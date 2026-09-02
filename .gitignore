@@ -1,0 +1,41 @@
+# Java
+target/
+build/
+*.class
+
+# Node / Electron
+node_modules/
+dist/
+out/
+release/
+coverage/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+**/application-local.yml
+**/application-local.yaml
+docker-compose.override.yml
+secrets/
+*.jks
+*.p12
+*.pem
+*.key
+
+# Local planning and learning notes
+/docs/
+
+# Logs and runtime data
+*.log
+logs/
+data/
+
+# OS
+Thumbs.db
+.DS_Store
