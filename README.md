@@ -2,30 +2,16 @@
 
 面向 4–8 名熟人的 Windows 游戏语音、文字聊天和多人屏幕共享项目。
 
-当前为开发预览，仅提供后端系统状态接口和本地数据库配置，尚无可用的桌面客户端、语音、文字聊天或屏幕共享功能。当前配置不适用于生产部署。
+当前为开发预览，提供后端系统接口和本地数据库迁移，尚无可用的桌面客户端、语音、文字聊天或屏幕共享功能。当前配置不适用于生产部署。
 
 ## 运行环境
 
 - 后端：JDK 17、Maven。
 - 本地数据库：Docker Desktop（Windows 使用 WSL 2），包含 Docker Compose。
 
-## 启动后端
-
-在仓库根目录执行：
-
-```powershell
-mvn -f services/api/pom.xml spring-boot:run
-```
-
-默认端口为 `8080`，可通过环境变量 `SERVER_PORT` 修改。
-
-- 系统状态：<http://localhost:8080/api/v1/system/status>
-- 接口文档：<http://localhost:8080/swagger-ui.html>
-- OpenAPI JSON：<http://localhost:8080/v3/api-docs>
-
 ## 启动本地数据库
 
-后端目前不依赖数据库，可按需单独启动 PostgreSQL 18.6。
+后端需要 PostgreSQL 18.6。
 
 1. 启动 Docker Desktop。
 2. 将根目录 `.env.example` 复制为 `.env`，设置随机的 `POSTGRES_PASSWORD`。已有 `.env` 时不要覆盖。
@@ -37,6 +23,21 @@ docker compose ps
 ```
 
 连接地址为 `127.0.0.1:5432`，数据库名为 `lycansync`，用户名为 `postgres`，密码为 `.env` 中的 `POSTGRES_PASSWORD`。该管理员账号仅用于本地开发。
+
+## 启动后端
+
+将 `.env` 中的 `POSTGRES_PASSWORD` 作为环境变量 `DB_PASSWORD` 提供给后端，然后在仓库根目录执行：
+
+```powershell
+mvn -f services/api/pom.xml spring-boot:run
+```
+
+首次启动会自动执行数据库迁移。默认端口为 `18080`，可通过环境变量 `SERVER_PORT` 修改。
+
+- 系统状态：<http://localhost:18080/api/v1/system/status>
+- 初始化状态：<http://localhost:18080/api/v1/system/initialization>
+- 接口文档：<http://localhost:18080/swagger-ui.html>
+- OpenAPI JSON：<http://localhost:18080/v3/api-docs>
 
 ## 停止运行
 

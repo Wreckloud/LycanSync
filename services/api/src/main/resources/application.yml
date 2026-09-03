@@ -1,9 +1,27 @@
 spring:
   application:
     name: lycan-sync-api
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://127.0.0.1:5432/lycansync}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX_SIZE:4}
+      # 空闲时允许连接池缩至零，减少本地开发的资源占用。
+      minimum-idle: ${DB_POOL_MIN_IDLE:0}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
+  flyway:
+    # 迁移账号可单独配置；本地开发默认复用应用账号。
+    user: ${DB_MIGRATION_USERNAME:${DB_USERNAME:postgres}}
+    password: ${DB_MIGRATION_PASSWORD:${DB_PASSWORD}}
+    locations: classpath:db/migration
+    validate-migration-naming: true
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
 
 server:
-  port: ${SERVER_PORT:8080}
+  port: ${SERVER_PORT:18080}
   shutdown: graceful
 
 management:
