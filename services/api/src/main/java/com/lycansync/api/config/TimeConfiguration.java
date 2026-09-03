@@ -16,6 +16,7 @@ public class TimeConfiguration {
 
     @Bean
     public Clock systemClock() {
+        // 统一提供时钟，测试时可替换为固定时间，避免依赖实际系统时间。
         return Clock.systemUTC();
     }
 }

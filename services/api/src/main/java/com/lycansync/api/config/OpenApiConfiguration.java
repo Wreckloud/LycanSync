@@ -2,6 +2,7 @@ package com.lycansync.api.config;
 
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
+import org.springframework.boot.info.BuildProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -15,11 +16,11 @@ import org.springframework.context.annotation.Configuration;
 public class OpenApiConfiguration {
 
     @Bean
-    public OpenAPI lycanSyncOpenApi() {
+    public OpenAPI lycanSyncOpenApi(BuildProperties buildProperties) {
         return new OpenAPI()
                 .info(new Info()
                         .title("LycanSync API")
                         .description("LycanSync 后端接口")
-                        .version("v1"));
+                        .version(buildProperties.getVersion()));
     }
 }

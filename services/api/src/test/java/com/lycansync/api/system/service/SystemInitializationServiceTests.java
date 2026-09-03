@@ -6,6 +6,9 @@ import com.lycansync.api.system.mapper.SystemStateMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessResourceFailureException;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -21,9 +24,11 @@ import static org.mockito.Mockito.when;
  */
 class SystemInitializationServiceTests {
 
+    private static final Instant SERVER_TIME = Instant.parse("2026-09-03T06:30:00Z");
+
     private final SystemStateMapper systemStateMapper = mock(SystemStateMapper.class);
     private final SystemInitializationService systemInitializationService =
-            new SystemInitializationService(systemStateMapper);
+            new SystemInitializationService(systemStateMapper, Clock.fixed(SERVER_TIME, ZoneOffset.UTC));
 
     @Test
     void shouldReturnUninitializedState() {
@@ -33,6 +38,7 @@ class SystemInitializationServiceTests {
                 systemInitializationService.getInitializationStatus();
 
         assertThat(response.initialized()).isFalse();
+        assertThat(response.serverTime()).isEqualTo(SERVER_TIME);
     }
 
     @Test
@@ -43,6 +49,7 @@ class SystemInitializationServiceTests {
                 systemInitializationService.getInitializationStatus();
 
         assertThat(response.initialized()).isTrue();
+        assertThat(response.serverTime()).isEqualTo(SERVER_TIME);
     }
 
     @Test

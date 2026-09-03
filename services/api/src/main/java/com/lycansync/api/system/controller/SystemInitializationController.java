@@ -21,14 +21,14 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequiredArgsConstructor
-@RequestMapping("/api/v1/system")
-@Tag(name = "系统接口", description = "客户端启动和服务状态接口")
+@RequestMapping("/api/system")
+@Tag(name = "系统接口", description = "客户端启动信息接口")
 public class SystemInitializationController {
 
     private final SystemInitializationService systemInitializationService;
 
     @GetMapping("/initialization")
-    @Operation(summary = "获取系统初始化状态")
+    @Operation(summary = "获取系统初始化信息")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "获取成功"),
             @ApiResponse(responseCode = "500", description = "系统状态记录异常"),

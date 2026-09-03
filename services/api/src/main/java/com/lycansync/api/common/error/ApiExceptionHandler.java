@@ -5,6 +5,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -17,6 +19,26 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice
 @Slf4j
 public class ApiExceptionHandler {
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ProblemDetail handleInvalidRequest(MethodArgumentNotValidException exception) {
+        return createProblemDetail(
+                HttpStatus.BAD_REQUEST,
+                "INVALID_REQUEST",
+                "请求参数无效",
+                "请求参数不符合接口要求，请检查必填项和长度限制"
+        );
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ProblemDetail handleUnreadableRequest(HttpMessageNotReadableException exception) {
+        return createProblemDetail(
+                HttpStatus.BAD_REQUEST,
+                "INVALID_REQUEST",
+                "请求参数无效",
+                "请求体缺失或 JSON 格式不正确"
+        );
+    }
 
     @ExceptionHandler(SystemStateNotFoundException.class)
     public ProblemDetail handleSystemStateNotFound(SystemStateNotFoundException exception) {

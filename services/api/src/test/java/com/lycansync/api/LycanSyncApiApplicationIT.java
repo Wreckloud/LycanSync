@@ -6,6 +6,7 @@ import org.flywaydb.core.api.output.MigrateResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.info.BuildProperties;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -18,6 +19,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -51,6 +53,9 @@ class LycanSyncApiApplicationIT {
 
     @Autowired
     private Flyway flyway;
+
+    @Autowired
+    private BuildProperties buildProperties;
 
     @DynamicPropertySource
     static void configureDatabase(DynamicPropertyRegistry registry) {
@@ -96,10 +101,12 @@ class LycanSyncApiApplicationIT {
 
     @Test
     void shouldReturnUninitializedStateFromDatabase() throws Exception {
-        mockMvc.perform(get("/api/v1/system/initialization"))
+        mockMvc.perform(get("/api/system/initialization"))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Cache-Control", "no-store"))
-                .andExpect(jsonPath("$.initialized").value(false));
+                .andExpect(jsonPath("$.initialized").value(false))
+                .andExpect(jsonPath("$.serverTime").isNotEmpty())
+                .andExpect(jsonPath("$.apiVersion").doesNotExist());
     }
 
     @Test
@@ -107,36 +114,57 @@ class LycanSyncApiApplicationIT {
         jdbcClient.sql("UPDATE system_state SET initialized_at = CURRENT_TIMESTAMP WHERE id = 1")
                 .update();
 
-        mockMvc.perform(get("/api/v1/system/initialization"))
+        mockMvc.perform(get("/api/system/initialization"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.initialized").value(true));
+                .andExpect(jsonPath("$.initialized").value(true))
+                .andExpect(jsonPath("$.serverTime").isNotEmpty());
     }
 
     @Test
     void shouldFailWhenSystemStateIsMissing() throws Exception {
         jdbcClient.sql("DELETE FROM system_state WHERE id = 1").update();
 
-        mockMvc.perform(get("/api/v1/system/initialization"))
+        mockMvc.perform(get("/api/system/initialization"))
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.code").value("SYSTEM_STATE_NOT_FOUND"));
     }
 
     @Test
-    void shouldKeepExistingSystemStatusEndpoint() throws Exception {
+    void shouldRemoveOldSystemStatusEndpoint() throws Exception {
         mockMvc.perform(get("/api/v1/system/status"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.apiVersion").value("v1"))
-                .andExpect(jsonPath("$.serverTime").isNotEmpty());
+                .andExpect(status().isNotFound());
     }
 
     @Test
-    void shouldKeepOpenApiContract() throws Exception {
+    void shouldRemoveVersionedInitializationEndpoint() throws Exception {
+        mockMvc.perform(get("/api/v1/system/initialization"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void shouldKeepActuatorHealthEndpoint() throws Exception {
+        mockMvc.perform(get("/actuator/health"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"))
+                .andExpect(jsonPath("$.components").doesNotExist());
+    }
+
+    @Test
+    void shouldDocumentConsolidatedEndpointAndApplicationVersion() throws Exception {
         mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.paths['/api/v1/system/status'].get").exists())
-                .andExpect(jsonPath("$.paths['/api/v1/system/initialization'].get.responses['200']").exists())
+                .andExpect(jsonPath("$.info.version").value(buildProperties.getVersion()))
+                .andExpect(jsonPath("$.paths['/api/v1/system/status']").doesNotExist())
+                .andExpect(jsonPath("$.paths['/api/v1/system/initialization']").doesNotExist())
+                .andExpect(jsonPath("$.paths['/api/rtc/token']").doesNotExist())
+                .andExpect(jsonPath("$.paths['/api/system/initialization'].get.responses['200']").exists())
                 .andExpect(jsonPath("$.components.schemas.SystemInitializationStatusResponse.properties.initialized.type")
-                        .value("boolean"));
+                        .value("boolean"))
+                .andExpect(jsonPath("$.components.schemas.SystemInitializationStatusResponse.properties.serverTime.format")
+                        .value("date-time"))
+                .andExpect(jsonPath("$.components.schemas.SystemInitializationStatusResponse.properties.apiVersion")
+                        .doesNotExist())
+                .andExpect(jsonPath("$.components.schemas.SystemStatusResponse").doesNotExist());
     }
 
     @Test
@@ -144,5 +172,13 @@ class LycanSyncApiApplicationIT {
         MigrateResult result = flyway.migrate();
 
         assertThat(result.migrationsExecuted).isZero();
+    }
+
+    @Test
+    void shouldNotExposeRtcTokenEndpointWithoutLocalProfile() throws Exception {
+        mockMvc.perform(post("/api/rtc/token")
+                        .contentType("application/json")
+                        .content("{\"displayName\":\"小狼\"}"))
+                .andExpect(status().isNotFound());
     }
 }

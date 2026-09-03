@@ -9,6 +9,8 @@ import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Instant;
+
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -28,6 +30,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 )
 class SystemInitializationControllerTests {
 
+    private static final Instant SERVER_TIME = Instant.parse("2026-09-03T06:30:00Z");
+
     @Autowired
     private MockMvc mockMvc;
 
@@ -35,15 +39,17 @@ class SystemInitializationControllerTests {
     private SystemInitializationService systemInitializationService;
 
     @Test
-    void shouldReturnInitializationStateWithoutCaching() throws Exception {
+    void shouldReturnInitializationStateAndServerTimeWithoutCaching() throws Exception {
         when(systemInitializationService.getInitializationStatus())
-                .thenReturn(new SystemInitializationStatusResponse(false));
+                .thenReturn(new SystemInitializationStatusResponse(false, SERVER_TIME));
 
-        mockMvc.perform(get("/api/v1/system/initialization"))
+        mockMvc.perform(get("/api/system/initialization"))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Cache-Control", "no-store"))
                 .andExpect(content().contentTypeCompatibleWith("application/json"))
-                .andExpect(jsonPath("$.initialized").value(false));
+                .andExpect(jsonPath("$.initialized").value(false))
+                .andExpect(jsonPath("$.serverTime").value(SERVER_TIME.toString()))
+                .andExpect(jsonPath("$.apiVersion").doesNotExist());
     }
 
     @Test
@@ -51,7 +57,7 @@ class SystemInitializationControllerTests {
         when(systemInitializationService.getInitializationStatus())
                 .thenThrow(new DataAccessResourceFailureException("connection details must stay hidden"));
 
-        mockMvc.perform(get("/api/v1/system/initialization"))
+        mockMvc.perform(get("/api/system/initialization"))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
                 .andExpect(jsonPath("$.code").value("DATABASE_ACCESS_ERROR"))
