@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}
       TZ: UTC
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
@@ -23,6 +23,35 @@ services:
     mem_limit: 512m
     memswap_limit: 512m
     shm_size: 128mb
+    stop_grace_period: 30s
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  livekit:
+    image: livekit/livekit-server:v1.13.6
+    restart: "no"
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7880
+        bind_addresses: ["0.0.0.0"]
+        rtc:
+          tcp_port: 7881
+          udp_port: 7882
+          use_external_ip: false
+          node_ip: 127.0.0.1
+        keys:
+          "${LIVEKIT_API_KEY:?Set LIVEKIT_API_KEY in the root .env file}": "${LIVEKIT_API_SECRET:?Set LIVEKIT_API_SECRET in the root .env file}"
+    ports:
+      # 宿主机只接受本机连接，容器内监听全部网卡供 Docker 端口转发。
+      - "127.0.0.1:7880:7880/tcp"
+      - "127.0.0.1:7881:7881/tcp"
+      - "127.0.0.1:7882:7882/udp"
+    cpus: 1.0
+    mem_limit: 512m
+    memswap_limit: 512m
     stop_grace_period: 30s
     logging:
       driver: local

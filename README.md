@@ -14,7 +14,7 @@
 后端需要 PostgreSQL 18.6。
 
 1. 启动 Docker Desktop。
-2. 将根目录 `.env.example` 复制为 `.env`，设置随机的 `POSTGRES_PASSWORD`。已有 `.env` 时不要覆盖。
+2. 将根目录 `.env.example` 复制为 `.env`，一次性设置随机的 `POSTGRES_PASSWORD`、`LIVEKIT_API_KEY` 和至少 32 个字符的 `LIVEKIT_API_SECRET`。Compose 使用同一个文件管理全部基础服务，即使只启动数据库也会先校验这些配置。已有 `.env` 时不要覆盖。
 3. 在仓库根目录执行：
 
 ```powershell
@@ -22,7 +22,7 @@ docker compose up -d --wait postgres
 docker compose ps
 ```
 
-连接地址为 `127.0.0.1:5432`，数据库名为 `lycansync`，用户名为 `postgres`，密码为 `.env` 中的 `POSTGRES_PASSWORD`。该管理员账号仅用于本地开发。
+默认连接地址为 `127.0.0.1:5432`，数据库名为 `lycansync`，用户名为 `postgres`，密码为 `.env` 中的 `POSTGRES_PASSWORD`。如果 Windows 保留了 5432 端口，可在 `.env` 设置 `POSTGRES_PORT=55432`，并让后端使用对应的 `DB_URL`。该管理员账号仅用于本地开发。
 
 ## 启动后端
 
@@ -43,12 +43,12 @@ mvn -f services/api/pom.xml spring-boot:run
 
 此模式不验证 QQ 身份，仅限同一台电脑上的开发测试。不要通过反向代理、隧道或公网转发暴露调试接口。
 
-1. 在根目录 `.env` 中配置 `LIVEKIT_API_KEY` 和 `LIVEKIT_API_SECRET`。API key 使用字母、数字、下划线或短横线；secret 使用至少 32 个字符的随机值。不要覆盖已有数据库密码，不要提交真实凭证。
-2. 启动本地 LiveKit 1.13.6：
+1. 确认根目录 `.env` 已按上文配置。API key 使用字母、数字、下划线或短横线；不要提交真实凭证。
+2. 使用同一个 Compose 文件启动 PostgreSQL 和本地 LiveKit 1.13.6：
 
 ```powershell
-docker compose -f compose.yaml -f compose.rtc.yaml config --quiet
-docker compose -f compose.yaml -f compose.rtc.yaml up -d livekit
+docker compose config --quiet
+docker compose up -d --wait
 ```
 
 3. 为后端设置 `DB_PASSWORD`、`LIVEKIT_API_KEY`、`LIVEKIT_API_SECRET` 环境变量，再启动：
@@ -91,13 +91,7 @@ mvn clean verify
 docker compose down
 ```
 
-如果启用了本地 RTC，使用同一组 Compose 文件停止全部开发服务：
-
-```powershell
-docker compose -f compose.yaml -f compose.rtc.yaml down
-```
-
-只停止 LiveKit、不影响数据库时使用 `docker compose -f compose.yaml -f compose.rtc.yaml stop livekit`。
+PostgreSQL 和 LiveKit 已放在同一个 Compose 文件中。只停止 LiveKit、不影响数据库时使用 `docker compose stop livekit`。
 
 不再使用 Docker 时，从系统托盘退出 Docker Desktop。必要时执行 `wsl --shutdown`；此命令会停止所有 WSL 发行版，请先保存其中的工作。
 
