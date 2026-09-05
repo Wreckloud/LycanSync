@@ -36,6 +36,8 @@ management:
 springdoc:
   api-docs:
     enabled: ${OPENAPI_ENABLED:true}
+    # 当前接口不依赖 3.1 特性，固定 3.0 以兼容更多导入工具。
+    version: openapi_3_0
   swagger-ui:
     enabled: ${SWAGGER_UI_ENABLED:true}
     path: /swagger-ui.html

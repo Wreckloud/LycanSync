@@ -28,12 +28,12 @@ class LocalRtcTokenServiceTests {
     private static final Instant SERVER_TIME = Instant.parse("2026-09-03T07:00:00.123Z");
 
     private final LocalRtcTokenService localRtcTokenService = new LocalRtcTokenService(
-            new LiveKitProperties("ws://127.0.0.1:7880", API_KEY, API_SECRET),
+            new LiveKitProperties("ws://127.0.0.1:7880", "http://127.0.0.1:7880", API_KEY, API_SECRET),
             Clock.fixed(SERVER_TIME, ZoneOffset.UTC));
 
     @Test
-    void shouldSignFixedRoomTokenWithOnlyRequiredMediaPermissions() {
-        RtcTokenResponse response = localRtcTokenService.issueToken(" 小狼 ");
+    void shouldSignGroupRoomTokenWithOnlyRequiredMediaPermissions() {
+        RtcTokenResponse response = localRtcTokenService.issueToken("pack", " 小狼 ");
         DecodedJWT token = JWT.decode(response.token());
 
         // 解码只能读取内容，另外验证签名才能确认凭证确实由指定密钥签发。
@@ -43,23 +43,23 @@ class LocalRtcTokenServiceTests {
         assertThat(token.getSubject()).isEqualTo(response.participantIdentity());
         assertThat(token.getClaim("name").asString()).isEqualTo("小狼");
         assertThat(response.serverUrl()).isEqualTo("ws://127.0.0.1:7880");
-        assertThat(response.roomName()).isEqualTo("lycan-sync-dev");
+        assertThat(response.roomName()).isEqualTo("lycan-sync-dev-pack");
 
         Map<String, Object> grants = token.getClaim("video").asMap();
         assertThat(grants).containsExactlyInAnyOrderEntriesOf(Map.of(
-                "room", "lycan-sync-dev",
+                "room", "lycan-sync-dev-pack",
                 "roomJoin", true,
                 "canPublish", true,
                 "canSubscribe", true,
                 "canPublishSources", List.of("microphone", "screen_share"),
                 "canPublishData", false,
-                "canUpdateOwnMetadata", false
+                "canUpdateOwnMetadata", true
         ));
     }
 
     @Test
     void shouldUseClockForTenMinuteExpiryAndMatchResponseToJwtPrecision() {
-        RtcTokenResponse response = localRtcTokenService.issueToken("小狼");
+        RtcTokenResponse response = localRtcTokenService.issueToken("pack", "小狼");
         DecodedJWT token = JWT.decode(response.token());
 
         assertThat(token.getNotBeforeAsInstant()).isEqualTo(Instant.parse("2026-09-03T07:00:00Z"));
@@ -69,8 +69,8 @@ class LocalRtcTokenServiceTests {
 
     @Test
     void shouldAssignDifferentIdentitiesToRequestsWithTheSameNickname() {
-        RtcTokenResponse first = localRtcTokenService.issueToken("小狼");
-        RtcTokenResponse second = localRtcTokenService.issueToken("小狼");
+        RtcTokenResponse first = localRtcTokenService.issueToken("pack", "小狼");
+        RtcTokenResponse second = localRtcTokenService.issueToken("pack", "小狼");
 
         assertThat(first.participantIdentity()).startsWith("dev-");
         assertThat(first.participantIdentity()).isNotEqualTo(second.participantIdentity());

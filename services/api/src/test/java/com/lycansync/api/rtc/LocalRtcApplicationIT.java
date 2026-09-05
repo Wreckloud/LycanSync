@@ -73,8 +73,6 @@ class LocalRtcApplicationIT {
                               udp_port: 7882
                               use_external_ip: false
                               node_ip: 127.0.0.1
-                            room:
-                              max_participants: 8
                             keys:
                               %s: %s
                             """.formatted(API_KEY, API_SECRET))
@@ -96,6 +94,7 @@ class LocalRtcApplicationIT {
         registry.add("spring.flyway.user", POSTGRESQL::getUsername);
         registry.add("spring.flyway.password", POSTGRESQL::getPassword);
         registry.add("lycansync.rtc.server-url", () -> "ws://" + liveKitAddress());
+        registry.add("lycansync.rtc.api-url", () -> "http://" + liveKitAddress());
         registry.add("lycansync.rtc.api-key", () -> API_KEY);
         registry.add("lycansync.rtc.api-secret", () -> API_SECRET);
     }
@@ -104,7 +103,7 @@ class LocalRtcApplicationIT {
     void shouldJoinLiveKitUsingTokenIssuedByHttpEndpoint() throws Exception {
         String responseBody = mockMvc.perform(post("/api/rtc/token")
                         .contentType("application/json")
-                        .content("{\"displayName\":\"小狼\"}"))
+                        .content("{\"groupId\":\"pack\",\"displayName\":\"小狼\"}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         RtcTokenResponse credential = objectMapper.readValue(responseBody, RtcTokenResponse.class);
@@ -121,7 +120,13 @@ class LocalRtcApplicationIT {
             assertThat(join.getRoom().getName()).isEqualTo(credential.roomName());
             assertThat(join.getParticipant().getIdentity()).isEqualTo(credential.participantIdentity());
             assertThat(join.getParticipant().getName()).isEqualTo("小狼");
-            assertThat(join.getRoom().getMaxParticipants()).isEqualTo(8);
+            assertThat(join.getRoom().getMaxParticipants()).isZero();
+
+            mockMvc.perform(get("/api/rtc/room-summary").queryParam("groupId", "pack"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.participantCount").value(1))
+                    .andExpect(jsonPath("$.participantNames[0]").value("小狼"))
+                    .andExpect(jsonPath("$.tracks").doesNotExist());
 
             RoomServiceClient roomClient = RoomServiceClient.createClient(
                     "http://" + liveKitAddress(), API_KEY, API_SECRET);
@@ -155,7 +160,8 @@ class LocalRtcApplicationIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.paths['/api/rtc/token'].post.responses['200']").exists())
                 .andExpect(jsonPath("$.paths['/api/rtc/token'].post.responses['400']").exists())
-                .andExpect(jsonPath("$.components.schemas.LocalRtcTokenRequest.required[0]").value("displayName"))
+                .andExpect(jsonPath("$.paths['/api/rtc/room-summary'].get.responses['200']").exists())
+                .andExpect(jsonPath("$.components.schemas.LocalRtcTokenRequest.required").isArray())
                 .andExpect(jsonPath("$.components.schemas.RtcTokenResponse.properties.token").exists())
                 .andExpect(jsonPath("$.components.schemas.RtcTokenResponse.properties.apiSecret").doesNotExist());
     }

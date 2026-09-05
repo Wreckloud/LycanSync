@@ -1,6 +1,8 @@
 package com.lycansync.api.common.error;
 
+import com.lycansync.api.rtc.exception.RtcServiceUnavailableException;
 import com.lycansync.api.system.exception.SystemStateNotFoundException;
+import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
@@ -59,6 +61,27 @@ public class ApiExceptionHandler {
                 "DATABASE_ACCESS_ERROR",
                 "数据库访问失败",
                 "数据库暂时不可用"
+        );
+    }
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ProblemDetail handleConstraintViolation(ConstraintViolationException exception) {
+        return createProblemDetail(
+                HttpStatus.BAD_REQUEST,
+                "INVALID_REQUEST",
+                "请求参数无效",
+                "请求参数不符合接口要求，请检查必填项和格式"
+        );
+    }
+
+    @ExceptionHandler(RtcServiceUnavailableException.class)
+    public ProblemDetail handleRtcServiceUnavailable(RtcServiceUnavailableException exception) {
+        log.error("RTC 服务端接口不可用", exception);
+        return createProblemDetail(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "RTC_SERVICE_UNAVAILABLE",
+                "语音状态暂时不可用",
+                "暂时无法获取语音房间状态"
         );
     }
 

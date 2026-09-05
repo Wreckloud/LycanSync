@@ -9,6 +9,9 @@ dist/
 out/
 release/
 coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
 
 # IDE
 .idea/

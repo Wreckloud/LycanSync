@@ -21,6 +21,7 @@ class LocalRtcConfigurationTests {
                     "spring.profiles.active=rtc-local",
                     "server.address=127.0.0.1",
                     "lycansync.rtc.server-url=ws://127.0.0.1:7880",
+                    "lycansync.rtc.api-url=http://127.0.0.1:7880",
                     "lycansync.rtc.api-key=local-test-key",
                     "lycansync.rtc.api-secret=local-test-secret-at-least-32-characters"
             );
@@ -52,7 +53,8 @@ class LocalRtcConfigurationTests {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"server-url=", "api-key=", "api-key=${MISSING_RTC_KEY}", "api-secret=", "api-secret=short"})
+    @ValueSource(strings = {"server-url=", "api-url=", "api-url=ws://127.0.0.1:7880",
+            "api-key=", "api-key=${MISSING_RTC_KEY}", "api-secret=", "api-secret=short"})
     void shouldRejectMissingOrWeakConnectionSettings(String invalidSetting) {
         contextRunner.withPropertyValues("lycansync.rtc." + invalidSetting).run(context ->
                 assertThat(context).hasFailed());

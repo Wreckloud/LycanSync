@@ -2,12 +2,13 @@
 
 面向 4–8 名熟人的 Windows 游戏语音、文字聊天和多人屏幕共享项目。
 
-当前为开发预览，提供后端系统接口、本地数据库迁移和本地 RTC 入房凭证。尚无可用的桌面客户端、语音、文字聊天或屏幕共享界面。当前配置不适用于生产部署。
+当前为本机开发预览，提供后端系统接口、本地数据库迁移，以及支持多人语音、多路屏幕视频和多画面观看的浏览器原型。尚无 QQ 登录、持久化房间、文字聊天、游戏音频或桌面安装包。当前配置不适用于公网或生产部署。
 
 ## 运行环境
 
 - 后端：JDK 17、Maven。
 - 本地数据库：Docker Desktop（Windows 使用 WSL 2），包含 Docker Compose。
+- 浏览器客户端：Node.js 22.12+、npm，以及支持屏幕采集的桌面 Chrome / Edge。
 
 ## 启动本地数据库
 
@@ -67,12 +68,43 @@ mvn -f services/api/pom.xml spring-boot:run "-Dspring-boot.run.profiles=rtc-loca
 POST /api/rtc/token
 Content-Type: application/json
 
-{"displayName":"小狼"}
+{"groupId":"pack","displayName":"小狼"}
 ```
 
-响应包含 `serverUrl`、`roomName`、`participantIdentity`、`token` 和 `expiresAt`。固定房间为 `lycan-sync-dev`，最多 8 人；每次请求生成独立临时身份。昵称为 1–32 个字符且不能全为空白。凭证允许发布麦克风、屏幕视频并订阅其他人，不开放摄像头、屏幕音频、数据发送或管理权限。
+响应包含 `serverUrl`、`roomName`、`participantIdentity`、`token` 和 `expiresAt`。每个群组对应一个 `lycan-sync-dev-{groupId}` 测试房间；每次请求生成独立临时身份。昵称为 1–32 个字符且不能全为空白。凭证允许发布麦克风、屏幕视频、订阅其他人以及更新自己的收听状态，不开放摄像头、屏幕音频、数据发送或房间管理权限。
+
+未加入语音时可查询当前群组的安全摘要：
+
+```http
+GET /api/rtc/room-summary?groupId=pack
+```
+
+该接口只返回 `participantCount` 和按加入顺序排列的 `participantNames`，不返回麦克风、发言、收听或屏幕共享状态。
 
 凭证用于 10 分钟内首次加入，不代表 10 分钟后强制结束通话。签发成功只证明后端生成了凭证，不保证 LiveKit 在线或媒体连接成功。不启用 `rtc-local` 时，该接口返回 404，也不会出现在 OpenAPI 文档中。
+
+## 启动浏览器客户端
+
+浏览器客户端使用 Vue 3、TypeScript 和 Vite，实时音视频使用 LiveKit JavaScript SDK。
+
+先按上文启动 PostgreSQL、LiveKit 和启用 `rtc-local` 的后端，再打开一个终端，在仓库根目录执行：
+
+```powershell
+cd apps/web
+npm ci
+npm run dev
+```
+
+访问 `http://127.0.0.1:4173`，双击群组头像并确认本地昵称即可进入该群组的测试房间。Vite 仅监听本机，可通过 `WEB_PORT` 更换端口；`/api` 代理到 `127.0.0.1:18080`，后端端口改变时需同步修改 `apps/web/vite.config.ts` 的代理目标。前端不需要数据库密码或 LiveKit API secret。
+
+- 明确加入语音后默认请求麦克风权限；屏幕只在点击共享图标后采集。关闭麦克风、停止共享或离开房间会停止对应采集。
+- 有人共享时，主观看区自动显示第一路；展开底部成员条后，直接点击共享缩略图可同时放大最多 4 路。每个主画面可独立全屏或进入画中画。
+- 本地原型不设置语音成员数上限；同一群组界面最多允许 8 路共享，最终服务端并发校验会在正式房间接口中实现。
+- 耳机按钮控制是否接收全部成员语音，音量按钮只调整本机听到的音量；若浏览器阻止自动播放，点击耳机按钮允许播放。
+- 屏幕采集目标为 1280×720、15 FPS，主视频编码上限约 1.5 Mbps；实际尺寸和帧率取决于浏览器、所选窗口和运行状态。这不是 60 FPS 游戏直播模式。
+- 首版只共享屏幕视频，不传输游戏/系统音频。语音开启浏览器回声消除、降噪和自动增益约束，效果需在真实设备上验证。
+
+可在本机打开多个标签页测试不同临时身份。建议戴耳机，并先只在一个页面开麦，避免同一物理麦克风被多路采集造成重复声音。共享时选择普通应用窗口，避免共享当前页面产生递归镜像。
 
 ## 验证
 
@@ -81,11 +113,29 @@ mvn -f services/api/pom.xml test
 mvn clean verify
 ```
 
-`test` 无需 Docker。`verify` 需要 Docker，会自动创建隔离的 PostgreSQL 和 LiveKit 测试容器，不使用开发数据库。测试覆盖凭证签名、配置限制、接口校验、数据库迁移和 LiveKit 信令入房；尚不验证实际音视频传输。
+后端 `test` 无需 Docker。`verify` 需要 Docker，会自动创建隔离的 PostgreSQL 和 LiveKit 测试容器，不使用开发数据库。测试覆盖凭证签名、配置限制、接口校验、数据库迁移和 LiveKit 信令入房。
+
+前端在 `apps/web` 目录执行：
+
+```powershell
+npm test
+npm run build
+```
+
+浏览器集成测试还需要前述本地后端和 LiveKit 正在运行，且 `4173` 端口空闲；测试会自行启动并停止 Vite。在 Windows 上可使用已安装的 Edge：
+
+```powershell
+$env:PLAYWRIGHT_CHANNEL = "msedge"
+npm run test:e2e
+```
+
+或运行 `npx playwright install chromium` 安装测试专用浏览器，不设置 `PLAYWRIGHT_CHANNEL` 时默认使用它。集成测试使用合成麦克风和合成画面，不采集真实桌面；覆盖双人及四人音视频实际接收、成员条和多画面观看、取消与拒绝授权、离房释放采集。它不替代真实游戏、异地网络或 8 人容量测试。测试期间不要混入其他手动入房会话。
+
+`npm run build` 只验证并生成前端静态产物，当前开发代理不随产物部署；正式部署的鉴权、HTTPS/WSS、路由代理和 TURN 尚未配置。
 
 ## 停止运行
 
-在后端终端按 `Ctrl+C`，然后在仓库根目录执行：
+先离开浏览器房间，在前端、后端终端分别按 `Ctrl+C`，然后在仓库根目录执行：
 
 ```powershell
 docker compose down

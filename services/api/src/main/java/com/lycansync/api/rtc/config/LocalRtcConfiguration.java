@@ -1,7 +1,9 @@
 package com.lycansync.api.rtc.config;
 
+import io.livekit.server.RoomServiceClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.util.Assert;
@@ -13,6 +15,7 @@ import org.springframework.util.Assert;
  * @since 2026-09-03
  */
 @Configuration(proxyBeanMethods = false)
+// TODO: 正式鉴权入口就绪后替换本地匿名模式，不能仅移除本机监听限制。
 @Profile("rtc-local")
 @EnableConfigurationProperties(LiveKitProperties.class)
 public class LocalRtcConfiguration {
@@ -27,5 +30,13 @@ public class LocalRtcConfiguration {
         // 单独检查密钥长度，避免配置绑定错误报告把被拒绝的密钥原文打印出来。
         Assert.state(liveKitProperties.getApiSecret().length() >= 32,
                 "LIVEKIT_API_SECRET 至少需要 32 个字符，请使用随机生成的密钥");
+    }
+
+    @Bean
+    public RoomServiceClient localRoomServiceClient(LiveKitProperties liveKitProperties) {
+        return RoomServiceClient.createClient(
+                liveKitProperties.getApiUrl(),
+                liveKitProperties.getApiKey(),
+                liveKitProperties.getApiSecret());
     }
 }

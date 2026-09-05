@@ -23,6 +23,11 @@ public class LiveKitProperties {
     @NotBlank
     private final String serverUrl;
 
+    // 服务端通过 HTTP API 查询房间摘要，不会返回给浏览器。
+    @NotBlank
+    @Pattern(regexp = "https?://.+")
+    private final String apiUrl;
+
     // 标识使用哪一组签名密钥，LiveKit 据此查找对应的 secret。
     @NotBlank
     @Pattern(regexp = "[A-Za-z0-9_-]+")
