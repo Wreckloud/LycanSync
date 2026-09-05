@@ -11,7 +11,9 @@
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run src",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "desktop": "npm run build && electron electron/main.cjs",
+    "test:desktop": "npm run build && playwright test --config playwright.desktop.config.ts"
   },
   "dependencies": {
     "@lucide/vue": "1.41.0",
@@ -22,6 +24,7 @@
     "@playwright/test": "1.62.1",
     "@types/node": "22.20.1",
     "@vitejs/plugin-vue": "6.0.8",
+    "electron": "44.2.0",
     "typescript": "5.9.3",
     "vite": "8.2.2",
     "vitest": "4.1.11",

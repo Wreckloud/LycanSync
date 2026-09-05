@@ -10,7 +10,7 @@ export default defineConfig({
     port: webPort,
     strictPort: true,
     proxy: {
-      // TODO: 桌面打包时配置业务服务地址；Vite 开发代理不会随静态产物运行。
+      // 浏览器开发使用此代理；Electron 由主进程转发到 LYCANSYNC_API_URL。
       // 只代理业务 HTTP；音视频和信令由浏览器直接连接 LiveKit。
       '/api': { target: 'http://127.0.0.1:18080' },
     },

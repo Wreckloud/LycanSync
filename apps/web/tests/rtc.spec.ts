@@ -1,4 +1,7 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { installTestRooms } from './fixtures/localRooms';
+
+test.beforeEach(async ({ context }) => { await installTestRooms(context); });
 
 const webPort = Number(process.env.WEB_PORT ?? 4173);
 const webBaseUrl = `http://127.0.0.1:${webPort}`;
@@ -18,6 +21,7 @@ declare global {
 }
 
 async function installSyntheticMedia(context: BrowserContext) {
+  await installTestRooms(context);
   await context.addInitScript(() => {
     const state = window.__rtcTest = {
       peers: [] as RTCPeerConnection[], tracks: [] as MediaStreamTrack[],
@@ -148,6 +152,7 @@ test('通话中单击其他群只预览，双击时要求确认切换', async ({
 
 test('房间外只能看到语音人数和昵称，不连接媒体房间', async ({ browser, context, page }) => {
   const observer = await browser.newContext({ baseURL: webBaseUrl, viewport: { width: 1440, height: 1000 } });
+  await installTestRooms(observer);
   try {
     await installSyntheticMedia(context);
     await join(page, '房内小狼');

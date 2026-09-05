@@ -141,7 +141,6 @@ export function useRtcRoom() {
     unpublishedTracks.value.clear();
     currentRoom?.localParticipant.trackPublications.forEach((publication) => publication.track?.stop());
     currentRoom?.removeAllListeners();
-    void currentRoom?.disconnect();
     pendingMedia.value = new Set();
     busySources.value = [];
     room.value = null;
@@ -149,6 +148,8 @@ export function useRtcRoom() {
     status.value = 'idle';
     needsAudioPlayback.value = false;
     notice.value = '';
+    // 桌面关窗需等待离房信令发送完毕；本地状态和采集已在上方立即清理。
+    return currentRoom?.disconnect() ?? Promise.resolve();
   }
 
   async function setMediaEnabled(source: MediaSource, enabled: boolean) {

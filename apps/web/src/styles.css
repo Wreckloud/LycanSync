@@ -1,4 +1,5 @@
 :root {
+  font-size: 18px;
   font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
   color: #edf3f8;
   background: #080b0f;
@@ -18,6 +19,7 @@
   --good: #42b883;
   --danger: #ef5350;
   --warning: #d99b2b;
+  --chat-font-size: 14px;
 }
 
 * { box-sizing: border-box; }
@@ -25,7 +27,8 @@
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
   background: var(--background);
 }
 
@@ -37,7 +40,10 @@ button:focus-visible, input:focus-visible {
 }
 
 .app-shell {
-  min-height: 100vh;
+  height: 100dvh;
+  display: grid;
+  grid-template-rows: 43px minmax(0, 1fr);
+  overflow: hidden;
   background: var(--panel);
 }
 
@@ -57,12 +63,12 @@ button:focus-visible, input:focus-visible {
   display: flex;
   align-items: center;
   gap: 9px;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 650;
   letter-spacing: .02em;
 }
 
-.brand-mark, .dialog-icon {
+.dialog-icon {
   width: 21px;
   height: 21px;
   display: grid;
@@ -74,7 +80,7 @@ button:focus-visible, input:focus-visible {
 
 .local-badge {
   color: var(--subtle);
-  font-size: 10px;
+  font-size: 12px;
   letter-spacing: .1em;
 }
 
@@ -84,12 +90,25 @@ button:focus-visible, input:focus-visible {
   display: flex;
 }
 
-.window-actions span {
+.window-actions span, .window-actions button {
   width: 41px;
   display: grid;
   place-items: center;
   color: var(--muted);
 }
+
+.desktop-titlebar { -webkit-app-region: drag; }
+.window-actions button { -webkit-app-region: no-drag; border: 0; background: transparent; cursor: pointer; }
+.window-actions button:hover { background: var(--panel-raised); }
+.window-actions button:last-child:hover { background: #c42b1c; color: white; }
+.capture-dialog { width: min(860px, calc(100vw - 48px)); padding: 24px; border: 1px solid var(--border); background: var(--panel); border-radius: 8px; }
+.capture-dialog h2 { margin-top: 0; }
+.capture-dialog p { color: var(--muted); }
+.capture-sources { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; max-height: 55vh; overflow-y: auto; }
+.capture-sources button { padding: 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-soft); cursor: pointer; min-width: 0; }
+.capture-sources button:hover { border-color: var(--accent); }
+.capture-sources img { width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #080b0f; }
+.capture-sources span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 6px; }
 
 .window-actions span:last-child:hover {
   background: #c42b1c;
@@ -109,31 +128,34 @@ button:focus-visible, input:focus-visible {
   background: #332820;
   color: #f3cfaa;
   box-shadow: 0 12px 35px #0008;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .workspace {
-  min-height: calc(100vh - 43px);
+  min-height: 0;
+  overflow: hidden;
   display: grid;
-  grid-template-columns: 58px minmax(0, 1fr) 210px;
+  grid-template-columns: 66px minmax(0, 1fr) 240px;
   align-items: stretch;
 }
 
 .group-rail {
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 9px;
-  padding: 12px 8px;
+  gap: 10px;
+  padding: 14px 9px;
   border-right: 1px solid var(--border);
   background: #0d1116;
 }
 
 .group-button {
   position: relative;
-  width: 40px;
-  height: 40px;
+  width: 46px;
+  height: 46px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
@@ -155,7 +177,7 @@ button:focus-visible, input:focus-visible {
 .group-button.is-selected::before {
   content: "";
   position: absolute;
-  left: -9px;
+  left: -10px;
   width: 3px;
   height: 24px;
   border-radius: 0 2px 2px 0;
@@ -192,7 +214,7 @@ button:focus-visible, input:focus-visible {
   border-radius: 3px;
   background: #f0f4f8;
   color: #12171d;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 500;
   line-height: 1.3;
   pointer-events: none;
@@ -218,12 +240,15 @@ button:focus-visible, input:focus-visible {
 
 .group-main {
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   background: var(--panel);
 }
 
 .group-header {
+  flex-shrink: 0;
   min-height: 79px;
   display: flex;
   align-items: center;
@@ -243,18 +268,18 @@ button:focus-visible, input:focus-visible {
 
 .group-title-row h1 {
   margin: 0;
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 650;
 }
 
 .group-copy p, .group-copy small { margin: 4px 0 0; }
-.group-copy p { color: var(--muted); font-size: 13px; }
-.group-copy small { display: block; color: var(--subtle); font-size: 11px; }
+.group-copy p { color: var(--muted); font-size: 15px; }
+.group-copy small { display: block; color: var(--subtle); font-size: 13px; }
 
 .icon-button {
   position: relative;
-  width: 35px;
-  height: 35px;
+  width: 40px;
+  height: 40px;
   flex: 0 0 auto;
   display: grid;
   place-items: center;
@@ -288,7 +313,7 @@ button:focus-visible, input:focus-visible {
   border-bottom: 1px solid #594620;
   background: #211c12;
   color: #d9c39d;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .switch-confirm span { flex: 1; }
@@ -309,6 +334,9 @@ button:focus-visible, input:focus-visible {
 }
 
 .voice-panel, .voice-preview {
+  min-height: 0;
+  max-height: 45%;
+  overflow-y: auto;
   padding: 12px 16px 15px;
   border-bottom: 1px solid var(--border);
   background: var(--panel-soft);
@@ -339,7 +367,7 @@ button:focus-visible, input:focus-visible {
   border: 1px solid var(--border);
   border-radius: 50%;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
   font-style: normal;
 }
 
@@ -347,7 +375,7 @@ button:focus-visible, input:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -363,11 +391,11 @@ button:focus-visible, input:focus-visible {
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 650;
 }
 
-.voice-heading small { color: var(--muted); font-size: 11px; }
+.voice-heading small { color: var(--muted); font-size: 13px; }
 
 .voice-heading-actions {
   display: flex;
@@ -455,7 +483,7 @@ button:focus-visible, input:focus-visible {
   border-radius: 50%;
   background: var(--panel);
   color: var(--text);
-  font-size: 17px;
+  font-size: 19px;
   font-weight: 700;
 }
 
@@ -465,7 +493,7 @@ button:focus-visible, input:focus-visible {
   display: grid;
   place-items: center;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .participant-media.is-selectable { cursor: pointer; }
@@ -479,7 +507,7 @@ button:focus-visible, input:focus-visible {
   place-items: center;
   background: #05080d99;
   color: var(--text);
-  font-size: 11px;
+  font-size: 13px;
   pointer-events: none;
 }
 
@@ -497,7 +525,7 @@ button:focus-visible, input:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -546,7 +574,7 @@ button:focus-visible, input:focus-visible {
 .participant-card.is-thumbnail .large-avatar {
   width: 42px;
   height: 42px;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .participant-card.is-thumbnail .participant-meta {
@@ -565,10 +593,10 @@ button:focus-visible, input:focus-visible {
 .participant-state.is-off { color: var(--danger); }
 
 .chat-panel {
-  min-height: 350px;
+  min-height: 140px;
   flex: 1;
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   padding: 14px 16px;
 }
 
@@ -578,52 +606,29 @@ button:focus-visible, input:focus-visible {
   gap: 8px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border-soft);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 650;
 }
 
 .message-list {
+  font-size: var(--chat-font-size);
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
   gap: 14px;
   padding: 24px 2px 18px;
 }
 
-.message {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  gap: 9px;
-}
+.empty-state { margin: 0; color: var(--muted); font-size: inherit; line-height: 1.7; }
 
-.small-avatar, .member-avatar {
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--border);
-  border-radius: 50%;
-  background: var(--panel-soft);
-  font-weight: 700;
-}
-
-.small-avatar {
-  width: 32px;
-  height: 32px;
-  font-size: 10px;
-}
-
-.message-author {
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-  font-size: 12px;
-}
-
-.message-author time { color: var(--subtle); font-size: 10px; }
-.message p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+/* 短对话贴底，长对话从顶部正常滚动，避免 flex-end 把早期消息推到不可达区域。 */
+.message-list > :first-child { margin-top: auto; }
+.message-list > * { flex-shrink: 0; }
 
 .composer {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) 32px;
+  grid-template-columns: 36px minmax(0, 1fr) 36px;
   align-items: center;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -632,8 +637,8 @@ button:focus-visible, input:focus-visible {
 }
 
 .composer button {
-  width: 32px;
-  height: 36px;
+  width: 36px;
+  height: 40px;
   display: grid;
   place-items: center;
   border: 0;
@@ -643,7 +648,8 @@ button:focus-visible, input:focus-visible {
 
 .composer input {
   min-width: 0;
-  height: 38px;
+  height: 42px;
+  font-size: var(--chat-font-size);
   border: 0;
   outline: 0;
   background: transparent;
@@ -652,31 +658,40 @@ button:focus-visible, input:focus-visible {
 
 .composer input::placeholder { color: var(--subtle); }
 
+.callbar-reveal {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-rows: 1fr;
+  animation: callbar-reveal-in 180ms ease-out;
+}
+
+/* 动画改变实际占用高度，聊天输入框随布局移动；不裁切上方的音量弹层。 */
+.callbar-content { min-height: 0; }
+
 .callbar {
   position: relative;
-  min-height: 53px;
+  min-height: 59px;
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 8px 16px;
+  gap: 8px;
+  padding: 9px 18px;
   border-top: 1px solid var(--border);
   background: var(--panel-soft);
-  animation: callbar-slide-in 180ms ease-out;
 }
 
-@keyframes callbar-slide-in {
-  from { opacity: 0; transform: translateY(14px); }
-  to { opacity: 1; transform: translateY(0); }
+@keyframes callbar-reveal-in {
+  from { opacity: 0; grid-template-rows: 0fr; }
+  to { opacity: 1; grid-template-rows: 1fr; }
 }
 
-.callbar.is-leaving {
+.callbar-reveal.is-leaving {
   pointer-events: none;
-  animation: callbar-slide-out 180ms ease-in forwards;
+  animation: callbar-reveal-out 180ms ease-in forwards;
 }
 
-@keyframes callbar-slide-out {
-  from { opacity: 1; transform: translateY(0); }
-  to { opacity: 0; transform: translateY(14px); }
+@keyframes callbar-reveal-out {
+  from { opacity: 1; grid-template-rows: 1fr; }
+  to { opacity: 0; grid-template-rows: 0fr; }
 }
 
 .call-state {
@@ -697,8 +712,8 @@ button:focus-visible, input:focus-visible {
   white-space: nowrap;
 }
 
-.call-state strong { color: var(--good); font-size: 11px; }
-.call-state small { margin-top: 2px; color: var(--muted); font-size: 10px; }
+.call-state strong { color: var(--good); font-size: 13px; }
+.call-state small { margin-top: 2px; color: var(--muted); font-size: 12px; }
 
 .volume-popover {
   position: absolute;
@@ -716,7 +731,7 @@ button:focus-visible, input:focus-visible {
   background: var(--panel-raised);
   box-shadow: 0 15px 35px #0008;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .volume-popover input {
@@ -728,7 +743,9 @@ button:focus-visible, input:focus-visible {
 
 .members-panel {
   min-width: 0;
-  padding: 14px 12px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 14px;
   border-left: 1px solid var(--border);
   background: #0d1116;
 }
@@ -738,68 +755,10 @@ button:focus-visible, input:focus-visible {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 13px;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .members-header svg { color: var(--muted); }
-
-.member-section h2 {
-  margin: 14px 0 7px;
-  color: var(--subtle);
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: .06em;
-  text-transform: uppercase;
-}
-
-.member-row {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  padding: 5px 0;
-}
-
-.member-row.is-offline { opacity: .45; }
-
-.member-avatar {
-  position: relative;
-  width: 28px;
-  height: 28px;
-  font-size: 9px;
-}
-
-.presence-dot {
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 8px;
-  height: 8px;
-  border: 2px solid #0d1116;
-  border-radius: 50%;
-  background: var(--good);
-}
-
-.member-row > span:last-child { min-width: 0; }
-
-.member-row strong, .member-row small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.member-row strong { font-size: 11px; font-weight: 600; }
-.member-row small { margin-top: 2px; color: #4aa3ff; font-size: 9px; }
-
-.preview-note {
-  margin: 24px 0 0;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-soft);
-  color: var(--subtle);
-  font-size: 9px;
-  line-height: 1.6;
-}
 
 .dialog-backdrop {
   position: fixed;
@@ -812,6 +771,8 @@ button:focus-visible, input:focus-visible {
 }
 
 .nickname-dialog {
+  max-height: calc(100dvh - 36px);
+  overflow-y: auto;
   width: min(390px, 100%);
   padding: 24px;
   border: 1px solid #343e49;
@@ -828,14 +789,14 @@ button:focus-visible, input:focus-visible {
 
 .nickname-dialog h2 {
   margin: 0 0 8px;
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 650;
 }
 
 .nickname-dialog > p {
   margin: 0 0 20px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.7;
 }
 
@@ -843,7 +804,7 @@ button:focus-visible, input:focus-visible {
   display: block;
   margin-bottom: 7px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .nickname-dialog input {
@@ -866,7 +827,7 @@ button:focus-visible, input:focus-visible {
 .dialog-actions button:disabled { opacity: .45; cursor: not-allowed; }
 
 @media (max-width: 900px) {
-  .workspace { grid-template-columns: 58px minmax(0, 1fr); }
+  .workspace { grid-template-columns: 66px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 140px); }
   .group-rail { grid-row: 1 / span 2; }
   .members-panel {
     grid-column: 2;
@@ -876,16 +837,16 @@ button:focus-visible, input:focus-visible {
     border-top: 1px solid var(--border);
     border-left: 0;
   }
-  .members-header, .preview-note { grid-column: 1 / -1; }
+  .members-header { grid-column: 1 / -1; }
   .participant-grid { grid-template-columns: repeat(3, minmax(118px, 1fr)); }
 }
 
 @media (max-width: 600px) {
   .titlebar { grid-template-columns: 1fr auto; }
   .local-badge { display: none; }
-  .workspace { grid-template-columns: 50px minmax(0, 1fr); }
+  .workspace { grid-template-columns: 56px minmax(0, 1fr); }
   .group-rail { padding-inline: 5px; }
-  .group-button { width: 36px; height: 36px; }
+  .group-button { width: 42px; height: 42px; }
   .group-button.is-selected::before { left: -6px; }
   .group-header, .voice-panel, .voice-preview, .chat-panel, .callbar { padding-left: 10px; padding-right: 10px; }
   .participant-grid { grid-template-columns: repeat(2, minmax(100px, 1fr)); }
@@ -895,10 +856,14 @@ button:focus-visible, input:focus-visible {
   .callbar { flex-wrap: wrap; }
   .call-state { flex-basis: 100%; }
   .members-panel { grid-template-columns: 1fr; }
-  .members-header, .preview-note { grid-column: 1; }
+  .members-header { grid-column: 1; }
   [data-tooltip]::after { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* 仅隐藏应用内容区的滚动条，仍保留滚轮、触控板与键盘滚动能力。 */
+:is(.group-rail, .members-panel, .message-list, .voice-panel, .voice-preview, .member-filmstrip, .capture-sources, .nickname-dialog) { scrollbar-width: none; }
+:is(.group-rail, .members-panel, .message-list, .voice-panel, .voice-preview, .member-filmstrip, .capture-sources, .nickname-dialog)::-webkit-scrollbar { display: none; }

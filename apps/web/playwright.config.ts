@@ -5,6 +5,7 @@ const baseURL = `http://127.0.0.1:${webPort}`;
 
 export default defineConfig({
   testDir: './tests',
+  testIgnore: '**/desktop/**',
   fullyParallel: false,
   workers: 1,
   timeout: 60_000,
