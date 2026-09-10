@@ -24,6 +24,7 @@ const submitting = ref(false);
 const profileOpen = ref(false);
 const windowMaximized = ref(false);
 let sessionHeartbeat: number | null = null;
+let sessionHeartbeatInFlight = false;
 
 const setupRequired = computed(() => !initialized.value);
 const registering = computed(() => setupRequired.value || registrationMode.value);
@@ -85,11 +86,23 @@ function acceptSession(result: { sessionToken?: string; user: AuthUser }) {
   passwordConfirmation.value = '';
 }
 
+async function verifyCurrentSession() {
+  if (sessionHeartbeatInFlight) return;
+  sessionHeartbeatInFlight = true;
+  try {
+    await authenticatedFetch('/api/auth/me', { signal: AbortSignal.timeout(15000) });
+  } catch {
+    // 网络异常由下一次心跳重试；401 会由 authenticatedFetch 统一退出登录。
+  } finally {
+    sessionHeartbeatInFlight = false;
+  }
+}
+
 watch(user, (currentUser) => {
   if (sessionHeartbeat !== null) window.clearInterval(sessionHeartbeat);
   sessionHeartbeat = currentUser ? window.setInterval(() => {
     // 同账号在新设备登录后，旧客户端即使正在语音中也会及时收到 401 并退出。
-    void authenticatedFetch('/api/auth/me', { signal: AbortSignal.timeout(15000) }).catch(() => undefined);
+    void verifyCurrentSession();
   }, SESSION_HEARTBEAT_INTERVAL_MS) : null;
 });
 

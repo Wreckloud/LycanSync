@@ -5,6 +5,17 @@ export interface AuthUser {
   administrator: boolean;
 }
 
+export class ApiRequestError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ApiRequestError';
+  }
+}
+
 let browserSession: string | null = null;
 
 const publicApiPaths = new Set([
@@ -39,7 +50,11 @@ export async function authRequest<T>(path: string, method = 'GET', body?: unknow
   });
   if (!response.ok) {
     const problem = await response.json().catch(() => null);
-    throw new Error(problem?.detail || problem?.message || `请求失败（HTTP ${response.status}）`);
+    const code = typeof problem?.code === 'string' ? problem.code : 'UNKNOWN_ERROR';
+    const message = typeof problem?.detail === 'string'
+      ? problem.detail
+      : (typeof problem?.message === 'string' ? problem.message : `请求失败（HTTP ${response.status}）`);
+    throw new ApiRequestError(response.status, code, message);
   }
   if (response.status === 204) return undefined as T;
   return response.json();

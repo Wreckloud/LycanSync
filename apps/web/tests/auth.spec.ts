@@ -99,6 +99,35 @@ test('新设备替换会话后旧客户端通过心跳静默退出', async ({ pa
   expect(meRequests).toBeGreaterThanOrEqual(2);
 });
 
+test('上一次会话心跳完成前不会发起下一次', async ({ page }) => {
+  await page.clock.install();
+  const user = { id: 'heartbeat-user', nickname: '心跳测试', avatar: '', administrator: false };
+  let meRequests = 0;
+  let releaseHeartbeat = () => {};
+  const heartbeatPending = new Promise<void>((resolve) => { releaseHeartbeat = resolve; });
+  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/auth/me', async (route) => {
+    meRequests++;
+    if (meRequests > 1) await heartbeatPending;
+    return route.fulfill({ json: user });
+  });
+  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
+    json: { participantCount: 0, participantNames: [] },
+  }));
+
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+  await page.evaluate(() => {
+    Object.defineProperty(AbortSignal, 'timeout', {
+      configurable: true,
+      value: () => new AbortController().signal,
+    });
+  });
+  await page.clock.fastForward(60_100);
+  await expect.poll(() => meRequests).toBe(2);
+  releaseHeartbeat();
+});
+
 test('个人资料修改沿用当前账号', async ({ page }) => {
   let user = { id: 'test-user', nickname: '初始昵称', avatar: '', administrator: true };
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));

@@ -106,7 +106,8 @@ class AuthApplicationIT {
         String token = registerAdmin();
         mvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.passwordHash").doesNotExist());
-        service.logout(token);
+        mvc.perform(post("/api/auth/logout").header("Authorization", "Bearer " + token))
+                .andExpect(status().isNoContent());
         assertThatThrownBy(() -> service.authenticate(token)).isInstanceOf(AuthException.class);
     }
 
@@ -148,9 +149,15 @@ class AuthApplicationIT {
     void shouldUseSameErrorForUnknownUserAndWrongPassword() {
         registerAdmin();
         assertThatThrownBy(() -> localAuth.login(new LocalLoginRequest("unknown", ADMIN_PASSWORD)))
-                .isInstanceOf(AuthException.class).hasMessage("用户名或密码错误");
+                .isInstanceOfSatisfying(AuthException.class, exception -> {
+                    assertThat(exception.getCode()).isEqualTo("INVALID_CREDENTIALS");
+                    assertThat(exception).hasMessage("用户名或密码错误");
+                });
         assertThatThrownBy(() -> localAuth.login(new LocalLoginRequest("admin", "incorrect-password")))
-                .isInstanceOf(AuthException.class).hasMessage("用户名或密码错误");
+                .isInstanceOfSatisfying(AuthException.class, exception -> {
+                    assertThat(exception.getCode()).isEqualTo("INVALID_CREDENTIALS");
+                    assertThat(exception).hasMessage("用户名或密码错误");
+                });
     }
 
     @Test

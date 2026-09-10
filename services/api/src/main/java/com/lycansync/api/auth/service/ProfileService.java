@@ -35,7 +35,7 @@ public class ProfileService {
         // 头像只接受本地上传的小尺寸图片，不允许服务器抓取用户指定网址。
         if (!request.avatar().equals(user.avatar()) && !request.avatar().isEmpty()) validateAvatar(request.avatar());
         if (mapper.updateProfile(user.id(), nickname, request.avatar()) != 1) {
-            throw new AuthException(HttpStatus.NOT_FOUND, "账号不存在");
+            throw new AuthException(HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND", "账号不存在");
         }
         return new AuthUser(user.id(), nickname, request.avatar(), user.administrator());
     }
@@ -67,6 +67,6 @@ public class ProfileService {
     }
 
     private AuthException invalid(String message) {
-        return new AuthException(HttpStatus.BAD_REQUEST, message);
+        return new AuthException(HttpStatus.BAD_REQUEST, "INVALID_REQUEST", message);
     }
 }

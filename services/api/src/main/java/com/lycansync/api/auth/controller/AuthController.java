@@ -69,7 +69,8 @@ public class AuthController {
     @PostMapping("/logout")
     @Operation(summary = "退出当前设备登录")
     public ResponseEntity<Void> logout(@RequestHeader("Authorization") String authorization) {
-        authService.logout(authorization.substring(7));
+        // 认证过滤器已校验 Bearer 前缀及当前会话，此处只提取待撤销的原始凭据。
+        authService.logout(authorization.substring("Bearer ".length()));
         return ResponseEntity.noContent().build();
     }
 }

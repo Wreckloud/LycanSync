@@ -28,12 +28,14 @@ public class AuthService {
 
     public AuthUser authenticate(String token) {
         if (token == null || !token.matches("[A-Za-z0-9_-]{43}")) {
-            throw new AuthException(HttpStatus.UNAUTHORIZED, "请先登录");
+            throw new AuthException(HttpStatus.UNAUTHORIZED, "INVALID_SESSION", "请先登录");
         }
         String hash = AuthSecrets.hash(token);
         Instant now = Instant.now(systemClock);
         AuthUser user = mapper.findSessionUser(hash, now);
-        if (user == null) throw new AuthException(HttpStatus.UNAUTHORIZED, "登录已过期，请重新登录");
+        if (user == null) {
+            throw new AuthException(HttpStatus.UNAUTHORIZED, "INVALID_SESSION", "登录已过期，请重新登录");
+        }
         mapper.extendSession(hash, now, now.plus(SESSION_TTL));
         return user;
     }

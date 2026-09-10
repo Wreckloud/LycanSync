@@ -25,7 +25,8 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(AuthException.class)
     public ProblemDetail handleAuth(AuthException exception) {
-        return createProblemDetail(exception.getStatus(), "AUTH_ERROR", "认证请求失败", exception.getMessage());
+        return createProblemDetail(
+                exception.getStatus(), exception.getCode(), "认证请求失败", exception.getMessage());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

@@ -54,14 +54,14 @@ public class LocalAuthService {
         try {
             return transactions.execute(status -> registerInTransaction(request, username, passwordHash));
         } catch (DuplicateKeyException exception) {
-            throw new AuthException(HttpStatus.CONFLICT, "用户名已被使用");
+            throw new AuthException(HttpStatus.CONFLICT, "USERNAME_ALREADY_EXISTS", "用户名已被使用");
         }
     }
 
     private LoginResponse registerInTransaction(LocalRegistrationRequest request, String username, String passwordHash) {
         Instant now = Instant.now(systemClock);
         if (mapper.findLocalCredential(username) != null) {
-            throw new AuthException(HttpStatus.CONFLICT, "用户名已被使用");
+            throw new AuthException(HttpStatus.CONFLICT, "USERNAME_ALREADY_EXISTS", "用户名已被使用");
         }
         // 条件更新会原子选出首位管理员；事务失败时初始化状态和账号写入一起回滚。
         boolean administrator = mapper.markInitialized(now) == 1;
@@ -79,7 +79,7 @@ public class LocalAuthService {
         String passwordHash = credential == null ? dummyPasswordHash : credential.passwordHash();
         boolean matches = passwordEncoder.matches(request.password(), passwordHash);
         if (credential == null || !matches) {
-            throw new AuthException(HttpStatus.UNAUTHORIZED, "用户名或密码错误");
+            throw new AuthException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "用户名或密码错误");
         }
         AuthUser user = credential.user();
         return new LoginResponse(authService.issueSession(user), user);
@@ -87,7 +87,11 @@ public class LocalAuthService {
 
     private String normalizeUsername(String username) {
         if (username == null || !USERNAME.matcher(username).matches()) {
-            throw new AuthException(HttpStatus.BAD_REQUEST, "用户名只能使用 3 至 32 位字母、数字或下划线");
+            throw new AuthException(
+                    HttpStatus.BAD_REQUEST,
+                    "INVALID_REQUEST",
+                    "用户名只能使用 3 至 32 位字母、数字或下划线"
+            );
         }
         return username.toLowerCase(Locale.ROOT);
     }
@@ -95,7 +99,11 @@ public class LocalAuthService {
     private void validatePassword(String password) {
         if (password == null || password.isBlank() || password.length() < 6 || password.length() > 64
                 || password.getBytes(StandardCharsets.UTF_8).length > 72) {
-            throw new AuthException(HttpStatus.BAD_REQUEST, "密码需为 6 至 64 个字符，且编码后不能超过 72 字节");
+            throw new AuthException(
+                    HttpStatus.BAD_REQUEST,
+                    "INVALID_REQUEST",
+                    "密码需为 6 至 64 个字符，且编码后不能超过 72 字节"
+            );
         }
     }
 }
