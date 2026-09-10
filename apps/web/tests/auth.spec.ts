@@ -150,8 +150,12 @@ test('个人资料修改沿用当前账号', async ({ page }) => {
 
 test('更换头像不会改变个人设置布局', async ({ page }) => {
   const user = { id: 'avatar-user', nickname: '头像测试', avatar: '', administrator: true };
+  let profileUpdate: { nickname?: string; avatar?: string } | undefined;
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
-  await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/auth/me', async (route) => {
+    if (route.request().method() === 'PUT') profileUpdate = route.request().postDataJSON();
+    await route.fulfill({ json: { ...user, ...profileUpdate } });
+  });
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
     json: { participantCount: 0, participantNames: [] },
   }));
@@ -168,6 +172,15 @@ test('更换头像不会改变个人设置布局', async ({ page }) => {
     mimeType: 'image/png',
     buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'),
   });
-  await expect(page.getByAltText('头像预览')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '调整头像' })).toBeVisible();
+  await expect(page.getByLabel('头像缩放')).toBeVisible();
+  await page.getByRole('button', { name: '应用头像' }).click();
+  const preview = page.getByAltText('头像预览');
+  await expect(preview).toBeVisible();
+  await expect(preview).toHaveJSProperty('naturalWidth', 512);
+  expect(await preview.getAttribute('src')).toMatch(/^data:image\/png;base64,/);
   expect(await dialog.boundingBox()).toEqual(initialDialog);
+  await page.getByRole('button', { name: '保存资料' }).click();
+  expect(profileUpdate?.avatar).toMatch(/^data:image\/png;base64,/);
+  expect(Buffer.from(profileUpdate!.avatar!.split(',')[1], 'base64').length).toBeLessThanOrEqual(512 * 1024);
 });
