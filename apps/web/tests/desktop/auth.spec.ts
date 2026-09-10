@@ -11,6 +11,7 @@ test('桌面本地注册、加密保存、重启恢复与退出撤销', async ()
   let initialized = false;
   let revoked = false;
   let authorizedRequests = 0;
+  let sessionRequests = 0;
   const server = createServer(async (request, response) => {
     let body = '';
     for await (const chunk of request) body += chunk;
@@ -27,9 +28,12 @@ test('桌面本地注册、加密保存、重启恢复与退出撤销', async ()
     } else if (request.url === '/api/auth/session') {
       if (request.headers.authorization !== 'Bearer ' + token || revoked) {
         response.writeHead(401); response.end('{}');
-      } else response.end(JSON.stringify({
-        id: user.id, nickname: user.nickname, administrator: user.administrator,
-      }));
+      } else {
+        sessionRequests++;
+        response.end(JSON.stringify({
+          id: user.id, nickname: user.nickname, administrator: user.administrator,
+        }));
+      }
     } else if (request.url === '/api/auth/logout' && request.headers.authorization === 'Bearer ' + token) {
       revoked = true; response.writeHead(204); response.end();
     } else if (request.url?.startsWith('/api/rtc/room-summary')) {
@@ -48,6 +52,7 @@ test('桌面本地注册、加密保存、重启恢复与退出撤销', async ()
   let application = await launch();
   try {
     let page = await application.firstWindow();
+    await page.clock.install();
     await expect(page.getByRole('heading', { name: '一起开黑，一起看' })).toBeVisible();
     const registrationResponse = page.waitForResponse((response) => response.url().endsWith('/api/auth/local/register'));
     await page.getByLabel('用户名').fill('Admin');
@@ -57,6 +62,8 @@ test('桌面本地注册、加密保存、重启恢复与退出撤销', async ()
     expect(await (await registrationResponse).json()).not.toHaveProperty('sessionToken');
     expect(registration).toEqual({ username: 'Admin', password: 'administrator-password' });
     await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+    await page.clock.fastForward(20_100);
+    await expect.poll(() => sessionRequests).toBe(1);
     const saved = readFileSync(resolve(userDataDir, 'session.bin'));
     expect(saved.toString('utf8')).not.toContain(token);
     expect(await page.evaluate(() => localStorage.length)).toBe(0);

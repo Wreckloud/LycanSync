@@ -105,7 +105,8 @@ async function serveApplication(request) {
   if (url.pathname.startsWith('/api/')) {
     const allowed = (url.pathname === '/api/rtc/token' && request.method === 'POST')
       || (url.pathname === '/api/rtc/room-summary' && request.method === 'GET')
-      || (['/api/system/initialization', '/api/auth/me'].includes(url.pathname) && request.method === 'GET')
+      || (['/api/system/initialization', '/api/auth/me', '/api/auth/session'].includes(url.pathname)
+        && request.method === 'GET')
       || ((sessionAuthPaths.has(url.pathname) || url.pathname === '/api/auth/logout') && request.method === 'POST')
       || (url.pathname === '/api/auth/me' && request.method === 'PUT');
     if (!allowed) return new Response(null, { status: 404 });
