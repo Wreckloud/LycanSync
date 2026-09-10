@@ -92,8 +92,10 @@ async function verifyCurrentSession() {
   sessionHeartbeatInFlight = true;
   try {
     const session = await authRequest<AuthSessionStatus>('session');
-    if (user.value?.id === session.id) {
-      user.value = { ...user.value, nickname: session.nickname, administrator: session.administrator };
+    const currentUser = user.value;
+    if (currentUser?.id === session.id
+        && (currentUser.nickname !== session.nickname || currentUser.administrator !== session.administrator)) {
+      user.value = { ...currentUser, nickname: session.nickname, administrator: session.administrator };
     }
   } catch {
     // 网络异常由下一次心跳重试；401 会由 authenticatedFetch 统一退出登录。
@@ -113,9 +115,9 @@ async function openProfile() {
   profileOpen.value = true;
 }
 
-watch(user, (currentUser) => {
+watch(() => user.value?.id ?? null, (currentUserId) => {
   if (sessionHeartbeat !== null) window.clearInterval(sessionHeartbeat);
-  sessionHeartbeat = currentUser ? window.setInterval(() => {
+  sessionHeartbeat = currentUserId ? window.setInterval(() => {
     // 同账号在新设备登录后，旧客户端即使正在语音中也会及时收到 401 并退出。
     void verifyCurrentSession();
   }, SESSION_HEARTBEAT_INTERVAL_MS) : null;

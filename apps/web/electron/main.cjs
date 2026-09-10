@@ -10,8 +10,17 @@ const serverConfig = require('./server-config.json');
 // 安装版固定使用打包配置；开发模式才允许环境变量临时覆盖。
 const backend = new URL(app.isPackaged ? serverConfig.apiUrl
   : process.env.LYCANSYNC_API_URL || serverConfig.apiUrl);
-const sessionAuthPaths = new Set(['/api/auth/local/register', '/api/auth/local/login']);
-const publicApiPaths = new Set(['/api/system/initialization', ...sessionAuthPaths]);
+const apiRoutePolicies = new Map([
+  ['GET /api/system/initialization', { public: true }],
+  ['POST /api/auth/local/register', { public: true, savesSession: true }],
+  ['POST /api/auth/local/login', { public: true, savesSession: true }],
+  ['GET /api/auth/me', {}],
+  ['GET /api/auth/session', {}],
+  ['PUT /api/auth/me', { maxBodyBytes: 750000 }],
+  ['POST /api/auth/logout', { clearsSession: true }],
+  ['POST /api/rtc/token', {}],
+  ['GET /api/rtc/room-summary', {}],
+]);
 if (backend.username || backend.password || backend.pathname !== '/' || backend.search || backend.hash
     || !['http:', 'https:'].includes(backend.protocol)
     || (backend.protocol === 'http:' && !['127.0.0.1', 'localhost', '[::1]'].includes(backend.hostname))) {
@@ -103,28 +112,22 @@ async function serveApplication(request) {
   const url = new URL(request.url);
   if (!trustedUrl(request.url)) return new Response(null, { status: 403 });
   if (url.pathname.startsWith('/api/')) {
-    const allowed = (url.pathname === '/api/rtc/token' && request.method === 'POST')
-      || (url.pathname === '/api/rtc/room-summary' && request.method === 'GET')
-      || (['/api/system/initialization', '/api/auth/me', '/api/auth/session'].includes(url.pathname)
-        && request.method === 'GET')
-      || ((sessionAuthPaths.has(url.pathname) || url.pathname === '/api/auth/logout') && request.method === 'POST')
-      || (url.pathname === '/api/auth/me' && request.method === 'PUT');
-    if (!allowed) return new Response(null, { status: 404 });
+    const routePolicy = apiRoutePolicies.get(`${request.method} ${url.pathname}`);
+    if (!routePolicy) return new Response(null, { status: 404 });
     try {
       const body = ['POST', 'PUT'].includes(request.method) ? await request.text() : undefined;
-      if (body && body.length > (url.pathname === '/api/auth/me' ? 750000 : 4096)) return new Response(null, { status: 413 });
+      if (body && body.length > (routePolicy.maxBodyBytes ?? 4096)) return new Response(null, { status: 413 });
       const token = await loadSession();
-      const publicRequest = publicApiPaths.has(url.pathname);
       const response = await net.fetch(new URL(url.pathname + url.search, backend).href, {
         method: request.method,
         headers: { ...(body ? { 'Content-Type': 'application/json' } : {}),
-          ...(!publicRequest && token ? { Authorization: 'Bearer ' + token } : {}) },
+          ...(!routePolicy.public && token ? { Authorization: 'Bearer ' + token } : {}) },
         body, redirect: 'error', credentials: 'omit',
         signal: AbortSignal.any([request.signal, AbortSignal.timeout(15000)]),
       });
-      if (!publicRequest && token === sessionToken
-          && (response.status === 401 || (url.pathname === '/api/auth/logout' && response.ok))) await clearSession();
-      if (sessionAuthPaths.has(url.pathname) && response.ok) {
+      if (!routePolicy.public && token === sessionToken
+          && (response.status === 401 || (routePolicy.clearsSession && response.ok))) await clearSession();
+      if (routePolicy.savesSession && response.ok) {
         const result = await response.json();
         if (!/^[A-Za-z0-9_-]{43}$/.test(result.sessionToken ?? '')) throw new Error('登录响应无效');
         await saveSession(result.sessionToken);

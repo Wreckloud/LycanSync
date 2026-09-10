@@ -130,6 +130,47 @@ test('上一次会话心跳完成前不会发起下一次', async ({ page }) => 
   releaseHeartbeat();
 });
 
+test('会话状态未变化时心跳保持固定节拍', async ({ page }) => {
+  await page.clock.install();
+  const user = { id: 'heartbeat-cadence', nickname: '固定节拍', avatar: '', administrator: false };
+  let sessionRequests = 0;
+  let releaseFirstHeartbeat = () => {};
+  let finishFirstHeartbeat = () => {};
+  const firstHeartbeatPending = new Promise<void>((resolve) => { releaseFirstHeartbeat = resolve; });
+  const firstHeartbeatFinished = new Promise<void>((resolve) => { finishFirstHeartbeat = resolve; });
+  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/auth/session', async (route) => {
+    sessionRequests++;
+    if (sessionRequests === 1) {
+      await firstHeartbeatPending;
+      await route.fulfill({ json: {
+        id: user.id, nickname: user.nickname, administrator: user.administrator,
+      } });
+      finishFirstHeartbeat();
+      return;
+    }
+    await route.fulfill({ json: {
+      id: user.id, nickname: user.nickname, administrator: user.administrator,
+    } });
+  });
+  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
+    json: { participantCount: 0, participantNames: [] },
+  }));
+
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+  await page.clock.fastForward(20_100);
+  await expect.poll(() => sessionRequests).toBe(1);
+  await page.clock.fastForward(5_000);
+  releaseFirstHeartbeat();
+  await firstHeartbeatFinished;
+  await page.clock.fastForward(14_800);
+  expect(sessionRequests).toBe(1);
+  await page.clock.fastForward(200);
+  await expect.poll(() => sessionRequests).toBe(2);
+});
+
 test('个人资料修改沿用当前账号', async ({ page }) => {
   let user = { id: 'test-user', nickname: '初始昵称', avatar: '', administrator: true };
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
