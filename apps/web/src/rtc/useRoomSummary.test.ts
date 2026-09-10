@@ -10,8 +10,20 @@ let scope: EffectScope | undefined;
 afterEach(() => {
   scope?.stop();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
+
+function stubDocumentVisibility(initial: DocumentVisibilityState) {
+  let visibilityState = initial;
+  const documentStub = new EventTarget();
+  Object.defineProperty(documentStub, 'visibilityState', { get: () => visibilityState });
+  vi.stubGlobal('document', documentStub);
+  return (next: DocumentVisibilityState) => {
+    visibilityState = next;
+    documentStub.dispatchEvent(new Event('visibilitychange'));
+  };
+}
 
 describe('Vue 房间摘要生命周期', () => {
   it('切换群组后忽略迟到的旧摘要', async () => {
@@ -61,5 +73,38 @@ describe('Vue 房间摘要生命周期', () => {
     expect(summary.value).toBeNull();
     expect(requestSummary).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('页面隐藏时暂停轮询并在恢复可见后立即刷新', async () => {
+    vi.useFakeTimers();
+    const setVisibility = stubDocumentVisibility('visible');
+    requestSummary.mockResolvedValue({ participantCount: 0, participantNames: [] });
+    scope = effectScope();
+    scope.run(() => useRoomSummary(ref('pack'), ref(true)));
+    await nextTick();
+    expect(requestSummary).toHaveBeenCalledTimes(1);
+
+    setVisibility('hidden');
+    await nextTick();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(requestSummary).toHaveBeenCalledTimes(1);
+
+    setVisibility('visible');
+    await nextTick();
+    expect(requestSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it('可见页面每十秒刷新一次摘要', async () => {
+    vi.useFakeTimers();
+    stubDocumentVisibility('visible');
+    requestSummary.mockResolvedValue({ participantCount: 0, participantNames: [] });
+    scope = effectScope();
+    scope.run(() => useRoomSummary(ref('pack'), ref(true)));
+    await nextTick();
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(requestSummary).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(requestSummary).toHaveBeenCalledTimes(2);
   });
 });

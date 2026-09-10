@@ -5,6 +5,7 @@ import com.auth0.jwt.algorithms.Algorithm;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.lycansync.api.rtc.config.LiveKitProperties;
 import com.lycansync.api.rtc.dto.RtcTokenResponse;
+import com.lycansync.api.rtc.exception.RtcRoomNotFoundException;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -12,10 +13,11 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
-import com.lycansync.api.auth.model.AuthUser;
+import com.lycansync.api.auth.model.AuthenticatedUser;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 本地 RTC 凭证签名与权限测试。
@@ -35,7 +37,8 @@ class LocalRtcTokenServiceTests {
 
     @Test
     void shouldSignGroupRoomTokenWithOnlyRequiredMediaPermissions() {
-        RtcTokenResponse response = localRtcTokenService.issueToken("pack", new AuthUser(UUID.randomUUID(), "小狼", "", false));
+        RtcTokenResponse response = localRtcTokenService.issueToken(
+                "pack", new AuthenticatedUser(UUID.randomUUID(), "小狼", false));
         DecodedJWT token = JWT.decode(response.token());
 
         // 解码只能读取内容，另外验证签名才能确认凭证确实由指定密钥签发。
@@ -61,7 +64,8 @@ class LocalRtcTokenServiceTests {
 
     @Test
     void shouldUseClockForTenMinuteExpiryAndMatchResponseToJwtPrecision() {
-        RtcTokenResponse response = localRtcTokenService.issueToken("pack", new AuthUser(UUID.randomUUID(), "小狼", "", false));
+        RtcTokenResponse response = localRtcTokenService.issueToken(
+                "pack", new AuthenticatedUser(UUID.randomUUID(), "小狼", false));
         DecodedJWT token = JWT.decode(response.token());
 
         assertThat(token.getNotBeforeAsInstant()).isEqualTo(Instant.parse("2026-09-03T07:00:00Z"));
@@ -71,7 +75,7 @@ class LocalRtcTokenServiceTests {
 
     @Test
     void shouldReuseAccountIdentityAcrossDevices() {
-        AuthUser user = new AuthUser(UUID.randomUUID(), "小狼", "", false);
+        AuthenticatedUser user = new AuthenticatedUser(UUID.randomUUID(), "小狼", false);
         RtcTokenResponse first = localRtcTokenService.issueToken("pack", user);
         RtcTokenResponse second = localRtcTokenService.issueToken("pack", user);
         assertThat(first.participantIdentity()).isEqualTo("user-" + user.id());
@@ -80,11 +84,22 @@ class LocalRtcTokenServiceTests {
 
     @Test
     void shouldAssignDifferentIdentitiesToRequestsWithTheSameNickname() {
-        RtcTokenResponse first = localRtcTokenService.issueToken("pack", new AuthUser(UUID.randomUUID(), "小狼", "", false));
-        RtcTokenResponse second = localRtcTokenService.issueToken("pack", new AuthUser(UUID.randomUUID(), "小狼", "", false));
+        RtcTokenResponse first = localRtcTokenService.issueToken(
+                "pack", new AuthenticatedUser(UUID.randomUUID(), "小狼", false));
+        RtcTokenResponse second = localRtcTokenService.issueToken(
+                "pack", new AuthenticatedUser(UUID.randomUUID(), "小狼", false));
 
         assertThat(first.participantIdentity()).startsWith("user-");
         assertThat(first.participantIdentity()).isNotEqualTo(second.participantIdentity());
         assertThat(first.token()).isNotEqualTo(second.token());
+    }
+
+    @Test
+    void shouldRejectUnknownBusinessRoomBeforeSigningToken() {
+        AuthenticatedUser user = new AuthenticatedUser(UUID.randomUUID(), "小狼", false);
+
+        assertThatThrownBy(() -> localRtcTokenService.issueToken("missing", user))
+                .isInstanceOf(RtcRoomNotFoundException.class)
+                .hasMessage("房间不存在");
     }
 }

@@ -42,6 +42,9 @@ export async function summary(groupId = 'pack') {
 async function api(path: string, body: string, user: ReturnType<typeof testUser>) {
   if (path === '/api/system/initialization') return { initialized: true };
   if (path === '/api/auth/me') return user;
+  if (path === '/api/auth/session') {
+    return { id: user.id, nickname: user.nickname, administrator: user.administrator };
+  }
   if (path.startsWith('/api/rtc/room-summary')) return summary(new URL(path, 'http://localhost').searchParams.get('groupId') ?? 'pack');
   if (path === '/api/rtc/token') {
     const { groupId } = JSON.parse(body);

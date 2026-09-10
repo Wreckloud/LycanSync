@@ -1,16 +1,24 @@
-import { shallowRef, watch, type Ref } from 'vue';
+import { onScopeDispose, shallowRef, watch, type Ref } from 'vue';
 import { requestRoomSummary, type RtcRoomSummary } from './roomSummaryApi';
 
-// TODO: 页面隐藏时暂停轮询、恢复时刷新；正式事件通道接入后保留重连快照校准。
-const REFRESH_INTERVAL_MS = 3_000;
+const REFRESH_INTERVAL_MS = 10_000;
 
 /** 未入房时查询摘要；切换群组、入房或销毁作用域时取消旧请求。 */
 export function useRoomSummary(groupId: Ref<string>, enabled: Ref<boolean>) {
   const summary = shallowRef<RtcRoomSummary | null>(null);
+  const pageVisible = shallowRef(typeof document === 'undefined' || document.visibilityState !== 'hidden');
 
-  watch([groupId, enabled], ([currentGroupId, shouldRefresh], _, onCleanup) => {
+  const updatePageVisibility = () => {
+    pageVisible.value = document.visibilityState !== 'hidden';
+  };
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', updatePageVisibility);
+    onScopeDispose(() => document.removeEventListener('visibilitychange', updatePageVisibility));
+  }
+
+  watch([groupId, enabled, pageVisible], ([currentGroupId, shouldRefresh, isVisible], _, onCleanup) => {
     summary.value = null;
-    if (!shouldRefresh) return;
+    if (!shouldRefresh || !isVisible) return;
     const request = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     onCleanup(() => {

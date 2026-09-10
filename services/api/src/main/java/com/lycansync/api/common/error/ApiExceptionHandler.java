@@ -1,6 +1,7 @@
 package com.lycansync.api.common.error;
 
 import com.lycansync.api.auth.exception.AuthException;
+import com.lycansync.api.rtc.exception.RtcRoomNotFoundException;
 import com.lycansync.api.rtc.exception.RtcServiceUnavailableException;
 import com.lycansync.api.system.exception.SystemStateNotFoundException;
 import jakarta.validation.ConstraintViolationException;
@@ -33,7 +34,7 @@ public class ApiExceptionHandler {
     public ProblemDetail handleInvalidRequest(MethodArgumentNotValidException exception) {
         return createProblemDetail(
                 HttpStatus.BAD_REQUEST,
-                "INVALID_REQUEST",
+                ApiErrorCode.INVALID_REQUEST,
                 "请求参数无效",
                 "请求参数不符合接口要求，请检查必填项和长度限制"
         );
@@ -43,7 +44,7 @@ public class ApiExceptionHandler {
     public ProblemDetail handleUnreadableRequest(HttpMessageNotReadableException exception) {
         return createProblemDetail(
                 HttpStatus.BAD_REQUEST,
-                "INVALID_REQUEST",
+                ApiErrorCode.INVALID_REQUEST,
                 "请求参数无效",
                 "请求体缺失或 JSON 格式不正确"
         );
@@ -54,7 +55,7 @@ public class ApiExceptionHandler {
         log.error("系统初始化状态记录不存在", exception);
         return createProblemDetail(
                 HttpStatus.INTERNAL_SERVER_ERROR,
-                "SYSTEM_STATE_NOT_FOUND",
+                ApiErrorCode.SYSTEM_STATE_NOT_FOUND,
                 "系统状态异常",
                 "系统初始化状态记录不存在"
         );
@@ -65,7 +66,7 @@ public class ApiExceptionHandler {
         log.error("数据库访问失败", exception);
         return createProblemDetail(
                 HttpStatus.SERVICE_UNAVAILABLE,
-                "DATABASE_ACCESS_ERROR",
+                ApiErrorCode.DATABASE_ACCESS_ERROR,
                 "数据库访问失败",
                 "数据库暂时不可用"
         );
@@ -75,7 +76,7 @@ public class ApiExceptionHandler {
     public ProblemDetail handleConstraintViolation(ConstraintViolationException exception) {
         return createProblemDetail(
                 HttpStatus.BAD_REQUEST,
-                "INVALID_REQUEST",
+                ApiErrorCode.INVALID_REQUEST,
                 "请求参数无效",
                 "请求参数不符合接口要求，请检查必填项和格式"
         );
@@ -86,22 +87,32 @@ public class ApiExceptionHandler {
         log.error("RTC 服务端接口不可用", exception);
         return createProblemDetail(
                 HttpStatus.SERVICE_UNAVAILABLE,
-                "RTC_SERVICE_UNAVAILABLE",
+                ApiErrorCode.RTC_SERVICE_UNAVAILABLE,
                 "语音状态暂时不可用",
                 "暂时无法获取语音房间状态"
         );
     }
 
+    @ExceptionHandler(RtcRoomNotFoundException.class)
+    public ProblemDetail handleRtcRoomNotFound(RtcRoomNotFoundException exception) {
+        return createProblemDetail(
+                HttpStatus.NOT_FOUND,
+                ApiErrorCode.ROOM_NOT_FOUND,
+                "房间不存在",
+                exception.getMessage()
+        );
+    }
+
     private ProblemDetail createProblemDetail(
             HttpStatus status,
-            String code,
+            ApiErrorCode code,
             String title,
             String detail
     ) {
         // 响应只包含预定义说明，底层异常详情留在服务端日志中。
         ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(status, detail);
         problemDetail.setTitle(title);
-        problemDetail.setProperty("code", code);
+        problemDetail.setProperty("code", code.name());
         return problemDetail;
     }
 }

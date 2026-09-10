@@ -24,6 +24,12 @@ test('桌面本地注册、加密保存、重启恢复与退出撤销', async ()
       if (request.headers.authorization !== 'Bearer ' + token || revoked) {
         response.writeHead(401); response.end('{}');
       } else { authorizedRequests++; response.end(JSON.stringify(user)); }
+    } else if (request.url === '/api/auth/session') {
+      if (request.headers.authorization !== 'Bearer ' + token || revoked) {
+        response.writeHead(401); response.end('{}');
+      } else response.end(JSON.stringify({
+        id: user.id, nickname: user.nickname, administrator: user.administrator,
+      }));
     } else if (request.url === '/api/auth/logout' && request.headers.authorization === 'Bearer ' + token) {
       revoked = true; response.writeHead(204); response.end();
     } else if (request.url?.startsWith('/api/rtc/room-summary')) {
@@ -88,6 +94,12 @@ test('桌面已初始化服务器允许创建普通账号', async () => {
       if (request.headers.authorization !== 'Bearer ' + token) {
         response.writeHead(401); response.end('{}');
       } else response.end(JSON.stringify(user));
+    } else if (request.url === '/api/auth/session') {
+      if (request.headers.authorization !== 'Bearer ' + token) {
+        response.writeHead(401); response.end('{}');
+      } else response.end(JSON.stringify({
+        id: user.id, nickname: user.nickname, administrator: user.administrator,
+      }));
     } else if (request.url?.startsWith('/api/rtc/room-summary')) {
       response.end(JSON.stringify({ participantCount: 0, participantNames: [] }));
     } else { response.writeHead(404); response.end('{}'); }

@@ -3,10 +3,12 @@ package com.lycansync.api.auth.controller;
 import com.lycansync.api.auth.config.AuthConfiguration;
 import com.lycansync.api.auth.dto.LocalLoginRequest;
 import com.lycansync.api.auth.exception.AuthException;
+import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.model.AuthUser;
 import com.lycansync.api.auth.service.AuthService;
 import com.lycansync.api.auth.service.LocalAuthService;
 import com.lycansync.api.auth.service.ProfileService;
+import com.lycansync.api.common.error.ApiErrorCode;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -22,7 +24,9 @@ import java.util.UUID;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -38,8 +42,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class AuthControllerTests {
 
     private static final String SESSION_TOKEN = "a".repeat(43);
-    private static final AuthUser AUTHENTICATED_USER =
-            new AuthUser(UUID.fromString("2d983469-4442-44f5-b5a8-f3819f16a611"), "小狼", "", false);
+    private static final UUID USER_ID = UUID.fromString("2d983469-4442-44f5-b5a8-f3819f16a611");
+    private static final AuthenticatedUser AUTHENTICATED_USER =
+            new AuthenticatedUser(USER_ID, "小狼", false);
 
     @Autowired
     private MockMvc mvc;
@@ -56,7 +61,7 @@ class AuthControllerTests {
     @Test
     void shouldDistinguishInvalidCredentialsFromRateLimit() throws Exception {
         when(localAuthService.login(any(LocalLoginRequest.class))).thenThrow(new AuthException(
-                HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "用户名或密码错误"));
+                HttpStatus.UNAUTHORIZED, ApiErrorCode.INVALID_CREDENTIALS, "用户名或密码错误"));
         performLogin().andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"));
 
@@ -66,6 +71,35 @@ class AuthControllerTests {
         }
         performLogin().andExpect(status().isTooManyRequests())
                 .andExpect(jsonPath("$.code").value("AUTH_RATE_LIMITED"));
+    }
+
+    @Test
+    void shouldReturnLightweightSessionWithoutLoadingProfile() throws Exception {
+        when(authService.authenticate(SESSION_TOKEN)).thenReturn(AUTHENTICATED_USER);
+
+        mvc.perform(get("/api/auth/session")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + SESSION_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(USER_ID.toString()))
+                .andExpect(jsonPath("$.nickname").value("小狼"))
+                .andExpect(jsonPath("$.administrator").value(false))
+                .andExpect(jsonPath("$.avatar").doesNotExist());
+
+        verifyNoInteractions(profileService);
+    }
+
+    @Test
+    void shouldLoadFullProfileOnlyForMeEndpoint() throws Exception {
+        AuthUser profile = new AuthUser(USER_ID, "小狼", "stored-avatar", false);
+        when(authService.authenticate(SESSION_TOKEN)).thenReturn(AUTHENTICATED_USER);
+        when(profileService.findProfile(AUTHENTICATED_USER)).thenReturn(profile);
+
+        mvc.perform(get("/api/auth/me")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + SESSION_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.avatar").value("stored-avatar"));
+
+        verify(profileService).findProfile(AUTHENTICATED_USER);
     }
 
     @Test

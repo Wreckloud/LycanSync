@@ -7,6 +7,7 @@ import {
   authRequest,
   authenticatedFetch,
   setBrowserSession,
+  type AuthSessionStatus,
   type AuthUser,
 } from './auth/authApi';
 
@@ -90,12 +91,26 @@ async function verifyCurrentSession() {
   if (sessionHeartbeatInFlight) return;
   sessionHeartbeatInFlight = true;
   try {
-    await authenticatedFetch('/api/auth/me', { signal: AbortSignal.timeout(15000) });
+    const session = await authRequest<AuthSessionStatus>('session');
+    if (user.value?.id === session.id) {
+      user.value = { ...user.value, nickname: session.nickname, administrator: session.administrator };
+    }
   } catch {
     // 网络异常由下一次心跳重试；401 会由 authenticatedFetch 统一退出登录。
   } finally {
     sessionHeartbeatInFlight = false;
   }
+}
+
+async function openProfile() {
+  error.value = '';
+  try {
+    user.value = await authRequest<AuthUser>('me');
+  } catch (exception) {
+    if (!user.value) return;
+    error.value = exception instanceof Error ? exception.message : '无法读取个人资料';
+  }
+  profileOpen.value = true;
 }
 
 watch(user, (currentUser) => {
@@ -143,7 +158,7 @@ onMounted(initialize);
 </script>
 
 <template>
-  <App v-if="user" :user="user" :window-maximized="windowMaximized" @profile="profileOpen = true" />
+  <App v-if="user" :user="user" :window-maximized="windowMaximized" @profile="openProfile" />
   <div v-else class="app-shell">
     <header class="titlebar" :class="{ 'desktop-titlebar': desktop }">
       <div class="brand">LycanSync</div>

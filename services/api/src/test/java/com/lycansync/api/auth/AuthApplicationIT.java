@@ -4,10 +4,12 @@ import com.lycansync.api.auth.dto.LocalLoginRequest;
 import com.lycansync.api.auth.dto.LocalRegistrationRequest;
 import com.lycansync.api.auth.dto.ProfileUpdateRequest;
 import com.lycansync.api.auth.exception.AuthException;
+import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.model.AuthUser;
 import com.lycansync.api.auth.service.AuthService;
 import com.lycansync.api.auth.service.LocalAuthService;
 import com.lycansync.api.auth.service.ProfileService;
+import com.lycansync.api.common.error.ApiErrorCode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -104,8 +106,15 @@ class AuthApplicationIT {
     @Test
     void shouldHidePasswordAndRevokeSessionOnLogout() throws Exception {
         String token = registerAdmin();
+        jdbc.sql("UPDATE app_user SET avatar = 'stored-avatar'").update();
         mvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + token))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.passwordHash").doesNotExist());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.avatar").value("stored-avatar"))
+                .andExpect(jsonPath("$.passwordHash").doesNotExist());
+        mvc.perform(get("/api/auth/session").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.nickname").value("Admin"))
+                .andExpect(jsonPath("$.avatar").doesNotExist());
         mvc.perform(post("/api/auth/logout").header("Authorization", "Bearer " + token))
                 .andExpect(status().isNoContent());
         assertThatThrownBy(() -> service.authenticate(token)).isInstanceOf(AuthException.class);
@@ -139,7 +148,7 @@ class AuthApplicationIT {
 
     @Test
     void shouldKeepCustomProfileOnLaterLogin() {
-        AuthUser admin = service.authenticate(registerAdmin());
+        AuthenticatedUser admin = service.authenticate(registerAdmin());
         profiles.update(admin, new ProfileUpdateRequest("自定义昵称", ""));
         assertThat(localAuth.login(new LocalLoginRequest("admin", ADMIN_PASSWORD)).user().nickname())
                 .isEqualTo("自定义昵称");
@@ -150,12 +159,12 @@ class AuthApplicationIT {
         registerAdmin();
         assertThatThrownBy(() -> localAuth.login(new LocalLoginRequest("unknown", ADMIN_PASSWORD)))
                 .isInstanceOfSatisfying(AuthException.class, exception -> {
-                    assertThat(exception.getCode()).isEqualTo("INVALID_CREDENTIALS");
+                    assertThat(exception.getCode()).isEqualTo(ApiErrorCode.INVALID_CREDENTIALS);
                     assertThat(exception).hasMessage("用户名或密码错误");
                 });
         assertThatThrownBy(() -> localAuth.login(new LocalLoginRequest("admin", "incorrect-password")))
                 .isInstanceOfSatisfying(AuthException.class, exception -> {
-                    assertThat(exception.getCode()).isEqualTo("INVALID_CREDENTIALS");
+                    assertThat(exception.getCode()).isEqualTo(ApiErrorCode.INVALID_CREDENTIALS);
                     assertThat(exception).hasMessage("用户名或密码错误");
                 });
     }
@@ -204,7 +213,7 @@ class AuthApplicationIT {
                 "Admin", "密密密密密密密密密密密密密密密密密密密密密密密密密密密密密密")))
                 .isInstanceOf(AuthException.class);
 
-        AuthUser admin = service.authenticate(registerAdmin());
+        AuthenticatedUser admin = service.authenticate(registerAdmin());
         assertThatThrownBy(() -> profiles.update(admin, new ProfileUpdateRequest(" ", "")))
                 .isInstanceOf(AuthException.class);
         assertThatThrownBy(() -> profiles.update(admin, new ProfileUpdateRequest("昵称", "https://localhost/private")))

@@ -1,11 +1,12 @@
 package com.lycansync.api.rtc.controller;
 
 import com.lycansync.api.auth.config.AuthConfiguration;
-import com.lycansync.api.auth.model.AuthUser;
+import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.service.AuthService;
 import com.lycansync.api.rtc.dto.RtcRoomSummaryResponse;
 import com.lycansync.api.rtc.dto.RtcTokenResponse;
 import com.lycansync.api.rtc.exception.RtcServiceUnavailableException;
+import com.lycansync.api.rtc.exception.RtcRoomNotFoundException;
 import com.lycansync.api.rtc.service.LocalRtcRoomSummaryService;
 import com.lycansync.api.rtc.service.LocalRtcTokenService;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,8 +48,8 @@ class LocalRtcControllerTests {
 
     private static final String SESSION_TOKEN = "test-session-token";
     private static final String AUTHORIZATION = "Bearer " + SESSION_TOKEN;
-    private static final AuthUser AUTHENTICATED_USER =
-            new AuthUser(UUID.fromString("2d983469-4442-44f5-b5a8-f3819f16a611"), "小狼", "", false);
+    private static final AuthenticatedUser AUTHENTICATED_USER =
+            new AuthenticatedUser(UUID.fromString("2d983469-4442-44f5-b5a8-f3819f16a611"), "小狼", false);
 
     @Autowired
     private MockMvc mockMvc;
@@ -153,5 +154,18 @@ class LocalRtcControllerTests {
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
                 .andExpect(jsonPath("$.code").value("RTC_SERVICE_UNAVAILABLE"));
+    }
+
+    @Test
+    void shouldDescribeUnknownBusinessRoomAsRtcNotFound() throws Exception {
+        when(localRtcRoomSummaryService.getSummary("missing"))
+                .thenThrow(new RtcRoomNotFoundException());
+
+        mockMvc.perform(get("/api/rtc/room-summary")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .queryParam("groupId", "missing"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("ROOM_NOT_FOUND"))
+                .andExpect(jsonPath("$.title").value("房间不存在"));
     }
 }

@@ -1,0 +1,28 @@
+package com.lycansync.api.common.error;
+
+/**
+ * API 对外公开的稳定错误码。
+ *
+ * @author Wreckloud
+ * @since 2026-09-10
+ */
+public enum ApiErrorCode {
+
+    INVALID_REQUEST,
+
+    AUTHENTICATION_REQUIRED,
+    INVALID_AUTHORIZATION,
+    INVALID_SESSION,
+    INVALID_CREDENTIALS,
+    USERNAME_ALREADY_EXISTS,
+    ACCOUNT_NOT_FOUND,
+    ACCESS_DENIED,
+    AUTH_RATE_LIMITED,
+    AUTH_SERVICE_UNAVAILABLE,
+
+    ROOM_NOT_FOUND,
+    RTC_SERVICE_UNAVAILABLE,
+
+    SYSTEM_STATE_NOT_FOUND,
+    DATABASE_ACCESS_ERROR
+}

@@ -4,6 +4,8 @@ import com.lycansync.api.auth.dto.LocalLoginRequest;
 import com.lycansync.api.auth.dto.LocalRegistrationRequest;
 import com.lycansync.api.auth.dto.LoginResponse;
 import com.lycansync.api.auth.dto.ProfileUpdateRequest;
+import com.lycansync.api.auth.dto.SessionStatusResponse;
+import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.model.AuthUser;
 import com.lycansync.api.auth.service.AuthService;
 import com.lycansync.api.auth.service.LocalAuthService;
@@ -56,13 +58,22 @@ public class AuthController {
 
     @GetMapping("/me")
     @Operation(summary = "获取当前账号资料")
-    public ResponseEntity<AuthUser> me(@AuthenticationPrincipal AuthUser user) {
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(user);
+    public ResponseEntity<AuthUser> me(@AuthenticationPrincipal AuthenticatedUser user) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(profileService.findProfile(user));
+    }
+
+    @GetMapping("/session")
+    @Operation(summary = "检查当前登录会话", description = "返回不包含头像的轻量会话状态")
+    public ResponseEntity<SessionStatusResponse> session(@AuthenticationPrincipal AuthenticatedUser user) {
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .body(new SessionStatusResponse(user.id(), user.nickname(), user.administrator()));
     }
 
     @PutMapping("/me")
     @Operation(summary = "修改昵称和头像", description = "头像支持不超过 512 KB、1024×1024 的 PNG/JPEG data URL")
-    public AuthUser update(@AuthenticationPrincipal AuthUser user, @Valid @RequestBody ProfileUpdateRequest request) {
+    public AuthUser update(@AuthenticationPrincipal AuthenticatedUser user,
+                           @Valid @RequestBody ProfileUpdateRequest request) {
         return profileService.update(user, request);
     }
 

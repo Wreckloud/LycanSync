@@ -1,6 +1,7 @@
 package com.lycansync.api.auth.mapper;
 
 import com.lycansync.api.auth.model.AuthUser;
+import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.model.LocalCredential;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -30,7 +31,9 @@ public interface AuthMapper {
 
     void replaceSession(@Param("hash") String hash, @Param("userId") UUID userId, @Param("expires") Instant expires);
 
-    AuthUser findSessionUser(@Param("hash") String hash, @Param("now") Instant now);
+    AuthenticatedUser findSessionUser(@Param("hash") String hash, @Param("now") Instant now);
+
+    AuthUser findUserProfile(@Param("id") UUID id);
 
     int extendSession(@Param("hash") String hash, @Param("now") Instant now, @Param("expires") Instant expires);
 

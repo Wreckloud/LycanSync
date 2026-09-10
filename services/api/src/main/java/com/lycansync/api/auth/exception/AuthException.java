@@ -1,5 +1,6 @@
 package com.lycansync.api.auth.exception;
 
+import com.lycansync.api.common.error.ApiErrorCode;
 import lombok.Getter;
 import org.springframework.http.HttpStatus;
 
@@ -13,9 +14,9 @@ import org.springframework.http.HttpStatus;
 public class AuthException extends RuntimeException {
 
     private final HttpStatus status;
-    private final String code;
+    private final ApiErrorCode code;
 
-    public AuthException(HttpStatus status, String code, String message) {
+    public AuthException(HttpStatus status, ApiErrorCode code, String message) {
         super(message);
         this.status = status;
         this.code = code;

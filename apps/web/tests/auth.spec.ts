@@ -80,13 +80,12 @@ test('已初始化服务器允许创建普通账号', async ({ page }) => {
 test('新设备替换会话后旧客户端通过心跳静默退出', async ({ page }) => {
   await page.clock.install();
   const user = { id: 'old-session', nickname: '旧设备', avatar: '', administrator: true };
-  let meRequests = 0;
+  let sessionRequests = 0;
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
-  await page.route('**/api/auth/me', (route) => {
-    meRequests++;
-    return meRequests === 1
-      ? route.fulfill({ json: user })
-      : route.fulfill({ status: 401, json: { detail: '登录已过期，请重新登录' } });
+  await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/auth/session', (route) => {
+    sessionRequests++;
+    return route.fulfill({ status: 401, json: { detail: '登录已过期，请重新登录' } });
   });
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
     json: { participantCount: 0, participantNames: [] },
@@ -96,20 +95,23 @@ test('新设备替换会话后旧客户端通过心跳静默退出', async ({ pa
   await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
   await page.clock.fastForward(20_100);
   await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
-  expect(meRequests).toBeGreaterThanOrEqual(2);
+  expect(sessionRequests).toBeGreaterThanOrEqual(1);
 });
 
 test('上一次会话心跳完成前不会发起下一次', async ({ page }) => {
   await page.clock.install();
   const user = { id: 'heartbeat-user', nickname: '心跳测试', avatar: '', administrator: false };
-  let meRequests = 0;
+  let sessionRequests = 0;
   let releaseHeartbeat = () => {};
   const heartbeatPending = new Promise<void>((resolve) => { releaseHeartbeat = resolve; });
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
-  await page.route('**/api/auth/me', async (route) => {
-    meRequests++;
-    if (meRequests > 1) await heartbeatPending;
-    return route.fulfill({ json: user });
+  await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/auth/session', async (route) => {
+    sessionRequests++;
+    await heartbeatPending;
+    return route.fulfill({ json: {
+      id: user.id, nickname: user.nickname, administrator: user.administrator,
+    } });
   });
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
     json: { participantCount: 0, participantNames: [] },
@@ -124,7 +126,7 @@ test('上一次会话心跳完成前不会发起下一次', async ({ page }) => 
     });
   });
   await page.clock.fastForward(60_100);
-  await expect.poll(() => meRequests).toBe(2);
+  await expect.poll(() => sessionRequests).toBe(1);
   releaseHeartbeat();
 });
 

@@ -5,6 +5,12 @@ export interface AuthUser {
   administrator: boolean;
 }
 
+export interface AuthSessionStatus {
+  id: string;
+  nickname: string;
+  administrator: boolean;
+}
+
 export class ApiRequestError extends Error {
   constructor(
     readonly status: number,

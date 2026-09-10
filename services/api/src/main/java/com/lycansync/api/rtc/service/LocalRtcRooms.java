@@ -1,7 +1,6 @@
 package com.lycansync.api.rtc.service;
 
-import com.lycansync.api.auth.exception.AuthException;
-import org.springframework.http.HttpStatus;
+import com.lycansync.api.rtc.exception.RtcRoomNotFoundException;
 
 /**
  * 本地调试群组与 LiveKit Room 的命名规则。
@@ -20,8 +19,7 @@ final class LocalRtcRooms {
     static String roomName(String groupId) {
         // 群组管理尚未实现，只开放明确存在的调试房间，禁止任意创建 RTC 房间。
         if (!"pack".equals(groupId)) {
-            throw new AuthException(
-                    HttpStatus.NOT_FOUND, "ROOM_NOT_FOUND", "房间不存在");
+            throw new RtcRoomNotFoundException();
         }
         return ROOM_PREFIX + groupId;
     }

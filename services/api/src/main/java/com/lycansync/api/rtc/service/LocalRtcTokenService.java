@@ -1,6 +1,6 @@
 package com.lycansync.api.rtc.service;
 
-import com.lycansync.api.auth.model.AuthUser;
+import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.rtc.config.LiveKitProperties;
 import com.lycansync.api.rtc.dto.RtcTokenResponse;
 import io.livekit.server.AccessToken;
@@ -38,7 +38,7 @@ public class LocalRtcTokenService {
     private final LiveKitProperties liveKitProperties;
     private final Clock systemClock;
 
-    public RtcTokenResponse issueToken(String groupId, AuthUser user) {
+    public RtcTokenResponse issueToken(String groupId, AuthenticatedUser user) {
         // 1. 固定使用可信账号 ID；同房间第二台设备连接时由 LiveKit 替换旧连接。
         String participantIdentity = "user-" + user.id();
 

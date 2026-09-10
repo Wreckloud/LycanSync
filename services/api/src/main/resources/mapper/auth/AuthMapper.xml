@@ -25,9 +25,12 @@
         INSERT INTO auth_session (token_hash, user_id, expires_at) VALUES (#{hash}, #{userId}, #{expires})
         ON CONFLICT (user_id) DO UPDATE SET token_hash = EXCLUDED.token_hash, expires_at = EXCLUDED.expires_at
     </insert>
-    <select id="findSessionUser" resultType="com.lycansync.api.auth.model.AuthUser">
-        SELECT u.id, u.nickname, u.avatar, u.administrator FROM app_user u
+    <select id="findSessionUser" resultType="com.lycansync.api.auth.model.AuthenticatedUser">
+        SELECT u.id, u.nickname, u.administrator FROM app_user u
         JOIN auth_session s ON s.user_id = u.id WHERE s.token_hash = #{hash} AND s.expires_at &gt; #{now}
+    </select>
+    <select id="findUserProfile" resultType="com.lycansync.api.auth.model.AuthUser">
+        SELECT id, nickname, avatar, administrator FROM app_user WHERE id = #{id}
     </select>
     <update id="extendSession">
         UPDATE auth_session SET expires_at = #{expires}
