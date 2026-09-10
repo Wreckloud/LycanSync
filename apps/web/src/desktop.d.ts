@@ -5,8 +5,11 @@ interface CaptureRequest {
 
 interface Window {
   lycanDesktop?: {
+    clearSession(): Promise<void>;
     minimize(): void;
+    isMaximized(): Promise<boolean>;
     toggleMaximize(): void;
+    onMaximizedChange(callback: (maximized: boolean) => void): () => void;
     close(): void;
     finishClose(): void;
     selectSource(requestId: string, sourceId: string | null): void;

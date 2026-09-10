@@ -5,6 +5,7 @@ import com.lycansync.api.system.service.SystemInitializationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.CacheControl;
@@ -29,6 +30,7 @@ public class SystemInitializationController {
 
     @GetMapping("/initialization")
     @Operation(summary = "获取系统初始化信息")
+    @SecurityRequirements
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "获取成功"),
             @ApiResponse(responseCode = "500", description = "系统状态记录异常"),

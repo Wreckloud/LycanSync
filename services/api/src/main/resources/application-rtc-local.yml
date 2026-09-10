@@ -4,7 +4,7 @@ server:
 lycansync:
   rtc:
     # TODO: 异机联调时分别配置客户端信令地址与后端管理地址，不能继续使用回环地址。
-    server-url: ws://127.0.0.1:7880
-    api-url: http://127.0.0.1:7880
+    server-url: ws://127.0.0.1:${LIVEKIT_PORT:7990}
+    api-url: http://127.0.0.1:${LIVEKIT_PORT:7990}
     api-key: ${LIVEKIT_API_KEY}
     api-secret: ${LIVEKIT_API_SECRET}

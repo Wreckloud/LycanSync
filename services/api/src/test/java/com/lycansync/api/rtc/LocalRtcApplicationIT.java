@@ -1,10 +1,15 @@
 package com.lycansync.api.rtc;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.protobuf.InvalidProtocolBufferException;
+import com.lycansync.api.auth.mapper.AuthMapper;
+import com.lycansync.api.auth.model.AuthUser;
+import com.lycansync.api.auth.service.AuthSecrets;
 import com.lycansync.api.rtc.dto.RtcTokenResponse;
 import io.livekit.server.RoomServiceClient;
 import livekit.LivekitModels;
 import livekit.LivekitRtc;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -28,7 +33,9 @@ import java.net.http.HttpResponse;
 import java.net.http.WebSocket;
 import java.nio.ByteBuffer;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
@@ -84,6 +91,19 @@ class LocalRtcApplicationIT {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private AuthMapper authMapper;
+
+    private String sessionToken;
+
+    @BeforeEach
+    void createAuthenticatedUser() {
+        AuthUser user = new AuthUser(UUID.randomUUID(), "小狼", "", false);
+        authMapper.insertUser(user, Instant.now());
+        sessionToken = AuthSecrets.generate();
+        authMapper.replaceSession(AuthSecrets.hash(sessionToken), user.id(), Instant.now().plusSeconds(600));
+    }
+
     @DynamicPropertySource
     static void configureDependencies(DynamicPropertyRegistry registry) {
         // 使用独立数据库和随机映射端口，测试不会修改开发库或占用本地 LiveKit。
@@ -101,9 +121,9 @@ class LocalRtcApplicationIT {
 
     @Test
     void shouldJoinLiveKitUsingTokenIssuedByHttpEndpoint() throws Exception {
-        String responseBody = mockMvc.perform(post("/api/rtc/token")
+        String responseBody = mockMvc.perform(post("/api/rtc/token").header("Authorization", "Bearer " + sessionToken)
                         .contentType("application/json")
-                        .content("{\"groupId\":\"pack\",\"displayName\":\"小狼\"}"))
+                        .content("{\"groupId\":\"pack\"}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         RtcTokenResponse credential = objectMapper.readValue(responseBody, RtcTokenResponse.class);
@@ -122,7 +142,7 @@ class LocalRtcApplicationIT {
             assertThat(join.getParticipant().getName()).isEqualTo("小狼");
             assertThat(join.getRoom().getMaxParticipants()).isZero();
 
-            mockMvc.perform(get("/api/rtc/room-summary").queryParam("groupId", "pack"))
+            mockMvc.perform(get("/api/rtc/room-summary").header("Authorization", "Bearer " + sessionToken).queryParam("groupId", "pack"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.participantCount").value(1))
                     .andExpect(jsonPath("$.participantNames[0]").value("小狼"))
@@ -192,7 +212,7 @@ class LocalRtcApplicationIT {
                     if (response.hasJoin()) {
                         joinResponse.complete(response.getJoin());
                     }
-                } catch (com.google.protobuf.InvalidProtocolBufferException exception) {
+                } catch (InvalidProtocolBufferException exception) {
                     joinResponse.completeExceptionally(exception);
                 }
                 fragments.reset();

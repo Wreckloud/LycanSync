@@ -1,3 +1,5 @@
+import { authenticatedFetch } from '../auth/authApi';
+
 export interface RtcTokenResponse {
   serverUrl: string;
   roomName: string;
@@ -18,17 +20,15 @@ function isRtcTokenResponse(value: unknown): value is RtcTokenResponse {
 
 export async function requestRtcToken(
   groupId: string,
-  displayName: string,
   signal: AbortSignal,
 ): Promise<RtcTokenResponse> {
   // 1. 向同源开发代理申请凭证，不在前端保存 LiveKit API secret。
-  const response = await fetch('/api/rtc/token', {
+  const response = await authenticatedFetch('/api/rtc/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     cache: 'no-store',
-    // TODO: 正式登录接入后按会话方案携带认证信息，同步摘要请求并区分 401/403。
     credentials: 'omit',
-    body: JSON.stringify({ groupId, displayName }),
+    body: JSON.stringify({ groupId }),
     signal,
   });
 
@@ -37,7 +37,7 @@ export async function requestRtcToken(
     throw new TokenRequestError('入房接口未启用，请以 rtc-local 模式启动后端。');
   }
   if (response.status === 400) {
-    throw new TokenRequestError('入房参数无效，请检查群组标识和 1–32 个字符的昵称。');
+    throw new TokenRequestError('入房参数无效，请检查群组标识。');
   }
   if (!response.ok) {
     throw new TokenRequestError(`申请入房凭证失败（HTTP ${response.status}），请检查后端是否启动。`);

@@ -1,5 +1,5 @@
 import { createApp } from 'vue';
-import App from './App.vue';
+import AuthRoot from './AuthRoot.vue';
 import './styles.css';
 
-createApp(App).mount('#root');
+createApp(AuthRoot).mount('#root');

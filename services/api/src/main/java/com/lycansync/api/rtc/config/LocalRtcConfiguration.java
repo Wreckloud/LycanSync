@@ -15,7 +15,7 @@ import org.springframework.util.Assert;
  * @since 2026-09-03
  */
 @Configuration(proxyBeanMethods = false)
-// TODO: 正式鉴权入口就绪后替换本地匿名模式，不能仅移除本机监听限制。
+// TODO: 完成公网媒体端口与群组权限验证后，再引入非本机 RTC 配置。
 @Profile("rtc-local")
 @EnableConfigurationProperties(LiveKitProperties.class)
 public class LocalRtcConfiguration {
@@ -24,9 +24,9 @@ public class LocalRtcConfiguration {
             @Value("${server.address:}") String serverAddress,
             LiveKitProperties liveKitProperties
     ) {
-        // 未接入登录的签发入口只能本机访问，配置被覆盖时也不能开放监听。
+        // 当前媒体配置仅适用于本机，接入登录不代表已经完成公网部署。
         Assert.state("127.0.0.1".equals(serverAddress),
-                "rtc-local 模式要求 server.address=127.0.0.1，禁止开放匿名入房接口");
+                "rtc-local 模式要求 server.address=127.0.0.1，当前媒体配置仅适用于本机");
         // 单独检查密钥长度，避免配置绑定错误报告把被拒绝的密钥原文打印出来。
         Assert.state(liveKitProperties.getApiSecret().length() >= 32,
                 "LIVEKIT_API_SECRET 至少需要 32 个字符，请使用随机生成的密钥");

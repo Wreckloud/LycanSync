@@ -1,4 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { renameTestUser } from './fixtures/authenticatedRtc';
 import { installTestRooms } from './fixtures/localRooms';
 
 test.beforeEach(async ({ context }) => { await installTestRooms(context); });
@@ -77,10 +78,9 @@ async function installSyntheticMedia(context: BrowserContext) {
 }
 
 async function join(page: Page, nickname: string) {
+  renameTestUser(page.context(), nickname);
   await page.goto('/');
   await page.getByRole('button', { name: /开黑小队，单击预览，双击加入语音/ }).dblclick();
-  await page.getByLabel('测试昵称').fill(nickname);
-  await page.getByRole('button', { name: '加入语音', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('语音已连接');
   await expect(page.getByRole('button', { name: '关闭麦克风' })).toBeEnabled();
   await expect(page.getByRole('button', { name: '离开当前群组语音' })).toBeEnabled();
@@ -99,7 +99,7 @@ async function inboundBytes(page: Page, kind: 'audio' | 'video') {
   }, kind);
 }
 
-test('单击只预览；加入时校验昵称并明确提示未启用本地入房接口', async ({ page }) => {
+test('单击只预览；入房接口未启用时明确提示', async ({ page }) => {
   await page.route('**/api/rtc/token', (route) => route.fulfill({ status: 404 }));
   await page.goto('/');
   await page.getByRole('button', { name: /周末车队，单击预览，双击加入语音/ }).click();
@@ -107,10 +107,6 @@ test('单击只预览；加入时校验昵称并明确提示未启用本地入�
   await expect(page.getByRole('status')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '开启麦克风' })).toHaveCount(0);
   await page.getByRole('button', { name: /周末车队，单击预览，双击加入语音/ }).dblclick();
-  await page.getByLabel('测试昵称').fill('   ');
-  await expect(page.getByRole('button', { name: '加入语音', exact: true })).toBeDisabled();
-  await page.getByLabel('测试昵称').fill('测试狼');
-  await page.getByRole('button', { name: '加入语音', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('rtc-local');
   await expect(page.getByRole('button', { name: '加入当前群组语音' })).toBeEnabled();
   await page.screenshot({ path: 'test-results/lobby.png', fullPage: true });
@@ -124,8 +120,6 @@ test('取消尚未完成的凭证请求后，不允许迟到的响应自动入�
   });
   await page.goto('/');
   await page.getByRole('button', { name: /开黑小队，单击预览，双击加入语音/ }).dblclick();
-  await page.getByLabel('测试昵称').fill('取消测试');
-  await page.getByRole('button', { name: '加入语音', exact: true }).click();
   await expect.poll(() => Boolean(releaseResponse)).toBe(true);
   await page.getByRole('button', { name: '取消连接' }).click();
   releaseResponse!();

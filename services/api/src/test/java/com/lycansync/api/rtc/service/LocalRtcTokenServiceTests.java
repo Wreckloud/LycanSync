@@ -11,6 +11,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.UUID;
+import com.lycansync.api.auth.model.AuthUser;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -33,7 +35,7 @@ class LocalRtcTokenServiceTests {
 
     @Test
     void shouldSignGroupRoomTokenWithOnlyRequiredMediaPermissions() {
-        RtcTokenResponse response = localRtcTokenService.issueToken("pack", " 小狼 ");
+        RtcTokenResponse response = localRtcTokenService.issueToken("pack", new AuthUser(UUID.randomUUID(), "小狼", "", false));
         DecodedJWT token = JWT.decode(response.token());
 
         // 解码只能读取内容，另外验证签名才能确认凭证确实由指定密钥签发。
@@ -59,7 +61,7 @@ class LocalRtcTokenServiceTests {
 
     @Test
     void shouldUseClockForTenMinuteExpiryAndMatchResponseToJwtPrecision() {
-        RtcTokenResponse response = localRtcTokenService.issueToken("pack", "小狼");
+        RtcTokenResponse response = localRtcTokenService.issueToken("pack", new AuthUser(UUID.randomUUID(), "小狼", "", false));
         DecodedJWT token = JWT.decode(response.token());
 
         assertThat(token.getNotBeforeAsInstant()).isEqualTo(Instant.parse("2026-09-03T07:00:00Z"));
@@ -68,11 +70,20 @@ class LocalRtcTokenServiceTests {
     }
 
     @Test
-    void shouldAssignDifferentIdentitiesToRequestsWithTheSameNickname() {
-        RtcTokenResponse first = localRtcTokenService.issueToken("pack", "小狼");
-        RtcTokenResponse second = localRtcTokenService.issueToken("pack", "小狼");
+    void shouldReuseAccountIdentityAcrossDevices() {
+        AuthUser user = new AuthUser(UUID.randomUUID(), "小狼", "", false);
+        RtcTokenResponse first = localRtcTokenService.issueToken("pack", user);
+        RtcTokenResponse second = localRtcTokenService.issueToken("pack", user);
+        assertThat(first.participantIdentity()).isEqualTo("user-" + user.id());
+        assertThat(second.participantIdentity()).isEqualTo(first.participantIdentity());
+    }
 
-        assertThat(first.participantIdentity()).startsWith("dev-");
+    @Test
+    void shouldAssignDifferentIdentitiesToRequestsWithTheSameNickname() {
+        RtcTokenResponse first = localRtcTokenService.issueToken("pack", new AuthUser(UUID.randomUUID(), "小狼", "", false));
+        RtcTokenResponse second = localRtcTokenService.issueToken("pack", new AuthUser(UUID.randomUUID(), "小狼", "", false));
+
+        assertThat(first.participantIdentity()).startsWith("user-");
         assertThat(first.participantIdentity()).isNotEqualTo(second.participantIdentity());
         assertThat(first.token()).isNotEqualTo(second.token());
     }

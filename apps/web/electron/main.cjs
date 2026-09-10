@@ -1,11 +1,17 @@
-const { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, screen, session } = require('electron');
+const { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, screen, session, safeStorage } = require('electron');
 const { resolve, sep } = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { readFile, writeFile, unlink, mkdir } = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
 
 const APP_ORIGIN = 'lycan://app';
 const rendererRoot = resolve(__dirname, '../dist');
-const backend = new URL(process.env.LYCANSYNC_API_URL || 'http://127.0.0.1:18080');
+const serverConfig = require('./server-config.json');
+// 安装版固定使用打包配置；开发模式才允许环境变量临时覆盖。
+const backend = new URL(app.isPackaged ? serverConfig.apiUrl
+  : process.env.LYCANSYNC_API_URL || serverConfig.apiUrl);
+const sessionAuthPaths = new Set(['/api/auth/local/register', '/api/auth/local/login']);
+const publicApiPaths = new Set(['/api/system/initialization', ...sessionAuthPaths]);
 if (backend.username || backend.password || backend.pathname !== '/' || backend.search || backend.hash
     || !['http:', 'https:'].includes(backend.protocol)
     || (backend.protocol === 'http:' && !['127.0.0.1', 'localhost', '[::1]'].includes(backend.hostname))) {
@@ -24,6 +30,39 @@ let pendingCapture;
 let closing = false;
 let canClose = false;
 let closeTimer;
+let sessionToken;
+let sessionLoaded = false;
+
+async function loadSession() {
+  if (sessionLoaded) return sessionToken;
+  try {
+    const encrypted = await readFile(resolve(app.getPath('userData'), 'session.bin'));
+    if (!safeStorage.isEncryptionAvailable()) throw new Error('系统加密不可用。');
+    const saved = JSON.parse(safeStorage.decryptString(encrypted));
+    // 会话绑定服务地址，不能向另一个部署实例发送旧凭据。
+    if (saved.server === backend.origin && /^[A-Za-z0-9_-]{43}$/.test(saved.token)) sessionToken = saved.token;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw new Error('无法读取本机登录凭据，请清理登录状态后重试。');
+  }
+  sessionLoaded = true;
+  return sessionToken;
+}
+
+async function saveSession(token) {
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('系统加密不可用，不能保存自动登录凭据。');
+  const encrypted = safeStorage.encryptString(JSON.stringify({ server: backend.origin, token }));
+  await mkdir(app.getPath('userData'), { recursive: true });
+  await writeFile(resolve(app.getPath('userData'), 'session.bin'), encrypted);
+  sessionToken = token;
+  sessionLoaded = true;
+}
+
+async function clearSession() {
+  sessionToken = undefined;
+  sessionLoaded = true;
+  try { await unlink(resolve(app.getPath('userData'), 'session.bin')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+}
 
 function trustedUrl(value) {
   try {
@@ -65,17 +104,33 @@ async function serveApplication(request) {
   if (!trustedUrl(request.url)) return new Response(null, { status: 403 });
   if (url.pathname.startsWith('/api/')) {
     const allowed = (url.pathname === '/api/rtc/token' && request.method === 'POST')
-      || (url.pathname === '/api/rtc/room-summary' && request.method === 'GET');
+      || (url.pathname === '/api/rtc/room-summary' && request.method === 'GET')
+      || (['/api/system/initialization', '/api/auth/me'].includes(url.pathname) && request.method === 'GET')
+      || ((sessionAuthPaths.has(url.pathname) || url.pathname === '/api/auth/logout') && request.method === 'POST')
+      || (url.pathname === '/api/auth/me' && request.method === 'PUT');
     if (!allowed) return new Response(null, { status: 404 });
     try {
-      const body = request.method === 'POST' ? await request.text() : undefined;
-      if (body && body.length > 4096) return new Response(null, { status: 413 });
+      const body = ['POST', 'PUT'].includes(request.method) ? await request.text() : undefined;
+      if (body && body.length > (url.pathname === '/api/auth/me' ? 750000 : 4096)) return new Response(null, { status: 413 });
+      const token = await loadSession();
+      const publicRequest = publicApiPaths.has(url.pathname);
       const response = await net.fetch(new URL(url.pathname + url.search, backend).href, {
         method: request.method,
-        headers: body ? { 'Content-Type': 'application/json' } : {},
+        headers: { ...(body ? { 'Content-Type': 'application/json' } : {}),
+          ...(!publicRequest && token ? { Authorization: 'Bearer ' + token } : {}) },
         body, redirect: 'error', credentials: 'omit',
         signal: AbortSignal.any([request.signal, AbortSignal.timeout(15000)]),
       });
+      if (!publicRequest && token === sessionToken
+          && (response.status === 401 || (url.pathname === '/api/auth/logout' && response.ok))) await clearSession();
+      if (sessionAuthPaths.has(url.pathname) && response.ok) {
+        const result = await response.json();
+        if (!/^[A-Za-z0-9_-]{43}$/.test(result.sessionToken ?? '')) throw new Error('登录响应无效');
+        await saveSession(result.sessionToken);
+        // 会话原文只进入主进程的系统加密存储，不暴露给渲染页面。
+        delete result.sessionToken;
+        return Response.json(result, { headers: { 'Cache-Control': 'no-store' } });
+      }
       return new Response(response.body, { status: response.status, headers: {
         'Content-Type': response.headers.get('Content-Type') || 'application/json',
         'Cache-Control': 'no-store',
@@ -168,12 +223,18 @@ if (!app.requestSingleInstanceLock()) {
       closeTimer = setTimeout(finishClose, 2000);
       mainWindow.webContents.send('window:release-media');
     });
+    mainWindow.on('maximize', () => mainWindow?.webContents.send('window:maximized-changed', true));
+    mainWindow.on('unmaximize', () => mainWindow?.webContents.send('window:maximized-changed', false));
     mainWindow.on('closed', () => { clearTimeout(closeTimer); mainWindow = undefined; });
     mainWindow.loadURL(APP_ORIGIN + '/');
   });
 }
 
 ipcMain.on('window:minimize', (event) => { if (trustedSender(event)) mainWindow.minimize(); });
+ipcMain.handle('window:is-maximized', (event) => {
+  if (!trustedSender(event)) throw new Error('请求来源无效');
+  return mainWindow.isMaximized();
+});
 ipcMain.on('window:maximize', (event) => {
   if (!trustedSender(event)) return;
   if (mainWindow.isMaximized()) mainWindow.unmaximize(); else mainWindow.maximize();
@@ -188,3 +249,7 @@ ipcMain.on('capture:select', (event, requestId, sourceId) => {
   if (source) capture.callback({ video: source }); else denyCapture(capture.callback);
 });
 app.on('window-all-closed', () => app.quit());
+ipcMain.handle('auth:clear', async (event) => {
+  if (!trustedSender(event)) throw new Error('请求来源无效');
+  await clearSession();
+});

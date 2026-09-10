@@ -1,9 +1,13 @@
 import { markRaw, onScopeDispose, ref, shallowRef } from 'vue';
-import { ConnectionState, Room, RoomEvent, Track, type LocalTrack, type Participant } from 'livekit-client';
+import {
+  ConnectionState, DisconnectReason, Room, RoomEvent, ScreenSharePresets, Track,
+  type LocalTrack, type Participant,
+} from 'livekit-client';
 import { requestRtcToken, TokenRequestError } from './tokenApi';
 
 type RoomStatus = 'idle' | 'joining' | 'connected' | 'reconnecting';
 type MediaSource = Track.Source.Microphone | Track.Source.ScreenShare;
+const SCREEN_SHARE_PRESET = ScreenSharePresets.h1080fps30;
 
 function captureErrorMessage(error: unknown, source: MediaSource): string {
   const label = source === Track.Source.Microphone ? '麦克风' : '屏幕共享';
@@ -40,12 +44,8 @@ export function useRtcRoom() {
     void currentRoom?.disconnect();
   });
 
-  async function join(groupId: string, displayName: string): Promise<boolean> {
+  async function join(groupId: string): Promise<boolean> {
     if (pendingJoin.value || activeRoom.value) return false;
-    if (!displayName.trim() || displayName.length > 32) {
-      notice.value = '请输入 1–32 个字符的昵称，不能全为空白。';
-      return false;
-    }
 
     // 1. 先申请临时凭证；取消入房时中止请求，过期请求不能建立新连接。
     const request = new AbortController();
@@ -54,7 +54,7 @@ export function useRtcRoom() {
     status.value = 'joining';
     let joiningRoom: Room | null = null;
     try {
-      const credential = await requestRtcToken(groupId, displayName.trim(), request.signal);
+      const credential = await requestRtcToken(groupId, request.signal);
       if (request.signal.aborted) return false;
 
       // 2. 建立独立的 RTC 会话；连接本身不采集麦克风、摄像头或屏幕。
@@ -69,7 +69,9 @@ export function useRtcRoom() {
         },
         publishDefaults: {
           videoCodec: 'vp8',
-          screenShareEncoding: { maxBitrate: 1_500_000, maxFramerate: 15 },
+          screenShareEncoding: SCREEN_SHARE_PRESET.encoding,
+          // 小画面只发送较低清晰度，主画面再按需启用 1080p 层。
+          screenShareSimulcastLayers: [ScreenSharePresets.h360fps15, ScreenSharePresets.h720fps15],
         },
       }));
       const currentRoom = joiningRoom;
@@ -100,10 +102,11 @@ export function useRtcRoom() {
           || connectionState === ConnectionState.SignalReconnecting) status.value = 'reconnecting';
         refresh();
       });
-      currentRoom.on(RoomEvent.Disconnected, () => {
+      currentRoom.on(RoomEvent.Disconnected, (reason) => {
         if (activeRoom.value !== currentRoom) return;
         leave();
-        notice.value = '已与房间断开连接，请确认 LiveKit 正常运行后重新加入。';
+        notice.value = reason === DisconnectReason.DUPLICATE_IDENTITY
+          ? '语音已在另一台设备连接。' : '已与房间断开连接，请确认 LiveKit 正常运行后重新加入。';
       });
 
       // 4. 凭证只用于连接 LiveKit，不写入本地存储，也不通过日志输出。
@@ -178,7 +181,7 @@ export function useRtcRoom() {
         ? await participant.createTracks({ audio: true, video: false })
         : await participant.createScreenTracks({
           audio: false,
-          resolution: { width: 1280, height: 720, frameRate: 15 },
+          resolution: SCREEN_SHARE_PRESET.resolution,
         });
       // 3. 选择器返回时可能已经离房，必须在发布前检查，不能只在发布后清理。
       if (activeRoom.value !== currentRoom) return;

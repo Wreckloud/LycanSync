@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lycansync.api.auth.mapper.AuthMapper">
+    <update id="markInitialized">
+        UPDATE system_state SET initialized_at = #{now} WHERE id = 1 AND initialized_at IS NULL
+    </update>
+    <select id="findLocalCredential" resultType="com.lycansync.api.auth.model.LocalCredential">
+        SELECT u.id, u.nickname, u.avatar, u.administrator, c.password_hash AS passwordHash
+        FROM app_user u
+        JOIN auth_local_credential c ON c.user_id = u.id
+        WHERE c.username = #{username}
+    </select>
+    <insert id="insertUser">
+        INSERT INTO app_user (id, nickname, avatar, administrator, created_at)
+        VALUES (#{user.id}, #{user.nickname}, #{user.avatar}, #{user.administrator}, #{now})
+    </insert>
+    <insert id="insertLocalCredential">
+        INSERT INTO auth_local_credential (username, password_hash, user_id, created_at)
+        VALUES (#{username}, #{passwordHash}, #{userId}, #{now})
+    </insert>
+    <update id="updateProfile">
+        UPDATE app_user SET nickname = #{nickname}, avatar = #{avatar} WHERE id = #{id}
+    </update>
+    <insert id="replaceSession">
+        INSERT INTO auth_session (token_hash, user_id, expires_at) VALUES (#{hash}, #{userId}, #{expires})
+        ON CONFLICT (user_id) DO UPDATE SET token_hash = EXCLUDED.token_hash, expires_at = EXCLUDED.expires_at
+    </insert>
+    <select id="findSessionUser" resultType="com.lycansync.api.auth.model.AuthUser">
+        SELECT u.id, u.nickname, u.avatar, u.administrator FROM app_user u
+        JOIN auth_session s ON s.user_id = u.id WHERE s.token_hash = #{hash} AND s.expires_at &gt; #{now}
+    </select>
+    <update id="extendSession">
+        UPDATE auth_session SET expires_at = #{expires}
+        WHERE token_hash = #{hash} AND expires_at &gt; #{now}
+        AND expires_at &lt; CAST(#{expires} AS TIMESTAMPTZ) - INTERVAL '1 hour'
+    </update>
+    <delete id="deleteSession">DELETE FROM auth_session WHERE token_hash = #{hash}</delete>
+    <delete id="deleteExpiredSessions">DELETE FROM auth_session WHERE expires_at &lt; #{now}</delete>
+</mapper>

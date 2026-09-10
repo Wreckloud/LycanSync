@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   font-size: 18px;
   font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
   color: #edf3f8;
@@ -78,13 +79,8 @@ button:focus-visible, input:focus-visible {
   color: white;
 }
 
-.local-badge {
-  color: var(--subtle);
-  font-size: 12px;
-  letter-spacing: .1em;
-}
-
 .window-actions {
+  grid-column: -2 / -1;
   justify-self: end;
   align-self: stretch;
   display: flex;
@@ -769,54 +765,6 @@ button:focus-visible, input:focus-visible {
   padding: 18px;
   background: #030507b8;
 }
-
-.nickname-dialog {
-  max-height: calc(100dvh - 36px);
-  overflow-y: auto;
-  width: min(390px, 100%);
-  padding: 24px;
-  border: 1px solid #343e49;
-  border-radius: 7px;
-  background: var(--panel-raised);
-  box-shadow: 0 28px 80px #000b;
-}
-
-.dialog-icon {
-  width: 34px;
-  height: 34px;
-  margin-bottom: 15px;
-}
-
-.nickname-dialog h2 {
-  margin: 0 0 8px;
-  font-size: 20px;
-  font-weight: 650;
-}
-
-.nickname-dialog > p {
-  margin: 0 0 20px;
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1.7;
-}
-
-.nickname-dialog label {
-  display: block;
-  margin-bottom: 7px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.nickname-dialog input {
-  width: 100%;
-  height: 38px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: #0e1217;
-  color: var(--text);
-}
-
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -843,7 +791,6 @@ button:focus-visible, input:focus-visible {
 
 @media (max-width: 600px) {
   .titlebar { grid-template-columns: 1fr auto; }
-  .local-badge { display: none; }
   .workspace { grid-template-columns: 56px minmax(0, 1fr); }
   .group-rail { padding-inline: 5px; }
   .group-button { width: 42px; height: 42px; }
@@ -865,5 +812,26 @@ button:focus-visible, input:focus-visible {
 }
 
 /* 仅隐藏应用内容区的滚动条，仍保留滚轮、触控板与键盘滚动能力。 */
-:is(.group-rail, .members-panel, .message-list, .voice-panel, .voice-preview, .member-filmstrip, .capture-sources, .nickname-dialog) { scrollbar-width: none; }
-:is(.group-rail, .members-panel, .message-list, .voice-panel, .voice-preview, .member-filmstrip, .capture-sources, .nickname-dialog)::-webkit-scrollbar { display: none; }
+:is(.group-rail, .members-panel, .message-list, .voice-panel, .voice-preview, .member-filmstrip, .capture-sources, .profile-dialog) { scrollbar-width: none; }
+:is(.group-rail, .members-panel, .message-list, .voice-panel, .voice-preview, .member-filmstrip, .capture-sources, .profile-dialog)::-webkit-scrollbar { display: none; }
+.auth-screen { display: grid; place-items: center; min-height: 0; overflow: auto; padding: 24px; }
+.auth-card { width: min(440px, 100%); padding: 28px; background: var(--panel-soft); border: 1px solid var(--border); border-radius: 8px; font-size: 14px; line-height: 1.5; }
+.auth-card h1 { font-size: 24px; margin-top: 0; }
+.auth-card p, .auth-card small { color: var(--muted); line-height: 1.6; }
+.auth-card form, .auth-card label { display: grid; gap: 12px; }
+.auth-card form { margin: 20px 0; }
+.auth-card input { width: 100%; min-width: 0; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 10px; font: inherit; }
+.auth-card button { padding: 8px 12px; border: 1px solid var(--border); border-radius: 4px; color: var(--text); background: var(--panel-raised); cursor: pointer; }
+.auth-card button:disabled { opacity: .5; cursor: default; }
+.auth-card .confirm-button { background: var(--accent); border-color: var(--accent); }
+.auth-card .auth-error { color: var(--danger); }
+.profile-dialog { max-height: 90dvh; overflow-y: auto; }
+.profile-dialog h2 { margin: 0; font-size: 20px; }
+.profile-dialog h3 { font-size: 16px; }
+.profile-dialog hr { border: 0; border-top: 1px solid var(--border); }
+.avatar-settings { display: grid; grid-template-columns: 112px minmax(0, 1fr); align-items: center; gap: 18px; min-height: 112px; }
+.profile-avatar-preview { width: 112px; height: 112px; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--border); border-radius: 50%; background: var(--panel); color: var(--muted); }
+.profile-avatar-preview .profile-avatar { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+.avatar-actions { display: grid; justify-items: start; gap: 8px; min-width: 0; }
+.profile-avatar { width: 64px; height: 64px; object-fit: cover; border-radius: 50%; }
+.group-button .profile-avatar { width: 32px; height: 32px; }

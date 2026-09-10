@@ -48,7 +48,7 @@ class LocalRtcConfigurationTests {
         contextRunner.withPropertyValues("server.address=" + bindAddress).run(context -> {
             assertThat(context).hasFailed();
             assertThat(context.getStartupFailure()).hasRootCauseMessage(
-                    "rtc-local 模式要求 server.address=127.0.0.1，禁止开放匿名入房接口");
+                    "rtc-local 模式要求 server.address=127.0.0.1，当前媒体配置仅适用于本机");
         });
     }
 

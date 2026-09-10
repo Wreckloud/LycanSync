@@ -1,5 +1,6 @@
 package com.lycansync.api.rtc.service;
 
+import com.lycansync.api.auth.model.AuthUser;
 import com.lycansync.api.rtc.config.LiveKitProperties;
 import com.lycansync.api.rtc.dto.RtcTokenResponse;
 import io.livekit.server.AccessToken;
@@ -20,7 +21,6 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
 import java.util.List;
-import java.util.UUID;
 
 /**
  * 本地 RTC 入房凭证签发服务。
@@ -38,11 +38,9 @@ public class LocalRtcTokenService {
     private final LiveKitProperties liveKitProperties;
     private final Clock systemClock;
 
-    public RtcTokenResponse issueToken(String groupId, String displayName) {
-        // TODO: 接入 QQ 白名单登录后校验群组成员权限，并从登录身份获取用户标识和昵称。
-        // 1. 生成临时身份：昵称允许重复，身份独立，避免同名连接互相挤掉。
-        // TODO: 正式账号接入时明确多端入房规则，替换每次请求生成的临时身份。
-        String participantIdentity = "dev-" + UUID.randomUUID();
+    public RtcTokenResponse issueToken(String groupId, AuthUser user) {
+        // 1. 固定使用可信账号 ID；同房间第二台设备连接时由 LiveKit 替换旧连接。
+        String participantIdentity = "user-" + user.id();
 
         // 2. 确定首次入房的有效期：统一为秒精度，不作为通话时长限制。
         Instant issuedAt = Instant.now(systemClock).truncatedTo(ChronoUnit.SECONDS);
@@ -53,7 +51,7 @@ public class LocalRtcTokenService {
         AccessToken accessToken = new AccessToken(
                 liveKitProperties.getApiKey(), liveKitProperties.getApiSecret());
         accessToken.setIdentity(participantIdentity);
-        accessToken.setName(displayName.strip());
+        accessToken.setName(user.nickname());
         accessToken.setNotBefore(Date.from(issuedAt));
         accessToken.setExpiration(Date.from(expiresAt));
         // 允许更新自己的收听状态；仍不授予摄像头、房间管理和数据发送权限。

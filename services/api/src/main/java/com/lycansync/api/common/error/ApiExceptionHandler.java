@@ -1,5 +1,6 @@
 package com.lycansync.api.common.error;
 
+import com.lycansync.api.auth.exception.AuthException;
 import com.lycansync.api.rtc.exception.RtcServiceUnavailableException;
 import com.lycansync.api.system.exception.SystemStateNotFoundException;
 import jakarta.validation.ConstraintViolationException;
@@ -21,6 +22,11 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice
 @Slf4j
 public class ApiExceptionHandler {
+
+    @ExceptionHandler(AuthException.class)
+    public ProblemDetail handleAuth(AuthException exception) {
+        return createProblemDetail(exception.getStatus(), "AUTH_ERROR", "认证请求失败", exception.getMessage());
+    }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ProblemDetail handleInvalidRequest(MethodArgumentNotValidException exception) {

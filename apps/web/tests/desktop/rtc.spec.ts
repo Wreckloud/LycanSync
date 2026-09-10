@@ -1,17 +1,17 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { resolve } from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { startDesktopApi, summary } from '../fixtures/authenticatedRtc';
 
 test('桌面入房、取消选择、窗口共享及离房释放', async () => {
   const nickname = `桌面测试-${Date.now()}`;
   const userDataDir = test.info().outputPath('profile');
   mkdirSync(userDataDir, { recursive: true });
-  const application = await electron.launch({ args: [resolve('electron/main.cjs'), `--user-data-dir=${userDataDir}`, '--use-fake-device-for-media-stream'] });
+  const api = await startDesktopApi(nickname);
+  const application = await electron.launch({ env: { ...process.env, LYCANSYNC_API_URL: api.url }, args: [resolve('electron/main.cjs'), `--user-data-dir=${userDataDir}`, '--use-fake-device-for-media-stream'] });
   try {
     const page = await application.firstWindow();
     await page.getByRole('button', { name: /本地调试房间，单击预览，双击加入语音/ }).dblclick();
-    await page.getByLabel('测试昵称').fill(nickname);
-    await page.getByRole('button', { name: '加入语音', exact: true }).click();
     await expect(page.getByRole('status')).toContainText('语音已连接');
     const inputPositions = await page.getByTestId('callbar').evaluate((element) => {
       const panel = element as HTMLElement;
@@ -60,9 +60,7 @@ test('桌面入房、取消选择、窗口共享及离房释放', async () => {
     await page.getByRole('button', { name: '关闭窗口', exact: true }).click();
     await closed;
     await expect.poll(async () => {
-      const response = await fetch('http://127.0.0.1:18080/api/rtc/room-summary?groupId=pack');
-      const summary = await response.json() as { participantNames: string[] };
-      return summary.participantNames.includes(nickname);
+      return (await summary()).participantNames.includes(nickname);
     }).toBe(false);
-  } finally { await application.close(); }
+  } finally { await application.close(); await api.close(); }
 });

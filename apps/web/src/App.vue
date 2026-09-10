@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onScopeDispose, reactive, ref, watch } from 'vue';
-import { AudioLines, ChevronDown, ChevronUp, CornerUpLeft, HeadphoneOff, Headphones,
+import { AudioLines, ChevronDown, ChevronUp, Copy, CornerUpLeft, HeadphoneOff, Headphones,
   LogOut, MessageSquareText, Mic, MicOff, Minus, MonitorUp, Plus, RadioTower, Search,
   Send, SlidersHorizontal, Square, UserRound, UsersRound, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
@@ -10,6 +10,10 @@ import IconButton from './components/IconButton.vue';
 import { LOCAL_ROOMS } from './localRooms';
 import { useRtcRoom } from './rtc/useRtcRoom';
 import { useRoomSummary } from './rtc/useRoomSummary';
+import type { AuthUser } from './auth/authApi';
+
+defineProps<{ user: AuthUser; windowMaximized: boolean }>();
+const emit = defineEmits<{ profile: [] }>();
 
 const STATUS_LABELS = { idle: '未加入语音', joining: '正在连接', connected: '语音已连接', reconnecting: '正在重连' };
 const CALLBAR_EXIT_DURATION_MS = 180;
@@ -33,10 +37,6 @@ const selectedGroupId = ref(LOCAL_ROOMS[0].id);
 const joinedGroupId = ref<string | null>(null);
 const joiningGroupId = ref<string | null>(null);
 const pendingSwitchGroupId = ref<string | null>(null);
-const nicknameGroupId = ref<string | null>(null);
-// TODO: 登录接入后使用账号资料和会话恢复，移除本地昵称确认流程。
-const displayName = ref(localStorage.getItem('lycansync.local-name') ?? '本地小狼');
-const identityConfirmed = ref(false);
 const listening = ref(true);
 const volume = ref(0.72);
 const lastVolume = ref(0.72);
@@ -46,6 +46,7 @@ const membersExpanded = ref(true);
 const viewerNotice = ref('');
 const departingGroupId = ref<string | null>(null);
 const callbarLeaving = ref(false);
+let listeningSync: Promise<void> | null = null;
 
 const selectedGroup = computed(() => LOCAL_ROOMS.find((group) => group.id === selectedGroupId.value) ?? LOCAL_ROOMS[0]);
 const joinedGroup = computed(() => LOCAL_ROOMS.find((group) => group.id === joinedGroupId.value) ?? null);
@@ -90,10 +91,9 @@ const remoteAudioTracks = computed(() => rtc.participants
   .filter((participant) => participant !== localParticipant.value)
   .map((participant) => participant.getTrackPublication(Track.Source.Microphone)?.track)
   .filter((track): track is RemoteAudioTrack => track instanceof RemoteAudioTrack));
-async function joinGroup(groupId: string, nickname: string) {
+async function joinGroup(groupId: string) {
   selectedGroupId.value = groupId;
   pendingSwitchGroupId.value = null;
-  nicknameGroupId.value = null;
   joiningGroupId.value = groupId;
   enlargedIdentities.value = [];
   viewerNotice.value = '';
@@ -106,11 +106,8 @@ async function joinGroup(groupId: string, nickname: string) {
     joinedGroupId.value = null;
   }
 
-  const joined = await rtc.join(groupId, nickname.trim());
+  const joined = await rtc.join(groupId);
   if (joined) {
-    localStorage.setItem('lycansync.local-name', nickname.trim());
-    displayName.value = nickname.trim();
-    identityConfirmed.value = true;
     joinedGroupId.value = groupId;
     listening.value = true;
     volume.value = lastVolume.value || 0.72;
@@ -132,17 +129,7 @@ function requestJoin(groupId: string) {
     pendingSwitchGroupId.value = groupId;
     return;
   }
-  if (!identityConfirmed.value) {
-    nicknameGroupId.value = groupId;
-    return;
-  }
-  void joinGroup(groupId, displayName.value);
-}
-
-function submitNickname(event: Event) {
-  event.preventDefault();
-  if (nicknameGroupId.value === null || !displayName.value.trim()) return;
-  void joinGroup(nicknameGroupId.value, displayName.value);
+  void joinGroup(groupId);
 }
 
 function leaveVoice() {
@@ -167,9 +154,27 @@ async function toggleMicrophone() {
   if (shouldEnableMicrophone && !listening.value) {
     listening.value = true;
     volume.value = lastVolume.value || 0.72;
-    void rtc.updateListeningState(true);
+    await synchronizeListeningState();
+    return;
   }
   await rtc.setMediaEnabled(Track.Source.Microphone, shouldEnableMicrophone);
+}
+
+function synchronizeListeningState() {
+  if (!connected.value) return Promise.resolve();
+  if (listeningSync) return listeningSync;
+  // 音量滑块可能连续跨过零点；串行追赶最后状态，避免异步开关完成顺序颠倒。
+  listeningSync = (async () => {
+    let applied: boolean;
+    do {
+      applied = listening.value;
+      await Promise.all([
+        rtc.updateListeningState(applied),
+        rtc.setMediaEnabled(Track.Source.Microphone, applied),
+      ]);
+    } while (connected.value && applied !== listening.value);
+  })().finally(() => { listeningSync = null; });
+  return listeningSync;
 }
 
 async function toggleListening() {
@@ -181,26 +186,21 @@ async function toggleListening() {
   if (listening.value) {
     lastVolume.value = volume.value || lastVolume.value;
     listening.value = false;
-    void rtc.updateListeningState(false);
     volumeOpen.value = false;
-    await rtc.setMediaEnabled(Track.Source.Microphone, false);
   } else {
     listening.value = true;
-    void rtc.updateListeningState(true);
     volume.value = lastVolume.value || 0.72;
-    await rtc.setMediaEnabled(Track.Source.Microphone, true);
   }
+  await synchronizeListeningState();
 }
 
-async function updateVolume(nextVolume: number) {
+function updateVolume(nextVolume: number) {
   const nextListening = nextVolume > 0;
-  if (nextListening !== listening.value) {
-    void rtc.updateListeningState(nextListening);
-    await rtc.setMediaEnabled(Track.Source.Microphone, nextListening);
-  }
   volume.value = nextVolume;
+  const listeningChanged = nextListening !== listening.value;
   listening.value = nextListening;
   if (nextVolume > 0) lastVolume.value = nextVolume;
+  if (listeningChanged) void synchronizeListeningState();
 }
 
 function toggleEnlargedParticipant(identity: string) {
@@ -232,10 +232,11 @@ function participantListening(participant: Participant) {
   <div class="app-shell">
     <header class="titlebar" :class="{ 'desktop-titlebar': desktop }">
       <div class="brand">LycanSync</div>
-      <span class="local-badge">本地调试</span>
       <div v-if="desktop" class="window-actions">
         <button aria-label="最小化窗口" @click="desktop.minimize()"><Minus :size="14" /></button>
-        <button aria-label="最大化或还原窗口" @click="desktop.toggleMaximize()"><Square :size="11" /></button>
+        <button :aria-label="windowMaximized ? '还原窗口' : '最大化窗口'" @click="desktop.toggleMaximize()">
+          <Copy v-if="windowMaximized" :size="14" /><Square v-else :size="14" />
+        </button>
         <button aria-label="关闭窗口" @click="desktop.close()"><X :size="14" /></button>
       </div>
       <div v-else class="window-actions" aria-hidden="true"><span><Minus :size="14" /></span><span><Square :size="11" /></span><span><X :size="14" /></span></div>
@@ -252,7 +253,7 @@ function participantListening(participant: Participant) {
         </button>
         <button class="group-button add-group" type="button" disabled aria-label="创建群组，尚未开放" data-tooltip="创建群组将在群组后端接入后开放"><Plus :size="17" /></button>
         <div class="rail-spacer" />
-        <button class="group-button profile-button" type="button" disabled aria-label="个人设置，尚未开放" data-tooltip="个人设置尚未开放"><UserRound :size="17" /></button>
+        <button class="group-button profile-button" type="button" aria-label="个人设置" data-tooltip="个人设置" @click="emit('profile')"><img v-if="user.avatar" :src="user.avatar" class="profile-avatar" alt="" referrerpolicy="no-referrer" /><UserRound v-else :size="17" /></button>
       </nav>
       <main class="group-main">
         <header class="group-header">
@@ -270,7 +271,7 @@ function participantListening(participant: Participant) {
         <div v-if="pendingSwitchGroup && joinedGroup" class="switch-confirm" role="alert">
           <span>从“{{ joinedGroup.name }}”切换到“{{ pendingSwitchGroup.name }}”？当前共享会停止，加入后默认开麦。</span>
           <button type="button" @click="pendingSwitchGroupId = null">取消</button>
-          <button type="button" class="confirm-button" @click="joinGroup(pendingSwitchGroup.id, displayName)">切换</button>
+          <button type="button" class="confirm-button" @click="joinGroup(pendingSwitchGroup.id)">切换</button>
         </div>
         <section v-if="!showingJoinedGroup && roomSummary && roomSummary.participantCount > 0" class="voice-preview" aria-label="当前语音成员预览">
           <div class="voice-heading"><span><AudioLines :size="15" />语音中</span><small data-testid="room-summary-count">{{ roomSummary.participantCount }} 人</small></div>
@@ -307,11 +308,9 @@ function participantListening(participant: Participant) {
         </section>
         <section class="chat-panel" :aria-label="`${selectedGroup.name}群聊`">
           <div class="chat-heading"><MessageSquareText :size="15" /><span>群聊</span></div>
-          <div class="message-list">
-            <p class="empty-state">文字聊天尚未开放，当前可使用语音和屏幕共享。</p>
-          </div>
+          <div class="message-list"></div>
           <div class="composer"><button type="button" disabled aria-label="添加内容"><Plus :size="16" /></button>
-            <input aria-label="消息内容" disabled placeholder="发送消息（尚未开放）" />
+            <input aria-label="消息内容" disabled placeholder="发送消息" />
             <button type="button" disabled aria-label="发送消息"><Send :size="15" /></button>
           </div>
         </section>
@@ -351,22 +350,7 @@ function participantListening(participant: Participant) {
       </main>
       <aside class="members-panel" aria-label="群组成员">
         <div class="members-header"><strong>成员</strong><Search :size="15" /></div>
-        <p class="empty-state">成员列表尚未开放。语音参与者显示在上方语音区域。</p>
       </aside>
-    </div>
-    <div v-if="nicknameGroupId" class="dialog-backdrop">
-      <section class="nickname-dialog" role="dialog" aria-modal="true" aria-labelledby="nickname-title">
-        <div class="dialog-icon"><Headphones :size="20" /></div>
-        <h2 id="nickname-title">加入 {{ LOCAL_ROOMS.find((group) => group.id === nicknameGroupId)?.name }}</h2>
-        <p>这是本地调试身份。确认加入后才连接语音，并默认请求开启麦克风。</p>
-        <form @submit="submitNickname">
-          <label for="nickname">测试昵称</label>
-          <input id="nickname" v-model="displayName" autofocus autocomplete="off" :maxlength="32" />
-          <div class="dialog-actions"><button type="button" @click="nicknameGroupId = null">取消</button>
-            <button type="submit" class="confirm-button" :disabled="!displayName.trim() || joiningGroupId !== null">{{ joiningGroupId ? '正在加入…' : '加入语音' }}</button>
-          </div>
-        </form>
-      </section>
     </div>
     <div v-if="captureRequest" class="dialog-backdrop" @keydown.esc="selectCaptureSource(null)">
       <section class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-title">

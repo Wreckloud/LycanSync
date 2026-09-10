@@ -1,10 +1,16 @@
 spring:
+  autoconfigure:
+    # 使用项目自己的 Bearer 会话，不生成 Spring Security 默认用户。
+    exclude: org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  config:
+    # 可从仓库根目录或 services/api 启动；环境变量仍优先于本地文件。
+    import: optional:file:../../.env[.properties],optional:file:.env[.properties]
   application:
     name: lycan-sync-api
   datasource:
-    url: ${DB_URL:jdbc:postgresql://127.0.0.1:5432/lycansync}
+    url: ${DB_URL:jdbc:postgresql://127.0.0.1:${POSTGRES_PORT:5432}/lycansync}
     username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD}
+    password: ${DB_PASSWORD:${POSTGRES_PASSWORD}}
     hikari:
       maximum-pool-size: ${DB_POOL_MAX_SIZE:4}
       # 空闲时允许连接池缩至零，减少本地开发的资源占用。
@@ -13,7 +19,7 @@ spring:
   flyway:
     # 迁移账号可单独配置；本地开发默认复用应用账号。
     user: ${DB_MIGRATION_USERNAME:${DB_USERNAME:postgres}}
-    password: ${DB_MIGRATION_PASSWORD:${DB_PASSWORD}}
+    password: ${DB_MIGRATION_PASSWORD:${DB_PASSWORD:${POSTGRES_PASSWORD}}}
     locations: classpath:db/migration
     validate-migration-naming: true
 

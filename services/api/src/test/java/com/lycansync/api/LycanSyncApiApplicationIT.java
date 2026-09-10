@@ -1,5 +1,8 @@
 package com.lycansync.api;
 
+import com.lycansync.api.auth.mapper.AuthMapper;
+import com.lycansync.api.auth.model.AuthUser;
+import com.lycansync.api.auth.service.AuthSecrets;
 import com.lycansync.api.system.mapper.SystemStateMapper;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.output.MigrateResult;
@@ -16,6 +19,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+
+import java.time.Instant;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -56,6 +62,17 @@ class LycanSyncApiApplicationIT {
 
     @Autowired
     private BuildProperties buildProperties;
+
+    @Autowired
+    private AuthMapper authMapper;
+
+    private String authenticatedSession() {
+        AuthUser user = new AuthUser(UUID.randomUUID(), "测试", "", false);
+        authMapper.insertUser(user, Instant.now());
+        String token = AuthSecrets.generate();
+        authMapper.replaceSession(AuthSecrets.hash(token), user.id(), Instant.now().plusSeconds(600));
+        return "Bearer " + token;
+    }
 
     @DynamicPropertySource
     static void configureDatabase(DynamicPropertyRegistry registry) {
@@ -131,13 +148,13 @@ class LycanSyncApiApplicationIT {
 
     @Test
     void shouldRemoveOldSystemStatusEndpoint() throws Exception {
-        mockMvc.perform(get("/api/v1/system/status"))
+        mockMvc.perform(get("/api/v1/system/status").header("Authorization", authenticatedSession()))
                 .andExpect(status().isNotFound());
     }
 
     @Test
     void shouldRemoveVersionedInitializationEndpoint() throws Exception {
-        mockMvc.perform(get("/api/v1/system/initialization"))
+        mockMvc.perform(get("/api/v1/system/initialization").header("Authorization", authenticatedSession()))
                 .andExpect(status().isNotFound());
     }
 
@@ -176,9 +193,9 @@ class LycanSyncApiApplicationIT {
 
     @Test
     void shouldNotExposeRtcTokenEndpointWithoutLocalProfile() throws Exception {
-        mockMvc.perform(post("/api/rtc/token")
+        mockMvc.perform(post("/api/rtc/token").header("Authorization", authenticatedSession())
                         .contentType("application/json")
-                        .content("{\"displayName\":\"小狼\"}"))
+                        .content("{\"groupId\":\"pack\"}"))
                 .andExpect(status().isNotFound());
     }
 }

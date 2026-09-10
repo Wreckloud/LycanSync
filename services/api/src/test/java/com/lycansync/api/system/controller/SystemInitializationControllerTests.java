@@ -1,16 +1,21 @@
 package com.lycansync.api.system.controller;
 
+import com.lycansync.api.auth.config.AuthConfiguration;
+import com.lycansync.api.auth.service.AuthService;
 import com.lycansync.api.system.dto.SystemInitializationStatusResponse;
 import com.lycansync.api.system.service.SystemInitializationService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
 
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -28,6 +33,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         controllers = SystemInitializationController.class,
         properties = "logging.level.com.lycansync.api.common.error=OFF"
 )
+@Import(AuthConfiguration.class)
 class SystemInitializationControllerTests {
 
     private static final Instant SERVER_TIME = Instant.parse("2026-09-03T06:30:00Z");
@@ -37,6 +43,9 @@ class SystemInitializationControllerTests {
 
     @MockitoBean
     private SystemInitializationService systemInitializationService;
+
+    @MockitoBean
+    private AuthService authService;
 
     @Test
     void shouldReturnInitializationStateAndServerTimeWithoutCaching() throws Exception {
@@ -62,7 +71,6 @@ class SystemInitializationControllerTests {
                 .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
                 .andExpect(jsonPath("$.code").value("DATABASE_ACCESS_ERROR"))
                 .andExpect(jsonPath("$.detail").value("数据库暂时不可用"))
-                .andExpect(content().string(org.hamcrest.Matchers.not(
-                        org.hamcrest.Matchers.containsString("connection details"))));
+                .andExpect(content().string(not(containsString("connection details"))));
     }
 }

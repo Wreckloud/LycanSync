@@ -1,5 +1,6 @@
 package com.lycansync.api.rtc.controller;
 
+import com.lycansync.api.auth.model.AuthUser;
 import com.lycansync.api.rtc.dto.LocalRtcTokenRequest;
 import com.lycansync.api.rtc.dto.RtcRoomSummaryResponse;
 import com.lycansync.api.rtc.dto.RtcTokenResponse;
@@ -20,6 +21,7 @@ import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -39,25 +41,26 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 @Validated
 @RequestMapping("/api/rtc")
-@Tag(name = "本地 RTC 调试", description = "仅 rtc-local 模式启用，不提供正式登录能力")
+@Tag(name = "本地 RTC 调试", description = "仅 rtc-local 模式启用，需要已登录账号")
 public class LocalRtcController {
 
     private final LocalRtcTokenService localRtcTokenService;
     private final LocalRtcRoomSummaryService localRtcRoomSummaryService;
 
     @PostMapping(value = "/token", consumes = MediaType.APPLICATION_JSON_VALUE)
-    @Operation(summary = "签发本地测试房间凭证", description = "群组对应独立房间，使用临时身份；不创建数据库用户或房间记录")
+    @Operation(summary = "签发本地测试房间凭证", description = "使用已认证账号身份进入本地调试房间，不创建群组记录")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "凭证签发成功，不代表媒体连接成功"),
             @ApiResponse(responseCode = "400", description = "请求参数无效",
                     content = @Content(mediaType = "application/problem+json",
                             schema = @Schema(implementation = ProblemDetail.class)))
     })
-    public ResponseEntity<RtcTokenResponse> issueToken(@Valid @RequestBody LocalRtcTokenRequest request) {
+    public ResponseEntity<RtcTokenResponse> issueToken(@Valid @RequestBody LocalRtcTokenRequest request,
+                                                      @AuthenticationPrincipal AuthUser user) {
         // 凭证不能被缓存后重复分发，每次申请都交由 Service 签发。
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())
-                .body(localRtcTokenService.issueToken(request.groupId(), request.displayName()));
+                .body(localRtcTokenService.issueToken(request.groupId(), user));
     }
 
     @GetMapping("/room-summary")

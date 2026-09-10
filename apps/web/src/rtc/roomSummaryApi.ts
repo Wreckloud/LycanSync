@@ -1,3 +1,5 @@
+import { authenticatedFetch } from '../auth/authApi';
+
 export interface RtcRoomSummary {
   participantCount: number;
   participantNames: string[];
@@ -18,7 +20,7 @@ function isRoomSummary(value: unknown): value is RtcRoomSummary {
 /** 查询房间外可见的成员人数和昵称，不连接 LiveKit，也不请求任何媒体权限。 */
 export async function requestRoomSummary(groupId: string, signal: AbortSignal): Promise<RtcRoomSummary> {
   const query = new URLSearchParams({ groupId });
-  const response = await fetch(`/api/rtc/room-summary?${query}`, {
+  const response = await authenticatedFetch(`/api/rtc/room-summary?${query}`, {
     method: 'GET',
     headers: { Accept: 'application/json' },
     cache: 'no-store',
