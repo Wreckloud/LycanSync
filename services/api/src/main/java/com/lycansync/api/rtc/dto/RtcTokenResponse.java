@@ -15,10 +15,10 @@ public record RtcTokenResponse(
         @Schema(description = "LiveKit 信令连接地址", example = "ws://127.0.0.1:7880")
         String serverUrl,
 
-        @Schema(description = "允许加入的群组房间", example = "lycan-sync-dev-pack")
+        @Schema(description = "允许加入的群组房间", example = "lycan-sync-group-01b08c29-d1e5-4bca-987f-64946541e93b")
         String roomName,
 
-        @Schema(description = "服务端为本次请求生成的临时参与者标识")
+        @Schema(description = "由登录用户 ID 确定的稳定参与者标识")
         String participantIdentity,
 
         @Schema(description = "已签名的 JWT 入房凭证，不应写入日志或分享给他人")

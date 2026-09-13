@@ -121,9 +121,13 @@ class LocalRtcApplicationIT {
 
     @Test
     void shouldJoinLiveKitUsingTokenIssuedByHttpEndpoint() throws Exception {
+        String groupBody = mockMvc.perform(post("/api/groups").header("Authorization", "Bearer " + sessionToken)
+                        .contentType("application/json").content("{\"name\":\"媒体测试群组\"}"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        String groupId = objectMapper.readTree(groupBody).get("id").asText();
         String responseBody = mockMvc.perform(post("/api/rtc/token").header("Authorization", "Bearer " + sessionToken)
                         .contentType("application/json")
-                        .content("{\"groupId\":\"pack\"}"))
+                        .content("{\"groupId\":\"" + groupId + "\"}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         RtcTokenResponse credential = objectMapper.readValue(responseBody, RtcTokenResponse.class);
@@ -142,10 +146,11 @@ class LocalRtcApplicationIT {
             assertThat(join.getParticipant().getName()).isEqualTo("小狼");
             assertThat(join.getRoom().getMaxParticipants()).isZero();
 
-            mockMvc.perform(get("/api/rtc/room-summary").header("Authorization", "Bearer " + sessionToken).queryParam("groupId", "pack"))
+            mockMvc.perform(get("/api/rtc/room-summary").header("Authorization", "Bearer " + sessionToken).queryParam("groupId", groupId))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.participantCount").value(1))
-                    .andExpect(jsonPath("$.participantNames[0]").value("小狼"))
+                    .andExpect(jsonPath("$.participants[0].displayName").value("小狼"))
+                    .andExpect(jsonPath("$.participants[0].participantIdentity").value(credential.participantIdentity()))
                     .andExpect(jsonPath("$.tracks").doesNotExist());
 
             RoomServiceClient roomClient = RoomServiceClient.createClient(
@@ -159,6 +164,35 @@ class LocalRtcApplicationIT {
         } finally {
             connection.abort();
         }
+    }
+
+    @Test
+    void shouldAllowEveryRegisteredUserIntoExistingGroupAndRejectMissingGroup() throws Exception {
+        String groupBody = mockMvc.perform(post("/api/groups").header("Authorization", "Bearer " + sessionToken)
+                        .contentType("application/json").content("{\"name\":\"开黑小队\"}"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        String groupId = objectMapper.readTree(groupBody).get("id").asText();
+        AuthUser friend = new AuthUser(UUID.randomUUID(), "新朋友", "", false);
+        authMapper.insertUser(friend, Instant.now());
+        String friendToken = AuthSecrets.generate();
+        authMapper.replaceSession(AuthSecrets.hash(friendToken), friend.id(), Instant.now().plusSeconds(600));
+
+        mockMvc.perform(post("/api/rtc/token").header("Authorization", "Bearer " + friendToken)
+                        .contentType("application/json").content("{\"groupId\":\"" + groupId + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.roomName").value("lycan-sync-group-" + groupId))
+                .andExpect(jsonPath("$.participantIdentity").value("user-" + friend.id()));
+        mockMvc.perform(get("/api/rtc/room-summary").header("Authorization", "Bearer " + friendToken)
+                        .queryParam("groupId", groupId))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.participantCount").value(0));
+
+        String missingGroupId = UUID.randomUUID().toString();
+        mockMvc.perform(post("/api/rtc/token").header("Authorization", "Bearer " + friendToken)
+                        .contentType("application/json").content("{\"groupId\":\"" + missingGroupId + "\"}"))
+                .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("GROUP_NOT_FOUND"));
+        mockMvc.perform(get("/api/rtc/room-summary").header("Authorization", "Bearer " + friendToken)
+                        .queryParam("groupId", missingGroupId))
+                .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("GROUP_NOT_FOUND"));
     }
 
     @Test

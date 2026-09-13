@@ -195,7 +195,7 @@ class LycanSyncApiApplicationIT {
     void shouldNotExposeRtcTokenEndpointWithoutLocalProfile() throws Exception {
         mockMvc.perform(post("/api/rtc/token").header("Authorization", authenticatedSession())
                         .contentType("application/json")
-                        .content("{\"groupId\":\"pack\"}"))
+                        .content("{\"groupId\":\"01b08c29-d1e5-4bca-987f-64946541e93b\"}"))
                 .andExpect(status().isNotFound());
     }
 }

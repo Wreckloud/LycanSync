@@ -1,8 +1,9 @@
 package com.lycansync.api.rtc.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.NotNull;
+
+import java.util.UUID;
 
 /**
  * 本地 RTC 入房凭证请求。
@@ -10,13 +11,10 @@ import jakarta.validation.constraints.Pattern;
  * @author Wreckloud
  * @since 2026-09-03
  */
-@Schema(description = "本地 RTC 入房凭证请求，身份由登录会话提供")
+@Schema(description = "群组 RTC 入房凭证请求，身份由登录会话提供")
 public record LocalRtcTokenRequest(
-        @NotBlank(message = "群组标识不能为空")
-        @Pattern(regexp = GROUP_ID_PATTERN, message = "群组标识格式不正确")
-        @Schema(description = "本地界面使用的群组标识", example = "pack", maxLength = 32)
-        String groupId
+        @NotNull
+        @Schema(description = "已加入群组的 UUID", example = "01b08c29-d1e5-4bca-987f-64946541e93b")
+        UUID groupId
 ) {
-
-    public static final String GROUP_ID_PATTERN = "[a-z0-9][a-z0-9-]{0,31}";
 }

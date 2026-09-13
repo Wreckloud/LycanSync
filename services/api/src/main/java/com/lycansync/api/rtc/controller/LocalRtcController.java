@@ -14,7 +14,6 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.Pattern;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Profile;
 import org.springframework.http.CacheControl;
@@ -30,8 +29,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.UUID;
+
 /**
- * 本地 RTC 调试接口。
+ * 群组 RTC 接口，仅在本地媒体环境启用。
  *
  * @author Wreckloud
  * @since 2026-09-03
@@ -41,14 +42,14 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 @Validated
 @RequestMapping("/api/rtc")
-@Tag(name = "本地 RTC 调试", description = "仅 rtc-local 模式启用，需要已登录账号")
+@Tag(name = "群组 RTC", description = "仅 rtc-local 模式启用，需要已登录账号")
 public class LocalRtcController {
 
     private final LocalRtcTokenService localRtcTokenService;
     private final LocalRtcRoomSummaryService localRtcRoomSummaryService;
 
     @PostMapping(value = "/token", consumes = MediaType.APPLICATION_JSON_VALUE)
-    @Operation(summary = "签发本地测试房间凭证", description = "使用已认证账号身份进入本地调试房间，不创建群组记录")
+    @Operation(summary = "签发群组语音凭证", description = "已登录账号可进入任一现存群组的语音房间")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "凭证签发成功，不代表媒体连接成功"),
             @ApiResponse(responseCode = "400", description = "请求参数无效",
@@ -65,8 +66,8 @@ public class LocalRtcController {
     }
 
     @GetMapping("/room-summary")
-    @Operation(summary = "查询本地测试群组的语音成员摘要",
-            description = "仅返回人数和显示昵称，不返回发言、麦克风、收听或共享状态")
+    @Operation(summary = "查询群组语音成员摘要",
+            description = "已登录账号可查看人数、参与者身份和昵称，不返回媒体状态")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "摘要查询成功；LiveKit 尚未创建房间时返回空摘要"),
             @ApiResponse(responseCode = "400", description = "群组标识格式不正确"),
@@ -75,9 +76,8 @@ public class LocalRtcController {
     })
     public ResponseEntity<RtcRoomSummaryResponse> getRoomSummary(
             @RequestParam
-            @Pattern(regexp = LocalRtcTokenRequest.GROUP_ID_PATTERN, message = "群组标识格式不正确")
-            @Parameter(description = "本地界面使用的群组标识", example = "pack")
-            String groupId
+            @Parameter(description = "持久化群组 UUID")
+            UUID groupId
     ) {
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())

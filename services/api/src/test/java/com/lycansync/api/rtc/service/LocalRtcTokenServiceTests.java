@@ -5,7 +5,10 @@ import com.auth0.jwt.algorithms.Algorithm;
 import com.auth0.jwt.interfaces.DecodedJWT;
 import com.lycansync.api.rtc.config.LiveKitProperties;
 import com.lycansync.api.rtc.dto.RtcTokenResponse;
-import com.lycansync.api.rtc.exception.RtcRoomNotFoundException;
+import com.lycansync.api.group.service.GroupService;
+import com.lycansync.api.group.exception.GroupException;
+import com.lycansync.api.common.error.ApiErrorCode;
+import org.springframework.http.HttpStatus;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -18,6 +21,9 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 /**
  * 本地 RTC 凭证签名与权限测试。
@@ -30,15 +36,17 @@ class LocalRtcTokenServiceTests {
     private static final String API_KEY = "local-test-key";
     private static final String API_SECRET = "local-test-secret-at-least-32-characters";
     private static final Instant SERVER_TIME = Instant.parse("2026-09-03T07:00:00.123Z");
+    private static final UUID GROUP_ID = UUID.fromString("01b08c29-d1e5-4bca-987f-64946541e93b");
+    private final GroupService groupService = mock(GroupService.class);
 
     private final LocalRtcTokenService localRtcTokenService = new LocalRtcTokenService(
             new LiveKitProperties("ws://127.0.0.1:7880", "http://127.0.0.1:7880", API_KEY, API_SECRET),
-            Clock.fixed(SERVER_TIME, ZoneOffset.UTC));
+            groupService, Clock.fixed(SERVER_TIME, ZoneOffset.UTC));
 
     @Test
     void shouldSignGroupRoomTokenWithOnlyRequiredMediaPermissions() {
         RtcTokenResponse response = localRtcTokenService.issueToken(
-                "pack", new AuthenticatedUser(UUID.randomUUID(), "小狼", false));
+                GROUP_ID, new AuthenticatedUser(UUID.randomUUID(), "小狼", false));
         DecodedJWT token = JWT.decode(response.token());
 
         // 解码只能读取内容，另外验证签名才能确认凭证确实由指定密钥签发。
@@ -48,11 +56,11 @@ class LocalRtcTokenServiceTests {
         assertThat(token.getSubject()).isEqualTo(response.participantIdentity());
         assertThat(token.getClaim("name").asString()).isEqualTo("小狼");
         assertThat(response.serverUrl()).isEqualTo("ws://127.0.0.1:7880");
-        assertThat(response.roomName()).isEqualTo("lycan-sync-dev-pack");
+        assertThat(response.roomName()).isEqualTo("lycan-sync-group-" + GROUP_ID);
 
         Map<String, Object> grants = token.getClaim("video").asMap();
         assertThat(grants).containsExactlyInAnyOrderEntriesOf(Map.of(
-                "room", "lycan-sync-dev-pack",
+                "room", "lycan-sync-group-" + GROUP_ID,
                 "roomJoin", true,
                 "canPublish", true,
                 "canSubscribe", true,
@@ -65,7 +73,7 @@ class LocalRtcTokenServiceTests {
     @Test
     void shouldUseClockForTenMinuteExpiryAndMatchResponseToJwtPrecision() {
         RtcTokenResponse response = localRtcTokenService.issueToken(
-                "pack", new AuthenticatedUser(UUID.randomUUID(), "小狼", false));
+                GROUP_ID, new AuthenticatedUser(UUID.randomUUID(), "小狼", false));
         DecodedJWT token = JWT.decode(response.token());
 
         assertThat(token.getNotBeforeAsInstant()).isEqualTo(Instant.parse("2026-09-03T07:00:00Z"));
@@ -76,8 +84,8 @@ class LocalRtcTokenServiceTests {
     @Test
     void shouldReuseAccountIdentityAcrossDevices() {
         AuthenticatedUser user = new AuthenticatedUser(UUID.randomUUID(), "小狼", false);
-        RtcTokenResponse first = localRtcTokenService.issueToken("pack", user);
-        RtcTokenResponse second = localRtcTokenService.issueToken("pack", user);
+        RtcTokenResponse first = localRtcTokenService.issueToken(GROUP_ID, user);
+        RtcTokenResponse second = localRtcTokenService.issueToken(GROUP_ID, user);
         assertThat(first.participantIdentity()).isEqualTo("user-" + user.id());
         assertThat(second.participantIdentity()).isEqualTo(first.participantIdentity());
     }
@@ -85,9 +93,9 @@ class LocalRtcTokenServiceTests {
     @Test
     void shouldAssignDifferentIdentitiesToRequestsWithTheSameNickname() {
         RtcTokenResponse first = localRtcTokenService.issueToken(
-                "pack", new AuthenticatedUser(UUID.randomUUID(), "小狼", false));
+                GROUP_ID, new AuthenticatedUser(UUID.randomUUID(), "小狼", false));
         RtcTokenResponse second = localRtcTokenService.issueToken(
-                "pack", new AuthenticatedUser(UUID.randomUUID(), "小狼", false));
+                GROUP_ID, new AuthenticatedUser(UUID.randomUUID(), "小狼", false));
 
         assertThat(first.participantIdentity()).startsWith("user-");
         assertThat(first.participantIdentity()).isNotEqualTo(second.participantIdentity());
@@ -98,8 +106,20 @@ class LocalRtcTokenServiceTests {
     void shouldRejectUnknownBusinessRoomBeforeSigningToken() {
         AuthenticatedUser user = new AuthenticatedUser(UUID.randomUUID(), "小狼", false);
 
-        assertThatThrownBy(() -> localRtcTokenService.issueToken("missing", user))
-                .isInstanceOf(RtcRoomNotFoundException.class)
-                .hasMessage("房间不存在");
+        doThrow(new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.GROUP_NOT_FOUND, "群组不存在"))
+                .when(groupService).requireGroup(GROUP_ID);
+        assertThatThrownBy(() -> localRtcTokenService.issueToken(GROUP_ID, user))
+                .isInstanceOf(GroupException.class)
+                .hasMessage("群组不存在");
+        verify(groupService).requireGroup(GROUP_ID);
+    }
+
+    @Test
+    void shouldKeepDifferentGroupsInDifferentRooms() {
+        AuthenticatedUser user = new AuthenticatedUser(UUID.randomUUID(), "小狼", false);
+        RtcTokenResponse first = localRtcTokenService.issueToken(GROUP_ID, user);
+        RtcTokenResponse second = localRtcTokenService.issueToken(UUID.randomUUID(), user);
+        assertThat(first.roomName()).isNotEqualTo(second.roomName());
+        assertThat(first.participantIdentity()).isEqualTo(second.participantIdentity());
     }
 }

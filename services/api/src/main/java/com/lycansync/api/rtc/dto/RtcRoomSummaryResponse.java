@@ -15,11 +15,11 @@ public record RtcRoomSummaryResponse(
         @Schema(description = "当前语音成员数量", example = "2")
         int participantCount,
 
-        @Schema(description = "当前语音成员显示昵称，按加入顺序排列", example = "[\"小北\", \"阿狼\"]")
-        List<String> participantNames
+        @Schema(description = "当前语音成员身份与昵称，按加入顺序排列")
+        List<RtcParticipantSummaryResponse> participants
 ) {
 
     public RtcRoomSummaryResponse {
-        participantNames = List.copyOf(participantNames);
+        participants = List.copyOf(participants);
     }
 }

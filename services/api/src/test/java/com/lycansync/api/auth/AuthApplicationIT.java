@@ -76,7 +76,7 @@ class AuthApplicationIT {
 
     @BeforeEach
     void resetDatabase() {
-        jdbc.sql("TRUNCATE auth_session, auth_local_credential, app_user").update();
+        jdbc.sql("TRUNCATE chat_group, auth_session, auth_local_credential, app_user").update();
         jdbc.sql("UPDATE system_state SET initialized_at = NULL WHERE id = 1").update();
     }
 
@@ -134,7 +134,7 @@ class AuthApplicationIT {
     void shouldRejectAnonymousBusinessRequests() throws Exception {
         mvc.perform(get("/api/auth/me")).andExpect(status().isUnauthorized());
         mvc.perform(post("/api/rtc/token").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"groupId\":\"pack\"}"))
+                        .content("{\"groupId\":\"01b08c29-d1e5-4bca-987f-64946541e93b\"}"))
                 .andExpect(status().isUnauthorized());
     }
 

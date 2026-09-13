@@ -1,6 +1,7 @@
 package com.lycansync.api.rtc.service;
 
 import com.lycansync.api.auth.model.AuthenticatedUser;
+import com.lycansync.api.group.service.GroupService;
 import com.lycansync.api.rtc.config.LiveKitProperties;
 import com.lycansync.api.rtc.dto.RtcTokenResponse;
 import io.livekit.server.AccessToken;
@@ -21,6 +22,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 本地 RTC 入房凭证签发服务。
@@ -36,9 +38,11 @@ public class LocalRtcTokenService {
     private static final Duration TOKEN_TTL = Duration.ofMinutes(10);
 
     private final LiveKitProperties liveKitProperties;
+    private final GroupService groupService;
     private final Clock systemClock;
 
-    public RtcTokenResponse issueToken(String groupId, AuthenticatedUser user) {
+    public RtcTokenResponse issueToken(UUID groupId, AuthenticatedUser user) {
+        groupService.requireGroup(groupId);
         // 1. 固定使用可信账号 ID；同房间第二台设备连接时由 LiveKit 替换旧连接。
         String participantIdentity = "user-" + user.id();
 
@@ -46,8 +50,8 @@ public class LocalRtcTokenService {
         Instant issuedAt = Instant.now(systemClock).truncatedTo(ChronoUnit.SECONDS);
         Instant expiresAt = issuedAt.plus(TOKEN_TTL);
 
-        // 3. 填写参与者信息和允许的操作，将权限限定在目标本地测试群组。
-        String roomName = LocalRtcRooms.roomName(groupId);
+        // 3. 填写参与者信息和允许的操作；注册账号可进入任一现存群组。
+        String roomName = GroupRtcRooms.roomName(groupId);
         AccessToken accessToken = new AccessToken(
                 liveKitProperties.getApiKey(), liveKitProperties.getApiSecret());
         accessToken.setIdentity(participantIdentity);

@@ -59,11 +59,11 @@ class ProfileServiceTests {
     @Test
     void shouldRejectAvatarLargerThanStoredOutputLimit() {
         String avatar = "data:image/png;base64,"
-                + Base64.getEncoder().encodeToString(new byte[512 * 1024 + 1]);
+                + Base64.getEncoder().encodeToString(new byte[96 * 1024 + 1]);
 
         assertThatThrownBy(() -> profileService.update(USER, new ProfileUpdateRequest("小狼", avatar)))
                 .isInstanceOf(AuthException.class)
-                .hasMessage("头像不能超过 512 KB");
+                .hasMessage("头像不能超过 96 KB");
         verifyNoInteractions(mapper);
     }
 
@@ -73,6 +73,25 @@ class ProfileServiceTests {
                 USER, new ProfileUpdateRequest("小狼", "data:image/png;base64,YWJj")))
                 .isInstanceOf(AuthException.class)
                 .hasMessage("头像文件无效");
+        verifyNoInteractions(mapper);
+    }
+
+    @Test
+    void shouldRejectImageLargerThanAvatarDimensions() throws IOException {
+        String avatar = pngDataUrl(new BufferedImage(257, 256, BufferedImage.TYPE_INT_ARGB));
+        assertThatThrownBy(() -> profileService.update(USER, new ProfileUpdateRequest("小狼", avatar)))
+                .isInstanceOf(AuthException.class)
+                .hasMessage("头像尺寸不能超过 256 × 256");
+        verifyNoInteractions(mapper);
+    }
+
+    @Test
+    void shouldRejectImageWithMismatchedDeclaredFormat() throws IOException {
+        String avatar = pngDataUrl(new BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB))
+                .replace("data:image/png;", "data:image/jpeg;");
+        assertThatThrownBy(() -> profileService.update(USER, new ProfileUpdateRequest("小狼", avatar)))
+                .isInstanceOf(AuthException.class)
+                .hasMessage("头像文件格式与声明不一致");
         verifyNoInteractions(mapper);
     }
 

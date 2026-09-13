@@ -1,6 +1,8 @@
 package com.lycansync.api.rtc.service;
 
 import com.lycansync.api.rtc.dto.RtcRoomSummaryResponse;
+import com.lycansync.api.rtc.dto.RtcParticipantSummaryResponse;
+import com.lycansync.api.group.service.GroupService;
 import com.lycansync.api.rtc.exception.RtcServiceUnavailableException;
 import io.livekit.server.RoomServiceClient;
 import livekit.LivekitModels.ParticipantInfo;
@@ -12,6 +14,7 @@ import retrofit2.Response;
 import java.io.IOException;
 import java.util.Comparator;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 查询房间外允许展示的本地 RTC 成员摘要。
@@ -25,13 +28,14 @@ import java.util.List;
 public class LocalRtcRoomSummaryService {
 
     private final RoomServiceClient roomServiceClient;
+    private final GroupService groupService;
 
-    public RtcRoomSummaryResponse getSummary(String groupId) {
-        // TODO: 正式群组接入后校验摘要查看权限，只向允许查看的成员返回名单。
+    public RtcRoomSummaryResponse getSummary(UUID groupId) {
+        groupService.requireGroup(groupId);
         // TODO: 多客户端查询时按房间合并请求并短暂缓存，限制缓存大小且不把查询失败当作无人。
         try {
             Response<List<ParticipantInfo>> response = roomServiceClient
-                    .listParticipants(LocalRtcRooms.roomName(groupId))
+                    .listParticipants(GroupRtcRooms.roomName(groupId))
                     .execute();
 
             // LiveKit 在无人房间销毁后返回 404，对业务而言就是当前没有语音成员。
@@ -44,14 +48,12 @@ public class LocalRtcRoomSummaryService {
                         "LiveKit 房间摘要查询失败，HTTP " + response.code());
             }
 
-            // TODO: 正式用户接入后按可信身份关联昵称，明确无对应用户的参与者展示规则。
-            List<String> participantNames = response.body().stream()
+            List<RtcParticipantSummaryResponse> participants = response.body().stream()
                     .sorted(Comparator.comparingLong(ParticipantInfo::getJoinedAtMs))
-                    .map(participant -> participant.getName().isBlank()
-                            ? "未命名成员"
-                            : participant.getName().strip())
+                    .map(participant -> new RtcParticipantSummaryResponse(participant.getIdentity(),
+                            participant.getName().isBlank() ? participant.getIdentity() : participant.getName().strip()))
                     .toList();
-            return new RtcRoomSummaryResponse(participantNames.size(), participantNames);
+            return new RtcRoomSummaryResponse(participants.size(), participants);
         } catch (IOException exception) {
             throw new RtcServiceUnavailableException("无法连接 LiveKit 房间服务", exception);
         }

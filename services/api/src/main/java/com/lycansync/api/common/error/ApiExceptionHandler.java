@@ -1,7 +1,7 @@
 package com.lycansync.api.common.error;
 
 import com.lycansync.api.auth.exception.AuthException;
-import com.lycansync.api.rtc.exception.RtcRoomNotFoundException;
+import com.lycansync.api.group.exception.GroupException;
 import com.lycansync.api.rtc.exception.RtcServiceUnavailableException;
 import com.lycansync.api.system.exception.SystemStateNotFoundException;
 import jakarta.validation.ConstraintViolationException;
@@ -11,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -28,6 +29,12 @@ public class ApiExceptionHandler {
     public ProblemDetail handleAuth(AuthException exception) {
         return createProblemDetail(
                 exception.getStatus(), exception.getCode(), "认证请求失败", exception.getMessage());
+    }
+
+    @ExceptionHandler(GroupException.class)
+    public ProblemDetail handleGroup(GroupException exception) {
+        return createProblemDetail(
+                exception.getStatus(), exception.getCode(), "群组请求失败", exception.getMessage());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -48,6 +55,12 @@ public class ApiExceptionHandler {
                 "请求参数无效",
                 "请求体缺失或 JSON 格式不正确"
         );
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ProblemDetail handleTypeMismatch(MethodArgumentTypeMismatchException exception) {
+        return createProblemDetail(HttpStatus.BAD_REQUEST, ApiErrorCode.INVALID_REQUEST,
+                "请求参数无效", "路径或查询参数格式不正确");
     }
 
     @ExceptionHandler(SystemStateNotFoundException.class)
@@ -90,16 +103,6 @@ public class ApiExceptionHandler {
                 ApiErrorCode.RTC_SERVICE_UNAVAILABLE,
                 "语音状态暂时不可用",
                 "暂时无法获取语音房间状态"
-        );
-    }
-
-    @ExceptionHandler(RtcRoomNotFoundException.class)
-    public ProblemDetail handleRtcRoomNotFound(RtcRoomNotFoundException exception) {
-        return createProblemDetail(
-                HttpStatus.NOT_FOUND,
-                ApiErrorCode.ROOM_NOT_FOUND,
-                "房间不存在",
-                exception.getMessage()
         );
     }
 

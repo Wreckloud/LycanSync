@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lycansync.api.group.mapper.GroupMapper">
+
+    <insert id="insertGroup">
+        INSERT INTO chat_group (id, name, description, avatar, owner_user_id, created_at, updated_at)
+        VALUES (#{group.id}, #{group.name}, #{group.description}, #{group.avatar}, #{group.ownerUserId},
+                #{group.createdAt}, #{group.updatedAt})
+    </insert>
+
+    <select id="groupExists" resultType="boolean">
+        SELECT EXISTS (SELECT 1 FROM chat_group WHERE id = #{groupId})
+    </select>
+
+    <select id="findGroups" resultType="com.lycansync.api.group.model.GroupView">
+        SELECT g.id, g.name, g.description, g.avatar,
+               CASE WHEN g.owner_user_id = #{userId} THEN 'OWNER' ELSE 'MEMBER' END AS role,
+               (SELECT COUNT(*) FROM app_user) AS member_count,
+               g.created_at, g.updated_at
+        FROM chat_group g
+        ORDER BY g.created_at, g.id
+    </select>
+
+    <select id="findGroup" resultType="com.lycansync.api.group.model.GroupView">
+        SELECT g.id, g.name, g.description, g.avatar,
+               CASE WHEN g.owner_user_id = #{userId} THEN 'OWNER' ELSE 'MEMBER' END AS role,
+               (SELECT COUNT(*) FROM app_user) AS member_count,
+               g.created_at, g.updated_at
+        FROM chat_group g
+        WHERE g.id = #{groupId}
+    </select>
+
+    <select id="findMembers" resultType="com.lycansync.api.group.model.GroupMember">
+        SELECT users.id AS user_id, users.nickname, users.avatar,
+               CASE WHEN users.id = g.owner_user_id THEN 'OWNER' ELSE 'MEMBER' END AS role,
+               GREATEST(users.created_at, g.created_at) AS joined_at
+        FROM chat_group g
+        CROSS JOIN app_user users
+        WHERE g.id = #{groupId}
+        ORDER BY CASE WHEN users.id = g.owner_user_id THEN 0 ELSE 1 END,
+                 users.created_at, users.id
+    </select>
+</mapper>
