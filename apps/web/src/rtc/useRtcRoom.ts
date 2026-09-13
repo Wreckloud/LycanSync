@@ -8,6 +8,18 @@ import { requestRtcToken, TokenRequestError } from './tokenApi';
 type RoomStatus = 'idle' | 'joining' | 'connected' | 'reconnecting';
 type MediaSource = Track.Source.Microphone | Track.Source.ScreenShare;
 const SCREEN_SHARE_PRESET = ScreenSharePresets.h1080fps30;
+// 只保留 720p 辅助层，避免每路共享同时维护 1080p、720p、360p 三个编码器。
+const SCREEN_SHARE_SIMULCAST_LAYERS = [ScreenSharePresets.h720fps15];
+const SPEAKER_REFRESH_INTERVAL_MS = 120;
+
+function preferredVideoCodec(): 'h264' | 'vp8' {
+  try {
+    const codecs = RTCRtpSender.getCapabilities?.('video')?.codecs ?? [];
+    return codecs.some(({ mimeType }) => mimeType.toLowerCase() === 'video/h264') ? 'h264' : 'vp8';
+  } catch {
+    return 'vp8';
+  }
+}
 
 function captureErrorMessage(error: unknown, source: MediaSource): string {
   const label = source === Track.Source.Microphone ? '麦克风' : '屏幕共享';
@@ -32,6 +44,12 @@ export function useRtcRoom() {
   const notice = ref('');
   const needsAudioPlayback = ref(false);
   const busySources = ref<MediaSource[]>([]);
+  let speakerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function clearSpeakerRefreshTimer() {
+    if (speakerRefreshTimer !== null) clearTimeout(speakerRefreshTimer);
+    speakerRefreshTimer = null;
+  }
 
   onScopeDispose(() => {
     pendingJoin.value?.abort();
@@ -41,6 +59,7 @@ export function useRtcRoom() {
     unpublishedTracks.value.clear();
     currentRoom?.localParticipant.trackPublications.forEach((publication) => publication.track?.stop());
     currentRoom?.removeAllListeners();
+    clearSpeakerRefreshTimer();
     void currentRoom?.disconnect();
   });
 
@@ -69,10 +88,13 @@ export function useRtcRoom() {
           autoGainControl: true,
         },
         publishDefaults: {
-          videoCodec: 'vp8',
+          // Windows 优先走硬件更常见的 H.264；浏览器不支持时回退到 VP8。
+          videoCodec: preferredVideoCodec(),
           screenShareEncoding: SCREEN_SHARE_PRESET.encoding,
-          // 小卡片用 360p，普通舞台可选 720p，专注或全屏可选原有的 1080p 主层。
-          screenShareSimulcastLayers: [ScreenSharePresets.h360fps15, ScreenSharePresets.h720fps30],
+          // 1080p 主层用于聚焦，720p 辅助层用于普通舞台和缩略图，降低发送端编码压力。
+          screenShareSimulcastLayers: SCREEN_SHARE_SIMULCAST_LAYERS,
+          // 网络受限时优先保留游戏画面尺寸，必要时降低帧率而不是立即变糊。
+          degradationPreference: 'maintain-resolution',
         },
       }));
       const currentRoom = joiningRoom;
@@ -86,16 +108,24 @@ export function useRtcRoom() {
         participants.value = [currentRoom.localParticipant, ...currentRoom.remoteParticipants.values()];
         needsAudioPlayback.value = !currentRoom.canPlaybackAudio;
       };
+      const scheduleSpeakerRefresh = () => {
+        if (speakerRefreshTimer !== null) return;
+        speakerRefreshTimer = setTimeout(() => {
+          speakerRefreshTimer = null;
+          refresh();
+        }, SPEAKER_REFRESH_INTERVAL_MS);
+      };
       [
         RoomEvent.ParticipantConnected, RoomEvent.ParticipantDisconnected,
         RoomEvent.TrackPublished, RoomEvent.TrackUnpublished,
         RoomEvent.TrackSubscribed, RoomEvent.TrackUnsubscribed,
         RoomEvent.LocalTrackPublished, RoomEvent.LocalTrackUnpublished,
         RoomEvent.TrackMuted, RoomEvent.TrackUnmuted,
-        RoomEvent.ActiveSpeakersChanged,
         RoomEvent.ParticipantAttributesChanged,
         RoomEvent.AudioPlaybackStatusChanged,
       ].forEach((event) => currentRoom.on(event, refresh));
+      // 发言状态变化可能很频繁，节流只影响 UI 指示，不影响音频传输。
+      currentRoom.on(RoomEvent.ActiveSpeakersChanged, scheduleSpeakerRefresh);
       currentRoom.on(RoomEvent.ConnectionStateChanged, (connectionState) => {
         if (activeRoom.value !== currentRoom) return;
         if (connectionState === ConnectionState.Connected) status.value = 'connected';
@@ -145,6 +175,7 @@ export function useRtcRoom() {
     unpublishedTracks.value.clear();
     currentRoom?.localParticipant.trackPublications.forEach((publication) => publication.track?.stop());
     currentRoom?.removeAllListeners();
+    clearSpeakerRefreshTimer();
     pendingMedia.value = new Set();
     busySources.value = [];
     room.value = null;
@@ -182,6 +213,7 @@ export function useRtcRoom() {
         ? await participant.createTracks({ audio: true, video: false })
         : await participant.createScreenTracks({
           audio: false,
+          contentHint: 'motion',
           resolution: SCREEN_SHARE_PRESET.resolution,
         });
       // 3. 选择器返回时可能已经离房，必须在发布前检查，不能只在发布后清理。
