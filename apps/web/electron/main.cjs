@@ -16,11 +16,14 @@ const apiRoutePolicies = new Map([
   ['POST /api/auth/local/login', { public: true, savesSession: true }],
   ['GET /api/auth/me', {}],
   ['GET /api/auth/session', {}],
-  ['PUT /api/auth/me', { maxBodyBytes: 750000 }],
+  ['PUT /api/auth/me', { maxBodyBytes: 160 * 1024 }],
   ['POST /api/auth/logout', { clearsSession: true }],
   ['POST /api/rtc/token', {}],
   ['GET /api/rtc/room-summary', {}],
+  ['GET /api/groups', {}],
+  ['POST /api/groups', {}],
 ]);
+const groupPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 if (backend.username || backend.password || backend.pathname !== '/' || backend.search || backend.hash
     || !['http:', 'https:'].includes(backend.protocol)
     || (backend.protocol === 'http:' && !['127.0.0.1', 'localhost', '[::1]'].includes(backend.hostname))) {
@@ -112,11 +115,12 @@ async function serveApplication(request) {
   const url = new URL(request.url);
   if (!trustedUrl(request.url)) return new Response(null, { status: 403 });
   if (url.pathname.startsWith('/api/')) {
-    const routePolicy = apiRoutePolicies.get(`${request.method} ${url.pathname}`);
+    const routePolicy = apiRoutePolicies.get(`${request.method} ${url.pathname}`)
+      ?? (request.method === 'GET' && groupPath.test(url.pathname) ? {} : undefined);
     if (!routePolicy) return new Response(null, { status: 404 });
     try {
       const body = ['POST', 'PUT'].includes(request.method) ? await request.text() : undefined;
-      if (body && body.length > (routePolicy.maxBodyBytes ?? 4096)) return new Response(null, { status: 413 });
+      if (body && Buffer.byteLength(body, 'utf8') > (routePolicy.maxBodyBytes ?? 4096)) return new Response(null, { status: 413 });
       const token = await loadSession();
       const response = await net.fetch(new URL(url.pathname + url.search, backend).href, {
         method: request.method,
