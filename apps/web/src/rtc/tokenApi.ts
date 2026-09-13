@@ -34,7 +34,10 @@ export async function requestRtcToken(
 
   // 2. 明确区分启动配置与输入错误，不把代理错误页当作成功凭证。
   if (response.status === 404) {
-    throw new TokenRequestError('入房接口未启用，请以 rtc-local 模式启动后端。');
+    const problem = await response.json().catch(() => null);
+    throw new TokenRequestError(problem?.code === 'GROUP_NOT_FOUND'
+      ? '群组不存在或你不是群组成员。'
+      : '入房接口未启用，请以 rtc-local 模式启动后端。');
   }
   if (response.status === 400) {
     throw new TokenRequestError('入房参数无效，请检查群组标识。');

@@ -60,7 +60,8 @@ export function useRtcRoom() {
       // 2. 建立独立的 RTC 会话；连接本身不采集麦克风、摄像头或屏幕。
       // TODO: 根据异地实测调整共享画质，并记录连接类型、RTT、丢包和码率以排查代理影响。
       joiningRoom = markRaw(new Room({
-        adaptiveStream: true,
+        // 依据卡片、舞台与专注窗口的实际显示尺寸自动选层；Windows 缩放时按物理像素估算清晰度。
+        adaptiveStream: { pixelDensity: Math.max(1.5, Math.min(2, window.devicePixelRatio || 1)) },
         dynacast: true,
         audioCaptureDefaults: {
           echoCancellation: true,
@@ -70,8 +71,8 @@ export function useRtcRoom() {
         publishDefaults: {
           videoCodec: 'vp8',
           screenShareEncoding: SCREEN_SHARE_PRESET.encoding,
-          // 小画面只发送较低清晰度，主画面再按需启用 1080p 层。
-          screenShareSimulcastLayers: [ScreenSharePresets.h360fps15, ScreenSharePresets.h720fps15],
+          // 小卡片用 360p，普通舞台可选 720p，专注或全屏可选原有的 1080p 主层。
+          screenShareSimulcastLayers: [ScreenSharePresets.h360fps15, ScreenSharePresets.h720fps30],
         },
       }));
       const currentRoom = joiningRoom;

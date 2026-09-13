@@ -1,10 +1,10 @@
 export const MAX_AVATAR_SOURCE_BYTES = 10 * 1024 * 1024;
 export const MAX_AVATAR_SOURCE_PIXELS = 40_000_000;
-export const MAX_AVATAR_OUTPUT_BYTES = 512 * 1024;
-export const AVATAR_OUTPUT_SIZE = 512;
+export const MAX_AVATAR_OUTPUT_BYTES = 96 * 1024;
+export const AVATAR_OUTPUT_SIZE = 256;
 
-const OUTPUT_SIZES = [AVATAR_OUTPUT_SIZE, 384, 256];
-const JPEG_QUALITIES = [0.9, 0.82, 0.74, 0.66];
+const OUTPUT_SIZES = [AVATAR_OUTPUT_SIZE, 224, 192];
+const JPEG_QUALITIES = [0.9, 0.82, 0.74];
 const ACCEPTED_TYPES = new Set(['image/png', 'image/jpeg']);
 
 export class AvatarImageError extends Error {
@@ -75,12 +75,11 @@ export async function encodeAvatarCrop(
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d');
   if (!context) throw new AvatarImageError('当前设备无法处理头像图片。');
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = 'high';
-
   for (const outputSize of OUTPUT_SIZES) {
     canvas.width = outputSize;
     canvas.height = outputSize;
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
     context.clearRect(0, 0, outputSize, outputSize);
     context.drawImage(
       source,
@@ -98,7 +97,7 @@ export async function encodeAvatarCrop(
       if (blob && blob.size <= MAX_AVATAR_OUTPUT_BYTES) return blob;
     }
   }
-  throw new AvatarImageError('图片内容过于复杂，无法压缩到 512 KB 以内。');
+  throw new AvatarImageError('图片内容过于复杂，无法压缩到 96 KB 以内。');
 }
 
 export function blobToDataUrl(blob: Blob): Promise<string> {

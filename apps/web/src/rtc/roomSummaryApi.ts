@@ -2,7 +2,7 @@ import { authenticatedFetch } from '../auth/authApi';
 
 export interface RtcRoomSummary {
   participantCount: number;
-  participantNames: string[];
+  participants: { participantIdentity: string; displayName: string }[];
 }
 
 export class RoomSummaryRequestError extends Error {}
@@ -12,9 +12,11 @@ function isRoomSummary(value: unknown): value is RtcRoomSummary {
   const summary = value as Record<string, unknown>;
   return Number.isInteger(summary.participantCount)
     && Number(summary.participantCount) >= 0
-    && Array.isArray(summary.participantNames)
-    && summary.participantNames.length === summary.participantCount
-    && summary.participantNames.every((name) => typeof name === 'string' && name.length > 0);
+    && Array.isArray(summary.participants)
+    && summary.participants.length === summary.participantCount
+    && summary.participants.every((participant) => participant
+      && typeof participant.participantIdentity === 'string' && participant.participantIdentity.length > 0
+      && typeof participant.displayName === 'string');
 }
 
 /** 查询房间外可见的成员人数和昵称，不连接 LiveKit，也不请求任何媒体权限。 */

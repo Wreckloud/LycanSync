@@ -1,19 +1,23 @@
 import { test, expect } from '@playwright/test';
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/groups', (route) => route.fulfill({ json: [] }));
+});
+
 test('首次注册创建管理员并在浏览器内存保存会话', async ({ page }) => {
   const token = 'a'.repeat(43);
   const user = { id: 'admin-user', nickname: 'Admin', avatar: '', administrator: true };
   let registration: Record<string, unknown> | undefined;
-  let summaryAuthorization: string | undefined;
+  let groupAuthorization: string | undefined;
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: false } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ status: 401, json: { detail: '请先登录' } }));
   await page.route('**/api/auth/local/register', async (route) => {
     registration = route.request().postDataJSON();
     await route.fulfill({ json: { sessionToken: token, user } });
   });
-  await page.route('**/api/rtc/room-summary*', (route) => {
-    summaryAuthorization = route.request().headers().authorization;
-    return route.fulfill({ json: { participantCount: 0, participantNames: [] } });
+  await page.route('**/api/groups', (route) => {
+    groupAuthorization = route.request().headers().authorization;
+    return route.fulfill({ json: [] });
   });
 
   await page.goto('/');
@@ -24,7 +28,7 @@ test('首次注册创建管理员并在浏览器内存保存会话', async ({ pa
 
   await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
   expect(registration).toEqual({ username: 'Admin', password: 'abc123' });
-  await expect.poll(() => summaryAuthorization).toBe('Bearer ' + token);
+  await expect.poll(() => groupAuthorization).toBe('Bearer ' + token);
   expect(await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length })))
     .toEqual({ local: 0, session: 0 });
 });
@@ -40,7 +44,7 @@ test('已初始化服务器使用本地账号登录', async ({ page }) => {
     await route.fulfill({ json: { sessionToken: token, user } });
   });
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
-    json: { participantCount: 0, participantNames: [] },
+    json: { participantCount: 0, participants: [] },
   }));
 
   await page.goto('/');
@@ -63,7 +67,7 @@ test('已初始化服务器允许创建普通账号', async ({ page }) => {
     await route.fulfill({ json: { sessionToken: token, user } });
   });
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
-    json: { participantCount: 0, participantNames: [] },
+    json: { participantCount: 0, participants: [] },
   }));
 
   await page.goto('/');
@@ -88,7 +92,7 @@ test('新设备替换会话后旧客户端通过心跳静默退出', async ({ pa
     return route.fulfill({ status: 401, json: { detail: '登录已过期，请重新登录' } });
   });
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
-    json: { participantCount: 0, participantNames: [] },
+    json: { participantCount: 0, participants: [] },
   }));
 
   await page.goto('/');
@@ -114,7 +118,7 @@ test('上一次会话心跳完成前不会发起下一次', async ({ page }) => 
     } });
   });
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
-    json: { participantCount: 0, participantNames: [] },
+    json: { participantCount: 0, participants: [] },
   }));
 
   await page.goto('/');
@@ -155,7 +159,7 @@ test('会话状态未变化时心跳保持固定节拍', async ({ page }) => {
     } });
   });
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
-    json: { participantCount: 0, participantNames: [] },
+    json: { participantCount: 0, participants: [] },
   }));
 
   await page.goto('/');
@@ -179,7 +183,7 @@ test('个人资料修改沿用当前账号', async ({ page }) => {
     await route.fulfill({ json: user });
   });
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
-    json: { participantCount: 0, participantNames: [] },
+    json: { participantCount: 0, participants: [] },
   }));
   await page.goto('/');
   await page.getByRole('button', { name: '个人设置', exact: true }).click();
@@ -198,7 +202,7 @@ test('更换头像不会改变个人设置布局', async ({ page }) => {
     await route.fulfill({ json: { ...user, ...profileUpdate } });
   });
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
-    json: { participantCount: 0, participantNames: [] },
+    json: { participantCount: 0, participants: [] },
   }));
   await page.goto('/');
   await page.getByRole('button', { name: '个人设置', exact: true }).click();
@@ -213,15 +217,19 @@ test('更换头像不会改变个人设置布局', async ({ page }) => {
     mimeType: 'image/png',
     buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'),
   });
-  await expect(page.getByRole('heading', { name: '调整头像' })).toBeVisible();
+  const cropDialog = page.getByRole('dialog', { name: '调整头像' });
+  await expect(cropDialog).toBeVisible();
+  await expect(cropDialog.getByAltText('待裁剪头像')).toHaveJSProperty('naturalWidth', 1);
+  expect(await cropDialog.getByAltText('待裁剪头像').getAttribute('src')).toMatch(/^data:image\/png;base64,/);
+  expect(await dialog.boundingBox()).toEqual(initialDialog);
   await expect(page.getByLabel('头像缩放')).toBeVisible();
   await page.getByRole('button', { name: '应用头像' }).click();
   const preview = page.getByAltText('头像预览');
   await expect(preview).toBeVisible();
-  await expect(preview).toHaveJSProperty('naturalWidth', 512);
+  await expect(preview).toHaveJSProperty('naturalWidth', 256);
   expect(await preview.getAttribute('src')).toMatch(/^data:image\/png;base64,/);
   expect(await dialog.boundingBox()).toEqual(initialDialog);
   await page.getByRole('button', { name: '保存资料' }).click();
   expect(profileUpdate?.avatar).toMatch(/^data:image\/png;base64,/);
-  expect(Buffer.from(profileUpdate!.avatar!.split(',')[1], 'base64').length).toBeLessThanOrEqual(512 * 1024);
+  expect(Buffer.from(profileUpdate!.avatar!.split(',')[1], 'base64').length).toBeLessThanOrEqual(96 * 1024);
 });

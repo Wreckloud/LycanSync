@@ -11,7 +11,7 @@ test('桌面入房、取消选择、窗口共享及离房释放', async () => {
   const application = await electron.launch({ env: { ...process.env, LYCANSYNC_API_URL: api.url }, args: [resolve('electron/main.cjs'), `--user-data-dir=${userDataDir}`, '--use-fake-device-for-media-stream'] });
   try {
     const page = await application.firstWindow();
-    await page.getByRole('button', { name: /本地调试房间，单击预览，双击加入语音/ }).dblclick();
+    await page.getByRole('button', { name: /开黑小队，单击预览，双击加入语音/ }).dblclick();
     await expect(page.getByRole('status')).toContainText('语音已连接');
     const inputPositions = await page.getByTestId('callbar').evaluate((element) => {
       const panel = element as HTMLElement;
@@ -60,7 +60,7 @@ test('桌面入房、取消选择、窗口共享及离房释放', async () => {
     await page.getByRole('button', { name: '关闭窗口', exact: true }).click();
     await closed;
     await expect.poll(async () => {
-      return (await summary()).participantNames.includes(nickname);
+      return (await summary()).participants.some((participant) => participant.displayName === nickname);
     }).toBe(false);
   } finally { await application.close(); await api.close(); }
 });

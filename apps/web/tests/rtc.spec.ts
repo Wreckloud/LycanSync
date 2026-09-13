@@ -1,8 +1,8 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
-import { renameTestUser } from './fixtures/authenticatedRtc';
-import { installTestRooms } from './fixtures/localRooms';
+import { renameTestUser, setTestAvatar, useNewTestGroups } from './fixtures/authenticatedRtc';
+import { installTestGroups } from './fixtures/authenticatedGroups';
 
-test.beforeEach(async ({ context }) => { await installTestRooms(context); });
+test.beforeEach(async ({ context }) => { useNewTestGroups(); await installTestGroups(context); });
 
 const webPort = Number(process.env.WEB_PORT ?? 4173);
 const webBaseUrl = `http://127.0.0.1:${webPort}`;
@@ -21,9 +21,9 @@ declare global {
   }
 }
 
-async function installSyntheticMedia(context: BrowserContext) {
-  await installTestRooms(context);
-  await context.addInitScript(() => {
+async function installSyntheticMedia(context: BrowserContext, screenSize = { width: 1280, height: 720 }) {
+  await installTestGroups(context);
+  await context.addInitScript((size) => {
     const state = window.__rtcTest = {
       peers: [] as RTCPeerConnection[], tracks: [] as MediaStreamTrack[],
       microphoneCalls: 0, screenCalls: 0, denyScreen: false, delayScreen: false,
@@ -50,13 +50,13 @@ async function installSyntheticMedia(context: BrowserContext) {
       if (state.delayScreen) await new Promise<void>((resolve) => { state.releaseScreen = resolve; });
       // 合成动态画面替代桌面采集，测试绝不读取真实窗口或屏幕。
       const canvas = document.createElement('canvas');
-      canvas.width = 1280;
-      canvas.height = 720;
+      canvas.width = size.width;
+      canvas.height = size.height;
       const drawing = canvas.getContext('2d')!;
       let frame = 0;
       const paint = () => {
         drawing.fillStyle = '#263958';
-        drawing.fillRect(0, 0, 1280, 720);
+        drawing.fillRect(0, 0, size.width, size.height);
         drawing.fillStyle = '#8fd9bc';
         drawing.fillRect(70 + (frame++ % 90) * 4, 390, 300, 10);
         drawing.font = '48px sans-serif';
@@ -74,7 +74,7 @@ async function installSyntheticMedia(context: BrowserContext) {
       state.tracks.push(track);
       return stream;
     };
-  });
+  }, screenSize);
 }
 
 async function join(page: Page, nickname: string) {
@@ -98,6 +98,68 @@ async function inboundBytes(page: Page, kind: 'audio' | 'video') {
     return bytes;
   }, kind);
 }
+
+async function expectStageFits(page: Page, minimumChatHeight = 180) {
+  await expect.poll(() => page.locator('.voice-panel').evaluate((panel) =>
+    panel.scrollHeight <= panel.clientHeight + 1)).toBe(true);
+  if (await page.getByTestId('member-filmstrip').isVisible()) {
+    await expect.poll(() => page.getByTestId('member-filmstrip').evaluate((strip) =>
+      strip.scrollWidth <= strip.clientWidth + 1)).toBe(true);
+  }
+  await expect(page.locator('.chat-panel')).toBeInViewport();
+  await expect.poll(() => page.locator('.chat-panel').evaluate((panel) => panel.clientHeight)).toBeGreaterThanOrEqual(minimumChatHeight);
+}
+
+async function stageGeometry(page: Page) {
+  return page.evaluate(() => {
+    const viewer = document.querySelector('.viewer-grid')!.getBoundingClientRect();
+    const chat = document.querySelector('.chat-panel')!.getBoundingClientRect();
+    const toggle = document.querySelector('.member-strip-toggle')!.getBoundingClientRect();
+    const thumbnail = document.querySelector('.member-filmstrip .participant-card')?.getBoundingClientRect();
+    const filmstrip = document.querySelector('.filmstrip-row')?.getBoundingClientRect();
+    return {
+      viewerHeight: viewer.height,
+      viewerBottom: viewer.bottom,
+      chatTop: chat.top,
+      toggleCenter: toggle.left + toggle.width / 2,
+      toggleTop: toggle.top,
+      toggleBottom: toggle.bottom,
+      viewerCenter: viewer.left + viewer.width / 2,
+      thumbnailRatio: thumbnail ? thumbnail.width / thumbnail.height : null,
+      filmstripTop: filmstrip?.top ?? null,
+    };
+  });
+}
+
+async function toggleMembersAndMeasureVideo(page: Page) {
+  return page.evaluate(async () => {
+    const viewer = document.querySelector('.viewer-grid')!;
+    const toggle = document.querySelector<HTMLButtonElement>('.member-strip-toggle')!;
+    const positions = [viewer.getBoundingClientRect()];
+    toggle.click();
+    for (let frame = 0; frame < 20; frame++) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      positions.push(viewer.getBoundingClientRect());
+    }
+    const heights = positions.map((position) => position.height);
+    const tops = positions.map((position) => position.top);
+    return Math.max(Math.max(...heights) - Math.min(...heights), Math.max(...tops) - Math.min(...tops));
+  });
+}
+
+test('未共享时显示群成员头像，停止共享后恢复头像', async ({ context, page }) => {
+  const avatar = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  setTestAvatar(context, avatar);
+  await installSyntheticMedia(context);
+  await join(page, '头像测试');
+  await expect(page.getByTestId('participant-card').locator('.large-avatar img')).toHaveAttribute('src', avatar);
+  await page.getByRole('button', { name: '开始屏幕共享' }).click();
+  await expect(page.getByTestId('viewer-screen')).toBeVisible();
+  await expectStageFits(page);
+  await expect(page.locator('video')).toHaveCount(1);
+  await page.getByRole('button', { name: '停止屏幕共享' }).click();
+  await expect(page.getByTestId('participant-card').locator('.large-avatar img')).toHaveAttribute('src', avatar);
+});
 
 test('单击只预览；入房接口未启用时明确提示', async ({ page }) => {
   await page.route('**/api/rtc/token', (route) => route.fulfill({ status: 404 }));
@@ -146,7 +208,7 @@ test('通话中单击其他群只预览，双击时要求确认切换', async ({
 
 test('房间外只能看到语音人数和昵称，不连接媒体房间', async ({ browser, context, page }) => {
   const observer = await browser.newContext({ baseURL: webBaseUrl, viewport: { width: 1440, height: 1000 } });
-  await installTestRooms(observer);
+  await installTestGroups(observer);
   try {
     await installSyntheticMedia(context);
     await join(page, '房内小狼');
@@ -159,9 +221,67 @@ test('房间外只能看到语音人数和昵称，不连接媒体房间', async
     await expect(observerPage.getByRole('button', { name: '开启麦克风' })).toHaveCount(0);
     await expect(observerPage.getByLabel('麦克风已开启')).toHaveCount(0);
     await page.getByRole('button', { name: '离开语音' }).click();
-    await expect(observerPage.getByTestId('room-summary-count')).toHaveCount(0, { timeout: 6_000 });
+    await expect(observerPage.getByTestId('room-summary-count')).toHaveCount(0, { timeout: 12_000 });
   } finally {
     await observer.close();
+  }
+});
+
+test('取消所有放大画面返回语音卡片，双击舞台可专注单路并隐藏聊天', async ({ browser, context, page }, testInfo) => {
+  const teammate = await browser.newContext({
+    baseURL: webBaseUrl, permissions: ['microphone'], viewport: { width: 1440, height: 1000 },
+  });
+  try {
+    await installSyntheticMedia(context);
+    await installSyntheticMedia(teammate, { width: 1920, height: 1080 });
+    const otherPage = await teammate.newPage();
+    await join(page, '苏州小狼');
+    await join(otherPage, '福州小狼');
+    await otherPage.getByRole('button', { name: '开始屏幕共享', exact: true }).click();
+    await expect(page.getByTestId('viewer-screen')).toHaveCount(1);
+    await page.getByRole('button', { name: '展开其他成员' }).click();
+    await page.getByRole('button', { name: '从主观看区移除福州小狼的共享画面' }).click();
+    await expect(page.getByTestId('viewer-screen')).toHaveCount(0);
+    await expect(page.getByTestId('participant-card')).toHaveCount(2);
+    await expect(page.getByTestId('participant-card').locator('video')).toHaveCount(1);
+    await expect(page.locator('.voice-panel')).not.toHaveClass(/has-sharing/);
+    await expect(page.locator('.chat-panel')).toBeVisible();
+    await expect.poll(() => page.getByTestId('participant-card').locator('video').evaluate((video) =>
+      (video as HTMLVideoElement).videoHeight)).toBeLessThanOrEqual(360);
+    await page.locator('.chat-heading').click();
+    await page.screenshot({ path: testInfo.outputPath('screen-grid.png'), fullPage: true });
+    await page.getByRole('button', { name: '开始屏幕共享', exact: true }).click();
+    await expect(page.getByTestId('viewer-screen')).toHaveCount(0);
+    await expect(page.getByTestId('participant-card').locator('video')).toHaveCount(2);
+
+    await page.getByRole('button', { name: '放大福州小狼的共享画面' }).click();
+    await expect(page.getByTestId('viewer-screen')).toHaveCount(1);
+    await page.getByTestId('viewer-screen').locator('.participant-media').dblclick();
+    await expect(page.locator('.voice-panel')).toHaveClass(/is-focused/);
+    await expect(page.locator('.chat-panel')).toHaveCount(0);
+    await expect(page.getByTestId('member-filmstrip')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '退出专注观看福州小狼的共享画面' })).toBeVisible();
+    expect(await page.locator('.viewer-action').evaluateAll((buttons) => buttons.every((button) => {
+      const buttonRect = button.getBoundingClientRect();
+      const iconRect = button.querySelector('svg')!.getBoundingClientRect();
+      return Math.abs(iconRect.left + iconRect.width / 2 - buttonRect.left - buttonRect.width / 2) < 1
+        && Math.abs(iconRect.top + iconRect.height / 2 - buttonRect.top - buttonRect.height / 2) < 1;
+    }))).toBe(true);
+    await expect.poll(() => page.getByTestId('viewer-screen').locator('video').evaluate((video) =>
+      (video as HTMLVideoElement).videoHeight)).toBeGreaterThanOrEqual(1000);
+    await expect.poll(() => page.evaluate(() => {
+      const stage = document.querySelector('.voice-panel')!.getBoundingClientRect();
+      const callbar = document.querySelector('.callbar')!.getBoundingClientRect();
+      return stage.bottom <= callbar.top + 1;
+    })).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('screen-focused.png'), fullPage: true });
+    await page.getByRole('button', { name: '退出专注观看福州小狼的共享画面' }).click();
+    await expect(page.locator('.chat-panel')).toBeVisible();
+    await page.getByRole('button', { name: '专注观看福州小狼的共享画面' }).click();
+    await page.getByTestId('viewer-screen').locator('.participant-media').dblclick();
+    await expect(page.locator('.chat-panel')).toBeVisible();
+  } finally {
+    await teammate.close();
   }
 });
 
@@ -183,7 +303,17 @@ test('双人同时语音和共享：实际收包、多画面观看、静音、�
     }
     for (const participantPage of [page, otherPage]) {
       await expect(participantPage.getByTestId('viewer-screen')).toHaveCount(1);
+      const collapsed = await stageGeometry(participantPage);
+      expect(await toggleMembersAndMeasureVideo(participantPage)).toBeLessThan(2);
       await expect(participantPage.getByTestId('member-thumbnail')).toHaveCount(2);
+      const expanded = await stageGeometry(participantPage);
+      expect(Math.abs(expanded.viewerHeight - collapsed.viewerHeight)).toBeLessThan(2);
+      expect(expanded.chatTop - collapsed.chatTop).toBeGreaterThan(85);
+      expect(Math.abs(expanded.toggleCenter - expanded.viewerCenter)).toBeLessThan(2);
+      expect(expanded.toggleTop).toBeGreaterThanOrEqual(expanded.viewerBottom);
+      expect(expanded.toggleBottom).toBeLessThanOrEqual(expanded.filmstripTop!);
+      expect(expanded.thumbnailRatio).toBeGreaterThan(1.5);
+      expect(expanded.thumbnailRatio).toBeLessThan(1.8);
       await expect.poll(() => inboundBytes(participantPage, 'audio')).toBeGreaterThan(0);
       await expect.poll(() => inboundBytes(participantPage, 'video')).toBeGreaterThan(0);
       await expect.poll(() => participantPage.locator('video').evaluateAll(
@@ -198,16 +328,46 @@ test('双人同时语音和共享：实际收包、多画面观看、静音、�
     }
     await page.getByRole('button', { name: '放大福州小狼的共享画面' }).click();
     await expect(page.getByTestId('viewer-screen')).toHaveCount(2);
+    expect(await page.getByTestId('viewer-screen').last().evaluate((card) =>
+      getComputedStyle(card).animationName)).toContain('viewer-appear');
+    await page.getByTestId('viewer-screen').filter({ hasText: '福州小狼' }).locator('.participant-media').dblclick();
+    await expect(page.getByTestId('viewer-screen')).toHaveCount(1);
+    await expect(page.locator('.chat-panel')).toHaveCount(0);
+    await page.getByRole('button', { name: '退出专注观看福州小狼的共享画面' }).click();
+    await expect(page.getByTestId('viewer-screen')).toHaveCount(2);
+    await expect(page.locator('.chat-panel')).toBeVisible();
+    await expect(page.getByRole('button', { name: '展开其他成员' })).toBeVisible();
+    expect(await toggleMembersAndMeasureVideo(page)).toBeLessThan(2);
+    await expect.poll(() => page.locator('video').evaluateAll((videos) => videos.every(
+      (video) => video instanceof HTMLVideoElement && video.videoWidth > 0 && video.currentTime > 0,
+    ))).toBe(true);
+    await page.locator('.chat-heading').click();
+    await page.screenshot({ path: testInfo.outputPath('two-screens-expanded.png'), fullPage: true });
+    const expanded = await stageGeometry(page);
+    expect(await toggleMembersAndMeasureVideo(page)).toBeLessThan(2);
+    await expect(page.getByTestId('member-filmstrip')).toHaveCount(0);
+    const collapsed = await stageGeometry(page);
+    expect(Math.abs(collapsed.viewerHeight - expanded.viewerHeight)).toBeLessThan(2);
+    expect(expanded.chatTop - collapsed.chatTop).toBeGreaterThan(85);
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await expectStageFits(page);
+    await expect(page.locator('video')).toHaveCount(2);
+    await page.screenshot({ path: testInfo.outputPath('two-screens.png'), fullPage: true });
     await expect(page.getByRole('button', { name: '全屏观看福州小狼的共享画面' })).toBeEnabled();
     await expect(page.getByRole('button', { name: '画中画观看福州小狼的共享画面' })).toBeEnabled();
     await expect(page.getByLabel('正在共享屏幕')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /聚焦.*共享画面/ })).toHaveCount(0);
-    await page.getByRole('button', { name: '收起其他成员' }).click();
     await expect(page.getByTestId('member-filmstrip')).toHaveCount(0);
-    await page.getByRole('button', { name: '展开其他成员' }).click();
+    const compactCollapsed = await stageGeometry(page);
+    expect(await toggleMembersAndMeasureVideo(page)).toBeLessThan(2);
+    const compactExpanded = await stageGeometry(page);
+    expect(Math.abs(compactExpanded.viewerHeight - compactCollapsed.viewerHeight)).toBeLessThan(2);
+    expect(compactExpanded.chatTop - compactCollapsed.chatTop).toBeGreaterThan(85);
+    await expectStageFits(page, 140);
+    await page.locator('.chat-heading').click();
+    await page.screenshot({ path: testInfo.outputPath('two-screens-compact-expanded.png'), fullPage: true });
     await page.getByRole('button', { name: '从主观看区移除福州小狼的共享画面' }).click();
     await expect(page.getByTestId('viewer-screen')).toHaveCount(1);
-    await page.screenshot({ path: testInfo.outputPath('two-screens.png'), fullPage: true });
     await page.getByRole('button', { name: '调整本机接收音量' }).click();
     const volumeSlider = page.getByRole('slider', { name: '本机接收音量' });
     await volumeSlider.fill('0.35');
@@ -312,6 +472,7 @@ test('四人同时发布，每位成员均收到其他三人的音视频', async
     }
     for (const page of pages) {
       await expect(page.getByTestId('member-count')).toContainText('4 人');
+      await page.getByRole('button', { name: '展开其他成员' }).click();
       await expect(page.getByTestId('member-thumbnail')).toHaveCount(4);
       await expect.poll(() => page.evaluate(async () => {
         const streams = { audio: 0, video: 0 };
@@ -331,6 +492,10 @@ test('四人同时发布，每位成员均收到其他三人的音视频', async
       await pages[0].getByRole('button', { name: /^放大.*的共享画面$/ }).first().click();
     }
     await expect(pages[0].getByTestId('viewer-screen')).toHaveCount(4);
+    await pages[0].getByRole('button', { name: '收起其他成员' }).click();
+    await pages[0].setViewportSize({ width: 1280, height: 720 });
+    await expectStageFits(pages[0]);
+    await expect(pages[0].locator('video')).toHaveCount(4);
     await pages[0].screenshot({ path: testInfo.outputPath('four-screens.png'), fullPage: true });
   } finally {
     await Promise.all(contexts.map((context) => context.close()));

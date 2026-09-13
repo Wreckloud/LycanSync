@@ -16,8 +16,15 @@ const secret = settings.LIVEKIT_API_SECRET;
 const liveKitPort = settings.LIVEKIT_PORT || '7990';
 const liveKitHttpUrl = `http://127.0.0.1:${liveKitPort}`;
 const liveKitWebSocketUrl = `ws://127.0.0.1:${liveKitPort}`;
-const roomPrefix = 'lycan-sync-e2e-';
+const roomPrefix = 'lycan-sync-group-';
+let testGroupId: string = randomUUID();
+let testOtherGroupId: string = randomUUID();
 export const testUser = (nickname = '测试小狼') => ({ id: randomUUID(), nickname, avatar: '', administrator: true });
+
+export function useNewTestGroups() {
+  testGroupId = randomUUID();
+  testOtherGroupId = randomUUID();
+}
 
 function jwt(grants: object, subject?: string, name?: string) {
   if (!key || !secret) throw new Error('媒体测试需要本机 LiveKit 配置');
@@ -28,15 +35,16 @@ function jwt(grants: object, subject?: string, name?: string) {
   return body + '.' + createHmac('sha256', secret).update(body).digest('base64url');
 }
 
-export async function summary(groupId = 'pack') {
+export async function summary(groupId: string = testGroupId) {
   const response = await fetch(liveKitHttpUrl + '/twirp/livekit.RoomService/ListParticipants', {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + jwt({ roomList: true, roomAdmin: true, room: roomPrefix + groupId }) },
     body: JSON.stringify({ room: roomPrefix + groupId }),
   });
-  if (response.status === 404) return { participantCount: 0, participantNames: [] };
+  if (response.status === 404) return { participantCount: 0, participants: [] };
   if (!response.ok) throw new Error('LiveKit 测试摘要失败：' + response.status);
-  const result = await response.json() as { participants?: { name: string }[] };
-  return { participantCount: result.participants?.length ?? 0, participantNames: result.participants?.map((p) => p.name) ?? [] };
+  const result = await response.json() as { participants?: { identity: string; name: string }[] };
+  return { participantCount: result.participants?.length ?? 0,
+    participants: result.participants?.map((p) => ({ participantIdentity: p.identity, displayName: p.name })) ?? [] };
 }
 
 async function api(path: string, body: string, user: ReturnType<typeof testUser>) {
@@ -45,14 +53,23 @@ async function api(path: string, body: string, user: ReturnType<typeof testUser>
   if (path === '/api/auth/session') {
     return { id: user.id, nickname: user.nickname, administrator: user.administrator };
   }
-  if (path.startsWith('/api/rtc/room-summary')) return summary(new URL(path, 'http://localhost').searchParams.get('groupId') ?? 'pack');
+  const groups = [
+    { id: testGroupId, name: '开黑小队' },
+    { id: testOtherGroupId, name: '周末车队' },
+  ].map((group) => ({ ...group, description: '', avatar: '', role: 'OWNER', memberCount: 1,
+    createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z' }));
+  if (path === '/api/groups') return groups;
+  const group = groups.find((candidate) => path === '/api/groups/' + candidate.id);
+  if (group) return { ...group, members: [{ userId: user.id, nickname: user.nickname, avatar: user.avatar,
+    role: 'OWNER', joinedAt: '2026-09-12T00:00:00Z' }] };
+  if (path.startsWith('/api/rtc/room-summary')) return summary(new URL(path, 'http://localhost').searchParams.get('groupId') ?? testGroupId);
   if (path === '/api/rtc/token') {
     const { groupId } = JSON.parse(body);
     const roomName = roomPrefix + groupId;
-    return { serverUrl: liveKitWebSocketUrl, roomName, participantIdentity: user.id,
+    return { serverUrl: liveKitWebSocketUrl, roomName, participantIdentity: 'user-' + user.id,
       expiresAt: new Date(Date.now() + 600000).toISOString(),
       token: jwt({ room: roomName, roomJoin: true, canPublish: true, canSubscribe: true,
-        canPublishSources: ['microphone', 'screen_share'], canPublishData: false, canUpdateOwnMetadata: true }, user.id, user.nickname) };
+        canPublishSources: ['microphone', 'screen_share'], canPublishData: false, canUpdateOwnMetadata: true }, 'user-' + user.id, user.nickname) };
   }
   throw new Error('未提供测试 API：' + path);
 }
@@ -74,6 +91,11 @@ export function renameTestUser(context: BrowserContext, nickname: string) {
   const user = contexts.get(context);
   if (!user) throw new Error('请先安装测试身份');
   user.nickname = nickname;
+}
+export function setTestAvatar(context: BrowserContext, avatar: string) {
+  const user = contexts.get(context);
+  if (!user) throw new Error('请先安装测试身份');
+  user.avatar = avatar;
 }
 export async function startDesktopApi(nickname = '测试小狼') {
   const user = testUser(nickname);
