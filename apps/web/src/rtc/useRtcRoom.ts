@@ -1,19 +1,21 @@
 import { markRaw, onScopeDispose, ref, shallowRef } from 'vue';
 import {
-  ConnectionState, DisconnectReason, Room, RoomEvent, ScreenSharePresets, Track,
+  ConnectionState, DisconnectReason, Room, RoomEvent, Track, VideoPreset, supportsAV1,
+  type VideoCodec,
   type LocalTrack, type Participant,
 } from 'livekit-client';
 import { requestRtcToken, TokenRequestError } from './tokenApi';
 
 type RoomStatus = 'idle' | 'joining' | 'connected' | 'reconnecting';
 type MediaSource = Track.Source.Microphone | Track.Source.ScreenShare;
-const SCREEN_SHARE_PRESET = ScreenSharePresets.h1080fps30;
-// 只保留 720p 辅助层，避免每路共享同时维护 1080p、720p、360p 三个编码器。
-const SCREEN_SHARE_SIMULCAST_LAYERS = [ScreenSharePresets.h720fps15];
+// 单路游戏共享的目标上限：12Mbps 只是“视觉近似无损”的起始码率，不保证实际恒定，也不保证无损。
+const SCREEN_SHARE_PRESET = new VideoPreset(1920, 1080, 12_000_000, 60, 'medium');
 const SPEAKER_REFRESH_INTERVAL_MS = 120;
 
-function preferredVideoCodec(): 'h264' | 'vp8' {
+function preferredVideoCodec(): VideoCodec {
   try {
+    // RTX 40 系列和新 Chromium 可协商 AV1；实际是否由硬件编码仍以诊断中的 encoderImplementation 为准。
+    if (supportsAV1()) return 'av1';
     const codecs = RTCRtpSender.getCapabilities?.('video')?.codecs ?? [];
     return codecs.some(({ mimeType }) => mimeType.toLowerCase() === 'video/h264') ? 'h264' : 'vp8';
   } catch {
@@ -44,6 +46,7 @@ export function useRtcRoom() {
   const notice = ref('');
   const needsAudioPlayback = ref(false);
   const busySources = ref<MediaSource[]>([]);
+  const screenShareSelectionCancelled = ref(false);
   let speakerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
   function clearSpeakerRefreshTimer() {
@@ -79,8 +82,8 @@ export function useRtcRoom() {
       // 2. 建立独立的 RTC 会话；连接本身不采集麦克风、摄像头或屏幕。
       // TODO: 根据异地实测调整共享画质，并记录连接类型、RTT、丢包和码率以排查代理影响。
       joiningRoom = markRaw(new Room({
-        // 依据卡片、舞台与专注窗口的实际显示尺寸自动选层；Windows 缩放时按物理像素估算清晰度。
-        adaptiveStream: { pixelDensity: Math.max(1.5, Math.min(2, window.devicePixelRatio || 1)) },
+        // 非可见画面仍由 SDK 暂停订阅，减少多路共享时的接收负担。
+        adaptiveStream: true,
         dynacast: true,
         audioCaptureDefaults: {
           echoCancellation: true,
@@ -88,11 +91,12 @@ export function useRtcRoom() {
           autoGainControl: true,
         },
         publishDefaults: {
-          // Windows 优先走硬件更常见的 H.264；浏览器不支持时回退到 VP8。
+          // 优先使用客户端可协商的 AV1，否则回退 H.264；实际硬件编码状态由媒体诊断确认。
           videoCodec: preferredVideoCodec(),
-          screenShareEncoding: SCREEN_SHARE_PRESET.encoding,
-          // 1080p 主层用于聚焦，720p 辅助层用于普通舞台和缩略图，降低发送端编码压力。
-          screenShareSimulcastLayers: SCREEN_SHARE_SIMULCAST_LAYERS,
+          // 游戏共享不应在同一连接的其他媒体竞争时被优先降级。
+          screenShareEncoding: { ...SCREEN_SHARE_PRESET.encoding, priority: 'high' },
+          // 双开实测多层 H.264 均由 OpenH264 软件编码；单层优先保留 1080p/60 观看画质。
+          simulcast: false,
           // 网络受限时优先保留游戏画面尺寸，必要时降低帧率而不是立即变糊。
           degradationPreference: 'maintain-resolution',
         },
@@ -178,6 +182,7 @@ export function useRtcRoom() {
     clearSpeakerRefreshTimer();
     pendingMedia.value = new Set();
     busySources.value = [];
+    screenShareSelectionCancelled.value = false;
     room.value = null;
     participants.value = [];
     status.value = 'idle';
@@ -195,6 +200,7 @@ export function useRtcRoom() {
     operations.add(source);
     busySources.value = [...operations];
     notice.value = '';
+    if (source === Track.Source.ScreenShare && enabled) screenShareSelectionCancelled.value = false;
     let capturedTracks: LocalTrack[] = [];
     let published = false;
     try {
@@ -222,7 +228,10 @@ export function useRtcRoom() {
       await Promise.all(capturedTracks.map((track) => participant.publishTrack(track)));
       published = true;
     } catch (error) {
-      if (activeRoom.value === currentRoom) notice.value = captureErrorMessage(error, source);
+      // 自定义选择器的取消会被 Chromium 以拒绝采集返回；这是正常结束，不能误报为权限或连接故障。
+      if (activeRoom.value === currentRoom && !(source === Track.Source.ScreenShare && screenShareSelectionCancelled.value)) {
+        notice.value = captureErrorMessage(error, source);
+      }
     } finally {
       // 4. 失败或旧会话的采集立即停止；已发布的轨道交由房间管理生命周期。
       capturedTracks.forEach((track) => {
@@ -230,6 +239,7 @@ export function useRtcRoom() {
         if (!published || activeRoom.value !== currentRoom) track.stop();
       });
       operations.delete(source);
+      if (source === Track.Source.ScreenShare) screenShareSelectionCancelled.value = false;
       if (activeRoom.value === currentRoom) busySources.value = [...operations];
     }
   }
@@ -262,6 +272,10 @@ export function useRtcRoom() {
     await setMediaEnabled(source, !enabled);
   }
 
+  function cancelPendingScreenShareSelection() {
+    if (pendingMedia.value.has(Track.Source.ScreenShare)) screenShareSelectionCancelled.value = true;
+  }
+
   return { revision, room, status, participants, notice, needsAudioPlayback, busySources,
-    join, leave, toggleMedia, setMediaEnabled, enableAudioPlayback, updateListeningState };
+    join, leave, toggleMedia, setMediaEnabled, enableAudioPlayback, updateListeningState, cancelPendingScreenShareSelection };
 }

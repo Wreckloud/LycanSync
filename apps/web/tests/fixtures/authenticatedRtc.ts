@@ -13,7 +13,7 @@ const settings = Object.fromEntries(readFileSync(resolve('../../.env'), 'utf8').
   }));
 const key = settings.LIVEKIT_API_KEY;
 const secret = settings.LIVEKIT_API_SECRET;
-const liveKitPort = settings.LIVEKIT_PORT || '7990';
+const liveKitPort = process.env.LIVEKIT_PORT || settings.LIVEKIT_PORT || '7990';
 const liveKitHttpUrl = `http://127.0.0.1:${liveKitPort}`;
 const liveKitWebSocketUrl = `ws://127.0.0.1:${liveKitPort}`;
 const roomPrefix = 'lycan-sync-group-';

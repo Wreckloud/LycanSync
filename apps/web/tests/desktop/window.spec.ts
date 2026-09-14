@@ -12,6 +12,13 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
   const application = await electron.launch({ args, env: { ...process.env, LYCANSYNC_API_URL: api.url } });
   try {
     const page = await application.firstWindow();
+    if (process.platform === 'win32') {
+      // 应用窗口始终允许系统截图；共享时也不能再开启内容保护。
+      expect(await application.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0].isContentProtected())).toBe(false);
+      expect(await application.evaluate(({ app }) => app.commandLine.getSwitchValue('disable-features')))
+        .toContain('WebRtcAllowWgcDesktopCapturer');
+    }
     await expect(page.getByRole('button', { name: '关闭窗口', exact: true })).toBeVisible();
     await expect(page.locator('.brand svg')).toHaveCount(0);
     await expect(page.getByText('本地调试', { exact: true })).toHaveCount(0);
@@ -51,6 +58,9 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
       bridge: typeof window.lycanDesktop?.close,
       secure: window.isSecureContext,
     }))).toEqual({ node: 'undefined', bridge: 'function', secure: true });
+    expect(await page.evaluate(async () => window.lycanDesktop?.getProcessMetrics())).toEqual({
+      cpuPercent: expect.any(Number), memoryMb: expect.any(Number),
+    });
     expect(await page.evaluate(async () => (await fetch('/api/not-allowed')).status)).toBe(404);
     expect(await page.evaluate(async () => {
       try { const stream = await navigator.mediaDevices.getUserMedia({ video: true }); stream.getTracks().forEach((track) => track.stop()); return 'allowed'; }

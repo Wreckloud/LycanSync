@@ -14,6 +14,7 @@ declare global {
       tracks: MediaStreamTrack[];
       microphoneCalls: number;
       screenCalls: number;
+      captureOptions?: DisplayMediaStreamOptions;
       denyScreen: boolean;
       delayScreen: boolean;
       releaseScreen?: () => void;
@@ -27,6 +28,7 @@ async function installSyntheticMedia(context: BrowserContext, screenSize = { wid
     const state = window.__rtcTest = {
       peers: [] as RTCPeerConnection[], tracks: [] as MediaStreamTrack[],
       microphoneCalls: 0, screenCalls: 0, denyScreen: false, delayScreen: false,
+      captureOptions: undefined as DisplayMediaStreamOptions | undefined,
       releaseScreen: undefined as (() => void) | undefined,
     };
     // 仅在测试页记录 WebRTC 统计，不给应用暴露测试接口或真实媒体。
@@ -44,8 +46,9 @@ async function installSyntheticMedia(context: BrowserContext, screenSize = { wid
       state.tracks.push(...stream.getTracks());
       return stream;
     };
-    navigator.mediaDevices.getDisplayMedia = async () => {
+    navigator.mediaDevices.getDisplayMedia = async (options) => {
       state.screenCalls++;
+      state.captureOptions = options;
       if (state.denyScreen) throw new DOMException('Test permission denied', 'NotAllowedError');
       if (state.delayScreen) await new Promise<void>((resolve) => { state.releaseScreen = resolve; });
       // 合成动态画面替代桌面采集，测试绝不读取真实窗口或屏幕。
@@ -97,6 +100,19 @@ async function inboundBytes(page: Page, kind: 'audio' | 'video') {
     }
     return bytes;
   }, kind);
+}
+
+async function outboundBytes(page: Page) {
+  return page.evaluate(async () => {
+    let bytes = 0;
+    for (const peer of window.__rtcTest.peers) {
+      const stats = await peer.getStats();
+      stats.forEach((entry) => {
+        if (entry.type === 'outbound-rtp' && entry.kind === 'video') bytes += entry.bytesSent ?? 0;
+      });
+    }
+    return bytes;
+  });
 }
 
 async function expectStageFits(page: Page, minimumChatHeight = 180) {
@@ -238,7 +254,21 @@ test('取消所有放大画面返回语音卡片，双击舞台可专注单路�
     await join(page, '苏州小狼');
     await join(otherPage, '福州小狼');
     await otherPage.getByRole('button', { name: '开始屏幕共享', exact: true }).click();
+    expect(await otherPage.evaluate(() => {
+      const video = window.__rtcTest.captureOptions?.video as MediaTrackConstraints;
+      return { width: video.width, height: video.height, frameRate: video.frameRate };
+    })).toEqual({ width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: 60 });
+    await expect.poll(() => otherPage.evaluate(() => window.__rtcTest.peers.flatMap((peer) => peer.getSenders())
+      .filter((sender) => sender.track?.kind === 'video')
+      .flatMap((sender) => sender.getParameters().encodings ?? [])
+      .map((encoding) => ({ maxBitrate: encoding.maxBitrate, maxFramerate: encoding.maxFramerate, priority: encoding.priority }))))
+      .toContainEqual(expect.objectContaining({ maxBitrate: 12_000_000, maxFramerate: 60, priority: 'high' }));
+    await expect.poll(() => otherPage.evaluate(() => window.__rtcTest.peers.flatMap((peer) => peer.getSenders())
+      .filter((sender) => sender.track?.kind === 'video')
+      .map((sender) => sender.getParameters().encodings?.length))).toEqual([1]);
     await expect(page.getByTestId('viewer-screen')).toHaveCount(1);
+    await expect.poll(() => page.getByTestId('viewer-screen').locator('video').evaluate((video) =>
+      (video as HTMLVideoElement).videoHeight)).toBeGreaterThanOrEqual(1000);
     await page.getByRole('button', { name: '展开其他成员' }).click();
     await page.getByRole('button', { name: '从主观看区移除福州小狼的共享画面' }).click();
     await expect(page.getByTestId('viewer-screen')).toHaveCount(0);
@@ -247,7 +277,7 @@ test('取消所有放大画面返回语音卡片，双击舞台可专注单路�
     await expect(page.locator('.voice-panel')).not.toHaveClass(/has-sharing/);
     await expect(page.locator('.chat-panel')).toBeVisible();
     await expect.poll(() => page.getByTestId('participant-card').locator('video').evaluate((video) =>
-      (video as HTMLVideoElement).videoHeight)).toBeLessThanOrEqual(360);
+      (video as HTMLVideoElement).videoHeight)).toBeLessThanOrEqual(720);
     await page.locator('.chat-heading').click();
     await page.screenshot({ path: testInfo.outputPath('screen-grid.png'), fullPage: true });
     await page.getByRole('button', { name: '开始屏幕共享', exact: true }).click();
@@ -402,6 +432,45 @@ test('双人同时语音和共享：实际收包、多画面观看、静音、�
       await expect.poll(() => participantPage.evaluate(() => window.__rtcTest.tracks.every((track) => track.readyState === 'ended'))).toBe(true);
       await expect(participantPage.locator('audio, video')).toHaveCount(0);
     }
+  } finally {
+    await teammate.close();
+  }
+});
+
+// 只覆盖 WebRTC 侧：本地采集轨道结束、远端订阅释放、不再有 outbound 报文增长。
+// 不覆盖开始菜单、系统托盘、输入法候选框响应，也不覆盖 Windows 视频采集服务的行为。
+test('停止共享后释放 WebRTC 轨道与远端订阅', async ({ browser, context, page }) => {
+  const teammate = await browser.newContext({
+    baseURL: webBaseUrl, permissions: ['microphone'], viewport: { width: 1440, height: 1000 },
+  });
+  try {
+    await installSyntheticMedia(context);
+    await installSyntheticMedia(teammate);
+    const otherPage = await teammate.newPage();
+    await join(page, '释放测试狼甲');
+    await join(otherPage, '释放测试狼乙');
+    await page.getByRole('button', { name: '开始屏幕共享', exact: true }).click();
+    await expect(otherPage.getByTestId('viewer-screen')).toHaveCount(1);
+    await expect.poll(() => inboundBytes(otherPage, 'video')).toBeGreaterThan(0);
+    const bytesBeforeStop = await outboundBytes(page);
+
+    await page.getByRole('button', { name: '停止屏幕共享', exact: true }).click();
+    // 停止共享只解除这一路画面：按钮立即回到“开始”，采集轨道必须结束，麦克风保持 live。
+    await expect(page.getByRole('button', { name: '开始屏幕共享', exact: true })).toBeEnabled();
+    await expect.poll(() => page.evaluate(() => {
+      const videoTracks = window.__rtcTest.tracks.filter((track) => track.kind === 'video');
+      return videoTracks.length > 0 && videoTracks.every((track) => track.readyState === 'ended');
+    })).toBe(true);
+    expect(await page.evaluate(() => window.__rtcTest.tracks
+      .some((track) => track.kind === 'audio' && track.readyState === 'live'))).toBe(true);
+    await expect(page.getByRole('status')).toContainText('语音已连接');
+    // 两侧都不应残留已连接的画面元素，远端订阅必须一并释放。
+    await expect(page.locator('video')).toHaveCount(0);
+    await expect(otherPage.getByTestId('viewer-screen')).toHaveCount(0);
+    await expect(otherPage.locator('video')).toHaveCount(0);
+    // 停止后不得再有视频报文增长，否则说明采集或发送并未真正释放。
+    await page.waitForTimeout(3_000);
+    expect(await outboundBytes(page) - bytesBeforeStop).toBeLessThan(2_000);
   } finally {
     await teammate.close();
   }

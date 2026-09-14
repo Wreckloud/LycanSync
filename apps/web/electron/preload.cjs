@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   clearSession: () => ipcRenderer.invoke('auth:clear'),
   minimize: () => ipcRenderer.send('window:minimize'),
   isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
+  getProcessMetrics: () => ipcRenderer.invoke('diagnostics:process-metrics'),
   toggleMaximize: () => ipcRenderer.send('window:maximize'),
   onMaximizedChange: (callback) => {
     const listener = (_event, maximized) => callback(maximized);

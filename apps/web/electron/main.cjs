@@ -31,6 +31,11 @@ if (backend.username || backend.password || backend.pathname !== '/' || backend.
 }
 
 app.setName('LycanSync');
+// Windows Graphics Capture 在部分 Win10 窗口源上会持续拖慢系统壳层；保持 Chromium 的 DXGI/GDI 兼容采集链路。
+// 这只影响共享的采集后端，不关闭 GPU 合成、硬件解码或 WebRTC 编码。
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('disable-features', 'WebRtcAllowWgcDesktopCapturer,WebRtcAllowWgcScreenCapturer');
+}
 // 遵循 Chromium 的独立用户目录参数，便于测试与日常账号数据隔离。
 if (app.commandLine.hasSwitch('user-data-dir')) app.setPath('userData', resolve(app.commandLine.getSwitchValue('user-data-dir')));
 protocol.registerSchemesAsPrivileged([{ scheme: 'lycan', privileges: {
@@ -86,6 +91,10 @@ function trustedUrl(value) {
 function trustedSender(event) {
   return mainWindow && event.sender === mainWindow.webContents
     && event.senderFrame === mainWindow.webContents.mainFrame && trustedUrl(event.senderFrame.url);
+}
+
+function captureSourceType(source) {
+  return source.id.startsWith('screen:') ? 'screen' : 'window';
 }
 
 function cancelCapture() {
@@ -184,10 +193,17 @@ function configurePermissions() {
     const capture = { requestId: randomUUID(), callback, sources: [] };
     pendingCapture = capture;
     try {
-      capture.sources = await desktopCapturer.getSources({ types: ['window', 'screen'], thumbnailSize: { width: 320, height: 180 } });
+      // 只保证“不能直接选中自身窗口”：按 source id 精确排除当前主窗口，不按标题模糊匹配。
+      const ownSourceId = mainWindow.getMediaSourceId();
+      capture.sources = (await desktopCapturer.getSources({
+        types: ['window', 'screen'], thumbnailSize: { width: 320, height: 180 },
+      })).filter((source) => source.id !== ownSourceId).sort((left, right) =>
+        captureSourceType(left).localeCompare(captureSourceType(right)));
       if (pendingCapture !== capture) return;
+      // 没有可选源时按既有取消逻辑结束，不替用户默认选择整个屏幕。
+      if (!capture.sources.length) { cancelCapture(); return; }
       mainWindow.webContents.send('capture:sources', { requestId: capture.requestId, sources: capture.sources.map((source) => ({
-        id: source.id, name: source.name, thumbnail: source.thumbnail.toDataURL(),
+        id: source.id, name: source.name, thumbnail: source.thumbnail.toDataURL(), type: captureSourceType(source),
       })) });
     } catch { if (pendingCapture === capture) cancelCapture(); }
   });
@@ -242,6 +258,14 @@ ipcMain.on('window:minimize', (event) => { if (trustedSender(event)) mainWindow.
 ipcMain.handle('window:is-maximized', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
   return mainWindow.isMaximized();
+});
+ipcMain.handle('diagnostics:process-metrics', (event) => {
+  if (!trustedSender(event)) throw new Error('请求来源无效');
+  const metrics = app.getAppMetrics();
+  return {
+    cpuPercent: Math.round(metrics.reduce((sum, process) => sum + (process.cpu?.percentCPUUsage ?? 0), 0) * 10) / 10,
+    memoryMb: Math.round(metrics.reduce((sum, process) => sum + (process.memory?.workingSetSize ?? 0), 0) / 1024),
+  };
 });
 ipcMain.on('window:maximize', (event) => {
   if (!trustedSender(event)) return;

@@ -109,6 +109,10 @@ button:focus-visible, input:focus-visible {
 .capture-dialog { width: min(860px, calc(100vw - 48px)); padding: 24px; border: 1px solid var(--border); background: var(--panel); border-radius: 8px; }
 .capture-dialog h2 { margin-top: 0; }
 .capture-dialog p { color: var(--muted); }
+.capture-tabs { display: flex; gap: 8px; margin: 16px 0 12px; padding: 4px; border-radius: 6px; background: var(--panel-raised); }
+.capture-tabs button { flex: 1; min-height: 34px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
+.capture-tabs button[aria-selected='true'] { background: var(--panel-soft); color: var(--text); }
+.capture-tabs button:disabled { cursor: not-allowed; opacity: .45; }
 .capture-sources { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; max-height: 55vh; overflow-y: auto; }
 .capture-sources button { padding: 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-soft); cursor: pointer; min-width: 0; }
 .capture-sources button:hover { border-color: var(--accent); }
@@ -432,6 +436,27 @@ button:focus-visible, input:focus-visible {
   align-items: center;
   gap: 8px;
 }
+
+.voice-heading-actions .icon-button { width: 27px; height: 27px; }
+.media-diagnostics {
+  position: absolute;
+  z-index: 5;
+  top: 44px;
+  right: 16px;
+  width: min(380px, calc(100% - 32px));
+  max-height: min(340px, 80%);
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 12px 28px #0008;
+  font-size: 12px;
+}
+.media-diagnostics > strong { display: flex; justify-content: space-between; font-size: 13px; }
+.media-diagnostics small, .media-diagnostics p { color: var(--muted); }
+.media-diagnostic-stream { display: grid; gap: 4px; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border-soft); }
+.media-diagnostic-stream b { font-size: 12px; }
 
 .member-strip-divider {
   position: relative;

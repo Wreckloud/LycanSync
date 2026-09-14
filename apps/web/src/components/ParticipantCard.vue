@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { Focus, Fullscreen, HeadphoneOff, Headphones, Mic, MicOff, Minimize2, Monitor, PictureInPicture2 } from '@lucide/vue';
-import { RemoteTrackPublication, Track, type Participant } from 'livekit-client';
+import { Track, type Participant } from 'livekit-client';
 
 const props = withDefaults(defineProps<{
   participant: Participant;
@@ -15,7 +15,6 @@ const props = withDefaults(defineProps<{
 }>(), { variant: 'card', selected: false, focused: false });
 const emit = defineEmits<{ select: []; focus: []; notice: [message: string] }>();
 const videoElement = ref<HTMLVideoElement | null>(null);
-const mediaElement = ref<HTMLElement | null>(null);
 
 // SDK 实例不作深层代理；事件版本变化时重新读取轨道和展示字段。
 const media = computed(() => {
@@ -35,36 +34,13 @@ const fullscreenAvailable = document.fullscreenEnabled;
 const pictureInPictureAvailable = document.pictureInPictureEnabled
   && 'requestPictureInPicture' in HTMLVideoElement.prototype;
 
-function requestRemoteQuality() {
-  if (props.variant !== 'viewer' || !mediaElement.value || mediaElement.value.clientWidth < 1) return;
-  const publication = props.participant.getTrackPublication(Track.Source.ScreenShare);
-  if (!(publication instanceof RemoteTrackPublication)) return;
-
-  // 普通舞台至少请求 720p，聚焦模式请求 1080p；缩略图仍交给自适应流选择低层。
-  const density = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-  const minimum = props.focused ? { width: 1920, height: 1080 } : { width: 960, height: 540 };
-  publication.setVideoDimensions({
-    width: Math.min(1920, Math.max(minimum.width, Math.ceil(mediaElement.value.clientWidth * density))),
-    height: Math.min(1080, Math.max(minimum.height, Math.ceil(mediaElement.value.clientHeight * density))),
-  });
-}
-
-watch(mediaElement, (element, _, onCleanup) => {
-  if (!element || props.variant !== 'viewer' || typeof ResizeObserver === 'undefined') return;
-  const observer = new ResizeObserver(requestRemoteQuality);
-  observer.observe(element);
-  requestRemoteQuality();
-  onCleanup(() => observer.disconnect());
-}, { flush: 'post' });
-
 watch([videoElement, () => media.value.track], ([element, track], _, onCleanup) => {
   if (!element || !track) return;
+  // 由 SDK 观察已绑定视频元素的尺寸和可见性，切换卡片／舞台／全屏时自动请求对应层。
   track.attach(element);
-  requestRemoteQuality();
   // 只解除当前元素的绑定，其他主画面或缩略图仍可使用同一轨道。
   onCleanup(() => track.detach(element));
 }, { flush: 'post' });
-watch(() => props.focused, requestRemoteQuality);
 
 async function openFullscreen() {
   const video = videoElement.value;
@@ -102,7 +78,7 @@ function selectFromKeyboard(event: KeyboardEvent) {
 <template>
   <article class="participant-card" :class="[`is-${variant}`, { 'is-speaking': media.speaking, 'is-selected-viewer': selected }]"
     :data-testid="variant === 'viewer' && media.sharing ? 'viewer-screen' : variant === 'thumbnail' ? 'member-thumbnail' : 'participant-card'">
-    <div ref="mediaElement" class="participant-media" :class="{ 'is-selectable': selectable }"
+    <div class="participant-media" :class="{ 'is-selectable': selectable }"
       :role="selectable ? 'button' : undefined" :tabindex="selectable ? 0 : undefined"
       :aria-label="selectable ? (selected ? '从主观看区移除' : '放大') + media.name + '的共享画面' : undefined"
       :data-select-hint="selectable ? selected ? '从主观看区移除' : '点击放大观看' : undefined"

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, reactive, ref, watch } from 'vue';
-import { AudioLines, ChevronDown, ChevronLeft, ChevronRight, Copy, CornerUpLeft, HeadphoneOff, Headphones,
+import { computed, nextTick, onMounted, onScopeDispose, reactive, ref, watch } from 'vue';
+import { Activity, AudioLines, ChevronDown, ChevronLeft, ChevronRight, Copy, CornerUpLeft, HeadphoneOff, Headphones,
   LogOut, MessageSquareText, Mic, MicOff, Minus, MonitorUp, Plus, RadioTower,
   Send, SlidersHorizontal, Square, UserRound, UsersRound, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
 import ParticipantCard from './components/ParticipantCard.vue';
+import MediaDiagnostics from './components/MediaDiagnostics.vue';
 import RemoteAudio from './components/RemoteAudio.vue';
 import IconButton from './components/IconButton.vue';
 import AvatarCropDialog from './components/AvatarCropDialog.vue';
@@ -22,12 +23,19 @@ const GROUP_REFRESH_INTERVAL_MS = 15_000;
 const rtc = reactive(useRtcRoom());
 const desktop = window.lycanDesktop;
 const captureRequest = ref<CaptureRequest | null>(null);
+const captureSourceType = ref<'window' | 'screen'>('window');
+const captureSources = computed(() => captureRequest.value?.sources
+  .filter((source) => source.type === captureSourceType.value) ?? []);
 function selectCaptureSource(sourceId: string | null) {
   if (!captureRequest.value) return;
+  if (sourceId === null) rtc.cancelPendingScreenShareSelection();
   desktop?.selectSource(captureRequest.value.requestId, sourceId);
   captureRequest.value = null;
 }
-const removeCaptureListener = desktop?.onSources((request) => { captureRequest.value = request; });
+const removeCaptureListener = desktop?.onSources((request) => {
+  captureSourceType.value = request.sources.some((source) => source.type === 'window') ? 'window' : 'screen';
+  captureRequest.value = request;
+});
 const removeCloseListener = desktop?.onClose(async () => {
   selectCaptureSource(null);
   try { await rtc.leave(); }
@@ -107,6 +115,7 @@ function refreshOnActivation() {
 onMounted(() => {
   refreshOnActivation();
   window.addEventListener('focus', refreshOnActivation);
+  window.addEventListener('resize', remeasureViewerHeight);
   document.addEventListener('visibilitychange', refreshOnActivation);
   groupRefreshTimer = setInterval(() => {
     if (document.visibilityState !== 'hidden') void refreshGroups(false);
@@ -114,6 +123,7 @@ onMounted(() => {
 });
 onScopeDispose(() => {
   window.removeEventListener('focus', refreshOnActivation);
+  window.removeEventListener('resize', remeasureViewerHeight);
   document.removeEventListener('visibilitychange', refreshOnActivation);
   if (groupRefreshTimer) clearInterval(groupRefreshTimer);
 });
@@ -166,13 +176,11 @@ const filmstripPage = ref(0);
 const viewerGrid = ref<HTMLElement | null>(null);
 const lockedViewerHeight = ref<number | null>(null);
 const viewerNotice = ref('');
+const diagnosticsOpen = ref(false);
 const departingGroupId = ref<string | null>(null);
 const callbarLeaving = ref(false);
 let listeningSync: Promise<void> | null = null;
-let viewerUnlockTimer: ReturnType<typeof setTimeout> | null = null;
 function releaseViewerLock() {
-  if (viewerUnlockTimer) clearTimeout(viewerUnlockTimer);
-  viewerUnlockTimer = null;
   lockedViewerHeight.value = null;
 }
 onScopeDispose(releaseViewerLock);
@@ -229,6 +237,7 @@ watch(() => [joinedGroupId.value, joiningGroupId.value, rtc.status, rtc.room], (
     joinedGroupId.value = null;
   }
 });
+watch(() => rtc.room, (room) => { if (!room) diagnosticsOpen.value = false; });
 watch(callbarLeaving, (leaving, _, onCleanup) => {
   if (!leaving) return;
   const timer = setTimeout(() => {
@@ -402,11 +411,22 @@ function toggleFocusedParticipant(identity: string) {
 }
 
 function toggleMembersExpanded() {
-  releaseViewerLock();
-  // 动画期间锁定主画面高度，成员区与聊天区交换空间时不让视频抖动。
-  lockedViewerHeight.value = viewerGrid.value?.getBoundingClientRect().height ?? null;
+  if (!membersExpanded.value) {
+    // 展开后新增的成员条只向下占用聊天区空间，主舞台保持当前高度。
+    lockedViewerHeight.value = viewerGrid.value?.getBoundingClientRect().height ?? null;
+  }
   membersExpanded.value = !membersExpanded.value;
-  viewerUnlockTimer = setTimeout(() => { lockedViewerHeight.value = null; viewerUnlockTimer = null; }, 200);
+}
+
+function remeasureViewerHeight() {
+  if (membersExpanded.value || !hasStage.value || !viewerGrid.value) return;
+  // 先解除旧尺寸，等待 flex 根据新窗口尺寸排版，再锁定新的舞台高度。
+  lockedViewerHeight.value = null;
+  void nextTick(() => {
+    if (!membersExpanded.value && hasStage.value && viewerGrid.value) {
+      lockedViewerHeight.value = viewerGrid.value.getBoundingClientRect().height;
+    }
+  });
 }
 
 function previewGroup(groupId: string) {
@@ -497,8 +517,10 @@ function participantListening(participant: Participant) {
             <span><AudioLines :size="15" />语音中</span>
             <span class="voice-heading-actions">
               <small data-testid="member-count">{{ groupParticipants.length }} 人 · {{ sharingParticipants.length }} / 8 路共享</small>
+              <IconButton label="媒体诊断" :class="{ 'is-active': diagnosticsOpen }" @click="diagnosticsOpen = !diagnosticsOpen"><Activity :size="15" /></IconButton>
             </span>
           </div>
+          <MediaDiagnostics v-if="diagnosticsOpen && rtc.room" :room="rtc.room" :participants="groupParticipants" />
           <div v-if="hasStage" ref="viewerGrid" class="viewer-grid" :class="`viewer-count-${displayedParticipants.length}`"
             :style="lockedViewerHeight === null ? undefined : { flex: `0 0 ${lockedViewerHeight}px` }">
             <ParticipantCard v-for="participant in displayedParticipants" :key="participant.identity" :participant="participant"
@@ -621,13 +643,19 @@ function participantListening(participant: Participant) {
     <div v-if="captureRequest" class="dialog-backdrop" @keydown.esc="selectCaptureSource(null)">
       <section class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-title">
         <h2 id="capture-title">选择共享的窗口或屏幕</h2>
-        <p>只共享画面，不包含系统声音。请选择不含私人信息的窗口。</p>
-        <div class="capture-sources">
-          <button v-for="source in captureRequest.sources" :key="source.id" @click="selectCaptureSource(source.id)">
+        <p>只共享画面，不包含系统声音。</p>
+        <div class="capture-tabs" role="tablist" aria-label="共享来源类型">
+          <button type="button" role="tab" :aria-selected="captureSourceType === 'window'"
+            :disabled="!captureRequest.sources.some((source) => source.type === 'window')" @click="captureSourceType = 'window'">应用窗口</button>
+          <button type="button" role="tab" :aria-selected="captureSourceType === 'screen'"
+            :disabled="!captureRequest.sources.some((source) => source.type === 'screen')" @click="captureSourceType = 'screen'">整个屏幕</button>
+        </div>
+        <div class="capture-sources" role="tabpanel">
+          <button v-for="source in captureSources" :key="source.id" :aria-label="source.name" @click="selectCaptureSource(source.id)">
             <img :src="source.thumbnail" alt="" /><span>{{ source.name }}</span>
           </button>
         </div>
-        <p v-if="!captureRequest.sources.length">没有可共享的窗口或屏幕，请检查系统权限后重试。</p>
+        <p v-if="!captureSources.length">没有可共享的{{ captureSourceType === 'window' ? '应用窗口' : '屏幕' }}，请切换来源类型后重试。</p>
         <div class="dialog-actions"><button autofocus @click="selectCaptureSource(null)">取消共享</button></div>
       </section>
     </div>
