@@ -20,7 +20,7 @@
   --good: #42b883;
   --danger: #ef5350;
   --warning: #d99b2b;
-  --chat-font-size: 14px;
+  --chat-font-size: 15px;
 }
 
 * { box-sizing: border-box; }
@@ -36,7 +36,7 @@ body {
 }
 
 input:not(:disabled):not([type="range"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]),
-textarea:not(:disabled), [contenteditable="true"], .message-list, .message-list * {
+textarea:not(:disabled), [contenteditable="true"], .chat-message-content {
   user-select: text;
   cursor: text;
 }
@@ -210,15 +210,11 @@ button:focus-visible, input:focus-visible {
 .add-group { border-style: dashed; }
 .rail-spacer { flex: 1; min-height: 24px; }
 
-[data-tooltip]::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  z-index: 80;
-  left: 50%;
-  bottom: calc(100% + 7px);
-  transform: translateX(-50%);
+.global-tooltip {
+  position: fixed;
+  z-index: 1000;
   width: max-content;
-  max-width: 210px;
+  max-width: min(210px, calc(100vw - 16px));
   padding: 5px 7px;
   border: 1px solid #cfd6dd;
   border-radius: 3px;
@@ -228,25 +224,12 @@ button:focus-visible, input:focus-visible {
   font-weight: 500;
   line-height: 1.3;
   pointer-events: none;
-  opacity: 0;
   white-space: normal;
-  transition: opacity 100ms ease;
+  transform: translate(-50%, -100%);
 }
 
-[data-tooltip]:hover::after, [data-tooltip]:focus-visible::after { opacity: 1; }
-
-.group-button[data-tooltip]::after {
-  left: calc(100% + 9px);
-  bottom: 50%;
-  transform: translateY(50%);
-}
-
-.group-header .icon-button[data-tooltip]::after,
-.callbar .icon-button[data-tooltip]::after {
-  right: 0;
-  left: auto;
-  transform: none;
-}
+.global-tooltip.is-bottom { transform: translate(-50%, 0); }
+.global-tooltip.is-right { transform: translate(0, -50%); }
 
 .group-main {
   min-width: 0;
@@ -788,6 +771,18 @@ button:focus-visible, input:focus-visible {
 .message-list > :first-child { margin-top: auto; }
 .message-list > * { flex-shrink: 0; }
 
+.chat-message { display: flex; gap: 9px; }
+.chat-message-avatar { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 50%; object-fit: cover; }
+.chat-message-initial { display: grid; place-items: center; background: var(--panel); border: 1px solid var(--border); color: var(--muted); }
+.chat-message-body { min-width: 0; }
+.chat-message-meta { display: flex; align-items: center; gap: 9px; }
+.chat-message-meta strong { font-size: 15px; line-height: 1.25; }
+.chat-message-meta time { color: var(--subtle); font-size: 11px; }
+.chat-message-content { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-message-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.chat-image { display: block; max-width: min(420px, 100%); max-height: 340px; margin-top: 6px; object-fit: contain; }
+.chat-image-error, .chat-error { margin: 0; color: var(--danger); font-size: 13px; }
+
 .composer {
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr) 36px;
@@ -808,17 +803,31 @@ button:focus-visible, input:focus-visible {
   color: var(--subtle);
 }
 
-.composer input {
+.composer-content { min-width: 0; }
+.composer textarea {
+  display: block;
   min-width: 0;
+  width: 100%;
+  min-height: 42px;
+  max-height: 122px;
   height: 42px;
+  padding: 10px 0;
+  resize: none;
+  overflow-y: auto;
   font-size: var(--chat-font-size);
+  line-height: 22px;
+  font-family: SimHei, "Microsoft YaHei", sans-serif;
+  font-weight: 400;
   border: 0;
   outline: 0;
   background: transparent;
   color: var(--muted);
 }
 
-.composer input::placeholder { color: var(--subtle); }
+.composer textarea::placeholder { color: var(--subtle); }
+.composer-image-preview { display: flex; align-items: center; gap: 7px; padding: 7px 0 0; color: var(--muted); font-size: 12px; }
+.composer-image-preview img { width: 34px; height: 34px; object-fit: cover; border-radius: 4px; }
+.composer-image-preview button { width: 24px; height: 24px; }
 
 .callbar-reveal {
   flex-shrink: 0;
@@ -970,7 +979,7 @@ button:focus-visible, input:focus-visible {
   .call-state { flex-basis: 100%; }
   .members-panel { grid-template-columns: 1fr; }
   .members-header { grid-column: 1; }
-  [data-tooltip]::after { display: none; }
+  .global-tooltip { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

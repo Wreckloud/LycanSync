@@ -32,12 +32,22 @@ test('创建群组只预览，并直接显示所有已注册账号的头像', as
     if (path === `/api/groups/${groupId}` && route.request().method() === 'GET') {
       return route.fulfill({ json: group });
     }
+    if (path === `/api/groups/${groupId}/messages`) return route.fulfill({ json: { messages: [], hasMore: false } });
     return route.fulfill({ status: 404 });
   });
 
   await page.goto('/');
   await expect(page.getByText('还没有群组，点击左侧的 + 创建一个开黑小队。')).toBeVisible();
-  await page.getByRole('button', { name: '创建群组' }).click();
+  const createGroupButton = page.getByRole('button', { name: '创建群组' });
+  await createGroupButton.hover();
+  await expect(page.getByRole('tooltip')).toHaveText('创建群组');
+  const tooltipBox = await page.getByRole('tooltip').boundingBox();
+  const buttonBox = await createGroupButton.boundingBox();
+  expect(tooltipBox).not.toBeNull();
+  expect(buttonBox).not.toBeNull();
+  expect(tooltipBox!.x).toBeGreaterThan(buttonBox!.x + buttonBox!.width);
+  expect(Math.abs(tooltipBox!.y + tooltipBox!.height / 2 - buttonBox!.y - buttonBox!.height / 2)).toBeLessThanOrEqual(2);
+  await createGroupButton.click();
   await page.getByLabel('群组名称').fill('周末开黑');
   await page.getByLabel('群组描述（可选）').fill('晚上一起玩');
   await page.getByRole('dialog', { name: '创建群组' }).getByRole('button', { name: '确定' }).click();
@@ -67,6 +77,7 @@ test('创建群组时可选择头像，群组栏显示裁剪后的图片', async
     }
     if (path === '/api/groups') return route.fulfill({ json: createdAvatar ? [{ ...group, members: undefined }] : [] });
     if (path === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (path === `/api/groups/${groupId}/messages`) return route.fulfill({ json: { messages: [], hasMore: false } });
     return route.fulfill({ status: 404 });
   });
   await page.goto('/');
@@ -86,8 +97,8 @@ test('创建群组时可选择头像，群组栏显示裁剪后的图片', async
   await expect(railButtons.nth(1)).toHaveAttribute('aria-label', '创建群组');
   await expect(railButtons.nth(2)).toHaveAttribute('aria-label', '个人设置');
   await expect(page.getByRole('heading', { name: '头像小队' })).toHaveCSS('user-select', 'none');
-  await expect(page.locator('.message-list')).toHaveCSS('user-select', 'text');
-  await expect(page.getByLabel('消息内容')).toHaveCSS('cursor', 'default');
+  await expect(page.locator('.message-list')).toHaveCSS('user-select', 'none');
+  await expect(page.getByLabel('消息内容')).toHaveCSS('cursor', 'text');
 });
 
 test('启动、窗口激活和成员变化时自动更新群组，无需刷新按钮', async ({ page }) => {
@@ -108,6 +119,7 @@ test('启动、窗口激活和成员变化时自动更新群组，无需刷新�
       createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z' };
     if (path === '/api/groups') return route.fulfill({ json: visible ? [group] : [] });
     if (path === `/api/groups/${groupId}`) return route.fulfill({ json: { ...group, members } });
+    if (path === `/api/groups/${groupId}/messages`) return route.fulfill({ json: { messages: [], hasMore: false } });
     return route.fulfill({ status: 404 });
   });
   await page.goto('/');

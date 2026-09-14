@@ -1,4 +1,4 @@
-const { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, screen, session, safeStorage } = require('electron');
+const { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, screen, session, safeStorage, shell } = require('electron');
 const { resolve, sep } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { readFile, writeFile, unlink, mkdir } = require('node:fs/promises');
@@ -24,6 +24,8 @@ const apiRoutePolicies = new Map([
   ['POST /api/groups', {}],
 ]);
 const groupPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const groupMessagePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/messages$/i;
+const groupAttachmentPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/attachments\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 if (backend.username || backend.password || backend.pathname !== '/' || backend.search || backend.hash
     || !['http:', 'https:'].includes(backend.protocol)
     || (backend.protocol === 'http:' && !['127.0.0.1', 'localhost', '[::1]'].includes(backend.hostname))) {
@@ -93,6 +95,14 @@ function trustedSender(event) {
     && event.senderFrame === mainWindow.webContents.mainFrame && trustedUrl(event.senderFrame.url);
 }
 
+function externalHttpUrl(value) {
+  if (typeof value !== 'string') return undefined;
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : undefined;
+  } catch { return undefined; }
+}
+
 function captureSourceType(source) {
   return source.id.startsWith('screen:') ? 'screen' : 'window';
 }
@@ -125,15 +135,18 @@ async function serveApplication(request) {
   if (!trustedUrl(request.url)) return new Response(null, { status: 403 });
   if (url.pathname.startsWith('/api/')) {
     const routePolicy = apiRoutePolicies.get(`${request.method} ${url.pathname}`)
-      ?? (request.method === 'GET' && groupPath.test(url.pathname) ? {} : undefined);
+      ?? (request.method === 'GET' && (groupPath.test(url.pathname) || groupMessagePath.test(url.pathname)
+        || groupAttachmentPath.test(url.pathname)) ? {} : undefined)
+      // multipart 仅向精确的群聊发送路径放行，仍由后端按图片实际大小校验。
+      ?? (request.method === 'POST' && groupMessagePath.test(url.pathname) ? { maxBodyBytes: 6 * 1024 * 1024 } : undefined);
     if (!routePolicy) return new Response(null, { status: 404 });
     try {
-      const body = ['POST', 'PUT'].includes(request.method) ? await request.text() : undefined;
-      if (body && Buffer.byteLength(body, 'utf8') > (routePolicy.maxBodyBytes ?? 4096)) return new Response(null, { status: 413 });
+      const body = ['POST', 'PUT'].includes(request.method) ? Buffer.from(await request.arrayBuffer()) : undefined;
+      if (body && body.byteLength > (routePolicy.maxBodyBytes ?? 4096)) return new Response(null, { status: 413 });
       const token = await loadSession();
       const response = await net.fetch(new URL(url.pathname + url.search, backend).href, {
         method: request.method,
-        headers: { ...(body ? { 'Content-Type': 'application/json' } : {}),
+        headers: { ...(body ? { 'Content-Type': request.headers.get('Content-Type') || 'application/json' } : {}),
           ...(!routePolicy.public && token ? { Authorization: 'Bearer ' + token } : {}) },
         body, redirect: 'error', credentials: 'omit',
         signal: AbortSignal.any([request.signal, AbortSignal.timeout(15000)]),
@@ -164,7 +177,7 @@ async function serveApplication(request) {
   try {
     const response = await net.fetch(pathToFileURL(file).href);
     const headers = new Headers(response.headers);
-    headers.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' ws: wss:; object-src 'none'; frame-src 'none'; base-uri 'none'");
+    headers.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; object-src 'none'; frame-src 'none'; base-uri 'none'");
     return new Response(response.body, { status: response.status, headers });
   } catch { return new Response(null, { status: 404 }); }
 }
@@ -273,6 +286,12 @@ ipcMain.on('window:maximize', (event) => {
 });
 ipcMain.on('window:close', (event) => { if (trustedSender(event)) mainWindow.close(); });
 ipcMain.on('window:closed-media', (event) => { if (trustedSender(event) && closing) finishClose(); });
+ipcMain.handle('external:open', async (event, value) => {
+  if (!trustedSender(event)) throw new Error('请求来源无效');
+  const url = externalHttpUrl(value);
+  if (!url) throw new Error('只允许打开 HTTP 或 HTTPS 链接。');
+  await shell.openExternal(url);
+});
 ipcMain.on('capture:select', (event, requestId, sourceId) => {
   if (!trustedSender(event) || !pendingCapture || requestId !== pendingCapture.requestId) return;
   const source = pendingCapture.sources.find((candidate) => candidate.id === sourceId);

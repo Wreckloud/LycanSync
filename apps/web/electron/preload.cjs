@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   },
   close: () => ipcRenderer.send('window:close'),
   finishClose: () => ipcRenderer.send('window:closed-media'),
+  openExternal: (url) => ipcRenderer.invoke('external:open', url),
   selectSource: (requestId, sourceId) => ipcRenderer.send('capture:select', requestId, sourceId),
   onSources: (callback) => {
     const listener = (_event, request) => callback(request);

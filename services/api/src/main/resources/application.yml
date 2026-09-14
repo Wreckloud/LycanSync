@@ -1,4 +1,9 @@
 spring:
+  servlet:
+    multipart:
+      # 接口层会再按 5 MiB 校验图片；此处为 multipart 边界预留少量开销。
+      max-file-size: 6MB
+      max-request-size: 6MB
   autoconfigure:
     # 使用项目自己的 Bearer 会话，不生成 Spring Security 默认用户。
     exclude: org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration

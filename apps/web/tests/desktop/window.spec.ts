@@ -25,7 +25,7 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
     expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomFactor())).toBe(1);
     await expect(page.locator('.members-panel')).not.toContainText('成员列表尚未开放');
     const chatFontSize = await page.locator('.message-list').evaluate((element) => getComputedStyle(element).fontSize);
-    expect(chatFontSize).toBe('14px');
+    expect(chatFontSize).toBe('15px');
     expect(await page.getByRole('textbox', { name: '消息内容' }).evaluate((element) => getComputedStyle(element).fontSize)).toBe(chatFontSize);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     const sizing = await application.evaluate(({ BrowserWindow, screen }) => {
@@ -56,8 +56,9 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
     expect(await page.evaluate(() => ({
       node: typeof (window as unknown as { require?: unknown }).require,
       bridge: typeof window.lycanDesktop?.close,
+      external: typeof window.lycanDesktop?.openExternal,
       secure: window.isSecureContext,
-    }))).toEqual({ node: 'undefined', bridge: 'function', secure: true });
+    }))).toEqual({ node: 'undefined', bridge: 'function', external: 'function', secure: true });
     expect(await page.evaluate(async () => window.lycanDesktop?.getProcessMetrics())).toEqual({
       cpuPercent: expect.any(Number), memoryMb: expect.any(Number),
     });

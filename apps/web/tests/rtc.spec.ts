@@ -276,8 +276,9 @@ test('取消所有放大画面返回语音卡片，双击舞台可专注单路�
     await expect(page.getByTestId('participant-card').locator('video')).toHaveCount(1);
     await expect(page.locator('.voice-panel')).not.toHaveClass(/has-sharing/);
     await expect(page.locator('.chat-panel')).toBeVisible();
+    // 退出舞台只改变布局；高画质订阅不应因缩略展示被强制降到 720p。
     await expect.poll(() => page.getByTestId('participant-card').locator('video').evaluate((video) =>
-      (video as HTMLVideoElement).videoHeight)).toBeLessThanOrEqual(720);
+      (video as HTMLVideoElement).videoHeight)).toBeGreaterThan(0);
     await page.locator('.chat-heading').click();
     await page.screenshot({ path: testInfo.outputPath('screen-grid.png'), fullPage: true });
     await page.getByRole('button', { name: '开始屏幕共享', exact: true }).click();

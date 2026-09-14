@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, reactive, ref, watch } from 'vue';
 import { Activity, AudioLines, ChevronDown, ChevronLeft, ChevronRight, Copy, CornerUpLeft, HeadphoneOff, Headphones,
-  LogOut, MessageSquareText, Mic, MicOff, Minus, MonitorUp, Plus, RadioTower,
-  Send, SlidersHorizontal, Square, UserRound, UsersRound, X } from '@lucide/vue';
+  LogOut, Mic, MicOff, Minus, MonitorUp, Plus, RadioTower,
+  SlidersHorizontal, Square, UserRound, UsersRound, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
 import ParticipantCard from './components/ParticipantCard.vue';
 import MediaDiagnostics from './components/MediaDiagnostics.vue';
 import RemoteAudio from './components/RemoteAudio.vue';
 import IconButton from './components/IconButton.vue';
+import GlobalTooltip from './components/GlobalTooltip.vue';
 import AvatarCropDialog from './components/AvatarCropDialog.vue';
+import GroupChat from './components/GroupChat.vue';
 import { createGroup, findGroup, findGroups, type GroupDetail, type GroupSummary } from './group/groupApi';
 import { useRtcRoom } from './rtc/useRtcRoom';
 import { useRoomSummary } from './rtc/useRoomSummary';
@@ -551,14 +553,8 @@ function participantListening(participant: Participant) {
             </div>
           </Transition>
         </section>
-        <section v-if="!focusedOnSelectedGroup" class="chat-panel" :aria-label="`${selectedGroup.name}群聊`">
-          <div class="chat-heading"><MessageSquareText :size="15" /><span>群聊</span></div>
-          <div class="message-list"></div>
-          <div class="composer"><button type="button" disabled aria-label="添加内容"><Plus :size="16" /></button>
-            <input aria-label="消息内容" disabled placeholder="发送消息" />
-            <button type="button" disabled aria-label="发送消息"><Send :size="15" /></button>
-          </div>
-        </section>
+        <GroupChat v-if="!focusedOnSelectedGroup" :key="selectedGroup.id" :group="selectedGroup"
+          :members="selectedGroupDetail?.members ?? []" :user="user" />
         <div v-if="callbarGroup || joiningGroupId" class="callbar-reveal" :class="{ 'is-leaving': callbarLeaving }" data-testid="callbar">
           <div class="callbar-content">
             <footer class="callbar">
@@ -660,5 +656,6 @@ function participantListening(participant: Participant) {
       </section>
     </div>
     <RemoteAudio v-for="track in remoteAudioTracks" :key="track.sid" :track="track" :volume="listening ? volume : 0" />
+    <GlobalTooltip />
   </div>
 </template>
