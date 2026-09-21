@@ -2,6 +2,7 @@ package com.lycansync.api.rtc.controller;
 
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.rtc.dto.LocalRtcTokenRequest;
+import com.lycansync.api.rtc.dto.RtcRoomOccupancyResponse;
 import com.lycansync.api.rtc.dto.RtcRoomSummaryResponse;
 import com.lycansync.api.rtc.dto.RtcTokenResponse;
 import com.lycansync.api.rtc.service.LocalRtcRoomSummaryService;
@@ -29,6 +30,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -82,5 +84,20 @@ public class LocalRtcController {
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())
                 .body(localRtcRoomSummaryService.getSummary(groupId));
+    }
+
+    @GetMapping("/room-occupancies")
+    @Operation(summary = "批量查询群组语音人数",
+            description = "返回当前账号可访问的全部群组语音人数，不返回参与者资料")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "批量查询成功；未创建的房间人数为零"),
+            @ApiResponse(responseCode = "503", description = "LiveKit 服务暂时不可用")
+    })
+    public ResponseEntity<List<RtcRoomOccupancyResponse>> getRoomOccupancies(
+            @AuthenticationPrincipal AuthenticatedUser user
+    ) {
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .body(localRtcRoomSummaryService.getOccupancies(user));
     }
 }

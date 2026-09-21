@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/groups', (route) => route.fulfill({ json: [] }));
+  await page.route('**/api/presence/heartbeat', (route) => route.fulfill({ status: 204 }));
 });
 
 test('首次注册创建管理员并在浏览器内存保存会话', async ({ page }) => {

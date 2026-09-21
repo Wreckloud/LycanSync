@@ -1,5 +1,8 @@
-const { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, screen, session, safeStorage, shell } = require('electron');
-const { resolve, sep } = require('node:path');
+const { app, BrowserWindow, desktopCapturer, ipcMain, net, powerMonitor, protocol, screen, session, safeStorage, shell } = require('electron');
+const { spawn } = require('node:child_process');
+const { existsSync } = require('node:fs');
+const { createInterface } = require('node:readline');
+const { isAbsolute, resolve, sep } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { readFile, writeFile, unlink, mkdir } = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
@@ -20,10 +23,12 @@ const apiRoutePolicies = new Map([
   ['POST /api/auth/logout', { clearsSession: true }],
   ['POST /api/rtc/token', {}],
   ['GET /api/rtc/room-summary', {}],
+  ['POST /api/presence/heartbeat', {}],
   ['GET /api/groups', {}],
   ['POST /api/groups', {}],
 ]);
 const groupPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const groupPresencePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/presences$/i;
 const groupMessagePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/messages$/i;
 const groupAttachmentPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/attachments\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 if (backend.username || backend.password || backend.pathname !== '/' || backend.search || backend.hash
@@ -51,6 +56,68 @@ let canClose = false;
 let closeTimer;
 let sessionToken;
 let sessionLoaded = false;
+let activityHelper;
+let activityRestartTimer;
+let currentActivity = null;
+
+function activityHelperPath() {
+  if (app.isPackaged) return resolve(process.resourcesPath, 'activity-helper', 'lycansync-activity.exe');
+  const override = process.env.LYCANSYNC_ACTIVITY_HELPER;
+  if (override && isAbsolute(override)) return override;
+  return resolve(__dirname, '../../../native/activity-helper/target/release/lycansync-activity.exe');
+}
+
+function normalizeActivity(value) {
+  if (value?.activityType == null) return null;
+  if (value.activityType !== 'GAME' || typeof value.activityName !== 'string'
+      || !Number.isSafeInteger(value.startedAtEpochSeconds)) return undefined;
+  const name = value.activityName.replace(/\s+/g, ' ').trim().slice(0, 80);
+  const startedAt = value.startedAtEpochSeconds * 1000;
+  if (!name || /[\u0000-\u001f\u007f]/.test(name)
+      || startedAt <= 0 || startedAt > Date.now() + 60_000) return undefined;
+  return { type: 'GAME', name, startedAt: new Date(startedAt).toISOString() };
+}
+
+function publishActivity(activity) {
+  if (JSON.stringify(activity) === JSON.stringify(currentActivity)) return;
+  currentActivity = activity;
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('activity:changed', activity);
+}
+
+function stopActivityHelper() {
+  clearTimeout(activityRestartTimer);
+  activityRestartTimer = undefined;
+  activityHelper?.kill();
+  activityHelper = undefined;
+}
+
+function startActivityHelper() {
+  if (process.platform !== 'win32' || closing || activityHelper) return;
+  const executable = activityHelperPath();
+  if (!existsSync(executable)) return;
+  const child = spawn(executable, [], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  activityHelper = child;
+  let finished = false;
+  const finish = () => {
+    if (finished || activityHelper !== child) return;
+    finished = true;
+    activityHelper = undefined;
+    publishActivity(null);
+    if (!closing) activityRestartTimer = setTimeout(startActivityHelper, 5000);
+  };
+  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  lines.on('line', (line) => {
+    if (line.length > 1024) return;
+    try {
+      const activity = normalizeActivity(JSON.parse(line));
+      if (activity !== undefined) publishActivity(activity);
+    } catch {
+      // 忽略单条不完整输出，下一轮扫描会再次上报。
+    }
+  });
+  child.once('error', finish);
+  child.once('exit', finish);
+}
 
 async function loadSession() {
   if (sessionLoaded) return sessionToken;
@@ -135,7 +202,7 @@ async function serveApplication(request) {
   if (!trustedUrl(request.url)) return new Response(null, { status: 403 });
   if (url.pathname.startsWith('/api/')) {
     const routePolicy = apiRoutePolicies.get(`${request.method} ${url.pathname}`)
-      ?? (request.method === 'GET' && (groupPath.test(url.pathname) || groupMessagePath.test(url.pathname)
+      ?? (request.method === 'GET' && (groupPath.test(url.pathname) || groupPresencePath.test(url.pathname) || groupMessagePath.test(url.pathname)
         || groupAttachmentPath.test(url.pathname)) ? {} : undefined)
       // multipart 仅向精确的群聊发送路径放行，仍由后端按图片实际大小校验。
       ?? (request.method === 'POST' && groupMessagePath.test(url.pathname) ? { maxBodyBytes: 6 * 1024 * 1024 } : undefined);
@@ -264,6 +331,7 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow.on('unmaximize', () => mainWindow?.webContents.send('window:maximized-changed', false));
     mainWindow.on('closed', () => { clearTimeout(closeTimer); mainWindow = undefined; });
     mainWindow.loadURL(APP_ORIGIN + '/');
+    startActivityHelper();
   });
 }
 
@@ -279,6 +347,17 @@ ipcMain.handle('diagnostics:process-metrics', (event) => {
     cpuPercent: Math.round(metrics.reduce((sum, process) => sum + (process.cpu?.percentCPUUsage ?? 0), 0) * 10) / 10,
     memoryMb: Math.round(metrics.reduce((sum, process) => sum + (process.memory?.workingSetSize ?? 0), 0) / 1024),
   };
+});
+ipcMain.handle('presence:system-idle-state', (event) => {
+  if (!trustedSender(event)) throw new Error('请求来源无效');
+  return {
+    state: powerMonitor.getSystemIdleState(300),
+    idleSeconds: powerMonitor.getSystemIdleTime(),
+  };
+});
+ipcMain.handle('activity:current', (event) => {
+  if (!trustedSender(event)) throw new Error('请求来源无效');
+  return currentActivity;
 });
 ipcMain.on('window:maximize', (event) => {
   if (!trustedSender(event)) return;
@@ -299,6 +378,7 @@ ipcMain.on('capture:select', (event, requestId, sourceId) => {
   pendingCapture = undefined;
   if (source) capture.callback({ video: source }); else denyCapture(capture.callback);
 });
+app.on('before-quit', stopActivityHelper);
 app.on('window-all-closed', () => app.quit());
 ipcMain.handle('auth:clear', async (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');

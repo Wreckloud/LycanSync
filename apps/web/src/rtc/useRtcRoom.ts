@@ -46,6 +46,7 @@ export function useRtcRoom() {
   const notice = ref('');
   const needsAudioPlayback = ref(false);
   const busySources = ref<MediaSource[]>([]);
+  const screenShareActive = ref(false);
   const screenShareSelectionCancelled = ref(false);
   let speakerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -110,6 +111,7 @@ export function useRtcRoom() {
         if (activeRoom.value !== currentRoom) return;
         revision.value++;
         participants.value = [currentRoom.localParticipant, ...currentRoom.remoteParticipants.values()];
+        screenShareActive.value = Boolean(currentRoom.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track);
         needsAudioPlayback.value = !currentRoom.canPlaybackAudio;
       };
       const scheduleSpeakerRefresh = () => {
@@ -182,6 +184,7 @@ export function useRtcRoom() {
     clearSpeakerRefreshTimer();
     pendingMedia.value = new Set();
     busySources.value = [];
+    screenShareActive.value = false;
     screenShareSelectionCancelled.value = false;
     room.value = null;
     participants.value = [];
@@ -276,6 +279,6 @@ export function useRtcRoom() {
     if (pendingMedia.value.has(Track.Source.ScreenShare)) screenShareSelectionCancelled.value = true;
   }
 
-  return { revision, room, status, participants, notice, needsAudioPlayback, busySources,
+  return { revision, room, status, participants, notice, needsAudioPlayback, busySources, screenShareActive,
     join, leave, toggleMedia, setMediaEnabled, enableAudioPlayback, updateListeningState, cancelPendingScreenShareSelection };
 }

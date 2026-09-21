@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
+    "build:activity": "cargo build --manifest-path ../../native/activity-helper/Cargo.toml --release",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run src",
     "test:e2e": "playwright test",

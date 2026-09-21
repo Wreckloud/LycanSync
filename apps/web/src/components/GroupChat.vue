@@ -20,6 +20,12 @@ const error = ref('');
 const list = ref<HTMLElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const messageInput = ref<HTMLTextAreaElement | null>(null);
+const messageTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
+  hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+});
+const messageDateFormatter = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric', month: 'long', day: 'numeric',
+});
 let request: AbortController | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
 const refreshOnFocus = () => void refresh();
@@ -33,18 +39,18 @@ function isAtBottom() {
   return !element || element.scrollHeight - element.scrollTop - element.clientHeight < 40;
 }
 
-async function scrollToBottom() {
+async function scrollToBottom(behavior: ScrollBehavior = 'smooth') {
   await nextTick();
-  list.value?.scrollTo({ top: list.value.scrollHeight, behavior: 'smooth' });
+  list.value?.scrollTo({ top: list.value.scrollHeight, behavior });
   atBottom = true;
 }
 
-function appendMessages(incoming: ChatMessage[], ownMessage = false) {
+function appendMessages(incoming: ChatMessage[], forceScroll = false, behavior: ScrollBehavior = 'smooth') {
   const known = new Set(messages.value.map((message) => message.id));
   const added = incoming.filter((message) => !known.has(message.id));
   if (!added.length) return;
   messages.value = [...messages.value, ...added];
-  if (ownMessage || atBottom) void scrollToBottom();
+  if (forceScroll || atBottom) void scrollToBottom(behavior);
 }
 
 async function refresh(initial = false) {
@@ -53,7 +59,7 @@ async function refresh(initial = false) {
   try {
     const latestId = initial ? undefined : messages.value.at(-1)?.id;
     const page = await findMessages(props.group.id, latestId, request.signal);
-    if (!request.signal.aborted) appendMessages(page.messages, initial);
+    if (!request.signal.aborted) appendMessages(page.messages, initial, initial ? 'auto' : 'smooth');
   } catch (reason) {
     if (!request.signal.aborted) error.value = reason instanceof Error ? reason.message : '无法读取群聊消息';
   }
@@ -146,7 +152,20 @@ function senderAvatar(message: ChatMessage) {
 }
 
 function formatTime(value: string) {
-  return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(new Date(value));
+  return messageTimeFormatter.format(new Date(value));
+}
+
+function localDateKey(value: string) {
+  const date = new Date(value);
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+function startsNewDate(message: ChatMessage, index: number) {
+  return index === 0 || localDateKey(messages.value[index - 1].createdAt) !== localDateKey(message.createdAt);
+}
+
+function formatDate(value: string) {
+  return messageDateFormatter.format(new Date(value));
 }
 
 function messageSegments(content: string): MessageSegment[] {
@@ -205,15 +224,18 @@ onScopeDispose(() => {
   <section class="chat-panel" :aria-label="`${group.name}群聊`" @dragover.prevent @drop="handleDrop">
     <div class="chat-heading"><MessageSquareText :size="15" /><span>群聊</span></div>
     <div ref="list" class="message-list" @scroll="onScroll">
-      <article v-for="message in messages" :key="message.id" class="chat-message" :class="{ 'is-own': message.senderUserId === user.id }">
-        <img v-if="senderAvatar(message)" class="chat-message-avatar" :src="senderAvatar(message)" alt="" />
-        <span v-else class="chat-message-avatar chat-message-initial">{{ senderName(message).slice(0, 1) }}</span>
-        <div class="chat-message-body">
-          <div class="chat-message-meta"><strong>{{ senderName(message) }}</strong><time>{{ formatTime(message.createdAt) }}</time></div>
-          <p v-if="message.content" class="chat-message-content"><template v-for="(segment, index) in messageSegments(message.content)" :key="index"><a v-if="segment.href" class="chat-message-link" :href="segment.href" @click.prevent="openLink(segment.href)">{{ segment.text }}</a><template v-else>{{ segment.text }}</template></template></p>
-          <ChatImage v-if="message.attachment" :group-id="group.id" :attachment-id="message.attachment.id" :alt="`${senderName(message)} 发送的图片`" />
-        </div>
-      </article>
+      <template v-for="(message, index) in messages" :key="message.id">
+        <div v-if="startsNewDate(message, index)" class="chat-date-divider"><span>{{ formatDate(message.createdAt) }}</span></div>
+        <article class="chat-message" :class="{ 'is-own': message.senderUserId === user.id }">
+          <img v-if="senderAvatar(message)" class="chat-message-avatar" :src="senderAvatar(message)" alt="" />
+          <span v-else class="chat-message-avatar chat-message-initial">{{ senderName(message).slice(0, 1) }}</span>
+          <div class="chat-message-body">
+            <div class="chat-message-meta"><strong>{{ senderName(message) }}</strong><time>{{ formatTime(message.createdAt) }}</time></div>
+            <p v-if="message.content" class="chat-message-content"><template v-for="(segment, segmentIndex) in messageSegments(message.content)" :key="segmentIndex"><a v-if="segment.href" class="chat-message-link" :href="segment.href" @click.prevent="openLink(segment.href)">{{ segment.text }}</a><template v-else>{{ segment.text }}</template></template></p>
+            <ChatImage v-if="message.attachment" :group-id="group.id" :attachment-id="message.attachment.id" :alt="`${senderName(message)} 发送的图片`" />
+          </div>
+        </article>
+      </template>
     </div>
     <form class="composer" @submit.prevent="submit">
       <input ref="fileInput" type="file" hidden accept="image/png,image/jpeg" @change="chooseOriginal" />

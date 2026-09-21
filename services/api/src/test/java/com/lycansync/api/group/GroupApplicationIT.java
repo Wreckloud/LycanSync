@@ -76,7 +76,7 @@ class GroupApplicationIT {
 
     @BeforeEach
     void resetDatabase() {
-        jdbc.sql("TRUNCATE chat_attachment, chat_message, chat_group, auth_session, auth_local_credential, app_user").update();
+        jdbc.sql("TRUNCATE user_presence, chat_attachment, chat_message, chat_group, auth_session, auth_local_credential, app_user").update();
         jdbc.sql("UPDATE system_state SET initialized_at = NULL WHERE id = 1").update();
     }
 
@@ -115,6 +115,52 @@ class GroupApplicationIT {
                 .andExpect(jsonPath("$.members.length()").value(2));
         assertThat(jdbc.sql("SELECT count(*) FROM chat_group WHERE owner_user_id IS NOT NULL")
                 .query(Long.class).single()).isOne();
+    }
+
+    @Test
+    void shouldUpdateOnlineStatusAfterHeartbeat() throws Exception {
+        String ownerToken = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
+        String response = mvc.perform(post("/api/groups")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"心跳测试\"}"))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String groupId = objectMapper.readTree(response).get("id").asText();
+
+        mvc.perform(post("/api/presence/heartbeat")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"ONLINE\",\"activity\":null}"))
+                .andExpect(status().isNoContent());
+
+        mvc.perform(post("/api/presence/heartbeat")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"ONLINE\",\"activity\":{\"type\":\"GAME\",\"name\":\"Core Keeper\"}}"))
+                .andExpect(status().isNoContent());
+
+        mvc.perform(get("/api/groups/{groupId}", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.members[0].nickname").value("Owner"))
+                .andExpect(jsonPath("$.members[0].status").doesNotExist())
+                .andExpect(jsonPath("$.members[0].activityName").doesNotExist());
+
+        mvc.perform(get("/api/groups/{groupId}/presences", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("ONLINE"))
+                .andExpect(jsonPath("$[0].activityType").value("GAME"))
+                .andExpect(jsonPath("$[0].activityName").value("Core Keeper"))
+                .andExpect(jsonPath("$[0].activityStartedAt").isNotEmpty());
+
+        mvc.perform(post("/api/presence/heartbeat")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"ONLINE\",\"activity\":{\"type\":\"GAME\",\"name\":\" \"}}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
     }
 
     @Test

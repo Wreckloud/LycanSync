@@ -5,6 +5,11 @@ const userId = '2d983469-4442-44f5-b5a8-f3819f16a611';
 const friendId = 'a1ae7096-049b-46ed-8e62-4f3dd0e7f80d';
 const avatar = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/presence/heartbeat', (route) => route.fulfill({ status: 204 }));
+  await page.route('**/api/rtc/room-occupancies', (route) => route.fulfill({ json: [] }));
+});
+
 test('创建群组只预览，并直接显示所有已注册账号的头像', async ({ page }) => {
   const user = { id: userId, nickname: '群主', avatar: '', administrator: true };
   const members = [
@@ -17,6 +22,7 @@ test('创建群组只预览，并直接显示所有已注册账号的头像', as
   let tokenRequests = 0;
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/auth/session', (route) => route.fulfill({ json: user }));
   await page.route('**/api/rtc/token', (route) => { tokenRequests++; return route.fulfill({ status: 503 }); });
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
   await page.route('**/api/groups**', async (route) => {
@@ -65,6 +71,7 @@ test('创建群组时可选择头像，群组栏显示裁剪后的图片', async
   let createdAvatar = '';
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/auth/session', (route) => route.fulfill({ json: user }));
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
   await page.route('**/api/groups**', (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -112,6 +119,7 @@ test('启动、窗口激活和成员变化时自动更新群组，无需刷新�
   await page.clock.install();
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/auth/session', (route) => route.fulfill({ json: user }));
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
   await page.route('**/api/groups**', (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -139,4 +147,52 @@ test('启动、窗口激活和成员变化时自动更新群组，无需刷新�
   await page.clock.fastForward(600);
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(page.locator('.group-member-row').filter({ hasText: '新昵称' })).toBeVisible();
+});
+
+test('离线成员稳定后置，语音状态不混入活动展示', async ({ page }) => {
+  const user = { id: userId, nickname: '群主', avatar: '', administrator: true };
+  const awayId = '4e602970-b857-431e-8b44-0aa92818c887';
+  const offlineId = 'a093dddf-70a3-4bb1-a43b-b3ac5c437cc6';
+  const members = [
+    { userId, nickname: '群主', avatar: '', role: 'OWNER', joinedAt: '2026-09-12T00:00:00Z' },
+    { userId: friendId, nickname: '语音朋友', avatar, role: 'MEMBER', joinedAt: '2026-09-12T01:00:00Z' },
+    { userId: offlineId, nickname: '离线朋友', avatar, role: 'MEMBER', joinedAt: '2026-09-12T01:30:00Z' },
+    { userId: awayId, nickname: '游戏中', avatar: '', role: 'MEMBER', joinedAt: '2026-09-12T02:00:00Z' },
+  ];
+  const group = { id: groupId, name: '周末开黑', description: '', avatar: '', role: 'OWNER', memberCount: 4,
+    createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z', members };
+  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/auth/session', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 1,
+    participants: [{ participantIdentity: `user-${friendId}`, displayName: '语音朋友' }] } }));
+  await page.route('**/api/rtc/room-occupancies', (route) => route.fulfill({
+    json: [{ groupId, participantCount: 1 }],
+  }));
+  await page.route('**/api/groups**', (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/groups') return route.fulfill({ json: [{ ...group, members: undefined }] });
+    if (path === `/api/groups/${groupId}/presences`) return route.fulfill({ json: [
+      { userId, status: 'ONLINE', activityType: null, activityName: null, activityStartedAt: null },
+      { userId: friendId, status: 'OFFLINE', activityType: null, activityName: null, activityStartedAt: null },
+      { userId: offlineId, status: 'OFFLINE', activityType: null, activityName: null, activityStartedAt: null },
+      { userId: awayId, status: 'AWAY', activityType: 'GAME', activityName: 'Core Keeper',
+        activityStartedAt: new Date(Date.now() - 70_000).toISOString() },
+    ] });
+    if (path === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (path === `/api/groups/${groupId}/messages`) return route.fulfill({ json: { messages: [], hasMore: false } });
+    return route.fulfill({ status: 404 });
+  });
+
+  await page.goto('/');
+  await expect(page.locator('.group-member-name')).toHaveText(['群主群主', '游戏中', '语音朋友', '离线朋友']);
+  await expect(page.getByLabel('群组成员').getByText('语音中', { exact: true })).toHaveCount(0);
+  await expect(page.locator('.group-member-row').nth(1)).toContainText('正在玩 Core Keeper');
+  await expect(page.locator('.group-member-row').nth(1).locator('.status-dot')).toHaveClass(/AWAY/);
+  await expect(page.locator('.group-member-row').nth(2).locator('.status-dot')).toHaveCount(0);
+  await expect(page.locator('.group-member-avatar').first()).toHaveCSS('width', '32px');
+  await expect(page.locator('.group-member-name').first()).toHaveCSS('font-size', '15px');
+  await expect(page.locator('.member-activity').first()).toHaveCSS('font-size', '13px');
+  await expect(page.locator('.group-call-badge')).toBeVisible();
+  await expect(page.locator('.group-call-badge')).toHaveCSS('width', '20px');
 });

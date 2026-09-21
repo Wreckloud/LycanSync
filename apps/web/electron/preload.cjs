@@ -6,6 +6,13 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   minimize: () => ipcRenderer.send('window:minimize'),
   isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
   getProcessMetrics: () => ipcRenderer.invoke('diagnostics:process-metrics'),
+  getSystemIdleState: () => ipcRenderer.invoke('presence:system-idle-state'),
+  getCurrentActivity: () => ipcRenderer.invoke('activity:current'),
+  onActivityChange: (callback) => {
+    const listener = (_event, activity) => callback(activity);
+    ipcRenderer.on('activity:changed', listener);
+    return () => ipcRenderer.removeListener('activity:changed', listener);
+  },
   toggleMaximize: () => ipcRenderer.send('window:maximize'),
   onMaximizedChange: (callback) => {
     const listener = (_event, maximized) => callback(maximized);

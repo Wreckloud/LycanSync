@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lycansync.api.presence.mapper.PresenceMapper">
+
+    <insert id="upsert">
+        INSERT INTO user_presence (user_id, status, last_seen_at, activity_type, activity_name, activity_started_at, updated_at)
+        VALUES (#{userId}, #{status}, #{now}, #{activityType}, #{activityName},
+                CASE WHEN CAST(#{activityName} AS VARCHAR) IS NULL
+                    THEN NULL ELSE CAST(#{now} AS TIMESTAMPTZ) END, #{now})
+        ON CONFLICT (user_id) DO UPDATE
+        SET status = EXCLUDED.status,
+            last_seen_at = EXCLUDED.last_seen_at,
+            activity_type = EXCLUDED.activity_type,
+            activity_name = EXCLUDED.activity_name,
+            activity_started_at = CASE
+                WHEN user_presence.activity_type IS NOT DISTINCT FROM EXCLUDED.activity_type
+                    AND user_presence.activity_name IS NOT DISTINCT FROM EXCLUDED.activity_name
+                    THEN user_presence.activity_started_at
+                ELSE EXCLUDED.activity_started_at
+            END,
+            updated_at = EXCLUDED.updated_at
+    </insert>
+
+    <select id="findByUsers" resultType="com.lycansync.api.presence.model.UserPresence">
+        SELECT user_id AS userId, status, last_seen_at AS lastSeenAt,
+               activity_type AS activityType, activity_name AS activityName,
+               activity_started_at AS activityStartedAt, updated_at AS updatedAt
+        FROM user_presence
+        WHERE user_id IN
+        <foreach collection="userIds" item="userId" open="(" separator="," close=")">
+            CAST(#{userId} AS UUID)
+        </foreach>
+    </select>
+
+</mapper>

@@ -1,12 +1,16 @@
 package com.lycansync.api.rtc.service;
 
-import com.lycansync.api.rtc.dto.RtcRoomSummaryResponse;
+import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.common.error.ApiErrorCode;
+import com.lycansync.api.group.dto.GroupSummaryResponse;
 import com.lycansync.api.group.exception.GroupException;
+import com.lycansync.api.group.model.GroupRole;
 import com.lycansync.api.group.service.GroupService;
+import com.lycansync.api.rtc.dto.RtcRoomSummaryResponse;
 import com.lycansync.api.rtc.exception.RtcServiceUnavailableException;
 import io.livekit.server.RoomServiceClient;
 import livekit.LivekitModels.ParticipantInfo;
+import livekit.LivekitModels.Room;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -14,11 +18,13 @@ import retrofit2.Call;
 import retrofit2.Response;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -33,10 +39,13 @@ import static org.mockito.Mockito.when;
 class LocalRtcRoomSummaryServiceTests {
 
     private static final UUID GROUP_ID = UUID.fromString("01b08c29-d1e5-4bca-987f-64946541e93b");
+    private static final AuthenticatedUser USER = new AuthenticatedUser(
+            UUID.fromString("2d983469-4442-44f5-b5a8-f3819f16a611"), "小狼", false);
 
     private RoomServiceClient roomServiceClient;
     private GroupService groupService;
     private Call<List<ParticipantInfo>> participantCall;
+    private Call<List<Room>> roomCall;
     private LocalRtcRoomSummaryService roomSummaryService;
 
     @BeforeEach
@@ -45,8 +54,10 @@ class LocalRtcRoomSummaryServiceTests {
         roomServiceClient = mock(RoomServiceClient.class);
         groupService = mock(GroupService.class);
         participantCall = mock(Call.class);
+        roomCall = mock(Call.class);
         roomSummaryService = new LocalRtcRoomSummaryService(roomServiceClient, groupService);
         when(roomServiceClient.listParticipants("lycan-sync-group-" + GROUP_ID)).thenReturn(participantCall);
+        when(roomServiceClient.listRooms(List.of("lycan-sync-group-" + GROUP_ID))).thenReturn(roomCall);
     }
 
     @Test
@@ -91,6 +102,21 @@ class LocalRtcRoomSummaryServiceTests {
         assertThatThrownBy(() -> roomSummaryService.getSummary(GROUP_ID))
                 .isInstanceOf(GroupException.class);
         verifyNoInteractions(participantCall);
+    }
+
+    @Test
+    void shouldReturnOccupancyForEveryAccessibleGroup() throws IOException {
+        Instant createdAt = Instant.parse("2026-09-20T00:00:00Z");
+        when(groupService.findGroups(USER)).thenReturn(List.of(new GroupSummaryResponse(
+                GROUP_ID, "周末开黑", "", "", GroupRole.OWNER, 2, createdAt, createdAt)));
+        when(roomCall.execute()).thenReturn(Response.success(List.of(Room.newBuilder()
+                .setName("lycan-sync-group-" + GROUP_ID)
+                .setNumParticipants(2)
+                .build())));
+
+        assertThat(roomSummaryService.getOccupancies(USER))
+                .extracting("groupId", "participantCount")
+                .containsExactly(tuple(GROUP_ID, 2));
     }
 
     private ParticipantInfo participant(String name, long joinedAtMs) {

@@ -1,19 +1,32 @@
 import { expect, test } from '@playwright/test';
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/presence/heartbeat', (route) => route.fulfill({ status: 204 }));
+  await page.route('**/api/rtc/room-occupancies', (route) => route.fulfill({ json: [] }));
+});
+
 const groupId = '01b08c29-d1e5-4bca-987f-64946541e93b';
 const user = { id: '2d983469-4442-44f5-b5a8-f3819f16a611', nickname: '群主', avatar: '', administrator: true };
 const group = { id: groupId, name: '周末开黑', description: '', avatar: '', role: 'OWNER', memberCount: 1,
   createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z',
   members: [{ userId: user.id, nickname: user.nickname, avatar: '', role: 'OWNER', joinedAt: '2026-09-12T00:00:00Z' }] };
 
-test('文本消息使用统一 multipart 接口发送，并仅允许消息正文复制', async ({ page }) => {
-  const messages: Record<string, unknown>[] = [];
+test('文本消息使用统一 multipart 接口发送，并按日期分组且仅允许消息正文复制', async ({ page }) => {
+  const messages: Record<string, unknown>[] = [
+    { id: '19b81ea9-04d8-45f7-9407-808c13a51fd0', senderUserId: user.id,
+      senderNickname: user.nickname, type: 'TEXT', content: '第一天', createdAt: '2026-09-13T04:00:00Z', attachment: null },
+    { id: '9350a7c7-5391-44f8-8b26-27f548c88793', senderUserId: user.id,
+      senderNickname: user.nickname, type: 'TEXT', content: '第二天', createdAt: '2026-09-14T04:00:00Z', attachment: null },
+  ];
   await page.addInitScript(() => {
     Object.defineProperty(window, 'lycanDesktop', { value: {
       clearSession: async () => undefined,
       minimize: () => undefined,
       isMaximized: async () => false,
       getProcessMetrics: async () => ({ cpuPercent: 0, memoryMb: 0 }),
+      getSystemIdleState: async () => ({ state: 'active', idleSeconds: 0 }),
+      getCurrentActivity: async () => null,
+      onActivityChange: () => () => undefined,
       toggleMaximize: () => undefined,
       onMaximizedChange: () => () => undefined,
       close: () => undefined,
@@ -53,11 +66,12 @@ test('文本消息使用统一 multipart 接口发送，并仅允许消息正文
   const composer = page.getByLabel('消息内容');
   await composer.fill('晚上见');
   await composer.press('Enter');
-  await expect(page.locator('.chat-message-content')).toHaveText('晚上见 https://example.com/docs。');
+  await expect(page.locator('.chat-message-content').last()).toHaveText('晚上见 https://example.com/docs。');
+  await expect(page.locator('.chat-date-divider')).toHaveText(['2026年9月13日', '2026年9月14日']);
   const link = page.getByRole('link', { name: 'https://example.com/docs' });
   await expect(link).toHaveAttribute('href', 'https://example.com/docs');
   await link.click();
   await expect(page.locator('html')).toHaveAttribute('data-external-url', 'https://example.com/docs');
   await expect(page.locator('.message-list')).toHaveCSS('user-select', 'none');
-  await expect(page.locator('.chat-message-content')).toHaveCSS('user-select', 'text');
+  await expect(page.locator('.chat-message-content').first()).toHaveCSS('user-select', 'text');
 });

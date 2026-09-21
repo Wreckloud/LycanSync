@@ -1,4 +1,5 @@
 import { ApiRequestError, authenticatedFetch } from '../auth/authApi';
+import type { UserActivityType, UserPresenceStatus } from '../presence/presenceApi';
 
 export type GroupRole = 'OWNER' | 'MEMBER';
 
@@ -19,6 +20,14 @@ export interface GroupMember {
   avatar: string;
   role: GroupRole;
   joinedAt: string;
+}
+
+export interface GroupPresence {
+  userId: string;
+  status: UserPresenceStatus;
+  activityType: UserActivityType | null;
+  activityName: string | null;
+  activityStartedAt: string | null;
 }
 
 export interface GroupDetail extends GroupSummary {
@@ -44,5 +53,7 @@ async function groupRequest<T>(path: string, method = 'GET', body?: unknown, sig
 export const findGroups = (signal?: AbortSignal) => groupRequest<GroupSummary[]>('', 'GET', undefined, signal);
 export const findGroup = (groupId: string, signal?: AbortSignal) =>
   groupRequest<GroupDetail>('/' + encodeURIComponent(groupId), 'GET', undefined, signal);
+export const findGroupPresences = (groupId: string, signal?: AbortSignal) =>
+  groupRequest<GroupPresence[]>('/' + encodeURIComponent(groupId) + '/presences', 'GET', undefined, signal);
 export const createGroup = (name: string, description: string, avatar: string) =>
   groupRequest<GroupDetail>('', 'POST', { name, description, avatar });

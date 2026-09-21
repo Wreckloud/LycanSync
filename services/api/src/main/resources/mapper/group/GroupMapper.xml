@@ -41,4 +41,13 @@
         ORDER BY CASE WHEN users.id = g.owner_user_id THEN 0 ELSE 1 END,
                  users.created_at, users.id
     </select>
+
+    <select id="findMemberIds" resultType="string">
+        SELECT users.id::text
+        FROM chat_group g
+        CROSS JOIN app_user users
+        WHERE g.id = #{groupId}
+        ORDER BY CASE WHEN users.id = g.owner_user_id THEN 0 ELSE 1 END,
+                 users.created_at, users.id
+    </select>
 </mapper>

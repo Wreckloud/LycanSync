@@ -3,6 +3,7 @@ package com.lycansync.api.rtc.controller;
 import com.lycansync.api.auth.config.AuthConfiguration;
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.service.AuthService;
+import com.lycansync.api.rtc.dto.RtcRoomOccupancyResponse;
 import com.lycansync.api.rtc.dto.RtcRoomSummaryResponse;
 import com.lycansync.api.rtc.dto.RtcParticipantSummaryResponse;
 import com.lycansync.api.group.exception.GroupException;
@@ -148,6 +149,19 @@ class LocalRtcControllerTests {
                 .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
 
         verifyNoInteractions(localRtcRoomSummaryService);
+    }
+
+    @Test
+    void shouldReturnAllAccessibleRoomOccupanciesWithoutCaching() throws Exception {
+        when(localRtcRoomSummaryService.getOccupancies(AUTHENTICATED_USER))
+                .thenReturn(List.of(new RtcRoomOccupancyResponse(GROUP_ID, 2)));
+
+        mockMvc.perform(get("/api/rtc/room-occupancies")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$[0].groupId").value(GROUP_ID.toString()))
+                .andExpect(jsonPath("$[0].participantCount").value(2));
     }
 
     @Test

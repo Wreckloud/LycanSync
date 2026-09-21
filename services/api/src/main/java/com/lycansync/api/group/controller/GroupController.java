@@ -3,7 +3,9 @@ package com.lycansync.api.group.controller;
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.group.dto.CreateGroupRequest;
 import com.lycansync.api.group.dto.GroupDetailResponse;
+import com.lycansync.api.group.dto.GroupPresenceResponse;
 import com.lycansync.api.group.dto.GroupSummaryResponse;
+import com.lycansync.api.group.service.GroupMemberPresenceService;
 import com.lycansync.api.group.service.GroupService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -43,6 +45,7 @@ import java.util.UUID;
 public class GroupController {
 
     private final GroupService groupService;
+    private final GroupMemberPresenceService groupMemberPresenceService;
 
     @GetMapping
     @Operation(summary = "查询所有群组")
@@ -89,6 +92,24 @@ public class GroupController {
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())
                 .body(groupService.findGroup(groupId, user));
+    }
+
+    @GetMapping("/{groupId}/presences")
+    @Operation(summary = "查询群组成员在线状态", description = "只返回定期刷新所需的在线与活动数据")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "查询成功"),
+            @ApiResponse(responseCode = "404", description = "群组不存在",
+                    content = @Content(mediaType = "application/problem+json",
+                            schema = @Schema(implementation = ProblemDetail.class)))
+    })
+    public ResponseEntity<List<GroupPresenceResponse>> findPresences(
+            @PathVariable
+            @Parameter(description = "群组 ID")
+            UUID groupId
+    ) {
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .body(groupMemberPresenceService.findPresences(groupId));
     }
 
 }

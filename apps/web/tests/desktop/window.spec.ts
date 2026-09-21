@@ -62,6 +62,10 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
     expect(await page.evaluate(async () => window.lycanDesktop?.getProcessMetrics())).toEqual({
       cpuPercent: expect.any(Number), memoryMb: expect.any(Number),
     });
+    expect(await page.evaluate(async () => window.lycanDesktop?.getSystemIdleState())).toEqual({
+      state: expect.stringMatching(/^(active|idle|locked|unknown)$/), idleSeconds: expect.any(Number),
+    });
+    expect(await page.evaluate(async () => window.lycanDesktop?.getCurrentActivity())).toBeNull();
     expect(await page.evaluate(async () => (await fetch('/api/not-allowed')).status)).toBe(404);
     expect(await page.evaluate(async () => {
       try { const stream = await navigator.mediaDevices.getUserMedia({ video: true }); stream.getTracks().forEach((track) => track.stop()); return 'allowed'; }

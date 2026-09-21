@@ -62,6 +62,10 @@ async function api(path: string, body: string, user: ReturnType<typeof testUser>
   if (/^\/api\/groups\/[0-9a-f-]+\/messages(?:\?.*)?$/i.test(path)) {
     return { messages: [], hasMore: false };
   }
+  if (/^\/api\/groups\/[0-9a-f-]+\/presences$/i.test(path)) {
+    return [{ userId: user.id, status: 'ONLINE', activityType: null,
+      activityName: null, activityStartedAt: null }];
+  }
   const group = groups.find((candidate) => path === '/api/groups/' + candidate.id);
   if (group) return { ...group, members: [{ userId: user.id, nickname: user.nickname, avatar: user.avatar,
     role: 'OWNER', joinedAt: '2026-09-12T00:00:00Z' }] };

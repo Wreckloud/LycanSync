@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, reactive, ref, watch } from 'vue';
-import { Activity, AudioLines, ChevronDown, ChevronLeft, ChevronRight, Copy, CornerUpLeft, HeadphoneOff, Headphones,
+import { Activity, AudioLines, ChevronDown, ChevronLeft, ChevronRight, Copy, CornerUpLeft, Gamepad2, HeadphoneOff, Headphones,
   LogOut, Mic, MicOff, Minus, MonitorUp, Plus, RadioTower,
-  SlidersHorizontal, Square, UserRound, UsersRound, X } from '@lucide/vue';
+  SlidersHorizontal, Square, UserRound, UsersRound, Volume2, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
 import ParticipantCard from './components/ParticipantCard.vue';
 import MediaDiagnostics from './components/MediaDiagnostics.vue';
@@ -11,9 +11,12 @@ import IconButton from './components/IconButton.vue';
 import GlobalTooltip from './components/GlobalTooltip.vue';
 import AvatarCropDialog from './components/AvatarCropDialog.vue';
 import GroupChat from './components/GroupChat.vue';
-import { createGroup, findGroup, findGroups, type GroupDetail, type GroupSummary } from './group/groupApi';
+import { createGroup, findGroup, findGroupPresences, findGroups,
+  type GroupDetail, type GroupMember, type GroupPresence, type GroupSummary } from './group/groupApi';
 import { useRtcRoom } from './rtc/useRtcRoom';
 import { useRoomSummary } from './rtc/useRoomSummary';
+import { requestRoomOccupancies } from './rtc/roomSummaryApi';
+import { sendPresenceHeartbeat, type UserActivity, type UserPresenceStatus } from './presence/presenceApi';
 import type { AuthUser } from './auth/authApi';
 
 const props = defineProps<{ user: AuthUser; windowMaximized: boolean }>();
@@ -22,6 +25,15 @@ const emit = defineEmits<{ profile: [] }>();
 const STATUS_LABELS = { idle: '未加入语音', joining: '正在连接', connected: '语音已连接', reconnecting: '正在重连' };
 const CALLBAR_EXIT_DURATION_MS = 180;
 const GROUP_REFRESH_INTERVAL_MS = 15_000;
+const PRESENCE_HEARTBEAT_INTERVAL_MS = 30_000;
+const PRESENCE_IDLE_TIMEOUT_MS = 5 * 60_000;
+const PRESENCE_IDLE_CHECK_INTERVAL_MS = 15_000;
+const ACTIVITY_CLOCK_INTERVAL_MS = 10_000;
+const PRESENCE_STATUS_LABELS: Record<UserPresenceStatus, string> = {
+  ONLINE: '在线',
+  AWAY: '离开',
+  OFFLINE: '离线',
+};
 const rtc = reactive(useRtcRoom());
 const desktop = window.lycanDesktop;
 const captureRequest = ref<CaptureRequest | null>(null);
@@ -43,12 +55,16 @@ const removeCloseListener = desktop?.onClose(async () => {
   try { await rtc.leave(); }
   finally { desktop.finishClose(); }
 });
-onScopeDispose(() => { selectCaptureSource(null); removeCaptureListener?.(); removeCloseListener?.(); detailRequest?.abort(); listRequest?.abort(); void rtc.leave(); });
+onScopeDispose(() => {
+  selectCaptureSource(null); removeCaptureListener?.(); removeCloseListener?.();
+  detailRequest?.abort(); listRequest?.abort(); void rtc.leave();
+});
 watch(() => rtc.status, (status) => { if (status === 'idle') selectCaptureSource(null); });
 const groups = ref<GroupSummary[]>([]);
 const selectedGroupId = ref<string | null>(null);
 const selectedGroupDetail = ref<GroupDetail | null>(null);
 const joinedGroupDetail = ref<GroupDetail | null>(null);
+const groupPresences = ref<Record<string, GroupPresence>>({});
 const groupError = ref('');
 const summaryError = ref<string | null>(null);
 const groupLoading = ref(false);
@@ -62,7 +78,89 @@ const formError = ref('');
 const formBusy = ref(false);
 let detailRequest: AbortController | null = null;
 let listRequest: AbortController | null = null;
+let groupPresenceRequest: AbortController | null = null;
+let roomOccupancyRequest: AbortController | null = null;
 let joinAttempt = 0;
+let presenceHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let presenceIdleTimer: ReturnType<typeof setInterval> | null = null;
+let activityClockTimer: ReturnType<typeof setInterval> | null = null;
+let presenceAbort: AbortController | null = null;
+const currentPresenceStatus = ref<UserPresenceStatus>('ONLINE');
+const currentActivity = ref<(UserActivity & { startedAt: string }) | null>(null);
+const activityClock = ref(Date.now());
+
+function applyDetectedActivity(activity: DetectedActivity | null) {
+  if (JSON.stringify(activity) === JSON.stringify(currentActivity.value)) return;
+  currentActivity.value = activity;
+  void sendHeartbeat();
+}
+const removeActivityListener = desktop?.onActivityChange(applyDetectedActivity);
+void desktop?.getCurrentActivity().then(applyDetectedActivity).catch(() => undefined);
+onScopeDispose(() => removeActivityListener?.());
+
+async function sendHeartbeat() {
+  presenceAbort?.abort();
+  const controller = new AbortController();
+  presenceAbort = controller;
+  try {
+    const activity = currentActivity.value
+      ? { type: currentActivity.value.type, name: currentActivity.value.name }
+      : null;
+    await sendPresenceHeartbeat(currentPresenceStatus.value, activity, controller.signal);
+  } catch {
+    // 心跳失败不阻塞 UI；下一次周期再试。
+  }
+}
+
+function startPresenceHeartbeat() {
+  if (presenceHeartbeatTimer) return;
+  void sendHeartbeat();
+  presenceHeartbeatTimer = setInterval(() => void sendHeartbeat(), PRESENCE_HEARTBEAT_INTERVAL_MS);
+}
+
+function stopPresenceHeartbeat() {
+  presenceAbort?.abort();
+  if (presenceHeartbeatTimer) clearInterval(presenceHeartbeatTimer);
+  presenceHeartbeatTimer = null;
+}
+
+async function updateOwnPresenceStatus() {
+  const systemIdle = await desktop?.getSystemIdleState().catch(() => null);
+  const nextStatus = systemIdle && (systemIdle.state === 'idle' || systemIdle.state === 'locked'
+    || systemIdle.idleSeconds >= PRESENCE_IDLE_TIMEOUT_MS / 1000) ? 'AWAY' : 'ONLINE';
+  if (nextStatus === currentPresenceStatus.value) return;
+  currentPresenceStatus.value = nextStatus;
+  void sendHeartbeat();
+}
+
+async function refreshGroupPresences(groupId: string) {
+  groupPresenceRequest?.abort();
+  const request = new AbortController();
+  groupPresenceRequest = request;
+  try {
+    const result = await findGroupPresences(groupId, request.signal);
+    if (!request.signal.aborted && selectedGroupId.value === groupId) {
+      groupPresences.value = Object.fromEntries(result.map((presence) => [presence.userId, presence]));
+    }
+  } catch {
+    // 在线状态短暂失效时保留最后一次结果，不覆盖群组资料错误。
+  }
+}
+
+const roomOccupancies = ref<Record<string, number>>({});
+async function refreshRoomOccupancies() {
+  roomOccupancyRequest?.abort();
+  const request = new AbortController();
+  roomOccupancyRequest = request;
+  try {
+    const result = await requestRoomOccupancies(request.signal);
+    if (!request.signal.aborted) {
+      roomOccupancies.value = Object.fromEntries(result.map((room) => [room.groupId, room.participantCount]));
+    }
+  } catch {
+    // RTC 摘要短暂不可用时保留最后一次人数，避免徽标闪烁。
+  }
+}
 
 async function loadGroup(groupId: string, keepExisting = false) {
   detailRequest?.abort();
@@ -76,6 +174,7 @@ async function loadGroup(groupId: string, keepExisting = false) {
     if (!request.signal.aborted && selectedGroupId.value === groupId) {
       selectedGroupDetail.value = detail;
       if (joinedGroupId.value === groupId) joinedGroupDetail.value = detail;
+      void refreshGroupPresences(groupId);
     }
   } catch (error) {
     if (!request.signal.aborted) groupError.value = error instanceof Error ? error.message : '无法读取群组资料';
@@ -92,6 +191,11 @@ async function refreshGroups(refreshDetail = true) {
     const result = await findGroups(request.signal);
     if (request.signal.aborted) return;
     groups.value = result;
+    if (result.length > 0) void refreshRoomOccupancies();
+    else {
+      roomOccupancyRequest?.abort();
+      roomOccupancies.value = {};
+    }
     groupError.value = '';
     if (!selectedGroupId.value || !result.some((group) => group.id === selectedGroupId.value)) {
       selectedGroupId.value = result[0]?.id ?? null;
@@ -114,19 +218,34 @@ function refreshOnActivation() {
   lastActivationRefreshAt = Date.now();
   void refreshGroups();
 }
-onMounted(() => {
+function handleVisibilityChange() {
   refreshOnActivation();
+}
+onMounted(() => {
+  void updateOwnPresenceStatus();
+  refreshOnActivation();
+  startPresenceHeartbeat();
   window.addEventListener('focus', refreshOnActivation);
   window.addEventListener('resize', remeasureViewerHeight);
-  document.addEventListener('visibilitychange', refreshOnActivation);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  presenceIdleTimer = setInterval(() => void updateOwnPresenceStatus(), PRESENCE_IDLE_CHECK_INTERVAL_MS);
+  activityClockTimer = setInterval(() => { activityClock.value = Date.now(); }, ACTIVITY_CLOCK_INTERVAL_MS);
   groupRefreshTimer = setInterval(() => {
-    if (document.visibilityState !== 'hidden') void refreshGroups(false);
+    if (document.visibilityState !== 'hidden') {
+      void refreshGroups(false);
+      if (selectedGroupId.value) void refreshGroupPresences(selectedGroupId.value);
+    }
   }, GROUP_REFRESH_INTERVAL_MS);
 });
 onScopeDispose(() => {
   window.removeEventListener('focus', refreshOnActivation);
   window.removeEventListener('resize', remeasureViewerHeight);
-  document.removeEventListener('visibilitychange', refreshOnActivation);
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
+  groupPresenceRequest?.abort();
+  roomOccupancyRequest?.abort();
+  stopPresenceHeartbeat();
+  if (presenceIdleTimer) clearInterval(presenceIdleTimer);
+  if (activityClockTimer) clearInterval(activityClockTimer);
   if (groupRefreshTimer) clearInterval(groupRefreshTimer);
 });
 
@@ -196,7 +315,44 @@ const connected = computed(() => rtc.status === 'connected');
 const showingJoinedGroup = computed(() => joinedGroupId.value !== null && selectedGroupId.value === joinedGroupId.value);
 const roomSummary = useRoomSummary(selectedGroupId, computed(() => !showingJoinedGroup.value),
   (message) => { summaryError.value = message; });
+const groupHasVoiceActivity = (groupId: string) => joinedGroupId.value === groupId
+  || (roomOccupancies.value[groupId] ?? 0) > 0;
 const currentMembers = computed(() => joinedGroupDetail.value?.members ?? []);
+const memberOnlineStatus = (member: GroupMember) => {
+  if (member.userId === props.user.id) return currentPresenceStatus.value;
+  return groupPresences.value[member.userId]?.status ?? 'OFFLINE';
+};
+const memberActivity = (member: GroupMember) => {
+  const activity = member.userId === props.user.id
+    ? currentActivity.value
+    : groupPresences.value[member.userId]?.activityType === 'GAME'
+      && groupPresences.value[member.userId]?.activityName
+      && groupPresences.value[member.userId]?.activityStartedAt
+      ? { type: 'GAME' as const, name: groupPresences.value[member.userId].activityName!,
+          startedAt: groupPresences.value[member.userId].activityStartedAt! }
+      : null;
+  if (memberOnlineStatus(member) === 'OFFLINE' || !activity) return null;
+  return `正在玩 ${activity.name} · ${formatActivityDuration(activity.startedAt)}`;
+};
+const orderedMembers = computed(() => {
+  const members = selectedGroupDetail.value?.members ?? [];
+  return [...members.filter((member) => memberOnlineStatus(member) !== 'OFFLINE'),
+    ...members.filter((member) => memberOnlineStatus(member) === 'OFFLINE')];
+});
+function formatActivityDuration(startedAt: string) {
+  const elapsedSeconds = Math.max(0, Math.floor((activityClock.value - Date.parse(startedAt)) / 1000));
+  const hours = Math.floor(elapsedSeconds / 3600);
+  const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+  const seconds = elapsedSeconds % 60;
+  return hours > 0 ? `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+    : `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+const memberStatusLabel = (member: GroupMember) => {
+  const status = memberOnlineStatus(member);
+  const activity = memberActivity(member);
+  const label = PRESENCE_STATUS_LABELS[status] ?? PRESENCE_STATUS_LABELS.OFFLINE;
+  return activity ? `${label} · ${activity}` : label;
+};
 const participantAvatar = (identity: string) => identity === `user-${props.user.id}` ? props.user.avatar
   : currentMembers.value.find((member) => `user-${member.userId}` === identity)?.avatar ?? '';
 const previewParticipantName = (identity: string, displayName: string) =>
@@ -473,12 +629,12 @@ function participantListening(participant: Participant) {
       <nav class="group-rail" aria-label="群组">
         <button v-for="group in groups" :key="group.id" type="button" class="group-button"
           :class="{ 'is-selected': selectedGroupId === group.id, 'is-in-call': joinedGroupId === group.id }"
-          :aria-label="`${group.name}，单击预览，双击加入语音`" :aria-pressed="selectedGroupId === group.id"
+          :aria-label="`${group.name}${groupHasVoiceActivity(group.id) ? '，当前有语音成员' : ''}，单击预览，双击加入语音`" :aria-pressed="selectedGroupId === group.id"
           :data-tooltip="`${group.name} · 单击预览 / 双击加入`"
           @click="previewGroup(group.id)" @dblclick="requestJoin(group.id)" @keydown.enter.prevent="requestJoin(group.id)">
           <img v-if="group.avatar" :src="group.avatar" class="group-rail-avatar" alt="" />
           <span v-else>{{ group.name.slice(0, 1) }}</span>
-          <span v-if="joinedGroupId === group.id" class="group-call-dot" aria-hidden="true" />
+          <span v-if="groupHasVoiceActivity(group.id)" class="group-call-badge" aria-hidden="true"><Volume2 :size="12" :stroke-width="2.6" /></span>
         </button>
         <div class="rail-spacer" />
         <button class="group-button add-group" type="button" aria-label="创建群组" data-tooltip="创建群组" @click="openEditor"><Plus :size="17" /></button>
@@ -598,11 +754,17 @@ function participantListening(participant: Participant) {
         </div>
         <p v-if="groupError" role="alert" class="group-error">{{ groupError }}</p>
         <p v-else-if="groupLoading" class="group-hint">正在读取成员…</p>
-        <div v-for="member in selectedGroupDetail?.members ?? []" :key="member.userId" class="group-member-row">
-          <img v-if="member.userId === user.id ? user.avatar : member.avatar" :src="member.userId === user.id ? user.avatar : member.avatar" alt="" />
-          <span v-else class="group-member-initial">{{ member.nickname.slice(0, 1) }}</span>
-          <span class="group-member-name">{{ member.userId === user.id ? user.nickname : member.nickname }}</span>
-          <small v-if="member.role === 'OWNER'">群主</small>
+        <div v-for="member in orderedMembers" :key="member.userId" class="group-member-row"
+          :class="{ 'is-offline': memberOnlineStatus(member) === 'OFFLINE' }">
+          <span class="group-member-avatar" :aria-label="memberStatusLabel(member)">
+            <img v-if="member.userId === user.id ? user.avatar : member.avatar" :src="member.userId === user.id ? user.avatar : member.avatar" alt="" />
+            <span v-else class="group-member-initial">{{ member.nickname.slice(0, 1) }}</span>
+            <span v-if="memberOnlineStatus(member) !== 'OFFLINE'" class="status-dot" :class="memberOnlineStatus(member)" />
+          </span>
+          <span class="group-member-info">
+            <span class="group-member-name">{{ member.userId === user.id ? user.nickname : member.nickname }}<small v-if="member.role === 'OWNER'" class="group-member-role">群主</small></span>
+            <span v-if="memberActivity(member)" class="member-activity"><Gamepad2 :size="13" />{{ memberActivity(member) }}</span>
+          </span>
         </div>
       </aside>
     </div>

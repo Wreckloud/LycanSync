@@ -193,15 +193,19 @@ button:focus-visible, input:focus-visible {
   background: var(--accent);
 }
 
-.group-call-dot {
+.group-call-badge {
   position: absolute;
-  right: -4px;
-  bottom: -4px;
-  width: 11px;
-  height: 11px;
+  right: -5px;
+  bottom: -5px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
   border: 2px solid #0d1116;
   border-radius: 50%;
   background: var(--good);
+  color: white;
+  box-shadow: 0 1px 4px #0008;
   pointer-events: none;
 }
 
@@ -560,11 +564,20 @@ button:focus-visible, input:focus-visible {
 }
 .large-avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
 .voice-preview-member img { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; }
-.group-member-row { display: flex; align-items: center; gap: 9px; margin: 9px 0; min-width: 0; }
-.group-member-row img, .group-member-initial { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 50%; object-fit: cover; }
+.group-member-row { display: flex; align-items: center; gap: 9px; min-width: 0; min-height: 40px; margin: 3px 0; }
+.group-member-avatar { position: relative; width: 32px; height: 32px; flex: 0 0 32px; }
+.group-member-avatar img, .group-member-initial { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
 .group-member-initial { display: grid; place-items: center; background: var(--panel); border: 1px solid var(--border); }
+.status-dot { position: absolute; right: -2px; bottom: -2px; width: 12px; height: 12px; border: 2px solid #0d1116; border-radius: 50%; background: var(--muted); }
+.status-dot.ONLINE { background: #3ba55d; }
+.status-dot.AWAY { background: #f59e0b; }
+.group-member-info { display: grid; align-content: center; min-width: 0; }
 .group-member-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; line-height: 1.25; }
-.group-member-row small { margin-left: auto; color: var(--muted); font-size: 11px; }
+.group-member-role { margin-left: 5px; color: var(--muted); font-size: 11px; font-weight: 400; }
+.member-activity { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; color: #43b6da; font-size: 13px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.group-member-row.is-offline { color: #6b727b; }
+.group-member-row.is-offline .group-member-avatar { filter: grayscale(1); opacity: .48; }
+.group-member-row.is-offline .group-member-role { color: #626a74; }
 .group-error { color: #e0a0a0; }
 .group-hint { color: var(--muted); }
 .group-empty { display: grid; place-items: center; color: var(--muted); }
@@ -770,6 +783,17 @@ button:focus-visible, input:focus-visible {
 /* 短对话贴底，长对话从顶部正常滚动，避免 flex-end 把早期消息推到不可达区域。 */
 .message-list > :first-child { margin-top: auto; }
 .message-list > * { flex-shrink: 0; }
+
+.chat-date-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--subtle);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.chat-date-divider::before, .chat-date-divider::after { content: ""; height: 1px; flex: 1; background: var(--border-soft); }
 
 .chat-message { display: flex; gap: 9px; }
 .chat-message-avatar { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 50%; object-fit: cover; }

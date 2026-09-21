@@ -80,6 +80,11 @@ public class GroupService {
         }
     }
 
+    public List<UUID> findMemberIds(UUID groupId) {
+        requireGroup(groupId);
+        return mapper.findMemberIds(groupId).stream().map(UUID::fromString).toList();
+    }
+
     private String normalizeName(String value) {
         String name = value.strip();
         if (name.isBlank() || name.codePoints().anyMatch(Character::isISOControl)) {
@@ -107,7 +112,8 @@ public class GroupService {
 
     private GroupMemberResponse toMember(GroupMember member) {
         return new GroupMemberResponse(
-                member.userId(), member.nickname(), member.avatar(), member.role(), member.joinedAt());
+                member.userId(), member.nickname(), member.avatar(), member.role(),
+                member.joinedAt());
     }
 
     private GroupException invalid(String message) {
