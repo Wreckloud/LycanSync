@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, reactive, ref, watch } from 'vue';
 import { Activity, AudioLines, ChevronDown, ChevronLeft, ChevronRight, Copy, CornerUpLeft, Gamepad2, HeadphoneOff, Headphones,
-  LogOut, Mic, MicOff, Minus, MonitorUp, Plus, RadioTower,
+  LogOut, MicOff, Minus, MonitorUp, Plus, RadioTower,
   SlidersHorizontal, Square, UserRound, UsersRound, Volume2, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
 import ParticipantCard from './components/ParticipantCard.vue';
+import VoiceLevelMic from './components/VoiceLevelMic.vue';
 import MediaDiagnostics from './components/MediaDiagnostics.vue';
 import RemoteAudio from './components/RemoteAudio.vue';
 import IconButton from './components/IconButton.vue';
@@ -317,6 +318,11 @@ const joinedGroup = computed(() => groups.value.find((group) => group.id === joi
 const callbarGroup = computed(() => joinedGroup.value ?? groups.value.find((group) => group.id === departingGroupId.value) ?? null);
 const pendingSwitchGroup = computed(() => groups.value.find((group) => group.id === pendingSwitchGroupId.value) ?? null);
 const localParticipant = computed(() => rtc.room?.localParticipant);
+const localMicrophoneLevel = computed(() => {
+  void rtc.revision;
+  const participant = localParticipant.value;
+  return participant?.isMicrophoneEnabled && participant.isSpeaking ? participant.audioLevel : 0;
+});
 const connected = computed(() => rtc.status === 'connected');
 const showingJoinedGroup = computed(() => joinedGroupId.value !== null && selectedGroupId.value === joinedGroupId.value);
 const roomSummary = useRoomSummary(selectedGroupId, computed(() => !showingJoinedGroup.value),
@@ -729,7 +735,7 @@ function participantListening(participant: Participant) {
               <IconButton v-if="joinedGroup && selectedGroupId !== joinedGroup.id" label="返回当前通话群组" @click="previewGroup(joinedGroup.id)"><CornerUpLeft :size="17" /></IconButton>
               <IconButton :label="localParticipant?.isMicrophoneEnabled ? '关闭麦克风' : '开启麦克风'" :class="{ 'is-off': !localParticipant?.isMicrophoneEnabled }"
                 :disabled="!connected || rtc.busySources.includes(Track.Source.Microphone)" @click="toggleMicrophone">
-                <Mic v-if="localParticipant?.isMicrophoneEnabled" :size="17" /><MicOff v-else :size="17" />
+                <VoiceLevelMic v-if="localParticipant?.isMicrophoneEnabled" :size="17" :level="localMicrophoneLevel" /><MicOff v-else :size="17" />
               </IconButton>
               <IconButton :label="rtc.needsAudioPlayback ? '允许播放声音' : listening ? '停止接收声音' : '恢复接收声音'"
                 :class="{ 'is-active': listening, 'is-off': !listening }" :disabled="!connected || rtc.busySources.includes(Track.Source.Microphone)" @click="toggleListening">

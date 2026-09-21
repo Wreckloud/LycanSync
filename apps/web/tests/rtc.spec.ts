@@ -168,6 +168,8 @@ test('未共享时显示群成员头像，停止共享后恢复头像', async ({
   setTestAvatar(context, avatar);
   await installSyntheticMedia(context);
   await join(page, '头像测试');
+  await expect(page.getByRole('button', { name: '关闭麦克风', exact: true }).locator('.voice-level-mic')).toHaveCount(1);
+  await expect(page.getByTestId('participant-card').locator('.voice-level-mic')).toHaveCount(1);
   await expect(page.getByTestId('participant-card').locator('.large-avatar img')).toHaveAttribute('src', avatar);
   await page.getByRole('button', { name: '开始屏幕共享' }).click();
   await expect(page.getByTestId('viewer-screen')).toBeVisible();

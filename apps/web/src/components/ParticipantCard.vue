@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { Focus, Fullscreen, HeadphoneOff, Headphones, Mic, MicOff, Minimize2, Monitor, PictureInPicture2 } from '@lucide/vue';
+import { Focus, Fullscreen, HeadphoneOff, Headphones, MicOff, Minimize2, Monitor, PictureInPicture2 } from '@lucide/vue';
 import { Track, type Participant } from 'livekit-client';
+import VoiceLevelMic from './VoiceLevelMic.vue';
 
 const props = withDefaults(defineProps<{
   participant: Participant;
@@ -25,6 +26,7 @@ const media = computed(() => {
     muted: publication?.isMuted,
     sharing: props.participant.isScreenShareEnabled,
     speaking: props.participant.isSpeaking,
+    audioLevel: props.participant.isSpeaking ? props.participant.audioLevel : 0,
     microphone: props.participant.isMicrophoneEnabled,
     name: props.participant.name || props.participant.identity,
   };
@@ -111,7 +113,7 @@ function selectFromKeyboard(event: KeyboardEvent) {
           data-tooltip="画中画" :disabled="!media.track || media.muted || !pictureInPictureAvailable" @click="openPictureInPicture"><PictureInPicture2 :size="16" aria-hidden="true" /></button>
       </span>
       <span class="participant-state" :class="{ 'is-off': !media.microphone }" :aria-label="media.microphone ? '麦克风已开启' : '麦克风已关闭'">
-        <Mic v-if="media.microphone" :size="14" /><MicOff v-else :size="14" />
+        <VoiceLevelMic v-if="media.microphone" :size="14" :level="media.audioLevel" /><MicOff v-else :size="14" />
       </span>
       <span class="participant-state" :class="{ 'is-off': isListening === false }"
         :aria-label="isListening === null ? '收听状态尚未同步' : isListening ? '正在接收声音' : '已停止接收声音'">
