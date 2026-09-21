@@ -24,7 +24,8 @@ const emit = defineEmits<{ profile: [] }>();
 
 const STATUS_LABELS = { idle: '未加入语音', joining: '正在连接', connected: '语音已连接', reconnecting: '正在重连' };
 const CALLBAR_EXIT_DURATION_MS = 180;
-const GROUP_REFRESH_INTERVAL_MS = 15_000;
+const GROUP_LIST_REFRESH_INTERVAL_MS = 30_000;
+const GROUP_REALTIME_REFRESH_INTERVAL_MS = 15_000;
 const PRESENCE_HEARTBEAT_INTERVAL_MS = 30_000;
 const PRESENCE_IDLE_TIMEOUT_MS = 5 * 60_000;
 const PRESENCE_IDLE_CHECK_INTERVAL_MS = 15_000;
@@ -183,7 +184,7 @@ async function loadGroup(groupId: string, keepExisting = false) {
   }
 }
 
-async function refreshGroups(refreshDetail = true) {
+async function refreshGroups(refreshDetail = true, refreshOccupancy = true) {
   listRequest?.abort();
   const request = new AbortController();
   listRequest = request;
@@ -191,8 +192,8 @@ async function refreshGroups(refreshDetail = true) {
     const result = await findGroups(request.signal);
     if (request.signal.aborted) return;
     groups.value = result;
-    if (result.length > 0) void refreshRoomOccupancies();
-    else {
+    if (result.length > 0 && refreshOccupancy) void refreshRoomOccupancies();
+    else if (result.length === 0) {
       roomOccupancyRequest?.abort();
       roomOccupancies.value = {};
     }
@@ -211,7 +212,8 @@ async function refreshGroups(refreshDetail = true) {
     if (!request.signal.aborted) groupError.value = error instanceof Error ? error.message : '无法读取群组列表';
   }
 }
-let groupRefreshTimer: ReturnType<typeof setInterval> | null = null;
+let groupListRefreshTimer: ReturnType<typeof setInterval> | null = null;
+let groupRealtimeRefreshTimer: ReturnType<typeof setInterval> | null = null;
 let lastActivationRefreshAt = 0;
 function refreshOnActivation() {
   if (document.visibilityState === 'hidden' || Date.now() - lastActivationRefreshAt < 500) return;
@@ -230,12 +232,15 @@ onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange);
   presenceIdleTimer = setInterval(() => void updateOwnPresenceStatus(), PRESENCE_IDLE_CHECK_INTERVAL_MS);
   activityClockTimer = setInterval(() => { activityClock.value = Date.now(); }, ACTIVITY_CLOCK_INTERVAL_MS);
-  groupRefreshTimer = setInterval(() => {
+  groupListRefreshTimer = setInterval(() => {
+    if (document.visibilityState !== 'hidden') void refreshGroups(false, false);
+  }, GROUP_LIST_REFRESH_INTERVAL_MS);
+  groupRealtimeRefreshTimer = setInterval(() => {
     if (document.visibilityState !== 'hidden') {
-      void refreshGroups(false);
+      if (groups.value.length > 0) void refreshRoomOccupancies();
       if (selectedGroupId.value) void refreshGroupPresences(selectedGroupId.value);
     }
-  }, GROUP_REFRESH_INTERVAL_MS);
+  }, GROUP_REALTIME_REFRESH_INTERVAL_MS);
 });
 onScopeDispose(() => {
   window.removeEventListener('focus', refreshOnActivation);
@@ -246,7 +251,8 @@ onScopeDispose(() => {
   stopPresenceHeartbeat();
   if (presenceIdleTimer) clearInterval(presenceIdleTimer);
   if (activityClockTimer) clearInterval(activityClockTimer);
-  if (groupRefreshTimer) clearInterval(groupRefreshTimer);
+  if (groupListRefreshTimer) clearInterval(groupListRefreshTimer);
+  if (groupRealtimeRefreshTimer) clearInterval(groupRealtimeRefreshTimer);
 });
 
 function openEditor() {

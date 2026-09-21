@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onScopeDispose, ref } from 'vue';
 import { MessageSquareText, Plus, Send, X } from '@lucide/vue';
 import type { AuthUser } from '../auth/authApi';
 import { findMessages, sendMessage, type ChatMessage } from '../chat/chatApi';
+import { messagePollDelay } from '../chat/messagePolling';
 import { compressChatImage, prepareOriginalImage } from '../chat/messageImage';
 import type { GroupMember, GroupSummary } from '../group/groupApi';
 import ChatImage from './ChatImage.vue';
@@ -27,8 +28,10 @@ const messageDateFormatter = new Intl.DateTimeFormat('zh-CN', {
   year: 'numeric', month: 'long', day: 'numeric',
 });
 let request: AbortController | null = null;
-let timer: ReturnType<typeof setInterval> | null = null;
-const refreshOnFocus = () => void refresh();
+let timer: ReturnType<typeof setTimeout> | null = null;
+let disposed = false;
+let consecutiveEmptyPolls = 0;
+let lastActivationRefreshAt = 0;
 let atBottom = true;
 
 const members = computed(() => new Map(props.members.map((member) => [member.userId, member])));
@@ -48,9 +51,10 @@ async function scrollToBottom(behavior: ScrollBehavior = 'smooth') {
 function appendMessages(incoming: ChatMessage[], forceScroll = false, behavior: ScrollBehavior = 'smooth') {
   const known = new Set(messages.value.map((message) => message.id));
   const added = incoming.filter((message) => !known.has(message.id));
-  if (!added.length) return;
+  if (!added.length) return 0;
   messages.value = [...messages.value, ...added];
   if (forceScroll || atBottom) void scrollToBottom(behavior);
+  return added.length;
 }
 
 async function refresh(initial = false) {
@@ -59,10 +63,48 @@ async function refresh(initial = false) {
   try {
     const latestId = initial ? undefined : messages.value.at(-1)?.id;
     const page = await findMessages(props.group.id, latestId, request.signal);
-    if (!request.signal.aborted) appendMessages(page.messages, initial, initial ? 'auto' : 'smooth');
+    if (!request.signal.aborted) return appendMessages(page.messages, initial, initial ? 'auto' : 'smooth');
   } catch (reason) {
-    if (!request.signal.aborted) error.value = reason instanceof Error ? reason.message : '无法读取群聊消息';
+    if (request.signal.aborted) return null;
+    error.value = reason instanceof Error ? reason.message : '无法读取群聊消息';
+    return 0;
   }
+  return null;
+}
+
+function clearRefreshTimer() {
+  if (timer) clearTimeout(timer);
+  timer = null;
+}
+
+function scheduleRefresh() {
+  clearRefreshTimer();
+  if (disposed || document.visibilityState === 'hidden') return;
+  timer = setTimeout(() => void pollMessages(), messagePollDelay(consecutiveEmptyPolls));
+}
+
+async function pollMessages(initial = false) {
+  clearRefreshTimer();
+  const added = await refresh(initial);
+  if (added === null || disposed || document.visibilityState === 'hidden') return;
+  consecutiveEmptyPolls = initial || added > 0 ? 0 : consecutiveEmptyPolls + 1;
+  scheduleRefresh();
+}
+
+function refreshOnActivation() {
+  if (document.visibilityState === 'hidden' || Date.now() - lastActivationRefreshAt < 500) return;
+  lastActivationRefreshAt = Date.now();
+  consecutiveEmptyPolls = 0;
+  void pollMessages();
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'hidden') {
+    clearRefreshTimer();
+    request?.abort();
+    return;
+  }
+  refreshOnActivation();
 }
 
 async function assignImage(file: File, mode: 'optimized' | 'original') {
@@ -136,6 +178,8 @@ async function submit() {
     removeImage();
     if (messageInput.value) messageInput.value.style.height = '42px';
     appendMessages([message], true);
+    consecutiveEmptyPolls = 0;
+    scheduleRefresh();
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '消息发送失败';
   } finally {
@@ -206,16 +250,16 @@ function onScroll() {
 }
 
 onMounted(() => {
-  void refresh(true);
-  timer = setInterval(() => {
-    if (document.visibilityState !== 'hidden') void refresh();
-  }, 2000);
-  window.addEventListener('focus', refreshOnFocus);
+  void pollMessages(true);
+  window.addEventListener('focus', refreshOnActivation);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
 });
 onScopeDispose(() => {
+  disposed = true;
   request?.abort();
-  if (timer) clearInterval(timer);
-  window.removeEventListener('focus', refreshOnFocus);
+  clearRefreshTimer();
+  window.removeEventListener('focus', refreshOnActivation);
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
   if (imagePreview.value) URL.revokeObjectURL(imagePreview.value);
 });
 </script>

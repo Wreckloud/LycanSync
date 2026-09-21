@@ -141,7 +141,7 @@ test('启动、窗口激活和成员变化时自动更新群组，无需刷新�
   await expect(page.locator('.group-member-name').first()).toHaveCSS('font-size', '15px');
   memberCount = 3;
   members.push({ userId: '4e602970-b857-431e-8b44-0aa92818c887', nickname: '新朋友', avatar: '', role: 'MEMBER', joinedAt: '2026-09-13T00:00:00Z' });
-  await page.clock.fastForward(15_000);
+  await page.clock.fastForward(30_000);
   await expect(page.locator('.group-member-row')).toHaveCount(3);
   members[1].nickname = '新昵称';
   await page.clock.fastForward(600);
