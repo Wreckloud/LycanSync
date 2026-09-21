@@ -17,6 +17,10 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
       senderNickname: user.nickname, type: 'TEXT', content: '第一天', createdAt: '2026-09-13T04:00:00Z', attachment: null },
     { id: '9350a7c7-5391-44f8-8b26-27f548c88793', senderUserId: user.id,
       senderNickname: user.nickname, type: 'TEXT', content: '第二天', createdAt: '2026-09-14T04:00:00Z', attachment: null },
+    { id: '6ec8f0bc-3be7-4529-968f-a498f035f984', senderUserId: user.id,
+      senderNickname: user.nickname, type: 'TEXT', content: '连续消息', createdAt: '2026-09-14T04:02:00Z', attachment: null },
+    { id: 'f6c5ae06-c726-47d5-a4ed-96f73cd20899', senderUserId: user.id,
+      senderNickname: user.nickname, type: 'TEXT', content: '间隔后的消息', createdAt: '2026-09-14T04:08:00Z', attachment: null },
   ];
   await page.addInitScript(() => {
     Object.defineProperty(window, 'lycanDesktop', { value: {
@@ -68,6 +72,9 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
   await composer.press('Enter');
   await expect(page.locator('.chat-message-content').last()).toHaveText('晚上见 https://example.com/docs。');
   await expect(page.locator('.chat-date-divider')).toHaveText(['2026年9月13日', '2026年9月14日']);
+  await expect(page.locator('.chat-message-meta')).toHaveCount(4);
+  await expect(page.locator('.chat-message.is-grouped')).toHaveCount(1);
+  await expect(page.locator('.chat-message-meta time').nth(1)).toHaveText('9月14日 12:00');
   const link = page.getByRole('link', { name: 'https://example.com/docs' });
   await expect(link).toHaveAttribute('href', 'https://example.com/docs');
   await link.click();

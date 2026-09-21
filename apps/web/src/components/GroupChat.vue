@@ -27,6 +27,7 @@ const messageTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
 const messageDateFormatter = new Intl.DateTimeFormat('zh-CN', {
   year: 'numeric', month: 'long', day: 'numeric',
 });
+const MESSAGE_GROUP_MAX_GAP_MS = 5 * 60_000;
 let request: AbortController | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let disposed = false;
@@ -196,7 +197,13 @@ function senderAvatar(message: ChatMessage) {
 }
 
 function formatTime(value: string) {
-  return messageTimeFormatter.format(new Date(value));
+  const date = new Date(value);
+  const now = new Date();
+  const time = messageTimeFormatter.format(date);
+  if (localDateKey(value) === localDateKey(now.toISOString())) return time;
+  const dateLabel = `${date.getMonth() + 1}月${date.getDate()}日`;
+  return date.getFullYear() === now.getFullYear() ? `${dateLabel} ${time}`
+    : `${date.getFullYear()}年${dateLabel} ${time}`;
 }
 
 function localDateKey(value: string) {
@@ -206,6 +213,13 @@ function localDateKey(value: string) {
 
 function startsNewDate(message: ChatMessage, index: number) {
   return index === 0 || localDateKey(messages.value[index - 1].createdAt) !== localDateKey(message.createdAt);
+}
+
+function startsNewMessageGroup(message: ChatMessage, index: number) {
+  if (startsNewDate(message, index)) return true;
+  const previous = messages.value[index - 1];
+  const gap = Date.parse(message.createdAt) - Date.parse(previous.createdAt);
+  return previous.senderUserId !== message.senderUserId || gap < 0 || gap > MESSAGE_GROUP_MAX_GAP_MS;
 }
 
 function formatDate(value: string) {
@@ -270,11 +284,14 @@ onScopeDispose(() => {
     <div ref="list" class="message-list" @scroll="onScroll">
       <template v-for="(message, index) in messages" :key="message.id">
         <div v-if="startsNewDate(message, index)" class="chat-date-divider"><span>{{ formatDate(message.createdAt) }}</span></div>
-        <article class="chat-message" :class="{ 'is-own': message.senderUserId === user.id }">
-          <img v-if="senderAvatar(message)" class="chat-message-avatar" :src="senderAvatar(message)" alt="" />
-          <span v-else class="chat-message-avatar chat-message-initial">{{ senderName(message).slice(0, 1) }}</span>
+        <article class="chat-message" :class="{ 'is-own': message.senderUserId === user.id, 'is-grouped': !startsNewMessageGroup(message, index) }">
+          <template v-if="startsNewMessageGroup(message, index)">
+            <img v-if="senderAvatar(message)" class="chat-message-avatar" :src="senderAvatar(message)" alt="" />
+            <span v-else class="chat-message-avatar chat-message-initial">{{ senderName(message).slice(0, 1) }}</span>
+          </template>
+          <span v-else class="chat-message-avatar-placeholder" aria-hidden="true" />
           <div class="chat-message-body">
-            <div class="chat-message-meta"><strong>{{ senderName(message) }}</strong><time>{{ formatTime(message.createdAt) }}</time></div>
+            <div v-if="startsNewMessageGroup(message, index)" class="chat-message-meta"><strong>{{ senderName(message) }}</strong><time>{{ formatTime(message.createdAt) }}</time></div>
             <p v-if="message.content" class="chat-message-content"><template v-for="(segment, segmentIndex) in messageSegments(message.content)" :key="segmentIndex"><a v-if="segment.href" class="chat-message-link" :href="segment.href" @click.prevent="openLink(segment.href)">{{ segment.text }}</a><template v-else>{{ segment.text }}</template></template></p>
             <ChatImage v-if="message.attachment" :group-id="group.id" :attachment-id="message.attachment.id" :alt="`${senderName(message)} 发送的图片`" />
           </div>

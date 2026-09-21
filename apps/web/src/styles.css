@@ -796,7 +796,9 @@ button:focus-visible, input:focus-visible {
 .chat-date-divider::before, .chat-date-divider::after { content: ""; height: 1px; flex: 1; background: var(--border-soft); }
 
 .chat-message { display: flex; gap: 9px; }
+.chat-message.is-grouped { margin-top: -9px; }
 .chat-message-avatar { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 50%; object-fit: cover; }
+.chat-message-avatar-placeholder { width: 32px; flex: 0 0 32px; }
 .chat-message-initial { display: grid; place-items: center; background: var(--panel); border: 1px solid var(--border); color: var(--muted); }
 .chat-message-body { min-width: 0; }
 .chat-message-meta { display: flex; align-items: center; gap: 9px; }
