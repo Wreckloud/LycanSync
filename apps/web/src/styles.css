@@ -758,7 +758,7 @@ button:focus-visible, input:focus-visible {
   place-items: center;
 }
 
-.participant-audio-toggle {
+.participant-state-button {
   padding: 0;
   border: 0;
   background: transparent;

@@ -168,15 +168,28 @@ test('未共享时显示群成员头像，停止共享后恢复头像', async ({
   setTestAvatar(context, avatar);
   await installSyntheticMedia(context);
   await join(page, '头像测试');
-  await expect(page.getByRole('button', { name: '关闭麦克风', exact: true }).locator('.voice-level-mic')).toHaveCount(1);
-  await expect(page.getByTestId('participant-card').locator('.voice-level-mic')).toHaveCount(1);
-  await expect(page.getByTestId('participant-card').locator('.large-avatar img')).toHaveAttribute('src', avatar);
+  const callbar = page.getByTestId('callbar');
+  const localCard = page.getByTestId('participant-card');
+  await expect(callbar.getByRole('button', { name: '关闭麦克风', exact: true }).locator('.voice-level-mic')).toHaveCount(1);
+  await expect(localCard.locator('.voice-level-mic')).toHaveCount(1);
+  await expect(localCard.locator('.voice-level-fill')).toHaveAttribute('width', '6');
+  await expect(localCard.locator('.voice-level-fill')).toHaveCSS('transition-duration', '0s');
+  await expect(callbar.getByRole('button', { name: '停止接收声音', exact: true })).not.toHaveClass(/is-active/);
+  await localCard.getByRole('button', { name: '关闭自己的麦克风' }).click();
+  await expect(callbar.getByRole('button', { name: '开启麦克风', exact: true })).toBeEnabled();
+  await localCard.getByRole('button', { name: '开启自己的麦克风' }).click();
+  await expect(callbar.getByRole('button', { name: '关闭麦克风', exact: true })).toBeEnabled();
+  await localCard.getByRole('button', { name: '停止接收所有成员声音' }).click();
+  await expect(callbar.getByRole('button', { name: '恢复接收声音', exact: true })).toBeEnabled();
+  await localCard.getByRole('button', { name: '恢复接收所有成员声音' }).click();
+  await expect(callbar.getByRole('button', { name: '停止接收声音', exact: true })).toBeEnabled();
+  await expect(localCard.locator('.large-avatar img')).toHaveAttribute('src', avatar);
   await page.getByRole('button', { name: '开始屏幕共享' }).click();
   await expect(page.getByTestId('viewer-screen')).toBeVisible();
   await expectStageFits(page);
   await expect(page.locator('video')).toHaveCount(1);
   await page.getByRole('button', { name: '停止屏幕共享' }).click();
-  await expect(page.getByTestId('participant-card').locator('.large-avatar img')).toHaveAttribute('src', avatar);
+  await expect(localCard.locator('.large-avatar img')).toHaveAttribute('src', avatar);
 });
 
 test('单击只预览；入房接口未启用时明确提示', async ({ page }) => {

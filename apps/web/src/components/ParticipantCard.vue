@@ -21,6 +21,8 @@ const emit = defineEmits<{
   notice: [message: string];
   toggleAudio: [];
   volumeChange: [volume: number];
+  toggleMicrophone: [];
+  toggleListening: [];
 }>();
 const videoElement = ref<HTMLVideoElement | null>(null);
 
@@ -124,12 +126,13 @@ function selectFromKeyboard(event: KeyboardEvent) {
         <button type="button" class="viewer-action" :aria-label="'画中画观看' + media.name + '的共享画面'"
           data-tooltip="画中画" :disabled="!media.track || media.muted || !pictureInPictureAvailable" @click="openPictureInPicture"><PictureInPicture2 :size="16" aria-hidden="true" /></button>
       </span>
-      <span v-if="isLocal" class="participant-state" :class="{ 'is-off': !media.microphone }"
-        :aria-label="media.microphone ? '麦克风已开启' : '麦克风已关闭'">
+      <button v-if="isLocal" type="button" class="participant-state participant-state-button"
+        :class="{ 'is-off': !media.microphone }" :aria-label="media.microphone ? '关闭自己的麦克风' : '开启自己的麦克风'"
+        @click="emit('toggleMicrophone')">
         <VoiceLevelMic v-if="media.microphone" :size="14" :level="media.speaking ? 1 : 0" :steps="1" /><MicOff v-else :size="14" />
-      </span>
+      </button>
       <span v-else class="participant-volume-control">
-        <button type="button" class="participant-state participant-audio-toggle"
+        <button type="button" class="participant-state participant-state-button"
           :class="{ 'is-off': !media.microphone || playbackVolume === 0 }" :aria-label="remoteAudioLabel"
           @click="emit('toggleAudio')">
           <VoiceLevelMic v-if="media.microphone && playbackVolume > 0" :size="14" :level="media.speaking ? 1 : 0" :steps="1" />
@@ -142,7 +145,12 @@ function selectFromKeyboard(event: KeyboardEvent) {
           <span>{{ playbackPercent }}%</span>
         </span>
       </span>
-      <span class="participant-state" :class="{ 'is-off': isListening === false }"
+      <button v-if="isLocal" type="button" class="participant-state participant-state-button"
+        :class="{ 'is-off': isListening === false }"
+        :aria-label="isListening ? '停止接收所有成员声音' : '恢复接收所有成员声音'" @click="emit('toggleListening')">
+        <HeadphoneOff v-if="isListening === false" :size="14" /><Headphones v-else :size="14" />
+      </button>
+      <span v-else class="participant-state" :class="{ 'is-off': isListening === false }"
         :aria-label="isListening === null ? '收听状态尚未同步' : isListening ? '正在接收声音' : '已停止接收声音'">
         <HeadphoneOff v-if="isListening === false" :size="14" /><Headphones v-else :size="14" />
       </span>

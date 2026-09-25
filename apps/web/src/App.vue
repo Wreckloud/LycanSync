@@ -698,13 +698,15 @@ function participantListening(participant: Participant) {
               :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)"
               :playback-volume="participantVolume(participant.identity)" variant="viewer" :focused="focusedOnSelectedGroup"
               @focus="toggleFocusedParticipant(participant.identity)" @notice="viewerNotice = $event"
-              @toggle-audio="toggleParticipantAudio(participant.identity)" @volume-change="updateParticipantVolume(participant.identity, $event)" />
+              @toggle-audio="toggleParticipantAudio(participant.identity)" @volume-change="updateParticipantVolume(participant.identity, $event)"
+              @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />
           </div>
           <div v-else class="participant-grid">
             <ParticipantCard v-for="participant in groupParticipants" :key="participant.identity" :participant="participant"
               :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)"
               :playback-volume="participantVolume(participant.identity)" @select="toggleEnlargedParticipant(participant.identity)"
-              @toggle-audio="toggleParticipantAudio(participant.identity)" @volume-change="updateParticipantVolume(participant.identity, $event)" />
+              @toggle-audio="toggleParticipantAudio(participant.identity)" @volume-change="updateParticipantVolume(participant.identity, $event)"
+              @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />
           </div>
           <div v-if="hasStage && !focusedOnSelectedGroup" class="member-strip-divider">
             <button type="button" :aria-label="membersExpanded ? '收起其他成员' : '展开其他成员'"
@@ -720,7 +722,8 @@ function participantListening(participant: Participant) {
                   :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)"
                   :playback-volume="participantVolume(participant.identity)" variant="thumbnail" :selected="enlargedIdentities.includes(participant.identity)"
                   @select="toggleEnlargedParticipant(participant.identity)" @toggle-audio="toggleParticipantAudio(participant.identity)"
-                  @volume-change="updateParticipantVolume(participant.identity, $event)" />
+                  @volume-change="updateParticipantVolume(participant.identity, $event)" @toggle-microphone="toggleMicrophone"
+                  @toggle-listening="toggleListening" />
               </div>
               <button v-if="filmstripPageCount > 1" type="button" class="filmstrip-page-button" aria-label="下一页成员" :disabled="filmstripPage >= filmstripPageCount - 1" @click="filmstripPage++"><ChevronRight :size="17" /></button>
             </div>
@@ -743,7 +746,7 @@ function participantListening(participant: Participant) {
                 <VoiceLevelMic v-if="localParticipant?.isMicrophoneEnabled" :size="17" :level="localMicrophoneLevel" /><MicOff v-else :size="17" />
               </IconButton>
               <IconButton :label="rtc.needsAudioPlayback ? '允许播放声音' : listening ? '停止接收声音' : '恢复接收声音'"
-                :class="{ 'is-active': listening, 'is-off': !listening }" :disabled="!connected || rtc.busySources.includes(Track.Source.Microphone)" @click="toggleListening">
+                :class="{ 'is-off': !listening }" :disabled="!connected || rtc.busySources.includes(Track.Source.Microphone)" @click="toggleListening">
                 <Headphones v-if="listening" :size="17" /><HeadphoneOff v-else :size="17" />
               </IconButton>
               <IconButton :label="localParticipant?.isScreenShareEnabled ? '停止屏幕共享' : screenShareLimitReached ? '屏幕共享已达到 8 路上限' : '开始屏幕共享'"
