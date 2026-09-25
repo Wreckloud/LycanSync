@@ -1,16 +1,40 @@
 import { markRaw, onScopeDispose, ref, shallowRef } from 'vue';
 import {
-  ConnectionState, DisconnectReason, Room, RoomEvent, Track, VideoPreset, supportsAV1,
+  ConnectionState, DisconnectReason, LocalAudioTrack, Room, RoomEvent, Track, VideoPreset, supportsAV1,
   type VideoCodec,
-  type LocalTrack, type Participant,
+  type LocalTrack, type Participant, type RemoteParticipant,
 } from 'livekit-client';
 import { requestRtcToken, TokenRequestError } from './tokenApi';
+import { DEFAULT_AUDIO_PREFERENCES, normalizeAudioVolume, unappliedCaptureProcessing,
+  type AudioProcessingSettings } from './audioPreferences';
+import { ENTRANCE_SOUND_MAX_BYTES, ENTRANCE_SOUND_TOPIC, isSupportedEntranceSoundType } from './entranceSound';
+import { MicrophoneAudioProcessor } from './microphoneAudioProcessor';
 
 type RoomStatus = 'idle' | 'joining' | 'connected' | 'reconnecting';
 type MediaSource = Track.Source.Microphone | Track.Source.ScreenShare;
 // 单路游戏共享的目标上限：12Mbps 只是“视觉近似无损”的起始码率，不保证实际恒定，也不保证无损。
 const SCREEN_SHARE_PRESET = new VideoPreset(1920, 1080, 12_000_000, 60, 'medium');
 const SPEAKER_REFRESH_INTERVAL_MS = 120;
+const ENTRANCE_SOUND_RECEIVE_TIMEOUT_MS = 8_000;
+const PROCESSING_RESTART_NOTICE = '部分音频处理设置需要重新开麦后生效。';
+const PROCESSING_UNSUPPORTED_NOTICE = '当前麦克风设备不支持动态切换这项音频处理，请重新开麦后生效。';
+
+interface RtcRoomEvents {
+  participantJoined?(identity: string): void;
+  participantLeft?(identity: string): void;
+  participantEntrancePending?(identity: string): void;
+  participantEntranceFailed?(identity: string): void;
+  participantEntranceSound?(identity: string, bytes: Uint8Array): void;
+  screenShareStarted?(): void;
+  screenShareStopped?(): void;
+  disconnected?(): void;
+}
+
+interface RtcRoomOptions {
+  inputGain: number;
+  processing: AudioProcessingSettings;
+  events?: RtcRoomEvents;
+}
 
 function preferredVideoCodec(): VideoCodec {
   try {
@@ -33,8 +57,8 @@ function captureErrorMessage(error: unknown, source: MediaSource): string {
   return `${label}操作失败，请检查设备、浏览器权限和 LiveKit 连接。`;
 }
 
-/** 管理一次临时入房及其媒体生命周期；不保存账号或入房凭证。 */
-export function useRtcRoom() {
+/** LiveKit 浏览器回退链路：集中管理入房、采集、发布和释放，不保存账号或入房凭证。 */
+export function useRtcRoom(options?: RtcRoomOptions) {
   const revision = ref(0);
   const activeRoom = shallowRef<Room | null>(null);
   const pendingJoin = shallowRef<AbortController | null>(null);
@@ -48,6 +72,17 @@ export function useRtcRoom() {
   const busySources = ref<MediaSource[]>([]);
   const screenShareActive = ref(false);
   const screenShareSelectionCancelled = ref(false);
+  const remoteAudioSubscriptions = new Map<string, boolean>();
+  let microphoneInputGain = normalizeAudioVolume(options?.inputGain ?? DEFAULT_AUDIO_PREFERENCES.inputGain);
+  let microphoneProcessing: AudioProcessingSettings = options?.processing
+    ? { ...options.processing }
+    : {
+        echoCancellation: DEFAULT_AUDIO_PREFERENCES.echoCancellation,
+        noiseSuppression: DEFAULT_AUDIO_PREFERENCES.noiseSuppression,
+        autoGainControl: DEFAULT_AUDIO_PREFERENCES.autoGainControl,
+        voiceEnhancement: DEFAULT_AUDIO_PREFERENCES.voiceEnhancement,
+      };
+  let microphoneProcessor: MicrophoneAudioProcessor | null = null;
   let speakerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
   function clearSpeakerRefreshTimer() {
@@ -89,9 +124,9 @@ export function useRtcRoom() {
         // 远端成员可在本机单独放大到 200%；统一由一个 AudioContext 混音，避免额外音频管线。
         webAudioMix: true,
         audioCaptureDefaults: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
+          echoCancellation: microphoneProcessing.echoCancellation,
+          noiseSuppression: microphoneProcessing.noiseSuppression,
+          autoGainControl: microphoneProcessing.autoGainControl,
         },
         publishDefaults: {
           // 优先使用客户端可协商的 AV1，否则回退 H.264；实际硬件编码状态由媒体诊断确认。
@@ -107,8 +142,17 @@ export function useRtcRoom() {
       const currentRoom = joiningRoom;
       activeRoom.value = currentRoom;
       room.value = currentRoom;
+      let remoteEventsEnabled = false;
+      const receivedEntranceSounds = new Set<string>();
 
       // 3. SDK 实例保持原样；事件更新数组与版本，驱动 Vue 重读成员和轨道状态。
+      const applyRemoteAudioSubscription = (participant: RemoteParticipant) => {
+        const subscribed = remoteAudioSubscriptions.get(participant.identity);
+        const publication = participant.getTrackPublication(Track.Source.Microphone);
+        if (subscribed !== undefined && publication && publication.isDesired !== subscribed) {
+          publication.setSubscribed(subscribed);
+        }
+      };
       const refresh = () => {
         if (activeRoom.value !== currentRoom) return;
         revision.value++;
@@ -124,14 +168,74 @@ export function useRtcRoom() {
         }, SPEAKER_REFRESH_INTERVAL_MS);
       };
       [
-        RoomEvent.ParticipantConnected, RoomEvent.ParticipantDisconnected,
-        RoomEvent.TrackPublished, RoomEvent.TrackUnpublished,
         RoomEvent.TrackSubscribed, RoomEvent.TrackUnsubscribed,
-        RoomEvent.LocalTrackPublished, RoomEvent.LocalTrackUnpublished,
         RoomEvent.TrackMuted, RoomEvent.TrackUnmuted,
         RoomEvent.ParticipantAttributesChanged,
         RoomEvent.AudioPlaybackStatusChanged,
       ].forEach((event) => currentRoom.on(event, refresh));
+      currentRoom.on(RoomEvent.ParticipantConnected, (participant) => {
+        if (remoteEventsEnabled) options?.events?.participantJoined?.(participant.identity);
+        refresh();
+      });
+      currentRoom.on(RoomEvent.ParticipantDisconnected, (participant) => {
+        receivedEntranceSounds.delete(participant.identity);
+        if (remoteEventsEnabled) options?.events?.participantLeft?.(participant.identity);
+        refresh();
+      });
+      currentRoom.on(RoomEvent.TrackPublished, (publication, participant) => {
+        applyRemoteAudioSubscription(participant);
+        if (remoteEventsEnabled && publication.source === Track.Source.ScreenShare) {
+          options?.events?.screenShareStarted?.();
+        }
+        refresh();
+      });
+      currentRoom.on(RoomEvent.LocalTrackPublished, (publication) => {
+        if (publication.source === Track.Source.ScreenShare) options?.events?.screenShareStarted?.();
+        refresh();
+      });
+      currentRoom.on(RoomEvent.TrackUnpublished, (publication) => {
+        if (remoteEventsEnabled && publication.source === Track.Source.ScreenShare) {
+          options?.events?.screenShareStopped?.();
+        }
+        refresh();
+      });
+      currentRoom.on(RoomEvent.LocalTrackUnpublished, (publication) => {
+        if (publication.source === Track.Source.ScreenShare) options?.events?.screenShareStopped?.();
+        refresh();
+      });
+      currentRoom.registerByteStreamHandler(ENTRANCE_SOUND_TOPIC, async (reader, participantInfo) => {
+        const identity = participantInfo.identity;
+        if (!remoteEventsEnabled || receivedEntranceSounds.has(identity)
+          || !isSupportedEntranceSoundType(reader.info.mimeType)
+          || typeof reader.info.size !== 'number' || reader.info.size <= 0
+          || reader.info.size > ENTRANCE_SOUND_MAX_BYTES) return;
+        receivedEntranceSounds.add(identity);
+        options?.events?.participantEntrancePending?.(identity);
+        try {
+          const chunks: Uint8Array[] = [];
+          let receivedBytes = 0;
+          for await (const chunk of reader.withAbortSignal(AbortSignal.timeout(ENTRANCE_SOUND_RECEIVE_TIMEOUT_MS))) {
+            receivedBytes += chunk.byteLength;
+            if (receivedBytes > ENTRANCE_SOUND_MAX_BYTES) throw new Error('entrance sound exceeds limit');
+            chunks.push(chunk);
+          }
+          if (receivedBytes <= 0) {
+            options?.events?.participantEntranceFailed?.(identity);
+            return;
+          }
+          const bytes = new Uint8Array(receivedBytes);
+          let offset = 0;
+          chunks.forEach((chunk) => {
+            bytes.set(chunk, offset);
+            offset += chunk.byteLength;
+          });
+          if (activeRoom.value === currentRoom && currentRoom.remoteParticipants.has(identity)) {
+            options?.events?.participantEntranceSound?.(identity, bytes);
+          }
+        } catch {
+          options?.events?.participantEntranceFailed?.(identity);
+        }
+      });
       // 发言状态变化可能很频繁，节流只影响 UI 指示，不影响音频传输。
       currentRoom.on(RoomEvent.ActiveSpeakersChanged, scheduleSpeakerRefresh);
       currentRoom.on(RoomEvent.ConnectionStateChanged, (connectionState) => {
@@ -143,6 +247,7 @@ export function useRtcRoom() {
       });
       currentRoom.on(RoomEvent.Disconnected, (reason) => {
         if (activeRoom.value !== currentRoom) return;
+        options?.events?.disconnected?.();
         leave();
         notice.value = reason === DisconnectReason.DUPLICATE_IDENTITY
           ? '语音已在另一台设备连接。' : '已与房间断开连接，请确认 LiveKit 正常运行后重新加入。';
@@ -154,8 +259,10 @@ export function useRtcRoom() {
         await currentRoom.disconnect();
         return false;
       }
+      currentRoom.remoteParticipants.forEach(applyRemoteAudioSubscription);
       refresh();
       status.value = 'connected';
+      remoteEventsEnabled = true;
 
       // 5. 明确加入语音后默认开麦；权限失败只保持关麦，不退出已经建立的语音会话。
       await setMediaEnabled(Track.Source.Microphone, true);
@@ -188,6 +295,7 @@ export function useRtcRoom() {
     busySources.value = [];
     screenShareActive.value = false;
     screenShareSelectionCancelled.value = false;
+    microphoneProcessor = null;
     room.value = null;
     participants.value = [];
     status.value = 'idle';
@@ -214,19 +322,35 @@ export function useRtcRoom() {
       const existingTrack = participant.getTrackPublication(source)?.track;
       if (!enabled) {
         if (existingTrack) await participant.unpublishTrack(existingTrack, true);
+        if (source === Track.Source.Microphone) microphoneProcessor = null;
         return;
       }
       if (existingTrack) return;
 
       // 2. 用户点击后才请求采集；首版屏幕只要视频，不请求系统音频。
       // TODO: 桌面端验证游戏窗口采集与可选游戏音频，区分麦克风和共享音频的音量控制。
-      capturedTracks = source === Track.Source.Microphone
-        ? await participant.createTracks({ audio: true, video: false })
-        : await participant.createScreenTracks({
+      if (source === Track.Source.Microphone) {
+        const processor = new MicrophoneAudioProcessor(microphoneInputGain, microphoneProcessing.voiceEnhancement);
+        capturedTracks = await participant.createTracks({
+          audio: {
+            echoCancellation: microphoneProcessing.echoCancellation,
+            noiseSuppression: microphoneProcessing.noiseSuppression,
+            autoGainControl: microphoneProcessing.autoGainControl,
+          },
+          video: false,
+        });
+        const audioTrack = capturedTracks.find((track): track is LocalAudioTrack => track instanceof LocalAudioTrack);
+        if (!audioTrack) throw new Error('麦克风采集未返回音频轨道');
+        // LocalParticipant.createTracks 返回后才会给轨道注入房间的 AudioContext，此时接入处理器才可靠。
+        await audioTrack.setProcessor(processor);
+        microphoneProcessor = processor;
+      } else {
+        capturedTracks = await participant.createScreenTracks({
           audio: false,
           contentHint: 'motion',
           resolution: SCREEN_SHARE_PRESET.resolution,
         });
+      }
       // 3. 选择器返回时可能已经离房，必须在发布前检查，不能只在发布后清理。
       if (activeRoom.value !== currentRoom) return;
       capturedTracks.forEach((track) => unpublishedTracks.value.add(track));
@@ -243,6 +367,9 @@ export function useRtcRoom() {
         unpublishedTracks.value.delete(track);
         if (!published || activeRoom.value !== currentRoom) track.stop();
       });
+      if (source === Track.Source.Microphone && (!published || activeRoom.value !== currentRoom)) {
+        microphoneProcessor = null;
+      }
       operations.delete(source);
       if (source === Track.Source.ScreenShare) screenShareSelectionCancelled.value = false;
       if (activeRoom.value === currentRoom) busySources.value = [...operations];
@@ -270,6 +397,59 @@ export function useRtcRoom() {
     }
   }
 
+  function setMicrophoneInputGain(value: number) {
+    microphoneInputGain = normalizeAudioVolume(value);
+    microphoneProcessor?.setInputGain(microphoneInputGain);
+  }
+
+  async function setMicrophoneProcessing(settings: AudioProcessingSettings) {
+    microphoneProcessing = { ...settings };
+    microphoneProcessor?.setVoiceEnhancement(settings.voiceEnhancement);
+    const track = activeRoom.value?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
+    if (!(track instanceof LocalAudioTrack)) return;
+    if (notice.value === PROCESSING_RESTART_NOTICE || notice.value === PROCESSING_UNSUPPORTED_NOTICE) notice.value = '';
+    try {
+      await track.applyConstraints({
+        echoCancellation: settings.echoCancellation,
+        noiseSuppression: settings.noiseSuppression,
+        autoGainControl: settings.autoGainControl,
+      });
+      if (unappliedCaptureProcessing(settings, track.mediaStreamTrack.getSettings()).length > 0
+        && activeRoom.value) {
+        notice.value = PROCESSING_RESTART_NOTICE;
+      }
+    } catch {
+      if (activeRoom.value) notice.value = PROCESSING_UNSUPPORTED_NOTICE;
+    }
+  }
+
+  async function sendEntranceSound(file: File) {
+    const currentRoom = activeRoom.value;
+    if (!currentRoom || currentRoom.state !== ConnectionState.Connected
+      || !isSupportedEntranceSoundType(file.type) || file.size <= 0 || file.size > ENTRANCE_SOUND_MAX_BYTES) return false;
+    const destinationIdentities = [...currentRoom.remoteParticipants.keys()];
+    if (!destinationIdentities.length) return true;
+    try {
+      await currentRoom.localParticipant.sendFile(file, {
+        topic: ENTRANCE_SOUND_TOPIC,
+        mimeType: file.type,
+        destinationIdentities,
+        compress: false,
+      });
+      return activeRoom.value === currentRoom;
+    } catch {
+      if (activeRoom.value === currentRoom) notice.value = '自定义入场音未能发送，其他成员仍会听到默认提示音。';
+      return false;
+    }
+  }
+
+  function setRemoteAudioSubscribed(identity: string, subscribed: boolean) {
+    remoteAudioSubscriptions.set(identity, subscribed);
+    const publication = activeRoom.value?.remoteParticipants.get(identity)
+      ?.getTrackPublication(Track.Source.Microphone);
+    if (publication && publication.isDesired !== subscribed) publication.setSubscribed(subscribed);
+  }
+
   async function toggleMedia(source: MediaSource) {
     const currentRoom = activeRoom.value;
     if (!currentRoom || currentRoom.state !== ConnectionState.Connected) return;
@@ -282,5 +462,7 @@ export function useRtcRoom() {
   }
 
   return { revision, room, status, participants, notice, needsAudioPlayback, busySources, screenShareActive,
-    join, leave, toggleMedia, setMediaEnabled, enableAudioPlayback, updateListeningState, cancelPendingScreenShareSelection };
+    join, leave, toggleMedia, setMediaEnabled, enableAudioPlayback, updateListeningState,
+    setMicrophoneInputGain, setMicrophoneProcessing, setRemoteAudioSubscribed, sendEntranceSound,
+    cancelPendingScreenShareSelection };
 }

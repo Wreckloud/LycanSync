@@ -298,15 +298,17 @@ onScopeDispose(() => {
         </article>
       </template>
     </div>
-    <form class="composer" @submit.prevent="submit">
-      <input ref="fileInput" type="file" hidden accept="image/png,image/jpeg" @change="chooseOriginal" />
-      <button type="button" aria-label="选择原图" :disabled="busy" @click="fileInput?.click()"><Plus :size="16" /></button>
-      <div class="composer-content">
-        <div v-if="image" class="composer-image-preview"><img :src="imagePreview" alt="待发送图片" /><span>{{ imageMode === 'optimized' ? '已压缩' : '原图' }}</span><button type="button" aria-label="移除待发送图片" @click="removeImage"><X :size="13" /></button></div>
-        <textarea ref="messageInput" v-model="text" aria-label="消息内容" maxlength="2000" rows="1" :disabled="busy" placeholder="发送消息" @input="resizeMessageInput" @keydown="handleKeydown" @paste="handlePaste" />
-      </div>
-      <button type="submit" aria-label="发送消息" :disabled="!canSend"><Send :size="15" /></button>
-    </form>
-    <p v-if="error" class="chat-error" role="alert">{{ error }}</p>
+    <div class="composer-shell">
+      <p v-if="error" class="chat-error" role="alert">{{ error }}</p>
+      <form class="composer" @submit.prevent="submit">
+        <input ref="fileInput" type="file" hidden accept="image/png,image/jpeg" @change="chooseOriginal" />
+        <button type="button" aria-label="选择原图" :disabled="busy" @click="fileInput?.click()"><Plus :size="16" /></button>
+        <div class="composer-content">
+          <div v-if="image" class="composer-image-preview"><img :src="imagePreview" alt="待发送图片" /><span>{{ imageMode === 'optimized' ? '已压缩' : '原图' }}</span><button type="button" aria-label="移除待发送图片" @click="removeImage"><X :size="13" /></button></div>
+          <textarea ref="messageInput" v-model="text" aria-label="消息内容" maxlength="2000" rows="1" :disabled="busy" placeholder="发送消息" @input="resizeMessageInput" @keydown="handleKeydown" @paste="handlePaste" />
+        </div>
+        <button type="submit" aria-label="发送消息" :disabled="!canSend"><Send :size="15" /></button>
+      </form>
+    </div>
   </section>
 </template>

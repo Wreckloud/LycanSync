@@ -1,7 +1,7 @@
 <script setup lang="ts">
-defineProps<{ label: string }>();
+withDefaults(defineProps<{ label: string; tooltip?: string; showTooltip?: boolean }>(), { showTooltip: true });
 </script>
 
 <template>
-  <button type="button" class="icon-button" :aria-label="label" :data-tooltip="label"><slot /></button>
+  <button type="button" class="icon-button" :aria-label="label" :data-tooltip="showTooltip ? tooltip ?? label : undefined"><slot /></button>
 </template>

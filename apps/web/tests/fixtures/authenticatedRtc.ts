@@ -76,7 +76,7 @@ async function api(path: string, body: string, user: ReturnType<typeof testUser>
     return { serverUrl: liveKitWebSocketUrl, roomName, participantIdentity: 'user-' + user.id,
       expiresAt: new Date(Date.now() + 600000).toISOString(),
       token: jwt({ room: roomName, roomJoin: true, canPublish: true, canSubscribe: true,
-        canPublishSources: ['microphone', 'screen_share'], canPublishData: false, canUpdateOwnMetadata: true }, 'user-' + user.id, user.nickname) };
+        canPublishSources: ['microphone', 'screen_share'], canPublishData: true, canUpdateOwnMetadata: true }, 'user-' + user.id, user.nickname) };
   }
   throw new Error('未提供测试 API：' + path);
 }

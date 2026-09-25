@@ -38,7 +38,8 @@ public class GroupMemberPresenceService {
         UserPresence presence = presences.get(userId);
         UserPresenceStatus status = presence == null ? UserPresenceStatus.OFFLINE : presence.status();
         return new GroupPresenceResponse(
-                userId, status, presence == null ? null : presence.activityType(),
+                userId, status, presence == null ? null : presence.lastSeenAt(),
+                presence == null ? null : presence.activityType(),
                 presence == null ? null : presence.activityName(),
                 presence == null ? null : presence.activityStartedAt());
     }

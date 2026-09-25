@@ -79,7 +79,9 @@ onScopeDispose(() => {
 
 <template>
   <Teleport to="body">
-    <span v-if="tooltip" role="tooltip" class="global-tooltip" :class="`is-${tooltip.placement}`"
-      :style="{ left: `${tooltip.left}px`, top: `${tooltip.top}px` }">{{ tooltip.text }}</span>
+    <Transition name="floating-tooltip">
+      <span v-if="tooltip" role="tooltip" class="global-tooltip" :class="`is-${tooltip.placement}`"
+        :style="{ left: `${tooltip.left}px`, top: `${tooltip.top}px` }">{{ tooltip.text }}</span>
+    </Transition>
   </Teleport>
 </template>

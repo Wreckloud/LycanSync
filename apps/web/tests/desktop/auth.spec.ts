@@ -139,7 +139,7 @@ test('桌面已初始化服务器允许创建普通账号', async () => {
     await page.getByRole('button', { name: '个人设置', exact: true }).click();
     const profileDialog = page.locator('.profile-dialog');
     const initialBounds = await profileDialog.boundingBox();
-    await page.locator('input[type="file"]').setInputFiles({
+    await page.getByLabel('上传头像').setInputFiles({
       name: 'avatar.png',
       mimeType: 'image/png',
       buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'),

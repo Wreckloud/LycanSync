@@ -65,6 +65,16 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
     expect(await page.evaluate(async () => window.lycanDesktop?.getSystemIdleState())).toEqual({
       state: expect.stringMatching(/^(active|idle|locked|unknown)$/), idleSeconds: expect.any(Number),
     });
+    expect(await page.evaluate(async () => window.lycanDesktop?.getAutoStart())).toEqual({
+      supported: false, enabled: false,
+    });
+    expect(await page.evaluate(async () => window.lycanDesktop?.setAutoStart(true))).toEqual({
+      supported: false, enabled: false,
+    });
+    await page.getByRole('button', { name: '个人设置', exact: true }).click();
+    await expect(page.getByLabel('开机自动启动')).toBeDisabled();
+    await expect(page.getByText('仅 Windows 安装版支持，开发模式不会修改系统启动项。')).toBeVisible();
+    await page.getByRole('button', { name: '关闭设置' }).click();
     expect(await page.evaluate(async () => window.lycanDesktop?.getCurrentActivity())).toBeNull();
     expect(await page.evaluate(async () => (await fetch('/api/not-allowed')).status)).toBe(404);
     expect(await page.evaluate(async () => {

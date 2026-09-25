@@ -17,6 +17,7 @@ import java.util.UUID;
 public record GroupPresenceResponse(
         UUID userId,
         UserPresenceStatus status,
+        Instant lastSeenAt,
         UserActivityType activityType,
         String activityName,
         Instant activityStartedAt

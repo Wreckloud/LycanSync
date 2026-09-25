@@ -151,9 +151,17 @@ class GroupApplicationIT {
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].status").value("ONLINE"))
+                .andExpect(jsonPath("$[0].lastSeenAt").isNotEmpty())
                 .andExpect(jsonPath("$[0].activityType").value("GAME"))
                 .andExpect(jsonPath("$[0].activityName").value("Core Keeper"))
                 .andExpect(jsonPath("$[0].activityStartedAt").isNotEmpty());
+
+        jdbc.sql("UPDATE user_presence SET last_seen_at = now() - interval '2 minutes'").update();
+        mvc.perform(get("/api/groups/{groupId}/presences", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("OFFLINE"))
+                .andExpect(jsonPath("$[0].lastSeenAt").isNotEmpty());
 
         mvc.perform(post("/api/presence/heartbeat")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)

@@ -25,6 +25,7 @@ export interface GroupMember {
 export interface GroupPresence {
   userId: string;
   status: UserPresenceStatus;
+  lastSeenAt: string | null;
   activityType: UserActivityType | null;
   activityName: string | null;
   activityStartedAt: string | null;

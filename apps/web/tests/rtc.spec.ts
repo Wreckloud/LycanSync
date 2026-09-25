@@ -13,13 +13,62 @@ declare global {
       peers: RTCPeerConnection[];
       tracks: MediaStreamTrack[];
       microphoneCalls: number;
+      microphoneConstraints?: MediaStreamConstraints;
       screenCalls: number;
       captureOptions?: DisplayMediaStreamOptions;
       denyScreen: boolean;
       delayScreen: boolean;
       releaseScreen?: () => void;
     };
+    __customEntrancePlayCount: number;
+    __tonePlayCount: number;
   }
+}
+
+function silentWav(durationMs = 100) {
+  const sampleRate = 8_000;
+  const dataLength = Math.round(sampleRate * durationMs / 1_000);
+  const buffer = Buffer.alloc(44 + dataLength, 128);
+  buffer.write('RIFF', 0);
+  buffer.writeUInt32LE(36 + dataLength, 4);
+  buffer.write('WAVEfmt ', 8);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate, 28);
+  buffer.writeUInt16LE(1, 32);
+  buffer.writeUInt16LE(8, 34);
+  buffer.write('data', 36);
+  buffer.writeUInt32LE(dataLength, 40);
+  return buffer;
+}
+
+async function installCallSoundProbe(context: BrowserContext) {
+  await context.addInitScript(() => {
+    window.__customEntrancePlayCount = 0;
+    window.__tonePlayCount = 0;
+    const createBufferSource = AudioContext.prototype.createBufferSource;
+    AudioContext.prototype.createBufferSource = function createTrackedBufferSource() {
+      const source = createBufferSource.call(this);
+      const start = source.start.bind(source);
+      source.start = (...args) => {
+        window.__customEntrancePlayCount++;
+        start(...args);
+      };
+      return source;
+    };
+    const createOscillator = AudioContext.prototype.createOscillator;
+    AudioContext.prototype.createOscillator = function createTrackedOscillator() {
+      const oscillator = createOscillator.call(this);
+      const start = oscillator.start.bind(oscillator);
+      oscillator.start = (...args) => {
+        window.__tonePlayCount++;
+        start(...args);
+      };
+      return oscillator;
+    };
+  });
 }
 
 async function installSyntheticMedia(context: BrowserContext, screenSize = { width: 1280, height: 720 }) {
@@ -28,6 +77,7 @@ async function installSyntheticMedia(context: BrowserContext, screenSize = { wid
     const state = window.__rtcTest = {
       peers: [] as RTCPeerConnection[], tracks: [] as MediaStreamTrack[],
       microphoneCalls: 0, screenCalls: 0, denyScreen: false, delayScreen: false,
+      microphoneConstraints: undefined as MediaStreamConstraints | undefined,
       captureOptions: undefined as DisplayMediaStreamOptions | undefined,
       releaseScreen: undefined as (() => void) | undefined,
     };
@@ -42,6 +92,7 @@ async function installSyntheticMedia(context: BrowserContext, screenSize = { wid
     const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
     navigator.mediaDevices.getUserMedia = async (constraints) => {
       state.microphoneCalls++;
+      state.microphoneConstraints = constraints;
       const stream = await getUserMedia(constraints);
       state.tracks.push(...stream.getTracks());
       return stream;
@@ -149,18 +200,38 @@ async function stageGeometry(page: Page) {
 
 async function toggleMembersAndMeasureVideo(page: Page) {
   return page.evaluate(async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 220));
     const viewer = document.querySelector('.viewer-grid')!;
+    const voicePanel = document.querySelector('.voice-panel')!;
     const toggle = document.querySelector<HTMLButtonElement>('.member-strip-toggle')!;
     const positions = [viewer.getBoundingClientRect()];
+    const panelHeights = [voicePanel.getBoundingClientRect().height];
     toggle.click();
     for (let frame = 0; frame < 20; frame++) {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       positions.push(viewer.getBoundingClientRect());
+      panelHeights.push(voicePanel.getBoundingClientRect().height);
     }
     const heights = positions.map((position) => position.height);
     const tops = positions.map((position) => position.top);
-    return Math.max(Math.max(...heights) - Math.min(...heights), Math.max(...tops) - Math.min(...tops));
+    const startHeight = panelHeights[0];
+    const endHeight = panelHeights.at(-1)!;
+    const lowerHeight = Math.min(startHeight, endHeight) + 1;
+    const upperHeight = Math.max(startHeight, endHeight) - 1;
+    return {
+      viewerShift: Math.max(Math.max(...heights) - Math.min(...heights), Math.max(...tops) - Math.min(...tops)),
+      panelHeightDelta: Math.abs(endHeight - startHeight),
+      intermediatePanelHeights: new Set(panelHeights.slice(1, -1)
+        .filter((height) => height > lowerHeight && height < upperHeight)
+        .map((height) => Math.round(height))).size,
+    };
   });
+}
+
+function expectFilmstripAnimation(animation: Awaited<ReturnType<typeof toggleMembersAndMeasureVideo>>) {
+  expect(animation.viewerShift).toBeLessThan(2);
+  expect(animation.panelHeightDelta).toBeGreaterThan(85);
+  expect(animation.intermediatePanelHeights).toBeGreaterThan(2);
 }
 
 test('未共享时显示群成员头像，停止共享后恢复头像', async ({ context, page }) => {
@@ -174,15 +245,57 @@ test('未共享时显示群成员头像，停止共享后恢复头像', async ({
   await expect(localCard.locator('.voice-level-mic')).toHaveCount(1);
   await expect(localCard.locator('.voice-level-fill')).toHaveAttribute('width', '6');
   await expect(localCard.locator('.voice-level-fill')).toHaveCSS('transition-duration', '0s');
-  await expect(callbar.getByRole('button', { name: '停止接收声音', exact: true })).not.toHaveClass(/is-active/);
+  expect(await page.evaluate(() => window.__rtcTest.microphoneConstraints?.audio)).toMatchObject({
+    echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+  });
+  expect(await page.evaluate(() => {
+    const sourceTrack = window.__rtcTest.tracks.find((track) => track.kind === 'audio');
+    const senderTrack = window.__rtcTest.peers.flatMap((peer) => peer.getSenders())
+      .find((sender) => sender.track?.kind === 'audio')?.track;
+    return Boolean(sourceTrack && senderTrack && sourceTrack.id !== senderTrack.id);
+  })).toBe(true);
+  const diagnosticsButton = page.getByRole('button', { name: '媒体诊断' });
+  const diagnostics = page.getByRole('complementary', { name: '媒体诊断' });
+  await diagnosticsButton.hover();
+  await expect(page.getByRole('tooltip')).toHaveText('点击固定');
+  await expect(diagnostics).toBeVisible();
+  await page.locator('.chat-heading').hover();
+  await expect(diagnostics).toBeHidden();
+  await diagnosticsButton.click();
+  await page.locator('.chat-heading').hover();
+  await expect(diagnostics).toBeVisible();
+  await diagnosticsButton.click();
+  await page.locator('.chat-heading').hover();
+  await expect(diagnostics).toBeHidden();
+  const microphoneButton = callbar.getByRole('button', { name: '关闭麦克风', exact: true });
+  await microphoneButton.hover();
+  const audioSettings = page.getByRole('region', { name: '音频详细设置' });
+  await expect(audioSettings).toBeVisible();
+  await expect(audioSettings.getByRole('meter', { name: '麦克风输入等级' })).toBeVisible();
+  const inputGainSlider = audioSettings.getByRole('slider', { name: '麦克风输入音量' });
+  await inputGainSlider.hover();
+  await expect(audioSettings).toBeVisible();
+  await inputGainSlider.fill('2');
+  await audioSettings.getByRole('checkbox', { name: '环境降噪' }).uncheck();
+  await expect.poll(() => page.evaluate(() => window.__rtcTest.tracks
+    .find((track) => track.kind === 'audio')?.getConstraints().noiseSuppression)).toBe(false);
+  await localCard.getByRole('button', { name: /输入音量200%/ }).hover();
+  await expect(localCard.locator('.participant-volume-popover').filter({ hasText: '输入 200%' })).toBeVisible();
+  await expect(callbar.getByRole('button', { name: '停止接收声音', exact: true })).toHaveCount(0);
+  await expect(audioSettings).toBeVisible();
+  await audioSettings.getByRole('slider', { name: 'LycanSync 总输出音量' }).fill('2');
+  await localCard.getByRole('button', { name: /LycanSync 总输出200%/ }).hover();
+  await expect(localCard.locator('.participant-volume-popover').filter({ hasText: '输出 200%' })).toBeVisible();
   await localCard.getByRole('button', { name: '关闭自己的麦克风' }).click();
+  await expect(localCard.locator('.participant-volume-popover').filter({ hasText: /^输入/ })).toHaveCount(0);
   await expect(callbar.getByRole('button', { name: '开启麦克风', exact: true })).toBeEnabled();
   await localCard.getByRole('button', { name: '开启自己的麦克风' }).click();
   await expect(callbar.getByRole('button', { name: '关闭麦克风', exact: true })).toBeEnabled();
   await localCard.getByRole('button', { name: '停止接收所有成员声音' }).click();
-  await expect(callbar.getByRole('button', { name: '恢复接收声音', exact: true })).toBeEnabled();
+  await expect(localCard.locator('.participant-volume-popover').filter({ hasText: /^输出/ })).toHaveCount(0);
   await localCard.getByRole('button', { name: '恢复接收所有成员声音' }).click();
-  await expect(callbar.getByRole('button', { name: '停止接收声音', exact: true })).toBeEnabled();
+  await expect(localCard.getByRole('button', { name: /停止接收所有成员声音/ })).toBeEnabled();
+  await expect(callbar.getByRole('button', { name: '语音设置' })).toBeVisible();
   await expect(localCard.locator('.large-avatar img')).toHaveAttribute('src', avatar);
   await page.getByRole('button', { name: '开始屏幕共享' }).click();
   await expect(page.getByTestId('viewer-screen')).toBeVisible();
@@ -255,6 +368,33 @@ test('房间外只能看到语音人数和昵称，不连接媒体房间', async
     await expect(observerPage.getByTestId('room-summary-count')).toHaveCount(0, { timeout: 12_000 });
   } finally {
     await observer.close();
+  }
+});
+
+test('自定义入场音通过房间数据流播放给已在语音中的成员', async ({ browser, context, page }) => {
+  const entrant = await browser.newContext({
+    baseURL: webBaseUrl, permissions: ['microphone'], viewport: { width: 1440, height: 1000 },
+  });
+  try {
+    await installCallSoundProbe(context);
+    await installSyntheticMedia(context);
+    await installSyntheticMedia(entrant);
+    const entrantPage = await entrant.newPage();
+    await entrantPage.goto('/');
+    await entrantPage.getByRole('button', { name: '个人设置', exact: true }).click();
+    await entrantPage.getByLabel('上传入场音效').setInputFiles({
+      name: 'hello.wav',
+      mimeType: 'audio/wav',
+      buffer: silentWav(),
+    });
+    await expect(entrantPage.getByRole('button', { name: '试听' })).toBeVisible();
+    await entrantPage.getByRole('button', { name: '关闭设置' }).click();
+
+    await join(page, '等候入场音的小狼');
+    await join(entrantPage, '带入场音的小狼');
+    await expect.poll(() => page.evaluate(() => window.__customEntrancePlayCount)).toBe(1);
+  } finally {
+    await entrant.close();
   }
 });
 
@@ -350,7 +490,7 @@ test('双人同时语音和共享：实际收包、多画面观看、静音、�
     for (const participantPage of [page, otherPage]) {
       await expect(participantPage.getByTestId('viewer-screen')).toHaveCount(1);
       const collapsed = await stageGeometry(participantPage);
-      expect(await toggleMembersAndMeasureVideo(participantPage)).toBeLessThan(2);
+      expectFilmstripAnimation(await toggleMembersAndMeasureVideo(participantPage));
       await expect(participantPage.getByTestId('member-thumbnail')).toHaveCount(2);
       const expanded = await stageGeometry(participantPage);
       expect(Math.abs(expanded.viewerHeight - collapsed.viewerHeight)).toBeLessThan(2);
@@ -383,14 +523,14 @@ test('双人同时语音和共享：实际收包、多画面观看、静音、�
     await expect(page.getByTestId('viewer-screen')).toHaveCount(2);
     await expect(page.locator('.chat-panel')).toBeVisible();
     await expect(page.getByRole('button', { name: '展开其他成员' })).toBeVisible();
-    expect(await toggleMembersAndMeasureVideo(page)).toBeLessThan(2);
+    expectFilmstripAnimation(await toggleMembersAndMeasureVideo(page));
     await expect.poll(() => page.locator('video').evaluateAll((videos) => videos.every(
       (video) => video instanceof HTMLVideoElement && video.videoWidth > 0 && video.currentTime > 0,
     ))).toBe(true);
     await page.locator('.chat-heading').click();
     await page.screenshot({ path: testInfo.outputPath('two-screens-expanded.png'), fullPage: true });
     const expanded = await stageGeometry(page);
-    expect(await toggleMembersAndMeasureVideo(page)).toBeLessThan(2);
+    expectFilmstripAnimation(await toggleMembersAndMeasureVideo(page));
     await expect(page.getByTestId('member-filmstrip')).toHaveCount(0);
     const collapsed = await stageGeometry(page);
     expect(Math.abs(collapsed.viewerHeight - expanded.viewerHeight)).toBeLessThan(2);
@@ -405,39 +545,68 @@ test('双人同时语音和共享：实际收包、多画面观看、静音、�
     await expect(page.getByRole('button', { name: /聚焦.*共享画面/ })).toHaveCount(0);
     await expect(page.getByTestId('member-filmstrip')).toHaveCount(0);
     const compactCollapsed = await stageGeometry(page);
-    expect(await toggleMembersAndMeasureVideo(page)).toBeLessThan(2);
+    expectFilmstripAnimation(await toggleMembersAndMeasureVideo(page));
     const compactExpanded = await stageGeometry(page);
     expect(Math.abs(compactExpanded.viewerHeight - compactCollapsed.viewerHeight)).toBeLessThan(2);
     expect(compactExpanded.chatTop - compactCollapsed.chatTop).toBeGreaterThan(85);
     await expectStageFits(page, 140);
     await page.locator('.chat-heading').click();
     await page.screenshot({ path: testInfo.outputPath('two-screens-compact-expanded.png'), fullPage: true });
+    await page.setViewportSize({ width: 920, height: 640 });
+    await expectStageFits(page, 96);
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await expectStageFits(page, 140);
     await page.getByRole('button', { name: '从主观看区移除福州小狼的共享画面' }).click();
     await expect(page.getByTestId('viewer-screen')).toHaveCount(1);
     const remoteCard = page.getByTestId('member-thumbnail').filter({ hasText: '福州小狼' });
-    const remoteMic = remoteCard.getByRole('button', { name: /福州小狼(?:麦克风已开启|正在说话)，点击取消收听/ });
+    const remoteMic = remoteCard.getByRole('button', { name: /福州小狼(?:麦克风已开启|正在说话).*点击取消收听/ });
     await remoteMic.hover();
-    const volumeSlider = remoteCard.getByRole('slider', { name: '福州小狼的接收音量' });
-    await expect(volumeSlider).toHaveValue('1');
-    await volumeSlider.fill('2');
-    await expect(remoteCard.locator('.participant-volume-popover > span')).toHaveText('200%');
+    await expect(remoteCard.getByRole('slider')).toHaveCount(0);
+    await expect(remoteCard.locator('.participant-volume-popover')).toHaveText('接收 100%');
+    const remoteMicBounds = await remoteMic.boundingBox();
+    if (!remoteMicBounds) throw new Error('远端麦克风按钮不可见');
+    await page.mouse.move(remoteMicBounds.x + remoteMicBounds.width / 2, remoteMicBounds.y + remoteMicBounds.height / 2);
+    await page.mouse.down();
+    const volumeDragger = page.getByRole('slider', { name: '福州小狼接收音量' });
+    await expect(volumeDragger).toBeVisible();
+    await page.mouse.move(remoteMicBounds.x + remoteMicBounds.width / 2, remoteMicBounds.y - 40, { steps: 4 });
+    await expect.poll(async () => Number(await volumeDragger.getAttribute('aria-valuenow'))).toBeGreaterThan(100);
+    await page.mouse.up();
+    await expect(volumeDragger).toHaveCount(0);
+    for (let step = 0; step < 40; step++) await remoteMic.dispatchEvent('wheel', { deltaY: 100 });
+    const mutedRemoteMic = remoteCard.getByRole('button', { name: /福州小狼已取消收听，点击恢复收听/ });
+    await expect(mutedRemoteMic).toBeVisible();
+    await expect(remoteCard.locator('.participant-volume-popover')).toHaveCount(0);
+    await mutedRemoteMic.dispatchEvent('wheel', { deltaY: -100 });
+    await expect(remoteCard.locator('.participant-volume-popover')).toHaveText('接收 5%');
+    for (let step = 0; step < 20; step++) await remoteMic.dispatchEvent('wheel', { deltaY: -100 });
+    await expect(remoteCard.locator('.participant-volume-popover')).toHaveText('接收 105%');
+    for (let step = 0; step < 20; step++) await remoteMic.dispatchEvent('wheel', { deltaY: -100 });
+    await expect(remoteCard.locator('.participant-volume-popover')).toHaveText('接收 200%');
     await remoteMic.click();
-    await expect(remoteCard.getByRole('button', { name: /福州小狼(?:麦克风已开启|正在说话)，点击恢复收听/ })).toBeVisible();
-    await expect(volumeSlider).toHaveValue('0');
+    await expect(remoteCard.getByRole('button', { name: /福州小狼已取消收听，点击恢复收听/ })).toBeVisible();
+    await expect(remoteCard.locator('.participant-volume-popover')).toHaveCount(0);
+    await expect(page.locator('audio')).toHaveCount(0);
     await expect(otherPage.getByTestId('member-thumbnail').filter({ hasText: '苏州小狼' })
-      .getByRole('button', { name: /苏州小狼(?:麦克风已开启|正在说话)，点击取消收听/ })).toBeVisible();
-    await remoteCard.getByRole('button', { name: /福州小狼(?:麦克风已开启|正在说话)，点击恢复收听/ }).click();
-    await expect(volumeSlider).toHaveValue('2');
-    await otherPage.getByRole('button', { name: '停止接收声音', exact: true }).click();
+      .getByRole('button', { name: /苏州小狼(?:麦克风已开启|正在说话).*点击取消收听/ })).toBeVisible();
+    await remoteCard.getByRole('button', { name: /福州小狼已取消收听，点击恢复收听/ }).click();
+    await expect(remoteCard.locator('.participant-volume-popover')).toHaveText('接收 200%');
+    await expect(page.locator('audio')).toHaveCount(1);
+    await expect.poll(() => page.evaluate(() => {
+      const key = Object.keys(localStorage).find((item) => item.startsWith('lycansync.audio-preferences.v1.'));
+      const stored = key ? JSON.parse(localStorage.getItem(key) ?? '{}') : {};
+      return Object.values(stored.participantVolumes ?? {});
+    })).toContain(2);
+    await otherPage.getByRole('button', { name: /停止接收所有成员声音/ }).first().click();
     await expect(page.getByTestId('member-thumbnail').filter({ hasText: '福州小狼' })
       .getByLabel('已停止接收声音')).toBeVisible();
     await expect(otherPage.getByRole('button', { name: '开启麦克风', exact: true })).toBeEnabled();
     await expect(page.getByTestId('member-thumbnail').filter({ hasText: '福州小狼' })
       .getByLabel('麦克风已关闭')).toBeVisible();
-    await otherPage.getByRole('button', { name: '恢复接收声音', exact: true }).click();
+    await otherPage.getByRole('button', { name: '恢复接收所有成员声音' }).first().click();
     await expect(otherPage.getByRole('button', { name: '关闭麦克风', exact: true })).toBeEnabled();
     await expect(page.getByTestId('member-thumbnail').filter({ hasText: '福州小狼' })
-      .getByRole('button', { name: /福州小狼(?:麦克风已开启|正在说话)，点击取消收听/ })).toBeVisible();
+      .getByRole('button', { name: /福州小狼(?:麦克风已开启|正在说话).*点击取消收听/ })).toBeVisible();
     await otherPage.getByRole('button', { name: '关闭麦克风', exact: true }).click();
     await expect(page.getByTestId('member-thumbnail').filter({ hasText: '福州小狼' })
       .getByLabel('麦克风已关闭')).toBeVisible();
@@ -462,6 +631,8 @@ test('停止共享后释放 WebRTC 轨道与远端订阅', async ({ browser, con
     baseURL: webBaseUrl, permissions: ['microphone'], viewport: { width: 1440, height: 1000 },
   });
   try {
+    await installCallSoundProbe(context);
+    await installCallSoundProbe(teammate);
     await installSyntheticMedia(context);
     await installSyntheticMedia(teammate);
     const otherPage = await teammate.newPage();
@@ -471,8 +642,13 @@ test('停止共享后释放 WebRTC 轨道与远端订阅', async ({ browser, con
     await expect(otherPage.getByTestId('viewer-screen')).toHaveCount(1);
     await expect.poll(() => inboundBytes(otherPage, 'video')).toBeGreaterThan(0);
     const bytesBeforeStop = await outboundBytes(page);
+    await page.waitForTimeout(900);
+    const localTonesBeforeStop = await page.evaluate(() => window.__tonePlayCount);
+    const remoteTonesBeforeStop = await otherPage.evaluate(() => window.__tonePlayCount);
 
     await page.getByRole('button', { name: '停止屏幕共享', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => window.__tonePlayCount)).toBeGreaterThanOrEqual(localTonesBeforeStop + 3);
+    await expect.poll(() => otherPage.evaluate(() => window.__tonePlayCount)).toBeGreaterThanOrEqual(remoteTonesBeforeStop + 3);
     // 停止共享只解除这一路画面：按钮立即回到“开始”，采集轨道必须结束，麦克风保持 live。
     await expect(page.getByRole('button', { name: '开始屏幕共享', exact: true })).toBeEnabled();
     await expect.poll(() => page.evaluate(() => {
@@ -579,8 +755,8 @@ test('四人同时发布，每位成员均收到其他三人的音视频', async
       await pages[0].getByRole('button', { name: /^放大.*的共享画面$/ }).first().click();
     }
     await expect(pages[0].getByTestId('viewer-screen')).toHaveCount(4);
-    await pages[0].getByRole('button', { name: '收起其他成员' }).click();
     await pages[0].setViewportSize({ width: 1280, height: 720 });
+    await pages[0].getByRole('button', { name: '收起其他成员' }).click();
     await expectStageFits(pages[0]);
     await expect(pages[0].locator('video')).toHaveCount(4);
     await pages[0].screenshot({ path: testInfo.outputPath('four-screens.png'), fullPage: true });

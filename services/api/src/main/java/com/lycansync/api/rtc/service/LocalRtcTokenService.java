@@ -58,7 +58,7 @@ public class LocalRtcTokenService {
         accessToken.setName(user.nickname());
         accessToken.setNotBefore(Date.from(issuedAt));
         accessToken.setExpiration(Date.from(expiresAt));
-        // 允许更新自己的收听状态；仍不授予摄像头、房间管理和数据发送权限。
+        // 允许更新自己的收听状态，并用房间数据通道发送受客户端限流的短入场音；仍不授予摄像头和房间管理权限。
         // TODO: 正式权限设计中限制可写属性；客户端自报信息不能作为身份或权限依据。
         accessToken.addGrants(
                 new RoomJoin(true),
@@ -66,7 +66,7 @@ public class LocalRtcTokenService {
                 new CanPublish(true),
                 new CanSubscribe(true),
                 new CanPublishSources(List.of("microphone", "screen_share")),
-                new CanPublishData(false),
+                new CanPublishData(true),
                 new CanUpdateOwnMetadata(true)
         );
 

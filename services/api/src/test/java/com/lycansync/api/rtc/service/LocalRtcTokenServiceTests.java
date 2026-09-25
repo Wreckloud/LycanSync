@@ -65,7 +65,7 @@ class LocalRtcTokenServiceTests {
                 "canPublish", true,
                 "canSubscribe", true,
                 "canPublishSources", List.of("microphone", "screen_share"),
-                "canPublishData", false,
+                "canPublishData", true,
                 "canUpdateOwnMetadata", true
         ));
     }

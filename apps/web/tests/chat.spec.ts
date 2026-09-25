@@ -57,6 +57,9 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
       if (!String(headers['content-type']).includes('multipart/form-data')) {
         throw new Error('文本消息必须使用 multipart/form-data 发送：' + JSON.stringify(headers));
       }
+      if (String(request.postData()).includes('触发错误')) {
+        return route.fulfill({ status: 500, json: { code: 'CHAT_SEND_FAILED', detail: '消息发送失败' } });
+      }
       if (!String(request.postData()).includes('晚上见')) throw new Error('消息文本未包含在 multipart 请求中');
       const message = { id: '6eff1bc9-1f63-4bb1-ad77-698c3bdc9c6c', senderUserId: user.id,
         senderNickname: user.nickname, type: 'TEXT', content: '晚上见 https://example.com/docs。', createdAt: '2026-09-14T12:00:00Z', attachment: null };
@@ -81,4 +84,14 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
   await expect(page.locator('html')).toHaveAttribute('data-external-url', 'https://example.com/docs');
   await expect(page.locator('.message-list')).toHaveCSS('user-select', 'none');
   await expect(page.locator('.chat-message-content').first()).toHaveCSS('user-select', 'text');
+
+  const composerBoundsBeforeError = await page.locator('.composer').boundingBox();
+  await composer.fill('触发错误');
+  await composer.press('Enter');
+  const chatError = page.getByRole('alert');
+  await expect(chatError).toHaveText('消息发送失败');
+  const composerBoundsAfterError = await page.locator('.composer').boundingBox();
+  const errorBounds = await chatError.boundingBox();
+  expect(composerBoundsAfterError).toEqual(composerBoundsBeforeError);
+  expect(errorBounds!.y + errorBounds!.height).toBeLessThanOrEqual(composerBoundsAfterError!.y);
 });

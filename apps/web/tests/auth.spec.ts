@@ -1,5 +1,24 @@
 import { test, expect } from '@playwright/test';
 
+function silentWav(durationMs = 100) {
+  const sampleRate = 8_000;
+  const dataLength = Math.round(sampleRate * durationMs / 1_000);
+  const buffer = Buffer.alloc(44 + dataLength, 128);
+  buffer.write('RIFF', 0);
+  buffer.writeUInt32LE(36 + dataLength, 4);
+  buffer.write('WAVEfmt ', 8);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(sampleRate, 28);
+  buffer.writeUInt16LE(1, 32);
+  buffer.writeUInt16LE(8, 34);
+  buffer.write('data', 36);
+  buffer.writeUInt32LE(dataLength, 40);
+  return buffer;
+}
+
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/groups', (route) => route.fulfill({ json: [] }));
   await page.route('**/api/presence/heartbeat', (route) => route.fulfill({ status: 204 }));
@@ -213,7 +232,7 @@ test('更换头像不会改变个人设置布局', async ({ page }) => {
   await expect(page.locator('.profile-avatar-preview')).toHaveCSS('width', '112px');
   await expect(page.locator('.profile-avatar-preview')).toHaveCSS('height', '112px');
   await expect(page.getByRole('button', { name: '移除头像' })).toHaveCount(0);
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.getByLabel('上传头像').setInputFiles({
     name: 'avatar.png',
     mimeType: 'image/png',
     buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'),
@@ -233,4 +252,30 @@ test('更换头像不会改变个人设置布局', async ({ page }) => {
   await page.getByRole('button', { name: '保存资料' }).click();
   expect(profileUpdate?.avatar).toMatch(/^data:image\/png;base64,/);
   expect(Buffer.from(profileUpdate!.avatar!.split(',')[1], 'base64').length).toBeLessThanOrEqual(96 * 1024);
+});
+
+test('自定义入场音按账号保存在本机并可移除', async ({ page }) => {
+  const user = { id: 'entrance-sound-user', nickname: '音效测试', avatar: '', administrator: true };
+  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
+    json: { participantCount: 0, participants: [] },
+  }));
+  await page.goto('/');
+  await page.getByRole('button', { name: '个人设置', exact: true }).click();
+  await page.getByLabel('上传入场音效').setInputFiles({
+    name: 'hello.wav',
+    mimeType: 'audio/wav',
+    buffer: silentWav(),
+  });
+
+  await expect(page.getByRole('button', { name: '试听' })).toBeVisible();
+  await expect(page.locator('.entrance-sound-actions')).toContainText('hello.wav');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem(
+    'lycansync.entrance-sound.v1.entrance-sound-user'))).not.toBeNull();
+
+  await page.getByRole('button', { name: '移除' }).click();
+  await expect(page.getByRole('button', { name: '试听' })).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem(
+    'lycansync.entrance-sound.v1.entrance-sound-user'))).toBeNull();
 });

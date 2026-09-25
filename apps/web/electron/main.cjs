@@ -162,6 +162,14 @@ function trustedSender(event) {
     && event.senderFrame === mainWindow.webContents.mainFrame && trustedUrl(event.senderFrame.url);
 }
 
+function autoStartSettings() {
+  const supported = process.platform === 'win32' && app.isPackaged;
+  return {
+    supported,
+    enabled: supported && app.getLoginItemSettings().openAtLogin,
+  };
+}
+
 function externalHttpUrl(value) {
   if (typeof value !== 'string') return undefined;
   try {
@@ -354,6 +362,18 @@ ipcMain.handle('presence:system-idle-state', (event) => {
     state: powerMonitor.getSystemIdleState(300),
     idleSeconds: powerMonitor.getSystemIdleTime(),
   };
+});
+ipcMain.handle('settings:auto-start:get', (event) => {
+  if (!trustedSender(event)) throw new Error('请求来源无效');
+  return autoStartSettings();
+});
+ipcMain.handle('settings:auto-start:set', (event, enabled) => {
+  if (!trustedSender(event) || typeof enabled !== 'boolean') throw new Error('请求参数无效');
+  const settings = autoStartSettings();
+  if (!settings.supported) return settings;
+  // 使用 Windows 登录项启动现有程序，不创建额外服务或常驻辅助进程。
+  app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath });
+  return autoStartSettings();
 });
 ipcMain.handle('activity:current', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');

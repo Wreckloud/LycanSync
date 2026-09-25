@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, reactive, ref, watch } from 'vue';
-import { Activity, AudioLines, ChevronDown, ChevronLeft, ChevronRight, Copy, CornerUpLeft, Gamepad2, HeadphoneOff, Headphones,
+import { Activity, AudioLines, ChevronDown, ChevronLeft, ChevronRight, Copy, CornerUpLeft, Gamepad2, Headphones,
   LogOut, MicOff, Minus, MonitorUp, Plus, RadioTower,
-  Square, UserRound, UsersRound, Volume2, X } from '@lucide/vue';
+  Settings, Square, UserRound, UsersRound, Volume2, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
 import ParticipantCard from './components/ParticipantCard.vue';
 import VoiceLevelMic from './components/VoiceLevelMic.vue';
@@ -17,6 +17,11 @@ import { createGroup, findGroup, findGroupPresences, findGroups,
 import { useRtcRoom } from './rtc/useRtcRoom';
 import { useRoomSummary } from './rtc/useRoomSummary';
 import { requestRoomOccupancies } from './rtc/roomSummaryApi';
+import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, type AudioProcessingSettings } from './rtc/audioPreferences';
+import { useAudioPreferences, type AudioVolumeChange } from './rtc/useAudioPreferences';
+import { entranceSoundToFile, loadEntranceSound } from './rtc/entranceSound';
+import { useCallSounds } from './rtc/useCallSounds';
+import { normalizeVoiceLevel } from './rtc/voiceLevel';
 import { sendPresenceHeartbeat, type UserActivity, type UserPresenceStatus } from './presence/presenceApi';
 import type { AuthUser } from './auth/authApi';
 
@@ -31,12 +36,35 @@ const PRESENCE_HEARTBEAT_INTERVAL_MS = 30_000;
 const PRESENCE_IDLE_TIMEOUT_MS = 5 * 60_000;
 const PRESENCE_IDLE_CHECK_INTERVAL_MS = 15_000;
 const ACTIVITY_CLOCK_INTERVAL_MS = 10_000;
+const INPUT_LEVEL_SEGMENTS = 16;
+const LAST_SEEN_DATE_TIME_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+});
 const PRESENCE_STATUS_LABELS: Record<UserPresenceStatus, string> = {
   ONLINE: '在线',
   AWAY: '离开',
   OFFLINE: '离线',
 };
-const rtc = reactive(useRtcRoom());
+const audioPreferences = useAudioPreferences(props.user.id);
+const { inputGain, outputVolume, processing: audioProcessing } = audioPreferences;
+const callSounds = useCallSounds(outputVolume);
+const rtc = reactive(useRtcRoom({
+  inputGain: inputGain.value,
+  processing: audioProcessing,
+  events: {
+    participantJoined: callSounds.participantJoined,
+    participantLeft: callSounds.participantLeft,
+    participantEntrancePending: callSounds.participantEntrancePending,
+    participantEntranceFailed: callSounds.participantEntranceFailed,
+    participantEntranceSound: (identity, bytes) => { void callSounds.participantEntranceSound(identity, bytes); },
+    screenShareStarted: callSounds.screenShareStarted,
+    screenShareStopped: callSounds.screenShareStopped,
+    disconnected: callSounds.left,
+  },
+}));
+// 预先恢复被静音成员的订阅策略；之后只有跨越 0% 时才更新网络订阅。
+audioPreferences.mutedParticipantIdentities()
+  .forEach((identity) => rtc.setRemoteAudioSubscribed(identity, false));
 const desktop = window.lycanDesktop;
 const captureRequest = ref<CaptureRequest | null>(null);
 const captureSourceType = ref<'window' | 'screen'>('window');
@@ -293,8 +321,6 @@ const joinedGroupId = ref<string | null>(null);
 const joiningGroupId = ref<string | null>(null);
 const pendingSwitchGroupId = ref<string | null>(null);
 const listening = ref(true);
-const participantVolumes = reactive(new Map<string, number>());
-const previousParticipantVolumes = new Map<string, number>();
 const enlargedIdentities = ref<string[]>([]);
 const stageDismissed = ref(false);
 const focusedIdentity = ref<string | null>(null);
@@ -303,14 +329,28 @@ const filmstripPage = ref(0);
 const viewerGrid = ref<HTMLElement | null>(null);
 const lockedViewerHeight = ref<number | null>(null);
 const viewerNotice = ref('');
-const diagnosticsOpen = ref(false);
+const diagnosticsPinned = ref(false);
+const diagnosticsHovered = ref(false);
+const diagnosticsOpen = computed(() => diagnosticsPinned.value || diagnosticsHovered.value);
 const departingGroupId = ref<string | null>(null);
 const callbarLeaving = ref(false);
 let listeningSync: Promise<void> | null = null;
+let diagnosticsHoverTimer: ReturnType<typeof setTimeout> | null = null;
 function releaseViewerLock() {
   lockedViewerHeight.value = null;
 }
-onScopeDispose(releaseViewerLock);
+function showDiagnosticsPreview() {
+  if (diagnosticsHoverTimer) clearTimeout(diagnosticsHoverTimer);
+  diagnosticsHovered.value = true;
+}
+function hideDiagnosticsPreview() {
+  if (diagnosticsHoverTimer) clearTimeout(diagnosticsHoverTimer);
+  diagnosticsHoverTimer = setTimeout(() => { diagnosticsHovered.value = false; }, 100);
+}
+onScopeDispose(() => {
+  if (diagnosticsHoverTimer) clearTimeout(diagnosticsHoverTimer);
+  releaseViewerLock();
+});
 
 const selectedGroup = computed(() => groups.value.find((group) => group.id === selectedGroupId.value) ?? null);
 const joinedGroup = computed(() => groups.value.find((group) => group.id === joinedGroupId.value) ?? null);
@@ -322,6 +362,12 @@ const localMicrophoneLevel = computed(() => {
   const participant = localParticipant.value;
   return participant?.isMicrophoneEnabled && participant.isSpeaking ? participant.audioLevel : 0;
 });
+const localInputLevel = computed(() => {
+  void rtc.revision;
+  const participant = localParticipant.value;
+  return participant?.isMicrophoneEnabled ? normalizeVoiceLevel(participant.audioLevel) : 0;
+});
+const localInputLevelPercent = computed(() => Math.round(localInputLevel.value * 100));
 const connected = computed(() => rtc.status === 'connected');
 const showingJoinedGroup = computed(() => joinedGroupId.value !== null && selectedGroupId.value === joinedGroupId.value);
 const roomSummary = useRoomSummary(selectedGroupId, computed(() => !showingJoinedGroup.value),
@@ -363,6 +409,14 @@ const memberStatusLabel = (member: GroupMember) => {
   const activity = memberActivity(member);
   const label = PRESENCE_STATUS_LABELS[status] ?? PRESENCE_STATUS_LABELS.OFFLINE;
   return activity ? `${label} · ${activity}` : label;
+};
+const memberLastSeenTooltip = (member: GroupMember) => {
+  if (memberOnlineStatus(member) !== 'OFFLINE') return undefined;
+  const lastSeenAt = groupPresences.value[member.userId]?.lastSeenAt;
+  const timestamp = lastSeenAt ? Date.parse(lastSeenAt) : Number.NaN;
+  return Number.isFinite(timestamp)
+    ? `最后在线：${LAST_SEEN_DATE_TIME_FORMATTER.format(timestamp)}`
+    : '最后在线：暂无记录';
 };
 const participantAvatar = (identity: string) => identity === `user-${props.user.id}` ? props.user.avatar
   : currentMembers.value.find((member) => `user-${member.userId}` === identity)?.avatar ?? '';
@@ -406,7 +460,11 @@ watch(() => [joinedGroupId.value, joiningGroupId.value, rtc.status, rtc.room], (
     joinedGroupId.value = null;
   }
 });
-watch(() => rtc.room, (room) => { if (!room) diagnosticsOpen.value = false; });
+watch(() => rtc.room, (room) => {
+  if (room) return;
+  diagnosticsPinned.value = false;
+  diagnosticsHovered.value = false;
+});
 watch(callbarLeaving, (leaving, _, onCleanup) => {
   if (!leaving) return;
   const timer = setTimeout(() => {
@@ -437,6 +495,7 @@ async function joinGroup(groupId: string) {
   departingGroupId.value = null;
 
   if (joinedGroupId.value !== null) {
+    void callSounds.left();
     await rtc.leave();
     joinedGroupId.value = null;
   }
@@ -457,6 +516,12 @@ async function joinGroup(groupId: string) {
   if (joined) {
     joinedGroupId.value = groupId;
     listening.value = true;
+    void callSounds.joined();
+    const entranceSound = loadEntranceSound(props.user.id);
+    if (entranceSound) {
+      try { void rtc.sendEntranceSound(entranceSoundToFile(entranceSound)); }
+      catch { viewerNotice.value = '本机保存的入场音效已损坏，请在个人设置中重新选择。'; }
+    }
     void refreshGroups();
   }
   joiningGroupId.value = null;
@@ -491,6 +556,7 @@ function leaveVoice() {
     departingGroupId.value = leavingGroupId;
     callbarLeaving.value = true;
   }
+  if (rtc.status === 'connected' || rtc.status === 'reconnecting') void callSounds.left();
   rtc.leave();
   joinedGroupId.value = null;
   joinedGroupDetail.value = null;
@@ -543,23 +609,37 @@ async function toggleListening() {
 }
 
 function participantVolume(identity: string) {
-  return participantVolumes.get(identity) ?? 1;
+  return audioPreferences.participantVolume(identity);
+}
+
+function synchronizeParticipantSubscription(identity: string, change: AudioVolumeChange | null) {
+  if (change && (change.previous > 0) !== (change.current > 0)) {
+    rtc.setRemoteAudioSubscribed(identity, change.current > 0);
+  }
 }
 
 function updateParticipantVolume(identity: string, volume: number) {
-  const nextVolume = Math.min(2, Math.max(0, Math.round(volume * 20) / 20));
-  participantVolumes.set(identity, nextVolume);
-  if (nextVolume > 0) previousParticipantVolumes.set(identity, nextVolume);
+  synchronizeParticipantSubscription(identity, audioPreferences.setParticipantVolume(identity, volume));
 }
 
 function toggleParticipantAudio(identity: string) {
-  const currentVolume = participantVolume(identity);
-  if (currentVolume > 0) {
-    previousParticipantVolumes.set(identity, currentVolume);
-    participantVolumes.set(identity, 0);
-    return;
-  }
-  participantVolumes.set(identity, previousParticipantVolumes.get(identity) ?? 1);
+  synchronizeParticipantSubscription(identity, audioPreferences.toggleParticipantVolume(identity));
+}
+
+function updateInputGain(volume: number) {
+  if (audioPreferences.setInputGain(volume)) rtc.setMicrophoneInputGain(inputGain.value);
+}
+
+function updateOutputVolume(volume: number) {
+  audioPreferences.setOutputVolume(volume);
+}
+
+function updateAudioProcessing(setting: keyof AudioProcessingSettings, enabled: boolean) {
+  if (audioPreferences.setProcessing(setting, enabled)) void rtc.setMicrophoneProcessing(audioProcessing);
+}
+
+function remotePlaybackVolume(identity: string) {
+  return Math.min(AUDIO_VOLUME_MAX, participantVolume(identity) * outputVolume.value);
 }
 
 function toggleEnlargedParticipant(identity: string) {
@@ -584,18 +664,18 @@ function toggleFocusedParticipant(identity: string) {
 
 function toggleMembersExpanded() {
   if (!membersExpanded.value) {
-    // 展开后新增的成员条只向下占用聊天区空间，主舞台保持当前高度。
+    // 下方成员条展开时只占用聊天区空间，主观看区保持当前高度。
     lockedViewerHeight.value = viewerGrid.value?.getBoundingClientRect().height ?? null;
   }
   membersExpanded.value = !membersExpanded.value;
 }
 
 function remeasureViewerHeight() {
-  if (membersExpanded.value || !hasStage.value || !viewerGrid.value) return;
-  // 先解除旧尺寸，等待 flex 根据新窗口尺寸排版，再锁定新的舞台高度。
+  if (!hasStage.value || !viewerGrid.value) return;
+  // 窗口变化后先让 flex 按当前展开状态重新排版，再锁定新的舞台高度。
   lockedViewerHeight.value = null;
   void nextTick(() => {
-    if (!membersExpanded.value && hasStage.value && viewerGrid.value) {
+    if (hasStage.value && viewerGrid.value) {
       lockedViewerHeight.value = viewerGrid.value.getBoundingClientRect().height;
     }
   });
@@ -688,44 +768,57 @@ function participantListening(participant: Participant) {
             <span><AudioLines :size="15" />语音中</span>
             <span class="voice-heading-actions">
               <small data-testid="member-count">{{ groupParticipants.length }} 人 · {{ sharingParticipants.length }} / 8 路共享</small>
-              <IconButton label="媒体诊断" :class="{ 'is-active': diagnosticsOpen }" @click="diagnosticsOpen = !diagnosticsOpen"><Activity :size="15" /></IconButton>
+              <span class="diagnostics-control" @mouseenter="showDiagnosticsPreview" @mouseleave="hideDiagnosticsPreview">
+                <IconButton label="媒体诊断" tooltip="点击固定" :class="{ 'is-active': diagnosticsPinned }"
+                  :aria-pressed="diagnosticsPinned" @click="diagnosticsPinned = !diagnosticsPinned"><Activity :size="15" /></IconButton>
+                <Transition name="floating-panel">
+                  <MediaDiagnostics v-if="diagnosticsOpen && rtc.room" :room="rtc.room" :participants="groupParticipants"
+                    @mouseenter="showDiagnosticsPreview" @mouseleave="hideDiagnosticsPreview" />
+                </Transition>
+              </span>
             </span>
           </div>
-          <MediaDiagnostics v-if="diagnosticsOpen && rtc.room" :room="rtc.room" :participants="groupParticipants" />
           <div v-if="hasStage" ref="viewerGrid" class="viewer-grid" :class="`viewer-count-${displayedParticipants.length}`"
             :style="lockedViewerHeight === null ? undefined : { flex: `0 0 ${lockedViewerHeight}px` }">
             <ParticipantCard v-for="participant in displayedParticipants" :key="participant.identity" :participant="participant"
               :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)"
-              :playback-volume="participantVolume(participant.identity)" variant="viewer" :focused="focusedOnSelectedGroup"
+              :playback-volume="participantVolume(participant.identity)" :input-gain="inputGain" :output-volume="outputVolume"
+              variant="viewer" :focused="focusedOnSelectedGroup"
               @focus="toggleFocusedParticipant(participant.identity)" @notice="viewerNotice = $event"
               @toggle-audio="toggleParticipantAudio(participant.identity)" @volume-change="updateParticipantVolume(participant.identity, $event)"
+              @input-gain-change="updateInputGain" @output-volume-change="updateOutputVolume"
               @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />
           </div>
           <div v-else class="participant-grid">
             <ParticipantCard v-for="participant in groupParticipants" :key="participant.identity" :participant="participant"
               :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)"
-              :playback-volume="participantVolume(participant.identity)" @select="toggleEnlargedParticipant(participant.identity)"
+              :playback-volume="participantVolume(participant.identity)" :input-gain="inputGain" :output-volume="outputVolume"
+              @select="toggleEnlargedParticipant(participant.identity)"
               @toggle-audio="toggleParticipantAudio(participant.identity)" @volume-change="updateParticipantVolume(participant.identity, $event)"
+              @input-gain-change="updateInputGain" @output-volume-change="updateOutputVolume"
               @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />
           </div>
           <div v-if="hasStage && !focusedOnSelectedGroup" class="member-strip-divider">
             <button type="button" :aria-label="membersExpanded ? '收起其他成员' : '展开其他成员'"
               class="icon-button member-strip-toggle" :class="{ 'is-expanded': membersExpanded }" @click="toggleMembersExpanded">
-              <UsersRound :size="15" /><ChevronDown :size="13" class="toggle-chevron" />
+              <ChevronDown :size="17" class="toggle-chevron" />
             </button>
           </div>
           <Transition name="member-strip">
             <div v-if="hasStage && membersExpanded && !focusedOnSelectedGroup" class="filmstrip-row">
-              <button v-if="filmstripPageCount > 1" type="button" class="filmstrip-page-button" aria-label="上一页成员" :disabled="filmstripPage === 0" @click="filmstripPage--"><ChevronLeft :size="17" /></button>
+              <button v-if="filmstripPageCount > 1" type="button" class="filmstrip-page-button" aria-label="上一页成员"
+                :disabled="filmstripPage === 0" @click="filmstripPage--"><ChevronLeft :size="17" /></button>
               <div class="member-filmstrip" data-testid="member-filmstrip">
                 <ParticipantCard v-for="participant in filmstripParticipants" :key="participant.identity" :participant="participant"
                   :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)"
-                  :playback-volume="participantVolume(participant.identity)" variant="thumbnail" :selected="enlargedIdentities.includes(participant.identity)"
+                  :playback-volume="participantVolume(participant.identity)" :input-gain="inputGain" :output-volume="outputVolume"
+                  variant="thumbnail" :selected="enlargedIdentities.includes(participant.identity)"
                   @select="toggleEnlargedParticipant(participant.identity)" @toggle-audio="toggleParticipantAudio(participant.identity)"
                   @volume-change="updateParticipantVolume(participant.identity, $event)" @toggle-microphone="toggleMicrophone"
-                  @toggle-listening="toggleListening" />
+                  @input-gain-change="updateInputGain" @output-volume-change="updateOutputVolume" @toggle-listening="toggleListening" />
               </div>
-              <button v-if="filmstripPageCount > 1" type="button" class="filmstrip-page-button" aria-label="下一页成员" :disabled="filmstripPage >= filmstripPageCount - 1" @click="filmstripPage++"><ChevronRight :size="17" /></button>
+              <button v-if="filmstripPageCount > 1" type="button" class="filmstrip-page-button" aria-label="下一页成员"
+                :disabled="filmstripPage >= filmstripPageCount - 1" @click="filmstripPage++"><ChevronRight :size="17" /></button>
             </div>
           </Transition>
         </section>
@@ -741,18 +834,45 @@ function participantListening(participant: Participant) {
                 </span>
               </div>
               <IconButton v-if="joinedGroup && selectedGroupId !== joinedGroup.id" label="返回当前通话群组" @click="previewGroup(joinedGroup.id)"><CornerUpLeft :size="17" /></IconButton>
-              <IconButton :label="localParticipant?.isMicrophoneEnabled ? '关闭麦克风' : '开启麦克风'" :class="{ 'is-off': !localParticipant?.isMicrophoneEnabled }"
-                :disabled="!connected || rtc.busySources.includes(Track.Source.Microphone)" @click="toggleMicrophone">
-                <VoiceLevelMic v-if="localParticipant?.isMicrophoneEnabled" :size="17" :level="localMicrophoneLevel" /><MicOff v-else :size="17" />
-              </IconButton>
-              <IconButton :label="rtc.needsAudioPlayback ? '允许播放声音' : listening ? '停止接收声音' : '恢复接收声音'"
-                :class="{ 'is-off': !listening }" :disabled="!connected || rtc.busySources.includes(Track.Source.Microphone)" @click="toggleListening">
-                <Headphones v-if="listening" :size="17" /><HeadphoneOff v-else :size="17" />
-              </IconButton>
+              <span class="call-audio-control">
+                <IconButton :label="localParticipant?.isMicrophoneEnabled ? '关闭麦克风' : '开启麦克风'" :show-tooltip="false"
+                  :class="{ 'is-off': !localParticipant?.isMicrophoneEnabled }"
+                  :disabled="!connected || rtc.busySources.includes(Track.Source.Microphone)" @click="toggleMicrophone">
+                  <VoiceLevelMic v-if="localParticipant?.isMicrophoneEnabled" :size="17" :level="localMicrophoneLevel" /><MicOff v-else :size="17" />
+                </IconButton>
+                <section class="audio-control-popover" aria-label="音频详细设置">
+                  <header><strong>音频设置</strong><span>输入与输出</span></header>
+                  <label class="audio-range"><span>麦克风输入 <b>{{ Math.round(inputGain * 100) }}%</b></span><input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="inputGain"
+                    aria-label="麦克风输入音量" @input="updateInputGain(Number(($event.target as HTMLInputElement).value))" /></label>
+                  <div class="audio-input-meter">
+                    <span>输入等级 <b>{{ localInputLevelPercent }}%</b></span>
+                    <div class="audio-level-segments" role="meter" aria-label="麦克风输入等级" aria-valuemin="0" aria-valuemax="100"
+                      :aria-valuenow="localInputLevelPercent">
+                      <i v-for="segment in INPUT_LEVEL_SEGMENTS" :key="segment"
+                        :class="{ 'is-active': segment / INPUT_LEVEL_SEGMENTS <= localInputLevel }" />
+                    </div>
+                  </div>
+                  <label class="audio-range"><span>LycanSync 输出 <b>{{ Math.round(outputVolume * 100) }}%</b></span><input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="outputVolume"
+                    aria-label="LycanSync 总输出音量" @input="updateOutputVolume(Number(($event.target as HTMLInputElement).value))" /></label>
+                  <small>每名成员的接收音量会在此基础上单独生效。</small>
+                  <div class="audio-options">
+                    <label class="audio-option"><span>回声消除</span><input type="checkbox" :checked="audioProcessing.echoCancellation"
+                      @change="updateAudioProcessing('echoCancellation', ($event.target as HTMLInputElement).checked)" /></label>
+                    <label class="audio-option"><span>环境降噪</span><input type="checkbox" :checked="audioProcessing.noiseSuppression"
+                      @change="updateAudioProcessing('noiseSuppression', ($event.target as HTMLInputElement).checked)" /></label>
+                    <label class="audio-option"><span>自动增益</span><input type="checkbox" :checked="audioProcessing.autoGainControl"
+                      @change="updateAudioProcessing('autoGainControl', ($event.target as HTMLInputElement).checked)" /></label>
+                    <label class="audio-option"><span>人声增强</span><input type="checkbox" :checked="audioProcessing.voiceEnhancement"
+                      @change="updateAudioProcessing('voiceEnhancement', ($event.target as HTMLInputElement).checked)" /></label>
+                  </div>
+                </section>
+              </span>
               <IconButton :label="localParticipant?.isScreenShareEnabled ? '停止屏幕共享' : screenShareLimitReached ? '屏幕共享已达到 8 路上限' : '开始屏幕共享'"
                 :class="{ 'is-active': localParticipant?.isScreenShareEnabled }"
                 :disabled="!connected || screenShareLimitReached || rtc.busySources.includes(Track.Source.ScreenShare)"
                 @click="rtc.toggleMedia(Track.Source.ScreenShare)"><MonitorUp :size="17" /></IconButton>
+              <IconButton label="语音设置" tooltip="语音设置（即将开放）"
+                @click="viewerNotice = '语音设置入口已预留，详细设置将在后续版本开放。'"><Settings :size="17" /></IconButton>
               <IconButton :label="joiningGroupId ? '取消连接' : '离开语音'" class="is-danger" :disabled="!joinedGroup && joiningGroupId === null" @click="leaveVoice"><LogOut :size="17" /></IconButton>
             </footer>
           </div>
@@ -768,7 +888,8 @@ function participantListening(participant: Participant) {
         <p v-if="groupError" role="alert" class="group-error">{{ groupError }}</p>
         <p v-else-if="groupLoading" class="group-hint">正在读取成员…</p>
         <div v-for="member in orderedMembers" :key="member.userId" class="group-member-row"
-          :class="{ 'is-offline': memberOnlineStatus(member) === 'OFFLINE' }">
+          :class="{ 'is-offline': memberOnlineStatus(member) === 'OFFLINE' }"
+          :data-tooltip="memberLastSeenTooltip(member)">
           <span class="group-member-avatar" :aria-label="memberStatusLabel(member)">
             <img v-if="member.userId === user.id ? user.avatar : member.avatar" :src="member.userId === user.id ? user.avatar : member.avatar" alt="" />
             <span v-else class="group-member-initial">{{ member.nickname.slice(0, 1) }}</span>
@@ -831,7 +952,7 @@ function participantListening(participant: Participant) {
       </section>
     </div>
     <RemoteAudio v-for="item in remoteAudioTracks" :key="item.track.sid" :track="item.track"
-      :volume="listening ? participantVolume(item.participantIdentity) : 0" />
+      :volume="listening ? remotePlaybackVolume(item.participantIdentity) : 0" />
     <GlobalTooltip />
   </div>
 </template>

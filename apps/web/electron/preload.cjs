@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
   getProcessMetrics: () => ipcRenderer.invoke('diagnostics:process-metrics'),
   getSystemIdleState: () => ipcRenderer.invoke('presence:system-idle-state'),
+  getAutoStart: () => ipcRenderer.invoke('settings:auto-start:get'),
+  setAutoStart: (enabled) => ipcRenderer.invoke('settings:auto-start:set', enabled),
   getCurrentActivity: () => ipcRenderer.invoke('activity:current'),
   onActivityChange: (callback) => {
     const listener = (_event, activity) => callback(activity);

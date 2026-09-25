@@ -173,11 +173,11 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/groups') return route.fulfill({ json: [{ ...group, members: undefined }] });
     if (path === `/api/groups/${groupId}/presences`) return route.fulfill({ json: [
-      { userId, status: 'ONLINE', activityType: null, activityName: null, activityStartedAt: null },
-      { userId: friendId, status: 'OFFLINE', activityType: null, activityName: null, activityStartedAt: null },
-      { userId: offlineId, status: 'OFFLINE', activityType: null, activityName: null, activityStartedAt: null },
+      { userId, status: 'ONLINE', lastSeenAt: '2026-09-25T10:00:00Z', activityType: null, activityName: null, activityStartedAt: null },
+      { userId: friendId, status: 'OFFLINE', lastSeenAt: '2026-09-24T10:15:00Z', activityType: null, activityName: null, activityStartedAt: null },
+      { userId: offlineId, status: 'OFFLINE', lastSeenAt: null, activityType: null, activityName: null, activityStartedAt: null },
       { userId: awayId, status: 'AWAY', activityType: 'GAME', activityName: 'Core Keeper',
-        activityStartedAt: new Date(Date.now() - 70_000).toISOString() },
+        lastSeenAt: '2026-09-25T10:00:00Z', activityStartedAt: new Date(Date.now() - 70_000).toISOString() },
     ] });
     if (path === `/api/groups/${groupId}`) return route.fulfill({ json: group });
     if (path === `/api/groups/${groupId}/messages`) return route.fulfill({ json: { messages: [], hasMore: false } });
@@ -190,6 +190,11 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   await expect(page.locator('.group-member-row').nth(1)).toContainText('正在玩 Core Keeper');
   await expect(page.locator('.group-member-row').nth(1).locator('.status-dot')).toHaveClass(/AWAY/);
   await expect(page.locator('.group-member-row').nth(2).locator('.status-dot')).toHaveCount(0);
+  await page.locator('.group-member-row').nth(2).hover();
+  await expect(page.getByRole('tooltip')).toContainText('最后在线：');
+  await expect(page.getByRole('tooltip')).toContainText('2026');
+  await page.locator('.group-member-row').nth(3).hover();
+  await expect(page.getByRole('tooltip')).toHaveText('最后在线：暂无记录');
   await expect(page.locator('.group-member-avatar').first()).toHaveCSS('width', '32px');
   await expect(page.locator('.group-member-name').first()).toHaveCSS('font-size', '15px');
   await expect(page.locator('.member-activity').first()).toHaveCSS('font-size', '13px');
