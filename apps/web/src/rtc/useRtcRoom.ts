@@ -86,6 +86,8 @@ export function useRtcRoom() {
         // 非可见画面仍由 SDK 暂停订阅，减少多路共享时的接收负担。
         adaptiveStream: true,
         dynacast: true,
+        // 远端成员可在本机单独放大到 200%；统一由一个 AudioContext 混音，避免额外音频管线。
+        webAudioMix: true,
         audioCaptureDefaults: {
           echoCancellation: true,
           noiseSuppression: true,

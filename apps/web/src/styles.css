@@ -196,7 +196,7 @@ button:focus-visible, input:focus-visible {
 .group-call-badge {
   position: absolute;
   right: -5px;
-  bottom: -5px;
+  top: -5px;
   width: 20px;
   height: 20px;
   display: grid;
@@ -617,6 +617,7 @@ button:focus-visible, input:focus-visible {
 }
 
 .participant-meta {
+  position: relative;
   min-height: 35px;
   display: flex;
   align-items: center;
@@ -749,6 +750,61 @@ button:focus-visible, input:focus-visible {
 }
 
 .participant-state.is-off { color: var(--danger); }
+
+.participant-volume-control {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+}
+
+.participant-audio-toggle {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.participant-volume-popover {
+  position: absolute;
+  z-index: 6;
+  right: 8px;
+  bottom: calc(100% - 8px);
+  width: min(190px, calc(100% - 16px));
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  align-items: center;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel-raised);
+  box-shadow: 0 12px 28px #0009;
+  color: var(--muted);
+  font-size: 12px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms;
+  pointer-events: none;
+}
+
+.participant-volume-control:hover .participant-volume-popover,
+.participant-volume-control:focus-within .participant-volume-popover {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.participant-volume-popover input {
+  min-width: 0;
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.participant-volume-popover > span { text-align: right; color: var(--text); }
 
 .chat-panel {
   min-height: 140px;
@@ -911,32 +967,6 @@ button:focus-visible, input:focus-visible {
 
 .call-state strong { color: var(--good); font-size: 13px; }
 .call-state small { margin-top: 2px; color: var(--muted); font-size: 12px; }
-
-.volume-popover {
-  position: absolute;
-  z-index: 30;
-  right: 87px;
-  bottom: 48px;
-  width: min(255px, calc(100% - 24px));
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 34px;
-  align-items: center;
-  gap: 9px;
-  padding: 11px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--panel-raised);
-  box-shadow: 0 15px 35px #0008;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.volume-popover input {
-  width: 100%;
-  accent-color: var(--accent);
-}
-
-.volume-popover span { text-align: right; color: var(--text); }
 
 .members-panel {
   min-width: 0;

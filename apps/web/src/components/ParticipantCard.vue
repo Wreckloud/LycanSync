@@ -13,8 +13,15 @@ const props = withDefaults(defineProps<{
   variant?: 'card' | 'viewer' | 'thumbnail';
   selected?: boolean;
   focused?: boolean;
-}>(), { variant: 'card', selected: false, focused: false });
-const emit = defineEmits<{ select: []; focus: []; notice: [message: string] }>();
+  playbackVolume?: number;
+}>(), { variant: 'card', selected: false, focused: false, playbackVolume: 1 });
+const emit = defineEmits<{
+  select: [];
+  focus: [];
+  notice: [message: string];
+  toggleAudio: [];
+  volumeChange: [volume: number];
+}>();
 const videoElement = ref<HTMLVideoElement | null>(null);
 
 // SDK 实例不作深层代理；事件版本变化时重新读取轨道和展示字段。
@@ -26,10 +33,15 @@ const media = computed(() => {
     muted: publication?.isMuted,
     sharing: props.participant.isScreenShareEnabled,
     speaking: props.participant.isSpeaking,
-    audioLevel: props.participant.isSpeaking ? props.participant.audioLevel : 0,
     microphone: props.participant.isMicrophoneEnabled,
     name: props.participant.name || props.participant.identity,
   };
+});
+const playbackPercent = computed(() => Math.round(props.playbackVolume * 100));
+const remoteAudioLabel = computed(() => {
+  const microphoneState = !media.value.microphone ? '麦克风已关闭' : media.value.speaking ? '正在说话' : '麦克风已开启';
+  const action = props.playbackVolume > 0 ? '取消收听' : '恢复收听';
+  return `${media.value.name}${microphoneState}，点击${action}`;
 });
 const selectable = computed(() => props.variant !== 'viewer' && media.value.sharing);
 const fullscreenAvailable = document.fullscreenEnabled;
@@ -112,8 +124,23 @@ function selectFromKeyboard(event: KeyboardEvent) {
         <button type="button" class="viewer-action" :aria-label="'画中画观看' + media.name + '的共享画面'"
           data-tooltip="画中画" :disabled="!media.track || media.muted || !pictureInPictureAvailable" @click="openPictureInPicture"><PictureInPicture2 :size="16" aria-hidden="true" /></button>
       </span>
-      <span class="participant-state" :class="{ 'is-off': !media.microphone }" :aria-label="media.microphone ? '麦克风已开启' : '麦克风已关闭'">
-        <VoiceLevelMic v-if="media.microphone" :size="14" :level="media.audioLevel" /><MicOff v-else :size="14" />
+      <span v-if="isLocal" class="participant-state" :class="{ 'is-off': !media.microphone }"
+        :aria-label="media.microphone ? '麦克风已开启' : '麦克风已关闭'">
+        <VoiceLevelMic v-if="media.microphone" :size="14" :level="media.speaking ? 1 : 0" :steps="1" /><MicOff v-else :size="14" />
+      </span>
+      <span v-else class="participant-volume-control">
+        <button type="button" class="participant-state participant-audio-toggle"
+          :class="{ 'is-off': !media.microphone || playbackVolume === 0 }" :aria-label="remoteAudioLabel"
+          @click="emit('toggleAudio')">
+          <VoiceLevelMic v-if="media.microphone && playbackVolume > 0" :size="14" :level="media.speaking ? 1 : 0" :steps="1" />
+          <MicOff v-else :size="14" />
+        </button>
+        <span class="participant-volume-popover" role="group" :aria-label="media.name + '的接收音量'">
+          <input type="range" min="0" max="2" step="0.05" :value="playbackVolume"
+            :aria-label="media.name + '的接收音量'"
+            @input="emit('volumeChange', Number(($event.target as HTMLInputElement).value))" />
+          <span>{{ playbackPercent }}%</span>
+        </span>
       </span>
       <span class="participant-state" :class="{ 'is-off': isListening === false }"
         :aria-label="isListening === null ? '收听状态尚未同步' : isListening ? '正在接收声音' : '已停止接收声音'">

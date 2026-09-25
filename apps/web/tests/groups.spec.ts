@@ -195,4 +195,5 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   await expect(page.locator('.member-activity').first()).toHaveCSS('font-size', '13px');
   await expect(page.locator('.group-call-badge')).toBeVisible();
   await expect(page.locator('.group-call-badge')).toHaveCSS('width', '20px');
+  await expect(page.locator('.group-call-badge')).toHaveCSS('top', '-5px');
 });

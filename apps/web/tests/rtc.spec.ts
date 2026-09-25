@@ -84,7 +84,7 @@ async function join(page: Page, nickname: string) {
   renameTestUser(page.context(), nickname);
   await page.goto('/');
   await page.getByRole('button', { name: /开黑小队，单击预览，双击加入语音/ }).dblclick();
-  await expect(page.getByRole('status')).toContainText('语音已连接');
+  await expect(page.getByTestId('callbar').getByRole('status')).toContainText('语音已连接');
   await expect(page.getByRole('button', { name: '关闭麦克风' })).toBeEnabled();
   await expect(page.getByRole('button', { name: '离开当前群组语音' })).toBeEnabled();
 }
@@ -401,18 +401,20 @@ test('双人同时语音和共享：实际收包、多画面观看、静音、�
     await page.screenshot({ path: testInfo.outputPath('two-screens-compact-expanded.png'), fullPage: true });
     await page.getByRole('button', { name: '从主观看区移除福州小狼的共享画面' }).click();
     await expect(page.getByTestId('viewer-screen')).toHaveCount(1);
-    await page.getByRole('button', { name: '调整本机接收音量' }).click();
-    const volumeSlider = page.getByRole('slider', { name: '本机接收音量' });
-    await volumeSlider.fill('0.35');
-    await expect.poll(() => page.locator('audio').evaluateAll(
-      (audios) => audios[0] instanceof HTMLAudioElement ? audios[0].volume : undefined,
-    )).toBeCloseTo(0.35);
-    await volumeSlider.fill('0');
-    await expect(page.getByRole('button', { name: '开启麦克风', exact: true })).toBeEnabled();
+    const remoteCard = page.getByTestId('member-thumbnail').filter({ hasText: '福州小狼' });
+    const remoteMic = remoteCard.getByRole('button', { name: /福州小狼(?:麦克风已开启|正在说话)，点击取消收听/ });
+    await remoteMic.hover();
+    const volumeSlider = remoteCard.getByRole('slider', { name: '福州小狼的接收音量' });
+    await expect(volumeSlider).toHaveValue('1');
+    await volumeSlider.fill('2');
+    await expect(remoteCard.locator('.participant-volume-popover > span')).toHaveText('200%');
+    await remoteMic.click();
+    await expect(remoteCard.getByRole('button', { name: /福州小狼(?:麦克风已开启|正在说话)，点击恢复收听/ })).toBeVisible();
+    await expect(volumeSlider).toHaveValue('0');
     await expect(otherPage.getByTestId('member-thumbnail').filter({ hasText: '苏州小狼' })
-      .getByLabel('麦克风已关闭')).toBeVisible();
-    await volumeSlider.fill('0.35');
-    await expect(page.getByRole('button', { name: '关闭麦克风', exact: true })).toBeEnabled();
+      .getByRole('button', { name: /苏州小狼(?:麦克风已开启|正在说话)，点击取消收听/ })).toBeVisible();
+    await remoteCard.getByRole('button', { name: /福州小狼(?:麦克风已开启|正在说话)，点击恢复收听/ }).click();
+    await expect(volumeSlider).toHaveValue('2');
     await otherPage.getByRole('button', { name: '停止接收声音', exact: true }).click();
     await expect(page.getByTestId('member-thumbnail').filter({ hasText: '福州小狼' })
       .getByLabel('已停止接收声音')).toBeVisible();
@@ -422,7 +424,7 @@ test('双人同时语音和共享：实际收包、多画面观看、静音、�
     await otherPage.getByRole('button', { name: '恢复接收声音', exact: true }).click();
     await expect(otherPage.getByRole('button', { name: '关闭麦克风', exact: true })).toBeEnabled();
     await expect(page.getByTestId('member-thumbnail').filter({ hasText: '福州小狼' })
-      .getByLabel('麦克风已开启')).toBeVisible();
+      .getByRole('button', { name: /福州小狼(?:麦克风已开启|正在说话)，点击取消收听/ })).toBeVisible();
     await otherPage.getByRole('button', { name: '关闭麦克风', exact: true }).click();
     await expect(page.getByTestId('member-thumbnail').filter({ hasText: '福州小狼' })
       .getByLabel('麦克风已关闭')).toBeVisible();

@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { normalizeVoiceLevel } from '../rtc/voiceLevel';
+import { quantizeVoiceLevel } from '../rtc/voiceLevel';
 
-const props = defineProps<{ level: number; size: number }>();
-const fillStyle = computed(() => ({ '--voice-level': normalizeVoiceLevel(props.level) }));
+const props = withDefaults(defineProps<{ level: number; size: number; steps?: number }>(), { steps: 4 });
+const fillStyle = computed(() => ({ '--voice-level': quantizeVoiceLevel(props.level, props.steps) }));
 </script>
 
 <template>
@@ -19,7 +19,7 @@ const fillStyle = computed(() => ({ '--voice-level': normalizeVoiceLevel(props.l
 <style scoped>
 .voice-level-mic { display: block; }
 .voice-level-fill {
-  fill: var(--accent);
+  fill: currentColor;
   stroke: none;
   transform: scaleY(var(--voice-level));
   transform-box: fill-box;
