@@ -1,22 +1,25 @@
 mod protocol;
+mod sources;
 pub mod state;
 
+use protocol::VideoSource;
 use protocol::{
-    CommandEnvelope, ErrorCode, MAX_LINE_BYTES, OutboundEvent, PROTOCOL_VERSION,
+    Capability, CommandEnvelope, ErrorCode, MAX_LINE_BYTES, OutboundEvent, PROTOCOL_VERSION,
     unavailable_capability, valid_identifier, valid_video_request,
 };
-use state::SessionMachine;
+use sources::{DiscoveryRuntime, SourceRegistry};
+use state::{SessionMachine, SessionState};
 use std::io::{self, BufRead, Write};
 
 pub fn run<R: BufRead, W: Write>(mut input: R, mut output: W) -> io::Result<()> {
-    let runtime = SessionMachine::default();
+    let mut runtime = Runtime::default();
     loop {
         let Some(line) = read_limited_line(&mut input)? else {
             return Ok(());
         };
         let event = match line {
             InputLine::Value(value) => match serde_json::from_str::<CommandEnvelope>(&value) {
-                Ok(command) => handle_command(&runtime, &command),
+                Ok(command) => handle_command(&mut runtime, &command),
                 Err(_) => OutboundEvent::Error {
                     protocol_version: PROTOCOL_VERSION,
                     request_id: None,
@@ -51,7 +54,7 @@ pub fn run<R: BufRead, W: Write>(mut input: R, mut output: W) -> io::Result<()> 
     }
 }
 
-fn handle_command(runtime: &SessionMachine, envelope: &CommandEnvelope) -> OutboundEvent {
+fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> OutboundEvent {
     if !valid_identifier(envelope.request_id()) {
         return error(runtime, None, ErrorCode::InvalidRequest, "requestId 无效");
     }
@@ -76,6 +79,7 @@ fn handle_command(runtime: &SessionMachine, envelope: &CommandEnvelope) -> Outbo
             state: runtime.state(),
             windows_only: true,
             video_capture: unavailable_capability(),
+            video_source_discovery: runtime.discovery_capability(),
             microphone_capture: unavailable_capability(),
             system_audio_capture: unavailable_capability(),
             process_audio_capture: unavailable_capability(),
@@ -86,6 +90,20 @@ fn handle_command(runtime: &SessionMachine, envelope: &CommandEnvelope) -> Outbo
             state: runtime.state(),
             session_id: runtime.session_id().map(str::to_owned),
             available: false,
+        },
+        CommandEnvelope::ListVideoSources { request_id, .. } => match runtime.refresh_sources() {
+            Ok((revision, sources)) => OutboundEvent::VideoSources {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: request_id.clone(),
+                revision,
+                sources,
+            },
+            Err(code) => error(
+                runtime,
+                Some(request_id.clone()),
+                code,
+                code.public_message(),
+            ),
         },
         CommandEnvelope::StartVideo {
             request_id,
@@ -105,6 +123,14 @@ fn handle_command(runtime: &SessionMachine, envelope: &CommandEnvelope) -> Outbo
                     Some(request_id.clone()),
                     ErrorCode::InvalidRequest,
                     "视频采集参数无效",
+                );
+            }
+            if !runtime.source_is_valid(source_id) {
+                return error(
+                    runtime,
+                    Some(request_id.clone()),
+                    ErrorCode::InvalidRequest,
+                    "sourceId 无效或已过期",
                 );
             }
             error(
@@ -146,7 +172,7 @@ fn handle_command(runtime: &SessionMachine, envelope: &CommandEnvelope) -> Outbo
 }
 
 fn error(
-    runtime: &SessionMachine,
+    runtime: &Runtime,
     request_id: Option<String>,
     code: ErrorCode,
     message: &'static str,
@@ -158,6 +184,40 @@ fn error(
         message,
         recoverable: true,
         state: runtime.state(),
+    }
+}
+
+#[derive(Default)]
+struct Runtime {
+    session: SessionMachine,
+    sources: SourceRegistry,
+    discovery: DiscoveryRuntime,
+}
+
+impl Runtime {
+    fn state(&self) -> SessionState {
+        self.session.state()
+    }
+
+    fn session_id(&self) -> Option<&str> {
+        self.session.session_id()
+    }
+
+    fn refresh_sources(&mut self) -> Result<(u64, Vec<VideoSource>), ErrorCode> {
+        match self.discovery.discover() {
+            Ok(discovered) => self.sources.refresh(discovered),
+            Err(error) => Err(self.sources.failed_refresh(error)),
+        }
+    }
+
+    fn discovery_capability(&mut self) -> Capability {
+        self.discovery.discovery_capability()
+    }
+
+    fn source_is_valid(&mut self, source_id: &str) -> bool {
+        self.sources
+            .target(source_id)
+            .is_some_and(|target| self.discovery.target_is_valid(target))
     }
 }
 
@@ -237,10 +297,72 @@ mod tests {
 "#,
         );
 
-        assert_eq!(events[0]["code"], "capabilityUnavailable");
+        assert_eq!(events[0]["code"], "invalidRequest");
         assert_eq!(events[0]["state"], "idle");
         assert_eq!(events[1]["available"], false);
         assert_eq!(events[1]["state"], "idle");
+    }
+
+    #[test]
+    fn repeated_winrt_queries_keep_one_runtime_alive_until_shutdown() {
+        let commands = [
+            "capabilities",
+            "capabilities",
+            "listVideoSources",
+            "listVideoSources",
+            "capabilities",
+            "listVideoSources",
+            "capabilities",
+            "listVideoSources",
+            "capabilities",
+            "capabilities",
+            "listVideoSources",
+            "listVideoSources",
+            "capabilities",
+            "listVideoSources",
+            "capabilities",
+            "listVideoSources",
+            "listVideoSources",
+            "capabilities",
+            "capabilities",
+            "listVideoSources",
+        ];
+        let mut input = commands
+            .iter()
+            .enumerate()
+            .map(|(index, command)| {
+                format!(
+                    "{{\"protocolVersion\":1,\"requestId\":\"query-{index}\",\"command\":\"{command}\"}}\n"
+                )
+            })
+            .collect::<String>();
+        input.push_str(
+            "{\"protocolVersion\":1,\"requestId\":\"shutdown\",\"command\":\"shutdown\"}\n",
+        );
+        let events = execute(&input);
+
+        assert_eq!(events.len(), commands.len() + 1);
+        for (index, command) in commands.iter().enumerate() {
+            let expected = match *command {
+                "capabilities" => "capabilities",
+                "listVideoSources" => {
+                    assert!(
+                        events[index]["event"] == "videoSources"
+                            || events[index]["event"] == "error"
+                    );
+                    if events[index]["event"] == "error" {
+                        assert!(
+                            events[index]["code"] == "sourceDiscoveryFailed"
+                                || events[index]["code"] == "platformUnsupported"
+                        );
+                    }
+                    continue;
+                }
+                _ => unreachable!(),
+            };
+            assert_eq!(events[index]["event"], expected);
+        }
+        assert_eq!(events[commands.len()]["event"], "acknowledged");
     }
 
     #[test]

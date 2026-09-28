@@ -1,0 +1,271 @@
+use crate::protocol::{ErrorCode, VideoSource, VideoSourceKind};
+
+pub const MAX_VIDEO_SOURCES: usize = 128;
+pub const MAX_TITLE_BYTES: usize = 128;
+
+#[derive(Clone, Copy)]
+pub(super) enum CaptureTarget {
+    #[cfg(target_os = "windows")]
+    Monitor(windows::NativeHmonitor),
+    #[cfg(target_os = "windows")]
+    Window(windows::NativeHwnd),
+    #[cfg(test)]
+    Test,
+}
+
+pub(super) struct DiscoveredSource {
+    pub(super) source: VideoSource,
+    pub(super) target: CaptureTarget,
+}
+
+struct RegisteredSource {
+    source: VideoSource,
+    target: CaptureTarget,
+}
+
+#[derive(Default)]
+pub struct SourceRegistry {
+    revision: u64,
+    exhausted: bool,
+    sources: Vec<RegisteredSource>,
+}
+
+impl SourceRegistry {
+    pub(super) fn refresh(
+        &mut self,
+        discovered: Vec<DiscoveredSource>,
+    ) -> Result<(u64, Vec<VideoSource>), ErrorCode> {
+        self.sources.clear();
+        if self.exhausted {
+            return Err(ErrorCode::SourceDiscoveryFailed);
+        }
+        let Some(revision) = self.revision.checked_add(1) else {
+            self.exhausted = true;
+            return Err(ErrorCode::SourceDiscoveryFailed);
+        };
+        self.revision = revision;
+        let mut monitor_index = 0;
+        let mut window_index = 0;
+        self.sources = discovered
+            .into_iter()
+            .filter_map(|mut discovered| {
+                discovered.source.title = clean_title(&discovered.source.title);
+                if discovered.source.title.is_empty() {
+                    return None;
+                }
+                let (kind, index) = match discovered.source.kind {
+                    VideoSourceKind::Monitor => {
+                        let index = monitor_index;
+                        monitor_index += 1;
+                        ("monitor", index)
+                    }
+                    VideoSourceKind::Window => {
+                        let index = window_index;
+                        window_index += 1;
+                        ("window", index)
+                    }
+                };
+                discovered.source.source_id = format!("{kind}:{revision}:{index}");
+                Some(RegisteredSource {
+                    source: discovered.source,
+                    target: discovered.target,
+                })
+            })
+            .take(MAX_VIDEO_SOURCES)
+            .collect();
+        Ok((revision, self.public_sources()))
+    }
+
+    fn invalidate(&mut self) {
+        self.sources.clear();
+        match self.revision.checked_add(1) {
+            Some(revision) => self.revision = revision,
+            None => self.exhausted = true,
+        }
+    }
+
+    pub(super) fn failed_refresh(&mut self, error: ErrorCode) -> ErrorCode {
+        self.invalidate();
+        error
+    }
+
+    fn public_sources(&self) -> Vec<VideoSource> {
+        self.sources
+            .iter()
+            .map(|registered| registered.source.clone())
+            .collect()
+    }
+
+    pub(super) fn target(&self, source_id: &str) -> Option<CaptureTarget> {
+        self.sources
+            .iter()
+            .find(|registered| registered.source.source_id == source_id)
+            .map(|registered| registered.target)
+    }
+}
+
+pub fn clean_title(title: &str) -> String {
+    let mut cleaned = String::with_capacity(title.len().min(MAX_TITLE_BYTES));
+    for character in title.chars().filter(|character| !character.is_control()) {
+        if cleaned.len() + character.len_utf8() > MAX_TITLE_BYTES {
+            break;
+        }
+        cleaned.push(character);
+    }
+    cleaned
+}
+
+#[derive(Default)]
+pub(super) struct DiscoveryRuntime {
+    #[cfg(target_os = "windows")]
+    windows: Option<Result<windows::WindowsDiscovery, ErrorCode>>,
+}
+
+impl DiscoveryRuntime {
+    pub(super) fn discovery_capability(&mut self) -> crate::protocol::Capability {
+        #[cfg(target_os = "windows")]
+        {
+            match self.windows_discovery() {
+                Ok(discovery) => discovery.capability(),
+                Err(_) => crate::protocol::Capability {
+                    available: false,
+                    reason: "sourceDiscoveryFailed",
+                },
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            crate::protocol::Capability {
+                available: false,
+                reason: "platformUnsupported",
+            }
+        }
+    }
+
+    pub(super) fn discover(&mut self) -> Result<Vec<DiscoveredSource>, ErrorCode> {
+        #[cfg(target_os = "windows")]
+        {
+            self.windows_discovery()?.discover()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Err(ErrorCode::PlatformUnsupported)
+        }
+    }
+
+    pub(super) fn target_is_valid(&mut self, target: CaptureTarget) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            self.windows_discovery()
+                .map(|discovery| discovery.target_is_valid(target))
+                .unwrap_or(false)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = target;
+            false
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_discovery(&mut self) -> Result<&mut windows::WindowsDiscovery, ErrorCode> {
+        if self.windows.is_none() {
+            self.windows = Some(windows::WindowsDiscovery::new());
+        }
+        match self.windows.as_mut().expect("discovery initialized") {
+            Ok(discovery) => Ok(discovery),
+            Err(error) => Err(*error),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod windows;
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CaptureTarget, DiscoveredSource, MAX_TITLE_BYTES, MAX_VIDEO_SOURCES, SourceRegistry,
+        clean_title,
+    };
+    use crate::protocol::{OutboundEvent, PROTOCOL_VERSION, VideoSource, VideoSourceKind};
+
+    fn discovered(kind: VideoSourceKind, title: &str) -> DiscoveredSource {
+        DiscoveredSource {
+            source: VideoSource {
+                source_id: String::new(),
+                kind,
+                title: title.to_owned(),
+                width: 640,
+                height: 480,
+                primary: false,
+            },
+            target: CaptureTarget::Test,
+        }
+    }
+
+    #[test]
+    fn refresh_assigns_opaque_ids_and_old_ids_expire() {
+        let mut registry = SourceRegistry::default();
+        let (first_revision, first) = registry
+            .refresh(vec![discovered(VideoSourceKind::Window, "window")])
+            .unwrap();
+        let old_id = first[0].source_id.clone();
+        assert_eq!(old_id, "window:1:0");
+        assert!(registry.target(&old_id).is_some());
+        let (second_revision, _) = registry
+            .refresh(vec![discovered(VideoSourceKind::Window, "window")])
+            .unwrap();
+        assert_eq!((first_revision, second_revision), (1, 2));
+        assert!(registry.target(&old_id).is_none());
+    }
+
+    #[test]
+    fn failed_refresh_invalidates_the_previous_snapshot() {
+        let mut registry = SourceRegistry::default();
+        let (_, sources) = registry
+            .refresh(vec![discovered(VideoSourceKind::Monitor, "DISPLAY1")])
+            .unwrap();
+        let old_id = sources[0].source_id.clone();
+        assert_eq!(
+            registry.failed_refresh(crate::protocol::ErrorCode::SourceDiscoveryFailed),
+            crate::protocol::ErrorCode::SourceDiscoveryFailed
+        );
+        assert!(registry.target(&old_id).is_none());
+        let (revision, next) = registry
+            .refresh(vec![discovered(VideoSourceKind::Monitor, "DISPLAY1")])
+            .unwrap();
+        assert_eq!(revision, 3);
+        assert_ne!(old_id, next[0].source_id);
+    }
+
+    #[test]
+    fn utf8_title_limit_does_not_split_a_character() {
+        let title = format!("{}z", "界".repeat(100));
+        let cleaned = clean_title(&title);
+        assert!(cleaned.len() <= MAX_TITLE_BYTES);
+        assert_eq!(cleaned.len() % "界".len(), 0);
+        assert!(!cleaned.chars().any(char::is_control));
+    }
+
+    #[test]
+    fn maximum_source_event_stays_within_the_line_limit() {
+        let title = "\\\"".repeat(MAX_TITLE_BYTES / 2);
+        let mut registry = SourceRegistry::default();
+        let (_, sources) = registry
+            .refresh(
+                (0..MAX_VIDEO_SOURCES)
+                    .map(|_| discovered(VideoSourceKind::Window, &title))
+                    .collect(),
+            )
+            .unwrap();
+        let event = OutboundEvent::VideoSources {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "r".repeat(128),
+            revision: u64::MAX,
+            sources,
+        };
+        let encoded = serde_json::to_vec(&event).unwrap();
+        assert!(encoded.len() < crate::protocol::MAX_LINE_BYTES as usize);
+    }
+}

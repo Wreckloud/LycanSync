@@ -42,6 +42,10 @@ pub enum CommandEnvelope {
         protocol_version: u16,
         request_id: String,
     },
+    ListVideoSources {
+        protocol_version: u16,
+        request_id: String,
+    },
 }
 
 impl CommandEnvelope {
@@ -62,6 +66,9 @@ impl CommandEnvelope {
             | Self::StopVideo {
                 protocol_version, ..
             }
+            | Self::ListVideoSources {
+                protocol_version, ..
+            }
             | Self::Shutdown {
                 protocol_version, ..
             } => *protocol_version,
@@ -75,6 +82,7 @@ impl CommandEnvelope {
             | Self::Diagnostics { request_id, .. }
             | Self::StartVideo { request_id, .. }
             | Self::StopVideo { request_id, .. }
+            | Self::ListVideoSources { request_id, .. }
             | Self::Shutdown { request_id, .. } => request_id,
         }
     }
@@ -85,6 +93,24 @@ impl CommandEnvelope {
 pub struct Capability {
     pub available: bool,
     pub reason: &'static str,
+}
+
+#[derive(Clone, Copy, Serialize, Debug, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoSourceKind {
+    Monitor,
+    Window,
+}
+
+#[derive(Clone, Serialize, Debug, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoSource {
+    pub source_id: String,
+    pub kind: VideoSourceKind,
+    pub title: String,
+    pub width: u32,
+    pub height: u32,
+    pub primary: bool,
 }
 
 #[derive(Serialize)]
@@ -106,6 +132,7 @@ pub enum OutboundEvent {
         state: SessionState,
         windows_only: bool,
         video_capture: Capability,
+        video_source_discovery: Capability,
         microphone_capture: Capability,
         system_audio_capture: Capability,
         process_audio_capture: Capability,
@@ -116,6 +143,12 @@ pub enum OutboundEvent {
         state: SessionState,
         session_id: Option<String>,
         available: bool,
+    },
+    VideoSources {
+        protocol_version: u16,
+        request_id: String,
+        revision: u64,
+        sources: Vec<VideoSource>,
     },
     Acknowledged {
         protocol_version: u16,
@@ -134,7 +167,7 @@ pub enum OutboundEvent {
     },
 }
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Serialize, Debug, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorCode {
     MalformedJson,
@@ -142,6 +175,19 @@ pub enum ErrorCode {
     UnsupportedProtocolVersion,
     InvalidRequest,
     CapabilityUnavailable,
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    PlatformUnsupported,
+    SourceDiscoveryFailed,
+}
+
+impl ErrorCode {
+    pub fn public_message(self) -> &'static str {
+        match self {
+            Self::PlatformUnsupported => "当前平台不支持视频源发现",
+            Self::SourceDiscoveryFailed => "视频源发现失败",
+            _ => "请求无法处理",
+        }
+    }
 }
 
 pub fn valid_identifier(value: &str) -> bool {
@@ -156,5 +202,45 @@ pub fn unavailable_capability() -> Capability {
     Capability {
         available: false,
         reason: "notImplemented",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CommandEnvelope, OutboundEvent, PROTOCOL_VERSION, VideoSource, VideoSourceKind};
+
+    #[test]
+    fn deserializes_list_video_sources_request() {
+        let request: CommandEnvelope = serde_json::from_str(
+            r#"{"protocolVersion":1,"requestId":"sources-1","command":"listVideoSources"}"#,
+        )
+        .unwrap();
+        assert_eq!(request.protocol_version(), PROTOCOL_VERSION);
+        assert_eq!(request.request_id(), "sources-1");
+        assert!(matches!(request, CommandEnvelope::ListVideoSources { .. }));
+    }
+
+    #[test]
+    fn serializes_video_sources_event_with_protocol_fields() {
+        let event = OutboundEvent::VideoSources {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "sources-1".to_owned(),
+            revision: 1,
+            sources: vec![VideoSource {
+                source_id: "monitor:1:0".to_owned(),
+                kind: VideoSourceKind::Monitor,
+                title: "DISPLAY1".to_owned(),
+                width: 1920,
+                height: 1080,
+                primary: true,
+            }],
+        };
+        let value = serde_json::to_value(event).unwrap();
+        assert_eq!(value["event"], "videoSources");
+        assert_eq!(value["protocolVersion"], 1);
+        assert_eq!(value["requestId"], "sources-1");
+        assert_eq!(value["revision"], 1);
+        assert_eq!(value["sources"][0]["kind"], "monitor");
+        assert_eq!(value["sources"][0]["sourceId"], "monitor:1:0");
     }
 }
