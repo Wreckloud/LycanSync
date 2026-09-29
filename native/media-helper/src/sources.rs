@@ -3,12 +3,22 @@ use crate::protocol::{ErrorCode, VideoSource, VideoSourceKind};
 pub const MAX_VIDEO_SOURCES: usize = 128;
 pub const MAX_TITLE_BYTES: usize = 128;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) enum CaptureTarget {
     #[cfg(target_os = "windows")]
     Monitor(windows::NativeHmonitor),
     #[cfg(target_os = "windows")]
-    Window(windows::NativeHwnd),
+    Window(windows::NativeHwnd, windows::WindowIdentity),
+    #[cfg(test)]
+    Test,
+}
+
+#[derive(Clone)]
+pub(super) enum ThreadCaptureTarget {
+    #[cfg(target_os = "windows")]
+    Monitor(usize),
+    #[cfg(target_os = "windows")]
+    Window(usize, windows::WindowIdentity),
     #[cfg(test)]
     Test,
 }
@@ -100,7 +110,29 @@ impl SourceRegistry {
         self.sources
             .iter()
             .find(|registered| registered.source.source_id == source_id)
-            .map(|registered| registered.target)
+            .map(|registered| registered.target.clone())
+    }
+
+    pub(super) fn kind(&self, source_id: &str) -> Option<VideoSourceKind> {
+        self.sources
+            .iter()
+            .find(|registered| registered.source.source_id == source_id)
+            .map(|registered| registered.source.kind)
+    }
+}
+
+impl CaptureTarget {
+    pub(super) fn thread_target(self) -> ThreadCaptureTarget {
+        match self {
+            #[cfg(target_os = "windows")]
+            Self::Monitor(monitor) => ThreadCaptureTarget::Monitor(monitor.0 as usize),
+            #[cfg(target_os = "windows")]
+            Self::Window(window, identity) => {
+                ThreadCaptureTarget::Window(window.0 as usize, identity)
+            }
+            #[cfg(test)]
+            Self::Test => ThreadCaptureTarget::Test,
+        }
     }
 }
 
@@ -142,6 +174,26 @@ impl DiscoveryRuntime {
         }
     }
 
+    pub(super) fn video_capture_capability(&mut self) -> crate::protocol::Capability {
+        #[cfg(target_os = "windows")]
+        {
+            match self.windows_discovery() {
+                Ok(discovery) => discovery.video_capture_capability(),
+                Err(_) => crate::protocol::Capability {
+                    available: false,
+                    reason: "sourceDiscoveryFailed",
+                },
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            crate::protocol::Capability {
+                available: false,
+                reason: "platformUnsupported",
+            }
+        }
+    }
+
     pub(super) fn discover(&mut self) -> Result<Vec<DiscoveredSource>, ErrorCode> {
         #[cfg(target_os = "windows")]
         {
@@ -153,7 +205,7 @@ impl DiscoveryRuntime {
         }
     }
 
-    pub(super) fn target_is_valid(&mut self, target: CaptureTarget) -> bool {
+    pub(super) fn target_is_valid(&mut self, target: &CaptureTarget) -> bool {
         #[cfg(target_os = "windows")]
         {
             self.windows_discovery()
@@ -180,7 +232,7 @@ impl DiscoveryRuntime {
 }
 
 #[cfg(target_os = "windows")]
-mod windows;
+pub(super) mod windows;
 
 #[cfg(test)]
 mod tests {

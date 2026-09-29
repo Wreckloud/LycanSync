@@ -1,3 +1,8 @@
+mod audio_probe;
+mod audio_sources;
+mod capture;
+#[cfg(target_os = "windows")]
+mod d3d;
 mod protocol;
 mod sources;
 pub mod state;
@@ -5,7 +10,8 @@ pub mod state;
 use protocol::VideoSource;
 use protocol::{
     Capability, CommandEnvelope, ErrorCode, MAX_LINE_BYTES, OutboundEvent, PROTOCOL_VERSION,
-    unavailable_capability, valid_identifier, valid_video_request,
+    audio_source_discovery_capability, unavailable_capability, unavailable_video_output_capability,
+    valid_identifier,
 };
 use sources::{DiscoveryRuntime, SourceRegistry};
 use state::{SessionMachine, SessionState};
@@ -15,6 +21,7 @@ pub fn run<R: BufRead, W: Write>(mut input: R, mut output: W) -> io::Result<()> 
     let mut runtime = Runtime::default();
     loop {
         let Some(line) = read_limited_line(&mut input)? else {
+            audio_probe_shutdown_result(runtime.shutdown_audio_probe())?;
             return Ok(());
         };
         let event = match line {
@@ -55,6 +62,8 @@ pub fn run<R: BufRead, W: Write>(mut input: R, mut output: W) -> io::Result<()> 
 }
 
 fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> OutboundEvent {
+    runtime.reap_finished_capture();
+    runtime.reap_finished_audio_probe();
     if !valid_identifier(envelope.request_id()) {
         return error(runtime, None, ErrorCode::InvalidRequest, "requestId 无效");
     }
@@ -78,19 +87,54 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
             request_id: request_id.clone(),
             state: runtime.state(),
             windows_only: true,
-            video_capture: unavailable_capability(),
+            video_capture: runtime.video_capture_capability(),
+            capture_probe: runtime.capture_probe_capability(),
             video_source_discovery: runtime.discovery_capability(),
             microphone_capture: unavailable_capability(),
             system_audio_capture: unavailable_capability(),
             process_audio_capture: unavailable_capability(),
+            audio_source_discovery: audio_source_discovery_capability(),
+            microphone_probe: audio_probe::probe_capability(),
         },
-        CommandEnvelope::Diagnostics { request_id, .. } => OutboundEvent::Diagnostics {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: request_id.clone(),
-            state: runtime.state(),
-            session_id: runtime.session_id().map(str::to_owned),
-            available: false,
-        },
+        CommandEnvelope::Diagnostics { request_id, .. } => {
+            let snapshot = runtime.capture.snapshot();
+            OutboundEvent::Diagnostics {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: request_id.clone(),
+                state: runtime.state(),
+                session_id: runtime.session_id().map(str::to_owned),
+                available: true,
+                source_kind: snapshot.as_ref().and_then(|value| value.source_kind),
+                frame_width: snapshot.as_ref().and_then(|value| value.frame_width),
+                frame_height: snapshot.as_ref().and_then(|value| value.frame_height),
+                frames_received: snapshot.as_ref().and_then(|value| value.frames_received),
+                frames_processed: snapshot.as_ref().and_then(|value| value.frames_processed),
+                dropped_notifications: snapshot
+                    .as_ref()
+                    .and_then(|value| value.dropped_notifications),
+                raw_capture_fps: snapshot.as_ref().and_then(|value| value.raw_capture_fps),
+                probe_processed_fps: snapshot
+                    .as_ref()
+                    .and_then(|value| value.probe_processed_fps),
+                raw_frame_interval_p50_ms: snapshot
+                    .as_ref()
+                    .and_then(|value| value.raw_frame_interval_p50_ms),
+                raw_frame_interval_p95_ms: snapshot
+                    .as_ref()
+                    .and_then(|value| value.raw_frame_interval_p95_ms),
+                raw_frame_interval_p99_ms: snapshot
+                    .as_ref()
+                    .and_then(|value| value.raw_frame_interval_p99_ms),
+                raw_timestamp_anomalies: snapshot
+                    .as_ref()
+                    .and_then(|value| value.raw_timestamp_anomalies),
+                last_frame_age_ms: snapshot.as_ref().and_then(|value| value.last_frame_age_ms),
+                size_changes: snapshot.as_ref().and_then(|value| value.size_changes),
+                last_capture_error: snapshot.as_ref().and_then(|value| value.last_capture_error),
+                stop_duration_ms: snapshot.as_ref().and_then(|value| value.stop_duration_ms),
+                microphone_probe: runtime.audio_probe.snapshot(),
+            }
+        }
         CommandEnvelope::ListVideoSources { request_id, .. } => match runtime.refresh_sources() {
             Ok((revision, sources)) => OutboundEvent::VideoSources {
                 protocol_version: PROTOCOL_VERSION,
@@ -105,42 +149,61 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                 code.public_message(),
             ),
         },
-        CommandEnvelope::StartVideo {
+        CommandEnvelope::ListAudioSources { request_id, .. } => {
+            match runtime.refresh_audio_sources() {
+                Ok(snapshot) => OutboundEvent::AudioSources {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: request_id.clone(),
+                    revision: snapshot.revision,
+                    inputs: snapshot.inputs,
+                    outputs: snapshot.outputs,
+                    input_status: snapshot.input_status,
+                    output_status: snapshot.output_status,
+                    inputs_truncated: snapshot.inputs_truncated,
+                    outputs_truncated: snapshot.outputs_truncated,
+                },
+                Err(code) => error(
+                    runtime,
+                    Some(request_id.clone()),
+                    code,
+                    code.public_message(),
+                ),
+            }
+        }
+        CommandEnvelope::StartMicrophoneProbe {
             request_id,
             session_id,
             source_id,
-            target_width,
-            target_height,
-            max_fps,
             ..
         } => {
-            if !valid_identifier(session_id)
-                || !valid_identifier(source_id)
-                || !valid_video_request(*target_width, *target_height, *max_fps)
+            if !valid_identifier(session_id) || !valid_identifier(source_id) {
+                return error(
+                    runtime,
+                    Some(request_id.clone()),
+                    ErrorCode::InvalidRequest,
+                    "探针参数无效",
+                );
+            }
+            match runtime
+                .audio_probe
+                .start(&runtime.audio_sources, session_id, source_id)
             {
-                return error(
+                Ok(()) => OutboundEvent::Acknowledged {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: request_id.clone(),
+                    command: "startMicrophoneProbe",
+                    state: runtime.state(),
+                    changed: true,
+                },
+                Err(code) => error(
                     runtime,
                     Some(request_id.clone()),
-                    ErrorCode::InvalidRequest,
-                    "视频采集参数无效",
-                );
+                    code,
+                    code.public_message(),
+                ),
             }
-            if !runtime.source_is_valid(source_id) {
-                return error(
-                    runtime,
-                    Some(request_id.clone()),
-                    ErrorCode::InvalidRequest,
-                    "sourceId 无效或已过期",
-                );
-            }
-            error(
-                runtime,
-                Some(request_id.clone()),
-                ErrorCode::CapabilityUnavailable,
-                "原生视频采集将在 Phase 1 启用",
-            )
         }
-        CommandEnvelope::StopVideo {
+        CommandEnvelope::StopMicrophoneProbe {
             request_id,
             session_id,
             ..
@@ -153,20 +216,119 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                     "sessionId 无效",
                 );
             }
-            OutboundEvent::Acknowledged {
-                protocol_version: PROTOCOL_VERSION,
-                request_id: request_id.clone(),
-                command: "stopVideo",
-                state: runtime.state(),
-                changed: false,
+            match runtime.audio_probe.stop(session_id) {
+                Ok(changed) => OutboundEvent::Acknowledged {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: request_id.clone(),
+                    command: "stopMicrophoneProbe",
+                    state: runtime.state(),
+                    changed,
+                },
+                Err(code) => error(
+                    runtime,
+                    Some(request_id.clone()),
+                    code,
+                    code.public_message(),
+                ),
             }
         }
-        CommandEnvelope::Shutdown { request_id, .. } => OutboundEvent::Acknowledged {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: request_id.clone(),
-            command: "shutdown",
-            state: runtime.state(),
-            changed: false,
+        CommandEnvelope::StartVideo {
+            request_id,
+            session_id: _session_id,
+            source_id: _source_id,
+            target_width: _target_width,
+            target_height: _target_height,
+            max_fps: _max_fps,
+            ..
+        } => error(
+            runtime,
+            Some(request_id.clone()),
+            ErrorCode::VideoOutputUnavailable,
+            ErrorCode::VideoOutputUnavailable.public_message(),
+        ),
+        CommandEnvelope::StartCaptureProbe {
+            request_id,
+            session_id,
+            source_id,
+            ..
+        } => {
+            if !valid_identifier(session_id) || !valid_identifier(source_id) {
+                return error(
+                    runtime,
+                    Some(request_id.clone()),
+                    ErrorCode::InvalidRequest,
+                    "探针参数无效",
+                );
+            }
+            match runtime.start_probe(session_id, source_id) {
+                Ok(()) => OutboundEvent::Acknowledged {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: request_id.clone(),
+                    command: "startCaptureProbe",
+                    state: runtime.state(),
+                    changed: true,
+                },
+                Err(code) => error(
+                    runtime,
+                    Some(request_id.clone()),
+                    code,
+                    code.public_message(),
+                ),
+            }
+        }
+        CommandEnvelope::StopVideo {
+            request_id,
+            session_id: _session_id,
+            ..
+        } => error(
+            runtime,
+            Some(request_id.clone()),
+            ErrorCode::VideoOutputUnavailable,
+            ErrorCode::VideoOutputUnavailable.public_message(),
+        ),
+        CommandEnvelope::StopCaptureProbe {
+            request_id,
+            session_id,
+            ..
+        } => {
+            if !valid_identifier(session_id) {
+                return error(
+                    runtime,
+                    Some(request_id.clone()),
+                    ErrorCode::InvalidRequest,
+                    "sessionId 无效",
+                );
+            }
+            match runtime.stop_probe(session_id) {
+                Ok(changed) => OutboundEvent::Acknowledged {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: request_id.clone(),
+                    command: "stopCaptureProbe",
+                    state: runtime.state(),
+                    changed,
+                },
+                Err(code) => error(
+                    runtime,
+                    Some(request_id.clone()),
+                    code,
+                    code.public_message(),
+                ),
+            }
+        }
+        CommandEnvelope::Shutdown { request_id, .. } => match runtime.shutdown_audio_probe() {
+            Ok(()) => OutboundEvent::Acknowledged {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: request_id.clone(),
+                command: "shutdown",
+                state: runtime.state(),
+                changed: false,
+            },
+            Err(code) => error(
+                runtime,
+                Some(request_id.clone()),
+                code,
+                code.public_message(),
+            ),
         },
     }
 }
@@ -191,7 +353,11 @@ fn error(
 struct Runtime {
     session: SessionMachine,
     sources: SourceRegistry,
+    capture: capture::CaptureManager,
     discovery: DiscoveryRuntime,
+    last_completed_session_id: Option<String>,
+    audio_sources: audio_sources::AudioSourceRegistry,
+    audio_probe: audio_probe::AudioProbeManager,
 }
 
 impl Runtime {
@@ -204,6 +370,7 @@ impl Runtime {
     }
 
     fn refresh_sources(&mut self) -> Result<(u64, Vec<VideoSource>), ErrorCode> {
+        self.reap_finished_capture();
         match self.discovery.discover() {
             Ok(discovered) => self.sources.refresh(discovered),
             Err(error) => Err(self.sources.failed_refresh(error)),
@@ -214,10 +381,98 @@ impl Runtime {
         self.discovery.discovery_capability()
     }
 
-    fn source_is_valid(&mut self, source_id: &str) -> bool {
-        self.sources
+    fn refresh_audio_sources(&mut self) -> Result<audio_sources::AudioSourceSnapshot, ErrorCode> {
+        match audio_sources::discover() {
+            Ok(discovered) => self.audio_sources.refresh(discovered),
+            Err(error) => Err(self.audio_sources.failed_refresh(error)),
+        }
+    }
+
+    fn shutdown_audio_probe(&mut self) -> Result<(), ErrorCode> {
+        self.audio_probe.shutdown()
+    }
+
+    fn reap_finished_audio_probe(&mut self) {
+        self.audio_probe.reap_finished();
+    }
+
+    fn video_capture_capability(&self) -> Capability {
+        unavailable_video_output_capability()
+    }
+
+    fn capture_probe_capability(&mut self) -> Capability {
+        self.discovery.video_capture_capability()
+    }
+
+    fn start_probe(&mut self, session_id: &str, source_id: &str) -> Result<(), ErrorCode> {
+        self.reap_finished_capture();
+        if self.state() != SessionState::Idle {
+            return Err(ErrorCode::CaptureAlreadyRunning);
+        }
+        let target = self
+            .sources
             .target(source_id)
-            .is_some_and(|target| self.discovery.target_is_valid(target))
+            .ok_or(ErrorCode::InvalidRequest)?;
+        let source_kind = self
+            .sources
+            .kind(source_id)
+            .ok_or(ErrorCode::InvalidRequest)?;
+        if !self.discovery.target_is_valid(&target) {
+            return Err(ErrorCode::InvalidRequest);
+        }
+        self.session
+            .begin(session_id.to_owned())
+            .map_err(|_| ErrorCode::CaptureAlreadyRunning)?;
+        if let Err(error) = self.capture.start(target.thread_target(), source_kind) {
+            let _ = self.session.fail_start();
+            return Err(error);
+        }
+        if self.session.mark_running().is_err() {
+            let _ = self.session.fail_start();
+            let _ = self.capture.stop();
+            return Err(ErrorCode::CaptureStartFailed);
+        }
+        self.last_completed_session_id = None;
+        Ok(())
+    }
+
+    fn stop_probe(&mut self, session_id: &str) -> Result<bool, ErrorCode> {
+        self.reap_finished_capture();
+        if self.state() == SessionState::Idle {
+            return if self.last_completed_session_id.as_deref() == Some(session_id) {
+                Ok(false)
+            } else {
+                Err(ErrorCode::CaptureSessionMismatch)
+            };
+        }
+        if self.session_id() != Some(session_id) {
+            return Err(ErrorCode::CaptureSessionMismatch);
+        }
+        if self.state() == SessionState::Running {
+            self.session
+                .begin_stop(session_id)
+                .map_err(|_| ErrorCode::CaptureSessionMismatch)?;
+        }
+        self.capture.stop()?;
+        self.session
+            .finish_stop()
+            .map_err(|_| ErrorCode::CaptureSessionMismatch)?;
+        self.last_completed_session_id = Some(session_id.to_owned());
+        Ok(true)
+    }
+
+    fn reap_finished_capture(&mut self) {
+        if self.capture.reap_finished().is_none() {
+            return;
+        }
+        if let Some(session_id) = self.session_id().map(str::to_owned) {
+            if self.state() == SessionState::Running {
+                let _ = self.session.begin_stop(&session_id);
+            }
+            if self.state() == SessionState::Stopping && self.session.finish_stop().is_ok() {
+                self.last_completed_session_id = Some(session_id);
+            }
+        }
     }
 }
 
@@ -257,9 +512,14 @@ fn discard_to_newline<R: BufRead>(input: &mut R) -> io::Result<()> {
     }
 }
 
+fn audio_probe_shutdown_result(result: Result<(), ErrorCode>) -> io::Result<()> {
+    result.map_err(|code| io::Error::other(code.diagnostic_name()))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::run;
+    use super::{audio_probe_shutdown_result, run};
+    use crate::protocol::ErrorCode;
     use serde_json::Value;
     use std::io::Cursor;
 
@@ -274,6 +534,22 @@ mod tests {
     }
 
     #[test]
+    fn stdin_eof_returns_success_when_audio_probe_cleanup_succeeds() {
+        let mut output = Vec::new();
+        assert!(run(Cursor::new(b""), &mut output).is_ok());
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn stdin_eof_cleanup_failure_becomes_a_process_error() {
+        let error = audio_probe_shutdown_result(Err(ErrorCode::AudioProbeStopFailed))
+            .expect_err("cleanup failure must not be reported as successful EOF");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert_eq!(error.to_string(), "audioProbeStopFailed");
+    }
+
+    #[test]
     fn reports_protocol_version_and_real_capabilities() {
         let events = execute(
             r#"{"protocolVersion":1,"requestId":"hello-1","command":"hello"}
@@ -284,23 +560,90 @@ mod tests {
 
         assert_eq!(events[0]["event"], "hello");
         assert_eq!(events[0]["state"], "idle");
+        assert!(events[1]["videoCapture"]["available"].is_boolean());
         assert_eq!(events[1]["videoCapture"]["available"], false);
+        assert!(events[1]["captureProbe"]["available"].is_boolean());
         assert_eq!(events[1]["systemAudioCapture"]["available"], false);
+        assert_eq!(events[1]["microphoneCapture"]["available"], false);
+        assert!(events[1]["microphoneProbe"]["available"].is_boolean());
+        assert_eq!(events[1]["processAudioCapture"]["available"], false);
+        assert!(events[1]["audioSourceDiscovery"]["available"].is_boolean());
         assert_eq!(events[2]["event"], "acknowledged");
     }
 
     #[test]
-    fn rejects_unimplemented_capture_without_changing_state() {
+    fn distinguishes_video_output_from_the_capture_probe() {
         let events = execute(
             r#"{"protocolVersion":1,"requestId":"start-1","command":"startVideo","sessionId":"capture-1","sourceId":"window-1","targetWidth":1920,"targetHeight":1080,"maxFps":60}
+{"protocolVersion":1,"requestId":"probe-1","command":"startCaptureProbe","sessionId":"capture-1","sourceId":"window-1"}
 {"protocolVersion":1,"requestId":"diagnostics-1","command":"diagnostics"}
 "#,
         );
 
-        assert_eq!(events[0]["code"], "invalidRequest");
+        assert_eq!(events[0]["code"], "videoOutputUnavailable");
         assert_eq!(events[0]["state"], "idle");
-        assert_eq!(events[1]["available"], false);
-        assert_eq!(events[1]["state"], "idle");
+        assert_eq!(events[1]["code"], "invalidRequest");
+        assert_eq!(events[2]["available"], true);
+        assert_eq!(events[2]["state"], "idle");
+    }
+
+    #[test]
+    fn diagnostics_exposes_distinct_rate_and_interval_fields_as_unavailable_when_idle() {
+        let events = execute(
+            r#"{"protocolVersion":1,"requestId":"diagnostics-1","command":"diagnostics"}
+{"protocolVersion":1,"requestId":"shutdown-1","command":"shutdown"}
+"#,
+        );
+
+        let diagnostics = &events[0];
+        for field in [
+            "rawCaptureFps",
+            "probeProcessedFps",
+            "rawFrameIntervalP50Ms",
+            "rawFrameIntervalP95Ms",
+            "rawFrameIntervalP99Ms",
+            "rawTimestampAnomalies",
+        ] {
+            assert!(diagnostics.get(field).is_some(), "missing {field}");
+        }
+        assert_eq!(diagnostics["rawCaptureFps"], serde_json::Value::Null);
+        assert_eq!(diagnostics["probeProcessedFps"], serde_json::Value::Null);
+        assert_eq!(
+            diagnostics["rawFrameIntervalP50Ms"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            diagnostics["rawFrameIntervalP95Ms"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            diagnostics["rawFrameIntervalP99Ms"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            diagnostics["rawTimestampAnomalies"],
+            serde_json::Value::Null
+        );
+        assert_eq!(diagnostics["microphoneProbe"]["state"], "idle");
+        assert_eq!(
+            diagnostics["microphoneProbe"]["packetsReceived"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn microphone_probe_commands_are_parsed_without_opening_a_device() {
+        let events = execute(
+            r#"{"protocolVersion":1,"requestId":"mic-start","command":"startMicrophoneProbe","sessionId":"mic-session","sourceId":"audioInput:1:0"}
+{"protocolVersion":1,"requestId":"mic-stop","command":"stopMicrophoneProbe","sessionId":"mic-session"}
+{"protocolVersion":1,"requestId":"shutdown","command":"shutdown"}
+"#,
+        );
+
+        assert_eq!(events[0]["code"], "audioDeviceUnavailable");
+        assert_eq!(events[0]["state"], "idle");
+        assert_eq!(events[1]["code"], "audioProbeSessionMismatch");
+        assert_eq!(events[2]["command"], "shutdown");
     }
 
     #[test]
