@@ -75,10 +75,12 @@ public class ChatController {
             @PathVariable @Parameter(description = "群组 ID") UUID groupId,
             @RequestParam(value = "content", required = false) @Parameter(description = "消息文字") String content,
             @RequestPart(value = "image", required = false) @Parameter(description = "PNG 或 JPEG 图片") MultipartFile image,
+            @RequestParam(value = "messageId", required = false)
+            @Parameter(description = "图片消息重试时保持不变的消息 ID") UUID messageId,
             @AuthenticationPrincipal AuthenticatedUser user
     ) {
         return ResponseEntity.status(201).cacheControl(CacheControl.noStore())
-                .body(chatService.sendMessage(groupId, user, content, image));
+                .body(chatService.sendMessage(groupId, user, content, image, messageId));
     }
 
     @PostMapping(value = "/files", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)

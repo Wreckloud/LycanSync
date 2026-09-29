@@ -34,9 +34,9 @@ public class ChatFileQuotaService {
     }
 
     @Transactional
-    public void reserve(UUID uploadId, UUID groupId, long byteSize) {
+    public void reserve(UUID uploadId, UUID groupId, long byteSize, UUID processInstanceId) {
         int reserved = mapper.reserveFileStorage(uploadId, groupId, byteSize,
-                properties.getMaxStorageSize(), Instant.now(systemClock));
+                properties.getMaxStorageSize(), Instant.now(systemClock), processInstanceId);
         if (reserved != 1) {
             throw new GroupException(HttpStatus.INSUFFICIENT_STORAGE, ApiErrorCode.CHAT_FILE_STORAGE_FULL,
                     "服务器文件存储空间不足");
@@ -52,11 +52,13 @@ public class ChatFileQuotaService {
 
     @Transactional
     public void release(UUID uploadId) {
-        mapper.releaseFileStorageReservation(uploadId);
+        if (mapper.releaseFileStorageReservation(uploadId) != 1) {
+            throw new IllegalStateException("文件存储额度预留释放失败");
+        }
     }
 
-    public List<ChatFileUploadReservation> findExpiredReservations(Instant createdBefore) {
-        return mapper.findExpiredFileStorageReservations(createdBefore);
+    public List<ChatFileUploadReservation> findReservations() {
+        return mapper.findFileStorageReservations();
     }
 
     public boolean fileExists(UUID attachmentId) {

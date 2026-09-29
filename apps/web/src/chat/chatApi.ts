@@ -50,10 +50,12 @@ export async function findMessages(groupId: string,
   return response.json() as Promise<ChatMessagePage>;
 }
 
-export async function sendMessage(groupId: string, content: string, image?: File, signal?: AbortSignal): Promise<ChatMessage> {
+export async function sendMessage(groupId: string, content: string, image?: File, signal?: AbortSignal,
+  messageId?: string): Promise<ChatMessage> {
   const body = new FormData();
   if (content) body.append('content', content);
   if (image) body.append('image', image, image.name);
+  if (messageId) body.append('messageId', messageId);
   const response = await authenticatedFetch(messagePath(groupId), {
     method: 'POST', headers: { Accept: 'application/json' }, body,
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),

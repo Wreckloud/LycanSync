@@ -675,6 +675,49 @@ test('混合拖入按原顺序逐项压缩图片并原样发送其他文件', as
   await expect(page.locator('.chat-message-content').last()).toHaveText('说明');
 });
 
+test('图片响应丢失后重试沿用消息 ID，界面只显示一条', async ({ page }) => {
+  await mockChatShell(page);
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+  const requestIds: string[] = [];
+  await page.route('**/api/groups**', async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
+    if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (url.pathname === `/api/groups/${groupId}/messages` && request.method() === 'GET') {
+      return route.fulfill({ json: { messages: [], hasMore: false } });
+    }
+    if (url.pathname === `/api/groups/${groupId}/messages` && request.method() === 'POST') {
+      const messageId = request.postData()?.match(/name="messageId"\r?\n\r?\n([^\r\n]+)/u)?.[1];
+      if (!messageId) throw new Error('图片请求缺少 messageId');
+      requestIds.push(messageId);
+      if (requestIds.length === 1) {
+        return route.fulfill({ status: 503, json: { code: 'UNKNOWN_ERROR', detail: '响应丢失' } });
+      }
+      const message: ChatMessage = { ...imageMessage(1, 'image-attachment'), id: messageId, content: '说明' };
+      return route.fulfill({ status: 201, json: message });
+    }
+    return route.fulfill({ status: 404 });
+  });
+
+  await page.goto('/');
+  await page.getByLabel('消息内容').fill('说明');
+  await page.locator('.chat-panel').evaluate((panel, encodedPng) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([Uint8Array.from(atob(encodedPng), (character) => character.charCodeAt(0))],
+      'screen.png', { type: 'image/png' }));
+    panel.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: transfer }));
+  }, png.toString('base64'));
+  await expect(page.locator('.composer-attachment')).toHaveCount(1);
+  await page.getByRole('button', { name: '发送消息' }).click();
+  await expect(page.getByRole('alert')).toHaveText('响应丢失');
+  await page.getByRole('button', { name: '发送消息' }).click();
+  await expect.poll(() => requestIds).toHaveLength(2);
+  expect(requestIds[1]).toBe(requestIds[0]);
+  await expect(page.locator(`[data-message-id="${requestIds[0]}"]`)).toHaveCount(1);
+  await expect(page.locator('.chat-message')).toHaveCount(1);
+});
+
 test('取消文件上传后可重新发送且不会重复创建成功消息', async ({ page }) => {
   await mockChatShell(page);
   let uploadRequests = 0;

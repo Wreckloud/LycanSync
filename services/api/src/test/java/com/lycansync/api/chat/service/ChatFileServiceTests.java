@@ -39,13 +39,14 @@ class ChatFileServiceTests {
     private final GroupService groupService = mock(GroupService.class);
     private final TransactionTemplate transactions = mock(TransactionTemplate.class);
     private final ChatFileProperties properties = new ChatFileProperties();
+    private final ChatFileStorageCoordinator coordinator = new ChatFileStorageCoordinator();
     private ChatFileService service;
 
     @BeforeEach
     void setUp(@TempDir Path temporaryDirectory) {
         properties.setStorageDirectory(temporaryDirectory.resolve("chat-files"));
         service = new ChatFileService(mapper, quotaService, groupService, properties,
-                Clock.systemUTC(), transactions);
+                Clock.systemUTC(), transactions, coordinator);
     }
 
     @Test
@@ -61,7 +62,7 @@ class ChatFileServiceTests {
                     assertThat(exception.getCode()).isEqualTo(ApiErrorCode.INVALID_REQUEST);
                 });
 
-        verify(quotaService).reserve(uploadId, GROUP_ID, 2);
+        verify(quotaService).reserve(uploadId, GROUP_ID, 2, coordinator.processInstanceId());
         verify(quotaService).release(uploadId);
     }
 
@@ -82,7 +83,7 @@ class ChatFileServiceTests {
                     assertThat(exception.getCode()).isEqualTo(ApiErrorCode.CHAT_FILE_STORAGE_FAILED);
                 });
 
-        verify(quotaService).reserve(uploadId, GROUP_ID, 1);
+        verify(quotaService).reserve(uploadId, GROUP_ID, 1, coordinator.processInstanceId());
         verify(quotaService).release(uploadId);
     }
 }

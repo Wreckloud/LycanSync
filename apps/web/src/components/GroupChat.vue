@@ -306,7 +306,7 @@ async function submit() {
         item.progress = 0;
         try {
           const message = item.kind === 'IMAGE'
-            ? await sendMessage(groupId, content, item.file, controller.signal)
+            ? await sendMessage(groupId, content, item.file, controller.signal, item.id)
             : await sendFile(groupId, item.file, content, item.id, controller.signal,
               (loaded) => { item.progress = loaded; });
           if (disposed || generation !== sendGeneration || props.group.id !== groupId || controller.signal.aborted) return;

@@ -9,5 +9,5 @@ import java.util.UUID;
  * @author Wreckloud
  * @since 2026-09-29
  */
-public record ChatFileUploadReservation(UUID id, long byteSize, Instant createdAt) {
+public record ChatFileUploadReservation(UUID id, long byteSize, Instant createdAt, UUID processInstanceId) {
 }

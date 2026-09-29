@@ -59,8 +59,10 @@ public class ChatService {
     }
 
     @Transactional
-    public ChatMessageResponse sendMessage(UUID groupId, AuthenticatedUser user, String content, MultipartFile image) {
+    public ChatMessageResponse sendMessage(UUID groupId, AuthenticatedUser user, String content, MultipartFile image,
+                                           UUID imageMessageId) {
         groupService.requireGroup(groupId);
+        if (imageMessageId != null && image == null) throw invalid("消息 ID 只能用于图片消息");
         String text = normalizeContent(content);
         ChatImageValidator.ValidatedImage validatedImage = null;
         if (image != null) {
@@ -72,10 +74,19 @@ public class ChatService {
         }
         if (text.isEmpty() && validatedImage == null) throw invalid("请输入消息内容或选择一张图片");
 
+        if (imageMessageId != null) {
+            if (mapper.lockGroupForImageSend(groupId) == null) {
+                throw new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.GROUP_NOT_FOUND, "群组不存在");
+            }
+            ChatMessageView existing = mapper.findImageMessage(groupId, imageMessageId, user.id());
+            if (existing != null) return toResponse(existing);
+            if (mapper.messageIdExists(imageMessageId)) throw invalid("消息 ID 已被占用");
+        }
+
         Long sequenceNumber = mapper.allocateMessageSequence(groupId);
         if (sequenceNumber == null) throw new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.GROUP_NOT_FOUND, "群组不存在");
         Instant now = Instant.now(systemClock);
-        UUID messageId = UUID.randomUUID();
+        UUID messageId = imageMessageId == null ? UUID.randomUUID() : imageMessageId;
         mapper.insertMessage(new ChatMessage(messageId, groupId, user.id(),
                 validatedImage == null ? ChatMessageType.TEXT : ChatMessageType.IMAGE, text, now, sequenceNumber));
 

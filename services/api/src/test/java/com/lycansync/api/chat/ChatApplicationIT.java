@@ -5,6 +5,8 @@ import org.flywaydb.core.Flyway;
 import com.lycansync.api.auth.dto.LocalRegistrationRequest;
 import com.lycansync.api.auth.service.LocalAuthService;
 import com.lycansync.api.chat.service.ChatFileStorageCleanup;
+import com.lycansync.api.chat.service.ChatFileQuotaService;
+import com.lycansync.api.chat.service.ChatFileStorageCoordinator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,10 +31,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.io.IOException;
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -44,11 +45,14 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.Lock;
 
 import javax.sql.DataSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -104,6 +108,12 @@ class ChatApplicationIT {
     @Autowired
     private ChatFileStorageCleanup fileStorageCleanup;
 
+    @Autowired
+    private ChatFileQuotaService fileQuotaService;
+
+    @Autowired
+    private ChatFileStorageCoordinator fileStorageCoordinator;
+
     @BeforeEach
     void resetDatabase() throws IOException {
         jdbc.sql("TRUNCATE user_presence, chat_attachment, chat_file_attachment, chat_file_upload_reservation, "
@@ -157,6 +167,83 @@ class ChatApplicationIT {
                         .contentType(MediaType.IMAGE_PNG))
                 .andReturn().getResponse().getContentAsByteArray();
         assertThat(attachment).isEqualTo(PNG);
+    }
+
+    @Test
+    void shouldReturnCommittedImageWhenRequestIsRetried() throws Exception {
+        String ownerToken = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
+        String friendToken = localAuth.register(new LocalRegistrationRequest("Friend", PASSWORD)).sessionToken();
+        String groupId = createGroup(ownerToken);
+        UUID messageId = UUID.randomUUID();
+
+        String first = mvc.perform(multipart("/api/groups/{groupId}/messages", groupId)
+                        .file(new MockMultipartFile("image", "screen.png", "image/png", PNG))
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
+                        .param("content", "截图")
+                        .param("messageId", messageId.toString()))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(messageId.toString()))
+                .andReturn().getResponse().getContentAsString();
+        String attachmentId = objectMapper.readTree(first).path("attachment").path("id").asText();
+
+        mvc.perform(multipart("/api/groups/{groupId}/messages", groupId)
+                        .file(new MockMultipartFile("image", "screen.png", "image/png", PNG))
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
+                        .param("content", "截图")
+                        .param("messageId", messageId.toString()))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(messageId.toString()))
+                .andExpect(jsonPath("$.attachment.id").value(attachmentId));
+        mvc.perform(multipart("/api/groups/{groupId}/messages", groupId)
+                        .file(new MockMultipartFile("image", "screen.png", "image/png", PNG))
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + friendToken)
+                        .param("messageId", messageId.toString()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+
+        assertThat(jdbc.sql("SELECT count(*) FROM chat_message WHERE group_id = :groupId")
+                .param("groupId", UUID.fromString(groupId)).query(Long.class).single()).isEqualTo(1L);
+        assertThat(jdbc.sql("SELECT count(*) FROM chat_attachment WHERE message_id = :messageId")
+                .param("messageId", messageId).query(Long.class).single()).isEqualTo(1L);
+        assertThat(jdbc.sql("SELECT next_message_sequence FROM chat_group WHERE id = :groupId")
+                .param("groupId", UUID.fromString(groupId)).query(Long.class).single()).isEqualTo(2L);
+    }
+
+    @Test
+    void shouldCommitOnlyOneImageWhenSameRequestArrivesConcurrently() throws Exception {
+        String token = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
+        String groupId = createGroup(token);
+        UUID messageId = UUID.randomUUID();
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<String>> responses = new ArrayList<>();
+            for (int index = 0; index < 2; index++) {
+                responses.add(executor.submit(() -> {
+                    assertThat(start.await(10, TimeUnit.SECONDS)).isTrue();
+                    return mvc.perform(multipart("/api/groups/{groupId}/messages", groupId)
+                                    .file(new MockMultipartFile("image", "screen.png", "image/png", PNG))
+                                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                                    .param("messageId", messageId.toString()))
+                            .andExpect(status().isCreated())
+                            .andReturn().getResponse().getContentAsString();
+                }));
+            }
+            start.countDown();
+            String first = responses.get(0).get(10, TimeUnit.SECONDS);
+            String second = responses.get(1).get(10, TimeUnit.SECONDS);
+            assertThat(objectMapper.readTree(first).path("id").asText()).isEqualTo(messageId.toString());
+            assertThat(objectMapper.readTree(second).path("attachment").path("id").asText())
+                    .isEqualTo(objectMapper.readTree(first).path("attachment").path("id").asText());
+            assertThat(jdbc.sql("SELECT count(*) FROM chat_message WHERE group_id = :groupId")
+                    .param("groupId", UUID.fromString(groupId)).query(Long.class).single()).isEqualTo(1L);
+            assertThat(jdbc.sql("SELECT next_message_sequence FROM chat_group WHERE id = :groupId")
+                    .param("groupId", UUID.fromString(groupId)).query(Long.class).single()).isEqualTo(2L);
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+        }
     }
 
     @Test
@@ -436,31 +523,108 @@ class ChatApplicationIT {
     }
 
     @Test
-    void shouldRemoveStaleTemporaryReservationsAndOrphanedFilesAtStartupCleanup() throws Exception {
+    void shouldRecoverRecentPreviousProcessUploadsAndPreserveCommittedFiles() throws Exception {
         String token = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
         String groupId = createGroup(token);
         UUID reservationId = UUID.randomUUID();
         UUID orphanFileId = UUID.randomUUID();
+        UUID previousProcessId = UUID.randomUUID();
         Path temporaryFile = FILE_STORAGE.resolve(".tmp").resolve(reservationId + ".part");
         Path orphanFile = FILE_STORAGE.resolve(orphanFileId + ".bin");
+        Path unrelatedFile = FILE_STORAGE.resolve("keep-this.txt");
+        String committedResponse = sendFile(groupId, token, UUID.randomUUID(), "committed.bin", "",
+                new byte[] { 8, 9, 10 }).andExpect(status().isCreated()).andReturn()
+                .getResponse().getContentAsString();
+        UUID committedFileId = UUID.fromString(objectMapper.readTree(committedResponse)
+                .path("attachment").path("id").asText());
+        Path committedFile = FILE_STORAGE.resolve(committedFileId + ".bin");
         Files.createDirectories(temporaryFile.getParent());
         Files.write(temporaryFile, new byte[] { 1, 2 });
         Files.write(orphanFile, new byte[] { 3, 4 });
-        FileTime staleTime = FileTime.from(Instant.now().minus(Duration.ofDays(2)));
-        OffsetDateTime expiredReservationTime = OffsetDateTime.ofInstant(
-                Instant.now().minus(Duration.ofDays(2)), ZoneOffset.UTC);
-        Files.setLastModifiedTime(temporaryFile, staleTime);
-        Files.setLastModifiedTime(orphanFile, staleTime);
-        jdbc.sql("INSERT INTO chat_file_upload_reservation (id, group_id, byte_size, created_at) "
-                        + "VALUES (:id, :groupId, 2, :createdAt)")
+        Files.write(unrelatedFile, new byte[] { 4, 5 });
+        Instant crashedAt = Instant.now().minus(Duration.ofMinutes(5));
+        Files.setLastModifiedTime(temporaryFile, FileTime.from(crashedAt));
+        Files.setLastModifiedTime(orphanFile, FileTime.from(crashedAt));
+        jdbc.sql("INSERT INTO chat_file_upload_reservation "
+                        + "(id, group_id, byte_size, created_at, process_instance_id) "
+                        + "VALUES (:id, :groupId, 2, :createdAt, :processInstanceId)")
                 .param("id", reservationId).param("groupId", UUID.fromString(groupId))
-                .param("createdAt", expiredReservationTime).update();
+                .param("createdAt", Timestamp.from(crashedAt)).param("processInstanceId", previousProcessId).update();
         jdbc.sql("UPDATE chat_file_storage_quota SET reserved_bytes = 2 WHERE id = 1").update();
 
         fileStorageCleanup.removeOrphanedFiles();
 
         assertThat(Files.exists(temporaryFile)).isFalse();
         assertThat(Files.exists(orphanFile)).isFalse();
+        assertThat(Files.exists(committedFile)).isTrue();
+        assertThat(Files.exists(unrelatedFile)).isTrue();
+        assertThat(jdbc.sql("SELECT count(*) FROM chat_file_upload_reservation")
+                .query(Long.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT reserved_bytes FROM chat_file_storage_quota WHERE id = 1")
+                .query(Long.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT used_bytes FROM chat_file_storage_quota WHERE id = 1")
+                .query(Long.class).single()).isEqualTo(3L);
+    }
+
+    @Test
+    void startupCleanupWaitsForUploadToCommitAfterItsFileHasMoved() throws Exception {
+        String token = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
+        UUID groupId = UUID.fromString(createGroup(token));
+        UUID senderId = jdbc.sql("SELECT owner_user_id FROM chat_group WHERE id = :groupId")
+                .param("groupId", groupId).query(UUID.class).single();
+        UUID uploadId = UUID.randomUUID();
+        UUID attachmentId = UUID.randomUUID();
+        UUID messageId = UUID.randomUUID();
+        Path temporaryFile = FILE_STORAGE.resolve(".tmp").resolve(uploadId + ".part");
+        Path storedFile = FILE_STORAGE.resolve(attachmentId + ".bin");
+        Files.createDirectories(temporaryFile.getParent());
+
+        Lock uploadLock = fileStorageCoordinator.uploadLock();
+        uploadLock.lock();
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        Future<?> cleanupTask;
+        try {
+            Files.write(temporaryFile, new byte[] { 1, 2 });
+            jdbc.sql("INSERT INTO chat_file_upload_reservation "
+                            + "(id, group_id, byte_size, created_at, process_instance_id) "
+                            + "VALUES (:id, :groupId, 2, :createdAt, :processInstanceId)")
+                    .param("id", uploadId).param("groupId", groupId)
+                    .param("createdAt", Timestamp.from(Instant.now()))
+                    .param("processInstanceId", fileStorageCoordinator.processInstanceId()).update();
+            jdbc.sql("UPDATE chat_file_storage_quota SET reserved_bytes = 2 WHERE id = 1").update();
+
+            CountDownLatch cleanupStarted = new CountDownLatch(1);
+            cleanupTask = executor.submit(() -> {
+                cleanupStarted.countDown();
+                fileStorageCleanup.removeOrphanedFiles();
+            });
+            assertThat(cleanupStarted.await(5, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> cleanupTask.get(100, TimeUnit.MILLISECONDS))
+                    .isInstanceOf(TimeoutException.class);
+
+            Files.move(temporaryFile, storedFile);
+            Long sequenceNumber = jdbc.sql("UPDATE chat_group SET next_message_sequence = "
+                            + "next_message_sequence + 1 WHERE id = :groupId "
+                            + "RETURNING next_message_sequence - 1")
+                    .param("groupId", groupId).query(Long.class).single();
+            jdbc.sql("INSERT INTO chat_message (id, group_id, sender_user_id, type, content, created_at, "
+                            + "sequence_number) VALUES (:id, :groupId, :senderId, 'FILE', '', :createdAt, :sequence)")
+                    .param("id", messageId).param("groupId", groupId).param("senderId", senderId)
+                    .param("createdAt", Timestamp.from(Instant.now())).param("sequence", sequenceNumber).update();
+            jdbc.sql("INSERT INTO chat_file_attachment (id, message_id, upload_id, file_name, byte_size) "
+                            + "VALUES (:id, :messageId, :uploadId, 'in-flight.bin', 2)")
+                    .param("id", attachmentId).param("messageId", messageId).param("uploadId", uploadId).update();
+            fileQuotaService.complete(uploadId, 2);
+        } finally {
+            uploadLock.unlock();
+            executor.shutdown();
+            assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+        }
+        cleanupTask.get(5, TimeUnit.SECONDS);
+
+        assertThat(Files.exists(storedFile)).isTrue();
+        assertThat(jdbc.sql("SELECT count(*) FROM chat_file_attachment WHERE id = :id")
+                .param("id", attachmentId).query(Long.class).single()).isEqualTo(1L);
         assertThat(jdbc.sql("SELECT reserved_bytes FROM chat_file_storage_quota WHERE id = 1")
                 .query(Long.class).single()).isZero();
     }

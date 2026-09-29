@@ -2,6 +2,9 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.lycansync.api.chat.mapper.ChatMapper">
+    <select id="lockGroupForImageSend" resultType="long" useCache="false">
+        SELECT 1 FROM chat_group WHERE id = #{groupId} FOR UPDATE
+    </select>
     <select id="allocateMessageSequence" resultType="long" affectData="true" flushCache="true" useCache="false">
         UPDATE chat_group
         SET next_message_sequence = next_message_sequence + 1
@@ -20,6 +23,21 @@
     </insert>
     <select id="messageExists" resultType="boolean">
         SELECT EXISTS (SELECT 1 FROM chat_message WHERE group_id = #{groupId} AND id = #{messageId})
+    </select>
+    <select id="messageIdExists" resultType="boolean">
+        SELECT EXISTS (SELECT 1 FROM chat_message WHERE id = #{messageId})
+    </select>
+    <select id="findImageMessage" resultType="com.lycansync.api.chat.model.ChatMessageView">
+        SELECT message.id, message.sender_user_id, users.nickname AS sender_nickname, message.type,
+               message.content, message.created_at, attachment.id AS attachment_id,
+               attachment.content_type AS attachment_content_type, attachment.width AS attachment_width,
+               attachment.height AS attachment_height, attachment.byte_size AS attachment_byte_size,
+               NULL AS attachment_file_name
+        FROM chat_message message
+        JOIN app_user users ON users.id = message.sender_user_id
+        JOIN chat_attachment attachment ON attachment.message_id = message.id
+        WHERE message.group_id = #{groupId} AND message.id = #{messageId}
+          AND message.sender_user_id = #{senderUserId} AND message.type = 'IMAGE'
     </select>
     <select id="findMessages" resultType="com.lycansync.api.chat.model.ChatMessageView">
         SELECT page.id, page.sender_user_id, page.sender_nickname, page.type, page.content, page.created_at,
@@ -86,8 +104,8 @@
             WHERE id = 1 AND used_bytes + reserved_bytes + #{byteSize} &lt;= #{maxStorageSize}
             RETURNING id
         )
-        INSERT INTO chat_file_upload_reservation (id, group_id, byte_size, created_at)
-        SELECT #{uploadId}, #{groupId}, #{byteSize}, #{createdAt} FROM reserved
+        INSERT INTO chat_file_upload_reservation (id, group_id, byte_size, created_at, process_instance_id)
+        SELECT #{uploadId}, #{groupId}, #{byteSize}, #{createdAt}, #{processInstanceId} FROM reserved
     </insert>
     <update id="completeFileStorageReservation" flushCache="true">
         WITH reservation AS (
@@ -111,9 +129,9 @@
         FROM reservation
         WHERE id = 1 AND reserved_bytes &gt;= reservation.byte_size
     </update>
-    <select id="findExpiredFileStorageReservations" resultType="com.lycansync.api.chat.model.ChatFileUploadReservation">
-        SELECT id, byte_size, created_at FROM chat_file_upload_reservation
-        WHERE created_at &lt; #{createdBefore}
+    <select id="findFileStorageReservations" resultType="com.lycansync.api.chat.model.ChatFileUploadReservation">
+        SELECT id, byte_size, created_at, process_instance_id FROM chat_file_upload_reservation
+        ORDER BY created_at, id
     </select>
     <select id="fileAttachmentExists" resultType="boolean">
         SELECT EXISTS (SELECT 1 FROM chat_file_attachment WHERE id = #{attachmentId})

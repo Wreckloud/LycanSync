@@ -36,6 +36,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.UUID;
+import java.util.concurrent.locks.Lock;
 
 /**
  * 群聊普通文件的流式持久化与下载。
@@ -54,15 +55,18 @@ public class ChatFileService {
     private final ChatFileProperties properties;
     private final Clock systemClock;
     private final TransactionTemplate transactions;
+    private final ChatFileStorageCoordinator coordinator;
 
     public ChatFileService(ChatMapper mapper, ChatFileQuotaService quotaService, GroupService groupService,
-                          ChatFileProperties properties, Clock systemClock, TransactionTemplate transactions) {
+                          ChatFileProperties properties, Clock systemClock, TransactionTemplate transactions,
+                          ChatFileStorageCoordinator coordinator) {
         this.mapper = mapper;
         this.quotaService = quotaService;
         this.groupService = groupService;
         this.properties = properties;
         this.systemClock = systemClock;
         this.transactions = transactions;
+        this.coordinator = coordinator;
     }
 
     public ChatMessageResponse upload(UUID groupId, AuthenticatedUser user, UUID uploadId,
@@ -79,28 +83,43 @@ public class ChatFileService {
         UUID attachmentId = UUID.randomUUID();
         Path temporaryFile = temporaryPath(uploadId);
         Path storedFile = storedPath(attachmentId);
-        quotaService.reserve(uploadId, groupId, expectedSize);
-        boolean completed = false;
+        Lock uploadLock = coordinator.uploadLock();
+        uploadLock.lock();
         try {
-            writeTemporaryFile(input, temporaryFile, expectedSize);
-            moveToStorage(temporaryFile, storedFile);
-            ChatMessageResponse response = transactions.execute(status -> persistMessageInTransaction(groupId, user,
-                    attachmentId, uploadId, fileName, content, expectedSize, uploadId));
-            completed = true;
-            return response;
-        } catch (IncompleteUploadException exception) {
-            throw new GroupException(HttpStatus.BAD_REQUEST, ApiErrorCode.INVALID_REQUEST,
-                    "文件内容未完整接收或与声明大小不符");
-        } catch (IOException exception) {
-            log.error("群聊文件存储失败", exception);
-            throw new GroupException(HttpStatus.INTERNAL_SERVER_ERROR, ApiErrorCode.CHAT_FILE_STORAGE_FAILED,
-                    "服务器文件存储暂时不可用");
-        } finally {
-            deleteQuietly(temporaryFile);
-            if (!completed) {
-                deleteQuietly(storedFile);
-                quotaService.release(uploadId);
+            quotaService.reserve(uploadId, groupId, expectedSize, coordinator.processInstanceId());
+            boolean completed = false;
+            try {
+                writeTemporaryFile(input, temporaryFile, expectedSize);
+                moveToStorage(temporaryFile, storedFile);
+                ChatMessageResponse response = transactions.execute(status -> persistMessageInTransaction(groupId,
+                        user, attachmentId, uploadId, fileName, content, expectedSize, uploadId));
+                completed = true;
+                return response;
+            } catch (IncompleteUploadException exception) {
+                throw new GroupException(HttpStatus.BAD_REQUEST, ApiErrorCode.INVALID_REQUEST,
+                        "文件内容未完整接收或与声明大小不符");
+            } catch (IOException exception) {
+                log.error("群聊文件存储失败", exception);
+                throw new GroupException(HttpStatus.INTERNAL_SERVER_ERROR, ApiErrorCode.CHAT_FILE_STORAGE_FAILED,
+                        "服务器文件存储暂时不可用");
+            } finally {
+                boolean temporaryRemoved = deleteQuietly(temporaryFile);
+                if (!completed) {
+                    boolean storedRemoved = deleteQuietly(storedFile);
+                    if (temporaryRemoved && storedRemoved) {
+                        try {
+                            quotaService.release(uploadId);
+                        } catch (RuntimeException exception) {
+                            log.error("群聊上传失败后额度预留释放失败，保留记录等待恢复: {}", uploadId, exception);
+                            throw exception;
+                        }
+                    } else {
+                        log.warn("群聊上传文件未能完整清理，保留额度预留等待恢复: {}", uploadId);
+                    }
+                }
             }
+        } finally {
+            uploadLock.unlock();
         }
     }
 
@@ -249,11 +268,13 @@ public class ChatFileService {
         return properties.getStorageDirectory().toAbsolutePath().normalize().resolve(attachmentId + ".bin");
     }
 
-    private void deleteQuietly(Path path) {
+    private boolean deleteQuietly(Path path) {
         try {
             Files.deleteIfExists(path);
+            return true;
         } catch (IOException exception) {
             log.warn("无法清理群聊上传文件，后续启动时会再次回收: {}", path.getFileName(), exception);
+            return false;
         }
     }
 }
