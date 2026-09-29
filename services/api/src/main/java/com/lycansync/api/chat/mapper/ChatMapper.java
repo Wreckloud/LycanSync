@@ -18,6 +18,7 @@ import java.util.UUID;
  */
 @Mapper
 public interface ChatMapper {
+    Long allocateMessageSequence(@Param("groupId") UUID groupId);
     int insertMessage(@Param("message") ChatMessage message);
     int insertAttachment(@Param("attachment") ChatAttachment attachment);
     boolean messageExists(@Param("groupId") UUID groupId, @Param("messageId") UUID messageId);

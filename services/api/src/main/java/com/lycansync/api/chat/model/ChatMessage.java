@@ -10,5 +10,5 @@ import java.util.UUID;
  * @since 2026-09-14
  */
 public record ChatMessage(UUID id, UUID groupId, UUID senderUserId, ChatMessageType type,
-                          String content, Instant createdAt) {
+                          String content, Instant createdAt, long sequenceNumber) {
 }

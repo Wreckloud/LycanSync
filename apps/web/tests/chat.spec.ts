@@ -1,4 +1,5 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+import type { ChatMessage } from '../src/chat/chatApi';
 
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/presence/heartbeat', (route) => route.fulfill({ status: 204 }));
@@ -10,6 +11,23 @@ const user = { id: '2d983469-4442-44f5-b5a8-f3819f16a611', nickname: '群主', a
 const group = { id: groupId, name: '周末开黑', description: '', avatar: '', role: 'OWNER', memberCount: 1,
   createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z',
   members: [{ userId: user.id, nickname: user.nickname, avatar: '', role: 'OWNER', joinedAt: '2026-09-12T00:00:00Z' }] };
+
+function chatMessage(number: number, prefix = 'A'): ChatMessage {
+  return { id: `${prefix}${String(number).padStart(2, '0')}`, senderUserId: user.id,
+    senderNickname: user.nickname, type: 'TEXT', content: `${prefix}消息 ${number}`,
+    createdAt: new Date(Date.UTC(2026, 8, 14, 0, 0, number)).toISOString(), attachment: null };
+}
+
+function imageMessage(number: number, attachmentId: string, width = 1600, height = 900, prefix = 'A'): ChatMessage {
+  return { ...chatMessage(number, prefix), type: 'IMAGE', content: '',
+    attachment: { id: attachmentId, contentType: 'image/png', width, height, byteSize: 68 } };
+}
+
+async function mockChatShell(page: Page) {
+  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
+}
 
 test('文本消息使用统一 multipart 接口发送，并按日期分组且仅允许消息正文复制', async ({ page }) => {
   const messages: Record<string, unknown>[] = [
@@ -94,4 +112,365 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
   const errorBounds = await chatError.boundingBox();
   expect(composerBoundsAfterError).toEqual(composerBoundsBeforeError);
   expect(errorBounds!.y + errorBounds!.height).toBeLessThanOrEqual(composerBoundsAfterError!.y);
+});
+
+test('触顶只取一页旧消息，与新消息轮询并行，去重并保持阅读位置', async ({ page }) => {
+  await mockChatShell(page);
+  const initial = Array.from({ length: 30 }, (_, index) => chatMessage(index + 31));
+  const older = Array.from({ length: 29 }, (_, index) => chatMessage(index + 2));
+  let releaseHistory!: () => void;
+  const historyGate = new Promise<void>((resolve) => { releaseHistory = resolve; });
+  const beforeCursors: string[] = [];
+  await page.route('**/api/groups**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
+    if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (url.pathname === `/api/groups/${groupId}/messages`) {
+      const before = url.searchParams.get('beforeMessageId');
+      if (before) {
+        beforeCursors.push(before);
+        await historyGate;
+        return route.fulfill({ json: { messages: [...older, initial[0]], hasMore: true } });
+      }
+      if (url.searchParams.get('afterMessageId')) {
+        return route.fulfill({ json: { messages: [initial.at(-1), chatMessage(61)], hasMore: false } });
+      }
+      return route.fulfill({ json: { messages: initial, hasMore: true } });
+    }
+    return route.fulfill({ status: 404 });
+  });
+
+  await page.goto('/');
+  const list = page.locator('.message-list');
+  await expect(page.locator('[data-message-id="A60"]')).toHaveCount(1);
+  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await list.evaluate((element) => { element.scrollTop = 0; });
+  await expect.poll(() => beforeCursors).toEqual(['A31']);
+  await list.dispatchEvent('wheel', { deltaY: -100 });
+  expect(beforeCursors).toEqual(['A31']);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('[data-message-id="A61"]')).toHaveCount(1);
+  const anchor = page.locator('[data-message-id="A31"]');
+  const anchorTop = (await anchor.boundingBox())!.y;
+  releaseHistory();
+  await expect(page.locator('[data-message-id="A02"]')).toHaveCount(1);
+  await expect(page.locator('.chat-message')).toHaveCount(60);
+  await expect(page.locator('.chat-message').first()).toHaveAttribute('data-message-id', 'A02');
+  await expect(page.locator('.chat-message').last()).toHaveAttribute('data-message-id', 'A61');
+  expect(beforeCursors).toEqual(['A31']);
+  expect(Math.abs((await anchor.boundingBox())!.y - anchorTop)).toBeLessThanOrEqual(2);
+});
+
+test('空频道恢复后更新历史分页状态，带游标轮询不清除它', async ({ page }) => {
+  await mockChatShell(page);
+  await page.addInitScript(() => {
+    let visibility: DocumentVisibilityState = 'visible';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+    Object.defineProperty(window, 'setTestVisibility', {
+      value: (state: DocumentVisibilityState) => {
+        visibility = state;
+        document.dispatchEvent(new Event('visibilitychange'));
+      },
+    });
+  });
+  const latest = Array.from({ length: 30 }, (_, index) => chatMessage(index + 31));
+  const older = Array.from({ length: 30 }, (_, index) => chatMessage(index + 1));
+  let messagesAvailable = false;
+  let emptyCursorRequests = 0;
+  let releaseSecondEmptyPoll!: () => void;
+  const secondEmptyPollGate = new Promise<void>((resolve) => { releaseSecondEmptyPoll = resolve; });
+  let afterCursors = 0;
+  const beforeCursors: string[] = [];
+  await page.route('**/api/groups**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
+    if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (url.pathname === `/api/groups/${groupId}/messages`) {
+      const before = url.searchParams.get('beforeMessageId');
+      if (before) {
+        beforeCursors.push(before);
+        return route.fulfill({ json: { messages: older, hasMore: false } });
+      }
+      if (url.searchParams.has('afterMessageId')) {
+        afterCursors++;
+        return route.fulfill({ json: { messages: [chatMessage(61)], hasMore: false } });
+      }
+      emptyCursorRequests++;
+      if (emptyCursorRequests === 2) {
+        await secondEmptyPollGate;
+        try { await route.fulfill({ json: { messages: [], hasMore: false } }); }
+        catch { /* The request is canceled when the tab becomes hidden. */ }
+        return;
+      }
+      return route.fulfill({ json: { messages: messagesAvailable ? latest : [], hasMore: messagesAvailable } });
+    }
+    return route.fulfill({ status: 404 });
+  });
+
+  await page.goto('/');
+  // The next scheduled poll proves the initial empty response has been handled by the component.
+  await expect.poll(() => emptyCursorRequests).toBe(2);
+  await page.evaluate(() => (window as unknown as Window & { setTestVisibility: (state: DocumentVisibilityState) => void })
+    .setTestVisibility('hidden'));
+  releaseSecondEmptyPoll();
+  messagesAvailable = true;
+  await page.evaluate(() => (window as unknown as Window & { setTestVisibility: (state: DocumentVisibilityState) => void })
+    .setTestVisibility('visible'));
+  await expect(page.locator('[data-message-id="A60"]')).toHaveCount(1);
+  await expect.poll(() => emptyCursorRequests).toBe(3);
+  await expect.poll(() => afterCursors).toBe(1);
+  await expect(page.locator('[data-message-id="A61"]')).toBeVisible();
+  const list = page.locator('.message-list');
+  await list.evaluate((element) => { element.scrollTop = 0; });
+  await list.dispatchEvent('wheel', { deltaY: -100 });
+  await expect(page.locator('[data-message-id="A01"]')).toHaveCount(1);
+  expect(beforeCursors).toEqual(['A31']);
+});
+
+test('历史图片接近列表可视区才加载，窄窗口保留比例且来回滚动不重复请求', async ({ page }) => {
+  await mockChatShell(page);
+  await page.setViewportSize({ width: 360, height: 760 });
+  const initial = [imageMessage(31, 'offscreen-wide', 1600, 400),
+    ...Array.from({ length: 29 }, (_, index) => chatMessage(index + 32))];
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+  let imageRequests = 0;
+  await page.route('**/api/groups**', (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
+    if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (url.pathname === `/api/groups/${groupId}/attachments/offscreen-wide`) {
+      imageRequests++;
+      return route.fulfill({ contentType: 'image/png', body: png });
+    }
+    if (url.pathname === `/api/groups/${groupId}/messages`) {
+      return route.fulfill({ json: { messages: url.searchParams.has('afterMessageId') ? [] : initial, hasMore: false } });
+    }
+    return route.fulfill({ status: 404 });
+  });
+
+  await page.goto('/');
+  const list = page.locator('.message-list');
+  const article = page.locator('[data-message-id="A31"]');
+  const frame = article.locator('.chat-image-frame');
+  await expect(page.locator('[data-message-id="A60"]')).toHaveCount(1);
+  const listBounds = await list.boundingBox();
+  const offscreenBounds = await frame.boundingBox();
+  expect(offscreenBounds!.y + offscreenBounds!.height).toBeLessThan(listBounds!.y - 180);
+  expect(imageRequests).toBe(0);
+
+  await list.evaluate((element) => { element.scrollTop = 0; });
+  await expect.poll(() => imageRequests).toBe(1);
+  await expect(article.getByAltText('群主 发送的图片')).toHaveJSProperty('naturalWidth', 1);
+  const imageBounds = await frame.boundingBox();
+  const bodyBounds = await article.locator('.chat-message-body').boundingBox();
+  expect(imageBounds!.width).toBeLessThanOrEqual(420);
+  expect(imageBounds!.width).toBeLessThanOrEqual(bodyBounds!.width + 1);
+  expect(imageBounds!.height).toBeLessThanOrEqual(340);
+  expect(Math.abs(imageBounds!.width / imageBounds!.height - 4)).toBeLessThan(0.03);
+
+  await list.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await list.evaluate((element) => { element.scrollTop = 0; });
+  await expect(article.getByAltText('群主 发送的图片')).toBeVisible();
+  expect(imageRequests).toBe(1);
+});
+
+test('切换群组会取消未完成的图片请求并释放已创建的 Blob URL', async ({ page }) => {
+  await mockChatShell(page);
+  await page.addInitScript(() => {
+    const urls = { created: [] as string[], revoked: [] as string[] };
+    const create = URL.createObjectURL.bind(URL);
+    const revoke = URL.revokeObjectURL.bind(URL);
+    URL.createObjectURL = (blob) => {
+      const url = create(blob);
+      urls.created.push(url);
+      return url;
+    };
+    URL.revokeObjectURL = (url) => {
+      urls.revoked.push(url);
+      revoke(url);
+    };
+    Object.defineProperty(window, '__chatImageUrls', { value: urls });
+  });
+  const otherGroup = { ...group, id: 'f45d69f7-ea7d-4a4f-b0bb-b17d91b78dc2', name: '第二群组' };
+  const initial = [chatMessage(1), imageMessage(2, 'loaded-image'), imageMessage(3, 'pending-image')];
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+  let releasePending!: () => void;
+  const pendingGate = new Promise<void>((resolve) => { releasePending = resolve; });
+  let finishPendingHandler!: () => void;
+  const pendingHandler = new Promise<void>((resolve) => { finishPendingHandler = resolve; });
+  let pendingStarted = false;
+  let pendingAborted = false;
+  page.on('requestfailed', (request) => {
+    if (request.url().endsWith('/attachments/pending-image')) pendingAborted = true;
+  });
+  await page.route('**/api/groups**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/groups') return route.fulfill({ json: [group, otherGroup] });
+    if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (url.pathname === `/api/groups/${otherGroup.id}`) return route.fulfill({ json: otherGroup });
+    if (url.pathname === `/api/groups/${otherGroup.id}/messages`) {
+      return route.fulfill({ json: { messages: [chatMessage(1, 'B')], hasMore: false } });
+    }
+    if (url.pathname === `/api/groups/${groupId}/attachments/loaded-image`) {
+      return route.fulfill({ contentType: 'image/png', body: png });
+    }
+    if (url.pathname === `/api/groups/${groupId}/attachments/pending-image`) {
+      pendingStarted = true;
+      await pendingGate;
+      try { await route.fulfill({ contentType: 'image/png', body: png }); }
+      catch { /* The image request is canceled when the old group is unmounted. */ }
+      finally { finishPendingHandler(); }
+      return;
+    }
+    if (url.pathname === `/api/groups/${groupId}/messages`) {
+      return route.fulfill({ json: { messages: initial, hasMore: false } });
+    }
+    return route.fulfill({ status: 404 });
+  });
+
+  await page.goto('/');
+  await expect(page.locator('.chat-image-frame')).toHaveCount(2);
+  await expect(page.getByAltText('群主 发送的图片')).toHaveCount(1);
+  await expect(page.getByAltText('群主 发送的图片')).toHaveJSProperty('naturalWidth', 1);
+  await expect.poll(() => pendingStarted).toBe(true);
+  const createdUrls = await page.evaluate(() =>
+    (window as unknown as Window & { __chatImageUrls: { created: string[] } }).__chatImageUrls.created);
+  expect(createdUrls).toHaveLength(1);
+
+  await page.getByRole('button', { name: /第二群组，单击预览/ }).click();
+  await expect(page.locator('[data-message-id="B01"]')).toHaveCount(1);
+  await expect.poll(() => pendingAborted).toBe(true);
+  const revokedUrls = await page.evaluate(() =>
+    (window as unknown as Window & { __chatImageUrls: { revoked: string[] } }).__chatImageUrls.revoked);
+  expect(revokedUrls).toContain(createdUrls[0]);
+  releasePending();
+  await pendingHandler;
+});
+
+test('图片加载失败只在用户重试时再次请求', async ({ page }) => {
+  await mockChatShell(page);
+  const image = imageMessage(1, 'retry-image');
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+  let imageRequests = 0;
+  await page.route('**/api/groups**', (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
+    if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (url.pathname === `/api/groups/${groupId}/messages`) {
+      return route.fulfill({ json: { messages: url.searchParams.has('afterMessageId') ? [] : [image], hasMore: false } });
+    }
+    if (url.pathname === `/api/groups/${groupId}/attachments/retry-image`) {
+      imageRequests++;
+      return imageRequests === 1 ? route.fulfill({ status: 503 })
+        : route.fulfill({ contentType: 'image/png', body: png });
+    }
+    return route.fulfill({ status: 404 });
+  });
+
+  await page.goto('/');
+  const retry = page.getByRole('button', { name: '图片加载失败，点击重试' });
+  await expect(retry).toBeVisible();
+  await page.waitForTimeout(2200);
+  expect(imageRequests).toBe(1);
+  await retry.click();
+  await expect(page.getByAltText('群主 发送的图片')).toHaveJSProperty('naturalWidth', 1);
+  expect(imageRequests).toBe(2);
+});
+
+test('历史请求失败可重试，到底后不再请求更早消息', async ({ page }) => {
+  await mockChatShell(page);
+  const initial = Array.from({ length: 30 }, (_, index) => chatMessage(index + 31));
+  const older = Array.from({ length: 30 }, (_, index) => chatMessage(index + 1));
+  let historyRequests = 0;
+  await page.route('**/api/groups**', (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
+    if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (url.pathname === `/api/groups/${groupId}/messages`) {
+      if (url.searchParams.has('beforeMessageId')) {
+        historyRequests++;
+        return historyRequests === 1
+          ? route.fulfill({ status: 503, json: { code: 'TEMPORARY', detail: '历史读取失败' } })
+          : route.fulfill({ json: { messages: older, hasMore: false } });
+      }
+      return route.fulfill({ json: { messages: initial, hasMore: true } });
+    }
+    return route.fulfill({ status: 404 });
+  });
+
+  await page.goto('/');
+  const list = page.locator('.message-list');
+  await expect(page.locator('[data-message-id="A60"]')).toHaveCount(1);
+  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await list.evaluate((element) => { element.scrollTop = 0; });
+  await expect(page.locator('.chat-error')).toHaveText('历史读取失败');
+  expect(historyRequests).toBe(1);
+  await list.dispatchEvent('wheel', { deltaY: -100 });
+  await expect(page.locator('[data-message-id="A01"]')).toHaveCount(1);
+  await expect(page.locator('.chat-error')).toHaveCount(0);
+  await list.evaluate((element) => { element.scrollTop = 0; });
+  await list.dispatchEvent('wheel', { deltaY: -100 });
+  expect(historyRequests).toBe(2);
+});
+
+test('切换群组时取消旧群组的历史与轮询请求，迟到响应不会串入新群组', async ({ page }) => {
+  await mockChatShell(page);
+  const otherGroup = { ...group, id: 'f45d69f7-ea7d-4a4f-b0bb-b17d91b78dc2', name: '第二群组' };
+  const initial = Array.from({ length: 30 }, (_, index) => chatMessage(index + 31));
+  let releaseHistory!: () => void;
+  const historyGate = new Promise<void>((resolve) => { releaseHistory = resolve; });
+  let releasePoll!: () => void;
+  const pollGate = new Promise<void>((resolve) => { releasePoll = resolve; });
+  let historySettled!: () => void;
+  const historyFinished = new Promise<void>((resolve) => { historySettled = resolve; });
+  let historyRequests = 0;
+  let pollRequests = 0;
+  let pollFinishedCount = 0;
+  await page.route('**/api/groups**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/groups') return route.fulfill({ json: [group, otherGroup] });
+    if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (url.pathname === `/api/groups/${otherGroup.id}`) return route.fulfill({ json: otherGroup });
+    if (url.pathname === `/api/groups/${otherGroup.id}/messages`) {
+      return route.fulfill({ json: { messages: [chatMessage(1, 'B')], hasMore: false } });
+    }
+    if (url.pathname === `/api/groups/${groupId}/messages`) {
+      if (url.searchParams.has('beforeMessageId')) {
+        historyRequests++;
+        await historyGate;
+        try { await route.fulfill({ json: { messages: [chatMessage(30)], hasMore: false } }); }
+        catch { /* The request may already be canceled by the group switch. */ }
+        finally { historySettled(); }
+        return;
+      }
+      if (url.searchParams.has('afterMessageId')) {
+        pollRequests++;
+        await pollGate;
+        try { await route.fulfill({ json: { messages: [chatMessage(61)], hasMore: false } }); }
+        catch { /* The request may already be canceled by the group switch. */ }
+        finally { pollFinishedCount++; }
+        return;
+      }
+      return route.fulfill({ json: { messages: initial, hasMore: true } });
+    }
+    return route.fulfill({ status: 404 });
+  });
+
+  await page.goto('/');
+  await expect(page.locator('[data-message-id="A60"]')).toHaveCount(1);
+  const list = page.locator('.message-list');
+  await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  await list.evaluate((element) => { element.scrollTop = 0; });
+  await expect.poll(() => historyRequests).toBe(1);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => pollRequests).toBeGreaterThanOrEqual(1);
+  await page.getByRole('button', { name: /第二群组，单击预览/ }).click();
+  await expect(page.locator('[data-message-id="B01"]')).toHaveCount(1);
+  releaseHistory();
+  releasePoll();
+  await historyFinished;
+  await expect.poll(() => pollFinishedCount).toBe(pollRequests);
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  await expect(page.locator('.chat-message')).toHaveCount(1);
+  await expect(page.locator('[data-message-id^="A"]')).toHaveCount(0);
 });

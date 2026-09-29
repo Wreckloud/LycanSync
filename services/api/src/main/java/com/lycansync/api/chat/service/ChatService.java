@@ -72,10 +72,12 @@ public class ChatService {
         }
         if (text.isEmpty() && validatedImage == null) throw invalid("请输入消息内容或选择一张图片");
 
+        Long sequenceNumber = mapper.allocateMessageSequence(groupId);
+        if (sequenceNumber == null) throw new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.GROUP_NOT_FOUND, "群组不存在");
         Instant now = Instant.now(systemClock);
         UUID messageId = UUID.randomUUID();
         mapper.insertMessage(new ChatMessage(messageId, groupId, user.id(),
-                validatedImage == null ? ChatMessageType.TEXT : ChatMessageType.IMAGE, text, now));
+                validatedImage == null ? ChatMessageType.TEXT : ChatMessageType.IMAGE, text, now, sequenceNumber));
 
         ChatAttachmentResponse attachment = null;
         if (validatedImage != null) {

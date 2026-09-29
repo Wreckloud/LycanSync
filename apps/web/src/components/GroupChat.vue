@@ -18,6 +18,7 @@ const imagePreview = ref('');
 const imageMode = ref<'optimized' | 'original' | null>(null);
 const busy = ref(false);
 const error = ref('');
+const historyError = ref('');
 const list = ref<HTMLElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const messageInput = ref<HTMLTextAreaElement | null>(null);
@@ -28,12 +29,18 @@ const messageDateFormatter = new Intl.DateTimeFormat('zh-CN', {
   year: 'numeric', month: 'long', day: 'numeric',
 });
 const MESSAGE_GROUP_MAX_GAP_MS = 5 * 60_000;
-let request: AbortController | null = null;
+const HISTORY_TOP_THRESHOLD = 80;
+let hasMore = false;
+let loadingOlder = false;
+let pollRequest: AbortController | null = null;
+let historyRequest: AbortController | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let disposed = false;
+let initialLoaded = false;
 let consecutiveEmptyPolls = 0;
 let lastActivationRefreshAt = 0;
 let atBottom = true;
+let lastScrollTop = 0;
 
 const members = computed(() => new Map(props.members.map((member) => [member.userId, member])));
 const canSend = computed(() => !busy.value && (text.value.trim().length > 0 || image.value !== null));
@@ -43,34 +50,98 @@ function isAtBottom() {
   return !element || element.scrollHeight - element.scrollTop - element.clientHeight < 40;
 }
 
-async function scrollToBottom(behavior: ScrollBehavior = 'smooth') {
+async function scrollToBottom(behavior: ScrollBehavior = 'smooth', force = false) {
   await nextTick();
+  if (disposed || (!force && !atBottom)) return;
   list.value?.scrollTo({ top: list.value.scrollHeight, behavior });
   atBottom = true;
 }
 
 function appendMessages(incoming: ChatMessage[], forceScroll = false, behavior: ScrollBehavior = 'smooth') {
   const known = new Set(messages.value.map((message) => message.id));
-  const added = incoming.filter((message) => !known.has(message.id));
+  const added = incoming.filter((message) => {
+    if (known.has(message.id)) return false;
+    known.add(message.id);
+    return true;
+  });
   if (!added.length) return 0;
   messages.value = [...messages.value, ...added];
-  if (forceScroll || atBottom) void scrollToBottom(behavior);
+  if (forceScroll || atBottom) void scrollToBottom(behavior, forceScroll);
   return added.length;
 }
 
-async function refresh(initial = false) {
-  request?.abort();
-  request = new AbortController();
+async function refresh() {
+  pollRequest?.abort();
+  const controller = new AbortController();
+  pollRequest = controller;
+  const groupId = props.group.id;
+  const initial = !initialLoaded;
   try {
     const latestId = initial ? undefined : messages.value.at(-1)?.id;
-    const page = await findMessages(props.group.id, latestId, request.signal);
-    if (!request.signal.aborted) return appendMessages(page.messages, initial, initial ? 'auto' : 'smooth');
+    const page = await findMessages(groupId, latestId ? { afterMessageId: latestId } : undefined, controller.signal);
+    if (controller.signal.aborted || disposed || pollRequest !== controller || props.group.id !== groupId) return null;
+    if (!latestId) {
+      hasMore = page.hasMore;
+      initialLoaded = true;
+    }
+    return appendMessages(page.messages, initial, initial ? 'auto' : 'smooth');
   } catch (reason) {
-    if (request.signal.aborted) return null;
+    if (controller.signal.aborted || disposed || pollRequest !== controller) return null;
     error.value = reason instanceof Error ? reason.message : '无法读取群聊消息';
     return 0;
+  } finally {
+    if (pollRequest === controller) pollRequest = null;
   }
-  return null;
+}
+
+async function loadOlder() {
+  const element = list.value;
+  const cursor = messages.value[0]?.id;
+  if (!element || !cursor || !initialLoaded || !hasMore || loadingOlder || disposed) return;
+  const controller = new AbortController();
+  historyRequest = controller;
+  loadingOlder = true;
+  historyError.value = '';
+  atBottom = false;
+  const groupId = props.group.id;
+  try {
+    const page = await findMessages(groupId, { beforeMessageId: cursor }, controller.signal);
+    if (controller.signal.aborted || disposed || historyRequest !== controller || props.group.id !== groupId) return;
+    const known = new Set(messages.value.map((message) => message.id));
+    const older = page.messages.filter((message) => {
+      if (known.has(message.id)) return false;
+      known.add(message.id);
+      return true;
+    });
+    hasMore = page.hasMore && older.length > 0;
+    if (!older.length) return;
+    // 日期分割线可能因插入旧消息而变化，锚定当前可见消息比只计算列表高度更稳定。
+    const listBounds = element.getBoundingClientRect();
+    const anchor = [...element.querySelectorAll<HTMLElement>('[data-message-id]')]
+      .find((message) => message.getBoundingClientRect().bottom > listBounds.top);
+    const anchorTop = anchor?.getBoundingClientRect().top;
+    const previousHeight = element.scrollHeight;
+    const previousTop = element.scrollTop;
+    messages.value = [...older, ...messages.value];
+    await nextTick();
+    if (controller.signal.aborted || disposed || list.value !== element) return;
+    if (anchor && anchorTop !== undefined) {
+      element.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+    } else {
+      element.scrollTop = previousTop + element.scrollHeight - previousHeight;
+    }
+    lastScrollTop = element.scrollTop;
+  } catch (reason) {
+    if (!controller.signal.aborted && !disposed && historyRequest === controller) {
+      historyError.value = reason instanceof Error ? reason.message : '无法读取更早消息';
+    }
+  } finally {
+    if (historyRequest === controller) {
+      historyRequest = null;
+      loadingOlder = false;
+      atBottom = isAtBottom();
+    }
+  }
 }
 
 function clearRefreshTimer() {
@@ -84,9 +155,10 @@ function scheduleRefresh() {
   timer = setTimeout(() => void pollMessages(), messagePollDelay(consecutiveEmptyPolls));
 }
 
-async function pollMessages(initial = false) {
+async function pollMessages() {
   clearRefreshTimer();
-  const added = await refresh(initial);
+  const initial = !initialLoaded;
+  const added = await refresh();
   if (added === null || disposed || document.visibilityState === 'hidden') return;
   consecutiveEmptyPolls = initial || added > 0 ? 0 : consecutiveEmptyPolls + 1;
   scheduleRefresh();
@@ -102,7 +174,11 @@ function refreshOnActivation() {
 function handleVisibilityChange() {
   if (document.visibilityState === 'hidden') {
     clearRefreshTimer();
-    request?.abort();
+    pollRequest?.abort();
+    historyRequest?.abort();
+    historyRequest = null;
+    loadingOlder = false;
+    atBottom = isAtBottom();
     return;
   }
   refreshOnActivation();
@@ -260,17 +336,28 @@ function openLink(url: string) {
 }
 
 function onScroll() {
+  const element = list.value;
+  if (!element) return;
+  const movingUp = element.scrollTop < lastScrollTop - 1;
+  lastScrollTop = element.scrollTop;
   atBottom = isAtBottom();
+  if (movingUp && element.scrollTop <= HISTORY_TOP_THRESHOLD) void loadOlder();
+}
+
+function onWheel(event: WheelEvent) {
+  if (event.deltaY < 0 && list.value && list.value.scrollTop <= HISTORY_TOP_THRESHOLD) void loadOlder();
 }
 
 onMounted(() => {
-  void pollMessages(true);
+  void pollMessages();
   window.addEventListener('focus', refreshOnActivation);
   document.addEventListener('visibilitychange', handleVisibilityChange);
 });
 onScopeDispose(() => {
   disposed = true;
-  request?.abort();
+  pollRequest?.abort();
+  historyRequest?.abort();
+  historyRequest = null;
   clearRefreshTimer();
   window.removeEventListener('focus', refreshOnActivation);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -281,10 +368,10 @@ onScopeDispose(() => {
 <template>
   <section class="chat-panel" :aria-label="`${group.name}群聊`" @dragover.prevent @drop="handleDrop">
     <div class="chat-heading"><MessageSquareText :size="15" /><span>群聊</span></div>
-    <div ref="list" class="message-list" @scroll="onScroll">
+    <div ref="list" class="message-list" @scroll="onScroll" @wheel="onWheel">
       <template v-for="(message, index) in messages" :key="message.id">
         <div v-if="startsNewDate(message, index)" class="chat-date-divider"><span>{{ formatDate(message.createdAt) }}</span></div>
-        <article class="chat-message" :class="{ 'is-own': message.senderUserId === user.id, 'is-grouped': !startsNewMessageGroup(message, index) }">
+        <article class="chat-message" :data-message-id="message.id" :class="{ 'is-own': message.senderUserId === user.id, 'is-grouped': !startsNewMessageGroup(message, index) }">
           <template v-if="startsNewMessageGroup(message, index)">
             <img v-if="senderAvatar(message)" class="chat-message-avatar" :src="senderAvatar(message)" alt="" />
             <span v-else class="chat-message-avatar chat-message-initial">{{ senderName(message).slice(0, 1) }}</span>
@@ -293,13 +380,14 @@ onScopeDispose(() => {
           <div class="chat-message-body">
             <div v-if="startsNewMessageGroup(message, index)" class="chat-message-meta"><strong>{{ senderName(message) }}</strong><time>{{ formatTime(message.createdAt) }}</time></div>
             <p v-if="message.content" class="chat-message-content"><template v-for="(segment, segmentIndex) in messageSegments(message.content)" :key="segmentIndex"><a v-if="segment.href" class="chat-message-link" :href="segment.href" @click.prevent="openLink(segment.href)">{{ segment.text }}</a><template v-else>{{ segment.text }}</template></template></p>
-            <ChatImage v-if="message.attachment" :group-id="group.id" :attachment-id="message.attachment.id" :alt="`${senderName(message)} 发送的图片`" />
+            <ChatImage v-if="message.attachment" :group-id="group.id" :attachment-id="message.attachment.id"
+              :width="message.attachment.width" :height="message.attachment.height" :alt="`${senderName(message)} 发送的图片`" />
           </div>
         </article>
       </template>
     </div>
     <div class="composer-shell">
-      <p v-if="error" class="chat-error" role="alert">{{ error }}</p>
+      <p v-if="error || historyError" class="chat-error" role="alert">{{ error || historyError }}</p>
       <form class="composer" @submit.prevent="submit">
         <input ref="fileInput" type="file" hidden accept="image/png,image/jpeg" @change="chooseOriginal" />
         <button type="button" aria-label="选择原图" :disabled="busy" @click="fileInput?.click()"><Plus :size="16" /></button>

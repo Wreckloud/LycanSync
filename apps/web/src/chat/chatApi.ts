@@ -36,10 +36,14 @@ async function readError(response: Response): Promise<never> {
     typeof problem?.detail === 'string' ? problem.detail : `请求失败（HTTP ${response.status}）`);
 }
 
-export async function findMessages(groupId: string, afterMessageId?: string, signal?: AbortSignal): Promise<ChatMessagePage> {
-  const search = afterMessageId ? '?afterMessageId=' + encodeURIComponent(afterMessageId) : '';
+export async function findMessages(groupId: string,
+  cursor?: { beforeMessageId: string; afterMessageId?: never } | { afterMessageId: string; beforeMessageId?: never },
+  signal?: AbortSignal): Promise<ChatMessagePage> {
+  const search = cursor?.beforeMessageId ? '?beforeMessageId=' + encodeURIComponent(cursor.beforeMessageId)
+    : cursor?.afterMessageId ? '?afterMessageId=' + encodeURIComponent(cursor.afterMessageId) : '';
   const response = await authenticatedFetch(messagePath(groupId) + search, {
-    headers: { Accept: 'application/json' }, signal: signal ?? AbortSignal.timeout(15000),
+    headers: { Accept: 'application/json' },
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
   });
   if (!response.ok) return readError(response);
   return response.json() as Promise<ChatMessagePage>;
@@ -59,7 +63,8 @@ export async function sendMessage(groupId: string, content: string, image?: File
 export async function fetchAttachment(groupId: string, attachmentId: string, signal?: AbortSignal): Promise<Blob> {
   const response = await authenticatedFetch(
     '/api/groups/' + encodeURIComponent(groupId) + '/attachments/' + encodeURIComponent(attachmentId),
-    { headers: { Accept: 'image/png,image/jpeg' }, signal: signal ?? AbortSignal.timeout(30000) },
+    { headers: { Accept: 'image/png,image/jpeg' },
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000) },
   );
   if (!response.ok) return readError(response);
   return response.blob();

@@ -2,10 +2,16 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.lycansync.api.chat.mapper.ChatMapper">
+    <select id="allocateMessageSequence" resultType="long" affectData="true" flushCache="true" useCache="false">
+        UPDATE chat_group
+        SET next_message_sequence = next_message_sequence + 1
+        WHERE id = #{groupId}
+        RETURNING next_message_sequence - 1
+    </select>
     <insert id="insertMessage">
-        INSERT INTO chat_message (id, group_id, sender_user_id, type, content, created_at)
+        INSERT INTO chat_message (id, group_id, sender_user_id, type, content, created_at, sequence_number)
         VALUES (#{message.id}, #{message.groupId}, #{message.senderUserId}, #{message.type},
-                #{message.content}, #{message.createdAt})
+                #{message.content}, #{message.createdAt}, #{message.sequenceNumber})
     </insert>
     <insert id="insertAttachment">
         INSERT INTO chat_attachment (id, message_id, content_type, width, height, byte_size, data)
@@ -16,8 +22,12 @@
         SELECT EXISTS (SELECT 1 FROM chat_message WHERE group_id = #{groupId} AND id = #{messageId})
     </select>
     <select id="findMessages" resultType="com.lycansync.api.chat.model.ChatMessageView">
-        SELECT page.* FROM (
-            SELECT m.id, m.sender_user_id, users.nickname AS sender_nickname, m.type, m.content, m.created_at,
+        SELECT page.id, page.sender_user_id, page.sender_nickname, page.type, page.content, page.created_at,
+               page.attachment_id, page.attachment_content_type, page.attachment_width,
+               page.attachment_height, page.attachment_byte_size
+        FROM (
+            SELECT m.id, m.sequence_number, m.sender_user_id, users.nickname AS sender_nickname,
+                   m.type, m.content, m.created_at,
                    attachment.id AS attachment_id, attachment.content_type AS attachment_content_type,
                    attachment.width AS attachment_width, attachment.height AS attachment_height,
                    attachment.byte_size AS attachment_byte_size
@@ -26,17 +36,17 @@
             LEFT JOIN chat_attachment attachment ON attachment.message_id = m.id
             WHERE m.group_id = #{groupId}
             <if test="beforeMessageId != null">
-                AND (m.created_at, m.id) &lt; (SELECT cursor.created_at, cursor.id FROM chat_message cursor
+                AND m.sequence_number &lt; (SELECT cursor.sequence_number FROM chat_message cursor
                     WHERE cursor.group_id = #{groupId} AND cursor.id = #{beforeMessageId})
             </if>
             <if test="afterMessageId != null">
-                AND (m.created_at, m.id) &gt; (SELECT cursor.created_at, cursor.id FROM chat_message cursor
+                AND m.sequence_number &gt; (SELECT cursor.sequence_number FROM chat_message cursor
                     WHERE cursor.group_id = #{groupId} AND cursor.id = #{afterMessageId})
             </if>
-            <choose><when test="afterMessageId != null">ORDER BY m.created_at, m.id</when>
-                <otherwise>ORDER BY m.created_at DESC, m.id DESC</otherwise></choose>
+            <choose><when test="afterMessageId != null">ORDER BY m.sequence_number</when>
+                <otherwise>ORDER BY m.sequence_number DESC</otherwise></choose>
             LIMIT #{limit}
-        ) page ORDER BY page.created_at, page.id
+        ) page ORDER BY page.sequence_number
     </select>
     <select id="findAttachment" resultType="com.lycansync.api.chat.model.ChatAttachmentContent">
         SELECT attachment.id, attachment.content_type, attachment.data FROM chat_attachment attachment
