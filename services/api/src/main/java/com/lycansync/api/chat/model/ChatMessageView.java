@@ -11,5 +11,6 @@ import java.util.UUID;
  */
 public record ChatMessageView(UUID id, UUID senderUserId, String senderNickname, ChatMessageType type,
                               String content, Instant createdAt, UUID attachmentId, String attachmentContentType,
-                              Integer attachmentWidth, Integer attachmentHeight, Integer attachmentByteSize) {
+                              Integer attachmentWidth, Integer attachmentHeight, Long attachmentByteSize,
+                              String attachmentFileName) {
 }

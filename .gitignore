@@ -38,6 +38,7 @@ secrets/
 *.log
 logs/
 data/
+**/var/chat-files/
 
 # OS
 Thumbs.db

@@ -49,7 +49,7 @@ export async function compressChatImage(file: File): Promise<File> {
         }
       }
     }
-    throw new ChatImageError('图片内容过于复杂，无法压缩到 2 MB 以内。请使用加号选择原图。');
+    throw new ChatImageError('图片内容过于复杂，无法压缩到 2 MB 以内。请使用加号将原文件作为附件发送。');
   } finally {
     source.close();
   }

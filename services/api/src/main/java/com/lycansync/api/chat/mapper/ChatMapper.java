@@ -2,12 +2,16 @@ package com.lycansync.api.chat.mapper;
 
 import com.lycansync.api.chat.model.ChatAttachment;
 import com.lycansync.api.chat.model.ChatAttachmentContent;
+import com.lycansync.api.chat.model.ChatFileAttachment;
+import com.lycansync.api.chat.model.ChatFileMetadata;
+import com.lycansync.api.chat.model.ChatFileUploadReservation;
 import com.lycansync.api.chat.model.ChatMessage;
 import com.lycansync.api.chat.model.ChatMessageView;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
 import java.util.List;
+import java.time.Instant;
 import java.util.UUID;
 
 /**
@@ -25,4 +29,23 @@ public interface ChatMapper {
     List<ChatMessageView> findMessages(@Param("groupId") UUID groupId, @Param("beforeMessageId") UUID beforeMessageId,
                                        @Param("afterMessageId") UUID afterMessageId, @Param("limit") int limit);
     ChatAttachmentContent findAttachment(@Param("groupId") UUID groupId, @Param("attachmentId") UUID attachmentId);
+
+    ChatFileMetadata findFileMetadata(@Param("groupId") UUID groupId, @Param("attachmentId") UUID attachmentId);
+
+    ChatMessageView findFileMessage(@Param("groupId") UUID groupId, @Param("uploadId") UUID uploadId,
+                                    @Param("senderUserId") UUID senderUserId);
+
+    int insertFileAttachment(@Param("attachment") ChatFileAttachment attachment);
+
+    int reserveFileStorage(@Param("uploadId") UUID uploadId, @Param("groupId") UUID groupId,
+                           @Param("byteSize") long byteSize, @Param("maxStorageSize") long maxStorageSize,
+                           @Param("createdAt") Instant createdAt);
+
+    int completeFileStorageReservation(@Param("uploadId") UUID uploadId, @Param("byteSize") long byteSize);
+
+    int releaseFileStorageReservation(@Param("uploadId") UUID uploadId);
+
+    List<ChatFileUploadReservation> findExpiredFileStorageReservations(@Param("createdBefore") Instant createdBefore);
+
+    boolean fileAttachmentExists(@Param("attachmentId") UUID attachmentId);
 }

@@ -31,6 +31,8 @@ const groupPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const groupPresencePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/presences$/i;
 const groupMessagePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/messages$/i;
 const groupAttachmentPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/attachments\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const groupFilePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/files(?:\/(?:requests\/)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/i;
+const groupFileDownloadPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/files\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 if (backend.username || backend.password || backend.pathname !== '/' || backend.search || backend.hash
     || !['http:', 'https:'].includes(backend.protocol)
     || (backend.protocol === 'http:' && !['127.0.0.1', 'localhost', '[::1]'].includes(backend.hostname))) {
@@ -211,20 +213,31 @@ async function serveApplication(request) {
   if (url.pathname.startsWith('/api/')) {
     const routePolicy = apiRoutePolicies.get(`${request.method} ${url.pathname}`)
       ?? (request.method === 'GET' && (groupPath.test(url.pathname) || groupPresencePath.test(url.pathname) || groupMessagePath.test(url.pathname)
-        || groupAttachmentPath.test(url.pathname)) ? {} : undefined)
-      // multipart 仅向精确的群聊发送路径放行，仍由后端按图片实际大小校验。
-      ?? (request.method === 'POST' && groupMessagePath.test(url.pathname) ? { maxBodyBytes: 6 * 1024 * 1024 } : undefined);
+        || groupAttachmentPath.test(url.pathname) || groupFilePath.test(url.pathname)) ? {} : undefined)
+      // 图片 multipart 保持原有限制，普通文件只按流转发到固定的上传路径。
+      ?? (request.method === 'POST' && groupMessagePath.test(url.pathname) ? { maxBodyBytes: 6 * 1024 * 1024 } : undefined)
+      ?? (request.method === 'POST' && groupFilePath.test(url.pathname) && url.pathname.endsWith('/files')
+        ? { streamBody: true } : undefined);
     if (!routePolicy) return new Response(null, { status: 404 });
     try {
-      const body = ['POST', 'PUT'].includes(request.method) ? Buffer.from(await request.arrayBuffer()) : undefined;
-      if (body && body.byteLength > (routePolicy.maxBodyBytes ?? 4096)) return new Response(null, { status: 413 });
+      const streamingUpload = routePolicy.streamBody === true;
+      const body = streamingUpload ? request.body
+        : ['POST', 'PUT'].includes(request.method) ? Buffer.from(await request.arrayBuffer()) : undefined;
+      if (body instanceof Buffer && body.byteLength > (routePolicy.maxBodyBytes ?? 4096)) return new Response(null, { status: 413 });
       const token = await loadSession();
       const response = await net.fetch(new URL(url.pathname + url.search, backend).href, {
         method: request.method,
         headers: { ...(body ? { 'Content-Type': request.headers.get('Content-Type') || 'application/json' } : {}),
+          ...(streamingUpload ? {
+            'X-File-Name': request.headers.get('X-File-Name') || '',
+            'X-File-Size': request.headers.get('X-File-Size') || '',
+            'X-Upload-Id': request.headers.get('X-Upload-Id') || '',
+            'X-Message-Content': request.headers.get('X-Message-Content') || '',
+          } : {}),
           ...(!routePolicy.public && token ? { Authorization: 'Bearer ' + token } : {}) },
         body, redirect: 'error', credentials: 'omit',
-        signal: AbortSignal.any([request.signal, AbortSignal.timeout(15000)]),
+        signal: AbortSignal.any([request.signal,
+          AbortSignal.timeout(streamingUpload || groupFileDownloadPath.test(url.pathname) ? 30 * 60_000 : 15000)]),
       });
       if (!routePolicy.public && token === sessionToken
           && (response.status === 401 || (routePolicy.clearsSession && response.ok))) await clearSession();
@@ -238,6 +251,9 @@ async function serveApplication(request) {
       }
       return new Response(response.body, { status: response.status, headers: {
         'Content-Type': response.headers.get('Content-Type') || 'application/json',
+        ...(response.headers.has('Content-Length') ? { 'Content-Length': response.headers.get('Content-Length') } : {}),
+        ...(response.headers.has('Content-Disposition') ? { 'Content-Disposition': response.headers.get('Content-Disposition') } : {}),
+        ...(response.headers.has('X-Content-Type-Options') ? { 'X-Content-Type-Options': response.headers.get('X-Content-Type-Options') } : {}),
         'Cache-Control': 'no-store',
       } });
     } catch {

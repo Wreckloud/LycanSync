@@ -34,6 +34,15 @@ mybatis-plus:
 server:
   port: ${SERVER_PORT:18080}
   shutdown: graceful
+  # 文件上传将最多 2000 个 Unicode 字符的消息正文放入 Base64 请求头。
+  max-http-request-header-size: 16KB
+
+lycansync:
+  chat:
+    files:
+      storage-directory: ${CHAT_FILE_STORAGE_DIR:./var/chat-files}
+      max-file-size: ${CHAT_FILE_MAX_BYTES:104857600}
+      max-storage-size: ${CHAT_FILE_STORAGE_MAX_BYTES:10737418240}
 
 management:
   endpoints:

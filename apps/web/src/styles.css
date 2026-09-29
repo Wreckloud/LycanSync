@@ -939,6 +939,26 @@ button:focus-visible, input:focus-visible {
 .chat-image-frame { position: relative; max-width: 100%; margin-top: 6px; overflow: hidden; border-radius: 8px; background: var(--panel-soft); }
 .chat-image { display: block; width: 100%; height: 100%; object-fit: contain; }
 .chat-image-error { position: absolute; inset: 0; width: 100%; border: 0; padding: 8px; background: var(--panel-soft); color: var(--danger); font-size: 13px; cursor: pointer; }
+.chat-file-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(360px, 100%);
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+.chat-file-icon { display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 34px; border-radius: 6px; background: var(--panel); color: var(--accent); }
+.chat-file-details { display: grid; min-width: 0; flex: 1; gap: 3px; }
+.chat-file-details strong, .composer-attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-file-details strong { font-size: 13px; }
+.chat-file-details small, .composer-attachment small { color: var(--subtle); font-size: 11px; }
+.chat-file-details progress, .composer-attachment progress { width: 100%; height: 5px; accent-color: var(--accent); }
+.chat-file-card > button, .composer-attachment > button { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
+.chat-file-card > button:hover, .composer-attachment > button:hover { background: var(--panel); color: var(--text); }
+.chat-file-error { color: var(--danger) !important; }
 
 .composer-shell { position: relative; min-width: 0; }
 .chat-error {
@@ -1002,6 +1022,12 @@ button:focus-visible, input:focus-visible {
 .composer-image-preview { display: flex; align-items: center; gap: 7px; padding: 7px 0 0; color: var(--muted); font-size: 12px; }
 .composer-image-preview img { width: 34px; height: 34px; object-fit: cover; border-radius: 4px; }
 .composer-image-preview button { width: 24px; height: 24px; }
+.composer-attachments { display: grid; gap: 4px; max-height: 180px; overflow-y: auto; padding-top: 6px; }
+.composer-attachment { display: flex; min-width: 0; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+.composer-attachment img { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 4px; object-fit: cover; }
+.composer-attachment-name { min-width: 0; flex: 1; }
+.composer-attachment progress { max-width: 90px; }
+.chat-transfer-state { padding: 6px 0; color: var(--subtle); font-size: 12px; }
 
 .callbar-reveal {
   flex-shrink: 0;

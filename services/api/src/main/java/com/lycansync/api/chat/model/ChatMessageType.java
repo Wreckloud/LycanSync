@@ -9,5 +9,6 @@ package com.lycansync.api.chat.model;
 public enum ChatMessageType {
 
     TEXT,
-    IMAGE
+    IMAGE,
+    FILE
 }

@@ -19,5 +19,5 @@ public record ChatMessageResponse(
         @Schema(description = "消息类型") ChatMessageType type,
         @Schema(description = "文本内容；图片消息可附带说明") String content,
         @Schema(description = "发送时间") Instant createdAt,
-        @Schema(description = "图片附件；纯文本时为空") ChatAttachmentResponse attachment) {
+        @Schema(description = "图片或文件附件；纯文本时为空") ChatAttachmentResponse attachment) {
 }

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.flywaydb.core.Flyway;
 import com.lycansync.api.auth.dto.LocalRegistrationRequest;
 import com.lycansync.api.auth.service.LocalAuthService;
+import com.lycansync.api.chat.service.ChatFileStorageCleanup;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,6 +25,14 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.UUID;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.io.IOException;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -47,7 +56,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 使用隔离 PostgreSQL 验证群聊文本和图片附件的完整链路。
+ * 使用隔离 PostgreSQL 验证群聊文本、图片和文件附件的完整链路。
  *
  * @author Wreckloud
  * @since 2026-09-14
@@ -58,8 +67,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class ChatApplicationIT {
 
     private static final String PASSWORD = "chat-test-password";
+    private static final long MAX_FILE_SIZE = 104_857_600L;
+    private static final long MAX_FILE_STORAGE_SIZE = 10_737_418_240L;
     private static final byte[] PNG = java.util.Base64.getDecoder().decode(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+    private static final Path FILE_STORAGE = Path.of("target", "chat-file-it").toAbsolutePath();
 
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:18.6-bookworm");
@@ -72,6 +84,9 @@ class ChatApplicationIT {
         registry.add("spring.flyway.url", POSTGRES::getJdbcUrl);
         registry.add("spring.flyway.user", POSTGRES::getUsername);
         registry.add("spring.flyway.password", POSTGRES::getPassword);
+        registry.add("lycansync.chat.files.storage-directory", FILE_STORAGE::toString);
+        registry.add("lycansync.chat.files.max-file-size", () -> MAX_FILE_SIZE);
+        registry.add("lycansync.chat.files.max-storage-size", () -> MAX_FILE_STORAGE_SIZE);
     }
 
     @Autowired
@@ -86,10 +101,20 @@ class ChatApplicationIT {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private ChatFileStorageCleanup fileStorageCleanup;
+
     @BeforeEach
-    void resetDatabase() {
-        jdbc.sql("TRUNCATE user_presence, chat_attachment, chat_message, chat_group, auth_session, auth_local_credential, app_user").update();
+    void resetDatabase() throws IOException {
+        jdbc.sql("TRUNCATE user_presence, chat_attachment, chat_file_attachment, chat_file_upload_reservation, "
+                + "chat_message, chat_group, auth_session, auth_local_credential, app_user").update();
+        jdbc.sql("UPDATE chat_file_storage_quota SET used_bytes = 0, reserved_bytes = 0 WHERE id = 1").update();
         jdbc.sql("UPDATE system_state SET initialized_at = NULL WHERE id = 1").update();
+        if (Files.exists(FILE_STORAGE)) {
+            try (var paths = Files.walk(FILE_STORAGE)) {
+                for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+            }
+        }
     }
 
     @Test
@@ -250,6 +275,197 @@ class ChatApplicationIT {
     }
 
     @Test
+    void shouldPersistOriginalFileBytesAndReturnExistingMessageWhenRetried() throws Exception {
+        String token = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
+        String groupId = createGroup(token);
+        UUID uploadId = UUID.randomUUID();
+        byte[] original = new byte[] { 0, 1, 2, 13, 10, -1, 42 };
+        String response = sendFile(groupId, token, uploadId, "报告.bin", "说明", original)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.type").value("FILE"))
+                .andExpect(jsonPath("$.content").value("说明"))
+                .andExpect(jsonPath("$.attachment.contentType").value("application/octet-stream"))
+                .andExpect(jsonPath("$.attachment.fileName").value("报告.bin"))
+                .andExpect(jsonPath("$.attachment.byteSize").value(original.length))
+                .andReturn().getResponse().getContentAsString();
+        String messageId = objectMapper.readTree(response).path("id").asText();
+        String attachmentId = objectMapper.readTree(response).path("attachment").path("id").asText();
+
+        mvc.perform(get("/api/groups/{groupId}/messages", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.messages[0].type").value("FILE"))
+                .andExpect(jsonPath("$.messages[0].attachment.fileName").value("报告.bin"));
+        byte[] downloaded = mvc.perform(get("/api/groups/{groupId}/files/{attachmentId}", groupId, attachmentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                        .contentType(MediaType.APPLICATION_OCTET_STREAM))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.header()
+                        .string(HttpHeaders.CONTENT_DISPOSITION, org.hamcrest.Matchers.containsString("attachment")))
+                .andReturn().getResponse().getContentAsByteArray();
+        assertThat(downloaded).containsExactly(original);
+        assertThat(Files.readAllBytes(FILE_STORAGE.resolve(attachmentId + ".bin"))).containsExactly(original);
+
+        mvc.perform(get("/api/groups/{groupId}/files/requests/{uploadId}", groupId, uploadId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.id").value(messageId));
+        String retried = sendFile(groupId, token, uploadId, "报告.bin", "说明", original)
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        assertThat(objectMapper.readTree(retried).path("id").asText()).isEqualTo(messageId);
+        assertThat(jdbc.sql("SELECT count(*) FROM chat_message WHERE type = 'FILE'")
+                .query(Long.class).single()).isEqualTo(1L);
+    }
+
+    @Test
+    void shouldRejectOversizedAndUnauthorizedFileRequests() throws Exception {
+        String token = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
+        String groupId = createGroup(token);
+        mvc.perform(post("/api/groups/{groupId}/files", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .header("X-Upload-Id", UUID.randomUUID())
+                        .header("X-File-Name", encodeFileName("boundary.bin"))
+                        .header("X-File-Size", String.valueOf(MAX_FILE_SIZE))
+                        .contentType(MediaType.APPLICATION_OCTET_STREAM).content(new byte[0]))
+                .andExpect(status().isBadRequest());
+        assertThat(jdbc.sql("SELECT used_bytes + reserved_bytes FROM chat_file_storage_quota WHERE id = 1")
+                .query(Long.class).single()).isZero();
+        mvc.perform(post("/api/groups/{groupId}/files", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .header("X-Upload-Id", UUID.randomUUID())
+                        .header("X-File-Name", encodeFileName("large.bin"))
+                        .header("X-File-Size", String.valueOf(MAX_FILE_SIZE + 1))
+                        .contentType(MediaType.APPLICATION_OCTET_STREAM).content(new byte[0]))
+                .andExpect(status().isPayloadTooLarge());
+        assertThat(jdbc.sql("SELECT count(*) FROM chat_message").query(Long.class).single()).isZero();
+
+        UUID uploadId = UUID.randomUUID();
+        String response = sendFile(groupId, token, uploadId, "private.bin", "", new byte[] { 7 })
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        String attachmentId = objectMapper.readTree(response).path("attachment").path("id").asText();
+        mvc.perform(get("/api/groups/{groupId}/files/{attachmentId}", groupId, attachmentId))
+                .andExpect(status().isUnauthorized());
+        String otherGroupId = createGroup(token);
+        mvc.perform(get("/api/groups/{groupId}/files/{attachmentId}", otherGroupId, attachmentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void shouldNotExceedSharedStorageQuotaWhenTwoUploadsRace() throws Exception {
+        String token = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
+        String groupId = createGroup(token);
+        long maxStorageBytes = MAX_FILE_STORAGE_SIZE;
+        jdbc.sql("UPDATE chat_file_storage_quota SET used_bytes = :usedBytes WHERE id = 1")
+                .param("usedBytes", maxStorageBytes - 1).update();
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<Integer>> uploads = new ArrayList<>();
+            for (int index = 0; index < 2; index++) {
+                UUID uploadId = UUID.randomUUID();
+                uploads.add(executor.submit(() -> {
+                    await(start);
+                    return sendFile(groupId, token, uploadId, "one.bin", "", new byte[] { 1 })
+                            .andReturn().getResponse().getStatus();
+                }));
+            }
+            start.countDown();
+            assertThat(uploads.stream().map(future -> awaitResult(future)).toList())
+                    .containsExactlyInAnyOrder(201, 507);
+            assertThat(jdbc.sql("SELECT used_bytes FROM chat_file_storage_quota WHERE id = 1")
+                    .query(Long.class).single()).isEqualTo(maxStorageBytes);
+            assertThat(jdbc.sql("SELECT reserved_bytes FROM chat_file_storage_quota WHERE id = 1")
+                    .query(Long.class).single()).isZero();
+            assertThat(jdbc.sql("SELECT count(*) FROM chat_message WHERE type = 'FILE'")
+                    .query(Long.class).single()).isEqualTo(1L);
+        } finally {
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    @Test
+    void shouldRollbackFileMessageQuotaSequenceAndDiskFileWhenMetadataWriteFails() throws Exception {
+        String token = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
+        String groupId = createGroup(token);
+        jdbc.sql("CREATE FUNCTION chat_test_reject_file_attachment() RETURNS trigger LANGUAGE plpgsql AS $$ "
+                + "BEGIN RAISE EXCEPTION 'forced file metadata failure'; END $$").update();
+        jdbc.sql("CREATE TRIGGER chat_test_reject_file_attachment BEFORE INSERT ON chat_file_attachment "
+                + "FOR EACH ROW EXECUTE FUNCTION chat_test_reject_file_attachment()").update();
+        try {
+            sendFile(groupId, token, UUID.randomUUID(), "failed.bin", "", new byte[] { 3, 4 })
+                    .andExpect(status().is5xxServerError());
+            assertThat(jdbc.sql("SELECT count(*) FROM chat_message WHERE group_id = :groupId AND type = 'FILE'")
+                    .param("groupId", UUID.fromString(groupId)).query(Long.class).single()).isZero();
+            assertThat(jdbc.sql("SELECT next_message_sequence FROM chat_group WHERE id = :groupId")
+                    .param("groupId", UUID.fromString(groupId)).query(Long.class).single()).isEqualTo(1L);
+            assertThat(jdbc.sql("SELECT used_bytes + reserved_bytes FROM chat_file_storage_quota WHERE id = 1")
+                    .query(Long.class).single()).isZero();
+            assertThat(jdbc.sql("SELECT count(*) FROM chat_file_upload_reservation")
+                    .query(Long.class).single()).isZero();
+            try (var files = Files.list(FILE_STORAGE)) {
+                assertThat(files.filter(path -> path.toString().endsWith(".bin")).toList()).isEmpty();
+            }
+        } finally {
+            jdbc.sql("DROP TRIGGER chat_test_reject_file_attachment ON chat_file_attachment").update();
+            jdbc.sql("DROP FUNCTION chat_test_reject_file_attachment()").update();
+        }
+    }
+
+    @Test
+    void shouldRollbackFileMessageQuotaSequenceAndDiskFileWhenMessageTextIsInvalid() throws Exception {
+        String token = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
+        String groupId = createGroup(token);
+
+        sendFile(groupId, token, UUID.randomUUID(), "invalid-content.bin",
+                "invalid" + Character.toString(1) + "text", new byte[] { 5, 6 })
+                .andExpect(status().isBadRequest());
+
+        assertThat(jdbc.sql("SELECT count(*) FROM chat_message WHERE group_id = :groupId AND type = 'FILE'")
+                .param("groupId", UUID.fromString(groupId)).query(Long.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT next_message_sequence FROM chat_group WHERE id = :groupId")
+                .param("groupId", UUID.fromString(groupId)).query(Long.class).single()).isEqualTo(1L);
+        assertThat(jdbc.sql("SELECT used_bytes + reserved_bytes FROM chat_file_storage_quota WHERE id = 1")
+                .query(Long.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT count(*) FROM chat_file_upload_reservation")
+                .query(Long.class).single()).isZero();
+        try (var files = Files.list(FILE_STORAGE)) {
+            assertThat(files.filter(path -> path.toString().endsWith(".bin")).toList()).isEmpty();
+        }
+    }
+
+    @Test
+    void shouldRemoveStaleTemporaryReservationsAndOrphanedFilesAtStartupCleanup() throws Exception {
+        String token = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
+        String groupId = createGroup(token);
+        UUID reservationId = UUID.randomUUID();
+        UUID orphanFileId = UUID.randomUUID();
+        Path temporaryFile = FILE_STORAGE.resolve(".tmp").resolve(reservationId + ".part");
+        Path orphanFile = FILE_STORAGE.resolve(orphanFileId + ".bin");
+        Files.createDirectories(temporaryFile.getParent());
+        Files.write(temporaryFile, new byte[] { 1, 2 });
+        Files.write(orphanFile, new byte[] { 3, 4 });
+        FileTime staleTime = FileTime.from(Instant.now().minus(Duration.ofDays(2)));
+        OffsetDateTime expiredReservationTime = OffsetDateTime.ofInstant(
+                Instant.now().minus(Duration.ofDays(2)), ZoneOffset.UTC);
+        Files.setLastModifiedTime(temporaryFile, staleTime);
+        Files.setLastModifiedTime(orphanFile, staleTime);
+        jdbc.sql("INSERT INTO chat_file_upload_reservation (id, group_id, byte_size, created_at) "
+                        + "VALUES (:id, :groupId, 2, :createdAt)")
+                .param("id", reservationId).param("groupId", UUID.fromString(groupId))
+                .param("createdAt", expiredReservationTime).update();
+        jdbc.sql("UPDATE chat_file_storage_quota SET reserved_bytes = 2 WHERE id = 1").update();
+
+        fileStorageCleanup.removeOrphanedFiles();
+
+        assertThat(Files.exists(temporaryFile)).isFalse();
+        assertThat(Files.exists(orphanFile)).isFalse();
+        assertThat(jdbc.sql("SELECT reserved_bytes FROM chat_file_storage_quota WHERE id = 1")
+                .query(Long.class).single()).isZero();
+    }
+
+    @Test
     void shouldBackfillOldMessagesInCreatedAtAndIdOrderAndPreservePageBoundaries() throws Exception {
         String schema = "chat_migration_" + UUID.randomUUID().toString().replace("-", "");
         Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
@@ -350,6 +566,34 @@ class ChatApplicationIT {
             statement.setString(4, createdAt);
             statement.setLong(5, sequenceNumber);
             statement.executeUpdate();
+        }
+    }
+
+    private org.springframework.test.web.servlet.ResultActions sendFile(String groupId, String token, UUID uploadId,
+                                                                        String fileName, String content, byte[] bytes)
+            throws Exception {
+        String encodedContent = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return mvc.perform(post("/api/groups/{groupId}/files", groupId)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                .header("X-Upload-Id", uploadId)
+                .header("X-File-Name", encodeFileName(fileName))
+                .header("X-File-Size", String.valueOf(bytes.length))
+                .header("X-Message-Content", encodedContent)
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .content(bytes));
+    }
+
+    private String encodeFileName(String fileName) {
+        return java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(fileName.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    private int awaitResult(Future<Integer> future) {
+        try {
+            return future.get(10, TimeUnit.SECONDS);
+        } catch (Exception exception) {
+            throw new RuntimeException(exception);
         }
     }
 

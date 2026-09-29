@@ -1,22 +1,31 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onScopeDispose, ref } from 'vue';
+import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { MessageSquareText, Plus, Send, X } from '@lucide/vue';
 import type { AuthUser } from '../auth/authApi';
-import { findMessages, sendMessage, type ChatMessage } from '../chat/chatApi';
+import { findMessages, sendFile, sendMessage, type ChatMessage } from '../chat/chatApi';
 import { messagePollDelay } from '../chat/messagePolling';
-import { compressChatImage, prepareOriginalImage } from '../chat/messageImage';
+import { compressChatImage } from '../chat/messageImage';
 import type { GroupMember, GroupSummary } from '../group/groupApi';
 import ChatImage from './ChatImage.vue';
+import ChatFileCard from './ChatFileCard.vue';
 
 type MessageSegment = { text: string; href?: string };
+type PendingAttachment = {
+  id: string;
+  kind: 'IMAGE' | 'FILE';
+  file: File;
+  previewUrl: string;
+  state: 'pending' | 'uploading' | 'failed' | 'sent';
+  progress: number;
+  error: string;
+};
 
 const props = defineProps<{ group: GroupSummary; members: GroupMember[]; user: AuthUser }>();
 const messages = ref<ChatMessage[]>([]);
 const text = ref('');
-const image = ref<File | null>(null);
-const imagePreview = ref('');
-const imageMode = ref<'optimized' | 'original' | null>(null);
+const pendingAttachments = ref<PendingAttachment[]>([]);
 const busy = ref(false);
+const preparing = ref(false);
 const error = ref('');
 const historyError = ref('');
 const list = ref<HTMLElement | null>(null);
@@ -43,7 +52,11 @@ let atBottom = true;
 let lastScrollTop = 0;
 
 const members = computed(() => new Map(props.members.map((member) => [member.userId, member])));
-const canSend = computed(() => !busy.value && (text.value.trim().length > 0 || image.value !== null));
+const canSend = computed(() => !busy.value && !preparing.value
+  && (text.value.trim().length > 0 || pendingAttachments.value.some((item) => item.state !== 'sent')));
+let activeUpload: AbortController | null = null;
+let preparationGeneration = 0;
+let sendGeneration = 0;
 
 function isAtBottom() {
   const element = list.value;
@@ -184,52 +197,73 @@ function handleVisibilityChange() {
   refreshOnActivation();
 }
 
-async function assignImage(file: File, mode: 'optimized' | 'original') {
-  if (busy.value) return;
-  if (image.value) {
-    error.value = '当前每条消息只能发送一张图片，请先移除待发送图片。';
+function revokePreview(item: PendingAttachment) {
+  if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+}
+
+function clearPendingAttachments() {
+  for (const item of pendingAttachments.value) revokePreview(item);
+  pendingAttachments.value = [];
+}
+
+function removePendingAttachment(id: string) {
+  const item = pendingAttachments.value.find((attachment) => attachment.id === id);
+  if (!item) return;
+  if (item.state === 'uploading') activeUpload?.abort();
+  revokePreview(item);
+  pendingAttachments.value = pendingAttachments.value.filter((attachment) => attachment.id !== id);
+}
+
+async function enqueueFiles(files: File[], compressSupportedImages: boolean) {
+  if (busy.value || preparing.value || !files.length) return;
+  error.value = '';
+  if (!compressSupportedImages) {
+    pendingAttachments.value.push(...files.map((file) => ({ id: crypto.randomUUID(), kind: 'FILE' as const,
+      file, previewUrl: '', state: 'pending' as const, progress: 0, error: '' })));
     return;
   }
-  error.value = '';
+  const generation = ++preparationGeneration;
+  preparing.value = true;
+  const preparedItems: PendingAttachment[] = [];
   try {
-    const prepared = mode === 'optimized' ? await compressChatImage(file) : await prepareOriginalImage(file);
-    if (imagePreview.value) URL.revokeObjectURL(imagePreview.value);
-    image.value = prepared;
-    imagePreview.value = URL.createObjectURL(prepared);
-    imageMode.value = mode;
+    for (const file of files) {
+      const imageType = file.type === 'image/png' || file.type === 'image/jpeg';
+      const prepared = imageType ? await compressChatImage(file) : file;
+      preparedItems.push({ id: crypto.randomUUID(), kind: imageType ? 'IMAGE' : 'FILE', file: prepared,
+        previewUrl: imageType ? URL.createObjectURL(prepared) : '', state: 'pending', progress: 0, error: '' });
+      if (generation !== preparationGeneration || disposed) {
+        for (const item of preparedItems) revokePreview(item);
+        return;
+      }
+    }
+    pendingAttachments.value.push(...preparedItems);
   } catch (reason) {
+    for (const item of preparedItems) revokePreview(item);
     error.value = reason instanceof Error ? reason.message : '图片处理失败';
+  } finally {
+    if (generation === preparationGeneration) preparing.value = false;
   }
 }
 
-function removeImage() {
-  if (imagePreview.value) URL.revokeObjectURL(imagePreview.value);
-  image.value = null;
-  imagePreview.value = '';
-  imageMode.value = null;
-}
-
-function chooseOriginal(event: Event) {
+function chooseFiles(event: Event) {
   const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
+  const files = [...input.files ?? []];
   input.value = '';
-  if (file) void assignImage(file, 'original');
+  void enqueueFiles(files, false);
 }
 
 function handlePaste(event: ClipboardEvent) {
-  const file = [...event.clipboardData?.files ?? []].find((item) => item.type.startsWith('image/'));
-  if (file) {
+  const files = [...event.clipboardData?.files ?? []];
+  if (files.length) {
     event.preventDefault();
-    void assignImage(file, 'optimized');
+    void enqueueFiles(files, true);
   }
 }
 
 function handleDrop(event: DragEvent) {
   event.preventDefault();
   const files = [...event.dataTransfer?.files ?? []];
-  const imageFile = files.find((file) => file.type.startsWith('image/'));
-  if (imageFile) void assignImage(imageFile, 'optimized');
-  else if (files.length) error.value = '文件发送将在后续版本开放；目前支持文本和 PNG/JPEG 图片。';
+  if (files.length) void enqueueFiles(files, true);
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -247,22 +281,92 @@ function resizeMessageInput(event: Event) {
 
 async function submit() {
   if (!canSend.value) return;
+  const generation = ++sendGeneration;
   busy.value = true;
   error.value = '';
   try {
-    const message = await sendMessage(props.group.id, text.value, image.value ?? undefined);
-    text.value = '';
-    removeImage();
+    const groupId = props.group.id;
+    const queued = pendingAttachments.value.filter((item) => item.state !== 'sent');
+    if (!queued.length) {
+      const controller = new AbortController();
+      activeUpload = controller;
+      const message = await sendMessage(groupId, text.value, undefined, controller.signal);
+      if (disposed || generation !== sendGeneration || props.group.id !== groupId) return;
+      activeUpload = null;
+      text.value = '';
+      appendMessages([message], true);
+    } else {
+      let content = text.value;
+      for (const item of queued) {
+        if (!pendingAttachments.value.some((attachment) => attachment.id === item.id)) continue;
+        const controller = new AbortController();
+        activeUpload = controller;
+        item.state = 'uploading';
+        item.error = '';
+        item.progress = 0;
+        try {
+          const message = item.kind === 'IMAGE'
+            ? await sendMessage(groupId, content, item.file, controller.signal)
+            : await sendFile(groupId, item.file, content, item.id, controller.signal,
+              (loaded) => { item.progress = loaded; });
+          if (disposed || generation !== sendGeneration || props.group.id !== groupId || controller.signal.aborted) return;
+          item.state = 'sent';
+          revokePreview(item);
+          item.previewUrl = '';
+          appendMessages([message], true);
+          content = '';
+          text.value = '';
+        } catch (reason) {
+          if (disposed || generation !== sendGeneration || props.group.id !== groupId) return;
+          item.state = controller.signal.aborted ? 'pending' : 'failed';
+          item.error = controller.signal.aborted ? '已取消，可继续发送' : reason instanceof Error ? reason.message : '文件发送失败';
+          if (!controller.signal.aborted) error.value = item.error;
+          break;
+        } finally {
+          if (activeUpload === controller) activeUpload = null;
+        }
+      }
+    if (pendingAttachments.value.length && pendingAttachments.value.every((item) => item.state === 'sent')) {
+      clearPendingAttachments();
+    }
+    }
     if (messageInput.value) messageInput.value.style.height = '42px';
-    appendMessages([message], true);
     consecutiveEmptyPolls = 0;
     scheduleRefresh();
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : '消息发送失败';
+    if (!disposed && generation === sendGeneration) error.value = reason instanceof Error ? reason.message : '消息发送失败';
   } finally {
-    busy.value = false;
+    if (generation === sendGeneration) {
+      activeUpload = null;
+      busy.value = false;
+    }
   }
 }
+
+function cancelUpload() {
+  activeUpload?.abort();
+}
+
+watch(() => props.group.id, () => {
+  pollRequest?.abort();
+  historyRequest?.abort();
+  activeUpload?.abort();
+  activeUpload = null;
+  sendGeneration++;
+  busy.value = false;
+  preparationGeneration++;
+  preparing.value = false;
+  clearPendingAttachments();
+  messages.value = [];
+  error.value = '';
+  historyError.value = '';
+  initialLoaded = false;
+  hasMore = false;
+  loadingOlder = false;
+  historyRequest = null;
+  clearRefreshTimer();
+  void pollMessages();
+});
 
 function senderName(message: ChatMessage) {
   return message.senderUserId === props.user.id ? props.user.nickname : message.senderNickname;
@@ -361,7 +465,10 @@ onScopeDispose(() => {
   clearRefreshTimer();
   window.removeEventListener('focus', refreshOnActivation);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
-  if (imagePreview.value) URL.revokeObjectURL(imagePreview.value);
+  activeUpload?.abort();
+  sendGeneration++;
+  preparationGeneration++;
+  clearPendingAttachments();
 });
 </script>
 
@@ -380,8 +487,9 @@ onScopeDispose(() => {
           <div class="chat-message-body">
             <div v-if="startsNewMessageGroup(message, index)" class="chat-message-meta"><strong>{{ senderName(message) }}</strong><time>{{ formatTime(message.createdAt) }}</time></div>
             <p v-if="message.content" class="chat-message-content"><template v-for="(segment, segmentIndex) in messageSegments(message.content)" :key="segmentIndex"><a v-if="segment.href" class="chat-message-link" :href="segment.href" @click.prevent="openLink(segment.href)">{{ segment.text }}</a><template v-else>{{ segment.text }}</template></template></p>
-            <ChatImage v-if="message.attachment" :group-id="group.id" :attachment-id="message.attachment.id"
-              :width="message.attachment.width" :height="message.attachment.height" :alt="`${senderName(message)} 发送的图片`" />
+            <ChatImage v-if="message.type === 'IMAGE' && message.attachment" :group-id="group.id" :attachment-id="message.attachment.id"
+              :width="message.attachment.width ?? 1" :height="message.attachment.height ?? 1" :alt="`${senderName(message)} 发送的图片`" />
+            <ChatFileCard v-if="message.type === 'FILE' && message.attachment" :group-id="group.id" :attachment="message.attachment" />
           </div>
         </article>
       </template>
@@ -389,11 +497,23 @@ onScopeDispose(() => {
     <div class="composer-shell">
       <p v-if="error || historyError" class="chat-error" role="alert">{{ error || historyError }}</p>
       <form class="composer" @submit.prevent="submit">
-        <input ref="fileInput" type="file" hidden accept="image/png,image/jpeg" @change="chooseOriginal" />
-        <button type="button" aria-label="选择原图" :disabled="busy" @click="fileInput?.click()"><Plus :size="16" /></button>
+        <input ref="fileInput" type="file" hidden multiple @change="chooseFiles" />
+        <button type="button" aria-label="添加文件" :disabled="busy || preparing" @click="fileInput?.click()"><Plus :size="16" /></button>
         <div class="composer-content">
-          <div v-if="image" class="composer-image-preview"><img :src="imagePreview" alt="待发送图片" /><span>{{ imageMode === 'optimized' ? '已压缩' : '原图' }}</span><button type="button" aria-label="移除待发送图片" @click="removeImage"><X :size="13" /></button></div>
-          <textarea ref="messageInput" v-model="text" aria-label="消息内容" maxlength="2000" rows="1" :disabled="busy" placeholder="发送消息" @input="resizeMessageInput" @keydown="handleKeydown" @paste="handlePaste" />
+          <div v-if="preparing" class="chat-transfer-state" role="status">正在压缩图片…</div>
+          <div v-if="pendingAttachments.length" class="composer-attachments">
+            <div v-for="item in pendingAttachments" :key="item.id" class="composer-attachment">
+              <img v-if="item.previewUrl" :src="item.previewUrl" alt="待发送图片" />
+              <span class="composer-attachment-name" :title="item.file.name">{{ item.file.name }}</span>
+              <small>{{ item.kind === 'IMAGE' ? '已压缩' : (item.file.size / 1024 / 1024).toFixed(2) + ' MB' }}</small>
+              <progress v-if="item.state === 'uploading' && item.kind === 'FILE'" :value="item.progress" :max="item.file.size" aria-label="文件上传进度" />
+              <small v-if="item.error" class="chat-file-error">{{ item.error }}</small>
+              <button v-if="item.state === 'uploading'" type="button" aria-label="取消文件上传" @click="cancelUpload"><X :size="13" /></button>
+              <button v-else-if="item.state !== 'sent'" type="button" :aria-label="`移除 ${item.file.name}`" @click="removePendingAttachment(item.id)"><X :size="13" /></button>
+              <small v-else>已发送</small>
+            </div>
+          </div>
+          <textarea ref="messageInput" v-model="text" aria-label="消息内容" maxlength="2000" rows="1" :disabled="busy || preparing" placeholder="发送消息" @input="resizeMessageInput" @keydown="handleKeydown" @paste="handlePaste" />
         </div>
         <button type="submit" aria-label="发送消息" :disabled="!canSend"><Send :size="15" /></button>
       </form>

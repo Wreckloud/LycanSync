@@ -85,7 +85,7 @@ public class ChatService {
             mapper.insertAttachment(new ChatAttachment(attachmentId, messageId, validatedImage.contentType(),
                     validatedImage.width(), validatedImage.height(), validatedImage.data().length, validatedImage.data()));
             attachment = new ChatAttachmentResponse(attachmentId, validatedImage.contentType(),
-                    validatedImage.width(), validatedImage.height(), validatedImage.data().length);
+                    validatedImage.width(), validatedImage.height(), (long) validatedImage.data().length, null);
         }
         return new ChatMessageResponse(messageId, user.id(), user.nickname(),
                 validatedImage == null ? ChatMessageType.TEXT : ChatMessageType.IMAGE, text, now, attachment);
@@ -113,7 +113,7 @@ public class ChatService {
     private ChatMessageResponse toResponse(ChatMessageView message) {
         ChatAttachmentResponse attachment = message.attachmentId() == null ? null : new ChatAttachmentResponse(
                 message.attachmentId(), message.attachmentContentType(), message.attachmentWidth(),
-                message.attachmentHeight(), message.attachmentByteSize());
+                message.attachmentHeight(), message.attachmentByteSize(), message.attachmentFileName());
         return new ChatMessageResponse(message.id(), message.senderUserId(), message.senderNickname(), message.type(),
                 message.content(), message.createdAt(), attachment);
     }

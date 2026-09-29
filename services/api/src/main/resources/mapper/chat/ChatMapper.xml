@@ -24,16 +24,19 @@
     <select id="findMessages" resultType="com.lycansync.api.chat.model.ChatMessageView">
         SELECT page.id, page.sender_user_id, page.sender_nickname, page.type, page.content, page.created_at,
                page.attachment_id, page.attachment_content_type, page.attachment_width,
-               page.attachment_height, page.attachment_byte_size
+               page.attachment_height, page.attachment_byte_size, page.attachment_file_name
         FROM (
             SELECT m.id, m.sequence_number, m.sender_user_id, users.nickname AS sender_nickname,
                    m.type, m.content, m.created_at,
-                   attachment.id AS attachment_id, attachment.content_type AS attachment_content_type,
+                   COALESCE(attachment.id, file_attachment.id) AS attachment_id,
+                   COALESCE(attachment.content_type, 'application/octet-stream') AS attachment_content_type,
                    attachment.width AS attachment_width, attachment.height AS attachment_height,
-                   attachment.byte_size AS attachment_byte_size
+                   COALESCE(attachment.byte_size, file_attachment.byte_size) AS attachment_byte_size,
+                   file_attachment.file_name AS attachment_file_name
             FROM chat_message m
             JOIN app_user users ON users.id = m.sender_user_id
             LEFT JOIN chat_attachment attachment ON attachment.message_id = m.id
+            LEFT JOIN chat_file_attachment file_attachment ON file_attachment.message_id = m.id
             WHERE m.group_id = #{groupId}
             <if test="beforeMessageId != null">
                 AND m.sequence_number &lt; (SELECT cursor.sequence_number FROM chat_message cursor
@@ -52,5 +55,67 @@
         SELECT attachment.id, attachment.content_type, attachment.data FROM chat_attachment attachment
         JOIN chat_message message ON message.id = attachment.message_id
         WHERE message.group_id = #{groupId} AND attachment.id = #{attachmentId}
+    </select>
+    <select id="findFileMetadata" resultType="com.lycansync.api.chat.model.ChatFileMetadata">
+        SELECT attachment.id, attachment.file_name, attachment.byte_size
+        FROM chat_file_attachment attachment
+        JOIN chat_message message ON message.id = attachment.message_id
+        WHERE message.group_id = #{groupId} AND attachment.id = #{attachmentId}
+    </select>
+    <select id="findFileMessage" resultType="com.lycansync.api.chat.model.ChatMessageView">
+        SELECT message.id, message.sender_user_id, users.nickname AS sender_nickname, message.type,
+               message.content, message.created_at, attachment.id AS attachment_id,
+               'application/octet-stream' AS attachment_content_type, NULL AS attachment_width,
+               NULL AS attachment_height, attachment.byte_size AS attachment_byte_size,
+               attachment.file_name AS attachment_file_name
+        FROM chat_file_attachment attachment
+        JOIN chat_message message ON message.id = attachment.message_id
+        JOIN app_user users ON users.id = message.sender_user_id
+        WHERE message.group_id = #{groupId} AND attachment.upload_id = #{uploadId}
+          AND message.sender_user_id = #{senderUserId}
+    </select>
+    <insert id="insertFileAttachment">
+        INSERT INTO chat_file_attachment (id, message_id, upload_id, file_name, byte_size)
+        VALUES (#{attachment.id}, #{attachment.messageId}, #{attachment.uploadId},
+                #{attachment.fileName}, #{attachment.byteSize})
+    </insert>
+    <insert id="reserveFileStorage" flushCache="true">
+        WITH reserved AS (
+            UPDATE chat_file_storage_quota
+            SET reserved_bytes = reserved_bytes + #{byteSize}
+            WHERE id = 1 AND used_bytes + reserved_bytes + #{byteSize} &lt;= #{maxStorageSize}
+            RETURNING id
+        )
+        INSERT INTO chat_file_upload_reservation (id, group_id, byte_size, created_at)
+        SELECT #{uploadId}, #{groupId}, #{byteSize}, #{createdAt} FROM reserved
+    </insert>
+    <update id="completeFileStorageReservation" flushCache="true">
+        WITH reservation AS (
+            DELETE FROM chat_file_upload_reservation
+            WHERE id = #{uploadId} AND byte_size = #{byteSize}
+            RETURNING byte_size
+        )
+        UPDATE chat_file_storage_quota
+        SET reserved_bytes = reserved_bytes - reservation.byte_size,
+            used_bytes = used_bytes + reservation.byte_size
+        FROM reservation
+        WHERE id = 1 AND reserved_bytes &gt;= reservation.byte_size
+    </update>
+    <update id="releaseFileStorageReservation" flushCache="true">
+        WITH reservation AS (
+            DELETE FROM chat_file_upload_reservation WHERE id = #{uploadId}
+            RETURNING byte_size
+        )
+        UPDATE chat_file_storage_quota
+        SET reserved_bytes = reserved_bytes - reservation.byte_size
+        FROM reservation
+        WHERE id = 1 AND reserved_bytes &gt;= reservation.byte_size
+    </update>
+    <select id="findExpiredFileStorageReservations" resultType="com.lycansync.api.chat.model.ChatFileUploadReservation">
+        SELECT id, byte_size, created_at FROM chat_file_upload_reservation
+        WHERE created_at &lt; #{createdBefore}
+    </select>
+    <select id="fileAttachmentExists" resultType="boolean">
+        SELECT EXISTS (SELECT 1 FROM chat_file_attachment WHERE id = #{attachmentId})
     </select>
 </mapper>
