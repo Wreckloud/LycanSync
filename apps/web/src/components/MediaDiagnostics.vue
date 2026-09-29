@@ -11,11 +11,120 @@ type StreamStats = {
 const streams = ref<StreamStats[]>([]);
 const error = ref('');
 const processMetrics = ref<{ cpuPercent: number; memoryMb: number } | null>(null);
+const captureProbeAvailable = ref(false);
+const captureProbeReason = ref('');
+const videoCaptureAvailable = ref(false);
+const videoSources = ref<NativeVideoSource[]>([]);
+const selectedVideoSourceId = ref('');
+const captureProbeSessionId = ref<string | null>(null);
+const captureProbeState = ref<'idle' | 'starting' | 'running' | 'stopping' | 'failed'>('idle');
+const captureProbeDiagnostics = ref<NativeCaptureDiagnostics | null>(null);
+const captureProbeError = ref('');
+const sourceListLoading = ref(false);
+const captureProbeBusy = ref(false);
 const previous = new Map<string, { bytes: number; frames: number | null; timestamp: number; encodeTime: number | null }>();
 const previousSource = new Map<string, { frames: number; timestamp: number }>();
 const previousPlayback = new WeakMap<HTMLVideoElement, { frames: number; timestamp: number }>();
 let polling = false;
 let timer: ReturnType<typeof setInterval> | null = null;
+let diagnosticsPolling = false;
+let componentDisposed = false;
+
+async function loadCaptureProbeCapability() {
+  try {
+    const capabilities = await window.lycanDesktop?.getNativeMediaCapabilities();
+    captureProbeAvailable.value = capabilities?.captureProbe.available ?? false;
+    captureProbeReason.value = capabilities?.captureProbe.reason ?? 'desktopUnavailable';
+    videoCaptureAvailable.value = capabilities?.videoCapture.available ?? false;
+  } catch {
+    captureProbeAvailable.value = false;
+    captureProbeReason.value = 'mediaHelperUnavailable';
+  }
+}
+
+async function listVideoSources() {
+  if (!window.lycanDesktop || sourceListLoading.value || captureProbeSessionId.value) return;
+  sourceListLoading.value = true;
+  captureProbeError.value = '';
+  try {
+    const snapshot = await window.lycanDesktop.listNativeVideoSources();
+    videoSources.value = snapshot.sources;
+    if (!snapshot.sources.some((source) => source.sourceId === selectedVideoSourceId.value)) {
+      selectedVideoSourceId.value = snapshot.sources[0]?.sourceId ?? '';
+    }
+  } catch {
+    videoSources.value = [];
+    selectedVideoSourceId.value = '';
+    captureProbeError.value = '无法列出原生视频来源，请稍后刷新。';
+  } finally {
+    sourceListLoading.value = false;
+  }
+}
+
+async function refreshCaptureProbeDiagnostics() {
+  if (!window.lycanDesktop || diagnosticsPolling || !captureProbeSessionId.value) return;
+  diagnosticsPolling = true;
+  try {
+    const diagnostics = await window.lycanDesktop.getNativeMediaDiagnostics();
+    captureProbeDiagnostics.value = diagnostics;
+    captureProbeState.value = diagnostics.state;
+    if (diagnostics.state === 'idle' && !diagnostics.sessionId) {
+      captureProbeSessionId.value = null;
+      captureProbeState.value = diagnostics.lastCaptureError ? 'failed' : 'idle';
+    }
+  } catch {
+    captureProbeSessionId.value = null;
+    captureProbeState.value = 'failed';
+    captureProbeError.value = '探针进程已停止或诊断请求超时；请刷新来源后重试。';
+  } finally {
+    diagnosticsPolling = false;
+  }
+}
+
+async function startCaptureProbe() {
+  if (!window.lycanDesktop || !captureProbeAvailable.value || !selectedVideoSourceId.value
+      || captureProbeBusy.value || captureProbeSessionId.value) return;
+  captureProbeBusy.value = true;
+  captureProbeState.value = 'starting';
+  captureProbeError.value = '';
+  try {
+    const result = await window.lycanDesktop.startNativeCaptureProbe(selectedVideoSourceId.value);
+    captureProbeSessionId.value = result.sessionId;
+    captureProbeState.value = 'running';
+    if (componentDisposed) {
+      await window.lycanDesktop.stopNativeCaptureProbe(result.sessionId).catch(() => undefined);
+      return;
+    }
+    await refreshCaptureProbeDiagnostics();
+  } catch {
+    captureProbeState.value = 'failed';
+    captureProbeError.value = '探针启动失败；请刷新来源并检查原生媒体能力。';
+    videoSources.value = [];
+    selectedVideoSourceId.value = '';
+  } finally {
+    captureProbeBusy.value = false;
+  }
+}
+
+async function stopCaptureProbe() {
+  const sessionId = captureProbeSessionId.value;
+  if (!window.lycanDesktop || !sessionId || captureProbeBusy.value) return;
+  captureProbeBusy.value = true;
+  captureProbeState.value = 'stopping';
+  captureProbeError.value = '';
+  try {
+    await window.lycanDesktop.stopNativeCaptureProbe(sessionId);
+    captureProbeSessionId.value = null;
+    captureProbeState.value = 'idle';
+    captureProbeDiagnostics.value = await window.lycanDesktop.getNativeMediaDiagnostics();
+  } catch {
+    captureProbeSessionId.value = null;
+    captureProbeState.value = 'failed';
+    captureProbeError.value = '探针停止未确认；主进程会阻止重复启动，并在应用退出时继续清理。';
+  } finally {
+    captureProbeBusy.value = false;
+  }
+}
 
 function readPlayback(track: Track) {
   const video = track.attachedElements.filter((element): element is HTMLVideoElement =>
@@ -74,12 +183,18 @@ function refreshOnVisible() {
 
 onMounted(() => {
   void refresh();
-  timer = setInterval(() => void refresh(), 2_000);
+  void loadCaptureProbeCapability();
+  timer = setInterval(() => {
+    void refresh();
+    if (captureProbeSessionId.value) void refreshCaptureProbeDiagnostics();
+  }, 2_000);
   document.addEventListener('visibilitychange', refreshOnVisible);
 });
 onScopeDispose(() => {
+  componentDisposed = true;
   if (timer) clearInterval(timer);
   document.removeEventListener('visibilitychange', refreshOnVisible);
+  if (captureProbeSessionId.value) void stopCaptureProbe();
 });
 </script>
 
@@ -87,6 +202,43 @@ onScopeDispose(() => {
   <aside class="media-diagnostics" aria-label="媒体诊断">
     <strong>媒体诊断 <small>每 2 秒更新</small></strong>
     <p v-if="processMetrics">本应用进程：CPU {{ processMetrics.cpuPercent }}% · 内存 {{ processMetrics.memoryMb }} MB</p>
+    <section class="native-capture-probe" aria-label="原生视频取帧探针">
+      <b>原生视频取帧探针</b>
+      <small>仅读取帧元数据，不输出或传输画面；不替代当前屏幕共享。</small>
+      <small>WGC 探针：{{ captureProbeAvailable ? '可尝试' : '不可用' }}（{{ captureProbeReason }}） ·
+        正式视频输出：{{ videoCaptureAvailable ? '可用' : '不可用' }}</small>
+      <div class="native-capture-probe-controls">
+        <button type="button" :disabled="sourceListLoading || captureProbeBusy || !!captureProbeSessionId"
+          @click="listVideoSources">{{ sourceListLoading ? '正在列出…' : '刷新来源' }}</button>
+        <select v-model="selectedVideoSourceId" aria-label="原生视频探针来源"
+          :disabled="captureProbeBusy || !!captureProbeSessionId || !videoSources.length">
+          <option value="" disabled>选择窗口或显示器</option>
+          <option v-for="source in videoSources" :key="source.sourceId" :value="source.sourceId">
+            {{ source.kind === 'monitor' ? '显示器' : '窗口' }} · {{ source.title }} · {{ source.width }}×{{ source.height }}
+          </option>
+        </select>
+        <button v-if="!captureProbeSessionId" type="button" :disabled="!captureProbeAvailable || !selectedVideoSourceId || captureProbeBusy"
+          @click="startCaptureProbe">{{ captureProbeState === 'starting' ? '正在启动…' : '启动探针' }}</button>
+        <button v-else type="button" :disabled="captureProbeBusy" @click="stopCaptureProbe">
+          {{ captureProbeState === 'stopping' ? '正在停止…' : '停止探针' }}
+        </button>
+      </div>
+      <small>探针状态：{{ captureProbeState }}</small>
+      <small v-if="captureProbeDiagnostics?.frameWidth && captureProbeDiagnostics.frameHeight">
+        当前画面 {{ captureProbeDiagnostics.frameWidth }}×{{ captureProbeDiagnostics.frameHeight }} ·
+        WGC 实际帧率 {{ captureProbeDiagnostics.rawCaptureFps ?? '—' }} fps ·
+        元数据处理 {{ captureProbeDiagnostics.probeProcessedFps ?? '—' }} fps
+      </small>
+      <small v-if="captureProbeDiagnostics?.framesReceived !== null && captureProbeDiagnostics?.framesReceived !== undefined">
+        已收到 {{ captureProbeDiagnostics.framesReceived }} 帧 · 已处理 {{ captureProbeDiagnostics.framesProcessed ?? '—' }} 帧 ·
+        通知队列满 {{ captureProbeDiagnostics.droppedNotifications ?? 0 }} 次
+      </small>
+      <small v-if="captureProbeDiagnostics?.lastCaptureError">最近错误：{{ captureProbeDiagnostics.lastCaptureError }}</small>
+      <small v-if="captureProbeDiagnostics?.lastFrameAgeMs !== null && captureProbeDiagnostics?.lastFrameAgeMs !== undefined">
+        最近帧 {{ captureProbeDiagnostics.lastFrameAgeMs }} ms 前 · 尺寸变化 {{ captureProbeDiagnostics.sizeChanges ?? 0 }} 次
+      </small>
+      <p v-if="captureProbeError" role="status">{{ captureProbeError }}</p>
+    </section>
     <p v-if="error" role="status">{{ error }}</p>
     <p v-else-if="streams.length === 0">当前没有屏幕共享。</p>
     <div v-for="stream in streams" :key="stream.identity" class="media-diagnostic-stream">

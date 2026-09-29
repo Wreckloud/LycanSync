@@ -10,6 +10,11 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   getAutoStart: () => ipcRenderer.invoke('settings:auto-start:get'),
   setAutoStart: (enabled) => ipcRenderer.invoke('settings:auto-start:set', enabled),
   getCurrentActivity: () => ipcRenderer.invoke('activity:current'),
+  getNativeMediaCapabilities: () => ipcRenderer.invoke('media:capabilities'),
+  listNativeVideoSources: () => ipcRenderer.invoke('media:video-sources'),
+  startNativeCaptureProbe: (sourceId) => ipcRenderer.invoke('media:capture-probe:start', sourceId),
+  stopNativeCaptureProbe: (sessionId) => ipcRenderer.invoke('media:capture-probe:stop', sessionId),
+  getNativeMediaDiagnostics: () => ipcRenderer.invoke('media:diagnostics'),
   onActivityChange: (callback) => {
     const listener = (_event, activity) => callback(activity);
     ipcRenderer.on('activity:changed', listener);

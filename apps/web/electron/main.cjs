@@ -6,6 +6,7 @@ const { isAbsolute, resolve, sep } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { readFile, writeFile, unlink, mkdir } = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
+const { MediaHelperManager } = require('./media-helper.cjs');
 
 const APP_ORIGIN = 'lycan://app';
 const rendererRoot = resolve(__dirname, '../dist');
@@ -61,12 +62,24 @@ let sessionLoaded = false;
 let activityHelper;
 let activityRestartTimer;
 let currentActivity = null;
+let allowQuitAfterMediaHelper = false;
+let mediaHelperShutdownPromise;
+
+const mediaHelper = new MediaHelperManager({
+  platform: process.platform,
+  executablePath: mediaHelperPath,
+});
 
 function activityHelperPath() {
   if (app.isPackaged) return resolve(process.resourcesPath, 'activity-helper', 'lycansync-activity.exe');
   const override = process.env.LYCANSYNC_ACTIVITY_HELPER;
   if (override && isAbsolute(override)) return override;
   return resolve(__dirname, '../../../native/activity-helper/target/release/lycansync-activity.exe');
+}
+
+function mediaHelperPath() {
+  if (app.isPackaged) return resolve(process.resourcesPath, 'media-helper', 'lycansync-media.exe');
+  return resolve(__dirname, '../../../native/media-helper/target/release/lycansync-media.exe');
 }
 
 function normalizeActivity(value) {
@@ -395,6 +408,30 @@ ipcMain.handle('activity:current', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
   return currentActivity;
 });
+ipcMain.handle('media:capabilities', (event) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return mediaHelper.getCapabilities();
+});
+ipcMain.handle('media:video-sources', (event) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return mediaHelper.listVideoSources();
+});
+ipcMain.handle('media:capture-probe:start', (event, sourceId) => {
+  if (!trustedSender(event) || closing || typeof sourceId !== 'string' || sourceId.length > 128) {
+    throw new Error('请求参数无效');
+  }
+  return mediaHelper.startCaptureProbe(sourceId);
+});
+ipcMain.handle('media:capture-probe:stop', (event, sessionId) => {
+  if (!trustedSender(event) || closing || typeof sessionId !== 'string' || sessionId.length > 128) {
+    throw new Error('请求参数无效');
+  }
+  return mediaHelper.stopCaptureProbe(sessionId);
+});
+ipcMain.handle('media:diagnostics', (event) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return mediaHelper.getDiagnostics();
+});
 ipcMain.on('window:maximize', (event) => {
   if (!trustedSender(event)) return;
   if (mainWindow.isMaximized()) mainWindow.unmaximize(); else mainWindow.maximize();
@@ -414,7 +451,18 @@ ipcMain.on('capture:select', (event, requestId, sourceId) => {
   pendingCapture = undefined;
   if (source) capture.callback({ video: source }); else denyCapture(capture.callback);
 });
-app.on('before-quit', stopActivityHelper);
+app.on('before-quit', (event) => {
+  stopActivityHelper();
+  if (allowQuitAfterMediaHelper) return;
+  event.preventDefault();
+  if (mediaHelperShutdownPromise) return;
+  mediaHelperShutdownPromise = mediaHelper.shutdown()
+    .catch((error) => console.error(`media-helper shutdown failed: ${error.message}`))
+    .finally(() => {
+      allowQuitAfterMediaHelper = true;
+      app.quit();
+    });
+});
 app.on('window-all-closed', () => app.quit());
 ipcMain.handle('auth:clear', async (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');

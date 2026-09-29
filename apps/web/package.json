@@ -12,6 +12,7 @@
     "build:activity": "cargo build --manifest-path ../../native/activity-helper/Cargo.toml --release",
     "build:media": "cargo build --manifest-path ../../native/media-helper/Cargo.toml --release",
     "test:media": "cargo test --manifest-path ../../native/media-helper/Cargo.toml",
+    "test:electron-unit": "node --test electron/media-helper.test.cjs",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run src",
     "test:e2e": "playwright test",
