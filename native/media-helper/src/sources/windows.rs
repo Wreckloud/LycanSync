@@ -18,7 +18,8 @@ use windows::Win32::UI::HiDpi::{
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GCW_ATOM, GWL_EXSTYLE, GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetPropW,
     GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
-    IsWindowVisible, MONITORINFOF_PRIMARY, RemovePropW, SetPropW, WNDENUMPROC,
+    IsWindowVisible, MONITORINFOF_PRIMARY, RemovePropW, SetPropW, WNDENUMPROC, WS_MAXIMIZE,
+    WS_MINIMIZE,
 };
 use windows::core::{BOOL, PCWSTR};
 
@@ -385,7 +386,7 @@ pub(crate) fn window_identity(window: HWND) -> Option<WindowIdentity> {
         process_creation_time: fingerprint.process_creation_time,
         class_atom: fingerprint.class_atom,
         class_name: fingerprint.class_name,
-        style: fingerprint.style,
+        style: stable_window_style(fingerprint.style),
         extended_style: fingerprint.extended_style,
     })
 }
@@ -403,9 +404,17 @@ pub(crate) fn window_matches_identity(window: HWND, identity: &WindowIdentity) -
             && current.process_creation_time == identity.process_creation_time
             && current.class_atom == identity.class_atom
             && current.class_name == identity.class_name
-            && current.style == identity.style
+            && stable_window_style(current.style) == identity.style
             && current.extended_style == identity.extended_style
     })
+}
+
+fn stable_window_style(style: isize) -> isize {
+    style & !(WS_MINIMIZE.0 as isize | WS_MAXIMIZE.0 as isize)
+}
+
+pub(crate) fn window_is_minimized(window: HWND) -> bool {
+    unsafe { IsWindow(Some(window)).as_bool() && IsIconic(window).as_bool() }
 }
 
 struct WindowFingerprint {
@@ -456,4 +465,23 @@ fn read_window_fingerprint(window: HWND) -> Option<WindowFingerprint> {
         style: unsafe { GetWindowLongPtrW(window, GWL_STYLE) },
         extended_style: unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WS_MAXIMIZE, WS_MINIMIZE, stable_window_style};
+
+    #[test]
+    fn window_identity_style_ignores_minimize_and_maximize_bits() {
+        let base = 0x1000isize;
+        let volatile = WS_MINIMIZE.0 as isize | WS_MAXIMIZE.0 as isize;
+        assert_eq!(
+            stable_window_style(base),
+            stable_window_style(base | volatile)
+        );
+        assert_ne!(
+            stable_window_style(base),
+            stable_window_style(base | 0x0004_0000)
+        );
+    }
 }

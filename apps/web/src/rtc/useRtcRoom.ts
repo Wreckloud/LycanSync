@@ -414,7 +414,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             onError: (code) => {
               if (nativeScreenVideoSession !== nativeVideo || activeRoom.value !== currentRoom) return;
               nativeScreenVideoSession = null;
-              notice.value = `原生屏幕共享已停止（${code}）。`;
+              if (code !== 'captureTargetClosed') notice.value = `原生屏幕共享已停止（${code}）。`;
               const publication = currentRoom.localParticipant.getTrackPublication(Track.Source.ScreenShare);
               if (publication?.track) void currentRoom.localParticipant.unpublishTrack(publication.track, true).catch(() => {});
               const screenAudioTrack = currentRoom.localParticipant
@@ -495,7 +495,10 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       published = true;
     } catch (error) {
       // 自定义选择器的取消会被 Chromium 以拒绝采集返回；这是正常结束，不能误报为权限或连接故障。
-      if (activeRoom.value === currentRoom && !(source === Track.Source.ScreenShare && screenShareSelectionCancelled.value)) {
+      const targetClosed = source === Track.Source.ScreenShare && error instanceof Error
+        && /(?:^|: )captureTargetClosed$/.test(error.message);
+      if (activeRoom.value === currentRoom && !targetClosed
+        && !(source === Track.Source.ScreenShare && screenShareSelectionCancelled.value)) {
         notice.value = captureErrorMessage(error, source);
       }
     } finally {

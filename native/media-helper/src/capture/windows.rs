@@ -97,6 +97,7 @@ struct CaptureMetrics {
     content_size_initialized: bool,
     last_error: Option<&'static str>,
     stop_duration_ms: Option<u64>,
+    capture_suspended: bool,
 }
 
 impl CaptureMetrics {
@@ -223,6 +224,7 @@ impl CaptureMetrics {
             frame_pool_recreates: Some(self.frame_pool_recreates),
             last_capture_error: self.last_error,
             stop_duration_ms: self.stop_duration_ms,
+            capture_suspended: Some(self.capture_suspended),
         }
     }
 }
@@ -571,6 +573,12 @@ fn capture_worker(target: ThreadCaptureTarget, context: CaptureWorkerContext) {
     if let Err(error) = loop_result {
         lock_metrics(&metrics).last_error = Some(error.diagnostic_name());
     }
+    lock_metrics(&metrics).capture_suspended = false;
+    let terminal_error = if stop_requested.load(Ordering::Acquire) {
+        None
+    } else {
+        loop_result.err()
+    };
 
     let mut cleanup_failed = false;
     if resources
@@ -635,6 +643,13 @@ fn capture_worker(target: ThreadCaptureTarget, context: CaptureWorkerContext) {
     drop(_frame_handler);
     drop(hardware);
     drop(_apartment);
+    if !stop_requested.load(Ordering::Acquire) {
+        if let Some(error) = terminal_error {
+            crate::notify_video_capture_ended(&session_id, error);
+        } else if cleanup_failed {
+            crate::notify_video_capture_ended(&session_id, ErrorCode::CaptureCleanupFailed);
+        }
+    }
 }
 
 fn create_resources(
@@ -769,6 +784,21 @@ fn capture_target_is_valid(target: &ThreadCaptureTarget) -> bool {
     }
 }
 
+fn capture_target_is_minimized(target: &ThreadCaptureTarget) -> bool {
+    match target {
+        ThreadCaptureTarget::Window(value, _) => {
+            super::super::sources::windows::window_is_minimized(HWND(*value as *mut _))
+        }
+        ThreadCaptureTarget::Monitor(_) => false,
+        #[cfg(test)]
+        ThreadCaptureTarget::Test => false,
+    }
+}
+
+fn should_suspend_for_minimized_window(is_window: bool, minimized: bool) -> bool {
+    is_window && minimized
+}
+
 fn target_closed_error(target: NativeTarget) -> ErrorCode {
     match target {
         NativeTarget::Window(_) => ErrorCode::CaptureTargetClosed,
@@ -789,6 +819,7 @@ fn run_capture_loop(
     let _ = session_id;
     let native = native_target(target.clone())?;
     let mut last_target_check = Instant::now();
+    let mut capture_suspended = false;
     loop {
         #[cfg(feature = "shared-texture-output")]
         {
@@ -823,15 +854,35 @@ fn run_capture_loop(
             }
             last_target_check = Instant::now();
         }
+        if should_suspend_for_minimized_window(
+            matches!(&target, ThreadCaptureTarget::Window(..)),
+            capture_target_is_minimized(&target),
+        ) {
+            if !capture_suspended {
+                lock_metrics(metrics).capture_suspended = true;
+                capture_suspended = true;
+                crate::notify_video_capture_suspended(session_id, true);
+            }
+            discard_pending_frames(&resources.frame_pool, metrics)?;
+            continue;
+        }
 
         let current_size = match resources.item.Size() {
             Ok(size) => size,
+            Err(_) if capture_target_is_minimized(&target) => {
+                discard_pending_frames(&resources.frame_pool, metrics)?;
+                continue;
+            }
             Err(_) if !capture_target_is_valid(&target) => {
                 return Err(target_closed_error(native));
             }
             Err(_) => return Err(ErrorCode::CaptureFrameProcessingFailed),
         };
         if !valid_size(current_size) {
+            if capture_target_is_minimized(&target) {
+                discard_pending_frames(&resources.frame_pool, metrics)?;
+                continue;
+            }
             return Err(if capture_target_is_valid(&target) {
                 ErrorCode::CaptureFramePoolRecreateFailed
             } else {
@@ -874,6 +925,9 @@ fn run_capture_loop(
             };
             if !valid_size(frame_size) {
                 let _ = frame.Close();
+                if capture_target_is_minimized(&target) {
+                    break;
+                }
                 return Err(if capture_target_is_valid(&target) {
                     ErrorCode::CaptureFramePoolRecreateFailed
                 } else {
@@ -909,6 +963,15 @@ fn run_capture_loop(
                 break;
             }
             lock_metrics(metrics).record_frame(frame_time, frame_size, Instant::now());
+            #[cfg(feature = "shared-texture-output")]
+            let frame_delivered = shared_frame.is_some();
+            #[cfg(not(feature = "shared-texture-output"))]
+            let frame_delivered = true;
+            if capture_suspended && frame_delivered {
+                lock_metrics(metrics).capture_suspended = false;
+                capture_suspended = false;
+                crate::notify_video_capture_suspended(session_id, false);
+            }
             #[cfg(feature = "shared-texture-output")]
             if let Some(shared_frame) = shared_frame
                 && let Err(error) = shared_frame.write_to_stdout(session_id)
@@ -1474,7 +1537,8 @@ unsafe extern "system" fn find_monitor(
 mod tests {
     use super::{
         CaptureMetrics, FramePoolSizing, MAX_FRAME_TIMESTAMPS, aligned_size, is_no_frame_available,
-        perform_frame_pool_recreate, source_interval_percentile_ms,
+        perform_frame_pool_recreate, should_suspend_for_minimized_window,
+        source_interval_percentile_ms,
     };
     #[cfg(feature = "shared-texture-output")]
     use super::{SHARED_TEXTURE_POOL_CAPACITY, frame_copy_region, next_free_shared_slot};
@@ -1518,6 +1582,25 @@ mod tests {
         assert_eq!(metrics.size_changes, 0);
         assert_eq!(metrics.width, Some(1179));
         assert_eq!(metrics.height, Some(953));
+    }
+
+    #[test]
+    fn minimized_windows_suspend_capture_without_affecting_monitor_targets() {
+        assert!(should_suspend_for_minimized_window(true, true));
+        assert!(!should_suspend_for_minimized_window(true, false));
+        assert!(!should_suspend_for_minimized_window(false, true));
+
+        let mut metrics = CaptureMetrics::new(crate::protocol::VideoSourceKind::Window);
+        metrics.capture_suspended = true;
+        assert_eq!(
+            metrics.snapshot_at(0, Instant::now()).capture_suspended,
+            Some(true)
+        );
+        metrics.capture_suspended = false;
+        assert_eq!(
+            metrics.snapshot_at(0, Instant::now()).capture_suspended,
+            Some(false)
+        );
     }
 
     #[test]

@@ -234,7 +234,7 @@ onScopeDispose(() => {
           {{ captureProbeState === 'stopping' ? '正在停止…' : '停止探针' }}
         </button>
       </div>
-      <small>探针状态：{{ captureProbeState }}</small>
+      <small>探针状态：{{ captureProbeDiagnostics?.captureSuspended ? '窗口已最小化，等待恢复' : captureProbeState }}</small>
       <small v-if="captureProbeDiagnostics?.frameWidth && captureProbeDiagnostics.frameHeight">
         当前画面 {{ captureProbeDiagnostics.frameWidth }}×{{ captureProbeDiagnostics.frameHeight }} ·
         WGC 实际帧率 {{ captureProbeDiagnostics.rawCaptureFps ?? '—' }} fps ·

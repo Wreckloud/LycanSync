@@ -40,6 +40,7 @@ interface NativeCaptureDiagnostics {
   framePoolRecreates: number | null;
   lastCaptureError: string | null;
   stopDurationMs: number | null;
+  captureSuspended: boolean | null;
   screenShareAudio: {
     state: 'idle' | 'starting' | 'running' | 'stopping' | 'failed';
     sessionId: string | null;
@@ -79,7 +80,8 @@ interface Window {
     stopNativeCaptureProbe(sessionId: string): Promise<{ changed: boolean }>;
     startNativeVideo(sourceId: string, maxFps: number): Promise<{ sessionId: string; changed: boolean }>;
     stopNativeVideo(sessionId?: string): Promise<{ changed: boolean }>;
-    onNativeVideoError(callback: (code: string) => void): () => void;
+    onNativeVideoError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
+    onNativeVideoSuspended(callback: (status: { sessionId: string; suspended: boolean }) => void): () => void;
     startNativeScreenAudio(sourceId: string, sessionId: string): Promise<{
       sampleRate: number; channels: 2; bitsPerSample: 32; nominalChunkMs: 10;
     }>;

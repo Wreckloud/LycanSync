@@ -30,6 +30,8 @@ class MediaHelperManager {
     idleTimeoutMs = 30_000,
     retryDelayMs = 2000,
     onSharedTextureFrame = () => {},
+    onVideoCaptureEnded = () => {},
+    onVideoCaptureSuspended = () => {},
     onHelperFailure = () => {},
     onHelperClosed = () => {},
   }) {
@@ -44,6 +46,8 @@ class MediaHelperManager {
     this.idleTimeoutMs = idleTimeoutMs;
     this.retryDelayMs = retryDelayMs;
     this.onSharedTextureFrame = onSharedTextureFrame;
+    this.onVideoCaptureEnded = onVideoCaptureEnded;
+    this.onVideoCaptureSuspended = onVideoCaptureSuspended;
     this.onHelperFailure = onHelperFailure;
     this.onHelperClosed = onHelperClosed;
     this.state = undefined;
@@ -559,6 +563,35 @@ class MediaHelperManager {
       catch { this.failState(state, new Error('mediaHelperSharedTextureDeliveryFailed')); }
       return;
     }
+    if (message.event === 'videoCaptureEnded') {
+      if (typeof message.sessionId !== 'string' || message.sessionId.length > 128
+          || !isStableCode(message.code)) {
+        this.failState(state, new Error('mediaHelperInvalidVideoCaptureEnded'));
+        return;
+      }
+      const active = this.videoCapture;
+      if (!active || active.state !== state || active.sessionId !== message.sessionId || active.endedNotified) {
+        return;
+      }
+      active.endedNotified = true;
+      try { this.onVideoCaptureEnded(state, { sessionId: message.sessionId, code: message.code }); }
+      catch { /* The capture owner still receives the event and can stop its session. */ }
+      return;
+    }
+    if (message.event === 'videoCaptureSuspended') {
+      if (typeof message.sessionId !== 'string' || message.sessionId.length > 128
+          || typeof message.suspended !== 'boolean') {
+        this.failState(state, new Error('mediaHelperInvalidVideoCaptureSuspended'));
+        return;
+      }
+      const active = this.videoCapture;
+      if (!active || active.state !== state || active.sessionId !== message.sessionId
+          || active.endedNotified || active.suspended === message.suspended) return;
+      active.suspended = message.suspended;
+      try { this.onVideoCaptureSuspended(state, { sessionId: message.sessionId, suspended: message.suspended }); }
+      catch { /* The capture owner can still stop its session. */ }
+      return;
+    }
     if (typeof message.requestId !== 'string') {
       this.failState(state, new Error('mediaHelperInvalidResponse'));
       return;
@@ -759,6 +792,8 @@ function validateDiagnostics(message) {
     }
   }
   if (typeof message.available !== 'boolean'
+      || (message.captureSuspended !== undefined && message.captureSuspended !== null
+        && typeof message.captureSuspended !== 'boolean')
       || (message.lastCaptureError !== null
         && (typeof message.lastCaptureError !== 'string' || message.lastCaptureError.length > 64
           || !/^[a-z][A-Za-z0-9]*$/.test(message.lastCaptureError)))) {
@@ -767,9 +802,10 @@ function validateDiagnostics(message) {
   const diagnostics = Object.fromEntries(['state', 'sessionId', 'available', 'sourceKind', 'frameWidth', 'frameHeight',
     'framesReceived', 'framesProcessed', 'droppedNotifications', 'rawCaptureFps', 'probeProcessedFps',
     'rawFrameIntervalP50Ms', 'rawFrameIntervalP95Ms', 'rawFrameIntervalP99Ms', 'rawTimestampAnomalies',
-    'lastFrameAgeMs', 'sizeChanges', 'framePoolRecreates', 'lastCaptureError', 'stopDurationMs']
+    'lastFrameAgeMs', 'sizeChanges', 'framePoolRecreates', 'lastCaptureError', 'stopDurationMs', 'captureSuspended']
     .map((field) => [field, message[field]]));
   diagnostics.framePoolRecreates ??= null;
+  diagnostics.captureSuspended ??= null;
   const audio = message.screenShareAudio;
   if (!audio || !['idle', 'starting', 'running', 'stopping', 'failed'].includes(audio.state)
       || (audio.sessionId !== null && (typeof audio.sessionId !== 'string' || audio.sessionId.length > 128))

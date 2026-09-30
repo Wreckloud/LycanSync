@@ -20,6 +20,7 @@ pub(super) struct CaptureSnapshot {
     pub(super) frame_pool_recreates: Option<u64>,
     pub(super) last_capture_error: Option<&'static str>,
     pub(super) stop_duration_ms: Option<u64>,
+    pub(super) capture_suspended: Option<bool>,
 }
 
 #[derive(Default)]

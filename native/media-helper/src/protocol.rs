@@ -325,6 +325,7 @@ pub enum OutboundEvent {
         frame_pool_recreates: Option<u64>,
         last_capture_error: Option<&'static str>,
         stop_duration_ms: Option<u64>,
+        capture_suspended: Option<bool>,
         microphone_probe: MicrophoneProbeDiagnostics,
         screen_share_audio: Box<ScreenShareAudioDiagnostics>,
     },
@@ -362,6 +363,16 @@ pub enum OutboundEvent {
         bits_per_sample: u16,
         nominal_chunk_ms: u8,
         changed: bool,
+    },
+    VideoCaptureEnded {
+        protocol_version: u16,
+        session_id: String,
+        code: ErrorCode,
+    },
+    VideoCaptureSuspended {
+        protocol_version: u16,
+        session_id: String,
+        suspended: bool,
     },
     Error {
         protocol_version: u16,
@@ -603,6 +614,34 @@ mod tests {
         assert_eq!(value["channels"], 2);
         assert!(value.get("processId").is_none());
         assert!(value.get("pipeId").is_none());
+    }
+
+    #[test]
+    fn serializes_video_capture_end_with_session_and_stable_error_code() {
+        let event = OutboundEvent::VideoCaptureEnded {
+            protocol_version: PROTOCOL_VERSION,
+            session_id: "video-1".to_owned(),
+            code: ErrorCode::CaptureTargetClosed,
+        };
+        let value = serde_json::to_value(event).unwrap();
+        assert_eq!(value["event"], "videoCaptureEnded");
+        assert_eq!(value["sessionId"], "video-1");
+        assert_eq!(value["code"], "captureTargetClosed");
+        assert!(value.get("requestId").is_none());
+    }
+
+    #[test]
+    fn serializes_video_capture_suspension_without_request_id() {
+        let event = OutboundEvent::VideoCaptureSuspended {
+            protocol_version: PROTOCOL_VERSION,
+            session_id: "video-1".to_owned(),
+            suspended: true,
+        };
+        let value = serde_json::to_value(event).unwrap();
+        assert_eq!(value["event"], "videoCaptureSuspended");
+        assert_eq!(value["sessionId"], "video-1");
+        assert_eq!(value["suspended"], true);
+        assert!(value.get("requestId").is_none());
     }
 
     #[test]

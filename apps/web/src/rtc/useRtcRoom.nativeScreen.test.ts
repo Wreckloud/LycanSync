@@ -211,6 +211,40 @@ describe('native screen share wiring', () => {
     }
   });
 
+  it('silently releases a published screen track when its window closes', async () => {
+    rtcMocks.token.mockResolvedValue({ serverUrl: 'wss://example.test', token: 'test-token' });
+    rtcMocks.nativeStarts.mockResolvedValue({ sessionId: 'closed-window-session', changed: true });
+    rtcMocks.nativeStops.mockResolvedValue({ changed: true });
+    rtcMocks.selectedSources.mockResolvedValue({ sourceId: 'window:1:0', shareAudio: false });
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { lycanDesktop: {
+        getNativeMediaCapabilities: async () => ({ videoCapture: { available: true, reason: 'ready' } }),
+        listNativeVideoSources: async () => ({ revision: 1, sources: [
+          { sourceId: 'window:1:0', kind: 'window', title: 'Game', width: 1280, height: 720, primary: false },
+        ] }),
+        startNativeVideo: rtcMocks.nativeStarts,
+        stopNativeVideo: rtcMocks.nativeStops,
+      } },
+    });
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({
+      inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false },
+      events: { selectNativeScreenSource: rtcMocks.selectedSources },
+    }))!;
+    try {
+      await rtc.join('group-window-close');
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
+      rtcMocks.nativeError('captureTargetClosed');
+      expect(rtc.notice.value).toBe('');
+      expect(rtcMocks.unpublishing).toHaveBeenCalledOnce();
+      expect(rtcMocks.nativeStops).toHaveBeenCalledWith('closed-window-session');
+    } finally {
+      scope.stop();
+    }
+  });
+
   it('publishes selected app audio as a separate ScreenShareAudio track and stops both tracks', async () => {
     rtcMocks.token.mockResolvedValue({ serverUrl: 'wss://example.test', token: 'test-token' });
     rtcMocks.nativeStarts.mockResolvedValue({ sessionId: 'native-session', changed: true });

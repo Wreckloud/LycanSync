@@ -188,6 +188,7 @@ class FakeHelper extends EventEmitter {
           silentPackets: 0, droppedAudioChunks: 0, lastError: null },
       };
       if (this.mode.omitFramePoolRecreates) delete diagnostics.framePoolRecreates;
+      if (this.mode.captureSuspended !== undefined) diagnostics.captureSuspended = this.mode.captureSuspended;
       this.writeResponse(diagnostics);
       return;
     }
@@ -441,6 +442,65 @@ test('screen-share audio rejects stale source ids and mismatched video sessions'
   await assert.rejects(manager.startScreenShareAudio(snapshot.sources[0].sourceId, pipeId, 'video-session'), /videoSourceExpired/);
   assert.equal(children[0].commands.includes('startScreenShareAudio'), false);
   await manager.stopVideo('video-session');
+  await manager.shutdown();
+});
+
+test('video capture end events are session-scoped and delivered once', async () => {
+  const ended = [];
+  const { manager, children } = createManager({}, {
+    onVideoCaptureEnded: (_state, event) => ended.push(event),
+  });
+  const sources = await manager.listVideoSources();
+  await manager.startVideo(sources.sources[0].sourceId, 30, 'video-ended');
+  const helper = children[0];
+  const report = (sessionId) => helper.writeResponse({
+    event: 'videoCaptureEnded', protocolVersion: 1, sessionId, code: 'captureTargetClosed',
+  });
+
+  report('old-video');
+  report('video-ended');
+  report('video-ended');
+  assert.deepEqual(ended, [{ sessionId: 'video-ended', code: 'captureTargetClosed' }]);
+
+  await manager.stopVideo('video-ended');
+  await manager.shutdown();
+});
+
+test('video suspension events follow only the active session and state transitions', async () => {
+  const statuses = [];
+  const { manager, children } = createManager({}, {
+    onVideoCaptureSuspended: (_state, status) => statuses.push(status),
+  });
+  const sources = await manager.listVideoSources();
+  await manager.startVideo(sources.sources[0].sourceId, 30, 'video-suspended');
+  const helper = children[0];
+  const report = (sessionId, suspended) => helper.writeResponse({
+    event: 'videoCaptureSuspended', protocolVersion: 1, sessionId, suspended,
+  });
+
+  report('old-video', true);
+  report('video-suspended', true);
+  report('video-suspended', true);
+  report('video-suspended', false);
+  assert.deepEqual(statuses, [
+    { sessionId: 'video-suspended', suspended: true },
+    { sessionId: 'video-suspended', suspended: false },
+  ]);
+
+  await manager.stopVideo('video-suspended');
+  report('video-suspended', true);
+  assert.equal(statuses.length, 2);
+  await manager.shutdown();
+});
+
+test('diagnostics distinguish a minimized window from healthy frame delivery', async () => {
+  const { manager } = createManager({ captureSuspended: true });
+  const sources = await manager.listVideoSources();
+  const started = await manager.startCaptureProbe(sources.sources[0].sourceId);
+  const diagnostics = await manager.getDiagnostics();
+  assert.equal(diagnostics.state, 'running');
+  assert.equal(diagnostics.captureSuspended, true);
+  await manager.stopCaptureProbe(started.sessionId);
   await manager.shutdown();
 });
 

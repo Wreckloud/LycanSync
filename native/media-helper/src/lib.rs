@@ -22,6 +22,33 @@ use std::sync::Mutex;
 
 pub(crate) static EVENT_OUTPUT_LOCK: Mutex<()> = Mutex::new(());
 
+pub(crate) fn notify_video_capture_ended(session_id: &str, code: ErrorCode) {
+    write_capture_event(OutboundEvent::VideoCaptureEnded {
+        protocol_version: PROTOCOL_VERSION,
+        session_id: session_id.to_owned(),
+        code,
+    });
+}
+
+pub(crate) fn notify_video_capture_suspended(session_id: &str, suspended: bool) {
+    write_capture_event(OutboundEvent::VideoCaptureSuspended {
+        protocol_version: PROTOCOL_VERSION,
+        session_id: session_id.to_owned(),
+        suspended,
+    });
+}
+
+fn write_capture_event(event: OutboundEvent) {
+    let _event_lock = EVENT_OUTPUT_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+    if serde_json::to_writer(&mut output, &event).is_ok() {
+        let _ = output.write_all(b"\n").and_then(|()| output.flush());
+    }
+}
+
 pub fn run<R: BufRead, W: Write>(mut input: R, mut output: W) -> io::Result<()> {
     let mut runtime = Runtime::default();
     loop {
@@ -144,6 +171,7 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                     .and_then(|value| value.frame_pool_recreates),
                 last_capture_error: snapshot.as_ref().and_then(|value| value.last_capture_error),
                 stop_duration_ms: snapshot.as_ref().and_then(|value| value.stop_duration_ms),
+                capture_suspended: snapshot.as_ref().and_then(|value| value.capture_suspended),
                 microphone_probe: runtime.audio_probe.snapshot(),
                 screen_share_audio: Box::new(runtime.screen_audio.snapshot()),
             }

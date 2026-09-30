@@ -78,6 +78,8 @@ const mediaHelper = new MediaHelperManager({
   platform: process.platform,
   executablePath: mediaHelperPath,
   onSharedTextureFrame: handleNativeSharedTextureFrame,
+  onVideoCaptureEnded: handleVideoCaptureEnded,
+  onVideoCaptureSuspended: handleVideoCaptureSuspended,
   onHelperFailure: handleMediaHelperFailure,
   onHelperClosed: releaseHelperProcessBridge,
 });
@@ -130,15 +132,34 @@ function notifyNativeVideoError(video, code) {
   video.stopping = true;
   video.lastError = /^[a-z][A-Za-z0-9]{0,63}$/.test(code) ? code : 'nativeVideoFailed';
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('media:native-video-error', video.lastError);
+    mainWindow.webContents.send('media:native-video-error', {
+      sessionId: video.sessionId,
+      code: video.lastError,
+    });
   }
   releaseNativeVideoImports(video);
-  void mediaHelper.stopVideo(video.sessionId).catch(() => {}).finally(() => {
-    if (nativeVideoSession === video && !video.helperState?.alive) {
-      lastStoppedNativeVideoSession = video.sessionId;
-      nativeVideoSession = undefined;
-    }
-  });
+  void stopNativeVideo(video.sessionId).catch(() => {});
+}
+
+function handleVideoCaptureEnded(state, event) {
+  const video = nativeVideoSession;
+  if (!video || video.sessionId !== event.sessionId || video.stopping
+      || (video.helperState && video.helperState !== state)
+      || state.videoSessionId !== event.sessionId) return;
+  video.helperState = state;
+  notifyNativeVideoError(video, event.code);
+}
+
+function handleVideoCaptureSuspended(state, event) {
+  const video = nativeVideoSession;
+  if (!video || video.sessionId !== event.sessionId || video.stopping
+      || (video.helperState && video.helperState !== state)
+      || state.videoSessionId !== event.sessionId) return;
+  video.helperState = state;
+  video.suspended = event.suspended;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('media:native-video-suspended', event);
+  }
 }
 
 function finishNativeScreenAudioPipe(audio, { destroy = false } = {}) {
@@ -296,7 +317,7 @@ function handleMediaHelperFailure(state, code) {
 
 function handleNativeSharedTextureFrame(state, frame) {
   const video = nativeVideoSession;
-  if (!video || video.sessionId !== frame.sessionId || video.stopping) {
+  if (!video || video.sessionId !== frame.sessionId || video.stopping || video.suspended) {
     if (video && video.sessionId === frame.sessionId) {
       void mediaHelper.releaseSharedTextureSlot(frame.sessionId, frame.slotIndex).catch(() => {});
     }
