@@ -64,7 +64,7 @@ class LocalRtcTokenServiceTests {
                 "roomJoin", true,
                 "canPublish", true,
                 "canSubscribe", true,
-                "canPublishSources", List.of("microphone", "screen_share"),
+                "canPublishSources", List.of("microphone", "screen_share", "screen_share_audio"),
                 "canPublishData", true,
                 "canUpdateOwnMetadata", true
         ));

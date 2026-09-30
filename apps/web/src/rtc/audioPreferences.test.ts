@@ -23,6 +23,7 @@ describe('audioPreferences', () => {
     expect(saveAudioPreferences('local-user', {
       inputGain: 1.25,
       outputVolume: 0.8,
+      screenShareVolume: 0.65,
       echoCancellation: true,
       noiseSuppression: false,
       autoGainControl: true,
@@ -34,6 +35,7 @@ describe('audioPreferences', () => {
     expect(loadAudioPreferences('local-user', storage)).toEqual({
       inputGain: 1.25,
       outputVolume: 0.8,
+      screenShareVolume: 0.65,
       echoCancellation: true,
       noiseSuppression: false,
       autoGainControl: true,

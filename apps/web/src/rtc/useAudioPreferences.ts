@@ -15,6 +15,7 @@ export function useAudioPreferences(userId: string,
   const stored = loadAudioPreferences(userId, storage);
   const inputGain = ref(stored.inputGain);
   const outputVolume = ref(stored.outputVolume);
+  const screenShareVolume = ref(stored.screenShareVolume);
   const processing = reactive<AudioProcessingSettings>({
     echoCancellation: stored.echoCancellation,
     noiseSuppression: stored.noiseSuppression,
@@ -30,6 +31,7 @@ export function useAudioPreferences(userId: string,
     return {
       inputGain: inputGain.value,
       outputVolume: outputVolume.value,
+      screenShareVolume: screenShareVolume.value,
       ...processing,
       participantVolumes: Object.fromEntries(participantVolumes),
       participantLastAudibleVolumes: Object.fromEntries(participantLastAudibleVolumes),
@@ -92,6 +94,14 @@ export function useAudioPreferences(userId: string,
     return true;
   }
 
+  function setScreenShareVolume(value: number) {
+    const next = normalizeAudioVolume(value);
+    if (next === screenShareVolume.value) return false;
+    screenShareVolume.value = next;
+    scheduleSave();
+    return true;
+  }
+
   function setProcessing(setting: keyof AudioProcessingSettings, enabled: boolean) {
     if (processing[setting] === enabled) return false;
     processing[setting] = enabled;
@@ -104,6 +114,7 @@ export function useAudioPreferences(userId: string,
   return {
     inputGain,
     outputVolume,
+    screenShareVolume,
     processing,
     participantVolume,
     mutedParticipantIdentities,
@@ -111,6 +122,7 @@ export function useAudioPreferences(userId: string,
     toggleParticipantVolume,
     setInputGain,
     setOutputVolume,
+    setScreenShareVolume,
     setProcessing,
   };
 }

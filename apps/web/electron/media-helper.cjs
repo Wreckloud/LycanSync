@@ -14,6 +14,7 @@ const CAPABILITY_NAMES = [
   'processAudioCapture',
   'audioSourceDiscovery',
   'microphoneProbe',
+  'screenShareAudioCapture',
 ];
 
 class MediaHelperManager {
@@ -62,6 +63,10 @@ class MediaHelperManager {
     this.videoCaptureStart = undefined;
     this.videoCaptureStop = undefined;
     this.lastStoppedVideoCapture = undefined;
+    this.screenShareAudio = undefined;
+    this.screenShareAudioStart = undefined;
+    this.screenShareAudioStop = undefined;
+    this.lastStoppedScreenShareAudio = undefined;
   }
 
   getCapabilities() {
@@ -236,6 +241,75 @@ class MediaHelperManager {
     return promise;
   }
 
+  startScreenShareAudio(sourceId, pipeId, sessionId) {
+    if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
+    if (!/^(?:monitor|window):[1-9]\d*:\d+$/.test(sourceId || '')
+        || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(pipeId || '')
+        || typeof sessionId !== 'string' || sessionId.length > 128) {
+      return Promise.reject(new Error('invalidScreenShareAudioStart'));
+    }
+    const activeVideo = this.videoCapture;
+    const snapshot = this.videoSourceSnapshot;
+    if (!activeVideo || activeVideo.sessionId !== sessionId || activeVideo.sourceId !== sourceId
+        || !snapshot || !snapshot.ids.has(sourceId) || snapshot.state !== activeVideo.state
+        || !activeVideo.state.alive) {
+      return Promise.reject(new Error('videoSourceExpired'));
+    }
+    if (this.screenShareAudio) {
+      return this.screenShareAudio.sessionId === sessionId
+        ? Promise.resolve({ ...this.screenShareAudio.result, changed: false })
+        : Promise.reject(new Error('screenShareAudioAlreadyRunning'));
+    }
+    if (this.screenShareAudioStart) return this.screenShareAudioStart;
+    this.clearIdleTimer();
+    const promise = this.runStartScreenShareAudio(activeVideo.state, sourceId, pipeId, sessionId)
+      .finally(() => { if (this.screenShareAudioStart === promise) this.screenShareAudioStart = undefined; });
+    this.screenShareAudioStart = promise;
+    return promise;
+  }
+
+  async runStartScreenShareAudio(state, sourceId, pipeId, sessionId) {
+    const response = await this.sendRequest(state, 'startScreenShareAudio', 'screenShareAudioStarted', this.requestTimeoutMs,
+      { sourceId, pipeId, sessionId });
+    if (response.sessionId !== sessionId || response.changed !== true
+        || !Number.isInteger(response.sampleRate) || response.sampleRate < 8000 || response.sampleRate > 192000
+        || response.channels !== 2 || response.bitsPerSample !== 32 || response.nominalChunkMs !== 10) {
+      this.failState(state, new Error('mediaHelperInvalidScreenShareAudioStart'));
+      throw new Error('mediaHelperInvalidScreenShareAudioStart');
+    }
+    const result = {
+      sampleRate: response.sampleRate,
+      channels: response.channels,
+      bitsPerSample: response.bitsPerSample,
+      nominalChunkMs: response.nominalChunkMs,
+    };
+    this.screenShareAudio = { state, sessionId, sourceId, result };
+    return { ...result, changed: true };
+  }
+
+  stopScreenShareAudio(sessionId) {
+    if (!this.screenShareAudio) {
+      return this.lastStoppedScreenShareAudio === sessionId
+        ? Promise.resolve({ changed: false })
+        : Promise.reject(new Error('screenShareAudioSessionMismatch'));
+    }
+    if (this.screenShareAudio.sessionId !== sessionId) return Promise.reject(new Error('screenShareAudioSessionMismatch'));
+    if (this.screenShareAudioStop) return this.screenShareAudioStop;
+    const active = this.screenShareAudio;
+    const promise = this.sendRequest(active.state, 'stopScreenShareAudio', 'acknowledged', this.requestTimeoutMs,
+      { sessionId }).then((response) => {
+      if (response.command !== 'stopScreenShareAudio') throw new Error('mediaHelperInvalidScreenShareAudioStop');
+      this.screenShareAudio = undefined;
+      this.lastStoppedScreenShareAudio = sessionId;
+      return { changed: response.changed };
+    }).finally(() => {
+      if (this.screenShareAudioStop === promise) this.screenShareAudioStop = undefined;
+      if (this.canCloseWhenIdle(active.state)) this.scheduleIdleShutdown(active.state);
+    });
+    this.screenShareAudioStop = promise;
+    return promise;
+  }
+
   async abortVideo(sessionId) {
     const active = this.videoCapture;
     if (!active || active.sessionId !== sessionId) {
@@ -317,6 +391,11 @@ class MediaHelperManager {
           && (diagnostics.state === 'idle' || diagnostics.sessionId !== this.videoCapture.sessionId)) {
         this.lastStoppedVideoCapture = this.videoCapture.sessionId;
         this.videoCapture = undefined;
+      }
+      if (this.screenShareAudio?.state === state
+          && diagnostics.screenShareAudio?.state !== 'running') {
+        this.lastStoppedScreenShareAudio = this.screenShareAudio.sessionId;
+        this.screenShareAudio = undefined;
       }
       return diagnostics;
     } finally {
@@ -559,7 +638,9 @@ class MediaHelperManager {
   canCloseWhenIdle(state) {
     return this.state === state && state.alive && state.pending.size === 0
       && !this.closingDown(state) && this.captureProbe?.state !== state && this.videoCapture?.state !== state
-      && this.captureProbeStart?.promise === undefined && this.videoCaptureStart?.promise === undefined;
+      && this.screenShareAudio?.state !== state
+      && this.captureProbeStart?.promise === undefined && this.videoCaptureStart?.promise === undefined
+      && this.screenShareAudioStart === undefined;
   }
 
   invalidateState(state) {
@@ -568,6 +649,8 @@ class MediaHelperManager {
     if (this.captureProbeStart?.state === state) this.captureProbeStart = undefined;
     if (this.videoCapture?.state === state) this.videoCapture = undefined;
     if (this.videoCaptureStart?.state === state) this.videoCaptureStart = undefined;
+    if (this.screenShareAudio?.state === state) this.screenShareAudio = undefined;
+    if (this.screenShareAudioStart) this.screenShareAudioStart = undefined;
   }
 
   clearIdleTimer() {
@@ -687,6 +770,18 @@ function validateDiagnostics(message) {
     'lastFrameAgeMs', 'sizeChanges', 'framePoolRecreates', 'lastCaptureError', 'stopDurationMs']
     .map((field) => [field, message[field]]));
   diagnostics.framePoolRecreates ??= null;
+  const audio = message.screenShareAudio;
+  if (!audio || !['idle', 'starting', 'running', 'stopping', 'failed'].includes(audio.state)
+      || (audio.sessionId !== null && (typeof audio.sessionId !== 'string' || audio.sessionId.length > 128))
+      || (audio.sourceKind !== null && !['monitor', 'window'].includes(audio.sourceKind))) {
+    throw new Error('mediaHelperInvalidDiagnostics');
+  }
+  for (const key of ['sampleRate', 'channels', 'packetsReceived', 'framesReceived', 'silentPackets', 'droppedAudioChunks']) {
+    if (audio[key] !== null && (!Number.isSafeInteger(audio[key]) || audio[key] < 0)) {
+      throw new Error('mediaHelperInvalidDiagnostics');
+    }
+  }
+  diagnostics.screenShareAudio = audio;
   return diagnostics;
 }
 

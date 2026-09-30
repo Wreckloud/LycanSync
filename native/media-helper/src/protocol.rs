@@ -72,6 +72,18 @@ pub enum CommandEnvelope {
         request_id: String,
         session_id: String,
     },
+    StartScreenShareAudio {
+        protocol_version: u16,
+        request_id: String,
+        session_id: String,
+        source_id: String,
+        pipe_id: String,
+    },
+    StopScreenShareAudio {
+        protocol_version: u16,
+        request_id: String,
+        session_id: String,
+    },
     #[cfg(feature = "shared-texture-output")]
     ReleaseSharedTextureSlot {
         protocol_version: u16,
@@ -117,6 +129,12 @@ impl CommandEnvelope {
             | Self::StopMicrophoneProbe {
                 protocol_version, ..
             }
+            | Self::StartScreenShareAudio {
+                protocol_version, ..
+            }
+            | Self::StopScreenShareAudio {
+                protocol_version, ..
+            }
             | Self::Shutdown {
                 protocol_version, ..
             } => *protocol_version,
@@ -140,6 +158,8 @@ impl CommandEnvelope {
             | Self::ListAudioSources { request_id, .. }
             | Self::StartMicrophoneProbe { request_id, .. }
             | Self::StopMicrophoneProbe { request_id, .. }
+            | Self::StartScreenShareAudio { request_id, .. }
+            | Self::StopScreenShareAudio { request_id, .. }
             | Self::Shutdown { request_id, .. } => request_id,
             #[cfg(feature = "shared-texture-output")]
             Self::ReleaseSharedTextureSlot { request_id, .. } => request_id,
@@ -228,6 +248,32 @@ pub struct MicrophoneProbeDiagnostics {
     pub last_error: Option<&'static str>,
 }
 
+#[derive(Clone, Copy, Serialize, Debug, Default, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ScreenShareAudioState {
+    #[default]
+    Idle,
+    Starting,
+    Running,
+    Stopping,
+    Failed,
+}
+
+#[derive(Clone, Serialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenShareAudioDiagnostics {
+    pub state: ScreenShareAudioState,
+    pub session_id: Option<String>,
+    pub source_kind: Option<VideoSourceKind>,
+    pub sample_rate: Option<u32>,
+    pub channels: Option<u16>,
+    pub packets_received: Option<u64>,
+    pub frames_received: Option<u64>,
+    pub silent_packets: Option<u64>,
+    pub dropped_audio_chunks: Option<u64>,
+    pub last_error: Option<&'static str>,
+}
+
 #[derive(Serialize)]
 #[serde(
     tag = "event",
@@ -254,6 +300,7 @@ pub enum OutboundEvent {
         process_audio_capture: Capability,
         audio_source_discovery: Capability,
         microphone_probe: Capability,
+        screen_share_audio_capture: Capability,
     },
     Diagnostics {
         protocol_version: u16,
@@ -279,6 +326,7 @@ pub enum OutboundEvent {
         last_capture_error: Option<&'static str>,
         stop_duration_ms: Option<u64>,
         microphone_probe: MicrophoneProbeDiagnostics,
+        screen_share_audio: Box<ScreenShareAudioDiagnostics>,
     },
     VideoSources {
         protocol_version: u16,
@@ -302,6 +350,17 @@ pub enum OutboundEvent {
         request_id: String,
         command: &'static str,
         state: SessionState,
+        changed: bool,
+    },
+    ScreenShareAudioStarted {
+        protocol_version: u16,
+        request_id: String,
+        session_id: String,
+        state: SessionState,
+        sample_rate: u32,
+        channels: u16,
+        bits_per_sample: u16,
+        nominal_chunk_ms: u8,
         changed: bool,
     },
     Error {
@@ -346,6 +405,16 @@ pub enum ErrorCode {
     AudioProbeStartTimedOut,
     AudioProbeStopFailed,
     AudioProbeFailed,
+    ScreenShareAudioAlreadyRunning,
+    ScreenShareAudioSessionMismatch,
+    ScreenShareAudioStartFailed,
+    ScreenShareAudioStartTimedOut,
+    ScreenShareAudioUnsupported,
+    ScreenShareAudioTargetUnavailable,
+    ScreenShareAudioPipeFailed,
+    ScreenShareAudioStopFailed,
+    ScreenShareAudioFailed,
+    ScreenShareAudioFormatUnsupported,
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     AudioProbeUnsupported,
 }
@@ -378,6 +447,16 @@ impl ErrorCode {
             Self::AudioProbeStopFailed => "麦克风元数据探针停止失败",
             Self::AudioProbeFailed => "麦克风元数据探针运行失败",
             Self::AudioProbeUnsupported => "当前平台不支持麦克风元数据探针",
+            Self::ScreenShareAudioAlreadyRunning => "屏幕共享音频已在运行",
+            Self::ScreenShareAudioSessionMismatch => "sessionId 与当前屏幕共享音频会话不匹配",
+            Self::ScreenShareAudioStartFailed => "屏幕共享音频启动失败",
+            Self::ScreenShareAudioStartTimedOut => "屏幕共享音频启动等待超时",
+            Self::ScreenShareAudioUnsupported => "当前 Windows 版本不支持应用循环音频捕获",
+            Self::ScreenShareAudioTargetUnavailable => "屏幕共享音频目标进程不可用",
+            Self::ScreenShareAudioPipeFailed => "屏幕共享音频数据通道失败",
+            Self::ScreenShareAudioStopFailed => "屏幕共享音频停止失败",
+            Self::ScreenShareAudioFailed => "屏幕共享音频采集失败",
+            Self::ScreenShareAudioFormatUnsupported => "当前音频格式暂不支持",
             _ => "请求无法处理",
         }
     }
@@ -411,6 +490,16 @@ impl ErrorCode {
             Self::AudioProbeStopFailed => "audioProbeStopFailed",
             Self::AudioProbeFailed => "audioProbeFailed",
             Self::AudioProbeUnsupported => "audioProbeUnsupported",
+            Self::ScreenShareAudioAlreadyRunning => "screenShareAudioAlreadyRunning",
+            Self::ScreenShareAudioSessionMismatch => "screenShareAudioSessionMismatch",
+            Self::ScreenShareAudioStartFailed => "screenShareAudioStartFailed",
+            Self::ScreenShareAudioStartTimedOut => "screenShareAudioStartTimedOut",
+            Self::ScreenShareAudioUnsupported => "screenShareAudioUnsupported",
+            Self::ScreenShareAudioTargetUnavailable => "screenShareAudioTargetUnavailable",
+            Self::ScreenShareAudioPipeFailed => "screenShareAudioPipeFailed",
+            Self::ScreenShareAudioStopFailed => "screenShareAudioStopFailed",
+            Self::ScreenShareAudioFailed => "screenShareAudioFailed",
+            Self::ScreenShareAudioFormatUnsupported => "screenShareAudioFormatUnsupported",
         }
     }
 }
@@ -478,6 +567,42 @@ mod tests {
         assert_eq!(request.protocol_version(), PROTOCOL_VERSION);
         assert_eq!(request.request_id(), "audio-1");
         assert!(matches!(request, CommandEnvelope::ListAudioSources { .. }));
+    }
+
+    #[test]
+    fn deserializes_start_and_stop_screen_share_audio_commands() {
+        let start: CommandEnvelope = serde_json::from_str(
+            r#"{"protocolVersion":1,"requestId":"share-audio-1","command":"startScreenShareAudio","sessionId":"video-1","sourceId":"monitor:2:0","pipeId":"58d00436-8ac2-4d0c-9283-9d5d5f70ed01"}"#,
+        ).unwrap();
+        assert!(matches!(
+            start,
+            CommandEnvelope::StartScreenShareAudio { .. }
+        ));
+        let stop: CommandEnvelope = serde_json::from_str(
+            r#"{"protocolVersion":1,"requestId":"share-audio-stop-1","command":"stopScreenShareAudio","sessionId":"video-1"}"#,
+        ).unwrap();
+        assert!(matches!(stop, CommandEnvelope::StopScreenShareAudio { .. }));
+    }
+
+    #[test]
+    fn serializes_screen_share_audio_format_without_target_process_details() {
+        let event = OutboundEvent::ScreenShareAudioStarted {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "share-audio-1".to_owned(),
+            session_id: "video-1".to_owned(),
+            state: crate::state::SessionState::Running,
+            sample_rate: 44100,
+            channels: 2,
+            bits_per_sample: 32,
+            nominal_chunk_ms: 10,
+            changed: true,
+        };
+        let value = serde_json::to_value(event).unwrap();
+        assert_eq!(value["event"], "screenShareAudioStarted");
+        assert_eq!(value["sampleRate"], 44100);
+        assert_eq!(value["channels"], 2);
+        assert!(value.get("processId").is_none());
+        assert!(value.get("pipeId").is_none());
     }
 
     #[test]

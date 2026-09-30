@@ -102,7 +102,7 @@ Authorization: Bearer <当前会话>
 {"groupId":"<现存群组的 UUID>"}
 ```
 
-响应包含 `serverUrl`、`roomName`、`participantIdentity`、`token` 和 `expiresAt`。房间名由群组 UUID 确定，身份与昵称取自已登录账号；任何已注册账号均可申请现存群组的凭证。同账号在另一台设备加入时，LiveKit 会断开旧连接。凭证允许发布麦克风、屏幕视频、订阅其他人、更新自己的收听状态，以及发送自定义入场音所需的房间数据流；不开放摄像头、屏幕音频或房间管理权限。持久群聊仍只使用业务 HTTP 接口，不经过 LiveKit 数据通道。
+响应包含 `serverUrl`、`roomName`、`participantIdentity`、`token` 和 `expiresAt`。房间名由群组 UUID 确定，身份与昵称取自已登录账号；任何已注册账号均可申请现存群组的凭证。同账号在另一台设备加入时，LiveKit 会断开旧连接。已验收的视频链路使用麦克风、屏幕视频、订阅、更新自己的收听状态，以及发送自定义入场音所需的房间数据流；不开放摄像头或房间管理权限。屏幕音频权限和采集链路正在开发，尚未作为可用功能验收。持久群聊仍只使用业务 HTTP 接口，不经过 LiveKit 数据通道。
 
 未加入语音时可查询当前群组的安全摘要：
 
@@ -146,15 +146,23 @@ npm run dev
 
 ## Windows 桌面客户端（开发版）
 
-先启动上述 PostgreSQL、LiveKit 和后端，再执行：
+先启动上述 PostgreSQL、LiveKit 和后端。桌面原生屏幕视频需要 Windows Rust/MSVC 工具链；首次验证前，在 `apps/web` 构建媒体 helper 和共享纹理桥接。游戏活动识别还需要单独构建 activity-helper：
 
 ```powershell
 cd apps/web
 npm ci
+npm run build:media
+cargo build --manifest-path ../../native/media-bridge/Cargo.toml --release --target x86_64-pc-windows-msvc
+npm run build:activity
+```
+
+随后执行：
+
+```powershell
 npm run desktop
 ```
 
-该命令先构建 Vue 界面，再打开 Electron 窗口，无需启动 Vite。修改界面后需关闭桌面窗口并重新运行此命令。首次运行会下载 Electron；下载需要可访问其官方发行资源的网络。
+`npm run desktop` 只构建 Vue 界面并打开 Electron 窗口，不会构建上述原生二进制，也无需启动 Vite。缺少媒体 helper 或桥接时原生屏幕视频不可用；缺少 activity-helper 时不会显示自动识别的游戏。修改界面后需关闭桌面窗口并重新运行此命令。首次运行会下载 Electron；下载需要可访问其官方发行资源的网络。
 
 需要在一台电脑模拟多人时，先运行一次 `npm run build`，再给每个测试实例指定不同的 Chromium 用户目录：
 
@@ -173,7 +181,7 @@ npx electron electron/main.cjs --user-data-dir="$env:LOCALAPPDATA\LycanSync-Test
 - 桌面业务请求由主进程转发到 `electron/server-config.json` 指定的服务，不依赖 Vite 代理。开发模式可用 `$env:LYCANSYNC_API_URL = "http://127.0.0.1:18080"` 临时覆盖；安装版固定使用打包时的配置且不提供服务器切换界面。地址不能包含路径，非本机地址必须使用 HTTPS。
 - 此变量只指定业务后端；音视频服务地址仍来自后端签发的凭证。当前 RTC 配置及 LiveKit 仍限本机，修改变量不会自动获得公网部署能力。
 
-目前提供源码开发运行，尚不包含安装程序、自动更新、托盘或游戏内悬浮层。原生媒体 helper 已能枚举来源、执行视频/麦克风元数据探针，并通过共享纹理为 Windows 桌面端屏幕分享提供画面；麦克风语音仍使用浏览器采集，系统/应用声音尚未接入。
+目前提供源码开发运行，尚不包含安装程序、自动更新、托盘或游戏内悬浮层。原生媒体 helper 已能枚举来源、执行视频/麦克风元数据探针，并通过共享纹理为 Windows 桌面端屏幕分享提供画面；麦克风语音仍使用浏览器采集。屏幕声音的实现正在开发，尚未完成运行时验收。
 
 ## 验证
 

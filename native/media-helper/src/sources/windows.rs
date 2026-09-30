@@ -142,6 +142,24 @@ impl WindowsDiscovery {
             CaptureTarget::Test => false,
         }
     }
+
+    pub(super) fn audio_process_identity(
+        &self,
+        target: &CaptureTarget,
+    ) -> Result<(u32, u64), ErrorCode> {
+        match target {
+            CaptureTarget::Window(window, identity)
+                if window_matches_identity(*window, identity) =>
+            {
+                let mut process_id = 0;
+                unsafe { GetWindowThreadProcessId(*window, Some(&mut process_id)) };
+                (process_id != 0 && process_id == identity.process_id)
+                    .then_some((process_id, identity.process_creation_time))
+                    .ok_or(ErrorCode::ScreenShareAudioTargetUnavailable)
+            }
+            _ => Err(ErrorCode::ScreenShareAudioTargetUnavailable),
+        }
+    }
 }
 
 struct WinRtApartment;

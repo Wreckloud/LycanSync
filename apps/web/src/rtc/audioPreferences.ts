@@ -8,6 +8,7 @@ export interface AudioProcessingSettings {
 export interface AudioPreferences extends AudioProcessingSettings {
   inputGain: number;
   outputVolume: number;
+  screenShareVolume: number;
   participantVolumes: Record<string, number>;
   participantLastAudibleVolumes: Record<string, number>;
 }
@@ -19,6 +20,7 @@ const AUDIO_VOLUME_SCALE = 1 / AUDIO_VOLUME_STEP;
 export const DEFAULT_AUDIO_PREFERENCES: AudioPreferences = {
   inputGain: 1,
   outputVolume: 1,
+  screenShareVolume: 1,
   echoCancellation: true,
   noiseSuppression: true,
   autoGainControl: true,
@@ -62,6 +64,7 @@ export function loadAudioPreferences(userId: string, storage: Pick<Storage, 'get
     return {
       inputGain: normalizeAudioVolume(stored.inputGain ?? 1),
       outputVolume: normalizeAudioVolume(stored.outputVolume ?? 1),
+      screenShareVolume: normalizeAudioVolume(stored.screenShareVolume ?? 1),
       echoCancellation: stored.echoCancellation !== false,
       noiseSuppression: stored.noiseSuppression !== false,
       autoGainControl: stored.autoGainControl !== false,

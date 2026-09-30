@@ -4,6 +4,7 @@ mod capture;
 #[cfg(target_os = "windows")]
 mod d3d;
 mod protocol;
+mod screen_audio;
 mod sources;
 pub mod state;
 
@@ -25,7 +26,7 @@ pub fn run<R: BufRead, W: Write>(mut input: R, mut output: W) -> io::Result<()> 
     let mut runtime = Runtime::default();
     loop {
         let Some(line) = read_limited_line(&mut input)? else {
-            audio_probe_shutdown_result(runtime.shutdown_audio_probe())?;
+            audio_probe_shutdown_result(runtime.shutdown_all_audio())?;
             return Ok(());
         };
         let event = match line {
@@ -102,6 +103,7 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
             process_audio_capture: unavailable_capability(),
             audio_source_discovery: audio_source_discovery_capability(),
             microphone_probe: audio_probe::probe_capability(),
+            screen_share_audio_capture: screen_audio::capability(),
         },
         CommandEnvelope::Diagnostics { request_id, .. } => {
             let snapshot = runtime.capture.snapshot();
@@ -143,6 +145,7 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                 last_capture_error: snapshot.as_ref().and_then(|value| value.last_capture_error),
                 stop_duration_ms: snapshot.as_ref().and_then(|value| value.stop_duration_ms),
                 microphone_probe: runtime.audio_probe.snapshot(),
+                screen_share_audio: Box::new(runtime.screen_audio.snapshot()),
             }
         }
         CommandEnvelope::ListVideoSources { request_id, .. } => match runtime.refresh_sources() {
@@ -231,6 +234,73 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                     protocol_version: PROTOCOL_VERSION,
                     request_id: request_id.clone(),
                     command: "stopMicrophoneProbe",
+                    state: runtime.state(),
+                    changed,
+                },
+                Err(code) => error(
+                    runtime,
+                    Some(request_id.clone()),
+                    code,
+                    code.public_message(),
+                ),
+            }
+        }
+        CommandEnvelope::StartScreenShareAudio {
+            request_id,
+            session_id,
+            source_id,
+            pipe_id,
+            ..
+        } => {
+            if !valid_identifier(session_id)
+                || !valid_identifier(source_id)
+                || !valid_pipe_id(pipe_id)
+            {
+                return error(
+                    runtime,
+                    Some(request_id.clone()),
+                    ErrorCode::InvalidRequest,
+                    "屏幕共享音频参数无效",
+                );
+            }
+            match runtime.start_screen_share_audio(session_id, source_id, pipe_id) {
+                Ok((sample_rate, channels)) => OutboundEvent::ScreenShareAudioStarted {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: request_id.clone(),
+                    session_id: session_id.clone(),
+                    state: runtime.state(),
+                    sample_rate,
+                    channels,
+                    bits_per_sample: 32,
+                    nominal_chunk_ms: 10,
+                    changed: true,
+                },
+                Err(code) => error(
+                    runtime,
+                    Some(request_id.clone()),
+                    code,
+                    code.public_message(),
+                ),
+            }
+        }
+        CommandEnvelope::StopScreenShareAudio {
+            request_id,
+            session_id,
+            ..
+        } => {
+            if !valid_identifier(session_id) {
+                return error(
+                    runtime,
+                    Some(request_id.clone()),
+                    ErrorCode::InvalidRequest,
+                    "sessionId 无效",
+                );
+            }
+            match runtime.screen_audio.stop(session_id) {
+                Ok(changed) => OutboundEvent::Acknowledged {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: request_id.clone(),
+                    command: "stopScreenShareAudio",
                     state: runtime.state(),
                     changed,
                 },
@@ -379,7 +449,7 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                 ),
             }
         }
-        CommandEnvelope::Shutdown { request_id, .. } => match runtime.shutdown_audio_probe() {
+        CommandEnvelope::Shutdown { request_id, .. } => match runtime.shutdown_all_audio() {
             Ok(()) => OutboundEvent::Acknowledged {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: request_id.clone(),
@@ -422,6 +492,7 @@ struct Runtime {
     last_completed_session_id: Option<String>,
     audio_sources: audio_sources::AudioSourceRegistry,
     audio_probe: audio_probe::AudioProbeManager,
+    screen_audio: screen_audio::ScreenShareAudioManager,
 }
 
 impl Runtime {
@@ -452,12 +523,33 @@ impl Runtime {
         }
     }
 
-    fn shutdown_audio_probe(&mut self) -> Result<(), ErrorCode> {
-        self.audio_probe.shutdown()
+    fn shutdown_all_audio(&mut self) -> Result<(), ErrorCode> {
+        let screen_result = self.screen_audio.shutdown();
+        let microphone_result = self.audio_probe.shutdown();
+        screen_result.and(microphone_result)
     }
 
     fn reap_finished_audio_probe(&mut self) {
         self.audio_probe.reap_finished();
+        self.screen_audio.snapshot();
+    }
+
+    fn start_screen_share_audio(
+        &mut self,
+        session_id: &str,
+        source_id: &str,
+        pipe_id: &str,
+    ) -> Result<(u32, u16), ErrorCode> {
+        if self.session_id() != Some(session_id) || self.state() != SessionState::Running {
+            return Err(ErrorCode::CaptureSessionMismatch);
+        }
+        self.screen_audio.start(
+            &mut self.sources,
+            &mut self.discovery,
+            session_id,
+            source_id,
+            pipe_id,
+        )
     }
 
     fn video_capture_capability(&mut self) -> Capability {
@@ -628,6 +720,14 @@ fn discard_to_newline<R: BufRead>(input: &mut R) -> io::Result<()> {
 
 fn audio_probe_shutdown_result(result: Result<(), ErrorCode>) -> io::Result<()> {
     result.map_err(|code| io::Error::other(code.diagnostic_name()))
+}
+
+fn valid_pipe_id(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        })
 }
 
 #[cfg(test)]

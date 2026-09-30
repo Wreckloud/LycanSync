@@ -65,7 +65,7 @@ public class LocalRtcTokenService {
                 new RoomName(roomName),
                 new CanPublish(true),
                 new CanSubscribe(true),
-                new CanPublishSources(List.of("microphone", "screen_share")),
+                new CanPublishSources(List.of("microphone", "screen_share", "screen_share_audio")),
                 new CanPublishData(true),
                 new CanUpdateOwnMetadata(true)
         );

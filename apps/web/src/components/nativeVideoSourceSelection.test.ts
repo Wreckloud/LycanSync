@@ -16,20 +16,20 @@ describe('createNativeVideoSourceSelection', () => {
       { id: 'window:2:0', name: 'Notepad', thumbnail: 'data:image/png;base64,window', type: 'window' },
       { id: 'monitor:2:0', name: 'DISPLAY1', thumbnail: undefined, type: 'screen' },
     ]);
-    selection.finish('window:2:0');
-    return expect(selection.result).resolves.toBe('window:2:0');
+    selection.finish({ sourceId: 'window:2:0', shareAudio: true });
+    return expect(selection.result).resolves.toEqual({ sourceId: 'window:2:0', shareAudio: true });
   });
 
   it('resolves cancellation to null and ignores any later selection', async () => {
     const selection = createNativeVideoSourceSelection(sources, []);
     selection.finish(null);
-    selection.finish('window:2:0');
+    selection.finish({ sourceId: 'window:2:0', shareAudio: true });
     await expect(selection.result).resolves.toBeNull();
   });
 
   it('rejects a source id that was not in the explicit picker snapshot', async () => {
     const selection = createNativeVideoSourceSelection(sources, []);
-    selection.finish('window:99:0');
+    selection.finish({ sourceId: 'window:99:0', shareAudio: true });
     await expect(selection.result).resolves.toBeNull();
   });
 });

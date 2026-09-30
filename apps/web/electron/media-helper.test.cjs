@@ -14,6 +14,7 @@ const capabilities = {
   processAudioCapture: { available: false, reason: 'notImplemented' },
   audioSourceDiscovery: { available: true, reason: 'windowsCoreAudioEndpointEnumeration' },
   microphoneProbe: { available: true, reason: 'windowsWasapiSharedModeEventDriven' },
+  screenShareAudioCapture: { available: true, reason: 'windowsApplicationLoopbackProcessTree' },
 };
 
 class FakeHelper extends EventEmitter {
@@ -29,6 +30,8 @@ class FakeHelper extends EventEmitter {
     this.captureSessionId = null;
     this.videoState = 'idle';
     this.videoSessionId = null;
+    this.screenAudioState = 'idle';
+    this.screenAudioSessionId = null;
     this.requests = [];
     this.stdout = new PassThrough();
     this.stdin = new Writable({
@@ -121,6 +124,21 @@ class FakeHelper extends EventEmitter {
       if (this.mode.exitAfterVideoStart) setImmediate(() => this.exit(19));
       return;
     }
+    if (command.command === 'startScreenShareAudio') {
+      this.screenAudioState = 'running';
+      this.screenAudioSessionId = command.sessionId;
+      this.writeResponse({ event: 'screenShareAudioStarted', protocolVersion: 1,
+        requestId: command.requestId, sessionId: command.sessionId, state: 'running',
+        sampleRate: 48000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
+      return;
+    }
+    if (command.command === 'stopScreenShareAudio') {
+      this.screenAudioState = 'idle';
+      this.screenAudioSessionId = null;
+      this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
+        command: command.command, state: 'running', changed: true });
+      return;
+    }
     if (command.command === 'releaseSharedTextureSlot') {
       this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
         command: command.command, state: 'running', changed: true });
@@ -161,6 +179,13 @@ class FakeHelper extends EventEmitter {
         rawFrameIntervalP50Ms: null, rawFrameIntervalP95Ms: null, rawFrameIntervalP99Ms: null,
         rawTimestampAnomalies: 0, lastFrameAgeMs: 0, sizeChanges: 0, framePoolRecreates: 0,
         lastCaptureError: null, stopDurationMs: null,
+        screenShareAudio: { state: this.screenAudioState, sessionId: this.screenAudioSessionId,
+          sourceKind: this.screenAudioState === 'running' ? 'monitor' : null,
+          sampleRate: this.screenAudioState === 'running' ? 48000 : null,
+          channels: this.screenAudioState === 'running' ? 2 : null,
+          packetsReceived: this.screenAudioState === 'running' ? 20 : null,
+          framesReceived: this.screenAudioState === 'running' ? 9600 : null,
+          silentPackets: 0, droppedAudioChunks: 0, lastError: null },
       };
       if (this.mode.omitFramePoolRecreates) delete diagnostics.framePoolRecreates;
       this.writeResponse(diagnostics);
@@ -389,6 +414,33 @@ test('video shares a bounded helper session, applies the requested frame rate, a
   assert.deepEqual(await manager.stopVideo('video-session'), { changed: true });
   assert.deepEqual(await manager.stopVideo('video-session'), { changed: false });
   await waitUntil(() => children[0].closed);
+  await manager.shutdown();
+});
+
+test('screen-share audio is bound to the active video source and stops idempotently', async () => {
+  const { manager, children } = createManager({}, { idleTimeoutMs: 20 });
+  const snapshot = await manager.listVideoSources();
+  await manager.startVideo(snapshot.sources[0].sourceId, 30, 'video-session');
+  const format = await manager.startScreenShareAudio(snapshot.sources[0].sourceId,
+    '58d00436-8ac2-4d0c-9283-9d5d5f70ed01', 'video-session');
+  assert.deepEqual(format, { sampleRate: 48000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
+  assert.equal(children[0].requests.at(-1).pipeId, '58d00436-8ac2-4d0c-9283-9d5d5f70ed01');
+  assert.deepEqual(await manager.stopScreenShareAudio('video-session'), { changed: true });
+  assert.deepEqual(await manager.stopScreenShareAudio('video-session'), { changed: false });
+  await manager.stopVideo('video-session');
+  await manager.shutdown();
+});
+
+test('screen-share audio rejects stale source ids and mismatched video sessions', async () => {
+  const { manager, children } = createManager();
+  const snapshot = await manager.listVideoSources();
+  await manager.startVideo(snapshot.sources[0].sourceId, 30, 'video-session');
+  const pipeId = '58d00436-8ac2-4d0c-9283-9d5d5f70ed01';
+  await assert.rejects(manager.startScreenShareAudio(snapshot.sources[0].sourceId, pipeId, 'other-session'), /videoSourceExpired/);
+  await manager.listVideoSources();
+  await assert.rejects(manager.startScreenShareAudio(snapshot.sources[0].sourceId, pipeId, 'video-session'), /videoSourceExpired/);
+  assert.equal(children[0].commands.includes('startScreenShareAudio'), false);
+  await manager.stopVideo('video-session');
   await manager.shutdown();
 });
 

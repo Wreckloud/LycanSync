@@ -47,12 +47,15 @@ const PRESENCE_STATUS_LABELS: Record<UserPresenceStatus, string> = {
   OFFLINE: '离线',
 };
 const audioPreferences = useAudioPreferences(props.user.id);
-const { inputGain, outputVolume, processing: audioProcessing } = audioPreferences;
+const { inputGain, outputVolume, screenShareVolume, processing: audioProcessing } = audioPreferences;
 const callSounds = useCallSounds(outputVolume);
 const desktop = window.lycanDesktop;
 const captureRequest = ref<CaptureRequest | null>(null);
 const captureSourceType = ref<'window' | 'screen'>('window');
-let resolveNativeSourceSelection: ((sourceId: string | null) => void) | undefined;
+const captureAudioAvailable = ref(false);
+const captureShareAudio = ref(true);
+type NativeScreenSourceSelection = { sourceId: string; shareAudio: boolean };
+let resolveNativeSourceSelection: ((selection: NativeScreenSourceSelection | null) => void) | undefined;
 const captureSources = computed(() => captureRequest.value?.sources
   .filter((source) => source.type === captureSourceType.value) ?? []);
 function selectCaptureSource(sourceId: string | null) {
@@ -62,14 +65,18 @@ function selectCaptureSource(sourceId: string | null) {
   if (request.native) {
     const resolveSelection = resolveNativeSourceSelection;
     resolveNativeSourceSelection = undefined;
-    resolveSelection?.(sourceId);
+    resolveSelection?.(sourceId ? { sourceId, shareAudio: captureShareAudio.value } : null);
     return;
   }
   if (sourceId === null) rtc.cancelPendingScreenShareSelection();
   desktop?.selectSource(request.requestId, sourceId);
 }
-async function requestNativeScreenSource(sources: NativeVideoSource[]): Promise<string | null> {
+async function requestNativeScreenSource(sources: NativeVideoSource[]): Promise<NativeScreenSourceSelection | null> {
   selectCaptureSource(null);
+  const capabilities = await desktop?.getNativeMediaCapabilities().catch(() =>
+    ({} as Record<string, { available: boolean; reason: string }>)) ?? {};
+  captureAudioAvailable.value = capabilities.screenShareAudioCapture?.available === true;
+  captureShareAudio.value = captureAudioAvailable.value;
   const thumbnails = await desktop?.getNativeVideoSourceThumbnails(sources).catch(() => []) ?? [];
   const selection = createNativeVideoSourceSelection(sources, thumbnails);
   resolveNativeSourceSelection = selection.finish;
@@ -498,11 +505,14 @@ watch(callbarLeaving, (leaving, _, onCleanup) => {
 });
 const remoteAudioTracks = computed(() => rtc.participants
   .filter((participant) => participant !== localParticipant.value)
-  .map((participant) => ({
-    participantIdentity: participant.identity,
-    track: participant.getTrackPublication(Track.Source.Microphone)?.track,
-  }))
-  .filter((item): item is { participantIdentity: string; track: RemoteAudioTrack } => item.track instanceof RemoteAudioTrack));
+  .flatMap((participant) => ([
+    { participantIdentity: participant.identity, source: Track.Source.Microphone,
+      track: participant.getTrackPublication(Track.Source.Microphone)?.track },
+    { participantIdentity: participant.identity, source: Track.Source.ScreenShareAudio,
+      track: participant.getTrackPublication(Track.Source.ScreenShareAudio)?.track },
+  ]))
+  .filter((item): item is { participantIdentity: string; source: Track.Source; track: RemoteAudioTrack } =>
+    item.track instanceof RemoteAudioTrack));
 async function joinGroup(groupId: string) {
   releaseViewerLock();
   const attempt = ++joinAttempt;
@@ -656,6 +666,9 @@ function updateInputGain(volume: number) {
 function updateOutputVolume(volume: number) {
   audioPreferences.setOutputVolume(volume);
 }
+function updateScreenShareVolume(volume: number) {
+  audioPreferences.setScreenShareVolume(volume);
+}
 
 function updateAudioProcessing(setting: keyof AudioProcessingSettings, enabled: boolean) {
   if (audioPreferences.setProcessing(setting, enabled)) void rtc.setMicrophoneProcessing(audioProcessing);
@@ -663,6 +676,9 @@ function updateAudioProcessing(setting: keyof AudioProcessingSettings, enabled: 
 
 function remotePlaybackVolume(identity: string) {
   return Math.min(AUDIO_VOLUME_MAX, participantVolume(identity) * outputVolume.value);
+}
+function remoteScreenSharePlaybackVolume() {
+  return Math.min(AUDIO_VOLUME_MAX, screenShareVolume.value * outputVolume.value);
 }
 
 function toggleEnlargedParticipant(identity: string) {
@@ -877,7 +893,9 @@ function participantListening(participant: Participant) {
                   </div>
                   <label class="audio-range"><span>LycanSync 输出 <b>{{ Math.round(outputVolume * 100) }}%</b></span><input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="outputVolume"
                     aria-label="LycanSync 总输出音量" @input="updateOutputVolume(Number(($event.target as HTMLInputElement).value))" /></label>
-                  <small>每名成员的接收音量会在此基础上单独生效。</small>
+                  <label class="audio-range"><span>共享声音 <b>{{ Math.round(screenShareVolume * 100) }}%</b></span><input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="screenShareVolume"
+                    aria-label="屏幕共享声音音量" @input="updateScreenShareVolume(Number(($event.target as HTMLInputElement).value))" /></label>
+                  <small>成员麦克风音量与共享声音音量分开设置，均受 LycanSync 总输出音量控制。</small>
                   <div class="audio-options">
                     <label class="audio-option"><span>回声消除</span><input type="checkbox" :checked="audioProcessing.echoCancellation"
                       @change="updateAudioProcessing('echoCancellation', ($event.target as HTMLInputElement).checked)" /></label>
@@ -958,7 +976,15 @@ function participantListening(participant: Participant) {
     <div v-if="captureRequest" class="dialog-backdrop" @keydown.esc="selectCaptureSource(null)">
       <section class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-title">
         <h2 id="capture-title">选择共享的窗口或屏幕</h2>
-        <p>只共享画面，不包含系统声音。</p>
+        <p v-if="captureRequest.native && captureAudioAvailable">
+          同时共享声音：{{ captureSourceType === 'window' ? '所选应用的声音' : '全系统声音（不含 LycanSync）' }}
+        </p>
+        <p v-else-if="captureRequest.native">当前系统仅支持共享画面。</p>
+        <p v-else>浏览器共享不采集应用或系统声音。</p>
+        <label v-if="captureRequest.native" class="capture-audio-option">
+          <input v-model="captureShareAudio" type="checkbox" :disabled="!captureAudioAvailable" />
+          同时共享声音（{{ captureSourceType === 'window' ? '该应用的声音' : '全系统声音，不含 LycanSync' }}）
+        </label>
         <div class="capture-tabs" role="tablist" aria-label="共享来源类型">
           <button type="button" role="tab" :aria-selected="captureSourceType === 'window'"
             :disabled="!captureRequest.sources.some((source) => source.type === 'window')" @click="captureSourceType = 'window'">应用窗口</button>
@@ -977,7 +1003,8 @@ function participantListening(participant: Participant) {
       </section>
     </div>
     <RemoteAudio v-for="item in remoteAudioTracks" :key="item.track.sid" :track="item.track"
-      :volume="listening ? remotePlaybackVolume(item.participantIdentity) : 0" />
+      :volume="listening ? (item.source === Track.Source.ScreenShareAudio
+        ? remoteScreenSharePlaybackVolume() : remotePlaybackVolume(item.participantIdentity)) : 0" />
     <GlobalTooltip />
   </div>
 </template>

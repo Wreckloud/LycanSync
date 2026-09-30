@@ -9,6 +9,11 @@ interface NativeVideoSourceThumbnail {
   thumbnail: string;
 }
 
+interface NativeScreenSourceSelection {
+  sourceId: string;
+  shareAudio: boolean;
+}
+
 export function createNativeVideoSourceSelection(
   sources: NativeVideoSource[],
   thumbnails: NativeVideoSourceThumbnail[],
@@ -21,17 +26,17 @@ export function createNativeVideoSourceSelection(
     type: source.kind === 'window' ? 'window' as const : 'screen' as const,
   }));
   const validSourceIds = new Set(options.map(({ id }) => id));
-  let settle: (sourceId: string | null) => void = () => {};
+  let settle: (selection: NativeScreenSourceSelection | null) => void = () => {};
   let settled = false;
-  const result = new Promise<string | null>((resolve) => { settle = resolve; });
+  const result = new Promise<NativeScreenSourceSelection | null>((resolve) => { settle = resolve; });
 
   return {
     options,
     result,
-    finish(sourceId: string | null) {
+    finish(selection: NativeScreenSourceSelection | null) {
       if (settled) return;
       settled = true;
-      settle(sourceId && validSourceIds.has(sourceId) ? sourceId : null);
+      settle(selection && validSourceIds.has(selection.sourceId) ? selection : null);
     },
   };
 }

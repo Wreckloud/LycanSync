@@ -37,6 +37,20 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
     ipcRenderer.on('media:native-video-error', listener);
     return () => ipcRenderer.removeListener('media:native-video-error', listener);
   },
+  startNativeScreenAudio: (sourceId, sessionId) => ipcRenderer.invoke('media:native-screen-audio:start', sourceId, sessionId),
+  stopNativeScreenAudio: (sessionId) => ipcRenderer.invoke('media:native-screen-audio:stop', sessionId),
+  onNativeScreenAudioChunk: (callback) => {
+    const listener = (_event, chunk) => callback(chunk);
+    ipcRenderer.on('media:native-screen-audio-frame', listener);
+    return () => ipcRenderer.removeListener('media:native-screen-audio-frame', listener);
+  },
+  acknowledgeNativeScreenAudioChunk: (sequence, droppedChunks) =>
+    ipcRenderer.send('media:native-screen-audio:consumed', sequence, droppedChunks),
+  onNativeScreenAudioError: (callback) => {
+    const listener = (_event, code) => callback(code);
+    ipcRenderer.on('media:native-screen-audio-error', listener);
+    return () => ipcRenderer.removeListener('media:native-screen-audio-error', listener);
+  },
   getNativeMediaDiagnostics: () => ipcRenderer.invoke('media:diagnostics'),
   onActivityChange: (callback) => {
     const listener = (_event, activity) => callback(activity);

@@ -219,6 +219,21 @@ impl DiscoveryRuntime {
         }
     }
 
+    pub(super) fn audio_process_identity(
+        &mut self,
+        target: &CaptureTarget,
+    ) -> Result<(u32, u64), ErrorCode> {
+        #[cfg(target_os = "windows")]
+        {
+            self.windows_discovery()?.audio_process_identity(target)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = target;
+            Err(ErrorCode::AudioPlatformUnsupported)
+        }
+    }
+
     #[cfg(target_os = "windows")]
     fn windows_discovery(&mut self) -> Result<&mut windows::WindowsDiscovery, ErrorCode> {
         if self.windows.is_none() {

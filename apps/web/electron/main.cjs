@@ -69,6 +69,8 @@ let mediaHelperShutdownPromise;
 let nativeMediaBridge;
 let nativeVideoSession;
 let lastStoppedNativeVideoSession;
+let nativeScreenAudioSession;
+let lastScreenAudioDroppedChunks = 0;
 const helperProcessBridges = new WeakMap();
 
 const mediaHelper = new MediaHelperManager({
@@ -138,10 +140,156 @@ function notifyNativeVideoError(video, code) {
   });
 }
 
+function finishNativeScreenAudioPipe(audio, { destroy = false } = {}) {
+  if (!audio) return;
+  audio.stopping = true;
+  audio.queue.length = 0;
+  audio.inFlight = undefined;
+  audio.buffer = Buffer.alloc(0);
+  if (audio.socket && !audio.socket.destroyed) {
+    if (destroy) audio.socket.destroy(); else audio.socket.end();
+  }
+  if (audio.server.listening) audio.server.close();
+}
+
+function handleNativeScreenAudioPipeData(audio, incoming) {
+  if (nativeScreenAudioSession !== audio || audio.stopping) return;
+  audio.buffer = audio.buffer.length ? Buffer.concat([audio.buffer, incoming]) : incoming;
+  while (audio.buffer.length >= 4) {
+    const frames = audio.buffer.readUInt32LE(0);
+    if (!frames || frames > 4096) {
+      notifyNativeScreenAudioError(audio, 'screenShareAudioInvalidPacket');
+      return;
+    }
+    const packetBytes = 4 + frames * 2 * 4;
+    if (audio.buffer.length < packetBytes) break;
+    const pcm = Uint8Array.from(audio.buffer.subarray(4, packetBytes));
+    audio.buffer = audio.buffer.subarray(packetBytes);
+    if (audio.queue.length === 2) {
+      audio.queue.shift();
+      audio.droppedChunks++;
+    }
+    audio.queue.push({ frames, pcm });
+  }
+  if (audio.buffer.length > 65_536) {
+    notifyNativeScreenAudioError(audio, 'screenShareAudioBufferOverflow');
+    return;
+  }
+  sendNextNativeScreenAudioChunk(audio);
+}
+
+function sendNextNativeScreenAudioChunk(audio) {
+  if (nativeScreenAudioSession !== audio || audio.stopping || audio.inFlight || !audio.queue.length
+      || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+  const sequence = ++audio.sequence;
+  const packet = audio.queue.shift();
+  audio.inFlight = sequence;
+  mainWindow.webContents.send('media:native-screen-audio-frame', {
+    sequence,
+    frames: packet.frames,
+    sampleRate: audio.sampleRate,
+    channels: 2,
+    pcm: packet.pcm,
+  });
+}
+
+function notifyNativeScreenAudioError(audio, code) {
+  if (!audio || audio.failureNotified || audio.stopping) return;
+  audio.failureNotified = true;
+  const safeCode = /^[a-z][A-Za-z0-9]{0,63}$/.test(code) ? code : 'screenShareAudioFailed';
+  finishNativeScreenAudioPipe(audio, { destroy: true });
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('media:native-screen-audio-error', safeCode);
+  }
+  void mediaHelper.stopScreenShareAudio(audio.sessionId).catch(() => {}).finally(() => {
+    lastScreenAudioDroppedChunks = audio.droppedChunks + audio.rendererDroppedChunks;
+    if (nativeScreenAudioSession === audio) nativeScreenAudioSession = undefined;
+  });
+}
+
+async function startNativeScreenAudio(sourceId, sessionId) {
+  const video = nativeVideoSession;
+  if (closing || process.platform !== 'win32') throw new Error('platformUnsupported');
+  if (!video || video.sessionId !== sessionId || video.sourceId !== sourceId) throw new Error('videoSourceExpired');
+  if (nativeScreenAudioSession) {
+    if (nativeScreenAudioSession.sessionId === sessionId) return nativeScreenAudioSession.format;
+    throw new Error('screenShareAudioAlreadyRunning');
+  }
+  lastScreenAudioDroppedChunks = 0;
+  const pipeId = randomUUID();
+  const server = net.createServer();
+  const audio = {
+    sessionId, pipeId, server, socket: undefined, buffer: Buffer.alloc(0), queue: [],
+    inFlight: undefined, sequence: 0, sampleRate: undefined, droppedChunks: 0,
+    rendererDroppedChunks: 0, stopping: false, failureNotified: false,
+  };
+  nativeScreenAudioSession = audio;
+  server.on('connection', (socket) => {
+    if (nativeScreenAudioSession !== audio || audio.socket) {
+      socket.destroy();
+      return;
+    }
+    audio.socket = socket;
+    socket.setNoDelay(true);
+    socket.on('data', (chunk) => handleNativeScreenAudioPipeData(audio, chunk));
+    socket.once('error', () => notifyNativeScreenAudioError(audio, 'screenShareAudioPipeFailed'));
+    socket.once('close', () => {
+      if (nativeScreenAudioSession === audio && !audio.stopping) {
+        notifyNativeScreenAudioError(audio, 'screenShareAudioPipeClosed');
+      }
+    });
+  });
+  server.on('error', () => notifyNativeScreenAudioError(audio, 'screenShareAudioPipeFailed'));
+  let helperStarted = false;
+  try {
+    await new Promise((resolveListen, rejectListen) => {
+      const onError = (error) => { server.removeListener('listening', onListening); rejectListen(error); };
+      const onListening = () => { server.removeListener('error', onError); resolveListen(); };
+      server.once('error', onError);
+      server.once('listening', onListening);
+      server.listen(`\\\\.\\pipe\\lycansync-screen-audio-${pipeId}`);
+    });
+    const format = await mediaHelper.startScreenShareAudio(sourceId, pipeId, sessionId);
+    helperStarted = true;
+    if (nativeScreenAudioSession !== audio || video.stopping) throw new Error('screenShareAudioSessionStopped');
+    audio.sampleRate = format.sampleRate;
+    audio.format = format;
+    return format;
+  } catch (error) {
+    finishNativeScreenAudioPipe(audio, { destroy: true });
+    if (helperStarted) await mediaHelper.stopScreenShareAudio(sessionId).catch(() => {});
+    if (nativeScreenAudioSession === audio) nativeScreenAudioSession = undefined;
+    throw error;
+  }
+}
+
+async function stopNativeScreenAudio(sessionId) {
+  const audio = nativeScreenAudioSession;
+  if (!audio) return { changed: false };
+  if (audio.sessionId !== sessionId) throw new Error('screenShareAudioSessionMismatch');
+  if (audio.stopPromise) return audio.stopPromise;
+  audio.stopPromise = (async () => {
+    const helperStop = mediaHelper.stopScreenShareAudio(sessionId);
+    // Deliver the stop command before breaking the pipe so the helper can mark the writer closure as intentional.
+    finishNativeScreenAudioPipe(audio, { destroy: true });
+    try {
+      return await helperStop;
+    } finally {
+      lastScreenAudioDroppedChunks = audio.droppedChunks + audio.rendererDroppedChunks;
+      if (nativeScreenAudioSession === audio) nativeScreenAudioSession = undefined;
+    }
+  })();
+  return audio.stopPromise;
+}
+
 function handleMediaHelperFailure(state, code) {
   const video = nativeVideoSession;
   if (video && (video.helperState === state || (!video.helperState && state.videoSessionId === video.sessionId))) {
     notifyNativeVideoError(video, code);
+  }
+  const audio = nativeScreenAudioSession;
+  if (audio && (state.videoSessionId === audio.sessionId || state === video?.helperState)) {
+    notifyNativeScreenAudioError(audio, code);
   }
 }
 
@@ -229,7 +377,7 @@ async function startNativeVideo(sourceId, maxFps) {
   if (nativeVideoSession) throw new Error('videoCaptureAlreadyRunning');
   if (!nativeMediaBridge) nativeMediaBridge = loadNativeMediaBridge();
   const sessionId = randomUUID();
-  const video = { sessionId, maxFps, imported: new Map(), pendingSlotReleases: new Set(), stopping: false, failureNotified: false };
+  const video = { sessionId, sourceId, maxFps, imported: new Map(), pendingSlotReleases: new Set(), stopping: false, failureNotified: false };
   nativeVideoSession = video;
   try {
     const started = await mediaHelper.startVideo(sourceId, maxFps, sessionId);
@@ -255,6 +403,9 @@ async function stopNativeVideo(sessionId) {
   if (video.stopPromise) return video.stopPromise;
   video.stopping = true;
   video.stopPromise = (async () => {
+    if (nativeScreenAudioSession?.sessionId === sessionId) {
+      await stopNativeScreenAudio(sessionId).catch(() => {});
+    }
     const deadline = Date.now() + 1_200;
     while ((video.imported.size || video.pendingSlotReleases.size) && Date.now() < deadline) {
       await new Promise((resolveWait) => setTimeout(resolveWait, 10));
@@ -452,6 +603,8 @@ async function serveApplication(request) {
         signal: AbortSignal.any([request.signal,
           AbortSignal.timeout(streamingUpload || groupFileDownloadPath.test(url.pathname) ? 30 * 60_000 : 15000)]),
       });
+      const currentSessionUnauthorized = !routePolicy.public && Boolean(token)
+        && response.status === 401 && token === sessionToken;
       if (!routePolicy.public && token === sessionToken
           && (response.status === 401 || (routePolicy.clearsSession && response.ok))) await clearSession();
       if (routePolicy.savesSession && response.ok) {
@@ -467,6 +620,8 @@ async function serveApplication(request) {
         ...(response.headers.has('Content-Length') ? { 'Content-Length': response.headers.get('Content-Length') } : {}),
         ...(response.headers.has('Content-Disposition') ? { 'Content-Disposition': response.headers.get('Content-Disposition') } : {}),
         ...(response.headers.has('X-Content-Type-Options') ? { 'X-Content-Type-Options': response.headers.get('X-Content-Type-Options') } : {}),
+        ...(response.status === 401 && !routePolicy.public
+          ? { 'X-Lycan-Session-Expired': currentSessionUnauthorized ? 'true' : 'false' } : {}),
         'Cache-Control': 'no-store',
       } });
     } catch {
@@ -481,7 +636,7 @@ async function serveApplication(request) {
   try {
     const response = await net.fetch(pathToFileURL(file).href);
     const headers = new Headers(response.headers);
-    headers.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; object-src 'none'; frame-src 'none'; base-uri 'none'");
+    headers.set('Content-Security-Policy', "default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; object-src 'none'; frame-src 'none'; base-uri 'none'");
     return new Response(response.body, { status: response.status, headers });
   } catch { return new Response(null, { status: 404 }); }
 }
@@ -674,13 +829,42 @@ ipcMain.handle('media:native-video:stop', (event, sessionId) => {
   if (!targetSessionId) return { changed: false };
   return stopNativeVideo(targetSessionId);
 });
+ipcMain.handle('media:native-screen-audio:start', (event, sourceId, sessionId) => {
+  if (!trustedSender(event) || closing || typeof sourceId !== 'string' || sourceId.length > 128
+      || typeof sessionId !== 'string' || sessionId.length > 128) {
+    throw new Error('请求参数无效');
+  }
+  return startNativeScreenAudio(sourceId, sessionId);
+});
+ipcMain.handle('media:native-screen-audio:stop', (event, sessionId) => {
+  if (!trustedSender(event) || typeof sessionId !== 'string' || sessionId.length > 128) {
+    throw new Error('请求参数无效');
+  }
+  return stopNativeScreenAudio(sessionId);
+});
+ipcMain.on('media:native-screen-audio:consumed', (event, sequence, droppedChunks) => {
+  if (!trustedSender(event) || !Number.isSafeInteger(sequence)
+      || !Number.isSafeInteger(droppedChunks) || droppedChunks < 0) return;
+  const audio = nativeScreenAudioSession;
+  if (!audio || audio.inFlight !== sequence) return;
+  audio.rendererDroppedChunks = Math.max(audio.rendererDroppedChunks, droppedChunks);
+  audio.inFlight = undefined;
+  sendNextNativeScreenAudioChunk(audio);
+});
 ipcMain.on('media:native-video:receiver-error', (event) => {
   if (!trustedSender(event)) return;
   notifyNativeVideoError(nativeVideoSession, 'sharedTextureReceiverFailed');
 });
-ipcMain.handle('media:diagnostics', (event) => {
+ipcMain.handle('media:diagnostics', async (event) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
-  return mediaHelper.getDiagnostics();
+  const diagnostics = await mediaHelper.getDiagnostics();
+  if (diagnostics.screenShareAudio) {
+    const audioDrops = nativeScreenAudioSession
+      ? nativeScreenAudioSession.droppedChunks + nativeScreenAudioSession.rendererDroppedChunks
+      : lastScreenAudioDroppedChunks;
+    diagnostics.screenShareAudio.droppedAudioChunks = (diagnostics.screenShareAudio.droppedAudioChunks ?? 0) + audioDrops;
+  }
+  return diagnostics;
 });
 ipcMain.on('window:maximize', (event) => {
   if (!trustedSender(event)) return;
@@ -706,7 +890,12 @@ app.on('before-quit', (event) => {
   if (allowQuitAfterMediaHelper) return;
   event.preventDefault();
   if (mediaHelperShutdownPromise) return;
-  mediaHelperShutdownPromise = (nativeVideoSession
+  mediaHelperShutdownPromise = (nativeScreenAudioSession
+    ? stopNativeScreenAudio(nativeScreenAudioSession.sessionId).catch((error) => {
+      console.error(`native screen audio shutdown failed: ${error.message}`);
+    })
+    : Promise.resolve())
+    .then(() => nativeVideoSession
     ? stopNativeVideo(nativeVideoSession.sessionId).catch((error) => {
       console.error(`native video shutdown failed: ${error.message}`);
     })

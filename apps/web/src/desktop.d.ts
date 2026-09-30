@@ -40,6 +40,26 @@ interface NativeCaptureDiagnostics {
   framePoolRecreates: number | null;
   lastCaptureError: string | null;
   stopDurationMs: number | null;
+  screenShareAudio: {
+    state: 'idle' | 'starting' | 'running' | 'stopping' | 'failed';
+    sessionId: string | null;
+    sourceKind: 'monitor' | 'window' | null;
+    sampleRate: number | null;
+    channels: number | null;
+    packetsReceived: number | null;
+    framesReceived: number | null;
+    silentPackets: number | null;
+    droppedAudioChunks: number | null;
+    lastError: string | null;
+  };
+}
+
+interface NativeScreenAudioChunk {
+  sequence: number;
+  frames: number;
+  sampleRate: number;
+  channels: 2;
+  pcm: Uint8Array;
 }
 
 interface Window {
@@ -60,6 +80,13 @@ interface Window {
     startNativeVideo(sourceId: string, maxFps: number): Promise<{ sessionId: string; changed: boolean }>;
     stopNativeVideo(sessionId?: string): Promise<{ changed: boolean }>;
     onNativeVideoError(callback: (code: string) => void): () => void;
+    startNativeScreenAudio(sourceId: string, sessionId: string): Promise<{
+      sampleRate: number; channels: 2; bitsPerSample: 32; nominalChunkMs: 10;
+    }>;
+    stopNativeScreenAudio(sessionId: string): Promise<{ changed: boolean }>;
+    onNativeScreenAudioChunk(callback: (chunk: NativeScreenAudioChunk) => void): () => void;
+    acknowledgeNativeScreenAudioChunk(sequence: number, droppedChunks: number): void;
+    onNativeScreenAudioError(callback: (code: string) => void): () => void;
     getNativeMediaDiagnostics(): Promise<NativeCaptureDiagnostics>;
     onActivityChange(callback: (activity: DetectedActivity | null) => void): () => void;
     toggleMaximize(): void;

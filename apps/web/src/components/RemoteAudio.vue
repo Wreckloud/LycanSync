@@ -19,6 +19,6 @@ watch(() => [props.track, props.volume] as const, ([track, volume]) => {
 </script>
 
 <template>
-  <!-- 只播放远端麦克风，避免回放自己的声音。 -->
+  <!-- App 只为远端参与者挂载音轨，本地发布音轨不会回放到扬声器。 -->
   <audio ref="audioElement" autoplay />
 </template>

@@ -26,6 +26,8 @@ const FIRST_FRAME_TIMEOUT_MS = 8_000;
 export class NativeScreenVideoSession {
   readonly track: LocalVideoTrack;
 
+  get captureSessionId() { return this.sessionId; }
+
   private readonly generator: GeneratedVideoTrack;
   private readonly writer: WritableStreamDefaultWriter<VideoFrame>;
   private readonly intervalMs: number;
