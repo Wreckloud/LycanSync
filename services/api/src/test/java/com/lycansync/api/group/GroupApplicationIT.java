@@ -3,9 +3,14 @@ package com.lycansync.api.group;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lycansync.api.auth.dto.LocalRegistrationRequest;
 import com.lycansync.api.auth.model.AuthenticatedUser;
+import com.lycansync.api.auth.service.AuthService;
 import com.lycansync.api.auth.service.LocalAuthService;
 import com.lycansync.api.group.dto.CreateGroupRequest;
 import com.lycansync.api.group.service.GroupService;
+import com.lycansync.api.presence.dto.PresenceHeartbeatRequest;
+import com.lycansync.api.presence.mapper.PresenceMapper;
+import com.lycansync.api.presence.model.UserPresenceStatus;
+import com.lycansync.api.presence.service.PresenceService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,18 +22,22 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.time.Instant;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -66,6 +75,15 @@ class GroupApplicationIT {
     private GroupService groupService;
 
     @Autowired
+    private PresenceService presenceService;
+
+    @Autowired
+    private AuthService authService;
+
+    @Autowired
+    private PresenceMapper presenceMapper;
+
+    @Autowired
     private JdbcClient jdbc;
 
     @Autowired
@@ -76,7 +94,7 @@ class GroupApplicationIT {
 
     @BeforeEach
     void resetDatabase() {
-        jdbc.sql("TRUNCATE user_presence, chat_attachment, chat_message, chat_group, auth_session, auth_local_credential, app_user").update();
+        jdbc.sql("TRUNCATE user_presence, chat_attachment, chat_file_attachment, chat_message, chat_group, auth_session, auth_local_credential, app_user").update();
         jdbc.sql("UPDATE system_state SET initialized_at = NULL WHERE id = 1").update();
     }
 
@@ -157,6 +175,7 @@ class GroupApplicationIT {
                 .andExpect(jsonPath("$[0].activityStartedAt").isNotEmpty());
 
         jdbc.sql("UPDATE user_presence SET last_seen_at = now() - interval '2 minutes'").update();
+        presenceService.markExpiredOffline();
         mvc.perform(get("/api/groups/{groupId}/presences", groupId)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken))
                 .andExpect(status().isOk())
@@ -169,6 +188,143 @@ class GroupApplicationIT {
                         .content("{\"status\":\"ONLINE\",\"activity\":{\"type\":\"GAME\",\"name\":\" \"}}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+    }
+
+    @Test
+    void shouldWakeGroupPresenceWaitersOnlyAfterACommittedStatusChange() throws Exception {
+        String token = localAuth.register(new LocalRegistrationRequest("PresenceWaiter", PASSWORD)).sessionToken();
+        String groupBody = mvc.perform(post("/api/groups")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"状态等待\"}"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        String groupId = objectMapper.readTree(groupBody).get("id").asText();
+        String clientId = UUID.randomUUID().toString();
+
+        MvcResult initialWait = mvc.perform(get("/api/groups/{groupId}/presence-changes", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .param("clientId", clientId).param("requestId", "1"))
+                .andExpect(request().asyncStarted()).andReturn();
+        String initialBody = mvc.perform(asyncDispatch(initialWait))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.changed").value(true))
+                .andExpect(jsonPath("$.version").value(0))
+                .andExpect(jsonPath("$.length()").value(3))
+                .andReturn().getResponse().getContentAsString();
+        String serverInstanceId = objectMapper.readTree(initialBody).get("serverInstanceId").asText();
+        String secondClientId = UUID.randomUUID().toString();
+        MvcResult secondInitialWait = mvc.perform(get("/api/groups/{groupId}/presence-changes", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .param("clientId", secondClientId).param("requestId", "1"))
+                .andExpect(request().asyncStarted()).andReturn();
+        mvc.perform(asyncDispatch(secondInitialWait))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(0));
+
+        MvcResult firstWaiting = mvc.perform(get("/api/groups/{groupId}/presence-changes", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .param("clientId", clientId).param("requestId", "2")
+                        .param("serverInstanceId", serverInstanceId).param("version", "0"))
+                .andExpect(request().asyncStarted()).andReturn();
+        MvcResult secondWaiting = mvc.perform(get("/api/groups/{groupId}/presence-changes", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .param("clientId", secondClientId).param("requestId", "2")
+                        .param("serverInstanceId", serverInstanceId).param("version", "0"))
+                .andExpect(request().asyncStarted()).andReturn();
+        mvc.perform(post("/api/presence/heartbeat")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"AWAY\",\"activity\":{\"type\":\"GAME\",\"name\":\"Core Keeper\"}}"))
+                .andExpect(status().isNoContent());
+
+        mvc.perform(asyncDispatch(firstWaiting))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.serverInstanceId").value(serverInstanceId))
+                .andExpect(jsonPath("$.version").value(1))
+                .andExpect(jsonPath("$.changed").value(true));
+        mvc.perform(asyncDispatch(secondWaiting))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(1))
+                .andExpect(jsonPath("$.changed").value(true));
+
+        MvcResult offlineWaiting = mvc.perform(get("/api/groups/{groupId}/presence-changes", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .param("clientId", clientId).param("requestId", "3")
+                        .param("serverInstanceId", serverInstanceId).param("version", "1"))
+                .andExpect(request().asyncStarted()).andReturn();
+        mvc.perform(post("/api/presence/heartbeat")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"OFFLINE\",\"activity\":null}"))
+                .andExpect(status().isNoContent());
+        mvc.perform(asyncDispatch(offlineWaiting))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value(2))
+                .andExpect(jsonPath("$.changed").value(true));
+        mvc.perform(get("/api/groups/{groupId}/presences", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("OFFLINE"))
+                .andExpect(jsonPath("$[0].activityName").doesNotExist());
+    }
+
+    @Test
+    void shouldRejectAnOfflineWriteFromAReplacedLoginSession() {
+        String oldToken = localAuth.register(new LocalRegistrationRequest("PresenceSession", PASSWORD)).sessionToken();
+        AuthenticatedUser oldSession = authService.authenticate(oldToken);
+        localAuth.login(new com.lycansync.api.auth.dto.LocalLoginRequest("PresenceSession", PASSWORD));
+
+        presenceService.heartbeat(oldSession, new PresenceHeartbeatRequest(UserPresenceStatus.OFFLINE, null));
+
+        assertThat(jdbc.sql("SELECT count(*) FROM user_presence WHERE user_id = ?")
+                .param(oldSession.id()).query(Long.class).single()).isZero();
+    }
+
+    @Test
+    void shouldRejectAnInFlightPresenceWaitAfterItsSessionWasReplaced() throws Exception {
+        String oldToken = localAuth.register(new LocalRegistrationRequest("PresenceOldWait", PASSWORD)).sessionToken();
+        String groupBody = mvc.perform(post("/api/groups")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + oldToken)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"状态会话\"}"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        String groupId = objectMapper.readTree(groupBody).get("id").asText();
+        String clientId = UUID.randomUUID().toString();
+        MvcResult initialWait = mvc.perform(get("/api/groups/{groupId}/presence-changes", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + oldToken)
+                        .param("clientId", clientId).param("requestId", "1"))
+                .andExpect(request().asyncStarted()).andReturn();
+        String initialBody = mvc.perform(asyncDispatch(initialWait))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        String serverInstanceId = objectMapper.readTree(initialBody).get("serverInstanceId").asText();
+
+        MvcResult waiting = mvc.perform(get("/api/groups/{groupId}/presence-changes", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + oldToken)
+                        .param("clientId", clientId).param("requestId", "2")
+                        .param("serverInstanceId", serverInstanceId).param("version", "0"))
+                .andExpect(request().asyncStarted()).andReturn();
+        String newToken = localAuth.login(new com.lycansync.api.auth.dto.LocalLoginRequest(
+                "PresenceOldWait", PASSWORD)).sessionToken();
+        mvc.perform(post("/api/presence/heartbeat")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + newToken)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"ONLINE\"}"))
+                .andExpect(status().isNoContent());
+
+        mvc.perform(asyncDispatch(waiting)).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void shouldNotLetAnOlderHeartbeatResurrectAnOfflinePresence() {
+        String token = localAuth.register(new LocalRegistrationRequest("PresenceRace", PASSWORD)).sessionToken();
+        AuthenticatedUser user = authService.authenticate(token);
+        presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE, null));
+        Instant delayedHeartbeatAt = Instant.now();
+        presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.OFFLINE, null));
+
+        int delayedUpdateCount = presenceMapper.upsert(user.id(), user.sessionHash(), UserPresenceStatus.ONLINE,
+                null, null, delayedHeartbeatAt);
+
+        assertThat(delayedUpdateCount).isZero();
+        assertThat(jdbc.sql("SELECT status FROM user_presence WHERE user_id = ?")
+                .param(user.id()).query(String.class).single()).isEqualTo("OFFLINE");
     }
 
     @Test

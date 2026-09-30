@@ -3,11 +3,23 @@
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.lycansync.api.presence.mapper.PresenceMapper">
 
+    <select id="findByUserForUpdate" resultType="com.lycansync.api.presence.model.UserPresence">
+        SELECT user_id AS userId, status, last_seen_at AS lastSeenAt,
+               activity_type AS activityType, activity_name AS activityName,
+               activity_started_at AS activityStartedAt, updated_at AS updatedAt
+        FROM user_presence WHERE user_id = #{userId} FOR UPDATE
+    </select>
+
     <insert id="upsert">
         INSERT INTO user_presence (user_id, status, last_seen_at, activity_type, activity_name, activity_started_at, updated_at)
-        VALUES (#{userId}, #{status}, #{now}, #{activityType}, #{activityName},
-                CASE WHEN CAST(#{activityName} AS VARCHAR) IS NULL
-                    THEN NULL ELSE CAST(#{now} AS TIMESTAMPTZ) END, #{now})
+        SELECT #{userId}, #{status}, #{now}, #{activityType}, #{activityName},
+               CASE WHEN CAST(#{activityName} AS VARCHAR) IS NULL
+                   THEN NULL ELSE CAST(#{now} AS TIMESTAMPTZ) END, #{now}
+        WHERE EXISTS (
+            SELECT 1 FROM auth_session
+            WHERE user_id = #{userId} AND token_hash = #{sessionHash} AND expires_at &gt; #{now}
+            FOR UPDATE
+        )
         ON CONFLICT (user_id) DO UPDATE
         SET status = EXCLUDED.status,
             last_seen_at = EXCLUDED.last_seen_at,
@@ -20,6 +32,14 @@
                 ELSE EXCLUDED.activity_started_at
             END,
             updated_at = EXCLUDED.updated_at
+        WHERE (user_presence.last_seen_at &lt; EXCLUDED.last_seen_at
+               OR (EXCLUDED.status = 'OFFLINE' AND user_presence.status &lt;&gt; 'OFFLINE'
+                   AND user_presence.last_seen_at = EXCLUDED.last_seen_at))
+          AND EXISTS (
+              SELECT 1 FROM auth_session
+              WHERE user_id = #{userId} AND token_hash = #{sessionHash} AND expires_at &gt; #{now}
+              FOR UPDATE
+          )
     </insert>
 
     <select id="findByUsers" resultType="com.lycansync.api.presence.model.UserPresence">
@@ -32,5 +52,19 @@
             CAST(#{userId} AS UUID)
         </foreach>
     </select>
+
+    <select id="findExpired" resultType="com.lycansync.api.presence.model.PresenceExpiryCandidate">
+        SELECT user_id AS userId, last_seen_at AS lastSeenAt
+        FROM user_presence
+        WHERE status &lt;&gt; 'OFFLINE' AND last_seen_at &lt;= #{cutoff}
+    </select>
+
+    <update id="markOfflineIfUnchanged">
+        UPDATE user_presence
+        SET status = 'OFFLINE', activity_type = NULL, activity_name = NULL,
+            activity_started_at = NULL, updated_at = #{now}
+        WHERE user_id = #{userId} AND status &lt;&gt; 'OFFLINE'
+          AND last_seen_at = #{lastSeenAt} AND last_seen_at &lt;= #{cutoff}
+    </update>
 
 </mapper>

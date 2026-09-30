@@ -1,5 +1,8 @@
 package com.lycansync.api.auth.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import org.apache.ibatis.annotations.AutomapConstructor;
+
 import java.util.UUID;
 
 /**
@@ -8,5 +11,11 @@ import java.util.UUID;
  * @author Wreckloud
  * @since 2026-09-10
  */
-public record AuthenticatedUser(UUID id, String nickname, boolean administrator) {
+public record AuthenticatedUser(UUID id, String nickname, boolean administrator,
+                                @JsonIgnore String sessionHash) {
+
+    @AutomapConstructor
+    public AuthenticatedUser(UUID id, String nickname, boolean administrator) {
+        this(id, nickname, administrator, null);
+    }
 }

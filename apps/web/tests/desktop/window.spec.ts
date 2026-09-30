@@ -12,6 +12,7 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
   const application = await electron.launch({ args, env: { ...process.env, LYCANSYNC_API_URL: api.url } });
   try {
     const page = await application.firstWindow();
+    await api.presencePollStarted;
     if (process.platform === 'win32') {
       // 应用窗口始终允许系统截图；共享时也不能再开启内容保护。
       expect(await application.evaluate(({ BrowserWindow }) =>
@@ -102,5 +103,7 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
     const closed = application.waitForEvent('close');
     await page.getByRole('button', { name: '关闭窗口', exact: true }).click();
     await closed;
+    expect(api.presenceHeartbeats).toContainEqual({ status: 'OFFLINE', activity: null });
+    await expect.poll(api.cancelledPresencePollCount).toBeGreaterThan(0);
   } finally { await application.close(); await api.close(); }
 });

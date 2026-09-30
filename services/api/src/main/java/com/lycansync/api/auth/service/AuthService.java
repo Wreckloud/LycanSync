@@ -40,7 +40,7 @@ public class AuthService {
                     HttpStatus.UNAUTHORIZED, ApiErrorCode.INVALID_SESSION, "登录已过期，请重新登录");
         }
         mapper.extendSession(hash, now, now.plus(SESSION_TTL));
-        return user;
+        return new AuthenticatedUser(user.id(), user.nickname(), user.administrator(), hash);
     }
 
     public void logout(String token) {

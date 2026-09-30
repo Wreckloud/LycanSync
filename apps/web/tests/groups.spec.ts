@@ -1,9 +1,19 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Route } from '@playwright/test';
 
 const groupId = '01b08c29-d1e5-4bca-987f-64946541e93b';
 const userId = '2d983469-4442-44f5-b5a8-f3819f16a611';
 const friendId = 'a1ae7096-049b-46ed-8e62-4f3dd0e7f80d';
 const avatar = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+function holdPresencePoll(route: Route) {
+  const query = new URL(route.request().url()).searchParams;
+  if (!query.has('serverInstanceId')) {
+    return route.fulfill({ json: {
+      serverInstanceId: 'e5965682-9948-41b0-b9cf-c12eeb927e53', version: 0, changed: true,
+    } });
+  }
+  return new Promise<void>(() => {});
+}
 
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/presence/heartbeat', (route) => route.fulfill({ status: 204 }));
@@ -27,6 +37,7 @@ test('创建群组只预览，并直接显示所有已注册账号的头像', as
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
   await page.route('**/api/groups**', async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path === `/api/groups/${groupId}/presence-changes`) return holdPresencePoll(route);
     if (path === '/api/groups' && route.request().method() === 'GET') {
       return route.fulfill({ json: created ? [{ ...group, members: undefined }] : [] });
     }
@@ -78,6 +89,7 @@ test('创建群组时可选择头像，群组栏显示裁剪后的图片', async
     const group = { id: groupId, name: '头像小队', description: '', avatar: createdAvatar, role: 'OWNER',
       memberCount: 1, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z',
       members: [{ userId, nickname: user.nickname, avatar: '', role: 'OWNER', joinedAt: '2026-09-12T00:00:00Z' }] };
+    if (path === `/api/groups/${groupId}/presence-changes`) return holdPresencePoll(route);
     if (path === '/api/groups' && route.request().method() === 'POST') {
       createdAvatar = route.request().postDataJSON().avatar;
       return route.fulfill({ status: 201, json: { ...group, avatar: createdAvatar } });
@@ -125,6 +137,7 @@ test('启动、窗口激活和成员变化时自动更新群组，无需刷新�
     const path = new URL(route.request().url()).pathname;
     const group = { id: groupId, name: '周末开黑', description: '', avatar: '', role: 'OWNER', memberCount,
       createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z' };
+    if (path === `/api/groups/${groupId}/presence-changes`) return holdPresencePoll(route);
     if (path === '/api/groups') return route.fulfill({ json: visible ? [group] : [] });
     if (path === `/api/groups/${groupId}`) return route.fulfill({ json: { ...group, members } });
     if (path === `/api/groups/${groupId}/messages`) return route.fulfill({ json: { messages: [], hasMore: false } });
@@ -171,6 +184,7 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   }));
   await page.route('**/api/groups**', (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path === `/api/groups/${groupId}/presence-changes`) return holdPresencePoll(route);
     if (path === '/api/groups') return route.fulfill({ json: [{ ...group, members: undefined }] });
     if (path === `/api/groups/${groupId}/presences`) return route.fulfill({ json: [
       { userId, status: 'ONLINE', lastSeenAt: '2026-09-25T10:00:00Z', activityType: null, activityName: null, activityStartedAt: null },
@@ -201,4 +215,72 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   await expect(page.locator('.group-call-badge')).toBeVisible();
   await expect(page.locator('.group-call-badge')).toHaveCSS('width', '20px');
   await expect(page.locator('.group-call-badge')).toHaveCSS('top', '-5px');
+});
+
+test('群成员状态长轮询变化后立即刷新完整快照', async ({ page }) => {
+  const user = { id: userId, nickname: '群主', avatar: '', administrator: true };
+  const members = [
+    { userId, nickname: user.nickname, avatar: '', role: 'OWNER', joinedAt: '2026-09-12T00:00:00Z' },
+    { userId: friendId, nickname: '朋友', avatar: '', role: 'MEMBER', joinedAt: '2026-09-12T01:00:00Z' },
+  ];
+  const group = { id: groupId, name: '通知小队', description: '', avatar: '', role: 'OWNER', memberCount: 2,
+    createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z', members };
+  const serverInstanceId = 'e5965682-9948-41b0-b9cf-c12eeb927e53';
+  let version = 0;
+  let friendStatus = 'OFFLINE';
+  let pollStarted!: () => void;
+  let releasePoll!: () => void;
+  const pollStartedPromise = new Promise<void>((resolve) => { pollStarted = resolve; });
+  const pollGate = new Promise<void>((resolve) => { releasePoll = resolve; });
+  let heldPoll = false;
+
+  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/auth/session', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
+  await page.route('**/api/rtc/room-occupancies', (route) => route.fulfill({ json: [] }));
+  await page.route('**/api/groups**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/groups') return route.fulfill({ json: [{ ...group, members: undefined }] });
+    if (path === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (path === `/api/groups/${groupId}/presences`) return route.fulfill({ json: [
+      { userId, status: 'ONLINE', lastSeenAt: new Date().toISOString(), activityType: null, activityName: null, activityStartedAt: null },
+      { userId: friendId, status: friendStatus, lastSeenAt: new Date().toISOString(), activityType: null, activityName: null, activityStartedAt: null },
+    ] });
+    if (path === `/api/groups/${groupId}/presence-changes`) {
+      const query = new URL(route.request().url()).searchParams;
+      if (!query.has('serverInstanceId')) {
+        return route.fulfill({ json: { serverInstanceId, version, changed: true } });
+      }
+      if (Number(query.get('version')) < version) {
+        return route.fulfill({ json: { serverInstanceId, version, changed: true } });
+      }
+      if (!heldPoll) {
+        heldPoll = true;
+        pollStarted();
+        await pollGate;
+        return route.fulfill({ json: { serverInstanceId, version, changed: true } });
+      }
+      return new Promise<void>(() => {});
+    }
+    if (path === `/api/groups/${groupId}/messages`) return route.fulfill({ json: { messages: [], hasMore: false } });
+    return route.fulfill({ status: 404 });
+  });
+
+  try {
+    await page.goto('/');
+    await expect(page.getByRole('heading', { name: '通知小队' })).toBeVisible();
+    await expect(page.locator('.group-member-row').filter({ hasText: '朋友' })).toHaveCount(1);
+    await expect(page.locator('.group-member-row').filter({ hasText: '朋友' }).locator('.status-dot')).toHaveCount(0);
+    await pollStartedPromise;
+
+    version = 1;
+    friendStatus = 'AWAY';
+    releasePoll();
+
+    await expect(page.locator('.group-member-row').filter({ hasText: '朋友' }).locator('.status-dot')).toHaveClass(/AWAY/);
+    await expect(page.locator('.group-member-row').filter({ hasText: '朋友' })).toContainText('朋友');
+  } finally {
+    releasePoll();
+  }
 });

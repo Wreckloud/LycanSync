@@ -61,6 +61,11 @@ public class AuthConfiguration {
                     private long window = System.nanoTime();
                     private int attempts;
 
+                    @Override
+                    protected boolean shouldNotFilterAsyncDispatch() {
+                        return false;
+                    }
+
                     private synchronized boolean allowAttempt() {
                         long now = System.nanoTime();
                         if (now - window > 60_000_000_000L) { window = now; attempts = 0; }

@@ -66,6 +66,14 @@ async function api(path: string, body: string, user: ReturnType<typeof testUser>
     return [{ userId: user.id, status: 'ONLINE', activityType: null,
       activityName: null, activityStartedAt: null }];
   }
+  if (/^\/api\/groups\/[0-9a-f-]+\/presence-changes(?:\?.*)?$/i.test(path)) {
+    const query = new URL(path, 'http://localhost').searchParams;
+    if (query.has('serverInstanceId') && Number(query.get('version')) === 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
+    }
+    return { serverInstanceId: 'e5965682-9948-41b0-b9cf-c12eeb927e53',
+      version: 0, changed: !query.has('serverInstanceId') || Number(query.get('version')) !== 0 };
+  }
   const group = groups.find((candidate) => path === '/api/groups/' + candidate.id);
   if (group) return { ...group, members: [{ userId: user.id, nickname: user.nickname, avatar: user.avatar,
     role: 'OWNER', joinedAt: '2026-09-12T00:00:00Z' }] };
@@ -106,11 +114,28 @@ export function setTestAvatar(context: BrowserContext, avatar: string) {
 }
 export async function startDesktopApi(nickname = '测试小狼') {
   const user = testUser(nickname);
+  const presenceHeartbeats: { status: string; activity: unknown }[] = [];
+  let resolvePresencePollStarted!: () => void;
+  const presencePollStarted = new Promise<void>((resolve) => { resolvePresencePollStarted = resolve; });
+  let cancelledPresencePolls = 0;
   const server = createServer(async (request, response) => {
     try {
       let body = '';
       for await (const chunk of request) body += chunk;
-      const result = await api(request.url ?? '/', body, user);
+      const path = request.url ?? '/';
+      if (path === '/api/presence/heartbeat') {
+        presenceHeartbeats.push(JSON.parse(body) as { status: string; activity: unknown });
+        response.writeHead(204);
+        response.end();
+        return;
+      }
+      if (/^\/api\/groups\/[0-9a-f-]+\/presence-changes\?/i.test(path)) {
+        resolvePresencePollStarted();
+        await new Promise<void>((resolve) => response.once('close', resolve));
+        if (!response.writableFinished) cancelledPresencePolls++;
+        return;
+      }
+      const result = await api(path, body, user);
       response.setHeader('Content-Type', 'application/json');
       response.end(JSON.stringify(result));
     } catch { response.writeHead(503); response.end('{}'); }
@@ -118,6 +143,7 @@ export async function startDesktopApi(nickname = '测试小狼') {
   await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('测试 API 未启动');
-  return { url: 'http://127.0.0.1:' + address.port, close: () => new Promise<void>((done, reject) =>
-    server.close((error) => error ? reject(error) : done())) };
+  return { url: 'http://127.0.0.1:' + address.port, presenceHeartbeats, presencePollStarted,
+    cancelledPresencePollCount: () => cancelledPresencePolls,
+    close: () => new Promise<void>((done, reject) => server.close((error) => error ? reject(error) : done())) };
 }

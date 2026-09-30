@@ -10,6 +10,7 @@ import {
   type AuthSessionStatus,
   type AuthUser,
 } from './auth/authApi';
+import { sendPresenceHeartbeat } from './presence/presenceApi';
 
 const desktop = window.lycanDesktop;
 const SESSION_HEARTBEAT_INTERVAL_MS = 20_000;
@@ -26,6 +27,7 @@ const profileOpen = ref(false);
 const windowMaximized = ref(false);
 let sessionHeartbeat: number | null = null;
 let sessionHeartbeatInFlight = false;
+let logoutInProgress = false;
 
 const setupRequired = computed(() => !initialized.value);
 const registering = computed(() => setupRequired.value || registrationMode.value);
@@ -43,7 +45,7 @@ function toggleRegistrationMode() {
   error.value = '';
 }
 const removeMaximizedChange = desktop?.onMaximizedChange((maximized) => { windowMaximized.value = maximized; });
-const removeClose = desktop?.onClose(() => { if (!user.value) desktop.finishClose(); });
+const removeClose = desktop?.onClose(() => { if (!user.value && !logoutInProgress) desktop.finishClose(); });
 void desktop?.isMaximized().then((maximized) => { windowMaximized.value = maximized; }).catch(() => undefined);
 window.addEventListener('lycan:unauthorized', expired);
 onScopeDispose(() => {
@@ -146,11 +148,22 @@ async function submitCredentials() {
 
 async function logout() {
   error.value = '';
+  const previousUser = user.value;
+  logoutInProgress = true;
+  user.value = null;
+  await sendPresenceHeartbeat('OFFLINE', null, AbortSignal.timeout(1_200)).catch(() => undefined);
   try {
     await authRequest<void>('logout', 'POST');
     setBrowserSession(null);
     expired();
-  } catch (exception) { error.value = exception instanceof Error ? exception.message : '退出登录失败'; }
+  } catch (exception) {
+    if (exception instanceof Error && exception.name === 'ApiRequestError'
+        && 'status' in exception && exception.status === 401) return;
+    if (previousUser) user.value = previousUser;
+    error.value = exception instanceof Error ? exception.message : '退出登录失败';
+  } finally {
+    logoutInProgress = false;
+  }
 }
 async function clearLocalSession() {
   try { await desktop?.clearSession(); await initialize(); }
