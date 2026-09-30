@@ -33,7 +33,7 @@ docker compose ps
 mvn -f services/api/pom.xml spring-boot:run
 ```
 
-首次启动会自动执行数据库迁移。默认端口为 `18080`，可通过环境变量 `SERVER_PORT` 修改。
+首次启动会自动执行数据库迁移。默认端口为 `18080`，可通过环境变量 `SERVER_PORT` 修改。普通模式没有配置 `server.address`，不能仅凭下面的 `localhost` 访问地址认定后端只监听本机；`rtc-local` 模式才明确绑定 `127.0.0.1`。当前注册入口开放，普通模式也不要暴露到公网或不可信局域网。
 
 - 初始化信息：<http://localhost:18080/api/system/initialization>，返回初始化状态和服务器 UTC 时间。
 - 健康检查：<http://localhost:18080/actuator/health>

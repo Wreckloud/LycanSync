@@ -71,7 +71,7 @@ public class AuthController {
     }
 
     @PutMapping("/me")
-    @Operation(summary = "修改昵称和头像", description = "头像支持不超过 512 KB、1024×1024 的 PNG/JPEG data URL")
+    @Operation(summary = "修改昵称和头像", description = "头像支持不超过 96 KiB、256×256 的 PNG/JPEG data URL")
     public AuthUser update(@AuthenticationPrincipal AuthenticatedUser user,
                            @Valid @RequestBody ProfileUpdateRequest request) {
         return profileService.update(user, request);

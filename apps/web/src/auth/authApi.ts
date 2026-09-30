@@ -38,12 +38,19 @@ export function setBrowserSession(token: string | null) {
 // 浏览器开发仅在内存保留会话；桌面凭据由主进程保存并只附加到允许转发的接口。
 export async function authenticatedFetch(input: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers);
-  if (browserSession) headers.set('Authorization', 'Bearer ' + browserSession);
+  const requestSession = browserSession;
+  if (requestSession) headers.set('Authorization', 'Bearer ' + requestSession);
   const response = await fetch(input, { ...init, headers, credentials: 'omit', cache: 'no-store' });
   const path = new URL(input, 'http://localhost').pathname;
   if (response.status === 401 && !publicApiPaths.has(path)) {
-    browserSession = null;
-    window.dispatchEvent(new Event('lycan:unauthorized'));
+    if (window.lycanDesktop) {
+      if (response.headers.get('X-Lycan-Session-Expired') === 'true') {
+        window.dispatchEvent(new Event('lycan:unauthorized'));
+      }
+    } else if (browserSession === requestSession) {
+      browserSession = null;
+      window.dispatchEvent(new Event('lycan:unauthorized'));
+    }
   }
   return response;
 }

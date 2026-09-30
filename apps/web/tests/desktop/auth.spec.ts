@@ -89,6 +89,104 @@ test('桌面本地注册、加密保存、重启恢复与退出撤销', async ()
   }
 });
 
+test('旧桌面会话的延迟 401 不退出新会话，当前会话 401 仍会退出', async () => {
+  const oldToken = randomBytes(32).toString('base64url');
+  const currentToken = randomBytes(32).toString('base64url');
+  const user = { id: randomUUID(), nickname: 'Session race', avatar: '', administrator: false };
+  let loginCount = 0;
+  let delayedSessionStarted!: () => void;
+  let releaseDelayedSession!: () => void;
+  let delayedSessionFinished!: () => void;
+  const delayedSessionStartedPromise = new Promise<void>((resolve) => { delayedSessionStarted = resolve; });
+  const delayedSessionGate = new Promise<void>((resolve) => { releaseDelayedSession = resolve; });
+  const delayedSessionFinishedPromise = new Promise<void>((resolve) => { delayedSessionFinished = resolve; });
+  let delayedSessionUsed = false;
+  let currentSessionExpired = false;
+  const server = createServer(async (request, response) => {
+    for await (const _chunk of request) { /* Drain the request before responding. */ }
+    response.setHeader('Content-Type', 'application/json');
+    const authorization = request.headers.authorization;
+    if (request.url === '/api/system/initialization') response.end(JSON.stringify({ initialized: true }));
+    else if (request.url === '/api/auth/me') {
+      if (authorization === 'Bearer ' + currentToken && currentSessionExpired) {
+        response.writeHead(401); response.end('{}');
+      } else if (authorization === 'Bearer ' + oldToken || authorization === 'Bearer ' + currentToken) {
+        response.end(JSON.stringify(user));
+      } else { response.writeHead(401); response.end('{}'); }
+    } else if (request.url === '/api/auth/local/login') {
+      loginCount++;
+      response.end(JSON.stringify({ sessionToken: loginCount === 1 ? oldToken : currentToken, user }));
+    } else if (request.url === '/api/auth/session' && authorization === 'Bearer ' + oldToken && !delayedSessionUsed) {
+      delayedSessionUsed = true;
+      delayedSessionStarted();
+      await delayedSessionGate;
+      response.writeHead(401); response.end('{}');
+      delayedSessionFinished();
+    } else if (request.url === '/api/auth/session' && authorization === 'Bearer ' + currentToken) {
+      response.writeHead(401); response.end('{}');
+    } else if (request.url === '/api/auth/logout'
+      && [oldToken, currentToken].some((token) => authorization === 'Bearer ' + token)) {
+      response.writeHead(204); response.end();
+    } else if (request.url === '/api/groups' && authorization) response.end('[]');
+    else if (request.url?.startsWith('/api/rtc/room-occupancies')) response.end('[]');
+    else if (request.url === '/api/presence/heartbeat') { response.writeHead(204); response.end(); }
+    else { response.writeHead(404); response.end('{}'); }
+  });
+  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('测试服务启动失败');
+  const userDataDir = test.info().outputPath('session-race-profile');
+  mkdirSync(userDataDir, { recursive: true });
+  const application = await electron.launch({
+    args: [resolve('electron/main.cjs'), '--user-data-dir=' + userDataDir],
+    env: { ...process.env, LYCANSYNC_API_URL: 'http://127.0.0.1:' + address.port },
+  });
+  try {
+    const page = await application.firstWindow();
+    await page.clock.install();
+    await expect(page.getByRole('heading', { name: '一起开黑，一起看' })).toBeVisible();
+    await page.getByLabel('用户名').fill('session_race');
+    await page.getByLabel('密码', { exact: true }).fill('session-password');
+    await page.getByRole('button', { name: '登录', exact: true }).click();
+    await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+
+    await page.clock.fastForward(20_100);
+    await delayedSessionStartedPromise;
+    await page.getByRole('button', { name: '个人设置', exact: true }).click();
+    await page.getByRole('button', { name: '退出登录', exact: true }).click();
+    await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
+    expect(existsSync(resolve(userDataDir, 'session.bin'))).toBe(false);
+
+    await page.getByLabel('用户名').fill('session_race');
+    await page.getByLabel('密码', { exact: true }).fill('session-password');
+    await page.getByRole('button', { name: '登录', exact: true }).click();
+    await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+    expect(existsSync(resolve(userDataDir, 'session.bin'))).toBe(true);
+
+    const delayedResponsePromise = page.waitForResponse((result) =>
+      result.url().endsWith('/api/auth/session') && result.status() === 401);
+    releaseDelayedSession();
+    const delayedResponse = await delayedResponsePromise;
+    expect(await delayedResponse.headerValue('X-Lycan-Session-Expired')).toBe('false');
+    await delayedSessionFinishedPromise;
+    await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+    expect(existsSync(resolve(userDataDir, 'session.bin'))).toBe(true);
+
+    currentSessionExpired = true;
+    const currentSessionResponsePromise = page.waitForResponse((result) =>
+      result.url().endsWith('/api/auth/me') && result.status() === 401);
+    await page.getByRole('button', { name: '个人设置', exact: true }).click();
+    const currentSessionResponse = await currentSessionResponsePromise;
+    expect(await currentSessionResponse.headerValue('X-Lycan-Session-Expired')).toBe('true');
+    await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
+    expect(existsSync(resolve(userDataDir, 'session.bin'))).toBe(false);
+  } finally {
+    releaseDelayedSession();
+    await application.close();
+    await new Promise<void>((done, reject) => server.close((error) => error ? reject(error) : done()));
+  }
+});
+
 test('桌面已初始化服务器允许创建普通账号', async () => {
   const token = randomBytes(32).toString('base64url');
   const user = { id: randomUUID(), nickname: 'Friend', avatar: '', administrator: false };

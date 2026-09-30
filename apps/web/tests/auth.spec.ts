@@ -49,8 +49,8 @@ test('首次注册创建管理员并在浏览器内存保存会话', async ({ pa
   await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
   expect(registration).toEqual({ username: 'Admin', password: 'abc123' });
   await expect.poll(() => groupAuthorization).toBe('Bearer ' + token);
-  expect(await page.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length })))
-    .toEqual({ local: 0, session: 0 });
+  expect(await page.evaluate(() => localStorage.length)).toBe(0);
+  expect(await page.evaluate((sessionToken) => Object.values(sessionStorage).includes(sessionToken), token)).toBe(false);
 });
 
 test('已初始化服务器使用本地账号登录', async ({ page }) => {
@@ -74,6 +74,97 @@ test('已初始化服务器使用本地账号登录', async ({ page }) => {
 
   await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
   expect(login).toEqual({ username: 'friend', password: 'friend-password' });
+});
+
+test('浏览器旧会话的延迟 401 不退出新会话，当前会话 401 仍会退出', async ({ page }) => {
+  await page.clock.install();
+  const oldToken = 'd'.repeat(43);
+  const currentToken = 'e'.repeat(43);
+  const user = { id: 'session-race-user', nickname: '会话竞态', avatar: '', administrator: false };
+  let loginCount = 0;
+  let delayedSessionStarted!: () => void;
+  let releaseDelayedSession!: () => void;
+  let delayedSessionFinished!: () => void;
+  const delayedSessionStartedPromise = new Promise<void>((resolve) => { delayedSessionStarted = resolve; });
+  const delayedSessionGate = new Promise<void>((resolve) => { releaseDelayedSession = resolve; });
+  const delayedSessionFinishedPromise = new Promise<void>((resolve) => { delayedSessionFinished = resolve; });
+  let delayedSessionWasStarted = false;
+  let delayedSessionUsed = false;
+  let currentSessionExpired = false;
+
+  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/auth/me', (route) => {
+    const authorization = route.request().headers().authorization;
+    if (authorization === `Bearer ${currentToken}` && currentSessionExpired) {
+      return route.fulfill({ status: 401, json: { detail: '会话已失效' } });
+    }
+    if (authorization === `Bearer ${oldToken}` || authorization === `Bearer ${currentToken}`) {
+      return route.fulfill({ json: user });
+    }
+    return route.fulfill({ status: 401, json: { detail: '请先登录' } });
+  });
+  await page.route('**/api/auth/local/login', async (route) => {
+    loginCount++;
+    await route.fulfill({ json: { sessionToken: loginCount === 1 ? oldToken : currentToken, user } });
+  });
+  await page.route('**/api/auth/logout', (route) => route.fulfill({ status: 204 }));
+  await page.route('**/api/auth/session', async (route) => {
+    const authorization = route.request().headers().authorization;
+    if (authorization === `Bearer ${oldToken}` && !delayedSessionUsed) {
+      delayedSessionUsed = true;
+      delayedSessionWasStarted = true;
+      delayedSessionStarted();
+      await delayedSessionGate;
+      try { await route.fulfill({ status: 401, json: { detail: '旧会话已失效' } }); }
+      finally { delayedSessionFinished(); }
+      return;
+    }
+    if (authorization === `Bearer ${currentToken}`) {
+      return route.fulfill({ json: { id: user.id, nickname: user.nickname, administrator: user.administrator } });
+    }
+    return route.fulfill({ status: 401, json: { detail: '请先登录' } });
+  });
+  await page.route('**/api/groups', (route) => route.fulfill({ json: [] }));
+  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
+    json: { participantCount: 0, participants: [] },
+  }));
+  await page.route('**/api/rtc/room-occupancies', (route) => route.fulfill({ json: [] }));
+
+  try {
+    await page.goto('/');
+    await page.getByLabel('用户名').fill('session_race');
+    await page.getByLabel('密码', { exact: true }).fill('session-password');
+    await page.getByRole('button', { name: '登录', exact: true }).click();
+    await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+
+    await page.clock.fastForward(20_100);
+    await delayedSessionStartedPromise;
+    await page.getByRole('button', { name: '个人设置', exact: true }).click();
+    await page.getByRole('button', { name: '退出登录', exact: true }).click();
+    await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
+
+    await page.getByLabel('用户名').fill('session_race');
+    await page.getByLabel('密码', { exact: true }).fill('session-password');
+    await page.getByRole('button', { name: '登录', exact: true }).click();
+    await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+
+    const delayedResponsePromise = page.waitForResponse((response) =>
+      response.url().endsWith('/api/auth/session') && response.status() === 401);
+    releaseDelayedSession();
+    await delayedResponsePromise;
+    await delayedSessionFinishedPromise;
+    await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+
+    currentSessionExpired = true;
+    const currentResponsePromise = page.waitForResponse((response) =>
+      response.url().endsWith('/api/auth/me') && response.status() === 401);
+    await page.getByRole('button', { name: '个人设置', exact: true }).click();
+    await currentResponsePromise;
+    await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
+  } finally {
+    releaseDelayedSession();
+    if (delayedSessionWasStarted) await delayedSessionFinishedPromise;
+  }
 });
 
 test('已初始化服务器允许创建普通账号', async ({ page }) => {
