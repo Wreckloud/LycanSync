@@ -12,7 +12,13 @@ use windows::core::{IInspectable, Interface};
 
 pub(super) struct HardwareD3dDevice {
     pub(super) winrt_device: IDirect3DDevice,
+    #[cfg(feature = "shared-texture-output")]
+    pub(super) context: ID3D11DeviceContext,
+    #[cfg(not(feature = "shared-texture-output"))]
     _context: ID3D11DeviceContext,
+    #[cfg(feature = "shared-texture-output")]
+    pub(super) device: ID3D11Device,
+    #[cfg(not(feature = "shared-texture-output"))]
     _device: ID3D11Device,
 }
 
@@ -49,7 +55,13 @@ impl HardwareD3dDevice {
             .map_err(|_| ErrorCode::HardwareD3dUnavailable)?;
         Ok(Self {
             winrt_device,
+            #[cfg(feature = "shared-texture-output")]
+            context,
+            #[cfg(not(feature = "shared-texture-output"))]
             _context: context,
+            #[cfg(feature = "shared-texture-output")]
+            device,
+            #[cfg(not(feature = "shared-texture-output"))]
             _device: device,
         })
     }

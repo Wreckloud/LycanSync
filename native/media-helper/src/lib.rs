@@ -8,14 +8,18 @@ mod sources;
 pub mod state;
 
 use protocol::VideoSource;
+#[cfg(not(feature = "shared-texture-output"))]
+use protocol::unavailable_video_output_capability;
 use protocol::{
     Capability, CommandEnvelope, ErrorCode, MAX_LINE_BYTES, OutboundEvent, PROTOCOL_VERSION,
-    audio_source_discovery_capability, unavailable_capability, unavailable_video_output_capability,
-    valid_identifier,
+    audio_source_discovery_capability, unavailable_capability, valid_identifier,
 };
 use sources::{DiscoveryRuntime, SourceRegistry};
 use state::{SessionMachine, SessionState};
 use std::io::{self, BufRead, Write};
+use std::sync::Mutex;
+
+pub(crate) static EVENT_OUTPUT_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn run<R: BufRead, W: Write>(mut input: R, mut output: W) -> io::Result<()> {
     let mut runtime = Runtime::default();
@@ -52,6 +56,9 @@ pub fn run<R: BufRead, W: Write>(mut input: R, mut output: W) -> io::Result<()> 
                 ..
             }
         );
+        let _output_lock = EVENT_OUTPUT_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         serde_json::to_writer(&mut output, &event)?;
         output.write_all(b"\n")?;
         output.flush()?;
@@ -130,6 +137,9 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                     .and_then(|value| value.raw_timestamp_anomalies),
                 last_frame_age_ms: snapshot.as_ref().and_then(|value| value.last_frame_age_ms),
                 size_changes: snapshot.as_ref().and_then(|value| value.size_changes),
+                frame_pool_recreates: snapshot
+                    .as_ref()
+                    .and_then(|value| value.frame_pool_recreates),
                 last_capture_error: snapshot.as_ref().and_then(|value| value.last_capture_error),
                 stop_duration_ms: snapshot.as_ref().and_then(|value| value.stop_duration_ms),
                 microphone_probe: runtime.audio_probe.snapshot(),
@@ -232,20 +242,65 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                 ),
             }
         }
+        #[cfg(feature = "shared-texture-output")]
+        CommandEnvelope::ReleaseSharedTextureSlot {
+            request_id,
+            session_id,
+            slot_index,
+            ..
+        } => match runtime.release_shared_texture_slot(session_id, *slot_index) {
+            Ok(()) => OutboundEvent::Acknowledged {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: request_id.clone(),
+                command: "releaseSharedTextureSlot",
+                state: runtime.state(),
+                changed: true,
+            },
+            Err(code) => error(
+                runtime,
+                Some(request_id.clone()),
+                code,
+                code.public_message(),
+            ),
+        },
         CommandEnvelope::StartVideo {
             request_id,
-            session_id: _session_id,
-            source_id: _source_id,
-            target_width: _target_width,
-            target_height: _target_height,
-            max_fps: _max_fps,
+            session_id,
+            source_id,
+            target_width,
+            target_height,
+            max_fps,
             ..
-        } => error(
-            runtime,
-            Some(request_id.clone()),
-            ErrorCode::VideoOutputUnavailable,
-            ErrorCode::VideoOutputUnavailable.public_message(),
-        ),
+        } => {
+            if !valid_identifier(session_id)
+                || !valid_identifier(source_id)
+                || !(1..=8192).contains(target_width)
+                || !(1..=8192).contains(target_height)
+                || !(1..=60).contains(max_fps)
+            {
+                return error(
+                    runtime,
+                    Some(request_id.clone()),
+                    ErrorCode::InvalidRequest,
+                    "视频参数无效",
+                );
+            }
+            match runtime.start_video(session_id, source_id, *max_fps) {
+                Ok(()) => OutboundEvent::Acknowledged {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: request_id.clone(),
+                    command: "startVideo",
+                    state: runtime.state(),
+                    changed: true,
+                },
+                Err(code) => error(
+                    runtime,
+                    Some(request_id.clone()),
+                    code,
+                    code.public_message(),
+                ),
+            }
+        }
         CommandEnvelope::StartCaptureProbe {
             request_id,
             session_id,
@@ -278,14 +333,23 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
         }
         CommandEnvelope::StopVideo {
             request_id,
-            session_id: _session_id,
+            session_id,
             ..
-        } => error(
-            runtime,
-            Some(request_id.clone()),
-            ErrorCode::VideoOutputUnavailable,
-            ErrorCode::VideoOutputUnavailable.public_message(),
-        ),
+        } => match runtime.stop_probe(session_id) {
+            Ok(changed) => OutboundEvent::Acknowledged {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: request_id.clone(),
+                command: "stopVideo",
+                state: runtime.state(),
+                changed,
+            },
+            Err(code) => error(
+                runtime,
+                Some(request_id.clone()),
+                code,
+                code.public_message(),
+            ),
+        },
         CommandEnvelope::StopCaptureProbe {
             request_id,
             session_id,
@@ -396,8 +460,15 @@ impl Runtime {
         self.audio_probe.reap_finished();
     }
 
-    fn video_capture_capability(&self) -> Capability {
-        unavailable_video_output_capability()
+    fn video_capture_capability(&mut self) -> Capability {
+        #[cfg(feature = "shared-texture-output")]
+        {
+            self.discovery.video_capture_capability()
+        }
+        #[cfg(not(feature = "shared-texture-output"))]
+        {
+            unavailable_video_output_capability()
+        }
     }
 
     fn capture_probe_capability(&mut self) -> Capability {
@@ -405,6 +476,32 @@ impl Runtime {
     }
 
     fn start_probe(&mut self, session_id: &str, source_id: &str) -> Result<(), ErrorCode> {
+        self.start_capture_session(session_id, source_id, None)
+    }
+
+    fn start_video(
+        &mut self,
+        session_id: &str,
+        source_id: &str,
+        max_fps: u16,
+    ) -> Result<(), ErrorCode> {
+        #[cfg(feature = "shared-texture-output")]
+        {
+            self.start_capture_session(session_id, source_id, Some(max_fps))
+        }
+        #[cfg(not(feature = "shared-texture-output"))]
+        {
+            let _ = (session_id, source_id, max_fps);
+            Err(ErrorCode::VideoOutputUnavailable)
+        }
+    }
+
+    fn start_capture_session(
+        &mut self,
+        session_id: &str,
+        source_id: &str,
+        max_fps: Option<u16>,
+    ) -> Result<(), ErrorCode> {
         self.reap_finished_capture();
         if self.state() != SessionState::Idle {
             return Err(ErrorCode::CaptureAlreadyRunning);
@@ -423,7 +520,12 @@ impl Runtime {
         self.session
             .begin(session_id.to_owned())
             .map_err(|_| ErrorCode::CaptureAlreadyRunning)?;
-        if let Err(error) = self.capture.start(target.thread_target(), source_kind) {
+        if let Err(error) = self.capture.start(
+            target.thread_target(),
+            source_kind,
+            session_id.to_owned(),
+            max_fps,
+        ) {
             let _ = self.session.fail_start();
             return Err(error);
         }
@@ -434,6 +536,18 @@ impl Runtime {
         }
         self.last_completed_session_id = None;
         Ok(())
+    }
+
+    #[cfg(feature = "shared-texture-output")]
+    fn release_shared_texture_slot(
+        &mut self,
+        session_id: &str,
+        slot_index: u8,
+    ) -> Result<(), ErrorCode> {
+        if self.session_id() != Some(session_id) {
+            return Err(ErrorCode::CaptureSessionMismatch);
+        }
+        self.capture.release_shared_texture_slot(slot_index)
     }
 
     fn stop_probe(&mut self, session_id: &str) -> Result<bool, ErrorCode> {
@@ -561,6 +675,7 @@ mod tests {
         assert_eq!(events[0]["event"], "hello");
         assert_eq!(events[0]["state"], "idle");
         assert!(events[1]["videoCapture"]["available"].is_boolean());
+        #[cfg(not(feature = "shared-texture-output"))]
         assert_eq!(events[1]["videoCapture"]["available"], false);
         assert!(events[1]["captureProbe"]["available"].is_boolean());
         assert_eq!(events[1]["systemAudioCapture"]["available"], false);
@@ -580,6 +695,9 @@ mod tests {
 "#,
         );
 
+        #[cfg(feature = "shared-texture-output")]
+        assert_eq!(events[0]["code"], "invalidRequest");
+        #[cfg(not(feature = "shared-texture-output"))]
         assert_eq!(events[0]["code"], "videoOutputUnavailable");
         assert_eq!(events[0]["state"], "idle");
         assert_eq!(events[1]["code"], "invalidRequest");
@@ -603,11 +721,13 @@ mod tests {
             "rawFrameIntervalP95Ms",
             "rawFrameIntervalP99Ms",
             "rawTimestampAnomalies",
+            "framePoolRecreates",
         ] {
             assert!(diagnostics.get(field).is_some(), "missing {field}");
         }
         assert_eq!(diagnostics["rawCaptureFps"], serde_json::Value::Null);
         assert_eq!(diagnostics["probeProcessedFps"], serde_json::Value::Null);
+        assert_eq!(diagnostics["framePoolRecreates"], serde_json::Value::Null);
         assert_eq!(
             diagnostics["rawFrameIntervalP50Ms"],
             serde_json::Value::Null

@@ -109,7 +109,7 @@ fn read_events(stdout: ChildStdout, event_sender: mpsc::Sender<String>) {
 }
 
 #[test]
-fn hello_unimplemented_video_and_shutdown_use_protocol_v1() {
+fn hello_video_start_requires_a_current_source_and_shutdown_use_protocol_v1() {
     let mut helper = HelperProcess::spawn();
     helper.send("{\"protocolVersion\":1,\"requestId\":\"hello-1\",\"command\":\"hello\"}\n");
     let hello = helper.next_event();
@@ -119,9 +119,12 @@ fn hello_unimplemented_video_and_shutdown_use_protocol_v1() {
     helper.send(
         "{\"protocolVersion\":1,\"requestId\":\"video-1\",\"command\":\"startVideo\",\"sessionId\":\"s1\",\"sourceId\":\"monitor:1:0\",\"targetWidth\":1920,\"targetHeight\":1080,\"maxFps\":60}\n",
     );
-    let unavailable = helper.next_event();
-    assert_eq!(unavailable["event"], "error");
-    assert_eq!(unavailable["code"], "videoOutputUnavailable");
+    let invalid_source = helper.next_event();
+    assert_eq!(invalid_source["event"], "error");
+    #[cfg(feature = "shared-texture-output")]
+    assert_eq!(invalid_source["code"], "invalidRequest");
+    #[cfg(not(feature = "shared-texture-output"))]
+    assert_eq!(invalid_source["code"], "videoOutputUnavailable");
 
     helper.send("{\"protocolVersion\":1,\"requestId\":\"shutdown-1\",\"command\":\"shutdown\"}\n");
     let shutdown = helper.next_event();

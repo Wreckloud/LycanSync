@@ -1,4 +1,19 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, sharedTexture } = require('electron');
+
+sharedTexture?.setSharedTextureReceiver(async ({ importedSharedTexture }, token) => {
+  let frame;
+  try {
+    if (token !== 'native-screen-frame') return;
+    frame = importedSharedTexture.getVideoFrame();
+    window.postMessage({ type: 'lycan-native-screen-frame', frame }, '*', [frame]);
+    frame = undefined;
+  } catch {
+    ipcRenderer.send('media:native-video:receiver-error');
+  } finally {
+    frame?.close();
+    importedSharedTexture.release();
+  }
+});
 
 // 只暴露固定操作，不向页面开放 Node.js 或任意 IPC 通道。
 contextBridge.exposeInMainWorld('lycanDesktop', {
@@ -12,8 +27,16 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   getCurrentActivity: () => ipcRenderer.invoke('activity:current'),
   getNativeMediaCapabilities: () => ipcRenderer.invoke('media:capabilities'),
   listNativeVideoSources: () => ipcRenderer.invoke('media:video-sources'),
+  getNativeVideoSourceThumbnails: (sources) => ipcRenderer.invoke('media:video-source-thumbnails', sources),
   startNativeCaptureProbe: (sourceId) => ipcRenderer.invoke('media:capture-probe:start', sourceId),
   stopNativeCaptureProbe: (sessionId) => ipcRenderer.invoke('media:capture-probe:stop', sessionId),
+  startNativeVideo: (sourceId, maxFps) => ipcRenderer.invoke('media:native-video:start', sourceId, maxFps),
+  stopNativeVideo: (sessionId) => ipcRenderer.invoke('media:native-video:stop', sessionId),
+  onNativeVideoError: (callback) => {
+    const listener = (_event, code) => callback(code);
+    ipcRenderer.on('media:native-video-error', listener);
+    return () => ipcRenderer.removeListener('media:native-video-error', listener);
+  },
   getNativeMediaDiagnostics: () => ipcRenderer.invoke('media:diagnostics'),
   onActivityChange: (callback) => {
     const listener = (_event, activity) => callback(activity);

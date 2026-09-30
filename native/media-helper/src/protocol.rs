@@ -72,6 +72,13 @@ pub enum CommandEnvelope {
         request_id: String,
         session_id: String,
     },
+    #[cfg(feature = "shared-texture-output")]
+    ReleaseSharedTextureSlot {
+        protocol_version: u16,
+        request_id: String,
+        session_id: String,
+        slot_index: u8,
+    },
 }
 
 impl CommandEnvelope {
@@ -113,6 +120,10 @@ impl CommandEnvelope {
             | Self::Shutdown {
                 protocol_version, ..
             } => *protocol_version,
+            #[cfg(feature = "shared-texture-output")]
+            Self::ReleaseSharedTextureSlot {
+                protocol_version, ..
+            } => *protocol_version,
         }
     }
 
@@ -130,6 +141,8 @@ impl CommandEnvelope {
             | Self::StartMicrophoneProbe { request_id, .. }
             | Self::StopMicrophoneProbe { request_id, .. }
             | Self::Shutdown { request_id, .. } => request_id,
+            #[cfg(feature = "shared-texture-output")]
+            Self::ReleaseSharedTextureSlot { request_id, .. } => request_id,
         }
     }
 }
@@ -262,6 +275,7 @@ pub enum OutboundEvent {
         raw_timestamp_anomalies: Option<u64>,
         last_frame_age_ms: Option<u64>,
         size_changes: Option<u64>,
+        frame_pool_recreates: Option<u64>,
         last_capture_error: Option<&'static str>,
         stop_duration_ms: Option<u64>,
         microphone_probe: MicrophoneProbeDiagnostics,
@@ -320,6 +334,7 @@ pub enum ErrorCode {
     CaptureFramePoolRecreateFailed,
     CaptureFrameProcessingFailed,
     CaptureCleanupFailed,
+    #[cfg_attr(feature = "shared-texture-output", allow(dead_code))]
     VideoOutputUnavailable,
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     AudioPlatformUnsupported,
@@ -411,6 +426,7 @@ pub fn unavailable_capability() -> Capability {
     }
 }
 
+#[cfg(not(feature = "shared-texture-output"))]
 pub fn unavailable_video_output_capability() -> Capability {
     Capability {
         available: false,
@@ -488,6 +504,21 @@ mod tests {
         .unwrap();
         assert_eq!(request.protocol_version(), PROTOCOL_VERSION);
         assert!(matches!(request, CommandEnvelope::StartCaptureProbe { .. }));
+    }
+
+    #[cfg(feature = "shared-texture-output")]
+    #[test]
+    fn deserializes_shared_texture_slot_release_command() {
+        let request: CommandEnvelope = serde_json::from_str(
+            r#"{"protocolVersion":1,"requestId":"release-1","command":"releaseSharedTextureSlot","sessionId":"smoke-1","slotIndex":2}"#,
+        )
+        .unwrap();
+        assert_eq!(request.protocol_version(), PROTOCOL_VERSION);
+        assert_eq!(request.request_id(), "release-1");
+        assert!(matches!(
+            request,
+            CommandEnvelope::ReleaseSharedTextureSlot { slot_index: 2, .. }
+        ));
     }
 
     #[test]

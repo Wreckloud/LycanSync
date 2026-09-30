@@ -17,6 +17,7 @@ pub(super) struct CaptureSnapshot {
     pub(super) raw_timestamp_anomalies: Option<u64>,
     pub(super) last_frame_age_ms: Option<u64>,
     pub(super) size_changes: Option<u64>,
+    pub(super) frame_pool_recreates: Option<u64>,
     pub(super) last_capture_error: Option<&'static str>,
     pub(super) stop_duration_ms: Option<u64>,
 }
@@ -32,14 +33,30 @@ impl CaptureManager {
         &mut self,
         target: ThreadCaptureTarget,
         source_kind: VideoSourceKind,
+        session_id: String,
+        max_fps: Option<u16>,
     ) -> Result<(), ErrorCode> {
         #[cfg(target_os = "windows")]
         {
-            self.windows.start(target, source_kind)
+            self.windows.start(target, source_kind, session_id, max_fps)
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = (target, source_kind);
+            let _ = (target, source_kind, session_id, max_fps);
+            Err(ErrorCode::PlatformUnsupported)
+        }
+    }
+
+    #[cfg(feature = "shared-texture-output")]
+    pub(super) fn release_shared_texture_slot(&mut self, slot_index: u8) -> Result<(), ErrorCode> {
+        #[cfg(target_os = "windows")]
+        {
+            self.windows
+                .release_shared_texture_slot(slot_index as usize)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = slot_index;
             Err(ErrorCode::PlatformUnsupported)
         }
     }

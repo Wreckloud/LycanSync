@@ -28,6 +28,9 @@ class MediaHelperManager {
     killTimeoutMs = 500,
     idleTimeoutMs = 30_000,
     retryDelayMs = 2000,
+    onSharedTextureFrame = () => {},
+    onHelperFailure = () => {},
+    onHelperClosed = () => {},
   }) {
     this.executablePath = executablePath;
     this.platform = platform;
@@ -39,6 +42,9 @@ class MediaHelperManager {
     this.killTimeoutMs = killTimeoutMs;
     this.idleTimeoutMs = idleTimeoutMs;
     this.retryDelayMs = retryDelayMs;
+    this.onSharedTextureFrame = onSharedTextureFrame;
+    this.onHelperFailure = onHelperFailure;
+    this.onHelperClosed = onHelperClosed;
     this.state = undefined;
     this.startPromise = undefined;
     this.capabilitiesPromise = undefined;
@@ -52,6 +58,10 @@ class MediaHelperManager {
     this.captureProbeStart = undefined;
     this.captureProbeStop = undefined;
     this.lastStoppedCaptureProbe = undefined;
+    this.videoCapture = undefined;
+    this.videoCaptureStart = undefined;
+    this.videoCaptureStop = undefined;
+    this.lastStoppedVideoCapture = undefined;
   }
 
   getCapabilities() {
@@ -100,6 +110,7 @@ class MediaHelperManager {
   startCaptureProbe(sourceId) {
     if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
     if (typeof sourceId !== 'string' || sourceId.length > 128) return Promise.reject(new Error('invalidVideoSource'));
+    if (this.videoCapture || this.videoCaptureStart) return Promise.reject(new Error('videoCaptureAlreadyRunning'));
     if (this.captureProbe) {
       return this.captureProbe.sourceId === sourceId
         ? Promise.resolve({ sessionId: this.captureProbe.sessionId, changed: false })
@@ -137,6 +148,119 @@ class MediaHelperManager {
     } catch (error) {
       this.videoSourceSnapshot = undefined;
       throw error;
+    }
+  }
+
+  startVideo(sourceId, maxFps, sessionId = this.createRequestId()) {
+    if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
+    if (typeof sourceId !== 'string' || sourceId.length > 128
+        || !Number.isInteger(maxFps) || maxFps < 1 || maxFps > 60
+        || typeof sessionId !== 'string' || sessionId.length > 128) {
+      return Promise.reject(new Error('invalidVideoStart'));
+    }
+    if (this.videoCapture || this.captureProbe) return Promise.reject(new Error('videoCaptureAlreadyRunning'));
+    if (this.videoCaptureStart || this.captureProbeStart) {
+      return Promise.reject(new Error('videoCaptureAlreadyStarting'));
+    }
+    const snapshot = this.videoSourceSnapshot;
+    if (!snapshot || !snapshot.ids.has(sourceId) || !snapshot.state.alive) {
+      return Promise.reject(new Error('videoSourceExpired'));
+    }
+    this.clearIdleTimer();
+    const active = { state: snapshot.state, sessionId, sourceId, maxFps, starting: true };
+    this.videoCapture = active;
+    snapshot.state.videoSessionId = sessionId;
+    const promise = this.runStartVideo(snapshot.state, sessionId, sourceId, maxFps)
+      .finally(() => {
+        if (this.videoCaptureStart?.promise === promise) this.videoCaptureStart = undefined;
+        if (this.canCloseWhenIdle(snapshot.state)) this.scheduleIdleShutdown(snapshot.state);
+      });
+    this.videoCaptureStart = { state: snapshot.state, sourceId, promise };
+    return promise;
+  }
+
+  async runStartVideo(state, sessionId, sourceId, maxFps) {
+    try {
+      const response = await this.sendRequest(state, 'startVideo', 'acknowledged', this.requestTimeoutMs,
+        { sessionId, sourceId, targetWidth: 1920, targetHeight: 1080, maxFps });
+      if (response.command !== 'startVideo' || response.changed !== true) {
+        throw new Error('mediaHelperInvalidVideoStart');
+      }
+      if (this.videoCapture?.state === state && this.videoCapture.sessionId === sessionId) {
+        this.videoCapture.starting = false;
+      }
+      return { sessionId, changed: true };
+    } catch (error) {
+      if (this.videoCapture?.state === state && this.videoCapture.sessionId === sessionId) {
+        this.videoCapture = undefined;
+      }
+      delete state.videoSessionId;
+      this.videoSourceSnapshot = undefined;
+      throw error;
+    }
+  }
+
+  releaseSharedTextureSlot(sessionId, slotIndex) {
+    const active = this.videoCapture;
+    if (!active || active.sessionId !== sessionId || !Number.isInteger(slotIndex)
+        || slotIndex < 0 || slotIndex >= 3) {
+      return Promise.reject(new Error('sharedTextureSlotMismatch'));
+    }
+    return this.sendRequest(active.state, 'releaseSharedTextureSlot', 'acknowledged', this.requestTimeoutMs,
+      { sessionId, slotIndex }).then((response) => {
+      if (response.command !== 'releaseSharedTextureSlot') throw new Error('mediaHelperInvalidSlotRelease');
+      return { changed: response.changed };
+    });
+  }
+
+  stopVideo(sessionId) {
+    if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
+    if (typeof sessionId !== 'string' || sessionId.length > 128) {
+      return Promise.reject(new Error('invalidVideoSession'));
+    }
+    if (!this.videoCapture) {
+      return this.lastStoppedVideoCapture === sessionId
+        ? Promise.resolve({ changed: false })
+        : Promise.reject(new Error('videoSessionMismatch'));
+    }
+    if (this.videoCapture.sessionId !== sessionId) return Promise.reject(new Error('videoSessionMismatch'));
+    if (this.videoCaptureStart) {
+      return this.videoCaptureStart.promise.then(() => this.stopVideo(sessionId));
+    }
+    if (this.videoCaptureStop) return this.videoCaptureStop;
+    const active = this.videoCapture;
+    const promise = this.runStopVideo(active).finally(() => {
+      if (this.videoCaptureStop === promise) this.videoCaptureStop = undefined;
+    });
+    this.videoCaptureStop = promise;
+    return promise;
+  }
+
+  async abortVideo(sessionId) {
+    const active = this.videoCapture;
+    if (!active || active.sessionId !== sessionId) {
+      return this.lastStoppedVideoCapture === sessionId ? { changed: false } : Promise.reject(new Error('videoSessionMismatch'));
+    }
+    const state = active.state;
+    this.failState(state, new Error('nativeVideoAbortRequested'));
+    if (!await waitForClose(state.closedPromise, this.killTimeoutMs)) {
+      throw new Error('mediaHelperTerminationUnconfirmed');
+    }
+    return { changed: true };
+  }
+
+  async runStopVideo(active) {
+    this.clearIdleTimer();
+    try {
+      const response = await this.sendRequest(active.state, 'stopVideo', 'acknowledged', this.requestTimeoutMs,
+        { sessionId: active.sessionId });
+      if (response.command !== 'stopVideo') throw new Error('mediaHelperInvalidVideoStop');
+      this.videoCapture = undefined;
+      this.lastStoppedVideoCapture = active.sessionId;
+      delete active.state.videoSessionId;
+      return { changed: response.changed };
+    } finally {
+      if (this.canCloseWhenIdle(active.state)) this.scheduleIdleShutdown(active.state);
     }
   }
 
@@ -188,6 +312,11 @@ class MediaHelperManager {
           && (diagnostics.state === 'idle' || diagnostics.sessionId !== this.captureProbe.sessionId)) {
         this.lastStoppedCaptureProbe = this.captureProbe.sessionId;
         this.captureProbe = undefined;
+      }
+      if (this.videoCapture?.state === state
+          && (diagnostics.state === 'idle' || diagnostics.sessionId !== this.videoCapture.sessionId)) {
+        this.lastStoppedVideoCapture = this.videoCapture.sessionId;
+        this.videoCapture = undefined;
       }
       return diagnostics;
     } finally {
@@ -252,6 +381,7 @@ class MediaHelperManager {
       }
     });
     child.once('close', () => {
+      try { this.onHelperClosed(state); } catch { /* Process close must complete regardless of cleanup hooks. */ }
       state.alive = false;
       state.closed = true;
       state.resolveClose();
@@ -330,8 +460,27 @@ class MediaHelperManager {
       this.failState(state, new Error('mediaHelperInvalidJson'));
       return;
     }
-    if (!message || message.protocolVersion !== PROTOCOL_VERSION
-        || typeof message.requestId !== 'string' || typeof message.event !== 'string') {
+    if (!message || message.protocolVersion !== PROTOCOL_VERSION || typeof message.event !== 'string') {
+      this.failState(state, new Error('mediaHelperInvalidResponse'));
+      return;
+    }
+    if (message.event === 'sharedTextureFrame') {
+      const active = this.videoCapture;
+      if (!active || active.state !== state || active.sessionId !== message.sessionId
+          || !Number.isInteger(message.slotIndex) || message.slotIndex < 0 || message.slotIndex >= 3
+          || typeof message.sourceHandleHex !== 'string' || !/^[0-9a-f]{16}$/i.test(message.sourceHandleHex)
+          || message.pixelFormat !== 'bgra' || !validTextureSize(message.codedSize)
+          || !validTextureSize(message.contentSize)
+          || message.contentSize.width > message.codedSize.width
+          || message.contentSize.height > message.codedSize.height) {
+        this.failState(state, new Error('mediaHelperInvalidSharedTextureFrame'));
+        return;
+      }
+      try { this.onSharedTextureFrame(state, message); }
+      catch { this.failState(state, new Error('mediaHelperSharedTextureDeliveryFailed')); }
+      return;
+    }
+    if (typeof message.requestId !== 'string') {
       this.failState(state, new Error('mediaHelperInvalidResponse'));
       return;
     }
@@ -372,6 +521,10 @@ class MediaHelperManager {
     if (this.startPromise && !state.ready) this.startPromise = undefined;
     this.clearIdleTimer();
     this.rejectPending(state, error);
+    if (!state.failureNotified) {
+      state.failureNotified = true;
+      try { this.onHelperFailure(state, safeFailureCode(error)); } catch { /* Child teardown remains authoritative. */ }
+    }
     if (!state.intentionalClose) this.terminateState(state);
   }
 
@@ -405,14 +558,16 @@ class MediaHelperManager {
 
   canCloseWhenIdle(state) {
     return this.state === state && state.alive && state.pending.size === 0
-      && !this.closingDown(state) && this.captureProbe?.state !== state
-      && this.captureProbeStart?.promise === undefined;
+      && !this.closingDown(state) && this.captureProbe?.state !== state && this.videoCapture?.state !== state
+      && this.captureProbeStart?.promise === undefined && this.videoCaptureStart?.promise === undefined;
   }
 
   invalidateState(state) {
     if (this.videoSourceSnapshot?.state === state) this.videoSourceSnapshot = undefined;
     if (this.captureProbe?.state === state) this.captureProbe = undefined;
     if (this.captureProbeStart?.state === state) this.captureProbeStart = undefined;
+    if (this.videoCapture?.state === state) this.videoCapture = undefined;
+    if (this.videoCaptureStart?.state === state) this.videoCaptureStart = undefined;
   }
 
   clearIdleTimer() {
@@ -510,10 +665,12 @@ function validateDiagnostics(message) {
   const numericFields = [
     'frameWidth', 'frameHeight', 'framesReceived', 'framesProcessed', 'droppedNotifications',
     'rawCaptureFps', 'probeProcessedFps', 'rawFrameIntervalP50Ms', 'rawFrameIntervalP95Ms',
-    'rawFrameIntervalP99Ms', 'rawTimestampAnomalies', 'lastFrameAgeMs', 'sizeChanges', 'stopDurationMs',
+    'rawFrameIntervalP99Ms', 'rawTimestampAnomalies', 'lastFrameAgeMs', 'sizeChanges',
+    'framePoolRecreates', 'stopDurationMs',
   ];
   for (const field of numericFields) {
     const value = message[field];
+    if (field === 'framePoolRecreates' && value === undefined) continue;
     if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) {
       throw new Error('mediaHelperInvalidDiagnostics');
     }
@@ -524,11 +681,24 @@ function validateDiagnostics(message) {
           || !/^[a-z][A-Za-z0-9]*$/.test(message.lastCaptureError)))) {
     throw new Error('mediaHelperInvalidDiagnostics');
   }
-  return Object.fromEntries(['state', 'sessionId', 'available', 'sourceKind', 'frameWidth', 'frameHeight',
+  const diagnostics = Object.fromEntries(['state', 'sessionId', 'available', 'sourceKind', 'frameWidth', 'frameHeight',
     'framesReceived', 'framesProcessed', 'droppedNotifications', 'rawCaptureFps', 'probeProcessedFps',
     'rawFrameIntervalP50Ms', 'rawFrameIntervalP95Ms', 'rawFrameIntervalP99Ms', 'rawTimestampAnomalies',
-    'lastFrameAgeMs', 'sizeChanges', 'lastCaptureError', 'stopDurationMs']
+    'lastFrameAgeMs', 'sizeChanges', 'framePoolRecreates', 'lastCaptureError', 'stopDurationMs']
     .map((field) => [field, message[field]]));
+  diagnostics.framePoolRecreates ??= null;
+  return diagnostics;
+}
+
+function validTextureSize(value) {
+  return value && Number.isSafeInteger(value.width) && value.width > 0 && value.width <= 32768
+    && Number.isSafeInteger(value.height) && value.height > 0 && value.height <= 32768;
+}
+
+function safeFailureCode(error) {
+  const value = error instanceof Error ? error.message : '';
+  const code = value.match(/(?:^|:)([a-z][A-Za-z0-9]{0,63})$/)?.[1];
+  return code || 'mediaHelperFailed';
 }
 
 function isStableCode(value) {

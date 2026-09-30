@@ -117,6 +117,7 @@ button:focus-visible, input:focus-visible {
 .capture-sources button { padding: 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-soft); cursor: pointer; min-width: 0; }
 .capture-sources button:hover { border-color: var(--accent); }
 .capture-sources img { width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #080b0f; }
+.capture-source-placeholder { width: 100%; aspect-ratio: 16 / 9; display: grid !important; place-items: center; background: #080b0f; color: var(--muted); }
 .capture-sources span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 6px; }
 
 .window-actions span:last-child:hover {

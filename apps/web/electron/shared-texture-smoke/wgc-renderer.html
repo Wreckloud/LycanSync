@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>隔离 WGC sharedTexture 测试</title>
+    <style>
+      body { margin: 0; padding: 20px; background: #111827; color: #e5e7eb; font: 14px sans-serif; }
+      main { max-width: 980px; margin: auto; }
+      header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      select, button { padding: 8px 10px; border: 1px solid #475569; border-radius: 6px; background: #1f2937; color: inherit; }
+      button { cursor: pointer; }
+      button:disabled { opacity: .5; cursor: default; }
+      video { display: block; width: 100%; max-height: 65vh; margin-top: 14px; background: #030712; object-fit: contain; }
+      pre { white-space: pre-wrap; color: #a7f3d0; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>隔离 WGC → VideoFrame 测试</h1>
+      <p>只验证 sharedTexture 桥接；不连接 LiveKit，也不替换正式屏幕共享。</p>
+      <header>
+        <select id="source"><option value="">请选择窗口或显示器</option></select>
+        <button id="start">启动测试</button>
+        <button id="stop" disabled>停止</button>
+      </header>
+      <video id="preview" muted autoplay playsinline></video>
+      <pre id="status">等待 helper</pre>
+    </main>
+    <script src="wgc-renderer.cjs"></script>
+  </body>
+</html>

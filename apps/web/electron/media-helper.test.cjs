@@ -3,6 +3,7 @@ const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
 const { test } = require('node:test');
 const { MediaHelperManager } = require('./media-helper.cjs');
+const { matchNativeVideoSourceThumbnails } = require('./native-video-thumbnails.cjs');
 
 const capabilities = {
   videoCapture: { available: false, reason: 'videoOutputNotImplemented' },
@@ -26,6 +27,9 @@ class FakeHelper extends EventEmitter {
     this.sourceRevision = 0;
     this.captureState = 'idle';
     this.captureSessionId = null;
+    this.videoState = 'idle';
+    this.videoSessionId = null;
+    this.requests = [];
     this.stdout = new PassThrough();
     this.stdin = new Writable({
       write: (chunk, _encoding, callback) => {
@@ -34,7 +38,9 @@ class FakeHelper extends EventEmitter {
           return;
         }
         for (const line of chunk.toString('utf8').split('\n').filter(Boolean)) {
-          this.handleCommand(JSON.parse(line));
+          const command = JSON.parse(line);
+          this.requests.push(command);
+          this.handleCommand(command);
         }
         callback();
       },
@@ -98,6 +104,36 @@ class FakeHelper extends EventEmitter {
       if (this.mode.exitAfterCaptureProbeStart) setImmediate(() => this.exit(18));
       return;
     }
+    if (command.command === 'startVideo') {
+      if (this.mode.videoStartTimeout) return;
+      this.videoState = 'running';
+      this.videoSessionId = command.sessionId;
+      if (!this.mode.omitSharedTextureFrame) {
+        this.writeResponse({
+          event: 'sharedTextureFrame', protocolVersion: 1, sessionId: command.sessionId,
+          slotIndex: 0, sourceHandleHex: '0000000000000001', pixelFormat: 'bgra',
+          codedSize: { width: command.targetWidth, height: command.targetHeight },
+          contentSize: { width: command.targetWidth, height: command.targetHeight }, timestampMicros: 1,
+        });
+      }
+      this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
+        command: command.command, state: 'running', changed: true });
+      if (this.mode.exitAfterVideoStart) setImmediate(() => this.exit(19));
+      return;
+    }
+    if (command.command === 'releaseSharedTextureSlot') {
+      this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
+        command: command.command, state: 'running', changed: true });
+      return;
+    }
+    if (command.command === 'stopVideo') {
+      if (this.mode.videoStopTimeout) return;
+      this.videoState = 'idle';
+      this.videoSessionId = null;
+      this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
+        command: command.command, state: 'idle', changed: true });
+      return;
+    }
     if (command.command === 'stopCaptureProbe') {
       if (this.mode.captureProbeStopTimeout) return;
       this.captureState = 'idle';
@@ -111,7 +147,7 @@ class FakeHelper extends EventEmitter {
         this.captureState = 'idle';
         this.captureSessionId = null;
       }
-      this.writeResponse({
+      const diagnostics = {
         event: 'diagnostics', protocolVersion: 1, requestId: command.requestId,
         state: this.captureState, sessionId: this.captureSessionId,
         available: true, sourceKind: this.captureState === 'running' ? 'monitor' : null,
@@ -123,9 +159,11 @@ class FakeHelper extends EventEmitter {
         rawCaptureFps: this.captureState === 'running' ? 60 : null,
         probeProcessedFps: this.captureState === 'running' ? 60 : null,
         rawFrameIntervalP50Ms: null, rawFrameIntervalP95Ms: null, rawFrameIntervalP99Ms: null,
-        rawTimestampAnomalies: 0, lastFrameAgeMs: 0, sizeChanges: 0,
+        rawTimestampAnomalies: 0, lastFrameAgeMs: 0, sizeChanges: 0, framePoolRecreates: 0,
         lastCaptureError: null, stopDurationMs: null,
-      });
+      };
+      if (this.mode.omitFramePoolRecreates) delete diagnostics.framePoolRecreates;
+      this.writeResponse(diagnostics);
       return;
     }
     if (command.command === 'shutdown' && !this.mode.shutdownHang) {
@@ -177,6 +215,45 @@ function createManager(mode = {}, options = {}) {
   });
   return { manager, children };
 }
+
+test('native chooser previews require one exact title and kind match on both sides', () => {
+  const videoSources = [
+    { sourceId: 'window:4:0', kind: 'window', title: 'Notepad' },
+    { sourceId: 'window:4:1', kind: 'window', title: 'Duplicate' },
+    { sourceId: 'window:4:2', kind: 'window', title: 'Duplicate' },
+    { sourceId: 'monitor:4:0', kind: 'monitor', title: 'DISPLAY1' },
+  ];
+  const desktopSources = [
+    { id: 'window:99:secret', name: 'Notepad', type: 'window', thumbnail: { isEmpty: () => false,
+      toDataURL: () => 'data:image/png;base64,notepad' } },
+    { id: 'window:100:secret', name: 'Duplicate', type: 'window', thumbnail: { isEmpty: () => false,
+      toDataURL: () => 'data:image/png;base64,ambiguous' } },
+    { id: 'window:101:secret', name: 'Duplicate', type: 'window', thumbnail: { isEmpty: () => false,
+      toDataURL: () => 'data:image/png;base64,ambiguous' } },
+    { id: 'screen:0:secret', name: 'DISPLAY1', type: 'screen', thumbnail: { isEmpty: () => false,
+      toDataURL: () => 'data:image/png;base64,display' } },
+    { id: 'screen:1:secret', name: 'Notepad', type: 'screen', thumbnail: { isEmpty: () => false,
+      toDataURL: () => 'data:image/png;base64,wrong-kind' } },
+  ];
+
+  assert.deepEqual(matchNativeVideoSourceThumbnails(videoSources, desktopSources), [
+    { sourceId: 'window:4:0', thumbnail: 'data:image/png;base64,notepad' },
+    { sourceId: 'monitor:4:0', thumbnail: 'data:image/png;base64,display' },
+  ]);
+});
+
+test('native chooser skips empty and over-budget preview images', () => {
+  const sources = [
+    { sourceId: 'window:1:0', kind: 'window', title: 'Empty' },
+    { sourceId: 'window:1:1', kind: 'window', title: 'Large' },
+  ];
+  const desktopSources = [
+    { name: 'Empty', type: 'window', thumbnail: { isEmpty: () => true, toDataURL: () => '' } },
+    { name: 'Large', type: 'window', thumbnail: { isEmpty: () => false,
+      toDataURL: () => `data:image/png;base64,${'x'.repeat(40 * 1024)}` } },
+  ];
+  assert.deepEqual(matchNativeVideoSourceThumbnails(sources, desktopSources), []);
+});
 
 async function waitUntil(predicate, timeoutMs = 500) {
   const deadline = Date.now() + timeoutMs;
@@ -268,6 +345,7 @@ test('probe holds helper past the idle timeout, deduplicates start and stop, and
   const diagnostics = await manager.getDiagnostics();
   assert.equal(diagnostics.state, 'running');
   assert.equal(diagnostics.framesReceived, 20);
+  assert.equal(diagnostics.framePoolRecreates, 0);
   const [stop, concurrentStop] = await Promise.all([
     manager.stopCaptureProbe(firstStart.sessionId),
     manager.stopCaptureProbe(firstStart.sessionId),
@@ -290,6 +368,62 @@ test('refresh invalidates old source ids before they can start a probe', async (
   await manager.shutdown();
 });
 
+test('video shares a bounded helper session, applies the requested frame rate, and returns texture notifications', async () => {
+  const receivedFrames = [];
+  const { manager, children } = createManager({}, {
+    idleTimeoutMs: 20,
+    onSharedTextureFrame: (_state, frame) => receivedFrames.push(frame),
+  });
+  const sources = await manager.listVideoSources();
+  const started = await manager.startVideo(sources.sources[0].sourceId, 30, 'video-session');
+  assert.deepEqual(started, { sessionId: 'video-session', changed: true });
+  assert.equal(receivedFrames.length, 1);
+  assert.equal(receivedFrames[0].sessionId, 'video-session');
+  const startRequest = children[0].requests.find((request) => request.command === 'startVideo');
+  assert.equal(startRequest.maxFps, 30);
+  assert.equal(startRequest.targetWidth, 1920);
+  assert.equal(children[0].closed, false);
+  await assert.rejects(manager.startVideo(sources.sources[0].sourceId, 60, 'second-session'), /videoCaptureAlreadyRunning/);
+
+  await manager.releaseSharedTextureSlot('video-session', 0);
+  assert.deepEqual(await manager.stopVideo('video-session'), { changed: true });
+  assert.deepEqual(await manager.stopVideo('video-session'), { changed: false });
+  await waitUntil(() => children[0].closed);
+  await manager.shutdown();
+});
+
+test('video rejects expired ids, invalid fps, worker exit, and stop timeout without reporting success', async (t) => {
+  await t.test('expired source', async () => {
+    const { manager, children } = createManager();
+    await assert.rejects(manager.startVideo('monitor:1:0', 30, 'video-session'), /videoSourceExpired/);
+    assert.equal(children.length, 0);
+    await manager.shutdown();
+  });
+  await t.test('invalid fps', async () => {
+    const { manager, children } = createManager();
+    const sources = await manager.listVideoSources();
+    await assert.rejects(manager.startVideo(sources.sources[0].sourceId, 144, 'video-session'), /invalidVideoStart/);
+    assert.equal(children[0].commands.includes('startVideo'), false);
+    await manager.shutdown();
+  });
+  await t.test('worker exit', async () => {
+    const { manager, children } = createManager({ exitAfterVideoStart: true }, { onSharedTextureFrame: () => {} });
+    const sources = await manager.listVideoSources();
+    await manager.startVideo(sources.sources[0].sourceId, 30, 'video-session');
+    await waitUntil(() => children[0].closed);
+    await assert.rejects(manager.getDiagnostics());
+    await manager.shutdown();
+  });
+  await t.test('stop timeout', async () => {
+    const { manager, children } = createManager({ videoStopTimeout: true }, { onSharedTextureFrame: () => {} });
+    const sources = await manager.listVideoSources();
+    await manager.startVideo(sources.sources[0].sourceId, 30, 'video-session');
+    await assert.rejects(manager.stopVideo('video-session'), /mediaHelperTimeout:stopVideo/);
+    await waitUntil(() => children[0].closed);
+    await manager.shutdown();
+  });
+});
+
 test('failed source refresh invalidates the previous snapshot', async () => {
   const { manager, children } = createManager();
   const sources = await manager.listVideoSources();
@@ -297,6 +431,23 @@ test('failed source refresh invalidates the previous snapshot', async () => {
   await assert.rejects(manager.listVideoSources(), /mediaHelper:sourceDiscoveryFailed/);
   await assert.rejects(manager.startCaptureProbe(sources.sources[0].sourceId), /videoSourceExpired/);
   assert.equal(children[0].commands.includes('startCaptureProbe'), false);
+  await manager.shutdown();
+});
+
+test('source ids expire when the lazy helper is reclaimed and do not start a replacement', async () => {
+  const { manager, children } = createManager({}, { idleTimeoutMs: 15 });
+  const sources = await manager.listVideoSources();
+  await waitUntil(() => children[0]?.closed);
+
+  await assert.rejects(manager.startCaptureProbe(sources.sources[0].sourceId), /videoSourceExpired/);
+  assert.equal(children.length, 1);
+  assert.equal(children[0].commands.includes('startCaptureProbe'), false);
+  await manager.shutdown();
+});
+
+test('diagnostics accept an older protocol v1 helper without the optional pool rebuild counter', async () => {
+  const { manager } = createManager({ omitFramePoolRecreates: true });
+  assert.equal((await manager.getDiagnostics()).framePoolRecreates, null);
   await manager.shutdown();
 });
 

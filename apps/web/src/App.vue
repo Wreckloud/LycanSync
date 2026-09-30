@@ -15,6 +15,7 @@ import GroupChat from './components/GroupChat.vue';
 import { createGroup, findGroup, findGroupPresences, findGroups,
   type GroupDetail, type GroupMember, type GroupPresence, type GroupSummary } from './group/groupApi';
 import { useRtcRoom } from './rtc/useRtcRoom';
+import { createNativeVideoSourceSelection } from './components/nativeVideoSourceSelection';
 import { useRoomSummary } from './rtc/useRoomSummary';
 import { requestRoomOccupancies } from './rtc/roomSummaryApi';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, type AudioProcessingSettings } from './rtc/audioPreferences';
@@ -48,6 +49,38 @@ const PRESENCE_STATUS_LABELS: Record<UserPresenceStatus, string> = {
 const audioPreferences = useAudioPreferences(props.user.id);
 const { inputGain, outputVolume, processing: audioProcessing } = audioPreferences;
 const callSounds = useCallSounds(outputVolume);
+const desktop = window.lycanDesktop;
+const captureRequest = ref<CaptureRequest | null>(null);
+const captureSourceType = ref<'window' | 'screen'>('window');
+let resolveNativeSourceSelection: ((sourceId: string | null) => void) | undefined;
+const captureSources = computed(() => captureRequest.value?.sources
+  .filter((source) => source.type === captureSourceType.value) ?? []);
+function selectCaptureSource(sourceId: string | null) {
+  const request = captureRequest.value;
+  if (!request) return;
+  captureRequest.value = null;
+  if (request.native) {
+    const resolveSelection = resolveNativeSourceSelection;
+    resolveNativeSourceSelection = undefined;
+    resolveSelection?.(sourceId);
+    return;
+  }
+  if (sourceId === null) rtc.cancelPendingScreenShareSelection();
+  desktop?.selectSource(request.requestId, sourceId);
+}
+async function requestNativeScreenSource(sources: NativeVideoSource[]): Promise<string | null> {
+  selectCaptureSource(null);
+  const thumbnails = await desktop?.getNativeVideoSourceThumbnails(sources).catch(() => []) ?? [];
+  const selection = createNativeVideoSourceSelection(sources, thumbnails);
+  resolveNativeSourceSelection = selection.finish;
+  captureSourceType.value = sources.some((source) => source.kind === 'window') ? 'window' : 'screen';
+  captureRequest.value = {
+    requestId: `native-${Date.now()}`,
+    native: true,
+    sources: selection.options,
+  };
+  return selection.result;
+}
 const rtc = reactive(useRtcRoom({
   inputGain: inputGain.value,
   processing: audioProcessing,
@@ -60,22 +93,12 @@ const rtc = reactive(useRtcRoom({
     screenShareStarted: callSounds.screenShareStarted,
     screenShareStopped: callSounds.screenShareStopped,
     disconnected: callSounds.left,
+    selectNativeScreenSource: requestNativeScreenSource,
   },
 }));
 // 预先恢复被静音成员的订阅策略；之后只有跨越 0% 时才更新网络订阅。
 audioPreferences.mutedParticipantIdentities()
   .forEach((identity) => rtc.setRemoteAudioSubscribed(identity, false));
-const desktop = window.lycanDesktop;
-const captureRequest = ref<CaptureRequest | null>(null);
-const captureSourceType = ref<'window' | 'screen'>('window');
-const captureSources = computed(() => captureRequest.value?.sources
-  .filter((source) => source.type === captureSourceType.value) ?? []);
-function selectCaptureSource(sourceId: string | null) {
-  if (!captureRequest.value) return;
-  if (sourceId === null) rtc.cancelPendingScreenShareSelection();
-  desktop?.selectSource(captureRequest.value.requestId, sourceId);
-  captureRequest.value = null;
-}
 const removeCaptureListener = desktop?.onSources((request) => {
   captureSourceType.value = request.sources.some((source) => source.type === 'window') ? 'window' : 'screen';
   captureRequest.value = request;
@@ -944,7 +967,9 @@ function participantListening(participant: Participant) {
         </div>
         <div class="capture-sources" role="tabpanel">
           <button v-for="source in captureSources" :key="source.id" :aria-label="source.name" @click="selectCaptureSource(source.id)">
-            <img :src="source.thumbnail" alt="" /><span>{{ source.name }}</span>
+            <img v-if="source.thumbnail" :src="source.thumbnail" alt="" />
+            <span v-else class="capture-source-placeholder"><MonitorUp :size="32" /></span>
+            <span>{{ source.name }}</span>
           </button>
         </div>
         <p v-if="!captureSources.length">没有可共享的{{ captureSourceType === 'window' ? '应用窗口' : '屏幕' }}，请切换来源类型后重试。</p>

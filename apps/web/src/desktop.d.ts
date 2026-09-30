@@ -1,6 +1,7 @@
 interface CaptureRequest {
   requestId: string;
-  sources: { id: string; name: string; thumbnail: string; type: 'screen' | 'window' }[];
+  native?: boolean;
+  sources: { id: string; name: string; thumbnail?: string; type: 'screen' | 'window' }[];
 }
 
 interface DetectedActivity {
@@ -36,6 +37,7 @@ interface NativeCaptureDiagnostics {
   rawTimestampAnomalies: number | null;
   lastFrameAgeMs: number | null;
   sizeChanges: number | null;
+  framePoolRecreates: number | null;
   lastCaptureError: string | null;
   stopDurationMs: number | null;
 }
@@ -52,8 +54,12 @@ interface Window {
     getCurrentActivity(): Promise<DetectedActivity | null>;
     getNativeMediaCapabilities(): Promise<Record<string, { available: boolean; reason: string }>>;
     listNativeVideoSources(): Promise<{ revision: number; sources: NativeVideoSource[] }>;
+    getNativeVideoSourceThumbnails(sources: NativeVideoSource[]): Promise<{ sourceId: string; thumbnail: string }[]>;
     startNativeCaptureProbe(sourceId: string): Promise<{ sessionId: string; changed: boolean }>;
     stopNativeCaptureProbe(sessionId: string): Promise<{ changed: boolean }>;
+    startNativeVideo(sourceId: string, maxFps: number): Promise<{ sessionId: string; changed: boolean }>;
+    stopNativeVideo(sessionId?: string): Promise<{ changed: boolean }>;
+    onNativeVideoError(callback: (code: string) => void): () => void;
     getNativeMediaDiagnostics(): Promise<NativeCaptureDiagnostics>;
     onActivityChange(callback: (activity: DetectedActivity | null) => void): () => void;
     toggleMaximize(): void;

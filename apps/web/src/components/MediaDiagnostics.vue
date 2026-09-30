@@ -2,6 +2,7 @@
 import { onMounted, onScopeDispose, ref } from 'vue';
 import { Track, type Participant, type Room } from 'livekit-client';
 import { readTrackTarget, readVideoLayers, readVideoSourceFps, formatTrackTarget, type TrackTarget, type VideoLayerStats } from '../rtc/mediaStats';
+import { isStaleVideoSourceError, resetVideoSourceSelection } from './mediaDiagnosticsSources';
 
 const props = defineProps<{ room: Room; participants: Participant[] }>();
 type StreamStats = {
@@ -42,15 +43,21 @@ async function loadCaptureProbeCapability() {
   }
 }
 
-async function listVideoSources() {
+async function listVideoSources(sourceExpired = false) {
   if (!window.lycanDesktop || sourceListLoading.value || captureProbeSessionId.value) return;
+  const previousSelection = selectedVideoSourceId.value;
   sourceListLoading.value = true;
   captureProbeError.value = '';
   try {
     const snapshot = await window.lycanDesktop.listNativeVideoSources();
     videoSources.value = snapshot.sources;
-    if (!snapshot.sources.some((source) => source.sourceId === selectedVideoSourceId.value)) {
-      selectedVideoSourceId.value = snapshot.sources[0]?.sourceId ?? '';
+    // Helper 重启后来源 ID 可能复用；刷新时必须重新明确选择捕获目标。
+    const selection = resetVideoSourceSelection(previousSelection);
+    selectedVideoSourceId.value = selection.sourceId;
+    if (sourceExpired) {
+      captureProbeError.value = '原来源已过期，来源列表已刷新；请重新选择窗口或显示器后再启动探针。';
+    } else if (selection.invalidated) {
+      captureProbeError.value = '来源列表已刷新；请重新选择窗口或显示器后再启动探针。';
     }
   } catch {
     videoSources.value = [];
@@ -83,7 +90,7 @@ async function refreshCaptureProbeDiagnostics() {
 
 async function startCaptureProbe() {
   if (!window.lycanDesktop || !captureProbeAvailable.value || !selectedVideoSourceId.value
-      || captureProbeBusy.value || captureProbeSessionId.value) return;
+      || sourceListLoading.value || captureProbeBusy.value || captureProbeSessionId.value) return;
   captureProbeBusy.value = true;
   captureProbeState.value = 'starting';
   captureProbeError.value = '';
@@ -96,11 +103,15 @@ async function startCaptureProbe() {
       return;
     }
     await refreshCaptureProbeDiagnostics();
-  } catch {
+  } catch (error) {
     captureProbeState.value = 'failed';
-    captureProbeError.value = '探针启动失败；请刷新来源并检查原生媒体能力。';
+    const sourceExpired = isStaleVideoSourceError(error);
+    captureProbeError.value = sourceExpired
+      ? '原来源已过期，正在刷新来源；请重新选择窗口或显示器后再启动探针。'
+      : '探针启动失败；请刷新来源并检查原生媒体能力。';
     videoSources.value = [];
     selectedVideoSourceId.value = '';
+    if (sourceExpired) await listVideoSources(true);
   } finally {
     captureProbeBusy.value = false;
   }
@@ -209,15 +220,15 @@ onScopeDispose(() => {
         正式视频输出：{{ videoCaptureAvailable ? '可用' : '不可用' }}</small>
       <div class="native-capture-probe-controls">
         <button type="button" :disabled="sourceListLoading || captureProbeBusy || !!captureProbeSessionId"
-          @click="listVideoSources">{{ sourceListLoading ? '正在列出…' : '刷新来源' }}</button>
+          @click="listVideoSources()">{{ sourceListLoading ? '正在列出…' : '刷新来源' }}</button>
         <select v-model="selectedVideoSourceId" aria-label="原生视频探针来源"
-          :disabled="captureProbeBusy || !!captureProbeSessionId || !videoSources.length">
+          :disabled="sourceListLoading || captureProbeBusy || !!captureProbeSessionId || !videoSources.length">
           <option value="" disabled>选择窗口或显示器</option>
           <option v-for="source in videoSources" :key="source.sourceId" :value="source.sourceId">
             {{ source.kind === 'monitor' ? '显示器' : '窗口' }} · {{ source.title }} · {{ source.width }}×{{ source.height }}
           </option>
         </select>
-        <button v-if="!captureProbeSessionId" type="button" :disabled="!captureProbeAvailable || !selectedVideoSourceId || captureProbeBusy"
+        <button v-if="!captureProbeSessionId" type="button" :disabled="!captureProbeAvailable || !selectedVideoSourceId || sourceListLoading || captureProbeBusy"
           @click="startCaptureProbe">{{ captureProbeState === 'starting' ? '正在启动…' : '启动探针' }}</button>
         <button v-else type="button" :disabled="captureProbeBusy" @click="stopCaptureProbe">
           {{ captureProbeState === 'stopping' ? '正在停止…' : '停止探针' }}
@@ -235,7 +246,8 @@ onScopeDispose(() => {
       </small>
       <small v-if="captureProbeDiagnostics?.lastCaptureError">最近错误：{{ captureProbeDiagnostics.lastCaptureError }}</small>
       <small v-if="captureProbeDiagnostics?.lastFrameAgeMs !== null && captureProbeDiagnostics?.lastFrameAgeMs !== undefined">
-        最近帧 {{ captureProbeDiagnostics.lastFrameAgeMs }} ms 前 · 尺寸变化 {{ captureProbeDiagnostics.sizeChanges ?? 0 }} 次
+        最近帧 {{ captureProbeDiagnostics.lastFrameAgeMs }} ms 前 · 内容尺寸变化 {{ captureProbeDiagnostics.sizeChanges ?? 0 }} 次 ·
+        帧池重建 {{ captureProbeDiagnostics.framePoolRecreates ?? '—' }} 次
       </small>
       <p v-if="captureProbeError" role="status">{{ captureProbeError }}</p>
     </section>

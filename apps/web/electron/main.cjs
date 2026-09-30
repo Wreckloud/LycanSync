@@ -1,12 +1,14 @@
-const { app, BrowserWindow, desktopCapturer, ipcMain, net, powerMonitor, protocol, screen, session, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, desktopCapturer, ipcMain, net, powerMonitor, protocol, screen, session, safeStorage, shell, sharedTexture } = require('electron');
 const { spawn } = require('node:child_process');
 const { existsSync } = require('node:fs');
 const { createInterface } = require('node:readline');
+const { Module } = require('node:module');
 const { isAbsolute, resolve, sep } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { readFile, writeFile, unlink, mkdir } = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
 const { MediaHelperManager } = require('./media-helper.cjs');
+const { matchNativeVideoSourceThumbnails } = require('./native-video-thumbnails.cjs');
 
 const APP_ORIGIN = 'lycan://app';
 const rendererRoot = resolve(__dirname, '../dist');
@@ -64,10 +66,17 @@ let activityRestartTimer;
 let currentActivity = null;
 let allowQuitAfterMediaHelper = false;
 let mediaHelperShutdownPromise;
+let nativeMediaBridge;
+let nativeVideoSession;
+let lastStoppedNativeVideoSession;
+const helperProcessBridges = new WeakMap();
 
 const mediaHelper = new MediaHelperManager({
   platform: process.platform,
   executablePath: mediaHelperPath,
+  onSharedTextureFrame: handleNativeSharedTextureFrame,
+  onHelperFailure: handleMediaHelperFailure,
+  onHelperClosed: releaseHelperProcessBridge,
 });
 
 function activityHelperPath() {
@@ -80,6 +89,197 @@ function activityHelperPath() {
 function mediaHelperPath() {
   if (app.isPackaged) return resolve(process.resourcesPath, 'media-helper', 'lycansync-media.exe');
   return resolve(__dirname, '../../../native/media-helper/target/release/lycansync-media.exe');
+}
+
+function mediaBridgePath() {
+  if (app.isPackaged) return resolve(process.resourcesPath, 'media-bridge', 'lycansync_shared_texture_bridge.dll');
+  return resolve(__dirname, '../../../native/media-bridge/target/x86_64-pc-windows-msvc/release/lycansync_shared_texture_bridge.dll');
+}
+
+function loadNativeMediaBridge() {
+  if (process.platform !== 'win32' || !sharedTexture?.importSharedTexture || !sharedTexture?.sendSharedTexture) {
+    throw new Error('nativeVideoBridgeUnavailable');
+  }
+  const path = mediaBridgePath();
+  if (!existsSync(path)) throw new Error('nativeVideoBridgeUnavailable');
+  const nativeModule = new Module(path);
+  process.dlopen(nativeModule, path);
+  return nativeModule.exports;
+}
+
+function releaseHelperProcessBridge(state) {
+  const bridge = helperProcessBridges.get(state);
+  if (!bridge) return;
+  bridge.release();
+  helperProcessBridges.delete(state);
+}
+
+function releaseNativeVideoImports(video) {
+  for (const imported of video.imported.values()) {
+    try { imported.release(); } catch { /* Electron may already have released this import. */ }
+  }
+  video.imported.clear();
+}
+
+function notifyNativeVideoError(video, code) {
+  if (!video || video.failureNotified) return;
+  video.failureNotified = true;
+  video.stopping = true;
+  video.lastError = /^[a-z][A-Za-z0-9]{0,63}$/.test(code) ? code : 'nativeVideoFailed';
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('media:native-video-error', video.lastError);
+  }
+  releaseNativeVideoImports(video);
+  void mediaHelper.stopVideo(video.sessionId).catch(() => {}).finally(() => {
+    if (nativeVideoSession === video && !video.helperState?.alive) {
+      lastStoppedNativeVideoSession = video.sessionId;
+      nativeVideoSession = undefined;
+    }
+  });
+}
+
+function handleMediaHelperFailure(state, code) {
+  const video = nativeVideoSession;
+  if (video && (video.helperState === state || (!video.helperState && state.videoSessionId === video.sessionId))) {
+    notifyNativeVideoError(video, code);
+  }
+}
+
+function handleNativeSharedTextureFrame(state, frame) {
+  const video = nativeVideoSession;
+  if (!video || video.sessionId !== frame.sessionId || video.stopping) {
+    if (video && video.sessionId === frame.sessionId) {
+      void mediaHelper.releaseSharedTextureSlot(frame.sessionId, frame.slotIndex).catch(() => {});
+    }
+    return;
+  }
+  video.helperState = state;
+  let helperBridge = helperProcessBridges.get(state);
+  let owned;
+  let imported;
+  let importRegistered = false;
+  let releaseBeforeRegistration = false;
+  let slotReleaseStarted = false;
+  const releaseSlot = () => {
+    if (slotReleaseStarted) return;
+    if (!importRegistered) {
+      releaseBeforeRegistration = true;
+      return;
+    }
+    slotReleaseStarted = true;
+    video.imported.delete(frame.slotIndex);
+    if (state.alive && !state.closed) {
+      video.pendingSlotReleases.add(frame.slotIndex);
+      void mediaHelper.releaseSharedTextureSlot(video.sessionId, frame.slotIndex).catch(() => {
+        notifyNativeVideoError(video, 'sharedTextureSlotReleaseFailed');
+      }).finally(() => video.pendingSlotReleases.delete(frame.slotIndex));
+    }
+  };
+  try {
+    if (!nativeMediaBridge) nativeMediaBridge = loadNativeMediaBridge();
+    if (!helperBridge) {
+      helperBridge = nativeMediaBridge.openSpawnedMediaHelper(state.child.pid, mediaHelperPath());
+      helperProcessBridges.set(state, helperBridge);
+    }
+    if (video.imported.has(frame.slotIndex) || video.imported.size >= 3) {
+      throw new Error('sharedTexturePoolInvariantFailed');
+    }
+    owned = helperBridge.duplicateSharedTexture(frame.sourceHandleHex);
+    imported = owned.withImportHandle((ntHandle) => sharedTexture.importSharedTexture({
+      textureInfo: {
+        pixelFormat: frame.pixelFormat,
+        codedSize: frame.codedSize,
+        visibleRect: { x: 0, y: 0, width: frame.contentSize.width, height: frame.contentSize.height },
+        timestamp: frame.timestampMicros,
+        handle: { ntHandle },
+      },
+      allReferencesReleased: releaseSlot,
+    }));
+    owned.release();
+    if (releaseBeforeRegistration) {
+      importRegistered = true;
+      releaseSlot();
+      imported.release();
+      return;
+    }
+    video.imported.set(frame.slotIndex, imported);
+    importRegistered = true;
+    void sharedTexture.sendSharedTexture({
+      frame: mainWindow.webContents.mainFrame,
+      importedSharedTexture: imported,
+    }, 'native-screen-frame').then(() => {
+      imported.release();
+    }).catch(() => {
+      imported.release();
+      notifyNativeVideoError(video, 'sharedTextureTransferFailed');
+    });
+  } catch {
+    owned?.release();
+    if (imported) imported.release();
+    else void mediaHelper.releaseSharedTextureSlot(video.sessionId, frame.slotIndex).catch(() => {});
+    notifyNativeVideoError(video, 'sharedTextureImportFailed');
+  }
+}
+
+async function startNativeVideo(sourceId, maxFps) {
+  if (closing) throw new Error('mediaHelperShuttingDown');
+  if (process.platform !== 'win32') throw new Error('platformUnsupported');
+  if (!Number.isInteger(maxFps) || maxFps < 1 || maxFps > 60
+      || typeof sourceId !== 'string' || sourceId.length > 128) throw new Error('invalidVideoStart');
+  if (nativeVideoSession) throw new Error('videoCaptureAlreadyRunning');
+  if (!nativeMediaBridge) nativeMediaBridge = loadNativeMediaBridge();
+  const sessionId = randomUUID();
+  const video = { sessionId, maxFps, imported: new Map(), pendingSlotReleases: new Set(), stopping: false, failureNotified: false };
+  nativeVideoSession = video;
+  try {
+    const started = await mediaHelper.startVideo(sourceId, maxFps, sessionId);
+    if (started.sessionId !== sessionId || !started.changed || nativeVideoSession !== video) {
+      throw new Error('mediaHelperInvalidVideoStart');
+    }
+    return { sessionId, changed: true };
+  } catch (error) {
+    if (nativeVideoSession === video) nativeVideoSession = undefined;
+    releaseNativeVideoImports(video);
+    throw error;
+  }
+}
+
+async function stopNativeVideo(sessionId) {
+  const video = nativeVideoSession;
+  if (!video) {
+    return lastStoppedNativeVideoSession === sessionId
+      ? { changed: false }
+      : Promise.reject(new Error('videoSessionMismatch'));
+  }
+  if (video.sessionId !== sessionId) throw new Error('videoSessionMismatch');
+  if (video.stopPromise) return video.stopPromise;
+  video.stopping = true;
+  video.stopPromise = (async () => {
+    const deadline = Date.now() + 1_200;
+    while ((video.imported.size || video.pendingSlotReleases.size) && Date.now() < deadline) {
+      await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+    }
+    if (video.imported.size || video.pendingSlotReleases.size) {
+      releaseNativeVideoImports(video);
+      try {
+        await mediaHelper.abortVideo(sessionId);
+      } finally {
+        video.lastError ??= 'sharedTextureReleaseTimedOut';
+        if (nativeVideoSession === video) nativeVideoSession = undefined;
+        lastStoppedNativeVideoSession = sessionId;
+      }
+      throw new Error('sharedTextureReleaseTimedOut');
+    }
+    try {
+      const result = await mediaHelper.stopVideo(sessionId);
+      return result;
+    } finally {
+      if (nativeVideoSession === video) nativeVideoSession = undefined;
+      lastStoppedNativeVideoSession = sessionId;
+      if (video.helperState?.closed) releaseHelperProcessBridge(video.helperState);
+    }
+  })();
+  return video.stopPromise;
 }
 
 function normalizeActivity(value) {
@@ -410,11 +610,44 @@ ipcMain.handle('activity:current', (event) => {
 });
 ipcMain.handle('media:capabilities', (event) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
-  return mediaHelper.getCapabilities();
+  return mediaHelper.getCapabilities().then((capabilities) => {
+    let bridgeAvailable = false;
+    try {
+      if (process.platform === 'win32') {
+        nativeMediaBridge ??= loadNativeMediaBridge();
+        bridgeAvailable = true;
+      }
+    } catch { /* Keep output capability unavailable if the native importer cannot load. */ }
+    if (!bridgeAvailable) capabilities.videoCapture = { available: false, reason: 'nativeVideoBridgeUnavailable' };
+    return capabilities;
+  });
 });
 ipcMain.handle('media:video-sources', (event) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
   return mediaHelper.listVideoSources();
+});
+ipcMain.handle('media:video-source-thumbnails', async (event, sources) => {
+  if (!trustedSender(event) || closing || !Array.isArray(sources) || sources.length > 128
+      || sources.some((source) => !source || !/^(?:monitor|window):[1-9]\d*:\d+$/.test(source.sourceId)
+        || !['monitor', 'window'].includes(source.kind) || typeof source.title !== 'string'
+        || source.title.length > 256 || /[\u0000-\u001f\u007f]/.test(source.title))) {
+    throw new Error('请求参数无效');
+  }
+  if (!sources.length) return [];
+  try {
+    const desktopSources = await desktopCapturer.getSources({
+      types: ['window', 'screen'],
+      thumbnailSize: { width: 160, height: 90 },
+    });
+    return matchNativeVideoSourceThumbnails(sources, desktopSources.map((source) => ({
+      type: captureSourceType(source),
+      name: source.name,
+      thumbnail: source.thumbnail,
+    })));
+  } catch {
+    // Preview is optional; source selection continues with the existing placeholder.
+    return [];
+  }
 });
 ipcMain.handle('media:capture-probe:start', (event, sourceId) => {
   if (!trustedSender(event) || closing || typeof sourceId !== 'string' || sourceId.length > 128) {
@@ -427,6 +660,23 @@ ipcMain.handle('media:capture-probe:stop', (event, sessionId) => {
     throw new Error('请求参数无效');
   }
   return mediaHelper.stopCaptureProbe(sessionId);
+});
+ipcMain.handle('media:native-video:start', (event, sourceId, maxFps) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return startNativeVideo(sourceId, maxFps);
+});
+ipcMain.handle('media:native-video:stop', (event, sessionId) => {
+  if (!trustedSender(event) || closing
+      || (sessionId !== undefined && (typeof sessionId !== 'string' || sessionId.length > 128))) {
+    throw new Error('请求参数无效');
+  }
+  const targetSessionId = sessionId ?? nativeVideoSession?.sessionId;
+  if (!targetSessionId) return { changed: false };
+  return stopNativeVideo(targetSessionId);
+});
+ipcMain.on('media:native-video:receiver-error', (event) => {
+  if (!trustedSender(event)) return;
+  notifyNativeVideoError(nativeVideoSession, 'sharedTextureReceiverFailed');
 });
 ipcMain.handle('media:diagnostics', (event) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
@@ -456,7 +706,12 @@ app.on('before-quit', (event) => {
   if (allowQuitAfterMediaHelper) return;
   event.preventDefault();
   if (mediaHelperShutdownPromise) return;
-  mediaHelperShutdownPromise = mediaHelper.shutdown()
+  mediaHelperShutdownPromise = (nativeVideoSession
+    ? stopNativeVideo(nativeVideoSession.sessionId).catch((error) => {
+      console.error(`native video shutdown failed: ${error.message}`);
+    })
+    : Promise.resolve())
+    .then(() => mediaHelper.shutdown())
     .catch((error) => console.error(`media-helper shutdown failed: ${error.message}`))
     .finally(() => {
       allowQuitAfterMediaHelper = true;
