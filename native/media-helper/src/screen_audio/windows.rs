@@ -845,10 +845,8 @@ fn parse_mix_format(
     let channels = wave_format.nChannels;
     let sample_rate = wave_format.nSamplesPerSec;
     let valid_channel_mask = channel_mask == 0 || channel_mask.count_ones() == u32::from(channels);
-    if channels < 1
-        || channels > 8
-        || sample_rate < 8_000
-        || sample_rate > 192_000
+    if !(1..=8).contains(&channels)
+        || !(8_000..=192_000).contains(&sample_rate)
         || !matches!(bits_per_sample, 8 | 16 | 24 | 32)
         || valid_bits_per_sample == 0
         || valid_bits_per_sample > bits_per_sample
@@ -1228,8 +1226,10 @@ mod tests {
 
     fn output_samples(output: &[u8]) -> Vec<f32> {
         output
-            .chunks_exact(4)
-            .map(|sample| f32::from_le_bytes(sample.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|sample| f32::from_le_bytes(*sample))
             .collect()
     }
 
