@@ -10,7 +10,7 @@ pub(super) enum CaptureTarget {
     #[cfg(target_os = "windows")]
     Window(windows::NativeHwnd, windows::WindowIdentity),
     #[cfg(test)]
-    Test,
+    Test(u64),
 }
 
 #[derive(Clone)]
@@ -45,7 +45,6 @@ impl SourceRegistry {
         &mut self,
         discovered: Vec<DiscoveredSource>,
     ) -> Result<(u64, Vec<VideoSource>), ErrorCode> {
-        self.sources.clear();
         if self.exhausted {
             return Err(ErrorCode::SourceDiscoveryFailed);
         }
@@ -54,6 +53,10 @@ impl SourceRegistry {
             return Err(ErrorCode::SourceDiscoveryFailed);
         };
         self.revision = revision;
+        let mut previous = std::mem::take(&mut self.sources)
+            .into_iter()
+            .map(Some)
+            .collect::<Vec<_>>();
         let mut monitor_index = 0;
         let mut window_index = 0;
         self.sources = discovered
@@ -63,23 +66,37 @@ impl SourceRegistry {
                 if discovered.source.title.is_empty() {
                     return None;
                 }
-                let (kind, index) = match discovered.source.kind {
-                    VideoSourceKind::Monitor => {
-                        let index = monitor_index;
-                        monitor_index += 1;
-                        ("monitor", index)
+                let retained = previous.iter_mut().find_map(|registered| {
+                    let current = registered.as_ref()?;
+                    if same_target(&current.target, &discovered.target) {
+                        registered.take()
+                    } else {
+                        None
                     }
-                    VideoSourceKind::Window => {
-                        let index = window_index;
-                        window_index += 1;
-                        ("window", index)
-                    }
+                });
+                let Some(mut registered) = retained else {
+                    let (kind, index) = match discovered.source.kind {
+                        VideoSourceKind::Monitor => {
+                            let index = monitor_index;
+                            monitor_index += 1;
+                            ("monitor", index)
+                        }
+                        VideoSourceKind::Window => {
+                            let index = window_index;
+                            window_index += 1;
+                            ("window", index)
+                        }
+                    };
+                    discovered.source.source_id = format!("{kind}:{revision}:{index}");
+                    return Some(RegisteredSource {
+                        source: discovered.source,
+                        target: discovered.target,
+                    });
                 };
-                discovered.source.source_id = format!("{kind}:{revision}:{index}");
-                Some(RegisteredSource {
-                    source: discovered.source,
-                    target: discovered.target,
-                })
+                discovered.source.source_id = registered.source.source_id.clone();
+                registered.source = discovered.source;
+                registered.target = discovered.target;
+                Some(registered)
             })
             .take(MAX_VIDEO_SOURCES)
             .collect();
@@ -131,8 +148,26 @@ impl CaptureTarget {
                 ThreadCaptureTarget::Window(window.0 as usize, identity)
             }
             #[cfg(test)]
-            Self::Test => ThreadCaptureTarget::Test,
+            Self::Test(_) => ThreadCaptureTarget::Test,
         }
+    }
+}
+
+fn same_target(left: &CaptureTarget, right: &CaptureTarget) -> bool {
+    match (left, right) {
+        #[cfg(target_os = "windows")]
+        (CaptureTarget::Monitor(left), CaptureTarget::Monitor(right)) => left == right,
+        #[cfg(target_os = "windows")]
+        (
+            CaptureTarget::Window(left_window, left_identity),
+            CaptureTarget::Window(right_window, _),
+        ) => {
+            left_window == right_window
+                && windows::window_matches_identity(*right_window, left_identity)
+        }
+        #[cfg(test)]
+        (CaptureTarget::Test(left), CaptureTarget::Test(right)) => left == right,
+        _ => false,
     }
 }
 
@@ -258,6 +293,10 @@ mod tests {
     use crate::protocol::{OutboundEvent, PROTOCOL_VERSION, VideoSource, VideoSourceKind};
 
     fn discovered(kind: VideoSourceKind, title: &str) -> DiscoveredSource {
+        discovered_target(kind, title, 1)
+    }
+
+    fn discovered_target(kind: VideoSourceKind, title: &str, target_key: u64) -> DiscoveredSource {
         DiscoveredSource {
             source: VideoSource {
                 source_id: String::new(),
@@ -267,12 +306,12 @@ mod tests {
                 height: 480,
                 primary: false,
             },
-            target: CaptureTarget::Test,
+            target: CaptureTarget::Test(target_key),
         }
     }
 
     #[test]
-    fn refresh_assigns_opaque_ids_and_old_ids_expire() {
+    fn refresh_preserves_ids_for_live_targets_and_expires_removed_targets() {
         let mut registry = SourceRegistry::default();
         let (first_revision, first) = registry
             .refresh(vec![discovered(VideoSourceKind::Window, "window")])
@@ -284,7 +323,32 @@ mod tests {
             .refresh(vec![discovered(VideoSourceKind::Window, "window")])
             .unwrap();
         assert_eq!((first_revision, second_revision), (1, 2));
+        assert!(registry.target(&old_id).is_some());
+        let (_, without_window) = registry.refresh(Vec::new()).unwrap();
+        assert!(without_window.is_empty());
         assert!(registry.target(&old_id).is_none());
+        let (_, reappeared) = registry
+            .refresh(vec![discovered(VideoSourceKind::Window, "window")])
+            .unwrap();
+        assert_ne!(old_id, reappeared[0].source_id);
+    }
+
+    #[test]
+    fn new_targets_get_new_ids_while_existing_targets_keep_their_ids() {
+        let mut registry = SourceRegistry::default();
+        let (_, first) = registry
+            .refresh(vec![discovered(VideoSourceKind::Window, "existing")])
+            .unwrap();
+        let existing_id = first[0].source_id.clone();
+        let (_, refreshed) = registry
+            .refresh(vec![
+                discovered(VideoSourceKind::Window, "existing renamed"),
+                discovered_target(VideoSourceKind::Window, "new", 2),
+            ])
+            .unwrap();
+        assert_eq!(refreshed[0].source_id, existing_id);
+        assert_ne!(refreshed[1].source_id, existing_id);
+        assert!(registry.target(&existing_id).is_some());
     }
 
     #[test]

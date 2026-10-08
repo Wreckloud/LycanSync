@@ -24,6 +24,7 @@ function dispatchFrame(target: EventTarget, frame: VideoFrame) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   Reflect.deleteProperty(globalThis, 'window');
 });
 
@@ -189,10 +190,12 @@ describe('NativeScreenVideoSession', () => {
     expect(stopNativeVideo).toHaveBeenCalledWith('current-session');
   });
 
-  it('replaces a minimized window with a pause frame and resumes real frames', async () => {
+  it('repeats monotonic pause hints on the live track and stops them on resume', async () => {
+    vi.useFakeTimers();
     const target = installWindowMessageTarget();
     const frames: VideoFrame[] = [];
-    const pauseFrame = Object.assign(createFrame(), { timestamp: 100_001 });
+    const pauseFrames: VideoFrame[] = [];
+    const adjustedFrames: VideoFrame[] = [];
     const onError = vi.fn();
     let reportSuspension!: (status: { sessionId: string; suspended: boolean }) => void;
     const desktop: NativeVideoDesktopBridge = {
@@ -205,12 +208,21 @@ describe('NativeScreenVideoSession', () => {
       },
     };
     let now = 0;
-    const createSuspendedFrame = vi.fn(() => pauseFrame);
+    const createSuspendedFrame = vi.fn((_width: number, _height: number, timestamp: number) => {
+      const frame = Object.assign(createFrame(), { timestamp });
+      pauseFrames.push(frame);
+      return frame;
+    });
     const session = new NativeScreenVideoSession(desktop, {
       maxFps: 30,
       now: () => now,
       onError,
       createSuspendedFrame,
+      createFrameWithTimestamp: (_frame, timestamp) => {
+        const adjusted = Object.assign(createFrame(), { timestamp });
+        adjustedFrames.push(adjusted);
+        return adjusted;
+      },
       createGenerator: () => ({
         contentHint: '',
         writable: new WritableStream<VideoFrame>({ write: (frame) => { frames.push(frame); } }),
@@ -227,9 +239,13 @@ describe('NativeScreenVideoSession', () => {
     expect(createSuspendedFrame).not.toHaveBeenCalled();
     reportSuspension({ sessionId: 'window-session', suspended: true });
     await vi.waitFor(() => expect(frames).toHaveLength(2));
-    expect(createSuspendedFrame).toHaveBeenCalledWith(800, 500, 100_001);
-    expect(frames[1]).toBe(pauseFrame);
-    await vi.waitFor(() => expect(pauseFrame.close).toHaveBeenCalledOnce());
+    expect(createSuspendedFrame).toHaveBeenCalledWith(800, 500, 1_100_000);
+    await vi.waitFor(() => expect(pauseFrames[0].close).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(frames).toHaveLength(4);
+    expect(pauseFrames.map((frame) => frame.timestamp)).toEqual([1_100_000, 2_100_000, 3_100_000]);
+    expect(pauseFrames[1].timestamp).toBeGreaterThan(pauseFrames[0].timestamp!);
+    expect(pauseFrames[2].timestamp).toBeGreaterThan(pauseFrames[1].timestamp!);
     const staleFrame = createFrame();
     dispatchFrame(target, staleFrame);
     expect(staleFrame.close).toHaveBeenCalledOnce();
@@ -238,10 +254,58 @@ describe('NativeScreenVideoSession', () => {
     now = 100;
     const resumedFrame = Object.assign(createFrame(), { timestamp: 200_000 });
     dispatchFrame(target, resumedFrame);
-    await vi.waitFor(() => expect(frames).toHaveLength(3));
-    expect(frames[2]).toBe(resumedFrame);
+    await vi.waitFor(() => expect(frames).toHaveLength(5));
+    expect(resumedFrame.close).toHaveBeenCalledOnce();
+    expect(frames[4]).toBe(adjustedFrames[0]);
+    expect(adjustedFrames[0].timestamp).toBe(pauseFrames[2].timestamp! + 1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(frames).toHaveLength(5);
     expect(onError).not.toHaveBeenCalled();
     await session.stop();
+  });
+
+  it('does not queue pause hints behind a blocked writer and clears the timer on stop', async () => {
+    vi.useFakeTimers();
+    const target = installWindowMessageTarget();
+    let rejectHint!: (error: Error) => void;
+    const writes: VideoFrame[] = [];
+    let reportSuspension!: (status: { sessionId: string; suspended: boolean }) => void;
+    const generator = {
+      contentHint: '',
+      writable: new WritableStream<VideoFrame>({
+        write: (frame) => {
+          writes.push(frame);
+          return writes.length === 2
+            ? new Promise<void>((_resolve, reject) => { rejectHint = reject; })
+            : undefined;
+        },
+      }),
+      stop: vi.fn(() => rejectHint?.(new Error('stopped'))),
+    };
+    const desktop: NativeVideoDesktopBridge = {
+      startNativeVideo: vi.fn(async () => ({ sessionId: 'busy-session', changed: true })),
+      stopNativeVideo: vi.fn(async () => ({ changed: true })),
+      onNativeVideoError: () => () => {},
+      onNativeVideoSuspended: (callback) => { reportSuspension = callback; return () => {}; },
+    };
+    const session = new NativeScreenVideoSession(desktop, {
+      maxFps: 30,
+      createSuspendedFrame: (_width, _height, timestamp) => Object.assign(createFrame(), { timestamp }),
+      createGenerator: () => generator as never,
+      createLocalTrack: () => ({ stop: vi.fn() } as never),
+    });
+    const ready = session.start('window:1:0');
+    await Promise.resolve();
+    dispatchFrame(target, Object.assign(createFrame(), { timestamp: 100_000 }));
+    await ready;
+    reportSuspension({ sessionId: 'busy-session', suspended: true });
+    await vi.waitFor(() => expect(writes).toHaveLength(2));
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(writes).toHaveLength(2);
+    await session.stop();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(writes).toHaveLength(2);
+    expect(desktop.stopNativeVideo).toHaveBeenCalledWith('busy-session');
   });
 
   it('can publish a pause frame when minimization precedes the first captured frame', async () => {

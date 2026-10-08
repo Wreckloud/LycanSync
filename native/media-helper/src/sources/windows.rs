@@ -3,10 +3,13 @@ use crate::protocol::{Capability, ErrorCode, VideoSource, VideoSourceKind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use windows::Graphics::Capture::GraphicsCaptureSession;
-use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, RECT};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, RECT};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORENUMPROC, MONITORINFOEXW,
+};
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
     GetCurrentProcessId, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -18,8 +21,8 @@ use windows::Win32::UI::HiDpi::{
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GCW_ATOM, GWL_EXSTYLE, GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetPropW,
     GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
-    IsWindowVisible, MONITORINFOF_PRIMARY, RemovePropW, SetPropW, WNDENUMPROC, WS_MAXIMIZE,
-    WS_MINIMIZE,
+    IsWindowVisible, MONITORINFOF_PRIMARY, RemovePropW, SetPropW, WNDENUMPROC, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_MAXIMIZE, WS_MINIMIZE,
 };
 use windows::core::{BOOL, PCWSTR};
 
@@ -67,6 +70,7 @@ pub(super) struct WindowsDiscovery {
     _apartment: WinRtApartment,
     supported: bool,
     hardware_d3d_available: bool,
+    client_process_id: u32,
 }
 
 impl WindowsDiscovery {
@@ -75,10 +79,12 @@ impl WindowsDiscovery {
         let supported =
             GraphicsCaptureSession::IsSupported().map_err(|_| ErrorCode::SourceDiscoveryFailed)?;
         let hardware_d3d_available = crate::d3d::probe_hardware_device().is_ok();
+        let client_process_id = parent_process_id().ok_or(ErrorCode::SourceDiscoveryFailed)?;
         Ok(Self {
             _apartment: apartment,
             supported,
             hardware_d3d_available,
+            client_process_id,
         })
     }
 
@@ -114,6 +120,8 @@ impl WindowsDiscovery {
         let _dpi_awareness = ThreadDpiAwarenessContext::per_monitor_v2()?;
         let mut context = DiscoveryContext {
             sources: Vec::new(),
+            helper_process_id: unsafe { GetCurrentProcessId() },
+            client_process_id: self.client_process_id,
         };
         let context_pointer = &mut context as *mut DiscoveryContext;
         let monitors: MONITORENUMPROC = Some(enumerate_monitor);
@@ -140,7 +148,7 @@ impl WindowsDiscovery {
             CaptureTarget::Window(window, identity) => window_matches_identity(*window, identity),
             CaptureTarget::Monitor(monitor) => is_live_monitor(*monitor),
             #[cfg(test)]
-            CaptureTarget::Test => false,
+            CaptureTarget::Test(_) => false,
         }
     }
 
@@ -196,6 +204,8 @@ fn initialize_winrt() -> Result<WinRtApartment, ErrorCode> {
 
 struct DiscoveryContext {
     sources: Vec<DiscoveredSource>,
+    helper_process_id: u32,
+    client_process_id: u32,
 }
 
 unsafe extern "system" fn enumerate_monitor(
@@ -251,7 +261,12 @@ unsafe extern "system" fn enumerate_window(window: HWND, parameter: LPARAM) -> B
     }
     let mut process_id = 0;
     unsafe { GetWindowThreadProcessId(window, Some(&mut process_id)) };
-    if process_id == unsafe { GetCurrentProcessId() }
+    let extended_style = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
+    if should_exclude_window(
+        process_id,
+        context.helper_process_id,
+        context.client_process_id,
+    ) || is_helper_window_style(extended_style)
         || is_shell_window(window)
         || is_cloaked(window)
     {
@@ -413,6 +428,45 @@ fn stable_window_style(style: isize) -> isize {
     style & !(WS_MINIMIZE.0 as isize | WS_MAXIMIZE.0 as isize)
 }
 
+fn should_exclude_window(process_id: u32, helper_process_id: u32, client_process_id: u32) -> bool {
+    process_id == helper_process_id || process_id == client_process_id
+}
+
+fn is_helper_window_style(extended_style: isize) -> bool {
+    let helper_style_bits = WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize;
+    extended_style & helper_style_bits != 0
+}
+
+fn parent_process_id() -> Option<u32> {
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }.ok()?;
+    if snapshot == INVALID_HANDLE_VALUE {
+        return None;
+    }
+    struct Snapshot(HANDLE);
+    impl Drop for Snapshot {
+        fn drop(&mut self) {
+            let _ = unsafe { CloseHandle(self.0) };
+        }
+    }
+    let _snapshot = Snapshot(snapshot);
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let helper_process_id = unsafe { GetCurrentProcessId() };
+    if unsafe { Process32FirstW(snapshot, &mut entry) }.is_err() {
+        return None;
+    }
+    loop {
+        if entry.th32ProcessID == helper_process_id {
+            return (entry.th32ParentProcessID != 0).then_some(entry.th32ParentProcessID);
+        }
+        if unsafe { Process32NextW(snapshot, &mut entry) }.is_err() {
+            return None;
+        }
+    }
+}
+
 pub(crate) fn window_is_minimized(window: HWND) -> bool {
     unsafe { IsWindow(Some(window)).as_bool() && IsIconic(window).as_bool() }
 }
@@ -469,7 +523,10 @@ fn read_window_fingerprint(window: HWND) -> Option<WindowFingerprint> {
 
 #[cfg(test)]
 mod tests {
-    use super::{WS_MAXIMIZE, WS_MINIMIZE, stable_window_style};
+    use super::{
+        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZE, WS_MINIMIZE, is_helper_window_style,
+        should_exclude_window, stable_window_style,
+    };
 
     #[test]
     fn window_identity_style_ignores_minimize_and_maximize_bits() {
@@ -483,5 +540,21 @@ mod tests {
             stable_window_style(base),
             stable_window_style(base | 0x0004_0000)
         );
+    }
+
+    #[test]
+    fn excludes_helper_and_parent_client_windows_without_title_matching() {
+        assert!(should_exclude_window(20, 10, 20));
+        assert!(should_exclude_window(10, 10, 20));
+        assert!(!should_exclude_window(30, 10, 20));
+    }
+
+    #[test]
+    fn classifies_tool_and_non_activatable_windows_as_helpers() {
+        assert!(is_helper_window_style(WS_EX_TOOLWINDOW.0 as isize));
+        assert!(is_helper_window_style(WS_EX_NOACTIVATE.0 as isize));
+        assert!(!is_helper_window_style(0));
+        // Layered and topmost styles are intentionally outside this classification.
+        assert!(!is_helper_window_style(0x0008_0000 | 0x0000_0008));
     }
 }

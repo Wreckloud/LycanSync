@@ -11,6 +11,7 @@ import { ENTRANCE_SOUND_MAX_BYTES, ENTRANCE_SOUND_TOPIC, isSupportedEntranceSoun
 import { MicrophoneAudioProcessor } from './microphoneAudioProcessor';
 import { NativeScreenVideoSession } from './nativeScreenVideo';
 import { NativeScreenAudioSession } from './nativeScreenAudio';
+import { nativeScreenAudioMode } from './nativeScreenAudioMode';
 
 type RoomStatus = 'idle' | 'joining' | 'connected' | 'reconnecting';
 type MediaSource = Track.Source.Microphone | Track.Source.ScreenShare;
@@ -30,19 +31,12 @@ interface RtcRoomEvents {
   screenShareStarted?(): void;
   screenShareStopped?(): void;
   disconnected?(): void;
-  selectNativeScreenSource?(sources: NativeVideoSource[]): Promise<NativeScreenSourceSelection | null>;
+  selectNativeScreenSource?(
+    capabilities: Promise<Record<string, { available: boolean; reason: string }>>,
+  ): Promise<NativeScreenSourceSelection | null>;
 }
 
 interface NativeScreenSourceSelection { sourceId: string; shareAudio: boolean }
-
-interface NativeVideoSource {
-  sourceId: string;
-  kind: 'monitor' | 'window';
-  title: string;
-  width: number;
-  height: number;
-  primary: boolean;
-}
 
 interface RtcRoomOptions {
   inputGain: number;
@@ -400,14 +394,23 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         microphoneProcessor = processor;
       } else {
         const desktop = window.lycanDesktop;
-        if (desktop?.startNativeVideo && desktop.listNativeVideoSources && desktop.getNativeMediaCapabilities) {
-          const capabilities = await desktop.getNativeMediaCapabilities();
+        if (desktop) {
+          const selectSource = options?.events?.selectNativeScreenSource;
+          const capabilitiesPromise = desktop.getNativeMediaCapabilities();
+          if (!selectSource) {
+            const capabilities = await capabilitiesPromise;
+            if (!capabilities.videoCapture?.available) {
+              throw new Error(capabilities.videoCapture?.reason || 'nativeVideoUnavailable');
+            }
+            throw new Error('nativeSourceSelectionUnavailable');
+          }
+          const selectionPromise = selectSource(capabilitiesPromise);
+          const selection = await selectionPromise;
+          if (!selection) return;
+          const capabilities = await capabilitiesPromise;
           if (!capabilities.videoCapture?.available) {
             throw new Error(capabilities.videoCapture?.reason || 'nativeVideoUnavailable');
           }
-          const snapshot = await desktop.listNativeVideoSources();
-          const selection = await options?.events?.selectNativeScreenSource?.(snapshot.sources);
-          if (!selection) return;
           const { sourceId } = selection;
           nativeVideo = new NativeScreenVideoSession(desktop, {
             maxFps: SCREEN_SHARE_PRESET.encoding.maxFramerate ?? 60,
@@ -432,12 +435,27 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           nativeScreenVideoSession = nativeVideo;
           capturedTracks = [await nativeVideo.start(sourceId)];
           if (selection.shareAudio) {
-            if (capabilities.screenShareAudioCapture?.available) {
+            const audioMode = nativeScreenAudioMode(capabilities.screenShareAudioCapture);
+            if (audioMode !== 'unavailable') {
               nativeAudio = new NativeScreenAudioSession(desktop, {
                 onError: (code) => {
                   if (nativeScreenAudioSession !== nativeAudio || activeRoom.value !== currentRoom) return;
                   nativeScreenAudioSession = null;
-                  notice.value = `共享声音已停止，画面仍在共享（${code}）。`;
+                  let reason = '声音采集连接已中断';
+                  if (code === 'screenShareAudioTargetUnavailable') {
+                    if (audioMode === 'systemMix') {
+                      reason = '默认播放设备已断开或切换';
+                    } else if (sourceId.startsWith('window:')) {
+                      reason = '所选应用已关闭或声音目标不可用';
+                    } else {
+                      reason = '共享声音目标不可用';
+                    }
+                  } else if (code === 'screenShareAudioFormatUnsupported') {
+                    reason = '当前系统音频格式暂不支持';
+                  } else if (audioMode === 'systemMix') {
+                    reason = '默认播放设备已断开或声音采集失败';
+                  }
+                  notice.value = `共享声音已停止，画面仍在共享（${reason}）。`;
                   const publication = currentRoom.localParticipant
                     .getTrackPublication(Track.Source.ScreenShareAudio);
                   if (publication?.track) {
@@ -456,16 +474,20 @@ export function useRtcRoom(options?: RtcRoomOptions) {
                 await nativeAudio.stop().catch(() => {});
                 nativeAudio = null;
                 const code = error instanceof Error ? error.message : '';
-                const reason = /screenShareAudioUnsupported/.test(code)
-                  ? '当前 Windows 版本不支持应用循环音频捕获'
-                  : /screenShareAudioTargetUnavailable/.test(code) && sourceId.startsWith('window:')
-                    ? '无法确认所选应用的声音来源或应用已关闭'
-                    : /screenShareAudioFormatUnsupported/.test(code)
-                      ? '当前系统音频格式暂不支持' : 'Windows 音频捕获启动失败';
+                let reason = 'Windows 音频捕获启动失败';
+                if (/screenShareAudioUnsupported/.test(code)) {
+                  reason = '当前 Windows 版本不支持屏幕共享声音捕获';
+                } else if (/screenShareAudioTargetUnavailable/.test(code) && audioMode === 'systemMix') {
+                  reason = '默认播放设备不可用或已切换';
+                } else if (/screenShareAudioTargetUnavailable/.test(code) && sourceId.startsWith('window:')) {
+                  reason = '无法确认所选应用的声音来源或应用已关闭';
+                } else if (/screenShareAudioFormatUnsupported/.test(code)) {
+                  reason = '当前系统音频格式暂不支持';
+                }
                 notice.value = `仅共享画面：${reason}。`;
               }
             } else {
-              notice.value = '仅共享画面：此 Windows 版本不支持应用循环音频捕获。';
+              notice.value = '仅共享画面：当前 Windows 版本不支持屏幕共享声音捕获。';
             }
           }
         } else {

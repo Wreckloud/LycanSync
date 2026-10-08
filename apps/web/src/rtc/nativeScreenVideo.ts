@@ -18,11 +18,14 @@ interface NativeScreenVideoOptions {
   createGenerator?: () => GeneratedVideoTrack;
   createLocalTrack?: (track: MediaStreamTrack) => LocalVideoTrack;
   createSuspendedFrame?: (width: number, height: number, timestamp: number) => VideoFrame;
+  createFrameWithTimestamp?: (frame: VideoFrame, timestamp: number) => VideoFrame;
   onError?: (code: string) => void;
   now?: () => number;
 }
 
 const FIRST_FRAME_TIMEOUT_MS = 8_000;
+const SUSPENDED_HINT_INTERVAL_MS = 1_000;
+const SUSPENDED_HINT_TIMESTAMP_STEP_US = SUSPENDED_HINT_INTERVAL_MS * 1_000;
 
 /** Owns the renderer-side VideoFrame queue and one helper video session. */
 export class NativeScreenVideoSession {
@@ -37,6 +40,7 @@ export class NativeScreenVideoSession {
   private readonly now: () => number;
   private readonly onError?: (code: string) => void;
   private readonly createSuspendedFrame: (width: number, height: number, timestamp: number) => VideoFrame;
+  private readonly createFrameWithTimestamp: (frame: VideoFrame, timestamp: number) => VideoFrame;
   private removeHelperErrorListener?: () => void;
   private removeSuspensionListener?: () => void;
   private sessionId?: string;
@@ -47,14 +51,14 @@ export class NativeScreenVideoSession {
   private stopPromise?: Promise<void>;
   private firstFrameResolve?: () => void;
   private firstFrameReject?: (error: Error) => void;
+  private suspensionTimer?: ReturnType<typeof setInterval>;
   private writePromise?: Promise<void>;
   private pendingFrame?: VideoFrame;
   private lastAcceptedAt = Number.NEGATIVE_INFINITY;
-  private lastTimestamp = 0;
+  private lastTimestamp = Number.NEGATIVE_INFINITY;
   private frameWidth = 1280;
   private frameHeight = 720;
   private suspended = false;
-  private suspensionFramePending = false;
   private writing = false;
   private stopped = false;
 
@@ -70,6 +74,8 @@ export class NativeScreenVideoSession {
     this.now = options.now ?? (() => performance.now());
     this.onError = options.onError;
     this.createSuspendedFrame = options.createSuspendedFrame ?? createSuspendedFrame;
+    this.createFrameWithTimestamp = options.createFrameWithTimestamp
+      ?? ((frame, timestamp) => new VideoFrame(frame, { timestamp }));
     this.generator = (options.createGenerator ?? createVideoGenerator)();
     this.generator.contentHint = 'motion';
     this.writer = this.generator.writable.getWriter();
@@ -133,7 +139,7 @@ export class NativeScreenVideoSession {
     this.removeHelperErrorListener = undefined;
     this.removeSuspensionListener?.();
     this.removeSuspensionListener = undefined;
-    this.suspensionFramePending = false;
+    this.clearSuspensionTimer();
     this.firstFrameReject?.(new Error('nativeVideoSessionStopped'));
     this.generator.stop();
     this.track.stop();
@@ -158,11 +164,25 @@ export class NativeScreenVideoSession {
 
   private readonly onWindowMessage = (event: MessageEvent) => {
     if (event.source !== window || event.data?.type !== 'lycan-native-screen-frame') return;
-    const frame = event.data.frame as VideoFrame | undefined;
+    let frame = event.data.frame as VideoFrame | undefined;
     if (!frame || typeof frame.close !== 'function') return;
     if (this.stopped || this.suspended || this.writing || this.now() - this.lastAcceptedAt < this.intervalMs) {
       frame.close();
       return;
+    }
+    if (Number.isFinite(frame.timestamp)) {
+      const timestamp = Math.max(frame.timestamp!, this.lastTimestamp + 1);
+      if (timestamp !== frame.timestamp) {
+        try {
+          const adjustedFrame = this.createFrameWithTimestamp(frame, timestamp);
+          frame.close();
+          frame = adjustedFrame;
+        } catch {
+          frame.close();
+          this.fail('nativeVideoTimestampAdjustmentFailed');
+          return;
+        }
+      }
     }
     if (Number.isInteger(frame.displayWidth) && frame.displayWidth > 0) this.frameWidth = frame.displayWidth;
     if (Number.isInteger(frame.displayHeight) && frame.displayHeight > 0) this.frameHeight = frame.displayHeight;
@@ -173,17 +193,19 @@ export class NativeScreenVideoSession {
   private setSuspended(suspended: boolean): void {
     if (this.stopped || this.suspended === suspended) return;
     this.suspended = suspended;
-    this.suspensionFramePending = suspended;
-    if (suspended) this.writeSuspendedFrame();
+    this.clearSuspensionTimer();
+    if (suspended) {
+      this.writeSuspendedFrame();
+      this.suspensionTimer = setInterval(() => this.writeSuspendedFrame(), SUSPENDED_HINT_INTERVAL_MS);
+    }
   }
 
   private writeSuspendedFrame(): void {
-    if (this.stopped || !this.suspended || !this.suspensionFramePending || this.writing) return;
-    this.suspensionFramePending = false;
+    if (this.stopped || !this.suspended || this.writing) return;
     const scale = Math.min(1, 1920 / this.frameWidth, 1080 / this.frameHeight);
     const width = Math.max(1, Math.round(this.frameWidth * scale));
     const height = Math.max(1, Math.round(this.frameHeight * scale));
-    const timestamp = Math.max(Math.round(this.now() * 1000), this.lastTimestamp + 1);
+    const timestamp = Math.max(Math.round(this.now() * 1000), this.lastTimestamp + SUSPENDED_HINT_TIMESTAMP_STEP_US);
     try {
       this.writeFrame(this.createSuspendedFrame(width, height, timestamp));
     } catch {
@@ -201,11 +223,15 @@ export class NativeScreenVideoSession {
       frame.close();
       if (this.pendingFrame === frame) this.pendingFrame = undefined;
       this.writing = false;
-      this.writeSuspendedFrame();
     });
     // 首帧已交给轨道；write 要等 LiveKit 开始读取才可能完成，不能以它作为发布前提。
     this.firstFrameResolve?.();
     this.firstFrameResolve = undefined;
+  }
+
+  private clearSuspensionTimer(): void {
+    if (this.suspensionTimer !== undefined) clearInterval(this.suspensionTimer);
+    this.suspensionTimer = undefined;
   }
 
   private fail(code: string): void {
