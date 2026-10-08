@@ -12,6 +12,10 @@ const rtcMocks = vi.hoisted(() => ({
   nativeAudioStarts: vi.fn(),
   nativeAudioStops: vi.fn(),
   nativeAudioError: vi.fn(),
+  microphoneStarted: vi.fn(),
+  microphoneStopped: vi.fn(),
+  microphoneConfigured: vi.fn(),
+  nativeMicrophoneError: vi.fn(),
   selectedSources: vi.fn(),
   nativeError: vi.fn(),
 }));
@@ -62,6 +66,27 @@ vi.mock('./nativeScreenAudio', () => ({
       return this.track as never;
     }
     async stop() { if (this.sessionId) await this.desktop!.stopNativeScreenAudio(this.sessionId); }
+  },
+}));
+
+vi.mock('./nativeMicrophoneAudio', () => ({
+  NativeMicrophoneAudioSession: class NativeMicrophoneAudioSession {
+    track = { stop: vi.fn() };
+    private sessionId = '';
+    constructor(private readonly desktop: Window['lycanDesktop'], options: { onError?: (code: string) => void }) {
+      if (options.onError) rtcMocks.nativeMicrophoneError.mockImplementation(options.onError);
+    }
+    async start(sessionId: string, settings: unknown) {
+      this.sessionId = sessionId;
+      await this.desktop!.startNativeMicrophone(sessionId, settings as never);
+      return this.track as never;
+    }
+    async configure(settings: unknown) {
+      return this.desktop!.configureNativeMicrophone!(this.sessionId, settings as never);
+    }
+    async stop() {
+      if (this.sessionId) await this.desktop!.stopNativeMicrophone(this.sessionId);
+    }
   },
 }));
 
@@ -138,6 +163,40 @@ afterEach(() => {
 });
 
 describe('native screen share wiring', () => {
+  it('uses the desktop native microphone and publishes it as the microphone source', async () => {
+    rtcMocks.token.mockResolvedValue({ serverUrl: 'wss://example.test', token: 'test-token' });
+    rtcMocks.microphoneStarted.mockResolvedValue({ sampleRate: 48000, channels: 1, bitsPerSample: 32, nominalChunkMs: 10 });
+    rtcMocks.microphoneStopped.mockResolvedValue({ changed: true });
+    rtcMocks.microphoneConfigured.mockResolvedValue({ changed: true });
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { lycanDesktop: {
+        startNativeMicrophone: rtcMocks.microphoneStarted,
+        configureNativeMicrophone: rtcMocks.microphoneConfigured,
+        stopNativeMicrophone: rtcMocks.microphoneStopped,
+      } },
+    });
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({
+      inputGain: 0.8,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true },
+    }))!;
+    try {
+      expect(await rtc.join('microphone-group')).toBe(true);
+      expect(rtcMocks.microphoneStarted).toHaveBeenCalledOnce();
+      expect(rtcMocks.microphoneStarted.mock.calls[0][1]).toEqual({
+        inputGain: 0.8, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true,
+      });
+      expect(rtcMocks.published).toHaveBeenCalledWith(expect.anything(), { source: Track.Source.Microphone });
+      rtc.setMicrophoneInputGain(0.5);
+      expect(rtcMocks.microphoneConfigured).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ inputGain: 0.5 }));
+      await rtc.toggleMedia(Track.Source.Microphone);
+      expect(rtcMocks.microphoneStopped).toHaveBeenCalledOnce();
+    } finally {
+      scope.stop();
+    }
+  });
+
   it('publishes only after native start resolves, with ScreenShare source, then releases on stop and leave', async () => {
     rtcMocks.token.mockResolvedValue({ serverUrl: 'wss://example.test', token: 'test-token' });
     rtcMocks.nativeStarts.mockResolvedValue({ sessionId: 'native-session', changed: true });

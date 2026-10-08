@@ -30,6 +30,7 @@ class MediaHelperManager {
     idleTimeoutMs = 30_000,
     retryDelayMs = 2000,
     onSharedTextureFrame = () => {},
+    onMicrophoneCaptureEnded = () => {},
     onVideoCaptureEnded = () => {},
     onVideoCaptureSuspended = () => {},
     onHelperFailure = () => {},
@@ -46,6 +47,7 @@ class MediaHelperManager {
     this.idleTimeoutMs = idleTimeoutMs;
     this.retryDelayMs = retryDelayMs;
     this.onSharedTextureFrame = onSharedTextureFrame;
+    this.onMicrophoneCaptureEnded = onMicrophoneCaptureEnded;
     this.onVideoCaptureEnded = onVideoCaptureEnded;
     this.onVideoCaptureSuspended = onVideoCaptureSuspended;
     this.onHelperFailure = onHelperFailure;
@@ -71,6 +73,11 @@ class MediaHelperManager {
     this.screenShareAudioStart = undefined;
     this.screenShareAudioStop = undefined;
     this.lastStoppedScreenShareAudio = undefined;
+    this.microphoneCapture = undefined;
+    this.microphoneCaptureStart = undefined;
+    this.microphoneCaptureStartingSessionId = undefined;
+    this.microphoneCaptureStop = undefined;
+    this.lastStoppedMicrophoneCapture = undefined;
   }
 
   getCapabilities() {
@@ -311,6 +318,114 @@ class MediaHelperManager {
       if (this.canCloseWhenIdle(active.state)) this.scheduleIdleShutdown(active.state);
     });
     this.screenShareAudioStop = promise;
+    return promise;
+  }
+
+  startMicrophoneCapture(pipeId, sessionId, settings) {
+    if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
+    if (this.platform !== 'win32' || !validPipeId(pipeId) || !validOpaqueId(sessionId)
+        || !validMicrophoneSettings(settings)) {
+      return Promise.reject(new Error('invalidMicrophoneCaptureStart'));
+    }
+    if (this.microphoneCapture) {
+      return this.microphoneCapture.sessionId === sessionId
+        ? Promise.resolve({ ...this.microphoneCapture.format, changed: false })
+        : Promise.reject(new Error('microphoneCaptureAlreadyRunning'));
+    }
+    if (this.microphoneCaptureStart) return this.microphoneCaptureStart;
+    const promise = this.runStartMicrophoneCapture(pipeId, sessionId, settings)
+      .finally(() => {
+        if (this.microphoneCaptureStart === promise) {
+          this.microphoneCaptureStart = undefined;
+          this.microphoneCaptureStartingSessionId = undefined;
+        }
+      });
+    this.microphoneCaptureStart = promise;
+    this.microphoneCaptureStartingSessionId = sessionId;
+    return promise;
+  }
+
+  async runStartMicrophoneCapture(pipeId, sessionId, settings) {
+    const state = await this.ensureStarted();
+    this.clearIdleTimer();
+    try {
+      const response = await this.sendRequest(state, 'startMicrophoneCapture', 'microphoneCaptureStarted',
+        this.requestTimeoutMs, { pipeId, sessionId, ...settings });
+      if (response.sessionId !== sessionId || response.changed !== true
+          || response.sampleRate !== 48000 || response.channels !== 1
+          || response.bitsPerSample !== 32 || response.nominalChunkMs !== 10) {
+        this.failState(state, new Error('mediaHelperInvalidMicrophoneCaptureStart'));
+        throw new Error('mediaHelperInvalidMicrophoneCaptureStart');
+      }
+      const format = {
+        sampleRate: response.sampleRate,
+        channels: 1,
+        bitsPerSample: 32,
+        nominalChunkMs: 10,
+      };
+      this.microphoneCapture = { state, sessionId, format };
+      state.microphoneCaptureSessionId = sessionId;
+      return { ...format, changed: true };
+    } finally {
+      if (this.canCloseWhenIdle(state)) this.scheduleIdleShutdown(state);
+    }
+  }
+
+  configureMicrophoneCapture(sessionId, settings) {
+    const active = this.microphoneCapture;
+    if (!active || active.sessionId !== sessionId || !validMicrophoneSettings(settings)) {
+      return Promise.reject(new Error('microphoneCaptureSessionMismatch'));
+    }
+    return this.sendRequest(active.state, 'configureMicrophoneCapture', 'acknowledged', this.requestTimeoutMs,
+      { sessionId, ...settings }).then((response) => {
+      if (response.command !== 'configureMicrophoneCapture' || response.changed !== true) {
+        throw new Error('mediaHelperInvalidMicrophoneCaptureSettings');
+      }
+      return { changed: true };
+    });
+  }
+
+  stopMicrophoneCapture(sessionId) {
+    if (!this.microphoneCapture && this.microphoneCaptureStart) {
+      if (this.microphoneCaptureStartingSessionId !== sessionId) {
+        return Promise.reject(new Error('microphoneCaptureSessionMismatch'));
+      }
+      if (this.microphoneCaptureStop) return this.microphoneCaptureStop;
+      const start = this.microphoneCaptureStart;
+      const promise = start.then(() => {
+        if (this.microphoneCaptureStop === promise) this.microphoneCaptureStop = undefined;
+        return this.stopMicrophoneCapture(sessionId);
+      }, (error) => {
+        if (this.lastStoppedMicrophoneCapture === sessionId) return { changed: false };
+        throw error;
+      }).finally(() => {
+        if (this.microphoneCaptureStop === promise) this.microphoneCaptureStop = undefined;
+      });
+      this.microphoneCaptureStop = promise;
+      return promise;
+    }
+    if (!this.microphoneCapture) {
+      return this.lastStoppedMicrophoneCapture === sessionId
+        ? Promise.resolve({ changed: false })
+        : Promise.reject(new Error('microphoneCaptureSessionMismatch'));
+    }
+    if (this.microphoneCapture.sessionId !== sessionId) {
+      return Promise.reject(new Error('microphoneCaptureSessionMismatch'));
+    }
+    if (this.microphoneCaptureStop) return this.microphoneCaptureStop;
+    const active = this.microphoneCapture;
+    const promise = this.sendRequest(active.state, 'stopMicrophoneCapture', 'acknowledged', this.requestTimeoutMs,
+      { sessionId }).then((response) => {
+      if (response.command !== 'stopMicrophoneCapture') throw new Error('mediaHelperInvalidMicrophoneCaptureStop');
+      this.microphoneCapture = undefined;
+      this.lastStoppedMicrophoneCapture = sessionId;
+      delete active.state.microphoneCaptureSessionId;
+      return { changed: response.changed };
+    }).finally(() => {
+      if (this.microphoneCaptureStop === promise) this.microphoneCaptureStop = undefined;
+      if (this.canCloseWhenIdle(active.state)) this.scheduleIdleShutdown(active.state);
+    });
+    this.microphoneCaptureStop = promise;
     return promise;
   }
 
@@ -592,6 +707,20 @@ class MediaHelperManager {
       catch { /* The capture owner can still stop its session. */ }
       return;
     }
+    if (message.event === 'microphoneCaptureEnded') {
+      if (!validOpaqueId(message.sessionId) || !isStableCode(message.code)) {
+        this.failState(state, new Error('mediaHelperInvalidMicrophoneCaptureEnded'));
+        return;
+      }
+      const active = this.microphoneCapture;
+      if (!active || active.state !== state || active.sessionId !== message.sessionId) return;
+      this.microphoneCapture = undefined;
+      this.lastStoppedMicrophoneCapture = message.sessionId;
+      delete state.microphoneCaptureSessionId;
+      try { this.onMicrophoneCaptureEnded(state, { sessionId: message.sessionId, code: message.code }); }
+      catch { /* The capture owner still receives the failure and can release its session. */ }
+      return;
+    }
     if (typeof message.requestId !== 'string') {
       this.failState(state, new Error('mediaHelperInvalidResponse'));
       return;
@@ -671,9 +800,9 @@ class MediaHelperManager {
   canCloseWhenIdle(state) {
     return this.state === state && state.alive && state.pending.size === 0
       && !this.closingDown(state) && this.captureProbe?.state !== state && this.videoCapture?.state !== state
-      && this.screenShareAudio?.state !== state
+      && this.screenShareAudio?.state !== state && this.microphoneCapture?.state !== state
       && this.captureProbeStart?.promise === undefined && this.videoCaptureStart?.promise === undefined
-      && this.screenShareAudioStart === undefined;
+      && this.screenShareAudioStart === undefined && this.microphoneCaptureStart === undefined;
   }
 
   invalidateState(state) {
@@ -684,6 +813,9 @@ class MediaHelperManager {
     if (this.videoCaptureStart?.state === state) this.videoCaptureStart = undefined;
     if (this.screenShareAudio?.state === state) this.screenShareAudio = undefined;
     if (this.screenShareAudioStart) this.screenShareAudioStart = undefined;
+    if (this.microphoneCapture?.state === state) this.microphoneCapture = undefined;
+    if (this.microphoneCaptureStart) this.microphoneCaptureStart = undefined;
+    this.microphoneCaptureStartingSessionId = undefined;
   }
 
   clearIdleTimer() {
@@ -751,6 +883,15 @@ function validateCapabilities(message) {
   if (supportedScreenAudio.get(screenAudio.reason) !== screenAudio.available) {
     throw new Error('mediaHelperInvalidCapabilities');
   }
+  const microphone = result.microphoneCapture;
+  const supportedMicrophone = new Map([
+    ['windowsWasapiSharedModeSonora', true],
+    ['platformUnsupported', false],
+    ['notImplemented', false],
+  ]);
+  if (supportedMicrophone.get(microphone.reason) !== microphone.available) {
+    throw new Error('mediaHelperInvalidCapabilities');
+  }
   return result;
 }
 
@@ -801,6 +942,10 @@ function validateDiagnostics(message) {
       throw new Error('mediaHelperInvalidDiagnostics');
     }
   }
+  if (message.microphoneCaptureDroppedChunks !== undefined
+      && (!Number.isSafeInteger(message.microphoneCaptureDroppedChunks) || message.microphoneCaptureDroppedChunks < 0)) {
+    throw new Error('mediaHelperInvalidDiagnostics');
+  }
   if (typeof message.available !== 'boolean'
       || (message.captureSuspended !== undefined && message.captureSuspended !== null
         && typeof message.captureSuspended !== 'boolean')
@@ -816,6 +961,7 @@ function validateDiagnostics(message) {
     .map((field) => [field, message[field]]));
   diagnostics.framePoolRecreates ??= null;
   diagnostics.captureSuspended ??= null;
+  diagnostics.microphoneCaptureDroppedChunks = message.microphoneCaptureDroppedChunks ?? 0;
   const audio = message.screenShareAudio;
   if (!audio || !['idle', 'starting', 'running', 'stopping', 'failed'].includes(audio.state)
       || (audio.sessionId !== null && (typeof audio.sessionId !== 'string' || audio.sessionId.length > 128))
@@ -844,6 +990,28 @@ function safeFailureCode(error) {
 
 function isStableCode(value) {
   return typeof value === 'string' && /^[a-z][A-Za-z0-9]{0,63}$/.test(value);
+}
+
+function validOpaqueId(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 128
+    && /^[A-Za-z0-9:_-]+$/.test(value);
+}
+
+function validPipeId(value) {
+  return typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+function validMicrophoneSettings(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const expected = ['inputGain', 'noiseSuppression', 'autoGainControl', 'voiceEnhancement'];
+  const keys = Object.keys(value);
+  return keys.length === expected.length && expected.every((key) => keys.includes(key))
+    && typeof value.inputGain === 'number' && Number.isFinite(value.inputGain)
+    && value.inputGain >= 0 && value.inputGain <= 2
+    && typeof value.noiseSuppression === 'boolean'
+    && typeof value.autoGainControl === 'boolean'
+    && typeof value.voiceEnhancement === 'boolean';
 }
 
 function waitForClose(closedPromise, timeoutMs) {

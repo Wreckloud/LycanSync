@@ -1115,7 +1115,9 @@ function participantListening(participant: Participant) {
                     aria-label="屏幕共享声音音量" @input="updateScreenShareVolume(Number(($event.target as HTMLInputElement).value))" /></label>
                   <small>成员麦克风音量与共享声音音量分开设置，均受 LycanSync 总输出音量控制。</small>
                   <div class="audio-options">
-                    <label class="audio-option"><span>回声消除</span><input type="checkbox" :checked="audioProcessing.echoCancellation"
+                    <label class="audio-option"><span>{{ desktop ? '回声消除（桌面不可用）' : '回声消除' }}</span><input type="checkbox"
+                      :checked="desktop ? false : audioProcessing.echoCancellation"
+                      :disabled="Boolean(desktop)"
                       @change="updateAudioProcessing('echoCancellation', ($event.target as HTMLInputElement).checked)" /></label>
                     <label class="audio-option"><span>环境降噪</span><input type="checkbox" :checked="audioProcessing.noiseSuppression"
                       @change="updateAudioProcessing('noiseSuppression', ($event.target as HTMLInputElement).checked)" /></label>
@@ -1124,6 +1126,7 @@ function participantListening(participant: Participant) {
                     <label class="audio-option"><span>人声增强</span><input type="checkbox" :checked="audioProcessing.voiceEnhancement"
                       @change="updateAudioProcessing('voiceEnhancement', ($event.target as HTMLInputElement).checked)" /></label>
                   </div>
+                  <small v-if="desktop">桌面原生麦克风暂不支持软件回声消除，建议使用耳机。</small>
                 </section>
               </span>
               <IconButton :label="localParticipant?.isScreenShareEnabled ? '停止屏幕共享' : screenShareLimitReached ? '屏幕共享已达到 8 路上限' : '开始屏幕共享'"

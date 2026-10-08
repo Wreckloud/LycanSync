@@ -9,7 +9,7 @@ const capabilities = {
   videoCapture: { available: false, reason: 'videoOutputNotImplemented' },
   captureProbe: { available: true, reason: 'windowsGraphicsCapture' },
   videoSourceDiscovery: { available: true, reason: 'windowsGraphicsCapture' },
-  microphoneCapture: { available: false, reason: 'notImplemented' },
+  microphoneCapture: { available: true, reason: 'windowsWasapiSharedModeSonora' },
   systemAudioCapture: { available: false, reason: 'notImplemented' },
   processAudioCapture: { available: false, reason: 'notImplemented' },
   audioSourceDiscovery: { available: true, reason: 'windowsCoreAudioEndpointEnumeration' },
@@ -32,6 +32,8 @@ class FakeHelper extends EventEmitter {
     this.videoSessionId = null;
     this.screenAudioState = 'idle';
     this.screenAudioSessionId = null;
+    this.microphoneState = 'idle';
+    this.microphoneSessionId = null;
     this.requests = [];
     this.stdout = new PassThrough();
     this.stdin = new Writable({
@@ -132,6 +134,27 @@ class FakeHelper extends EventEmitter {
         sampleRate: 48000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
       return;
     }
+    if (command.command === 'startMicrophoneCapture') {
+      if (this.mode.holdMicrophoneStart) {
+        this.pendingMicrophoneStart = command;
+        return;
+      }
+      this.microphoneState = 'running';
+      this.microphoneSessionId = command.sessionId;
+      this.writeResponse({ event: 'microphoneCaptureStarted', protocolVersion: 1,
+        requestId: command.requestId, sessionId: command.sessionId, state: 'running',
+        sampleRate: 48000, channels: 1, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
+      return;
+    }
+    if (command.command === 'configureMicrophoneCapture' || command.command === 'stopMicrophoneCapture') {
+      if (command.command === 'stopMicrophoneCapture') {
+        this.microphoneState = 'idle';
+        this.microphoneSessionId = null;
+      }
+      this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
+        command: command.command, state: 'running', changed: true });
+      return;
+    }
     if (command.command === 'stopScreenShareAudio') {
       this.screenAudioState = 'idle';
       this.screenAudioSessionId = null;
@@ -169,6 +192,7 @@ class FakeHelper extends EventEmitter {
         event: 'diagnostics', protocolVersion: 1, requestId: command.requestId,
         state: this.captureState, sessionId: this.captureSessionId,
         available: true, sourceKind: this.captureState === 'running' ? 'monitor' : null,
+        microphoneCaptureDroppedChunks: 0,
         frameWidth: this.captureState === 'running' ? 1920 : null,
         frameHeight: this.captureState === 'running' ? 1080 : null,
         framesReceived: this.captureState === 'running' ? 20 : null,
@@ -188,6 +212,7 @@ class FakeHelper extends EventEmitter {
           silentPackets: 0, droppedAudioChunks: 0, lastError: null },
       };
       if (this.mode.omitFramePoolRecreates) delete diagnostics.framePoolRecreates;
+      if (this.mode.omitMicrophoneCaptureDroppedChunks) delete diagnostics.microphoneCaptureDroppedChunks;
       if (this.mode.captureSuspended !== undefined) diagnostics.captureSuspended = this.mode.captureSuspended;
       this.writeResponse(diagnostics);
       return;
@@ -461,6 +486,40 @@ test('screen-share audio is bound to the active video source and stops idempoten
   await manager.shutdown();
 });
 
+test('native microphone capture validates settings, configures the active session, and stops idempotently', async () => {
+  const { manager, children } = createManager({}, { idleTimeoutMs: 20 });
+  const settings = { inputGain: 0.8, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false };
+  const pipeId = '58d00436-8ac2-4d0c-9283-9d5d5f70ed01';
+  const sessionId = 'microphone-session';
+  const started = await manager.startMicrophoneCapture(pipeId, sessionId, settings);
+  assert.deepEqual(started, { sampleRate: 48000, channels: 1, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
+  assert.deepEqual(await manager.startMicrophoneCapture(pipeId, sessionId, settings), { ...started, changed: false });
+  await assert.rejects(manager.startMicrophoneCapture(pipeId, 'other-session', settings), /microphoneCaptureAlreadyRunning/);
+  assert.deepEqual(await manager.configureMicrophoneCapture(sessionId, { ...settings, inputGain: 1.2 }), { changed: true });
+  assert.deepEqual(await manager.stopMicrophoneCapture(sessionId), { changed: true });
+  assert.deepEqual(await manager.stopMicrophoneCapture(sessionId), { changed: false });
+  assert.equal(children[0].requests.filter((request) => request.command === 'startMicrophoneCapture').length, 1);
+  assert.equal(children[0].requests.find((request) => request.command === 'startMicrophoneCapture').pipeId, pipeId);
+  await waitUntil(() => children[0].closed);
+  await manager.shutdown();
+});
+
+test('stopping the native microphone while start is pending waits for start then stops the same session', async () => {
+  const { manager, children } = createManager({ holdMicrophoneStart: true });
+  const settings = { inputGain: 1, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true };
+  const sessionId = 'pending-microphone-session';
+  const start = manager.startMicrophoneCapture('58d00436-8ac2-4d0c-9283-9d5d5f70ed01', sessionId, settings);
+  await waitUntil(() => children[0]?.pendingMicrophoneStart);
+  const stop = manager.stopMicrophoneCapture(sessionId);
+  children[0].writeResponse({ event: 'microphoneCaptureStarted', protocolVersion: 1,
+    requestId: children[0].pendingMicrophoneStart.requestId, sessionId, state: 'running',
+    sampleRate: 48000, channels: 1, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
+  await start;
+  assert.deepEqual(await stop, { changed: true });
+  assert.deepEqual(children[0].commands.slice(-2), ['startMicrophoneCapture', 'stopMicrophoneCapture']);
+  await manager.shutdown();
+});
+
 test('screen-share audio rejects stale source ids and mismatched video sessions', async () => {
   const { manager, children } = createManager();
   const snapshot = await manager.listVideoSources();
@@ -586,9 +645,10 @@ test('source ids expire when the lazy helper is reclaimed and do not start a rep
   await manager.shutdown();
 });
 
-test('diagnostics accept an older protocol v1 helper without the optional pool rebuild counter', async () => {
-  const { manager } = createManager({ omitFramePoolRecreates: true });
+test('diagnostics accept an older protocol v1 helper without optional capture counters', async () => {
+  const { manager } = createManager({ omitFramePoolRecreates: true, omitMicrophoneCaptureDroppedChunks: true });
   assert.equal((await manager.getDiagnostics()).framePoolRecreates, null);
+  assert.equal((await manager.getDiagnostics()).microphoneCaptureDroppedChunks, 0);
   await manager.shutdown();
 });
 

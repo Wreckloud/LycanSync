@@ -56,6 +56,21 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
     ipcRenderer.on('media:native-screen-audio-error', listener);
     return () => ipcRenderer.removeListener('media:native-screen-audio-error', listener);
   },
+  startNativeMicrophone: (sessionId, settings) => ipcRenderer.invoke('media:native-microphone:start', sessionId, settings),
+  configureNativeMicrophone: (sessionId, settings) => ipcRenderer.invoke('media:native-microphone:configure', sessionId, settings),
+  stopNativeMicrophone: (sessionId) => ipcRenderer.invoke('media:native-microphone:stop', sessionId),
+  onNativeMicrophoneChunk: (callback) => {
+    const listener = (_event, chunk) => callback(chunk);
+    ipcRenderer.on('media:native-microphone-frame', listener);
+    return () => ipcRenderer.removeListener('media:native-microphone-frame', listener);
+  },
+  acknowledgeNativeMicrophoneChunk: (sequence, droppedChunks) =>
+    ipcRenderer.send('media:native-microphone:consumed', sequence, droppedChunks),
+  onNativeMicrophoneError: (callback) => {
+    const listener = (_event, failure) => callback(failure);
+    ipcRenderer.on('media:native-microphone-error', listener);
+    return () => ipcRenderer.removeListener('media:native-microphone-error', listener);
+  },
   getNativeMediaDiagnostics: () => ipcRenderer.invoke('media:diagnostics'),
   onActivityChange: (callback) => {
     const listener = (_event, activity) => callback(activity);

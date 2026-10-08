@@ -402,6 +402,10 @@ impl AudioQueue {
     }
 
     fn pop(&self) -> Option<Vec<u8>> {
+        self.pop_with_before_wait(|| {})
+    }
+
+    fn pop_with_before_wait(&self, mut before_wait: impl FnMut()) -> Option<Vec<u8>> {
         let mut blocks = self.blocks.lock().expect("audio queue lock poisoned");
         loop {
             if let Some(block) = blocks.pop_front() {
@@ -410,12 +414,16 @@ impl AudioQueue {
             if self.closed.load(Ordering::Acquire) {
                 return None;
             }
+            before_wait();
             blocks = self.ready.wait(blocks).expect("audio queue lock poisoned");
         }
     }
 
     fn close(&self) {
+        // Use pop()'s mutex so close cannot notify between its check and wait.
+        let blocks = self.blocks.lock().expect("audio queue lock poisoned");
         self.closed.store(true, Ordering::Release);
+        drop(blocks);
         self.ready.notify_all();
     }
 }
@@ -683,7 +691,7 @@ fn normalize_to_stereo_f32(
     Ok(output)
 }
 
-unsafe fn sample_as_f32(
+pub(crate) unsafe fn sample_as_f32(
     data: *mut u8,
     sample_index: usize,
     format: &StreamFormat,
@@ -722,7 +730,7 @@ fn finite_sample(sample: f32) -> f32 {
     if sample.is_finite() { sample } else { 0.0 }
 }
 
-fn channel_weights(format: &StreamFormat, channel: usize) -> (f32, f32) {
+pub(crate) fn channel_weights(format: &StreamFormat, channel: usize) -> (f32, f32) {
     const SPEAKER_FRONT_LEFT: u32 = 0x1;
     const SPEAKER_FRONT_RIGHT: u32 = 0x2;
     const SPEAKER_FRONT_CENTER: u32 = 0x4;
@@ -782,19 +790,19 @@ fn channel_weights(format: &StreamFormat, channel: usize) -> (f32, f32) {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SampleEncoding {
+pub(crate) enum SampleEncoding {
     Pcm,
     IeeeFloat,
 }
 
-struct StreamFormat {
-    wave_format: WAVEFORMATEX,
-    sample_rate: u32,
-    channels: u16,
-    bits_per_sample: u16,
-    valid_bits_per_sample: u16,
-    channel_mask: u32,
-    encoding: SampleEncoding,
+pub(crate) struct StreamFormat {
+    pub(crate) wave_format: WAVEFORMATEX,
+    pub(crate) sample_rate: u32,
+    pub(crate) channels: u16,
+    pub(crate) bits_per_sample: u16,
+    pub(crate) valid_bits_per_sample: u16,
+    pub(crate) channel_mask: u32,
+    pub(crate) encoding: SampleEncoding,
 }
 
 fn supported_capture_format() -> StreamFormat {
@@ -818,7 +826,7 @@ fn supported_capture_format() -> StreamFormat {
     }
 }
 
-fn parse_mix_format(
+pub(crate) fn parse_mix_format(
     wave_format: WAVEFORMATEX,
     extensible: Option<WAVEFORMATEXTENSIBLE>,
 ) -> Result<StreamFormat, ErrorCode> {
@@ -1191,8 +1199,12 @@ mod tests {
     };
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+    use std::time::Duration;
     use windows::Win32::Media::KernelStreaming::KSDATAFORMAT_SUBTYPE_PCM;
     use windows::Win32::Media::Multimedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+
+    const QUEUE_TEST_TIMEOUT: Duration = Duration::from_secs(2);
 
     fn format(
         encoding: SampleEncoding,
@@ -1316,6 +1328,64 @@ mod tests {
         assert_eq!(blocks.len(), AUDIO_QUEUE_CAPACITY);
         assert_eq!(blocks.first(), Some(&vec![3]));
         assert_eq!(blocks.last(), Some(&vec![(AUDIO_QUEUE_CAPACITY + 2) as u8]));
+    }
+
+    #[test]
+    fn close_wakes_empty_consumer_at_the_wait_boundary() {
+        let queue = Arc::new(AudioQueue::default());
+        let (about_to_wait_tx, about_to_wait_rx) = mpsc::channel();
+        let (continue_wait_tx, continue_wait_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let consumer_queue = Arc::clone(&queue);
+        let consumer = std::thread::spawn(move || {
+            let result = consumer_queue.pop_with_before_wait(|| {
+                about_to_wait_tx.send(()).unwrap();
+                continue_wait_rx
+                    .recv_timeout(QUEUE_TEST_TIMEOUT)
+                    .expect("test must release consumer to enter Condvar::wait");
+            });
+            result_tx.send(result).unwrap();
+        });
+
+        about_to_wait_rx
+            .recv_timeout(QUEUE_TEST_TIMEOUT)
+            .expect("consumer should reach the empty-queue wait boundary");
+        let (close_started_tx, close_started_rx) = mpsc::channel();
+        let close_queue = Arc::clone(&queue);
+        let closer = std::thread::spawn(move || {
+            close_started_tx.send(()).unwrap();
+            close_queue.close();
+        });
+        close_started_rx
+            .recv_timeout(QUEUE_TEST_TIMEOUT)
+            .expect("closer should start while consumer holds the queue lock");
+        continue_wait_tx.send(()).unwrap();
+
+        let result = result_rx.recv_timeout(QUEUE_TEST_TIMEOUT);
+        let woke = result == Ok(None);
+        if !woke {
+            // Release a consumer if this regression reappears, then fail the bounded assertion.
+            queue.close();
+        }
+        consumer.join().unwrap();
+        closer.join().unwrap();
+        assert!(woke, "close should wake an empty-queue consumer");
+    }
+
+    #[test]
+    fn repeated_close_drains_queued_screen_audio_blocks_before_returning_none() {
+        let queue = AudioQueue::default();
+        queue.push(vec![1]);
+        queue.push(vec![2]);
+
+        queue.close();
+        queue.close();
+
+        assert_eq!(queue.pop(), Some(vec![1]));
+        assert_eq!(queue.pop(), Some(vec![2]));
+        assert_eq!(queue.pop(), None);
+        queue.close();
+        assert_eq!(queue.pop(), None);
     }
 
     #[test]

@@ -11,6 +11,7 @@ import { ENTRANCE_SOUND_MAX_BYTES, ENTRANCE_SOUND_TOPIC, isSupportedEntranceSoun
 import { MicrophoneAudioProcessor } from './microphoneAudioProcessor';
 import { NativeScreenVideoSession } from './nativeScreenVideo';
 import { NativeScreenAudioSession } from './nativeScreenAudio';
+import { NativeMicrophoneAudioSession, type NativeMicrophoneSettings } from './nativeMicrophoneAudio';
 import { nativeScreenAudioMode } from './nativeScreenAudioMode';
 
 type RoomStatus = 'idle' | 'joining' | 'connected' | 'reconnecting';
@@ -61,6 +62,12 @@ function captureErrorMessage(error: unknown, source: MediaSource): string {
     if (error.name === 'NotAllowedError') return `${label}未获授权或已取消，请允许后重试。`;
     if (error.name === 'NotFoundError') return `未找到可用的${label}设备。`;
     if (error.name === 'NotReadableError') return `${label}无法采集，请检查系统权限或设备占用。`;
+    if (source === Track.Source.Microphone && window.lycanDesktop) {
+      if (error.message === 'audioDeviceUnavailable') return '默认麦克风不可用，请检查设备连接或 Windows 录音权限。';
+      if (error.message === 'microphoneCaptureFormatUnsupported') return '当前麦克风音频格式暂不支持。';
+      if (error.message === 'platformUnsupported') return '当前桌面系统不支持原生麦克风采集。';
+      return '原生麦克风采集失败，请检查默认输入设备和 Windows 录音权限。';
+    }
     if (source === Track.Source.ScreenShare) {
       const code = error.message.match(/(?:^|: )([a-z][A-Za-z0-9]{0,63})$/)?.[1];
       if (code) return `屏幕共享操作失败（${code}）。`;
@@ -95,6 +102,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         voiceEnhancement: DEFAULT_AUDIO_PREFERENCES.voiceEnhancement,
       };
   let microphoneProcessor: MicrophoneAudioProcessor | null = null;
+  let nativeMicrophoneSession: NativeMicrophoneAudioSession | null = null;
   let speakerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let nativeScreenVideoSession: NativeScreenVideoSession | null = null;
   let nativeScreenAudioSession: NativeScreenAudioSession | null = null;
@@ -112,7 +120,10 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     nativeScreenVideoSession = null;
     const nativeAudio = nativeScreenAudioSession;
     nativeScreenAudioSession = null;
+    const nativeMicrophone = nativeMicrophoneSession;
+    nativeMicrophoneSession = null;
     void nativeAudio?.stop().catch(() => {});
+    void nativeMicrophone?.stop().catch(() => {});
     void nativeVideo?.stop().catch(() => {});
     unpublishedTracks.value.forEach((track) => track.stop());
     unpublishedTracks.value.clear();
@@ -310,9 +321,12 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     nativeScreenVideoSession = null;
     const nativeAudio = nativeScreenAudioSession;
     nativeScreenAudioSession = null;
+    const nativeMicrophone = nativeMicrophoneSession;
+    nativeMicrophoneSession = null;
     const nativeStop = Promise.all([
       nativeAudio?.stop().catch(() => {}),
       nativeVideo?.stop().catch(() => {}),
+      nativeMicrophone?.stop().catch(() => {}),
     ]);
     unpublishedTracks.value.forEach((track) => track.stop());
     unpublishedTracks.value.clear();
@@ -346,6 +360,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     let capturedTracks: LocalTrack[] = [];
     let nativeVideo: NativeScreenVideoSession | null = null;
     let nativeAudio: NativeScreenAudioSession | null = null;
+    let nativeMicrophone: NativeMicrophoneAudioSession | null = null;
     let published = false;
     try {
       // 1. 关闭时取消发布并释放设备，而不是仅把采集中的音频静音。
@@ -369,7 +384,14 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             await Promise.all([nativeStop, nativeAudio?.stop()]);
           }
         } else if (existingTrack) {
-          await participant.unpublishTrack(existingTrack, true);
+          nativeMicrophone = nativeMicrophoneSession;
+          nativeMicrophoneSession = null;
+          try {
+            await participant.unpublishTrack(existingTrack, true);
+          } finally {
+            await nativeMicrophone?.stop();
+            nativeMicrophone = null;
+          }
         }
         if (source === Track.Source.Microphone) microphoneProcessor = null;
         return;
@@ -378,20 +400,48 @@ export function useRtcRoom(options?: RtcRoomOptions) {
 
       // 2. 用户点击后才请求采集；浏览器路径保留原有无共享声音行为。
       if (source === Track.Source.Microphone) {
-        const processor = new MicrophoneAudioProcessor(microphoneInputGain, microphoneProcessing.voiceEnhancement);
-        capturedTracks = await participant.createTracks({
-          audio: {
-            echoCancellation: microphoneProcessing.echoCancellation,
+        const desktop = window.lycanDesktop;
+        if (desktop) {
+          const nativeSettings: NativeMicrophoneSettings = {
+            inputGain: microphoneInputGain,
             noiseSuppression: microphoneProcessing.noiseSuppression,
             autoGainControl: microphoneProcessing.autoGainControl,
-          },
-          video: false,
-        });
-        const audioTrack = capturedTracks.find((track): track is LocalAudioTrack => track instanceof LocalAudioTrack);
-        if (!audioTrack) throw new Error('麦克风采集未返回音频轨道');
-        // LocalParticipant.createTracks 返回后才会给轨道注入房间的 AudioContext，此时接入处理器才可靠。
-        await audioTrack.setProcessor(processor);
-        microphoneProcessor = processor;
+            voiceEnhancement: microphoneProcessing.voiceEnhancement,
+          };
+          nativeMicrophone = new NativeMicrophoneAudioSession(desktop, {
+            onError: (code) => {
+              if (nativeMicrophoneSession !== nativeMicrophone || activeRoom.value !== currentRoom) return;
+              nativeMicrophoneSession = null;
+              const publication = currentRoom.localParticipant.getTrackPublication(Track.Source.Microphone);
+              if (publication?.track) void currentRoom.localParticipant.unpublishTrack(publication.track, true).catch(() => {});
+              void nativeMicrophone?.stop().catch(() => {});
+              const reason = code === 'audioDeviceUnavailable'
+                ? '默认麦克风已断开或切换'
+                : code === 'microphoneCaptureFormatUnsupported'
+                  ? '当前麦克风格式暂不支持'
+                  : '原生麦克风采集连接已中断';
+              notice.value = `麦克风已停止：${reason}。`;
+              revision.value++;
+            },
+          });
+          nativeMicrophoneSession = nativeMicrophone;
+          capturedTracks = [await nativeMicrophone.start(crypto.randomUUID(), nativeSettings)];
+        } else {
+          const processor = new MicrophoneAudioProcessor(microphoneInputGain, microphoneProcessing.voiceEnhancement);
+          capturedTracks = await participant.createTracks({
+            audio: {
+              echoCancellation: microphoneProcessing.echoCancellation,
+              noiseSuppression: microphoneProcessing.noiseSuppression,
+              autoGainControl: microphoneProcessing.autoGainControl,
+            },
+            video: false,
+          });
+          const audioTrack = capturedTracks.find((track): track is LocalAudioTrack => track instanceof LocalAudioTrack);
+          if (!audioTrack) throw new Error('麦克风采集未返回音频轨道');
+          // LocalParticipant.createTracks 返回后才会给轨道注入房间的 AudioContext，此时接入处理器才可靠。
+          await audioTrack.setProcessor(processor);
+          microphoneProcessor = processor;
+        }
       } else {
         const desktop = window.lycanDesktop;
         if (desktop) {
@@ -503,6 +553,9 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       if (activeRoom.value !== currentRoom) return;
       capturedTracks.forEach((track) => unpublishedTracks.value.add(track));
       await Promise.all(capturedTracks.map((track) => {
+        if (nativeMicrophone && track === nativeMicrophone.track) {
+          return participant.publishTrack(track, { source: Track.Source.Microphone });
+        }
         if (nativeVideo && track === nativeVideo.track) {
           return participant.publishTrack(track, {
             source: Track.Source.ScreenShare,
@@ -548,6 +601,10 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       }
       if (source === Track.Source.Microphone && (!published || activeRoom.value !== currentRoom)) {
         microphoneProcessor = null;
+        if (nativeMicrophone) {
+          if (nativeMicrophoneSession === nativeMicrophone) nativeMicrophoneSession = null;
+          await nativeMicrophone.stop().catch(() => {});
+        }
       }
       operations.delete(source);
       if (source === Track.Source.ScreenShare) screenShareSelectionCancelled.value = false;
@@ -579,11 +636,34 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   function setMicrophoneInputGain(value: number) {
     microphoneInputGain = normalizeAudioVolume(value);
     microphoneProcessor?.setInputGain(microphoneInputGain);
+    if (nativeMicrophoneSession) {
+      void nativeMicrophoneSession.configure({
+        inputGain: microphoneInputGain,
+        noiseSuppression: microphoneProcessing.noiseSuppression,
+        autoGainControl: microphoneProcessing.autoGainControl,
+        voiceEnhancement: microphoneProcessing.voiceEnhancement,
+      }).catch(() => {
+        if (nativeMicrophoneSession && activeRoom.value) notice.value = '麦克风设置未能应用。';
+      });
+    }
   }
 
   async function setMicrophoneProcessing(settings: AudioProcessingSettings) {
     microphoneProcessing = { ...settings };
     microphoneProcessor?.setVoiceEnhancement(settings.voiceEnhancement);
+    if (nativeMicrophoneSession) {
+      try {
+        await nativeMicrophoneSession.configure({
+          inputGain: microphoneInputGain,
+          noiseSuppression: settings.noiseSuppression,
+          autoGainControl: settings.autoGainControl,
+          voiceEnhancement: settings.voiceEnhancement,
+        });
+      } catch {
+        if (nativeMicrophoneSession && activeRoom.value) notice.value = '麦克风设置未能应用。';
+      }
+      return;
+    }
     const track = activeRoom.value?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
     if (!(track instanceof LocalAudioTrack)) return;
     if (notice.value === PROCESSING_RESTART_NOTICE || notice.value === PROCESSING_UNSUPPORTED_NOTICE) notice.value = '';

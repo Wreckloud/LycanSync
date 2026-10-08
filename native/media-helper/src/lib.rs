@@ -1,4 +1,6 @@
+mod audio_capture;
 mod audio_probe;
+mod audio_processing;
 mod audio_sources;
 mod capture;
 #[cfg(target_os = "windows")]
@@ -35,6 +37,14 @@ pub(crate) fn notify_video_capture_suspended(session_id: &str, suspended: bool) 
         protocol_version: PROTOCOL_VERSION,
         session_id: session_id.to_owned(),
         suspended,
+    });
+}
+
+pub(crate) fn notify_microphone_capture_ended(session_id: &str, code: ErrorCode) {
+    write_capture_event(OutboundEvent::MicrophoneCaptureEnded {
+        protocol_version: PROTOCOL_VERSION,
+        session_id: session_id.to_owned(),
+        code,
     });
 }
 
@@ -125,7 +135,7 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
             video_capture: runtime.video_capture_capability(),
             capture_probe: runtime.capture_probe_capability(),
             video_source_discovery: runtime.discovery_capability(),
-            microphone_capture: unavailable_capability(),
+            microphone_capture: audio_capture::capability(),
             system_audio_capture: unavailable_capability(),
             process_audio_capture: unavailable_capability(),
             audio_source_discovery: audio_source_discovery_capability(),
@@ -173,6 +183,7 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                 stop_duration_ms: snapshot.as_ref().and_then(|value| value.stop_duration_ms),
                 capture_suspended: snapshot.as_ref().and_then(|value| value.capture_suspended),
                 microphone_probe: runtime.audio_probe.snapshot(),
+                microphone_capture_dropped_chunks: runtime.microphone_capture.dropped_chunks(),
                 screen_share_audio: Box::new(runtime.screen_audio.snapshot()),
             }
         }
@@ -262,6 +273,125 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                     protocol_version: PROTOCOL_VERSION,
                     request_id: request_id.clone(),
                     command: "stopMicrophoneProbe",
+                    state: runtime.state(),
+                    changed,
+                },
+                Err(code) => error(
+                    runtime,
+                    Some(request_id.clone()),
+                    code,
+                    code.public_message(),
+                ),
+            }
+        }
+        CommandEnvelope::StartMicrophoneCapture {
+            request_id,
+            session_id,
+            pipe_id,
+            input_gain,
+            noise_suppression,
+            auto_gain_control,
+            voice_enhancement,
+            ..
+        } => {
+            if !valid_identifier(session_id) || !valid_pipe_id(pipe_id) {
+                return error(
+                    runtime,
+                    Some(request_id.clone()),
+                    ErrorCode::InvalidRequest,
+                    "麦克风采集参数无效",
+                );
+            }
+            let settings = audio_processing::ProcessingSettings {
+                input_gain: *input_gain,
+                noise_suppression: *noise_suppression,
+                auto_gain_control: *auto_gain_control,
+                voice_enhancement: *voice_enhancement,
+            };
+            match runtime.microphone_capture.start(
+                session_id,
+                pipe_id,
+                settings,
+                audio_capture::start,
+            ) {
+                Ok(()) => OutboundEvent::MicrophoneCaptureStarted {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: request_id.clone(),
+                    session_id: session_id.clone(),
+                    state: runtime.state(),
+                    sample_rate: audio_processing::SAMPLE_RATE,
+                    channels: 1,
+                    bits_per_sample: 32,
+                    nominal_chunk_ms: 10,
+                    changed: true,
+                },
+                Err(code) => error(
+                    runtime,
+                    Some(request_id.clone()),
+                    code,
+                    code.public_message(),
+                ),
+            }
+        }
+        CommandEnvelope::ConfigureMicrophoneCapture {
+            request_id,
+            session_id,
+            input_gain,
+            noise_suppression,
+            auto_gain_control,
+            voice_enhancement,
+            ..
+        } => {
+            if !valid_identifier(session_id) {
+                return error(
+                    runtime,
+                    Some(request_id.clone()),
+                    ErrorCode::InvalidRequest,
+                    "麦克风采集会话无效",
+                );
+            }
+            match runtime.microphone_capture.configure(
+                session_id,
+                audio_processing::ProcessingSettings {
+                    input_gain: *input_gain,
+                    noise_suppression: *noise_suppression,
+                    auto_gain_control: *auto_gain_control,
+                    voice_enhancement: *voice_enhancement,
+                },
+            ) {
+                Ok(()) => OutboundEvent::Acknowledged {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: request_id.clone(),
+                    command: "configureMicrophoneCapture",
+                    state: runtime.state(),
+                    changed: true,
+                },
+                Err(code) => error(
+                    runtime,
+                    Some(request_id.clone()),
+                    code,
+                    code.public_message(),
+                ),
+            }
+        }
+        CommandEnvelope::StopMicrophoneCapture {
+            request_id,
+            session_id,
+            ..
+        } => {
+            if !valid_identifier(session_id) {
+                return error(
+                    runtime,
+                    Some(request_id.clone()),
+                    ErrorCode::InvalidRequest,
+                    "麦克风采集会话无效",
+                );
+            }
+            match runtime.microphone_capture.stop(session_id) {
+                Ok(changed) => OutboundEvent::Acknowledged {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: request_id.clone(),
+                    command: "stopMicrophoneCapture",
                     state: runtime.state(),
                     changed,
                 },
@@ -520,6 +650,7 @@ struct Runtime {
     last_completed_session_id: Option<String>,
     audio_sources: audio_sources::AudioSourceRegistry,
     audio_probe: audio_probe::AudioProbeManager,
+    microphone_capture: audio_capture::MicrophoneCaptureManager,
     screen_audio: screen_audio::ScreenShareAudioManager,
 }
 
@@ -553,12 +684,14 @@ impl Runtime {
 
     fn shutdown_all_audio(&mut self) -> Result<(), ErrorCode> {
         let screen_result = self.screen_audio.shutdown();
-        let microphone_result = self.audio_probe.shutdown();
-        screen_result.and(microphone_result)
+        let microphone_result = self.microphone_capture.shutdown();
+        let probe_result = self.audio_probe.shutdown();
+        screen_result.and(microphone_result).and(probe_result)
     }
 
     fn reap_finished_audio_probe(&mut self) {
         self.audio_probe.reap_finished();
+        self.microphone_capture.reap_finished_capture();
         self.screen_audio.snapshot();
     }
 
@@ -807,6 +940,9 @@ mod tests {
         assert_eq!(events[1]["videoCapture"]["available"], false);
         assert!(events[1]["captureProbe"]["available"].is_boolean());
         assert_eq!(events[1]["systemAudioCapture"]["available"], false);
+        #[cfg(target_os = "windows")]
+        assert_eq!(events[1]["microphoneCapture"]["available"], true);
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(events[1]["microphoneCapture"]["available"], false);
         assert!(events[1]["microphoneProbe"]["available"].is_boolean());
         assert_eq!(events[1]["processAudioCapture"]["available"], false);

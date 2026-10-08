@@ -72,6 +72,30 @@ pub enum CommandEnvelope {
         request_id: String,
         session_id: String,
     },
+    StartMicrophoneCapture {
+        protocol_version: u16,
+        request_id: String,
+        session_id: String,
+        pipe_id: String,
+        input_gain: f32,
+        noise_suppression: bool,
+        auto_gain_control: bool,
+        voice_enhancement: bool,
+    },
+    ConfigureMicrophoneCapture {
+        protocol_version: u16,
+        request_id: String,
+        session_id: String,
+        input_gain: f32,
+        noise_suppression: bool,
+        auto_gain_control: bool,
+        voice_enhancement: bool,
+    },
+    StopMicrophoneCapture {
+        protocol_version: u16,
+        request_id: String,
+        session_id: String,
+    },
     StartScreenShareAudio {
         protocol_version: u16,
         request_id: String,
@@ -129,6 +153,15 @@ impl CommandEnvelope {
             | Self::StopMicrophoneProbe {
                 protocol_version, ..
             }
+            | Self::StartMicrophoneCapture {
+                protocol_version, ..
+            }
+            | Self::ConfigureMicrophoneCapture {
+                protocol_version, ..
+            }
+            | Self::StopMicrophoneCapture {
+                protocol_version, ..
+            }
             | Self::StartScreenShareAudio {
                 protocol_version, ..
             }
@@ -158,6 +191,9 @@ impl CommandEnvelope {
             | Self::ListAudioSources { request_id, .. }
             | Self::StartMicrophoneProbe { request_id, .. }
             | Self::StopMicrophoneProbe { request_id, .. }
+            | Self::StartMicrophoneCapture { request_id, .. }
+            | Self::ConfigureMicrophoneCapture { request_id, .. }
+            | Self::StopMicrophoneCapture { request_id, .. }
             | Self::StartScreenShareAudio { request_id, .. }
             | Self::StopScreenShareAudio { request_id, .. }
             | Self::Shutdown { request_id, .. } => request_id,
@@ -327,6 +363,7 @@ pub enum OutboundEvent {
         stop_duration_ms: Option<u64>,
         capture_suspended: Option<bool>,
         microphone_probe: MicrophoneProbeDiagnostics,
+        microphone_capture_dropped_chunks: u64,
         screen_share_audio: Box<ScreenShareAudioDiagnostics>,
     },
     VideoSources {
@@ -363,6 +400,22 @@ pub enum OutboundEvent {
         bits_per_sample: u16,
         nominal_chunk_ms: u8,
         changed: bool,
+    },
+    MicrophoneCaptureStarted {
+        protocol_version: u16,
+        request_id: String,
+        session_id: String,
+        state: SessionState,
+        sample_rate: u32,
+        channels: u16,
+        bits_per_sample: u16,
+        nominal_chunk_ms: u8,
+        changed: bool,
+    },
+    MicrophoneCaptureEnded {
+        protocol_version: u16,
+        session_id: String,
+        code: ErrorCode,
     },
     VideoCaptureEnded {
         protocol_version: u16,
@@ -426,6 +479,14 @@ pub enum ErrorCode {
     ScreenShareAudioStopFailed,
     ScreenShareAudioFailed,
     ScreenShareAudioFormatUnsupported,
+    MicrophoneCaptureAlreadyRunning,
+    MicrophoneCaptureSessionMismatch,
+    MicrophoneCaptureStartFailed,
+    MicrophoneCaptureStartTimedOut,
+    MicrophoneCaptureStopFailed,
+    MicrophoneCaptureFailed,
+    MicrophoneCapturePipeFailed,
+    MicrophoneCaptureFormatUnsupported,
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     AudioProbeUnsupported,
 }
@@ -468,6 +529,14 @@ impl ErrorCode {
             Self::ScreenShareAudioStopFailed => "屏幕共享音频停止失败",
             Self::ScreenShareAudioFailed => "屏幕共享音频采集失败",
             Self::ScreenShareAudioFormatUnsupported => "当前音频格式暂不支持",
+            Self::MicrophoneCaptureAlreadyRunning => "麦克风采集已在运行",
+            Self::MicrophoneCaptureSessionMismatch => "麦克风采集会话不匹配",
+            Self::MicrophoneCaptureStartFailed => "麦克风采集启动失败",
+            Self::MicrophoneCaptureStartTimedOut => "麦克风采集启动等待超时",
+            Self::MicrophoneCaptureStopFailed => "麦克风采集停止失败",
+            Self::MicrophoneCaptureFailed => "麦克风采集运行失败",
+            Self::MicrophoneCapturePipeFailed => "麦克风数据通道失败",
+            Self::MicrophoneCaptureFormatUnsupported => "麦克风格式暂不支持",
             _ => "请求无法处理",
         }
     }
@@ -511,6 +580,14 @@ impl ErrorCode {
             Self::ScreenShareAudioStopFailed => "screenShareAudioStopFailed",
             Self::ScreenShareAudioFailed => "screenShareAudioFailed",
             Self::ScreenShareAudioFormatUnsupported => "screenShareAudioFormatUnsupported",
+            Self::MicrophoneCaptureAlreadyRunning => "microphoneCaptureAlreadyRunning",
+            Self::MicrophoneCaptureSessionMismatch => "microphoneCaptureSessionMismatch",
+            Self::MicrophoneCaptureStartFailed => "microphoneCaptureStartFailed",
+            Self::MicrophoneCaptureStartTimedOut => "microphoneCaptureStartTimedOut",
+            Self::MicrophoneCaptureStopFailed => "microphoneCaptureStopFailed",
+            Self::MicrophoneCaptureFailed => "microphoneCaptureFailed",
+            Self::MicrophoneCapturePipeFailed => "microphoneCapturePipeFailed",
+            Self::MicrophoneCaptureFormatUnsupported => "microphoneCaptureFormatUnsupported",
         }
     }
 }

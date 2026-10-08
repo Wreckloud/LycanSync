@@ -72,6 +72,8 @@ let nativeVideoSession;
 let lastStoppedNativeVideoSession;
 let nativeScreenAudioSession;
 let lastScreenAudioDroppedChunks = 0;
+let nativeMicrophoneSession;
+let lastMicrophoneDroppedChunks = 0;
 const helperProcessBridges = new WeakMap();
 
 const mediaHelper = new MediaHelperManager({
@@ -80,6 +82,7 @@ const mediaHelper = new MediaHelperManager({
   onSharedTextureFrame: handleNativeSharedTextureFrame,
   onVideoCaptureEnded: handleVideoCaptureEnded,
   onVideoCaptureSuspended: handleVideoCaptureSuspended,
+  onMicrophoneCaptureEnded: handleMicrophoneCaptureEnded,
   onHelperFailure: handleMediaHelperFailure,
   onHelperClosed: releaseHelperProcessBridge,
 });
@@ -172,6 +175,145 @@ function finishNativeScreenAudioPipe(audio, { destroy = false } = {}) {
     if (destroy) audio.socket.destroy(); else audio.socket.end();
   }
   if (audio.server.listening) audio.server.close();
+}
+
+function finishNativeMicrophonePipe(audio, { destroy = false } = {}) {
+  if (!audio) return;
+  audio.stopping = true;
+  audio.queue.length = 0;
+  audio.inFlight = undefined;
+  audio.buffer = Buffer.alloc(0);
+  if (audio.socket && !audio.socket.destroyed) {
+    if (destroy) audio.socket.destroy(); else audio.socket.end();
+  }
+  if (audio.server.listening) audio.server.close();
+}
+
+function handleNativeMicrophonePipeData(audio, incoming) {
+  if (nativeMicrophoneSession !== audio || audio.stopping) return;
+  audio.buffer = audio.buffer.length ? Buffer.concat([audio.buffer, incoming]) : incoming;
+  while (audio.buffer.length >= 4) {
+    const frames = audio.buffer.readUInt32LE(0);
+    if (frames !== 480) {
+      notifyNativeMicrophoneError(audio, 'microphoneCaptureInvalidPacket');
+      return;
+    }
+    const packetBytes = 4 + frames * 4;
+    if (audio.buffer.length < packetBytes) break;
+    const pcm = Uint8Array.from(audio.buffer.subarray(4, packetBytes));
+    audio.buffer = audio.buffer.subarray(packetBytes);
+    if (audio.queue.length === 12) {
+      audio.queue.shift();
+      audio.droppedChunks++;
+    }
+    audio.queue.push({ frames, pcm });
+  }
+  if (audio.buffer.length > 65_536) {
+    notifyNativeMicrophoneError(audio, 'microphoneCaptureBufferOverflow');
+    return;
+  }
+  sendNextNativeMicrophoneChunk(audio);
+}
+
+function sendNextNativeMicrophoneChunk(audio) {
+  if (nativeMicrophoneSession !== audio || audio.stopping || audio.inFlight || !audio.queue.length
+      || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+  const sequence = ++audio.sequence;
+  const packet = audio.queue.shift();
+  audio.inFlight = sequence;
+  mainWindow.webContents.send('media:native-microphone-frame', {
+    sequence, frames: packet.frames, sampleRate: 48_000, channels: 1, pcm: packet.pcm,
+  });
+}
+
+function notifyNativeMicrophoneError(audio, code) {
+  if (!audio || audio.failureNotified || audio.stopping) return;
+  audio.failureNotified = true;
+  const safeCode = /^[a-z][A-Za-z0-9]{0,63}$/.test(code) ? code : 'microphoneCaptureFailed';
+  finishNativeMicrophonePipe(audio, { destroy: true });
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('media:native-microphone-error', { sessionId: audio.sessionId, code: safeCode });
+  }
+  void mediaHelper.stopMicrophoneCapture(audio.sessionId).catch(() => {}).finally(() => {
+    lastMicrophoneDroppedChunks = audio.droppedChunks + audio.rendererDroppedChunks;
+    if (nativeMicrophoneSession === audio) nativeMicrophoneSession = undefined;
+  });
+}
+
+function handleMicrophoneCaptureEnded(_state, event) {
+  const audio = nativeMicrophoneSession;
+  if (!audio || audio.sessionId !== event.sessionId || audio.stopping) return;
+  notifyNativeMicrophoneError(audio, event.code);
+}
+
+async function startNativeMicrophoneCapture(sessionId, settings) {
+  if (closing || process.platform !== 'win32') throw new Error('platformUnsupported');
+  if (typeof sessionId !== 'string' || sessionId.length > 128 || !validMicrophoneSettings(settings)) {
+    throw new Error('invalidMicrophoneCaptureStart');
+  }
+  if (nativeMicrophoneSession) {
+    if (nativeMicrophoneSession.sessionId === sessionId) return nativeMicrophoneSession.format;
+    throw new Error('microphoneCaptureAlreadyRunning');
+  }
+  lastMicrophoneDroppedChunks = 0;
+  const pipeId = randomUUID();
+  const server = net.createServer();
+  const audio = {
+    sessionId, pipeId, server, socket: undefined, buffer: Buffer.alloc(0), queue: [],
+    inFlight: undefined, sequence: 0, droppedChunks: 0, rendererDroppedChunks: 0,
+    stopping: false, failureNotified: false,
+  };
+  nativeMicrophoneSession = audio;
+  server.on('connection', (socket) => {
+    if (nativeMicrophoneSession !== audio || audio.socket) { socket.destroy(); return; }
+    audio.socket = socket;
+    socket.setNoDelay(true);
+    socket.on('data', (chunk) => handleNativeMicrophonePipeData(audio, chunk));
+    socket.once('error', () => notifyNativeMicrophoneError(audio, 'microphoneCapturePipeFailed'));
+    socket.once('close', () => {
+      if (nativeMicrophoneSession === audio && !audio.stopping) {
+        notifyNativeMicrophoneError(audio, 'microphoneCapturePipeClosed');
+      }
+    });
+  });
+  server.on('error', () => notifyNativeMicrophoneError(audio, 'microphoneCapturePipeFailed'));
+  let helperStarted = false;
+  try {
+    await new Promise((resolveListen, rejectListen) => {
+      const onError = (error) => { server.removeListener('listening', onListening); rejectListen(error); };
+      const onListening = () => { server.removeListener('error', onError); resolveListen(); };
+      server.once('error', onError);
+      server.once('listening', onListening);
+      server.listen(`\\\\.\\pipe\\lycansync-microphone-audio-${pipeId}`);
+    });
+    const format = await mediaHelper.startMicrophoneCapture(pipeId, sessionId, settings);
+    helperStarted = true;
+    if (nativeMicrophoneSession !== audio || audio.stopping) throw new Error('microphoneCaptureSessionStopped');
+    audio.format = format;
+    return format;
+  } catch (error) {
+    finishNativeMicrophonePipe(audio, { destroy: true });
+    if (helperStarted) await mediaHelper.stopMicrophoneCapture(sessionId).catch(() => {});
+    if (nativeMicrophoneSession === audio) nativeMicrophoneSession = undefined;
+    throw error;
+  }
+}
+
+async function stopNativeMicrophoneCapture(sessionId) {
+  const audio = nativeMicrophoneSession;
+  if (!audio) return { changed: false };
+  if (audio.sessionId !== sessionId) throw new Error('microphoneCaptureSessionMismatch');
+  if (audio.stopPromise) return audio.stopPromise;
+  audio.stopPromise = (async () => {
+    const helperStop = mediaHelper.stopMicrophoneCapture(sessionId);
+    finishNativeMicrophonePipe(audio, { destroy: true });
+    try { return await helperStop; }
+    finally {
+      lastMicrophoneDroppedChunks = audio.droppedChunks + audio.rendererDroppedChunks;
+      if (nativeMicrophoneSession === audio) nativeMicrophoneSession = undefined;
+    }
+  })();
+  return audio.stopPromise;
 }
 
 function handleNativeScreenAudioPipeData(audio, incoming) {
@@ -312,6 +454,10 @@ function handleMediaHelperFailure(state, code) {
   const audio = nativeScreenAudioSession;
   if (audio && (state.videoSessionId === audio.sessionId || state === video?.helperState)) {
     notifyNativeScreenAudioError(audio, code);
+  }
+  const microphone = nativeMicrophoneSession;
+  if (microphone && state.microphoneCaptureSessionId === microphone.sessionId) {
+    notifyNativeMicrophoneError(microphone, code);
   }
 }
 
@@ -464,6 +610,16 @@ function normalizeActivity(value) {
   if (!name || /[\u0000-\u001f\u007f]/.test(name)
       || startedAt <= 0 || startedAt > Date.now() + 60_000) return undefined;
   return { type: 'GAME', name, startedAt: new Date(startedAt).toISOString() };
+}
+
+function validMicrophoneSettings(settings) {
+  return settings && typeof settings === 'object' && !Array.isArray(settings)
+    && Object.keys(settings).length === 4
+    && typeof settings.inputGain === 'number' && Number.isFinite(settings.inputGain)
+    && settings.inputGain >= 0 && settings.inputGain <= 2
+    && typeof settings.noiseSuppression === 'boolean'
+    && typeof settings.autoGainControl === 'boolean'
+    && typeof settings.voiceEnhancement === 'boolean';
 }
 
 function publishActivity(activity) {
@@ -875,6 +1031,31 @@ ipcMain.on('media:native-screen-audio:consumed', (event, sequence, droppedChunks
   audio.inFlight = undefined;
   sendNextNativeScreenAudioChunk(audio);
 });
+ipcMain.handle('media:native-microphone:start', (event, sessionId, settings) => {
+  if (!trustedSender(event) || closing || typeof sessionId !== 'string' || sessionId.length > 128
+      || !validMicrophoneSettings(settings)) throw new Error('请求参数无效');
+  return startNativeMicrophoneCapture(sessionId, settings);
+});
+ipcMain.handle('media:native-microphone:configure', (event, sessionId, settings) => {
+  if (!trustedSender(event) || closing || typeof sessionId !== 'string' || sessionId.length > 128
+      || !validMicrophoneSettings(settings)) throw new Error('请求参数无效');
+  return mediaHelper.configureMicrophoneCapture(sessionId, settings);
+});
+ipcMain.handle('media:native-microphone:stop', (event, sessionId) => {
+  if (!trustedSender(event) || typeof sessionId !== 'string' || sessionId.length > 128) {
+    throw new Error('请求参数无效');
+  }
+  return stopNativeMicrophoneCapture(sessionId);
+});
+ipcMain.on('media:native-microphone:consumed', (event, sequence, droppedChunks) => {
+  if (!trustedSender(event) || !Number.isSafeInteger(sequence)
+      || !Number.isSafeInteger(droppedChunks) || droppedChunks < 0) return;
+  const audio = nativeMicrophoneSession;
+  if (!audio || audio.inFlight !== sequence) return;
+  audio.rendererDroppedChunks = Math.max(audio.rendererDroppedChunks, droppedChunks);
+  audio.inFlight = undefined;
+  sendNextNativeMicrophoneChunk(audio);
+});
 ipcMain.on('media:native-video:receiver-error', (event) => {
   if (!trustedSender(event)) return;
   notifyNativeVideoError(nativeVideoSession, 'sharedTextureReceiverFailed');
@@ -888,6 +1069,10 @@ ipcMain.handle('media:diagnostics', async (event) => {
       : lastScreenAudioDroppedChunks;
     diagnostics.screenShareAudio.droppedAudioChunks = (diagnostics.screenShareAudio.droppedAudioChunks ?? 0) + audioDrops;
   }
+  diagnostics.microphoneCaptureDroppedChunks = (diagnostics.microphoneCaptureDroppedChunks ?? 0)
+    + (nativeMicrophoneSession
+      ? nativeMicrophoneSession.droppedChunks + nativeMicrophoneSession.rendererDroppedChunks
+      : lastMicrophoneDroppedChunks);
   return diagnostics;
 });
 ipcMain.on('window:maximize', (event) => {
@@ -919,6 +1104,11 @@ app.on('before-quit', (event) => {
       console.error(`native screen audio shutdown failed: ${error.message}`);
     })
     : Promise.resolve())
+    .then(() => nativeMicrophoneSession
+      ? stopNativeMicrophoneCapture(nativeMicrophoneSession.sessionId).catch((error) => {
+        console.error(`native microphone shutdown failed: ${error.message}`);
+      })
+      : Promise.resolve())
     .then(() => nativeVideoSession
     ? stopNativeVideo(nativeVideoSession.sessionId).catch((error) => {
       console.error(`native video shutdown failed: ${error.message}`);
