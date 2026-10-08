@@ -43,13 +43,14 @@ impl ScreenShareAudioManager {
         if !discovery.target_is_valid(&target) {
             return Err(ErrorCode::ScreenShareAudioTargetUnavailable);
         }
-        let process_identity = if source_kind == VideoSourceKind::Window {
-            Some(discovery.audio_process_identity(&target)?)
-        } else {
-            None
-        };
         #[cfg(target_os = "windows")]
         {
+            let process_identity =
+                if source_kind == VideoSourceKind::Window && windows::requires_process_identity() {
+                    Some(discovery.audio_process_identity(&target)?)
+                } else {
+                    None
+                };
             self.start_with_backend(
                 session_id,
                 source_kind,
@@ -60,7 +61,7 @@ impl ScreenShareAudioManager {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = (session_id, source_kind, process_identity, pipe_id);
+            let _ = (session_id, source_kind, pipe_id);
             Err(ErrorCode::ScreenShareAudioUnsupported)
         }
     }
@@ -262,7 +263,8 @@ mod windows;
 mod tests {
     use super::{ScreenShareAudioManager, ScreenShareAudioWorker, StartFailure, StartedAudio};
     use crate::protocol::{ErrorCode, ScreenShareAudioState, VideoSourceKind};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     struct FakeWorker(AtomicBool);
     impl ScreenShareAudioWorker for FakeWorker {
@@ -275,6 +277,22 @@ mod tests {
         fn join(&mut self) -> Result<(), ErrorCode> {
             self.0.store(true, Ordering::Release);
             Ok(())
+        }
+    }
+
+    struct DropTrackedWorker(Arc<AtomicUsize>);
+    impl ScreenShareAudioWorker for DropTrackedWorker {
+        fn request_stop(&self) {}
+        fn is_finished(&self) -> bool {
+            false
+        }
+        fn join(&mut self) -> Result<(), ErrorCode> {
+            Ok(())
+        }
+    }
+    impl Drop for DropTrackedWorker {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -324,5 +342,30 @@ mod tests {
         assert_eq!(manager.stop("session"), Ok(true));
         assert_eq!(manager.stop("session"), Ok(false));
         assert_eq!(manager.snapshot().state, ScreenShareAudioState::Idle);
+    }
+
+    #[test]
+    fn stopping_releases_the_capture_worker_after_joining_it() {
+        let released = Arc::new(AtomicUsize::new(0));
+        let worker_released = Arc::clone(&released);
+        let mut manager = ScreenShareAudioManager::default();
+        manager
+            .start_with_backend(
+                "session",
+                VideoSourceKind::Monitor,
+                None,
+                "pipe",
+                move |_, _, _, _| {
+                    Ok(StartedAudio {
+                        worker: Box::new(DropTrackedWorker(worker_released)),
+                        sample_rate: 48_000,
+                        channels: 2,
+                    })
+                },
+            )
+            .unwrap();
+
+        assert_eq!(manager.stop("session"), Ok(true));
+        assert_eq!(released.load(Ordering::SeqCst), 1);
     }
 }

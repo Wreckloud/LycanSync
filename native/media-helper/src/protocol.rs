@@ -462,7 +462,7 @@ impl ErrorCode {
             Self::ScreenShareAudioSessionMismatch => "sessionId 与当前屏幕共享音频会话不匹配",
             Self::ScreenShareAudioStartFailed => "屏幕共享音频启动失败",
             Self::ScreenShareAudioStartTimedOut => "屏幕共享音频启动等待超时",
-            Self::ScreenShareAudioUnsupported => "当前 Windows 版本不支持应用循环音频捕获",
+            Self::ScreenShareAudioUnsupported => "当前 Windows 版本不支持屏幕共享声音捕获",
             Self::ScreenShareAudioTargetUnavailable => "屏幕共享音频目标进程不可用",
             Self::ScreenShareAudioPipeFailed => "屏幕共享音频数据通道失败",
             Self::ScreenShareAudioStopFailed => "屏幕共享音频停止失败",

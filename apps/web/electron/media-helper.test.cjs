@@ -77,7 +77,7 @@ class FakeHelper extends EventEmitter {
       }
       const response = {
         event: 'capabilities', protocolVersion: 1, requestId: command.requestId, state: 'idle',
-        windowsOnly: true, ...capabilities,
+        windowsOnly: true, ...capabilities, ...this.mode.capabilityOverrides,
       };
       if (this.mode.wrongCapabilitiesRequestId) response.requestId = 'unexpected';
       this.writeResponse(response);
@@ -299,6 +299,35 @@ test('helper starts lazily and concurrent capability requests share one process 
   assert.equal(children[0].commands.filter((command) => command === 'capabilities').length, 1);
   assert.deepEqual(results[0].videoCapture, capabilities.videoCapture);
   await manager.shutdown();
+});
+
+test('screen-share audio capability distinguishes process loopback from explicit system mix', async () => {
+  const { manager: processManager } = createManager();
+  assert.deepEqual((await processManager.getCapabilities()).screenShareAudioCapture,
+    { available: true, reason: 'windowsApplicationLoopbackProcessTree' });
+  await processManager.shutdown();
+
+  const { manager: mixManager } = createManager({ capabilityOverrides: {
+    screenShareAudioCapture: { available: true, reason: 'windowsSystemMixLoopback' },
+  } });
+  assert.deepEqual((await mixManager.getCapabilities()).screenShareAudioCapture,
+    { available: true, reason: 'windowsSystemMixLoopback' });
+  await mixManager.shutdown();
+});
+
+test('screen-share audio capability rejects unknown modes and inconsistent availability', async (t) => {
+  for (const capability of [
+    { available: true, reason: 'futureGenericAudioCapture' },
+    { available: false, reason: 'windowsSystemMixLoopback' },
+    { available: true, reason: 'windowsEventDrivenLoopbackRequiresBuild15063' },
+  ]) {
+    await t.test(JSON.stringify(capability), async () => {
+      const { manager, children } = createManager({ capabilityOverrides: { screenShareAudioCapture: capability } });
+      await assert.rejects(manager.getCapabilities(), /mediaHelperInvalidCapabilities/);
+      await waitUntil(() => children[0]?.closed);
+      await manager.shutdown();
+    });
+  }
 });
 
 test('handshake timeout, wrong protocol version, and wrong request id reject and clean the child', async (t) => {

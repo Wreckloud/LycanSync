@@ -741,6 +741,16 @@ function validateCapabilities(message) {
     }
     result[name] = { available: capability.available, reason: capability.reason };
   }
+  const screenAudio = result.screenShareAudioCapture;
+  const supportedScreenAudio = new Map([
+    ['windowsApplicationLoopbackProcessTree', true],
+    ['windowsSystemMixLoopback', true],
+    ['windowsEventDrivenLoopbackRequiresBuild15063', false],
+    ['platformUnsupported', false],
+  ]);
+  if (supportedScreenAudio.get(screenAudio.reason) !== screenAudio.available) {
+    throw new Error('mediaHelperInvalidCapabilities');
+  }
   return result;
 }
 
