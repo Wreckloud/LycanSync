@@ -1,3 +1,5 @@
+//! 麦克风 48 kHz 单声道 10 ms 块的 Sonora 处理及可变设置应用。
+
 use sonora::config::{
     AdaptiveDigital, GainController2, HighPassFilter, MaxProcessingRate, NoiseSuppression,
     NoiseSuppressionLevel, Pipeline,
@@ -57,6 +59,7 @@ impl MicrophoneProcessor {
             || self.settings.auto_gain_control != settings.auto_gain_control
             || self.settings.voice_enhancement != settings.voice_enhancement
         {
+            // Sonora 配置在处理线程的块边界应用；处理器实例和采集会话保持不变。
             self.audio_processing
                 .apply_config(processing_config(settings));
         }
@@ -78,7 +81,7 @@ impl MicrophoneProcessor {
             .expect("fixed 48 kHz mono audio processing format");
         for sample in &mut output {
             *sample = if sample.is_finite() {
-                // Apply user gain after AGC so automatic gain does not cancel the preference.
+                // 用户增益放在 AGC 后应用，避免自动增益抵消用户主动调整的音量。
                 (*sample * self.settings.input_gain).clamp(-1.0, 1.0)
             } else {
                 0.0

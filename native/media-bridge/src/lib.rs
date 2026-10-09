@@ -1,3 +1,5 @@
+//! Electron 原生桥：验证 helper 身份后复制共享纹理句柄，并管理本地副本生命周期。
+
 use napi::bindgen_prelude::{Buffer, FnArgs, Function, Unknown};
 use napi::{Error, Result, Status};
 
@@ -111,6 +113,7 @@ mod windows_bridge {
                 .raw();
             let value = handle.0 as usize as u64;
             let bytes = Buffer::from(value.to_le_bytes().to_vec());
+            // 句柄仅在同步导入回调期间有效，成功或失败返回后都释放本地副本。
             let result = callback.call(FnArgs { data: (bytes,) });
             self.release();
             result
@@ -139,6 +142,7 @@ mod windows_bridge {
         let process = unsafe { OpenProcess(access, false, pid) }
             .map_err(|_| error("spawnedMediaHelperUnavailable"))?;
         let process = OwnedHandle::new(process);
+        // 只接受当前 Electron 启动且路径匹配的 helper，不能按任意 PID 复制纹理句柄。
         if parent_process_id(pid)? != unsafe { GetCurrentProcessId() }
             || !same_path(&process_image_path(process.raw())?, &expected_path)
             || !process_is_running(process.raw())

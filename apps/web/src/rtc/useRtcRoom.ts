@@ -100,7 +100,7 @@ function reportNativeAudioCleanupFailure(error: unknown) {
   console.error('原生音频清理未完成', error);
 }
 
-/** LiveKit 浏览器回退链路：集中管理入房、采集、发布和释放，不保存账号或入房凭证。 */
+/** 编排房间与媒体生命周期；桌面走原生采集，浏览器走 Chromium，不持久化凭证。 */
 export function useRtcRoom(options?: RtcRoomOptions) {
   const revision = ref(0);
   const activeRoom = shallowRef<Room | null>(null);
@@ -155,6 +155,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   function retirePublicTrack(currentRoom: Room, track: LocalTrack) {
     const publicTracks = publicTracksByRoom.get(currentRoom);
     if (!publicTracks) return;
+    // 主动结束先撤销资格，SDK 的迟到发布事件就不能重新授予权限。
     publicTracks.eligibleTracks.delete(track);
     publicTracks.publishedSids.delete(track);
     updateTrackSubscriptionPermissions(currentRoom);
@@ -191,7 +192,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     microphoneLoopback = loopback;
     microphoneLoopbackState.value = 'starting';
     try {
-      // The public getter includes the browser processor's output, matching the published track.
+      // 此 getter 包含浏览器处理器的输出，试听复用实际发布的处理后音轨。
       await loopback.start(publication.track.mediaStreamTrack, normalizeAudioVolume(volume),
         (currentRoom.options.publishDefaults?.audioPreset ?? AudioPresets.music).maxBitrate,
         currentRoom.options.publishDefaults?.dtx ?? true);
@@ -782,7 +783,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             }
           }
         } else {
-          // 浏览器环境保留 Chromium 采集作为显式回滚路径；Electron 始终走上面的原生接口。
+          // 仅浏览器使用 Chromium 采集；Electron 原生失败不会回退到此路径。
           capturedTracks = await participant.createScreenTracks({
             audio: false,
             contentHint: 'motion',

@@ -1,3 +1,5 @@
+//! 麦克风会话管理：校验会话身份、更新处理设置并回收平台采集 worker。
+
 use crate::audio_processing::ProcessingSettings;
 use crate::protocol::{Capability, ErrorCode};
 use std::sync::mpsc::{self, Receiver};
@@ -25,6 +27,7 @@ pub(super) fn wait_for_microphone_capture_start(
     worker: Box<dyn MicrophoneCaptureWorker>,
     timeout: Duration,
 ) -> Result<Box<dyn MicrophoneCaptureWorker>, MicrophoneCaptureStartFailure> {
+    // 超时或启动失败时线程可能仍在初始化；把 worker 交回 Manager，才能继续停止并 join。
     match ready.recv_timeout(timeout) {
         Ok(Ok(())) => Ok(worker),
         Ok(Err(error)) => Err(MicrophoneCaptureStartFailure {
@@ -95,6 +98,7 @@ impl MicrophoneCaptureManager {
             }
             Err(failure) => {
                 if let Some(worker) = failure.worker {
+                    // 已请求停止但保留所有权，直到回收时 join，避免后台线程失去管理者。
                     worker.request_stop();
                     self.session_id = Some(session_id.to_owned());
                     self.settings = Some(settings);
@@ -116,6 +120,7 @@ impl MicrophoneCaptureManager {
         if self.session_id.as_deref() != Some(session_id) {
             return Err(ErrorCode::MicrophoneCaptureSessionMismatch);
         }
+        // 设置通过共享配置交给现有采集线程，不为开关变化重开设备或管道。
         let mut current_settings = self
             .settings
             .as_ref()
@@ -175,6 +180,7 @@ impl MicrophoneCaptureManager {
         worker.request_stop();
         match worker.join() {
             Ok(()) => Ok(()),
+            // 采集错误是 worker 的运行结果；join 失败表示线程本身无法正常回收，两者诊断不同。
             Err(MicrophoneCaptureJoinError::Capture(error)) => Err(error),
             Err(MicrophoneCaptureJoinError::JoinFailed) => {
                 Err(ErrorCode::MicrophoneCaptureStopFailed)

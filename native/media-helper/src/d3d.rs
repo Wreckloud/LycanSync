@@ -1,3 +1,5 @@
+//! 创建硬件 D3D11 设备及 WinRT 包装；WinRT 初始化由调用线程上的 RAII 对象配对释放。
+
 use crate::protocol::ErrorCode;
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_11_0};
@@ -79,6 +81,7 @@ impl WinRtApartment {
 
 impl Drop for WinRtApartment {
     fn drop(&mut self) {
+        // 只在创建该 apartment 的探测线程上释放对应的 WinRT 初始化。
         unsafe { RoUninitialize() };
     }
 }

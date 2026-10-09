@@ -1,3 +1,5 @@
+//! 普通视频采集会话的状态机；远控授权由 RemoteInputManager 独立持有并依附于该会话。
+
 use serde::Serialize;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]

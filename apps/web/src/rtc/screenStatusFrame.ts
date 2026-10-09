@@ -3,7 +3,7 @@ export interface ScreenStatusMessage {
   description: string;
 }
 
-/** Draws a status-only frame; the owning video session manages timing and release. */
+/** 只绘制不含真实画面的状态帧，刷新频率与释放由所属视频会话负责。 */
 export function createScreenStatusFrame(
   width: number,
   height: number,

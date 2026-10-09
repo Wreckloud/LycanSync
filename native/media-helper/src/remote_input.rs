@@ -1,3 +1,5 @@
+//! 远控授权和按住输入状态；撤销只释放输入，不拥有或停止普通屏幕采集会话。
+
 use crate::protocol::{ErrorCode, RemoteInputEvent, RemoteMouseButton};
 use std::time::{Duration, Instant};
 
@@ -12,6 +14,7 @@ struct Grant {
     control_session_id: String,
     controller_identity: String,
     monitor: usize,
+    // 鼠标移动可丢弃，可靠键鼠事件不能被其序号推进，因此分别校验顺序。
     last_move_sequence: u64,
     last_reliable_sequence: u64,
     accepting_inputs: bool,
@@ -20,7 +23,7 @@ struct Grant {
     held: Vec<RemoteInputEvent>,
 }
 
-// Cleanup-only action: unlike an input event, releasing a held button needs no screen coordinates.
+// 清理抬起动作不依赖屏幕坐标，显示器失效时仍能释放按住的鼠标键。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Injection {
     Event(RemoteInputEvent),
@@ -175,6 +178,7 @@ impl RemoteInputManager {
             }
         }
         if !still_held.is_empty() {
+            // 仅保留未成功抬起的输入，授权已停止接收新事件，后续撤销可重试清理。
             grant.held = still_held;
             self.grant = Some(grant);
             Err(ErrorCode::RemoteControlInputFailed)

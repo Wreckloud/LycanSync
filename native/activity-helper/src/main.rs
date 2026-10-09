@@ -1,3 +1,5 @@
+//! 检测运行中的 Steam 游戏并优先选择前台游戏；变化经 stdout JSON 行交给桌面端。
+
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -49,6 +51,7 @@ fn main() {
                 Some(game)
             }
             None if last_activity.is_some() && missing_scans == 0 => {
+                // 单次扫描缺失可能是进程枚举抖动，先保留活动；连续缺失才发出结束变化。
                 missing_scans = 1;
                 last_activity.clone()
             }
@@ -65,6 +68,7 @@ fn main() {
 
         catalog_refresh = catalog_refresh.saturating_add(1);
         if catalog_refresh >= 30 {
+            // 安装目录可能在 helper 运行中变化，每 30 次扫描（约 5 分钟）刷新一次清单。
             games = discover_games();
             catalog_refresh = 0;
         }
@@ -83,23 +87,35 @@ fn detect_game(system: &System, games: &[GameInstall]) -> Option<DetectedGame> {
             continue;
         }
         let executable_path = normalized_path(executable);
-        let Some(game) = games.iter().find(|game| executable_path.starts_with(&game.directory)) else {
+        let Some(game) = games
+            .iter()
+            .find(|game| executable_path.starts_with(&game.directory))
+        else {
             continue;
         };
-        if let Some(candidate) = candidates.iter_mut().find(|candidate| candidate.2.directory == game.directory) {
+        if let Some(candidate) = candidates
+            .iter_mut()
+            .find(|candidate| candidate.2.directory == game.directory)
+        {
             candidate.0 |= pid.as_u32() == foreground_pid;
             candidate.1 = candidate.1.min(process.start_time());
         } else {
             candidates.push((pid.as_u32() == foreground_pid, process.start_time(), game));
         }
     }
-    candidates.into_iter().max_by(compare_detected).map(|(_, started_at, game)| DetectedGame {
-        name: game.name.clone(),
-        started_at,
-    })
+    candidates
+        .into_iter()
+        .max_by(compare_detected)
+        .map(|(_, started_at, game)| DetectedGame {
+            name: game.name.clone(),
+            started_at,
+        })
 }
 
-fn compare_detected(left: &(bool, u64, &GameInstall), right: &(bool, u64, &GameInstall)) -> Ordering {
+fn compare_detected(
+    left: &(bool, u64, &GameInstall),
+    right: &(bool, u64, &GameInstall),
+) -> Ordering {
     left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1))
 }
 
@@ -116,13 +132,29 @@ fn foreground_process_id() -> u32 {
 }
 
 fn ignored_executable(path: &Path) -> bool {
-    let name = path.file_stem().and_then(|value| value.to_str()).unwrap_or_default().to_ascii_lowercase();
-    ["crash", "report", "unins", "setup", "unitycrashhandler", "easyanticheat", "beservice"]
-        .iter().any(|fragment| name.contains(fragment))
+    let name = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    [
+        "crash",
+        "report",
+        "unins",
+        "setup",
+        "unitycrashhandler",
+        "easyanticheat",
+        "beservice",
+    ]
+    .iter()
+    .any(|fragment| name.contains(fragment))
 }
 
 fn discover_games() -> Vec<GameInstall> {
-    steam_apps_directories().into_iter().flat_map(|apps| read_manifests(&apps)).collect()
+    steam_apps_directories()
+        .into_iter()
+        .flat_map(|apps| read_manifests(&apps))
+        .collect()
 }
 
 fn steam_apps_directories() -> Vec<PathBuf> {
@@ -139,11 +171,15 @@ fn steam_apps_directories() -> Vec<PathBuf> {
     for root in roots {
         let default_apps = root.join("steamapps");
         push_unique(&mut apps_directories, &mut seen, default_apps.clone());
-        let libraries = fs::read_to_string(default_apps.join("libraryfolders.vdf")).unwrap_or_default();
+        let libraries =
+            fs::read_to_string(default_apps.join("libraryfolders.vdf")).unwrap_or_default();
         for line in libraries.lines() {
             if let Some(path) = vdf_value(line, "path") {
-                push_unique(&mut apps_directories, &mut seen,
-                    PathBuf::from(path.replace("\\\\", "\\")).join("steamapps"));
+                push_unique(
+                    &mut apps_directories,
+                    &mut seen,
+                    PathBuf::from(path.replace("\\\\", "\\")).join("steamapps"),
+                );
             }
         }
     }
@@ -154,19 +190,24 @@ fn read_manifests(apps_directory: &Path) -> Vec<GameInstall> {
     let Ok(entries) = fs::read_dir(apps_directory) else {
         return Vec::new();
     };
-    entries.flatten().filter_map(|entry| {
-        let file_name = entry.file_name().to_string_lossy().into_owned();
-        if !file_name.starts_with("appmanifest_") || !file_name.ends_with(".acf") {
-            return None;
-        }
-        let content = fs::read_to_string(entry.path()).ok()?;
-        let name = content.lines().find_map(|line| vdf_value(line, "name"))?;
-        let install_directory = content.lines().find_map(|line| vdf_value(line, "installdir"))?;
-        Some(GameInstall {
-            name,
-            directory: normalized_path(&apps_directory.join("common").join(install_directory)),
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let file_name = entry.file_name().to_string_lossy().into_owned();
+            if !file_name.starts_with("appmanifest_") || !file_name.ends_with(".acf") {
+                return None;
+            }
+            let content = fs::read_to_string(entry.path()).ok()?;
+            let name = content.lines().find_map(|line| vdf_value(line, "name"))?;
+            let install_directory = content
+                .lines()
+                .find_map(|line| vdf_value(line, "installdir"))?;
+            Some(GameInstall {
+                name,
+                directory: normalized_path(&apps_directory.join("common").join(install_directory)),
+            })
         })
-    }).collect()
+        .collect()
 }
 
 fn vdf_value(line: &str, expected_key: &str) -> Option<String> {
@@ -184,7 +225,10 @@ fn push_unique(values: &mut Vec<PathBuf>, seen: &mut HashSet<String>, value: Pat
 }
 
 fn normalized_path(path: &Path) -> String {
-    let mut value = path.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
+    let mut value = path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
     if !value.ends_with('\\') {
         value.push('\\');
     }

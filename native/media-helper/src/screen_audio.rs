@@ -1,3 +1,5 @@
+//! 群聊共享声音会话管理；Windows worker 负责实际采集，Manager 负责会话和诊断生命周期。
+
 use crate::protocol::{
     Capability, ErrorCode, ScreenShareAudioDiagnostics, ScreenShareAudioState, VideoSourceKind,
 };
@@ -100,6 +102,7 @@ impl ScreenShareAudioManager {
             }
             Err(failure) => {
                 if let Some(worker) = failure.worker {
+                    // 启动超时后 worker 仍可能持有系统资源，保留引用供 snapshot/stop 回收。
                     worker.request_stop();
                     self.worker = Some(worker);
                     self.set_failed(failure.error);

@@ -30,7 +30,7 @@ interface NativeScreenAudioOptions {
   createLocalTrack?: (track: MediaStreamTrack, context: AudioContext) => LocalAudioTrack;
 }
 
-/** Feeds bounded WASAPI PCM blocks to an inaudible MediaStreamDestination track. */
+/** 将有界 WASAPI PCM 队列接入共享声音音轨，不连接本机扬声器。 */
 export class NativeScreenAudioSession {
   track?: LocalAudioTrack;
 
@@ -128,7 +128,7 @@ export class NativeScreenAudioSession {
       this.node = undefined;
       this.removeChunkListener = undefined;
       this.removeErrorListener = undefined;
-      // Each resource must be released even when another cleanup fails.
+      // 分别尝试每项清理，单个资源失败不能阻断其余释放。
       const cleanups = [
         Promise.resolve().then(() => removeChunks?.()),
         Promise.resolve().then(() => removeErrors?.()),
@@ -141,7 +141,7 @@ export class NativeScreenAudioSession {
           try {
             await this.nativeStartCommand;
           } catch {
-            // A rejected native startup did not establish an owned capture session.
+            // 启动被拒绝时没有取得采集会话，无需发送对应停止命令。
             return;
           }
           await this.desktop.stopNativeScreenAudio(this.sessionId);

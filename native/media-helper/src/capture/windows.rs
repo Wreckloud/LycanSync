@@ -1,3 +1,5 @@
+//! Windows Graphics Capture worker、帧池和可选共享纹理槽位的生命周期。
+
 use super::CaptureSnapshot;
 use crate::d3d::HardwareD3dDevice;
 use crate::protocol::{ErrorCode, VideoSourceKind};
@@ -45,6 +47,7 @@ use windows::core::Interface;
 use windows::core::{BOOL, IInspectable, factory};
 
 const NOTIFICATION_CAPACITY: usize = 1;
+// WGC 帧池只保留两个系统帧；帧到达回调只负责唤醒 worker，不把帧对象跨线程排队。
 const FRAME_POOL_BUFFERS: i32 = 2;
 const STOP_TIMEOUT: Duration = Duration::from_millis(1_800);
 const START_TIMEOUT: Duration = Duration::from_secs(10);
@@ -54,7 +57,7 @@ const WORKER_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const TARGET_CHECK_INTERVAL: Duration = Duration::from_millis(500);
 const CALLBACK_DRAIN_TIMEOUT: Duration = Duration::from_millis(200);
 const MAX_FRAMES_PER_WAKE: usize = 8;
-// Coarse growth and no shrinking keep window drags from rebuilding the pool per pixel.
+// 帧池按 64 像素对齐扩容且不缩小，避免拖动窗口时因每像素变化反复重建。
 const FRAME_POOL_SIZE_ALIGNMENT: i32 = 64;
 const SHARED_TEXTURE_POOL_CAPACITY: usize = 3;
 #[cfg(feature = "shared-texture-output")]
@@ -72,6 +75,7 @@ struct ActiveCapture {
     done: Receiver<()>,
     worker: Option<JoinHandle<()>>,
     metrics: Arc<Mutex<CaptureMetrics>>,
+    // 回调唤醒队列饱和次数，与 WGC 交付帧和纹理输出丢帧分开统计。
     dropped_notifications: Arc<AtomicU64>,
     #[cfg(feature = "shared-texture-output")]
     shared_slot_releases: SyncSender<usize>,
@@ -82,11 +86,12 @@ struct CaptureMetrics {
     source_kind: Option<VideoSourceKind>,
     width: Option<u32>,
     height: Option<u32>,
+    // received 是 WGC 交付帧数；processed 是 helper 已处理帧数，不代表通知队列长度。
     received: u64,
     processed: u64,
-    // WGC source timestamps use 100 ns units; only strictly increasing values are retained.
+    // WGC 来源时间戳以 100 ns 为单位；只有严格递增的值进入采集间隔统计。
     raw_frame_times: VecDeque<i64>,
-    // Local monotonic timestamps are recorded after frame metadata has been handled.
+    // 本地单调时钟在帧元数据处理后记录，用来统计 helper 的实际处理速率。
     processed_frame_times: VecDeque<Instant>,
     last_frame_at: Option<Instant>,
     last_source_time_at: Option<Instant>,
@@ -317,6 +322,7 @@ impl CaptureManager {
             return Err(ErrorCode::CaptureAlreadyRunning);
         }
 
+        // manager 持有 worker 与唤醒/槽位归还通道；超时后保留 ActiveCapture 供后续停止回收。
         let metrics = Arc::new(Mutex::new(CaptureMetrics::new(source_kind)));
         let dropped_notifications = Arc::new(AtomicU64::new(0));
         let stop_requested = Arc::new(AtomicBool::new(false));
@@ -420,6 +426,7 @@ impl CaptureManager {
             return Err(ErrorCode::CaptureSessionMismatch);
         };
         let started_at = Instant::now();
+        // 通知 worker 收尾；共享纹理有在途槽位时需等 Electron 归还后才能释放池。
         active.stop_requested.store(true, Ordering::Release);
         let _ = active.notifications.try_send(());
         if active.done.recv_timeout(STOP_TIMEOUT).is_err() {
@@ -623,7 +630,7 @@ fn capture_worker(target: ThreadCaptureTarget, context: CaptureWorkerContext) {
     if cleanup_failed {
         lock_metrics(&metrics).last_error = Some(ErrorCode::CaptureCleanupFailed.diagnostic_name());
     }
-    // Release every WinRT/D3D reference before balancing RoInitialize on this worker.
+    // 先释放全部 WinRT/D3D 引用，再在创建它们的 worker 线程平衡 RoInitialize。
     let CaptureResources {
         capture_session,
         frame_pool,
@@ -659,6 +666,7 @@ fn create_resources(
     notifications: SyncSender<()>,
     dropped_notifications: &Arc<AtomicU64>,
 ) -> Result<CaptureResources, ErrorCode> {
+    // WinRT apartment 在 worker 线程创建并随 CaptureResources 持有，确保所有 WinRT 对象先释放。
     let apartment = WinRtApartment::initialize()?;
     let native = native_target(target.clone())?;
     if !capture_target_is_valid(&target) {
@@ -706,7 +714,7 @@ fn create_resources(
         TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(move |_, _| {
             callback_activity.fetch_add(1, Ordering::AcqRel);
             if let Err(TrySendError::Full(())) = frame_sender.try_send(()) {
-                // This counts a saturated wake-up queue, not frames lost by WGC.
+                // 这里只统计唤醒通知队列饱和，不代表 WGC 实际丢帧。
                 callback_dropped.fetch_add(1, Ordering::Relaxed);
             }
             callback_activity.fetch_sub(1, Ordering::AcqRel);
@@ -858,6 +866,7 @@ fn run_capture_loop(
             matches!(&target, ThreadCaptureTarget::Window(..)),
             capture_target_is_minimized(&target),
         ) {
+            // 最小化窗口的尺寸/帧可能无效；丢弃待处理帧并标记暂停，不把它当成采集故障。
             if !capture_suspended {
                 lock_metrics(metrics).capture_suspended = true;
                 capture_suspended = true;
@@ -1133,6 +1142,7 @@ fn perform_frame_pool_recreate(
 }
 
 #[cfg(feature = "shared-texture-output")]
+// helper 进程拥有原始共享句柄；跨进程使用需由 media-bridge 复制，不能把这个本地句柄转移出去。
 struct OwnedSharedHandle(HANDLE);
 
 #[cfg(feature = "shared-texture-output")]
@@ -1148,6 +1158,7 @@ impl Drop for OwnedSharedHandle {
 
 #[cfg(feature = "shared-texture-output")]
 struct SharedTextureSlot {
+    // helper 持有纹理、同步对象和本进程句柄；Electron 完成导入/使用后按槽位归还。
     texture: ID3D11Texture2D,
     mutex: IDXGIKeyedMutex,
     handle: OwnedSharedHandle,
@@ -1160,6 +1171,7 @@ struct SharedTexturePool {
     allocated: SizeInt32,
     slots: Vec<SharedTextureSlot>,
     next_slot: usize,
+    // frames 是成功输出数；dropped_frames 是限帧、槽位占用或容量调整导致未输出的帧数。
     frames: u64,
     dropped_frames: u64,
     max_fps: Option<u16>,
@@ -1371,6 +1383,7 @@ fn frame_copy_region(allocated: SizeInt32, content: SizeInt32) -> Result<D3D11_B
 #[cfg(feature = "shared-texture-output")]
 impl SharedTextureFrame {
     fn write_to_stdout(&self, session_id: &str) -> Result<(), ErrorCode> {
+        // 事件只携带 helper 侧句柄描述和槽位索引；Electron 负责复制句柄并归还槽位。
         let event = serde_json::json!({
             "event": "sharedTextureFrame",
             "protocolVersion": crate::protocol::PROTOCOL_VERSION,

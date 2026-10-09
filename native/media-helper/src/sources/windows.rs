@@ -1,3 +1,5 @@
+//! Windows 来源发现及窗口身份校验；采集前再次核对身份，防止 HWND 重用指向别的窗口。
+
 use super::{CaptureTarget, DiscoveredSource, MAX_VIDEO_SOURCES, clean_title};
 use crate::protocol::{Capability, ErrorCode, VideoSource, VideoSourceKind};
 use std::sync::Arc;
@@ -79,7 +81,7 @@ struct WindowIdentityMarker {
     property_name: Vec<u16>,
 }
 
-// User32 window property operations are valid across threads; these fields are otherwise immutable.
+// 标记只跨线程调用 User32 属性 API，身份字段创建后不变，因此包装可跨线程共享。
 unsafe impl Send for WindowIdentityMarker {}
 unsafe impl Sync for WindowIdentityMarker {}
 
@@ -206,6 +208,7 @@ impl WindowsDiscovery {
 struct WinRtApartment;
 impl Drop for WinRtApartment {
     fn drop(&mut self) {
+        // Discovery 持有 apartment 到所有 WinRT 查询结束后，再平衡初始化引用。
         unsafe { RoUninitialize() };
     }
 }
@@ -586,7 +589,7 @@ mod tests {
         assert!(is_helper_window_style(WS_EX_TOOLWINDOW.0 as isize));
         assert!(is_helper_window_style(WS_EX_NOACTIVATE.0 as isize));
         assert!(!is_helper_window_style(0));
-        // Layered and topmost styles are intentionally outside this classification.
+        // 分层和置顶样式本身不用于判定窗口是否为辅助窗口。
         assert!(!is_helper_window_style(0x0008_0000 | 0x0000_0008));
     }
 }

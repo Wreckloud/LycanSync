@@ -1,3 +1,5 @@
+//! Windows 进程声音或默认播放设备混音采集，并以有界双声道 PCM 块写入管道。
+
 use super::{ScreenShareAudioWorker, StartFailure, StartedAudio};
 use crate::protocol::{
     Capability, ErrorCode, ScreenShareAudioDiagnostics, ScreenShareAudioState, VideoSourceKind,
@@ -44,7 +46,8 @@ use windows::core::{IUnknown, Interface, Ref};
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 const WAIT_INTERVAL_MS: u32 = 100;
 const MAX_PACKETS_PER_WAKE: usize = 32;
-const AUDIO_QUEUE_CAPACITY: usize = 12; // 120 ms at the existing 10 ms chunk size.
+// 10 ms 块最多暂存约 120 ms；饱和时丢弃最旧块以限制声音延迟。
+const AUDIO_QUEUE_CAPACITY: usize = 12;
 const AUDIO_PIPE_PREFIX: &str = r"\\.\pipe\lycansync-screen-audio-";
 const CAPTURE_SAMPLE_RATE: u32 = 44_100;
 const CAPTURE_CHANNELS: u16 = 2;
@@ -194,6 +197,7 @@ fn worker_main(
     stop_requested: Arc<AtomicBool>,
     ready: mpsc::SyncSender<Result<(u32, u16), ErrorCode>>,
 ) -> Result<(), ErrorCode> {
+    // 采集线程拥有 Core Audio/COM 资源；单独写线程只排空有界队列并写入管道。
     let pipe_path = format!("{AUDIO_PIPE_PREFIX}{pipe_id}");
     let mut pipe = match OpenOptions::new().write(true).open(pipe_path) {
         Ok(pipe) => pipe,
@@ -377,6 +381,7 @@ struct AudioQueue {
     blocks: Mutex<VecDeque<Vec<u8>>>,
     ready: Condvar,
     closed: AtomicBool,
+    // 仅统计队列饱和时主动丢弃的旧块，不代表 WASAPI 未采到数据。
     dropped: std::sync::atomic::AtomicU64,
 }
 
@@ -413,6 +418,7 @@ impl AudioQueue {
                 return Some(block);
             }
             if self.closed.load(Ordering::Acquire) {
+                // 关闭后仍先交付已缓冲块；空队列时才结束写管道线程。
                 return None;
             }
             before_wait();
@@ -421,7 +427,7 @@ impl AudioQueue {
     }
 
     fn close(&self) {
-        // Use pop()'s mutex so close cannot notify between its check and wait.
+        // 与 pop() 使用同一把锁，避免关闭通知落在条件检查与等待之间。
         let blocks = self.blocks.lock().expect("audio queue lock poisoned");
         self.closed.store(true, Ordering::Release);
         drop(blocks);
@@ -439,7 +445,7 @@ fn write_audio_pipe(pipe: &mut std::fs::File, queue: Arc<AudioQueue>) -> Result<
     Ok(())
 }
 
-// Stereo Float32 is the transport contract; the helper normalizes supported Core Audio mixes.
+// 设备格式在采集边界转为立体声 Float32；后续管道和 AudioWorklet 使用这一固定格式。
 fn queue_channels(_block: &[u8]) -> usize {
     2
 }
@@ -628,6 +634,7 @@ struct ChunkAssembler {
 
 impl ChunkAssembler {
     fn new(sample_rate: u32) -> Result<Self, ErrorCode> {
+        // 按当前采样率切成 10 ms 立体声 Float32 块，块尺寸不会改写设备采样率。
         let frames_per_chunk = (sample_rate / 100).max(1) as usize;
         let chunk_bytes = frames_per_chunk
             .checked_mul(2 * 4)
@@ -659,6 +666,7 @@ fn normalize_to_stereo_f32(
     format: &StreamFormat,
     silent: bool,
 ) -> Result<Vec<u8>, ErrorCode> {
+    // Core Audio 原始声道按通道掩码混成立体声，输出固定为 little-endian Float32。
     let samples = usize::try_from(frames)
         .map_err(|_| ErrorCode::ScreenShareAudioFailed)?
         .checked_mul(2)
@@ -881,6 +889,7 @@ pub(crate) fn parse_mix_format(
 struct OwnedMixFormat(*mut WAVEFORMATEX);
 impl Drop for OwnedMixFormat {
     fn drop(&mut self) {
+        // GetMixFormat 返回 CoTaskMem 分配的缓冲区，格式解析和初始化完成后由此释放。
         unsafe { CoTaskMemFree(Some(self.0.cast())) };
     }
 }
@@ -1000,20 +1009,17 @@ fn activate_process_loopback(
         Ok(Ok(client)) => client,
         Ok(Err(error)) => return Err(error),
         Err(mpsc::RecvTimeoutError::Timeout) => {
-            // Windows retains the completion handler through callback completion. Its
-            // Arc keeps the PROPVARIANT and CoTaskMem blob alive even after this timeout.
+            // 超时不代表 Windows 已结束回调，处理器的 Arc 继续保有激活参数内存。
             drop(operation);
             return Err(ErrorCode::ScreenShareAudioStartTimedOut);
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
-            // Do not infer from a missing channel result that activation stopped using
-            // its parameters; Windows still owns the completion handler until callback.
+            // 通道断开也不能提前释放激活参数，Windows 仍持有完成处理器直到回调结束。
             drop(operation);
             return Err(ErrorCode::ScreenShareAudioStartFailed);
         }
     };
-    // Process Loopback is a virtual client; use the supported explicit PCM format from
-    // Microsoft's Application Loopback sample instead of asking it for a mix format.
+    // 进程回环是虚拟客户端，沿用微软示例的显式 PCM 格式，不向它查询设备混音格式。
     let stream = supported_capture_format();
     Ok((client, stream, None))
 }
@@ -1065,8 +1071,7 @@ impl windows::Win32::Media::Audio::IActivateAudioInterfaceCompletionHandler_Impl
 
 struct OwnedPropVariant(Box<PROPVARIANT>);
 
-// This wrapper only contains a VT_BLOB allocated by CoTaskMemAlloc. PropVariantClear
-// may therefore safely release it on the COM completion thread.
+// 此包装只持有 CoTaskMemAlloc 分配的 VT_BLOB，可由 COM 完成线程通过 PropVariantClear 释放。
 unsafe impl Send for OwnedPropVariant {}
 
 struct ActivationParamsOwner {
@@ -1463,7 +1468,7 @@ mod tests {
         let result = result_rx.recv_timeout(QUEUE_TEST_TIMEOUT);
         let woke = result == Ok(None);
         if !woke {
-            // Release a consumer if this regression reappears, then fail the bounded assertion.
+            // 若该回归重现，先释放消费者线程，再让有界等待断言失败。
             queue.close();
         }
         consumer.join().unwrap();

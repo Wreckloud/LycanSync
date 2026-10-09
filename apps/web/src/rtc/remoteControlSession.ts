@@ -403,6 +403,7 @@ export class RemoteControlSession {
 
   private async retainNativeGrant(room: Room, share: RemoteControlShare, authorization: RemoteControlAuthorization, identity: string,
     requestId: string, controlSessionId: string) {
+    // 授权响应已失效仍需撤销其原生会话，清理完成前阻止下一次授权。
     authorization.beginCleanup(controlSessionId);
     const cleanup: NativeRemoteControlCleanup = { room, captureSessionId: share.captureSessionId,
       shareId: share.shareId, identity, requestId, controlSessionId, authorization };

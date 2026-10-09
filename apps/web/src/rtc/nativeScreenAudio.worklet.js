@@ -22,7 +22,7 @@ class LycanScreenAudioProcessor extends AudioWorkletProcessor {
     };
   }
   acknowledgeAvailableCapacity() {
-    // Keep a small playback reserve; delay IPC acknowledgements while it is full.
+    // 待播队列满时延后确认，让主进程暂停发送，避免持续积压。
     if (this.queue.length >= 4) return;
     for (const sequence of this.pendingAcknowledgements) {
       this.port.postMessage({ type: 'accepted', sequence, droppedChunks: this.dropped });

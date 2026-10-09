@@ -1,3 +1,5 @@
+//! Helper 运行时：串行处理命令，并协调来源发现、媒体采集与远控输入管理器。
+
 mod audio_capture;
 mod audio_processing;
 mod capture;
@@ -56,7 +58,7 @@ fn microphone_capture_reap_event(
     result: audio_capture::MicrophoneCaptureJoinError,
 ) -> Option<OutboundEvent> {
     match result {
-        // Capture errors were already reported by the worker before it exited.
+        // 采集运行错误已由 worker 结束事件上报；回收阶段只补报线程 join 失败。
         audio_capture::MicrophoneCaptureJoinError::Capture(_error) => None,
         audio_capture::MicrophoneCaptureJoinError::JoinFailed => Some(
             microphone_capture_ended_event(session_id, ErrorCode::MicrophoneCaptureStopFailed),
@@ -76,6 +78,7 @@ fn write_capture_event(event: OutboundEvent) {
 }
 
 pub fn run<R: BufRead, W: Write>(mut input: R, mut output: W) -> io::Result<()> {
+    // 命令在此循环中串行分发；捕获线程的异步事件通过同一输出锁写入协议流。
     let mut runtime = Runtime::default();
     loop {
         let Some(line) = read_limited_line(&mut input)? else {
@@ -683,6 +686,7 @@ impl Runtime {
     }
 
     fn shutdown_all_audio(&mut self) -> Result<(), ErrorCode> {
+        // 远控授权、屏幕声音与麦克风各自清理；一个失败不跳过后续资源的停止尝试。
         let remote_control_result = self
             .session_id()
             .map(str::to_owned)

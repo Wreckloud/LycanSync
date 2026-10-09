@@ -1,3 +1,5 @@
+//! Helper 的 JSON Lines 命令、响应和异步事件定义；stdout 只承载这些协议消息。
+
 use crate::state::SessionState;
 use serde::{Deserialize, Serialize};
 

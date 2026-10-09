@@ -1,3 +1,5 @@
+//! Windows WASAPI 麦克风采集、设备格式转换与有界 PCM 管道输出。
+
 use super::{
     MicrophoneCaptureJoinError, MicrophoneCaptureStartFailure, MicrophoneCaptureWorker,
     StartedCapture, wait_for_microphone_capture_start,
@@ -32,6 +34,7 @@ use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 const WAIT_INTERVAL_MS: u32 = 200;
 const MAX_PACKETS_PER_WAKE: usize = 32;
+// 固定 10 ms 处理块下暂存约 120 ms；饱和时丢最旧块以限制声音延迟。
 const AUDIO_QUEUE_CAPACITY: usize = 12;
 const AUDIO_PIPE_PREFIX: &str = r"\\.\pipe\lycansync-microphone-audio-";
 const WAVE_FORMAT_EXTENSIBLE_TAG: u16 =
@@ -137,6 +140,7 @@ fn worker_main(
     ready: &SyncSender<Result<(), ErrorCode>>,
     capture_started: &AtomicBool,
 ) -> Result<(), ErrorCode> {
+    // 采集线程拥有 WASAPI/COM 生命周期；独立写线程只消费队列并写入命名管道。
     let mut pipe = OpenOptions::new()
         .write(true)
         .open(format!("{AUDIO_PIPE_PREFIX}{pipe_id}"))
@@ -302,6 +306,7 @@ struct CaptureContext<'a> {
 }
 
 fn capture_loop(context: CaptureContext<'_>) -> Result<(), ErrorCode> {
+    // 设备包先转为单声道并重采样到 48 kHz，再生成 480 帧的 10 ms 处理块。
     let (source_frames, output_frames) = resampler_frame_counts(context.format.sample_rate)?;
     let mut resampler = sonora_common_audio::push_resampler::PushResampler::<f32>::new(
         source_frames,
@@ -580,6 +585,7 @@ impl AudioQueue {
                 return Some(block);
             }
             if self.closed.load(Ordering::Acquire) {
+                // 先返回队列里已缓冲的块；空队列关闭后才让写管道线程退出。
                 return None;
             }
             before_wait();
@@ -591,7 +597,7 @@ impl AudioQueue {
     }
 
     fn close(&self) {
-        // Use pop()'s mutex so close cannot notify between its check and wait.
+        // 与 pop() 使用同一把锁，避免关闭通知落在条件检查与等待之间。
         let blocks = self
             .blocks
             .lock()
@@ -607,6 +613,7 @@ struct OwnedMixFormat(*mut WAVEFORMATEX);
 impl Drop for OwnedMixFormat {
     fn drop(&mut self) {
         if !self.0.is_null() {
+            // GetMixFormat 的结果由 CoTaskMem 分配，此包装负责释放格式缓冲区。
             unsafe { CoTaskMemFree(Some(self.0.cast())) };
         }
     }
@@ -730,7 +737,7 @@ mod tests {
         let result = result_rx.recv_timeout(QUEUE_TEST_TIMEOUT);
         let woke = result == Ok(None);
         if !woke {
-            // Release a consumer if this regression reappears, then fail the bounded assertion.
+            // 若该回归重现，先释放消费者线程，再让有界等待断言失败。
             queue.close();
         }
         consumer.join().unwrap();

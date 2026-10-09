@@ -27,7 +27,7 @@ export function remoteKeyFromCode(code: string): RemoteControlKey | null {
   return keys[code] ?? null;
 }
 
-/** Tracks physical key codes while emitting the existing semantic wire keys. */
+/** 按物理键跟踪按住状态，沿用协议中的语义键名发送输入。 */
 export class RemoteKeyPresses {
   private readonly pressed = new Map<string, RemoteControlKey>();
 

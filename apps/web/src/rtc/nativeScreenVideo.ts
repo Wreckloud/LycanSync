@@ -28,7 +28,7 @@ const FIRST_FRAME_TIMEOUT_MS = 8_000;
 const SUSPENDED_HINT_INTERVAL_MS = 1_000;
 const SUSPENDED_HINT_TIMESTAMP_STEP_US = SUSPENDED_HINT_INTERVAL_MS * 1_000;
 
-/** Owns the renderer-side VideoFrame queue and one helper video session. */
+/** 持有页面侧视频帧队列及一个 helper 采集会话，负责停止与帧释放。 */
 export class NativeScreenVideoSession {
   readonly track: LocalVideoTrack;
 
@@ -208,6 +208,7 @@ export class NativeScreenVideoSession {
       return;
     }
     if (!this.sessionId) {
+      // 启动响应可能晚于首帧；只保留一帧，取得会话标识后再确认归属。
       this.pendingFrame?.close();
       this.pendingFrame = frame;
       this.pendingFrameSessionId = frameSessionId;

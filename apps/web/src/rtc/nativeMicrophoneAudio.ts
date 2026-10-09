@@ -33,7 +33,7 @@ interface NativeMicrophoneOptions {
   createLocalTrack?: (track: MediaStreamTrack, context: AudioContext) => LocalAudioTrack;
 }
 
-/** Sends mono WASAPI PCM through the current room's ordinary LocalAudioTrack. */
+/** 将单声道 WASAPI PCM 接入当前房间的麦克风音轨，持有页面侧音频资源。 */
 export class NativeMicrophoneAudioSession {
   track?: LocalAudioTrack;
 
@@ -133,7 +133,7 @@ export class NativeMicrophoneAudioSession {
       this.node = undefined;
       this.removeChunkListener = undefined;
       this.removeErrorListener = undefined;
-      // Each resource must be released even when another cleanup fails.
+      // 分别尝试每项清理，单个资源失败不能阻断其余释放。
       const cleanups = [
         Promise.resolve().then(() => removeChunks?.()),
         Promise.resolve().then(() => removeErrors?.()),
@@ -146,7 +146,7 @@ export class NativeMicrophoneAudioSession {
           try {
             await this.nativeStartCommand;
           } catch {
-            // A rejected native startup did not establish an owned capture session.
+            // 启动被拒绝时没有取得采集会话，无需发送对应停止命令。
             return;
           }
           this.started = false;

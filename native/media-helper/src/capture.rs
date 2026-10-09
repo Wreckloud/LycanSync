@@ -1,3 +1,5 @@
+//! 视频会话的平台分发与诊断快照；Windows 细节留在对应子模块。
+
 use crate::protocol::{ErrorCode, VideoSourceKind};
 use crate::sources::ThreadCaptureTarget;
 

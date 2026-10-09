@@ -1,3 +1,5 @@
+//! 来源注册表用 revision 管理可见 ID，并保存后续采集所需的目标身份。
+
 use crate::protocol::{ErrorCode, VideoSource, VideoSourceKind};
 
 pub const MAX_VIDEO_SOURCES: usize = 128;
@@ -45,6 +47,7 @@ impl SourceRegistry {
         &mut self,
         discovered: Vec<DiscoveredSource>,
     ) -> Result<(u64, Vec<VideoSource>), ErrorCode> {
+        // 刷新时仅复用身份仍匹配的目标；窗口标题和可复用的 HWND 都不足以单独确认窗口。
         if self.exhausted {
             return Err(ErrorCode::SourceDiscoveryFailed);
         }
