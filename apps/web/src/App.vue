@@ -208,6 +208,16 @@ const rtc = reactive(useRtcRoom({
     selectNativeScreenSource: requestNativeScreenSource,
   },
 }));
+watch(outputVolume, (volume) => rtc.setMicrophoneLoopbackVolume(volume));
+
+function stopHiddenMicrophoneLoopback(event: MouseEvent | FocusEvent) {
+  const control = event.currentTarget as HTMLElement;
+  const nextFocus = event instanceof FocusEvent ? event.relatedTarget : document.activeElement;
+  if (!control.matches(':hover') && !(nextFocus instanceof Node && control.contains(nextFocus))) {
+    rtc.stopMicrophoneLoopback();
+  }
+}
+
 // 预先恢复被静音成员的订阅策略；之后只有跨越 0% 时才更新网络订阅。
 audioPreferences.mutedParticipantIdentities()
   .forEach((identity) => rtc.setRemoteAudioSubscribed(identity, false));
@@ -1091,7 +1101,7 @@ function participantListening(participant: Participant) {
                 </span>
               </div>
               <IconButton v-if="joinedGroup && selectedGroupId !== joinedGroup.id" label="返回当前通话群组" @click="previewGroup(joinedGroup.id)"><CornerUpLeft :size="17" /></IconButton>
-              <span class="call-audio-control">
+              <span class="call-audio-control" @mouseleave="stopHiddenMicrophoneLoopback" @focusout="stopHiddenMicrophoneLoopback" @keydown.esc="rtc.stopMicrophoneLoopback()">
                 <IconButton :label="localParticipant?.isMicrophoneEnabled ? '关闭麦克风' : '开启麦克风'" :show-tooltip="false"
                   :class="{ 'is-off': !localParticipant?.isMicrophoneEnabled }"
                   :disabled="!connected || rtc.busySources.includes(Track.Source.Microphone)" @click="toggleMicrophone">
@@ -1123,10 +1133,19 @@ function participantListening(participant: Participant) {
                       @change="updateAudioProcessing('noiseSuppression', ($event.target as HTMLInputElement).checked)" /></label>
                     <label class="audio-option"><span>自动增益</span><input type="checkbox" :checked="audioProcessing.autoGainControl"
                       @change="updateAudioProcessing('autoGainControl', ($event.target as HTMLInputElement).checked)" /></label>
-                    <label class="audio-option"><span>人声增强</span><input type="checkbox" :checked="audioProcessing.voiceEnhancement"
+                    <label class="audio-option"><span>{{ desktop ? '低频过滤' : '人声增强' }}</span><input type="checkbox" :checked="audioProcessing.voiceEnhancement"
                       @change="updateAudioProcessing('voiceEnhancement', ($event.target as HTMLInputElement).checked)" /></label>
                   </div>
+                  <small v-if="desktop">过滤低频杂音。输入音量在处理后应用，超过满幅可能产生削波。</small>
+                  <small v-else>浏览器此项包含低频过滤和轻量压缩；降噪、自动增益及回声消除由 Chromium 采集器处理，输入音量在压缩前应用。</small>
                   <small v-if="desktop">桌面原生麦克风暂不支持软件回声消除，建议使用耳机。</small>
+                  <button type="button" class="secondary-button"
+                    :disabled="rtc.microphoneLoopbackState === 'idle' && (!connected || !localParticipant?.isMicrophoneEnabled || rtc.busySources.includes(Track.Source.Microphone))"
+                    @click="rtc.microphoneLoopbackState === 'idle' ? rtc.startMicrophoneLoopback(outputVolume) : rtc.stopMicrophoneLoopback()">
+                    {{ rtc.microphoneLoopbackState === 'starting' ? '取消试听连接' : rtc.microphoneLoopbackState === 'listening' ? '停止麦克风试听' : '麦克风试听' }}
+                  </button>
+                  <small>建议戴耳机试听。声音经过本机 Opus 编解码，接近远端音质，不模拟网络丢包或对方音量。</small>
+                  <small v-if="rtc.microphoneLoopbackNotice" role="alert">{{ rtc.microphoneLoopbackNotice }}</small>
                 </section>
               </span>
               <IconButton :label="localParticipant?.isScreenShareEnabled ? '停止屏幕共享' : screenShareLimitReached ? '屏幕共享已达到 8 路上限' : '开始屏幕共享'"

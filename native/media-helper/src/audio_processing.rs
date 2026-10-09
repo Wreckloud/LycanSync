@@ -33,25 +33,9 @@ pub(super) struct MicrophoneProcessor {
 
 impl MicrophoneProcessor {
     pub(super) fn new(settings: ProcessingSettings) -> Self {
-        let config = Config {
-            pipeline: Pipeline {
-                maximum_internal_processing_rate: MaxProcessingRate::Rate48kHz,
-                ..Pipeline::default()
-            },
-            high_pass_filter: settings.voice_enhancement.then(HighPassFilter::default),
-            noise_suppression: settings.noise_suppression.then(|| NoiseSuppression {
-                level: NoiseSuppressionLevel::Moderate,
-                ..NoiseSuppression::default()
-            }),
-            gain_controller2: settings.auto_gain_control.then(|| GainController2 {
-                adaptive_digital: Some(AdaptiveDigital::default()),
-                ..GainController2::default()
-            }),
-            ..Config::default()
-        };
         let stream = StreamConfig::new(SAMPLE_RATE, 1);
         let audio_processing = AudioProcessing::builder()
-            .config(config)
+            .config(processing_config(settings))
             .capture_config(stream)
             .render_config(stream)
             .build();
@@ -66,14 +50,17 @@ impl MicrophoneProcessor {
     }
 
     pub(super) fn set_settings(&mut self, settings: ProcessingSettings) {
+        if self.settings == settings {
+            return;
+        }
         if self.settings.noise_suppression != settings.noise_suppression
             || self.settings.auto_gain_control != settings.auto_gain_control
             || self.settings.voice_enhancement != settings.voice_enhancement
         {
-            *self = Self::new(settings);
-        } else {
-            self.settings.input_gain = settings.input_gain;
+            self.audio_processing
+                .apply_config(processing_config(settings));
         }
+        self.settings = settings;
     }
 
     pub(super) fn process(&mut self, input: &[f32; FRAMES_PER_CHUNK]) -> [f32; FRAMES_PER_CHUNK] {
@@ -91,12 +78,32 @@ impl MicrophoneProcessor {
             .expect("fixed 48 kHz mono audio processing format");
         for sample in &mut output {
             *sample = if sample.is_finite() {
+                // Apply user gain after AGC so automatic gain does not cancel the preference.
                 (*sample * self.settings.input_gain).clamp(-1.0, 1.0)
             } else {
                 0.0
             };
         }
         output
+    }
+}
+
+fn processing_config(settings: ProcessingSettings) -> Config {
+    Config {
+        pipeline: Pipeline {
+            maximum_internal_processing_rate: MaxProcessingRate::Rate48kHz,
+            ..Pipeline::default()
+        },
+        high_pass_filter: settings.voice_enhancement.then(HighPassFilter::default),
+        noise_suppression: settings.noise_suppression.then(|| NoiseSuppression {
+            level: NoiseSuppressionLevel::Moderate,
+            ..NoiseSuppression::default()
+        }),
+        gain_controller2: settings.auto_gain_control.then(|| GainController2 {
+            adaptive_digital: Some(AdaptiveDigital::default()),
+            ..GainController2::default()
+        }),
+        ..Config::default()
     }
 }
 
@@ -152,8 +159,8 @@ mod tests {
     fn noise_suppression_reduces_stationary_noise_while_preserving_voice_energy() {
         let mut processor = MicrophoneProcessor::new(ProcessingSettings {
             input_gain: 1.0,
-            noise_suppression: true,
-            auto_gain_control: true,
+            noise_suppression: false,
+            auto_gain_control: false,
             voice_enhancement: false,
         });
         let mut random_state = 0x5EED_u32;
@@ -161,7 +168,14 @@ mod tests {
         let mut speech = [0.0; FRAMES_PER_CHUNK];
         let mut voice_and_noise = [0.0; FRAMES_PER_CHUNK];
         let mut noise_output = [0.0; FRAMES_PER_CHUNK];
+        let mut noise_input = [0.0; FRAMES_PER_CHUNK];
         for block in 0..250 {
+            if block == 1 {
+                processor.set_settings(ProcessingSettings {
+                    noise_suppression: true,
+                    ..processor.settings()
+                });
+            }
             for index in 0..FRAMES_PER_CHUNK {
                 random_state = random_state
                     .wrapping_mul(1_664_525)
@@ -182,16 +196,17 @@ mod tests {
                 let output = processor.process(&noise);
                 if block >= 140 {
                     noise_output = output;
+                    noise_input = noise;
                 }
             } else {
                 voice_and_noise = processor.process(&voice_and_noise);
             }
         }
         assert!(
-            rms(&noise_output) < rms(&noise) * 0.92,
+            rms(&noise_output) < rms(&noise_input) * 0.92,
             "noise RMS {} was not reduced from {}",
             rms(&noise_output),
-            rms(&noise)
+            rms(&noise_input)
         );
         assert!(
             rms(&voice_and_noise) > 0.03,
@@ -284,6 +299,109 @@ mod tests {
                 .iter()
                 .all(|sample| sample.is_finite() && sample.abs() <= 1.0)
         );
+    }
+
+    #[test]
+    fn automatic_gain_control_toggle_changes_level_and_can_be_restored_during_capture() {
+        let initial = ProcessingSettings {
+            input_gain: 1.0,
+            noise_suppression: false,
+            auto_gain_control: false,
+            voice_enhancement: false,
+        };
+        let mut toggled = MicrophoneProcessor::new(initial);
+        let mut fixed = MicrophoneProcessor::new(initial);
+        let mut auto_output = [0.0; FRAMES_PER_CHUNK];
+        let mut fixed_output = [0.0; FRAMES_PER_CHUNK];
+
+        for block in 0..500 {
+            if block == 1 {
+                toggled.set_settings(ProcessingSettings {
+                    auto_gain_control: true,
+                    ..initial
+                });
+            }
+            let input = tone(0.003, 220.0, block);
+            auto_output = toggled.process(&input);
+            fixed_output = fixed.process(&input);
+        }
+        assert!(rms(&auto_output) > rms(&fixed_output) * 1.5);
+
+        toggled.set_settings(initial);
+        let input = tone(0.003, 220.0, 500);
+        let restored_output = toggled.process(&input);
+        let fixed_output = fixed.process(&input);
+        assert_eq!(restored_output.len(), FRAMES_PER_CHUNK);
+        assert!(
+            restored_output
+                .iter()
+                .zip(fixed_output)
+                .all(|(restored, fixed)| (restored - fixed).abs() < 1e-6)
+        );
+    }
+
+    #[test]
+    fn applying_identical_settings_and_input_gain_keeps_warmed_processing_state() {
+        let initial = ProcessingSettings::default();
+        let mut updated = MicrophoneProcessor::new(initial);
+        let mut unchanged = MicrophoneProcessor::new(initial);
+        for block in 0..300 {
+            let input = tone(0.01, 220.0, block);
+            updated.process(&input);
+            unchanged.process(&input);
+        }
+
+        updated.set_settings(initial);
+        updated.set_settings(ProcessingSettings {
+            input_gain: 0.5,
+            ..initial
+        });
+        let input = tone(0.01, 220.0, 300);
+        let updated_output = updated.process(&input);
+        let unchanged_output = unchanged.process(&input);
+
+        assert_eq!(updated_output.len(), FRAMES_PER_CHUNK);
+        assert_eq!(SAMPLE_RATE, 48_000);
+        assert_eq!(updated.settings().input_gain, 0.5);
+        for (updated, unchanged) in updated_output.iter().zip(unchanged_output) {
+            assert!((*updated - unchanged * 0.5).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn processing_options_can_be_toggled_and_restored_without_changing_chunk_format() {
+        let initial = ProcessingSettings {
+            input_gain: 1.0,
+            noise_suppression: false,
+            auto_gain_control: false,
+            voice_enhancement: false,
+        };
+        let mut processor = MicrophoneProcessor::new(initial);
+        let settings = [
+            ProcessingSettings {
+                noise_suppression: true,
+                ..initial
+            },
+            ProcessingSettings {
+                auto_gain_control: true,
+                ..initial
+            },
+            ProcessingSettings {
+                voice_enhancement: true,
+                ..initial
+            },
+            initial,
+        ];
+
+        for (block, settings) in settings.into_iter().enumerate() {
+            processor.set_settings(settings);
+            let output = processor.process(&tone(0.1, 120.0, block));
+            assert_eq!(output.len(), FRAMES_PER_CHUNK);
+            assert!(output.iter().all(|sample| sample.is_finite()));
+            assert_eq!(processor.settings(), settings);
+            assert_eq!(output.len(), SAMPLE_RATE as usize / 100);
+        }
+        assert_eq!(processor.settings(), initial);
     }
 
     #[test]

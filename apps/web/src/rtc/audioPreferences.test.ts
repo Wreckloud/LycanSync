@@ -16,6 +16,7 @@ describe('audioPreferences', () => {
     expect(normalizeAudioVolume(1.024)).toBe(1);
     expect(normalizeAudioVolume(1.026)).toBe(1.05);
     expect(normalizeAudioVolume(3)).toBe(2);
+    expect(normalizeAudioVolume(Number.NaN)).toBe(1);
   });
 
   it('按当前账号保存总音量、处理开关和成员音量', () => {
@@ -53,6 +54,19 @@ describe('audioPreferences', () => {
       outputVolume: 1,
       echoCancellation: true,
       noiseSuppression: true,
+    });
+  });
+
+  it('保留旧版偏好并为缺少的处理开关补充默认值', () => {
+    const storage = { getItem: () => JSON.stringify({ inputGain: 0.8, outputVolume: 1.2 }) };
+    expect(loadAudioPreferences('local-user', storage)).toMatchObject({
+      inputGain: 0.8,
+      outputVolume: 1.2,
+      screenShareVolume: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      voiceEnhancement: true,
     });
   });
 

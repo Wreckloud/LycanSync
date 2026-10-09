@@ -12,8 +12,6 @@ const CAPABILITY_NAMES = [
   'microphoneCapture',
   'systemAudioCapture',
   'processAudioCapture',
-  'audioSourceDiscovery',
-  'microphoneProbe',
   'screenShareAudioCapture',
 ];
 

@@ -11,13 +11,15 @@
     "build": "vue-tsc --noEmit && vite build",
     "build:activity": "cargo build --manifest-path ../../native/activity-helper/Cargo.toml --release",
     "build:media": "cargo build --manifest-path ../../native/media-helper/Cargo.toml --release --features shared-texture-output",
+    "build:media-bridge": "cargo build --manifest-path ../../native/media-bridge/Cargo.toml --release --target x86_64-pc-windows-msvc",
+    "build:desktop": "npm run build:media && npm run build:media-bridge && npm run build:activity && npm run build",
     "test:media": "cargo test --manifest-path ../../native/media-helper/Cargo.toml",
     "test:electron-unit": "node --test electron/media-helper.test.cjs",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run src",
     "test:e2e": "playwright test",
-    "desktop": "npm run build && electron electron/main.cjs",
-    "test:desktop": "npm run build && playwright test --config playwright.desktop.config.ts"
+    "desktop": "npm run build:desktop && electron electron/main.cjs",
+    "test:desktop": "npm run build:desktop && playwright test --config playwright.desktop.config.ts"
   },
   "dependencies": {
     "@lucide/vue": "1.41.0",

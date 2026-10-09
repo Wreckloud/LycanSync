@@ -57,21 +57,6 @@ pub enum CommandEnvelope {
         protocol_version: u16,
         request_id: String,
     },
-    ListAudioSources {
-        protocol_version: u16,
-        request_id: String,
-    },
-    StartMicrophoneProbe {
-        protocol_version: u16,
-        request_id: String,
-        session_id: String,
-        source_id: String,
-    },
-    StopMicrophoneProbe {
-        protocol_version: u16,
-        request_id: String,
-        session_id: String,
-    },
     StartMicrophoneCapture {
         protocol_version: u16,
         request_id: String,
@@ -144,15 +129,6 @@ impl CommandEnvelope {
             | Self::ListVideoSources {
                 protocol_version, ..
             }
-            | Self::ListAudioSources {
-                protocol_version, ..
-            }
-            | Self::StartMicrophoneProbe {
-                protocol_version, ..
-            }
-            | Self::StopMicrophoneProbe {
-                protocol_version, ..
-            }
             | Self::StartMicrophoneCapture {
                 protocol_version, ..
             }
@@ -188,9 +164,6 @@ impl CommandEnvelope {
             | Self::StopVideo { request_id, .. }
             | Self::StopCaptureProbe { request_id, .. }
             | Self::ListVideoSources { request_id, .. }
-            | Self::ListAudioSources { request_id, .. }
-            | Self::StartMicrophoneProbe { request_id, .. }
-            | Self::StopMicrophoneProbe { request_id, .. }
             | Self::StartMicrophoneCapture { request_id, .. }
             | Self::ConfigureMicrophoneCapture { request_id, .. }
             | Self::StopMicrophoneCapture { request_id, .. }
@@ -226,62 +199,6 @@ pub struct VideoSource {
     pub width: u32,
     pub height: u32,
     pub primary: bool,
-}
-
-#[derive(Clone, Copy, Serialize, Debug, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub enum AudioSourceKind {
-    Input,
-    Output,
-}
-
-#[derive(Clone, Copy, Serialize, Debug, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub enum AudioDefaultRole {
-    Console,
-    Multimedia,
-    Communications,
-}
-
-#[derive(Clone, Copy, Serialize, Debug, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub enum AudioEndpointStatus {
-    Available,
-    NoActiveDevice,
-}
-
-#[derive(Clone, Serialize, Debug, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct AudioSource {
-    pub source_id: String,
-    pub kind: AudioSourceKind,
-    pub name: String,
-    pub default_roles: Vec<AudioDefaultRole>,
-}
-
-#[derive(Clone, Copy, Serialize, Debug, Default, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub enum AudioProbeState {
-    #[default]
-    Idle,
-    Starting,
-    Running,
-    Stopping,
-    Failed,
-}
-
-#[derive(Clone, Serialize, Debug, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct MicrophoneProbeDiagnostics {
-    pub state: AudioProbeState,
-    pub session_id: Option<String>,
-    pub sample_rate: Option<u32>,
-    pub channels: Option<u16>,
-    pub bits_per_sample: Option<u16>,
-    pub packets_received: Option<u64>,
-    pub frames_received: Option<u64>,
-    pub silent_flag_packets: Option<u64>,
-    pub last_error: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, Serialize, Debug, Default, Eq, PartialEq)]
@@ -334,8 +251,6 @@ pub enum OutboundEvent {
         microphone_capture: Capability,
         system_audio_capture: Capability,
         process_audio_capture: Capability,
-        audio_source_discovery: Capability,
-        microphone_probe: Capability,
         screen_share_audio_capture: Capability,
     },
     Diagnostics {
@@ -362,7 +277,6 @@ pub enum OutboundEvent {
         last_capture_error: Option<&'static str>,
         stop_duration_ms: Option<u64>,
         capture_suspended: Option<bool>,
-        microphone_probe: MicrophoneProbeDiagnostics,
         microphone_capture_dropped_chunks: u64,
         screen_share_audio: Box<ScreenShareAudioDiagnostics>,
     },
@@ -371,17 +285,6 @@ pub enum OutboundEvent {
         request_id: String,
         revision: u64,
         sources: Vec<VideoSource>,
-    },
-    AudioSources {
-        protocol_version: u16,
-        request_id: String,
-        revision: u64,
-        inputs: Vec<AudioSource>,
-        outputs: Vec<AudioSource>,
-        input_status: AudioEndpointStatus,
-        output_status: AudioEndpointStatus,
-        inputs_truncated: bool,
-        outputs_truncated: bool,
     },
     Acknowledged {
         protocol_version: u16,
@@ -461,14 +364,7 @@ pub enum ErrorCode {
     VideoOutputUnavailable,
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     AudioPlatformUnsupported,
-    AudioSourceDiscoveryFailed,
     AudioDeviceUnavailable,
-    AudioProbeAlreadyRunning,
-    AudioProbeSessionMismatch,
-    AudioProbeStartFailed,
-    AudioProbeStartTimedOut,
-    AudioProbeStopFailed,
-    AudioProbeFailed,
     ScreenShareAudioAlreadyRunning,
     ScreenShareAudioSessionMismatch,
     ScreenShareAudioStartFailed,
@@ -487,8 +383,6 @@ pub enum ErrorCode {
     MicrophoneCaptureFailed,
     MicrophoneCapturePipeFailed,
     MicrophoneCaptureFormatUnsupported,
-    #[cfg_attr(target_os = "windows", allow(dead_code))]
-    AudioProbeUnsupported,
 }
 
 impl ErrorCode {
@@ -510,15 +404,7 @@ impl ErrorCode {
                 "视频输出尚未实现；可使用 startCaptureProbe 查询原始捕获帧"
             }
             Self::AudioPlatformUnsupported => "当前平台不支持音频来源发现",
-            Self::AudioSourceDiscoveryFailed => "音频来源发现失败",
             Self::AudioDeviceUnavailable => "没有可用的活动音频端点",
-            Self::AudioProbeAlreadyRunning => "麦克风探针已在运行",
-            Self::AudioProbeSessionMismatch => "sessionId 与当前麦克风探针不匹配",
-            Self::AudioProbeStartFailed => "麦克风元数据探针启动失败",
-            Self::AudioProbeStartTimedOut => "麦克风元数据探针启动等待超时；后台清理仍在进行",
-            Self::AudioProbeStopFailed => "麦克风元数据探针停止失败",
-            Self::AudioProbeFailed => "麦克风元数据探针运行失败",
-            Self::AudioProbeUnsupported => "当前平台不支持麦克风元数据探针",
             Self::ScreenShareAudioAlreadyRunning => "屏幕共享音频已在运行",
             Self::ScreenShareAudioSessionMismatch => "sessionId 与当前屏幕共享音频会话不匹配",
             Self::ScreenShareAudioStartFailed => "屏幕共享音频启动失败",
@@ -548,6 +434,7 @@ impl ErrorCode {
             Self::UnsupportedProtocolVersion => "unsupportedProtocolVersion",
             Self::InvalidRequest => "invalidRequest",
             Self::PlatformUnsupported => "platformUnsupported",
+            Self::AudioPlatformUnsupported => "audioPlatformUnsupported",
             Self::SourceDiscoveryFailed => "sourceDiscoveryFailed",
             Self::HardwareD3dUnavailable => "hardwareD3dUnavailable",
             Self::CaptureStartFailed => "captureStartFailed",
@@ -560,16 +447,7 @@ impl ErrorCode {
             Self::CaptureFrameProcessingFailed => "captureFrameProcessingFailed",
             Self::CaptureCleanupFailed => "captureCleanupFailed",
             Self::VideoOutputUnavailable => "videoOutputUnavailable",
-            Self::AudioPlatformUnsupported => "audioPlatformUnsupported",
-            Self::AudioSourceDiscoveryFailed => "audioSourceDiscoveryFailed",
             Self::AudioDeviceUnavailable => "audioDeviceUnavailable",
-            Self::AudioProbeAlreadyRunning => "audioProbeAlreadyRunning",
-            Self::AudioProbeSessionMismatch => "audioProbeSessionMismatch",
-            Self::AudioProbeStartFailed => "audioProbeStartFailed",
-            Self::AudioProbeStartTimedOut => "audioProbeStartTimedOut",
-            Self::AudioProbeStopFailed => "audioProbeStopFailed",
-            Self::AudioProbeFailed => "audioProbeFailed",
-            Self::AudioProbeUnsupported => "audioProbeUnsupported",
             Self::ScreenShareAudioAlreadyRunning => "screenShareAudioAlreadyRunning",
             Self::ScreenShareAudioSessionMismatch => "screenShareAudioSessionMismatch",
             Self::ScreenShareAudioStartFailed => "screenShareAudioStartFailed",
@@ -611,28 +489,10 @@ pub fn unavailable_video_output_capability() -> Capability {
     }
 }
 
-pub fn audio_source_discovery_capability() -> Capability {
-    #[cfg(target_os = "windows")]
-    {
-        Capability {
-            available: true,
-            reason: "windowsCoreAudioEndpointEnumeration",
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        Capability {
-            available: false,
-            reason: "platformUnsupported",
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        AudioDefaultRole, AudioEndpointStatus, AudioSource, AudioSourceKind, CommandEnvelope,
-        ErrorCode, OutboundEvent, PROTOCOL_VERSION, VideoSource, VideoSourceKind,
+        CommandEnvelope, ErrorCode, OutboundEvent, PROTOCOL_VERSION, VideoSource, VideoSourceKind,
     };
 
     #[test]
@@ -644,17 +504,6 @@ mod tests {
         assert_eq!(request.protocol_version(), PROTOCOL_VERSION);
         assert_eq!(request.request_id(), "sources-1");
         assert!(matches!(request, CommandEnvelope::ListVideoSources { .. }));
-    }
-
-    #[test]
-    fn deserializes_list_audio_sources_request() {
-        let request: CommandEnvelope = serde_json::from_str(
-            r#"{"protocolVersion":1,"requestId":"audio-1","command":"listAudioSources"}"#,
-        )
-        .unwrap();
-        assert_eq!(request.protocol_version(), PROTOCOL_VERSION);
-        assert_eq!(request.request_id(), "audio-1");
-        assert!(matches!(request, CommandEnvelope::ListAudioSources { .. }));
     }
 
     #[test]
@@ -722,15 +571,7 @@ mod tests {
     }
 
     #[test]
-    fn audio_discovery_errors_have_stable_codes() {
-        assert_eq!(
-            serde_json::to_value(ErrorCode::AudioPlatformUnsupported).unwrap(),
-            "audioPlatformUnsupported"
-        );
-        assert_eq!(
-            serde_json::to_value(ErrorCode::AudioSourceDiscoveryFailed).unwrap(),
-            "audioSourceDiscoveryFailed"
-        );
+    fn active_microphone_device_error_has_a_stable_code() {
         assert_eq!(
             serde_json::to_value(ErrorCode::AudioDeviceUnavailable).unwrap(),
             "audioDeviceUnavailable"
@@ -784,33 +625,5 @@ mod tests {
         assert_eq!(value["revision"], 1);
         assert_eq!(value["sources"][0]["kind"], "monitor");
         assert_eq!(value["sources"][0]["sourceId"], "monitor:1:0");
-    }
-
-    #[test]
-    fn serializes_audio_sources_with_default_roles_and_endpoint_status() {
-        let event = OutboundEvent::AudioSources {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: "audio-1".to_owned(),
-            revision: 2,
-            inputs: vec![AudioSource {
-                source_id: "audioInput:2:0".to_owned(),
-                kind: AudioSourceKind::Input,
-                name: "Microphone".to_owned(),
-                default_roles: vec![AudioDefaultRole::Communications],
-            }],
-            outputs: vec![],
-            input_status: AudioEndpointStatus::Available,
-            output_status: AudioEndpointStatus::NoActiveDevice,
-            inputs_truncated: false,
-            outputs_truncated: false,
-        };
-
-        let value = serde_json::to_value(event).unwrap();
-        assert_eq!(value["event"], "audioSources");
-        assert_eq!(value["revision"], 2);
-        assert_eq!(value["inputs"][0]["kind"], "input");
-        assert_eq!(value["inputs"][0]["defaultRoles"][0], "communications");
-        assert_eq!(value["outputs"], serde_json::json!([]));
-        assert_eq!(value["outputStatus"], "noActiveDevice");
     }
 }

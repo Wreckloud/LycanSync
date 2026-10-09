@@ -1,4 +1,5 @@
 import { LocalAudioTrack } from 'livekit-client';
+import processorUrl from './nativeScreenAudio.worklet.js?url&no-inline';
 
 export interface NativeScreenAudioDesktopBridge {
   startNativeScreenAudio(sourceId: string, sessionId: string): Promise<{
@@ -9,11 +10,12 @@ export interface NativeScreenAudioDesktopBridge {
   }>;
   stopNativeScreenAudio(sessionId: string): Promise<{ changed: boolean }>;
   onNativeScreenAudioChunk(callback: (chunk: NativeScreenAudioChunk) => void): () => void;
-  acknowledgeNativeScreenAudioChunk(sequence: number, droppedChunks: number): void;
-  onNativeScreenAudioError(callback: (code: string) => void): () => void;
+  acknowledgeNativeScreenAudioChunk(sessionId: string, sequence: number, droppedChunks: number): void;
+  onNativeScreenAudioError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
 }
 
 export interface NativeScreenAudioChunk {
+  sessionId: string;
   sequence: number;
   frames: number;
   sampleRate: number;
@@ -28,40 +30,6 @@ interface NativeScreenAudioOptions {
   createLocalTrack?: (track: MediaStreamTrack, context: AudioContext) => LocalAudioTrack;
 }
 
-const PROCESSOR_SOURCE = `
-class LycanScreenAudioProcessor extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this.queue = [];
-    this.current = null;
-    this.dropped = 0;
-    this.port.onmessage = ({ data }) => {
-      if (data?.type !== 'chunk' || !(data.pcm instanceof ArrayBuffer)) return;
-      if (this.queue.length >= 2) { this.queue.shift(); this.dropped++; }
-      this.queue.push({ sequence: data.sequence, samples: new Float32Array(data.pcm), offset: 0 });
-      this.port.postMessage({ type: 'accepted', sequence: data.sequence, droppedChunks: this.dropped });
-    };
-  }
-  process(_inputs, outputs) {
-    const output = outputs[0];
-    if (!output || output.length < 2) return true;
-    const left = output[0];
-    const right = output[1];
-    for (let index = 0; index < left.length; index++) {
-      if (!this.current || this.current.offset >= this.current.samples.length / 2) {
-        this.current = this.queue.shift() || null;
-      }
-      if (!this.current) { left[index] = 0; right[index] = 0; continue; }
-      const sample = this.current.offset++ * 2;
-      left[index] = this.current.samples[sample];
-      right[index] = this.current.samples[sample + 1];
-    }
-    return true;
-  }
-}
-registerProcessor('lycan-screen-audio', LycanScreenAudioProcessor);
-`;
-
 /** Feeds bounded WASAPI PCM blocks to an inaudible MediaStreamDestination track. */
 export class NativeScreenAudioSession {
   track?: LocalAudioTrack;
@@ -73,8 +41,8 @@ export class NativeScreenAudioSession {
   private removeChunkListener?: () => void;
   private removeErrorListener?: () => void;
   private stopPromise?: Promise<void>;
+  private nativeStartCommand?: ReturnType<NativeScreenAudioDesktopBridge['startNativeScreenAudio']>;
   private stopped = false;
-  private started = false;
   private droppedChunksBeforeWorklet = 0;
   private readonly onError?: (code: string) => void;
 
@@ -100,6 +68,7 @@ export class NativeScreenAudioSession {
     if (this.stopped) return Promise.reject(new Error('screenAudioSessionStopped'));
     if (!this.startCommand) this.startCommand = this.startGraphAndCapture(sourceId, sessionId);
     return this.startCommand.then(() => {
+      if (this.stopped) throw new Error('screenAudioSessionStopped');
       if (!this.track) throw new Error('screenAudioTrackUnavailable');
       return this.track;
     });
@@ -108,31 +77,27 @@ export class NativeScreenAudioSession {
   private async startGraphAndCapture(sourceId: string, sessionId: string) {
     this.sessionId = sessionId;
     this.removeChunkListener = this.desktop.onNativeScreenAudioChunk((chunk) => this.acceptChunk(chunk));
-    this.removeErrorListener = this.desktop.onNativeScreenAudioError((code) => this.fail(code));
-    let objectUrl: string | undefined;
+    this.removeErrorListener = this.desktop.onNativeScreenAudioError((failure) => {
+      if (failure?.sessionId === this.sessionId) this.fail(failure.code);
+    });
     try {
-      const format = await this.desktop.startNativeScreenAudio(sourceId, sessionId);
-      this.started = true;
+      this.nativeStartCommand = this.desktop.startNativeScreenAudio(sourceId, sessionId);
+      const format = await this.nativeStartCommand;
       if (format.channels !== 2 || format.bitsPerSample !== 32 || format.nominalChunkMs !== 10
           || !Number.isInteger(format.sampleRate) || format.sampleRate < 8000 || format.sampleRate > 192000) {
         throw new Error('screenAudioFormatUnsupported');
       }
-      if (this.stopped) {
-        this.started = false;
-        await this.desktop.stopNativeScreenAudio(sessionId).catch(() => {});
-        throw new Error('screenAudioSessionStopped');
-      }
+      if (this.stopped) throw new Error('screenAudioSessionStopped');
       this.context = this.createContext(format.sampleRate);
-      const blob = new Blob([PROCESSOR_SOURCE], { type: 'text/javascript' });
-      objectUrl = URL.createObjectURL(blob);
-      await this.context.audioWorklet.addModule(objectUrl);
+      await this.context.audioWorklet.addModule(processorUrl);
       if (this.stopped) throw new Error('screenAudioSessionStopped');
       this.node = this.createWorkletNode(this.context);
+      const workletSessionId = sessionId;
       const destination = this.context.createMediaStreamDestination();
       this.node.connect(destination);
       this.node.port.onmessage = (event: MessageEvent) => {
-        if (event.data?.type === 'accepted' && Number.isSafeInteger(event.data.sequence)) {
-          this.desktop.acknowledgeNativeScreenAudioChunk(event.data.sequence,
+        if (!this.stopped && event.data?.type === 'accepted' && Number.isSafeInteger(event.data.sequence)) {
+          this.desktop.acknowledgeNativeScreenAudioChunk(workletSessionId, event.data.sequence,
             this.droppedChunksBeforeWorklet
               + (Number.isSafeInteger(event.data.droppedChunks) ? event.data.droppedChunks : 0));
         }
@@ -142,40 +107,59 @@ export class NativeScreenAudioSession {
       this.track = this.createLocalTrack(destination.stream.getAudioTracks()[0], this.context);
       return format;
     } catch (error) {
-      await this.stop().catch(() => {});
+      try {
+        await this.stop();
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], '共享声音启动失败，清理未完成。');
+      }
       throw error;
-    } finally {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     }
   }
 
   stop(): Promise<void> {
     if (this.stopPromise) return this.stopPromise;
     this.stopped = true;
-    this.removeChunkListener?.();
-    this.removeChunkListener = undefined;
-    this.removeErrorListener?.();
-    this.removeErrorListener = undefined;
-    this.node?.port.close();
-    this.node?.disconnect();
-    this.node = undefined;
-    this.track?.stop();
-    this.stopPromise = (async () => {
+    this.stopPromise = Promise.resolve().then(async () => {
       const context = this.context;
+      const node = this.node;
+      const removeChunks = this.removeChunkListener;
+      const removeErrors = this.removeErrorListener;
       this.context = undefined;
-      if (context && context.state !== 'closed') await context.close();
-      if (this.sessionId && this.started) {
-        this.started = false;
-        await this.desktop.stopNativeScreenAudio(this.sessionId);
-      }
-    })();
+      this.node = undefined;
+      this.removeChunkListener = undefined;
+      this.removeErrorListener = undefined;
+      // Each resource must be released even when another cleanup fails.
+      const cleanups = [
+        Promise.resolve().then(() => removeChunks?.()),
+        Promise.resolve().then(() => removeErrors?.()),
+        Promise.resolve().then(() => node?.port.close()),
+        Promise.resolve().then(() => node?.disconnect()),
+        Promise.resolve().then(() => this.track?.stop()),
+        Promise.resolve().then(() => context && context.state !== 'closed' ? context.close() : undefined),
+        Promise.resolve().then(async () => {
+          if (!this.nativeStartCommand || !this.sessionId) return;
+          try {
+            await this.nativeStartCommand;
+          } catch {
+            // A rejected native startup did not establish an owned capture session.
+            return;
+          }
+          await this.desktop.stopNativeScreenAudio(this.sessionId);
+        }),
+      ];
+      const results = await Promise.allSettled(cleanups);
+      const errors = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map((result) => result.reason);
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) throw new AggregateError(errors, '共享声音清理未完成。');
+    });
     return this.stopPromise;
   }
 
   private acceptChunk(chunk: NativeScreenAudioChunk) {
-    if (this.stopped || !chunk || !Number.isSafeInteger(chunk.sequence)) return;
+    if (this.stopped || !chunk || chunk.sessionId !== this.sessionId || !Number.isSafeInteger(chunk.sequence)) return;
     if (!this.node) {
-      this.desktop.acknowledgeNativeScreenAudioChunk(chunk.sequence, ++this.droppedChunksBeforeWorklet);
+      this.desktop.acknowledgeNativeScreenAudioChunk(this.sessionId!, chunk.sequence, ++this.droppedChunksBeforeWorklet);
       return;
     }
     const sampleRate = this.context?.sampleRate;
@@ -185,7 +169,7 @@ export class NativeScreenAudioSession {
         || !(chunk.pcm instanceof Uint8Array) || chunk.pcm.byteLength !== chunk.frames * 8
         || chunk.pcm.byteLength % 4 !== 0) {
       if (!this.stopped && chunk?.sequence) {
-        this.desktop.acknowledgeNativeScreenAudioChunk(chunk.sequence, ++this.droppedChunksBeforeWorklet);
+        this.desktop.acknowledgeNativeScreenAudioChunk(this.sessionId!, chunk.sequence, ++this.droppedChunksBeforeWorklet);
       }
       return;
     }
@@ -196,7 +180,10 @@ export class NativeScreenAudioSession {
   private fail(code: string) {
     if (this.stopped) return;
     const safeCode = /^[a-z][A-Za-z0-9]{0,63}$/.test(code) ? code : 'screenShareAudioFailed';
-    this.onError?.(safeCode);
-    void this.stop();
+    try {
+      this.onError?.(safeCode);
+    } finally {
+      void this.stop().catch((error) => console.error('共享声音异常后的清理失败', error));
+    }
   }
 }

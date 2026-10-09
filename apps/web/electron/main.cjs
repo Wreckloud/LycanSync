@@ -1,5 +1,6 @@
 const { app, BrowserWindow, desktopCapturer, ipcMain, net, powerMonitor, protocol, screen, session, safeStorage, shell, sharedTexture } = require('electron');
 const { spawn } = require('node:child_process');
+const { createServer } = require('node:net');
 const { existsSync } = require('node:fs');
 const { createInterface } = require('node:readline');
 const { Module } = require('node:module');
@@ -189,6 +190,11 @@ function finishNativeMicrophonePipe(audio, { destroy = false } = {}) {
   if (audio.server.listening) audio.server.close();
 }
 
+function validNativeAudioSessionId(sessionId) {
+  return typeof sessionId === 'string' && sessionId.length > 0 && Buffer.byteLength(sessionId, 'utf8') <= 128
+    && !/[\u0000-\u001f\u007f-\u009f]/u.test(sessionId);
+}
+
 function handleNativeMicrophonePipeData(audio, incoming) {
   if (nativeMicrophoneSession !== audio || audio.stopping) return;
   audio.buffer = audio.buffer.length ? Buffer.concat([audio.buffer, incoming]) : incoming;
@@ -222,8 +228,18 @@ function sendNextNativeMicrophoneChunk(audio) {
   const packet = audio.queue.shift();
   audio.inFlight = sequence;
   mainWindow.webContents.send('media:native-microphone-frame', {
-    sequence, frames: packet.frames, sampleRate: 48_000, channels: 1, pcm: packet.pcm,
+    sessionId: audio.sessionId, sequence, frames: packet.frames, sampleRate: 48_000, channels: 1, pcm: packet.pcm,
   });
+}
+
+function acknowledgeNativeMicrophoneChunk(sessionId, sequence, droppedChunks) {
+  if (!validNativeAudioSessionId(sessionId) || !Number.isSafeInteger(sequence)
+      || !Number.isSafeInteger(droppedChunks) || droppedChunks < 0) return;
+  const audio = nativeMicrophoneSession;
+  if (!audio || audio.sessionId !== sessionId || audio.inFlight !== sequence) return;
+  audio.rendererDroppedChunks = Math.max(audio.rendererDroppedChunks, droppedChunks);
+  audio.inFlight = undefined;
+  sendNextNativeMicrophoneChunk(audio);
 }
 
 function notifyNativeMicrophoneError(audio, code) {
@@ -257,7 +273,7 @@ async function startNativeMicrophoneCapture(sessionId, settings) {
   }
   lastMicrophoneDroppedChunks = 0;
   const pipeId = randomUUID();
-  const server = net.createServer();
+  const server = createServer();
   const audio = {
     sessionId, pipeId, server, socket: undefined, buffer: Buffer.alloc(0), queue: [],
     inFlight: undefined, sequence: 0, droppedChunks: 0, rendererDroppedChunks: 0,
@@ -329,7 +345,7 @@ function handleNativeScreenAudioPipeData(audio, incoming) {
     if (audio.buffer.length < packetBytes) break;
     const pcm = Uint8Array.from(audio.buffer.subarray(4, packetBytes));
     audio.buffer = audio.buffer.subarray(packetBytes);
-    if (audio.queue.length === 2) {
+    if (audio.queue.length === 12) {
       audio.queue.shift();
       audio.droppedChunks++;
     }
@@ -349,6 +365,7 @@ function sendNextNativeScreenAudioChunk(audio) {
   const packet = audio.queue.shift();
   audio.inFlight = sequence;
   mainWindow.webContents.send('media:native-screen-audio-frame', {
+    sessionId: audio.sessionId,
     sequence,
     frames: packet.frames,
     sampleRate: audio.sampleRate,
@@ -357,13 +374,23 @@ function sendNextNativeScreenAudioChunk(audio) {
   });
 }
 
+function acknowledgeNativeScreenAudioChunk(sessionId, sequence, droppedChunks) {
+  if (!validNativeAudioSessionId(sessionId) || !Number.isSafeInteger(sequence)
+      || !Number.isSafeInteger(droppedChunks) || droppedChunks < 0) return;
+  const audio = nativeScreenAudioSession;
+  if (!audio || audio.sessionId !== sessionId || audio.inFlight !== sequence) return;
+  audio.rendererDroppedChunks = Math.max(audio.rendererDroppedChunks, droppedChunks);
+  audio.inFlight = undefined;
+  sendNextNativeScreenAudioChunk(audio);
+}
+
 function notifyNativeScreenAudioError(audio, code) {
   if (!audio || audio.failureNotified || audio.stopping) return;
   audio.failureNotified = true;
   const safeCode = /^[a-z][A-Za-z0-9]{0,63}$/.test(code) ? code : 'screenShareAudioFailed';
   finishNativeScreenAudioPipe(audio, { destroy: true });
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('media:native-screen-audio-error', safeCode);
+    mainWindow.webContents.send('media:native-screen-audio-error', { sessionId: audio.sessionId, code: safeCode });
   }
   void mediaHelper.stopScreenShareAudio(audio.sessionId).catch(() => {}).finally(() => {
     lastScreenAudioDroppedChunks = audio.droppedChunks + audio.rendererDroppedChunks;
@@ -381,7 +408,7 @@ async function startNativeScreenAudio(sourceId, sessionId) {
   }
   lastScreenAudioDroppedChunks = 0;
   const pipeId = randomUUID();
-  const server = net.createServer();
+  const server = createServer();
   const audio = {
     sessionId, pipeId, server, socket: undefined, buffer: Buffer.alloc(0), queue: [],
     inFlight: undefined, sequence: 0, sampleRate: undefined, droppedChunks: 0,
@@ -1022,14 +1049,9 @@ ipcMain.handle('media:native-screen-audio:stop', (event, sessionId) => {
   }
   return stopNativeScreenAudio(sessionId);
 });
-ipcMain.on('media:native-screen-audio:consumed', (event, sequence, droppedChunks) => {
-  if (!trustedSender(event) || !Number.isSafeInteger(sequence)
-      || !Number.isSafeInteger(droppedChunks) || droppedChunks < 0) return;
-  const audio = nativeScreenAudioSession;
-  if (!audio || audio.inFlight !== sequence) return;
-  audio.rendererDroppedChunks = Math.max(audio.rendererDroppedChunks, droppedChunks);
-  audio.inFlight = undefined;
-  sendNextNativeScreenAudioChunk(audio);
+ipcMain.on('media:native-screen-audio:consumed', (event, sessionId, sequence, droppedChunks) => {
+  if (!trustedSender(event)) return;
+  acknowledgeNativeScreenAudioChunk(sessionId, sequence, droppedChunks);
 });
 ipcMain.handle('media:native-microphone:start', (event, sessionId, settings) => {
   if (!trustedSender(event) || closing || typeof sessionId !== 'string' || sessionId.length > 128
@@ -1047,14 +1069,9 @@ ipcMain.handle('media:native-microphone:stop', (event, sessionId) => {
   }
   return stopNativeMicrophoneCapture(sessionId);
 });
-ipcMain.on('media:native-microphone:consumed', (event, sequence, droppedChunks) => {
-  if (!trustedSender(event) || !Number.isSafeInteger(sequence)
-      || !Number.isSafeInteger(droppedChunks) || droppedChunks < 0) return;
-  const audio = nativeMicrophoneSession;
-  if (!audio || audio.inFlight !== sequence) return;
-  audio.rendererDroppedChunks = Math.max(audio.rendererDroppedChunks, droppedChunks);
-  audio.inFlight = undefined;
-  sendNextNativeMicrophoneChunk(audio);
+ipcMain.on('media:native-microphone:consumed', (event, sessionId, sequence, droppedChunks) => {
+  if (!trustedSender(event)) return;
+  acknowledgeNativeMicrophoneChunk(sessionId, sequence, droppedChunks);
 });
 ipcMain.on('media:native-video:receiver-error', (event) => {
   if (!trustedSender(event)) return;

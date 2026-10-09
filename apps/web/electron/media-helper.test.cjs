@@ -12,8 +12,6 @@ const capabilities = {
   microphoneCapture: { available: true, reason: 'windowsWasapiSharedModeSonora' },
   systemAudioCapture: { available: false, reason: 'notImplemented' },
   processAudioCapture: { available: false, reason: 'notImplemented' },
-  audioSourceDiscovery: { available: true, reason: 'windowsCoreAudioEndpointEnumeration' },
-  microphoneProbe: { available: true, reason: 'windowsWasapiSharedModeEventDriven' },
   screenShareAudioCapture: { available: true, reason: 'windowsApplicationLoopbackProcessTree' },
 };
 

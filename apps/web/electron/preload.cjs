@@ -49,10 +49,10 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
     ipcRenderer.on('media:native-screen-audio-frame', listener);
     return () => ipcRenderer.removeListener('media:native-screen-audio-frame', listener);
   },
-  acknowledgeNativeScreenAudioChunk: (sequence, droppedChunks) =>
-    ipcRenderer.send('media:native-screen-audio:consumed', sequence, droppedChunks),
+  acknowledgeNativeScreenAudioChunk: (sessionId, sequence, droppedChunks) =>
+    ipcRenderer.send('media:native-screen-audio:consumed', sessionId, sequence, droppedChunks),
   onNativeScreenAudioError: (callback) => {
-    const listener = (_event, code) => callback(code);
+    const listener = (_event, failure) => callback(failure);
     ipcRenderer.on('media:native-screen-audio-error', listener);
     return () => ipcRenderer.removeListener('media:native-screen-audio-error', listener);
   },
@@ -64,8 +64,8 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
     ipcRenderer.on('media:native-microphone-frame', listener);
     return () => ipcRenderer.removeListener('media:native-microphone-frame', listener);
   },
-  acknowledgeNativeMicrophoneChunk: (sequence, droppedChunks) =>
-    ipcRenderer.send('media:native-microphone:consumed', sequence, droppedChunks),
+  acknowledgeNativeMicrophoneChunk: (sessionId, sequence, droppedChunks) =>
+    ipcRenderer.send('media:native-microphone:consumed', sessionId, sequence, droppedChunks),
   onNativeMicrophoneError: (callback) => {
     const listener = (_event, failure) => callback(failure);
     ipcRenderer.on('media:native-microphone-error', listener);

@@ -57,6 +57,7 @@ interface NativeCaptureDiagnostics {
 }
 
 interface NativeScreenAudioChunk {
+  sessionId: string;
   sequence: number;
   frames: number;
   sampleRate: number;
@@ -65,6 +66,7 @@ interface NativeScreenAudioChunk {
 }
 
 interface NativeMicrophoneChunk {
+  sessionId: string;
   sequence: number;
   frames: number;
   sampleRate: number;
@@ -96,15 +98,15 @@ interface Window {
     }>;
     stopNativeScreenAudio(sessionId: string): Promise<{ changed: boolean }>;
     onNativeScreenAudioChunk(callback: (chunk: NativeScreenAudioChunk) => void): () => void;
-    acknowledgeNativeScreenAudioChunk(sequence: number, droppedChunks: number): void;
-    onNativeScreenAudioError(callback: (code: string) => void): () => void;
+    acknowledgeNativeScreenAudioChunk(sessionId: string, sequence: number, droppedChunks: number): void;
+    onNativeScreenAudioError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
     startNativeMicrophone(sessionId: string, settings: import('./rtc/nativeMicrophoneAudio').NativeMicrophoneSettings): Promise<{
       sampleRate: 48000; channels: 1; bitsPerSample: 32; nominalChunkMs: 10;
     }>;
     configureNativeMicrophone(sessionId: string, settings: import('./rtc/nativeMicrophoneAudio').NativeMicrophoneSettings): Promise<{ changed: boolean }>;
     stopNativeMicrophone(sessionId: string): Promise<{ changed: boolean }>;
     onNativeMicrophoneChunk(callback: (chunk: NativeMicrophoneChunk) => void): () => void;
-    acknowledgeNativeMicrophoneChunk(sequence: number, droppedChunks: number): void;
+    acknowledgeNativeMicrophoneChunk(sessionId: string, sequence: number, droppedChunks: number): void;
     onNativeMicrophoneError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
     getNativeMediaDiagnostics(): Promise<NativeCaptureDiagnostics>;
     onActivityChange(callback: (activity: DetectedActivity | null) => void): () => void;

@@ -1,4 +1,5 @@
 import { LocalAudioTrack } from 'livekit-client';
+import processorUrl from './nativeMicrophoneAudio.worklet.js?url&no-inline';
 import type { AudioProcessingSettings } from './audioPreferences';
 
 export interface NativeMicrophoneSettings extends Omit<AudioProcessingSettings, 'echoCancellation'> {
@@ -6,6 +7,7 @@ export interface NativeMicrophoneSettings extends Omit<AudioProcessingSettings, 
 }
 
 export interface NativeMicrophoneChunk {
+  sessionId: string;
   sequence: number;
   frames: number;
   sampleRate: number;
@@ -20,7 +22,7 @@ export interface NativeMicrophoneDesktopBridge {
   configureNativeMicrophone(sessionId: string, settings: NativeMicrophoneSettings): Promise<{ changed: boolean }>;
   stopNativeMicrophone(sessionId: string): Promise<{ changed: boolean }>;
   onNativeMicrophoneChunk(callback: (chunk: NativeMicrophoneChunk) => void): () => void;
-  acknowledgeNativeMicrophoneChunk(sequence: number, droppedChunks: number): void;
+  acknowledgeNativeMicrophoneChunk(sessionId: string, sequence: number, droppedChunks: number): void;
   onNativeMicrophoneError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
 }
 
@@ -30,34 +32,6 @@ interface NativeMicrophoneOptions {
   createWorkletNode?: (context: AudioContext) => AudioWorkletNode;
   createLocalTrack?: (track: MediaStreamTrack, context: AudioContext) => LocalAudioTrack;
 }
-
-const PROCESSOR_SOURCE = `
-class LycanMicrophoneProcessor extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this.queue = [];
-    this.current = null;
-    this.dropped = 0;
-    this.port.onmessage = ({ data }) => {
-      if (data?.type !== 'chunk' || !(data.pcm instanceof ArrayBuffer)) return;
-      if (this.queue.length >= 2) { this.queue.shift(); this.dropped++; }
-      this.queue.push({ sequence: data.sequence, samples: new Float32Array(data.pcm), offset: 0 });
-      this.port.postMessage({ type: 'accepted', sequence: data.sequence, droppedChunks: this.dropped });
-    };
-  }
-  process(_inputs, outputs) {
-    const output = outputs[0];
-    if (!output || output.length < 1) return true;
-    const samples = output[0];
-    for (let index = 0; index < samples.length; index++) {
-      if (!this.current || this.current.offset >= this.current.samples.length) this.current = this.queue.shift() || null;
-      samples[index] = this.current ? this.current.samples[this.current.offset++] : 0;
-    }
-    return true;
-  }
-}
-registerProcessor('lycan-native-microphone', LycanMicrophoneProcessor);
-`;
 
 /** Sends mono WASAPI PCM through the current room's ordinary LocalAudioTrack. */
 export class NativeMicrophoneAudioSession {
@@ -70,6 +44,7 @@ export class NativeMicrophoneAudioSession {
   private removeChunkListener?: () => void;
   private removeErrorListener?: () => void;
   private stopPromise?: Promise<void>;
+  private nativeStartCommand?: ReturnType<NativeMicrophoneDesktopBridge['startNativeMicrophone']>;
   private stopped = false;
   private started = false;
   private droppedChunks = 0;
@@ -112,74 +87,90 @@ export class NativeMicrophoneAudioSession {
     this.removeErrorListener = this.desktop.onNativeMicrophoneError((failure) => {
       if (failure?.sessionId === this.sessionId) this.fail(failure.code);
     });
-    let objectUrl: string | undefined;
     try {
       this.context = this.createContext(48_000);
-      const blob = new Blob([PROCESSOR_SOURCE], { type: 'text/javascript' });
-      objectUrl = URL.createObjectURL(blob);
-      await this.context.audioWorklet.addModule(objectUrl);
+      await this.context.audioWorklet.addModule(processorUrl);
       if (this.stopped) throw new Error('microphoneSessionStopped');
       this.node = this.createWorkletNode(this.context);
+      const workletSessionId = sessionId;
       const destination = this.context.createMediaStreamDestination();
       destination.channelCount = 1;
       destination.channelCountMode = 'explicit';
       this.node.connect(destination);
       this.node.port.onmessage = (event: MessageEvent) => {
-        if (event.data?.type === 'accepted' && Number.isSafeInteger(event.data.sequence)) {
+        if (!this.stopped && event.data?.type === 'accepted' && Number.isSafeInteger(event.data.sequence)) {
           const workletDropped = Number.isSafeInteger(event.data.droppedChunks) ? event.data.droppedChunks : 0;
-          this.desktop.acknowledgeNativeMicrophoneChunk(event.data.sequence, this.droppedChunks + workletDropped);
+          this.desktop.acknowledgeNativeMicrophoneChunk(workletSessionId,
+            event.data.sequence, this.droppedChunks + workletDropped);
         }
       };
       await this.context.resume();
       if (this.stopped) throw new Error('microphoneSessionStopped');
       this.track = this.createLocalTrack(destination.stream.getAudioTracks()[0], this.context);
-      await this.desktop.startNativeMicrophone(sessionId, settings);
+      this.nativeStartCommand = this.desktop.startNativeMicrophone(sessionId, settings);
+      await this.nativeStartCommand;
       this.started = true;
-      if (this.stopped) {
-        this.started = false;
-        await this.desktop.stopNativeMicrophone(sessionId).catch(() => {});
-        throw new Error('microphoneSessionStopped');
-      }
+      if (this.stopped) throw new Error('microphoneSessionStopped');
     } catch (error) {
-      await this.stop().catch(() => {});
+      try {
+        await this.stop();
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], '原生麦克风启动失败，清理未完成。');
+      }
       throw error;
-    } finally {
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     }
   }
 
   stop(): Promise<void> {
     if (this.stopPromise) return this.stopPromise;
     this.stopped = true;
-    this.removeChunkListener?.();
-    this.removeChunkListener = undefined;
-    this.removeErrorListener?.();
-    this.removeErrorListener = undefined;
-    this.node?.port.close();
-    this.node?.disconnect();
-    this.node = undefined;
-    this.track?.stop();
-    this.stopPromise = (async () => {
+    this.stopPromise = Promise.resolve().then(async () => {
       const context = this.context;
+      const node = this.node;
+      const removeChunks = this.removeChunkListener;
+      const removeErrors = this.removeErrorListener;
       this.context = undefined;
-      if (context && context.state !== 'closed') await context.close();
-      if (this.sessionId && this.started) {
-        this.started = false;
-        await this.desktop.stopNativeMicrophone(this.sessionId);
-      }
-    })();
+      this.node = undefined;
+      this.removeChunkListener = undefined;
+      this.removeErrorListener = undefined;
+      // Each resource must be released even when another cleanup fails.
+      const cleanups = [
+        Promise.resolve().then(() => removeChunks?.()),
+        Promise.resolve().then(() => removeErrors?.()),
+        Promise.resolve().then(() => node?.port.close()),
+        Promise.resolve().then(() => node?.disconnect()),
+        Promise.resolve().then(() => this.track?.stop()),
+        Promise.resolve().then(() => context && context.state !== 'closed' ? context.close() : undefined),
+        Promise.resolve().then(async () => {
+          if (!this.nativeStartCommand || !this.sessionId) return;
+          try {
+            await this.nativeStartCommand;
+          } catch {
+            // A rejected native startup did not establish an owned capture session.
+            return;
+          }
+          this.started = false;
+          await this.desktop.stopNativeMicrophone(this.sessionId);
+        }),
+      ];
+      const results = await Promise.allSettled(cleanups);
+      const errors = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map((result) => result.reason);
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) throw new AggregateError(errors, '原生麦克风清理未完成。');
+    });
     return this.stopPromise;
   }
 
   private acceptChunk(chunk: NativeMicrophoneChunk) {
-    if (this.stopped || !chunk || !Number.isSafeInteger(chunk.sequence)) return;
+    if (this.stopped || !chunk || chunk.sessionId !== this.sessionId || !Number.isSafeInteger(chunk.sequence)) return;
     if (!this.node) {
-      this.desktop.acknowledgeNativeMicrophoneChunk(chunk.sequence, ++this.droppedChunks);
+      this.desktop.acknowledgeNativeMicrophoneChunk(this.sessionId!, chunk.sequence, ++this.droppedChunks);
       return;
     }
     if (chunk.frames !== 480 || chunk.sampleRate !== 48_000 || chunk.channels !== 1
         || !(chunk.pcm instanceof Uint8Array) || chunk.pcm.byteLength !== 480 * 4) {
-      this.desktop.acknowledgeNativeMicrophoneChunk(chunk.sequence, ++this.droppedChunks);
+      this.desktop.acknowledgeNativeMicrophoneChunk(this.sessionId!, chunk.sequence, ++this.droppedChunks);
       return;
     }
     const pcm = chunk.pcm.slice();
@@ -189,7 +180,10 @@ export class NativeMicrophoneAudioSession {
   private fail(code: string) {
     if (this.stopped) return;
     const safeCode = /^[a-z][A-Za-z0-9]{0,63}$/.test(code) ? code : 'microphoneCaptureFailed';
-    this.onError?.(safeCode);
-    void this.stop();
+    try {
+      this.onError?.(safeCode);
+    } finally {
+      void this.stop().catch((error) => console.error('原生麦克风异常后的清理失败', error));
+    }
   }
 }

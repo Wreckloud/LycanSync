@@ -1,7 +1,5 @@
 mod audio_capture;
-mod audio_probe;
 mod audio_processing;
-mod audio_sources;
 mod capture;
 #[cfg(target_os = "windows")]
 mod d3d;
@@ -15,7 +13,7 @@ use protocol::VideoSource;
 use protocol::unavailable_video_output_capability;
 use protocol::{
     Capability, CommandEnvelope, ErrorCode, MAX_LINE_BYTES, OutboundEvent, PROTOCOL_VERSION,
-    audio_source_discovery_capability, unavailable_capability, valid_identifier,
+    unavailable_capability, valid_identifier,
 };
 use sources::{DiscoveryRuntime, SourceRegistry};
 use state::{SessionMachine, SessionState};
@@ -41,11 +39,28 @@ pub(crate) fn notify_video_capture_suspended(session_id: &str, suspended: bool) 
 }
 
 pub(crate) fn notify_microphone_capture_ended(session_id: &str, code: ErrorCode) {
-    write_capture_event(OutboundEvent::MicrophoneCaptureEnded {
+    write_capture_event(microphone_capture_ended_event(session_id, code));
+}
+
+fn microphone_capture_ended_event(session_id: &str, code: ErrorCode) -> OutboundEvent {
+    OutboundEvent::MicrophoneCaptureEnded {
         protocol_version: PROTOCOL_VERSION,
         session_id: session_id.to_owned(),
         code,
-    });
+    }
+}
+
+fn microphone_capture_reap_event(
+    session_id: &str,
+    result: audio_capture::MicrophoneCaptureJoinError,
+) -> Option<OutboundEvent> {
+    match result {
+        // Capture errors were already reported by the worker before it exited.
+        audio_capture::MicrophoneCaptureJoinError::Capture(_error) => None,
+        audio_capture::MicrophoneCaptureJoinError::JoinFailed => Some(
+            microphone_capture_ended_event(session_id, ErrorCode::MicrophoneCaptureStopFailed),
+        ),
+    }
 }
 
 fn write_capture_event(event: OutboundEvent) {
@@ -63,7 +78,7 @@ pub fn run<R: BufRead, W: Write>(mut input: R, mut output: W) -> io::Result<()> 
     let mut runtime = Runtime::default();
     loop {
         let Some(line) = read_limited_line(&mut input)? else {
-            audio_probe_shutdown_result(runtime.shutdown_all_audio())?;
+            audio_shutdown_result(runtime.shutdown_all_audio())?;
             return Ok(());
         };
         let event = match line {
@@ -108,7 +123,6 @@ pub fn run<R: BufRead, W: Write>(mut input: R, mut output: W) -> io::Result<()> 
 
 fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> OutboundEvent {
     runtime.reap_finished_capture();
-    runtime.reap_finished_audio_probe();
     if !valid_identifier(envelope.request_id()) {
         return error(runtime, None, ErrorCode::InvalidRequest, "requestId 无效");
     }
@@ -120,6 +134,7 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
             "协议版本不受支持",
         );
     }
+    runtime.reap_finished_audio();
     match envelope {
         CommandEnvelope::Hello { request_id, .. } => OutboundEvent::Hello {
             protocol_version: PROTOCOL_VERSION,
@@ -138,8 +153,6 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
             microphone_capture: audio_capture::capability(),
             system_audio_capture: unavailable_capability(),
             process_audio_capture: unavailable_capability(),
-            audio_source_discovery: audio_source_discovery_capability(),
-            microphone_probe: audio_probe::probe_capability(),
             screen_share_audio_capture: screen_audio::capability(),
         },
         CommandEnvelope::Diagnostics { request_id, .. } => {
@@ -182,7 +195,6 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                 last_capture_error: snapshot.as_ref().and_then(|value| value.last_capture_error),
                 stop_duration_ms: snapshot.as_ref().and_then(|value| value.stop_duration_ms),
                 capture_suspended: snapshot.as_ref().and_then(|value| value.capture_suspended),
-                microphone_probe: runtime.audio_probe.snapshot(),
                 microphone_capture_dropped_chunks: runtime.microphone_capture.dropped_chunks(),
                 screen_share_audio: Box::new(runtime.screen_audio.snapshot()),
             }
@@ -201,89 +213,6 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                 code.public_message(),
             ),
         },
-        CommandEnvelope::ListAudioSources { request_id, .. } => {
-            match runtime.refresh_audio_sources() {
-                Ok(snapshot) => OutboundEvent::AudioSources {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: request_id.clone(),
-                    revision: snapshot.revision,
-                    inputs: snapshot.inputs,
-                    outputs: snapshot.outputs,
-                    input_status: snapshot.input_status,
-                    output_status: snapshot.output_status,
-                    inputs_truncated: snapshot.inputs_truncated,
-                    outputs_truncated: snapshot.outputs_truncated,
-                },
-                Err(code) => error(
-                    runtime,
-                    Some(request_id.clone()),
-                    code,
-                    code.public_message(),
-                ),
-            }
-        }
-        CommandEnvelope::StartMicrophoneProbe {
-            request_id,
-            session_id,
-            source_id,
-            ..
-        } => {
-            if !valid_identifier(session_id) || !valid_identifier(source_id) {
-                return error(
-                    runtime,
-                    Some(request_id.clone()),
-                    ErrorCode::InvalidRequest,
-                    "探针参数无效",
-                );
-            }
-            match runtime
-                .audio_probe
-                .start(&runtime.audio_sources, session_id, source_id)
-            {
-                Ok(()) => OutboundEvent::Acknowledged {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: request_id.clone(),
-                    command: "startMicrophoneProbe",
-                    state: runtime.state(),
-                    changed: true,
-                },
-                Err(code) => error(
-                    runtime,
-                    Some(request_id.clone()),
-                    code,
-                    code.public_message(),
-                ),
-            }
-        }
-        CommandEnvelope::StopMicrophoneProbe {
-            request_id,
-            session_id,
-            ..
-        } => {
-            if !valid_identifier(session_id) {
-                return error(
-                    runtime,
-                    Some(request_id.clone()),
-                    ErrorCode::InvalidRequest,
-                    "sessionId 无效",
-                );
-            }
-            match runtime.audio_probe.stop(session_id) {
-                Ok(changed) => OutboundEvent::Acknowledged {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: request_id.clone(),
-                    command: "stopMicrophoneProbe",
-                    state: runtime.state(),
-                    changed,
-                },
-                Err(code) => error(
-                    runtime,
-                    Some(request_id.clone()),
-                    code,
-                    code.public_message(),
-                ),
-            }
-        }
         CommandEnvelope::StartMicrophoneCapture {
             request_id,
             session_id,
@@ -648,8 +577,6 @@ struct Runtime {
     capture: capture::CaptureManager,
     discovery: DiscoveryRuntime,
     last_completed_session_id: Option<String>,
-    audio_sources: audio_sources::AudioSourceRegistry,
-    audio_probe: audio_probe::AudioProbeManager,
     microphone_capture: audio_capture::MicrophoneCaptureManager,
     screen_audio: screen_audio::ScreenShareAudioManager,
 }
@@ -675,23 +602,18 @@ impl Runtime {
         self.discovery.discovery_capability()
     }
 
-    fn refresh_audio_sources(&mut self) -> Result<audio_sources::AudioSourceSnapshot, ErrorCode> {
-        match audio_sources::discover() {
-            Ok(discovered) => self.audio_sources.refresh(discovered),
-            Err(error) => Err(self.audio_sources.failed_refresh(error)),
-        }
-    }
-
     fn shutdown_all_audio(&mut self) -> Result<(), ErrorCode> {
         let screen_result = self.screen_audio.shutdown();
         let microphone_result = self.microphone_capture.shutdown();
-        let probe_result = self.audio_probe.shutdown();
-        screen_result.and(microphone_result).and(probe_result)
+        screen_result.and(microphone_result)
     }
 
-    fn reap_finished_audio_probe(&mut self) {
-        self.audio_probe.reap_finished();
-        self.microphone_capture.reap_finished_capture();
+    fn reap_finished_audio(&mut self) {
+        if let Some((session_id, error)) = self.microphone_capture.reap_finished_capture() {
+            if let Some(event) = microphone_capture_reap_event(&session_id, error) {
+                write_capture_event(event);
+            }
+        }
         self.screen_audio.snapshot();
     }
 
@@ -879,7 +801,7 @@ fn discard_to_newline<R: BufRead>(input: &mut R) -> io::Result<()> {
     }
 }
 
-fn audio_probe_shutdown_result(result: Result<(), ErrorCode>) -> io::Result<()> {
+fn audio_shutdown_result(result: Result<(), ErrorCode>) -> io::Result<()> {
     result.map_err(|code| io::Error::other(code.diagnostic_name()))
 }
 
@@ -893,10 +815,19 @@ fn valid_pipe_id(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{audio_probe_shutdown_result, run};
-    use crate::protocol::ErrorCode;
+    use super::{
+        Runtime, audio_shutdown_result, handle_command, microphone_capture_ended_event,
+        microphone_capture_reap_event, run,
+    };
+    use crate::audio_capture::{
+        MicrophoneCaptureJoinError, MicrophoneCaptureWorker, StartedCapture,
+    };
+    use crate::audio_processing::ProcessingSettings;
+    use crate::protocol::{ErrorCode, PROTOCOL_VERSION};
     use serde_json::Value;
     use std::io::Cursor;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     fn execute(input: &str) -> Vec<Value> {
         let mut output = Vec::new();
@@ -909,7 +840,7 @@ mod tests {
     }
 
     #[test]
-    fn stdin_eof_returns_success_when_audio_probe_cleanup_succeeds() {
+    fn stdin_eof_returns_success_when_audio_cleanup_succeeds() {
         let mut output = Vec::new();
         assert!(run(Cursor::new(b""), &mut output).is_ok());
         assert!(output.is_empty());
@@ -917,11 +848,181 @@ mod tests {
 
     #[test]
     fn stdin_eof_cleanup_failure_becomes_a_process_error() {
-        let error = audio_probe_shutdown_result(Err(ErrorCode::AudioProbeStopFailed))
+        let error = audio_shutdown_result(Err(ErrorCode::MicrophoneCaptureStopFailed))
             .expect_err("cleanup failure must not be reported as successful EOF");
 
         assert_eq!(error.kind(), std::io::ErrorKind::Other);
-        assert_eq!(error.to_string(), "audioProbeStopFailed");
+        assert_eq!(error.to_string(), "microphoneCaptureStopFailed");
+    }
+
+    #[test]
+    fn reaped_capture_failure_does_not_block_hello_and_allows_a_new_session() {
+        let (mut runtime, joined) = runtime_with_finished_microphone_worker(
+            MicrophoneCaptureJoinError::Capture(ErrorCode::MicrophoneCaptureFailed),
+        );
+        let response = handle_command(
+            &mut runtime,
+            &crate::protocol::CommandEnvelope::Hello {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "hello-after-mic-error".to_owned(),
+            },
+        );
+        let response = serde_json::to_value(response).unwrap();
+
+        assert_eq!(response["event"], "hello");
+        assert!(joined.load(Ordering::Acquire));
+        assert_eq!(runtime.microphone_capture.stop("failed-session"), Ok(false));
+
+        let next_response = handle_command(
+            &mut runtime,
+            &crate::protocol::CommandEnvelope::Hello {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "hello-after-reap".to_owned(),
+            },
+        );
+        assert_eq!(
+            serde_json::to_value(next_response).unwrap()["event"],
+            "hello"
+        );
+
+        runtime
+            .microphone_capture
+            .start(
+                "next-session",
+                "next-pipe",
+                ProcessingSettings::default(),
+                |_, _, _| {
+                    Ok(StartedCapture {
+                        worker: Box::new(FinishedMicrophoneWorker {
+                            join_error: None,
+                            joined: Arc::new(AtomicBool::new(false)),
+                        }),
+                        dropped_chunks: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                    })
+                },
+            )
+            .unwrap();
+        runtime
+            .microphone_capture
+            .configure("next-session", ProcessingSettings::default())
+            .unwrap();
+        runtime.microphone_capture.shutdown().unwrap();
+    }
+
+    #[test]
+    fn reaped_capture_failure_does_not_prevent_shutdown_cleanup() {
+        let (mut runtime, joined) = runtime_with_finished_microphone_worker(
+            MicrophoneCaptureJoinError::Capture(ErrorCode::MicrophoneCaptureFailed),
+        );
+        let response = handle_command(
+            &mut runtime,
+            &crate::protocol::CommandEnvelope::Shutdown {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "shutdown-after-mic-error".to_owned(),
+            },
+        );
+        let response = serde_json::to_value(response).unwrap();
+
+        assert_eq!(response["event"], "acknowledged");
+        assert_eq!(response["command"], "shutdown");
+        assert!(joined.load(Ordering::Acquire));
+        assert_eq!(runtime.microphone_capture.stop("failed-session"), Ok(false));
+    }
+
+    #[test]
+    fn reaped_join_failure_reports_capture_end_without_blocking_hello() {
+        let (mut runtime, joined) =
+            runtime_with_finished_microphone_worker(MicrophoneCaptureJoinError::JoinFailed);
+        let response = handle_command(
+            &mut runtime,
+            &crate::protocol::CommandEnvelope::Hello {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "hello-after-join-failure".to_owned(),
+            },
+        );
+
+        assert_eq!(serde_json::to_value(response).unwrap()["event"], "hello");
+        assert!(joined.load(Ordering::Acquire));
+        assert_eq!(runtime.microphone_capture.stop("failed-session"), Ok(false));
+    }
+
+    #[test]
+    fn microphone_end_event_preserves_runtime_and_join_error_codes() {
+        let capture_error = serde_json::to_value(microphone_capture_ended_event(
+            "capture-session",
+            ErrorCode::MicrophoneCaptureFailed,
+        ))
+        .unwrap();
+        let join_error = serde_json::to_value(microphone_capture_ended_event(
+            "capture-session",
+            ErrorCode::MicrophoneCaptureStopFailed,
+        ))
+        .unwrap();
+
+        assert_eq!(capture_error["event"], "microphoneCaptureEnded");
+        assert_eq!(capture_error["code"], "microphoneCaptureFailed");
+        assert_eq!(join_error["event"], "microphoneCaptureEnded");
+        assert_eq!(join_error["code"], "microphoneCaptureStopFailed");
+        assert!(
+            microphone_capture_reap_event(
+                "capture-session",
+                MicrophoneCaptureJoinError::Capture(ErrorCode::MicrophoneCaptureFailed)
+            )
+            .is_none()
+        );
+        let cleanup_event = serde_json::to_value(
+            microphone_capture_reap_event(
+                "capture-session",
+                MicrophoneCaptureJoinError::JoinFailed,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(cleanup_event["code"], "microphoneCaptureStopFailed");
+    }
+
+    fn runtime_with_finished_microphone_worker(
+        join_error: MicrophoneCaptureJoinError,
+    ) -> (Runtime, Arc<AtomicBool>) {
+        let joined = Arc::new(AtomicBool::new(false));
+        let worker_joined = Arc::clone(&joined);
+        let mut runtime = Runtime::default();
+        runtime
+            .microphone_capture
+            .start(
+                "failed-session",
+                "failed-pipe",
+                ProcessingSettings::default(),
+                |_, _, _| {
+                    Ok(StartedCapture {
+                        worker: Box::new(FinishedMicrophoneWorker {
+                            join_error: Some(join_error),
+                            joined: worker_joined,
+                        }),
+                        dropped_chunks: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                    })
+                },
+            )
+            .unwrap();
+        (runtime, joined)
+    }
+
+    struct FinishedMicrophoneWorker {
+        join_error: Option<MicrophoneCaptureJoinError>,
+        joined: Arc<AtomicBool>,
+    }
+
+    impl MicrophoneCaptureWorker for FinishedMicrophoneWorker {
+        fn request_stop(&self) {}
+
+        fn is_finished(&self) -> bool {
+            true
+        }
+
+        fn join(&mut self) -> Result<(), MicrophoneCaptureJoinError> {
+            self.joined.store(true, Ordering::Release);
+            self.join_error.take().map_or(Ok(()), Err)
+        }
     }
 
     #[test]
@@ -944,9 +1045,9 @@ mod tests {
         assert_eq!(events[1]["microphoneCapture"]["available"], true);
         #[cfg(not(target_os = "windows"))]
         assert_eq!(events[1]["microphoneCapture"]["available"], false);
-        assert!(events[1]["microphoneProbe"]["available"].is_boolean());
         assert_eq!(events[1]["processAudioCapture"]["available"], false);
-        assert!(events[1]["audioSourceDiscovery"]["available"].is_boolean());
+        assert!(events[1].get("audioSourceDiscovery").is_none());
+        assert!(events[1].get("microphoneProbe").is_none());
         assert_eq!(events[2]["event"], "acknowledged");
     }
 
@@ -1008,15 +1109,10 @@ mod tests {
             diagnostics["rawTimestampAnomalies"],
             serde_json::Value::Null
         );
-        assert_eq!(diagnostics["microphoneProbe"]["state"], "idle");
-        assert_eq!(
-            diagnostics["microphoneProbe"]["packetsReceived"],
-            serde_json::Value::Null
-        );
     }
 
     #[test]
-    fn microphone_probe_commands_are_parsed_without_opening_a_device() {
+    fn removed_microphone_commands_follow_unknown_command_protocol_failure() {
         let events = execute(
             r#"{"protocolVersion":1,"requestId":"mic-start","command":"startMicrophoneProbe","sessionId":"mic-session","sourceId":"audioInput:1:0"}
 {"protocolVersion":1,"requestId":"mic-stop","command":"stopMicrophoneProbe","sessionId":"mic-session"}
@@ -1024,9 +1120,9 @@ mod tests {
 "#,
         );
 
-        assert_eq!(events[0]["code"], "audioDeviceUnavailable");
+        assert_eq!(events[0]["code"], "malformedJson");
         assert_eq!(events[0]["state"], "idle");
-        assert_eq!(events[1]["code"], "audioProbeSessionMismatch");
+        assert_eq!(events[1]["code"], "malformedJson");
         assert_eq!(events[2]["command"], "shutdown");
     }
 

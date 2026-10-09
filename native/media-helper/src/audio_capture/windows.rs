@@ -1,5 +1,7 @@
-use super::StartedCapture;
-use crate::audio_probe::{ProbeWorker, WorkerStartFailure, wait_for_worker_start};
+use super::{
+    MicrophoneCaptureJoinError, MicrophoneCaptureStartFailure, MicrophoneCaptureWorker,
+    StartedCapture, wait_for_microphone_capture_start,
+};
 use crate::audio_processing::{
     FRAMES_PER_CHUNK, MicrophoneProcessor, ProcessingSettings, SAMPLE_RATE,
 };
@@ -39,7 +41,7 @@ pub(super) fn start(
     session_id: String,
     pipe_id: String,
     settings: Arc<Mutex<ProcessingSettings>>,
-) -> Result<StartedCapture, WorkerStartFailure> {
+) -> Result<StartedCapture, MicrophoneCaptureStartFailure> {
     let stop_requested = Arc::new(AtomicBool::new(false));
     let thread_stop = Arc::clone(&stop_requested);
     let dropped_chunks = Arc::new(AtomicU64::new(0));
@@ -70,17 +72,16 @@ pub(super) fn start(
             }
             result
         })
-        .map_err(|_| WorkerStartFailure {
+        .map_err(|_| MicrophoneCaptureStartFailure {
             error: ErrorCode::MicrophoneCaptureStartFailed,
             worker: None,
-            pending: false,
         })?;
     let worker = Worker {
         stop_requested,
         join: Some(join),
     };
     debug_assert_eq!(SAMPLE_RATE, 48_000);
-    match wait_for_worker_start(ready_receiver, Box::new(worker), START_TIMEOUT) {
+    match wait_for_microphone_capture_start(ready_receiver, Box::new(worker), START_TIMEOUT) {
         Ok(worker) => Ok(StartedCapture {
             worker,
             dropped_chunks,
@@ -89,14 +90,9 @@ pub(super) fn start(
             if let Some(worker) = failure.worker.as_ref() {
                 worker.request_stop();
             }
-            Err(WorkerStartFailure {
-                error: match failure.error {
-                    ErrorCode::AudioProbeStartTimedOut => ErrorCode::MicrophoneCaptureStartTimedOut,
-                    ErrorCode::AudioProbeStartFailed => ErrorCode::MicrophoneCaptureStartFailed,
-                    error => error,
-                },
+            Err(MicrophoneCaptureStartFailure {
+                error: failure.error,
                 worker: failure.worker,
-                pending: failure.pending,
             })
         }
     }
@@ -107,7 +103,7 @@ struct Worker {
     join: Option<JoinHandle<Result<(), ErrorCode>>>,
 }
 
-impl ProbeWorker for Worker {
+impl MicrophoneCaptureWorker for Worker {
     fn request_stop(&self) {
         self.stop_requested.store(true, Ordering::Release);
     }
@@ -116,10 +112,11 @@ impl ProbeWorker for Worker {
         self.join.as_ref().is_none_or(JoinHandle::is_finished)
     }
 
-    fn join(&mut self) -> Result<(), ErrorCode> {
+    fn join(&mut self) -> Result<(), MicrophoneCaptureJoinError> {
         self.join.take().map_or(Ok(()), |join| {
             join.join()
-                .map_err(|_| ErrorCode::MicrophoneCaptureStopFailed)?
+                .map_err(|_| MicrophoneCaptureJoinError::JoinFailed)?
+                .map_err(MicrophoneCaptureJoinError::Capture)
         })
     }
 }
@@ -483,11 +480,11 @@ fn process_packet(
         let input = pending_samples.drain(..source_frames).collect::<Vec<_>>();
         let mut normalized = vec![0.0_f32; output_frames];
         resampler.resample_mono(&input, &mut normalized);
-        let current = current_settings(settings);
-        if processor.settings() != current {
-            processor.set_settings(current);
-        }
         for output_chunk in normalized.as_chunks::<FRAMES_PER_CHUNK>().0 {
+            let current = current_settings(settings);
+            if processor.settings() != current {
+                processor.set_settings(current);
+            }
             let output = processor.process(output_chunk);
             let mut bytes = Vec::with_capacity(FRAMES_PER_CHUNK * 4);
             for sample in output {

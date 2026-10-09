@@ -139,15 +139,16 @@ fn hello_video_start_requires_a_current_source_and_shutdown_use_protocol_v1() {
 #[test]
 fn capabilities_advertise_platform_audio_support_without_opening_streams() {
     let mut helper = HelperProcess::spawn();
-    // Audio discovery capability is metadata; this test never enumerates or opens an audio stream.
+    // Capability reporting is metadata; this test never opens an audio stream.
     helper.send(
         "{\"protocolVersion\":1,\"requestId\":\"capabilities-1\",\"command\":\"capabilities\"}\n",
     );
     let capabilities = helper.next_event();
     assert_eq!(capabilities["event"], "capabilities");
     assert_eq!(capabilities["protocolVersion"], 1);
-    assert!(capabilities["audioSourceDiscovery"]["available"].is_boolean());
-    assert!(capabilities["microphoneProbe"]["available"].is_boolean());
+    assert!(capabilities["microphoneCapture"]["available"].is_boolean());
+    assert!(capabilities.get("audioSourceDiscovery").is_none());
+    assert!(capabilities.get("microphoneProbe").is_none());
     #[cfg(target_os = "windows")]
     {
         assert_eq!(capabilities["microphoneCapture"]["available"], true);
@@ -173,14 +174,14 @@ fn capabilities_advertise_platform_audio_support_without_opening_streams() {
 }
 
 #[test]
-fn stale_microphone_probe_source_fails_without_enumerating_or_opening_a_device() {
+fn removed_microphone_probe_command_is_rejected_without_opening_an_audio_device() {
     let mut helper = HelperProcess::spawn();
     helper.send(
         "{\"protocolVersion\":1,\"requestId\":\"mic-start\",\"command\":\"startMicrophoneProbe\",\"sessionId\":\"mic-1\",\"sourceId\":\"audioInput:99:0\"}\n",
     );
     let result = helper.next_event();
     assert_eq!(result["event"], "error");
-    assert_eq!(result["code"], "audioDeviceUnavailable");
+    assert_eq!(result["code"], "malformedJson");
 
     helper.send("{\"protocolVersion\":1,\"requestId\":\"shutdown\",\"command\":\"shutdown\"}\n");
     assert_eq!(helper.next_event()["command"], "shutdown");

@@ -1,6 +1,6 @@
 import { markRaw, onScopeDispose, ref, shallowRef } from 'vue';
 import {
-  ConnectionState, DisconnectReason, LocalAudioTrack, Room, RoomEvent, Track, VideoPreset, supportsAV1,
+  AudioPresets, ConnectionState, DisconnectReason, LocalAudioTrack, Room, RoomEvent, Track, VideoPreset, supportsAV1,
   type VideoCodec,
   type LocalTrack, type Participant, type RemoteParticipant,
 } from 'livekit-client';
@@ -9,6 +9,7 @@ import { DEFAULT_AUDIO_PREFERENCES, normalizeAudioVolume, unappliedCaptureProces
   type AudioProcessingSettings } from './audioPreferences';
 import { ENTRANCE_SOUND_MAX_BYTES, ENTRANCE_SOUND_TOPIC, isSupportedEntranceSoundType } from './entranceSound';
 import { MicrophoneAudioProcessor } from './microphoneAudioProcessor';
+import { MicrophoneLoopback } from './microphoneLoopback';
 import { NativeScreenVideoSession } from './nativeScreenVideo';
 import { NativeScreenAudioSession } from './nativeScreenAudio';
 import { NativeMicrophoneAudioSession, type NativeMicrophoneSettings } from './nativeMicrophoneAudio';
@@ -76,6 +77,10 @@ function captureErrorMessage(error: unknown, source: MediaSource): string {
   return `${label}操作失败，请检查设备、浏览器权限和 LiveKit 连接。`;
 }
 
+function reportNativeAudioCleanupFailure(error: unknown) {
+  console.error('原生音频清理未完成', error);
+}
+
 /** LiveKit 浏览器回退链路：集中管理入房、采集、发布和释放，不保存账号或入房凭证。 */
 export function useRtcRoom(options?: RtcRoomOptions) {
   const revision = ref(0);
@@ -103,9 +108,59 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       };
   let microphoneProcessor: MicrophoneAudioProcessor | null = null;
   let nativeMicrophoneSession: NativeMicrophoneAudioSession | null = null;
+  let microphoneLoopback: MicrophoneLoopback | null = null;
+  let microphoneLoopbackAttempt = 0;
+  const microphoneLoopbackState = ref<'idle' | 'starting' | 'listening'>('idle');
+  const microphoneLoopbackNotice = ref('');
   let speakerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let nativeScreenVideoSession: NativeScreenVideoSession | null = null;
   let nativeScreenAudioSession: NativeScreenAudioSession | null = null;
+  function stopMicrophoneLoopback() {
+    microphoneLoopbackAttempt++;
+    const loopback = microphoneLoopback;
+    microphoneLoopback = null;
+    microphoneLoopbackState.value = 'idle';
+    loopback?.stop();
+  }
+
+  async function startMicrophoneLoopback(volume: number) {
+    if (microphoneLoopback) return;
+    const currentRoom = activeRoom.value;
+    const publication = currentRoom?.localParticipant.getTrackPublication(Track.Source.Microphone);
+    if (currentRoom?.state !== ConnectionState.Connected || !publication?.track || publication.isMuted) {
+      microphoneLoopbackNotice.value = '请先加入通话并开启麦克风。';
+      return;
+    }
+    microphoneLoopbackNotice.value = '';
+    const attempt = ++microphoneLoopbackAttempt;
+    const loopback = new MicrophoneLoopback({
+      onStopped: () => {
+        if (microphoneLoopback !== loopback) return;
+        microphoneLoopback = null;
+        microphoneLoopbackState.value = 'idle';
+      },
+      onError: (error) => {
+        if (microphoneLoopback === loopback) microphoneLoopbackNotice.value = error.message;
+      },
+    });
+    microphoneLoopback = loopback;
+    microphoneLoopbackState.value = 'starting';
+    try {
+      // The public getter includes the browser processor's output, matching the published track.
+      await loopback.start(publication.track.mediaStreamTrack, normalizeAudioVolume(volume),
+        (currentRoom.options.publishDefaults?.audioPreset ?? AudioPresets.music).maxBitrate,
+        currentRoom.options.publishDefaults?.dtx ?? true);
+      if (microphoneLoopback === loopback) microphoneLoopbackState.value = 'listening';
+    } catch (error) {
+      if (attempt !== microphoneLoopbackAttempt) return;
+      if (error instanceof Error && error.name === 'AbortError') return;
+      microphoneLoopbackNotice.value = error instanceof Error ? error.message : '麦克风试听失败，请重试。';
+    }
+  }
+
+  function setMicrophoneLoopbackVolume(volume: number) {
+    microphoneLoopback?.setVolume(normalizeAudioVolume(volume));
+  }
 
   function clearSpeakerRefreshTimer() {
     if (speakerRefreshTimer !== null) clearTimeout(speakerRefreshTimer);
@@ -113,6 +168,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   }
 
   onScopeDispose(() => {
+    stopMicrophoneLoopback();
     pendingJoin.value?.abort();
     const currentRoom = activeRoom.value;
     activeRoom.value = null;
@@ -122,8 +178,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     nativeScreenAudioSession = null;
     const nativeMicrophone = nativeMicrophoneSession;
     nativeMicrophoneSession = null;
-    void nativeAudio?.stop().catch(() => {});
-    void nativeMicrophone?.stop().catch(() => {});
+    void nativeAudio?.stop().catch(reportNativeAudioCleanupFailure);
+    void nativeMicrophone?.stop().catch(reportNativeAudioCleanupFailure);
     void nativeVideo?.stop().catch(() => {});
     unpublishedTracks.value.forEach((track) => track.stop());
     unpublishedTracks.value.clear();
@@ -231,6 +287,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         refresh();
       });
       currentRoom.on(RoomEvent.LocalTrackUnpublished, (publication) => {
+        if (publication.source === Track.Source.Microphone) stopMicrophoneLoopback();
         if (publication.source === Track.Source.ScreenShare) options?.events?.screenShareStopped?.();
         refresh();
       });
@@ -273,7 +330,10 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         if (activeRoom.value !== currentRoom) return;
         if (connectionState === ConnectionState.Connected) status.value = 'connected';
         else if (connectionState === ConnectionState.Reconnecting
-          || connectionState === ConnectionState.SignalReconnecting) status.value = 'reconnecting';
+          || connectionState === ConnectionState.SignalReconnecting) {
+          stopMicrophoneLoopback();
+          status.value = 'reconnecting';
+        }
         refresh();
       });
       currentRoom.on(RoomEvent.Disconnected, (reason) => {
@@ -297,7 +357,9 @@ export function useRtcRoom(options?: RtcRoomOptions) {
 
       // 5. 明确加入语音后默认开麦；权限失败只保持关麦，不退出已经建立的语音会话。
       await setMediaEnabled(Track.Source.Microphone, true);
+      if (request.signal.aborted || activeRoom.value !== currentRoom) return false;
       await updateListeningState(true);
+      if (request.signal.aborted || activeRoom.value !== currentRoom) return false;
       return true;
     } catch (error) {
       if (request.signal.aborted) return false;
@@ -312,9 +374,12 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   }
 
   async function leave(): Promise<void> {
+    stopMicrophoneLoopback();
     // 先使旧会话失效，再停止发布与连接，防止迟到的事件覆盖下一次入房状态。
     pendingJoin.value?.abort();
     pendingJoin.value = null;
+    // 先替换操作集合，使正在等待选择器或采集的任务立即进入旧会话清理路径。
+    pendingMedia.value = new Set([Track.Source.Microphone, Track.Source.ScreenShare]);
     const currentRoom = activeRoom.value;
     activeRoom.value = null;
     const nativeVideo = nativeScreenVideoSession;
@@ -324,9 +389,9 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     const nativeMicrophone = nativeMicrophoneSession;
     nativeMicrophoneSession = null;
     const nativeStop = Promise.all([
-      nativeAudio?.stop().catch(() => {}),
+      nativeAudio?.stop().catch(reportNativeAudioCleanupFailure),
       nativeVideo?.stop().catch(() => {}),
-      nativeMicrophone?.stop().catch(() => {}),
+      nativeMicrophone?.stop().catch(reportNativeAudioCleanupFailure),
     ]);
     unpublishedTracks.value.forEach((track) => track.stop());
     unpublishedTracks.value.clear();
@@ -354,10 +419,13 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       || pendingMedia.value.has(source)) return;
     const operations = pendingMedia.value;
     operations.add(source);
+    const isCurrentTask = () => activeRoom.value === currentRoom && pendingMedia.value === operations;
+    const microphoneProcessorAtStart = source === Track.Source.Microphone ? microphoneProcessor : null;
     busySources.value = [...operations];
     notice.value = '';
     if (source === Track.Source.ScreenShare && enabled) screenShareSelectionCancelled.value = false;
     let capturedTracks: LocalTrack[] = [];
+    let microphoneProcessorForTask: MicrophoneAudioProcessor | null = null;
     let nativeVideo: NativeScreenVideoSession | null = null;
     let nativeAudio: NativeScreenAudioSession | null = null;
     let nativeMicrophone: NativeMicrophoneAudioSession | null = null;
@@ -367,12 +435,12 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       const participant = currentRoom.localParticipant;
       const existingTrack = participant.getTrackPublication(source)?.track;
       if (!enabled) {
+        if (source === Track.Source.Microphone) stopMicrophoneLoopback();
         if (source === Track.Source.ScreenShare) {
           nativeVideo = nativeScreenVideoSession;
-          nativeScreenVideoSession = null;
           nativeAudio = nativeScreenAudioSession;
-          nativeScreenAudioSession = null;
-          // stop() marks the writer intentional synchronously, before unpublish stops its track.
+          if (nativeScreenVideoSession === nativeVideo) nativeScreenVideoSession = null;
+          if (nativeScreenAudioSession === nativeAudio) nativeScreenAudioSession = null;
           const nativeStop = nativeVideo?.stop();
           try {
             const shareAudioTrack = participant.getTrackPublication(Track.Source.ScreenShareAudio)?.track;
@@ -385,7 +453,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           }
         } else if (existingTrack) {
           nativeMicrophone = nativeMicrophoneSession;
-          nativeMicrophoneSession = null;
+          if (nativeMicrophoneSession === nativeMicrophone) nativeMicrophoneSession = null;
+          if (microphoneProcessor === microphoneProcessorAtStart) microphoneProcessor = null;
           try {
             await participant.unpublishTrack(existingTrack, true);
           } finally {
@@ -393,7 +462,9 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             nativeMicrophone = null;
           }
         }
-        if (source === Track.Source.Microphone) microphoneProcessor = null;
+        if (source === Track.Source.Microphone && microphoneProcessor === microphoneProcessorAtStart) {
+          microphoneProcessor = null;
+        }
         return;
       }
       if (existingTrack) return;
@@ -412,9 +483,9 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             onError: (code) => {
               if (nativeMicrophoneSession !== nativeMicrophone || activeRoom.value !== currentRoom) return;
               nativeMicrophoneSession = null;
+              stopMicrophoneLoopback();
               const publication = currentRoom.localParticipant.getTrackPublication(Track.Source.Microphone);
               if (publication?.track) void currentRoom.localParticipant.unpublishTrack(publication.track, true).catch(() => {});
-              void nativeMicrophone?.stop().catch(() => {});
               const reason = code === 'audioDeviceUnavailable'
                 ? '默认麦克风已断开或切换'
                 : code === 'microphoneCaptureFormatUnsupported'
@@ -426,6 +497,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           });
           nativeMicrophoneSession = nativeMicrophone;
           capturedTracks = [await nativeMicrophone.start(crypto.randomUUID(), nativeSettings)];
+          if (!isCurrentTask()) return;
         } else {
           const processor = new MicrophoneAudioProcessor(microphoneInputGain, microphoneProcessing.voiceEnhancement);
           capturedTracks = await participant.createTracks({
@@ -436,10 +508,15 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             },
             video: false,
           });
+          if (!isCurrentTask()) return;
           const audioTrack = capturedTracks.find((track): track is LocalAudioTrack => track instanceof LocalAudioTrack);
           if (!audioTrack) throw new Error('麦克风采集未返回音频轨道');
           // LocalParticipant.createTracks 返回后才会给轨道注入房间的 AudioContext，此时接入处理器才可靠。
           await audioTrack.setProcessor(processor);
+          if (!isCurrentTask()) return;
+          processor.setInputGain(microphoneInputGain);
+          processor.setVoiceEnhancement(microphoneProcessing.voiceEnhancement);
+          microphoneProcessorForTask = processor;
           microphoneProcessor = processor;
         }
       } else {
@@ -449,6 +526,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           const capabilitiesPromise = desktop.getNativeMediaCapabilities();
           if (!selectSource) {
             const capabilities = await capabilitiesPromise;
+            if (!isCurrentTask()) return;
             if (!capabilities.videoCapture?.available) {
               throw new Error(capabilities.videoCapture?.reason || 'nativeVideoUnavailable');
             }
@@ -456,8 +534,9 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           }
           const selectionPromise = selectSource(capabilitiesPromise);
           const selection = await selectionPromise;
-          if (!selection) return;
+          if (!isCurrentTask() || screenShareSelectionCancelled.value || !selection) return;
           const capabilities = await capabilitiesPromise;
+          if (!isCurrentTask() || screenShareSelectionCancelled.value) return;
           if (!capabilities.videoCapture?.available) {
             throw new Error(capabilities.videoCapture?.reason || 'nativeVideoUnavailable');
           }
@@ -477,13 +556,14 @@ export function useRtcRoom(options?: RtcRoomOptions) {
               }
               nativeAudio = nativeScreenAudioSession;
               nativeScreenAudioSession = null;
-              void nativeAudio?.stop().catch(() => {});
+              void nativeAudio?.stop().catch(reportNativeAudioCleanupFailure);
               void nativeVideo?.stop().catch(() => {});
               revision.value++;
             },
           });
           nativeScreenVideoSession = nativeVideo;
           capturedTracks = [await nativeVideo.start(sourceId)];
+          if (!isCurrentTask()) return;
           if (selection.shareAudio) {
             const audioMode = nativeScreenAudioMode(capabilities.screenShareAudioCapture);
             if (audioMode !== 'unavailable') {
@@ -518,11 +598,14 @@ export function useRtcRoom(options?: RtcRoomOptions) {
               try {
                 const videoSessionId = nativeVideo.captureSessionId;
                 if (!videoSessionId) throw new Error('nativeVideoSessionUnavailable');
-                capturedTracks.push(await nativeAudio.start(sourceId, videoSessionId));
+                const audioTrack = await nativeAudio.start(sourceId, videoSessionId);
+                if (!isCurrentTask()) return;
+                capturedTracks.push(audioTrack);
               } catch (error) {
                 if (nativeScreenAudioSession === nativeAudio) nativeScreenAudioSession = null;
-                await nativeAudio.stop().catch(() => {});
+                await nativeAudio.stop().catch(reportNativeAudioCleanupFailure);
                 nativeAudio = null;
+                if (!isCurrentTask()) return;
                 const code = error instanceof Error ? error.message : '';
                 let reason = 'Windows 音频捕获启动失败';
                 if (/screenShareAudioUnsupported/.test(code)) {
@@ -537,7 +620,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
                 notice.value = `仅共享画面：${reason}。`;
               }
             } else {
-              notice.value = '仅共享画面：当前 Windows 版本不支持屏幕共享声音捕获。';
+              if (isCurrentTask()) notice.value = '仅共享画面：当前 Windows 版本不支持屏幕共享声音捕获。';
             }
           }
         } else {
@@ -547,12 +630,13 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             contentHint: 'motion',
             resolution: SCREEN_SHARE_PRESET.resolution,
           });
+          if (!isCurrentTask()) return;
         }
       }
-      // 3. 选择器返回时可能已经离房，必须在发布前检查，不能只在发布后清理。
-      if (activeRoom.value !== currentRoom) return;
+      // 3. 采集期间可能已经离房或取消选择；失效任务不能再发布。
+      if (!isCurrentTask() || (source === Track.Source.ScreenShare && screenShareSelectionCancelled.value)) return;
       capturedTracks.forEach((track) => unpublishedTracks.value.add(track));
-      await Promise.all(capturedTracks.map((track) => {
+      const publishResults = await Promise.allSettled(capturedTracks.map((track) => {
         if (nativeMicrophone && track === nativeMicrophone.track) {
           return participant.publishTrack(track, { source: Track.Source.Microphone });
         }
@@ -567,48 +651,67 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         }
         return participant.publishTrack(track);
       }));
+      const failedPublish = publishResults.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failedPublish) throw failedPublish.reason;
       published = true;
+      if (!isCurrentTask()) return;
     } catch (error) {
       // 自定义选择器的取消会被 Chromium 以拒绝采集返回；这是正常结束，不能误报为权限或连接故障。
       const targetClosed = source === Track.Source.ScreenShare && error instanceof Error
         && /(?:^|: )captureTargetClosed$/.test(error.message);
-      if (activeRoom.value === currentRoom && !targetClosed
+      if (isCurrentTask() && !targetClosed
         && !(source === Track.Source.ScreenShare && screenShareSelectionCancelled.value)) {
-        notice.value = captureErrorMessage(error, source);
+        notice.value = enabled ? captureErrorMessage(error, source)
+          : `${source === Track.Source.Microphone ? '麦克风' : '屏幕共享'}停止未确认，请重新连接语音。`;
       }
     } finally {
-      // 4. 失败或旧会话的采集立即停止；已发布的轨道交由房间管理生命周期。
+      // 4. 失败或旧房间的轨道只由本任务所属房间清理，避免碰到新房间的发布。
+      const releaseTracks = !published || !isCurrentTask();
+      const releasedTracks = new Set<LocalTrack>();
+      if (releaseTracks && capturedTracks.length) {
+        const participant = currentRoom.localParticipant;
+        const publications = [...participant.trackPublications.values()]
+          .filter((publication) => publication.track && capturedTracks.includes(publication.track));
+        await Promise.all(publications.map(async (publication) => {
+          const track = publication.track;
+          if (!track) return;
+          try {
+            await participant.unpublishTrack(track, true);
+            releasedTracks.add(track);
+          } catch (error) {
+            reportNativeAudioCleanupFailure(error);
+          }
+        }));
+      }
       capturedTracks.forEach((track) => {
         unpublishedTracks.value.delete(track);
-        if ((!published || activeRoom.value !== currentRoom) && !nativeVideo) track.stop();
+        if (releaseTracks && !releasedTracks.has(track)) {
+          try {
+            track.stop();
+          } catch (error) {
+            reportNativeAudioCleanupFailure(error);
+          }
+        }
       });
-      if (nativeVideo && (!published || activeRoom.value !== currentRoom)) {
-        const videoPublication = currentRoom.localParticipant.getTrackPublication(Track.Source.ScreenShare);
-        const audioPublication = currentRoom.localParticipant.getTrackPublication(Track.Source.ScreenShareAudio);
-        const audioTrack = nativeAudio?.track;
-        await Promise.all([
-          videoPublication?.track === nativeVideo.track
-            ? currentRoom.localParticipant.unpublishTrack(nativeVideo.track, true).catch(() => {}) : Promise.resolve(),
-          audioTrack && audioPublication?.track === audioTrack
-            ? currentRoom.localParticipant.unpublishTrack(audioTrack, true).catch(() => {}) : Promise.resolve(),
-        ]);
+      if (nativeVideo && releaseTracks) {
         if (nativeScreenVideoSession === nativeVideo) nativeScreenVideoSession = null;
-        await nativeVideo.stop().catch(() => {});
+        await nativeVideo.stop().catch(reportNativeAudioCleanupFailure);
       }
-      if (nativeAudio && (!published || activeRoom.value !== currentRoom)) {
+      if (nativeAudio && releaseTracks) {
         if (nativeScreenAudioSession === nativeAudio) nativeScreenAudioSession = null;
-        await nativeAudio.stop().catch(() => {});
+        await nativeAudio.stop().catch(reportNativeAudioCleanupFailure);
       }
-      if (source === Track.Source.Microphone && (!published || activeRoom.value !== currentRoom)) {
-        microphoneProcessor = null;
+      if (source === Track.Source.Microphone && releaseTracks) {
+        const processorToRelease = microphoneProcessorForTask ?? microphoneProcessorAtStart;
+        if (processorToRelease && microphoneProcessor === processorToRelease) microphoneProcessor = null;
         if (nativeMicrophone) {
           if (nativeMicrophoneSession === nativeMicrophone) nativeMicrophoneSession = null;
-          await nativeMicrophone.stop().catch(() => {});
+          await nativeMicrophone.stop().catch(reportNativeAudioCleanupFailure);
         }
       }
       operations.delete(source);
-      if (source === Track.Source.ScreenShare) screenShareSelectionCancelled.value = false;
-      if (activeRoom.value === currentRoom) busySources.value = [...operations];
+      if (source === Track.Source.ScreenShare && isCurrentTask()) screenShareSelectionCancelled.value = false;
+      if (isCurrentTask()) busySources.value = [...operations];
     }
   }
 
@@ -636,14 +739,18 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   function setMicrophoneInputGain(value: number) {
     microphoneInputGain = normalizeAudioVolume(value);
     microphoneProcessor?.setInputGain(microphoneInputGain);
-    if (nativeMicrophoneSession) {
-      void nativeMicrophoneSession.configure({
+    const requestRoom = activeRoom.value;
+    const requestSession = nativeMicrophoneSession;
+    if (requestSession) {
+      void requestSession.configure({
         inputGain: microphoneInputGain,
         noiseSuppression: microphoneProcessing.noiseSuppression,
         autoGainControl: microphoneProcessing.autoGainControl,
         voiceEnhancement: microphoneProcessing.voiceEnhancement,
       }).catch(() => {
-        if (nativeMicrophoneSession && activeRoom.value) notice.value = '麦克风设置未能应用。';
+        if (requestRoom && activeRoom.value === requestRoom && nativeMicrophoneSession === requestSession) {
+          notice.value = '麦克风设置未能应用。';
+        }
       });
     }
   }
@@ -651,21 +758,30 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   async function setMicrophoneProcessing(settings: AudioProcessingSettings) {
     microphoneProcessing = { ...settings };
     microphoneProcessor?.setVoiceEnhancement(settings.voiceEnhancement);
-    if (nativeMicrophoneSession) {
+    const requestRoom = activeRoom.value;
+    const requestSession = nativeMicrophoneSession;
+    if (requestSession) {
       try {
-        await nativeMicrophoneSession.configure({
+        await requestSession.configure({
           inputGain: microphoneInputGain,
           noiseSuppression: settings.noiseSuppression,
           autoGainControl: settings.autoGainControl,
           voiceEnhancement: settings.voiceEnhancement,
         });
       } catch {
-        if (nativeMicrophoneSession && activeRoom.value) notice.value = '麦克风设置未能应用。';
+        if (requestRoom && activeRoom.value === requestRoom && nativeMicrophoneSession === requestSession) {
+          notice.value = '麦克风设置未能应用。';
+        }
       }
       return;
     }
-    const track = activeRoom.value?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
+    const trackRoom = requestRoom;
+    const track = trackRoom?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track;
     if (!(track instanceof LocalAudioTrack)) return;
+    const mediaTrack = track.mediaStreamTrack;
+    const isCurrentTrack = () => activeRoom.value === trackRoom
+      && trackRoom?.localParticipant.getTrackPublication(Track.Source.Microphone)?.track === track
+      && track.mediaStreamTrack === mediaTrack;
     if (notice.value === PROCESSING_RESTART_NOTICE || notice.value === PROCESSING_UNSUPPORTED_NOTICE) notice.value = '';
     try {
       await track.applyConstraints({
@@ -673,12 +789,12 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         noiseSuppression: settings.noiseSuppression,
         autoGainControl: settings.autoGainControl,
       });
-      if (unappliedCaptureProcessing(settings, track.mediaStreamTrack.getSettings()).length > 0
-        && activeRoom.value) {
+      if (isCurrentTrack()
+        && unappliedCaptureProcessing(settings, mediaTrack.getSettings()).length > 0) {
         notice.value = PROCESSING_RESTART_NOTICE;
       }
     } catch {
-      if (activeRoom.value) notice.value = PROCESSING_UNSUPPORTED_NOTICE;
+      if (isCurrentTrack()) notice.value = PROCESSING_UNSUPPORTED_NOTICE;
     }
   }
 
@@ -721,6 +837,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   }
 
   return { revision, room, status, participants, notice, needsAudioPlayback, busySources, screenShareActive,
+    microphoneLoopbackState, microphoneLoopbackNotice, startMicrophoneLoopback, stopMicrophoneLoopback,
+    setMicrophoneLoopbackVolume,
     join, leave, toggleMedia, setMediaEnabled, enableAudioPlayback, updateListeningState,
     setMicrophoneInputGain, setMicrophoneProcessing, setRemoteAudioSubscribed, sendEntranceSound,
     cancelPendingScreenShareSelection };
