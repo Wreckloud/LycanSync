@@ -25,6 +25,8 @@ class MediaHelperManager {
     createRequestId = randomUUID,
     handshakeTimeoutMs = 5000,
     requestTimeoutMs = 5000,
+    // Rust audio workers wait up to 10 seconds for startup; leave time for its result event.
+    audioStartTimeoutMs = 12_000,
     shutdownTimeoutMs = 1000,
     killTimeoutMs = 500,
     idleTimeoutMs = 30_000,
@@ -42,6 +44,7 @@ class MediaHelperManager {
     this.createRequestId = createRequestId;
     this.handshakeTimeoutMs = handshakeTimeoutMs;
     this.requestTimeoutMs = requestTimeoutMs;
+    this.audioStartTimeoutMs = audioStartTimeoutMs;
     this.shutdownTimeoutMs = shutdownTimeoutMs;
     this.killTimeoutMs = killTimeoutMs;
     this.idleTimeoutMs = idleTimeoutMs;
@@ -280,7 +283,7 @@ class MediaHelperManager {
   }
 
   async runStartScreenShareAudio(state, sourceId, pipeId, sessionId) {
-    const response = await this.sendRequest(state, 'startScreenShareAudio', 'screenShareAudioStarted', this.requestTimeoutMs,
+    const response = await this.sendRequest(state, 'startScreenShareAudio', 'screenShareAudioStarted', this.audioStartTimeoutMs,
       { sourceId, pipeId, sessionId });
     if (response.sessionId !== sessionId || response.changed !== true
         || !Number.isInteger(response.sampleRate) || response.sampleRate < 8000 || response.sampleRate > 192000
@@ -350,7 +353,7 @@ class MediaHelperManager {
     this.clearIdleTimer();
     try {
       const response = await this.sendRequest(state, 'startMicrophoneCapture', 'microphoneCaptureStarted',
-        this.requestTimeoutMs, { pipeId, sessionId, ...settings });
+        this.audioStartTimeoutMs, { pipeId, sessionId, ...settings });
       if (response.sessionId !== sessionId || response.changed !== true
           || response.sampleRate !== 48000 || response.channels !== 1
           || response.bitsPerSample !== 32 || response.nominalChunkMs !== 10) {

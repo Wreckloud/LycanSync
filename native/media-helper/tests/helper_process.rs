@@ -137,7 +137,7 @@ fn hello_video_start_requires_a_current_source_and_shutdown_use_protocol_v1() {
 }
 
 #[test]
-fn capabilities_advertise_audio_enumeration_without_audio_capture() {
+fn capabilities_advertise_platform_audio_support_without_opening_streams() {
     let mut helper = HelperProcess::spawn();
     // Audio discovery capability is metadata; this test never enumerates or opens an audio stream.
     helper.send(
@@ -148,8 +148,22 @@ fn capabilities_advertise_audio_enumeration_without_audio_capture() {
     assert_eq!(capabilities["protocolVersion"], 1);
     assert!(capabilities["audioSourceDiscovery"]["available"].is_boolean());
     assert!(capabilities["microphoneProbe"]["available"].is_boolean());
-    assert_eq!(capabilities["microphoneCapture"]["available"], false);
-    assert_eq!(capabilities["microphoneCapture"]["available"], false);
+    #[cfg(target_os = "windows")]
+    {
+        assert_eq!(capabilities["microphoneCapture"]["available"], true);
+        assert_eq!(
+            capabilities["microphoneCapture"]["reason"],
+            "windowsWasapiSharedModeSonora"
+        );
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        assert_eq!(capabilities["microphoneCapture"]["available"], false);
+        assert_eq!(
+            capabilities["microphoneCapture"]["reason"],
+            "platformUnsupported"
+        );
+    }
     assert_eq!(capabilities["systemAudioCapture"]["available"], false);
     assert_eq!(capabilities["processAudioCapture"]["available"], false);
 

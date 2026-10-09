@@ -28,7 +28,8 @@ use windows::Win32::System::Com::{
     StructuredStorage::{PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0},
 };
 use windows::Win32::System::Com::{
-    CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
+    CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemAlloc,
+    CoTaskMemFree,
 };
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
@@ -979,49 +980,48 @@ fn activate_process_loopback(
             },
         },
     };
-    let mut property = PROPVARIANT::default();
-    property.Anonymous = PROPVARIANT_0 {
-        Anonymous: std::mem::ManuallyDrop::new(PROPVARIANT_0_0 {
-            vt: VT_BLOB,
-            wReserved1: 0,
-            wReserved2: 0,
-            wReserved3: 0,
-            Anonymous: PROPVARIANT_0_0_0 {
-                blob: BLOB {
-                    cbSize: std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>() as u32,
-                    pBlobData: (&params as *const AUDIOCLIENT_ACTIVATION_PARAMS)
-                        .cast_mut()
-                        .cast(),
-                },
-            },
-        }),
-    };
+    let activation_params = Arc::new(ActivationParamsOwner::new(params)?);
     let (sender, receiver) = mpsc::sync_channel(1);
     let handler: IActivateAudioInterfaceCompletionHandler = ActivationHandler {
         sender: Mutex::new(Some(sender)),
+        activation_params: Arc::clone(&activation_params),
     }
     .into();
-    unsafe {
+    let operation = unsafe {
         ActivateAudioInterfaceAsync(
             VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
             &IAudioClient::IID,
-            Some(&property),
+            Some(activation_params.as_ptr()),
             &handler,
         )
     }
     .map_err(|_| ErrorCode::ScreenShareAudioUnsupported)?;
-    let client = receiver
-        .recv_timeout(START_TIMEOUT)
-        .map_err(|_| ErrorCode::ScreenShareAudioStartTimedOut)??;
+    let client = match receiver.recv_timeout(START_TIMEOUT) {
+        Ok(Ok(client)) => client,
+        Ok(Err(error)) => return Err(error),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            // Windows retains the completion handler through callback completion. Its
+            // Arc keeps the PROPVARIANT and CoTaskMem blob alive even after this timeout.
+            drop(operation);
+            return Err(ErrorCode::ScreenShareAudioStartTimedOut);
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            // Do not infer from a missing channel result that activation stopped using
+            // its parameters; Windows still owns the completion handler until callback.
+            drop(operation);
+            return Err(ErrorCode::ScreenShareAudioStartFailed);
+        }
+    };
     // Process Loopback is a virtual client; use the supported explicit PCM format from
     // Microsoft's Application Loopback sample instead of asking it for a mix format.
     let stream = supported_capture_format();
     Ok((client, stream, None))
 }
 
-#[windows::core::implement(IActivateAudioInterfaceCompletionHandler)]
+#[windows::core::implement(IActivateAudioInterfaceCompletionHandler, Agile = true)]
 struct ActivationHandler {
     sender: Mutex<Option<mpsc::SyncSender<Result<IAudioClient, ErrorCode>>>>,
+    activation_params: Arc<ActivationParamsOwner>,
 }
 
 impl windows::Win32::Media::Audio::IActivateAudioInterfaceCompletionHandler_Impl
@@ -1031,22 +1031,24 @@ impl windows::Win32::Media::Audio::IActivateAudioInterfaceCompletionHandler_Impl
         &self,
         operation: Ref<IActivateAudioInterfaceAsyncOperation>,
     ) -> windows::core::Result<()> {
-        let operation = operation.as_ref().ok_or(windows::core::Error::from(
-            windows::Win32::Foundation::E_POINTER,
-        ))?;
-        let mut activation_result = windows::core::HRESULT(0);
-        let mut activated: Option<IUnknown> = None;
-        let result = unsafe { operation.GetActivateResult(&mut activation_result, &mut activated) };
-        let outcome = if result.is_err() || activation_result.is_err() {
-            Err(ErrorCode::ScreenShareAudioStartFailed)
+        let outcome = if let Some(operation) = operation.as_ref() {
+            let mut activation_result = windows::core::HRESULT(0);
+            let mut activated: Option<IUnknown> = None;
+            let result =
+                unsafe { operation.GetActivateResult(&mut activation_result, &mut activated) };
+            if result.is_err() || activation_result.is_err() {
+                Err(ErrorCode::ScreenShareAudioStartFailed)
+            } else {
+                activated
+                    .ok_or(ErrorCode::ScreenShareAudioStartFailed)
+                    .and_then(|unknown| {
+                        unknown
+                            .cast::<IAudioClient>()
+                            .map_err(|_| ErrorCode::ScreenShareAudioStartFailed)
+                    })
+            }
         } else {
-            activated
-                .ok_or(ErrorCode::ScreenShareAudioStartFailed)
-                .and_then(|unknown| {
-                    unknown
-                        .cast::<IAudioClient>()
-                        .map_err(|_| ErrorCode::ScreenShareAudioStartFailed)
-                })
+            Err(ErrorCode::ScreenShareAudioStartFailed)
         };
         if let Some(sender) = self
             .sender
@@ -1056,7 +1058,65 @@ impl windows::Win32::Media::Audio::IActivateAudioInterfaceCompletionHandler_Impl
         {
             let _ = sender.send(outcome);
         }
+        self.activation_params.release();
         Ok(())
+    }
+}
+
+struct OwnedPropVariant(Box<PROPVARIANT>);
+
+// This wrapper only contains a VT_BLOB allocated by CoTaskMemAlloc. PropVariantClear
+// may therefore safely release it on the COM completion thread.
+unsafe impl Send for OwnedPropVariant {}
+
+struct ActivationParamsOwner {
+    property: Mutex<Option<OwnedPropVariant>>,
+}
+
+impl ActivationParamsOwner {
+    fn new(params: AUDIOCLIENT_ACTIVATION_PARAMS) -> Result<Self, ErrorCode> {
+        let size = std::mem::size_of::<AUDIOCLIENT_ACTIVATION_PARAMS>();
+        let blob = unsafe { CoTaskMemAlloc(size) }.cast::<AUDIOCLIENT_ACTIVATION_PARAMS>();
+        if blob.is_null() {
+            return Err(ErrorCode::ScreenShareAudioStartFailed);
+        }
+        unsafe { blob.write(params) };
+        let property = PROPVARIANT {
+            Anonymous: PROPVARIANT_0 {
+                Anonymous: std::mem::ManuallyDrop::new(PROPVARIANT_0_0 {
+                    vt: VT_BLOB,
+                    wReserved1: 0,
+                    wReserved2: 0,
+                    wReserved3: 0,
+                    Anonymous: PROPVARIANT_0_0_0 {
+                        blob: BLOB {
+                            cbSize: size as u32,
+                            pBlobData: blob.cast(),
+                        },
+                    },
+                }),
+            },
+        };
+        Ok(Self {
+            property: Mutex::new(Some(OwnedPropVariant(Box::new(property)))),
+        })
+    }
+
+    fn as_ptr(&self) -> *const PROPVARIANT {
+        let property = self
+            .property
+            .lock()
+            .expect("activation property lock poisoned");
+        property
+            .as_ref()
+            .map_or(std::ptr::null(), |owned| owned.0.as_ref())
+    }
+
+    fn release(&self) {
+        self.property
+            .lock()
+            .expect("activation property lock poisoned")
+            .take();
     }
 }
 
@@ -1191,11 +1251,11 @@ impl Drop for ComApartment {
 #[cfg(test)]
 mod tests {
     use super::{
-        AUDIO_QUEUE_CAPACITY, AudioQueue, CAPTURE_BITS_PER_SAMPLE, CAPTURE_CHANNELS,
-        CAPTURE_SAMPLE_RATE, CaptureMode, ChunkAssembler, SampleEncoding, StreamFormat,
-        WAVE_FORMAT_EXTENSIBLE_TAG, WAVE_FORMAT_IEEE_FLOAT_TAG, WAVE_FORMAT_PCM_TAG, WAVEFORMATEX,
-        WAVEFORMATEXTENSIBLE, capture_mode, normalize_to_stereo_f32, parse_mix_format,
-        process_capture_packet, supported_capture_format,
+        AUDIO_QUEUE_CAPACITY, ActivationParamsOwner, AudioQueue, CAPTURE_BITS_PER_SAMPLE,
+        CAPTURE_CHANNELS, CAPTURE_SAMPLE_RATE, CaptureMode, ChunkAssembler, SampleEncoding,
+        StreamFormat, WAVE_FORMAT_EXTENSIBLE_TAG, WAVE_FORMAT_IEEE_FLOAT_TAG, WAVE_FORMAT_PCM_TAG,
+        WAVEFORMATEX, WAVEFORMATEXTENSIBLE, capture_mode, normalize_to_stereo_f32,
+        parse_mix_format, process_capture_packet, supported_capture_format,
     };
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -1255,6 +1315,45 @@ mod tests {
         assert_eq!(capture_mode((10, 20348)), CaptureMode::ProcessLoopback);
         assert_eq!(capture_mode((10, 22631)), CaptureMode::ProcessLoopback);
         assert_eq!(capture_mode((6, 19045)), CaptureMode::Unsupported);
+    }
+
+    #[test]
+    fn process_loopback_activation_blob_is_owned_until_completion() {
+        let params = super::AUDIOCLIENT_ACTIVATION_PARAMS {
+            ActivationType: super::AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+            Anonymous: super::AUDIOCLIENT_ACTIVATION_PARAMS_0 {
+                ProcessLoopbackParams: super::AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
+                    TargetProcessId: 42,
+                    ProcessLoopbackMode: super::PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE,
+                },
+            },
+        };
+        let params_size = std::mem::size_of_val(&params);
+        let owner = Arc::new(ActivationParamsOwner::new(params).unwrap());
+        let callback_owner = Arc::clone(&owner);
+        let property = unsafe { &*owner.as_ptr() };
+        assert_eq!(unsafe { property.Anonymous.Anonymous.vt }, super::VT_BLOB);
+        let blob = unsafe { property.Anonymous.Anonymous.Anonymous.blob };
+        assert_eq!(blob.cbSize as usize, params_size);
+        assert!(!blob.pBlobData.is_null());
+        let copied = unsafe {
+            blob.pBlobData
+                .cast::<super::AUDIOCLIENT_ACTIVATION_PARAMS>()
+                .read()
+        };
+        assert_eq!(
+            copied.ActivationType,
+            super::AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK
+        );
+        assert_eq!(
+            unsafe { copied.Anonymous.ProcessLoopbackParams.TargetProcessId },
+            42
+        );
+
+        drop(owner);
+        assert!(!callback_owner.as_ptr().is_null());
+        callback_owner.release();
+        assert!(callback_owner.as_ptr().is_null());
     }
 
     #[test]

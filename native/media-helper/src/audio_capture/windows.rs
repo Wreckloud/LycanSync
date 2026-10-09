@@ -145,8 +145,16 @@ fn worker_main(
         .open(format!("{AUDIO_PIPE_PREFIX}{pipe_id}"))
         .map_err(|_| ErrorCode::MicrophoneCapturePipeFailed)?;
     let _apartment = ComApartment::initialize()?;
-    let (enumerator, device, endpoint_id, client, capture_client, event, format, buffer_frames) =
-        setup_capture()?;
+    let CaptureSetup {
+        enumerator,
+        device,
+        endpoint_id,
+        client,
+        capture_client,
+        event,
+        format,
+        buffer_frames,
+    } = setup_capture()?;
     if stop_requested.load(Ordering::Acquire) {
         return Err(ErrorCode::MicrophoneCaptureStartFailed);
     }
@@ -199,19 +207,18 @@ fn worker_main(
     }
 }
 
-fn setup_capture() -> Result<
-    (
-        IMMDeviceEnumerator,
-        windows::Win32::Media::Audio::IMMDevice,
-        String,
-        IAudioClient,
-        IAudioCaptureClient,
-        EventHandle,
-        StreamFormat,
-        u32,
-    ),
-    ErrorCode,
-> {
+struct CaptureSetup {
+    enumerator: IMMDeviceEnumerator,
+    device: windows::Win32::Media::Audio::IMMDevice,
+    endpoint_id: String,
+    client: IAudioClient,
+    capture_client: IAudioCaptureClient,
+    event: EventHandle,
+    format: StreamFormat,
+    buffer_frames: u32,
+}
+
+fn setup_capture() -> Result<CaptureSetup, ErrorCode> {
     let enumerator: IMMDeviceEnumerator = unsafe {
         CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
             .map_err(|_| ErrorCode::MicrophoneCaptureStartFailed)?
@@ -264,16 +271,16 @@ fn setup_capture() -> Result<
     let buffer_frames =
         unsafe { client.GetBufferSize() }.map_err(|_| ErrorCode::MicrophoneCaptureStartFailed)?;
     drop(mix_format);
-    Ok((
+    Ok(CaptureSetup {
         enumerator,
-        endpoint,
+        device: endpoint,
         endpoint_id,
         client,
         capture_client,
         event,
         format,
         buffer_frames,
-    ))
+    })
 }
 
 fn default_capture_endpoint(
@@ -480,11 +487,8 @@ fn process_packet(
         if processor.settings() != current {
             processor.set_settings(current);
         }
-        for output_chunk in normalized.chunks_exact(FRAMES_PER_CHUNK) {
-            let output: [f32; FRAMES_PER_CHUNK] = output_chunk
-                .try_into()
-                .map_err(|_| ErrorCode::MicrophoneCaptureFailed)?;
-            let output = processor.process(&output);
+        for output_chunk in normalized.as_chunks::<FRAMES_PER_CHUNK>().0 {
+            let output = processor.process(output_chunk);
             let mut bytes = Vec::with_capacity(FRAMES_PER_CHUNK * 4);
             for sample in output {
                 bytes.extend_from_slice(&sample.to_le_bytes());
@@ -652,6 +656,12 @@ impl ComApartment {
     }
 }
 
+impl Drop for ComApartment {
+    fn drop(&mut self) {
+        unsafe { windows::Win32::System::Com::CoUninitialize() };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AUDIO_QUEUE_CAPACITY, AudioQueue, resampler_frame_counts};
@@ -747,11 +757,5 @@ mod tests {
         queue.close();
         assert_eq!(queue.pop(), None);
         assert_eq!(dropped.load(Ordering::Relaxed), 0);
-    }
-}
-
-impl Drop for ComApartment {
-    fn drop(&mut self) {
-        unsafe { windows::Win32::System::Com::CoUninitialize() };
     }
 }

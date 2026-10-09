@@ -127,11 +127,17 @@ class FakeHelper extends EventEmitter {
       return;
     }
     if (command.command === 'startScreenShareAudio') {
-      this.screenAudioState = 'running';
-      this.screenAudioSessionId = command.sessionId;
-      this.writeResponse({ event: 'screenShareAudioStarted', protocolVersion: 1,
-        requestId: command.requestId, sessionId: command.sessionId, state: 'running',
-        sampleRate: 48000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
+      if (this.mode.holdScreenAudioStart) return;
+      const acknowledge = () => {
+        if (this.closed) return;
+        this.screenAudioState = 'running';
+        this.screenAudioSessionId = command.sessionId;
+        this.writeResponse({ event: 'screenShareAudioStarted', protocolVersion: 1,
+          requestId: command.requestId, sessionId: command.sessionId, state: 'running',
+          sampleRate: 48000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
+      };
+      if (this.mode.screenAudioStartDelayMs) setTimeout(acknowledge, this.mode.screenAudioStartDelayMs);
+      else acknowledge();
       return;
     }
     if (command.command === 'startMicrophoneCapture') {
@@ -139,11 +145,16 @@ class FakeHelper extends EventEmitter {
         this.pendingMicrophoneStart = command;
         return;
       }
-      this.microphoneState = 'running';
-      this.microphoneSessionId = command.sessionId;
-      this.writeResponse({ event: 'microphoneCaptureStarted', protocolVersion: 1,
-        requestId: command.requestId, sessionId: command.sessionId, state: 'running',
-        sampleRate: 48000, channels: 1, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
+      const acknowledge = () => {
+        if (this.closed) return;
+        this.microphoneState = 'running';
+        this.microphoneSessionId = command.sessionId;
+        this.writeResponse({ event: 'microphoneCaptureStarted', protocolVersion: 1,
+          requestId: command.requestId, sessionId: command.sessionId, state: 'running',
+          sampleRate: 48000, channels: 1, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
+      };
+      if (this.mode.microphoneStartDelayMs) setTimeout(acknowledge, this.mode.microphoneStartDelayMs);
+      else acknowledge();
       return;
     }
     if (command.command === 'configureMicrophoneCapture' || command.command === 'stopMicrophoneCapture') {
@@ -258,6 +269,7 @@ function createManager(mode = {}, options = {}) {
     createRequestId: (() => { let next = 0; return () => `request-${++next}`; })(),
     handshakeTimeoutMs: 40,
     requestTimeoutMs: 80,
+    audioStartTimeoutMs: 80,
     shutdownTimeoutMs: 40,
     killTimeoutMs: 40,
     idleTimeoutMs: 1000,
@@ -502,6 +514,93 @@ test('native microphone capture validates settings, configures the active sessio
   assert.equal(children[0].requests.find((request) => request.command === 'startMicrophoneCapture').pipeId, pipeId);
   await waitUntil(() => children[0].closed);
   await manager.shutdown();
+});
+
+test('microphone startup allows the Rust worker startup deadline beyond the general request timeout', async () => {
+  const { manager, children } = createManager({ microphoneStartDelayMs: 65 }, {
+    requestTimeoutMs: 30,
+    audioStartTimeoutMs: 150,
+  });
+  const settings = { inputGain: 1, noiseSuppression: false, autoGainControl: false, voiceEnhancement: false };
+  const sessionId = 'delayed-microphone-session';
+  const started = await manager.startMicrophoneCapture(
+    '58d00436-8ac2-4d0c-9283-9d5d5f70ed01', sessionId, settings,
+  );
+  assert.equal(started.changed, true);
+  assert.equal(children[0].killCount, 0);
+  await manager.stopMicrophoneCapture(sessionId);
+  await manager.shutdown();
+});
+
+test('screen-share audio startup uses its own deadline beyond the general request timeout', async () => {
+  const { manager, children } = createManager({ screenAudioStartDelayMs: 65 }, {
+    requestTimeoutMs: 30,
+    audioStartTimeoutMs: 150,
+  });
+  try {
+    const sources = await manager.listVideoSources();
+    await manager.startVideo(sources.sources[0].sourceId, 30, 'delayed-video-session');
+    const started = await manager.startScreenShareAudio(sources.sources[0].sourceId,
+      '58d00436-8ac2-4d0c-9283-9d5d5f70ed01', 'delayed-video-session');
+    assert.equal(started.changed, true);
+    assert.equal(children[0].killCount, 0);
+    await manager.stopScreenShareAudio('delayed-video-session');
+    await manager.stopVideo('delayed-video-session');
+  } finally {
+    await manager.shutdown();
+  }
+});
+
+test('audio startup deadline failure clears sessions and reaps the helper before an explicit retry', async (t) => {
+  for (const kind of ['microphone', 'screenAudio']) {
+    await t.test(kind, async () => {
+      const mode = kind === 'microphone' ? { holdMicrophoneStart: true } : { holdScreenAudioStart: true };
+      const { manager, children } = createManager(mode, {
+        requestTimeoutMs: 150,
+        audioStartTimeoutMs: 30,
+        retryDelayMs: 0,
+      });
+      const pipeId = '58d00436-8ac2-4d0c-9283-9d5d5f70ed01';
+      const settings = { inputGain: 1, noiseSuppression: false, autoGainControl: false, voiceEnhancement: false };
+      try {
+        let start;
+        if (kind === 'microphone') {
+          start = manager.startMicrophoneCapture(pipeId, 'timed-out-microphone', settings);
+        } else {
+          const sources = await manager.listVideoSources();
+          await manager.startVideo(sources.sources[0].sourceId, 30, 'timed-out-video');
+          start = manager.startScreenShareAudio(sources.sources[0].sourceId, pipeId, 'timed-out-video');
+        }
+        const command = kind === 'microphone' ? 'startMicrophoneCapture' : 'startScreenShareAudio';
+        await assert.rejects(start, new RegExp(`mediaHelperTimeout:${command}`));
+        await waitUntil(() => children[0].closed);
+        assert.equal(children[0].killCount, 1);
+        assert.equal(manager.microphoneCapture, undefined);
+        assert.equal(manager.microphoneCaptureStart, undefined);
+        assert.equal(manager.microphoneCaptureStartingSessionId, undefined);
+        assert.equal(manager.screenShareAudio, undefined);
+        assert.equal(manager.screenShareAudioStart, undefined);
+        assert.equal(manager.videoCapture, undefined);
+        assert.equal(children.length, 1);
+
+        mode.holdMicrophoneStart = false;
+        mode.holdScreenAudioStart = false;
+        if (kind === 'microphone') {
+          assert.equal((await manager.startMicrophoneCapture(pipeId, 'retry-microphone', settings)).changed, true);
+          await manager.stopMicrophoneCapture('retry-microphone');
+        } else {
+          const sources = await manager.listVideoSources();
+          await manager.startVideo(sources.sources[0].sourceId, 30, 'retry-video');
+          assert.equal((await manager.startScreenShareAudio(sources.sources[0].sourceId, pipeId, 'retry-video')).changed, true);
+          await manager.stopScreenShareAudio('retry-video');
+          await manager.stopVideo('retry-video');
+        }
+        assert.equal(children.length, 2);
+      } finally {
+        await manager.shutdown();
+      }
+    });
+  }
 });
 
 test('stopping the native microphone while start is pending waits for start then stops the same session', async () => {
