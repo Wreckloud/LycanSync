@@ -1,8 +1,9 @@
 import { LocalVideoTrack } from 'livekit-client';
+import { createScreenStatusFrame } from './screenStatusFrame';
 
 export interface NativeVideoDesktopBridge {
   startNativeVideo(sourceId: string, maxFps: number): Promise<{ sessionId: string; changed: boolean }>;
-  stopNativeVideo(sessionId?: string): Promise<{ changed: boolean }>;
+  stopNativeVideo(sessionId: string): Promise<{ changed: boolean }>;
   onNativeVideoError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
   onNativeVideoSuspended(callback: (status: { sessionId: string; suspended: boolean }) => void): () => void;
 }
@@ -54,6 +55,7 @@ export class NativeScreenVideoSession {
   private suspensionTimer?: ReturnType<typeof setInterval>;
   private writePromise?: Promise<void>;
   private pendingFrame?: VideoFrame;
+  private pendingFrameSessionId?: string;
   private lastAcceptedAt = Number.NEGATIVE_INFINITY;
   private lastTimestamp = Number.NEGATIVE_INFINITY;
   private frameWidth = 1280;
@@ -116,6 +118,14 @@ export class NativeScreenVideoSession {
         throw new Error('nativeVideoStartRejected');
       }
       this.sessionId = started.sessionId;
+      if (this.pendingFrame) {
+        const pendingFrame = this.pendingFrame;
+        const pendingSessionId = this.pendingFrameSessionId;
+        this.pendingFrame = undefined;
+        this.pendingFrameSessionId = undefined;
+        if (pendingSessionId === this.sessionId && !this.stopped) this.acceptFrame(pendingFrame);
+        else pendingFrame.close();
+      }
       const pendingSuspension = this.pendingSuspension;
       this.pendingSuspension = undefined;
       if (pendingSuspension?.sessionId === this.sessionId) this.setSuspended(pendingSuspension.suspended);
@@ -126,7 +136,9 @@ export class NativeScreenVideoSession {
       await waitWithTimeout(firstFrame, this.firstFrameTimeoutMs, 'nativeVideoFirstFrameTimeout');
       return this.track;
     } catch (error) {
-      await this.stop().catch(() => {});
+      await this.stop().catch((cleanupError) => {
+        console.error('原生屏幕共享启动失败后的清理未完成', cleanupError);
+      });
       throw error;
     }
   }
@@ -134,7 +146,6 @@ export class NativeScreenVideoSession {
   stop(): Promise<void> {
     if (this.stopPromise) return this.stopPromise;
     this.stopped = true;
-    window.removeEventListener('message', this.onWindowMessage);
     this.removeHelperErrorListener?.();
     this.removeHelperErrorListener = undefined;
     this.removeSuspensionListener?.();
@@ -145,27 +156,67 @@ export class NativeScreenVideoSession {
     this.track.stop();
     this.pendingFrame?.close();
     this.pendingFrame = undefined;
+    this.pendingFrameSessionId = undefined;
     this.stopPromise = this.stopResources();
     return this.stopPromise;
   }
 
   private async stopResources(): Promise<void> {
     const startCommand = this.startCommand;
+    let startCleanupTimedOut: Error | undefined;
     if (startCommand) {
       try {
         const started = await waitWithTimeout(startCommand, 1_500, 'nativeVideoStartCleanupTimeout');
-        this.sessionId ??= started.sessionId;
-      } catch { /* The main process owns cancellation when startup did not return a session ID. */ }
+        if (typeof started.sessionId === 'string' && started.sessionId) this.sessionId ??= started.sessionId;
+      } catch (error) {
+        if (error instanceof Error && error.message === 'nativeVideoStartCleanupTimeout') {
+          startCleanupTimedOut = error;
+          void startCommand.then((started) => {
+            if (typeof started.sessionId !== 'string' || !started.sessionId) {
+              window.removeEventListener('message', this.onWindowMessage);
+              return;
+            }
+            return this.desktop.stopNativeVideo(started.sessionId).then(() => {
+              window.removeEventListener('message', this.onWindowMessage);
+            });
+          }, () => {
+            window.removeEventListener('message', this.onWindowMessage);
+          }).catch((cleanupError) => {
+            console.error('原生屏幕共享迟到启动清理失败', cleanupError);
+          });
+        } else {
+          window.removeEventListener('message', this.onWindowMessage);
+        }
+      }
     }
     if (this.writePromise) await waitWithTimeout(this.writePromise, 500, 'nativeVideoWriterCloseTimeout').catch(() => {});
     await waitWithTimeout(this.writer.close(), 500, 'nativeVideoWriterCloseTimeout').catch(() => {});
-    await this.desktop.stopNativeVideo(this.sessionId).then(() => undefined).catch(() => {});
+    if (this.sessionId) await this.desktop.stopNativeVideo(this.sessionId);
+    else if (!startCleanupTimedOut) window.removeEventListener('message', this.onWindowMessage);
+    if (startCleanupTimedOut) throw startCleanupTimedOut;
+    if (this.sessionId) window.removeEventListener('message', this.onWindowMessage);
   }
 
   private readonly onWindowMessage = (event: MessageEvent) => {
     if (event.source !== window || event.data?.type !== 'lycan-native-screen-frame') return;
     let frame = event.data.frame as VideoFrame | undefined;
     if (!frame || typeof frame.close !== 'function') return;
+    const frameSessionId = event.data.sessionId;
+    if (typeof frameSessionId !== 'string' || !frameSessionId || this.stopped
+        || (this.sessionId && frameSessionId !== this.sessionId)) {
+      frame.close();
+      return;
+    }
+    if (!this.sessionId) {
+      this.pendingFrame?.close();
+      this.pendingFrame = frame;
+      this.pendingFrameSessionId = frameSessionId;
+      return;
+    }
+    this.acceptFrame(frame);
+  };
+
+  private acceptFrame(frame: VideoFrame): void {
     if (this.stopped || this.suspended || this.writing || this.now() - this.lastAcceptedAt < this.intervalMs) {
       frame.close();
       return;
@@ -188,7 +239,7 @@ export class NativeScreenVideoSession {
     if (Number.isInteger(frame.displayHeight) && frame.displayHeight > 0) this.frameHeight = frame.displayHeight;
     this.lastAcceptedAt = this.now();
     this.writeFrame(frame);
-  };
+  }
 
   private setSuspended(suspended: boolean): void {
     if (this.stopped || this.suspended === suspended) return;
@@ -240,27 +291,17 @@ export class NativeScreenVideoSession {
     this.firstFrameReject?.(new Error(safeCode));
     this.firstFrameReject = undefined;
     this.onError?.(safeCode);
-    void this.stop();
+    void this.stop().catch((error) => {
+      console.error('原生屏幕共享停止未完成', error);
+    });
   }
 }
 
 function createSuspendedFrame(width: number, height: number, timestamp: number): VideoFrame {
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext('2d');
-  if (!context) throw new Error('nativeVideoPauseCanvasUnavailable');
-  context.fillStyle = '#111820';
-  context.fillRect(0, 0, width, height);
-  context.fillStyle = '#f0f3f8';
-  context.textAlign = 'center';
-  context.textBaseline = 'middle';
-  context.font = `600 ${Math.max(18, Math.round(width / 34))}px sans-serif`;
-  context.fillText('共享窗口已最小化', width / 2, height / 2 - 20);
-  context.fillStyle = '#a8b2c2';
-  context.font = `${Math.max(14, Math.round(width / 50))}px sans-serif`;
-  context.fillText('恢复窗口后继续共享', width / 2, height / 2 + 28);
-  return new VideoFrame(canvas, { timestamp });
+  return createScreenStatusFrame(width, height, timestamp, {
+    title: '共享窗口已最小化',
+    description: '恢复窗口后继续共享',
+  });
 }
 
 function createVideoGenerator(): GeneratedVideoTrack {

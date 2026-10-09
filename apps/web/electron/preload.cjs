@@ -1,11 +1,11 @@
 const { contextBridge, ipcRenderer, sharedTexture } = require('electron');
 
-sharedTexture?.setSharedTextureReceiver(async ({ importedSharedTexture }, token) => {
+sharedTexture?.setSharedTextureReceiver(async ({ importedSharedTexture }, token, sessionId) => {
   let frame;
   try {
-    if (token !== 'native-screen-frame') return;
+    if (token !== 'native-screen-frame' || typeof sessionId !== 'string' || !sessionId) return;
     frame = importedSharedTexture.getVideoFrame();
-    window.postMessage({ type: 'lycan-native-screen-frame', frame }, '*', [frame]);
+    window.postMessage({ type: 'lycan-native-screen-frame', sessionId, frame }, '*', [frame]);
     frame = undefined;
   } catch {
     ipcRenderer.send('media:native-video:receiver-error');
@@ -32,6 +32,12 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   stopNativeCaptureProbe: (sessionId) => ipcRenderer.invoke('media:capture-probe:stop', sessionId),
   startNativeVideo: (sourceId, maxFps) => ipcRenderer.invoke('media:native-video:start', sourceId, maxFps),
   stopNativeVideo: (sessionId) => ipcRenderer.invoke('media:native-video:stop', sessionId),
+  authorizeNativeRemoteControl: (sessionId, controlSessionId, controllerIdentity) =>
+    ipcRenderer.invoke('media:remote-control:authorize', sessionId, controlSessionId, controllerIdentity),
+  sendNativeRemoteInput: (sessionId, controlSessionId, controllerIdentity, sequence, input) =>
+    ipcRenderer.invoke('media:remote-control:input', sessionId, controlSessionId, controllerIdentity, sequence, input),
+  revokeNativeRemoteControl: (sessionId, controlSessionId) =>
+    ipcRenderer.invoke('media:remote-control:revoke', sessionId, controlSessionId),
   onNativeVideoError: (callback) => {
     const listener = (_event, failure) => callback(failure);
     ipcRenderer.on('media:native-video-error', listener);

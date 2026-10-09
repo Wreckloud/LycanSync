@@ -142,7 +142,9 @@ function notifyNativeVideoError(video, code) {
     });
   }
   releaseNativeVideoImports(video);
-  void stopNativeVideo(video.sessionId).catch(() => {});
+  void stopNativeVideo(video.sessionId).catch((error) => {
+    console.error(`native video stop after capture failure failed: ${error.message}`);
+  });
 }
 
 function handleVideoCaptureEnded(state, event) {
@@ -550,7 +552,7 @@ function handleNativeSharedTextureFrame(state, frame) {
     void sharedTexture.sendSharedTexture({
       frame: mainWindow.webContents.mainFrame,
       importedSharedTexture: imported,
-    }, 'native-screen-frame').then(() => {
+    }, 'native-screen-frame', video.sessionId).then(() => {
       imported.release();
     }).catch(() => {
       imported.release();
@@ -607,23 +609,15 @@ async function stopNativeVideo(sessionId) {
     }
     if (video.imported.size || video.pendingSlotReleases.size) {
       releaseNativeVideoImports(video);
-      try {
-        await mediaHelper.abortVideo(sessionId);
-      } finally {
-        video.lastError ??= 'sharedTextureReleaseTimedOut';
-        if (nativeVideoSession === video) nativeVideoSession = undefined;
-        lastStoppedNativeVideoSession = sessionId;
-      }
+      await mediaHelper.abortVideo(sessionId);
+      video.lastError ??= 'sharedTextureReleaseTimedOut';
       throw new Error('sharedTextureReleaseTimedOut');
     }
-    try {
-      const result = await mediaHelper.stopVideo(sessionId);
-      return result;
-    } finally {
-      if (nativeVideoSession === video) nativeVideoSession = undefined;
-      lastStoppedNativeVideoSession = sessionId;
-      if (video.helperState?.closed) releaseHelperProcessBridge(video.helperState);
-    }
+    const result = await mediaHelper.stopVideo(sessionId);
+    if (nativeVideoSession === video) nativeVideoSession = undefined;
+    lastStoppedNativeVideoSession = sessionId;
+    if (video.helperState?.closed) releaseHelperProcessBridge(video.helperState);
+    return result;
   })();
   return video.stopPromise;
 }
@@ -1028,13 +1022,30 @@ ipcMain.handle('media:native-video:start', (event, sourceId, maxFps) => {
   return startNativeVideo(sourceId, maxFps);
 });
 ipcMain.handle('media:native-video:stop', (event, sessionId) => {
-  if (!trustedSender(event) || closing
-      || (sessionId !== undefined && (typeof sessionId !== 'string' || sessionId.length > 128))) {
+  if (!trustedSender(event) || closing || typeof sessionId !== 'string' || !sessionId || sessionId.length > 128) {
     throw new Error('请求参数无效');
   }
-  const targetSessionId = sessionId ?? nativeVideoSession?.sessionId;
-  if (!targetSessionId) return { changed: false };
-  return stopNativeVideo(targetSessionId);
+  return stopNativeVideo(sessionId);
+});
+ipcMain.handle('media:remote-control:authorize', (event, sessionId, controlSessionId, controllerIdentity) => {
+  if (!trustedSender(event) || closing || typeof sessionId !== 'string'
+      || typeof controlSessionId !== 'string' || typeof controllerIdentity !== 'string'
+      || nativeVideoSession?.sessionId !== sessionId || !nativeVideoSession.sourceId.startsWith('monitor:')) {
+    throw new Error('remoteControlInvalidSession');
+  }
+  return mediaHelper.setRemoteControl(sessionId, controlSessionId, controllerIdentity);
+});
+ipcMain.handle('media:remote-control:input', (event, sessionId, controlSessionId, controllerIdentity, sequence, input) => {
+  if (!trustedSender(event) || closing || nativeVideoSession?.sessionId !== sessionId) {
+    throw new Error('remoteControlInvalidSession');
+  }
+  return mediaHelper.sendRemoteInput(sessionId, controlSessionId, controllerIdentity, sequence, input);
+});
+ipcMain.handle('media:remote-control:revoke', (event, sessionId, controlSessionId) => {
+  if (!trustedSender(event) || typeof sessionId !== 'string' || typeof controlSessionId !== 'string') {
+    throw new Error('remoteControlInvalidSession');
+  }
+  return mediaHelper.clearRemoteControl(sessionId, controlSessionId);
 });
 ipcMain.handle('media:native-screen-audio:start', (event, sourceId, sessionId) => {
   if (!trustedSender(event) || closing || typeof sourceId !== 'string' || sourceId.length > 128

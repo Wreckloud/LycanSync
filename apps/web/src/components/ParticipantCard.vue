@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Focus, Fullscreen, HeadphoneOff, Headphones, MicOff, Minimize2, Monitor, PictureInPicture2 } from '@lucide/vue';
 import { Track, type Participant } from 'livekit-client';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, normalizeAudioVolume } from '../rtc/audioPreferences';
 import VoiceLevelMic from './VoiceLevelMic.vue';
+import { mapRemotePointerToScreen, RemoteInputPresses, remoteKeyFromCode, type RemoteControlInput } from '../rtc/remoteControl';
 
 const props = withDefaults(defineProps<{
   participant: Participant;
@@ -17,6 +18,11 @@ const props = withDefaults(defineProps<{
   playbackVolume?: number;
   inputGain?: number;
   outputVolume?: number;
+  remoteControlAvailable?: boolean;
+  remoteControlPending?: boolean;
+  remoteControlActive?: boolean;
+  remoteControlName?: string;
+  remoteControlUnavailable?: boolean;
 }>(), { variant: 'card', selected: false, focused: false, playbackVolume: 1, inputGain: 1, outputVolume: 1 });
 const emit = defineEmits<{
   select: [];
@@ -28,6 +34,10 @@ const emit = defineEmits<{
   outputVolumeChange: [volume: number];
   toggleMicrophone: [];
   toggleListening: [];
+  requestControl: [];
+  cancelControl: [];
+  stopControl: [];
+  remoteInput: [input: RemoteControlInput];
 }>();
 const videoElement = ref<HTMLVideoElement | null>(null);
 const VOLUME_DRAGGER_WIDTH = 28;
@@ -46,6 +56,7 @@ type VolumeDragState = {
 };
 const volumeDrag = ref<VolumeDragState | null>(null);
 let suppressVolumeClick = false;
+const heldRemoteInputs = new RemoteInputPresses();
 
 // SDK 实例不作深层代理；事件版本变化时重新读取轨道和展示字段。
 const media = computed(() => {
@@ -196,16 +207,97 @@ function toggleRemoteAudioFromCard() {
   if (suppressVolumeClick) return;
   emit('toggleAudio');
 }
+
+function handleRemoteClick(event: MouseEvent) {
+  if (props.remoteControlActive) { event.preventDefault(); event.stopPropagation(); return; }
+  if (selectable.value) emit('select');
+}
+
+function sendRemotePointer(event: PointerEvent) {
+  if (!props.remoteControlActive || !videoElement.value) return null;
+  const bounds = videoElement.value.getBoundingClientRect();
+  const mapped = mapRemotePointerToScreen(event.clientX, event.clientY, bounds,
+    { width: videoElement.value.videoWidth, height: videoElement.value.videoHeight });
+  if (mapped) emit('remoteInput', { kind: 'move', ...mapped });
+  return mapped;
+}
+
+function remotePointerDown(event: PointerEvent) {
+  if (!props.remoteControlActive) return;
+  event.preventDefault();
+  event.stopPropagation();
+  (event.currentTarget as HTMLElement).focus();
+  const mapped = sendRemotePointer(event);
+  if (!mapped || (event.button !== 0 && event.button !== 2)) return;
+  const button: 'left' | 'right' = event.button === 0 ? 'left' : 'right';
+  heldRemoteInputs.pressButton(button, mapped.x, mapped.y).forEach((input) => emit('remoteInput', input));
+  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+}
+
+function remotePointerMove(event: PointerEvent) {
+  if (!props.remoteControlActive) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const mapped = sendRemotePointer(event);
+  if (mapped) heldRemoteInputs.moveButtons(mapped);
+}
+
+function remotePointerUp(event: PointerEvent) {
+  if (!props.remoteControlActive) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const button = event.button === 0 ? 'left' : event.button === 2 ? 'right' : null;
+  if (!button) return;
+  const mapped = sendRemotePointer(event) ?? undefined;
+  heldRemoteInputs.releaseButton(button, mapped).forEach((input) => emit('remoteInput', input));
+}
+
+function remoteWheel(event: WheelEvent) {
+  if (!props.remoteControlActive) return;
+  event.preventDefault();
+  event.stopPropagation();
+  emit('remoteInput', { kind: 'wheel', delta: Math.max(-1200, Math.min(1200, Math.round(-event.deltaY))) });
+}
+
+function remoteKey(event: KeyboardEvent, pressed: boolean) {
+  if (!props.remoteControlActive) {
+    if (pressed) selectFromKeyboard(event);
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.code === 'Escape' && pressed) { emit('stopControl'); return; }
+  const key = remoteKeyFromCode(event.code);
+  if (!key) return;
+  const inputs = pressed ? heldRemoteInputs.pressKey(event.code, key) : heldRemoteInputs.releaseKey(event.code);
+  inputs.forEach((input) => emit('remoteInput', input));
+}
+
+function releaseHeldRemoteInputs() {
+  heldRemoteInputs.releaseAll().forEach((input) => emit('remoteInput', input));
+}
+
+watch(() => props.remoteControlActive, (active) => { if (!active) releaseHeldRemoteInputs(); });
+onMounted(() => window.addEventListener('blur', releaseHeldRemoteInputs));
+onBeforeUnmount(() => {
+  window.removeEventListener('blur', releaseHeldRemoteInputs);
+  releaseHeldRemoteInputs();
+});
 </script>
 
 <template>
   <article class="participant-card" :class="[`is-${variant}`, { 'is-speaking': media.speaking, 'is-selected-viewer': selected }]"
     :data-testid="variant === 'viewer' && media.sharing ? 'viewer-screen' : variant === 'thumbnail' ? 'member-thumbnail' : 'participant-card'">
-    <div class="participant-media" :class="{ 'is-selectable': selectable }"
-      :role="selectable ? 'button' : undefined" :tabindex="selectable ? 0 : undefined"
+    <div class="participant-media" :class="{ 'is-selectable': selectable, 'is-remote-control': remoteControlActive }"
+      :role="selectable ? 'button' : undefined" :tabindex="remoteControlActive ? 0 : selectable ? 0 : undefined"
       :aria-label="selectable ? (selected ? '从主观看区移除' : '放大') + media.name + '的共享画面' : undefined"
       :data-select-hint="selectable ? selected ? '从主观看区移除' : '点击放大观看' : undefined"
-      @click="selectable && emit('select')" @dblclick="variant === 'viewer' && media.sharing && emit('focus')" @keydown="selectFromKeyboard">
+      @click="handleRemoteClick" @dblclick="variant === 'viewer' && media.sharing && !remoteControlActive && emit('focus')"
+      @keydown="remoteKey($event, true)" @keyup="remoteKey($event, false)"
+      @blur="releaseHeldRemoteInputs"
+      @pointerdown="remotePointerDown" @pointermove="remotePointerMove" @pointerup="remotePointerUp"
+      @pointercancel="releaseHeldRemoteInputs" @wheel="remoteWheel"
+      @contextmenu="remoteControlActive && $event.preventDefault()">
       <template v-if="media.sharing">
         <div v-if="variant === 'thumbnail' && selected" class="selected-screen-preview" aria-hidden="true">
           <img v-if="avatar" :src="avatar" alt="" /><Monitor v-else :size="20" />
@@ -233,6 +325,13 @@ function toggleRemoteAudioFromCard() {
         <button type="button" class="viewer-action" :aria-label="'画中画观看' + media.name + '的共享画面'"
           data-tooltip="画中画" :disabled="!media.track || media.muted || !pictureInPictureAvailable" @click="openPictureInPicture"><PictureInPicture2 :size="16" aria-hidden="true" /></button>
       </span>
+      <button v-if="media.sharing && !isLocal && remoteControlAvailable" type="button" class="viewer-action remote-control-action"
+        :aria-label="remoteControlActive ? '退出远程控制' : remoteControlPending ? '取消远程控制申请' : '申请远程控制'"
+        @click="remoteControlActive ? emit('stopControl') : remoteControlPending ? emit('cancelControl') : emit('requestControl')">
+        {{ remoteControlActive ? '退出控制' : remoteControlPending ? '取消申请' : '申请控制' }}
+      </button>
+      <small v-if="media.sharing && !isLocal && remoteControlUnavailable" class="remote-control-status">窗口共享暂不支持远程控制</small>
+      <small v-if="remoteControlActive" class="remote-control-status">正在控制 {{ remoteControlName || media.name }} · Esc 退出</small>
       <span v-if="isLocal" class="participant-volume-control" @wheel.stop.prevent="adjustInputGain">
         <button type="button" class="participant-state participant-state-button"
           :class="{ 'is-off': !media.microphone }"

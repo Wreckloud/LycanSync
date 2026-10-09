@@ -24,10 +24,42 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IsWindowVisible, MONITORINFOF_PRIMARY, RemovePropW, SetPropW, WNDENUMPROC, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_MAXIMIZE, WS_MINIMIZE,
 };
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+};
 use windows::core::{BOOL, PCWSTR};
 
 pub(super) use windows::Win32::Foundation::HWND as NativeHwnd;
 pub(super) use windows::Win32::Graphics::Gdi::HMONITOR as NativeHmonitor;
+
+pub(crate) fn monitor_and_virtual_bounds(handle: usize) -> Option<(RECT, RECT)> {
+    let _dpi_context = ThreadDpiAwarenessContext::per_monitor_v2().ok()?;
+    let monitor = HMONITOR(handle as *mut std::ffi::c_void);
+    if monitor.is_invalid() {
+        return None;
+    }
+    let mut info = MONITORINFOEXW::default();
+    info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    if !unsafe { GetMonitorInfoW(monitor, &mut info.monitorInfo) }.as_bool() {
+        return None;
+    }
+    let x = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
+    let y = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
+    let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
+    let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
+    if width <= 1 || height <= 1 {
+        return None;
+    }
+    Some((
+        info.monitorInfo.rcMonitor,
+        RECT {
+            left: x,
+            top: y,
+            right: x.saturating_add(width),
+            bottom: y.saturating_add(height),
+        },
+    ))
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct WindowIdentity {

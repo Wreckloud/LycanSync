@@ -14,13 +14,20 @@ function installWindowMessageTarget() {
   return target;
 }
 
-function dispatchFrame(target: EventTarget, frame: VideoFrame) {
+function dispatchFrame(target: EventTarget, frame: VideoFrame, sessionId?: string) {
   const event = new Event('message');
   Object.defineProperties(event, {
     source: { value: target },
-    data: { value: { type: 'lycan-native-screen-frame', frame } },
+    data: { value: { type: 'lycan-native-screen-frame', ...(sessionId === undefined ? {} : { sessionId }), frame } },
   });
   target.dispatchEvent(event);
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((complete, fail) => { resolve = complete; reject = fail; });
+  return { promise, resolve, reject };
 }
 
 afterEach(() => {
@@ -59,7 +66,7 @@ describe('NativeScreenVideoSession', () => {
     const ready = session.start('monitor:1:0');
     await Promise.resolve();
     const frame = createFrame();
-    dispatchFrame(target, frame);
+    dispatchFrame(target, frame, 'session-1');
     expect(await ready).toBe(track);
     expect(started).toHaveBeenCalledWith('monitor:1:0', 30);
     expect(frames).toEqual([frame]);
@@ -71,6 +78,93 @@ describe('NativeScreenVideoSession', () => {
     expect(track.stop).toHaveBeenCalledOnce();
     expect(stopped).toHaveBeenCalledWith('session-1');
     expect(helperError).toBeUndefined();
+  });
+
+  it('accepts only the matching session frame, including a frame received before start resolves', async () => {
+    const target = installWindowMessageTarget();
+    let finishStart!: (value: { sessionId: string; changed: boolean }) => void;
+    const frames: VideoFrame[] = [];
+    const generator = {
+      contentHint: '',
+      writable: new WritableStream<VideoFrame>({ write: (frame) => { frames.push(frame); } }),
+      stop: vi.fn(),
+    };
+    const desktop: NativeVideoDesktopBridge = {
+      startNativeVideo: () => new Promise((resolve) => { finishStart = resolve; }),
+      stopNativeVideo: vi.fn(async () => ({ changed: true })),
+      onNativeVideoError: () => () => {},
+      onNativeVideoSuspended: () => () => {},
+    };
+    const session = new NativeScreenVideoSession(desktop, {
+      maxFps: 60,
+      createGenerator: () => generator as never,
+      createLocalTrack: () => ({ stop: vi.fn() } as never),
+    });
+    const ready = session.start('monitor:1:0');
+    await Promise.resolve();
+
+    const oldFrame = createFrame();
+    const missingIdFrame = createFrame();
+    dispatchFrame(target, oldFrame, 'older-session');
+    dispatchFrame(target, missingIdFrame);
+    expect(missingIdFrame.close).toHaveBeenCalledOnce();
+
+    const firstFrame = createFrame();
+    dispatchFrame(target, firstFrame, 'new-session');
+    expect(oldFrame.close).toHaveBeenCalledOnce();
+    expect(firstFrame.close).not.toHaveBeenCalled();
+    finishStart({ sessionId: 'new-session', changed: true });
+    await vi.waitFor(() => expect(session.captureSessionId).toBe('new-session'));
+    const lateOldFrame = createFrame();
+    dispatchFrame(target, lateOldFrame, 'older-session');
+    expect(lateOldFrame.close).toHaveBeenCalledOnce();
+    await expect(ready).resolves.toBeTruthy();
+    await vi.waitFor(() => expect(frames).toEqual([firstFrame]));
+    await session.stop();
+  });
+
+  it('stops local resources immediately and keeps a rejected native stop visible on repeated calls', async () => {
+    const target = installWindowMessageTarget();
+    const nativeStop = deferred<{ changed: boolean }>();
+    const stopNativeVideo = vi.fn(() => nativeStop.promise);
+    const generator = {
+      contentHint: '',
+      writable: new WritableStream<VideoFrame>(),
+      stop: vi.fn(),
+    };
+    const track = { stop: vi.fn() };
+    const desktop: NativeVideoDesktopBridge = {
+      startNativeVideo: vi.fn(async () => ({ sessionId: 'stop-fails', changed: true })),
+      stopNativeVideo,
+      onNativeVideoError: () => () => {},
+      onNativeVideoSuspended: () => () => {},
+    };
+    const session = new NativeScreenVideoSession(desktop, {
+      maxFps: 60,
+      createGenerator: () => generator as never,
+      createLocalTrack: () => track as never,
+    });
+    const ready = session.start('monitor:1:0');
+    await Promise.resolve();
+    const first = createFrame();
+    dispatchFrame(target, first, 'stop-fails');
+    await ready;
+
+    const stopping = session.stop();
+    expect(generator.stop).toHaveBeenCalledOnce();
+    expect(track.stop).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(stopNativeVideo).toHaveBeenCalledWith('stop-fails'));
+    const lateFrame = createFrame();
+    dispatchFrame(target, lateFrame, 'stop-fails');
+    expect(lateFrame.close).toHaveBeenCalledOnce();
+
+    nativeStop.reject(new Error('videoStopFailed'));
+    await expect(stopping).rejects.toThrow('videoStopFailed');
+    await expect(session.stop()).rejects.toThrow('videoStopFailed');
+    expect(stopNativeVideo).toHaveBeenCalledOnce();
+    const laterFrame = createFrame();
+    dispatchFrame(target, laterFrame, 'stop-fails');
+    expect(laterFrame.close).toHaveBeenCalledOnce();
   });
 
   it('drops frames while a write is in flight and closes frames rejected by the FPS cap', async () => {
@@ -104,9 +198,9 @@ describe('NativeScreenVideoSession', () => {
     await Promise.resolve();
 
     const first = createFrame();
-    dispatchFrame(target, first);
+    dispatchFrame(target, first, 'session-2');
     const inFlight = createFrame();
-    dispatchFrame(target, inFlight);
+    dispatchFrame(target, inFlight, 'session-2');
     expect(inFlight.close).toHaveBeenCalledOnce();
     expect(writes).toEqual([first]);
 
@@ -116,7 +210,7 @@ describe('NativeScreenVideoSession', () => {
     await Promise.resolve();
     now = 5;
     const fpsDropped = createFrame();
-    dispatchFrame(target, fpsDropped);
+    dispatchFrame(target, fpsDropped, 'session-2');
     expect(fpsDropped.close).toHaveBeenCalledOnce();
     await session.stop();
   });
@@ -177,7 +271,7 @@ describe('NativeScreenVideoSession', () => {
     });
     const ready = session.start('window:1:0');
     await Promise.resolve();
-    dispatchFrame(target, createFrame());
+    dispatchFrame(target, createFrame(), 'current-session');
     await ready;
 
     reportError({ sessionId: 'old-session', code: 'captureTargetClosed' });
@@ -232,7 +326,7 @@ describe('NativeScreenVideoSession', () => {
     });
     const ready = session.start('window:1:0');
     await Promise.resolve();
-    dispatchFrame(target, Object.assign(createFrame(), { displayWidth: 800, displayHeight: 500, timestamp: 100_000 }));
+    dispatchFrame(target, Object.assign(createFrame(), { displayWidth: 800, displayHeight: 500, timestamp: 100_000 }), 'window-session');
     await ready;
 
     reportSuspension({ sessionId: 'old-session', suspended: true });
@@ -247,13 +341,13 @@ describe('NativeScreenVideoSession', () => {
     expect(pauseFrames[1].timestamp).toBeGreaterThan(pauseFrames[0].timestamp!);
     expect(pauseFrames[2].timestamp).toBeGreaterThan(pauseFrames[1].timestamp!);
     const staleFrame = createFrame();
-    dispatchFrame(target, staleFrame);
+    dispatchFrame(target, staleFrame, 'window-session');
     expect(staleFrame.close).toHaveBeenCalledOnce();
 
     reportSuspension({ sessionId: 'window-session', suspended: false });
     now = 100;
     const resumedFrame = Object.assign(createFrame(), { timestamp: 200_000 });
-    dispatchFrame(target, resumedFrame);
+    dispatchFrame(target, resumedFrame, 'window-session');
     await vi.waitFor(() => expect(frames).toHaveLength(5));
     expect(resumedFrame.close).toHaveBeenCalledOnce();
     expect(frames[4]).toBe(adjustedFrames[0]);
@@ -296,7 +390,7 @@ describe('NativeScreenVideoSession', () => {
     });
     const ready = session.start('window:1:0');
     await Promise.resolve();
-    dispatchFrame(target, Object.assign(createFrame(), { timestamp: 100_000 }));
+    dispatchFrame(target, Object.assign(createFrame(), { timestamp: 100_000 }), 'busy-session');
     await ready;
     reportSuspension({ sessionId: 'busy-session', suspended: true });
     await vi.waitFor(() => expect(writes).toHaveLength(2));
@@ -365,7 +459,7 @@ describe('NativeScreenVideoSession', () => {
     });
     const ready = session.start('monitor:1:0');
     await Promise.resolve();
-    dispatchFrame(target, createFrame());
+    dispatchFrame(target, createFrame(), 'session-stop');
     await ready;
 
     await session.stop();
@@ -395,7 +489,7 @@ describe('NativeScreenVideoSession', () => {
     });
     const ready = session.start('window:1:0');
     await Promise.resolve();
-    dispatchFrame(target, createFrame());
+    dispatchFrame(target, createFrame(), 'session-write-error');
     await ready;
     await Promise.resolve();
 

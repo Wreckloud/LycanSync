@@ -184,7 +184,7 @@ class MediaHelperManager {
       return Promise.reject(new Error('videoSourceExpired'));
     }
     this.clearIdleTimer();
-    const active = { state: snapshot.state, sessionId, sourceId, maxFps, starting: true };
+    const active = { state: snapshot.state, sessionId, sourceId, maxFps, starting: true, remoteControl: undefined };
     this.videoCapture = active;
     snapshot.state.videoSessionId = sessionId;
     const promise = this.runStartVideo(snapshot.state, sessionId, sourceId, maxFps)
@@ -194,6 +194,73 @@ class MediaHelperManager {
       });
     this.videoCaptureStart = { state: snapshot.state, sourceId, promise };
     return promise;
+  }
+
+  async setRemoteControl(sessionId, controlSessionId, controllerIdentity) {
+    const active = this.videoCapture;
+    if (!active || active.sessionId !== sessionId || active.starting || !active.sourceId.startsWith('monitor:')) {
+      throw new Error('remoteControlSourceUnavailable');
+    }
+    if (!validOpaqueId(controlSessionId) || !validOpaqueId(controllerIdentity) || active.remoteControl) {
+      throw new Error('remoteControlInvalidSession');
+    }
+    const response = await this.sendRequest(active.state, 'setRemoteControl', 'acknowledged', this.requestTimeoutMs,
+      { sessionId, sourceId: active.sourceId, controlSessionId, controllerIdentity });
+    if (response.command !== 'setRemoteControl' || response.changed !== true) {
+      throw new Error('mediaHelperInvalidRemoteControlStart');
+    }
+    active.remoteControl = { controlSessionId, controllerIdentity, lastMoveSequence: 0,
+      lastReliableSequence: 0, accepting: true, windowAt: Date.now(), rate: 0 };
+    return { changed: true };
+  }
+
+  async sendRemoteInput(sessionId, controlSessionId, controllerIdentity, sequence, input) {
+    const active = this.videoCapture;
+    const control = active?.remoteControl;
+    const safeInput = normalizeRemoteInput(input);
+    if (!active || active.sessionId !== sessionId || !control || !control.accepting
+        || control.controlSessionId !== controlSessionId || control.controllerIdentity !== controllerIdentity
+        || !Number.isSafeInteger(sequence) || sequence < 1 || !safeInput) {
+      throw new Error('remoteControlInvalidSession');
+    }
+    const isMove = safeInput.kind === 'move';
+    if (isMove) {
+      if (sequence <= control.lastMoveSequence || sequence <= control.lastReliableSequence) {
+        throw new Error('remoteControlInvalidSession');
+      }
+      control.lastMoveSequence = sequence;
+    } else {
+      if (sequence <= control.lastReliableSequence) throw new Error('remoteControlInvalidSession');
+      control.lastReliableSequence = sequence;
+    }
+    const now = Date.now();
+    if (now - control.windowAt >= 1000) { control.windowAt = now; control.rate = 0; }
+    if (control.rate >= 120) {
+      if (isMove) return { changed: false, dropped: true };
+      control.accepting = false;
+      await this.clearRemoteControl(sessionId, controlSessionId);
+      throw new Error('remoteControlInputRateExceeded');
+    }
+    control.rate += 1;
+    const response = await this.sendRequest(active.state, 'remoteInput', 'acknowledged', this.requestTimeoutMs,
+      { sessionId, controlSessionId, controllerIdentity, sequence, input: safeInput });
+    if (response.command !== 'remoteInput') throw new Error('mediaHelperInvalidRemoteInput');
+    return { changed: response.changed, dropped: isMove && response.changed !== true };
+  }
+
+  async clearRemoteControl(sessionId, controlSessionId) {
+    const active = this.videoCapture;
+    const control = active?.remoteControl;
+    if (!control) return { changed: false };
+    if (!active || active.sessionId !== sessionId || control.controlSessionId !== controlSessionId) {
+      throw new Error('remoteControlInvalidSession');
+    }
+    control.accepting = false;
+    const response = await this.sendRequest(active.state, 'clearRemoteControl', 'acknowledged', this.requestTimeoutMs,
+      { sessionId, controlSessionId });
+    if (response.command !== 'clearRemoteControl') throw new Error('mediaHelperInvalidRemoteControlStop');
+    active.remoteControl = undefined;
+    return { changed: response.changed };
   }
 
   async runStartVideo(state, sessionId, sourceId, maxFps) {
@@ -449,6 +516,7 @@ class MediaHelperManager {
       const response = await this.sendRequest(active.state, 'stopVideo', 'acknowledged', this.requestTimeoutMs,
         { sessionId: active.sessionId });
       if (response.command !== 'stopVideo') throw new Error('mediaHelperInvalidVideoStop');
+      active.remoteControl = undefined;
       this.videoCapture = undefined;
       this.lastStoppedVideoCapture = active.sessionId;
       delete active.state.videoSessionId;
@@ -1013,6 +1081,29 @@ function validMicrophoneSettings(value) {
     && typeof value.noiseSuppression === 'boolean'
     && typeof value.autoGainControl === 'boolean'
     && typeof value.voiceEnhancement === 'boolean';
+}
+
+function normalizeRemoteInput(input) {
+  if (!input || typeof input !== 'object') return false;
+  const keys = Object.keys(input);
+  const exactKeys = (...expected) => keys.length === expected.length && expected.every((key) => keys.includes(key));
+  if (input.kind === 'move' && exactKeys('kind', 'x', 'y')
+      && Number.isInteger(input.x) && input.x >= 0 && input.x <= 65535
+      && Number.isInteger(input.y) && input.y >= 0 && input.y <= 65535) return { kind: 'move', x: input.x, y: input.y };
+  if ((input.kind === 'buttonDown' || input.kind === 'buttonUp') && exactKeys('kind', 'button', 'x', 'y')
+      && (input.button === 'left' || input.button === 'right')
+      && Number.isInteger(input.x) && input.x >= 0 && input.x <= 65535
+      && Number.isInteger(input.y) && input.y >= 0 && input.y <= 65535) {
+    return { kind: input.kind, button: input.button, x: input.x, y: input.y };
+  }
+  if (input.kind === 'wheel' && exactKeys('kind', 'delta')
+      && Number.isInteger(input.delta) && Math.abs(input.delta) <= 1200) return { kind: 'wheel', delta: input.delta };
+  if ((input.kind === 'keyDown' || input.kind === 'keyUp') && exactKeys('kind', 'key')
+      && typeof input.key === 'string'
+      && /^(enter|escape|space|tab|backspace|delete|home|end|pageUp|pageDown|left|right|up|down|shift|control|alt|digit[0-9]|letter[A-Z])$/.test(input.key)) {
+    return { kind: input.kind, key: input.key };
+  }
+  return null;
 }
 
 function waitForClose(closedPromise, timeoutMs) {

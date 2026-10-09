@@ -90,7 +90,11 @@ interface Window {
     startNativeCaptureProbe(sourceId: string): Promise<{ sessionId: string; changed: boolean }>;
     stopNativeCaptureProbe(sessionId: string): Promise<{ changed: boolean }>;
     startNativeVideo(sourceId: string, maxFps: number): Promise<{ sessionId: string; changed: boolean }>;
-    stopNativeVideo(sessionId?: string): Promise<{ changed: boolean }>;
+    stopNativeVideo(sessionId: string): Promise<{ changed: boolean }>;
+    authorizeNativeRemoteControl(sessionId: string, controlSessionId: string, controllerIdentity: string): Promise<{ changed: boolean }>;
+    sendNativeRemoteInput(sessionId: string, controlSessionId: string, controllerIdentity: string, sequence: number,
+      input: import('./rtc/remoteControl').RemoteControlInput): Promise<{ changed: boolean; dropped?: boolean }>;
+    revokeNativeRemoteControl(sessionId: string, controlSessionId: string): Promise<{ changed: boolean }>;
     onNativeVideoError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
     onNativeVideoSuspended(callback: (status: { sessionId: string; suspended: boolean }) => void): () => void;
     startNativeScreenAudio(sourceId: string, sessionId: string): Promise<{

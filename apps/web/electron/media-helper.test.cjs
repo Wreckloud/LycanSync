@@ -176,6 +176,11 @@ class FakeHelper extends EventEmitter {
         command: command.command, state: 'running', changed: true });
       return;
     }
+    if (['setRemoteControl', 'remoteInput', 'clearRemoteControl'].includes(command.command)) {
+      this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
+        command: command.command, state: 'running', changed: true });
+      return;
+    }
     if (command.command === 'stopVideo') {
       if (this.mode.videoStopTimeout) return;
       this.videoState = 'idle';
@@ -869,4 +874,49 @@ test('kill without close is reported, pending requests settle, and no second hel
   assert.equal([...manager.children][0].pending.size, 0);
   await assert.rejects(manager.getCapabilities(), /mediaHelperShuttingDown/);
   assert.equal(children.length, 1);
+});
+
+test('remote input is bound to one active monitor session and authenticated identity', async () => {
+  const { manager, children } = createManager();
+  const sources = await manager.listVideoSources();
+  await manager.startVideo(sources.sources[0].sourceId, 30, 'video-control');
+  await manager.setRemoteControl('video-control', 'control-session', 'member-a');
+  assert.deepEqual(await manager.sendRemoteInput('video-control', 'control-session', 'member-a', 1,
+    { kind: 'move', x: 0, y: 65535 }), { changed: true, dropped: false });
+  assert.deepEqual(await manager.sendRemoteInput('video-control', 'control-session', 'member-a', 3,
+    { kind: 'move', x: 3, y: 4 }), { changed: true, dropped: false });
+  assert.deepEqual(await manager.sendRemoteInput('video-control', 'control-session', 'member-a', 2,
+    { kind: 'buttonUp', button: 'left', x: 333, y: 444 }), { changed: true, dropped: false });
+  const buttonRelease = children[0].requests.find((request) => request.command === 'remoteInput' && request.sequence === 2);
+  assert.deepEqual(buttonRelease.input, { kind: 'buttonUp', button: 'left', x: 333, y: 444 });
+  await assert.rejects(manager.sendRemoteInput('video-control', 'control-session', 'member-b', 2,
+    { kind: 'move', x: 1, y: 2 }), /remoteControlInvalidSession/);
+  await assert.rejects(manager.sendRemoteInput('video-control', 'control-session', 'member-a', 1,
+    { kind: 'move', x: 1, y: 2 }), /remoteControlInvalidSession/);
+  await assert.rejects(manager.sendRemoteInput('video-control', 'control-session', 'member-a', 4,
+    { kind: 'execute', command: 'bad' }), /remoteControlInvalidSession/);
+  await assert.rejects(manager.sendRemoteInput('video-control', 'control-session', 'member-a', 4,
+    { kind: 'move', x: 1, y: 2, hwnd: 1234 }), /remoteControlInvalidSession/);
+  assert.deepEqual(await manager.clearRemoteControl('video-control', 'control-session'), { changed: true });
+  await assert.rejects(manager.sendRemoteInput('video-control', 'control-session', 'member-a', 5,
+    { kind: 'move', x: 1, y: 2 }), /remoteControlInvalidSession/);
+  await manager.stopVideo('video-control');
+  await manager.shutdown();
+});
+
+test('mouse movement may be dropped under load, but discrete overload clears the helper grant', async () => {
+  const { manager } = createManager();
+  const sources = await manager.listVideoSources();
+  await manager.startVideo(sources.sources[0].sourceId, 30, 'video-overload');
+  await manager.setRemoteControl('video-overload', 'control-overload', 'member-a');
+  for (let sequence = 1; sequence <= 120; sequence += 1) {
+    await manager.sendRemoteInput('video-overload', 'control-overload', 'member-a', sequence,
+      { kind: 'move', x: sequence, y: 2 });
+  }
+  await assert.rejects(manager.sendRemoteInput('video-overload', 'control-overload', 'member-a', 121,
+    { kind: 'keyUp', key: 'letterA' }), /remoteControlInputRateExceeded/);
+  await assert.rejects(manager.sendRemoteInput('video-overload', 'control-overload', 'member-a', 122,
+    { kind: 'move', x: 1, y: 2 }), /remoteControlInvalidSession/);
+  await manager.stopVideo('video-overload');
+  await manager.shutdown();
 });

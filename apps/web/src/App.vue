@@ -685,6 +685,10 @@ const sharingParticipants = computed(() => groupParticipants.value.filter((parti
 const filmstripPageCount = computed(() => Math.ceil(groupParticipants.value.length / 5));
 const filmstripParticipants = computed(() => groupParticipants.value.slice(filmstripPage.value * 5, (filmstripPage.value + 1) * 5));
 const activeScreenShareCount = computed(() => rtc.participants.filter((participant) => participant.isScreenShareEnabled).length);
+const remoteControlShare = (identity: string) => rtc.remoteControlShares[identity];
+const remoteControlCanRequest = (identity: string) => remoteControlShare(identity)?.kind === 'monitor';
+const remoteControlIsPending = (identity: string) => rtc.remoteControlPending?.identity === identity;
+const remoteControlIsActive = (identity: string) => rtc.remoteControlActive?.identity === identity;
 // TODO: 服务端按群组原子分配并回收共享名额，处理并发开启、断线及失败；前端限制仅作提示。
 const screenShareLimitReached = computed(() => activeScreenShareCount.value >= 8 && !localParticipant.value?.isScreenShareEnabled);
 const sharingIdentityKey = computed(() => sharingParticipants.value.map((participant) => participant.identity).join('|'));
@@ -985,6 +989,22 @@ function participantListening(participant: Participant) {
       <div v-else class="window-actions" aria-hidden="true"><span><Minus :size="14" /></span><span><Square :size="11" /></span><span><X :size="14" /></span></div>
     </header>
     <div v-if="rtc.notice || viewerNotice" class="notice" role="alert">{{ rtc.notice || viewerNotice }}</div>
+    <section v-if="rtc.remoteControlRequest" class="remote-control-prompt" role="dialog" aria-modal="true" aria-label="远程控制申请">
+      <strong>{{ previewParticipantName(rtc.remoteControlRequest.identity,
+        rtc.participants.find((participant) => participant.identity === rtc.remoteControlRequest?.identity)?.name || rtc.remoteControlRequest.identity) }}申请控制你的显示器</strong>
+      <span>允许后，对方可以使用鼠标和常用键盘按键。你仍可随时停止控制。</span>
+      <div><button type="button" :disabled="rtc.remoteControlGranting" @click="rtc.rejectRemoteControl">拒绝</button>
+        <button type="button" class="confirm-button" :disabled="rtc.remoteControlGranting" @click="rtc.allowRemoteControl">允许</button></div>
+    </section>
+    <div v-if="rtc.remoteControlOwner" class="remote-control-owner-status" role="status">
+      正在由 {{ previewParticipantName(rtc.remoteControlOwner.identity,
+        rtc.participants.find((participant) => participant.identity === rtc.remoteControlOwner?.identity)?.name || rtc.remoteControlOwner.identity) }} 控制
+      <button type="button" @click="rtc.revokeRemoteControl">停止控制</button>
+    </div>
+    <div v-else-if="rtc.remoteControlCleanupPending" class="remote-control-owner-status" role="alert">
+      远程输入尚未释放
+      <button type="button" @click="rtc.retryRemoteControlCleanup">重试撤销</button>
+    </div>
     <div class="workspace">
       <nav class="group-rail" aria-label="群组">
         <button v-for="group in groups" :key="group.id" type="button" class="group-button"
@@ -1051,7 +1071,14 @@ function participantListening(participant: Participant) {
               :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)"
               :playback-volume="participantVolume(participant.identity)" :input-gain="inputGain" :output-volume="outputVolume"
               variant="viewer" :focused="focusedOnSelectedGroup"
+              :remote-control-available="remoteControlCanRequest(participant.identity)"
+              :remote-control-unavailable="remoteControlShare(participant.identity)?.kind === 'window'"
+              :remote-control-pending="remoteControlIsPending(participant.identity)"
+              :remote-control-active="remoteControlIsActive(participant.identity)"
+              :remote-control-name="previewParticipantName(participant.identity, participant.name || participant.identity)"
               @focus="toggleFocusedParticipant(participant.identity)" @notice="viewerNotice = $event"
+              @request-control="rtc.requestRemoteControl(participant.identity)" @cancel-control="rtc.cancelPendingRemoteControl(participant.identity)" @stop-control="rtc.exitRemoteControl"
+              @remote-input="rtc.sendRemoteControlInput"
               @toggle-audio="toggleParticipantAudio(participant.identity)" @volume-change="updateParticipantVolume(participant.identity, $event)"
               @input-gain-change="updateInputGain" @output-volume-change="updateOutputVolume"
               @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />
@@ -1059,8 +1086,15 @@ function participantListening(participant: Participant) {
           <div v-else class="participant-grid">
             <ParticipantCard v-for="participant in groupParticipants" :key="participant.identity" :participant="participant"
               :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)"
+              :remote-control-available="remoteControlCanRequest(participant.identity)"
+              :remote-control-unavailable="remoteControlShare(participant.identity)?.kind === 'window'"
+              :remote-control-pending="remoteControlIsPending(participant.identity)"
+              :remote-control-active="remoteControlIsActive(participant.identity)"
+              :remote-control-name="previewParticipantName(participant.identity, participant.name || participant.identity)"
               :playback-volume="participantVolume(participant.identity)" :input-gain="inputGain" :output-volume="outputVolume"
               @select="toggleEnlargedParticipant(participant.identity)"
+              @request-control="rtc.requestRemoteControl(participant.identity)" @cancel-control="rtc.cancelPendingRemoteControl(participant.identity)" @stop-control="rtc.exitRemoteControl"
+              @remote-input="rtc.sendRemoteControlInput"
               @toggle-audio="toggleParticipantAudio(participant.identity)" @volume-change="updateParticipantVolume(participant.identity, $event)"
               @input-gain-change="updateInputGain" @output-volume-change="updateOutputVolume"
               @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />

@@ -93,6 +93,29 @@ pub enum CommandEnvelope {
         request_id: String,
         session_id: String,
     },
+    SetRemoteControl {
+        protocol_version: u16,
+        request_id: String,
+        session_id: String,
+        source_id: String,
+        control_session_id: String,
+        controller_identity: String,
+    },
+    RemoteInput {
+        protocol_version: u16,
+        request_id: String,
+        session_id: String,
+        control_session_id: String,
+        controller_identity: String,
+        sequence: u64,
+        input: RemoteInputEvent,
+    },
+    ClearRemoteControl {
+        protocol_version: u16,
+        request_id: String,
+        session_id: String,
+        control_session_id: String,
+    },
     #[cfg(feature = "shared-texture-output")]
     ReleaseSharedTextureSlot {
         protocol_version: u16,
@@ -144,6 +167,15 @@ impl CommandEnvelope {
             | Self::StopScreenShareAudio {
                 protocol_version, ..
             }
+            | Self::SetRemoteControl {
+                protocol_version, ..
+            }
+            | Self::RemoteInput {
+                protocol_version, ..
+            }
+            | Self::ClearRemoteControl {
+                protocol_version, ..
+            }
             | Self::Shutdown {
                 protocol_version, ..
             } => *protocol_version,
@@ -169,11 +201,107 @@ impl CommandEnvelope {
             | Self::StopMicrophoneCapture { request_id, .. }
             | Self::StartScreenShareAudio { request_id, .. }
             | Self::StopScreenShareAudio { request_id, .. }
+            | Self::SetRemoteControl { request_id, .. }
+            | Self::RemoteInput { request_id, .. }
+            | Self::ClearRemoteControl { request_id, .. }
             | Self::Shutdown { request_id, .. } => request_id,
             #[cfg(feature = "shared-texture-output")]
             Self::ReleaseSharedTextureSlot { request_id, .. } => request_id,
         }
     }
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, Eq, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RemoteInputEvent {
+    Move {
+        x: u16,
+        y: u16,
+    },
+    ButtonDown {
+        button: RemoteMouseButton,
+        x: u16,
+        y: u16,
+    },
+    ButtonUp {
+        button: RemoteMouseButton,
+        x: u16,
+        y: u16,
+    },
+    Wheel {
+        delta: i32,
+    },
+    KeyDown {
+        key: RemoteKey,
+    },
+    KeyUp {
+        key: RemoteKey,
+    },
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, Eq, PartialEq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteMouseButton {
+    Left,
+    Right,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, Eq, PartialEq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteKey {
+    Enter,
+    Escape,
+    Space,
+    Tab,
+    Backspace,
+    Delete,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Left,
+    Right,
+    Up,
+    Down,
+    Shift,
+    Control,
+    Alt,
+    Digit0,
+    Digit1,
+    Digit2,
+    Digit3,
+    Digit4,
+    Digit5,
+    Digit6,
+    Digit7,
+    Digit8,
+    Digit9,
+    LetterA,
+    LetterB,
+    LetterC,
+    LetterD,
+    LetterE,
+    LetterF,
+    LetterG,
+    LetterH,
+    LetterI,
+    LetterJ,
+    LetterK,
+    LetterL,
+    LetterM,
+    LetterN,
+    LetterO,
+    LetterP,
+    LetterQ,
+    LetterR,
+    LetterS,
+    LetterT,
+    LetterU,
+    LetterV,
+    LetterW,
+    LetterX,
+    LetterY,
+    LetterZ,
 }
 
 #[derive(Serialize)]
@@ -360,6 +488,9 @@ pub enum ErrorCode {
     CaptureFramePoolRecreateFailed,
     CaptureFrameProcessingFailed,
     CaptureCleanupFailed,
+    RemoteControlInvalidSession,
+    RemoteControlInputFailed,
+    RemoteControlTargetUnavailable,
     #[cfg_attr(feature = "shared-texture-output", allow(dead_code))]
     VideoOutputUnavailable,
     #[cfg_attr(target_os = "windows", allow(dead_code))]
@@ -400,6 +531,9 @@ impl ErrorCode {
             Self::CaptureFramePoolRecreateFailed => "视频帧池重建失败",
             Self::CaptureFrameProcessingFailed => "视频帧元数据读取失败",
             Self::CaptureCleanupFailed => "视频捕获资源释放失败",
+            Self::RemoteControlInvalidSession => "远程控制会话无效或已过期",
+            Self::RemoteControlInputFailed => "远程输入无法应用",
+            Self::RemoteControlTargetUnavailable => "共享显示器已不可用",
             Self::VideoOutputUnavailable => {
                 "视频输出尚未实现；可使用 startCaptureProbe 查询原始捕获帧"
             }
@@ -446,6 +580,9 @@ impl ErrorCode {
             Self::CaptureFramePoolRecreateFailed => "captureFramePoolRecreateFailed",
             Self::CaptureFrameProcessingFailed => "captureFrameProcessingFailed",
             Self::CaptureCleanupFailed => "captureCleanupFailed",
+            Self::RemoteControlInvalidSession => "remoteControlInvalidSession",
+            Self::RemoteControlInputFailed => "remoteControlInputFailed",
+            Self::RemoteControlTargetUnavailable => "remoteControlTargetUnavailable",
             Self::VideoOutputUnavailable => "videoOutputUnavailable",
             Self::AudioDeviceUnavailable => "audioDeviceUnavailable",
             Self::ScreenShareAudioAlreadyRunning => "screenShareAudioAlreadyRunning",
@@ -519,6 +656,25 @@ mod tests {
             r#"{"protocolVersion":1,"requestId":"share-audio-stop-1","command":"stopScreenShareAudio","sessionId":"video-1"}"#,
         ).unwrap();
         assert!(matches!(stop, CommandEnvelope::StopScreenShareAudio { .. }));
+    }
+
+    #[test]
+    fn deserializes_fixed_remote_input_commands_without_handle_fields() {
+        let command: CommandEnvelope = serde_json::from_str(
+            r#"{"protocolVersion":1,"requestId":"input-1","command":"remoteInput","sessionId":"share-1","controlSessionId":"control-1","controllerIdentity":"member-1","sequence":7,"input":{"kind":"keyDown","key":"letterA"}}"#,
+        ).unwrap();
+        assert!(matches!(command, CommandEnvelope::RemoteInput { .. }));
+        let serialized = serde_json::to_value(OutboundEvent::Acknowledged {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "input-1".to_owned(),
+            command: "remoteInput",
+            state: crate::state::SessionState::Running,
+            changed: true,
+        })
+        .unwrap();
+        let output = serialized.to_string();
+        assert!(!output.contains("HWND"));
+        assert!(!output.contains("processId"));
     }
 
     #[test]

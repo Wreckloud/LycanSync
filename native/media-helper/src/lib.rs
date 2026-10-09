@@ -4,6 +4,7 @@ mod capture;
 #[cfg(target_os = "windows")]
 mod d3d;
 mod protocol;
+mod remote_input;
 mod screen_audio;
 mod sources;
 pub mod state;
@@ -399,6 +400,82 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                 ),
             }
         }
+        CommandEnvelope::SetRemoteControl {
+            request_id,
+            session_id,
+            source_id,
+            control_session_id,
+            controller_identity,
+            ..
+        } => match runtime.set_remote_control(
+            session_id,
+            source_id,
+            control_session_id,
+            controller_identity,
+        ) {
+            Ok(()) => OutboundEvent::Acknowledged {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: request_id.clone(),
+                command: "setRemoteControl",
+                state: runtime.state(),
+                changed: true,
+            },
+            Err(code) => error(
+                runtime,
+                Some(request_id.clone()),
+                code,
+                code.public_message(),
+            ),
+        },
+        CommandEnvelope::RemoteInput {
+            request_id,
+            session_id,
+            control_session_id,
+            controller_identity,
+            sequence,
+            input,
+            ..
+        } => match runtime.apply_remote_input(
+            session_id,
+            control_session_id,
+            controller_identity,
+            *sequence,
+            *input,
+        ) {
+            Ok(changed) => OutboundEvent::Acknowledged {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: request_id.clone(),
+                command: "remoteInput",
+                state: runtime.state(),
+                changed,
+            },
+            Err(code) => error(
+                runtime,
+                Some(request_id.clone()),
+                code,
+                code.public_message(),
+            ),
+        },
+        CommandEnvelope::ClearRemoteControl {
+            request_id,
+            session_id,
+            control_session_id,
+            ..
+        } => match runtime.clear_remote_control(session_id, Some(control_session_id)) {
+            Ok(changed) => OutboundEvent::Acknowledged {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: request_id.clone(),
+                command: "clearRemoteControl",
+                state: runtime.state(),
+                changed,
+            },
+            Err(code) => error(
+                runtime,
+                Some(request_id.clone()),
+                code,
+                code.public_message(),
+            ),
+        },
         #[cfg(feature = "shared-texture-output")]
         CommandEnvelope::ReleaseSharedTextureSlot {
             request_id,
@@ -579,6 +656,9 @@ struct Runtime {
     last_completed_session_id: Option<String>,
     microphone_capture: audio_capture::MicrophoneCaptureManager,
     screen_audio: screen_audio::ScreenShareAudioManager,
+    remote_input: remote_input::RemoteInputManager,
+    active_source_id: Option<String>,
+    video_output_session: bool,
 }
 
 impl Runtime {
@@ -603,9 +683,17 @@ impl Runtime {
     }
 
     fn shutdown_all_audio(&mut self) -> Result<(), ErrorCode> {
+        let remote_control_result = self
+            .session_id()
+            .map(str::to_owned)
+            .map_or(Ok(()), |session_id| {
+                self.clear_remote_control(&session_id, None).map(|_| ())
+            });
         let screen_result = self.screen_audio.shutdown();
         let microphone_result = self.microphone_capture.shutdown();
-        screen_result.and(microphone_result)
+        remote_control_result
+            .and(screen_result)
+            .and(microphone_result)
     }
 
     fn reap_finished_audio(&mut self) {
@@ -710,6 +798,8 @@ impl Runtime {
             return Err(ErrorCode::CaptureStartFailed);
         }
         self.last_completed_session_id = None;
+        self.active_source_id = Some(source_id.to_owned());
+        self.video_output_session = max_fps.is_some();
         Ok(())
     }
 
@@ -729,6 +819,7 @@ impl Runtime {
         self.reap_finished_capture();
         if self.state() == SessionState::Idle {
             return if self.last_completed_session_id.as_deref() == Some(session_id) {
+                self.clear_remote_control(session_id, None)?;
                 Ok(false)
             } else {
                 Err(ErrorCode::CaptureSessionMismatch)
@@ -737,6 +828,7 @@ impl Runtime {
         if self.session_id() != Some(session_id) {
             return Err(ErrorCode::CaptureSessionMismatch);
         }
+        let input_cleanup_error = self.clear_remote_control(session_id, None).err();
         if self.state() == SessionState::Running {
             self.session
                 .begin_stop(session_id)
@@ -747,7 +839,13 @@ impl Runtime {
             .finish_stop()
             .map_err(|_| ErrorCode::CaptureSessionMismatch)?;
         self.last_completed_session_id = Some(session_id.to_owned());
-        Ok(true)
+        self.active_source_id = None;
+        self.video_output_session = false;
+        if let Some(error) = input_cleanup_error {
+            Err(error)
+        } else {
+            Ok(true)
+        }
     }
 
     fn reap_finished_capture(&mut self) {
@@ -755,13 +853,115 @@ impl Runtime {
             return;
         }
         if let Some(session_id) = self.session_id().map(str::to_owned) {
+            if let Err(error) = self.clear_remote_control(&session_id, None) {
+                eprintln!("remote input cleanup after capture exit failed: {error:?}");
+            }
             if self.state() == SessionState::Running {
                 let _ = self.session.begin_stop(&session_id);
             }
             if self.state() == SessionState::Stopping && self.session.finish_stop().is_ok() {
                 self.last_completed_session_id = Some(session_id);
+                self.active_source_id = None;
+                self.video_output_session = false;
             }
         }
+    }
+
+    fn set_remote_control(
+        &mut self,
+        session_id: &str,
+        source_id: &str,
+        control_session_id: &str,
+        controller_identity: &str,
+    ) -> Result<(), ErrorCode> {
+        if self.session_id() != Some(session_id)
+            || self.state() != SessionState::Running
+            || !self.video_output_session
+            || self.active_source_id.as_deref() != Some(source_id)
+        {
+            return Err(ErrorCode::RemoteControlInvalidSession);
+        }
+        if !valid_identifier(source_id)
+            || !valid_identifier(control_session_id)
+            || !valid_identifier(controller_identity)
+        {
+            return Err(ErrorCode::InvalidRequest);
+        }
+        let target = self
+            .sources
+            .target(source_id)
+            .ok_or(ErrorCode::InvalidRequest)?;
+        if self.sources.kind(source_id) != Some(protocol::VideoSourceKind::Monitor)
+            || !self.discovery.target_is_valid(&target)
+        {
+            return Err(ErrorCode::RemoteControlTargetUnavailable);
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let monitor = target
+                .monitor_handle()
+                .ok_or(ErrorCode::RemoteControlTargetUnavailable)?;
+            self.remote_input.grant(
+                session_id,
+                source_id,
+                control_session_id,
+                controller_identity,
+                monitor,
+            )
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = target;
+            Err(ErrorCode::PlatformUnsupported)
+        }
+    }
+
+    fn clear_remote_control(
+        &mut self,
+        session_id: &str,
+        control_session_id: Option<&str>,
+    ) -> Result<bool, ErrorCode> {
+        self.remote_input
+            .revoke(session_id, control_session_id, remote_input::inject)
+    }
+
+    fn apply_remote_input(
+        &mut self,
+        session_id: &str,
+        control_session_id: &str,
+        controller_identity: &str,
+        sequence: u64,
+        input: protocol::RemoteInputEvent,
+    ) -> Result<bool, ErrorCode> {
+        if self.session_id() != Some(session_id)
+            || self.state() != SessionState::Running
+            || !self.video_output_session
+        {
+            return Err(ErrorCode::RemoteControlInvalidSession);
+        }
+        let source_id = self
+            .remote_input
+            .source_id()
+            .ok_or(ErrorCode::RemoteControlInvalidSession)?
+            .to_owned();
+        let target = self
+            .sources
+            .target(&source_id)
+            .ok_or(ErrorCode::RemoteControlTargetUnavailable)?;
+        if self.sources.kind(&source_id) != Some(protocol::VideoSourceKind::Monitor)
+            || !self.discovery.target_is_valid(&target)
+        {
+            self.clear_remote_control(session_id, None)?;
+            return Err(ErrorCode::RemoteControlTargetUnavailable);
+        }
+        self.remote_input.apply(
+            session_id,
+            control_session_id,
+            controller_identity,
+            sequence,
+            input,
+            remote_input::inject,
+        )
     }
 }
 

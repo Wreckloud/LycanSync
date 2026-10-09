@@ -139,6 +139,14 @@ impl SourceRegistry {
 }
 
 impl CaptureTarget {
+    #[cfg(target_os = "windows")]
+    pub(super) fn monitor_handle(&self) -> Option<usize> {
+        match self {
+            Self::Monitor(monitor) => Some(monitor.0 as usize),
+            _ => None,
+        }
+    }
+
     pub(super) fn thread_target(self) -> ThreadCaptureTarget {
         match self {
             #[cfg(target_os = "windows")]
