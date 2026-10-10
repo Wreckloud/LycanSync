@@ -31,6 +31,8 @@ interface NativeCaptureDiagnostics {
   droppedNotifications: number | null;
   rawCaptureFps: number | null;
   probeProcessedFps: number | null;
+  videoOutputFps: number | null;
+  videoOutputDroppedFrames: number | null;
   rawFrameIntervalP50Ms: number | null;
   rawFrameIntervalP95Ms: number | null;
   rawFrameIntervalP99Ms: number | null;
@@ -94,6 +96,7 @@ interface Window {
     getScreenShareSupport(): Promise<{ hideCursor: boolean; hideBorder: boolean }>;
     startNativeVideo(sourceId: string, maxFps: number, settings: { hideCursor: boolean; hideBorder: boolean }): Promise<{ sessionId: string; changed: boolean }>;
     stopNativeVideo(sessionId: string): Promise<{ changed: boolean }>;
+    configureNativeVideo(sessionId: string, maxFps: number): Promise<{ changed: boolean }>;
     authorizeNativeRemoteControl(sessionId: string, controlSessionId: string, controllerIdentity: string): Promise<{ changed: boolean }>;
     sendNativeRemoteInput(sessionId: string, controlSessionId: string, controllerIdentity: string, sequence: number,
       input: import('./rtc/remoteControl').RemoteControlInput): Promise<{ changed: boolean; dropped?: boolean }>;

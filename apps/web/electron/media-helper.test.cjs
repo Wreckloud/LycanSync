@@ -2,8 +2,34 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
 const { test } = require('node:test');
+const { readFileSync } = require('node:fs');
+const { join } = require('node:path');
+const { runInNewContext } = require('node:vm');
 const { MediaHelperManager } = require('./media-helper.cjs');
 const { matchNativeVideoSourceThumbnails } = require('./native-video-thumbnails.cjs');
+
+test('main-process video entry accepts 120 fps before forwarding to the helper', async () => {
+  // 执行实际入口函数，隔离 Electron 和设备，避免只验证下游而漏掉主进程上限。
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const start = main.indexOf('async function startNativeVideo(');
+  const end = main.indexOf('async function stopNativeVideo(', start);
+  assert.ok(start >= 0 && end > start);
+  const requests = [];
+  const invoke = runInNewContext(`${main.slice(start, end)}; startNativeVideo`, {
+    closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
+    nativeMediaBridge: {}, randomUUID: () => 'main-quality-session',
+    mediaHelper: { startVideo: async (...args) => {
+      requests.push(args);
+      return { sessionId: args[2], changed: true };
+    } },
+    recordVideoFailure: () => assert.fail('valid start must not fail'),
+    releaseNativeVideoImports: () => assert.fail('valid start must not need cleanup'),
+  });
+  await invoke('window:1:0', 120, { hideCursor: false, hideBorder: false });
+  assert.equal(requests[0][1], 120);
+  await assert.rejects(invoke('window:1:0', 121, {}), /invalidVideoStart/);
+  assert.equal(requests.length, 1);
+});
 
 const capabilities = {
   videoCapture: { available: false, reason: 'videoOutputNotImplemented' },
@@ -124,6 +150,17 @@ class FakeHelper extends EventEmitter {
       this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
         command: command.command, state: 'running', changed: true });
       if (this.mode.exitAfterVideoStart) setImmediate(() => this.exit(19));
+      return;
+    }
+    if (command.command === 'configureVideo') {
+      if (this.mode.holdVideoConfiguration) return;
+      if (this.mode.videoConfigurationFailure) {
+        this.writeResponse({ event: 'error', protocolVersion: 1, requestId: command.requestId,
+          code: 'captureSessionMismatch', message: 'capture session mismatch', recoverable: true, state: 'running' });
+        return;
+      }
+      this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
+        command: 'configureVideo', state: 'running', changed: true });
       return;
     }
     if (command.command === 'startScreenShareAudio') {
@@ -762,6 +799,26 @@ test('video rejects expired ids, invalid fps, worker exit, and stop timeout with
   });
 });
 
+test('video configuration keeps the capture identity and rejects stale sessions or failed updates', async () => {
+  const { manager, children } = createManager();
+  try {
+    const sources = await manager.listVideoSources();
+    await manager.startVideo(sources.sources[0].sourceId, 30, 'quality-session');
+    const active = manager.videoCapture;
+    await assert.rejects(manager.configureVideo('other-session', 60), /invalidVideoConfiguration/);
+    await assert.rejects(manager.configureVideo('quality-session', 121), /invalidVideoConfiguration/);
+    await manager.configureVideo('quality-session', 120);
+    assert.equal(manager.videoCapture, active);
+    assert.equal(active.maxFps, 120);
+    assert.equal(children[0].requests.filter(({ command }) => command === 'startVideo').length, 1);
+    children[0].mode.videoConfigurationFailure = true;
+    await assert.rejects(manager.configureVideo('quality-session', 30), /captureSessionMismatch/);
+    assert.equal(active.maxFps, 120);
+    await manager.stopVideo('quality-session');
+    await assert.rejects(manager.configureVideo('quality-session', 30), /invalidVideoConfiguration/);
+  } finally { await manager.shutdown(); }
+});
+
 test('pending source refresh allows confirmation and replaces the snapshot only after completion', async () => {
   const { manager, children } = createManager({}, { requestTimeoutMs: 1000 });
   try {
@@ -781,6 +838,19 @@ test('pending source refresh allows confirmation and replaces the snapshot only 
     assert.deepEqual((await refresh).sources, []);
     await assert.rejects(manager.startVideo(sources.sources[0].sourceId, 30, 'late-session'), /videoSourceExpired/);
     assert.equal(child.requests.filter(({ command }) => command === 'startVideo').length, 1);
+  } finally {
+    await manager.shutdown();
+  }
+});
+
+test('video forwards the 120 fps preset and rejects values above the supported limit', async () => {
+  const { manager, children } = createManager();
+  try {
+    const sources = await manager.listVideoSources();
+    await assert.rejects(manager.startVideo(sources.sources[0].sourceId, 121, 'invalid-session'), /invalidVideoStart/);
+    await manager.startVideo(sources.sources[0].sourceId, 120, 'high-fps-session');
+    assert.equal(children[0].requests.find(({ command }) => command === 'startVideo').maxFps, 120);
+    await manager.stopVideo('high-fps-session');
   } finally {
     await manager.shutdown();
   }

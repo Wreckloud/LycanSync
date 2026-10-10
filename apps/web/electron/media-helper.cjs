@@ -177,7 +177,7 @@ class MediaHelperManager {
   startVideo(sourceId, maxFps, sessionId = this.createRequestId(), settings = { hideCursor: false, hideBorder: false }) {
     if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
     if (typeof sourceId !== 'string' || sourceId.length > 128
-        || !Number.isInteger(maxFps) || maxFps < 1 || maxFps > 60
+        || !Number.isInteger(maxFps) || maxFps < 1 || maxFps > 120
         || typeof sessionId !== 'string' || sessionId.length > 128
         || !settings || typeof settings !== 'object' || Array.isArray(settings)
         || Object.keys(settings).length !== 2
@@ -270,6 +270,18 @@ class MediaHelperManager {
     if (response.command !== 'clearRemoteControl') throw new Error('mediaHelperInvalidRemoteControlStop');
     active.remoteControl = undefined;
     return { changed: response.changed };
+  }
+
+  async configureVideo(sessionId, maxFps) {
+    const active = this.videoCapture;
+    if (!active || active.sessionId !== sessionId || active.starting || !active.state.alive
+        || !Number.isInteger(maxFps) || maxFps < 1 || maxFps > 120) throw new Error('invalidVideoConfiguration');
+    const response = await this.sendRequest(active.state, 'configureVideo', 'acknowledged', this.requestTimeoutMs,
+      { sessionId, maxFps });
+    if (response.command !== 'configureVideo' || response.changed !== true) throw new Error('mediaHelperInvalidVideoConfiguration');
+    if (this.videoCapture !== active) throw new Error('videoCaptureSessionMismatch');
+    active.maxFps = maxFps;
+    return { changed: true };
   }
 
   async runStartVideo(state, sessionId, sourceId, maxFps, settings) {
@@ -1021,10 +1033,11 @@ function validateDiagnostics(message) {
     'rawCaptureFps', 'probeProcessedFps', 'rawFrameIntervalP50Ms', 'rawFrameIntervalP95Ms',
     'rawFrameIntervalP99Ms', 'rawTimestampAnomalies', 'lastFrameAgeMs', 'sizeChanges',
     'framePoolRecreates', 'stopDurationMs',
+    'videoOutputFps', 'videoOutputDroppedFrames',
   ];
   for (const field of numericFields) {
     const value = message[field];
-    if (field === 'framePoolRecreates' && value === undefined) continue;
+    if (['framePoolRecreates', 'videoOutputFps', 'videoOutputDroppedFrames'].includes(field) && value === undefined) continue;
     if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) {
       throw new Error('mediaHelperInvalidDiagnostics');
     }
@@ -1047,6 +1060,8 @@ function validateDiagnostics(message) {
     'lastFrameAgeMs', 'sizeChanges', 'framePoolRecreates', 'lastCaptureError', 'stopDurationMs', 'captureSuspended']
     .map((field) => [field, message[field]]));
   diagnostics.framePoolRecreates ??= null;
+  diagnostics.videoOutputFps = message.videoOutputFps ?? null;
+  diagnostics.videoOutputDroppedFrames = message.videoOutputDroppedFrames ?? null;
   diagnostics.captureSuspended ??= null;
   diagnostics.microphoneCaptureDroppedChunks = message.microphoneCaptureDroppedChunks ?? 0;
   const audio = message.screenShareAudio;

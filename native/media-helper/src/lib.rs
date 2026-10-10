@@ -179,6 +179,10 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                 probe_processed_fps: snapshot
                     .as_ref()
                     .and_then(|value| value.probe_processed_fps),
+                video_output_fps: snapshot.as_ref().and_then(|value| value.video_output_fps),
+                video_output_dropped_frames: snapshot
+                    .as_ref()
+                    .and_then(|value| value.video_output_dropped_frames),
                 raw_frame_interval_p50_ms: snapshot
                     .as_ref()
                     .and_then(|value| value.raw_frame_interval_p50_ms),
@@ -515,7 +519,7 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                 || !valid_identifier(source_id)
                 || !(1..=8192).contains(target_width)
                 || !(1..=8192).contains(target_height)
-                || !(1..=60).contains(max_fps)
+                || !(1..=120).contains(max_fps)
             {
                 return error(
                     runtime,
@@ -537,6 +541,44 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                     protocol_version: PROTOCOL_VERSION,
                     request_id: request_id.clone(),
                     command: "startVideo",
+                    state: runtime.state(),
+                    changed: true,
+                },
+                Err(code) => error(
+                    runtime,
+                    Some(request_id.clone()),
+                    code,
+                    code.public_message(),
+                ),
+            }
+        }
+        CommandEnvelope::ConfigureVideo {
+            request_id,
+            session_id,
+            max_fps,
+            ..
+        } => {
+            if !valid_identifier(session_id) || !(1..=120).contains(max_fps) {
+                return error(
+                    runtime,
+                    Some(request_id.clone()),
+                    ErrorCode::InvalidRequest,
+                    "视频参数无效",
+                );
+            }
+            runtime.reap_finished_capture();
+            let result = if runtime.session_id() == Some(session_id.as_str())
+                && runtime.video_output_session
+            {
+                runtime.capture.configure_video(*max_fps)
+            } else {
+                Err(ErrorCode::CaptureSessionMismatch)
+            };
+            match result {
+                Ok(()) => OutboundEvent::Acknowledged {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: request_id.clone(),
+                    command: "configureVideo",
                     state: runtime.state(),
                     changed: true,
                 },
@@ -1059,6 +1101,18 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn video_configuration_rejects_invalid_rates_and_missing_sessions() {
+        let responses = execute(concat!(
+            "{\"command\":\"configureVideo\",\"protocolVersion\":1,\"requestId\":\"invalid-rate\",\"sessionId\":\"missing-session\",\"maxFps\":121}\n",
+            "{\"command\":\"configureVideo\",\"protocolVersion\":1,\"requestId\":\"missing-capture\",\"sessionId\":\"missing-session\",\"maxFps\":120}\n",
+            "{\"command\":\"hello\",\"protocolVersion\":1,\"requestId\":\"after-invalid-config\"}\n"
+        ));
+        assert_eq!(responses[0]["code"], "invalidRequest");
+        assert_eq!(responses[1]["code"], "captureSessionMismatch");
+        assert_eq!(responses[2]["event"], "hello");
     }
 
     #[test]

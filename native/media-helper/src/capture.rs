@@ -19,6 +19,8 @@ pub(super) struct CaptureSnapshot {
     pub(super) dropped_notifications: Option<u64>,
     pub(super) raw_capture_fps: Option<f64>,
     pub(super) probe_processed_fps: Option<f64>,
+    pub(super) video_output_fps: Option<f64>,
+    pub(super) video_output_dropped_frames: Option<u64>,
     pub(super) raw_frame_interval_p50_ms: Option<f64>,
     pub(super) raw_frame_interval_p95_ms: Option<f64>,
     pub(super) raw_frame_interval_p99_ms: Option<f64>,
@@ -68,6 +70,18 @@ impl CaptureManager {
         #[cfg(not(target_os = "windows"))]
         {
             let _ = slot_index;
+            Err(ErrorCode::PlatformUnsupported)
+        }
+    }
+
+    pub(super) fn configure_video(&mut self, max_fps: u16) -> Result<(), ErrorCode> {
+        #[cfg(target_os = "windows")]
+        {
+            self.windows.configure_video(max_fps)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = max_fps;
             Err(ErrorCode::PlatformUnsupported)
         }
     }

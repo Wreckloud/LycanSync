@@ -45,6 +45,12 @@ pub enum CommandEnvelope {
         session_id: String,
         source_id: String,
     },
+    ConfigureVideo {
+        protocol_version: u16,
+        request_id: String,
+        session_id: String,
+        max_fps: u16,
+    },
     StopVideo {
         protocol_version: u16,
         request_id: String,
@@ -146,6 +152,9 @@ impl CommandEnvelope {
             | Self::StartVideo {
                 protocol_version, ..
             }
+            | Self::ConfigureVideo {
+                protocol_version, ..
+            }
             | Self::StartCaptureProbe {
                 protocol_version, ..
             }
@@ -198,6 +207,7 @@ impl CommandEnvelope {
             | Self::Capabilities { request_id, .. }
             | Self::Diagnostics { request_id, .. }
             | Self::StartVideo { request_id, .. }
+            | Self::ConfigureVideo { request_id, .. }
             | Self::StartCaptureProbe { request_id, .. }
             | Self::StopVideo { request_id, .. }
             | Self::StopCaptureProbe { request_id, .. }
@@ -401,6 +411,8 @@ pub enum OutboundEvent {
         dropped_notifications: Option<u64>,
         raw_capture_fps: Option<f64>,
         probe_processed_fps: Option<f64>,
+        video_output_fps: Option<f64>,
+        video_output_dropped_frames: Option<u64>,
         raw_frame_interval_p50_ms: Option<f64>,
         raw_frame_interval_p95_ms: Option<f64>,
         raw_frame_interval_p99_ms: Option<f64>,

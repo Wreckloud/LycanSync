@@ -612,7 +612,7 @@ function handleNativeSharedTextureFrame(state, frame) {
 async function startNativeVideo(sourceId, maxFps, settings) {
   if (closing) throw new Error('mediaHelperShuttingDown');
   if (process.platform !== 'win32') throw new Error('platformUnsupported');
-  if (!Number.isInteger(maxFps) || maxFps < 1 || maxFps > 60
+  if (!Number.isInteger(maxFps) || maxFps < 1 || maxFps > 120
       || typeof sourceId !== 'string' || sourceId.length > 128) throw new Error('invalidVideoStart');
   if (nativeVideoSession) throw new Error('videoCaptureAlreadyRunning');
   if (!nativeMediaBridge) nativeMediaBridge = loadNativeMediaBridge();
@@ -1095,6 +1095,11 @@ ipcMain.handle('media:native-video:stop', (event, sessionId) => {
     throw new Error('请求参数无效');
   }
   return stopNativeVideo(sessionId);
+});
+ipcMain.handle('media:native-video:configure', (event, sessionId, maxFps) => {
+  if (!trustedSender(event) || closing || !nativeVideoSession || nativeVideoSession.stopping
+      || nativeVideoSession.sessionId !== sessionId) throw new Error('请求参数无效');
+  return mediaHelper.configureVideo(sessionId, maxFps);
 });
 ipcMain.handle('media:remote-control:authorize', (event, sessionId, controlSessionId, controllerIdentity) => {
   if (!trustedSender(event) || closing || typeof sessionId !== 'string'

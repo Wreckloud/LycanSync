@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   getScreenShareSupport: () => ipcRenderer.invoke('settings:screen-share:support'),
   startNativeVideo: (sourceId, maxFps, settings) => ipcRenderer.invoke('media:native-video:start', sourceId, maxFps, settings),
   stopNativeVideo: (sessionId) => ipcRenderer.invoke('media:native-video:stop', sessionId),
+  configureNativeVideo: (sessionId, maxFps) => ipcRenderer.invoke('media:native-video:configure', sessionId, maxFps),
   authorizeNativeRemoteControl: (sessionId, controlSessionId, controllerIdentity) =>
     ipcRenderer.invoke('media:remote-control:authorize', sessionId, controlSessionId, controllerIdentity),
   sendNativeRemoteInput: (sessionId, controlSessionId, controllerIdentity, sequence, input) =>

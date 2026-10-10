@@ -7,7 +7,7 @@ use crate::sources::ThreadCaptureTarget;
 use std::collections::VecDeque;
 #[cfg(feature = "shared-texture-output")]
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
@@ -71,6 +71,7 @@ pub(super) struct CaptureManager {
 
 struct ActiveCapture {
     stop_requested: Arc<AtomicBool>,
+    frame_rate: Arc<AtomicU16>,
     notifications: SyncSender<()>,
     done: Receiver<()>,
     worker: Option<JoinHandle<()>>,
@@ -93,6 +94,8 @@ struct CaptureMetrics {
     raw_frame_times: VecDeque<i64>,
     // 本地单调时钟在帧元数据处理后记录，用来统计 helper 的实际处理速率。
     processed_frame_times: VecDeque<Instant>,
+    output_frame_times: VecDeque<Instant>,
+    output_dropped_frames: Option<u64>,
     last_frame_at: Option<Instant>,
     last_source_time_at: Option<Instant>,
     last_source_time: Option<i64>,
@@ -216,6 +219,13 @@ impl CaptureMetrics {
             dropped_notifications: Some(dropped_notifications),
             raw_capture_fps,
             probe_processed_fps,
+            video_output_fps: self.output_dropped_frames.and_then(|_| {
+                self.output_frame_times
+                    .back()
+                    .filter(|last| now.saturating_duration_since(**last) <= Duration::from_secs(1))
+                    .and_then(|_| recent_processed_fps(&self.output_frame_times, now))
+            }),
+            video_output_dropped_frames: self.output_dropped_frames,
             raw_frame_interval_p50_ms,
             raw_frame_interval_p95_ms,
             raw_frame_interval_p99_ms,
@@ -327,6 +337,7 @@ impl CaptureManager {
         let metrics = Arc::new(Mutex::new(CaptureMetrics::new(source_kind)));
         let dropped_notifications = Arc::new(AtomicU64::new(0));
         let stop_requested = Arc::new(AtomicBool::new(false));
+        let frame_rate = Arc::new(AtomicU16::new(max_fps.unwrap_or(0)));
         let (notification_sender, notification_receiver) =
             mpsc::sync_channel(NOTIFICATION_CAPACITY);
         let (shared_slot_release_sender, shared_slot_release_receiver) =
@@ -338,6 +349,7 @@ impl CaptureManager {
         let worker_metrics = Arc::clone(&metrics);
         let worker_dropped = Arc::clone(&dropped_notifications);
         let worker_stop = Arc::clone(&stop_requested);
+        let worker_frame_rate = Arc::clone(&frame_rate);
         let worker_sender = notification_sender.clone();
 
         let worker = thread::Builder::new()
@@ -347,7 +359,7 @@ impl CaptureManager {
                     target,
                     CaptureWorkerContext {
                         session_id,
-                        max_fps,
+                        frame_rate: worker_frame_rate,
                         settings,
                         metrics: worker_metrics,
                         dropped_notifications: worker_dropped,
@@ -366,6 +378,7 @@ impl CaptureManager {
             Ok(Ok(())) => {
                 self.active = Some(ActiveCapture {
                     stop_requested,
+                    frame_rate,
                     notifications: notification_sender,
                     done: done_receiver,
                     worker: Some(worker),
@@ -385,6 +398,7 @@ impl CaptureManager {
                 Err(_) => {
                     self.active = Some(ActiveCapture {
                         stop_requested,
+                        frame_rate,
                         notifications: notification_sender,
                         done: done_receiver,
                         worker: Some(worker),
@@ -408,6 +422,7 @@ impl CaptureManager {
                     Err(_) => {
                         self.active = Some(ActiveCapture {
                             stop_requested,
+                            frame_rate,
                             notifications: notification_sender,
                             done: done_receiver,
                             worker: Some(worker),
@@ -421,6 +436,19 @@ impl CaptureManager {
                 }
             }
         }
+    }
+
+    pub(super) fn configure_video(&mut self, max_fps: u16) -> Result<(), ErrorCode> {
+        let active = self
+            .active
+            .as_ref()
+            .ok_or(ErrorCode::CaptureSessionMismatch)?;
+        if !(1..=120).contains(&max_fps) || active.stop_requested.load(Ordering::Acquire) {
+            return Err(ErrorCode::InvalidRequest);
+        }
+        // 只更新下一帧的限速目标，不重开 WGC、纹理池或输入授权。
+        active.frame_rate.store(max_fps, Ordering::Release);
+        Ok(())
     }
 
     pub(super) fn stop(&mut self) -> Result<CaptureSnapshot, ErrorCode> {
@@ -529,7 +557,7 @@ struct CaptureResources {
 
 struct CaptureWorkerContext {
     session_id: String,
-    max_fps: Option<u16>,
+    frame_rate: Arc<AtomicU16>,
     settings: super::CaptureSettings,
     metrics: Arc<Mutex<CaptureMetrics>>,
     dropped_notifications: Arc<AtomicU64>,
@@ -543,7 +571,7 @@ struct CaptureWorkerContext {
 fn capture_worker(target: ThreadCaptureTarget, context: CaptureWorkerContext) {
     let CaptureWorkerContext {
         session_id,
-        max_fps,
+        frame_rate,
         settings,
         metrics,
         dropped_notifications,
@@ -555,7 +583,7 @@ fn capture_worker(target: ThreadCaptureTarget, context: CaptureWorkerContext) {
     } = context;
     let resources = create_resources(
         target.clone(),
-        max_fps,
+        frame_rate,
         settings,
         &stop_requested,
         &metrics,
@@ -715,7 +743,7 @@ fn apply_capture_settings(
 
 fn create_resources(
     target: ThreadCaptureTarget,
-    _max_fps: Option<u16>,
+    _frame_rate: Arc<AtomicU16>,
     settings: super::CaptureSettings,
     stop_requested: &AtomicBool,
     metrics: &Mutex<CaptureMetrics>,
@@ -746,7 +774,8 @@ fn create_resources(
     lock_metrics(metrics).set_initial_size(item_size);
     let frame_pool_size = FramePoolSizing::new(item_size)?;
     #[cfg(feature = "shared-texture-output")]
-    let shared_textures = SharedTexturePool::new(&hardware, frame_pool_size.allocated, _max_fps)?;
+    let shared_textures =
+        SharedTexturePool::new(&hardware, frame_pool_size.allocated, _frame_rate)?;
     let frame_pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
         &hardware.winrt_device,
         DirectXPixelFormat::B8G8R8A8UIntNormalized,
@@ -1036,6 +1065,17 @@ fn run_capture_loop(
             lock_metrics(metrics).record_frame(frame_time, frame_size, Instant::now());
             #[cfg(feature = "shared-texture-output")]
             let frame_delivered = shared_frame.is_some();
+            #[cfg(feature = "shared-texture-output")]
+            {
+                let mut metrics = lock_metrics(metrics);
+                metrics.output_dropped_frames = Some(resources.shared_textures.dropped_frames);
+                if frame_delivered {
+                    metrics.output_frame_times.push_back(Instant::now());
+                    while metrics.output_frame_times.len() > MAX_FRAME_TIMESTAMPS {
+                        metrics.output_frame_times.pop_front();
+                    }
+                }
+            }
             #[cfg(not(feature = "shared-texture-output"))]
             let frame_delivered = true;
             if capture_suspended && frame_delivered {
@@ -1236,9 +1276,46 @@ struct SharedTexturePool {
     // frames 是成功输出数；dropped_frames 是限帧、槽位占用或容量调整导致未输出的帧数。
     frames: u64,
     dropped_frames: u64,
-    max_fps: Option<u16>,
-    last_output_at: Option<Instant>,
+    frame_rate: Arc<AtomicU16>,
+    limiter: VideoFrameLimiter,
     recent_output_times: VecDeque<Instant>,
+}
+
+#[cfg(any(feature = "shared-texture-output", test))]
+#[derive(Default)]
+struct VideoFrameLimiter {
+    max_fps: u16,
+    next_output_at: Option<Instant>,
+}
+
+#[cfg(any(feature = "shared-texture-output", test))]
+impl VideoFrameLimiter {
+    fn ready(&mut self, now: Instant, max_fps: u16) -> bool {
+        if self.max_fps != max_fps {
+            self.max_fps = max_fps;
+            self.next_output_at = None;
+        }
+        // 接纳半毫秒内的调度抖动，节拍仍由累计目标时间推进，不凭重复帧补足帧数。
+        max_fps == 0
+            || self
+                .next_output_at
+                .is_none_or(|deadline| now + Duration::from_micros(500) >= deadline)
+    }
+
+    fn record_output(&mut self, now: Instant, max_fps: u16) {
+        if max_fps == 0 {
+            self.next_output_at = None;
+            return;
+        }
+        let interval = Duration::from_secs_f64(1.0 / max_fps as f64);
+        // 沿用目标节拍，避免微小时间抖动反复把输出帧率折半；长时间背压后不追赶补帧。
+        self.next_output_at = Some(
+            self.next_output_at
+                .filter(|deadline| now.saturating_duration_since(*deadline) < interval)
+                .unwrap_or(now)
+                + interval,
+        );
+    }
 }
 
 #[cfg(feature = "shared-texture-output")]
@@ -1259,7 +1336,7 @@ impl SharedTexturePool {
     fn new(
         hardware: &HardwareD3dDevice,
         allocated: SizeInt32,
-        max_fps: Option<u16>,
+        frame_rate: Arc<AtomicU16>,
     ) -> Result<Self, ErrorCode> {
         Ok(Self {
             allocated,
@@ -1267,8 +1344,8 @@ impl SharedTexturePool {
             next_slot: 0,
             frames: 0,
             dropped_frames: 0,
-            max_fps,
-            last_output_at: None,
+            frame_rate,
+            limiter: VideoFrameLimiter::default(),
             recent_output_times: VecDeque::with_capacity(64),
         })
     }
@@ -1325,11 +1402,8 @@ impl SharedTexturePool {
             return Ok(None);
         }
         let now = Instant::now();
-        if self.max_fps.is_some_and(|max_fps| {
-            self.last_output_at.is_some_and(|last| {
-                now.saturating_duration_since(last) < Duration::from_secs_f64(1.0 / max_fps as f64)
-            })
-        }) {
+        let max_fps = self.frame_rate.load(Ordering::Acquire);
+        if !self.limiter.ready(now, max_fps) {
             self.dropped_frames = self.dropped_frames.saturating_add(1);
             return Ok(None);
         }
@@ -1394,7 +1468,7 @@ impl SharedTexturePool {
                 .then_some((self.recent_output_times.len() - 1) as f64 / elapsed)
         });
         let source_handle_hex = format!("{:016x}", self.slots[slot_index].handle.0.0 as usize);
-        self.last_output_at = Some(now);
+        self.limiter.record_output(now, max_fps);
         Ok(Some(SharedTextureFrame {
             slot_index,
             source_handle_hex,
@@ -1625,6 +1699,42 @@ mod tests {
 
     fn frame_time(ticks: i64) -> TimeSpan {
         TimeSpan { Duration: ticks }
+    }
+
+    #[test]
+    fn output_limiter_preserves_120_fps_cadence_with_small_clock_jitter() {
+        let mut limiter = super::VideoFrameLimiter::default();
+        let start = Instant::now();
+        let mut outputs = 0;
+        for frame in 0..120 {
+            let jitter = if frame % 2 == 0 { 0.0 } else { -0.0002 };
+            let now = start + Duration::from_secs_f64(frame as f64 / 120.0 + jitter);
+            if limiter.ready(now, 120) {
+                limiter.record_output(now, 120);
+                outputs += 1;
+            }
+        }
+        assert_eq!(outputs, 120);
+        assert!(!limiter.ready(
+            start + Duration::from_secs(1) - Duration::from_millis(2),
+            120
+        ));
+    }
+
+    #[test]
+    fn output_limiter_rebases_after_backpressure_and_applies_a_new_target() {
+        let mut limiter = super::VideoFrameLimiter::default();
+        let start = Instant::now();
+        assert!(limiter.ready(start, 30));
+        limiter.record_output(start, 30);
+        assert!(!limiter.ready(start + Duration::from_millis(5), 30));
+        let resumed = start + Duration::from_secs(2);
+        assert!(limiter.ready(resumed, 30));
+        limiter.record_output(resumed, 30);
+        assert!(!limiter.ready(resumed + Duration::from_millis(1), 30));
+        assert!(limiter.ready(resumed + Duration::from_millis(1), 120));
+        limiter.record_output(resumed + Duration::from_millis(1), 120);
+        assert!(!limiter.ready(resumed + Duration::from_millis(2), 120));
     }
 
     fn frame_size() -> SizeInt32 {

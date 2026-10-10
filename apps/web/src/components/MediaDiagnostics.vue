@@ -69,17 +69,21 @@ async function listVideoSources(sourceExpired = false) {
 }
 
 async function refreshCaptureProbeDiagnostics() {
-  if (!window.lycanDesktop || diagnosticsPolling || !captureProbeSessionId.value) return;
+  if (!window.lycanDesktop || diagnosticsPolling || (!captureProbeSessionId.value
+      && !props.room.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track)) return;
   diagnosticsPolling = true;
   try {
     const diagnostics = await window.lycanDesktop.getNativeMediaDiagnostics();
+    if (componentDisposed) return;
     captureProbeDiagnostics.value = diagnostics;
+    if (!captureProbeSessionId.value) return;
     captureProbeState.value = diagnostics.state;
     if (diagnostics.state === 'idle' && !diagnostics.sessionId) {
       captureProbeSessionId.value = null;
       captureProbeState.value = diagnostics.lastCaptureError ? 'failed' : 'idle';
     }
   } catch {
+    if (!captureProbeSessionId.value) { error.value = '原生共享诊断暂时无法读取。'; return; }
     captureProbeSessionId.value = null;
     captureProbeState.value = 'failed';
     captureProbeError.value = '探针进程已停止或诊断请求超时；请刷新来源后重试。';
@@ -194,10 +198,11 @@ function refreshOnVisible() {
 
 onMounted(() => {
   void refresh();
+  void refreshCaptureProbeDiagnostics();
   void loadCaptureProbeCapability();
   timer = setInterval(() => {
     void refresh();
-    if (captureProbeSessionId.value) void refreshCaptureProbeDiagnostics();
+    void refreshCaptureProbeDiagnostics();
   }, 2_000);
   document.addEventListener('visibilitychange', refreshOnVisible);
 });
@@ -212,6 +217,11 @@ onScopeDispose(() => {
 <template>
   <aside class="media-diagnostics" aria-label="媒体诊断">
     <strong>媒体诊断 <small>每 2 秒更新</small></strong>
+    <p v-if="room.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track && captureProbeDiagnostics">
+      原生采集 {{ captureProbeDiagnostics.rawCaptureFps ?? '—' }} fps ·
+      纹理输出 {{ captureProbeDiagnostics.videoOutputFps ?? '—' }} fps ·
+      限帧／背压丢帧累计 {{ captureProbeDiagnostics.videoOutputDroppedFrames ?? '—' }}
+    </p>
     <p v-if="processMetrics">本应用进程：CPU {{ processMetrics.cpuPercent }}% · 内存 {{ processMetrics.memoryMb }} MB</p>
     <section class="native-capture-probe" aria-label="原生视频取帧探针">
       <b>原生视频取帧探针</b>
@@ -256,7 +266,7 @@ onScopeDispose(() => {
     <div v-for="stream in streams" :key="stream.identity" class="media-diagnostic-stream">
       <b>{{ stream.name }} · {{ stream.direction }}</b>
       <small v-if="stream.target">共享源 {{ stream.target.displaySurface ?? '未知' }} · 轨道设置（目标） {{ formatTrackTarget(stream.target) }}</small>
-      <small v-if="stream.direction === '发送'">实际采集 {{ stream.sourceFps ?? '—' }} fps</small>
+      <small v-if="stream.direction === '发送'">编码前输入 {{ stream.sourceFps ?? '—' }} fps</small>
       <small v-if="stream.playbackFps !== null">画面显示 {{ stream.playbackFps }} fps · 累计显示丢帧 {{ stream.playbackDrops }}</small>
       <small v-if="stream.layers.length === 0">等待编解码统计…</small>
       <small v-for="layer in stream.layers" :key="layer.id">

@@ -44,6 +44,7 @@ describe('NativeScreenVideoSession', () => {
     const desktop: NativeVideoDesktopBridge = {
       startNativeVideo: vi.fn(async () => ({ sessionId: 'resize-session', changed: true })),
       stopNativeVideo: vi.fn(async () => ({ changed: true })),
+      configureNativeVideo: vi.fn(async () => ({ changed: true })),
       onNativeVideoError: () => () => {},
       onNativeVideoSuspended: () => () => {},
     };
@@ -106,6 +107,7 @@ describe('NativeScreenVideoSession', () => {
     const desktop: NativeVideoDesktopBridge = {
       startNativeVideo: vi.fn(async () => ({ sessionId: 'adjustment-fails', changed: true })),
       stopNativeVideo,
+      configureNativeVideo: vi.fn(async () => ({ changed: true })),
       onNativeVideoError: () => () => {},
       onNativeVideoSuspended: () => () => {},
     };
@@ -150,6 +152,7 @@ describe('NativeScreenVideoSession', () => {
     const desktop: NativeVideoDesktopBridge = {
       startNativeVideo: started,
       stopNativeVideo: stopped,
+      configureNativeVideo: vi.fn(async () => ({ changed: true })),
       onNativeVideoError: (callback) => {
         helperError = callback;
         return () => { helperError = undefined; };
@@ -191,6 +194,7 @@ describe('NativeScreenVideoSession', () => {
     const desktop: NativeVideoDesktopBridge = {
       startNativeVideo: () => new Promise((resolve) => { finishStart = resolve; }),
       stopNativeVideo: vi.fn(async () => ({ changed: true })),
+      configureNativeVideo: vi.fn(async () => ({ changed: true })),
       onNativeVideoError: () => () => {},
       onNativeVideoSuspended: () => () => {},
     };
@@ -235,6 +239,7 @@ describe('NativeScreenVideoSession', () => {
     const desktop: NativeVideoDesktopBridge = {
       startNativeVideo: vi.fn(async () => ({ sessionId: 'stop-fails', changed: true })),
       stopNativeVideo,
+      configureNativeVideo: vi.fn(async () => ({ changed: true })),
       onNativeVideoError: () => () => {},
       onNativeVideoSuspended: () => () => {},
     };
@@ -266,7 +271,7 @@ describe('NativeScreenVideoSession', () => {
     expect(laterFrame.close).toHaveBeenCalledOnce();
   });
 
-  it('drops frames while a write is in flight and closes frames rejected by the FPS cap', async () => {
+  it('drops frames only while a write is in flight, without applying a second FPS cap', async () => {
     const target = installWindowMessageTarget();
     let finishWrite!: () => void;
     const writes: VideoFrame[] = [];
@@ -283,6 +288,7 @@ describe('NativeScreenVideoSession', () => {
     const desktop: NativeVideoDesktopBridge = {
       startNativeVideo: vi.fn(async () => ({ sessionId: 'session-2', changed: true })),
       stopNativeVideo: vi.fn(async () => ({ changed: true })),
+      configureNativeVideo: vi.fn(async () => ({ changed: true })),
       onNativeVideoError: () => () => {},
       onNativeVideoSuspended: () => () => {},
     };
@@ -306,11 +312,44 @@ describe('NativeScreenVideoSession', () => {
     await ready;
     expect(first.close).not.toHaveBeenCalled();
     finishWrite();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(first.close).toHaveBeenCalledOnce());
     now = 5;
-    const fpsDropped = createFrame();
-    dispatchFrame(target, fpsDropped, 'session-2');
-    expect(fpsDropped.close).toHaveBeenCalledOnce();
+    const next = createFrame();
+    dispatchFrame(target, next, 'session-2');
+    await vi.waitFor(() => expect(writes).toEqual([first, next]));
+    finishWrite();
+    await session.stop();
+  });
+
+  it('scales a 120 fps input to the requested resolution without changing its aspect ratio', async () => {
+    const target = installWindowMessageTarget();
+    const writes: VideoFrame[] = [];
+    const desktop: NativeVideoDesktopBridge = {
+      startNativeVideo: vi.fn(async () => ({ sessionId: 'quality-session', changed: true })),
+      stopNativeVideo: vi.fn(async () => ({ changed: true })),
+      configureNativeVideo: vi.fn(async () => ({ changed: true })),
+      onNativeVideoError: () => () => {},
+      onNativeVideoSuspended: () => () => {},
+    };
+    const session = new NativeScreenVideoSession(desktop, {
+      maxFps: 120, resolution: { width: 1280, height: 720 },
+      createAdjustedFrame: (frame, init) => Object.assign({}, frame, init, { close: vi.fn() }),
+      createGenerator: () => ({ writable: new WritableStream<VideoFrame>({ write: (frame) => { writes.push(frame); } }), stop: vi.fn() }) as never,
+      createLocalTrack: () => ({ stop: vi.fn() }) as never,
+    });
+    const ready = session.start('window:1:0');
+    await Promise.resolve();
+    const frame = Object.assign(createFrame(), {
+      displayWidth: 1920, displayHeight: 1080, timestamp: 1,
+      visibleRect: { x: 0, y: 0, width: 1920, height: 1080 },
+    });
+    dispatchFrame(target, frame, 'quality-session');
+    await ready;
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    expect(desktop.startNativeVideo).toHaveBeenCalledWith('window:1:0', 120, { hideCursor: false, hideBorder: false });
+    expect(writes[0].displayWidth).toBe(1280);
+    expect(writes[0].displayHeight).toBe(720);
+    expect(frame.close).toHaveBeenCalledOnce();
     await session.stop();
   });
 
@@ -321,6 +360,7 @@ describe('NativeScreenVideoSession', () => {
     const desktop: NativeVideoDesktopBridge = {
       startNativeVideo: vi.fn(async () => ({ sessionId: 'session-3', changed: true })),
       stopNativeVideo,
+      configureNativeVideo: vi.fn(async () => ({ changed: true })),
       onNativeVideoError: (callback) => {
         reportError = callback;
         return () => {};
@@ -352,6 +392,7 @@ describe('NativeScreenVideoSession', () => {
     const desktop: NativeVideoDesktopBridge = {
       startNativeVideo: vi.fn(async () => ({ sessionId: 'current-session', changed: true })),
       stopNativeVideo,
+      configureNativeVideo: vi.fn(async () => ({ changed: true })),
       onNativeVideoError: (callback) => {
         reportError = callback;
         return () => {};
@@ -394,6 +435,7 @@ describe('NativeScreenVideoSession', () => {
     const desktop: NativeVideoDesktopBridge = {
       startNativeVideo: vi.fn(async () => ({ sessionId: 'window-session', changed: true })),
       stopNativeVideo: vi.fn(async () => ({ changed: true })),
+      configureNativeVideo: vi.fn(async () => ({ changed: true })),
       onNativeVideoError: () => () => {},
       onNativeVideoSuspended: (callback) => {
         reportSuspension = callback;
@@ -484,6 +526,7 @@ describe('NativeScreenVideoSession', () => {
     const desktop: NativeVideoDesktopBridge = {
       startNativeVideo: vi.fn(async () => ({ sessionId: 'busy-session', changed: true })),
       stopNativeVideo: vi.fn(async () => ({ changed: true })),
+      configureNativeVideo: vi.fn(async () => ({ changed: true })),
       onNativeVideoError: () => () => {},
       onNativeVideoSuspended: (callback) => { reportSuspension = callback; return () => {}; },
     };
@@ -515,6 +558,7 @@ describe('NativeScreenVideoSession', () => {
     const desktop: NativeVideoDesktopBridge = {
       startNativeVideo: () => new Promise((resolve) => { finishStart = resolve; }),
       stopNativeVideo: vi.fn(async () => ({ changed: true })),
+      configureNativeVideo: vi.fn(async () => ({ changed: true })),
       onNativeVideoError: () => () => {},
       onNativeVideoSuspended: (callback) => {
         reportSuspension = callback;
@@ -546,6 +590,7 @@ describe('NativeScreenVideoSession', () => {
     const desktop: NativeVideoDesktopBridge = {
       startNativeVideo: vi.fn(async () => ({ sessionId: 'session-stop', changed: true })),
       stopNativeVideo: vi.fn(async () => ({ changed: true })),
+      configureNativeVideo: vi.fn(async () => ({ changed: true })),
       onNativeVideoError: () => () => {},
       onNativeVideoSuspended: () => () => {},
     };
@@ -579,6 +624,7 @@ describe('NativeScreenVideoSession', () => {
     const desktop: NativeVideoDesktopBridge = {
       startNativeVideo: vi.fn(async () => ({ sessionId: 'session-write-error', changed: true })),
       stopNativeVideo: vi.fn(async () => ({ changed: true })),
+      configureNativeVideo: vi.fn(async () => ({ changed: true })),
       onNativeVideoError: () => () => {},
       onNativeVideoSuspended: () => () => {},
     };

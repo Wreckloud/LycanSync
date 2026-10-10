@@ -1,6 +1,6 @@
 import { markRaw, onScopeDispose, ref, shallowRef } from 'vue';
 import {
-  AudioPresets, ConnectionState, DisconnectReason, LocalAudioTrack, Room, RoomEvent, Track, VideoPreset, supportsAV1,
+  AudioPresets, ConnectionState, DisconnectReason, LocalAudioTrack, Room, RoomEvent, Track, supportsAV1,
   type VideoCodec,
   type LocalTrack, type Participant, type RemoteParticipant,
   type ParticipantTrackPermission,
@@ -17,11 +17,11 @@ import { NativeMicrophoneAudioSession, type NativeMicrophoneSettings } from './n
 import { nativeScreenAudioMode } from './nativeScreenAudioMode';
 import { REMOTE_CONTROL_TOPIC, type RemoteControlInput } from './remoteControl';
 import { RemoteControlSession, type RemoteControlShare } from './remoteControlSession';
+import { screenShareQuality, screenShareVideoPreset, type ScreenShareQualityId } from './screenShareQuality';
 
 type RoomStatus = 'idle' | 'joining' | 'connected' | 'reconnecting';
 type MediaSource = Track.Source.Microphone | Track.Source.ScreenShare;
-// 单路游戏共享的目标上限：12Mbps 只是“视觉近似无损”的起始码率，不保证实际恒定，也不保证无损。
-const SCREEN_SHARE_PRESET = new VideoPreset(1920, 1080, 12_000_000, 60, 'medium');
+const SCREEN_SHARE_PRESET = screenShareVideoPreset('standard');
 const SPEAKER_REFRESH_INTERVAL_MS = 120;
 const ENTRANCE_SOUND_RECEIVE_TIMEOUT_MS = 8_000;
 const PROCESSING_RESTART_NOTICE = '部分音频处理设置需要重新开麦后生效。';
@@ -41,7 +41,7 @@ interface RtcRoomEvents {
   ): Promise<NativeScreenSourceSelection | null>;
 }
 
-interface NativeScreenSourceSelection { sourceId: string; shareAudio: boolean }
+interface NativeScreenSourceSelection { sourceId: string; shareAudio: boolean; quality?: ScreenShareQualityId }
 
 interface ScreenShareResource {
   captureSessionId: string | null;
@@ -51,6 +51,7 @@ interface ScreenShareResource {
   videoTrack: LocalTrack;
   liveKitTrackId: string | null;
   remoteShare: RemoteControlShare | null;
+  quality: ScreenShareQualityId;
 }
 
 interface PublicTrackRegistry {
@@ -59,6 +60,7 @@ interface PublicTrackRegistry {
 }
 
 interface RtcRoomOptions {
+  screenShareQuality?: ScreenShareQualityId;
   inputGain: number;
   processing: AudioProcessingSettings;
   events?: RtcRoomEvents;
@@ -136,6 +138,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   const microphoneLoopbackNotice = ref('');
   let speakerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let screenShareResource: ScreenShareResource | null = null;
+  const currentScreenShareQuality = ref<ScreenShareQualityId>(options?.screenShareQuality ?? 'standard');
+  const screenShareQualityBusy = ref(false);
   let nativeScreenAudioSession: NativeScreenAudioSession | null = null;
   const remoteControl = new RemoteControlSession({
     currentRoom: () => activeRoom.value,
@@ -524,6 +528,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     notice.value = '';
     if (source === Track.Source.ScreenShare && enabled) screenShareSelectionCancelled.value = false;
     let capturedTracks: LocalTrack[] = [];
+    let selectedQuality = options?.screenShareQuality ?? 'standard';
+    let sharePreset = screenShareVideoPreset(selectedQuality);
     let microphoneProcessorForTask: MicrophoneAudioProcessor | null = null;
     let nativeVideo: NativeScreenVideoSession | null = null;
     let shareResource: ScreenShareResource | null = null;
@@ -682,10 +688,14 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             throw new Error(capabilities.videoCapture?.reason || 'nativeVideoUnavailable');
           }
           const { sourceId } = selection;
+          selectedQuality = selection.quality ?? selectedQuality;
+          sharePreset = screenShareVideoPreset(selectedQuality);
           nativeSourceId = sourceId;
           const kind = sourceId.startsWith('monitor:') ? 'monitor' : 'window';
           nativeVideo = new NativeScreenVideoSession(desktop, {
-            maxFps: SCREEN_SHARE_PRESET.encoding.maxFramerate ?? 60,
+            maxFps: screenShareQuality(selectedQuality).fps,
+            resolution: { width: screenShareQuality(selectedQuality).width, height: screenShareQuality(selectedQuality).height },
+            contentHint: selectedQuality === 'text' ? 'detail' : 'motion',
             onError: (code) => {
               const failedShareResource = shareResource;
               const failedVideoSession = nativeVideo;
@@ -719,7 +729,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             },
           });
           shareResource = { captureSessionId: null, sourceId, kind, videoSession: nativeVideo,
-            videoTrack: nativeVideo.track, liveKitTrackId: null, remoteShare: null };
+            videoTrack: nativeVideo.track, liveKitTrackId: null, remoteShare: null, quality: selectedQuality };
           screenShareResource = shareResource;
           capturedTracks = [await nativeVideo.start(sourceId)];
           shareResource.captureSessionId = nativeVideo.captureSessionId ?? null;
@@ -788,8 +798,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           // 仅浏览器使用 Chromium 采集；Electron 原生失败不会回退到此路径。
           capturedTracks = await participant.createScreenTracks({
             audio: false,
-            contentHint: 'motion',
-            resolution: SCREEN_SHARE_PRESET.resolution,
+            contentHint: selectedQuality === 'text' ? 'detail' : 'motion',
+            resolution: sharePreset.resolution,
           });
           if (!isCurrentTask()) return;
         }
@@ -803,10 +813,10 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         if (nativeMicrophone && track === nativeMicrophone.track) {
           return participant.publishTrack(track, { source: Track.Source.Microphone });
         }
-        if (nativeVideo && track === nativeVideo.track) {
+        if (track.source === Track.Source.ScreenShare || (nativeVideo && track === nativeVideo.track)) {
           return participant.publishTrack(track, {
             source: Track.Source.ScreenShare,
-            videoEncoding: { ...SCREEN_SHARE_PRESET.encoding, priority: 'high' },
+            videoEncoding: { ...sharePreset.encoding, priority: 'high' },
           });
         }
         if (nativeAudio && track === nativeAudio.track) {
@@ -818,6 +828,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       if (failedPublish) throw failedPublish.reason;
       published = true;
       if (!isCurrentTask()) return;
+      if (source === Track.Source.ScreenShare) currentScreenShareQuality.value = selectedQuality;
       publishResults.forEach((result) => {
         if (result.status === 'fulfilled' && result.value.track
           && publicTracks?.eligibleTracks.has(result.value.track)
@@ -1029,11 +1040,37 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     await setMediaEnabled(source, !enabled);
   }
 
+  async function setScreenShareQuality(quality: ScreenShareQualityId): Promise<boolean> {
+    const currentRoom = activeRoom.value;
+    const resource = screenShareResource;
+    if (!currentRoom || !resource || screenShareQualityBusy.value || resource.quality === quality
+        || currentRoom.state !== ConnectionState.Connected
+        || currentRoom.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track !== resource.videoTrack) return false;
+    screenShareQualityBusy.value = true;
+    try {
+      await resource.videoSession.configureQuality(quality);
+      if (activeRoom.value !== currentRoom || screenShareResource !== resource) return false;
+      resource.quality = quality;
+      currentScreenShareQuality.value = quality;
+      return true;
+    } catch (error) {
+      if (activeRoom.value === currentRoom && screenShareResource === resource) {
+        notice.value = error instanceof Error && error.message === 'nativeVideoConfigurationRollbackFailed'
+          ? '画质恢复失败，屏幕共享已停止，请重新开始共享。'
+          : '画质未能切换，已保留原画质。';
+      }
+      return false;
+    } finally {
+      screenShareQualityBusy.value = false;
+    }
+  }
+
   function cancelPendingScreenShareSelection() {
     if (pendingMedia.value.has(Track.Source.ScreenShare)) screenShareSelectionCancelled.value = true;
   }
 
   return { revision, room, status, participants, notice, needsAudioPlayback, busySources, screenShareActive,
+    currentScreenShareQuality, screenShareQualityBusy, setScreenShareQuality,
     remoteControlRequest: remoteControl.request, remoteControlOwner: remoteControl.owner,
     remoteControlShares: remoteControl.shares, remoteControlActive: remoteControl.active,
     remoteControlPending: remoteControl.pending, remoteControlGranting: remoteControl.granting,

@@ -1,3 +1,5 @@
+import type { ScreenShareQualityId } from '../rtc/screenShareQuality';
+
 export interface NativeVideoSourceOptionInput {
   sourceId: string;
   kind: 'monitor' | 'window';
@@ -15,6 +17,7 @@ interface NativeVideoSourceThumbnail {
 interface NativeScreenSourceSelection {
   sourceId: string;
   shareAudio: boolean;
+  quality?: ScreenShareQualityId;
 }
 
 const THUMBNAIL_REFRESH_INTERVAL_MS = 2_000;
