@@ -7,8 +7,10 @@ sharedTexture?.setSharedTextureReceiver(async ({ importedSharedTexture }, token,
     frame = importedSharedTexture.getVideoFrame();
     window.postMessage({ type: 'lycan-native-screen-frame', sessionId, frame }, '*', [frame]);
     frame = undefined;
-  } catch {
-    ipcRenderer.send('media:native-video:receiver-error');
+  } catch (error) {
+    ipcRenderer.send('media:native-video:receiver-error', {
+      sessionId, message: String(error?.message ?? error).slice(0, 2000),
+    });
   } finally {
     frame?.close();
     importedSharedTexture.release();

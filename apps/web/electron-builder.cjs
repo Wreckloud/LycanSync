@@ -10,6 +10,7 @@ module.exports = {
     'electron/server-settings.cjs',
     'electron/preload.cjs',
     'electron/media-helper.cjs',
+    'electron/media-diagnostics.cjs',
     'electron/native-video-thumbnails.cjs',
     '!node_modules/**/*',
   ],

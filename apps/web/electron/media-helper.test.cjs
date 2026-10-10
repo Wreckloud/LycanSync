@@ -34,6 +34,7 @@ class FakeHelper extends EventEmitter {
     this.microphoneSessionId = null;
     this.requests = [];
     this.stdout = new PassThrough();
+    this.stderr = new PassThrough();
     this.stdin = new Writable({
       write: (chunk, _encoding, callback) => {
         if (this.mode.writeFailure) {
@@ -84,6 +85,7 @@ class FakeHelper extends EventEmitter {
       return;
     }
     if (command.command === 'listVideoSources') {
+      if (this.mode.holdVideoSources) return;
       if (this.mode.listVideoSourcesFailure) {
         this.writeResponse({ event: 'error', protocolVersion: 1, requestId: command.requestId,
           code: 'sourceDiscoveryFailed', message: 'source discovery failed', recoverable: true, state: 'idle' });
@@ -331,17 +333,45 @@ async function waitUntil(predicate, timeoutMs = 500) {
   }
 }
 
+test('helper stderr 保留原生错误并且不干扰协议响应', async () => {
+  const diagnostics = [];
+  const { manager, children } = createManager({}, { onDiagnostic: (message) => diagnostics.push(message) });
+  try {
+    await manager.getCapabilities();
+    children[0].stderr.write('stage=initialize hresult=0x80070057\n');
+    children[0].stderr.write('x'.repeat(9000));
+    assert.equal(diagnostics[0], 'stage=initialize hresult=0x80070057\n');
+    assert.ok(diagnostics.every((message) => message.length <= 4096));
+    assert.deepEqual((await manager.getCapabilities()).videoCapture, capabilities.videoCapture);
+  } finally {
+    await manager.shutdown();
+  }
+});
+
 test('helper starts lazily and concurrent capability requests share one process and handshake', async () => {
   const { manager, children, spawnOptions } = createManager();
   assert.equal(children.length, 0);
 
   const results = await Promise.all(Array.from({ length: 6 }, () => manager.getCapabilities()));
   assert.equal(children.length, 1);
-  assert.deepEqual(spawnOptions[0].stdio, ['pipe', 'pipe', 'inherit']);
+  assert.deepEqual(spawnOptions[0].stdio, ['pipe', 'pipe', 'pipe']);
   assert.equal(children[0].commands.filter((command) => command === 'hello').length, 1);
   assert.equal(children[0].commands.filter((command) => command === 'capabilities').length, 1);
   assert.deepEqual(results[0].videoCapture, capabilities.videoCapture);
   await manager.shutdown();
+});
+
+test('来源记忆使用 helper 生命周期标识，重启实例不能复用旧标识', async () => {
+  const first = createManager();
+  const second = createManager();
+  try {
+    const snapshot = await first.manager.listVideoSources();
+    assert.equal((await first.manager.listVideoSources()).discoveryId, snapshot.discoveryId);
+    assert.match(snapshot.discoveryId, /^[0-9a-f-]{36}$/);
+    assert.notEqual((await second.manager.listVideoSources()).discoveryId, snapshot.discoveryId);
+  } finally {
+    await Promise.all([first.manager.shutdown(), second.manager.shutdown()]);
+  }
 });
 
 test('screen-share audio capability distinguishes process loopback from explicit system mix', async () => {
@@ -730,6 +760,30 @@ test('video rejects expired ids, invalid fps, worker exit, and stop timeout with
     await waitUntil(() => children[0].closed);
     await manager.shutdown();
   });
+});
+
+test('pending source refresh allows confirmation and replaces the snapshot only after completion', async () => {
+  const { manager, children } = createManager({}, { requestTimeoutMs: 1000 });
+  try {
+    const sources = await manager.listVideoSources();
+    const child = children[0];
+    child.mode.holdVideoSources = true;
+    const refresh = manager.listVideoSources();
+    await waitUntil(() => child.requests.filter(({ command }) => command === 'listVideoSources').length === 2);
+
+    await manager.startVideo(sources.sources[0].sourceId, 30, 'video-session');
+    assert.equal(child.commands.includes('startVideo'), true);
+    await manager.stopVideo('video-session');
+
+    const request = child.requests.filter(({ command }) => command === 'listVideoSources')[1];
+    child.writeResponse({ event: 'videoSources', protocolVersion: 1, requestId: request.requestId,
+      revision: 2, sources: [] });
+    assert.deepEqual((await refresh).sources, []);
+    await assert.rejects(manager.startVideo(sources.sources[0].sourceId, 30, 'late-session'), /videoSourceExpired/);
+    assert.equal(child.requests.filter(({ command }) => command === 'startVideo').length, 1);
+  } finally {
+    await manager.shutdown();
+  }
 });
 
 test('failed source refresh invalidates the previous snapshot', async () => {

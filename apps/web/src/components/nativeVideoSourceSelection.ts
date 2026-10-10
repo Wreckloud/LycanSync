@@ -17,13 +17,12 @@ interface NativeScreenSourceSelection {
   shareAudio: boolean;
 }
 
-const THUMBNAIL_RETRY_INTERVAL_MS = 3_000;
-const MAX_THUMBNAIL_ATTEMPTS = 3;
+const THUMBNAIL_REFRESH_INTERVAL_MS = 2_000;
 
 export function createNativeVideoSourceSelection(sources: NativeVideoSourceOptionInput[]) {
   let currentSources = sources;
   const thumbnails = new Map<string, { title: string; thumbnail: string }>();
-  const thumbnailAttempts = new Map<string, { title: string; count: number; attemptedAt: number }>();
+  const thumbnailAttempts = new Map<string, { title: string; attemptedAt: number }>();
   let settle: (selection: NativeScreenSourceSelection | null) => void = () => {};
   let settled = false;
   const result = new Promise<NativeScreenSourceSelection | null>((resolve) => { settle = resolve; });
@@ -43,7 +42,13 @@ export function createNativeVideoSourceSelection(sources: NativeVideoSourceOptio
     get options() { return buildOptions(); },
     replaceSources(nextSources: NativeVideoSourceOptionInput[]) {
       if (settled) return buildOptions();
-      currentSources = nextSources;
+      // 系统枚举顺序可能变化；已有来源保持位置，新来源追加到末尾。
+      const remaining = new Map(nextSources.map((source) => [source.sourceId, source]));
+      currentSources = currentSources.flatMap((source) => {
+        const updated = remaining.get(source.sourceId);
+        remaining.delete(source.sourceId);
+        return updated ? [updated] : [];
+      }).concat([...remaining.values()]);
       const current = new Map(nextSources.map((source) => [source.sourceId, source.title]));
       for (const [sourceId, thumbnail] of thumbnails) {
         if (current.get(sourceId) !== thumbnail.title) thumbnails.delete(sourceId);
@@ -53,20 +58,19 @@ export function createNativeVideoSourceSelection(sources: NativeVideoSourceOptio
       }
       return buildOptions();
     },
-    sourcesNeedingThumbnails(now = Date.now()) {
+    sourcesNeedingThumbnails(now = Date.now(), visibleIds?: Set<string>, selectedId?: string) {
       if (settled) return [];
       return currentSources.filter((source) => {
-        if (thumbnails.get(source.sourceId)?.title === source.title) return false;
+        if (visibleIds && !visibleIds.has(source.sourceId) && source.sourceId !== selectedId) return false;
         const previous = thumbnailAttempts.get(source.sourceId);
-        if (previous && (previous.count >= MAX_THUMBNAIL_ATTEMPTS
-            || now - previous.attemptedAt < THUMBNAIL_RETRY_INTERVAL_MS)) return false;
+        const interval = source.sourceId === selectedId ? 1_000 : THUMBNAIL_REFRESH_INTERVAL_MS;
+        if (previous && now - previous.attemptedAt < interval) return false;
         thumbnailAttempts.set(source.sourceId, {
           title: source.title,
-          count: (previous?.count ?? 0) + 1,
           attemptedAt: now,
         });
         return true;
-      });
+      }).sort((left, right) => Number(right.sourceId === selectedId) - Number(left.sourceId === selectedId));
     },
     applyThumbnails(requestedSources: NativeVideoSourceOptionInput[], received: NativeVideoSourceThumbnail[]) {
       if (settled) return buildOptions();

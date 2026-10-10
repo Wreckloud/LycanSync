@@ -87,7 +87,7 @@ interface Window {
     setAutoStart(enabled: boolean): Promise<{ supported: boolean; enabled: boolean }>;
     getCurrentActivity(): Promise<DetectedActivity | null>;
     getNativeMediaCapabilities(): Promise<Record<string, { available: boolean; reason: string }>>;
-    listNativeVideoSources(): Promise<{ revision: number; sources: NativeVideoSource[] }>;
+    listNativeVideoSources(): Promise<{ revision: number; discoveryId: string; sources: NativeVideoSource[] }>;
     getNativeVideoSourceThumbnails(sources: NativeVideoSource[]): Promise<{ sourceId: string; thumbnail: string }[]>;
     startNativeCaptureProbe(sourceId: string): Promise<{ sessionId: string; changed: boolean }>;
     stopNativeCaptureProbe(sessionId: string): Promise<{ changed: boolean }>;

@@ -35,6 +35,7 @@ class MediaHelperManager {
     onVideoCaptureSuspended = () => {},
     onHelperFailure = () => {},
     onHelperClosed = () => {},
+    onDiagnostic = (message) => console.error(message),
   }) {
     this.executablePath = executablePath;
     this.platform = platform;
@@ -53,6 +54,7 @@ class MediaHelperManager {
     this.onVideoCaptureSuspended = onVideoCaptureSuspended;
     this.onHelperFailure = onHelperFailure;
     this.onHelperClosed = onHelperClosed;
+    this.onDiagnostic = onDiagnostic;
     this.state = undefined;
     this.startPromise = undefined;
     this.capabilitiesPromise = undefined;
@@ -113,12 +115,16 @@ class MediaHelperManager {
   async listVideoSources() {
     const state = await this.ensureStarted();
     this.clearIdleTimer();
-    this.videoSourceSnapshot = undefined;
     try {
       const response = await this.sendRequest(state, 'listVideoSources', 'videoSources', this.requestTimeoutMs);
       const snapshot = validateVideoSources(response);
+      // 刷新期间仍可确认已有来源；仅用校验通过的新快照替换，目标身份由原生启动再次检查。
       this.videoSourceSnapshot = { state, ids: new Set(snapshot.sources.map(({ sourceId }) => sourceId)) };
-      return snapshot;
+      return { ...snapshot, discoveryId: state.discoveryId };
+    } catch (error) {
+      // 原生枚举失败会撤销来源注册表，不能继续使用失败前的快照。
+      if (this.videoSourceSnapshot?.state === state) this.videoSourceSnapshot = undefined;
+      throw error;
     } finally {
       if (this.canCloseWhenIdle(state)) this.scheduleIdleShutdown(state);
     }
@@ -615,8 +621,8 @@ class MediaHelperManager {
       const executable = typeof this.executablePath === 'function' ? this.executablePath() : this.executablePath;
       child = this.spawnProcess(executable, [], {
         windowsHide: true,
-        // 协议仍走 stdout；原生失败阶段和 HRESULT 写入父进程的 stderr。
-        stdio: ['pipe', 'pipe', 'inherit'],
+        // 协议和诊断分流；安装版没有终端，诊断由主进程持久化。
+        stdio: ['pipe', 'pipe', 'pipe'],
       });
     } catch {
       this.retryAfter = Date.now() + this.retryDelayMs;
@@ -626,6 +632,7 @@ class MediaHelperManager {
     let stateResolveClose;
     const state = {
       child,
+      discoveryId: randomUUID(),
       alive: true,
       closed: false,
       killRequested: false,
@@ -644,6 +651,13 @@ class MediaHelperManager {
     this.clearIdleTimer();
 
     child.stdout.on('data', (chunk) => this.readOutput(state, chunk));
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk) => {
+      for (let offset = 0; offset < chunk.length; offset += 4096) {
+        try { this.onDiagnostic(chunk.slice(offset, offset + 4096)); }
+        catch (error) { console.error('原生媒体诊断回调失败', error.message); }
+      }
+    });
     child.stdin.once('error', () => this.failState(state, new Error('mediaHelperWriteFailed')));
     child.once('error', () => this.failState(state, new Error('mediaHelperProcessError')));
     child.once('exit', (code) => {

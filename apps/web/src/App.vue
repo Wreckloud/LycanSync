@@ -57,6 +57,12 @@ const callSounds = useCallSounds(outputVolume);
 const desktop = window.lycanDesktop;
 const captureRequest = ref<CaptureRequest | null>(null);
 const captureSourceType = ref<'window' | 'screen'>('window');
+const selectedCaptureSourceId = ref('');
+const captureSourceNotice = ref('');
+const captureSourcesElement = ref<HTMLDivElement | null>(null);
+let lastCaptureSourceType: 'window' | 'screen' = localStorage.getItem('lycansync.capture-source-type') === 'screen' ? 'screen' : 'window';
+let lastNativeSelection: { discoveryId: string; sourceId: string } | undefined;
+let currentNativeDiscoveryId = '';
 const captureAudioAvailable = ref(false);
 const captureAudioCapabilityReady = ref(false);
 const captureAudioCapabilityFailed = ref(false);
@@ -66,15 +72,16 @@ type NativeScreenSourceSelection = { sourceId: string; shareAudio: boolean };
 const NATIVE_SOURCE_REFRESH_INTERVAL_MS = 1_000;
 let nativeSourceChooser: ReturnType<typeof createNativeVideoSourceSelection> | undefined;
 let nativeSourceChooserGeneration = 0;
-let nativeSourceRefreshTimer: ReturnType<typeof setInterval> | undefined;
+let nativeSourceRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 let nativeSourceRefresh: { generation: number; promise: Promise<void> } | undefined;
+let nativeThumbnailRefresh: Promise<void> | undefined;
 const nativeSourceLoading = ref(false);
 const nativeSourceError = ref('');
 const captureSources = computed(() => captureRequest.value?.sources
   .filter((source) => source.type === captureSourceType.value) ?? []);
 function stopNativeSourceRefresh() {
   nativeSourceChooserGeneration++;
-  if (nativeSourceRefreshTimer !== undefined) clearInterval(nativeSourceRefreshTimer);
+  if (nativeSourceRefreshTimer !== undefined) clearTimeout(nativeSourceRefreshTimer);
   nativeSourceRefreshTimer = undefined;
   nativeSourceLoading.value = false;
 }
@@ -84,38 +91,67 @@ function updateNativeSourceOptions(generation: number, chooser: ReturnType<typeo
   captureRequest.value = { ...captureRequest.value, sources: chooser.options };
 }
 
-function loadNativeSourceThumbnails(
+async function loadNativeSourceThumbnails(
   generation: number,
   chooser: ReturnType<typeof createNativeVideoSourceSelection>,
 ) {
-  const requested = chooser.sourcesNeedingThumbnails();
+  if (!desktop || nativeThumbnailRefresh || document.hidden
+      || generation !== nativeSourceChooserGeneration || nativeSourceChooser !== chooser) return;
+  const container = captureSourcesElement.value;
+  if (!container) return;
+  const bounds = container.getBoundingClientRect();
+  const visibleIds = new Set([...container.querySelectorAll<HTMLButtonElement>('[data-source-id]')]
+    .filter((element) => {
+      const rect = element.getBoundingClientRect();
+      return rect.bottom > bounds.top && rect.top < bounds.bottom;
+    }).map((element) => element.dataset.sourceId!));
+  const requested = chooser.sourcesNeedingThumbnails(Date.now(), visibleIds, selectedCaptureSourceId.value);
   if (!requested.length) return;
-  void desktop?.getNativeVideoSourceThumbnails(requested).then((thumbnails) => {
-    if (generation !== nativeSourceChooserGeneration || nativeSourceChooser !== chooser) return;
+  const discoveryId = currentNativeDiscoveryId;
+  const promise = desktop.getNativeVideoSourceThumbnails(requested).then((thumbnails) => {
+    if (generation !== nativeSourceChooserGeneration || nativeSourceChooser !== chooser
+        || currentNativeDiscoveryId !== discoveryId) return;
     chooser.applyThumbnails(requested, thumbnails);
     updateNativeSourceOptions(generation, chooser);
-  }).catch(() => {});
+  }).catch((error) => {
+    console.error('共享来源缩略图更新失败', error);
+  });
+  nativeThumbnailRefresh = promise;
+  try { await promise; }
+  finally { if (nativeThumbnailRefresh === promise) nativeThumbnailRefresh = undefined; }
 }
 
 async function refreshNativeSources(
   generation: number,
   chooser: ReturnType<typeof createNativeVideoSourceSelection>,
 ) {
-  if (!desktop || generation !== nativeSourceChooserGeneration || nativeSourceRefresh?.generation === generation) return;
+  if (!desktop || document.hidden || generation !== nativeSourceChooserGeneration || nativeSourceRefresh) return;
   const promise = (async () => {
     try {
       const snapshot = await desktop.listNativeVideoSources();
       if (generation !== nativeSourceChooserGeneration || nativeSourceChooser !== chooser
           || !captureRequest.value?.native) return;
+      if (currentNativeDiscoveryId && currentNativeDiscoveryId !== snapshot.discoveryId) chooser.replaceSources([]);
       const options = chooser.replaceSources(snapshot.sources);
+      const firstSnapshot = !currentNativeDiscoveryId;
+      if (currentNativeDiscoveryId && currentNativeDiscoveryId !== snapshot.discoveryId) {
+        selectedCaptureSourceId.value = '';
+        captureSourceNotice.value = '共享来源已重新连接，请重新选择。';
+      }
+      currentNativeDiscoveryId = snapshot.discoveryId;
+      if (firstSnapshot && lastNativeSelection?.discoveryId === snapshot.discoveryId
+          && options.some((source) => source.id === lastNativeSelection?.sourceId && source.type === captureSourceType.value)) {
+        selectedCaptureSourceId.value = lastNativeSelection.sourceId;
+      }
+      if (selectedCaptureSourceId.value && !options.some((source) => source.id === selectedCaptureSourceId.value)) {
+        selectedCaptureSourceId.value = '';
+        captureSourceNotice.value = '所选窗口或屏幕已不可用，请重新选择。';
+      }
       captureRequest.value = { ...captureRequest.value!, sources: options };
       nativeSourceLoading.value = false;
       nativeSourceError.value = '';
-      const hasSelectedType = options.some((source) => source.type === captureSourceType.value);
-      if (!hasSelectedType) {
-        captureSourceType.value = options.some((source) => source.type === 'window') ? 'window' : 'screen';
-      }
-      loadNativeSourceThumbnails(generation, chooser);
+      await nextTick();
+      void loadNativeSourceThumbnails(generation, chooser);
     } catch (error) {
       if (generation !== nativeSourceChooserGeneration || nativeSourceChooser !== chooser
           || !captureRequest.value?.native) return;
@@ -130,11 +166,22 @@ async function refreshNativeSources(
   }
 }
 
-function manuallyRefreshNativeSources() {
-  if (!nativeSourceChooser) return;
-  if (nativeSourceRefresh?.generation === nativeSourceChooserGeneration) return;
-  nativeSourceLoading.value = true;
-  void refreshNativeSources(nativeSourceChooserGeneration, nativeSourceChooser);
+async function scheduleNativeSourceRefresh(generation: number, chooser: ReturnType<typeof createNativeVideoSourceSelection>) {
+  await refreshNativeSources(generation, chooser);
+  if (generation !== nativeSourceChooserGeneration || nativeSourceChooser !== chooser) return;
+  nativeSourceRefreshTimer = setTimeout(() => void scheduleNativeSourceRefresh(generation, chooser),
+    NATIVE_SOURCE_REFRESH_INTERVAL_MS);
+}
+
+function refreshVisibleSourceThumbnails() {
+  if (nativeSourceChooser) void loadNativeSourceThumbnails(nativeSourceChooserGeneration, nativeSourceChooser);
+}
+
+function chooseCaptureSource(sourceId: string) {
+  if (!captureSources.value.some((source) => source.id === sourceId)) return;
+  selectedCaptureSourceId.value = sourceId;
+  captureSourceNotice.value = '';
+  refreshVisibleSourceThumbnails();
 }
 
 function selectCaptureSource(sourceId: string | null) {
@@ -142,6 +189,10 @@ function selectCaptureSource(sourceId: string | null) {
   if (!request) return;
   if (request.native && sourceId !== null
       && !canSelectNativeSource(captureAudioCapabilityReady.value, captureAudioCapabilityFailed.value)) return;
+  if (sourceId !== null && !request.sources.some((source) => source.id === sourceId)) return;
+  lastCaptureSourceType = captureSourceType.value;
+  localStorage.setItem('lycansync.capture-source-type', lastCaptureSourceType);
+  if (request.native && sourceId) lastNativeSelection = { discoveryId: currentNativeDiscoveryId, sourceId };
   captureRequest.value = null;
   if (request.native) {
     const chooser = nativeSourceChooser;
@@ -177,7 +228,10 @@ function requestNativeScreenSource(
   captureAudioCapabilityFailed.value = false;
   captureAudioMode.value = 'unavailable';
   captureShareAudio.value = false;
-  captureSourceType.value = 'window';
+  captureSourceType.value = lastCaptureSourceType;
+  selectedCaptureSourceId.value = '';
+  captureSourceNotice.value = '';
+  currentNativeDiscoveryId = '';
   captureRequest.value = {
     requestId: `native-${Date.now()}`,
     native: true,
@@ -191,11 +245,14 @@ function requestNativeScreenSource(
     captureAudioCapabilityFailed.value = state.failed;
     captureAudioCapabilityReady.value = true;
   });
-  void refreshNativeSources(generation, chooser);
-  nativeSourceRefreshTimer = setInterval(() => void refreshNativeSources(generation, chooser),
-    NATIVE_SOURCE_REFRESH_INTERVAL_MS);
+  void scheduleNativeSourceRefresh(generation, chooser);
   return chooser.result;
 }
+
+watch(captureSourceType, () => {
+  if (!captureSources.value.some((source) => source.id === selectedCaptureSourceId.value)) selectedCaptureSourceId.value = '';
+  void nextTick().then(refreshVisibleSourceThumbnails);
+});
 const rtc = reactive(useRtcRoom({
   inputGain: inputGain.value,
   processing: audioProcessing,
@@ -224,6 +281,8 @@ const removeCaptureListener = desktop?.onSources((request) => {
     chooser.finish(null);
   }
   captureSourceType.value = request.sources.some((source) => source.type === 'window') ? 'window' : 'screen';
+  selectedCaptureSourceId.value = '';
+  captureSourceNotice.value = '';
   captureRequest.value = request;
 });
 const removeCloseListener = desktop?.onClose(async () => {
@@ -1239,22 +1298,29 @@ function participantListening(participant: Participant) {
           <button type="button" role="tab" :aria-selected="captureSourceType === 'screen'"
             :disabled="!captureRequest.sources.some((source) => source.type === 'screen')" @click="captureSourceType = 'screen'">整个屏幕</button>
         </div>
-        <div class="capture-sources" role="tabpanel">
+        <div ref="captureSourcesElement" class="capture-sources" role="tabpanel" @scroll.passive="refreshVisibleSourceThumbnails">
           <button v-for="source in captureSources" :key="source.id" :aria-label="source.name"
+            :data-source-id="source.id" :aria-pressed="selectedCaptureSourceId === source.id" :title="source.name"
             :disabled="captureRequest.native
               && !canSelectNativeSource(captureAudioCapabilityReady, captureAudioCapabilityFailed)"
-            @click="selectCaptureSource(source.id)">
-            <img v-if="source.thumbnail" :src="source.thumbnail" alt="" />
-            <span v-else class="capture-source-placeholder"><MonitorUp :size="32" /></span>
-            <span>{{ source.name }}</span>
+            @click="chooseCaptureSource(source.id)">
+            <span class="capture-source-preview">
+              <img v-if="source.thumbnail" :src="source.thumbnail" alt="" />
+              <span v-else class="capture-source-placeholder"><MonitorUp :size="32" /></span>
+              <span v-if="selectedCaptureSourceId === source.id" class="capture-source-selected" aria-hidden="true">✓</span>
+            </span>
+            <span class="capture-source-name">{{ source.name }}</span>
           </button>
         </div>
         <p v-if="nativeSourceLoading && !captureSources.length" role="status">正在读取共享来源…</p>
         <p v-else-if="nativeSourceError" role="alert">{{ nativeSourceError }}</p>
         <p v-else-if="!captureSources.length">没有可共享的{{ captureSourceType === 'window' ? '应用窗口' : '屏幕' }}，请切换来源类型后重试。</p>
+        <p v-if="captureSourceNotice" role="status">{{ captureSourceNotice }}</p>
         <div class="dialog-actions">
-          <button v-if="captureRequest.native" type="button" :disabled="nativeSourceLoading" @click="manuallyRefreshNativeSources">刷新</button>
           <button autofocus @click="selectCaptureSource(null)">取消共享</button>
+          <button type="button" :disabled="!selectedCaptureSourceId || (captureRequest.native
+            && !canSelectNativeSource(captureAudioCapabilityReady, captureAudioCapabilityFailed))"
+            @click="selectCaptureSource(selectedCaptureSourceId)">开始共享</button>
         </div>
       </section>
     </div>

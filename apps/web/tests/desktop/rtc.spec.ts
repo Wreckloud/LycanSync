@@ -40,6 +40,8 @@ test('桌面入房、取消选择、窗口共享及离房释放', async () => {
     });
     await page.getByRole('button', { name: '开始屏幕共享', exact: true }).click();
     await page.getByRole('button', { name: 'LycanSync Capture Test', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'LycanSync Capture Test', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: '开始共享', exact: true }).click();
     await expect(page.getByRole('button', { name: '停止屏幕共享', exact: true })).toBeEnabled();
     // 整屏共享时也不能从系统截图中排除应用窗口。
     expect(await application.evaluate(({ BrowserWindow }) =>

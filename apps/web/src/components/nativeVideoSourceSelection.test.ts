@@ -67,13 +67,37 @@ describe('createNativeVideoSourceSelection', () => {
     await expect(selection.result).resolves.toBeNull();
   });
 
-  it('retries a missing thumbnail at a low frequency with a per-source limit', () => {
+  it('按间隔刷新缩略图，缺失预览仍可继续重试', () => {
     const selection = createNativeVideoSourceSelection([sources[0]]);
     expect(selection.sourcesNeedingThumbnails(10_000)).toHaveLength(1);
-    expect(selection.sourcesNeedingThumbnails(12_999)).toHaveLength(0);
-    expect(selection.sourcesNeedingThumbnails(13_000)).toHaveLength(1);
+    expect(selection.sourcesNeedingThumbnails(11_999)).toHaveLength(0);
+    expect(selection.sourcesNeedingThumbnails(12_000)).toHaveLength(1);
+    selection.applyThumbnails(sources, [{ sourceId: sources[0].sourceId, thumbnail: 'old' }]);
+    expect(selection.sourcesNeedingThumbnails(14_000)).toHaveLength(1);
+    expect(selection.options[0].thumbnail).toBe('old');
+    selection.applyThumbnails(sources, [{ sourceId: sources[0].sourceId, thumbnail: 'new' }]);
+    expect(selection.options[0].thumbnail).toBe('new');
     expect(selection.sourcesNeedingThumbnails(16_000)).toHaveLength(1);
-    expect(selection.sourcesNeedingThumbnails(19_000)).toHaveLength(0);
+  });
+
+  it('只请求可见或选中的来源，选中来源按一秒间隔优先更新', () => {
+    const selection = createNativeVideoSourceSelection(sources);
+    const visible = new Set([sources[0].sourceId]);
+    expect(selection.sourcesNeedingThumbnails(10_000, visible).map((source) => source.sourceId))
+      .toEqual([sources[0].sourceId]);
+    expect(selection.sourcesNeedingThumbnails(10_001, visible, sources[1].sourceId)
+      .map((source) => source.sourceId)).toEqual([sources[1].sourceId]);
+    expect(selection.sourcesNeedingThumbnails(11_001, visible, sources[1].sourceId)
+      .map((source) => source.sourceId)).toEqual([sources[1].sourceId]);
+  });
+
+  it('刷新保留已有排列，移除关闭窗口并追加新窗口', () => {
+    const selection = createNativeVideoSourceSelection(sources);
+    const added = { ...sources[0], sourceId: 'window:3:0', title: 'New' };
+    expect(selection.replaceSources([added, sources[1], sources[0]]).map((source) => source.id))
+      .toEqual([sources[0].sourceId, sources[1].sourceId, added.sourceId]);
+    expect(selection.replaceSources([added, sources[1]]).map((source) => source.id))
+      .toEqual([sources[1].sourceId, added.sourceId]);
   });
 
   it('keeps black thumbnails as display previews instead of filtering the source', () => {

@@ -10,6 +10,7 @@ const { pathToFileURL } = require('node:url');
 const { readFile, writeFile, unlink, mkdir } = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
 const { MediaHelperManager } = require('./media-helper.cjs');
+const { createMediaDiagnostics } = require('./media-diagnostics.cjs');
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
 const { matchNativeVideoSourceThumbnails } = require('./native-video-thumbnails.cjs');
 
@@ -81,10 +82,36 @@ let lastScreenAudioDroppedChunks = 0;
 let nativeMicrophoneSession;
 let lastMicrophoneDroppedChunks = 0;
 const helperProcessBridges = new WeakMap();
+const writeMediaDiagnostic = createMediaDiagnostics(resolve(app.getPath('userData'), 'screen-share-error.log'));
+const sourceTimingRecordedAt = new Map();
+
+function recordSourceTiming(stage, startedAt, sourceCount) {
+  const now = Date.now();
+  if (now - (sourceTimingRecordedAt.get(stage) ?? 0) < 30_000) return;
+  sourceTimingRecordedAt.set(stage, now);
+  void writeMediaDiagnostic({ stage, durationMs: Math.round(performance.now() - startedAt), sourceCount });
+}
+
+function recordVideoFailure(stage, error, frame) {
+  void writeMediaDiagnostic({
+    stage, message: String(error?.message ?? error).slice(0, 2000),
+    appVersion: app.getVersion(), electronVersion: process.versions.electron,
+    windowsVersion: osRelease(), gpu: app.getGPUFeatureStatus(),
+    pixelFormat: frame?.pixelFormat, codedSize: frame?.codedSize,
+  });
+  // 只在故障时查询 GPU，不记录窗口、纹理句柄或账号信息。
+  void app.getGPUInfo('basic').then((gpu) => writeMediaDiagnostic({
+    stage: 'gpuAdapters', devices: gpu.gpuDevice?.slice(0, 8).map((device) => ({
+      vendorId: device.vendorId, deviceId: device.deviceId, active: device.active,
+      driverVersion: device.driverVersion,
+    })),
+  })).catch((failure) => writeMediaDiagnostic({ stage: 'gpuDiagnostics', message: String(failure.message).slice(0, 500) }));
+}
 
 const mediaHelper = new MediaHelperManager({
   platform: process.platform,
   executablePath: mediaHelperPath,
+  onDiagnostic: (message) => { void writeMediaDiagnostic({ stage: 'helperStderr', message }); },
   onSharedTextureFrame: handleNativeSharedTextureFrame,
   onVideoCaptureEnded: handleVideoCaptureEnded,
   onVideoCaptureSuspended: handleVideoCaptureSuspended,
@@ -148,6 +175,7 @@ function notifyNativeVideoError(video, code) {
   }
   releaseNativeVideoImports(video);
   void stopNativeVideo(video.sessionId).catch((error) => {
+    recordVideoFailure('stopAfterFailure', error);
     console.error(`native video stop after capture failure failed: ${error.message}`);
   });
 }
@@ -507,6 +535,7 @@ function handleNativeSharedTextureFrame(state, frame) {
   let helperBridge = helperProcessBridges.get(state);
   let owned;
   let imported;
+  let importStage = 'loadBridge';
   let importRegistered = false;
   let releaseBeforeRegistration = false;
   let slotReleaseStarted = false;
@@ -520,7 +549,8 @@ function handleNativeSharedTextureFrame(state, frame) {
     video.imported.delete(frame.slotIndex);
     if (state.alive && !state.closed) {
       video.pendingSlotReleases.add(frame.slotIndex);
-      void mediaHelper.releaseSharedTextureSlot(video.sessionId, frame.slotIndex).catch(() => {
+      void mediaHelper.releaseSharedTextureSlot(video.sessionId, frame.slotIndex).catch((error) => {
+        if (!video.failureNotified) recordVideoFailure('releaseTextureSlot', error, frame);
         notifyNativeVideoError(video, 'sharedTextureSlotReleaseFailed');
       }).finally(() => video.pendingSlotReleases.delete(frame.slotIndex));
     }
@@ -528,13 +558,17 @@ function handleNativeSharedTextureFrame(state, frame) {
   try {
     if (!nativeMediaBridge) nativeMediaBridge = loadNativeMediaBridge();
     if (!helperBridge) {
+      importStage = 'openHelper';
       helperBridge = nativeMediaBridge.openSpawnedMediaHelper(state.child.pid, mediaHelperPath());
       helperProcessBridges.set(state, helperBridge);
     }
+    importStage = 'validateTexturePool';
     if (video.imported.has(frame.slotIndex) || video.imported.size >= 3) {
       throw new Error('sharedTexturePoolInvariantFailed');
     }
+    importStage = 'duplicateHandle';
     owned = helperBridge.duplicateSharedTexture(frame.sourceHandleHex);
+    importStage = 'importTexture';
     imported = owned.withImportHandle((ntHandle) => sharedTexture.importSharedTexture({
       textureInfo: {
         pixelFormat: frame.pixelFormat,
@@ -554,16 +588,20 @@ function handleNativeSharedTextureFrame(state, frame) {
     }
     video.imported.set(frame.slotIndex, imported);
     importRegistered = true;
+    importStage = 'sendTexture';
     void sharedTexture.sendSharedTexture({
       frame: mainWindow.webContents.mainFrame,
       importedSharedTexture: imported,
     }, 'native-screen-frame', video.sessionId).then(() => {
       imported.release();
-    }).catch(() => {
+    }).catch((error) => {
+      if (!video.failureNotified) recordVideoFailure('sendTexture', error, frame);
       imported.release();
       notifyNativeVideoError(video, 'sharedTextureTransferFailed');
     });
-  } catch {
+  } catch (error) {
+    // 每次采集只保存首次失败；不记录纹理句柄、窗口标题或账号凭据。
+    if (!video.failureNotified) recordVideoFailure(importStage, error, frame);
     owned?.release();
     if (imported) imported.release();
     else void mediaHelper.releaseSharedTextureSlot(video.sessionId, frame.slotIndex).catch(() => {});
@@ -588,6 +626,7 @@ async function startNativeVideo(sourceId, maxFps, settings) {
     }
     return { sessionId, changed: true };
   } catch (error) {
+    if (!video.failureNotified) recordVideoFailure('startCapture', error);
     if (nativeVideoSession === video) nativeVideoSession = undefined;
     releaseNativeVideoImports(video);
     throw error;
@@ -997,9 +1036,12 @@ ipcMain.handle('media:capabilities', (event) => {
     return capabilities;
   });
 });
-ipcMain.handle('media:video-sources', (event) => {
+ipcMain.handle('media:video-sources', async (event) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
-  return mediaHelper.listVideoSources();
+  const startedAt = performance.now();
+  const snapshot = await mediaHelper.listVideoSources();
+  recordSourceTiming('enumerateSources', startedAt, snapshot.sources.length);
+  return snapshot;
 });
 ipcMain.handle('media:video-source-thumbnails', async (event, sources) => {
   if (!trustedSender(event) || closing || !Array.isArray(sources) || sources.length > 128
@@ -1009,18 +1051,21 @@ ipcMain.handle('media:video-source-thumbnails', async (event, sources) => {
     throw new Error('请求参数无效');
   }
   if (!sources.length) return [];
+  const startedAt = performance.now();
   try {
     const desktopSources = await desktopCapturer.getSources({
-      types: ['window', 'screen'],
+      types: [...new Set(sources.map((source) => source.kind === 'monitor' ? 'screen' : 'window'))],
       thumbnailSize: { width: 160, height: 90 },
     });
+    recordSourceTiming('sourceThumbnails', startedAt, desktopSources.length);
     return matchNativeVideoSourceThumbnails(sources, desktopSources.map((source) => ({
       type: captureSourceType(source),
       name: source.name,
       thumbnail: source.thumbnail,
     })));
-  } catch {
-    // Preview is optional; source selection continues with the existing placeholder.
+  } catch (error) {
+    void writeMediaDiagnostic({ stage: 'sourceThumbnailsFailed', message: String(error.message).slice(0, 500) });
+    // 缩略图不决定来源是否可选，失败后保留图标并按间隔重试。
     return [];
   }
 });
@@ -1108,8 +1153,10 @@ ipcMain.on('media:native-microphone:consumed', (event, sessionId, sequence, drop
   if (!trustedSender(event)) return;
   acknowledgeNativeMicrophoneChunk(sessionId, sequence, droppedChunks);
 });
-ipcMain.on('media:native-video:receiver-error', (event) => {
-  if (!trustedSender(event)) return;
+ipcMain.on('media:native-video:receiver-error', (event, failure) => {
+  if (!trustedSender(event) || !nativeVideoSession || nativeVideoSession.stopping
+      || failure?.sessionId !== nativeVideoSession.sessionId || typeof failure.message !== 'string') return;
+  recordVideoFailure('receiveTexture', failure.message.slice(0, 2000));
   notifyNativeVideoError(nativeVideoSession, 'sharedTextureReceiverFailed');
 });
 ipcMain.handle('media:diagnostics', async (event) => {
