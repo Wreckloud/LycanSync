@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { AppWindow, Fullscreen, HeadphoneOff, Headphones, MicOff, Minimize2, Monitor } from '@lucide/vue';
+import { AppWindow, Fullscreen, GripVertical, HeadphoneOff, Headphones, Maximize2, MicOff, Minimize2, Monitor, X } from '@lucide/vue';
 import { Track, type Participant } from 'livekit-client';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, normalizeAudioVolume } from '../rtc/audioPreferences';
 import VoiceLevelMic from './VoiceLevelMic.vue';
@@ -14,6 +14,8 @@ const props = withDefaults(defineProps<{
   avatar?: string;
   variant?: 'card' | 'viewer' | 'thumbnail';
   selected?: boolean;
+  focused?: boolean;
+  stageDraggable?: boolean;
   playbackVolume?: number;
   inputGain?: number;
   outputVolume?: number;
@@ -26,6 +28,10 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   select: [];
   focus: [];
+  remove: [];
+  dragStart: [event: DragEvent];
+  dragEnd: [];
+  move: [offset: number];
   notice: [message: string];
   toggleAudio: [];
   volumeChange: [volume: number];
@@ -39,6 +45,7 @@ const emit = defineEmits<{
   remoteInput: [input: RemoteControlInput];
 }>();
 const videoElement = ref<HTMLVideoElement | null>(null);
+const cardElement = ref<HTMLElement | null>(null);
 const windowFullscreen = ref(false);
 const VOLUME_DRAGGER_WIDTH = 28;
 const VOLUME_DRAGGER_HEIGHT = 104;
@@ -102,16 +109,42 @@ watch([videoElement, () => media.value.track], ([element, track], _, onCleanup) 
 }, { flush: 'post' });
 
 async function openFullscreen() {
-  const video = videoElement.value;
-  if (!video?.requestFullscreen) {
+  const card = cardElement.value;
+  if (!card?.requestFullscreen) {
     emit('notice', '当前浏览器不支持单路全屏观看。');
     return;
   }
   try {
-    await video.requestFullscreen();
+    await card.requestFullscreen();
+    if (!props.focused) emit('focus');
   } catch {
     emit('notice', '无法进入全屏，请再次点击或检查浏览器权限。');
   }
+}
+
+function toggleWindowFullscreen() {
+  windowFullscreen.value = !windowFullscreen.value;
+  if (windowFullscreen.value && !props.focused) emit('focus');
+}
+
+async function toggleFocusedView() {
+  if (props.focused) {
+    windowFullscreen.value = false;
+    if (document.fullscreenElement === cardElement.value) {
+      try { await document.exitFullscreen(); }
+      catch { emit('notice', '无法退出全屏，请使用 Esc 后重试。'); return; }
+    }
+  }
+  emit('focus');
+}
+
+function moveStageFromKeyboard(event: KeyboardEvent) {
+  if (!props.stageDraggable || !event.altKey) return;
+  const offset = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -2, ArrowDown: 2 }[event.key];
+  if (offset === undefined) return;
+  event.preventDefault();
+  event.stopPropagation();
+  emit('move', offset);
 }
 
 function exitWindowFullscreen(event: KeyboardEvent) {
@@ -121,8 +154,8 @@ function exitWindowFullscreen(event: KeyboardEvent) {
   windowFullscreen.value = false;
 }
 
-watch([() => props.variant, () => media.value.sharing], ([variant, sharing]) => {
-  if (variant !== 'viewer' || !sharing) windowFullscreen.value = false;
+watch([() => props.variant, () => media.value.sharing, () => props.focused], ([variant, sharing, focused]) => {
+  if (variant !== 'viewer' || !sharing || !focused) windowFullscreen.value = false;
 });
 
 function selectFromKeyboard(event: KeyboardEvent) {
@@ -282,14 +315,14 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <article class="participant-card" :class="[`is-${variant}`, { 'is-speaking': media.speaking, 'is-selected-viewer': selected, 'is-window-fullscreen': windowFullscreen }]"
+  <article ref="cardElement" class="participant-card" :class="[`is-${variant}`, { 'is-speaking': media.speaking, 'is-selected-viewer': selected, 'is-window-fullscreen': windowFullscreen }]"
     @keydown.esc="exitWindowFullscreen"
     :data-testid="variant === 'viewer' && media.sharing ? 'viewer-screen' : variant === 'thumbnail' ? 'member-thumbnail' : 'participant-card'">
     <div class="participant-media" :class="{ 'is-selectable': selectable, 'is-remote-control': remoteControlActive }"
       :role="selectable ? 'button' : undefined" :tabindex="remoteControlActive ? 0 : selectable ? 0 : undefined"
       :aria-label="selectable ? (selected ? '从主观看区移除' : '放大') + media.name + '的共享画面' : undefined"
       :data-select-hint="selectable ? selected ? '从主观看区移除' : '点击放大观看' : undefined"
-      @click="handleRemoteClick" @dblclick="variant === 'viewer' && media.sharing && !remoteControlActive && emit('focus')"
+      @click="handleRemoteClick" @dblclick="variant === 'viewer' && media.sharing && !remoteControlActive && toggleFocusedView()"
       @keydown="remoteKey($event, true)" @keyup="remoteKey($event, false)"
       @blur="releaseHeldRemoteInputs"
       @pointerdown="remotePointerDown" @pointermove="remotePointerMove" @pointerup="remotePointerUp"
@@ -312,15 +345,26 @@ onBeforeUnmount(() => {
     <div class="participant-meta">
       <strong>{{ media.name }}{{ isLocal ? '（你）' : '' }}</strong>
       <span v-if="variant === 'viewer' && media.sharing" class="viewer-actions">
+        <button v-if="stageDraggable" type="button" class="viewer-action stage-drag-handle" draggable="true"
+          :aria-label="'拖动排列' + media.name + '的共享画面'" title="拖动排列；也可使用 Alt + 方向键"
+          @dragstart="emit('dragStart', $event)" @dragend="emit('dragEnd')" @keydown="moveStageFromKeyboard">
+          <GripVertical :size="16" aria-hidden="true" />
+        </button>
+        <button type="button" class="viewer-action" :disabled="remoteControlActive"
+          :aria-label="(focused ? '返回多人舞台' : '单路观看') + media.name + '的共享画面'" @click="toggleFocusedView">
+          <Minimize2 v-if="focused" :size="16" aria-hidden="true" /><Maximize2 v-else :size="16" aria-hidden="true" />
+        </button>
         <button type="button" class="viewer-action" :aria-label="'全屏观看' + media.name + '的共享画面'"
           data-viewer-tooltip="系统全屏"
           :disabled="!media.track || media.muted || !fullscreenAvailable" @click="openFullscreen"><Fullscreen :size="16" aria-hidden="true" /></button>
         <button type="button" class="viewer-action" :class="{ 'is-active': windowFullscreen }"
           :aria-label="(windowFullscreen ? '退出窗口全屏观看' : '窗口全屏观看') + media.name + '的共享画面'"
           :data-viewer-tooltip="windowFullscreen ? '退出窗口全屏' : '窗口全屏'"
-          :disabled="!windowFullscreen && (!media.track || media.muted)" @click="windowFullscreen = !windowFullscreen">
+          :disabled="!windowFullscreen && (!media.track || media.muted)" @click="toggleWindowFullscreen">
           <Minimize2 v-if="windowFullscreen" :size="16" aria-hidden="true" /><AppWindow v-else :size="16" aria-hidden="true" />
         </button>
+        <button type="button" class="viewer-action" :disabled="remoteControlActive"
+          :aria-label="'从舞台移出' + media.name + '的共享画面'" @click="emit('remove')"><X :size="16" aria-hidden="true" /></button>
       </span>
       <button v-if="media.sharing && !isLocal && remoteControlAvailable" type="button" class="viewer-action remote-control-action"
         :aria-label="remoteControlActive ? '退出远程控制' : remoteControlPending ? '取消远程控制申请' : '申请远程控制'"

@@ -30,6 +30,8 @@ import { sendPresenceHeartbeat, type UserActivity, type UserPresenceStatus } fro
 import type { AuthUser, ProfileUpdate } from './auth/authApi';
 import { settingsSectionForEntry, type SettingsSectionId } from './settings/settingsSections';
 import { useActivityVisibility } from './settings/useActivityVisibility';
+import { ScreenShareStage } from './rtc/screenShareStage';
+import { useStagePreferences } from './settings/useStagePreferences';
 
 const props = defineProps<{
   user: AuthUser;
@@ -652,9 +654,11 @@ const listening = ref(true);
 const settingsOpen = ref(false);
 const settingsSection = ref<SettingsSectionId>('audio');
 const settingsReturnFocus = ref<HTMLElement | null>(null);
-const enlargedIdentities = ref<string[]>([]);
-const stageDismissed = ref(false);
-const focusedIdentity = ref<string | null>(null);
+const stage = reactive(new ScreenShareStage());
+const stagePreferences = useStagePreferences(props.user.id);
+const enlargedIdentities = computed(() => stage.slots.filter((id): id is string => id !== null));
+const stageDrag = ref<{ identity: string; room: typeof rtc.room } | null>(null);
+const stageDropSlot = ref<number | null>(null);
 const membersExpanded = ref(false);
 const filmstripPage = ref(0);
 const viewerGrid = ref<HTMLElement | null>(null);
@@ -754,35 +758,49 @@ const previewParticipantName = (identity: string, displayName: string) =>
 const previewParticipantAvatar = (identity: string) =>
   selectedGroupDetail.value?.members.find((member) => `user-${member.userId}` === identity)?.avatar ?? '';
 const groupParticipants = computed(() => showingJoinedGroup.value ? rtc.participants : []);
-const sharingParticipants = computed(() => groupParticipants.value.filter((participant) => participant.isScreenShareEnabled));
+const sharingParticipants = computed(() => {
+  void rtc.revision;
+  return groupParticipants.value.filter((participant) => participant.isScreenShareEnabled);
+});
 const filmstripPageCount = computed(() => Math.ceil(groupParticipants.value.length / 5));
 const filmstripParticipants = computed(() => groupParticipants.value.slice(filmstripPage.value * 5, (filmstripPage.value + 1) * 5));
-const activeScreenShareCount = computed(() => rtc.participants.filter((participant) => participant.isScreenShareEnabled).length);
+const activeScreenShareCount = computed(() => {
+  void rtc.revision;
+  return rtc.participants.filter((participant) => participant.isScreenShareEnabled).length;
+});
 const remoteControlShare = (identity: string) => rtc.remoteControlShares[identity];
 const remoteControlCanRequest = (identity: string) => remoteControlShare(identity)?.kind === 'monitor';
 const remoteControlIsPending = (identity: string) => rtc.remoteControlPending?.identity === identity;
 const remoteControlIsActive = (identity: string) => rtc.remoteControlActive?.identity === identity;
 // TODO: 服务端按群组原子分配并回收共享名额，处理并发开启、断线及失败；前端限制仅作提示。
 const screenShareLimitReached = computed(() => activeScreenShareCount.value >= 8 && !localParticipant.value?.isScreenShareEnabled);
-const sharingIdentityKey = computed(() => sharingParticipants.value.map((participant) => participant.identity).join('|'));
+const sharingIdentityKey = computed(() => {
+  void rtc.revision;
+  return rtc.participants.filter((participant) => participant.isScreenShareEnabled).map((participant) => participant.identity).join('|');
+});
 const enlargedParticipants = computed(() => enlargedIdentities.value
   .map((identity) => sharingParticipants.value.find((participant) => participant.identity === identity))
   .filter((participant) => participant !== undefined));
 const hasStage = computed(() => enlargedParticipants.value.length > 0);
 const focusedOnSelectedGroup = computed(() => hasStage.value && showingJoinedGroup.value
-  && enlargedParticipants.value.some((participant) => participant.identity === focusedIdentity.value));
-const displayedParticipants = computed(() => focusedOnSelectedGroup.value
-  ? enlargedParticipants.value.filter((participant) => participant.identity === focusedIdentity.value)
-  : enlargedParticipants.value);
-
-watch(sharingIdentityKey, (key) => {
-  // 首次共享默认展示一路；手动取消全部放大后，新轨道变化不强迫用户回到舞台。
-  const available = key ? key.split('|') : [];
-  if (!available.length) stageDismissed.value = false;
-  const retained = enlargedIdentities.value.filter((id) => available.includes(id)).slice(0, 4);
-  enlargedIdentities.value = retained.length || !available.length || stageDismissed.value ? retained : [available[0]];
-  if (focusedIdentity.value && !available.includes(focusedIdentity.value)) focusedIdentity.value = null;
+  && enlargedParticipants.value.some((participant) => participant.identity === stage.focused));
+const displayedSlots = computed(() => {
+  const slots = stage.slots.map((identity, index) => ({ index,
+    participant: sharingParticipants.value.find((participant) => participant.identity === identity) }));
+  if (focusedOnSelectedGroup.value) return slots.filter((slot) => slot.participant?.identity === stage.focused);
+  const lastOccupied = stage.slots.reduce((last, identity, index) => identity !== null ? index : last, -1);
+  const count = stageDrag.value || lastOccupied >= 2 ? 4 : lastOccupied + 1;
+  return slots.slice(0, count);
 });
+
+watch(() => [rtc.status, sharingIdentityKey.value] as const, ([status, key]) => {
+  // 重连期间轨道列表可能暂时为空，不能将它视为用户停止共享并清除手动安排。
+  if (status === 'reconnecting') { endStageDrag(); return; }
+  stage.sync(key ? key.split('|') : []);
+  if (stageDrag.value && !stage.available.includes(stageDrag.value.identity)) endStageDrag();
+}, { immediate: true });
+watch(stagePreferences.autoFill, (enabled) => stage.setAutoFill(enabled), { immediate: true });
+watch(() => rtc.room, () => { stage.reset(); stage.sync(sharingIdentityKey.value ? sharingIdentityKey.value.split('|') : []); endStageDrag(); });
 watch(() => groupParticipants.value.map((participant) => participant.identity).join('|'), () => {
   filmstripPage.value = Math.min(filmstripPage.value, Math.max(0, filmstripPageCount.value - 1));
 });
@@ -818,9 +836,8 @@ async function joinGroup(groupId: string) {
   selectedGroupId.value = groupId;
   pendingSwitchGroupId.value = null;
   joiningGroupId.value = groupId;
-  enlargedIdentities.value = [];
-  stageDismissed.value = false;
-  focusedIdentity.value = null;
+  stage.reset();
+  endStageDrag();
   membersExpanded.value = false;
   viewerNotice.value = '';
   callbarLeaving.value = false;
@@ -868,9 +885,8 @@ function requestJoin(groupId: string) {
     pendingSwitchGroupId.value = null;
     return;
   }
-  enlargedIdentities.value = [];
-  stageDismissed.value = false;
-  focusedIdentity.value = null;
+  stage.focused = null;
+  endStageDrag();
   membersExpanded.value = false;
   if (joinedGroupId.value !== null) {
     pendingSwitchGroupId.value = groupId;
@@ -895,9 +911,8 @@ function leaveVoice() {
   joinedGroupDetail.value = null;
   joiningGroupId.value = null;
   pendingSwitchGroupId.value = null;
-  enlargedIdentities.value = [];
-  stageDismissed.value = false;
-  focusedIdentity.value = null;
+  stage.reset();
+  endStageDrag();
   membersExpanded.value = false;
   viewerNotice.value = '';
   void refreshGroups();
@@ -975,22 +990,58 @@ function remoteScreenSharePlaybackVolume() {
 
 function toggleEnlargedParticipant(identity: string) {
   viewerNotice.value = '';
-  if (!enlargedIdentities.value.includes(identity) && enlargedIdentities.value.length >= 4) {
-    viewerNotice.value = '主观看区最多同时显示四路共享，请先移除一路已放大的画面。';
-    return;
-  }
-  enlargedIdentities.value = enlargedIdentities.value.includes(identity)
-    ? enlargedIdentities.value.filter((item) => item !== identity)
-    : [...enlargedIdentities.value, identity];
-  stageDismissed.value = enlargedIdentities.value.length === 0;
-  if (focusedIdentity.value && !enlargedIdentities.value.includes(focusedIdentity.value)) focusedIdentity.value = null;
+  if (stage.slots.includes(identity)) stage.remove(identity);
+  else stage.place(identity);
+  releaseViewerLock();
   if (!enlargedIdentities.value.length) membersExpanded.value = false;
 }
 
 function toggleFocusedParticipant(identity: string) {
   releaseViewerLock();
-  if (focusedIdentity.value !== identity) membersExpanded.value = false;
-  focusedIdentity.value = focusedIdentity.value === identity ? null : identity;
+  if (stage.focused !== identity) membersExpanded.value = false;
+  stage.toggleFocus(identity);
+}
+
+function beginStageDrag(identity: string, event: DragEvent) {
+  if (focusedOnSelectedGroup.value || remoteControlIsActive(identity) || !event.dataTransfer) { event.preventDefault(); return; }
+  stageDrag.value = { identity, room: rtc.room };
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('application/x-lycansync-stage', identity);
+  releaseViewerLock();
+}
+
+function endStageDrag() {
+  stageDrag.value = null;
+  stageDropSlot.value = null;
+}
+
+function moveStageParticipant(identity: string, target: number) {
+  if (!showingJoinedGroup.value || focusedOnSelectedGroup.value || remoteControlIsActive(identity)
+      || (stage.slots[target] && remoteControlIsActive(stage.slots[target]!))) return;
+  stage.move(identity, target);
+  releaseViewerLock();
+}
+
+function moveStageFromKeyboard(identity: string, index: number, offset: number) {
+  if ((offset === -1 && index % 2 === 0) || (offset === 1 && index % 2 === 1)) return;
+  moveStageParticipant(identity, index + offset);
+}
+
+function dragOverStage(slot: number, event: DragEvent) {
+  if (!stageDrag.value || stageDrag.value.room !== rtc.room || !showingJoinedGroup.value || focusedOnSelectedGroup.value) return;
+  if (stage.slots[slot] && remoteControlIsActive(stage.slots[slot]!)) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  stageDropSlot.value = slot;
+}
+
+function dropOnStage(slot: number, event: DragEvent) {
+  const drag = stageDrag.value;
+  if (drag && drag.room === rtc.room && event.dataTransfer?.getData('application/x-lycansync-stage') === drag.identity) {
+    event.preventDefault();
+    moveStageParticipant(drag.identity, slot);
+  }
+  endStageDrag();
 }
 
 function toggleMembersExpanded() {
@@ -1021,9 +1072,8 @@ function previewGroup(groupId: string) {
   else void loadGroup(groupId);
   pendingSwitchGroupId.value = null;
   if (changed) {
-    enlargedIdentities.value = [];
-    stageDismissed.value = false;
-    focusedIdentity.value = null;
+    stage.focused = null;
+    endStageDrag();
     membersExpanded.value = false;
   }
   viewerNotice.value = '';
@@ -1113,15 +1163,24 @@ function participantListening(participant: Participant) {
           <div class="voice-heading">
             <span><AudioLines :size="15" />语音中</span>
             <span class="voice-heading-actions">
+              <button v-if="focusedOnSelectedGroup" type="button" class="viewer-return" @click="stage.focused = null; releaseViewerLock()">返回多人舞台</button>
               <small data-testid="member-count">{{ groupParticipants.length }} 人 · {{ sharingParticipants.length }} / 8 路共享</small>
             </span>
           </div>
-          <div v-if="hasStage" ref="viewerGrid" class="viewer-grid" :class="`viewer-count-${displayedParticipants.length}`"
+          <div v-if="hasStage" ref="viewerGrid" class="viewer-grid" :class="`viewer-count-${displayedSlots.length}`"
             :style="lockedViewerHeight === null ? undefined : { flex: `0 0 ${lockedViewerHeight}px` }">
-            <ParticipantCard v-for="participant in displayedParticipants" :key="participant.identity" :participant="participant"
+            <div v-for="{ participant, index } in displayedSlots" :key="index" class="stage-slot"
+              :class="{ 'is-drop-target': stageDropSlot === index }" :data-stage-slot="index"
+              @dragover="dragOverStage(index, $event)" @dragleave="stageDropSlot === index && (stageDropSlot = null)"
+              @drop="dropOnStage(index, $event)">
+            <ParticipantCard v-if="participant" :key="participant.identity" :participant="participant"
               :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)"
               :playback-volume="participantVolume(participant.identity)" :input-gain="inputGain" :output-volume="outputVolume"
               variant="viewer"
+              :focused="focusedOnSelectedGroup" :stage-draggable="!focusedOnSelectedGroup && !remoteControlIsActive(participant.identity)"
+              @remove="toggleEnlargedParticipant(participant.identity)"
+              @drag-start="beginStageDrag(participant.identity, $event)" @drag-end="endStageDrag"
+              @move="moveStageFromKeyboard(participant.identity, index, $event)"
               :remote-control-available="remoteControlCanRequest(participant.identity)"
               :remote-control-unavailable="remoteControlShare(participant.identity)?.kind === 'window'"
               :remote-control-pending="remoteControlIsPending(participant.identity)"
@@ -1133,6 +1192,8 @@ function participantListening(participant: Participant) {
               @toggle-audio="toggleParticipantAudio(participant.identity)" @volume-change="updateParticipantVolume(participant.identity, $event)"
               @input-gain-change="updateInputGain" @output-volume-change="updateOutputVolume"
               @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />
+              <div v-else class="stage-empty">{{ stageDrag ? '拖到这里放置画面' : '空闲位置' }}</div>
+            </div>
           </div>
           <div v-else class="participant-grid">
             <ParticipantCard v-for="participant in groupParticipants" :key="participant.identity" :participant="participant"
@@ -1288,6 +1349,8 @@ function participantListening(participant: Participant) {
     <SettingsView v-if="settingsOpen" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
       :preferences="audioPreferences" :rtc="rtc" :connected="connected" :input-level-percent="localInputLevelPercent"
       :activity="currentActivity" :show-activity="showActivity" :activity-error="activityVisibilityError"
+      :stage-auto-fill="stagePreferences.autoFill.value" :stage-preference-error="stagePreferences.error.value"
+      @stage-auto-fill="stagePreferences.setAutoFill"
       @activity-visibility="setShowActivity"
       :save-profile="saveProfile" @close="closeSettings" @logout="emit('logout')" />
     <div v-if="captureRequest" class="dialog-backdrop" @keydown.esc="selectCaptureSource(null)">

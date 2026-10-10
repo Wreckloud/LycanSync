@@ -28,9 +28,11 @@ const props = defineProps<{
   activity: UserActivity | null;
   showActivity: boolean;
   activityError: string;
+  stageAutoFill: boolean;
+  stagePreferenceError: string;
   saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
 }>();
-const emit = defineEmits<{ close: []; logout: []; activityVisibility: [enabled: boolean] }>();
+const emit = defineEmits<{ close: []; logout: []; activityVisibility: [enabled: boolean]; stageAutoFill: [enabled: boolean] }>();
 const heading = ref<HTMLElement | null>(null);
 const profileSettings = ref<InstanceType<typeof ProfileSettings> | null>(null);
 const activeSection = ref<SettingsSectionId>(props.section);
@@ -111,7 +113,8 @@ async function leaveSettings(logout: boolean) {
           :desktop="desktop" :preferences="preferences" :rtc="rtc" :connected="connected"
           :input-level-percent="inputLevelPercent" />
         <SoundSettings v-show="activeSection === 'sound'" :user-id="user.id" :active="activeSection === 'sound'" />
-        <ClientSettings v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'" />
+        <ClientSettings v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'"
+          :stage-auto-fill="stageAutoFill" :stage-preference-error="stagePreferenceError" @stage-auto-fill="emit('stageAutoFill', $event)" />
         <AboutSettings v-show="activeSection === 'about'" :active="activeSection === 'about'" :rtc="rtc" />
       </div>
     </section>

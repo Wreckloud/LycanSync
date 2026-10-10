@@ -2,7 +2,8 @@
 import { reactive, ref, watch } from 'vue';
 import { readScreenSharePreferences, saveScreenSharePreferences } from '../../settings/screenSharePreferences';
 
-const props = defineProps<{ desktop: boolean; active: boolean }>();
+const props = defineProps<{ desktop: boolean; active: boolean; stageAutoFill: boolean; stagePreferenceError: string }>();
+const emit = defineEmits<{ stageAutoFill: [enabled: boolean] }>();
 const autoStartSupported = defineModel<boolean>('supported', { default: false });
 const autoStartEnabled = defineModel<boolean>('enabled', { default: false });
 const autoStartBusy = defineModel<boolean>('busy', { default: false });
@@ -75,6 +76,15 @@ async function updateAutoStart(event: Event) {
 <template>
   <div class="settings-section client-settings">
     <p class="settings-intro">客户端选项只影响当前设备。</p>
+    <section class="settings-block">
+      <h2>共享观看</h2>
+      <label class="settings-toggle">
+        <span><strong>自动填充舞台</strong><small>按开始共享的顺序填入最多四路；停止共享或移出后自动补位。手动移出的画面不会自动返回。</small></span>
+        <input type="checkbox" :checked="stageAutoFill" aria-label="自动填充舞台"
+          @change="emit('stageAutoFill', ($event.target as HTMLInputElement).checked)" />
+      </label>
+      <p v-if="stagePreferenceError" role="alert" class="settings-error">{{ stagePreferenceError }}</p>
+    </section>
     <section class="settings-block">
       <h2>屏幕共享</h2>
       <p>以下设置在下一次屏幕共享时生效。</p>
