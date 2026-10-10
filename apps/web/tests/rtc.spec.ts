@@ -137,7 +137,7 @@ async function join(page: Page, nickname: string) {
   await page.getByRole('button', { name: /开黑小队，单击预览，双击加入语音/ }).dblclick();
   await expect(page.getByTestId('callbar').getByRole('status')).toContainText('语音已连接');
   await expect(page.getByRole('button', { name: '关闭麦克风' })).toBeEnabled();
-  await expect(page.getByRole('button', { name: '离开当前群组语音' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: '离开语音', exact: true })).toBeEnabled();
 }
 
 async function inboundBytes(page: Page, kind: 'audio' | 'video') {
@@ -228,10 +228,10 @@ async function toggleMembersAndMeasureVideo(page: Page) {
   });
 }
 
-function expectFilmstripAnimation(animation: Awaited<ReturnType<typeof toggleMembersAndMeasureVideo>>) {
-  expect(animation.viewerShift).toBeLessThan(2);
-  expect(animation.panelHeightDelta).toBeGreaterThan(85);
-  expect(animation.intermediatePanelHeights).toBeGreaterThan(2);
+function expectImmediateFilmstripLayout(layout: Awaited<ReturnType<typeof toggleMembersAndMeasureVideo>>) {
+  expect(layout.viewerShift).toBeLessThan(2);
+  expect(layout.panelHeightDelta).toBeGreaterThan(85);
+  expect(layout.intermediatePanelHeights).toBe(0);
 }
 
 test('未共享时显示群成员头像，停止共享后恢复头像', async ({ context, page }) => {
@@ -239,9 +239,8 @@ test('未共享时显示群成员头像，停止共享后恢复头像', async ({
   setTestAvatar(context, avatar);
   await installSyntheticMedia(context);
   await join(page, '头像测试');
-  const callbar = page.getByTestId('callbar');
   const localCard = page.getByTestId('participant-card');
-  await expect(callbar.getByRole('button', { name: '关闭麦克风', exact: true }).locator('.voice-level-mic')).toHaveCount(1);
+  await expect(page.locator('.callbar').getByRole('button', { name: '关闭麦克风', exact: true }).locator('.voice-level-mic')).toHaveCount(1);
   await expect(localCard.locator('.voice-level-mic')).toHaveCount(1);
   await expect(localCard.locator('.voice-level-fill')).toHaveAttribute('width', '6');
   await expect(localCard.locator('.voice-level-fill')).toHaveCSS('transition-duration', '0s');
@@ -254,48 +253,54 @@ test('未共享时显示群成员头像，停止共享后恢复头像', async ({
       .find((sender) => sender.track?.kind === 'audio')?.track;
     return Boolean(sourceTrack && senderTrack && sourceTrack.id !== senderTrack.id);
   })).toBe(true);
-  const diagnosticsButton = page.getByRole('button', { name: '媒体诊断' });
-  const diagnostics = page.getByRole('complementary', { name: '媒体诊断' });
-  await diagnosticsButton.hover();
-  await expect(page.getByRole('tooltip')).toHaveText('点击固定');
-  await expect(diagnostics).toBeVisible();
-  await page.locator('.chat-heading').hover();
-  await expect(diagnostics).toBeHidden();
-  await diagnosticsButton.click();
-  await page.locator('.chat-heading').hover();
-  await expect(diagnostics).toBeVisible();
-  await diagnosticsButton.click();
-  await page.locator('.chat-heading').hover();
-  await expect(diagnostics).toBeHidden();
-  const microphoneButton = callbar.getByRole('button', { name: '关闭麦克风', exact: true });
+  const microphoneButton = page.locator('.callbar').getByRole('button', { name: '关闭麦克风', exact: true });
   await microphoneButton.hover();
-  const audioSettings = page.getByRole('region', { name: '音频详细设置' });
-  await expect(audioSettings).toBeVisible();
-  await expect(audioSettings.getByRole('meter', { name: '麦克风输入等级' })).toBeVisible();
-  const inputGainSlider = audioSettings.getByRole('slider', { name: '麦克风输入音量' });
-  await inputGainSlider.hover();
-  await expect(audioSettings).toBeVisible();
+  const quickVolumeSettings = page.getByRole('region', { name: '音量快捷设置' });
+  await expect(quickVolumeSettings.getByRole('slider')).toHaveCount(2);
+  await expect(quickVolumeSettings.getByRole('checkbox')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '媒体诊断' })).toHaveCount(0);
+  const peerCountBeforeSettings = await page.evaluate(() => window.__rtcTest.peers.length);
+  await page.getByRole('button', { name: '打开语音与音频设置' }).click();
+  const settingsPage = page.locator('.settings-view');
+  await expect(settingsPage).toBeVisible();
+  await expect(settingsPage).not.toHaveAttribute('role', 'dialog');
+  await expect(settingsPage).not.toHaveAttribute('aria-modal', 'true');
+  const audioSettingsSection = page.locator('.audio-settings');
+  await expect(audioSettingsSection).toBeVisible();
+  await expect(audioSettingsSection.getByRole('checkbox', { name: '回声消除' })).toBeEnabled();
+  await expect(audioSettingsSection.getByText('人声增强', { exact: true })).toBeVisible();
+  await expect(audioSettingsSection.getByRole('meter', { name: '麦克风输入等级' })).toBeVisible();
+  const inputGainSlider = audioSettingsSection.getByRole('slider', { name: '麦克风输入音量' });
   await inputGainSlider.fill('2');
-  await audioSettings.getByRole('checkbox', { name: '环境降噪' }).uncheck();
+  await audioSettingsSection.getByRole('checkbox', { name: '环境降噪' }).uncheck();
   await expect.poll(() => page.evaluate(() => window.__rtcTest.tracks
     .find((track) => track.kind === 'audio')?.getConstraints().noiseSuppression)).toBe(false);
+  await audioSettingsSection.getByRole('slider', { name: 'LycanSync 总输出音量' }).fill('2');
+  await page.getByRole('button', { name: '关于与诊断', exact: true }).click();
+  await expect(page.locator('.media-diagnostics')).toHaveCount(0);
+  await page.getByRole('button', { name: '查看媒体诊断' }).click();
+  await expect(page.locator('.media-diagnostics')).toBeVisible();
+  await expect(page.locator('.native-capture-probe')).toBeVisible();
+  await page.getByRole('button', { name: '返回应用' }).click();
+  expect(await page.evaluate(() => window.__rtcTest.peers.length)).toBe(peerCountBeforeSettings);
+  await expect(page.getByTestId('member-count')).toContainText('1 人');
   await localCard.getByRole('button', { name: /输入音量200%/ }).hover();
   await expect(localCard.locator('.participant-volume-popover').filter({ hasText: '输入 200%' })).toBeVisible();
-  await expect(callbar.getByRole('button', { name: '停止接收声音', exact: true })).toHaveCount(0);
-  await expect(audioSettings).toBeVisible();
-  await audioSettings.getByRole('slider', { name: 'LycanSync 总输出音量' }).fill('2');
+  await expect(page.locator('.callbar').getByRole('button', { name: '停止接收声音', exact: true })).toBeEnabled();
   await localCard.getByRole('button', { name: /LycanSync 总输出200%/ }).hover();
   await expect(localCard.locator('.participant-volume-popover').filter({ hasText: '输出 200%' })).toBeVisible();
   await localCard.getByRole('button', { name: '关闭自己的麦克风' }).click();
   await expect(localCard.locator('.participant-volume-popover').filter({ hasText: /^输入/ })).toHaveCount(0);
-  await expect(callbar.getByRole('button', { name: '开启麦克风', exact: true })).toBeEnabled();
+  await expect(page.locator('.callbar').getByRole('button', { name: '开启麦克风', exact: true })).toBeEnabled();
   await localCard.getByRole('button', { name: '开启自己的麦克风' }).click();
-  await expect(callbar.getByRole('button', { name: '关闭麦克风', exact: true })).toBeEnabled();
+  await expect(page.locator('.callbar').getByRole('button', { name: '关闭麦克风', exact: true })).toBeEnabled();
   await localCard.getByRole('button', { name: '停止接收所有成员声音' }).click();
   await expect(localCard.locator('.participant-volume-popover').filter({ hasText: /^输出/ })).toHaveCount(0);
   await localCard.getByRole('button', { name: '恢复接收所有成员声音' }).click();
   await expect(localCard.getByRole('button', { name: /停止接收所有成员声音/ })).toBeEnabled();
-  await expect(callbar.getByRole('button', { name: '语音设置' })).toBeVisible();
+  await expect(page.locator('.callbar').getByRole('button', { name: '语音设置' })).toHaveCount(0);
+  await expect(page.getByLabel('个人状态与设置').getByRole('button', { name: '语音与音频设置' })).toBeVisible();
+  expect(await page.evaluate(() => window.__rtcTest.tracks.some((track) => track.kind === 'audio'))).toBe(true);
   await expect(localCard.locator('.large-avatar img')).toHaveAttribute('src', avatar);
   await page.getByRole('button', { name: '开始屏幕共享' }).click();
   await expect(page.getByTestId('viewer-screen')).toBeVisible();
@@ -315,6 +320,11 @@ test('单击只预览；入房接口未启用时明确提示', async ({ page }) 
   await page.getByRole('button', { name: /周末车队，单击预览，双击加入语音/ }).dblclick();
   await expect(page.getByRole('alert')).toContainText('rtc-local');
   await expect(page.getByRole('button', { name: '加入当前群组语音' })).toBeEnabled();
+  await page.getByRole('button', { name: '收起提示', exact: true }).click();
+  await expect(page.locator('.app-notice [role="alert"]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '展开提示', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '展开提示', exact: true }).click();
+  await expect(page.locator('.app-notice [role="alert"]')).toContainText('rtc-local');
   await page.screenshot({ path: 'test-results/lobby.png', fullPage: true });
 });
 
@@ -381,14 +391,18 @@ test('自定义入场音通过房间数据流播放给已在语音中的成员',
     await installSyntheticMedia(entrant);
     const entrantPage = await entrant.newPage();
     await entrantPage.goto('/');
-    await entrantPage.getByRole('button', { name: '个人设置', exact: true }).click();
-    await entrantPage.getByLabel('上传入场音效').setInputFiles({
+    if (!await entrantPage.locator('.settings-view').isVisible()) {
+      await entrantPage.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+    }
+    await entrantPage.getByRole('button', { name: '账号设置', exact: true }).click();
+    await entrantPage.getByRole('button', { name: '音效', exact: true }).click();
+    await entrantPage.getByLabel('选择入场音效').setInputFiles({
       name: 'hello.wav',
       mimeType: 'audio/wav',
       buffer: silentWav(),
     });
     await expect(entrantPage.getByRole('button', { name: '试听' })).toBeVisible();
-    await entrantPage.getByRole('button', { name: '关闭设置' }).click();
+    await entrantPage.getByRole('button', { name: '返回应用' }).click();
 
     await join(page, '等候入场音的小狼');
     await join(entrantPage, '带入场音的小狼');
@@ -442,11 +456,33 @@ test('取消所有放大画面返回语音卡片，双击舞台可专注单路�
 
     await page.getByRole('button', { name: '放大福州小狼的共享画面' }).click();
     await expect(page.getByTestId('viewer-screen')).toHaveCount(1);
+    const viewer = page.getByTestId('viewer-screen');
+    const originalVideo = await viewer.locator('video').elementHandle();
+    await expect(page.getByRole('button', { name: /画中画/ })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '全屏观看福州小狼的共享画面', exact: true })).toHaveAttribute('data-viewer-tooltip', '系统全屏');
+    await expect(page.getByRole('button', { name: '窗口全屏观看福州小狼的共享画面', exact: true })).toHaveAttribute('data-viewer-tooltip', '窗口全屏');
+    await page.getByRole('button', { name: '窗口全屏观看福州小狼的共享画面', exact: true }).click();
+    await expect(viewer).toHaveClass(/is-window-fullscreen/);
+    await expect(page.getByRole('button', { name: '退出窗口全屏观看福州小狼的共享画面', exact: true })).toHaveAttribute('data-viewer-tooltip', '退出窗口全屏');
+    expect(await viewer.evaluate((card) => {
+      const rect = card.getBoundingClientRect();
+      const titlebar = document.querySelector('.titlebar')!.getBoundingClientRect();
+      return Math.abs(rect.left) < 1 && Math.abs(rect.right - innerWidth) < 1
+        && Math.abs(rect.top - titlebar.bottom) < 1 && Math.abs(rect.bottom - innerHeight) < 1
+        && document.fullscreenElement === null;
+    })).toBe(true);
+    expect(await originalVideo!.evaluate((video) => video === document.querySelector('[data-testid="viewer-screen"] video'))).toBe(true);
+    await page.keyboard.press('Escape');
+    await expect(viewer).not.toHaveClass(/is-window-fullscreen/);
+    await page.getByRole('button', { name: '窗口全屏观看福州小狼的共享画面', exact: true }).click();
+    await page.getByRole('button', { name: '退出窗口全屏观看福州小狼的共享画面', exact: true }).click();
+    await expect(viewer).not.toHaveClass(/is-window-fullscreen/);
+    await originalVideo!.dispose();
     await page.getByTestId('viewer-screen').locator('.participant-media').dblclick();
     await expect(page.locator('.voice-panel')).toHaveClass(/is-focused/);
     await expect(page.locator('.chat-panel')).toHaveCount(0);
     await expect(page.getByTestId('member-filmstrip')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: '退出专注观看福州小狼的共享画面' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /专注观看/ })).toHaveCount(0);
     expect(await page.locator('.viewer-action').evaluateAll((buttons) => buttons.every((button) => {
       const buttonRect = button.getBoundingClientRect();
       const iconRect = button.querySelector('svg')!.getBoundingClientRect();
@@ -461,9 +497,9 @@ test('取消所有放大画面返回语音卡片，双击舞台可专注单路�
       return stage.bottom <= callbar.top + 1;
     })).toBe(true);
     await page.screenshot({ path: testInfo.outputPath('screen-focused.png'), fullPage: true });
-    await page.getByRole('button', { name: '退出专注观看福州小狼的共享画面' }).click();
+    await page.getByTestId('viewer-screen').locator('.participant-media').dblclick();
     await expect(page.locator('.chat-panel')).toBeVisible();
-    await page.getByRole('button', { name: '专注观看福州小狼的共享画面' }).click();
+    await page.getByTestId('viewer-screen').locator('.participant-media').dblclick();
     await page.getByTestId('viewer-screen').locator('.participant-media').dblclick();
     await expect(page.locator('.chat-panel')).toBeVisible();
   } finally {
@@ -490,7 +526,7 @@ test('双人同时语音和共享：实际收包、多画面观看、静音、�
     for (const participantPage of [page, otherPage]) {
       await expect(participantPage.getByTestId('viewer-screen')).toHaveCount(1);
       const collapsed = await stageGeometry(participantPage);
-      expectFilmstripAnimation(await toggleMembersAndMeasureVideo(participantPage));
+      expectImmediateFilmstripLayout(await toggleMembersAndMeasureVideo(participantPage));
       await expect(participantPage.getByTestId('member-thumbnail')).toHaveCount(2);
       const expanded = await stageGeometry(participantPage);
       expect(Math.abs(expanded.viewerHeight - collapsed.viewerHeight)).toBeLessThan(2);
@@ -515,22 +551,22 @@ test('双人同时语音和共享：实际收包、多画面观看、静音、�
     await page.getByRole('button', { name: '放大福州小狼的共享画面' }).click();
     await expect(page.getByTestId('viewer-screen')).toHaveCount(2);
     expect(await page.getByTestId('viewer-screen').last().evaluate((card) =>
-      getComputedStyle(card).animationName)).toContain('viewer-appear');
+      getComputedStyle(card).animationName)).toBe('none');
     await page.getByTestId('viewer-screen').filter({ hasText: '福州小狼' }).locator('.participant-media').dblclick();
     await expect(page.getByTestId('viewer-screen')).toHaveCount(1);
     await expect(page.locator('.chat-panel')).toHaveCount(0);
-    await page.getByRole('button', { name: '退出专注观看福州小狼的共享画面' }).click();
+    await page.getByTestId('viewer-screen').locator('.participant-media').dblclick();
     await expect(page.getByTestId('viewer-screen')).toHaveCount(2);
     await expect(page.locator('.chat-panel')).toBeVisible();
     await expect(page.getByRole('button', { name: '展开其他成员' })).toBeVisible();
-    expectFilmstripAnimation(await toggleMembersAndMeasureVideo(page));
+    expectImmediateFilmstripLayout(await toggleMembersAndMeasureVideo(page));
     await expect.poll(() => page.locator('video').evaluateAll((videos) => videos.every(
       (video) => video instanceof HTMLVideoElement && video.videoWidth > 0 && video.currentTime > 0,
     ))).toBe(true);
     await page.locator('.chat-heading').click();
     await page.screenshot({ path: testInfo.outputPath('two-screens-expanded.png'), fullPage: true });
     const expanded = await stageGeometry(page);
-    expectFilmstripAnimation(await toggleMembersAndMeasureVideo(page));
+    expectImmediateFilmstripLayout(await toggleMembersAndMeasureVideo(page));
     await expect(page.getByTestId('member-filmstrip')).toHaveCount(0);
     const collapsed = await stageGeometry(page);
     expect(Math.abs(collapsed.viewerHeight - expanded.viewerHeight)).toBeLessThan(2);
@@ -539,13 +575,13 @@ test('双人同时语音和共享：实际收包、多画面观看、静音、�
     await expectStageFits(page);
     await expect(page.locator('video')).toHaveCount(2);
     await page.screenshot({ path: testInfo.outputPath('two-screens.png'), fullPage: true });
-    await expect(page.getByRole('button', { name: '全屏观看福州小狼的共享画面' })).toBeEnabled();
-    await expect(page.getByRole('button', { name: '画中画观看福州小狼的共享画面' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: '全屏观看福州小狼的共享画面', exact: true })).toBeEnabled();
+    await expect(page.getByRole('button', { name: '窗口全屏观看福州小狼的共享画面', exact: true })).toBeEnabled();
     await expect(page.getByLabel('正在共享屏幕')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /聚焦.*共享画面/ })).toHaveCount(0);
     await expect(page.getByTestId('member-filmstrip')).toHaveCount(0);
     const compactCollapsed = await stageGeometry(page);
-    expectFilmstripAnimation(await toggleMembersAndMeasureVideo(page));
+    expectImmediateFilmstripLayout(await toggleMembersAndMeasureVideo(page));
     const compactExpanded = await stageGeometry(page);
     expect(Math.abs(compactExpanded.viewerHeight - compactCollapsed.viewerHeight)).toBeLessThan(2);
     expect(compactExpanded.chatTop - compactCollapsed.chatTop).toBeGreaterThan(85);

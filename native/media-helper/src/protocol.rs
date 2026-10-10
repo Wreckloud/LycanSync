@@ -34,6 +34,10 @@ pub enum CommandEnvelope {
         target_width: u32,
         target_height: u32,
         max_fps: u16,
+        #[serde(default)]
+        hide_cursor: bool,
+        #[serde(default)]
+        hide_border: bool,
     },
     StartCaptureProbe {
         protocol_version: u16,
@@ -482,6 +486,8 @@ pub enum ErrorCode {
     SourceDiscoveryFailed,
     HardwareD3dUnavailable,
     CaptureStartFailed,
+    CaptureSettingsUnsupported,
+    CaptureBorderAccessDenied,
     CaptureStopTimedOut,
     CaptureSessionMismatch,
     CaptureAlreadyRunning,
@@ -525,6 +531,10 @@ impl ErrorCode {
             Self::SourceDiscoveryFailed => "视频源发现失败",
             Self::HardwareD3dUnavailable => "硬件 D3D11 设备不可用",
             Self::CaptureStartFailed => "视频捕获启动失败",
+            Self::CaptureSettingsUnsupported => "当前 Windows 不支持所选屏幕共享设置",
+            Self::CaptureBorderAccessDenied => {
+                "未获准隐藏共享边框，请关闭该选项或使用具有相应权限的安装包"
+            }
             Self::CaptureStopTimedOut => "视频捕获停止超时",
             Self::CaptureSessionMismatch => "sessionId 与当前捕获会话不匹配",
             Self::CaptureAlreadyRunning => "已有视频捕获会话正在运行",
@@ -574,6 +584,8 @@ impl ErrorCode {
             Self::SourceDiscoveryFailed => "sourceDiscoveryFailed",
             Self::HardwareD3dUnavailable => "hardwareD3dUnavailable",
             Self::CaptureStartFailed => "captureStartFailed",
+            Self::CaptureSettingsUnsupported => "captureSettingsUnsupported",
+            Self::CaptureBorderAccessDenied => "captureBorderAccessDenied",
             Self::CaptureStopTimedOut => "captureStopTimedOut",
             Self::CaptureSessionMismatch => "captureSessionMismatch",
             Self::CaptureAlreadyRunning => "captureAlreadyRunning",
@@ -633,6 +645,35 @@ mod tests {
     use super::{
         CommandEnvelope, ErrorCode, OutboundEvent, PROTOCOL_VERSION, VideoSource, VideoSourceKind,
     };
+
+    #[test]
+    fn video_capture_preferences_preserve_defaults_and_reject_non_booleans() {
+        let mut request = serde_json::json!({
+            "protocolVersion": 1, "requestId": "video-options", "command": "startVideo",
+            "sessionId": "video-1", "sourceId": "monitor:1:0",
+            "targetWidth": 1920, "targetHeight": 1080, "maxFps": 30
+        });
+        assert!(matches!(
+            serde_json::from_value::<CommandEnvelope>(request.clone()).unwrap(),
+            CommandEnvelope::StartVideo {
+                hide_cursor: false,
+                hide_border: false,
+                ..
+            }
+        ));
+        request["hideCursor"] = serde_json::json!(true);
+        request["hideBorder"] = serde_json::json!(true);
+        assert!(matches!(
+            serde_json::from_value::<CommandEnvelope>(request.clone()).unwrap(),
+            CommandEnvelope::StartVideo {
+                hide_cursor: true,
+                hide_border: true,
+                ..
+            }
+        ));
+        request["hideCursor"] = serde_json::json!("false");
+        assert!(serde_json::from_value::<CommandEnvelope>(request).is_err());
+    }
 
     #[test]
     fn deserializes_list_video_sources_request() {

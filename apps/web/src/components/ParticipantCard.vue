@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { Focus, Fullscreen, HeadphoneOff, Headphones, MicOff, Minimize2, Monitor, PictureInPicture2 } from '@lucide/vue';
+import { AppWindow, Fullscreen, HeadphoneOff, Headphones, MicOff, Minimize2, Monitor } from '@lucide/vue';
 import { Track, type Participant } from 'livekit-client';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, normalizeAudioVolume } from '../rtc/audioPreferences';
 import VoiceLevelMic from './VoiceLevelMic.vue';
@@ -14,7 +14,6 @@ const props = withDefaults(defineProps<{
   avatar?: string;
   variant?: 'card' | 'viewer' | 'thumbnail';
   selected?: boolean;
-  focused?: boolean;
   playbackVolume?: number;
   inputGain?: number;
   outputVolume?: number;
@@ -23,7 +22,7 @@ const props = withDefaults(defineProps<{
   remoteControlActive?: boolean;
   remoteControlName?: string;
   remoteControlUnavailable?: boolean;
-}>(), { variant: 'card', selected: false, focused: false, playbackVolume: 1, inputGain: 1, outputVolume: 1 });
+}>(), { variant: 'card', selected: false, playbackVolume: 1, inputGain: 1, outputVolume: 1 });
 const emit = defineEmits<{
   select: [];
   focus: [];
@@ -40,6 +39,7 @@ const emit = defineEmits<{
   remoteInput: [input: RemoteControlInput];
 }>();
 const videoElement = ref<HTMLVideoElement | null>(null);
+const windowFullscreen = ref(false);
 const VOLUME_DRAGGER_WIDTH = 28;
 const VOLUME_DRAGGER_HEIGHT = 104;
 const VOLUME_DRAGGER_GAP = 6;
@@ -92,8 +92,6 @@ const remoteAudioLabel = computed(() => {
 });
 const selectable = computed(() => props.variant !== 'viewer' && media.value.sharing);
 const fullscreenAvailable = document.fullscreenEnabled;
-const pictureInPictureAvailable = document.pictureInPictureEnabled
-  && 'requestPictureInPicture' in HTMLVideoElement.prototype;
 
 watch([videoElement, () => media.value.track], ([element, track], _, onCleanup) => {
   if (!element || !track) return;
@@ -116,18 +114,16 @@ async function openFullscreen() {
   }
 }
 
-async function openPictureInPicture() {
-  const video = videoElement.value;
-  if (!video?.requestPictureInPicture || !document.pictureInPictureEnabled) {
-    emit('notice', '当前浏览器不支持画中画。');
-    return;
-  }
-  try {
-    await video.requestPictureInPicture();
-  } catch {
-    emit('notice', '画中画暂时无法打开，请等待共享画面开始播放后重试。');
-  }
+function exitWindowFullscreen(event: KeyboardEvent) {
+  if (!windowFullscreen.value || document.fullscreenElement || props.remoteControlActive) return;
+  event.preventDefault();
+  event.stopPropagation();
+  windowFullscreen.value = false;
 }
+
+watch([() => props.variant, () => media.value.sharing], ([variant, sharing]) => {
+  if (variant !== 'viewer' || !sharing) windowFullscreen.value = false;
+});
 
 function selectFromKeyboard(event: KeyboardEvent) {
   if (!selectable.value || (event.key !== 'Enter' && event.key !== ' ')) return;
@@ -286,7 +282,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <article class="participant-card" :class="[`is-${variant}`, { 'is-speaking': media.speaking, 'is-selected-viewer': selected }]"
+  <article class="participant-card" :class="[`is-${variant}`, { 'is-speaking': media.speaking, 'is-selected-viewer': selected, 'is-window-fullscreen': windowFullscreen }]"
+    @keydown.esc="exitWindowFullscreen"
     :data-testid="variant === 'viewer' && media.sharing ? 'viewer-screen' : variant === 'thumbnail' ? 'member-thumbnail' : 'participant-card'">
     <div class="participant-media" :class="{ 'is-selectable': selectable, 'is-remote-control': remoteControlActive }"
       :role="selectable ? 'button' : undefined" :tabindex="remoteControlActive ? 0 : selectable ? 0 : undefined"
@@ -313,17 +310,17 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <div class="participant-meta">
-      <strong :title="media.name">{{ media.name }}{{ isLocal ? '（你）' : '' }}</strong>
+      <strong>{{ media.name }}{{ isLocal ? '（你）' : '' }}</strong>
       <span v-if="variant === 'viewer' && media.sharing" class="viewer-actions">
-        <button type="button" class="viewer-action" :class="{ 'is-active': focused }"
-          :aria-label="(focused ? '退出专注观看' : '专注观看') + media.name + '的共享画面'"
-          :data-tooltip="focused ? '退出专注' : '专注观看'" @click="emit('focus')">
-          <Minimize2 v-if="focused" :size="16" aria-hidden="true" /><Focus v-else :size="16" aria-hidden="true" />
-        </button>
         <button type="button" class="viewer-action" :aria-label="'全屏观看' + media.name + '的共享画面'"
-          data-tooltip="全屏观看" :disabled="!media.track || media.muted || !fullscreenAvailable" @click="openFullscreen"><Fullscreen :size="16" aria-hidden="true" /></button>
-        <button type="button" class="viewer-action" :aria-label="'画中画观看' + media.name + '的共享画面'"
-          data-tooltip="画中画" :disabled="!media.track || media.muted || !pictureInPictureAvailable" @click="openPictureInPicture"><PictureInPicture2 :size="16" aria-hidden="true" /></button>
+          data-viewer-tooltip="系统全屏"
+          :disabled="!media.track || media.muted || !fullscreenAvailable" @click="openFullscreen"><Fullscreen :size="16" aria-hidden="true" /></button>
+        <button type="button" class="viewer-action" :class="{ 'is-active': windowFullscreen }"
+          :aria-label="(windowFullscreen ? '退出窗口全屏观看' : '窗口全屏观看') + media.name + '的共享画面'"
+          :data-viewer-tooltip="windowFullscreen ? '退出窗口全屏' : '窗口全屏'"
+          :disabled="!windowFullscreen && (!media.track || media.muted)" @click="windowFullscreen = !windowFullscreen">
+          <Minimize2 v-if="windowFullscreen" :size="16" aria-hidden="true" /><AppWindow v-else :size="16" aria-hidden="true" />
+        </button>
       </span>
       <button v-if="media.sharing && !isLocal && remoteControlAvailable" type="button" class="viewer-action remote-control-action"
         :aria-label="remoteControlActive ? '退出远程控制' : remoteControlPending ? '取消远程控制申请' : '申请远程控制'"

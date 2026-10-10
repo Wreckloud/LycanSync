@@ -14,12 +14,13 @@ use std::time::Duration;
 use std::time::Instant;
 use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
-    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-    AUDCLNT_STREAMFLAGS_LOOPBACK, AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
-    AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
-    ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
-    IActivateAudioInterfaceCompletionHandler, IAudioCaptureClient, IAudioClient,
-    IMMDeviceEnumerator, MMDeviceEnumerator, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+    AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
+    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK, AUDIOCLIENT_ACTIVATION_PARAMS,
+    AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+    AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS, ActivateAudioInterfaceAsync,
+    IActivateAudioInterfaceAsyncOperation, IActivateAudioInterfaceCompletionHandler,
+    IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
+    PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
     PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
     WAVE_FORMAT_PCM, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
 };
@@ -261,7 +262,8 @@ fn worker_main(
     };
     let event = EventHandle(match unsafe { CreateEventW(None, false, false, None) } {
         Ok(event) => event,
-        Err(_) => {
+        Err(error) => {
+            log_windows_start_error("CreateEventW", error.code());
             let _ = ready.send(Err(ErrorCode::ScreenShareAudioStartFailed));
             return Err(ErrorCode::ScreenShareAudioStartFailed);
         }
@@ -272,7 +274,10 @@ fn worker_main(
         unsafe {
             client.Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
-                AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                // 虚拟进程回环沿用微软示例：回环采集，并转换为请求的 PCM 格式。
+                AUDCLNT_STREAMFLAGS_LOOPBACK
+                    | AUDCLNT_STREAMFLAGS_EVENTCALLBACK
+                    | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
                 0,
                 0,
                 &format.wave_format,
@@ -280,19 +285,22 @@ fn worker_main(
             )
         }
     };
-    if initialized.is_err() {
+    if let Err(error) = initialized {
+        log_windows_start_error("IAudioClient::Initialize", error.code());
         set_start_error(&diagnostics, ErrorCode::ScreenShareAudioStartFailed);
         let _ = ready.send(Err(ErrorCode::ScreenShareAudioStartFailed));
         return Err(ErrorCode::ScreenShareAudioStartFailed);
     }
-    if unsafe { client.SetEventHandle(event.0) }.is_err() {
+    if let Err(error) = unsafe { client.SetEventHandle(event.0) } {
+        log_windows_start_error("IAudioClient::SetEventHandle", error.code());
         set_start_error(&diagnostics, ErrorCode::ScreenShareAudioStartFailed);
         let _ = ready.send(Err(ErrorCode::ScreenShareAudioStartFailed));
         return Err(ErrorCode::ScreenShareAudioStartFailed);
     }
     let capture_client: IAudioCaptureClient = match unsafe { client.GetService() } {
         Ok(value) => value,
-        Err(_) => {
+        Err(error) => {
+            log_windows_start_error("IAudioClient::GetService", error.code());
             let _ = ready.send(Err(ErrorCode::ScreenShareAudioStartFailed));
             return Err(ErrorCode::ScreenShareAudioStartFailed);
         }
@@ -311,7 +319,8 @@ fn worker_main(
             result
         })
         .map_err(|_| ErrorCode::ScreenShareAudioPipeFailed)?;
-    if unsafe { client.Start() }.is_err() {
+    if let Err(error) = unsafe { client.Start() } {
+        log_windows_start_error("IAudioClient::Start", error.code());
         queue.close();
         let _ = writer.join();
         set_start_error(&diagnostics, ErrorCode::ScreenShareAudioStartFailed);
@@ -1004,7 +1013,10 @@ fn activate_process_loopback(
             &handler,
         )
     }
-    .map_err(|_| ErrorCode::ScreenShareAudioUnsupported)?;
+    .map_err(|error| {
+        log_windows_start_error("ActivateAudioInterfaceAsync", error.code());
+        ErrorCode::ScreenShareAudioUnsupported
+    })?;
     let client = match receiver.recv_timeout(START_TIMEOUT) {
         Ok(Ok(client)) => client,
         Ok(Err(error)) => return Err(error),
@@ -1042,15 +1054,20 @@ impl windows::Win32::Media::Audio::IActivateAudioInterfaceCompletionHandler_Impl
             let mut activated: Option<IUnknown> = None;
             let result =
                 unsafe { operation.GetActivateResult(&mut activation_result, &mut activated) };
-            if result.is_err() || activation_result.is_err() {
+            if let Err(error) = result {
+                log_windows_start_error("GetActivateResult", error.code());
+                Err(ErrorCode::ScreenShareAudioStartFailed)
+            } else if activation_result.is_err() {
+                log_windows_start_error("ActivateCompleted", activation_result);
                 Err(ErrorCode::ScreenShareAudioStartFailed)
             } else {
                 activated
                     .ok_or(ErrorCode::ScreenShareAudioStartFailed)
                     .and_then(|unknown| {
-                        unknown
-                            .cast::<IAudioClient>()
-                            .map_err(|_| ErrorCode::ScreenShareAudioStartFailed)
+                        unknown.cast::<IAudioClient>().map_err(|error| {
+                            log_windows_start_error("QueryInterface(IAudioClient)", error.code());
+                            ErrorCode::ScreenShareAudioStartFailed
+                        })
                     })
             }
         } else {
@@ -1239,11 +1256,22 @@ impl Drop for EventHandle {
 }
 
 struct ComApartment;
+// 只记录固定阶段和 HRESULT，避免把进程、管道或用户路径写入诊断。
+fn log_windows_start_error(stage: &str, hresult: windows::core::HRESULT) {
+    eprintln!(
+        "screen audio start failed: stage={stage} hresult=0x{:08X}",
+        hresult.0 as u32
+    );
+}
+
 impl ComApartment {
     fn initialize() -> Result<Self, ErrorCode> {
         unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
             .ok()
-            .map_err(|_| ErrorCode::ScreenShareAudioStartFailed)?;
+            .map_err(|error| {
+                log_windows_start_error("CoInitializeEx", error.code());
+                ErrorCode::ScreenShareAudioStartFailed
+            })?;
         Ok(Self)
     }
 }

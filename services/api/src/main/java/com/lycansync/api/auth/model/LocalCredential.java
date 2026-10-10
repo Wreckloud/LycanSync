@@ -1,5 +1,6 @@
 package com.lycansync.api.auth.model;
 
+import java.time.Instant;
 import java.util.UUID;
 
 /**
@@ -13,10 +14,12 @@ public record LocalCredential(
         String nickname,
         String avatar,
         boolean administrator,
-        String passwordHash
+        String passwordHash,
+        String signature,
+        Instant createdAt
 ) {
 
     public AuthUser user() {
-        return new AuthUser(id, nickname, avatar, administrator);
+        return new AuthUser(id, nickname, avatar, administrator, signature, createdAt);
     }
 }

@@ -1,0 +1,7 @@
+{$SERVER_DOMAIN} {
+    reverse_proxy api:18080
+}
+
+{$SERVER_DOMAIN}:8443 {
+    reverse_proxy livekit:7990
+}

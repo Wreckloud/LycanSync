@@ -1,0 +1,5 @@
+# 仅用于内网 VM：Caddy 使用自己的 CA 签发 HTTPS，客户端需信任该 CA。
+services:
+  caddy:
+    volumes:
+      - ./Caddyfile.lan:/etc/caddy/Caddyfile:ro,Z

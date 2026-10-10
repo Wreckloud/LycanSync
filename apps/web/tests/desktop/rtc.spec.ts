@@ -13,25 +13,10 @@ test('桌面入房、取消选择、窗口共享及离房释放', async () => {
     const page = await application.firstWindow();
     await page.getByRole('button', { name: /开黑小队，单击预览，双击加入语音/ }).dblclick();
     await expect(page.getByTestId('callbar').getByRole('status')).toContainText('语音已连接');
-    const inputPositions = await page.getByTestId('callbar').evaluate((element) => {
-      const panel = element as HTMLElement;
-      const composer = document.querySelector('.composer')!;
-      const samples: number[][] = [];
-      for (const name of ['callbar-reveal-in', 'callbar-reveal-out']) {
-        panel.style.animation = `${name} 180ms linear both paused`;
-        const animation = panel.getAnimations()[0];
-        samples.push([0, 90, 180].map((time) => {
-          animation.currentTime = time;
-          return composer.getBoundingClientRect().y;
-        }));
-      }
-      panel.style.removeProperty('animation');
-      return samples;
-    });
-    expect(inputPositions[0][0]).toBeGreaterThan(inputPositions[0][1]);
-    expect(inputPositions[0][1]).toBeGreaterThan(inputPositions[0][2]);
-    expect(inputPositions[1][0]).toBeLessThan(inputPositions[1][1]);
-    expect(inputPositions[1][1]).toBeLessThan(inputPositions[1][2]);
+    expect(await page.getByTestId('callbar').evaluate((panel) => {
+      const composer = document.querySelector('.composer')!.getBoundingClientRect();
+      return composer.bottom <= panel.getBoundingClientRect().top + 1;
+    })).toBe(true);
     await expect(page.getByRole('button', { name: '关闭麦克风', exact: true }).first()).toBeVisible();
     await page.getByRole('button', { name: '开始屏幕共享', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '选择共享的窗口或屏幕' })).toBeVisible();
@@ -60,7 +45,7 @@ test('桌面入房、取消选择、窗口共享及离房释放', async () => {
     expect(await application.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].isContentProtected())).toBe(false);
     await expect.poll(() => page.locator('video').evaluateAll((videos) => videos.some((video) => video instanceof HTMLVideoElement && video.videoWidth > 0))).toBe(true);
-    await page.getByRole('button', { name: '离开当前群组语音', exact: true }).click();
+    await page.getByRole('button', { name: '离开语音', exact: true }).click();
     await expect(page.getByRole('button', { name: '加入当前群组语音', exact: true })).toBeVisible();
     await expect(page.locator('video')).toHaveCount(0);
     await application.evaluate(({ BrowserWindow }) => {

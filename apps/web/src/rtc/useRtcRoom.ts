@@ -90,6 +90,8 @@ function captureErrorMessage(error: unknown, source: MediaSource): string {
     if (source === Track.Source.ScreenShare) {
       const code = error.message.match(/(?:^|: )([a-z][A-Za-z0-9]{0,63})$/)?.[1];
       if (code === 'nativeVideoStopNotConfirmed') return '原生屏幕共享停止未确认，请重启客户端后再试。';
+      if (code === 'captureSettingsUnsupported') return '当前 Windows 不支持所选屏幕共享设置，请关闭对应选项后重试。';
+      if (code === 'captureBorderAccessDenied') return '未获准隐藏共享边框。请关闭该选项后重试；此功能需要 Windows 授权及安装包权限支持。';
       if (code) return `屏幕共享操作失败（${code}）。`;
     }
   }

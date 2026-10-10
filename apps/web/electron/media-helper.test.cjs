@@ -261,10 +261,12 @@ class FakeHelper extends EventEmitter {
 
 function createManager(mode = {}, options = {}) {
   const children = [];
+  const spawnOptions = [];
   const manager = new MediaHelperManager({
     executablePath: 'fake-media-helper.exe',
     platform: 'win32',
-    spawnProcess: () => {
+    spawnProcess: (_executable, _args, options) => {
+      spawnOptions.push(options);
       const child = new FakeHelper(mode);
       children.push(child);
       return child;
@@ -279,7 +281,7 @@ function createManager(mode = {}, options = {}) {
     retryDelayMs: 20,
     ...options,
   });
-  return { manager, children };
+  return { manager, children, spawnOptions };
 }
 
 test('native chooser previews require one exact title and kind match on both sides', () => {
@@ -330,11 +332,12 @@ async function waitUntil(predicate, timeoutMs = 500) {
 }
 
 test('helper starts lazily and concurrent capability requests share one process and handshake', async () => {
-  const { manager, children } = createManager();
+  const { manager, children, spawnOptions } = createManager();
   assert.equal(children.length, 0);
 
   const results = await Promise.all(Array.from({ length: 6 }, () => manager.getCapabilities()));
   assert.equal(children.length, 1);
+  assert.deepEqual(spawnOptions[0].stdio, ['pipe', 'pipe', 'inherit']);
   assert.equal(children[0].commands.filter((command) => command === 'hello').length, 1);
   assert.equal(children[0].commands.filter((command) => command === 'capabilities').length, 1);
   assert.deepEqual(results[0].videoCapture, capabilities.videoCapture);
@@ -470,12 +473,14 @@ test('video shares a bounded helper session, applies the requested frame rate, a
     onSharedTextureFrame: (_state, frame) => receivedFrames.push(frame),
   });
   const sources = await manager.listVideoSources();
-  const started = await manager.startVideo(sources.sources[0].sourceId, 30, 'video-session');
+  const started = await manager.startVideo(sources.sources[0].sourceId, 30, 'video-session', { hideCursor: true, hideBorder: false });
   assert.deepEqual(started, { sessionId: 'video-session', changed: true });
   assert.equal(receivedFrames.length, 1);
   assert.equal(receivedFrames[0].sessionId, 'video-session');
   const startRequest = children[0].requests.find((request) => request.command === 'startVideo');
   assert.equal(startRequest.maxFps, 30);
+  assert.equal(startRequest.hideCursor, true);
+  assert.equal(startRequest.hideBorder, false);
   assert.equal(startRequest.targetWidth, 1920);
   assert.equal(children[0].closed, false);
   await assert.rejects(manager.startVideo(sources.sources[0].sourceId, 60, 'second-session'), /videoCaptureAlreadyRunning/);
@@ -705,6 +710,7 @@ test('video rejects expired ids, invalid fps, worker exit, and stop timeout with
     const { manager, children } = createManager();
     const sources = await manager.listVideoSources();
     await assert.rejects(manager.startVideo(sources.sources[0].sourceId, 144, 'video-session'), /invalidVideoStart/);
+    await assert.rejects(manager.startVideo(sources.sources[0].sourceId, 30, 'video-session', { hideCursor: 'false', hideBorder: false }), /invalidVideoStart/);
     assert.equal(children[0].commands.includes('startVideo'), false);
     await manager.shutdown();
   });

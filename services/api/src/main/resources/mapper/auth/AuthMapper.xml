@@ -5,21 +5,24 @@
         UPDATE system_state SET initialized_at = #{now} WHERE id = 1 AND initialized_at IS NULL
     </update>
     <select id="findLocalCredential" resultType="com.lycansync.api.auth.model.LocalCredential">
-        SELECT u.id, u.nickname, u.avatar, u.administrator, c.password_hash AS passwordHash
+        SELECT u.id, u.nickname, u.avatar, u.administrator, c.password_hash AS passwordHash,
+               u.signature, u.created_at AS createdAt
         FROM app_user u
         JOIN auth_local_credential c ON c.user_id = u.id
         WHERE c.username = #{username}
     </select>
     <insert id="insertUser">
-        INSERT INTO app_user (id, nickname, avatar, administrator, created_at)
-        VALUES (#{user.id}, #{user.nickname}, #{user.avatar}, #{user.administrator}, #{now})
+        INSERT INTO app_user (id, nickname, avatar, administrator, signature, created_at)
+        VALUES (#{user.id}, #{user.nickname}, #{user.avatar}, #{user.administrator}, #{user.signature}, #{now})
     </insert>
     <insert id="insertLocalCredential">
         INSERT INTO auth_local_credential (username, password_hash, user_id, created_at)
         VALUES (#{username}, #{passwordHash}, #{userId}, #{now})
     </insert>
     <update id="updateProfile">
-        UPDATE app_user SET nickname = #{nickname}, avatar = #{avatar} WHERE id = #{id}
+        UPDATE app_user SET nickname = #{nickname}, avatar = #{avatar},
+                            signature = COALESCE(#{signature}, signature)
+        WHERE id = #{id}
     </update>
     <insert id="replaceSession">
         INSERT INTO auth_session (token_hash, user_id, expires_at) VALUES (#{hash}, #{userId}, #{expires})
@@ -30,7 +33,7 @@
         JOIN auth_session s ON s.user_id = u.id WHERE s.token_hash = #{hash} AND s.expires_at &gt; #{now}
     </select>
     <select id="findUserProfile" resultType="com.lycansync.api.auth.model.AuthUser">
-        SELECT id, nickname, avatar, administrator FROM app_user WHERE id = #{id}
+        SELECT id, nickname, avatar, administrator, signature, created_at AS createdAt FROM app_user WHERE id = #{id}
     </select>
     <update id="extendSession">
         UPDATE auth_session SET expires_at = #{expires}

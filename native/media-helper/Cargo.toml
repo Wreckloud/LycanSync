@@ -17,6 +17,7 @@ sonora-common-audio = "0.2.0"
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", features = [
     "Graphics_Capture",
+    "Security_Authorization_AppCapabilityAccess",
     "Graphics_DirectX",
     "Graphics_DirectX_Direct3D11",
     "Win32_Foundation",
@@ -45,6 +46,7 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 windows-core = "0.62"
+windows-future = "0.3"
 
 [profile.release]
 codegen-units = 1

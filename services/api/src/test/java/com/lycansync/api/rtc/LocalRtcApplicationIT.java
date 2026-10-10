@@ -98,7 +98,7 @@ class LocalRtcApplicationIT {
 
     @BeforeEach
     void createAuthenticatedUser() {
-        AuthUser user = new AuthUser(UUID.randomUUID(), "小狼", "", false);
+        AuthUser user = new AuthUser(UUID.randomUUID(), "小狼", "", false, "", Instant.now());
         authMapper.insertUser(user, Instant.now());
         sessionToken = AuthSecrets.generate();
         authMapper.replaceSession(AuthSecrets.hash(sessionToken), user.id(), Instant.now().plusSeconds(600));
@@ -172,7 +172,7 @@ class LocalRtcApplicationIT {
                         .contentType("application/json").content("{\"name\":\"开黑小队\"}"))
                 .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
         String groupId = objectMapper.readTree(groupBody).get("id").asText();
-        AuthUser friend = new AuthUser(UUID.randomUUID(), "新朋友", "", false);
+        AuthUser friend = new AuthUser(UUID.randomUUID(), "新朋友", "", false, "", Instant.now());
         authMapper.insertUser(friend, Instant.now());
         String friendToken = AuthSecrets.generate();
         authMapper.replaceSession(AuthSecrets.hash(friendToken), friend.id(), Instant.now().plusSeconds(600));

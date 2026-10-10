@@ -64,7 +64,7 @@ test('桌面本地注册、加密保存、重启恢复与退出撤销', async ()
     await page.getByRole('button', { name: '创建账号', exact: true }).click();
     expect(await (await registrationResponse).json()).not.toHaveProperty('sessionToken');
     expect(registration).toEqual({ username: 'Admin', password: 'administrator-password' });
-    await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
     await expect.poll(() => groupAuthorizedRequests).toBeGreaterThan(0);
     await page.clock.fastForward(20_100);
     await expect.poll(() => sessionRequests).toBe(1);
@@ -75,10 +75,13 @@ test('桌面本地注册、加密保存、重启恢复与退出撤销', async ()
     await application.close();
     application = await launch();
     page = await application.firstWindow();
-    await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
     expect(authorizedRequests).toBeGreaterThan(0);
-    await page.getByRole('button', { name: '个人设置', exact: true }).click();
-    await expect(page.getByLabel('昵称', { exact: true })).toHaveValue('Admin');
+    if (!await page.locator('.settings-view').isVisible()) {
+      await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+    }
+    await page.getByRole('button', { name: '账号设置', exact: true }).click();
+    await expect(page.getByRole('button', { name: '修改昵称，Admin', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '退出登录', exact: true }).click();
     await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
     expect(revoked).toBe(true);
@@ -123,7 +126,8 @@ test('旧桌面会话的延迟 401 不退出新会话，当前会话 401 仍会�
       response.writeHead(401); response.end('{}');
       delayedSessionFinished();
     } else if (request.url === '/api/auth/session' && authorization === 'Bearer ' + currentToken) {
-      response.writeHead(401); response.end('{}');
+      if (currentSessionExpired) { response.writeHead(401); response.end('{}'); }
+      else response.end(JSON.stringify({ id: user.id, nickname: user.nickname, administrator: user.administrator }));
     } else if (request.url === '/api/auth/logout'
       && [oldToken, currentToken].some((token) => authorization === 'Bearer ' + token)) {
       response.writeHead(204); response.end();
@@ -148,11 +152,14 @@ test('旧桌面会话的延迟 401 不退出新会话，当前会话 401 仍会�
     await page.getByLabel('用户名').fill('session_race');
     await page.getByLabel('密码', { exact: true }).fill('session-password');
     await page.getByRole('button', { name: '登录', exact: true }).click();
-    await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
 
     await page.clock.fastForward(20_100);
     await delayedSessionStartedPromise;
-    await page.getByRole('button', { name: '个人设置', exact: true }).click();
+    if (!await page.locator('.settings-view').isVisible()) {
+      await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+    }
+    await page.getByRole('button', { name: '账号设置', exact: true }).click();
     await page.getByRole('button', { name: '退出登录', exact: true }).click();
     await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
     expect(existsSync(resolve(userDataDir, 'session.bin'))).toBe(false);
@@ -160,7 +167,7 @@ test('旧桌面会话的延迟 401 不退出新会话，当前会话 401 仍会�
     await page.getByLabel('用户名').fill('session_race');
     await page.getByLabel('密码', { exact: true }).fill('session-password');
     await page.getByRole('button', { name: '登录', exact: true }).click();
-    await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
     expect(existsSync(resolve(userDataDir, 'session.bin'))).toBe(true);
 
     const delayedResponsePromise = page.waitForResponse((result) =>
@@ -169,13 +176,13 @@ test('旧桌面会话的延迟 401 不退出新会话，当前会话 401 仍会�
     const delayedResponse = await delayedResponsePromise;
     expect(await delayedResponse.headerValue('X-Lycan-Session-Expired')).toBe('false');
     await delayedSessionFinishedPromise;
-    await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
     expect(existsSync(resolve(userDataDir, 'session.bin'))).toBe(true);
 
     currentSessionExpired = true;
     const currentSessionResponsePromise = page.waitForResponse((result) =>
-      result.url().endsWith('/api/auth/me') && result.status() === 401);
-    await page.getByRole('button', { name: '个人设置', exact: true }).click();
+      result.url().endsWith('/api/auth/session') && result.status() === 401);
+    await page.clock.fastForward(20_100);
     const currentSessionResponse = await currentSessionResponsePromise;
     expect(await currentSessionResponse.headerValue('X-Lycan-Session-Expired')).toBe('true');
     await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
@@ -230,13 +237,16 @@ test('桌面已初始化服务器允许创建普通账号', async () => {
     await page.getByLabel('密码', { exact: true }).fill('friend-password');
     await page.getByLabel('确认密码').fill('friend-password');
     await page.getByRole('button', { name: '创建账号', exact: true }).click();
-    await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
     expect(registration).toEqual({ username: 'Friend', password: 'friend-password' });
     const saved = readFileSync(resolve(userDataDir, 'session.bin'));
     expect(saved.toString('utf8')).not.toContain(token);
-    await page.getByRole('button', { name: '个人设置', exact: true }).click();
-    const profileDialog = page.locator('.profile-dialog');
-    const initialBounds = await profileDialog.boundingBox();
+    if (!await page.locator('.settings-view').isVisible()) {
+      await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+    }
+    await page.getByRole('button', { name: '账号设置', exact: true }).click();
+    const profileSettings = page.locator('.settings-view');
+    const initialBounds = await profileSettings.boundingBox();
     await page.getByLabel('上传头像').setInputFiles({
       name: 'avatar.png',
       mimeType: 'image/png',
@@ -246,7 +256,7 @@ test('桌面已初始化服务器允许创建普通账号', async () => {
     await expect(cropDialog).toBeVisible();
     await expect(cropDialog.getByAltText('待裁剪头像')).toHaveJSProperty('naturalWidth', 1);
     expect(await cropDialog.getByAltText('待裁剪头像').getAttribute('src')).toMatch(/^data:image\/png;base64,/);
-    expect(await profileDialog.boundingBox()).toEqual(initialBounds);
+    expect(await profileSettings.boundingBox()).toEqual(initialBounds);
     await cropDialog.getByRole('button', { name: '取消裁剪' }).click();
     await expect(cropDialog).toHaveCount(0);
   } finally {

@@ -20,6 +20,11 @@ export interface AvatarCrop {
   size: number;
 }
 
+export function zoomAvatarWithWheel(zoom: number, deltaY: number, deltaMode: number): number {
+  const pixels = deltaY * (deltaMode === 1 ? 16 : deltaMode === 2 ? 280 : 1);
+  return Math.max(1, Math.min(3, zoom - Math.max(-200, Math.min(200, pixels)) / 1000));
+}
+
 export async function decodeAvatarFile(file: File): Promise<ImageBitmap> {
   if (!ACCEPTED_TYPES.has(file.type)) {
     throw new AvatarImageError('请选择 PNG 或 JPEG 图片。');

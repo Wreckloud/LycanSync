@@ -77,6 +77,8 @@ interface NativeMicrophoneChunk {
 interface Window {
   lycanDesktop?: {
     clearSession(): Promise<void>;
+    getServerSettings(): Promise<{ apiUrl: string; editable: boolean }>;
+    setServerAddress(value: string): Promise<void>;
     minimize(): void;
     isMaximized(): Promise<boolean>;
     getProcessMetrics(): Promise<{ cpuPercent: number; memoryMb: number }>;
@@ -89,7 +91,8 @@ interface Window {
     getNativeVideoSourceThumbnails(sources: NativeVideoSource[]): Promise<{ sourceId: string; thumbnail: string }[]>;
     startNativeCaptureProbe(sourceId: string): Promise<{ sessionId: string; changed: boolean }>;
     stopNativeCaptureProbe(sessionId: string): Promise<{ changed: boolean }>;
-    startNativeVideo(sourceId: string, maxFps: number): Promise<{ sessionId: string; changed: boolean }>;
+    getScreenShareSupport(): Promise<{ hideCursor: boolean; hideBorder: boolean }>;
+    startNativeVideo(sourceId: string, maxFps: number, settings: { hideCursor: boolean; hideBorder: boolean }): Promise<{ sessionId: string; changed: boolean }>;
     stopNativeVideo(sessionId: string): Promise<{ changed: boolean }>;
     authorizeNativeRemoteControl(sessionId: string, controlSessionId: string, controllerIdentity: string): Promise<{ changed: boolean }>;
     sendNativeRemoteInput(sessionId: string, controlSessionId: string, controllerIdentity: string, sequence: number,

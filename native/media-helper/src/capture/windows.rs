@@ -317,6 +317,7 @@ impl CaptureManager {
         source_kind: VideoSourceKind,
         session_id: String,
         max_fps: Option<u16>,
+        settings: super::CaptureSettings,
     ) -> Result<(), ErrorCode> {
         if self.active.is_some() {
             return Err(ErrorCode::CaptureAlreadyRunning);
@@ -347,6 +348,7 @@ impl CaptureManager {
                     CaptureWorkerContext {
                         session_id,
                         max_fps,
+                        settings,
                         metrics: worker_metrics,
                         dropped_notifications: worker_dropped,
                         stop_requested: worker_stop,
@@ -528,6 +530,7 @@ struct CaptureResources {
 struct CaptureWorkerContext {
     session_id: String,
     max_fps: Option<u16>,
+    settings: super::CaptureSettings,
     metrics: Arc<Mutex<CaptureMetrics>>,
     dropped_notifications: Arc<AtomicU64>,
     stop_requested: Arc<AtomicBool>,
@@ -541,6 +544,7 @@ fn capture_worker(target: ThreadCaptureTarget, context: CaptureWorkerContext) {
     let CaptureWorkerContext {
         session_id,
         max_fps,
+        settings,
         metrics,
         dropped_notifications,
         stop_requested,
@@ -552,6 +556,8 @@ fn capture_worker(target: ThreadCaptureTarget, context: CaptureWorkerContext) {
     let resources = create_resources(
         target.clone(),
         max_fps,
+        settings,
+        &stop_requested,
         &metrics,
         notifications.clone(),
         &dropped_notifications,
@@ -659,9 +665,59 @@ fn capture_worker(target: ThreadCaptureTarget, context: CaptureWorkerContext) {
     }
 }
 
+fn apply_capture_settings(
+    session: &GraphicsCaptureSession,
+    settings: super::CaptureSettings,
+    stop_requested: &AtomicBool,
+) -> Result<(), ErrorCode> {
+    if settings.hide_cursor {
+        session
+            .SetIsCursorCaptureEnabled(false)
+            .map_err(|_| ErrorCode::CaptureSettingsUnsupported)?;
+    }
+    if settings.hide_border {
+        use windows::Graphics::Capture::{GraphicsCaptureAccess, GraphicsCaptureAccessKind};
+        use windows::Security::Authorization::AppCapabilityAccess::AppCapabilityAccessStatus;
+        // 先确认系统授权；仅设置属性会在拒绝授权时被 Windows 静默忽略。
+        let request =
+            GraphicsCaptureAccess::RequestAccessAsync(GraphicsCaptureAccessKind::Borderless)
+                .map_err(|_| ErrorCode::CaptureBorderAccessDenied)?;
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while request
+            .Status()
+            .map_err(|_| ErrorCode::CaptureBorderAccessDenied)?
+            == windows_future::AsyncStatus::Started
+        {
+            // 授权弹窗不能让 worker 无限等待；停止或超时后不继续创建采集。
+            if stop_requested.load(Ordering::Acquire) || Instant::now() >= deadline {
+                if let Err(error) = request.Cancel() {
+                    eprintln!(
+                        "capture border access cancellation failed: {:?}",
+                        error.code()
+                    );
+                }
+                return Err(ErrorCode::CaptureBorderAccessDenied);
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        let status = request
+            .GetResults()
+            .map_err(|_| ErrorCode::CaptureBorderAccessDenied)?;
+        if status != AppCapabilityAccessStatus::Allowed {
+            return Err(ErrorCode::CaptureBorderAccessDenied);
+        }
+        session
+            .SetIsBorderRequired(false)
+            .map_err(|_| ErrorCode::CaptureSettingsUnsupported)?;
+    }
+    Ok(())
+}
+
 fn create_resources(
     target: ThreadCaptureTarget,
     _max_fps: Option<u16>,
+    settings: super::CaptureSettings,
+    stop_requested: &AtomicBool,
     metrics: &Mutex<CaptureMetrics>,
     notifications: SyncSender<()>,
     dropped_notifications: &Arc<AtomicU64>,
@@ -705,6 +761,12 @@ fn create_resources(
             return Err(ErrorCode::CaptureStartFailed);
         }
     };
+
+    if let Err(error) = apply_capture_settings(&capture_session, settings, stop_requested) {
+        let _ = capture_session.Close();
+        let _ = frame_pool.Close();
+        return Err(error);
+    }
 
     let frame_sender = notifications.clone();
     let callback_dropped = Arc::clone(dropped_notifications);

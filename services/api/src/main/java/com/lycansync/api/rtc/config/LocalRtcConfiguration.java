@@ -15,7 +15,6 @@ import org.springframework.util.Assert;
  * @since 2026-09-03
  */
 @Configuration(proxyBeanMethods = false)
-// TODO: 完成公网媒体端口与群组权限验证后，再引入非本机 RTC 配置。
 @Profile("rtc-local")
 @EnableConfigurationProperties(LiveKitProperties.class)
 public class LocalRtcConfiguration {

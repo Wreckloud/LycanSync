@@ -1,4 +1,5 @@
 const { app, BrowserWindow, desktopCapturer, ipcMain, net, powerMonitor, protocol, screen, session, safeStorage, shell, sharedTexture } = require('electron');
+const { release: osRelease } = require('node:os');
 const { spawn } = require('node:child_process');
 const { createServer } = require('node:net');
 const { existsSync } = require('node:fs');
@@ -9,14 +10,18 @@ const { pathToFileURL } = require('node:url');
 const { readFile, writeFile, unlink, mkdir } = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
 const { MediaHelperManager } = require('./media-helper.cjs');
+const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
 const { matchNativeVideoSourceThumbnails } = require('./native-video-thumbnails.cjs');
 
 const APP_ORIGIN = 'lycan://app';
 const rendererRoot = resolve(__dirname, '../dist');
-const serverConfig = require('./server-config.json');
-// 安装版固定使用打包配置；开发模式才允许环境变量临时覆盖。
-const backend = new URL(app.isPackaged ? serverConfig.apiUrl
-  : process.env.LYCANSYNC_API_URL || serverConfig.apiUrl);
+const devRendererUrl = !app.isPackaged && process.env.LYCANSYNC_DEV_RENDERER_URL
+  ? new URL(process.env.LYCANSYNC_DEV_RENDERER_URL) : undefined;
+if (devRendererUrl && (devRendererUrl.protocol !== 'http:' || devRendererUrl.hostname !== '127.0.0.1'
+    || devRendererUrl.username || devRendererUrl.password || devRendererUrl.pathname !== '/'
+    || devRendererUrl.search || devRendererUrl.hash)) {
+  throw new Error('开发前端必须使用本机 http://127.0.0.1 地址。');
+}
 const apiRoutePolicies = new Map([
   ['GET /api/system/initialization', { public: true }],
   ['POST /api/auth/local/register', { public: true, savesSession: true }],
@@ -38,12 +43,6 @@ const groupMessagePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 const groupAttachmentPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/attachments\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const groupFilePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/files(?:\/(?:requests\/)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/i;
 const groupFileDownloadPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/files\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-if (backend.username || backend.password || backend.pathname !== '/' || backend.search || backend.hash
-    || !['http:', 'https:'].includes(backend.protocol)
-    || (backend.protocol === 'http:' && !['127.0.0.1', 'localhost', '[::1]'].includes(backend.hostname))) {
-  throw new Error('LYCANSYNC_API_URL 必须是 HTTPS 服务地址，本机开发可使用 HTTP；不能包含路径或凭据。');
-}
-
 app.setName('LycanSync');
 // Windows Graphics Capture 在部分 Win10 窗口源上会持续拖慢系统壳层；保持 Chromium 的 DXGI/GDI 兼容采集链路。
 // 这只影响共享的采集后端，不关闭 GPU 合成、硬件解码或 WebRTC 编码。
@@ -52,6 +51,12 @@ if (process.platform === 'win32') {
 }
 // 遵循 Chromium 的独立用户目录参数，便于测试与日常账号数据隔离。
 if (app.commandLine.hasSwitch('user-data-dir')) app.setPath('userData', resolve(app.commandLine.getSwitchValue('user-data-dir')));
+const backend = new URL(loadServerSettings({
+  packaged: app.isPackaged,
+  userDirectory: app.getPath('userData'),
+  resourcesDirectory: app.isPackaged ? process.resourcesPath : __dirname,
+  developmentUrl: process.env.LYCANSYNC_API_URL,
+}));
 protocol.registerSchemesAsPrivileged([{ scheme: 'lycan', privileges: {
   standard: true, secure: true, supportFetchAPI: true, stream: true,
 } }]);
@@ -566,7 +571,7 @@ function handleNativeSharedTextureFrame(state, frame) {
   }
 }
 
-async function startNativeVideo(sourceId, maxFps) {
+async function startNativeVideo(sourceId, maxFps, settings) {
   if (closing) throw new Error('mediaHelperShuttingDown');
   if (process.platform !== 'win32') throw new Error('platformUnsupported');
   if (!Number.isInteger(maxFps) || maxFps < 1 || maxFps > 60
@@ -577,7 +582,7 @@ async function startNativeVideo(sourceId, maxFps) {
   const video = { sessionId, sourceId, maxFps, imported: new Map(), pendingSlotReleases: new Set(), stopping: false, failureNotified: false };
   nativeVideoSession = video;
   try {
-    const started = await mediaHelper.startVideo(sourceId, maxFps, sessionId);
+    const started = await mediaHelper.startVideo(sourceId, maxFps, sessionId, settings);
     if (started.sessionId !== sessionId || !started.changed || nativeVideoSession !== video) {
       throw new Error('mediaHelperInvalidVideoStart');
     }
@@ -830,6 +835,20 @@ async function serveApplication(request) {
     }
   }
   if (request.method !== 'GET') return new Response(null, { status: 405 });
+  // 保留桌面同源 API 和权限边界，仅把开发资源交给 Vite；热更新 WebSocket 直连本机。
+  if (devRendererUrl) {
+    try {
+      const resourceUrl = new URL(devRendererUrl);
+      resourceUrl.pathname = url.pathname;
+      resourceUrl.search = url.search;
+      const response = await net.fetch(resourceUrl.href);
+      const headers = new Headers(response.headers);
+      headers.set('Cache-Control', 'no-store');
+      return new Response(response.body, { status: response.status, headers });
+    } catch {
+      return new Response('开发前端服务不可用，请重新运行 npm run desktop:dev。', { status: 502 });
+    }
+  }
   let file;
   try { file = resolve(rendererRoot, '.' + decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname)); }
   catch { return new Response(null, { status: 400 }); }
@@ -1017,9 +1036,14 @@ ipcMain.handle('media:capture-probe:stop', (event, sessionId) => {
   }
   return mediaHelper.stopCaptureProbe(sessionId);
 });
-ipcMain.handle('media:native-video:start', (event, sourceId, maxFps) => {
+ipcMain.handle('settings:screen-share:support', (event) => {
+  if (!trustedSender(event)) throw new Error('请求来源无效');
+  const build = process.platform === 'win32' ? Number(osRelease().split('.')[2]) : 0;
+  return { hideCursor: build >= 19041, hideBorder: build >= 20348 };
+});
+ipcMain.handle('media:native-video:start', (event, sourceId, maxFps, settings) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
-  return startNativeVideo(sourceId, maxFps);
+  return startNativeVideo(sourceId, maxFps, settings);
 });
 ipcMain.handle('media:native-video:stop', (event, sessionId) => {
   if (!trustedSender(event) || closing || typeof sessionId !== 'string' || !sessionId || sessionId.length > 128) {
@@ -1153,4 +1177,16 @@ app.on('window-all-closed', () => app.quit());
 ipcMain.handle('auth:clear', async (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
   await clearSession();
+});
+
+ipcMain.handle('settings:server:get', (event) => {
+  if (!trustedSender(event)) throw new Error('请求来源无效');
+  return { apiUrl: backend.origin, editable: app.isPackaged };
+});
+ipcMain.handle('settings:server:set', async (event, value) => {
+  if (!trustedSender(event) || closing || !app.isPackaged) throw new Error('当前不能修改服务器地址。');
+  if (await loadSession()) throw new Error('请退出登录后再修改服务器地址。');
+  await saveServerSettings(app.getPath('userData'), value);
+  app.relaunch();
+  app.quit();
 });

@@ -6,6 +6,7 @@ import {
   calculateAvatarCrop,
   decodeAvatarFile,
   encodeAvatarCrop,
+  zoomAvatarWithWheel,
 } from './avatarImage';
 
 afterEach(() => {
@@ -13,6 +14,20 @@ afterEach(() => {
 });
 
 describe('头像图片处理', () => {
+  it('滚轮向上放大、向下缩小，并限制在滑块范围内', () => {
+    expect(zoomAvatarWithWheel(2, -100, 0)).toBeCloseTo(2.1);
+    expect(zoomAvatarWithWheel(2, 100, 0)).toBeCloseTo(1.9);
+    expect(zoomAvatarWithWheel(3, -100, 0)).toBe(3);
+    expect(zoomAvatarWithWheel(1, 100, 0)).toBe(1);
+    expect(zoomAvatarWithWheel(2, 0, 0)).toBe(2);
+  });
+
+  it('兼容按行和按页的滚轮，单次大滚动不跳到边界', () => {
+    expect(zoomAvatarWithWheel(2, -3, 1)).toBeCloseTo(2.048);
+    expect(zoomAvatarWithWheel(2, 1, 2)).toBeCloseTo(1.8);
+    expect(zoomAvatarWithWheel(2, -10_000, 0)).toBeCloseTo(2.2);
+  });
+
   it('在解码前拒绝超过 10 MB 的原图', async () => {
     const decode = vi.fn();
     vi.stubGlobal('createImageBitmap', decode);

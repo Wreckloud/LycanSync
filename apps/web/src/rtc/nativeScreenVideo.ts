@@ -1,8 +1,9 @@
+import { readScreenSharePreferences, type ScreenSharePreferences } from '../settings/screenSharePreferences';
 import { LocalVideoTrack } from 'livekit-client';
 import { createScreenStatusFrame } from './screenStatusFrame';
 
 export interface NativeVideoDesktopBridge {
-  startNativeVideo(sourceId: string, maxFps: number): Promise<{ sessionId: string; changed: boolean }>;
+  startNativeVideo(sourceId: string, maxFps: number, settings: ScreenSharePreferences): Promise<{ sessionId: string; changed: boolean }>;
   stopNativeVideo(sessionId: string): Promise<{ changed: boolean }>;
   onNativeVideoError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
   onNativeVideoSuspended(callback: (status: { sessionId: string; suspended: boolean }) => void): () => void;
@@ -19,7 +20,7 @@ interface NativeScreenVideoOptions {
   createGenerator?: () => GeneratedVideoTrack;
   createLocalTrack?: (track: MediaStreamTrack) => LocalVideoTrack;
   createSuspendedFrame?: (width: number, height: number, timestamp: number) => VideoFrame;
-  createFrameWithTimestamp?: (frame: VideoFrame, timestamp: number) => VideoFrame;
+  createAdjustedFrame?: (frame: VideoFrame, init: VideoFrameInit) => VideoFrame;
   onError?: (code: string) => void;
   now?: () => number;
 }
@@ -41,7 +42,7 @@ export class NativeScreenVideoSession {
   private readonly now: () => number;
   private readonly onError?: (code: string) => void;
   private readonly createSuspendedFrame: (width: number, height: number, timestamp: number) => VideoFrame;
-  private readonly createFrameWithTimestamp: (frame: VideoFrame, timestamp: number) => VideoFrame;
+  private readonly createAdjustedFrame: (frame: VideoFrame, init: VideoFrameInit) => VideoFrame;
   private removeHelperErrorListener?: () => void;
   private removeSuspensionListener?: () => void;
   private sessionId?: string;
@@ -76,8 +77,8 @@ export class NativeScreenVideoSession {
     this.now = options.now ?? (() => performance.now());
     this.onError = options.onError;
     this.createSuspendedFrame = options.createSuspendedFrame ?? createSuspendedFrame;
-    this.createFrameWithTimestamp = options.createFrameWithTimestamp
-      ?? ((frame, timestamp) => new VideoFrame(frame, { timestamp }));
+    this.createAdjustedFrame = options.createAdjustedFrame
+      ?? ((frame, init) => new VideoFrame(frame, init));
     this.generator = (options.createGenerator ?? createVideoGenerator)();
     this.generator.contentHint = 'motion';
     this.writer = this.generator.writable.getWriter();
@@ -92,6 +93,7 @@ export class NativeScreenVideoSession {
   }
 
   private async startAndWaitForFrame(sourceId: string): Promise<LocalVideoTrack> {
+    const settings = readScreenSharePreferences();
     const firstFrame = new Promise<void>((resolve, reject) => {
       this.firstFrameResolve = resolve;
       this.firstFrameReject = reject;
@@ -111,7 +113,7 @@ export class NativeScreenVideoSession {
         this.pendingSuspension = status;
       }
     });
-    this.startCommand = this.desktop.startNativeVideo(sourceId, Math.round(1_000 / this.intervalMs));
+    this.startCommand = this.desktop.startNativeVideo(sourceId, Math.round(1_000 / this.intervalMs), settings);
     try {
       const started = await this.startCommand;
       if (started.changed !== true || typeof started.sessionId !== 'string' || !started.sessionId) {
@@ -222,18 +224,26 @@ export class NativeScreenVideoSession {
       frame.close();
       return;
     }
+    const init: VideoFrameInit = {};
+    const visibleRect = frame.visibleRect;
+    // Electron 将纹理容量作为显示尺寸；实际窗口内容可能因对齐或纹理复用而更小。
+    if (visibleRect && (frame.displayWidth !== visibleRect.width || frame.displayHeight !== visibleRect.height)) {
+      init.displayWidth = visibleRect.width;
+      init.displayHeight = visibleRect.height;
+    }
     if (Number.isFinite(frame.timestamp)) {
       const timestamp = Math.max(frame.timestamp!, this.lastTimestamp + 1);
-      if (timestamp !== frame.timestamp) {
-        try {
-          const adjustedFrame = this.createFrameWithTimestamp(frame, timestamp);
-          frame.close();
-          frame = adjustedFrame;
-        } catch {
-          frame.close();
-          this.fail('nativeVideoTimestampAdjustmentFailed');
-          return;
-        }
+      if (timestamp !== frame.timestamp) init.timestamp = timestamp;
+    }
+    if (init.displayWidth !== undefined || init.timestamp !== undefined) {
+      try {
+        const adjustedFrame = this.createAdjustedFrame(frame, init);
+        frame.close();
+        frame = adjustedFrame;
+      } catch {
+        frame.close();
+        this.fail('nativeVideoFrameAdjustmentFailed');
+        return;
       }
     }
     if (Number.isInteger(frame.displayWidth) && frame.displayWidth > 0) this.frameWidth = frame.displayWidth;

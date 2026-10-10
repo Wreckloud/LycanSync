@@ -3,6 +3,12 @@
 use crate::protocol::{ErrorCode, VideoSourceKind};
 use crate::sources::ThreadCaptureTarget;
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct CaptureSettings {
+    pub(super) hide_cursor: bool,
+    pub(super) hide_border: bool,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct CaptureSnapshot {
     pub(super) source_kind: Option<VideoSourceKind>,
@@ -38,14 +44,16 @@ impl CaptureManager {
         source_kind: VideoSourceKind,
         session_id: String,
         max_fps: Option<u16>,
+        settings: CaptureSettings,
     ) -> Result<(), ErrorCode> {
         #[cfg(target_os = "windows")]
         {
-            self.windows.start(target, source_kind, session_id, max_fps)
+            self.windows
+                .start(target, source_kind, session_id, max_fps, settings)
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = (target, source_kind, session_id, max_fps);
+            let _ = (target, source_kind, session_id, max_fps, settings);
             Err(ErrorCode::PlatformUnsupported)
         }
     }

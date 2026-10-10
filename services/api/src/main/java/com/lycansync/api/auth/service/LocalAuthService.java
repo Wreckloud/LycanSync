@@ -68,7 +68,7 @@ public class LocalAuthService {
         }
         // 条件更新会原子选出首位管理员；事务失败时初始化状态和账号写入一起回滚。
         boolean administrator = mapper.markInitialized(now) == 1;
-        AuthUser user = new AuthUser(UUID.randomUUID(), request.username(), "", administrator);
+        AuthUser user = new AuthUser(UUID.randomUUID(), request.username(), "", administrator, "", now);
         mapper.insertUser(user, now);
         mapper.insertLocalCredential(user.id(), username, passwordHash, now);
         String sessionToken = authService.issueSession(user);

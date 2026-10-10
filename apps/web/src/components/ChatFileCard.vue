@@ -39,7 +39,7 @@ onScopeDispose(cancel);
   <div class="chat-file-card">
     <div class="chat-file-icon" aria-hidden="true"><Download :size="17" /></div>
     <div class="chat-file-details">
-      <strong :title="attachment.fileName">{{ attachment.fileName }}</strong>
+      <strong>{{ attachment.fileName }}</strong>
       <small>{{ (attachment.byteSize / 1024 / 1024).toFixed(2) }} MB</small>
       <progress v-if="downloading" :value="progress()" max="100" aria-label="文件下载进度" />
       <small v-if="error" class="chat-file-error" role="alert">{{ error }}</small>

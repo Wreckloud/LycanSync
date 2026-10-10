@@ -168,11 +168,14 @@ class MediaHelperManager {
     }
   }
 
-  startVideo(sourceId, maxFps, sessionId = this.createRequestId()) {
+  startVideo(sourceId, maxFps, sessionId = this.createRequestId(), settings = { hideCursor: false, hideBorder: false }) {
     if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
     if (typeof sourceId !== 'string' || sourceId.length > 128
         || !Number.isInteger(maxFps) || maxFps < 1 || maxFps > 60
-        || typeof sessionId !== 'string' || sessionId.length > 128) {
+        || typeof sessionId !== 'string' || sessionId.length > 128
+        || !settings || typeof settings !== 'object' || Array.isArray(settings)
+        || Object.keys(settings).length !== 2
+        || typeof settings.hideCursor !== 'boolean' || typeof settings.hideBorder !== 'boolean') {
       return Promise.reject(new Error('invalidVideoStart'));
     }
     if (this.videoCapture || this.captureProbe) return Promise.reject(new Error('videoCaptureAlreadyRunning'));
@@ -187,7 +190,7 @@ class MediaHelperManager {
     const active = { state: snapshot.state, sessionId, sourceId, maxFps, starting: true, remoteControl: undefined };
     this.videoCapture = active;
     snapshot.state.videoSessionId = sessionId;
-    const promise = this.runStartVideo(snapshot.state, sessionId, sourceId, maxFps)
+    const promise = this.runStartVideo(snapshot.state, sessionId, sourceId, maxFps, settings)
       .finally(() => {
         if (this.videoCaptureStart?.promise === promise) this.videoCaptureStart = undefined;
         if (this.canCloseWhenIdle(snapshot.state)) this.scheduleIdleShutdown(snapshot.state);
@@ -263,10 +266,10 @@ class MediaHelperManager {
     return { changed: response.changed };
   }
 
-  async runStartVideo(state, sessionId, sourceId, maxFps) {
+  async runStartVideo(state, sessionId, sourceId, maxFps, settings) {
     try {
       const response = await this.sendRequest(state, 'startVideo', 'acknowledged', this.requestTimeoutMs,
-        { sessionId, sourceId, targetWidth: 1920, targetHeight: 1080, maxFps });
+        { sessionId, sourceId, targetWidth: 1920, targetHeight: 1080, maxFps, ...settings });
       if (response.command !== 'startVideo' || response.changed !== true) {
         throw new Error('mediaHelperInvalidVideoStart');
       }
@@ -612,7 +615,8 @@ class MediaHelperManager {
       const executable = typeof this.executablePath === 'function' ? this.executablePath() : this.executablePath;
       child = this.spawnProcess(executable, [], {
         windowsHide: true,
-        stdio: ['pipe', 'pipe', 'ignore'],
+        // 协议仍走 stdout；原生失败阶段和 HRESULT 写入父进程的 stderr。
+        stdio: ['pipe', 'pipe', 'inherit'],
       });
     } catch {
       this.retryAfter = Date.now() + this.retryDelayMs;

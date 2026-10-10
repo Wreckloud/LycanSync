@@ -25,13 +25,13 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * 本地 RTC 入房凭证签发服务。
+ * 本机调试与独立服务器共用的 RTC 入房凭证签发服务。
  *
  * @author Wreckloud
  * @since 2026-09-03
  */
 @Service
-@Profile("rtc-local")
+@Profile({"rtc-local", "rtc-server"})
 @RequiredArgsConstructor
 public class LocalRtcTokenService {
 

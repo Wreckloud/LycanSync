@@ -18,6 +18,8 @@ sharedTexture?.setSharedTextureReceiver(async ({ importedSharedTexture }, token,
 // 只暴露固定操作，不向页面开放 Node.js 或任意 IPC 通道。
 contextBridge.exposeInMainWorld('lycanDesktop', {
   clearSession: () => ipcRenderer.invoke('auth:clear'),
+  getServerSettings: () => ipcRenderer.invoke('settings:server:get'),
+  setServerAddress: (value) => ipcRenderer.invoke('settings:server:set', value),
   minimize: () => ipcRenderer.send('window:minimize'),
   isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
   getProcessMetrics: () => ipcRenderer.invoke('diagnostics:process-metrics'),
@@ -30,7 +32,8 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   getNativeVideoSourceThumbnails: (sources) => ipcRenderer.invoke('media:video-source-thumbnails', sources),
   startNativeCaptureProbe: (sourceId) => ipcRenderer.invoke('media:capture-probe:start', sourceId),
   stopNativeCaptureProbe: (sessionId) => ipcRenderer.invoke('media:capture-probe:stop', sessionId),
-  startNativeVideo: (sourceId, maxFps) => ipcRenderer.invoke('media:native-video:start', sourceId, maxFps),
+  getScreenShareSupport: () => ipcRenderer.invoke('settings:screen-share:support'),
+  startNativeVideo: (sourceId, maxFps, settings) => ipcRenderer.invoke('media:native-video:start', sourceId, maxFps, settings),
   stopNativeVideo: (sessionId) => ipcRenderer.invoke('media:native-video:stop', sessionId),
   authorizeNativeRemoteControl: (sessionId, controlSessionId, controllerIdentity) =>
     ipcRenderer.invoke('media:remote-control:authorize', sessionId, controlSessionId, controllerIdentity),

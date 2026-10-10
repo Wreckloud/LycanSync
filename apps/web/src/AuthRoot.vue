@@ -2,13 +2,13 @@
 import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { Copy, Minus, Square, X } from '@lucide/vue';
 import App from './App.vue';
-import ProfileDialog from './components/ProfileDialog.vue';
 import {
   authRequest,
   authenticatedFetch,
   setBrowserSession,
   type AuthSessionStatus,
   type AuthUser,
+  type ProfileUpdate,
 } from './auth/authApi';
 import { sendPresenceHeartbeat } from './presence/presenceApi';
 
@@ -23,8 +23,11 @@ const password = ref('');
 const passwordConfirmation = ref('');
 const error = ref('');
 const submitting = ref(false);
-const profileOpen = ref(false);
 const windowMaximized = ref(false);
+const serverAddress = ref('');
+const serverEditable = ref(false);
+const serverSaving = ref(false);
+const serverError = ref('');
 let sessionHeartbeat: number | null = null;
 let sessionHeartbeatInFlight = false;
 let logoutInProgress = false;
@@ -33,11 +36,10 @@ const setupRequired = computed(() => !initialized.value);
 const registering = computed(() => setupRequired.value || registrationMode.value);
 const canSubmit = computed(() => Boolean(username.value.trim()) && Boolean(password.value)
   && (!registering.value || (password.value === passwordConfirmation.value && Boolean(passwordConfirmation.value)))
-  && !submitting.value);
+  && !submitting.value && !serverSaving.value);
 
 function expired() {
   user.value = null;
-  profileOpen.value = false;
 }
 function toggleRegistrationMode() {
   registrationMode.value = !registrationMode.value;
@@ -106,15 +108,13 @@ async function verifyCurrentSession() {
   }
 }
 
-async function openProfile() {
-  error.value = '';
-  try {
-    user.value = await authRequest<AuthUser>('me');
-  } catch (exception) {
-    if (!user.value) return;
-    error.value = exception instanceof Error ? exception.message : '无法读取个人资料';
-  }
-  profileOpen.value = true;
+async function saveProfile(profile: ProfileUpdate) {
+  const currentUserId = user.value?.id;
+  if (!currentUserId) throw new Error('登录状态已结束，请重新登录。');
+  const updated = await authRequest<AuthUser>('me', 'PUT', profile);
+  if (user.value?.id !== currentUserId) throw new Error('当前账号已切换，资料没有更新到新账号。');
+  user.value = updated;
+  return updated;
 }
 
 watch(() => user.value?.id ?? null, (currentUserId) => {
@@ -169,11 +169,27 @@ async function clearLocalSession() {
   try { await desktop?.clearSession(); await initialize(); }
   catch { error.value = '清理本机凭据失败，请检查用户目录权限。'; }
 }
-onMounted(initialize);
+async function saveServerAddress() {
+  if (!desktop || submitting.value || serverSaving.value) return;
+  serverSaving.value = true;
+  serverError.value = '';
+  try { await desktop.setServerAddress(serverAddress.value); }
+  catch (exception) {
+    serverError.value = exception instanceof Error ? exception.message : '服务器地址保存失败';
+    serverSaving.value = false;
+  }
+}
+onMounted(() => {
+  void initialize();
+  void desktop?.getServerSettings?.().then((settings) => {
+    serverAddress.value = settings.apiUrl;
+    serverEditable.value = settings.editable;
+  }).catch(() => { serverError.value = '无法读取服务器地址。'; });
+});
 </script>
 
 <template>
-  <App v-if="user" :user="user" :window-maximized="windowMaximized" @profile="openProfile" />
+  <App v-if="user" :user="user" :window-maximized="windowMaximized" :save-profile="saveProfile" @logout="logout" />
   <div v-else class="app-shell">
     <header class="titlebar" :class="{ 'desktop-titlebar': desktop }">
       <div class="brand">LycanSync</div>
@@ -218,9 +234,18 @@ onMounted(initialize);
           <button v-if="desktop && error" type="button" @click="clearLocalSession">清理本机登录凭据</button>
         </template>
         <p v-if="error" role="alert" class="auth-error">{{ error }}</p>
+        <details v-if="serverEditable" class="auth-server-settings">
+          <summary>服务器地址</summary>
+          <form @submit.prevent="saveServerAddress">
+            <label>服务器地址
+              <input v-model="serverAddress" type="url" required autocomplete="off" :disabled="submitting || serverSaving" />
+            </label>
+            <small>保存后重启应用，使用该服务器的账号登录。</small>
+            <button type="submit" :disabled="submitting || serverSaving">{{ serverSaving ? '正在重启…' : '保存并重启' }}</button>
+            <p v-if="serverError" role="alert" class="auth-error">{{ serverError }}</p>
+          </form>
+        </details>
       </section>
     </main>
   </div>
-  <ProfileDialog v-if="profileOpen && user" :user="user" :error="error"
-    @close="profileOpen = false" @updated="user = $event" @logout="logout" />
 </template>

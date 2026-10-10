@@ -34,17 +34,18 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * 群组 RTC 接口，仅在本地媒体环境启用。
+ * 群组 RTC 接口，在本机调试或独立服务器媒体环境启用。
  *
  * @author Wreckloud
  * @since 2026-09-03
  */
 @RestController
-@Profile("rtc-local")
+// 本机与独立服务器共用凭证及房间摘要接口，连接配置分别启用。
+@Profile({"rtc-local", "rtc-server"})
 @RequiredArgsConstructor
 @Validated
 @RequestMapping("/api/rtc")
-@Tag(name = "群组 RTC", description = "仅 rtc-local 模式启用，需要已登录账号")
+@Tag(name = "群组 RTC", description = "rtc-local 或 rtc-server 模式启用，需要已登录账号")
 public class LocalRtcController {
 
     private final LocalRtcTokenService localRtcTokenService;

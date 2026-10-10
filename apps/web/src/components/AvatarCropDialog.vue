@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, ref, shallowRef, watch } from 'vue';
 import {
-  AvatarImageError, blobToDataUrl, calculateAvatarCrop, decodeAvatarFile, encodeAvatarCrop,
+  AvatarImageError, blobToDataUrl, calculateAvatarCrop, decodeAvatarFile, encodeAvatarCrop, zoomAvatarWithWheel,
 } from '../profile/avatarImage';
 
 const CROP_VIEWPORT_SIZE = 280;
@@ -43,6 +43,11 @@ function clampOffset() {
   offsetY.value = Math.max(-maximumOffset('y'), Math.min(maximumOffset('y'), offsetY.value));
 }
 watch(zoom, clampOffset);
+
+function zoomWithWheel(event: WheelEvent) {
+  if (!source.value || processing.value) return;
+  zoom.value = zoomAvatarWithWheel(zoom.value, event.deltaY, event.deltaMode);
+}
 
 onMounted(async () => {
   await nextTick();
@@ -108,10 +113,10 @@ async function applyCrop() {
         aria-labelledby="avatar-crop-title" tabindex="-1">
         <div>
           <h3 id="avatar-crop-title">{{ title }}</h3>
-          <small>拖动图片调整位置，圆框内是头像最终显示范围。</small>
+          <small>拖动图片调整位置，滚轮缩放；圆框内是头像最终显示范围。</small>
         </div>
         <div class="avatar-crop-viewport" aria-label="拖动调整头像位置"
-          @pointerdown="beginDrag" @pointermove="moveDrag" @pointerup="endDrag" @pointercancel="endDrag">
+          @pointerdown="beginDrag" @pointermove="moveDrag" @pointerup="endDrag" @pointercancel="endDrag" @wheel.prevent="zoomWithWheel">
           <img v-if="source" :src="sourceUrl" :style="imageStyle" alt="待裁剪头像" draggable="false" />
           <span class="avatar-crop-guide" aria-hidden="true" />
         </div>

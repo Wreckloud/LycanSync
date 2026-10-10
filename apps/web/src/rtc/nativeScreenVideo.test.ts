@@ -36,6 +36,105 @@ afterEach(() => {
 });
 
 describe('NativeScreenVideoSession', () => {
+  it('uses visible dimensions through aligned textures, portrait resizing and already-correct frames', async () => {
+    const target = installWindowMessageTarget();
+    const frames: VideoFrame[] = [];
+    const createAdjustedFrame = vi.fn((frame: VideoFrame, init: VideoFrameInit) =>
+      Object.assign({}, frame, init, { close: vi.fn() }) as FakeVideoFrame);
+    const desktop: NativeVideoDesktopBridge = {
+      startNativeVideo: vi.fn(async () => ({ sessionId: 'resize-session', changed: true })),
+      stopNativeVideo: vi.fn(async () => ({ changed: true })),
+      onNativeVideoError: () => () => {},
+      onNativeVideoSuspended: () => () => {},
+    };
+    let now = 0;
+    const session = new NativeScreenVideoSession(desktop, {
+      maxFps: 30,
+      now: () => now,
+      createAdjustedFrame,
+      createGenerator: () => ({
+        writable: new WritableStream<VideoFrame>({ write: (frame) => { frames.push(frame); } }),
+        stop: vi.fn(),
+      }) as never,
+      createLocalTrack: () => ({ stop: vi.fn() } as never),
+    });
+    const ready = session.start('window:1:0');
+    await Promise.resolve();
+    expect(desktop.startNativeVideo).toHaveBeenCalledWith('window:1:0', 30, { hideCursor: false, hideBorder: false });
+    const sizes = [
+      { width: 1920, height: 1080, displayWidth: 1920, displayHeight: 1088 },
+      { width: 800, height: 1048, displayWidth: 1920, displayHeight: 1088 },
+      { width: 1200, height: 600, displayWidth: 1920, displayHeight: 1088 },
+      { width: 1200, height: 600, displayWidth: 1200, displayHeight: 600 },
+    ];
+    for (const [index, size] of sizes.entries()) {
+      now = index * 50;
+      const original = Object.assign(createFrame(), {
+        codedWidth: 1920, codedHeight: 1088, timestamp: now * 1000,
+        displayWidth: size.displayWidth, displayHeight: size.displayHeight,
+        visibleRect: { x: 0, y: 0, width: size.width, height: size.height },
+      });
+      dispatchFrame(target, original, 'resize-session');
+      await ready;
+      await vi.waitFor(() => expect(frames).toHaveLength(index + 1));
+      const output = frames[index];
+      expect(output.displayWidth).toBe(size.width);
+      expect(output.displayHeight).toBe(size.height);
+      expect(output.visibleRect).toEqual(original.visibleRect);
+      expect(output.codedWidth).toBe(1920);
+      expect(output.codedHeight).toBe(1088);
+      expect(output.timestamp).toBe(original.timestamp);
+      await vi.waitFor(() => expect(output.close).toHaveBeenCalledOnce());
+      expect(original.close).toHaveBeenCalledOnce();
+      if (index < 3) {
+        expect(createAdjustedFrame).toHaveBeenLastCalledWith(original, {
+          displayWidth: size.width, displayHeight: size.height,
+        });
+      } else {
+        expect(output).toBe(original);
+      }
+    }
+    expect(createAdjustedFrame).toHaveBeenCalledTimes(3);
+    await session.stop();
+  });
+
+  it('releases the original frame and stops capture if display metadata adjustment fails', async () => {
+    const target = installWindowMessageTarget();
+    const onError = vi.fn();
+    const write = vi.fn();
+    const stopNativeVideo = vi.fn(async () => ({ changed: true }));
+    const desktop: NativeVideoDesktopBridge = {
+      startNativeVideo: vi.fn(async () => ({ sessionId: 'adjustment-fails', changed: true })),
+      stopNativeVideo,
+      onNativeVideoError: () => () => {},
+      onNativeVideoSuspended: () => () => {},
+    };
+    const session = new NativeScreenVideoSession(desktop, {
+      maxFps: 30,
+      onError,
+      createAdjustedFrame: () => { throw new Error('frame adjustment failed'); },
+      createGenerator: () => ({
+        writable: new WritableStream<VideoFrame>({ write }),
+        stop: vi.fn(),
+      }) as never,
+      createLocalTrack: () => ({ stop: vi.fn() } as never),
+    });
+    const ready = session.start('window:1:0');
+    const rejected = expect(ready).rejects.toThrow('nativeVideoFrameAdjustmentFailed');
+    await Promise.resolve();
+    const original = Object.assign(createFrame(), {
+      displayWidth: 1920, displayHeight: 1088,
+      visibleRect: { x: 0, y: 0, width: 800, height: 1048 },
+    });
+    dispatchFrame(target, original, 'adjustment-fails');
+    await rejected;
+    await session.stop();
+    expect(original.close).toHaveBeenCalledOnce();
+    expect(write).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith('nativeVideoFrameAdjustmentFailed');
+    expect(stopNativeVideo).toHaveBeenCalledWith('adjustment-fails');
+  });
+
   it('waits for an actual VideoFrame before exposing a publishable track and releases it on stop', async () => {
     const target = installWindowMessageTarget();
     const frames: VideoFrame[] = [];
@@ -68,7 +167,7 @@ describe('NativeScreenVideoSession', () => {
     const frame = createFrame();
     dispatchFrame(target, frame, 'session-1');
     expect(await ready).toBe(track);
-    expect(started).toHaveBeenCalledWith('monitor:1:0', 30);
+    expect(started).toHaveBeenCalledWith('monitor:1:0', 30, { hideCursor: false, hideBorder: false });
     expect(frames).toEqual([frame]);
     expect(frame.close).toHaveBeenCalledOnce();
 
@@ -312,8 +411,8 @@ describe('NativeScreenVideoSession', () => {
       now: () => now,
       onError,
       createSuspendedFrame,
-      createFrameWithTimestamp: (_frame, timestamp) => {
-        const adjusted = Object.assign(createFrame(), { timestamp });
+      createAdjustedFrame: (_frame, init) => {
+        const adjusted = Object.assign(createFrame(), init);
         adjustedFrames.push(adjusted);
         return adjusted;
       },
@@ -346,12 +445,18 @@ describe('NativeScreenVideoSession', () => {
 
     reportSuspension({ sessionId: 'window-session', suspended: false });
     now = 100;
-    const resumedFrame = Object.assign(createFrame(), { timestamp: 200_000 });
+    const resumedFrame = Object.assign(createFrame(), {
+      timestamp: 200_000, displayWidth: 1280, displayHeight: 720,
+      visibleRect: { x: 0, y: 0, width: 800, height: 500 },
+    });
     dispatchFrame(target, resumedFrame, 'window-session');
     await vi.waitFor(() => expect(frames).toHaveLength(5));
     expect(resumedFrame.close).toHaveBeenCalledOnce();
     expect(frames[4]).toBe(adjustedFrames[0]);
     expect(adjustedFrames[0].timestamp).toBe(pauseFrames[2].timestamp! + 1);
+    expect(adjustedFrames[0].displayWidth).toBe(800);
+    expect(adjustedFrames[0].displayHeight).toBe(500);
+    expect(adjustedFrames).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(2_000);
     expect(frames).toHaveLength(5);
     expect(onError).not.toHaveBeenCalled();

@@ -1,4 +1,11 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
+
+async function editNickname(page: Page, nickname?: string) {
+  const input = page.getByLabel('昵称', { exact: true });
+  if (!await input.isVisible()) await page.getByRole('button', { name: /^修改昵称，/ }).click();
+  if (nickname !== undefined) await input.fill(nickname);
+  return input;
+}
 
 function silentWav(durationMs = 100) {
   const sampleRate = 8_000;
@@ -46,7 +53,7 @@ test('首次注册创建管理员并在浏览器内存保存会话', async ({ pa
   await page.getByLabel('确认密码', { exact: true }).fill('abc123');
   await page.getByRole('button', { name: '创建账号', exact: true }).click();
 
-  await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
   expect(registration).toEqual({ username: 'Admin', password: 'abc123' });
   await expect.poll(() => groupAuthorization).toBe('Bearer ' + token);
   expect(await page.evaluate(() => localStorage.length)).toBe(0);
@@ -72,7 +79,7 @@ test('已初始化服务器使用本地账号登录', async ({ page }) => {
   await page.getByLabel('密码', { exact: true }).fill('friend-password');
   await page.getByRole('button', { name: '登录', exact: true }).click();
 
-  await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
   expect(login).toEqual({ username: 'friend', password: 'friend-password' });
 });
 
@@ -120,6 +127,7 @@ test('浏览器旧会话的延迟 401 不退出新会话，当前会话 401 仍�
       return;
     }
     if (authorization === `Bearer ${currentToken}`) {
+      if (currentSessionExpired) return route.fulfill({ status: 401, json: { detail: '会话已失效' } });
       return route.fulfill({ json: { id: user.id, nickname: user.nickname, administrator: user.administrator } });
     }
     return route.fulfill({ status: 401, json: { detail: '请先登录' } });
@@ -135,30 +143,33 @@ test('浏览器旧会话的延迟 401 不退出新会话，当前会话 401 仍�
     await page.getByLabel('用户名').fill('session_race');
     await page.getByLabel('密码', { exact: true }).fill('session-password');
     await page.getByRole('button', { name: '登录', exact: true }).click();
-    await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
 
     await page.clock.fastForward(20_100);
     await delayedSessionStartedPromise;
-    await page.getByRole('button', { name: '个人设置', exact: true }).click();
+    if (!await page.locator('.settings-view').isVisible()) {
+      await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+    }
+    await page.getByRole('button', { name: '账号设置', exact: true }).click();
     await page.getByRole('button', { name: '退出登录', exact: true }).click();
     await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
 
     await page.getByLabel('用户名').fill('session_race');
     await page.getByLabel('密码', { exact: true }).fill('session-password');
     await page.getByRole('button', { name: '登录', exact: true }).click();
-    await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
 
     const delayedResponsePromise = page.waitForResponse((response) =>
       response.url().endsWith('/api/auth/session') && response.status() === 401);
     releaseDelayedSession();
     await delayedResponsePromise;
     await delayedSessionFinishedPromise;
-    await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
 
     currentSessionExpired = true;
     const currentResponsePromise = page.waitForResponse((response) =>
-      response.url().endsWith('/api/auth/me') && response.status() === 401);
-    await page.getByRole('button', { name: '个人设置', exact: true }).click();
+      response.url().endsWith('/api/auth/session') && response.status() === 401);
+    await page.clock.fastForward(20_100);
     await currentResponsePromise;
     await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
   } finally {
@@ -188,7 +199,7 @@ test('已初始化服务器允许创建普通账号', async ({ page }) => {
   await page.getByLabel('确认密码', { exact: true }).fill('friend-password');
   await page.getByRole('button', { name: '创建账号', exact: true }).click();
 
-  await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
   expect(registration).toEqual({ username: 'NewFriend', password: 'friend-password' });
 });
 
@@ -207,7 +218,7 @@ test('新设备替换会话后旧客户端通过心跳静默退出', async ({ pa
   }));
 
   await page.goto('/');
-  await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
   await page.clock.fastForward(20_100);
   await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
   expect(sessionRequests).toBeGreaterThanOrEqual(1);
@@ -233,7 +244,7 @@ test('上一次会话心跳完成前不会发起下一次', async ({ page }) => 
   }));
 
   await page.goto('/');
-  await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
   await page.evaluate(() => {
     Object.defineProperty(AbortSignal, 'timeout', {
       configurable: true,
@@ -274,7 +285,7 @@ test('会话状态未变化时心跳保持固定节拍', async ({ page }) => {
   }));
 
   await page.goto('/');
-  await expect(page.getByRole('button', { name: '个人设置', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
   await page.clock.fastForward(20_100);
   await expect.poll(() => sessionRequests).toBe(1);
   await page.clock.fastForward(5_000);
@@ -297,14 +308,144 @@ test('个人资料修改沿用当前账号', async ({ page }) => {
     json: { participantCount: 0, participants: [] },
   }));
   await page.goto('/');
-  await page.getByRole('button', { name: '个人设置', exact: true }).click();
-  await page.getByLabel('昵称', { exact: true }).fill('自定义昵称');
-  await page.getByRole('button', { name: '保存资料' }).click();
-  await page.getByRole('button', { name: '个人设置', exact: true }).click();
-  await expect(page.getByLabel('昵称', { exact: true })).toHaveValue('自定义昵称');
+  if (!await page.locator('.settings-view').isVisible()) {
+    await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  }
+  await page.getByRole('button', { name: '账号设置', exact: true }).click();
+  await expect(page.locator('.settings-view')).not.toHaveAttribute('role', 'dialog');
+  await expect(page.locator('.settings-view')).not.toHaveAttribute('aria-modal', 'true');
+  await expect(page.getByLabel('账号标识')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '保存资料' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '取消修改' })).toHaveCount(0);
+  await editNickname(page, '自定义昵称');
+  await page.getByLabel('昵称', { exact: true }).press('Enter');
+  await expect.poll(() => user.nickname).toBe('自定义昵称');
+  await expect(page.getByRole('button', { name: '修改昵称，自定义昵称', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '返回应用' }).click();
+  if (!await page.locator('.settings-view').isVisible()) {
+    await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  }
+  await page.getByRole('button', { name: '账号设置', exact: true }).click();
+  await expect(page.getByRole('button', { name: '修改昵称，自定义昵称', exact: true })).toBeVisible();
 });
 
-test('更换头像不会改变个人设置布局', async ({ page }) => {
+test('自动保存失败保留草稿，不关闭设置，重新编辑后可以重试', async ({ page }) => {
+  let user = { id: 'profile-failure-user', nickname: '服务器昵称', avatar: '', administrator: false };
+  let failSave = true;
+  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
+  await page.route('**/api/auth/me', async (route) => {
+    if (route.request().method() === 'PUT') {
+      if (failSave) return route.fulfill({ status: 503, json: { message: '暂时无法保存' } });
+      user = { ...user, ...route.request().postDataJSON() };
+    }
+    return route.fulfill({ json: user });
+  });
+  await page.goto('/');
+  if (!await page.locator('.settings-view').isVisible()) {
+    await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  }
+  await page.getByRole('button', { name: '账号设置', exact: true }).click();
+  await editNickname(page, '未保存的新昵称');
+  await page.getByLabel('昵称', { exact: true }).press('Tab');
+  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(page.getByLabel('昵称', { exact: true })).toHaveValue('未保存的新昵称');
+  await page.getByRole('button', { name: '返回应用' }).click();
+  await expect(page.locator('.settings-view')).toBeVisible();
+  await expect(page.getByRole('alert')).toBeVisible();
+  failSave = false;
+  await page.getByLabel('昵称', { exact: true }).press('Enter');
+  await expect.poll(() => user.nickname).toBe('未保存的新昵称');
+  await page.getByRole('button', { name: '返回应用' }).click();
+  await expect(page.locator('.settings-view')).toHaveCount(0);
+});
+
+test('资料基线跟随服务器更新并在保存后采用服务端规范值', async ({ page }) => {
+  let user = { id: 'profile-baseline-user', nickname: '初始昵称', avatar: '', administrator: false };
+  await page.clock.install();
+  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/auth/me', async (route) => {
+    if (route.request().method() === 'PUT') user = { ...user, ...route.request().postDataJSON() };
+    await route.fulfill({ json: user });
+  });
+  await page.route('**/api/auth/session', (route) => route.fulfill({ json: {
+    id: user.id, nickname: user.nickname, administrator: user.administrator,
+  } }));
+  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
+  await page.goto('/');
+  if (!await page.locator('.settings-view').isVisible()) {
+    await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  }
+  await page.getByRole('button', { name: '账号设置', exact: true }).click();
+
+  user = { ...user, nickname: '服务器新昵称' };
+  await page.clock.fastForward(20_100);
+  await expect(page.getByRole('button', { name: '修改昵称，服务器新昵称', exact: true })).toBeVisible();
+
+  await editNickname(page, '保留的资料草稿');
+  user = { ...user, nickname: '服务器再次更新' };
+  await page.clock.fastForward(20_100);
+  await expect(page.getByLabel('昵称', { exact: true })).toHaveValue('保留的资料草稿');
+  await page.getByLabel('昵称', { exact: true }).fill('  保存时去空格  ');
+  await page.getByLabel('昵称', { exact: true }).press('Enter');
+  await expect(page.getByRole('button', { name: '修改昵称，保存时去空格', exact: true })).toBeVisible();
+  await expect.poll(() => user.nickname).toBe('保存时去空格');
+  await page.getByRole('button', { name: '返回应用' }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
+test('浏览器客户端栏目不展示 Windows 开机自启控件，Esc 返回并恢复入口焦点', async ({ page }) => {
+  const user = { id: 'settings-browser-user', nickname: '浏览器用户', avatar: '', administrator: false };
+  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
+  await page.goto('/');
+  const entry = page.getByRole('button', { name: '语音与音频设置', exact: true });
+  await entry.click();
+  await expect(page.locator('.settings-header h1')).toBeFocused();
+  await page.getByRole('button', { name: '客户端', exact: true }).click();
+  await expect(page.locator('.client-settings')).toContainText('开机自启仅在 Windows 桌面版提供');
+  await expect(page.getByLabel('开机自动启动')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.settings-view')).toHaveCount(0);
+  await expect(entry).toBeFocused();
+});
+
+test('切换栏目和 Esc 关闭前自动保存，未修改不提交', async ({ page }) => {
+  let user = { id: 'draft-user', nickname: '草稿测试', avatar: '', administrator: true };
+  let updates = 0;
+  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/auth/me', (route) => {
+    if (route.request().method() === 'PUT') {
+      updates++;
+      user = { ...user, ...route.request().postDataJSON() };
+    }
+    return route.fulfill({ json: user });
+  });
+  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
+  await page.goto('/');
+  if (!await page.locator('.settings-view').isVisible()) {
+    await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  }
+  await page.getByRole('button', { name: '账号设置', exact: true }).click();
+  await editNickname(page);
+  await page.getByRole('button', { name: '音效', exact: true }).click();
+  expect(updates).toBe(0);
+  await page.getByRole('button', { name: '账号设置', exact: true }).click();
+  await editNickname(page, '自动保存');
+  await page.getByRole('button', { name: '音效', exact: true }).click();
+  await expect.poll(() => user.nickname).toBe('自动保存');
+  expect(updates).toBe(1);
+  await page.getByRole('button', { name: '账号设置', exact: true }).click();
+  await expect(page.getByRole('button', { name: '修改昵称，自动保存', exact: true })).toBeVisible();
+  await editNickname(page, '关闭前保存');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.settings-view')).toHaveCount(0);
+  expect(user.nickname).toBe('关闭前保存');
+  expect(updates).toBe(2);
+});
+
+test('更换头像在整页资料设置中裁剪并保存', async ({ page }) => {
   const user = { id: 'avatar-user', nickname: '头像测试', avatar: '', administrator: true };
   let profileUpdate: { nickname?: string; avatar?: string } | undefined;
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
@@ -316,12 +457,18 @@ test('更换头像不会改变个人设置布局', async ({ page }) => {
     json: { participantCount: 0, participants: [] },
   }));
   await page.goto('/');
-  await page.getByRole('button', { name: '个人设置', exact: true }).click();
+  if (!await page.locator('.settings-view').isVisible()) {
+    await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  }
+  await page.getByRole('button', { name: '账号设置', exact: true }).click();
 
-  const dialog = page.locator('.profile-dialog');
-  const initialDialog = await dialog.boundingBox();
-  await expect(page.locator('.profile-avatar-preview')).toHaveCSS('width', '112px');
-  await expect(page.locator('.profile-avatar-preview')).toHaveCSS('height', '112px');
+  const settings = page.locator('.settings-view');
+  const initialSettings = await settings.boundingBox();
+  await expect(settings).not.toHaveAttribute('role', 'dialog');
+  await expect(settings).not.toHaveAttribute('aria-modal', 'true');
+  await expect(page.locator('.profile-avatar-preview')).toHaveCSS('width', '76px');
+  await page.getByRole('button', { name: '修改头像', exact: true }).hover();
+  await expect(page.locator('.profile-avatar-overlay')).toHaveCSS('opacity', '1');
   await expect(page.getByRole('button', { name: '移除头像' })).toHaveCount(0);
   await page.getByLabel('上传头像').setInputFiles({
     name: 'avatar.png',
@@ -332,17 +479,101 @@ test('更换头像不会改变个人设置布局', async ({ page }) => {
   await expect(cropDialog).toBeVisible();
   await expect(cropDialog.getByAltText('待裁剪头像')).toHaveJSProperty('naturalWidth', 1);
   expect(await cropDialog.getByAltText('待裁剪头像').getAttribute('src')).toMatch(/^data:image\/png;base64,/);
-  expect(await dialog.boundingBox()).toEqual(initialDialog);
+  expect(await settings.boundingBox()).toEqual(initialSettings);
   await expect(page.getByLabel('头像缩放')).toBeVisible();
+  await cropDialog.getByLabel('拖动调整头像位置').hover();
+  await page.mouse.wheel(0, -100);
+  await expect(page.getByLabel('头像缩放')).toHaveValue('1.1');
+  await page.mouse.wheel(0, 100);
+  await expect(page.getByLabel('头像缩放')).toHaveValue('1');
   await page.getByRole('button', { name: '应用头像' }).click();
   const preview = page.getByAltText('头像预览');
   await expect(preview).toBeVisible();
   await expect(preview).toHaveJSProperty('naturalWidth', 256);
   expect(await preview.getAttribute('src')).toMatch(/^data:image\/png;base64,/);
-  expect(await dialog.boundingBox()).toEqual(initialDialog);
-  await page.getByRole('button', { name: '保存资料' }).click();
-  expect(profileUpdate?.avatar).toMatch(/^data:image\/png;base64,/);
+  expect(await settings.boundingBox()).toEqual(initialSettings);
+  await expect.poll(() => profileUpdate?.avatar).toMatch(/^data:image\/png;base64,/);
   expect(Buffer.from(profileUpdate!.avatar!.split(',')[1], 'base64').length).toBeLessThanOrEqual(96 * 1024);
+});
+
+test('签名自动保存与注册日期展示，反馈不推动下方内容', async ({ page }) => {
+  const user = {
+    id: 'signature-user', nickname: '签名测试', avatar: '', administrator: false,
+    signature: '', createdAt: '2026-09-06T12:00:00Z',
+  };
+  let updates = 0;
+  let failNext = false;
+  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/auth/me', async (route) => {
+    if (route.request().method() === 'PUT') {
+      updates++;
+      if (failNext) {
+        failNext = false;
+        return route.fulfill({ status: 503, json: { detail: '暂时无法保存' } });
+      }
+      const profile = route.request().postDataJSON();
+      expect(profile).not.toHaveProperty('createdAt');
+      Object.assign(user, profile);
+    }
+    await route.fulfill({ json: user });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  await page.getByRole('button', { name: '账号设置', exact: true }).click();
+  await expect(page.locator('.profile-registration time')).toHaveAttribute('datetime', user.createdAt);
+  const activityPosition = await page.locator('.activity-settings').boundingBox();
+  const signature = page.getByRole('textbox', { name: '个性签名', exact: true });
+  await expect(signature).toHaveAttribute('maxlength', '120');
+  await signature.fill('一起开黑');
+  await page.getByRole('heading', { name: '账号设置', exact: true }).click();
+  await expect.poll(() => user.signature).toBe('一起开黑');
+  expect(updates).toBe(1);
+  expect(await page.locator('.activity-settings').boundingBox()).toEqual(activityPosition);
+
+  failNext = true;
+  await signature.fill('保留失败草稿');
+  await page.getByRole('heading', { name: '账号设置', exact: true }).click();
+  await expect(page.locator('.profile-feedback [role="alert"]')).toContainText('暂时无法保存');
+  await expect(signature).toHaveValue('保留失败草稿');
+  expect(await page.locator('.activity-settings').boundingBox()).toEqual(activityPosition);
+
+  await signature.fill('');
+  await page.getByRole('heading', { name: '账号设置', exact: true }).click();
+  await expect.poll(() => user.signature).toBe('');
+  await expect(page.locator('.profile-feedback [role="alert"]')).toHaveCount(0);
+  expect(updates).toBe(3);
+});
+
+test('动态开关按账号保存，账号设置明确标出尚未接入的功能', async ({ page }) => {
+  const user = { id: 'settings-account-user', nickname: '设置测试', avatar: '', administrator: false };
+  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
+  await page.goto('/');
+  await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  await page.getByRole('button', { name: '账号设置', exact: true }).click();
+  await expect(page.getByRole('navigation', { name: '设置栏目' }).getByRole('button', { name: '个人资料', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('navigation', { name: '设置栏目' }).getByRole('button', { name: '当前动态', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '修改头像', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '修改密码', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '连接 QQ', exact: true })).toBeVisible();
+  await expect(page.locator('.activity-settings')).toContainText('动态检测仅在桌面版提供');
+  const toggle = page.getByRole('checkbox', { name: '显示当前动态', exact: true });
+  await expect(toggle).toBeChecked();
+  await toggle.uncheck();
+  expect(await page.evaluate(() => localStorage.getItem('lycansync.activity-visible.v1.settings-account-user'))).toBe('false');
+  await page.getByRole('button', { name: '返回应用' }).click();
+  await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  await page.getByRole('button', { name: '账号设置', exact: true }).click();
+  await expect(toggle).not.toBeChecked();
+
+  await page.getByRole('button', { name: '修改密码', exact: true }).click();
+  await expect(page.locator('#password-entry')).toContainText('尚未接入');
+  await expect(page.getByRole('textbox', { name: '新密码' })).toHaveCount(0);
+  await page.getByRole('button', { name: '连接 QQ', exact: true }).click();
+  await expect(page.locator('#qq-entry')).toContainText('尚未接入');
+  await expect(page.getByRole('button', { name: '注销账号', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '退出登录', exact: true })).toBeEnabled();
 });
 
 test('自定义入场音按账号保存在本机并可移除', async ({ page }) => {
@@ -353,15 +584,19 @@ test('自定义入场音按账号保存在本机并可移除', async ({ page }) 
     json: { participantCount: 0, participants: [] },
   }));
   await page.goto('/');
-  await page.getByRole('button', { name: '个人设置', exact: true }).click();
-  await page.getByLabel('上传入场音效').setInputFiles({
+  if (!await page.locator('.settings-view').isVisible()) {
+    await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  }
+  await page.getByRole('button', { name: '账号设置', exact: true }).click();
+  await page.getByRole('button', { name: '音效', exact: true }).click();
+  await page.getByLabel('选择入场音效').setInputFiles({
     name: 'hello.wav',
     mimeType: 'audio/wav',
     buffer: silentWav(),
   });
 
   await expect(page.getByRole('button', { name: '试听' })).toBeVisible();
-  await expect(page.locator('.entrance-sound-actions')).toContainText('hello.wav');
+  await expect(page.locator('.sound-settings')).toContainText('hello.wav');
   await expect.poll(() => page.evaluate(() => localStorage.getItem(
     'lycansync.entrance-sound.v1.entrance-sound-user'))).not.toBeNull();
 
@@ -369,4 +604,44 @@ test('自定义入场音按账号保存在本机并可移除', async ({ page }) 
   await expect(page.getByRole('button', { name: '试听' })).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem(
     'lycansync.entrance-sound.v1.entrance-sound-user'))).toBeNull();
+});
+
+test('离开音效栏目或关闭设置会停止音效试听', async ({ page }) => {
+  const user = { id: 'preview-user', nickname: '试听测试', avatar: '', administrator: false };
+  await page.addInitScript(() => {
+    const state = window as Window & { __previewCounts?: { plays: number; pauses: number } };
+    state.__previewCounts = { plays: 0, pauses: 0 };
+    class AudioPreviewStub {
+      volume = 1;
+      constructor(_source: string) {}
+      play() { state.__previewCounts!.plays++; return Promise.resolve(); }
+      pause() { state.__previewCounts!.pauses++; }
+    }
+    Object.defineProperty(window, 'Audio', { value: AudioPreviewStub });
+    localStorage.setItem('lycansync.entrance-sound.v1.preview-user', JSON.stringify({
+      name: 'hello.wav', mimeType: 'audio/wav', dataUrl: 'data:audio/wav;base64,AAAA',
+    }));
+  });
+  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
+  await page.goto('/');
+  if (!await page.locator('.settings-view').isVisible()) {
+    await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  }
+  await page.getByRole('button', { name: '账号设置', exact: true }).click();
+  await page.getByRole('button', { name: '音效', exact: true }).click();
+  await expect(page.locator('.sound-settings')).toContainText('格式：audio/wav · 文件大小：3 字节');
+  await page.getByRole('button', { name: '试听' }).click();
+  await expect.poll(() => page.evaluate(() => (window as Window & {
+    __previewCounts?: { plays: number; pauses: number };
+  }).__previewCounts?.plays)).toBe(1);
+  await page.getByRole('button', { name: '语音与音频', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as Window & {
+    __previewCounts?: { plays: number; pauses: number };
+  }).__previewCounts?.pauses)).toBe(1);
+  await page.getByRole('button', { name: '返回应用' }).click();
+  await expect.poll(() => page.evaluate(() => (window as Window & {
+    __previewCounts?: { plays: number; pauses: number };
+  }).__previewCounts?.pauses)).toBe(1);
 });

@@ -1,0 +1,89 @@
+name: lycansync-server
+services:
+  postgres:
+    image: postgres:18.6-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: lycansync
+      POSTGRES_USER: lycansync
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请先填写 .env}
+      TZ: UTC
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U lycansync -d lycansync"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: &logging
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+  livekit:
+    image: livekit/livekit-server:v1.13.6
+    restart: unless-stopped
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7990
+        bind_addresses: ["0.0.0.0"]
+        rtc:
+          tcp_port: 7991
+          udp_port: 7992
+          use_external_ip: false
+          node_ip: ${MEDIA_ADVERTISE_IP:?请填写客户端能访问的服务器 IP}
+        keys:
+          "${LIVEKIT_API_KEY:?请先填写 .env}": "${LIVEKIT_API_SECRET:?请先填写 .env}"
+    ports:
+      - "7991:7991/tcp"
+      - "7992:7992/udp"
+    logging: *logging
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: rtc-server
+      DB_URL: jdbc:postgresql://postgres:5432/lycansync
+      DB_USERNAME: lycansync
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请先填写 .env}
+      LIVEKIT_SERVER_URL: wss://${SERVER_DOMAIN:?请填写域名}:8443
+      LIVEKIT_INTERNAL_URL: http://livekit:7990
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?请先填写 .env}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?请先填写 .env}
+      CHAT_FILE_STORAGE_DIR: /var/chat-files
+      CHAT_FILE_MAX_BYTES: 104857600
+      CHAT_FILE_STORAGE_MAX_BYTES: 10737418240
+      OPENAPI_ENABLED: "false"
+      SWAGGER_UI_ENABLED: "false"
+    volumes:
+      - chat-files:/var/chat-files
+    mem_limit: 1g
+    stop_grace_period: 30s
+    logging: *logging
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    depends_on:
+      - api
+      - livekit
+    environment:
+      SERVER_DOMAIN: ${SERVER_DOMAIN:?请填写域名}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8443:8443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro,Z
+      - caddy-data:/data
+      - caddy-config:/config
+    logging: *logging
+volumes:
+  postgres-data:
+  chat-files:
+  caddy-data:
+  caddy-config:

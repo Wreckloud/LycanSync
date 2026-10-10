@@ -30,6 +30,8 @@
 
 ## Vue / TypeScript / Electron
 
+- 前端视觉、交互和区域拆分遵循 `FRONTEND_GUIDE.md`；其中目标尺寸是后续改版基线，不要求无关修改一次性重排全部页面。
+
 - 沿用两空格、单引号、分号以及已有 import 风格；类型专用引用使用 `import type`。以 `.editorconfig` 和 TypeScript 严格检查为基础。
 - Vue 使用现有 `<script setup lang="ts">`。新建或大幅调整组件时，按类型和参数、状态、派生状态、业务操作、监听与清理、模板的顺序组织；不为排序制造整文件差异。
 - 持有 SDK 实例、设备或轨道时沿用现有浅引用方式，不随意交给深层响应式代理。

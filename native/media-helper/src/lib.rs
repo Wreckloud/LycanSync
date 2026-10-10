@@ -507,6 +507,8 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
             target_width,
             target_height,
             max_fps,
+            hide_cursor,
+            hide_border,
             ..
         } => {
             if !valid_identifier(session_id)
@@ -522,7 +524,15 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                     "视频参数无效",
                 );
             }
-            match runtime.start_video(session_id, source_id, *max_fps) {
+            match runtime.start_video(
+                session_id,
+                source_id,
+                *max_fps,
+                capture::CaptureSettings {
+                    hide_cursor: *hide_cursor,
+                    hide_border: *hide_border,
+                },
+            ) {
                 Ok(()) => OutboundEvent::Acknowledged {
                     protocol_version: PROTOCOL_VERSION,
                     request_id: request_id.clone(),
@@ -743,7 +753,12 @@ impl Runtime {
     }
 
     fn start_probe(&mut self, session_id: &str, source_id: &str) -> Result<(), ErrorCode> {
-        self.start_capture_session(session_id, source_id, None)
+        self.start_capture_session(
+            session_id,
+            source_id,
+            None,
+            capture::CaptureSettings::default(),
+        )
     }
 
     fn start_video(
@@ -751,14 +766,15 @@ impl Runtime {
         session_id: &str,
         source_id: &str,
         max_fps: u16,
+        settings: capture::CaptureSettings,
     ) -> Result<(), ErrorCode> {
         #[cfg(feature = "shared-texture-output")]
         {
-            self.start_capture_session(session_id, source_id, Some(max_fps))
+            self.start_capture_session(session_id, source_id, Some(max_fps), settings)
         }
         #[cfg(not(feature = "shared-texture-output"))]
         {
-            let _ = (session_id, source_id, max_fps);
+            let _ = (session_id, source_id, max_fps, settings);
             Err(ErrorCode::VideoOutputUnavailable)
         }
     }
@@ -768,6 +784,7 @@ impl Runtime {
         session_id: &str,
         source_id: &str,
         max_fps: Option<u16>,
+        settings: capture::CaptureSettings,
     ) -> Result<(), ErrorCode> {
         self.reap_finished_capture();
         if self.state() != SessionState::Idle {
@@ -792,6 +809,7 @@ impl Runtime {
             source_kind,
             session_id.to_owned(),
             max_fps,
+            settings,
         ) {
             let _ = self.session.fail_start();
             return Err(error);

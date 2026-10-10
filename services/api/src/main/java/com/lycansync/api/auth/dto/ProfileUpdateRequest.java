@@ -20,6 +20,9 @@ public record ProfileUpdateRequest(
         @NotNull
         @Size(max = 131095)
         @Schema(description = "PNG/JPEG data URL；图片最多 256 × 256、96 KiB；空串表示移除头像")
-        String avatar
+        String avatar,
+        @Size(max = 120)
+        @Schema(description = "选填个性签名，最多 120 个字符；空串清空，省略或 null 保留原值")
+        String signature
 ) {
 }

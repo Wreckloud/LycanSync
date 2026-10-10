@@ -504,7 +504,7 @@ onScopeDispose(() => {
           <div v-if="pendingAttachments.length" class="composer-attachments">
             <div v-for="item in pendingAttachments" :key="item.id" class="composer-attachment">
               <img v-if="item.previewUrl" :src="item.previewUrl" alt="待发送图片" />
-              <span class="composer-attachment-name" :title="item.file.name">{{ item.file.name }}</span>
+              <span class="composer-attachment-name">{{ item.file.name }}</span>
               <small>{{ item.kind === 'IMAGE' ? '已压缩' : (item.file.size / 1024 / 1024).toFixed(2) + ' MB' }}</small>
               <progress v-if="item.state === 'uploading' && item.kind === 'FILE'" :value="item.progress" :max="item.file.size" aria-label="文件上传进度" />
               <small v-if="item.error" class="chat-file-error">{{ item.error }}</small>

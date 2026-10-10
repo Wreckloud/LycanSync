@@ -1,0 +1,9 @@
+server:
+  address: 0.0.0.0
+
+lycansync:
+  rtc:
+    server-url: ${LIVEKIT_SERVER_URL}
+    api-url: ${LIVEKIT_INTERNAL_URL:http://livekit:7990}
+    api-key: ${LIVEKIT_API_KEY}
+    api-secret: ${LIVEKIT_API_SECRET}

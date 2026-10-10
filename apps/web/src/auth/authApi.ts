@@ -3,6 +3,14 @@ export interface AuthUser {
   nickname: string;
   avatar: string;
   administrator: boolean;
+  signature?: string;
+  createdAt?: string;
+}
+
+export interface ProfileUpdate {
+  nickname: string;
+  avatar: string;
+  signature?: string;
 }
 
 export interface AuthSessionStatus {

@@ -1,7 +1,9 @@
 {
   "name": "@lycan-sync/web",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "private": true,
+  "description": "LycanSync 语音、屏幕共享与群聊客户端",
+  "author": "Wreckloud",
   "type": "module",
   "engines": {
     "node": ">=22.12.0"
@@ -13,12 +15,14 @@
     "build:media": "cargo build --manifest-path ../../native/media-helper/Cargo.toml --release --features shared-texture-output",
     "build:media-bridge": "cargo build --manifest-path ../../native/media-bridge/Cargo.toml --release --target x86_64-pc-windows-msvc",
     "build:desktop": "npm run build:media && npm run build:media-bridge && npm run build:activity && npm run build",
+    "package:desktop": "npm run build:desktop && node electron/package-desktop.cjs",
     "test:media": "cargo test --manifest-path ../../native/media-helper/Cargo.toml",
-    "test:electron-unit": "node --test electron/media-helper.test.cjs",
+    "test:electron-unit": "node --test electron/media-helper.test.cjs electron/server-settings.test.cjs",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run src",
     "test:e2e": "playwright test",
     "desktop": "npm run build:desktop && electron electron/main.cjs",
+    "desktop:dev": "node electron/dev.cjs",
     "test:desktop": "npm run build:desktop && playwright test --config playwright.desktop.config.ts"
   },
   "dependencies": {
@@ -30,7 +34,9 @@
     "@playwright/test": "1.62.1",
     "@types/node": "22.20.1",
     "@vitejs/plugin-vue": "6.0.8",
+    "7zip-bin": "5.2.0",
     "electron": "44.2.0",
+    "electron-builder": "26.15.3",
     "typescript": "5.9.3",
     "vite": "8.2.2",
     "vitest": "4.1.11",

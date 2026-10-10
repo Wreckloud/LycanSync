@@ -27,7 +27,8 @@ public interface AuthMapper {
     void insertLocalCredential(@Param("userId") UUID userId, @Param("username") String username,
                                @Param("passwordHash") String passwordHash, @Param("now") Instant now);
 
-    int updateProfile(@Param("id") UUID id, @Param("nickname") String nickname, @Param("avatar") String avatar);
+    int updateProfile(@Param("id") UUID id, @Param("nickname") String nickname, @Param("avatar") String avatar,
+                      @Param("signature") String signature);
 
     void replaceSession(@Param("hash") String hash, @Param("userId") UUID userId, @Param("expires") Instant expires);
 

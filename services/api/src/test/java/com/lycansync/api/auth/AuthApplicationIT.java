@@ -149,9 +149,34 @@ class AuthApplicationIT {
     @Test
     void shouldKeepCustomProfileOnLaterLogin() {
         AuthenticatedUser admin = service.authenticate(registerAdmin());
-        profiles.update(admin, new ProfileUpdateRequest("自定义昵称", ""));
+        profiles.update(admin, new ProfileUpdateRequest("自定义昵称", "", null));
         assertThat(localAuth.login(new LocalLoginRequest("admin", ADMIN_PASSWORD)).user().nickname())
                 .isEqualTo("自定义昵称");
+    }
+
+    @Test
+    void shouldPersistSignatureWithoutChangingRegistrationDate() throws Exception {
+        var registration = localAuth.register(new LocalRegistrationRequest("Admin", ADMIN_PASSWORD));
+        AuthenticatedUser admin = service.authenticate(registration.sessionToken());
+        assertThat(registration.user().signature()).isEmpty();
+        assertThat(registration.user().createdAt()).isNotNull();
+        var createdAt = profiles.findProfile(admin).createdAt();
+        assertThat(createdAt.getEpochSecond()).isEqualTo(registration.user().createdAt().getEpochSecond());
+
+        AuthUser saved = profiles.update(admin, new ProfileUpdateRequest("自定义昵称", "", " 一起开黑 "));
+        assertThat(saved.signature()).isEqualTo("一起开黑");
+        assertThat(saved.createdAt()).isEqualTo(createdAt);
+        mvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + registration.sessionToken()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.signature").value("一起开黑"))
+                .andExpect(jsonPath("$.createdAt").value(createdAt.toString()));
+
+        AuthUser loggedIn = localAuth.login(new LocalLoginRequest("admin", ADMIN_PASSWORD)).user();
+        assertThat(loggedIn.signature()).isEqualTo(saved.signature());
+        assertThat(loggedIn.createdAt()).isEqualTo(createdAt);
+        assertThat(profiles.update(admin, new ProfileUpdateRequest("新昵称", "", null)).signature()).isEqualTo("一起开黑");
+        assertThat(profiles.update(admin, new ProfileUpdateRequest("新昵称", "", "")).signature()).isEmpty();
+        assertThat(profiles.findProfile(admin).createdAt()).isEqualTo(createdAt);
     }
 
     @Test
@@ -214,12 +239,12 @@ class AuthApplicationIT {
                 .isInstanceOf(AuthException.class);
 
         AuthenticatedUser admin = service.authenticate(registerAdmin());
-        assertThatThrownBy(() -> profiles.update(admin, new ProfileUpdateRequest(" ", "")))
+        assertThatThrownBy(() -> profiles.update(admin, new ProfileUpdateRequest(" ", "", null)))
                 .isInstanceOf(AuthException.class);
-        assertThatThrownBy(() -> profiles.update(admin, new ProfileUpdateRequest("昵称", "https://localhost/private")))
+        assertThatThrownBy(() -> profiles.update(admin, new ProfileUpdateRequest("昵称", "https://localhost/private", null)))
                 .isInstanceOf(AuthException.class);
         assertThatThrownBy(() -> profiles.update(admin,
-                new ProfileUpdateRequest("昵称", "data:image/png;base64,YWJj"))).isInstanceOf(AuthException.class);
+                new ProfileUpdateRequest("昵称", "data:image/png;base64,YWJj", null))).isInstanceOf(AuthException.class);
     }
 
 }

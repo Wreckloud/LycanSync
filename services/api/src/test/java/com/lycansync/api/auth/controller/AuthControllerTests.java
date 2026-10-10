@@ -2,6 +2,7 @@ package com.lycansync.api.auth.controller;
 
 import com.lycansync.api.auth.config.AuthConfiguration;
 import com.lycansync.api.auth.dto.LocalLoginRequest;
+import com.lycansync.api.auth.dto.ProfileUpdateRequest;
 import com.lycansync.api.auth.exception.AuthException;
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.model.AuthUser;
@@ -19,6 +20,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Instant;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -28,6 +30,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -90,16 +93,41 @@ class AuthControllerTests {
 
     @Test
     void shouldLoadFullProfileOnlyForMeEndpoint() throws Exception {
-        AuthUser profile = new AuthUser(USER_ID, "小狼", "stored-avatar", false);
+        AuthUser profile = new AuthUser(USER_ID, "小狼", "stored-avatar", false, "一起开黑", Instant.parse("2026-09-06T08:00:00Z"));
         when(authService.authenticate(SESSION_TOKEN)).thenReturn(AUTHENTICATED_USER);
         when(profileService.findProfile(AUTHENTICATED_USER)).thenReturn(profile);
 
         mvc.perform(get("/api/auth/me")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + SESSION_TOKEN))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.avatar").value("stored-avatar"));
+                .andExpect(jsonPath("$.avatar").value("stored-avatar"))
+                .andExpect(jsonPath("$.signature").value("一起开黑"))
+                .andExpect(jsonPath("$.createdAt").value("2026-09-06T08:00:00Z"));
 
         verify(profileService).findProfile(AUTHENTICATED_USER);
+    }
+
+    @Test
+    void shouldPassOptionalSignatureAndRejectOversizedSignature() throws Exception {
+        when(authService.authenticate(SESSION_TOKEN)).thenReturn(AUTHENTICATED_USER);
+        AuthUser profile = new AuthUser(USER_ID, "小狼", "", false, "签名", Instant.parse("2026-09-06T08:00:00Z"));
+        when(profileService.update(any(), any())).thenReturn(profile);
+
+        mvc.perform(put("/api/auth/me")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + SESSION_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"nickname\":\"小狼\",\"avatar\":\"\",\"signature\":\"签名\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.signature").value("签名"));
+        verify(profileService).update(AUTHENTICATED_USER, new ProfileUpdateRequest("小狼", "", "签名"));
+
+        reset(profileService);
+        mvc.perform(put("/api/auth/me")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + SESSION_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"nickname\":\"小狼\",\"avatar\":\"\",\"signature\":\"" + "字".repeat(121) + "\"}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(profileService);
     }
 
     @Test

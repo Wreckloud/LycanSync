@@ -65,7 +65,7 @@ vi.mock('./nativeScreenVideo', () => ({
     }
     start(sourceId: string) {
       if (!this.startPromise) {
-        this.startPromise = this.desktop!.startNativeVideo(sourceId, this.options.maxFps).then((result) => {
+        this.startPromise = this.desktop!.startNativeVideo(sourceId, this.options.maxFps, { hideCursor: false, hideBorder: false }).then((result) => {
           this.sessionId = result.sessionId;
           return this.track as never;
         });
@@ -1300,7 +1300,7 @@ describe('native screen share wiring', () => {
     try {
       expect(await rtc.join('group-1')).toBe(true);
       rtcMocks.published.mockImplementationOnce(() => {
-        expect(rtcMocks.nativeStarts).toHaveBeenCalledWith('monitor:1:0', 60);
+        expect(rtcMocks.nativeStarts).toHaveBeenCalledWith('monitor:1:0', 60, { hideCursor: false, hideBorder: false });
       });
       await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
       expect(rtcMocks.published).toHaveBeenCalledOnce();
@@ -1682,7 +1682,7 @@ describe('native screen share wiring', () => {
       await oldTask;
 
       expect(rtcMocks.nativeStarts).toHaveBeenCalledOnce();
-      expect(rtcMocks.nativeStarts).toHaveBeenCalledWith('window:room-b:0', 60);
+      expect(rtcMocks.nativeStarts).toHaveBeenCalledWith('window:room-b:0', 60, { hideCursor: false, hideBorder: false });
       expect(rtc.screenShareActive.value).toBe(true);
       expect(roomB.localParticipant.getTrackPublication(Track.Source.ScreenShare)).toBeTruthy();
       expect(roomBVideo.track.stop).not.toHaveBeenCalled();

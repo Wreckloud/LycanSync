@@ -67,7 +67,7 @@ class LycanSyncApiApplicationIT {
     private AuthMapper authMapper;
 
     private String authenticatedSession() {
-        AuthUser user = new AuthUser(UUID.randomUUID(), "测试", "", false);
+        AuthUser user = new AuthUser(UUID.randomUUID(), "测试", "", false, "", Instant.now());
         authMapper.insertUser(user, Instant.now());
         String token = AuthSecrets.generate();
         authMapper.replaceSession(AuthSecrets.hash(token), user.id(), Instant.now().plusSeconds(600));

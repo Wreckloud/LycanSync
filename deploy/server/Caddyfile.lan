@@ -1,0 +1,9 @@
+https://{$SERVER_DOMAIN} {
+    tls internal
+    reverse_proxy api:18080
+}
+
+https://{$SERVER_DOMAIN}:8443 {
+    tls internal
+    reverse_proxy livekit:7990
+}

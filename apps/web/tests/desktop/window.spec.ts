@@ -72,10 +72,17 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
     expect(await page.evaluate(async () => window.lycanDesktop?.setAutoStart(true))).toEqual({
       supported: false, enabled: false,
     });
-    await page.getByRole('button', { name: '个人设置', exact: true }).click();
+    if (!await page.locator('.settings-view').isVisible()) {
+      await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+    }
+    await page.getByRole('button', { name: '账号设置', exact: true }).click();
+    await page.getByRole('button', { name: '客户端', exact: true }).click();
     await expect(page.getByLabel('开机自动启动')).toBeDisabled();
     await expect(page.getByText('仅 Windows 安装版支持，开发模式不会修改系统启动项。')).toBeVisible();
-    await page.getByRole('button', { name: '关闭设置' }).click();
+    await page.getByRole('button', { name: '语音与音频', exact: true }).click();
+    await expect(page.locator('.audio-settings').getByRole('checkbox', { name: '回声消除' })).toBeDisabled();
+    await expect(page.locator('.audio-settings').getByText('低频过滤', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '返回应用' }).click();
     expect(await page.evaluate(async () => window.lycanDesktop?.getCurrentActivity())).toBeNull();
     expect(await page.evaluate(async () => (await fetch('/api/not-allowed')).status)).toBe(404);
     expect(await page.evaluate(async () => {

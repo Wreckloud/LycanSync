@@ -23,13 +23,13 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * 查询房间外允许展示的本地 RTC 成员摘要。
+ * 查询房间外允许展示的 RTC 成员摘要。
  *
  * @author Wreckloud
  * @since 2026-09-04
  */
 @Service
-@Profile("rtc-local")
+@Profile({"rtc-local", "rtc-server"})
 @RequiredArgsConstructor
 public class LocalRtcRoomSummaryService {
 
