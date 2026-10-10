@@ -3,22 +3,19 @@ import { ref, watch } from 'vue';
 
 const props = defineProps<{ active: boolean; leaving: boolean }>();
 const emit = defineEmits<{ logout: [] }>();
-const expanded = ref<'password' | 'qq' | null>(null);
+const expanded = ref<'qq' | null>(null);
 
-function toggleEntry(entry: 'password' | 'qq') {
+function toggleEntry(entry: 'qq') {
   expanded.value = expanded.value === entry ? null : entry;
 }
-watch(() => props.active, (active) => { if (!active) expanded.value = null; });
+watch(() => props.active, (active) => {
+  if (!active) { expanded.value = null; return; }
+}, { immediate: true });
 </script>
 
 <template>
   <section class="settings-section account-settings">
-    <section class="settings-block">
-      <h2>密码</h2>
-      <div class="account-row"><div class="account-copy"><span>登录密码</span>
-        <div class="account-row-description"><p v-if="expanded === 'password'" id="password-entry" class="account-entry-note">修改密码尚未接入，本页不会提交密码。</p></div></div>
-        <button type="button" :aria-expanded="expanded === 'password'" aria-controls="password-entry" @click="toggleEntry('password')">修改密码</button></div>
-    </section>
+    <p>更换电脑或丢失登录时，请联系服主生成“恢复成员登录”链接。</p>
     <section class="settings-block">
       <h2>第三方账号</h2>
       <div class="account-row"><div class="account-copy"><span>QQ 登录</span>
@@ -41,7 +38,7 @@ watch(() => props.active, (active) => { if (!active) expanded.value = null; });
 .account-copy { display: grid; gap: 4px; min-width: 0; flex: 1; }
 .account-copy small { display: block; line-height: 16px; }
 .account-row-description { height: 32px; overflow: auto; color: var(--muted); font-size: 12px; line-height: 16px; }
-.account-row button { flex-shrink: 0; min-height: 34px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-raised); color: var(--text); cursor: pointer; }
+.account-row button { flex-shrink: 0; }
 .account-row .account-danger { color: var(--danger); }
 .account-entry-note { font-size: 12px; line-height: 16px; }
 .account-session { gap: 12px; border-bottom: 0; }

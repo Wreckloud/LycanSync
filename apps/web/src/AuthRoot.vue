@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
+import { onMounted, onScopeDispose, ref, watch } from 'vue';
 import { Copy, Minus, Square, X } from '@lucide/vue';
 import App from './App.vue';
+import AccountAccessPrompt from './components/AccountAccessPrompt.vue';
+import WelcomeProfile from './components/WelcomeProfile.vue';
+import type { AccessOffer } from './auth/accountAccess';
 import {
   authRequest,
   authenticatedFetch,
@@ -13,14 +16,12 @@ import {
 import { sendPresenceHeartbeat } from './presence/presenceApi';
 
 const desktop = window.lycanDesktop;
+const pageOrigin = window.location.origin;
 const SESSION_HEARTBEAT_INTERVAL_MS = 20_000;
 const user = ref<AuthUser | null>(null);
 const ready = ref(false);
-const initialized = ref(true);
-const registrationMode = ref(false);
-const username = ref('');
-const password = ref('');
-const passwordConfirmation = ref('');
+const accessOffer = ref<AccessOffer | null>(null);
+const onboarding = ref(false);
 const error = ref('');
 const submitting = ref(false);
 const windowMaximized = ref(false);
@@ -32,20 +33,14 @@ let sessionHeartbeat: number | null = null;
 let sessionHeartbeatInFlight = false;
 let logoutInProgress = false;
 
-const setupRequired = computed(() => !initialized.value);
-const registering = computed(() => setupRequired.value || registrationMode.value);
-const canSubmit = computed(() => Boolean(username.value.trim()) && Boolean(password.value)
-  && (!registering.value || (password.value === passwordConfirmation.value && Boolean(passwordConfirmation.value)))
-  && !submitting.value && !serverSaving.value);
-
 function expired() {
   user.value = null;
+  onboarding.value = false;
 }
-function toggleRegistrationMode() {
-  registrationMode.value = !registrationMode.value;
-  passwordConfirmation.value = '';
-  error.value = '';
-}
+const removeAccessLink = desktop?.onAccessLink((offer) => {
+  // 当前确认未结束前不切换链接，避免两次兑换的响应互相覆盖。
+  if (!accessOffer.value) accessOffer.value = offer;
+});
 const removeMaximizedChange = desktop?.onMaximizedChange((maximized) => { windowMaximized.value = maximized; });
 const removeClose = desktop?.onClose(() => { if (!user.value && !logoutInProgress) desktop.finishClose(); });
 void desktop?.isMaximized().then((maximized) => { windowMaximized.value = maximized; }).catch(() => undefined);
@@ -54,19 +49,15 @@ onScopeDispose(() => {
   if (sessionHeartbeat !== null) window.clearInterval(sessionHeartbeat);
   removeMaximizedChange?.();
   removeClose?.();
+  removeAccessLink?.();
   window.removeEventListener('lycan:unauthorized', expired);
 });
 
 async function initialize() {
   error.value = '';
   try {
-    const statusResponse = await authenticatedFetch('/api/system/initialization', {
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!statusResponse.ok) throw new Error('无法读取服务器初始化状态。');
-    const status = await statusResponse.json() as { initialized: boolean };
-    initialized.value = status.initialized;
-    registrationMode.value = !status.initialized;
+    const options = await authRequest<{ mode: 'invite' }>('options');
+    if (options.mode !== 'invite') throw new Error('服务器尚未启用邀请登录，请联系服主。');
     // 没有 Cookie 或页面持久化凭据；桌面主进程会自动附加已保存会话。
     const response = await authenticatedFetch('/api/auth/me', { signal: AbortSignal.timeout(15000) });
     if (response.ok) {
@@ -84,11 +75,11 @@ function acceptSession(result: { sessionToken?: string; user: AuthUser }) {
     setBrowserSession(result.sessionToken);
   }
   user.value = result.user;
-  initialized.value = true;
-  registrationMode.value = false;
-  username.value = '';
-  password.value = '';
-  passwordConfirmation.value = '';
+}
+function completeAccess(result: { sessionToken?: string; user: AuthUser }, kind: string) {
+  acceptSession(result);
+  accessOffer.value = null;
+  onboarding.value = kind !== 'RECOVERY';
 }
 
 async function verifyCurrentSession() {
@@ -125,27 +116,6 @@ watch(() => user.value?.id ?? null, (currentUserId) => {
   }, SESSION_HEARTBEAT_INTERVAL_MS) : null;
 });
 
-async function submitCredentials() {
-  error.value = '';
-  if (registering.value && password.value !== passwordConfirmation.value) {
-    error.value = '两次输入的密码不一致';
-    return;
-  }
-  submitting.value = true;
-  try {
-    const result = registering.value
-      ? await authRequest<{ sessionToken?: string; user: AuthUser }>('local/register', 'POST', {
-        username: username.value.trim(), password: password.value,
-      })
-      : await authRequest<{ sessionToken?: string; user: AuthUser }>('local/login', 'POST', {
-        username: username.value.trim(), password: password.value,
-      });
-    acceptSession(result);
-  } catch (exception) {
-    error.value = exception instanceof Error ? exception.message : (registering.value ? '注册失败' : '登录失败');
-  } finally { submitting.value = false; }
-}
-
 async function logout() {
   error.value = '';
   const previousUser = user.value;
@@ -181,6 +151,8 @@ async function saveServerAddress() {
 }
 onMounted(() => {
   void initialize();
+  void desktop?.getAccessLink().then((offer) => { if (offer && !accessOffer.value) accessOffer.value = offer; })
+    .catch(() => { error.value = '无法读取邀请链接，请从网页重新打开。'; });
   void desktop?.getServerSettings?.().then((settings) => {
     serverAddress.value = settings.apiUrl;
     serverEditable.value = settings.editable;
@@ -189,8 +161,8 @@ onMounted(() => {
 </script>
 
 <template>
-  <App v-if="user" :user="user" :window-maximized="windowMaximized" :save-profile="saveProfile" @logout="logout" />
-  <div v-else class="app-shell">
+  <App v-if="user && !onboarding" v-show="!accessOffer" :user="user" :window-maximized="windowMaximized" :save-profile="saveProfile" @logout="logout" />
+  <div v-if="!user || onboarding || accessOffer" class="app-shell">
     <header class="titlebar" :class="{ 'desktop-titlebar': desktop }">
       <div class="brand">LycanSync</div>
       <div v-if="desktop" class="window-actions">
@@ -201,37 +173,20 @@ onMounted(() => {
         <button aria-label="关闭窗口" @click="desktop.close()"><X :size="17" /></button>
       </div>
     </header>
-    <main class="auth-screen">
-      <section class="auth-card">
+    <WelcomeProfile v-if="user && onboarding" :user="user" :save-profile="saveProfile" @finish="onboarding = false" />
+    <main v-else class="auth-screen">
+      <AccountAccessPrompt v-if="accessOffer && ready" :offer="accessOffer" :current-user="user" :current-server="serverAddress || pageOrigin"
+        @cancel="accessOffer = null" @joined="completeAccess" />
+      <section v-else class="auth-card">
         <h1>一起开黑，一起看</h1>
         <p>登录 LycanSync，继续和朋友一起玩。</p>
         <p v-if="!ready">正在连接服务器…</p>
-        <template v-else>
-          <p v-if="setupRequired">首次使用：创建本服务器的管理员账号。</p>
-          <p v-else-if="registering">创建此服务器的登录账号。</p>
-          <p v-else>使用此服务器的账号登录。</p>
-          <form @submit.prevent="submitCredentials">
-            <label>用户名
-              <input v-model="username" autocomplete="username" minlength="3" maxlength="32"
-                pattern="[A-Za-z0-9_]{3,32}" required :disabled="submitting" />
-            </label>
-            <label>密码
-              <input v-model="password" type="password" :autocomplete="registering ? 'new-password' : 'current-password'"
-                minlength="6" maxlength="64" required :disabled="submitting" />
-            </label>
-            <label v-if="registering">确认密码
-              <input v-model="passwordConfirmation" type="password" autocomplete="new-password"
-                minlength="6" maxlength="64" required :disabled="submitting" />
-            </label>
-            <button class="confirm-button" :disabled="!canSubmit">
-              {{ submitting ? (registering ? '正在创建账号…' : '正在登录…') : (registering ? '创建账号' : '登录') }}
-            </button>
-            <button v-if="initialized" type="button" :disabled="submitting" @click="toggleRegistrationMode">
-              {{ registering ? '已有账号，返回登录' : '没有账号，创建账号' }}
-            </button>
-          </form>
-          <button v-if="error" type="button" @click="initialize">重新检查</button>
-          <button v-if="desktop && error" type="button" @click="clearLocalSession">清理本机登录凭据</button>
+        <template v-else-if="ready">
+          <p>请打开服主发来的邀请或恢复登录链接；首次部署请使用服务器生成的激活链接。</p>
+          <div v-if="error" class="button-actions">
+            <button @click="initialize">重新连接</button>
+            <button v-if="desktop" @click="clearLocalSession">清理本机登录凭据</button>
+          </div>
         </template>
         <p v-if="error" role="alert" class="auth-error">{{ error }}</p>
         <details v-if="serverEditable" class="auth-server-settings">

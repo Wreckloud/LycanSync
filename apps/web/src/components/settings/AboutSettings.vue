@@ -55,5 +55,4 @@ watch(() => props.active, (active) => { if (!active) diagnosticsOpen.value = fal
 .about-settings dt { color: var(--muted); }
 .about-settings dd { margin: 0; }
 .about-settings :deep(.media-diagnostics) { position: static; width: 100%; max-height: none; padding: 0; overflow: visible; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-.settings-button { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel-raised); color: var(--text); cursor: pointer; }
 </style>

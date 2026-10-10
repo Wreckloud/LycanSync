@@ -28,6 +28,9 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
+import org.springframework.beans.factory.annotation.Value;
 
 /**
  * 无 Cookie 的 Bearer 会话边界与公开本地登录入口。
@@ -39,6 +42,9 @@ import java.util.List;
 @EnableScheduling
 public class AuthConfiguration {
 
+    @Value("${lycansync.account.trust-proxy:false}")
+    private boolean trustProxy;
+
     @Bean
     SecurityFilterChain authSecurity(HttpSecurity http, AuthService service, ObjectMapper json) throws Exception {
         // 不接受浏览器自动附带的身份，所有业务请求显式携带 Bearer，故不依赖 Cookie CSRF 防护。
@@ -48,7 +54,8 @@ public class AuthConfiguration {
                 .formLogin(form -> form.disable()).httpBasic(basic -> basic.disable())
                 .authorizeHttpRequests(requests -> requests
                         .requestMatchers("/api/auth/local/register", "/api/auth/local/login",
-                                "/api/system/initialization", "/actuator/health", "/actuator/info",
+                                "/api/auth/options", "/api/auth/access/preview", "/api/auth/access/redeem",
+                                "/join", "/join.js", "/api/system/initialization", "/actuator/health", "/actuator/info",
                                 "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/error").permitAll()
                         .requestMatchers("/api/**").authenticated()
                         .anyRequest().denyAll())
@@ -58,18 +65,23 @@ public class AuthConfiguration {
                         .accessDeniedHandler((request, response, exception) -> writeProblem(
                                 json, response, 403, ApiErrorCode.ACCESS_DENIED, "没有访问权限")))
                 .addFilterBefore(new OncePerRequestFilter() {
-                    private long window = System.nanoTime();
-                    private int attempts;
+                    private final Map<String, long[]> attempts = new HashMap<>();
 
                     @Override
                     protected boolean shouldNotFilterAsyncDispatch() {
                         return false;
                     }
 
-                    private synchronized boolean allowAttempt() {
+                    private synchronized boolean allowAttempt(String source) {
                         long now = System.nanoTime();
-                        if (now - window > 60_000_000_000L) { window = now; attempts = 0; }
-                        return ++attempts <= 60;
+                        attempts.entrySet().removeIf(entry -> now - entry.getValue()[0] > 60_000_000_000L);
+                        long[] counter = attempts.get(source);
+                        if (counter == null) {
+                            if (attempts.size() >= 4096) return false;
+                            counter = new long[] {now, 0};
+                            attempts.put(source, counter);
+                        }
+                        return ++counter[1] <= 60;
                     }
 
                     @Override
@@ -77,8 +89,12 @@ public class AuthConfiguration {
                                                     FilterChain chain) throws ServletException, IOException {
                         String path = request.getRequestURI();
                         boolean loginAttempt = "/api/auth/local/register".equals(path)
-                                || "/api/auth/local/login".equals(path);
-                        if (loginAttempt && !allowAttempt()) {
+                                || "/api/auth/local/login".equals(path)
+                                || "/api/auth/access/preview".equals(path)
+                                || "/api/auth/access/redeem".equals(path);
+                        String source = trustProxy ? request.getHeader("X-Lycan-Client-IP") : null;
+                        if (source == null || source.isBlank() || source.length() > 64) source = request.getRemoteAddr();
+                        if (loginAttempt && !allowAttempt(source)) {
                             writeProblem(
                                     json, response, 429, ApiErrorCode.AUTH_RATE_LIMITED, "登录请求过于频繁，请一分钟后重试");
                             return;

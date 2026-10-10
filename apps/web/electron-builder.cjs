@@ -1,6 +1,7 @@
 module.exports = {
   appId: 'com.lycansync.desktop',
   productName: 'LycanSync',
+  protocols: [{ name: 'LycanSync 邀请', schemes: ['lycansync'] }],
   electronDist: 'node_modules/electron/dist',
   directories: { output: '../../release/desktop', buildResources: '../../release/build-resources' },
   extraMetadata: { main: 'electron/main.cjs' },
@@ -8,6 +9,7 @@ module.exports = {
     'dist/**/*',
     'electron/main.cjs',
     'electron/server-settings.cjs',
+    'electron/access-links.cjs',
     'electron/preload.cjs',
     'electron/media-helper.cjs',
     'electron/media-diagnostics.cjs',

@@ -48,6 +48,11 @@ services:
         condition: service_started
     environment:
       SPRING_PROFILES_ACTIVE: rtc-server
+      ACCOUNT_MODE: ${ACCOUNT_MODE:-invite}
+      ACCOUNT_PUBLIC_URL: https://${SERVER_DOMAIN:?请填写域名}
+      ACCOUNT_SERVER_NAME: ${ACCOUNT_SERVER_NAME:-LycanSync}
+      ACCOUNT_BOOTSTRAP_FILE: /var/bootstrap/admin-activation.txt
+      LYCANSYNC_ACCOUNT_TRUST_PROXY: "true"
       DB_URL: jdbc:postgresql://postgres:5432/lycansync
       DB_USERNAME: lycansync
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请先填写 .env}
@@ -62,6 +67,7 @@ services:
       SWAGGER_UI_ENABLED: "false"
     volumes:
       - chat-files:/var/chat-files
+      - account-bootstrap:/var/bootstrap
     mem_limit: 1g
     stop_grace_period: 30s
     logging: *logging
@@ -79,10 +85,12 @@ services:
       - "8443:8443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro,Z
+      - ./downloads:/srv/downloads:ro,Z
       - caddy-data:/data
       - caddy-config:/config
     logging: *logging
 volumes:
+  account-bootstrap:
   postgres-data:
   chat-files:
   caddy-data:

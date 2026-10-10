@@ -33,9 +33,10 @@ export class ApiRequestError extends Error {
 let browserSession: string | null = null;
 
 const publicApiPaths = new Set([
+  '/api/auth/options',
+  '/api/auth/access/preview',
+  '/api/auth/access/redeem',
   '/api/system/initialization',
-  '/api/auth/local/register',
-  '/api/auth/local/login',
 ]);
 
 export function setBrowserSession(token: string | null) {

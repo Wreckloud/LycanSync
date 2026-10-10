@@ -79,6 +79,9 @@ interface NativeMicrophoneChunk {
 interface Window {
   lycanDesktop?: {
     clearSession(): Promise<void>;
+    getAccessLink(): Promise<import('./auth/accountAccess').AccessOffer | null>;
+    prepareAccessLink(offer: import('./auth/accountAccess').AccessOffer): Promise<void>;
+    onAccessLink(callback: (offer: import('./auth/accountAccess').AccessOffer) => void): () => void;
     getServerSettings(): Promise<{ apiUrl: string; editable: boolean }>;
     setServerAddress(value: string): Promise<void>;
     minimize(): void;

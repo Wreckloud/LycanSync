@@ -47,7 +47,10 @@ public class ProfileService {
         }
         // 头像只接受本地上传的小尺寸图片，不允许服务器抓取用户指定网址。
         try {
-            if (!request.avatar().isEmpty()) AvatarImageValidator.validate(request.avatar());
+            // 随包默认头像可信，修改昵称时原样保留；用户上传仍使用原有限制。
+            if (!request.avatar().isEmpty() && !request.avatar().equals(DefaultAvatar.value())) {
+                AvatarImageValidator.validate(request.avatar());
+            }
         } catch (AvatarImageValidator.InvalidAvatarException exception) {
             throw invalid(exception.getMessage());
         }

@@ -31,182 +31,82 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/api/presence/heartbeat', (route) => route.fulfill({ status: 204 }));
 });
 
-test('首次注册创建管理员并在浏览器内存保存会话', async ({ page }) => {
-  const token = 'a'.repeat(43);
-  const user = { id: 'admin-user', nickname: 'Admin', avatar: '', administrator: true };
-  let registration: Record<string, unknown> | undefined;
-  let groupAuthorization: string | undefined;
-  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: false } }));
-  await page.route('**/api/auth/me', (route) => route.fulfill({ status: 401, json: { detail: '请先登录' } }));
-  await page.route('**/api/auth/local/register', async (route) => {
-    registration = route.request().postDataJSON();
-    await route.fulfill({ json: { sessionToken: token, user } });
-  });
-  await page.route('**/api/groups', (route) => {
-    groupAuthorization = route.request().headers().authorization;
-    return route.fulfill({ json: [] });
-  });
 
-  await page.goto('/');
-  await page.getByLabel('用户名', { exact: true }).fill('Admin');
-  await page.getByLabel('密码', { exact: true }).fill('abc123');
-  await page.getByLabel('确认密码', { exact: true }).fill('abc123');
-  await page.getByRole('button', { name: '创建账号', exact: true }).click();
 
-  await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
-  expect(registration).toEqual({ username: 'Admin', password: 'abc123' });
-  await expect.poll(() => groupAuthorization).toBe('Bearer ' + token);
-  expect(await page.evaluate(() => localStorage.length)).toBe(0);
-  expect(await page.evaluate((sessionToken) => Object.values(sessionStorage).includes(sessionToken), token)).toBe(false);
-});
 
-test('已初始化服务器使用本地账号登录', async ({ page }) => {
-  const token = 'b'.repeat(43);
-  const user = { id: 'local-user', nickname: '小狼', avatar: '', administrator: false };
-  let login: Record<string, unknown> | undefined;
-  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
-  await page.route('**/api/auth/me', (route) => route.fulfill({ status: 401, json: { detail: '请先登录' } }));
-  await page.route('**/api/auth/local/login', async (route) => {
-    login = route.request().postDataJSON();
-    await route.fulfill({ json: { sessionToken: token, user } });
-  });
-  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
-    json: { participantCount: 0, participants: [] },
-  }));
-
-  await page.goto('/');
-  await page.getByLabel('用户名', { exact: true }).fill('friend');
-  await page.getByLabel('密码', { exact: true }).fill('friend-password');
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-
-  await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
-  expect(login).toEqual({ username: 'friend', password: 'friend-password' });
-});
 
 test('浏览器旧会话的延迟 401 不退出新会话，当前会话 401 仍会退出', async ({ page }) => {
   await page.clock.install();
-  const oldToken = 'd'.repeat(43);
-  const currentToken = 'e'.repeat(43);
-  const user = { id: 'session-race-user', nickname: '会话竞态', avatar: '', administrator: false };
-  let loginCount = 0;
-  let delayedSessionStarted!: () => void;
-  let releaseDelayedSession!: () => void;
-  let delayedSessionFinished!: () => void;
-  const delayedSessionStartedPromise = new Promise<void>((resolve) => { delayedSessionStarted = resolve; });
-  const delayedSessionGate = new Promise<void>((resolve) => { releaseDelayedSession = resolve; });
-  const delayedSessionFinishedPromise = new Promise<void>((resolve) => { delayedSessionFinished = resolve; });
-  let delayedSessionWasStarted = false;
-  let delayedSessionUsed = false;
-  let currentSessionExpired = false;
-
-  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
-  await page.route('**/api/auth/me', (route) => {
-    const authorization = route.request().headers().authorization;
-    if (authorization === `Bearer ${currentToken}` && currentSessionExpired) {
-      return route.fulfill({ status: 401, json: { detail: '会话已失效' } });
-    }
-    if (authorization === `Bearer ${oldToken}` || authorization === `Bearer ${currentToken}`) {
-      return route.fulfill({ json: user });
-    }
-    return route.fulfill({ status: 401, json: { detail: '请先登录' } });
-  });
-  await page.route('**/api/auth/local/login', async (route) => {
-    loginCount++;
-    await route.fulfill({ json: { sessionToken: loginCount === 1 ? oldToken : currentToken, user } });
+  const user = { id: 'race-member', nickname: '行者1001', avatar: '', administrator: false };
+  let optionsRequests = 0;
+  let redemptions = 0;
+  let currentToken = '';
+  let revoked = false;
+  let holdSession = true;
+  let releaseSession = () => {};
+  let sessionStarted = () => {};
+  const started = new Promise<void>((resolve) => { sessionStarted = resolve; });
+  const gate = new Promise<void>((resolve) => { releaseSession = resolve; });
+  await page.route('**/api/auth/options', (route) => ++optionsRequests === 1
+    ? route.fulfill({ status: 503, json: { detail: '测试初始化等待兑换' } })
+    : route.fulfill({ json: { mode: 'invite' } }));
+  await page.route('**/api/auth/access/redeem', (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({ token: (redemptions ? 'e' : 'a').repeat(43), redemptionKey: 'b'.repeat(43) });
+    currentToken = (++redemptions === 1 ? 'c' : 'd').repeat(43);
+    return route.fulfill({ json: { sessionToken: currentToken, user } });
   });
   await page.route('**/api/auth/logout', (route) => route.fulfill({ status: 204 }));
+  await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
   await page.route('**/api/auth/session', async (route) => {
-    const authorization = route.request().headers().authorization;
-    if (authorization === `Bearer ${oldToken}` && !delayedSessionUsed) {
-      delayedSessionUsed = true;
-      delayedSessionWasStarted = true;
-      delayedSessionStarted();
-      await delayedSessionGate;
-      try { await route.fulfill({ status: 401, json: { detail: '旧会话已失效' } }); }
-      finally { delayedSessionFinished(); }
-      return;
+    if (holdSession) {
+      holdSession = false;
+      sessionStarted();
+      await gate;
+      return route.fulfill({ status: 401, json: { detail: '旧会话已失效' } });
     }
-    if (authorization === `Bearer ${currentToken}`) {
-      if (currentSessionExpired) return route.fulfill({ status: 401, json: { detail: '会话已失效' } });
-      return route.fulfill({ json: { id: user.id, nickname: user.nickname, administrator: user.administrator } });
-    }
-    return route.fulfill({ status: 401, json: { detail: '请先登录' } });
+    const valid = !revoked && route.request().headers().authorization === 'Bearer ' + currentToken;
+    return route.fulfill({ status: valid ? 200 : 401, json: valid ? user : { detail: '会话已失效' } });
   });
-  await page.route('**/api/groups', (route) => route.fulfill({ json: [] }));
-  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
-    json: { participantCount: 0, participants: [] },
-  }));
-  await page.route('**/api/rtc/room-occupancies', (route) => route.fulfill({ json: [] }));
-
+  // 浏览器没有桌面协议入口；通过正式兑换接口和会话存储测试传输层，不增加产品测试开关。
+  const exchange = (recovery = false) => page.evaluate(async (token) => {
+    const modulePath = '/src/auth/authApi.ts';
+    const { authRequest, setBrowserSession } = await import(modulePath);
+    const result = await authRequest('access/redeem', 'POST', { token, redemptionKey: 'b'.repeat(43) });
+    setBrowserSession(result.sessionToken);
+  }, (recovery ? 'e' : 'a').repeat(43));
   try {
     await page.goto('/');
-    await page.getByLabel('用户名').fill('session_race');
-    await page.getByLabel('密码', { exact: true }).fill('session-password');
-    await page.getByRole('button', { name: '登录', exact: true }).click();
+    await expect(page.getByRole('button', { name: '重新连接', exact: true })).toBeVisible();
+    await exchange();
+    await page.getByRole('button', { name: '重新连接', exact: true }).click();
     await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
-
     await page.clock.fastForward(20_100);
-    await delayedSessionStartedPromise;
-    if (!await page.locator('.settings-view').isVisible()) {
-      await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
-    }
-    await page.getByRole('button', { name: '账号设置', exact: true }).click();
-    await page.getByRole('button', { name: '退出登录', exact: true }).click();
-    await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
-
-    await page.getByLabel('用户名').fill('session_race');
-    await page.getByLabel('密码', { exact: true }).fill('session-password');
-    await page.getByRole('button', { name: '登录', exact: true }).click();
+    await started;
+    await page.evaluate(async () => {
+      const modulePath = '/src/auth/authApi.ts';
+      const { authRequest, setBrowserSession } = await import(modulePath);
+      await authRequest('logout', 'POST');
+      setBrowserSession(null);
+    });
+    await exchange(true);
+    const delayed = page.waitForResponse((response) => response.url().endsWith('/api/auth/session') && response.status() === 401);
+    releaseSession();
+    await delayed;
     await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
-
-    const delayedResponsePromise = page.waitForResponse((response) =>
-      response.url().endsWith('/api/auth/session') && response.status() === 401);
-    releaseDelayedSession();
-    await delayedResponsePromise;
-    await delayedSessionFinishedPromise;
-    await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
-
-    currentSessionExpired = true;
-    const currentResponsePromise = page.waitForResponse((response) =>
-      response.url().endsWith('/api/auth/session') && response.status() === 401);
+    revoked = true;
     await page.clock.fastForward(20_100);
-    await currentResponsePromise;
-    await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
-  } finally {
-    releaseDelayedSession();
-    if (delayedSessionWasStarted) await delayedSessionFinishedPromise;
-  }
+    await expect(page.getByText('请打开服主发来的邀请或恢复登录链接', { exact: false })).toBeVisible();
+    expect(redemptions).toBe(2);
+  } finally { releaseSession(); }
 });
 
-test('已初始化服务器允许创建普通账号', async ({ page }) => {
-  const token = 'c'.repeat(43);
-  const user = { id: 'new-user', nickname: 'NewFriend', avatar: '', administrator: false };
-  let registration: Record<string, unknown> | undefined;
-  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
-  await page.route('**/api/auth/me', (route) => route.fulfill({ status: 401, json: { detail: '请先登录' } }));
-  await page.route('**/api/auth/local/register', async (route) => {
-    registration = route.request().postDataJSON();
-    await route.fulfill({ json: { sessionToken: token, user } });
-  });
-  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
-    json: { participantCount: 0, participants: [] },
-  }));
 
-  await page.goto('/');
-  await page.getByRole('button', { name: '没有账号，创建账号' }).click();
-  await page.getByLabel('用户名', { exact: true }).fill('NewFriend');
-  await page.getByLabel('密码', { exact: true }).fill('friend-password');
-  await page.getByLabel('确认密码', { exact: true }).fill('friend-password');
-  await page.getByRole('button', { name: '创建账号', exact: true }).click();
-
-  await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
-  expect(registration).toEqual({ username: 'NewFriend', password: 'friend-password' });
-});
 
 test('新设备替换会话后旧客户端通过心跳静默退出', async ({ page }) => {
   await page.clock.install();
   const user = { id: 'old-session', nickname: '旧设备', avatar: '', administrator: true };
   let sessionRequests = 0;
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
   await page.route('**/api/auth/session', (route) => {
@@ -220,7 +120,7 @@ test('新设备替换会话后旧客户端通过心跳静默退出', async ({ pa
   await page.goto('/');
   await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
   await page.clock.fastForward(20_100);
-  await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
+  await expect(page.getByText('请打开服主发来的邀请或恢复登录链接', { exact: false })).toBeVisible();
   expect(sessionRequests).toBeGreaterThanOrEqual(1);
 });
 
@@ -230,6 +130,7 @@ test('上一次会话心跳完成前不会发起下一次', async ({ page }) => 
   let sessionRequests = 0;
   let releaseHeartbeat = () => {};
   const heartbeatPending = new Promise<void>((resolve) => { releaseHeartbeat = resolve; });
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
   await page.route('**/api/auth/session', async (route) => {
@@ -264,6 +165,7 @@ test('会话状态未变化时心跳保持固定节拍', async ({ page }) => {
   let finishFirstHeartbeat = () => {};
   const firstHeartbeatPending = new Promise<void>((resolve) => { releaseFirstHeartbeat = resolve; });
   const firstHeartbeatFinished = new Promise<void>((resolve) => { finishFirstHeartbeat = resolve; });
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
   await page.route('**/api/auth/session', async (route) => {
@@ -299,6 +201,7 @@ test('会话状态未变化时心跳保持固定节拍', async ({ page }) => {
 
 test('个人资料修改沿用当前账号', async ({ page }) => {
   let user = { id: 'test-user', nickname: '初始昵称', avatar: '', administrator: true };
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', async (route) => {
     if (route.request().method() === 'PUT') user = { ...user, ...route.request().postDataJSON() };
@@ -332,6 +235,7 @@ test('个人资料修改沿用当前账号', async ({ page }) => {
 test('自动保存失败保留草稿，不关闭设置，重新编辑后可以重试', async ({ page }) => {
   let user = { id: 'profile-failure-user', nickname: '服务器昵称', avatar: '', administrator: false };
   let failSave = true;
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
   await page.route('**/api/auth/me', async (route) => {
@@ -363,6 +267,7 @@ test('自动保存失败保留草稿，不关闭设置，重新编辑后可以�
 test('资料基线跟随服务器更新并在保存后采用服务端规范值', async ({ page }) => {
   let user = { id: 'profile-baseline-user', nickname: '初始昵称', avatar: '', administrator: false };
   await page.clock.install();
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', async (route) => {
     if (route.request().method() === 'PUT') user = { ...user, ...route.request().postDataJSON() };
@@ -396,6 +301,7 @@ test('资料基线跟随服务器更新并在保存后采用服务端规范值',
 
 test('浏览器客户端栏目不展示 Windows 开机自启控件，Esc 返回并恢复入口焦点', async ({ page }) => {
   const user = { id: 'settings-browser-user', nickname: '浏览器用户', avatar: '', administrator: false };
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
@@ -414,6 +320,7 @@ test('浏览器客户端栏目不展示 Windows 开机自启控件，Esc 返回�
 test('切换栏目和 Esc 关闭前自动保存，未修改不提交', async ({ page }) => {
   let user = { id: 'draft-user', nickname: '草稿测试', avatar: '', administrator: true };
   let updates = 0;
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => {
     if (route.request().method() === 'PUT') {
@@ -448,6 +355,7 @@ test('切换栏目和 Esc 关闭前自动保存，未修改不提交', async ({ 
 test('更换头像在整页资料设置中裁剪并保存', async ({ page }) => {
   const user = { id: 'avatar-user', nickname: '头像测试', avatar: '', administrator: true };
   let profileUpdate: { nickname?: string; avatar?: string } | undefined;
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', async (route) => {
     if (route.request().method() === 'PUT') profileUpdate = route.request().postDataJSON();
@@ -503,6 +411,7 @@ test('签名自动保存与注册日期展示，反馈不推动下方内容', as
   };
   let updates = 0;
   let failNext = false;
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', async (route) => {
     if (route.request().method() === 'PUT') {
@@ -546,6 +455,7 @@ test('签名自动保存与注册日期展示，反馈不推动下方内容', as
 
 test('动态开关按账号保存，账号设置明确标出尚未接入的功能', async ({ page }) => {
   const user = { id: 'settings-account-user', nickname: '设置测试', avatar: '', administrator: false };
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
@@ -555,7 +465,8 @@ test('动态开关按账号保存，账号设置明确标出尚未接入的功�
   await expect(page.getByRole('navigation', { name: '设置栏目' }).getByRole('button', { name: '个人资料', exact: true })).toHaveCount(0);
   await expect(page.getByRole('navigation', { name: '设置栏目' }).getByRole('button', { name: '当前动态', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '修改头像', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '修改密码', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '修改密码', exact: true })).toHaveCount(0);
+  await expect(page.getByText('更换电脑或丢失登录时，请联系服主生成“恢复成员登录”链接。')).toBeVisible();
   await expect(page.getByRole('button', { name: '连接 QQ', exact: true })).toBeVisible();
   await expect(page.locator('.activity-settings')).toContainText('动态检测仅在桌面版提供');
   const toggle = page.getByRole('checkbox', { name: '显示当前动态', exact: true });
@@ -567,8 +478,6 @@ test('动态开关按账号保存，账号设置明确标出尚未接入的功�
   await page.getByRole('button', { name: '账号设置', exact: true }).click();
   await expect(toggle).not.toBeChecked();
 
-  await page.getByRole('button', { name: '修改密码', exact: true }).click();
-  await expect(page.locator('#password-entry')).toContainText('尚未接入');
   await expect(page.getByRole('textbox', { name: '新密码' })).toHaveCount(0);
   await page.getByRole('button', { name: '连接 QQ', exact: true }).click();
   await expect(page.locator('#qq-entry')).toContainText('尚未接入');
@@ -578,6 +487,7 @@ test('动态开关按账号保存，账号设置明确标出尚未接入的功�
 
 test('自定义入场音按账号保存在本机并可移除', async ({ page }) => {
   const user = { id: 'entrance-sound-user', nickname: '音效测试', avatar: '', administrator: true };
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({
@@ -622,6 +532,7 @@ test('离开音效栏目或关闭设置会停止音效试听', async ({ page }) 
       name: 'hello.wav', mimeType: 'audio/wav', dataUrl: 'data:audio/wav;base64,AAAA',
     }));
   });
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));

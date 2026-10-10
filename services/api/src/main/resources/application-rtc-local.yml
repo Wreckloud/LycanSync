@@ -8,3 +8,7 @@ lycansync:
     api-url: http://127.0.0.1:${LIVEKIT_PORT:7990}
     api-key: ${LIVEKIT_API_KEY}
     api-secret: ${LIVEKIT_API_SECRET}
+
+  account:
+    mode: invite
+    public-url: ${ACCOUNT_PUBLIC_URL:https://192.168.150.108}

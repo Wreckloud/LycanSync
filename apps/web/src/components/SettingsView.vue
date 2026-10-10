@@ -8,6 +8,7 @@ import type { useRtcRoom } from '../rtc/useRtcRoom';
 import IconButton from './IconButton.vue';
 import AboutSettings from './settings/AboutSettings.vue';
 import AccountSettings from './settings/AccountSettings.vue';
+import MemberAccessSettings from './settings/MemberAccessSettings.vue';
 import ActivitySettings from './settings/ActivitySettings.vue';
 import AudioSettings from './settings/AudioSettings.vue';
 import ClientSettings from './settings/ClientSettings.vue';
@@ -35,6 +36,7 @@ const profileSettings = ref<InstanceType<typeof ProfileSettings> | null>(null);
 const activeSection = ref<SettingsSectionId>(props.section);
 const leaving = ref(false);
 const sectionTitle = computed(() => settingsSectionTitle(activeSection.value));
+const visibleSections = computed(() => SETTINGS_SECTIONS.filter((item) => item.id !== 'members' || props.user.administrator));
 
 watch(() => props.section, (section) => { activeSection.value = section; });
 watch(activeSection, async () => {
@@ -46,6 +48,7 @@ onMounted(() => heading.value?.focus());
 onScopeDispose(() => props.rtc.stopMicrophoneLoopback());
 
 async function selectSection(section: SettingsSectionId) {
+  if (section === 'members' && !props.user.administrator) return;
   if (leaving.value || section === activeSection.value) return;
   if (activeSection.value === 'account' && !await profileSettings.value?.save()) return;
   activeSection.value = section;
@@ -78,7 +81,7 @@ async function leaveSettings(logout: boolean) {
 <template>
   <main class="settings-view" aria-label="设置" @keydown.esc.stop="closeSettings">
     <nav class="settings-sidebar" aria-label="设置栏目">
-      <button v-for="item in SETTINGS_SECTIONS" :key="item.id" type="button"
+      <button v-for="item in visibleSections" :key="item.id" type="button"
         :class="{ 'is-selected': activeSection === item.id }" :aria-current="activeSection === item.id ? 'page' : undefined"
         :disabled="leaving" @click="selectSection(item.id)">{{ item.title }}</button>
       <div class="settings-sidebar-spacer" />
@@ -97,6 +100,7 @@ async function leaveSettings(logout: boolean) {
         </div>
       </header>
       <div class="settings-content">
+        <MemberAccessSettings v-if="user.administrator && activeSection === 'members'" :active="true" />
         <div v-show="activeSection === 'account'" class="settings-account-page">
           <ProfileSettings ref="profileSettings" :user="user" :save-profile="saveProfile" />
           <ActivitySettings :desktop="desktop" :activity="activity" :show-activity="showActivity"

@@ -30,6 +30,7 @@ test('创建群组只预览，并直接显示所有已注册账号的头像', as
     memberCount: 2, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z', members };
   let created = false;
   let tokenRequests = 0;
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
   await page.route('**/api/auth/session', (route) => route.fulfill({ json: user }));
@@ -74,6 +75,7 @@ test('创建群组只预览，并直接显示所有已注册账号的头像', as
 test('创建群组时可选择头像，群组栏显示裁剪后的图片', async ({ page }) => {
   const user = { id: userId, nickname: '群主', avatar: '', administrator: true };
   let createdAvatar = '';
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
   await page.route('**/api/auth/session', (route) => route.fulfill({ json: user }));
@@ -126,6 +128,7 @@ test('启动、窗口激活和成员变化时自动更新群组，无需刷新�
   let visible = false;
   let memberCount = 2;
   await page.clock.install();
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
   await page.route('**/api/auth/session', (route) => route.fulfill({ json: user }));
@@ -171,6 +174,7 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   ];
   const group = { id: groupId, name: '周末开黑', description: '', avatar: '', role: 'OWNER', memberCount: 4,
     createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z', members };
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
   await page.route('**/api/auth/session', (route) => route.fulfill({ json: user }));
@@ -230,6 +234,7 @@ test('群成员状态长轮询变化后立即刷新完整快照', async ({ page 
   const pollGate = new Promise<void>((resolve) => { releasePoll = resolve; });
   let heldPoll = false;
 
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
   await page.route('**/api/auth/session', (route) => route.fulfill({ json: user }));

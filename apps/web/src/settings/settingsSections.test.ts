@@ -10,6 +10,6 @@ describe('settings sections', () => {
   });
 
   it('groups profile and activity into one account page', () => {
-    expect(SETTINGS_SECTIONS.map(({ id }) => id)).toEqual(['account', 'audio', 'sound', 'client', 'about']);
+    expect(SETTINGS_SECTIONS.map(({ id }) => id)).toEqual(['account', 'members', 'audio', 'sound', 'client', 'about']);
   });
 });

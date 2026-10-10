@@ -38,6 +38,11 @@ server:
   max-http-request-header-size: 16KB
 
 lycansync:
+  account:
+    mode: ${ACCOUNT_MODE:invite}
+    public-url: ${ACCOUNT_PUBLIC_URL:}
+    server-name: ${ACCOUNT_SERVER_NAME:LycanSync}
+    bootstrap-file: ${ACCOUNT_BOOTSTRAP_FILE:./var/bootstrap/admin-activation.txt}
   chat:
     files:
       storage-directory: ${CHAT_FILE_STORAGE_DIR:./var/chat-files}

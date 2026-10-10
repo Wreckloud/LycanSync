@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lycansync.api.auth.mapper.AccessLinkMapper">
+    <sql id="columns">id, kind, creator_id AS creatorId, target_id AS targetId, note, created_at AS createdAt,
+        expires_at AS expiresAt, consumed_at AS consumedAt, revoked_at AS revokedAt,
+        result_user_id AS resultUserId, last_failure AS lastFailure, last_failure_at AS lastFailureAt</sql>
+    <select id="lockInitialization" resultType="java.lang.Boolean">
+        SELECT initialized_at IS NOT NULL FROM system_state WHERE id = 1 FOR UPDATE
+    </select>
+    <select id="nextGuestNumber" resultType="long">SELECT nextval('account_guest_number')</select>
+    <insert id="insert">
+        INSERT INTO auth_access_link(id, token_hash, kind, creator_id, target_id, note, created_at, expires_at)
+        VALUES (#{link.id}, #{hash}, #{link.kind}, #{link.creatorId}, #{link.targetId}, #{link.note}, #{link.createdAt}, #{link.expiresAt})
+    </insert>
+    <select id="lockByHash" resultType="com.lycansync.api.auth.model.AccessLink">
+        SELECT <include refid="columns"/> FROM auth_access_link WHERE token_hash = #{hash} FOR UPDATE
+    </select>
+    <select id="lockById" resultType="com.lycansync.api.auth.model.AccessLink">
+        SELECT <include refid="columns"/> FROM auth_access_link WHERE id = #{id} FOR UPDATE
+    </select>
+    <update id="consume">UPDATE auth_access_link SET consumed_at = #{now}, result_user_id = #{userId}, redemption_key_hash = #{keyHash}
+        WHERE id = #{id} AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > #{now}</update>
+    <select id="redemptionKeyHash" resultType="java.lang.String">SELECT redemption_key_hash FROM auth_access_link WHERE id = #{id}</select>
+    <update id="revoke">UPDATE auth_access_link SET revoked_at = #{now}
+        WHERE id = #{id} AND consumed_at IS NULL AND revoked_at IS NULL</update>
+    <update id="revokeActivation">UPDATE auth_access_link SET revoked_at = #{now}
+        WHERE kind = 'ACTIVATE' AND consumed_at IS NULL AND revoked_at IS NULL</update>
+    <update id="revokeRecovery">UPDATE auth_access_link SET revoked_at = #{now}
+        WHERE kind = 'RECOVERY' AND target_id = #{userId} AND consumed_at IS NULL AND revoked_at IS NULL</update>
+    <update id="recordFailure">UPDATE auth_access_link SET last_failure = #{failure}, last_failure_at = #{now}
+        WHERE token_hash = #{hash} AND consumed_at IS NULL</update>
+    <select id="list" resultType="com.lycansync.api.auth.model.AccessLink">
+        SELECT <include refid="columns"/> FROM auth_access_link
+        WHERE kind != 'ACTIVATE' ORDER BY created_at DESC, id DESC LIMIT 100 OFFSET #{offset}
+    </select>
+    <select id="members" resultType="com.lycansync.api.auth.model.AuthUser">
+        SELECT id, nickname, avatar, administrator, signature, created_at AS createdAt
+        FROM app_user WHERE administrator = FALSE ORDER BY created_at, id LIMIT 100 OFFSET #{offset}
+    </select>
+</mapper>

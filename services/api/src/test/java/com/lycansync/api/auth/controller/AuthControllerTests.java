@@ -40,7 +40,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * @author Wreckloud
  * @since 2026-09-10
  */
-@WebMvcTest(AuthController.class)
+@WebMvcTest({AuthController.class, LocalAuthController.class})
 @Import(AuthConfiguration.class)
 class AuthControllerTests {
 
@@ -150,5 +150,24 @@ class AuthControllerTests {
         return mvc.perform(post("/api/auth/local/login")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"username\":\"tester\",\"password\":\"abc123\"}"));
+    }
+
+    @Test
+    void shouldIsolateSourcesAndIgnoreUntrustedProxyHeader() throws Exception {
+        for (int attempt = 0; attempt < 60; attempt++) {
+            mvc.perform(post("/api/auth/local/login").with(request -> {
+                request.setRemoteAddr("192.0.2.41"); return request;
+            }).contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"username\":\"tester\",\"password\":\"abc123\"}"))
+                    .andExpect(status().isOk());
+        }
+        mvc.perform(post("/api/auth/local/login").with(request -> {
+            request.setRemoteAddr("192.0.2.41"); return request;
+        }).header("X-Lycan-Client-IP", "192.0.2.99")).andExpect(status().isTooManyRequests());
+        mvc.perform(post("/api/auth/local/login").with(request -> {
+            request.setRemoteAddr("192.0.2.42"); return request;
+        }).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"tester\",\"password\":\"abc123\"}"))
+                .andExpect(status().isOk());
     }
 }

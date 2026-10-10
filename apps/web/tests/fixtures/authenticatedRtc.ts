@@ -48,6 +48,7 @@ export async function summary(groupId: string = testGroupId) {
 }
 
 async function api(path: string, body: string, user: ReturnType<typeof testUser>) {
+  if (path === '/api/auth/options') return { mode: 'invite', qqAvailable: false };
   if (path === '/api/system/initialization') return { initialized: true };
   if (path === '/api/auth/me') return user;
   if (path === '/api/auth/session') {

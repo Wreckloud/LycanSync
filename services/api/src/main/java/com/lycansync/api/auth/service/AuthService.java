@@ -48,8 +48,11 @@ public class AuthService {
     }
 
     String issueSession(AuthUser user) {
-        // 新会话原子替换该账号旧会话，旧设备下次请求会静默退出。
-        String token = AuthSecrets.generate();
+        return issueSession(user, AuthSecrets.generate());
+    }
+
+    String issueSession(AuthUser user, String token) {
+        // 重试兑换使用同一凭据，避免响应逆序到达后保存已经失效的会话。
         mapper.replaceSession(AuthSecrets.hash(token), user.id(), Instant.now(systemClock).plus(SESSION_TTL));
         return token;
     }

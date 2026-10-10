@@ -13,6 +13,7 @@ const { MediaHelperManager } = require('./media-helper.cjs');
 const { createMediaDiagnostics } = require('./media-diagnostics.cjs');
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
 const { matchNativeVideoSourceThumbnails } = require('./native-video-thumbnails.cjs');
+const { parseAccessLink, accessLinkFromArguments } = require('./access-links.cjs');
 
 const APP_ORIGIN = 'lycan://app';
 const rendererRoot = resolve(__dirname, '../dist');
@@ -24,9 +25,13 @@ if (devRendererUrl && (devRendererUrl.protocol !== 'http:' || devRendererUrl.hos
   throw new Error('开发前端必须使用本机 http://127.0.0.1 地址。');
 }
 const apiRoutePolicies = new Map([
+  ['GET /api/auth/options', { public: true }],
+  ['POST /api/auth/access/preview', { public: true }],
+  ['POST /api/auth/access/redeem', { public: true, savesSession: true }],
+  ['GET /api/auth/access/links', {}],
+  ['POST /api/auth/access/links', {}],
+  ['GET /api/auth/access/members', {}],
   ['GET /api/system/initialization', { public: true }],
-  ['POST /api/auth/local/register', { public: true, savesSession: true }],
-  ['POST /api/auth/local/login', { public: true, savesSession: true }],
   ['GET /api/auth/me', {}],
   ['GET /api/auth/session', {}],
   ['PUT /api/auth/me', { maxBodyBytes: 160 * 1024 }],
@@ -58,6 +63,9 @@ const backend = new URL(loadServerSettings({
   resourcesDirectory: app.isPackaged ? process.resourcesPath : __dirname,
   developmentUrl: process.env.LYCANSYNC_API_URL,
 }));
+let pendingAccessLink = accessLinkFromArguments(process.argv);
+let pendingAccessError = false;
+const accessLinkFile = resolve(app.getPath('userData'), 'pending-access.bin');
 protocol.registerSchemesAsPrivileged([{ scheme: 'lycan', privileges: {
   standard: true, secure: true, supportFetchAPI: true, stream: true,
 } }]);
@@ -819,6 +827,9 @@ async function serveApplication(request) {
   if (!trustedUrl(request.url)) return new Response(null, { status: 403 });
   if (url.pathname.startsWith('/api/')) {
     const routePolicy = apiRoutePolicies.get(`${request.method} ${url.pathname}`)
+      ?? (/^\/api\/auth\/access\/links\/[0-9a-f-]{36}(?:\/renew)?$/i.test(url.pathname)
+        && ((request.method === 'POST' && url.pathname.endsWith('/renew'))
+          || (request.method === 'DELETE' && !url.pathname.endsWith('/renew'))) ? {} : undefined)
       ?? (request.method === 'GET' && (groupPath.test(url.pathname) || groupPresencePath.test(url.pathname) || groupMessagePath.test(url.pathname)
         || groupAttachmentPath.test(url.pathname) || groupFilePath.test(url.pathname)) ? {} : undefined)
       ?? (request.method === 'GET' && groupPresenceChangesPath.test(url.pathname) ? { longPolling: true } : undefined)
@@ -833,6 +844,9 @@ async function serveApplication(request) {
         : ['POST', 'PUT'].includes(request.method) ? Buffer.from(await request.arrayBuffer()) : undefined;
       if (body instanceof Buffer && body.byteLength > (routePolicy.maxBodyBytes ?? 4096)) return new Response(null, { status: 413 });
       const token = await loadSession();
+      if (url.pathname === '/api/auth/access/redeem' && token) {
+        return Response.json({ detail: '请先退出当前账号，再使用邀请链接。' }, { status: 409 });
+      }
       const response = await net.fetch(new URL(url.pathname + url.search, backend).href, {
         method: request.method,
         headers: { ...(body ? { 'Content-Type': request.headers.get('Content-Type') || 'application/json' } : {}),
@@ -943,12 +957,26 @@ function configurePermissions() {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
+    const offer = accessLinkFromArguments(argv);
+    if (offer) {
+      pendingAccessLink = offer;
+      mainWindow?.webContents.send('auth:access:offer', offer);
+    }
     if (mainWindow?.isMinimized()) mainWindow.restore();
     mainWindow?.show();
     mainWindow?.focus();
   });
   app.whenReady().then(() => {
+    if (existsSync(accessLinkFile)) {
+      try {
+        if (!pendingAccessLink) pendingAccessLink = parseAccessLink(safeStorage.decryptString(require('node:fs').readFileSync(accessLinkFile)));
+        require('node:fs').unlinkSync(accessLinkFile);
+      } catch {
+        pendingAccessError = true;
+        console.error('无法读取待确认邀请，请从邀请网页重新打开。');
+      }
+    }
     protocol.handle('lycan', serveApplication);
     configurePermissions();
     const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
@@ -1233,10 +1261,29 @@ ipcMain.handle('auth:clear', async (event) => {
 
 ipcMain.handle('settings:server:get', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
-  return { apiUrl: backend.origin, editable: app.isPackaged };
+  return { apiUrl: backend.origin, editable: true };
+});
+ipcMain.handle('auth:access:get', (event) => {
+  if (!trustedSender(event)) throw new Error('请求来源无效');
+  if (pendingAccessError) throw new Error('无法读取待确认邀请，请从网页重新打开。');
+  const offer = pendingAccessLink;
+  pendingAccessLink = null;
+  return offer;
+});
+ipcMain.handle('auth:access:prepare', async (event, offer) => {
+  if (!trustedSender(event) || closing) throw new Error('当前不能打开邀请链接。');
+  if (await loadSession()) throw new Error('请先退出当前账号。');
+  const link = `lycansync://access?server=${encodeURIComponent(offer?.server ?? '')}#token=${offer?.token ?? ''}`;
+  const validated = parseAccessLink(link);
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('系统凭据加密不可用。');
+  await mkdir(app.getPath('userData'), { recursive: true });
+  await writeFile(accessLinkFile, safeStorage.encryptString(link));
+  await saveServerSettings(app.getPath('userData'), validated.server);
+  app.relaunch();
+  app.quit();
 });
 ipcMain.handle('settings:server:set', async (event, value) => {
-  if (!trustedSender(event) || closing || !app.isPackaged) throw new Error('当前不能修改服务器地址。');
+  if (!trustedSender(event) || closing) throw new Error('当前不能修改服务器地址。');
   if (await loadSession()) throw new Error('请退出登录后再修改服务器地址。');
   await saveServerSettings(app.getPath('userData'), value);
   app.relaunch();

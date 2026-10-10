@@ -8,6 +8,10 @@
 |---|---|---|
 | `services/api/src/main/java/com/lycansync/api` | 认证、群组、聊天、状态和 RTC 凭证 | Controller → Service → Mapper；事务与业务异常 |
 | `apps/web/src/AuthRoot.vue` | 登录与已登录界面的入口 | 会话建立、过期和退出 |
+| `services/api/src/main/java/com/lycansync/api/auth/service/AccessLinkService.java` | 服主激活、单人邀请和恢复 | 链接行锁、一次性消费与会话原子替换 |
+| `apps/web/electron/access-links.cjs` | 安装版邀请唤起校验 | 仅接受固定协议、HTTPS 服务器和一次性凭据 |
+| `apps/web/src/components/AccountAccessPrompt.vue` | 邀请确认 | 先检查，用户确认后兑换；已登录时保留原会话 |
+| `apps/web/src/components/settings/MemberAccessSettings.vue` | 服主管理 | 生成邀请、恢复原成员及查看链接记录 |
 | `apps/web/src/App.vue` | 群组界面、状态同步、音频设置和共享选择器 | 用户动作如何进入 RTC；页面状态不等于媒体资源 |
 | `apps/web/src/components` | 聊天、成员、播放和诊断组件 | props / emit、轨道展示、挂载与销毁 |
 | `apps/web/src/rtc/useRtcRoom.ts` | 房间连接、普通媒体采集发布、权限及离房清理 | 房间与任务身份；资源创建和停止路径 |

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LycanSync · 加入朋友</title>
+  <style>
+    body { margin:0; background:#10151a; color:#e7edf3; font:16px/1.7 system-ui,sans-serif; }
+    main { max-width:520px; margin:12vh auto; padding:32px; }
+    .actions { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0; }
+    a,button { display:inline-flex; align-items:center; justify-content:center; min-height:32px; padding:5px 10px; border:1px solid #35404b; border-radius:5px; background:#202932; color:#e7edf3; text-decoration:none; cursor:pointer; font:14px/20px system-ui,sans-serif; }
+    button:disabled { opacity:.55; cursor:default; } small { color:#a3b0bc; }
+  </style>
+  <script defer src="/join.js"></script>
+</head>
+<body><main>
+  <h1 id="title">LycanSync</h1>
+  <p id="status" role="status">正在检查链接…</p>
+  <p>安装后回到本页，点击“打开应用”。下载或打开页面不会消耗链接。</p>
+  <div class="actions">
+    <a href="/downloads/LycanSync-setup.exe" download>下载 Windows 应用</a>
+    <button id="open" disabled>打开应用</button>
+  </div>
+  <p><button disabled>QQ 授权加入（尚未开通）</button></p>
+  <small>本阶段可暂不绑定 QQ。进入应用后确认操作，首次资料可以设置或跳过。</small>
+  <p id="error" role="alert"></p>
+</main></body></html>

@@ -18,6 +18,8 @@ import java.util.UUID;
 @Mapper
 public interface AuthMapper {
 
+    long countLocalCredentials();
+
     int markInitialized(@Param("now") Instant now);
 
     LocalCredential findLocalCredential(@Param("username") String username);

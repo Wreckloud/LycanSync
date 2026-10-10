@@ -27,6 +27,9 @@
   --member-panel-width: 240px;
   --rail-edge-space: 14px;
   --titlebar-height: 43px;
+  --button-height: 32px;
+  --button-padding: 5px 10px;
+  --button-gap: 8px;
 }
 
 * { box-sizing: border-box; }
@@ -50,6 +53,24 @@ input[type="range"] { cursor: pointer; }
 
 button, input { font: inherit; }
 button { color: inherit; }
+button:where(:not([class]), .confirm-button, .settings-button, .account-row button, .sound-actions button) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: var(--button-height);
+  padding: var(--button-padding);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel-raised);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 20px;
+  cursor: pointer;
+}
+:where(button:not([class]), .confirm-button, .settings-button):hover:not(:disabled) { border-color: var(--muted); }
+:where(button):disabled { opacity: .5; cursor: not-allowed; }
+.button-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--button-gap); }
 :is(button, input, textarea, select, [tabindex]):focus { outline: none; }
 
 .app-shell {
@@ -109,7 +130,7 @@ button { color: inherit; }
 }
 
 .desktop-titlebar { -webkit-app-region: drag; }
-.window-actions button { -webkit-app-region: no-drag; border: 0; background: transparent; cursor: pointer; }
+.window-actions button { -webkit-app-region: no-drag; padding: 0; border: 0; background: transparent; cursor: pointer; }
 .window-actions button:hover { background: var(--panel-raised); }
 .window-actions button:last-child:hover { background: #c42b1c; color: white; }
 .capture-dialog { width: min(860px, calc(100vw - 48px)); padding: 24px; border: 1px solid var(--border); background: var(--panel); border-radius: 8px; }
@@ -312,7 +333,7 @@ button { color: inherit; }
 .switch-confirm button, .dialog-actions button, .group-avatar-actions button {
   border: 1px solid var(--border);
   border-radius: 4px;
-  padding: 6px 10px;
+  padding: var(--button-padding);
   background: var(--panel-raised);
   color: var(--text);
   cursor: pointer;
@@ -1233,8 +1254,8 @@ button { color: inherit; }
 .auth-card p, .auth-card small { color: var(--muted); line-height: 1.6; }
 .auth-card form, .auth-card label { display: grid; gap: 12px; }
 .auth-card form { margin: 20px 0; }
+.auth-card > button { margin-top: var(--button-gap); }
 .auth-card input { width: 100%; min-width: 0; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 10px; font: inherit; }
-.auth-card button { padding: 8px 12px; border: 1px solid var(--border); border-radius: 4px; color: var(--text); background: var(--panel-raised); cursor: pointer; }
 .auth-card button:disabled { opacity: .5; cursor: default; }
 .auth-card .confirm-button { background: var(--accent); border-color: var(--accent); }
 .auth-card .auth-error { color: var(--danger); }
@@ -1262,7 +1283,7 @@ button { color: inherit; }
 .settings-toggle input:disabled { cursor: not-allowed; }
 .settings-toggle.is-disabled { opacity: .65; cursor: not-allowed; }
 .settings-error { color: var(--danger) !important; }
-.settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--button-gap); }
 .settings-section button { font-size: 13px; }
 .settings-section button:not(:disabled):hover { background: var(--panel); border-color: var(--muted); }
 .settings-section button:disabled { opacity: .45; cursor: not-allowed; }

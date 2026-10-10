@@ -13,7 +13,7 @@ test('服务器地址拒绝外部 HTTP、凭据、路径和非法输入', () => 
   assert.equal(serverUrl('http://127.0.0.1:18080'), 'http://127.0.0.1:18080');
 });
 
-test('用户服务器地址在默认配置更新后保留，开发环境仍使用开发地址', async () => {
+test('用户服务器地址在安装版和开发版一致保留，显式测试地址可覆盖', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'lycansync-server-'));
   const userDirectory = join(directory, 'user');
   try {
@@ -23,6 +23,7 @@ test('用户服务器地址在默认配置更新后保留，开发环境仍使�
     await saveServerSettings(userDirectory, 'https://192.168.150.108/');
     writeFileSync(join(directory, 'server-config.json'), JSON.stringify({ apiUrl: 'https://updated.example' }));
     assert.equal(loadServerSettings(options), 'https://192.168.150.108');
+    assert.equal(loadServerSettings({ ...options, packaged: false }), 'https://192.168.150.108');
     assert.equal(loadServerSettings({ ...options, packaged: false, developmentUrl: 'http://127.0.0.1:18080' }), 'http://127.0.0.1:18080');
     await assert.rejects(saveServerSettings(userDirectory, 'http://external.example'));
     assert.equal(loadServerSettings(options), 'https://192.168.150.108');

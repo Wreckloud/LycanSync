@@ -86,5 +86,4 @@ function removeSound() {
 <style scoped>
 .sound-settings { max-width: 760px; }
 .sound-actions { justify-content: flex-start; }
-.sound-actions button { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel-raised); color: var(--text); cursor: pointer; }
 </style>

@@ -39,4 +39,14 @@ FunctionEnd
 
 !macro customInstall
   Call EnsureVisualCppRuntime
+  WriteRegStr HKCU "Software\Classes\lycansync" "" "URL:LycanSync"
+  WriteRegStr HKCU "Software\Classes\lycansync" "URL Protocol" ""
+  WriteRegStr HKCU "Software\Classes\lycansync\shell\open\command" "" '$\"$INSTDIR\${APP_EXECUTABLE_FILENAME}$\" $\"%1$\"'
+!macroend
+
+!macro customUnInstall
+  ReadRegStr $0 HKCU "Software\Classes\lycansync\shell\open\command" ""
+  ${If} $0 == '$\"$INSTDIR\${APP_EXECUTABLE_FILENAME}$\" $\"%1$\"'
+    DeleteRegKey HKCU "Software\Classes\lycansync"
+  ${EndIf}
 !macroend

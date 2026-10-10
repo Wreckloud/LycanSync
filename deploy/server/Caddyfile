@@ -1,5 +1,13 @@
 {$SERVER_DOMAIN} {
-    reverse_proxy api:18080
+    handle_path /downloads/* {
+        root * /srv/downloads
+        file_server
+    }
+    handle {
+        reverse_proxy api:18080 {
+            header_up X-Lycan-Client-IP {remote_host}
+        }
+    }
 }
 
 {$SERVER_DOMAIN}:8443 {

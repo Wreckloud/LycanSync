@@ -39,6 +39,7 @@ secrets/
 logs/
 data/
 **/var/chat-files/
+**/var/bootstrap/
 
 # OS
 Thumbs.db

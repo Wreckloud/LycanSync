@@ -100,6 +100,5 @@ function updateProcessing(setting: keyof AudioProcessingSettings, event: Event) 
 .settings-range-row span, .settings-range-row label { display: flex; justify-content: space-between; }
 .settings-range-row strong { color: var(--accent); }
 .settings-range-row input { width: 100%; margin: 0; accent-color: var(--accent); }
-.settings-button { min-height: 34px; padding: 6px 11px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel-raised); color: var(--text); cursor: pointer; }
 .settings-muted { display: block; margin-top: 8px; color: var(--muted); }
 </style>

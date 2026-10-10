@@ -60,6 +60,14 @@ class ProfileServiceTests {
     }
 
     @Test
+    void shouldAllowUnchangedBundledAvatarWhileSavingNickname() {
+        String avatar = DefaultAvatar.value();
+        when(mapper.updateProfile(USER_ID, "行者", avatar, "")).thenReturn(1);
+        when(mapper.findUserProfile(USER_ID)).thenReturn(new AuthUser(USER_ID, "行者", avatar, false, "", CREATED_AT));
+        assertThat(profileService.update(USER, new ProfileUpdateRequest("行者", avatar, "")).avatar()).isEqualTo(avatar);
+    }
+
+    @Test
     void shouldRejectAvatarLargerThanStoredOutputLimit() {
         String avatar = "data:image/png;base64,"
                 + Base64.getEncoder().encodeToString(new byte[96 * 1024 + 1]);

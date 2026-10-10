@@ -16,7 +16,7 @@ describe('authRequest', () => {
       headers: { 'Content-Type': 'application/problem+json' },
     })));
 
-    const request = authRequest('local/login', 'POST', { username: 'tester', password: 'abc123' });
+    const request = authRequest('access/preview', 'POST', { token: 'a'.repeat(43) });
     await expect(request).rejects.toBeInstanceOf(ApiRequestError);
     await expect(request).rejects.toMatchObject({
       status: 429,

@@ -17,7 +17,7 @@ function serverUrl(value) {
 function loadServerSettings({ packaged, userDirectory, resourcesDirectory, developmentUrl }) {
   const userFile = resolve(userDirectory, 'server-config.json');
   // 用户选择优先于安装包默认值，升级只替换默认值。
-  const file = packaged && existsSync(userFile) ? userFile : resolve(resourcesDirectory, 'server-config.json');
+  const file = existsSync(userFile) ? userFile : resolve(resourcesDirectory, 'server-config.json');
   const config = JSON.parse(readFileSync(file, 'utf8'));
   return serverUrl(!packaged && developmentUrl ? developmentUrl : config.apiUrl);
 }
