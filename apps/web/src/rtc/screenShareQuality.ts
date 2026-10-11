@@ -21,6 +21,17 @@ export function screenShareVideoPreset(id: ScreenShareQualityId) {
   return new VideoPreset(quality.width, quality.height, quality.bitrate, quality.fps, 'medium');
 }
 
+export function screenShareDegradationPreference(id: ScreenShareQualityId): RTCDegradationPreference {
+  screenShareQuality(id);
+  if (id === 'text') return 'maintain-resolution';
+  if (id === 'economy') return 'balanced';
+  return 'maintain-framerate';
+}
+
+export function screenShareThumbnailPreset() {
+  return new VideoPreset(640, 360, 1_000_000, 30, 'high');
+}
+
 export function readScreenShareQuality(): ScreenShareQualityId {
   const stored = localStorage.getItem(STORAGE_KEY);
   return SCREEN_SHARE_QUALITIES.find((quality) => quality.id === stored)?.id ?? 'standard';

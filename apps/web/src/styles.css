@@ -330,7 +330,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 
 .switch-confirm span { flex: 1; }
 
-.switch-confirm button, .dialog-actions button, .group-avatar-actions button {
+.switch-confirm button, .dialog-actions button {
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: var(--button-padding);
@@ -632,16 +632,6 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .group-error { color: #e0a0a0; }
 .group-hint { color: var(--muted); }
 .group-empty { display: grid; place-items: center; color: var(--muted); }
-.group-dialog { width: min(440px, 100%); max-height: 90dvh; overflow-y: auto; padding: 22px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
-.group-dialog h2 { margin: 0 0 18px; }
-.group-dialog label { display: grid; gap: 7px; margin-top: 12px; }
-.group-dialog input, .group-dialog textarea { width: 100%; padding: 9px; background: var(--panel-soft); color: var(--text); border: 1px solid var(--border); border-radius: 5px; font: inherit; }
-.group-avatar-settings { display: flex; align-items: center; gap: 14px; min-height: 72px; }
-.group-avatar-preview { width: 72px; height: 72px; flex: 0 0 72px; display: grid; place-items: center; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); color: var(--muted); }
-.group-avatar-preview img { width: 100%; height: 100%; object-fit: cover; }
-.group-avatar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.group-avatar-actions small { flex-basis: 100%; color: var(--muted); }
-.group-avatar-actions button:disabled { opacity: .45; cursor: not-allowed; }
 
 .video-placeholder {
   position: absolute;

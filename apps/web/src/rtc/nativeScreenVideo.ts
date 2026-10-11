@@ -1,7 +1,7 @@
 import { readScreenSharePreferences, type ScreenSharePreferences } from '../settings/screenSharePreferences';
 import { LocalVideoTrack } from 'livekit-client';
 import { createScreenStatusFrame } from './screenStatusFrame';
-import { screenShareQuality, type ScreenShareQualityId } from './screenShareQuality';
+import { screenShareDegradationPreference, screenShareQuality, screenShareThumbnailPreset, type ScreenShareQualityId } from './screenShareQuality';
 import { applyScreenShareEncoding, readScreenShareEncoding, screenShareEncodingLimits } from './screenShareEncoding';
 
 export interface NativeVideoDesktopBridge {
@@ -67,6 +67,8 @@ export class NativeScreenVideoSession {
   private lastTimestamp = Number.NEGATIVE_INFINITY;
   private frameWidth = 1280;
   private frameHeight = 720;
+  private sourceWidth = 1920;
+  private sourceHeight = 1080;
   private suspended = false;
   private writing = false;
   private stopped = false;
@@ -165,7 +167,8 @@ export class NativeScreenVideoSession {
     this.configuring = true;
     let nativeRequested = false;
     try {
-      await applyScreenShareEncoding(sender, screenShareEncodingLimits(id));
+      await applyScreenShareEncoding(sender, screenShareEncodingLimits(id, previousLimits,
+        { width: this.sourceWidth, height: this.sourceHeight }));
       if (this.stopped || this.track.sender !== sender) throw new Error('nativeVideoSessionStopped');
       nativeRequested = true;
       const response = await this.desktop.configureNativeVideo(sessionId, quality.fps);
@@ -175,7 +178,14 @@ export class NativeScreenVideoSession {
       this.resolution = { width: quality.width, height: quality.height };
       this.generator.contentHint = id === 'text' ? 'detail' : 'motion';
       // SDK 重发布使用当前配置，不能重新套用最初发布时的画质。
-      if (this.track.publishOptions) this.track.publishOptions.videoEncoding = screenShareEncodingLimits(id);
+      if (this.track.publishOptions) {
+        // SDK 对 ScreenShare 单独读取 screenShareEncoding，不能写入摄像头编码字段。
+        this.track.publishOptions.screenShareEncoding = {
+          maxBitrate: quality.bitrate, maxFramerate: quality.fps, priority: 'high',
+        };
+        this.track.publishOptions.degradationPreference = screenShareDegradationPreference(id);
+        this.track.publishOptions.screenShareSimulcastLayers = [screenShareThumbnailPreset()];
+      }
     } catch (error) {
       if (!this.stopped) {
         const rollback = await Promise.allSettled([
@@ -280,6 +290,8 @@ export class NativeScreenVideoSession {
     const visibleRect = frame.visibleRect;
     // Electron 将纹理容量作为显示尺寸；实际窗口内容可能因对齐或纹理复用而更小。
     if (visibleRect) {
+      this.sourceWidth = visibleRect.width;
+      this.sourceHeight = visibleRect.height;
       const scale = Math.min(1, this.resolution.width / visibleRect.width, this.resolution.height / visibleRect.height);
       const width = Math.max(1, Math.round(visibleRect.width * scale));
       const height = Math.max(1, Math.round(visibleRect.height * scale));

@@ -15,7 +15,17 @@ function setup(saveProfile = vi.fn(async (profile: ProfileUpdate) => ({ ...initi
   return { scope, user, draft, saveProfile };
 }
 
-describe('个人资料自动保存', () => {
+describe('个人资料草稿与保存', () => {
+  it('仅编辑草稿不会提交，首次资料页可以直接跳过', async () => {
+    const { scope, draft, saveProfile } = setup();
+    draft.nickname.value = '草稿昵称';
+    draft.avatar.value = 'data:image/png;base64,AAAA';
+    draft.signature.value = '草稿签名';
+    await nextTick();
+    expect(saveProfile).not.toHaveBeenCalled();
+    scope.stop();
+  });
+
   it('只聚焦或没有实质修改时不提交', async () => {
     const { scope, draft, saveProfile } = setup();
     expect(await draft.save()).toBe(true);

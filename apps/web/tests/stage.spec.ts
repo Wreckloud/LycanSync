@@ -30,27 +30,48 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/src/rtc/useRtcRoom.ts*', async (route) => {
     const original = await (await route.fetch()).text();
     const vuePath = original.match(/from ["']([^"']*\/vue\.js[^"']*)["']/)?.[1];
-    if (!vuePath) throw new Error('未找到 Vite Vue 模块');
+    const livekitPath = original.match(/from ["']([^"']*\/livekit-client\.js[^"']*)["']/)?.[1];
+    if (!vuePath || !livekitPath) throw new Error('未找到 Vite Vue 或 LiveKit 模块');
     await route.fulfill({ contentType: 'text/javascript', body: `
 import { ref, shallowRef, markRaw } from ${JSON.stringify(vuePath)};
+import { LocalVideoTrack, RemoteVideoTrack, RemoteTrackPublication, Track, TrackEvent } from ${JSON.stringify(livekitPath)};
 export function useRtcRoom() {
   const revision = ref(0), status = ref('idle'), room = shallowRef(null), participants = shallowRef([]);
   const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 180;
   canvas.getContext('2d').fillRect(0, 0, 320, 180);
   const stream = canvas.captureStream(0);
-  const track = { attach(element) { element.srcObject = stream; return element; }, detach(element) { element.srcObject = null; } };
-  const makeParticipant = (identity, name) => markRaw({ identity, name, attributes: {},
+  const track = new LocalVideoTrack(stream.getVideoTracks()[0], undefined, true);
+  const visibility = {}, quality = {}, remoteTracks = [];
+  const makeParticipant = (identity, name, isLocal = false) => {
+    const video = isLocal ? track : new RemoteVideoTrack(stream.getVideoTracks()[0].clone(), 'share-' + identity,
+      { getStats: async () => new Map() });
+    const publication = isLocal ? { track: video, isMuted: false } : new RemoteTrackPublication(Track.Kind.Video,
+      { sid: 'share-' + identity, name: 'share', type: 1, source: 3, simulcast: true }, true);
+    if (!isLocal) {
+      remoteTracks.push(video);
+      publication.setTrack(video);
+      publication.on(TrackEvent.UpdateSettings, (settings) => {
+        visibility[identity] = !settings.disabled; quality[identity] = settings.quality;
+      });
+    }
+    return markRaw({ identity, name, attributes: {},
     isScreenShareEnabled: false, isMicrophoneEnabled: false, isSpeaking: false,
-    getTrackPublication(source) { return source === 'screen_share' && this.isScreenShareEnabled ? { track, isMuted: false } : undefined; }
-  });
-  const local = makeParticipant('user-stage-user', '自己');
+    getTrackPublication(source) { return source === 'screen_share' && this.isScreenShareEnabled ? publication : undefined; }
+  }); };
+  const local = makeParticipant('user-stage-user', '自己', true);
   const friends = ['A','B','C','D','E','F'].map((id) => makeParticipant(id, '成员' + id));
   window.__stageTest = {
-    sharing(ids) { for (const friend of friends) friend.isScreenShareEnabled = ids.includes(friend.identity); revision.value++; },
+    sharing(ids) { for (const member of [local, ...friends]) member.isScreenShareEnabled = ids.includes(member.identity); revision.value++; },
+    visibility() { return { ...visibility }; },
+    quality() { return { ...quality }; },
     connection(value) { status.value = value; },
     reorder() { participants.value = [local, ...friends.slice().reverse()]; revision.value++; }
   };
-  window.addEventListener('pagehide', () => stream.getTracks().forEach((track) => track.stop()), { once: true });
+  window.addEventListener('pagehide', () => {
+    remoteTracks.forEach((track) => track.stop());
+    track.stop();
+    stream.getTracks().forEach((track) => track.stop());
+  }, { once: true });
   return { revision, status, room, participants, notice: ref(''), busySources: ref([]),
     needsAudioPlayback: ref(false), remoteControlShares: ref({}), remoteControlActive: ref(null),
     remoteControlPending: ref(null), remoteControlRequest: ref(null), remoteControlOwner: ref(null),
@@ -77,6 +98,76 @@ async function sharing(page: Page, ids: string[]) {
 async function stageNames(page: Page) {
   return page.getByTestId('viewer-screen').locator('.participant-meta > strong').allTextContents();
 }
+
+test('隐藏观看保留远端轨道，返回恢复可见需求，本地预览暂停不结束采集', async ({ page }) => {
+  await sharing(page, ['user-stage-user', 'A', 'B']);
+  const visibility = () => page.evaluate(() => (window as unknown as {
+    __stageTest: { visibility(): Record<string, boolean> }
+  }).__stageTest.visibility());
+  await expect.poll(visibility).toMatchObject({ A: true, B: true });
+  const localVideo = page.getByTestId('viewer-screen').getByLabel('自己的共享画面', { exact: true });
+  await expect.poll(() => localVideo.evaluate((video: HTMLVideoElement) => video.paused)).toBe(false);
+  const localStream = await localVideo.evaluateHandle((video: HTMLVideoElement) => video.srcObject);
+  const remoteStream = await page.getByLabel('成员A的共享画面', { exact: true }).evaluateHandle((video: HTMLVideoElement) => video.srcObject);
+  await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  await expect.poll(visibility).toMatchObject({ A: false, B: false });
+  await expect.poll(() => localVideo.evaluate((video: HTMLVideoElement) => video.paused)).toBe(true);
+  // 模拟最小化后恢复的文档事件，让真实 SDK 执行恢复播放；设置页仍未关闭。
+  const restoredPreview = await localVideo.evaluate(async (video: HTMLVideoElement) => {
+    let playbackAttempts = 0;
+    const recordPlayback = () => { playbackAttempts++; };
+    video.addEventListener('play', recordPlayback);
+    try {
+      for (const state of ['hidden', 'visible']) {
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: state });
+        document.dispatchEvent(new Event('visibilitychange'));
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      return { playbackAttempts, paused: video.paused };
+    } finally {
+      Reflect.deleteProperty(document, 'visibilityState');
+      video.removeEventListener('play', recordPlayback);
+    }
+  });
+  expect(restoredPreview.playbackAttempts).toBeGreaterThan(0);
+  expect(restoredPreview.paused).toBe(true);
+  await page.getByRole('button', { name: '返回应用', exact: true }).click();
+  await expect.poll(visibility).toMatchObject({ A: true, B: true });
+  await expect.poll(() => localVideo.evaluate((video: HTMLVideoElement) => video.paused)).toBe(false);
+  expect(await localVideo.evaluate((video: HTMLVideoElement, stream) => video.srcObject === stream, localStream)).toBe(true);
+  expect(await localVideo.evaluate((video: HTMLVideoElement) => (video.srcObject as MediaStream).getVideoTracks()[0].readyState)).toBe('live');
+  expect(await page.getByLabel('成员A的共享画面', { exact: true }).evaluate(
+    (video: HTMLVideoElement, stream) => video.srcObject === stream, remoteStream)).toBe(true);
+  await page.getByRole('button', { name: '单路观看成员A的共享画面', exact: true }).click();
+  await expect.poll(visibility).toMatchObject({ A: true, B: false });
+  await page.getByRole('button', { name: '返回多人舞台', exact: true }).click();
+  await expect.poll(visibility).toMatchObject({ A: true, B: true });
+  await page.getByRole('button', { name: /^另一群组，/ }).click();
+  await expect.poll(visibility).toMatchObject({ A: false, B: false });
+  await page.getByRole('button', { name: '返回当前通话群组' }).click();
+  await expect.poll(visibility).toMatchObject({ A: true, B: true });
+  await localStream.dispose();
+  await remoteStream.dispose();
+});
+
+test('成员小窗请求低层，四路舞台请求主层，单路隐藏其他画面且返回恢复', async ({ page }) => {
+  await sharing(page, ['A', 'B', 'C', 'D', 'E']);
+  await page.getByRole('button', { name: '展开其他成员' }).click();
+  await page.getByRole('button', { name: '下一页成员' }).click();
+  const qualities = () => page.evaluate(() => (window as unknown as {
+    __stageTest: { quality(): Record<string, number> }
+  }).__stageTest.quality());
+  const visibility = () => page.evaluate(() => (window as unknown as {
+    __stageTest: { visibility(): Record<string, boolean> }
+  }).__stageTest.visibility());
+  // SDK 的 LOW=0、HIGH=2；舞台四路也请求主层，不设置额外的帧率上限。
+  await expect.poll(qualities).toMatchObject({ A: 2, B: 2, C: 2, D: 2, E: 0 });
+  await page.getByRole('button', { name: '单路观看成员A的共享画面', exact: true }).click();
+  await expect.poll(visibility).toMatchObject({ A: true, B: false, C: false, D: false, E: false });
+  await page.getByRole('button', { name: '返回多人舞台', exact: true }).click();
+  await expect.poll(visibility).toMatchObject({ A: true, B: true, C: true, D: true });
+  await expect.poll(qualities).toMatchObject({ A: 2, B: 2, C: 2, D: 2 });
+});
 
 test('四槽自动补位、手工替换、单路返回及预览其他群保持安排', async ({ page }) => {
   await sharing(page, ['A']);

@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { AppWindow, Fullscreen, GripVertical, HeadphoneOff, Headphones, Maximize2, MicOff, Minimize2, Monitor, X } from '@lucide/vue';
-import { Track, type Participant } from 'livekit-client';
+import { Track, VideoQuality, type Participant, type RemoteTrackPublication } from 'livekit-client';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, normalizeAudioVolume } from '../rtc/audioPreferences';
 import VoiceLevelMic from './VoiceLevelMic.vue';
+import { observeLocalScreenPreview } from '../rtc/localScreenPreview';
+import { observeScreenShareView } from '../rtc/screenShareViewing';
 import { mapRemotePointerToScreen, RemoteInputPresses, remoteKeyFromCode, type RemoteControlInput } from '../rtc/remoteControl';
 
 const props = withDefaults(defineProps<{
@@ -70,6 +72,7 @@ const media = computed(() => {
   void props.revision;
   const publication = props.participant.getTrackPublication(Track.Source.ScreenShare);
   return {
+    publication,
     track: publication?.track,
     muted: publication?.isMuted,
     sharing: props.participant.isScreenShareEnabled,
@@ -100,12 +103,27 @@ const remoteAudioLabel = computed(() => {
 const selectable = computed(() => props.variant !== 'viewer' && media.value.sharing);
 const fullscreenAvailable = document.fullscreenEnabled;
 
-watch([videoElement, () => media.value.track], ([element, track], _, onCleanup) => {
+watch([videoElement, () => media.value.track, () => media.value.publication, () => props.isLocal], ([element, track, publication, isLocal], _, onCleanup) => {
   if (!element || !track) return;
-  // 由 SDK 观察已绑定视频元素的尺寸和可见性，切换卡片／舞台／全屏时自动请求对应层。
+  // 本地仅绑定采集轨道，远端由观看需求统一选择层；不创建第二份订阅。
   track.attach(element);
+  const stopPreviewObservation = isLocal
+    ? observeLocalScreenPreview(element, () => emit('notice', '本地共享预览无法播放，请重新打开观看画面。'))
+    : undefined;
+  const viewing = !isLocal && publication
+    ? observeScreenShareView(publication as RemoteTrackPublication, element,
+      props.variant === 'viewer' ? VideoQuality.HIGH : VideoQuality.LOW)
+    : undefined;
+  const stopQualityWatch = watch(() => props.variant, (variant) => {
+    viewing?.setQuality(variant === 'viewer' ? VideoQuality.HIGH : VideoQuality.LOW);
+  });
   // 只解除当前元素的绑定，其他主画面或缩略图仍可使用同一轨道。
-  onCleanup(() => track.detach(element));
+  onCleanup(() => {
+    stopPreviewObservation?.();
+    stopQualityWatch();
+    viewing?.stop();
+    track.detach(element);
+  });
 }, { flush: 'post' });
 
 async function openFullscreen() {

@@ -1,7 +1,15 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { readScreenShareQuality, saveScreenShareQuality, screenShareQuality, screenShareVideoPreset } from './screenShareQuality';
+import { readScreenShareQuality, saveScreenShareQuality, screenShareDegradationPreference, screenShareQuality, screenShareVideoPreset } from './screenShareQuality';
 
 afterEach(() => vi.unstubAllGlobals());
+
+it('游戏优先保留帧率，文字优先保留尺寸，节省流量使用平衡策略', () => {
+  expect(screenShareDegradationPreference('standard')).toBe('maintain-framerate');
+  expect(screenShareDegradationPreference('highFrameRate')).toBe('maintain-framerate');
+  expect(screenShareDegradationPreference('text')).toBe('maintain-resolution');
+  expect(screenShareDegradationPreference('economy')).toBe('balanced');
+  expect(() => screenShareDegradationPreference('unknown' as never)).toThrow('invalidScreenShareQuality');
+});
 
 it('restores only known presets and remembers the confirmed selection', () => {
   let stored: string | null = 'removedPreset';

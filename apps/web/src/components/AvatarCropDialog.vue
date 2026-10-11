@@ -5,7 +5,7 @@ import {
 } from '../profile/avatarImage';
 
 const CROP_VIEWPORT_SIZE = 280;
-const props = defineProps<{ file: File; title: string }>();
+const props = withDefaults(defineProps<{ file: File; title: string; shape?: 'circle' | 'rounded-square' }>(), { shape: 'circle' });
 const emit = defineEmits<{ apply: [avatar: string]; cancel: [] }>();
 const dialog = ref<HTMLElement | null>(null);
 const source = shallowRef<ImageBitmap | null>(null);
@@ -113,12 +113,12 @@ async function applyCrop() {
         aria-labelledby="avatar-crop-title" tabindex="-1">
         <div>
           <h3 id="avatar-crop-title">{{ title }}</h3>
-          <small>拖动图片调整位置，滚轮缩放；圆框内是头像最终显示范围。</small>
+          <small>拖动图片调整位置，滚轮缩放；{{ shape === 'circle' ? '圆框' : '方框' }}内是头像最终显示范围。</small>
         </div>
         <div class="avatar-crop-viewport" aria-label="拖动调整头像位置"
           @pointerdown="beginDrag" @pointermove="moveDrag" @pointerup="endDrag" @pointercancel="endDrag" @wheel.prevent="zoomWithWheel">
           <img v-if="source" :src="sourceUrl" :style="imageStyle" alt="待裁剪头像" draggable="false" />
-          <span class="avatar-crop-guide" aria-hidden="true" />
+          <span class="avatar-crop-guide" :class="{ 'is-rounded-square': shape === 'rounded-square' }" aria-hidden="true" />
         </div>
         <label class="avatar-crop-zoom">缩放
           <input v-model.number="zoom" aria-label="头像缩放" type="range" min="1" max="3" step="0.01" :disabled="!source || processing" />
@@ -134,3 +134,7 @@ async function applyCrop() {
     </div>
   </Teleport>
 </template>
+
+<style scoped>
+.avatar-crop-guide.is-rounded-square { border-radius: 8px; }
+</style>

@@ -1,7 +1,6 @@
 import { markRaw, onScopeDispose, ref, shallowRef } from 'vue';
 import {
-  AudioPresets, ConnectionState, DisconnectReason, LocalAudioTrack, Room, RoomEvent, Track, supportsAV1,
-  type VideoCodec,
+  AudioPresets, ConnectionState, DisconnectReason, LocalAudioTrack, Room, RoomEvent, Track,
   type LocalTrack, type Participant, type RemoteParticipant,
   type ParticipantTrackPermission,
 } from 'livekit-client';
@@ -17,7 +16,8 @@ import { NativeMicrophoneAudioSession, type NativeMicrophoneSettings } from './n
 import { nativeScreenAudioMode } from './nativeScreenAudioMode';
 import { REMOTE_CONTROL_TOPIC, type RemoteControlInput } from './remoteControl';
 import { RemoteControlSession, type RemoteControlShare } from './remoteControlSession';
-import { screenShareQuality, screenShareVideoPreset, type ScreenShareQualityId } from './screenShareQuality';
+import { screenShareDegradationPreference, screenShareQuality, screenShareThumbnailPreset, screenShareVideoPreset, type ScreenShareQualityId } from './screenShareQuality';
+import { syncScreenShareViewing } from './screenShareViewing';
 
 type RoomStatus = 'idle' | 'joining' | 'connected' | 'reconnecting';
 type MediaSource = Track.Source.Microphone | Track.Source.ScreenShare;
@@ -64,17 +64,6 @@ interface RtcRoomOptions {
   inputGain: number;
   processing: AudioProcessingSettings;
   events?: RtcRoomEvents;
-}
-
-function preferredVideoCodec(): VideoCodec {
-  try {
-    // RTX 40 系列和新 Chromium 可协商 AV1；实际是否由硬件编码仍以诊断中的 encoderImplementation 为准。
-    if (supportsAV1()) return 'av1';
-    const codecs = RTCRtpSender.getCapabilities?.('video')?.codecs ?? [];
-    return codecs.some(({ mimeType }) => mimeType.toLowerCase() === 'video/h264') ? 'h264' : 'vp8';
-  } catch {
-    return 'vp8';
-  }
 }
 
 function captureErrorMessage(error: unknown, source: MediaSource): string {
@@ -268,8 +257,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       // 2. 建立独立的 RTC 会话；连接本身不采集麦克风、摄像头或屏幕。
       // TODO: 根据异地实测调整共享画质，并记录连接类型、RTT、丢包和码率以排查代理影响。
       joiningRoom = markRaw(new Room({
-        // 非可见画面仍由 SDK 暂停订阅，减少多路共享时的接收负担。
-        adaptiveStream: true,
+        // 屏幕按小窗/舞台的明确用途合并需求，不按舞台尺寸自动限制主画面质量。
+        adaptiveStream: false,
         dynacast: true,
         // 远端成员可在本机单独放大到 200%；统一由一个 AudioContext 混音，避免额外音频管线。
         webAudioMix: true,
@@ -279,14 +268,12 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           autoGainControl: microphoneProcessing.autoGainControl,
         },
         publishDefaults: {
-          // 优先使用客户端可协商的 AV1，否则回退 H.264；实际硬件编码状态由媒体诊断确认。
-          videoCodec: preferredVideoCodec(),
+          // 屏幕统一使用 H.264 双层，实际编码器及高帧率表现由设备验收确认。
+          videoCodec: 'h264',
           // 游戏共享不应在同一连接的其他媒体竞争时被优先降级。
           screenShareEncoding: { ...SCREEN_SHARE_PRESET.encoding, priority: 'high' },
-          // 双开实测多层 H.264 均由 OpenH264 软件编码；单层优先保留 1080p/60 观看画质。
-          simulcast: false,
-          // 网络受限时优先保留游戏画面尺寸，必要时降低帧率而不是立即变糊。
-          degradationPreference: 'maintain-resolution',
+          simulcast: true,
+          screenShareSimulcastLayers: [screenShareThumbnailPreset()],
         },
       }));
       const currentRoom = joiningRoom;
@@ -331,6 +318,11 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         RoomEvent.ParticipantAttributesChanged,
         RoomEvent.AudioPlaybackStatusChanged,
       ].forEach((event) => currentRoom.on(event, refresh));
+      currentRoom.on(RoomEvent.TrackSubscribed, (_track, publication) => {
+        if (activeRoom.value === currentRoom && publication.source === Track.Source.ScreenShare) {
+          syncScreenShareViewing(publication);
+        }
+      });
       currentRoom.on(RoomEvent.ParticipantConnected, (participant) => {
         updateTrackSubscriptionPermissions(currentRoom);
         if (remoteEventsEnabled) options?.events?.participantJoined?.(participant.identity);
@@ -816,7 +808,11 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         if (track.source === Track.Source.ScreenShare || (nativeVideo && track === nativeVideo.track)) {
           return participant.publishTrack(track, {
             source: Track.Source.ScreenShare,
-            videoEncoding: { ...sharePreset.encoding, priority: 'high' },
+            screenShareEncoding: { ...sharePreset.encoding, priority: 'high' },
+            videoCodec: 'h264', simulcast: true,
+            screenShareSimulcastLayers: [screenShareThumbnailPreset()],
+            // 游戏优先流畅，文字优先清晰；不把同一降级策略套到房间其他视频上。
+            degradationPreference: screenShareDegradationPreference(selectedQuality),
           });
         }
         if (nativeAudio && track === nativeAudio.track) {
@@ -824,8 +820,19 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         }
         return participant.publishTrack(track);
       }));
-      const failedPublish = publishResults.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      const audioTrack = nativeAudio?.track;
+      const failedPublish = publishResults.find((result, index): result is PromiseRejectedResult =>
+        result.status === 'rejected' && capturedTracks[index] !== audioTrack);
       if (failedPublish) throw failedPublish.reason;
+      const audioPublish = audioTrack ? publishResults[capturedTracks.indexOf(audioTrack)] : undefined;
+      if (nativeAudio && audioTrack && audioPublish?.status === 'rejected') {
+        // 共享声音是可选轨道；发布失败只撤销它，不能连带停止已发布的画面。
+        retirePublicTrack(currentRoom, audioTrack);
+        if (nativeScreenAudioSession === nativeAudio) nativeScreenAudioSession = null;
+        await nativeAudio.stop().catch(reportNativeAudioCleanupFailure);
+        nativeAudio = null;
+        if (isCurrentTask()) notice.value = '仅共享画面：共享声音发布失败，请停止共享后重试。';
+      }
       published = true;
       if (!isCurrentTask()) return;
       if (source === Track.Source.ScreenShare) currentScreenShareQuality.value = selectedQuality;

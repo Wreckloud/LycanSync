@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onScopeDispose, reactive, ref, watch } from 'vue';
 import { AudioLines, ChevronDown, ChevronLeft, ChevronRight, Copy, CornerUpLeft, Gamepad2, Headphones,
   LogOut, MicOff, Minus, MonitorUp, Plus, RadioTower,
-  Settings, Square, UserRound, UsersRound, Volume2, X } from '@lucide/vue';
+  Settings, Square, UserRound, Volume2, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
 import ParticipantCard from './components/ParticipantCard.vue';
 import VoiceLevelMic from './components/VoiceLevelMic.vue';
@@ -10,7 +10,7 @@ import RemoteAudio from './components/RemoteAudio.vue';
 import IconButton from './components/IconButton.vue';
 import SettingsView from './components/SettingsView.vue';
 import AppNotice from './components/AppNotice.vue';
-import AvatarCropDialog from './components/AvatarCropDialog.vue';
+import GroupEntryDialog from './components/GroupEntryDialog.vue';
 import GroupChat from './components/GroupChat.vue';
 import { createGroup, findGroup, findGroupPresences, findGroups, nextPresenceWaitRequest, waitForGroupPresenceChanges,
   type GroupDetail, type GroupMember, type GroupPresence, type GroupPresenceChangeCursor, type GroupSummary } from './group/groupApi';
@@ -77,7 +77,7 @@ const NATIVE_SOURCE_REFRESH_INTERVAL_MS = 1_000;
 let nativeSourceChooser: ReturnType<typeof createNativeVideoSourceSelection> | undefined;
 let nativeSourceChooserGeneration = 0;
 let nativeSourceRefreshTimer: ReturnType<typeof setTimeout> | undefined;
-let nativeSourceRefresh: { generation: number; promise: Promise<void> } | undefined;
+let nativeSourceRefresh: { promise: Promise<void> } | undefined;
 let nativeThumbnailRefresh: Promise<void> | undefined;
 const nativeSourceLoading = ref(false);
 const nativeSourceError = ref('');
@@ -163,7 +163,7 @@ async function refreshNativeSources(
       nativeSourceError.value = error instanceof Error ? `无法读取共享来源（${error.message}）` : '无法读取共享来源';
     }
   })();
-  nativeSourceRefresh = { generation, promise };
+  nativeSourceRefresh = { promise };
   try { await promise; }
   finally {
     if (nativeSourceRefresh?.promise === promise) nativeSourceRefresh = undefined;
@@ -322,13 +322,6 @@ const groupError = ref('');
 const summaryError = ref<string | null>(null);
 const groupLoading = ref(false);
 const editorOpen = ref(false);
-const formName = ref('');
-const formDescription = ref('');
-const formAvatar = ref('');
-const formAvatarFile = ref<File | null>(null);
-const groupAvatarInput = ref<HTMLInputElement | null>(null);
-const formError = ref('');
-const formBusy = ref(false);
 let detailRequest: AbortController | null = null;
 let listRequest: AbortController | null = null;
 let groupPresenceRequest: AbortController | null = null;
@@ -616,36 +609,15 @@ onScopeDispose(() => {
 
 function openEditor() {
   editorOpen.value = true;
-  formName.value = '';
-  formDescription.value = '';
-  formAvatar.value = '';
-  formAvatarFile.value = null;
-  formError.value = '';
 }
 
-function pickGroupAvatar(event: Event) {
-  const input = event.target as HTMLInputElement;
-  formAvatarFile.value = input.files?.[0] ?? null;
-  input.value = '';
-  formError.value = '';
-}
-
-async function submitEditor() {
-  if (formBusy.value || formAvatarFile.value) return;
-  formBusy.value = true;
-  formError.value = '';
-  try {
-    const detail = await createGroup(formName.value, formDescription.value, formAvatar.value);
-    await refreshGroups();
-    groups.value = groups.value.some((group) => group.id === detail.id) ? groups.value : [...groups.value, detail];
-    selectedGroupId.value = detail.id;
-    selectedGroupDetail.value = detail;
-    editorOpen.value = false;
-  } catch (error) {
-    formError.value = error instanceof Error ? error.message : '操作失败';
-  } finally {
-    formBusy.value = false;
-  }
+async function createGroupFromDialog(name: string, description: string, avatar: string) {
+  const detail = await createGroup(name, description, avatar);
+  await refreshGroups();
+  groups.value = groups.value.some((group) => group.id === detail.id) ? groups.value : [...groups.value, detail];
+  selectedGroupId.value = detail.id;
+  selectedGroupDetail.value = detail;
+  editorOpen.value = false;
 }
 const joinedGroupId = ref<string | null>(null);
 const joiningGroupId = ref<string | null>(null);
@@ -1315,36 +1287,7 @@ function participantListening(participant: Participant) {
         </footer>
       </aside>
     </div>
-    <div v-if="editorOpen" class="dialog-backdrop" @keydown.esc="!formBusy && !formAvatarFile && (editorOpen = false)">
-      <form class="group-dialog" role="dialog" aria-modal="true" aria-label="创建群组" :inert="Boolean(formAvatarFile)" @submit.prevent="submitEditor">
-        <h2>创建群组</h2>
-        <div class="group-avatar-settings">
-          <div class="group-avatar-preview" aria-label="群组头像预览">
-            <img v-if="formAvatar" :src="formAvatar" alt="" />
-            <UsersRound v-else :size="28" />
-          </div>
-          <div class="group-avatar-actions">
-            <input ref="groupAvatarInput" type="file" hidden aria-label="上传群组头像" accept="image/png,image/jpeg" @change="pickGroupAvatar" />
-            <button type="button" :disabled="formBusy" @click="groupAvatarInput?.click()">选择头像</button>
-            <button v-if="formAvatar" type="button" :disabled="formBusy" @click="formAvatar = ''">移除头像</button>
-            <small>可选 PNG/JPEG，支持裁剪；原图不超过 10 MB。</small>
-          </div>
-        </div>
-        <label>群组名称
-          <input v-model="formName" required maxlength="32" autocomplete="off" />
-        </label>
-        <label>群组描述（可选）
-          <textarea v-model="formDescription" maxlength="200" rows="3" />
-        </label>
-        <p v-if="formError" role="alert" class="group-error">{{ formError }}</p>
-        <div class="dialog-actions">
-          <button type="button" :disabled="formBusy" @click="editorOpen = false">取消</button>
-          <button type="submit" :disabled="formBusy || Boolean(formAvatarFile) || !formName.trim()">{{ formBusy ? '请稍候…' : '确定' }}</button>
-        </div>
-      </form>
-    </div>
-    <AvatarCropDialog v-if="formAvatarFile" :file="formAvatarFile" title="调整群组头像"
-      @apply="(avatar) => { formAvatar = avatar; formAvatarFile = null; }" @cancel="formAvatarFile = null" />
+    <GroupEntryDialog v-if="editorOpen" :create-group="createGroupFromDialog" @close="editorOpen = false" />
     </div>
     <SettingsView v-if="settingsOpen" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
       :preferences="audioPreferences" :rtc="rtc" :connected="connected" :input-level-percent="localInputLevelPercent"

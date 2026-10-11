@@ -62,7 +62,19 @@ test('创建群组只预览，并直接显示所有已注册账号的头像', as
   await createGroupButton.click();
   await page.getByLabel('群组名称').fill('周末开黑');
   await page.getByLabel('群组描述（可选）').fill('晚上一起玩');
-  await page.getByRole('dialog', { name: '创建群组' }).getByRole('button', { name: '确定' }).click();
+  const createDialog = page.getByRole('dialog', { name: '创建群组', exact: true });
+  const createBounds = await createDialog.boundingBox();
+  await createDialog.getByRole('button', { name: '加入群组', exact: true }).click();
+  const joinDialog = page.getByRole('dialog', { name: '加入群组', exact: true });
+  expect(await joinDialog.boundingBox()).toEqual(createBounds);
+  await joinDialog.getByLabel('群组邀请码', { exact: true }).fill('测试邀请码');
+  await joinDialog.getByLabel('群组邀请码', { exact: true }).press('Enter');
+  await expect(joinDialog.getByRole('button', { name: '加入群组', exact: true })).toBeDisabled();
+  expect(created).toBe(false);
+  await joinDialog.getByRole('button', { name: '创建群组', exact: true }).click();
+  await expect(createDialog.getByLabel('群组名称', { exact: true })).toHaveValue('周末开黑');
+  await expect(createDialog.getByLabel('群组描述（可选）', { exact: true })).toHaveValue('晚上一起玩');
+  await page.getByRole('dialog', { name: '创建群组' }).getByRole('button', { name: '创建群组', exact: true }).click();
   await expect(page.getByRole('heading', { name: '周末开黑' })).toBeVisible();
   expect(tokenRequests).toBe(0);
 
@@ -105,7 +117,7 @@ test('创建群组时可选择头像，群组栏显示裁剪后的图片', async
   await cropDialog.getByRole('button', { name: '应用头像' }).click();
   await expect(page.locator('.group-avatar-preview img')).toHaveJSProperty('naturalWidth', 256);
   await page.getByLabel('群组名称').fill('头像小队');
-  await page.getByRole('dialog', { name: '创建群组' }).getByRole('button', { name: '确定' }).click();
+  await page.getByRole('dialog', { name: '创建群组' }).getByRole('button', { name: '创建群组', exact: true }).click();
   expect(createdAvatar).toMatch(/^data:image\/png;base64,/);
   await expect(page.locator('.group-rail-avatar')).toHaveAttribute('src', createdAvatar);
   const railButtons = page.locator('.group-rail > button');

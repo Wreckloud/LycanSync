@@ -11,10 +11,13 @@
 | `services/api/src/main/java/com/lycansync/api/auth/service/AccessLinkService.java` | 服主激活、单人邀请和恢复 | 链接行锁、一次性消费与会话原子替换 |
 | `apps/web/electron/access-links.cjs` | 安装版邀请唤起校验 | 仅接受固定协议、HTTPS 服务器和一次性凭据 |
 | `apps/web/src/components/AccountAccessPrompt.vue` | 邀请确认 | 先检查，用户确认后兑换；已登录时保留原会话 |
+| `apps/web/src/components/GroupEntryDialog.vue` | 创建／加入群组弹窗 | 管理表单、裁剪和提交状态；创建结果由 App 更新，加入暂仅预览 |
 | `apps/web/src/components/settings/MemberAccessSettings.vue` | 服主管理 | 生成邀请、恢复原成员及查看链接记录 |
 | `apps/web/src/App.vue` | 群组界面、状态同步、音频设置和共享选择器 | 用户动作如何进入 RTC；页面状态不等于媒体资源 |
 | `apps/web/src/components` | 聊天、成员、播放和诊断组件 | props / emit、轨道展示、挂载与销毁 |
 | `apps/web/src/rtc/useRtcRoom.ts` | 房间连接、普通媒体采集发布、权限及离房清理 | 房间与任务身份；资源创建和停止路径 |
+| `apps/web/src/rtc/screenShareStage.ts` | 本机四槽舞台与观看排列 | 自动补位、手动排除、替换顺序和单路观看；不停止采集 |
+| `apps/web/src/rtc/screenShareViewing.ts`、`localScreenPreview.ts` | 远端观看需求与本地预览可见性 | 可见位置合并接收质量；隐藏不停止通话或对外共享 |
 | `apps/web/src/rtc/remoteControlSession.ts` | 远控申请、授权、输入发送和撤销 | 申请标识、授权归属、迟到响应与释放 |
 | `apps/web/electron/main.cjs` | 桌面窗口、HTTP 代理、IPC、音视频桥接 | 可信发送方校验、会话与主进程资源 |
 | `apps/web/electron/media-helper.cjs` | 管理 helper 子进程与请求响应 | 启动、超时、当前会话和退出 |
@@ -41,6 +44,8 @@
 ```
 
 `nativeMicrophoneAudio.ts`、`nativeScreenAudio.ts` 和 `nativeScreenVideo.ts` 持有页面侧资源。Worklet 在音频渲染线程消费队列；延后确认用于限制积压，不是远端播放确认。`useRtcRoom.ts` 负责把这些资源接入当前房间并协调停止。
+
+共享声音的启动或发布失败只清理该声音轨道并提示仅共享画面；视频发布失败仍结束本次共享。观看端移出舞台、隐藏页面和全屏切换只改变本机显示或接收需求，不改变发送端采集及公开权限。当前舞台请求主层、小窗请求低层，尚无按舞台路数进一步调低分辨率的策略。
 
 ### 浏览器
 

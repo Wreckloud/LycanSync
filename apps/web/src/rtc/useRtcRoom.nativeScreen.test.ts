@@ -211,6 +211,8 @@ vi.mock('livekit-client', () => {
     removeAllListeners() { this.handlers.clear(); }
   }
   class MockVideoPreset {
+    get width() { return this.resolution.width; }
+    get height() { return this.resolution.height; }
     resolution: { width: number; height: number };
     encoding: { maxBitrate: number; maxFramerate: number };
     constructor(width: number, height: number, bitrate: number, fps: number) {
@@ -226,7 +228,6 @@ vi.mock('livekit-client', () => {
     RoomEvent: events,
     Track: { Source: source },
     VideoPreset: MockVideoPreset,
-    supportsAV1: () => false,
   };
 });
 
@@ -383,9 +384,11 @@ describe('native screen share wiring', () => {
   });
 
   it.each([
-    { quality: 'economy', fps: 30, bitrate: 3_000_000 },
-    { quality: 'highFrameRate', fps: 120, bitrate: 20_000_000 },
-  ] as const)('passes the $quality selection to native capture and publication', async ({ quality, fps, bitrate }) => {
+    { quality: 'economy', fps: 30, bitrate: 3_000_000, degradation: 'balanced' },
+    { quality: 'standard', fps: 60, bitrate: 12_000_000, degradation: 'maintain-framerate' },
+    { quality: 'highFrameRate', fps: 120, bitrate: 20_000_000, degradation: 'maintain-framerate' },
+    { quality: 'text', fps: 30, bitrate: 8_000_000, degradation: 'maintain-resolution' },
+  ] as const)('passes the $quality selection to native capture and publication', async ({ quality, fps, bitrate, degradation }) => {
     configureNativeScreenDesktop();
     rtcMocks.selectedSources.mockResolvedValue({ sourceId: 'window:test:0', shareAudio: false, quality });
     const scope = effectScope();
@@ -400,7 +403,11 @@ describe('native screen share wiring', () => {
       expect(rtcMocks.nativeStarts).toHaveBeenCalledWith('window:test:0', fps, { hideCursor: false, hideBorder: false });
       expect(rtcMocks.published).toHaveBeenCalledWith(expect.anything(), {
         source: Track.Source.ScreenShare,
-        videoEncoding: expect.objectContaining({ maxFramerate: fps, maxBitrate: bitrate, priority: 'high' }),
+        screenShareEncoding: expect.objectContaining({ maxFramerate: fps, maxBitrate: bitrate, priority: 'high' }),
+        videoCodec: 'h264', simulcast: true,
+        screenShareSimulcastLayers: [expect.objectContaining({ width: 640, height: 360,
+          encoding: expect.objectContaining({ maxBitrate: 1_000_000, maxFramerate: 30 }) })],
+        degradationPreference: degradation,
       });
     } finally {
       await rtc.leave();
@@ -1535,6 +1542,37 @@ describe('native screen share wiring', () => {
       expect(rtcMocks.nativeAudioStops).toHaveBeenCalledWith('native-session');
       expect(rtcMocks.nativeStops).toHaveBeenCalledWith('native-session');
     } finally {
+      scope.stop();
+    }
+  });
+
+  it('共享声音发布失败只清理声音，保留画面和麦克风', async () => {
+    configureNativeScreenDesktop({ screenAudio: true });
+    rtcMocks.published.mockImplementation(async (_track, options) => {
+      if (options?.source === Track.Source.ScreenShareAudio) throw new Error('audio publication failed');
+    });
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({
+      inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false },
+      events: { selectNativeScreenSource: rtcMocks.selectedSources },
+    }))!;
+    try {
+      expect(await rtc.join('audio-publish-failure')).toBe(true);
+      const room = mockRoom();
+      const microphone = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
+      expect(room.localParticipant.getTrackPublication(Track.Source.ScreenShare)).toMatchObject({ track: expect.anything() });
+      expect(room.localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)).toBeUndefined();
+      expect(room.localParticipant.getTrackPublication(Track.Source.Microphone)).toBe(microphone);
+      expect(rtcMocks.nativeAudioStops).toHaveBeenCalledOnce();
+      expect(rtcMocks.nativeStops).not.toHaveBeenCalled();
+      expect(rtc.notice.value).toContain('仅共享画面');
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, false);
+      expect(rtcMocks.nativeStops).toHaveBeenCalledOnce();
+      expect(rtcMocks.nativeAudioStops).toHaveBeenCalledOnce();
+    } finally {
+      await rtc.leave();
       scope.stop();
     }
   });
