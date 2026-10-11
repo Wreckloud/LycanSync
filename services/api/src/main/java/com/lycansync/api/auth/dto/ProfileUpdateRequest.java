@@ -18,8 +18,7 @@ public record ProfileUpdateRequest(
         @Schema(description = "显示昵称，最多 32 个字符", example = "Wreckloud")
         String nickname,
         @NotNull
-        @Size(max = 131095)
-        @Schema(description = "PNG/JPEG data URL；图片最多 256 × 256、96 KiB；空串表示移除头像")
+        @Schema(description = "裁剪后的 PNG/JPEG data URL，最多 1024 × 1024、2 MiB；服务器统一为 256 × 256 PNG；空串移除头像")
         String avatar,
         @Size(max = 120)
         @Schema(description = "选填个性签名，最多 120 个字符；空串清空，省略或 null 保留原值")

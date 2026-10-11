@@ -1,4 +1,4 @@
-import { ApiRequestError, authenticatedFetch } from '../auth/authApi';
+import { authenticatedFetch, readApiError } from '../auth/authApi';
 
 export type ChatMessageType = 'TEXT' | 'IMAGE' | 'FILE';
 
@@ -30,13 +30,6 @@ function messagePath(groupId: string) {
   return '/api/groups/' + encodeURIComponent(groupId) + '/messages';
 }
 
-async function readError(response: Response): Promise<never> {
-  const problem = await response.json().catch(() => null);
-  throw new ApiRequestError(response.status,
-    typeof problem?.code === 'string' ? problem.code : 'UNKNOWN_ERROR',
-    typeof problem?.detail === 'string' ? problem.detail : `请求失败（HTTP ${response.status}）`);
-}
-
 export async function findMessages(groupId: string,
   cursor?: { beforeMessageId: string; afterMessageId?: never } | { afterMessageId: string; beforeMessageId?: never },
   signal?: AbortSignal): Promise<ChatMessagePage> {
@@ -46,7 +39,7 @@ export async function findMessages(groupId: string,
     headers: { Accept: 'application/json' },
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
   });
-  if (!response.ok) return readError(response);
+  if (!response.ok) throw await readApiError(response);
   return response.json() as Promise<ChatMessagePage>;
 }
 
@@ -60,7 +53,7 @@ export async function sendMessage(groupId: string, content: string, image?: File
     method: 'POST', headers: { Accept: 'application/json' }, body,
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
   });
-  if (!response.ok) return readError(response);
+  if (!response.ok) throw await readApiError(response);
   return response.json() as Promise<ChatMessage>;
 }
 
@@ -71,7 +64,7 @@ export async function findFileUpload(groupId: string, uploadId: string, signal?:
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
   });
   if (response.status === 204) return null;
-  if (!response.ok) return readError(response);
+  if (!response.ok) throw await readApiError(response);
   return response.json() as Promise<ChatMessage>;
 }
 
@@ -118,7 +111,7 @@ export async function sendFile(groupId: string, file: File, content: string, upl
     duplex: 'half',
     signal: AbortSignal.any([signal, AbortSignal.timeout(30 * 60_000)]),
   } as RequestInit & { duplex: 'half' });
-  if (!response.ok) return readError(response);
+  if (!response.ok) throw await readApiError(response);
   return response.json() as Promise<ChatMessage>;
 }
 
@@ -143,7 +136,7 @@ export async function downloadFile(groupId: string, attachment: ChatAttachment, 
       { headers: { Accept: 'application/octet-stream' },
         signal: AbortSignal.any([signal, AbortSignal.timeout(30 * 60_000)]) },
     );
-    if (!response.ok) return readError(response);
+    if (!response.ok) throw await readApiError(response);
     if (!response.body) throw new Error('服务器未返回文件内容');
     reader = response.body.getReader();
     let loadedBytes = 0;
@@ -168,6 +161,6 @@ export async function fetchAttachment(groupId: string, attachmentId: string, sig
     { headers: { Accept: 'image/png,image/jpeg' },
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000) },
   );
-  if (!response.ok) return readError(response);
+  if (!response.ok) throw await readApiError(response);
   return response.blob();
 }

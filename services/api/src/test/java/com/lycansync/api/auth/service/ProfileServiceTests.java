@@ -5,6 +5,7 @@ import com.lycansync.api.auth.exception.AuthException;
 import com.lycansync.api.auth.mapper.AuthMapper;
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.model.AuthUser;
+import com.lycansync.api.common.image.AvatarImageProcessor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -45,18 +46,19 @@ class ProfileServiceTests {
     }
 
     @Test
-    void shouldAcceptProcessedTransparentPng() throws IOException {
+    void shouldStoreAndReturnNormalizedTransparentPng() throws IOException {
         BufferedImage image = new BufferedImage(2, 2, BufferedImage.TYPE_INT_ARGB);
         image.setRGB(0, 0, 0x00000000);
         image.setRGB(1, 1, 0x80ff0000);
         String avatar = pngDataUrl(image);
-        when(mapper.updateProfile(USER_ID, "透明头像", avatar, null)).thenReturn(1);
-        when(mapper.findUserProfile(USER_ID)).thenReturn(new AuthUser(USER_ID, "透明头像", avatar, false, "", CREATED_AT));
+        String normalizedAvatar = AvatarImageProcessor.normalize(avatar);
+        when(mapper.updateProfile(USER_ID, "透明头像", normalizedAvatar, null)).thenReturn(1);
+        when(mapper.findUserProfile(USER_ID)).thenReturn(new AuthUser(USER_ID, "透明头像", normalizedAvatar, false, "", CREATED_AT));
 
         AuthUser updated = profileService.update(USER, new ProfileUpdateRequest("透明头像", avatar, null));
 
-        assertThat(updated.avatar()).isEqualTo(avatar);
-        verify(mapper).updateProfile(USER_ID, "透明头像", avatar, null);
+        assertThat(updated.avatar()).isEqualTo(normalizedAvatar).isNotEqualTo(avatar);
+        verify(mapper).updateProfile(USER_ID, "透明头像", normalizedAvatar, null);
     }
 
     @Test
@@ -68,13 +70,13 @@ class ProfileServiceTests {
     }
 
     @Test
-    void shouldRejectAvatarLargerThanStoredOutputLimit() {
+    void shouldRejectPayloadLargerThanCroppedUploadBudget() {
         String avatar = "data:image/png;base64,"
-                + Base64.getEncoder().encodeToString(new byte[96 * 1024 + 1]);
+                + Base64.getEncoder().encodeToString(new byte[2 * 1024 * 1024 + 1]);
 
         assertThatThrownBy(() -> profileService.update(USER, new ProfileUpdateRequest("小狼", avatar, null)))
                 .isInstanceOf(AuthException.class)
-                .hasMessage("头像不能超过 96 KB");
+                .hasMessage("裁剪后的头像数据过大，请重新裁剪后重试");
         verifyNoInteractions(mapper);
     }
 
@@ -88,11 +90,11 @@ class ProfileServiceTests {
     }
 
     @Test
-    void shouldRejectImageLargerThanAvatarDimensions() throws IOException {
-        String avatar = pngDataUrl(new BufferedImage(257, 256, BufferedImage.TYPE_INT_ARGB));
+    void shouldRejectImageLargerThanCroppedUploadDimensions() throws IOException {
+        String avatar = pngDataUrl(new BufferedImage(1025, 256, BufferedImage.TYPE_INT_ARGB));
         assertThatThrownBy(() -> profileService.update(USER, new ProfileUpdateRequest("小狼", avatar, null)))
                 .isInstanceOf(AuthException.class)
-                .hasMessage("头像尺寸不能超过 256 × 256");
+                .hasMessage("裁剪后的头像尺寸过大，请重新裁剪后重试");
         verifyNoInteractions(mapper);
     }
 

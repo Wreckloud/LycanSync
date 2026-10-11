@@ -32,6 +32,28 @@ export class ApiRequestError extends Error {
 
 let browserSession: string | null = null;
 
+const requestErrorMessages: Record<number, string> = {
+  400: '提交内容不符合要求，请检查后重试。',
+  401: '登录已失效，请重新登录。',
+  403: '没有权限执行此操作。',
+  404: '请求的内容不存在或已被移除。',
+  409: '当前状态无法完成此操作，请刷新后重试。',
+  413: '提交内容过大，请缩小图片或减少内容后重试。',
+  429: '操作过于频繁，请稍后重试。',
+};
+
+// 桌面代理和反向代理可能返回空正文或 HTML；保留状态与业务代码，不把它们当作成功。
+export async function readApiError(response: Response): Promise<ApiRequestError> {
+  const problem = await response.json().catch(() => null);
+  const detail = typeof problem?.detail === 'string' ? problem.detail.trim() : '';
+  const message = typeof problem?.message === 'string' ? problem.message.trim() : '';
+  const fallback = requestErrorMessages[response.status]
+    ?? (response.status >= 500 ? '服务暂时不可用，请稍后重试。' : '请求未完成，请稍后重试。');
+  return new ApiRequestError(response.status,
+    typeof problem?.code === 'string' ? problem.code : response.status === 413 ? 'REQUEST_TOO_LARGE' : 'UNKNOWN_ERROR',
+    detail || message || fallback);
+}
+
 const publicApiPaths = new Set([
   '/api/auth/options',
   '/api/auth/access/preview',
@@ -70,14 +92,7 @@ export async function authRequest<T>(path: string, method = 'GET', body?: unknow
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: signal ?? AbortSignal.timeout(15000),
   });
-  if (!response.ok) {
-    const problem = await response.json().catch(() => null);
-    const code = typeof problem?.code === 'string' ? problem.code : 'UNKNOWN_ERROR';
-    const message = typeof problem?.detail === 'string'
-      ? problem.detail
-      : (typeof problem?.message === 'string' ? problem.message : `请求失败（HTTP ${response.status}）`);
-    throw new ApiRequestError(response.status, code, message);
-  }
+  if (!response.ok) throw await readApiError(response);
   if (response.status === 204) return undefined as T;
   return response.json();
 }

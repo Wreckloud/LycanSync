@@ -1289,17 +1289,6 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .settings-section button:not(:disabled):hover { background: var(--panel); border-color: var(--muted); }
 .settings-section button:disabled { opacity: .45; cursor: not-allowed; }
 @media (max-width: 760px) { .settings-row { grid-template-columns: minmax(0, 1fr); } }
-.avatar-crop-backdrop { z-index: 110; }
-.avatar-crop-dialog { width: min(406px, 100%); max-height: 90dvh; overflow-y: auto; display: grid; justify-items: center; gap: 14px; }
-.avatar-crop-dialog > div:first-child { width: 100%; }
-.avatar-crop-dialog h3 { margin: 0 0 2px; font-size: 16px; }
-.avatar-crop-viewport { position: relative; width: 280px; height: 280px; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; background: #06080b; cursor: grab; touch-action: none; }
-.avatar-crop-viewport:active { cursor: grabbing; }
-.avatar-crop-viewport img { position: absolute; max-width: none; transform: translate(-50%, -50%); pointer-events: none; user-select: none; }
-.avatar-crop-guide { position: absolute; inset: 12px; border: 2px solid #ffffffd9; border-radius: 50%; box-shadow: 0 0 0 999px #0008; pointer-events: none; }
-.avatar-crop-zoom { width: 100%; grid-template-columns: auto minmax(0, 1fr); align-items: center; }
-.avatar-crop-zoom input { padding: 0; accent-color: var(--accent); }
-.avatar-crop-actions { width: 100%; margin-top: 0; }
 .profile-avatar { width: 64px; height: 64px; object-fit: cover; border-radius: 50%; }
 
 .auth-server-settings { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border); }

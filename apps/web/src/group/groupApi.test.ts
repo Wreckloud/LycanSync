@@ -1,8 +1,15 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { nextPresenceWaitRequest, waitForGroupPresenceChanges } from './groupApi';
+import { createGroup, nextPresenceWaitRequest, waitForGroupPresenceChanges } from './groupApi';
 
 describe('group presence change waiting API', () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  test('创建群组的空正文 413 使用统一错误文案，不返回默认群组', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 413 })));
+    await expect(createGroup('开黑', '', 'data:image/png;base64,abc')).rejects.toMatchObject({
+      status: 413, code: 'REQUEST_TOO_LARGE', message: '提交内容过大，请缩小图片或减少内容后重试。',
+    });
+  });
 
   test('sends only the group cursor and client waiter identity to the fixed endpoint', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({

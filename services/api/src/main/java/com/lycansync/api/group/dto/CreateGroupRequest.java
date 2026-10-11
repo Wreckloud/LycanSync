@@ -19,8 +19,7 @@ public record CreateGroupRequest(
         @Size(max = 200)
         @Schema(description = "群组描述，可省略或留空", example = "周六晚上随叫随到")
         String description,
-        @Size(max = 131095)
-        @Schema(description = "PNG/JPEG data URL；图片最多 256 × 256、96 KiB；可省略")
+        @Schema(description = "裁剪后的 PNG/JPEG data URL，最多 1024 × 1024、2 MiB；服务器统一为 256 × 256 PNG；可省略")
         String avatar
 ) {
 }

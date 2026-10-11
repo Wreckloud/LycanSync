@@ -5,6 +5,7 @@ import com.lycansync.api.auth.dto.LocalRegistrationRequest;
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.service.AuthService;
 import com.lycansync.api.auth.service.LocalAuthService;
+import com.lycansync.api.common.image.AvatarImageProcessor;
 import com.lycansync.api.group.dto.CreateGroupRequest;
 import com.lycansync.api.group.service.GroupService;
 import com.lycansync.api.presence.dto.PresenceHeartbeatRequest;
@@ -328,18 +329,19 @@ class GroupApplicationIT {
     }
 
     @Test
-    void shouldStoreValidatedGroupAvatar() throws Exception {
+    void shouldStoreNormalizedGroupAvatar() throws Exception {
         String token = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
         String body = objectMapper.writeValueAsString(new CreateGroupRequest("有头像的小队", "", AVATAR));
+        String normalizedAvatar = AvatarImageProcessor.normalize(AVATAR);
         mvc.perform(post("/api/groups")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.avatar").value(AVATAR));
+                .andExpect(jsonPath("$.avatar").value(normalizedAvatar));
         mvc.perform(get("/api/groups").header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].avatar").value(AVATAR));
-        assertThat(jdbc.sql("SELECT avatar FROM chat_group").query(String.class).single()).isEqualTo(AVATAR);
+                .andExpect(jsonPath("$[0].avatar").value(normalizedAvatar));
+        assertThat(jdbc.sql("SELECT avatar FROM chat_group").query(String.class).single()).isEqualTo(normalizedAvatar);
     }
 
     @Test

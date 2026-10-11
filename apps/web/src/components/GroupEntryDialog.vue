@@ -2,6 +2,8 @@
 import { computed, nextTick, onMounted, onScopeDispose, ref } from 'vue';
 import { ArrowRight, Link, Pencil, UsersRound } from '@lucide/vue';
 import AvatarCropDialog from './AvatarCropDialog.vue';
+import InlineFeedback from './InlineFeedback.vue';
+import { useAvatarCrop } from '../profile/useAvatarCrop';
 
 const props = defineProps<{ createGroup: (name: string, description: string, avatar: string) => Promise<void> }>();
 const emit = defineEmits<{ close: [] }>();
@@ -10,43 +12,36 @@ const name = ref('');
 const description = ref('');
 const avatar = ref('');
 const invitationCode = ref('');
-const cropFile = ref<File | null>(null);
 const avatarInput = ref<HTMLInputElement | null>(null);
 const avatarButton = ref<HTMLButtonElement | null>(null);
 const dialog = ref<HTMLFormElement | null>(null);
 const busy = ref(false);
 const error = ref('');
+const { cropSource, picking, pickAvatar, clearCrop } = useAvatarCrop(error);
 const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 const creating = computed(() => mode.value === 'create');
 const title = computed(() => creating.value ? '创建群组' : '加入群组');
 
 function close() {
-  if (!busy.value && !cropFile.value) emit('close');
+  if (!busy.value && !cropSource.value) emit('close');
 }
 
 function switchMode() {
-  if (busy.value || cropFile.value) return;
+  if (busy.value || picking.value || cropSource.value) return;
   mode.value = creating.value ? 'join' : 'create';
-  error.value = '';
-}
-
-function pickAvatar(event: Event) {
-  const input = event.target as HTMLInputElement;
-  cropFile.value = input.files?.[0] ?? null;
-  input.value = '';
   error.value = '';
 }
 
 async function finishCrop(value?: string) {
   if (value !== undefined) avatar.value = value;
-  cropFile.value = null;
+  clearCrop();
   await nextTick();
   avatarButton.value?.focus();
 }
 
 async function submit() {
   // 加入页仅用于布局预览，不能落入创建请求或伪报加入成功。
-  if (!creating.value || busy.value || cropFile.value || !name.value.trim()) return;
+  if (!creating.value || busy.value || picking.value || cropSource.value || !name.value.trim()) return;
   busy.value = true;
   error.value = '';
   try {
@@ -79,10 +74,10 @@ onScopeDispose(() => { if (returnFocus?.isConnected) returnFocus.focus(); });
 <template>
   <div class="dialog-backdrop" @keydown.esc.stop="close">
     <form ref="dialog" class="group-entry" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1"
-      :inert="!!cropFile" @submit.prevent="submit" @keydown="keepFocus">
+      :inert="!!cropSource" @submit.prevent="submit" @keydown="keepFocus">
       <header class="entry-header">
         <div><h2>{{ title }}</h2><p>{{ creating ? '让朋友们有个相聚的地方' : '找到你的开黑小队' }}</p></div>
-        <button type="button" class="entry-switch" :disabled="busy" @click="switchMode">
+        <button type="button" class="entry-switch" :disabled="busy || picking" @click="switchMode">
           {{ creating ? '加入群组' : '创建群组' }}<ArrowRight :size="16" aria-hidden="true" />
         </button>
       </header>
@@ -90,13 +85,13 @@ onScopeDispose(() => { if (returnFocus?.isConnected) returnFocus.focus(); });
         <div class="entry-identity">
           <div class="entry-avatar-area">
             <button v-if="creating" ref="avatarButton" type="button" class="group-avatar-preview" aria-label="选择群组头像"
-              :disabled="busy" @click="avatarInput?.click()">
+              :disabled="busy || picking" @click="avatarInput?.click()">
               <img v-if="avatar" :src="avatar" alt="群组头像预览" />
               <UsersRound v-else :size="32" />
               <span class="entry-avatar-overlay" aria-hidden="true"><Pencil :size="18" /><span>编辑</span></span>
             </button>
             <div v-else class="group-avatar-preview entry-join-icon" aria-hidden="true"><Link :size="32" /></div>
-            <button v-if="creating && avatar" type="button" class="entry-remove-avatar" :disabled="busy" @click="avatar = ''">移除</button>
+            <button v-if="creating && avatar" type="button" class="entry-remove-avatar" :disabled="busy || picking" @click="avatar = ''">移除</button>
           </div>
           <input ref="avatarInput" type="file" hidden aria-label="上传群组头像" accept="image/png,image/jpeg" @change="pickAvatar" />
           <label v-if="creating" class="entry-field entry-name">群组名称
@@ -117,14 +112,14 @@ onScopeDispose(() => { if (returnFocus?.isConnected) returnFocus.focus(); });
         </div>
       </div>
       <footer class="entry-footer">
-        <div class="entry-feedback"><p v-if="error" role="alert">{{ error }}</p><span v-else-if="busy" role="status">正在创建…</span></div>
+        <InlineFeedback class="entry-feedback" :message="error" :status="busy ? '正在创建…' : picking ? '正在读取图片…' : ''" />
         <div class="button-actions">
           <button type="button" :disabled="busy" @click="close">取消</button>
-          <button type="submit" class="confirm-button" :disabled="!creating || busy || !name.trim()">{{ creating ? '创建群组' : '加入群组' }}</button>
+          <button type="submit" class="confirm-button" :disabled="!creating || busy || picking || !name.trim()">{{ creating ? '创建群组' : '加入群组' }}</button>
         </div>
       </footer>
     </form>
-    <AvatarCropDialog v-if="cropFile" :file="cropFile" title="调整群组头像" shape="rounded-square" @apply="finishCrop" @cancel="finishCrop()" />
+    <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整群组头像" shape="rounded-square" @apply="finishCrop" @cancel="finishCrop()" />
   </div>
 </template>
 
@@ -159,8 +154,7 @@ onScopeDispose(() => { if (returnFocus?.isConnected) returnFocus.focus(); });
 .entry-join-placeholder strong { font-size: 14px; font-weight: 500; }
 .entry-join-placeholder span { color: var(--muted); font-size: 12px; }
 .entry-footer { display: flex; align-items: center; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
-.entry-feedback { flex: 1; min-width: 0; height: 32px; overflow: auto; color: var(--muted); font-size: 12px; line-height: 16px; }
-.entry-feedback p { margin: 0; color: var(--danger); }
+.entry-feedback { flex: 1; }
 .entry-footer .button-actions { flex-shrink: 0; justify-content: flex-end; }
 .entry-footer .confirm-button { border-color: var(--accent); background: var(--accent); }
 @media (max-width: 420px) { .group-entry { padding: 20px; } .entry-header h2 { font-size: 20px; } .entry-identity { gap: 12px; } .group-avatar-preview, .entry-remove-avatar { width: 64px; } .group-avatar-preview { height: 64px; } .entry-remove-avatar { top: 66px; } }

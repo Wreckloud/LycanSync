@@ -3,6 +3,8 @@ import { computed, nextTick, ref, toRef } from 'vue';
 import { ArrowRight, Pencil, UserRound } from '@lucide/vue';
 import type { AuthUser, ProfileUpdate } from '../auth/authApi';
 import AvatarCropDialog from './AvatarCropDialog.vue';
+import InlineFeedback from './InlineFeedback.vue';
+import { useAvatarCrop } from '../profile/useAvatarCrop';
 import { useProfileDraft } from '../profile/useProfileDraft';
 import { formatRegistrationDate } from '../profile/registrationDate';
 
@@ -13,19 +15,12 @@ const avatarInput = ref<HTMLInputElement | null>(null);
 const nicknameInput = ref<HTMLInputElement | null>(null);
 const nicknameButton = ref<HTMLButtonElement | null>(null);
 const editingNickname = ref(false);
-const cropFile = ref<File | null>(null);
+const { cropSource, picking, pickAvatar, clearCrop } = useAvatarCrop(error);
 const registrationDate = computed(() => formatRegistrationDate(props.user.createdAt));
-
-function pickAvatar(event: Event) {
-  const input = event.target as HTMLInputElement;
-  cropFile.value = input.files?.[0] ?? null;
-  input.value = '';
-  error.value = '';
-}
 
 function applyAvatar(value: string) {
   avatar.value = value;
-  cropFile.value = null;
+  clearCrop();
 }
 
 async function editNickname() {
@@ -48,7 +43,7 @@ async function submitNickname(event: KeyboardEvent) {
 }
 
 async function save() {
-  if (busy.value || cropFile.value) return;
+  if (busy.value || picking.value || cropSource.value) return;
   // 首次填写只在确认时提交，跳过不保存草稿；日常设置仍保持自动保存。
   if (await saveDraft()) emit('finish');
 }
@@ -56,19 +51,19 @@ async function save() {
 
 <template>
   <main class="auth-screen">
-    <form class="auth-card welcome-profile" aria-labelledby="welcome-profile-title" @submit.prevent="save">
+    <form class="auth-card welcome-profile" aria-labelledby="welcome-profile-title" :inert="!!cropSource" @submit.prevent="save">
       <header class="welcome-header">
         <div>
           <h1 id="welcome-profile-title">你的个人资料卡</h1>
           <p>向大家展示自己</p>
         </div>
-        <button type="button" class="welcome-skip" :disabled="busy || !!cropFile" @click="emit('finish')">
+        <button type="button" class="welcome-skip" :disabled="busy || picking || !!cropSource" @click="emit('finish')">
           跳过<ArrowRight :size="16" aria-hidden="true" />
         </button>
       </header>
       <div class="welcome-details">
         <div class="welcome-identity">
-          <button type="button" class="welcome-avatar" aria-label="修改头像" :disabled="busy" @click="avatarInput?.click()">
+          <button type="button" class="welcome-avatar" aria-label="修改头像" :disabled="busy || picking" @click="avatarInput?.click()">
             <img v-if="avatar" :src="avatar" alt="头像预览" referrerpolicy="no-referrer" />
             <UserRound v-else :size="42" />
             <span class="welcome-avatar-overlay" aria-hidden="true"><Pencil :size="20" /><span>编辑</span></span>
@@ -93,15 +88,12 @@ async function save() {
         </div>
       </div>
       <footer class="welcome-actions">
-        <div class="welcome-feedback">
-          <p v-if="error" role="alert">{{ error }}</p>
-          <span v-else-if="busy" role="status">正在保存…</span>
-          <span v-else-if="!supportsSignature">签名保存需要更新服务。</span>
-        </div>
-        <button type="submit" class="confirm-button" :disabled="busy || !!cropFile">保存并进入</button>
+        <InlineFeedback class="welcome-feedback" :message="error"
+          :status="busy ? '正在保存…' : picking ? '正在读取图片…' : !supportsSignature ? '签名保存需要更新服务。' : ''" />
+        <button type="submit" class="confirm-button" :disabled="busy || picking || !!cropSource">保存并进入</button>
       </footer>
     </form>
-    <AvatarCropDialog v-if="cropFile" :file="cropFile" title="调整头像" @apply="applyAvatar" @cancel="cropFile = null" />
+    <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整头像" @apply="applyAvatar" @cancel="clearCrop" />
   </main>
 </template>
 
@@ -134,8 +126,7 @@ async function save() {
 .welcome-signature textarea { width: 100%; height: 72px; resize: none; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; line-height: 22px; }
 .welcome-signature textarea:disabled { opacity: .5; }
 .welcome-actions { display: flex; align-items: center; gap: 16px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
-.welcome-feedback { flex: 1; min-width: 0; height: 32px; overflow: auto; color: var(--muted); font-size: 12px; line-height: 16px; }
-.welcome-feedback p { margin: 0; color: var(--danger); line-height: 16px; }
+.welcome-feedback { flex: 1; }
 .welcome-actions button { flex-shrink: 0; }
 @media (max-width: 600px) { .welcome-details { grid-template-columns: minmax(0, 1fr); gap: 16px; } }
 @media (max-width: 420px) { .welcome-profile { padding: 20px; } .welcome-header h1 { font-size: 20px; } .welcome-avatar { width: 64px; height: 64px; } .welcome-nickname button span, .welcome-nickname input { font-size: 18px; } }

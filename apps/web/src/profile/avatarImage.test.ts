@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   AvatarImageError,
-  MAX_AVATAR_OUTPUT_BYTES,
-  MAX_AVATAR_SOURCE_BYTES,
   calculateAvatarCrop,
   decodeAvatarFile,
   encodeAvatarCrop,
@@ -28,15 +26,16 @@ describe('头像图片处理', () => {
     expect(zoomAvatarWithWheel(2, -10_000, 0)).toBeCloseTo(2.2);
   });
 
-  it('在解码前拒绝超过 10 MB 的原图', async () => {
-    const decode = vi.fn();
+  it('原图超过 10 MB 仍可解码，上传只使用裁剪区域', async () => {
+    const source = bitmap(1200, 800);
+    const decode = vi.fn().mockResolvedValue(source);
     vi.stubGlobal('createImageBitmap', decode);
 
     await expect(decodeAvatarFile({
       type: 'image/jpeg',
-      size: MAX_AVATAR_SOURCE_BYTES + 1,
-    } as File)).rejects.toThrow('原图不能超过 10 MB');
-    expect(decode).not.toHaveBeenCalled();
+      size: 50 * 1024 * 1024,
+    } as File)).resolves.toBe(source);
+    expect(decode).toHaveBeenCalledOnce();
   });
 
   it('为透明 PNG 保留 PNG 输出格式', async () => {
@@ -45,14 +44,14 @@ describe('头像图片处理', () => {
     });
     const source = bitmap(1200, 800);
 
-    const result = await encodeAvatarCrop(source, { x: 200, y: 0, size: 800 }, 'image/png');
+    const result = await encodeAvatarCrop(source, { x: 200, y: 0, size: 800 });
 
     expect(result.type).toBe('image/png');
-    expect(canvas.width).toBe(256);
-    expect(canvas.height).toBe(256);
-    expect(clearRect).toHaveBeenCalled();
-    expect(drawImage).toHaveBeenCalledWith(source, 200, 0, 800, 800, 0, 0, 256, 256);
-    expect(toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/png', undefined);
+    expect(canvas.width).toBe(512);
+    expect(canvas.height).toBe(512);
+    expect(clearRect).not.toHaveBeenCalled();
+    expect(drawImage).toHaveBeenCalledWith(source, 200, 0, 800, 800, 0, 0, 512, 512);
+    expect(toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/png');
   });
 
   it('把损坏图片转换为明确错误', async () => {
@@ -62,25 +61,29 @@ describe('头像图片处理', () => {
       .rejects.toEqual(new AvatarImageError('图片已损坏或无法读取。'));
   });
 
-  it('256 像素输出超限时降到 224 像素，不缩成低清头像', async () => {
+  it('裁剪 PNG 超过旧 96 KB 限制时仍提交，不在客户端反复降质', async () => {
     const mocked = installCanvas((done, type) => {
-      done(new Blob([new Uint8Array(mocked.canvas.width === 256
-        ? MAX_AVATAR_OUTPUT_BYTES + 1 : MAX_AVATAR_OUTPUT_BYTES - 1)], { type }));
+      done(new Blob([new Uint8Array(512 * 1024)], { type }));
     });
-    const result = await encodeAvatarCrop(bitmap(800, 800), { x: 0, y: 0, size: 800 }, 'image/jpeg');
-    expect(result.size).toBeLessThanOrEqual(MAX_AVATAR_OUTPUT_BYTES);
-    expect(mocked.canvas.width).toBe(224);
-    expect(mocked.toBlob).toHaveBeenCalledTimes(4);
+    const result = await encodeAvatarCrop(bitmap(800, 800), { x: 0, y: 0, size: 800 });
+    expect(result.size).toBe(512 * 1024);
+    expect(mocked.canvas.width).toBe(512);
+    expect(mocked.toBlob).toHaveBeenCalledOnce();
   });
 
-  it('所有尺寸和质量都超限时报告压缩失败', async () => {
-    const { toBlob } = installCanvas((done, type) => {
-      done(new Blob([new Uint8Array(MAX_AVATAR_OUTPUT_BYTES + 1)], { type }));
-    });
+  it('生成裁剪图失败时显示明确错误', async () => {
+    const { toBlob } = installCanvas((done) => done(null));
 
-    await expect(encodeAvatarCrop(bitmap(800, 800), { x: 0, y: 0, size: 800 }, 'image/jpeg'))
-      .rejects.toThrow('无法压缩到 96 KB 以内');
-    expect(toBlob).toHaveBeenCalledTimes(9);
+    await expect(encodeAvatarCrop(bitmap(800, 800), { x: 0, y: 0, size: 800 }))
+      .rejects.toThrow('无法生成裁剪后的头像');
+    expect(toBlob).toHaveBeenCalledOnce();
+  });
+
+  it('保留解码尺寸保护并释放过大位图', async () => {
+    const source = bitmap(10000, 10000);
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue(source));
+    await expect(decodeAvatarFile({ type: 'image/png' } as File)).rejects.toThrow('4000 万像素');
+    expect(source.close).toHaveBeenCalledOnce();
   });
 
   it('根据拖动和缩放位置计算原图裁剪区域', () => {

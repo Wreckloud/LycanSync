@@ -1,4 +1,4 @@
-import { ApiRequestError, authenticatedFetch } from '../auth/authApi';
+import { authenticatedFetch, readApiError } from '../auth/authApi';
 import type { UserActivityType, UserPresenceStatus } from '../presence/presenceApi';
 
 export type GroupRole = 'OWNER' | 'MEMBER';
@@ -73,12 +73,7 @@ async function groupRequest<T>(path: string, method = 'GET', body?: unknown, sig
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: signal ?? AbortSignal.timeout(15000),
   });
-  if (!response.ok) {
-    const problem = await response.json().catch(() => null);
-    throw new ApiRequestError(response.status,
-      typeof problem?.code === 'string' ? problem.code : 'UNKNOWN_ERROR',
-      typeof problem?.detail === 'string' ? problem.detail : `请求失败（HTTP ${response.status}）`);
-  }
+  if (!response.ok) throw await readApiError(response);
   return response.json() as Promise<T>;
 }
 
@@ -101,12 +96,7 @@ export async function waitForGroupPresenceChanges(
     headers: { Accept: 'application/json' },
     signal: AbortSignal.any([signal, AbortSignal.timeout(50_000)]),
   });
-  if (!response.ok) {
-    const problem = await response.json().catch(() => null);
-    throw new ApiRequestError(response.status,
-      typeof problem?.code === 'string' ? problem.code : 'UNKNOWN_ERROR',
-      typeof problem?.detail === 'string' ? problem.detail : `请求失败（HTTP ${response.status}）`);
-  }
+  if (!response.ok) throw await readApiError(response);
   return response.json() as Promise<GroupPresenceChangeCursor>;
 }
 export const createGroup = (name: string, description: string, avatar: string) =>

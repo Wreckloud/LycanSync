@@ -6,7 +6,7 @@ import com.lycansync.api.auth.mapper.AuthMapper;
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.model.AuthUser;
 import com.lycansync.api.common.error.ApiErrorCode;
-import com.lycansync.api.common.image.AvatarImageValidator;
+import com.lycansync.api.common.image.AvatarImageProcessor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -45,16 +45,16 @@ public class ProfileService {
                 && value != '\n' && value != '\r'))) {
             throw invalid("个性签名不能超过 120 个字符或包含非法控制字符");
         }
-        // 头像只接受本地上传的小尺寸图片，不允许服务器抓取用户指定网址。
+        String avatar = request.avatar();
+        // 只处理客户端裁剪的图片，不抓取用户网址；随包默认头像仍原样保留。
         try {
-            // 随包默认头像可信，修改昵称时原样保留；用户上传仍使用原有限制。
-            if (!request.avatar().isEmpty() && !request.avatar().equals(DefaultAvatar.value())) {
-                AvatarImageValidator.validate(request.avatar());
+            if (!avatar.isEmpty() && !avatar.equals(DefaultAvatar.value())) {
+                avatar = AvatarImageProcessor.normalize(avatar);
             }
-        } catch (AvatarImageValidator.InvalidAvatarException exception) {
+        } catch (AvatarImageProcessor.InvalidAvatarException exception) {
             throw invalid(exception.getMessage());
         }
-        if (mapper.updateProfile(user.id(), nickname, request.avatar(), signature) != 1) {
+        if (mapper.updateProfile(user.id(), nickname, avatar, signature) != 1) {
             throw new AuthException(HttpStatus.NOT_FOUND, ApiErrorCode.ACCOUNT_NOT_FOUND, "账号不存在");
         }
         return findProfile(user);

@@ -34,13 +34,14 @@ const apiRoutePolicies = new Map([
   ['GET /api/system/initialization', { public: true }],
   ['GET /api/auth/me', {}],
   ['GET /api/auth/session', {}],
-  ['PUT /api/auth/me', { maxBodyBytes: 160 * 1024 }],
+  ['PUT /api/auth/me', { maxBodyBytes: 3 * 1024 * 1024 }],
   ['POST /api/auth/logout', { clearsSession: true }],
   ['POST /api/rtc/token', {}],
   ['GET /api/rtc/room-summary', {}],
   ['POST /api/presence/heartbeat', {}],
   ['GET /api/groups', {}],
-  ['POST /api/groups', {}],
+  // 后端接受最多 2 MiB 的裁剪图片，另留 Base64 膨胀、文本与 JSON 的空间。
+  ['POST /api/groups', { maxBodyBytes: 3 * 1024 * 1024 }],
 ]);
 const groupPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const groupPresencePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/presences$/i;
@@ -842,7 +843,9 @@ async function serveApplication(request) {
       const streamingUpload = routePolicy.streamBody === true;
       const body = streamingUpload ? request.body
         : ['POST', 'PUT'].includes(request.method) ? Buffer.from(await request.arrayBuffer()) : undefined;
-      if (body instanceof Buffer && body.byteLength > (routePolicy.maxBodyBytes ?? 4096)) return new Response(null, { status: 413 });
+      if (body instanceof Buffer && body.byteLength > (routePolicy.maxBodyBytes ?? 4096)) {
+        return Response.json({ code: 'REQUEST_TOO_LARGE', detail: '提交内容过大，请缩小图片或减少内容后重试。' }, { status: 413 });
+      }
       const token = await loadSession();
       if (url.pathname === '/api/auth/access/redeem' && token) {
         return Response.json({ detail: '请先退出当前账号，再使用邀请链接。' }, { status: 409 });

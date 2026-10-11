@@ -12,6 +12,9 @@
 | `apps/web/electron/access-links.cjs` | 安装版邀请唤起校验 | 仅接受固定协议、HTTPS 服务器和一次性凭据 |
 | `apps/web/src/components/AccountAccessPrompt.vue` | 邀请确认 | 先检查，用户确认后兑换；已登录时保留原会话 |
 | `apps/web/src/components/GroupEntryDialog.vue` | 创建／加入群组弹窗 | 管理表单、裁剪和提交状态；创建结果由 App 更新，加入暂仅预览 |
+| `apps/web/src/profile/useAvatarCrop.ts`、`components/AvatarCropDialog.vue` | 头像选择和裁剪 | 先验证解码再展示；选择模块释放位图和对象 URL，裁剪器只输出 512 像素 PNG |
+| `services/api/src/main/java/com/lycansync/api/common/image/AvatarImageProcessor.java` | 个人及群组头像规范化 | 检查裁剪载荷与解码尺寸，统一 256 像素 PNG 后保存；不上传原图、不新增存储链路 |
+| `apps/web/src/components/InlineFeedback.vue`、`auth/authApi.ts` | 就近反馈与 HTTP 错误解析 | 固定反馈区不推动布局；保留状态／业务代码并统一空正文错误文案 |
 | `apps/web/src/components/settings/MemberAccessSettings.vue` | 服主管理 | 生成邀请、恢复原成员及查看链接记录 |
 | `apps/web/src/App.vue` | 群组界面、状态同步、音频设置和共享选择器 | 用户动作如何进入 RTC；页面状态不等于媒体资源 |
 | `apps/web/src/components` | 聊天、成员、播放和诊断组件 | props / emit、轨道展示、挂载与销毁 |

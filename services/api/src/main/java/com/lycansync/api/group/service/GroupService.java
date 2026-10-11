@@ -2,7 +2,7 @@ package com.lycansync.api.group.service;
 
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.common.error.ApiErrorCode;
-import com.lycansync.api.common.image.AvatarImageValidator;
+import com.lycansync.api.common.image.AvatarImageProcessor;
 import com.lycansync.api.group.dto.CreateGroupRequest;
 import com.lycansync.api.group.dto.GroupDetailResponse;
 import com.lycansync.api.group.dto.GroupMemberResponse;
@@ -49,8 +49,8 @@ public class GroupService {
         String description = normalizeDescription(request.description());
         String avatar = request.avatar() == null ? "" : request.avatar();
         try {
-            if (!avatar.isEmpty()) AvatarImageValidator.validate(avatar);
-        } catch (AvatarImageValidator.InvalidAvatarException exception) {
+            if (!avatar.isEmpty()) avatar = AvatarImageProcessor.normalize(avatar);
+        } catch (AvatarImageProcessor.InvalidAvatarException exception) {
             throw invalid(exception.getMessage());
         }
         Instant now = Instant.now(systemClock);

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { ApiRequestError, authRequest, authenticatedFetch, setBrowserSession } from './authApi';
+import { ApiRequestError, authRequest, authenticatedFetch, readApiError, setBrowserSession } from './authApi';
 
 describe('authRequest', () => {
   afterEach(() => {
@@ -23,6 +23,18 @@ describe('authRequest', () => {
       code: 'AUTH_RATE_LIMITED',
       message: '登录请求过于频繁，请一分钟后重试',
     });
+  });
+
+  test.each([null, '<html>Payload Too Large</html>', '{}'])('413 正文为 %s 时仍明确说明提交内容过大', async (body) => {
+    const error = await readApiError(new Response(body, { status: 413 }));
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toMatchObject({ status: 413, code: 'REQUEST_TOO_LARGE', message: '提交内容过大，请缩小图片或减少内容后重试。' });
+  });
+
+  test('空错误说明不遮蔽状态文案，有效的后端说明保留', async () => {
+    expect((await readApiError(Response.json({ detail: '  ' }, { status: 403 }))).message).toBe('没有权限执行此操作。');
+    expect(await readApiError(Response.json({ code: 'INVALID_REQUEST', detail: '裁剪后的头像数据过大，请重新裁剪后重试' }, { status: 400 })))
+      .toMatchObject({ status: 400, code: 'INVALID_REQUEST', message: '裁剪后的头像数据过大，请重新裁剪后重试' });
   });
 
   test('旧会话请求的延迟 401 不会清除新会话', async () => {

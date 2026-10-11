@@ -37,13 +37,15 @@ describe('个人资料草稿与保存', () => {
   });
 
   it('保存昵称和头像，并采用服务端规范值', async () => {
-    const saveProfile = vi.fn(async (profile: ProfileUpdate) => ({ ...initialUser, ...profile, nickname: '规范昵称' }));
+    const saveProfile = vi.fn(async (profile: ProfileUpdate) => ({ ...initialUser, ...profile,
+      nickname: '规范昵称', avatar: 'data:image/png;base64,normalized' }));
     const { scope, draft } = setup(saveProfile);
     draft.nickname.value = ' 新昵称 ';
     draft.avatar.value = 'data:image/png;base64,AAAA';
     expect(await draft.save()).toBe(true);
     expect(saveProfile).toHaveBeenCalledWith({ nickname: '新昵称', avatar: 'data:image/png;base64,AAAA', signature: '' });
     expect(draft.nickname.value).toBe('规范昵称');
+    expect(draft.avatar.value).toBe('data:image/png;base64,normalized');
     expect(await draft.save()).toBe(true);
     expect(saveProfile).toHaveBeenCalledTimes(1);
     scope.stop();

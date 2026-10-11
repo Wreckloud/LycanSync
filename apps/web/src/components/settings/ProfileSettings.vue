@@ -3,6 +3,8 @@ import { computed, nextTick, ref, toRef } from 'vue';
 import { Pencil, UserRound } from '@lucide/vue';
 import type { AuthUser, ProfileUpdate } from '../../auth/authApi';
 import AvatarCropDialog from '../AvatarCropDialog.vue';
+import InlineFeedback from '../InlineFeedback.vue';
+import { useAvatarCrop } from '../../profile/useAvatarCrop';
 import { useProfileDraft } from '../../profile/useProfileDraft';
 import { formatRegistrationDate } from '../../profile/registrationDate';
 
@@ -15,18 +17,11 @@ const avatarInput = ref<HTMLInputElement | null>(null);
 const nicknameInput = ref<HTMLInputElement | null>(null);
 const nicknameButton = ref<HTMLButtonElement | null>(null);
 const editingNickname = ref(false);
-const cropFile = ref<File | null>(null);
+const { cropSource, picking, pickAvatar, clearCrop } = useAvatarCrop(error);
 const registrationDate = computed(() => formatRegistrationDate(props.user.createdAt));
 
-function pickAvatar(event: Event) {
-  const input = event.target as HTMLInputElement;
-  cropFile.value = input.files?.[0] ?? null;
-  input.value = '';
-  error.value = '';
-}
-
 async function save() {
-  if (cropFile.value) return false;
+  if (picking.value || cropSource.value) return false;
   const saved = await saveDraft();
   if (saved) editingNickname.value = false;
   return saved;
@@ -42,7 +37,7 @@ async function editNickname() {
 
 function applyAvatar(value: string) {
   avatar.value = value;
-  cropFile.value = null;
+  clearCrop();
   void save();
 }
 
@@ -62,7 +57,7 @@ defineExpose({ save });
   <section class="settings-section profile-settings">
     <div class="profile-details">
       <div class="profile-identity">
-        <button type="button" class="profile-avatar-preview" aria-label="修改头像" :disabled="busy" @click="avatarInput?.click()">
+        <button type="button" class="profile-avatar-preview" aria-label="修改头像" :disabled="busy || picking" @click="avatarInput?.click()">
           <img v-if="avatar" :src="avatar" class="profile-avatar" alt="头像预览" referrerpolicy="no-referrer" />
           <UserRound v-else :size="42" />
           <span class="profile-avatar-overlay" aria-hidden="true"><Pencil :size="20" /><span>编辑</span></span>
@@ -84,13 +79,10 @@ defineExpose({ save });
           :disabled="!supportsSignature" :readonly="busy" placeholder="写一句想让朋友看到的话" @blur="save" />
       </div>
     </div>
-    <div class="profile-feedback">
-      <p v-if="error" class="settings-error" role="alert">{{ error }}</p>
-      <span v-else-if="busy" role="status">正在保存…</span>
-      <span v-else-if="!supportsSignature">签名保存需要更新服务。</span>
-    </div>
-    <AvatarCropDialog v-if="cropFile" :file="cropFile" title="调整头像"
-      @apply="applyAvatar" @cancel="cropFile = null" />
+    <InlineFeedback :message="error"
+      :status="busy ? '正在保存…' : picking ? '正在读取图片…' : !supportsSignature ? '签名保存需要更新服务。' : ''" />
+    <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整头像"
+      @apply="applyAvatar" @cancel="clearCrop" />
   </section>
 </template>
 
@@ -115,7 +107,6 @@ defineExpose({ save });
 .profile-signature textarea { width: 100%; height: 64px; resize: none; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; line-height: 22px; }
 .profile-signature textarea:disabled { opacity: .5; }
 .profile-signature-count { flex-shrink: 0; color: var(--muted); font-size: 12px; }
-.profile-feedback { height: 32px; overflow: auto; color: var(--muted); font-size: 12px; line-height: 16px; }
 @media (max-width: 760px) { .profile-details { grid-template-columns: minmax(0, 1fr); gap: 16px; } }
 @media (max-width: 520px) { .profile-identity { gap: 12px; } .profile-avatar-preview { width: 62px; height: 62px; } .profile-nickname button span, .profile-nickname input { font-size: 17px; } }
 </style>
