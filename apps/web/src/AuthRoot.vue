@@ -4,6 +4,8 @@ import { Copy, Minus, Square, X } from '@lucide/vue';
 import App from './App.vue';
 import AccountAccessPrompt from './components/AccountAccessPrompt.vue';
 import WelcomeProfile from './components/WelcomeProfile.vue';
+import StartupUpdate from './components/StartupUpdate.vue';
+import AppNotice from './components/AppNotice.vue';
 import type { AccessOffer } from './auth/accountAccess';
 import {
   authRequest,
@@ -29,6 +31,10 @@ const serverAddress = ref('');
 const serverEditable = ref(false);
 const serverSaving = ref(false);
 const serverError = ref('');
+const startupChecking = ref(Boolean(desktop));
+const updateState = ref<StartupUpdateState | null>(null);
+const updateWarning = ref('');
+let disposed = false;
 let sessionHeartbeat: number | null = null;
 let sessionHeartbeatInFlight = false;
 let logoutInProgress = false;
@@ -42,14 +48,17 @@ const removeAccessLink = desktop?.onAccessLink((offer) => {
   if (!accessOffer.value) accessOffer.value = offer;
 });
 const removeMaximizedChange = desktop?.onMaximizedChange((maximized) => { windowMaximized.value = maximized; });
+const removeUpdateState = desktop?.onUpdateState((state) => { updateState.value = state; });
 const removeClose = desktop?.onClose(() => { if (!user.value && !logoutInProgress) desktop.finishClose(); });
 void desktop?.isMaximized().then((maximized) => { windowMaximized.value = maximized; }).catch(() => undefined);
 window.addEventListener('lycan:unauthorized', expired);
 onScopeDispose(() => {
+  disposed = true;
   if (sessionHeartbeat !== null) window.clearInterval(sessionHeartbeat);
   removeMaximizedChange?.();
   removeClose?.();
   removeAccessLink?.();
+  removeUpdateState?.();
   window.removeEventListener('lycan:unauthorized', expired);
 });
 
@@ -149,7 +158,19 @@ async function saveServerAddress() {
     serverSaving.value = false;
   }
 }
-onMounted(() => {
+onMounted(async () => {
+  if (desktop) {
+    try {
+      updateState.value = await desktop.getUpdateState();
+      const result = await desktop.runStartupUpdate();
+      if (result.error) updateWarning.value = result.message;
+    } catch {
+      updateWarning.value = '启动更新不可用，仍可使用当前版本。请稍后重新打开应用。';
+    }
+    if (disposed) return;
+    startupChecking.value = false;
+  }
+  // 更新期间不读走邀请、不恢复登录，也不挂载房间或启动心跳。
   void initialize();
   void desktop?.getAccessLink().then((offer) => { if (offer && !accessOffer.value) accessOffer.value = offer; })
     .catch(() => { error.value = '无法读取邀请链接，请从网页重新打开。'; });
@@ -161,8 +182,10 @@ onMounted(() => {
 </script>
 
 <template>
-  <App v-if="user && !onboarding" v-show="!accessOffer" :user="user" :window-maximized="windowMaximized" :save-profile="saveProfile" @logout="logout" />
+  <App v-if="user && !onboarding" v-show="!accessOffer" :user="user" :window-maximized="windowMaximized" :save-profile="saveProfile"
+    :startup-update-warning="updateWarning" @dismiss-update-warning="updateWarning = ''" @logout="logout" />
   <div v-if="!user || onboarding || accessOffer" class="app-shell">
+    <AppNotice v-if="updateWarning" :message="updateWarning" dismissible @dismiss="updateWarning = ''" />
     <header class="titlebar" :class="{ 'desktop-titlebar': desktop }">
       <div class="brand">LycanSync</div>
       <div v-if="desktop" class="window-actions">
@@ -173,7 +196,8 @@ onMounted(() => {
         <button aria-label="关闭窗口" @click="desktop.close()"><X :size="17" /></button>
       </div>
     </header>
-    <WelcomeProfile v-if="user && onboarding" :user="user" :save-profile="saveProfile" @finish="onboarding = false" />
+    <StartupUpdate v-if="startupChecking" :state="updateState" @skip="desktop?.skipStartupUpdate()" />
+    <WelcomeProfile v-else-if="user && onboarding" :user="user" :save-profile="saveProfile" @finish="onboarding = false" />
     <main v-else class="auth-screen">
       <AccountAccessPrompt v-if="accessOffer && ready" :offer="accessOffer" :current-user="user" :current-server="serverAddress || pageOrigin"
         @cancel="accessOffer = null" @joined="completeAccess" />

@@ -35,8 +35,26 @@ function writeDesktopLicenses(outputFile) {
   }
 
   const lock = JSON.parse(readFileSync(join(appDirectory, 'package-lock.json'), 'utf8'));
+  const bundledPackages = new Set();
+  // 这些依赖编译进页面，不再作为主进程运行依赖打包，但许可仍需交付。
+  function includeBundledPackage(location) {
+    if (bundledPackages.has(location)) return;
+    const pkg = lock.packages[location];
+    if (!pkg) throw new Error(`缺少页面依赖许可元数据：${location}`);
+    bundledPackages.add(location);
+    for (const dependency of Object.keys(pkg.dependencies || {})) {
+      let parent = location;
+      while (true) {
+        const candidate = `${parent ? `${parent}/` : ''}node_modules/${dependency}`;
+        if (lock.packages[candidate]) { includeBundledPackage(candidate); break; }
+        if (!parent) throw new Error(`缺少页面依赖许可：${dependency}`);
+        parent = parent.slice(0, Math.max(0, parent.lastIndexOf('node_modules/'))).replace(/\/$/, '');
+      }
+    }
+  }
+  for (const name of ['@lucide/vue', 'livekit-client', 'vue']) includeBundledPackage(`node_modules/${name}`);
   for (const [location, pkg] of Object.entries(lock.packages)) {
-    if (!location || pkg.dev || pkg.devOptional) continue;
+    if (!location || ((pkg.dev || pkg.devOptional) && !bundledPackages.has(location))) continue;
     const directory = join(appDirectory, location);
     const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'));
     includePackage(manifest.name, manifest.version, manifest.license, directory);

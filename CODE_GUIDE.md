@@ -10,6 +10,7 @@
 | `apps/web/src/AuthRoot.vue` | 登录与已登录界面的入口 | 会话建立、过期和退出 |
 | `services/api/src/main/java/com/lycansync/api/auth/service/AccessLinkService.java` | 服主激活、单人邀请和恢复 | 链接行锁、一次性消费与会话原子替换 |
 | `apps/web/electron/access-links.cjs` | 安装版邀请唤起校验 | 仅接受固定协议、HTTPS 服务器和一次性凭据 |
+| `apps/web/electron/startup-update.cjs` | 安装版单次启动更新 | 主进程持有唯一检查任务；进入业务前校验、安装，跳过及迟到结果不能触发后续安装 |
 | `apps/web/src/components/AccountAccessPrompt.vue` | 邀请确认 | 先检查，用户确认后兑换；已登录时保留原会话 |
 | `apps/web/src/components/GroupEntryDialog.vue` | 创建／加入群组弹窗 | 管理表单、裁剪和提交状态；创建结果由 App 更新，加入暂仅预览 |
 | `apps/web/src/profile/useAvatarCrop.ts`、`components/AvatarCropDialog.vue` | 头像选择和裁剪 | 先验证解码再展示；选择模块释放位图和对象 URL，裁剪器只输出 512 像素 PNG |

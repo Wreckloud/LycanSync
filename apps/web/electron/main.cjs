@@ -14,6 +14,7 @@ const { createMediaDiagnostics } = require('./media-diagnostics.cjs');
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
 const { matchNativeVideoSourceThumbnails } = require('./native-video-thumbnails.cjs');
 const { parseAccessLink, accessLinkFromArguments } = require('./access-links.cjs');
+const { createStartupUpdate } = require('./startup-update.cjs');
 
 const APP_ORIGIN = 'lycan://app';
 const rendererRoot = resolve(__dirname, '../dist');
@@ -81,6 +82,7 @@ let sessionLoaded = false;
 let activityHelper;
 let activityRestartTimer;
 let currentActivity = null;
+let startupReady = false;
 let allowQuitAfterMediaHelper = false;
 let mediaHelperShutdownPromise;
 let nativeMediaBridge;
@@ -93,6 +95,26 @@ let lastMicrophoneDroppedChunks = 0;
 const helperProcessBridges = new WeakMap();
 const writeMediaDiagnostic = createMediaDiagnostics(resolve(app.getPath('userData'), 'screen-share-error.log'));
 const sourceTimingRecordedAt = new Map();
+const startupUpdate = createStartupUpdate({
+  enabled: app.isPackaged && process.platform === 'win32',
+  version: app.getVersion(),
+  // app-update.yml 来自安装包，不能跟随用户选择的业务服务器改变。
+  createUpdater: () => require('electron-updater').autoUpdater,
+  onChange: (state) => { if (!mainWindow?.isDestroyed()) mainWindow?.webContents.send('update:state', state); },
+  beforeInstall: async () => {
+    if (pendingAccessLink) {
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('无法保存待确认邀请');
+      const link = `lycansync://access?server=${encodeURIComponent(pendingAccessLink.server)}#token=${pendingAccessLink.token}`;
+      await mkdir(app.getPath('userData'), { recursive: true });
+      await writeFile(accessLinkFile, safeStorage.encryptString(link));
+    }
+    if (closing || startupReady) throw new Error('启动更新已结束');
+    // 更新发生在认证和 helper 启动之前，不进入普通的媒体退出等待。
+    canClose = true;
+    allowQuitAfterMediaHelper = true;
+  },
+  onInstallFailure: () => { canClose = false; allowQuitAfterMediaHelper = false; },
+});
 
 function recordSourceTiming(stage, startedAt, sourceCount) {
   const now = Date.now();
@@ -1004,6 +1026,7 @@ if (!app.requestSingleInstanceLock()) {
       event.preventDefault();
       if (closing) return;
       closing = true;
+      startupUpdate.cancel();
       cancelCapture();
       // 先停止采集再退出；页面异常时由主进程兜底销毁窗口，避免后台残留。
       closeTimer = setTimeout(finishClose, 2000);
@@ -1013,9 +1036,26 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow.on('unmaximize', () => mainWindow?.webContents.send('window:maximized-changed', false));
     mainWindow.on('closed', () => { clearTimeout(closeTimer); mainWindow = undefined; });
     mainWindow.loadURL(APP_ORIGIN + '/');
-    startActivityHelper();
   });
 }
+
+ipcMain.handle('update:startup', async (event) => {
+  if (!trustedSender(event) || closing) throw new Error('当前不能检查更新');
+  const state = await startupUpdate.start();
+  if (!closing && !startupReady) {
+    startupReady = true;
+    startActivityHelper();
+  }
+  return state;
+});
+ipcMain.handle('update:state:get', (event) => {
+  if (!trustedSender(event)) throw new Error('请求来源无效');
+  return startupUpdate.getState();
+});
+ipcMain.handle('update:skip', (event) => {
+  if (!trustedSender(event)) throw new Error('请求来源无效');
+  if (['idle', 'checking', 'downloading'].includes(startupUpdate.getState().phase)) startupUpdate.cancel();
+});
 
 ipcMain.on('window:minimize', (event) => { if (trustedSender(event)) mainWindow.minimize(); });
 ipcMain.handle('window:is-maximized', (event) => {
@@ -1230,6 +1270,8 @@ ipcMain.on('capture:select', (event, requestId, sourceId) => {
   if (source) capture.callback({ video: source }); else denyCapture(capture.callback);
 });
 app.on('before-quit', (event) => {
+  closing = true;
+  if (startupUpdate.getState().phase !== 'installing') startupUpdate.cancel();
   stopActivityHelper();
   if (allowQuitAfterMediaHelper) return;
   event.preventDefault();

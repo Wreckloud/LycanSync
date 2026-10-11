@@ -19,6 +19,14 @@ sharedTexture?.setSharedTextureReceiver(async ({ importedSharedTexture }, token,
 
 // 只暴露固定操作，不向页面开放 Node.js 或任意 IPC 通道。
 contextBridge.exposeInMainWorld('lycanDesktop', {
+  runStartupUpdate: () => ipcRenderer.invoke('update:startup'),
+  getUpdateState: () => ipcRenderer.invoke('update:state:get'),
+  skipStartupUpdate: () => ipcRenderer.invoke('update:skip'),
+  onUpdateState: (callback) => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on('update:state', listener);
+    return () => ipcRenderer.removeListener('update:state', listener);
+  },
   clearSession: () => ipcRenderer.invoke('auth:clear'),
   getAccessLink: () => ipcRenderer.invoke('auth:access:get'),
   prepareAccessLink: (offer) => ipcRenderer.invoke('auth:access:prepare', offer),

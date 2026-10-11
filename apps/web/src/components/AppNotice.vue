@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { ChevronDown, ChevronUp, CircleAlert } from '@lucide/vue';
+import { ChevronDown, ChevronUp, CircleAlert, X } from '@lucide/vue';
 
-const props = defineProps<{ message: string }>();
+const props = defineProps<{ message: string; dismissible?: boolean }>();
+defineEmits<{ dismiss: [] }>();
 const collapsed = ref(false);
 
 watch(() => props.message, () => { collapsed.value = false; });
@@ -15,7 +16,8 @@ watch(() => props.message, () => { collapsed.value = false; });
     </button>
     <div v-else class="notice" role="alert">
       <span class="notice-message">{{ message }}</span>
-      <button type="button" class="notice-collapse" aria-label="收起提示" :aria-expanded="true" @click="collapsed = true">收起<ChevronUp :size="14" /></button>
+      <button v-if="dismissible" type="button" class="notice-collapse" aria-label="关闭提示" @click="$emit('dismiss')"><X :size="14" /></button>
+      <button v-else type="button" class="notice-collapse" aria-label="收起提示" :aria-expanded="true" @click="collapsed = true">收起<ChevronUp :size="14" /></button>
     </div>
   </aside>
 </template>

@@ -37,8 +37,9 @@ const props = defineProps<{
   user: AuthUser;
   windowMaximized: boolean;
   saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
+  startupUpdateWarning?: string;
 }>();
-const emit = defineEmits<{ logout: [] }>();
+const emit = defineEmits<{ logout: []; dismissUpdateWarning: [] }>();
 
 const STATUS_LABELS = { idle: '未加入语音', joining: '正在连接', connected: '语音已连接', reconnecting: '正在重连' };
 const CALLBAR_EXIT_DURATION_MS = 180;
@@ -1071,6 +1072,7 @@ function participantListening(participant: Participant) {
       <div v-else class="window-actions" aria-hidden="true"><span><Minus :size="14" /></span><span><Square :size="11" /></span><span><X :size="14" /></span></div>
     </header>
     <AppNotice v-if="rtc.notice || viewerNotice" :message="rtc.notice || viewerNotice" />
+    <AppNotice v-else-if="startupUpdateWarning" :message="startupUpdateWarning" dismissible @dismiss="emit('dismissUpdateWarning')" />
     <section v-if="rtc.remoteControlRequest" class="remote-control-prompt" role="dialog" aria-modal="true" aria-label="远程控制申请">
       <strong>{{ previewParticipantName(rtc.remoteControlRequest.identity,
         rtc.participants.find((participant) => participant.identity === rtc.remoteControlRequest?.identity)?.name || rtc.remoteControlRequest.identity) }}申请控制你的显示器</strong>

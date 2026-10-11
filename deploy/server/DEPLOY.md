@@ -48,7 +48,22 @@ docker compose exec -T api cat /var/bootstrap/admin-activation.txt
 
 在服主设置“邀请与成员”中生成每人一条的 3 天邀请，或为原成员生成 12 小时恢复链接。成功恢复后旧会话失效，原资料和权限保留；服主自身恢复暂不提供。本机和虚拟机同样使用邀请登录，运行环境不支持 `ACCOUNT_MODE=test`。QQ 尚未开通，当前使用邀请身份与系统加密的桌面会话。
 
-`downloads/LycanSync-setup.exe` 是随部署包提供的新版安装程序。网页下载入口由 Caddy 提供；API、PostgreSQL 仍不直接暴露。客户端需重新生成安装包才支持 `lycansync://` 邀请唤起，旧安装包不具备此功能。替换安装程序即可更新下载，不需要为每人构建不同安装包。
+`downloads/LycanSync-setup.exe` 是网页使用的安装程序别名；版本化的安装包、同名 `.blockmap` 和 `latest.yml` 供自动更新使用，由 Caddy 提供，API、PostgreSQL 仍不直接暴露。`package-server.ps1` 检查清单名称及 SHA-512 与安装包一致，不允许混用不同构建批次。首次接入自动更新需手动安装 0.0.4 或以后版本。
+
+发布新客户端时先递增 `apps/web/package.json` 与锁文件的版本，再按 README 构建。将版本化安装包及 `.blockmap` 上传到打包时固定的 HTTPS 更新目录，更新 `LycanSync-setup.exe` 别名，最后将同批 `latest.yml` 原子替换到位；不得先发布清单，也不要覆盖旧的版本化文件。保留旧 `.blockmap` 供差量下载；缺失时更新库会尝试完整下载。只发布静态文件不需要重启 API 或清理数据库。
+
+例如在服务器目录已收到同批产物后（将 `0.0.5` 换成实际版本；这些文件必须先上传完整）：
+
+```bash
+cp incoming/LycanSync-0.0.5-windows-x64-setup.exe downloads/
+cp incoming/LycanSync-0.0.5-windows-x64-setup.exe.blockmap downloads/
+cp incoming/LycanSync-0.0.5-windows-x64-setup.exe downloads/LycanSync-setup.exe.next
+mv downloads/LycanSync-setup.exe.next downloads/LycanSync-setup.exe
+cp incoming/latest.yml downloads/latest.yml.next
+mv downloads/latest.yml.next downloads/latest.yml
+```
+
+更新目录默认是打包 API 地址的 `/downloads/`，可用 `LYCANSYNC_PACKAGED_UPDATE_URL` 在构建时指定独立站点。用户切换业务服务器不改变更新目录；不要从用户填写的服务器获取并执行安装包。内网更新同样要求信任自己的测试 CA，不禁用 TLS 校验。SHA-512 检查用于发现文件损坏，不代替发布者签名；当前安装包未签名，正式对外发布前需评估签名并完成 Windows 安装升级验收。
 
 请勿公开密钥、`.env`、激活文件或恢复链接。
 

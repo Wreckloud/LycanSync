@@ -1,8 +1,9 @@
 const { spawnSync } = require('node:child_process');
 const { copyFileSync, existsSync, mkdirSync, writeFileSync } = require('node:fs');
-const { resolve, join } = require('node:path');
+const { resolve, join, normalize } = require('node:path');
 const { writeDesktopLicenses } = require('./package-licenses.cjs');
 const { serverUrl } = require('./server-settings.cjs');
+const { updateFeedUrl } = require('./startup-update.cjs');
 
 const appDirectory = resolve(__dirname, '..');
 const projectRoot = resolve(appDirectory, '../..');
@@ -20,6 +21,7 @@ mkdirSync(buildResources, { recursive: true });
 copyFileSync(runtimeInstaller, join(buildResources, 'vc_redist.x64.exe'));
 if (!process.env.LYCANSYNC_PACKAGED_API_URL) throw new Error('请用 LYCANSYNC_PACKAGED_API_URL 指定本包的 HTTPS 服务器地址。');
 const apiUrl = serverUrl(process.env.LYCANSYNC_PACKAGED_API_URL);
+const updateUrl = updateFeedUrl(process.env.LYCANSYNC_PACKAGED_UPDATE_URL || new URL('/downloads/', apiUrl).href);
 writeFileSync(join(buildResources, 'server-config.json'), `${JSON.stringify({ apiUrl }, null, 2)}\n`, 'utf8');
 writeDesktopLicenses(join(outputDirectory, 'THIRD-PARTY-NOTICES.txt'));
 
@@ -38,8 +40,18 @@ const result = spawnSync(process.execPath, [
 });
 if (result.error) throw result.error;
 if (result.status !== 0) process.exit(result.status || 1);
+// 页面依赖已进入 dist；主进程更新库必须实际进入 asar，不能只验证开发目录可用。
+const archive = join(outputDirectory, 'win-unpacked/resources/app.asar');
+for (const file of ['electron/startup-update.cjs', 'node_modules/electron-updater/package.json',
+  'node_modules/builder-util-runtime/package.json']) require('@electron/asar').extractFile(archive, normalize(file));
+const version = require('../package.json').version;
+for (const file of ['latest.yml', `LycanSync-${version}-windows-x64-setup.exe.blockmap`]) {
+  if (!existsSync(join(outputDirectory, file))) throw new Error(`构建缺少更新产物：${file}`);
+}
 writeFileSync(join(outputDirectory, '安装说明.txt'),
   '运行 LycanSync 安装程序即可，运行库由安装程序按需检测安装。\n'
   + `本包默认服务器：${apiUrl}。登录页可修改，用户选择会在升级时保留。\n`
+  + `固定更新目录：${updateUrl}。每次打开检查一次，进入应用前自动下载、安装并重新打开；失败可继续使用当前版本。\n`
+  + '发布时保留版本化安装包和 blockmap，最后更新 latest.yml；旧版本首次接入自动更新需手动安装此包。\n'
   + '内网测试仍需手动信任服务器的 CA 证书；正式可信 HTTPS 服务无需此步骤。\n'
   + '当前为未签名测试版本，安装和真实设备行为仍需验收。\n', 'utf8');

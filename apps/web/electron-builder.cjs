@@ -1,3 +1,8 @@
+const { updateFeedUrl } = require('./electron/startup-update.cjs');
+
+const updateUrl = updateFeedUrl(process.env.LYCANSYNC_PACKAGED_UPDATE_URL
+  || (process.env.LYCANSYNC_PACKAGED_API_URL ? new URL('/downloads/', process.env.LYCANSYNC_PACKAGED_API_URL).href : ''));
+
 module.exports = {
   appId: 'com.lycansync.desktop',
   productName: 'LycanSync',
@@ -5,16 +10,18 @@ module.exports = {
   electronDist: 'node_modules/electron/dist',
   directories: { output: '../../release/desktop', buildResources: '../../release/build-resources' },
   extraMetadata: { main: 'electron/main.cjs' },
+  publish: { provider: 'generic', url: updateUrl },
   files: [
     'dist/**/*',
     'electron/main.cjs',
+    'electron/startup-update.cjs',
     'electron/server-settings.cjs',
     'electron/access-links.cjs',
     'electron/preload.cjs',
     'electron/media-helper.cjs',
     'electron/media-diagnostics.cjs',
     'electron/native-video-thumbnails.cjs',
-    '!node_modules/**/*',
+    'node_modules/**/*',
   ],
   extraResources: [
     { from: '../../release/desktop/THIRD-PARTY-NOTICES.txt', to: 'THIRD-PARTY-NOTICES.txt' },

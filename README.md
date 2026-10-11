@@ -12,16 +12,20 @@ Windows 桌面安装包包含 media-helper、media-bridge 和 activity-helper，
 
 ```powershell
 $env:LYCANSYNC_PACKAGED_API_URL = "https://你的服务器地址"
+# 可选：独立更新站点；未指定时使用上述地址的 /downloads/。
+# $env:LYCANSYNC_PACKAGED_UPDATE_URL = "https://你的更新站点/downloads/"
 npm --prefix apps/web run package:desktop
 ```
 
-产物位于 `release/desktop/`，交付单个未签名 NSIS x64 安装程序，内置微软 VC++ x64 运行库并按需安装。打包必须指定 HTTPS 服务器地址；运行库默认从 Visual Studio 2022 Build Tools 的 Redist 目录获取，其他位置用 `LYCANSYNC_VC_REDIST_PATH` 指定微软原版文件。安装完成可直接启动，在未登录页面修改服务器地址并重启；选择保存在用户目录，升级不会覆盖。安装版启动、升级、自动启动、原生媒体和卸载仍需在 Windows 10/11 验收。
+产物位于 `release/desktop/`，包括未签名 NSIS x64 安装程序、同名 `.blockmap` 和 `latest.yml`；内置微软 VC++ x64 运行库并按需安装。打包必须指定 HTTPS 服务器地址；运行库默认从 Visual Studio 2022 Build Tools 的 Redist 目录获取，其他位置用 `LYCANSYNC_VC_REDIST_PATH` 指定微软原版文件。安装完成可直接启动，在未登录页面修改服务器地址并重启；选择保存在用户目录，升级不会覆盖。安装版启动、升级、自动启动、原生媒体和卸载仍需在 Windows 10/11 验收。
+
+Windows 安装版每次启动只检查一次更新，不定时轮询。检查最多等待 10 秒；发现新版后在恢复登录、启动活动检测及媒体之前下载，经更新库校验后静默安装并重新打开。下载期间可选择“暂不更新”；检查、下载或校验失败会提示并继续使用旧版，不在通话中或普通退出时补装。更新源固定在安装包中，不随用户修改业务服务器改变；开发和浏览器入口不检查更新。旧版首次接入需手动安装 0.0.4 或以后版本，设置的“客户端”栏目可查看当前版本及本次状态。当前未签名版本仍可能被安全软件阻止；真实静默升级及重启尚待验收，不能保证系统级安装失败能在原进程中恢复。
 
 Linux 部署包包含后端 JAR、Dockerfile、Compose、HTTPS 入口和部署说明：
 
 ```powershell
 mvn -f services/api/pom.xml package
-./deploy/package-server.ps1 -DesktopInstaller ./release/desktop/LycanSync-0.0.3-windows-x64-setup.exe
+./deploy/package-server.ps1 -DesktopInstaller ./release/desktop/LycanSync-0.0.4-windows-x64-setup.exe
 ```
 
 产物位于 `release/server/`。部署步骤见 [服务器部署说明](deploy/server/DEPLOY.md)，支持域名证书和内网 VMware 测试 CA 两种明确配置。服务器使用 `rtc-server` profile；`rtc-local` 的本机监听约束保持不变。服务器首次运行需要联网获取 Docker 镜像，并执行数据库迁移；本包不包含现有数据库、聊天文件或密钥。
@@ -241,7 +245,7 @@ npx electron electron/main.cjs --user-data-dir="$env:LOCALAPPDATA\LycanSync-Test
 - 桌面业务请求由主进程转发到 `electron/server-config.json` 指定的服务，不依赖 Vite 代理。本机默认连接 `https://192.168.150.108`，开发模式可用 `LYCANSYNC_API_URL` 显式指定另一邀请服务器；安装版初始使用打包时的配置，可在未登录页面切换服务器；用户目录的选择优先于安装包默认值。地址不能包含路径，非本机地址必须使用 HTTPS。
 - 此变量只指定业务后端；音视频服务地址仍来自后端签发的凭证。`rtc-local` 限本机，虚拟机与正式部署使用 `rtc-server` 的媒体地址和端口；修改客户端变量不会自动获得公网部署能力。
 
-目前提供源码开发运行和 Windows 安装程序，尚不包含自动更新、托盘或游戏内悬浮层。Windows 桌面麦克风已接入默认通讯输入端点的 Rust/WASAPI 共享模式采集，通过有界命名管道 PCM 进入当前 LiveKit 麦克风轨道；默认设备拔出、切换或采集失败时会停止麦克风并提示，不静默切回 Chromium。浏览器麦克风仍由 Chromium 采集。原生麦克风的真实设备音质、设备拔插与长时间运行尚未验收；软件回声消除不在支持范围内。屏幕声音的两种 Windows 采集模式也尚未完成真实设备运行时验收。
+目前提供源码开发运行、Windows 安装程序与启动更新链路，尚不包含托盘或游戏内悬浮层。Windows 桌面麦克风已接入默认通讯输入端点的 Rust/WASAPI 共享模式采集，通过有界命名管道 PCM 进入当前 LiveKit 麦克风轨道；默认设备拔出、切换或采集失败时会停止麦克风并提示，不静默切回 Chromium。浏览器麦克风仍由 Chromium 采集。原生麦克风的真实设备音质、设备拔插与长时间运行尚未验收；软件回声消除不在支持范围内。屏幕声音的两种 Windows 采集模式也尚未完成真实设备运行时验收。
 
 ## 房间内远控（开发中）
 

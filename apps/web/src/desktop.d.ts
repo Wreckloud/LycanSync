@@ -76,8 +76,22 @@ interface NativeMicrophoneChunk {
   pcm: Uint8Array;
 }
 
+interface StartupUpdateState {
+  phase: 'idle' | 'checking' | 'downloading' | 'installing' | 'ready';
+  version: string;
+  supported: boolean;
+  message: string;
+  nextVersion?: string;
+  percent?: number;
+  error?: boolean;
+}
+
 interface Window {
   lycanDesktop?: {
+    runStartupUpdate(): Promise<StartupUpdateState>;
+    getUpdateState(): Promise<StartupUpdateState>;
+    skipStartupUpdate(): Promise<void>;
+    onUpdateState(callback: (state: StartupUpdateState) => void): () => void;
     clearSession(): Promise<void>;
     getAccessLink(): Promise<import('./auth/accountAccess').AccessOffer | null>;
     prepareAccessLink(offer: import('./auth/accountAccess').AccessOffer): Promise<void>;

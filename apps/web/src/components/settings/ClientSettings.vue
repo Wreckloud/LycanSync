@@ -13,6 +13,8 @@ let loaded = false;
 const screenPreferences = reactive({ hideCursor: false, hideBorder: false });
 const screenSupport = ref<{ hideCursor: boolean; hideBorder: boolean }>();
 const screenError = ref('');
+const updateState = ref<StartupUpdateState>();
+const updateError = ref('');
 let screenLoaded = false;
 
 watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
@@ -48,6 +50,8 @@ function updateScreenPreference(key: 'hideCursor' | 'hideBorder', event: Event) 
 watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
   if (!active || !desktop || loaded || !desktopBridge?.getAutoStart) return;
   loaded = true;
+  void desktopBridge.getUpdateState().then((state) => { updateState.value = state; })
+    .catch(() => { updateError.value = '无法读取更新状态，请重新打开客户端。'; });
   void desktopBridge.getAutoStart().then((settings) => {
     autoStartSupported.value = settings.supported;
     autoStartEnabled.value = settings.enabled;
@@ -76,6 +80,14 @@ async function updateAutoStart(event: Event) {
 <template>
   <div class="settings-section client-settings">
     <p class="settings-intro">客户端选项只影响当前设备。</p>
+    <section v-if="desktop" class="settings-block">
+      <h2>应用更新</h2>
+      <div class="settings-toggle">
+        <span><strong>版本 {{ updateState?.version || '读取中…' }}</strong><small>每次打开检查一次；发现新版后，在进入应用前下载、安装并重新打开。</small></span>
+      </div>
+      <p v-if="updateState" :class="{ 'settings-error': updateState.error }">{{ updateState.message }}</p>
+      <p v-if="updateError" role="alert" class="settings-error">{{ updateError }}</p>
+    </section>
     <section class="settings-block">
       <h2>共享观看</h2>
       <label class="settings-toggle">
