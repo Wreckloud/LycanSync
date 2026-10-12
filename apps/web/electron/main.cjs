@@ -52,8 +52,8 @@ const groupAttachmentPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}
 const groupFilePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/files(?:\/(?:requests\/)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/i;
 const groupFileDownloadPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/files\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 app.setName('LycanSync');
-// Windows Graphics Capture 在部分 Win10 窗口源上会持续拖慢系统壳层；保持 Chromium 的 DXGI/GDI 兼容采集链路。
-// 这只影响共享的采集后端，不关闭 GPU 合成、硬件解码或 WebRTC 编码。
+// 来源缩略图仍由 Chromium 截取；避免部分 Win10 窗口的 WGC 缩略图采集拖慢系统壳层。
+// 正式视频流由 Rust 采集，此开关不改变其后端，也不关闭 GPU 合成或 WebRTC 编码。
 if (process.platform === 'win32') {
   app.commandLine.appendSwitch('disable-features', 'WebRtcAllowWgcDesktopCapturer,WebRtcAllowWgcScreenCapturer');
 }
@@ -73,7 +73,6 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'lycan', privileges: {
 } }]);
 
 let mainWindow;
-let pendingCapture;
 let closing = false;
 let canClose = false;
 let closeTimer;
@@ -822,13 +821,6 @@ function captureSourceType(source) {
   return source.id.startsWith('screen:') ? 'screen' : 'window';
 }
 
-function cancelCapture() {
-  if (!pendingCapture) return;
-  const capture = pendingCapture;
-  pendingCapture = undefined;
-  denyCapture(capture.callback);
-}
-
 function denyCapture(callback) {
   try { callback({}); }
   catch (error) {
@@ -954,29 +946,8 @@ function configurePermissions() {
       && details.mediaTypes.every((type) => type === 'audio');
     callback(Boolean(trusted && (allowedMedia || ['display-capture', 'fullscreen'].includes(permission))));
   });
-  desktopSession.setDisplayMediaRequestHandler(async (request, callback) => {
-    if (closing || pendingCapture || request.frame !== mainWindow?.webContents.mainFrame
-        || !trustedUrl(request.securityOrigin) || !request.videoRequested || request.audioRequested) {
-      denyCapture(callback);
-      return;
-    }
-    const capture = { requestId: randomUUID(), callback, sources: [] };
-    pendingCapture = capture;
-    try {
-      // 只保证“不能直接选中自身窗口”：按 source id 精确排除当前主窗口，不按标题模糊匹配。
-      const ownSourceId = mainWindow.getMediaSourceId();
-      capture.sources = (await desktopCapturer.getSources({
-        types: ['window', 'screen'], thumbnailSize: { width: 320, height: 180 },
-      })).filter((source) => source.id !== ownSourceId).sort((left, right) =>
-        captureSourceType(left).localeCompare(captureSourceType(right)));
-      if (pendingCapture !== capture) return;
-      // 没有可选源时按既有取消逻辑结束，不替用户默认选择整个屏幕。
-      if (!capture.sources.length) { cancelCapture(); return; }
-      mainWindow.webContents.send('capture:sources', { requestId: capture.requestId, sources: capture.sources.map((source) => ({
-        id: source.id, name: source.name, thumbnail: source.thumbnail.toDataURL(), type: captureSourceType(source),
-      })) });
-    } catch { if (pendingCapture === capture) cancelCapture(); }
-  });
+  // 桌面只允许正式原生共享；保留拒绝处理器，避免误调用 getDisplayMedia 启动另一条采集链路。
+  desktopSession.setDisplayMediaRequestHandler((_request, callback) => denyCapture(callback));
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -1019,7 +990,7 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
     mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
-    mainWindow.webContents.on('render-process-gone', () => { cancelCapture(); finishClose(); });
+    mainWindow.webContents.on('render-process-gone', () => finishClose());
     mainWindow.once('ready-to-show', () => mainWindow.show());
     mainWindow.on('close', (event) => {
       if (canClose) return;
@@ -1027,7 +998,6 @@ if (!app.requestSingleInstanceLock()) {
       if (closing) return;
       closing = true;
       startupUpdate.cancel();
-      cancelCapture();
       // 先停止采集再退出；页面异常时由主进程兜底销毁窗口，避免后台残留。
       closeTimer = setTimeout(finishClose, 2000);
       mainWindow.webContents.send('window:release-media');
@@ -1266,13 +1236,6 @@ ipcMain.handle('external:open', async (event, value) => {
   const url = externalHttpUrl(value);
   if (!url) throw new Error('只允许打开 HTTP 或 HTTPS 链接。');
   await shell.openExternal(url);
-});
-ipcMain.on('capture:select', (event, requestId, sourceId) => {
-  if (!trustedSender(event) || !pendingCapture || requestId !== pendingCapture.requestId) return;
-  const source = pendingCapture.sources.find((candidate) => candidate.id === sourceId);
-  const capture = pendingCapture;
-  pendingCapture = undefined;
-  if (source) capture.callback({ video: source }); else denyCapture(capture.callback);
 });
 app.on('before-quit', (event) => {
   closing = true;

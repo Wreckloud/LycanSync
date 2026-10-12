@@ -62,8 +62,6 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
       close: () => undefined,
       finishClose: () => undefined,
       openExternal: async (url: string) => { document.documentElement.dataset.externalUrl = url; },
-      selectSource: () => undefined,
-      onSources: () => () => undefined,
       onClose: () => () => undefined,
     } });
   });
