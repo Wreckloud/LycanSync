@@ -45,7 +45,7 @@ function expired() {
 }
 const removeAccessLink = desktop?.onAccessLink((offer) => {
   // 当前确认未结束前不切换链接，避免两次兑换的响应互相覆盖。
-  if (!accessOffer.value) accessOffer.value = offer;
+  if (!user.value && !accessOffer.value) accessOffer.value = offer;
 });
 const removeMaximizedChange = desktop?.onMaximizedChange((maximized) => { windowMaximized.value = maximized; });
 const removeUpdateState = desktop?.onUpdateState((state) => { updateState.value = state; });
@@ -118,6 +118,8 @@ async function saveProfile(profile: ProfileUpdate) {
 }
 
 watch(() => user.value?.id ?? null, (currentUserId) => {
+  // 有效会话直接进入应用；打开邀请不能切换身份或遮住已有通话。
+  if (currentUserId) accessOffer.value = null;
   if (sessionHeartbeat !== null) window.clearInterval(sessionHeartbeat);
   sessionHeartbeat = currentUserId ? window.setInterval(() => {
     // 同账号在新设备登录后，旧客户端即使正在语音中也会及时收到 401 并退出。
@@ -172,7 +174,7 @@ onMounted(async () => {
   }
   // 更新期间不读走邀请、不恢复登录，也不挂载房间或启动心跳。
   void initialize();
-  void desktop?.getAccessLink().then((offer) => { if (offer && !accessOffer.value) accessOffer.value = offer; })
+  void desktop?.getAccessLink().then((offer) => { if (!user.value && offer && !accessOffer.value) accessOffer.value = offer; })
     .catch(() => { error.value = '无法读取邀请链接，请从网页重新打开。'; });
   void desktop?.getServerSettings?.().then((settings) => {
     serverAddress.value = settings.apiUrl;

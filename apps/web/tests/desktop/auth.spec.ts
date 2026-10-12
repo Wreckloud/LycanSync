@@ -50,6 +50,7 @@ async function createAccountServer(administrator = true) {
   if (!address || typeof address === 'string') throw new Error('测试服务未启动');
   const origin = 'http://127.0.0.1:' + address.port;
   return { origin, user, get token() { return token; }, get logoutCount() { return logoutCount; },
+    get redemptions() { return redemptions; },
     delaySession: () => { holdNextSession = true; }, started, release: () => releaseOldSession(),
     revoke: () => { revoked = true; }, close: async () => {
       releaseOldSession();
@@ -82,9 +83,18 @@ for (const administrator of [true, false]) {
       expect(existsSync(sessionFile)).toBe(true);
       expect(readFileSync(sessionFile).includes(Buffer.from(api.token))).toBe(false);
       await application.close();
-      ({ application } = await launchIsolatedDesktop(directory, api.origin));
+      const unusedLink = `lycansync://access?server=https%3A%2F%2Fexample.com#token=${'b'.repeat(43)}`;
+      ({ application } = await launchIsolatedDesktop(directory, api.origin, unusedLink));
       const restored = await application.firstWindow();
       await expect(restored.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
+      await expect(restored.locator('.access-prompt')).toHaveCount(0);
+      // 冷启动携带链接和运行中收到链接都不覆盖已有账号，也不触发兑换。
+      await application.evaluate(({ BrowserWindow }, offer) => {
+        BrowserWindow.getAllWindows()[0].webContents.send('auth:access:offer', offer);
+      }, { server: api.origin, token: 'b'.repeat(43) });
+      await expect(restored.locator('.access-prompt')).toHaveCount(0);
+      await expect(restored.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
+      expect(api.redemptions).toBe(1);
       await restored.getByRole('button', { name: '语音与音频设置', exact: true }).click();
       await restored.getByRole('button', { name: '账号设置', exact: true }).click();
       await restored.getByRole('button', { name: '退出登录', exact: true }).click();
