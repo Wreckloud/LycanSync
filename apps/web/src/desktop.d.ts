@@ -88,6 +88,7 @@ interface StartupUpdateState {
 
 interface Window {
   lycanDesktop?: {
+    copyText(text: string): Promise<void>;
     runStartupUpdate(): Promise<StartupUpdateState>;
     getUpdateState(): Promise<StartupUpdateState>;
     skipStartupUpdate(): Promise<void>;

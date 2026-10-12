@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, onScopeDispose, ref, watch } from 'vue';
+import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
+import { X } from '@lucide/vue';
+import InlineFeedback from './InlineFeedback.vue';
 import { authRequest, type AuthUser } from '../auth/authApi';
 import { redemptionKey, type AccessOffer, type AccessPreview } from '../auth/accountAccess';
 const props = defineProps<{ offer: AccessOffer; currentUser: AuthUser | null; currentServer: string }>();
@@ -7,12 +9,21 @@ const emit = defineEmits<{ cancel: []; joined: [result: { sessionToken?: string;
 const preview = ref<AccessPreview | null>(null);
 const error = ref('');
 const busy = ref(false);
+const heading = ref<HTMLElement | null>(null);
+const title = computed(() => {
+  const server = preview.value?.serverName ?? 'LycanSync';
+  if (props.currentUser) return server;
+  if (preview.value?.kind === 'ACTIVATE') return `激活 ${server}`;
+  if (preview.value?.kind === 'RECOVERY') return `恢复登录 · ${server}`;
+  return `加入 ${server}`;
+});
+const subtitle = computed(() => preview.value?.kind === 'RECOVERY' ? '回到熟悉的小队'
+  : preview.value?.kind === 'ACTIVATE' ? '让朋友们有个相聚的地方' : '一起开黑，一起看');
 const canRedeem = computed(() => preview.value?.status === 'PENDING'
   || (preview.value?.status === 'COMPLETED' && !!sessionStorage.getItem(`lycan:redeem:${props.offer.token}`)));
 let generation = 0;
 const controller = new AbortController();
-onScopeDispose(() => { generation++; controller.abort(); });
-watch(() => [props.offer.token, props.currentServer], async () => {
+async function checkLink() {
   const task = ++generation;
   preview.value = null;
   error.value = '';
@@ -22,7 +33,12 @@ watch(() => [props.offer.token, props.currentServer], async () => {
       AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]));
     if (task === generation) preview.value = result;
   } catch (exception) { if (task === generation) error.value = exception instanceof Error ? exception.message : '链接检查失败'; }
-}, { immediate: true });
+}
+
+function close() { if (!busy.value) emit('cancel'); }
+watch(() => [props.offer.token, props.offer.server, props.currentServer], () => { void checkLink(); }, { immediate: true });
+onMounted(() => heading.value?.focus());
+onScopeDispose(() => { generation++; controller.abort(); });
 
 async function join() {
   if (busy.value || props.currentUser || !canRedeem.value || !preview.value) return;
@@ -49,27 +65,47 @@ async function switchServer() {
 </script>
 
 <template>
-  <section class="auth-card" aria-label="确认链接操作">
-    <h1>{{ preview?.serverName ?? '打开 LycanSync' }}</h1>
-    <template v-if="currentUser">
-      <p>当前已登录 {{ currentUser.nickname }}。可以直接返回应用；需要使用其他账号时，请先退出登录。</p>
-    </template>
-    <template v-else-if="offer.server !== currentServer">
-      <p>此链接连接到 {{ offer.server }}，确认后应用将切换服务器并重启。</p>
-      <button :disabled="busy" @click="switchServer">确认连接此服务器</button>
-    </template>
-    <template v-else-if="preview">
-      <p v-if="!canRedeem">链接已使用、过期或撤销。恢复原账号请联系服主；下载入口仍在原网页。</p>
-      <template v-else>
-        <p>{{ preview.kind === 'ACTIVATE' ? '确认后成为本服务器管理员。' : preview.kind === 'RECOVERY' ? '恢复原账号，保留资料与权限；成功后旧设备登录失效。' : '加入此服务器，接下来可以设置资料或直接跳过。' }}</p>
-        <div class="button-actions">
-          <button disabled>QQ 授权（尚未开通）</button>
-          <button class="confirm-button" :disabled="busy" @click="join">{{ busy ? '正在处理…' : preview.kind === 'ACTIVATE' ? '确认激活' : preview.kind === 'RECOVERY' ? '确认恢复登录' : '暂不绑定 QQ，确认加入' }}</button>
-        </div>
+  <section class="auth-card access-prompt" aria-labelledby="access-prompt-title" @keydown.esc.stop="close">
+    <header class="access-header">
+      <div><h1 id="access-prompt-title" ref="heading" tabindex="-1">{{ title }}</h1><p>{{ subtitle }}</p></div>
+      <button type="button" class="access-close" :aria-label="currentUser ? '返回应用' : '关闭邀请'" :disabled="busy" @click="close"><X :size="18" aria-hidden="true" /></button>
+    </header>
+    <div class="access-body">
+      <template v-if="currentUser">
+        <p>已登录 {{ currentUser.nickname }}。如需使用其他账号，请先退出登录。</p>
       </template>
-    </template>
-    <p v-else-if="!error">正在检查链接…</p>
-    <p v-if="error" role="alert" class="auth-error">{{ error }}</p>
-    <button :disabled="busy" @click="emit('cancel')">{{ currentUser ? '返回应用' : '取消' }}</button>
+      <template v-else-if="offer.server !== currentServer">
+        <p>连接到 {{ offer.server }}，确认后应用将切换服务器并重启。</p>
+      </template>
+      <template v-else-if="preview">
+        <p v-if="!canRedeem">链接已使用、过期或撤销，请联系服主获取新链接。</p>
+        <p v-else>{{ preview.kind === 'ACTIVATE' ? '确认后成为本服务器的服主，管理成员与邀请。' : preview.kind === 'RECOVERY' ? '保留原账号的资料与权限，旧设备将退出登录。' : '这是你的专属邀请，加入后链接即失效。' }}</p>
+      </template>
+      <p v-else-if="!error">正在检查邀请…</p>
+      <p v-else>暂时无法检查此链接，请重试。</p>
+    </div>
+    <footer class="access-actions">
+      <InlineFeedback class="access-feedback" :message="error" :status="busy ? '正在处理…' : ''" />
+      <button v-if="currentUser" type="button" class="confirm-button" :disabled="busy" @click="close">返回应用</button>
+      <button v-else-if="offer.server !== currentServer" type="button" class="confirm-button" :disabled="busy" @click="switchServer">连接并重启</button>
+      <button v-else-if="canRedeem" type="button" class="confirm-button" :disabled="busy" @click="join">{{ preview?.kind === 'ACTIVATE' ? '确认激活' : preview?.kind === 'RECOVERY' ? '恢复登录' : '确认加入' }}</button>
+      <button v-else-if="error" type="button" :disabled="busy" @click="checkLink">重新检查</button>
+    </footer>
   </section>
 </template>
+
+<style scoped>
+.access-prompt { width: min(480px, 100%); padding: 24px; }
+.access-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.access-header > div { min-width: 0; }
+.access-header h1 { margin: 0; font-size: 22px; line-height: 32px; overflow-wrap: anywhere; }
+.access-header p { margin: 4px 0 0; font-size: 13px; line-height: 20px; }
+.access-close { display: grid; place-items: center; flex-shrink: 0; width: var(--button-height); height: var(--button-height); padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
+.access-close:hover:not(:disabled) { background: var(--panel-raised); color: var(--text); }
+.access-body { min-height: 64px; margin: 20px 0; }
+.access-body p { margin: 0; color: var(--muted); font-size: 14px; line-height: 22px; overflow-wrap: anywhere; }
+.access-actions { display: flex; align-items: center; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
+.access-feedback { flex: 1; }
+.access-actions button { flex-shrink: 0; min-width: 96px; }
+@media (max-width: 420px) { .access-prompt { padding: 20px; } .access-header h1 { font-size: 20px; } }
+</style>

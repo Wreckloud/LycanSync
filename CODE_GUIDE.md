@@ -16,7 +16,7 @@
 | `apps/web/src/profile/useAvatarCrop.ts`、`components/AvatarCropDialog.vue` | 头像选择和裁剪 | 先验证解码再展示；选择模块释放位图和对象 URL，裁剪器只输出 512 像素 PNG |
 | `services/api/src/main/java/com/lycansync/api/common/image/AvatarImageProcessor.java` | 个人及群组头像规范化 | 检查裁剪载荷与解码尺寸，统一 256 像素 PNG 后保存；不上传原图、不新增存储链路 |
 | `apps/web/src/components/InlineFeedback.vue`、`auth/authApi.ts` | 就近反馈与 HTTP 错误解析 | 固定反馈区不推动布局；保留状态／业务代码并统一空正文错误文案 |
-| `apps/web/src/components/settings/MemberAccessSettings.vue` | 服主管理 | 生成邀请、恢复原成员及查看链接记录 |
+| `apps/web/src/components/settings/MemberAccessSettings.vue`、`settings/useMemberAccess.ts` | 服主管理 | 就近展示生成／复制反馈；可见时轮询当前页记录，隐藏及销毁时停止，刷新不丢失原链接或成员选择 |
 | `apps/web/src/App.vue` | 群组界面、状态同步、音频设置和共享选择器 | 用户动作如何进入 RTC；页面状态不等于媒体资源 |
 | `apps/web/src/components` | 聊天、成员、播放和诊断组件 | props / emit、轨道展示、挂载与销毁 |
 | `apps/web/src/rtc/useRtcRoom.ts` | 房间连接、普通媒体采集发布、权限及离房清理 | 房间与任务身份；资源创建和停止路径 |

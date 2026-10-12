@@ -202,6 +202,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   flex: 0 0 auto;
   display: grid;
   place-items: center;
+  padding: 0;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--panel-soft);
@@ -244,7 +245,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 }
 
 .group-button:disabled { opacity: .4; cursor: not-allowed; }
-.group-rail-avatar { width: 100%; height: 100%; border-radius: 5px; object-fit: cover; }
+.group-rail-avatar { display: block; width: 100%; height: 100%; border-radius: 5px; object-fit: cover; }
 .add-group { border-style: dashed; }
 .rail-spacer { flex: 1; min-height: 24px; }
 
@@ -284,9 +285,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   font-weight: 650;
 }
 
-.group-copy p, .group-copy small { margin: 4px 0 0; }
-.group-copy p { color: var(--muted); font-size: 15px; }
-.group-copy small { display: block; color: var(--subtle); font-size: 13px; }
+.group-copy p { margin: 4px 0 0; color: var(--muted); font-size: 15px; }
 
 .icon-button {
   position: relative;

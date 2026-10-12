@@ -20,7 +20,7 @@ test('仅服主显示邀请面板且生成链接只在成功后展示', async ({
   await page.route('**/api/presence/heartbeat', (route) => route.fulfill({ status: 204 }));
   await page.route('**/api/auth/access/members?offset=0', (route) => route.fulfill({ json: [] }));
   await page.route('**/api/auth/access/links*', (route) => route.fulfill({ json: route.request().method() === 'POST'
-    ? { url: `https://example.com/join#token=${'a'.repeat(43)}` } : [] }));
+    ? { record: { id: 'new-link' }, url: `https://example.com/join#token=${'a'.repeat(43)}` } : [] }));
   await page.goto('/');
   await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
   await page.getByRole('button', { name: '邀请与成员', exact: true }).click();

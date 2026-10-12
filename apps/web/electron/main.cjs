@@ -1,4 +1,4 @@
-const { app, BrowserWindow, desktopCapturer, ipcMain, net, powerMonitor, protocol, screen, session, safeStorage, shell, sharedTexture } = require('electron');
+const { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, net, powerMonitor, protocol, screen, session, safeStorage, shell, sharedTexture } = require('electron');
 const { release: osRelease } = require('node:os');
 const { spawn } = require('node:child_process');
 const { createServer } = require('node:net');
@@ -1039,6 +1039,11 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
+ipcMain.handle('clipboard:write-text', async (event, text) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  if (typeof text !== 'string' || !text || text.length > 16_384) throw new Error('复制内容无效');
+  await clipboard.writeText(text);
+});
 ipcMain.handle('update:startup', async (event) => {
   if (!trustedSender(event) || closing) throw new Error('当前不能检查更新');
   const state = await startupUpdate.start();

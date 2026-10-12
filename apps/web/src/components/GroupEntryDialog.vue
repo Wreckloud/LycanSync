@@ -91,7 +91,7 @@ onScopeDispose(() => { if (returnFocus?.isConnected) returnFocus.focus(); });
               <span class="entry-avatar-overlay" aria-hidden="true"><Pencil :size="18" /><span>编辑</span></span>
             </button>
             <div v-else class="group-avatar-preview entry-join-icon" aria-hidden="true"><Link :size="32" /></div>
-            <button v-if="creating && avatar" type="button" class="entry-remove-avatar" :disabled="busy || picking" @click="avatar = ''">移除</button>
+            <button v-if="creating" type="button" class="entry-avatar-action" :disabled="busy || picking" @click="avatar ? avatar = '' : avatarInput?.click()">{{ avatar ? '移除' : '添加头像' }}</button>
           </div>
           <input ref="avatarInput" type="file" hidden aria-label="上传群组头像" accept="image/png,image/jpeg" @change="pickAvatar" />
           <label v-if="creating" class="entry-field entry-name">群组名称
@@ -138,8 +138,8 @@ onScopeDispose(() => { if (returnFocus?.isConnected) returnFocus.focus(); });
 .entry-join-icon { cursor: default; }
 .entry-avatar-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; background: #0009; color: white; font-size: 12px; opacity: 0; }
 .group-avatar-preview:hover .entry-avatar-overlay, .group-avatar-preview:focus-visible .entry-avatar-overlay { opacity: 1; }
-.entry-remove-avatar { position: absolute; top: 74px; width: 72px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 12px; line-height: 18px; cursor: pointer; }
-.entry-remove-avatar:hover:not(:disabled) { color: var(--text); }
+.entry-avatar-action { position: absolute; top: 74px; width: 72px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 12px; line-height: 18px; cursor: pointer; }
+.entry-avatar-action:hover:not(:disabled) { color: var(--text); }
 .entry-field { display: grid; gap: 4px; min-width: 0; }
 .entry-name { flex: 1; }
 .entry-name input { width: 100%; min-width: 0; height: 40px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font-size: 16px; }
@@ -157,5 +157,5 @@ onScopeDispose(() => { if (returnFocus?.isConnected) returnFocus.focus(); });
 .entry-feedback { flex: 1; }
 .entry-footer .button-actions { flex-shrink: 0; justify-content: flex-end; }
 .entry-footer .confirm-button { border-color: var(--accent); background: var(--accent); }
-@media (max-width: 420px) { .group-entry { padding: 20px; } .entry-header h2 { font-size: 20px; } .entry-identity { gap: 12px; } .group-avatar-preview, .entry-remove-avatar { width: 64px; } .group-avatar-preview { height: 64px; } .entry-remove-avatar { top: 66px; } }
+@media (max-width: 420px) { .group-entry { padding: 20px; } .entry-header h2 { font-size: 20px; } .entry-identity { gap: 12px; } .group-avatar-preview, .entry-avatar-action { width: 64px; } .group-avatar-preview { height: 64px; } .entry-avatar-action { top: 66px; } }
 </style>

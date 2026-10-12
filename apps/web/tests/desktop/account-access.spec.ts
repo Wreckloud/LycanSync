@@ -19,13 +19,13 @@ test('邀请参数从冷启动和第二实例传到确认页面', async () => {
     const { application, args, env } = await launchIsolatedDesktop(userDirectory, 'http://127.0.0.1:' + address.port, link);
     try {
       const page = await application.firstWindow();
-      await expect(page.getByRole('button', { name: '确认连接此服务器' })).toBeVisible();
-      await page.getByRole('button', { name: '取消', exact: true }).click();
-      await expect(page.getByLabel('确认链接操作')).toHaveCount(0);
+      await expect(page.getByRole('button', { name: '连接并重启' })).toBeVisible();
+      await page.getByRole('button', { name: '关闭邀请', exact: true }).click();
+      await expect(page.locator('.access-prompt')).toHaveCount(0);
       const executable = await application.evaluate(() => process.execPath);
       const child = spawn(executable, [...args, link], { env, windowsHide: true, stdio: 'ignore' });
       try {
-        await expect(page.getByRole('button', { name: '确认连接此服务器' })).toBeVisible();
+        await expect(page.getByRole('button', { name: '连接并重启' })).toBeVisible();
       } finally {
         if (child.exitCode === null) child.kill();
       }

@@ -1108,7 +1108,6 @@ function participantListening(participant: Participant) {
           <div class="group-copy">
             <div class="group-title-row"><h1>{{ selectedGroup.name }}</h1></div>
             <p v-if="selectedGroup.description">{{ selectedGroup.description }}</p>
-            <small>单击头像预览 · 双击或按 Enter 加入语音</small>
           </div>
           <IconButton :label="joinedGroupId === selectedGroup.id ? '离开当前群组语音' : '加入当前群组语音'"
             :class="{ 'is-danger': joinedGroupId === selectedGroup.id }" :disabled="joiningGroupId !== null"

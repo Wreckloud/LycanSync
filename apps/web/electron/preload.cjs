@@ -19,6 +19,7 @@ sharedTexture?.setSharedTextureReceiver(async ({ importedSharedTexture }, token,
 
 // 只暴露固定操作，不向页面开放 Node.js 或任意 IPC 通道。
 contextBridge.exposeInMainWorld('lycanDesktop', {
+  copyText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
   runStartupUpdate: () => ipcRenderer.invoke('update:startup'),
   getUpdateState: () => ipcRenderer.invoke('update:state:get'),
   skipStartupUpdate: () => ipcRenderer.invoke('update:skip'),

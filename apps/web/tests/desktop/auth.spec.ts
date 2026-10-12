@@ -64,7 +64,7 @@ async function redeem(application: ElectronApplication, origin: string, recovery
   await application.evaluate(({ BrowserWindow }, offer) => {
     BrowserWindow.getAllWindows()[0].webContents.send('auth:access:offer', offer);
   }, { server: origin, token: (recovery ? 'e' : 'a').repeat(43) });
-  await page.getByRole('button', { name: /^(确认激活|暂不绑定 QQ，确认加入|确认恢复登录)$/ }).click();
+  await page.getByRole('button', { name: /^(确认激活|确认加入|恢复登录)$/ }).click();
   if (!recovery) await page.getByRole('button', { name: '跳过', exact: true }).click();
   await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeVisible();
   return page;
