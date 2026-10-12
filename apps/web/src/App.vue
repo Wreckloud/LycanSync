@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, reactive, ref, watch } from 'vue';
 import { AudioLines, ChevronDown, ChevronLeft, ChevronRight, Copy, CornerUpLeft, Gamepad2, Headphones,
-  LogOut, MicOff, Minus, MonitorUp, Plus, RadioTower,
-  Settings, Square, UserRound, Volume2, X } from '@lucide/vue';
+  LogOut, MicOff, Minus, MonitorUp, MonitorX, Plus, RadioTower,
+  Settings, Square, UserRound, Volume2, VolumeX, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
 import ParticipantCard from './components/ParticipantCard.vue';
 import VoiceLevelMic from './components/VoiceLevelMic.vue';
@@ -12,12 +12,14 @@ import SettingsView from './components/SettingsView.vue';
 import AppNotice from './components/AppNotice.vue';
 import GroupEntryDialog from './components/GroupEntryDialog.vue';
 import GroupChat from './components/GroupChat.vue';
+import ScreenSharePicker from './components/ScreenSharePicker.vue';
 import { createGroup, findGroup, findGroupPresences, findGroups, nextPresenceWaitRequest, waitForGroupPresenceChanges,
   type GroupDetail, type GroupMember, type GroupPresence, type GroupPresenceChangeCursor, type GroupSummary } from './group/groupApi';
 import { useRtcRoom } from './rtc/useRtcRoom';
 import { SCREEN_SHARE_QUALITIES, readScreenShareQuality, saveScreenShareQuality, type ScreenShareQualityId } from './rtc/screenShareQuality';
 import { canSelectNativeSource, shouldDefaultShareAudio,
-  resolveNativeScreenAudioCapability, shouldShareAudioInNativeSelection } from './rtc/nativeScreenAudioMode';
+  resolveNativeScreenAudioCapability, shouldShareAudioInNativeSelection,
+  type NativeScreenAudioMode } from './rtc/nativeScreenAudioMode';
 import { createNativeVideoSourceSelection } from './components/nativeVideoSourceSelection';
 import { useRoomSummary } from './rtc/useRoomSummary';
 import { requestRoomOccupancies } from './rtc/roomSummaryApi';
@@ -64,17 +66,17 @@ const captureSourceType = ref<'window' | 'screen'>('window');
 const captureQuality = ref<ScreenShareQualityId>(readScreenShareQuality());
 const selectedCaptureSourceId = ref('');
 const captureSourceNotice = ref('');
-const captureSourcesElement = ref<HTMLDivElement | null>(null);
+const capturePicker = ref<InstanceType<typeof ScreenSharePicker> | null>(null);
+const captureSourcesElement = computed(() => capturePicker.value?.sourcesElement);
 let lastCaptureSourceType: 'window' | 'screen' = localStorage.getItem('lycansync.capture-source-type') === 'screen' ? 'screen' : 'window';
 let lastNativeSelection: { discoveryId: string; sourceId: string } | undefined;
 let currentNativeDiscoveryId = '';
-const captureAudioAvailable = ref(false);
 const captureAudioCapabilityReady = ref(false);
 const captureAudioCapabilityFailed = ref(false);
-const captureAudioMode = ref<'process' | 'systemMix' | 'unavailable'>('unavailable');
+const captureAudioMode = ref<NativeScreenAudioMode>('unavailable');
 const captureShareAudio = ref(false);
 type NativeScreenSourceSelection = { sourceId: string; shareAudio: boolean; quality?: ScreenShareQualityId };
-const NATIVE_SOURCE_REFRESH_INTERVAL_MS = 1_000;
+const NATIVE_SOURCE_REFRESH_INTERVAL_MS = 750;
 let nativeSourceChooser: ReturnType<typeof createNativeVideoSourceSelection> | undefined;
 let nativeSourceChooserGeneration = 0;
 let nativeSourceRefreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -85,6 +87,7 @@ const nativeSourceError = ref('');
 const captureSources = computed(() => captureRequest.value?.sources
   .filter((source) => source.type === captureSourceType.value) ?? []);
 function stopNativeSourceRefresh() {
+  // IPC 无法在页面侧取消；使本次选择失效，迟到结果不能改写下次打开的选择器。
   nativeSourceChooserGeneration++;
   if (nativeSourceRefreshTimer !== undefined) clearTimeout(nativeSourceRefreshTimer);
   nativeSourceRefreshTimer = undefined;
@@ -140,6 +143,7 @@ async function refreshNativeSources(
       const options = chooser.replaceSources(snapshot.sources);
       const firstSnapshot = !currentNativeDiscoveryId;
       if (currentNativeDiscoveryId && currentNativeDiscoveryId !== snapshot.discoveryId) {
+        // helper 重启后来源标识不再可信，不能按同名窗口恢复选中。
         selectedCaptureSourceId.value = '';
         captureSourceNotice.value = '共享来源已重新连接，请重新选择。';
       }
@@ -161,7 +165,8 @@ async function refreshNativeSources(
       if (generation !== nativeSourceChooserGeneration || nativeSourceChooser !== chooser
           || !captureRequest.value) return;
       nativeSourceLoading.value = false;
-      nativeSourceError.value = error instanceof Error ? `无法读取共享来源（${error.message}）` : '无法读取共享来源';
+      if (!nativeSourceError.value) console.error('共享来源读取失败', error);
+      nativeSourceError.value = '无法读取共享来源，正在重试。';
     }
   })();
   nativeSourceRefresh = { promise };
@@ -174,6 +179,7 @@ async function refreshNativeSources(
 async function scheduleNativeSourceRefresh(generation: number, chooser: ReturnType<typeof createNativeVideoSourceSelection>) {
   await refreshNativeSources(generation, chooser);
   if (generation !== nativeSourceChooserGeneration || nativeSourceChooser !== chooser) return;
+  // 等本次枚举完成再计时，慢请求不会按固定频率不断积压。
   nativeSourceRefreshTimer = setTimeout(() => void scheduleNativeSourceRefresh(generation, chooser),
     NATIVE_SOURCE_REFRESH_INTERVAL_MS);
 }
@@ -193,7 +199,7 @@ function selectCaptureSource(sourceId: string | null) {
   const request = captureRequest.value;
   if (!request) return;
   if (sourceId !== null
-      && !canSelectNativeSource(captureAudioCapabilityReady.value, captureAudioCapabilityFailed.value)) return;
+      && (nativeSourceError.value || !canSelectNativeSource(captureAudioCapabilityReady.value, captureAudioCapabilityFailed.value))) return;
   if (sourceId !== null && !request.sources.some((source) => source.id === sourceId)) return;
   lastCaptureSourceType = captureSourceType.value;
   localStorage.setItem('lycansync.capture-source-type', lastCaptureSourceType);
@@ -225,7 +231,6 @@ function requestNativeScreenSource(
   nativeSourceChooser = chooser;
   nativeSourceLoading.value = true;
   nativeSourceError.value = '';
-  captureAudioAvailable.value = false;
   captureAudioCapabilityReady.value = false;
   captureAudioCapabilityFailed.value = false;
   captureAudioMode.value = 'unavailable';
@@ -240,7 +245,6 @@ function requestNativeScreenSource(
   void resolveNativeScreenAudioCapability(capabilities).then((state) => {
     if (generation !== nativeSourceChooserGeneration || nativeSourceChooser !== chooser) return;
     captureAudioMode.value = state.mode;
-    captureAudioAvailable.value = state.available;
     captureShareAudio.value = shouldDefaultShareAudio(captureAudioMode.value);
     captureAudioCapabilityFailed.value = state.failed;
     captureAudioCapabilityReady.value = true;
@@ -1216,12 +1220,12 @@ function participantListening(participant: Participant) {
               </span>
               <IconButton :label="listening ? '停止接收声音' : '开始接收声音'" :class="{ 'is-off': !listening }"
                 :disabled="!connected" @click="toggleListening">
-                <Volume2 v-if="listening" :size="17" /><Headphones v-else :size="17" />
+                <Volume2 v-if="listening" :size="17" /><VolumeX v-else :size="17" />
               </IconButton>
-              <IconButton :label="localParticipant?.isScreenShareEnabled ? '停止屏幕共享' : screenShareLimitReached ? '屏幕共享已达到 8 路上限' : '开始屏幕共享'"
+              <IconButton :label="captureRequest ? '取消共享选择' : localParticipant?.isScreenShareEnabled ? '停止屏幕共享' : screenShareLimitReached ? '屏幕共享已达到 8 路上限' : '开始屏幕共享'"
                 :class="{ 'is-active': localParticipant?.isScreenShareEnabled }"
-                :disabled="!connected || screenShareLimitReached || rtc.busySources.includes(Track.Source.ScreenShare)"
-                @click="rtc.toggleMedia(Track.Source.ScreenShare)"><MonitorUp :size="17" /></IconButton>
+                :disabled="!connected || screenShareLimitReached || (!captureRequest && rtc.busySources.includes(Track.Source.ScreenShare))"
+                @click="captureRequest ? selectCaptureSource(null) : rtc.toggleMedia(Track.Source.ScreenShare)"><MonitorX v-if="localParticipant?.isScreenShareEnabled || captureRequest" :size="17" /><MonitorUp v-else :size="17" /></IconButton>
               <select v-if="desktop && localParticipant?.isScreenShareEnabled" class="active-share-quality"
                 aria-label="当前共享画质" :value="rtc.currentScreenShareQuality"
                 :disabled="rtc.screenShareQualityBusy || rtc.busySources.includes(Track.Source.ScreenShare)"
@@ -1278,68 +1282,12 @@ function participantListening(participant: Participant) {
       @stage-auto-fill="stagePreferences.setAutoFill"
       @activity-visibility="setShowActivity"
       :save-profile="saveProfile" @close="closeSettings" @logout="emit('logout')" />
-    <div v-if="captureRequest" class="dialog-backdrop" @keydown.esc="selectCaptureSource(null)">
-      <section class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-title">
-        <h2 id="capture-title">选择共享的窗口或屏幕</h2>
-        <p v-if="captureAudioCapabilityFailed" role="alert">
-          无法确认共享能力，请重试。
-        </p>
-        <p v-else-if="!captureAudioCapabilityReady" role="status">
-          正在检查共享声音能力…
-        </p>
-        <p v-else-if="captureAudioMode === 'process'">
-          同时共享声音：{{ captureSourceType === 'window' ? '所选应用及其子进程的声音' : '全系统声音（排除 LycanSync）' }}
-        </p>
-        <p v-else-if="captureAudioMode === 'unavailable'">当前系统仅支持共享画面。</p>
-        <label class="capture-audio-option">
-          <input v-model="captureShareAudio" type="checkbox"
-            :disabled="!captureAudioCapabilityReady || !captureAudioAvailable" />
-          <template v-if="captureAudioMode === 'systemMix'">共享电脑播放的全部声音</template>
-          <template v-else>同时共享声音（{{ captureSourceType === 'window' ? '该应用及其子进程' : '全系统，不含 LycanSync' }}）</template>
-        </label>
-        <small v-if="captureAudioMode === 'systemMix'" class="capture-audio-help">
-          会包含其他程序和 LycanSync 播放的声音，可能产生回声。
-        </small>
-        <div class="capture-tabs" role="tablist" aria-label="共享来源类型">
-          <button type="button" role="tab" :aria-selected="captureSourceType === 'window'"
-            :disabled="!captureRequest.sources.some((source) => source.type === 'window')" @click="captureSourceType = 'window'">应用窗口</button>
-          <button type="button" role="tab" :aria-selected="captureSourceType === 'screen'"
-            :disabled="!captureRequest.sources.some((source) => source.type === 'screen')" @click="captureSourceType = 'screen'">整个屏幕</button>
-        </div>
-        <div ref="captureSourcesElement" class="capture-sources" role="tabpanel" @scroll.passive="refreshVisibleSourceThumbnails">
-          <button v-for="source in captureSources" :key="source.id" :aria-label="source.name"
-            :data-source-id="source.id" :aria-pressed="selectedCaptureSourceId === source.id" :title="source.name"
-            :disabled="!canSelectNativeSource(captureAudioCapabilityReady, captureAudioCapabilityFailed)"
-            @click="chooseCaptureSource(source.id)">
-            <span class="capture-source-preview">
-              <img v-if="source.thumbnail" :src="source.thumbnail" alt="" />
-              <span v-else class="capture-source-placeholder"><MonitorUp :size="32" /></span>
-              <span v-if="selectedCaptureSourceId === source.id" class="capture-source-selected" aria-hidden="true">✓</span>
-            </span>
-            <span class="capture-source-name">{{ source.name }}</span>
-          </button>
-        </div>
-        <p v-if="nativeSourceLoading && !captureSources.length" role="status">正在读取共享来源…</p>
-        <p v-else-if="nativeSourceError" role="alert">{{ nativeSourceError }}</p>
-        <p v-else-if="!captureSources.length">没有可共享的{{ captureSourceType === 'window' ? '应用窗口' : '屏幕' }}，请切换来源类型后重试。</p>
-        <p v-if="captureSourceNotice" role="status">{{ captureSourceNotice }}</p>
-        <div class="capture-quality">
-          <label for="capture-quality">共享画质</label>
-          <select id="capture-quality" v-model="captureQuality">
-            <option v-for="quality in SCREEN_SHARE_QUALITIES" :key="quality.id" :value="quality.id">
-              {{ quality.label }} · {{ quality.description }}
-            </option>
-          </select>
-          <small>目标上限，实际画质和帧率取决于设备、画面变化及网络。</small>
-        </div>
-        <div class="dialog-actions">
-          <button autofocus @click="selectCaptureSource(null)">取消共享</button>
-          <button type="button" :disabled="!selectedCaptureSourceId
-            || !canSelectNativeSource(captureAudioCapabilityReady, captureAudioCapabilityFailed)"
-            @click="selectCaptureSource(selectedCaptureSourceId)">开始共享</button>
-        </div>
-      </section>
-    </div>
+    <ScreenSharePicker v-if="captureRequest" ref="capturePicker" :sources="captureRequest.sources"
+      v-model:source-type="captureSourceType" v-model:quality="captureQuality" v-model:share-audio="captureShareAudio"
+      :selected-id="selectedCaptureSourceId" :audio-mode="captureAudioMode" :audio-ready="captureAudioCapabilityReady"
+      :audio-failed="captureAudioCapabilityFailed" :loading="nativeSourceLoading" :error="nativeSourceError" :notice="captureSourceNotice"
+      @choose="chooseCaptureSource" @refresh-thumbnails="refreshVisibleSourceThumbnails"
+      @close="selectCaptureSource(null)" @confirm="selectCaptureSource(selectedCaptureSourceId)" />
     <RemoteAudio v-for="item in remoteAudioTracks" :key="item.track.sid" :track="item.track"
       :volume="listening ? (item.source === Track.Source.ScreenShareAudio
         ? remoteScreenSharePlaybackVolume() : remotePlaybackVolume(item.participantIdentity)) : 0" />

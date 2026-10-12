@@ -12,7 +12,7 @@ const { randomUUID } = require('node:crypto');
 const { MediaHelperManager } = require('./media-helper.cjs');
 const { createMediaDiagnostics } = require('./media-diagnostics.cjs');
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
-const { matchNativeVideoSourceThumbnails } = require('./native-video-thumbnails.cjs');
+const { matchNativeVideoSourceThumbnails, monitorDisplayId } = require('./native-video-thumbnails.cjs');
 const { parseAccessLink, accessLinkFromArguments } = require('./access-links.cjs');
 const { createStartupUpdate } = require('./startup-update.cjs');
 
@@ -1093,7 +1093,12 @@ ipcMain.handle('media:video-source-thumbnails', async (event, sources) => {
   if (!trustedSender(event) || closing || !Array.isArray(sources) || sources.length > 128
       || sources.some((source) => !source || !/^(?:monitor|window):[1-9]\d*:\d+$/.test(source.sourceId)
         || !['monitor', 'window'].includes(source.kind) || typeof source.title !== 'string'
-        || source.title.length > 256 || /[\u0000-\u001f\u007f]/.test(source.title))) {
+        || source.title.length > 256 || /[\u0000-\u001f\u007f]/.test(source.title)
+        || (source.kind === 'monitor' && (!source.monitorOrigin
+          || !Number.isInteger(source.monitorOrigin.x) || !Number.isInteger(source.monitorOrigin.y)
+          || Math.abs(source.monitorOrigin.x) > 2147483647 || Math.abs(source.monitorOrigin.y) > 2147483647
+          || !Number.isInteger(source.width) || source.width < 1 || source.width > 32768
+          || !Number.isInteger(source.height) || source.height < 1 || source.height > 32768)))) {
     throw new Error('请求参数无效');
   }
   if (!sources.length) return [];
@@ -1101,13 +1106,15 @@ ipcMain.handle('media:video-source-thumbnails', async (event, sources) => {
   try {
     const desktopSources = await desktopCapturer.getSources({
       types: [...new Set(sources.map((source) => source.kind === 'monitor' ? 'screen' : 'window'))],
-      thumbnailSize: { width: 160, height: 90 },
+      thumbnailSize: { width: 320, height: 180 },
     });
     recordSourceTiming('sourceThumbnails', startedAt, desktopSources.length);
-    return matchNativeVideoSourceThumbnails(sources, desktopSources.map((source) => ({
+    return matchNativeVideoSourceThumbnails(sources.map((source) => ({ ...source, displayId: monitorDisplayId(source, screen) })), desktopSources.map((source) => ({
       type: captureSourceType(source),
+      displayId: source.display_id,
       name: source.name,
-      thumbnail: source.thumbnail,
+      thumbnail: { isEmpty: () => source.thumbnail.isEmpty(),
+        toDataURL: () => 'data:image/jpeg;base64,' + source.thumbnail.toJPEG(80).toString('base64') },
     })));
   } catch (error) {
     void writeMediaDiagnostic({ stage: 'sourceThumbnailsFailed', message: String(error.message).slice(0, 500) });

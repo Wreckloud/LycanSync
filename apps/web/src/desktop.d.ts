@@ -11,6 +11,7 @@ interface NativeVideoSource {
   width: number;
   height: number;
   primary: boolean;
+  monitorOrigin?: { x: number; y: number };
 }
 
 interface NativeCaptureDiagnostics {

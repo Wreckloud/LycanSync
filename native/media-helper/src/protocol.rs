@@ -336,6 +336,13 @@ pub enum VideoSourceKind {
 
 #[derive(Clone, Serialize, Debug, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct MonitorOrigin {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Clone, Serialize, Debug, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct VideoSource {
     pub source_id: String,
     pub kind: VideoSourceKind,
@@ -343,6 +350,8 @@ pub struct VideoSource {
     pub width: u32,
     pub height: u32,
     pub primary: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monitor_origin: Option<MonitorOrigin>,
 }
 
 #[derive(Clone, Copy, Serialize, Debug, Default, Eq, PartialEq)]
@@ -827,6 +836,7 @@ mod tests {
                 width: 1920,
                 height: 1080,
                 primary: true,
+                monitor_origin: Some(super::MonitorOrigin { x: -1920, y: 0 }),
             }],
         };
         let value = serde_json::to_value(event).unwrap();
@@ -836,5 +846,6 @@ mod tests {
         assert_eq!(value["revision"], 1);
         assert_eq!(value["sources"][0]["kind"], "monitor");
         assert_eq!(value["sources"][0]["sourceId"], "monitor:1:0");
+        assert_eq!(value["sources"][0]["monitorOrigin"]["x"], -1920);
     }
 }

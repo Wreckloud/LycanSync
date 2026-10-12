@@ -15,7 +15,7 @@ describe('createNativeVideoSourceSelection', () => {
 
     expect(selection.options).toEqual([
       { id: 'window:2:0', name: 'Notepad', thumbnail: 'data:image/png;base64,window', type: 'window' },
-      { id: 'monitor:2:0', name: 'DISPLAY1', thumbnail: undefined, type: 'screen' },
+      { id: 'monitor:2:0', name: '屏幕 1', thumbnail: undefined, type: 'screen' },
     ]);
     selection.finish({ sourceId: 'window:2:0', shareAudio: true });
     return expect(selection.result).resolves.toEqual({ sourceId: 'window:2:0', shareAudio: true });
@@ -41,7 +41,7 @@ describe('createNativeVideoSourceSelection', () => {
       sources[0],
       { sourceId: 'window:3:0', kind: 'window', title: 'New window', width: 640, height: 480, primary: false },
     ]);
-    expect(updated.map(({ id }) => id)).toEqual([firstId, 'window:3:0']);
+    expect(updated.map(({ id }) => id)).toEqual(['window:3:0', firstId]);
   });
 
   it('ignores a thumbnail response that arrives after cancellation or source replacement', () => {
@@ -70,8 +70,8 @@ describe('createNativeVideoSourceSelection', () => {
   it('按间隔刷新缩略图，缺失预览仍可继续重试', () => {
     const selection = createNativeVideoSourceSelection([sources[0]]);
     expect(selection.sourcesNeedingThumbnails(10_000)).toHaveLength(1);
-    expect(selection.sourcesNeedingThumbnails(11_999)).toHaveLength(0);
-    expect(selection.sourcesNeedingThumbnails(12_000)).toHaveLength(1);
+    expect(selection.sourcesNeedingThumbnails(11_499)).toHaveLength(0);
+    expect(selection.sourcesNeedingThumbnails(11_500)).toHaveLength(1);
     selection.applyThumbnails(sources, [{ sourceId: sources[0].sourceId, thumbnail: 'old' }]);
     expect(selection.sourcesNeedingThumbnails(14_000)).toHaveLength(1);
     expect(selection.options[0].thumbnail).toBe('old');
@@ -80,24 +80,25 @@ describe('createNativeVideoSourceSelection', () => {
     expect(selection.sourcesNeedingThumbnails(16_000)).toHaveLength(1);
   });
 
-  it('只请求可见或选中的来源，选中来源按一秒间隔优先更新', () => {
+  it('只请求可见或选中的来源，选中来源按 750 毫秒间隔优先更新', () => {
     const selection = createNativeVideoSourceSelection(sources);
     const visible = new Set([sources[0].sourceId]);
     expect(selection.sourcesNeedingThumbnails(10_000, visible).map((source) => source.sourceId))
       .toEqual([sources[0].sourceId]);
     expect(selection.sourcesNeedingThumbnails(10_001, visible, sources[1].sourceId)
       .map((source) => source.sourceId)).toEqual([sources[1].sourceId]);
-    expect(selection.sourcesNeedingThumbnails(11_001, visible, sources[1].sourceId)
+    expect(selection.sourcesNeedingThumbnails(10_750, visible, sources[1].sourceId)).toHaveLength(0);
+    expect(selection.sourcesNeedingThumbnails(10_751, visible, sources[1].sourceId)
       .map((source) => source.sourceId)).toEqual([sources[1].sourceId]);
   });
 
-  it('刷新保留已有排列，移除关闭窗口并追加新窗口', () => {
+  it('新窗口放在前面，保留已有排列并移除关闭窗口', () => {
     const selection = createNativeVideoSourceSelection(sources);
     const added = { ...sources[0], sourceId: 'window:3:0', title: 'New' };
     expect(selection.replaceSources([added, sources[1], sources[0]]).map((source) => source.id))
-      .toEqual([sources[0].sourceId, sources[1].sourceId, added.sourceId]);
+      .toEqual([added.sourceId, sources[0].sourceId, sources[1].sourceId]);
     expect(selection.replaceSources([added, sources[1]]).map((source) => source.id))
-      .toEqual([sources[1].sourceId, added.sourceId]);
+      .toEqual([added.sourceId, sources[1].sourceId]);
   });
 
   it('keeps black thumbnails as display previews instead of filtering the source', () => {

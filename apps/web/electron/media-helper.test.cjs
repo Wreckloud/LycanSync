@@ -6,7 +6,7 @@ const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { runInNewContext } = require('node:vm');
 const { MediaHelperManager } = require('./media-helper.cjs');
-const { matchNativeVideoSourceThumbnails } = require('./native-video-thumbnails.cjs');
+const { matchNativeVideoSourceThumbnails, monitorDisplayId } = require('./native-video-thumbnails.cjs');
 
 test('main-process video entry accepts 120 fps before forwarding to the helper', async () => {
   // 执行实际入口函数，隔离 Electron 和设备，避免只验证下游而漏掉主进程上限。
@@ -122,7 +122,7 @@ class FakeHelper extends EventEmitter {
         event: 'videoSources', protocolVersion: 1, requestId: command.requestId,
         revision: this.sourceRevision,
         sources: [{ sourceId: `monitor:${this.sourceRevision}:0`, kind: 'monitor', title: 'DISPLAY1',
-          width: 1920, height: 1080, primary: true }],
+          width: 1920, height: 1080, primary: true, monitorOrigin: { x: 0, y: 0 } }],
       });
       return;
     }
@@ -328,7 +328,7 @@ test('native chooser previews require one exact title and kind match on both sid
     { sourceId: 'window:4:0', kind: 'window', title: 'Notepad' },
     { sourceId: 'window:4:1', kind: 'window', title: 'Duplicate' },
     { sourceId: 'window:4:2', kind: 'window', title: 'Duplicate' },
-    { sourceId: 'monitor:4:0', kind: 'monitor', title: 'DISPLAY1' },
+    { sourceId: 'monitor:4:0', kind: 'monitor', title: '\\\\.\\DISPLAY1', displayId: '123' },
   ];
   const desktopSources = [
     { id: 'window:99:secret', name: 'Notepad', type: 'window', thumbnail: { isEmpty: () => false,
@@ -337,7 +337,7 @@ test('native chooser previews require one exact title and kind match on both sid
       toDataURL: () => 'data:image/png;base64,ambiguous' } },
     { id: 'window:101:secret', name: 'Duplicate', type: 'window', thumbnail: { isEmpty: () => false,
       toDataURL: () => 'data:image/png;base64,ambiguous' } },
-    { id: 'screen:0:secret', name: 'DISPLAY1', type: 'screen', thumbnail: { isEmpty: () => false,
+    { id: 'screen:0:secret', name: 'Screen 1', type: 'screen', displayId: '123', thumbnail: { isEmpty: () => false,
       toDataURL: () => 'data:image/png;base64,display' } },
     { id: 'screen:1:secret', name: 'Notepad', type: 'screen', thumbnail: { isEmpty: () => false,
       toDataURL: () => 'data:image/png;base64,wrong-kind' } },
@@ -357,9 +357,29 @@ test('native chooser skips empty and over-budget preview images', () => {
   const desktopSources = [
     { name: 'Empty', type: 'window', thumbnail: { isEmpty: () => true, toDataURL: () => '' } },
     { name: 'Large', type: 'window', thumbnail: { isEmpty: () => false,
-      toDataURL: () => `data:image/png;base64,${'x'.repeat(40 * 1024)}` } },
+      toDataURL: () => `data:image/png;base64,${'x'.repeat(80 * 1024)}` } },
   ];
   assert.deepEqual(matchNativeVideoSourceThumbnails(sources, desktopSources), []);
+});
+
+test('整屏预览按物理位置转换后的显示器 ID 匹配，支持负坐标与不同缩放', () => {
+  const source = { sourceId: 'monitor:1:0', kind: 'monitor', title: '\\\\.\\DISPLAY2',
+    width: 1920, height: 1080, monitorOrigin: { x: -1920, y: 0 } };
+  let physical;
+  const displayId = monitorDisplayId(source, {
+    screenToDipPoint(point) { physical = point; return { x: -640, y: 360 }; },
+    getDisplayNearestPoint: () => ({ id: 42, bounds: { x: -1280, y: 0, width: 1280, height: 720 } }),
+  });
+  assert.deepEqual(physical, { x: -960, y: 540 });
+  assert.equal(displayId, '42');
+  const image = { isEmpty: () => false, toDataURL: () => 'data:image/png;base64,screen' };
+  const desktop = [{ type: 'screen', displayId: '42', name: 'Screen 1', thumbnail: image }];
+  assert.deepEqual(matchNativeVideoSourceThumbnails([{ ...source, displayId }], desktop),
+    [{ sourceId: source.sourceId, thumbnail: 'data:image/png;base64,screen' }]);
+  assert.deepEqual(matchNativeVideoSourceThumbnails([{ ...source, displayId: 'wrong' }], desktop), []);
+  assert.deepEqual(matchNativeVideoSourceThumbnails([{ ...source, displayId }], [...desktop, ...desktop]), []);
+  assert.equal(monitorDisplayId({ kind: 'window' }, {}), undefined);
+  assert.equal(monitorDisplayId({ ...source, monitorOrigin: undefined }, {}), undefined);
 });
 
 async function waitUntil(predicate, timeoutMs = 500) {

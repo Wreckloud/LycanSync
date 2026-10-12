@@ -280,6 +280,10 @@ unsafe extern "system" fn enumerate_monitor(
             width: width as u32,
             height: height as u32,
             primary: info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
+            monitor_origin: Some(crate::protocol::MonitorOrigin {
+                x: info.monitorInfo.rcMonitor.left,
+                y: info.monitorInfo.rcMonitor.top,
+            }),
         },
         target: CaptureTarget::Monitor(monitor),
     });
@@ -338,6 +342,7 @@ unsafe extern "system" fn enumerate_window(window: HWND, parameter: LPARAM) -> B
             width: width as u32,
             height: height as u32,
             primary: false,
+            monitor_origin: None,
         },
         target: CaptureTarget::Window(window, identity),
     });

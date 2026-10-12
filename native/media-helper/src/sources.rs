@@ -316,6 +316,7 @@ mod tests {
                 width: 640,
                 height: 480,
                 primary: false,
+                monitor_origin: None,
             },
             target: CaptureTarget::Test(target_key),
         }

@@ -17,7 +17,8 @@
 | `services/api/src/main/java/com/lycansync/api/common/image/AvatarImageProcessor.java` | 个人及群组头像规范化 | 检查裁剪载荷与解码尺寸，统一 256 像素 PNG 后保存；不上传原图、不新增存储链路 |
 | `apps/web/src/components/InlineFeedback.vue`、`auth/authApi.ts` | 就近反馈与 HTTP 错误解析 | 固定反馈区不推动布局；保留状态／业务代码并统一空正文错误文案 |
 | `apps/web/src/components/settings/MemberAccessSettings.vue`、`settings/useMemberAccess.ts` | 服主管理 | 就近展示生成／复制反馈；可见时轮询当前页记录，隐藏及销毁时停止，刷新不丢失原链接或成员选择 |
-| `apps/web/src/App.vue` | 群组界面、状态同步、音频设置和共享选择器 | 用户动作如何进入 RTC；页面状态不等于媒体资源 |
+| `apps/web/src/App.vue` | 群组界面、状态同步、音频设置和共享选择编排 | 用户动作如何进入 RTC；页面状态不等于媒体资源 |
+| `apps/web/src/components/ScreenSharePicker.vue`、`nativeVideoSourceSelection.ts` | 共享选择界面与来源快照 | 组件管理展示与焦点，来源模型管理排列和预览；App 持有刷新任务并把选择交给 RTC |
 | `apps/web/src/components` | 聊天、成员、播放和诊断组件 | props / emit、轨道展示、挂载与销毁 |
 | `apps/web/src/rtc/useRtcRoom.ts` | 房间连接、普通媒体采集发布、权限及离房清理 | 房间与任务身份；资源创建和停止路径 |
 | `apps/web/src/rtc/screenShareStage.ts` | 本机四槽舞台与观看排列 | 自动补位、手动排除、替换顺序和单路观看；不停止采集 |

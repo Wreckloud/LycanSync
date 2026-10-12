@@ -1010,6 +1010,12 @@ function validateVideoSources(message) {
         || typeof source.primary !== 'boolean') {
       throw new Error('mediaHelperInvalidVideoSources');
     }
+    if ((source.kind === 'monitor' && (!source.monitorOrigin
+        || !Number.isInteger(source.monitorOrigin.x) || !Number.isInteger(source.monitorOrigin.y)
+        || Math.abs(source.monitorOrigin.x) > 2147483647 || Math.abs(source.monitorOrigin.y) > 2147483647))
+        || (source.kind === 'window' && source.monitorOrigin !== undefined)) {
+      throw new Error('mediaHelperInvalidVideoSources');
+    }
     return {
       sourceId: source.sourceId,
       kind: source.kind,
@@ -1017,6 +1023,7 @@ function validateVideoSources(message) {
       width: source.width,
       height: source.height,
       primary: source.primary,
+      ...(source.monitorOrigin ? { monitorOrigin: { x: source.monitorOrigin.x, y: source.monitorOrigin.y } } : {}),
     };
   });
   return { revision: message.revision, sources };
