@@ -111,15 +111,14 @@ describe('个人资料草稿与保存', () => {
     scope.stop();
   });
 
-  it('旧服务缺少签名字段时保留原有昵称修改能力', async () => {
+  it('缺少签名的旧资料也沿用当前签名提交约定，不保留旧服务保存分支', async () => {
     const { scope, draft, user, saveProfile } = setup();
     const { signature: _signature, ...legacyUser } = initialUser;
     user.value = legacyUser;
     await nextTick();
-    expect(draft.supportsSignature.value).toBe(false);
     draft.nickname.value = '新昵称';
     expect(await draft.save()).toBe(true);
-    expect(saveProfile).toHaveBeenCalledWith({ nickname: '新昵称', avatar: '' });
+    expect(saveProfile).toHaveBeenCalledWith({ nickname: '新昵称', avatar: '', signature: '' });
     scope.stop();
   });
 

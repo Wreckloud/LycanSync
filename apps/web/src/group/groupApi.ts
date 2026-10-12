@@ -58,7 +58,7 @@ let presenceRequestSequence = (() => {
 export function nextPresenceWaitRequest() {
   presenceRequestSequence++;
   try { sessionStorage.setItem(PRESENCE_REQUEST_SEQUENCE_KEY, String(presenceRequestSequence)); }
-  catch { /* The in-memory sequence still orders requests during this page lifetime. */ }
+  catch { /* 本页仍以内存序号保持请求顺序，不因存储失败中断状态同步。 */ }
   return { clientId: presenceClientId, requestId: presenceRequestSequence };
 }
 

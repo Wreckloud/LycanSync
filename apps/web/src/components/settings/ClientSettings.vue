@@ -4,10 +4,10 @@ import { readScreenSharePreferences, saveScreenSharePreferences } from '../../se
 
 const props = defineProps<{ desktop: boolean; active: boolean; stageAutoFill: boolean; stagePreferenceError: string }>();
 const emit = defineEmits<{ stageAutoFill: [enabled: boolean] }>();
-const autoStartSupported = defineModel<boolean>('supported', { default: false });
-const autoStartEnabled = defineModel<boolean>('enabled', { default: false });
-const autoStartBusy = defineModel<boolean>('busy', { default: false });
-const autoStartError = defineModel<string>('error', { default: '' });
+const autoStartSupported = ref(false);
+const autoStartEnabled = ref(false);
+const autoStartBusy = ref(false);
+const autoStartError = ref('');
 const desktopBridge = window.lycanDesktop;
 let loaded = false;
 const screenPreferences = reactive({ hideCursor: false, hideBorder: false });

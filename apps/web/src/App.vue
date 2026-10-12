@@ -201,9 +201,10 @@ function selectCaptureSource(sourceId: string | null) {
   if (sourceId !== null
       && (nativeSourceError.value || !canSelectNativeSource(captureAudioCapabilityReady.value, captureAudioCapabilityFailed.value))) return;
   if (sourceId !== null && !request.sources.some((source) => source.id === sourceId)) return;
-  lastCaptureSourceType = captureSourceType.value;
-  localStorage.setItem('lycansync.capture-source-type', lastCaptureSourceType);
-  if (sourceId) lastNativeSelection = { discoveryId: currentNativeDiscoveryId, sourceId };
+  if (sourceId) {
+    lastCaptureSourceType = captureSourceType.value;
+    lastNativeSelection = { discoveryId: currentNativeDiscoveryId, sourceId };
+  }
   captureRequest.value = null;
   const chooser = nativeSourceChooser;
   nativeSourceChooser = undefined;
@@ -217,10 +218,19 @@ function selectCaptureSource(sourceId: string | null) {
       captureShareAudio.value,
     ),
   } : null;
-  if (selection) saveScreenShareQuality(captureQuality.value);
   captureAudioCapabilityReady.value = false;
   captureAudioCapabilityFailed.value = false;
+  // 取消及清理不依赖偏好存储；写入失败也必须结束本次选择等待。
   chooser?.finish(selection);
+  if (selection) saveCapturePreferences(captureQuality.value, lastCaptureSourceType);
+}
+function saveCapturePreferences(quality: ScreenShareQualityId, sourceType?: 'window' | 'screen') {
+  try {
+    saveScreenShareQuality(quality);
+    if (sourceType) localStorage.setItem('lycansync.capture-source-type', sourceType);
+  } catch {
+    viewerNotice.value = '本次共享设置已生效，但无法保存到本机。';
+  }
 }
 function requestNativeScreenSource(
   capabilities: Promise<Record<string, { available: boolean; reason: string }>>,
@@ -263,7 +273,7 @@ async function changeActiveScreenShareQuality(event: Event) {
   const applied = await rtc.setScreenShareQuality(quality);
   if (applied) {
     captureQuality.value = quality;
-    saveScreenShareQuality(quality);
+    saveCapturePreferences(quality);
   }
   select.value = rtc.currentScreenShareQuality;
 }
@@ -295,6 +305,7 @@ const removeCloseListener = desktop?.onClose(async () => {
   finally { desktop.finishClose(); }
 });
 onScopeDispose(() => {
+  joinAttempt++;
   selectCaptureSource(null); removeCloseListener?.();
   detailRequest?.abort(); listRequest?.abort(); void rtc.leave();
 });
@@ -804,14 +815,18 @@ async function joinGroup(groupId: string) {
   if (joinedGroupId.value !== null) {
     void callSounds.left();
     await rtc.leave();
+    if (attempt !== joinAttempt) return;
     joinedGroupId.value = null;
   }
 
   if (attempt !== joinAttempt) return;
   try {
-    joinedGroupDetail.value = selectedGroupDetail.value?.id === groupId
+    const detail = selectedGroupDetail.value?.id === groupId
       ? selectedGroupDetail.value : await findGroup(groupId);
+    if (attempt !== joinAttempt) return;
+    joinedGroupDetail.value = detail;
   } catch (error) {
+    if (attempt !== joinAttempt) return;
     viewerNotice.value = error instanceof Error ? error.message : '无法读取群组成员';
     joiningGroupId.value = null;
     return;
@@ -1075,7 +1090,7 @@ function participantListening(participant: Participant) {
       <button type="button" @click="rtc.retryRemoteControlCleanup">重试撤销</button>
     </div>
     <div class="app-content" v-show="!settingsOpen" :inert="settingsOpen">
-    <div class="workspace">
+    <div class="workspace" :inert="editorOpen">
       <nav class="group-rail" aria-label="群组">
         <button v-for="group in groups" :key="group.id" type="button" class="group-button"
           :class="{ 'is-selected': selectedGroupId === group.id, 'is-in-call': joinedGroupId === group.id }"

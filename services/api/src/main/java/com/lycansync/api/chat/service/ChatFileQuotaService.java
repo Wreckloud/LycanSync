@@ -60,8 +60,4 @@ public class ChatFileQuotaService {
     public List<ChatFileUploadReservation> findReservations() {
         return mapper.findFileStorageReservations();
     }
-
-    public boolean fileExists(UUID attachmentId) {
-        return mapper.fileAttachmentExists(attachmentId);
-    }
 }

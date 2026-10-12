@@ -47,10 +47,6 @@ public class AuthService {
         mapper.deleteSession(AuthSecrets.hash(token));
     }
 
-    String issueSession(AuthUser user) {
-        return issueSession(user, AuthSecrets.generate());
-    }
-
     String issueSession(AuthUser user, String token) {
         // 重试兑换使用同一凭据，避免响应逆序到达后保存已经失效的会话。
         mapper.replaceSession(AuthSecrets.hash(token), user.id(), Instant.now(systemClock).plus(SESSION_TTL));

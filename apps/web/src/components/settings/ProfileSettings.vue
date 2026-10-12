@@ -12,7 +12,7 @@ const props = defineProps<{
   user: AuthUser;
   saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
 }>();
-const { nickname, avatar, signature, supportsSignature, busy, error, save: saveDraft } = useProfileDraft(toRef(props, 'user'), props.saveProfile);
+const { nickname, avatar, signature, busy, error, save: saveDraft } = useProfileDraft(toRef(props, 'user'), props.saveProfile);
 const avatarInput = ref<HTMLInputElement | null>(null);
 const nicknameInput = ref<HTMLInputElement | null>(null);
 const nicknameButton = ref<HTMLButtonElement | null>(null);
@@ -76,11 +76,11 @@ defineExpose({ save });
         <div class="profile-signature-heading"><label for="profile-signature">个性签名 <span>选填</span></label>
           <span class="profile-signature-count">{{ signature.length }} / 120</span></div>
         <textarea id="profile-signature" v-model="signature" aria-label="个性签名" maxlength="120" rows="2"
-          :disabled="!supportsSignature" :readonly="busy" placeholder="写一句想让朋友看到的话" @blur="save" />
+          :readonly="busy" placeholder="写一句想让朋友看到的话" @blur="save" />
       </div>
     </div>
     <InlineFeedback :message="error"
-      :status="busy ? '正在保存…' : picking ? '正在读取图片…' : !supportsSignature ? '签名保存需要更新服务。' : ''" />
+      :status="busy ? '正在保存…' : picking ? '正在读取图片…' : ''" />
     <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整头像"
       @apply="applyAvatar" @cancel="clearCrop" />
   </section>

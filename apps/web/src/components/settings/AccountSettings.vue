@@ -20,7 +20,7 @@ watch(() => props.active, (active) => {
       <h2>第三方账号</h2>
       <div class="account-row"><div class="account-copy"><span>QQ 登录</span>
         <div class="account-row-description"><p v-if="expanded === 'qq'" id="qq-entry" class="account-entry-note">QQ 账号绑定尚未接入，暂时不能用于登录或关联当前账号。</p><small v-else>尚未接入</small></div></div>
-        <button type="button" :aria-expanded="expanded === 'qq'" aria-controls="qq-entry" @click="toggleEntry('qq')">连接 QQ</button></div>
+        <button type="button" :aria-expanded="expanded === 'qq'" aria-controls="qq-entry" @click="toggleEntry('qq')">{{ expanded === 'qq' ? '收起说明' : '查看 QQ 绑定说明' }}</button></div>
     </section>
     <section class="settings-block account-session">
       <h2>账号操作</h2>

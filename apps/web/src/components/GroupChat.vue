@@ -27,6 +27,7 @@ const pendingAttachments = ref<PendingAttachment[]>([]);
 const busy = ref(false);
 const preparing = ref(false);
 const error = ref('');
+const pollError = ref('');
 const historyError = ref('');
 const list = ref<HTMLElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
@@ -93,6 +94,7 @@ async function refresh() {
     const latestId = initial ? undefined : messages.value.at(-1)?.id;
     const page = await findMessages(groupId, latestId ? { afterMessageId: latestId } : undefined, controller.signal);
     if (controller.signal.aborted || disposed || pollRequest !== controller || props.group.id !== groupId) return null;
+    pollError.value = '';
     if (!latestId) {
       hasMore = page.hasMore;
       initialLoaded = true;
@@ -100,7 +102,7 @@ async function refresh() {
     return appendMessages(page.messages, initial, initial ? 'auto' : 'smooth');
   } catch (reason) {
     if (controller.signal.aborted || disposed || pollRequest !== controller) return null;
-    error.value = reason instanceof Error ? reason.message : '无法读取群聊消息';
+    pollError.value = reason instanceof Error ? reason.message : '无法读取群聊消息';
     return 0;
   } finally {
     if (pollRequest === controller) pollRequest = null;
@@ -326,9 +328,9 @@ async function submit() {
           if (activeUpload === controller) activeUpload = null;
         }
       }
-    if (pendingAttachments.value.length && pendingAttachments.value.every((item) => item.state === 'sent')) {
-      clearPendingAttachments();
-    }
+      if (pendingAttachments.value.length && pendingAttachments.value.every((item) => item.state === 'sent')) {
+        clearPendingAttachments();
+      }
     }
     if (messageInput.value) messageInput.value.style.height = '42px';
     consecutiveEmptyPolls = 0;
@@ -359,6 +361,7 @@ watch(() => props.group.id, () => {
   clearPendingAttachments();
   messages.value = [];
   error.value = '';
+  pollError.value = '';
   historyError.value = '';
   initialLoaded = false;
   hasMore = false;
@@ -495,7 +498,7 @@ onScopeDispose(() => {
       </template>
     </div>
     <div class="composer-shell">
-      <p v-if="error || historyError" class="chat-error" role="alert">{{ error || historyError }}</p>
+      <p v-if="error || historyError || pollError" class="chat-error" role="alert">{{ error || historyError || pollError }}</p>
       <form class="composer" @submit.prevent="submit">
         <input ref="fileInput" type="file" hidden multiple @change="chooseFiles" />
         <button type="button" aria-label="添加文件" :disabled="busy || preparing" @click="fileInput?.click()"><Plus :size="16" /></button>

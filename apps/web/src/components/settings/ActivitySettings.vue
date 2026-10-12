@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { Gamepad2 } from '@lucide/vue';
+import InlineFeedback from '../InlineFeedback.vue';
 import type { UserActivity } from '../../presence/presenceApi';
 
 defineProps<{ desktop: boolean; activity: UserActivity | null; showActivity: boolean; error: string }>();
@@ -19,13 +20,12 @@ const emit = defineEmits<{ visibility: [enabled: boolean] }>();
       <input type="checkbox" :checked="showActivity" aria-label="显示当前动态"
         @change="emit('visibility', ($event.target as HTMLInputElement).checked)" />
     </label>
-    <p v-if="error" class="settings-error" role="alert">{{ error }}</p>
+    <InlineFeedback :message="error" />
   </section>
 </template>
 
 <style scoped>
-.activity-settings { position: relative; gap: 12px; padding-bottom: 20px; border-bottom: 1px solid var(--border-soft); }
-.activity-settings > .settings-error { position: absolute; right: 0; bottom: 2px; left: 0; max-height: 16px; overflow: auto; font-size: 12px; line-height: 16px; }
+.activity-settings { gap: 12px; padding-bottom: 20px; border-bottom: 1px solid var(--border-soft); }
 .activity-current { display: flex; align-items: center; gap: 16px; min-height: 64px; color: var(--muted); }
 .activity-current svg { flex-shrink: 0; }
 .activity-current > div { display: grid; gap: 5px; min-width: 0; }

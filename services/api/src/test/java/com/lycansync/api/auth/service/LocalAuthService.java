@@ -22,7 +22,7 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 
 /**
- * 本地用户名密码注册与登录业务。
+ * 仅供集成测试构造账号的用户名密码注册与登录业务，不进入正式产物。
  *
  * @author Wreckloud
  * @since 2026-09-09
@@ -71,7 +71,7 @@ public class LocalAuthService {
         AuthUser user = new AuthUser(UUID.randomUUID(), request.username(), "", administrator, "", now);
         mapper.insertUser(user, now);
         mapper.insertLocalCredential(user.id(), username, passwordHash, now);
-        String sessionToken = authService.issueSession(user);
+        String sessionToken = authService.issueSession(user, AuthSecrets.generate());
         return new LoginResponse(sessionToken, user);
     }
 
@@ -86,7 +86,7 @@ public class LocalAuthService {
                     HttpStatus.UNAUTHORIZED, ApiErrorCode.INVALID_CREDENTIALS, "用户名或密码错误");
         }
         AuthUser user = credential.user();
-        return new LoginResponse(authService.issueSession(user), user);
+        return new LoginResponse(authService.issueSession(user, AuthSecrets.generate()), user);
     }
 
     private String normalizeUsername(String username) {

@@ -33,7 +33,7 @@ import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 
 /**
- * 无 Cookie 的 Bearer 会话边界与公开本地登录入口。
+ * 无 Cookie 的 Bearer 会话边界与公开邀请入口；密码入口仅由测试控制器提供。
  *
  * @author Wreckloud
  * @since 2026-09-06

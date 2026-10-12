@@ -38,6 +38,7 @@ async function mockChatShell(page: Page) {
 }
 
 test('文本消息使用统一 multipart 接口发送，并按日期分组且仅允许消息正文复制', async ({ page }) => {
+  let readFailure = true;
   const messages: Record<string, unknown>[] = [
     { id: '19b81ea9-04d8-45f7-9407-808c13a51fd0', senderUserId: user.id,
       senderNickname: user.nickname, type: 'TEXT', content: '第一天', createdAt: '2026-09-13T04:00:00Z', attachment: null },
@@ -51,6 +52,11 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
   await page.addInitScript(() => {
     Object.defineProperty(window, 'lycanDesktop', { value: {
       clearSession: async () => undefined,
+      getAccessLink: async () => null,
+      onAccessLink: () => () => undefined,
+      getUpdateState: async () => ({ phase: 'ready', supported: false, version: 'test', message: '测试不检查更新' } satisfies StartupUpdateState),
+      runStartupUpdate: async () => ({ phase: 'ready', supported: false, version: 'test', message: '测试不检查更新' } satisfies StartupUpdateState),
+      onUpdateState: () => () => undefined,
       minimize: () => undefined,
       isMaximized: async () => false,
       getProcessMetrics: async () => ({ cpuPercent: 0, memoryMb: 0 }),
@@ -75,6 +81,7 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
     if (path === '/api/groups') return route.fulfill({ json: [group] });
     if (path === `/api/groups/${groupId}`) return route.fulfill({ json: group });
     if (path === `/api/groups/${groupId}/messages` && request.method() === 'GET') {
+      if (readFailure) return route.fulfill({ status: 503, json: { detail: '群聊读取暂时失败' } });
       return route.fulfill({ json: { messages, hasMore: false } });
     }
     if (path === `/api/groups/${groupId}/messages` && request.method() === 'POST') {
@@ -95,6 +102,10 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
   });
 
   await page.goto('/');
+  await expect(page.locator('.chat-error')).toHaveText('群聊读取暂时失败');
+  readFailure = false;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('.chat-error')).toHaveCount(0);
   const composer = page.getByLabel('消息内容');
   await composer.fill('晚上见');
   await composer.press('Enter');
@@ -114,6 +125,8 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
   await composer.fill('触发错误');
   await composer.press('Enter');
   const chatError = page.getByRole('alert');
+  await expect(chatError).toHaveText('消息发送失败');
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(chatError).toHaveText('消息发送失败');
   const composerBoundsAfterError = await page.locator('.composer').boundingBox();
   const errorBounds = await chatError.boundingBox();

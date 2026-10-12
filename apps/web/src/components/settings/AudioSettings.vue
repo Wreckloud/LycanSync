@@ -62,7 +62,6 @@ function updateProcessing(setting: keyof AudioProcessingSettings, event: Event) 
       <label class="settings-toggle"><span><strong>{{ desktop ? '低频过滤' : '人声增强' }}</strong>
         <small>{{ desktop ? '过滤低频杂音。输入音量在处理后应用。' : '包含低频过滤和轻量压缩；输入音量在压缩前应用。' }}</small></span>
         <input type="checkbox" :checked="processing.voiceEnhancement" @change="updateProcessing('voiceEnhancement', $event)" /></label>
-      <p v-if="rtc.notice" class="settings-error" role="status">{{ rtc.notice }}</p>
     </section>
     <section class="settings-block">
       <h2>输出</h2>

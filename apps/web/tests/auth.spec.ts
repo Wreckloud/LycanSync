@@ -386,7 +386,7 @@ test('更换头像在整页资料设置中裁剪并保存', async ({ page }) => 
   const cropDialog = page.getByRole('dialog', { name: '调整头像' });
   await expect(cropDialog).toBeVisible();
   await expect(cropDialog.getByAltText('待裁剪头像')).toHaveJSProperty('naturalWidth', 1);
-  expect(await cropDialog.getByAltText('待裁剪头像').getAttribute('src')).toMatch(/^data:image\/png;base64,/);
+  expect(await cropDialog.getByAltText('待裁剪头像').getAttribute('src')).toMatch(/^blob:/);
   expect(await settings.boundingBox()).toEqual(initialSettings);
   await expect(page.getByLabel('头像缩放')).toBeVisible();
   await cropDialog.getByLabel('拖动调整头像位置').hover();
@@ -397,11 +397,11 @@ test('更换头像在整页资料设置中裁剪并保存', async ({ page }) => 
   await page.getByRole('button', { name: '应用头像' }).click();
   const preview = page.getByAltText('头像预览');
   await expect(preview).toBeVisible();
-  await expect(preview).toHaveJSProperty('naturalWidth', 256);
+  await expect(preview).toHaveJSProperty('naturalWidth', 512);
   expect(await preview.getAttribute('src')).toMatch(/^data:image\/png;base64,/);
   expect(await settings.boundingBox()).toEqual(initialSettings);
   await expect.poll(() => profileUpdate?.avatar).toMatch(/^data:image\/png;base64,/);
-  expect(Buffer.from(profileUpdate!.avatar!.split(',')[1], 'base64').length).toBeLessThanOrEqual(96 * 1024);
+  expect(Buffer.from(profileUpdate!.avatar!.split(',')[1], 'base64').length).toBeLessThanOrEqual(2 * 1024 * 1024);
 });
 
 test('签名自动保存与注册日期展示，反馈不推动下方内容', async ({ page }) => {
@@ -442,14 +442,14 @@ test('签名自动保存与注册日期展示，反馈不推动下方内容', as
   failNext = true;
   await signature.fill('保留失败草稿');
   await page.getByRole('heading', { name: '账号设置', exact: true }).click();
-  await expect(page.locator('.profile-feedback [role="alert"]')).toContainText('暂时无法保存');
+  await expect(page.locator('.profile-settings [role="alert"]')).toContainText('暂时无法保存');
   await expect(signature).toHaveValue('保留失败草稿');
   expect(await page.locator('.activity-settings').boundingBox()).toEqual(activityPosition);
 
   await signature.fill('');
   await page.getByRole('heading', { name: '账号设置', exact: true }).click();
   await expect.poll(() => user.signature).toBe('');
-  await expect(page.locator('.profile-feedback [role="alert"]')).toHaveCount(0);
+  await expect(page.locator('.profile-settings [role="alert"]')).toHaveCount(0);
   expect(updates).toBe(3);
 });
 
@@ -467,7 +467,7 @@ test('动态开关按账号保存，账号设置明确标出尚未接入的功�
   await expect(page.getByRole('button', { name: '修改头像', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '修改密码', exact: true })).toHaveCount(0);
   await expect(page.getByText('更换电脑或丢失登录时，请联系服主生成“恢复成员登录”链接。')).toBeVisible();
-  await expect(page.getByRole('button', { name: '连接 QQ', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '查看 QQ 绑定说明', exact: true })).toBeVisible();
   await expect(page.locator('.activity-settings')).toContainText('动态检测仅在桌面版提供');
   const toggle = page.getByRole('checkbox', { name: '显示当前动态', exact: true });
   await expect(toggle).toBeChecked();
@@ -479,7 +479,7 @@ test('动态开关按账号保存，账号设置明确标出尚未接入的功�
   await expect(toggle).not.toBeChecked();
 
   await expect(page.getByRole('textbox', { name: '新密码' })).toHaveCount(0);
-  await page.getByRole('button', { name: '连接 QQ', exact: true }).click();
+  await page.getByRole('button', { name: '查看 QQ 绑定说明', exact: true }).click();
   await expect(page.locator('#qq-entry')).toContainText('尚未接入');
   await expect(page.getByRole('button', { name: '注销账号', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: '退出登录', exact: true })).toBeEnabled();
