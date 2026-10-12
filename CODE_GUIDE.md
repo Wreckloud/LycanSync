@@ -2,6 +2,8 @@
 
 本文帮助定位职责和调用链，编码约束见 [AGENTS.md](AGENTS.md)，运行方法见 [README.md](README.md)。
 
+逐模块审查顺序、实施提示词与当前进度见 [REVIEW_PLAN.md](REVIEW_PLAN.md)，逐文件覆盖见 [REVIEW_FILES.csv](REVIEW_FILES.csv)；局部修复不代表整份文件已审完。
+
 ## 从哪里开始读
 
 | 目录／入口 | 职责 | 阅读重点 |
