@@ -39,3 +39,19 @@ test('preload 仅提供原生共享接口，不再暴露旧来源选择 IPC', ()
   assert.equal('selectSource' in bridge, false);
   assert.equal('onSources' in bridge, false);
 });
+
+test('退出尚未完成媒体清理时阻止关闭，完成后允许 app.quit 关闭窗口', () => {
+  const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const start = source.indexOf("mainWindow.on('close'");
+  const end = source.indexOf("mainWindow.on('maximize'", start);
+  for (const completed of [false, true]) {
+    let close;
+    let prevented = false;
+    runInNewContext(source.slice(start, end), {
+      mainWindow: { on: (_name, callback) => { close = callback; } },
+      canClose: false, closing: true, allowQuitAfterMediaHelper: completed,
+    });
+    close({ preventDefault: () => { prevented = true; } });
+    assert.equal(prevented, !completed);
+  }
+});

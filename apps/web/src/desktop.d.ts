@@ -90,6 +90,7 @@ interface Window {
     onUpdateState(callback: (state: StartupUpdateState) => void): () => void;
     clearSession(): Promise<void>;
     getAccessLink(): Promise<import('./auth/accountAccess').AccessOffer | null>;
+    parseAccessLink(value: string): Promise<import('./auth/accountAccess').AccessOffer>;
     prepareAccessLink(offer: import('./auth/accountAccess').AccessOffer): Promise<void>;
     onAccessLink(callback: (offer: import('./auth/accountAccess').AccessOffer) => void): () => void;
     getServerSettings(): Promise<{ apiUrl: string; editable: boolean }>;

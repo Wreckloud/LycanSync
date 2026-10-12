@@ -13,7 +13,7 @@ const { MediaHelperManager } = require('./media-helper.cjs');
 const { createMediaDiagnostics } = require('./media-diagnostics.cjs');
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
 const { matchNativeVideoSourceThumbnails, monitorDisplayId } = require('./native-video-thumbnails.cjs');
-const { parseAccessLink, accessLinkFromArguments } = require('./access-links.cjs');
+const { parseAccessLink, accessLinkFromArguments, parseManualAccessLink } = require('./access-links.cjs');
 const { createStartupUpdate } = require('./startup-update.cjs');
 
 const APP_ORIGIN = 'lycan://app';
@@ -993,7 +993,8 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow.webContents.on('render-process-gone', () => finishClose());
     mainWindow.once('ready-to-show', () => mainWindow.show());
     mainWindow.on('close', (event) => {
-      if (canClose) return;
+      // app.quit 先等待 helper 清理；确认完成后的第二次退出允许关闭窗口。
+      if (canClose || allowQuitAfterMediaHelper) return;
       event.preventDefault();
       if (closing) return;
       closing = true;
@@ -1289,6 +1290,11 @@ ipcMain.handle('auth:access:get', (event) => {
   const offer = pendingAccessLink;
   pendingAccessLink = null;
   return offer;
+});
+ipcMain.handle('auth:access:parse', async (event, value) => {
+  if (!trustedSender(event) || closing) throw new Error('当前不能打开邀请链接。');
+  if (await loadSession()) throw new Error('请先退出当前账号。');
+  return parseManualAccessLink(value);
 });
 ipcMain.handle('auth:access:prepare', async (event, offer) => {
   if (!trustedSender(event) || closing) throw new Error('当前不能打开邀请链接。');

@@ -6,6 +6,7 @@ import AccountAccessPrompt from './components/AccountAccessPrompt.vue';
 import WelcomeProfile from './components/WelcomeProfile.vue';
 import StartupUpdate from './components/StartupUpdate.vue';
 import AppNotice from './components/AppNotice.vue';
+import InlineFeedback from './components/InlineFeedback.vue';
 import type { AccessOffer } from './auth/accountAccess';
 import {
   authRequest,
@@ -31,6 +32,8 @@ const serverAddress = ref('');
 const serverEditable = ref(false);
 const serverSaving = ref(false);
 const serverError = ref('');
+const manualAccessLink = ref('');
+const manualAccessError = ref('');
 const startupChecking = ref(Boolean(desktop));
 const updateState = ref<StartupUpdateState | null>(null);
 const updateWarning = ref('');
@@ -160,6 +163,23 @@ async function saveServerAddress() {
     serverSaving.value = false;
   }
 }
+async function openManualAccessLink() {
+  if (!desktop || submitting.value || serverSaving.value || user.value || accessOffer.value) return;
+  submitting.value = true;
+  manualAccessError.value = '';
+  try {
+    const offer = await desktop.parseAccessLink(manualAccessLink.value);
+    if (disposed || user.value || accessOffer.value) return;
+    manualAccessLink.value = '';
+    accessOffer.value = offer;
+  } catch (exception) {
+    if (!disposed && !user.value && !accessOffer.value) {
+      manualAccessError.value = exception instanceof Error
+        ? exception.message.replace(/^Error invoking remote method 'auth:access:parse': Error: /, '')
+        : '无法读取链接，请重新粘贴。';
+    }
+  } finally { submitting.value = false; }
+}
 onMounted(async () => {
   if (desktop) {
     try {
@@ -215,9 +235,18 @@ onMounted(async () => {
           </div>
         </template>
         <p v-if="error" role="alert" class="auth-error">{{ error }}</p>
-        <details v-if="serverEditable" class="auth-server-settings">
-          <summary>服务器地址</summary>
-          <form @submit.prevent="saveServerAddress">
+        <details v-if="desktop || serverEditable" class="auth-server-settings">
+          <summary>更多</summary>
+          <form v-if="desktop" @submit.prevent="openManualAccessLink">
+            <label>邀请或恢复登录链接
+              <input v-model="manualAccessLink" type="text" required maxlength="2048" autocomplete="off" spellcheck="false"
+                placeholder="粘贴服主发来的完整链接" :disabled="submitting || serverSaving" />
+            </label>
+            <small>在当前窗口打开，不会立即使用邀请；检查后仍需确认。</small>
+            <InlineFeedback :message="manualAccessError" :status="submitting ? '正在检查…' : ''" />
+            <button type="submit" :disabled="submitting || serverSaving">检查链接</button>
+          </form>
+          <form v-if="serverEditable" @submit.prevent="saveServerAddress">
             <label>服务器地址
               <input v-model="serverAddress" type="url" required autocomplete="off" :disabled="submitting || serverSaving" />
             </label>

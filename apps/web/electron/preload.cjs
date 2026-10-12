@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   },
   clearSession: () => ipcRenderer.invoke('auth:clear'),
   getAccessLink: () => ipcRenderer.invoke('auth:access:get'),
+  parseAccessLink: (value) => ipcRenderer.invoke('auth:access:parse', value),
   prepareAccessLink: (offer) => ipcRenderer.invoke('auth:access:prepare', offer),
   onAccessLink: (callback) => {
     const listener = (_event, offer) => callback(offer);

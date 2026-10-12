@@ -22,6 +22,17 @@ test('邀请参数从冷启动和第二实例传到确认页面', async () => {
       await expect(page.getByRole('button', { name: '连接并重启' })).toBeVisible();
       await page.getByRole('button', { name: '关闭邀请', exact: true }).click();
       await expect(page.locator('.access-prompt')).toHaveCount(0);
+      await page.getByText('更多', { exact: true }).click();
+      await page.getByLabel('邀请或恢复登录链接', { exact: true }).fill('https://example.com/join#token=short');
+      await page.getByRole('button', { name: '检查链接', exact: true }).click();
+      await expect(page.getByText('链接无效，请粘贴完整的 HTTPS 邀请链接或 LycanSync 打开链接。')).toBeVisible();
+      await expect(page.locator('.access-prompt')).toHaveCount(0);
+      await page.getByLabel('邀请或恢复登录链接', { exact: true }).fill(`https://example.com/join#token=${'a'.repeat(43)}`);
+      await page.getByRole('button', { name: '检查链接', exact: true }).click();
+      await expect(page.getByRole('button', { name: '连接并重启' })).toBeVisible();
+      await page.getByRole('button', { name: '关闭邀请', exact: true }).click();
+      await page.getByText('更多', { exact: true }).click();
+      await expect(page.getByLabel('邀请或恢复登录链接', { exact: true })).toHaveValue('');
       const executable = await application.evaluate(() => process.execPath);
       const child = spawn(executable, [...args, link], { env, windowsHide: true, stdio: 'ignore' });
       try {
