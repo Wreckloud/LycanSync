@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { hasValidEncodingCostStats } from '../../tests/desktop/fixtures/encodingCost';
+import { hasValidEncodingCostStats } from '../desktop/fixtures/encodingCost';
 
 const layer = { codec: 'video/H264', width: 1920, height: 1080, measuredFps: 120, measuredKbps: 8000, averageEncodeMs: 2 };
 const lowLayer = { ...layer, width: 640, height: 360, measuredFps: 30 };

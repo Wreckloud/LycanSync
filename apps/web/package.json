@@ -10,7 +10,9 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
+    "typecheck:test": "vue-tsc --noEmit -p tsconfig.test.json",
+    "build": "npm run typecheck && vite build",
     "build:activity": "cargo build --manifest-path ../../native/activity-helper/Cargo.toml --release",
     "build:media": "cargo build --manifest-path ../../native/media-helper/Cargo.toml --release --features shared-texture-output",
     "build:media-bridge": "cargo build --manifest-path ../../native/media-bridge/Cargo.toml --release --target x86_64-pc-windows-msvc",
@@ -19,11 +21,11 @@
     "test:media": "cargo test --manifest-path ../../native/media-helper/Cargo.toml",
     "test:electron-unit": "node --test electron/media-helper.test.cjs electron/media-diagnostics.test.cjs electron/capture-permissions.test.cjs electron/server-settings.test.cjs electron/access-links.test.cjs electron/api-proxy.test.cjs electron/startup-update.test.cjs",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "vitest run src",
-    "test:e2e": "playwright test",
+    "test": "npm run typecheck:test && vitest run src tests/unit",
+    "test:e2e": "npm run typecheck:test && playwright test",
     "desktop": "npm run build:desktop && electron electron/main.cjs",
     "desktop:dev": "node electron/dev.cjs",
-    "test:desktop": "npm run build:desktop && playwright test --config playwright.desktop.config.ts"
+    "test:desktop": "npm run build:desktop && npm run typecheck:test && playwright test --config playwright.desktop.config.ts"
   },
   "dependencies": {
     "electron-updater": "6.8.9"
