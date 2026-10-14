@@ -43,6 +43,72 @@ test('群组创建允许 2 MiB 裁剪图的 Base64 和文本，转发保持认�
   assert.equal(forwarded[0].options.headers.Authorization, 'Bearer test-session');
 });
 
+test('文件上传按流构造真实请求，保留认证和元数据，不先读取全部内容', async () => {
+  let outgoing;
+  let forwardedBody;
+  const { serve } = proxyFixture({ net: { fetch: async (url, options) => {
+    forwardedBody = options.body;
+    // Electron fetchWithSession 同样先构造 Request；这里不运行 Electron 或访问网络。
+    outgoing = new Request(url, options);
+    return Response.json({ id: 'uploaded' }, { status: 201 });
+  } } });
+  const stream = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([1, 2, 3])); controller.close(); } });
+  const request = new Request('lycan://app/api/groups/11111111-1111-4111-8111-111111111111/files', {
+    method: 'POST', body: stream, duplex: 'half', headers: {
+      'Content-Type': 'application/octet-stream', 'X-File-Name': 'ZmlsZS5iaW4', 'X-File-Size': '3',
+      'X-Upload-Id': '22222222-2222-4222-8222-222222222222', 'X-Message-Content': 'aGk',
+    },
+  });
+  const response = await serve(request);
+  assert.equal(response.status, 201);
+  assert.equal(forwardedBody, request.body);
+  assert.equal(request.bodyUsed, false);
+  assert.equal(outgoing.headers.get('Authorization'), 'Bearer test-session');
+  assert.equal(outgoing.headers.get('X-File-Size'), '3');
+  assert.equal(outgoing.headers.get('X-Upload-Id'), '22222222-2222-4222-8222-222222222222');
+  assert.equal(outgoing.headers.get('X-Message-Content'), 'aGk');
+  assert.deepEqual([...new Uint8Array(await outgoing.arrayBuffer())], [1, 2, 3]);
+});
+
+test('页面取消会传给正在等待的上传请求，不产生伪造成功', async () => {
+  const controller = new AbortController();
+  let started;
+  const ready = new Promise((resolve) => { started = resolve; });
+  let forwardedSignal;
+  const { serve } = proxyFixture({ net: { fetch: async (url, options) => {
+    new Request(url, options);
+    forwardedSignal = options.signal;
+    started();
+    return new Promise((_, reject) => { options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }); });
+  } } });
+  const request = new Request('lycan://app/api/groups/11111111-1111-4111-8111-111111111111/files', {
+    method: 'POST', body: new ReadableStream({}), duplex: 'half', signal: controller.signal,
+  });
+  const serving = serve(request);
+  await ready;
+  controller.abort();
+  const response = await serving;
+  assert.equal(forwardedSignal.aborted, true);
+  assert.equal(response.status, 502);
+});
+
+test('下载保持响应流与文件头，消费端取消会传给源流', async () => {
+  let cancelled = false;
+  const stream = new ReadableStream({
+    start(controller) { controller.enqueue(new Uint8Array([1, 2, 3])); },
+    cancel() { cancelled = true; },
+  });
+  const { serve } = proxyFixture({ net: { fetch: async () => new Response(stream, { headers: {
+    'Content-Type': 'application/octet-stream', 'Content-Length': '3', 'Content-Disposition': 'attachment; filename="file.bin"',
+  } }) } });
+  const response = await serve(new Request('lycan://app/api/groups/11111111-1111-4111-8111-111111111111/files/22222222-2222-4222-8222-222222222222'));
+  assert.equal(response.body, stream);
+  assert.equal(response.headers.get('Content-Length'), '3');
+  assert.equal(response.headers.get('Content-Disposition'), 'attachment; filename="file.bin"');
+  await response.body.cancel();
+  assert.equal(cancelled, true);
+});
+
 test('凭据读取失败与网络连接失败有不同反馈，不透传路径或凭据', async () => {
   const loadFailure = proxyFixture({ loadSession: async () => { throw new Error('private/session.bin'); } });
   const unreadable = await loadFailure.serve(new Request('lycan://app/api/auth/me'));

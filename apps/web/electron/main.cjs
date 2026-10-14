@@ -885,7 +885,7 @@ async function serveApplication(request) {
             'X-Message-Content': request.headers.get('X-Message-Content') || '',
           } : {}),
           ...(!routePolicy.public && token ? { Authorization: 'Bearer ' + token } : {}) },
-        body, redirect: 'error', credentials: 'omit',
+        body, ...(streamingUpload ? { duplex: 'half' } : {}), redirect: 'error', credentials: 'omit',
         signal: AbortSignal.any([request.signal,
           AbortSignal.timeout(streamingUpload || groupFileDownloadPath.test(url.pathname) ? 30 * 60_000
             : routePolicy.longPolling ? 52_000 : 15000)]),
