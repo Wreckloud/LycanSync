@@ -99,7 +99,15 @@ async function refresh() {
       hasMore = page.hasMore;
       initialLoaded = true;
     }
-    return appendMessages(page.messages, initial, initial ? 'auto' : 'smooth');
+    // 历史或轮询可能晚于本机发送返回；游标之后先按服务端顺序合并，再补上快照之后发出的消息。
+    const currentIds = new Set(messages.value.map((message) => message.id));
+    const snapshotIds = new Set(page.messages.map((message) => message.id));
+    const prefixEnd = latestId ? messages.value.findIndex((message) => message.id === latestId) + 1 : 0;
+    const added = page.messages.filter((message) => !currentIds.has(message.id)).length;
+    messages.value = [...messages.value.slice(0, prefixEnd), ...page.messages,
+      ...messages.value.slice(prefixEnd).filter((message) => !snapshotIds.has(message.id))];
+    if (added && (initial || atBottom)) void scrollToBottom(initial ? 'auto' : 'smooth', initial);
+    return added;
   } catch (reason) {
     if (controller.signal.aborted || disposed || pollRequest !== controller) return null;
     pollError.value = reason instanceof Error ? reason.message : '无法读取群聊消息';

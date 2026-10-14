@@ -127,10 +127,14 @@ export async function downloadFile(groupId: string, attachment: ChatAttachment, 
   onProgress: (loadedBytes: number) => void): Promise<void> {
   const picker = (window as FilePickerWindow).showSaveFilePicker;
   if (!picker) throw new Error('当前客户端不支持大文件流式保存');
+  signal.throwIfAborted();
   const handle = await picker.call(window, { suggestedName: attachment.fileName ?? 'download' });
+  // 系统保存对话框不能强制关闭，但取消后的迟到选择不得创建写入或发起下载。
+  signal.throwIfAborted();
   const writer = await handle.createWritable();
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
+    signal.throwIfAborted();
     const response = await authenticatedFetch(
       '/api/groups/' + encodeURIComponent(groupId) + '/files/' + encodeURIComponent(attachment.id),
       { headers: { Accept: 'application/octet-stream' },
@@ -142,11 +146,14 @@ export async function downloadFile(groupId: string, attachment: ChatAttachment, 
     let loadedBytes = 0;
     while (true) {
       const { done, value } = await reader.read();
+      signal.throwIfAborted();
       if (done) break;
       await writer.write(value);
+      signal.throwIfAborted();
       loadedBytes += value.byteLength;
       onProgress(loadedBytes);
     }
+    signal.throwIfAborted();
     await writer.close();
   } catch (reason) {
     await reader?.cancel(reason).catch(() => undefined);

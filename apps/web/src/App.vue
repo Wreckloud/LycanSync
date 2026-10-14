@@ -1287,7 +1287,7 @@ function participantListening(participant: Participant) {
               :disabled="filmstripPage >= filmstripPageCount - 1" @click="filmstripPage++"><ChevronRight :size="17" /></button>
           </div>
         </section>
-        <GroupChat v-if="!focusedOnSelectedGroup" :key="selectedGroup.id" :group="selectedGroup"
+        <GroupChat v-show="!focusedOnSelectedGroup" :key="selectedGroup.id" :group="selectedGroup"
           :members="selectedGroupDetail?.members ?? []" :user="user" />
         <Transition enter-active-class="callbar-enter-active">
           <div v-if="callbarGroup || joiningGroupId" class="callbar-reveal" :class="{ 'is-leaving': callbarLeaving }" data-testid="callbar">

@@ -122,6 +122,20 @@ async function stageNames(page: Page) {
   return page.getByTestId('viewer-screen').locator('.participant-meta > strong').allTextContents();
 }
 
+test('聚焦共享只隐藏群聊，返回后草稿与原群聊元素保留', async ({ page }) => {
+  await sharing(page, ['A']);
+  const input = page.getByRole('textbox', { name: '消息内容' });
+  await input.fill('稍后继续写');
+  const composer = await input.elementHandle();
+  await page.getByRole('button', { name: '单路观看成员A的共享画面', exact: true }).click();
+  await expect(input).toBeHidden();
+  expect(await composer?.evaluate((element) => element.isConnected)).toBe(true);
+  await page.getByRole('button', { name: '返回多人舞台', exact: true }).click();
+  await expect(input).toHaveValue('稍后继续写');
+  expect(await composer?.evaluate((element) => element.isConnected)).toBe(true);
+  await composer?.dispose();
+});
+
 test('隐藏观看保留远端轨道，返回恢复可见需求，本地预览暂停不结束采集', async ({ page }) => {
   await sharing(page, ['user-stage-user', 'A', 'B']);
   const visibility = () => page.evaluate(() => (window as unknown as {
