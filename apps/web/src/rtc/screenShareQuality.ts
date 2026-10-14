@@ -1,10 +1,10 @@
 import { VideoPreset } from 'livekit-client';
 
 export const SCREEN_SHARE_QUALITIES = [
-  { id: 'economy', label: '节省流量', description: '720p · 30 FPS', width: 1280, height: 720, fps: 30, bitrate: 3_000_000 },
-  { id: 'standard', label: '标准', description: '1080p · 60 FPS', width: 1920, height: 1080, fps: 60, bitrate: 12_000_000 },
   { id: 'highFrameRate', label: '高帧率', description: '1080p · 120 FPS', width: 1920, height: 1080, fps: 120, bitrate: 20_000_000 },
   { id: 'text', label: '文字清晰', description: '1080p · 30 FPS', width: 1920, height: 1080, fps: 30, bitrate: 8_000_000 },
+  { id: 'standard', label: '标准', description: '1080p · 60 FPS', width: 1920, height: 1080, fps: 60, bitrate: 12_000_000 },
+  { id: 'economy', label: '节省流量', description: '720p · 30 FPS', width: 1280, height: 720, fps: 30, bitrate: 3_000_000 },
 ] as const;
 
 export type ScreenShareQualityId = typeof SCREEN_SHARE_QUALITIES[number]['id'];

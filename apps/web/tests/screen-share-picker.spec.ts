@@ -58,16 +58,16 @@ test('四种画质切换、整屏预览、失败阻止确认和恢复', async ({
   expect(await page.evaluate(() => (window as unknown as { pickerTest: { confirmed(): boolean } }).pickerTest.confirmed())).toBe(true);
 });
 
-test('右上关闭、Esc、焦点隔离与窄窗口布局', async ({ page }, testInfo) => {
-  const close = page.getByRole('button', { name: '关闭共享选择器' });
-  await expect(close).toBeFocused();
+test('左下取消、Esc、焦点隔离与窄窗口布局', async ({ page }, testInfo) => {
+  const dialog = page.getByRole('dialog');
+  const close = dialog.getByRole('button', { name: '取消', exact: true });
+  await expect(dialog).toBeFocused();
   await page.keyboard.press('Shift+Tab');
-  await expect(page.getByRole('tab', { name: '文字清晰', exact: true })).toBeFocused();
+  await expect(page.getByRole('checkbox', { name: '共享音频', exact: true })).toBeFocused();
   await page.keyboard.press('Tab');
-  await expect(close).toBeFocused();
+  await expect(page.getByRole('tab', { name: '应用窗口', exact: true })).toBeFocused();
   expect(await page.locator('#root').evaluate((element) => (element as HTMLElement).inert)).toBe(true);
   await page.setViewportSize({ width: 420, height: 720 });
-  const dialog = page.getByRole('dialog');
   expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await expect(page.getByRole('button', { name: '开始共享', exact: true })).toBeInViewport();
   await page.screenshot({ path: testInfo.outputPath('picker-narrow.png') });

@@ -3,6 +3,35 @@ const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { test } = require('node:test');
 const { runInNewContext } = require('node:vm');
+const { matchNativeVideoSourceThumbnails, monitorDisplayId } = require('./native-video-thumbnails.cjs');
+
+test('缩略图 IPC 保留窗口句柄，同标题的分离窗口分别匹配并校验字段', async () => {
+  const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const start = source.indexOf("ipcMain.handle('media:video-source-thumbnails'");
+  const end = source.indexOf("ipcMain.handle('media:capture-probe:start'", start);
+  let handler;
+  let calls = 0;
+  runInNewContext(source.slice(start, end), {
+    ipcMain: { handle: (_name, callback) => { handler = callback; } },
+    trustedSender: () => true, closing: false, performance, Buffer, screen: {},
+    recordSourceTiming() {}, writeMediaDiagnostic: async () => {},
+    captureSourceType: source => source.id.startsWith('window:') ? 'window' : 'screen',
+    matchNativeVideoSourceThumbnails, monitorDisplayId,
+    desktopCapturer: { getSources: async () => {
+      calls++;
+      return ['10', '20'].map(id => ({ id: `window:${id}:0`, name: 'Same browser title', display_id: '',
+        thumbnail: { isEmpty: () => false, toJPEG: () => Buffer.from(id) } }));
+    } },
+  });
+  const sources = ['10', '20'].map((windowId, index) => ({ sourceId: `window:1:${index}`,
+    kind: 'window', title: 'Same browser title', windowId }));
+  assert.deepEqual(await handler({}, sources), [
+    { sourceId: 'window:1:0', thumbnail: 'data:image/jpeg;base64,MTA=' },
+    { sourceId: 'window:1:1', thumbnail: 'data:image/jpeg;base64,MjA=' },
+  ]);
+  await assert.rejects(handler({}, [{ ...sources[0], windowId: '-1' }]), /请求参数无效/);
+  assert.equal(calls, 1);
+});
 
 test('桌面误调用 Chromium 共享时明确拒绝，不枚举来源或启动采集', () => {
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');

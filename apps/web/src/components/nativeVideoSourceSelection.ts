@@ -7,6 +7,7 @@ export interface NativeVideoSourceOptionInput {
   width: number;
   height: number;
   primary: boolean;
+  windowId?: string;
   monitorOrigin?: { x: number; y: number };
 }
 
@@ -37,8 +38,7 @@ export function createNativeVideoSourceSelection(sources: NativeVideoSourceOptio
     return currentSources.map((source) => ({
       id: source.sourceId,
       name: source.kind === 'monitor'
-        ? `屏幕 ${source.title.match(/(?:^|\\)DISPLAY(\d+)$/i)?.[1]
-          ?? currentSources.filter((item) => item.kind === 'monitor').indexOf(source) + 1}` : source.title,
+        ? `屏幕 ${currentSources.filter((item) => item.kind === 'monitor').indexOf(source) + 1}` : source.title,
       thumbnail: thumbnails.get(source.sourceId)?.title === source.title
         ? thumbnails.get(source.sourceId)?.thumbnail : undefined,
       type: source.kind === 'window' ? 'window' as const : 'screen' as const,

@@ -2,6 +2,7 @@
 
 use super::{CaptureTarget, DiscoveredSource, MAX_VIDEO_SOURCES, clean_title};
 use crate::protocol::{Capability, ErrorCode, VideoSource, VideoSourceKind};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use windows::Graphics::Capture::GraphicsCaptureSession;
@@ -14,7 +15,8 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Threading::{
-    GetCurrentProcessId, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentProcessId, GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize, RoUninitialize};
 use windows::Win32::UI::HiDpi::{
@@ -29,7 +31,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
 };
-use windows::core::{BOOL, PCWSTR};
+use windows::core::{BOOL, PCWSTR, PWSTR};
 
 pub(super) use windows::Win32::Foundation::HWND as NativeHwnd;
 pub(super) use windows::Win32::Graphics::Gdi::HMONITOR as NativeHmonitor;
@@ -156,6 +158,8 @@ impl WindowsDiscovery {
             sources: Vec::new(),
             helper_process_id: unsafe { GetCurrentProcessId() },
             client_process_id: self.client_process_id,
+            client_executable: process_executable(self.client_process_id),
+            excluded_processes: HashMap::new(),
         };
         let context_pointer = &mut context as *mut DiscoveryContext;
         let monitors: MONITORENUMPROC = Some(enumerate_monitor);
@@ -241,6 +245,8 @@ struct DiscoveryContext {
     sources: Vec<DiscoveredSource>,
     helper_process_id: u32,
     client_process_id: u32,
+    client_executable: Option<String>,
+    excluded_processes: HashMap<u32, bool>,
 }
 
 unsafe extern "system" fn enumerate_monitor(
@@ -280,6 +286,7 @@ unsafe extern "system" fn enumerate_monitor(
             width: width as u32,
             height: height as u32,
             primary: info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
+            window_id: None,
             monitor_origin: Some(crate::protocol::MonitorOrigin {
                 x: info.monitorInfo.rcMonitor.left,
                 y: info.monitorInfo.rcMonitor.top,
@@ -301,11 +308,21 @@ unsafe extern "system" fn enumerate_window(window: HWND, parameter: LPARAM) -> B
     let mut process_id = 0;
     unsafe { GetWindowThreadProcessId(window, Some(&mut process_id)) };
     let extended_style = unsafe { GetWindowLongPtrW(window, GWL_EXSTYLE) };
-    if should_exclude_window(
-        process_id,
-        context.helper_process_id,
-        context.client_process_id,
-    ) || is_helper_window_style(extended_style)
+    // 只在本次快照内缓存，同进程多窗口不重复查路径，避免跨快照复用旧 PID。
+    let excluded = *context
+        .excluded_processes
+        .entry(process_id)
+        .or_insert_with(|| {
+            should_exclude_window(
+                process_id,
+                context.helper_process_id,
+                context.client_process_id,
+            ) || process_executable(process_id).is_some_and(|path| {
+                is_client_executable(&path, context.client_executable.as_deref())
+            })
+        });
+    if excluded
+        || is_helper_window_style(extended_style)
         || is_shell_window(window)
         || is_cloaked(window)
     {
@@ -342,6 +359,7 @@ unsafe extern "system" fn enumerate_window(window: HWND, parameter: LPARAM) -> B
             width: width as u32,
             height: height as u32,
             primary: false,
+            window_id: Some((window.0 as usize).to_string()),
             monitor_origin: None,
         },
         target: CaptureTarget::Window(window, identity),
@@ -472,6 +490,30 @@ fn should_exclude_window(process_id: u32, helper_process_id: u32, client_process
     process_id == helper_process_id || process_id == client_process_id
 }
 
+fn is_client_executable(path: &str, current_client: Option<&str>) -> bool {
+    path.rsplit(['\\', '/'])
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case("LycanSync.exe"))
+        || current_client.is_some_and(|client| path.eq_ignore_ascii_case(client))
+}
+
+fn process_executable(process_id: u32) -> Option<String> {
+    let process =
+        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) }.ok()?;
+    let mut path = vec![0u16; 32768];
+    let mut length = path.len() as u32;
+    let queried = unsafe {
+        QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(path.as_mut_ptr()),
+            &mut length,
+        )
+    };
+    let closed = unsafe { CloseHandle(process) };
+    (queried.is_ok() && closed.is_ok()).then(|| String::from_utf16_lossy(&path[..length as usize]))
+}
+
 fn is_helper_window_style(extended_style: isize) -> bool {
     let helper_style_bits = WS_EX_TOOLWINDOW.0 as isize | WS_EX_NOACTIVATE.0 as isize;
     extended_style & helper_style_bits != 0
@@ -564,8 +606,8 @@ fn read_window_fingerprint(window: HWND) -> Option<WindowFingerprint> {
 #[cfg(test)]
 mod tests {
     use super::{
-        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZE, WS_MINIMIZE, is_helper_window_style,
-        should_exclude_window, stable_window_style,
+        WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZE, WS_MINIMIZE, is_client_executable,
+        is_helper_window_style, should_exclude_window, stable_window_style,
     };
 
     #[test]
@@ -587,6 +629,24 @@ mod tests {
         assert!(should_exclude_window(20, 10, 20));
         assert!(should_exclude_window(10, 10, 20));
         assert!(!should_exclude_window(30, 10, 20));
+    }
+
+    #[test]
+    fn excludes_other_installed_and_same_runtime_client_instances() {
+        assert!(is_client_executable(
+            r"D:\Programs\LycanSync\LycanSync.exe",
+            None
+        ));
+        assert!(is_client_executable(r"E:\Test\LYCANSYNC.EXE", None));
+        assert!(is_client_executable(
+            r"D:\app\electron.exe",
+            Some(r"d:\APP\Electron.exe")
+        ));
+        assert!(!is_client_executable(
+            r"D:\Other\electron.exe",
+            Some(r"D:\app\electron.exe")
+        ));
+        assert!(!is_client_executable(r"D:\Programs\msedge.exe", None));
     }
 
     #[test]

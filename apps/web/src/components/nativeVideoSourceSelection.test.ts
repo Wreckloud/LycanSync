@@ -7,6 +7,14 @@ const sources = [
 ];
 
 describe('createNativeVideoSourceSelection', () => {
+  it('显示器按当前列表编号，不将 Windows 的 DISPLAY25 当作屏幕数量', () => {
+    const monitor = { ...sources[1], title: '\\\\.\\DISPLAY25' };
+    const selection = createNativeVideoSourceSelection([monitor]);
+    expect(selection.options[0].name).toBe('屏幕 1');
+    const second = { ...monitor, sourceId: 'monitor:3:0', title: '\\\\.\\DISPLAY40' };
+    expect(selection.replaceSources([second, monitor]).map(source => source.name)).toEqual(['屏幕 1', '屏幕 2']);
+    expect(selection.options[0].id).toBe(monitor.sourceId);
+  });
   it('attaches previews by opaque source id without changing the selected id', () => {
     const selection = createNativeVideoSourceSelection(sources);
     selection.applyThumbnails(sources, [

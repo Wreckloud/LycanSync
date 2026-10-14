@@ -350,6 +350,9 @@ pub struct VideoSource {
     pub width: u32,
     pub height: u32,
     pub primary: bool,
+    /// 仅用于缩略图精确匹配；采集仍使用注册表中的 source_id 和窗口身份。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitor_origin: Option<MonitorOrigin>,
 }
@@ -829,15 +832,28 @@ mod tests {
             protocol_version: PROTOCOL_VERSION,
             request_id: "sources-1".to_owned(),
             revision: 1,
-            sources: vec![VideoSource {
-                source_id: "monitor:1:0".to_owned(),
-                kind: VideoSourceKind::Monitor,
-                title: "DISPLAY1".to_owned(),
-                width: 1920,
-                height: 1080,
-                primary: true,
-                monitor_origin: Some(super::MonitorOrigin { x: -1920, y: 0 }),
-            }],
+            sources: vec![
+                VideoSource {
+                    source_id: "monitor:1:0".to_owned(),
+                    kind: VideoSourceKind::Monitor,
+                    title: "DISPLAY1".to_owned(),
+                    width: 1920,
+                    height: 1080,
+                    primary: true,
+                    window_id: None,
+                    monitor_origin: Some(super::MonitorOrigin { x: -1920, y: 0 }),
+                },
+                VideoSource {
+                    source_id: "window:1:0".to_owned(),
+                    kind: VideoSourceKind::Window,
+                    title: "Game".to_owned(),
+                    width: 1280,
+                    height: 720,
+                    primary: false,
+                    window_id: Some(u64::MAX.to_string()),
+                    monitor_origin: None,
+                },
+            ],
         };
         let value = serde_json::to_value(event).unwrap();
         assert_eq!(value["event"], "videoSources");
@@ -847,5 +863,8 @@ mod tests {
         assert_eq!(value["sources"][0]["kind"], "monitor");
         assert_eq!(value["sources"][0]["sourceId"], "monitor:1:0");
         assert_eq!(value["sources"][0]["monitorOrigin"]["x"], -1920);
+        assert!(value["sources"][0].get("windowId").is_none());
+        assert_eq!(value["sources"][1]["windowId"], u64::MAX.to_string());
+        assert!(value["sources"][1].get("monitorOrigin").is_none());
     }
 }

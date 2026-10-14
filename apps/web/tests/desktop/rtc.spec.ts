@@ -28,7 +28,7 @@ test('桌面入房、取消选择、窗口共享及离房释放', async () => {
     // 整屏或其他窗口仍必须保留在可选源里，过滤不能清空列表（含取消按钮在内应多于一项）。
     await expect.poll(() => page.getByRole('dialog', { name: '选择共享的窗口或屏幕' })
       .locator('button').count()).toBeGreaterThan(1);
-    await page.getByRole('button', { name: '关闭共享选择器' }).click();
+    await page.getByRole('dialog', { name: '选择共享的窗口或屏幕' }).getByRole('button', { name: '取消', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '选择共享的窗口或屏幕' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '开始屏幕共享', exact: true })).toBeEnabled();
     await expect(page.getByRole('alert')).toHaveCount(0);

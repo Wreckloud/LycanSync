@@ -11,6 +11,7 @@ interface NativeVideoSource {
   width: number;
   height: number;
   primary: boolean;
+  windowId?: string;
   monitorOrigin?: { x: number; y: number };
 }
 

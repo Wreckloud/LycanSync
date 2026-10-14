@@ -323,20 +323,20 @@ function createManager(mode = {}, options = {}) {
   return { manager, children, spawnOptions };
 }
 
-test('native chooser previews require one exact title and kind match on both sides', () => {
+test('窗口预览按句柄匹配，同标题窗口仍各自显示正确画面', () => {
   const videoSources = [
-    { sourceId: 'window:4:0', kind: 'window', title: 'Notepad' },
-    { sourceId: 'window:4:1', kind: 'window', title: 'Duplicate' },
-    { sourceId: 'window:4:2', kind: 'window', title: 'Duplicate' },
+    { sourceId: 'window:4:0', kind: 'window', title: 'Notepad', windowId: '99' },
+    { sourceId: 'window:4:1', kind: 'window', title: 'Duplicate', windowId: '100' },
+    { sourceId: 'window:4:2', kind: 'window', title: 'Duplicate', windowId: '101' },
     { sourceId: 'monitor:4:0', kind: 'monitor', title: '\\\\.\\DISPLAY1', displayId: '123' },
   ];
   const desktopSources = [
-    { id: 'window:99:secret', name: 'Notepad', type: 'window', thumbnail: { isEmpty: () => false,
+    { id: 'window:99:0', name: 'Notepad', type: 'window', thumbnail: { isEmpty: () => false,
       toDataURL: () => 'data:image/png;base64,notepad' } },
-    { id: 'window:100:secret', name: 'Duplicate', type: 'window', thumbnail: { isEmpty: () => false,
-      toDataURL: () => 'data:image/png;base64,ambiguous' } },
-    { id: 'window:101:secret', name: 'Duplicate', type: 'window', thumbnail: { isEmpty: () => false,
-      toDataURL: () => 'data:image/png;base64,ambiguous' } },
+    { id: 'window:100:0', name: 'Duplicate', type: 'window', thumbnail: { isEmpty: () => false,
+      toDataURL: () => 'data:image/png;base64,first' } },
+    { id: 'window:101:0', name: 'Duplicate', type: 'window', thumbnail: { isEmpty: () => false,
+      toDataURL: () => 'data:image/png;base64,second' } },
     { id: 'screen:0:secret', name: 'Screen 1', type: 'screen', displayId: '123', thumbnail: { isEmpty: () => false,
       toDataURL: () => 'data:image/png;base64,display' } },
     { id: 'screen:1:secret', name: 'Notepad', type: 'screen', thumbnail: { isEmpty: () => false,
@@ -345,21 +345,33 @@ test('native chooser previews require one exact title and kind match on both sid
 
   assert.deepEqual(matchNativeVideoSourceThumbnails(videoSources, desktopSources), [
     { sourceId: 'window:4:0', thumbnail: 'data:image/png;base64,notepad' },
+    { sourceId: 'window:4:1', thumbnail: 'data:image/png;base64,first' },
+    { sourceId: 'window:4:2', thumbnail: 'data:image/png;base64,second' },
     { sourceId: 'monitor:4:0', thumbnail: 'data:image/png;base64,display' },
   ]);
 });
 
 test('native chooser skips empty and over-budget preview images', () => {
   const sources = [
-    { sourceId: 'window:1:0', kind: 'window', title: 'Empty' },
-    { sourceId: 'window:1:1', kind: 'window', title: 'Large' },
+    { sourceId: 'window:1:0', kind: 'window', title: 'Empty', windowId: '1' },
+    { sourceId: 'window:1:1', kind: 'window', title: 'Large', windowId: '2' },
   ];
   const desktopSources = [
-    { name: 'Empty', type: 'window', thumbnail: { isEmpty: () => true, toDataURL: () => '' } },
-    { name: 'Large', type: 'window', thumbnail: { isEmpty: () => false,
+    { id: 'window:1:0', name: 'Empty', type: 'window', thumbnail: { isEmpty: () => true, toDataURL: () => '' } },
+    { id: 'window:2:0', name: 'Large', type: 'window', thumbnail: { isEmpty: () => false,
       toDataURL: () => `data:image/png;base64,${'x'.repeat(80 * 1024)}` } },
   ];
   assert.deepEqual(matchNativeVideoSourceThumbnails(sources, desktopSources), []);
+});
+
+test('缺失或重复窗口句柄不退回标题猜测，也不使用其他窗口的缩略图', () => {
+  const source = { sourceId: 'window:1:0', kind: 'window', title: 'Same', windowId: '10' };
+  const desktop = { id: 'window:11:0', type: 'window', name: 'Same', thumbnail: {
+    isEmpty: () => false, toDataURL: () => 'data:image/png;base64,wrong' } };
+  assert.deepEqual(matchNativeVideoSourceThumbnails([source], [desktop]), []);
+  assert.deepEqual(matchNativeVideoSourceThumbnails([{ ...source, windowId: undefined }], [desktop]), []);
+  const matching = { ...desktop, id: 'window:10:0' };
+  assert.deepEqual(matchNativeVideoSourceThumbnails([source], [matching, matching]), []);
 });
 
 test('整屏预览按物理位置转换后的显示器 ID 匹配，支持负坐标与不同缩放', () => {
@@ -589,6 +601,13 @@ test('screen-share audio is bound to the active video source and stops idempoten
   assert.equal(children[0].requests.at(-1).pipeId, '58d00436-8ac2-4d0c-9283-9d5d5f70ed01');
   assert.deepEqual(await manager.stopScreenShareAudio('video-session'), { changed: true });
   assert.deepEqual(await manager.stopScreenShareAudio('video-session'), { changed: false });
+  const nextPipeId = 'b1bc1d58-9ead-4622-b887-8a4fb1e32d92';
+  assert.equal((await manager.startScreenShareAudio(snapshot.sources[0].sourceId, nextPipeId, 'video-session')).changed, true);
+  assert.equal(children[0].requests.at(-1).pipeId, nextPipeId);
+  assert.equal(children[0].requests.filter(request => request.command === 'startVideo').length, 1);
+  await assert.rejects(manager.startScreenShareAudio('window:99:0', nextPipeId, 'video-session'), /videoSourceExpired/);
+  await assert.rejects(manager.startScreenShareAudio(snapshot.sources[0].sourceId, nextPipeId, 'old-session'), /videoSourceExpired/);
+  await manager.stopScreenShareAudio('video-session');
   await manager.stopVideo('video-session');
   await manager.shutdown();
 });

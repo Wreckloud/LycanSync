@@ -316,6 +316,7 @@ mod tests {
                 width: 640,
                 height: 480,
                 primary: false,
+                window_id: None,
                 monitor_origin: None,
             },
             target: CaptureTarget::Test(target_key),
@@ -398,7 +399,11 @@ mod tests {
         let (_, sources) = registry
             .refresh(
                 (0..MAX_VIDEO_SOURCES)
-                    .map(|_| discovered(VideoSourceKind::Window, &title))
+                    .map(|_| {
+                        let mut source = discovered(VideoSourceKind::Window, &title);
+                        source.source.window_id = Some(u64::MAX.to_string());
+                        source
+                    })
                     .collect(),
             )
             .unwrap();

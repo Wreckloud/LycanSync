@@ -1109,6 +1109,8 @@ ipcMain.handle('media:video-source-thumbnails', async (event, sources) => {
       || sources.some((source) => !source || !/^(?:monitor|window):[1-9]\d*:\d+$/.test(source.sourceId)
         || !['monitor', 'window'].includes(source.kind) || typeof source.title !== 'string'
         || source.title.length > 256 || /[\u0000-\u001f\u007f]/.test(source.title)
+        || (source.windowId !== undefined && (source.kind !== 'window'
+          || typeof source.windowId !== 'string' || !/^[1-9]\d{0,19}$/.test(source.windowId)))
         || (source.kind === 'monitor' && (!source.monitorOrigin
           || !Number.isInteger(source.monitorOrigin.x) || !Number.isInteger(source.monitorOrigin.y)
           || Math.abs(source.monitorOrigin.x) > 2147483647 || Math.abs(source.monitorOrigin.y) > 2147483647
@@ -1125,6 +1127,7 @@ ipcMain.handle('media:video-source-thumbnails', async (event, sources) => {
     });
     recordSourceTiming('sourceThumbnails', startedAt, desktopSources.length);
     return matchNativeVideoSourceThumbnails(sources.map((source) => ({ ...source, displayId: monitorDisplayId(source, screen) })), desktopSources.map((source) => ({
+      id: source.id,
       type: captureSourceType(source),
       displayId: source.display_id,
       name: source.name,

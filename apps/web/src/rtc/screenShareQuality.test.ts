@@ -1,7 +1,11 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { readScreenShareQuality, saveScreenShareQuality, screenShareDegradationPreference, screenShareQuality, screenShareVideoPreset } from './screenShareQuality';
+import { SCREEN_SHARE_QUALITIES, readScreenShareQuality, saveScreenShareQuality, screenShareDegradationPreference, screenShareQuality, screenShareVideoPreset } from './screenShareQuality';
 
 afterEach(() => vi.unstubAllGlobals());
+
+it('画质按高帧率、文字清晰、标准、节省流量排列', () => {
+  expect(SCREEN_SHARE_QUALITIES.map((quality) => quality.id)).toEqual(['highFrameRate', 'text', 'standard', 'economy']);
+});
 
 it('游戏优先保留帧率，文字优先保留尺寸，节省流量使用平衡策略', () => {
   expect(screenShareDegradationPreference('standard')).toBe('maintain-framerate');
