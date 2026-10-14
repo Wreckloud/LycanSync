@@ -30,6 +30,7 @@ async function chooseSound(event: Event) {
   const file = fileInput.files?.[0];
   fileInput.value = '';
   if (!file) return;
+  stopPreview();
   busy.value = true;
   error.value = '';
   try {
@@ -44,11 +45,16 @@ async function chooseSound(event: Event) {
 }
 
 function playPreview() {
-  if (!sound.value) return;
+  if (!props.active || !sound.value) return;
   stopPreview();
-  preview = new Audio(sound.value.dataUrl);
-  preview.volume = 0.5;
-  void preview.play().catch(() => { error.value = '当前系统未允许播放声音'; });
+  const player = new Audio(sound.value.dataUrl);
+  preview = player;
+  player.volume = 0.5;
+  error.value = '';
+  // 被新试听或栏目退出停止的旧播放器，不再改写当前反馈。
+  void player.play().catch(() => {
+    if (preview === player) error.value = '当前系统未允许播放声音';
+  });
 }
 
 function removeSound() {
