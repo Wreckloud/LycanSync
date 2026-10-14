@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
-import { X } from '@lucide/vue';
 import InlineFeedback from './InlineFeedback.vue';
 import { authRequest, type AuthUser } from '../auth/authApi';
 import { redemptionKey, type AccessOffer, type AccessPreview } from '../auth/accountAccess';
@@ -68,7 +67,6 @@ async function switchServer() {
   <section class="auth-card access-prompt" aria-labelledby="access-prompt-title" @keydown.esc.stop="close">
     <header class="access-header">
       <div><h1 id="access-prompt-title" ref="heading" tabindex="-1">{{ title }}</h1><p>{{ subtitle }}</p></div>
-      <button type="button" class="access-close" :aria-label="currentUser ? '返回应用' : '关闭邀请'" :disabled="busy" @click="close"><X :size="18" aria-hidden="true" /></button>
     </header>
     <div class="access-body">
       <template v-if="currentUser">
@@ -84,12 +82,13 @@ async function switchServer() {
       <p v-else-if="!error">正在检查邀请…</p>
       <p v-else>暂时无法检查此链接，请重试。</p>
     </div>
-    <footer class="access-actions">
-      <InlineFeedback class="access-feedback" :message="error" :status="busy ? '正在处理…' : ''" />
-      <button v-if="currentUser" type="button" class="confirm-button" :disabled="busy" @click="close">返回应用</button>
-      <button v-else-if="offer.server !== currentServer" type="button" class="confirm-button" :disabled="busy" @click="switchServer">连接并重启</button>
-      <button v-else-if="canRedeem" type="button" class="confirm-button" :disabled="busy" @click="join">{{ preview?.kind === 'ACTIVATE' ? '确认激活' : preview?.kind === 'RECOVERY' ? '恢复登录' : '确认加入' }}</button>
-      <button v-else-if="error" type="button" :disabled="busy" @click="checkLink">重新检查</button>
+    <footer class="card-actions" :class="{ 'card-actions-no-cancel': !!currentUser, 'card-actions-no-primary': !currentUser && offer.server === currentServer && !canRedeem && !error }">
+      <button v-if="!currentUser" type="button" class="settings-button" :disabled="busy" @click="close">取消</button>
+      <InlineFeedback class="card-feedback" :message="error" :status="busy ? '正在处理…' : ''" />
+      <button v-if="currentUser" type="button" class="confirm-button card-actions-end" :disabled="busy" @click="close">返回应用</button>
+      <button v-else-if="offer.server !== currentServer" type="button" class="confirm-button card-actions-end" :disabled="busy" @click="switchServer">连接并重启</button>
+      <button v-else-if="canRedeem" type="button" class="confirm-button card-actions-end" :disabled="busy" @click="join">{{ preview?.kind === 'ACTIVATE' ? '确认激活' : preview?.kind === 'RECOVERY' ? '恢复登录' : '确认加入' }}</button>
+      <button v-else-if="error" type="button" class="confirm-button card-actions-end" :disabled="busy" @click="checkLink">重新检查</button>
     </footer>
   </section>
 </template>
@@ -100,12 +99,7 @@ async function switchServer() {
 .access-header > div { min-width: 0; }
 .access-header h1 { margin: 0; font-size: 22px; line-height: 32px; overflow-wrap: anywhere; }
 .access-header p { margin: 4px 0 0; font-size: 13px; line-height: 20px; }
-.access-close { display: grid; place-items: center; flex-shrink: 0; width: var(--button-height); height: var(--button-height); padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
-.access-close:hover:not(:disabled) { background: var(--panel-raised); color: var(--text); }
 .access-body { min-height: 64px; margin: 20px 0; }
 .access-body p { margin: 0; color: var(--muted); font-size: 14px; line-height: 22px; overflow-wrap: anywhere; }
-.access-actions { display: flex; align-items: center; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
-.access-feedback { flex: 1; }
-.access-actions button { flex-shrink: 0; min-width: 96px; }
 @media (max-width: 420px) { .access-prompt { padding: 20px; } .access-header h1 { font-size: 20px; } }
 </style>

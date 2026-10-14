@@ -243,16 +243,20 @@ onMounted(async () => {
                 placeholder="粘贴服主发来的完整链接" :disabled="submitting || serverSaving" />
             </label>
             <small>在当前窗口打开，不会立即使用邀请；检查后仍需确认。</small>
-            <InlineFeedback :message="manualAccessError" :status="submitting ? '正在检查…' : ''" />
-            <button type="submit" :disabled="submitting || serverSaving">检查链接</button>
+            <footer class="card-actions card-actions-no-cancel">
+              <InlineFeedback class="card-feedback" :message="manualAccessError" :status="submitting ? '正在检查…' : ''" />
+              <button type="submit" class="confirm-button card-actions-end" :disabled="submitting || serverSaving">检查链接</button>
+            </footer>
           </form>
           <form v-if="serverEditable" @submit.prevent="saveServerAddress">
             <label>服务器地址
               <input v-model="serverAddress" type="url" required autocomplete="off" :disabled="submitting || serverSaving" />
             </label>
             <small>保存后重启应用，使用该服务器的账号登录。</small>
-            <button type="submit" :disabled="submitting || serverSaving">{{ serverSaving ? '正在重启…' : '保存并重启' }}</button>
-            <p v-if="serverError" role="alert" class="auth-error">{{ serverError }}</p>
+            <footer class="card-actions card-actions-no-cancel">
+              <InlineFeedback class="card-feedback" :message="serverError" :status="serverSaving ? '正在重启…' : ''" />
+              <button type="submit" class="confirm-button card-actions-end" :disabled="submitting || serverSaving">{{ serverSaving ? '正在重启…' : '保存并重启' }}</button>
+            </footer>
           </form>
         </details>
       </section>
