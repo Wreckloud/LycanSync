@@ -5,8 +5,9 @@ import com.lycansync.api.auth.mapper.AuthMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
-import org.springframework.stereotype.Component;
 import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Component;
+
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -14,6 +15,7 @@ import java.nio.file.attribute.PosixFilePermissions;
 
 /**
  * 首次启动将激活链接写入部署侧私有文件，不写入公开接口或日志。
+ *
  * @author Wreckloud
  * @since 2026-10-10
  */

@@ -4,12 +4,14 @@ import com.lycansync.api.auth.model.AccessLink;
 import com.lycansync.api.auth.model.AuthUser;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
 /**
  * 激活、邀请和恢复链接的持久化及行锁。
+ *
  * @author Wreckloud
  * @since 2026-10-10
  */

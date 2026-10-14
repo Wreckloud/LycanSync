@@ -20,7 +20,7 @@ test('邀请参数从冷启动和第二实例传到确认页面', async () => {
     try {
       const page = await application.firstWindow();
       await expect(page.getByRole('button', { name: '连接并重启' })).toBeVisible();
-      await page.getByRole('button', { name: '关闭邀请', exact: true }).click();
+      await page.getByRole('button', { name: '取消', exact: true }).click();
       await expect(page.locator('.access-prompt')).toHaveCount(0);
       await page.getByText('更多', { exact: true }).click();
       await page.getByLabel('邀请或恢复登录链接', { exact: true }).fill('https://example.com/join#token=short');
@@ -30,7 +30,7 @@ test('邀请参数从冷启动和第二实例传到确认页面', async () => {
       await page.getByLabel('邀请或恢复登录链接', { exact: true }).fill(`https://example.com/join#token=${'a'.repeat(43)}`);
       await page.getByRole('button', { name: '检查链接', exact: true }).click();
       await expect(page.getByRole('button', { name: '连接并重启' })).toBeVisible();
-      await page.getByRole('button', { name: '关闭邀请', exact: true }).click();
+      await page.getByRole('button', { name: '取消', exact: true }).click();
       await page.getByText('更多', { exact: true }).click();
       await expect(page.getByLabel('邀请或恢复登录链接', { exact: true })).toHaveValue('');
       const executable = await application.evaluate(() => process.execPath);

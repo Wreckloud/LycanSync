@@ -16,16 +16,18 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
+
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.List;
-import java.util.UUID;
 import java.util.Base64;
 import java.util.HexFormat;
+import java.util.List;
+import java.util.UUID;
 
 /**
  * 邀请准入、管理员激活与原账号恢复；链接使用和会话替换一起提交。
+ *
  * @author Wreckloud
  * @since 2026-10-10
  */

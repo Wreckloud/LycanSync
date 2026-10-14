@@ -95,14 +95,16 @@ function completeAccess(result: { sessionToken?: string; user: AuthUser }, kind:
 }
 
 async function verifyCurrentSession() {
-  if (sessionHeartbeatInFlight) return;
+  const requestUser = user.value;
+  if (disposed || !requestUser || sessionHeartbeatInFlight) return;
   sessionHeartbeatInFlight = true;
   try {
     const session = await authRequest<AuthSessionStatus>('session');
-    const currentUser = user.value;
-    if (currentUser?.id === session.id
-        && (currentUser.nickname !== session.nickname || currentUser.administrator !== session.administrator)) {
-      user.value = { ...currentUser, nickname: session.nickname, administrator: session.administrator };
+    // 保存资料或重新登录后账号对象已更换，旧心跳不能覆盖新的资料与身份展示。
+    if (disposed || user.value !== requestUser) return;
+    if (requestUser.id === session.id
+        && (requestUser.nickname !== session.nickname || requestUser.administrator !== session.administrator)) {
+      user.value = { ...requestUser, nickname: session.nickname, administrator: session.administrator };
     }
   } catch {
     // 网络异常由下一次心跳重试；401 会由 authenticatedFetch 统一退出登录。
