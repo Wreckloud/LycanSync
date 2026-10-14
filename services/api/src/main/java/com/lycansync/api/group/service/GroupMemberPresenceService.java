@@ -1,5 +1,6 @@
 package com.lycansync.api.group.service;
 
+import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.group.dto.GroupPresenceResponse;
 import com.lycansync.api.presence.model.UserPresence;
 import com.lycansync.api.presence.model.UserPresenceStatus;
@@ -28,7 +29,8 @@ public class GroupMemberPresenceService {
         this.presenceService = presenceService;
     }
 
-    public List<GroupPresenceResponse> findPresences(UUID groupId) {
+    public List<GroupPresenceResponse> findPresences(UUID groupId, AuthenticatedUser user) {
+        groupService.requireMember(groupId, user);
         List<UUID> memberIds = groupService.findMemberIds(groupId);
         Map<UUID, UserPresence> presences = presenceService.findPresenceByUsers(Set.copyOf(memberIds));
         return memberIds.stream().map(userId -> withPresence(userId, presences)).toList();

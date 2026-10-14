@@ -11,10 +11,10 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.ProblemDetail;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
-import org.springframework.dao.DataAccessException;
+import org.springframework.http.ProblemDetail;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -27,8 +27,8 @@ import org.springframework.security.web.authentication.preauth.PreAuthenticatedA
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.util.List;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 
@@ -56,7 +56,8 @@ public class AuthConfiguration {
                         .requestMatchers("/api/auth/local/register", "/api/auth/local/login",
                                 "/api/auth/options", "/api/auth/access/preview", "/api/auth/access/redeem",
                                 "/join", "/join.js", "/api/system/initialization", "/actuator/health", "/actuator/info",
-                                "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/error").permitAll()
+                                "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/error",
+                                "/internal/rtc/access", "/internal/rtc/events").permitAll()
                         .requestMatchers("/api/**").authenticated()
                         .anyRequest().denyAll())
                 .exceptionHandling(errors -> errors
@@ -88,6 +89,11 @@ public class AuthConfiguration {
                     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                                     FilterChain chain) throws ServletException, IOException {
                         String path = request.getRequestURI();
+                        // 此入口验证 LiveKit JWT，不是业务登录会话；网关在公网阻断 /internal 路径。
+                        if ("/internal/rtc/access".equals(path) || "/internal/rtc/events".equals(path)) {
+                            chain.doFilter(request, response);
+                            return;
+                        }
                         boolean loginAttempt = "/api/auth/local/register".equals(path)
                                 || "/api/auth/local/login".equals(path)
                                 || "/api/auth/access/preview".equals(path)

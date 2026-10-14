@@ -52,7 +52,7 @@ public class LocalRtcController {
     private final LocalRtcRoomSummaryService localRtcRoomSummaryService;
 
     @PostMapping(value = "/token", consumes = MediaType.APPLICATION_JSON_VALUE)
-    @Operation(summary = "签发群组语音凭证", description = "已登录账号可进入任一现存群组的语音房间")
+    @Operation(summary = "签发群组语音凭证", description = "仅当前群成员可进入语音房间")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "凭证签发成功，不代表媒体连接成功"),
             @ApiResponse(responseCode = "400", description = "请求参数无效",
@@ -70,7 +70,7 @@ public class LocalRtcController {
 
     @GetMapping("/room-summary")
     @Operation(summary = "查询群组语音成员摘要",
-            description = "已登录账号可查看人数、参与者身份和昵称，不返回媒体状态")
+            description = "仅当前群成员可查看人数、参与者身份和昵称，不返回媒体状态")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "摘要查询成功；LiveKit 尚未创建房间时返回空摘要"),
             @ApiResponse(responseCode = "400", description = "群组标识格式不正确"),
@@ -80,11 +80,12 @@ public class LocalRtcController {
     public ResponseEntity<RtcRoomSummaryResponse> getRoomSummary(
             @RequestParam
             @Parameter(description = "持久化群组 UUID")
-            UUID groupId
+            UUID groupId,
+            @AuthenticationPrincipal AuthenticatedUser user
     ) {
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())
-                .body(localRtcRoomSummaryService.getSummary(groupId));
+                .body(localRtcRoomSummaryService.getSummary(groupId, user));
     }
 
     @GetMapping("/room-occupancies")

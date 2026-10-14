@@ -67,6 +67,10 @@ mv downloads/latest.yml.next downloads/latest.yml
 
 请勿公开密钥、`.env`、激活文件或恢复链接。
 
+私密群权限要求后端与 Caddy 配置一起更新：8443 端口只代理 `/rtc`、`/rtc/validate`、`/rtc/v1`、`/rtc/v1/validate`，每次连接先由 `/internal/rtc/access` 验证 LiveKit 签名及当前群成员资格。该内部路径在业务入口返回 404；API 与 LiveKit HTTP 端口保持容器内访问，不直接发布。不要将 7990 映射给客户端，也不要通过另一个未校验的代理开放信令。首次从全员测试版迁移时，旧群只保留群主，并关闭旧公开语音房间；建议无人通话时部署。成员日常退出／移除只断开目标用户，不重建房间。
+
+同版本 `compose.yaml` 配置 LiveKit 签名 webhook 到 `http://api:18080/internal/rtc/events`，用于复核迟到入房，不轮询房间。升级已有部署时需要加载这项 LiveKit 配置；先确认无人通话，再更新后端及 LiveKit，最后验证并重新加载 Caddy。不要对外开放回调路径，不关闭签名和正文 SHA-256 校验。此异步复核不等于零帧暴露保证。
+
 ## 3. 仅内网 VMware 测试
 
 没有公网域名或端口映射时，使用独立的内网覆盖文件，保留 HTTPS 校验。在 `.env` 中将 `SERVER_DOMAIN` 和 `MEDIA_ADVERTISE_IP` 都填写为 Linux VM 的固定 IPv4，例如 `192.168.1.50`。不要继续使用示例公网域名。

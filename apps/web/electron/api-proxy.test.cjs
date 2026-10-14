@@ -64,3 +64,26 @@ test('没有放宽其他接口的默认 4 KiB 限制或未授权路由', async (
   assert.equal((await serve(new Request('lycan://app/api/not-allowed', { method: 'POST', body: '{}' }))).status, 404);
   assert.equal(forwarded.length, 0);
 });
+
+test('群组成员制路由严格限制路径和方法，头像编辑沿用载荷预算', async () => {
+  const { serve, forwarded } = proxyFixture();
+  const groupId = '11111111-1111-4111-8111-111111111111';
+  const memberId = '22222222-2222-4222-8222-222222222222';
+  for (const [method, path] of [
+    ['POST', '/api/groups/join'], ['PUT', `/api/groups/${groupId}`],
+    ['GET', `/api/groups/${groupId}/candidates?search=demo&offset=0`],
+    ['POST', `/api/groups/${groupId}/members`], ['POST', `/api/groups/${groupId}/owner`],
+    ['POST', `/api/groups/${groupId}/invite-code`], ['POST', `/api/groups/${groupId}/invite-code/refresh`],
+    ['DELETE', `/api/groups/${groupId}/members/${memberId}`], ['DELETE', `/api/groups/${groupId}`],
+    ['GET', '/api/rtc/room-occupancies'],
+  ]) {
+    const response = await serve(new Request('lycan://app' + path, { method, ...(['POST', 'PUT'].includes(method) ? { body: '{}' } : {}) }));
+    assert.equal(response.status, 201, `${method} ${path}`);
+    assert.equal(forwarded.at(-1).options.headers.Authorization, 'Bearer test-session');
+  }
+  for (const [method, path] of [['GET', `/api/groups/${groupId}/invite-code`],
+    ['POST', `/api/groups/${groupId}/candidates`], ['DELETE', `/api/groups/${groupId}/members/not-a-uuid`]]) {
+    assert.equal((await serve(new Request('lycan://app' + path, { method }))).status, 404);
+  }
+  assert.equal((await serve(new Request(`lycan://app/api/groups/${groupId}`, { method: 'PUT', body: 'x'.repeat(3 * 1024 * 1024 + 1) }))).status, 413);
+});

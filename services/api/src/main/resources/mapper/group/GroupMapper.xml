@@ -1,53 +1,68 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
-        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.lycansync.api.group.mapper.GroupMapper">
-
     <insert id="insertGroup">
-        INSERT INTO chat_group (id, name, description, avatar, owner_user_id, created_at, updated_at)
-        VALUES (#{group.id}, #{group.name}, #{group.description}, #{group.avatar}, #{group.ownerUserId},
-                #{group.createdAt}, #{group.updatedAt})
+        INSERT INTO chat_group(id, name, description, avatar, owner_user_id, created_at, updated_at)
+        VALUES (#{group.id}, #{group.name}, #{group.description}, #{group.avatar}, #{group.ownerUserId}, #{group.createdAt}, #{group.updatedAt})
     </insert>
-
-    <select id="groupExists" resultType="boolean">
-        SELECT EXISTS (SELECT 1 FROM chat_group WHERE id = #{groupId})
-    </select>
-
+    <sql id="groupFields">
+        g.id, g.name, g.description, g.avatar,
+        CASE WHEN g.owner_user_id = #{userId} THEN 'OWNER' ELSE 'MEMBER' END AS role,
+        (SELECT COUNT(*) FROM group_member WHERE group_id = g.id) AS member_count,
+        g.created_at, g.updated_at
+    </sql>
     <select id="findGroups" resultType="com.lycansync.api.group.model.GroupView">
-        SELECT g.id, g.name, g.description, g.avatar,
-               CASE WHEN g.owner_user_id = #{userId} THEN 'OWNER' ELSE 'MEMBER' END AS role,
-               (SELECT COUNT(*) FROM app_user) AS member_count,
-               g.created_at, g.updated_at
-        FROM chat_group g
+        SELECT <include refid="groupFields"/> FROM chat_group g
+        JOIN group_member membership ON membership.group_id = g.id AND membership.user_id = #{userId}
         ORDER BY g.created_at, g.id
     </select>
-
     <select id="findGroup" resultType="com.lycansync.api.group.model.GroupView">
-        SELECT g.id, g.name, g.description, g.avatar,
-               CASE WHEN g.owner_user_id = #{userId} THEN 'OWNER' ELSE 'MEMBER' END AS role,
-               (SELECT COUNT(*) FROM app_user) AS member_count,
-               g.created_at, g.updated_at
-        FROM chat_group g
+        SELECT <include refid="groupFields"/> FROM chat_group g
+        JOIN group_member membership ON membership.group_id = g.id AND membership.user_id = #{userId}
         WHERE g.id = #{groupId}
     </select>
-
     <select id="findMembers" resultType="com.lycansync.api.group.model.GroupMember">
         SELECT users.id AS user_id, users.nickname, users.avatar,
-               CASE WHEN users.id = g.owner_user_id THEN 'OWNER' ELSE 'MEMBER' END AS role,
-               GREATEST(users.created_at, g.created_at) AS joined_at
-        FROM chat_group g
-        CROSS JOIN app_user users
+            CASE WHEN users.id = g.owner_user_id THEN 'OWNER' ELSE 'MEMBER' END AS role, membership.joined_at
+        FROM group_member membership JOIN app_user users ON users.id = membership.user_id
+        JOIN chat_group g ON g.id = membership.group_id
         WHERE g.id = #{groupId}
-        ORDER BY CASE WHEN users.id = g.owner_user_id THEN 0 ELSE 1 END,
-                 users.created_at, users.id
+        ORDER BY CASE WHEN users.id = g.owner_user_id THEN 0 ELSE 1 END, membership.joined_at, users.id
     </select>
-
     <select id="findMemberIds" resultType="string">
-        SELECT users.id::text
-        FROM chat_group g
-        CROSS JOIN app_user users
-        WHERE g.id = #{groupId}
-        ORDER BY CASE WHEN users.id = g.owner_user_id THEN 0 ELSE 1 END,
-                 users.created_at, users.id
+        SELECT user_id::text FROM group_member WHERE group_id = #{groupId} ORDER BY joined_at, user_id
     </select>
+    <select id="lockOwner" resultType="string" useCache="false" flushCache="true">
+        SELECT owner_user_id::text FROM chat_group WHERE id = #{groupId} FOR UPDATE
+    </select>
+    <select id="memberExists" resultType="boolean" useCache="false">
+        SELECT EXISTS(SELECT 1 FROM group_member WHERE group_id = #{groupId} AND user_id = #{userId})
+    </select>
+    <insert id="addMember">
+        INSERT INTO group_member(group_id, user_id, joined_at)
+        SELECT #{groupId}, id, #{now} FROM app_user WHERE id = #{userId}
+        ON CONFLICT (group_id, user_id) DO NOTHING
+    </insert>
+    <delete id="removeMember">DELETE FROM group_member WHERE group_id = #{groupId} AND user_id = #{userId}</delete>
+    <select id="findCandidates" resultType="com.lycansync.api.group.dto.GroupCandidateResponse">
+        SELECT users.id AS user_id, users.nickname, users.avatar,
+            EXISTS(SELECT 1 FROM group_member WHERE group_id = #{groupId} AND user_id = users.id) AS joined
+        FROM app_user users WHERE position(lower(#{search}) in lower(users.nickname)) &gt; 0
+        ORDER BY users.created_at, users.id LIMIT 21 OFFSET #{offset}
+    </select>
+    <update id="updateGroup">
+        UPDATE chat_group SET name = #{name}, description = #{description}, avatar = #{avatar}, updated_at = #{now}
+        WHERE id = #{groupId}
+    </update>
+    <update id="transferOwner">UPDATE chat_group SET owner_user_id = #{userId}, updated_at = #{now} WHERE id = #{groupId}</update>
+    <update id="touchGroup">UPDATE chat_group SET updated_at = #{now} WHERE id = #{groupId}</update>
+    <select id="findInviteCode" resultType="string">SELECT invite_code FROM chat_group WHERE id = #{groupId}</select>
+    <update id="updateInviteCode">UPDATE chat_group SET invite_code = #{code} WHERE id = #{groupId}</update>
+    <select id="findGroupByCode" resultType="string">SELECT id::text FROM chat_group WHERE invite_code = #{code}</select>
+    <select id="findRtcRoomKey" resultType="string" useCache="false">SELECT rtc_room_key::text FROM chat_group WHERE id = #{groupId}</select>
+    <select id="findRtcRoomKeys" resultType="string">SELECT rtc_room_key::text FROM chat_group</select>
+    <select id="lockRtcGroup" resultType="string" useCache="false" flushCache="true">
+        SELECT id::text FROM chat_group WHERE rtc_room_key = #{roomKey} FOR SHARE
+    </select>
+    <delete id="deleteGroup">DELETE FROM chat_group WHERE id = #{groupId}</delete>
 </mapper>

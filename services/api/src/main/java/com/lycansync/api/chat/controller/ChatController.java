@@ -5,8 +5,8 @@ import com.lycansync.api.chat.dto.ChatMessagePageResponse;
 import com.lycansync.api.chat.dto.ChatMessageResponse;
 import com.lycansync.api.chat.model.ChatAttachmentContent;
 import com.lycansync.api.chat.model.ChatFileMetadata;
-import com.lycansync.api.chat.service.ChatService;
 import com.lycansync.api.chat.service.ChatFileService;
+import com.lycansync.api.chat.service.ChatService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -15,27 +15,27 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.core.io.Resource;
 import org.springframework.http.CacheControl;
+import org.springframework.http.ContentDisposition;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
-import org.springframework.core.io.Resource;
-import org.springframework.http.ContentDisposition;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
-import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.util.UUID;
-import java.io.IOException;
 import jakarta.servlet.http.HttpServletRequest;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 
 /**
  * 群聊消息、图片与文件附件接口。
@@ -46,7 +46,7 @@ import java.nio.charset.StandardCharsets;
 @RestController
 @RequestMapping("/api/groups/{groupId}")
 @RequiredArgsConstructor
-@Tag(name = "群聊", description = "已注册用户可在所有群组发送文字、图片和文件")
+@Tag(name = "群聊", description = "群成员可发送和读取本群文字、图片和文件")
 public class ChatController {
 
     private final ChatService chatService;
@@ -138,7 +138,7 @@ public class ChatController {
             @PathVariable @Parameter(description = "文件附件 ID") UUID attachmentId,
             @AuthenticationPrincipal AuthenticatedUser user
     ) {
-        ChatFileMetadata metadata = chatFileService.findMetadata(groupId, attachmentId);
+        ChatFileMetadata metadata = chatFileService.findMetadata(groupId, attachmentId, user);
         Resource file = chatFileService.findFile(attachmentId);
         ContentDisposition disposition = ContentDisposition.attachment()
                 .filename(metadata.fileName(), StandardCharsets.UTF_8).build();

@@ -71,7 +71,7 @@ public class ChatFileService {
 
     public ChatMessageResponse upload(UUID groupId, AuthenticatedUser user, UUID uploadId,
                                       String encodedFileName, String content, long expectedSize, InputStream input) {
-        groupService.requireGroup(groupId);
+        groupService.requireMember(groupId, user);
         ChatMessageView previousUpload = mapper.findFileMessage(groupId, uploadId, user.id());
         if (previousUpload != null) return toResponse(previousUpload);
         String fileName = decodeFileName(encodedFileName);
@@ -123,8 +123,8 @@ public class ChatFileService {
         }
     }
 
-    public ChatFileMetadata findMetadata(UUID groupId, UUID attachmentId) {
-        groupService.requireGroup(groupId);
+    public ChatFileMetadata findMetadata(UUID groupId, UUID attachmentId, AuthenticatedUser user) {
+        groupService.requireMember(groupId, user);
         ChatFileMetadata metadata = mapper.findFileMetadata(groupId, attachmentId);
         if (metadata == null) {
             throw new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.CHAT_ATTACHMENT_NOT_FOUND, "消息文件不存在");
@@ -133,7 +133,7 @@ public class ChatFileService {
     }
 
     public ChatMessageResponse findCompletedUpload(UUID groupId, UUID uploadId, AuthenticatedUser user) {
-        groupService.requireGroup(groupId);
+        groupService.requireMember(groupId, user);
         ChatMessageView message = mapper.findFileMessage(groupId, uploadId, user.id());
         return message == null ? null : toResponse(message);
     }
@@ -155,6 +155,8 @@ public class ChatFileService {
             throw new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.GROUP_NOT_FOUND, "群组不存在");
         }
         Instant createdAt = Instant.now(systemClock);
+        // 文件接收不持有群锁；落库时必须确认上传期间没有被移出或退出。
+        groupService.requireMember(groupId, user);
         UUID messageId = UUID.randomUUID();
         String normalizedContent = normalizeContent(decodeHeaderText(content));
         mapper.insertMessage(new ChatMessage(messageId, groupId, user.id(), ChatMessageType.FILE, normalizedContent,

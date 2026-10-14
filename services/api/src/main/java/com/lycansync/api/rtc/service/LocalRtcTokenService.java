@@ -15,6 +15,7 @@ import io.livekit.server.RoomName;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -41,8 +42,9 @@ public class LocalRtcTokenService {
     private final GroupService groupService;
     private final Clock systemClock;
 
+    @Transactional
     public RtcTokenResponse issueToken(UUID groupId, AuthenticatedUser user) {
-        groupService.requireGroup(groupId);
+        UUID roomKey = groupService.lockMemberRoomKey(groupId, user);
         // 1. 固定使用可信账号 ID；同房间第二台设备连接时由 LiveKit 替换旧连接。
         String participantIdentity = "user-" + user.id();
 
@@ -50,8 +52,8 @@ public class LocalRtcTokenService {
         Instant issuedAt = Instant.now(systemClock).truncatedTo(ChronoUnit.SECONDS);
         Instant expiresAt = issuedAt.plus(TOKEN_TTL);
 
-        // 3. 填写参与者信息和允许的操作；注册账号可进入任一现存群组。
-        String roomName = GroupRtcRooms.roomName(groupId);
+        // 独立房间键隔离迁移前的公开测试房间；成员变更不再重建正在通话的房间。
+        String roomName = GroupRtcRooms.roomName(roomKey);
         AccessToken accessToken = new AccessToken(
                 liveKitProperties.getApiKey(), liveKitProperties.getApiSecret());
         accessToken.setIdentity(participantIdentity);

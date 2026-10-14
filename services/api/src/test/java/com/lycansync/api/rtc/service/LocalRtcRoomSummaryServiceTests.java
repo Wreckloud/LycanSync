@@ -25,8 +25,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -53,6 +53,7 @@ class LocalRtcRoomSummaryServiceTests {
     void setUp() {
         roomServiceClient = mock(RoomServiceClient.class);
         groupService = mock(GroupService.class);
+        when(groupService.memberRoomKey(GROUP_ID, USER)).thenReturn(GROUP_ID);
         participantCall = mock(Call.class);
         roomCall = mock(Call.class);
         roomSummaryService = new LocalRtcRoomSummaryService(roomServiceClient, groupService);
@@ -66,7 +67,7 @@ class LocalRtcRoomSummaryServiceTests {
                 participant("阿澈", 20), participant(" 小北 ", 10));
         when(participantCall.execute()).thenReturn(Response.success(participants));
 
-        RtcRoomSummaryResponse summary = roomSummaryService.getSummary(GROUP_ID);
+        RtcRoomSummaryResponse summary = roomSummaryService.getSummary(GROUP_ID, USER);
 
         assertThat(summary.participantCount()).isEqualTo(2);
         assertThat(summary.participants()).extracting("displayName").containsExactly("小北", "阿澈");
@@ -80,7 +81,7 @@ class LocalRtcRoomSummaryServiceTests {
         when(response.code()).thenReturn(404);
         when(participantCall.execute()).thenReturn(response);
 
-        RtcRoomSummaryResponse summary = roomSummaryService.getSummary(GROUP_ID);
+        RtcRoomSummaryResponse summary = roomSummaryService.getSummary(GROUP_ID, USER);
 
         assertThat(summary.participantCount()).isZero();
         assertThat(summary.participants()).isEmpty();
@@ -90,7 +91,7 @@ class LocalRtcRoomSummaryServiceTests {
     void shouldRejectLiveKitTransportFailure() throws IOException {
         when(participantCall.execute()).thenThrow(new IOException("connection refused"));
 
-        assertThatThrownBy(() -> roomSummaryService.getSummary(GROUP_ID))
+        assertThatThrownBy(() -> roomSummaryService.getSummary(GROUP_ID, USER))
                 .isInstanceOf(RtcServiceUnavailableException.class)
                 .hasMessage("无法连接 LiveKit 房间服务");
     }
@@ -98,8 +99,8 @@ class LocalRtcRoomSummaryServiceTests {
     @Test
     void shouldNotQueryLiveKitForMissingGroup() {
         doThrow(new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.GROUP_NOT_FOUND, "群组不存在"))
-                .when(groupService).requireGroup(GROUP_ID);
-        assertThatThrownBy(() -> roomSummaryService.getSummary(GROUP_ID))
+                .when(groupService).memberRoomKey(GROUP_ID, USER);
+        assertThatThrownBy(() -> roomSummaryService.getSummary(GROUP_ID, USER))
                 .isInstanceOf(GroupException.class);
         verifyNoInteractions(participantCall);
     }

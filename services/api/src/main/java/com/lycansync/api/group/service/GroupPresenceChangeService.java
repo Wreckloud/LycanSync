@@ -1,6 +1,7 @@
 package com.lycansync.api.group.service;
 
 import com.lycansync.api.group.dto.GroupPresenceChangeResponse;
+import com.lycansync.api.group.event.GroupChangedEvent;
 import com.lycansync.api.presence.event.PresenceChangedEvent;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.event.TransactionalEventListener;
@@ -60,6 +61,12 @@ public class GroupPresenceChangeService {
     @TransactionalEventListener(phase = AFTER_COMMIT)
     public void presenceChanged(PresenceChangedEvent event) {
         groups.values().forEach(GroupState::publish);
+    }
+
+    @TransactionalEventListener(phase = AFTER_COMMIT)
+    public void groupChanged(GroupChangedEvent event) {
+        GroupState state = event.deleted() ? groups.remove(event.groupId()) : groups.get(event.groupId());
+        if (state != null) state.publish();
     }
 
     private void remove(Waiter waiter) {

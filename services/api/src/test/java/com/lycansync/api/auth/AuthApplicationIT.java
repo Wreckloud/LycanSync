@@ -4,8 +4,8 @@ import com.lycansync.api.auth.dto.LocalLoginRequest;
 import com.lycansync.api.auth.dto.LocalRegistrationRequest;
 import com.lycansync.api.auth.dto.ProfileUpdateRequest;
 import com.lycansync.api.auth.exception.AuthException;
-import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.model.AuthUser;
+import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.service.AuthService;
 import com.lycansync.api.auth.service.LocalAuthService;
 import com.lycansync.api.auth.service.ProfileService;
@@ -76,7 +76,7 @@ class AuthApplicationIT {
 
     @BeforeEach
     void resetDatabase() {
-        jdbc.sql("TRUNCATE auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_message, chat_group, auth_session, auth_local_credential, app_user").update();
+        jdbc.sql("TRUNCATE auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
         jdbc.sql("UPDATE system_state SET initialized_at = NULL WHERE id = 1").update();
     }
 

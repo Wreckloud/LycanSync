@@ -6,6 +6,9 @@ import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.service.AccessLinkService;
 import com.lycansync.api.auth.service.AuthSecrets;
 import com.lycansync.api.auth.service.AuthService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,9 +19,6 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -48,7 +48,7 @@ class AccessLinkApplicationIT {
 
     @BeforeEach
     void setup() {
-        jdbc.sql("TRUNCATE auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_file_upload_reservation, chat_message, chat_group, auth_session, auth_local_credential, app_user").update();
+        jdbc.sql("TRUNCATE auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_file_upload_reservation, chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
         jdbc.sql("UPDATE system_state SET initialized_at = NULL WHERE id = 1").update();
         var activation = links.activation();
         var result = links.redeem(token(activation), AuthSecrets.generate(), null);
@@ -65,7 +65,10 @@ class AccessLinkApplicationIT {
         assertThatThrownBy(() -> links.redeem(token(invitation), AuthSecrets.generate(), null)).isInstanceOf(AuthException.class);
         var recovery = links.create(owner, new AccessLinkRequest("RECOVERY", original.user().id(), "换电脑"));
         var restored = links.redeem(token(recovery), AuthSecrets.generate(), null);
-        assertThat(restored.user()).isEqualTo(original.user());
+        assertThat(restored.user()).usingRecursiveComparison().ignoringFields("createdAt").isEqualTo(original.user());
+        // PostgreSQL 保存到微秒，恢复账号读取的是落库后的时间精度。
+        assertThat(restored.user().createdAt()).isCloseTo(original.user().createdAt(),
+                org.assertj.core.api.Assertions.within(1, java.time.temporal.ChronoUnit.MICROS));
         assertThatThrownBy(() -> sessions.authenticate(original.sessionToken())).isInstanceOf(AuthException.class);
         assertThatThrownBy(() -> links.redeem(token(invitation), key, null)).isInstanceOf(AuthException.class);
         assertThat(sessions.authenticate(restored.sessionToken()).id()).isEqualTo(original.user().id());

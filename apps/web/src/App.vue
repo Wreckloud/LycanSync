@@ -12,9 +12,11 @@ import IconButton from './components/IconButton.vue';
 import SettingsView from './components/SettingsView.vue';
 import AppNotice from './components/AppNotice.vue';
 import GroupEntryDialog from './components/GroupEntryDialog.vue';
+import GroupMenu from './components/GroupMenu.vue';
+import GroupManagementDialog from './components/GroupManagementDialog.vue';
 import GroupChat from './components/GroupChat.vue';
 import ScreenSharePicker from './components/ScreenSharePicker.vue';
-import { createGroup, findGroup, findGroupPresences, findGroups, nextPresenceWaitRequest, waitForGroupPresenceChanges,
+import { createGroup, updateGroup, findGroup, findGroupPresences, findGroups, nextPresenceWaitRequest, waitForGroupPresenceChanges,
   type GroupDetail, type GroupMember, type GroupPresence, type GroupPresenceChangeCursor, type GroupSummary } from './group/groupApi';
 import { useRtcRoom } from './rtc/useRtcRoom';
 import { useMicrophoneTest } from './rtc/useMicrophoneTest';
@@ -31,7 +33,7 @@ import { entranceSoundToFile, loadEntranceSound } from './rtc/entranceSound';
 import { useCallSounds } from './rtc/useCallSounds';
 import { normalizeVoiceLevel } from './rtc/voiceLevel';
 import { sendPresenceHeartbeat, type UserActivity, type UserPresenceStatus } from './presence/presenceApi';
-import type { AuthUser, ProfileUpdate } from './auth/authApi';
+import { ApiRequestError, type AuthUser, type ProfileUpdate } from './auth/authApi';
 import { settingsSectionForEntry, type SettingsSectionId } from './settings/settingsSections';
 import { useActivityVisibility } from './settings/useActivityVisibility';
 import { ScreenShareStage } from './rtc/screenShareStage';
@@ -353,6 +355,8 @@ const groupError = ref('');
 const summaryError = ref<string | null>(null);
 const groupLoading = ref(false);
 const editorOpen = ref(false);
+const editingGroup = ref<GroupDetail | null>(null);
+const management = ref<{ group: GroupDetail; mode: 'invite' | 'members' | 'transfer' | 'leave' | 'dissolve' } | null>(null);
 let detailRequest: AbortController | null = null;
 let listRequest: AbortController | null = null;
 let groupPresenceRequest: AbortController | null = null;
@@ -542,9 +546,18 @@ async function loadGroup(groupId: string, keepExisting = false) {
     if (!request.signal.aborted && selectedGroupId.value === groupId) {
       selectedGroupDetail.value = detail;
       if (joinedGroupId.value === groupId) joinedGroupDetail.value = detail;
+      if (management.value?.group.id === groupId) management.value.group = detail;
     }
   } catch (error) {
-    if (!request.signal.aborted) groupError.value = error instanceof Error ? error.message : '无法读取群组资料';
+    if (!request.signal.aborted) {
+      groupError.value = error instanceof Error ? error.message : '无法读取群组资料';
+      if (error instanceof ApiRequestError && error.status === 404) {
+        if (joinedGroupId.value === groupId || joiningGroupId.value === groupId) leaveVoice();
+        if (selectedGroupDetail.value?.id === groupId) selectedGroupDetail.value = null;
+        if (management.value?.group.id === groupId) management.value = null;
+        void refreshGroups(false);
+      }
+    }
   } finally {
     if (!request.signal.aborted) groupLoading.value = false;
   }
@@ -558,6 +571,10 @@ async function refreshGroups(refreshDetail = true, refreshOccupancy = true) {
     const result = await findGroups(request.signal);
     if (request.signal.aborted) return;
     groups.value = result;
+    if (joinedGroupId.value && !result.some((group) => group.id === joinedGroupId.value)) leaveVoice();
+    if (joiningGroupId.value && !result.some((group) => group.id === joiningGroupId.value)) leaveVoice();
+    if (management.value && !result.some((group) => group.id === management.value?.group.id)) management.value = null;
+    if (editingGroup.value && !result.some((group) => group.id === editingGroup.value?.id)) { editorOpen.value = false; editingGroup.value = null; }
     if (result.length > 0 && refreshOccupancy) void refreshRoomOccupancies();
     else if (result.length === 0) {
       roomOccupancyRequest?.abort();
@@ -570,7 +587,8 @@ async function refreshGroups(refreshDetail = true, refreshOccupancy = true) {
     if (selectedGroupId.value) {
       const selectedSummary = result.find((group) => group.id === selectedGroupId.value);
       const keepExisting = selectedGroupDetail.value?.id === selectedGroupId.value;
-      if (refreshDetail || !keepExisting || selectedGroupDetail.value?.memberCount !== selectedSummary?.memberCount) {
+      if (refreshDetail || !keepExisting || selectedGroupDetail.value?.memberCount !== selectedSummary?.memberCount
+          || selectedGroupDetail.value?.updatedAt !== selectedSummary?.updatedAt || selectedGroupDetail.value?.role !== selectedSummary?.role) {
         void loadGroup(selectedGroupId.value, keepExisting);
       }
     } else selectedGroupDetail.value = null;
@@ -639,16 +657,59 @@ onScopeDispose(() => {
 });
 
 function openEditor() {
+  editingGroup.value = null;
   editorOpen.value = true;
 }
 
 async function createGroupFromDialog(name: string, description: string, avatar: string) {
+  if (editingGroup.value) {
+    applyGroupDetail(await updateGroup(editingGroup.value.id, name, description, avatar));
+    editorOpen.value = false;
+    editingGroup.value = null;
+    return;
+  }
   const detail = await createGroup(name, description, avatar);
   await refreshGroups();
   groups.value = groups.value.some((group) => group.id === detail.id) ? groups.value : [...groups.value, detail];
   selectedGroupId.value = detail.id;
   selectedGroupDetail.value = detail;
   editorOpen.value = false;
+}
+
+function applyGroupDetail(detail: GroupDetail) {
+  groups.value = groups.value.some((group) => group.id === detail.id)
+    ? groups.value.map((group) => group.id === detail.id ? detail : group) : [...groups.value, detail];
+  if (selectedGroupId.value === detail.id) selectedGroupDetail.value = detail;
+  if (joinedGroupId.value === detail.id) joinedGroupDetail.value = detail;
+  if (management.value?.group.id === detail.id) management.value.group = detail;
+}
+
+function joinedFromCode(detail: GroupDetail) {
+  applyGroupDetail(detail);
+  selectedGroupId.value = detail.id;
+  selectedGroupDetail.value = detail;
+  editorOpen.value = false;
+}
+
+async function openGroupAction(action: 'edit' | 'invite' | 'members' | 'transfer' | 'leave' | 'dissolve') {
+  const groupId = selectedGroupId.value;
+  if (!groupId) return;
+  try {
+    const detail = await findGroup(groupId);
+    if (selectedGroupId.value !== groupId) return;
+    applyGroupDetail(detail);
+    if (action === 'edit') { editingGroup.value = detail; editorOpen.value = true; }
+    else management.value = { group: detail, mode: action };
+  } catch (exception) { groupError.value = exception instanceof Error ? exception.message : '无法读取群组，请重试。'; }
+}
+
+function removedFromGroup(groupId: string) {
+  if (joinedGroupId.value === groupId || joiningGroupId.value === groupId) leaveVoice();
+  management.value = null;
+  groups.value = groups.value.filter((group) => group.id !== groupId);
+  if (selectedGroupId.value === groupId) selectedGroupId.value = groups.value[0]?.id ?? null;
+  selectedGroupDetail.value = null;
+  void refreshGroups();
 }
 const joinedGroupId = ref<string | null>(null);
 const joiningGroupId = ref<string | null>(null);
@@ -1109,11 +1170,12 @@ function participantListening(participant: Participant) {
       <button type="button" @click="rtc.retryRemoteControlCleanup">重试撤销</button>
     </div>
     <div class="app-content" v-show="!settingsOpen" :inert="settingsOpen">
-    <div class="workspace" :inert="editorOpen">
+    <div class="workspace" :inert="editorOpen || !!management">
       <nav class="group-rail" aria-label="群组">
         <button v-for="group in groups" :key="group.id" type="button" class="group-button"
           :class="{ 'is-selected': selectedGroupId === group.id, 'is-in-call': joinedGroupId === group.id }"
           :aria-label="`${group.name}${groupHasVoiceActivity(group.id) ? '，当前有语音成员' : ''}，单击预览，双击加入语音`" :aria-pressed="selectedGroupId === group.id"
+          :title="group.name"
           @click="previewGroup(group.id)" @dblclick="requestJoin(group.id)" @keydown.enter.prevent="requestJoin(group.id)">
           <img v-if="group.avatar" :src="group.avatar" class="group-rail-avatar" alt="" />
           <span v-else>{{ group.name.slice(0, 1) }}</span>
@@ -1125,7 +1187,7 @@ function participantListening(participant: Participant) {
       <main v-if="selectedGroup" class="group-main">
         <header class="group-header">
           <div class="group-copy">
-            <div class="group-title-row"><h1>{{ selectedGroup.name }}</h1></div>
+            <div class="group-title-row"><GroupMenu :key="selectedGroup.id" :group="selectedGroup" @select="openGroupAction" /></div>
             <p v-if="selectedGroup.description">{{ selectedGroup.description }}</p>
           </div>
           <IconButton :label="joinedGroupId === selectedGroup.id ? '离开当前群组语音' : '加入当前群组语音'"
@@ -1286,7 +1348,10 @@ function participantListening(participant: Participant) {
         </PersonalStatusCard>
       </aside>
     </div>
-    <GroupEntryDialog v-if="editorOpen" :create-group="createGroupFromDialog" @close="editorOpen = false" />
+    <GroupEntryDialog v-if="editorOpen" :group="editingGroup ?? undefined" :create-group="createGroupFromDialog"
+      @joined="joinedFromCode" @close="editorOpen = false; editingGroup = null" />
+    <GroupManagementDialog v-if="management" :group="management.group" :mode="management.mode" :user-id="user.id"
+      @updated="applyGroupDetail" @removed="removedFromGroup" @close="management = null" />
     </div>
     <SettingsView v-if="settingsOpen" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
       :presence-status="currentPresenceStatus" :presence-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]"

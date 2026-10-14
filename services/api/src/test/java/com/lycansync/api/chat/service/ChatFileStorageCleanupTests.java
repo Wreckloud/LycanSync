@@ -3,6 +3,7 @@ package com.lycansync.api.chat.service;
 import com.lycansync.api.chat.config.ChatFileProperties;
 import com.lycansync.api.chat.mapper.ChatMapper;
 import com.lycansync.api.chat.model.ChatFileUploadReservation;
+import com.lycansync.api.group.event.GroupChangedEvent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -13,10 +14,12 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -73,5 +76,48 @@ class ChatFileStorageCleanupTests {
         ChatFileProperties properties = new ChatFileProperties();
         properties.setStorageDirectory(storageDirectory);
         return properties;
+    }
+
+    @Test
+    void dissolvedGroupCleanupOnlyDeletesOrphansWithoutQuotaWrites(@TempDir Path storage) throws Exception {
+        UUID orphanId = UUID.randomUUID();
+        UUID referencedId = UUID.randomUUID();
+        Path orphan = Files.write(storage.resolve(orphanId + ".bin"), new byte[]{1});
+        Path referenced = Files.write(storage.resolve(referencedId + ".bin"), new byte[]{2});
+        ChatFileQuotaService quota = mock(ChatFileQuotaService.class);
+        ChatMapper mapper = mock(ChatMapper.class);
+        when(mapper.fileAttachmentExists(referencedId)).thenReturn(true);
+        ChatFileStorageCleanup cleanup = new ChatFileStorageCleanup(properties(storage), quota, mapper,
+                new ChatFileStorageCoordinator());
+
+        cleanup.groupDissolved(new GroupChangedEvent(UUID.randomUUID(), false));
+        verifyNoInteractions(quota, mapper);
+        cleanup.groupDissolved(new GroupChangedEvent(UUID.randomUUID(), true));
+
+        assertThat(orphan).doesNotExist();
+        assertThat(referenced).exists();
+        verifyNoInteractions(quota);
+    }
+
+    @Test
+    void dissolvedGroupDoesNotWaitForUploadsOrReportCommittedDeletionAsFailure(@TempDir Path storage)
+            throws Exception {
+        Path orphan = Files.write(storage.resolve(UUID.randomUUID() + ".bin"), new byte[]{1});
+        ChatFileQuotaService quota = mock(ChatFileQuotaService.class);
+        ChatMapper mapper = mock(ChatMapper.class);
+        ChatFileStorageCoordinator coordinator = new ChatFileStorageCoordinator();
+        ChatFileStorageCleanup cleanup = new ChatFileStorageCleanup(properties(storage), quota, mapper, coordinator);
+        coordinator.uploadLock().lock();
+        try {
+            cleanup.groupDissolved(new GroupChangedEvent(UUID.randomUUID(), true));
+            assertThat(orphan).exists();
+            verifyNoInteractions(quota, mapper);
+        } finally {
+            coordinator.uploadLock().unlock();
+        }
+        // 非目录触发真实文件系统异常，解散结果仍保持成功，日志保留失败上下文。
+        ChatFileStorageCleanup failed = new ChatFileStorageCleanup(properties(orphan), quota, mapper, coordinator);
+        assertThatCode(() -> failed.groupDissolved(new GroupChangedEvent(UUID.randomUUID(), true)))
+                .doesNotThrowAnyException();
     }
 }

@@ -7,7 +7,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * 隐式群组成员的公开资料；加入时间为账号注册与建群时间中较晚者。
+ * 当前群成员的公开资料与实际入群时间。
  *
  * @author Wreckloud
  * @since 2026-09-10

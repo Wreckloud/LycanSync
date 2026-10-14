@@ -24,6 +24,8 @@
         <mybatis-plus.version>3.5.17</mybatis-plus.version>
         <springdoc.version>2.9.0</springdoc.version>
         <livekit-server.version>0.15.1</livekit-server.version>
+        <!-- LiveKit 已使用此运行库；连接入口需要直接编译调用同一 JWT 校验实现。 -->
+        <java-jwt.version>4.6.0</java-jwt.version>
         <!-- 与 LiveKit SDK 的运行库对齐，避免 Boot 默认版本降级及 OkHttp 重复类。 -->
         <kotlin.version>2.3.0</kotlin.version>
         <okhttp.version>5.3.2</okhttp.version>
@@ -99,6 +101,12 @@
             <groupId>io.livekit</groupId>
             <artifactId>livekit-server</artifactId>
             <version>${livekit-server.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.auth0</groupId>
+            <artifactId>java-jwt</artifactId>
+            <version>${java-jwt.version}</version>
         </dependency>
 
         <dependency>

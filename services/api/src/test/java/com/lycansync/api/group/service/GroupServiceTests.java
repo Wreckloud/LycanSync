@@ -7,10 +7,11 @@ import com.lycansync.api.group.mapper.GroupMapper;
 import com.lycansync.api.group.model.ChatGroup;
 import com.lycansync.api.group.model.GroupRole;
 import com.lycansync.api.group.model.GroupView;
+import com.lycansync.api.rtc.service.GroupRtcAccessService;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
 
-import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -18,6 +19,7 @@ import java.time.Clock;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
+import javax.imageio.ImageIO;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -53,7 +55,7 @@ class GroupServiceTests {
         // 插入时捕获真正写入数据库的图片，再让查询返回同一份资料。
         when(mapper.insertGroup(inserted.capture())).thenReturn(1);
 
-        var result = new GroupService(mapper, Clock.systemUTC())
+        var result = new GroupService(mapper, Clock.systemUTC(), mock(ApplicationEventPublisher.class), mock(GroupRtcAccessService.class))
                 .createGroup(user, new CreateGroupRequest(" 小队 ", " 描述 ", avatar));
 
         verify(mapper).insertGroup(any(ChatGroup.class));
@@ -67,7 +69,7 @@ class GroupServiceTests {
     @Test
     void shouldRejectDamagedAvatarBeforeWritingGroup() {
         GroupMapper mapper = mock(GroupMapper.class);
-        GroupService service = new GroupService(mapper, Clock.systemUTC());
+        GroupService service = new GroupService(mapper, Clock.systemUTC(), mock(ApplicationEventPublisher.class), mock(GroupRtcAccessService.class));
         AuthenticatedUser user = new AuthenticatedUser(UUID.randomUUID(), "群主", false);
 
         assertThatThrownBy(() -> service.createGroup(user,

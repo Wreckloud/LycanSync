@@ -3,11 +3,11 @@ package com.lycansync.api.rtc.controller;
 import com.lycansync.api.auth.config.AuthConfiguration;
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.service.AuthService;
+import com.lycansync.api.common.error.ApiErrorCode;
+import com.lycansync.api.group.exception.GroupException;
+import com.lycansync.api.rtc.dto.RtcParticipantSummaryResponse;
 import com.lycansync.api.rtc.dto.RtcRoomOccupancyResponse;
 import com.lycansync.api.rtc.dto.RtcRoomSummaryResponse;
-import com.lycansync.api.rtc.dto.RtcParticipantSummaryResponse;
-import com.lycansync.api.group.exception.GroupException;
-import com.lycansync.api.common.error.ApiErrorCode;
 import com.lycansync.api.rtc.dto.RtcTokenResponse;
 import com.lycansync.api.rtc.exception.RtcServiceUnavailableException;
 import com.lycansync.api.rtc.service.LocalRtcRoomSummaryService;
@@ -20,8 +20,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -32,8 +32,8 @@ import java.util.UUID;
 
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -122,7 +122,7 @@ class LocalRtcControllerTests {
 
     @Test
     void shouldReturnOnlyParticipantCountAndNamesWithoutCaching() throws Exception {
-        when(localRtcRoomSummaryService.getSummary(GROUP_ID))
+        when(localRtcRoomSummaryService.getSummary(GROUP_ID, AUTHENTICATED_USER))
                 .thenReturn(new RtcRoomSummaryResponse(2, List.of(
                         new RtcParticipantSummaryResponse("user-a", "小北"),
                         new RtcParticipantSummaryResponse("user-b", "阿澈"))));
@@ -166,7 +166,7 @@ class LocalRtcControllerTests {
 
     @Test
     void shouldReturnServiceUnavailableWhenLiveKitCannotBeQueried() throws Exception {
-        when(localRtcRoomSummaryService.getSummary(GROUP_ID))
+        when(localRtcRoomSummaryService.getSummary(GROUP_ID, AUTHENTICATED_USER))
                 .thenThrow(new RtcServiceUnavailableException("无法连接 LiveKit 房间服务"));
 
         mockMvc.perform(get("/api/rtc/room-summary")
@@ -179,7 +179,7 @@ class LocalRtcControllerTests {
 
     @Test
     void shouldDescribeUnknownBusinessRoomAsRtcNotFound() throws Exception {
-        when(localRtcRoomSummaryService.getSummary(GROUP_ID))
+        when(localRtcRoomSummaryService.getSummary(GROUP_ID, AUTHENTICATED_USER))
                 .thenThrow(new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.GROUP_NOT_FOUND, "群组不存在"));
 
         mockMvc.perform(get("/api/rtc/room-summary")

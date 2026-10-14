@@ -1,45 +1,46 @@
 package com.lycansync.api.chat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.flywaydb.core.Flyway;
 import com.lycansync.api.auth.dto.LocalRegistrationRequest;
+import com.lycansync.api.auth.service.AuthService;
 import com.lycansync.api.auth.service.LocalAuthService;
-import com.lycansync.api.chat.service.ChatFileStorageCleanup;
 import com.lycansync.api.chat.service.ChatFileQuotaService;
+import com.lycansync.api.chat.service.ChatFileStorageCleanup;
 import com.lycansync.api.chat.service.ChatFileStorageCoordinator;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-import java.util.UUID;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
-import java.io.IOException;
-import java.sql.Timestamp;
-import java.time.Duration;
-import java.time.Instant;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -53,6 +54,7 @@ import javax.sql.DataSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -97,6 +99,9 @@ class ChatApplicationIT {
     private LocalAuthService localAuth;
 
     @Autowired
+    private AuthService authService;
+
+    @Autowired
     private JdbcClient jdbc;
 
     @Autowired
@@ -117,7 +122,7 @@ class ChatApplicationIT {
     @BeforeEach
     void resetDatabase() throws IOException {
         jdbc.sql("TRUNCATE auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_file_upload_reservation, "
-                + "chat_message, chat_group, auth_session, auth_local_credential, app_user").update();
+                + "chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
         jdbc.sql("UPDATE chat_file_storage_quota SET used_bytes = 0, reserved_bytes = 0 WHERE id = 1").update();
         jdbc.sql("UPDATE system_state SET initialized_at = NULL WHERE id = 1").update();
         if (Files.exists(FILE_STORAGE)) {
@@ -132,6 +137,7 @@ class ChatApplicationIT {
         String ownerToken = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
         String friendToken = localAuth.register(new LocalRegistrationRequest("Friend", PASSWORD)).sessionToken();
         String groupId = createGroup(ownerToken);
+        addFriend(groupId, ownerToken, friendToken);
 
         String textResponse = mvc.perform(multipart("/api/groups/{groupId}/messages", groupId)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
@@ -174,6 +180,7 @@ class ChatApplicationIT {
         String ownerToken = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
         String friendToken = localAuth.register(new LocalRegistrationRequest("Friend", PASSWORD)).sessionToken();
         String groupId = createGroup(ownerToken);
+        addFriend(groupId, ownerToken, friendToken);
         UUID messageId = UUID.randomUUID();
 
         String first = mvc.perform(multipart("/api/groups/{groupId}/messages", groupId)
@@ -801,6 +808,38 @@ class ChatApplicationIT {
             Thread.sleep(25);
         }
         throw new IllegalStateException("Concurrent message write did not block on the group row");
+    }
+
+    @Test
+    void shouldRevokePrivateAttachmentsAndReclaimFilesAfterDissolve() throws Exception {
+        String ownerToken = localAuth.register(new LocalRegistrationRequest("FileOwner", PASSWORD)).sessionToken();
+        String friendToken = localAuth.register(new LocalRegistrationRequest("FileFriend", PASSWORD)).sessionToken();
+        String groupId = createGroup(ownerToken);
+        byte[] bytes = "私密文件".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String response = sendFile(groupId, ownerToken, UUID.randomUUID(), "private.txt", "", bytes)
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        String attachmentId = objectMapper.readTree(response).path("attachment").path("id").asText();
+        mvc.perform(get("/api/groups/{id}/files/{attachment}", groupId, attachmentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + friendToken)).andExpect(status().isNotFound());
+        addFriend(groupId, ownerToken, friendToken);
+        mvc.perform(get("/api/groups/{id}/files/{attachment}", groupId, attachmentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + friendToken)).andExpect(status().isOk());
+        mvc.perform(delete("/api/groups/{id}/members/{memberId}", groupId, authService.authenticate(friendToken).id())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + friendToken)).andExpect(status().isNoContent());
+        mvc.perform(get("/api/groups/{id}/files/{attachment}", groupId, attachmentId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + friendToken)).andExpect(status().isNotFound());
+        mvc.perform(delete("/api/groups/{id}", groupId).header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken))
+                .andExpect(status().isNoContent());
+        assertThat(Files.exists(FILE_STORAGE.resolve(attachmentId + ".bin"))).isFalse();
+        assertThat(jdbc.sql("SELECT used_bytes FROM chat_file_storage_quota WHERE id = 1").query(Long.class).single()).isZero();
+    }
+
+    private void addFriend(String groupId, String ownerToken, String friendToken) throws Exception {
+        UUID friendId = authService.authenticate(friendToken).id();
+        mvc.perform(post("/api/groups/{groupId}/members", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"userId\":\"" + friendId + "\"}"))
+                .andExpect(status().isOk());
     }
 
     private String createGroup(String token) throws Exception {

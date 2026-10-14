@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * 所有注册用户在群组中的公开资料。
+ * 当前群成员的公开资料和入群时间。
  *
  * @author Wreckloud
  * @since 2026-09-10

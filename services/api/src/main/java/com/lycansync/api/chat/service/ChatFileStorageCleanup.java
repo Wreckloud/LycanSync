@@ -3,10 +3,12 @@ package com.lycansync.api.chat.service;
 import com.lycansync.api.chat.config.ChatFileProperties;
 import com.lycansync.api.chat.mapper.ChatMapper;
 import com.lycansync.api.chat.model.ChatFileUploadReservation;
+import com.lycansync.api.group.event.GroupChangedEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -58,6 +60,25 @@ public class ChatFileStorageCleanup {
         } catch (IOException | RuntimeException exception) {
             log.error("群聊文件启动恢复未完成，遗留项将在后续启动重试", exception);
             throw new IllegalStateException("无法清理群聊文件存储", exception);
+        } finally {
+            cleanupLock.unlock();
+        }
+    }
+
+    @TransactionalEventListener
+    public void groupDissolved(GroupChangedEvent event) {
+        if (!event.deleted()) return;
+        Lock cleanupLock = coordinator.cleanupLock();
+        // 解散已经提交，不等待其他群的大文件上传；忙碌时留给启动恢复。
+        if (!cleanupLock.tryLock()) {
+            log.warn("群组已解散，文件上传仍在进行，遗留附件将在启动时回收: {}", event.groupId());
+            return;
+        }
+        try {
+            // 提交后只清理已无引用的附件，不复用启动流程中的额度写入事务。
+            removeOrphanedStoredFiles(properties.getStorageDirectory().toAbsolutePath().normalize());
+        } catch (IOException | RuntimeException exception) {
+            log.error("群组已解散，附件清理未完成，遗留文件将在启动时重试: {}", event.groupId(), exception);
         } finally {
             cleanupLock.unlock();
         }

@@ -3,27 +3,31 @@ package com.lycansync.api.rtc.service;
 import com.auth0.jwt.JWT;
 import com.auth0.jwt.algorithms.Algorithm;
 import com.auth0.jwt.interfaces.DecodedJWT;
+import com.lycansync.api.common.error.ApiErrorCode;
+import com.lycansync.api.group.exception.GroupException;
+import com.lycansync.api.group.service.GroupService;
 import com.lycansync.api.rtc.config.LiveKitProperties;
 import com.lycansync.api.rtc.dto.RtcTokenResponse;
-import com.lycansync.api.group.service.GroupService;
-import com.lycansync.api.group.exception.GroupException;
-import com.lycansync.api.common.error.ApiErrorCode;
-import org.springframework.http.HttpStatus;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 
+import com.lycansync.api.auth.model.AuthenticatedUser;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.UUID;
-import com.lycansync.api.auth.model.AuthenticatedUser;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * 本地 RTC 凭证签名与权限测试。
@@ -42,6 +46,11 @@ class LocalRtcTokenServiceTests {
     private final LocalRtcTokenService localRtcTokenService = new LocalRtcTokenService(
             new LiveKitProperties("ws://127.0.0.1:7880", "http://127.0.0.1:7880", API_KEY, API_SECRET),
             groupService, Clock.fixed(SERVER_TIME, ZoneOffset.UTC));
+
+    @BeforeEach
+    void setUp() {
+        when(groupService.lockMemberRoomKey(eq(GROUP_ID), any(AuthenticatedUser.class))).thenReturn(GROUP_ID);
+    }
 
     @Test
     void shouldSignGroupRoomTokenWithOnlyRequiredMediaPermissions() {
@@ -107,19 +116,30 @@ class LocalRtcTokenServiceTests {
         AuthenticatedUser user = new AuthenticatedUser(UUID.randomUUID(), "小狼", false);
 
         doThrow(new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.GROUP_NOT_FOUND, "群组不存在"))
-                .when(groupService).requireGroup(GROUP_ID);
+                .when(groupService).lockMemberRoomKey(GROUP_ID, user);
         assertThatThrownBy(() -> localRtcTokenService.issueToken(GROUP_ID, user))
                 .isInstanceOf(GroupException.class)
                 .hasMessage("群组不存在");
-        verify(groupService).requireGroup(GROUP_ID);
+        verify(groupService).lockMemberRoomKey(GROUP_ID, user);
     }
 
     @Test
     void shouldKeepDifferentGroupsInDifferentRooms() {
         AuthenticatedUser user = new AuthenticatedUser(UUID.randomUUID(), "小狼", false);
+        UUID otherGroup = UUID.randomUUID();
+        when(groupService.lockMemberRoomKey(otherGroup, user)).thenReturn(UUID.randomUUID());
         RtcTokenResponse first = localRtcTokenService.issueToken(GROUP_ID, user);
-        RtcTokenResponse second = localRtcTokenService.issueToken(UUID.randomUUID(), user);
+        RtcTokenResponse second = localRtcTokenService.issueToken(otherGroup, user);
         assertThat(first.roomName()).isNotEqualTo(second.roomName());
         assertThat(first.participantIdentity()).isEqualTo(second.participantIdentity());
+    }
+
+    @Test
+    void shouldScopeTokensToStablePrivateRoomInsteadOfPublicGroupId() {
+        AuthenticatedUser user = new AuthenticatedUser(UUID.randomUUID(), "小狼", false);
+        UUID roomKey = UUID.randomUUID();
+        when(groupService.lockMemberRoomKey(GROUP_ID, user)).thenReturn(roomKey);
+        assertThat(localRtcTokenService.issueToken(GROUP_ID, user).roomName()).isEqualTo("lycan-sync-group-" + roomKey);
+        assertThat(localRtcTokenService.issueToken(GROUP_ID, user).roomName()).isEqualTo("lycan-sync-group-" + roomKey);
     }
 }

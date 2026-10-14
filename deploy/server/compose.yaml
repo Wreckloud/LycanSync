@@ -34,6 +34,9 @@ services:
           node_ip: ${MEDIA_ADVERTISE_IP:?请填写客户端能访问的服务器 IP}
         keys:
           "${LIVEKIT_API_KEY:?请先填写 .env}": "${LIVEKIT_API_SECRET:?请先填写 .env}"
+        webhook:
+          api_key: ${LIVEKIT_API_KEY:?请先填写 .env}
+          urls: ["http://api:18080/internal/rtc/events"]
     ports:
       - "7991:7991/tcp"
       - "7992:7992/udp"

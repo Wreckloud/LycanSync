@@ -12,6 +12,7 @@ import com.lycansync.api.presence.dto.PresenceHeartbeatRequest;
 import com.lycansync.api.presence.mapper.PresenceMapper;
 import com.lycansync.api.presence.model.UserPresenceStatus;
 import com.lycansync.api.presence.service.PresenceService;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,6 +21,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -34,15 +36,17 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 使用隔离 PostgreSQL 验证注册账号的隐式群组成员身份。
+ * 使用隔离 PostgreSQL 验证私密群成员资格、群主权限和邀请码。
  *
  * @author Wreckloud
  * @since 2026-09-10
@@ -95,12 +99,12 @@ class GroupApplicationIT {
 
     @BeforeEach
     void resetDatabase() {
-        jdbc.sql("TRUNCATE auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_message, chat_group, auth_session, auth_local_credential, app_user").update();
+        jdbc.sql("TRUNCATE auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
         jdbc.sql("UPDATE system_state SET initialized_at = NULL WHERE id = 1").update();
     }
 
     @Test
-    void shouldShowNewGroupToEveryRegisteredUser() throws Exception {
+    void shouldOnlyShowGroupAfterOwnerAddsMember() throws Exception {
         String ownerToken = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
         String friendToken = localAuth.register(new LocalRegistrationRequest("Friend", PASSWORD)).sessionToken();
 
@@ -114,14 +118,22 @@ class GroupApplicationIT {
                 .andExpect(jsonPath("$.name").value("周末开黑"))
                 .andExpect(jsonPath("$.description").value("周六晚上"))
                 .andExpect(jsonPath("$.role").value("OWNER"))
-                .andExpect(jsonPath("$.memberCount").value(2))
+                .andExpect(jsonPath("$.memberCount").value(1))
                 .andExpect(jsonPath("$.members[0].nickname").value("Owner"))
                 .andExpect(jsonPath("$.members[0].role").value("OWNER"))
-                .andExpect(jsonPath("$.members[1].nickname").value("Friend"))
-                .andExpect(jsonPath("$.members[1].role").value("MEMBER"))
                 .andReturn().getResponse().getContentAsString();
 
         String groupId = objectMapper.readTree(response).get("id").asText();
+        mvc.perform(get("/api/groups").header(HttpHeaders.AUTHORIZATION, "Bearer " + friendToken))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        mvc.perform(get("/api/groups/{groupId}", groupId).header(HttpHeaders.AUTHORIZATION, "Bearer " + friendToken))
+                .andExpect(status().isNotFound());
+        mvc.perform(get("/api/groups/{groupId}/messages", groupId).header(HttpHeaders.AUTHORIZATION, "Bearer " + friendToken))
+                .andExpect(status().isNotFound());
+        UUID friendId = authService.authenticate(friendToken).id();
+        mvc.perform(post("/api/groups/{groupId}/members", groupId).header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"userId\":\"" + friendId + "\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.memberCount").value(2));
         mvc.perform(get("/api/groups").header(HttpHeaders.AUTHORIZATION, "Bearer " + friendToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value(groupId))
@@ -345,7 +357,7 @@ class GroupApplicationIT {
     }
 
     @Test
-    void shouldIncludeAccountsRegisteredAfterGroupCreation() throws Exception {
+    void shouldNotImplicitlyIncludeNewAccounts() throws Exception {
         String ownerToken = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
         String groupBody = mvc.perform(post("/api/groups")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
@@ -359,18 +371,15 @@ class GroupApplicationIT {
         String newToken = localAuth.register(new LocalRegistrationRequest("NewFriend", PASSWORD)).sessionToken();
         mvc.perform(get("/api/groups/{groupId}", groupId)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + newToken))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.memberCount").value(2))
-                .andExpect(jsonPath("$.members[1].nickname").value("NewFriend"))
-                .andExpect(jsonPath("$.members[1].role").value("MEMBER"));
+                .andExpect(status().isNotFound());
         mvc.perform(get("/api/groups").header(HttpHeaders.AUTHORIZATION, "Bearer " + newToken))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].id").value(groupId));
+                .andExpect(jsonPath("$.length()").value(0));
         mvc.perform(post("/api/groups/{groupId}/members", groupId)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"username\":\"NewFriend\"}"))
-                .andExpect(status().isNotFound());
+                .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -412,5 +421,80 @@ class GroupApplicationIT {
         assertThatThrownBy(() -> groupService.createGroup(missingUser, new CreateGroupRequest("回滚测试", null, null)))
                 .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
         assertThat(jdbc.sql("SELECT count(*) FROM chat_group").query(Long.class).single()).isZero();
+    }
+
+    @Test
+    void shouldJoinTransferRemoveAndInvalidatePreviousCode() throws Exception {
+        String ownerToken = localAuth.register(new LocalRegistrationRequest("PrivateOwner", PASSWORD)).sessionToken();
+        String memberToken = localAuth.register(new LocalRegistrationRequest("PrivateMember", PASSWORD)).sessionToken();
+        UUID ownerId = authService.authenticate(ownerToken).id();
+        UUID memberId = authService.authenticate(memberToken).id();
+        String groupBody = mvc.perform(post("/api/groups").header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"私密小队\"}"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        String groupId = objectMapper.readTree(groupBody).path("id").asText();
+        String codeBody = mvc.perform(post("/api/groups/{id}/invite-code", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        String originalCode = objectMapper.readTree(codeBody).path("code").asText();
+        mvc.perform(post("/api/groups/join").header(HttpHeaders.AUTHORIZATION, "Bearer " + memberToken)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"code\":\"" + originalCode + "\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.role").value("MEMBER"));
+        mvc.perform(post("/api/groups/{id}/invite-code", groupId).header(HttpHeaders.AUTHORIZATION, "Bearer " + memberToken))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/groups/{id}/candidates", groupId).param("search", "Private")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.members.length()").value(2));
+        mvc.perform(post("/api/groups/{id}/owner", groupId).header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"userId\":\"" + memberId + "\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.role").value("MEMBER"));
+        mvc.perform(put("/api/groups/{id}", groupId).header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"无权限修改\"}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(put("/api/groups/{id}", groupId).header(HttpHeaders.AUTHORIZATION, "Bearer " + memberToken)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"新的群主\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.name").value("新的群主"));
+        String outsider = localAuth.register(new LocalRegistrationRequest("PrivateOutsider", PASSWORD)).sessionToken();
+        mvc.perform(post("/api/groups/join").header(HttpHeaders.AUTHORIZATION, "Bearer " + outsider)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"code\":\"" + originalCode + "\"}"))
+                .andExpect(status().isBadRequest());
+        String keyBefore = jdbc.sql("SELECT rtc_room_key::text FROM chat_group WHERE id = ?")
+                .param(UUID.fromString(groupId)).query(String.class).single();
+        mvc.perform(delete("/api/groups/{id}/members/{userId}", groupId, ownerId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + memberToken))
+                .andExpect(status().isNoContent());
+        assertThat(jdbc.sql("SELECT rtc_room_key::text FROM chat_group WHERE id = ?")
+                .param(UUID.fromString(groupId)).query(String.class).single()).isEqualTo(keyBefore);
+        mvc.perform(get("/api/groups/{id}/messages", groupId).header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken))
+                .andExpect(status().isNotFound());
+        mvc.perform(get("/api/groups/{id}/presences", groupId).header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken))
+                .andExpect(status().isNotFound());
+        mvc.perform(delete("/api/groups/{id}", groupId).header(HttpHeaders.AUTHORIZATION, "Bearer " + memberToken))
+                .andExpect(status().isNoContent());
+        assertThat(jdbc.sql("SELECT count(*) FROM group_member").query(Long.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT count(*) FROM chat_group").query(Long.class).single()).isZero();
+    }
+
+    @Test
+    void shouldMigrateLegacyPublicGroupsWithoutGrantingEveryoneMembership() {
+        String schema = "group_upgrade";
+        var oldVersion = Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+                .schemas(schema).target("13").load();
+        oldVersion.migrate();
+        String url = POSTGRES.getJdbcUrl() + (POSTGRES.getJdbcUrl().contains("?") ? "&" : "?") + "currentSchema=" + schema;
+        var isolated = JdbcClient.create(new DriverManagerDataSource(url, POSTGRES.getUsername(), POSTGRES.getPassword()));
+        UUID owner = UUID.randomUUID(); UUID friend = UUID.randomUUID(); UUID group = UUID.randomUUID();
+        for (UUID user : java.util.List.of(owner, friend)) {
+            isolated.sql("INSERT INTO app_user(id, nickname, avatar, created_at) VALUES (?, '旧成员', '', now())").param(user).update();
+        }
+        isolated.sql("INSERT INTO chat_group(id, name, description, avatar, owner_user_id, created_at, updated_at) VALUES (?, '旧群', '', '', ?, now(), now())")
+                .param(group).param(owner).update();
+        isolated.sql("INSERT INTO chat_message(id, group_id, sender_user_id, type, content, created_at, sequence_number) VALUES (?, ?, ?, 'TEXT', '旧消息', now(), 1)")
+                .param(UUID.randomUUID()).param(group).param(owner).update();
+        Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()).schemas(schema).load().migrate();
+        assertThat(isolated.sql("SELECT count(*) FROM app_user").query(Long.class).single()).isEqualTo(2);
+        assertThat(isolated.sql("SELECT count(*) FROM chat_message").query(Long.class).single()).isOne();
+        assertThat(isolated.sql("SELECT user_id::text FROM group_member").query(String.class).single()).isEqualTo(owner.toString());
+        assertThat(isolated.sql("SELECT rtc_room_key::text FROM chat_group").query(String.class).single()).isNotEqualTo(group.toString());
     }
 }

@@ -46,7 +46,7 @@ public class ChatService {
     public ChatMessagePageResponse findMessages(
             UUID groupId, AuthenticatedUser user, UUID beforeMessageId, UUID afterMessageId
     ) {
-        groupService.requireGroup(groupId);
+        groupService.requireMember(groupId, user);
         if (beforeMessageId != null && afterMessageId != null) throw invalid("不能同时使用前后消息游标");
         if ((beforeMessageId != null && !mapper.messageExists(groupId, beforeMessageId))
                 || (afterMessageId != null && !mapper.messageExists(groupId, afterMessageId))) {
@@ -61,7 +61,7 @@ public class ChatService {
     @Transactional
     public ChatMessageResponse sendMessage(UUID groupId, AuthenticatedUser user, String content, MultipartFile image,
                                            UUID imageMessageId) {
-        groupService.requireGroup(groupId);
+        groupService.requireMember(groupId, user);
         if (imageMessageId != null && image == null) throw invalid("消息 ID 只能用于图片消息");
         String text = normalizeContent(content);
         ChatImageValidator.ValidatedImage validatedImage = null;
@@ -85,6 +85,8 @@ public class ChatService {
 
         Long sequenceNumber = mapper.allocateMessageSequence(groupId);
         if (sequenceNumber == null) throw new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.GROUP_NOT_FOUND, "群组不存在");
+        // 分配序号已锁定群组行，重新确认资格，避免退群与发送交错后仍写入。
+        groupService.requireMember(groupId, user);
         Instant now = Instant.now(systemClock);
         UUID messageId = imageMessageId == null ? UUID.randomUUID() : imageMessageId;
         mapper.insertMessage(new ChatMessage(messageId, groupId, user.id(),
@@ -103,7 +105,7 @@ public class ChatService {
     }
 
     public ChatAttachmentContent findAttachment(UUID groupId, UUID attachmentId, AuthenticatedUser user) {
-        groupService.requireGroup(groupId);
+        groupService.requireMember(groupId, user);
         ChatAttachmentContent attachment = mapper.findAttachment(groupId, attachmentId);
         if (attachment == null) {
             throw new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.CHAT_ATTACHMENT_NOT_FOUND, "消息图片不存在");

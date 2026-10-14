@@ -36,12 +36,12 @@ public class LocalRtcRoomSummaryService {
     private final RoomServiceClient roomServiceClient;
     private final GroupService groupService;
 
-    public RtcRoomSummaryResponse getSummary(UUID groupId) {
-        groupService.requireGroup(groupId);
+    public RtcRoomSummaryResponse getSummary(UUID groupId, AuthenticatedUser user) {
+        UUID roomKey = groupService.memberRoomKey(groupId, user);
         // TODO: 多客户端高频查询时增加短时有界缓存，但不能把查询失败当作无人。
         try {
             Response<List<ParticipantInfo>> response = roomServiceClient
-                    .listParticipants(GroupRtcRooms.roomName(groupId))
+                    .listParticipants(GroupRtcRooms.roomName(roomKey))
                     .execute();
 
             // LiveKit 在无人房间销毁后返回 404，对业务而言就是当前没有语音成员。
@@ -71,7 +71,7 @@ public class LocalRtcRoomSummaryService {
             return List.of();
         }
         Map<String, UUID> groupIdsByRoomName = groups.stream()
-                .collect(Collectors.toMap(group -> GroupRtcRooms.roomName(group.id()), GroupSummaryResponse::id));
+                .collect(Collectors.toMap(group -> GroupRtcRooms.roomName(groupService.memberRoomKey(group.id(), user)), GroupSummaryResponse::id));
         try {
             Response<List<Room>> response = roomServiceClient.listRooms(List.copyOf(groupIdsByRoomName.keySet())).execute();
             if (!response.isSuccessful() || response.body() == null) {

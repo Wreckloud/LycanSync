@@ -74,6 +74,7 @@ async function groupRequest<T>(path: string, method = 'GET', body?: unknown, sig
     signal: signal ?? AbortSignal.timeout(15000),
   });
   if (!response.ok) throw await readApiError(response);
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
@@ -101,3 +102,20 @@ export async function waitForGroupPresenceChanges(
 }
 export const createGroup = (name: string, description: string, avatar: string) =>
   groupRequest<GroupDetail>('', 'POST', { name, description, avatar });
+
+export interface GroupCandidate { userId: string; nickname: string; avatar: string; joined: boolean }
+export interface GroupCandidatePage { members: GroupCandidate[]; hasMore: boolean }
+export const updateGroup = (groupId: string, name: string, description: string, avatar: string) =>
+  groupRequest<GroupDetail>('/' + encodeURIComponent(groupId), 'PUT', { name, description, avatar });
+export const joinGroupByCode = (code: string) => groupRequest<GroupDetail>('/join', 'POST', { code });
+export const findGroupCandidates = (groupId: string, search: string, offset: number, signal?: AbortSignal) =>
+  groupRequest<GroupCandidatePage>(`/${encodeURIComponent(groupId)}/candidates?${new URLSearchParams({ search, offset: String(offset) })}`, 'GET', undefined, signal);
+export const addGroupMember = (groupId: string, userId: string) =>
+  groupRequest<GroupDetail>(`/${encodeURIComponent(groupId)}/members`, 'POST', { userId });
+export const removeGroupMember = (groupId: string, userId: string) =>
+  groupRequest<void>(`/${encodeURIComponent(groupId)}/members/${encodeURIComponent(userId)}`, 'DELETE');
+export const transferGroupOwner = (groupId: string, userId: string) =>
+  groupRequest<GroupDetail>(`/${encodeURIComponent(groupId)}/owner`, 'POST', { userId });
+export const getGroupInviteCode = (groupId: string, refresh = false) =>
+  groupRequest<{ code: string }>(`/${encodeURIComponent(groupId)}/invite-code${refresh ? '/refresh' : ''}`, 'POST');
+export const dissolveGroup = (groupId: string) => groupRequest<void>('/' + encodeURIComponent(groupId), 'DELETE');

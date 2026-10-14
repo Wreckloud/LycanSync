@@ -1,5 +1,13 @@
+{
+    # Windows 通过 IP 连接时可能不发送 SNI，仍使用这台内网服务器的证书。
+    default_sni {$SERVER_DOMAIN}
+}
+
 https://{$SERVER_DOMAIN} {
     tls internal
+    handle /internal/* {
+        respond 404
+    }
     handle_path /downloads/* {
         root * /srv/downloads
         file_server
@@ -13,5 +21,26 @@ https://{$SERVER_DOMAIN} {
 
 https://{$SERVER_DOMAIN}:8443 {
     tls internal
-    reverse_proxy livekit:7990
+    @signal path /rtc /rtc/validate /rtc/v1 /rtc/v1/validate
+    handle @signal {
+        header >Access-Control-Allow-Origin *
+        header Cache-Control no-store
+        header Access-Control-Allow-Headers Authorization
+        header Access-Control-Allow-Methods "GET, OPTIONS"
+        @preflight method OPTIONS
+        route {
+            respond @preflight 204
+            forward_auth api:18080 {
+                uri /internal/rtc/access
+                header_up X-Lycan-Rtc-Token {query.access_token}
+                transport http {
+                    response_header_timeout 10s
+                }
+            }
+            reverse_proxy livekit:7990
+        }
+    }
+    handle {
+        respond 404
+    }
 }
