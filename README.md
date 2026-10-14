@@ -17,13 +17,15 @@ npm --prefix apps/web run package:desktop
 
 产物位于 `release/desktop/`，包括未签名 NSIS x64 安装程序、同名 `.blockmap` 和 `latest.yml`；内置微软 VC++ x64 运行库并按需安装。打包必须指定 HTTPS 服务器地址；运行库默认从 Visual Studio 2022 Build Tools 的 Redist 目录获取，其他位置用 `LYCANSYNC_VC_REDIST_PATH` 指定微软原版文件。安装完成可直接启动，在未登录页面修改服务器地址并重启；选择保存在用户目录，升级不会覆盖。安装版启动、升级、自动启动、原生媒体和卸载仍需在 Windows 10/11 验收。
 
+每次发布先递增 `apps/web/package.json` 和 `package-lock.json` 中的应用版本，再重新打包；不得覆盖已发布的同版本安装包。发布时先上传版本化安装包和 `.blockmap`，最后更新 `latest.yml`。修改源码或提交 Git 不会更新已有安装包。
+
 Windows 安装版每次启动只检查一次更新，不定时轮询。检查最多等待 10 秒；发现新版后在恢复登录、启动活动检测及媒体之前下载，经更新库校验后静默安装并重新打开。下载期间可选择“暂不更新”；检查、下载或校验失败会提示并继续使用旧版，不在通话中或普通退出时补装。更新源固定在安装包中，不随用户修改业务服务器改变；开发和浏览器入口不检查更新。旧版首次接入需手动安装 0.0.4 或以后版本；设置的“客户端”栏目可查看当前版本及状态，也可手动“检查更新”。手动发现新版后显示重启确认，取消不打断使用；选择“重启更新”会正常结束当前通话、共享和远控并重启，再复用启动下载、校验和安装流程，不在业务界面另建下载链路。本机 Windows 10 已验证 0.0.4 → 0.0.5 自动下载、静默升级和重新打开，账号凭据与服务器配置保留；新的手动确认重启入口及其他 Windows 环境仍需实机验收。当前未签名版本仍可能被安全软件阻止，不能保证系统级安装失败能在原进程中恢复。
 
 Linux 部署包包含后端 JAR、Dockerfile、Compose、HTTPS 入口和部署说明：
 
 ```powershell
 mvn -f services/api/pom.xml package
-./deploy/package-server.ps1 -DesktopInstaller ./release/desktop/LycanSync-0.0.5-windows-x64-setup.exe
+./deploy/package-server.ps1 -DesktopInstaller ./release/desktop/LycanSync-0.0.10-windows-x64-setup.exe
 ```
 
 产物位于 `release/server/`。部署步骤见 [服务器部署说明](deploy/server/DEPLOY.md)，支持域名证书和内网 VMware 测试 CA 两种明确配置。服务器使用 `rtc-server` profile；`rtc-local` 的本机监听约束保持不变。服务器首次运行需要联网获取 Docker 镜像，并执行数据库迁移；本包不包含现有数据库、聊天文件或密钥。
