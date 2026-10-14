@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   copyText: (text) => ipcRenderer.invoke('clipboard:write-text', text),
   runStartupUpdate: () => ipcRenderer.invoke('update:startup'),
   getUpdateState: () => ipcRenderer.invoke('update:state:get'),
+  checkUpdates: () => ipcRenderer.invoke('update:check'),
+  restartForUpdate: () => ipcRenderer.invoke('update:restart'),
   skipStartupUpdate: () => ipcRenderer.invoke('update:skip'),
   onUpdateState: (callback) => {
     const listener = (_event, state) => callback(state);

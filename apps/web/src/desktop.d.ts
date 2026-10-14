@@ -86,6 +86,8 @@ interface Window {
     copyText(text: string): Promise<void>;
     runStartupUpdate(): Promise<StartupUpdateState>;
     getUpdateState(): Promise<StartupUpdateState>;
+    checkUpdates(): Promise<StartupUpdateState>;
+    restartForUpdate(): Promise<void>;
     skipStartupUpdate(): Promise<void>;
     onUpdateState(callback: (state: StartupUpdateState) => void): () => void;
     clearSession(): Promise<void>;

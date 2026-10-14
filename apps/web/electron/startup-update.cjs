@@ -8,7 +8,7 @@ function updateFeedUrl(value) {
   return url.href;
 }
 
-// 每个主进程只检查一次；进入业务界面后，迟到的检查或下载不能再触发安装。
+// 启动自动更新只执行一次；设置页查版本，确认后重启复用启动流程。
 function createStartupUpdate({ enabled, version, createUpdater, onChange, beforeInstall, onInstallFailure,
   checkTimeoutMs = 10_000 }) {
   let state = { phase: 'idle', version, supported: enabled, message: enabled ? '等待检查更新' : '开发模式不检查更新' };
@@ -18,6 +18,7 @@ function createStartupUpdate({ enabled, version, createUpdater, onChange, before
   let cancellationToken;
   let checkTimer;
   let finished = false;
+  let manualCheckPromise;
 
   function publish(changes) {
     state = { ...state, ...changes };
@@ -52,16 +53,22 @@ function createStartupUpdate({ enabled, version, createUpdater, onChange, before
     if (Number.isFinite(percent) && percent !== state.percent) publish({ percent });
   }
 
+  function getUpdater() {
+    if (updater) return updater;
+    updater = createUpdater();
+    updater.autoDownload = false;
+    updater.autoInstallOnAppQuit = false;
+    updater.allowDowngrade = false;
+    updater.disableWebInstaller = true;
+    updater.logger = null;
+    // 启动结束后仍接住 SDK 的 error 事件；手动检查通过自身 Promise 报错。
+    updater.on('error', fail);
+    return updater;
+  }
+
   async function checkAndInstall() {
     try {
-      updater = createUpdater();
-      updater.autoDownload = false;
-      updater.autoInstallOnAppQuit = false;
-      updater.allowDowngrade = false;
-      updater.disableWebInstaller = true;
-      updater.logger = null;
-      // 保留 error 监听来接住取消后的 SDK 迟到错误，不再改动已结束的启动状态。
-      updater.on('error', fail);
+      getUpdater();
       updater.on('download-progress', progress);
       publish({ phase: 'checking', message: '正在检查更新…' });
       checkTimer = setTimeout(() => complete('更新检查超时，仍可使用当前版本。下次打开时重试。', true), checkTimeoutMs);
@@ -86,6 +93,25 @@ function createStartupUpdate({ enabled, version, createUpdater, onChange, before
     } catch (error) { fail(error); }
   }
 
+  async function checkVersion() {
+    let timeout;
+    publish({ phase: 'checking', message: '正在检查更新…', error: false, nextVersion: undefined, percent: undefined });
+    try {
+      const result = await Promise.race([
+        getUpdater().checkForUpdates(),
+        new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('更新检查超时')), checkTimeoutMs); }),
+      ]);
+      if (!result) throw new Error('更新检查没有返回结果');
+      const nextVersion = result.isUpdateAvailable ? result.updateInfo.version : undefined;
+      publish({ phase: 'ready', nextVersion, message: nextVersion
+        ? `发现新版 ${nextVersion}，可重启应用更新。` : '当前已是最新版本' });
+    } catch (error) {
+      console.error('客户端手动检查更新失败', error?.code ?? error?.name ?? 'Error');
+      publish({ phase: 'ready', error: true, message: '无法检查更新，请检查网络和服务器证书后重试。' });
+    } finally { clearTimeout(timeout); }
+    return { ...state };
+  }
+
   return {
     getState: () => ({ ...state }),
     start: () => {
@@ -98,6 +124,13 @@ function createStartupUpdate({ enabled, version, createUpdater, onChange, before
       return startupPromise;
     },
     cancel: () => complete('本次更新已跳过，下次打开时检查。'),
+    checkOnly: () => {
+      if (!enabled) return Promise.resolve({ ...state });
+      if (!finished) return Promise.reject(new Error('启动更新尚未结束，请稍后检查。'));
+      // 同一次点击任务共用结果；超时后的 SDK 迟到结果不会进入安装链路。
+      if (!manualCheckPromise) manualCheckPromise = checkVersion().finally(() => { manualCheckPromise = undefined; });
+      return manualCheckPromise;
+    },
   };
 }
 

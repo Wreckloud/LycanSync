@@ -1195,6 +1195,27 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 
 .dialog-actions button:disabled { opacity: .45; cursor: not-allowed; }
 
+/* 卡片只统一操作位置，不耦合各表单的保存、取消和权限逻辑。 */
+.card-header-action { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; height: var(--button-height); padding: 5px 0 5px 8px; border: 0; background: transparent; color: var(--muted); font-size: 14px; line-height: 20px; cursor: pointer; }
+.card-header-action:hover:not(:disabled) { color: var(--text); }
+.card-header-action:disabled, .avatar-action:disabled { opacity: .45; cursor: not-allowed; }
+.avatar-actions { position: absolute; top: calc(100% + 2px); left: 0; width: 100%; display: flex; justify-content: center; gap: 8px; }
+.avatar-actions .avatar-action { padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 12px; line-height: 18px; white-space: nowrap; cursor: pointer; }
+.avatar-actions .avatar-action:hover:not(:disabled) { color: var(--text); background: transparent; }
+.card-actions { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; padding-top: 16px; border-top: 1px solid var(--border-soft); }
+.card-actions-no-cancel { grid-template-columns: minmax(0, 1fr) auto; }
+.card-actions-no-primary { grid-template-columns: auto minmax(0, 1fr); }
+.card-actions-end { justify-self: end; }
+.card-actions .confirm-button:not(.is-danger) { background: var(--accent); border-color: var(--accent); }
+.card-actions .is-danger { color: var(--danger); }
+.card-actions button:disabled { opacity: .45; cursor: not-allowed; }
+@media (max-width: 420px) {
+  .card-actions { grid-template-columns: auto minmax(0, 1fr); gap: 8px 12px; }
+  .card-actions > .card-feedback { grid-column: 1 / -1; grid-row: 1; }
+  .card-actions > button, .card-actions > .card-actions-end { grid-row: 2; }
+  .card-actions-no-cancel > .card-actions-end { grid-column: 2; }
+}
+
 @media (max-width: 900px) {
   .workspace { grid-template-columns: 66px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 160px); }
   .group-rail { grid-row: 1 / span 2; }

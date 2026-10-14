@@ -70,6 +70,131 @@ test('开发模式不加载更新库或连接更新源', async () => {
   const f = fixture({ enabled: false });
   assert.equal((await f.startup.start()).supported, false);
   assert.equal(f.counts().checkCount, 0);
+  assert.equal((await f.startup.checkOnly()).supported, false);
+  assert.equal(f.counts().checkCount, 0);
+});
+
+test('启动尚未结束时禁止设置页检查；手动检查不会重跑启动任务', async () => {
+  const f = fixture();
+  await assert.rejects(f.startup.checkOnly(), /启动更新尚未结束/);
+  const started = f.startup.start();
+  f.checks.resolve({ isUpdateAvailable: false });
+  const initial = await started;
+  const checked = await f.startup.checkOnly();
+  assert.equal(checked.message, '当前已是最新版本');
+  assert.equal(await f.startup.start(), initial);
+  assert.deepEqual(f.counts(), { checkCount: 2, downloadCount: 0, cancelled: 0, prepared: 0, restored: 0 });
+});
+
+test('跳过启动后手动发现新版只报告版本，不下载、安装或准备退出', async () => {
+  const f = fixture();
+  f.startup.cancel();
+  f.available();
+  const state = await f.startup.checkOnly();
+  assert.equal(state.phase, 'ready');
+  assert.equal(state.nextVersion, '0.0.4');
+  assert.match(state.message, /可重启应用更新/);
+  assert.equal(f.updater.autoDownload, false);
+  assert.equal(f.updater.autoInstallOnAppQuit, false);
+  assert.deepEqual(f.counts(), { checkCount: 1, downloadCount: 0, cancelled: 0, prepared: 0, restored: 0 });
+  assert.equal(f.installs.length, 0);
+});
+
+test('手动检查并发共用任务，结束后可以再次检查', async () => {
+  const f = fixture();
+  f.startup.cancel();
+  const first = f.startup.checkOnly();
+  assert.equal(f.startup.checkOnly(), first);
+  f.checks.resolve({ isUpdateAvailable: false });
+  await first;
+  await f.startup.checkOnly();
+  assert.equal(f.counts().checkCount, 2);
+  assert.equal(f.counts().downloadCount, 0);
+});
+
+test('手动检查超时后 SDK 迟到的新版不覆盖提示、不下载或安装', async () => {
+  const f = fixture({ checkTimeoutMs: 10 });
+  f.startup.cancel();
+  const state = await f.startup.checkOnly();
+  assert.equal(state.error, true);
+  f.available();
+  await flush();
+  assert.deepEqual(f.startup.getState(), state);
+  assert.equal(f.counts().downloadCount, 0);
+  assert.equal(f.installs.length, 0);
+});
+
+test('手动检查失败可重试，SDK error 事件不会重新进入启动安装链路', async () => {
+  const f = fixture();
+  f.startup.cancel();
+  const first = f.startup.checkOnly();
+  f.updater.emit('error', new Error('certificate invalid'));
+  f.checks.reject(new Error('certificate invalid'));
+  assert.equal((await first).error, true);
+  f.updater.checkForUpdates = async () => ({ isUpdateAvailable: false });
+  const retried = await f.startup.checkOnly();
+  assert.equal(retried.error, false);
+  assert.equal(retried.message, '当前已是最新版本');
+  assert.equal(f.counts().downloadCount, 0);
+  assert.equal(f.installs.length, 0);
+});
+
+test('主进程手动检查仅接受启动完成后的可信页面，不启动 helper 或退出客户端', async () => {
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const start = main.indexOf("ipcMain.handle('update:check'");
+  const end = main.indexOf("ipcMain.handle('update:restart'", start);
+  assert.ok(start >= 0 && end > start);
+  let handler;
+  let checks = 0;
+  const context = { ipcMain: { handle: (_, value) => { handler = value; } },
+    trustedSender: event => event.trusted, closing: false, startupReady: false,
+    startupUpdate: { checkOnly: () => { checks++; return Promise.resolve({ phase: 'ready' }); } } };
+  runInNewContext(main.slice(start, end), context);
+  assert.throws(() => handler({ trusted: true }), /当前不能检查/);
+  context.startupReady = true;
+  assert.throws(() => handler({ trusted: false }), /当前不能检查/);
+  await handler({ trusted: true });
+  assert.equal(checks, 1);
+  context.closing = true;
+  assert.throws(() => handler({ trusted: true }), /当前不能检查/);
+});
+
+test('确认重启只接受已发现新版的可信安装版页面，沿正常关窗而不直接调用安装器', () => {
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const start = main.indexOf("ipcMain.handle('update:restart'");
+  const end = main.indexOf("ipcMain.handle('update:skip'", start);
+  assert.ok(start >= 0 && end > start);
+  let handler;
+  const calls = [];
+  let state = { supported: true, phase: 'ready', error: false, nextVersion: '0.0.10' };
+  const context = {
+    ipcMain: { handle: (_, value) => { handler = value; } },
+    trustedSender: event => event.trusted, closing: false, startupReady: true,
+    startupUpdate: { getState: () => state },
+    app: { relaunch: () => calls.push('relaunch') },
+    mainWindow: { close: () => { calls.push('close'); context.closing = true; } },
+  };
+  runInNewContext(main.slice(start, end), context);
+  assert.throws(() => handler({ trusted: false }), /当前不能重启/);
+  context.startupReady = false;
+  assert.throws(() => handler({ trusted: true }), /当前不能重启/);
+  context.startupReady = true;
+  const available = { ...state };
+  for (const changes of [{ supported: false }, { phase: 'checking' }, { error: true }, { nextVersion: undefined }]) {
+    state = { ...available, ...changes };
+    assert.throws(() => handler({ trusted: true }), /请先检查/);
+  }
+  assert.deepEqual(calls, []);
+  state = available;
+  handler({ trusted: true });
+  assert.deepEqual(calls, ['relaunch', 'close']);
+  assert.throws(() => handler({ trusted: true }), /当前不能重启/);
+  assert.deepEqual(calls, ['relaunch', 'close']);
+});
+
+test('设置重启更新桥接是无参数固定 IPC，不接受下载源或安装路径', () => {
+  const preload = readFileSync(join(__dirname, 'preload.cjs'), 'utf8');
+  assert.match(preload, /restartForUpdate: \(\) => ipcRenderer\.invoke\('update:restart'\)/);
 });
 
 test('下载完成并通过 SDK 校验后才准备退出及调用静默安装重启', async () => {

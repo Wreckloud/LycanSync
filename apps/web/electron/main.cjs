@@ -1028,6 +1028,20 @@ ipcMain.handle('update:state:get', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
   return startupUpdate.getState();
 });
+ipcMain.handle('update:check', (event) => {
+  if (!trustedSender(event) || closing || !startupReady) throw new Error('当前不能检查更新');
+  return startupUpdate.checkOnly();
+});
+ipcMain.handle('update:restart', (event) => {
+  if (!trustedSender(event) || closing || !startupReady) throw new Error('当前不能重启更新');
+  const state = startupUpdate.getState();
+  if (!state.supported || state.phase !== 'ready' || state.error || !state.nextVersion) {
+    throw new Error('请先检查并确认有可用的新版本');
+  }
+  // 走普通关窗清理通话、共享和 helper；新进程再使用唯一的启动更新链路。
+  app.relaunch();
+  mainWindow.close();
+});
 ipcMain.handle('update:skip', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
   if (['idle', 'checking', 'downloading'].includes(startupUpdate.getState().phase)) startupUpdate.cancel();

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { reactive, ref, watch } from 'vue';
 import { readScreenSharePreferences, saveScreenSharePreferences } from '../../settings/screenSharePreferences';
+import InlineFeedback from '../InlineFeedback.vue';
+import UpdateRestartDialog from '../UpdateRestartDialog.vue';
+import { useClientUpdate } from '../../settings/useClientUpdate';
 
 const props = defineProps<{ desktop: boolean; active: boolean; stageAutoFill: boolean; stagePreferenceError: string }>();
 const emit = defineEmits<{ stageAutoFill: [enabled: boolean] }>();
@@ -13,8 +16,9 @@ let loaded = false;
 const screenPreferences = reactive({ hideCursor: false, hideBorder: false });
 const screenSupport = ref<{ hideCursor: boolean; hideBorder: boolean }>();
 const screenError = ref('');
-const updateState = ref<StartupUpdateState>();
-const updateError = ref('');
+const { state: updateState, error: updateError, busy: updateBusy, confirmationVersion,
+  check: checkUpdates, cancel: cancelUpdate, restart: restartUpdate } = useClientUpdate(desktopBridge,
+  () => props.active && props.desktop);
 let screenLoaded = false;
 
 watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
@@ -50,8 +54,6 @@ function updateScreenPreference(key: 'hideCursor' | 'hideBorder', event: Event) 
 watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
   if (!active || !desktop || loaded || !desktopBridge?.getAutoStart) return;
   loaded = true;
-  void desktopBridge.getUpdateState().then((state) => { updateState.value = state; })
-    .catch(() => { updateError.value = '无法读取更新状态，请重新打开客户端。'; });
   void desktopBridge.getAutoStart().then((settings) => {
     autoStartSupported.value = settings.supported;
     autoStartEnabled.value = settings.enabled;
@@ -82,11 +84,14 @@ async function updateAutoStart(event: Event) {
     <p class="settings-intro">客户端选项只影响当前设备。</p>
     <section v-if="desktop" class="settings-block">
       <h2>应用更新</h2>
-      <div class="settings-toggle">
-        <span><strong>版本 {{ updateState?.version || '读取中…' }}</strong><small>每次打开检查一次；发现新版后，在进入应用前下载、安装并重新打开。</small></span>
+      <div class="settings-toggle update-summary">
+        <span><strong>版本 {{ updateState?.version || '读取中…' }}</strong><small>启动时自动检查；也可手动检查并确认重启更新。</small></span>
+        <button type="button" class="settings-button" :disabled="updateBusy || !updateState?.supported || updateState.phase === 'checking'" @click="checkUpdates">{{ updateBusy || updateState?.phase === 'checking' ? '正在检查…' : '检查更新' }}</button>
       </div>
-      <p v-if="updateState" :class="{ 'settings-error': updateState.error }">{{ updateState.message }}</p>
-      <p v-if="updateError" role="alert" class="settings-error">{{ updateError }}</p>
+      <InlineFeedback :message="confirmationVersion ? '' : updateError || (updateState?.error ? updateState.message : '')"
+        :status="updateState?.error ? '' : updateState?.message" />
+      <UpdateRestartDialog v-if="confirmationVersion" :version="confirmationVersion" :busy="updateBusy" :error="updateError"
+        @cancel="cancelUpdate" @confirm="restartUpdate" />
     </section>
     <section class="settings-block">
       <h2>共享观看</h2>
@@ -135,4 +140,6 @@ async function updateAutoStart(event: Event) {
 
 <style scoped>
 .client-settings { max-width: 760px; }
+.update-summary { cursor: default; }
+.update-summary > button { flex-shrink: 0; }
 </style>
