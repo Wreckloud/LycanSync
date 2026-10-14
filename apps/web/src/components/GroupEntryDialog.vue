@@ -112,7 +112,7 @@ onScopeDispose(() => { if (returnFocus?.isConnected) returnFocus.focus(); });
         <button type="submit" class="confirm-button card-actions-end" :disabled="busy || picking || !!cropSource || (mode === 'join' ? !code.trim() : !name.trim())">{{ group ? '保存修改' : mode === 'join' ? '加入群组' : '创建群组' }}</button>
       </footer>
     </form>
-    <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整群组头像" @apply="finishCrop" @cancel="finishCrop()" />
+    <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整群组头像" shape="square" @apply="finishCrop" @cancel="finishCrop()" />
   </div>
 </template>
 

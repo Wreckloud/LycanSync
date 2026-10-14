@@ -7,7 +7,7 @@ import {
 import type { AvatarCropSource } from '../profile/useAvatarCrop';
 import InlineFeedback from './InlineFeedback.vue';
 
-const props = defineProps<{ source: AvatarCropSource; title: string }>();
+const props = defineProps<{ source: AvatarCropSource; title: string; shape?: 'circle' | 'square' }>();
 const emit = defineEmits<{ apply: [avatar: string]; cancel: [] }>();
 const dialog = ref<HTMLElement | null>(null);
 const viewport = shallowRef<HTMLElement | null>(null);
@@ -159,7 +159,7 @@ function keepFocus(event: KeyboardEvent) {
       <section ref="dialog" class="avatar-crop-dialog" role="dialog" aria-modal="true"
         aria-labelledby="avatar-crop-title" tabindex="-1" @keydown="keepFocus">
         <header><h2 id="avatar-crop-title">{{ title }}</h2><p>拖动调整位置，滚轮缩放</p></header>
-        <div ref="viewport" class="avatar-crop-viewport" aria-label="拖动调整头像位置"
+        <div ref="viewport" class="avatar-crop-viewport" :class="{ 'is-square': shape === 'square' }" aria-label="拖动调整头像位置"
           @pointerdown="beginDrag" @pointermove="moveDrag" @pointerup="endDrag" @pointercancel="endDrag" @wheel.prevent="zoomWithWheel">
           <img :src="source.previewUrl" :style="imageStyle" alt="待裁剪头像" draggable="false" />
         </div>
@@ -198,7 +198,8 @@ function keepFocus(event: KeyboardEvent) {
 .avatar-crop-dialog header { width: 100%; }
 .avatar-crop-dialog h2 { margin: 0; font-size: 22px; line-height: 32px; }
 .avatar-crop-dialog header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 20px; }
-.avatar-crop-viewport { position: relative; width: min(300px, 100%); aspect-ratio: 1; overflow: hidden; border: 2px solid var(--subtle); border-radius: 6px; background: var(--background); cursor: grab; touch-action: none; }
+.avatar-crop-viewport { position: relative; width: min(300px, 100%); aspect-ratio: 1; overflow: hidden; border: 2px solid var(--subtle); border-radius: 50%; background: var(--background); cursor: grab; touch-action: none; }
+.avatar-crop-viewport.is-square { border-radius: 8px; }
 .avatar-crop-viewport:active { cursor: grabbing; }
 .avatar-crop-viewport img { position: absolute; max-width: none; transform: translate(-50%, -50%); pointer-events: none; user-select: none; }
 .avatar-crop-rotation { display: grid; width: min(300px, 100%); grid-template-columns: minmax(64px, 1fr) minmax(0, 182px) minmax(64px, 1fr); gap: 8px; align-items: center; font-size: 13px; line-height: 20px; }
