@@ -56,7 +56,7 @@ onScopeDispose(() => { void props.microphoneTest.stop(); });
 async function selectSection(section: SettingsSectionId) {
   if (section === 'members' && !props.user.administrator) return;
   if (leaving.value || section === activeSection.value) return;
-  if (activeSection.value === 'account' && !await profileSettings.value?.save()) return;
+  if (activeSection.value === 'account' && !await profileSettings.value?.finishEditing()) return;
   activeSection.value = section;
 }
 
@@ -72,7 +72,7 @@ async function leaveSettings(logout: boolean) {
   if (leaving.value) return;
   leaving.value = true;
   try {
-    if (!await profileSettings.value?.save()) {
+    if (!await profileSettings.value?.finishEditing()) {
       activeSection.value = 'account';
       return;
     }
@@ -85,7 +85,7 @@ async function leaveSettings(logout: boolean) {
 </script>
 
 <template>
-  <main class="settings-view" aria-label="设置" @keydown.esc.stop="closeSettings">
+  <main class="settings-view" aria-label="设置" :inert="profileSettings?.cropping" @keydown.esc.stop="closeSettings">
     <nav class="settings-sidebar" aria-label="设置栏目">
       <button v-for="item in visibleSections" :key="item.id" type="button"
         :class="{ 'is-selected': activeSection === item.id }" :aria-current="activeSection === item.id ? 'page' : undefined"

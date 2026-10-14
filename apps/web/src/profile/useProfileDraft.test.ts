@@ -68,7 +68,7 @@ describe('个人资料草稿与保存', () => {
     scope.stop();
   });
 
-  it('失败保留修改，下一次保存可以重试', async () => {
+  it('首次资料提交失败保留修改，下一次保存可以重试', async () => {
     const { scope, draft, saveProfile } = setup();
     saveProfile.mockRejectedValueOnce(new Error('暂时无法保存'));
     draft.nickname.value = '保留草稿';
@@ -77,6 +77,24 @@ describe('个人资料草稿与保存', () => {
     expect(draft.error.value).toBe('暂时无法保存');
     expect(await draft.save()).toBe(true);
     expect(draft.error.value).toBe('');
+    scope.stop();
+  });
+
+  it('日常设置回退到最近确认的服务端值，保留保存失败提示', async () => {
+    const { scope, draft, user, saveProfile } = setup();
+    user.value = { ...initialUser, nickname: '最新昵称', avatar: '已保存头像', signature: '已保存签名' };
+    await nextTick();
+    draft.nickname.value = '失败的修改';
+    draft.avatar.value = '失败的新头像';
+    draft.signature.value = '失败的新签名';
+    saveProfile.mockRejectedValueOnce(new Error('服务暂不可用'));
+    expect(await draft.save()).toBe(false);
+    draft.resetDraft();
+    expect(draft.nickname.value).toBe('最新昵称');
+    expect(draft.avatar.value).toBe('已保存头像');
+    expect(draft.signature.value).toBe('已保存签名');
+    expect(draft.dirty.value).toBe(false);
+    expect(draft.error.value).toBe('服务暂不可用');
     scope.stop();
   });
 

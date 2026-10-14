@@ -12,19 +12,23 @@ const props = defineProps<{
   user: AuthUser;
   saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
 }>();
-const { nickname, avatar, signature, busy, error, save: saveDraft } = useProfileDraft(toRef(props, 'user'), props.saveProfile);
+const { nickname, avatar, signature, busy, error, dirty, save: saveDraft, resetDraft } = useProfileDraft(toRef(props, 'user'), props.saveProfile);
 const avatarInput = ref<HTMLInputElement | null>(null);
 const nicknameInput = ref<HTMLInputElement | null>(null);
 const nicknameButton = ref<HTMLButtonElement | null>(null);
 const editingNickname = ref(false);
 const { cropSource, picking, pickAvatar, editAvatar, clearCrop } = useAvatarCrop(error);
 const registrationDate = computed(() => formatRegistrationDate(props.user.createdAt));
+const cropping = computed(() => !!cropSource.value);
 
-async function save() {
+async function finishEditing() {
   if (picking.value || cropSource.value) return false;
-  const saved = await saveDraft();
-  if (saved) editingNickname.value = false;
-  return saved;
+  // 返回值只表示可以结束编辑；保存失败回退资料，保留错误，不阻断离开设置。
+  if (busy.value || dirty.value) {
+    if (!await saveDraft()) resetDraft();
+  }
+  editingNickname.value = false;
+  return true;
 }
 
 async function editNickname() {
@@ -38,24 +42,24 @@ async function editNickname() {
 function applyAvatar(value: string) {
   avatar.value = value;
   clearCrop();
-  void save();
+  void finishEditing();
 }
 
 function removeAvatar() {
   avatar.value = '';
-  void save();
+  void finishEditing();
 }
 
 async function submitNickname(event: KeyboardEvent) {
   if (event.isComposing) return;
   event.preventDefault();
-  if (await save()) {
+  if (await finishEditing()) {
     await nextTick();
     nicknameButton.value?.focus();
   }
 }
 
-defineExpose({ save });
+defineExpose({ finishEditing, cropping });
 </script>
 
 <template>
@@ -73,7 +77,7 @@ defineExpose({ save });
         <input ref="avatarInput" type="file" hidden aria-label="上传头像" accept="image/png,image/jpeg" @change="pickAvatar" />
         <div class="profile-nickname">
           <input v-if="editingNickname" ref="nicknameInput" v-model="nickname" aria-label="昵称" maxlength="32"
-            :readonly="busy" :aria-invalid="!nickname.trim()" @blur="save" @keydown.enter="submitNickname" />
+            :readonly="busy" :aria-invalid="!nickname.trim()" @blur="finishEditing" @keydown.enter="submitNickname" />
           <button v-else ref="nicknameButton" type="button" :aria-label="`修改昵称，${nickname}`" :disabled="busy" @click="editNickname">
             <span>{{ nickname }}</span><Pencil :size="15" aria-hidden="true" />
           </button>
@@ -84,7 +88,7 @@ defineExpose({ save });
         <div class="profile-signature-heading"><label for="profile-signature">个性签名 <span>选填</span></label>
           <span class="profile-signature-count">{{ signature.length }} / 120</span></div>
         <textarea id="profile-signature" v-model="signature" aria-label="个性签名" maxlength="120" rows="2"
-          :readonly="busy" placeholder="写一句想让朋友看到的话" @blur="save" />
+          :readonly="busy" placeholder="写一句想让朋友看到的话" @blur="finishEditing" />
       </div>
     </div>
     <InlineFeedback :message="error"

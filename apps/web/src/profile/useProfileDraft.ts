@@ -26,6 +26,12 @@ export function useProfileDraft(
     savedSignature.value = updated.signature ?? '';
   }, { deep: true });
 
+  function resetDraft() {
+    nickname.value = savedNickname.value;
+    avatar.value = savedAvatar.value;
+    signature.value = savedSignature.value;
+  }
+
   function save(): Promise<boolean> {
     if (pendingSave) return pendingSave;
     const profile = { nickname: nickname.value.trim(), avatar: avatar.value, signature: signature.value.trim() };
@@ -69,5 +75,5 @@ export function useProfileDraft(
     return pendingSave;
   }
 
-  return { nickname, avatar, signature, busy, error, save };
+  return { nickname, avatar, signature, busy, error, dirty, save, resetDraft };
 }
