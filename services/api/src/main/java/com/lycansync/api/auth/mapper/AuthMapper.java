@@ -2,7 +2,6 @@ package com.lycansync.api.auth.mapper;
 
 import com.lycansync.api.auth.model.AuthUser;
 import com.lycansync.api.auth.model.AuthenticatedUser;
-import com.lycansync.api.auth.model.LocalCredential;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
@@ -10,7 +9,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * 用户、本地凭据和认证会话数据访问。
+ * 用户、初始化状态和认证会话数据访问。
  *
  * @author Wreckloud
  * @since 2026-09-06
@@ -22,12 +21,7 @@ public interface AuthMapper {
 
     int markInitialized(@Param("now") Instant now);
 
-    LocalCredential findLocalCredential(@Param("username") String username);
-
     void insertUser(@Param("user") AuthUser user, @Param("now") Instant now);
-
-    void insertLocalCredential(@Param("userId") UUID userId, @Param("username") String username,
-                               @Param("passwordHash") String passwordHash, @Param("now") Instant now);
 
     int updateProfile(@Param("id") UUID id, @Param("nickname") String nickname, @Param("avatar") String avatar,
                       @Param("signature") String signature);

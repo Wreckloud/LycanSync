@@ -5,6 +5,7 @@ import com.lycansync.api.auth.dto.LocalRegistrationRequest;
 import com.lycansync.api.auth.dto.LoginResponse;
 import com.lycansync.api.auth.exception.AuthException;
 import com.lycansync.api.auth.mapper.AuthMapper;
+import com.lycansync.api.auth.mapper.LocalCredentialMapper;
 import com.lycansync.api.auth.model.AuthUser;
 import com.lycansync.api.auth.model.LocalCredential;
 import com.lycansync.api.common.error.ApiErrorCode;
@@ -32,15 +33,17 @@ public class LocalAuthService {
 
     private static final Pattern USERNAME = Pattern.compile("[A-Za-z0-9_]{3,32}");
     private final AuthMapper mapper;
+    private final LocalCredentialMapper credentials;
     private final AuthService authService;
     private final PasswordEncoder passwordEncoder;
     private final Clock systemClock;
     private final TransactionTemplate transactions;
     private final String dummyPasswordHash;
 
-    public LocalAuthService(AuthMapper mapper, AuthService authService,
+    public LocalAuthService(AuthMapper mapper, LocalCredentialMapper credentials, AuthService authService,
                             PasswordEncoder passwordEncoder, Clock systemClock, TransactionTemplate transactions) {
         this.mapper = mapper;
+        this.credentials = credentials;
         this.authService = authService;
         this.passwordEncoder = passwordEncoder;
         this.systemClock = systemClock;
@@ -62,7 +65,7 @@ public class LocalAuthService {
 
     private LoginResponse registerInTransaction(LocalRegistrationRequest request, String username, String passwordHash) {
         Instant now = Instant.now(systemClock);
-        if (mapper.findLocalCredential(username) != null) {
+        if (credentials.findByUsername(username) != null) {
             throw new AuthException(
                     HttpStatus.CONFLICT, ApiErrorCode.USERNAME_ALREADY_EXISTS, "用户名已被使用");
         }
@@ -70,7 +73,7 @@ public class LocalAuthService {
         boolean administrator = mapper.markInitialized(now) == 1;
         AuthUser user = new AuthUser(UUID.randomUUID(), request.username(), "", administrator, "", now);
         mapper.insertUser(user, now);
-        mapper.insertLocalCredential(user.id(), username, passwordHash, now);
+        credentials.insert(user.id(), username, passwordHash, now);
         String sessionToken = authService.issueSession(user, AuthSecrets.generate());
         return new LoginResponse(sessionToken, user);
     }
@@ -78,7 +81,7 @@ public class LocalAuthService {
     public LoginResponse login(LocalLoginRequest request) {
         String username = normalizeUsername(request.username());
         validatePassword(request.password());
-        LocalCredential credential = mapper.findLocalCredential(username);
+        LocalCredential credential = credentials.findByUsername(username);
         String passwordHash = credential == null ? dummyPasswordHash : credential.passwordHash();
         boolean matches = passwordEncoder.matches(request.password(), passwordHash);
         if (credential == null || !matches) {

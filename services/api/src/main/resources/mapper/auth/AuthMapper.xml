@@ -5,20 +5,9 @@
     <update id="markInitialized">
         UPDATE system_state SET initialized_at = #{now} WHERE id = 1 AND initialized_at IS NULL
     </update>
-    <select id="findLocalCredential" resultType="com.lycansync.api.auth.model.LocalCredential">
-        SELECT u.id, u.nickname, u.avatar, u.administrator, c.password_hash AS passwordHash,
-               u.signature, u.created_at AS createdAt
-        FROM app_user u
-        JOIN auth_local_credential c ON c.user_id = u.id
-        WHERE c.username = #{username}
-    </select>
     <insert id="insertUser">
         INSERT INTO app_user (id, nickname, avatar, administrator, signature, created_at)
         VALUES (#{user.id}, #{user.nickname}, #{user.avatar}, #{user.administrator}, #{user.signature}, #{now})
-    </insert>
-    <insert id="insertLocalCredential">
-        INSERT INTO auth_local_credential (username, password_hash, user_id, created_at)
-        VALUES (#{username}, #{passwordHash}, #{userId}, #{now})
     </insert>
     <update id="updateProfile">
         UPDATE app_user SET nickname = #{nickname}, avatar = #{avatar},

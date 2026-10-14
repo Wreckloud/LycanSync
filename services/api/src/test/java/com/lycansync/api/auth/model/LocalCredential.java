@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * 本地账号凭据查询结果。
+ * 仅供自动化测试构造账号的密码凭据查询结果。
  *
  * @author Wreckloud
  * @since 2026-09-09
