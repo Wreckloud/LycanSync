@@ -31,20 +31,24 @@ function setup() {
     ({ messages: [], hasMore: false }));
   const sendMessage = vi.fn(async (_groupId: string, _text: string, _image?: File, _signal?: AbortSignal, _id?: string) => message('sent'));
   const sendFile = vi.fn(async (_groupId: string, _file: File, _text: string, id: string, _signal: AbortSignal) => message(id));
+  const document = { visibilityState: 'visible', removeEventListener: vi.fn() };
   // 真实组件的任务、监听和销毁；只替换网络、DOM 与图片边界，不启动浏览器或传输文件。
-  const chat = scope.run(() => runInNewContext(`${compiled}\n({ refresh, submit, cancelUpload, messages, text, busy, error, pendingAttachments })`, {
+  const chat = scope.run(() => runInNewContext(`${compiled}\n({ refresh, loadOlder, handleVisibilityChange, submit, cancelUpload,
+    list, messages, text, busy, error, historyError, pendingAttachments })`, {
     computed, ref, watch, nextTick, onScopeDispose, onMounted: () => {}, defineProps: () => props,
     findMessages, sendMessage, sendFile, compressChatImage: vi.fn(), messagePollDelay: () => 8000,
     AbortController, setTimeout, clearTimeout, Error,
-    document: { visibilityState: 'visible', removeEventListener: vi.fn() },
+    document,
     window: { removeEventListener: vi.fn() }, URL: { revokeObjectURL: vi.fn() },
   })) as {
     refresh: () => Promise<number | null>; submit: () => Promise<void>; cancelUpload: () => void;
+    loadOlder: () => Promise<void>; handleVisibilityChange: () => void; list: { value: HTMLElement | null };
+    historyError: { value: string };
     messages: { value: ChatMessage[] }; text: { value: string }; busy: { value: boolean }; error: { value: string };
     pendingAttachments: { value: Array<{ id: string; kind: 'FILE'; file: File; previewUrl: string;
       state: 'pending' | 'uploading' | 'failed' | 'sent'; progress: number; error: string }> };
   };
-  return { scope, props, chat, findMessages, sendMessage, sendFile };
+  return { scope, props, chat, findMessages, sendMessage, sendFile, document };
 }
 
 it.each([false, true])('首批快照迟于本机发送，保留服务端顺序并去重（快照含本机消息：%s）', async (includesSent) => {
@@ -59,7 +63,7 @@ it.each([false, true])('首批快照迟于本机发送，保留服务端顺序�
     await refreshing;
     expect(chat.messages.value.map((entry) => entry.id)).toEqual(includesSent ? ['older', 'sent', 'newer'] : ['older', 'sent']);
     await chat.refresh();
-    expect(findMessages.mock.calls.at(-1)?.[1]).toEqual({ afterMessageId: includesSent ? 'newer' : 'sent' });
+    expect(findMessages.mock.calls.at(-1)?.[1]).toEqual({ afterMessageId: includesSent ? 'newer' : 'older' });
   } finally { scope.stop(); }
 });
 
@@ -75,6 +79,29 @@ it('文字发送失败保留草稿与错误，允许明确重试', async () => {
     await chat.submit();
     expect(chat.text.value).toBe('');
     expect(chat.messages.value).toHaveLength(1);
+  } finally { scope.stop(); }
+});
+
+it('本机发送不推进查询游标，超过一页的未读消息逐批补齐', async () => {
+  const { scope, chat, findMessages } = setup();
+  try {
+    findMessages.mockResolvedValueOnce({ messages: [message('cursor')], hasMore: false });
+    await chat.refresh();
+    chat.text.value = '本机最新消息';
+    await chat.submit();
+    const firstPage = Array.from({ length: 31 }, (_, index) => message(`remote-${index + 1}`));
+    const secondPage = [message('remote-32'), message('remote-33'), message('sent')];
+    findMessages.mockImplementation(async (_group, cursor) => {
+      const after = (cursor as { afterMessageId: string }).afterMessageId;
+      return { messages: after === 'cursor' ? firstPage : after === 'remote-31' ? secondPage : [], hasMore: false };
+    });
+    await chat.refresh();
+    await chat.refresh();
+    expect(findMessages.mock.calls.slice(-2).map((entry) => entry[1])).toEqual([
+      { afterMessageId: 'cursor' }, { afterMessageId: 'remote-31' },
+    ]);
+    expect(chat.messages.value.map((entry) => entry.id)).toEqual(['cursor', ...firstPage.map((entry) => entry.id),
+      ...secondPage.map((entry) => entry.id)]);
   } finally { scope.stop(); }
 });
 
@@ -153,5 +180,58 @@ it('主动取消上传保留同一请求ID待重试，不显示服务器失败',
     await chat.submit();
     expect(sendFile.mock.calls.map((entry) => entry[3])).toEqual(['upload', 'upload']);
     expect(chat.messages.value).toHaveLength(1);
+  } finally { scope.stop(); }
+});
+
+it('历史失败保持原消息，重试按原游标去重并保持可见锚点，到底后不再请求', async () => {
+  const { scope, chat, findMessages } = setup();
+  try {
+    findMessages.mockResolvedValueOnce({ messages: [message('three'), message('four')], hasMore: true });
+    await chat.refresh();
+    await nextTick();
+    const anchor = { getBoundingClientRect: () => ({ top: chat.messages.value.length === 2 ? 100 : 180, bottom: 200 }) };
+    const list = { scrollTop: 120, scrollHeight: 1000, clientHeight: 200,
+      getBoundingClientRect: () => ({ top: 0 }), querySelectorAll: () => [anchor] };
+    chat.list.value = list as unknown as HTMLElement;
+    findMessages.mockRejectedValueOnce(new Error('历史读取失败'));
+    await chat.loadOlder();
+    expect(chat.historyError.value).toBe('历史读取失败');
+    expect(chat.messages.value.map((entry) => entry.id)).toEqual(['three', 'four']);
+    findMessages.mockResolvedValueOnce({ messages: [message('one'), message('two'), message('three')], hasMore: false });
+    await chat.loadOlder();
+    expect(findMessages.mock.calls.slice(-2).map((entry) => entry[1])).toEqual([
+      { beforeMessageId: 'three' }, { beforeMessageId: 'three' },
+    ]);
+    expect(chat.messages.value.map((entry) => entry.id)).toEqual(['one', 'two', 'three', 'four']);
+    expect(list.scrollTop).toBe(200);
+    expect(chat.historyError.value).toBe('');
+    const requests = findMessages.mock.calls.length;
+    await chat.loadOlder();
+    expect(findMessages).toHaveBeenCalledTimes(requests);
+  } finally { scope.stop(); }
+});
+
+it('隐藏页面取消历史等待，迟到结果不写入，返回后可以重新读取', async () => {
+  const { scope, chat, findMessages, document } = setup();
+  try {
+    findMessages.mockResolvedValueOnce({ messages: [message('current')], hasMore: true });
+    await chat.refresh();
+    await nextTick();
+    chat.list.value = { scrollTop: 120, scrollHeight: 1000, clientHeight: 200 } as HTMLElement;
+    const oldPage = deferred<ChatMessagePage>();
+    findMessages.mockReturnValueOnce(oldPage.promise);
+    const reading = chat.loadOlder();
+    const signal = findMessages.mock.calls.at(-1)?.[2]!;
+    document.visibilityState = 'hidden';
+    chat.handleVisibilityChange();
+    expect(signal.aborted).toBe(true);
+    oldPage.resolve({ messages: [message('stale')], hasMore: false });
+    await reading;
+    expect(chat.messages.value.map((entry) => entry.id)).toEqual(['current']);
+    document.visibilityState = 'visible';
+    findMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+    await chat.loadOlder();
+    expect(findMessages.mock.calls.at(-1)?.[1]).toEqual({ beforeMessageId: 'current' });
+    expect(chat.historyError.value).toBe('');
   } finally { scope.stop(); }
 });

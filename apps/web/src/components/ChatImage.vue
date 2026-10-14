@@ -13,6 +13,7 @@ const frameStyle = computed(() => ({
 let activeUrl = '';
 let controller: AbortController | null = null;
 let observer: IntersectionObserver | null = null;
+let disposed = false;
 
 function clearSource() {
   if (activeUrl) URL.revokeObjectURL(activeUrl);
@@ -21,6 +22,7 @@ function clearSource() {
 }
 
 async function load() {
+  if (disposed) return;
   controller?.abort();
   const currentController = new AbortController();
   controller = currentController;
@@ -41,18 +43,22 @@ async function load() {
 }
 
 function observeFrame() {
-  if (!frame.value) return;
+  if (disposed || !frame.value) return;
   observer?.disconnect();
-  observer = new IntersectionObserver((entries) => {
-    if (!entries.some((entry) => entry.isIntersecting)) return;
-    observer?.disconnect();
+  const currentObserver = new IntersectionObserver((entries) => {
+    // disconnect 不撤回已排队的回调；旧观察器不能重开请求或断开新的观察器。
+    if (disposed || observer !== currentObserver || !entries.some((entry) => entry.isIntersecting)) return;
+    currentObserver.disconnect();
+    observer = null;
     void load();
   }, { root: frame.value.closest('.message-list'), rootMargin: '180px 0px' });
-  observer.observe(frame.value);
+  observer = currentObserver;
+  currentObserver.observe(frame.value);
 }
 
 watch(() => [props.groupId, props.attachmentId], () => {
   observer?.disconnect();
+  observer = null;
   controller?.abort();
   controller = null;
   clearSource();
@@ -61,7 +67,9 @@ watch(() => [props.groupId, props.attachmentId], () => {
 });
 onMounted(observeFrame);
 onScopeDispose(() => {
+  disposed = true;
   observer?.disconnect();
+  observer = null;
   controller?.abort();
   clearSource();
 });

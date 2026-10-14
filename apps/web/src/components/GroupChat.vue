@@ -47,6 +47,7 @@ let historyRequest: AbortController | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let disposed = false;
 let initialLoaded = false;
+let latestFetchedMessageId: string | undefined;
 let consecutiveEmptyPolls = 0;
 let lastActivationRefreshAt = 0;
 let atBottom = true;
@@ -91,7 +92,8 @@ async function refresh() {
   const groupId = props.group.id;
   const initial = !initialLoaded;
   try {
-    const latestId = initial ? undefined : messages.value.at(-1)?.id;
+    // 只有查询结果能推进轮询游标；本机发送成功不代表游标之前的其他消息已经读完。
+    const latestId = latestFetchedMessageId;
     const page = await findMessages(groupId, latestId ? { afterMessageId: latestId } : undefined, controller.signal);
     if (controller.signal.aborted || disposed || pollRequest !== controller || props.group.id !== groupId) return null;
     pollError.value = '';
@@ -106,6 +108,7 @@ async function refresh() {
     const added = page.messages.filter((message) => !currentIds.has(message.id)).length;
     messages.value = [...messages.value.slice(0, prefixEnd), ...page.messages,
       ...messages.value.slice(prefixEnd).filter((message) => !snapshotIds.has(message.id))];
+    latestFetchedMessageId = page.messages.at(-1)?.id ?? latestId;
     if (added && (initial || atBottom)) void scrollToBottom(initial ? 'auto' : 'smooth', initial);
     return added;
   } catch (reason) {
@@ -372,6 +375,7 @@ watch(() => props.group.id, () => {
   pollError.value = '';
   historyError.value = '';
   initialLoaded = false;
+  latestFetchedMessageId = undefined;
   hasMore = false;
   loadingOlder = false;
   historyRequest = null;
