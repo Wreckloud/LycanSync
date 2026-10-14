@@ -37,6 +37,8 @@ import { ref, shallowRef, markRaw } from ${JSON.stringify(vuePath)};
 import { LocalVideoTrack, RemoteVideoTrack, RemoteTrackPublication, Track, TrackEvent } from ${JSON.stringify(livekitPath)};
 export function useRtcRoom() {
   const revision = ref(0), status = ref('idle'), room = shallowRef(null), participants = shallowRef([]);
+  const listening = ref(true), microphoneIntent = ref(false), microphoneEnabled = ref(false);
+  const currentScreenShareQuality = ref('standard');
   const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 180;
   canvas.getContext('2d').fillRect(0, 0, 320, 180);
   const stream = canvas.captureStream(0);
@@ -55,7 +57,7 @@ export function useRtcRoom() {
       });
     }
     return markRaw({ identity, name, attributes: {},
-    isScreenShareEnabled: false, isMicrophoneEnabled: false, isSpeaking: false,
+    isScreenShareEnabled: false, isMicrophoneEnabled: false, isSpeaking: false, audioLevel: 0,
     getTrackPublication(source) { return source === 'screen_share' && this.isScreenShareEnabled ? publication : undefined; }
   }); };
   const local = makeParticipant('user-stage-user', '自己', true);
@@ -73,16 +75,37 @@ export function useRtcRoom() {
     stream.getTracks().forEach((track) => track.stop());
   }, { once: true });
   return { revision, status, room, participants, notice: ref(''), busySources: ref([]),
+    listening, microphoneIntent, microphoneEnabled,
     needsAudioPlayback: ref(false), remoteControlShares: ref({}), remoteControlActive: ref(null),
     remoteControlPending: ref(null), remoteControlRequest: ref(null), remoteControlOwner: ref(null),
-    remoteControlCleanupPending: ref(false), microphoneLoopbackState: ref('idle'), microphoneLoopbackNotice: ref(''),
-    currentScreenShareQuality: ref('standard'), screenShareQualityBusy: ref(false),
+    remoteControlCleanupPending: ref(false), remoteControlGranting: ref(false),
+    currentScreenShareQuality, screenShareQualityBusy: ref(false), screenShareSourceBusy: ref(false),
+    currentScreenShareAudioMode: ref('unavailable'),
     async join() { room.value = markRaw({ localParticipant: local, remoteParticipants: new Map(), state: 'connected' });
+      listening.value = true; microphoneIntent.value = true; microphoneEnabled.value = true;
+      local.isMicrophoneEnabled = true;
       participants.value = [local, ...friends]; status.value = 'connected'; revision.value++; return true; },
-    leave() { friends.forEach((friend) => friend.isScreenShareEnabled = false); room.value = null; participants.value = []; status.value = 'idle'; revision.value++; },
-    async updateListeningState() {}, stopMicrophoneLoopback() {}, setMicrophoneLoopbackVolume() {},
+    async leave() { [local, ...friends].forEach((member) => member.isScreenShareEnabled = false);
+      microphoneIntent.value = false; microphoneEnabled.value = false; local.isMicrophoneEnabled = false;
+      room.value = null; participants.value = []; status.value = 'idle'; revision.value++; },
+    async updateListeningState(enabled) {
+      listening.value = enabled; microphoneEnabled.value = enabled && microphoneIntent.value;
+      local.isMicrophoneEnabled = microphoneEnabled.value; revision.value++;
+    },
+    async enableAudioPlayback() {},
     setMicrophoneInputGain() {}, setMicrophoneProcessing() {}, setRemoteAudioSubscribed() {},
-    async sendEntranceSound() {}, async toggleMedia() {}, cancelPendingScreenShareSelection() {}
+    async sendEntranceSound() {}, async toggleMedia(source) {
+      if (source !== Track.Source.Microphone || status.value !== 'connected') return;
+      microphoneIntent.value = !microphoneEnabled.value;
+      if (microphoneIntent.value) listening.value = true;
+      microphoneEnabled.value = listening.value && microphoneIntent.value;
+      local.isMicrophoneEnabled = microphoneEnabled.value; revision.value++;
+    },
+    async setScreenShareQuality(value) { currentScreenShareQuality.value = value; return true; },
+    async setScreenShareAudioEnabled() { return false; }, async changeScreenShareSource() { return false; },
+    async requestRemoteControl() {}, sendRemoteControlInput() {}, async exitRemoteControl() {},
+    async revokeRemoteControl() {}, async retryRemoteControlCleanup() {}, async allowRemoteControl() {},
+    async rejectRemoteControl() {}, async cancelPendingRemoteControl() {}, cancelPendingScreenShareSelection() {}
   };
 }` });
   });

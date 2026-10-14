@@ -33,7 +33,7 @@ interface NativeMicrophoneOptions {
   createLocalTrack?: (track: MediaStreamTrack, context: AudioContext) => LocalAudioTrack;
 }
 
-/** 将单声道 WASAPI PCM 接入当前房间的麦克风音轨，持有页面侧音频资源。 */
+/** 将单声道 WASAPI PCM 接为麦克风音轨，持有页面侧资源；是否发布由调用方决定。 */
 export class NativeMicrophoneAudioSession {
   track?: LocalAudioTrack;
 

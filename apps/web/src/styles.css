@@ -133,7 +133,6 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .window-actions button { -webkit-app-region: no-drag; padding: 0; border: 0; background: transparent; cursor: pointer; }
 .window-actions button:hover { background: var(--panel-raised); }
 .window-actions button:last-child:hover { background: #c42b1c; color: white; }
-.active-share-quality { max-width: 100px; min-height: 32px; padding: 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-soft); color: var(--text); font: inherit; font-size: 12px; }
 
 .window-actions span:last-child:hover {
   background: #c42b1c;
@@ -1027,8 +1026,10 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   flex-shrink: 0;
   display: grid;
   grid-template-rows: 1fr;
-  animation: callbar-reveal-in 180ms ease-out;
 }
+
+/* 只在加入时临时添加，页面恢复显示不会重播入场动画。 */
+.callbar-enter-active { animation: callbar-reveal-in 180ms ease-out; }
 
 /* 动画改变实际占用高度，聊天输入框随布局移动；不裁切上方的音量弹层。 */
 .callbar-content { min-height: 0; }
@@ -1080,67 +1081,6 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 
 .call-state strong { color: var(--good); font-size: 13px; }
 .call-state small { margin-top: 2px; color: var(--muted); font-size: 12px; }
-
-.call-audio-control {
-  position: relative;
-  height: 36px;
-  display: flex;
-  gap: 8px;
-  flex: 0 0 auto;
-}
-
-.audio-control-popover {
-  position: absolute;
-  z-index: 8;
-  right: 0;
-  bottom: calc(100% + 8px);
-  width: 250px;
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel-raised);
-  box-shadow: 0 12px 28px #0009;
-  color: var(--muted);
-  font-size: 12px;
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(4px);
-  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms;
-  pointer-events: none;
-}
-
-.audio-control-popover::after {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  left: 0;
-  height: 9px;
-  content: "";
-}
-.call-audio-control:hover .audio-control-popover,
-.call-audio-control:focus-within .audio-control-popover {
-  opacity: 1;
-  visibility: visible;
-  transform: translateY(0);
-  pointer-events: auto;
-}
-
-.audio-control-popover header,
-.audio-range > span {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.audio-control-popover header { color: var(--text); }
-.audio-range { display: grid; gap: 6px; }
-.audio-range b { color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
-.audio-range input { width: 100%; margin: 0; accent-color: var(--accent); }
-.audio-control-popover small { color: var(--subtle); line-height: 1.45; }
-.audio-settings-link { min-height: 30px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-soft); color: var(--text); cursor: pointer; }
 
 .members-panel {
   grid-column: 3;

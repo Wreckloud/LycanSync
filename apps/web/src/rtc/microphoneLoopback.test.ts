@@ -63,4 +63,21 @@ describe('MicrophoneLoopback', () => {
     await expect(loopback.start(track as unknown as MediaStreamTrack, 1, 64000, true)).rejects.toThrow('麦克风音轨已停止');
     expect(createContext).not.toHaveBeenCalled();
   });
+
+  it('returns the same stop confirmation and reports output cleanup failure', async () => {
+    const { track, context } = createFakes();
+    let resume!: () => void;
+    context.resume.mockImplementation(() => new Promise<void>((resolve) => { resume = resolve; }));
+    context.close.mockRejectedValue(new Error('output close failed'));
+    const onError = vi.fn();
+    const loopback = new MicrophoneLoopback({ createContext: () => context as unknown as AudioContext, onError });
+    const starting = loopback.start(track as unknown as MediaStreamTrack, 1, 64000, true);
+    const stopping = loopback.stop();
+    expect(loopback.stop()).toBe(stopping);
+    await expect(stopping).rejects.toThrow('output close failed');
+    resume();
+    await expect(starting).rejects.toMatchObject({ name: 'AbortError' });
+    expect(onError).toHaveBeenCalledOnce();
+    expect(track.stop).not.toHaveBeenCalled();
+  });
 });

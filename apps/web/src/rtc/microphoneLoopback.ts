@@ -5,7 +5,7 @@ interface MicrophoneLoopbackOptions {
   createContext?: () => AudioContext;
 }
 
-/** Locally encode and decode the published microphone without another capture or RTC room. */
+/** 对处理后的麦克风音轨进行本机 Opus 编解码回放，不拥有原始采集。 */
 export class MicrophoneLoopback {
   private readonly controller = new AbortController();
   private sourceTrack?: MediaStreamTrack;
@@ -19,6 +19,7 @@ export class MicrophoneLoopback {
   private playbackElement?: HTMLAudioElement;
   private playbackReady?: Promise<void>;
   private stopped = false;
+  private stopPromise?: Promise<void>;
   private readonly sourceEnded = () => this.stop();
 
   constructor(private readonly options: MicrophoneLoopbackOptions = {}) {}
@@ -97,6 +98,9 @@ export class MicrophoneLoopback {
       await transceiver.sender.setParameters(parameters);
       this.assertRunning();
     } catch (error) {
+      if (!(error instanceof Error && error.name === 'AbortError')) {
+        this.options.onError?.(error instanceof Error ? error : new Error('麦克风试听播放失败。'));
+      }
       this.stop();
       throw error;
     } finally {
@@ -109,7 +113,7 @@ export class MicrophoneLoopback {
   }
 
   stop() {
-    if (this.stopped) return;
+    if (this.stopPromise) return this.stopPromise;
     this.stopped = true;
     this.controller.abort();
     this.sourceTrack?.removeEventListener('ended', this.sourceEnded);
@@ -125,10 +129,10 @@ export class MicrophoneLoopback {
     this.receiver?.close();
     this.clonedTrack?.stop();
     this.receivedTrack?.stop();
-    if (this.context && this.context.state !== 'closed') {
-      void this.context.close().catch((error: Error) => this.options.onError?.(error));
-    }
+    this.stopPromise = this.context && this.context.state !== 'closed' ? this.context.close() : Promise.resolve();
+    void this.stopPromise.catch((error: Error) => this.options.onError?.(error));
     this.options.onStopped?.();
+    return this.stopPromise;
   }
 
   private assertRunning() {

@@ -5,7 +5,9 @@ import { ArrowLeft } from '@lucide/vue';
 import type { AuthUser, ProfileUpdate } from '../auth/authApi';
 import type { useAudioPreferences } from '../rtc/useAudioPreferences';
 import type { useRtcRoom } from '../rtc/useRtcRoom';
+import type { useMicrophoneTest } from '../rtc/useMicrophoneTest';
 import IconButton from './IconButton.vue';
+import PersonalStatusCard from './PersonalStatusCard.vue';
 import AboutSettings from './settings/AboutSettings.vue';
 import AccountSettings from './settings/AccountSettings.vue';
 import MemberAccessSettings from './settings/MemberAccessSettings.vue';
@@ -15,15 +17,17 @@ import ClientSettings from './settings/ClientSettings.vue';
 import ProfileSettings from './settings/ProfileSettings.vue';
 import SoundSettings from './settings/SoundSettings.vue';
 import { SETTINGS_SECTIONS, settingsSectionTitle, type SettingsSectionId } from '../settings/settingsSections';
-import type { UserActivity } from '../presence/presenceApi';
+import type { UserActivity, UserPresenceStatus } from '../presence/presenceApi';
 
 const props = defineProps<{
   section: SettingsSectionId;
   user: AuthUser;
+  presenceStatus: UserPresenceStatus;
+  presenceLabel: string;
   desktop: boolean;
   preferences: ReturnType<typeof useAudioPreferences>;
   rtc: UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>;
-  connected: boolean;
+  microphoneTest: UnwrapNestedRefs<ReturnType<typeof useMicrophoneTest>>;
   inputLevelPercent: number;
   activity: UserActivity | null;
   showActivity: boolean;
@@ -47,7 +51,7 @@ watch(activeSection, async () => {
 });
 
 onMounted(() => heading.value?.focus());
-onScopeDispose(() => props.rtc.stopMicrophoneLoopback());
+onScopeDispose(() => { void props.microphoneTest.stop(); });
 
 async function selectSection(section: SettingsSectionId) {
   if (section === 'members' && !props.user.administrator) return;
@@ -87,13 +91,10 @@ async function leaveSettings(logout: boolean) {
         :class="{ 'is-selected': activeSection === item.id }" :aria-current="activeSection === item.id ? 'page' : undefined"
         :disabled="leaving" @click="selectSection(item.id)">{{ item.title }}</button>
       <div class="settings-sidebar-spacer" />
-      <div class="settings-call-status" role="status">
-        <strong>{{ rtc.room ? '通话中' : '未加入语音' }}</strong>
-        <span>{{ rtc.room ? (rtc.room.localParticipant.isMicrophoneEnabled ? '麦克风已开启' : '麦克风已关闭') : '媒体状态保持不变' }}</span>
-      </div>
-      <footer class="personal-card settings-footer">
+      <PersonalStatusCard class="settings-footer" aria-label="个人状态与返回应用"
+        :user="user" :status="presenceStatus" :status-label="presenceLabel">
         <IconButton label="返回应用" :disabled="leaving" @click="closeSettings"><ArrowLeft :size="19" /></IconButton>
-      </footer>
+      </PersonalStatusCard>
     </nav>
     <section class="settings-main">
       <header class="settings-header">
@@ -110,7 +111,7 @@ async function leaveSettings(logout: boolean) {
           <AccountSettings :active="activeSection === 'account'" :leaving="leaving" @logout="requestLogout" />
         </div>
         <AudioSettings v-show="activeSection === 'audio'" :active="activeSection === 'audio'"
-          :desktop="desktop" :preferences="preferences" :rtc="rtc" :connected="connected"
+          :desktop="desktop" :preferences="preferences" :rtc="rtc" :microphone-test="microphoneTest"
           :input-level-percent="inputLevelPercent" />
         <SoundSettings v-show="activeSection === 'sound'" :user-id="user.id" :active="activeSection === 'sound'" />
         <ClientSettings v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'"
@@ -148,10 +149,7 @@ async function leaveSettings(logout: boolean) {
 .settings-sidebar > button:hover { background: var(--panel-soft); color: var(--text); }
 .settings-sidebar > button.is-selected { background: var(--panel-raised); color: var(--text); }
 .settings-footer { position: sticky; bottom: 0; flex-shrink: 0; margin: 0 -14px; background: #0d1116; }
-.settings-footer > .icon-button { grid-column: 3; }
 .settings-sidebar-spacer { flex: 1; min-height: 32px; }
-.settings-call-status { display: grid; flex-shrink: 0; gap: 6px; padding: 16px 12px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 12px; }
-.settings-call-status strong { color: var(--text); font-size: 13px; font-weight: 500; }
 .settings-main { grid-area: main; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
 .settings-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 64px; padding: 12px 24px; border-bottom: 1px solid var(--border-soft); }
 .settings-header-content { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; max-width: 820px; margin-inline: auto; }

@@ -29,6 +29,18 @@ export function shouldDefaultShareAudio(mode: NativeScreenAudioMode): boolean {
   return mode === 'process';
 }
 
+export function readScreenShareAudioPreference(mode: NativeScreenAudioMode): boolean {
+  if (mode === 'unavailable') return false;
+  const stored = localStorage.getItem(`lycansync.screen-share-audio.${mode}`);
+  return stored === 'true' || (stored !== 'false' && shouldDefaultShareAudio(mode));
+}
+
+export function saveScreenShareAudioPreference(mode: NativeScreenAudioMode, enabled: boolean) {
+  if (mode === 'unavailable') throw new Error('screenShareAudioUnavailable');
+  // 应用声音与全部系统声音分开记忆，换设备能力时不能扩大原先的共享范围。
+  localStorage.setItem(`lycansync.screen-share-audio.${mode}`, String(enabled));
+}
+
 export function canSelectNativeSource(audioCapabilityReady: boolean, audioCapabilityFailed = false): boolean {
   return audioCapabilityReady && !audioCapabilityFailed;
 }

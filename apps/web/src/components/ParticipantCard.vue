@@ -13,6 +13,7 @@ const props = withDefaults(defineProps<{
   revision: number;
   isLocal: boolean;
   isListening: boolean | null;
+  localMicrophoneEnabled?: boolean;
   avatar?: string;
   variant?: 'card' | 'viewer' | 'thumbnail';
   selected?: boolean;
@@ -71,13 +72,15 @@ const heldRemoteInputs = new RemoteInputPresses();
 const media = computed(() => {
   void props.revision;
   const publication = props.participant.getTrackPublication(Track.Source.ScreenShare);
+  const microphone = props.isLocal ? props.localMicrophoneEnabled === true
+    : props.isListening !== false && props.participant.isMicrophoneEnabled;
   return {
     publication,
     track: publication?.track,
     muted: publication?.isMuted,
     sharing: props.participant.isScreenShareEnabled,
-    speaking: props.participant.isSpeaking,
-    microphone: props.participant.isMicrophoneEnabled,
+    speaking: microphone && props.participant.isSpeaking,
+    microphone,
     name: props.participant.name || props.participant.identity,
   };
 });

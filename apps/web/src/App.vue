@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, reactive, ref, watch } from 'vue';
 import { AudioLines, ChevronDown, ChevronLeft, ChevronRight, Copy, CornerUpLeft, Gamepad2, Headphones,
-  LogOut, MicOff, Minus, MonitorUp, MonitorX, Plus, RadioTower,
-  Settings, Square, UserRound, Volume2, VolumeX, X } from '@lucide/vue';
+  LogOut, Minus, Plus, RadioTower,
+  Settings, Square, Volume2, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
 import ParticipantCard from './components/ParticipantCard.vue';
-import VoiceLevelMic from './components/VoiceLevelMic.vue';
+import CallControls from './components/CallControls.vue';
+import PersonalStatusCard from './components/PersonalStatusCard.vue';
 import RemoteAudio from './components/RemoteAudio.vue';
 import IconButton from './components/IconButton.vue';
 import SettingsView from './components/SettingsView.vue';
@@ -16,14 +17,15 @@ import ScreenSharePicker from './components/ScreenSharePicker.vue';
 import { createGroup, findGroup, findGroupPresences, findGroups, nextPresenceWaitRequest, waitForGroupPresenceChanges,
   type GroupDetail, type GroupMember, type GroupPresence, type GroupPresenceChangeCursor, type GroupSummary } from './group/groupApi';
 import { useRtcRoom } from './rtc/useRtcRoom';
-import { SCREEN_SHARE_QUALITIES, readScreenShareQuality, saveScreenShareQuality, type ScreenShareQualityId } from './rtc/screenShareQuality';
-import { canSelectNativeSource, shouldDefaultShareAudio,
+import { useMicrophoneTest } from './rtc/useMicrophoneTest';
+import { readScreenShareQuality, saveScreenShareQuality, type ScreenShareQualityId } from './rtc/screenShareQuality';
+import { canSelectNativeSource, readScreenShareAudioPreference, saveScreenShareAudioPreference,
   resolveNativeScreenAudioCapability, shouldShareAudioInNativeSelection,
   type NativeScreenAudioMode } from './rtc/nativeScreenAudioMode';
 import { createNativeVideoSourceSelection } from './components/nativeVideoSourceSelection';
 import { useRoomSummary } from './rtc/useRoomSummary';
 import { requestRoomOccupancies } from './rtc/roomSummaryApi';
-import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP } from './rtc/audioPreferences';
+import { AUDIO_VOLUME_MAX } from './rtc/audioPreferences';
 import { useAudioPreferences, type AudioVolumeChange } from './rtc/useAudioPreferences';
 import { entranceSoundToFile, loadEntranceSound } from './rtc/entranceSound';
 import { useCallSounds } from './rtc/useCallSounds';
@@ -199,7 +201,8 @@ function selectCaptureSource(sourceId: string | null) {
   const request = captureRequest.value;
   if (!request) return;
   if (sourceId !== null
-      && (nativeSourceError.value || !canSelectNativeSource(captureAudioCapabilityReady.value, captureAudioCapabilityFailed.value))) return;
+      && (!sourceId || nativeSourceError.value
+        || !canSelectNativeSource(captureAudioCapabilityReady.value, captureAudioCapabilityFailed.value))) return;
   if (sourceId !== null && !request.sources.some((source) => source.id === sourceId)) return;
   if (sourceId) {
     lastCaptureSourceType = captureSourceType.value;
@@ -222,15 +225,24 @@ function selectCaptureSource(sourceId: string | null) {
   captureAudioCapabilityFailed.value = false;
   // 取消及清理不依赖偏好存储；写入失败也必须结束本次选择等待。
   chooser?.finish(selection);
-  if (selection) saveCapturePreferences(captureQuality.value, lastCaptureSourceType);
+  if (selection) {
+    saveCapturePreferences(captureQuality.value, lastCaptureSourceType);
+    if (captureAudioMode.value !== 'unavailable') {
+      try { saveScreenShareAudioPreference(captureAudioMode.value, selection.shareAudio); }
+      catch { viewerNotice.value = '已确认本次共享选择，但无法保存本机音频偏好。'; }
+    }
+  }
 }
 function saveCapturePreferences(quality: ScreenShareQualityId, sourceType?: 'window' | 'screen') {
   try {
     saveScreenShareQuality(quality);
     if (sourceType) localStorage.setItem('lycansync.capture-source-type', sourceType);
   } catch {
-    viewerNotice.value = '本次共享设置已生效，但无法保存到本机。';
+    viewerNotice.value = '无法保存本机共享偏好，下次启动可能恢复原设置。';
   }
+}
+function updateCaptureShareAudio(enabled: boolean) {
+  captureShareAudio.value = enabled;
 }
 function requestNativeScreenSource(
   capabilities: Promise<Record<string, { available: boolean; reason: string }>>,
@@ -255,7 +267,11 @@ function requestNativeScreenSource(
   void resolveNativeScreenAudioCapability(capabilities).then((state) => {
     if (generation !== nativeSourceChooserGeneration || nativeSourceChooser !== chooser) return;
     captureAudioMode.value = state.mode;
-    captureShareAudio.value = shouldDefaultShareAudio(captureAudioMode.value);
+    try { captureShareAudio.value = readScreenShareAudioPreference(captureAudioMode.value); }
+    catch {
+      captureShareAudio.value = captureAudioMode.value === 'process';
+      captureSourceNotice.value = '无法读取本机音频偏好，已使用默认设置。';
+    }
     captureAudioCapabilityFailed.value = state.failed;
     captureAudioCapabilityReady.value = true;
   });
@@ -267,21 +283,25 @@ watch(captureSourceType, () => {
   if (!captureSources.value.some((source) => source.id === selectedCaptureSourceId.value)) selectedCaptureSourceId.value = '';
   void nextTick().then(refreshVisibleSourceThumbnails);
 });
-async function changeActiveScreenShareQuality(event: Event) {
-  const select = event.target as HTMLSelectElement;
-  const quality = select.value as ScreenShareQualityId;
-  const applied = await rtc.setScreenShareQuality(quality);
+async function changeScreenShareQuality(quality: ScreenShareQualityId) {
+  const applied = localParticipant.value?.isScreenShareEnabled ? await rtc.setScreenShareQuality(quality) : true;
   if (applied) {
     captureQuality.value = quality;
     saveCapturePreferences(quality);
   }
-  select.value = rtc.currentScreenShareQuality;
+}
+async function changeScreenShareAudio(enabled: boolean) {
+  const mode = rtc.currentScreenShareAudioMode;
+  if (!await rtc.setScreenShareAudioEnabled(enabled)) return;
+  try { saveScreenShareAudioPreference(mode, enabled); }
+  catch { viewerNotice.value = '本次音频设置已生效，但无法保存到本机。'; }
 }
 const rtc = reactive(useRtcRoom({
   screenShareQuality: captureQuality.value,
   inputGain: inputGain.value,
   processing: audioProcessing,
   events: {
+    beforeMicrophoneChange: (): Promise<void> => microphoneTest.stop(),
     participantJoined: callSounds.participantJoined,
     participantLeft: callSounds.participantLeft,
     participantEntrancePending: callSounds.participantEntrancePending,
@@ -293,7 +313,18 @@ const rtc = reactive(useRtcRoom({
     selectNativeScreenSource: requestNativeScreenSource,
   },
 }));
-watch(outputVolume, (volume) => rtc.setMicrophoneLoopbackVolume(volume));
+const microphoneTest = reactive(useMicrophoneTest({
+  preferences: audioPreferences,
+  desktop,
+  canStart: () => rtc.status !== 'joining' && rtc.status !== 'reconnecting'
+    && !rtc.busySources.includes(Track.Source.Microphone),
+  publishedTrack: () => {
+    void rtc.revision;
+    if (rtc.status !== 'connected' || !rtc.microphoneEnabled) return undefined;
+    const publication = rtc.room?.localParticipant.getTrackPublication(Track.Source.Microphone);
+    return publication && !publication.isMuted ? publication.track?.mediaStreamTrack : undefined;
+  },
+}));
 
 // 预先恢复被静音成员的订阅策略；之后只有跨越 0% 时才更新网络订阅。
 audioPreferences.mutedParticipantIdentities()
@@ -301,8 +332,11 @@ audioPreferences.mutedParticipantIdentities()
 const removeCloseListener = desktop?.onClose(async () => {
   selectCaptureSource(null);
   await reportOfflineBeforeClose();
-  try { await rtc.leave(); }
-  finally { desktop.finishClose(); }
+  try { await microphoneTest.stop(); }
+  finally {
+    try { await rtc.leave(); }
+    finally { desktop.finishClose(); }
+  }
 });
 onScopeDispose(() => {
   joinAttempt++;
@@ -619,7 +653,7 @@ async function createGroupFromDialog(name: string, description: string, avatar: 
 const joinedGroupId = ref<string | null>(null);
 const joiningGroupId = ref<string | null>(null);
 const pendingSwitchGroupId = ref<string | null>(null);
-const listening = ref(true);
+const listening = computed(() => rtc.listening);
 const settingsOpen = ref(false);
 const settingsSection = ref<SettingsSectionId>('audio');
 const settingsReturnFocus = ref<HTMLElement | null>(null);
@@ -635,7 +669,6 @@ const lockedViewerHeight = ref<number | null>(null);
 const viewerNotice = ref('');
 const departingGroupId = ref<string | null>(null);
 const callbarLeaving = ref(false);
-let listeningSync: Promise<void> | null = null;
 function releaseViewerLock() {
   lockedViewerHeight.value = null;
 }
@@ -643,8 +676,9 @@ onScopeDispose(() => {
   releaseViewerLock();
 });
 
-async function openSettings(section: SettingsSectionId, event: Event) {
-  settingsReturnFocus.value = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+async function openSettings(section: SettingsSectionId, event: Event | HTMLElement) {
+  settingsReturnFocus.value = event instanceof HTMLElement ? event
+    : event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
   settingsSection.value = section;
   settingsOpen.value = true;
   await nextTick();
@@ -652,8 +686,9 @@ async function openSettings(section: SettingsSectionId, event: Event) {
 }
 
 async function closeSettings() {
+  try { await microphoneTest.stop(); }
+  catch { viewerNotice.value = '麦克风试听停止未确认，请重启客户端后再试。'; }
   settingsOpen.value = false;
-  rtc.stopMicrophoneLoopback();
   await nextTick();
   settingsReturnFocus.value?.focus();
   settingsReturnFocus.value = null;
@@ -667,15 +702,19 @@ const callbarGroup = computed(() => joinedGroup.value
   ?? null);
 const pendingSwitchGroup = computed(() => groups.value.find((group) => group.id === pendingSwitchGroupId.value) ?? null);
 const localParticipant = computed(() => rtc.room?.localParticipant);
+const sharingAudio = computed(() => {
+  void rtc.revision;
+  return Boolean(localParticipant.value?.getTrackPublication(Track.Source.ScreenShareAudio)?.track);
+});
 const localMicrophoneLevel = computed(() => {
   void rtc.revision;
   const participant = localParticipant.value;
-  return participant?.isMicrophoneEnabled && participant.isSpeaking ? participant.audioLevel : 0;
+  return rtc.microphoneEnabled && participant?.isSpeaking ? participant.audioLevel : 0;
 });
 const localInputLevel = computed(() => {
   void rtc.revision;
   const participant = localParticipant.value;
-  return participant?.isMicrophoneEnabled ? normalizeVoiceLevel(participant.audioLevel) : 0;
+  return rtc.microphoneEnabled && participant ? normalizeVoiceLevel(participant.audioLevel) : 0;
 });
 const localInputLevelPercent = computed(() => Math.round(localInputLevel.value * 100));
 const connected = computed(() => rtc.status === 'connected');
@@ -798,6 +837,10 @@ const remoteAudioTracks = computed(() => rtc.participants
   ]))
   .filter((item): item is { participantIdentity: string; source: Track.Source; track: RemoteAudioTrack } =>
     item.track instanceof RemoteAudioTrack));
+// 先直接静音现有播放轨道，不能等 Vue 更新音频组件后才停止本机收听。
+watch([listening, remoteAudioTracks], ([enabled, tracks]) => {
+  if (!enabled) tracks.forEach((item) => item.track.setVolume(0));
+}, { flush: 'sync' });
 async function joinGroup(groupId: string) {
   selectCaptureSource(null);
   releaseViewerLock();
@@ -837,7 +880,6 @@ async function joinGroup(groupId: string) {
   if (attempt !== joinAttempt) return;
   if (joined) {
     joinedGroupId.value = groupId;
-    listening.value = true;
     void callSounds.joined();
     const entranceSound = loadEntranceSound(props.user.id);
     if (entranceSound) {
@@ -893,40 +935,17 @@ function leaveVoice() {
 
 async function toggleMicrophone() {
   if (!connected.value || !localParticipant.value) return;
-  const shouldEnableMicrophone = !localParticipant.value.isMicrophoneEnabled;
-  if (shouldEnableMicrophone && !listening.value) {
-    listening.value = true;
-    await synchronizeListeningState();
-    return;
-  }
-  await rtc.setMediaEnabled(Track.Source.Microphone, shouldEnableMicrophone);
-}
-
-function synchronizeListeningState() {
-  if (!connected.value) return Promise.resolve();
-  if (listeningSync) return listeningSync;
-  // 连续点击可能让异步开关交错；串行追赶最后状态，避免旧请求覆盖新状态。
-  listeningSync = (async () => {
-    let applied: boolean;
-    do {
-      applied = listening.value;
-      await Promise.all([
-        rtc.updateListeningState(applied),
-        rtc.setMediaEnabled(Track.Source.Microphone, applied),
-      ]);
-    } while (connected.value && applied !== listening.value);
-  })().finally(() => { listeningSync = null; });
-  return listeningSync;
+  await rtc.toggleMedia(Track.Source.Microphone);
 }
 
 async function toggleListening() {
   if (!connected.value) return;
-  if (rtc.needsAudioPlayback) {
+  const enabled = !listening.value;
+  const changing = rtc.updateListeningState(enabled);
+  if (rtc.needsAudioPlayback && enabled) {
     await rtc.enableAudioPlayback();
-    return;
   }
-  listening.value = !listening.value;
-  await synchronizeListeningState();
+  await changing;
 }
 
 function participantVolume(identity: string) {
@@ -1147,7 +1166,7 @@ function participantListening(participant: Participant) {
               @dragover="dragOverStage(index, $event)" @dragleave="stageDropSlot === index && (stageDropSlot = null)"
               @drop="dropOnStage(index, $event)">
             <ParticipantCard v-if="participant" :key="participant.identity" :participant="participant"
-              :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)"
+              :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"
               :playback-volume="participantVolume(participant.identity)" :input-gain="inputGain" :output-volume="outputVolume"
               variant="viewer"
               :focused="focusedOnSelectedGroup" :stage-draggable="!focusedOnSelectedGroup && !remoteControlIsActive(participant.identity)"
@@ -1170,7 +1189,7 @@ function participantListening(participant: Participant) {
           </div>
           <div v-else class="participant-grid">
             <ParticipantCard v-for="participant in groupParticipants" :key="participant.identity" :participant="participant"
-              :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)"
+              :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"
               :remote-control-available="remoteControlCanRequest(participant.identity)"
               :remote-control-unavailable="remoteControlShare(participant.identity)?.kind === 'window'"
               :remote-control-pending="remoteControlIsPending(participant.identity)"
@@ -1195,7 +1214,7 @@ function participantListening(participant: Participant) {
               :disabled="filmstripPage === 0" @click="filmstripPage--"><ChevronLeft :size="17" /></button>
             <div class="member-filmstrip" data-testid="member-filmstrip">
               <ParticipantCard v-for="participant in filmstripParticipants" :key="participant.identity" :participant="participant"
-                :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)"
+                :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"
                 :playback-volume="participantVolume(participant.identity)" :input-gain="inputGain" :output-volume="outputVolume"
                 variant="thumbnail" :selected="enlargedIdentities.includes(participant.identity)"
                 @select="toggleEnlargedParticipant(participant.identity)" @toggle-audio="toggleParticipantAudio(participant.identity)"
@@ -1208,50 +1227,35 @@ function participantListening(participant: Participant) {
         </section>
         <GroupChat v-if="!focusedOnSelectedGroup" :key="selectedGroup.id" :group="selectedGroup"
           :members="selectedGroupDetail?.members ?? []" :user="user" />
-        <div v-if="callbarGroup || joiningGroupId" class="callbar-reveal" :class="{ 'is-leaving': callbarLeaving }" data-testid="callbar">
-          <div class="callbar-content">
-            <footer class="callbar">
-              <div class="call-state" role="status">
-                <RadioTower v-if="connected || rtc.status === 'reconnecting'" :size="17" /><Headphones v-else :size="17" />
-                <span><strong>{{ callbarLeaving ? '正在退出' : STATUS_LABELS[rtc.status] }}</strong>
-                  <small>{{ callbarGroup?.name }}{{ joinedGroup && selectedGroupId !== joinedGroup.id && selectedGroup ? ' · 正在浏览 ' + selectedGroup.name : joiningGroupId ? ' · 加入中' : '' }}</small>
-                </span>
-              </div>
-              <IconButton v-if="joinedGroup && selectedGroupId !== joinedGroup.id" label="返回当前通话群组" @click="previewGroup(joinedGroup.id)"><CornerUpLeft :size="17" /></IconButton>
-              <span class="call-audio-control">
-                <IconButton :label="localParticipant?.isMicrophoneEnabled ? '关闭麦克风' : '开启麦克风'"
-                  :class="{ 'is-off': !localParticipant?.isMicrophoneEnabled }"
-                  :disabled="!connected || rtc.busySources.includes(Track.Source.Microphone)" @click="toggleMicrophone">
-                  <VoiceLevelMic v-if="localParticipant?.isMicrophoneEnabled" :size="17" :level="localMicrophoneLevel" /><MicOff v-else :size="17" />
-                </IconButton>
-                <section class="audio-control-popover" aria-label="音量快捷设置">
-                  <header><strong>音量快捷设置</strong></header>
-                  <label class="audio-range"><span>麦克风输入 <b>{{ Math.round(inputGain * 100) }}%</b></span><input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="inputGain"
-                    aria-label="麦克风输入音量" @input="updateInputGain(Number(($event.target as HTMLInputElement).value))" /></label>
-                  <label class="audio-range"><span>LycanSync 输出 <b>{{ Math.round(outputVolume * 100) }}%</b></span><input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="outputVolume"
-                    aria-label="LycanSync 总输出音量" @input="updateOutputVolume(Number(($event.target as HTMLInputElement).value))" /></label>
-                  <button type="button" class="audio-settings-link" @click="openSettings('audio', $event)">打开语音与音频设置</button>
-                </section>
-              </span>
-              <IconButton :label="listening ? '停止接收声音' : '开始接收声音'" :class="{ 'is-off': !listening }"
-                :disabled="!connected" @click="toggleListening">
-                <Volume2 v-if="listening" :size="17" /><VolumeX v-else :size="17" />
-              </IconButton>
-              <IconButton :label="captureRequest ? '取消共享选择' : localParticipant?.isScreenShareEnabled ? '停止屏幕共享' : screenShareLimitReached ? '屏幕共享已达到 8 路上限' : '开始屏幕共享'"
-                :class="{ 'is-active': localParticipant?.isScreenShareEnabled }"
-                :disabled="!connected || screenShareLimitReached || (!captureRequest && rtc.busySources.includes(Track.Source.ScreenShare))"
-                @click="captureRequest ? selectCaptureSource(null) : rtc.toggleMedia(Track.Source.ScreenShare)"><MonitorX v-if="localParticipant?.isScreenShareEnabled || captureRequest" :size="17" /><MonitorUp v-else :size="17" /></IconButton>
-              <select v-if="desktop && localParticipant?.isScreenShareEnabled" class="active-share-quality"
-                aria-label="当前共享画质" :value="rtc.currentScreenShareQuality"
-                :disabled="rtc.screenShareQualityBusy || rtc.busySources.includes(Track.Source.ScreenShare)"
-                @change="changeActiveScreenShareQuality">
-                <option v-for="quality in SCREEN_SHARE_QUALITIES" :key="quality.id" :value="quality.id">{{ quality.label }}</option>
-              </select>
-              <IconButton :label="joiningGroupId ? '取消连接' : '离开语音'" class="is-danger"
-                :disabled="callbarLeaving || (!joinedGroup && joiningGroupId === null)" @click="leaveVoice"><LogOut :size="17" /></IconButton>
-            </footer>
+        <Transition enter-active-class="callbar-enter-active">
+          <div v-if="callbarGroup || joiningGroupId" class="callbar-reveal" :class="{ 'is-leaving': callbarLeaving }" data-testid="callbar">
+            <div class="callbar-content">
+              <footer class="callbar">
+                <div class="call-state" role="status">
+                  <RadioTower v-if="connected || rtc.status === 'reconnecting'" :size="17" /><Headphones v-else :size="17" />
+                  <span><strong>{{ callbarLeaving ? '正在退出' : STATUS_LABELS[rtc.status] }}</strong>
+                    <small>{{ callbarGroup?.name }}{{ joinedGroup && selectedGroupId !== joinedGroup.id && selectedGroup ? ' · 正在浏览 ' + selectedGroup.name : joiningGroupId ? ' · 加入中' : '' }}</small>
+                  </span>
+                </div>
+                <IconButton v-if="joinedGroup && selectedGroupId !== joinedGroup.id" label="返回当前通话群组" @click="previewGroup(joinedGroup.id)"><CornerUpLeft :size="17" /></IconButton>
+                <CallControls :connected="connected" :desktop="Boolean(desktop)"
+                  :microphone-enabled="rtc.microphoneEnabled" :microphone-intent="rtc.microphoneIntent" :microphone-busy="rtc.busySources.includes(Track.Source.Microphone)"
+                  :microphone-level="localMicrophoneLevel" :input-level-percent="localInputLevelPercent"
+                  :listening="listening" :input-gain="inputGain" :output-volume="outputVolume"
+                  :sharing="Boolean(localParticipant?.isScreenShareEnabled)" :share-limit-reached="screenShareLimitReached" :choosing-source="Boolean(captureRequest)"
+                  :share-busy="rtc.busySources.includes(Track.Source.ScreenShare) || rtc.screenShareQualityBusy || rtc.screenShareSourceBusy"
+                  :quality="localParticipant?.isScreenShareEnabled ? rtc.currentScreenShareQuality : captureQuality"
+                  :share-audio="sharingAudio" :audio-mode="rtc.currentScreenShareAudioMode"
+                  @microphone="toggleMicrophone" @listening="toggleListening"
+                  @share="captureRequest ? selectCaptureSource(null) : rtc.toggleMedia(Track.Source.ScreenShare)"
+                  @change-source="rtc.changeScreenShareSource" @quality="changeScreenShareQuality" @share-audio="changeScreenShareAudio"
+                  @input-gain="updateInputGain" @output-volume="updateOutputVolume" @settings="openSettings('audio', $event)" />
+                <IconButton :label="joiningGroupId ? '取消连接' : '离开语音'" class="is-danger"
+                  :disabled="callbarLeaving || (!joinedGroup && joiningGroupId === null)" @click="leaveVoice"><LogOut :size="17" /></IconButton>
+              </footer>
+            </div>
           </div>
-        </div>
+        </Transition>
       </main>
       <main v-else class="group-main group-empty">
         <p v-if="groupError" role="alert">{{ groupError }}</p>
@@ -1277,28 +1281,24 @@ function participantListening(participant: Participant) {
             </span>
           </div>
         </div>
-        <footer class="personal-card" aria-label="个人状态与设置">
-          <span class="personal-avatar">
-            <img v-if="user.avatar" :src="user.avatar" class="profile-avatar" alt="" referrerpolicy="no-referrer" />
-            <span v-else class="profile-avatar-placeholder"><UserRound :size="18" /></span>
-            <span class="status-dot" :class="currentPresenceStatus" aria-hidden="true" />
-          </span>
-          <span class="personal-copy"><strong>{{ user.nickname }}</strong><small>{{ PRESENCE_STATUS_LABELS[currentPresenceStatus] }}</small></span>
+        <PersonalStatusCard :user="user" :status="currentPresenceStatus" :status-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]">
           <IconButton label="语音与音频设置" @click="openSettings(settingsSectionForEntry('gear'), $event)"><Settings :size="19" /></IconButton>
-        </footer>
+        </PersonalStatusCard>
       </aside>
     </div>
     <GroupEntryDialog v-if="editorOpen" :create-group="createGroupFromDialog" @close="editorOpen = false" />
     </div>
     <SettingsView v-if="settingsOpen" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
-      :preferences="audioPreferences" :rtc="rtc" :connected="connected" :input-level-percent="localInputLevelPercent"
+      :presence-status="currentPresenceStatus" :presence-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]"
+      :preferences="audioPreferences" :rtc="rtc" :microphone-test="microphoneTest" :input-level-percent="localInputLevelPercent"
       :activity="currentActivity" :show-activity="showActivity" :activity-error="activityVisibilityError"
       :stage-auto-fill="stagePreferences.autoFill.value" :stage-preference-error="stagePreferences.error.value"
       @stage-auto-fill="stagePreferences.setAutoFill"
       @activity-visibility="setShowActivity"
       :save-profile="saveProfile" @close="closeSettings" @logout="emit('logout')" />
     <ScreenSharePicker v-if="captureRequest" ref="capturePicker" :sources="captureRequest.sources"
-      v-model:source-type="captureSourceType" v-model:quality="captureQuality" v-model:share-audio="captureShareAudio"
+      v-model:source-type="captureSourceType" v-model:quality="captureQuality" :share-audio="captureShareAudio"
+      @update:share-audio="updateCaptureShareAudio"
       :selected-id="selectedCaptureSourceId" :audio-mode="captureAudioMode" :audio-ready="captureAudioCapabilityReady"
       :audio-failed="captureAudioCapabilityFailed" :loading="nativeSourceLoading" :error="nativeSourceError" :notice="captureSourceNotice"
       @choose="chooseCaptureSource" @refresh-thumbnails="refreshVisibleSourceThumbnails"

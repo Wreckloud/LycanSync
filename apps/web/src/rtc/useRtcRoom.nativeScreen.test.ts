@@ -119,22 +119,29 @@ vi.mock('./nativeScreenAudio', () => ({
 
 vi.mock('./nativeMicrophoneAudio', () => ({
   NativeMicrophoneAudioSession: class NativeMicrophoneAudioSession {
-    track = { stop: vi.fn() };
+    track = { stop: vi.fn(), mute: vi.fn(async () => {}), mediaStreamTrack: { enabled: true }, sender: { track: { enabled: true } } };
     private sessionId = '';
+    private starting?: Promise<unknown>;
+    private stopping?: Promise<void>;
     constructor(private readonly desktop: Window['lycanDesktop'], options: { onError?: (code: string) => void }) {
       rtcMocks.microphoneInstances.push(this);
       if (options.onError) rtcMocks.nativeMicrophoneError.mockImplementation(options.onError);
     }
     async start(sessionId: string, settings: unknown) {
       this.sessionId = sessionId;
-      await this.desktop!.startNativeMicrophone(sessionId, settings as never);
+      this.starting = this.desktop!.startNativeMicrophone(sessionId, settings as never);
+      await this.starting;
       return this.track as never;
     }
     configure(settings: unknown) {
       return this.desktop!.configureNativeMicrophone!(this.sessionId, settings as never);
     }
-    async stop() {
-      if (this.sessionId) await this.desktop!.stopNativeMicrophone(this.sessionId);
+    stop() {
+      this.stopping ??= (async () => {
+        try { await this.starting; } catch { return; }
+        if (this.sessionId) await this.desktop!.stopNativeMicrophone(this.sessionId);
+      })();
+      return this.stopping;
     }
   },
 }));
@@ -188,7 +195,9 @@ vi.mock('livekit-client', () => {
         rtcMocks.sentPackets.push({ payload, options });
         await rtcMocks.publishData(payload, options);
       },
-      unpublishTrack: async (track: { stop: ReturnType<typeof vi.fn> }, stopTrack: boolean) => {
+      unpublishTrack: async (track: { stop: () => void }, stopTrack: boolean) => {
+        if (stopTrack && [...this.publications.values()].some((publication) =>
+          publication.source === source.Microphone && publication.track === track)) track.stop();
         await rtcMocks.unpublishing(track, stopTrack);
         const entry = [...this.publications.entries()].find(([, publication]) => publication.track === track);
         if (entry) this.publications.delete(entry[0]);
@@ -222,7 +231,7 @@ vi.mock('livekit-client', () => {
   }
   return {
     ConnectionState: { Connected: 'connected', Reconnecting: 'reconnecting', SignalReconnecting: 'signalReconnecting' },
-    DisconnectReason: { DUPLICATE_IDENTITY: 'duplicateIdentity' },
+    DisconnectReason: { DUPLICATE_IDENTITY: 'duplicateIdentity', PARTICIPANT_REMOVED: 'participantRemoved' },
     LocalAudioTrack: class LocalAudioTrack {},
     Room: MockRoom,
     RoomEvent: events,
@@ -298,11 +307,13 @@ function browserMicrophoneTrack(
   settings: MediaTrackSettings = { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
   setProcessor: () => Promise<void> = async () => {},
 ) {
-  const mediaStreamTrack = { getSettings: () => settings };
+  const mediaStreamTrack = { getSettings: () => settings, enabled: true };
   return Object.assign(Object.create(LocalAudioTrack.prototype), {
     mediaStreamTrack,
+    getSourceTrackSettings: () => settings,
     applyConstraints,
     setProcessor: vi.fn(setProcessor),
+    mute: vi.fn(async () => {}),
     stop: vi.fn(),
   }) as LocalAudioTrack;
 }
@@ -343,6 +354,593 @@ function configureNativeScreenDesktop(options: {
 }
 
 describe('native screen share wiring', () => {
+  it('checks capture settings on the original browser microphone rather than processed output', async () => {
+    rtcMocks.token.mockResolvedValue({ serverUrl: 'wss://example.test', token: 'test-token' });
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: {} });
+    const track = browserMicrophoneTrack(async () => {});
+    Object.defineProperty(track, 'mediaStreamTrack', { configurable: true,
+      value: { getSettings: () => ({}) },
+    });
+    rtcMocks.browserTracks.push(track);
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      expect(await rtc.join('microphone-source-settings')).toBe(true);
+      await rtc.setMicrophoneProcessing({ echoCancellation: true, noiseSuppression: true,
+        autoGainControl: true, voiceEnhancement: true });
+      expect(rtc.notice.value).toBe('部分音频处理设置需要重新开麦后生效。');
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('waits for standalone microphone test cleanup before requesting a room token or capturing', async () => {
+    configureNativeMicrophoneDesktop();
+    const stopped = deferred<void>();
+    const beforeMicrophoneChange = vi.fn().mockReturnValueOnce(stopped.promise).mockResolvedValue(undefined);
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true },
+      events: { beforeMicrophoneChange },
+    }))!;
+    try {
+      const joining = rtc.join('test-microphone');
+      expect(rtc.status.value).toBe('joining');
+      expect(rtcMocks.token).not.toHaveBeenCalled();
+      expect(rtcMocks.microphoneStarted).not.toHaveBeenCalled();
+      stopped.resolve();
+      expect(await joining).toBe(true);
+      expect(rtcMocks.microphoneStarted).toHaveBeenCalledOnce();
+      expect(beforeMicrophoneChange).toHaveBeenCalledTimes(2);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('does not enter a room if the join was cancelled while waiting for test cleanup', async () => {
+    configureNativeMicrophoneDesktop();
+    const stopped = deferred<void>();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true },
+      events: { beforeMicrophoneChange: () => stopped.promise },
+    }))!;
+    const joining = rtc.join('test-microphone');
+    await rtc.leave();
+    stopped.resolve();
+    expect(await joining).toBe(false);
+    expect(rtcMocks.token).not.toHaveBeenCalled();
+    expect(rtc.status.value).toBe('idle');
+    scope.stop();
+  });
+
+  it('reports unconfirmed test cleanup and does not enter a room', async () => {
+    configureNativeMicrophoneDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true },
+      events: { beforeMicrophoneChange: async () => { throw new Error('test stop failed'); } },
+    }))!;
+    expect(await rtc.join('test-microphone')).toBe(false);
+    expect(rtcMocks.token).not.toHaveBeenCalled();
+    expect(rtc.status.value).toBe('idle');
+    expect(rtc.notice.value).toContain('试听停止未确认');
+    scope.stop();
+  });
+
+  it('disables sending before awaiting audition cleanup, then releases the published microphone', async () => {
+    configureNativeMicrophoneDesktop();
+    const beforeMicrophoneChange = vi.fn().mockResolvedValue(undefined);
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true },
+      events: { beforeMicrophoneChange },
+    }))!;
+    try {
+      expect(await rtc.join('test-microphone')).toBe(true);
+      const stopped = deferred<void>();
+      beforeMicrophoneChange.mockReturnValueOnce(stopped.promise);
+      const changing = rtc.setMediaEnabled(Track.Source.Microphone, false);
+      const track = rtc.room.value!.localParticipant.getTrackPublication(Track.Source.Microphone)!.track!;
+      expect(track.mediaStreamTrack.enabled).toBe(false);
+      expect(track.sender!.track!.enabled).toBe(false);
+      expect(track.mute).toHaveBeenCalled();
+      expect(rtc.microphoneEnabled.value).toBe(false);
+      expect(rtc.microphoneIntent.value).toBe(false);
+      expect(rtcMocks.unpublishing).not.toHaveBeenCalled();
+      expect(rtcMocks.microphoneStopped).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(rtcMocks.microphoneStopped).toHaveBeenCalledOnce());
+      expect(rtcMocks.unpublishing).not.toHaveBeenCalled();
+      stopped.resolve();
+      await changing;
+      expect(rtcMocks.unpublishing).toHaveBeenCalledOnce();
+      expect(rtcMocks.microphoneStopped).toHaveBeenCalledOnce();
+      beforeMicrophoneChange.mockRejectedValueOnce(new Error('test stop failed'));
+      await rtc.setMediaEnabled(Track.Source.Microphone, true);
+      expect(rtcMocks.microphoneStarted).toHaveBeenCalledOnce();
+      expect(rtc.notice.value).toContain('试听停止未确认');
+      expect(rtc.busySources.value).toEqual([]);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('still turns off the published microphone if optional audition cleanup fails', async () => {
+    configureNativeMicrophoneDesktop();
+    const beforeMicrophoneChange = vi.fn().mockResolvedValue(undefined);
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true },
+      events: { beforeMicrophoneChange },
+    }))!;
+    try {
+      expect(await rtc.join('test-microphone')).toBe(true);
+      beforeMicrophoneChange.mockRejectedValueOnce(new Error('test stop failed'));
+      await rtc.setMediaEnabled(Track.Source.Microphone, false);
+      expect(rtcMocks.unpublishing).toHaveBeenCalledOnce();
+      expect(rtcMocks.microphoneStopped).toHaveBeenCalledOnce();
+      expect(rtc.notice.value).toContain('试听停止未确认');
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+  it.each([true, false])('停止收听后恢复只沿用此前开麦意愿：%s', async (intent) => {
+    configureNativeMicrophoneDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      expect(await rtc.join('listening-intent')).toBe(true);
+      if (!intent) await rtc.setMediaEnabled(Track.Source.Microphone, false);
+      await rtc.updateListeningState(false);
+      expect(rtc.listening.value).toBe(false);
+      expect(rtc.microphoneEnabled.value).toBe(false);
+      expect(rtc.microphoneIntent.value).toBe(intent);
+      await rtc.updateListeningState(true);
+      expect(rtc.listening.value).toBe(true);
+      expect(rtc.microphoneEnabled.value).toBe(intent);
+      expect(rtcMocks.microphoneStarted).toHaveBeenCalledTimes(intent ? 2 : 1);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('停止及状态同步未完成时，实际 sender 和图标状态已关闭，原生采集不等待网络', async () => {
+    configureNativeMicrophoneDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('pending-stop');
+      const track = rtc.room.value!.localParticipant.getTrackPublication(Track.Source.Microphone)!.track!;
+      const stop = deferred<void>();
+      const unpublish = deferred<void>();
+      const attributes = deferred<void>();
+      rtcMocks.microphoneStopped.mockReturnValueOnce(stop.promise);
+      rtcMocks.unpublishing.mockReturnValueOnce(unpublish.promise);
+      rtcMocks.attributesSet.mockReturnValueOnce(attributes.promise);
+      const stopping = rtc.updateListeningState(false);
+      expect(rtc.listening.value).toBe(false);
+      expect(rtc.microphoneEnabled.value).toBe(false);
+      expect(rtc.microphoneIntent.value).toBe(true);
+      expect(track.mediaStreamTrack.enabled).toBe(false);
+      expect(track.sender!.track!.enabled).toBe(false);
+      await vi.waitFor(() => expect(rtcMocks.microphoneStopped).toHaveBeenCalledOnce());
+      expect(rtc.busySources.value).toContain(Track.Source.Microphone);
+      stop.resolve(); unpublish.resolve(); attributes.resolve();
+      await stopping;
+      expect(rtc.busySources.value).toEqual([]);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it.each(['unpublish', 'native', 'mute'] as const)('停止 %s 失败仍禁发，恢复不会另建采集', async (failure) => {
+    configureNativeMicrophoneDesktop();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('failed-stop');
+      const track = rtc.room.value!.localParticipant.getTrackPublication(Track.Source.Microphone)!.track!;
+      if (failure === 'mute') vi.mocked(track.mute).mockRejectedValueOnce(new Error('mute failed'));
+      else (failure === 'native' ? rtcMocks.microphoneStopped : rtcMocks.unpublishing)
+        .mockRejectedValueOnce(new Error('stop failed'));
+      await rtc.updateListeningState(false);
+      expect(rtc.notice.value).toContain('停止未确认');
+      expect(track.mediaStreamTrack.enabled).toBe(false);
+      expect(rtc.microphoneEnabled.value).toBe(false);
+      expect(rtcMocks.microphoneStopped).toHaveBeenCalledOnce();
+      await rtc.updateListeningState(true);
+      expect(rtcMocks.microphoneStarted).toHaveBeenCalledOnce();
+      expect(rtc.microphoneEnabled.value).toBe(false);
+      expect(rtc.notice.value).toContain('停止未确认');
+    } finally { await rtc.leave(); scope.stop(); log.mockRestore(); }
+  });
+
+  it('恢复启动失败保留意愿，但不能显示成功开麦；明确开麦可重试', async () => {
+    configureNativeMicrophoneDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('failed-restore');
+      await rtc.updateListeningState(false);
+      rtcMocks.microphoneStarted.mockRejectedValueOnce(new Error('audioDeviceUnavailable'));
+      await rtc.updateListeningState(true);
+      expect(rtc.microphoneIntent.value).toBe(true);
+      expect(rtc.microphoneEnabled.value).toBe(false);
+      expect(rtc.notice.value).toContain('麦克风不可用');
+      await rtc.toggleMedia(Track.Source.Microphone);
+      expect(rtc.microphoneEnabled.value).toBe(true);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('连续停止、恢复、停止收敛到最后意愿，旧停止不会触发开麦', async () => {
+    configureNativeMicrophoneDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('rapid-listening');
+      const delayed = deferred<void>();
+      rtcMocks.microphoneStopped.mockReturnValueOnce(delayed.promise);
+      const first = rtc.updateListeningState(false);
+      const second = rtc.updateListeningState(true);
+      const third = rtc.updateListeningState(false);
+      expect(rtc.microphoneEnabled.value).toBe(false);
+      delayed.resolve();
+      await Promise.all([first, second, third]);
+      expect(rtc.listening.value).toBe(false);
+      expect(rtc.microphoneEnabled.value).toBe(false);
+      expect(rtcMocks.microphoneStarted).toHaveBeenCalledOnce();
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it.each(['capture', 'publish'] as const)('启动 %s 中停止，迟到音轨始终禁发且被清理', async (stage) => {
+    configureNativeMicrophoneDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('cancel-start');
+      await rtc.setMediaEnabled(Track.Source.Microphone, false);
+      const delayed = deferred<unknown>();
+      (stage === 'capture' ? rtcMocks.microphoneStarted : rtcMocks.published).mockReturnValueOnce(delayed.promise);
+      const opening = rtc.setMediaEnabled(Track.Source.Microphone, true);
+      await vi.waitFor(() => expect(rtcMocks.microphoneStarted).toHaveBeenCalledTimes(2));
+      if (stage === 'publish') await vi.waitFor(() => expect(rtcMocks.published).toHaveBeenCalledTimes(2));
+      const closing = rtc.updateListeningState(false);
+      const track = (rtcMocks.microphoneInstances.at(-1) as { track: { mediaStreamTrack: { enabled: boolean }; stop: ReturnType<typeof vi.fn> } }).track;
+      expect(rtc.microphoneEnabled.value).toBe(false);
+      if (stage === 'publish') expect(track.mediaStreamTrack.enabled).toBe(false);
+      delayed.resolve(undefined);
+      await Promise.all([opening, closing]);
+      expect(track.mediaStreamTrack.enabled).toBe(false);
+      expect(track.stop).toHaveBeenCalled();
+      expect(rtc.room.value!.localParticipant.getTrackPublication(Track.Source.Microphone)).toBeUndefined();
+      expect(rtc.microphoneEnabled.value).toBe(false);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('重连不会恢复停听后的发送资格，也不重建麦克风', async () => {
+    configureNativeMicrophoneDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('reconnect-listening');
+      await rtc.updateListeningState(false);
+      const room = rtcMocks.rooms.at(-1) as { emit: (event: string, ...args: unknown[]) => void };
+      room.emit('connectionStateChanged', 'reconnecting');
+      room.emit('connectionStateChanged', 'connected');
+      expect(rtc.listening.value).toBe(false);
+      expect(rtc.microphoneEnabled.value).toBe(false);
+      expect(rtcMocks.microphoneStarted).toHaveBeenCalledOnce();
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('旧房间停止迟到时不执行排队恢复，也不改变新房间关麦意愿', async () => {
+    configureNativeMicrophoneDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('old-listening-room');
+      const delayed = deferred<void>();
+      rtcMocks.microphoneStopped.mockReturnValueOnce(delayed.promise);
+      const stopping = rtc.updateListeningState(false);
+      await vi.waitFor(() => expect(rtcMocks.microphoneStopped).toHaveBeenCalledOnce());
+      const restoring = rtc.updateListeningState(true);
+      await rtc.leave();
+      expect(await rtc.join('new-listening-room')).toBe(true);
+      await rtc.setMediaEnabled(Track.Source.Microphone, false);
+      delayed.resolve();
+      await Promise.all([stopping, restoring]);
+      expect(rtc.microphoneIntent.value).toBe(false);
+      expect(rtc.microphoneEnabled.value).toBe(false);
+      expect(rtcMocks.microphoneStarted).toHaveBeenCalledTimes(2);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('允许发送的已有麦克风在普通重连时继续使用，不重新采集', async () => {
+    configureNativeMicrophoneDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('allowed-reconnect');
+      const room = rtcMocks.rooms.at(-1) as { emit: (event: string, ...args: unknown[]) => void };
+      room.emit('connectionStateChanged', 'reconnecting');
+      room.emit('connectionStateChanged', 'connected');
+      expect(rtc.microphoneEnabled.value).toBe(true);
+      expect(rtc.microphoneIntent.value).toBe(true);
+      expect(rtcMocks.microphoneStarted).toHaveBeenCalledOnce();
+      expect(rtcMocks.microphoneStopped).not.toHaveBeenCalled();
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('SDK 静音确认迟到时保持禁发，恢复必须等清理确认', async () => {
+    configureNativeMicrophoneDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('mute-ack');
+      const track = (rtcMocks.microphoneInstances.at(-1) as {
+        track: { mute: ReturnType<typeof vi.fn>; mediaStreamTrack: { enabled: boolean } } }).track;
+      const muted = deferred<void>();
+      track.mute.mockReturnValueOnce(muted.promise);
+      const stopping = rtc.updateListeningState(false);
+      const restoring = rtc.updateListeningState(true);
+      await vi.waitFor(() => expect(rtcMocks.microphoneStopped).toHaveBeenCalledOnce());
+      expect(rtc.microphoneEnabled.value).toBe(false);
+      expect(track.mediaStreamTrack.enabled).toBe(false);
+      expect(rtcMocks.microphoneStarted).toHaveBeenCalledOnce();
+      muted.resolve();
+      await Promise.all([stopping, restoring]);
+      expect(rtc.microphoneEnabled.value).toBe(true);
+      expect(rtcMocks.microphoneStarted).toHaveBeenCalledTimes(2);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('浏览器处理前输入、处理后输出及发布中的 sender 在停听时都禁发', async () => {
+    rtcMocks.token.mockResolvedValue({ serverUrl: 'wss://example.test', token: 'test-token' });
+    Object.defineProperty(globalThis, 'window', { configurable: true, value: {} });
+    const track = browserMicrophoneTrack(async () => {});
+    const raw = track.mediaStreamTrack;
+    const processed = { enabled: true };
+    const senderTrack = { enabled: true };
+    track.setProcessor = vi.fn(async () => {
+      Object.defineProperty(track, 'mediaStreamTrack', { configurable: true, value: processed });
+      Object.defineProperty(track, 'sender', { value: { track: senderTrack } });
+    });
+    rtcMocks.browserTracks.push(track);
+    const publish = deferred<void>();
+    rtcMocks.published.mockReturnValueOnce(publish.promise);
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      const joining = rtc.join('browser-gate');
+      await vi.waitFor(() => expect(rtcMocks.published).toHaveBeenCalledOnce());
+      expect(raw.enabled).toBe(false);
+      expect(processed.enabled).toBe(false);
+      const stopping = rtc.updateListeningState(false);
+      expect(raw.enabled).toBe(false);
+      expect(processed.enabled).toBe(false);
+      expect(senderTrack.enabled).toBe(false);
+      expect(rtc.microphoneEnabled.value).toBe(false);
+      publish.resolve();
+      await Promise.all([joining, stopping]);
+      expect(track.stop).toHaveBeenCalled();
+      expect(rtc.listening.value).toBe(false);
+      expect(rtc.microphoneEnabled.value).toBe(false);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('启动中重复请求开麦复用任务，不取消后再采集', async () => {
+    configureNativeMicrophoneDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('duplicate-open');
+      await rtc.setMediaEnabled(Track.Source.Microphone, false);
+      const started = deferred<unknown>();
+      rtcMocks.microphoneStarted.mockReturnValueOnce(started.promise);
+      const first = rtc.setMediaEnabled(Track.Source.Microphone, true);
+      await vi.waitFor(() => expect(rtcMocks.microphoneStarted).toHaveBeenCalledTimes(2));
+      const second = rtc.setMediaEnabled(Track.Source.Microphone, true);
+      const listeningAgain = rtc.updateListeningState(true);
+      started.resolve(undefined);
+      await Promise.all([first, second, listeningAgain]);
+      expect(rtc.microphoneEnabled.value).toBe(true);
+      expect(rtcMocks.microphoneStarted).toHaveBeenCalledTimes(2);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('共享中关闭再开启声音只替换声音轨道，保留画面、麦克风及公开权限', async () => {
+    configureNativeScreenDesktop({ screenAudio: true });
+    addRemoteParticipant('viewer');
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false },
+      events: { selectNativeScreenSource: rtcMocks.selectedSources },
+    }))!;
+    try {
+      await rtc.join('audio-toggle');
+      await rtc.setMediaEnabled(Track.Source.Microphone, true);
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
+      const room = mockRoom();
+      const video = room.localParticipant.getTrackPublication(Track.Source.ScreenShare);
+      const microphone = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+      const originalAudio = room.localParticipant.getTrackPublication(Track.Source.ScreenShareAudio);
+      expect(rtc.currentScreenShareAudioMode.value).toBe('process');
+      expect(await rtc.setScreenShareAudioEnabled(false)).toBe(true);
+      expect(room.localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)).toBeUndefined();
+      expect(await rtc.setScreenShareAudioEnabled(true)).toBe(true);
+      const newAudio = room.localParticipant.getTrackPublication(Track.Source.ScreenShareAudio);
+      expect(newAudio).toBeDefined();
+      expect(newAudio).not.toBe(originalAudio);
+      expect(room.localParticipant.getTrackPublication(Track.Source.ScreenShare)).toBe(video);
+      expect(room.localParticipant.getTrackPublication(Track.Source.Microphone)).toBe(microphone);
+      expect(rtcMocks.nativeStarts).toHaveBeenCalledOnce();
+      expect(rtcMocks.nativeStops).not.toHaveBeenCalled();
+      expect(rtcMocks.microphoneStopped).not.toHaveBeenCalled();
+      expect(rtcMocks.nativeAudioStarts).toHaveBeenCalledTimes(2);
+      expect(rtcMocks.nativeAudioStops).toHaveBeenCalledOnce();
+      expect(rtcMocks.subscriptionPermissions.at(-1)?.permissions).toEqual([
+        { participantIdentity: 'viewer', allowAll: false,
+          allowedTrackSids: expect.arrayContaining([
+            (video as { trackSid: string }).trackSid, (newAudio as { trackSid: string }).trackSid,
+            (microphone as { trackSid: string }).trackSid,
+          ]) },
+      ]);
+    } finally {
+      await rtc.leave();
+      scope.stop();
+    }
+  });
+
+  it.each(['capture', 'publish'])('共享中声音 %s 失败不停止画面，失败后可以重试', async (stage) => {
+    configureNativeScreenDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false },
+      events: { selectNativeScreenSource: rtcMocks.selectedSources },
+    }))!;
+    try {
+      await rtc.join('audio-toggle-failure');
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
+      const video = mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare);
+      if (stage === 'capture') rtcMocks.nativeAudioStarts.mockRejectedValueOnce(new Error('capture failed'));
+      else rtcMocks.published.mockRejectedValueOnce(new Error('publish failed'));
+      expect(await rtc.setScreenShareAudioEnabled(true)).toBe(false);
+      expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)).toBeUndefined();
+      expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare)).toBe(video);
+      expect(rtcMocks.nativeStops).not.toHaveBeenCalled();
+      expect(rtc.notice.value).toContain('画面仍在共享');
+      expect(await rtc.setScreenShareAudioEnabled(true)).toBe(true);
+      expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)).toBeDefined();
+    } finally {
+      await rtc.leave();
+      scope.stop();
+    }
+  });
+
+  it('声音切换期间拒绝重复操作与画质切换，离房后不发布迟到的声音', async () => {
+    configureNativeScreenDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false },
+      events: { selectNativeScreenSource: rtcMocks.selectedSources },
+    }))!;
+    const startup = deferred<unknown>();
+    try {
+      await rtc.join('late-audio-toggle');
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
+      rtcMocks.nativeAudioStarts.mockReturnValueOnce(startup.promise);
+      const enabling = rtc.setScreenShareAudioEnabled(true);
+      expect(rtc.busySources.value).toContain(Track.Source.ScreenShare);
+      expect(await rtc.setScreenShareAudioEnabled(false)).toBe(false);
+      expect(await rtc.setScreenShareQuality('text')).toBe(false);
+      await rtc.leave();
+      await rtc.join('next-audio-room');
+      rtc.notice.value = '新房间提示';
+      startup.resolve({});
+      expect(await enabling).toBe(false);
+      expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)).toBeUndefined();
+      expect(rtc.notice.value).toBe('新房间提示');
+      expect(rtcMocks.nativeAudioStops).toHaveBeenCalledOnce();
+    } finally {
+      startup.resolve({});
+      await rtc.leave();
+      scope.stop();
+    }
+  });
+
+  it('更换来源的选择过程与取消保留原共享，确认后重建并撤销原远控授权', async () => {
+    configureNativeScreenDesktop({ screenAudio: true });
+    rtcMocks.selectedSources.mockResolvedValue({ sourceId: 'monitor:1:0', shareAudio: true });
+    const revoke = vi.fn().mockResolvedValue({ changed: true });
+    Object.assign(window.lycanDesktop!, {
+      authorizeNativeRemoteControl: vi.fn().mockResolvedValue({ changed: true }),
+      revokeNativeRemoteControl: revoke,
+    });
+    addRemoteParticipant('viewer');
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false },
+      events: { selectNativeScreenSource: rtcMocks.selectedSources },
+    }))!;
+    const selection = deferred<{ sourceId: string; shareAudio: boolean; quality: string } | null>();
+    try {
+      await rtc.join('source-replacement');
+      await rtc.setMediaEnabled(Track.Source.Microphone, true);
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
+      const room = mockRoom();
+      const video = room.localParticipant.getTrackPublication(Track.Source.ScreenShare);
+      const audio = room.localParticipant.getTrackPublication(Track.Source.ScreenShareAudio);
+      const microphone = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+      receiveRemoteControl('viewer', { type: 'request', shareSessionId: 'monitor:1:0-session', requestId: 'request' });
+      expect(await rtc.allowRemoteControl()).toBe(true);
+      rtcMocks.selectedSources.mockReturnValueOnce(selection.promise);
+      const choosing = rtc.changeScreenShareSource();
+      expect(rtc.screenShareSourceBusy.value).toBe(true);
+      expect(room.localParticipant.getTrackPublication(Track.Source.ScreenShare)).toBe(video);
+      expect(room.localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)).toBe(audio);
+      expect(await rtc.setScreenShareAudioEnabled(false)).toBe(false);
+      selection.resolve(null);
+      expect(await choosing).toBe(false);
+      expect(rtcMocks.nativeStops).not.toHaveBeenCalled();
+      expect(revoke).not.toHaveBeenCalled();
+      expect(rtc.remoteControlOwner.value).not.toBeNull();
+
+      rtcMocks.selectedSources.mockResolvedValueOnce({ sourceId: 'window:2:0', shareAudio: true, quality: 'text' });
+      expect(await rtc.changeScreenShareSource()).toBe(true);
+      expect(rtcMocks.nativeStarts).toHaveBeenLastCalledWith('window:2:0', 30, expect.anything());
+      expect(rtcMocks.nativeAudioStarts).toHaveBeenLastCalledWith('window:2:0', 'window:2:0-session');
+      expect(rtc.currentScreenShareQuality.value).toBe('text');
+      expect(room.localParticipant.getTrackPublication(Track.Source.Microphone)).toBe(microphone);
+      expect(room.localParticipant.getTrackPublication(Track.Source.ScreenShare)).not.toBe(video);
+      expect(rtc.remoteControlOwner.value).toBeNull();
+      expect(revoke).toHaveBeenCalledWith('monitor:1:0-session', expect.any(String));
+      expect(rtcMocks.microphoneStopped).not.toHaveBeenCalled();
+      expect(rtc.status.value).toBe('connected');
+    } finally {
+      selection.resolve(null);
+      await rtc.leave();
+      scope.stop();
+    }
+  });
+
+  it('离开房间后忽略迟到的来源选择，不影响新房间', async () => {
+    configureNativeScreenDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false },
+      events: { selectNativeScreenSource: rtcMocks.selectedSources },
+    }))!;
+    const selection = deferred<{ sourceId: string; shareAudio: boolean } | null>();
+    try {
+      await rtc.join('old-source-room');
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
+      rtcMocks.selectedSources.mockReturnValueOnce(selection.promise);
+      const choosing = rtc.changeScreenShareSource();
+      await rtc.leave();
+      await rtc.join('new-source-room');
+      rtc.notice.value = '新房间提示';
+      selection.resolve({ sourceId: 'window:late:0', shareAudio: true });
+      expect(await choosing).toBe(false);
+      expect(rtcMocks.nativeStarts).toHaveBeenCalledOnce();
+      expect(rtc.notice.value).toBe('新房间提示');
+      expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare)).toBeUndefined();
+    } finally {
+      selection.resolve(null);
+      await rtc.leave();
+      scope.stop();
+    }
+  });
+
+  it('更换来源时原采集停止未确认，不叠加新采集', async () => {
+    configureNativeScreenDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false },
+      events: { selectNativeScreenSource: rtcMocks.selectedSources },
+    }))!;
+    try {
+      await rtc.join('source-stop-failure');
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
+      rtcMocks.nativeStops.mockRejectedValueOnce(new Error('stop failed'));
+      rtcMocks.selectedSources.mockResolvedValueOnce({ sourceId: 'window:next:0', shareAudio: false });
+      expect(await rtc.changeScreenShareSource()).toBe(false);
+      expect(rtcMocks.nativeStarts).toHaveBeenCalledOnce();
+      expect(rtc.notice.value).toContain('停止未确认');
+    } finally {
+      await rtc.leave();
+      scope.stop();
+    }
+  });
+
   it('changes quality without recreating the publication, audio or capture, and ignores completion after leaving', async () => {
     configureNativeScreenDesktop({ screenAudio: true });
     const scope = effectScope();
@@ -381,6 +979,28 @@ describe('native screen share wiring', () => {
       expect(rtc.notice.value).toBe('新房间提示');
       expect(rtc.currentScreenShareQuality.value).toBe('economy');
     } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('releases microphone and sharing when removed without treating it as a media server failure', async () => {
+    configureNativeScreenDesktop({ screenAudio: true });
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false },
+      events: { selectNativeScreenSource: rtcMocks.selectedSources },
+    }))!;
+    try {
+      expect(await rtc.join('removed-member-room')).toBe(true);
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
+      mockRoom().emit('disconnected', 'participantRemoved');
+      expect(rtc.notice.value).toContain('语音、共享和远控已结束');
+      await vi.waitFor(() => {
+        expect(rtcMocks.microphoneStopped).toHaveBeenCalledOnce();
+        expect(rtcMocks.nativeStops).toHaveBeenCalledOnce();
+        expect(rtcMocks.nativeAudioStops).toHaveBeenCalledOnce();
+      });
+      expect(rtc.screenShareActive.value).toBe(false);
+      expect(rtc.room.value).toBeNull();
+    } finally { scope.stop(); }
   });
 
   it.each([
@@ -1201,7 +1821,7 @@ describe('native screen share wiring', () => {
     try {
       expect(await rtc.join('microphone-group')).toBe(true);
       await rtc.setMediaEnabled(Track.Source.Microphone, false);
-      expect(rtc.notice.value).toBe('麦克风停止未确认，请重新连接语音。');
+      expect(rtc.notice.value).toBe('麦克风停止未确认，已禁止发送，请重启客户端后再开麦。');
       expect(rtc.busySources.value).toEqual([]);
     } finally {
       rtcMocks.microphoneStopped.mockResolvedValue({ changed: true });

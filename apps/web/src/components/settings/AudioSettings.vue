@@ -2,15 +2,17 @@
 import { computed, watch } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
 import { Track } from 'livekit-client';
+import InlineFeedback from '../InlineFeedback.vue';
 import type { useAudioPreferences } from '../../rtc/useAudioPreferences';
 import type { useRtcRoom } from '../../rtc/useRtcRoom';
+import type { useMicrophoneTest } from '../../rtc/useMicrophoneTest';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, type AudioProcessingSettings } from '../../rtc/audioPreferences';
 
 const props = defineProps<{
   desktop: boolean;
   preferences: ReturnType<typeof useAudioPreferences>;
   rtc: UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>;
-  connected: boolean;
+  microphoneTest: UnwrapNestedRefs<ReturnType<typeof useMicrophoneTest>>;
   inputLevelPercent: number;
   active: boolean;
 }>();
@@ -19,8 +21,15 @@ const inputGain = computed(() => props.preferences.inputGain.value);
 const outputVolume = computed(() => props.preferences.outputVolume.value);
 const screenShareVolume = computed(() => props.preferences.screenShareVolume.value);
 const levelSegments = Array.from({ length: 16 }, (_, index) => index + 1);
+const displayedInputLevel = computed(() => props.microphoneTest.state === 'idle'
+  ? props.inputLevelPercent : props.microphoneTest.inputLevelPercent);
 
-watch(() => props.active, (isActive) => { if (!isActive) props.rtc.stopMicrophoneLoopback(); });
+watch(() => props.active, (isActive) => { if (!isActive) void props.microphoneTest.stop(); });
+
+function toggleTest() {
+  if (props.microphoneTest.state === 'idle') void props.microphoneTest.start();
+  else void props.microphoneTest.stop();
+}
 
 function updateProcessing(setting: keyof AudioProcessingSettings, event: Event) {
   if (props.preferences.setProcessing(setting, (event.target as HTMLInputElement).checked)) {
@@ -42,9 +51,9 @@ function updateProcessing(setting: keyof AudioProcessingSettings, event: Event) 
             ) && rtc.setMicrophoneInputGain(preferences.inputGain.value)" />
       </div>
       <div class="settings-meter">
-        <span>输入等级 <strong>{{ inputLevelPercent }}%</strong></span>
-        <div role="meter" aria-label="麦克风输入等级" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="inputLevelPercent">
-          <i v-for="segment in levelSegments" :key="segment" :class="{ 'is-active': segment * 100 / levelSegments.length <= inputLevelPercent }" />
+        <span>输入等级 <strong>{{ displayedInputLevel }}%</strong></span>
+        <div role="meter" aria-label="麦克风输入等级" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="displayedInputLevel">
+          <i v-for="segment in levelSegments" :key="segment" :class="{ 'is-active': segment * 100 / levelSegments.length <= displayedInputLevel }" />
         </div>
       </div>
     </section>
@@ -75,14 +84,15 @@ function updateProcessing(setting: keyof AudioProcessingSettings, event: Event) 
     </section>
     <section class="settings-block">
       <h2>麦克风试听</h2>
-      <p>入房并开启麦克风后可用。试听声音经过本机 Opus 编解码，接近远端音质。</p>
-      <button type="button" class="settings-button" :disabled="rtc.microphoneLoopbackState === 'idle'
-        && (!connected || !rtc.room?.localParticipant.isMicrophoneEnabled || rtc.busySources.includes(Track.Source.Microphone))"
-        @click="rtc.microphoneLoopbackState === 'idle' ? rtc.startMicrophoneLoopback(outputVolume) : rtc.stopMicrophoneLoopback()">
-        {{ rtc.microphoneLoopbackState === 'starting' ? '取消试听连接' : rtc.microphoneLoopbackState === 'listening' ? '停止麦克风试听' : '开始试听' }}
+      <p>无需加入语音，试听只在本机播放。建议使用耳机。</p>
+      <button type="button" class="settings-button" :disabled="microphoneTest.state === 'stopping'
+        || (microphoneTest.state === 'idle' && (rtc.status === 'joining' || rtc.status === 'reconnecting'
+          || rtc.busySources.includes(Track.Source.Microphone)))"
+        @click="toggleTest">
+        {{ microphoneTest.state === 'starting' ? '取消试听' : microphoneTest.state === 'listening' ? '停止麦克风试听'
+          : microphoneTest.state === 'stopping' ? '正在停止' : '开始试听' }}
       </button>
-      <small v-if="!connected || !rtc.room?.localParticipant.isMicrophoneEnabled" class="settings-muted">请先加入通话并开启麦克风。</small>
-      <p v-if="rtc.microphoneLoopbackNotice" class="settings-error" role="alert">{{ rtc.microphoneLoopbackNotice }}</p>
+      <InlineFeedback :message="microphoneTest.notice" />
     </section>
   </div>
 </template>
@@ -99,5 +109,4 @@ function updateProcessing(setting: keyof AudioProcessingSettings, event: Event) 
 .settings-range-row span, .settings-range-row label { display: flex; justify-content: space-between; }
 .settings-range-row strong { color: var(--accent); }
 .settings-range-row input { width: 100%; margin: 0; accent-color: var(--accent); }
-.settings-muted { display: block; margin-top: 8px; color: var(--muted); }
 </style>

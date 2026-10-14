@@ -1,8 +1,25 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { canSelectNativeSource, nativeScreenAudioMode, shouldDefaultShareAudio,
+  readScreenShareAudioPreference, saveScreenShareAudioPreference,
   resolveNativeScreenAudioCapability, shouldShareAudioInNativeSelection } from './nativeScreenAudioMode';
 
 describe('native screen audio mode', () => {
+  it('记住用户开关，应用声音的默认选择不扩展到系统混音', () => {
+    const stored = new Map<string, string>();
+    vi.stubGlobal('localStorage', { getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => stored.set(key, value) });
+    try {
+      expect(readScreenShareAudioPreference('process')).toBe(true);
+      expect(readScreenShareAudioPreference('systemMix')).toBe(false);
+      saveScreenShareAudioPreference('process', false);
+      expect(readScreenShareAudioPreference('process')).toBe(false);
+      saveScreenShareAudioPreference('systemMix', true);
+      expect(readScreenShareAudioPreference('systemMix')).toBe(true);
+      expect(readScreenShareAudioPreference('process')).toBe(false);
+      expect(readScreenShareAudioPreference('unavailable')).toBe(false);
+      expect(() => saveScreenShareAudioPreference('unavailable', true)).toThrow('screenShareAudioUnavailable');
+    } finally { vi.unstubAllGlobals(); }
+  });
   it('defaults process loopback on for the Windows 10 19041+ process capability', () => {
     const mode = nativeScreenAudioMode({ available: true, reason: 'windowsApplicationLoopbackProcessTree' });
     expect(mode).toBe('process');

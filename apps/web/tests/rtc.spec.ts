@@ -255,12 +255,15 @@ test('未共享时显示群成员头像，停止共享后恢复头像', async ({
   })).toBe(true);
   const microphoneButton = page.locator('.callbar').getByRole('button', { name: '关闭麦克风', exact: true });
   await microphoneButton.hover();
-  const quickVolumeSettings = page.getByRole('region', { name: '音量快捷设置' });
-  await expect(quickVolumeSettings.getByRole('slider')).toHaveCount(2);
+  await expect(page.locator('.call-control-menu')).toHaveCount(0);
+  await page.locator('.callbar').getByRole('button', { name: '麦克风选项', exact: true }).click();
+  const quickVolumeSettings = page.getByRole('region', { name: '麦克风选项', exact: true });
+  await expect(quickVolumeSettings.getByRole('slider')).toHaveCount(1);
+  await expect(quickVolumeSettings.getByRole('meter')).toHaveCount(1);
   await expect(quickVolumeSettings.getByRole('checkbox')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '媒体诊断' })).toHaveCount(0);
   const peerCountBeforeSettings = await page.evaluate(() => window.__rtcTest.peers.length);
-  await page.getByRole('button', { name: '打开语音与音频设置' }).click();
+  await quickVolumeSettings.getByRole('button', { name: '语音设置', exact: true }).click();
   const settingsPage = page.locator('.settings-view');
   await expect(settingsPage).toBeVisible();
   await expect(settingsPage).not.toHaveAttribute('role', 'dialog');
@@ -346,10 +349,14 @@ test('取消尚未完成的凭证请求后，不允许迟到的响应自动入�
 test('通话中单击其他群只预览，双击时要求确认切换', async ({ context, page }) => {
   await installSyntheticMedia(context);
   await join(page, '切群测试狼');
+  await expect(page.getByTestId('callbar')).toHaveCSS('animation-name', 'none');
   await page.getByRole('button', { name: /周末车队，单击预览，双击加入语音/ }).click();
   await expect(page.getByRole('heading', { name: '周末车队' })).toBeVisible();
   await expect(page.getByRole('status')).toContainText('开黑小队 · 正在浏览 周末车队');
   await expect(page.getByRole('button', { name: '返回当前通话群组' })).toBeEnabled();
+  await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  await page.getByRole('button', { name: '返回应用', exact: true }).click();
+  await expect(page.getByTestId('callbar')).toHaveCSS('animation-name', 'none');
   await page.getByRole('button', { name: /周末车队，单击预览，双击加入语音/ }).dblclick();
   await expect(page.getByRole('alert')).toContainText('当前共享会停止，加入后默认开麦');
   await page.getByRole('button', { name: '取消', exact: true }).click();
