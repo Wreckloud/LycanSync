@@ -5,23 +5,32 @@ import ts from 'typescript';
 import { ref } from 'vue';
 import { expect, it, vi } from 'vitest';
 import type { AuthSessionStatus, AuthUser } from './auth/authApi';
+import { ApiRequestError } from './auth/authApi';
 
 const script = parse(readFileSync(new URL('./AuthRoot.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('AuthRoot.ts', script, ts.ScriptTarget.Latest, true);
-const declaration = sourceFile.statements.find((statement) => ts.isFunctionDeclaration(statement)
-  && statement.name?.text === 'verifyCurrentSession');
-if (!declaration) throw new Error('登录心跳回调不存在');
-const compiled = ts.transpile(declaration.getText(sourceFile), { target: ts.ScriptTarget.ES2022 });
+const callbackNames = ['verifyCurrentSession', 'expired', 'logout'];
+const callbacks = callbackNames.map((name) => {
+  const declaration = sourceFile.statements.find((statement) => ts.isFunctionDeclaration(statement)
+    && statement.name?.text === name);
+  if (!declaration) throw new Error(`登录回调不存在：${name}`);
+  return declaration.getText(sourceFile);
+}).join('\n');
+const compiled = ts.transpile(callbacks, { target: ts.ScriptTarget.ES2022 });
 
 function setup() {
   let resolve!: (status: AuthSessionStatus) => void;
   const pending = new Promise<AuthSessionStatus>((done) => { resolve = done; });
   const user = ref<AuthUser | null>({ id: 'member', nickname: '旧昵称', avatar: '', administrator: false });
   const authRequest = vi.fn(() => pending);
-  // 执行正式心跳回调，只控制请求返回顺序，不启动页面、客户端或服务器。
-  const context = { user, authRequest, disposed: false, sessionHeartbeatInFlight: false };
-  const verify = runInNewContext(`${compiled}\nverifyCurrentSession`, context) as () => Promise<void>;
-  return { context, verify, resolve };
+  // 执行正式心跳和退出回调，只控制请求结果，不启动页面、客户端或服务器。
+  const context = { user, authRequest, disposed: false, sessionHeartbeatInFlight: false,
+    onboarding: ref(false), error: ref(''), logoutInProgress: false, ApiRequestError, Error, AbortSignal,
+    sendPresenceHeartbeat: vi.fn(async () => undefined), setBrowserSession: vi.fn() };
+  const callbacks = runInNewContext(`${compiled}\n({ verifyCurrentSession, logout })`, context) as {
+    verifyCurrentSession: () => Promise<void>; logout: () => Promise<void>;
+  };
+  return { context, verify: callbacks.verifyCurrentSession, logout: callbacks.logout, resolve };
 }
 
 it.each(['profile', 'same-account', 'other-account', 'logout'])(
@@ -69,4 +78,27 @@ it('没有登录账号时不发送心跳', async () => {
   resolve({ id: 'member', nickname: '旧昵称', administrator: false });
   await verify();
   expect(context.authRequest).not.toHaveBeenCalled();
+});
+
+it.each([401, 502])('退出已在服务端完成时，本机返回%s不恢复旧身份', async (status) => {
+  const { context, logout } = setup();
+  context.onboarding.value = true;
+  context.authRequest.mockRejectedValue(new ApiRequestError(status,
+    status === 401 ? 'INVALID_SESSION' : 'LOCAL_SESSION_CLEAR_FAILED', '登录已结束，但本机凭据清理失败'));
+  await logout();
+  expect(context.user.value).toBeNull();
+  expect(context.onboarding.value).toBe(false);
+  expect(context.setBrowserSession).toHaveBeenCalledWith(null);
+  expect(context.logoutInProgress).toBe(false);
+  expect(context.error.value).toBe(status === 401 ? '' : '登录已结束，但本机凭据清理失败');
+});
+
+it('服务端退出失败才恢复原账号，保留明确错误', async () => {
+  const { context, logout } = setup();
+  const original = context.user.value;
+  context.authRequest.mockRejectedValue(new ApiRequestError(503, 'AUTH_SERVICE_UNAVAILABLE', '账号服务暂不可用'));
+  await logout();
+  expect(context.user.value).toBe(original);
+  expect(context.error.value).toBe('账号服务暂不可用');
+  expect(context.setBrowserSession).not.toHaveBeenCalled();
 });

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { effectScope, ref, type EffectScope } from 'vue';
 import { authRequest } from '../auth/authApi';
-import type { AccessLinkRecord } from '../auth/accountAccess';
+import { accessLinkStatus, type AccessLinkRecord } from '../auth/accountAccess';
 import { useMemberAccess } from './useMemberAccess';
 
 vi.mock('../auth/authApi', () => ({ authRequest: vi.fn() }));
@@ -127,6 +127,17 @@ describe('邀请页记录刷新与操作反馈', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(request).toHaveBeenCalledTimes(1);
     expect(state.recordsError.value).toBe('');
+  });
+
+  it('读取失败时已到期链接仍显示过期，不把最近失败当作终态', async () => {
+    serverLinks = [link({ expiresAt: new Date(Date.now() + 4_000).toISOString(), lastFailure: '上次兑换失败' })];
+    const { state } = await open();
+    expect(accessLinkStatus(state.links.value[0], state.currentTime.value)).toBe('待使用');
+    request.mockRejectedValueOnce(new Error('服务暂不可用'));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(state.recordsError.value).toBe('服务暂不可用');
+    expect(accessLinkStatus(state.links.value[0], state.currentTime.value)).toBe('已过期');
+    expect(state.links.value[0].lastFailure).toBe('上次兑换失败');
   });
 
   it('生成失败保留已有原链接，并只显示对应表单错误', async () => {

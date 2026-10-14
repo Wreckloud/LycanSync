@@ -11,6 +11,7 @@ import type { AccessOffer } from './auth/accountAccess';
 import {
   authRequest,
   authenticatedFetch,
+  ApiRequestError,
   setBrowserSession,
   type AuthSessionStatus,
   type AuthUser,
@@ -143,8 +144,13 @@ async function logout() {
     setBrowserSession(null);
     expired();
   } catch (exception) {
-    if (exception instanceof Error && exception.name === 'ApiRequestError'
-        && 'status' in exception && exception.status === 401) return;
+    if (exception instanceof ApiRequestError
+        && (exception.status === 401 || exception.code === 'LOCAL_SESSION_CLEAR_FAILED')) {
+      setBrowserSession(null);
+      expired();
+      if (exception.status !== 401) error.value = exception.message;
+      return;
+    }
     if (previousUser) user.value = previousUser;
     error.value = exception instanceof Error ? exception.message : '退出登录失败';
   } finally {

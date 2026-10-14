@@ -44,6 +44,8 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>) {
     clearTimeout(timer);
     const request = controller;
     refreshing.value = true;
+    // 过期由本地时间判断，读取失败也不能把已过期链接一直显示为待使用。
+    currentTime.value = Date.now();
     includeMembers ||= !membersLoaded;
     try {
       const [records, memberPage] = await Promise.all([

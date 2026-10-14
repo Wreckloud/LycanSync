@@ -4,7 +4,7 @@ const { join } = require('node:path');
 const { test } = require('node:test');
 const { runInNewContext } = require('node:vm');
 
-function proxyFixture() {
+function proxyFixture(overrides = {}) {
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const policyStart = main.indexOf('const apiRoutePolicies =');
   const policyEnd = main.indexOf('app.setName(', policyStart);
@@ -19,10 +19,13 @@ function proxyFixture() {
     sessionToken: 'test-session',
     trustedUrl: (url) => url.startsWith('lycan://app/'),
     loadSession: async () => 'test-session',
+    saveSession: async () => {},
+    clearSession: async () => {},
     net: { fetch: async (url, options) => {
       forwarded.push({ url, options });
       return Response.json({ id: 'test-group' }, { status: 201 });
     } },
+    ...overrides,
   });
   return { serve, forwarded };
 }
@@ -38,6 +41,94 @@ test('群组创建允许 2 MiB 裁剪图的 Base64 和文本，转发保持认�
   assert.equal(forwarded[0].url, 'https://example.test/api/groups');
   assert.equal(forwarded[0].options.body.toString(), body);
   assert.equal(forwarded[0].options.headers.Authorization, 'Bearer test-session');
+});
+
+test('凭据读取失败与网络连接失败有不同反馈，不透传路径或凭据', async () => {
+  const loadFailure = proxyFixture({ loadSession: async () => { throw new Error('private/session.bin'); } });
+  const unreadable = await loadFailure.serve(new Request('lycan://app/api/auth/me'));
+  assert.equal(unreadable.status, 502);
+  assert.deepEqual(await unreadable.json(), { message: '无法读取本机登录凭据，请清理本机登录凭据后重试。' });
+  assert.equal(loadFailure.forwarded.length, 0);
+
+  const networkFailure = proxyFixture({ net: { fetch: async () => { throw new Error('private-transport-detail'); } } });
+  const disconnected = await networkFailure.serve(new Request('lycan://app/api/auth/me'));
+  assert.equal(disconnected.status, 502);
+  assert.deepEqual(await disconnected.json(), { message: '无法连接业务服务，请检查网络和服务器状态。' });
+});
+
+test('兑换响应完整且本机保存成功后才返回资料，会话原文不进入页面', async () => {
+  const token = 'a'.repeat(43);
+  const user = { id: 'member', nickname: '行者1001', avatar: '', administrator: false };
+  const saved = [];
+  const { serve } = proxyFixture({ loadSession: async () => undefined,
+    net: { fetch: async () => Response.json({ sessionToken: token, user }) },
+    saveSession: async (value) => { saved.push(value); } });
+  const response = await serve(new Request('lycan://app/api/auth/access/redeem', { method: 'POST', body: '{}' }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(saved, [token]);
+  assert.deepEqual(await response.json(), { user });
+});
+
+test('凭据保存失败明确提示本机问题，重试仍可沿原兑换流程完成', async () => {
+  const token = 'b'.repeat(43);
+  let writes = 0;
+  const { serve } = proxyFixture({ loadSession: async () => undefined,
+    net: { fetch: async () => Response.json({ sessionToken: token,
+      user: { id: 'member', nickname: '朋友', avatar: '', administrator: false } }) },
+    saveSession: async () => { if (++writes === 1) throw new Error('private-session-path'); } });
+  const request = () => new Request('lycan://app/api/auth/access/redeem', { method: 'POST', body: '{}' });
+  const first = await serve(request());
+  assert.equal(first.status, 502);
+  assert.deepEqual(await first.json(), { message: '无法保存本机登录凭据，请检查用户目录权限和系统加密后重试。' });
+  assert.equal((await serve(request())).status, 200);
+  assert.equal(writes, 2);
+});
+
+test('无效兑换响应不写入凭据，也不伪报网络失败', async () => {
+  for (const result of [null, { sessionToken: 'short' }, { sessionToken: 'c'.repeat(43) },
+    { sessionToken: 'c'.repeat(43), user: { id: 'member' } }]) {
+    let saved = false;
+    const { serve } = proxyFixture({ loadSession: async () => undefined,
+      net: { fetch: async () => Response.json(result) }, saveSession: async () => { saved = true; } });
+    const response = await serve(new Request('lycan://app/api/auth/access/redeem', { method: 'POST', body: '{}' }));
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { message: '登录响应无法确认，请重试或联系服主。' });
+    assert.equal(saved, false);
+  }
+});
+
+test('已登录时拒绝兑换，不转发也不保存新凭据', async () => {
+  let saved = false;
+  const { serve, forwarded } = proxyFixture({ saveSession: async () => { saved = true; } });
+  const response = await serve(new Request('lycan://app/api/auth/access/redeem', { method: 'POST', body: '{}' }));
+  assert.equal(response.status, 409);
+  assert.equal(forwarded.length, 0);
+  assert.equal(saved, false);
+});
+
+test('当前会话401即使本机清理失败仍通知退出，旧会话401不清理新凭据', async () => {
+  const expired = proxyFixture({ net: { fetch: async () => new Response(null, { status: 401 }) },
+    clearSession: async () => { throw new Error('private-session-path'); } });
+  const response = await expired.serve(new Request('lycan://app/api/auth/me'));
+  assert.equal(response.status, 401);
+  assert.equal(response.headers.get('X-Lycan-Session-Expired'), 'true');
+  assert.equal((await response.json()).code, 'LOCAL_SESSION_CLEAR_FAILED');
+
+  let cleared = false;
+  const previous = proxyFixture({ loadSession: async () => 'previous-token',
+    net: { fetch: async () => new Response(null, { status: 401 }) }, clearSession: async () => { cleared = true; } });
+  const oldResponse = await previous.serve(new Request('lycan://app/api/auth/me'));
+  assert.equal(oldResponse.headers.get('X-Lycan-Session-Expired'), 'false');
+  assert.equal(cleared, false);
+});
+
+test('服务端退出成功但本机文件清理失败明确报告已结束会话', async () => {
+  const { serve } = proxyFixture({ net: { fetch: async () => new Response(null, { status: 204 }) },
+    clearSession: async () => { throw new Error('private-session-path'); } });
+  const response = await serve(new Request('lycan://app/api/auth/logout', { method: 'POST' }));
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), { code: 'LOCAL_SESSION_CLEAR_FAILED',
+    message: '登录已结束，但无法清理本机凭据，请检查用户目录权限。' });
 });
 
 test('群组超过 3 MiB 接口预算时本地返回明确 413，不转发到后端', async () => {

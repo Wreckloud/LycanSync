@@ -861,6 +861,7 @@ async function serveApplication(request) {
       ?? (request.method === 'POST' && groupFilePath.test(url.pathname) && url.pathname.endsWith('/files')
         ? { streamBody: true } : undefined);
     if (!routePolicy) return new Response(null, { status: 404 });
+    let failureMessage = '无法读取请求内容，请重试。';
     try {
       const streamingUpload = routePolicy.streamBody === true;
       const body = streamingUpload ? request.body
@@ -868,10 +869,12 @@ async function serveApplication(request) {
       if (body instanceof Buffer && body.byteLength > (routePolicy.maxBodyBytes ?? 4096)) {
         return Response.json({ code: 'REQUEST_TOO_LARGE', detail: '提交内容过大，请缩小图片或减少内容后重试。' }, { status: 413 });
       }
+      failureMessage = '无法读取本机登录凭据，请清理本机登录凭据后重试。';
       const token = await loadSession();
       if (url.pathname === '/api/auth/access/redeem' && token) {
         return Response.json({ detail: '请先退出当前账号，再使用邀请链接。' }, { status: 409 });
       }
+      failureMessage = '无法连接业务服务，请检查网络和服务器状态。';
       const response = await net.fetch(new URL(url.pathname + url.search, backend).href, {
         method: request.method,
         headers: { ...(body ? { 'Content-Type': request.headers.get('Content-Type') || 'application/json' } : {}),
@@ -890,10 +893,25 @@ async function serveApplication(request) {
       const currentSessionUnauthorized = !routePolicy.public && Boolean(token)
         && response.status === 401 && token === sessionToken;
       if (!routePolicy.public && token === sessionToken
-          && (response.status === 401 || (routePolicy.clearsSession && response.ok))) await clearSession();
+          && (response.status === 401 || (routePolicy.clearsSession && response.ok))) {
+        try { await clearSession(); }
+        catch {
+          // 服务端已结束会话，文件清理失败也不能继续展示为已登录。
+          return Response.json({ code: 'LOCAL_SESSION_CLEAR_FAILED', message: '登录已结束，但无法清理本机凭据，请检查用户目录权限。' }, {
+            status: currentSessionUnauthorized ? 401 : 502,
+            headers: { 'Cache-Control': 'no-store',
+              ...(currentSessionUnauthorized ? { 'X-Lycan-Session-Expired': 'true' } : {}) },
+          });
+        }
+      }
       if (routePolicy.savesSession && response.ok) {
+        failureMessage = '登录响应无法确认，请重试或联系服主。';
         const result = await response.json();
-        if (!/^[A-Za-z0-9_-]{43}$/.test(result.sessionToken ?? '')) throw new Error('登录响应无效');
+        if (!/^[A-Za-z0-9_-]{43}$/.test(result?.sessionToken ?? '')
+            || typeof result.user?.id !== 'string' || !result.user.id
+            || typeof result.user.nickname !== 'string' || typeof result.user.avatar !== 'string'
+            || typeof result.user.administrator !== 'boolean') throw new Error('登录响应无效');
+        failureMessage = '无法保存本机登录凭据，请检查用户目录权限和系统加密后重试。';
         await saveSession(result.sessionToken);
         // 会话原文只进入主进程的系统加密存储，不暴露给渲染页面。
         delete result.sessionToken;
@@ -909,7 +927,7 @@ async function serveApplication(request) {
         'Cache-Control': 'no-store',
       } });
     } catch {
-      return Response.json({ message: '无法连接业务服务，请检查后端是否已启动。' }, { status: 502 });
+      return Response.json({ message: failureMessage }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
     }
   }
   if (request.method !== 'GET') return new Response(null, { status: 405 });
