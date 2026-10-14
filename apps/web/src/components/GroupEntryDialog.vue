@@ -100,7 +100,7 @@ onScopeDispose(() => { if (returnFocus?.isConnected) returnFocus.focus(); });
         </div>
       </footer>
     </form>
-    <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整群组头像" shape="rounded-square" @apply="finishCrop" @cancel="finishCrop()" />
+    <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整群组头像" @apply="finishCrop" @cancel="finishCrop()" />
   </div>
 </template>
 

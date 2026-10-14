@@ -17,7 +17,7 @@ const avatarInput = ref<HTMLInputElement | null>(null);
 const nicknameInput = ref<HTMLInputElement | null>(null);
 const nicknameButton = ref<HTMLButtonElement | null>(null);
 const editingNickname = ref(false);
-const { cropSource, picking, pickAvatar, clearCrop } = useAvatarCrop(error);
+const { cropSource, picking, pickAvatar, editAvatar, clearCrop } = useAvatarCrop(error);
 const registrationDate = computed(() => formatRegistrationDate(props.user.createdAt));
 
 async function save() {
@@ -41,6 +41,11 @@ function applyAvatar(value: string) {
   void save();
 }
 
+function removeAvatar() {
+  avatar.value = '';
+  void save();
+}
+
 async function submitNickname(event: KeyboardEvent) {
   if (event.isComposing) return;
   event.preventDefault();
@@ -57,11 +62,14 @@ defineExpose({ save });
   <section class="settings-section profile-settings">
     <div class="profile-details">
       <div class="profile-identity">
-        <button type="button" class="profile-avatar-preview" aria-label="修改头像" :disabled="busy || picking" @click="avatarInput?.click()">
+        <div class="profile-avatar-area"><button type="button" class="profile-avatar-preview" aria-label="修改头像" :disabled="busy || picking" @click="avatar ? editAvatar(avatar) : avatarInput?.click()">
           <img v-if="avatar" :src="avatar" class="profile-avatar" alt="头像预览" referrerpolicy="no-referrer" />
           <UserRound v-else :size="42" />
           <span class="profile-avatar-overlay" aria-hidden="true"><Pencil :size="20" /><span>编辑</span></span>
-        </button>
+        </button><div class="avatar-actions">
+          <button type="button" class="avatar-action" :disabled="busy || picking" @click="avatarInput?.click()">{{ avatar ? '更换' : '添加头像' }}</button>
+          <button v-if="avatar" type="button" class="avatar-action" :disabled="busy || picking" @click="removeAvatar">移除</button>
+        </div></div>
         <input ref="avatarInput" type="file" hidden aria-label="上传头像" accept="image/png,image/jpeg" @change="pickAvatar" />
         <div class="profile-nickname">
           <input v-if="editingNickname" ref="nicknameInput" v-model="nickname" aria-label="昵称" maxlength="32"
@@ -90,16 +98,17 @@ defineExpose({ save });
 .profile-settings { max-width: 820px; gap: 4px; border-bottom: 1px solid var(--border-soft); }
 .profile-details { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: center; padding-top: 4px; }
 .profile-identity { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.profile-avatar-area { position: relative; flex-shrink: 0; }
 .profile-avatar-preview { position: relative; flex-shrink: 0; width: 76px; height: 76px; display: grid; place-items: center; overflow: hidden; padding: 0; border: 0; border-radius: 50%; background: var(--panel-raised); color: var(--muted); cursor: pointer; }
 .profile-avatar { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 .profile-avatar-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; background: #0009; color: white; font-size: 12px; opacity: 0; transition: opacity 120ms; }
 .profile-avatar-preview:hover .profile-avatar-overlay, .profile-avatar-preview:focus-visible .profile-avatar-overlay { opacity: 1; }
 .profile-nickname { display: grid; grid-template-rows: 40px 20px; gap: 4px; min-width: 0; flex: 1; }
-.profile-nickname button { display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 40px; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
-.profile-nickname button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 20px; font-weight: 600; }
+.profile-nickname button { display: flex; align-items: center; justify-content: flex-start; gap: 12px; min-width: 0; min-height: 40px; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.profile-nickname button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 20px; font-weight: 600; line-height: 24px; }
 .profile-nickname button svg { flex-shrink: 0; color: var(--muted); }
-.profile-nickname input { width: 100%; min-height: 40px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font-size: 20px; font-weight: 600; }
-.profile-registration { min-width: 0; overflow: hidden; padding-left: 8px; color: var(--muted); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
+.profile-nickname input { width: 100%; min-height: 40px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font-size: 20px; font-weight: 600; line-height: 24px; }
+.profile-registration { min-width: 0; overflow: hidden; padding-left: 9px; color: var(--muted); font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
 .profile-signature { display: grid; gap: 4px; min-width: 0; }
 .profile-signature-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .profile-signature label { font-size: 14px; font-weight: 500; }

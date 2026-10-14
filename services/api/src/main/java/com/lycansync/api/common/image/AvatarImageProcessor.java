@@ -47,7 +47,12 @@ public final class AvatarImageProcessor {
         if (bytes.length > MAX_INPUT_BYTES) {
             throw new InvalidAvatarException("裁剪后的头像数据过大，请重新裁剪后重试");
         }
-        return encodePng(readImage(bytes, prefix));
+        BufferedImage image = readImage(bytes, prefix);
+        // 已规范的头像原样保存，避免反复编辑后再次编码；仍先完成格式与像素校验。
+        if (prefix.equals(PNG_PREFIX) && image.getWidth() == OUTPUT_SIZE && image.getHeight() == OUTPUT_SIZE) {
+            return avatar;
+        }
+        return encodePng(image);
     }
 
     private static BufferedImage readImage(byte[] bytes, String prefix) {

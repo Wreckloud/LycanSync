@@ -50,6 +50,12 @@ class AvatarImageProcessorTests {
     }
 
     @Test
+    void shouldPreserveCompliantPngWithoutReencoding() throws IOException {
+        String original = dataUrl(new BufferedImage(256, 256, BufferedImage.TYPE_INT_ARGB), "png");
+        assertThat(AvatarImageProcessor.normalize(original)).isEqualTo(original);
+    }
+
+    @Test
     void shouldAcceptComplexCropAboveOldLimitWithoutDroppingResolution() throws IOException {
         BufferedImage source = new BufferedImage(512, 512, BufferedImage.TYPE_INT_ARGB);
         Random random = new Random(11);

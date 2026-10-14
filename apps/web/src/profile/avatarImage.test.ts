@@ -12,18 +12,18 @@ afterEach(() => {
 });
 
 describe('头像图片处理', () => {
-  it('滚轮向上放大、向下缩小，并限制在滑块范围内', () => {
-    expect(zoomAvatarWithWheel(2, -100, 0)).toBeCloseTo(2.1);
-    expect(zoomAvatarWithWheel(2, 100, 0)).toBeCloseTo(1.9);
-    expect(zoomAvatarWithWheel(3, -100, 0)).toBe(3);
+  it('滚轮按比例缩放，上限扩展到 9 倍', () => {
+    expect(zoomAvatarWithWheel(2, -100, 0)).toBeCloseTo(2 * Math.exp(0.1));
+    expect(zoomAvatarWithWheel(2, 100, 0)).toBeCloseTo(2 * Math.exp(-0.1));
+    expect(zoomAvatarWithWheel(9, -100, 0)).toBe(9);
     expect(zoomAvatarWithWheel(1, 100, 0)).toBe(1);
     expect(zoomAvatarWithWheel(2, 0, 0)).toBe(2);
   });
 
   it('兼容按行和按页的滚轮，单次大滚动不跳到边界', () => {
-    expect(zoomAvatarWithWheel(2, -3, 1)).toBeCloseTo(2.048);
-    expect(zoomAvatarWithWheel(2, 1, 2)).toBeCloseTo(1.8);
-    expect(zoomAvatarWithWheel(2, -10_000, 0)).toBeCloseTo(2.2);
+    expect(zoomAvatarWithWheel(2, -3, 1)).toBeCloseTo(2 * Math.exp(0.048));
+    expect(zoomAvatarWithWheel(2, 1, 2)).toBeCloseTo(2 * Math.exp(-0.2));
+    expect(zoomAvatarWithWheel(2, -10_000, 0)).toBeCloseTo(2 * Math.exp(0.2));
   });
 
   it('原图超过 10 MB 仍可解码，上传只使用裁剪区域', async () => {
@@ -50,7 +50,7 @@ describe('头像图片处理', () => {
     expect(canvas.width).toBe(512);
     expect(canvas.height).toBe(512);
     expect(clearRect).not.toHaveBeenCalled();
-    expect(drawImage).toHaveBeenCalledWith(source, 200, 0, 800, 800, 0, 0, 512, 512);
+    expect(drawImage).toHaveBeenCalledWith(source, -600, -400);
     expect(toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/png');
   });
 
@@ -91,7 +91,33 @@ describe('头像图片处理', () => {
       x: 350,
       y: 300,
       size: 400,
+      rotation: 0,
     });
+  });
+
+  it('旋转和极端拖动后四角仍位于原图中，不露空白', () => {
+    for (const zoom of [1, 2, 9]) for (const rotation of [-180, -90, -45, 0, 30, 45, 90, 180]) {
+      const crop = calculateAvatarCrop(1200, 800, 300, zoom, 10000, -10000, rotation);
+      const radians = rotation * Math.PI / 180;
+      for (const x of [-crop.size / 2, crop.size / 2]) {
+        for (const y of [-crop.size / 2, crop.size / 2]) {
+          const sourceX = crop.x + crop.size / 2 + Math.cos(radians) * x + Math.sin(radians) * y;
+          const sourceY = crop.y + crop.size / 2 - Math.sin(radians) * x + Math.cos(radians) * y;
+          expect(sourceX).toBeGreaterThanOrEqual(-0.000001);
+          expect(sourceX).toBeLessThanOrEqual(1200.000001);
+          expect(sourceY).toBeGreaterThanOrEqual(-0.000001);
+          expect(sourceY).toBeLessThanOrEqual(800.000001);
+        }
+      }
+    }
+  });
+
+  it('输出使用与预览相同的旋转和中心位置', async () => {
+    const { translate, rotate, scale } = installCanvas((done, type) => done(new Blob(['png'], { type })));
+    await encodeAvatarCrop(bitmap(800, 800), { x: 200, y: 200, size: 400, rotation: 90 });
+    expect(translate).toHaveBeenCalledWith(256, 256);
+    expect(rotate).toHaveBeenCalledWith(Math.PI / 2);
+    expect(scale).toHaveBeenCalledWith(1.28, 1.28);
   });
 });
 
@@ -104,13 +130,14 @@ function installCanvas(
 ) {
   const clearRect = vi.fn();
   const drawImage = vi.fn();
+  const translate = vi.fn(); const rotate = vi.fn(); const scale = vi.fn();
   const toBlob = vi.fn((done: BlobCallback, type = 'image/png') => encode(done, type));
   const canvas = {
     width: 0,
     height: 0,
-    getContext: vi.fn(() => ({ clearRect, drawImage })),
+    getContext: vi.fn(() => ({ clearRect, drawImage, translate, rotate, scale })),
     toBlob,
   } as unknown as HTMLCanvasElement;
   vi.stubGlobal('document', { createElement: vi.fn(() => canvas) });
-  return { canvas, clearRect, drawImage, toBlob };
+  return { canvas, clearRect, drawImage, toBlob, translate, rotate, scale };
 }

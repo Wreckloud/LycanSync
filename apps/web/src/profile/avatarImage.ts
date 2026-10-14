@@ -1,5 +1,6 @@
 export const MAX_AVATAR_SOURCE_PIXELS = 40_000_000;
 export const AVATAR_CROP_SIZE = 512;
+export const AVATAR_MAX_ZOOM = 9;
 
 const ACCEPTED_TYPES = new Set(['image/png', 'image/jpeg']);
 
@@ -14,11 +15,12 @@ export interface AvatarCrop {
   x: number;
   y: number;
   size: number;
+  rotation?: number;
 }
 
 export function zoomAvatarWithWheel(zoom: number, deltaY: number, deltaMode: number): number {
   const pixels = deltaY * (deltaMode === 1 ? 16 : deltaMode === 2 ? 280 : 1);
-  return Math.max(1, Math.min(3, zoom - Math.max(-200, Math.min(200, pixels)) / 1000));
+  return Math.max(1, Math.min(AVATAR_MAX_ZOOM, zoom * Math.exp(-Math.max(-200, Math.min(200, pixels)) / 1000)));
 }
 
 export async function decodeAvatarFile(file: File): Promise<ImageBitmap> {
@@ -47,15 +49,23 @@ export function calculateAvatarCrop(
   zoom: number,
   offsetX: number,
   offsetY: number,
+  rotation = 0,
 ): AvatarCrop {
-  const displayScale = viewportSize / Math.min(sourceWidth, sourceHeight) * zoom;
+  const radians = rotation * Math.PI / 180;
+  const cosine = Math.cos(radians);
+  const sine = Math.sin(radians);
+  const coverage = Math.abs(cosine) + Math.abs(sine);
+  const displayScale = viewportSize * coverage / Math.min(sourceWidth, sourceHeight) * zoom;
   const size = viewportSize / displayScale;
-  const x = sourceWidth / 2 - (viewportSize / 2 + offsetX) / displayScale;
-  const y = sourceHeight / 2 - (viewportSize / 2 + offsetY) / displayScale;
+  // 将拖动量转回图片坐标；四个裁剪角始终落在原图范围内。
+  const marginX = Math.max(0, sourceWidth / 2 - size * coverage / 2);
+  const marginY = Math.max(0, sourceHeight / 2 - size * coverage / 2);
+  const shiftX = Math.max(-marginX, Math.min(marginX, (cosine * offsetX + sine * offsetY) / displayScale));
+  const shiftY = Math.max(-marginY, Math.min(marginY, (-sine * offsetX + cosine * offsetY) / displayScale));
   return {
-    x: Math.max(0, Math.min(sourceWidth - size, x)),
-    y: Math.max(0, Math.min(sourceHeight - size, y)),
-    size,
+    x: sourceWidth / 2 - shiftX - size / 2,
+    y: sourceHeight / 2 - shiftY - size / 2,
+    size, rotation,
   };
 }
 
@@ -64,6 +74,7 @@ export async function encodeAvatarCrop(
   crop: AvatarCrop,
 ): Promise<Blob> {
   if (!Number.isFinite(crop.x) || !Number.isFinite(crop.y) || !Number.isFinite(crop.size)
+      || !Number.isFinite(crop.rotation ?? 0)
       || crop.size <= 0) {
     throw new AvatarImageError('头像裁剪区域无效。');
   }
@@ -75,7 +86,10 @@ export async function encodeAvatarCrop(
   // 只提交用户选中的区域，保留透明度；最终尺寸和压缩由服务器统一处理。
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = 'high';
-  context.drawImage(source, crop.x, crop.y, crop.size, crop.size, 0, 0, AVATAR_CROP_SIZE, AVATAR_CROP_SIZE);
+  context.translate(AVATAR_CROP_SIZE / 2, AVATAR_CROP_SIZE / 2);
+  context.rotate((crop.rotation ?? 0) * Math.PI / 180);
+  context.scale(AVATAR_CROP_SIZE / crop.size, AVATAR_CROP_SIZE / crop.size);
+  context.drawImage(source, -crop.x - crop.size / 2, -crop.y - crop.size / 2);
   const blob = await canvasToBlob(canvas);
   if (!blob) throw new AvatarImageError('无法生成裁剪后的头像，请重试。');
   return blob;

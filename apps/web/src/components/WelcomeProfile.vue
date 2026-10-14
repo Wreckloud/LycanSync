@@ -15,7 +15,7 @@ const avatarInput = ref<HTMLInputElement | null>(null);
 const nicknameInput = ref<HTMLInputElement | null>(null);
 const nicknameButton = ref<HTMLButtonElement | null>(null);
 const editingNickname = ref(false);
-const { cropSource, picking, pickAvatar, clearCrop } = useAvatarCrop(error);
+const { cropSource, picking, pickAvatar, editAvatar, clearCrop } = useAvatarCrop(error);
 const registrationDate = computed(() => formatRegistrationDate(props.user.createdAt));
 
 function applyAvatar(value: string) {
@@ -57,17 +57,20 @@ async function save() {
           <h1 id="welcome-profile-title">你的个人资料卡</h1>
           <p>向大家展示自己</p>
         </div>
-        <button type="button" class="welcome-skip" :disabled="busy || picking || !!cropSource" @click="emit('finish')">
+        <button type="button" class="card-header-action" :disabled="busy || picking || !!cropSource" @click="emit('finish')">
           跳过<ArrowRight :size="16" aria-hidden="true" />
         </button>
       </header>
       <div class="welcome-details">
         <div class="welcome-identity">
-          <button type="button" class="welcome-avatar" aria-label="修改头像" :disabled="busy || picking" @click="avatarInput?.click()">
+          <div class="welcome-avatar-area"><button type="button" class="welcome-avatar" aria-label="修改头像" :disabled="busy || picking" @click="avatar ? editAvatar(avatar) : avatarInput?.click()">
             <img v-if="avatar" :src="avatar" alt="头像预览" referrerpolicy="no-referrer" />
             <UserRound v-else :size="42" />
             <span class="welcome-avatar-overlay" aria-hidden="true"><Pencil :size="20" /><span>编辑</span></span>
-          </button>
+          </button><div class="avatar-actions">
+            <button type="button" class="avatar-action" :disabled="busy || picking" @click="avatarInput?.click()">{{ avatar ? '更换' : '添加头像' }}</button>
+            <button v-if="avatar" type="button" class="avatar-action" :disabled="busy || picking" @click="avatar = ''">移除</button>
+          </div></div>
           <input ref="avatarInput" type="file" hidden aria-label="上传头像" accept="image/png,image/jpeg" @change="pickAvatar" />
           <div class="welcome-nickname">
             <input v-if="editingNickname" ref="nicknameInput" v-model="nickname" aria-label="昵称" maxlength="32"
@@ -87,10 +90,10 @@ async function save() {
             :readonly="busy" placeholder="写一句想让朋友看到的话" />
         </div>
       </div>
-      <footer class="welcome-actions">
-        <InlineFeedback class="welcome-feedback" :message="error"
+      <footer class="card-actions card-actions-no-cancel">
+        <InlineFeedback class="card-feedback" :message="error"
           :status="busy ? '正在保存…' : picking ? '正在读取图片…' : ''" />
-        <button type="submit" class="confirm-button" :disabled="busy || picking || !!cropSource">保存并进入</button>
+        <button type="submit" class="confirm-button card-actions-end" :disabled="busy || picking || !!cropSource">保存并进入</button>
       </footer>
     </form>
     <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整头像" @apply="applyAvatar" @cancel="clearCrop" />
@@ -102,10 +105,9 @@ async function save() {
 .welcome-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .welcome-header h1 { margin: 0; font-size: 22px; line-height: 32px; }
 .welcome-header p { margin: 4px 0 0; font-size: 13px; line-height: 20px; }
-.welcome-skip { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; height: var(--button-height); padding: 5px 0 5px 8px; border: 0; background: transparent; color: var(--muted); font-size: 14px; line-height: 20px; cursor: pointer; }
-.welcome-skip:hover:not(:disabled) { color: var(--text); }
 .welcome-details { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 24px; margin: 24px 0; }
 .welcome-identity { display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 96px; }
+.welcome-avatar-area { position: relative; flex-shrink: 0; }
 .welcome-avatar { position: relative; flex-shrink: 0; display: grid; place-items: center; width: 80px; height: 80px; padding: 0; overflow: hidden; border: 0; border-radius: 50%; background: var(--panel-raised); color: var(--muted); cursor: pointer; }
 .welcome-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .welcome-avatar-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; background: #0009; color: white; font-size: 12px; opacity: 0; }
@@ -125,9 +127,6 @@ async function save() {
 .welcome-signature-count { flex-shrink: 0; }
 .welcome-signature textarea { width: 100%; height: 72px; resize: none; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; line-height: 22px; }
 .welcome-signature textarea:disabled { opacity: .5; }
-.welcome-actions { display: flex; align-items: center; gap: 16px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
-.welcome-feedback { flex: 1; }
-.welcome-actions button { flex-shrink: 0; }
 @media (max-width: 600px) { .welcome-details { grid-template-columns: minmax(0, 1fr); gap: 16px; } }
 @media (max-width: 420px) { .welcome-profile { padding: 20px; } .welcome-header h1 { font-size: 20px; } .welcome-avatar { width: 64px; height: 64px; } .welcome-nickname button span, .welcome-nickname input { font-size: 18px; } }
 </style>
