@@ -32,7 +32,7 @@ watch(() => props.active, (active) => { if (!active) diagnosticsOpen.value = fal
   <div class="settings-section about-settings">
     <section class="settings-block">
       <h2>LycanSync</h2>
-      <dl><div><dt>版本</dt><dd>{{ packageInfo.version }} · 开发版</dd></div>
+      <dl><div><dt>版本</dt><dd>{{ packageInfo.version }}</dd></div>
         <div><dt>媒体状态</dt><dd>{{ room ? rtc.status === 'connected' ? '已加入语音' : rtc.status : '未加入语音' }}</dd></div>
         <div><dt>活动媒体</dt><dd>{{ hasActiveMedia ? '存在' : '无' }}</dd></div></dl>
     </section>

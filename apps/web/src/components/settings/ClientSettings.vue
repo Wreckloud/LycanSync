@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { readScreenSharePreferences, saveScreenSharePreferences } from '../../settings/screenSharePreferences';
 import InlineFeedback from '../InlineFeedback.vue';
 import UpdateRestartDialog from '../UpdateRestartDialog.vue';
@@ -7,7 +7,7 @@ import { useClientUpdate } from '../../settings/useClientUpdate';
 
 const props = defineProps<{ desktop: boolean; active: boolean; stageAutoFill: boolean; stagePreferenceError: string }>();
 const emit = defineEmits<{ stageAutoFill: [enabled: boolean] }>();
-const autoStartSupported = ref(false);
+const autoStartSupported = ref<boolean>();
 const autoStartEnabled = ref(false);
 const autoStartBusy = ref(false);
 const autoStartError = ref('');
@@ -20,6 +20,22 @@ const { state: updateState, error: updateError, busy: updateBusy, confirmationVe
   check: checkUpdates, cancel: cancelUpdate, restart: restartUpdate } = useClientUpdate(desktopBridge,
   () => props.active && props.desktop);
 let screenLoaded = false;
+const confirmingUpdate = computed(() => Boolean(confirmationVersion.value));
+const borderDescription = computed(() => {
+  if (!screenSupport.value) return screenError.value ? '尚未确认系统支持情况。' : '正在确认系统支持情况…';
+  return screenSupport.value.hideBorder
+    ? '需要 Windows 授权及安装包权限支持；未获准时会提示，其他应用也可能要求保留边框。'
+    : '需要 Windows build 20348 或以上；当前系统无法通过官方接口隐藏边框。';
+});
+const autoStartDescription = computed(() => {
+  if (autoStartSupported.value === undefined) return autoStartError.value ? '尚未确认开机自启支持情况。' : '正在读取开机自启设置…';
+  return autoStartSupported.value
+    ? '使用 Windows 登录项启动，不增加额外常驻进程。'
+    : '仅 Windows 安装版支持，开发模式不会修改系统启动项。';
+});
+
+// 弹窗通过 Teleport 展示；由设置页隔离背景，避免确认期间切栏或返回。
+defineExpose({ confirmingUpdate });
 
 watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
   if (!active || !desktop || screenLoaded) return;
@@ -40,20 +56,27 @@ watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
 
 function updateScreenPreference(key: 'hideCursor' | 'hideBorder', event: Event) {
   if (!screenSupport.value?.[key]) return;
+  const input = event.target as HTMLInputElement;
   const previous = screenPreferences[key];
-  screenPreferences[key] = (event.target as HTMLInputElement).checked;
+  screenPreferences[key] = input.checked;
   try {
     saveScreenSharePreferences(screenPreferences);
     screenError.value = '';
   } catch {
     screenPreferences[key] = previous;
+    // 同步回退可能与上次渲染值相同，仍须恢复用户刚改变的原生勾选状态。
+    input.checked = previous;
     screenError.value = '无法保存屏幕共享设置。';
   }
 }
 
 watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
-  if (!active || !desktop || loaded || !desktopBridge?.getAutoStart) return;
+  if (!active || !desktop || loaded) return;
   loaded = true;
+  if (!desktopBridge?.getAutoStart) {
+    autoStartError.value = '请重新启动客户端以读取开机自启设置。';
+    return;
+  }
   void desktopBridge.getAutoStart().then((settings) => {
     autoStartSupported.value = settings.supported;
     autoStartEnabled.value = settings.enabled;
@@ -61,13 +84,14 @@ watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
 }, { immediate: true });
 
 async function updateAutoStart(event: Event) {
+  if (autoStartBusy.value || !autoStartSupported.value || !desktopBridge) return;
   const enabled = (event.target as HTMLInputElement).checked;
   const previous = autoStartEnabled.value;
   autoStartEnabled.value = enabled;
   autoStartBusy.value = true;
   autoStartError.value = '';
   try {
-    const settings = await desktopBridge?.setAutoStart(enabled);
+    const settings = await desktopBridge.setAutoStart(enabled);
     if (!settings?.supported) throw new Error('当前版本不支持开机自启');
     autoStartEnabled.value = settings.enabled;
   } catch (exception) {
@@ -113,9 +137,7 @@ async function updateAutoStart(event: Event) {
             aria-label="隐藏共享画面中的光标" @change="updateScreenPreference('hideCursor', $event)" />
         </label>
         <label class="settings-toggle" :class="{ 'is-disabled': !screenSupport?.hideBorder }">
-          <span><strong>隐藏黄色共享边框</strong><small>{{ screenSupport?.hideBorder
-            ? '需要 Windows 授权及安装包权限支持；未获准时会提示，其他应用也可能要求保留边框。'
-            : '需要 Windows build 20348 或以上；当前系统无法通过官方接口隐藏边框。' }}</small></span>
+          <span><strong>隐藏黄色共享边框</strong><small>{{ borderDescription }}</small></span>
           <input type="checkbox" :checked="screenPreferences.hideBorder" :disabled="!screenSupport?.hideBorder"
             aria-label="隐藏黄色共享边框" @change="updateScreenPreference('hideBorder', $event)" />
         </label>
@@ -127,9 +149,7 @@ async function updateAutoStart(event: Event) {
       <h2>系统</h2>
       <p v-if="!desktop">开机自启仅在 Windows 桌面版提供。</p>
       <label v-else class="settings-toggle" :class="{ 'is-disabled': !autoStartSupported || autoStartBusy }">
-        <span><strong>开机自动启动</strong><small>{{ autoStartSupported
-          ? '使用 Windows 登录项启动，不增加额外常驻进程。'
-          : '仅 Windows 安装版支持，开发模式不会修改系统启动项。' }}</small></span>
+        <span><strong>开机自动启动</strong><small>{{ autoStartDescription }}</small></span>
         <input type="checkbox" :checked="autoStartEnabled" :disabled="!autoStartSupported || autoStartBusy"
           aria-label="开机自动启动" @change="updateAutoStart" />
       </label>

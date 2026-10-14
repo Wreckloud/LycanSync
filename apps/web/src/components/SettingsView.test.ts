@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { expect, it, vi } from 'vitest';
 import type { SettingsSectionId } from '../settings/settingsSections';
 
@@ -14,11 +14,14 @@ const callbacks = ['selectSection', 'leaveSettings'].map((name) => {
   if (!declaration) throw new Error(`设置回调不存在：${name}`);
   return declaration.getText(sourceFile);
 }).join('\n');
-const compiled = ts.transpile(callbacks, { target: ts.ScriptTarget.ES2022 });
+const blockedState = sourceFile.statements.find((statement) => ts.isVariableStatement(statement)
+  && statement.declarationList.declarations.some((declaration) => declaration.name.getText(sourceFile) === 'interactionBlocked'))!;
+const compiled = ts.transpile(`${blockedState.getText(sourceFile)}\n${callbacks}`, { target: ts.ScriptTarget.ES2022 });
 
 function setup() {
   const state = { activeSection: ref<SettingsSectionId>('account'), leaving: ref(false),
-    profileSettings: ref({ finishEditing: vi.fn(async () => true) }),
+    profileSettings: ref({ cropping: false, finishEditing: vi.fn(async () => true) }),
+    clientSettings: ref({ confirmingUpdate: false }), computed,
     props: { user: { administrator: false } }, emit: vi.fn() };
   const callbacks = runInNewContext(`${compiled}\n({ selectSection, leaveSettings })`, state) as {
     selectSection: (section: SettingsSectionId) => Promise<void>; leaveSettings: (logout: boolean) => Promise<void>;
@@ -57,4 +60,32 @@ it('头像尚未处理完时保留账号页，不发出返回或退出事件', a
   expect(state.activeSection.value).toBe('account');
   expect(state.emit).not.toHaveBeenCalled();
   expect(state.leaving.value).toBe(false);
+});
+
+it('更新确认期间隔离栏目、返回和退出；取消确认后可以继续', async () => {
+  const { state, selectSection, leaveSettings } = setup();
+  state.activeSection.value = 'client';
+  state.clientSettings.value.confirmingUpdate = true;
+  await selectSection('account');
+  await leaveSettings(false);
+  await leaveSettings(true);
+  expect(state.activeSection.value).toBe('client');
+  expect(state.profileSettings.value.finishEditing).not.toHaveBeenCalled();
+  expect(state.emit).not.toHaveBeenCalled();
+  state.clientSettings.value.confirmingUpdate = false;
+  await selectSection('account');
+  await leaveSettings(false);
+  expect(state.emit).toHaveBeenCalledExactlyOnceWith('close');
+});
+
+it('裁剪弹窗期间不启动背景操作，关闭裁剪后恢复操作', async () => {
+  const { state, selectSection, leaveSettings } = setup();
+  state.profileSettings.value.cropping = true;
+  await selectSection('client');
+  await leaveSettings(false);
+  expect(state.profileSettings.value.finishEditing).not.toHaveBeenCalled();
+  expect(state.emit).not.toHaveBeenCalled();
+  state.profileSettings.value.cropping = false;
+  await selectSection('client');
+  expect(state.activeSection.value).toBe('client');
 });

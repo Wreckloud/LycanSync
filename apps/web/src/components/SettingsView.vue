@@ -39,10 +39,12 @@ const props = defineProps<{
 const emit = defineEmits<{ close: []; logout: []; activityVisibility: [enabled: boolean]; stageAutoFill: [enabled: boolean] }>();
 const heading = ref<HTMLElement | null>(null);
 const profileSettings = ref<InstanceType<typeof ProfileSettings> | null>(null);
+const clientSettings = ref<InstanceType<typeof ClientSettings> | null>(null);
 const activeSection = ref<SettingsSectionId>(props.section);
 const leaving = ref(false);
 const sectionTitle = computed(() => settingsSectionTitle(activeSection.value));
 const visibleSections = computed(() => SETTINGS_SECTIONS.filter((item) => item.id !== 'members' || props.user.administrator));
+const interactionBlocked = computed(() => Boolean(profileSettings.value?.cropping || clientSettings.value?.confirmingUpdate));
 
 watch(() => props.section, (section) => { activeSection.value = section; });
 watch(activeSection, async () => {
@@ -55,7 +57,7 @@ onScopeDispose(() => { void props.microphoneTest.stop(); });
 
 async function selectSection(section: SettingsSectionId) {
   if (section === 'members' && !props.user.administrator) return;
-  if (leaving.value || section === activeSection.value) return;
+  if (interactionBlocked.value || leaving.value || section === activeSection.value) return;
   if (activeSection.value === 'account' && !await profileSettings.value?.finishEditing()) return;
   activeSection.value = section;
 }
@@ -69,7 +71,7 @@ function requestLogout() {
 }
 
 async function leaveSettings(logout: boolean) {
-  if (leaving.value) return;
+  if (interactionBlocked.value || leaving.value) return;
   leaving.value = true;
   try {
     if (!await profileSettings.value?.finishEditing()) {
@@ -85,7 +87,7 @@ async function leaveSettings(logout: boolean) {
 </script>
 
 <template>
-  <main class="settings-view" aria-label="设置" :inert="profileSettings?.cropping" @keydown.esc.stop="closeSettings">
+  <main class="settings-view" aria-label="设置" :inert="interactionBlocked" @keydown.esc.stop="closeSettings">
     <nav class="settings-sidebar" aria-label="设置栏目">
       <button v-for="item in visibleSections" :key="item.id" type="button"
         :class="{ 'is-selected': activeSection === item.id }" :aria-current="activeSection === item.id ? 'page' : undefined"
@@ -114,7 +116,7 @@ async function leaveSettings(logout: boolean) {
           :desktop="desktop" :preferences="preferences" :rtc="rtc" :microphone-test="microphoneTest"
           :input-level-percent="inputLevelPercent" />
         <SoundSettings v-show="activeSection === 'sound'" :user-id="user.id" :active="activeSection === 'sound'" />
-        <ClientSettings v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'"
+        <ClientSettings ref="clientSettings" v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'"
           :stage-auto-fill="stageAutoFill" :stage-preference-error="stagePreferenceError" @stage-auto-fill="emit('stageAutoFill', $event)" />
         <AboutSettings v-show="activeSection === 'about'" :active="activeSection === 'about'" :rtc="rtc" />
       </div>
