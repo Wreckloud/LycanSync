@@ -25,7 +25,7 @@ Linux 部署包包含后端 JAR、Dockerfile、Compose、HTTPS 入口和部署�
 
 ```powershell
 mvn -f services/api/pom.xml package
-./deploy/package-server.ps1 -DesktopInstaller ./release/desktop/LycanSync-0.0.11-windows-x64-setup.exe
+./deploy/package-server.ps1 -DesktopInstaller ./release/desktop/LycanSync-0.1.0-windows-x64-setup.exe
 ```
 
 产物位于 `release/server/`。部署步骤见 [服务器部署说明](deploy/server/DEPLOY.md)，支持域名证书和内网 VMware 测试 CA 两种明确配置。服务器使用 `rtc-server` profile；`rtc-local` 的本机监听约束保持不变。服务器首次运行需要联网获取 Docker 镜像，并执行数据库迁移；本包不包含现有数据库、聊天文件或密钥。
