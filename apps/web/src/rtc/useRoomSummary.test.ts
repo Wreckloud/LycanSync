@@ -28,6 +28,24 @@ function stubDocumentVisibility(initial: DocumentVisibilityState) {
 }
 
 describe('Vue 房间摘要生命周期', () => {
+  it('慢请求超时后显示查询失败，五秒后仍能重新获取当前摘要', async () => {
+    vi.useFakeTimers();
+    requestSummary.mockRejectedValueOnce(new DOMException('请求超时', 'TimeoutError'));
+    requestSummary.mockResolvedValue({ participantCount: 0, participants: [] });
+    const onError = vi.fn();
+    scope = effectScope();
+    const summary = scope.run(() => useRoomSummary(ref(groupIdValue), ref(true), onError))!;
+    await nextTick();
+    expect(summary.value).toBeNull();
+    expect(onError).toHaveBeenLastCalledWith('暂时无法查询当前语音成员');
+    expect(requestSummary.mock.calls[0][1].aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(requestSummary).toHaveBeenCalledTimes(2);
+    expect(summary.value).toEqual({ participantCount: 0, participants: [] });
+    expect(onError).toHaveBeenLastCalledWith(null);
+  });
+
   it('切换群组后忽略迟到的旧摘要', async () => {
     let finishOld!: (summary: RtcRoomSummary) => void;
     requestSummary.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }));

@@ -19,7 +19,7 @@ describe('查询房间外语音成员摘要', () => {
       participants: [{ participantIdentity: 'user-a', displayName: '小北' }, { participantIdentity: 'user-b', displayName: '阿澈' }],
     });
     expect(fetchMock).toHaveBeenCalledWith('/api/rtc/room-summary?groupId=' + groupId, expect.objectContaining({
-      method: 'GET', cache: 'no-store', credentials: 'omit', signal,
+      method: 'GET', cache: 'no-store', credentials: 'omit', signal: expect.any(AbortSignal),
     }));
   });
 
@@ -43,7 +43,7 @@ describe('批量查询群组语音人数', () => {
 
     await expect(requestRoomOccupancies(signal)).resolves.toEqual(result);
     expect(fetchMock).toHaveBeenCalledWith('/api/rtc/room-occupancies', expect.objectContaining({
-      method: 'GET', cache: 'no-store', credentials: 'omit', signal,
+      method: 'GET', cache: 'no-store', credentials: 'omit', signal: expect.any(AbortSignal),
     }));
   });
 

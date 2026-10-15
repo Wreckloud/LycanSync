@@ -71,7 +71,7 @@ async function groupRequest<T>(path: string, method = 'GET', body?: unknown, sig
     method,
     headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: signal ?? AbortSignal.timeout(15000),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
   });
   if (!response.ok) throw await readApiError(response);
   if (response.status === 204) return undefined as T;

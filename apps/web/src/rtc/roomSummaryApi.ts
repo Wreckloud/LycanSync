@@ -32,7 +32,8 @@ export async function requestRoomSummary(groupId: string, signal: AbortSignal): 
     headers: { Accept: 'application/json' },
     cache: 'no-store',
     credentials: 'omit',
-    signal,
+    // 切群可立即取消，慢请求也必须结束，避免下一轮状态刷新一直等不到执行。
+    signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]),
   });
   if (!response.ok) {
     throw new RoomSummaryRequestError(`查询语音成员失败（HTTP ${response.status}）`);
@@ -53,7 +54,8 @@ export async function requestRoomSummary(groupId: string, signal: AbortSignal): 
 /** 一次查询所有可访问群组的语音人数，供左侧群组栏展示占用徽标。 */
 export async function requestRoomOccupancies(signal: AbortSignal): Promise<RtcRoomOccupancy[]> {
   const response = await authenticatedFetch('/api/rtc/room-occupancies', {
-    method: 'GET', headers: { Accept: 'application/json' }, cache: 'no-store', credentials: 'omit', signal,
+    method: 'GET', headers: { Accept: 'application/json' }, cache: 'no-store', credentials: 'omit',
+    signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]),
   });
   if (!response.ok) throw new RoomSummaryRequestError(`查询群组语音人数失败（HTTP ${response.status}）`);
   const result: unknown = await response.json().catch(() => null);

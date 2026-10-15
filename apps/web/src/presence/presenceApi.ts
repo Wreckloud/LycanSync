@@ -20,7 +20,7 @@ export async function sendPresenceHeartbeat(
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ status, activity } satisfies PresenceHeartbeatRequest),
-    signal: signal ?? AbortSignal.timeout(15000),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
   });
   if (!response.ok) {
     throw new Error(`心跳上报失败（HTTP ${response.status}）`);
