@@ -572,7 +572,10 @@ async function loadGroup(groupId: string, keepExisting = false) {
     }
   } catch (error) {
     if (!request.signal.aborted) {
-      groupError.value = error instanceof Error ? error.message : '无法读取群组资料';
+      if (selectedGroupId.value === groupId) {
+        groupError.value = error instanceof Error ? error.message : '无法读取群组资料';
+      }
+      // 旧预览不覆盖当前提示；若它仍是通话群，失去成员资格仍须正常离房。
       if (error instanceof ApiRequestError && error.status === 404) {
         if (joinedGroupId.value === groupId || joiningGroupId.value === groupId) leaveVoice();
         if (selectedGroupDetail.value?.id === groupId) selectedGroupDetail.value = null;
@@ -581,7 +584,7 @@ async function loadGroup(groupId: string, keepExisting = false) {
       }
     }
   } finally {
-    if (!request.signal.aborted) groupLoading.value = false;
+    if (!request.signal.aborted && selectedGroupId.value === groupId) groupLoading.value = false;
   }
 }
 
