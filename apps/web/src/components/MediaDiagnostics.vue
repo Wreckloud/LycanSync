@@ -34,22 +34,25 @@ let componentDisposed = false;
 async function loadCaptureProbeCapability() {
   try {
     const capabilities = await window.lycanDesktop?.getNativeMediaCapabilities();
+    if (componentDisposed) return;
     captureProbeAvailable.value = capabilities?.captureProbe.available ?? false;
     captureProbeReason.value = capabilities?.captureProbe.reason ?? 'desktopUnavailable';
     videoCaptureAvailable.value = capabilities?.videoCapture.available ?? false;
   } catch {
+    if (componentDisposed) return;
     captureProbeAvailable.value = false;
     captureProbeReason.value = 'mediaHelperUnavailable';
   }
 }
 
 async function listVideoSources(sourceExpired = false) {
-  if (!window.lycanDesktop || sourceListLoading.value || captureProbeSessionId.value) return;
+  if (componentDisposed || !window.lycanDesktop || sourceListLoading.value || captureProbeSessionId.value) return;
   const previousSelection = selectedVideoSourceId.value;
   sourceListLoading.value = true;
   captureProbeError.value = '';
   try {
     const snapshot = await window.lycanDesktop.listNativeVideoSources();
+    if (componentDisposed) return;
     videoSources.value = snapshot.sources;
     // Helper 重启后来源 ID 可能复用；刷新时必须重新明确选择捕获目标。
     const selection = resetVideoSourceSelection(previousSelection);
@@ -69,12 +72,13 @@ async function listVideoSources(sourceExpired = false) {
 }
 
 async function refreshCaptureProbeDiagnostics() {
-  if (!window.lycanDesktop || diagnosticsPolling || (!captureProbeSessionId.value
+  if (componentDisposed || !window.lycanDesktop || diagnosticsPolling || (!captureProbeSessionId.value
       && !props.room.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track)) return;
+  const sessionId = captureProbeSessionId.value;
   diagnosticsPolling = true;
   try {
     const diagnostics = await window.lycanDesktop.getNativeMediaDiagnostics();
-    if (componentDisposed) return;
+    if (componentDisposed || captureProbeSessionId.value !== sessionId) return;
     captureProbeDiagnostics.value = diagnostics;
     if (!captureProbeSessionId.value) return;
     captureProbeState.value = diagnostics.state;
@@ -83,17 +87,17 @@ async function refreshCaptureProbeDiagnostics() {
       captureProbeState.value = diagnostics.lastCaptureError ? 'failed' : 'idle';
     }
   } catch {
+    if (componentDisposed || captureProbeSessionId.value !== sessionId) return;
     if (!captureProbeSessionId.value) { error.value = '原生共享诊断暂时无法读取。'; return; }
-    captureProbeSessionId.value = null;
     captureProbeState.value = 'failed';
-    captureProbeError.value = '探针进程已停止或诊断请求超时；请刷新来源后重试。';
+    captureProbeError.value = '无法读取探针诊断，采集状态尚未确认；请停止探针后重试。';
   } finally {
     diagnosticsPolling = false;
   }
 }
 
 async function startCaptureProbe() {
-  if (!window.lycanDesktop || !captureProbeAvailable.value || !selectedVideoSourceId.value
+  if (componentDisposed || !window.lycanDesktop || !captureProbeAvailable.value || !selectedVideoSourceId.value
       || sourceListLoading.value || captureProbeBusy.value || captureProbeSessionId.value) return;
   captureProbeBusy.value = true;
   captureProbeState.value = 'starting';
@@ -102,12 +106,10 @@ async function startCaptureProbe() {
     const result = await window.lycanDesktop.startNativeCaptureProbe(selectedVideoSourceId.value);
     captureProbeSessionId.value = result.sessionId;
     captureProbeState.value = 'running';
-    if (componentDisposed) {
-      await window.lycanDesktop.stopNativeCaptureProbe(result.sessionId).catch(() => undefined);
-      return;
-    }
+    if (componentDisposed) return;
     await refreshCaptureProbeDiagnostics();
   } catch (error) {
+    if (componentDisposed) return;
     captureProbeState.value = 'failed';
     const sourceExpired = isStaleVideoSourceError(error);
     captureProbeError.value = sourceExpired
@@ -118,6 +120,8 @@ async function startCaptureProbe() {
     if (sourceExpired) await listVideoSources(true);
   } finally {
     captureProbeBusy.value = false;
+    // 关闭可能发生在启动确认或首轮诊断等待期间；启动收尾后仍须回收已取得的会话。
+    if (componentDisposed && captureProbeSessionId.value) await stopCaptureProbe();
   }
 }
 
@@ -131,11 +135,14 @@ async function stopCaptureProbe() {
     await window.lycanDesktop.stopNativeCaptureProbe(sessionId);
     captureProbeSessionId.value = null;
     captureProbeState.value = 'idle';
-    captureProbeDiagnostics.value = await window.lycanDesktop.getNativeMediaDiagnostics();
+    if (!componentDisposed) {
+      try { captureProbeDiagnostics.value = await window.lycanDesktop.getNativeMediaDiagnostics(); }
+      catch { if (!componentDisposed) captureProbeError.value = '探针已停止，但暂时无法读取诊断。'; }
+    }
   } catch {
-    captureProbeSessionId.value = null;
     captureProbeState.value = 'failed';
-    captureProbeError.value = '探针停止未确认；主进程会阻止重复启动，并在应用退出时继续清理。';
+    captureProbeError.value = '探针停止未确认；请重试停止，或退出应用完成清理。';
+    if (componentDisposed) console.warn('诊断面板关闭后，视频探针停止未确认。');
   } finally {
     captureProbeBusy.value = false;
   }
@@ -161,7 +168,7 @@ function readPlayback(track: Track) {
 
 async function refresh() {
   // 面板隐藏或页面不可见时不做统计读取，避免后台窗口持续占用采集与解码线程。
-  if (polling || document.hidden) return;
+  if (componentDisposed || polling || document.hidden) return;
   polling = true;
   try {
     const results = await Promise.all(props.participants.map(async (participant) => {
@@ -182,6 +189,7 @@ async function refresh() {
         layers: report ? readVideoLayers(report, local ? 'outbound-rtp' : 'inbound-rtp', previous, track.mediaStreamTrack.id) : [],
       };
     }));
+    if (componentDisposed) return;
     streams.value = results.filter((result): result is StreamStats => result !== null);
     processMetrics.value = await window.lycanDesktop?.getProcessMetrics().catch(() => null) ?? null;
     error.value = '';
