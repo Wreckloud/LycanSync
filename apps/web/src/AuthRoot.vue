@@ -42,8 +42,10 @@ let disposed = false;
 let sessionHeartbeat: number | null = null;
 let sessionHeartbeatInFlight = false;
 let logoutInProgress = false;
+let initializationRequest: AbortController | null = null;
 
 function expired() {
+  initializationRequest?.abort();
   user.value = null;
   onboarding.value = false;
 }
@@ -58,6 +60,7 @@ void desktop?.isMaximized().then((maximized) => { windowMaximized.value = maximi
 window.addEventListener('lycan:unauthorized', expired);
 onScopeDispose(() => {
   disposed = true;
+  initializationRequest?.abort();
   if (sessionHeartbeat !== null) window.clearInterval(sessionHeartbeat);
   removeMaximizedChange?.();
   removeClose?.();
@@ -67,19 +70,34 @@ onScopeDispose(() => {
 });
 
 async function initialize() {
+  if (disposed) return;
+  initializationRequest?.abort();
+  const request = new AbortController();
+  initializationRequest = request;
   error.value = '';
   try {
-    const options = await authRequest<{ mode: 'invite' }>('options');
+    const options = await authRequest<{ mode: 'invite' }>('options', 'GET', undefined, request.signal);
+    if (request.signal.aborted) return;
     if (options.mode !== 'invite') throw new Error('服务器尚未启用邀请登录，请联系服主。');
     // 没有 Cookie 或页面持久化凭据；桌面主进程会自动附加已保存会话。
-    const response = await authenticatedFetch('/api/auth/me', { signal: AbortSignal.timeout(15000) });
+    const response = await authenticatedFetch('/api/auth/me', {
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(15000)]),
+    });
+    if (request.signal.aborted) return;
     if (response.ok) {
-      user.value = await response.json();
+      const restoredUser = await response.json();
+      // 邀请确认或新的重连已接管身份，旧响应正文也不能恢复先前账号。
+      if (!request.signal.aborted) user.value = restoredUser;
     }
     else if (response.status !== 401) throw new Error('无法恢复登录，请稍后重试。');
   } catch (exception) {
-    error.value = exception instanceof Error ? exception.message : '无法连接服务器';
-  } finally { ready.value = true; }
+    if (!request.signal.aborted) error.value = exception instanceof Error ? exception.message : '无法连接服务器';
+  } finally {
+    if (initializationRequest === request) {
+      initializationRequest = null;
+      if (!disposed) ready.value = true;
+    }
+  }
 }
 
 function acceptSession(result: { sessionToken?: string; user: AuthUser }) {
@@ -87,6 +105,7 @@ function acceptSession(result: { sessionToken?: string; user: AuthUser }) {
     if (!result.sessionToken) throw new Error('登录响应缺少会话');
     setBrowserSession(result.sessionToken);
   }
+  initializationRequest?.abort();
   user.value = result.user;
 }
 function completeAccess(result: { sessionToken?: string; user: AuthUser }, kind: string) {
@@ -134,16 +153,21 @@ watch(() => user.value?.id ?? null, (currentUserId) => {
 });
 
 async function logout() {
+  initializationRequest?.abort();
   error.value = '';
   const previousUser = user.value;
   logoutInProgress = true;
   user.value = null;
   await sendPresenceHeartbeat('OFFLINE', null, AbortSignal.timeout(1_200)).catch(() => undefined);
   try {
+    // 退出期间已通过邀请接入新身份时，不再使用新会话发送旧退出请求。
+    if (disposed || user.value) return;
     await authRequest<void>('logout', 'POST');
+    if (disposed || user.value) return;
     setBrowserSession(null);
     expired();
   } catch (exception) {
+    if (disposed || user.value) return;
     if (exception instanceof ApiRequestError
         && (exception.status === 401 || exception.code === 'LOCAL_SESSION_CLEAR_FAILED')) {
       setBrowserSession(null);

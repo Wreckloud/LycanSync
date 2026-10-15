@@ -25,8 +25,8 @@ function setup() {
   const authRequest = vi.fn(() => pending);
   // 执行正式心跳和退出回调，只控制请求结果，不启动页面、客户端或服务器。
   const context = { user, authRequest, disposed: false, sessionHeartbeatInFlight: false,
-    onboarding: ref(false), error: ref(''), logoutInProgress: false, ApiRequestError, Error, AbortSignal,
-    sendPresenceHeartbeat: vi.fn(async () => undefined), setBrowserSession: vi.fn() };
+    onboarding: ref(false), error: ref(''), logoutInProgress: false, initializationRequest: null, ApiRequestError, Error, AbortSignal,
+    sendPresenceHeartbeat: vi.fn(async (): Promise<void> => undefined), setBrowserSession: vi.fn() };
   const callbacks = runInNewContext(`${compiled}\n({ verifyCurrentSession, logout })`, context) as {
     verifyCurrentSession: () => Promise<void>; logout: () => Promise<void>;
   };
@@ -101,4 +101,43 @@ it('服务端退出失败才恢复原账号，保留明确错误', async () => {
   expect(context.user.value).toBe(original);
   expect(context.error.value).toBe('账号服务暂不可用');
   expect(context.setBrowserSession).not.toHaveBeenCalled();
+});
+
+it('离线上报期间已接入新账号，不使用新会话发送旧退出请求', async () => {
+  const { context, logout } = setup();
+  let complete!: () => void;
+  context.sendPresenceHeartbeat.mockReturnValueOnce(new Promise<void>((resolve) => { complete = resolve; }));
+  const pending = logout();
+  const current = { id: 'new-member', nickname: '新账号', avatar: '', administrator: false };
+  context.user.value = current;
+  complete();
+  await pending;
+  expect(context.user.value).toEqual(current);
+  expect(context.authRequest).not.toHaveBeenCalled();
+  expect(context.setBrowserSession).not.toHaveBeenCalled();
+  expect(context.logoutInProgress).toBe(false);
+});
+
+it.each([200, 401, 503])('旧退出返回%s时，不清除或覆盖之后接入的新账号', async (status) => {
+  const { context, logout } = setup();
+  let complete!: () => void;
+  let started!: () => void;
+  const entered = new Promise<void>((resolve) => { started = resolve; });
+  context.authRequest.mockImplementationOnce(async () => {
+    started();
+    await new Promise<void>((resolve) => { complete = resolve; });
+    if (status !== 200) throw new ApiRequestError(status, 'INVALID_SESSION', '旧退出结果');
+    return { id: 'member', nickname: '旧昵称', administrator: false };
+  });
+  const pending = logout();
+  await entered;
+  const current = { id: 'new-member', nickname: '新账号', avatar: '', administrator: false };
+  context.user.value = current;
+  context.error.value = '新状态提示';
+  complete();
+  await pending;
+  expect(context.user.value).toEqual(current);
+  expect(context.error.value).toBe('新状态提示');
+  expect(context.setBrowserSession).not.toHaveBeenCalled();
+  expect(context.logoutInProgress).toBe(false);
 });
