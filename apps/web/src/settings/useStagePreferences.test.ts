@@ -21,3 +21,22 @@ it('读取失败明确提示；保存失败仍保持本次选择', () => {
   expect(preference.autoFill.value).toBe(false);
   expect(preference.error.value).toContain('无法保存');
 });
+
+it('存储对象本身被系统拒绝时不阻断页面，本次舞台设置仍可修改', () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    get() { throw new Error('storage access denied'); },
+  });
+  try {
+    const preference = useStagePreferences('user');
+    expect(preference.autoFill.value).toBe(true);
+    expect(preference.error.value).toContain('无法读取');
+    preference.setAutoFill(false);
+    expect(preference.autoFill.value).toBe(false);
+    expect(preference.error.value).toContain('本次修改已生效');
+  } finally {
+    if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor);
+    else Reflect.deleteProperty(globalThis, 'localStorage');
+  }
+});
