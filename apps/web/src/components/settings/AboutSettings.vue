@@ -54,5 +54,4 @@ watch(() => props.active, (active) => { if (!active) diagnosticsOpen.value = fal
 .about-settings dl > div { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; padding: 11px 0; border-top: 1px solid var(--border-soft); }
 .about-settings dt { color: var(--muted); }
 .about-settings dd { margin: 0; }
-.about-settings :deep(.media-diagnostics) { position: static; width: 100%; max-height: none; padding: 0; overflow: visible; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 </style>

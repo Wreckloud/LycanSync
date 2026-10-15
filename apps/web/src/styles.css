@@ -105,16 +105,6 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   letter-spacing: .02em;
 }
 
-.dialog-icon {
-  width: 21px;
-  height: 21px;
-  display: grid;
-  place-items: center;
-  border-radius: 4px;
-  background: var(--accent);
-  color: white;
-}
-
 .window-actions {
   grid-column: -2 / -1;
   justify-self: end;
@@ -308,7 +298,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 
 .switch-confirm span { flex: 1; }
 
-.switch-confirm button, .dialog-actions button {
+.switch-confirm button {
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: var(--button-padding);
@@ -317,7 +307,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   cursor: pointer;
 }
 
-.switch-confirm .confirm-button, .dialog-actions .confirm-button {
+.switch-confirm .confirm-button {
   border-color: var(--accent);
   background: var(--accent);
   color: white;
@@ -418,18 +408,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 
 .voice-heading-actions .icon-button { width: 27px; height: 27px; }
 .media-diagnostics {
-  position: absolute;
-  z-index: 8;
-  top: 44px;
-  right: 16px;
-  width: min(380px, calc(100% - 32px));
-  max-height: min(340px, 80%);
-  overflow: auto;
-  padding: 13px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel-raised);
-  box-shadow: 0 12px 28px #0009;
+  width: 100%;
   font-size: 12px;
 }
 .media-diagnostics > strong {
@@ -1012,9 +991,6 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 }
 
 .composer textarea::placeholder { color: var(--subtle); }
-.composer-image-preview { display: flex; align-items: center; gap: 7px; padding: 7px 0 0; color: var(--muted); font-size: 12px; }
-.composer-image-preview img { width: 34px; height: 34px; object-fit: cover; border-radius: 4px; }
-.composer-image-preview button { width: 24px; height: 24px; }
 .composer-attachments { display: grid; gap: 4px; max-height: 180px; overflow-y: auto; padding-top: 6px; }
 .composer-attachment { display: flex; min-width: 0; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
 .composer-attachment img { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 4px; object-fit: cover; }
@@ -1126,15 +1102,6 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   padding: 18px;
   background: #030507b8;
 }
-.dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 18px;
-}
-
-.dialog-actions button:disabled { opacity: .45; cursor: not-allowed; }
-
 /* 卡片只统一操作位置，不耦合各表单的保存、取消和权限逻辑。 */
 .card-header-action { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; height: var(--button-height); padding: 5px 0 5px 8px; border: 0; background: transparent; color: var(--muted); font-size: 14px; line-height: 20px; cursor: pointer; }
 .card-header-action:hover:not(:disabled) { color: var(--text); }
