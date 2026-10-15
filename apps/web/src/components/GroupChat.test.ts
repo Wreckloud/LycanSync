@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
-import { computed, effectScope, nextTick, onScopeDispose, reactive, ref, watch } from 'vue';
+import { computed, effectScope, nextTick, onScopeDispose, reactive, ref } from 'vue';
 import { expect, it, vi } from 'vitest';
 import type { ChatMessage, ChatMessagePage } from '../chat/chatApi';
 
@@ -35,7 +35,7 @@ function setup() {
   // 真实组件的任务、监听和销毁；只替换网络、DOM 与图片边界，不启动浏览器或传输文件。
   const chat = scope.run(() => runInNewContext(`${compiled}\n({ refresh, loadOlder, handleVisibilityChange, submit, cancelUpload,
     list, messages, text, busy, error, historyError, pendingAttachments })`, {
-    computed, ref, watch, nextTick, onScopeDispose, onMounted: () => {}, defineProps: () => props,
+    computed, ref, nextTick, onScopeDispose, onMounted: () => {}, defineProps: () => props,
     findMessages, sendMessage, sendFile, compressChatImage: vi.fn(), messagePollDelay: () => 8000,
     AbortController, setTimeout, clearTimeout, Error,
     document,
@@ -123,8 +123,9 @@ it('增量轮询迟于本机发送，旧游标之后按服务端顺序合并', a
   } finally { scope.stop(); }
 });
 
-it('切群取消发送与旧消息请求，迟到结果不写入新群', async () => {
-  const { scope, props, chat, findMessages, sendMessage } = setup();
+it('切群销毁旧聊天并创建新实例，取消旧请求且不带入旧草稿或迟到结果', async () => {
+  const { scope, chat, findMessages, sendMessage } = setup();
+  const current = setup();
   try {
     const oldPage = deferred<ChatMessagePage>();
     const oldSend = deferred<ChatMessage>();
@@ -135,8 +136,7 @@ it('切群取消发送与旧消息请求，迟到结果不写入新群', async (
     const sending = chat.submit();
     const pollSignal = findMessages.mock.calls[0][2]!;
     const sendSignal = sendMessage.mock.calls[0][3]!;
-    props.group.id = 'second';
-    await nextTick();
+    scope.stop();
     expect(pollSignal.aborted).toBe(true);
     expect(sendSignal.aborted).toBe(true);
     oldPage.resolve({ messages: [message('old')], hasMore: false });
@@ -144,7 +144,10 @@ it('切群取消发送与旧消息请求，迟到结果不写入新群', async (
     await Promise.all([refreshing, sending]);
     expect(chat.messages.value).toHaveLength(0);
     expect(chat.error.value).toBe('');
-  } finally { scope.stop(); }
+    expect(current.chat.messages.value).toHaveLength(0);
+    expect(current.chat.text.value).toBe('');
+    expect(current.chat.error.value).toBe('');
+  } finally { scope.stop(); current.scope.stop(); }
 });
 
 it('批量文件失败后仅重试未成功项，并沿用原请求ID', async () => {

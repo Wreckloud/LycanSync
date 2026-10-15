@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onScopeDispose, ref } from 'vue';
 import { MessageSquareText, Plus, Send, X } from '@lucide/vue';
 import type { AuthUser } from '../auth/authApi';
 import { findMessages, sendFile, sendMessage, type ChatMessage } from '../chat/chatApi';
@@ -360,29 +360,6 @@ function cancelUpload() {
   activeUpload?.abort();
 }
 
-watch(() => props.group.id, () => {
-  pollRequest?.abort();
-  historyRequest?.abort();
-  activeUpload?.abort();
-  activeUpload = null;
-  sendGeneration++;
-  busy.value = false;
-  preparationGeneration++;
-  preparing.value = false;
-  clearPendingAttachments();
-  messages.value = [];
-  error.value = '';
-  pollError.value = '';
-  historyError.value = '';
-  initialLoaded = false;
-  latestFetchedMessageId = undefined;
-  hasMore = false;
-  loadingOlder = false;
-  historyRequest = null;
-  clearRefreshTimer();
-  void pollMessages();
-});
-
 function senderName(message: ChatMessage) {
   return message.senderUserId === props.user.id ? props.user.nickname : message.senderNickname;
 }
@@ -473,6 +450,7 @@ onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange);
 });
 onScopeDispose(() => {
+  // App 按群 ID 创建独立实例；切群统一在销毁处取消，聚焦共享只隐藏此实例。
   disposed = true;
   pollRequest?.abort();
   historyRequest?.abort();
