@@ -333,13 +333,24 @@ npm run test:e2e
 
 `npm run build` 只验证并生成前端静态产物，开发代理不随产物部署；部署包的 HTTPS/WSS 和路由由 Caddy 配置，公网 TURN 及异地网络仍需另行验收。
 
-桌面集成测试需本地后端和 LiveKit 正在运行，并先关闭手动打开的 LycanSync 桌面窗口：
+桌面集成测试会启动独立用户目录的客户端与模拟业务接口；运行前确认允许启动测试窗口：
 
 ```powershell
 npm run test:desktop
 ```
 
-该命令先运行完整桌面统一构建，再启动桌面测试。测试覆盖窗口控制、页面隔离、摄像头拒绝、真实入房、取消共享、共享测试窗口、离房与关窗退出。浏览器 E2E 可用 Chromium 合成麦克风；Windows 桌面端改用真实默认麦克风，桌面测试前需确认设备与录音权限，并在允许访问实时媒体服务的环境中执行。共享只选择测试创建的纯色窗口；不会录制真实桌面。测试 API 替身仅位于 tests，媒体仍连接本机 LiveKit。认证后端测试使用隔离 PostgreSQL，不会修改开发数据库。
+该命令先运行完整桌面统一构建，再启动桌面测试，默认覆盖邀请、认证、窗口控制、页面隔离、摄像头拒绝及合成音频模块，不启动游戏活动扫描。真实原生麦克风和 RTC 采集用例默认跳过；Chromium 的合成麦克风参数不会替代 Rust 采集设备。
+
+允许真实默认麦克风和原生窗口采集时，再显式运行以下用例。`rtc.spec.ts` 还需本机 LiveKit 正在运行，会把真实麦克风发布到测试房间；屏幕只选择测试创建的纯色窗口，但选择器会枚举实际来源并读取缩略图。`nativeMicrophone.spec.ts` 只在本机统计采集数据，不入房或保存录音。测试业务 API 仍由 tests 中的替身提供，不修改实际账号数据库。
+
+```powershell
+$env:LYCANSYNC_RUN_DEVICE_TESTS = '1'
+try {
+  npm run test:desktop -- rtc.spec.ts nativeMicrophone.spec.ts
+} finally {
+  Remove-Item Env:LYCANSYNC_RUN_DEVICE_TESTS
+}
+```
 
 ## 停止运行
 

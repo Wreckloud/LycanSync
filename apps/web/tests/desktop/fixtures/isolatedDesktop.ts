@@ -1,6 +1,7 @@
 import { _electron as electron } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { desktopTestEnvironment } from './desktopTestEnvironment';
 
 export async function launchIsolatedDesktop(directory: string, apiUrl: string, link?: string) {
   mkdirSync(directory, { recursive: true });
@@ -13,11 +14,6 @@ BrowserWindow.prototype.focus = function () {};
 require(${JSON.stringify(resolve('electron/main.cjs'))});
 `);
   const args = [entry, '--user-data-dir=' + resolve(directory, 'profile')];
-  const env: Record<string, string> = { LYCANSYNC_API_URL: apiUrl };
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined && key !== 'LYCANSYNC_API_URL') env[key] = value;
-  }
-  delete env.ELECTRON_RUN_AS_NODE;
-  delete env.LYCANSYNC_DEV_RENDERER_URL;
+  const env = desktopTestEnvironment(directory, apiUrl);
   return { application: await electron.launch({ args: link ? [...args, link] : args, env }), args, env };
 }

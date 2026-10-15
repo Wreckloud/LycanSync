@@ -1,18 +1,21 @@
 import { test, expect, _electron as electron } from '@playwright/test';
 import { mkdirSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { desktopTestEnvironment } from './fixtures/desktopTestEnvironment';
+
+test.skip(process.platform !== 'win32' || process.env.LYCANSYNC_RUN_DEVICE_TESTS !== '1',
+  '需在 Windows 明确启用真实默认麦克风采集测试');
 
 test('桌面真实麦克风经主进程管道传入音频模块并正常停止', async () => {
-  test.skip(process.platform !== 'win32', 'Native microphone capture requires Windows');
   const worklet = readdirSync(resolve('dist/assets'))
     .find((file) => file.startsWith('nativeMicrophoneAudio.worklet-') && file.endsWith('.js'));
   expect(worklet).toBeTruthy();
   const profile = test.info().outputPath('native-microphone-profile');
   mkdirSync(profile, { recursive: true });
-  // No account or RTC room is needed; this test samples the real default microphone locally.
+  // 无需账号或入房；此用例会实际采集默认麦克风，必须单独启用。
   const application = await electron.launch({ args: [
     resolve('electron/main.cjs'), `--user-data-dir=${profile}`,
-  ], env: { ...process.env, LYCANSYNC_API_URL: 'http://127.0.0.1:1' } });
+  ], env: desktopTestEnvironment(profile, 'http://127.0.0.1:1') });
   try {
     const page = await application.firstWindow();
     const result = await page.evaluate(async (workletUrl) => {

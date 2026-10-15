@@ -2,13 +2,18 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import { resolve } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { startDesktopApi, summary } from '../fixtures/authenticatedRtc';
+import { desktopTestEnvironment } from './fixtures/desktopTestEnvironment';
+
+test.skip(process.platform !== 'win32' || process.env.LYCANSYNC_RUN_DEVICE_TESTS !== '1',
+  '需在 Windows 明确启用真实麦克风和原生窗口采集测试');
 
 test('桌面入房、取消选择、窗口共享及离房释放', async () => {
   const nickname = `桌面测试-${Date.now()}`;
   const userDataDir = test.info().outputPath('profile');
   mkdirSync(userDataDir, { recursive: true });
   const api = await startDesktopApi(nickname);
-  const application = await electron.launch({ env: { ...process.env, LYCANSYNC_API_URL: api.url }, args: [resolve('electron/main.cjs'), `--user-data-dir=${userDataDir}`, '--use-fake-device-for-media-stream'] });
+  const application = await electron.launch({ env: desktopTestEnvironment(userDataDir, api.url),
+    args: [resolve('electron/main.cjs'), `--user-data-dir=${userDataDir}`] });
   try {
     const page = await application.firstWindow();
     await page.getByRole('button', { name: /开黑小队，单击预览，双击加入语音/ }).dblclick();
@@ -25,9 +30,9 @@ test('桌面入房、取消选择、窗口共享及离房释放', async () => {
     // 主窗口必须被排除，否则整屏共享会在双开时递归捕获自己的共享画面。
     await expect(page.getByRole('dialog', { name: '选择共享的窗口或屏幕' })
       .getByRole('button', { name: 'LycanSync', exact: true })).toHaveCount(0);
-    // 整屏或其他窗口仍必须保留在可选源里，过滤不能清空列表（含取消按钮在内应多于一项）。
+    // 只统计真实来源卡片，不能把来源类型或画质按钮误当成可共享窗口。
     await expect.poll(() => page.getByRole('dialog', { name: '选择共享的窗口或屏幕' })
-      .locator('button').count()).toBeGreaterThan(1);
+      .locator('.capture-sources button').count()).toBeGreaterThan(0);
     await page.getByRole('dialog', { name: '选择共享的窗口或屏幕' }).getByRole('button', { name: '取消', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '选择共享的窗口或屏幕' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '开始屏幕共享', exact: true })).toBeEnabled();

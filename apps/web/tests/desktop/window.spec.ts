@@ -3,13 +3,14 @@ import { resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { startDesktopApi } from '../fixtures/authenticatedRtc';
+import { desktopTestEnvironment } from './fixtures/desktopTestEnvironment';
 
 test('桌面窗口安全边界、真实控件与退出', async () => {
   const userDataDir = test.info().outputPath('profile');
   mkdirSync(userDataDir, { recursive: true });
   const args = [resolve('electron/main.cjs'), `--user-data-dir=${userDataDir}`];
   const api = await startDesktopApi();
-  const application = await electron.launch({ args, env: { ...process.env, LYCANSYNC_API_URL: api.url } });
+  const application = await electron.launch({ args, env: desktopTestEnvironment(userDataDir, api.url) });
   try {
     const page = await application.firstWindow();
     await api.presencePollStarted;
@@ -99,7 +100,9 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
     await page.getByRole('button', { name: '最小化窗口' }).click();
     await expect.poll(() => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized())).toBe(true);
     // Windows 下 Playwright 的父进程可能是命令包装器，直接启动 Electron 本体。
-    const secondInstance = spawn(resolve('node_modules/electron/dist/electron.exe'), args, { stdio: 'ignore' });
+    const secondInstance = spawn(resolve('node_modules/electron/dist/electron.exe'), args, {
+      stdio: 'ignore', env: desktopTestEnvironment(userDataDir, api.url),
+    });
     const exitCode = await new Promise<number | null>((resolveExit, reject) => {
       secondInstance.once('error', reject);
       secondInstance.once('exit', resolveExit);
