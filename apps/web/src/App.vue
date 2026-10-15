@@ -343,6 +343,7 @@ const removeCloseListener = desktop?.onClose(async () => {
 onScopeDispose(() => {
   joinAttempt++;
   selectCaptureSource(null); removeCloseListener?.();
+  closeGroupEditor(); groupActionRequest?.abort();
   detailRequest?.abort(); listRequest?.abort(); void rtc.leave();
 });
 watch(() => rtc.status, (status) => { if (status === 'idle') selectCaptureSource(null); });
@@ -359,6 +360,8 @@ const editingGroup = ref<GroupDetail | null>(null);
 const management = ref<{ group: GroupDetail; mode: 'invite' | 'members' | 'transfer' | 'leave' | 'dissolve' } | null>(null);
 let detailRequest: AbortController | null = null;
 let listRequest: AbortController | null = null;
+let groupActionRequest: AbortController | null = null;
+let groupEditorGeneration = 0;
 let groupPresenceRequest: AbortController | null = null;
 let groupPresenceWaitRequest: AbortController | null = null;
 let groupPresenceWatchGeneration = 0;
@@ -593,7 +596,7 @@ async function refreshGroups(refreshDetail = true, refreshOccupancy = true) {
     if (joinedGroupId.value && !result.some((group) => group.id === joinedGroupId.value)) leaveVoice();
     if (joiningGroupId.value && !result.some((group) => group.id === joiningGroupId.value)) leaveVoice();
     if (management.value && !result.some((group) => group.id === management.value?.group.id)) management.value = null;
-    if (editingGroup.value && !result.some((group) => group.id === editingGroup.value?.id)) { editorOpen.value = false; editingGroup.value = null; }
+    if (editingGroup.value && !result.some((group) => group.id === editingGroup.value?.id)) closeGroupEditor();
     if (result.length > 0 && refreshOccupancy) void refreshRoomOccupancies();
     else if (result.length === 0) {
       roomOccupancyRequest?.abort();
@@ -651,6 +654,7 @@ onMounted(() => {
   }, ROOM_OCCUPANCY_REFRESH_INTERVAL_MS);
 });
 watch(selectedGroupId, (groupId) => {
+  groupActionRequest?.abort();
   groupPresences.value = {};
   presenceConnectionLost.value = false;
   startGroupPresenceSync(groupId, Boolean(groupId));
@@ -683,23 +687,35 @@ onScopeDispose(() => {
 });
 
 function openEditor() {
+  groupActionRequest?.abort();
+  groupEditorGeneration++;
   editingGroup.value = null;
   editorOpen.value = true;
 }
 
-async function createGroupFromDialog(name: string, description: string, avatar: string) {
-  if (editingGroup.value) {
-    applyGroupDetail(await updateGroup(editingGroup.value.id, name, description, avatar));
-    editorOpen.value = false;
-    editingGroup.value = null;
-    return;
-  }
-  const detail = await createGroup(name, description, avatar);
-  await refreshGroups();
-  groups.value = groups.value.some((group) => group.id === detail.id) ? groups.value : [...groups.value, detail];
-  selectedGroupId.value = detail.id;
-  selectedGroupDetail.value = detail;
+function closeGroupEditor() {
+  groupEditorGeneration++;
   editorOpen.value = false;
+  editingGroup.value = null;
+}
+
+async function createGroupFromDialog(name: string, description: string, avatar: string) {
+  const generation = groupEditorGeneration;
+  const editing = editingGroup.value;
+  const detail = editing ? await updateGroup(editing.id, name, description, avatar)
+    : await createGroup(name, description, avatar);
+  // 写入可能已在服务端完成；旧窗口只放弃更新界面，不能关闭新编辑窗口或再次请求群列表。
+  if (!editorOpen.value || generation !== groupEditorGeneration) return;
+  if (!editing) {
+    await refreshGroups();
+    if (!editorOpen.value || generation !== groupEditorGeneration) return;
+  }
+  applyGroupDetail(detail);
+  if (!editing) {
+    selectedGroupId.value = detail.id;
+    selectedGroupDetail.value = detail;
+  }
+  closeGroupEditor();
 }
 
 function applyGroupDetail(detail: GroupDetail) {
@@ -714,19 +730,28 @@ function joinedFromCode(detail: GroupDetail) {
   applyGroupDetail(detail);
   selectedGroupId.value = detail.id;
   selectedGroupDetail.value = detail;
-  editorOpen.value = false;
+  closeGroupEditor();
 }
 
 async function openGroupAction(action: 'edit' | 'invite' | 'members' | 'transfer' | 'leave' | 'dissolve') {
   const groupId = selectedGroupId.value;
   if (!groupId) return;
+  groupActionRequest?.abort();
+  const request = new AbortController();
+  groupActionRequest = request;
   try {
-    const detail = await findGroup(groupId);
-    if (selectedGroupId.value !== groupId) return;
+    const detail = await findGroup(groupId, request.signal);
+    if (request.signal.aborted || selectedGroupId.value !== groupId) return;
     applyGroupDetail(detail);
-    if (action === 'edit') { editingGroup.value = detail; editorOpen.value = true; }
+    if (action === 'edit') { groupEditorGeneration++; editingGroup.value = detail; editorOpen.value = true; }
     else management.value = { group: detail, mode: action };
-  } catch (exception) { groupError.value = exception instanceof Error ? exception.message : '无法读取群组，请重试。'; }
+  } catch (exception) {
+    if (!request.signal.aborted && selectedGroupId.value === groupId) {
+      groupError.value = exception instanceof Error ? exception.message : '无法读取群组，请重试。';
+    }
+  } finally {
+    if (groupActionRequest === request) groupActionRequest = null;
+  }
 }
 
 function removedFromGroup(groupId: string) {
@@ -1408,7 +1433,7 @@ function participantListening(participant: Participant) {
       </aside>
     </div>
     <GroupEntryDialog v-if="editorOpen" :group="editingGroup ?? undefined" :create-group="createGroupFromDialog"
-      @joined="joinedFromCode" @close="editorOpen = false; editingGroup = null" />
+      @joined="joinedFromCode" @close="closeGroupEditor" />
     <GroupManagementDialog v-if="management" :group="management.group" :mode="management.mode" :user-id="user.id"
       @updated="applyGroupDetail" @removed="removedFromGroup" @close="management = null" />
     </div>
