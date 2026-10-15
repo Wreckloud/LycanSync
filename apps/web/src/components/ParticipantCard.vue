@@ -367,7 +367,8 @@ onBeforeUnmount(() => {
       <strong>{{ media.name }}{{ isLocal ? '（你）' : '' }}</strong>
       <span v-if="variant === 'viewer' && media.sharing" class="viewer-actions">
         <button v-if="stageDraggable" type="button" class="viewer-action stage-drag-handle" draggable="true"
-          :aria-label="'拖动排列' + media.name + '的共享画面'" title="拖动排列；也可使用 Alt + 方向键"
+          :aria-label="'拖动排列' + media.name + '的共享画面'"
+          aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown"
           @dragstart="emit('dragStart', $event)" @dragend="emit('dragEnd')" @keydown="moveStageFromKeyboard">
           <GripVertical :size="16" aria-hidden="true" />
         </button>
