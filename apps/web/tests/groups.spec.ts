@@ -16,18 +16,19 @@ function holdPresencePoll(route: Route) {
 }
 
 test.beforeEach(async ({ page }) => {
+  // 未提供模拟的业务请求明确失败，不能落到 Vite 的真实服务器代理。
+  await page.route('**/api/**', (route) => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
   await page.route('**/api/presence/heartbeat', (route) => route.fulfill({ status: 204 }));
   await page.route('**/api/rtc/room-occupancies', (route) => route.fulfill({ json: [] }));
 });
 
-test('创建群组只预览，并直接显示所有已注册账号的头像', async ({ page }) => {
+test('创建群组只预览，初始只有创建者且不自动加入语音', async ({ page }) => {
   const user = { id: userId, nickname: '群主', avatar: '', administrator: true };
   const members = [
     { userId, nickname: user.nickname, avatar: '', role: 'OWNER', joinedAt: '2026-09-12T00:00:00Z' },
-    { userId: friendId, nickname: '朋友', avatar, role: 'MEMBER', joinedAt: '2026-09-12T01:00:00Z' },
   ];
   const group = { id: groupId, name: '周末开黑', description: '晚上一起玩', avatar: '', role: 'OWNER',
-    memberCount: 2, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z', members };
+    memberCount: 1, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z', members };
   let created = false;
   let tokenRequests = 0;
   await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
@@ -74,8 +75,9 @@ test('创建群组只预览，并直接显示所有已注册账号的头像', as
   await expect(page.locator('.workspace')).not.toHaveAttribute('inert');
   expect(tokenRequests).toBe(0);
 
-  await expect(page.getByRole('complementary', { name: '群组成员' })).toContainText('成员 · 2');
-  await expect(page.locator('.group-member-row').filter({ hasText: '朋友' }).locator('img')).toHaveAttribute('src', avatar);
+  await expect(page.getByRole('complementary', { name: '群组成员' })).toContainText('成员 · 1');
+  await expect(page.locator('.group-member-row')).toHaveCount(1);
+  await expect(page.locator('.group-member-row')).toContainText(user.nickname);
   await expect(page.getByRole('button', { name: '添加群组成员' })).toHaveCount(0);
   expect(tokenRequests).toBe(0);
 });
@@ -209,6 +211,7 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
 
   await page.goto('/');
   await expect(page.locator('.group-member-name')).toHaveText(['群主群主', '游戏中', '语音朋友', '离线朋友']);
+  await expect(page.locator('.group-member-row').filter({ hasText: '语音朋友' }).locator('img')).toHaveAttribute('src', avatar);
   await expect(page.getByLabel('群组成员').getByText('语音中', { exact: true })).toHaveCount(0);
   await expect(page.locator('.group-member-row').nth(1)).toContainText('正在玩 Core Keeper');
   await expect(page.locator('.group-member-row').nth(1).locator('.status-dot')).toHaveClass(/AWAY/);

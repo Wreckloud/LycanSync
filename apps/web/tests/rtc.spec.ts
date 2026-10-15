@@ -1,8 +1,7 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
-import { renameTestUser, setTestAvatar, useNewTestGroups } from './fixtures/authenticatedRtc';
-import { installTestGroups } from './fixtures/authenticatedGroups';
+import { installAuthenticatedRtc, renameTestUser, setTestAvatar, useNewTestGroups } from './fixtures/authenticatedRtc';
 
-test.beforeEach(async ({ context }) => { useNewTestGroups(); await installTestGroups(context); });
+test.beforeEach(async ({ context }) => { useNewTestGroups(); await installAuthenticatedRtc(context); });
 
 const webPort = Number(process.env.WEB_PORT ?? 4173);
 const webBaseUrl = `http://127.0.0.1:${webPort}`;
@@ -72,7 +71,7 @@ async function installCallSoundProbe(context: BrowserContext) {
 }
 
 async function installSyntheticMedia(context: BrowserContext, screenSize = { width: 1280, height: 720 }) {
-  await installTestGroups(context);
+  await installAuthenticatedRtc(context);
   await context.addInitScript((size) => {
     const state = window.__rtcTest = {
       peers: [] as RTCPeerConnection[], tracks: [] as MediaStreamTrack[],
@@ -369,7 +368,7 @@ test('通话中单击其他群只预览，双击时要求确认切换', async ({
 
 test('房间外只能看到语音人数和昵称，不连接媒体房间', async ({ browser, context, page }) => {
   const observer = await browser.newContext({ baseURL: webBaseUrl, viewport: { width: 1440, height: 1000 } });
-  await installTestGroups(observer);
+  await installAuthenticatedRtc(observer);
   try {
     await installSyntheticMedia(context);
     await join(page, '房内小狼');
@@ -452,7 +451,7 @@ test('取消所有放大画面返回语音卡片，双击舞台可专注单路�
     await expect(page.getByTestId('participant-card').locator('video')).toHaveCount(1);
     await expect(page.locator('.voice-panel')).not.toHaveClass(/has-sharing/);
     await expect(page.locator('.chat-panel')).toBeVisible();
-    // 退出舞台只改变布局；高画质订阅不应因缩略展示被强制降到 720p。
+    // 移出舞台后，成员卡片中仍能观看该路共享。
     await expect.poll(() => page.getByTestId('participant-card').locator('video').evaluate((video) =>
       (video as HTMLVideoElement).videoHeight)).toBeGreaterThan(0);
     await page.locator('.chat-heading').click();
@@ -487,7 +486,7 @@ test('取消所有放大画面返回语音卡片，双击舞台可专注单路�
     await originalVideo!.dispose();
     await page.getByTestId('viewer-screen').locator('.participant-media').dblclick();
     await expect(page.locator('.voice-panel')).toHaveClass(/is-focused/);
-    await expect(page.locator('.chat-panel')).toHaveCount(0);
+    await expect(page.locator('.chat-panel')).toBeHidden();
     await expect(page.getByTestId('member-filmstrip')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /专注观看/ })).toHaveCount(0);
     expect(await page.locator('.viewer-action').evaluateAll((buttons) => buttons.every((button) => {
@@ -561,7 +560,7 @@ test('双人同时语音和共享：实际收包、多画面观看、静音、�
       getComputedStyle(card).animationName)).toBe('none');
     await page.getByTestId('viewer-screen').filter({ hasText: '福州小狼' }).locator('.participant-media').dblclick();
     await expect(page.getByTestId('viewer-screen')).toHaveCount(1);
-    await expect(page.locator('.chat-panel')).toHaveCount(0);
+    await expect(page.locator('.chat-panel')).toBeHidden();
     await page.getByTestId('viewer-screen').locator('.participant-media').dblclick();
     await expect(page.getByTestId('viewer-screen')).toHaveCount(2);
     await expect(page.locator('.chat-panel')).toBeVisible();

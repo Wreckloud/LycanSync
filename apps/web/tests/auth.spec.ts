@@ -27,6 +27,8 @@ function silentWav(durationMs = 100) {
 }
 
 test.beforeEach(async ({ page }) => {
+  // 未提供模拟的业务请求明确失败，不能落到 Vite 的真实服务器代理。
+  await page.route('**/api/**', (route) => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
   await page.route('**/api/groups', (route) => route.fulfill({ json: [] }));
   await page.route('**/api/presence/heartbeat', (route) => route.fulfill({ status: 204 }));
 });
@@ -386,12 +388,17 @@ test('更换头像在整页资料设置中裁剪并保存', async ({ page }) => 
   await expect(cropDialog.getByAltText('待裁剪头像')).toHaveJSProperty('naturalWidth', 1);
   expect(await cropDialog.getByAltText('待裁剪头像').getAttribute('src')).toMatch(/^blob:/);
   expect(await settings.boundingBox()).toEqual(initialSettings);
-  await expect(page.getByLabel('头像缩放')).toBeVisible();
-  await cropDialog.getByLabel('拖动调整头像位置').hover();
+  const cropViewport = cropDialog.getByLabel('拖动调整头像位置');
+  const cropImage = cropDialog.getByAltText('待裁剪头像');
+  await expect(cropViewport).toHaveCSS('border-radius', '50%');
+  const originalWidth = await cropImage.evaluate((image) => parseFloat(getComputedStyle(image).width));
+  await cropViewport.hover();
   await page.mouse.wheel(0, -100);
-  await expect(page.getByLabel('头像缩放')).toHaveValue('1.1');
+  await expect.poll(() => cropImage.evaluate((image) => parseFloat(getComputedStyle(image).width)))
+    .toBeGreaterThan(originalWidth);
   await page.mouse.wheel(0, 100);
-  await expect(page.getByLabel('头像缩放')).toHaveValue('1');
+  await expect.poll(() => cropImage.evaluate((image) => parseFloat(getComputedStyle(image).width)))
+    .toBeCloseTo(originalWidth, 1);
   await page.getByRole('button', { name: '应用头像' }).click();
   const preview = page.getByAltText('头像预览');
   await expect(preview).toBeVisible();
