@@ -14,6 +14,7 @@ const candidates = ref<GroupCandidate[]>([]);
 const hasMore = ref(false);
 const code = ref('');
 const error = ref('');
+const candidateError = ref('');
 const status = ref('');
 const busy = ref(false);
 const loading = ref(false);
@@ -43,11 +44,12 @@ async function loadCandidates() {
   const current = new AbortController();
   request = current;
   loading.value = true;
+  candidateError.value = '';
   try {
     const result = await findGroupCandidates(props.group.id, search.value, offset.value, current.signal);
     if (!current.signal.aborted) { candidates.value = result.members; hasMore.value = result.hasMore; }
   } catch (exception) {
-    if (!current.signal.aborted) error.value = exception instanceof Error ? exception.message : '无法读取服务器成员，请重试。';
+    if (!current.signal.aborted) candidateError.value = exception instanceof Error ? exception.message : '无法读取服务器成员，请重试。';
   } finally { if (!current.signal.aborted) loading.value = false; }
 }
 
@@ -65,6 +67,7 @@ async function refreshCode() {
 }
 
 async function addMember(member: GroupCandidate) {
+  clearTimeout(searchTimer);
   request?.abort();
   loading.value = false;
   await action(async () => {
@@ -112,9 +115,19 @@ async function confirm() {
 watch(search, () => {
   offset.value = 0;
   clearTimeout(searchTimer);
-  if (props.mode === 'invite') searchTimer = setTimeout(() => void loadCandidates(), 250);
+  if (props.mode === 'invite') {
+    // 输入变化即撤销旧查询，防抖期间也不允许按旧搜索结果添加成员。
+    request?.abort();
+    loading.value = true;
+    candidateError.value = '';
+    searchTimer = setTimeout(() => void loadCandidates(), 250);
+  }
 });
-function page(change: number) { offset.value = Math.max(0, offset.value + change * 20); if (props.mode === 'invite') void loadCandidates(); }
+function page(change: number) {
+  clearTimeout(searchTimer);
+  offset.value = Math.max(0, offset.value + change * 20);
+  if (props.mode === 'invite') void loadCandidates();
+}
 watch(() => props.group.role, (role) => { if (role !== 'OWNER' && props.mode !== 'leave') emit('close'); });
 
 function keepFocus(event: KeyboardEvent) {
@@ -162,7 +175,7 @@ onScopeDispose(() => {
           <template v-if="mode === 'invite'">
             <div v-for="member in candidates" :key="member.userId" class="management-member">
               <img v-if="member.avatar" :src="member.avatar" alt="" /><UserRound v-else :size="36" />
-              <strong>{{ member.nickname }}</strong><button type="button" :disabled="busy || member.joined" @click="addMember(member)">{{ member.joined ? '已加入' : '添加' }}</button>
+              <strong>{{ member.nickname }}</strong><button type="button" :disabled="busy || loading || !!candidateError || member.joined" @click="addMember(member)">{{ member.joined ? '已加入' : '添加' }}</button>
             </div>
           </template>
           <template v-else>
@@ -183,7 +196,7 @@ onScopeDispose(() => {
       </div>
       <footer class="card-actions" :class="{ 'card-actions-no-primary': !confirming }">
         <button type="button" class="settings-button" :disabled="busy" @click="close">取消</button>
-        <InlineFeedback class="card-feedback" :message="error" :status="busy ? '正在处理…' : loading ? '正在读取…' : status" />
+        <InlineFeedback class="card-feedback" :message="error || candidateError" :status="busy ? '正在处理…' : loading ? '正在读取…' : status" />
         <button v-if="mode === 'dissolve'" type="submit" form="group-dissolve-form" class="confirm-button is-danger card-actions-end" :disabled="busy || !dissolveNameMatches">确认解散</button>
         <button v-else-if="confirming" type="button" class="confirm-button card-actions-end" :class="{ 'is-danger': mode !== 'transfer' }" :disabled="busy" @click="confirm">{{ mode === 'transfer' ? '确认转让' : mode === 'leave' ? '退出群聊' : '移出成员' }}</button>
       </footer>
