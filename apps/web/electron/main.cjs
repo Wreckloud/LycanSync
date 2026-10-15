@@ -1338,24 +1338,30 @@ ipcMain.handle('auth:access:get', (event) => {
 ipcMain.handle('auth:access:parse', async (event, value) => {
   if (!trustedSender(event) || closing) throw new Error('当前不能打开邀请链接。');
   if (await loadSession()) throw new Error('请先退出当前账号。');
+  if (!trustedSender(event) || closing) throw new Error('当前不能打开邀请链接。');
   return parseManualAccessLink(value);
 });
 ipcMain.handle('auth:access:prepare', async (event, offer) => {
   if (!trustedSender(event) || closing) throw new Error('当前不能打开邀请链接。');
   if (await loadSession()) throw new Error('请先退出当前账号。');
+  if (!trustedSender(event) || closing) throw new Error('当前不能打开邀请链接。');
   const link = `lycansync://access?server=${encodeURIComponent(offer?.server ?? '')}#token=${offer?.token ?? ''}`;
   const validated = parseAccessLink(link);
   if (!safeStorage.isEncryptionAvailable()) throw new Error('系统凭据加密不可用。');
   await mkdir(app.getPath('userData'), { recursive: true });
   await writeFile(accessLinkFile, safeStorage.encryptString(link));
   await saveServerSettings(app.getPath('userData'), validated.server);
+  if (!trustedSender(event) || closing) return;
   app.relaunch();
   app.quit();
 });
 ipcMain.handle('settings:server:set', async (event, value) => {
   if (!trustedSender(event) || closing) throw new Error('当前不能修改服务器地址。');
   if (await loadSession()) throw new Error('请退出登录后再修改服务器地址。');
+  if (!trustedSender(event) || closing) throw new Error('当前不能修改服务器地址。');
   await saveServerSettings(app.getPath('userData'), value);
+  // 配置可能已经落盘；用户已关窗时留待下次启动，不再因迟到结果重新打开应用。
+  if (!trustedSender(event) || closing) return;
   app.relaunch();
   app.quit();
 });

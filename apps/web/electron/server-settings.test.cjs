@@ -1,9 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { mkdtempSync, writeFileSync, rmSync } = require('node:fs');
+const { mkdtempSync, readFileSync, writeFileSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
+const { runInNewContext } = require('node:vm');
 const { serverUrl, loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
+const { parseAccessLink, parseManualAccessLink } = require('./access-links.cjs');
 
 test('服务器地址拒绝外部 HTTP、凭据、路径和非法输入', () => {
   for (const url of ['http://192.168.150.108', 'https://user:pass@example.com', 'https://example.com/api', 'https://example.com/?key=1', '', null]) {
@@ -44,3 +46,80 @@ test('显式开发地址不读取损坏或缺失的配置，安装版仍拒绝�
     assert.throws(() => loadServerSettings({ ...options, developmentUrl: 'http://external.example' }), /HTTPS/);
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
+
+function desktopSettingsFixture() {
+  const handlers = new Map();
+  const calls = [];
+  const context = {
+    closing: false, trusted: true,
+    ipcMain: { handle: (name, callback) => handlers.set(name, callback) },
+    trustedSender: () => context.trusted,
+    loadSession: async () => undefined,
+    saveServerSettings: async () => { calls.push('save'); },
+    parseAccessLink, parseManualAccessLink,
+    safeStorage: { isEncryptionAvailable: () => true, encryptString: (value) => Buffer.from(value) },
+    mkdir: async () => {}, writeFile: async () => {}, accessLinkFile: 'pending-access.bin',
+    app: { getPath: () => 'test-profile', relaunch: () => calls.push('relaunch'), quit: () => calls.push('quit') },
+  };
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const start = main.indexOf("ipcMain.handle('auth:clear'");
+  assert.ok(start > 0);
+  // 执行主进程正式设置回调；替代文件写入和退出，不启动 Electron 或访问真实用户目录。
+  runInNewContext(main.slice(start), context);
+  return { handlers, context, calls };
+}
+
+const offer = { server: 'https://example.test', token: 'a'.repeat(43) };
+const settingsInputs = new Map([
+  ['settings:server:set', offer.server],
+  ['auth:access:prepare', offer],
+]);
+
+for (const [name, input] of settingsInputs) {
+  test(`${name}：正常保存后才安排重启`, async () => {
+    const { handlers, calls } = desktopSettingsFixture();
+    await handlers.get(name)({}, input);
+    assert.deepEqual(calls, ['save', 'relaunch', 'quit']);
+  });
+
+  test(`${name}：保存期间关窗或失去来源时不再重启`, async () => {
+    for (const change of ['closing', 'sender']) {
+      const { handlers, context, calls } = desktopSettingsFixture();
+      let complete;
+      let started;
+      const entered = new Promise((resolve) => { started = resolve; });
+      context.saveServerSettings = async () => {
+        calls.push('save'); started();
+        await new Promise((resolve) => { complete = resolve; });
+      };
+      const saving = handlers.get(name)({}, input);
+      await entered;
+      if (change === 'closing') context.closing = true;
+      else context.trusted = false;
+      complete();
+      await saving;
+      assert.deepEqual(calls, ['save']);
+    }
+  });
+
+  test(`${name}：保存失败保留错误且不重启`, async () => {
+    const { handlers, context, calls } = desktopSettingsFixture();
+    context.saveServerSettings = async () => { throw new Error('write failed'); };
+    await assert.rejects(handlers.get(name)({}, input), /write failed/);
+    assert.deepEqual(calls, []);
+  });
+}
+
+for (const [name, input] of [...settingsInputs,
+  ['auth:access:parse', `https://example.test/join#token=${offer.token}`]]) {
+  test(`${name}：等待读取凭据后再次校验窗口归属`, async () => {
+    const { handlers, context, calls } = desktopSettingsFixture();
+    let complete;
+    context.loadSession = () => new Promise((resolve) => { complete = resolve; });
+    const pending = handlers.get(name)({}, input);
+    context.closing = true;
+    complete();
+    await assert.rejects(pending, /当前不能/);
+    assert.deepEqual(calls, []);
+  });
+}
