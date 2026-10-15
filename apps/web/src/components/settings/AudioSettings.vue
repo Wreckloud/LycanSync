@@ -36,6 +36,13 @@ function updateProcessing(setting: keyof AudioProcessingSettings, event: Event) 
     void props.rtc.setMicrophoneProcessing(props.preferences.processing);
   }
 }
+
+function updateInputGain(event: Event) {
+  const gain = Number((event.target as HTMLInputElement).value);
+  if (props.preferences.setInputGain(gain)) {
+    void props.rtc.setMicrophoneInputGain(props.preferences.inputGain.value);
+  }
+}
 </script>
 
 <template>
@@ -47,8 +54,7 @@ function updateProcessing(setting: keyof AudioProcessingSettings, event: Event) 
       <div class="settings-range-row">
         <label for="settings-input-gain">麦克风输入音量 <strong>{{ Math.round(inputGain * 100) }}%</strong></label>
         <input id="settings-input-gain" type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP"
-          :value="inputGain" @input="preferences.setInputGain(Number(($event.target as HTMLInputElement).value)
-            ) && rtc.setMicrophoneInputGain(preferences.inputGain.value)" />
+          :value="inputGain" @input="updateInputGain" />
       </div>
       <div class="settings-meter">
         <span>输入等级 <strong>{{ displayedInputLevel }}%</strong></span>

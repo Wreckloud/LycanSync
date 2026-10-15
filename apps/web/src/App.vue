@@ -913,7 +913,7 @@ const remoteControlShare = (identity: string) => rtc.remoteControlShares[identit
 const remoteControlCanRequest = (identity: string) => remoteControlShare(identity)?.kind === 'monitor';
 const remoteControlIsPending = (identity: string) => rtc.remoteControlPending?.identity === identity;
 const remoteControlIsActive = (identity: string) => rtc.remoteControlActive?.identity === identity;
-// TODO: 服务端按群组原子分配并回收共享名额，处理并发开启、断线及失败；前端限制仅作提示。
+// 测试期的客户端软限制，不代表服务端并发容量；后续按实测逐步移除。
 const screenShareLimitReached = computed(() => activeScreenShareCount.value >= 8 && !localParticipant.value?.isScreenShareEnabled);
 const sharingIdentityKey = computed(() => {
   void rtc.revision;

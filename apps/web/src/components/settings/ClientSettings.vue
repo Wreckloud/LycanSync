@@ -124,7 +124,7 @@ async function updateAutoStart(event: Event) {
         <input type="checkbox" :checked="stageAutoFill" aria-label="自动填充舞台"
           @change="emit('stageAutoFill', ($event.target as HTMLInputElement).checked)" />
       </label>
-      <p v-if="stagePreferenceError" role="alert" class="settings-error">{{ stagePreferenceError }}</p>
+      <InlineFeedback :message="stagePreferenceError" />
     </section>
     <section class="settings-block">
       <h2>屏幕共享</h2>
@@ -141,8 +141,7 @@ async function updateAutoStart(event: Event) {
           <input type="checkbox" :checked="screenPreferences.hideBorder" :disabled="!screenSupport?.hideBorder"
             aria-label="隐藏黄色共享边框" @change="updateScreenPreference('hideBorder', $event)" />
         </label>
-        <p v-if="!screenSupport && !screenError">正在确认系统支持情况…</p>
-        <p v-if="screenError" role="alert" class="settings-error">{{ screenError }}</p>
+        <InlineFeedback :message="screenError" />
       </template>
     </section>
     <section class="settings-block">
@@ -153,7 +152,7 @@ async function updateAutoStart(event: Event) {
         <input type="checkbox" :checked="autoStartEnabled" :disabled="!autoStartSupported || autoStartBusy"
           aria-label="开机自动启动" @change="updateAutoStart" />
       </label>
-      <p v-if="autoStartError" role="alert" class="settings-error">{{ autoStartError }}</p>
+      <InlineFeedback :message="autoStartError" />
     </section>
   </div>
 </template>

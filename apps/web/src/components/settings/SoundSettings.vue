@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onScopeDispose, ref, watch } from 'vue';
 import { Play, Trash2, Upload } from '@lucide/vue';
+import InlineFeedback from '../InlineFeedback.vue';
 import { createEntranceSound, ENTRANCE_SOUND_MAX_BYTES, ENTRANCE_SOUND_MAX_DURATION_SECONDS,
   loadEntranceSound, saveEntranceSound } from '../../rtc/entranceSound';
 
@@ -76,7 +77,6 @@ function removeSound() {
       <p>{{ sound ? sound.name : '尚未选择入场音效' }}</p>
       <small v-if="sound">格式：{{ sound.mimeType }} · 文件大小：{{ soundSize }} 字节</small>
       <small>支持 MP3、OGG、WAV、WebM；最长 {{ ENTRANCE_SOUND_MAX_DURATION_SECONDS }} 秒，最大 {{ Math.round(ENTRANCE_SOUND_MAX_BYTES / 1024) }} KB。</small>
-      <small>仅保存在这台设备。</small>
       <div class="settings-actions sound-actions">
         <input ref="input" type="file" hidden aria-label="选择入场音效"
           accept="audio/mpeg,audio/ogg,audio/wav,audio/webm,.mp3,.ogg,.wav,.webm" @change="chooseSound" />
@@ -84,7 +84,7 @@ function removeSound() {
         <button v-if="sound" type="button" :disabled="busy" @click="playPreview"><Play :size="15" />试听</button>
         <button v-if="sound" type="button" :disabled="busy" @click="removeSound"><Trash2 :size="15" />移除</button>
       </div>
-      <p v-if="error" role="alert" class="settings-error">{{ error }}</p>
+      <InlineFeedback :message="error" :status="busy ? '正在读取并保存音效…' : ''" />
     </section>
   </div>
 </template>
