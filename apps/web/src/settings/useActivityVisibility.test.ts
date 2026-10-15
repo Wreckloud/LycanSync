@@ -29,4 +29,19 @@ describe('当前动态显示偏好', () => {
     expect(preference.showActivity.value).toBe(false);
     expect(preference.error.value).toContain('本次修改已生效');
   });
+
+  it('访问存储对象本身被拒绝时默认不分享，后续保存失败明确报告', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, get: () => { throw new Error('denied'); } });
+    try {
+      const preference = useActivityVisibility('member');
+      expect(preference.showActivity.value).toBe(false);
+      expect(preference.error.value).toContain('无法读取');
+      preference.setShowActivity(true);
+      expect(preference.error.value).toContain('无法保存');
+    } finally {
+      if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor);
+      else Reflect.deleteProperty(globalThis, 'localStorage');
+    }
+  });
 });

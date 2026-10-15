@@ -22,6 +22,7 @@ function joining() {
     stage: { reset: vi.fn() }, membersExpanded: { value: false }, viewerNotice: { value: '' },
     callbarLeaving: { value: false }, departingGroupId: { value: null },
     joinedGroupId: { value: null as string | null }, joinedGroupDetail: { value: null as { id: string } | null },
+    locallyLeftVoiceGroupId: { value: null as string | null },
     selectedGroupDetail: { value: null as { id: string } | null }, listening: { value: true },
     callSounds: { left: vi.fn(), joined: vi.fn() },
     rtc: { leave: vi.fn(async () => {}), join: vi.fn(async () => true) },

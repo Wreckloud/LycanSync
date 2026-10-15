@@ -96,7 +96,7 @@ describe('Vue 房间摘要生命周期', () => {
     expect(requestSummary).toHaveBeenCalledTimes(2);
   });
 
-  it('可见页面每十秒刷新一次摘要', async () => {
+  it('可见页面每五秒刷新一次摘要', async () => {
     vi.useFakeTimers();
     stubDocumentVisibility('visible');
     requestSummary.mockResolvedValue({ participantCount: 0, participants: [] });
@@ -104,9 +104,30 @@ describe('Vue 房间摘要生命周期', () => {
     scope.run(() => useRoomSummary(ref(groupIdValue), ref(true)));
     await nextTick();
 
-    await vi.advanceTimersByTimeAsync(9_999);
+    await vi.advanceTimersByTimeAsync(4_999);
     expect(requestSummary).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(requestSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it('离房完成触发立即查询，取消旧等待且迟到快照不能返回', async () => {
+    vi.useFakeTimers();
+    stubDocumentVisibility('visible');
+    let finishOld!: (summary: RtcRoomSummary) => void;
+    requestSummary.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }));
+    requestSummary.mockResolvedValue({ participantCount: 0, participants: [] });
+    const refreshVersion = ref(0);
+    scope = effectScope();
+    const summary = scope.run(() => useRoomSummary(ref(groupIdValue), ref(true), undefined, refreshVersion))!;
+    const oldSignal = requestSummary.mock.calls[0][1];
+    refreshVersion.value++;
+    await nextTick();
+    await nextTick();
+    expect(requestSummary).toHaveBeenCalledTimes(2);
+    expect(oldSignal.aborted).toBe(true);
+    finishOld({ participantCount: 1, participants: [{ participantIdentity: 'user-self', displayName: '旧成员' }] });
+    await nextTick();
+    expect(summary.value?.participantCount).toBe(0);
+    expect(vi.getTimerCount()).toBe(1);
   });
 });

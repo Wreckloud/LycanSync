@@ -50,10 +50,10 @@ const emit = defineEmits<{ logout: []; dismissUpdateWarning: [] }>();
 const STATUS_LABELS = { idle: '未加入语音', joining: '正在连接', connected: '语音已连接', reconnecting: '正在重连' };
 const CALLBAR_EXIT_DURATION_MS = 180;
 const GROUP_LIST_REFRESH_INTERVAL_MS = 30_000;
-const ROOM_OCCUPANCY_REFRESH_INTERVAL_MS = 15_000;
+const ROOM_OCCUPANCY_REFRESH_INTERVAL_MS = 5_000;
 const PRESENCE_HEARTBEAT_INTERVAL_MS = 20_000;
 const PRESENCE_IDLE_TIMEOUT_MS = 5 * 60_000;
-const PRESENCE_IDLE_CHECK_INTERVAL_MS = 15_000;
+const PRESENCE_IDLE_CHECK_INTERVAL_MS = 2_000;
 const ACTIVITY_CLOCK_INTERVAL_MS = 10_000;
 const PRESENCE_STATUS_LABELS: Record<UserPresenceStatus, string> = {
   ONLINE: '在线',
@@ -378,15 +378,21 @@ const currentActivity = ref<(UserActivity & { startedAt: string }) | null>(null)
 const { showActivity, error: activityVisibilityError, setShowActivity } = useActivityVisibility(props.user.id);
 const sharedActivity = computed(() => showActivity.value ? currentActivity.value : null);
 const activityClock = ref(Date.now());
+let activityRevision = 0;
+const activitySnapshotRevision = activityRevision;
 watch(showActivity, () => { void sendHeartbeat(); });
 
 function applyDetectedActivity(activity: DetectedActivity | null) {
+  if (presenceStopped) return;
+  activityRevision++;
   if (JSON.stringify(activity) === JSON.stringify(currentActivity.value)) return;
   currentActivity.value = activity;
   void sendHeartbeat();
 }
 const removeActivityListener = desktop?.onActivityChange(applyDetectedActivity);
-void desktop?.getCurrentActivity().then(applyDetectedActivity).catch(() => undefined);
+void desktop?.getCurrentActivity().then((activity) => {
+  if (activityRevision === activitySnapshotRevision) applyDetectedActivity(activity);
+}).catch(() => undefined);
 onScopeDispose(() => removeActivityListener?.());
 
 async function sendHeartbeat() {
@@ -426,6 +432,8 @@ async function reportOfflineBeforeClose() {
 
 async function updateOwnPresenceStatus() {
   const systemIdle = await desktop?.getSystemIdleState().catch(() => null);
+  // 系统查询失败时保留上次状态，下一轮重试，不能据此判定用户已经恢复操作。
+  if (presenceStopped || (desktop && !systemIdle)) return;
   const nextStatus = systemIdle && (systemIdle.state === 'idle' || systemIdle.state === 'locked'
     || systemIdle.idleSeconds >= PRESENCE_IDLE_TIMEOUT_MS / 1000) ? 'AWAY' : 'ONLINE';
   if (nextStatus === currentPresenceStatus.value) return;
@@ -520,7 +528,9 @@ function startGroupPresenceSync(groupId: string | null, refreshImmediately = fal
 }
 
 const roomOccupancies = ref<Record<string, number>>({});
-async function refreshRoomOccupancies() {
+async function refreshRoomOccupancies(force = false) {
+  // 周期刷新复用在途请求；明确的离房/网络恢复才取消旧请求，避免慢网络下反复中止。
+  if (roomOccupancyRequest && !roomOccupancyRequest.signal.aborted && !force) return;
   roomOccupancyRequest?.abort();
   const request = new AbortController();
   roomOccupancyRequest = request;
@@ -531,6 +541,8 @@ async function refreshRoomOccupancies() {
     }
   } catch {
     // RTC 摘要短暂不可用时保留最后一次人数，避免徽标闪烁。
+  } finally {
+    if (roomOccupancyRequest === request) roomOccupancyRequest = null;
   }
 }
 
@@ -602,6 +614,9 @@ let lastActivationRefreshAt = 0;
 function refreshOnActivation() {
   if (document.visibilityState === 'hidden' || Date.now() - lastActivationRefreshAt < 500) return;
   lastActivationRefreshAt = Date.now();
+  void updateOwnPresenceStatus();
+  void sendHeartbeat();
+  roomSummaryRefreshVersion.value++;
   void refreshGroups();
   if (selectedGroupId.value) startGroupPresenceSync(selectedGroupId.value, true);
 }
@@ -634,6 +649,10 @@ watch(selectedGroupId, (groupId) => {
   startGroupPresenceSync(groupId, Boolean(groupId));
 });
 function handlePresenceNetworkRestored() {
+  void updateOwnPresenceStatus();
+  void sendHeartbeat();
+  roomSummaryRefreshVersion.value++;
+  void refreshRoomOccupancies(true);
   if (selectedGroupId.value && document.visibilityState !== 'hidden') {
     startGroupPresenceSync(selectedGroupId.value, true);
   }
@@ -712,6 +731,8 @@ function removedFromGroup(groupId: string) {
   void refreshGroups();
 }
 const joinedGroupId = ref<string | null>(null);
+const locallyLeftVoiceGroupId = ref<string | null>(null);
+const roomSummaryRefreshVersion = ref(0);
 const joiningGroupId = ref<string | null>(null);
 const pendingSwitchGroupId = ref<string | null>(null);
 const listening = computed(() => rtc.listening);
@@ -780,10 +801,26 @@ const localInputLevel = computed(() => {
 const localInputLevelPercent = computed(() => Math.round(localInputLevel.value * 100));
 const connected = computed(() => rtc.status === 'connected');
 const showingJoinedGroup = computed(() => joinedGroupId.value !== null && selectedGroupId.value === joinedGroupId.value);
-const roomSummary = useRoomSummary(selectedGroupId, computed(() => !showingJoinedGroup.value),
-  (message) => { summaryError.value = message; });
-const groupHasVoiceActivity = (groupId: string) => joinedGroupId.value === groupId
-  || (roomOccupancies.value[groupId] ?? 0) > 0;
+const fetchedRoomSummary = useRoomSummary(selectedGroupId, computed(() => !showingJoinedGroup.value),
+  (message) => { summaryError.value = message; }, roomSummaryRefreshVersion);
+const roomSummary = computed(() => {
+  const summary = fetchedRoomSummary.value;
+  if (!summary || locallyLeftVoiceGroupId.value !== selectedGroupId.value) return summary;
+  // 离房清理和服务端成员移除可能尚未完成，本机不能用旧快照重新显示自己在语音中。
+  const participants = summary.participants.filter((participant) => participant.participantIdentity !== `user-${props.user.id}`);
+  return { participantCount: participants.length, participants };
+});
+watch(fetchedRoomSummary, (summary) => {
+  if (summary && locallyLeftVoiceGroupId.value === selectedGroupId.value
+      && !summary.participants.some((participant) => participant.participantIdentity === `user-${props.user.id}`)) {
+    locallyLeftVoiceGroupId.value = null;
+  }
+});
+const groupHasVoiceActivity = (groupId: string) => {
+  if (joinedGroupId.value === groupId) return true;
+  if (selectedGroupId.value === groupId && roomSummary.value) return roomSummary.value.participantCount > 0;
+  return (roomOccupancies.value[groupId] ?? 0) > 0;
+};
 const currentMembers = computed(() => joinedGroupDetail.value?.members ?? []);
 const memberOnlineStatus = (member: GroupMember) => {
   if (member.userId === props.user.id) return currentPresenceStatus.value;
@@ -941,6 +978,7 @@ async function joinGroup(groupId: string) {
   if (attempt !== joinAttempt) return;
   if (joined) {
     joinedGroupId.value = groupId;
+    if (locallyLeftVoiceGroupId.value === groupId) locallyLeftVoiceGroupId.value = null;
     void callSounds.joined();
     const entranceSound = loadEntranceSound(props.user.id);
     if (entranceSound) {
@@ -974,15 +1012,29 @@ function requestJoin(groupId: string) {
 function leaveVoice() {
   selectCaptureSource(null);
   releaseViewerLock();
-  joinAttempt++;
+  const attempt = ++joinAttempt;
   const leavingGroupId = joinedGroupId.value ?? joiningGroupId.value;
   if (leavingGroupId !== null) {
-    // RTC 立即离房，仅保留短暂的界面快照来完成底栏退场动画。
+    locallyLeftVoiceGroupId.value = leavingGroupId;
+    roomOccupancyRequest?.abort();
+    if (joinedGroupId.value !== null) {
+      roomOccupancies.value = { ...roomOccupancies.value, [leavingGroupId]: rtc.participants
+        .filter((participant) => participant.identity !== `user-${props.user.id}`).length };
+    }
+    // 本机先更新离房意愿，真实断开等待资源清理；底栏只保留退场动画快照。
     departingGroupId.value = leavingGroupId;
     callbarLeaving.value = true;
   }
   if (rtc.status === 'connected' || rtc.status === 'reconnecting') void callSounds.left();
-  rtc.leave();
+  void rtc.leave().then(() => {
+    if (presenceStopped || attempt !== joinAttempt) return;
+    roomSummaryRefreshVersion.value++;
+    void refreshRoomOccupancies(true);
+  }).catch(() => {
+    if (!presenceStopped && attempt === joinAttempt && joinedGroupId.value === null && joiningGroupId.value === null) {
+      viewerNotice.value = '离开语音未能确认，请重启客户端后再试。';
+    }
+  });
   joinedGroupId.value = null;
   joinedGroupDetail.value = null;
   joiningGroupId.value = null;
@@ -991,7 +1043,7 @@ function leaveVoice() {
   endStageDrag();
   membersExpanded.value = false;
   viewerNotice.value = '';
-  void refreshGroups();
+  void refreshGroups(true, false);
 }
 
 async function toggleMicrophone() {

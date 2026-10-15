@@ -1,10 +1,11 @@
 import { onScopeDispose, shallowRef, watch, type Ref } from 'vue';
 import { requestRoomSummary, type RtcRoomSummary } from './roomSummaryApi';
 
-const REFRESH_INTERVAL_MS = 10_000;
+const REFRESH_INTERVAL_MS = 5_000;
 
 /** 未入房时查询摘要；切换群组、入房或销毁作用域时取消旧请求。 */
-export function useRoomSummary(groupId: Ref<string | null>, enabled: Ref<boolean>, onError?: (message: string | null) => void) {
+export function useRoomSummary(groupId: Ref<string | null>, enabled: Ref<boolean>, onError?: (message: string | null) => void,
+  refreshVersion?: Ref<number>) {
   const summary = shallowRef<RtcRoomSummary | null>(null);
   const pageVisible = shallowRef(typeof document === 'undefined' || document.visibilityState !== 'hidden');
 
@@ -16,7 +17,7 @@ export function useRoomSummary(groupId: Ref<string | null>, enabled: Ref<boolean
     onScopeDispose(() => document.removeEventListener('visibilitychange', updatePageVisibility));
   }
 
-  watch([groupId, enabled, pageVisible], ([currentGroupId, shouldRefresh, isVisible], _, onCleanup) => {
+  watch([groupId, enabled, pageVisible, () => refreshVersion?.value], ([currentGroupId, shouldRefresh, isVisible], _, onCleanup) => {
     summary.value = null;
     onError?.(null);
     if (!currentGroupId || !shouldRefresh || !isVisible) return;
