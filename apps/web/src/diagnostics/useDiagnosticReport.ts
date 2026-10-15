@@ -2,6 +2,7 @@ import { onScopeDispose, ref, shallowRef, watch } from 'vue';
 import type { Participant, Room } from 'livekit-client';
 import { createMediaDiagnosticsSampler, type MediaDiagnosticsSnapshot } from './mediaDiagnostics';
 import packageInfo from '../../package.json';
+import { SCREEN_SHARE_QUALITIES } from '../rtc/screenShareQuality';
 
 const SAMPLE_INTERVAL_MS = 2_000;
 const MAX_SAMPLES = 900;
@@ -10,6 +11,7 @@ const MAX_SAMPLE_BYTES = 6 * 1024 * 1024;
 type DiagnosticSettings = { quality: string; inputGain: number; outputVolume: number; screenShareVolume: number;
   noiseSuppression: boolean; autoGainControl: boolean; voiceEnhancement: boolean; echoCancellation: boolean;
   stageCount: number; focused: boolean };
+type ReportSettings = DiagnosticSettings & { preset: { width: number; height: number; maxFrameRate: number; maxBitrate: number } | null };
 
 function numeric(value: unknown) { return typeof value === 'number' && Number.isFinite(value) ? value : null; }
 function label(value: unknown) {
@@ -83,11 +85,18 @@ export function useDiagnosticReport(options: {
   let sampler = createMediaDiagnosticsSampler();
   let startedAt: string | null = null;
   let endedAt: string | null = null;
-  let samples: (ReturnType<typeof diagnosticReportSample> & { requestedSettings: DiagnosticSettings })[] = [];
+  let samples: (ReturnType<typeof diagnosticReportSample> & { requestedSettings: ReportSettings })[] = [];
   let sampleBytes = 0;
-  let startSettings: DiagnosticSettings | null = null;
-  let endSettings: DiagnosticSettings | null = null;
+  let startSettings: ReportSettings | null = null;
+  let endSettings: ReportSettings | null = null;
   const aliases = new Map<string, string>();
+
+  function readSettings(): ReportSettings {
+    const settings = options.settings();
+    const preset = SCREEN_SHARE_QUALITIES.find((item) => item.id === settings.quality);
+    return { ...settings, preset: preset ? { width: preset.width, height: preset.height,
+      maxFrameRate: preset.fps, maxBitrate: preset.bitrate } : null };
+  }
 
   function updateTimer() {
     if (!timer && (viewing || recording.value)) timer = setInterval(() => void poll(), SAMPLE_INTERVAL_MS);
@@ -98,7 +107,7 @@ export function useDiagnosticReport(options: {
     generation++;
     recording.value = false;
     endedAt = new Date().toISOString();
-    endSettings = options.settings();
+    endSettings = readSettings();
     reason.value = stopReason;
     updateTimer();
   }
@@ -109,7 +118,7 @@ export function useDiagnosticReport(options: {
     if (polling || !room || (!recording.value && (!viewing || document.hidden))) return;
     polling = true;
     const attempt = generation;
-    const requestedSettings = options.settings();
+    const requestedSettings = readSettings();
     try {
       const snapshot = await sampler.collect(room, options.participants());
       if (disposed || attempt !== generation || room !== options.room()) return;
@@ -138,7 +147,7 @@ export function useDiagnosticReport(options: {
     generation++;
     sampler = createMediaDiagnosticsSampler();
     aliases.clear(); samples = []; sampleCount.value = 0;
-    sampleBytes = 0; startSettings = options.settings(); endSettings = null;
+    sampleBytes = 0; startSettings = readSettings(); endSettings = null;
     startedAt = new Date().toISOString(); endedAt = null;
     reason.value = ''; error.value = ''; recording.value = true;
     updateTimer();

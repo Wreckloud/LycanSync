@@ -111,6 +111,8 @@ it('导出按记录时参数保存，匿名化身份/轨道ID，不使用导出�
   expect(text).not.toContain('私人昵称');
   const result = JSON.parse(text);
   expect(result.startSettings.quality).toBe('standard'); expect(result.endSettings.quality).toBe('economy');
+  expect(result.startSettings.preset).toEqual({ width: 1920, height: 1080, maxFrameRate: 60, maxBitrate: 12_000_000 });
+  expect(result.endSettings.preset).toEqual({ width: 1280, height: 720, maxFrameRate: 30, maxBitrate: 3_000_000 });
   expect(result.samples.map((sample: { requestedSettings: { quality: string } }) => sample.requestedSettings.quality)).toEqual(['standard', 'economy']);
   expect(result.samples[0].streams[0].member).toBe('member-1');
 });
