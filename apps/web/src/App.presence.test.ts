@@ -9,7 +9,7 @@ import type { RtcRoomSummary } from './rtc/roomSummaryApi';
 const script = parse(readFileSync(new URL('./App.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('App.ts', script, ts.ScriptTarget.Latest, true);
 const functionNames = ['applyDetectedActivity', 'sendHeartbeat', 'stopPresenceHeartbeat', 'updateOwnPresenceStatus',
-  'refreshOnActivation', 'handlePresenceNetworkRestored', 'leaveVoice'];
+  'refreshOnActivation', 'handlePresenceNetworkRestored', 'refreshGroupPresences', 'leaveVoice'];
 const variableNames = ['PRESENCE_IDLE_TIMEOUT_MS', 'activityRevision', 'activitySnapshotRevision', 'removeActivityListener',
   'fetchedRoomSummary', 'roomSummary', 'groupHasVoiceActivity'];
 const callbacks = sourceFile.statements.filter((statement) => {
@@ -51,6 +51,10 @@ function setup() {
     currentPresenceStatus: ref('ONLINE'), presenceStopped: false,
     presenceAbort: null as AbortController | null, presenceHeartbeatTimer: null,
     selectedGroupId: ref<string | null>('group'), joinedGroupId: ref<string | null>('group'),
+    selectedGroupDetail: ref({ id: 'group', members: [{ userId: 'self' }] }), groupPresences: ref({}),
+    groupPresenceWatchGeneration: 0, presenceConnectionLost: ref(false), loadGroup: vi.fn(async () => {}),
+    findGroupPresences: vi.fn(async () => [{ userId: 'self' }, { userId: 'friend' }].map((member) => ({ ...member,
+      status: 'ONLINE', lastSeenAt: null, activityType: null, activityName: null, activityStartedAt: null }))),
     joiningGroupId: ref<string | null>(null), joinedGroupDetail: ref<unknown>(null),
     locallyLeftVoiceGroupId: ref<string | null>(null), roomSummaryRefreshVersion: ref(0),
     summaryError: ref<string | null>(null), roomOccupancies: ref<Record<string, number>>({ group: 2 }),
@@ -72,6 +76,7 @@ function setup() {
   const app = scope.run(() => runInNewContext(`${compiled}\n({ ${functionNames.join(', ')}, roomSummary, groupHasVoiceActivity })`, sandbox)) as {
     applyDetectedActivity: (activity: DetectedActivity | null) => void; stopPresenceHeartbeat: () => void;
     updateOwnPresenceStatus: () => Promise<void>; refreshOnActivation: () => void; handlePresenceNetworkRestored: () => void;
+    refreshGroupPresences: (groupId: string, generation: number, signal: AbortSignal) => Promise<boolean>;
     leaveVoice: () => void; roomSummary: { value: RtcRoomSummary | null }; groupHasVoiceActivity: (groupId: string) => boolean;
   };
   return { scope, state: sandbox, app, desktop, rawSummary, leaving, initialActivity, removeActivityListener,
@@ -152,6 +157,21 @@ it('离房修正只针对原群和本人，服务端确认无人后恢复正常�
     await settle();
     expect(state.locallyLeftVoiceGroupId.value).toBeNull();
     expect(app.roomSummary.value?.participantCount).toBe(0);
+  } finally { stop(); }
+});
+
+it('成员快照的名单变化立即复核资料，仅状态变化不重复加载，旧群结果无权刷新', async () => {
+  const { state, app, stop } = setup();
+  try {
+    await app.refreshGroupPresences('group', 0, new AbortController().signal);
+    expect(state.loadGroup).toHaveBeenCalledExactlyOnceWith('group', true);
+    state.selectedGroupDetail.value.members.push({ userId: 'friend' });
+    await app.refreshGroupPresences('group', 0, new AbortController().signal);
+    expect(state.loadGroup).toHaveBeenCalledOnce();
+    state.selectedGroupId.value = 'other';
+    const result = await app.refreshGroupPresences('group', 0, new AbortController().signal);
+    expect(result).toBe(false);
+    expect(state.loadGroup).toHaveBeenCalledOnce();
   } finally { stop(); }
 });
 

@@ -446,6 +446,13 @@ async function refreshGroupPresences(groupId: string, generation: number, signal
     const result = await findGroupPresences(groupId, signal);
     if (!signal.aborted && generation === groupPresenceWatchGeneration && selectedGroupId.value === groupId) {
       groupPresences.value = Object.fromEntries(result.map((presence) => [presence.userId, presence]));
+      const detail = selectedGroupDetail.value;
+      const memberIds = new Set(result.map((presence) => presence.userId));
+      if (detail?.id === groupId && (detail.members.length !== memberIds.size
+          || detail.members.some((member) => !memberIds.has(member.userId)))) {
+        // 状态快照也确认当前成员资格；名单变化时立即复核资料，不等待群列表周期刷新。
+        void loadGroup(groupId, true);
+      }
       presenceConnectionLost.value = false;
       return true;
     }
