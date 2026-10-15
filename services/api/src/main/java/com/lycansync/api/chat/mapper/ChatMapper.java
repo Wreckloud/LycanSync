@@ -10,12 +10,12 @@ import com.lycansync.api.chat.model.ChatMessageView;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
-import java.util.List;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
- * 群聊消息与图片附件的数据访问。
+ * 群聊消息、图片与普通文件附件及存储额度的数据访问。
  *
  * @author Wreckloud
  * @since 2026-09-14

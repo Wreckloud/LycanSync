@@ -11,6 +11,6 @@ import java.util.List;
  */
 @Schema(description = "群聊消息列表")
 public record ChatMessagePageResponse(
-        @Schema(description = "按时间正序排列的消息") List<ChatMessageResponse> messages,
+        @Schema(description = "按群内消息序号正序排列的消息") List<ChatMessageResponse> messages,
         @Schema(description = "是否还有更早消息") boolean hasMore) {
 }

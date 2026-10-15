@@ -103,6 +103,7 @@ public class ChatFileService {
                 throw new GroupException(HttpStatus.INTERNAL_SERVER_ERROR, ApiErrorCode.CHAT_FILE_STORAGE_FAILED,
                         "服务器文件存储暂时不可用");
             } finally {
+                // 文件仍占用磁盘时保留额度，避免清理失败后继续接受超出容量的上传。
                 boolean temporaryRemoved = deleteQuietly(temporaryFile);
                 if (!completed) {
                     boolean storedRemoved = deleteQuietly(storedFile);
