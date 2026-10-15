@@ -24,9 +24,9 @@ createApp({ components: { ScreenSharePicker }, setup() {
     confirmed: () => confirmed.value };
   return () => h('div', [h('button', { onClick: () => { open.value=true; } }, '打开选择器'),
     h('button', '背景按钮'), open.value ? h(ScreenSharePicker, {
-      sources, sourceType:sourceType.value, quality:quality.value, shareAudio:shareAudio.value,
+      sources:sources.filter(source => source.type === sourceType.value), sourceType:sourceType.value, quality:quality.value, shareAudio:shareAudio.value,
       selectedId:selectedId.value, audioMode:'process', audioReady:true, audioFailed:false, loading:false,
-      error:error.value, notice:'', 'onUpdate:sourceType': value => {sourceType.value=value;},
+      error:error.value, notice:'', 'onUpdate:sourceType': value => {sourceType.value=value;selectedId.value='';},
       'onUpdate:quality': value => {quality.value=value;}, 'onUpdate:shareAudio': value => {shareAudio.value=value;},
       onChoose:value => {selectedId.value=value;}, onClose:() => {open.value=false;},
       onConfirm:() => {confirmed.value=true;open.value=false;}
@@ -46,6 +46,7 @@ test('四种画质切换、整屏预览、失败阻止确认和恢复', async ({
   await page.getByRole('tab', { name: '高帧率', exact: true }).click();
   await expect(dialog).toContainText('1080p · 120 FPS');
   await page.getByRole('tab', { name: '整个屏幕', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: '测试窗口', exact: true })).toHaveCount(0);
   const screen = page.getByRole('button', { name: '屏幕 1', exact: true });
   await expect(screen.locator('img')).toBeVisible();
   await screen.click();

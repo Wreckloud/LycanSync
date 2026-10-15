@@ -31,10 +31,6 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/api/presence/heartbeat', (route) => route.fulfill({ status: 204 }));
 });
 
-
-
-
-
 test('浏览器旧会话的延迟 401 不退出新会话，当前会话 401 仍会退出', async ({ page }) => {
   await page.clock.install();
   const user = { id: 'race-member', nickname: '行者1001', avatar: '', administrator: false };
@@ -99,8 +95,6 @@ test('浏览器旧会话的延迟 401 不退出新会话，当前会话 401 仍�
     expect(redemptions).toBe(2);
   } finally { releaseSession(); }
 });
-
-
 
 test('新设备替换会话后旧客户端通过心跳静默退出', async ({ page }) => {
   await page.clock.install();
@@ -232,7 +226,7 @@ test('个人资料修改沿用当前账号', async ({ page }) => {
   await expect(page.getByRole('button', { name: '修改昵称，自定义昵称', exact: true })).toBeVisible();
 });
 
-test('自动保存失败保留草稿，不关闭设置，重新编辑后可以重试', async ({ page }) => {
+test('自动保存失败回退资料且允许返回，重新编辑后可以正常保存', async ({ page }) => {
   let user = { id: 'profile-failure-user', nickname: '服务器昵称', avatar: '', administrator: false };
   let failSave = true;
   await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
@@ -252,14 +246,18 @@ test('自动保存失败保留草稿，不关闭设置，重新编辑后可以�
   await page.getByRole('button', { name: '账号设置', exact: true }).click();
   await editNickname(page, '未保存的新昵称');
   await page.getByLabel('昵称', { exact: true }).press('Tab');
-  await expect(page.getByRole('alert')).toBeVisible();
-  await expect(page.getByLabel('昵称', { exact: true })).toHaveValue('未保存的新昵称');
+  await expect(page.locator('.profile-settings [role="alert"]')).toContainText('暂时无法保存');
+  await expect(page.getByRole('button', { name: '修改昵称，服务器昵称', exact: true })).toBeVisible();
+  expect(user.nickname).toBe('服务器昵称');
   await page.getByRole('button', { name: '返回应用' }).click();
-  await expect(page.locator('.settings-view')).toBeVisible();
-  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(page.locator('.settings-view')).toHaveCount(0);
   failSave = false;
+  await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  await page.getByRole('button', { name: '账号设置', exact: true }).click();
+  await editNickname(page, '重新编辑的新昵称');
   await page.getByLabel('昵称', { exact: true }).press('Enter');
-  await expect.poll(() => user.nickname).toBe('未保存的新昵称');
+  await expect.poll(() => user.nickname).toBe('重新编辑的新昵称');
+  await expect(page.locator('.profile-settings [role="alert"]')).toHaveCount(0);
   await page.getByRole('button', { name: '返回应用' }).click();
   await expect(page.locator('.settings-view')).toHaveCount(0);
 });
@@ -440,10 +438,11 @@ test('签名自动保存与注册日期展示，反馈不推动下方内容', as
   expect(await page.locator('.activity-settings').boundingBox()).toEqual(activityPosition);
 
   failNext = true;
-  await signature.fill('保留失败草稿');
+  await signature.fill('未保存的新签名');
   await page.getByRole('heading', { name: '账号设置', exact: true }).click();
   await expect(page.locator('.profile-settings [role="alert"]')).toContainText('暂时无法保存');
-  await expect(signature).toHaveValue('保留失败草稿');
+  await expect(signature).toHaveValue('一起开黑');
+  expect(user.signature).toBe('一起开黑');
   expect(await page.locator('.activity-settings').boundingBox()).toEqual(activityPosition);
 
   await signature.fill('');
