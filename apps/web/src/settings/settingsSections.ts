@@ -8,11 +8,6 @@ export const SETTINGS_SECTIONS = [
 ] as const;
 
 export type SettingsSectionId = typeof SETTINGS_SECTIONS[number]['id'];
-export type SettingsEntry = 'avatar' | 'gear';
-
-export function settingsSectionForEntry(entry: SettingsEntry): SettingsSectionId {
-  return entry === 'avatar' ? 'account' : 'audio';
-}
 
 export function settingsSectionTitle(section: SettingsSectionId) {
   return SETTINGS_SECTIONS.find((item) => item.id === section)!.title;

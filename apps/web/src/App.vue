@@ -34,7 +34,7 @@ import { useCallSounds } from './rtc/useCallSounds';
 import { normalizeVoiceLevel } from './rtc/voiceLevel';
 import { sendPresenceHeartbeat, type UserActivity, type UserPresenceStatus } from './presence/presenceApi';
 import { ApiRequestError, type AuthUser, type ProfileUpdate } from './auth/authApi';
-import { settingsSectionForEntry, type SettingsSectionId } from './settings/settingsSections';
+import type { SettingsSectionId } from './settings/settingsSections';
 import { useActivityVisibility } from './settings/useActivityVisibility';
 import { ScreenShareStage } from './rtc/screenShareStage';
 import { useStagePreferences } from './settings/useStagePreferences';
@@ -1431,7 +1431,7 @@ function participantListening(participant: Participant) {
           </div>
         </div>
         <PersonalStatusCard :user="user" :status="currentPresenceStatus" :status-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]">
-          <IconButton label="语音与音频设置" @click="openSettings(settingsSectionForEntry('gear'), $event)"><Settings :size="19" /></IconButton>
+          <IconButton label="语音与音频设置" @click="openSettings('audio', $event)"><Settings :size="19" /></IconButton>
         </PersonalStatusCard>
       </aside>
     </div>

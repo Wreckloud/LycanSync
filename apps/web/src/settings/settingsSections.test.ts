@@ -1,15 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { SETTINGS_SECTIONS, settingsSectionForEntry, settingsSectionTitle } from './settingsSections';
+import { SETTINGS_SECTIONS, settingsSectionTitle } from './settingsSections';
 
-describe('settings sections', () => {
-  it('routes both existing entrances into the shared settings page', () => {
-    expect(settingsSectionForEntry('avatar')).toBe('account');
-    expect(settingsSectionForEntry('gear')).toBe('audio');
-    expect(settingsSectionTitle(settingsSectionForEntry('avatar'))).toBe('账号设置');
-    expect(settingsSectionTitle(settingsSectionForEntry('gear'))).toBe('语音与音频');
+describe('设置栏目', () => {
+  it('账号与音频栏目使用统一标题', () => {
+    expect(settingsSectionTitle('account')).toBe('账号设置');
+    expect(settingsSectionTitle('audio')).toBe('语音与音频');
   });
 
-  it('groups profile and activity into one account page', () => {
+  it('资料和活动归入账号栏目，不新增重复导航', () => {
     expect(SETTINGS_SECTIONS.map(({ id }) => id)).toEqual(['account', 'audio', 'sound', 'client', 'about', 'members']);
   });
 });
