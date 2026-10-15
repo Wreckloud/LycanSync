@@ -8,6 +8,7 @@ const emit = defineEmits<{ cancel: []; joined: [result: { sessionToken?: string;
 const preview = ref<AccessPreview | null>(null);
 const error = ref('');
 const busy = ref(false);
+const canRetryRedemption = ref(false);
 const heading = ref<HTMLElement | null>(null);
 const title = computed(() => {
   const server = preview.value?.serverName ?? 'LycanSync';
@@ -19,18 +20,24 @@ const title = computed(() => {
 const subtitle = computed(() => preview.value?.kind === 'RECOVERY' ? '回到熟悉的小队'
   : preview.value?.kind === 'ACTIVATE' ? '让朋友们有个相聚的地方' : '一起开黑，一起看');
 const canRedeem = computed(() => preview.value?.status === 'PENDING'
-  || (preview.value?.status === 'COMPLETED' && !!sessionStorage.getItem(`lycan:redeem:${props.offer.token}`)));
+  || (preview.value?.status === 'COMPLETED' && canRetryRedemption.value));
 let generation = 0;
 const controller = new AbortController();
 async function checkLink() {
   const task = ++generation;
   preview.value = null;
+  canRetryRedemption.value = false;
   error.value = '';
   if (props.offer.server !== props.currentServer) return;
   try {
     const result = await authRequest<AccessPreview>('access/preview', 'POST', { token: props.offer.token },
       AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]));
-    if (task === generation) preview.value = result;
+    if (task !== generation) return;
+    preview.value = result;
+    if (result.status === 'COMPLETED') {
+      const key = sessionStorage.getItem(`lycan:redeem:${props.offer.token}`);
+      canRetryRedemption.value = key !== null && /^[A-Za-z0-9_-]{43}$/.test(key);
+    }
   } catch (exception) { if (task === generation) error.value = exception instanceof Error ? exception.message : '链接检查失败'; }
 }
 
@@ -49,7 +56,9 @@ async function join() {
   try {
     const result = await authRequest<{ sessionToken?: string; user: AuthUser }>('access/redeem', 'POST', { token, redemptionKey: redemptionKey(token) });
     if (task !== generation) return;
-    sessionStorage.removeItem(`lycan:redeem:${token}`);
+    // 服务端兑换已完成；临时重试凭据清理失败不能把成功登录误报为兑换失败。
+    try { sessionStorage.removeItem(`lycan:redeem:${token}`); }
+    catch { console.warn('登录已完成，但本页临时重试凭据未能清理。'); }
     emit('joined', result, kind);
   } catch (exception) { if (task === generation) error.value = exception instanceof Error ? exception.message : '操作未完成，请重试'; }
   finally { busy.value = false; }
