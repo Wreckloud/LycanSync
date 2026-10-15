@@ -55,7 +55,8 @@ export function calculateAvatarCrop(
   const cosine = Math.cos(radians);
   const sine = Math.sin(radians);
   const coverage = Math.abs(cosine) + Math.abs(sine);
-  const displayScale = viewportSize * coverage / Math.min(sourceWidth, sourceHeight) * zoom;
+  // 旋转只提高防露白所需的最低倍率，不叠乘用户已经选择的放大倍率。
+  const displayScale = viewportSize / Math.min(sourceWidth, sourceHeight) * Math.max(coverage, zoom);
   const size = viewportSize / displayScale;
   // 将拖动量转回图片坐标；四个裁剪角始终落在原图范围内。
   const marginX = Math.max(0, sourceWidth / 2 - size * coverage / 2);

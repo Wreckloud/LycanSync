@@ -55,7 +55,20 @@ function clampOffset() {
   offsetX.value = (Math.cos(radians) * shiftX - Math.sin(radians) * shiftY) * scale;
   offsetY.value = (Math.sin(radians) * shiftX + Math.cos(radians) * shiftY) * scale;
 }
-watch([zoom, rotation], clampOffset);
+watch(zoom, clampOffset);
+watch(rotation, (_, previousRotation) => {
+  // 围绕取景框内已选中的原图位置旋转，不能沿用旋转前的屏幕拖动量。
+  const source = props.source.bitmap;
+  const previous = calculateAvatarCrop(source.width, source.height, viewportSize.value,
+    zoom.value, offsetX.value, offsetY.value, previousRotation);
+  const shiftX = source.width / 2 - previous.x - previous.size / 2;
+  const shiftY = source.height / 2 - previous.y - previous.size / 2;
+  const scale = viewportSize.value / crop.value.size;
+  const radians = rotation.value * Math.PI / 180;
+  offsetX.value = (Math.cos(radians) * shiftX - Math.sin(radians) * shiftY) * scale;
+  offsetY.value = (Math.sin(radians) * shiftX + Math.cos(radians) * shiftY) * scale;
+  clampOffset();
+});
 
 function zoomWithWheel(event: WheelEvent) {
   if (processing.value) return;

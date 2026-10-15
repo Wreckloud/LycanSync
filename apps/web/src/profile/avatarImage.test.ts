@@ -112,6 +112,14 @@ describe('头像图片处理', () => {
     }
   });
 
+  it('放大足够时旋转保持相同像素比例，倍率不足才补足取景框', () => {
+    for (const rotation of [-180, -90, -71, -45, 0, 30, 45, 71, 90, 180]) {
+      expect(calculateAvatarCrop(1200, 800, 300, 2, 0, 0, rotation).size).toBeCloseTo(400);
+      expect(calculateAvatarCrop(800, 1200, 300, 9, 0, 0, rotation).size).toBeCloseTo(800 / 9);
+    }
+    expect(calculateAvatarCrop(800, 800, 300, 1, 0, 0, 45).size).toBeCloseTo(800 / Math.SQRT2);
+  });
+
   it('输出使用与预览相同的旋转和中心位置', async () => {
     const { translate, rotate, scale } = installCanvas((done, type) => done(new Blob(['png'], { type })));
     await encodeAvatarCrop(bitmap(800, 800), { x: 200, y: 200, size: 400, rotation: 90 });
