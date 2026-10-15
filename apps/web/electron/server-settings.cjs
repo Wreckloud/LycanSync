@@ -15,11 +15,13 @@ function serverUrl(value) {
 }
 
 function loadServerSettings({ packaged, userDirectory, resourcesDirectory, developmentUrl }) {
+  // 显式开发地址独立生效，不依赖另一套本机或安装包配置能否读取。
+  if (!packaged && developmentUrl) return serverUrl(developmentUrl);
   const userFile = resolve(userDirectory, 'server-config.json');
   // 用户选择优先于安装包默认值，升级只替换默认值。
   const file = existsSync(userFile) ? userFile : resolve(resourcesDirectory, 'server-config.json');
   const config = JSON.parse(readFileSync(file, 'utf8'));
-  return serverUrl(!packaged && developmentUrl ? developmentUrl : config.apiUrl);
+  return serverUrl(config.apiUrl);
 }
 
 async function saveServerSettings(userDirectory, value) {

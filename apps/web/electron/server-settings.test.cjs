@@ -31,3 +31,16 @@ test('用户服务器地址在安装版和开发版一致保留，显式测试�
     assert.throws(() => loadServerSettings(options));
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
+
+test('显式开发地址不读取损坏或缺失的配置，安装版仍拒绝损坏配置', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'lycansync-server-'));
+  try {
+    const options = { packaged: false, userDirectory: directory, resourcesDirectory: directory,
+      developmentUrl: 'http://127.0.0.1:18080' };
+    assert.equal(loadServerSettings(options), 'http://127.0.0.1:18080');
+    writeFileSync(join(directory, 'server-config.json'), '{broken');
+    assert.equal(loadServerSettings(options), 'http://127.0.0.1:18080');
+    assert.throws(() => loadServerSettings({ ...options, packaged: true }));
+    assert.throws(() => loadServerSettings({ ...options, developmentUrl: 'http://external.example' }), /HTTPS/);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
