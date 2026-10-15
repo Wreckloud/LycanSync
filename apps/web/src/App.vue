@@ -65,14 +65,29 @@ const { inputGain, outputVolume, screenShareVolume } = audioPreferences;
 const audioProcessing = audioPreferences.processing;
 const callSounds = useCallSounds(outputVolume);
 const desktop = window.lycanDesktop;
+const viewerNotice = ref('');
 const captureRequest = ref<{ sources: ReturnType<typeof createNativeVideoSourceSelection>['options'] } | null>(null);
 const captureSourceType = ref<'window' | 'screen'>('window');
-const captureQuality = ref<ScreenShareQualityId>(readScreenShareQuality());
+const captureQuality = ref<ScreenShareQualityId>('standard');
 const selectedCaptureSourceId = ref('');
 const captureSourceNotice = ref('');
 const capturePicker = ref<InstanceType<typeof ScreenSharePicker> | null>(null);
 const captureSourcesElement = computed(() => capturePicker.value?.sourcesElement);
-let lastCaptureSourceType: 'window' | 'screen' = localStorage.getItem('lycansync.capture-source-type') === 'screen' ? 'screen' : 'window';
+let lastCaptureSourceType: 'window' | 'screen' = 'window';
+restoreCapturePreferences();
+
+function restoreCapturePreferences() {
+  try {
+    const quality = readScreenShareQuality();
+    const sourceType = localStorage.getItem('lycansync.capture-source-type') === 'screen' ? 'screen' : 'window';
+    captureQuality.value = quality;
+    lastCaptureSourceType = sourceType;
+  } catch {
+    // 偏好不可读不能阻止主界面启动；未读完之前不覆盖默认选择。
+    viewerNotice.value = '无法读取本机共享偏好，当前使用标准画质和窗口来源。';
+  }
+}
+
 let lastNativeSelection: { discoveryId: string; sourceId: string } | undefined;
 let currentNativeDiscoveryId = '';
 const captureAudioCapabilityReady = ref(false);
@@ -783,7 +798,6 @@ const membersExpanded = ref(false);
 const filmstripPage = ref(0);
 const viewerGrid = ref<HTMLElement | null>(null);
 const lockedViewerHeight = ref<number | null>(null);
-const viewerNotice = ref('');
 const departingGroupId = ref<string | null>(null);
 const callbarLeaving = ref(false);
 function releaseViewerLock() {

@@ -7,10 +7,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNativeVideoSourceSelection } from './components/nativeVideoSourceSelection';
 import { canSelectNativeSource, readScreenShareAudioPreference, resolveNativeScreenAudioCapability,
   saveScreenShareAudioPreference, shouldShareAudioInNativeSelection, type NativeScreenAudioMode } from './rtc/nativeScreenAudioMode';
-import { saveScreenShareQuality, type ScreenShareQualityId } from './rtc/screenShareQuality';
+import { readScreenShareQuality, saveScreenShareQuality, type ScreenShareQualityId } from './rtc/screenShareQuality';
 
 type Selection = { sourceId: string; shareAudio: boolean; quality?: ScreenShareQualityId };
-const callbackNames = ['stopNativeSourceRefresh', 'selectCaptureSource', 'saveCapturePreferences',
+const callbackNames = ['restoreCapturePreferences', 'stopNativeSourceRefresh', 'selectCaptureSource', 'saveCapturePreferences',
   'updateCaptureShareAudio', 'requestNativeScreenSource', 'changeScreenShareAudio'];
 const script = parse(readFileSync(new URL('./App.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('App.ts', script, ts.ScriptTarget.Latest, true);
@@ -26,7 +26,8 @@ function setup(mode: NativeScreenAudioMode = 'process') {
   const stored = new Map<string, string>();
   const order: string[] = [];
   const setItem = vi.fn((key: string, value: string) => { order.push(key); stored.set(key, value); });
-  const storage = { getItem: (key: string) => stored.get(key) ?? null, setItem };
+  const getItem = vi.fn((key: string) => stored.get(key) ?? null);
+  const storage = { getItem, setItem };
   vi.stubGlobal('localStorage', storage);
   const state = {
     captureRequest: ref<{ sources: Array<{ id: string; type: 'window' | 'screen' }> } | null>(null),
@@ -41,7 +42,7 @@ function setup(mode: NativeScreenAudioMode = 'process') {
     ...state, localStorage: storage, rtc,
     nativeSourceChooser: undefined, nativeSourceChooserGeneration: 0, nativeSourceRefreshTimer: undefined,
     lastCaptureSourceType: 'window', lastNativeSelection: undefined, currentNativeDiscoveryId: '',
-    clearTimeout, canSelectNativeSource, saveScreenShareQuality, readScreenShareAudioPreference,
+    clearTimeout, canSelectNativeSource, readScreenShareQuality, saveScreenShareQuality, readScreenShareAudioPreference,
     saveScreenShareAudioPreference, resolveNativeScreenAudioCapability, shouldShareAudioInNativeSelection,
     createNativeVideoSourceSelection: () => {
       const chooser = createNativeVideoSourceSelection([]);
@@ -56,6 +57,7 @@ function setup(mode: NativeScreenAudioMode = 'process') {
     },
   };
   const app = runInNewContext(`${compiled}\n({ ${callbackNames.join(', ')} })`, sandbox) as {
+    restoreCapturePreferences(): void;
     requestNativeScreenSource(capabilities: Promise<Record<string, { available: boolean; reason: string }>>): Promise<Selection | null>;
     updateCaptureShareAudio(enabled: boolean): void;
     selectCaptureSource(sourceId: string | null): void;
@@ -65,10 +67,45 @@ function setup(mode: NativeScreenAudioMode = 'process') {
     : mode === 'systemMix' ? { available: true, reason: 'windowsSystemMixLoopback' }
       : { available: false, reason: 'unsupported' };
   const open = () => app.requestNativeScreenSource(Promise.resolve({ screenShareAudioCapture: capability }));
-  return { app, state, stored, setItem, order, open, rtc };
+  return { app, state, stored, getItem, setItem, order, open, rtc };
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('App 启动恢复共享偏好', () => {
+  it('沿用已保存的画质和屏幕来源', async () => {
+    const { app, state, stored, open } = setup();
+    stored.set('lycansync.screen-share-quality', 'highFrameRate');
+    stored.set('lycansync.capture-source-type', 'screen');
+    app.restoreCapturePreferences();
+    expect(state.captureQuality.value).toBe('highFrameRate');
+    expect(state.viewerNotice.value).toBe('');
+    const waiting = open();
+    expect(state.captureSourceType.value).toBe('screen');
+    app.selectCaptureSource(null);
+    await waiting;
+  });
+
+  it.each(['lycansync.screen-share-quality', 'lycansync.capture-source-type'])(
+    '%s 读取失败不抛出、不写入，保留完整默认选择并提示', async (failedKey) => {
+      const { app, state, stored, getItem, setItem, open } = setup();
+      state.captureQuality.value = 'standard';
+      stored.set('lycansync.screen-share-quality', 'highFrameRate');
+      getItem.mockImplementation((key) => {
+        if (key === failedKey) throw new Error('storage denied');
+        return stored.get(key) ?? null;
+      });
+      expect(() => app.restoreCapturePreferences()).not.toThrow();
+      expect(state.captureQuality.value).toBe('standard');
+      expect(state.viewerNotice.value).toContain('无法读取本机共享偏好');
+      expect(setItem).not.toHaveBeenCalled();
+      const waiting = open();
+      expect(state.captureSourceType.value).toBe('window');
+      app.selectCaptureSource(null);
+      await waiting;
+    },
+  );
+});
 
 describe('App 共享选择的音频偏好提交顺序', () => {
   it.each(['process', 'systemMix'] as const)('%s 勾选后取消不写入偏好', async (mode) => {
