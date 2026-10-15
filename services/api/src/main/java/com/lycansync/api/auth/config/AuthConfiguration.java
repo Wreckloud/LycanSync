@@ -9,6 +9,7 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.dao.DataAccessException;
@@ -28,10 +29,9 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import org.springframework.beans.factory.annotation.Value;
 
 /**
- * 无 Cookie 的 Bearer 会话边界与公开邀请入口；密码入口仅由测试控制器提供。
+ * 无 Cookie 的 Bearer 会话边界与公开邀请入口。
  *
  * @author Wreckloud
  * @since 2026-09-06
@@ -51,8 +51,7 @@ public class AuthConfiguration {
                 .requestCache(cache -> cache.disable())
                 .formLogin(form -> form.disable()).httpBasic(basic -> basic.disable())
                 .authorizeHttpRequests(requests -> requests
-                        .requestMatchers("/api/auth/local/register", "/api/auth/local/login",
-                                "/api/auth/options", "/api/auth/access/preview", "/api/auth/access/redeem",
+                        .requestMatchers("/api/auth/options", "/api/auth/access/preview", "/api/auth/access/redeem",
                                 "/join", "/join.js", "/api/system/initialization", "/actuator/health", "/actuator/info",
                                 "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/error",
                                 "/internal/rtc/access", "/internal/rtc/events").permitAll()
@@ -92,9 +91,7 @@ public class AuthConfiguration {
                             chain.doFilter(request, response);
                             return;
                         }
-                        boolean loginAttempt = "/api/auth/local/register".equals(path)
-                                || "/api/auth/local/login".equals(path)
-                                || "/api/auth/access/preview".equals(path)
+                        boolean loginAttempt = "/api/auth/access/preview".equals(path)
                                 || "/api/auth/access/redeem".equals(path);
                         String source = trustProxy ? request.getHeader("X-Lycan-Client-IP") : null;
                         if (source == null || source.isBlank() || source.length() > 64) source = request.getRemoteAddr();

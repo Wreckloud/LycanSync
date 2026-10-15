@@ -1,13 +1,13 @@
 package com.lycansync.api.auth.controller;
 
+import com.lycansync.api.auth.config.AccountAccessProperties;
 import com.lycansync.api.auth.config.AuthConfiguration;
-import com.lycansync.api.auth.dto.LocalLoginRequest;
 import com.lycansync.api.auth.dto.ProfileUpdateRequest;
 import com.lycansync.api.auth.exception.AuthException;
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.model.AuthUser;
+import com.lycansync.api.auth.service.AccessLinkService;
 import com.lycansync.api.auth.service.AuthService;
-import com.lycansync.api.auth.service.LocalAuthService;
 import com.lycansync.api.auth.service.ProfileService;
 import com.lycansync.api.common.error.ApiErrorCode;
 import org.junit.jupiter.api.Test;
@@ -35,12 +35,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * 本地认证接口错误分层与登出边界测试。
+ * 邀请入口限流、会话资料与登出边界测试。
  *
  * @author Wreckloud
  * @since 2026-09-10
  */
-@WebMvcTest({AuthController.class, LocalAuthController.class})
+@WebMvcTest({AuthController.class, AccessLinkController.class})
 @Import(AuthConfiguration.class)
 class AuthControllerTests {
 
@@ -56,23 +56,26 @@ class AuthControllerTests {
     private AuthService authService;
 
     @MockitoBean
-    private LocalAuthService localAuthService;
+    private AccessLinkService accessLinkService;
+
+    @MockitoBean
+    private AccountAccessProperties accountAccessProperties;
 
     @MockitoBean
     private ProfileService profileService;
 
     @Test
-    void shouldDistinguishInvalidCredentialsFromRateLimit() throws Exception {
-        when(localAuthService.login(any(LocalLoginRequest.class))).thenThrow(new AuthException(
-                HttpStatus.UNAUTHORIZED, ApiErrorCode.INVALID_CREDENTIALS, "用户名或密码错误"));
-        performLogin().andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"));
+    void shouldDistinguishInvalidLinkFromRateLimit() throws Exception {
+        when(accessLinkService.preview(SESSION_TOKEN)).thenThrow(new AuthException(
+                HttpStatus.CONFLICT, ApiErrorCode.INVALID_REQUEST, "链接无效"));
+        performPreview().andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
 
-        reset(localAuthService);
+        reset(accessLinkService);
         for (int attempt = 1; attempt < 60; attempt++) {
-            performLogin().andExpect(status().isOk());
+            performPreview().andExpect(status().isOk());
         }
-        performLogin().andExpect(status().isTooManyRequests())
+        performPreview().andExpect(status().isTooManyRequests())
                 .andExpect(jsonPath("$.code").value("AUTH_RATE_LIMITED"));
     }
 
@@ -146,28 +149,28 @@ class AuthControllerTests {
                 .andExpect(jsonPath("$.code").value("INVALID_AUTHORIZATION"));
     }
 
-    private org.springframework.test.web.servlet.ResultActions performLogin() throws Exception {
-        return mvc.perform(post("/api/auth/local/login")
+    private org.springframework.test.web.servlet.ResultActions performPreview() throws Exception {
+        return mvc.perform(post("/api/auth/access/preview")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"tester\",\"password\":\"abc123\"}"));
+                .content("{\"token\":\"" + SESSION_TOKEN + "\"}"));
     }
 
     @Test
     void shouldIsolateSourcesAndIgnoreUntrustedProxyHeader() throws Exception {
         for (int attempt = 0; attempt < 60; attempt++) {
-            mvc.perform(post("/api/auth/local/login").with(request -> {
+            mvc.perform(post("/api/auth/access/preview").with(request -> {
                 request.setRemoteAddr("192.0.2.41"); return request;
             }).contentType(MediaType.APPLICATION_JSON)
-                    .content("{\"username\":\"tester\",\"password\":\"abc123\"}"))
+                    .content("{\"token\":\"" + SESSION_TOKEN + "\"}"))
                     .andExpect(status().isOk());
         }
-        mvc.perform(post("/api/auth/local/login").with(request -> {
+        mvc.perform(post("/api/auth/access/redeem").with(request -> {
             request.setRemoteAddr("192.0.2.41"); return request;
         }).header("X-Lycan-Client-IP", "192.0.2.99")).andExpect(status().isTooManyRequests());
-        mvc.perform(post("/api/auth/local/login").with(request -> {
+        mvc.perform(post("/api/auth/access/preview").with(request -> {
             request.setRemoteAddr("192.0.2.42"); return request;
         }).contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"tester\",\"password\":\"abc123\"}"))
+                .content("{\"token\":\"" + SESSION_TOKEN + "\"}"))
                 .andExpect(status().isOk());
     }
 }
