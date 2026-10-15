@@ -1,18 +1,16 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onScopeDispose, ref, watch } from 'vue';
 import { Activity } from '@lucide/vue';
 import type { UnwrapNestedRefs } from 'vue';
-import type { Participant } from 'livekit-client';
 import type { useRtcRoom } from '../../rtc/useRtcRoom';
 import MediaDiagnostics from '../MediaDiagnostics.vue';
+import DiagnosticReportSettings from './DiagnosticReportSettings.vue';
+import type { useDiagnosticReport } from '../../diagnostics/useDiagnosticReport';
 import packageInfo from '../../../package.json';
 
-const props = defineProps<{ rtc: UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>; active: boolean }>();
+const props = defineProps<{ rtc: UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>; active: boolean;
+  report: ReturnType<typeof useDiagnosticReport> }>();
 const diagnosticsOpen = ref(false);
-const participants = computed(() => {
-  void props.rtc.revision;
-  return props.rtc.participants as Participant[];
-});
 const room = computed(() => props.rtc.room);
 const hasActiveMedia = computed(() => {
   void props.rtc.revision;
@@ -26,6 +24,8 @@ const hasActiveMedia = computed(() => {
 
 watch(room, (current) => { if (!current) diagnosticsOpen.value = false; });
 watch(() => props.active, (active) => { if (!active) diagnosticsOpen.value = false; });
+watch(diagnosticsOpen, (open) => props.report.setViewing(open));
+onScopeDispose(() => props.report.setViewing(false));
 </script>
 
 <template>
@@ -43,8 +43,9 @@ watch(() => props.active, (active) => { if (!active) diagnosticsOpen.value = fal
       <button v-else type="button" class="settings-button" @click="diagnosticsOpen = !diagnosticsOpen">
         <Activity :size="15" />{{ diagnosticsOpen ? '关闭媒体诊断' : '查看媒体诊断' }}
       </button>
-      <MediaDiagnostics v-if="diagnosticsOpen && room" :room="room" :participants="participants" />
+      <MediaDiagnostics v-if="diagnosticsOpen && room" :room="room" :statistics="report.latest.value" />
     </section>
+    <DiagnosticReportSettings :report="report" :can-start="!!room" />
   </div>
 </template>
 

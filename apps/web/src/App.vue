@@ -38,6 +38,7 @@ import type { SettingsSectionId } from './settings/settingsSections';
 import { useActivityVisibility } from './settings/useActivityVisibility';
 import { ScreenShareStage } from './rtc/screenShareStage';
 import { useStagePreferences } from './settings/useStagePreferences';
+import { useDiagnosticReport } from './diagnostics/useDiagnosticReport';
 
 const props = defineProps<{
   user: AuthUser;
@@ -1232,6 +1233,13 @@ function previewGroup(groupId: string) {
   }
   viewerNotice.value = '';
 }
+const diagnosticReport = useDiagnosticReport({
+  room: () => rtc.room, participants: () => rtc.participants,
+  settings: () => ({ quality: rtc.currentScreenShareQuality, inputGain: inputGain.value, outputVolume: outputVolume.value,
+    screenShareVolume: screenShareVolume.value, ...audioProcessing, stageCount: enlargedIdentities.value.length,
+    focused: focusedOnSelectedGroup.value }),
+});
+
 function participantListening(participant: Participant) {
   return participant === localParticipant.value ? listening.value
     : participant.attributes['lycansync.listening'] !== 'false';
@@ -1456,7 +1464,7 @@ function participantListening(participant: Participant) {
     </div>
     <SettingsView v-if="settingsOpen" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
       :presence-status="currentPresenceStatus" :presence-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]"
-      :preferences="audioPreferences" :rtc="rtc" :microphone-test="microphoneTest" :input-level-percent="localInputLevelPercent"
+      :preferences="audioPreferences" :rtc="rtc" :microphone-test="microphoneTest" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
       :activity="currentActivity" :show-activity="showActivity" :activity-error="activityVisibilityError"
       :stage-auto-fill="stagePreferences.autoFill.value" :stage-preference-error="stagePreferences.error.value"
       @stage-auto-fill="stagePreferences.setAutoFill"

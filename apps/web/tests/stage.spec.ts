@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 const user = { id: 'stage-user', nickname: '自己', avatar: '', administrator: true };
 const groups = ['舞台测试', '另一群组'].map((name, index) => ({
@@ -121,6 +122,40 @@ async function sharing(page: Page, ids: string[]) {
 async function stageNames(page: Page) {
   return page.getByTestId('viewer-screen').locator('.participant-meta > strong').allTextContents();
 }
+
+test('主动诊断记录返回应用后继续，离房结束并导出匿名报告', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await sharing(page, ['A', 'B']);
+  await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  await page.getByRole('button', { name: '关于与诊断', exact: true }).click();
+  const report = page.locator('.diagnostic-report-settings');
+  await report.getByRole('textbox', { name: '体验说明（选填）' }).fill('合成界面回归');
+  await report.getByRole('button', { name: '开始记录', exact: true }).click();
+  await expect(report.getByRole('status')).toContainText('记录中');
+  await expect(report.getByRole('status')).not.toContainText('0 份统计');
+  await page.getByRole('button', { name: '返回应用', exact: true }).click();
+  await page.waitForTimeout(2200);
+  await page.getByRole('button', { name: '离开语音', exact: true }).click();
+  await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  await page.getByRole('button', { name: '关于与诊断', exact: true }).click();
+  await expect(report.getByRole('status')).toContainText('记录已结束');
+  await expect(report.getByRole('textbox', { name: '体验说明（选填）' })).toHaveValue('合成界面回归');
+  const downloading = page.waitForEvent('download');
+  await report.getByRole('button', { name: '导出报告', exact: true }).click();
+  const download = await downloading;
+  const path = await download.path();
+  if (!path) throw new Error('未取得测试报告下载');
+  const text = await readFile(path, 'utf8');
+  const result = JSON.parse(text);
+  expect(result.kind).toBe('lycansync-diagnostics');
+  expect(result.stopReason).toBe('roomChanged');
+  expect(result.samples.length).toBeGreaterThan(1);
+  expect(result.notes).toBe('合成界面回归');
+  expect(text).not.toContain('user-stage-user');
+  expect(text).not.toContain('成员A');
+  expect(pageErrors).toEqual([]);
+});
 
 test('聚焦共享只隐藏群聊，返回后草稿与原群聊元素保留', async ({ page }) => {
   await sharing(page, ['A']);

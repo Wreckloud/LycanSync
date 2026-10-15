@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   minimize: () => ipcRenderer.send('window:minimize'),
   isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
   getProcessMetrics: () => ipcRenderer.invoke('diagnostics:process-metrics'),
+  exportDiagnosticReport: (report) => ipcRenderer.invoke('diagnostics:export', report),
   getSystemIdleState: () => ipcRenderer.invoke('presence:system-idle-state'),
   getAutoStart: () => ipcRenderer.invoke('settings:auto-start:get'),
   setAutoStart: (enabled) => ipcRenderer.invoke('settings:auto-start:set', enabled),

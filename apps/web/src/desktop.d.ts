@@ -101,6 +101,7 @@ interface Window {
     minimize(): void;
     isMaximized(): Promise<boolean>;
     getProcessMetrics(): Promise<{ cpuPercent: number; memoryMb: number }>;
+    exportDiagnosticReport(report: string): Promise<{ saved: boolean }>;
     getSystemIdleState(): Promise<{ state: 'active' | 'idle' | 'locked' | 'unknown'; idleSeconds: number }>;
     getAutoStart(): Promise<{ supported: boolean; enabled: boolean }>;
     setAutoStart(enabled: boolean): Promise<{ supported: boolean; enabled: boolean }>;

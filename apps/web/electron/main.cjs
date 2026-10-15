@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, desktopCapturer, ipcMain, net, powerMonitor, protocol, screen, session, safeStorage, shell, sharedTexture } = require('electron');
+const { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, net, powerMonitor, protocol, screen, session, safeStorage, shell, sharedTexture } = require('electron');
 const { release: osRelease } = require('node:os');
 const { spawn } = require('node:child_process');
 const { createServer } = require('node:net');
@@ -10,7 +10,7 @@ const { pathToFileURL } = require('node:url');
 const { readFile, writeFile, unlink, mkdir } = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
 const { MediaHelperManager } = require('./media-helper.cjs');
-const { createMediaDiagnostics } = require('./media-diagnostics.cjs');
+const { createMediaDiagnostics, readDiagnosticEvents } = require('./media-diagnostics.cjs');
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
 const { matchNativeVideoSourceThumbnails, monitorDisplayId } = require('./native-video-thumbnails.cjs');
 const { parseAccessLink, accessLinkFromArguments, parseManualAccessLink } = require('./access-links.cjs');
@@ -98,6 +98,7 @@ let lastMicrophoneDroppedChunks = 0;
 const helperProcessBridges = new WeakMap();
 const writeMediaDiagnostic = createMediaDiagnostics(resolve(app.getPath('userData'), 'screen-share-error.log'));
 const sourceTimingRecordedAt = new Map();
+let diagnosticExportPending = false;
 const startupUpdate = createStartupUpdate({
   enabled: app.isPackaged && process.platform === 'win32',
   version: app.getVersion(),
@@ -1086,6 +1087,34 @@ ipcMain.handle('diagnostics:process-metrics', (event) => {
     cpuPercent: Math.round(metrics.reduce((sum, process) => sum + (process.cpu?.percentCPUUsage ?? 0), 0) * 10) / 10,
     memoryMb: Math.round(metrics.reduce((sum, process) => sum + (process.memory?.workingSetSize ?? 0), 0) / 1024),
   };
+});
+ipcMain.handle('diagnostics:export', async (event, text) => {
+  if (!trustedSender(event) || closing || diagnosticExportPending) throw new Error('当前不能导出诊断。');
+  if (typeof text !== 'string' || Buffer.byteLength(text) > 8 * 1024 * 1024) throw new Error('诊断报告过大或无效。');
+  const report = JSON.parse(text);
+  if (!report || report.kind !== 'lycansync-diagnostics' || report.schemaVersion !== 1 || !Array.isArray(report.samples)
+      || report.samples.length > 900 || !Number.isFinite(Date.parse(report.startedAt))
+      || !Number.isFinite(Date.parse(report.endedAt)) || Date.parse(report.endedAt) < Date.parse(report.startedAt)) {
+    throw new Error('诊断报告无效。');
+  }
+  diagnosticExportPending = true;
+  try {
+    const events = await readDiagnosticEvents(resolve(app.getPath('userData'), 'screen-share-error.log'),
+      Date.parse(report.startedAt), Date.parse(report.endedAt));
+    if (!trustedSender(event) || closing) return { saved: false };
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: '导出诊断报告', defaultPath: `LycanSync-diagnostics-${Date.now()}.json`,
+      filters: [{ name: 'JSON 诊断报告', extensions: ['json'] }],
+    });
+    if (result.canceled || !result.filePath || !trustedSender(event) || closing) return { saved: false };
+    report.environment = { appVersion: app.getVersion(), electronVersion: process.versions.electron,
+      platform: process.platform, arch: process.arch, osVersion: osRelease(), gpuFeatures: app.getGPUFeatureStatus(),
+      helperVersion: null, gpuUtilization: null };
+    report.events = events;
+    report.eventLimit = '最多读取当前及上一份日志各256KiB，保留记录期间最近200项；不含异常正文';
+    await writeFile(result.filePath, JSON.stringify(report), 'utf8');
+    return { saved: true };
+  } finally { diagnosticExportPending = false; }
 });
 ipcMain.handle('presence:system-idle-state', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');

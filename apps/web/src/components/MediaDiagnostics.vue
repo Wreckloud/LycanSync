@@ -1,17 +1,14 @@
 <script setup lang="ts">
-import { onMounted, onScopeDispose, ref } from 'vue';
-import { Track, type Participant, type Room } from 'livekit-client';
-import { readTrackTarget, readVideoLayers, readVideoSourceFps, formatTrackTarget, type TrackTarget, type VideoLayerStats } from '../rtc/mediaStats';
+import { computed, onMounted, onScopeDispose, ref } from 'vue';
+import { Track, type Room } from 'livekit-client';
+import { formatTrackTarget } from '../rtc/mediaStats';
+import type { MediaDiagnosticsSnapshot } from '../diagnostics/mediaDiagnostics';
 import { isStaleVideoSourceError, resetVideoSourceSelection } from './mediaDiagnosticsSources';
 
-const props = defineProps<{ room: Room; participants: Participant[] }>();
-type StreamStats = {
-  identity: string; name: string; direction: '发送' | '接收'; target: TrackTarget | null;
-  sourceFps: number | null; playbackFps: number | null; playbackDrops: number | null; layers: VideoLayerStats[];
-};
-const streams = ref<StreamStats[]>([]);
-const error = ref('');
-const processMetrics = ref<{ cpuPercent: number; memoryMb: number } | null>(null);
+const props = defineProps<{ room: Room; statistics: MediaDiagnosticsSnapshot | null }>();
+const streams = computed(() => props.statistics?.streams ?? []);
+const error = computed(() => props.statistics?.failures.length ? '部分统计暂时无法读取，缺失值不代表零。' : '');
+const processMetrics = computed(() => props.statistics?.process ?? null);
 const captureProbeAvailable = ref(false);
 const captureProbeReason = ref('');
 const videoCaptureAvailable = ref(false);
@@ -23,10 +20,6 @@ const captureProbeDiagnostics = ref<NativeCaptureDiagnostics | null>(null);
 const captureProbeError = ref('');
 const sourceListLoading = ref(false);
 const captureProbeBusy = ref(false);
-const previous = new Map<string, { bytes: number; frames: number | null; timestamp: number; encodeTime: number | null }>();
-const previousSource = new Map<string, { frames: number; timestamp: number }>();
-const previousPlayback = new WeakMap<HTMLVideoElement, { frames: number; timestamp: number }>();
-let polling = false;
 let timer: ReturnType<typeof setInterval> | null = null;
 let diagnosticsPolling = false;
 let componentDisposed = false;
@@ -72,15 +65,18 @@ async function listVideoSources(sourceExpired = false) {
 }
 
 async function refreshCaptureProbeDiagnostics() {
-  if (componentDisposed || !window.lycanDesktop || diagnosticsPolling || (!captureProbeSessionId.value
-      && !props.room.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track)) return;
+  if (componentDisposed) return;
+  if (!captureProbeSessionId.value) {
+    captureProbeDiagnostics.value = props.statistics?.native ?? null;
+    return;
+  }
+  if (!window.lycanDesktop || diagnosticsPolling) return;
   const sessionId = captureProbeSessionId.value;
   diagnosticsPolling = true;
   try {
     const diagnostics = await window.lycanDesktop.getNativeMediaDiagnostics();
     if (componentDisposed || captureProbeSessionId.value !== sessionId) return;
     captureProbeDiagnostics.value = diagnostics;
-    if (!captureProbeSessionId.value) return;
     captureProbeState.value = diagnostics.state;
     if (diagnostics.state === 'idle' && !diagnostics.sessionId) {
       captureProbeSessionId.value = null;
@@ -88,7 +84,6 @@ async function refreshCaptureProbeDiagnostics() {
     }
   } catch {
     if (componentDisposed || captureProbeSessionId.value !== sessionId) return;
-    if (!captureProbeSessionId.value) { error.value = '原生共享诊断暂时无法读取。'; return; }
     captureProbeState.value = 'failed';
     captureProbeError.value = '无法读取探针诊断，采集状态尚未确认；请停止探针后重试。';
   } finally {
@@ -148,76 +143,16 @@ async function stopCaptureProbe() {
   }
 }
 
-function readPlayback(track: Track) {
-  const video = track.attachedElements.filter((element): element is HTMLVideoElement =>
-    element instanceof HTMLVideoElement && element.isConnected && element.getBoundingClientRect().width > 0)
-    .sort((left, right) => right.clientWidth - left.clientWidth)[0];
-  if (!video) return { fps: null, dropped: null };
-  const quality = video.getVideoPlaybackQuality();
-  const timestamp = performance.now();
-  const displayedFrames = quality.totalVideoFrames - quality.droppedVideoFrames;
-  const last = previousPlayback.get(video);
-  previousPlayback.set(video, { frames: displayedFrames, timestamp });
-  const elapsedSeconds = last ? (timestamp - last.timestamp) / 1000 : 0;
-  return {
-    fps: last && elapsedSeconds > 0 && displayedFrames >= last.frames
-      ? Math.round((displayedFrames - last.frames) / elapsedSeconds) : null,
-    dropped: quality.droppedVideoFrames,
-  };
-}
-
-async function refresh() {
-  // 面板隐藏或页面不可见时不做统计读取，避免后台窗口持续占用采集与解码线程。
-  if (componentDisposed || polling || document.hidden) return;
-  polling = true;
-  try {
-    const results = await Promise.all(props.participants.map(async (participant) => {
-      const track = participant.getTrackPublication(Track.Source.ScreenShare)?.track;
-      if (!track) return null;
-      const report = await track.getRTCStatsReport();
-      const local = participant === props.room.localParticipant;
-      const settings = local ? track.mediaStreamTrack.getSettings() : null;
-      const playback = readPlayback(track);
-      return {
-        identity: participant.identity,
-        name: participant.name || participant.identity,
-        direction: local ? '发送' as const : '接收' as const,
-        target: settings ? readTrackTarget(settings) : null,
-        sourceFps: local && report ? readVideoSourceFps(report, track.mediaStreamTrack.id, previousSource) : null,
-        playbackFps: playback.fps,
-        playbackDrops: playback.dropped,
-        layers: report ? readVideoLayers(report, local ? 'outbound-rtp' : 'inbound-rtp', previous, track.mediaStreamTrack.id) : [],
-      };
-    }));
-    if (componentDisposed) return;
-    streams.value = results.filter((result): result is StreamStats => result !== null);
-    processMetrics.value = await window.lycanDesktop?.getProcessMetrics().catch(() => null) ?? null;
-    error.value = '';
-  } catch {
-    error.value = '暂时无法读取媒体统计，请确认共享仍在进行。';
-  } finally {
-    polling = false;
-  }
-}
-
-function refreshOnVisible() {
-  if (!document.hidden) void refresh();
-}
-
 onMounted(() => {
-  void refresh();
   void refreshCaptureProbeDiagnostics();
   void loadCaptureProbeCapability();
   timer = setInterval(() => {
-    void refresh();
     void refreshCaptureProbeDiagnostics();
   }, 2_000);
-  document.addEventListener('visibilitychange', refreshOnVisible);
 });
 onScopeDispose(() => {
   componentDisposed = true;
   if (timer) clearInterval(timer);
-  document.removeEventListener('visibilitychange', refreshOnVisible);
   if (captureProbeSessionId.value) void stopCaptureProbe();
 });
 </script>

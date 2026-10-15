@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
-import { effectScope, onScopeDispose, ref } from 'vue';
+import { computed, effectScope, onScopeDispose, ref } from 'vue';
 import { afterEach, expect, it, vi } from 'vitest';
 import { isStaleVideoSourceError, resetVideoSourceSelection } from './mediaDiagnosticsSources';
 
@@ -37,7 +37,7 @@ function setup() {
   const panel = scope.run(() => runInNewContext(`${compiled}\n({ startCaptureProbe, stopCaptureProbe,
     refreshCaptureProbeDiagnostics, captureProbeAvailable, selectedVideoSourceId, captureProbeSessionId,
     captureProbeState, captureProbeBusy, captureProbeError })`, {
-    ref, onScopeDispose, Error, isStaleVideoSourceError, resetVideoSourceSelection,
+    computed, ref, onScopeDispose, Error, isStaleVideoSourceError, resetVideoSourceSelection,
     defineProps: () => ({ room: { localParticipant: { getTrackPublication: () => undefined } }, participants: [] }),
     window: { lycanDesktop: bridge }, document: { removeEventListener: vi.fn() },
     console: { warn }, clearInterval, Track: { Source: { ScreenShare: 'screen' } },

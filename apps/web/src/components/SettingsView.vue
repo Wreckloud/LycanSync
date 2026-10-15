@@ -6,6 +6,7 @@ import type { AuthUser, ProfileUpdate } from '../auth/authApi';
 import type { useAudioPreferences } from '../rtc/useAudioPreferences';
 import type { useRtcRoom } from '../rtc/useRtcRoom';
 import type { useMicrophoneTest } from '../rtc/useMicrophoneTest';
+import type { useDiagnosticReport } from '../diagnostics/useDiagnosticReport';
 import IconButton from './IconButton.vue';
 import PersonalStatusCard from './PersonalStatusCard.vue';
 import AboutSettings from './settings/AboutSettings.vue';
@@ -28,6 +29,7 @@ const props = defineProps<{
   preferences: ReturnType<typeof useAudioPreferences>;
   rtc: UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>;
   microphoneTest: UnwrapNestedRefs<ReturnType<typeof useMicrophoneTest>>;
+  diagnosticReport: ReturnType<typeof useDiagnosticReport>;
   inputLevelPercent: number;
   activity: UserActivity | null;
   showActivity: boolean;
@@ -118,7 +120,7 @@ async function leaveSettings(logout: boolean) {
         <SoundSettings v-show="activeSection === 'sound'" :user-id="user.id" :active="activeSection === 'sound'" />
         <ClientSettings ref="clientSettings" v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'"
           :stage-auto-fill="stageAutoFill" :stage-preference-error="stagePreferenceError" @stage-auto-fill="emit('stageAutoFill', $event)" />
-        <AboutSettings v-show="activeSection === 'about'" :active="activeSection === 'about'" :rtc="rtc" />
+        <AboutSettings v-show="activeSection === 'about'" :active="activeSection === 'about'" :rtc="rtc" :report="diagnosticReport" />
       </div>
     </section>
   </main>
