@@ -1234,3 +1234,12 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 
 .auth-server-settings { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border); }
 .auth-server-settings summary { color: var(--muted); cursor: pointer; }
+.auth-server-settings form { gap: 8px; margin: 16px 0 0; }
+.auth-input-row { display: flex; align-items: center; gap: 12px; }
+.auth-input-row input { flex: 1; width: 0; min-height: var(--button-height); padding: var(--button-padding); line-height: 20px; }
+.auth-input-row button { flex-shrink: 0; min-width: 108px; white-space: nowrap; }
+@media (max-width: 380px) {
+  .auth-input-row { flex-wrap: wrap; gap: 8px; }
+  .auth-input-row input { flex-basis: 100%; width: 100%; }
+  .auth-input-row button { margin-left: auto; }
+}
