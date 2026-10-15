@@ -433,7 +433,7 @@ async function reportOfflineBeforeClose() {
 async function updateOwnPresenceStatus() {
   const systemIdle = await desktop?.getSystemIdleState().catch(() => null);
   // 系统查询失败时保留上次状态，下一轮重试，不能据此判定用户已经恢复操作。
-  if (presenceStopped || (desktop && !systemIdle)) return;
+  if (presenceStopped || (desktop && (!systemIdle || systemIdle.state === 'unknown'))) return;
   const nextStatus = systemIdle && (systemIdle.state === 'idle' || systemIdle.state === 'locked'
     || systemIdle.idleSeconds >= PRESENCE_IDLE_TIMEOUT_MS / 1000) ? 'AWAY' : 'ONLINE';
   if (nextStatus === currentPresenceStatus.value) return;

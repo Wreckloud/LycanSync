@@ -756,7 +756,7 @@ function startActivityHelper() {
       const activity = normalizeActivity(JSON.parse(line));
       if (activity !== undefined) publishActivity(activity);
     } catch {
-      // 忽略单条不完整输出，下一轮扫描会再次上报。
+      // 忽略单条非法输出，保留最近的合法活动；进程退出时统一清除。
     }
   });
   child.once('error', finish);

@@ -184,6 +184,9 @@ it('闲置五分钟或锁屏判离开，恢复输入立即判在线，查询失�
     desktop.getSystemIdleState.mockRejectedValueOnce(new Error('system unavailable'));
     await app.updateOwnPresenceStatus();
     expect(state.currentPresenceStatus.value).toBe('AWAY');
+    desktop.getSystemIdleState.mockResolvedValueOnce({ state: 'unknown', idleSeconds: 0 });
+    await app.updateOwnPresenceStatus();
+    expect(state.currentPresenceStatus.value).toBe('AWAY');
     await app.updateOwnPresenceStatus();
     expect(state.currentPresenceStatus.value).toBe('ONLINE');
     desktop.getSystemIdleState.mockResolvedValueOnce({ state: 'locked', idleSeconds: 0 });
