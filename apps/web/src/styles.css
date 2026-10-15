@@ -154,15 +154,17 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   grid-row: 1;
   min-width: 0;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  padding: var(--rail-edge-space) 9px;
+  padding: var(--rail-edge-space) 0;
   border-right: 1px solid var(--border);
   background: #0d1116;
 }
+
+.group-list { display: flex; flex-direction: column; align-items: center; gap: 10px; flex: 1; width: 100%; min-height: 0; overflow-y: auto; padding-inline: 9px; }
 
 .group-button {
   position: relative;
@@ -216,7 +218,6 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .group-button:disabled { opacity: .4; cursor: not-allowed; }
 .group-rail-avatar { display: block; width: 100%; height: 100%; border-radius: 5px; object-fit: cover; }
 .add-group { border-style: dashed; }
-.rail-spacer { flex: 1; min-height: 24px; }
 
 .group-main {
   grid-column: 2;
@@ -1069,7 +1070,8 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   background: #0d1116;
 }
 
-.members-list { min-width: 0; min-height: 0; overflow-y: auto; padding: 16px 14px; }
+.members-directory { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.members-list { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: 0 14px 16px; }
 .personal-card { position: relative; display: grid; grid-template-columns: 40px minmax(0, 1fr) 36px; align-items: center; gap: 10px; height: calc(var(--voice-bar-height) + var(--voice-bar-bottom-space)); margin: 0; padding: 8px 14px; }
 .personal-card::before { content: ''; position: absolute; top: 0; left: 14px; right: 14px; height: 1px; background: var(--border-soft); pointer-events: none; }
 .personal-avatar { position: relative; width: 40px; height: 40px; }
@@ -1087,11 +1089,18 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 13px;
+  flex-shrink: 0;
+  gap: 8px;
+  padding: 12px 14px 8px;
   font-size: 14px;
 }
 
 .members-header svg { color: var(--muted); }
+.member-search-toggle { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
+.member-search-toggle:hover, .member-search-toggle[aria-expanded="true"] { background: var(--panel-raised); }
+.member-search-toggle:hover svg { color: var(--text); }
+.member-search { flex-shrink: 0; padding: 0 14px 10px; }
+.member-search input { width: 100%; min-width: 0; height: 32px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--text); font-size: 13px; }
 
 .dialog-backdrop {
   position: fixed;
@@ -1124,19 +1133,19 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 }
 
 @media (max-width: 900px) {
-  .workspace { grid-template-columns: 66px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 160px); }
+  .workspace { grid-template-columns: 66px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 240px); }
   .group-rail { grid-row: 1 / span 2; }
   .group-main { grid-column: 2; grid-row: 1; }
   .members-panel { grid-column: 2; grid-row: 2; border-top: 1px solid var(--border); border-left: 0; }
-  .members-list { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; padding: 10px 14px; }
-  .members-header { grid-column: 1 / -1; }
+  .members-list { display: grid; grid-template-columns: 1fr 1fr; align-content: start; gap: 0 24px; padding: 0 14px 10px; }
+  .members-list > p { grid-column: 1 / -1; }
   .participant-grid { grid-template-columns: repeat(3, minmax(118px, 1fr)); }
 }
 
 @media (max-width: 600px) {
   .titlebar { grid-template-columns: 1fr auto; }
   .workspace { grid-template-columns: 56px minmax(0, 1fr); --rail-control-size: 42px; }
-  .group-rail { padding-inline: 5px; }
+  .group-list { padding-inline: 5px; }
   .group-button.is-selected::before { left: -6px; }
   .group-header, .voice-panel, .voice-preview, .chat-panel, .callbar { padding-left: 10px; padding-right: 10px; }
   .participant-grid { grid-template-columns: repeat(2, minmax(100px, 1fr)); }
@@ -1146,7 +1155,6 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   .callbar { flex-wrap: wrap; }
   .call-state { flex-basis: 100%; }
   .members-list { grid-template-columns: 1fr; }
-  .members-header { grid-column: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1154,8 +1162,8 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 }
 
 /* 仅隐藏可滚动内容区的滚动条，仍保留滚轮、触控板与键盘滚动能力。 */
-:is(.group-rail, .members-list, .message-list, .voice-panel, .voice-preview, .settings-sidebar, .settings-content) { scrollbar-width: none; }
-:is(.group-rail, .members-list, .message-list, .voice-panel, .voice-preview, .settings-sidebar, .settings-content)::-webkit-scrollbar { display: none; }
+:is(.group-list, .members-list, .message-list, .voice-panel, .voice-preview, .settings-navigation, .settings-content) { scrollbar-width: none; }
+:is(.group-list, .members-list, .message-list, .voice-panel, .voice-preview, .settings-navigation, .settings-content)::-webkit-scrollbar { display: none; }
 .auth-screen { display: grid; place-items: center; min-height: 0; overflow: auto; padding: 24px; }
 .auth-card { width: min(440px, 100%); padding: 24px; background: var(--panel-soft); border: 1px solid var(--border); border-radius: 8px; font-size: 14px; line-height: 1.5; }
 .auth-card h1 { margin: 0; font-size: 22px; line-height: 32px; }

@@ -91,10 +91,11 @@ async function leaveSettings(logout: boolean) {
 <template>
   <main class="settings-view" aria-label="设置" :inert="interactionBlocked" @keydown.esc.stop="closeSettings">
     <nav class="settings-sidebar" aria-label="设置栏目">
-      <button v-for="item in visibleSections" :key="item.id" type="button"
-        :class="{ 'is-selected': activeSection === item.id }" :aria-current="activeSection === item.id ? 'page' : undefined"
-        :disabled="leaving" @click="selectSection(item.id)">{{ item.title }}</button>
-      <div class="settings-sidebar-spacer" />
+      <div class="settings-navigation">
+        <button v-for="item in visibleSections" :key="item.id" type="button"
+          :class="{ 'is-selected': activeSection === item.id }" :aria-current="activeSection === item.id ? 'page' : undefined"
+          :disabled="leaving" @click="selectSection(item.id)">{{ item.title }}</button>
+      </div>
       <PersonalStatusCard class="settings-footer" aria-label="个人状态与返回应用"
         :user="user" :status="presenceStatus" :status-label="presenceLabel">
         <IconButton label="返回应用" :disabled="leaving" @click="closeSettings"><ArrowLeft :size="19" /></IconButton>
@@ -139,21 +140,19 @@ async function leaveSettings(logout: boolean) {
 }
 .settings-sidebar {
   grid-area: sidebar;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
   min-width: 0;
   min-height: 0;
-  overflow-y: auto;
-  padding: 20px 14px 0;
+  overflow: hidden;
   border-left: 1px solid var(--border);
   background: #0d1116;
 }
-.settings-sidebar > button { flex: 0 0 auto; min-height: 38px; padding: 8px 11px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); text-align: left; cursor: pointer; }
-.settings-sidebar > button:hover { background: var(--panel-soft); color: var(--text); }
-.settings-sidebar > button.is-selected { background: var(--panel-raised); color: var(--text); }
-.settings-footer { position: sticky; bottom: 0; flex-shrink: 0; margin: 0 -14px; background: #0d1116; }
-.settings-sidebar-spacer { flex: 1; min-height: 32px; }
+.settings-navigation { display: flex; flex-direction: column; gap: 4px; min-height: 0; overflow-y: auto; padding: 20px 14px; }
+.settings-navigation > button { flex: 0 0 auto; min-height: 38px; padding: 8px 11px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); text-align: left; cursor: pointer; }
+.settings-navigation > button:hover { background: var(--panel-soft); color: var(--text); }
+.settings-navigation > button.is-selected { background: var(--panel-raised); color: var(--text); }
+.settings-footer { background: #0d1116; }
 .settings-main { grid-area: main; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
 .settings-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 64px; padding: 12px 24px; border-bottom: 1px solid var(--border-soft); }
 .settings-header-content { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; max-width: 820px; margin-inline: auto; }
@@ -164,13 +163,12 @@ async function leaveSettings(logout: boolean) {
 .settings-account-page { display: grid; gap: 16px; width: 100%; max-width: 820px; }
 @media (max-width: 760px) {
   .settings-view { grid-template-columns: minmax(0, 1fr) 176px; }
-  .settings-sidebar { padding: 14px 8px 0; }
-  .settings-footer { margin-inline: -8px; }
+  .settings-navigation { padding: 14px 8px; }
   .settings-header { min-height: 56px; padding: 10px 16px; }
   .settings-content { padding: 16px; }
 }
 @media (max-width: 520px) {
   .settings-view { grid-template-columns: minmax(0, 1fr) 132px; }
-  .settings-sidebar > button { padding: 7px 8px; font-size: 13px; }
+  .settings-navigation > button { padding: 7px 8px; font-size: 13px; }
 }
 </style>

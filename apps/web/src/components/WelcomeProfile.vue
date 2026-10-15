@@ -68,8 +68,7 @@ async function save() {
             <UserRound v-else :size="42" />
             <span class="welcome-avatar-overlay" aria-hidden="true"><Pencil :size="20" /><span>编辑</span></span>
           </button><div class="avatar-actions">
-            <button type="button" class="avatar-action" :disabled="busy || picking" @click="avatarInput?.click()">{{ avatar ? '更换' : '添加头像' }}</button>
-            <button v-if="avatar" type="button" class="avatar-action" :disabled="busy || picking" @click="avatar = ''">移除</button>
+            <button type="button" class="avatar-action" :disabled="busy || picking" @click="avatarInput?.click()">更换头像</button>
           </div></div>
           <input ref="avatarInput" type="file" hidden aria-label="上传头像" accept="image/png,image/jpeg" @change="pickAvatar" />
           <div class="welcome-nickname">

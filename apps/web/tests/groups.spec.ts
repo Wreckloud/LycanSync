@@ -57,6 +57,9 @@ test('创建群组只预览，初始只有创建者且不自动加入语音', as
 
   await page.goto('/');
   await expect(page.getByText('还没有群组，点击左侧的 + 创建一个开黑小队。')).toBeVisible();
+  await expect(page.locator('.members-header')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '搜索群组成员' })).toHaveCount(0);
+  await expect(page.locator('.members-directory')).toBeEmpty();
   const createGroupButton = page.getByRole('button', { name: '创建群组' });
   await createGroupButton.hover();
   await expect(page.getByRole('tooltip')).toHaveCount(0);
@@ -114,12 +117,14 @@ test('创建群组时可选择头像，群组栏显示裁剪后的图片', async
   await expect(cropDialog.getByAltText('待裁剪头像')).toHaveJSProperty('naturalWidth', 1);
   await cropDialog.getByRole('button', { name: '应用头像' }).click();
   await expect(page.locator('.group-avatar-preview img')).toHaveJSProperty('naturalWidth', 512);
+  await expect(page.locator('.avatar-actions button')).toHaveCount(1);
+  await expect(page.locator('.avatar-actions button')).toHaveText('更换头像');
   await page.getByLabel('群组名称').fill('头像小队');
   await page.getByRole('dialog', { name: '创建群组' }).getByRole('button', { name: '创建群组', exact: true }).click();
   expect(createdAvatar).toMatch(/^data:image\/png;base64,/);
   await expect(page.locator('.group-rail-avatar')).toHaveAttribute('src', createdAvatar);
-  const railButtons = page.locator('.group-rail > button');
-  await expect(railButtons.nth(1)).toHaveAttribute('aria-label', '创建群组');
+  const railButtons = page.locator('.group-rail button');
+  await expect(page.locator('.group-rail > button')).toHaveAttribute('aria-label', '创建群组');
   await expect(railButtons).toHaveCount(2);
   await expect(page.getByLabel('个人状态与设置')).toBeVisible();
   await expect(page.getByLabel('个人状态与设置').getByRole('button', { name: '语音与音频设置' })).toBeVisible();
@@ -127,6 +132,88 @@ test('创建群组时可选择头像，群组栏显示裁剪后的图片', async
   await expect(page.getByRole('heading', { name: '头像小队' })).toHaveCSS('user-select', 'none');
   await expect(page.locator('.message-list')).toHaveCSS('user-select', 'none');
   await expect(page.getByLabel('消息内容')).toHaveCSS('cursor', 'text');
+});
+
+test('群组与成员独立滚动，固定入口不移动，成员搜索只影响当前群', async ({ page }) => {
+  const user = { id: userId, nickname: '当前昵称', avatar, administrator: true };
+  const members = Array.from({ length: 80 }, (_, index) => ({
+    userId: index === 0 ? userId : `member-${index}`,
+    nickname: index === 0 ? '旧昵称' : index === 1 ? 'Alpha Friend' : `朋友${index}`,
+    avatar: '', role: index === 0 ? 'OWNER' : 'MEMBER', joinedAt: '2026-09-12T00:00:00Z',
+  }));
+  const groups = Array.from({ length: 30 }, (_, index) => ({
+    id: `list-group-${index}`, name: `群组${index}`, description: '', avatar: '', role: 'OWNER',
+    memberCount: members.length, createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z',
+  }));
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
+  await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/auth/session', (route) => route.fulfill({ json: user }));
+  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
+  await page.route('**/api/groups**', (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/groups') return route.fulfill({ json: groups });
+    if (path.endsWith('/presence-changes')) return holdPresencePoll(route);
+    if (path.endsWith('/presences')) return route.fulfill({ json: [] });
+    if (path.endsWith('/messages')) return route.fulfill({ json: { messages: [], hasMore: false } });
+    const group = groups.find((item) => path === `/api/groups/${item.id}`);
+    return group ? route.fulfill({ json: { ...group, members } }) : route.fulfill({ status: 404 });
+  });
+  await page.goto('/');
+  await expect(page.locator('.group-member-row')).toHaveCount(80);
+  const addButton = page.getByRole('button', { name: '创建群组', exact: true });
+  const personal = page.getByLabel('个人状态与设置');
+  const searchButton = page.getByRole('button', { name: '搜索群组成员' });
+  const addBounds = await addButton.boundingBox();
+  const personalBounds = await personal.boundingBox();
+  const searchBounds = await searchButton.boundingBox();
+  await page.locator('.group-list').evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await page.locator('.members-list').evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  expect(await page.locator('.group-list').evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  expect(await page.locator('.members-list').evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  expect(await addButton.boundingBox()).toEqual(addBounds);
+  expect(await personal.boundingBox()).toEqual(personalBounds);
+  expect(await searchButton.boundingBox()).toEqual(searchBounds);
+  await expect(addButton).toBeInViewport();
+  await expect(personal).toBeInViewport();
+  await searchButton.click();
+  const search = page.getByRole('searchbox', { name: '按名称搜索成员' });
+  await expect(search).toBeFocused();
+  await search.fill(' ALPHA ');
+  await expect(page.locator('.group-member-row')).toHaveCount(1);
+  await expect(page.locator('.group-member-row')).toContainText('Alpha Friend');
+  await search.fill('当前昵称');
+  await expect(page.locator('.group-member-row')).toHaveCount(1);
+  await expect(page.locator('.group-member-row')).toContainText('当前昵称');
+  await search.fill('不存在的人');
+  await expect(page.getByText('没有找到匹配的成员')).toBeVisible();
+  await search.press('Escape');
+  await expect(search).toHaveCount(0);
+  await expect(searchButton).toBeFocused();
+  await expect(page.locator('.group-member-row')).toHaveCount(80);
+  await searchButton.click();
+  await search.fill('Alpha');
+  await page.getByRole('button', { name: '群组29，单击预览，双击加入语音', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '群组29', exact: true })).toBeVisible();
+  await expect(search).toHaveCount(0);
+  await expect(page.locator('.group-member-row')).toHaveCount(80);
+  await page.setViewportSize({ width: 760, height: 720 });
+  await searchButton.click();
+  await expect(search).toBeInViewport();
+  await expect(personal).toBeInViewport();
+  await personal.getByRole('button', { name: '语音与音频设置' }).click();
+  await expect(page.getByRole('navigation', { name: '设置栏目' })).toBeVisible();
+  await expect(searchButton).not.toBeVisible();
+  await page.setViewportSize({ width: 760, height: 320 });
+  const settingsPersonal = page.getByLabel('个人状态与返回应用');
+  const settingsBounds = await settingsPersonal.boundingBox();
+  await page.locator('.settings-navigation').evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  expect(await page.locator('.settings-navigation').evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  expect(await settingsPersonal.boundingBox()).toEqual(settingsBounds);
+  await expect(settingsPersonal).toBeInViewport();
+  await settingsPersonal.getByRole('button', { name: '返回应用' }).click();
+  await page.setViewportSize({ width: 760, height: 720 });
+  await expect(searchButton).toBeVisible();
 });
 
 test('启动、窗口激活和成员变化时自动更新群组，无需刷新按钮', async ({ page }) => {

@@ -84,8 +84,7 @@ onScopeDispose(() => { if (returnFocus?.isConnected) returnFocus.focus(); });
               <span class="entry-avatar-overlay" aria-hidden="true"><Pencil :size="18" /><span>编辑</span></span>
             </button>
             <div class="avatar-actions">
-              <button type="button" class="avatar-action" :disabled="busy || picking" @click="avatarInput?.click()">{{ avatar ? '更换' : '添加头像' }}</button>
-              <button v-if="avatar" type="button" class="avatar-action" :disabled="busy || picking" @click="avatar = ''">移除</button>
+              <button type="button" class="avatar-action" :disabled="busy || picking" @click="avatarInput?.click()">更换头像</button>
             </div>
           </div>
           <input ref="avatarInput" type="file" hidden aria-label="上传群组头像" accept="image/png,image/jpeg" @change="pickAvatar" />

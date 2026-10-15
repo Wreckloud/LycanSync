@@ -403,6 +403,8 @@ test('更换头像在整页资料设置中裁剪并保存', async ({ page }) => 
   const preview = page.getByAltText('头像预览');
   await expect(preview).toBeVisible();
   await expect(preview).toHaveJSProperty('naturalWidth', 512);
+  await expect(page.locator('.avatar-actions button')).toHaveCount(1);
+  await expect(page.locator('.avatar-actions button')).toHaveText('更换头像');
   expect(await preview.getAttribute('src')).toMatch(/^data:image\/png;base64,/);
   expect(await settings.boundingBox()).toEqual(initialSettings);
   await expect.poll(() => profileUpdate?.avatar).toMatch(/^data:image\/png;base64,/);

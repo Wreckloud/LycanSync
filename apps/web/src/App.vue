@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onScopeDispose, reactive, ref, watch } from 'vue';
 import { AudioLines, ChevronDown, ChevronLeft, ChevronRight, Copy, CornerUpLeft, Gamepad2, Headphones,
   LogOut, Minus, Plus, RadioTower,
-  Settings, Square, Volume2, X } from '@lucide/vue';
+  Search, Settings, Square, Volume2, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
 import ParticipantCard from './components/ParticipantCard.vue';
 import CallControls from './components/CallControls.vue';
@@ -893,6 +893,25 @@ const orderedMembers = computed(() => {
   return [...members.filter((member) => memberOnlineStatus(member) !== 'OFFLINE'),
     ...members.filter((member) => memberOnlineStatus(member) === 'OFFLINE')];
 });
+const memberSearchOpen = ref(false);
+const memberSearch = ref('');
+const memberSearchInput = ref<HTMLInputElement | null>(null);
+const memberSearchButton = ref<HTMLButtonElement | null>(null);
+const filteredMembers = computed(() => {
+  const query = memberSearch.value.trim().toLowerCase();
+  return orderedMembers.value.filter((member) =>
+    (member.userId === props.user.id ? props.user.nickname : member.nickname).toLowerCase().includes(query));
+});
+watch(selectedGroupId, () => {
+  memberSearchOpen.value = false;
+  memberSearch.value = '';
+});
+async function toggleMemberSearch() {
+  memberSearchOpen.value = !memberSearchOpen.value;
+  if (!memberSearchOpen.value) memberSearch.value = '';
+  await nextTick();
+  (memberSearchOpen.value ? memberSearchInput.value : memberSearchButton.value)?.focus();
+}
 function formatActivityDuration(startedAt: string) {
   const elapsedSeconds = Math.max(0, Math.floor((activityClock.value - Date.parse(startedAt)) / 1000));
   const hours = Math.floor(elapsedSeconds / 3600);
@@ -1281,16 +1300,17 @@ function participantListening(participant: Participant) {
     <div class="app-content" v-show="!settingsOpen" :inert="settingsOpen">
     <div class="workspace" :inert="editorOpen || !!management">
       <nav class="group-rail" aria-label="群组">
-        <button v-for="group in groups" :key="group.id" type="button" class="group-button"
-          :class="{ 'is-selected': selectedGroupId === group.id, 'is-in-call': joinedGroupId === group.id }"
-          :aria-label="`${group.name}${groupHasVoiceActivity(group.id) ? '，当前有语音成员' : ''}，单击预览，双击加入语音`" :aria-pressed="selectedGroupId === group.id"
-          :title="group.name"
-          @click="previewGroup(group.id)" @dblclick="requestJoin(group.id)" @keydown.enter.prevent="requestJoin(group.id)">
-          <img v-if="group.avatar" :src="group.avatar" class="group-rail-avatar" alt="" />
-          <span v-else>{{ group.name.slice(0, 1) }}</span>
-          <span v-if="groupHasVoiceActivity(group.id)" class="group-call-badge" aria-hidden="true"><Volume2 :size="12" :stroke-width="2.6" /></span>
-        </button>
-        <div class="rail-spacer" />
+        <div class="group-list">
+          <button v-for="group in groups" :key="group.id" type="button" class="group-button"
+            :class="{ 'is-selected': selectedGroupId === group.id, 'is-in-call': joinedGroupId === group.id }"
+            :aria-label="`${group.name}${groupHasVoiceActivity(group.id) ? '，当前有语音成员' : ''}，单击预览，双击加入语音`" :aria-pressed="selectedGroupId === group.id"
+            :title="group.name"
+            @click="previewGroup(group.id)" @dblclick="requestJoin(group.id)" @keydown.enter.prevent="requestJoin(group.id)">
+            <img v-if="group.avatar" :src="group.avatar" class="group-rail-avatar" alt="" />
+            <span v-else>{{ group.name.slice(0, 1) }}</span>
+            <span v-if="groupHasVoiceActivity(group.id)" class="group-call-badge" aria-hidden="true"><Volume2 :size="12" :stroke-width="2.6" /></span>
+          </button>
+        </div>
         <button class="group-button add-group" type="button" aria-label="创建群组" @click="openEditor"><Plus :size="17" /></button>
       </nav>
       <main v-if="selectedGroup" class="group-main">
@@ -1433,25 +1453,36 @@ function participantListening(participant: Participant) {
         <p v-else>还没有群组，点击左侧的 + 创建一个开黑小队。</p>
       </main>
       <aside class="members-panel" aria-label="群组成员">
-        <div class="members-list">
-          <div class="members-header"><strong>成员<span v-if="selectedGroupDetail"> · {{ selectedGroupDetail.memberCount }}</span></strong>
-          </div>
-          <p v-if="presenceConnectionLost" class="group-hint" role="status">成员状态同步中断，当前显示可能已过期。</p>
-          <p v-if="groupError" role="alert" class="group-error">{{ groupError }}</p>
-          <p v-else-if="groupLoading" class="group-hint">正在读取成员…</p>
-          <div v-for="member in orderedMembers" :key="member.userId" class="group-member-row"
-            :class="{ 'is-offline': memberOnlineStatus(member) === 'OFFLINE' }">
-            <span class="group-member-avatar" :aria-label="memberStatusLabel(member)">
-              <img v-if="member.userId === user.id ? user.avatar : member.avatar" :src="member.userId === user.id ? user.avatar : member.avatar" alt="" />
-              <span v-else class="group-member-initial">{{ member.nickname.slice(0, 1) }}</span>
-              <span v-if="memberOnlineStatus(member) !== 'OFFLINE'" class="status-dot" :class="memberOnlineStatus(member)" />
-            </span>
-            <span class="group-member-info">
-              <span class="group-member-name">{{ member.userId === user.id ? user.nickname : member.nickname }}<small v-if="member.role === 'OWNER'" class="group-member-role">群主</small></span>
-              <span v-if="memberActivity(member)" class="member-activity"><Gamepad2 :size="13" />{{ memberActivity(member) }}</span>
-            </span>
-          </div>
-        </div>
+        <section class="members-directory">
+          <template v-if="selectedGroup">
+            <header class="members-header"><strong>成员<span v-if="selectedGroupDetail"> · {{ selectedGroupDetail.memberCount }}</span></strong>
+              <button ref="memberSearchButton" type="button" class="member-search-toggle" aria-label="搜索群组成员"
+                :aria-expanded="memberSearchOpen" aria-controls="group-member-search" @click="toggleMemberSearch"><Search :size="16" /></button>
+            </header>
+            <div v-if="memberSearchOpen" id="group-member-search" class="member-search">
+              <input ref="memberSearchInput" v-model="memberSearch" type="search" aria-label="按名称搜索成员"
+                placeholder="搜索成员名称" @keydown.esc.stop="toggleMemberSearch" />
+            </div>
+            <div class="members-list">
+              <p v-if="presenceConnectionLost" class="group-hint" role="status">成员状态同步中断，当前显示可能已过期。</p>
+              <p v-if="groupError" role="alert" class="group-error">{{ groupError }}</p>
+              <p v-else-if="groupLoading" class="group-hint">正在读取成员…</p>
+              <p v-if="memberSearch.trim() && !groupLoading && !groupError && filteredMembers.length === 0" class="group-hint" role="status">没有找到匹配的成员</p>
+              <div v-for="member in filteredMembers" :key="member.userId" class="group-member-row"
+                :class="{ 'is-offline': memberOnlineStatus(member) === 'OFFLINE' }">
+                <span class="group-member-avatar" :aria-label="memberStatusLabel(member)">
+                  <img v-if="member.userId === user.id ? user.avatar : member.avatar" :src="member.userId === user.id ? user.avatar : member.avatar" alt="" />
+                  <span v-else class="group-member-initial">{{ member.nickname.slice(0, 1) }}</span>
+                  <span v-if="memberOnlineStatus(member) !== 'OFFLINE'" class="status-dot" :class="memberOnlineStatus(member)" />
+                </span>
+                <span class="group-member-info">
+                  <span class="group-member-name">{{ member.userId === user.id ? user.nickname : member.nickname }}<small v-if="member.role === 'OWNER'" class="group-member-role">群主</small></span>
+                  <span v-if="memberActivity(member)" class="member-activity"><Gamepad2 :size="13" />{{ memberActivity(member) }}</span>
+                </span>
+              </div>
+            </div>
+          </template>
+        </section>
         <PersonalStatusCard :user="user" :status="currentPresenceStatus" :status-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]">
           <IconButton label="语音与音频设置" @click="openSettings('audio', $event)"><Settings :size="19" /></IconButton>
         </PersonalStatusCard>
