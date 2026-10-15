@@ -750,6 +750,7 @@ function startActivityHelper() {
   };
   const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
   lines.on('line', (line) => {
+    if (finished || closing || activityHelper !== child) return;
     if (line.length > 1024) return;
     try {
       const activity = normalizeActivity(JSON.parse(line));
