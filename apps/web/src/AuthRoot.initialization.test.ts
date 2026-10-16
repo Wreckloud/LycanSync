@@ -26,6 +26,8 @@ function setup() {
   const state = {
     user: ref<AuthUser | null>(null), error: ref(''), ready: ref(false), onboarding: ref(false), disposed: false,
     initializationRequest: null as AbortController | null, desktop: undefined, sessionHeartbeat: null,
+    layoutFrame: 1, cancelAnimationFrame: vi.fn(),
+    layoutResizeObserver: { disconnect: vi.fn() }, layoutMutationObserver: { disconnect: vi.fn() },
     authRequest: vi.fn(async (_path: string, _method?: string, _body?: unknown, _signal?: AbortSignal): Promise<unknown> => ({ mode: 'invite' })),
     authenticatedFetch: vi.fn(async (_path: string, _options: RequestInit): Promise<Pick<Response, 'ok' | 'status' | 'json'>> => ({
       ok: false, status: 401, json: async () => null,
@@ -120,6 +122,9 @@ it.each(['expired', 'dispose'] as const)('%s 后旧恢复不能重新登录或�
   expect(state.user.value).toBeNull();
   expect(state.error.value).toBe('');
   if (ending === 'dispose') {
+    expect(state.cancelAnimationFrame).toHaveBeenCalledWith(1);
+    expect(state.layoutResizeObserver.disconnect).toHaveBeenCalledOnce();
+    expect(state.layoutMutationObserver.disconnect).toHaveBeenCalledOnce();
     expect(state.ready.value).toBe(false);
     await app.initialize();
     expect(state.authRequest).toHaveBeenCalledOnce();

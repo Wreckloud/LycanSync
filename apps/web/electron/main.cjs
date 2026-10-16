@@ -15,6 +15,7 @@ const { parseAccessLink, accessLinkFromArguments, parseManualAccessLink } = requ
 const { createStartupUpdate } = require('./startup-update.cjs');
 const { createActivityHelper } = require('./activity-helper.cjs');
 const { createVoiceOverlay } = require('./voice-overlay.cjs');
+const { initialWindowBounds, createWindowLayout } = require('./window-layout.cjs');
 
 const APP_ORIGIN = 'lycan://app';
 const rendererRoot = resolve(__dirname, '../dist');
@@ -77,6 +78,7 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'lycan', privileges: {
 } }]);
 
 let mainWindow;
+let windowLayout;
 let closing = false;
 let canClose = false;
 let closeTimer;
@@ -975,16 +977,13 @@ if (!app.requestSingleInstanceLock()) {
     powerMonitor.on('resume', voiceOverlay.correctPlacement);
     powerMonitor.on('unlock-screen', voiceOverlay.correctPlacement);
     const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-    // 默认保留桌面操作空间；使用逻辑像素并按工作区裁剪，适配系统缩放和小屏幕。
-    const width = Math.min(1280, workArea.width - 32);
-    const height = Math.min(820, workArea.height - 32);
+    // 首次显示即使用紧凑尺寸，避免先闪出主窗口再收缩。
     mainWindow = new BrowserWindow({
-      x: workArea.x + Math.floor((workArea.width - width) / 2),
-      y: workArea.y + Math.floor((workArea.height - height) / 2),
-      width, height, minWidth: Math.min(920, width), minHeight: Math.min(640, height),
+      ...initialWindowBounds(workArea), resizable: false, maximizable: false,
       title: 'LycanSync', frame: false, show: false, backgroundColor: '#10151a',
       webPreferences: { preload: resolve(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false },
     });
+    windowLayout = createWindowLayout(mainWindow, screen);
     mainWindow.setMenu(null);
     mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
@@ -1048,6 +1047,10 @@ ipcMain.handle('update:skip', (event) => {
 });
 
 ipcMain.on('window:minimize', (event) => { if (trustedSender(event)) mainWindow.minimize(); });
+ipcMain.handle('window:layout', (event, mode, height) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  windowLayout.apply(mode, height);
+});
 ipcMain.handle('window:is-maximized', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
   return mainWindow.isMaximized();
@@ -1287,7 +1290,7 @@ ipcMain.handle('media:diagnostics', async (event) => {
   return diagnostics;
 });
 ipcMain.on('window:maximize', (event) => {
-  if (!trustedSender(event)) return;
+  if (!trustedSender(event) || !mainWindow.isMaximizable()) return;
   if (mainWindow.isMaximized()) mainWindow.unmaximize(); else mainWindow.maximize();
 });
 ipcMain.on('window:close', (event) => { if (trustedSender(event)) mainWindow.close(); });

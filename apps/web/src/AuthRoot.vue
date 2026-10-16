@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { onMounted, onScopeDispose, ref, watch } from 'vue';
-import { Copy, Minus, Square, X } from '@lucide/vue';
+import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
+import { Minus, X } from '@lucide/vue';
 import App from './App.vue';
 import AccountAccessPrompt from './components/AccountAccessPrompt.vue';
 import WelcomeProfile from './components/WelcomeProfile.vue';
@@ -38,11 +38,61 @@ const manualAccessError = ref('');
 const startupChecking = ref(Boolean(desktop));
 const updateState = ref<StartupUpdateState | null>(null);
 const updateWarning = ref('');
+const entryRoot = ref<HTMLElement | null>(null);
+const windowMode = computed(() => {
+  if (startupChecking.value) return 'startup';
+  if (accessOffer.value) return 'invitation';
+  if (!user.value) return 'account';
+  return onboarding.value ? 'profile' : 'main';
+});
+let layoutFrame: number | undefined;
+let layoutResizeObserver: ResizeObserver | undefined;
+let layoutMutationObserver: MutationObserver | undefined;
+let observedCard: HTMLElement | null = null;
+let observedNotice: HTMLElement | null = null;
+let lastWindowLayout = '';
 let disposed = false;
 let sessionHeartbeat: number | null = null;
 let sessionHeartbeatInFlight = false;
 let logoutInProgress = false;
 let initializationRequest: AbortController | null = null;
+
+function updateWindowLayout() {
+  layoutFrame = undefined;
+  if (!desktop || disposed) return;
+  const card = entryRoot.value?.querySelector<HTMLElement>('.startup-update-card, .auth-card') ?? null;
+  const notice = entryRoot.value?.querySelector<HTMLElement>('.app-notice') ?? null;
+  if (windowMode.value !== 'main' && !card) return;
+  if (card !== observedCard || notice !== observedNotice) {
+    layoutResizeObserver?.disconnect();
+    observedCard = card;
+    observedNotice = notice;
+    if (card) layoutResizeObserver?.observe(card);
+    if (notice) layoutResizeObserver?.observe(notice);
+  }
+  const height = card ? Math.ceil(card.getBoundingClientRect().height
+    + (entryRoot.value?.querySelector('.titlebar')?.getBoundingClientRect().height ?? 43)
+    + (notice?.getBoundingClientRect().height ?? 0)) : 0;
+  const signature = `${windowMode.value}:${height}`;
+  if (signature === lastWindowLayout) return;
+  lastWindowLayout = signature;
+  void desktop.setWindowLayout(windowMode.value, height).catch(() => {
+    if (!disposed) error.value = '窗口尺寸调整失败，请重新打开应用。';
+  });
+}
+
+function scheduleWindowLayout() {
+  if (layoutFrame === undefined) layoutFrame = requestAnimationFrame(updateWindowLayout);
+}
+
+watch([entryRoot, windowMode], ([root]) => {
+  if (!desktop) return;
+  layoutMutationObserver?.disconnect();
+  layoutResizeObserver ??= new ResizeObserver(scheduleWindowLayout);
+  layoutMutationObserver ??= new MutationObserver(scheduleWindowLayout);
+  if (root) layoutMutationObserver.observe(root, { childList: true, subtree: true });
+  scheduleWindowLayout();
+}, { flush: 'post' });
 
 function expired() {
   initializationRequest?.abort();
@@ -60,6 +110,9 @@ void desktop?.isMaximized().then((maximized) => { windowMaximized.value = maximi
 window.addEventListener('lycan:unauthorized', expired);
 onScopeDispose(() => {
   disposed = true;
+  if (layoutFrame !== undefined) cancelAnimationFrame(layoutFrame);
+  layoutResizeObserver?.disconnect();
+  layoutMutationObserver?.disconnect();
   initializationRequest?.abort();
   if (sessionHeartbeat !== null) window.clearInterval(sessionHeartbeat);
   removeMaximizedChange?.();
@@ -238,18 +291,15 @@ onMounted(async () => {
 <template>
   <App v-if="user && !onboarding" v-show="!accessOffer" :user="user" :window-maximized="windowMaximized" :save-profile="saveProfile"
     :startup-update-warning="updateWarning" @dismiss-update-warning="updateWarning = ''" @logout="logout" />
-  <div v-if="!user || onboarding || accessOffer" class="app-shell">
-    <AppNotice v-if="updateWarning" :message="updateWarning" dismissible @dismiss="updateWarning = ''" />
+  <div v-if="!user || onboarding || accessOffer" ref="entryRoot" class="app-shell" :class="{ 'compact-auth': desktop }">
     <header class="titlebar" :class="{ 'desktop-titlebar': desktop }">
       <div class="brand">LycanSync</div>
       <div v-if="desktop" class="window-actions">
         <button aria-label="最小化窗口" @click="desktop.minimize()"><Minus :size="16" /></button>
-        <button :aria-label="windowMaximized ? '还原窗口' : '最大化窗口'" @click="desktop.toggleMaximize()">
-          <Copy v-if="windowMaximized" :size="14" /><Square v-else :size="14" />
-        </button>
         <button aria-label="关闭窗口" @click="desktop.close()"><X :size="17" /></button>
       </div>
     </header>
+    <AppNotice v-if="updateWarning" :message="updateWarning" dismissible @dismiss="updateWarning = ''" />
     <StartupUpdate v-if="startupChecking" :state="updateState" @skip="desktop?.skipStartupUpdate()" />
     <WelcomeProfile v-else-if="user && onboarding" :user="user" :save-profile="saveProfile" @finish="onboarding = false" />
     <main v-else class="auth-screen">
@@ -294,3 +344,15 @@ onMounted(async () => {
     </main>
   </div>
 </template>
+
+<style scoped>
+.compact-auth { display: flex; flex-direction: column; }
+.compact-auth > .titlebar { flex: 0 0 var(--titlebar-height); }
+.compact-auth :deep(.auth-screen), .compact-auth :deep(.startup-update-screen) {
+  display: block; flex: 1; min-height: 0; overflow: auto; padding: 0;
+}
+.compact-auth :deep(.auth-card), .compact-auth :deep(.startup-update-card) {
+  width: 100%; border: 0; border-radius: 0; background: var(--panel);
+}
+.compact-auth :deep(.app-notice) { position: static; transform: none; width: 100%; flex: 0 0 auto; }
+</style>

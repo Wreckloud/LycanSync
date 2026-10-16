@@ -61,6 +61,7 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
       onUpdateState: () => () => undefined,
       minimize: () => undefined,
       isMaximized: async () => false,
+      setWindowLayout: async () => undefined,
       getProcessMetrics: async () => ({ cpuPercent: 0, memoryMb: 0 }),
       getSystemIdleState: async () => ({ state: 'active', idleSeconds: 0 }),
       getCurrentActivity: async () => null,

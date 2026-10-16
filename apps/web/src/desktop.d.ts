@@ -115,6 +115,7 @@ interface Window {
     setServerAddress(value: string): Promise<void>;
     minimize(): void;
     isMaximized(): Promise<boolean>;
+    setWindowLayout(mode: 'startup' | 'account' | 'invitation' | 'profile' | 'main', height: number): Promise<void>;
     getProcessMetrics(): Promise<{ cpuPercent: number; memoryMb: number }>;
     exportDiagnosticReport(report: string): Promise<{ saved: boolean }>;
     getSystemIdleState(): Promise<{ state: 'active' | 'idle' | 'locked' | 'unknown'; idleSeconds: number }>;
