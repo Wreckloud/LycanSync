@@ -93,6 +93,11 @@ interface StartupUpdateState {
 }
 
 interface Window {
+  lycanVoiceOverlay?: import('./overlay/types').VoiceOverlayBridge;
+  lycanOverlayView?: {
+    ready(): Promise<void>;
+    onView(callback: (view: import('./overlay/types').VoiceOverlayView) => void): () => void;
+  };
   lycanDesktop?: {
     copyText(text: string): Promise<void>;
     runStartupUpdate(): Promise<StartupUpdateState>;

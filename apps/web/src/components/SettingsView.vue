@@ -8,6 +8,7 @@ import type { useRtcRoom } from '../rtc/useRtcRoom';
 import type { useMicrophoneTest } from '../rtc/useMicrophoneTest';
 import type { useDiagnosticReport } from '../diagnostics/useDiagnosticReport';
 import type { useActivityMappings } from '../settings/useActivityMappings';
+import type { useVoiceOverlay } from '../overlay/useVoiceOverlay';
 import IconButton from './IconButton.vue';
 import PersonalStatusCard from './PersonalStatusCard.vue';
 import AboutSettings from './settings/AboutSettings.vue';
@@ -16,6 +17,7 @@ import MemberAccessSettings from './settings/MemberAccessSettings.vue';
 import ActivitySettings from './settings/ActivitySettings.vue';
 import AudioSettings from './settings/AudioSettings.vue';
 import ClientSettings from './settings/ClientSettings.vue';
+import OverlaySettings from './settings/OverlaySettings.vue';
 import ProfileSettings from './settings/ProfileSettings.vue';
 import SoundSettings from './settings/SoundSettings.vue';
 import { SETTINGS_SECTIONS, settingsSectionTitle, type SettingsSectionId } from '../settings/settingsSections';
@@ -27,6 +29,7 @@ const props = defineProps<{
   presenceStatus: UserPresenceStatus;
   presenceLabel: string;
   desktop: boolean;
+  overlay?: ReturnType<typeof useVoiceOverlay>;
   preferences: ReturnType<typeof useAudioPreferences>;
   rtc: UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>;
   microphoneTest: UnwrapNestedRefs<ReturnType<typeof useMicrophoneTest>>;
@@ -47,7 +50,8 @@ const clientSettings = ref<InstanceType<typeof ClientSettings> | null>(null);
 const activeSection = ref<SettingsSectionId>(props.section);
 const leaving = ref(false);
 const sectionTitle = computed(() => settingsSectionTitle(activeSection.value));
-const visibleSections = computed(() => SETTINGS_SECTIONS.filter((item) => item.id !== 'members' || props.user.administrator));
+const visibleSections = computed(() => SETTINGS_SECTIONS.filter((item) => (item.id !== 'members' || props.user.administrator)
+  && (item.id !== 'overlay' || (props.desktop && props.overlay))));
 const interactionBlocked = computed(() => Boolean(profileSettings.value?.cropping || clientSettings.value?.confirmingUpdate));
 
 watch(() => props.section, (section) => { activeSection.value = section; });
@@ -122,6 +126,7 @@ async function leaveSettings(logout: boolean) {
           :desktop="desktop" :preferences="preferences" :rtc="rtc" :microphone-test="microphoneTest"
           :input-level-percent="inputLevelPercent" />
         <SoundSettings v-show="activeSection === 'sound'" :user-id="user.id" :active="activeSection === 'sound'" />
+        <OverlaySettings v-if="desktop && overlay" v-show="activeSection === 'overlay'" :overlay="overlay" :active="activeSection === 'overlay'" />
         <ClientSettings ref="clientSettings" v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'"
           :stage-auto-fill="stageAutoFill" :stage-preference-error="stagePreferenceError" @stage-auto-fill="emit('stageAutoFill', $event)" />
         <AboutSettings v-show="activeSection === 'about'" :active="activeSection === 'about'" :rtc="rtc" :report="diagnosticReport" />

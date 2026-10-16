@@ -19,6 +19,8 @@ module.exports = {
     'electron/server-settings.cjs',
     'electron/access-links.cjs',
     'electron/preload.cjs',
+    'electron/voice-overlay.cjs',
+    'electron/voice-overlay-preload.cjs',
     'electron/media-helper.cjs',
     'electron/media-diagnostics.cjs',
     'electron/native-video-thumbnails.cjs',

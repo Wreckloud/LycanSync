@@ -19,7 +19,7 @@
     "build:desktop": "npm run build:media && npm run build:media-bridge && npm run build:activity && npm run build",
     "package:desktop": "npm run build:desktop && node electron/package-desktop.cjs",
     "test:media": "cargo test --manifest-path ../../native/media-helper/Cargo.toml",
-    "test:electron-unit": "node --test electron/media-helper.test.cjs electron/media-diagnostics.test.cjs electron/capture-permissions.test.cjs electron/server-settings.test.cjs electron/access-links.test.cjs electron/api-proxy.test.cjs electron/startup-update.test.cjs electron/activity-helper.test.cjs",
+    "test:electron-unit": "node --test electron/media-helper.test.cjs electron/media-diagnostics.test.cjs electron/capture-permissions.test.cjs electron/server-settings.test.cjs electron/access-links.test.cjs electron/api-proxy.test.cjs electron/startup-update.test.cjs electron/activity-helper.test.cjs electron/voice-overlay.test.cjs",
     "preview": "vite preview --host 127.0.0.1",
     "test": "npm run typecheck:test && vitest run src tests/unit",
     "test:e2e": "npm run typecheck:test && playwright test",

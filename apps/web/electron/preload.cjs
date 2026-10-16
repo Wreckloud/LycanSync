@@ -1,5 +1,29 @@
 const { contextBridge, ipcRenderer, sharedTexture } = require('electron');
 
+contextBridge.exposeInMainWorld('lycanVoiceOverlay', {
+  begin: () => ipcRenderer.invoke('voice-overlay:begin'),
+  configure: (owner, settings) => ipcRenderer.invoke('voice-overlay:configure', owner, settings),
+  update: (owner, snapshot) => ipcRenderer.invoke('voice-overlay:update', owner, snapshot),
+  edit: (owner, enabled) => ipcRenderer.invoke('voice-overlay:edit', owner, enabled),
+  end: (owner) => ipcRenderer.invoke('voice-overlay:end', owner),
+  displays: () => ipcRenderer.invoke('voice-overlay:displays'),
+  onError: (callback) => {
+    const listener = (_event, message) => callback(message);
+    ipcRenderer.on('voice-overlay:error', listener);
+    return () => ipcRenderer.removeListener('voice-overlay:error', listener);
+  },
+  onPlacement: (callback) => {
+    const listener = (_event, settings) => callback(settings);
+    ipcRenderer.on('voice-overlay:placement', listener);
+    return () => ipcRenderer.removeListener('voice-overlay:placement', listener);
+  },
+  onEditingChange: (callback) => {
+    const listener = (_event, editing) => callback(editing);
+    ipcRenderer.on('voice-overlay:editing', listener);
+    return () => ipcRenderer.removeListener('voice-overlay:editing', listener);
+  },
+});
+
 sharedTexture?.setSharedTextureReceiver(async ({ importedSharedTexture }, token, sessionId) => {
   let frame;
   try {

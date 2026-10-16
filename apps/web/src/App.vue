@@ -40,6 +40,7 @@ import { useActivityMappings } from './settings/useActivityMappings';
 import { ScreenShareStage } from './rtc/screenShareStage';
 import { useStagePreferences } from './settings/useStagePreferences';
 import { useDiagnosticReport } from './diagnostics/useDiagnosticReport';
+import { useVoiceOverlay } from './overlay/useVoiceOverlay';
 
 const props = defineProps<{
   user: AuthUser;
@@ -931,6 +932,11 @@ const memberStatusLabel = (member: GroupMember) => {
 };
 const participantAvatar = (identity: string) => identity === `user-${props.user.id}` ? props.user.avatar
   : currentMembers.value.find((member) => `user-${member.userId}` === identity)?.avatar ?? '';
+const voiceOverlay = useVoiceOverlay({
+  userId: props.user.id, room: () => rtc.room, revision: () => rtc.revision,
+  status: () => rtc.status, microphone: () => rtc.microphoneEnabled, listening: () => rtc.listening,
+  avatar: participantAvatar, bridge: window.lycanVoiceOverlay,
+});
 const previewParticipantName = (identity: string, displayName: string) =>
   selectedGroupDetail.value?.members.find((member) => `user-${member.userId}` === identity)?.nickname ?? displayName;
 const previewParticipantAvatar = (identity: string) =>
@@ -1497,6 +1503,7 @@ function participantListening(participant: Participant) {
       @updated="applyGroupDetail" @removed="removedFromGroup" @close="management = null" />
     </div>
     <SettingsView v-if="settingsOpen" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
+      :overlay="desktop ? voiceOverlay : undefined"
       :presence-status="currentPresenceStatus" :presence-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]"
       :preferences="audioPreferences" :rtc="rtc" :microphone-test="microphoneTest" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
       :activity="currentActivity" :show-activity="showActivity" :activity-error="activityVisibilityError"

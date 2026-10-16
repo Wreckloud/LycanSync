@@ -14,6 +14,7 @@ const { matchNativeVideoSourceThumbnails, monitorDisplayId } = require('./native
 const { parseAccessLink, accessLinkFromArguments, parseManualAccessLink } = require('./access-links.cjs');
 const { createStartupUpdate } = require('./startup-update.cjs');
 const { createActivityHelper } = require('./activity-helper.cjs');
+const { createVoiceOverlay } = require('./voice-overlay.cjs');
 
 const APP_ORIGIN = 'lycan://app';
 const rendererRoot = resolve(__dirname, '../dist');
@@ -96,6 +97,14 @@ const helperProcessBridges = new WeakMap();
 const writeMediaDiagnostic = createMediaDiagnostics(resolve(app.getPath('userData'), 'screen-share-error.log'));
 const sourceTimingRecordedAt = new Map();
 let diagnosticExportPending = false;
+const voiceOverlay = createVoiceOverlay({
+  BrowserWindow, screen, session, net, rendererRoot, devRendererUrl,
+  defaultDisplay: () => mainWindow ? screen.getDisplayMatching(mainWindow.getBounds()).id : screen.getPrimaryDisplay().id,
+  onError: (message) => mainWindow?.webContents.send('voice-overlay:error', message),
+  onPlacement: (settings) => mainWindow?.webContents.send('voice-overlay:placement', settings),
+  onEditingChange: (editing) => mainWindow?.webContents.send('voice-overlay:editing', editing),
+  onDiagnostic: (entry) => { void writeMediaDiagnostic(entry); },
+});
 const startupUpdate = createStartupUpdate({
   enabled: app.isPackaged && process.platform === 'win32',
   version: app.getVersion(),
@@ -745,6 +754,7 @@ async function clearSession() {
   sessionToken = undefined;
   sessionLoaded = true;
   activityMonitor.clearMappings();
+  voiceOverlay.clear();
   try { await unlink(resolve(app.getPath('userData'), 'session.bin')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
@@ -793,6 +803,7 @@ function denyCapture(callback) {
 function finishClose() {
   canClose = true;
   clearTimeout(closeTimer);
+  voiceOverlay.clear();
   mainWindow?.destroy();
 }
 
@@ -957,6 +968,12 @@ if (!app.requestSingleInstanceLock()) {
     }
     protocol.handle('lycan', serveApplication);
     configurePermissions();
+    voiceOverlay.initialize();
+    screen.on('display-added', voiceOverlay.correctPlacement);
+    screen.on('display-removed', voiceOverlay.correctPlacement);
+    screen.on('display-metrics-changed', voiceOverlay.correctPlacement);
+    powerMonitor.on('resume', voiceOverlay.correctPlacement);
+    powerMonitor.on('unlock-screen', voiceOverlay.correctPlacement);
     const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
     // 默认保留桌面操作空间；使用逻辑像素并按工作区裁剪，适配系统缩放和小屏幕。
     const width = Math.min(1280, workArea.width - 32);
@@ -980,6 +997,7 @@ if (!app.requestSingleInstanceLock()) {
       event.preventDefault();
       if (closing) return;
       closing = true;
+      voiceOverlay.clear();
       startupUpdate.cancel();
       // 先停止采集再退出；页面异常时由主进程兜底销毁窗口，避免后台残留。
       closeTimer = setTimeout(finishClose, 2000);
@@ -1282,6 +1300,7 @@ ipcMain.handle('external:open', async (event, value) => {
 });
 app.on('before-quit', (event) => {
   closing = true;
+  voiceOverlay.clear();
   if (startupUpdate.getState().phase !== 'installing') startupUpdate.cancel();
   stopActivityHelper();
   if (allowQuitAfterMediaHelper) return;
@@ -1310,6 +1329,31 @@ app.on('before-quit', (event) => {
     });
 });
 app.on('window-all-closed', () => app.quit());
+ipcMain.handle('voice-overlay:begin', (event) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return voiceOverlay.begin();
+});
+ipcMain.handle('voice-overlay:configure', (event, owner, settings) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return voiceOverlay.configure(owner, settings);
+});
+ipcMain.handle('voice-overlay:update', (event, owner, snapshot) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  voiceOverlay.update(owner, snapshot);
+});
+ipcMain.handle('voice-overlay:edit', (event, owner, enabled) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return voiceOverlay.edit(owner, enabled);
+});
+ipcMain.handle('voice-overlay:end', (event, owner) => {
+  if (!trustedSender(event)) throw new Error('请求来源无效');
+  voiceOverlay.end(owner);
+});
+ipcMain.handle('voice-overlay:displays', (event) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return voiceOverlay.displays();
+});
+ipcMain.handle('voice-overlay:ready', (event) => voiceOverlay.ready(event));
 ipcMain.handle('auth:clear', async (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
   await clearSession();
