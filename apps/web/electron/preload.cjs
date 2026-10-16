@@ -49,6 +49,8 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   getAutoStart: () => ipcRenderer.invoke('settings:auto-start:get'),
   setAutoStart: (enabled) => ipcRenderer.invoke('settings:auto-start:set', enabled),
   getCurrentActivity: () => ipcRenderer.invoke('activity:current'),
+  listActivityWindows: () => ipcRenderer.invoke('activity:windows'),
+  configureActivityMappings: (mappings) => ipcRenderer.invoke('activity:configure', mappings),
   getNativeMediaCapabilities: () => ipcRenderer.invoke('media:capabilities'),
   listNativeVideoSources: () => ipcRenderer.invoke('media:video-sources'),
   getNativeVideoSourceThumbnails: (sources) => ipcRenderer.invoke('media:video-source-thumbnails', sources),

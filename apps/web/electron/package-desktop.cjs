@@ -42,7 +42,7 @@ if (result.error) throw result.error;
 if (result.status !== 0) process.exit(result.status || 1);
 // 页面依赖已进入 dist；主进程更新库必须实际进入 asar，不能只验证开发目录可用。
 const archive = join(outputDirectory, 'win-unpacked/resources/app.asar');
-for (const file of ['electron/startup-update.cjs', 'node_modules/electron-updater/package.json',
+for (const file of ['electron/startup-update.cjs', 'electron/activity-helper.cjs', 'node_modules/electron-updater/package.json',
   'node_modules/builder-util-runtime/package.json']) require('@electron/asar').extractFile(archive, normalize(file));
 const version = require('../package.json').version;
 for (const file of ['latest.yml', `LycanSync-${version}-windows-x64-setup.exe.blockmap`]) {

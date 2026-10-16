@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
-import { UserRound } from '@lucide/vue';
+import { Crown, UserRound } from '@lucide/vue';
 import InlineFeedback from './InlineFeedback.vue';
 import { addGroupMember, dissolveGroup, findGroup, findGroupCandidates, getGroupInviteCode,
   removeGroupMember, transferGroupOwner, type GroupCandidate, type GroupDetail } from '../group/groupApi';
@@ -175,13 +175,13 @@ onScopeDispose(() => {
           <template v-if="mode === 'invite'">
             <div v-for="member in candidates" :key="member.userId" class="management-member">
               <img v-if="member.avatar" :src="member.avatar" alt="" /><UserRound v-else :size="36" />
-              <strong>{{ member.nickname }}</strong><button type="button" :disabled="busy || loading || !!candidateError || member.joined" @click="addMember(member)">{{ member.joined ? '已加入' : '添加' }}</button>
+              <strong><span>{{ member.nickname }}</span></strong><button type="button" :disabled="busy || loading || !!candidateError || member.joined" @click="addMember(member)">{{ member.joined ? '已加入' : '添加' }}</button>
             </div>
           </template>
           <template v-else>
             <div v-for="member in members" :key="member.userId" class="management-member">
               <img v-if="member.avatar" :src="member.avatar" alt="" /><UserRound v-else :size="36" />
-              <strong>{{ member.nickname }}<small v-if="member.role === 'OWNER'">群主</small></strong>
+              <strong><span>{{ member.nickname }}</span><Crown v-if="member.role === 'OWNER'" :size="13" role="img" aria-label="群主" /></strong>
               <button type="button" :disabled="busy || member.role === 'OWNER'" @click="confirmation = member; error = ''">{{ mode === 'transfer' ? '选择' : '移出' }}</button>
             </div>
           </template>
@@ -218,8 +218,9 @@ header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
 .management-member { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 5px 0; }
 .management-member img { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; }
 .management-member > svg { flex-shrink: 0; }
-.management-member strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.management-member small { margin-left: 6px; color: var(--muted); font-size: 12px; }
+.management-member strong { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; font-weight: 500; }
+.management-member strong span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.management-member strong svg { flex-shrink: 0; color: var(--warning); }
 .management-member button { flex-shrink: 0; min-width: 64px; }
 .management-pages { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .management-pages span { color: var(--muted); font-size: 12px; }

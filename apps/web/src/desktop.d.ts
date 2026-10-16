@@ -1,7 +1,17 @@
 interface DetectedActivity {
-  type: 'GAME';
+  type: 'GAME' | 'MUSIC';
   name: string;
   startedAt: string;
+}
+
+interface ActivityMapping {
+  executable: string;
+  name: string;
+}
+
+interface ActivityWindow {
+  executable: string;
+  title: string;
 }
 
 interface NativeVideoSource {
@@ -106,6 +116,8 @@ interface Window {
     getAutoStart(): Promise<{ supported: boolean; enabled: boolean }>;
     setAutoStart(enabled: boolean): Promise<{ supported: boolean; enabled: boolean }>;
     getCurrentActivity(): Promise<DetectedActivity | null>;
+    listActivityWindows(): Promise<ActivityWindow[]>;
+    configureActivityMappings(mappings: ActivityMapping[]): Promise<void>;
     getNativeMediaCapabilities(): Promise<Record<string, { available: boolean; reason: string }>>;
     listNativeVideoSources(): Promise<{ revision: number; discoveryId: string; sources: NativeVideoSource[] }>;
     getNativeVideoSourceThumbnails(sources: NativeVideoSource[]): Promise<{ sourceId: string; thumbnail: string }[]>;

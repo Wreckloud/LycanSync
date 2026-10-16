@@ -581,9 +581,12 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .status-dot.ONLINE { background: #3ba55d; }
 .status-dot.AWAY { background: #f59e0b; }
 .group-member-info { display: grid; align-content: center; min-width: 0; }
-.group-member-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; line-height: 1.25; }
-.group-member-role { margin-left: 5px; color: var(--muted); font-size: 11px; font-weight: 400; }
+.group-member-name { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 15px; line-height: 1.25; }
+.group-member-name > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-member-role { flex-shrink: 0; color: var(--warning); }
 .member-activity { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; color: #43b6da; font-size: 13px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.member-activity svg { flex-shrink: 0; }
+.member-activity > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-member-row.is-offline { color: #6b727b; }
 .group-member-row.is-offline .group-member-avatar { filter: grayscale(1); opacity: .48; }
 .group-member-row.is-offline .group-member-role { color: #626a74; }

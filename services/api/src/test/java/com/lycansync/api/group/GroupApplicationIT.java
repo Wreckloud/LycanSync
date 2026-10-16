@@ -10,11 +10,14 @@ import com.lycansync.api.group.dto.CreateGroupRequest;
 import com.lycansync.api.group.service.GroupService;
 import com.lycansync.api.presence.dto.PresenceHeartbeatRequest;
 import com.lycansync.api.presence.mapper.PresenceMapper;
+import com.lycansync.api.presence.model.UserActivityType;
 import com.lycansync.api.presence.model.UserPresenceStatus;
 import com.lycansync.api.presence.service.PresenceService;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -148,8 +151,10 @@ class GroupApplicationIT {
                 .query(Long.class).single()).isOne();
     }
 
-    @Test
-    void shouldUpdateOnlineStatusAfterHeartbeat() throws Exception {
+    @ParameterizedTest
+    @EnumSource(UserActivityType.class)
+    void shouldUpdateOnlineStatusAfterHeartbeat(UserActivityType activityType) throws Exception {
+        String activityName = activityType == UserActivityType.MUSIC ? "测试歌曲" : "Core Keeper";
         String ownerToken = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
         String response = mvc.perform(post("/api/groups")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
@@ -168,7 +173,8 @@ class GroupApplicationIT {
         mvc.perform(post("/api/presence/heartbeat")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"status\":\"ONLINE\",\"activity\":{\"type\":\"GAME\",\"name\":\"Core Keeper\"}}"))
+                        .content("{\"status\":\"ONLINE\",\"activity\":{\"type\":\"%s\",\"name\":\"%s\"}}"
+                                .formatted(activityType, activityName)))
                 .andExpect(status().isNoContent());
 
         mvc.perform(get("/api/groups/{groupId}", groupId)
@@ -183,8 +189,8 @@ class GroupApplicationIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].status").value("ONLINE"))
                 .andExpect(jsonPath("$[0].lastSeenAt").isNotEmpty())
-                .andExpect(jsonPath("$[0].activityType").value("GAME"))
-                .andExpect(jsonPath("$[0].activityName").value("Core Keeper"))
+                .andExpect(jsonPath("$[0].activityType").value(activityType.name()))
+                .andExpect(jsonPath("$[0].activityName").value(activityName))
                 .andExpect(jsonPath("$[0].activityStartedAt").isNotEmpty());
 
         jdbc.sql("UPDATE user_presence SET last_seen_at = now() - interval '2 minutes'").update();
@@ -198,7 +204,7 @@ class GroupApplicationIT {
         mvc.perform(post("/api/presence/heartbeat")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"status\":\"ONLINE\",\"activity\":{\"type\":\"GAME\",\"name\":\" \"}}"))
+                        .content("{\"status\":\"ONLINE\",\"activity\":{\"type\":\"%s\",\"name\":\" \"}}".formatted(activityType)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
     }
@@ -473,6 +479,37 @@ class GroupApplicationIT {
                 .andExpect(status().isNoContent());
         assertThat(jdbc.sql("SELECT count(*) FROM group_member").query(Long.class).single()).isZero();
         assertThat(jdbc.sql("SELECT count(*) FROM chat_group").query(Long.class).single()).isZero();
+    }
+
+    @Test
+    void shouldMigrateMusicActivityWithoutRewritingExistingPresence() {
+        String schema = "activity_upgrade";
+        Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+                .schemas(schema).target("14").load().migrate();
+        String url = POSTGRES.getJdbcUrl() + (POSTGRES.getJdbcUrl().contains("?") ? "&" : "?") + "currentSchema=" + schema;
+        var isolated = JdbcClient.create(new DriverManagerDataSource(url, POSTGRES.getUsername(), POSTGRES.getPassword()));
+        UUID userId = UUID.randomUUID();
+        isolated.sql("INSERT INTO app_user(id, nickname, avatar, created_at) VALUES (?, '旧成员', '', now())")
+                .param(userId).update();
+        isolated.sql("""
+                        INSERT INTO user_presence(user_id, status, activity_type, activity_name, activity_started_at)
+                        VALUES (?, 'ONLINE', 'GAME', '原游戏', now())
+                        """)
+                .param(userId).update();
+        var previous = isolated.sql("SELECT * FROM user_presence WHERE user_id = ?").param(userId).query().singleRow();
+        assertThatThrownBy(() -> isolated.sql("UPDATE user_presence SET activity_type = 'MUSIC' WHERE user_id = ?")
+                .param(userId).update()).isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+
+        var migration = Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+                .schemas(schema).load().migrate();
+        assertThat(migration.migrationsExecuted).isOne();
+        assertThat(isolated.sql("SELECT * FROM user_presence WHERE user_id = ?").param(userId).query().singleRow())
+                .isEqualTo(previous);
+        assertThat(isolated.sql("SELECT count(*) FROM app_user").query(Long.class).single()).isOne();
+        assertThat(isolated.sql("UPDATE user_presence SET activity_type = 'MUSIC' WHERE user_id = ?")
+                .param(userId).update()).isOne();
+        assertThatThrownBy(() -> isolated.sql("UPDATE user_presence SET activity_type = 'OTHER' WHERE user_id = ?")
+                .param(userId).update()).isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
     }
 
     @Test

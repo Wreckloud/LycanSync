@@ -1,249 +1,164 @@
-//! 检测运行中的 Steam 游戏并优先选择前台游戏；变化经 stdout JSON 行交给桌面端。
+//! 活动检测独立于媒体采集，只输出整理后的动态；窗口清单仅在主动请求时返回。
 
-use serde::Serialize;
-use std::cmp::Ordering;
-use std::collections::HashSet;
-use std::env;
-use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+mod catalog;
+mod detection;
+mod windows;
+
+use detection::{ActivityDetector, ActivityMapping, DetectedActivity, ProcessSnapshot};
+use serde::Deserialize;
+use serde_json::json;
+use std::io::{self, BufRead, Write};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 
 const SCAN_INTERVAL: Duration = Duration::from_secs(10);
 
-#[derive(Clone)]
-struct GameInstall {
-    name: String,
-    directory: String,
-}
-
-#[derive(Clone, PartialEq, Eq)]
-struct DetectedGame {
-    name: String,
-    started_at: u64,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ActivityEvent<'a> {
-    activity_type: Option<&'a str>,
-    activity_name: Option<&'a str>,
-    started_at_epoch_seconds: Option<u64>,
+#[derive(Deserialize)]
+#[serde(tag = "method", rename_all = "camelCase")]
+enum Command {
+    Configure {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+        mappings: Vec<ActivityMapping>,
+    },
+    Windows {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+    },
 }
 
 fn main() {
-    let mut games = discover_games();
-    let refresh_kind = ProcessRefreshKind::nothing().with_exe(UpdateKind::OnlyIfNotSet);
+    let (sender, receiver) = mpsc::sync_channel(8);
+    thread::spawn(move || {
+        for line in io::stdin().lock().lines() {
+            let Ok(line) = line else { break };
+            if line.len() > 512 * 1024 {
+                continue;
+            }
+            if let Ok(command) = serde_json::from_str::<Command>(&line)
+                && sender.send(command).is_err()
+            {
+                break;
+            }
+        }
+    });
     let mut system = System::new();
-    let mut last_activity: Option<DetectedGame> = None;
-    let mut missing_scans = 0_u8;
-    let mut catalog_refresh = 0_u8;
-
+    let mut games = catalog::discover_games();
+    let mut catalog_refreshed = Instant::now();
+    let mut next_scan = Instant::now();
+    let mut mappings = Vec::new();
+    let mut configuration_id = 0;
+    let mut last_activity: Option<DetectedActivity> = None;
+    let mut detector = ActivityDetector::default();
     loop {
-        system.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh_kind);
-        let detected = detect_game(&system, &games);
-        let next_activity = match detected {
-            Some(game) => {
-                missing_scans = 0;
-                Some(game)
-            }
-            None if last_activity.is_some() && missing_scans == 0 => {
-                // 单次扫描缺失可能是进程枚举抖动，先保留活动；连续缺失才发出结束变化。
-                missing_scans = 1;
-                last_activity.clone()
-            }
-            None => {
-                missing_scans = 0;
-                None
-            }
-        };
-
-        if next_activity != last_activity {
-            write_event(next_activity.as_ref());
-            last_activity = next_activity;
+        let command =
+            match receiver.recv_timeout(next_scan.saturating_duration_since(Instant::now())) {
+                Ok(command) => Some(command),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => break,
+            };
+        if catalog_refreshed.elapsed() >= Duration::from_secs(300) {
+            games = catalog::discover_games();
+            catalog_refreshed = Instant::now();
         }
-
-        catalog_refresh = catalog_refresh.saturating_add(1);
-        if catalog_refresh >= 30 {
-            // 安装目录可能在 helper 运行中变化，每 30 次扫描（约 5 分钟）刷新一次清单。
-            games = discover_games();
-            catalog_refresh = 0;
-        }
-        thread::sleep(SCAN_INTERVAL);
-    }
-}
-
-fn detect_game(system: &System, games: &[GameInstall]) -> Option<DetectedGame> {
-    let foreground_pid = foreground_process_id();
-    let mut candidates: Vec<(bool, u64, &GameInstall)> = Vec::new();
-    for (pid, process) in system.processes() {
-        let Some(executable) = process.exe() else {
-            continue;
-        };
-        if ignored_executable(executable) {
-            continue;
-        }
-        let executable_path = normalized_path(executable);
-        let Some(game) = games
-            .iter()
-            .find(|game| executable_path.starts_with(&game.directory))
-        else {
-            continue;
-        };
-        if let Some(candidate) = candidates
-            .iter_mut()
-            .find(|candidate| candidate.2.directory == game.directory)
+        if let Some(Command::Configure {
+            request_id,
+            mappings: next,
+        }) = &command
         {
-            candidate.0 |= pid.as_u32() == foreground_pid;
-            candidate.1 = candidate.1.min(process.start_time());
-        } else {
-            candidates.push((pid.as_u32() == foreground_pid, process.start_time(), game));
+            if next.len() > 32 || next.iter().any(|mapping| !mapping.valid()) {
+                write_message(json!({ "requestId": request_id, "error": "动态名称设置无效。" }));
+                continue;
+            }
+            mappings = next.clone();
+            configuration_id = *request_id;
+            last_activity = None;
         }
-    }
-    candidates
-        .into_iter()
-        .max_by(compare_detected)
-        .map(|(_, started_at, game)| DetectedGame {
-            name: game.name.clone(),
-            started_at,
-        })
-}
-
-fn compare_detected(
-    left: &(bool, u64, &GameInstall),
-    right: &(bool, u64, &GameInstall),
-) -> Ordering {
-    left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1))
-}
-
-fn foreground_process_id() -> u32 {
-    unsafe {
-        let window = GetForegroundWindow();
-        let mut process_id = 0_u32;
-        if window.0.is_null() {
-            return 0;
-        }
-        GetWindowThreadProcessId(window, Some(&mut process_id));
-        process_id
-    }
-}
-
-fn ignored_executable(path: &Path) -> bool {
-    let name = path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    [
-        "crash",
-        "report",
-        "unins",
-        "setup",
-        "unitycrashhandler",
-        "easyanticheat",
-        "beservice",
-    ]
-    .iter()
-    .any(|fragment| name.contains(fragment))
-}
-
-fn discover_games() -> Vec<GameInstall> {
-    steam_apps_directories()
-        .into_iter()
-        .flat_map(|apps| read_manifests(&apps))
-        .collect()
-}
-
-fn steam_apps_directories() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(root) = env::var_os("STEAM_PATH") {
-        roots.push(PathBuf::from(root));
-    }
-    if let Some(program_files) = env::var_os("ProgramFiles(x86)") {
-        roots.push(PathBuf::from(program_files).join("Steam"));
-    }
-
-    let mut apps_directories = Vec::new();
-    let mut seen = HashSet::new();
-    for root in roots {
-        let default_apps = root.join("steamapps");
-        push_unique(&mut apps_directories, &mut seen, default_apps.clone());
-        let libraries =
-            fs::read_to_string(default_apps.join("libraryfolders.vdf")).unwrap_or_default();
-        for line in libraries.lines() {
-            if let Some(path) = vdf_value(line, "path") {
-                push_unique(
-                    &mut apps_directories,
-                    &mut seen,
-                    PathBuf::from(path.replace("\\\\", "\\")).join("steamapps"),
-                );
+        let processes = process_snapshot(&mut system);
+        let list_windows = matches!(command, Some(Command::Windows { .. }));
+        // 自动检测只读指定播放器/用户所选程序的标题；完整清单只在设置中主动请求。
+        let wanted_pids = processes
+            .iter()
+            .filter(|process| list_windows || detection::needs_window(process, &mappings))
+            .map(|process| process.pid)
+            .collect();
+        let windows = match windows::snapshot(&wanted_pids) {
+            Ok(windows) => windows,
+            Err(_) => {
+                if let Some(command) = command {
+                    let request_id = match command {
+                        Command::Configure { request_id, .. } | Command::Windows { request_id } => {
+                            request_id
+                        }
+                    };
+                    write_message(
+                        json!({ "requestId": request_id, "error": "无法读取运行窗口，请重试。" }),
+                    );
+                }
+                // 检测失败时清除公开候选，不把旧标题当成仍有效的新快照。
+                write_activity(None, configuration_id);
+                last_activity = None;
+                next_scan = Instant::now() + SCAN_INTERVAL;
+                continue;
+            }
+        };
+        if let Some(command) = command {
+            match command {
+                Command::Configure { request_id, .. } => {
+                    write_message(json!({ "requestId": request_id }));
+                }
+                Command::Windows { request_id } => {
+                    write_message(
+                        json!({ "requestId": request_id, "windows": detection::window_options(&processes, &windows) }),
+                    );
+                }
             }
         }
+        let activity = detector.detect(&processes, &windows, &games, &mappings);
+        if activity != last_activity || configuration_id == 0 {
+            write_activity(activity.as_ref(), configuration_id);
+            last_activity = activity;
+        }
+        next_scan = Instant::now() + SCAN_INTERVAL;
     }
-    apps_directories
 }
 
-fn read_manifests(apps_directory: &Path) -> Vec<GameInstall> {
-    let Ok(entries) = fs::read_dir(apps_directory) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            let file_name = entry.file_name().to_string_lossy().into_owned();
-            if !file_name.starts_with("appmanifest_") || !file_name.ends_with(".acf") {
-                return None;
-            }
-            let content = fs::read_to_string(entry.path()).ok()?;
-            let name = content.lines().find_map(|line| vdf_value(line, "name"))?;
-            let install_directory = content
-                .lines()
-                .find_map(|line| vdf_value(line, "installdir"))?;
-            Some(GameInstall {
-                name,
-                directory: normalized_path(&apps_directory.join("common").join(install_directory)),
+fn process_snapshot(system: &mut System) -> Vec<ProcessSnapshot> {
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().with_exe(UpdateKind::OnlyIfNotSet),
+    );
+    system
+        .processes()
+        .iter()
+        .filter_map(|(pid, process)| {
+            Some(ProcessSnapshot {
+                pid: pid.as_u32(),
+                executable: detection::normalize_path(&process.exe()?.to_string_lossy()),
+                started_at: process.start_time(),
             })
         })
         .collect()
 }
 
-fn vdf_value(line: &str, expected_key: &str) -> Option<String> {
-    let mut values = line.split('"').skip(1).step_by(2);
-    let key = values.next()?.trim();
-    let value = values.next()?.trim();
-    (key.eq_ignore_ascii_case(expected_key) && !value.is_empty()).then(|| value.to_owned())
+fn write_activity(activity: Option<&DetectedActivity>, configuration_id: u64) {
+    write_message(json!({
+        "configurationId": configuration_id,
+        "activityType": activity.map(|activity| activity.kind),
+        "activityName": activity.map(|activity| activity.name.as_str()),
+        "startedAtEpochSeconds": activity.map(|activity| activity.started_at),
+    }));
 }
 
-fn push_unique(values: &mut Vec<PathBuf>, seen: &mut HashSet<String>, value: PathBuf) {
-    let key = normalized_path(&value);
-    if seen.insert(key) {
-        values.push(value);
-    }
-}
-
-fn normalized_path(path: &Path) -> String {
-    let mut value = path
-        .to_string_lossy()
-        .replace('/', "\\")
-        .to_ascii_lowercase();
-    if !value.ends_with('\\') {
-        value.push('\\');
-    }
-    value
-}
-
-fn write_event(activity: Option<&DetectedGame>) {
-    let event = ActivityEvent {
-        activity_type: activity.map(|_| "GAME"),
-        activity_name: activity.map(|game| game.name.as_str()),
-        started_at_epoch_seconds: activity.map(|game| game.started_at),
-    };
-    if let Ok(line) = serde_json::to_string(&event) {
-        let mut stdout = io::stdout().lock();
-        let _ = writeln!(stdout, "{line}");
-        let _ = stdout.flush();
+fn write_message(message: serde_json::Value) {
+    let mut stdout = io::stdout().lock();
+    if writeln!(stdout, "{message}")
+        .and_then(|_| stdout.flush())
+        .is_err()
+    {
+        std::process::exit(0);
     }
 }

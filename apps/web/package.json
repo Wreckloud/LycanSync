@@ -1,6 +1,6 @@
 {
   "name": "@lycan-sync/web",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "LycanSync 语音、屏幕共享与群聊客户端",
   "author": "Wreckloud",

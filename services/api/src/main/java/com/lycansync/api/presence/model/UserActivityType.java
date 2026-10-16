@@ -7,5 +7,6 @@ package com.lycansync.api.presence.model;
  * @since 2026-09-20
  */
 public enum UserActivityType {
-    GAME
+    GAME,
+    MUSIC
 }

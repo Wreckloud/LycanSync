@@ -1,7 +1,7 @@
 import { authenticatedFetch } from '../auth/authApi';
 
 export type UserPresenceStatus = 'ONLINE' | 'AWAY' | 'OFFLINE';
-export type UserActivityType = 'GAME';
+export type UserActivityType = 'GAME' | 'MUSIC';
 
 export interface UserActivity {
   type: UserActivityType;

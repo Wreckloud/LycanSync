@@ -1,9 +1,7 @@
 const { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, net, powerMonitor, protocol, screen, session, safeStorage, shell, sharedTexture } = require('electron');
 const { release: osRelease } = require('node:os');
-const { spawn } = require('node:child_process');
 const { createServer } = require('node:net');
 const { existsSync } = require('node:fs');
-const { createInterface } = require('node:readline');
 const { Module } = require('node:module');
 const { isAbsolute, resolve, sep } = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -15,6 +13,7 @@ const { loadServerSettings, saveServerSettings } = require('./server-settings.cj
 const { matchNativeVideoSourceThumbnails, monitorDisplayId } = require('./native-video-thumbnails.cjs');
 const { parseAccessLink, accessLinkFromArguments, parseManualAccessLink } = require('./access-links.cjs');
 const { createStartupUpdate } = require('./startup-update.cjs');
+const { createActivityHelper } = require('./activity-helper.cjs');
 
 const APP_ORIGIN = 'lycan://app';
 const rendererRoot = resolve(__dirname, '../dist');
@@ -82,8 +81,6 @@ let canClose = false;
 let closeTimer;
 let sessionToken;
 let sessionLoaded = false;
-let activityHelper;
-let activityRestartTimer;
 let currentActivity = null;
 let startupReady = false;
 let allowQuitAfterMediaHelper = false;
@@ -701,17 +698,6 @@ async function stopNativeVideo(sessionId) {
   return video.stopPromise;
 }
 
-function normalizeActivity(value) {
-  if (value?.activityType == null) return null;
-  if (value.activityType !== 'GAME' || typeof value.activityName !== 'string'
-      || !Number.isSafeInteger(value.startedAtEpochSeconds)) return undefined;
-  const name = value.activityName.replace(/\s+/g, ' ').trim().slice(0, 80);
-  const startedAt = value.startedAtEpochSeconds * 1000;
-  if (!name || /[\u0000-\u001f\u007f]/.test(name)
-      || startedAt <= 0 || startedAt > Date.now() + 60_000) return undefined;
-  return { type: 'GAME', name, startedAt: new Date(startedAt).toISOString() };
-}
-
 function validMicrophoneSettings(settings) {
   return settings && typeof settings === 'object' && !Array.isArray(settings)
     && Object.keys(settings).length === 4
@@ -722,47 +708,14 @@ function validMicrophoneSettings(settings) {
     && typeof settings.voiceEnhancement === 'boolean';
 }
 
-function publishActivity(activity) {
-  if (JSON.stringify(activity) === JSON.stringify(currentActivity)) return;
-  currentActivity = activity;
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('activity:changed', activity);
-}
+const activityMonitor = createActivityHelper({ enabled: process.platform === 'win32', executablePath: activityHelperPath,
+  onActivity: (activity) => {
+    currentActivity = activity;
+    if (!closing && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('activity:changed', activity);
+  } });
 
-function stopActivityHelper() {
-  clearTimeout(activityRestartTimer);
-  activityRestartTimer = undefined;
-  activityHelper?.kill();
-  activityHelper = undefined;
-}
-
-function startActivityHelper() {
-  if (process.platform !== 'win32' || closing || activityHelper) return;
-  const executable = activityHelperPath();
-  if (!existsSync(executable)) return;
-  const child = spawn(executable, [], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-  activityHelper = child;
-  let finished = false;
-  const finish = () => {
-    if (finished || activityHelper !== child) return;
-    finished = true;
-    activityHelper = undefined;
-    publishActivity(null);
-    if (!closing) activityRestartTimer = setTimeout(startActivityHelper, 5000);
-  };
-  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
-  lines.on('line', (line) => {
-    if (finished || closing || activityHelper !== child) return;
-    if (line.length > 1024) return;
-    try {
-      const activity = normalizeActivity(JSON.parse(line));
-      if (activity !== undefined) publishActivity(activity);
-    } catch {
-      // 忽略单条非法输出，保留最近的合法活动；进程退出时统一清除。
-    }
-  });
-  child.once('error', finish);
-  child.once('exit', finish);
-}
+function startActivityHelper() { if (!closing) activityMonitor.start(); }
+function stopActivityHelper() { activityMonitor.stop(); }
 
 async function loadSession() {
   if (sessionLoaded) return sessionToken;
@@ -791,6 +744,7 @@ async function saveSession(token) {
 async function clearSession() {
   sessionToken = undefined;
   sessionLoaded = true;
+  activityMonitor.clearMappings();
   try { await unlink(resolve(app.getPath('userData'), 'session.bin')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
 }
@@ -1138,6 +1092,14 @@ ipcMain.handle('settings:auto-start:set', (event, enabled) => {
 ipcMain.handle('activity:current', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
   return currentActivity;
+});
+ipcMain.handle('activity:windows', (event) => {
+  if (!trustedSender(event) || closing || !startupReady) throw new Error('请求来源无效');
+  return activityMonitor.listWindows();
+});
+ipcMain.handle('activity:configure', (event, mappings) => {
+  if (!trustedSender(event) || closing || !startupReady) throw new Error('请求来源无效');
+  return activityMonitor.configure(mappings);
 });
 ipcMain.handle('media:capabilities', (event) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');

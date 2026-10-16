@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, reactive, ref, watch } from 'vue';
-import { AudioLines, ChevronDown, ChevronLeft, ChevronRight, Copy, CornerUpLeft, Gamepad2, Headphones,
+import { AudioLines, ChevronDown, ChevronLeft, ChevronRight, Copy, CornerUpLeft, Crown, Gamepad2, Headphones, Music2,
   LogOut, Minus, Plus, RadioTower,
   Search, Settings, Square, Volume2, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
@@ -36,6 +36,7 @@ import { sendPresenceHeartbeat, type UserActivity, type UserPresenceStatus } fro
 import { ApiRequestError, type AuthUser, type ProfileUpdate } from './auth/authApi';
 import type { SettingsSectionId } from './settings/settingsSections';
 import { useActivityVisibility } from './settings/useActivityVisibility';
+import { useActivityMappings } from './settings/useActivityMappings';
 import { ScreenShareStage } from './rtc/screenShareStage';
 import { useStagePreferences } from './settings/useStagePreferences';
 import { useDiagnosticReport } from './diagnostics/useDiagnosticReport';
@@ -395,6 +396,7 @@ let presenceStopped = false;
 const currentPresenceStatus = ref<UserPresenceStatus>('ONLINE');
 const currentActivity = ref<(UserActivity & { startedAt: string }) | null>(null);
 const { showActivity, error: activityVisibilityError, setShowActivity } = useActivityVisibility(props.user.id);
+const activityMappings = useActivityMappings(props.user.id, desktop);
 const sharedActivity = computed(() => showActivity.value ? currentActivity.value : null);
 const activityClock = ref(Date.now());
 let activityRevision = 0;
@@ -879,14 +881,15 @@ const memberOnlineStatus = (member: GroupMember) => {
 const memberActivity = (member: GroupMember) => {
   const activity = member.userId === props.user.id
     ? sharedActivity.value
-    : groupPresences.value[member.userId]?.activityType === 'GAME'
+    : (groupPresences.value[member.userId]?.activityType === 'GAME' || groupPresences.value[member.userId]?.activityType === 'MUSIC')
       && groupPresences.value[member.userId]?.activityName
       && groupPresences.value[member.userId]?.activityStartedAt
-      ? { type: 'GAME' as const, name: groupPresences.value[member.userId].activityName!,
+      ? { type: groupPresences.value[member.userId].activityType!, name: groupPresences.value[member.userId].activityName!,
           startedAt: groupPresences.value[member.userId].activityStartedAt! }
       : null;
   if (memberOnlineStatus(member) === 'OFFLINE' || !activity) return null;
-  return `正在玩 ${activity.name} · ${formatActivityDuration(activity.startedAt)}`;
+  return { type: activity.type, text: activity.type === 'MUSIC' ? `正在听 ${activity.name}`
+    : `正在玩 ${activity.name} · ${formatActivityDuration(activity.startedAt)}` };
 };
 const orderedMembers = computed(() => {
   const members = selectedGroupDetail.value?.members ?? [];
@@ -924,7 +927,7 @@ const memberStatusLabel = (member: GroupMember) => {
   const status = memberOnlineStatus(member);
   const activity = memberActivity(member);
   const label = PRESENCE_STATUS_LABELS[status] ?? PRESENCE_STATUS_LABELS.OFFLINE;
-  return activity ? `${label} · ${activity}` : label;
+  return activity ? `${label} · ${activity.text}` : label;
 };
 const participantAvatar = (identity: string) => identity === `user-${props.user.id}` ? props.user.avatar
   : currentMembers.value.find((member) => `user-${member.userId}` === identity)?.avatar ?? '';
@@ -1476,8 +1479,8 @@ function participantListening(participant: Participant) {
                   <span v-if="memberOnlineStatus(member) !== 'OFFLINE'" class="status-dot" :class="memberOnlineStatus(member)" />
                 </span>
                 <span class="group-member-info">
-                  <span class="group-member-name">{{ member.userId === user.id ? user.nickname : member.nickname }}<small v-if="member.role === 'OWNER'" class="group-member-role">群主</small></span>
-                  <span v-if="memberActivity(member)" class="member-activity"><Gamepad2 :size="13" />{{ memberActivity(member) }}</span>
+                  <span class="group-member-name"><span>{{ member.userId === user.id ? user.nickname : member.nickname }}</span><Crown v-if="member.role === 'OWNER'" :size="13" class="group-member-role" role="img" aria-label="群主" /></span>
+                  <span v-if="memberActivity(member)" class="member-activity"><Music2 v-if="memberActivity(member)?.type === 'MUSIC'" :size="13" aria-hidden="true" /><Gamepad2 v-else :size="13" aria-hidden="true" /><span>{{ memberActivity(member)?.text }}</span></span>
                 </span>
               </div>
             </div>
@@ -1497,6 +1500,7 @@ function participantListening(participant: Participant) {
       :presence-status="currentPresenceStatus" :presence-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]"
       :preferences="audioPreferences" :rtc="rtc" :microphone-test="microphoneTest" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
       :activity="currentActivity" :show-activity="showActivity" :activity-error="activityVisibilityError"
+      :activity-mappings="activityMappings"
       :stage-auto-fill="stagePreferences.autoFill.value" :stage-preference-error="stagePreferences.error.value"
       @stage-auto-fill="stagePreferences.setAutoFill"
       @activity-visibility="setShowActivity"

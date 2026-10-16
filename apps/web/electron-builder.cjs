@@ -14,6 +14,7 @@ module.exports = {
   files: [
     'dist/**/*',
     'electron/main.cjs',
+    'electron/activity-helper.cjs',
     'electron/startup-update.cjs',
     'electron/server-settings.cjs',
     'electron/access-links.cjs',

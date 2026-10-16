@@ -7,6 +7,7 @@ import type { useAudioPreferences } from '../rtc/useAudioPreferences';
 import type { useRtcRoom } from '../rtc/useRtcRoom';
 import type { useMicrophoneTest } from '../rtc/useMicrophoneTest';
 import type { useDiagnosticReport } from '../diagnostics/useDiagnosticReport';
+import type { useActivityMappings } from '../settings/useActivityMappings';
 import IconButton from './IconButton.vue';
 import PersonalStatusCard from './PersonalStatusCard.vue';
 import AboutSettings from './settings/AboutSettings.vue';
@@ -34,6 +35,7 @@ const props = defineProps<{
   activity: UserActivity | null;
   showActivity: boolean;
   activityError: string;
+  activityMappings: ReturnType<typeof useActivityMappings>;
   stageAutoFill: boolean;
   stagePreferenceError: string;
   saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
@@ -112,6 +114,7 @@ async function leaveSettings(logout: boolean) {
         <div v-show="activeSection === 'account'" class="settings-account-page">
           <ProfileSettings ref="profileSettings" :user="user" :save-profile="saveProfile" />
           <ActivitySettings :desktop="desktop" :activity="activity" :show-activity="showActivity"
+            :mappings="activityMappings" :active="activeSection === 'account'"
             :error="activityError" @visibility="emit('activityVisibility', $event)" />
           <AccountSettings :active="activeSection === 'account'" :leaving="leaving" @logout="requestLogout" />
         </div>
