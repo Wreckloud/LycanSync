@@ -36,6 +36,7 @@ const props = defineProps<{
   diagnosticReport: ReturnType<typeof useDiagnosticReport>;
   inputLevelPercent: number;
   activity: UserActivity | null;
+  activityStatus?: { type: UserActivity['type']; text: string } | null;
   showActivity: boolean;
   activityError: string;
   activityMappings: ReturnType<typeof useActivityMappings>;
@@ -103,7 +104,7 @@ async function leaveSettings(logout: boolean) {
           :disabled="leaving" @click="selectSection(item.id)">{{ item.title }}</button>
       </div>
       <PersonalStatusCard class="settings-footer" aria-label="个人状态与返回应用"
-        :user="user" :status="presenceStatus" :status-label="presenceLabel">
+        :user="user" :status="presenceStatus" :status-label="presenceLabel" :activity-status="activityStatus">
         <IconButton label="返回应用" :disabled="leaving" @click="closeSettings"><ArrowLeft :size="19" /></IconButton>
       </PersonalStatusCard>
     </nav>

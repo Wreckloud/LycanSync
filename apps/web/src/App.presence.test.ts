@@ -256,21 +256,27 @@ it('音乐沿用同一公开开关，只上报类型和名称，不附带窗口�
 });
 
 it('本人和群成员的音乐/游戏展示一致，离线和关闭动态均不占用第二行', () => {
-  const names = ['memberActivity', 'memberOnlineStatus'];
+  const names = ['memberActivity', 'memberOnlineStatus', 'personalActivityStatus'];
   const statements = sourceFile.statements.filter((statement) => ts.isVariableStatement(statement)
     && statement.declarationList.declarations.some((declaration) => names.includes(declaration.name.getText(sourceFile))));
   const state = { props: { user: { id: 'self' } }, currentPresenceStatus: ref('ONLINE'),
     sharedActivity: ref<DetectedActivity | null>({ type: 'MUSIC', name: '歌曲', startedAt: '2026-10-15T00:00:00Z' }),
     groupPresences: ref({ friend: { status: 'ONLINE', activityType: 'MUSIC', activityName: '歌曲', activityStartedAt: '2026-10-15T00:00:00Z' } }),
-    formatActivityDuration: () => '1:00' };
+    formatActivityDuration: () => '1:00', computed };
   const body = statements.map((statement) => statement.getText(sourceFile)).join('\n');
-  const display = runInNewContext(`${ts.transpile(body)}\nmemberActivity`, state) as (member: { userId: string }) => { type: string; text: string } | null;
+  const result = runInNewContext(`${ts.transpile(body)}\n({ memberActivity, personalActivityStatus })`, state) as {
+    memberActivity: (member: { userId: string }) => { type: string; text: string } | null;
+    personalActivityStatus: { value: { type: string; text: string } | null };
+  };
+  const display = result.memberActivity;
+  expect(result.personalActivityStatus.value?.text).toBe('正在听 歌曲');
   expect(display({ userId: 'self' })?.text).toBe('正在听 歌曲');
   expect(display({ userId: 'friend' })?.text).toBe('正在听 歌曲');
   state.groupPresences.value.friend.status = 'OFFLINE';
   expect(display({ userId: 'friend' })).toBeNull();
   state.sharedActivity.value = null;
   expect(display({ userId: 'self' })).toBeNull();
+  expect(result.personalActivityStatus.value).toBeNull();
   state.sharedActivity.value = { type: 'GAME', name: '游戏', startedAt: '2026-10-15T00:00:00Z' };
   expect(display({ userId: 'self' })?.text).toBe('正在玩 游戏 · 1:00');
 });

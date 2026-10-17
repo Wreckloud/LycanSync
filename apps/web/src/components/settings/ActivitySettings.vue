@@ -84,6 +84,7 @@ watch(() => props.active, (active) => {
 .activity-window-choice select, .activity-name-editor input { flex: 1; min-width: 0; width: 0; }
 .activity-window-choice button, .activity-name-editor button { flex-shrink: 0; }
 .activity-window-choice button { display: grid; place-items: center; }
+.activity-window-choice select { height: var(--button-height); padding: var(--button-padding); border: 1px solid var(--border); border-radius: 6px; background: var(--background); color: var(--text); font: inherit; font-size: 13px; }
 .activity-mappings small { color: var(--muted); font-size: 12px; line-height: 18px; }
 .activity-mapping-feedback { display: flex; align-items: center; gap: 8px; min-height: 32px; }
 .activity-mapping-feedback .inline-feedback { flex: 1; }

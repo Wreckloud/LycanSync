@@ -192,12 +192,17 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
         if (appliedBounds && Object.keys(bounds).every((key) => Math.abs(bounds[key] - appliedBounds[key]) <= 1)) return;
         const target = screen.getDisplayMatching(bounds);
         const area = target.workArea;
+        const freeWidth = Math.max(1, area.width - bounds.width);
+        const left = bounds.x - area.x;
+        // 只在用户拖动结束时吸附左右边缘，普通状态刷新不改变用户位置。
+        const x = left <= 24 ? 0 : freeWidth - left <= 24 ? 1 : Math.max(0, Math.min(1, left / freeWidth));
         settings = { ...settings, displayId: target.id,
-          x: Math.max(0, Math.min(1, (bounds.x - area.x) / Math.max(1, area.width - bounds.width))),
+          x,
           y: Math.max(0, Math.min(1, (bounds.y - area.y) / Math.max(1, area.height - bounds.height))) };
         editDisplay = target.id;
         appliedBounds = bounds;
         onPlacement(settings);
+        refresh();
       });
       void current.loadURL(OVERLAY_URL).catch(() => { if (overlay === current) reportFailure('voiceOverlayLoadFailed'); });
     }

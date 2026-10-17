@@ -43,6 +43,21 @@ test('隔离覆盖页：真实协议与preload、说话展示、权限隔离、�
     overlay.on('requestfailed', (request) => messages.push(`${request.url()} ${request.failure()?.errorText}`));
     await expect(overlay.getByText('测试成员', { exact: true })).toBeVisible();
     await expect(overlay.locator('.member')).toHaveClass(/speaking/);
+    const rightAligned = await overlay.locator('.member').evaluate((element) => {
+      const avatar = element.querySelector('.avatar')!.getBoundingClientRect();
+      const name = element.querySelector('.name')!.getBoundingClientRect();
+      return { background: getComputedStyle(element).backgroundColor, avatarAfterName: avatar.left >= name.right };
+    });
+    expect(rightAligned).toEqual({ background: 'rgba(0, 0, 0, 0)', avatarAfterName: true });
+    await overlay.screenshot({ path: test.info().outputPath('overlay-right.png'), omitBackground: true });
+    await application.evaluate((_electron, next) => {
+      const { manager, owner } = global.voiceOverlayTest;
+      manager.configure(owner, next);
+    }, { ...settings, x: 0 });
+    await expect(overlay.locator('.voice-overlay')).not.toHaveClass(/align-right/);
+    expect(await overlay.locator('.member').evaluate((element) => element.querySelector('.avatar')!.getBoundingClientRect().right
+      <= element.querySelector('.name')!.getBoundingClientRect().left)).toBe(true);
+    await overlay.screenshot({ path: test.info().outputPath('overlay-left.png'), omitBackground: true });
     const state = await application.evaluate(({ BrowserWindow }) => {
       const main = BrowserWindow.fromId(global.voiceOverlayTest.mainId)!;
       const overlay = BrowserWindow.getAllWindows().find((window) => window !== main)!;

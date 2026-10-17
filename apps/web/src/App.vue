@@ -875,11 +875,11 @@ const groupHasVoiceActivity = (groupId: string) => {
   return (roomOccupancies.value[groupId] ?? 0) > 0;
 };
 const currentMembers = computed(() => joinedGroupDetail.value?.members ?? []);
-const memberOnlineStatus = (member: GroupMember) => {
+const memberOnlineStatus = (member: Pick<GroupMember, 'userId'>) => {
   if (member.userId === props.user.id) return currentPresenceStatus.value;
   return groupPresences.value[member.userId]?.status ?? 'OFFLINE';
 };
-const memberActivity = (member: GroupMember) => {
+const memberActivity = (member: Pick<GroupMember, 'userId'>) => {
   const activity = member.userId === props.user.id
     ? sharedActivity.value
     : (groupPresences.value[member.userId]?.activityType === 'GAME' || groupPresences.value[member.userId]?.activityType === 'MUSIC')
@@ -892,6 +892,7 @@ const memberActivity = (member: GroupMember) => {
   return { type: activity.type, text: activity.type === 'MUSIC' ? `正在听 ${activity.name}`
     : `正在玩 ${activity.name} · ${formatActivityDuration(activity.startedAt)}` };
 };
+const personalActivityStatus = computed(() => memberActivity({ userId: props.user.id }));
 const orderedMembers = computed(() => {
   const members = selectedGroupDetail.value?.members ?? [];
   return [...members.filter((member) => memberOnlineStatus(member) !== 'OFFLINE'),
@@ -1487,13 +1488,14 @@ function participantListening(participant: Participant) {
                 </span>
                 <span class="group-member-info">
                   <span class="group-member-name"><span>{{ member.userId === user.id ? user.nickname : member.nickname }}</span><Crown v-if="member.role === 'OWNER'" :size="13" class="group-member-role" role="img" aria-label="群主" /></span>
-                  <span v-if="memberActivity(member)" class="member-activity"><Music2 v-if="memberActivity(member)?.type === 'MUSIC'" :size="13" aria-hidden="true" /><Gamepad2 v-else :size="13" aria-hidden="true" /><span>{{ memberActivity(member)?.text }}</span></span>
+                  <span v-if="memberActivity(member)" class="member-activity" :title="memberActivity(member)?.text"><Music2 v-if="memberActivity(member)?.type === 'MUSIC'" :size="12" aria-hidden="true" /><Gamepad2 v-else :size="12" aria-hidden="true" /><span>{{ memberActivity(member)?.text }}</span></span>
                 </span>
               </div>
             </div>
           </template>
         </section>
-        <PersonalStatusCard :user="user" :status="currentPresenceStatus" :status-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]">
+        <PersonalStatusCard :user="user" :status="currentPresenceStatus" :status-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]"
+          :activity-status="personalActivityStatus">
           <IconButton label="语音与音频设置" @click="openSettings('audio', $event)"><Settings :size="19" /></IconButton>
         </PersonalStatusCard>
       </aside>
@@ -1507,7 +1509,7 @@ function participantListening(participant: Participant) {
       :overlay="desktop ? voiceOverlay : undefined"
       :presence-status="currentPresenceStatus" :presence-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]"
       :preferences="audioPreferences" :rtc="rtc" :microphone-test="microphoneTest" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
-      :activity="currentActivity" :show-activity="showActivity" :activity-error="activityVisibilityError"
+      :activity="currentActivity" :activity-status="personalActivityStatus" :show-activity="showActivity" :activity-error="activityVisibilityError"
       :activity-mappings="activityMappings"
       :stage-auto-fill="stagePreferences.autoFill.value" :stage-preference-error="stagePreferences.error.value"
       @stage-auto-fill="stagePreferences.setAutoFill"

@@ -18,6 +18,7 @@ pub struct WindowSnapshot {
     pub pid: u32,
     pub title: String,
     pub visible: bool,
+    pub selectable: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -91,6 +92,7 @@ fn ignored_executable(path: &str) -> bool {
             | "riotclientservices.exe"
             | "lycansync.exe"
             | "electron.exe"
+            | "textinputhost.exe"
     )
 }
 
@@ -186,7 +188,10 @@ pub fn window_options(
 ) -> Vec<WindowOption> {
     let mut options = Vec::new();
     let mut seen = HashSet::new();
-    for window in windows.iter().filter(|window| window.visible) {
+    for window in windows
+        .iter()
+        .filter(|window| window.visible && window.selectable)
+    {
         let Some(process) = processes.iter().find(|process| process.pid == window.pid) else {
             continue;
         };
@@ -235,9 +240,10 @@ impl ActivityDetector {
             let mapping = mappings
                 .iter()
                 .find(|mapping| mapping.executable == process.executable);
-            let game = games
-                .iter()
-                .find(|game| process.executable.starts_with(&game.directory));
+            // 壁纸工具常驻不能算正在玩；仅排除自动匹配，用户仍可主动登记它的有效窗口。
+            let game = games.iter().find(|game| {
+                game.key != "steam:431960" && process.executable.starts_with(&game.directory)
+            });
             // 国服和国际服的独立大厅都算英雄联盟；仅打开 WeGame/Riot 平台不算游戏。
             let league = matches!(
                 file_name(&process.executable),
@@ -372,6 +378,7 @@ mod tests {
             pid,
             title: title.to_owned(),
             visible: true,
+            selectable: true,
         }
     }
     fn games() -> Vec<GameInstall> {
@@ -681,6 +688,67 @@ mod tests {
         );
         assert_eq!(
             select_activity(&processes, &[], &games(), &[])
+                .unwrap()
+                .name,
+            "游戏 A"
+        );
+    }
+
+    #[test]
+    fn window_choices_require_selectable_windows_but_minimized_manual_game_stays_active() {
+        let processes = [
+            process(1, "c:/custom.exe", 100),
+            process(2, "c:/TextInputHost.exe", 200),
+        ];
+        let mappings = [ActivityMapping {
+            executable: normalize_path("c:/custom.exe"),
+            name: "自选游戏".to_owned(),
+        }];
+        let windows = [
+            WindowSnapshot {
+                selectable: false,
+                ..window(1, "已最小化游戏")
+            },
+            window(2, "输入法"),
+        ];
+        assert!(window_options(&processes, &windows).is_empty());
+        assert_eq!(
+            select_activity(&processes, &windows, &[], &mappings)
+                .unwrap()
+                .name,
+            "自选游戏"
+        );
+        assert_eq!(
+            window_options(&processes, &[window(1, "正常游戏")]).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn wallpaper_engine_does_not_automatically_publish_a_game_or_hide_real_games() {
+        let wallpaper = GameInstall {
+            key: "steam:431960".to_owned(),
+            name: "Wallpaper Engine".to_owned(),
+            directory: normalize_path("d:/steamapps/common/wallpaper_engine/"),
+        };
+        let processes = [process(
+            1,
+            "d:/steamapps/common/wallpaper_engine/wallpaper64.exe",
+            200,
+        )];
+        assert!(select_activity(&processes, &[], &[wallpaper.clone()], &[]).is_none());
+        let mut installed = games();
+        installed.push(wallpaper);
+        let processes = [
+            process(1, "d:/games/a/game.exe", 100),
+            process(
+                2,
+                "d:/steamapps/common/wallpaper_engine/wallpaper64.exe",
+                200,
+            ),
+        ];
+        assert_eq!(
+            select_activity(&processes, &[], &installed, &[])
                 .unwrap()
                 .name,
             "游戏 A"

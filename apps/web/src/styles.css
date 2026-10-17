@@ -574,17 +574,26 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .large-avatar img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
 .voice-preview-member img { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; }
 .group-member-row { display: flex; align-items: center; gap: 9px; min-width: 0; min-height: 40px; margin: 3px 0; }
-.group-member-avatar { position: relative; width: 32px; height: 32px; flex: 0 0 32px; }
+.group-member-avatar { --avatar-size: 32px; position: relative; width: var(--avatar-size); height: var(--avatar-size); flex: 0 0 var(--avatar-size); }
 .group-member-avatar img, .group-member-initial { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
 .group-member-initial { display: grid; place-items: center; background: var(--panel); border: 1px solid var(--border); }
-.status-dot { position: absolute; right: -2px; bottom: -2px; width: 12px; height: 12px; border: 2px solid #0d1116; border-radius: 50%; background: var(--muted); }
+.status-dot {
+  position: absolute;
+  right: calc(var(--avatar-size, 32px) * -.0625);
+  bottom: calc(var(--avatar-size, 32px) * -.0625);
+  width: calc(var(--avatar-size, 32px) * .375);
+  height: calc(var(--avatar-size, 32px) * .375);
+  border: calc(var(--avatar-size, 32px) * .0625) solid #0d1116;
+  border-radius: 50%;
+  background: var(--muted);
+}
 .status-dot.ONLINE { background: #3ba55d; }
 .status-dot.AWAY { background: #f59e0b; }
 .group-member-info { display: grid; align-content: center; min-width: 0; }
 .group-member-name { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 15px; line-height: 1.25; }
 .group-member-name > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-member-role { flex-shrink: 0; color: var(--warning); }
-.member-activity { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; color: #43b6da; font-size: 13px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.member-activity { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; color: #43b6da; font-size: 12px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .member-activity svg { flex-shrink: 0; }
 .member-activity > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-member-row.is-offline { color: #6b727b; }
@@ -1075,16 +1084,17 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 
 .members-directory { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .members-list { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: 0 14px 16px; }
-.personal-card { position: relative; display: grid; grid-template-columns: 40px minmax(0, 1fr) 36px; align-items: center; gap: 10px; height: calc(var(--voice-bar-height) + var(--voice-bar-bottom-space)); margin: 0; padding: 8px 14px; }
+.personal-card { position: relative; display: grid; grid-template-columns: 44px minmax(0, 1fr) 36px; align-items: center; gap: 10px; height: calc(var(--voice-bar-height) + var(--voice-bar-bottom-space)); margin: 0; padding: 8px 14px; }
 .personal-card::before { content: ''; position: absolute; top: 0; left: 14px; right: 14px; height: 1px; background: var(--border-soft); pointer-events: none; }
-.personal-avatar { position: relative; width: 40px; height: 40px; }
-.personal-avatar .profile-avatar, .profile-avatar-placeholder { display: block; width: 40px; height: 40px; border-radius: 50%; object-fit: cover; }
+.personal-avatar { --avatar-size: 44px; position: relative; width: var(--avatar-size); height: var(--avatar-size); }
+.personal-avatar .profile-avatar, .profile-avatar-placeholder { display: block; width: var(--avatar-size); height: var(--avatar-size); border-radius: 50%; object-fit: cover; }
 .profile-avatar-placeholder { display: grid; place-items: center; background: var(--panel-soft); color: var(--muted); }
 .personal-avatar .status-dot { border-color: #0d1116; }
 .personal-copy { min-width: 0; display: grid; gap: 2px; }
 .personal-copy strong, .personal-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.personal-copy strong { font-size: 14px; font-weight: 600; }
+.personal-copy strong { font-size: 15px; font-weight: 600; }
 .personal-copy small { color: var(--muted); font-size: 12px; }
+.personal-copy .member-activity { color: #43b6da; }
 .personal-card .icon-button { width: 36px; height: 36px; border-color: transparent; background: transparent; }
 .personal-card .icon-button:hover:not(:disabled) { background: var(--panel-raised); }
 

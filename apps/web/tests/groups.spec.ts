@@ -297,7 +297,8 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   });
 
   await page.goto('/');
-  await expect(page.locator('.group-member-name')).toHaveText(['群主群主', '游戏中', '语音朋友', '离线朋友']);
+  await expect(page.locator('.group-member-name')).toHaveText(['群主', '游戏中', '语音朋友', '离线朋友']);
+  await expect(page.locator('.group-member-name').first().getByRole('img', { name: '群主' })).toBeVisible();
   await expect(page.locator('.group-member-row').filter({ hasText: '语音朋友' }).locator('img')).toHaveAttribute('src', avatar);
   await expect(page.getByLabel('群组成员').getByText('语音中', { exact: true })).toHaveCount(0);
   await expect(page.locator('.group-member-row').nth(1)).toContainText('正在玩 Core Keeper');
@@ -309,10 +310,22 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   await expect(page.getByRole('tooltip')).toHaveCount(0);
   await expect(page.locator('.group-member-avatar').first()).toHaveCSS('width', '32px');
   await expect(page.locator('.group-member-name').first()).toHaveCSS('font-size', '15px');
-  await expect(page.locator('.member-activity').first()).toHaveCSS('font-size', '13px');
+  await expect(page.locator('.member-activity').first()).toHaveCSS('font-size', '12px');
+  await expect(page.locator('.personal-avatar')).toHaveCSS('width', '44px');
+  const proportions = await page.evaluate(() => {
+    const ratio = (selector: string) => {
+      const avatar = document.querySelector(selector)!;
+      return avatar.querySelector('.status-dot')!.getBoundingClientRect().width / avatar.getBoundingClientRect().width;
+    };
+    return { member: ratio('.group-member-avatar'), personal: ratio('.personal-avatar') };
+  });
+  expect(proportions.personal).toBeCloseTo(proportions.member, 3);
   await expect(page.locator('.group-call-badge')).toBeVisible();
   await expect(page.locator('.group-call-badge')).toHaveCSS('width', '20px');
   await expect(page.locator('.group-call-badge')).toHaveCSS('top', '-5px');
+  await page.locator('.members-panel').screenshot({ path: test.info().outputPath('members-panel.png') });
+  await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  await expect(page.locator('.settings-footer .personal-avatar')).toHaveCSS('width', '44px');
 });
 
 test('群成员状态长轮询变化后立即刷新完整快照', async ({ page }) => {

@@ -182,6 +182,22 @@ test('系统移动或显示器断开不会冒充用户拖动覆盖原偏好，�
   f.manager.clear();
 });
 
+test('编辑拖动结束靠近左右边缘时吸附并立即更新排列方向', () => {
+  const f = fixture(); f.configure({ displayId: 1, x: 1 }); f.update(); const window = f.ready();
+  f.manager.edit(f.owner, true);
+  window.bounds = { ...window.bounds, x: -1270 };
+  window.emit('will-move'); window.emit('moved');
+  assert.equal(f.placements.at(-1).x, 0);
+  assert.equal(window.bounds.x, -1280);
+  assert.equal(window.message.payload.settings.x, 0);
+  window.bounds = { ...window.bounds, x: -window.bounds.width - 10 };
+  window.emit('will-move'); window.emit('moved');
+  assert.equal(f.placements.at(-1).x, 1);
+  assert.equal(window.bounds.x + window.bounds.width, 0);
+  assert.equal(window.message.payload.settings.x, 1);
+  f.manager.clear();
+});
+
 test('覆盖页崩溃只报告覆盖错误，不自动重建；关闭再开启可恢复', () => {
   const f = fixture(); f.configure({}); f.update();
   const window = f.ready();
