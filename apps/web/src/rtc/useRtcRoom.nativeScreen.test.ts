@@ -1,5 +1,5 @@
 import { effectScope } from 'vue';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalAudioTrack, Track } from 'livekit-client';
 import { useRtcRoom } from './useRtcRoom';
 import { encodeRemoteControlMessage, REMOTE_CONTROL_TOPIC, type RemoteControlMessage } from './remoteControl';
@@ -240,6 +240,13 @@ vi.mock('livekit-client', () => {
   };
 });
 
+beforeEach(() => {
+  vi.stubGlobal('AudioContext', class {
+    state = 'running';
+    close = vi.fn(async () => { this.state = 'closed'; });
+  });
+});
+
 afterEach(() => {
   Reflect.deleteProperty(globalThis, 'window');
   rtcMocks.rooms.length = 0;
@@ -261,6 +268,7 @@ function mockRoom() {
     remoteParticipants: Map<string, { identity: string; getTrackPublication: (source: string) => unknown }>;
     localParticipant: { getTrackPublication: (source: string) => unknown };
     emit: (event: string, ...args: unknown[]) => void;
+    disconnect(): Promise<void>;
   };
 }
 
@@ -354,6 +362,23 @@ function configureNativeScreenDesktop(options: {
 }
 
 describe('native screen share wiring', () => {
+  it('房间拥有唯一混音上下文，离房失败也释放，再入房使用新上下文', async () => {
+    configureNativeMicrophoneDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      expect(await rtc.join('playback-context')).toBe(true);
+      const context = rtc.playbackContext.value!;
+      expect(context).not.toBeNull();
+      vi.spyOn(mockRoom(), 'disconnect').mockRejectedValueOnce(new Error('disconnect failed'));
+      await expect(rtc.leave()).rejects.toThrow('disconnect failed');
+      expect(context.close).toHaveBeenCalledTimes(1);
+      expect(rtc.playbackContext.value).toBeNull();
+      expect(await rtc.join('next-playback-context')).toBe(true);
+      expect(rtc.playbackContext.value).not.toBe(context);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
   it('checks capture settings on the original browser microphone rather than processed output', async () => {
     rtcMocks.token.mockResolvedValue({ serverUrl: 'wss://example.test', token: 'test-token' });
     Object.defineProperty(globalThis, 'window', { configurable: true, value: {} });

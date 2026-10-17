@@ -14,6 +14,23 @@ function memoryStorage() {
 afterEach(() => vi.useRealTimers());
 
 describe('useAudioPreferences', () => {
+  it('人声平衡默认关闭，独立保存且不改动成员静音和麦克风处理', () => {
+    vi.useFakeTimers();
+    const storage = memoryStorage();
+    const scope = effectScope();
+    const preferences = scope.run(() => useAudioPreferences('local-user', storage))!;
+    expect(preferences.voiceVolumeBalance.value).toBe(false);
+    preferences.setParticipantVolume('friend', 0);
+    preferences.setVoiceVolumeBalance(true);
+    expect(preferences.processing.autoGainControl).toBe(true);
+    expect(preferences.participantVolume('friend')).toBe(0);
+    scope.stop();
+    const next = effectScope();
+    expect(next.run(() => useAudioPreferences('local-user', storage))!.voiceVolumeBalance.value).toBe(true);
+    expect(next.run(() => useAudioPreferences('other-user', storage))!.voiceVolumeBalance.value).toBe(false);
+    next.stop();
+  });
+
   it('合并连续音量修改，并在作用域释放前保存最后状态', () => {
     vi.useFakeTimers();
     const storage = memoryStorage();

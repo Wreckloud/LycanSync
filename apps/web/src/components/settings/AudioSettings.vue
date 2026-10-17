@@ -81,6 +81,10 @@ function updateInputGain(event: Event) {
     <section class="settings-block">
       <h2>输出</h2>
       <p>成员音量与共享声音音量分开控制，并受 LycanSync 总输出音量影响。</p>
+      <label class="settings-toggle"><span><strong>平衡成员语音音量</strong>
+        <small>在本机拉近不同成员的人声响度，不处理共享声音。成员音量、总音量和静音仍由你控制。</small></span>
+        <input type="checkbox" :checked="preferences.voiceVolumeBalance.value"
+          @change="preferences.setVoiceVolumeBalance(($event.target as HTMLInputElement).checked)" /></label>
       <label class="settings-range-row"><span>LycanSync 总输出音量 <strong>{{ Math.round(outputVolume * 100) }}%</strong></span>
         <input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="outputVolume"
           aria-label="LycanSync 总输出音量" @input="preferences.setOutputVolume(Number(($event.target as HTMLInputElement).value))" /></label>

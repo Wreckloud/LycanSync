@@ -9,6 +9,7 @@ const MAX_SAMPLES = 900;
 const MAX_DURATION_MS = 30 * 60_000;
 const MAX_SAMPLE_BYTES = 6 * 1024 * 1024;
 type DiagnosticSettings = { quality: string; inputGain: number; outputVolume: number; screenShareVolume: number;
+  voiceVolumeBalance: boolean;
   noiseSuppression: boolean; autoGainControl: boolean; voiceEnhancement: boolean; echoCancellation: boolean;
   stageCount: number; focused: boolean };
 type ReportSettings = DiagnosticSettings & { preset: { width: number; height: number; maxFrameRate: number; maxBitrate: number } | null };

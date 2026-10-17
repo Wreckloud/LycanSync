@@ -103,6 +103,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   const pendingMedia = shallowRef(new Set<MediaSource>());
   const unpublishedTracks = shallowRef(new Set<LocalTrack>());
   const room = shallowRef<Room | null>(null);
+  const playbackContext = shallowRef<AudioContext | null>(null);
   const status = ref<RoomStatus>('idle');
   const participants = shallowRef<Participant[]>([]);
   const notice = ref('');
@@ -283,6 +284,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     notice.value = '';
     status.value = 'joining';
     let joiningRoom: Room | null = null;
+    let unassignedPlaybackContext: AudioContext | null = null;
     try {
       // 本机测试可独占原生麦克风；确认释放后才进入新的房间生命周期。
       if (options?.events?.beforeMicrophoneChange) {
@@ -300,12 +302,13 @@ export function useRtcRoom(options?: RtcRoomOptions) {
 
       // 2. 建立独立的 RTC 会话；连接本身不采集麦克风、摄像头或屏幕。
       // TODO: 根据异地实测调整共享画质，并记录连接类型、RTT、丢包和码率以排查代理影响。
+      unassignedPlaybackContext = new AudioContext();
       joiningRoom = markRaw(new Room({
         // 屏幕按小窗/舞台的明确用途合并需求，不按舞台尺寸自动限制主画面质量。
         adaptiveStream: false,
         dynacast: true,
-        // 远端成员可在本机单独放大到 200%；统一由一个 AudioContext 混音，避免额外音频管线。
-        webAudioMix: true,
+        // 房间只用一个混音上下文；由本模块释放，供成员人声平衡节点复用。
+        webAudioMix: { audioContext: unassignedPlaybackContext },
         audioCaptureDefaults: {
           echoCancellation: microphoneProcessing.echoCancellation,
           noiseSuppression: microphoneProcessing.noiseSuppression,
@@ -321,6 +324,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         },
       }));
       const currentRoom = joiningRoom;
+      playbackContext.value = markRaw(unassignedPlaybackContext);
+      unassignedPlaybackContext = null;
       activeRoom.value = currentRoom;
       room.value = currentRoom;
       publicTracksByRoom.set(currentRoom, { eligibleTracks: new Set(), publishedSids: new Map() });
@@ -510,6 +515,9 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         : '连接失败，请确认后端和 LiveKit 已启动，并检查本机端口及网络。';
       return false;
     } finally {
+      if (unassignedPlaybackContext) {
+        await unassignedPlaybackContext.close().catch((error) => console.error('房间音频上下文关闭失败', error));
+      }
       if (pendingJoin.value === request) pendingJoin.value = null;
     }
   }
@@ -530,6 +538,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       await remoteControl.endShare(currentRoom, screenShareResource?.remoteShare ?? null);
     }
     activeRoom.value = null;
+    const currentPlaybackContext = playbackContext.value;
+    playbackContext.value = null;
     const publicTracks = currentRoom ? publicTracksByRoom.get(currentRoom) : undefined;
     publicTracks?.eligibleTracks.clear();
     publicTracks?.publishedSids.clear();
@@ -564,8 +574,12 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     needsAudioPlayback.value = false;
     notice.value = '';
     // 桌面关窗需等待离房信令发送完毕；本地状态和采集已在上方立即清理。
-    await nativeStop;
-    await (currentRoom?.disconnect() ?? Promise.resolve());
+    try {
+      await nativeStop;
+      await (currentRoom?.disconnect() ?? Promise.resolve());
+    } finally {
+      await currentPlaybackContext?.close().catch((error) => console.error('房间音频上下文关闭失败', error));
+    }
   }
 
   function createScreenShareAudioSession(currentRoom: Room, resource: ScreenShareResource,
@@ -1349,7 +1363,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     if (pendingMedia.value.has(Track.Source.ScreenShare)) screenShareSelectionCancelled.value = true;
   }
 
-  return { revision, room, status, participants, notice, needsAudioPlayback, busySources, screenShareActive,
+  return { revision, room, playbackContext, status, participants, notice, needsAudioPlayback, busySources, screenShareActive,
     listening, microphoneIntent, microphoneEnabled,
     currentScreenShareQuality, screenShareQualityBusy, setScreenShareQuality,
     currentScreenShareAudioMode, screenShareSourceBusy, changeScreenShareSource, setScreenShareAudioEnabled,

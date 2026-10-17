@@ -19,6 +19,7 @@ function setup() {
   const scope = effectScope(); scopes.push(scope);
   const room = shallowRef<Room | null>({} as Room);
   const settings = { quality: 'standard', inputGain: 1, outputVolume: 1, screenShareVolume: 1,
+    voiceVolumeBalance: false,
     noiseSuppression: true, autoGainControl: true, voiceEnhancement: true, echoCancellation: false,
     stageCount: 1, focused: false };
   const exportDiagnosticReport = vi.fn(async (_text: string) => ({ saved: true }));
@@ -103,6 +104,7 @@ it('导出按记录时参数保存，匿名化身份/轨道ID，不使用导出�
   const { report, settings, exportDiagnosticReport } = setup();
   report.start(); await vi.advanceTimersByTimeAsync(0);
   settings.quality = 'economy';
+  settings.voiceVolumeBalance = true;
   await vi.advanceTimersByTimeAsync(2000);
   report.stop(); settings.quality = 'text';
   await report.save('四路略卡');
@@ -111,6 +113,8 @@ it('导出按记录时参数保存，匿名化身份/轨道ID，不使用导出�
   expect(text).not.toContain('私人昵称');
   const result = JSON.parse(text);
   expect(result.startSettings.quality).toBe('standard'); expect(result.endSettings.quality).toBe('economy');
+  expect(result.startSettings.voiceVolumeBalance).toBe(false);
+  expect(result.endSettings.voiceVolumeBalance).toBe(true);
   expect(result.startSettings.preset).toEqual({ width: 1920, height: 1080, maxFrameRate: 60, maxBitrate: 12_000_000 });
   expect(result.endSettings.preset).toEqual({ width: 1280, height: 720, maxFrameRate: 30, maxBitrate: 3_000_000 });
   expect(result.samples.map((sample: { requestedSettings: { quality: string } }) => sample.requestedSettings.quality)).toEqual(['standard', 'economy']);

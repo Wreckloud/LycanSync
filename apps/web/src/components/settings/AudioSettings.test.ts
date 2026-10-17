@@ -29,6 +29,8 @@ describe('语音设置的本机试听入口', () => {
     expect(html).not.toContain('请先加入通话');
     expect(html).toContain('class="inline-feedback"');
     expect(html).toContain('测试错误');
+    expect(html).toContain('平衡成员语音音量');
+    expect(html).toContain('不处理共享声音');
   });
 
   it('没有房间时显示测试输入等级，停止期间不能重复启动', async () => {

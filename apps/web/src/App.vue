@@ -64,7 +64,7 @@ const PRESENCE_STATUS_LABELS: Record<UserPresenceStatus, string> = {
   OFFLINE: '离线',
 };
 const audioPreferences = useAudioPreferences(props.user.id);
-const { inputGain, outputVolume, screenShareVolume } = audioPreferences;
+const { inputGain, outputVolume, screenShareVolume, voiceVolumeBalance } = audioPreferences;
 const audioProcessing = audioPreferences.processing;
 const callSounds = useCallSounds(outputVolume);
 const desktop = window.lycanDesktop;
@@ -1264,7 +1264,8 @@ function previewGroup(groupId: string) {
 const diagnosticReport = useDiagnosticReport({
   room: () => rtc.room, participants: () => rtc.participants,
   settings: () => ({ quality: rtc.currentScreenShareQuality, inputGain: inputGain.value, outputVolume: outputVolume.value,
-    screenShareVolume: screenShareVolume.value, ...audioProcessing, stageCount: enlargedIdentities.value.length,
+    screenShareVolume: screenShareVolume.value, voiceVolumeBalance: voiceVolumeBalance.value,
+    ...audioProcessing, stageCount: enlargedIdentities.value.length,
     focused: focusedOnSelectedGroup.value }),
 });
 
@@ -1520,6 +1521,8 @@ function participantListening(participant: Participant) {
       @choose="chooseCaptureSource" @refresh-thumbnails="refreshVisibleSourceThumbnails"
       @close="selectCaptureSource(null)" @confirm="selectCaptureSource(selectedCaptureSourceId)" />
     <RemoteAudio v-for="item in remoteAudioTracks" :key="item.track.sid" :track="item.track"
+      :context="rtc.playbackContext" :balance="voiceVolumeBalance && item.source === Track.Source.Microphone"
+      @balance-error="audioPreferences.setVoiceVolumeBalance(false); viewerNotice = '成员语音音量平衡未能运行，已关闭该功能，语音继续按原音量播放。'"
       :volume="listening ? (item.source === Track.Source.ScreenShareAudio
         ? remoteScreenSharePlaybackVolume() : remotePlaybackVolume(item.participantIdentity)) : 0" />
   </div>
