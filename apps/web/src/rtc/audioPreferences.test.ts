@@ -65,7 +65,7 @@ describe('audioPreferences', () => {
       inputGain: 0.8,
       outputVolume: 1.2,
       screenShareVolume: 1,
-      voiceVolumeBalance: false,
+      voiceVolumeBalance: true,
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
@@ -85,5 +85,16 @@ describe('audioPreferences', () => {
       noiseSuppression: true,
     })).toEqual(['noiseSuppression']);
     expect(unappliedCaptureProcessing(requested, {})).toEqual([]);
+  });
+
+  it('新账号与旧偏好默认开启平衡，保留明确保存的关闭状态', () => {
+    const storage = memoryStorage();
+    expect(loadAudioPreferences('new-user', storage).voiceVolumeBalance).toBe(true);
+    storage.setItem('lycansync.audio-preferences.v1.old-user', JSON.stringify({ outputVolume: 0.8 }));
+    expect(loadAudioPreferences('old-user', storage).voiceVolumeBalance).toBe(true);
+    const preferences = loadAudioPreferences('old-user', storage);
+    expect(saveAudioPreferences('old-user', { ...preferences, voiceVolumeBalance: false }, storage)).toBe(true);
+    expect(loadAudioPreferences('old-user', storage).voiceVolumeBalance).toBe(false);
+    expect(loadAudioPreferences('old-user', storage).outputVolume).toBe(0.8);
   });
 });

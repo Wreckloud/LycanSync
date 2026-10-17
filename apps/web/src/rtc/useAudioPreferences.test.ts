@@ -14,20 +14,20 @@ function memoryStorage() {
 afterEach(() => vi.useRealTimers());
 
 describe('useAudioPreferences', () => {
-  it('人声平衡默认关闭，独立保存且不改动成员静音和麦克风处理', () => {
+  it('人声平衡默认开启，独立保存关闭选择且不改动成员静音和麦克风处理', () => {
     vi.useFakeTimers();
     const storage = memoryStorage();
     const scope = effectScope();
     const preferences = scope.run(() => useAudioPreferences('local-user', storage))!;
-    expect(preferences.voiceVolumeBalance.value).toBe(false);
+    expect(preferences.voiceVolumeBalance.value).toBe(true);
     preferences.setParticipantVolume('friend', 0);
-    preferences.setVoiceVolumeBalance(true);
+    preferences.setVoiceVolumeBalance(false);
     expect(preferences.processing.autoGainControl).toBe(true);
     expect(preferences.participantVolume('friend')).toBe(0);
     scope.stop();
     const next = effectScope();
-    expect(next.run(() => useAudioPreferences('local-user', storage))!.voiceVolumeBalance.value).toBe(true);
-    expect(next.run(() => useAudioPreferences('other-user', storage))!.voiceVolumeBalance.value).toBe(false);
+    expect(next.run(() => useAudioPreferences('local-user', storage))!.voiceVolumeBalance.value).toBe(false);
+    expect(next.run(() => useAudioPreferences('other-user', storage))!.voiceVolumeBalance.value).toBe(true);
     next.stop();
   });
 
