@@ -164,6 +164,11 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
             OutboundEvent::Diagnostics {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: request_id.clone(),
+                helper_version: env!("CARGO_PKG_VERSION"),
+                capture_backend: snapshot
+                    .as_ref()
+                    .and_then(|value| value.source_kind)
+                    .map(|_| "windowsGraphicsCapture"),
                 state: runtime.state(),
                 session_id: runtime.session_id().map(str::to_owned),
                 available: true,
@@ -1355,6 +1360,8 @@ mod tests {
         );
 
         let diagnostics = &events[0];
+        assert_eq!(diagnostics["helperVersion"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(diagnostics["captureBackend"], serde_json::Value::Null);
         for field in [
             "rawCaptureFps",
             "probeProcessedFps",

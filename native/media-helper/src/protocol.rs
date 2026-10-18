@@ -412,6 +412,8 @@ pub enum OutboundEvent {
     Diagnostics {
         protocol_version: u16,
         request_id: String,
+        helper_version: &'static str,
+        capture_backend: Option<&'static str>,
         state: SessionState,
         session_id: Option<String>,
         available: bool,

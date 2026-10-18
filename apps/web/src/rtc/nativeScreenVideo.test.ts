@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { NativeScreenVideoSession, type NativeVideoDesktopBridge } from './nativeScreenVideo';
+import { NativeScreenVideoSession, readNativeVideoInput, type NativeVideoDesktopBridge } from './nativeScreenVideo';
 
 type FakeVideoFrame = VideoFrame & { close: ReturnType<typeof vi.fn> };
 
@@ -36,6 +36,48 @@ afterEach(() => {
 });
 
 describe('NativeScreenVideoSession', () => {
+  it('诊断区分真实帧提交、写入背压和最小化提示，停止后撤销轨道统计', async () => {
+    const target = installWindowMessageTarget();
+    const writeGate = deferred<void>();
+    let suspended!: (status: { sessionId: string; suspended: boolean }) => void;
+    const desktop: NativeVideoDesktopBridge = {
+      startNativeVideo: async () => ({ sessionId: 'diagnostic-session', changed: true }),
+      stopNativeVideo: vi.fn(async () => ({ changed: true })),
+      configureNativeVideo: async () => ({ changed: true }),
+      onNativeVideoError: () => () => {},
+      onNativeVideoSuspended: (callback) => { suspended = callback; return () => {}; },
+    };
+    let now = 100;
+    const session = new NativeScreenVideoSession(desktop, { maxFps: 120, now: () => now,
+      createGenerator: () => ({ writable: new WritableStream<VideoFrame>({ write: () => writeGate.promise }),
+        stop: vi.fn() }) as never,
+      createLocalTrack: (track) => ({ mediaStreamTrack: track, stop: vi.fn() }) as never,
+      createSuspendedFrame: () => createFrame(),
+    });
+    const track = session.track.mediaStreamTrack;
+    expect(readNativeVideoInput({} as MediaStreamTrack)).toBeNull();
+    const ready = session.start('window:1:0');
+    await Promise.resolve();
+    now = 125;
+    dispatchFrame(target, createFrame(), 'diagnostic-session');
+    await ready;
+    const dropped = createFrame();
+    dispatchFrame(target, dropped, 'diagnostic-session');
+    dispatchFrame(target, createFrame(), 'old-session');
+    expect(readNativeVideoInput(track)).toMatchObject({ receivedFrames: 2, submittedFrames: 1,
+      backpressureDroppedFrames: 1, completedWrites: 0, pendingWrite: true, firstFrameMs: 25 });
+    expect(dropped.close).toHaveBeenCalledOnce();
+    writeGate.resolve();
+    await vi.waitFor(() => expect(readNativeVideoInput(track)?.pendingWrite).toBe(false));
+    suspended({ sessionId: 'diagnostic-session', suspended: true });
+    dispatchFrame(target, createFrame(), 'diagnostic-session');
+    expect(readNativeVideoInput(track)).toMatchObject({ receivedFrames: 3, submittedFrames: 1,
+      suspendedDroppedFrames: 1, placeholderFrames: 1, backpressureDroppedFrames: 1 });
+    await session.stop();
+    expect(readNativeVideoInput(track)).toBeNull();
+    expect(desktop.stopNativeVideo).toHaveBeenCalledOnce();
+  });
+
   it('uses visible dimensions through aligned textures, portrait resizing and already-correct frames', async () => {
     const target = installWindowMessageTarget();
     const frames: VideoFrame[] = [];
@@ -645,6 +687,7 @@ describe('NativeScreenVideoSession', () => {
     await Promise.resolve();
 
     expect(onError).toHaveBeenCalledWith('nativeVideoTrackWriteFailed');
+    expect(session.readDiagnostics().writeFailures).toBe(1);
     await session.stop();
   });
 });

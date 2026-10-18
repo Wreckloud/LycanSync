@@ -6,6 +6,27 @@ function report(stats: Record<string, unknown>[]): RTCStatsReport {
 }
 
 describe('屏幕共享媒体统计', () => {
+  it('按RID匹配真实编码层开关，不把缺失状态或接收轨道伪造成启用', () => {
+    const stats = report([
+      { id: 'high', rid: 'h', type: 'outbound-rtp', kind: 'video', frameWidth: 1920, frameHeight: 1080 },
+      { id: 'low', rid: 'q', type: 'outbound-rtp', kind: 'video', frameWidth: 640, frameHeight: 360 },
+      { id: 'unknown', rid: 'other', type: 'outbound-rtp', kind: 'video' },
+    ]);
+    const layers = readVideoLayers(stats, 'outbound-rtp', new Map(), 'track', [
+      { rid: 'q', active: true }, { rid: 'h', active: false },
+    ]);
+    expect(layers.find((layer) => layer.id === 'h')?.active).toBe(false);
+    expect(layers.find((layer) => layer.id === 'q')?.active).toBe(true);
+    expect(layers.find((layer) => layer.id === 'other')?.active).toBeNull();
+    expect(readVideoLayers(report([{ id: 'in', type: 'inbound-rtp', kind: 'video', active: true }]),
+      'inbound-rtp', new Map(), 'remote')[0].active).toBeNull();
+    expect(readVideoLayers(report([{ id: 'single', type: 'outbound-rtp', kind: 'video' }]),
+      'outbound-rtp', new Map(), 'single', [{ active: false }])[0].active).toBe(false);
+    expect(readVideoLayers(stats, 'outbound-rtp', new Map(), 'unknown').every((layer) => layer.active === null)).toBe(true);
+    expect(readVideoLayers(report([{ id: 'single', type: 'outbound-rtp', kind: 'video', active: false }]),
+      'outbound-rtp', new Map(), 'single', [{ active: true }])[0].active).toBe(false);
+  });
+
   it('根据连续两次发送统计计算真实码率，并忽略音频', () => {
     const previous = new Map();
     const first = report([
@@ -15,7 +36,7 @@ describe('屏幕共享媒体统计', () => {
       { id: 'codec', type: 'codec', mimeType: 'video/H264' },
     ]);
     expect(readVideoLayers(first, 'outbound-rtp', previous, 'track')[0]).toMatchObject({
-      size: '1920×1080', fps: 30, bitrateKbps: null, codec: 'H264', limitation: 'cpu',
+      size: '1920×1080', fps: null, intervalMs: null, bitrateKbps: null, codec: 'H264', limitation: 'cpu',
     });
     const second = report([
       { id: 'video', type: 'outbound-rtp', kind: 'video', bytesSent: 200_000, timestamp: 3_000,
@@ -87,6 +108,23 @@ describe('屏幕共享媒体统计', () => {
     expect(readVideoLayers(report([{ id: 'video', type: 'inbound-rtp', kind: 'video',
       bytesReceived: 900, framesDecoded: 12, timestamp: 1_000 }]), 'inbound-rtp', previous, 'in-track')[0])
       .toMatchObject({ fps: null, bitrateKbps: null });
+  });
+
+  it('使用真实计数差和单调统计时间计算区间帧率，不依赖固定两秒或瞬时FPS', () => {
+    const previousSource = new Map();
+    const first = report([{ id: 'source', type: 'media-source', kind: 'video', trackIdentifier: 'screen',
+      frames: 100, framesPerSecond: 60, timestamp: 1_000 }]);
+    expect(readVideoSourceFps(first, 'screen', previousSource)).toBeNull();
+    const second = report([{ id: 'source', type: 'media-source', kind: 'video', trackIdentifier: 'screen',
+      frames: 340, framesPerSecond: 30, timestamp: 3_400 }]);
+    expect(readVideoSourceFps(second, 'screen', previousSource)).toBe(100);
+
+    const layerPrevious = new Map();
+    readVideoLayers(report([{ id: 'video', type: 'outbound-rtp', kind: 'video', framesEncoded: 100,
+      framesPerSecond: 60, bytesSent: 100, timestamp: 1_000 }]), 'outbound-rtp', layerPrevious, 'track');
+    expect(readVideoLayers(report([{ id: 'video', type: 'outbound-rtp', kind: 'video', framesEncoded: 340,
+      framesPerSecond: 30, bytesSent: 1000, timestamp: 3_400 }]), 'outbound-rtp', layerPrevious, 'track')[0])
+      .toMatchObject({ fps: 100, intervalMs: 2400 });
   });
 
   it('缺失的受限原因、编码器与丢帧统计按未知处理', () => {

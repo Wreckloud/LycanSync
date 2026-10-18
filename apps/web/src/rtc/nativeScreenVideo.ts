@@ -34,6 +34,13 @@ const FIRST_FRAME_TIMEOUT_MS = 8_000;
 const SUSPENDED_HINT_INTERVAL_MS = 1_000;
 const SUSPENDED_HINT_TIMESTAMP_STEP_US = SUSPENDED_HINT_INTERVAL_MS * 1_000;
 
+const nativeVideoInputs = new WeakMap<MediaStreamTrack, NativeScreenVideoSession>();
+
+/** 只读取当前轨道所属会话；不创建采集或另行保留帧。 */
+export function readNativeVideoInput(track: MediaStreamTrack) {
+  return nativeVideoInputs.get(track)?.readDiagnostics() ?? null;
+}
+
 /** 持有页面侧视频帧队列及一个 helper 采集会话，负责停止与帧释放。 */
 export class NativeScreenVideoSession {
   readonly track: LocalVideoTrack;
@@ -72,6 +79,15 @@ export class NativeScreenVideoSession {
   private suspended = false;
   private writing = false;
   private stopped = false;
+  private receivedFrames = 0;
+  private backpressureDroppedFrames = 0;
+  private suspendedDroppedFrames = 0;
+  private submittedFrames = 0;
+  private completedWrites = 0;
+  private writeFailures = 0;
+  private placeholderFrames = 0;
+  private startedAt: number | undefined;
+  private firstFrameMs: number | null = null;
 
   constructor(
     private readonly desktop: NativeVideoDesktopBridge,
@@ -95,6 +111,16 @@ export class NativeScreenVideoSession {
     this.generator.contentHint = options.contentHint ?? 'motion';
     this.writer = this.generator.writable.getWriter();
     this.track = (options.createLocalTrack ?? ((track) => new LocalVideoTrack(track, {}, true)))(this.generator);
+    nativeVideoInputs.set(this.generator, this);
+  }
+
+  readDiagnostics() {
+    // 真实来源帧与最小化提示分开累计；写入完成数包含两者，不代表编码或网络确认。
+    return { sessionId: this.sessionId ?? null, receivedFrames: this.receivedFrames,
+      backpressureDroppedFrames: this.backpressureDroppedFrames,
+      suspendedDroppedFrames: this.suspendedDroppedFrames, submittedFrames: this.submittedFrames,
+      completedWrites: this.completedWrites, writeFailures: this.writeFailures,
+      placeholderFrames: this.placeholderFrames, pendingWrite: this.writing, firstFrameMs: this.firstFrameMs };
   }
 
   start(sourceId: string): Promise<LocalVideoTrack> {
@@ -105,6 +131,7 @@ export class NativeScreenVideoSession {
   }
 
   private async startAndWaitForFrame(sourceId: string): Promise<LocalVideoTrack> {
+    this.startedAt = this.now();
     const settings = readScreenSharePreferences();
     const firstFrame = new Promise<void>((resolve, reject) => {
       this.firstFrameResolve = resolve;
@@ -209,6 +236,7 @@ export class NativeScreenVideoSession {
   stop(): Promise<void> {
     if (this.stopPromise) return this.stopPromise;
     this.stopped = true;
+    nativeVideoInputs.delete(this.generator);
     this.removeHelperErrorListener?.();
     this.removeHelperErrorListener = undefined;
     this.removeSuspensionListener?.();
@@ -282,7 +310,14 @@ export class NativeScreenVideoSession {
 
   private acceptFrame(frame: VideoFrame): void {
     // helper 已按目标帧率输出；页面只保留写入背压，避免重复限帧误丢正常帧。
-    if (this.stopped || this.suspended || this.writing) {
+    if (this.stopped) {
+      frame.close();
+      return;
+    }
+    this.receivedFrames++;
+    if (this.suspended || this.writing) {
+      if (this.suspended) this.suspendedDroppedFrames++;
+      else this.backpressureDroppedFrames++;
       frame.close();
       return;
     }
@@ -317,6 +352,10 @@ export class NativeScreenVideoSession {
     }
     if (Number.isInteger(frame.displayWidth) && frame.displayWidth > 0) this.frameWidth = frame.displayWidth;
     if (Number.isInteger(frame.displayHeight) && frame.displayHeight > 0) this.frameHeight = frame.displayHeight;
+    this.submittedFrames++;
+    if (this.firstFrameMs === null && this.startedAt !== undefined) {
+      this.firstFrameMs = Math.max(0, this.now() - this.startedAt);
+    }
     this.writeFrame(frame);
   }
 
@@ -338,6 +377,7 @@ export class NativeScreenVideoSession {
     const timestamp = Math.max(Math.round(this.now() * 1000), this.lastTimestamp + SUSPENDED_HINT_TIMESTAMP_STEP_US);
     try {
       this.writeFrame(this.createSuspendedFrame(width, height, timestamp));
+      this.placeholderFrames++;
     } catch {
       this.fail('nativeVideoPauseFrameFailed');
     }
@@ -347,7 +387,10 @@ export class NativeScreenVideoSession {
     if (Number.isFinite(frame.timestamp)) this.lastTimestamp = Math.max(this.lastTimestamp, frame.timestamp);
     this.writing = true;
     this.pendingFrame = frame;
-    this.writePromise = this.writer.write(frame).catch(() => {
+    this.writePromise = this.writer.write(frame).then(() => {
+      this.completedWrites++;
+    }, () => {
+      this.writeFailures++;
       this.fail('nativeVideoTrackWriteFailed');
     }).finally(() => {
       frame.close();

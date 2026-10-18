@@ -1035,7 +1035,9 @@ function validateVideoSources(message) {
 }
 
 function validateDiagnostics(message) {
-  if (!['idle', 'starting', 'running', 'stopping'].includes(message.state)
+  if (typeof message.helperVersion !== 'string' || !/^[\w.+-]{1,80}$/.test(message.helperVersion)
+      || (message.captureBackend !== null && message.captureBackend !== 'windowsGraphicsCapture')
+      || !['idle', 'starting', 'running', 'stopping'].includes(message.state)
       || (message.sessionId !== null && (typeof message.sessionId !== 'string' || message.sessionId.length > 128))
       || (message.sourceKind !== null && !['monitor', 'window'].includes(message.sourceKind))) {
     throw new Error('mediaHelperInvalidDiagnostics');
@@ -1066,7 +1068,7 @@ function validateDiagnostics(message) {
           || !/^[a-z][A-Za-z0-9]*$/.test(message.lastCaptureError)))) {
     throw new Error('mediaHelperInvalidDiagnostics');
   }
-  const diagnostics = Object.fromEntries(['state', 'sessionId', 'available', 'sourceKind', 'frameWidth', 'frameHeight',
+  const diagnostics = Object.fromEntries(['helperVersion', 'captureBackend', 'state', 'sessionId', 'available', 'sourceKind', 'frameWidth', 'frameHeight',
     'framesReceived', 'framesProcessed', 'droppedNotifications', 'rawCaptureFps', 'probeProcessedFps',
     'rawFrameIntervalP50Ms', 'rawFrameIntervalP95Ms', 'rawFrameIntervalP99Ms', 'rawTimestampAnomalies',
     'lastFrameAgeMs', 'sizeChanges', 'framePoolRecreates', 'lastCaptureError', 'stopDurationMs', 'captureSuspended']

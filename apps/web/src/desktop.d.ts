@@ -26,6 +26,8 @@ interface NativeVideoSource {
 }
 
 interface NativeCaptureDiagnostics {
+  helperVersion: string;
+  captureBackend: 'windowsGraphicsCapture' | null;
   state: 'idle' | 'starting' | 'running' | 'stopping';
   sessionId: string | null;
   available: boolean;

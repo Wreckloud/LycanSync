@@ -34,7 +34,8 @@ secrets/
 *.key
 
 # Local planning and learning notes
-/docs/
+/docs/*
+!/docs/AGENTS.md
 
 # Logs and runtime data
 *.log

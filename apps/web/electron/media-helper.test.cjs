@@ -243,6 +243,7 @@ class FakeHelper extends EventEmitter {
       }
       const diagnostics = {
         event: 'diagnostics', protocolVersion: 1, requestId: command.requestId,
+        helperVersion: '0.1.0', captureBackend: this.captureState === 'running' ? 'windowsGraphicsCapture' : null,
         state: this.captureState, sessionId: this.captureSessionId,
         available: true, sourceKind: this.captureState === 'running' ? 'monitor' : null,
         microphoneCaptureDroppedChunks: 0,
@@ -267,7 +268,7 @@ class FakeHelper extends EventEmitter {
       if (this.mode.omitFramePoolRecreates) delete diagnostics.framePoolRecreates;
       if (this.mode.omitMicrophoneCaptureDroppedChunks) delete diagnostics.microphoneCaptureDroppedChunks;
       if (this.mode.captureSuspended !== undefined) diagnostics.captureSuspended = this.mode.captureSuspended;
-      this.writeResponse(diagnostics);
+      this.writeResponse({ ...diagnostics, ...this.mode.diagnosticsOverrides });
       return;
     }
     if (command.command === 'shutdown' && !this.mode.shutdownHang) {
@@ -916,11 +917,31 @@ test('source ids expire when the lazy helper is reclaimed and do not start a rep
   await manager.shutdown();
 });
 
-test('diagnostics accept an older protocol v1 helper without optional capture counters', async () => {
+test('诊断保留真实helper版本和后端，可选帧池计数缺失仍按未知处理', async () => {
   const { manager } = createManager({ omitFramePoolRecreates: true, omitMicrophoneCaptureDroppedChunks: true });
-  assert.equal((await manager.getDiagnostics()).framePoolRecreates, null);
+  const diagnostics = await manager.getDiagnostics();
+  assert.equal(diagnostics.helperVersion, '0.1.0');
+  assert.equal(diagnostics.captureBackend, null);
+  assert.equal(diagnostics.framePoolRecreates, null);
   assert.equal((await manager.getDiagnostics()).microphoneCaptureDroppedChunks, 0);
   await manager.shutdown();
+});
+
+test('运行中的原生后端按协议保留，非法版本或后端不能进入报告', async (t) => {
+  const { manager } = createManager();
+  try {
+    const sources = await manager.listVideoSources();
+    await manager.startCaptureProbe(sources.sources[0].sourceId);
+    assert.equal((await manager.getDiagnostics()).captureBackend, 'windowsGraphicsCapture');
+  } finally { await manager.shutdown(); }
+  for (const diagnosticsOverrides of [{ helperVersion: undefined }, { helperVersion: 'https://private/token' },
+    { captureBackend: 'unverifiedBackend' }]) {
+    await t.test(JSON.stringify(diagnosticsOverrides), async () => {
+      const { manager } = createManager({ diagnosticsOverrides });
+      try { await assert.rejects(manager.getDiagnostics(), /mediaHelperInvalidDiagnostics/); }
+      finally { await manager.shutdown(); }
+    });
+  }
 });
 
 test('diagnostics reconcile a capture worker that stopped without an explicit stop request', async () => {

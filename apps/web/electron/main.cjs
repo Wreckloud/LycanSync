@@ -1067,7 +1067,7 @@ ipcMain.handle('diagnostics:export', async (event, text) => {
   if (!trustedSender(event) || closing || diagnosticExportPending) throw new Error('当前不能导出诊断。');
   if (typeof text !== 'string' || Buffer.byteLength(text) > 8 * 1024 * 1024) throw new Error('诊断报告过大或无效。');
   const report = JSON.parse(text);
-  if (!report || report.kind !== 'lycansync-diagnostics' || report.schemaVersion !== 1 || !Array.isArray(report.samples)
+  if (!report || report.kind !== 'lycansync-diagnostics' || report.schemaVersion !== 3 || !Array.isArray(report.samples)
       || report.samples.length > 900 || !Number.isFinite(Date.parse(report.startedAt))
       || !Number.isFinite(Date.parse(report.endedAt)) || Date.parse(report.endedAt) < Date.parse(report.startedAt)) {
     throw new Error('诊断报告无效。');
@@ -1084,7 +1084,7 @@ ipcMain.handle('diagnostics:export', async (event, text) => {
     if (result.canceled || !result.filePath || !trustedSender(event) || closing) return { saved: false };
     report.environment = { appVersion: app.getVersion(), electronVersion: process.versions.electron,
       platform: process.platform, arch: process.arch, osVersion: osRelease(), gpuFeatures: app.getGPUFeatureStatus(),
-      helperVersion: null, gpuUtilization: null };
+      gpuUtilization: null };
     report.events = events;
     report.eventLimit = '最多读取当前及上一份日志各256KiB，保留记录期间最近200项；不含异常正文';
     await writeFile(result.filePath, JSON.stringify(report), 'utf8');
