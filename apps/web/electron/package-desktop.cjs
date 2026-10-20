@@ -9,6 +9,7 @@ const { updateFeedUrl } = require('./startup-update.cjs');
 const appDirectory = resolve(__dirname, '..');
 const projectRoot = resolve(appDirectory, '../..');
 const outputDirectory = join(projectRoot, 'release/desktop');
+const version = require('../package.json').version;
 const obsDirectory = join(projectRoot, 'release/build-cache/obs-32.2.2/prepared');
 const obsManifest = JSON.parse(readFileSync(join(obsDirectory, 'build-manifest.json'), 'utf8').replace(/^\uFEFF/, ''));
 if (obsManifest.obsVersion !== '32.2.2' || obsManifest.architecture !== 'x64'
@@ -20,6 +21,17 @@ for (const file of obsManifest.files) {
   if (contents.length !== file.bytes || createHash('sha256').update(contents).digest('hex') !== file.sha256) {
     throw new Error(`OBS 文件与构建清单不一致：${file.path}`);
   }
+}
+const obsSource = obsManifest.sourceBundle;
+if (!obsSource || obsSource.version !== version
+    || obsSource.path !== `LycanSync-${version}-obs-source.tar.gz`
+    || obsSource.runtimeSha256 !== createHash('sha256').update(JSON.stringify(obsManifest.files)).digest('hex')) {
+  throw new Error('OBS 对应源码包缺失或与本次版本、运行文件不一致。');
+}
+const sourceContents = readFileSync(join(outputDirectory, obsSource.path));
+if (sourceContents.length !== obsSource.bytes
+    || createHash('sha256').update(sourceContents).digest('hex') !== obsSource.sha256) {
+  throw new Error('OBS 对应源码包校验失败，拒绝发布安装包。');
 }
 const runtimeInstaller = process.env.LYCANSYNC_VC_REDIST_PATH || join(
   process.env['ProgramFiles(x86)'] || 'C:/Program Files (x86)',
@@ -64,7 +76,6 @@ for (const file of obsManifest.files) {
     throw new Error(`安装包内 OBS 文件校验失败：${file.path}`);
   }
 }
-const version = require('../package.json').version;
 for (const file of ['latest.yml', `LycanSync-${version}-windows-x64-setup.exe.blockmap`]) {
   if (!existsSync(join(outputDirectory, file))) throw new Error(`构建缺少更新产物：${file}`);
 }

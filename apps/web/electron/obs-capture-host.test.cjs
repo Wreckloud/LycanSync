@@ -370,13 +370,24 @@ test('打包前读取真实清单，未完成发布材料或文件变化时明�
   const manifest = { obsVersion: '32.2.2', architecture: 'x64', redistributionReady: false,
     files: [{ path: 'bin/64bit/obs.dll', bytes: contents.length,
       sha256: require('node:crypto').createHash('sha256').update(contents).digest('hex') }] };
-  const sandbox = { projectRoot: 'C:\\project', join: require('node:path').win32.join,
+  const version = '0.1.3';
+  const sourceContents = Buffer.from('controlled source bundle fixture');
+  const sandbox = { projectRoot: 'C:\\project', outputDirectory: 'C:\\project\\release\\desktop', version,
+    join: require('node:path').win32.join,
     createHash: require('node:crypto').createHash,
-    readFileSync: (file) => file.endsWith('build-manifest.json') ? '\uFEFF' + JSON.stringify(manifest) : contents };
+    readFileSync: (file) => file.endsWith('build-manifest.json') ? '\uFEFF' + JSON.stringify(manifest)
+      : file.endsWith('.tar.gz') ? sourceContents : contents };
   const check = () => runInNewContext(source.slice(start, end), { ...sandbox });
   assert.throws(check, /发布材料尚未核验/);
   manifest.redistributionReady = true;
+  assert.throws(check, /对应源码包缺失/);
+  manifest.sourceBundle = { version, path: `LycanSync-${version}-obs-source.tar.gz`, bytes: sourceContents.length,
+    sha256: require('node:crypto').createHash('sha256').update(sourceContents).digest('hex'),
+    runtimeSha256: require('node:crypto').createHash('sha256').update(JSON.stringify(manifest.files)).digest('hex') };
   assert.doesNotThrow(check);
+  manifest.sourceBundle.bytes++;
+  assert.throws(check, /对应源码包校验失败/);
+  manifest.sourceBundle.bytes--;
   manifest.files[0].bytes++;
   assert.throws(check, /文件与构建清单不一致/);
 });

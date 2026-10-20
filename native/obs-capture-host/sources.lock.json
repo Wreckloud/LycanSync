@@ -1,0 +1,265 @@
+{
+  "obsVersion": "32.2.2",
+  "dependencyRecipeCommit": "8683107a02300923abe4f293920f4b5edc8cb624",
+  "archives": [
+    {
+      "name": "OBS source",
+      "version": "32.2.2",
+      "path": "downloads/OBS-Studio-32.2.2-Sources.tar.gz",
+      "url": "https://github.com/obsproject/obs-studio/releases/download/32.2.2/OBS-Studio-32.2.2-Sources.tar.gz",
+      "bytes": 16660601,
+      "sha256": "ec81fb66b03e75ddb3076b576f62679c39262e0e9960cef3e17a40dc5d68e6b4"
+    },
+    {
+      "name": "OBS Windows build dependencies",
+      "version": "2026-07-15-x64",
+      "path": "downloads/windows-deps-2026-07-15-x64.zip",
+      "url": "https://github.com/obsproject/obs-deps/releases/download/2026-07-15/windows-deps-2026-07-15-x64.zip",
+      "bytes": 66679471,
+      "sha256": "6f90e9598fa10cff5ad23cdcfae49b87868c07bf896b02cd464582b4ce2f2ba9"
+    },
+    {
+      "name": "OBS dependency build recipes",
+      "revision": "8683107a02300923abe4f293920f4b5edc8cb624",
+      "path": "downloads/obs-deps-8683107.tar.gz",
+      "url": "https://codeload.github.com/obsproject/obs-deps/tar.gz/8683107a02300923abe4f293920f4b5edc8cb624",
+      "bytes": 271668,
+      "sha256": "14a95cbdba57e3cbc0f46a156d045f3574e7e1a90b85afb353ef3eaf44ae7e6e"
+    },
+    {
+      "name": "zlib",
+      "version": "1.3.1",
+      "revision": "51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf",
+      "path": "corresponding-source/zlib-1.3.1-51b7f2abdade.tar.gz",
+      "url": "https://codeload.github.com/madler/zlib/tar.gz/51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf",
+      "recipe": "deps.ffmpeg/10-zlib.ps1",
+      "bytes": 1572004,
+      "sha256": "d9e270d46252734aa49770fbc544125391617956266f220bd63216c834f3a522"
+    },
+    {
+      "name": "libpng",
+      "version": "1.6.47",
+      "revision": "${PSScriptRoot}/checksums/lpng1647.zip.sha256",
+      "path": "corresponding-source/libpng-1.6.47.zip",
+      "url": "https://sourceforge.net/projects/libpng/files/libpng16/1.6.47/lpng1647.zip",
+      "recipe": "deps.ffmpeg/20-libpng.ps1",
+      "bytes": 1854163,
+      "sha256": "883340209fccd5353e406a79e22a2d226fc61666b83e700ab1e367bc1a679101"
+    },
+    {
+      "name": "opus",
+      "version": "1.5.2",
+      "revision": "ddbe48383984d56acd9e1ab6a090c54ca6b735a6",
+      "path": "corresponding-source/opus-1.5.2-ddbe48383984.tar.gz",
+      "url": "https://codeload.github.com/xiph/opus/tar.gz/ddbe48383984d56acd9e1ab6a090c54ca6b735a6",
+      "recipe": "deps.ffmpeg/20-opus.ps1",
+      "bytes": 4184347,
+      "sha256": "18e9d9e26565e279753aafb6823a482ef85ea9fddbfdcdbff8fd095b12dd96b6"
+    },
+    {
+      "name": "libogg",
+      "version": "1.3.5",
+      "revision": "fa80aae9d50096160f2b56ada35527d7aee3f746",
+      "path": "corresponding-source/libogg-1.3.5-fa80aae9d500.tar.gz",
+      "url": "https://codeload.github.com/xiph/ogg/tar.gz/fa80aae9d50096160f2b56ada35527d7aee3f746",
+      "recipe": "deps.ffmpeg/30-libogg.ps1",
+      "bytes": 254224,
+      "sha256": "e6a3581e2e09679ae3bce702dcc1f310207bad69600abce3e741214bb749e370"
+    },
+    {
+      "name": "libvorbis",
+      "version": "1.3.7",
+      "revision": "2eac96b03ff67953354cb0a649c08aa3a23267ef",
+      "path": "corresponding-source/libvorbis-1.3.7-2eac96b03ff6.tar.gz",
+      "url": "https://gitlab.xiph.org/xiph/vorbis/-/archive/2eac96b03ff67953354cb0a649c08aa3a23267ef/vorbis-2eac96b03ff67953354cb0a649c08aa3a23267ef.tar.gz",
+      "recipe": "deps.ffmpeg/30-libvorbis.ps1",
+      "bytes": 1238194,
+      "sha256": "a9323a23ef91e087504152764e3e50a845daf2b469713455689ff6bdc60d3514"
+    },
+    {
+      "name": "libvpx",
+      "version": "1.14.1",
+      "revision": "${PSScriptRoot}/checksums/v1.14.1.zip.sha256",
+      "path": "corresponding-source/libvpx-1.14.1.zip",
+      "url": "https://github.com/webmproject/libvpx/archive/refs/tags/v1.14.1.zip",
+      "recipe": "deps.ffmpeg/30-libvpx.ps1",
+      "bytes": 6335358,
+      "sha256": "f40e4c7e7b4025d18be17a8225f8be2f26b349715399cd36c2de573fe976dfd7"
+    },
+    {
+      "name": "svt-av1",
+      "version": "2.3.0",
+      "revision": "6e69def4ec283fe0b71195671245c3b768bebdef",
+      "path": "corresponding-source/svt-av1-2.3.0-6e69def4ec28.tar.gz",
+      "url": "https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/6e69def4ec283fe0b71195671245c3b768bebdef/SVT-AV1-6e69def4ec283fe0b71195671245c3b768bebdef.tar.gz",
+      "recipe": "deps.ffmpeg/30-svt-av1.ps1",
+      "bytes": 10844802,
+      "sha256": "8c7921e9f44f1dc18d51351fe353e6c86de306cc9e7e159a4d479dfc01456d6d"
+    },
+    {
+      "name": "aom",
+      "version": "3.13.1",
+      "revision": "d772e334cc724105040382a977ebb10dfd393293",
+      "path": "corresponding-source/aom-3.13.1-d772e334cc72.tar.gz",
+      "url": "https://aomedia.googlesource.com/aom/+archive/d772e334cc724105040382a977ebb10dfd393293.tar.gz",
+      "recipe": "deps.ffmpeg/40-aom.ps1",
+      "bytes": 6324485,
+      "sha256": "53e34c2017709c47158ed6f04a82be628fee14ace6aed5498377698d8869b20e"
+    },
+    {
+      "name": "x264",
+      "version": "r3106",
+      "revision": "eaa68fad9e5d201d42fde51665f2d137ae96baf0",
+      "path": "corresponding-source/x264-r3106-eaa68fad9e5d.tar.gz",
+      "url": "https://codeload.github.com/mirror/x264/tar.gz/eaa68fad9e5d201d42fde51665f2d137ae96baf0",
+      "recipe": "deps.ffmpeg/40-x264.ps1",
+      "bytes": 943274,
+      "sha256": "580f07f08af23768074e5346bdf32c77b68b4d4e614f4998ea869b02fc29714d"
+    },
+    {
+      "name": "libtheora",
+      "version": "1.1.1",
+      "revision": "${PSScriptRoot}/checksums/libtheora-1.1.1.zip.sha256",
+      "path": "corresponding-source/libtheora-1.1.1.zip",
+      "url": "https://ftp.osuosl.org/pub/xiph/releases/theora/libtheora-1.1.1.zip",
+      "recipe": "deps.ffmpeg/50-libtheora.ps1",
+      "bytes": 2275495,
+      "sha256": "f644fef154f7a80e7258c8baec5c510f594d720835855cddce322b924934ba36"
+    },
+    {
+      "name": "lame",
+      "version": "3.100",
+      "revision": "${PSScriptRoot}/checksums/lame-3.100.tar.gz.win.sha256",
+      "path": "corresponding-source/lame-3.100.tar.gz",
+      "url": "https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz",
+      "recipe": "deps.ffmpeg/60-lame.ps1",
+      "bytes": 1524133,
+      "sha256": "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e"
+    },
+    {
+      "name": "mbedtls",
+      "version": "3.6.4",
+      "revision": "c765c831e5c2a0971410692f92f7a81d6ec65ec2",
+      "path": "corresponding-source/mbedtls-3.6.4-c765c831e5c2.tar.gz",
+      "url": "https://codeload.github.com/Mbed-TLS/mbedtls/tar.gz/c765c831e5c2a0971410692f92f7a81d6ec65ec2",
+      "recipe": "deps.ffmpeg/60-mbedtls.ps1",
+      "bytes": 5614554,
+      "sha256": "0f050462eabf814c7e3b37825efc4d8dd1caf6a3b3eeb350705ad818d6ca770a"
+    },
+    {
+      "name": "srt",
+      "version": "1.5.2",
+      "revision": "${PSScriptRoot}/checksums/v1.5.2.zip.sha256",
+      "path": "corresponding-source/srt-1.5.2.zip",
+      "url": "https://github.com/Haivision/srt/archive/refs/tags/v1.5.2.zip",
+      "recipe": "deps.ffmpeg/60-srt.ps1",
+      "bytes": 1874895,
+      "sha256": "2686f75533bd53ec917dab6129186b124b4d105eadaa6a84e83719ac3b5ae6bd"
+    },
+    {
+      "name": "librist",
+      "version": "0.2.7",
+      "revision": "809390b3b75a259a704079d0fb4d8f1b5f7fa956",
+      "path": "corresponding-source/librist-0.2.7-809390b3b75a.tar.gz",
+      "url": "https://code.videolan.org/rist/librist/-/archive/809390b3b75a259a704079d0fb4d8f1b5f7fa956/librist-809390b3b75a259a704079d0fb4d8f1b5f7fa956.tar.gz",
+      "recipe": "deps.ffmpeg/70-librist.ps1",
+      "bytes": 2887291,
+      "sha256": "fd725c491e4a72d7d2620adc1127355536bf01e1c8ffc874d32be42a822f8117"
+    },
+    {
+      "name": "nv-codec-headers",
+      "version": "13.0.19.0",
+      "revision": "e844e5b26f46bb77479f063029595293aa8f812d",
+      "path": "corresponding-source/nv-codec-headers-13.0.19.0-e844e5b26f46.tar.gz",
+      "url": "https://codeload.github.com/FFmpeg/nv-codec-headers/tar.gz/e844e5b26f46bb77479f063029595293aa8f812d",
+      "recipe": "deps.ffmpeg/70-nv-codec.ps1",
+      "bytes": 83409,
+      "sha256": "42d72fbcca46e05a1c05a79f1cda1fedd68ba686b21adf917e05d908153645d9"
+    },
+    {
+      "name": "amf",
+      "version": "1.5.0",
+      "revision": "afed28d37aca1938da2eedc50599bb3535a987ec",
+      "path": "corresponding-source/amf-1.5.0-afed28d37aca.tar.gz",
+      "url": "https://codeload.github.com/GPUOpen-LibrariesAndSDKs/AMF/tar.gz/afed28d37aca1938da2eedc50599bb3535a987ec",
+      "recipe": "deps.ffmpeg/80-amf.ps1",
+      "bytes": 178689557,
+      "sha256": "79ca6faacc982a49a23be0b3a58c4e57e8dc5c8f87b59605831ee77412e8a5b4"
+    },
+    {
+      "name": "FFmpeg",
+      "version": "8.1.2",
+      "revision": "38b88335f99e76ed89ff3c93f877fdefce736c13",
+      "path": "corresponding-source/FFmpeg-8.1.2-38b88335f99e.tar.gz",
+      "url": "https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/38b88335f99e76ed89ff3c93f877fdefce736c13",
+      "recipe": "deps.ffmpeg/99-ffmpeg.ps1",
+      "bytes": 16894057,
+      "sha256": "2ae7e42343cfffb811d15cfe98b6d005f082595fcdf034d30a4ff90cfed9f9c6"
+    },
+    {
+      "name": "curl",
+      "version": "8.12.1",
+      "revision": "57495c64871d18905a0941db9196ef90bafe9a29",
+      "path": "corresponding-source/curl-8.12.1-57495c64871d.tar.gz",
+      "url": "https://codeload.github.com/curl/curl/tar.gz/57495c64871d18905a0941db9196ef90bafe9a29",
+      "recipe": "deps.windows/30-curl.ps1",
+      "bytes": 3464188,
+      "sha256": "0c7df3d2730de54d3e8eaa557c04ba60c5b68dab7a3904afd45b8de2bb72dc47"
+    },
+    {
+      "name": "jansson",
+      "version": "2.14.1",
+      "revision": "96d160df90016066d04d493d1d69639474ba4f20",
+      "path": "corresponding-source/jansson-2.14.1-96d160df9001.tar.gz",
+      "url": "https://codeload.github.com/akheron/jansson/tar.gz/96d160df90016066d04d493d1d69639474ba4f20",
+      "recipe": "deps.windows/30-jansson.ps1",
+      "bytes": 193408,
+      "sha256": "71efbc7a252f538f0910df551ed87ab5c25f1246d556c38e20feac6a9a20e1d5"
+    },
+    {
+      "name": "simde",
+      "version": "0.8.2",
+      "revision": "71fd833d9666141edcd1d3c109a80e228303d8d7",
+      "path": "corresponding-source/simde-0.8.2-71fd833d9666.tar.gz",
+      "url": "https://codeload.github.com/simd-everywhere/simde/tar.gz/71fd833d9666141edcd1d3c109a80e228303d8d7",
+      "bytes": 7481259,
+      "sha256": "72b2c14a487560b7eb203795f2c2fead5c7499662e639944cca2a9bb19f09029"
+    },
+    {
+      "name": "uthash",
+      "version": "2.3.0",
+      "revision": "e493aa90a2833b4655927598f169c31cfcdf7861",
+      "path": "corresponding-source/uthash-2.3.0-e493aa90a283.tar.gz",
+      "url": "https://codeload.github.com/troydhanson/uthash/tar.gz/e493aa90a2833b4655927598f169c31cfcdf7861",
+      "bytes": 191431,
+      "sha256": "2ddb6665e82ffd7e87a27b97081bddf8f09520b7a2cfd6ab011541e7cde991fa"
+    },
+    {
+      "name": "detours",
+      "version": "4.0.1",
+      "revision": "e4bfd6b03e50de46b47abfbd1e46b384f0c5f833",
+      "path": "corresponding-source/detours-4.0.1-e4bfd6b03e50.tar.gz",
+      "url": "https://codeload.github.com/microsoft/Detours/tar.gz/e4bfd6b03e50de46b47abfbd1e46b384f0c5f833",
+      "bytes": 346948,
+      "sha256": "d24f5dd1f977c33301ebd9f3be064e938a7908954df15b31235c9ca6691cb356"
+    },
+    {
+      "name": "mbedtls-framework",
+      "version": "mbedtls-3.6.4-submodule",
+      "revision": "2a3e2c5ea053c14b745dbdf41f609b1edc6a72fa",
+      "path": "corresponding-source/mbedtls-framework-2a3e2c5ea053.tar.gz",
+      "url": "https://codeload.github.com/Mbed-TLS/mbedtls-framework/tar.gz/2a3e2c5ea053c14b745dbdf41f609b1edc6a72fa",
+      "bytes": 788082,
+      "sha256": "f5934ffcad4c32a95f9281f0f95908eb471ee34df721fb9d6ad4adb9567f6b61"
+    },
+    {
+      "name": "Vulkan-Headers",
+      "version": "sdk-1.3.216.0",
+      "revision": "3ef4c97fd6ea001d75a8e9da408ee473c180e456",
+      "path": "corresponding-source/vulkan-headers-1.3.216.0-3ef4c97fd6ea.tar.gz",
+      "url": "https://codeload.github.com/KhronosGroup/Vulkan-Headers/tar.gz/3ef4c97fd6ea001d75a8e9da408ee473c180e456",
+      "bytes": 1489755,
+      "sha256": "d8e5012917b17b74528219aa1be7d9345756543179f972c1c3aa5d9414f00875"
+    }
+  ]
+}

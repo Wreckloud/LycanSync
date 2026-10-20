@@ -1,4 +1,4 @@
-param([switch]$Offline, [switch]$BuildTestWindows)
+﻿param([switch]$Offline, [switch]$BuildTestWindows)
 $ErrorActionPreference = 'Stop'
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or -not [Environment]::Is64BitProcess) {
     throw 'OBS 宿主构建仅支持 Windows x64 PowerShell。'
@@ -184,10 +184,16 @@ $files = @(Get-ChildItem -LiteralPath $preparedDirectory -File -Recurse | Where-
     [pscustomobject][ordered]@{ path = $_.FullName.Substring($preparedDirectory.Length + 1).Replace('\', '/'); bytes = $_.Length;
         sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
 })
+$hostSources = @(Get-ChildItem -LiteralPath $PSScriptRoot -File -Recurse | Where-Object {
+    $_.Extension -in @('.cpp', '.hpp', '.c', '.h', '.txt', '.cmake', '.ps1', '.patch')
+} | Sort-Object FullName | ForEach-Object {
+    [pscustomobject][ordered]@{ path = $_.FullName.Substring($projectRoot.Length + 1).Replace('\', '/'); bytes = $_.Length;
+        sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+})
 $manifest = [ordered]@{ obsVersion = '32.2.2'; architecture = 'x64'; sourceSha256 = $sourceHash; runtimeSha256 = $runtimeHash;
     sourceUrl = 'https://github.com/obsproject/obs-studio/releases/tag/32.2.2'; sourceArchive = (Split-Path $sourceArchive -Leaf);
     compiler = $toolsVersion; runtimeBytes = ($files | Measure-Object -Property bytes -Sum).Sum;
-    runtimeExecuted = $false; redistributionReady = $false; imports = $imports; files = $files }
+    runtimeExecuted = $false; redistributionReady = $false; imports = $imports; sourceFiles = $hostSources; files = $files }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $preparedDirectory 'build-manifest.json') -Encoding utf8
 Write-Host "构建和静态依赖检查完成（未运行）：$preparedDirectory"
 Write-Host "运行文件合计 $($manifest.runtimeBytes) 字节；许可证和对应源码仍需发布前审查。"
