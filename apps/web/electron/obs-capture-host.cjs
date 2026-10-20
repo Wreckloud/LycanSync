@@ -7,9 +7,12 @@ const SHUTDOWN_TIMEOUT_MS = 4_000;
 const TERMINATE_TIMEOUT_MS = 1_500;
 const DIAGNOSTIC_TIMEOUT_MS = 2_000;
 const CONFIGURE_TIMEOUT_MS = 3_000;
+const AUDIO_START_TIMEOUT_MS = 10_000;
+const AUDIO_STOP_TIMEOUT_MS = 3_000;
 
 class ObsCaptureHostManager {
   constructor({ executablePath, modulePath, dataPath, configPath, platform = process.platform, spawnProcess = spawn,
+    clientProcessId = process.pid, onAudioFailure = () => {}, onAudioStopped = () => {},
     onFrame = () => {}, onFailure = () => {}, onClosed = () => {}, onSuspended = () => {}, onDiagnostic = () => {} }) {
     this.executablePath = executablePath;
     this.modulePath = modulePath;
@@ -22,6 +25,9 @@ class ObsCaptureHostManager {
     this.onClosed = onClosed;
     this.onSuspended = onSuspended;
     this.onDiagnostic = onDiagnostic;
+    this.onAudioFailure = onAudioFailure;
+    this.onAudioStopped = onAudioStopped;
+    this.clientProcessId = clientProcessId;
     this.state = undefined;
   }
 
@@ -104,6 +110,27 @@ class ObsCaptureHostManager {
       failState(state, new Error('obsCaptureProtocolEventInvalid'));
       return;
     }
+    if (['audioStarted', 'audioFailed', 'audioStopped'].includes(event.event)) {
+      const audio = state.audio;
+      // 同一画面可多次开关声音；旧尝试的响应不能结束或重新开启下一次声音。
+      if (this.state !== state || !audio || event.sessionId !== state.videoSessionId || event.audioId !== audio.id) return;
+      if (event.event === 'audioStopped') {
+        audio.finishStart?.(new Error('screenShareAudioSessionStopped'));
+        audio.finishStop?.(undefined, { changed: true });
+        state.audio = undefined;
+        this.onAudioStopped(state, { sessionId: state.videoSessionId, audioId: audio.id });
+      } else if (event.event === 'audioFailed') {
+        this.failAudio(state, audio, new Error(validAudioCode(event.code) ? event.code : 'screenShareAudioFailed'));
+      } else if (!audio.stopping && !state.stopRequested) {
+        if (event.sampleRate !== 48_000 || event.channels !== 2 || event.bitsPerSample !== 32 || event.nominalChunkMs !== 10) {
+          this.failAudio(state, audio, new Error('screenShareAudioFormatUnsupported'));
+        } else if (audio.finishStart) {
+          audio.started = true;
+          audio.finishStart(undefined, { sampleRate: 48_000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10 });
+        }
+      }
+      return;
+    }
     if (event.event === 'captureStarted') {
       if (this.state !== state || state.closed || state.stopRequested || !state.startResolve) return;
       if (event.helperVersion !== '32.2.2') {
@@ -141,12 +168,13 @@ class ObsCaptureHostManager {
     if (event.event === 'diagnostics') {
       const request = state.pendingDiagnostics;
       if (!request || event.requestId !== request.id) return;
-      if (this.state !== state || event.sessionId !== state.videoSessionId || !validCounters(event)) {
+      if (this.state !== state || event.sessionId !== state.videoSessionId || !validCounters(event)
+          || !validAudioDiagnostics(event.screenShareAudio)) {
         failState(state, new Error('obsCaptureDiagnosticsInvalid'));
         return;
       }
       request.finish(undefined, { helperVersion: state.helperVersion, renderedFrames: event.renderedFrames,
-        bridgeFrames: event.bridgeFrames, bridgeDroppedFrames: event.bridgeDroppedFrames });
+        bridgeFrames: event.bridgeFrames, bridgeDroppedFrames: event.bridgeDroppedFrames, screenShareAudio: event.screenShareAudio });
       return;
     }
     if (event.event === 'captureConfigured' || event.event === 'captureConfigurationRejected') {
@@ -223,6 +251,68 @@ class ObsCaptureHostManager {
     return promise;
   }
 
+  startScreenAudio(sessionId, pipeId, mode) {
+    const state = this.state;
+    if (!state || !state.alive || state.closed || state.failed || state.stopRequested
+        || state.videoSessionId !== sessionId || !state.helperVersion || !isSessionId(pipeId)
+        || !['process', 'systemMix'].includes(mode) || !Number.isInteger(this.clientProcessId)
+        || this.clientProcessId <= 0 || this.clientProcessId > 0xffffffff) {
+      return Promise.reject(new Error('invalidScreenShareAudioStart'));
+    }
+    if (state.audio) return Promise.reject(new Error('screenShareAudioAlreadyRunning'));
+    const audio = { id: pipeId, stopping: false, started: false, failureNotified: false };
+    state.audio = audio;
+    const promise = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => this.failAudio(state, audio, new Error('screenShareAudioStartTimedOut')), AUDIO_START_TIMEOUT_MS);
+      timer.unref?.();
+      audio.finishStart = (error, result) => {
+        if (!audio.finishStart) return;
+        clearTimeout(timer);
+        audio.finishStart = undefined;
+        if (error) reject(error); else resolve(result);
+      };
+    });
+    void writeLine(state.child, `audioStart:${pipeId}:${mode}:${this.clientProcessId}`)
+      .catch(() => this.failAudio(state, audio, new Error('screenShareAudioPipeFailed')));
+    return promise;
+  }
+
+  stopScreenAudio(sessionId, audioId) {
+    const state = this.state;
+    if (!state || state.closed) return Promise.resolve({ changed: false });
+    if (state.videoSessionId !== sessionId) return Promise.reject(new Error('screenShareAudioSessionMismatch'));
+    const audio = state.audio;
+    if (!audio) return Promise.resolve({ changed: false });
+    if (audio.id !== audioId) return Promise.reject(new Error('screenShareAudioSessionMismatch'));
+    if (audio.stopPromise) return audio.stopPromise;
+    audio.stopping = true;
+    audio.finishStart?.(new Error('screenShareAudioSessionStopped'));
+    audio.stopPromise = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => audio.finishStop(new Error('screenShareAudioStopFailed')), AUDIO_STOP_TIMEOUT_MS);
+      timer.unref?.();
+      audio.finishStop = (error, result) => {
+        if (!audio.finishStop) return;
+        clearTimeout(timer);
+        audio.finishStop = undefined;
+        if (error) reject(error); else resolve(result);
+      };
+    });
+    // 声音停止不确认时保留阻挡，不杀死仍可用的画面；整次共享停止仍以宿主退出为准。
+    void writeLine(state.child, `audioStop:${audioId}`)
+      .catch(() => audio.finishStop?.(new Error('screenShareAudioStopFailed')));
+    return audio.stopPromise;
+  }
+
+  failAudio(state, audio, error) {
+    if (this.state !== state || state.audio !== audio || state.closed) return;
+    audio.finishStart?.(error);
+    if (!audio.failureNotified && !audio.stopping && !state.stopRequested) {
+      audio.failureNotified = true;
+      this.onAudioFailure(state, { sessionId: state.videoSessionId, audioId: audio.id, code: error.message });
+    }
+    void this.stopScreenAudio(state.videoSessionId, audio.id).catch(() => {});
+  }
+
   async stop(sessionId) {
     const state = this.state;
     if (!state) return { changed: false };
@@ -232,6 +322,10 @@ class ObsCaptureHostManager {
       return { changed: true };
     }
     state.stopRequested = true;
+    if (state.audio) {
+      state.audio.stopping = true;
+      state.audio.finishStart?.(new Error('obsCaptureStopping'));
+    }
     state.pendingDiagnostics?.finish(new Error('obsCaptureStopping'));
     state.pendingConfiguration?.finish(new Error('obsCaptureStopping'));
     // stdin 背压不能阻止退出计时；是否停止只以子进程关闭事件为准。
@@ -250,6 +344,9 @@ class ObsCaptureHostManager {
     if (state.closed) return;
     state.alive = false;
     state.closed = true;
+    state.audio?.finishStart?.(error ?? new Error('obsCaptureHostClosed'));
+    state.audio?.finishStop?.(undefined, { changed: true });
+    state.audio = undefined;
     clearTimeout(state.startTimer);
     state.pendingDiagnostics?.finish(error ?? new Error('obsCaptureHostClosed'));
     state.pendingConfiguration?.finish(error ?? new Error('obsCaptureHostClosed'));
@@ -292,6 +389,22 @@ function validCounters(event) {
   return [event.renderedFrames, event.bridgeFrames, event.bridgeDroppedFrames]
     .every((value) => Number.isSafeInteger(value) && value >= 0)
     && event.renderedFrames >= event.bridgeFrames + event.bridgeDroppedFrames;
+}
+
+function validAudioCode(code) {
+  return ['screenShareAudioAlreadyRunning', 'screenShareAudioStartFailed', 'screenShareAudioStartTimedOut',
+    'screenShareAudioUnsupported', 'screenShareAudioTargetUnavailable', 'screenShareAudioPipeFailed',
+    'screenShareAudioStopFailed', 'screenShareAudioFailed', 'screenShareAudioFormatUnsupported'].includes(code);
+}
+
+function validAudioDiagnostics(audio) {
+  return audio && ['idle', 'starting', 'running', 'stopping', 'failed'].includes(audio.state)
+    && ((Number.isInteger(audio.sampleRate) && audio.sampleRate >= 8000 && audio.sampleRate <= 192000
+      && Number.isInteger(audio.channels) && audio.channels >= 1 && audio.channels <= 8)
+      || (audio.sampleRate === null && audio.channels === null))
+    && ['packetsReceived', 'framesReceived', 'silentPackets', 'droppedAudioChunks']
+      .every((key) => Number.isSafeInteger(audio[key]) && audio[key] >= 0)
+    && audio.silentPackets <= audio.packetsReceived && (audio.lastError === null || validAudioCode(audio.lastError));
 }
 
 function isPositiveSize(size) {

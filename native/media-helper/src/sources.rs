@@ -15,16 +15,6 @@ pub(super) enum CaptureTarget {
     Test(u64),
 }
 
-#[derive(Clone)]
-pub(super) enum ThreadCaptureTarget {
-    #[cfg(target_os = "windows")]
-    Monitor(usize),
-    #[cfg(target_os = "windows")]
-    Window(usize, windows::WindowIdentity),
-    #[cfg(test)]
-    Test,
-}
-
 pub(super) struct DiscoveredSource {
     pub(super) source: VideoSource,
     pub(super) target: CaptureTarget,
@@ -142,12 +132,14 @@ impl SourceRegistry {
 }
 
 impl CaptureTarget {
-    pub(super) fn window_video_target(
-        &self,
-    ) -> Result<crate::protocol::WindowVideoTarget, ErrorCode> {
+    pub(super) fn video_target(&self) -> Result<crate::protocol::ReservedVideoTarget, ErrorCode> {
         #[cfg(target_os = "windows")]
         if let Self::Window(window, identity) = self {
             return windows::window_video_target(*window, identity);
+        }
+        #[cfg(target_os = "windows")]
+        if let Self::Monitor(monitor) = self {
+            return windows::monitor_video_target(*monitor);
         }
         Err(ErrorCode::InvalidRequest)
     }
@@ -157,19 +149,6 @@ impl CaptureTarget {
         match self {
             Self::Monitor(monitor) => Some(monitor.0 as usize),
             _ => None,
-        }
-    }
-
-    pub(super) fn thread_target(self) -> ThreadCaptureTarget {
-        match self {
-            #[cfg(target_os = "windows")]
-            Self::Monitor(monitor) => ThreadCaptureTarget::Monitor(monitor.0 as usize),
-            #[cfg(target_os = "windows")]
-            Self::Window(window, identity) => {
-                ThreadCaptureTarget::Window(window.0 as usize, identity)
-            }
-            #[cfg(test)]
-            Self::Test(_) => ThreadCaptureTarget::Test,
         }
     }
 }
@@ -230,26 +209,6 @@ impl DiscoveryRuntime {
         }
     }
 
-    pub(super) fn video_capture_capability(&mut self) -> crate::protocol::Capability {
-        #[cfg(target_os = "windows")]
-        {
-            match self.windows_discovery() {
-                Ok(discovery) => discovery.video_capture_capability(),
-                Err(_) => crate::protocol::Capability {
-                    available: false,
-                    reason: "sourceDiscoveryFailed",
-                },
-            }
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            crate::protocol::Capability {
-                available: false,
-                reason: "platformUnsupported",
-            }
-        }
-    }
-
     pub(super) fn discover(&mut self) -> Result<Vec<DiscoveredSource>, ErrorCode> {
         #[cfg(target_os = "windows")]
         {
@@ -272,21 +231,6 @@ impl DiscoveryRuntime {
         {
             let _ = target;
             false
-        }
-    }
-
-    pub(super) fn audio_process_identity(
-        &mut self,
-        target: &CaptureTarget,
-    ) -> Result<(u32, u64), ErrorCode> {
-        #[cfg(target_os = "windows")]
-        {
-            self.windows_discovery()?.audio_process_identity(target)
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = target;
-            Err(ErrorCode::AudioPlatformUnsupported)
         }
     }
 

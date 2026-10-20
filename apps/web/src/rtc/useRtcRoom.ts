@@ -888,9 +888,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
                 if (!isCurrentTask()) return;
                 const code = error instanceof Error ? error.message : '';
                 let reason = 'Windows 音频捕获启动失败';
-                if (/obsCaptureScreenAudioUnavailable/.test(code)) {
-                  reason = '当前 OBS 验证路径只支持画面共享';
-                } else if (/screenShareAudioUnsupported/.test(code)) {
+                if (/screenShareAudioUnsupported/.test(code)) {
                   reason = '当前 Windows 版本不支持屏幕共享声音捕获';
                 } else if (/screenShareAudioTargetUnavailable/.test(code) && audioMode === 'systemMix') {
                   reason = '默认播放设备不可用或已切换';

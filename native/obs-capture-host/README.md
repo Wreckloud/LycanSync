@@ -1,6 +1,6 @@
-# OBS capture host (development migration)
+# OBS capture host
 
-This Windows x64 host requires **OBS Studio 32.2.2** exactly. It is an unpackaged development path, not an installer-ready replacement. Installed clients still use Rust until migration acceptance. Screen audio and remote-control association are not yet supported by the OBS path.
+This Windows x64 host requires **OBS Studio 32.2.2** exactly. Development and installed clients built from this revision use this single capture route, without Rust video/audio fallback. Older published installers are unchanged until a new release. Rust retains source identity, microphone capture and monitor remote-control authorization/input. Consolidated device acceptance is still pending; selecting the production route is not a performance or compatibility verdict.
 
 ## Build without starting capture
 
@@ -16,7 +16,7 @@ From the project root:
 
 The script uses existing Visual Studio x64 C++ Build Tools and Windows SDK. It downloads to project-local `release/build-cache/obs-32.2.2`, verifies SHA-256, extracts the required files and builds with CMake. It does not install system components, initialize OBS, start capture or replace the user's OBS installation. No Qt, OBS UI, browser or recording/output plugins are included.
 
-The official Windows ZIP has no development SDK. The script uses matching public headers and generates import libraries from actual fixed DLL exports; it does not invent an upstream CMake package. The fixed upstream `win-capture` source is rebuilt with the narrow exact-window patch. Official graphics-hook DLLs and injection helpers are **not** recompiled.
+The official Windows ZIP has no development SDK. The script uses matching public headers and generates import libraries from actual fixed DLL exports; it does not invent an upstream CMake package. The fixed upstream `win-capture` source is rebuilt with the narrow exact-window patch. The same-version `win-wasapi` source is also rebuilt with exact-process binding and capture-status reporting, for the next audio wiring step. Official graphics-hook DLLs and injection helpers are **not** recompiled.
 
 Pinned archives:
 
@@ -30,15 +30,40 @@ Source/runtime archives come from the [fixed official release](https://github.co
 
 The prepared runtime is `release/build-cache/obs-32.2.2/prepared`. It contains one `obs-plugins/64bit/win-capture.dll`: the project-built exact-window plugin. The original upstream plugin is not copied back by a default build, and the old optional game-plugin switch is removed. Test executables stay under `cmake-build/test-tools`, outside default builds and runtime packaging. Build manifests record archive, patch and binary hashes, compiler, size and resolved static imports. `runtimeExecuted: false` describes the build script, not separately authorized tests; `redistributionReady: false` remains deliberate.
 
-## Enable the development route
+## Screen audio and lifecycle
 
-Build the activity and media helpers together with the host (`npm run build:activity` and `npm run build:media` from `apps/web`). Set these three environment variables to absolute existing paths:
+The prepared `obs-plugins/64bit/win-wasapi.dll` is the only audio plugin build. The host loads it on the first shared-audio request, not for video-only sharing. Module/data paths are the `win-wasapi` siblings of the configured `win-capture` paths; no extra environment switches are required. Existing installed clients, microphone capture, UI preferences and server APIs are unchanged. Desktop/helper builds must stay together; there is no older protocol compatibility branch.
 
-- `LYCANSYNC_OBS_CAPTURE_HOST`: prepared `bin/64bit/lycansync-obs-capture-host.exe`.
-- `LYCANSYNC_OBS_WIN_CAPTURE_MODULE`: prepared `obs-plugins/64bit/win-capture.dll`, **not** the unpatched upstream copy.
-- `LYCANSYNC_OBS_WIN_CAPTURE_DATA`: prepared `data/obs-plugins/win-capture`.
+- `lycansync_process_output_capture` requires the selected HWND and Rust's instance property, or an explicit process to exclude for monitor sharing. It holds the original process object and rechecks the window marker and process before delivering captured packets. It never resolves another window by title/class/executable and never falls back to system mix.
+- Monitor process mode is configured to exclude the trusted Electron main-process tree, including received room audio. The manager supplies its own PID, not renderer input; actual exclusion still needs listening acceptance. `lycansync_system_output_capture` is only for the existing explicitly consented old-Windows system-mix mode. Electron retains the current capability and preference policy; the host independently rejects a broader system-mix request on a process-capable OS.
+- The private `lycansync_audio_status` procedure (binding version 1) reports state `0` waiting, `1` initialized and capture started, or `2` failed. Source creation alone is not success; silence does not imply failure. Failures are latched, with no title rematch or automatic reconnect. A default-device change invalidates system mix rather than silently changing devices. Packet/frame/silence counters are native source counters, not pipe delivery or remote playback.
+- No microphone source is registered by this module. WASAPI capture and format handling remain fixed upstream code, not another self-written capture engine. The narrow patch and built binary hashes have a separate `cmake-build/audio-plugin/build-manifest.json`.
 
-All three are required; the opt-in is Windows/unpackaged only. The parent starts the host in its `bin/64bit` directory because libobs locates core effects by relative path. Module paths are normalized before libobs derives the module name. Writable configuration belongs to Electron's user-data `obs-capture/32.2.2`, not the fixed runtime bundle.
+`audioStart:<audio-id>:<process|systemMix>:<client-pid>` / `audioStop:<audio-id>` and `audioStarted` / `audioFailed` / `audioStopped` are private host messages. Each attempt uses the main process's fresh pipe UUID, in addition to the video session ID; late replies cannot resurrect or stop another attempt. Electron returns a format only after the native source reports a real successful start. Source initialization has an eight-second deadline and the manager a ten-second start deadline; silence is not a startup failure. Audio start timeout requests cleanup without killing video.
+
+libobs resamples the source to its configured 48 kHz stereo planar-float format. The source callback only interleaves samples into 480-frame packets and a preallocated 12-packet queue, dropping the oldest full packet when overloaded. A separate worker writes the existing little-endian frame-count + stereo float32 pipe protocol with cancelable overlapped I/O; callbacks never wait on the pipe. The page still uses `NativeScreenAudioSession` and its existing AudioWorklet/LiveKit track, not a second audio graph or local speaker. No frames/audio are saved and no per-packet logs are added.
+
+Stop immediately cuts main-process delivery and invalidates the native PCM queue, then removes the callback and source, waits for libobs's destruction queue (including WASAPI cleanup), and acknowledges. The command/video thread does not wait on source destruction. An unconfirmed three-second audio stop rejects and blocks another audio attempt, but does not kill the usable video host; a late matching cleanup ACK or host exit releases that blocker. Whole-share stop still confirms process exit before releasing Rust identity. Audio failure closes only shared audio and retains video, microphone and remote-control association; quality switching retains the same source/audio worker.
+
+The existing diagnostic request now includes the OBS source's audio state, **original source** sample rate/channels, packet/frame/silence counters and the native output queue's dropped chunks. The pipe format stays 48 kHz stereo even when a system-mix source is, for example, 44.1 kHz multichannel. Main/page queue drops are added separately by the existing projection; these counters do not prove converted frames were published or heard remotely. No new page sampling timer or report schema is introduced. After stop, final counters may remain with an explicit idle state.
+
+After `-BuildTestWindows`, identity and synthetic PCM tests can run without OBS initialization, plugins or audio devices:
+
+```powershell
+$env:PATH = "$(Resolve-Path release/build-cache/obs-32.2.2/prepared/bin/64bit);$env:PATH"
+& ./release/build-cache/obs-32.2.2/cmake-build/test-tools/lycansync-bound-audio-target-tests.exe
+& ./release/build-cache/obs-32.2.2/cmake-build/test-tools/lycansync-bound-game-target-tests.exe
+& ./release/build-cache/obs-32.2.2/cmake-build/test-tools/lycansync-screen-audio-pcm-tests.exe
+```
+
+They create only their own hidden fixture windows; the audio identity test also starts one short-lived copy of itself that waits for an event, proving an exited process is no longer valid. They do not prove capture, loopback exclusion, audible output, startup/stop timing or synchronization; those require consolidated device acceptance after wiring.
+
+## Production and development paths
+
+Run `npm run build:desktop` from `apps/web` after the verified OBS archives are cached. Development reads the fixed prepared directory; installed clients read `resources/obs-capture`. There is no engine environment switch.
+
+
+The parent starts the host in its `bin/64bit` directory because libobs locates core effects by relative path. Writable configuration belongs to Electron user-data `obs-capture/32.2.2`, not the runtime bundle. Missing resources explicitly fail rather than starting another engine.
 
 ## Source selection and identity
 
@@ -50,7 +75,9 @@ The existing picker remains unchanged; users do not choose a capture API.
 
 Classification queries do not enumerate windows or change published activity. The executable is stripped before host startup, never exposed to the renderer or anonymous report. The existing activity scan remains independent of capture resources. Configuration/stop changes invalidate pending classification results; late results cannot start capture or close a newer session.
 
-Rust reserves the exact selected window/instance-property tuple in its existing video session, without starting a capture worker. List refresh does not release the reservation. The host checks the instance before source creation and before/after GPU delivery; a closed/replaced window ends capture without selecting a different window or monitor. Stop confirms the OBS process exit **before** releasing Rust's reservation. Unconfirmed termination keeps the reservation and blocks another capture. Old private protocol responses lacking the executable are rejected, not accepted via a compatibility path.
+Rust reserves the selected monitor or exact window/instance-property tuple in its existing video session, without starting a capture worker. The private command is now only `reserveVideo`/`videoReserved` with a tagged monitor/window target; the old window-only command and untagged response are rejected, not retained as aliases. Monitors pass their validated device name; window targets include the executable. Client and helper must be built together. List refresh does not release the reservation. The host checks window instances before source creation and before/after GPU delivery; a closed/replaced window ends capture without selecting a different window or monitor. Stop confirms the OBS process exit **before** releasing Rust's reservation. Unconfirmed termination keeps the reservation and blocks another capture.
+
+Only a successfully started, current monitor share can receive remote-control authorization. Window/game shares cannot obtain monitor control. Rust still owns the authoritative grant, selected monitor, sequence/rate checks and held-input cleanup; OBS owns shared video/audio. Starting/stopping sessions reject authorization and input before waiting for asynchronous cleanup. Stop first revokes input and releases held keys, then closes OBS, then releases the reservation. A revoke failure still permits the remaining video cleanup, but is reported rather than converted into success. Stop and late authorization replies cannot restore permission; an invalid monitor is rejected and the existing grant revoked before injection. These are associations to existing remote control, not new private-view, source-switch or automatic-restoration features.
 
 The stock game query exposes titles, not HWNDs. The fixed-source patch adds `lycansync_get_target` ABI 1 (selected HWND, actual drawing HWND, hooked and valid), disables foreground/fullscreen/hotkey target selection, and guards hook initialization/ticking/rendering/dimensions. Drawing children of the selected window are allowed; another top-level or owned popup is not. The host validates this public query rather than reading a precompiled DLL's private structure. A mismatch remains latched after stopping the plugin so it cannot become an apparent first-frame wait. Neither classifier nor game-source failure falls back to ordinary-window, monitor or Rust capture.
 
@@ -64,7 +91,7 @@ The host copies the OBS main texture into three bounded BGRA shared-NT GPU slots
 
 Electron validates the child identity before duplicating handles. A slot is returned only after all imported references are released. Transfers pending Electron acknowledgement retain the main reference, avoiding premature release on stop or rejection. Preload snapshots imported frames through one session-owned OffscreenCanvas because direct external frames stalled the tested generated-track path. The input/import belongs to preload, the transferred copy to the page; matching stop/error/suspension clears the canvas, while late old-session cleanup cannot clear a new one. This adds a canvas conversion, is not zero-copy, and uses no per-frame CPU readback API.
 
-Screen audio and remote control remain blocked in this development path until integrated. The agreed cutover completes those capabilities, runs consolidated acceptance, then removes replaced Rust video/audio commands, probes and residual callers. There is no permanent dual-engine UI or failure fallback.
+OBS sharing does not start the old Rust screen-audio worker. The agreed cutover runs consolidated audio/video/remote-control acceptance before removing replaced Rust video/audio commands, probes and residual callers. Rust's retained source identity and input injection are not a second video engine and are not removed merely because media moves to OBS. There is no permanent dual-engine UI or failure fallback.
 
 ## Explicit tests and acceptance boundaries
 
@@ -78,9 +105,9 @@ From `apps/web`, additionally choose **one** mode and run only `node --test --te
 | `LYCANSYNC_CAPTURE_GAME_CHECK=1` | Two own D3D11 swap chains, fixture-only activity mapping and the production game classifier/host path. Official hooks may inject only this owned process. |
 | `LYCANSYNC_CAPTURE_APPLICATION_CHECK=1` | Dedicated browser fixture titles; optionally an explicitly authorized `LYCANSYNC_CAPTURE_APPLICATION_WINDOW_ID` for read-only existing-window capture. |
 | `LYCANSYNC_CAPTURE_QUALITY_CHECK=1` | Authorized primary-monitor 60→30→120→60 changes. |
-| `LYCANSYNC_CAPTURE_RESOURCE_CHECK=1` | Short primary-monitor resource comparison; optional `LYCANSYNC_CAPTURE_REFERENCE=rust` is test-only, never production fallback. |
+| `LYCANSYNC_CAPTURE_RESOURCE_CHECK=1` | Short authorized primary-monitor resource measurement of the sole OBS route. |
 
-Rebuild the reference media helper after private protocol changes with `cargo build --manifest-path native/media-helper/Cargo.toml --release --features shared-texture-output --target-dir release/build-cache/media-helper-compare`. The game mode also needs the normal release activity helper. Clear test variables afterwards. Running the **whole** device-test file also captures the primary monitor; a window-only authorization does not authorize that.
+Build the production media helper with `npm run build:media`. Resource checks include the separate Rust identity helper alongside OBS/Electron; working sets remain separate and are not summed as physical memory. Clear test variables afterwards. Running the whole device-test file also captures the primary monitor; window-only authorization does not authorize that.
 
 The native `cmake-build/test-tools/lycansync-bound-game-target-tests.exe` runs from prepared `bin/64bit`, creates its own hidden windows and tests markers/child/owned-popup/closure constraints without initializing OBS or injecting a process.
 
@@ -90,4 +117,4 @@ Earlier local checks passed ordinary windows, Edge main/popup and QQ. Two contro
 
 Initializing `win-capture`, even for a monitor, can update `%ProgramData%/obs-studio-hook`, run helper initialization, modify Vulkan implicit-layer files/registry entries and contact OBS's compatibility-update endpoint. Native networking is not governed by Electron session denial. Ordinary-window mode skips module initialization. Do not claim system neutrality simply because OBS's installation directory is untouched; do not force-replace occupied hooks or terminate unrelated programs.
 
-The recompiled parent plugin does not inherit an official signature or guarantee anti-cheat support, even with unchanged official hook/helper binaries. The bundle retains OBS's GPL license and fixed complete source-archive reference. Corresponding source, third-party dependency licenses, distribution materials, update-network policy and clean-machine installation remain release checks. This is not a release-ready redistribution.
+The recompiled plugin does not inherit an official signature or guarantee anti-cheat support, even with unchanged official hook/helper binaries. This directory is GPL-2.0-or-later (see LICENSE.md and COPYING), without relicensing the rest of the project. The build collects OBS and dependency licenses. Corresponding dependency source/build materials, distribution checks, update-network policy and clean-machine installation remain release checks. `redistributionReady` remains false until those materials are verified; the installer packager rejects that state. A compiled runtime is not permission to publish an incomplete redistribution.

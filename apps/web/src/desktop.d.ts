@@ -130,8 +130,6 @@ interface Window {
     getNativeMediaCapabilities(): Promise<Record<string, { available: boolean; reason: string }>>;
     listNativeVideoSources(): Promise<{ revision: number; discoveryId: string; sources: NativeVideoSource[] }>;
     getNativeVideoSourceThumbnails(sources: NativeVideoSource[]): Promise<{ sourceId: string; thumbnail: string }[]>;
-    startNativeCaptureProbe(sourceId: string): Promise<{ sessionId: string; changed: boolean }>;
-    stopNativeCaptureProbe(sessionId: string): Promise<{ changed: boolean }>;
     getScreenShareSupport(): Promise<{ hideCursor: boolean; hideBorder: boolean }>;
     startNativeVideo(sourceId: string, maxFps: number, settings: { hideCursor: boolean; hideBorder: boolean }): Promise<{ sessionId: string; changed: boolean }>;
     stopNativeVideo(sessionId: string): Promise<{ changed: boolean }>;

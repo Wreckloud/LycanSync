@@ -10,6 +10,8 @@ const { ObsCaptureHostManager } = require('./obs-capture-host.cjs');
 const sessionId = '12345678-1234-1234-1234-123456789abc';
 const monitorName = '\\\\.\\DISPLAY2';
 const flush = () => new Promise((resolve) => setImmediate(resolve));
+const idleAudio = { state: 'idle', sampleRate: null, channels: null, packetsReceived: 0, framesReceived: 0,
+  silentPackets: 0, droppedAudioChunks: 0, lastError: null };
 
 function fixture(context, { closeOnShutdown = true, closeOnKill = true, blockShutdownWrite = false, shutdownDelayMs = 0 } = {}) {
   const child = new EventEmitter();
@@ -19,6 +21,7 @@ function fixture(context, { closeOnShutdown = true, closeOnKill = true, blockShu
   const commands = [];
   const spawns = [];
   const failures = [];
+  const audioFailures = [];
   let kills = 0;
   child.stdin = new Writable({ write(chunk, _encoding, callback) {
     const command = chunk.toString('utf8').trim();
@@ -38,9 +41,11 @@ function fixture(context, { closeOnShutdown = true, closeOnKill = true, blockShu
   const frames = [];
   const manager = new ObsCaptureHostManager({ executablePath: 'C:\\obs\\host.exe', modulePath: 'C:\\obs\\win-capture.dll',
     dataPath: 'C:\\obs\\data', configPath: 'C:\\user-data\\obs-capture\\32.2.2',
-    platform: 'win32', spawnProcess: (...args) => { spawns.push(args); return child; },
+    platform: 'win32', clientProcessId: 4321, spawnProcess: (...args) => { spawns.push(args); return child; },
+    onAudioFailure: (_state, failure) => audioFailures.push(failure),
     onFrame: (_state, frame) => frames.push(frame), onFailure: (_state, error) => failures.push(error.message) });
-  const emit = (event) => child.stdout.write(JSON.stringify(event) + '\n');
+  const emit = (event) => child.stdout.write(JSON.stringify(event.event === 'diagnostics'
+    ? { screenShareAudio: { ...idleAudio }, ...event } : event) + '\n');
   const start = (maxFps = 60) => manager.start('monitor:7:0', maxFps, sessionId,
     { kind: 'monitor', monitorName }, { hideCursor: true, hideBorder: false });
   const ready = async (maxFps = 60) => {
@@ -52,16 +57,360 @@ function fixture(context, { closeOnShutdown = true, closeOnKill = true, blockShu
     if (manager.state) manager.state.stopRequested = true;
     child.emit('close', 0);
   });
-  return { child, commands, spawns, failures, frames, manager, emit, start, ready, killCount: () => kills };
+  return { child, commands, spawns, failures, audioFailures, frames, manager, emit, start, ready, killCount: () => kills };
 }
 
-test('安装包包含主进程直接依赖的 OBS 管理文件，但不打包未验收的原生宿主', () => {
+const audioId = '00000000-0000-0000-0000-000000000001';
+const nextAudioId = '00000000-0000-0000-0000-000000000002';
+const audioFormat = { sampleRate: 48_000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10 };
+
+test('OBS 声音等待真实启动及固定格式确认，使用同一宿主并由可信主进程提供排除身份', async (context) => {
+  const { manager, ready, emit, commands, spawns } = fixture(context);
+  await ready();
+  const state = manager.state;
+  for (const [id, mode] of [[audioId, 'process'], [nextAudioId, 'systemMix']]) {
+    const started = manager.startScreenAudio(sessionId, id, mode);
+    assert.equal(state.audio.started, false);
+    assert.equal(commands.at(-1), `audioStart:${id}:${mode}:4321`);
+    await assert.rejects(manager.startScreenAudio(sessionId, id, mode), /AlreadyRunning/);
+    emit({ event: 'audioStarted', sessionId, audioId: id, ...audioFormat });
+    assert.deepEqual(await started, audioFormat);
+    assert.equal(state.audio.started, true);
+    const stopped = manager.stopScreenAudio(sessionId, id);
+    assert.equal(manager.stopScreenAudio(sessionId, id), stopped);
+    emit({ event: 'audioStopped', sessionId, audioId: id });
+    assert.deepEqual(await stopped, { changed: true });
+    assert.equal(manager.state, state);
+    assert.equal(state.audio, undefined);
+  }
+  assert.equal(spawns.length, 1);
+});
+
+test('OBS 声音拒绝无效来源模式、旧会话和非法标识，不伪造另一个声音来源', async (context) => {
+  const { manager, ready, commands } = fixture(context);
+  await ready();
+  for (const [id, pipe, mode] of [['old', audioId, 'process'], [sessionId, 'bad:pipe', 'process'],
+    [sessionId, audioId, 'auto'], [sessionId, audioId, 'unavailable']]) {
+    await assert.rejects(manager.startScreenAudio(id, pipe, mode), /invalidScreenShareAudioStart/);
+  }
+  assert.deepEqual(commands, []);
+});
+
+test('OBS 声音启动中关闭，迟到成功或上一轮失败不能恢复声音或结束下一轮', async (context) => {
+  const { manager, ready, emit, audioFailures, failures } = fixture(context);
+  await ready();
+  const startRejected = assert.rejects(manager.startScreenAudio(sessionId, audioId, 'process'), /SessionStopped/);
+  const stopped = manager.stopScreenAudio(sessionId, audioId);
+  await startRejected;
+  emit({ event: 'audioStarted', sessionId, audioId, ...audioFormat });
+  assert.equal(manager.state.audio.started, false);
+  emit({ event: 'audioStopped', sessionId, audioId });
+  await stopped;
+  const next = manager.startScreenAudio(sessionId, nextAudioId, 'process');
+  emit({ event: 'audioFailed', sessionId, audioId, code: 'screenShareAudioFailed' });
+  emit({ event: 'audioStopped', sessionId, audioId });
+  assert.equal(manager.state.audio.id, nextAudioId);
+  emit({ event: 'audioStarted', sessionId, audioId: nextAudioId, ...audioFormat });
+  await next;
+  assert.deepEqual(audioFailures, []);
+  assert.deepEqual(failures, []);
+});
+
+test('OBS 声音失败及格式错误只结束声音，原生确认清理后才允许重开', async (context) => {
+  for (const invalidFormat of [false, true]) {
+    const { manager, ready, emit, audioFailures, failures, killCount } = fixture(context);
+    await ready();
+    const state = manager.state;
+    const rejected = assert.rejects(manager.startScreenAudio(sessionId, audioId, 'process'),
+      invalidFormat ? /FormatUnsupported/ : /StartFailed/);
+    emit(invalidFormat ? { event: 'audioStarted', sessionId, audioId, ...audioFormat, channels: 1 }
+      : { event: 'audioFailed', sessionId, audioId, code: 'screenShareAudioStartFailed' });
+    await rejected;
+    await assert.rejects(manager.startScreenAudio(sessionId, nextAudioId, 'process'), /AlreadyRunning/);
+    assert.equal(state.audio.stopping, true);
+    emit({ event: 'audioStopped', sessionId, audioId });
+    await flush();
+    assert.equal(manager.state, state);
+    assert.equal(state.audio, undefined);
+    assert.equal(audioFailures.length, 1);
+    assert.equal(killCount(), 0);
+    assert.deepEqual(failures, []);
+  }
+});
+
+test('OBS 声音启动超时会请求清理，停止未确认时保留阻挡且不杀视频', async (context) => {
+  const { manager, ready, emit, commands, killCount, audioFailures } = fixture(context);
+  await ready();
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const rejected = assert.rejects(manager.startScreenAudio(sessionId, audioId, 'process'), /StartTimedOut/);
+  context.mock.timers.tick(10_000);
+  await rejected;
+  assert.equal(commands.at(-1), `audioStop:${audioId}`);
+  const stopRejected = assert.rejects(manager.stopScreenAudio(sessionId, audioId), /StopFailed/);
+  context.mock.timers.tick(3000);
+  await stopRejected;
+  assert.equal(manager.state.audio.stopping, true);
+  assert.equal(killCount(), 0);
+  assert.equal(audioFailures.length, 1);
+  await assert.rejects(manager.startScreenAudio(sessionId, nextAudioId, 'process'), /AlreadyRunning/);
+  emit({ event: 'audioStarted', sessionId, audioId, ...audioFormat });
+  assert.equal(manager.state.audio.started, false);
+  emit({ event: 'audioStopped', sessionId, audioId });
+  assert.equal(manager.state.audio, undefined);
+});
+
+test('OBS 声音诊断保留原始来源采样率，不能把多声道源计数冒充 48k 双声道交付', async (context) => {
+  const { manager, ready, emit } = fixture(context);
+  await ready();
+  const diagnostics = manager.getDiagnostics(sessionId);
+  emit({ event: 'diagnostics', requestId: '1', sessionId, renderedFrames: 60, bridgeFrames: 3, bridgeDroppedFrames: 57,
+    screenShareAudio: { state: 'running', sampleRate: 44_100, channels: 6, packetsReceived: 20,
+      framesReceived: 44_100, silentPackets: 2, droppedAudioChunks: 1, lastError: null } });
+  const source = (await diagnostics).screenShareAudio;
+  assert.equal(source.sampleRate, 44_100);
+  assert.equal(source.channels, 6);
+  assert.equal(source.framesReceived, 44_100);
+  const rejected = assert.rejects(manager.getDiagnostics(sessionId), /DiagnosticsInvalid/);
+  emit({ event: 'diagnostics', requestId: '2', sessionId, renderedFrames: 60, bridgeFrames: 3, bridgeDroppedFrames: 57,
+    screenShareAudio: { ...idleAudio, packetsReceived: 1, silentPackets: 2 } });
+  await rejected;
+});
+
+test('OBS 宿主退出使声音启动失败，退出本身确认了待清理的声音资源已释放', async (context) => {
+  const { manager, ready, child } = fixture(context);
+  await ready();
+  const rejected = assert.rejects(manager.startScreenAudio(sessionId, audioId, 'process'), /SessionStopped/);
+  const stopped = manager.stopScreenAudio(sessionId, audioId);
+  child.emit('close', 1);
+  await rejected;
+  assert.deepEqual(await stopped, { changed: true });
+  assert.equal(manager.state, undefined);
+});
+
+function mainScreenAudioFixture({ capability = 'windowsApplicationLoopbackProcessTree', captureStart, captureStop } = {}) {
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const calls = [];
+  const messages = [];
+  const servers = [];
+  let sequence = 0;
+  const sandbox = { closing: false, process: { platform: 'win32' }, Buffer, Uint8Array, AggregateError,
+    nativeVideoSession: { sessionId, sourceId: 'monitor:7:0', starting: false, stopping: false },
+    nativeScreenAudioSession: undefined, lastScreenAudioDroppedChunks: 0,
+    nativeMicrophoneSession: { sessionId: 'separate-microphone' },
+    randomUUID: () => ++sequence === 1 ? audioId : nextAudioId,
+    mainWindow: { isDestroyed: () => false, webContents: { isDestroyed: () => false,
+      send: (...args) => messages.push(args) } },
+    writeMediaDiagnostic: async (event) => { calls.push(['diagnostic', event]); },
+    releaseHelperProcessBridge: () => {},
+    createServer: () => {
+      const server = new EventEmitter();
+      server.listening = false;
+      server.listen = (path) => {
+        calls.push(['listen', path]); server.listening = true; queueMicrotask(() => server.emit('listening'));
+      };
+      server.close = () => { server.listening = false; calls.push(['close']); };
+      servers.push(server);
+      return server;
+    },
+    screenShareAudioCapability: () => ({ available: capability !== 'platformUnsupported', reason: capability }),
+    obsCaptureHost: {
+      startScreenAudio: (...args) => { calls.push(['start', ...args]); return captureStart?.(...args) ?? Promise.resolve(audioFormat); },
+      stopScreenAudio: (...args) => { calls.push(['stop', ...args]); return captureStop?.(...args) ?? Promise.resolve({ changed: true }); },
+    } };
+  runInNewContext(main.slice(main.indexOf('function finishNativeScreenAudioPipe('),
+    main.indexOf('function finishNativeMicrophonePipe(')) + '\n'
+    + main.slice(main.indexOf('function validNativeAudioSessionId('), main.indexOf('function handleNativeMicrophonePipeData(')) + '\n'
+    + main.slice(main.indexOf('function handleNativeScreenAudioPipeData('), main.indexOf('function handleMediaHelperFailure(')), sandbox);
+  const connect = () => {
+    const socket = new EventEmitter();
+    socket.destroyed = false;
+    socket.setNoDelay = () => {};
+    socket.destroy = () => { socket.destroyed = true; socket.emit('close'); };
+    servers.at(-1).emit('connection', socket);
+    return socket;
+  };
+  const packet = () => {
+    const bytes = Buffer.alloc(4 + 480 * 8);
+    bytes.writeUInt32LE(480);
+    bytes.writeFloatLE(0.25, 4);
+    return bytes;
+  };
+  return { sandbox, calls, messages, servers, connect, packet,
+    start: () => sandbox.startNativeScreenAudio('monitor:7:0', sessionId),
+    stop: () => sandbox.stopNativeScreenAudio(sessionId) };
+}
+
+test('正式声音入口按能力选择 OBS 模式，先建立管道，成功才返回格式；重复点击共用等待', async () => {
+  for (const [capability, mode] of [['windowsApplicationLoopbackProcessTree', 'process'], ['windowsSystemMixLoopback', 'systemMix']]) {
+    let accept;
+    const f = mainScreenAudioFixture({ capability, captureStart: () => new Promise((resolve) => { accept = resolve; }) });
+    const first = f.start();
+    const repeated = f.start();
+    await flush();
+    assert.deepEqual(f.calls.map((entry) => entry[0]), ['listen', 'start']);
+    assert.equal(f.calls.at(-1)[3], mode);
+    assert.equal(f.sandbox.nativeScreenAudioSession.format, undefined);
+    accept(audioFormat);
+    assert.deepEqual(await first, audioFormat);
+    assert.deepEqual(await repeated, audioFormat);
+    await f.stop();
+    assert.equal(f.sandbox.nativeScreenAudioSession, undefined);
+    assert.equal(f.sandbox.nativeMicrophoneSession.sessionId, 'separate-microphone');
+  }
+});
+
+test('PCM 碎片在真实格式确认前不发页面；停止 Promise 未完成时已断开并禁止后续交付', async () => {
+  let accept, finishStop;
+  const f = mainScreenAudioFixture({ captureStart: () => new Promise((resolve) => { accept = resolve; }),
+    captureStop: () => new Promise((resolve) => { finishStop = resolve; }) });
+  const started = f.start();
+  await flush();
+  const socket = f.connect();
+  const bytes = f.packet();
+  socket.emit('data', bytes.subarray(0, 17));
+  socket.emit('data', bytes.subarray(17));
+  assert.deepEqual(f.messages, []);
+  accept(audioFormat);
+  await started;
+  const frame = f.messages[0];
+  assert.equal(frame[0], 'media:native-screen-audio-frame');
+  assert.equal(frame[1].sampleRate, 48_000);
+  assert.equal(frame[1].pcm.byteLength, 3840);
+  const audio = f.sandbox.nativeScreenAudioSession;
+  const stopped = f.stop();
+  assert.equal(audio.stopping, true);
+  assert.equal(socket.destroyed, true);
+  assert.equal(audio.queue.length, 0);
+  socket.emit('data', bytes);
+  f.sandbox.acknowledgeNativeScreenAudioChunk(sessionId, 1, 0);
+  assert.equal(f.messages.length, 1);
+  finishStop({ changed: true });
+  await stopped;
+  assert.equal(f.sandbox.nativeVideoSession.stopping, false);
+});
+
+test('声音启动中停止并重开，迟到旧格式和旧停止通知不能清理下一次声音', async () => {
+  let acceptOld;
+  let starts = 0;
+  const f = mainScreenAudioFixture({ captureStart: () => ++starts === 1
+    ? new Promise((resolve) => { acceptOld = resolve; }) : Promise.resolve(audioFormat) });
+  const rejected = assert.rejects(f.start(), /SessionStopped/);
+  await flush();
+  await f.stop();
+  await f.start();
+  const next = f.sandbox.nativeScreenAudioSession;
+  acceptOld(audioFormat);
+  await rejected;
+  f.sandbox.handleObsScreenAudioStopped({ videoSessionId: sessionId }, { audioId });
+  assert.equal(f.sandbox.nativeScreenAudioSession, next);
+  assert.equal(next.pipeId, nextAudioId);
+  assert.equal(f.calls.filter((entry) => entry[0] === 'stop').length, 1);
+  await f.stop();
+});
+
+
+test('声音启动失败不回退；停止失败保留禁发与阻挡，迟到清理确认后才释放', async () => {
+  const failed = mainScreenAudioFixture({ captureStart: async () => { throw new Error('screenShareAudioStartFailed'); } });
+  await assert.rejects(failed.start(), /StartFailed/);
+  assert.equal(failed.sandbox.nativeScreenAudioSession, undefined);
+  assert.equal(failed.servers[0].listening, false);
+  const f = mainScreenAudioFixture({ captureStop: async () => { throw new Error('screenShareAudioStopFailed'); } });
+  await f.start();
+  const audio = f.sandbox.nativeScreenAudioSession;
+  const socket = f.connect();
+  await assert.rejects(f.stop(), /StopFailed/);
+  assert.equal(f.sandbox.nativeScreenAudioSession, audio);
+  assert.equal(audio.stopping, true);
+  assert.equal(socket.destroyed, true);
+  await assert.rejects(f.start(), /AlreadyRunning/);
+  f.sandbox.handleObsScreenAudioStopped({ videoSessionId: sessionId }, { audioId });
+  assert.equal(f.sandbox.nativeScreenAudioSession, undefined);
+  assert.equal(f.sandbox.nativeVideoSession.stopping, false);
+});
+
+test('能力失败、画面停止和旧来源不启动声音；原生错误只通知并清理对应声音', async () => {
+  const unsupported = mainScreenAudioFixture({ capability: 'platformUnsupported' });
+  await assert.rejects(unsupported.start(), /Unsupported/);
+  assert.equal(unsupported.calls.some((entry) => entry[0] === 'start'), false);
+  assert.equal(unsupported.servers[0].listening, false);
+  const f = mainScreenAudioFixture();
+  f.sandbox.nativeVideoSession.stopping = true;
+  await assert.rejects(f.start(), /videoSourceExpired/);
+  f.sandbox.nativeVideoSession.stopping = false;
+  await assert.rejects(f.sandbox.startNativeScreenAudio('window:7:0', sessionId), /videoSourceExpired/);
+  await f.start();
+  const audio = f.sandbox.nativeScreenAudioSession;
+  const socket = f.connect();
+  f.sandbox.notifyNativeScreenAudioError(audio, 'screenShareAudioTargetUnavailable');
+  assert.equal(socket.destroyed, true);
+  assert.equal(f.messages.at(-1)[0], 'media:native-screen-audio-error');
+  assert.equal(f.messages.at(-1)[1].code, 'screenShareAudioTargetUnavailable');
+  await flush();
+  assert.equal(f.sandbox.nativeScreenAudioSession, undefined);
+  assert.equal(f.sandbox.nativeVideoSession.stopping, false);
+  assert.equal(f.sandbox.nativeMicrophoneSession.sessionId, 'separate-microphone');
+});
+
+
+test('正式安装包交付唯一 OBS 采集宿主及插件资源', () => {
   const source = readFileSync(join(__dirname, '../electron-builder.cjs'), 'utf8');
   const module = { exports: {} };
   runInNewContext(source, { module, process: { env: {} },
     require: () => ({ updateFeedUrl: () => 'https://example.invalid/downloads/' }) });
   assert.ok(module.exports.files.includes('electron/obs-capture-host.cjs'));
-  assert.ok(!module.exports.extraResources.some((entry) => entry.from.includes('obs-capture-host')));
+  assert.ok(module.exports.extraResources.some((entry) => entry.to === 'obs-capture'));
+});
+
+test('打包前读取真实清单，未完成发布材料或文件变化时明确拒绝，不受 UTF-8 BOM 影响', () => {
+  const source = readFileSync(join(__dirname, 'package-desktop.cjs'), 'utf8');
+  const start = source.indexOf('const obsDirectory =');
+  const end = source.indexOf('const runtimeInstaller =', start);
+  assert.ok(start >= 0 && end > start);
+  const contents = Buffer.from('controlled runtime fixture');
+  const manifest = { obsVersion: '32.2.2', architecture: 'x64', redistributionReady: false,
+    files: [{ path: 'bin/64bit/obs.dll', bytes: contents.length,
+      sha256: require('node:crypto').createHash('sha256').update(contents).digest('hex') }] };
+  const sandbox = { projectRoot: 'C:\\project', join: require('node:path').win32.join,
+    createHash: require('node:crypto').createHash,
+    readFileSync: (file) => file.endsWith('build-manifest.json') ? '\uFEFF' + JSON.stringify(manifest) : contents };
+  const check = () => runInNewContext(source.slice(start, end), { ...sandbox });
+  assert.throws(check, /发布材料尚未核验/);
+  manifest.redistributionReady = true;
+  assert.doesNotThrow(check);
+  manifest.files[0].bytes++;
+  assert.throws(check, /文件与构建清单不一致/);
+});
+
+test('正式包和开发环境都使用固定 OBS 路径，不通过环境变量切回旧采集', () => {
+  const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const start = source.indexOf('function obsCaptureHostSettings(');
+  const end = source.indexOf('const obsHostSettings =', start);
+  assert.ok(start >= 0 && end > start);
+  for (const packaged of [false, true]) {
+    const sandbox = { app: { isPackaged: packaged }, process: { resourcesPath: 'C:\\installed\\resources',
+      env: { LYCANSYNC_OBS_CAPTURE_HOST: 'C:\\untrusted.exe' } },
+      __dirname: 'C:\\project\\apps\\web\\electron', resolve: require('node:path').win32.resolve };
+    const paths = runInNewContext(`${source.slice(start, end)}; obsCaptureHostSettings()`, sandbox);
+    assert.ok(paths.executablePath.endsWith('bin\\64bit\\lycansync-obs-capture-host.exe'));
+    assert.ok(paths.modulePath.endsWith('obs-plugins\\64bit\\win-capture.dll'));
+    assert.ok(packaged ? paths.executablePath.startsWith('C:\\installed\\resources\\obs-capture\\')
+      : paths.executablePath.startsWith('C:\\project\\release\\build-cache\\obs-32.2.2\\prepared\\'));
+  }
+});
+
+test('声音模式仅由 Windows 能力决定，旧系统混音与进程树范围不会互换', () => {
+  const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const start = source.indexOf('function screenShareAudioCapability(');
+  const end = source.indexOf('function notifyNativeVideoError(', start);
+  assert.ok(start >= 0 && end > start);
+  for (const [build, reason, available] of [[19041, 'windowsApplicationLoopbackProcessTree', true],
+    [19040, 'windowsSystemMixLoopback', true], [15063, 'windowsSystemMixLoopback', true],
+    [15062, 'windowsEventDrivenLoopbackRequiresBuild15063', false]]) {
+    const result = runInNewContext(`${source.slice(start, end)}; screenShareAudioCapability()`, {
+      process: { platform: 'win32' }, osRelease: () => `10.0.${build}` });
+    assert.equal(result.reason, reason);
+    assert.equal(result.available, available);
+  }
 });
 
 test('启动按显示器设备名传参，不把来源 ID 尾号当作显示器序号', async (context) => {
@@ -176,7 +525,8 @@ test('主进程的显示器各档启动及共享中切换均走 OBS，不接入�
     nativeVideoSourcesById: new Map([['monitor:7:0', { kind: 'monitor', title: monitorName }]]),
     obsCaptureHost: { start: async (...args) => { calls.push(args); return { sessionId, changed: true }; },
       configureVideo: async (...args) => { calls.push(args); return { changed: true }; } },
-    mediaHelper: { startVideo: () => assert.fail('显示器不应按画质回到旧采集'),
+    mediaHelper: { reserveVideo: async () => ({ kind: 'monitor', monitorName }),
+      startVideo: () => assert.fail('显示器不应按画质回到旧采集'),
       configureVideo: () => assert.fail('OBS 会话不应修改旧采集') } };
   runInNewContext(main.slice(start, end), sandbox);
   for (const fps of [30, 60, 120]) {
@@ -291,7 +641,7 @@ test('生产入口先预留窗口身份再启动 OBS，停止先关闭 OBS 再�
       },
       stop: async () => { calls.push('obs-stop'); sandbox.obsCaptureHost.state = undefined; return { changed: true }; } },
     mediaHelper: { videoCapture: undefined,
-      reserveWindowVideo: async () => {
+      reserveVideo: async () => {
         calls.push('reserve'); sandbox.mediaHelper.videoCapture = { state: targetState, sessionId };
         return { ...target, executable: 'C:\\Apps\\app.exe' };
       },
@@ -305,7 +655,7 @@ test('生产入口先预留窗口身份再启动 OBS，停止先关闭 OBS 再�
   await sandbox.startNativeVideo('window:7:0', 60, { hideCursor: false, hideBorder: false });
   assert.equal(sandbox.nativeVideoSession.targetState, targetState);
   assert.equal(sandbox.nativeVideoSession.sourceKind, 'window');
-  assert.equal(sandbox.nativeVideoSession.engine, 'obs');
+  assert.equal(sandbox.nativeVideoSession.sourceKind, 'window');
   await sandbox.stopNativeVideo(sessionId);
   assert.deepEqual(calls, ['reserve', 'classify', 'obs-start', 'obs-stop', 'release']);
   assert.equal(sandbox.nativeVideoSession, undefined);
@@ -329,7 +679,7 @@ function gameRoutingFixture(classify, startFailure) {
       },
       stop: async (id) => { calls.push({ action: 'stop', id }); sandbox.obsCaptureHost.state = undefined; return { changed: true }; } },
     mediaHelper: { videoCapture: undefined,
-      reserveWindowVideo: async (id) => {
+      reserveVideo: async (id) => {
         sandbox.mediaHelper.videoCapture = { state: {}, sessionId: id };
         calls.push({ action: 'reserve', id });
         return { kind: 'window', windowId: '123', propertyName: 'LycanSync.MediaHelper.Window.1.2.3',
@@ -394,6 +744,93 @@ test('分类等待中重复启动被拒绝；停止后迟到结果不能重开�
   await sandbox.stopNativeVideo(current.sessionId);
 });
 
+test('OBS 远控 IPC 仅接受当前有效整屏；启动、停止、旧会话和窗口均拒绝输入', async () => {
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const handlers = new Map();
+  const calls = [];
+  const sandbox = { closing: false, trustedSender: (event) => event.trusted,
+    ipcMain: { handle: (name, callback) => handlers.set(name, callback) },
+    nativeVideoSession: { sessionId, sourceId: 'monitor:7:0', starting: false, stopping: false },
+    mediaHelper: Object.fromEntries(['setRemoteControl', 'sendRemoteInput', 'clearRemoteControl'].map((name) =>
+      [name, async (...args) => { calls.push([name, ...args]); return { changed: true }; }])) };
+  runInNewContext(main.slice(main.indexOf("ipcMain.handle('media:remote-control:authorize',"),
+    main.indexOf("ipcMain.handle('media:native-screen-audio:start',")), sandbox);
+  const authorize = () => handlers.get('media:remote-control:authorize')({ trusted: true }, sessionId, 'control', 'friend');
+  const input = () => handlers.get('media:remote-control:input')({ trusted: true }, sessionId, 'control', 'friend', 1, { kind: 'keyUp', key: 'letterA' });
+  await authorize();
+  await input();
+  assert.deepEqual(calls.map((entry) => entry[0]), ['setRemoteControl', 'sendRemoteInput']);
+  for (const change of [{ starting: true }, { stopping: true }, { sourceId: 'window:7:0' }, { sessionId: 'old' }]) {
+    const current = sandbox.nativeVideoSession;
+    sandbox.nativeVideoSession = { ...current, ...change };
+    assert.throws(authorize, /InvalidSession/);
+    assert.throws(input, /InvalidSession/);
+    sandbox.nativeVideoSession = current;
+  }
+  assert.throws(() => handlers.get('media:remote-control:authorize')({ trusted: false }, sessionId, 'control', 'friend'), /InvalidSession/);
+  sandbox.closing = true;
+  assert.throws(authorize, /InvalidSession/);
+  assert.throws(input, /InvalidSession/);
+  await handlers.get('media:remote-control:revoke')({ trusted: true }, sessionId, 'control');
+  assert.equal(calls.at(-1)[0], 'clearRemoteControl');
+});
+
+test('停止先禁用远控并释放按键，再等待 OBS 退出后释放身份；撤销失败仍清理画面且不报成功', async () => {
+  for (const revokeFailure of [false, true]) {
+    const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+    const calls = [];
+    let releaseInput;
+    const sandbox = { nativeVideoSession: { sessionId, stopping: false,
+      targetState: {}, imported: new Map(), pendingSlotReleases: new Set() },
+      nativeScreenAudioSession: undefined, setTimeout, Date, lastStoppedNativeVideoSession: undefined,
+      obsCaptureHost: { state: { videoSessionId: sessionId }, stop: async () => {
+        calls.push('obs-stop'); sandbox.obsCaptureHost.state = undefined; return { changed: true };
+      } },
+      mediaHelper: { videoCapture: { sessionId, remoteControl: { controlSessionId: 'control', accepting: true } },
+        clearRemoteControl: async () => {
+          calls.push('revoke'); sandbox.mediaHelper.videoCapture.remoteControl.accepting = false;
+          await new Promise((resolve) => { releaseInput = resolve; });
+          if (revokeFailure) throw new Error('remoteControlInputFailed');
+          sandbox.mediaHelper.videoCapture.remoteControl = undefined;
+          return { changed: true };
+        },
+        stopVideo: async () => { calls.push('release'); sandbox.mediaHelper.videoCapture = undefined; return { changed: true }; } },
+      recordVideoFailure: () => calls.push('report-revoke-failure'), releaseHelperProcessBridge: () => {} };
+    runInNewContext(main.slice(main.indexOf('async function stopObsVideo('), main.indexOf('function validMicrophoneSettings(')), sandbox);
+    const stopped = sandbox.stopNativeVideo(sessionId);
+    const rejected = revokeFailure ? assert.rejects(stopped, /remoteControlInputFailed/) : undefined;
+    assert.equal(sandbox.nativeVideoSession.stopping, true);
+    assert.equal(sandbox.mediaHelper.videoCapture.remoteControl.accepting, false);
+    assert.deepEqual(calls, ['revoke']);
+    releaseInput();
+    if (revokeFailure) {
+      await rejected;
+      assert.deepEqual(calls, ['revoke', 'report-revoke-failure', 'obs-stop', 'release']);
+      assert.equal(sandbox.nativeVideoSession.stopping, true);
+    } else {
+      await stopped;
+      assert.deepEqual(calls, ['revoke', 'obs-stop', 'release']);
+      assert.equal(sandbox.nativeVideoSession, undefined);
+    }
+  }
+});
+
+test('资源对照单独记录 Rust 身份 helper，不把它漏算或并成物理内存', () => {
+  const source = readFileSync(join(__dirname, 'obs-capture-smoke/main.cjs'), 'utf8');
+  const summary = runInNewContext(`${source.slice(source.indexOf('function resourceSummary('), source.indexOf('function sourceRange('))}; resourceSummary`,
+    { cpus: () => [0, 1, 2, 3], assert: (condition, message) => { if (!condition) throw new Error(message); } });
+  const before = { at: 1000, helper: { cpuSeconds: 1, workingSetMiB: 100, privateMiB: 70 },
+    identityHelper: { cpuSeconds: 2, workingSetMiB: 40, privateMiB: 30 },
+    electron: [{ pid: 1, cpu: { cumulativeCPUUsage: 1 }, memory: { workingSetSize: 1024 } }] };
+  const after = { ...before, at: 2000, identityHelper: { cpuSeconds: 3, workingSetMiB: 42, privateMiB: 31 } };
+  const result = summary(before, after);
+  assert.equal(result.identityHelper.cpuPercentOfMachine, 25);
+  assert.equal(result.identityHelper.privateMiB[1], 31);
+  assert.equal(result.helperPrivateMiB[1], 70);
+  assert.equal(summary({ ...before, identityHelper: null }, { ...after, identityHelper: null }).identityHelper, null);
+  assert.throws(() => summary(before, { ...after, identityHelper: null }), /identityHelperChangedDuringSample/);
+});
+
 test('OBS 未确认停止时不能释放 Rust 持有的窗口身份', async () => {
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = main.indexOf('async function stopObsVideo(');
@@ -422,7 +859,8 @@ test('没有新增成功帧时仍主动读取真实槽位丢帧；并发诊断�
   assert.equal(manager.getDiagnostics(sessionId), diagnostics);
   assert.deepEqual(commands, ['diagnostics:1']);
   emit({ event: 'diagnostics', requestId: '1', sessionId, renderedFrames: 123, bridgeFrames: 3, bridgeDroppedFrames: 120 });
-  assert.deepEqual(await diagnostics, { helperVersion: '32.2.2', renderedFrames: 123, bridgeFrames: 3, bridgeDroppedFrames: 120 });
+  assert.deepEqual(await diagnostics, { helperVersion: '32.2.2', renderedFrames: 123, bridgeFrames: 3,
+    bridgeDroppedFrames: 120, screenShareAudio: idleAudio });
   await manager.state.releaseSharedTextureSlot(sessionId, 1);
   assert.equal(commands.at(-1), 'release:1');
   await assert.rejects(manager.state.releaseSharedTextureSlot('old-session', 1), /Unavailable/);
@@ -438,11 +876,13 @@ test('正式诊断入口使用宿主响应的版本及计数，不读取缓存�
   const sandbox = { ipcMain: { handle: (_name, callback) => { handler = callback; } },
     trustedSender: () => true, closing: false,
     mediaHelper: { getDiagnostics: async () => ({ helperVersion: 'rust', framesReceived: 999 }) },
-    nativeVideoSession: { engine: 'obs', sessionId, sourceKind: 'monitor', helperState: { alive: true } },
+    nativeVideoSession: { sessionId, sourceKind: 'monitor', helperState: { alive: true } },
     obsCaptureHost: { getDiagnostics: async (id) => {
       requested.push(id);
-      return { helperVersion: 'observed-version', renderedFrames: 123, bridgeFrames: 3, bridgeDroppedFrames: 120 };
+      return { helperVersion: 'observed-version', renderedFrames: 123, bridgeFrames: 3, bridgeDroppedFrames: 120,
+        screenShareAudio: { ...idleAudio } };
     } },
+    nativeScreenAudioSession: undefined, lastScreenAudioDroppedChunks: 0,
     nativeMicrophoneSession: undefined, lastMicrophoneDroppedChunks: 0 };
   runInNewContext(main.slice(start, end), sandbox);
   const diagnostics = await handler({});

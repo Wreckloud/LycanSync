@@ -8,6 +8,16 @@ function writeDesktopLicenses(outputFile) {
   const sections = ['LycanSync 第三方组件许可证\nElectron/Chromium 许可证另见安装目录 LICENSE.electron.txt 和 LICENSES.chromium.html。'];
   const included = new Set();
 
+  // OBS 及其运行依赖不能遗漏在 Cargo/npm 许可证清单之外。
+  function includeObsLicenses(directory) {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const file = join(directory, entry.name);
+      if (entry.isDirectory()) includeObsLicenses(file);
+      else if (entry.isFile()) sections.push(`\n===== OBS runtime: ${entry.name} =====\n${readFileSync(file, 'utf8')}`);
+    }
+  }
+  includeObsLicenses(join(projectRoot, 'release/build-cache/obs-32.2.2/prepared/licenses'));
+
   function includePackage(name, version, license, directory) {
     const identity = `${name}@${version}`;
     if (included.has(identity)) return;

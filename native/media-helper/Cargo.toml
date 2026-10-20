@@ -5,8 +5,7 @@ edition = "2024"
 publish = false
 
 [features]
-shared-texture-output = []
-shared-texture-smoke = ["shared-texture-output"]
+shared-texture-smoke = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -16,10 +15,6 @@ sonora-common-audio = "0.2.0"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", features = [
-    "Graphics_Capture",
-    "Security_Authorization_AppCapabilityAccess",
-    "Graphics_DirectX",
-    "Graphics_DirectX_Direct3D11",
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
@@ -37,16 +32,11 @@ windows = { version = "0.62", features = [
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Threading",
     "Win32_System_Variant",
-    "Win32_System_WinRT",
-    "Win32_System_WinRT_Direct3D11",
-    "Win32_System_WinRT_Graphics_Capture",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_WindowsAndMessaging",
 ] }
-windows-core = "0.62"
-windows-future = "0.3"
 
 [profile.release]
 codegen-units = 1

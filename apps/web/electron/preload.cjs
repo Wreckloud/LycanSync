@@ -120,8 +120,6 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   getNativeMediaCapabilities: () => ipcRenderer.invoke('media:capabilities'),
   listNativeVideoSources: () => ipcRenderer.invoke('media:video-sources'),
   getNativeVideoSourceThumbnails: (sources) => ipcRenderer.invoke('media:video-source-thumbnails', sources),
-  startNativeCaptureProbe: (sourceId) => ipcRenderer.invoke('media:capture-probe:start', sourceId),
-  stopNativeCaptureProbe: (sessionId) => ipcRenderer.invoke('media:capture-probe:stop', sessionId),
   getScreenShareSupport: () => ipcRenderer.invoke('settings:screen-share:support'),
   startNativeVideo: (sourceId, maxFps, settings) => ipcRenderer.invoke('media:native-video:start', sourceId, maxFps, settings),
   stopNativeVideo: async (sessionId) => {

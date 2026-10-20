@@ -22,8 +22,7 @@ const windowCheck = process.env.LYCANSYNC_CAPTURE_WINDOW_CHECK === '1';
 const gameCheck = process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1';
 const applicationCheck = process.env.LYCANSYNC_CAPTURE_APPLICATION_CHECK === '1';
 if ([resourceCheck, qualityCheck, windowCheck, applicationCheck, gameCheck].filter(Boolean).length > 1) throw new Error('captureTestModesConflict');
-const referenceRust = resourceCheck && process.env.LYCANSYNC_CAPTURE_REFERENCE === 'rust';
-const rustPath = resolve(projectRoot, 'release/build-cache/media-helper-compare/release/lycansync-media.exe');
+const rustPath = resolve(projectRoot, 'native/media-helper/target/release/lycansync-media.exe');
 const cases = [];
 const failures = [];
 const diagnostics = [];
@@ -36,18 +35,31 @@ let finishing = false;
 
 async function readResources(state) {
   // 只读取本测试持有的子进程；工作集分开记录，不能当作整机物理内存。
-  const { stdout } = await promisify(execFile)('powershell.exe', ['-NoProfile', '-Command',
-    `$captureProcess = Get-Process -Id ${state.child.pid} -ErrorAction Stop; `
-    + '[pscustomobject]@{cpuSeconds=$captureProcess.TotalProcessorTime.TotalSeconds; '
-    + 'workingSetMiB=$captureProcess.WorkingSet64/1MB; privateMiB=$captureProcess.PrivateMemorySize64/1MB} | ConvertTo-Json -Compress'],
-  { windowsHide: true, timeout: 5000 });
-  return { at: performance.now(), helper: JSON.parse(stdout), electron: app.getAppMetrics() };
+  const readProcess = async (owned) => {
+    const { stdout } = await promisify(execFile)('powershell.exe', ['-NoProfile', '-Command',
+      `$captureProcess = Get-Process -Id ${owned.child.pid} -ErrorAction Stop; `
+      + '[pscustomobject]@{cpuSeconds=$captureProcess.TotalProcessorTime.TotalSeconds; '
+      + 'workingSetMiB=$captureProcess.WorkingSet64/1MB; privateMiB=$captureProcess.PrivateMemorySize64/1MB} | ConvertTo-Json -Compress'],
+    { windowsHide: true, timeout: 5000 });
+    return JSON.parse(stdout);
+  };
+  const identityState = targetHelper?.videoCapture?.state;
+  const [helper, identityHelper] = await Promise.all([readProcess(state), identityState ? readProcess(identityState) : null]);
+  return { at: performance.now(), helper, identityHelper, electron: app.getAppMetrics() };
 }
 
 function resourceSummary(before, after) {
   const seconds = (after.at - before.at) / 1000;
   assert(seconds > 0 && Number.isFinite(before.helper.cpuSeconds)
     && Number.isFinite(after.helper.cpuSeconds) && after.helper.cpuSeconds >= before.helper.cpuSeconds, 'invalidResourceInterval');
+  assert(Boolean(before.identityHelper) === Boolean(after.identityHelper), 'identityHelperChangedDuringSample');
+  const identityHelper = before.identityHelper ? {
+    cpuPercentOfMachine: +((after.identityHelper.cpuSeconds - before.identityHelper.cpuSeconds) / seconds / cpus().length * 100).toFixed(2),
+    workingSetMiB: [before.identityHelper.workingSetMiB, after.identityHelper.workingSetMiB].map(Math.round),
+    privateMiB: [before.identityHelper.privateMiB, after.identityHelper.privateMiB].map(Math.round),
+  } : null;
+  if (identityHelper) assert(Number.isFinite(identityHelper.cpuPercentOfMachine)
+    && identityHelper.cpuPercentOfMachine >= 0, 'invalidIdentityResourceInterval');
   const previous = new Map(before.electron.map((entry) => [entry.pid, entry.cpu.cumulativeCPUUsage]));
   let electronCpuSeconds = 0;
   for (const entry of after.electron) {
@@ -56,7 +68,7 @@ function resourceSummary(before, after) {
     electronCpuSeconds += end - start;
   }
   const electronWorkingSet = (sample) => Math.round(sample.electron.reduce((sum, entry) => sum + entry.memory.workingSetSize, 0) / 1024);
-  return { intervalMs: Math.round(seconds * 1000), logicalProcessors: cpus().length,
+  return { intervalMs: Math.round(seconds * 1000), logicalProcessors: cpus().length, identityHelper,
     cpuPercentOfMachine: {
       electron: +(electronCpuSeconds / seconds / cpus().length * 100).toFixed(2),
       helper: +((after.helper.cpuSeconds - before.helper.cpuSeconds) / seconds / cpus().length * 100).toFixed(2),
@@ -92,11 +104,8 @@ async function finish(result) {
   try { if (window && !window.isDestroyed()) await renderer('stop()'); }
   catch (error) { result.cleanupError = String(error.message).slice(0, 180); }
   try { if (manager?.state) {
-    if (referenceRust) await manager.stopVideo(manager.state.videoSessionId);
-    else await manager.stop(manager.state.videoSessionId);
+    await manager.stop(manager.state.videoSessionId);
   } }
-  catch (error) { result.cleanupError = String(error.message).slice(0, 180); }
-  try { if (referenceRust) await manager?.shutdown(); }
   catch (error) { result.cleanupError = String(error.message).slice(0, 180); }
   try { if (targetHelper) await targetHelper.shutdown(); }
   catch (error) { result.cleanupError = String(error.message).slice(0, 180); }
@@ -140,7 +149,6 @@ app.whenReady().then(async () => {
     nativeMicrophoneSession: undefined, lastMicrophoneDroppedChunks: 0, lastScreenAudioDroppedChunks: 0,
     nativeVideoSourcesById: new Map([['monitor:1:0', { kind: 'monitor', title: monitorName }]]),
     loadNativeMediaBridge: () => bridge, mediaHelperPath: () => rustPath,
-    mediaHelper: { startVideo: () => { throw new Error('unexpectedRustCapture'); } },
     trustedSender: (event) => event.sender === window.webContents,
     recordVideoFailure: (stage, error) => {
       const failure = { stage, code: String(error.message ?? error).slice(0, 160) };
@@ -151,7 +159,7 @@ app.whenReady().then(async () => {
   const main = readFileSync(resolve(__dirname, '../main.cjs'), 'utf8');
   // 运行生产入口本身，不复制另一套纹理交付和清理逻辑；不执行应用启动代码。
   runInNewContext([
-    sourceRange(main, 'function releaseHelperProcessBridge(', 'function handleVideoCaptureEnded('),
+    sourceRange(main, 'function releaseHelperProcessBridge(', 'function handleVideoCaptureSuspended('),
     sourceRange(main, 'function handleVideoCaptureSuspended(', 'function finishNativeScreenAudioPipe('),
     sourceRange(main, 'function handleMediaHelperFailure(', 'function handleNativeSharedTextureFrame('),
     sourceRange(main, 'function handleNativeSharedTextureFrame(', 'function validMicrophoneSettings('),
@@ -159,12 +167,7 @@ app.whenReady().then(async () => {
     sourceRange(main, "ipcMain.on('media:native-video:receiver-error',", "ipcMain.handle('media:diagnostics',"),
     sourceRange(main, "ipcMain.handle('media:diagnostics',", "ipcMain.on('window:maximize',"),
   ].join('\n'), production);
-  manager = referenceRust ? new MediaHelperManager({ executablePath: rustPath,
-    onSharedTextureFrame: production.handleNativeSharedTextureFrame,
-    onHelperClosed: production.releaseHelperProcessBridge,
-    onHelperFailure: (_state, code) => failures.push({ stage: 'rustHelper', code }),
-    onDiagnostic: (message) => { if (diagnostics.length < 30) diagnostics.push(message.slice(0, 250)); },
-  }) : new ObsCaptureHostManager({ executablePath: helperPath,
+  manager = new ObsCaptureHostManager({ executablePath: helperPath,
     modulePath: resolve(prepared, 'obs-plugins/64bit/win-capture.dll'),
     dataPath: resolve(prepared, 'data/obs-plugins/win-capture'),
     configPath: resolve(app.getPath('userData'), 'obs-capture', '32.2.2'),
@@ -181,15 +184,19 @@ app.whenReady().then(async () => {
     onDiagnostic: (message) => { if (diagnostics.length < 30) diagnostics.push(message.slice(0, 250)); },
   });
   let sourceId = 'monitor:1:0';
-  if (referenceRust) {
-    production.mediaHelper = manager;
-    production.obsCaptureHost = undefined;
-    // 枚举只用于匹配已授权的主显示器，不输出或采集其他窗口。
-    const snapshot = await manager.listVideoSources();
+  {
+    production.obsCaptureHost = manager;
+    targetHelper = new MediaHelperManager({ executablePath: rustPath,
+      onHelperFailure: production.handleMediaHelperFailure,
+      onDiagnostic: (message) => { if (diagnostics.length < 30) diagnostics.push(String(message).slice(0, 250)); },
+    });
+    production.mediaHelper = targetHelper;
+    const snapshot = await targetHelper.listVideoSources();
     const monitor = snapshot.sources.find((source) => source.kind === 'monitor' && source.title === monitorName);
     assert(monitor, 'primaryMonitorMissing');
     sourceId = monitor.sourceId;
-  } else production.obsCaptureHost = manager;
+    production.nativeVideoSourcesById = new Map(snapshot.sources.map((source) => [source.sourceId, source]));
+  }
   // 普通窗口验证不启动活动扫描；游戏模式会以本次自建程序的映射走真实分类命令。
   production.activityMonitor = { isCaptureGame: async () => false };
   await window.loadFile(resolve(projectRoot, 'release/build-cache/obs-32.2.2/smoke-page/renderer.html'));
@@ -201,12 +208,6 @@ app.whenReady().then(async () => {
     y: Math.round((bounds.y + 48 - display.bounds.y) / display.bounds.height * 1080) };
   const probe = () => renderer(`probe(${point.x},${point.y})`);
   if (applicationCheck) {
-    targetHelper = new MediaHelperManager({ executablePath: rustPath,
-      onHelperFailure: production.handleMediaHelperFailure,
-      onHelperClosed: production.releaseHelperProcessBridge,
-      onDiagnostic: (message) => { if (diagnostics.length < 30) diagnostics.push(String(message).slice(0, 250)); },
-    });
-    production.mediaHelper = targetHelper;
     const snapshot = await targetHelper.listVideoSources();
     const existingWindowId = process.env.LYCANSYNC_CAPTURE_APPLICATION_WINDOW_ID;
     if (existingWindowId && !/^[1-9]\d{0,19}$/.test(existingWindowId)) throw new Error('invalidApplicationTestWindow');
@@ -274,12 +275,6 @@ app.whenReady().then(async () => {
     targetFixture.stderr.on('data', (chunk) => diagnostics.push(String(chunk).slice(0, 250)));
     targetFixture.on('error', (error) => { void finish({ ok: false, error: error.message }); });
     const ready = await until(() => events.find((event) => event.event === 'ready'));
-    targetHelper = new MediaHelperManager({ executablePath: rustPath,
-      onHelperFailure: production.handleMediaHelperFailure,
-      onHelperClosed: production.releaseHelperProcessBridge,
-      onDiagnostic: (message) => diagnostics.push(String(message).slice(0, 250)),
-    });
-    production.mediaHelper = targetHelper;
     const snapshot = await targetHelper.listVideoSources();
     const selected = snapshot.sources.find((source) => source.windowId === ready.windowId);
     const other = snapshot.sources.find((source) => source.windowId === ready.otherWindowId);
@@ -379,7 +374,7 @@ app.whenReady().then(async () => {
     const started = await renderer(`start(${JSON.stringify(sourceId)})`);
     process.stdout.write(`${JSON.stringify({ phase: 'pageStarted', started })}\n`);
     const state = manager.state;
-    assert(referenceRust || state?.helperVersion === '32.2.2', 'actualObsVersionMissing');
+    assert(state?.helperVersion === '32.2.2', 'actualObsVersionMissing');
     let pixelsChecked = false;
     if (mode !== 'receiver-failure' && mode !== 'helper-exit') {
       await until(async () => { const p = await probe(); return p.pixel && p.pixel[0] > 150 && p.pixel[1] < 70 && p.pixel[2] > 100; });
@@ -441,25 +436,22 @@ app.whenReady().then(async () => {
     }
     const stopStart = performance.now();
     const stopped = await renderer('stop()');
-    if (referenceRust) await manager.shutdown();
     await until(() => !manager.state && !production.nativeVideoSession && production.helperProcessBridges.size === 0);
     assert(stopped.readyState === 'ended', 'generatedTrackNotEnded');
     assert(state.closed && (state.child.exitCode !== null || state.child.signalCode !== null), 'helperExitNotConfirmed');
-    assert(page.presented > 0 && (referenceRust || (page.width === 1920 && page.height === 1080)), 'pageDidNotPresent1080p');
-    cases.push({ mode, engine: referenceRust ? 'rust' : 'obs', pixelsChecked, qualityChanges,
+    assert(page.presented > 0 && (page.width === 1920 && page.height === 1080), 'pageDidNotPresent1080p');
+    cases.push({ mode, engine: 'obs', pixelsChecked, qualityChanges,
       helperVersion: after.helperVersion,
-      nativeWidth: referenceRust ? after.frameWidth : 1920, nativeHeight: referenceRust ? after.frameHeight : 1080,
+      nativeWidth: 1920, nativeHeight: 1080,
       outputWidth: page.width, outputHeight: page.height,
       resources: resourceCheck ? resourceSummary(resourcesBefore, resourcesAfter) : undefined,
       firstFrameMs: started.firstFrameMs, framesSubmitted: page.input.submittedFrames,
-      framesPresented: page.presented, hostFps: referenceRust ? after.videoOutputFps
-        : Math.round((after.bridgeFrames - before.bridgeFrames) * 1000 / nativeIntervalMs),
+      framesPresented: page.presented, hostFps: Math.round((after.bridgeFrames - before.bridgeFrames) * 1000 / nativeIntervalMs),
       nativeIntervalMs: Math.round(nativeIntervalMs),
       intervalMs: Math.round(intervalMs),
       submittedFps: Math.round((page.input.submittedFrames - pageBefore.input.submittedFrames) * 1000 / intervalMs),
       presentedFps: Math.round((page.presented - pageBefore.presented) * 1000 / intervalMs),
-      slotDrops: referenceRust ? undefined : after.bridgeDroppedFrames,
-      outputDrops: referenceRust ? after.videoOutputDroppedFrames : undefined,
+      slotDrops: after.bridgeDroppedFrames,
       stopMs: Math.round(performance.now() - stopStart),
       helperExitCode: state.child.exitCode, handleCount: bridge.currentProcessHandleCount() });
     process.stdout.write(`${JSON.stringify({ phase: 'caseComplete', ...cases.at(-1) })}\n`);
@@ -470,7 +462,7 @@ app.whenReady().then(async () => {
     && failures[1].code.startsWith('obsCaptureHostExited:'), 'unexpectedCaptureFailures');
   assert(cases.at(-1).handleCount <= cases[0].handleCount + 4, 'mainHandleCountKeptGrowing');
   assert(!diagnostics.some((message) => /Uncaught|Double destroy/.test(message)), 'unexpectedRuntimeDiagnostic');
-  if (!referenceRust) {
+  {
     assert(existsSync(resolve(app.getPath('userData'), 'obs-capture/32.2.2/win-capture')), 'pluginConfigDirectoryMissing');
     assert(!existsSync(resolve(prepared, 'obs-plugins/64bit/win-capture')), 'pluginCachePollutedRuntime');
   }

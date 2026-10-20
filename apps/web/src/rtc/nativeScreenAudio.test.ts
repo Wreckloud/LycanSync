@@ -182,7 +182,7 @@ describe('NativeScreenAudioSession cleanup failures', () => {
     expect(harness.stopped).toHaveBeenCalledOnce();
   });
 
-  it('waits for late startup and its native stop acknowledgement after cancellation', async () => {
+  it('requests stop before pending startup completes and waits for real cleanup', async () => {
     const harness = cleanupHarness();
     const nativeReady = deferred<typeof harness.format>();
     const startRequested = deferred<void>();
@@ -196,12 +196,13 @@ describe('NativeScreenAudioSession cleanup failures', () => {
     const stopping = harness.session.stop();
     let finished = false;
     void stopping.then(() => { finished = true; });
-    nativeReady.resolve(harness.format);
     await stopRequested.promise;
+    expect(harness.addModule).not.toHaveBeenCalled();
     expect(finished).toBe(false);
     expect(harness.session.stop()).toBe(stopping);
     stopAcknowledged.resolve({ changed: true });
     await stopping;
+    nativeReady.resolve(harness.format);
     expect(await startResult).toMatchObject({ message: 'screenAudioSessionStopped' });
     expect(harness.stopped).toHaveBeenCalledOnce();
     expect(harness.onError).not.toHaveBeenCalled();

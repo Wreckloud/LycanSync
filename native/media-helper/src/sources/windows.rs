@@ -5,7 +5,6 @@ use crate::protocol::{Capability, ErrorCode, VideoSource, VideoSourceKind};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use windows::Graphics::Capture::GraphicsCaptureSession;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, RECT};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
@@ -18,7 +17,6 @@ use windows::Win32::System::Threading::{
     GetCurrentProcessId, GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32,
     PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
-use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize, RoUninitialize};
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
 };
@@ -103,56 +101,23 @@ fn window_property_value() -> HANDLE {
 const MAX_CALLBACK_SOURCES: usize = MAX_VIDEO_SOURCES;
 
 pub(super) struct WindowsDiscovery {
-    _apartment: WinRtApartment,
-    supported: bool,
-    hardware_d3d_available: bool,
     client_process_id: u32,
 }
 
 impl WindowsDiscovery {
     pub(super) fn new() -> Result<Self, ErrorCode> {
-        let apartment = initialize_winrt()?;
-        let supported =
-            GraphicsCaptureSession::IsSupported().map_err(|_| ErrorCode::SourceDiscoveryFailed)?;
-        let hardware_d3d_available = crate::d3d::probe_hardware_device().is_ok();
         let client_process_id = parent_process_id().ok_or(ErrorCode::SourceDiscoveryFailed)?;
-        Ok(Self {
-            _apartment: apartment,
-            supported,
-            hardware_d3d_available,
-            client_process_id,
-        })
+        Ok(Self { client_process_id })
     }
 
     pub(super) fn capability(&self) -> Capability {
         Capability {
-            available: self.supported,
-            reason: if self.supported {
-                "available"
-            } else {
-                "wgcUnavailable"
-            },
-        }
-    }
-
-    pub(super) fn video_capture_capability(&self) -> Capability {
-        let reason = if !self.supported {
-            "wgcUnavailable"
-        } else if !self.hardware_d3d_available {
-            "hardwareD3dUnavailable"
-        } else {
-            "available"
-        };
-        Capability {
-            available: self.supported && self.hardware_d3d_available,
-            reason,
+            available: true,
+            reason: "available",
         }
     }
 
     pub(super) fn discover(&self) -> Result<Vec<DiscoveredSource>, ErrorCode> {
-        if !self.supported {
-            return Err(ErrorCode::SourceDiscoveryFailed);
-        }
         let _dpi_awareness = ThreadDpiAwarenessContext::per_monitor_v2()?;
         let mut context = DiscoveryContext {
             sources: Vec::new(),
@@ -179,41 +144,12 @@ impl WindowsDiscovery {
     }
 
     pub(super) fn target_is_valid(&self, target: &CaptureTarget) -> bool {
-        if !self.supported {
-            return false;
-        }
         match target {
             CaptureTarget::Window(window, identity) => window_matches_identity(*window, identity),
             CaptureTarget::Monitor(monitor) => is_live_monitor(*monitor),
             #[cfg(test)]
             CaptureTarget::Test(_) => false,
         }
-    }
-
-    pub(super) fn audio_process_identity(
-        &self,
-        target: &CaptureTarget,
-    ) -> Result<(u32, u64), ErrorCode> {
-        match target {
-            CaptureTarget::Window(window, identity)
-                if window_matches_identity(*window, identity) =>
-            {
-                let mut process_id = 0;
-                unsafe { GetWindowThreadProcessId(*window, Some(&mut process_id)) };
-                (process_id != 0 && process_id == identity.process_id)
-                    .then_some((process_id, identity.process_creation_time))
-                    .ok_or(ErrorCode::ScreenShareAudioTargetUnavailable)
-            }
-            _ => Err(ErrorCode::ScreenShareAudioTargetUnavailable),
-        }
-    }
-}
-
-struct WinRtApartment;
-impl Drop for WinRtApartment {
-    fn drop(&mut self) {
-        // Discovery 持有 apartment 到所有 WinRT 查询结束后，再平衡初始化引用。
-        unsafe { RoUninitialize() };
     }
 }
 
@@ -234,11 +170,6 @@ impl Drop for ThreadDpiAwarenessContext {
     fn drop(&mut self) {
         unsafe { SetThreadDpiAwarenessContext(self.0) };
     }
-}
-
-fn initialize_winrt() -> Result<WinRtApartment, ErrorCode> {
-    unsafe { RoInitialize(RO_INIT_MULTITHREADED) }.map_err(|_| ErrorCode::SourceDiscoveryFailed)?;
-    Ok(WinRtApartment)
 }
 
 struct DiscoveryContext {
@@ -485,7 +416,7 @@ pub(crate) fn window_matches_identity(window: HWND, identity: &WindowIdentity) -
 pub(super) fn window_video_target(
     window: HWND,
     identity: &WindowIdentity,
-) -> Result<crate::protocol::WindowVideoTarget, ErrorCode> {
+) -> Result<crate::protocol::ReservedVideoTarget, ErrorCode> {
     if !window_matches_identity(window, identity) {
         return Err(ErrorCode::InvalidRequest);
     }
@@ -495,13 +426,30 @@ pub(super) fn window_video_target(
     if !window_matches_identity(window, identity) {
         return Err(ErrorCode::InvalidRequest);
     }
-    Ok(crate::protocol::WindowVideoTarget {
+    Ok(crate::protocol::ReservedVideoTarget::Window {
         window_id: (window.0 as usize).to_string(),
         property_name: String::from_utf16_lossy(
             &identity.marker.property_name[..identity.marker.property_name.len() - 1],
         ),
         property_value: (window_property_value().0 as usize).to_string(),
         executable,
+    })
+}
+
+pub(super) fn monitor_video_target(
+    monitor: HMONITOR,
+) -> Result<crate::protocol::ReservedVideoTarget, ErrorCode> {
+    let mut info = MONITORINFOEXW::default();
+    info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    if !is_live_monitor(monitor)
+        || !unsafe { GetMonitorInfoW(monitor, &mut info.monitorInfo) }.as_bool()
+    {
+        return Err(ErrorCode::InvalidRequest);
+    }
+    Ok(crate::protocol::ReservedVideoTarget::Monitor {
+        monitor_name: String::from_utf16_lossy(&info.szDevice)
+            .trim_end_matches('\0')
+            .to_owned(),
     })
 }
 
@@ -570,10 +518,6 @@ fn parent_process_id() -> Option<u32> {
             return None;
         }
     }
-}
-
-pub(crate) fn window_is_minimized(window: HWND) -> bool {
-    unsafe { IsWindow(Some(window)).as_bool() && IsIconic(window).as_bool() }
 }
 
 struct WindowFingerprint {

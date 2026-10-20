@@ -28,10 +28,11 @@ set_target_properties(lycansync_libobs PROPERTIES
   IMPORTED_LOCATION "${LYCANSYNC_OBS_SDK}/bin/64bit/obs.dll"
   INTERFACE_INCLUDE_DIRECTORIES "${LYCANSYNC_OBS_SDK}/include;${CMAKE_CURRENT_BINARY_DIR}/generated")
 
-add_executable(lycansync-obs-capture-host src/main.cpp src/window_capture.cpp src/game_capture.cpp)
+add_executable(lycansync-obs-capture-host src/main.cpp src/window_capture.cpp src/game_capture.cpp
+  src/screen_audio.cpp src/screen_audio_pcm.cpp)
 target_compile_features(lycansync-obs-capture-host PRIVATE cxx_std_20)
 target_compile_definitions(lycansync-obs-capture-host PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_link_libraries(lycansync-obs-capture-host PRIVATE lycansync_libobs d3d11 dxgi windowsapp)
+target_link_libraries(lycansync-obs-capture-host PRIVATE lycansync_libobs d3d11 dxgi windowsapp ole32)
 target_compile_options(lycansync-obs-capture-host PRIVATE /utf-8)
 
 # 仅供显式设备测试创建色块窗口，不进入宿主运行包或默认构建。
@@ -50,3 +51,11 @@ target_link_libraries(lycansync-obs-test-d3d PRIVATE user32 d3d11 dxgi)
 set_target_properties(lycansync-obs-test-d3d PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")
 
 add_subdirectory(game-plugin)
+add_subdirectory(audio-plugin)
+
+# 只测试合成 PCM 的分块与背压，不链接或初始化 OBS/WASAPI。
+add_executable(lycansync-screen-audio-pcm-tests EXCLUDE_FROM_ALL tests/screen_audio_pcm.cpp src/screen_audio_pcm.cpp)
+target_compile_features(lycansync-screen-audio-pcm-tests PRIVATE cxx_std_20)
+target_compile_options(lycansync-screen-audio-pcm-tests PRIVATE /utf-8)
+target_include_directories(lycansync-screen-audio-pcm-tests PRIVATE src)
+set_target_properties(lycansync-screen-audio-pcm-tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")

@@ -4,6 +4,7 @@
 #include <util/base.h>
 #include "window_capture.h"
 #include "game_capture.h"
+#include "screen_audio.h"
 
 #include <windows.h>
 #include <d3d11.h>
@@ -83,13 +84,19 @@ void write_started_event() {
   std::cout.flush();
 }
 
-void write_diagnostics_event(std::string_view request_id) {
+void write_diagnostics_event(std::string_view request_id, const ScreenAudioSnapshot &audio) {
   const std::lock_guard<std::mutex> render_lock(g_render_mutex);
   const std::lock_guard<std::mutex> output_lock(g_output_mutex);
   std::cout << "{\"event\":\"diagnostics\",\"requestId\":\"" << request_id
             << "\",\"sessionId\":\"" << g_host.session_id << "\",\"renderedFrames\":"
             << g_host.rendered_frames << ",\"bridgeFrames\":" << g_host.frame_count
-            << ",\"bridgeDroppedFrames\":" << g_host.dropped_frames << "}\n";
+            << ",\"bridgeDroppedFrames\":" << g_host.dropped_frames
+            << ",\"screenShareAudio\":{\"state\":\"" << audio.state << "\",\"sampleRate\":"
+            << (audio.sample_rate ? std::to_string(audio.sample_rate) : "null") << ",\"channels\":"
+            << (audio.channels ? std::to_string(audio.channels) : "null")
+            << ",\"packetsReceived\":" << audio.packets_received << ",\"framesReceived\":" << audio.frames_received
+            << ",\"silentPackets\":" << audio.silent_packets << ",\"droppedAudioChunks\":" << audio.dropped_chunks
+            << ",\"lastError\":" << (audio.last_error.empty() ? "null" : "\"" + audio.last_error + "\"") << "}}\n";
   std::cout.flush();
 }
 
@@ -553,21 +560,38 @@ int wmain(int argc, wchar_t **argv) {
   obs_add_main_rendered_callback(render_shared_frame, source);
   write_started_event();
 
+  const auto audio_module = std::filesystem::path(argv[1]).parent_path() / L"win-wasapi.dll";
+  auto capture_data = std::filesystem::path(argv[2]).lexically_normal();
+  if (capture_data.filename().empty()) capture_data = capture_data.parent_path();
+  const auto audio_data = capture_data.parent_path() / L"win-wasapi";
+  ScreenAudioHost screen_audio(to_utf8(audio_module.wstring()), to_utf8(audio_data.wstring()), window_target, window_source,
+      [](std::string_view event, std::string_view audio_id, std::string_view code) {
+        const std::lock_guard<std::mutex> output_lock(g_output_mutex);
+        std::cout << "{\"event\":\"" << event << "\",\"sessionId\":\"" << g_host.session_id
+                  << "\",\"audioId\":\"" << audio_id << "\"";
+        if (event == "audioStarted") std::cout << ",\"sampleRate\":48000,\"channels\":2,\"bitsPerSample\":32,\"nominalChunkMs\":10";
+        if (!code.empty()) std::cout << ",\"code\":\"" << code << "\"";
+        std::cout << "}\n";
+        std::cout.flush();
+      });
+
   std::string command;
   while (std::getline(std::cin, command)) {
     if (command == "shutdown") break;
+    if (screen_audio.command(command)) continue;
     size_t slot_index = 0;
     if (parse_release_command(command, slot_index)) {
       const std::lock_guard<std::mutex> lock(g_slot_mutex);
       g_host.slots[slot_index].busy = false;
     }
     std::string_view request_id;
-    if (parse_diagnostics_command(command, request_id)) write_diagnostics_event(request_id);
+    if (parse_diagnostics_command(command, request_id)) write_diagnostics_event(request_id, screen_audio.snapshot());
     uint32_t next_frame_rate = 0;
     if (parse_configure_command(command, request_id, next_frame_rate)
         && !configure_video(video, source, request_id, next_frame_rate)) break;
   }
 
+  screen_audio.shutdown();
   obs_remove_main_rendered_callback(render_shared_frame, source);
   const std::lock_guard<std::mutex> render_lock(g_render_mutex);
   obs_set_output_source(0, nullptr);

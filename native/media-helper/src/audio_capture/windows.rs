@@ -1,5 +1,6 @@
 //! Windows WASAPI 麦克风采集、设备格式转换与有界 PCM 管道输出。
 
+use super::format::{StreamFormat, channel_weights, parse_mix_format, sample_as_f32};
 use super::{
     MicrophoneCaptureJoinError, MicrophoneCaptureStartFailure, MicrophoneCaptureWorker,
     StartedCapture, wait_for_microphone_capture_start,
@@ -8,9 +9,6 @@ use crate::audio_processing::{
     FRAMES_PER_CHUNK, MicrophoneProcessor, ProcessingSettings, SAMPLE_RATE,
 };
 use crate::protocol::ErrorCode;
-use crate::screen_audio::windows::{
-    StreamFormat, channel_weights, parse_mix_format, sample_as_f32,
-};
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::Write;

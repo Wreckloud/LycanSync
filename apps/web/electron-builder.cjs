@@ -29,6 +29,8 @@ module.exports = {
     'node_modules/**/*',
   ],
   extraResources: [
+    { from: '../../release/build-cache/obs-32.2.2/prepared', to: 'obs-capture',
+      filter: ['bin/64bit/**/*', 'obs-plugins/64bit/**/*', 'data/**/*', 'licenses/**/*', 'build-manifest.json'] },
     { from: '../../release/desktop/THIRD-PARTY-NOTICES.txt', to: 'THIRD-PARTY-NOTICES.txt' },
     { from: '../../release/build-resources/server-config.json', to: 'server-config.json' },
     { from: '../../native/media-helper/target/release/lycansync-media.exe', to: 'media-helper/lycansync-media.exe' },

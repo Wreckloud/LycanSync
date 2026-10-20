@@ -86,6 +86,7 @@ interface MainAudioState {
   droppedChunks: number;
   rendererDroppedChunks: number;
   sampleRate: number;
+  format?: { sampleRate: number; channels: number; bitsPerSample: number; nominalChunkMs: number };
 }
 // Run the production parser and sender without launching Electron or accessing devices.
 function mainAudio(channels: number) {
@@ -98,6 +99,7 @@ function mainAudio(channels: number) {
   };
   const audio: MainAudioState = { sessionId: 'session-b', buffer: Buffer.alloc(0), queue: [], sequence: 0,
     stopping: false, droppedChunks: 0, rendererDroppedChunks: 0, sampleRate: 48000 };
+  if (channels === 2) audio.format = { sampleRate: 48_000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10 };
   const sent: { sessionId: string; sequence: number; pcm: Uint8Array }[] = [];
   const mainWindow = { isDestroyed: () => false, webContents: {
     isDestroyed: () => false,

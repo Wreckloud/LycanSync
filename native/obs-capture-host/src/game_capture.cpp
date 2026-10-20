@@ -34,7 +34,7 @@ obs_source_t *create_game_video_source(const WindowVideoTarget &target, bool hid
   obs_data_set_int(settings, "lycansync_window_property_value", static_cast<long long>(target.property_value));
   obs_data_set_string(settings, "capture_mode", "window");
   obs_data_set_bool(settings, "capture_cursor", !hide_cursor);
-  // 游戏浮窗和共享声音尚未接通，不能借上游子源扩大本次验证范围。
+  // 游戏浮窗仍未接入；声音由独立来源负责，不启用游戏插件的内置声音子源。
   obs_data_set_bool(settings, "capture_overlays", false);
   obs_data_set_bool(settings, "capture_audio", false);
   auto *source = obs_source_create("lycansync_game_capture", "LycanSync selected game", settings, nullptr);

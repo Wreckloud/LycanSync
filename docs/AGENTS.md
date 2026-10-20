@@ -75,12 +75,12 @@
 - 英文命名，自有业务注释使用简短中文；模块、状态流转和资源所有权不直观时说明原因，不逐行翻译，也不为每个函数添加形式化注释。
 - `Option` 用于确实可能缺失的会话或快照（如 `state.rs`）；`Result` 沿用现有错误码表达可恢复失败（如 `audio_capture.rs`），不以假值伪造成功。
 - 按本项目代码理解所有权：`Arc` 在采集线程间共享设置和诊断数据，`Mutex` 保护可变快照或配置；`Drop` 在 Worker、COM/WinRT apartment、句柄包装和纹理句柄处兜底释放。说明这些类型在具体位置解决的生命周期问题，不写通用教程。
-- `cfg` 划分 Windows API 与跨平台协议层，`shared-texture-output` 控制可选纹理实现；新增分支须保留非 Windows 与 feature 编译边界。
+- `cfg` 划分 Windows API 与跨平台协议层。Rust helper 仅保留来源身份、麦克风及输入注入；正式画面和共享声音由固定 OBS 宿主持有，不重新引入旧采集或失败回退。合成共享纹理测试是测试工具，不进入正式采集。
 - `unsafe` 只在真实的 FFI/WinRT/D3D 边界使用；说明调用线程、句柄/指针有效期或同步依据（如 `sources/windows.rs` 的窗口身份标记），不添加无依据的安全承诺，也不为每处重复套话。
 - 队列有明确容量和过载行为；停止标志、条件变量与等待锁的同步边界要可理解。说明丢弃、关闭唤醒及剩余块排空语义，不无限积压音视频。
 - 协议 stdout 只输出协议消息；诊断沿用 stderr，不泄露句柄、凭据或无必要的进程信息。
 - Windows 专属 API 留在条件编译边界内，协议、Electron 校验和 TypeScript 类型变更要同步检查。
-- 阅读顺序：麦克风从 `audio_capture.rs` → `audio_capture/windows.rs` → `audio_processing.rs`；视频从 `lib.rs` → `sources.rs` → `sources/windows.rs` → `capture.rs` → `capture/windows.rs` → `d3d.rs` → `media-bridge/src/lib.rs`。共享声音和远控分别再读 `screen_audio*`、`remote_input.rs`。
+- 阅读顺序：麦克风从 `audio_capture.rs` → `audio_capture/windows.rs` → `audio_capture/format.rs` → `audio_processing.rs`；画面及共享声音从 Electron `main.cjs` → `obs-capture-host.cjs` → `native/obs-capture-host/src`。来源身份见 `sources*`，远控见 `remote_input.rs`，纹理导入见 `native/media-bridge/src/lib.rs`。
 
 ## 文档和验证
 

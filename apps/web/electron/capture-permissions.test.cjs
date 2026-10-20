@@ -8,7 +8,7 @@ const { matchNativeVideoSourceThumbnails, monitorDisplayId } = require('./native
 test('缩略图 IPC 保留窗口句柄，同标题的分离窗口分别匹配并校验字段', async () => {
   const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = source.indexOf("ipcMain.handle('media:video-source-thumbnails'");
-  const end = source.indexOf("ipcMain.handle('media:capture-probe:start'", start);
+  const end = source.indexOf("ipcMain.handle('settings:screen-share:support'", start);
   let handler;
   let calls = 0;
   runInNewContext(source.slice(start, end), {

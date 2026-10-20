@@ -109,7 +109,7 @@ fn read_events(stdout: ChildStdout, event_sender: mpsc::Sender<String>) {
 }
 
 #[test]
-fn hello_video_start_requires_a_current_source_and_shutdown_use_protocol_v1() {
+fn hello_and_shutdown_keep_protocol_v1_but_removed_video_start_is_rejected() {
     let mut helper = HelperProcess::spawn();
     helper.send("{\"protocolVersion\":1,\"requestId\":\"hello-1\",\"command\":\"hello\"}\n");
     let hello = helper.next_event();
@@ -121,10 +121,7 @@ fn hello_video_start_requires_a_current_source_and_shutdown_use_protocol_v1() {
     );
     let invalid_source = helper.next_event();
     assert_eq!(invalid_source["event"], "error");
-    #[cfg(feature = "shared-texture-output")]
-    assert_eq!(invalid_source["code"], "invalidRequest");
-    #[cfg(not(feature = "shared-texture-output"))]
-    assert_eq!(invalid_source["code"], "videoOutputUnavailable");
+    assert_eq!(invalid_source["code"], "malformedJson");
 
     helper.send("{\"protocolVersion\":1,\"requestId\":\"shutdown-1\",\"command\":\"shutdown\"}\n");
     let shutdown = helper.next_event();

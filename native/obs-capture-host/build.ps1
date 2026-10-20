@@ -58,21 +58,23 @@ if ($LASTEXITCODE -ne 0) { throw '官方运行包解压失败。' }
 $libobsSource = Join-Path $sourceDirectory 'obs-studio-32.2.2-sources/libobs'
 $gameSourceRoot = Join-Path $sourceDirectory 'obs-studio-32.2.2-sources'
 $gameDepsDirectory = Join-Path $cacheDirectory 'game-build-deps'
-& tar.exe -xzf $sourceArchive -C $sourceDirectory 'obs-studio-32.2.2-sources/plugins/win-capture' 'obs-studio-32.2.2-sources/libobs-winrt' 'obs-studio-32.2.2-sources/shared/obs-hook-config' 'obs-studio-32.2.2-sources/shared/obs-inject-library' 'obs-studio-32.2.2-sources/shared/ipc-util' 'obs-studio-32.2.2-sources/shared/file-updater' 'obs-studio-32.2.2-sources/deps/w32-pthreads'
+& tar.exe -xzf $sourceArchive -C $sourceDirectory 'obs-studio-32.2.2-sources/plugins/win-capture' 'obs-studio-32.2.2-sources/plugins/win-wasapi' 'obs-studio-32.2.2-sources/libobs-winrt' 'obs-studio-32.2.2-sources/shared/obs-hook-config' 'obs-studio-32.2.2-sources/shared/obs-inject-library' 'obs-studio-32.2.2-sources/shared/ipc-util' 'obs-studio-32.2.2-sources/shared/file-updater' 'obs-studio-32.2.2-sources/deps/w32-pthreads'
 if ($LASTEXITCODE -ne 0) { throw '游戏插件固定源码解压失败。' }
 $gameDepsHash = '6f90e9598fa10cff5ad23cdcfae49b87868c07bf896b02cd464582b4ce2f2ba9'
 # 哈希与版本来自同一份已校验 OBS 源码归档中的 CMakePresets.json。
 $gameDepsArchive = Get-VerifiedArchive 'windows-deps-2026-07-15-x64.zip' $gameDepsHash 'https://github.com/obsproject/obs-deps/releases/download/2026-07-15/windows-deps-2026-07-15-x64.zip'
 New-Item -ItemType Directory -Force -Path $gameDepsDirectory | Out-Null
-& tar.exe -xf $gameDepsArchive -C $gameDepsDirectory 'include/curl' 'include/jansson.h' 'include/jansson_config.h' 'lib/jansson.lib' 'lib/libcurl_imp.lib' 'licenses/jansson'
+& tar.exe -xf $gameDepsArchive -C $gameDepsDirectory 'include/curl' 'include/jansson.h' 'include/jansson_config.h' 'lib/jansson.lib' 'lib/libcurl_imp.lib' 'licenses'
 if ($LASTEXITCODE -ne 0) { throw '游戏插件依赖解压失败。' }
 & git -C $projectRoot apply --recount --whitespace=error-all --directory=release/build-cache/obs-32.2.2/source/obs-studio-32.2.2-sources (Join-Path $PSScriptRoot 'patches/bound-game-capture.patch')
 if ($LASTEXITCODE -ne 0) { throw '固定游戏插件补丁不适用，拒绝继续构建。' }
+& git -C $projectRoot apply --recount --whitespace=error-all --directory=release/build-cache/obs-32.2.2/source/obs-studio-32.2.2-sources (Join-Path $PSScriptRoot 'patches/bound-audio-capture.patch')
+if ($LASTEXITCODE -ne 0) { throw '固定声音插件补丁不适用，拒绝继续构建。' }
 $includeDirectory = Join-Path $preparedDirectory 'include'
 $libraryDirectory = Join-Path $preparedDirectory 'lib'
 $binaryDirectory = Join-Path $preparedDirectory 'bin/64bit'
 New-Item -ItemType Directory -Force -Path $includeDirectory, $libraryDirectory, $binaryDirectory | Out-Null
-foreach ($header in Get-ChildItem -LiteralPath $libobsSource -Filter '*.h' -File -Recurse) {
+foreach ($header in Get-ChildItem -LiteralPath $libobsSource -File -Recurse | Where-Object { $_.Extension -in @('.h', '.hpp') }) {
     $destination = Join-Path $includeDirectory $header.FullName.Substring($libobsSource.Length + 1)
     New-Item -ItemType Directory -Force -Path (Split-Path $destination -Parent) | Out-Null
     Copy-Item -LiteralPath $header.FullName -Destination $destination -Force
@@ -97,9 +99,22 @@ foreach ($captureFile in Get-ChildItem -LiteralPath $captureDataSource -File -Re
     New-Item -ItemType Directory -Force -Path (Split-Path $destination -Parent) | Out-Null
     Copy-Item -LiteralPath $captureFile.FullName -Destination $destination -Force
 }
+$audioDataSource = Join-Path $upstreamDirectory 'data/obs-plugins/win-wasapi'
+foreach ($audioFile in Get-ChildItem -LiteralPath $audioDataSource -File -Recurse | Where-Object { $_.Extension -ne '.pdb' }) {
+    $destination = Join-Path $dataDirectory "obs-plugins/win-wasapi/$($audioFile.FullName.Substring($audioDataSource.Length + 1))"
+    New-Item -ItemType Directory -Force -Path (Split-Path $destination -Parent) | Out-Null
+    Copy-Item -LiteralPath $audioFile.FullName -Destination $destination -Force
+}
 $licenseDirectory = Join-Path $preparedDirectory 'licenses'
 New-Item -ItemType Directory -Force -Path $licenseDirectory | Out-Null
 Copy-Item -LiteralPath (Join-Path $sourceDirectory 'obs-studio-32.2.2-sources/COPYING') -Destination (Join-Path $licenseDirectory 'OBS-COPYING.txt') -Force
+$dependencyLicenses = Join-Path $gameDepsDirectory 'licenses'
+foreach ($licenseFile in Get-ChildItem -LiteralPath $dependencyLicenses -File -Recurse) {
+    $destination = Join-Path $licenseDirectory "dependencies/$($licenseFile.FullName.Substring($dependencyLicenses.Length + 1))"
+    New-Item -ItemType Directory -Force -Path (Split-Path $destination -Parent) | Out-Null
+    Copy-Item -LiteralPath $licenseFile.FullName -Destination $destination -Force
+}
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'LICENSE.md') -Destination (Join-Path $licenseDirectory 'LycanSync-OBS-LICENSE.md') -Force
 
 $obsDll = Join-Path $binaryDirectory 'obs.dll'
 if ((Get-Item -LiteralPath $obsDll).VersionInfo.ProductVersion -cne '32.2.2') { throw '官方 obs.dll 文件版本不匹配。' }
@@ -129,16 +144,18 @@ if ($LASTEXITCODE -ne 0) { throw 'OBS 宿主 CMake 配置失败。' }
 & $cmake --build $buildDirectory --config Release --parallel 2
 if ($LASTEXITCODE -ne 0) { throw 'OBS 宿主构建失败。' }
 if ($BuildTestWindows) {
-    & $cmake --build $buildDirectory --config Release --target lycansync-obs-test-windows lycansync-bound-game-target-tests lycansync-obs-test-d3d --parallel 2
+    & $cmake --build $buildDirectory --config Release --target lycansync-obs-test-windows lycansync-bound-game-target-tests lycansync-bound-audio-target-tests lycansync-screen-audio-pcm-tests lycansync-obs-test-d3d --parallel 2
     if ($LASTEXITCODE -ne 0) { throw '测试色块窗口构建失败。' }
 }
 $gamePlugin = Join-Path $buildDirectory 'game-plugin/win-capture.dll'
 # 开发包只有这一份精确绑定插件，不保留可被默认构建换回的原插件。
 Copy-Item -LiteralPath $gamePlugin -Destination (Join-Path $pluginDirectory 'win-capture.dll') -Force
+$audioPlugin = Join-Path $buildDirectory 'audio-plugin/win-wasapi.dll'
+Copy-Item -LiteralPath $audioPlugin -Destination (Join-Path $pluginDirectory 'win-wasapi.dll') -Force
 
 # 静态检查 DLL 依赖；不加载 OBS、辅助程序或设备。API-set 由 Windows 装载器提供。
 $imports = @()
-$runtimeBinaries = @(Get-ChildItem -LiteralPath $binaryDirectory -File) + @(Get-Item (Join-Path $pluginDirectory 'win-capture.dll'))
+$runtimeBinaries = @(Get-ChildItem -LiteralPath $binaryDirectory -File) + @(Get-Item (Join-Path $pluginDirectory 'win-capture.dll')) + @(Get-Item (Join-Path $pluginDirectory 'win-wasapi.dll'))
 foreach ($binary in $runtimeBinaries) {
     $dependencies = & $dumpbin /nologo /dependents $binary.FullName
     if ($LASTEXITCODE -ne 0) { throw "无法静态检查运行依赖：$($binary.Name)" }
@@ -156,6 +173,11 @@ foreach ($binary in $runtimeBinaries) {
     binarySha256 = (Get-FileHash -LiteralPath $gamePlugin -Algorithm SHA256).Hash.ToLowerInvariant();
     bytes = (Get-Item -LiteralPath $gamePlugin).Length; importsChecked = $true;
     runtimeExecuted = $false; redistributionReady = $false } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $buildDirectory 'game-plugin/build-manifest.json') -Encoding utf8
+[ordered]@{ obsVersion = '32.2.2'; sourceSha256 = $sourceHash;
+    patchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/bound-audio-capture.patch') -Algorithm SHA256).Hash.ToLowerInvariant();
+    binarySha256 = (Get-FileHash -LiteralPath $audioPlugin -Algorithm SHA256).Hash.ToLowerInvariant();
+    bytes = (Get-Item -LiteralPath $audioPlugin).Length; importsChecked = $true;
+    runtimeExecuted = $false; redistributionReady = $false } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $buildDirectory 'audio-plugin/build-manifest.json') -Encoding utf8
 $files = @(Get-ChildItem -LiteralPath $preparedDirectory -File -Recurse | Where-Object {
     $_.FullName -notmatch '[\\/]include[\\/]|[\\/]lib[\\/]' -and $_.Name -notin @('build-manifest.json', 'sdk-version.txt')
 } | Sort-Object FullName | ForEach-Object {

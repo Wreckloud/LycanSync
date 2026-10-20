@@ -603,4 +603,6 @@ mod tests {
 }
 
 #[cfg(target_os = "windows")]
+mod format;
+#[cfg(target_os = "windows")]
 mod windows;

@@ -7,13 +7,10 @@ const PROTOCOL_VERSION = 1;
 const MAX_LINE_BYTES = 64 * 1024;
 const UTF8_DECODER = new TextDecoder('utf-8', { fatal: true });
 const CAPABILITY_NAMES = [
-  'videoCapture',
-  'captureProbe',
   'videoSourceDiscovery',
   'microphoneCapture',
   'systemAudioCapture',
   'processAudioCapture',
-  'screenShareAudioCapture',
 ];
 
 class MediaHelperManager {
@@ -30,12 +27,8 @@ class MediaHelperManager {
     killTimeoutMs = 500,
     idleTimeoutMs = 30_000,
     retryDelayMs = 2000,
-    onSharedTextureFrame = () => {},
     onMicrophoneCaptureEnded = () => {},
-    onVideoCaptureEnded = () => {},
-    onVideoCaptureSuspended = () => {},
     onHelperFailure = () => {},
-    onHelperClosed = () => {},
     onDiagnostic = (message) => console.error(message),
   }) {
     this.executablePath = executablePath;
@@ -49,12 +42,8 @@ class MediaHelperManager {
     this.killTimeoutMs = killTimeoutMs;
     this.idleTimeoutMs = idleTimeoutMs;
     this.retryDelayMs = retryDelayMs;
-    this.onSharedTextureFrame = onSharedTextureFrame;
     this.onMicrophoneCaptureEnded = onMicrophoneCaptureEnded;
-    this.onVideoCaptureEnded = onVideoCaptureEnded;
-    this.onVideoCaptureSuspended = onVideoCaptureSuspended;
     this.onHelperFailure = onHelperFailure;
-    this.onHelperClosed = onHelperClosed;
     this.onDiagnostic = onDiagnostic;
     this.state = undefined;
     this.startPromise = undefined;
@@ -65,18 +54,11 @@ class MediaHelperManager {
     this.closing = false;
     this.lastError = undefined;
     this.videoSourceSnapshot = undefined;
-    this.captureProbe = undefined;
-    this.captureProbeStart = undefined;
-    this.captureProbeStop = undefined;
-    this.lastStoppedCaptureProbe = undefined;
+    // 此处只持有来源身份；实际画面和共享声音均由 OBS 宿主持有。
     this.videoCapture = undefined;
     this.videoCaptureStart = undefined;
     this.videoCaptureStop = undefined;
     this.lastStoppedVideoCapture = undefined;
-    this.screenShareAudio = undefined;
-    this.screenShareAudioStart = undefined;
-    this.screenShareAudioStop = undefined;
-    this.lastStoppedScreenShareAudio = undefined;
     this.microphoneCapture = undefined;
     this.microphoneCaptureStart = undefined;
     this.microphoneCaptureStartingSessionId = undefined;
@@ -131,64 +113,22 @@ class MediaHelperManager {
     }
   }
 
-  startCaptureProbe(sourceId) {
-    if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
-    if (typeof sourceId !== 'string' || sourceId.length > 128) return Promise.reject(new Error('invalidVideoSource'));
-    if (this.videoCapture || this.videoCaptureStart) return Promise.reject(new Error('videoCaptureAlreadyRunning'));
-    if (this.captureProbe) {
-      return this.captureProbe.sourceId === sourceId
-        ? Promise.resolve({ sessionId: this.captureProbe.sessionId, changed: false })
-        : Promise.reject(new Error('captureProbeAlreadyRunning'));
-    }
-    if (this.captureProbeStart) {
-      return this.captureProbeStart.sourceId === sourceId
-        ? this.captureProbeStart.promise
-        : Promise.reject(new Error('captureProbeAlreadyStarting'));
-    }
-    const snapshot = this.videoSourceSnapshot;
-    if (!snapshot || !snapshot.ids.has(sourceId) || !snapshot.state.alive) {
-      return Promise.reject(new Error('videoSourceExpired'));
-    }
-    const sessionId = this.createRequestId();
-    this.clearIdleTimer();
-    const promise = this.runStartCaptureProbe(snapshot.state, sessionId, sourceId)
-      .finally(() => {
-        if (this.captureProbeStart?.promise === promise) this.captureProbeStart = undefined;
-        if (this.canCloseWhenIdle(snapshot.state)) this.scheduleIdleShutdown(snapshot.state);
-      });
-    this.captureProbeStart = { state: snapshot.state, sourceId, promise };
-    return promise;
-  }
 
-  async runStartCaptureProbe(state, sessionId, sourceId) {
-    try {
-      const response = await this.sendRequest(state, 'startCaptureProbe', 'acknowledged', this.requestTimeoutMs,
-        { sessionId, sourceId });
-      if (response.command !== 'startCaptureProbe' || response.changed !== true) {
-        throw new Error('mediaHelperInvalidCaptureStart');
-      }
-      this.captureProbe = { state, sessionId, sourceId };
-      return { sessionId, changed: true };
-    } catch (error) {
-      this.videoSourceSnapshot = undefined;
-      throw error;
-    }
-  }
 
-  reserveWindowVideo(sessionId, sourceId) {
+  reserveVideo(sessionId, sourceId) {
     if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
     if (typeof sessionId !== 'string' || sessionId.length > 128
-        || !/^window:[1-9]\d*:\d+$/.test(sourceId || '')) return Promise.reject(new Error('invalidVideoStart'));
-    if (this.videoCapture || this.videoCaptureStart || this.captureProbe || this.captureProbeStart) {
+        || !/^(monitor|window):[1-9]\d*:\d+$/.test(sourceId || '')) return Promise.reject(new Error('invalidVideoStart'));
+    if (this.videoCapture || this.videoCaptureStart) {
       return Promise.reject(new Error('videoCaptureAlreadyRunning'));
     }
     const snapshot = this.videoSourceSnapshot;
     if (!snapshot || !snapshot.ids.has(sourceId) || !snapshot.state.alive) return Promise.reject(new Error('videoSourceExpired'));
     this.clearIdleTimer();
-    const active = { state: snapshot.state, sessionId, sourceId, starting: true, external: true };
+    const active = { state: snapshot.state, sessionId, sourceId, starting: true, stopping: false };
     this.videoCapture = active;
     active.state.videoSessionId = sessionId;
-    const promise = this.runReserveWindowVideo(active).finally(() => {
+    const promise = this.runReserveVideo(active).finally(() => {
       if (this.videoCaptureStart?.promise === promise) this.videoCaptureStart = undefined;
       if (this.canCloseWhenIdle(active.state)) this.scheduleIdleShutdown(active.state);
     });
@@ -196,29 +136,33 @@ class MediaHelperManager {
     return promise;
   }
 
-  async runReserveWindowVideo(active) {
+  async runReserveVideo(active) {
     const { state, sessionId, sourceId } = active;
     try {
-      const response = await this.sendRequest(state, 'reserveWindowVideo', 'windowVideoReserved', this.requestTimeoutMs,
+      const response = await this.sendRequest(state, 'reserveVideo', 'videoReserved', this.requestTimeoutMs,
         { sessionId, sourceId });
       const target = response.target;
-      if (response.sessionId !== sessionId || response.sourceId !== sourceId || !target
-          || typeof target.windowId !== 'string' || !/^[1-9]\d{0,19}$/.test(target.windowId)
-          || BigInt(target.windowId) > 0xffffffffffffffffn
-          || typeof target.propertyName !== 'string' || target.propertyName.length > 128
-          || !/^LycanSync\.MediaHelper\.Window\.\d+\.\d+\.\d+$/.test(target.propertyName)
-          || typeof target.propertyValue !== 'string' || !/^[1-9]\d{0,19}$/.test(target.propertyValue)
-          || BigInt(target.propertyValue) > 0xffffffffffffffffn
-          || typeof target.executable !== 'string' || target.executable.length > 4096
-          || !win32.isAbsolute(target.executable) || !/\.exe$/i.test(target.executable)
-          || /[\u0000-\u001f\u007f]/.test(target.executable)) {
-        const error = new Error('mediaHelperInvalidWindowTarget');
+      const monitor = target?.kind === 'monitor' && sourceId.startsWith('monitor:')
+        && typeof target.monitorName === 'string' && /^\\\\\.\\DISPLAY[1-9]\d*$/i.test(target.monitorName);
+      const window = target?.kind === 'window' && sourceId.startsWith('window:')
+        && typeof target.windowId === 'string' && /^[1-9]\d{0,19}$/.test(target.windowId)
+        && BigInt(target.windowId) <= 0xffffffffffffffffn
+        && typeof target.propertyName === 'string' && target.propertyName.length <= 128
+        && /^LycanSync\.MediaHelper\.Window\.\d+\.\d+\.\d+$/.test(target.propertyName)
+        && typeof target.propertyValue === 'string' && /^[1-9]\d{0,19}$/.test(target.propertyValue)
+        && BigInt(target.propertyValue) <= 0xffffffffffffffffn
+        && typeof target.executable === 'string' && target.executable.length <= 4096
+        && win32.isAbsolute(target.executable) && /\.exe$/i.test(target.executable)
+        && !/[\u0000-\u001f\u007f]/.test(target.executable);
+      if (response.sessionId !== sessionId || response.sourceId !== sourceId || (!monitor && !window)) {
+        const error = new Error('mediaHelperInvalidVideoTarget');
         this.failState(state, error);
         throw error;
       }
       active.starting = false;
-      return { kind: 'window', windowId: target.windowId, propertyName: target.propertyName,
-        propertyValue: target.propertyValue, executable: target.executable };
+      return monitor ? { kind: 'monitor', monitorName: target.monitorName }
+        : { kind: 'window', windowId: target.windowId, propertyName: target.propertyName,
+          propertyValue: target.propertyValue, executable: target.executable };
     } catch (error) {
       if (this.videoCapture === active) this.videoCapture = undefined;
       delete state.videoSessionId;
@@ -227,40 +171,10 @@ class MediaHelperManager {
     }
   }
 
-  startVideo(sourceId, maxFps, sessionId = this.createRequestId(), settings = { hideCursor: false, hideBorder: false }) {
-    if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
-    if (typeof sourceId !== 'string' || sourceId.length > 128
-        || !Number.isInteger(maxFps) || maxFps < 1 || maxFps > 120
-        || typeof sessionId !== 'string' || sessionId.length > 128
-        || !settings || typeof settings !== 'object' || Array.isArray(settings)
-        || Object.keys(settings).length !== 2
-        || typeof settings.hideCursor !== 'boolean' || typeof settings.hideBorder !== 'boolean') {
-      return Promise.reject(new Error('invalidVideoStart'));
-    }
-    if (this.videoCapture || this.captureProbe) return Promise.reject(new Error('videoCaptureAlreadyRunning'));
-    if (this.videoCaptureStart || this.captureProbeStart) {
-      return Promise.reject(new Error('videoCaptureAlreadyStarting'));
-    }
-    const snapshot = this.videoSourceSnapshot;
-    if (!snapshot || !snapshot.ids.has(sourceId) || !snapshot.state.alive) {
-      return Promise.reject(new Error('videoSourceExpired'));
-    }
-    this.clearIdleTimer();
-    const active = { state: snapshot.state, sessionId, sourceId, maxFps, starting: true, remoteControl: undefined };
-    this.videoCapture = active;
-    snapshot.state.videoSessionId = sessionId;
-    const promise = this.runStartVideo(snapshot.state, sessionId, sourceId, maxFps, settings)
-      .finally(() => {
-        if (this.videoCaptureStart?.promise === promise) this.videoCaptureStart = undefined;
-        if (this.canCloseWhenIdle(snapshot.state)) this.scheduleIdleShutdown(snapshot.state);
-      });
-    this.videoCaptureStart = { state: snapshot.state, sourceId, promise };
-    return promise;
-  }
 
   async setRemoteControl(sessionId, controlSessionId, controllerIdentity) {
     const active = this.videoCapture;
-    if (!active || active.sessionId !== sessionId || active.starting || !active.sourceId.startsWith('monitor:')) {
+    if (!active || active.sessionId !== sessionId || active.starting || active.stopping || !active.sourceId.startsWith('monitor:')) {
       throw new Error('remoteControlSourceUnavailable');
     }
     if (!validOpaqueId(controlSessionId) || !validOpaqueId(controllerIdentity) || active.remoteControl) {
@@ -268,7 +182,7 @@ class MediaHelperManager {
     }
     const response = await this.sendRequest(active.state, 'setRemoteControl', 'acknowledged', this.requestTimeoutMs,
       { sessionId, sourceId: active.sourceId, controlSessionId, controllerIdentity });
-    if (response.command !== 'setRemoteControl' || response.changed !== true) {
+    if (this.videoCapture !== active || active.stopping || response.command !== 'setRemoteControl' || response.changed !== true) {
       throw new Error('mediaHelperInvalidRemoteControlStart');
     }
     active.remoteControl = { controlSessionId, controllerIdentity, lastMoveSequence: 0,
@@ -280,7 +194,7 @@ class MediaHelperManager {
     const active = this.videoCapture;
     const control = active?.remoteControl;
     const safeInput = normalizeRemoteInput(input);
-    if (!active || active.sessionId !== sessionId || !control || !control.accepting
+    if (!active || active.sessionId !== sessionId || active.stopping || !control || !control.accepting
         || control.controlSessionId !== controlSessionId || control.controllerIdentity !== controllerIdentity
         || !Number.isSafeInteger(sequence) || sequence < 1 || !safeInput) {
       throw new Error('remoteControlInvalidSession');
@@ -325,51 +239,8 @@ class MediaHelperManager {
     return { changed: response.changed };
   }
 
-  async configureVideo(sessionId, maxFps) {
-    const active = this.videoCapture;
-    if (!active || active.sessionId !== sessionId || active.starting || active.external || !active.state.alive
-        || !Number.isInteger(maxFps) || maxFps < 1 || maxFps > 120) throw new Error('invalidVideoConfiguration');
-    const response = await this.sendRequest(active.state, 'configureVideo', 'acknowledged', this.requestTimeoutMs,
-      { sessionId, maxFps });
-    if (response.command !== 'configureVideo' || response.changed !== true) throw new Error('mediaHelperInvalidVideoConfiguration');
-    if (this.videoCapture !== active) throw new Error('videoCaptureSessionMismatch');
-    active.maxFps = maxFps;
-    return { changed: true };
-  }
 
-  async runStartVideo(state, sessionId, sourceId, maxFps, settings) {
-    try {
-      const response = await this.sendRequest(state, 'startVideo', 'acknowledged', this.requestTimeoutMs,
-        { sessionId, sourceId, targetWidth: 1920, targetHeight: 1080, maxFps, ...settings });
-      if (response.command !== 'startVideo' || response.changed !== true) {
-        throw new Error('mediaHelperInvalidVideoStart');
-      }
-      if (this.videoCapture?.state === state && this.videoCapture.sessionId === sessionId) {
-        this.videoCapture.starting = false;
-      }
-      return { sessionId, changed: true };
-    } catch (error) {
-      if (this.videoCapture?.state === state && this.videoCapture.sessionId === sessionId) {
-        this.videoCapture = undefined;
-      }
-      delete state.videoSessionId;
-      this.videoSourceSnapshot = undefined;
-      throw error;
-    }
-  }
 
-  releaseSharedTextureSlot(sessionId, slotIndex) {
-    const active = this.videoCapture;
-    if (!active || active.sessionId !== sessionId || !Number.isInteger(slotIndex)
-        || slotIndex < 0 || slotIndex >= 3) {
-      return Promise.reject(new Error('sharedTextureSlotMismatch'));
-    }
-    return this.sendRequest(active.state, 'releaseSharedTextureSlot', 'acknowledged', this.requestTimeoutMs,
-      { sessionId, slotIndex }).then((response) => {
-      if (response.command !== 'releaseSharedTextureSlot') throw new Error('mediaHelperInvalidSlotRelease');
-      return { changed: response.changed };
-    });
-  }
 
   stopVideo(sessionId) {
     if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
@@ -382,6 +253,7 @@ class MediaHelperManager {
         : Promise.reject(new Error('videoSessionMismatch'));
     }
     if (this.videoCapture.sessionId !== sessionId) return Promise.reject(new Error('videoSessionMismatch'));
+    this.videoCapture.stopping = true;
     if (this.videoCaptureStart) {
       return this.videoCaptureStart.promise.then(() => this.stopVideo(sessionId));
     }
@@ -394,74 +266,8 @@ class MediaHelperManager {
     return promise;
   }
 
-  startScreenShareAudio(sourceId, pipeId, sessionId) {
-    if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
-    if (!/^(?:monitor|window):[1-9]\d*:\d+$/.test(sourceId || '')
-        || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(pipeId || '')
-        || typeof sessionId !== 'string' || sessionId.length > 128) {
-      return Promise.reject(new Error('invalidScreenShareAudioStart'));
-    }
-    const activeVideo = this.videoCapture;
-    const snapshot = this.videoSourceSnapshot;
-    if (!activeVideo || activeVideo.sessionId !== sessionId || activeVideo.sourceId !== sourceId
-        || !snapshot || !snapshot.ids.has(sourceId) || snapshot.state !== activeVideo.state
-        || !activeVideo.state.alive) {
-      return Promise.reject(new Error('videoSourceExpired'));
-    }
-    if (this.screenShareAudio) {
-      return this.screenShareAudio.sessionId === sessionId
-        ? Promise.resolve({ ...this.screenShareAudio.result, changed: false })
-        : Promise.reject(new Error('screenShareAudioAlreadyRunning'));
-    }
-    if (this.screenShareAudioStart) return this.screenShareAudioStart;
-    this.clearIdleTimer();
-    const promise = this.runStartScreenShareAudio(activeVideo.state, sourceId, pipeId, sessionId)
-      .finally(() => { if (this.screenShareAudioStart === promise) this.screenShareAudioStart = undefined; });
-    this.screenShareAudioStart = promise;
-    return promise;
-  }
 
-  async runStartScreenShareAudio(state, sourceId, pipeId, sessionId) {
-    const response = await this.sendRequest(state, 'startScreenShareAudio', 'screenShareAudioStarted', this.audioStartTimeoutMs,
-      { sourceId, pipeId, sessionId });
-    if (response.sessionId !== sessionId || response.changed !== true
-        || !Number.isInteger(response.sampleRate) || response.sampleRate < 8000 || response.sampleRate > 192000
-        || response.channels !== 2 || response.bitsPerSample !== 32 || response.nominalChunkMs !== 10) {
-      this.failState(state, new Error('mediaHelperInvalidScreenShareAudioStart'));
-      throw new Error('mediaHelperInvalidScreenShareAudioStart');
-    }
-    const result = {
-      sampleRate: response.sampleRate,
-      channels: response.channels,
-      bitsPerSample: response.bitsPerSample,
-      nominalChunkMs: response.nominalChunkMs,
-    };
-    this.screenShareAudio = { state, sessionId, sourceId, result };
-    return { ...result, changed: true };
-  }
 
-  stopScreenShareAudio(sessionId) {
-    if (!this.screenShareAudio) {
-      return this.lastStoppedScreenShareAudio === sessionId
-        ? Promise.resolve({ changed: false })
-        : Promise.reject(new Error('screenShareAudioSessionMismatch'));
-    }
-    if (this.screenShareAudio.sessionId !== sessionId) return Promise.reject(new Error('screenShareAudioSessionMismatch'));
-    if (this.screenShareAudioStop) return this.screenShareAudioStop;
-    const active = this.screenShareAudio;
-    const promise = this.sendRequest(active.state, 'stopScreenShareAudio', 'acknowledged', this.requestTimeoutMs,
-      { sessionId }).then((response) => {
-      if (response.command !== 'stopScreenShareAudio') throw new Error('mediaHelperInvalidScreenShareAudioStop');
-      this.screenShareAudio = undefined;
-      this.lastStoppedScreenShareAudio = sessionId;
-      return { changed: response.changed };
-    }).finally(() => {
-      if (this.screenShareAudioStop === promise) this.screenShareAudioStop = undefined;
-      if (this.canCloseWhenIdle(active.state)) this.scheduleIdleShutdown(active.state);
-    });
-    this.screenShareAudioStop = promise;
-    return promise;
-  }
 
   startMicrophoneCapture(pipeId, sessionId, settings) {
     if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
@@ -571,18 +377,6 @@ class MediaHelperManager {
     return promise;
   }
 
-  async abortVideo(sessionId) {
-    const active = this.videoCapture;
-    if (!active || active.sessionId !== sessionId) {
-      return this.lastStoppedVideoCapture === sessionId ? { changed: false } : Promise.reject(new Error('videoSessionMismatch'));
-    }
-    const state = active.state;
-    this.failState(state, new Error('nativeVideoAbortRequested'));
-    if (!await waitForClose(state.closedPromise, this.killTimeoutMs)) {
-      throw new Error('mediaHelperTerminationUnconfirmed');
-    }
-    return { changed: true };
-  }
 
   async runStopVideo(active) {
     this.clearIdleTimer();
@@ -600,42 +394,7 @@ class MediaHelperManager {
     }
   }
 
-  stopCaptureProbe(sessionId) {
-    if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
-    if (typeof sessionId !== 'string' || sessionId.length > 128) {
-      return Promise.reject(new Error('invalidCaptureSession'));
-    }
-    if (!this.captureProbe) {
-      return this.lastStoppedCaptureProbe === sessionId
-        ? Promise.resolve({ changed: false })
-        : Promise.reject(new Error('captureProbeSessionMismatch'));
-    }
-    if (this.captureProbe.sessionId !== sessionId) {
-      return Promise.reject(new Error('captureProbeSessionMismatch'));
-    }
-    if (this.captureProbeStop) return this.captureProbeStop;
-    const captureProbe = this.captureProbe;
-    const promise = this.runStopCaptureProbe(captureProbe).finally(() => {
-      if (this.captureProbeStop === promise) this.captureProbeStop = undefined;
-    });
-    this.captureProbeStop = promise;
-    return promise;
-  }
 
-  async runStopCaptureProbe(captureProbe) {
-    const { state, sessionId } = captureProbe;
-    this.clearIdleTimer();
-    try {
-      const response = await this.sendRequest(state, 'stopCaptureProbe', 'acknowledged', this.requestTimeoutMs,
-        { sessionId });
-      if (response.command !== 'stopCaptureProbe') throw new Error('mediaHelperInvalidCaptureStop');
-      this.captureProbe = undefined;
-      this.lastStoppedCaptureProbe = sessionId;
-      return { changed: response.changed };
-    } finally {
-      if (this.canCloseWhenIdle(state)) this.scheduleIdleShutdown(state);
-    }
-  }
 
   async getDiagnostics() {
     const state = await this.ensureStarted();
@@ -644,20 +403,10 @@ class MediaHelperManager {
       const diagnostics = validateDiagnostics(
         await this.sendRequest(state, 'diagnostics', 'diagnostics', this.requestTimeoutMs),
       );
-      if (this.captureProbe?.state === state
-          && (diagnostics.state === 'idle' || diagnostics.sessionId !== this.captureProbe.sessionId)) {
-        this.lastStoppedCaptureProbe = this.captureProbe.sessionId;
-        this.captureProbe = undefined;
-      }
       if (this.videoCapture?.state === state
           && (diagnostics.state === 'idle' || diagnostics.sessionId !== this.videoCapture.sessionId)) {
         this.lastStoppedVideoCapture = this.videoCapture.sessionId;
         this.videoCapture = undefined;
-      }
-      if (this.screenShareAudio?.state === state
-          && diagnostics.screenShareAudio?.state !== 'running') {
-        this.lastStoppedScreenShareAudio = this.screenShareAudio.sessionId;
-        this.screenShareAudio = undefined;
       }
       return diagnostics;
     } finally {
@@ -731,7 +480,6 @@ class MediaHelperManager {
       }
     });
     child.once('close', () => {
-      try { this.onHelperClosed(state); } catch { /* Process close must complete regardless of cleanup hooks. */ }
       state.alive = false;
       state.closed = true;
       state.resolveClose();
@@ -812,51 +560,6 @@ class MediaHelperManager {
     }
     if (!message || message.protocolVersion !== PROTOCOL_VERSION || typeof message.event !== 'string') {
       this.failState(state, new Error('mediaHelperInvalidResponse'));
-      return;
-    }
-    if (message.event === 'sharedTextureFrame') {
-      const active = this.videoCapture;
-      if (!active || active.state !== state || active.sessionId !== message.sessionId
-          || !Number.isInteger(message.slotIndex) || message.slotIndex < 0 || message.slotIndex >= 3
-          || typeof message.sourceHandleHex !== 'string' || !/^[0-9a-f]{16}$/i.test(message.sourceHandleHex)
-          || message.pixelFormat !== 'bgra' || !validTextureSize(message.codedSize)
-          || !validTextureSize(message.contentSize)
-          || message.contentSize.width > message.codedSize.width
-          || message.contentSize.height > message.codedSize.height) {
-        this.failState(state, new Error('mediaHelperInvalidSharedTextureFrame'));
-        return;
-      }
-      try { this.onSharedTextureFrame(state, message); }
-      catch { this.failState(state, new Error('mediaHelperSharedTextureDeliveryFailed')); }
-      return;
-    }
-    if (message.event === 'videoCaptureEnded') {
-      if (typeof message.sessionId !== 'string' || message.sessionId.length > 128
-          || !isStableCode(message.code)) {
-        this.failState(state, new Error('mediaHelperInvalidVideoCaptureEnded'));
-        return;
-      }
-      const active = this.videoCapture;
-      if (!active || active.state !== state || active.sessionId !== message.sessionId || active.endedNotified) {
-        return;
-      }
-      active.endedNotified = true;
-      try { this.onVideoCaptureEnded(state, { sessionId: message.sessionId, code: message.code }); }
-      catch { /* The capture owner still receives the event and can stop its session. */ }
-      return;
-    }
-    if (message.event === 'videoCaptureSuspended') {
-      if (typeof message.sessionId !== 'string' || message.sessionId.length > 128
-          || typeof message.suspended !== 'boolean') {
-        this.failState(state, new Error('mediaHelperInvalidVideoCaptureSuspended'));
-        return;
-      }
-      const active = this.videoCapture;
-      if (!active || active.state !== state || active.sessionId !== message.sessionId
-          || active.endedNotified || active.suspended === message.suspended) return;
-      active.suspended = message.suspended;
-      try { this.onVideoCaptureSuspended(state, { sessionId: message.sessionId, suspended: message.suspended }); }
-      catch { /* The capture owner can still stop its session. */ }
       return;
     }
     if (message.event === 'microphoneCaptureEnded') {
@@ -951,20 +654,14 @@ class MediaHelperManager {
 
   canCloseWhenIdle(state) {
     return this.state === state && state.alive && state.pending.size === 0
-      && !this.closingDown(state) && this.captureProbe?.state !== state && this.videoCapture?.state !== state
-      && this.screenShareAudio?.state !== state && this.microphoneCapture?.state !== state
-      && this.captureProbeStart?.promise === undefined && this.videoCaptureStart?.promise === undefined
-      && this.screenShareAudioStart === undefined && this.microphoneCaptureStart === undefined;
+      && !this.closingDown(state) && this.videoCapture?.state !== state && this.microphoneCapture?.state !== state
+      && this.videoCaptureStart?.promise === undefined && this.microphoneCaptureStart === undefined;
   }
 
   invalidateState(state) {
     if (this.videoSourceSnapshot?.state === state) this.videoSourceSnapshot = undefined;
-    if (this.captureProbe?.state === state) this.captureProbe = undefined;
-    if (this.captureProbeStart?.state === state) this.captureProbeStart = undefined;
     if (this.videoCapture?.state === state) this.videoCapture = undefined;
     if (this.videoCaptureStart?.state === state) this.videoCaptureStart = undefined;
-    if (this.screenShareAudio?.state === state) this.screenShareAudio = undefined;
-    if (this.screenShareAudioStart) this.screenShareAudioStart = undefined;
     if (this.microphoneCapture?.state === state) this.microphoneCapture = undefined;
     if (this.microphoneCaptureStart) this.microphoneCaptureStart = undefined;
     this.microphoneCaptureStartingSessionId = undefined;
@@ -1024,16 +721,6 @@ function validateCapabilities(message) {
       throw new Error('mediaHelperInvalidCapabilities');
     }
     result[name] = { available: capability.available, reason: capability.reason };
-  }
-  const screenAudio = result.screenShareAudioCapture;
-  const supportedScreenAudio = new Map([
-    ['windowsApplicationLoopbackProcessTree', true],
-    ['windowsSystemMixLoopback', true],
-    ['windowsEventDrivenLoopbackRequiresBuild15063', false],
-    ['platformUnsupported', false],
-  ]);
-  if (supportedScreenAudio.get(screenAudio.reason) !== screenAudio.available) {
-    throw new Error('mediaHelperInvalidCapabilities');
   }
   const microphone = result.microphoneCapture;
   const supportedMicrophone = new Map([
@@ -1144,11 +831,6 @@ function validateDiagnostics(message) {
   }
   diagnostics.screenShareAudio = audio;
   return diagnostics;
-}
-
-function validTextureSize(value) {
-  return value && Number.isSafeInteger(value.width) && value.width > 0 && value.width <= 32768
-    && Number.isSafeInteger(value.height) && value.height > 0 && value.height <= 32768;
 }
 
 function safeFailureCode(error) {

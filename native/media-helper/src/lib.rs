@@ -2,18 +2,12 @@
 
 mod audio_capture;
 mod audio_processing;
-mod capture;
-#[cfg(target_os = "windows")]
-mod d3d;
 mod protocol;
 mod remote_input;
-mod screen_audio;
 mod sources;
 pub mod state;
 
 use protocol::VideoSource;
-#[cfg(not(feature = "shared-texture-output"))]
-use protocol::unavailable_video_output_capability;
 use protocol::{
     Capability, CommandEnvelope, ErrorCode, MAX_LINE_BYTES, OutboundEvent, PROTOCOL_VERSION,
     unavailable_capability, valid_identifier,
@@ -24,22 +18,6 @@ use std::io::{self, BufRead, Write};
 use std::sync::Mutex;
 
 pub(crate) static EVENT_OUTPUT_LOCK: Mutex<()> = Mutex::new(());
-
-pub(crate) fn notify_video_capture_ended(session_id: &str, code: ErrorCode) {
-    write_capture_event(OutboundEvent::VideoCaptureEnded {
-        protocol_version: PROTOCOL_VERSION,
-        session_id: session_id.to_owned(),
-        code,
-    });
-}
-
-pub(crate) fn notify_video_capture_suspended(session_id: &str, suspended: bool) {
-    write_capture_event(OutboundEvent::VideoCaptureSuspended {
-        protocol_version: PROTOCOL_VERSION,
-        session_id: session_id.to_owned(),
-        suspended,
-    });
-}
 
 pub(crate) fn notify_microphone_capture_ended(session_id: &str, code: ErrorCode) {
     write_capture_event(microphone_capture_ended_event(session_id, code));
@@ -126,7 +104,6 @@ pub fn run<R: BufRead, W: Write>(mut input: R, mut output: W) -> io::Result<()> 
 }
 
 fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> OutboundEvent {
-    runtime.reap_finished_capture();
     if !valid_identifier(envelope.request_id()) {
         return error(runtime, None, ErrorCode::InvalidRequest, "requestId 无效");
     }
@@ -151,78 +128,49 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
             request_id: request_id.clone(),
             state: runtime.state(),
             windows_only: true,
-            video_capture: runtime.video_capture_capability(),
-            capture_probe: runtime.capture_probe_capability(),
             video_source_discovery: runtime.discovery_capability(),
             microphone_capture: audio_capture::capability(),
             system_audio_capture: unavailable_capability(),
             process_audio_capture: unavailable_capability(),
-            screen_share_audio_capture: screen_audio::capability(),
         },
-        CommandEnvelope::Diagnostics { request_id, .. } => {
-            let snapshot = if runtime.external_video_target.is_some() {
-                None
-            } else {
-                runtime.capture.snapshot()
-            };
-            OutboundEvent::Diagnostics {
-                protocol_version: PROTOCOL_VERSION,
-                request_id: request_id.clone(),
-                helper_version: env!("CARGO_PKG_VERSION"),
-                capture_backend: snapshot
-                    .as_ref()
-                    .and_then(|value| value.source_kind)
-                    .map(|_| "windowsGraphicsCapture"),
-                state: runtime.state(),
-                session_id: runtime.session_id().map(str::to_owned),
-                available: true,
-                source_kind: snapshot.as_ref().and_then(|value| value.source_kind),
-                frame_width: snapshot.as_ref().and_then(|value| value.frame_width),
-                frame_height: snapshot.as_ref().and_then(|value| value.frame_height),
-                frames_received: snapshot.as_ref().and_then(|value| value.frames_received),
-                frames_processed: snapshot.as_ref().and_then(|value| value.frames_processed),
-                dropped_notifications: snapshot
-                    .as_ref()
-                    .and_then(|value| value.dropped_notifications),
-                raw_capture_fps: snapshot.as_ref().and_then(|value| value.raw_capture_fps),
-                probe_processed_fps: snapshot
-                    .as_ref()
-                    .and_then(|value| value.probe_processed_fps),
-                video_output_fps: snapshot.as_ref().and_then(|value| value.video_output_fps),
-                video_output_dropped_frames: snapshot
-                    .as_ref()
-                    .and_then(|value| value.video_output_dropped_frames),
-                raw_frame_interval_p50_ms: snapshot
-                    .as_ref()
-                    .and_then(|value| value.raw_frame_interval_p50_ms),
-                raw_frame_interval_p95_ms: snapshot
-                    .as_ref()
-                    .and_then(|value| value.raw_frame_interval_p95_ms),
-                raw_frame_interval_p99_ms: snapshot
-                    .as_ref()
-                    .and_then(|value| value.raw_frame_interval_p99_ms),
-                raw_timestamp_anomalies: snapshot
-                    .as_ref()
-                    .and_then(|value| value.raw_timestamp_anomalies),
-                last_frame_age_ms: snapshot.as_ref().and_then(|value| value.last_frame_age_ms),
-                size_changes: snapshot.as_ref().and_then(|value| value.size_changes),
-                frame_pool_recreates: snapshot
-                    .as_ref()
-                    .and_then(|value| value.frame_pool_recreates),
-                last_capture_error: snapshot.as_ref().and_then(|value| value.last_capture_error),
-                stop_duration_ms: snapshot.as_ref().and_then(|value| value.stop_duration_ms),
-                capture_suspended: snapshot.as_ref().and_then(|value| value.capture_suspended),
-                microphone_capture_dropped_chunks: runtime.microphone_capture.dropped_chunks(),
-                screen_share_audio: Box::new(runtime.screen_audio.snapshot()),
-            }
-        }
-        CommandEnvelope::ReserveWindowVideo {
+        CommandEnvelope::Diagnostics { request_id, .. } => OutboundEvent::Diagnostics {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: request_id.clone(),
+            helper_version: env!("CARGO_PKG_VERSION"),
+            capture_backend: None,
+            state: runtime.state(),
+            session_id: runtime.session_id().map(str::to_owned),
+            available: true,
+            source_kind: None,
+            frame_width: None,
+            frame_height: None,
+            frames_received: None,
+            frames_processed: None,
+            dropped_notifications: None,
+            raw_capture_fps: None,
+            probe_processed_fps: None,
+            video_output_fps: None,
+            video_output_dropped_frames: None,
+            raw_frame_interval_p50_ms: None,
+            raw_frame_interval_p95_ms: None,
+            raw_frame_interval_p99_ms: None,
+            raw_timestamp_anomalies: None,
+            last_frame_age_ms: None,
+            size_changes: None,
+            frame_pool_recreates: None,
+            last_capture_error: None,
+            stop_duration_ms: None,
+            capture_suspended: None,
+            microphone_capture_dropped_chunks: runtime.microphone_capture.dropped_chunks(),
+            screen_share_audio: Box::default(),
+        },
+        CommandEnvelope::ReserveVideo {
             request_id,
             session_id,
             source_id,
             ..
-        } => match runtime.reserve_window_video(session_id, source_id) {
-            Ok(target) => OutboundEvent::WindowVideoReserved {
+        } => match runtime.reserve_video(session_id, source_id) {
+            Ok(target) => OutboundEvent::VideoReserved {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: request_id.clone(),
                 session_id: session_id.clone(),
@@ -369,73 +317,6 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                 ),
             }
         }
-        CommandEnvelope::StartScreenShareAudio {
-            request_id,
-            session_id,
-            source_id,
-            pipe_id,
-            ..
-        } => {
-            if !valid_identifier(session_id)
-                || !valid_identifier(source_id)
-                || !valid_pipe_id(pipe_id)
-            {
-                return error(
-                    runtime,
-                    Some(request_id.clone()),
-                    ErrorCode::InvalidRequest,
-                    "屏幕共享音频参数无效",
-                );
-            }
-            match runtime.start_screen_share_audio(session_id, source_id, pipe_id) {
-                Ok((sample_rate, channels)) => OutboundEvent::ScreenShareAudioStarted {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: request_id.clone(),
-                    session_id: session_id.clone(),
-                    state: runtime.state(),
-                    sample_rate,
-                    channels,
-                    bits_per_sample: 32,
-                    nominal_chunk_ms: 10,
-                    changed: true,
-                },
-                Err(code) => error(
-                    runtime,
-                    Some(request_id.clone()),
-                    code,
-                    code.public_message(),
-                ),
-            }
-        }
-        CommandEnvelope::StopScreenShareAudio {
-            request_id,
-            session_id,
-            ..
-        } => {
-            if !valid_identifier(session_id) {
-                return error(
-                    runtime,
-                    Some(request_id.clone()),
-                    ErrorCode::InvalidRequest,
-                    "sessionId 无效",
-                );
-            }
-            match runtime.screen_audio.stop(session_id) {
-                Ok(changed) => OutboundEvent::Acknowledged {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: request_id.clone(),
-                    command: "stopScreenShareAudio",
-                    state: runtime.state(),
-                    changed,
-                },
-                Err(code) => error(
-                    runtime,
-                    Some(request_id.clone()),
-                    code,
-                    code.public_message(),
-                ),
-            }
-        }
         CommandEnvelope::SetRemoteControl {
             request_id,
             session_id,
@@ -512,148 +393,11 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                 code.public_message(),
             ),
         },
-        #[cfg(feature = "shared-texture-output")]
-        CommandEnvelope::ReleaseSharedTextureSlot {
-            request_id,
-            session_id,
-            slot_index,
-            ..
-        } => match runtime.release_shared_texture_slot(session_id, *slot_index) {
-            Ok(()) => OutboundEvent::Acknowledged {
-                protocol_version: PROTOCOL_VERSION,
-                request_id: request_id.clone(),
-                command: "releaseSharedTextureSlot",
-                state: runtime.state(),
-                changed: true,
-            },
-            Err(code) => error(
-                runtime,
-                Some(request_id.clone()),
-                code,
-                code.public_message(),
-            ),
-        },
-        CommandEnvelope::StartVideo {
-            request_id,
-            session_id,
-            source_id,
-            target_width,
-            target_height,
-            max_fps,
-            hide_cursor,
-            hide_border,
-            ..
-        } => {
-            if !valid_identifier(session_id)
-                || !valid_identifier(source_id)
-                || !(1..=8192).contains(target_width)
-                || !(1..=8192).contains(target_height)
-                || !(1..=120).contains(max_fps)
-            {
-                return error(
-                    runtime,
-                    Some(request_id.clone()),
-                    ErrorCode::InvalidRequest,
-                    "视频参数无效",
-                );
-            }
-            match runtime.start_video(
-                session_id,
-                source_id,
-                *max_fps,
-                capture::CaptureSettings {
-                    hide_cursor: *hide_cursor,
-                    hide_border: *hide_border,
-                },
-            ) {
-                Ok(()) => OutboundEvent::Acknowledged {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: request_id.clone(),
-                    command: "startVideo",
-                    state: runtime.state(),
-                    changed: true,
-                },
-                Err(code) => error(
-                    runtime,
-                    Some(request_id.clone()),
-                    code,
-                    code.public_message(),
-                ),
-            }
-        }
-        CommandEnvelope::ConfigureVideo {
-            request_id,
-            session_id,
-            max_fps,
-            ..
-        } => {
-            if !valid_identifier(session_id) || !(1..=120).contains(max_fps) {
-                return error(
-                    runtime,
-                    Some(request_id.clone()),
-                    ErrorCode::InvalidRequest,
-                    "视频参数无效",
-                );
-            }
-            runtime.reap_finished_capture();
-            let result = if runtime.session_id() == Some(session_id.as_str())
-                && runtime.video_output_session
-            {
-                runtime.capture.configure_video(*max_fps)
-            } else {
-                Err(ErrorCode::CaptureSessionMismatch)
-            };
-            match result {
-                Ok(()) => OutboundEvent::Acknowledged {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: request_id.clone(),
-                    command: "configureVideo",
-                    state: runtime.state(),
-                    changed: true,
-                },
-                Err(code) => error(
-                    runtime,
-                    Some(request_id.clone()),
-                    code,
-                    code.public_message(),
-                ),
-            }
-        }
-        CommandEnvelope::StartCaptureProbe {
-            request_id,
-            session_id,
-            source_id,
-            ..
-        } => {
-            if !valid_identifier(session_id) || !valid_identifier(source_id) {
-                return error(
-                    runtime,
-                    Some(request_id.clone()),
-                    ErrorCode::InvalidRequest,
-                    "探针参数无效",
-                );
-            }
-            match runtime.start_probe(session_id, source_id) {
-                Ok(()) => OutboundEvent::Acknowledged {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: request_id.clone(),
-                    command: "startCaptureProbe",
-                    state: runtime.state(),
-                    changed: true,
-                },
-                Err(code) => error(
-                    runtime,
-                    Some(request_id.clone()),
-                    code,
-                    code.public_message(),
-                ),
-            }
-        }
         CommandEnvelope::StopVideo {
             request_id,
             session_id,
             ..
-        } => match runtime.stop_probe(session_id) {
+        } => match runtime.stop_video(session_id) {
             Ok(changed) => OutboundEvent::Acknowledged {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: request_id.clone(),
@@ -668,35 +412,6 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
                 code.public_message(),
             ),
         },
-        CommandEnvelope::StopCaptureProbe {
-            request_id,
-            session_id,
-            ..
-        } => {
-            if !valid_identifier(session_id) {
-                return error(
-                    runtime,
-                    Some(request_id.clone()),
-                    ErrorCode::InvalidRequest,
-                    "sessionId 无效",
-                );
-            }
-            match runtime.stop_probe(session_id) {
-                Ok(changed) => OutboundEvent::Acknowledged {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: request_id.clone(),
-                    command: "stopCaptureProbe",
-                    state: runtime.state(),
-                    changed,
-                },
-                Err(code) => error(
-                    runtime,
-                    Some(request_id.clone()),
-                    code,
-                    code.public_message(),
-                ),
-            }
-        }
         CommandEnvelope::Shutdown { request_id, .. } => match runtime.shutdown_all_audio() {
             Ok(()) => OutboundEvent::Acknowledged {
                 protocol_version: PROTOCOL_VERSION,
@@ -735,24 +450,20 @@ fn error(
 struct Runtime {
     session: SessionMachine,
     sources: SourceRegistry,
-    capture: capture::CaptureManager,
     discovery: DiscoveryRuntime,
     last_completed_session_id: Option<String>,
     microphone_capture: audio_capture::MicrophoneCaptureManager,
-    screen_audio: screen_audio::ScreenShareAudioManager,
     remote_input: remote_input::RemoteInputManager,
     active_source_id: Option<String>,
-    video_output_session: bool,
-    external_video_target: Option<sources::CaptureTarget>,
+    video_target: Option<sources::CaptureTarget>,
 }
 
 impl Runtime {
-    fn reserve_window_video(
+    fn reserve_video(
         &mut self,
         session_id: &str,
         source_id: &str,
-    ) -> Result<protocol::WindowVideoTarget, ErrorCode> {
-        self.reap_finished_capture();
+    ) -> Result<protocol::ReservedVideoTarget, ErrorCode> {
         if !valid_identifier(session_id) || !valid_identifier(source_id) {
             return Err(ErrorCode::InvalidRequest);
         }
@@ -763,17 +474,16 @@ impl Runtime {
             .sources
             .target(source_id)
             .ok_or(ErrorCode::InvalidRequest)?;
-        let identity = target.window_video_target()?;
+        let identity = target.video_target()?;
         self.session
             .begin(session_id.to_owned())
             .map_err(|_| ErrorCode::CaptureAlreadyRunning)?;
         self.session
             .mark_running()
             .map_err(|_| ErrorCode::CaptureStartFailed)?;
-        // 只持有来源身份，画面归 OBS；复用视频会话，防止空闲退出或刷新释放窗口标记。
-        self.external_video_target = Some(target);
+        // 只持有显示器或窗口身份，画面归 OBS；远控仍复用这份会话及既有输入清理。
+        self.video_target = Some(target);
         self.active_source_id = Some(source_id.to_owned());
-        self.video_output_session = false;
         self.last_completed_session_id = None;
         Ok(identity)
     }
@@ -787,7 +497,6 @@ impl Runtime {
     }
 
     fn refresh_sources(&mut self) -> Result<(u64, Vec<VideoSource>), ErrorCode> {
-        self.reap_finished_capture();
         match self.discovery.discover() {
             Ok(discovered) => self.sources.refresh(discovered),
             Err(error) => Err(self.sources.failed_refresh(error)),
@@ -799,18 +508,15 @@ impl Runtime {
     }
 
     fn shutdown_all_audio(&mut self) -> Result<(), ErrorCode> {
-        // 远控授权、屏幕声音与麦克风各自清理；一个失败不跳过后续资源的停止尝试。
+        // 远控和麦克风各自清理；OBS 画面与共享声音由父进程负责。
         let remote_control_result = self
             .session_id()
             .map(str::to_owned)
             .map_or(Ok(()), |session_id| {
                 self.clear_remote_control(&session_id, None).map(|_| ())
             });
-        let screen_result = self.screen_audio.shutdown();
         let microphone_result = self.microphone_capture.shutdown();
-        remote_control_result
-            .and(screen_result)
-            .and(microphone_result)
+        remote_control_result.and(microphone_result)
     }
 
     fn reap_finished_audio(&mut self) {
@@ -819,129 +525,9 @@ impl Runtime {
                 write_capture_event(event);
             }
         }
-        self.screen_audio.snapshot();
     }
 
-    fn start_screen_share_audio(
-        &mut self,
-        session_id: &str,
-        source_id: &str,
-        pipe_id: &str,
-    ) -> Result<(u32, u16), ErrorCode> {
-        if self.session_id() != Some(session_id) || self.state() != SessionState::Running {
-            return Err(ErrorCode::CaptureSessionMismatch);
-        }
-        self.screen_audio.start(
-            &mut self.sources,
-            &mut self.discovery,
-            session_id,
-            source_id,
-            pipe_id,
-        )
-    }
-
-    fn video_capture_capability(&mut self) -> Capability {
-        #[cfg(feature = "shared-texture-output")]
-        {
-            self.discovery.video_capture_capability()
-        }
-        #[cfg(not(feature = "shared-texture-output"))]
-        {
-            unavailable_video_output_capability()
-        }
-    }
-
-    fn capture_probe_capability(&mut self) -> Capability {
-        self.discovery.video_capture_capability()
-    }
-
-    fn start_probe(&mut self, session_id: &str, source_id: &str) -> Result<(), ErrorCode> {
-        self.start_capture_session(
-            session_id,
-            source_id,
-            None,
-            capture::CaptureSettings::default(),
-        )
-    }
-
-    fn start_video(
-        &mut self,
-        session_id: &str,
-        source_id: &str,
-        max_fps: u16,
-        settings: capture::CaptureSettings,
-    ) -> Result<(), ErrorCode> {
-        #[cfg(feature = "shared-texture-output")]
-        {
-            self.start_capture_session(session_id, source_id, Some(max_fps), settings)
-        }
-        #[cfg(not(feature = "shared-texture-output"))]
-        {
-            let _ = (session_id, source_id, max_fps, settings);
-            Err(ErrorCode::VideoOutputUnavailable)
-        }
-    }
-
-    fn start_capture_session(
-        &mut self,
-        session_id: &str,
-        source_id: &str,
-        max_fps: Option<u16>,
-        settings: capture::CaptureSettings,
-    ) -> Result<(), ErrorCode> {
-        self.reap_finished_capture();
-        if self.state() != SessionState::Idle {
-            return Err(ErrorCode::CaptureAlreadyRunning);
-        }
-        let target = self
-            .sources
-            .target(source_id)
-            .ok_or(ErrorCode::InvalidRequest)?;
-        let source_kind = self
-            .sources
-            .kind(source_id)
-            .ok_or(ErrorCode::InvalidRequest)?;
-        if !self.discovery.target_is_valid(&target) {
-            return Err(ErrorCode::InvalidRequest);
-        }
-        self.session
-            .begin(session_id.to_owned())
-            .map_err(|_| ErrorCode::CaptureAlreadyRunning)?;
-        if let Err(error) = self.capture.start(
-            target.thread_target(),
-            source_kind,
-            session_id.to_owned(),
-            max_fps,
-            settings,
-        ) {
-            let _ = self.session.fail_start();
-            return Err(error);
-        }
-        if self.session.mark_running().is_err() {
-            let _ = self.session.fail_start();
-            let _ = self.capture.stop();
-            return Err(ErrorCode::CaptureStartFailed);
-        }
-        self.last_completed_session_id = None;
-        self.active_source_id = Some(source_id.to_owned());
-        self.video_output_session = max_fps.is_some();
-        Ok(())
-    }
-
-    #[cfg(feature = "shared-texture-output")]
-    fn release_shared_texture_slot(
-        &mut self,
-        session_id: &str,
-        slot_index: u8,
-    ) -> Result<(), ErrorCode> {
-        if self.session_id() != Some(session_id) {
-            return Err(ErrorCode::CaptureSessionMismatch);
-        }
-        self.capture.release_shared_texture_slot(slot_index)
-    }
-
-    fn stop_probe(&mut self, session_id: &str) -> Result<bool, ErrorCode> {
-        self.reap_finished_capture();
+    fn stop_video(&mut self, session_id: &str) -> Result<bool, ErrorCode> {
         if self.state() == SessionState::Idle {
             return if self.last_completed_session_id.as_deref() == Some(session_id) {
                 self.clear_remote_control(session_id, None)?;
@@ -959,39 +545,16 @@ impl Runtime {
                 .begin_stop(session_id)
                 .map_err(|_| ErrorCode::CaptureSessionMismatch)?;
         }
-        if self.external_video_target.is_none() {
-            self.capture.stop()?;
-        }
-        self.external_video_target = None;
+        self.video_target = None;
         self.session
             .finish_stop()
             .map_err(|_| ErrorCode::CaptureSessionMismatch)?;
         self.last_completed_session_id = Some(session_id.to_owned());
         self.active_source_id = None;
-        self.video_output_session = false;
         if let Some(error) = input_cleanup_error {
             Err(error)
         } else {
             Ok(true)
-        }
-    }
-
-    fn reap_finished_capture(&mut self) {
-        if self.capture.reap_finished().is_none() {
-            return;
-        }
-        if let Some(session_id) = self.session_id().map(str::to_owned) {
-            if let Err(error) = self.clear_remote_control(&session_id, None) {
-                eprintln!("remote input cleanup after capture exit failed: {error:?}");
-            }
-            if self.state() == SessionState::Running {
-                let _ = self.session.begin_stop(&session_id);
-            }
-            if self.state() == SessionState::Stopping && self.session.finish_stop().is_ok() {
-                self.last_completed_session_id = Some(session_id);
-                self.active_source_id = None;
-                self.video_output_session = false;
-            }
         }
     }
 
@@ -1004,7 +567,7 @@ impl Runtime {
     ) -> Result<(), ErrorCode> {
         if self.session_id() != Some(session_id)
             || self.state() != SessionState::Running
-            || !self.video_output_session
+            || self.video_target.is_none()
             || self.active_source_id.as_deref() != Some(source_id)
         {
             return Err(ErrorCode::RemoteControlInvalidSession);
@@ -1063,7 +626,7 @@ impl Runtime {
     ) -> Result<bool, ErrorCode> {
         if self.session_id() != Some(session_id)
             || self.state() != SessionState::Running
-            || !self.video_output_session
+            || self.video_target.is_none()
         {
             return Err(ErrorCode::RemoteControlInvalidSession);
         }
@@ -1144,27 +707,81 @@ fn valid_pipe_id(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn external_window_reservation_owns_only_identity_and_uses_normal_stop() {
+    fn external_video_reservation_owns_only_identity_and_uses_normal_stop() {
         let mut runtime = super::Runtime::default();
         assert!(
             runtime
-                .reserve_window_video("window-session", "window:1:0")
+                .reserve_video("window-session", "window:1:0")
                 .is_err()
         );
         assert_eq!(runtime.state(), super::SessionState::Idle);
         runtime.session.begin("window-session".to_owned()).unwrap();
         runtime.session.mark_running().unwrap();
-        runtime.external_video_target = Some(super::sources::CaptureTarget::Test(7));
+        runtime.video_target = Some(super::sources::CaptureTarget::Test(7));
         runtime.active_source_id = Some("window:1:0".to_owned());
-        runtime.reap_finished_capture();
         assert_eq!(runtime.state(), super::SessionState::Running);
-        assert!(runtime.reserve_window_video("next", "window:1:1").is_err());
-        assert!(runtime.stop_probe("old-session").is_err());
-        assert!(runtime.external_video_target.is_some());
-        assert!(runtime.stop_probe("window-session").unwrap());
-        assert!(runtime.external_video_target.is_none());
+        assert!(runtime.reserve_video("next", "window:1:1").is_err());
+        assert!(runtime.stop_video("old-session").is_err());
+        assert!(runtime.video_target.is_some());
+        assert!(runtime.stop_video("window-session").unwrap());
+        assert!(runtime.video_target.is_none());
         assert_eq!(runtime.state(), super::SessionState::Idle);
-        assert!(!runtime.stop_probe("window-session").unwrap());
+        assert!(!runtime.stop_video("window-session").unwrap());
+    }
+
+    #[test]
+    fn external_monitor_allows_admission_checks_but_invalid_target_never_injects() {
+        use crate::protocol::{RemoteInputEvent, VideoSource, VideoSourceKind};
+        let mut runtime = super::Runtime::default();
+        let (_, sources) = runtime
+            .sources
+            .refresh(vec![crate::sources::DiscoveredSource {
+                source: VideoSource {
+                    source_id: String::new(),
+                    kind: VideoSourceKind::Monitor,
+                    title: "test monitor".to_owned(),
+                    width: 1920,
+                    height: 1080,
+                    primary: true,
+                    window_id: None,
+                    monitor_origin: None,
+                },
+                target: crate::sources::CaptureTarget::Test(7),
+            }])
+            .unwrap();
+        let source_id = &sources[0].source_id;
+        runtime
+            .session
+            .begin("external-monitor".to_owned())
+            .unwrap();
+        runtime.session.mark_running().unwrap();
+        runtime.active_source_id = Some(source_id.clone());
+        assert_eq!(
+            runtime.set_remote_control("external-monitor", source_id, "control", "friend"),
+            Err(crate::protocol::ErrorCode::RemoteControlInvalidSession)
+        );
+        runtime.video_target = Some(crate::sources::CaptureTarget::Test(7));
+        assert_eq!(
+            runtime.set_remote_control("external-monitor", source_id, "control", "friend"),
+            Err(crate::protocol::ErrorCode::RemoteControlTargetUnavailable)
+        );
+        // 只设置空的受控授权；失效来源在注入前撤销，测试不会发送系统输入。
+        runtime
+            .remote_input
+            .grant("external-monitor", source_id, "control", "friend", 0)
+            .unwrap();
+        assert_eq!(
+            runtime.apply_remote_input(
+                "external-monitor",
+                "control",
+                "friend",
+                1,
+                RemoteInputEvent::Move { x: 1, y: 1 }
+            ),
+            Err(crate::protocol::ErrorCode::RemoteControlTargetUnavailable)
+        );
+        assert!(runtime.remote_input.source_id().is_none());
+        runtime.stop_video("external-monitor").unwrap();
     }
 
     use super::{
@@ -1189,18 +806,6 @@ mod tests {
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
-    }
-
-    #[test]
-    fn video_configuration_rejects_invalid_rates_and_missing_sessions() {
-        let responses = execute(concat!(
-            "{\"command\":\"configureVideo\",\"protocolVersion\":1,\"requestId\":\"invalid-rate\",\"sessionId\":\"missing-session\",\"maxFps\":121}\n",
-            "{\"command\":\"configureVideo\",\"protocolVersion\":1,\"requestId\":\"missing-capture\",\"sessionId\":\"missing-session\",\"maxFps\":120}\n",
-            "{\"command\":\"hello\",\"protocolVersion\":1,\"requestId\":\"after-invalid-config\"}\n"
-        ));
-        assert_eq!(responses[0]["code"], "invalidRequest");
-        assert_eq!(responses[1]["code"], "captureSessionMismatch");
-        assert_eq!(responses[2]["event"], "hello");
     }
 
     #[test]
@@ -1400,10 +1005,7 @@ mod tests {
 
         assert_eq!(events[0]["event"], "hello");
         assert_eq!(events[0]["state"], "idle");
-        assert!(events[1]["videoCapture"]["available"].is_boolean());
-        #[cfg(not(feature = "shared-texture-output"))]
-        assert_eq!(events[1]["videoCapture"]["available"], false);
-        assert!(events[1]["captureProbe"]["available"].is_boolean());
+        assert!(events[1].get("videoCapture").is_none());
         assert_eq!(events[1]["systemAudioCapture"]["available"], false);
         #[cfg(target_os = "windows")]
         assert_eq!(events[1]["microphoneCapture"]["available"], true);
@@ -1413,25 +1015,6 @@ mod tests {
         assert!(events[1].get("audioSourceDiscovery").is_none());
         assert!(events[1].get("microphoneProbe").is_none());
         assert_eq!(events[2]["event"], "acknowledged");
-    }
-
-    #[test]
-    fn distinguishes_video_output_from_the_capture_probe() {
-        let events = execute(
-            r#"{"protocolVersion":1,"requestId":"start-1","command":"startVideo","sessionId":"capture-1","sourceId":"window-1","targetWidth":1920,"targetHeight":1080,"maxFps":60}
-{"protocolVersion":1,"requestId":"probe-1","command":"startCaptureProbe","sessionId":"capture-1","sourceId":"window-1"}
-{"protocolVersion":1,"requestId":"diagnostics-1","command":"diagnostics"}
-"#,
-        );
-
-        #[cfg(feature = "shared-texture-output")]
-        assert_eq!(events[0]["code"], "invalidRequest");
-        #[cfg(not(feature = "shared-texture-output"))]
-        assert_eq!(events[0]["code"], "videoOutputUnavailable");
-        assert_eq!(events[0]["state"], "idle");
-        assert_eq!(events[1]["code"], "invalidRequest");
-        assert_eq!(events[2]["available"], true);
-        assert_eq!(events[2]["state"], "idle");
     }
 
     #[test]
@@ -1493,7 +1076,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_winrt_queries_keep_one_runtime_alive_until_shutdown() {
+    fn repeated_source_queries_keep_one_registry_alive_until_shutdown() {
         let commands = [
             "capabilities",
             "capabilities",

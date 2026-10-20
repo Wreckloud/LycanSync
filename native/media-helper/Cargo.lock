@@ -74,8 +74,6 @@ dependencies = [
  "sonora",
  "sonora-common-audio",
  "windows",
- "windows-core",
- "windows-future",
 ]
 
 [[package]]

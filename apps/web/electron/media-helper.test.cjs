@@ -65,37 +65,11 @@ test('纹理交付、停止和迟到结果共用一次主进程引用释放', as
   }
 });
 
-test('main-process video entry accepts 120 fps before forwarding to the helper', async () => {
-  // 执行实际入口函数，隔离 Electron 和设备，避免只验证下游而漏掉主进程上限。
-  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
-  const start = main.indexOf('async function startNativeVideo(');
-  const end = main.indexOf('async function stopNativeVideo(', start);
-  assert.ok(start >= 0 && end > start);
-  const requests = [];
-  const invoke = runInNewContext(`${main.slice(start, end)}; startNativeVideo`, {
-    closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
-    nativeMediaBridge: {}, obsCaptureHost: undefined, randomUUID: () => 'main-quality-session',
-    mediaHelper: { startVideo: async (...args) => {
-      requests.push(args);
-      return { sessionId: args[2], changed: true };
-    } },
-    recordVideoFailure: () => assert.fail('valid start must not fail'),
-    releaseNativeVideoImports: () => assert.fail('valid start must not need cleanup'),
-  });
-  await invoke('window:1:0', 120, { hideCursor: false, hideBorder: false });
-  assert.equal(requests[0][1], 120);
-  await assert.rejects(invoke('window:1:0', 121, {}), /invalidVideoStart/);
-  assert.equal(requests.length, 1);
-});
-
 const capabilities = {
-  videoCapture: { available: false, reason: 'videoOutputNotImplemented' },
-  captureProbe: { available: true, reason: 'windowsGraphicsCapture' },
   videoSourceDiscovery: { available: true, reason: 'windowsGraphicsCapture' },
   microphoneCapture: { available: true, reason: 'windowsWasapiSharedModeSonora' },
   systemAudioCapture: { available: false, reason: 'notImplemented' },
   processAudioCapture: { available: false, reason: 'notImplemented' },
-  screenShareAudioCapture: { available: true, reason: 'windowsApplicationLoopbackProcessTree' },
 };
 
 class FakeHelper extends EventEmitter {
@@ -107,12 +81,8 @@ class FakeHelper extends EventEmitter {
     this.closed = false;
     this.capabilitiesCount = 0;
     this.sourceRevision = 0;
-    this.captureState = 'idle';
-    this.captureSessionId = null;
     this.videoState = 'idle';
     this.videoSessionId = null;
-    this.screenAudioState = 'idle';
-    this.screenAudioSessionId = null;
     this.microphoneState = 'idle';
     this.microphoneSessionId = null;
     this.requests = [];
@@ -185,65 +155,16 @@ class FakeHelper extends EventEmitter {
       });
       return;
     }
-    if (command.command === 'reserveWindowVideo') {
-      if (this.mode.reserveWindowTimeout) return;
+    if (command.command === 'reserveVideo') {
+      if (this.mode.reserveVideoTimeout) return;
       this.videoState = 'running';
       this.videoSessionId = command.sessionId;
-      this.writeResponse({ event: 'windowVideoReserved', protocolVersion: 1, requestId: command.requestId,
+      this.writeResponse({ event: 'videoReserved', protocolVersion: 1, requestId: command.requestId,
         sessionId: command.sessionId, sourceId: command.sourceId,
-        target: this.mode.invalidWindowTarget ?? { windowId: '123456', propertyName: 'LycanSync.MediaHelper.Window.1.2.3',
-          propertyValue: '987654', executable: 'C:\\Games\\game.exe' } });
-      return;
-    }
-    if (command.command === 'startCaptureProbe') {
-      if (this.mode.captureProbeStartTimeout) return;
-      this.captureState = 'running';
-      this.captureSessionId = command.sessionId;
-      this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
-        command: command.command, state: 'running', changed: true });
-      if (this.mode.exitAfterCaptureProbeStart) setImmediate(() => this.exit(18));
-      return;
-    }
-    if (command.command === 'startVideo') {
-      if (this.mode.videoStartTimeout) return;
-      this.videoState = 'running';
-      this.videoSessionId = command.sessionId;
-      if (!this.mode.omitSharedTextureFrame) {
-        this.writeResponse({
-          event: 'sharedTextureFrame', protocolVersion: 1, sessionId: command.sessionId,
-          slotIndex: 0, sourceHandleHex: '0000000000000001', pixelFormat: 'bgra',
-          codedSize: { width: command.targetWidth, height: command.targetHeight },
-          contentSize: { width: command.targetWidth, height: command.targetHeight }, timestampMicros: 1,
-        });
-      }
-      this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
-        command: command.command, state: 'running', changed: true });
-      if (this.mode.exitAfterVideoStart) setImmediate(() => this.exit(19));
-      return;
-    }
-    if (command.command === 'configureVideo') {
-      if (this.mode.holdVideoConfiguration) return;
-      if (this.mode.videoConfigurationFailure) {
-        this.writeResponse({ event: 'error', protocolVersion: 1, requestId: command.requestId,
-          code: 'captureSessionMismatch', message: 'capture session mismatch', recoverable: true, state: 'running' });
-        return;
-      }
-      this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
-        command: 'configureVideo', state: 'running', changed: true });
-      return;
-    }
-    if (command.command === 'startScreenShareAudio') {
-      if (this.mode.holdScreenAudioStart) return;
-      const acknowledge = () => {
-        if (this.closed) return;
-        this.screenAudioState = 'running';
-        this.screenAudioSessionId = command.sessionId;
-        this.writeResponse({ event: 'screenShareAudioStarted', protocolVersion: 1,
-          requestId: command.requestId, sessionId: command.sessionId, state: 'running',
-          sampleRate: 48000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
-      };
-      if (this.mode.screenAudioStartDelayMs) setTimeout(acknowledge, this.mode.screenAudioStartDelayMs);
-      else acknowledge();
+        target: this.mode.invalidVideoTarget ?? (command.sourceId.startsWith('monitor:')
+          ? { kind: 'monitor', monitorName: '\\\\.\\DISPLAY1' }
+          : { kind: 'window', windowId: '123456', propertyName: 'LycanSync.MediaHelper.Window.1.2.3',
+            propertyValue: '987654', executable: 'C:\\Games\\game.exe' }) });
       return;
     }
     if (command.command === 'startMicrophoneCapture') {
@@ -272,19 +193,8 @@ class FakeHelper extends EventEmitter {
         command: command.command, state: 'running', changed: true });
       return;
     }
-    if (command.command === 'stopScreenShareAudio') {
-      this.screenAudioState = 'idle';
-      this.screenAudioSessionId = null;
-      this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
-        command: command.command, state: 'running', changed: true });
-      return;
-    }
-    if (command.command === 'releaseSharedTextureSlot') {
-      this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
-        command: command.command, state: 'running', changed: true });
-      return;
-    }
     if (['setRemoteControl', 'remoteInput', 'clearRemoteControl'].includes(command.command)) {
+      if (command.command === 'setRemoteControl' && this.mode.deferRemoteControl) return;
       this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
         command: command.command, state: 'running', changed: true });
       return;
@@ -297,41 +207,29 @@ class FakeHelper extends EventEmitter {
         command: command.command, state: 'idle', changed: true });
       return;
     }
-    if (command.command === 'stopCaptureProbe') {
-      if (this.mode.captureProbeStopTimeout) return;
-      this.captureState = 'idle';
-      this.captureSessionId = null;
-      this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
-        command: command.command, state: 'idle', changed: true });
-      return;
-    }
     if (command.command === 'diagnostics') {
-      if (this.mode.captureEndsBeforeDiagnostics) {
-        this.captureState = 'idle';
-        this.captureSessionId = null;
-      }
       const diagnostics = {
         event: 'diagnostics', protocolVersion: 1, requestId: command.requestId,
-        helperVersion: '0.1.0', captureBackend: this.captureState === 'running' ? 'windowsGraphicsCapture' : null,
-        state: this.captureState, sessionId: this.captureSessionId,
-        available: true, sourceKind: this.captureState === 'running' ? 'monitor' : null,
+        helperVersion: '0.1.0', captureBackend: null,
+        state: this.videoState, sessionId: this.videoSessionId,
+        available: true, sourceKind: null,
         microphoneCaptureDroppedChunks: 0,
-        frameWidth: this.captureState === 'running' ? 1920 : null,
-        frameHeight: this.captureState === 'running' ? 1080 : null,
-        framesReceived: this.captureState === 'running' ? 20 : null,
-        framesProcessed: this.captureState === 'running' ? 20 : null,
-        droppedNotifications: this.captureState === 'running' ? 0 : null,
-        rawCaptureFps: this.captureState === 'running' ? 60 : null,
-        probeProcessedFps: this.captureState === 'running' ? 60 : null,
+        frameWidth: null,
+        frameHeight: null,
+        framesReceived: null,
+        framesProcessed: null,
+        droppedNotifications: null,
+        rawCaptureFps: null,
+        probeProcessedFps: null,
         rawFrameIntervalP50Ms: null, rawFrameIntervalP95Ms: null, rawFrameIntervalP99Ms: null,
         rawTimestampAnomalies: 0, lastFrameAgeMs: 0, sizeChanges: 0, framePoolRecreates: 0,
         lastCaptureError: null, stopDurationMs: null,
-        screenShareAudio: { state: this.screenAudioState, sessionId: this.screenAudioSessionId,
-          sourceKind: this.screenAudioState === 'running' ? 'monitor' : null,
-          sampleRate: this.screenAudioState === 'running' ? 48000 : null,
-          channels: this.screenAudioState === 'running' ? 2 : null,
-          packetsReceived: this.screenAudioState === 'running' ? 20 : null,
-          framesReceived: this.screenAudioState === 'running' ? 9600 : null,
+        screenShareAudio: { state: 'idle', sessionId: null,
+          sourceKind: null,
+          sampleRate: null,
+          channels: null,
+          packetsReceived: null,
+          framesReceived: null,
           silentPackets: 0, droppedAudioChunks: 0, lastError: null },
       };
       if (this.mode.omitFramePoolRecreates) delete diagnostics.framePoolRecreates;
@@ -398,16 +296,15 @@ test('OBS 窗口预留复用视频会话并阻止空闲退出，不启动 Rust �
   try {
     const snapshot = await manager.listVideoSources();
     const sourceId = snapshot.sources.find((source) => source.kind === 'window').sourceId;
-    const target = await manager.reserveWindowVideo('obs-window-session', sourceId);
+    const target = await manager.reserveVideo('obs-window-session', sourceId);
     assert.equal(target.kind, 'window');
     assert.equal(target.windowId, '123456');
     assert.equal(target.executable, 'C:\\Games\\game.exe');
-    assert.equal(manager.videoCapture.external, true);
+    assert.equal(manager.videoCapture.starting, false);
     await new Promise((resolve) => setTimeout(resolve, 35));
     assert.equal(children[0].closed, false);
     assert.ok(!children[0].commands.includes('startVideo'));
-    await assert.rejects(manager.startVideo(sourceId, 60), /AlreadyRunning/);
-    await assert.rejects(manager.configureVideo('obs-window-session', 30), /invalidVideoConfiguration/);
+    await assert.rejects(manager.reserveVideo('other', sourceId), /AlreadyRunning/);
     await assert.rejects(manager.stopVideo('old-session'), /Mismatch/);
     assert.equal((await manager.stopVideo('obs-window-session')).changed, true);
     assert.equal((await manager.stopVideo('obs-window-session')).changed, false);
@@ -415,16 +312,74 @@ test('OBS 窗口预留复用视频会话并阻止空闲退出，不启动 Rust �
   } finally { await manager.shutdown(); }
 });
 
+test('OBS 整屏预留不启动视频 worker，远控绑定该会话，窗口预留不能获得整屏授权', async () => {
+  const { manager, children } = createManager({ windowSources: true });
+  try {
+    const snapshot = await manager.listVideoSources();
+    const monitorId = snapshot.sources.find((entry) => entry.kind === 'monitor').sourceId;
+    assert.deepEqual(await manager.reserveVideo('obs-monitor', monitorId), { kind: 'monitor', monitorName: '\\\\.\\DISPLAY1' });
+    await manager.setRemoteControl('obs-monitor', 'control', 'friend');
+    await manager.sendRemoteInput('obs-monitor', 'control', 'friend', 1, { kind: 'keyDown', key: 'letterA' });
+    await assert.rejects(manager.sendRemoteInput('old', 'control', 'friend', 2, { kind: 'keyUp', key: 'letterA' }), /InvalidSession/);
+    assert.equal(children[0].commands.includes('startVideo'), false);
+    await manager.clearRemoteControl('obs-monitor', 'control');
+    await manager.stopVideo('obs-monitor');
+    const windowId = snapshot.sources.find((entry) => entry.kind === 'window').sourceId;
+    await manager.reserveVideo('obs-window', windowId);
+    await assert.rejects(manager.setRemoteControl('obs-window', 'control', 'friend'), /SourceUnavailable/);
+    await manager.stopVideo('obs-window');
+  } finally { await manager.shutdown(); }
+});
+
+test('整屏预留拒绝错类型及非法设备名，不接受旧的无类型响应', async () => {
+  for (const target of [{ kind: 'window' }, { monitorName: '\\\\.\\DISPLAY1' },
+    { kind: 'monitor', monitorName: 'DISPLAY25' }, { kind: 'monitor', monitorName: '' }]) {
+    const { manager } = createManager({ invalidVideoTarget: target });
+    try {
+      const snapshot = await manager.listVideoSources();
+      await assert.rejects(manager.reserveVideo('obs-monitor', snapshot.sources[0].sourceId), /InvalidVideoTarget/);
+      assert.equal(manager.videoCapture, undefined);
+    } finally { await manager.shutdown(); }
+  }
+});
+
+test('停止 Promise 未完成已禁止输入和新授权，迟到授权响应不能恢复权限', async () => {
+  const { manager, children } = createManager();
+  try {
+    const snapshot = await manager.listVideoSources();
+    await manager.reserveVideo('obs-monitor', snapshot.sources[0].sourceId);
+    await manager.setRemoteControl('obs-monitor', 'control', 'friend');
+    children[0].mode.videoStopTimeout = true;
+    const stopping = manager.stopVideo('obs-monitor');
+    await assert.rejects(manager.sendRemoteInput('obs-monitor', 'control', 'friend', 1, { kind: 'keyDown', key: 'letterA' }), /InvalidSession/);
+    await assert.rejects(manager.setRemoteControl('obs-monitor', 'other', 'friend'), /SourceUnavailable/);
+    const stopRequest = children[0].requests.at(-1);
+    children[0].writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: stopRequest.requestId,
+      command: 'stopVideo', state: 'idle', changed: true });
+    await stopping;
+    children[0].mode.videoStopTimeout = false;
+    await manager.reserveVideo('next-monitor', snapshot.sources[0].sourceId);
+    children[0].mode.deferRemoteControl = true;
+    const granting = assert.rejects(manager.setRemoteControl('next-monitor', 'next-control', 'friend'), /InvalidRemoteControlStart/);
+    const grantRequest = children[0].requests.at(-1);
+    await manager.stopVideo('next-monitor');
+    children[0].writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: grantRequest.requestId,
+      command: 'setRemoteControl', state: 'running', changed: true });
+    await granting;
+    assert.equal(manager.videoCapture, undefined);
+  } finally { await manager.shutdown(); }
+});
+
 test('窗口预留只接受当前快照，坏身份响应明确失败并关闭失去同步的 helper', async () => {
   const { manager, children } = createManager({ windowSources: true,
-    invalidWindowTarget: { windowId: '123', propertyName: 'untrusted', propertyValue: '4' } });
+    invalidVideoTarget: { windowId: '123', propertyName: 'untrusted', propertyValue: '4' } });
   try {
-    await assert.rejects(manager.reserveWindowVideo('obs-session', 'window:1:0'), /videoSourceExpired/);
+    await assert.rejects(manager.reserveVideo('obs-session', 'window:1:0'), /videoSourceExpired/);
     assert.equal(children.length, 0);
     await manager.listVideoSources();
-    await assert.rejects(manager.reserveWindowVideo('obs-session', 'window:9:0'), /videoSourceExpired/);
-    assert.equal(children[0].commands.filter((command) => command === 'reserveWindowVideo').length, 0);
-    await assert.rejects(manager.reserveWindowVideo('obs-session', 'window:1:0'), /InvalidWindowTarget/);
+    await assert.rejects(manager.reserveVideo('obs-session', 'window:9:0'), /videoSourceExpired/);
+    assert.equal(children[0].commands.filter((command) => command === 'reserveVideo').length, 0);
+    await assert.rejects(manager.reserveVideo('obs-session', 'window:1:0'), /InvalidVideoTarget/);
     assert.equal(manager.videoCapture, undefined);
     await waitUntil(() => children[0].closed);
     assert.equal(children[0].closed, true);
@@ -434,11 +389,11 @@ test('窗口预留只接受当前快照，坏身份响应明确失败并关闭�
 test('窗口程序路径仅接受完整本机 exe 身份，缺失或非法响应不继续分类', async () => {
   for (const executable of [undefined, 'relative.exe', 'C:\\Apps\\not-an-exe.txt', 'C:\\Apps\\bad\n.exe']) {
     const { manager, children } = createManager({ windowSources: true,
-      invalidWindowTarget: { windowId: '123', propertyName: 'LycanSync.MediaHelper.Window.1.2.3',
+      invalidVideoTarget: { kind: 'window', windowId: '123', propertyName: 'LycanSync.MediaHelper.Window.1.2.3',
         propertyValue: '456', executable } });
     try {
       await manager.listVideoSources();
-      await assert.rejects(manager.reserveWindowVideo('obs-session', 'window:1:0'), /InvalidWindowTarget/);
+      await assert.rejects(manager.reserveVideo('obs-session', 'window:1:0'), /InvalidVideoTarget/);
       assert.equal(manager.videoCapture, undefined);
       await waitUntil(() => children[0].closed);
     } finally { await manager.shutdown(); }
@@ -446,10 +401,10 @@ test('窗口程序路径仅接受完整本机 exe 身份，缺失或非法响应
 });
 
 test('窗口身份预留中停止遇到请求超时，明确失败并回收 helper，不启动采集', async () => {
-  const { manager, children } = createManager({ windowSources: true, reserveWindowTimeout: true });
+  const { manager, children } = createManager({ windowSources: true, reserveVideoTimeout: true });
   try {
     await manager.listVideoSources();
-    const reservation = assert.rejects(manager.reserveWindowVideo('obs-session', 'window:1:0'), /Timeout/);
+    const reservation = assert.rejects(manager.reserveVideo('obs-session', 'window:1:0'), /Timeout/);
     const stopped = assert.rejects(manager.stopVideo('obs-session'), /Timeout/);
     await Promise.all([reservation, stopped]);
     await waitUntil(() => children[0].closed);
@@ -546,7 +501,7 @@ test('helper stderr 保留原生错误并且不干扰协议响应', async () => 
     children[0].stderr.write('x'.repeat(9000));
     assert.equal(diagnostics[0], 'stage=initialize hresult=0x80070057\n');
     assert.ok(diagnostics.every((message) => message.length <= 4096));
-    assert.deepEqual((await manager.getCapabilities()).videoCapture, capabilities.videoCapture);
+    assert.deepEqual((await manager.getCapabilities()).microphoneCapture, capabilities.microphoneCapture);
   } finally {
     await manager.shutdown();
   }
@@ -561,7 +516,7 @@ test('helper starts lazily and concurrent capability requests share one process 
   assert.deepEqual(spawnOptions[0].stdio, ['pipe', 'pipe', 'pipe']);
   assert.equal(children[0].commands.filter((command) => command === 'hello').length, 1);
   assert.equal(children[0].commands.filter((command) => command === 'capabilities').length, 1);
-  assert.deepEqual(results[0].videoCapture, capabilities.videoCapture);
+  assert.deepEqual(results[0].microphoneCapture, capabilities.microphoneCapture);
   await manager.shutdown();
 });
 
@@ -575,35 +530,6 @@ test('来源记忆使用 helper 生命周期标识，重启实例不能复用旧
     assert.notEqual((await second.manager.listVideoSources()).discoveryId, snapshot.discoveryId);
   } finally {
     await Promise.all([first.manager.shutdown(), second.manager.shutdown()]);
-  }
-});
-
-test('screen-share audio capability distinguishes process loopback from explicit system mix', async () => {
-  const { manager: processManager } = createManager();
-  assert.deepEqual((await processManager.getCapabilities()).screenShareAudioCapture,
-    { available: true, reason: 'windowsApplicationLoopbackProcessTree' });
-  await processManager.shutdown();
-
-  const { manager: mixManager } = createManager({ capabilityOverrides: {
-    screenShareAudioCapture: { available: true, reason: 'windowsSystemMixLoopback' },
-  } });
-  assert.deepEqual((await mixManager.getCapabilities()).screenShareAudioCapture,
-    { available: true, reason: 'windowsSystemMixLoopback' });
-  await mixManager.shutdown();
-});
-
-test('screen-share audio capability rejects unknown modes and inconsistent availability', async (t) => {
-  for (const capability of [
-    { available: true, reason: 'futureGenericAudioCapture' },
-    { available: false, reason: 'windowsSystemMixLoopback' },
-    { available: true, reason: 'windowsEventDrivenLoopbackRequiresBuild15063' },
-  ]) {
-    await t.test(JSON.stringify(capability), async () => {
-      const { manager, children } = createManager({ capabilityOverrides: { screenShareAudioCapture: capability } });
-      await assert.rejects(manager.getCapabilities(), /mediaHelperInvalidCapabilities/);
-      await waitUntil(() => children[0]?.closed);
-      await manager.shutdown();
-    });
   }
 });
 
@@ -656,97 +582,6 @@ test('idle helper receives shutdown and closes normally', async () => {
   await manager.shutdown();
 });
 
-test('probe holds helper past the idle timeout, deduplicates start and stop, and returns bounded diagnostics', async () => {
-  const { manager, children } = createManager({}, { idleTimeoutMs: 20 });
-  const sources = await manager.listVideoSources();
-  assert.equal(sources.revision, 1);
-  assert.equal(children[0].captureState, 'idle');
-  assert.equal(children[0].commands.includes('startCaptureProbe'), false);
-
-  const initialStart = manager.startCaptureProbe(sources.sources[0].sourceId);
-  const concurrentStart = manager.startCaptureProbe(sources.sources[0].sourceId);
-  const [firstStart, concurrentStartResult] = await Promise.all([initialStart, concurrentStart]);
-  assert.equal(firstStart.changed, true);
-  assert.deepEqual(concurrentStartResult, firstStart);
-  const duplicateStart = await manager.startCaptureProbe(sources.sources[0].sourceId);
-  assert.deepEqual(duplicateStart, { ...firstStart, changed: false });
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal(children[0].closed, false);
-  assert.equal(children[0].commands.filter((command) => command === 'startCaptureProbe').length, 1);
-
-  const diagnostics = await manager.getDiagnostics();
-  assert.equal(diagnostics.state, 'running');
-  assert.equal(diagnostics.framesReceived, 20);
-  assert.equal(diagnostics.framePoolRecreates, 0);
-  const [stop, concurrentStop] = await Promise.all([
-    manager.stopCaptureProbe(firstStart.sessionId),
-    manager.stopCaptureProbe(firstStart.sessionId),
-  ]);
-  assert.deepEqual(stop, { changed: true });
-  assert.deepEqual(concurrentStop, stop);
-  assert.deepEqual(await manager.stopCaptureProbe(firstStart.sessionId), { changed: false });
-  assert.equal(children[0].commands.filter((command) => command === 'stopCaptureProbe').length, 1);
-  await waitUntil(() => children[0].closed);
-  await manager.shutdown();
-});
-
-test('refresh invalidates old source ids before they can start a probe', async () => {
-  const { manager, children } = createManager();
-  const first = await manager.listVideoSources();
-  const second = await manager.listVideoSources();
-  assert.notEqual(first.sources[0].sourceId, second.sources[0].sourceId);
-  await assert.rejects(manager.startCaptureProbe(first.sources[0].sourceId), /videoSourceExpired/);
-  assert.equal(children[0].commands.includes('startCaptureProbe'), false);
-  await manager.shutdown();
-});
-
-test('video shares a bounded helper session, applies the requested frame rate, and returns texture notifications', async () => {
-  const receivedFrames = [];
-  const { manager, children } = createManager({}, {
-    idleTimeoutMs: 20,
-    onSharedTextureFrame: (_state, frame) => receivedFrames.push(frame),
-  });
-  const sources = await manager.listVideoSources();
-  const started = await manager.startVideo(sources.sources[0].sourceId, 30, 'video-session', { hideCursor: true, hideBorder: false });
-  assert.deepEqual(started, { sessionId: 'video-session', changed: true });
-  assert.equal(receivedFrames.length, 1);
-  assert.equal(receivedFrames[0].sessionId, 'video-session');
-  const startRequest = children[0].requests.find((request) => request.command === 'startVideo');
-  assert.equal(startRequest.maxFps, 30);
-  assert.equal(startRequest.hideCursor, true);
-  assert.equal(startRequest.hideBorder, false);
-  assert.equal(startRequest.targetWidth, 1920);
-  assert.equal(children[0].closed, false);
-  await assert.rejects(manager.startVideo(sources.sources[0].sourceId, 60, 'second-session'), /videoCaptureAlreadyRunning/);
-
-  await manager.releaseSharedTextureSlot('video-session', 0);
-  assert.deepEqual(await manager.stopVideo('video-session'), { changed: true });
-  assert.deepEqual(await manager.stopVideo('video-session'), { changed: false });
-  await waitUntil(() => children[0].closed);
-  await manager.shutdown();
-});
-
-test('screen-share audio is bound to the active video source and stops idempotently', async () => {
-  const { manager, children } = createManager({}, { idleTimeoutMs: 20 });
-  const snapshot = await manager.listVideoSources();
-  await manager.startVideo(snapshot.sources[0].sourceId, 30, 'video-session');
-  const format = await manager.startScreenShareAudio(snapshot.sources[0].sourceId,
-    '58d00436-8ac2-4d0c-9283-9d5d5f70ed01', 'video-session');
-  assert.deepEqual(format, { sampleRate: 48000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
-  assert.equal(children[0].requests.at(-1).pipeId, '58d00436-8ac2-4d0c-9283-9d5d5f70ed01');
-  assert.deepEqual(await manager.stopScreenShareAudio('video-session'), { changed: true });
-  assert.deepEqual(await manager.stopScreenShareAudio('video-session'), { changed: false });
-  const nextPipeId = 'b1bc1d58-9ead-4622-b887-8a4fb1e32d92';
-  assert.equal((await manager.startScreenShareAudio(snapshot.sources[0].sourceId, nextPipeId, 'video-session')).changed, true);
-  assert.equal(children[0].requests.at(-1).pipeId, nextPipeId);
-  assert.equal(children[0].requests.filter(request => request.command === 'startVideo').length, 1);
-  await assert.rejects(manager.startScreenShareAudio('window:99:0', nextPipeId, 'video-session'), /videoSourceExpired/);
-  await assert.rejects(manager.startScreenShareAudio(snapshot.sources[0].sourceId, nextPipeId, 'old-session'), /videoSourceExpired/);
-  await manager.stopScreenShareAudio('video-session');
-  await manager.stopVideo('video-session');
-  await manager.shutdown();
-});
-
 test('native microphone capture validates settings, configures the active session, and stops idempotently', async () => {
   const { manager, children } = createManager({}, { idleTimeoutMs: 20 });
   const settings = { inputGain: 0.8, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false };
@@ -781,77 +616,6 @@ test('microphone startup allows the Rust worker startup deadline beyond the gene
   await manager.shutdown();
 });
 
-test('screen-share audio startup uses its own deadline beyond the general request timeout', async () => {
-  const { manager, children } = createManager({ screenAudioStartDelayMs: 65 }, {
-    requestTimeoutMs: 30,
-    audioStartTimeoutMs: 150,
-  });
-  try {
-    const sources = await manager.listVideoSources();
-    await manager.startVideo(sources.sources[0].sourceId, 30, 'delayed-video-session');
-    const started = await manager.startScreenShareAudio(sources.sources[0].sourceId,
-      '58d00436-8ac2-4d0c-9283-9d5d5f70ed01', 'delayed-video-session');
-    assert.equal(started.changed, true);
-    assert.equal(children[0].killCount, 0);
-    await manager.stopScreenShareAudio('delayed-video-session');
-    await manager.stopVideo('delayed-video-session');
-  } finally {
-    await manager.shutdown();
-  }
-});
-
-test('audio startup deadline failure clears sessions and reaps the helper before an explicit retry', async (t) => {
-  for (const kind of ['microphone', 'screenAudio']) {
-    await t.test(kind, async () => {
-      const mode = kind === 'microphone' ? { holdMicrophoneStart: true } : { holdScreenAudioStart: true };
-      const { manager, children } = createManager(mode, {
-        requestTimeoutMs: 150,
-        audioStartTimeoutMs: 30,
-        retryDelayMs: 0,
-      });
-      const pipeId = '58d00436-8ac2-4d0c-9283-9d5d5f70ed01';
-      const settings = { inputGain: 1, noiseSuppression: false, autoGainControl: false, voiceEnhancement: false };
-      try {
-        let start;
-        if (kind === 'microphone') {
-          start = manager.startMicrophoneCapture(pipeId, 'timed-out-microphone', settings);
-        } else {
-          const sources = await manager.listVideoSources();
-          await manager.startVideo(sources.sources[0].sourceId, 30, 'timed-out-video');
-          start = manager.startScreenShareAudio(sources.sources[0].sourceId, pipeId, 'timed-out-video');
-        }
-        const command = kind === 'microphone' ? 'startMicrophoneCapture' : 'startScreenShareAudio';
-        await assert.rejects(start, new RegExp(`mediaHelperTimeout:${command}`));
-        await waitUntil(() => children[0].closed);
-        assert.equal(children[0].killCount, 1);
-        assert.equal(manager.microphoneCapture, undefined);
-        assert.equal(manager.microphoneCaptureStart, undefined);
-        assert.equal(manager.microphoneCaptureStartingSessionId, undefined);
-        assert.equal(manager.screenShareAudio, undefined);
-        assert.equal(manager.screenShareAudioStart, undefined);
-        assert.equal(manager.videoCapture, undefined);
-        assert.equal(children.length, 1);
-
-        mode.holdMicrophoneStart = false;
-        mode.holdScreenAudioStart = false;
-        if (kind === 'microphone') {
-          assert.equal((await manager.startMicrophoneCapture(pipeId, 'retry-microphone', settings)).changed, true);
-          await manager.stopMicrophoneCapture('retry-microphone');
-        } else {
-          const sources = await manager.listVideoSources();
-          await manager.startVideo(sources.sources[0].sourceId, 30, 'retry-video');
-          assert.equal((await manager.startScreenShareAudio(sources.sources[0].sourceId, pipeId, 'retry-video')).changed, true);
-          await manager.stopScreenShareAudio('retry-video');
-          await manager.stopVideo('retry-video');
-        }
-        assert.equal(children.length, 2);
-      } finally {
-        await manager.shutdown();
-      }
-    });
-  }
-});
-
 test('stopping the native microphone while start is pending waits for start then stops the same session', async () => {
   const { manager, children } = createManager({ holdMicrophoneStart: true });
   const settings = { inputGain: 1, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true };
@@ -868,131 +632,6 @@ test('stopping the native microphone while start is pending waits for start then
   await manager.shutdown();
 });
 
-test('screen-share audio rejects stale source ids and mismatched video sessions', async () => {
-  const { manager, children } = createManager();
-  const snapshot = await manager.listVideoSources();
-  await manager.startVideo(snapshot.sources[0].sourceId, 30, 'video-session');
-  const pipeId = '58d00436-8ac2-4d0c-9283-9d5d5f70ed01';
-  await assert.rejects(manager.startScreenShareAudio(snapshot.sources[0].sourceId, pipeId, 'other-session'), /videoSourceExpired/);
-  await manager.listVideoSources();
-  await assert.rejects(manager.startScreenShareAudio(snapshot.sources[0].sourceId, pipeId, 'video-session'), /videoSourceExpired/);
-  assert.equal(children[0].commands.includes('startScreenShareAudio'), false);
-  await manager.stopVideo('video-session');
-  await manager.shutdown();
-});
-
-test('video capture end events are session-scoped and delivered once', async () => {
-  const ended = [];
-  const { manager, children } = createManager({}, {
-    onVideoCaptureEnded: (_state, event) => ended.push(event),
-  });
-  const sources = await manager.listVideoSources();
-  await manager.startVideo(sources.sources[0].sourceId, 30, 'video-ended');
-  const helper = children[0];
-  const report = (sessionId) => helper.writeResponse({
-    event: 'videoCaptureEnded', protocolVersion: 1, sessionId, code: 'captureTargetClosed',
-  });
-
-  report('old-video');
-  report('video-ended');
-  report('video-ended');
-  assert.deepEqual(ended, [{ sessionId: 'video-ended', code: 'captureTargetClosed' }]);
-
-  await manager.stopVideo('video-ended');
-  await manager.shutdown();
-});
-
-test('video suspension events follow only the active session and state transitions', async () => {
-  const statuses = [];
-  const { manager, children } = createManager({}, {
-    onVideoCaptureSuspended: (_state, status) => statuses.push(status),
-  });
-  const sources = await manager.listVideoSources();
-  await manager.startVideo(sources.sources[0].sourceId, 30, 'video-suspended');
-  const helper = children[0];
-  const report = (sessionId, suspended) => helper.writeResponse({
-    event: 'videoCaptureSuspended', protocolVersion: 1, sessionId, suspended,
-  });
-
-  report('old-video', true);
-  report('video-suspended', true);
-  report('video-suspended', true);
-  report('video-suspended', false);
-  assert.deepEqual(statuses, [
-    { sessionId: 'video-suspended', suspended: true },
-    { sessionId: 'video-suspended', suspended: false },
-  ]);
-
-  await manager.stopVideo('video-suspended');
-  report('video-suspended', true);
-  assert.equal(statuses.length, 2);
-  await manager.shutdown();
-});
-
-test('diagnostics distinguish a minimized window from healthy frame delivery', async () => {
-  const { manager } = createManager({ captureSuspended: true });
-  const sources = await manager.listVideoSources();
-  const started = await manager.startCaptureProbe(sources.sources[0].sourceId);
-  const diagnostics = await manager.getDiagnostics();
-  assert.equal(diagnostics.state, 'running');
-  assert.equal(diagnostics.captureSuspended, true);
-  await manager.stopCaptureProbe(started.sessionId);
-  await manager.shutdown();
-});
-
-test('video rejects expired ids, invalid fps, worker exit, and stop timeout without reporting success', async (t) => {
-  await t.test('expired source', async () => {
-    const { manager, children } = createManager();
-    await assert.rejects(manager.startVideo('monitor:1:0', 30, 'video-session'), /videoSourceExpired/);
-    assert.equal(children.length, 0);
-    await manager.shutdown();
-  });
-  await t.test('invalid fps', async () => {
-    const { manager, children } = createManager();
-    const sources = await manager.listVideoSources();
-    await assert.rejects(manager.startVideo(sources.sources[0].sourceId, 144, 'video-session'), /invalidVideoStart/);
-    await assert.rejects(manager.startVideo(sources.sources[0].sourceId, 30, 'video-session', { hideCursor: 'false', hideBorder: false }), /invalidVideoStart/);
-    assert.equal(children[0].commands.includes('startVideo'), false);
-    await manager.shutdown();
-  });
-  await t.test('worker exit', async () => {
-    const { manager, children } = createManager({ exitAfterVideoStart: true }, { onSharedTextureFrame: () => {} });
-    const sources = await manager.listVideoSources();
-    await manager.startVideo(sources.sources[0].sourceId, 30, 'video-session');
-    await waitUntil(() => children[0].closed);
-    await assert.rejects(manager.getDiagnostics());
-    await manager.shutdown();
-  });
-  await t.test('stop timeout', async () => {
-    const { manager, children } = createManager({ videoStopTimeout: true }, { onSharedTextureFrame: () => {} });
-    const sources = await manager.listVideoSources();
-    await manager.startVideo(sources.sources[0].sourceId, 30, 'video-session');
-    await assert.rejects(manager.stopVideo('video-session'), /mediaHelperTimeout:stopVideo/);
-    await waitUntil(() => children[0].closed);
-    await manager.shutdown();
-  });
-});
-
-test('video configuration keeps the capture identity and rejects stale sessions or failed updates', async () => {
-  const { manager, children } = createManager();
-  try {
-    const sources = await manager.listVideoSources();
-    await manager.startVideo(sources.sources[0].sourceId, 30, 'quality-session');
-    const active = manager.videoCapture;
-    await assert.rejects(manager.configureVideo('other-session', 60), /invalidVideoConfiguration/);
-    await assert.rejects(manager.configureVideo('quality-session', 121), /invalidVideoConfiguration/);
-    await manager.configureVideo('quality-session', 120);
-    assert.equal(manager.videoCapture, active);
-    assert.equal(active.maxFps, 120);
-    assert.equal(children[0].requests.filter(({ command }) => command === 'startVideo').length, 1);
-    children[0].mode.videoConfigurationFailure = true;
-    await assert.rejects(manager.configureVideo('quality-session', 30), /captureSessionMismatch/);
-    assert.equal(active.maxFps, 120);
-    await manager.stopVideo('quality-session');
-    await assert.rejects(manager.configureVideo('quality-session', 30), /invalidVideoConfiguration/);
-  } finally { await manager.shutdown(); }
-});
-
 test('pending source refresh allows confirmation and replaces the snapshot only after completion', async () => {
   const { manager, children } = createManager({}, { requestTimeoutMs: 1000 });
   try {
@@ -1002,29 +641,16 @@ test('pending source refresh allows confirmation and replaces the snapshot only 
     const refresh = manager.listVideoSources();
     await waitUntil(() => child.requests.filter(({ command }) => command === 'listVideoSources').length === 2);
 
-    await manager.startVideo(sources.sources[0].sourceId, 30, 'video-session');
-    assert.equal(child.commands.includes('startVideo'), true);
+    await manager.reserveVideo('video-session', sources.sources[0].sourceId);
+    assert.equal(child.commands.includes('reserveVideo'), true);
     await manager.stopVideo('video-session');
 
     const request = child.requests.filter(({ command }) => command === 'listVideoSources')[1];
     child.writeResponse({ event: 'videoSources', protocolVersion: 1, requestId: request.requestId,
       revision: 2, sources: [] });
     assert.deepEqual((await refresh).sources, []);
-    await assert.rejects(manager.startVideo(sources.sources[0].sourceId, 30, 'late-session'), /videoSourceExpired/);
-    assert.equal(child.requests.filter(({ command }) => command === 'startVideo').length, 1);
-  } finally {
-    await manager.shutdown();
-  }
-});
-
-test('video forwards the 120 fps preset and rejects values above the supported limit', async () => {
-  const { manager, children } = createManager();
-  try {
-    const sources = await manager.listVideoSources();
-    await assert.rejects(manager.startVideo(sources.sources[0].sourceId, 121, 'invalid-session'), /invalidVideoStart/);
-    await manager.startVideo(sources.sources[0].sourceId, 120, 'high-fps-session');
-    assert.equal(children[0].requests.find(({ command }) => command === 'startVideo').maxFps, 120);
-    await manager.stopVideo('high-fps-session');
+    await assert.rejects(manager.reserveVideo('late-session', sources.sources[0].sourceId), /videoSourceExpired/);
+    assert.equal(child.requests.filter(({ command }) => command === 'reserveVideo').length, 1);
   } finally {
     await manager.shutdown();
   }
@@ -1035,8 +661,8 @@ test('failed source refresh invalidates the previous snapshot', async () => {
   const sources = await manager.listVideoSources();
   children[0].mode.listVideoSourcesFailure = true;
   await assert.rejects(manager.listVideoSources(), /mediaHelper:sourceDiscoveryFailed/);
-  await assert.rejects(manager.startCaptureProbe(sources.sources[0].sourceId), /videoSourceExpired/);
-  assert.equal(children[0].commands.includes('startCaptureProbe'), false);
+  await assert.rejects(manager.reserveVideo('video-session', sources.sources[0].sourceId), /videoSourceExpired/);
+  assert.equal(children[0].commands.includes('reserveVideo'), false);
   await manager.shutdown();
 });
 
@@ -1045,9 +671,9 @@ test('source ids expire when the lazy helper is reclaimed and do not start a rep
   const sources = await manager.listVideoSources();
   await waitUntil(() => children[0]?.closed);
 
-  await assert.rejects(manager.startCaptureProbe(sources.sources[0].sourceId), /videoSourceExpired/);
+  await assert.rejects(manager.reserveVideo('video-session', sources.sources[0].sourceId), /videoSourceExpired/);
   assert.equal(children.length, 1);
-  assert.equal(children[0].commands.includes('startCaptureProbe'), false);
+  assert.equal(children[0].commands.includes('reserveVideo'), false);
   await manager.shutdown();
 });
 
@@ -1064,9 +690,7 @@ test('诊断保留真实helper版本和后端，可选帧池计数缺失仍按�
 test('运行中的原生后端按协议保留，非法版本或后端不能进入报告', async (t) => {
   const { manager } = createManager();
   try {
-    const sources = await manager.listVideoSources();
-    await manager.startCaptureProbe(sources.sources[0].sourceId);
-    assert.equal((await manager.getDiagnostics()).captureBackend, 'windowsGraphicsCapture');
+    assert.equal((await manager.getDiagnostics()).captureBackend, null);
   } finally { await manager.shutdown(); }
   for (const diagnosticsOverrides of [{ helperVersion: undefined }, { helperVersion: 'https://private/token' },
     { captureBackend: 'unverifiedBackend' }]) {
@@ -1076,59 +700,6 @@ test('运行中的原生后端按协议保留，非法版本或后端不能进�
       finally { await manager.shutdown(); }
     });
   }
-});
-
-test('diagnostics reconcile a capture worker that stopped without an explicit stop request', async () => {
-  const { manager, children } = createManager({ captureEndsBeforeDiagnostics: true }, { idleTimeoutMs: 20 });
-  const sources = await manager.listVideoSources();
-  await manager.startCaptureProbe(sources.sources[0].sourceId);
-  const diagnostics = await manager.getDiagnostics();
-  assert.equal(diagnostics.state, 'idle');
-  assert.equal(manager.captureProbe, undefined);
-  await waitUntil(() => children[0].closed);
-  await manager.shutdown();
-});
-
-test('probe start timeout or worker exit rejects and never starts a replacement while the child is unclosed', async (t) => {
-  await t.test('start timeout', async () => {
-    const { manager, children } = createManager({ captureProbeStartTimeout: true });
-    const sources = await manager.listVideoSources();
-    await assert.rejects(manager.startCaptureProbe(sources.sources[0].sourceId));
-    await waitUntil(() => children[0].closed);
-    await assert.rejects(manager.startCaptureProbe(sources.sources[0].sourceId));
-    assert.equal(children.length, 1);
-    await manager.shutdown();
-  });
-  await t.test('worker exit after start acknowledgement', async () => {
-    const { manager, children } = createManager({ exitAfterCaptureProbeStart: true });
-    const sources = await manager.listVideoSources();
-    await manager.startCaptureProbe(sources.sources[0].sourceId);
-    await waitUntil(() => children[0].closed);
-    await assert.rejects(manager.getDiagnostics());
-    await assert.rejects(manager.startCaptureProbe(sources.sources[0].sourceId));
-    assert.equal(children.length, 1);
-    await manager.shutdown();
-  });
-});
-
-test('probe stop timeout terminates the failed helper and shutdown while probing stays bounded', async (t) => {
-  await t.test('stop timeout', async () => {
-    const { manager, children } = createManager({ captureProbeStopTimeout: true });
-    const sources = await manager.listVideoSources();
-    const started = await manager.startCaptureProbe(sources.sources[0].sourceId);
-    await assert.rejects(manager.stopCaptureProbe(started.sessionId), /mediaHelperTimeout:stopCaptureProbe/);
-    await waitUntil(() => children[0].closed);
-    assert.equal(children.length, 1);
-    await manager.shutdown();
-  });
-  await t.test('application shutdown', async () => {
-    const { manager, children } = createManager();
-    const sources = await manager.listVideoSources();
-    await manager.startCaptureProbe(sources.sources[0].sourceId);
-    await manager.shutdown();
-    assert.equal(children[0].closed, true);
-    assert.equal(children[0].commands.at(-1), 'shutdown');
-  });
 });
 
 test('application shutdown during idle close rejects a waiting request without respawning', async () => {
@@ -1203,7 +774,7 @@ test('kill without close is reported, pending requests settle, and no second hel
 test('remote input is bound to one active monitor session and authenticated identity', async () => {
   const { manager, children } = createManager();
   const sources = await manager.listVideoSources();
-  await manager.startVideo(sources.sources[0].sourceId, 30, 'video-control');
+  await manager.reserveVideo('video-control', sources.sources[0].sourceId);
   await manager.setRemoteControl('video-control', 'control-session', 'member-a');
   assert.deepEqual(await manager.sendRemoteInput('video-control', 'control-session', 'member-a', 1,
     { kind: 'move', x: 0, y: 65535 }), { changed: true, dropped: false });
@@ -1231,7 +802,7 @@ test('remote input is bound to one active monitor session and authenticated iden
 test('mouse movement may be dropped under load, but discrete overload clears the helper grant', async () => {
   const { manager } = createManager();
   const sources = await manager.listVideoSources();
-  await manager.startVideo(sources.sources[0].sourceId, 30, 'video-overload');
+  await manager.reserveVideo('video-overload', sources.sources[0].sourceId);
   await manager.setRemoteControl('video-overload', 'control-overload', 'member-a');
   for (let sequence = 1; sequence <= 120; sequence += 1) {
     await manager.sendRemoteInput('video-overload', 'control-overload', 'member-a', sequence,

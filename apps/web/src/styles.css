@@ -423,17 +423,6 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .media-diagnostics small, .media-diagnostics p { color: var(--muted); }
 .media-diagnostic-stream { display: grid; gap: 4px; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border-soft); }
 .media-diagnostic-stream b { font-size: 12px; }
-.native-capture-probe { display: grid; gap: 6px; margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border-soft); }
-.native-capture-probe > b { font-size: 12px; }
-.native-capture-probe-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.native-capture-probe-controls select { grid-column: 1 / -1; min-width: 0; }
-.native-capture-probe-controls button, .native-capture-probe-controls select {
-  min-height: 28px; padding: 4px 7px; border: 1px solid var(--border); border-radius: 4px;
-  background: var(--panel-soft); color: var(--text); font: inherit;
-}
-.native-capture-probe-controls button { cursor: pointer; }
-.native-capture-probe-controls button:disabled, .native-capture-probe-controls select:disabled { cursor: not-allowed; opacity: .5; }
-
 .member-strip-divider {
   position: relative;
   flex: 0 0 30px;

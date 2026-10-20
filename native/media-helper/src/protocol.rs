@@ -26,37 +26,7 @@ pub enum CommandEnvelope {
         protocol_version: u16,
         request_id: String,
     },
-    StartVideo {
-        protocol_version: u16,
-        request_id: String,
-        session_id: String,
-        source_id: String,
-        target_width: u32,
-        target_height: u32,
-        max_fps: u16,
-        #[serde(default)]
-        hide_cursor: bool,
-        #[serde(default)]
-        hide_border: bool,
-    },
-    StartCaptureProbe {
-        protocol_version: u16,
-        request_id: String,
-        session_id: String,
-        source_id: String,
-    },
-    ConfigureVideo {
-        protocol_version: u16,
-        request_id: String,
-        session_id: String,
-        max_fps: u16,
-    },
     StopVideo {
-        protocol_version: u16,
-        request_id: String,
-        session_id: String,
-    },
-    StopCaptureProbe {
         protocol_version: u16,
         request_id: String,
         session_id: String,
@@ -69,7 +39,7 @@ pub enum CommandEnvelope {
         protocol_version: u16,
         request_id: String,
     },
-    ReserveWindowVideo {
+    ReserveVideo {
         protocol_version: u16,
         request_id: String,
         session_id: String,
@@ -99,18 +69,6 @@ pub enum CommandEnvelope {
         request_id: String,
         session_id: String,
     },
-    StartScreenShareAudio {
-        protocol_version: u16,
-        request_id: String,
-        session_id: String,
-        source_id: String,
-        pipe_id: String,
-    },
-    StopScreenShareAudio {
-        protocol_version: u16,
-        request_id: String,
-        session_id: String,
-    },
     SetRemoteControl {
         protocol_version: u16,
         request_id: String,
@@ -134,13 +92,6 @@ pub enum CommandEnvelope {
         session_id: String,
         control_session_id: String,
     },
-    #[cfg(feature = "shared-texture-output")]
-    ReleaseSharedTextureSlot {
-        protocol_version: u16,
-        request_id: String,
-        session_id: String,
-        slot_index: u8,
-    },
 }
 
 impl CommandEnvelope {
@@ -155,25 +106,13 @@ impl CommandEnvelope {
             | Self::Diagnostics {
                 protocol_version, ..
             }
-            | Self::StartVideo {
-                protocol_version, ..
-            }
-            | Self::ConfigureVideo {
-                protocol_version, ..
-            }
-            | Self::StartCaptureProbe {
-                protocol_version, ..
-            }
             | Self::StopVideo {
-                protocol_version, ..
-            }
-            | Self::StopCaptureProbe {
                 protocol_version, ..
             }
             | Self::ListVideoSources {
                 protocol_version, ..
             }
-            | Self::ReserveWindowVideo {
+            | Self::ReserveVideo {
                 protocol_version, ..
             }
             | Self::StartMicrophoneCapture {
@@ -183,12 +122,6 @@ impl CommandEnvelope {
                 protocol_version, ..
             }
             | Self::StopMicrophoneCapture {
-                protocol_version, ..
-            }
-            | Self::StartScreenShareAudio {
-                protocol_version, ..
-            }
-            | Self::StopScreenShareAudio {
                 protocol_version, ..
             }
             | Self::SetRemoteControl {
@@ -203,10 +136,6 @@ impl CommandEnvelope {
             | Self::Shutdown {
                 protocol_version, ..
             } => *protocol_version,
-            #[cfg(feature = "shared-texture-output")]
-            Self::ReleaseSharedTextureSlot {
-                protocol_version, ..
-            } => *protocol_version,
         }
     }
 
@@ -215,24 +144,16 @@ impl CommandEnvelope {
             Self::Hello { request_id, .. }
             | Self::Capabilities { request_id, .. }
             | Self::Diagnostics { request_id, .. }
-            | Self::StartVideo { request_id, .. }
-            | Self::ConfigureVideo { request_id, .. }
-            | Self::StartCaptureProbe { request_id, .. }
             | Self::StopVideo { request_id, .. }
-            | Self::StopCaptureProbe { request_id, .. }
             | Self::ListVideoSources { request_id, .. }
-            | Self::ReserveWindowVideo { request_id, .. }
+            | Self::ReserveVideo { request_id, .. }
             | Self::StartMicrophoneCapture { request_id, .. }
             | Self::ConfigureMicrophoneCapture { request_id, .. }
             | Self::StopMicrophoneCapture { request_id, .. }
-            | Self::StartScreenShareAudio { request_id, .. }
-            | Self::StopScreenShareAudio { request_id, .. }
             | Self::SetRemoteControl { request_id, .. }
             | Self::RemoteInput { request_id, .. }
             | Self::ClearRemoteControl { request_id, .. }
             | Self::Shutdown { request_id, .. } => request_id,
-            #[cfg(feature = "shared-texture-output")]
-            Self::ReleaseSharedTextureSlot { request_id, .. } => request_id,
         }
     }
 }
@@ -367,14 +288,23 @@ pub struct VideoSource {
     pub monitor_origin: Option<MonitorOrigin>,
 }
 
-/// 仅通过父子进程协议交接已校验的窗口身份，不返回给网页或匿名报告。
+/// 仅通过父子进程协议交接已校验的来源身份，不返回给网页或匿名报告。
 #[derive(Serialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct WindowVideoTarget {
-    pub window_id: String,
-    pub property_name: String,
-    pub property_value: String,
-    pub executable: String,
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ReservedVideoTarget {
+    Monitor {
+        monitor_name: String,
+    },
+    Window {
+        window_id: String,
+        property_name: String,
+        property_value: String,
+        executable: String,
+    },
 }
 
 #[derive(Clone, Copy, Serialize, Debug, Default, Eq, PartialEq)]
@@ -382,10 +312,6 @@ pub struct WindowVideoTarget {
 pub enum ScreenShareAudioState {
     #[default]
     Idle,
-    Starting,
-    Running,
-    Stopping,
-    Failed,
 }
 
 #[derive(Clone, Serialize, Debug, Default)]
@@ -421,13 +347,10 @@ pub enum OutboundEvent {
         request_id: String,
         state: SessionState,
         windows_only: bool,
-        video_capture: Capability,
-        capture_probe: Capability,
         video_source_discovery: Capability,
         microphone_capture: Capability,
         system_audio_capture: Capability,
         process_audio_capture: Capability,
-        screen_share_audio_capture: Capability,
     },
     Diagnostics {
         protocol_version: u16,
@@ -466,29 +389,18 @@ pub enum OutboundEvent {
         revision: u64,
         sources: Vec<VideoSource>,
     },
-    WindowVideoReserved {
+    VideoReserved {
         protocol_version: u16,
         request_id: String,
         session_id: String,
         source_id: String,
-        target: WindowVideoTarget,
+        target: ReservedVideoTarget,
     },
     Acknowledged {
         protocol_version: u16,
         request_id: String,
         command: &'static str,
         state: SessionState,
-        changed: bool,
-    },
-    ScreenShareAudioStarted {
-        protocol_version: u16,
-        request_id: String,
-        session_id: String,
-        state: SessionState,
-        sample_rate: u32,
-        channels: u16,
-        bits_per_sample: u16,
-        nominal_chunk_ms: u8,
         changed: bool,
     },
     MicrophoneCaptureStarted {
@@ -506,16 +418,6 @@ pub enum OutboundEvent {
         protocol_version: u16,
         session_id: String,
         code: ErrorCode,
-    },
-    VideoCaptureEnded {
-        protocol_version: u16,
-        session_id: String,
-        code: ErrorCode,
-    },
-    VideoCaptureSuspended {
-        protocol_version: u16,
-        session_id: String,
-        suspended: bool,
     },
     Error {
         protocol_version: u16,
@@ -537,36 +439,15 @@ pub enum ErrorCode {
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     PlatformUnsupported,
     SourceDiscoveryFailed,
-    HardwareD3dUnavailable,
     CaptureStartFailed,
-    CaptureSettingsUnsupported,
-    CaptureBorderAccessDenied,
-    CaptureStopTimedOut,
     CaptureSessionMismatch,
     CaptureAlreadyRunning,
-    CaptureTargetClosed,
-    CaptureDisplayDisconnected,
-    CaptureFramePoolRecreateFailed,
-    CaptureFrameProcessingFailed,
-    CaptureCleanupFailed,
     RemoteControlInvalidSession,
     RemoteControlInputFailed,
     RemoteControlTargetUnavailable,
-    #[cfg_attr(feature = "shared-texture-output", allow(dead_code))]
-    VideoOutputUnavailable,
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     AudioPlatformUnsupported,
     AudioDeviceUnavailable,
-    ScreenShareAudioAlreadyRunning,
-    ScreenShareAudioSessionMismatch,
-    ScreenShareAudioStartFailed,
-    ScreenShareAudioStartTimedOut,
-    ScreenShareAudioUnsupported,
-    ScreenShareAudioTargetUnavailable,
-    ScreenShareAudioPipeFailed,
-    ScreenShareAudioStopFailed,
-    ScreenShareAudioFailed,
-    ScreenShareAudioFormatUnsupported,
     MicrophoneCaptureAlreadyRunning,
     MicrophoneCaptureSessionMismatch,
     MicrophoneCaptureStartFailed,
@@ -582,38 +463,14 @@ impl ErrorCode {
         match self {
             Self::PlatformUnsupported => "当前平台不支持视频源发现",
             Self::SourceDiscoveryFailed => "视频源发现失败",
-            Self::HardwareD3dUnavailable => "硬件 D3D11 设备不可用",
             Self::CaptureStartFailed => "视频捕获启动失败",
-            Self::CaptureSettingsUnsupported => "当前 Windows 不支持所选屏幕共享设置",
-            Self::CaptureBorderAccessDenied => {
-                "未获准隐藏共享边框，请关闭该选项或使用具有相应权限的安装包"
-            }
-            Self::CaptureStopTimedOut => "视频捕获停止超时",
             Self::CaptureSessionMismatch => "sessionId 与当前捕获会话不匹配",
             Self::CaptureAlreadyRunning => "已有视频捕获会话正在运行",
-            Self::CaptureTargetClosed => "捕获窗口已关闭",
-            Self::CaptureDisplayDisconnected => "捕获显示器已断开",
-            Self::CaptureFramePoolRecreateFailed => "视频帧池重建失败",
-            Self::CaptureFrameProcessingFailed => "视频帧元数据读取失败",
-            Self::CaptureCleanupFailed => "视频捕获资源释放失败",
             Self::RemoteControlInvalidSession => "远程控制会话无效或已过期",
             Self::RemoteControlInputFailed => "远程输入无法应用",
             Self::RemoteControlTargetUnavailable => "共享显示器已不可用",
-            Self::VideoOutputUnavailable => {
-                "视频输出尚未实现；可使用 startCaptureProbe 查询原始捕获帧"
-            }
             Self::AudioPlatformUnsupported => "当前平台不支持音频来源发现",
             Self::AudioDeviceUnavailable => "没有可用的活动音频端点",
-            Self::ScreenShareAudioAlreadyRunning => "屏幕共享音频已在运行",
-            Self::ScreenShareAudioSessionMismatch => "sessionId 与当前屏幕共享音频会话不匹配",
-            Self::ScreenShareAudioStartFailed => "屏幕共享音频启动失败",
-            Self::ScreenShareAudioStartTimedOut => "屏幕共享音频启动等待超时",
-            Self::ScreenShareAudioUnsupported => "当前 Windows 版本不支持屏幕共享声音捕获",
-            Self::ScreenShareAudioTargetUnavailable => "屏幕共享音频目标进程不可用",
-            Self::ScreenShareAudioPipeFailed => "屏幕共享音频数据通道失败",
-            Self::ScreenShareAudioStopFailed => "屏幕共享音频停止失败",
-            Self::ScreenShareAudioFailed => "屏幕共享音频采集失败",
-            Self::ScreenShareAudioFormatUnsupported => "当前音频格式暂不支持",
             Self::MicrophoneCaptureAlreadyRunning => "麦克风采集已在运行",
             Self::MicrophoneCaptureSessionMismatch => "麦克风采集会话不匹配",
             Self::MicrophoneCaptureStartFailed => "麦克风采集启动失败",
@@ -635,33 +492,13 @@ impl ErrorCode {
             Self::PlatformUnsupported => "platformUnsupported",
             Self::AudioPlatformUnsupported => "audioPlatformUnsupported",
             Self::SourceDiscoveryFailed => "sourceDiscoveryFailed",
-            Self::HardwareD3dUnavailable => "hardwareD3dUnavailable",
             Self::CaptureStartFailed => "captureStartFailed",
-            Self::CaptureSettingsUnsupported => "captureSettingsUnsupported",
-            Self::CaptureBorderAccessDenied => "captureBorderAccessDenied",
-            Self::CaptureStopTimedOut => "captureStopTimedOut",
             Self::CaptureSessionMismatch => "captureSessionMismatch",
             Self::CaptureAlreadyRunning => "captureAlreadyRunning",
-            Self::CaptureTargetClosed => "captureTargetClosed",
-            Self::CaptureDisplayDisconnected => "captureDisplayDisconnected",
-            Self::CaptureFramePoolRecreateFailed => "captureFramePoolRecreateFailed",
-            Self::CaptureFrameProcessingFailed => "captureFrameProcessingFailed",
-            Self::CaptureCleanupFailed => "captureCleanupFailed",
             Self::RemoteControlInvalidSession => "remoteControlInvalidSession",
             Self::RemoteControlInputFailed => "remoteControlInputFailed",
             Self::RemoteControlTargetUnavailable => "remoteControlTargetUnavailable",
-            Self::VideoOutputUnavailable => "videoOutputUnavailable",
             Self::AudioDeviceUnavailable => "audioDeviceUnavailable",
-            Self::ScreenShareAudioAlreadyRunning => "screenShareAudioAlreadyRunning",
-            Self::ScreenShareAudioSessionMismatch => "screenShareAudioSessionMismatch",
-            Self::ScreenShareAudioStartFailed => "screenShareAudioStartFailed",
-            Self::ScreenShareAudioStartTimedOut => "screenShareAudioStartTimedOut",
-            Self::ScreenShareAudioUnsupported => "screenShareAudioUnsupported",
-            Self::ScreenShareAudioTargetUnavailable => "screenShareAudioTargetUnavailable",
-            Self::ScreenShareAudioPipeFailed => "screenShareAudioPipeFailed",
-            Self::ScreenShareAudioStopFailed => "screenShareAudioStopFailed",
-            Self::ScreenShareAudioFailed => "screenShareAudioFailed",
-            Self::ScreenShareAudioFormatUnsupported => "screenShareAudioFormatUnsupported",
             Self::MicrophoneCaptureAlreadyRunning => "microphoneCaptureAlreadyRunning",
             Self::MicrophoneCaptureSessionMismatch => "microphoneCaptureSessionMismatch",
             Self::MicrophoneCaptureStartFailed => "microphoneCaptureStartFailed",
@@ -685,29 +522,40 @@ pub fn unavailable_capability() -> Capability {
     }
 }
 
-#[cfg(not(feature = "shared-texture-output"))]
-pub fn unavailable_video_output_capability() -> Capability {
-    Capability {
-        available: false,
-        reason: "videoOutputNotImplemented",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
+    fn removed_capture_commands_are_not_supported_or_aliased() {
+        for command in [
+            "startVideo",
+            "configureVideo",
+            "startCaptureProbe",
+            "stopCaptureProbe",
+            "releaseSharedTextureSlot",
+            "startScreenShareAudio",
+            "stopScreenShareAudio",
+        ] {
+            let request = serde_json::json!({ "command": command, "protocolVersion": 1,
+                "requestId": "removed", "sessionId": "video", "sourceId": "monitor:1:0",
+                "targetWidth": 1920, "targetHeight": 1080, "maxFps": 60,
+                "pipeId": "58d00436-8ac2-4d0c-9283-9d5d5f70ed01", "slotIndex": 0 });
+            assert!(serde_json::from_value::<super::CommandEnvelope>(request).is_err());
+        }
+    }
+
+    #[test]
     fn window_reservation_protocol_keeps_pointer_values_as_strings() {
         let command: super::CommandEnvelope = serde_json::from_str(
-            r#"{"command":"reserveWindowVideo","protocolVersion":1,"requestId":"request-1","sessionId":"video-1","sourceId":"window:1:0"}"#,
+            r#"{"command":"reserveVideo","protocolVersion":1,"requestId":"request-1","sessionId":"video-1","sourceId":"window:1:0"}"#,
         ).unwrap();
         assert_eq!(command.request_id(), "request-1");
         assert_eq!(command.protocol_version(), 1);
-        let event = super::OutboundEvent::WindowVideoReserved {
+        let event = super::OutboundEvent::VideoReserved {
             protocol_version: 1,
             request_id: "request-1".to_owned(),
             session_id: "video-1".to_owned(),
             source_id: "window:1:0".to_owned(),
-            target: super::WindowVideoTarget {
+            target: super::ReservedVideoTarget::Window {
                 window_id: u64::MAX.to_string(),
                 property_name: "LycanSync.MediaHelper.Window.1.2.3".to_owned(),
                 property_value: u64::MAX.to_string(),
@@ -717,40 +565,22 @@ mod tests {
         let value = serde_json::to_value(event).unwrap();
         assert_eq!(value["target"]["windowId"], u64::MAX.to_string());
         assert_eq!(value["target"]["propertyValue"], u64::MAX.to_string());
+        assert_eq!(value["target"]["kind"], "window");
+        let monitor = serde_json::to_value(super::ReservedVideoTarget::Monitor {
+            monitor_name: "\\\\.\\DISPLAY1".to_owned(),
+        })
+        .unwrap();
+        assert_eq!(monitor["kind"], "monitor");
+        assert_eq!(monitor["monitorName"], "\\\\.\\DISPLAY1");
+        assert!(monitor.get("windowId").is_none());
+        assert!(serde_json::from_str::<super::CommandEnvelope>(
+            r#"{"command":"reserveWindowVideo","protocolVersion":1,"requestId":"old","sessionId":"video","sourceId":"window:1:0"}"#
+        ).is_err());
     }
 
     use super::{
         CommandEnvelope, ErrorCode, OutboundEvent, PROTOCOL_VERSION, VideoSource, VideoSourceKind,
     };
-
-    #[test]
-    fn video_capture_preferences_preserve_defaults_and_reject_non_booleans() {
-        let mut request = serde_json::json!({
-            "protocolVersion": 1, "requestId": "video-options", "command": "startVideo",
-            "sessionId": "video-1", "sourceId": "monitor:1:0",
-            "targetWidth": 1920, "targetHeight": 1080, "maxFps": 30
-        });
-        assert!(matches!(
-            serde_json::from_value::<CommandEnvelope>(request.clone()).unwrap(),
-            CommandEnvelope::StartVideo {
-                hide_cursor: false,
-                hide_border: false,
-                ..
-            }
-        ));
-        request["hideCursor"] = serde_json::json!(true);
-        request["hideBorder"] = serde_json::json!(true);
-        assert!(matches!(
-            serde_json::from_value::<CommandEnvelope>(request.clone()).unwrap(),
-            CommandEnvelope::StartVideo {
-                hide_cursor: true,
-                hide_border: true,
-                ..
-            }
-        ));
-        request["hideCursor"] = serde_json::json!("false");
-        assert!(serde_json::from_value::<CommandEnvelope>(request).is_err());
-    }
 
     #[test]
     fn deserializes_list_video_sources_request() {
@@ -761,21 +591,6 @@ mod tests {
         assert_eq!(request.protocol_version(), PROTOCOL_VERSION);
         assert_eq!(request.request_id(), "sources-1");
         assert!(matches!(request, CommandEnvelope::ListVideoSources { .. }));
-    }
-
-    #[test]
-    fn deserializes_start_and_stop_screen_share_audio_commands() {
-        let start: CommandEnvelope = serde_json::from_str(
-            r#"{"protocolVersion":1,"requestId":"share-audio-1","command":"startScreenShareAudio","sessionId":"video-1","sourceId":"monitor:2:0","pipeId":"58d00436-8ac2-4d0c-9283-9d5d5f70ed01"}"#,
-        ).unwrap();
-        assert!(matches!(
-            start,
-            CommandEnvelope::StartScreenShareAudio { .. }
-        ));
-        let stop: CommandEnvelope = serde_json::from_str(
-            r#"{"protocolVersion":1,"requestId":"share-audio-stop-1","command":"stopScreenShareAudio","sessionId":"video-1"}"#,
-        ).unwrap();
-        assert!(matches!(stop, CommandEnvelope::StopScreenShareAudio { .. }));
     }
 
     #[test]
@@ -798,85 +613,11 @@ mod tests {
     }
 
     #[test]
-    fn serializes_screen_share_audio_format_without_target_process_details() {
-        let event = OutboundEvent::ScreenShareAudioStarted {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: "share-audio-1".to_owned(),
-            session_id: "video-1".to_owned(),
-            state: crate::state::SessionState::Running,
-            sample_rate: 44100,
-            channels: 2,
-            bits_per_sample: 32,
-            nominal_chunk_ms: 10,
-            changed: true,
-        };
-        let value = serde_json::to_value(event).unwrap();
-        assert_eq!(value["event"], "screenShareAudioStarted");
-        assert_eq!(value["sampleRate"], 44100);
-        assert_eq!(value["channels"], 2);
-        assert!(value.get("processId").is_none());
-        assert!(value.get("pipeId").is_none());
-    }
-
-    #[test]
-    fn serializes_video_capture_end_with_session_and_stable_error_code() {
-        let event = OutboundEvent::VideoCaptureEnded {
-            protocol_version: PROTOCOL_VERSION,
-            session_id: "video-1".to_owned(),
-            code: ErrorCode::CaptureTargetClosed,
-        };
-        let value = serde_json::to_value(event).unwrap();
-        assert_eq!(value["event"], "videoCaptureEnded");
-        assert_eq!(value["sessionId"], "video-1");
-        assert_eq!(value["code"], "captureTargetClosed");
-        assert!(value.get("requestId").is_none());
-    }
-
-    #[test]
-    fn serializes_video_capture_suspension_without_request_id() {
-        let event = OutboundEvent::VideoCaptureSuspended {
-            protocol_version: PROTOCOL_VERSION,
-            session_id: "video-1".to_owned(),
-            suspended: true,
-        };
-        let value = serde_json::to_value(event).unwrap();
-        assert_eq!(value["event"], "videoCaptureSuspended");
-        assert_eq!(value["sessionId"], "video-1");
-        assert_eq!(value["suspended"], true);
-        assert!(value.get("requestId").is_none());
-    }
-
-    #[test]
     fn active_microphone_device_error_has_a_stable_code() {
         assert_eq!(
             serde_json::to_value(ErrorCode::AudioDeviceUnavailable).unwrap(),
             "audioDeviceUnavailable"
         );
-    }
-
-    #[test]
-    fn deserializes_probe_without_quality_limits() {
-        let request: CommandEnvelope = serde_json::from_str(
-            r#"{"protocolVersion":1,"requestId":"probe-1","command":"startCaptureProbe","sessionId":"capture-1","sourceId":"window:1:0"}"#,
-        )
-        .unwrap();
-        assert_eq!(request.protocol_version(), PROTOCOL_VERSION);
-        assert!(matches!(request, CommandEnvelope::StartCaptureProbe { .. }));
-    }
-
-    #[cfg(feature = "shared-texture-output")]
-    #[test]
-    fn deserializes_shared_texture_slot_release_command() {
-        let request: CommandEnvelope = serde_json::from_str(
-            r#"{"protocolVersion":1,"requestId":"release-1","command":"releaseSharedTextureSlot","sessionId":"smoke-1","slotIndex":2}"#,
-        )
-        .unwrap();
-        assert_eq!(request.protocol_version(), PROTOCOL_VERSION);
-        assert_eq!(request.request_id(), "release-1");
-        assert!(matches!(
-            request,
-            CommandEnvelope::ReleaseSharedTextureSlot { slot_index: 2, .. }
-        ));
     }
 
     #[test]

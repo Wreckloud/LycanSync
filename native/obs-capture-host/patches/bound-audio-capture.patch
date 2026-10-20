@@ -1,0 +1,187 @@
+diff --git a/plugins/win-wasapi/win-wasapi.cpp b/plugins/win-wasapi/win-wasapi.cpp
+--- a/plugins/win-wasapi/win-wasapi.cpp
++++ b/plugins/win-wasapi/win-wasapi.cpp
+@@ -1,3 +1,4 @@
+ #include "wasapi-notify.hpp"
+ #include "enum-wasapi.hpp"
++#include "bound_audio_target.h"
+ 
+@@ -140,3 +141,8 @@
+ class WASAPISource {
++	BoundAudioTarget bound_target;
++	// 0 等待初始化，1 已确认采集启动，2 失败锁定；创建来源不等于开始收音。
++	std::atomic<int> capture_status = 0;
++	std::atomic<uint64_t> packets_received = 0;
++	std::atomic<uint64_t> frames_received = 0;
++	std::atomic<uint64_t> silent_packets = 0;
++	std::atomic<uint32_t> capture_sample_rate = 0;
++	std::atomic<uint32_t> capture_channels = 0;
+ 	ComPtr<IMMDeviceEnumerator> enumerator;
+@@ -236,3 +242,4 @@
+ 	bool ProcessCaptureData();
++	bool ReadCaptureData();
+ 
+@@ -244,4 +251,4 @@
+ 	static ComPtr<IAudioClient> InitClient(IMMDevice *device, SourceType type, DWORD process_id,
++					       bool exclude_process,
+ 					       PFN_ActivateAudioInterfaceAsync activate_audio_interface_async,
+@@ -283,3 +291,4 @@
+ 	HWND GetHwnd();
++	void GetCaptureStatus(calldata_t *cd);
+ 
+@@ -302,3 +311,7 @@
+ {
++	if (sourceType == SourceType::ProcessOutput && !bound_target.read(settings)) {
++		throw "Invalid exact audio process target";
++	}
++	hwnd = bound_target.window();
+ 	mmdevapi_module = LoadLibrary(L"Mmdevapi");
+@@ -590,4 +603,6 @@
+ void WASAPISource::Activate()
+ {
++	// 固定来源失败后交给宿主明确结束声音，不按标题重找或自动重连。
++	if (sourceType != SourceType::Input) return;
+ 	if (!reconnectThread.Valid()) {
+@@ -661,3 +676,4 @@
+ ComPtr<IAudioClient> WASAPISource::InitClient(IMMDevice *device, SourceType type, DWORD process_id,
++					      bool exclude_process,
+ 					      PFN_ActivateAudioInterfaceAsync activate_audio_interface_async,
+@@ -698,4 +714,6 @@
+ 		audioclientActivationParams.ProcessLoopbackParams.ProcessLoopbackMode =
+-			PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE;
++			exclude_process ? PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE
++					: PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE;
+ 		PROPVARIANT activateParams{};
+@@ -859,18 +877,8 @@
+-		hwnd = ms_find_window(INCLUDE_MINIMIZED, priority, window_class.c_str(), title.c_str(),
+-				      executable.c_str());
+-		if (!hwnd) {
+-			throw "Failed to find window";
+-		}
+-
+-		DWORD dwProcessId = 0;
+-		if (!GetWindowThreadProcessId(hwnd, &dwProcessId)) {
+-			hwnd = NULL;
+-			throw "Failed to get process id of window";
++		if (!bound_target.valid()) {
++			throw "Exact audio process target expired";
+ 		}
+ 
+-		process_id = dwProcessId;
++		process_id = bound_target.process_id();
+ 	} else {
+@@ -881,2 +890,3 @@
+-	ComPtr<IAudioClient> temp_client = InitClient(device, sourceType, process_id, activate_audio_interface_async,
++	ComPtr<IAudioClient> temp_client = InitClient(device, sourceType, process_id, bound_target.exclude(),
++						      activate_audio_interface_async,
+ 						      speakers, format, sampleRate);
+@@ -911,3 +921,3 @@
+-	if (sourceType == SourceType::ProcessOutput && !hooked) {
++	if (sourceType == SourceType::ProcessOutput && !hooked && hwnd) {
+ 		hooked = true;
+@@ -936,6 +946,8 @@
+ bool WASAPISource::TryInitialize()
+ {
++	if (capture_status.load() == 2) return false;
+ 	bool success = false;
+ 	try {
+ 		Initialize();
+-		success = true;
++		int waiting = 0;
++		capture_sample_rate = sampleRate;
++		capture_channels = get_audio_channels(speakers);
++		success = capture_status.compare_exchange_strong(waiting, 1);
+ 
+@@ -955,3 +967,4 @@
+ 	previouslyFailed = !success;
++	if (!success) capture_status = 2;
+ 	return success;
+@@ -995,3 +1008,22 @@
+ bool WASAPISource::ProcessCaptureData()
++{
++	if (capture_status.load() == 2 || !ReadCaptureData()) {
++		capture_status = 2;
++		return false;
++	}
++	return true;
++}
++
++void WASAPISource::GetCaptureStatus(calldata_t *cd)
++{
++	const int state = capture_status.load();
++	calldata_set_int(cd, "binding_version", 1);
++	calldata_set_int(cd, "capture_state", state);
++	calldata_set_int(cd, "sample_rate", state == 1 ? capture_sample_rate.load() : 0);
++	calldata_set_int(cd, "channels", state == 1 ? capture_channels.load() : 0);
++	// 静音包是总包的子集，先读子计数，避免采集并发时产生反向快照。
++	calldata_set_int(cd, "silent_packets", silent_packets.load());
++	calldata_set_int(cd, "frames_received", frames_received.load());
++	calldata_set_int(cd, "packets_received", packets_received.load());
++}
++
++bool WASAPISource::ReadCaptureData()
+ {
+@@ -1005,3 +1037,3 @@
+-		if ((sourceType == SourceType::ProcessOutput) && !IsWindow(hwnd)) {
++		if ((sourceType == SourceType::ProcessOutput) && !bound_target.valid()) {
+ 			blog(LOG_WARNING, "[WASAPISource::ProcessCaptureData] window disappeared");
+@@ -1069,3 +1101,11 @@
+-		if (reroute_target) {
++		// 取到数据后再次确认实例，失效块不进入 libobs 或页面。
++		if (sourceType == SourceType::ProcessOutput && !bound_target.valid()) {
++			capture->ReleaseBuffer(frames);
++			return false;
++		}
++		++packets_received;
++		frames_received += frames;
++		if (flags & AUDCLNT_BUFFERFLAGS_SILENT) ++silent_packets;
++		if (reroute_target) {
+ 			obs_source_t *target = obs_weak_source_get_source(reroute_target);
+@@ -1264,3 +1304,4 @@
+ 	blog(LOG_INFO, "WASAPI: Default %s device changed", input ? "input" : "output");
+ 
++	if (sourceType == SourceType::DeviceOutput) capture_status = 2;
+ 	SetEvent(restartSignal);
+@@ -1394,3 +1435,8 @@
+-static void wasapi_get_hooked(void *data, calldata_t *cd)
++static void lycan_get_capture_status(void *data, calldata_t *cd)
++{
++	static_cast<WASAPISource *>(data)->GetCaptureStatus(cd);
++}
++
++static void wasapi_get_hooked(void *data, calldata_t *cd)
+ {
+@@ -1432,5 +1478,15 @@
+ static void *CreateWASAPISource(obs_data_t *settings, obs_source_t *source, SourceType type)
+ {
+ 	try {
++		auto *wasapi_source = new WASAPISource(settings, source, type);
++		proc_handler_add(obs_source_get_proc_handler(source),
++			"void lycansync_audio_status(out int binding_version, out int capture_state, out int sample_rate, out int channels, out int packets_received, out int frames_received, out int silent_packets)",
++			lycan_get_capture_status, wasapi_source);
+ 		if (type != SourceType::ProcessOutput) {
+-			return new WASAPISource(settings, source, type);
++			return wasapi_source;
+ 		} else {
+-			WASAPISource *wasapi_source = new WASAPISource(settings, source, type);
+ 
+@@ -1463,3 +1517,5 @@
+-	} catch (const char *error) {
++	} catch (HRError &error) {
++		blog(LOG_ERROR, "[CreateWASAPISource] %s: %lX", error.str, error.hr);
++	} catch (const char *error) {
+ 		blog(LOG_ERROR, "[CreateWASAPISource] %s", error);
+@@ -1617,3 +1673,3 @@
+-	info.id = "wasapi_output_capture";
++	info.id = "lycansync_system_output_capture";
+ 	info.type = OBS_SOURCE_TYPE_INPUT;
+@@ -1635,3 +1691,3 @@
+-	info.id = "wasapi_process_output_capture";
++	info.id = "lycansync_process_output_capture";
+ 	info.type = OBS_SOURCE_TYPE_INPUT;
+diff --git a/plugins/win-wasapi/plugin-main.cpp b/plugins/win-wasapi/plugin-main.cpp
+--- a/plugins/win-wasapi/plugin-main.cpp
++++ b/plugins/win-wasapi/plugin-main.cpp
+@@ -60,3 +60,2 @@
+-	RegisterWASAPIInput();
+ 	RegisterWASAPIDeviceOutput();

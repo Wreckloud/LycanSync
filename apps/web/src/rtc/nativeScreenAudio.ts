@@ -138,12 +138,7 @@ export class NativeScreenAudioSession {
         Promise.resolve().then(() => context && context.state !== 'closed' ? context.close() : undefined),
         Promise.resolve().then(async () => {
           if (!this.nativeStartCommand || !this.sessionId) return;
-          try {
-            await this.nativeStartCommand;
-          } catch {
-            // 启动被拒绝时没有取得采集会话，无需发送对应停止命令。
-            return;
-          }
+          // 主进程持有启动中的声音身份；取消不能等待启动确认后才请求停止。
           await this.desktop.stopNativeScreenAudio(this.sessionId);
         }),
       ];
