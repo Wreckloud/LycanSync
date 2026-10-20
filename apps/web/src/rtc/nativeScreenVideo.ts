@@ -62,7 +62,7 @@ export class NativeScreenVideoSession {
   private sessionId?: string;
   private pendingHelperFailure?: { sessionId: string; code: string };
   private pendingSuspension?: { sessionId: string; suspended: boolean };
-  private startCommand?: Promise<{ sessionId: string; changed: boolean }>;
+  private startCommand?: ReturnType<NativeVideoDesktopBridge['startNativeVideo']>;
   private startPromise?: Promise<LocalVideoTrack>;
   private stopPromise?: Promise<void>;
   private firstFrameResolve?: () => void;
@@ -137,6 +137,8 @@ export class NativeScreenVideoSession {
       this.firstFrameResolve = resolve;
       this.firstFrameReject = reject;
     });
+    // 启动命令可能先失败；提前观察首帧拒绝，实际错误仍由下面的启动流程上报。
+    void firstFrame.catch(() => {});
     window.addEventListener('message', this.onWindowMessage);
     this.removeHelperErrorListener = this.desktop.onNativeVideoError((failure) => {
       if (this.sessionId) {

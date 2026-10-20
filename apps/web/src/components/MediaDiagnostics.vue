@@ -171,11 +171,12 @@ onScopeDispose(() => {
       限帧／背压丢帧累计 {{ captureProbeDiagnostics.videoOutputDroppedFrames ?? '—' }}
     </p>
     <p v-if="processMetrics">Electron 进程（不含原生 helper）：CPU {{ processMetrics.cpuPercent }}% · 工作集合计 {{ processMetrics.memoryMb }} MB</p>
-    <p v-if="statistics?.native?.state === 'running'">原生采集计数区间 FPS：
-      <template v-if="statistics.nativeInterval">收到 {{ statistics.nativeInterval.receivedFps }} ·
-        处理 {{ statistics.nativeInterval.processedFps }} · {{ formatFpsInterval(statistics.nativeInterval.elapsedMs) }}</template>
+    <p v-if="statistics?.native?.state === 'running'">{{ statistics.native.captureBackend === 'obsLibobs' ? 'OBS 计数区间 FPS' : '原生采集计数区间 FPS' }}：
+      <template v-if="statistics.nativeInterval">{{ statistics.native?.captureBackend === 'obsLibobs' ? 'OBS 渲染回调' : '收到' }} {{ statistics.nativeInterval.receivedFps }} ·
+        {{ statistics.native?.captureBackend === 'obsLibobs' ? '宿主发帧' : '处理' }} {{ statistics.nativeInterval.processedFps }} · {{ formatFpsInterval(statistics.nativeInterval.elapsedMs) }}</template>
       <template v-else>等待统计</template>
     </p>
+    <small v-if="statistics?.native?.captureBackend === 'obsLibobs'">本次 OBS 会话槽位累计丢帧 {{ statistics.native.obsBridgeDroppedFrames ?? '—' }}；发帧计数截至宿主事件，不代表 Electron 导入或编码成功。</small>
     <section class="native-capture-probe" aria-label="原生视频取帧探针">
       <b>原生视频取帧探针</b>
       <small>仅读取帧元数据，不输出或传输画面；不替代当前屏幕共享。</small>

@@ -8,6 +8,63 @@ const { runInNewContext } = require('node:vm');
 const { MediaHelperManager } = require('./media-helper.cjs');
 const { matchNativeVideoSourceThumbnails, monitorDisplayId } = require('./native-video-thumbnails.cjs');
 
+test('纹理交付、停止和迟到结果共用一次主进程引用释放', async (context) => {
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const cleanupStart = main.indexOf('function releaseNativeVideoImports(');
+  const cleanupEnd = main.indexOf('function notifyNativeVideoError(', cleanupStart);
+  const frameStart = main.indexOf('function handleNativeSharedTextureFrame(');
+  const frameEnd = main.indexOf('async function startNativeVideo(', frameStart);
+  assert.ok(cleanupStart >= 0 && cleanupEnd > cleanupStart && frameStart >= 0 && frameEnd > frameStart);
+  for (const mode of ['sent-then-stop', 'stop-then-sent', 'stop-then-rejected', 'rejected']) {
+    await context.test(mode, async () => {
+      let resolveSend, rejectSend, allReferencesReleased;
+      const sent = new Promise((resolve, reject) => { resolveSend = resolve; rejectSend = reject; });
+      const failures = [], notifications = [], slots = [];
+      let releases = 0;
+      const video = { sessionId: 'texture-session', imported: new Map(), pendingSlotReleases: new Set() };
+      const state = { alive: true, closed: false, child: { pid: 1234 }, executablePath: 'C:\\host.exe',
+        releaseSharedTextureSlot: async (...args) => slots.push(args) };
+      const sandbox = {
+        nativeVideoSession: video, helperProcessBridges: new Map(), mainWindow: { webContents: { mainFrame: {} } },
+        nativeMediaBridge: { openSpawnedMediaHelper: () => ({ duplicateSharedTexture: () => ({
+          withImportHandle: (callback) => callback(Buffer.alloc(8)), release: () => {},
+        }) }) },
+        sharedTexture: {
+          importSharedTexture: (options) => {
+            allReferencesReleased = options.allReferencesReleased;
+            return { release: () => { releases++; assert.equal(releases, 1, '不能重复释放主进程引用'); } };
+          },
+          sendSharedTexture: () => sent,
+        },
+        recordVideoFailure: (stage) => failures.push(stage),
+        notifyNativeVideoError: (_video, code) => notifications.push(code),
+      };
+      runInNewContext(`${main.slice(cleanupStart, cleanupEnd)}\n${main.slice(frameStart, frameEnd)}`, sandbox);
+      sandbox.handleNativeSharedTextureFrame(state, { sessionId: video.sessionId, slotIndex: 0,
+        codedSize: { width: 1920, height: 1080 }, contentSize: { width: 1920, height: 1080 } });
+      if (mode.startsWith('stop-')) {
+        sandbox.releaseNativeVideoImports(video);
+        assert.equal(releases, 0, '交付仍等待确认时，停止也不能提前释放主进程引用');
+      }
+      if (mode.includes('rejected')) rejectSend(new Error('controlledTransferFailure'));
+      else resolveSend();
+      await new Promise((resolve) => setImmediate(resolve));
+      sandbox.releaseNativeVideoImports(video);
+      assert.equal(releases, 1);
+      assert.equal(notifications.length, mode.includes('rejected') ? 1 : 0);
+      assert.equal(failures.length, notifications.length);
+      // 主进程引用释放不等于消费者已用完，只有 Electron 的总释放回调归还槽位。
+      assert.equal(slots.length, 0);
+      allReferencesReleased();
+      allReferencesReleased();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(slots.length, 1);
+      assert.equal(video.imported.size, 0);
+      assert.equal(video.pendingSlotReleases.size, 0);
+    });
+  }
+});
+
 test('main-process video entry accepts 120 fps before forwarding to the helper', async () => {
   // 执行实际入口函数，隔离 Electron 和设备，避免只验证下游而漏掉主进程上限。
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
@@ -17,7 +74,7 @@ test('main-process video entry accepts 120 fps before forwarding to the helper',
   const requests = [];
   const invoke = runInNewContext(`${main.slice(start, end)}; startNativeVideo`, {
     closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
-    nativeMediaBridge: {}, randomUUID: () => 'main-quality-session',
+    nativeMediaBridge: {}, obsCaptureHost: undefined, randomUUID: () => 'main-quality-session',
     mediaHelper: { startVideo: async (...args) => {
       requests.push(args);
       return { sessionId: args[2], changed: true };
@@ -122,8 +179,19 @@ class FakeHelper extends EventEmitter {
         event: 'videoSources', protocolVersion: 1, requestId: command.requestId,
         revision: this.sourceRevision,
         sources: [{ sourceId: `monitor:${this.sourceRevision}:0`, kind: 'monitor', title: 'DISPLAY1',
-          width: 1920, height: 1080, primary: true, monitorOrigin: { x: 0, y: 0 } }],
+          width: 1920, height: 1080, primary: true, monitorOrigin: { x: 0, y: 0 } },
+        ...(this.mode.windowSources ? [{ sourceId: `window:${this.sourceRevision}:0`, kind: 'window',
+          title: 'Test window', width: 640, height: 480, primary: false, windowId: '123456' }] : [])],
       });
+      return;
+    }
+    if (command.command === 'reserveWindowVideo') {
+      if (this.mode.reserveWindowTimeout) return;
+      this.videoState = 'running';
+      this.videoSessionId = command.sessionId;
+      this.writeResponse({ event: 'windowVideoReserved', protocolVersion: 1, requestId: command.requestId,
+        sessionId: command.sessionId, sourceId: command.sourceId,
+        target: this.mode.invalidWindowTarget ?? { windowId: '123456', propertyName: 'LycanSync.MediaHelper.Window.1.2.3', propertyValue: '987654' } });
       return;
     }
     if (command.command === 'startCaptureProbe') {
@@ -323,6 +391,56 @@ function createManager(mode = {}, options = {}) {
   });
   return { manager, children, spawnOptions };
 }
+
+test('OBS 窗口预留复用视频会话并阻止空闲退出，不启动 Rust 画面采集', async () => {
+  const { manager, children } = createManager({ windowSources: true }, { idleTimeoutMs: 20 });
+  try {
+    const snapshot = await manager.listVideoSources();
+    const sourceId = snapshot.sources.find((source) => source.kind === 'window').sourceId;
+    const target = await manager.reserveWindowVideo('obs-window-session', sourceId);
+    assert.equal(target.kind, 'window');
+    assert.equal(target.windowId, '123456');
+    assert.equal(manager.videoCapture.external, true);
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    assert.equal(children[0].closed, false);
+    assert.ok(!children[0].commands.includes('startVideo'));
+    await assert.rejects(manager.startVideo(sourceId, 60), /AlreadyRunning/);
+    await assert.rejects(manager.configureVideo('obs-window-session', 30), /invalidVideoConfiguration/);
+    await assert.rejects(manager.stopVideo('old-session'), /Mismatch/);
+    assert.equal((await manager.stopVideo('obs-window-session')).changed, true);
+    assert.equal((await manager.stopVideo('obs-window-session')).changed, false);
+    assert.equal(manager.videoCapture, undefined);
+  } finally { await manager.shutdown(); }
+});
+
+test('窗口预留只接受当前快照，坏身份响应明确失败并关闭失去同步的 helper', async () => {
+  const { manager, children } = createManager({ windowSources: true,
+    invalidWindowTarget: { windowId: '123', propertyName: 'untrusted', propertyValue: '4' } });
+  try {
+    await assert.rejects(manager.reserveWindowVideo('obs-session', 'window:1:0'), /videoSourceExpired/);
+    assert.equal(children.length, 0);
+    await manager.listVideoSources();
+    await assert.rejects(manager.reserveWindowVideo('obs-session', 'window:9:0'), /videoSourceExpired/);
+    assert.equal(children[0].commands.filter((command) => command === 'reserveWindowVideo').length, 0);
+    await assert.rejects(manager.reserveWindowVideo('obs-session', 'window:1:0'), /InvalidWindowTarget/);
+    assert.equal(manager.videoCapture, undefined);
+    await waitUntil(() => children[0].closed);
+    assert.equal(children[0].closed, true);
+  } finally { await manager.shutdown(); }
+});
+
+test('窗口身份预留中停止遇到请求超时，明确失败并回收 helper，不启动采集', async () => {
+  const { manager, children } = createManager({ windowSources: true, reserveWindowTimeout: true });
+  try {
+    await manager.listVideoSources();
+    const reservation = assert.rejects(manager.reserveWindowVideo('obs-session', 'window:1:0'), /Timeout/);
+    const stopped = assert.rejects(manager.stopVideo('obs-session'), /Timeout/);
+    await Promise.all([reservation, stopped]);
+    await waitUntil(() => children[0].closed);
+    assert.equal(manager.videoCapture, undefined);
+    assert.ok(!children[0].commands.some((command) => command === 'startVideo'));
+  } finally { await manager.shutdown(); }
+});
 
 test('窗口预览按句柄匹配，同标题窗口仍各自显示正确画面', () => {
   const videoSources = [

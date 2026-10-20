@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; media-src 'self' blob:; connect-src 'none'">
+<title>OBS 本机采集验证</title>
+<style>
+  body { margin: 0; background: #111820; color: #ddd; font: 13px sans-serif; }
+  #marker { position: absolute; left: 0; top: 0; width: 96px; height: 96px; background: #f010c0; }
+  video { position: absolute; left: 112px; top: 12px; width: 320px; height: 180px; }
+  p { position: absolute; left: 12px; top: 200px; }
+</style>
+<div id="marker"></div><video autoplay muted playsinline></video>
+<p>只验证本机画面交付，不连接房间、不录音、不保存画面。</p>
+<script type="module" src="./renderer.js"></script>
+</html>

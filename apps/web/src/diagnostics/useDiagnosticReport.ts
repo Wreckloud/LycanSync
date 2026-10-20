@@ -94,8 +94,18 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
       warnings.add('至少一个阶段没有可比较样本；等待统计或缺失值不按 0 处理。');
     }
     const firstNativeInput = entries.find(({ stream }) => typeof stream.nativeInput?.firstFrameMs === 'number')?.stream.nativeInput;
-    const native = entries.filter(({ sample }) => sample.nativeVideoSessionMatched)
-      .map(({ sample }) => sample.native).find((value) => value !== null);
+    const matchedNativeSamples = entries.filter(({ sample }) => sample.nativeVideoSessionMatched)
+      .map(({ sample }) => sample.native).filter((value) => value !== null);
+    const native = matchedNativeSamples[0];
+    const latestNative = matchedNativeSamples[matchedNativeSamples.length - 1];
+    const obsBridgeDroppedFrames = native?.captureBackend === 'obsLibobs'
+      && typeof native.obsBridgeDroppedFrames === 'number'
+      && typeof latestNative?.obsBridgeDroppedFrames === 'number'
+      && latestNative.obsBridgeDroppedFrames >= native.obsBridgeDroppedFrames
+      ? latestNative.obsBridgeDroppedFrames - native.obsBridgeDroppedFrames : null;
+    if (native?.captureBackend === 'obsLibobs') {
+      warnings.add('OBS 帧计数截至宿主事件发出，不代表 Electron 已成功导入纹理或 LiveKit 已编码。');
+    }
     const nativeResolution = first.stream.direction === '发送' && native?.frameWidth && native.frameHeight
       ? `${native.frameWidth}×${native.frameHeight}` : null;
     const encodedDimensions = [...new Set(entries.flatMap(({ stream }) => stream.layers)
@@ -109,8 +119,9 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
       layers.some((layer) => layer.typicalFps !== null)
         ? `编码层 FPS 分别记录为 ${layers.map((layer) => `第 ${layer.layer} 层 ${layer.typicalFps ?? '等待统计'}`).join('、')}，不跨层相加。` : null,
       median(playbackFps) !== null ? `本机显示约 ${median(playbackFps)} FPS。` : null,
-      median(nativeCaptureFps) !== null ? `原生采集收到约 ${median(nativeCaptureFps)} FPS。` : null,
-      median(nativeProcessedFps) !== null ? `原生采集处理约 ${median(nativeProcessedFps)} FPS。` : null,
+      median(nativeCaptureFps) !== null ? `${native?.captureBackend === 'obsLibobs' ? 'OBS 渲染回调' : '原生采集收到'}约 ${median(nativeCaptureFps)} FPS。` : null,
+      median(nativeProcessedFps) !== null ? `${native?.captureBackend === 'obsLibobs' ? 'OBS 宿主发出共享纹理帧' : '原生采集处理'}约 ${median(nativeProcessedFps)} FPS。` : null,
+      obsBridgeDroppedFrames !== null ? `记录期间 OBS 共享纹理槽位累计丢帧 ${obsBridgeDroppedFrames}。` : null,
       totalBackpressureDrops > 0 ? `页面背压期间累计丢弃 ${totalBackpressureDrops} 帧（占收到真实帧 ${totalReceived > 0
         ? `${Math.round(totalBackpressureDrops / totalReceived * 10_000) / 100}%` : '比例待统计'}）。` : null,
     ].filter((value): value is string => value !== null);
@@ -202,6 +213,7 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
       rawCaptureFps: numeric(native.rawCaptureFps), videoOutputFps: numeric(native.videoOutputFps),
       videoOutputDroppedFrames: numeric(native.videoOutputDroppedFrames), framesReceived: numeric(native.framesReceived),
       framesProcessed: numeric(native.framesProcessed), droppedNotifications: numeric(native.droppedNotifications),
+      obsBridgeDroppedFrames: numeric(native.obsBridgeDroppedFrames),
       rawFrameIntervalP50Ms: numeric(native.rawFrameIntervalP50Ms), rawFrameIntervalP95Ms: numeric(native.rawFrameIntervalP95Ms),
       rawFrameIntervalP99Ms: numeric(native.rawFrameIntervalP99Ms), rawTimestampAnomalies: numeric(native.rawTimestampAnomalies),
       lastFrameAgeMs: numeric(native.lastFrameAgeMs), stopDurationMs: numeric(native.stopDurationMs),
@@ -371,7 +383,7 @@ export function useDiagnosticReport(options: {
   async function save(notes: string) {
     if (disposed || saving.value || recording.value || !startedAt) return;
     saving.value = true; error.value = '';
-    const report = { kind: 'lycansync-diagnostics', schemaVersion: 3, startedAt, endedAt, stopReason: reason.value,
+    const report = { kind: 'lycansync-diagnostics', schemaVersion: 4, startedAt, endedAt, stopReason: reason.value,
       sampleIntervalMs: SAMPLE_INTERVAL_MS, notes: notes.slice(0, 2000), startSettings, endSettings, samples,
       summary: { segments: summarizeSegments(samples, packageInfo.version, Boolean(window.lycanDesktop)), limitations: [
         '各阶段统计窗口来源不同，不能直接相减计算全链路丢帧率。FPS 仅描述视频链路，不代表游戏 FPS 或每帧画面内容均不同。',

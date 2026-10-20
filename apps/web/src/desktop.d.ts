@@ -27,7 +27,7 @@ interface NativeVideoSource {
 
 interface NativeCaptureDiagnostics {
   helperVersion: string;
-  captureBackend: 'windowsGraphicsCapture' | null;
+  captureBackend: 'windowsGraphicsCapture' | 'obsLibobs' | null;
   state: 'idle' | 'starting' | 'running' | 'stopping';
   sessionId: string | null;
   available: boolean;
@@ -41,6 +41,7 @@ interface NativeCaptureDiagnostics {
   probeProcessedFps: number | null;
   videoOutputFps: number | null;
   videoOutputDroppedFrames: number | null;
+  obsBridgeDroppedFrames: number | null;
   rawFrameIntervalP50Ms: number | null;
   rawFrameIntervalP95Ms: number | null;
   rawFrameIntervalP99Ms: number | null;

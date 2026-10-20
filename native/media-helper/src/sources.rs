@@ -142,6 +142,16 @@ impl SourceRegistry {
 }
 
 impl CaptureTarget {
+    pub(super) fn window_video_target(
+        &self,
+    ) -> Result<crate::protocol::WindowVideoTarget, ErrorCode> {
+        #[cfg(target_os = "windows")]
+        if let Self::Window(window, identity) = self {
+            return windows::window_video_target(*window, identity);
+        }
+        Err(ErrorCode::InvalidRequest)
+    }
+
     #[cfg(target_os = "windows")]
     pub(super) fn monitor_handle(&self) -> Option<usize> {
         match self {

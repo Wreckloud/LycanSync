@@ -482,6 +482,22 @@ pub(crate) fn window_matches_identity(window: HWND, identity: &WindowIdentity) -
     })
 }
 
+pub(super) fn window_video_target(
+    window: HWND,
+    identity: &WindowIdentity,
+) -> Result<crate::protocol::WindowVideoTarget, ErrorCode> {
+    if !window_matches_identity(window, identity) {
+        return Err(ErrorCode::InvalidRequest);
+    }
+    Ok(crate::protocol::WindowVideoTarget {
+        window_id: (window.0 as usize).to_string(),
+        property_name: String::from_utf16_lossy(
+            &identity.marker.property_name[..identity.marker.property_name.len() - 1],
+        ),
+        property_value: (window_property_value().0 as usize).to_string(),
+    })
+}
+
 fn stable_window_style(style: isize) -> isize {
     style & !(WS_MINIMIZE.0 as isize | WS_MAXIMIZE.0 as isize)
 }

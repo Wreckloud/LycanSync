@@ -1,0 +1,43 @@
+cmake_minimum_required(VERSION 3.28)
+project(lycansync_obs_capture_host LANGUAGES CXX)
+
+if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+  message(FATAL_ERROR "The OBS capture host currently targets Windows x64 only")
+endif()
+
+set(LYCANSYNC_OBS_SDK "" CACHE PATH "Verified OBS 32.2.2 Windows x64 SDK prepared by build.ps1")
+if(NOT EXISTS "${LYCANSYNC_OBS_SDK}/include/obs.h"
+   OR NOT EXISTS "${LYCANSYNC_OBS_SDK}/lib/obs.lib"
+   OR NOT EXISTS "${LYCANSYNC_OBS_SDK}/bin/64bit/obs.dll"
+   OR NOT EXISTS "${LYCANSYNC_OBS_SDK}/sdk-version.txt")
+  message(FATAL_ERROR "Run native/obs-capture-host/build.ps1 to prepare the pinned OBS SDK")
+endif()
+file(READ "${LYCANSYNC_OBS_SDK}/sdk-version.txt" obs_sdk_version)
+string(STRIP "${obs_sdk_version}" obs_sdk_version)
+if(NOT obs_sdk_version STREQUAL "32.2.2")
+  message(FATAL_ERROR "The capture host requires OBS 32.2.2 exactly")
+endif()
+
+# 官方发布包不附带开发包；只使用同版头文件及真实 DLL 导出生成的导入库。
+set(OBS_RELEASE_CANDIDATE 0)
+set(OBS_BETA 0)
+configure_file("${LYCANSYNC_OBS_SDK}/include/obsconfig.h.in" generated/obsconfig.h @ONLY)
+add_library(lycansync_libobs SHARED IMPORTED)
+set_target_properties(lycansync_libobs PROPERTIES
+  IMPORTED_IMPLIB "${LYCANSYNC_OBS_SDK}/lib/obs.lib"
+  IMPORTED_LOCATION "${LYCANSYNC_OBS_SDK}/bin/64bit/obs.dll"
+  INTERFACE_INCLUDE_DIRECTORIES "${LYCANSYNC_OBS_SDK}/include;${CMAKE_CURRENT_BINARY_DIR}/generated")
+
+add_executable(lycansync-obs-capture-host src/main.cpp src/window_capture.cpp)
+target_compile_features(lycansync-obs-capture-host PRIVATE cxx_std_20)
+target_compile_definitions(lycansync-obs-capture-host PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(lycansync-obs-capture-host PRIVATE lycansync_libobs d3d11 dxgi windowsapp)
+target_compile_options(lycansync-obs-capture-host PRIVATE /utf-8)
+
+# 仅供显式设备测试创建色块窗口，不进入宿主运行包或默认构建。
+add_executable(lycansync-obs-test-windows EXCLUDE_FROM_ALL tests/window_fixture.cpp)
+target_compile_features(lycansync-obs-test-windows PRIVATE cxx_std_20)
+target_compile_definitions(lycansync-obs-test-windows PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(lycansync-obs-test-windows PRIVATE /utf-8)
+target_link_libraries(lycansync-obs-test-windows PRIVATE user32 gdi32)
+set_target_properties(lycansync-obs-test-windows PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")

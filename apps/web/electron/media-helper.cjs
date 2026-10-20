@@ -174,6 +174,54 @@ class MediaHelperManager {
     }
   }
 
+  reserveWindowVideo(sessionId, sourceId) {
+    if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
+    if (typeof sessionId !== 'string' || sessionId.length > 128
+        || !/^window:[1-9]\d*:\d+$/.test(sourceId || '')) return Promise.reject(new Error('invalidVideoStart'));
+    if (this.videoCapture || this.videoCaptureStart || this.captureProbe || this.captureProbeStart) {
+      return Promise.reject(new Error('videoCaptureAlreadyRunning'));
+    }
+    const snapshot = this.videoSourceSnapshot;
+    if (!snapshot || !snapshot.ids.has(sourceId) || !snapshot.state.alive) return Promise.reject(new Error('videoSourceExpired'));
+    this.clearIdleTimer();
+    const active = { state: snapshot.state, sessionId, sourceId, starting: true, external: true };
+    this.videoCapture = active;
+    active.state.videoSessionId = sessionId;
+    const promise = this.runReserveWindowVideo(active).finally(() => {
+      if (this.videoCaptureStart?.promise === promise) this.videoCaptureStart = undefined;
+      if (this.canCloseWhenIdle(active.state)) this.scheduleIdleShutdown(active.state);
+    });
+    this.videoCaptureStart = { state: active.state, sourceId, promise };
+    return promise;
+  }
+
+  async runReserveWindowVideo(active) {
+    const { state, sessionId, sourceId } = active;
+    try {
+      const response = await this.sendRequest(state, 'reserveWindowVideo', 'windowVideoReserved', this.requestTimeoutMs,
+        { sessionId, sourceId });
+      const target = response.target;
+      if (response.sessionId !== sessionId || response.sourceId !== sourceId || !target
+          || typeof target.windowId !== 'string' || !/^[1-9]\d{0,19}$/.test(target.windowId)
+          || BigInt(target.windowId) > 0xffffffffffffffffn
+          || typeof target.propertyName !== 'string' || target.propertyName.length > 128
+          || !/^LycanSync\.MediaHelper\.Window\.\d+\.\d+\.\d+$/.test(target.propertyName)
+          || typeof target.propertyValue !== 'string' || !/^[1-9]\d{0,19}$/.test(target.propertyValue)
+          || BigInt(target.propertyValue) > 0xffffffffffffffffn) {
+        const error = new Error('mediaHelperInvalidWindowTarget');
+        this.failState(state, error);
+        throw error;
+      }
+      active.starting = false;
+      return { kind: 'window', windowId: target.windowId, propertyName: target.propertyName, propertyValue: target.propertyValue };
+    } catch (error) {
+      if (this.videoCapture === active) this.videoCapture = undefined;
+      delete state.videoSessionId;
+      this.videoSourceSnapshot = undefined;
+      throw error;
+    }
+  }
+
   startVideo(sourceId, maxFps, sessionId = this.createRequestId(), settings = { hideCursor: false, hideBorder: false }) {
     if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
     if (typeof sourceId !== 'string' || sourceId.length > 128
@@ -274,7 +322,7 @@ class MediaHelperManager {
 
   async configureVideo(sessionId, maxFps) {
     const active = this.videoCapture;
-    if (!active || active.sessionId !== sessionId || active.starting || !active.state.alive
+    if (!active || active.sessionId !== sessionId || active.starting || active.external || !active.state.alive
         || !Number.isInteger(maxFps) || maxFps < 1 || maxFps > 120) throw new Error('invalidVideoConfiguration');
     const response = await this.sendRequest(active.state, 'configureVideo', 'acknowledged', this.requestTimeoutMs,
       { sessionId, maxFps });

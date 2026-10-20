@@ -36,6 +36,35 @@ afterEach(() => {
 });
 
 describe('NativeScreenVideoSession', () => {
+  it('启动命令失败时清理轨道和监听，不遗留未处理的首帧拒绝', async () => {
+    installWindowMessageTarget();
+    const removeErrorListener = vi.fn();
+    const removeSuspensionListener = vi.fn();
+    const stopGenerator = vi.fn();
+    const stopTrack = vi.fn();
+    const desktop: NativeVideoDesktopBridge = {
+      startNativeVideo: async () => { throw new Error('obsWindowRuntimeUnavailable'); },
+      stopNativeVideo: vi.fn(async () => ({ changed: true })),
+      configureNativeVideo: async () => ({ changed: true }),
+      onNativeVideoError: () => removeErrorListener,
+      onNativeVideoSuspended: () => removeSuspensionListener,
+    };
+    const session = new NativeScreenVideoSession(desktop, {
+      maxFps: 60,
+      createGenerator: () => ({ writable: new WritableStream<VideoFrame>(), stop: stopGenerator }) as never,
+      createLocalTrack: () => ({ stop: stopTrack }) as never,
+    });
+    await expect(session.start('window:1:0')).rejects.toThrow('obsWindowRuntimeUnavailable');
+    await session.stop();
+    // 跨过拒绝检查时机；Vitest 会将未观察的首帧 Promise 拒绝判为失败。
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(stopGenerator).toHaveBeenCalledOnce();
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(removeErrorListener).toHaveBeenCalledOnce();
+    expect(removeSuspensionListener).toHaveBeenCalledOnce();
+    expect(desktop.stopNativeVideo).not.toHaveBeenCalled();
+  });
+
   it('诊断区分真实帧提交、写入背压和最小化提示，停止后撤销轨道统计', async () => {
     const target = installWindowMessageTarget();
     const writeGate = deferred<void>();

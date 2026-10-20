@@ -61,7 +61,7 @@ test('桌面误调用 Chromium 共享时明确拒绝，不枚举来源或启动�
 test('preload 仅提供原生共享接口，不再暴露旧来源选择 IPC', () => {
   let bridge;
   runInNewContext(readFileSync(join(__dirname, 'preload.cjs'), 'utf8'), {
-    require: () => ({ contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value; } }, ipcRenderer: {} }),
+    require: () => ({ contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value; } }, ipcRenderer: { on: () => {} } }),
   });
   assert.equal(typeof bridge.startNativeVideo, 'function');
   assert.equal(typeof bridge.listNativeVideoSources, 'function');

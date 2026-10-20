@@ -119,7 +119,7 @@ it('导出按记录时参数保存，匿名化身份/轨道ID，不使用导出�
   expect(text).not.toContain('private-user-id'); expect(text).not.toContain('private-track-id');
   expect(text).not.toContain('私人昵称');
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(3);
+  expect(result.schemaVersion).toBe(4);
   expect(result.measurements.process).toEqual({ scope: 'electron-app-metrics', memory: 'sum-working-set',
     includesNativeHelpers: false, sharedPagesMayBeCountedMoreThanOnce: true });
   expect(result.samples[0]).toMatchObject({ remoteParticipantCount: 0, roomState: 'connected', dynacast: true });
@@ -289,6 +289,42 @@ it('新增诊断只导出版本、后端和计数，不导出会话、帧对象�
     pendingWrite: true, firstFrameMs: 20 });
   expect(exported.streams[0].layers[0].active).toBe(true);
   expect(JSON.stringify(exported)).not.toMatch(/private|secret|sessionId/);
+});
+
+it('OBS 摘要分开记录宿主、页面和编码帧率，槽位丢帧只取本段增量', async () => {
+  const first = snapshot();
+  first.native = { helperVersion: '32.2.2', captureBackend: 'obsLibobs', state: 'running',
+    sessionId: 'private-obs-session', captureSuspended: false, frameWidth: 1920, frameHeight: 1080,
+    framesReceived: 200, framesProcessed: 180, obsBridgeDroppedFrames: 20 } as NativeCaptureDiagnostics;
+  first.streams[0].sessionKey = 'private-obs-session';
+  first.streams[0].nativeInput = { sessionId: 'private-obs-session', receivedFrames: 180, submittedFrames: 160,
+    backpressureDroppedFrames: 20, suspendedDroppedFrames: 0, completedWrites: 160, writeFailures: 0,
+    placeholderFrames: 0, pendingWrite: false, firstFrameMs: 30 };
+  const next = structuredClone(first);
+  Object.assign(next.native!, { framesReceived: 320, framesProcessed: 270, obsBridgeDroppedFrames: 50 });
+  next.nativeInterval = { elapsedMs: 2000, framesReceived: 120, framesProcessed: 90, receivedFps: 60, processedFps: 45 };
+  next.streams[0].sourceFps = 40;
+  Object.assign(next.streams[0].nativeInput!, { receivedFrames: 264, submittedFrames: 240, backpressureDroppedFrames: 24 });
+  next.streams[0].nativeInputInterval = { elapsedMs: 2000, receivedFrames: 84, submittedFrames: 80,
+    backpressureDroppedFrames: 4, receivedFps: 42, submittedFps: 40, backpressureDropRate: 4.8 };
+  next.streams[0].layers[0].fps = 39;
+  collect.mockResolvedValueOnce(first).mockResolvedValueOnce(next);
+  const { report, exportDiagnosticReport } = setup();
+  report.start(); await vi.advanceTimersByTimeAsync(2000);
+  report.stop(); await report.save('');
+  const text = exportDiagnosticReport.mock.calls[0][0];
+  const result = JSON.parse(text);
+  expect(result.schemaVersion).toBe(4);
+  expect(result.summary.segments).toHaveLength(1);
+  expect(result.samples[0].native).toMatchObject({ helperVersion: '32.2.2', captureBackend: 'obsLibobs' });
+  expect(result.summary.segments[0]).toMatchObject({ captureMode: 'obsLibobs',
+    typicalFps: { nativeCapture: 60, nativeProcessed: 45, pageReceived: 42, pageSubmitted: 40,
+      encodingLayers: [{ typicalFps: 39 }] } });
+  expect(result.summary.segments[0].observations).toContain('记录期间 OBS 共享纹理槽位累计丢帧 30。');
+  expect(result.summary.segments[0].warnings).toContain('OBS 帧计数截至宿主事件发出，不代表 Electron 已成功导入纹理或 LiveKit 已编码。');
+  expect(result.samples.map((sample: { native: { obsBridgeDroppedFrames: number } }) => sample.native.obsBridgeDroppedFrames))
+    .toEqual([20, 50]);
+  expect(text).not.toContain('private-obs-session');
 });
 
 it('导出失败保留原记录，采样处理中不会重复启动或积压任务', async () => {

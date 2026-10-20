@@ -56,6 +56,27 @@ async function createSession(dualLayer = false) {
   return { session, desktop, sender, track, onError, writes, sendFrame };
 }
 
+it('四档画质依次切换只更新同一轨道的发送参数及后续帧尺寸', async () => {
+  const { session, desktop, sender, track, writes, sendFrame } = await createSession();
+  try {
+    for (const [quality, fps, width, height] of [
+      ['highFrameRate', 120, 1920, 1080], ['text', 30, 1920, 1080],
+      ['standard', 60, 1920, 1080], ['economy', 30, 1280, 720],
+    ] as const) {
+      await session.configureQuality(quality);
+      expect(desktop.configureNativeVideo).toHaveBeenLastCalledWith('quality-session', fps);
+      expect(sender.getParameters().encodings[0].maxFramerate).toBe(fps);
+      expect(track.publishOptions.screenShareEncoding.maxFramerate).toBe(fps);
+      expect(session.track).toBe(track);
+      await sendFrame();
+      expect(writes.at(-1)?.displayWidth).toBe(width);
+      expect(writes.at(-1)?.displayHeight).toBe(height);
+    }
+    expect(desktop.startNativeVideo).toHaveBeenCalledOnce();
+    expect(desktop.stopNativeVideo).not.toHaveBeenCalled();
+  } finally { await session.stop(); }
+});
+
 it('updates capture and encoder without replacing the track or session, and scales the next frame', async () => {
   const { session, desktop, sender, track, writes, sendFrame } = await createSession();
   try {

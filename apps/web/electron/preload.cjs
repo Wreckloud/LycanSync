@@ -24,21 +24,62 @@ contextBridge.exposeInMainWorld('lycanVoiceOverlay', {
   },
 });
 
+let nativeVideoCanvas;
+let nativeVideoContext;
+let nativeVideoCanvasSessionId;
+
+function releaseNativeVideoCanvas(sessionId) {
+  if (!nativeVideoCanvas || nativeVideoCanvasSessionId !== sessionId) return;
+  nativeVideoCanvas.width = 0;
+  nativeVideoCanvas.height = 0;
+  nativeVideoCanvas = undefined;
+  nativeVideoContext = undefined;
+  nativeVideoCanvasSessionId = undefined;
+}
+
+function copyNativeVideoFrame(frame, sessionId) {
+  const width = frame.visibleRect?.width ?? frame.displayWidth;
+  const height = frame.visibleRect?.height ?? frame.displayHeight;
+  if (nativeVideoCanvasSessionId !== sessionId) releaseNativeVideoCanvas(nativeVideoCanvasSessionId);
+  if (!nativeVideoCanvas) {
+    const canvas = new OffscreenCanvas(width, height);
+    const context = canvas.getContext('2d', { alpha: false });
+    if (!context) throw new Error('nativeVideoCanvasUnavailable');
+    nativeVideoCanvas = canvas;
+    nativeVideoContext = context;
+    nativeVideoCanvasSessionId = sessionId;
+  }
+  if (nativeVideoCanvas.width !== width) nativeVideoCanvas.width = width;
+  if (nativeVideoCanvas.height !== height) nativeVideoCanvas.height = height;
+  // 当前 Electron 的外部纹理直接进入视频轨道会卡住；画布快照隔开两边的资源归属。
+  nativeVideoContext.drawImage(frame, 0, 0, width, height);
+  return new VideoFrame(nativeVideoCanvas, { timestamp: frame.timestamp });
+}
+
 sharedTexture?.setSharedTextureReceiver(async ({ importedSharedTexture }, token, sessionId) => {
   let frame;
+  let copiedFrame;
   try {
     if (token !== 'native-screen-frame' || typeof sessionId !== 'string' || !sessionId) return;
     frame = importedSharedTexture.getVideoFrame();
-    window.postMessage({ type: 'lycan-native-screen-frame', sessionId, frame }, '*', [frame]);
-    frame = undefined;
+    copiedFrame = copyNativeVideoFrame(frame, sessionId);
+    window.postMessage({ type: 'lycan-native-screen-frame', sessionId, frame: copiedFrame }, '*', [copiedFrame]);
+    copiedFrame = undefined;
   } catch (error) {
+    releaseNativeVideoCanvas(sessionId);
     ipcRenderer.send('media:native-video:receiver-error', {
       sessionId, message: String(error?.message ?? error).slice(0, 2000),
     });
   } finally {
+    copiedFrame?.close();
     frame?.close();
     importedSharedTexture.release();
   }
+});
+
+ipcRenderer.on('media:native-video-error', (_event, failure) => releaseNativeVideoCanvas(failure?.sessionId));
+ipcRenderer.on('media:native-video-suspended', (_event, status) => {
+  if (status?.suspended) releaseNativeVideoCanvas(status.sessionId);
 });
 
 // 只暴露固定操作，不向页面开放 Node.js 或任意 IPC 通道。
@@ -83,7 +124,12 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   stopNativeCaptureProbe: (sessionId) => ipcRenderer.invoke('media:capture-probe:stop', sessionId),
   getScreenShareSupport: () => ipcRenderer.invoke('settings:screen-share:support'),
   startNativeVideo: (sourceId, maxFps, settings) => ipcRenderer.invoke('media:native-video:start', sourceId, maxFps, settings),
-  stopNativeVideo: (sessionId) => ipcRenderer.invoke('media:native-video:stop', sessionId),
+  stopNativeVideo: async (sessionId) => {
+    // 停止等待前释放画布；清理期间迟到的旧帧也不能留下缓存或影响新会话。
+    releaseNativeVideoCanvas(sessionId);
+    try { return await ipcRenderer.invoke('media:native-video:stop', sessionId); }
+    finally { releaseNativeVideoCanvas(sessionId); }
+  },
   configureNativeVideo: (sessionId, maxFps) => ipcRenderer.invoke('media:native-video:configure', sessionId, maxFps),
   authorizeNativeRemoteControl: (sessionId, controlSessionId, controllerIdentity) =>
     ipcRenderer.invoke('media:remote-control:authorize', sessionId, controlSessionId, controllerIdentity),

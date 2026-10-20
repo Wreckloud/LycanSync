@@ -69,6 +69,12 @@ pub enum CommandEnvelope {
         protocol_version: u16,
         request_id: String,
     },
+    ReserveWindowVideo {
+        protocol_version: u16,
+        request_id: String,
+        session_id: String,
+        source_id: String,
+    },
     StartMicrophoneCapture {
         protocol_version: u16,
         request_id: String,
@@ -167,6 +173,9 @@ impl CommandEnvelope {
             | Self::ListVideoSources {
                 protocol_version, ..
             }
+            | Self::ReserveWindowVideo {
+                protocol_version, ..
+            }
             | Self::StartMicrophoneCapture {
                 protocol_version, ..
             }
@@ -212,6 +221,7 @@ impl CommandEnvelope {
             | Self::StopVideo { request_id, .. }
             | Self::StopCaptureProbe { request_id, .. }
             | Self::ListVideoSources { request_id, .. }
+            | Self::ReserveWindowVideo { request_id, .. }
             | Self::StartMicrophoneCapture { request_id, .. }
             | Self::ConfigureMicrophoneCapture { request_id, .. }
             | Self::StopMicrophoneCapture { request_id, .. }
@@ -357,6 +367,15 @@ pub struct VideoSource {
     pub monitor_origin: Option<MonitorOrigin>,
 }
 
+/// 仅通过父子进程协议交接已校验的窗口身份，不返回给网页或匿名报告。
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowVideoTarget {
+    pub window_id: String,
+    pub property_name: String,
+    pub property_value: String,
+}
+
 #[derive(Clone, Copy, Serialize, Debug, Default, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum ScreenShareAudioState {
@@ -445,6 +464,13 @@ pub enum OutboundEvent {
         request_id: String,
         revision: u64,
         sources: Vec<VideoSource>,
+    },
+    WindowVideoReserved {
+        protocol_version: u16,
+        request_id: String,
+        session_id: String,
+        source_id: String,
+        target: WindowVideoTarget,
     },
     Acknowledged {
         protocol_version: u16,
@@ -668,6 +694,29 @@ pub fn unavailable_video_output_capability() -> Capability {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn window_reservation_protocol_keeps_pointer_values_as_strings() {
+        let command: super::CommandEnvelope = serde_json::from_str(
+            r#"{"command":"reserveWindowVideo","protocolVersion":1,"requestId":"request-1","sessionId":"video-1","sourceId":"window:1:0"}"#,
+        ).unwrap();
+        assert_eq!(command.request_id(), "request-1");
+        assert_eq!(command.protocol_version(), 1);
+        let event = super::OutboundEvent::WindowVideoReserved {
+            protocol_version: 1,
+            request_id: "request-1".to_owned(),
+            session_id: "video-1".to_owned(),
+            source_id: "window:1:0".to_owned(),
+            target: super::WindowVideoTarget {
+                window_id: u64::MAX.to_string(),
+                property_name: "LycanSync.MediaHelper.Window.1.2.3".to_owned(),
+                property_value: u64::MAX.to_string(),
+            },
+        };
+        let value = serde_json::to_value(event).unwrap();
+        assert_eq!(value["target"]["windowId"], u64::MAX.to_string());
+        assert_eq!(value["target"]["propertyValue"], u64::MAX.to_string());
+    }
+
     use super::{
         CommandEnvelope, ErrorCode, OutboundEvent, PROTOCOL_VERSION, VideoSource, VideoSourceKind,
     };
