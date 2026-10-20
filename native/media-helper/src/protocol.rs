@@ -374,6 +374,7 @@ pub struct WindowVideoTarget {
     pub window_id: String,
     pub property_name: String,
     pub property_value: String,
+    pub executable: String,
 }
 
 #[derive(Clone, Copy, Serialize, Debug, Default, Eq, PartialEq)]
@@ -710,6 +711,7 @@ mod tests {
                 window_id: u64::MAX.to_string(),
                 property_name: "LycanSync.MediaHelper.Window.1.2.3".to_owned(),
                 property_value: u64::MAX.to_string(),
+                executable: "C:\\Games\\game.exe".to_owned(),
             },
         };
         let value = serde_json::to_value(event).unwrap();

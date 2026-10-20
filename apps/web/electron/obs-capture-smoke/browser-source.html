@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>LycanSync OBS Browser Fixture</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; font: 16px system-ui; }
+  canvas { width: 100%; height: 100%; display: block; }
+  aside { position: fixed; left: 16px; top: 16px; padding: 12px; color: white; background: #111d; }
+  button { margin-top: 8px; padding: 8px; }
+</style>
+<canvas aria-label="WebGL 动画测试画面"></canvas>
+<aside>独立浏览器采集测试<br><button>打开分离测试窗口</button></aside>
+<script>
+  const child = new URL(location.href).searchParams.has('child');
+  const canvas = document.querySelector('canvas');
+  const gl = canvas.getContext('webgl', { antialias: false, preserveDrawingBuffer: false });
+  window.fixtureInfo = { webgl: Boolean(gl), child, frames: 0 };
+  if (gl) {
+    const renderer = gl.getExtension('WEBGL_debug_renderer_info');
+    window.fixtureInfo.renderer = renderer ? gl.getParameter(renderer.UNMASKED_RENDERER_WEBGL) : null;
+    const draw = (time) => {
+      if (canvas.width !== innerWidth || canvas.height !== innerHeight) {
+        canvas.width = innerWidth; canvas.height = innerHeight;
+        gl.viewport(0, 0, canvas.width, canvas.height);
+      }
+      const alternate = Math.floor(time / 1000) % 2 === 1;
+      const color = child ? (alternate ? [16, 216, 240] : [220, 16, 200])
+        : (alternate ? [32, 64, 220] : [16, 200, 80]);
+      gl.disable(gl.SCISSOR_TEST);
+      gl.clearColor(...color.map((channel) => channel / 255), 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.enable(gl.SCISSOR_TEST);
+      gl.scissor(Math.floor(time / 5) % innerWidth, 0, 32, 16);
+      gl.clearColor(1, 1, 1, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+      window.fixtureInfo.frames++;
+      requestAnimationFrame(draw);
+    };
+    requestAnimationFrame(draw);
+  }
+  document.querySelector('button').onclick = () => window.open(`${location.pathname}?child=1`,
+    'lycan-obs-browser-child', 'popup,width=560,height=430,left=650,top=350');
+</script>
+</html>

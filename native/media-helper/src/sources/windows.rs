@@ -489,12 +489,19 @@ pub(super) fn window_video_target(
     if !window_matches_identity(window, identity) {
         return Err(ErrorCode::InvalidRequest);
     }
+    let executable =
+        process_executable(identity.process_id).ok_or(ErrorCode::SourceDiscoveryFailed)?;
+    // 读取程序路径后再次核对实例，分类结果不能绑定到复用的 PID 或窗口。
+    if !window_matches_identity(window, identity) {
+        return Err(ErrorCode::InvalidRequest);
+    }
     Ok(crate::protocol::WindowVideoTarget {
         window_id: (window.0 as usize).to_string(),
         property_name: String::from_utf16_lossy(
             &identity.marker.property_name[..identity.marker.property_name.len() - 1],
         ),
         property_value: (window_property_value().0 as usize).to_string(),
+        executable,
     })
 }
 

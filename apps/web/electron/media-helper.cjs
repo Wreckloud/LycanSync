@@ -1,6 +1,7 @@
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { TextDecoder } = require('node:util');
+const { win32 } = require('node:path');
 
 const PROTOCOL_VERSION = 1;
 const MAX_LINE_BYTES = 64 * 1024;
@@ -207,13 +208,17 @@ class MediaHelperManager {
           || typeof target.propertyName !== 'string' || target.propertyName.length > 128
           || !/^LycanSync\.MediaHelper\.Window\.\d+\.\d+\.\d+$/.test(target.propertyName)
           || typeof target.propertyValue !== 'string' || !/^[1-9]\d{0,19}$/.test(target.propertyValue)
-          || BigInt(target.propertyValue) > 0xffffffffffffffffn) {
+          || BigInt(target.propertyValue) > 0xffffffffffffffffn
+          || typeof target.executable !== 'string' || target.executable.length > 4096
+          || !win32.isAbsolute(target.executable) || !/\.exe$/i.test(target.executable)
+          || /[\u0000-\u001f\u007f]/.test(target.executable)) {
         const error = new Error('mediaHelperInvalidWindowTarget');
         this.failState(state, error);
         throw error;
       }
       active.starting = false;
-      return { kind: 'window', windowId: target.windowId, propertyName: target.propertyName, propertyValue: target.propertyValue };
+      return { kind: 'window', windowId: target.windowId, propertyName: target.propertyName,
+        propertyValue: target.propertyValue, executable: target.executable };
     } catch (error) {
       if (this.videoCapture === active) this.videoCapture = undefined;
       delete state.videoSessionId;

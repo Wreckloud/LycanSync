@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(lycansync_obs_capture_host LANGUAGES CXX)
+project(lycansync_obs_capture_host LANGUAGES C CXX)
 
 if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "The OBS capture host currently targets Windows x64 only")
@@ -28,7 +28,7 @@ set_target_properties(lycansync_libobs PROPERTIES
   IMPORTED_LOCATION "${LYCANSYNC_OBS_SDK}/bin/64bit/obs.dll"
   INTERFACE_INCLUDE_DIRECTORIES "${LYCANSYNC_OBS_SDK}/include;${CMAKE_CURRENT_BINARY_DIR}/generated")
 
-add_executable(lycansync-obs-capture-host src/main.cpp src/window_capture.cpp)
+add_executable(lycansync-obs-capture-host src/main.cpp src/window_capture.cpp src/game_capture.cpp)
 target_compile_features(lycansync-obs-capture-host PRIVATE cxx_std_20)
 target_compile_definitions(lycansync-obs-capture-host PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(lycansync-obs-capture-host PRIVATE lycansync_libobs d3d11 dxgi windowsapp)
@@ -41,3 +41,12 @@ target_compile_definitions(lycansync-obs-test-windows PRIVATE UNICODE _UNICODE W
 target_compile_options(lycansync-obs-test-windows PRIVATE /utf-8)
 target_link_libraries(lycansync-obs-test-windows PRIVATE user32 gdi32)
 set_target_properties(lycansync-obs-test-windows PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")
+
+add_executable(lycansync-obs-test-d3d EXCLUDE_FROM_ALL tests/d3d_fixture.cpp)
+target_compile_features(lycansync-obs-test-d3d PRIVATE cxx_std_20)
+target_compile_definitions(lycansync-obs-test-d3d PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(lycansync-obs-test-d3d PRIVATE /utf-8)
+target_link_libraries(lycansync-obs-test-d3d PRIVATE user32 d3d11 dxgi)
+set_target_properties(lycansync-obs-test-d3d PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")
+
+add_subdirectory(game-plugin)

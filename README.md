@@ -213,6 +213,8 @@ npm run dev
 
 ## Windows 桌面客户端（开发版）
 
+OBS 采集迁移另有[开发宿主构建说明](native/obs-capture-host/README.md)：固定 32.2.2，已接入显示器、普通窗口和识别到的游戏的开发路由；按所选窗口的程序身份分类，不要求用户选择底层 API，也不在失败时更换来源或引擎。共享声音与远控关联尚未接通，游戏实机与完整链路统一后置验收，当前安装包仍使用原有链路。
+
 开发构建需要 Windows x64、Node.js 22.12+、npm、稳定版 Rust 工具链（含 `x86_64-pc-windows-msvc` target），以及带 MSVC C++ 工具和 Windows SDK 的 Visual Studio Build Tools。构建本身不需要启动后端、数据库、LiveKit 或 Vite。
 
 在 `apps/web` 安装依赖后，可先单独执行统一构建：

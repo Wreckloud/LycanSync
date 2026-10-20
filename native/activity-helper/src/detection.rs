@@ -105,6 +105,24 @@ fn music_player(executable: &str) -> Option<&'static str> {
     }
 }
 
+pub fn is_capture_game(
+    executable: &str,
+    games: &[GameInstall],
+    mappings: &[ActivityMapping],
+) -> bool {
+    // 大厅可展示游戏动态，但不因此注入其浏览器界面；播放器也不当作游戏采集。
+    !ignored_executable(executable)
+        && music_player(executable).is_none()
+        && file_name(executable) != "leagueclient.exe"
+        && (file_name(executable) == "league of legends.exe"
+            || games
+                .iter()
+                .any(|game| game.key != "steam:431960" && executable.starts_with(&game.directory))
+            || mappings
+                .iter()
+                .any(|mapping| mapping.executable == executable))
+}
+
 pub fn needs_window(process: &ProcessSnapshot, mappings: &[ActivityMapping]) -> bool {
     music_player(&process.executable).is_some()
         || mappings
@@ -394,6 +412,44 @@ mod tests {
                 directory: "d:\\games\\b\\".into(),
             },
         ]
+    }
+
+    #[test]
+    fn capture_game_uses_selected_executable_not_latest_activity_or_title() {
+        let games = games();
+        let mappings = vec![ActivityMapping {
+            executable: "c:\\custom\\game.exe".to_owned(),
+            name: "自选游戏".to_owned(),
+        }];
+        assert!(is_capture_game("d:\\games\\a\\game.exe", &games, &[]));
+        assert!(is_capture_game("d:\\games\\b\\game.exe", &games, &[]));
+        assert!(is_capture_game("c:\\custom\\game.exe", &[], &mappings));
+        assert!(is_capture_game("c:\\riot\\league of legends.exe", &[], &[]));
+        for executable in [
+            "c:\\riot\\leagueclient.exe",
+            "c:\\custom\\qqmusic.exe",
+            "c:\\custom\\cloudmusic.exe",
+            "c:\\custom\\kugou.exe",
+            "d:\\games\\a\\launcher.exe",
+            "d:\\games\\a\\steam.exe",
+            "c:\\apps\\browser.exe",
+            "d:\\games\\ab\\game.exe",
+        ] {
+            assert!(
+                !is_capture_game(executable, &games, &mappings),
+                "{executable}"
+            );
+        }
+        let wallpaper = vec![GameInstall {
+            key: "steam:431960".to_owned(),
+            name: "壁纸".to_owned(),
+            directory: "c:\\wallpaper\\".to_owned(),
+        }];
+        assert!(!is_capture_game(
+            "c:\\wallpaper\\wallpaper.exe",
+            &wallpaper,
+            &[]
+        ));
     }
 
     #[test]

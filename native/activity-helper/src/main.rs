@@ -27,6 +27,11 @@ enum Command {
         #[serde(rename = "requestId")]
         request_id: u64,
     },
+    CaptureGame {
+        #[serde(rename = "requestId")]
+        request_id: u64,
+        executable: String,
+    },
 }
 
 fn main() {
@@ -63,6 +68,25 @@ fn main() {
             games = catalog::discover_games();
             catalog_refreshed = Instant::now();
         }
+        if let Some(Command::CaptureGame {
+            request_id,
+            executable,
+        }) = &command
+        {
+            let executable = detection::normalize_path(executable);
+            if executable.encode_utf16().count() > 4096
+                || !executable.ends_with(".exe")
+                || executable.chars().any(char::is_control)
+                || !std::path::Path::new(&executable).is_absolute()
+            {
+                write_message(json!({ "requestId": request_id, "error": "采集程序身份无效。" }));
+            } else {
+                write_message(json!({ "requestId": request_id,
+                    "game": detection::is_capture_game(&executable, &games, &mappings) }));
+            }
+            // 只查询已有清单与映射，不扫描窗口、不改变当前动态或采集资源。
+            continue;
+        }
         if let Some(Command::Configure {
             request_id,
             mappings: next,
@@ -89,9 +113,9 @@ fn main() {
             Err(_) => {
                 if let Some(command) = command {
                     let request_id = match command {
-                        Command::Configure { request_id, .. } | Command::Windows { request_id } => {
-                            request_id
-                        }
+                        Command::Configure { request_id, .. }
+                        | Command::Windows { request_id }
+                        | Command::CaptureGame { request_id, .. } => request_id,
                     };
                     write_message(
                         json!({ "requestId": request_id, "error": "无法读取运行窗口，请重试。" }),
@@ -113,6 +137,9 @@ fn main() {
                     write_message(
                         json!({ "requestId": request_id, "windows": detection::window_options(&processes, &windows) }),
                     );
+                }
+                Command::CaptureGame { .. } => {
+                    unreachable!("capture query returned before scanning")
                 }
             }
         }

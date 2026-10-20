@@ -38,7 +38,7 @@ class ObsCaptureHostManager {
     const child = this.spawnProcess(this.executablePath,
       [this.modulePath, this.dataPath, target.kind, target.kind === 'monitor' ? target.monitorName : target.windowId,
         settings.hideCursor ? '0' : '1', settings.hideBorder ? '1' : '0', sessionId, this.configPath, String(maxFps),
-        target.kind === 'window' ? target.propertyName : '', target.kind === 'window' ? target.propertyValue : ''],
+        target.kind !== 'monitor' ? target.propertyName : '', target.kind !== 'monitor' ? target.propertyValue : ''],
       // 官方 libobs 按 bin/64bit 的相对路径查找 effect 文件，不能继承项目工作目录。
       { cwd: win32.dirname(this.executablePath), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const state = { child, alive: true, closed: false, videoSessionId: sessionId, buffer: '', startTimer: undefined,
@@ -266,9 +266,11 @@ class ObsCaptureHostManager {
 }
 
 function validTarget(target, sourceId) {
-  if (!target || typeof target !== 'object' || !sourceId.startsWith(`${target.kind}:`)) return false;
-  if (target.kind === 'monitor') return typeof target.monitorName === 'string' && /^\\\\\.\\DISPLAY[1-9]\d*$/i.test(target.monitorName);
-  return target.kind === 'window' && typeof target.windowId === 'string' && /^[1-9]\d{0,19}$/.test(target.windowId)
+  if (!target || typeof target !== 'object') return false;
+  if (target.kind === 'monitor') return sourceId.startsWith('monitor:')
+    && typeof target.monitorName === 'string' && /^\\\\\.\\DISPLAY[1-9]\d*$/i.test(target.monitorName);
+  return ['window', 'game'].includes(target.kind) && sourceId.startsWith('window:')
+    && typeof target.windowId === 'string' && /^[1-9]\d{0,19}$/.test(target.windowId)
     && BigInt(target.windowId) <= 0xffffffffffffffffn && typeof target.propertyValue === 'string'
     && /^[1-9]\d{0,19}$/.test(target.propertyValue) && BigInt(target.propertyValue) <= 0xffffffffffffffffn
     && typeof target.propertyName === 'string' && target.propertyName.length <= 128

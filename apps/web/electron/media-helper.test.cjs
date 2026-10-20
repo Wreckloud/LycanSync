@@ -191,7 +191,8 @@ class FakeHelper extends EventEmitter {
       this.videoSessionId = command.sessionId;
       this.writeResponse({ event: 'windowVideoReserved', protocolVersion: 1, requestId: command.requestId,
         sessionId: command.sessionId, sourceId: command.sourceId,
-        target: this.mode.invalidWindowTarget ?? { windowId: '123456', propertyName: 'LycanSync.MediaHelper.Window.1.2.3', propertyValue: '987654' } });
+        target: this.mode.invalidWindowTarget ?? { windowId: '123456', propertyName: 'LycanSync.MediaHelper.Window.1.2.3',
+          propertyValue: '987654', executable: 'C:\\Games\\game.exe' } });
       return;
     }
     if (command.command === 'startCaptureProbe') {
@@ -400,6 +401,7 @@ test('OBS 窗口预留复用视频会话并阻止空闲退出，不启动 Rust �
     const target = await manager.reserveWindowVideo('obs-window-session', sourceId);
     assert.equal(target.kind, 'window');
     assert.equal(target.windowId, '123456');
+    assert.equal(target.executable, 'C:\\Games\\game.exe');
     assert.equal(manager.videoCapture.external, true);
     await new Promise((resolve) => setTimeout(resolve, 35));
     assert.equal(children[0].closed, false);
@@ -427,6 +429,20 @@ test('窗口预留只接受当前快照，坏身份响应明确失败并关闭�
     await waitUntil(() => children[0].closed);
     assert.equal(children[0].closed, true);
   } finally { await manager.shutdown(); }
+});
+
+test('窗口程序路径仅接受完整本机 exe 身份，缺失或非法响应不继续分类', async () => {
+  for (const executable of [undefined, 'relative.exe', 'C:\\Apps\\not-an-exe.txt', 'C:\\Apps\\bad\n.exe']) {
+    const { manager, children } = createManager({ windowSources: true,
+      invalidWindowTarget: { windowId: '123', propertyName: 'LycanSync.MediaHelper.Window.1.2.3',
+        propertyValue: '456', executable } });
+    try {
+      await manager.listVideoSources();
+      await assert.rejects(manager.reserveWindowVideo('obs-session', 'window:1:0'), /InvalidWindowTarget/);
+      assert.equal(manager.videoCapture, undefined);
+      await waitUntil(() => children[0].closed);
+    } finally { await manager.shutdown(); }
+  }
 });
 
 test('窗口身份预留中停止遇到请求超时，明确失败并回收 helper，不启动采集', async () => {

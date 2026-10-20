@@ -186,7 +186,23 @@ function createActivityHelper({ enabled, executablePath, onActivity, spawnProces
     }
   }
 
-  return { start, stop, configure, listWindows, clearMappings };
+  async function isCaptureGame(executable) {
+    if (!enabled || !validExecutable(executable)) throw new Error('obsCaptureGameDetectionFailed');
+    start();
+    const revision = configurationId;
+    const target = child;
+    try {
+      const response = await request('captureGame', { executable });
+      if (child !== target || stopped || revision !== configurationId || typeof response.game !== 'boolean') {
+        throw new Error('obsCaptureGameDetectionFailed');
+      }
+      return response.game;
+    } catch {
+      throw new Error('obsCaptureGameDetectionFailed');
+    }
+  }
+
+  return { start, stop, configure, listWindows, clearMappings, isCaptureGame };
 }
 
 module.exports = { createActivityHelper, normalizeActivity, normalizeMappings };

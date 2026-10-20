@@ -104,12 +104,23 @@ test('OBS 真实来源纹理经生产入口到页面轨道，重复停止及故�
     assert.equal(code, 0, details);
     assert.equal(result.ok, true, details);
     assert.equal(result.helperClosed, true, details);
-    assert.equal(result.cases.length, process.env.LYCANSYNC_CAPTURE_RESOURCE_CHECK === '1'
-      || process.env.LYCANSYNC_CAPTURE_QUALITY_CHECK === '1' || process.env.LYCANSYNC_CAPTURE_WINDOW_CHECK === '1' ? 1 : 6, details);
-    if (process.env.LYCANSYNC_CAPTURE_WINDOW_CHECK === '1') {
+    const expectedCases = process.env.LYCANSYNC_CAPTURE_APPLICATION_CHECK === '1'
+      ? (process.env.LYCANSYNC_CAPTURE_APPLICATION_WINDOW_ID ? 1 : 2)
+      : process.env.LYCANSYNC_CAPTURE_RESOURCE_CHECK === '1' || process.env.LYCANSYNC_CAPTURE_QUALITY_CHECK === '1'
+        || process.env.LYCANSYNC_CAPTURE_WINDOW_CHECK === '1' || process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1' ? 1 : 6;
+    assert.equal(result.cases.length, expectedCases, details);
+    if (process.env.LYCANSYNC_CAPTURE_APPLICATION_CHECK === '1' && !process.env.LYCANSYNC_CAPTURE_APPLICATION_WINDOW_ID) {
+      assert.deepEqual(result.cases.map((entry) => entry.mode).sort(), ['browser-main', 'browser-popup'], details);
+      assert.ok(result.cases.every((entry) => entry.freshPixelsChecked && entry.helperExitCode === 0), details);
+    }
+    if (process.env.LYCANSYNC_CAPTURE_WINDOW_CHECK === '1' || process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1') {
+      assert.equal(result.cases[0].mode, process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1' ? 'controlled-d3d-game' : 'window', details);
       assert.deepEqual(result.cases[0].windowActions,
         ['same-title', 'rename-and-refresh', 'minimize', 'restore', 'stop-and-reopen', 'close-without-takeover'], details);
       assert.equal(result.cases[0].pixelsChecked, true, details);
+      assert.equal(result.cases[0].diagnosticsChecked, true, details);
+      assert.deepEqual(result.cases[0].frameRateChanges.map((entry) => entry.targetFps), [120, 30, 60, 30, 60], details);
+      assert.ok(result.cases[0].frameRateChanges.every((entry) => entry.freshPixelsChecked), details);
     }
     if (process.env.LYCANSYNC_CAPTURE_QUALITY_CHECK === '1') {
       assert.deepEqual(result.cases[0].qualityChanges.map((entry) => entry.targetFps), [30, 120, 60], details);

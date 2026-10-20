@@ -1,0 +1,123 @@
+diff --git a/plugins/win-capture/game-capture.c b/plugins/win-capture/game-capture.c
+--- a/plugins/win-capture/game-capture.c
++++ b/plugins/win-capture/game-capture.c
+@@ -21,3 +21,4 @@
+ #include "nt-stuff.h"
++#include "bound_game_target.h"
+ 
+@@ -123,3 +124,4 @@
+ struct game_capture {
++	struct lycan_game_target bound_target;
++	bool lycan_target_mismatch;
+ 	obs_source_t *source;
+@@ -436,3 +438,4 @@
+-	cfg->priority = (enum window_priority)obs_data_get_int(settings, SETTING_WINDOW_PRIORITY);
++	cfg->mode = CAPTURE_MODE_WINDOW;
++	cfg->priority = (enum window_priority)obs_data_get_int(settings, SETTING_WINDOW_PRIORITY);
+ 	cfg->force_shmem = obs_data_get_bool(settings, SETTING_COMPATIBILITY);
+@@ -531,3 +534,18 @@
+ }
+ 
++static void lycan_game_capture_get_target(void *data, calldata_t *cd)
++{
++	struct game_capture *gc = data;
++	HWND captured = gc->global_hook_info ? (HWND)(uintptr_t)gc->global_hook_info->window : NULL;
++	calldata_set_int(cd, "binding_version", 1);
++	calldata_set_ptr(cd, "window", gc->bound_target.window);
++	calldata_set_ptr(cd, "capture_window", captured);
++	calldata_set_bool(cd, "hooked", gc->capturing);
++	calldata_set_bool(cd, "valid", !gc->lycan_target_mismatch && lycan_game_target_valid(&gc->bound_target)
++			&& (!gc->capturing || lycan_game_capture_matches(&gc->bound_target, captured)));
++}
++
+ static void game_capture_update(void *data, obs_data_t *settings)
+@@ -550,4 +568,2 @@
+-		gc->activate_hook = !!window && !!*window;
++		gc->activate_hook = lycan_game_target_valid(&gc->bound_target);
+ 	}
+@@ -587,3 +603,8 @@
+ 	struct game_capture *gc = bzalloc(sizeof(*gc));
++	if (!lycan_game_target_read(&gc->bound_target, settings)) {
++		bfree(gc);
++		return NULL;
++	}
+ 
+@@ -590,6 +611,4 @@
+ 	gc->source = source;
+ 	gc->initial_config = true;
+ 	gc->retry_interval = DEFAULT_RETRY_INTERVAL * hook_rate_to_float(gc->config.hook_rate);
+-	gc->hotkey_pair = obs_hotkey_pair_register_source(gc->source, HOTKEY_START, TEXT_HOTKEY_START, HOTKEY_STOP,
+-							  TEXT_HOTKEY_STOP, hotkey_start, hotkey_stop, gc, gc);
+ 
+@@ -614,2 +633,6 @@
+ 	proc_handler_t *ph = obs_source_get_proc_handler(source);
++	proc_handler_add(ph,
++			 "void lycansync_get_target(out int binding_version, out ptr window, out ptr capture_window, out bool valid, out bool hooked)",
++			 lycan_game_capture_get_target, gc);
+ 	proc_handler_add(ph,
+@@ -1011,3 +1033,6 @@
+ static bool init_hook(struct game_capture *gc)
+ {
++	if (!lycan_game_target_valid(&gc->bound_target) || gc->next_window != gc->bound_target.window)
++		return false;
+ 	struct dstr exe = {0};
+@@ -1146,17 +1169,5 @@
+ static void get_selected_window(struct game_capture *gc)
+ {
+-	HWND window;
+-
+-	if (dstr_cmpi(&gc->class, "dwm") == 0) {
+-		wchar_t class_w[512];
+-		os_utf8_to_wcs(gc->class.array, 0, class_w, 512);
+-		window = FindWindowW(class_w, NULL);
+-	} else {
+-		window = ms_find_window(INCLUDE_MINIMIZED, gc->priority, gc->class.array, gc->title.array,
+-					gc->executable.array);
+-	}
++	HWND window = lycan_game_target_valid(&gc->bound_target) ? gc->bound_target.window : NULL;
+ 
+@@ -1168,7 +1179,3 @@
+ static void try_hook(struct game_capture *gc)
+ {
+-	if (gc->config.mode == CAPTURE_MODE_ANY) {
+-		get_fullscreen_window(gc);
+-	} else {
+-		get_selected_window(gc);
+-	}
++	get_selected_window(gc);
+ 
+@@ -1693,3 +1700,11 @@
+ static void game_capture_tick(void *data, float seconds)
+ {
+ 	struct game_capture *gc = data;
++	if (!lycan_game_target_valid(&gc->bound_target)
++	    || (gc->capturing && !lycan_game_capture_matches(&gc->bound_target,
++		gc->global_hook_info ? (HWND)(uintptr_t)gc->global_hook_info->window : NULL))) {
++		// 停止会清空 capturing；保留身份失败，避免宿主把它误判为等待首帧。
++		gc->lycan_target_mismatch = true;
++		if (gc->active)
++			stop_capture(gc);
++		gc->error_acquiring = true;
++		return;
++	}
+ 	bool deactivate = os_atomic_set_bool(&gc->deactivate_hook, false);
+@@ -1867,3 +1889,6 @@
+ 	struct game_capture *gc = data;
++	if (!lycan_game_capture_matches(&gc->bound_target,
++		gc->global_hook_info ? (HWND)(uintptr_t)gc->global_hook_info->window : NULL))
++		return;
+ 	if (!gc->texture || !gc->active)
+@@ -2086,3 +2101,3 @@
+-	return (gc->active && gc->capturing) ? gc->cx : 0;
++	return (gc->active && gc->capturing && lycan_game_capture_matches(&gc->bound_target,
++		gc->global_hook_info ? (HWND)(uintptr_t)gc->global_hook_info->window : NULL)) ? gc->cx : 0;
+ }
+@@ -2092,3 +2108,3 @@
+-	return (gc->active && gc->capturing) ? gc->cy : 0;
++	return (gc->active && gc->capturing && lycan_game_capture_matches(&gc->bound_target,
++		gc->global_hook_info ? (HWND)(uintptr_t)gc->global_hook_info->window : NULL)) ? gc->cy : 0;
+ }
+@@ -2359,3 +2376,3 @@
+-	.id = "game_capture",
++	.id = "lycansync_game_capture",
+ 	.type = OBS_SOURCE_TYPE_INPUT,

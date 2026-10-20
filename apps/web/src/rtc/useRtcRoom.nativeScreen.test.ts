@@ -2339,6 +2339,30 @@ describe('native screen share wiring', () => {
     }
   });
 
+  it.each([
+    ['obsCaptureGameDetectionFailed', '无法确认所选程序的共享方式'],
+    ['obsGameBindingUnavailable', '游戏采集组件版本不匹配'],
+    ['obsGameTargetMismatch', '游戏绘制窗口与所选窗口不符'],
+  ])('游戏采集错误 %s 展示可操作提示，不发布画面', async (code, message) => {
+    rtcMocks.token.mockResolvedValue({ serverUrl: 'wss://example.test', token: 'test-token' });
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { lycanDesktop: {
+        getNativeMediaCapabilities: async () => ({ videoCapture: { available: false, reason: code } }),
+        listNativeVideoSources: vi.fn(), startNativeVideo: rtcMocks.nativeStarts, stopNativeVideo: rtcMocks.nativeStops,
+      } },
+    });
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('group-2');
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
+      expect(rtc.notice.value).toContain(message);
+      expect(rtcMocks.published).not.toHaveBeenCalled();
+      expect(rtcMocks.nativeStarts).not.toHaveBeenCalled();
+    } finally { scope.stop(); }
+  });
+
   it('keeps the new browser microphone processor when an old createTracks request resolves late', async () => {
     rtcMocks.token.mockResolvedValue({ serverUrl: 'wss://example.test', token: 'test-token' });
     const delayedTracks = deferred<never[]>();

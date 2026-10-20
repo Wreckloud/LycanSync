@@ -43,6 +43,43 @@ function fixture(enabled = true) {
   return { monitor, children, readers, activities, timers, reply, activity };
 }
 
+test('采集分类只查所选程序，不受当前动态影响，也不暴露路径给动态订阅者', async () => {
+  const { monitor, children, activities, reply, activity } = fixture();
+  try {
+    activity(0, '另一个游戏');
+    const before = activities.length;
+    const query = monitor.isCaptureGame('C:\\Games\\selected.exe');
+    const command = children[0].commands.at(-1);
+    assert.equal(command.method, 'captureGame');
+    assert.equal(command.executable, 'C:\\Games\\selected.exe');
+    reply(0, command, { game: true });
+    assert.equal(await query, true);
+    const ordinary = monitor.isCaptureGame('C:\\Apps\\app.exe');
+    reply(0, children[0].commands.at(-1), { game: false });
+    assert.equal(await ordinary, false);
+    assert.equal(activities.length, before);
+    await assert.rejects(monitor.isCaptureGame('relative.exe'), /obsCaptureGameDetectionFailed/);
+  } finally { monitor.stop(); }
+});
+
+test('分类响应缺失、超时或配置切换时明确失败，不把未知当普通窗口', async () => {
+  const { monitor, children, timers, reply } = fixture();
+  try {
+    const invalid = assert.rejects(monitor.isCaptureGame('C:\\Games\\a.exe'), /obsCaptureGameDetectionFailed/);
+    reply(0, children[0].commands.at(-1), {});
+    await invalid;
+    const stale = assert.rejects(monitor.isCaptureGame('C:\\Games\\a.exe'), /obsCaptureGameDetectionFailed/);
+    const query = children[0].commands.at(-1);
+    monitor.clearMappings();
+    reply(0, children[0].commands.at(-1));
+    reply(0, query, { game: true });
+    await stale;
+    const timeout = assert.rejects(monitor.isCaptureGame('C:\\Games\\a.exe'), /obsCaptureGameDetectionFailed/);
+    [...timers.values()].find((entry) => entry.delay === 10_000).callback();
+    await timeout;
+  } finally { monitor.stop(); }
+});
+
 test('退出、重启及配置变化后旧 helper 输出不能恢复活动', async () => {
   const { monitor, children, readers, activities, timers, reply, activity } = fixture();
   try {

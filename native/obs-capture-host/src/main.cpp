@@ -3,6 +3,7 @@
 #include <graphics/graphics.h>
 #include <util/base.h>
 #include "window_capture.h"
+#include "game_capture.h"
 
 #include <windows.h>
 #include <d3d11.h>
@@ -50,6 +51,8 @@ struct HostState {
   bool textures_initialized = false;
   bool texture_setup_failed = false;
   bool window_source = false;
+  bool game_source = false;
+  WindowVideoTarget window_target;
   bool suspended = false;
 };
 
@@ -168,14 +171,17 @@ void release_busy_slot(size_t slot_index) {
   if (slot_index < g_host.slots.size()) g_host.slots[slot_index].busy = false;
 }
 
-bool window_delivery_allowed() {
+bool window_delivery_allowed(obs_source_t *source) {
   if (!g_host.window_source) return true;
-  if (const char *error = window_video_failure()) {
+  const char *failure = g_host.game_source ? game_video_failure(source, g_host.window_target) : window_video_failure();
+  if (failure) {
     g_host.texture_setup_failed = true;
-    write_event(error);
+    write_event(failure);
     return false;
   }
-  const bool suspended = window_video_suspended();
+  const bool suspended = g_host.game_source
+      ? IsIconic(g_host.window_target.window) || !IsWindowVisible(g_host.window_target.window)
+      : window_video_suspended();
   if (suspended != g_host.suspended) {
     g_host.suspended = suspended;
     const std::lock_guard<std::mutex> lock(g_output_mutex);
@@ -190,8 +196,8 @@ void render_shared_frame(void *parameter) {
   const std::lock_guard<std::mutex> render_lock(g_render_mutex);
   if (g_host.texture_setup_failed) return;
   ++g_host.rendered_frames;
-  if (!window_delivery_allowed()) return;
   auto *capture_source = static_cast<obs_source_t *>(parameter);
+  if (!window_delivery_allowed(capture_source)) return;
   // 初始化时主画布已能渲染，但来源尚未就绪，不能把空画布计作首帧交付。
   if (!obs_source_get_width(capture_source) || !obs_source_get_height(capture_source)) return;
   if (!g_host.textures_initialized && !initialize_textures()) {
@@ -258,7 +264,7 @@ void render_shared_frame(void *parameter) {
     return;
   }
   // 复制期间也可能关闭或最小化；交付前复核，绝不按旧 HWND 接管另一个窗口。
-  if (!window_delivery_allowed()) {
+  if (!window_delivery_allowed(capture_source)) {
     release_busy_slot(slot_index);
     return;
   }
@@ -391,12 +397,13 @@ void destroy_textures() {
 
 int wmain(int argc, wchar_t **argv) {
   if (argc != 12) {
-    std::wcerr << L"usage: lycansync-obs-capture-host <win-capture.dll> <module-data-dir> <monitor|window> <target> <capture-cursor:0|1> <hide-border:0|1> <session-id> <module-config-dir> <max-fps:30|60|120> <window-property> <window-property-value>\n";
+    std::wcerr << L"usage: lycansync-obs-capture-host <win-capture.dll> <module-data-dir> <monitor|window|game> <target> <capture-cursor:0|1> <hide-border:0|1> <session-id> <module-config-dir> <max-fps:30|60|120> <window-property> <window-property-value>\n";
     return 2;
   }
 
   const std::wstring_view source_kind(argv[3]);
-  const bool window_source = source_kind == L"window";
+  const bool game_source = source_kind == L"game";
+  const bool window_source = source_kind == L"window" || game_source;
   const std::string session_id = to_utf8(argv[7]);
   const std::string config_path = to_utf8(argv[8]);
   const std::string frame_rate_argument = to_utf8(argv[9]);
@@ -418,6 +425,7 @@ int wmain(int argc, wchar_t **argv) {
   }
   g_host.session_id = session_id;
   g_host.window_source = window_source;
+  g_host.game_source = game_source;
   WindowVideoTarget window_target;
   if (window_source) {
     const auto parse_pointer = [](const std::wstring_view argument, uintptr_t &value) {
@@ -435,6 +443,7 @@ int wmain(int argc, wchar_t **argv) {
     }
     window_target.window = reinterpret_cast<HWND>(window_handle);
     if (!window_video_target_valid(window_target)) { write_event("captureTargetClosed"); return 2; }
+    g_host.window_target = window_target;
   }
 
   base_set_log_handler(obs_log_handler, nullptr);
@@ -484,18 +493,20 @@ int wmain(int argc, wchar_t **argv) {
   const std::string data_path = to_utf8(argv[2]);
   // libobs 用正斜杠提取模块名，否则会把 Windows 绝对路径拼进缓存目录。
   std::replace(module_path.begin(), module_path.end(), '\\', '/');
-  if (!window_source && (module_path.empty() || data_path.empty()
+  if ((!window_source || game_source) && (module_path.empty() || data_path.empty()
       || obs_open_module(&module, module_path.c_str(), data_path.c_str()) != MODULE_SUCCESS
       || !obs_init_module(module))) {
     write_event("obsCaptureModuleLoadFailed");
     obs_shutdown();
     return 1;
   }
-  if (!window_source) obs_post_load_modules();
+  if (!window_source || game_source) obs_post_load_modules();
 
   obs_source_t *source = nullptr;
   const char *source_error = "obsDisplaySourceUnavailable";
-  if (window_source) {
+  if (game_source) {
+    source = create_game_video_source(window_target, capture_cursor_argument == L"0", source_error);
+  } else if (window_source) {
     source = create_window_video_source(window_target, std::filesystem::path(argv[0]).parent_path().wstring(),
         capture_cursor_argument == L"0", hide_border_argument == L"1", source_error);
   } else {

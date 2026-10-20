@@ -85,6 +85,9 @@ function captureErrorMessage(error: unknown, source: MediaSource): string {
       if (code === 'nativeVideoStopNotConfirmed') return '原生屏幕共享停止未确认，请重启客户端后再试。';
       if (code === 'captureSettingsUnsupported') return '当前 Windows 不支持所选屏幕共享设置，请关闭对应选项后重试。';
       if (code === 'captureBorderAccessDenied') return '未获准隐藏共享边框。请关闭该选项后重试；此功能需要 Windows 授权及安装包权限支持。';
+      if (code === 'obsCaptureGameDetectionFailed') return '无法确认所选程序的共享方式，请重新选择窗口后重试。';
+      if (code === 'obsGameBindingUnavailable') return '游戏采集组件版本不匹配，请重新构建或更新客户端。';
+      if (code === 'obsGameTargetMismatch') return '游戏绘制窗口与所选窗口不符，已停止共享，请重新选择。';
       if (code) return `屏幕共享操作失败（${code}）。`;
     }
   }

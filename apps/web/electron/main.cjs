@@ -182,7 +182,8 @@ const obsCaptureHost = obsHostSettings ? new ObsCaptureHostManager({
     const video = nativeVideoSession;
     if (video?.engine === 'obs' && video.sessionId === state.videoSessionId && !video.stopping) {
       recordVideoFailure('obsCaptureHost', error);
-      const code = ['captureTargetClosed', 'captureSettingsUnsupported', 'captureBorderAccessDenied'].includes(error.message)
+      const code = ['captureTargetClosed', 'captureSettingsUnsupported', 'captureBorderAccessDenied',
+        'obsGameBindingUnavailable', 'obsGameTargetMismatch'].includes(error.message)
         ? error.message : 'obsCaptureHostFailed';
       notifyNativeVideoError(video, code);
     }
@@ -715,7 +716,8 @@ async function startNativeVideo(sourceId, maxFps, settings) {
   const engine = obsCaptureHost ? 'obs' : 'rust';
   const obsSource = engine === 'obs' ? nativeVideoSourcesById.get(sourceId) : undefined;
   if (engine === 'obs' && (!obsSource || !sourceId.startsWith(`${obsSource.kind}:`))) throw new Error('videoSourceExpired');
-  const video = { sessionId, sourceId, engine, imported: new Map(), pendingSlotReleases: new Set(), stopping: false, failureNotified: false };
+  const video = { sessionId, sourceId, sourceKind: obsSource?.kind, engine,
+    imported: new Map(), pendingSlotReleases: new Set(), stopping: false, failureNotified: false };
   nativeVideoSession = video;
   try {
     let target;
@@ -723,6 +725,10 @@ async function startNativeVideo(sourceId, maxFps, settings) {
       const reservation = mediaHelper.reserveWindowVideo(sessionId, sourceId);
       video.targetState = mediaHelper.videoCapture?.state;
       target = await reservation;
+      const game = await activityMonitor.isCaptureGame(target.executable);
+      // 程序分类只决定采集方式；授权范围仍是注册表预留的精确窗口实例。
+      const { windowId, propertyName, propertyValue } = target;
+      target = { kind: game ? 'game' : 'window', windowId, propertyName, propertyValue };
     } else if (engine === 'obs') target = { kind: 'monitor', monitorName: obsSource.title };
     if (closing || video.stopping || nativeVideoSession !== video) throw new Error('nativeVideoSessionStopped');
     const start = engine === 'obs'
@@ -1385,13 +1391,13 @@ ipcMain.handle('media:diagnostics', async (event) => {
     Object.assign(diagnostics, {
       helperVersion: obsDiagnostics.helperVersion, captureBackend: 'obsLibobs',
       state: video.stopping ? 'stopping' : 'running', sessionId: video.sessionId, available: Boolean(state?.alive),
-      sourceKind: 'monitor', frameWidth: 1920, frameHeight: 1080,
+      sourceKind: video.sourceKind, frameWidth: 1920, frameHeight: 1080,
       framesReceived: obsDiagnostics.renderedFrames, framesProcessed: obsDiagnostics.bridgeFrames,
       droppedNotifications: null, rawCaptureFps: null, probeProcessedFps: null,
       videoOutputFps: null, videoOutputDroppedFrames: null, obsBridgeDroppedFrames: obsDiagnostics.bridgeDroppedFrames,
       rawFrameIntervalP50Ms: null, rawFrameIntervalP95Ms: null, rawFrameIntervalP99Ms: null,
       rawTimestampAnomalies: null, lastFrameAgeMs: null, sizeChanges: null, framePoolRecreates: null,
-      lastCaptureError: null, stopDurationMs: null, captureSuspended: null,
+      lastCaptureError: null, stopDurationMs: null, captureSuspended: video.suspended ?? null,
     });
   } else {
     diagnostics.obsBridgeDroppedFrames = null;

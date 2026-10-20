@@ -34,6 +34,10 @@ window.obsCaptureTest = {
       input: session?.readDiagnostics(), readyState: track?.mediaStreamTrack.readyState };
   },
   markerCyan() { marker.style.background = '#10d8f0'; },
+  async diagnostics() {
+    const stats = await window.lycanDesktop.getNativeMediaDiagnostics();
+    return { sourceKind: stats.sourceKind, captureSuspended: stats.captureSuspended, captureBackend: stats.captureBackend };
+  },
   async configureFrameRate(maxFps) {
     const originalTrack = track.mediaStreamTrack;
     const result = await window.lycanDesktop.configureNativeVideo(session.captureSessionId, maxFps);
