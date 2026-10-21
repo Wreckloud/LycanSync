@@ -776,22 +776,17 @@ function validateVideoSources(message) {
 
 function validateDiagnostics(message) {
   if (typeof message.helperVersion !== 'string' || !/^[\w.+-]{1,80}$/.test(message.helperVersion)
-      || (message.captureBackend !== null && message.captureBackend !== 'windowsGraphicsCapture')
+      || message.captureBackend !== null
       || !['idle', 'starting', 'running', 'stopping'].includes(message.state)
       || (message.sessionId !== null && (typeof message.sessionId !== 'string' || message.sessionId.length > 128))
       || (message.sourceKind !== null && !['monitor', 'window'].includes(message.sourceKind))) {
     throw new Error('mediaHelperInvalidDiagnostics');
   }
   const numericFields = [
-    'frameWidth', 'frameHeight', 'framesReceived', 'framesProcessed', 'droppedNotifications',
-    'rawCaptureFps', 'probeProcessedFps', 'rawFrameIntervalP50Ms', 'rawFrameIntervalP95Ms',
-    'rawFrameIntervalP99Ms', 'rawTimestampAnomalies', 'lastFrameAgeMs', 'sizeChanges',
-    'framePoolRecreates', 'stopDurationMs',
-    'videoOutputFps', 'videoOutputDroppedFrames',
+    'frameWidth', 'frameHeight', 'framesReceived', 'framesProcessed',
   ];
   for (const field of numericFields) {
     const value = message[field];
-    if (['framePoolRecreates', 'videoOutputFps', 'videoOutputDroppedFrames'].includes(field) && value === undefined) continue;
     if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) {
       throw new Error('mediaHelperInvalidDiagnostics');
     }
@@ -802,20 +797,12 @@ function validateDiagnostics(message) {
   }
   if (typeof message.available !== 'boolean'
       || (message.captureSuspended !== undefined && message.captureSuspended !== null
-        && typeof message.captureSuspended !== 'boolean')
-      || (message.lastCaptureError !== null
-        && (typeof message.lastCaptureError !== 'string' || message.lastCaptureError.length > 64
-          || !/^[a-z][A-Za-z0-9]*$/.test(message.lastCaptureError)))) {
+        && typeof message.captureSuspended !== 'boolean')) {
     throw new Error('mediaHelperInvalidDiagnostics');
   }
   const diagnostics = Object.fromEntries(['helperVersion', 'captureBackend', 'state', 'sessionId', 'available', 'sourceKind', 'frameWidth', 'frameHeight',
-    'framesReceived', 'framesProcessed', 'droppedNotifications', 'rawCaptureFps', 'probeProcessedFps',
-    'rawFrameIntervalP50Ms', 'rawFrameIntervalP95Ms', 'rawFrameIntervalP99Ms', 'rawTimestampAnomalies',
-    'lastFrameAgeMs', 'sizeChanges', 'framePoolRecreates', 'lastCaptureError', 'stopDurationMs', 'captureSuspended']
+    'framesReceived', 'framesProcessed', 'captureSuspended']
     .map((field) => [field, message[field]]));
-  diagnostics.framePoolRecreates ??= null;
-  diagnostics.videoOutputFps = message.videoOutputFps ?? null;
-  diagnostics.videoOutputDroppedFrames = message.videoOutputDroppedFrames ?? null;
   diagnostics.captureSuspended ??= null;
   diagnostics.microphoneCaptureDroppedChunks = message.microphoneCaptureDroppedChunks ?? 0;
   const audio = message.screenShareAudio;

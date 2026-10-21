@@ -140,7 +140,7 @@ function exportFixture() {
     ipcMain: { handle: (_name, callback) => { exportReport = callback; } },
   };
   runInNewContext(main.slice(start, end), state);
-  const text = JSON.stringify({ kind: 'lycansync-diagnostics', schemaVersion: 4,
+  const text = JSON.stringify({ kind: 'lycansync-diagnostics', schemaVersion: 5,
     startedAt: '2026-10-15T00:00:00Z', endedAt: '2026-10-15T00:00:01Z', samples: [] });
   return { state, calls, text, exportReport: (...args) => exportReport(...args) };
 }
@@ -152,7 +152,7 @@ test('诊断导出仅允许可信页面，验证格式并通过用户选址写�
   assert.equal(calls.read, 0);
   state.trustedSender = () => true;
   await assert.rejects(exportReport({}, '{}'), /无效/);
-  await assert.rejects(exportReport({}, text.replace('"schemaVersion":4', '"schemaVersion":3')), /无效/);
+  await assert.rejects(exportReport({}, text.replace('"schemaVersion":5', '"schemaVersion":4')), /无效/);
   await assert.rejects(exportReport({}, 'x'.repeat(8 * 1024 * 1024 + 1)), /过大/);
   await exportReport({}, text);
   assert.equal(calls.writes.length, 1);

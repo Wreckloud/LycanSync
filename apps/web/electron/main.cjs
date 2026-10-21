@@ -1209,7 +1209,7 @@ ipcMain.handle('diagnostics:export', async (event, text) => {
   if (!trustedSender(event) || closing || diagnosticExportPending) throw new Error('当前不能导出诊断。');
   if (typeof text !== 'string' || Buffer.byteLength(text) > 8 * 1024 * 1024) throw new Error('诊断报告过大或无效。');
   const report = JSON.parse(text);
-  if (!report || report.kind !== 'lycansync-diagnostics' || report.schemaVersion !== 4 || !Array.isArray(report.samples)
+  if (!report || report.kind !== 'lycansync-diagnostics' || report.schemaVersion !== 5 || !Array.isArray(report.samples)
       || report.samples.length > 900 || !Number.isFinite(Date.parse(report.startedAt))
       || !Number.isFinite(Date.parse(report.endedAt)) || Date.parse(report.endedAt) < Date.parse(report.startedAt)) {
     throw new Error('诊断报告无效。');
@@ -1447,11 +1447,7 @@ ipcMain.handle('media:diagnostics', async (event) => {
       state: video.stopping ? 'stopping' : 'running', sessionId: video.sessionId, available: Boolean(state?.alive),
       sourceKind: video.sourceKind, frameWidth: video.frameWidth ?? null, frameHeight: video.frameHeight ?? null,
       framesReceived: obsDiagnostics.renderedFrames, framesProcessed: obsDiagnostics.bridgeFrames,
-      droppedNotifications: null, rawCaptureFps: null, probeProcessedFps: null,
-      videoOutputFps: null, videoOutputDroppedFrames: null, obsBridgeDroppedFrames: obsDiagnostics.bridgeDroppedFrames,
-      rawFrameIntervalP50Ms: null, rawFrameIntervalP95Ms: null, rawFrameIntervalP99Ms: null,
-      rawTimestampAnomalies: null, lastFrameAgeMs: null, sizeChanges: null, framePoolRecreates: null,
-      lastCaptureError: null, stopDurationMs: null, captureSuspended: video.suspended ?? null,
+      obsBridgeDroppedFrames: obsDiagnostics.bridgeDroppedFrames, captureSuspended: video.suspended ?? null,
       screenShareAudio: { ...obsDiagnostics.screenShareAudio, sessionId: video.sessionId, sourceKind: video.sourceKind },
     });
   } else {

@@ -10,11 +10,19 @@ export interface VideoLayerStats {
   limitation: string | null;
   lostPackets: number | null;
   encoder: string | null;
+  powerEfficientEncoder: boolean | null;
   averageEncodeMs: number | null;
   droppedFrames: number | null;
+  roundTripMs: number | null;
+  receiverReportedLossPercent: number | null;
+  feedbackAgeMs: number | null;
+  receiveLossPercent: number | null;
+  jitterBufferMs: number | null;
 }
 
-type PreviousSample = { bytes: number | null; frames: number | null; timestamp: number; encodeTime: number | null };
+type PreviousSample = { bytes: number | null; frames: number | null; timestamp: number; encodeTime: number | null;
+  packetsReceived: number | null; packetsLost: number | null; jitterBufferDelay: number | null;
+  jitterBufferEmittedCount: number | null; feedbackTimestamp: number | null };
 type PreviousSourceSample = { frames: number; timestamp: number };
 
 export interface VideoSourceSample {
@@ -45,14 +53,6 @@ export function formatTrackTarget(target: TrackTarget): string {
 }
 
 /** 采集源帧率位于编码之前；轨道设置里的 frameRate 只是约束结果，不能替代此值。 */
-export function readVideoSourceFps(
-  report: RTCStatsReport,
-  trackId: string,
-  previous: Map<string, PreviousSourceSample>,
-): number | null {
-  return readVideoSourceSample(report, trackId, previous).fps;
-}
-
 export function readVideoSourceSample(
   report: RTCStatsReport,
   trackId: string,
@@ -94,11 +94,34 @@ export function readVideoLayers(
       ? stat.totalEncodeTime : null;
     const sampleKey = `${trackId}:${stat.id}`;
     const last = previous.get(sampleKey);
-    if (typeof bytes === 'number' || typeof frames === 'number' || encodeTime !== null) previous.set(sampleKey, {
-      bytes: typeof bytes === 'number' ? bytes : last?.bytes ?? null,
+    let remote: { timestamp?: number; roundTripTime?: number; fractionLost?: number } | undefined;
+    if (direction === 'outbound-rtp') {
+      // 只关联当前编码层的接收报告，不能拿同一房间其他轨道的网络数据补缺。
+      report.forEach((candidate) => {
+        if (candidate.type === 'remote-inbound-rtp' && (candidate.localId === stat.id || candidate.id === stat.remoteId)) {
+          remote = candidate;
+        }
+      });
+    }
+    const feedbackTimestamp = finite(remote?.timestamp);
+    const hasNewFeedback = feedbackTimestamp !== null && (last?.feedbackTimestamp === null
+      || last?.feedbackTimestamp === undefined || feedbackTimestamp > last.feedbackTimestamp);
+    const roundTripTime = finite(remote?.roundTripTime);
+    const fractionLost = finite(remote?.fractionLost);
+    const packetsReceived = direction === 'inbound-rtp' ? finite(stat.packetsReceived) : null;
+    const packetsLost = direction === 'inbound-rtp' ? finite(stat.packetsLost) : null;
+    const jitterBufferDelay = direction === 'inbound-rtp' ? finite(stat.jitterBufferDelay) : null;
+    const jitterBufferEmittedCount = direction === 'inbound-rtp' ? finite(stat.jitterBufferEmittedCount) : null;
+    previous.set(sampleKey, {
+      bytes: finite(bytes),
       frames: typeof frames === 'number' ? frames : null, timestamp: stat.timestamp, encodeTime,
+      packetsReceived, packetsLost, jitterBufferDelay, jitterBufferEmittedCount, feedbackTimestamp,
     });
     const elapsedSeconds = last ? (stat.timestamp - last.timestamp) / 1000 : 0;
+    const receivedDelta = elapsedSeconds > 0 ? counterDelta(packetsReceived, last?.packetsReceived) : null;
+    const lostDelta = elapsedSeconds > 0 ? counterDelta(packetsLost, last?.packetsLost) : null;
+    const bufferDelayDelta = elapsedSeconds > 0 ? counterDelta(jitterBufferDelay, last?.jitterBufferDelay) : null;
+    const bufferFramesDelta = elapsedSeconds > 0 ? counterDelta(jitterBufferEmittedCount, last?.jitterBufferEmittedCount) : null;
     const bitrateKbps = last && last.bytes !== null && typeof bytes === 'number' && elapsedSeconds > 0 && bytes >= last.bytes
       ? Math.round((bytes - last.bytes) * 8 / elapsedSeconds / 1000) : null;
     const hasComparableFrames = last && last.frames !== null && typeof frames === 'number'
@@ -130,12 +153,34 @@ export function readVideoLayers(
         ? stat.packetsLost : null,
       encoder: direction === 'outbound-rtp' && typeof stat.encoderImplementation === 'string'
         ? stat.encoderImplementation : null,
+      powerEfficientEncoder: direction === 'outbound-rtp' && typeof stat.powerEfficientEncoder === 'boolean'
+        ? stat.powerEfficientEncoder : null,
       averageEncodeMs: encodeTime !== null && last?.encodeTime !== null && last?.encodeTime !== undefined
         && encodedFrames > 0 && encodeTime >= last.encodeTime
         ? Math.round((encodeTime - last.encodeTime) / encodedFrames * 1000 * 10) / 10 : null,
       droppedFrames: direction === 'inbound-rtp' && typeof stat.framesDropped === 'number'
         ? stat.framesDropped : null,
+      // RTT/报告丢包仅代表本机到 SFU；旧 RTCP 报告不重复冒充本区间的新反馈。
+      roundTripMs: hasNewFeedback && roundTripTime !== null && roundTripTime >= 0
+        ? Math.round(roundTripTime * 1000) : null,
+      receiverReportedLossPercent: hasNewFeedback && fractionLost !== null
+        && fractionLost >= 0 && fractionLost <= 1 ? Math.round(fractionLost * 10_000) / 100 : null,
+      feedbackAgeMs: feedbackTimestamp !== null && stat.timestamp >= feedbackTimestamp
+        ? Math.round(stat.timestamp - feedbackTimestamp) : null,
+      receiveLossPercent: receivedDelta !== null && lostDelta !== null && receivedDelta + lostDelta > 0
+        ? Math.round(lostDelta / (receivedDelta + lostDelta) * 10_000) / 100 : null,
+      jitterBufferMs: bufferDelayDelta !== null && bufferFramesDelta !== null && bufferFramesDelta > 0
+        ? Math.round(bufferDelayDelta / bufferFramesDelta * 1000 * 10) / 10 : null,
     });
   });
   return layers.sort((left, right) => left.size.localeCompare(right.size));
+}
+
+function finite(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function counterDelta(current: number | null, previous: number | null | undefined): number | null {
+  return current !== null && previous !== null && previous !== undefined && current >= 0 && previous >= 0 && current >= previous
+    ? current - previous : null;
 }

@@ -146,20 +146,6 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
             frame_height: None,
             frames_received: None,
             frames_processed: None,
-            dropped_notifications: None,
-            raw_capture_fps: None,
-            probe_processed_fps: None,
-            video_output_fps: None,
-            video_output_dropped_frames: None,
-            raw_frame_interval_p50_ms: None,
-            raw_frame_interval_p95_ms: None,
-            raw_frame_interval_p99_ms: None,
-            raw_timestamp_anomalies: None,
-            last_frame_age_ms: None,
-            size_changes: None,
-            frame_pool_recreates: None,
-            last_capture_error: None,
-            stop_duration_ms: None,
             capture_suspended: None,
             microphone_capture_dropped_chunks: runtime.microphone_capture.dropped_chunks(),
             screen_share_audio: Box::default(),
@@ -1018,7 +1004,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_exposes_distinct_rate_and_interval_fields_as_unavailable_when_idle() {
+    fn diagnostics_does_not_expose_removed_video_probe_fields() {
         let events = execute(
             r#"{"protocolVersion":1,"requestId":"diagnostics-1","command":"diagnostics"}
 {"protocolVersion":1,"requestId":"shutdown-1","command":"shutdown"}
@@ -1030,34 +1016,15 @@ mod tests {
         assert_eq!(diagnostics["captureBackend"], serde_json::Value::Null);
         for field in [
             "rawCaptureFps",
-            "probeProcessedFps",
             "rawFrameIntervalP50Ms",
             "rawFrameIntervalP95Ms",
             "rawFrameIntervalP99Ms",
             "rawTimestampAnomalies",
             "framePoolRecreates",
         ] {
-            assert!(diagnostics.get(field).is_some(), "missing {field}");
+            assert!(diagnostics.get(field).is_none(), "obsolete {field}");
         }
-        assert_eq!(diagnostics["rawCaptureFps"], serde_json::Value::Null);
-        assert_eq!(diagnostics["probeProcessedFps"], serde_json::Value::Null);
-        assert_eq!(diagnostics["framePoolRecreates"], serde_json::Value::Null);
-        assert_eq!(
-            diagnostics["rawFrameIntervalP50Ms"],
-            serde_json::Value::Null
-        );
-        assert_eq!(
-            diagnostics["rawFrameIntervalP95Ms"],
-            serde_json::Value::Null
-        );
-        assert_eq!(
-            diagnostics["rawFrameIntervalP99Ms"],
-            serde_json::Value::Null
-        );
-        assert_eq!(
-            diagnostics["rawTimestampAnomalies"],
-            serde_json::Value::Null
-        );
+        assert!(diagnostics.get("probeProcessedFps").is_none());
     }
 
     #[test]

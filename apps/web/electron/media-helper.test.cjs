@@ -218,12 +218,6 @@ class FakeHelper extends EventEmitter {
         frameHeight: null,
         framesReceived: null,
         framesProcessed: null,
-        droppedNotifications: null,
-        rawCaptureFps: null,
-        probeProcessedFps: null,
-        rawFrameIntervalP50Ms: null, rawFrameIntervalP95Ms: null, rawFrameIntervalP99Ms: null,
-        rawTimestampAnomalies: 0, lastFrameAgeMs: 0, sizeChanges: 0, framePoolRecreates: 0,
-        lastCaptureError: null, stopDurationMs: null,
         screenShareAudio: { state: 'idle', sessionId: null,
           sourceKind: null,
           sampleRate: null,
@@ -232,7 +226,6 @@ class FakeHelper extends EventEmitter {
           framesReceived: null,
           silentPackets: 0, droppedAudioChunks: 0, lastError: null },
       };
-      if (this.mode.omitFramePoolRecreates) delete diagnostics.framePoolRecreates;
       if (this.mode.omitMicrophoneCaptureDroppedChunks) delete diagnostics.microphoneCaptureDroppedChunks;
       if (this.mode.captureSuspended !== undefined) diagnostics.captureSuspended = this.mode.captureSuspended;
       this.writeResponse({ ...diagnostics, ...this.mode.diagnosticsOverrides });
@@ -677,12 +670,13 @@ test('source ids expire when the lazy helper is reclaimed and do not start a rep
   await manager.shutdown();
 });
 
-test('诊断保留真实helper版本和后端，可选帧池计数缺失仍按未知处理', async () => {
-  const { manager } = createManager({ omitFramePoolRecreates: true, omitMicrophoneCaptureDroppedChunks: true });
+test('诊断保留真实helper版本和麦克风统计，不再补回已移除的视频探针字段', async () => {
+  const { manager } = createManager({ omitMicrophoneCaptureDroppedChunks: true });
   const diagnostics = await manager.getDiagnostics();
   assert.equal(diagnostics.helperVersion, '0.1.0');
   assert.equal(diagnostics.captureBackend, null);
-  assert.equal(diagnostics.framePoolRecreates, null);
+  assert.equal('framePoolRecreates' in diagnostics, false);
+  assert.equal('probeProcessedFps' in diagnostics, false);
   assert.equal((await manager.getDiagnostics()).microphoneCaptureDroppedChunks, 0);
   await manager.shutdown();
 });
@@ -693,7 +687,7 @@ test('运行中的原生后端按协议保留，非法版本或后端不能进�
     assert.equal((await manager.getDiagnostics()).captureBackend, null);
   } finally { await manager.shutdown(); }
   for (const diagnosticsOverrides of [{ helperVersion: undefined }, { helperVersion: 'https://private/token' },
-    { captureBackend: 'unverifiedBackend' }]) {
+    { captureBackend: 'unverifiedBackend' }, { captureBackend: 'windowsGraphicsCapture' }]) {
     await t.test(JSON.stringify(diagnosticsOverrides), async () => {
       const { manager } = createManager({ diagnosticsOverrides });
       try { await assert.rejects(manager.getDiagnostics(), /mediaHelperInvalidDiagnostics/); }

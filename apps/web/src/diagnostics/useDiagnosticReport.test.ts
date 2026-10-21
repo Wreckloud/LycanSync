@@ -20,7 +20,9 @@ function snapshot(): MediaDiagnosticsSnapshot {
         backpressureDroppedFrames: 50, receivedFps: 100, submittedFps: 75, backpressureDropRate: 25 },
       sessionKey: null, layers: [{ id: 'private-track-id', active: true, size: '1920×1080', frameCount: 180,
         fps: 58, intervalMs: 2000, bitrateKbps: 8000, codec: 'H264', limitation: null, lostPackets: null, encoder: 'testEncoder',
-        averageEncodeMs: 2, droppedFrames: null }] }],
+        averageEncodeMs: 2, droppedFrames: null, powerEfficientEncoder: true,
+        roundTripMs: 25, receiverReportedLossPercent: 1.5, feedbackAgeMs: 20,
+        receiveLossPercent: null, jitterBufferMs: null }] }],
     audio: [], process: null, native: null, failures: [] };
 }
 function setup() {
@@ -42,6 +44,49 @@ beforeEach(() => {
   collect.mockReset().mockImplementation(async () => snapshot());
 });
 afterEach(() => { scopes.splice(0).forEach((scope) => scope.stop()); vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+it('报告只导出诊断字段，摘要包含各阶段证据和编码网络统计，不推断硬件编码或端到端延迟', async () => {
+  const next = snapshot();
+  next.streams[0].layers[0].averageEncodeMs = 2.4;
+  Object.assign(next.streams[0].layers[0], { receiveLossPercent: 3, jitterBufferMs: 18.5 });
+  Object.assign(next.streams[0].layers[0], { address: 'private-ip-address', remoteId: 'private-remote-id' });
+  collect.mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(next);
+  const { report, exportDiagnosticReport } = setup();
+  report.start(); await vi.advanceTimersByTimeAsync(2000); report.stop(); await report.save('');
+  const text = exportDiagnosticReport.mock.calls[0][0];
+  const result = JSON.parse(text);
+  expect(result.samples[1].streams[0].layers[0]).toMatchObject({ powerEfficientEncoder: true,
+    roundTripMs: 25, receiverReportedLossPercent: 1.5, receiveLossPercent: 3, jitterBufferMs: 18.5 });
+  const segment = result.summary.segments[0];
+  expect(segment.typicalFps.encodingLayers[0]).toMatchObject({ typicalBitrateKbps: 8000, typicalEncodeMs: 2.4,
+    encoderImplementations: ['testEncoder'], powerEfficientEncoderValues: [true],
+    network: { typicalRoundTripMs: 25, typicalReceiverReportedLossPercent: 1.5, typicalReceiveLossPercent: 3,
+      typicalJitterBufferMs: 18.5, validSamples: { receiveLoss: 1, jitterBuffer: 1 } } });
+  expect(segment.evidence).toContainEqual({ stage: '网络反馈', available: true });
+  expect(segment.evidence).toContainEqual({ stage: '本机播放', available: false });
+  expect(result.measurements.powerEfficientEncoder).toContain('not-proof');
+  expect(text).not.toMatch(/private-ip-address|private-remote-id/);
+  expect(result.samples[0].streams[0].layers[0]).toMatchObject({ receiveLossPercent: null, jitterBufferMs: null });
+});
+
+it('暂停、停层与恢复边界不进入诊断摘要，缺失网络反馈不当作正常网络', async () => {
+  const paused = snapshot(); paused.streams[0].subscription.muted = true;
+  Object.assign(paused.streams[0].layers[0], { roundTripMs: 999, receiverReportedLossPercent: 99 });
+  const resumed = snapshot(); Object.assign(resumed.streams[0].layers[0], { roundTripMs: 888 });
+  const active = snapshot(); Object.assign(active.streams[0].layers[0], { roundTripMs: null, receiverReportedLossPercent: null });
+  collect.mockResolvedValueOnce(snapshot()).mockResolvedValueOnce(paused).mockResolvedValueOnce(resumed).mockResolvedValueOnce(active);
+  const { report, exportDiagnosticReport } = setup();
+  report.start(); await vi.advanceTimersByTimeAsync(6000); report.stop(); await report.save('');
+  const result = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
+  // 初始接收报告仍是有效快照，但暂停与恢复时的极端值不得污染摘要。
+  expect(result.summary.segments[0].typicalFps.encodingLayers[0].network.typicalRoundTripMs).toBe(25);
+  const unavailable = snapshot(); Object.assign(unavailable.streams[0].layers[0], { roundTripMs: null, receiverReportedLossPercent: null });
+  collect.mockResolvedValue(unavailable);
+  report.start(); await vi.advanceTimersByTimeAsync(2000); report.stop(); await report.save('');
+  const missing = JSON.parse(exportDiagnosticReport.mock.calls[1][0]).summary.segments[0];
+  expect(missing.evidence).toContainEqual({ stage: '网络反馈', available: false });
+  expect(missing.warnings).toContain('没有有效的新接收报告，不能据此判断发送网络正常或异常。');
+});
 
 it('默认不采样；查看时读取，隐藏后停止；主动记录返回应用后继续', async () => {
   const { report } = setup();
@@ -121,7 +166,7 @@ it('导出按记录时参数保存，匿名化身份/轨道ID，不使用导出�
   expect(text).not.toContain('private-user-id'); expect(text).not.toContain('private-track-id');
   expect(text).not.toContain('私人昵称');
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(4);
+  expect(result.schemaVersion).toBe(5);
   expect(result.measurements.process).toEqual({ scope: 'electron-app-metrics', memory: 'sum-working-set',
     includesNativeHelpers: false, sharedPagesMayBeCountedMoreThanOnce: true });
   expect(result.samples[0]).toMatchObject({ remoteParticipantCount: 0, roomState: 'connected', dynacast: true });
@@ -312,7 +357,7 @@ it('未知指标保留null，不把非有限数值或原始异常当成有效统
 
 it('新增诊断只导出版本、后端和计数，不导出会话、帧对象或附加身份字段', () => {
   const input = snapshot();
-  input.native = { helperVersion: '0.1.0', captureBackend: 'windowsGraphicsCapture', state: 'running',
+  input.native = { helperVersion: '32.2.2', captureBackend: 'obsLibobs', state: 'running',
     sessionId: 'private-native-session', available: true, sourceKind: 'window' } as NativeCaptureDiagnostics;
   input.streams[0].nativeInput = { sessionId: 'private-session', receivedFrames: 10, submittedFrames: 7, completedWrites: 6,
     backpressureDroppedFrames: 2, suspendedDroppedFrames: 1, writeFailures: 0, placeholderFrames: 3,
@@ -320,7 +365,7 @@ it('新增诊断只导出版本、后端和计数，不导出会话、帧对象�
   Object.assign(input.streams[0].nativeInput!, { frame: { secret: 'private-frame' }, sessionId: 'private-session' });
   Object.assign(input.streams[0].subscription, { identity: 'private-identity' });
   const exported = diagnosticReportSample(input, new Map());
-  expect(exported.native).toMatchObject({ helperVersion: '0.1.0', captureBackend: 'windowsGraphicsCapture' });
+  expect(exported.native).toMatchObject({ helperVersion: '32.2.2', captureBackend: 'obsLibobs' });
   expect(exported.streams[0].nativeInput).toEqual({ receivedFrames: 10, submittedFrames: 7, completedWrites: 6,
     backpressureDroppedFrames: 2, suspendedDroppedFrames: 1, writeFailures: 0, placeholderFrames: 3,
     pendingWrite: true, firstFrameMs: 20 });
@@ -351,7 +396,7 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，槽位丢帧只取本
   report.stop(); await report.save('');
   const text = exportDiagnosticReport.mock.calls[0][0];
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(4);
+  expect(result.schemaVersion).toBe(5);
   expect(result.summary.segments).toHaveLength(1);
   expect(result.samples[0].native).toMatchObject({ helperVersion: '32.2.2', captureBackend: 'obsLibobs' });
   expect(result.summary.segments[0]).toMatchObject({ captureMode: 'obsLibobs',

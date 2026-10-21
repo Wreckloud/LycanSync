@@ -61,7 +61,15 @@ function formatFpsInterval(intervalMs: number | null) {
         <template v-if="layer.droppedFrames !== null"> · 累计解码丢帧 {{ layer.droppedFrames }}</template>
         <template v-if="layer.averageEncodeMs !== null"> · 编码 {{ layer.averageEncodeMs }} ms/帧</template>
         <template v-if="layer.encoder"> · 编码器 {{ layer.encoder }}</template>
+        <template v-if="stream.direction === '发送'"> · 节能编码标志 {{ layer.powerEfficientEncoder === null ? '未知' : layer.powerEfficientEncoder ? '是' : '否' }}（非硬件编码结论）</template>
+        <template v-if="layer.roundTripMs !== null"> · 到 SFU RTT {{ layer.roundTripMs }} ms</template>
+        <template v-if="layer.receiverReportedLossPercent !== null"> · SFU 报告丢包 {{ layer.receiverReportedLossPercent }}%</template>
+        <template v-if="layer.feedbackAgeMs !== null"> · 接收报告距今 {{ layer.feedbackAgeMs }} ms</template>
+        <template v-if="layer.receiveLossPercent !== null"> · 接收区间丢包 {{ layer.receiveLossPercent }}%</template>
+        <template v-if="layer.jitterBufferMs !== null"> · 接收缓冲 {{ layer.jitterBufferMs }} ms/帧</template>
       </small>
+      <small v-if="stream.direction === '发送' && stream.layers.length && stream.layers.every(layer => layer.roundTripMs === null && layer.receiverReportedLossPercent === null)">本次采样没有新的接收报告，不代表网络正常或异常。</small>
     </div>
+    <small>网络数据仅描述本机与 SFU 之间的一段；RTT 和接收缓冲等待都不是端到端画面延迟。</small>
   </aside>
 </template>

@@ -27,7 +27,7 @@ interface NativeVideoSource {
 
 interface NativeCaptureDiagnostics {
   helperVersion: string;
-  captureBackend: 'windowsGraphicsCapture' | 'obsLibobs' | null;
+  captureBackend: 'obsLibobs' | null;
   state: 'idle' | 'starting' | 'running' | 'stopping';
   sessionId: string | null;
   available: boolean;
@@ -36,21 +36,7 @@ interface NativeCaptureDiagnostics {
   frameHeight: number | null;
   framesReceived: number | null;
   framesProcessed: number | null;
-  droppedNotifications: number | null;
-  rawCaptureFps: number | null;
-  probeProcessedFps: number | null;
-  videoOutputFps: number | null;
-  videoOutputDroppedFrames: number | null;
   obsBridgeDroppedFrames: number | null;
-  rawFrameIntervalP50Ms: number | null;
-  rawFrameIntervalP95Ms: number | null;
-  rawFrameIntervalP99Ms: number | null;
-  rawTimestampAnomalies: number | null;
-  lastFrameAgeMs: number | null;
-  sizeChanges: number | null;
-  framePoolRecreates: number | null;
-  lastCaptureError: string | null;
-  stopDurationMs: number | null;
   captureSuspended: boolean | null;
   microphoneCaptureDroppedChunks: number;
   screenShareAudio: {

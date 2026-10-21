@@ -24,15 +24,34 @@ function setup() {
   return { bridge, track, local, room, participants: [local, bad] as unknown as Participant[] };
 }
 
+it('复用当前轨道统计补充网络反馈，不增加采样、连接或媒体采集', async () => {
+  const { room, local, track, bridge } = setup();
+  const stats = new Map([
+    ['video', { id: 'video', type: 'outbound-rtp', kind: 'video', timestamp: 1000,
+      powerEfficientEncoder: false, encoderImplementation: 'OpenH264' }],
+    ['rr', { id: 'rr', type: 'remote-inbound-rtp', localId: 'video', timestamp: 950,
+      roundTripTime: 0.05, fractionLost: 0.01 }],
+  ] as [string, Record<string, unknown>][]);
+  track.getRTCStatsReport.mockResolvedValue(stats);
+  const sampler = createMediaDiagnosticsSampler();
+  const first = await sampler.collect(room, [local] as unknown as Participant[]);
+  expect(first.streams[0].layers[0]).toMatchObject({ roundTripMs: 50, receiverReportedLossPercent: 1,
+    feedbackAgeMs: 50, powerEfficientEncoder: false });
+  const next = await sampler.collect(room, [local] as unknown as Participant[]);
+  expect(next.streams[0].layers[0]).toMatchObject({ roundTripMs: null, receiverReportedLossPercent: null });
+  expect(track.getRTCStatsReport).toHaveBeenCalledTimes(2);
+  expect(bridge.getNativeMediaDiagnostics).toHaveBeenCalledTimes(2);
+});
+
 it('首次样本显示等待统计，第二份样本按实际间隔计算编码前和编码FPS', async () => {
   const { room, participants, bridge } = setup();
   let now = 1000;
   vi.stubGlobal('performance', { now: () => now });
   bridge.getNativeMediaDiagnostics.mockResolvedValueOnce({ state: 'running', helperVersion: 'test',
-    captureBackend: 'windowsGraphicsCapture', sourceKind: 'window', frameWidth: 1920, frameHeight: 1080,
+    captureBackend: 'obsLibobs', sourceKind: 'window', frameWidth: 1920, frameHeight: 1080,
     framesReceived: 100, framesProcessed: 80 } as NativeCaptureDiagnostics)
     .mockResolvedValueOnce({ state: 'running', helperVersion: 'test',
-      captureBackend: 'windowsGraphicsCapture', sourceKind: 'window', frameWidth: 1920, frameHeight: 1080,
+      captureBackend: 'obsLibobs', sourceKind: 'window', frameWidth: 1920, frameHeight: 1080,
       framesReceived: 340, framesProcessed: 220 } as NativeCaptureDiagnostics);
   const track = room.localParticipant.getTrackPublication(Track.Source.ScreenShare)!.track!;
   track.getRTCStatsReport = vi.fn()
@@ -78,7 +97,7 @@ it('同尺寸的新原生会话重新建立基线，不与旧会话计数相减'
   const { room, local, bridge } = setup();
   let now = 1000;
   vi.stubGlobal('performance', { now: () => now });
-  const native = { state: 'running', helperVersion: 'test', captureBackend: 'windowsGraphicsCapture',
+  const native = { state: 'running', helperVersion: 'test', captureBackend: 'obsLibobs',
     sourceKind: 'window', frameWidth: 1920, frameHeight: 1080 } as NativeCaptureDiagnostics;
   bridge.getNativeMediaDiagnostics.mockResolvedValueOnce({ ...native, sessionId: 'old', framesReceived: 20, framesProcessed: 10 } as NativeCaptureDiagnostics)
     .mockResolvedValueOnce({ ...native, sessionId: 'new', framesReceived: 100, framesProcessed: 50 } as NativeCaptureDiagnostics)
