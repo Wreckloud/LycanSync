@@ -20,7 +20,7 @@ import { createGroup, updateGroup, findGroup, findGroupPresences, findGroups, ne
   type GroupDetail, type GroupMember, type GroupPresence, type GroupPresenceChangeCursor, type GroupSummary } from './group/groupApi';
 import { useRtcRoom } from './rtc/useRtcRoom';
 import { useMicrophoneTest } from './rtc/useMicrophoneTest';
-import { readScreenShareQuality, saveScreenShareQuality, type ScreenShareQualityId } from './rtc/screenShareQuality';
+import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, readScreenShareQuality, saveScreenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from './rtc/screenShareQuality';
 import { canSelectNativeSource, readScreenShareAudioPreference, saveScreenShareAudioPreference,
   resolveNativeScreenAudioCapability, shouldShareAudioInNativeSelection,
   type NativeScreenAudioMode } from './rtc/nativeScreenAudioMode';
@@ -69,9 +69,11 @@ const audioProcessing = audioPreferences.processing;
 const callSounds = useCallSounds(outputVolume);
 const desktop = window.lycanDesktop;
 const viewerNotice = ref('');
-const captureRequest = ref<{ sources: ReturnType<typeof createNativeVideoSourceSelection>['options'] } | null>(null);
+const captureRequest = ref<{ sources: ReturnType<typeof createNativeVideoSourceSelection>['options'];
+  quality: ScreenShareQualityId; customQuality: CustomScreenShareQuality } | null>(null);
 const captureSourceType = ref<'window' | 'screen'>('window');
 const captureQuality = ref<ScreenShareQualityId>('standard');
+const captureCustomQuality = ref<CustomScreenShareQuality>({ ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY });
 const selectedCaptureSourceId = ref('');
 const captureSourceNotice = ref('');
 const capturePicker = ref<InstanceType<typeof ScreenSharePicker> | null>(null);
@@ -83,7 +85,8 @@ function restoreCapturePreferences() {
   try {
     const quality = readScreenShareQuality();
     const sourceType = localStorage.getItem('lycansync.capture-source-type') === 'screen' ? 'screen' : 'window';
-    captureQuality.value = quality;
+    captureQuality.value = quality.quality;
+    captureCustomQuality.value = quality.customQuality;
     lastCaptureSourceType = sourceType;
   } catch {
     // 偏好不可读不能阻止主界面启动；未读完之前不覆盖默认选择。
@@ -97,7 +100,7 @@ const captureAudioCapabilityReady = ref(false);
 const captureAudioCapabilityFailed = ref(false);
 const captureAudioMode = ref<NativeScreenAudioMode>('unavailable');
 const captureShareAudio = ref(false);
-type NativeScreenSourceSelection = { sourceId: string; shareAudio: boolean; quality?: ScreenShareQualityId };
+type NativeScreenSourceSelection = { sourceId: string; shareAudio: boolean; quality?: ScreenShareQualityId; customQuality?: CustomScreenShareQuality };
 const NATIVE_SOURCE_REFRESH_INTERVAL_MS = 750;
 let nativeSourceChooser: ReturnType<typeof createNativeVideoSourceSelection> | undefined;
 let nativeSourceChooserGeneration = 0;
@@ -224,6 +227,11 @@ function selectCaptureSource(sourceId: string | null) {
       && (!sourceId || nativeSourceError.value
         || !canSelectNativeSource(captureAudioCapabilityReady.value, captureAudioCapabilityFailed.value))) return;
   if (sourceId !== null && !request.sources.some((source) => source.id === sourceId)) return;
+  if (sourceId === null) {
+    // 取消只丢弃本次草稿，不能改变下一次共享或菜单里的自定义选择。
+    captureQuality.value = request.quality;
+    captureCustomQuality.value = { ...request.customQuality };
+  }
   if (sourceId) {
     lastCaptureSourceType = captureSourceType.value;
     lastNativeSelection = { discoveryId: currentNativeDiscoveryId, sourceId };
@@ -235,6 +243,7 @@ function selectCaptureSource(sourceId: string | null) {
   const selection = sourceId ? {
     sourceId,
     quality: captureQuality.value,
+    customQuality: { ...captureCustomQuality.value },
     shareAudio: shouldShareAudioInNativeSelection(
       captureAudioCapabilityReady.value,
       captureAudioMode.value,
@@ -255,7 +264,7 @@ function selectCaptureSource(sourceId: string | null) {
 }
 function saveCapturePreferences(quality: ScreenShareQualityId, sourceType?: 'window' | 'screen') {
   try {
-    saveScreenShareQuality(quality);
+    saveScreenShareQuality(quality, captureCustomQuality.value);
     if (sourceType) localStorage.setItem('lycansync.capture-source-type', sourceType);
   } catch {
     viewerNotice.value = '无法保存本机共享偏好，下次启动可能恢复原设置。';
@@ -283,6 +292,8 @@ function requestNativeScreenSource(
   currentNativeDiscoveryId = '';
   captureRequest.value = {
     sources: chooser.options,
+    quality: captureQuality.value,
+    customQuality: { ...captureCustomQuality.value },
   };
   void resolveNativeScreenAudioCapability(capabilities).then((state) => {
     if (generation !== nativeSourceChooserGeneration || nativeSourceChooser !== chooser) return;
@@ -303,10 +314,13 @@ watch(captureSourceType, () => {
   if (!captureSources.value.some((source) => source.id === selectedCaptureSourceId.value)) selectedCaptureSourceId.value = '';
   void nextTick().then(refreshVisibleSourceThumbnails);
 });
-async function changeScreenShareQuality(quality: ScreenShareQualityId) {
-  const applied = localParticipant.value?.isScreenShareEnabled ? await rtc.setScreenShareQuality(quality) : true;
+async function changeScreenShareQuality(quality: ScreenShareQualityId,
+  customQuality = localParticipant.value?.isScreenShareEnabled ? rtc.currentCustomScreenShareQuality : captureCustomQuality.value) {
+  const snapshot = { ...customQuality };
+  const applied = localParticipant.value?.isScreenShareEnabled ? await rtc.setScreenShareQuality(quality, snapshot) : true;
   if (applied) {
     captureQuality.value = quality;
+    captureCustomQuality.value = snapshot;
     saveCapturePreferences(quality);
   }
 }
@@ -318,6 +332,7 @@ async function changeScreenShareAudio(enabled: boolean) {
 }
 const rtc = reactive(useRtcRoom({
   screenShareQuality: captureQuality.value,
+  customScreenShareQuality: captureCustomQuality.value,
   inputGain: inputGain.value,
   processing: audioProcessing,
   events: {
@@ -1264,7 +1279,8 @@ function previewGroup(groupId: string) {
 }
 const diagnosticReport = useDiagnosticReport({
   room: () => rtc.room, participants: () => rtc.participants,
-  settings: () => ({ quality: rtc.currentScreenShareQuality, inputGain: inputGain.value, outputVolume: outputVolume.value,
+  settings: () => ({ quality: rtc.currentScreenShareQuality, customQuality: rtc.currentCustomScreenShareQuality,
+    inputGain: inputGain.value, outputVolume: outputVolume.value,
     screenShareVolume: screenShareVolume.value, voiceVolumeBalance: voiceVolumeBalance.value,
     ...audioProcessing, stageCount: enlargedIdentities.value.length,
     focused: focusedOnSelectedGroup.value }),
@@ -1447,6 +1463,7 @@ function participantListening(participant: Participant) {
                   :sharing="Boolean(localParticipant?.isScreenShareEnabled)" :share-limit-reached="screenShareLimitReached" :choosing-source="Boolean(captureRequest)"
                   :share-busy="rtc.busySources.includes(Track.Source.ScreenShare) || rtc.screenShareQualityBusy || rtc.screenShareSourceBusy"
                   :quality="localParticipant?.isScreenShareEnabled ? rtc.currentScreenShareQuality : captureQuality"
+                  :custom-quality="localParticipant?.isScreenShareEnabled ? rtc.currentCustomScreenShareQuality : captureCustomQuality"
                   :share-audio="sharingAudio" :audio-mode="rtc.currentScreenShareAudioMode"
                   @microphone="toggleMicrophone" @listening="toggleListening"
                   @share="captureRequest ? selectCaptureSource(null) : rtc.toggleMedia(Track.Source.ScreenShare)"
@@ -1516,7 +1533,7 @@ function participantListening(participant: Participant) {
       @activity-visibility="setShowActivity"
       :save-profile="saveProfile" @close="closeSettings" @logout="emit('logout')" />
     <ScreenSharePicker v-if="captureRequest" ref="capturePicker" :sources="captureRequest.sources"
-      v-model:source-type="captureSourceType" v-model:quality="captureQuality" :share-audio="captureShareAudio"
+      v-model:source-type="captureSourceType" v-model:quality="captureQuality" v-model:custom-quality="captureCustomQuality" :share-audio="captureShareAudio"
       @update:share-audio="updateCaptureShareAudio"
       :selected-id="selectedCaptureSourceId" :audio-mode="captureAudioMode" :audio-ready="captureAudioCapabilityReady"
       :audio-failed="captureAudioCapabilityFailed" :loading="nativeSourceLoading" :error="nativeSourceError" :notice="captureSourceNotice"

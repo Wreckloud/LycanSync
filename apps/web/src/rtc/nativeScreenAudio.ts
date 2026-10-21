@@ -7,6 +7,8 @@ export interface NativeScreenAudioDesktopBridge {
     channels: 2;
     bitsPerSample: 32;
     nominalChunkMs: 10;
+    pluginLoadMs: number;
+    captureReadyMs: number;
   }>;
   stopNativeScreenAudio(sessionId: string): Promise<{ changed: boolean }>;
   onNativeScreenAudioChunk(callback: (chunk: NativeScreenAudioChunk) => void): () => void;
@@ -33,11 +35,12 @@ interface NativeScreenAudioOptions {
 /** 将有界 WASAPI PCM 队列接入共享声音音轨，不连接本机扬声器。 */
 export class NativeScreenAudioSession {
   track?: LocalAudioTrack;
+  startupTiming?: { pluginLoadMs: number; captureReadyMs: number; graphReadyMs?: number };
 
   private context?: AudioContext;
   private node?: AudioWorkletNode;
   private sessionId?: string;
-  private startCommand?: Promise<{ sampleRate: number; channels: 2; bitsPerSample: 32; nominalChunkMs: 10 }>;
+  private startCommand?: ReturnType<NativeScreenAudioDesktopBridge['startNativeScreenAudio']>;
   private removeChunkListener?: () => void;
   private removeErrorListener?: () => void;
   private stopPromise?: Promise<void>;
@@ -88,6 +91,8 @@ export class NativeScreenAudioSession {
         throw new Error('screenAudioFormatUnsupported');
       }
       if (this.stopped) throw new Error('screenAudioSessionStopped');
+      this.startupTiming = { pluginLoadMs: format.pluginLoadMs, captureReadyMs: format.captureReadyMs };
+      const graphStartedAt = performance.now();
       this.context = this.createContext(format.sampleRate);
       await this.context.audioWorklet.addModule(processorUrl);
       if (this.stopped) throw new Error('screenAudioSessionStopped');
@@ -105,6 +110,7 @@ export class NativeScreenAudioSession {
       await this.context.resume();
       if (this.stopped) throw new Error('screenAudioSessionStopped');
       this.track = this.createLocalTrack(destination.stream.getAudioTracks()[0], this.context);
+      this.startupTiming.graphReadyMs = performance.now() - graphStartedAt;
       return format;
     } catch (error) {
       try {

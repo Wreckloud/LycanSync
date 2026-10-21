@@ -1,7 +1,7 @@
 const { appendFile, mkdir, open, rename, stat } = require('node:fs/promises');
 const { dirname } = require('node:path');
 
-// 仅保存故障诊断；串行轮转避免多个失败同时写入时覆盖日志。
+// 保存故障与一次性启动摘要；串行轮转避免并发写入时覆盖日志。
 function createMediaDiagnostics(path, maxBytes = 1024 * 1024) {
   let pending = Promise.resolve();
   return (entry) => {
@@ -46,8 +46,17 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           ? entry.stage : 'unknown';
         const message = typeof entry.message === 'string' ? entry.message : '';
         const hresults = [...new Set(message.match(/\b0x[0-9a-fA-F]{8}\b/g) ?? [])].slice(0, 8);
+        const audioTiming = {};
+        if (stage === 'screenAudioStartup') {
+          if (['published', 'failed'].includes(entry.outcome)) audioTiming.outcome = entry.outcome;
+          if (['capture', 'graph', 'publish'].includes(entry.phase)) audioTiming.phase = entry.phase;
+          for (const key of ['pluginLoadMs', 'captureReadyMs', 'graphReadyMs', 'publishMs']) {
+            if (Number.isFinite(entry[key]) && entry[key] >= 0 && entry[key] <= 300_000) audioTiming[key] = entry[key];
+          }
+        }
         events.push({ time: new Date(time).toISOString(), stage, hresults,
-          ...(typeof entry.durationMs === 'number' && Number.isFinite(entry.durationMs) ? { durationMs: entry.durationMs } : {}) });
+          ...(typeof entry.durationMs === 'number' && Number.isFinite(entry.durationMs) ? { durationMs: entry.durationMs } : {}),
+          ...audioTiming });
       }
     } catch (error) {
       if (error.code !== 'ENOENT') throw new Error('无法读取本机故障诊断，请检查用户目录权限。');

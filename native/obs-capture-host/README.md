@@ -85,7 +85,7 @@ Minimized/hidden windows reuse suspension notifications and separately counted p
 
 ## Frames, configuration and cleanup
 
-OBS renders a fixed 1920×1080 canvas at 30/60/120 FPS. The existing page/sender handles 720p output and text/motion hints. Same-session `obs_reset_video` preserves source, process, three texture slots and page track; it does not render permanently at 120 FPS and discard frames. Success is acknowledged after application. A rejected reset attempts the previous configuration; failed rollback or an uncertain three-second timeout ends capture without automatic retry.
+OBS renders at the selected 2560×1440 / 1920×1080 / 1280×720 / 640×360 cap and 30/60/120/180 FPS target. Source aspect ratio is preserved without upscaling small sources; `contentSize` identifies the top-left content inside the canvas. Same-session `obs_reset_video` preserves source, process and page track. Rendering pauses while the three bounded texture slots are returned, then the pool is rebuilt at the new cap. Command processing continues during the drain so release acknowledgements cannot deadlock behind configuration. Success acknowledges applied dimensions and FPS, not measured performance. A rejected reset attempts the previous configuration; failed rollback or an uncertain three-second timeout ends capture without automatic retry. Custom 1440p/180 performance still requires real-device acceptance.
 
 The host copies the OBS main texture into three bounded BGRA shared-NT GPU slots. Each has a keyed mutex; D3D11 event-query completion and mutex release precede announcement. Initial zero source dimensions do not count as a first frame. Full slots drop an update rather than allocate more textures or queue indefinitely. Stdout carries only the protocol; warnings/errors go to stderr. Existing bounded low-frequency diagnostics read actual counters even when delivery is blocked.
 
@@ -104,7 +104,7 @@ From `apps/web`, additionally choose **one** mode and run only `node --test --te
 | `LYCANSYNC_CAPTURE_WINDOW_CHECK=1` | Two own GDI windows: equal titles, fresh colors, FPS changes, rename/refresh, minimize/restore, stop/reopen, close without takeover. |
 | `LYCANSYNC_CAPTURE_GAME_CHECK=1` | Two own D3D11 swap chains, fixture-only activity mapping and the production game classifier/host path. Official hooks may inject only this owned process. |
 | `LYCANSYNC_CAPTURE_APPLICATION_CHECK=1` | Dedicated browser fixture titles; optionally an explicitly authorized `LYCANSYNC_CAPTURE_APPLICATION_WINDOW_ID` for read-only existing-window capture. |
-| `LYCANSYNC_CAPTURE_QUALITY_CHECK=1` | Authorized primary-monitor 60→30→120→60 changes. |
+| `LYCANSYNC_CAPTURE_QUALITY_CHECK=1` | Authorized primary-monitor 1080p60 → 1440p60/120/180 → 720p30 → 1080p60 changes, fresh pixels and actual content dimensions. An unconnected local sender exercises parameter APIs; this does not measure encoding or remote playback. |
 | `LYCANSYNC_CAPTURE_RESOURCE_CHECK=1` | Short authorized primary-monitor resource measurement of the sole OBS route. |
 
 Build the production media helper with `npm run build:media`. Resource checks include the separate Rust identity helper alongside OBS/Electron; working sets remain separate and are not summed as physical memory. Clear test variables afterwards. Running the whole device-test file also captures the primary monitor; window-only authorization does not authorize that.

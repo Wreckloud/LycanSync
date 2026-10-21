@@ -29,7 +29,7 @@ describe('NativeScreenAudioSession', () => {
   it('passes bounded PCM chunks to the worklet, acknowledges them, and releases on stop', async () => {
     const fakes = createFakes();
     const started = vi.fn(async () => ({ sampleRate: 48000, channels: 2 as const,
-      bitsPerSample: 32 as const, nominalChunkMs: 10 as const }));
+      bitsPerSample: 32 as const, nominalChunkMs: 10 as const, pluginLoadMs: 12, captureReadyMs: 340 }));
     const stopped = vi.fn(async () => ({ changed: true }));
     const acknowledge = vi.fn();
     let receiveChunk: ((chunk: { sessionId: string; sequence: number; frames: number; sampleRate: number;
@@ -85,7 +85,7 @@ describe('NativeScreenAudioSession', () => {
     const onError = vi.fn();
     const desktop: NativeScreenAudioDesktopBridge = {
       startNativeScreenAudio: vi.fn(async () => ({ sampleRate: 48000, channels: 2 as const,
-        bitsPerSample: 32 as const, nominalChunkMs: 10 as const })),
+        bitsPerSample: 32 as const, nominalChunkMs: 10 as const, pluginLoadMs: 12, captureReadyMs: 340 })),
       stopNativeScreenAudio: stopped,
       onNativeScreenAudioChunk: () => () => {},
       acknowledgeNativeScreenAudioChunk: () => {},
@@ -114,7 +114,7 @@ describe('NativeScreenAudioSession', () => {
 function cleanupHarness() {
   const fakes = createFakes();
   const format = { sampleRate: 48000 as const, channels: 2 as const,
-    bitsPerSample: 32 as const, nominalChunkMs: 10 as const };
+    bitsPerSample: 32 as const, nominalChunkMs: 10 as const, pluginLoadMs: 12, captureReadyMs: 340 };
   const started = vi.fn(async () => format);
   const stopped = vi.fn(async () => ({ changed: true }));
   const removeChunks = vi.fn();
@@ -146,6 +146,34 @@ function deferred<T>() {
 }
 
 describe('NativeScreenAudioSession cleanup failures', () => {
+  it('separates native startup from graph preparation without creating another capture or timer', async () => {
+    const harness = cleanupHarness();
+    const moduleReady = deferred<void>();
+    let now = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    harness.started.mockImplementation(async () => { now = 352; return harness.format; });
+    harness.addModule.mockImplementation(() => moduleReady.promise);
+    const starting = harness.start();
+    await vi.waitFor(() => expect(harness.addModule).toHaveBeenCalledOnce());
+    expect(harness.session.startupTiming).toEqual({ pluginLoadMs: 12, captureReadyMs: 340 });
+    now = 372;
+    moduleReady.resolve();
+    await starting;
+    expect(harness.session.startupTiming).toEqual({ pluginLoadMs: 12, captureReadyMs: 340, graphReadyMs: 20 });
+    expect(harness.started).toHaveBeenCalledOnce();
+    expect(await harness.start()).toBe(harness.track);
+    expect(harness.session.startupTiming?.graphReadyMs).toBe(20);
+    await harness.session.stop();
+  });
+
+  it('keeps completed native timings but does not claim graph readiness after module loading fails', async () => {
+    const harness = cleanupHarness();
+    harness.addModule.mockRejectedValue(new Error('module unavailable'));
+    await expect(harness.start()).rejects.toThrow('module unavailable');
+    expect(harness.session.startupTiming).toEqual({ pluginLoadMs: 12, captureReadyMs: 340 });
+    expect(harness.stopped).toHaveBeenCalledOnce();
+  });
+
   it.each(['context', 'native', 'both'] as const)('attempts every cleanup when %s fails and shares the failed stop promise', async (failure) => {
     const harness = cleanupHarness();
     await harness.start();

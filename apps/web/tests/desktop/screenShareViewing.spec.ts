@@ -81,8 +81,9 @@ app.whenReady().then(() => {
         async configure() {
           const sender = localTrack.sender!;
           const limits = readScreenShareEncoding(sender);
-          await applyScreenShareEncoding(sender, screenShareEncodingLimits('text', limits, { width: 1920, height: 1080 }));
-          const quality = screenShareQuality('text');
+          const custom = { resolution: 1080, fps: 30 } as const;
+          await applyScreenShareEncoding(sender, screenShareEncodingLimits('custom', limits, { width: 1920, height: 1080 }, custom));
+          const quality = screenShareQuality('custom', custom);
           localTrack.publishOptions!.screenShareEncoding = { maxBitrate: quality.bitrate, maxFramerate: quality.fps };
         },
         async stop() {

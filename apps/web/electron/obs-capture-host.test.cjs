@@ -45,7 +45,9 @@ function fixture(context, { closeOnShutdown = true, closeOnKill = true, blockShu
     onAudioFailure: (_state, failure) => audioFailures.push(failure),
     onFrame: (_state, frame) => frames.push(frame), onFailure: (_state, error) => failures.push(error.message) });
   const emit = (event) => child.stdout.write(JSON.stringify(event.event === 'diagnostics'
-    ? { screenShareAudio: { ...idleAudio }, ...event } : event) + '\n');
+    ? { screenShareAudio: { ...idleAudio }, ...event }
+    : ['captureConfigured', 'captureConfigurationRejected'].includes(event.event)
+      ? { width: 1920, height: 1080, ...event } : event) + '\n');
   const start = (maxFps = 60) => manager.start('monitor:7:0', maxFps, sessionId,
     { kind: 'monitor', monitorName }, { hideCursor: true, hideBorder: false });
   const ready = async (maxFps = 60) => {
@@ -62,7 +64,8 @@ function fixture(context, { closeOnShutdown = true, closeOnKill = true, blockShu
 
 const audioId = '00000000-0000-0000-0000-000000000001';
 const nextAudioId = '00000000-0000-0000-0000-000000000002';
-const audioFormat = { sampleRate: 48_000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10 };
+const audioFormat = { sampleRate: 48_000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10,
+  pluginLoadMs: 12, captureReadyMs: 340 };
 
 test('OBS 声音等待真实启动及固定格式确认，使用同一宿主并由可信主进程提供排除身份', async (context) => {
   const { manager, ready, emit, commands, spawns } = fixture(context);
@@ -138,6 +141,19 @@ test('OBS 声音失败及格式错误只结束声音，原生确认清理后才�
   }
 });
 
+test('OBS 启动确认只接收有界数字计时，非法计时不影响视频会话', async (context) => {
+  for (const timing of [undefined, -1, Infinity, 'slow', 300001]) {
+    const { manager, ready, emit, failures, killCount } = fixture(context);
+    await ready();
+    const rejected = assert.rejects(manager.startScreenAudio(sessionId, audioId, 'process'), /FormatUnsupported/);
+    emit({ event: 'audioStarted', sessionId, audioId, ...audioFormat, captureReadyMs: timing });
+    await rejected;
+    emit({ event: 'audioStopped', sessionId, audioId });
+    assert.deepEqual(failures, []);
+    assert.equal(killCount(), 0);
+  }
+});
+
 test('OBS 声音启动超时会请求清理，停止未确认时保留阻挡且不杀视频', async (context) => {
   const { manager, ready, emit, commands, killCount, audioFailures } = fixture(context);
   await ready();
@@ -193,7 +209,7 @@ function mainScreenAudioFixture({ capability = 'windowsApplicationLoopbackProces
   const messages = [];
   const servers = [];
   let sequence = 0;
-  const sandbox = { closing: false, process: { platform: 'win32' }, Buffer, Uint8Array, AggregateError,
+  const sandbox = { performance, writeMediaDiagnostic: async () => {}, closing: false, process: { platform: 'win32' }, Buffer, Uint8Array, AggregateError,
     nativeVideoSession: { sessionId, sourceId: 'monitor:7:0', starting: false, stopping: false },
     nativeScreenAudioSession: undefined, lastScreenAudioDroppedChunks: 0,
     nativeMicrophoneSession: { sessionId: 'separate-microphone' },
@@ -428,7 +444,7 @@ test('启动按显示器设备名传参，不把来源 ID 尾号当作显示器�
   const { manager, ready, spawns } = fixture(context);
   await ready();
   assert.deepEqual(spawns[0][1], ['C:\\obs\\win-capture.dll', 'C:\\obs\\data', 'monitor', monitorName,
-    '0', '0', sessionId, 'C:\\user-data\\obs-capture\\32.2.2', '60', '', '']);
+    '0', '0', sessionId, 'C:\\user-data\\obs-capture\\32.2.2', '60', '', '', '1920', '1080']);
   assert.equal(spawns[0][2].windowsHide, true);
   assert.equal(spawns[0][2].cwd, 'C:\\obs');
   assert.equal(manager.state.helperVersion, '32.2.2');
@@ -436,8 +452,8 @@ test('启动按显示器设备名传参，不把来源 ID 尾号当作显示器�
   assert.equal(manager.state, undefined);
 });
 
-test('显示器三种目标帧率均传入同一 OBS 宿主，拒绝预设以外的值', async (context) => {
-  for (const fps of [30, 60, 120]) {
+test('四档目标帧率均传入同一 OBS 宿主，拒绝选项以外的值', async (context) => {
+  for (const fps of [30, 60, 120, 180]) {
     const { manager, ready, spawns } = fixture(context);
     await ready(fps);
     assert.equal(spawns[0][1][8], String(fps));
@@ -445,7 +461,9 @@ test('显示器三种目标帧率均传入同一 OBS 宿主，拒绝预设以外
     await manager.stop(sessionId);
   }
   const { start, spawns } = fixture(context);
-  for (const fps of [0, 15, 61, 121, 30.5, '60']) await assert.rejects(start(fps), /invalidObsCaptureArguments/);
+  for (const fps of [0, 15, 61, 90, 121, 144, 181, 30.5, NaN, Infinity, '60']) {
+    await assert.rejects(start(fps), /invalidObsCaptureArguments/);
+  }
   assert.equal(spawns.length, 0);
 });
 
@@ -453,11 +471,11 @@ test('共享中切换等宿主确认才更新帧率，不更换子进程或会�
   const { manager, ready, emit, commands, spawns } = fixture(context);
   await ready();
   const state = manager.state;
-  for (const [index, fps] of [30, 120, 60].entries()) {
+  for (const [index, fps] of [30, 120, 180, 60].entries()) {
     const previous = state.maxFps;
     const configured = manager.configureVideo(sessionId, fps);
     assert.equal(state.maxFps, previous);
-    assert.equal(commands.at(-1), `configure:${index + 1}:${fps}`);
+    assert.equal(commands.at(-1), `configure:${index + 1}:${fps}:1920:1080`);
     await assert.rejects(manager.configureVideo(sessionId, fps), /ConfigurationInProgress/);
     emit({ event: 'captureConfigured', requestId: String(index + 1), sessionId, maxFps: fps });
     assert.deepEqual(await configured, { changed: true });
@@ -466,23 +484,66 @@ test('共享中切换等宿主确认才更新帧率，不更换子进程或会�
   }
   assert.equal(spawns.length, 1);
   await assert.rejects(manager.configureVideo('old-session', 30), /invalidVideoConfiguration/);
-  await assert.rejects(manager.configureVideo(sessionId, 61), /invalidVideoConfiguration/);
+  for (const fps of [0, 61, 90, 144, 181, 30.5, NaN, Infinity, '180']) {
+    await assert.rejects(manager.configureVideo(sessionId, fps), /invalidVideoConfiguration/);
+  }
+});
+
+test('自定义尺寸贯通宿主启动与切换，只在尺寸和帧率均确认后更新，不新增进程', async (context) => {
+  const { manager, emit, spawns, commands } = fixture(context);
+  const started = manager.start('monitor:7:0', 180, sessionId, { kind: 'monitor', monitorName },
+    { hideCursor: false, hideBorder: false }, { width: 2560, height: 1440 });
+  emit({ event: 'captureStarted', helperVersion: '32.2.2' });
+  await started;
+  assert.deepEqual(spawns[0][1].slice(-2), ['2560', '1440']);
+  const resolution = { width: 640, height: 360 };
+  const changing = manager.configureVideo(sessionId, 30, resolution);
+  resolution.width = 1280;
+  assert.equal(commands.at(-1), 'configure:1:30:640:360');
+  assert.deepEqual(manager.state.resolution, { width: 2560, height: 1440 });
+  emit({ event: 'captureConfigured', requestId: '1', sessionId, maxFps: 30, width: 640, height: 360 });
+  await changing;
+  assert.deepEqual(manager.state.resolution, { width: 640, height: 360 });
+  assert.equal(spawns.length, 1);
+  for (const size of [null, { width: 3840, height: 2160 }, { width: 2560, height: 1080 }, { width: '1920', height: 1080 }]) {
+    await assert.rejects(manager.configureVideo(sessionId, 60, size), /invalidVideoConfiguration/);
+  }
+  const rejected = assert.rejects(manager.configureVideo(sessionId, 180, { width: 2560, height: 1440 }), /ConfigurationRejected/);
+  emit({ event: 'captureConfigurationRejected', requestId: '2', sessionId, maxFps: 30, width: 640, height: 360 });
+  await rejected;
+  assert.equal(manager.state.maxFps, 30);
+  assert.deepEqual(manager.state.resolution, { width: 640, height: 360 });
+  await manager.stop(sessionId);
+  for (const size of [null, { width: 3840, height: 2160 }, { width: 2560, height: 1080 }]) {
+    await assert.rejects(manager.start('monitor:7:0', 60, sessionId, { kind: 'monitor', monitorName },
+      { hideCursor: false, hideBorder: false }, size), /invalidObsCaptureArguments/);
+  }
+  assert.equal(spawns.length, 1);
+});
+
+test('宿主尺寸确认不一致即失败，不能把目标尺寸冒充实际输出', async (context) => {
+  const { manager, ready, emit, failures } = fixture(context);
+  await ready();
+  const rejected = assert.rejects(manager.configureVideo(sessionId, 180, { width: 2560, height: 1440 }), /ConfigurationInvalid/);
+  emit({ event: 'captureConfigured', requestId: '1', sessionId, maxFps: 180, width: 1920, height: 1080 });
+  await rejected;
+  assert.deepEqual(failures, ['obsCaptureConfigurationInvalid']);
 });
 
 test('宿主拒绝切换并恢复原帧率时明确失败，迟到旧响应不完成下一次切换', async (context) => {
   const { manager, ready, emit, failures } = fixture(context);
   await ready();
-  const rejected = assert.rejects(manager.configureVideo(sessionId, 30), /ConfigurationRejected/);
+  const rejected = assert.rejects(manager.configureVideo(sessionId, 180), /ConfigurationRejected/);
   emit({ event: 'captureConfigurationRejected', requestId: '1', sessionId, maxFps: 60 });
   await rejected;
   assert.equal(manager.state.maxFps, 60);
   assert.deepEqual(failures, []);
-  const next = manager.configureVideo(sessionId, 120);
-  emit({ event: 'captureConfigured', requestId: '1', sessionId, maxFps: 30 });
+  const next = manager.configureVideo(sessionId, 180);
+  emit({ event: 'captureConfigured', requestId: '1', sessionId, maxFps: 180 });
   assert.equal(manager.state.pendingConfiguration.id, '2');
-  emit({ event: 'captureConfigured', requestId: '2', sessionId, maxFps: 120 });
+  emit({ event: 'captureConfigured', requestId: '2', sessionId, maxFps: 180 });
   await next;
-  assert.equal(manager.state.maxFps, 120);
+  assert.equal(manager.state.maxFps, 180);
 });
 
 test('切换超时后实际配置未知，结束采集且不接受迟到成功', async (context) => {
@@ -531,7 +592,9 @@ test('主进程的显示器各档启动及共享中切换均走 OBS，不接入�
   const start = main.indexOf('async function startNativeVideo(');
   const end = main.indexOf('async function stopNativeVideo(', start);
   const calls = [];
-  const sandbox = { closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
+  const timings = [];
+  const sandbox = { performance, writeMediaDiagnostic: async (entry) => timings.push(entry),
+    closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
     nativeMediaBridge: {}, randomUUID: () => sessionId,
     nativeVideoSourcesById: new Map([['monitor:7:0', { kind: 'monitor', title: monitorName }]]),
     obsCaptureHost: { start: async (...args) => { calls.push(args); return { sessionId, changed: true }; },
@@ -540,19 +603,23 @@ test('主进程的显示器各档启动及共享中切换均走 OBS，不接入�
       startVideo: () => assert.fail('显示器不应按画质回到旧采集'),
       configureVideo: () => assert.fail('OBS 会话不应修改旧采集') } };
   runInNewContext(main.slice(start, end), sandbox);
-  for (const fps of [30, 60, 120]) {
+  for (const fps of [30, 60, 120, 180]) {
     sandbox.nativeVideoSession = undefined;
     await sandbox.startNativeVideo('monitor:7:0', fps, { hideCursor: true, hideBorder: false });
     assert.equal(calls.at(-1)[1], fps);
   }
+  assert.equal(timings.length, 4);
+  assert.ok(timings.every(entry => entry.stage === 'obsReady' && Number.isFinite(entry.durationMs) && entry.durationMs >= 0));
   const configureStart = main.indexOf("ipcMain.handle('media:native-video:configure',");
   const configureEnd = main.indexOf("ipcMain.handle('media:remote-control:authorize',", configureStart);
   let configure;
   sandbox.ipcMain = { handle: (_name, callback) => { configure = callback; } };
   sandbox.trustedSender = () => true;
   runInNewContext(main.slice(configureStart, configureEnd), sandbox);
-  await configure({}, sessionId, 30);
-  assert.deepEqual(calls.at(-1), [sessionId, 30]);
+  await configure({}, sessionId, 30, { width: 640, height: 360 });
+  assert.deepEqual(calls.at(-1), [sessionId, 30, { width: 640, height: 360 }]);
+  await configure({}, sessionId, 180, { width: 2560, height: 1440 });
+  assert.deepEqual(calls.at(-1), [sessionId, 180, { width: 2560, height: 1440 }]);
   sandbox.nativeVideoSession.stopping = true;
   assert.throws(() => configure({}, sessionId, 120));
 });
@@ -582,7 +649,7 @@ test('窗口启动只传已验证句柄和实例标记，不传标题做匹配',
   emit({ event: 'captureStarted', helperVersion: '32.2.2' });
   await started;
   assert.deepEqual(spawns[0][1].slice(2), ['window', '34567', '0', '1', sessionId,
-    'C:\\user-data\\obs-capture\\32.2.2', '60', target.propertyName, target.propertyValue]);
+    'C:\\user-data\\obs-capture\\32.2.2', '60', target.propertyName, target.propertyValue, '1920', '1080']);
   await manager.stop(sessionId);
   for (const invalid of [{ ...target, windowId: '0' }, { ...target, propertyValue: '18446744073709551616' },
     { ...target, propertyName: 'window title' }, { ...target, kind: 'monitor' }]) {
@@ -598,7 +665,7 @@ test('游戏来源仍绑定已登记窗口，不接受整屏或丢失的实例�
   emit({ event: 'captureStarted', helperVersion: '32.2.2' });
   await started;
   assert.deepEqual(spawns[0][1].slice(2), ['game', '34567', '0', '1', sessionId,
-    'C:\\user-data\\obs-capture\\32.2.2', '120', target.propertyName, target.propertyValue]);
+    'C:\\user-data\\obs-capture\\32.2.2', '120', target.propertyName, target.propertyValue, '1920', '1080']);
   await manager.stop(sessionId);
   await assert.rejects(manager.start('monitor:7:0', 60, sessionId, target, { hideCursor: false, hideBorder: false }), /invalidObsCaptureArguments/);
   await assert.rejects(manager.start('window:7:0', 60, sessionId, { ...target, propertyName: '' },
@@ -639,7 +706,7 @@ test('生产入口先预留窗口身份再启动 OBS，停止先关闭 OBS 再�
   const calls = [];
   const targetState = { alive: true };
   const target = { kind: 'window', windowId: '123', propertyName: 'LycanSync.MediaHelper.Window.1.2.3', propertyValue: '456' };
-  const sandbox = { closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
+  const sandbox = { performance, writeMediaDiagnostic: async () => {}, closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
     nativeMediaBridge: {}, randomUUID: () => sessionId, setTimeout, clearTimeout,
     nativeScreenAudioSession: undefined, lastStoppedNativeVideoSession: undefined,
     nativeVideoSourcesById: new Map([['window:7:0', { kind: 'window', title: 'same title' }]]),
@@ -676,7 +743,7 @@ function gameRoutingFixture(classify, startFailure) {
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const calls = [];
   let sequence = 0;
-  const sandbox = { closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
+  const sandbox = { performance, writeMediaDiagnostic: async () => {}, closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
     nativeMediaBridge: {}, randomUUID: () => `routing-${++sequence}`, setTimeout, clearTimeout,
     nativeScreenAudioSession: undefined, lastStoppedNativeVideoSession: undefined,
     nativeVideoSourcesById: new Map([['window:7:0', { kind: 'window', title: 'same title' }]]),
@@ -917,7 +984,7 @@ test('启动失败后的宿主停止未确认，主进程也保留身份阻止�
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = main.indexOf('async function startNativeVideo(');
   const end = main.indexOf('async function stopNativeVideo(', start);
-  const sandbox = { closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
+  const sandbox = { performance, writeMediaDiagnostic: async () => {}, closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
     nativeMediaBridge: {}, randomUUID: () => sessionId,
     nativeVideoSourcesById: new Map([['monitor:7:0', { kind: 'monitor', title: monitorName }]]),
     obsCaptureHost: { start: async () => { throw new Error('start failed'); },

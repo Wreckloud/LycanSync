@@ -31,12 +31,12 @@ class ObsCaptureHostManager {
     this.state = undefined;
   }
 
-  async start(sourceId, maxFps, sessionId, target, settings) {
+  async start(sourceId, maxFps, sessionId, target, settings, resolution = { width: 1920, height: 1080 }) {
     if (this.platform !== 'win32') throw new Error('platformUnsupported');
     if (this.state) throw new Error('obsCaptureAlreadyRunning');
     if (typeof sourceId !== 'string' || !/^(monitor|window):[1-9]\d*:\d+$/.test(sourceId)
-        || ![30, 60, 120].includes(maxFps) || !validTarget(target, sourceId) || !isSessionId(sessionId)
-        || typeof this.configPath !== 'string' || !win32.isAbsolute(this.configPath)
+        || ![30, 60, 120, 180].includes(maxFps) || !validTarget(target, sourceId) || !isSessionId(sessionId)
+        || !validResolution(resolution) || typeof this.configPath !== 'string' || !win32.isAbsolute(this.configPath)
         || !settings || typeof settings.hideCursor !== 'boolean' || typeof settings.hideBorder !== 'boolean') {
       throw new Error('invalidObsCaptureArguments');
     }
@@ -44,12 +44,13 @@ class ObsCaptureHostManager {
     const child = this.spawnProcess(this.executablePath,
       [this.modulePath, this.dataPath, target.kind, target.kind === 'monitor' ? target.monitorName : target.windowId,
         settings.hideCursor ? '0' : '1', settings.hideBorder ? '1' : '0', sessionId, this.configPath, String(maxFps),
-        target.kind !== 'monitor' ? target.propertyName : '', target.kind !== 'monitor' ? target.propertyValue : ''],
+        target.kind !== 'monitor' ? target.propertyName : '', target.kind !== 'monitor' ? target.propertyValue : '',
+        String(resolution.width), String(resolution.height)],
       // 官方 libobs 按 bin/64bit 的相对路径查找 effect 文件，不能继承项目工作目录。
       { cwd: win32.dirname(this.executablePath), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const state = { child, alive: true, closed: false, videoSessionId: sessionId, buffer: '', startTimer: undefined,
       startResolve: undefined, startReject: undefined, failureNotified: false, executablePath: this.executablePath,
-      onFailure: this.onFailure, helperVersion: undefined, maxFps,
+      onFailure: this.onFailure, helperVersion: undefined, maxFps, resolution: { ...resolution },
       diagnosticSequence: 0, pendingDiagnostics: undefined, configurationSequence: 0, pendingConfiguration: undefined };
     state.closePromise = new Promise((resolve) => { state.resolveClose = resolve; });
     state.releaseSharedTextureSlot = (frameSessionId, slotIndex) => {
@@ -122,11 +123,13 @@ class ObsCaptureHostManager {
       } else if (event.event === 'audioFailed') {
         this.failAudio(state, audio, new Error(validAudioCode(event.code) ? event.code : 'screenShareAudioFailed'));
       } else if (!audio.stopping && !state.stopRequested) {
-        if (event.sampleRate !== 48_000 || event.channels !== 2 || event.bitsPerSample !== 32 || event.nominalChunkMs !== 10) {
+        if (event.sampleRate !== 48_000 || event.channels !== 2 || event.bitsPerSample !== 32 || event.nominalChunkMs !== 10
+            || ![event.pluginLoadMs, event.captureReadyMs].every(value => Number.isFinite(value) && value >= 0 && value <= 300_000)) {
           this.failAudio(state, audio, new Error('screenShareAudioFormatUnsupported'));
         } else if (audio.finishStart) {
           audio.started = true;
-          audio.finishStart(undefined, { sampleRate: 48_000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10 });
+          audio.finishStart(undefined, { sampleRate: 48_000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10,
+            pluginLoadMs: event.pluginLoadMs, captureReadyMs: event.captureReadyMs });
         }
       }
       return;
@@ -181,13 +184,16 @@ class ObsCaptureHostManager {
       const request = state.pendingConfiguration;
       if (!request || event.requestId !== request.id) return;
       if (this.state !== state || event.sessionId !== state.videoSessionId
-          || event.maxFps !== (event.event === 'captureConfigured' ? request.maxFps : state.maxFps)) {
+          || event.maxFps !== (event.event === 'captureConfigured' ? request.maxFps : state.maxFps)
+          || event.width !== (event.event === 'captureConfigured' ? request.resolution.width : state.resolution.width)
+          || event.height !== (event.event === 'captureConfigured' ? request.resolution.height : state.resolution.height)) {
         failState(state, new Error('obsCaptureConfigurationInvalid'));
         return;
       }
       if (event.event === 'captureConfigurationRejected') request.finish(new Error('obsCaptureConfigurationRejected'));
       else {
         state.maxFps = event.maxFps;
+        state.resolution = request.resolution;
         request.finish(undefined, { changed: true });
       }
       return;
@@ -225,16 +231,16 @@ class ObsCaptureHostManager {
     return promise;
   }
 
-  configureVideo(sessionId, maxFps) {
+  configureVideo(sessionId, maxFps, resolution = this.state?.resolution) {
     const state = this.state;
     if (!state || !state.alive || state.closed || state.failed || state.stopRequested
-        || state.videoSessionId !== sessionId || !state.helperVersion || ![30, 60, 120].includes(maxFps)) {
+        || state.videoSessionId !== sessionId || !state.helperVersion || ![30, 60, 120, 180].includes(maxFps) || !validResolution(resolution)) {
       return Promise.reject(new Error('invalidVideoConfiguration'));
     }
     if (state.pendingConfiguration) return Promise.reject(new Error('obsCaptureConfigurationInProgress'));
     let resolveRequest, rejectRequest;
     const promise = new Promise((resolve, reject) => { resolveRequest = resolve; rejectRequest = reject; });
-    const request = { id: String(++state.configurationSequence), maxFps, timer: undefined, finish: (error, result) => {
+    const request = { id: String(++state.configurationSequence), maxFps, resolution: { ...resolution }, timer: undefined, finish: (error, result) => {
       if (state.pendingConfiguration !== request) return;
       clearTimeout(request.timer);
       state.pendingConfiguration = undefined;
@@ -242,10 +248,10 @@ class ObsCaptureHostManager {
       else resolveRequest(result);
     } };
     state.pendingConfiguration = request;
-    // 超时后实际帧率未知，结束本次采集，不能把迟到成功当成旧配置继续发送。
+    // 超时后实际尺寸和帧率未知，结束本次采集，不能按旧配置继续发送。
     request.timer = setTimeout(() => failState(state, new Error('obsCaptureConfigurationTimeout')), CONFIGURE_TIMEOUT_MS);
     request.timer.unref?.();
-    void writeLine(state.child, `configure:${request.id}:${maxFps}`).catch((error) => {
+    void writeLine(state.child, `configure:${request.id}:${maxFps}:${resolution.width}:${resolution.height}`).catch((error) => {
       if (state.pendingConfiguration === request) failState(state, error);
     });
     return promise;
@@ -405,6 +411,10 @@ function validAudioDiagnostics(audio) {
     && ['packetsReceived', 'framesReceived', 'silentPackets', 'droppedAudioChunks']
       .every((key) => Number.isSafeInteger(audio[key]) && audio[key] >= 0)
     && audio.silentPackets <= audio.packetsReceived && (audio.lastError === null || validAudioCode(audio.lastError));
+}
+
+function validResolution(size) {
+  return size && [360, 720, 1080, 1440].includes(size.height) && size.width === size.height * 16 / 9;
 }
 
 function isPositiveSize(size) {

@@ -142,7 +142,8 @@ app.whenReady().then(async () => {
   window.webContents.on('console-message', (event) => {
     if (event.level === 'error') diagnostics.push(String(event.message).slice(0, 250));
   });
-  production = { closing: false, process, console: { error: (...args) => diagnostics.push(args.map(String).join(' ').slice(0, 250)) },
+  production = { closing: false, process, performance, writeMediaDiagnostic: async () => {},
+    console: { error: (...args) => diagnostics.push(args.map(String).join(' ').slice(0, 250)) },
     setTimeout, clearTimeout, randomUUID, sharedTexture, ipcMain, mainWindow: window,
     nativeMediaBridge: bridge, nativeVideoSession: undefined, lastStoppedNativeVideoSession: undefined,
     nativeScreenAudioSession: undefined, helperProcessBridges: new Map(),
@@ -225,7 +226,7 @@ app.whenReady().then(async () => {
       for (let index = 0; index < 10; index++) {
         await sleep(400);
         const sample = await renderer('probe(960,540)');
-        assert(sample.readyState === 'live' && sample.width === 1920 && sample.height === 1080
+        assert(sample.readyState === 'live' && sample.width > 0 && sample.height > 0
           && sample.input.writeFailures === 0 && sample.errors.length === 0, 'applicationPlaybackFailed');
         if (!existingWindowId && sample.pixel) {
           const [red, green, blue] = sample.pixel;
@@ -296,6 +297,7 @@ app.whenReady().then(async () => {
       return sample.pixel && sample.pixel[0] < 100 && sample.pixel[1] > 120
         && (cyan ? sample.pixel[2] > 160 : sample.pixel[2] < 120); };
     await until(selectedColorMatches);
+    const initialWindow = await renderer('probe(960,540)');
     const reserved = await targetHelper.getDiagnostics();
     assert(reserved.state === 'running' && reserved.captureBackend === null && reserved.framesReceived === null, 'identityHelperStartedCapture');
     const command = async (text, event) => {
@@ -306,8 +308,15 @@ app.whenReady().then(async () => {
     const frameRateChanges = [];
     const identityState = targetHelper.videoCapture;
     // 检查四档对应的原生节奏及回到标准；每次切换后变色，不能用旧纹理冒充恢复。
-    for (const fps of [120, 30, 60, 30, 60]) {
-      const configured = await renderer(`configureFrameRate(${fps})`);
+    for (const [id, custom] of [
+      ['highFrameRate', { resolution: 1440, fps: 30 }],
+      ['custom', { resolution: 1440, fps: 30 }],
+      ['standard', { resolution: 1440, fps: 30 }],
+      ['economy', { resolution: 1440, fps: 30 }],
+      ['standard', { resolution: 1440, fps: 30 }],
+    ]) {
+      const configured = await renderer(`configureQuality(${JSON.stringify(id)},${JSON.stringify(custom)})`);
+      const { fps } = configured.profile;
       assert(configured.changed && configured.sameTrack && configured.readyState === 'live', 'windowConfigurationReplacedTrack');
       assert(manager.state === state && state.maxFps === fps && targetHelper.videoCapture === identityState,
         'windowConfigurationReplacedIdentity');
@@ -325,7 +334,9 @@ app.whenReady().then(async () => {
       assert(hostFps >= fps * 0.75 && hostFps <= fps * 1.25, `windowFrameRateMismatch:${fps}:${hostFps}`);
       assert(pageAfter.presented > pageBefore.presented + 5 && pageAfter.input.submittedFrames > pageBefore.input.submittedFrames + 5
         && pageAfter.input.writeFailures === 0 && pageAfter.errors.length === 0, 'windowConfigurationStoppedPlayback');
-      frameRateChanges.push({ targetFps: fps, hostFps, freshPixelsChecked: true });
+      assert(pageAfter.width === initialWindow.width && pageAfter.height === initialWindow.height, 'smallWindowUpscaled');
+      frameRateChanges.push({ targetFps: fps, cap: configured.profile.height,
+        output: { width: pageAfter.width, height: pageAfter.height }, hostFps, freshPixelsChecked: true, encoderMeasured: false });
     }
     await command('rename', 'renamed');
     const refreshed = await targetHelper.listVideoSources();
@@ -400,12 +411,26 @@ app.whenReady().then(async () => {
     assert(page.errors.length === 0 && page.input.writeFailures === 0, 'unexpectedPageFailure');
     const qualityChanges = [];
     if (qualityCheck) {
-      for (const fps of [30, 120, 60]) {
-        process.stdout.write(`${JSON.stringify({ phase: 'qualityChanging', fps })}\n`);
-        const configured = await renderer(`configureFrameRate(${fps})`);
-        process.stdout.write(`${JSON.stringify({ phase: 'qualityConfigured', fps })}\n`);
+      for (const [id, custom] of [
+        ['standard', { resolution: 1080, fps: 60 }],
+        ['custom', { resolution: 1440, fps: 60 }],
+        ['custom', { resolution: 1440, fps: 120 }],
+        ['custom', { resolution: 1440, fps: 180 }],
+        ['economy', { resolution: 1440, fps: 180 }],
+        ['standard', { resolution: 1440, fps: 180 }],
+      ]) {
+        process.stdout.write(`${JSON.stringify({ phase: 'qualityChanging', id, ...custom })}\n`);
+        const configured = await renderer(`configureQuality(${JSON.stringify(id)},${JSON.stringify(custom)})`);
+        const { width, height, fps } = configured.profile;
+        process.stdout.write(`${JSON.stringify({ phase: 'qualityConfigured', width, height, fps })}\n`);
         assert(configured.changed && configured.sameTrack && configured.readyState === 'live', 'qualityReplacedTrack');
-        assert(manager.state === state && state.maxFps === fps, 'qualityReplacedCaptureSession');
+        assert(manager.state === state && state.maxFps === fps && state.resolution.width === width
+          && state.resolution.height === height, 'qualityReplacedCaptureSession');
+        assert(configured.encodings[0].maxFramerate === fps, 'qualitySenderLimitMismatch');
+        await renderer('markerMagenta()');
+        await until(async () => { const p = await probe(); return p.pixel && p.pixel[0] > 150 && p.pixel[1] < 70 && p.pixel[2] > 100; });
+        await renderer('markerCyan()');
+        await until(async () => { const p = await probe(); return p.pixel && p.pixel[0] < 80 && p.pixel[1] > 130 && p.pixel[2] > 130; });
         await sleep(250);
         const nativeStart = await manager.getDiagnostics(state.videoSessionId);
         const nativeStartAt = performance.now();
@@ -420,9 +445,12 @@ app.whenReady().then(async () => {
           && pageEnd.presented > pageStart.presented + 10, 'qualityStoppedFrames');
         assert(pageEnd.errors.length === 0 && pageEnd.input.writeFailures === 0, 'qualityPageFailure');
         const hostFps = Math.round((nativeEnd.bridgeFrames - nativeStart.bridgeFrames) * 1000 / nativeMs);
-        assert(hostFps >= fps * 0.75 && hostFps <= fps * 1.25, `qualityHostFrameRateMismatch:${fps}:${hostFps}`);
-        qualityChanges.push({ targetFps: fps,
-          hostFps,
+        const sourceScale = Math.min(1, width / (display.bounds.width * display.scaleFactor), height / (display.bounds.height * display.scaleFactor));
+        const expectedWidth = Math.floor(display.bounds.width * display.scaleFactor * sourceScale);
+        const expectedHeight = Math.floor(display.bounds.height * display.scaleFactor * sourceScale);
+        assert(Math.abs(pageEnd.width - expectedWidth) <= 1 && Math.abs(pageEnd.height - expectedHeight) <= 1, 'qualityContentSizeMismatch');
+        qualityChanges.push({ targetFps: fps, cap: { width, height }, output: { width: pageEnd.width, height: pageEnd.height },
+          hostFps, freshPixelsChecked: true, encoderMeasured: false,
           submittedFps: Math.round((pageEnd.input.submittedFrames - pageStart.input.submittedFrames) * 1000 / pageMs),
           presentedFps: Math.round((pageEnd.presented - pageStart.presented) * 1000 / pageMs) });
       }
@@ -439,10 +467,10 @@ app.whenReady().then(async () => {
     await until(() => !manager.state && !production.nativeVideoSession && production.helperProcessBridges.size === 0);
     assert(stopped.readyState === 'ended', 'generatedTrackNotEnded');
     assert(state.closed && (state.child.exitCode !== null || state.child.signalCode !== null), 'helperExitNotConfirmed');
-    assert(page.presented > 0 && (page.width === 1920 && page.height === 1080), 'pageDidNotPresent1080p');
+    assert(page.presented > 0 && page.width > 0 && page.height > 0, 'pageDidNotPresentContent');
     cases.push({ mode, engine: 'obs', pixelsChecked, qualityChanges,
       helperVersion: after.helperVersion,
-      nativeWidth: 1920, nativeHeight: 1080,
+      nativeWidth: state.resolution.width, nativeHeight: state.resolution.height,
       outputWidth: page.width, outputHeight: page.height,
       resources: resourceCheck ? resourceSummary(resourcesBefore, resourcesAfter) : undefined,
       firstFrameMs: started.firstFrameMs, framesSubmitted: page.input.submittedFrames,

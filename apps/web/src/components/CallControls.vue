@@ -3,19 +3,21 @@ import { nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { ChevronDown, ChevronRight, HeadphoneOff, Headphones, MicOff, MonitorUp, MonitorX, Settings } from '@lucide/vue';
 import VoiceLevelMic from './VoiceLevelMic.vue';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP } from '../rtc/audioPreferences';
-import { SCREEN_SHARE_QUALITIES, type ScreenShareQualityId } from '../rtc/screenShareQuality';
+import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, SCREEN_SHARE_QUALITIES, screenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from '../rtc/screenShareQuality';
+import ScreenShareCustomQuality from './ScreenShareCustomQuality.vue';
 import type { NativeScreenAudioMode } from '../rtc/nativeScreenAudioMode';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   connected: boolean; desktop: boolean;
   microphoneEnabled: boolean; microphoneIntent: boolean; microphoneBusy: boolean; microphoneLevel: number; inputLevelPercent: number;
   listening: boolean; inputGain: number; outputVolume: number;
   sharing: boolean; shareBusy: boolean; choosingSource: boolean; shareLimitReached: boolean;
   quality: ScreenShareQualityId; shareAudio: boolean; audioMode: NativeScreenAudioMode;
-}>();
+  customQuality?: CustomScreenShareQuality;
+}>(), { customQuality: () => ({ ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY }) });
 const emit = defineEmits<{
   microphone: []; listening: []; share: []; changeSource: []; shareAudio: [enabled: boolean];
-  quality: [quality: ScreenShareQualityId]; inputGain: [volume: number]; outputVolume: [volume: number];
+  quality: [quality: ScreenShareQualityId, customQuality?: CustomScreenShareQuality]; inputGain: [volume: number]; outputVolume: [volume: number];
   settings: [opener: HTMLElement];
 }>();
 type ControlMenu = 'microphone' | 'output' | 'share';
@@ -150,9 +152,11 @@ onScopeDispose(() => {
             共享画质<span>{{ SCREEN_SHARE_QUALITIES.find(preset => preset.id === quality)?.label }}</span><ChevronRight class="call-menu-chevron" :size="14" :class="{ 'is-open': qualityOpen }" /></button>
           <div v-if="qualityOpen" class="call-quality-options" role="group" aria-label="共享画质">
             <label v-for="preset in SCREEN_SHARE_QUALITIES" :key="preset.id">
-              <span>{{ preset.label }}<small>{{ preset.description }}</small></span>
+              <span>{{ preset.label }}<small>{{ screenShareQuality(preset.id, customQuality).description }}</small></span>
               <input type="radio" name="call-share-quality" :value="preset.id" :checked="quality === preset.id" :disabled="shareBusy" @change="chooseQuality(preset.id)" />
             </label>
+            <ScreenShareCustomQuality v-if="quality === 'custom'" :model-value="customQuality" :disabled="shareBusy"
+              @update:model-value="emit('quality', 'custom', $event)" />
           </div>
           <label v-if="sharing" class="call-share-audio"><span>共享音频</span><input type="checkbox" :checked="shareAudio" :disabled="shareBusy || audioMode === 'unavailable'"
             @change="toggleShareAudio" /></label>

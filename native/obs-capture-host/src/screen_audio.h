@@ -18,9 +18,14 @@ struct ScreenAudioSnapshot {
   std::string last_error;
 };
 
+struct ScreenAudioStartupTiming {
+  uint64_t plugin_load_ms = 0;
+  uint64_t capture_ready_ms = 0;
+};
+
 class ScreenAudioHost {
 public:
-  using Emit = std::function<void(std::string_view, std::string_view, std::string_view)>;
+  using Emit = std::function<void(std::string_view, std::string_view, std::string_view, ScreenAudioStartupTiming)>;
   ScreenAudioHost(std::string module_path, std::string data_path, WindowVideoTarget target, bool window, Emit emit);
   ~ScreenAudioHost();
   bool command(std::string_view command);
@@ -37,5 +42,5 @@ private:
   Emit emit_;
   bool module_loaded_ = false;
   bool module_apartment_initialized_ = false;
-  void run(const std::shared_ptr<Session> &session, bool system_mix, DWORD client_process);
+  void run(const std::shared_ptr<Session> &session, bool system_mix, DWORD client_process, uint64_t plugin_load_ms);
 };

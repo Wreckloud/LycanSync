@@ -1,13 +1,14 @@
 import { readScreenSharePreferences, type ScreenSharePreferences } from '../settings/screenSharePreferences';
 import { LocalVideoTrack } from 'livekit-client';
 import { createScreenStatusFrame } from './screenStatusFrame';
-import { screenShareDegradationPreference, screenShareQuality, screenShareThumbnailPreset, type ScreenShareQualityId } from './screenShareQuality';
+import { screenShareDegradationPreference, screenShareQuality, screenShareThumbnailPreset, type CustomScreenShareQuality, type ScreenShareQualityId } from './screenShareQuality';
 import { applyScreenShareEncoding, readScreenShareEncoding, screenShareEncodingLimits } from './screenShareEncoding';
 
 export interface NativeVideoDesktopBridge {
-  startNativeVideo(sourceId: string, maxFps: number, settings: ScreenSharePreferences): Promise<{ sessionId: string; changed: boolean }>;
+  recordScreenShareStartupTiming(sessionId: string, stage: 'screenVideoFirstFrame', durationMs: number): void;
+  startNativeVideo(sourceId: string, maxFps: number, settings: ScreenSharePreferences, resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean }>;
   stopNativeVideo(sessionId: string): Promise<{ changed: boolean }>;
-  configureNativeVideo(sessionId: string, maxFps: number): Promise<{ changed: boolean }>;
+  configureNativeVideo(sessionId: string, maxFps: number, resolution?: { width: number; height: number }): Promise<{ changed: boolean }>;
   onNativeVideoError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
   onNativeVideoSuspended(callback: (status: { sessionId: string; suspended: boolean }) => void): () => void;
 }
@@ -74,8 +75,6 @@ export class NativeScreenVideoSession {
   private lastTimestamp = Number.NEGATIVE_INFINITY;
   private frameWidth = 1280;
   private frameHeight = 720;
-  private sourceWidth = 1920;
-  private sourceHeight = 1080;
   private suspended = false;
   private writing = false;
   private stopped = false;
@@ -93,7 +92,7 @@ export class NativeScreenVideoSession {
     private readonly desktop: NativeVideoDesktopBridge,
     options: NativeScreenVideoOptions,
   ) {
-    if (!Number.isInteger(options.maxFps) || options.maxFps < 1 || options.maxFps > 120) {
+    if (![30, 60, 120, 180].includes(options.maxFps)) {
       throw new Error('invalidNativeVideoFrameRate');
     }
     this.maxFps = options.maxFps;
@@ -154,7 +153,7 @@ export class NativeScreenVideoSession {
         this.pendingSuspension = status;
       }
     });
-    this.startCommand = this.desktop.startNativeVideo(sourceId, this.maxFps, settings);
+    this.startCommand = this.desktop.startNativeVideo(sourceId, this.maxFps, settings, this.resolution);
     try {
       const started = await this.startCommand;
       if (started.changed !== true || typeof started.sessionId !== 'string' || !started.sessionId) {
@@ -186,26 +185,30 @@ export class NativeScreenVideoSession {
     }
   }
 
-  async configureQuality(id: ScreenShareQualityId): Promise<void> {
-    const quality = screenShareQuality(id);
+  async configureQuality(id: ScreenShareQualityId, custom?: CustomScreenShareQuality): Promise<void> {
+    const quality = screenShareQuality(id, custom);
     const sender = this.track.sender;
     const sessionId = this.sessionId;
     if (this.stopped || !sessionId || !sender || this.configuring) throw new Error('nativeVideoConfigurationUnavailable');
     const previousLimits = readScreenShareEncoding(sender);
     const previousFps = this.maxFps;
+    const previousResolution = this.resolution;
     this.configuring = true;
     let nativeRequested = false;
     try {
       await applyScreenShareEncoding(sender, screenShareEncodingLimits(id, previousLimits,
-        { width: this.sourceWidth, height: this.sourceHeight }));
+        { width: quality.width, height: quality.height }, custom));
       if (this.stopped || this.track.sender !== sender) throw new Error('nativeVideoSessionStopped');
-      nativeRequested = true;
-      const response = await this.desktop.configureNativeVideo(sessionId, quality.fps);
-      if (response.changed !== true) throw new Error('nativeVideoConfigurationRejected');
+      // 只改编码预算不重置 OBS，避免无必要的停帧和纹理重建。
+      if (quality.fps !== previousFps || quality.width !== previousResolution.width || quality.height !== previousResolution.height) {
+        nativeRequested = true;
+        const response = await this.desktop.configureNativeVideo(sessionId, quality.fps, { width: quality.width, height: quality.height });
+        if (response.changed !== true) throw new Error('nativeVideoConfigurationRejected');
+      }
       if (this.stopped || this.track.sender !== sender) throw new Error('nativeVideoSessionStopped');
       this.maxFps = quality.fps;
       this.resolution = { width: quality.width, height: quality.height };
-      this.generator.contentHint = id === 'text' ? 'detail' : 'motion';
+      this.generator.contentHint = 'motion';
       // SDK 重发布使用当前配置，不能重新套用最初发布时的画质。
       if (this.track.publishOptions) {
         // SDK 对 ScreenShare 单独读取 screenShareEncoding，不能写入摄像头编码字段。
@@ -219,7 +222,7 @@ export class NativeScreenVideoSession {
       if (!this.stopped) {
         const rollback = await Promise.allSettled([
           ...(this.track.sender === sender ? [applyScreenShareEncoding(sender, previousLimits)] : []),
-          ...(nativeRequested ? [this.desktop.configureNativeVideo(sessionId, previousFps).then((result) => {
+          ...(nativeRequested ? [this.desktop.configureNativeVideo(sessionId, previousFps, previousResolution).then((result) => {
             if (result.changed !== true) throw new Error('nativeVideoConfigurationRollbackRejected');
           })] : []),
         ]);
@@ -327,8 +330,6 @@ export class NativeScreenVideoSession {
     const visibleRect = frame.visibleRect;
     // Electron 将纹理容量作为显示尺寸；实际窗口内容可能因对齐或纹理复用而更小。
     if (visibleRect) {
-      this.sourceWidth = visibleRect.width;
-      this.sourceHeight = visibleRect.height;
       const scale = Math.min(1, this.resolution.width / visibleRect.width, this.resolution.height / visibleRect.height);
       const width = Math.max(1, Math.round(visibleRect.width * scale));
       const height = Math.max(1, Math.round(visibleRect.height * scale));
@@ -357,6 +358,7 @@ export class NativeScreenVideoSession {
     this.submittedFrames++;
     if (this.firstFrameMs === null && this.startedAt !== undefined) {
       this.firstFrameMs = Math.max(0, this.now() - this.startedAt);
+      this.desktop.recordScreenShareStartupTiming(this.sessionId!, 'screenVideoFirstFrame', this.firstFrameMs);
     }
     this.writeFrame(frame);
   }

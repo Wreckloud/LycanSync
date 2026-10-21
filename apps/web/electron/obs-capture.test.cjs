@@ -22,6 +22,7 @@ test('OBS 真实宿主固定三槽背压、恢复和正常停止，不含 Electr
   const prepared = resolve(__dirname, '../../../release/build-cache/obs-32.2.2/prepared');
   const failures = [], diagnostics = [];
   const heldSlots = new Set();
+  let lastFrame;
   let holding = false;
   const manager = new ObsCaptureHostManager({
     executablePath: resolve(prepared, 'bin/64bit/lycansync-obs-capture-host.exe'),
@@ -29,6 +30,7 @@ test('OBS 真实宿主固定三槽背压、恢复和正常停止，不含 Electr
     dataPath: resolve(prepared, 'data/obs-plugins/win-capture'),
     configPath: resolve(prepared, '../test-config'),
     onFrame: (state, frame) => {
+      lastFrame = frame;
       if (holding) heldSlots.add(frame.slotIndex);
       else void state.releaseSharedTextureSlot(state.videoSessionId, frame.slotIndex).catch((error) => failures.push(error.message));
     },
@@ -49,12 +51,20 @@ test('OBS 真实宿主固定三槽背压、恢复和正常停止，不含 Electr
       assert.equal(heldSlots.size, 3);
       assert.ok(blocked.bridgeFrames - before.bridgeFrames <= 3);
       assert.ok(blocked.bridgeDroppedFrames > before.bridgeDroppedFrames);
+      // 满槽时发起尺寸切换，确认命令线程仍能接收归还，而不是等待自己才能处理的 release。
+      let configured = false;
+      const changing = manager.configureVideo(sessionId, 120, { width: 2560, height: 1440 }).then(() => { configured = true; });
+      await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+      assert.equal(configured, false);
       holding = false;
       for (const slot of heldSlots) await state.releaseSharedTextureSlot(sessionId, slot);
       heldSlots.clear();
+      await changing;
       await new Promise((resolveWait) => setTimeout(resolveWait, 500));
       const resumed = await manager.getDiagnostics(sessionId);
       assert.ok(resumed.bridgeFrames > blocked.bridgeFrames + 3);
+      assert.deepEqual(lastFrame.codedSize, { width: 2560, height: 1440 });
+      assert.equal(state.maxFps, 120);
       const stopStart = performance.now();
       await manager.stop(sessionId);
       assert.equal(manager.state, undefined);
@@ -123,7 +133,8 @@ test('OBS 真实来源纹理经生产入口到页面轨道，重复停止及故�
       assert.ok(result.cases[0].frameRateChanges.every((entry) => entry.freshPixelsChecked), details);
     }
     if (process.env.LYCANSYNC_CAPTURE_QUALITY_CHECK === '1') {
-      assert.deepEqual(result.cases[0].qualityChanges.map((entry) => entry.targetFps), [30, 120, 60], details);
+      assert.deepEqual(result.cases[0].qualityChanges.map((entry) => entry.targetFps), [60, 60, 120, 180, 30, 60], details);
+      assert.deepEqual(result.cases[0].qualityChanges.map((entry) => entry.cap.height), [1080, 1440, 1440, 1440, 720, 1080], details);
     }
     for (const entry of result.cases.filter((entry) => entry.mode === 'success')) {
       assert.equal(entry.pixelsChecked, true, details);

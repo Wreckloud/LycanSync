@@ -1,4 +1,5 @@
 import { NativeScreenVideoSession } from '../../src/rtc/nativeScreenVideo';
+import { screenShareQuality } from '../../src/rtc/screenShareQuality';
 
 const video = document.querySelector('video');
 const marker = document.querySelector('#marker');
@@ -10,6 +11,7 @@ let track;
 let errors = [];
 let presented = 0;
 let callback;
+let senderConnection;
 function countPresented() {
   callback = video.requestVideoFrameCallback(() => { presented++; countPresented(); });
 }
@@ -19,6 +21,10 @@ window.obsCaptureTest = {
     marker.style.background = '#f010c0';
     session = new NativeScreenVideoSession(window.lycanDesktop, { maxFps: 60, onError: (code) => errors.push(code) });
     track = await session.start(sourceId);
+    // 仅建立本机未连接的 sender 以调用真实参数 API；不发起房间或把本地播放冒充编码验收。
+    senderConnection = new RTCPeerConnection({ iceServers: [] });
+    track.sender = senderConnection.addTrack(track.mediaStreamTrack);
+    await senderConnection.setLocalDescription(await senderConnection.createOffer());
     video.srcObject = new MediaStream([track.mediaStreamTrack]);
     await video.play();
     countPresented();
@@ -34,19 +40,22 @@ window.obsCaptureTest = {
       input: session?.readDiagnostics(), readyState: track?.mediaStreamTrack.readyState };
   },
   markerCyan() { marker.style.background = '#10d8f0'; },
+  markerMagenta() { marker.style.background = '#f010c0'; },
   async diagnostics() {
     const stats = await window.lycanDesktop.getNativeMediaDiagnostics();
     return { sourceKind: stats.sourceKind, captureSuspended: stats.captureSuspended, captureBackend: stats.captureBackend };
   },
-  async configureFrameRate(maxFps) {
+  async configureQuality(id, custom) {
     const originalTrack = track.mediaStreamTrack;
-    const result = await window.lycanDesktop.configureNativeVideo(session.captureSessionId, maxFps);
-    return { changed: result.changed, sameTrack: originalTrack === track.mediaStreamTrack,
-      readyState: track.mediaStreamTrack.readyState };
+    await session.configureQuality(id, custom);
+    return { changed: true, sameTrack: originalTrack === track.mediaStreamTrack,
+      readyState: track.mediaStreamTrack.readyState,
+      profile: screenShareQuality(id, custom), encodings: track.sender.getParameters().encodings };
   },
   async stop() {
     if (callback !== undefined) video.cancelVideoFrameCallback(callback);
     video.pause(); video.srcObject = null;
+    senderConnection?.close(); senderConnection = undefined;
     await session?.stop();
     return { readyState: track?.mediaStreamTrack.readyState, errors };
   },

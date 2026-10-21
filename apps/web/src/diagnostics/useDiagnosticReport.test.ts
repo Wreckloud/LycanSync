@@ -3,6 +3,7 @@ import type { Room } from 'livekit-client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { MediaDiagnosticsSnapshot } from './mediaDiagnostics';
 import { diagnosticReportSample, useDiagnosticReport } from './useDiagnosticReport';
+import type { CustomScreenShareQuality } from '../rtc/screenShareQuality';
 
 const { collect } = vi.hoisted(() => ({ collect: vi.fn() }));
 vi.mock('./mediaDiagnostics', () => ({ createMediaDiagnosticsSampler: () => ({ collect }) }));
@@ -25,7 +26,8 @@ function snapshot(): MediaDiagnosticsSnapshot {
 function setup() {
   const scope = effectScope(); scopes.push(scope);
   const room = shallowRef<Room | null>({} as Room);
-  const settings = { quality: 'standard', inputGain: 1, outputVolume: 1, screenShareVolume: 1,
+  const settings = { quality: 'standard', customQuality: { resolution: 1080, fps: 60 } as CustomScreenShareQuality,
+    inputGain: 1, outputVolume: 1, screenShareVolume: 1,
     voiceVolumeBalance: false,
     noiseSuppression: true, autoGainControl: true, voiceEnhancement: true, echoCancellation: false,
     stageCount: 1, focused: false };
@@ -113,7 +115,7 @@ it('导出按记录时参数保存，匿名化身份/轨道ID，不使用导出�
   settings.quality = 'economy';
   settings.voiceVolumeBalance = true;
   await vi.advanceTimersByTimeAsync(2000);
-  report.stop(); settings.quality = 'text';
+  report.stop(); settings.quality = 'custom';
   await report.save('四路略卡');
   const text = exportDiagnosticReport.mock.calls[0][0];
   expect(text).not.toContain('private-user-id'); expect(text).not.toContain('private-track-id');
@@ -190,6 +192,41 @@ it.each(['quality-change', 'dimensions-change', 'source-change', 'sampling-gap']
       typicalFps: { source: 59, pageReceived: 100, pageSubmitted: 75 },
       pageReceivedFrames: 200, pageBackpressureDroppedFrames: 50, pageBackpressureDropRate: 25 });
   });
+
+it('自定义同模式切换帧率时另起分段，摘要记录确认参数而非默认 1080p60', async () => {
+  const { report, settings, exportDiagnosticReport } = setup();
+  settings.quality = 'custom';
+  settings.customQuality = { resolution: 1440, fps: 180 };
+  report.start(); await vi.advanceTimersByTimeAsync(0);
+  settings.customQuality.fps = 120;
+  await vi.advanceTimersByTimeAsync(2000);
+  report.stop(); await report.save('');
+  const result = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
+  expect(result.startSettings.preset).toEqual({ width: 2560, height: 1440, maxFrameRate: 180, maxBitrate: 40_000_000 });
+  expect(result.samples[1].streams[0].segmentReason).toBe('quality-change');
+  expect(result.summary.segments).toHaveLength(2);
+  expect(result.summary.segments[0].preset.maxFrameRate).toBe(180);
+  expect(result.summary.segments[1].preset.maxFrameRate).toBe(120);
+  expect(result.samples[1].streams[0].sourceFps).toBeNull();
+});
+
+it('手动码率变化及恢复推荐另起分段，报告同时记录来源与实际配置上限', async () => {
+  const { report, settings, exportDiagnosticReport } = setup();
+  settings.quality = 'custom';
+  settings.customQuality = { resolution: 1080, fps: 60, bitrateMbps: 6 };
+  report.start(); await vi.advanceTimersByTimeAsync(0);
+  settings.customQuality.bitrateMbps = 10;
+  await vi.advanceTimersByTimeAsync(2000);
+  settings.customQuality = { resolution: 1080, fps: 60 };
+  await vi.advanceTimersByTimeAsync(2000);
+  report.stop(); await report.save('');
+  const result = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
+  expect(result.startSettings).toMatchObject({ bitrateMode: 'manual', preset: { maxBitrate: 6_000_000 } });
+  expect(result.summary.segments.map((segment: { bitrateMode: string; preset: { maxBitrate: number } }) =>
+    [segment.bitrateMode, segment.preset.maxBitrate])).toEqual([['manual', 6_000_000], ['manual', 10_000_000], ['recommended', 12_000_000]]);
+  expect(result.samples[1].streams[0].segmentReason).toBe('quality-change');
+  expect(result.samples[2].streams[0].segmentReason).toBe('quality-change');
+});
 
 it.each(['capture', 'unsubscribed', 'disabled', 'muted'])(
   '%s 暂停及恢复边界不计入摘要，原始区间与累计数仍保留', async (pause) => {

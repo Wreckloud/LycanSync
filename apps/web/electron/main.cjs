@@ -653,6 +653,8 @@ function handleNativeSharedTextureFrame(state, frame) {
     return;
   }
   video.helperState = state;
+  video.frameWidth = frame.contentSize.width;
+  video.frameHeight = frame.contentSize.height;
   let helperBridge = helperProcessBridges.get(state);
   let owned;
   let imported;
@@ -743,10 +745,10 @@ function handleNativeSharedTextureFrame(state, frame) {
   }
 }
 
-async function startNativeVideo(sourceId, maxFps, settings) {
+async function startNativeVideo(sourceId, maxFps, settings, resolution) {
   if (closing) throw new Error('mediaHelperShuttingDown');
   if (process.platform !== 'win32') throw new Error('platformUnsupported');
-  if (!Number.isInteger(maxFps) || maxFps < 1 || maxFps > 120
+  if (![30, 60, 120, 180].includes(maxFps)
       || typeof sourceId !== 'string' || sourceId.length > 128) throw new Error('invalidVideoStart');
   if (nativeVideoSession) throw new Error('videoCaptureAlreadyRunning');
   if (!nativeMediaBridge) nativeMediaBridge = loadNativeMediaBridge();
@@ -768,13 +770,15 @@ async function startNativeVideo(sourceId, maxFps, settings) {
       target = { kind: game ? 'game' : 'window', windowId, propertyName, propertyValue };
     }
     if (closing || video.stopping || nativeVideoSession !== video) throw new Error('nativeVideoSessionStopped');
-    const start = obsCaptureHost.start(sourceId, maxFps, sessionId, target, settings);
+    const obsStartedAt = performance.now();
+    const start = obsCaptureHost.start(sourceId, maxFps, sessionId, target, settings, resolution);
     video.helperState = obsCaptureHost.state;
     const started = await start;
     if (started.sessionId !== sessionId || !started.changed || closing || video.stopping || nativeVideoSession !== video) {
       throw new Error('mediaHelperInvalidVideoStart');
     }
     video.starting = false;
+    void writeMediaDiagnostic({ stage: 'obsReady', durationMs: Math.round(performance.now() - obsStartedAt) });
     return { sessionId, changed: true };
   } catch (error) {
     if (!video.failureNotified) recordVideoFailure('startCapture', error);
@@ -1326,9 +1330,33 @@ ipcMain.handle('settings:screen-share:support', (event) => {
   const build = process.platform === 'win32' ? Number(osRelease().split('.')[2]) : 0;
   return { hideCursor: build >= 19041, hideBorder: build >= 20348 };
 });
-ipcMain.handle('media:native-video:start', (event, sourceId, maxFps, settings) => {
+ipcMain.handle('media:native-video:start', (event, sourceId, maxFps, settings, resolution) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
-  return startNativeVideo(sourceId, maxFps, settings);
+  return startNativeVideo(sourceId, maxFps, settings, resolution);
+});
+ipcMain.on('media:screen-share-startup', (event, sessionId, stage, durationMs, audioTiming) => {
+  const video = nativeVideoSession;
+  if (!trustedSender(event) || closing || !video || video.starting || video.stopping
+      || video.sessionId !== sessionId
+      || !['screenVideoFirstFrame', 'screenAudioStartup', 'screenVideoPublished'].includes(stage)
+      || !Number.isFinite(durationMs) || durationMs < 0 || durationMs > 300_000) return;
+  let audioDetails;
+  if (stage === 'screenAudioStartup') {
+    if (!audioTiming || !['published', 'failed'].includes(audioTiming.outcome)
+        || !['capture', 'graph', 'publish'].includes(audioTiming.phase)) return;
+    audioDetails = { outcome: audioTiming.outcome, phase: audioTiming.phase };
+    for (const key of ['pluginLoadMs', 'captureReadyMs', 'graphReadyMs', 'publishMs']) {
+      const value = audioTiming[key];
+      if (value === undefined) continue;
+      if (!Number.isFinite(value) || value < 0 || value > 300_000) return;
+      audioDetails[key] = Math.round(value);
+    }
+  }
+  // 每个采集会话每阶段只保留一次，不记录来源名称、句柄或会话标识。
+  video.startupTimings ??= new Set();
+  if (video.startupTimings.has(stage)) return;
+  video.startupTimings.add(stage);
+  void writeMediaDiagnostic({ stage, durationMs: Math.round(durationMs), ...audioDetails });
 });
 ipcMain.handle('media:native-video:stop', (event, sessionId) => {
   if (!trustedSender(event) || closing || typeof sessionId !== 'string' || !sessionId || sessionId.length > 128) {
@@ -1336,10 +1364,10 @@ ipcMain.handle('media:native-video:stop', (event, sessionId) => {
   }
   return stopNativeVideo(sessionId);
 });
-ipcMain.handle('media:native-video:configure', (event, sessionId, maxFps) => {
+ipcMain.handle('media:native-video:configure', (event, sessionId, maxFps, resolution) => {
   if (!trustedSender(event) || closing || !nativeVideoSession || nativeVideoSession.stopping
       || nativeVideoSession.sessionId !== sessionId) throw new Error('请求参数无效');
-  return obsCaptureHost.configureVideo(sessionId, maxFps);
+  return obsCaptureHost.configureVideo(sessionId, maxFps, resolution);
 });
 ipcMain.handle('media:remote-control:authorize', (event, sessionId, controlSessionId, controllerIdentity) => {
   if (!trustedSender(event) || closing || typeof sessionId !== 'string'
@@ -1417,7 +1445,7 @@ ipcMain.handle('media:diagnostics', async (event) => {
     Object.assign(diagnostics, {
       helperVersion: obsDiagnostics.helperVersion, captureBackend: 'obsLibobs',
       state: video.stopping ? 'stopping' : 'running', sessionId: video.sessionId, available: Boolean(state?.alive),
-      sourceKind: video.sourceKind, frameWidth: 1920, frameHeight: 1080,
+      sourceKind: video.sourceKind, frameWidth: video.frameWidth ?? null, frameHeight: video.frameHeight ?? null,
       framesReceived: obsDiagnostics.renderedFrames, framesProcessed: obsDiagnostics.bridgeFrames,
       droppedNotifications: null, rawCaptureFps: null, probeProcessedFps: null,
       videoOutputFps: null, videoOutputDroppedFrames: null, obsBridgeDroppedFrames: obsDiagnostics.bridgeDroppedFrames,

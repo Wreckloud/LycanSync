@@ -131,17 +131,22 @@ interface Window {
     listNativeVideoSources(): Promise<{ revision: number; discoveryId: string; sources: NativeVideoSource[] }>;
     getNativeVideoSourceThumbnails(sources: NativeVideoSource[]): Promise<{ sourceId: string; thumbnail: string }[]>;
     getScreenShareSupport(): Promise<{ hideCursor: boolean; hideBorder: boolean }>;
-    startNativeVideo(sourceId: string, maxFps: number, settings: { hideCursor: boolean; hideBorder: boolean }): Promise<{ sessionId: string; changed: boolean }>;
+    startNativeVideo(sourceId: string, maxFps: number, settings: { hideCursor: boolean; hideBorder: boolean }, resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean }>;
     stopNativeVideo(sessionId: string): Promise<{ changed: boolean }>;
-    configureNativeVideo(sessionId: string, maxFps: number): Promise<{ changed: boolean }>;
+    configureNativeVideo(sessionId: string, maxFps: number, resolution?: { width: number; height: number }): Promise<{ changed: boolean }>;
     authorizeNativeRemoteControl(sessionId: string, controlSessionId: string, controllerIdentity: string): Promise<{ changed: boolean }>;
     sendNativeRemoteInput(sessionId: string, controlSessionId: string, controllerIdentity: string, sequence: number,
       input: import('./rtc/remoteControl').RemoteControlInput): Promise<{ changed: boolean; dropped?: boolean }>;
     revokeNativeRemoteControl(sessionId: string, controlSessionId: string): Promise<{ changed: boolean }>;
     onNativeVideoError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
     onNativeVideoSuspended(callback: (status: { sessionId: string; suspended: boolean }) => void): () => void;
+    recordScreenShareStartupTiming(sessionId: string,
+      stage: 'screenVideoFirstFrame' | 'screenAudioStartup' | 'screenVideoPublished', durationMs: number,
+      audioTiming?: { outcome: 'published' | 'failed'; phase: 'capture' | 'graph' | 'publish';
+        pluginLoadMs?: number; captureReadyMs?: number; graphReadyMs?: number; publishMs?: number }): void;
     startNativeScreenAudio(sourceId: string, sessionId: string): Promise<{
       sampleRate: number; channels: 2; bitsPerSample: 32; nominalChunkMs: 10;
+      pluginLoadMs: number; captureReadyMs: number;
     }>;
     stopNativeScreenAudio(sessionId: string): Promise<{ changed: boolean }>;
     onNativeScreenAudioChunk(callback: (chunk: NativeScreenAudioChunk) => void): () => void;

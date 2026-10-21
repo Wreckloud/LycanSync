@@ -121,14 +121,16 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   listNativeVideoSources: () => ipcRenderer.invoke('media:video-sources'),
   getNativeVideoSourceThumbnails: (sources) => ipcRenderer.invoke('media:video-source-thumbnails', sources),
   getScreenShareSupport: () => ipcRenderer.invoke('settings:screen-share:support'),
-  startNativeVideo: (sourceId, maxFps, settings) => ipcRenderer.invoke('media:native-video:start', sourceId, maxFps, settings),
+  startNativeVideo: (sourceId, maxFps, settings, resolution) => ipcRenderer.invoke('media:native-video:start', sourceId, maxFps, settings, resolution),
+  recordScreenShareStartupTiming: (sessionId, stage, durationMs, audioTiming) =>
+    ipcRenderer.send('media:screen-share-startup', sessionId, stage, durationMs, audioTiming),
   stopNativeVideo: async (sessionId) => {
     // 停止等待前释放画布；清理期间迟到的旧帧也不能留下缓存或影响新会话。
     releaseNativeVideoCanvas(sessionId);
     try { return await ipcRenderer.invoke('media:native-video:stop', sessionId); }
     finally { releaseNativeVideoCanvas(sessionId); }
   },
-  configureNativeVideo: (sessionId, maxFps) => ipcRenderer.invoke('media:native-video:configure', sessionId, maxFps),
+  configureNativeVideo: (sessionId, maxFps, resolution) => ipcRenderer.invoke('media:native-video:configure', sessionId, maxFps, resolution),
   authorizeNativeRemoteControl: (sessionId, controlSessionId, controllerIdentity) =>
     ipcRenderer.invoke('media:remote-control:authorize', sessionId, controlSessionId, controllerIdentity),
   sendNativeRemoteInput: (sessionId, controlSessionId, controllerIdentity, sequence, input) =>

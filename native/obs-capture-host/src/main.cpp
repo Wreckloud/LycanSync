@@ -21,6 +21,7 @@
 #include <iomanip>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -28,8 +29,6 @@ namespace {
 
 static_assert(LIBOBS_API_VER == MAKE_SEMANTIC_VERSION(32, 2, 2), "OBS 32.2.2 headers are required");
 
-constexpr uint32_t kOutputWidth = 1920;
-constexpr uint32_t kOutputHeight = 1080;
 constexpr size_t kTextureSlotCount = 3;
 constexpr auto kGpuFenceTimeout = std::chrono::milliseconds(250);
 
@@ -55,6 +54,11 @@ struct HostState {
   bool game_source = false;
   WindowVideoTarget window_target;
   bool suspended = false;
+  bool configuration_paused = false;
+  uint32_t output_width = 1920;
+  uint32_t output_height = 1080;
+  uint32_t content_width = 0;
+  uint32_t content_height = 0;
 };
 
 HostState g_host;
@@ -106,9 +110,9 @@ void write_frame_event(size_t slot_index, const TextureSlot &slot, uint64_t time
   std::cout << "{\"event\":\"sharedTextureFrame\",\"sessionId\":\"" << g_host.session_id
             << "\",\"slotIndex\":" << slot_index << ",\"sourceHandleHex\":\"" << std::hex
             << std::setw(16) << std::setfill('0') << handle << std::dec << "\",\"pixelFormat\":\"bgra\",\"codedSize\":{\"width\":"
-            << kOutputWidth << ",\"height\":" << kOutputHeight
-            << "},\"contentSize\":{\"width\":" << kOutputWidth << ",\"height\":"
-            << kOutputHeight << "},\"timestampMicros\":" << timestamp_micros
+            << g_host.output_width << ",\"height\":" << g_host.output_height
+            << "},\"contentSize\":{\"width\":" << g_host.content_width << ",\"height\":"
+            << g_host.content_height << "},\"timestampMicros\":" << timestamp_micros
             << ",\"renderedFrames\":" << g_host.rendered_frames
             << ",\"bridgeFrames\":" << g_host.frame_count << ",\"bridgeDroppedFrames\":"
             << g_host.dropped_frames << "}\n";
@@ -124,8 +128,8 @@ bool gpu_operation_succeeded(HRESULT result, const char *stage) {
 
 bool create_texture_slot(TextureSlot &slot, ID3D11Device *device) {
   const D3D11_TEXTURE2D_DESC description{
-      .Width = kOutputWidth,
-      .Height = kOutputHeight,
+      .Width = g_host.output_width,
+      .Height = g_host.output_height,
       .MipLevels = 1,
       .ArraySize = 1,
       .Format = DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -201,12 +205,18 @@ bool window_delivery_allowed(obs_source_t *source) {
 
 void render_shared_frame(void *parameter) {
   const std::lock_guard<std::mutex> render_lock(g_render_mutex);
-  if (g_host.texture_setup_failed) return;
+  if (g_host.texture_setup_failed || g_host.configuration_paused) return;
   ++g_host.rendered_frames;
   auto *capture_source = static_cast<obs_source_t *>(parameter);
   if (!window_delivery_allowed(capture_source)) return;
   // 初始化时主画布已能渲染，但来源尚未就绪，不能把空画布计作首帧交付。
-  if (!obs_source_get_width(capture_source) || !obs_source_get_height(capture_source)) return;
+  const auto source_width = obs_source_get_width(capture_source);
+  const auto source_height = obs_source_get_height(capture_source);
+  if (!source_width || !source_height) return;
+  const auto scale = std::min({1.0, static_cast<double>(g_host.output_width) / source_width,
+      static_cast<double>(g_host.output_height) / source_height});
+  g_host.content_width = std::max(1u, static_cast<uint32_t>(source_width * scale));
+  g_host.content_height = std::max(1u, static_cast<uint32_t>(source_height * scale));
   if (!g_host.textures_initialized && !initialize_textures()) {
     g_host.texture_setup_failed = true;
     write_event("sharedTextureUnavailable");
@@ -245,7 +255,7 @@ void render_shared_frame(void *parameter) {
   if (source) source->GetDesc(&source_description);
   const bool bgra_format = source_description.Format == DXGI_FORMAT_B8G8R8A8_UNORM
                        || source_description.Format == DXGI_FORMAT_B8G8R8A8_TYPELESS;
-  if (!context || !source || source_description.Width != kOutputWidth || source_description.Height != kOutputHeight || !bgra_format) {
+  if (!context || !source || source_description.Width != g_host.output_width || source_description.Height != g_host.output_height || !bgra_format) {
     std::fprintf(stderr, "mainTexture context=%d source=%d size=%ux%u format=%u\n",
                  context != nullptr, source != nullptr, source_description.Width, source_description.Height, source_description.Format);
     release_busy_slot(slot_index);
@@ -344,10 +354,15 @@ bool parse_diagnostics_command(std::string_view command, std::string_view &reque
 }
 
 bool valid_frame_rate(uint32_t frame_rate) {
-  return frame_rate == 30 || frame_rate == 60 || frame_rate == 120;
+  return frame_rate == 30 || frame_rate == 60 || frame_rate == 120 || frame_rate == 180;
 }
 
-bool parse_configure_command(std::string_view command, std::string_view &request_id, uint32_t &frame_rate) {
+bool valid_resolution(uint32_t width, uint32_t height) {
+  return (height == 360 || height == 720 || height == 1080 || height == 1440) && width == height * 16 / 9;
+}
+
+bool parse_configure_command(std::string_view command, std::string_view &request_id, uint32_t &frame_rate,
+    uint32_t &width, uint32_t &height) {
   constexpr std::string_view prefix = "configure:";
   if (!command.starts_with(prefix)) return false;
   const auto values = command.substr(prefix.size());
@@ -356,32 +371,64 @@ bool parse_configure_command(std::string_view command, std::string_view &request
   request_id = values.substr(0, separator);
   if (request_id.empty() || request_id.size() > 16
       || !std::all_of(request_id.begin(), request_id.end(), [](char digit) { return digit >= '0' && digit <= '9'; })) return false;
-  const auto value = values.substr(separator + 1);
-  const auto parsed = std::from_chars(value.data(), value.data() + value.size(), frame_rate);
-  return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() && valid_frame_rate(frame_rate);
+  auto remaining = values.substr(separator + 1);
+  for (auto *number : {&frame_rate, &width, &height}) {
+    const auto end = remaining.find(':');
+    const auto value = remaining.substr(0, end);
+    const auto parsed = std::from_chars(value.data(), value.data() + value.size(), *number);
+    if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) return false;
+    if (number == &height) {
+      if (end != std::string_view::npos) return false;
+    } else {
+      if (end == std::string_view::npos) return false;
+      remaining.remove_prefix(end + 1);
+    }
+  }
+  return valid_frame_rate(frame_rate) && valid_resolution(width, height);
 }
 
-bool configure_video(obs_video_info &video, obs_source_t *source, std::string_view request_id, uint32_t frame_rate) {
+void destroy_textures();
+
+bool configure_video(obs_video_info &video, obs_sceneitem_t *item, std::string_view request_id,
+    uint32_t frame_rate, uint32_t width, uint32_t height) {
   bool accepted = true;
-  if (video.fps_num != frame_rate) {
-    // 重置 OBS 渲染节奏，不在页面重复限帧，也不更换采集来源、纹理槽或轨道。
-    obs_remove_main_rendered_callback(render_shared_frame, source);
+  if (video.fps_num != frame_rate || video.base_width != width || video.base_height != height) {
+    // 此时三个槽位均已归还，才能销毁旧纹理；来源、声音及房间身份保持不变。
+    destroy_textures();
     auto next = video;
     next.fps_num = frame_rate;
-    if (obs_reset_video(&next) == OBS_VIDEO_SUCCESS) video = next;
+    next.base_width = next.output_width = width;
+    next.base_height = next.output_height = height;
+    accepted = obs_reset_video(&next) == OBS_VIDEO_SUCCESS;
+    if (accepted) {
+      g_host.output_width = width;
+      g_host.output_height = height;
+      obs_enter_graphics();
+      accepted = initialize_textures();
+      obs_leave_graphics();
+    }
+    if (accepted) video = next;
     else {
-      accepted = false;
+      destroy_textures();
       if (obs_reset_video(&video) != OBS_VIDEO_SUCCESS) {
         write_event("obsCaptureConfigurationRollbackFailed");
         return false;
       }
+      g_host.output_width = video.base_width;
+      g_host.output_height = video.base_height;
+      obs_enter_graphics();
+      const bool restored = initialize_textures();
+      obs_leave_graphics();
+      if (!restored) { write_event("obsCaptureConfigurationRollbackFailed"); return false; }
     }
-    obs_add_main_rendered_callback(render_shared_frame, source);
+    const vec2 bounds{static_cast<float>(video.base_width), static_cast<float>(video.base_height)};
+    obs_sceneitem_set_bounds(item, &bounds);
   }
   const std::lock_guard<std::mutex> output_lock(g_output_mutex);
   std::cout << "{\"event\":\"" << (accepted ? "captureConfigured" : "captureConfigurationRejected")
             << "\",\"requestId\":\"" << request_id << "\",\"sessionId\":\"" << g_host.session_id
-            << "\",\"maxFps\":" << video.fps_num << "}\n";
+            << "\",\"maxFps\":" << video.fps_num << ",\"width\":" << video.base_width
+            << ",\"height\":" << video.base_height << "}\n";
   std::cout.flush();
   return true;
 }
@@ -398,13 +445,14 @@ void destroy_textures() {
     slot.d3d_texture.Reset();
   }
   obs_leave_graphics();
+  g_host.textures_initialized = false;
 }
 
 }  // namespace
 
 int wmain(int argc, wchar_t **argv) {
-  if (argc != 12) {
-    std::wcerr << L"usage: lycansync-obs-capture-host <win-capture.dll> <module-data-dir> <monitor|window|game> <target> <capture-cursor:0|1> <hide-border:0|1> <session-id> <module-config-dir> <max-fps:30|60|120> <window-property> <window-property-value>\n";
+  if (argc != 14) {
+    std::wcerr << L"usage: lycansync-obs-capture-host <win-capture.dll> <module-data-dir> <monitor|window|game> <target> <capture-cursor:0|1> <hide-border:0|1> <session-id> <module-config-dir> <max-fps:30|60|120|180> <window-property> <window-property-value> <width> <height>\n";
     return 2;
   }
 
@@ -416,6 +464,11 @@ int wmain(int argc, wchar_t **argv) {
   const std::string frame_rate_argument = to_utf8(argv[9]);
   uint32_t frame_rate = 0;
   const auto parsed_frame_rate = std::from_chars(frame_rate_argument.data(), frame_rate_argument.data() + frame_rate_argument.size(), frame_rate);
+  const auto width_argument = to_utf8(argv[12]);
+  const auto height_argument = to_utf8(argv[13]);
+  uint32_t width = 0, height = 0;
+  const auto parsed_width = std::from_chars(width_argument.data(), width_argument.data() + width_argument.size(), width);
+  const auto parsed_height = std::from_chars(height_argument.data(), height_argument.data() + height_argument.size(), height);
   const std::wstring_view capture_cursor_argument(argv[5]);
   const std::wstring_view hide_border_argument(argv[6]);
   if (capture_cursor_argument.size() != 1
@@ -426,11 +479,16 @@ int wmain(int argc, wchar_t **argv) {
       || config_path.empty() || !std::filesystem::path(argv[8]).is_absolute()
       || parsed_frame_rate.ec != std::errc{} || parsed_frame_rate.ptr != frame_rate_argument.data() + frame_rate_argument.size()
       || !valid_frame_rate(frame_rate)
+      || parsed_width.ec != std::errc{} || parsed_width.ptr != width_argument.data() + width_argument.size()
+      || parsed_height.ec != std::errc{} || parsed_height.ptr != height_argument.data() + height_argument.size()
+      || !valid_resolution(width, height)
       || (!window_source && !monitor_exists(argv[4]))) {
     write_event("invalidCaptureArguments");
     return 2;
   }
   g_host.session_id = session_id;
+  g_host.output_width = width;
+  g_host.output_height = height;
   g_host.window_source = window_source;
   g_host.game_source = game_source;
   WindowVideoTarget window_target;
@@ -471,10 +529,10 @@ int wmain(int argc, wchar_t **argv) {
   video.graphics_module = "libobs-d3d11";
   video.fps_num = frame_rate;
   video.fps_den = 1;
-  video.base_width = kOutputWidth;
-  video.base_height = kOutputHeight;
-  video.output_width = kOutputWidth;
-  video.output_height = kOutputHeight;
+  video.base_width = g_host.output_width;
+  video.base_height = g_host.output_height;
+  video.output_width = g_host.output_width;
+  video.output_height = g_host.output_height;
   video.output_format = VIDEO_FORMAT_BGRA;
   video.gpu_conversion = true;
   video.colorspace = VIDEO_CS_SRGB;
@@ -548,12 +606,12 @@ int wmain(int argc, wchar_t **argv) {
     return 1;
   }
   obs_transform_info transform{};
-  transform.pos = {static_cast<float>(kOutputWidth) / 2.0f, static_cast<float>(kOutputHeight) / 2.0f};
+  transform.pos = {0.0f, 0.0f};
   transform.scale = {1.0f, 1.0f};
-  transform.alignment = OBS_ALIGN_CENTER;
-  transform.bounds_type = OBS_BOUNDS_SCALE_INNER;
-  transform.bounds_alignment = OBS_ALIGN_CENTER;
-  transform.bounds = {static_cast<float>(kOutputWidth), static_cast<float>(kOutputHeight)};
+  transform.alignment = OBS_ALIGN_TOP | OBS_ALIGN_LEFT;
+  transform.bounds_type = OBS_BOUNDS_MAX_ONLY;
+  transform.bounds_alignment = OBS_ALIGN_TOP | OBS_ALIGN_LEFT;
+  transform.bounds = {static_cast<float>(g_host.output_width), static_cast<float>(g_host.output_height)};
   obs_sceneitem_set_info2(item, &transform);
   // scene 持有 add 返回的元素，此处没有额外引用需要释放。
   obs_set_output_source(0, obs_scene_get_source(scene));
@@ -565,17 +623,22 @@ int wmain(int argc, wchar_t **argv) {
   if (capture_data.filename().empty()) capture_data = capture_data.parent_path();
   const auto audio_data = capture_data.parent_path() / L"win-wasapi";
   ScreenAudioHost screen_audio(to_utf8(audio_module.wstring()), to_utf8(audio_data.wstring()), window_target, window_source,
-      [](std::string_view event, std::string_view audio_id, std::string_view code) {
+      [](std::string_view event, std::string_view audio_id, std::string_view code, ScreenAudioStartupTiming timing) {
         const std::lock_guard<std::mutex> output_lock(g_output_mutex);
         std::cout << "{\"event\":\"" << event << "\",\"sessionId\":\"" << g_host.session_id
                   << "\",\"audioId\":\"" << audio_id << "\"";
-        if (event == "audioStarted") std::cout << ",\"sampleRate\":48000,\"channels\":2,\"bitsPerSample\":32,\"nominalChunkMs\":10";
+        if (event == "audioStarted") {
+          std::cout << ",\"sampleRate\":48000,\"channels\":2,\"bitsPerSample\":32,\"nominalChunkMs\":10"
+                    << ",\"pluginLoadMs\":" << timing.plugin_load_ms << ",\"captureReadyMs\":" << timing.capture_ready_ms;
+        }
         if (!code.empty()) std::cout << ",\"code\":\"" << code << "\"";
         std::cout << "}\n";
         std::cout.flush();
       });
 
   std::string command;
+  struct PendingConfiguration { std::string id; uint32_t fps; uint32_t width; uint32_t height; };
+  std::optional<PendingConfiguration> pending_configuration;
   while (std::getline(std::cin, command)) {
     if (command == "shutdown") break;
     if (screen_audio.command(command)) continue;
@@ -586,9 +649,31 @@ int wmain(int argc, wchar_t **argv) {
     }
     std::string_view request_id;
     if (parse_diagnostics_command(command, request_id)) write_diagnostics_event(request_id, screen_audio.snapshot());
-    uint32_t next_frame_rate = 0;
-    if (parse_configure_command(command, request_id, next_frame_rate)
-        && !configure_video(video, source, request_id, next_frame_rate)) break;
+    uint32_t next_frame_rate = 0, next_width = 0, next_height = 0;
+    if (!pending_configuration && parse_configure_command(command, request_id, next_frame_rate, next_width, next_height)) {
+      obs_remove_main_rendered_callback(render_shared_frame, source);
+      const std::lock_guard<std::mutex> render_lock(g_render_mutex);
+      g_host.configuration_paused = true;
+      pending_configuration = PendingConfiguration{std::string(request_id), next_frame_rate, next_width, next_height};
+    }
+    if (pending_configuration) {
+      bool slots_released;
+      {
+        const std::lock_guard<std::mutex> slot_lock(g_slot_mutex);
+        slots_released = std::none_of(g_host.slots.begin(), g_host.slots.end(), [](const auto &slot) { return slot.busy; });
+      }
+      // 等待期间继续处理 release 命令，不能在命令线程阻塞归还路径。
+      if (slots_released) {
+        const auto &next = *pending_configuration;
+        if (!configure_video(video, item, next.id, next.fps, next.width, next.height)) break;
+        pending_configuration.reset();
+        {
+          const std::lock_guard<std::mutex> render_lock(g_render_mutex);
+          g_host.configuration_paused = false;
+        }
+        obs_add_main_rendered_callback(render_shared_frame, source);
+      }
+    }
   }
 
   screen_audio.shutdown();

@@ -119,7 +119,7 @@ bool ScreenAudioHost::command(std::string_view command) {
     const auto id = command.substr(10);
     if (session_ && session_->id == id) {
       session_->request_stop();
-      if (session_->done) emit_("audioStopped", id, "");
+      if (session_->done) emit_("audioStopped", id, "", {});
     }
     return true;
   }
@@ -135,7 +135,7 @@ bool ScreenAudioHost::command(std::string_view command) {
   const auto process_argument = mode_and_process.substr(process_separator + 1);
   DWORD client_process = 0;
   const auto process = std::from_chars(process_argument.data(), process_argument.data() + process_argument.size(), client_process);
-  const auto reject = [&](std::string_view code) { emit_("audioFailed", id, code); emit_("audioStopped", id, ""); };
+  const auto reject = [&](std::string_view code) { emit_("audioFailed", id, code, {}); emit_("audioStopped", id, "", {}); };
   if (process.ec != std::errc{} || process.ptr != process_argument.data() + process_argument.size()
       || !client_process || (mode != "process" && mode != "systemMix")) {
     reject("screenShareAudioUnsupported");
@@ -150,7 +150,9 @@ bool ScreenAudioHost::command(std::string_view command) {
     reject("screenShareAudioUnsupported");
     return true;
   }
+  uint64_t plugin_load_ms = 0;
   if (!module_loaded_) {
+    const auto plugin_started = std::chrono::steady_clock::now();
     // 官方默认设备通知器在加载线程创建 COM 对象，不能只初始化采集线程。
     if (!module_apartment_initialized_) {
       if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) { reject("screenShareAudioStartFailed"); return true; }
@@ -163,19 +165,21 @@ bool ScreenAudioHost::command(std::string_view command) {
       return true;
     }
     module_loaded_ = true;
+    plugin_load_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - plugin_started).count();
   }
   auto session = std::make_shared<Session>();
   session->id = id;
   session->statistics.state = "starting";
   if (!session->stop || !session->ready) { reject("screenShareAudioStartFailed"); return true; }
   session_ = session;
-  session->worker = std::thread([this, session, system_mix = mode == "systemMix", client_process] {
-    run(session, system_mix, client_process);
+  session->worker = std::thread([this, session, system_mix = mode == "systemMix", client_process, plugin_load_ms] {
+    run(session, system_mix, client_process, plugin_load_ms);
   });
   return true;
 }
 
-void ScreenAudioHost::run(const std::shared_ptr<Session> &session, bool system_mix, DWORD client_process) {
+void ScreenAudioHost::run(const std::shared_ptr<Session> &session, bool system_mix, DWORD client_process, uint64_t plugin_load_ms) {
+  const auto capture_started = std::chrono::steady_clock::now();
   const HRESULT apartment = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   HANDLE pipe = INVALID_HANDLE_VALUE;
   HANDLE completed = nullptr;
@@ -236,7 +240,9 @@ void ScreenAudioHost::run(const std::shared_ptr<Session> &session, bool system_m
           const std::lock_guard<std::mutex> lock(session->mutex);
           if (!stopped()) session->statistics.state = "running";
         }
-        emit_("audioStarted", session->id, "");
+        // 来源就绪包含管道、来源创建及 Windows 激活，不冒充单个 API 的耗时。
+        const auto capture_ready_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - capture_started).count();
+        emit_("audioStarted", session->id, "", {plugin_load_ms, static_cast<uint64_t>(capture_ready_ms)});
       }
       if (!started && std::chrono::steady_clock::now() >= deadline) { failure = "screenShareAudioStartTimedOut"; break; }
       ScreenAudioPacket packet;
@@ -259,7 +265,7 @@ void ScreenAudioHost::run(const std::shared_ptr<Session> &session, bool system_m
       session->statistics.state = "failed";
       session->statistics.last_error = failure;
     }
-    emit_("audioFailed", session->id, failure);
+    emit_("audioFailed", session->id, failure, {});
   }
   if (callback_added) obs_source_remove_audio_capture_callback(source, Session::capture, session.get());
   if (source) { obs_source_remove(source); obs_source_release(source); }
@@ -275,8 +281,8 @@ void ScreenAudioHost::run(const std::shared_ptr<Session> &session, bool system_m
     session->statistics.dropped_chunks = session->queue.dropped();
     session->done = destroyed;
   }
-  if (destroyed) emit_("audioStopped", session->id, "");
-  else emit_("audioFailed", session->id, "screenShareAudioStopFailed");
+  if (destroyed) emit_("audioStopped", session->id, "", {});
+  else emit_("audioFailed", session->id, "screenShareAudioStopFailed", {});
 }
 
 ScreenAudioSnapshot ScreenAudioHost::snapshot() const {

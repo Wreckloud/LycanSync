@@ -2,17 +2,19 @@ import { onScopeDispose, ref, shallowRef, watch } from 'vue';
 import type { Participant, Room } from 'livekit-client';
 import { createMediaDiagnosticsSampler, type MediaDiagnosticsSnapshot } from './mediaDiagnostics';
 import packageInfo from '../../package.json';
-import { SCREEN_SHARE_QUALITIES } from '../rtc/screenShareQuality';
+import { SCREEN_SHARE_QUALITIES, screenShareQuality, type CustomScreenShareQuality } from '../rtc/screenShareQuality';
 
 const SAMPLE_INTERVAL_MS = 2_000;
 const MAX_SAMPLES = 900;
 const MAX_DURATION_MS = 30 * 60_000;
 const MAX_SAMPLE_BYTES = 6 * 1024 * 1024;
-type DiagnosticSettings = { quality: string; inputGain: number; outputVolume: number; screenShareVolume: number;
+type DiagnosticSettings = { quality: string; customQuality?: CustomScreenShareQuality;
+  inputGain: number; outputVolume: number; screenShareVolume: number;
   voiceVolumeBalance: boolean;
   noiseSuppression: boolean; autoGainControl: boolean; voiceEnhancement: boolean; echoCancellation: boolean;
   stageCount: number; focused: boolean };
-type ReportSettings = DiagnosticSettings & { preset: { width: number; height: number; maxFrameRate: number; maxBitrate: number } | null };
+type ReportSettings = DiagnosticSettings & { bitrateMode: 'recommended' | 'manual' | null;
+  preset: { width: number; height: number; maxFrameRate: number; maxBitrate: number } | null };
 
 function numeric(value: unknown) { return typeof value === 'number' && Number.isFinite(value) ? value : null; }
 function label(value: unknown) {
@@ -131,6 +133,7 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
         ? native?.captureBackend ?? (desktop ? '桌面采集方式未取得' : '浏览器屏幕采集') : null,
       quality: first.stream.direction === '发送' ? first.sample.requestedSettings.quality : null,
       preset: first.stream.direction === '发送' ? first.sample.requestedSettings.preset : null,
+      bitrateMode: first.stream.direction === '发送' ? first.sample.requestedSettings.bitrateMode : null,
       actualDimensions: { source: nativeResolution, encoded: encodedDimensions }, targetDimensions: targetResolution,
       durationMs: Math.max(0, last.sample.elapsedMs - first.sample.elapsedMs), sampleCount: entries.length,
       validSampleCounts: { nativeCaptureFps: nativeCaptureFps.length, nativeProcessedFps: nativeProcessedFps.length,
@@ -260,10 +263,14 @@ export function useDiagnosticReport(options: {
   const aliases = new Map<string, string>();
 
   function readSettings(): ReportSettings {
-    const settings = options.settings();
-    const preset = SCREEN_SHARE_QUALITIES.find((item) => item.id === settings.quality);
-    return { ...settings, preset: preset ? { width: preset.width, height: preset.height,
-      maxFrameRate: preset.fps, maxBitrate: preset.bitrate } : null };
+    const { customQuality, ...settings } = options.settings();
+    const selected = SCREEN_SHARE_QUALITIES.find((item) => item.id === settings.quality);
+    const preset = selected ? screenShareQuality(selected.id, customQuality) : null;
+    const bitrateMode = !preset ? null
+      : selected?.id === 'custom' && customQuality?.bitrateMbps !== undefined ? 'manual' : 'recommended';
+    return { ...settings, bitrateMode,
+      preset: preset ? { width: preset.width, height: preset.height,
+        maxFrameRate: preset.fps, maxBitrate: preset.bitrate } : null };
   }
 
   function updateTimer() {
@@ -298,7 +305,9 @@ export function useDiagnosticReport(options: {
         const reportStreams = exported.streams.map((stream, index) => {
           const observed = snapshot.streams[index];
           const streamKey = `${stream.member}:${stream.direction}`;
-          const quality = stream.direction === '发送' ? requestedSettings.quality : '';
+          // 同为自定义模式时，尺寸、帧率或码率变化也必须划分统计区间。
+          const quality = stream.direction === '发送'
+            ? `${requestedSettings.quality}:${requestedSettings.bitrateMode}:${JSON.stringify(requestedSettings.preset)}` : '';
           const sourceDimensions = stream.direction === '发送' && exported.nativeVideoSessionMatched
             && snapshot.native?.frameWidth && snapshot.native.frameHeight
             ? `${snapshot.native.frameWidth}×${snapshot.native.frameHeight}` : '';

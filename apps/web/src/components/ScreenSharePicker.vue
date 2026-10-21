@@ -1,25 +1,28 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Monitor } from '@lucide/vue';
-import { SCREEN_SHARE_QUALITIES, screenShareQuality, type ScreenShareQualityId } from '../rtc/screenShareQuality';
+import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, SCREEN_SHARE_QUALITIES, screenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from '../rtc/screenShareQuality';
+import ScreenShareCustomQuality from './ScreenShareCustomQuality.vue';
 import type { NativeScreenAudioMode } from '../rtc/nativeScreenAudioMode';
 import InlineFeedback from './InlineFeedback.vue';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   sources: { id: string; name: string; thumbnail?: string; type: 'window' | 'screen' }[];
   sourceType: 'window' | 'screen'; selectedId: string; quality: ScreenShareQualityId;
   audioMode: NativeScreenAudioMode; audioReady: boolean; audioFailed: boolean; shareAudio: boolean;
   loading: boolean; error: string; notice: string;
-}>();
+  customQuality?: CustomScreenShareQuality;
+}>(), { customQuality: () => ({ ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY }) });
 const emit = defineEmits<{
   close: []; confirm: []; choose: [id: string]; refreshThumbnails: [];
   'update:sourceType': [type: 'window' | 'screen']; 'update:quality': [quality: ScreenShareQualityId];
   'update:shareAudio': [enabled: boolean];
+  'update:customQuality': [quality: CustomScreenShareQuality];
 }>();
 const panel = ref<HTMLElement | null>(null);
 const sourcesElement = ref<HTMLDivElement | null>(null);
 const sources = computed(() => props.sources.filter((source) => source.type === props.sourceType));
-const quality = computed(() => screenShareQuality(props.quality));
+const quality = computed(() => screenShareQuality(props.quality, props.customQuality));
 const canChoose = computed(() => props.audioReady && !props.audioFailed);
 const canConfirm = computed(() => canChoose.value && !props.error && props.sources.some((source) => source.id === props.selectedId));
 const feedbackStatus = computed(() => {
@@ -33,7 +36,7 @@ const feedbackStatus = computed(() => {
 });
 const descriptions: Record<ScreenShareQualityId, string> = {
   economy: '减少带宽占用，适合网络受限时观看。', standard: '平衡清晰度与流畅度，适合日常游戏分享。',
-  highFrameRate: '优先展示快速运动画面，对设备和网络要求较高。', text: '优先保留文字和细节，适合文档与代码。',
+  highFrameRate: '优先展示快速运动画面，对设备和网络要求较高。', custom: '按来源比例输出，尽量保持所选帧率。',
 };
 let returnFocus: HTMLElement | null = null;
 const background = new Map<HTMLElement, boolean>();
@@ -41,7 +44,7 @@ const background = new Map<HTMLElement, boolean>();
 function keydown(event: KeyboardEvent) {
   if (event.key === 'Escape') { event.preventDefault(); emit('close'); return; }
   if (event.key !== 'Tab') return;
-  const buttons = [...(panel.value?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)') ?? [])];
+  const buttons = [...(panel.value?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)') ?? [])];
   const first = buttons[0], last = buttons.at(-1);
   if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.value)) { event.preventDefault(); last?.focus(); }
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
@@ -112,6 +115,8 @@ defineExpose({ sourcesElement });
               :aria-selected="quality.id === preset.id" @click="emit('update:quality', preset.id)">{{ preset.label }}</button>
           </div>
         </div>
+        <ScreenShareCustomQuality v-if="quality.id === 'custom'" :model-value="customQuality"
+          @update:model-value="emit('update:customQuality', $event)" />
         <footer class="card-actions">
           <button type="button" class="settings-button" @click="emit('close')">取消</button>
           <InlineFeedback class="card-feedback" :message="audioFailed ? '无法确认共享能力，请关闭后重试。' : error"
