@@ -43,19 +43,19 @@ onScopeDispose(() => removeListener?.());
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
 body { color: #e7ebef; font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; user-select: none; }
 .voice-overlay { height: 100%; padding: 4px 2px; }
-.voice-overlay.editing { border: 1px dashed #6a9fe8; border-radius: 6px; background: #10151a99; }
+.voice-overlay.editing { padding: 3px 1px; border: 1px dashed #6a9fe8; border-radius: 6px; background: #10151a99; }
 .drag-handle { height: 32px; padding: 6px; font-size: 12px; text-align: center; color: #c7d8ef; -webkit-app-region: drag; }
 .members { height: 100%; display: flex; flex-flow: column wrap; align-content: flex-start; gap: 0; }
 .align-right .members { flex-wrap: wrap-reverse; }
 .editing .members { height: calc(100% - 32px); }
-.member { width: calc(var(--column-width) - 4px); height: calc(48px * var(--scale)); flex: 0 0 auto; display: flex; align-items: center; gap: calc(9px * var(--scale)); padding: 4px 0; }
+.member { width: calc(var(--column-width) - 4px); height: calc(40px * var(--scale)); flex: 0 0 auto; display: flex; align-items: center; gap: calc(8px * var(--scale)); padding: calc(4px * var(--scale)) 0; }
 .align-right .member { flex-direction: row-reverse; }
 .align-right .name { text-align: right; }
 .avatar { display: grid; place-items: center; flex-shrink: 0; width: calc(32px * var(--scale)); height: calc(32px * var(--scale)); border: 2px solid transparent; border-radius: 50%; background: #3c4854; font-size: calc(15px * var(--scale)); }
 .avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 .speaking .avatar { border-color: #5acaa5; }
 .speaking .name { color: #8de3c3; }
-.name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(14px * var(--scale)); text-shadow: 0 1px 2px #000, 1px 0 2px #000, -1px 0 2px #000; }
+.name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(15px * var(--scale)); line-height: calc(32px * var(--scale)); text-shadow: 0 1px 2px #000, 1px 0 2px #000, -1px 0 2px #000; }
 .is-muted .name { color: #aab4be; }
 .connection { position: absolute; bottom: 2px; right: 6px; font-size: 11px; color: #b5c6d9; text-shadow: 0 1px 2px #000; }
 </style>

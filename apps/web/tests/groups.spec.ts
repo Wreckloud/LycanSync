@@ -311,7 +311,9 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   await expect(page.locator('.group-member-avatar').first()).toHaveCSS('width', '32px');
   await expect(page.locator('.group-member-name').first()).toHaveCSS('font-size', '15px');
   await expect(page.locator('.member-activity').first()).toHaveCSS('font-size', '12px');
-  await expect(page.locator('.personal-avatar')).toHaveCSS('width', '44px');
+  await expect(page.locator('.personal-avatar')).toHaveCSS('width', '32px');
+  await expect(page.locator('.group-member-row').nth(1).locator('.group-member-info')).toHaveCSS('height', '32px');
+  await expect(page.locator('.group-member-row').nth(1)).toHaveCSS('height', '40px');
   const proportions = await page.evaluate(() => {
     const ratio = (selector: string) => {
       const avatar = document.querySelector(selector)!;
@@ -337,7 +339,7 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.locator('.members-directory').screenshot({ path: test.info().outputPath('members-panel.png') });
   await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
-  await expect(page.locator('.settings-footer .personal-avatar')).toHaveCSS('width', '44px');
+  await expect(page.locator('.settings-footer .personal-avatar')).toHaveCSS('width', '32px');
 });
 
 test('群成员状态长轮询变化后立即刷新完整快照', async ({ page }) => {

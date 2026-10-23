@@ -124,7 +124,7 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
   function place(count) {
     if (!overlay) return;
     const area = display().workArea;
-    const rowHeight = Math.ceil(48 * settings.scale / 100);
+    const rowHeight = Math.ceil(40 * settings.scale / 100);
     const maxRows = Math.max(1, Math.floor((area.height - 64) / rowHeight));
     const rows = Math.max(1, Math.min(count, maxRows));
     const columns = Math.max(1, Math.ceil(count / rows));

@@ -1227,7 +1227,8 @@ function participantListening(participant: Participant) {
         </div>
         <button class="group-button add-group" type="button" aria-label="创建群组" @click="openEditor"><Plus :size="17" /></button>
       </nav>
-      <main v-if="selectedGroup" class="group-main">
+      <main class="group-main">
+        <template v-if="selectedGroup">
         <header class="group-header">
           <div class="group-copy">
             <div class="group-title-row"><GroupMenu :key="selectedGroup.id" :group="selectedGroup" @select="openGroupAction" /></div>
@@ -1277,20 +1278,18 @@ function participantListening(participant: Participant) {
               @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />
           </div>
         </section>
+        </template>
         <div class="group-conversation">
-          <GroupChat :key="selectedGroup.id" :group="selectedGroup"
+          <GroupChat v-if="selectedGroup" :key="selectedGroup.id" :group="selectedGroup"
             :members="selectedGroupDetail?.members ?? []" :user="user" />
-          <GroupMembersPanel :key="selectedGroup.id" :members="orderedMembers" :user="user" :loading="groupLoading"
+          <div v-else class="group-empty">
+            <p v-if="groupError" role="alert">{{ groupError }}</p>
+            <p v-else>还没有群组，点击左侧的 + 创建一个开黑小队。</p>
+          </div>
+          <GroupMembersPanel v-if="selectedGroup" :key="selectedGroup.id" :members="orderedMembers" :user="user" :loading="groupLoading"
             :member-count="selectedGroupDetail?.memberCount"
             :error="groupError" :connection-lost="presenceConnectionLost" :status="memberOnlineStatus"
             :status-label="memberStatusLabel" :activity="memberActivity" />
-        </div>
-      </main>
-      <main v-else class="group-main group-empty">
-        <p v-if="groupError" role="alert">{{ groupError }}</p>
-        <p v-else>还没有群组，点击左侧的 + 创建一个开黑小队。</p>
-      </main>
-      <div class="workspace-footer">
         <Transition enter-active-class="callbar-enter-active">
           <div v-if="callbarGroup || joiningGroupId" class="callbar-reveal" :class="{ 'is-leaving': callbarLeaving }" data-testid="callbar">
             <div class="callbar-content">
@@ -1326,7 +1325,8 @@ function participantListening(participant: Participant) {
           :activity-status="personalActivityStatus">
           <IconButton label="语音与音频设置" @click="openSettings('audio', $event)"><Settings :size="19" /></IconButton>
         </PersonalStatusCard>
-      </div>
+        </div>
+      </main>
     </div>
     <GroupEntryDialog v-if="editorOpen" :group="editingGroup ?? undefined" :create-group="createGroupFromDialog"
       @joined="joinedFromCode" @close="closeGroupEditor" />

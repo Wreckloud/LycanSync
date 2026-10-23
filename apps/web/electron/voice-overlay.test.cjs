@@ -90,6 +90,24 @@ test('默认关闭且无房间不建窗口；已开启且加入语音后才显�
   f.manager.clear();
 });
 
+test('紧凑成员行随缩放计算窗口高度，多列及编辑预览仍保持在工作区内', () => {
+  for (const scale of [75, 100, 150]) {
+    const f = fixture(); f.configure({ scale, displayId: 2 });
+    f.update(0, { members: [member, { ...member, identity: 'two' }] });
+    const window = f.ready();
+    const rowHeight = 40 * scale / 100;
+    assert.equal(window.bounds.height, rowHeight * 2 + 8);
+    f.manager.edit(f.owner, true);
+    assert.equal(window.bounds.height, rowHeight * 2 + 40);
+    const maxRows = Math.floor((1080 - 64) / rowHeight);
+    f.update(1, { members: Array.from({ length: maxRows + 1 }, (_, index) => ({ ...member, identity: String(index) })) });
+    assert.equal(window.bounds.width, 480);
+    assert.equal(window.bounds.height, maxRows * rowHeight + 40);
+    assert.ok(window.bounds.y + window.bounds.height <= 1080);
+    f.manager.clear();
+  }
+});
+
 test('只说话者支持多人，停说保留500ms，禁麦/停止收听立即消失，头像不随说话重复发送', (t) => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 0 });
   const f = fixture();
