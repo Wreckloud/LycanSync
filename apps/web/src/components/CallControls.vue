@@ -13,6 +13,7 @@ const props = withDefaults(defineProps<{
   listening: boolean; inputGain: number; outputVolume: number;
   sharing: boolean; shareBusy: boolean; choosingSource: boolean; shareLimitReached: boolean;
   quality: ScreenShareQualityId; shareAudio: boolean; audioMode: NativeScreenAudioMode;
+  shareAudioRestricted?: boolean;
   customQuality?: CustomScreenShareQuality;
 }>(), { customQuality: () => ({ ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY }) });
 const emit = defineEmits<{
@@ -158,9 +159,10 @@ onScopeDispose(() => {
             <ScreenShareCustomQuality v-if="quality === 'custom'" :model-value="customQuality" :disabled="shareBusy"
               @update:model-value="emit('quality', 'custom', $event)" />
           </div>
-          <label v-if="sharing" class="call-share-audio"><span>共享音频</span><input type="checkbox" :checked="shareAudio" :disabled="shareBusy || audioMode === 'unavailable'"
+          <label v-if="sharing" class="call-share-audio"><span>共享音频</span><input type="checkbox" :checked="shareAudio" :disabled="shareBusy || shareAudioRestricted || audioMode === 'unavailable'"
             @change="toggleShareAudio" /></label>
-          <small v-if="sharing && audioMode === 'systemMix'" class="call-audio-warning">包含所有系统声音，可能产生回声。</small>
+          <small v-if="sharing && shareAudioRestricted" class="call-audio-warning">临时远控画面不共享电脑声音，频道语音不变。</small>
+          <small v-else-if="sharing && audioMode === 'systemMix'" class="call-audio-warning">包含所有系统声音，可能产生回声。</small>
           <small v-else-if="sharing && audioMode === 'unavailable'" class="call-audio-warning">当前系统不支持共享音频。</small>
         </template>
         <button type="button" class="call-settings-entry" @click="openAudioSettings"><Settings :size="15" />语音设置<ChevronRight :size="14" /></button>

@@ -38,6 +38,7 @@ import type { SettingsSectionId } from './settings/settingsSections';
 import { useActivityVisibility } from './settings/useActivityVisibility';
 import { useActivityMappings } from './settings/useActivityMappings';
 import ScreenShareWindows from './components/ScreenShareWindows.vue';
+import RemoteControlRequest from './components/RemoteControlRequest.vue';
 import GroupMembersPanel from './components/GroupMembersPanel.vue';
 import { useDiagnosticReport } from './diagnostics/useDiagnosticReport';
 import { useVoiceOverlay } from './overlay/useVoiceOverlay';
@@ -950,8 +951,13 @@ const activeScreenShareCount = computed(() => {
   void rtc.revision;
   return rtc.participants.filter((participant) => participant.isScreenShareEnabled).length;
 });
-const remoteControlShare = (identity: string) => rtc.remoteControlShares[identity];
-const remoteControlCanRequest = (identity: string) => remoteControlShare(identity)?.kind === 'monitor';
+const remoteControlCanRequest = (identity: string) => rtc.remoteControlAvailable[identity] === true;
+const remoteControlPlaceholder = (identity: string) => {
+  const presentation = rtc.remoteControlPresentations[identity];
+  if (!presentation || presentation.public || presentation.identity === rtc.room?.localParticipant.identity) return '';
+  return '正在被 ' + previewParticipantName(presentation.identity,
+    rtc.participants.find(participant => participant.identity === presentation.identity)?.name || presentation.identity) + ' 控制中';
+};
 const remoteControlIsPending = (identity: string) => rtc.remoteControlPending?.identity === identity;
 const remoteControlIsActive = (identity: string) => rtc.remoteControlActive?.identity === identity;
 // 测试期的客户端软限制，不代表服务端并发容量；后续按实测逐步移除。
@@ -1186,23 +1192,26 @@ function participantListening(participant: Participant) {
     </header>
     <AppNotice v-if="rtc.notice || viewerNotice" :message="rtc.notice || viewerNotice" />
     <AppNotice v-else-if="startupUpdateWarning" :message="startupUpdateWarning" dismissible @dismiss="emit('dismissUpdateWarning')" />
-    <section v-if="rtc.remoteControlRequest" class="remote-control-prompt" role="dialog" aria-modal="true" aria-label="远程控制申请">
-      <strong>{{ previewParticipantName(rtc.remoteControlRequest.identity,
-        rtc.participants.find((participant) => participant.identity === rtc.remoteControlRequest?.identity)?.name || rtc.remoteControlRequest.identity) }}申请控制你的显示器</strong>
-      <span>允许后，对方可以使用鼠标和常用键盘按键。你仍可随时停止控制。</span>
-      <div><button type="button" :disabled="rtc.remoteControlGranting" @click="rtc.rejectRemoteControl">拒绝</button>
-        <button type="button" class="confirm-button" :disabled="rtc.remoteControlGranting" @click="rtc.allowRemoteControl">允许</button></div>
-    </section>
+    <RemoteControlRequest v-if="rtc.remoteControlRequest" :key="rtc.remoteControlRequest.requestId"
+      :name="previewParticipantName(rtc.remoteControlRequest.identity,
+        rtc.participants.find(participant => participant.identity === rtc.remoteControlRequest?.identity)?.name || rtc.remoteControlRequest.identity)"
+      :busy="rtc.remoteControlGranting" @reject="rtc.rejectRemoteControl" @allow="rtc.allowRemoteControl" />
     <div v-if="rtc.remoteControlOwner" class="remote-control-owner-status" role="status">
       正在由 {{ previewParticipantName(rtc.remoteControlOwner.identity,
         rtc.participants.find((participant) => participant.identity === rtc.remoteControlOwner?.identity)?.name || rtc.remoteControlOwner.identity) }} 控制
+      <span>{{ rtc.remoteControlOwner.public ? '画面向频道公开' : '画面仅控制方可见' }}</span>
       <button type="button" @click="rtc.revokeRemoteControl">停止控制</button>
     </div>
     <div v-else-if="rtc.remoteControlCleanupPending" class="remote-control-owner-status" role="alert">
       远程输入尚未释放
       <button type="button" @click="rtc.retryRemoteControlCleanup">重试撤销</button>
     </div>
-    <div class="app-content" v-show="!settingsOpen && mainWindowVisible" :inert="settingsOpen">
+    <div v-else-if="rtc.remoteControlPending" class="remote-control-owner-status" role="status">
+      {{ rtc.remoteControlPending.phase === 'preparing' ? '正在准备远程控制…' : '等待对方接受远程控制…' }}
+      <button type="button" @click="rtc.cancelPendingRemoteControl()">取消申请</button>
+    </div>
+    <div v-else-if="rtc.remoteControlRestoring" class="remote-control-owner-status" role="status">正在恢复原共享…</div>
+    <div class="app-content" v-show="!settingsOpen && mainWindowVisible" :inert="settingsOpen || !!rtc.remoteControlRequest">
     <div class="workspace" :inert="editorOpen || !!management">
       <nav class="group-rail" aria-label="群组">
         <div class="group-list">
@@ -1254,7 +1263,7 @@ function participantListening(participant: Participant) {
             <ParticipantCard v-for="participant in groupParticipants" :key="participant.identity" :participant="participant"
               :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"
               :remote-control-available="remoteControlCanRequest(participant.identity)"
-              :remote-control-unavailable="remoteControlShare(participant.identity)?.kind === 'window'"
+              :private-control="remoteControlPlaceholder(participant.identity)"
               :remote-control-pending="remoteControlIsPending(participant.identity)"
               :remote-control-active="remoteControlIsActive(participant.identity)"
               :remote-control-name="previewParticipantName(participant.identity, participant.name || participant.identity)"
@@ -1302,6 +1311,7 @@ function participantListening(participant: Participant) {
                   :quality="localParticipant?.isScreenShareEnabled ? rtc.currentScreenShareQuality : captureQuality"
                   :custom-quality="localParticipant?.isScreenShareEnabled ? rtc.currentCustomScreenShareQuality : captureCustomQuality"
                   :share-audio="sharingAudio" :audio-mode="rtc.currentScreenShareAudioMode"
+                  :share-audio-restricted="rtc.screenShareAudioRestricted"
                   @microphone="toggleMicrophone" @listening="toggleListening"
                   @share="captureRequest ? selectCaptureSource(null) : rtc.toggleMedia(Track.Source.ScreenShare)"
                   @change-source="rtc.changeScreenShareSource" @quality="changeScreenShareQuality" @share-audio="changeScreenShareAudio"
@@ -1323,7 +1333,7 @@ function participantListening(participant: Participant) {
     <GroupManagementDialog v-if="management" :group="management.group" :mode="management.mode" :user-id="user.id"
       @updated="applyGroupDetail" @removed="removedFromGroup" @close="management = null" />
     </div>
-    <SettingsView v-if="settingsOpen" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
+    <SettingsView v-if="settingsOpen" :inert="!!rtc.remoteControlRequest" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
       :overlay="desktop ? voiceOverlay : undefined"
       :presence-status="currentPresenceStatus" :presence-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]"
       :preferences="audioPreferences" :rtc="rtc" :microphone-test="microphoneTest" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
@@ -1340,6 +1350,7 @@ function participantListening(participant: Participant) {
       @close="selectCaptureSource(null)" @confirm="selectCaptureSource(selectedCaptureSourceId)" />
     <ScreenShareWindows ref="viewingWindows" :rtc="rtc" :group-name="joinedGroup?.name ?? ''"
       :avatar="participantAvatar" :muted-shares="mutedShares"
+      :control-placeholder="remoteControlPlaceholder"
       :input-blocked="viewerInputBlocked"
       @notice="viewerNotice = $event" @toggle-share-audio="toggleSharedAudio" />
     <RemoteAudio v-for="item in remoteAudioTracks" :key="item.track.sid" :track="item.track"

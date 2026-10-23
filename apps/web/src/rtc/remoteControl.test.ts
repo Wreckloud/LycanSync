@@ -46,6 +46,17 @@ describe('remote control wire and coordinate bounds', () => {
     expect(decodeRemoteControlMessage(new TextEncoder().encode(JSON.stringify({ ...message, sequence: 0 })))).toBeNull();
   });
 
+  it('新协商不依赖已有共享，严格校验公开范围且不再接受旧共享协议', () => {
+    const state = { type: 'state' as const, available: true, share: null, control: { identity: 'controller', public: false } };
+    expect(decodeRemoteControlMessage(encodeRemoteControlMessage(state))).toEqual(state);
+    expect(decodeRemoteControlMessage(encodeRemoteControlMessage({ type: 'request', requestId: 'request-1' })))
+      .toEqual({ type: 'request', requestId: 'request-1' });
+    const invalid = [ { ...state, control: { identity: 'controller', public: 'false' } },
+      { ...state, share: { kind: 'screen', shareSessionId: 'share-1' } }, { type: 'queryShare' },
+      { type: 'share', shareSessionId: 'old-share', sourceKind: 'monitor' } ];
+    invalid.forEach(message => expect(decodeRemoteControlMessage(new TextEncoder().encode(JSON.stringify(message)))).toBeNull());
+  });
+
   it('requires screen coordinates on reliable mouse button events', () => {
     const button = { type: 'input' as const, shareSessionId: 'share-1', controlSessionId: 'control-1', sequence: 2,
       input: { kind: 'buttonDown' as const, button: 'left' as const, x: 1234, y: 5678 } };

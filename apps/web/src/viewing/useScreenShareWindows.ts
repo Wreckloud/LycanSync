@@ -20,7 +20,7 @@ interface WindowOptions {
   status(): string;
   shareSessionId(identity: string): string | undefined;
   notice(message: string): void;
-  closed(identity: string): void;
+  closed(identity: string, shareSessionId?: string): void;
 }
 
 export function useScreenShareWindows(options: WindowOptions, owner: Window = window) {
@@ -35,7 +35,7 @@ export function useScreenShareWindows(options: WindowOptions, owner: Window = wi
     clearTimeout(entry.timer);
     entry.stopPage?.();
     if (!entry.window.closed) entry.window.dispatchEvent(new Event('lycan-viewer-disarm'));
-    options.closed(entry.participant.identity);
+    options.closed(entry.participant.identity, entry.shareSessionId);
     if (!entry.window.closed) entry.window.close();
     if (failed && !disposed) options.notice('观看窗口未能正常打开或已失效，请重新打开。');
   }
@@ -67,6 +67,8 @@ export function useScreenShareWindows(options: WindowOptions, owner: Window = wi
     const participant = options.participants().find((candidate) => candidate.identity === identity);
     if (disposed || !room || !participant?.isScreenShareEnabled || options.status() !== 'connected') return false;
     const previous = entries.value.find((entry) => entry.room === room && entry.participant.identity === identity);
+    const shareSessionId = options.shareSessionId(identity);
+    if (previous?.shareSessionId && shareSessionId && previous.shareSessionId !== shareSessionId) previous.ended = true;
     if (previous && !previous.ended && !previous.window.closed) {
       if (owner.lycanDesktop) {
         void owner.lycanDesktop.focusViewerWindow(previous.id).catch(() => {
@@ -80,7 +82,7 @@ export function useScreenShareWindows(options: WindowOptions, owner: Window = wi
     const child = owner.open(`/viewer.html#${id}`, `lycan-viewer-${id}`, 'popup,width=960,height=600');
     if (!child) { options.notice('观看窗口被阻止，请允许应用打开弹出窗口后重试。'); return false; }
     const entry: ScreenShareWindow = { id, room, participant, window: child, target: null, ended: false,
-      shareSessionId: options.shareSessionId(identity) };
+      shareSessionId };
     entries.value = [...entries.value, entry];
     entry.timer = setTimeout(() => close(entry, true), 8000);
     return true;

@@ -69,7 +69,7 @@ it('初始空白页的 pagehide 不会取消未就绪窗口；清理后迟到就
   f.owner.dispatchEvent(event);
   expect(f.manager.entries.value).toEqual([]);
   expect(entry.target).toBeNull();
-  expect(f.closed).toHaveBeenCalledExactlyOnceWith('A');
+  expect(f.closed).toHaveBeenCalledExactlyOnceWith('A', 'first');
   f.scope.stop();
 });
 
@@ -99,6 +99,17 @@ it('重连的空列表和旧发布不会结束观看；重连完成核对原共�
   expect(f.manager.entries.value[0]!.ended).toBe(false);
   f.sessions.A = 'replacement'; f.revision.value++;
   expect(f.manager.entries.value[0]!.ended).toBe(true);
+  f.scope.stop();
+});
+
+it('新远控授权早于界面版本刷新时，按会话替换旧窗，关闭回调仍属于旧会话', () => {
+  const f = fixture(); f.manager.open('A'); f.ready();
+  f.sessions.A = 'control-share';
+  expect(f.manager.open('A')).toBe(true);
+  expect(f.windows).toHaveLength(2);
+  expect(f.closed).toHaveBeenCalledExactlyOnceWith('A', 'first');
+  expect(f.manager.entries.value[0]!.shareSessionId).toBe('control-share');
+  expect(f.manager.entries.value[0]!.ended).toBe(false);
   f.scope.stop();
 });
 

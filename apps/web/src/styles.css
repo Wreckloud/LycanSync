@@ -129,16 +129,15 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   color: white;
 }
 
-.remote-control-prompt, .remote-control-owner-status {
-  position: fixed; z-index: 40; right: 18px; top: 58px; display: flex; align-items: center; gap: 12px;
+.remote-control-owner-status {
+  position: fixed; z-index: 40; right: 18px; top: 58px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
   max-width: min(520px, calc(100vw - 36px)); padding: 12px 14px; border: 1px solid var(--border);
   border-radius: 8px; background: var(--panel); box-shadow: 0 8px 28px #0005;
 }
-.remote-control-prompt { flex-direction: column; align-items: flex-start; }
-.remote-control-prompt span, .remote-control-status { color: var(--muted); font-size: 12px; }
-.remote-control-prompt > div { display: flex; gap: 8px; align-self: flex-end; }
-.remote-control-prompt button, .remote-control-owner-status button { border: 1px solid var(--border); border-radius: 5px; padding: 6px 10px; color: var(--text); background: var(--surface); cursor: pointer; }
+.remote-control-status { color: var(--muted); font-size: 12px; }
+.remote-control-owner-status button { border: 1px solid var(--border); border-radius: 5px; padding: 6px 10px; color: var(--text); background: var(--surface); cursor: pointer; }
 .remote-control-owner-status button { color: var(--danger); }
+.remote-control-owner-status > span { color: var(--muted); font-size: 12px; }
 
 .workspace {
   min-height: 0;

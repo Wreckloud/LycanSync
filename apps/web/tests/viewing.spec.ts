@@ -41,6 +41,7 @@ export function useRtcRoom() {
   const revision = ref(0), status = ref('idle'), room = shallowRef(null), participants = shallowRef([]);
   const listening = ref(true), microphoneIntent = ref(false), microphoneEnabled = ref(false);
   const remoteControlShares = ref({}), remoteControlActive = ref(null), remoteControlPending = ref(null);
+  const remoteControlAvailable = ref({});
   const inputs = [];
   const makeRoom = () => {
     const callbacks = new Map();
@@ -79,8 +80,8 @@ export function useRtcRoom() {
       for (const member of [local, ...friends]) member.isScreenShareEnabled = ids.includes(member.identity);
       revision.value++;
     },
-    control(identity) { remoteControlShares.value = { ...remoteControlShares.value, [identity]: { kind: 'monitor', shareSessionId: identity + '-share' } }; revision.value++; },
-    grant(identity) { remoteControlPending.value = null; remoteControlActive.value = { identity, shareSessionId: identity + '-share', controlSessionId: identity + '-control' }; },
+    control(identity) { remoteControlShares.value = { ...remoteControlShares.value, [identity]: { kind: 'monitor', shareSessionId: identity + '-share' } }; remoteControlAvailable.value = { ...remoteControlAvailable.value, [identity]: true }; revision.value++; },
+    grant(identity) { remoteControlPending.value = null; remoteControlActive.value = { identity, shareSessionId: identity + '-share', controlSessionId: identity + '-control', trackSid: 'share-' + identity }; },
     inputEvents() { return inputs.slice(); },
     disconnected(identity) {
       participants.value = participants.value.filter((member) => member.identity !== identity);
@@ -99,7 +100,9 @@ export function useRtcRoom() {
   }, { once: true });
   return { revision, status, room, participants, notice: ref(''), busySources: ref([]),
     listening, microphoneIntent, microphoneEnabled,
-    needsAudioPlayback: ref(false), remoteControlShares, remoteControlActive,
+    needsAudioPlayback: ref(false), remoteControlShares, remoteControlActive, remoteControlAvailable,
+    remoteControlPresentations: ref({}), remoteControlRestoring: ref(false),
+    screenShareAudioRestricted: ref(false),
     remoteControlPending, remoteControlRequest: ref(null), remoteControlOwner: ref(null),
     remoteControlCleanupPending: ref(false), remoteControlGranting: ref(false),
     currentScreenShareQuality, screenShareQualityBusy: ref(false), screenShareSourceBusy: ref(false),
@@ -126,7 +129,7 @@ export function useRtcRoom() {
     },
     async setScreenShareQuality(value) { currentScreenShareQuality.value = value; return true; },
     async setScreenShareAudioEnabled() { return false; }, async changeScreenShareSource() { return false; },
-    async requestRemoteControl(identity) { remoteControlPending.value = { identity }; },
+    async requestRemoteControl(identity) { remoteControlPending.value = { identity, requestId: identity + '-request', phase: 'waiting' }; },
     sendRemoteControlInput(input) { inputs.push(input); },
     async exitRemoteControl() { remoteControlActive.value = null; },
     async revokeRemoteControl() {}, async retryRemoteControlCleanup() {}, async allowRemoteControl() {},

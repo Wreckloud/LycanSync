@@ -294,6 +294,26 @@ function receiveRemoteControl(identity: string, message: RemoteControlMessage) {
   mockRoom().emit('dataReceived', encodeRemoteControlMessage(message), { identity }, 'reliable', REMOTE_CONTROL_TOPIC);
 }
 
+
+function beginRemoteControlApproval(rtc: ReturnType<typeof useRtcRoom>, identity = 'viewer-a', publicVideo = true) {
+  const request = rtc.remoteControlRequest.value!;
+  const approving = rtc.allowRemoteControl('monitor:1:0', publicVideo);
+  receiveRemoteControl(identity, { type: 'controllerReady', requestId: request.requestId });
+  return approving;
+}
+
+async function deliverControlGrant(rtc: ReturnType<typeof useRtcRoom>, identity: string,
+  message: Extract<RemoteControlMessage, { type: 'allow' }>) {
+  if (rtc.remoteControlPending.value?.requestId === message.requestId) {
+    receiveRemoteControl(identity, { type: 'accept', requestId: message.requestId });
+    await vi.waitFor(() => expect(rtcMocks.sentPackets.some(({ payload }) => {
+      const packet = JSON.parse(new TextDecoder().decode(payload));
+      return packet.type === 'controllerReady' && packet.requestId === message.requestId;
+    })).toBe(true));
+  }
+  receiveRemoteControl(identity, message);
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -357,7 +377,10 @@ function configureNativeScreenDesktop(options: {
         videoCapture: { available: true, reason: 'ready' },
         screenShareAudioCapture: { available: true, reason: 'windowsApplicationLoopbackProcessTree' },
       }),
-      listNativeVideoSources: async () => ({ revision: 1, sources: [] }),
+      listNativeVideoSources: async () => ({ revision: 1, sources: [
+        { sourceId: 'monitor:1:0', kind: 'monitor', title: 'DISPLAY1', width: 1920, height: 1080, primary: true },
+        { sourceId: 'window:test:0', kind: 'window', title: '测试窗口', width: 1280, height: 720, primary: false },
+      ] }),
       recordScreenShareStartupTiming: rtcMocks.startupTiming,
       startNativeVideo: rtcMocks.nativeStarts,
       stopNativeVideo: rtcMocks.nativeStops,
@@ -1056,8 +1079,8 @@ describe('native screen share wiring', () => {
       await waitForSharedAudio();
       const audio = room.localParticipant.getTrackPublication(Track.Source.ScreenShareAudio);
       const microphone = room.localParticipant.getTrackPublication(Track.Source.Microphone);
-      receiveRemoteControl('viewer', { type: 'request', shareSessionId: 'monitor:1:0-session', requestId: 'request' });
-      expect(await rtc.allowRemoteControl()).toBe(true);
+      receiveRemoteControl('viewer', { type: 'request', requestId: 'request' });
+      expect(await beginRemoteControlApproval(rtc, 'viewer')).toBe(true);
       rtcMocks.selectedSources.mockReturnValueOnce(selection.promise);
       const choosing = rtc.changeScreenShareSource();
       expect(rtc.screenShareSourceBusy.value).toBe(true);
@@ -1569,21 +1592,268 @@ describe('native screen share wiring', () => {
     }
   });
 
-  it('queries existing shares after join and accepts the matching current-room response', async () => {
-    rtcMocks.token.mockResolvedValue({ serverUrl: 'wss://example.test', token: 'test-token' });
-    addRemoteParticipant('owner-a', true);
-    Object.defineProperty(globalThis, 'window', { configurable: true, value: {} });
+  it.each([true, false])('未共享时接受后自动开屏，公开=%s，临时共享结束即回收且不影响语音', async (publicVideo) => {
+    configureNativeScreenDesktop();
+    const authorize = vi.fn().mockResolvedValue({ changed: true });
+    const revoke = vi.fn().mockResolvedValue({ changed: true });
+    Object.assign(window.lycanDesktop!, { authorizeNativeRemoteControl: authorize, revokeNativeRemoteControl: revoke });
+    addRemoteParticipant('viewer-a');
+    addRemoteParticipant('bystander');
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('automatic-control');
+      const microphone = mockRoom().localParticipant.getTrackPublication(Track.Source.Microphone);
+      receiveRemoteControl('viewer-a', { type: 'request', requestId: 'control-request' });
+      expect(rtcMocks.nativeStarts).not.toHaveBeenCalled();
+      const approving = rtc.allowRemoteControl('monitor:1:0', publicVideo);
+      expect(rtcMocks.nativeStarts).not.toHaveBeenCalled();
+      receiveRemoteControl('viewer-a', { type: 'controllerReady', requestId: 'control-request' });
+      expect(await approving).toBe(true);
+      const video = mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare) as { trackSid: string; track: unknown };
+      const permissions = rtcMocks.subscriptionPermissions.at(-1)!;
+      expect(permissions.allowAll).toBe(false);
+      const allowed = (identity: string) => (permissions.permissions as Array<{ participantIdentity: string; allowedTrackSids: string[] }>)
+        .find(entry => entry.participantIdentity === identity)!.allowedTrackSids;
+      expect(allowed('viewer-a')).toContain(video.trackSid);
+      expect(allowed('bystander').includes(video.trackSid)).toBe(publicVideo);
+      mockRoom().emit('localTrackPublished', { ...video, trackSid: 'republished-control-video', source: Track.Source.ScreenShare });
+      const newcomer = addRemoteParticipant('newcomer');
+      mockRoom().emit('participantConnected', newcomer);
+      const republished = rtcMocks.subscriptionPermissions.at(-1)!.permissions as Array<{ participantIdentity: string; allowedTrackSids: string[] }>;
+      expect(republished.find(entry => entry.participantIdentity === 'viewer-a')!.allowedTrackSids).toContain('republished-control-video');
+      expect(republished.find(entry => entry.participantIdentity === 'newcomer')!.allowedTrackSids.includes('republished-control-video')).toBe(publicVideo);
+      expect(rtcMocks.nativeAudioStarts).not.toHaveBeenCalled();
+      expect(await rtc.setScreenShareAudioEnabled(true)).toBe(false);
+      expect(rtc.remoteControlOwner.value).toMatchObject({ identity: 'viewer-a', public: publicVideo });
+      expect(rtc.screenShareAudioRestricted.value).toBe(true);
+      if (!publicVideo) {
+        expect(await rtc.changeScreenShareSource()).toBe(false);
+        expect(rtc.notice.value).toContain('先停止控制');
+      }
+      expect(await rtc.revokeRemoteControl()).toBe(true);
+      expect(rtcMocks.nativeStops).toHaveBeenCalledExactlyOnceWith('monitor:1:0-session');
+      expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare)).toBeUndefined();
+      expect(mockRoom().localParticipant.getTrackPublication(Track.Source.Microphone)).toBe(microphone);
+      expect(rtc.listening.value).toBe(true);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it.each([true, false])('自动整屏启动中取消，公开=%s，迟到采集不得发布或授权', async (publicVideo) => {
+    configureNativeScreenDesktop();
+    const start = deferred<{ sessionId: string }>();
+    rtcMocks.nativeStarts.mockReturnValueOnce(start.promise);
+    const authorize = vi.fn().mockResolvedValue({ changed: true });
+    Object.assign(window.lycanDesktop!, { authorizeNativeRemoteControl: authorize });
+    addRemoteParticipant('viewer-a');
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('cancel-before-video-start');
+      receiveRemoteControl('viewer-a', { type: 'request', requestId: 'late-capture' });
+      const approving = rtc.allowRemoteControl('monitor:1:0', publicVideo);
+      receiveRemoteControl('viewer-a', { type: 'controllerReady', requestId: 'late-capture' });
+      await vi.waitFor(() => expect(rtcMocks.nativeStarts).toHaveBeenCalledOnce());
+      await rtc.rejectRemoteControl();
+      start.resolve({ sessionId: 'cancelled-capture' });
+      expect(await approving).toBe(false);
+      expect(rtcMocks.published.mock.calls.filter(call => call[1]?.source === Track.Source.ScreenShare)).toHaveLength(0);
+      expect(authorize).not.toHaveBeenCalled();
+      expect(rtcMocks.nativeStops).toHaveBeenCalledWith('cancelled-capture');
+      expect(rtc.screenShareActive.value).toBe(false);
+    } finally { start.resolve({ sessionId: 'cancelled-capture' }); await rtc.leave(); scope.stop(); }
+  });
+
+  it('恢复原共享的采集中主动停止，不发布迟到轨道或重新开启共享', async () => {
+    configureNativeScreenDesktop();
+    addRemoteParticipant('owner-a');
+    const start = deferred<{ sessionId: string }>();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('cancel-restore-start');
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true, { sourceId: 'window:test:0', shareAudio: false });
+      receiveRemoteControl('owner-a', { type: 'state', available: true, share: null, control: null });
+      await rtc.requestRemoteControl('owner-a');
+      const pending = rtc.remoteControlPending.value!;
+      await deliverControlGrant(rtc, 'owner-a', { type: 'allow', trackSid: 'owner-video', requestId: pending.requestId,
+        shareSessionId: 'owner-share', controlSessionId: 'owner-control' });
+      rtcMocks.nativeStarts.mockReturnValueOnce(start.promise);
+      const exiting = rtc.exitRemoteControl();
+      await vi.waitFor(() => expect(rtcMocks.nativeStarts).toHaveBeenCalledTimes(2));
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, false);
+      start.resolve({ sessionId: 'cancelled-restore' });
+      await exiting;
+      expect(rtcMocks.published.mock.calls.filter(call => call[1]?.source === Track.Source.ScreenShare)).toHaveLength(1);
+      expect(rtc.screenShareActive.value).toBe(false);
+      expect(rtcMocks.nativeStops).toHaveBeenCalledWith('cancelled-restore');
+    } finally { start.resolve({ sessionId: 'cancelled-restore' }); await rtc.leave(); scope.stop(); }
+  });
+
+  it('远控画面等待发布时取消，迟到 SID 不获得订阅权限且只清理本次采集', async () => {
+    configureNativeScreenDesktop();
+    const publication = deferred<void>();
+    rtcMocks.published.mockImplementation((_track, options) => options?.source === Track.Source.ScreenShare
+      ? publication.promise : Promise.resolve());
+    const authorize = vi.fn();
+    Object.assign(window.lycanDesktop!, { authorizeNativeRemoteControl: authorize });
+    addRemoteParticipant('viewer-a'); addRemoteParticipant('bystander');
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('cancel-pending-screen-publish');
+      receiveRemoteControl('viewer-a', { type: 'request', requestId: 'pending-publish' });
+      const approving = beginRemoteControlApproval(rtc);
+      await vi.waitFor(() => expect(rtcMocks.published.mock.calls
+        .filter(call => call[1]?.source === Track.Source.ScreenShare)).toHaveLength(1));
+      await rtc.rejectRemoteControl();
+      publication.resolve();
+      expect(await approving).toBe(false);
+      expect(authorize).not.toHaveBeenCalled();
+      expect(rtcMocks.subscriptionPermissions.every(entry => (entry.permissions as Array<{ allowedTrackSids: string[] }>)
+        .every(permission => !permission.allowedTrackSids.includes('track-2')))).toBe(true);
+      expect(rtcMocks.nativeStops).toHaveBeenCalledExactlyOnceWith('monitor:1:0-session');
+      expect(rtc.screenShareActive.value).toBe(false);
+    } finally { publication.resolve(); await rtc.leave(); scope.stop(); }
+  });
+
+  it('私密控制替换旧公开窗口，撤销后恢复原来源、画质与声音，而不是放宽私密 SID', async () => {
+    configureNativeScreenDesktop({ screenAudio: true });
+    let sequence = 0;
+    rtcMocks.nativeStarts.mockImplementation(async (sourceId: string) => ({ sessionId: `${sourceId}-${++sequence}` }));
+    Object.assign(window.lycanDesktop!, {
+      authorizeNativeRemoteControl: vi.fn().mockResolvedValue({ changed: true }),
+      revokeNativeRemoteControl: vi.fn().mockResolvedValue({ changed: true }),
+    });
+    addRemoteParticipant('viewer-a'); addRemoteParticipant('bystander');
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('restore-original');
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true, { sourceId: 'window:test:0', shareAudio: true,
+        quality: 'custom', customQuality: { resolution: 720, fps: 30, bitrateMbps: 4 } });
+      await waitForSharedAudio();
+      const original = mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare);
+      receiveRemoteControl('viewer-a', { type: 'request', requestId: 'replace' });
+      expect(await beginRemoteControlApproval(rtc, 'viewer-a', false)).toBe(true);
+      expect(rtcMocks.nativeStops).toHaveBeenCalledWith('window:test:0-1');
+      const privateVideo = mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare) as { trackSid: string };
+      expect(privateVideo).not.toBe(original);
+      expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)).toBeUndefined();
+      expect(await rtc.revokeRemoteControl()).toBe(true);
+      await waitForSharedAudio();
+      expect(rtcMocks.nativeStarts.mock.calls.map(call => call[0])).toEqual(['window:test:0', 'monitor:1:0', 'window:test:0']);
+      expect(rtcMocks.nativeStarts).toHaveBeenLastCalledWith('window:test:0', 30, expect.anything(), { width: 1280, height: 720 });
+      expect(rtc.currentScreenShareQuality.value).toBe('custom');
+      const last = rtcMocks.subscriptionPermissions.at(-1)!.permissions as Array<{ allowedTrackSids: string[] }>;
+      expect(last.every(entry => !entry.allowedTrackSids.includes(privateVideo.trackSid))).toBe(true);
+      expect(rtcMocks.nativeAudioStarts).toHaveBeenLastCalledWith('window:test:0', 'window:test:0-3');
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('原生撤销失败时不恢复原共享，拒绝输入并阻止新授权；确认清理后才恢复', async () => {
+    configureNativeScreenDesktop();
+    const revoke = vi.fn().mockRejectedValueOnce(new Error('nativeReleaseFailed')).mockResolvedValue({ changed: true });
+    const input = vi.fn();
+    Object.assign(window.lycanDesktop!, {
+      authorizeNativeRemoteControl: vi.fn().mockResolvedValue({ changed: true }),
+      revokeNativeRemoteControl: revoke, sendNativeRemoteInput: input,
+    });
+    addRemoteParticipant('viewer-a'); addRemoteParticipant('other');
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('cleanup-before-restore');
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true, { sourceId: 'window:test:0', shareAudio: false });
+      receiveRemoteControl('viewer-a', { type: 'request', requestId: 'private-control' });
+      expect(await beginRemoteControlApproval(rtc, 'viewer-a', false)).toBe(true);
+      const control = rtc.remoteControlOwner.value!;
+      expect(await rtc.revokeRemoteControl()).toBe(false);
+      expect(rtc.remoteControlCleanupPending.value).toBe(true);
+      expect(rtc.notice.value).toContain('尚未释放');
+      receiveRemoteControl('viewer-a', { type: 'input', shareSessionId: 'monitor:1:0-session',
+        controlSessionId: control.controlSessionId, sequence: 1, input: { kind: 'keyDown', key: 'letterA' } });
+      receiveRemoteControl('other', { type: 'request', requestId: 'must-deny' });
+      expect(rtc.remoteControlRequest.value).toBeNull();
+      expect(input).not.toHaveBeenCalled();
+      expect(rtcMocks.nativeStarts).toHaveBeenCalledTimes(2);
+      expect(await rtc.retryRemoteControlCleanup()).toBe(true);
+      expect(rtc.remoteControlCleanupPending.value).toBe(false);
+      expect(rtcMocks.nativeStarts).toHaveBeenCalledTimes(3);
+      expect(rtcMocks.nativeStarts.mock.calls.at(-1)![0]).toBe('window:test:0');
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('控制方接受前保留自己的共享，接受后暂停，正常退出恢复；主动停止后不再自动恢复', async () => {
+    configureNativeScreenDesktop();
+    addRemoteParticipant('owner-a');
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('controller-restore');
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true, { sourceId: 'window:test:0', shareAudio: false });
+      receiveRemoteControl('owner-a', { type: 'state', available: true, share: null, control: null });
+      await rtc.requestRemoteControl('owner-a');
+      expect(rtcMocks.nativeStops).not.toHaveBeenCalled();
+      const request = rtc.remoteControlPending.value!;
+      await deliverControlGrant(rtc, 'owner-a', { type: 'allow', trackSid: 'target-video', requestId: request.requestId,
+        shareSessionId: 'target-screen', controlSessionId: 'first-control' });
+      expect(rtcMocks.nativeStops).toHaveBeenCalledOnce();
+      expect(rtc.screenShareActive.value).toBe(false);
+      await rtc.exitRemoteControl();
+      expect(rtcMocks.nativeStarts).toHaveBeenCalledTimes(2);
+      expect(rtc.screenShareActive.value).toBe(true);
+      await rtc.requestRemoteControl('owner-a');
+      const next = rtc.remoteControlPending.value!;
+      await deliverControlGrant(rtc, 'owner-a', { type: 'allow', trackSid: 'target-video', requestId: next.requestId,
+        shareSessionId: 'next-screen', controlSessionId: 'second-control' });
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, false);
+      await rtc.exitRemoteControl();
+      expect(rtcMocks.nativeStarts).toHaveBeenCalledTimes(2);
+      expect(rtc.screenShareActive.value).toBe(false);
+      expect(rtc.listening.value).toBe(true);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('拒绝失效显示器不新建采集，授权 IPC 失败也必须确认撤销', async () => {
+    configureNativeScreenDesktop();
+    const revoke = vi.fn().mockResolvedValue({ changed: true });
+    Object.assign(window.lycanDesktop!, {
+      authorizeNativeRemoteControl: vi.fn().mockRejectedValue(new Error('ipcTimeout')),
+      revokeNativeRemoteControl: revoke,
+    });
+    addRemoteParticipant('viewer-a');
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('invalid-monitor');
+      receiveRemoteControl('viewer-a', { type: 'request', requestId: 'expired' });
+      const invalid = rtc.allowRemoteControl('monitor:expired:0', false);
+      receiveRemoteControl('viewer-a', { type: 'controllerReady', requestId: 'expired' });
+      expect(await invalid).toBe(false);
+      expect(rtcMocks.nativeStarts).not.toHaveBeenCalled();
+      receiveRemoteControl('viewer-a', { type: 'request', requestId: 'ipc-failed' });
+      expect(await beginRemoteControlApproval(rtc)).toBe(false);
+      expect(revoke).toHaveBeenCalledOnce();
+      expect(rtc.remoteControlOwner.value).toBeNull();
+      expect(rtc.screenShareActive.value).toBe(false);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('入房查询当前远控能力，不要求对方已经共享整屏，忽略外房成员消息', async () => {
+    configureNativeMicrophoneDesktop();
+    addRemoteParticipant('owner-a');
     const scope = effectScope();
     const rtc = scope.run(() => useRtcRoom())!;
     try {
       expect(await rtc.join('remote-control-query')).toBe(true);
-      const query = rtcMocks.sentPackets.map(({ payload }) => JSON.parse(new TextDecoder().decode(payload)))
-        .find((message) => message.type === 'queryShare');
-      expect(query?.requestId).toBeTruthy();
-      receiveRemoteControl('owner-a', { type: 'shareState', shareSessionId: 'share-a', sourceKind: 'monitor', requestId: query.requestId });
-      expect(rtc.remoteControlShares.value['owner-a']).toEqual({ shareSessionId: 'share-a', kind: 'monitor' });
-      receiveRemoteControl('owner-a', { type: 'shareState', shareSessionId: 'stale-share', sourceKind: 'window', requestId: 'stale-query' });
-      expect(rtc.remoteControlShares.value['owner-a'].shareSessionId).toBe('share-a');
+      expect(rtcMocks.sentPackets.some(({ payload }) =>
+        JSON.parse(new TextDecoder().decode(payload)).type === 'queryState')).toBe(true);
+      receiveRemoteControl('owner-a', { type: 'state', available: true, share: null, control: null });
+      expect(rtc.remoteControlAvailable.value['owner-a']).toBe(true);
+      expect(await rtc.requestRemoteControl('owner-a')).toBe(true);
+      receiveRemoteControl('outsider', { type: 'state', available: true, share: null, control: null });
+      expect(rtc.remoteControlAvailable.value['outsider']).toBeUndefined();
     } finally {
       await rtc.leave();
       scope.stop();
@@ -1598,10 +1868,7 @@ describe('native screen share wiring', () => {
     const rtc = scope.run(() => useRtcRoom())!;
     try {
       await rtc.join('remote-control-cancel');
-      const query = rtcMocks.sentPackets.map(({ payload }) => JSON.parse(new TextDecoder().decode(payload)))
-        .find((message) => message.type === 'queryShare');
-      receiveRemoteControl('owner-a', { type: 'shareState', shareSessionId: 'share-a',
-        sourceKind: 'monitor', requestId: query.requestId });
+      receiveRemoteControl('owner-a', { type: 'state', available: true, share: { shareSessionId: 'share-a', kind: 'monitor' }, control: null});
       expect(rtc.remoteControlShares.value['owner-a']).toEqual({ shareSessionId: 'share-a', kind: 'monitor' });
 
       expect(await rtc.requestRemoteControl('owner-a')).toBe(true);
@@ -1611,14 +1878,14 @@ describe('native screen share wiring', () => {
       expect(rtc.remoteControlPending.value).toBeNull();
       expect(rtcMocks.sentPackets.map(({ payload }) => JSON.parse(new TextDecoder().decode(payload)))
         .filter((message) => message.type === 'cancel')).toHaveLength(1);
-      receiveRemoteControl('owner-a', { type: 'allow', shareSessionId: firstRequest.shareSessionId,
+      await deliverControlGrant(rtc, 'owner-a', { type: 'allow', trackSid: 'target-video', shareSessionId: 'share-a',
         requestId: firstRequest.requestId, controlSessionId: 'late-control' });
       expect(rtc.remoteControlActive.value).toBeNull();
 
       expect(await rtc.requestRemoteControl('owner-a')).toBe(true);
       const nextRequest = rtc.remoteControlPending.value!;
       expect(nextRequest.requestId).not.toBe(firstRequest.requestId);
-      receiveRemoteControl('owner-a', { type: 'allow', shareSessionId: nextRequest.shareSessionId,
+      await deliverControlGrant(rtc, 'owner-a', { type: 'allow', trackSid: 'target-video', shareSessionId: 'share-a',
         requestId: nextRequest.requestId, controlSessionId: 'current-control' });
       expect(rtc.remoteControlActive.value?.controlSessionId).toBe('current-control');
 
@@ -1641,13 +1908,10 @@ describe('native screen share wiring', () => {
     const notification = deferred<void>();
     try {
       await rtc.join('remote-control-local-stop');
-      const query = rtcMocks.sentPackets.map(({ payload }) => JSON.parse(new TextDecoder().decode(payload)))
-        .find((message) => message.type === 'queryShare');
-      receiveRemoteControl('owner-a', { type: 'shareState', shareSessionId: 'share-a',
-        sourceKind: 'monitor', requestId: query.requestId });
+      receiveRemoteControl('owner-a', { type: 'state', available: true, share: { shareSessionId: 'share-a', kind: 'monitor' }, control: null});
       await rtc.requestRemoteControl('owner-a');
       const request = rtc.remoteControlPending.value!;
-      receiveRemoteControl('owner-a', { type: 'allow', shareSessionId: request.shareSessionId,
+      await deliverControlGrant(rtc, 'owner-a', { type: 'allow', trackSid: 'target-video', shareSessionId: 'share-a',
         requestId: request.requestId, controlSessionId: 'control-a' });
       rtcMocks.publishData.mockImplementation((payload: Uint8Array) => {
         if (JSON.parse(new TextDecoder().decode(payload)).type === 'revoke') return notification.promise;
@@ -1683,20 +1947,16 @@ describe('native screen share wiring', () => {
     const rtc = scope.run(() => useRtcRoom())!;
     try {
       await rtc.join('remote-control-controller');
-      const queryPacket = rtcMocks.sentPackets.find(({ payload, options }) =>
-        options.destinationIdentities?.[0] === 'owner-a'
-          && JSON.parse(new TextDecoder().decode(payload)).type === 'queryShare');
-      const query = JSON.parse(new TextDecoder().decode(queryPacket!.payload));
       const owner = addRemoteParticipant('owner-a', true);
       expect(owner).toBeTruthy();
-      receiveRemoteControl('owner-a', { type: 'shareState', shareSessionId: 'share-a', sourceKind: 'monitor', requestId: query.requestId });
-      receiveRemoteControl('owner-b', { type: 'share', shareSessionId: 'share-b', sourceKind: 'monitor' });
+      receiveRemoteControl('owner-a', { type: 'state', available: true, share: { shareSessionId: 'share-a', kind: 'monitor' }, control: null});
+      receiveRemoteControl('owner-b', { type: 'state', available: true, share: { shareSessionId: 'share-b', kind: 'monitor'  }, control: null});
 
       expect(await rtc.requestRemoteControl('owner-a')).toBe(true);
       expect(await rtc.requestRemoteControl('owner-b')).toBe(false);
       const request = rtcMocks.sentPackets.map(({ payload }) => JSON.parse(new TextDecoder().decode(payload)))
         .reverse().find((message) => message.type === 'request');
-      receiveRemoteControl('owner-a', { type: 'allow', shareSessionId: 'share-a', requestId: request.requestId, controlSessionId: 'control-a' });
+      await deliverControlGrant(rtc, 'owner-a', { type: 'allow', trackSid: 'target-video', shareSessionId: 'share-a', requestId: request.requestId, controlSessionId: 'control-a' });
       expect(rtc.remoteControlActive.value?.controlSessionId).toBe('control-a');
 
       let failOldMove!: () => void;
@@ -1726,7 +1986,7 @@ describe('native screen share wiring', () => {
       expect(await rtc.requestRemoteControl('owner-b')).toBe(true);
       const nextRequest = rtcMocks.sentPackets.map(({ payload }) => JSON.parse(new TextDecoder().decode(payload)))
         .reverse().find((message) => message.type === 'request');
-      receiveRemoteControl('owner-b', { type: 'allow', shareSessionId: 'share-b',
+      await deliverControlGrant(rtc, 'owner-b', { type: 'allow', trackSid: 'target-video', shareSessionId: 'share-b',
         requestId: nextRequest.requestId, controlSessionId: 'control-b' });
       expect(rtc.remoteControlActive.value?.controlSessionId).toBe('control-b');
       failOldMove();
@@ -1787,13 +2047,13 @@ describe('native screen share wiring', () => {
     try {
       await rtc.join('remote-control-applicant-left');
       await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
-      receiveRemoteControl('viewer-a', { type: 'request', shareSessionId: 'approval-share', requestId: 'request-a' });
+      receiveRemoteControl('viewer-a', { type: 'request', requestId: 'request-a' });
       expect(rtc.remoteControlRequest.value?.identity).toBe('viewer-a');
       const room = mockRoom();
       room.remoteParticipants.delete('viewer-a');
       room.emit('participantDisconnected', { identity: 'viewer-a' });
       expect(rtc.remoteControlRequest.value).toBeNull();
-      receiveRemoteControl('viewer-b', { type: 'request', shareSessionId: 'approval-share', requestId: 'request-b' });
+      receiveRemoteControl('viewer-b', { type: 'request', requestId: 'request-b' });
       expect(rtc.remoteControlRequest.value).toEqual({ identity: 'viewer-b', requestId: 'request-b' });
     } finally {
       await rtc.leave();
@@ -1835,17 +2095,18 @@ describe('native screen share wiring', () => {
     try {
       await rtc.join('remote-control-cancel-race');
       await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
-      receiveRemoteControl('viewer-a', { type: 'request', shareSessionId: 'cancel-race-share', requestId: 'request-a' });
-      const allowing = rtc.allowRemoteControl();
+      receiveRemoteControl('viewer-a', { type: 'request', requestId: 'request-a' });
+      const allowing = beginRemoteControlApproval(rtc);
+      await vi.waitFor(() => expect(authorizeNative).toHaveBeenCalledTimes(1));
       expect(rtc.remoteControlGranting.value).toBe(true);
-      receiveRemoteControl('viewer-a', { type: 'cancel', shareSessionId: 'cancel-race-share', requestId: 'request-a' });
+      receiveRemoteControl('viewer-a', { type: 'cancel', requestId: 'request-a' });
       expect(rtc.remoteControlRequest.value).toBeNull();
       authorization.resolve({ changed: true });
 
       expect(await allowing).toBe(false);
       expect(rtc.remoteControlOwner.value).toBeNull();
       expect(revokeNative).toHaveBeenCalledTimes(1);
-      receiveRemoteControl('viewer-b', { type: 'request', shareSessionId: 'cancel-race-share', requestId: 'request-b' });
+      receiveRemoteControl('viewer-b', { type: 'request', requestId: 'request-b' });
       expect(rtc.remoteControlRequest.value).toEqual({ identity: 'viewer-b', requestId: 'request-b' });
     } finally {
       authorization.resolve({ changed: true });
@@ -1888,25 +2149,26 @@ describe('native screen share wiring', () => {
     try {
       expect(await rtc.join('remote-owner-room-a')).toBe(true);
       await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
-      receiveRemoteControl('viewer-a', { type: 'request', shareSessionId: 'share-a', requestId: 'request-a' });
-      const oldAllow = rtc.allowRemoteControl();
+      receiveRemoteControl('viewer-a', { type: 'request', requestId: 'request-a' });
+      const oldAllow = beginRemoteControlApproval(rtc);
+      await vi.waitFor(() => expect(authorizeNative).toHaveBeenCalledTimes(1));
       await rtc.leave();
 
       expect(await rtc.join('remote-owner-room-b')).toBe(true);
       await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
-      receiveRemoteControl('viewer-a', { type: 'request', shareSessionId: 'share-b', requestId: 'request-b' });
+      receiveRemoteControl('viewer-a', { type: 'request', requestId: 'request-b' });
       expect(rtc.remoteControlRequest.value).toBeNull();
       expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare)).toBeTruthy();
 
       oldAuthorization.resolve({ changed: true });
       expect(await oldAllow).toBe(false);
-      expect(revokeNative).toHaveBeenCalledWith('share-a', expect.any(String));
+      expect(rtcMocks.nativeStops).toHaveBeenCalledWith('share-a');
       expect(rtc.remoteControlRequest.value).toBeNull();
       expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare)).toBeTruthy();
 
-      receiveRemoteControl('viewer-a', { type: 'request', shareSessionId: 'share-b', requestId: 'request-b2' });
+      receiveRemoteControl('viewer-a', { type: 'request', requestId: 'request-b2' });
       expect(rtc.remoteControlRequest.value).toEqual({ identity: 'viewer-a', requestId: 'request-b2' });
-      expect(await rtc.allowRemoteControl()).toBe(true);
+      expect(await beginRemoteControlApproval(rtc)).toBe(true);
       expect(rtc.remoteControlOwner.value?.identity).toBe('viewer-a');
     } finally {
       oldAuthorization.resolve({ changed: true });
@@ -1951,16 +2213,16 @@ describe('native screen share wiring', () => {
     try {
       await rtc.join('remote-control-allow-send-failure');
       await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
-      receiveRemoteControl('viewer-a', { type: 'request', shareSessionId: 'allow-failure-share', requestId: 'allow-request' });
+      receiveRemoteControl('viewer-a', { type: 'request', requestId: 'allow-request' });
 
-      expect(await rtc.allowRemoteControl()).toBe(false);
+      expect(await beginRemoteControlApproval(rtc)).toBe(false);
       expect(authorizeNative).toHaveBeenCalledTimes(1);
       expect(revokeNative).toHaveBeenCalledWith('allow-failure-share', expect.any(String));
       expect(rtc.remoteControlOwner.value).toBeNull();
       expect(rtc.remoteControlRequest.value).toBeNull();
       expect(rtc.remoteControlCleanupPending.value).toBe(false);
 
-      receiveRemoteControl('viewer-b', { type: 'request', shareSessionId: 'allow-failure-share', requestId: 'next-request' });
+      receiveRemoteControl('viewer-b', { type: 'request', requestId: 'next-request' });
       expect(rtc.remoteControlRequest.value).toEqual({ identity: 'viewer-b', requestId: 'next-request' });
     } finally {
       await rtc.leave();
@@ -2007,10 +2269,10 @@ describe('native screen share wiring', () => {
     try {
       await rtc.join('remote-control-owner');
       await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
-      receiveRemoteControl('viewer-a', { type: 'request', shareSessionId: 'share-session', requestId: 'request-a' });
-      receiveRemoteControl('viewer-b', { type: 'request', shareSessionId: 'share-session', requestId: 'request-b' });
+      receiveRemoteControl('viewer-a', { type: 'request', requestId: 'request-a' });
+      receiveRemoteControl('viewer-b', { type: 'request', requestId: 'request-b' });
       expect(rtc.remoteControlRequest.value).toEqual({ identity: 'viewer-a', requestId: 'request-a' });
-      await rtc.allowRemoteControl();
+      await beginRemoteControlApproval(rtc);
       const granted = rtc.remoteControlOwner.value!;
       expect(rtc.remoteControlActive.value).toBeNull();
       receiveRemoteControl('viewer-a', { type: 'input', shareSessionId: 'share-session', controlSessionId: granted.controlSessionId,
@@ -2022,7 +2284,7 @@ describe('native screen share wiring', () => {
         sequence: 2, input: { kind: 'keyUp', key: 'letterA' } });
       await vi.waitFor(() => expect(nativeInput).toHaveBeenCalledTimes(3));
 
-      receiveRemoteControl('viewer-a', { type: 'revoke', shareSessionId: 'stale-share', requestId: 'old',
+      receiveRemoteControl('viewer-a', { type: 'revoke', shareSessionId: 'stale-share',
         controlSessionId: granted.controlSessionId });
       await Promise.resolve();
       expect(rtc.remoteControlOwner.value?.controlSessionId).toBe(granted.controlSessionId);
@@ -2039,7 +2301,7 @@ describe('native screen share wiring', () => {
       expect(await rtc.retryRemoteControlCleanup()).toBe(true);
       expect(rtc.remoteControlCleanupPending.value).toBe(false);
       expect(nativeInput).toHaveBeenCalledTimes(3);
-      receiveRemoteControl('owner-c', { type: 'share', shareSessionId: 'other-share', sourceKind: 'monitor' });
+      receiveRemoteControl('owner-c', { type: 'state', available: true, share: { shareSessionId: 'other-share', kind: 'monitor'  }, control: null});
       expect(await rtc.requestRemoteControl('owner-c')).toBe(true);
     } finally {
       revokeNotification.resolve();
@@ -2795,7 +3057,7 @@ describe('native screen share wiring', () => {
       rtcMocks.selectedSources.mockResolvedValueOnce({ sourceId: 'window:room-b:0', shareAudio: false });
       await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
       const packetsBeforeOldPublish = rtcMocks.sentPackets.map(({ payload }) => JSON.parse(new TextDecoder().decode(payload)))
-        .filter((message) => message.type === 'share');
+        .filter((message) => message.type === 'state' && message.share);
       expect(packetsBeforeOldPublish).toHaveLength(1);
       const roomAPermissionsBeforeLatePublish = rtcMocks.subscriptionPermissions
         .filter((entry) => entry.room === roomA).length;
@@ -2805,7 +3067,7 @@ describe('native screen share wiring', () => {
       expect(rtcMocks.subscriptionPermissions.filter((entry) => entry.room === roomA))
         .toHaveLength(roomAPermissionsBeforeLatePublish);
       const sharePackets = rtcMocks.sentPackets.map(({ payload }) => JSON.parse(new TextDecoder().decode(payload)))
-        .filter((message) => message.type === 'share');
+        .filter((message) => message.type === 'state' && message.share);
       expect(sharePackets).toHaveLength(1);
       expect(rtc.screenShareActive.value).toBe(true);
       expect(rtcMocks.unpublishing).toHaveBeenCalledWith(oldTrack, true);

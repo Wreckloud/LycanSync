@@ -15,7 +15,7 @@ const props = defineProps<{
   reconnecting: boolean;
   inputBlocked: boolean;
   controlAvailable: boolean;
-  controlUnavailable: boolean;
+  privateControl: string;
   controlPending: boolean;
   controlActive: boolean;
   shareAudio: boolean;
@@ -69,10 +69,11 @@ onScopeDispose(() => { disposed = true; stopState?.(); });
         <PinOff v-if="pinned" :size="16" /><Pin v-else :size="16" />
       </button>
     </header>
-    <p v-if="ended" class="viewer-ended" role="status">共享已结束</p>
+    <p v-if="privateControl" class="viewer-ended" role="status">{{ privateControl }} · 画面未公开</p>
+    <p v-else-if="ended" class="viewer-ended" role="status">共享已结束</p>
     <ParticipantCard v-else :participant="entry.participant" :revision="revision" :avatar="avatar"
       :is-local="isLocal" :is-listening="listening" variant="viewer" :input-blocked="inputBlocked"
-      :remote-control-available="controlAvailable" :remote-control-unavailable="controlUnavailable"
+      :remote-control-available="controlAvailable"
       :remote-control-active="controlActive" :remote-control-pending="controlPending"
       @request-control="emit('requestControl')" @cancel-control="emit('cancelControl')"
       @stop-control="emit('stopControl')" @remote-input="emit('remoteInput', $event)" @notice="error = $event" />

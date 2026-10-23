@@ -1,4 +1,4 @@
-export const REMOTE_CONTROL_TOPIC = 'lycan-remote-control-v1';
+export const REMOTE_CONTROL_TOPIC = 'lycan-remote-control-v2';
 export const REMOTE_CONTROL_MAX_MESSAGE_BYTES = 1024;
 export const REMOTE_CONTROL_MAX_INPUTS_PER_SECOND = 120;
 
@@ -84,14 +84,12 @@ export class RemoteInputPresses {
 }
 
 export type RemoteControlMessage =
-  | { type: 'share'; shareSessionId: string; sourceKind: 'monitor' | 'window' }
-  | { type: 'queryShare'; requestId: string }
-  | { type: 'shareState'; shareSessionId: string; sourceKind: 'monitor' | 'window'; requestId: string }
-  | { type: 'shareStopped'; shareSessionId: string }
-  | { type: 'request'; shareSessionId: string; requestId: string }
-  | { type: 'allow'; shareSessionId: string; requestId: string; controlSessionId: string }
-  | { type: 'reject' | 'revoke'; shareSessionId: string; requestId: string; controlSessionId?: string }
-  | { type: 'cancel'; shareSessionId: string; requestId: string }
+  | { type: 'queryState' }
+  | { type: 'state'; available: boolean; share: { shareSessionId: string; kind: 'monitor' | 'window' } | null;
+      control: { identity: string; public: boolean } | null }
+  | { type: 'request' | 'accept' | 'controllerReady' | 'reject' | 'cancel'; requestId: string }
+  | { type: 'allow'; shareSessionId: string; requestId: string; controlSessionId: string; trackSid: string }
+  | { type: 'revoke'; shareSessionId: string; controlSessionId: string }
   | { type: 'input'; shareSessionId: string; controlSessionId: string; sequence: number; input: RemoteControlInput };
 
 export class RemoteControlAuthorization {
@@ -226,17 +224,21 @@ export function decodeRemoteControlMessage(payload: Uint8Array): RemoteControlMe
   try {
     const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(payload));
     if (!value || typeof value !== 'object') return null;
-    if (value.type === 'queryShare') return validId(value.requestId) ? value as RemoteControlMessage : null;
+    if (value.type === 'queryState') return value as RemoteControlMessage;
+    if (value.type === 'state') {
+      if (typeof value.available !== 'boolean' || (value.share !== null && (!value.share
+          || !validId(value.share.shareSessionId) || !['monitor', 'window'].includes(value.share.kind)))
+          || (value.control !== null && (!value.control || !validId(value.control.identity)
+            || typeof value.control.public !== 'boolean'))) return null;
+      return value as RemoteControlMessage;
+    }
+    if (['request', 'accept', 'controllerReady', 'reject', 'cancel'].includes(value.type)) {
+      return validId(value.requestId) ? value as RemoteControlMessage : null;
+    }
     if (!validId(value.shareSessionId)) return null;
-    if (value.type === 'share') return value.sourceKind === 'monitor' || value.sourceKind === 'window'
-      ? value as RemoteControlMessage : null;
-    if (value.type === 'shareState') return (value.sourceKind === 'monitor' || value.sourceKind === 'window')
-      && validId(value.requestId) ? value as RemoteControlMessage : null;
-    if (value.type === 'shareStopped') return value as RemoteControlMessage;
-    if (value.type === 'request' || value.type === 'allow' || value.type === 'reject'
-        || value.type === 'revoke' || value.type === 'cancel') {
-      if (!validId(value.requestId)) return null;
-      if ((value.type === 'allow' || value.type === 'revoke') && !validId(value.controlSessionId)) return null;
+    if (value.type === 'allow' || value.type === 'revoke') {
+      if (value.type === 'allow' && (!validId(value.requestId) || !validId(value.trackSid))) return null;
+      if (!validId(value.controlSessionId)) return null;
       return value as RemoteControlMessage;
     }
     if (value.type !== 'input' || !validId(value.controlSessionId)
