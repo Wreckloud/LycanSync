@@ -19,15 +19,22 @@ function fixture(context, { closeOnShutdown = true, closeOnKill = true, blockShu
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
   const commands = [];
+  const captureCommands = [];
   const spawns = [];
   const failures = [];
   const audioFailures = [];
   let kills = 0;
   child.stdin = new Writable({ write(chunk, _encoding, callback) {
     const command = chunk.toString('utf8').trim();
-    commands.push(command);
-    if (command === 'shutdown' && blockShutdownWrite) return;
+    if (command.startsWith('start|')) captureCommands.push(command);
+    else commands.push(command);
+    if ((command === 'shutdown' || command.startsWith('stop:')) && blockShutdownWrite) return;
     callback();
+    if (command.startsWith('stop:') && closeOnShutdown) {
+      const stopped = () => child.stdout.write(JSON.stringify({ event: 'captureStopped', sessionId: command.slice(5) }) + '\n');
+      if (shutdownDelayMs) setTimeout(stopped, shutdownDelayMs);
+      else queueMicrotask(stopped);
+    }
     if (command === 'shutdown' && closeOnShutdown) {
       if (shutdownDelayMs) setTimeout(() => child.emit('close', 0), shutdownDelayMs);
       else queueMicrotask(() => child.emit('close', 0));
@@ -41,13 +48,21 @@ function fixture(context, { closeOnShutdown = true, closeOnKill = true, blockShu
   const frames = [];
   const manager = new ObsCaptureHostManager({ executablePath: 'C:\\obs\\host.exe', modulePath: 'C:\\obs\\win-capture.dll',
     dataPath: 'C:\\obs\\data', configPath: 'C:\\user-data\\obs-capture\\32.2.2',
-    platform: 'win32', clientProcessId: 4321, spawnProcess: (...args) => { spawns.push(args); return child; },
+    platform: 'win32', clientProcessId: 4321, spawnProcess: (...args) => {
+      spawns.push(args);
+      queueMicrotask(() => child.stdout.write('{"event":"coreReady"}\n'));
+      return child;
+    },
     onAudioFailure: (_state, failure) => audioFailures.push(failure),
     onFrame: (_state, frame) => frames.push(frame), onFailure: (_state, error) => failures.push(error.message) });
-  const emit = (event) => child.stdout.write(JSON.stringify(event.event === 'diagnostics'
+  const emit = (event) => {
+    const output = () => child.stdout.write(JSON.stringify(event.event === 'diagnostics'
     ? { screenShareAudio: { ...idleAudio }, ...event }
     : ['captureConfigured', 'captureConfigurationRejected'].includes(event.event)
-      ? { width: 1920, height: 1080, ...event } : event) + '\n');
+      ? { width: 1920, height: 1080, ...event } : { sessionId, ...event }) + '\n');
+    if (event.event === 'captureStarted') queueMicrotask(output);
+    else output();
+  };
   const start = (maxFps = 60) => manager.start('monitor:7:0', maxFps, sessionId,
     { kind: 'monitor', monitorName }, { hideCursor: true, hideBorder: false });
   const ready = async (maxFps = 60) => {
@@ -56,16 +71,158 @@ function fixture(context, { closeOnShutdown = true, closeOnKill = true, blockShu
     await started;
   };
   context.after(() => {
-    if (manager.state) manager.state.stopRequested = true;
+    if (manager.state) manager.state.shuttingDown = true;
     child.emit('close', 0);
   });
-  return { child, commands, spawns, failures, audioFailures, frames, manager, emit, start, ready, killCount: () => kills };
+  return { child, commands, captureCommands, spawns, failures, audioFailures, frames, manager, emit, start, ready, killCount: () => kills };
 }
 
 const audioId = '00000000-0000-0000-0000-000000000001';
 const nextAudioId = '00000000-0000-0000-0000-000000000002';
 const audioFormat = { sampleRate: 48_000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10,
   pluginLoadMs: 12, captureReadyMs: 340 };
+
+test('核心预热不携带来源，图形准备共用宿主和一次命令，未真实确认前保持等待', async (context) => {
+  const { manager, emit, commands, captureCommands, spawns } = fixture(context);
+  await manager.prepare();
+  assert.equal(manager.state.videoSessionId, undefined);
+  assert.deepEqual(captureCommands, []);
+  assert.equal(spawns[0][1].length, 3);
+  let complete = false;
+  const prepared = manager.prepare(true).then(() => { complete = true; });
+  const repeated = manager.prepare(true);
+  await flush();
+  assert.deepEqual(commands, ['prepare']);
+  assert.equal(complete, false);
+  emit({ event: 'enginePrepared' });
+  await Promise.all([prepared, repeated]);
+  assert.equal(complete, true);
+  assert.equal(spawns.length, 1);
+  assert.equal(manager.state.audio, undefined);
+});
+
+test('热宿主连续采集复用同一进程，旧开始、停止、帧及槽位归还不能接管新会话', async (context) => {
+  const { manager, ready, emit, commands, captureCommands, spawns, frames, failures } = fixture(context);
+  await ready();
+  const state = manager.state;
+  await manager.stop(sessionId);
+  assert.equal(manager.state, state);
+  assert.equal(state.closed, false);
+  const nextSession = '00000000-0000-0000-0000-000000000003';
+  const started = manager.start('monitor:7:0', 120, nextSession, { kind: 'monitor', monitorName },
+    { hideCursor: false, hideBorder: false });
+  await flush();
+  emit({ event: 'captureStarted', sessionId, helperVersion: '32.2.2' });
+  emit({ event: 'captureStopped', sessionId });
+  emit({ event: 'sharedTextureFrame', sessionId });
+  emit({ event: 'captureSuspended', sessionId, suspended: true });
+  assert.equal(state.videoSessionId, nextSession);
+  assert.notEqual(state.startResolve, undefined);
+  await assert.rejects(state.releaseSharedTextureSlot(sessionId, 0), /Unavailable/);
+  emit({ event: 'captureStarted', sessionId: nextSession, helperVersion: '32.2.2' });
+  await started;
+  await state.releaseSharedTextureSlot(nextSession, 0);
+  assert.equal(commands.at(-1), `release:${nextSession}:0`);
+  assert.equal(captureCommands.length, 2);
+  assert.equal(spawns.length, 1);
+  assert.deepEqual(frames, []);
+  assert.deepEqual(failures, []);
+});
+
+test('启动前取消不写采集命令，迟到核心就绪不会启动已取消的来源', async (context) => {
+  const { manager, start, captureCommands, failures } = fixture(context);
+  const rejected = assert.rejects(start(), /obsCaptureStopping/);
+  await manager.stop(sessionId);
+  await rejected;
+  await flush();
+  assert.deepEqual(captureCommands, []);
+  assert.equal(manager.state.videoSessionId, undefined);
+  assert.deepEqual(failures, []);
+});
+
+test('空闲三分钟退出；活动采集不被旧空闲计时器结束，停止后重新计时', async (context) => {
+  const { manager, emit, start, commands } = fixture(context);
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  await manager.prepare();
+  context.mock.timers.tick(179_999);
+  assert.equal(commands.includes('shutdown'), false);
+  const started = start();
+  emit({ event: 'captureStarted', helperVersion: '32.2.2' });
+  await started;
+  context.mock.timers.tick(180_000);
+  assert.equal(commands.includes('shutdown'), false);
+  await manager.stop(sessionId);
+  context.mock.timers.tick(179_999);
+  assert.equal(commands.includes('shutdown'), false);
+  context.mock.timers.tick(1);
+  await flush();
+  assert.equal(commands.at(-1), 'shutdown');
+  assert.equal(manager.state, undefined);
+});
+
+test('图形准备超时真实失败并退出宿主，不启动采集或伪报准备成功', async (context) => {
+  const { manager, captureCommands, failures, killCount } = fixture(context);
+  await manager.prepare();
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const rejected = assert.rejects(manager.prepare(true), /obsCapturePrepareTimeout/);
+  await flush();
+  context.mock.timers.tick(10_000);
+  await rejected;
+  await flush();
+  assert.equal(killCount(), 1);
+  assert.equal(manager.state, undefined);
+  assert.deepEqual(captureCommands, []);
+  assert.deepEqual(failures, ['obsCapturePrepareTimeout']);
+});
+
+test('正式后台入口只做一次核心准备，图形失败后不随页面枚举循环重启', async () => {
+  const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const calls = [];
+  const diagnostics = [];
+  const sandbox = { closing: false, process: { platform: 'win32' }, existsSync: () => true,
+    obsHostSettings: { executablePath: 'host', modulePath: 'capture', dataPath: 'data' },
+    obsCaptureHost: { prepare: async graphics => { calls.push(graphics); if (graphics) throw new Error('prepare failed'); } },
+    writeMediaDiagnostic: async event => { diagnostics.push(event); } };
+  const prepare = runInNewContext(source.slice(source.indexOf('let obsCorePreparationRequested ='),
+    source.indexOf('function activityHelperPath(')) + '; prepareObsCapture', sandbox);
+  prepare(false);
+  prepare(false);
+  assert.deepEqual(calls, [false]);
+  prepare(true);
+  await flush();
+  prepare(true);
+  prepare(false);
+  assert.deepEqual(calls, [false, true]);
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].stage, 'obsPrewarmFailed');
+});
+
+test('退出中、非 Windows 或缺少固定运行文件时不发起后台准备', () => {
+  const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  for (const [closing, platform, available] of [[true, 'win32', true], [false, 'linux', true], [false, 'win32', false]]) {
+    const sandbox = { closing, process: { platform }, existsSync: () => available,
+      obsHostSettings: { executablePath: 'host' }, obsCaptureHost: { prepare: () => assert.fail('不能启动后台宿主') } };
+    const prepare = runInNewContext(source.slice(source.indexOf('let obsCorePreparationRequested ='),
+      source.indexOf('function activityHelperPath(')) + '; prepareObsCapture', sandbox);
+    prepare(false);
+    prepare(true);
+  }
+});
+
+test('应用退出永久封闭宿主，等待空闲退出的准备和新采集都不能再次创建进程', async (context) => {
+  const { manager, spawns, child } = fixture(context, { closeOnShutdown: false });
+  await manager.prepare();
+  const idleShutdown = manager.shutdown();
+  const preparing = assert.rejects(manager.prepare(true), /Disposed/);
+  const starting = assert.rejects(manager.start('monitor:7:0', 60, sessionId,
+    { kind: 'monitor', monitorName }, { hideCursor: false, hideBorder: false }), /Disposed/);
+  const disposed = manager.dispose();
+  child.emit('close', 0);
+  await Promise.all([idleShutdown, disposed, preparing, starting]);
+  await assert.rejects(manager.prepare(), /Disposed/);
+  assert.equal(spawns.length, 1);
+  assert.equal(manager.state, undefined);
+});
 
 test('OBS 声音等待真实启动及固定格式确认，使用同一宿主并由可信主进程提供排除身份', async (context) => {
   const { manager, ready, emit, commands, spawns } = fixture(context);
@@ -441,22 +598,24 @@ test('声音模式仅由 Windows 能力决定，旧系统混音与进程树范�
 });
 
 test('启动按显示器设备名传参，不把来源 ID 尾号当作显示器序号', async (context) => {
-  const { manager, ready, spawns } = fixture(context);
+  const { manager, ready, spawns, captureCommands } = fixture(context);
   await ready();
-  assert.deepEqual(spawns[0][1], ['C:\\obs\\win-capture.dll', 'C:\\obs\\data', 'monitor', monitorName,
-    '0', '0', sessionId, 'C:\\user-data\\obs-capture\\32.2.2', '60', '', '', '1920', '1080']);
+  assert.deepEqual(spawns[0][1], ['C:\\obs\\win-capture.dll', 'C:\\obs\\data', 'C:\\user-data\\obs-capture\\32.2.2']);
+  assert.equal(captureCommands[0], `start|monitor|${monitorName}|0|0|${sessionId}|60|||1920|1080`);
   assert.equal(spawns[0][2].windowsHide, true);
   assert.equal(spawns[0][2].cwd, 'C:\\obs');
   assert.equal(manager.state.helperVersion, '32.2.2');
   await manager.stop(sessionId);
+  assert.equal(manager.state.videoSessionId, undefined);
+  await manager.shutdown();
   assert.equal(manager.state, undefined);
 });
 
 test('四档目标帧率均传入同一 OBS 宿主，拒绝选项以外的值', async (context) => {
   for (const fps of [30, 60, 120, 180]) {
-    const { manager, ready, spawns } = fixture(context);
+    const { manager, ready, captureCommands } = fixture(context);
     await ready(fps);
-    assert.equal(spawns[0][1][8], String(fps));
+    assert.equal(captureCommands[0].split('|')[6], String(fps));
     assert.equal(manager.state.maxFps, fps);
     await manager.stop(sessionId);
   }
@@ -490,12 +649,12 @@ test('共享中切换等宿主确认才更新帧率，不更换子进程或会�
 });
 
 test('自定义尺寸贯通宿主启动与切换，只在尺寸和帧率均确认后更新，不新增进程', async (context) => {
-  const { manager, emit, spawns, commands } = fixture(context);
+  const { manager, emit, spawns, commands, captureCommands } = fixture(context);
   const started = manager.start('monitor:7:0', 180, sessionId, { kind: 'monitor', monitorName },
     { hideCursor: false, hideBorder: false }, { width: 2560, height: 1440 });
   emit({ event: 'captureStarted', helperVersion: '32.2.2' });
   await started;
-  assert.deepEqual(spawns[0][1].slice(-2), ['2560', '1440']);
+  assert.deepEqual(captureCommands[0].split('|').slice(-2), ['2560', '1440']);
   const resolution = { width: 640, height: 360 };
   const changing = manager.configureVideo(sessionId, 30, resolution);
   resolution.width = 1280;
@@ -643,13 +802,13 @@ test('宿主实际版本不匹配时拒绝启动，不把目标版本冒充运�
 });
 
 test('窗口启动只传已验证句柄和实例标记，不传标题做匹配', async (context) => {
-  const { manager, emit, spawns } = fixture(context);
+  const { manager, emit, spawns, captureCommands } = fixture(context);
   const target = { kind: 'window', windowId: '34567', propertyName: 'LycanSync.MediaHelper.Window.1.2.3', propertyValue: '56789' };
   const started = manager.start('window:7:0', 60, sessionId, target, { hideCursor: true, hideBorder: true });
   emit({ event: 'captureStarted', helperVersion: '32.2.2' });
   await started;
-  assert.deepEqual(spawns[0][1].slice(2), ['window', '34567', '0', '1', sessionId,
-    'C:\\user-data\\obs-capture\\32.2.2', '60', target.propertyName, target.propertyValue, '1920', '1080']);
+  assert.deepEqual(captureCommands[0].split('|').slice(1), ['window', '34567', '0', '1', sessionId,
+    '60', target.propertyName, target.propertyValue, '1920', '1080']);
   await manager.stop(sessionId);
   for (const invalid of [{ ...target, windowId: '0' }, { ...target, propertyValue: '18446744073709551616' },
     { ...target, propertyName: 'window title' }, { ...target, kind: 'monitor' }]) {
@@ -659,13 +818,13 @@ test('窗口启动只传已验证句柄和实例标记，不传标题做匹配',
 });
 
 test('游戏来源仍绑定已登记窗口，不接受整屏或丢失的实例标记', async (context) => {
-  const { manager, emit, spawns } = fixture(context);
+  const { manager, emit, spawns, captureCommands } = fixture(context);
   const target = { kind: 'game', windowId: '34567', propertyName: 'LycanSync.MediaHelper.Window.1.2.3', propertyValue: '56789' };
   const started = manager.start('window:7:0', 120, sessionId, target, { hideCursor: true, hideBorder: true });
   emit({ event: 'captureStarted', helperVersion: '32.2.2' });
   await started;
-  assert.deepEqual(spawns[0][1].slice(2), ['game', '34567', '0', '1', sessionId,
-    'C:\\user-data\\obs-capture\\32.2.2', '120', target.propertyName, target.propertyValue, '1920', '1080']);
+  assert.deepEqual(captureCommands[0].split('|').slice(1), ['game', '34567', '0', '1', sessionId,
+    '120', target.propertyName, target.propertyValue, '1920', '1080']);
   await manager.stop(sessionId);
   await assert.rejects(manager.start('monitor:7:0', 60, sessionId, target, { hideCursor: false, hideBorder: false }), /invalidObsCaptureArguments/);
   await assert.rejects(manager.start('window:7:0', 60, sessionId, { ...target, propertyName: '' },
@@ -925,6 +1084,18 @@ test('OBS 未确认停止时不能释放 Rust 持有的窗口身份', async () =
   assert.equal(sandbox.mediaHelper.videoCapture.state, targetState);
 });
 
+test('旧采集迟到清理不释放已复用宿主的新桥接或新来源身份', async () => {
+  const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const current = { videoSessionId: 'new-session' };
+  const sandbox = { obsCaptureHost: { state: current, stop: () => assert.fail('不能停止新采集') },
+    releaseHelperProcessBridge: () => assert.fail('不能释放新桥接'),
+    mediaHelper: { videoCapture: { sessionId: 'new-session' }, stopVideo: () => assert.fail('不能释放新来源') } };
+  const stop = runInNewContext(source.slice(source.indexOf('async function stopObsVideo('),
+    source.indexOf('async function stopNativeVideo(')) + '; stopObsVideo', sandbox);
+  assert.equal((await stop({ sessionId, helperState: current, targetState: {} })).changed, false);
+  assert.equal(sandbox.obsCaptureHost.state, current);
+});
+
 test('没有新增成功帧时仍主动读取真实槽位丢帧；并发诊断共用一次请求', async (context) => {
   const { manager, ready, emit, commands, frames } = fixture(context);
   await ready();
@@ -940,7 +1111,7 @@ test('没有新增成功帧时仍主动读取真实槽位丢帧；并发诊断�
   assert.deepEqual(await diagnostics, { helperVersion: '32.2.2', renderedFrames: 123, bridgeFrames: 3,
     bridgeDroppedFrames: 120, screenShareAudio: idleAudio });
   await manager.state.releaseSharedTextureSlot(sessionId, 1);
-  assert.equal(commands.at(-1), 'release:1');
+  assert.equal(commands.at(-1), `release:${sessionId}:1`);
   await assert.rejects(manager.state.releaseSharedTextureSlot('old-session', 1), /Unavailable/);
 });
 
@@ -1038,7 +1209,7 @@ test('shutdown 写入未完成仍按时结束进程，不被 stdin 背压阻塞'
 test('启动中停止后迟到的 ready 不能再宣告启动成功', async (context) => {
   const { manager, start, emit } = fixture(context, { closeOnShutdown: false });
   context.mock.timers.enable({ apis: ['setTimeout'] });
-  const rejected = assert.rejects(start(), /obsCaptureHostClosedBeforeStart/);
+  const rejected = assert.rejects(start(), /obsCaptureStopping/);
   const stopped = manager.stop(sessionId);
   emit({ event: 'captureStarted', helperVersion: '32.2.2' });
   assert.equal(manager.state.helperVersion, undefined);
@@ -1047,7 +1218,7 @@ test('启动中停止后迟到的 ready 不能再宣告启动成功', async (con
   await rejected;
 });
 
-test('正常原生清理超过两秒时等待真实关闭，不提前强杀进程', async (context) => {
+test('正常原生清理超过两秒时等待真实确认，保留宿主而不提前强杀', async (context) => {
   const { manager, ready, killCount } = fixture(context, { shutdownDelayMs: 2500 });
   await ready();
   context.mock.timers.enable({ apis: ['setTimeout'] });
@@ -1055,7 +1226,8 @@ test('正常原生清理超过两秒时等待真实关闭，不提前强杀进�
   context.mock.timers.tick(2500);
   await stopped;
   assert.equal(killCount(), 0);
-  assert.equal(manager.state, undefined);
+  assert.equal(manager.state.videoSessionId, undefined);
+  assert.equal(manager.state.closed, false);
 });
 
 test('诊断超时不伪造成功；迟到响应不能结束新请求', async (context) => {

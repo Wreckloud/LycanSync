@@ -84,7 +84,8 @@ void write_event(std::string_view event) {
 
 void write_started_event() {
   const std::lock_guard<std::mutex> lock(g_output_mutex);
-  std::cout << "{\"event\":\"captureStarted\",\"helperVersion\":\"" << g_host.helper_version << "\"}\n";
+  std::cout << "{\"event\":\"captureStarted\",\"sessionId\":\"" << g_host.session_id
+            << "\",\"helperVersion\":\"" << g_host.helper_version << "\"}\n";
   std::cout.flush();
 }
 
@@ -335,7 +336,7 @@ bool valid_session_id(std::string_view value) {
 }
 
 bool parse_release_command(std::string_view command, size_t &slot_index) {
-  constexpr std::string_view prefix = "release:";
+  const std::string prefix = "release:" + g_host.session_id + ":";
   if (!command.starts_with(prefix)) return false;
   const auto value = command.substr(prefix.size());
   const auto result = std::from_chars(value.data(), value.data() + value.size(), slot_index);
@@ -450,42 +451,40 @@ void destroy_textures() {
 
 }  // namespace
 
-int wmain(int argc, wchar_t **argv) {
-  if (argc != 14) {
-    std::wcerr << L"usage: lycansync-obs-capture-host <win-capture.dll> <module-data-dir> <monitor|window|game> <target> <capture-cursor:0|1> <hide-border:0|1> <session-id> <module-config-dir> <max-fps:30|60|120|180> <window-property> <window-property-value> <width> <height>\n";
-    return 2;
-  }
-
-  const std::wstring_view source_kind(argv[3]);
-  const bool game_source = source_kind == L"game";
-  const bool window_source = source_kind == L"window" || game_source;
-  const std::string session_id = to_utf8(argv[7]);
-  const std::string config_path = to_utf8(argv[8]);
-  const std::string frame_rate_argument = to_utf8(argv[9]);
+int capture(const std::array<std::string, 10> &arguments, const std::filesystem::path &module_path,
+    const std::filesystem::path &data_path, const std::filesystem::path &executable_path, obs_video_info &video) {
+  // 目录只在启动时接收；采集命令只允许有界 ASCII 来源身份，不能指定插件或执行路径。
+  const auto wide = [&](size_t index) { return std::wstring(arguments[index].begin(), arguments[index].end()); };
+  const std::string_view source_kind(arguments[0]);
+  const bool game_source = source_kind == "game";
+  const bool window_source = source_kind == "window" || game_source;
+  const std::string &session_id = arguments[4];
+  const std::string &frame_rate_argument = arguments[5];
   uint32_t frame_rate = 0;
   const auto parsed_frame_rate = std::from_chars(frame_rate_argument.data(), frame_rate_argument.data() + frame_rate_argument.size(), frame_rate);
-  const auto width_argument = to_utf8(argv[12]);
-  const auto height_argument = to_utf8(argv[13]);
+  const auto &width_argument = arguments[8];
+  const auto &height_argument = arguments[9];
   uint32_t width = 0, height = 0;
   const auto parsed_width = std::from_chars(width_argument.data(), width_argument.data() + width_argument.size(), width);
   const auto parsed_height = std::from_chars(height_argument.data(), height_argument.data() + height_argument.size(), height);
-  const std::wstring_view capture_cursor_argument(argv[5]);
-  const std::wstring_view hide_border_argument(argv[6]);
+  const std::string_view capture_cursor_argument(arguments[2]);
+  const std::string_view hide_border_argument(arguments[3]);
   if (capture_cursor_argument.size() != 1
-      || (capture_cursor_argument[0] != L'0' && capture_cursor_argument[0] != L'1')
-      || (hide_border_argument != L"0" && hide_border_argument != L"1")
-      || (source_kind != L"monitor" && !window_source)
+      || (capture_cursor_argument[0] != '0' && capture_cursor_argument[0] != '1')
+      || (hide_border_argument != "0" && hide_border_argument != "1")
+      || (source_kind != "monitor" && !window_source)
       || !valid_session_id(session_id)
-      || config_path.empty() || !std::filesystem::path(argv[8]).is_absolute()
       || parsed_frame_rate.ec != std::errc{} || parsed_frame_rate.ptr != frame_rate_argument.data() + frame_rate_argument.size()
       || !valid_frame_rate(frame_rate)
       || parsed_width.ec != std::errc{} || parsed_width.ptr != width_argument.data() + width_argument.size()
       || parsed_height.ec != std::errc{} || parsed_height.ptr != height_argument.data() + height_argument.size()
       || !valid_resolution(width, height)
-      || (!window_source && !monitor_exists(argv[4]))) {
+      || (!window_source && !monitor_exists(wide(1)))) {
     write_event("invalidCaptureArguments");
     return 2;
   }
+  g_host = HostState{};
+  g_host.helper_version = obs_get_version_string();
   g_host.session_id = session_id;
   g_host.output_width = width;
   g_host.output_height = height;
@@ -499,8 +498,8 @@ int wmain(int argc, wchar_t **argv) {
       return result.ec == std::errc{} && result.ptr == text.data() + text.size() && value != 0;
     };
     uintptr_t window_handle = 0;
-    window_target.property_name = argv[10];
-    if (!parse_pointer(argv[4], window_handle) || !parse_pointer(argv[11], window_target.property_value)
+    window_target.property_name = wide(6);
+    if (!parse_pointer(wide(1), window_handle) || !parse_pointer(wide(7), window_target.property_value)
         || !window_target.property_name.starts_with(L"LycanSync.MediaHelper.Window.")
         || window_target.property_name.size() > 128) {
       write_event("invalidCaptureArguments");
@@ -511,22 +510,6 @@ int wmain(int argc, wchar_t **argv) {
     g_host.window_target = window_target;
   }
 
-  base_set_log_handler(obs_log_handler, nullptr);
-  // 插件兼容列表等可写缓存归用户目录，不污染固定运行依赖或安装目录。
-  if (!obs_startup("en-US", config_path.c_str(), nullptr)) {
-    write_event("obsStartupFailed");
-    return 1;
-  }
-  const char *helper_version = obs_get_version_string();
-  if (!helper_version || std::string_view(helper_version) != "32.2.2") {
-    write_event("obsCaptureVersionUnsupported");
-    obs_shutdown();
-    return 1;
-  }
-  g_host.helper_version = helper_version;
-
-  obs_video_info video{};
-  video.graphics_module = "libobs-d3d11";
   video.fps_num = frame_rate;
   video.fps_den = 1;
   video.base_width = g_host.output_width;
@@ -540,52 +523,27 @@ int wmain(int argc, wchar_t **argv) {
   video.scale_type = OBS_SCALE_BICUBIC;
   if (obs_reset_video(&video) != OBS_VIDEO_SUCCESS) {
     write_event("obsVideoInitFailed");
-    obs_shutdown();
     return 1;
   }
-
-  obs_audio_info audio{};
-  audio.samples_per_sec = 48'000;
-  audio.speakers = SPEAKERS_STEREO;
-  if (!obs_reset_audio(&audio)) {
-    write_event("obsAudioInitFailed");
-    obs_shutdown();
-    return 1;
-  }
-
-  obs_module_t *module = nullptr;
-  std::string module_path = to_utf8(argv[1]);
-  const std::string data_path = to_utf8(argv[2]);
-  // libobs 用正斜杠提取模块名，否则会把 Windows 绝对路径拼进缓存目录。
-  std::replace(module_path.begin(), module_path.end(), '\\', '/');
-  if ((!window_source || game_source) && (module_path.empty() || data_path.empty()
-      || obs_open_module(&module, module_path.c_str(), data_path.c_str()) != MODULE_SUCCESS
-      || !obs_init_module(module))) {
-    write_event("obsCaptureModuleLoadFailed");
-    obs_shutdown();
-    return 1;
-  }
-  if (!window_source || game_source) obs_post_load_modules();
 
   obs_source_t *source = nullptr;
   const char *source_error = "obsDisplaySourceUnavailable";
   if (game_source) {
-    source = create_game_video_source(window_target, capture_cursor_argument == L"0", source_error);
+    source = create_game_video_source(window_target, capture_cursor_argument == "0", source_error);
   } else if (window_source) {
-    source = create_window_video_source(window_target, std::filesystem::path(argv[0]).parent_path().wstring(),
-        capture_cursor_argument == L"0", hide_border_argument == L"1", source_error);
+    source = create_window_video_source(window_target, executable_path.parent_path().wstring(),
+        capture_cursor_argument == "0", hide_border_argument == "1", source_error);
   } else {
     obs_data_t *settings = obs_data_create();
     // 来源 ID 的尾号不是系统显示器序号；固定版本按设备名匹配 monitor_id。
-    const std::string monitor_name = to_utf8(argv[4]);
+    const std::string &monitor_name = arguments[1];
     obs_data_set_string(settings, "monitor_id", monitor_name.c_str());
-    obs_data_set_bool(settings, "capture_cursor", capture_cursor_argument[0] == L'1');
+    obs_data_set_bool(settings, "capture_cursor", capture_cursor_argument[0] == '1');
     source = obs_source_create("monitor_capture", "LycanSync display", settings, nullptr);
     obs_data_release(settings);
   }
   if (!source) {
     write_event(source_error);
-    obs_shutdown();
     return 1;
   }
 
@@ -593,7 +551,6 @@ int wmain(int argc, wchar_t **argv) {
   if (!scene) {
     obs_source_release(source);
     write_event("obsSceneUnavailable");
-    obs_shutdown();
     return 1;
   }
   obs_sceneitem_t *item = obs_scene_add(scene, source);
@@ -602,7 +559,6 @@ int wmain(int argc, wchar_t **argv) {
     obs_scene_release(scene);
     obs_source_release(source);
     write_event("obsDisplaySceneAddFailed");
-    obs_shutdown();
     return 1;
   }
   obs_transform_info transform{};
@@ -618,8 +574,8 @@ int wmain(int argc, wchar_t **argv) {
   obs_add_main_rendered_callback(render_shared_frame, source);
   write_started_event();
 
-  const auto audio_module = std::filesystem::path(argv[1]).parent_path() / L"win-wasapi.dll";
-  auto capture_data = std::filesystem::path(argv[2]).lexically_normal();
+  const auto audio_module = module_path.parent_path() / L"win-wasapi.dll";
+  auto capture_data = data_path.lexically_normal();
   if (capture_data.filename().empty()) capture_data = capture_data.parent_path();
   const auto audio_data = capture_data.parent_path() / L"win-wasapi";
   ScreenAudioHost screen_audio(to_utf8(audio_module.wstring()), to_utf8(audio_data.wstring()), window_target, window_source,
@@ -639,8 +595,11 @@ int wmain(int argc, wchar_t **argv) {
   std::string command;
   struct PendingConfiguration { std::string id; uint32_t fps; uint32_t width; uint32_t height; };
   std::optional<PendingConfiguration> pending_configuration;
+  bool keep_host = false;
   while (std::getline(std::cin, command)) {
     if (command == "shutdown") break;
+    if (command == "stop:" + g_host.session_id) { keep_host = true; break; }
+    if (command == "prepare") { write_event("enginePrepared"); continue; }
     if (screen_audio.command(command)) continue;
     size_t slot_index = 0;
     if (parse_release_command(command, slot_index)) {
@@ -678,14 +637,100 @@ int wmain(int argc, wchar_t **argv) {
 
   screen_audio.shutdown();
   obs_remove_main_rendered_callback(render_shared_frame, source);
-  const std::lock_guard<std::mutex> render_lock(g_render_mutex);
-  obs_set_output_source(0, nullptr);
-  // 主画布也持有场景引用，先移出注册表，避免 shutdown 再次销毁。
-  obs_source_remove(obs_scene_get_source(scene));
-  obs_scene_release(scene);
-  obs_source_release(source);
-  destroy_textures();
+  {
+    const std::lock_guard<std::mutex> render_lock(g_render_mutex);
+    obs_set_output_source(0, nullptr);
+    // 主画布也持有场景引用，先移出注册表，避免下次采集继承旧来源。
+    obs_source_remove(obs_scene_get_source(scene));
+    obs_scene_release(scene);
+    obs_source_release(source);
+    destroy_textures();
+  }
+  // OBS 的来源析构由任务队列执行，必须确认完成后才能归还来源身份或复用宿主。
+  if (!obs_wait_for_destroy_queue()) { write_event("obsCaptureCleanupFailed"); return 1; }
+  // 热态仅保留小画布与低频图形循环，不保留采集、共享纹理或声音设备。
+  video.base_width = video.output_width = 320;
+  video.base_height = video.output_height = 180;
+  video.fps_num = 1;
+  if (keep_host && obs_reset_video(&video) != OBS_VIDEO_SUCCESS) {
+    write_event("obsVideoIdleFailed");
+    return 1;
+  }
+  {
+    const std::lock_guard<std::mutex> output_lock(g_output_mutex);
+    std::cout << "{\"event\":\"captureStopped\",\"sessionId\":\"" << g_host.session_id << "\"}\n";
+    std::cout.flush();
+  }
+  return keep_host ? 0 : 3;
+}
+
+int wmain(int argc, wchar_t **argv) {
+  if (argc != 4 || !std::filesystem::path(argv[3]).is_absolute()) return 2;
+  base_set_log_handler(obs_log_handler, nullptr);
+  if (!obs_startup("en-US", to_utf8(argv[3]).c_str(), nullptr)) { write_event("obsStartupFailed"); return 1; }
+  if (std::string_view(obs_get_version_string()) != "32.2.2") {
+    write_event("obsCaptureVersionUnsupported");
+    obs_shutdown();
+    return 1;
+  }
+  write_event("coreReady");
+  bool prepared = false;
+  obs_video_info video{};
+  video.graphics_module = "libobs-d3d11";
+  video.fps_den = 1;
+  video.output_format = VIDEO_FORMAT_BGRA;
+  video.gpu_conversion = true;
+  video.colorspace = VIDEO_CS_SRGB;
+  video.range = VIDEO_RANGE_PARTIAL;
+  video.scale_type = OBS_SCALE_BICUBIC;
+  const auto prepare = [&]() {
+    if (prepared) return true;
+    video.fps_num = 1;
+    video.base_width = video.output_width = 320;
+    video.base_height = video.output_height = 180;
+    if (obs_reset_video(&video) != OBS_VIDEO_SUCCESS) { write_event("obsVideoInitFailed"); return false; }
+    obs_audio_info audio{};
+    audio.samples_per_sec = 48'000;
+    audio.speakers = SPEAKERS_STEREO;
+    if (!obs_reset_audio(&audio)) { write_event("obsAudioInitFailed"); return false; }
+    obs_module_t *module = nullptr;
+    auto module_path = to_utf8(argv[1]);
+    std::replace(module_path.begin(), module_path.end(), '\\', '/');
+    if (obs_open_module(&module, module_path.c_str(), to_utf8(argv[2]).c_str()) != MODULE_SUCCESS
+        || !obs_init_module(module)) { write_event("obsCaptureModuleLoadFailed"); return false; }
+    obs_post_load_modules();
+    prepared = true;
+    return true;
+  };
+  std::string command;
+  int result = 0;
+  while (std::getline(std::cin, command)) {
+    if (command == "shutdown") break;
+    if (command == "prepare") {
+      if (!prepare()) { result = 1; break; }
+      write_event("enginePrepared");
+      continue;
+    }
+    size_t retired_slot = 0;
+    // 页面撤销导入后的最后一次归还可能排在 stop 后；空闲时不再持有可修改的槽位。
+    if (parse_release_command(command, retired_slot)) continue;
+    if (!command.starts_with("start|")) { write_event("invalidCaptureCommand"); result = 1; break; }
+    auto remaining = std::string_view(command).substr(6);
+    std::array<std::string, 10> arguments;
+    bool valid = true;
+    for (size_t index = 0; index < arguments.size(); ++index) {
+      const auto end = remaining.find('|');
+      const auto value = remaining.substr(0, end);
+      if (value.size() > 256 || !std::all_of(value.begin(), value.end(), [](unsigned char ch) { return ch >= 32 && ch < 127; })
+          || ((index + 1 == arguments.size()) != (end == std::string_view::npos))) { valid = false; break; }
+      arguments[index] = value;
+      if (end != std::string_view::npos) remaining.remove_prefix(end + 1);
+    }
+    if (!valid) { write_event("invalidCaptureArguments"); result = 1; break; }
+    if (!prepare()) { result = 1; break; }
+    result = capture(arguments, argv[1], argv[2], argv[0], video);
+    if (result != 0) break;
+  }
   obs_shutdown();
-  write_event("captureStopped");
-  return 0;
+  return result == 3 ? 0 : result;
 }

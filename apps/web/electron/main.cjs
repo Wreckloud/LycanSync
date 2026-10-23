@@ -207,6 +207,20 @@ const obsCaptureHost = new ObsCaptureHostManager({
   onDiagnostic: (message) => { void writeMediaDiagnostic({ stage: 'obsCaptureHostStderr', message }); },
 });
 
+let obsCorePreparationRequested = false;
+let obsBackgroundPreparationFailed = false;
+function prepareObsCapture(graphics) {
+  if (closing || obsBackgroundPreparationFailed || process.platform !== 'win32'
+      || !Object.values(obsHostSettings).every(path => existsSync(path))) return;
+  if (!graphics && obsCorePreparationRequested) return;
+  obsCorePreparationRequested = true;
+  void obsCaptureHost.prepare(graphics).catch(error => {
+    // 后台失败只记录一次；下一次用户确认共享仍可显式重试，不循环启动失败的宿主。
+    obsBackgroundPreparationFailed = true;
+    void writeMediaDiagnostic({ stage: 'obsPrewarmFailed', message: error.message });
+  });
+}
+
 function activityHelperPath() {
   if (app.isPackaged) return resolve(process.resourcesPath, 'activity-helper', 'lycansync-activity.exe');
   const override = process.env.LYCANSYNC_ACTIVITY_HELPER;
@@ -801,10 +815,12 @@ async function startNativeVideo(sourceId, maxFps, settings, resolution) {
 }
 
 async function stopObsVideo(video) {
-  // 未确认 OBS 关闭时保留窗口身份，不能让另一来源越过未完成的清理。
+  // 未确认采集清理或宿主退出时保留来源身份，不能让另一来源越过清理。
   const state = obsCaptureHost.state;
-  const stopped = !state || state.videoSessionId === video.sessionId
+  const ownsCapture = !state || state.videoSessionId === video.sessionId;
+  const stopped = ownsCapture
     ? await obsCaptureHost.stop(video.sessionId) : { changed: false };
+  if (video.helperState && (video.helperState !== state || ownsCapture)) releaseHelperProcessBridge(video.helperState);
   if (video.targetState && mediaHelper.videoCapture?.sessionId === video.sessionId) {
     const released = await mediaHelper.stopVideo(video.sessionId);
     return { changed: stopped.changed || released.changed };
@@ -851,7 +867,6 @@ async function stopNativeVideo(sessionId) {
     if (controlFailure) throw controlFailure;
     if (nativeVideoSession === video) nativeVideoSession = undefined;
     lastStoppedNativeVideoSession = sessionId;
-    if (video.helperState?.closed) releaseHelperProcessBridge(video.helperState);
     return result;
   })();
   return video.stopPromise;
@@ -1221,6 +1236,7 @@ ipcMain.handle('viewer:fullscreen', (event, enabled) => {
 ipcMain.handle('window:layout', (event, mode, height) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
   windowLayout.apply(mode, height);
+  if (mode === 'main') prepareObsCapture(false);
 });
 ipcMain.handle('window:is-maximized', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
@@ -1313,6 +1329,8 @@ ipcMain.handle('media:capabilities', (event) => {
 ipcMain.handle('media:video-sources', async (event) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
   const startedAt = performance.now();
+  // 图形准备与来源枚举并行，不在选择器打开前创建真实采集来源。
+  prepareObsCapture(true);
   const snapshot = await mediaHelper.listVideoSources();
   nativeVideoSourcesById = new Map(snapshot.sources.map((source) => [source.sourceId, source]));
   recordSourceTiming('enumerateSources', startedAt, snapshot.sources.length);
@@ -1529,6 +1547,9 @@ app.on('before-quit', (event) => {
       console.error(`native video shutdown failed: ${error.message}`);
     })
     : Promise.resolve())
+    .then(() => obsCaptureHost.dispose().catch(error => {
+      console.error(`OBS host shutdown failed: ${error.message}`);
+    }))
     .then(() => mediaHelper.shutdown())
     .catch((error) => console.error(`media-helper shutdown failed: ${error.message}`))
     .finally(() => {

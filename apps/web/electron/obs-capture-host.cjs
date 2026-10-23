@@ -9,6 +9,7 @@ const DIAGNOSTIC_TIMEOUT_MS = 2_000;
 const CONFIGURE_TIMEOUT_MS = 3_000;
 const AUDIO_START_TIMEOUT_MS = 10_000;
 const AUDIO_STOP_TIMEOUT_MS = 3_000;
+const IDLE_TIMEOUT_MS = 180_000;
 
 class ObsCaptureHostManager {
   constructor({ executablePath, modulePath, dataPath, configPath, platform = process.platform, spawnProcess = spawn,
@@ -29,28 +30,24 @@ class ObsCaptureHostManager {
     this.onAudioStopped = onAudioStopped;
     this.clientProcessId = clientProcessId;
     this.state = undefined;
+    this.disposed = false;
   }
 
-  async start(sourceId, maxFps, sessionId, target, settings, resolution = { width: 1920, height: 1080 }) {
+  ensureHost() {
+    if (this.disposed) throw new Error('obsCaptureHostDisposed');
     if (this.platform !== 'win32') throw new Error('platformUnsupported');
-    if (this.state) throw new Error('obsCaptureAlreadyRunning');
-    if (typeof sourceId !== 'string' || !/^(monitor|window):[1-9]\d*:\d+$/.test(sourceId)
-        || ![30, 60, 120, 180].includes(maxFps) || !validTarget(target, sourceId) || !isSessionId(sessionId)
-        || !validResolution(resolution) || typeof this.configPath !== 'string' || !win32.isAbsolute(this.configPath)
-        || !settings || typeof settings.hideCursor !== 'boolean' || typeof settings.hideBorder !== 'boolean') {
-      throw new Error('invalidObsCaptureArguments');
+    if (this.state) {
+      if (this.state.failed || this.state.shuttingDown) throw new Error('obsCaptureHostUnavailable');
+      return this.state;
     }
-
+    if (typeof this.configPath !== 'string' || !win32.isAbsolute(this.configPath)) throw new Error('invalidObsCaptureArguments');
     const child = this.spawnProcess(this.executablePath,
-      [this.modulePath, this.dataPath, target.kind, target.kind === 'monitor' ? target.monitorName : target.windowId,
-        settings.hideCursor ? '0' : '1', settings.hideBorder ? '1' : '0', sessionId, this.configPath, String(maxFps),
-        target.kind !== 'monitor' ? target.propertyName : '', target.kind !== 'monitor' ? target.propertyValue : '',
-        String(resolution.width), String(resolution.height)],
+      [this.modulePath, this.dataPath, this.configPath],
       // 官方 libobs 按 bin/64bit 的相对路径查找 effect 文件，不能继承项目工作目录。
       { cwd: win32.dirname(this.executablePath), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
-    const state = { child, alive: true, closed: false, videoSessionId: sessionId, buffer: '', startTimer: undefined,
+    const state = { child, alive: true, closed: false, videoSessionId: undefined, buffer: '', startTimer: undefined,
       startResolve: undefined, startReject: undefined, failureNotified: false, executablePath: this.executablePath,
-      onFailure: this.onFailure, helperVersion: undefined, maxFps, resolution: { ...resolution },
+      onFailure: this.onFailure, helperVersion: undefined,
       diagnosticSequence: 0, pendingDiagnostics: undefined, configurationSequence: 0, pendingConfiguration: undefined };
     state.closePromise = new Promise((resolve) => { state.resolveClose = resolve; });
     state.releaseSharedTextureSlot = (frameSessionId, slotIndex) => {
@@ -58,16 +55,18 @@ class ObsCaptureHostManager {
           || !Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= 3) {
         return Promise.reject(new Error('obsCaptureSlotReleaseUnavailable'));
       }
-      return writeLine(child, `release:${slotIndex}`);
+      return writeLine(child, `release:${frameSessionId}:${slotIndex}`);
     };
     this.state = state;
 
-    const started = new Promise((resolve, reject) => {
-      state.startResolve = resolve;
-      state.startReject = reject;
-      state.startTimer = setTimeout(() => failState(state, new Error('obsCaptureStartTimeout')), START_TIMEOUT_MS);
-      state.startTimer.unref?.();
+    state.corePromise = new Promise((resolve, reject) => {
+      state.coreResolve = resolve;
+      state.coreReject = reject;
+      state.coreTimer = setTimeout(() => failState(state, new Error('obsCapturePrepareTimeout')), START_TIMEOUT_MS);
+      state.coreTimer.unref?.();
     });
+    // 后台预热和实际启动共用 Promise；失败仍传给等待者，避免未等待的准备产生未处理拒绝。
+    void state.corePromise.catch(() => {});
     child.stdout.on('data', (chunk) => this.readStdout(state, chunk));
     child.stderr.on('data', (chunk) => this.onDiagnostic(String(chunk).trim().slice(0, 2000)));
     child.stdin.on('error', (error) => failState(state, error));
@@ -78,6 +77,65 @@ class ObsCaptureHostManager {
     child.once('close', (code, signal) => {
       this.closeState(state, code === 0 ? undefined : new Error(`obsCaptureHostExited:${code ?? signal ?? 'unknown'}`));
     });
+    return state;
+  }
+
+  prepare(graphics = false) {
+    if (this.state?.shutdownPromise) return this.state.shutdownPromise.then(() => this.prepare(graphics));
+    let state;
+    try { state = this.ensureHost(); } catch (error) { return Promise.reject(error); }
+    clearTimeout(state.idleTimer);
+    if (!graphics) return state.corePromise.then(() => this.scheduleIdle(state));
+    if (!state.preparePromise) {
+      state.preparePromise = new Promise((resolve, reject) => {
+        state.prepareResolve = resolve;
+        state.prepareReject = reject;
+        state.prepareTimer = setTimeout(() => failState(state, new Error('obsCapturePrepareTimeout')), START_TIMEOUT_MS);
+        state.prepareTimer.unref?.();
+      });
+      void state.corePromise.then(() => writeLine(state.child, 'prepare')).catch(error => failState(state, error));
+    }
+    return state.preparePromise.then(() => this.scheduleIdle(state));
+  }
+
+  scheduleIdle(state) {
+    clearTimeout(state.idleTimer);
+    if (this.state !== state || state.videoSessionId || state.shuttingDown || state.failed || state.closed) return;
+    state.idleTimer = setTimeout(() => { void this.shutdown().catch(error => this.onDiagnostic(error.message)); }, IDLE_TIMEOUT_MS);
+    state.idleTimer.unref?.();
+  }
+
+  async start(sourceId, maxFps, sessionId, target, settings, resolution = { width: 1920, height: 1080 }) {
+    if (typeof sourceId !== 'string' || !/^(monitor|window):[1-9]\d*:\d+$/.test(sourceId)
+        || ![30, 60, 120, 180].includes(maxFps) || !validTarget(target, sourceId) || !isSessionId(sessionId)
+        || !validResolution(resolution) || !settings || typeof settings.hideCursor !== 'boolean' || typeof settings.hideBorder !== 'boolean') {
+      throw new Error('invalidObsCaptureArguments');
+    }
+    if (this.state?.videoSessionId) throw new Error('obsCaptureAlreadyRunning');
+    if (this.state?.shutdownPromise) await this.state.shutdownPromise;
+    const state = this.ensureHost();
+    if (state.videoSessionId) throw new Error('obsCaptureAlreadyRunning');
+    clearTimeout(state.idleTimer);
+    state.videoSessionId = sessionId;
+    state.stopRequested = false;
+    state.startSent = false;
+    state.maxFps = maxFps;
+    state.resolution = { ...resolution };
+    state.stopPromise = undefined;
+    const started = new Promise((resolve, reject) => {
+      state.startResolve = resolve;
+      state.startReject = reject;
+      state.startTimer = setTimeout(() => failState(state, new Error('obsCaptureStartTimeout')), START_TIMEOUT_MS);
+      state.startTimer.unref?.();
+    });
+    void state.corePromise.then(() => {
+      if (state.stopRequested || state.closed || state.failed || state.videoSessionId !== sessionId) return;
+      state.startSent = true;
+      return writeLine(state.child, ['start', target.kind, target.kind === 'monitor' ? target.monitorName : target.windowId,
+        settings.hideCursor ? '0' : '1', settings.hideBorder ? '1' : '0', sessionId, maxFps,
+        target.kind !== 'monitor' ? target.propertyName : '', target.kind !== 'monitor' ? target.propertyValue : '',
+        resolution.width, resolution.height].join('|'));
+    }).catch(error => failState(state, error));
     return started;
   }
 
@@ -111,6 +169,24 @@ class ObsCaptureHostManager {
       failState(state, new Error('obsCaptureProtocolEventInvalid'));
       return;
     }
+    if (event.event === 'coreReady') {
+      clearTimeout(state.coreTimer);
+      state.coreResolve?.();
+      state.coreResolve = undefined;
+      state.coreReject = undefined;
+      return;
+    }
+    if (event.event === 'enginePrepared') {
+      clearTimeout(state.prepareTimer);
+      state.prepareResolve?.();
+      state.prepareResolve = undefined;
+      state.prepareReject = undefined;
+      return;
+    }
+    if (event.event === 'captureStopped') {
+      if (event.sessionId === state.videoSessionId && state.stopRequested) this.completeStop(state);
+      return;
+    }
     if (['audioStarted', 'audioFailed', 'audioStopped'].includes(event.event)) {
       const audio = state.audio;
       // 同一画面可多次开关声音；旧尝试的响应不能结束或重新开启下一次声音。
@@ -135,7 +211,8 @@ class ObsCaptureHostManager {
       return;
     }
     if (event.event === 'captureStarted') {
-      if (this.state !== state || state.closed || state.stopRequested || !state.startResolve) return;
+      if (this.state !== state || state.closed || state.stopRequested || !state.startResolve
+          || event.sessionId !== state.videoSessionId) return;
       if (event.helperVersion !== '32.2.2') {
         failState(state, new Error('obsCaptureVersionUnsupported'));
         return;
@@ -149,6 +226,7 @@ class ObsCaptureHostManager {
       return;
     }
     if (event.event === 'sharedTextureFrame') {
+      if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
       if (this.state !== state || state.closed || !validFrameEvent(event, state.videoSessionId)) {
         failState(state, new Error('obsCaptureFrameInvalid'));
         return;
@@ -159,6 +237,7 @@ class ObsCaptureHostManager {
       return;
     }
     if (event.event === 'captureSuspended') {
+      if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
       if (state.stopRequested) return;
       if (this.state !== state || event.sessionId !== state.videoSessionId
           || typeof event.suspended !== 'boolean') {
@@ -198,7 +277,6 @@ class ObsCaptureHostManager {
       }
       return;
     }
-    if (event.event === 'captureStopped') return;
     if (/^[a-z][A-Za-z0-9]{0,63}$/.test(event.event)) {
       failState(state, new Error(event.event));
       return;
@@ -322,28 +400,77 @@ class ObsCaptureHostManager {
   async stop(sessionId) {
     const state = this.state;
     if (!state) return { changed: false };
+    if (!state.videoSessionId && state.lastStoppedSessionId === sessionId) return { changed: false };
     if (state.videoSessionId !== sessionId) throw new Error('videoSessionMismatch');
     if (state.closed) {
       if (this.state === state) this.state = undefined;
       return { changed: true };
     }
+    if (state.stopPromise) return state.stopPromise;
     state.stopRequested = true;
+    clearTimeout(state.startTimer);
+    state.startReject?.(new Error('obsCaptureStopping'));
+    state.startResolve = undefined;
+    state.startReject = undefined;
     if (state.audio) {
       state.audio.stopping = true;
       state.audio.finishStart?.(new Error('obsCaptureStopping'));
     }
     state.pendingDiagnostics?.finish(new Error('obsCaptureStopping'));
     state.pendingConfiguration?.finish(new Error('obsCaptureStopping'));
-    // stdin 背压不能阻止退出计时；是否停止只以子进程关闭事件为准。
-    void writeLine(state.child, 'shutdown').catch(() => {});
-    await waitForClose(state, SHUTDOWN_TIMEOUT_MS);
-    if (!state.closed) {
-      state.child.kill();
-      await waitForClose(state, TERMINATE_TIMEOUT_MS);
-    }
-    // 超时不是退出确认；保留当前进程身份，阻止再次启动采集。
-    if (!state.closed) throw new Error('obsCaptureStopUnconfirmed');
-    return { changed: true };
+    const startSent = state.startSent;
+    state.captureStopPromise = new Promise(resolve => { state.captureStopResolve = resolve; });
+    state.stopPromise = (async () => {
+      if (!startSent) this.completeStop(state);
+      else {
+        void writeLine(state.child, `stop:${sessionId}`).catch(() => {});
+        let timer;
+        await Promise.race([state.captureStopPromise, state.closePromise, new Promise(resolve => {
+          timer = setTimeout(resolve, SHUTDOWN_TIMEOUT_MS);
+          timer.unref?.();
+        })]).finally(() => clearTimeout(timer));
+        // 停止未确认就退出整个宿主；进程也未退出时保留阻挡，不能复用未知资源。
+        if (!state.closed && state.videoSessionId === sessionId) await this.shutdown(true);
+      }
+      return { changed: true };
+    })();
+    return state.stopPromise;
+  }
+
+  completeStop(state) {
+    state.audio?.finishStart?.(new Error('obsCaptureStopping'));
+    state.audio?.finishStop?.(undefined, { changed: true });
+    this.onAudioStopped(state);
+    state.audio = undefined;
+    state.lastStoppedSessionId = state.videoSessionId;
+    state.videoSessionId = undefined;
+    state.stopRequested = false;
+    state.captureStopResolve?.();
+    state.captureStopResolve = undefined;
+    this.scheduleIdle(state);
+  }
+
+  shutdown(force = false) {
+    const state = this.state;
+    if (!state || state.closed) return Promise.resolve();
+    if (state.shutdownPromise) return state.shutdownPromise;
+    state.shuttingDown = true;
+    clearTimeout(state.idleTimer);
+    state.shutdownPromise = (async () => {
+      void writeLine(state.child, 'shutdown').catch(() => {});
+      if (!force) await waitForClose(state, SHUTDOWN_TIMEOUT_MS);
+      if (!state.closed) {
+        state.child.kill();
+        await waitForClose(state, TERMINATE_TIMEOUT_MS);
+      }
+      if (!state.closed) throw new Error('obsCaptureStopUnconfirmed');
+    })();
+    return state.shutdownPromise;
+  }
+
+  dispose() {
+    this.disposed = true;
+    return this.shutdown();
   }
 
   closeState(state, error) {
@@ -354,9 +481,15 @@ class ObsCaptureHostManager {
     state.audio?.finishStop?.(undefined, { changed: true });
     state.audio = undefined;
     clearTimeout(state.startTimer);
+    clearTimeout(state.coreTimer);
+    clearTimeout(state.prepareTimer);
+    clearTimeout(state.idleTimer);
+    state.coreReject?.(error ?? new Error('obsCaptureHostClosed'));
+    state.prepareReject?.(error ?? new Error('obsCaptureHostClosed'));
+    state.captureStopResolve?.();
     state.pendingDiagnostics?.finish(error ?? new Error('obsCaptureHostClosed'));
     state.pendingConfiguration?.finish(error ?? new Error('obsCaptureHostClosed'));
-    const closeError = error ?? (!state.stopRequested ? new Error('obsCaptureHostClosedUnexpectedly') : undefined);
+    const closeError = error ?? (!state.stopRequested && !state.shuttingDown ? new Error('obsCaptureHostClosedUnexpectedly') : undefined);
     if (closeError) failState(state, closeError, false);
     state.startReject?.(closeError ?? new Error('obsCaptureHostClosedBeforeStart'));
     state.startResolve = undefined;
@@ -442,7 +575,13 @@ function waitForClose(state, timeoutMs) {
 }
 
 function failState(state, error, kill = true) {
+  if (state.closed && kill) return;
   state.failed = true;
+  clearTimeout(state.coreTimer);
+  clearTimeout(state.prepareTimer);
+  clearTimeout(state.idleTimer);
+  state.coreReject?.(error);
+  state.prepareReject?.(error);
   state.pendingDiagnostics?.finish(error);
   state.pendingConfiguration?.finish(error);
   if (state.startReject) {

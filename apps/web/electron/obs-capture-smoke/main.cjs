@@ -104,7 +104,7 @@ async function finish(result) {
   try { if (window && !window.isDestroyed()) await renderer('stop()'); }
   catch (error) { result.cleanupError = String(error.message).slice(0, 180); }
   try { if (manager?.state) {
-    await manager.stop(manager.state.videoSessionId);
+    await manager.dispose();
   } }
   catch (error) { result.cleanupError = String(error.message).slice(0, 180); }
   try { if (targetHelper) await targetHelper.shutdown(); }
@@ -246,7 +246,7 @@ app.whenReady().then(async () => {
       const sourceDiagnostics = await renderer('diagnostics()');
       assert(sourceDiagnostics.sourceKind === 'window' && sourceDiagnostics.captureBackend === 'obsLibobs', 'applicationDiagnosticsMismatch');
       const stopped = await renderer('stop()');
-      await until(() => !manager.state && !production.nativeVideoSession && !targetHelper.videoCapture);
+      await until(() => !manager.state?.videoSessionId && !production.nativeVideoSession && !targetHelper.videoCapture);
       assert(stopped.readyState === 'ended' && state.child.exitCode === 0, 'applicationStopUnconfirmed');
       cases.push({ mode: browserKind ?? 'existing-application', firstFrameMs: started.firstFrameMs,
         submittedFps: Math.round((after.input.submittedFrames - before.input.submittedFrames) * 1000 / intervalMs),
@@ -359,14 +359,14 @@ app.whenReady().then(async () => {
     assert(restoredDiagnostics.sourceKind === 'window' && restoredDiagnostics.captureSuspended === false,
       'windowRestoredDiagnosticsMismatch');
     await renderer('stop()');
-    await until(() => !manager.state && !production.nativeVideoSession && !targetHelper.videoCapture);
+    await until(() => !manager.state?.videoSessionId && !production.nativeVideoSession && !targetHelper.videoCapture);
     assert(state.child.exitCode === 0, 'windowNormalStopWasForced');
     const reopenedSources = await targetHelper.listVideoSources();
     production.nativeVideoSourcesById = new Map(reopenedSources.sources.map((source) => [source.sourceId, source]));
     await renderer(`start(${JSON.stringify(selected.sourceId)})`);
     await until(selectedColorMatches);
     await command('close', 'targetClosed');
-    await until(() => !manager.state && !production.nativeVideoSession && !targetHelper.videoCapture);
+    await until(() => !manager.state?.videoSessionId && !production.nativeVideoSession && !targetHelper.videoCapture);
     const ended = await renderer('probe(960,540)');
     assert(ended.readyState === 'ended' && ended.errors.includes('captureTargetClosed'), 'windowClosureNotEnded');
     const remaining = await targetHelper.listVideoSources();
@@ -464,7 +464,7 @@ app.whenReady().then(async () => {
     }
     const stopStart = performance.now();
     const stopped = await renderer('stop()');
-    await until(() => !manager.state && !production.nativeVideoSession && production.helperProcessBridges.size === 0);
+    await until(() => !manager.state?.videoSessionId && !production.nativeVideoSession && production.helperProcessBridges.size === 0);
     assert(stopped.readyState === 'ended', 'generatedTrackNotEnded');
     assert(state.closed && (state.child.exitCode !== null || state.child.signalCode !== null), 'helperExitNotConfirmed');
     assert(page.presented > 0 && page.width > 0 && page.height > 0, 'pageDidNotPresentContent');
