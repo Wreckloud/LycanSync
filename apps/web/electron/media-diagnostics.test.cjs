@@ -123,6 +123,15 @@ test('启动计时只接受当前可信采集会话和固定阶段，每阶段�
   send('next', 'screenAudioStartup', 100, true, { outcome: 'failed', phase: 'graph', pluginLoadMs: 0, captureReadyMs: 10 });
   assert.deepEqual(JSON.parse(JSON.stringify(entries.at(-1))), { stage: 'screenAudioStartup', durationMs: 100,
     outcome: 'failed', phase: 'graph', pluginLoadMs: 0, captureReadyMs: 10 });
+  const beforeFailure = entries.length;
+  send('old', 'screenVideoStartupFailed', 100, true, { code: 'nativeVideoFirstFrameTimeout' });
+  send('next', 'screenVideoStartupFailed', 100, true, { code: 'private-body' });
+  assert.equal(entries.length, beforeFailure);
+  send('next', 'screenVideoStartupFailed', 100, true, { code: 'nativeVideoFirstFrameTimeout', message: 'private-body' });
+  send('next', 'screenVideoStartupFailed', 200, true, { code: 'nativeVideoFirstFrameTimeout' });
+  assert.equal(entries.length, beforeFailure + 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(entries.at(-1))), { stage: 'screenVideoStartupFailed',
+    durationMs: 100, code: 'nativeVideoFirstFrameTimeout' });
 });
 
 test('preload 的启动计时只转发固定 IPC，不向页面开放任意日志通道', () => {
@@ -138,6 +147,25 @@ test('preload 的启动计时只转发固定 IPC，不向页面开放任意日�
   desktop.recordScreenShareStartupTiming('capture', 'screenAudioStartup', 400, timing);
   assert.deepEqual(calls, [['media:screen-share-startup', 'capture', 'screenVideoPublished', 630, undefined],
     ['media:screen-share-startup', 'capture', 'screenAudioStartup', 400, timing]]);
+});
+
+test('启动前桥接或来源失败也记录终止阶段，不泄露来源，并保留失败而不报成功', async () => {
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const start = main.indexOf("ipcMain.handle('media:native-video:start'");
+  const end = main.indexOf("ipcMain.on('media:screen-share-startup'", start);
+  let handler;
+  const entries = [];
+  const failure = new Error('nativeVideoBridgeUnavailable');
+  const sandbox = { performance, closing: false, trustedSender: event => event.trusted,
+    startNativeVideo: async () => { throw failure; }, writeMediaDiagnostic: async entry => entries.push(entry),
+    ipcMain: { handle: (_name, callback) => { handler = callback; } } };
+  runInNewContext(main.slice(start, end), sandbox);
+  assert.throws(() => handler({ trusted: false }, 'private-window'), /无效/);
+  assert.equal(entries.length, 0);
+  await assert.rejects(handler({ trusted: true }, 'private-window'), error => error === failure);
+  assert.equal(entries[0].stage, 'screenVideoStartFailed');
+  assert.equal(entries[0].code, 'nativeVideoBridgeUnavailable');
+  assert.doesNotMatch(JSON.stringify(entries), /private-window/);
 });
 
 test('声音启动只导出固定摘要字段，缺失阶段不补零，不泄露附加正文', async () => {
@@ -169,6 +197,45 @@ test('故障日志串行写入并轮转，保留最近一份历史', async () =>
   }
 });
 
+test('重复宿主警告合并计数，不新增定时器，导出前刷新且不吞掉不同错误', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lycansync-dedup-'));
+  try {
+    const path = join(directory, 'error.log');
+    const write = createMediaDiagnostics(path);
+    await Promise.all(Array.from({ length: 50 }, () => write({ stage: 'obsCaptureHostStderr', message: 'same warning' })));
+    await write({ stage: 'obsCaptureHostStderr', message: 'different warning' });
+    await write({ stage: 'screenVideoStartupFailed', code: 'nativeVideoFirstFrameTimeout' });
+    await write.flush();
+    const entries = (await readFile(path, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    assert.equal(entries.length, 4);
+    assert.equal(entries.at(-1).repeatCount, 49);
+    assert.ok(entries.some(entry => entry.code === 'nativeVideoFirstFrameTimeout'));
+    const exported = await readDiagnosticEvents(path, 0, Date.now());
+    assert.ok(exported.some(entry => entry.repeatCount === 49));
+    assert.ok(exported.some(entry => entry.code === 'nativeVideoFirstFrameTimeout'));
+    assert.doesNotMatch(JSON.stringify(exported), /same warning|different warning/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('自动启动与共享事件导出保留有效字段，附加正文和未知错误不进入报告', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'lycansync-events-'));
+  try {
+    const path = join(directory, 'error.log');
+    const write = createMediaDiagnostics(path);
+    await write({ stage: 'applicationReady', appVersion: '0.1.10', electronVersion: '44.2.0', osVersion: '10.0.19045',
+      platform: 'win32', arch: 'x64', account: 'private-account' });
+    await write({ stage: 'screenVideoStartRequested', sourceKind: 'window', width: 1920, height: 1080, maxFps: 60,
+      title: 'private-window', sessionId: 'private-session' });
+    await write({ stage: 'screenVideoStopFailed', code: 'private-secret', message: 'private-message' });
+    const events = await readDiagnosticEvents(path, 0, Date.now());
+    assert.equal(events[0].appVersion, '0.1.10');
+    assert.equal(events[1].width, 1920);
+    assert.equal(events[1].sourceKind, 'window');
+    assert.equal(events[2].code, undefined);
+    assert.doesNotMatch(JSON.stringify(events), /private/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test('报告日志只保留时间/阶段/HRESULT，忽略坏行并限制数量与时间范围', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lycansync-report-'));
   try {
@@ -192,11 +259,15 @@ function exportFixture() {
   const end = main.indexOf("ipcMain.handle('presence:system-idle-state'", start);
   assert.ok(start >= 0 && end > start);
   let exportReport;
-  const calls = { read: 0, dialog: 0, writes: [] };
+  const calls = { read: 0, dialog: 0, writes: [], ranges: [], flushed: 0 };
   const state = { closing: false, diagnosticExportPending: false, trustedSender: () => true,
+    diagnosticStartedAt: Date.parse('2026-10-14T00:00:00Z'), writeMediaDiagnostic: { flush: async () => { calls.flushed++; } },
     Buffer, JSON, Date, Error, resolve: join, mainWindow: {}, process: { versions: { electron: 'test' }, platform: 'win32', arch: 'x64' },
     osRelease: () => 'test-os', app: { getPath: () => '/private', getVersion: () => 'test-version', getGPUFeatureStatus: () => ({ video_encode: 'enabled' }) },
-    readDiagnosticEvents: async () => { calls.read++; return [{ stage: 'test' }]; },
+    readDiagnosticEvents: async (_path, start, end) => {
+      calls.read++; calls.ranges.push([start, end]); assert.ok(calls.flushed >= calls.read);
+      return [{ stage: 'test' }];
+    },
     dialog: { showSaveDialog: async () => { calls.dialog++; return { canceled: false, filePath: '/selected/report.json' }; } },
     writeFile: async (...args) => { calls.writes.push(args); },
     ipcMain: { handle: (_name, callback) => { exportReport = callback; } },
@@ -220,6 +291,9 @@ test('诊断导出仅允许可信页面，验证格式并通过用户选址写�
   assert.equal(calls.writes.length, 1);
   assert.equal(calls.writes[0][0], '/selected/report.json');
   const report = JSON.parse(calls.writes[0][1]);
+  assert.equal(calls.ranges[0][0], state.diagnosticStartedAt);
+  assert.ok(calls.ranges[0][1] > Date.parse(report.endedAt));
+  assert.equal(Date.parse(report.eventWindow.endedAt), calls.ranges[0][1]);
   assert.equal(report.environment.appVersion, 'test-version');
   assert.equal(report.environment.gpuUtilization, null);
   assert.equal(Object.hasOwn(report.environment, 'helperVersion'), false);

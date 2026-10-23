@@ -179,7 +179,7 @@ test('正式后台入口只做一次核心准备，图形失败后不随页面�
   const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const calls = [];
   const diagnostics = [];
-  const sandbox = { closing: false, process: { platform: 'win32' }, existsSync: () => true,
+  const sandbox = { performance, closing: false, process: { platform: 'win32' }, existsSync: () => true,
     obsHostSettings: { executablePath: 'host', modulePath: 'capture', dataPath: 'data' },
     obsCaptureHost: { prepare: async graphics => { calls.push(graphics); if (graphics) throw new Error('prepare failed'); } },
     writeMediaDiagnostic: async event => { diagnostics.push(event); } };
@@ -193,8 +193,7 @@ test('正式后台入口只做一次核心准备，图形失败后不随页面�
   prepare(true);
   prepare(false);
   assert.deepEqual(calls, [false, true]);
-  assert.equal(diagnostics.length, 1);
-  assert.equal(diagnostics[0].stage, 'obsPrewarmFailed');
+  assert.deepEqual(diagnostics.map(entry => entry.stage), ['obsCorePrepared', 'obsPrewarmFailed']);
 });
 
 test('退出中、非 Windows 或缺少固定运行文件时不发起后台准备', () => {
@@ -767,8 +766,10 @@ test('主进程的显示器各档启动及共享中切换均走 OBS，不接入�
     await sandbox.startNativeVideo('monitor:7:0', fps, { hideCursor: true, hideBorder: false });
     assert.equal(calls.at(-1)[1], fps);
   }
-  assert.equal(timings.length, 4);
-  assert.ok(timings.every(entry => entry.stage === 'obsReady' && Number.isFinite(entry.durationMs) && entry.durationMs >= 0));
+  assert.equal(timings.filter(entry => entry.stage === 'screenVideoStartRequested').length, 4);
+  const readyTimings = timings.filter(entry => entry.stage === 'obsReady');
+  assert.equal(readyTimings.length, 4);
+  assert.ok(readyTimings.every(entry => Number.isFinite(entry.durationMs) && entry.durationMs >= 0));
   const configureStart = main.indexOf("ipcMain.handle('media:native-video:configure',");
   const configureEnd = main.indexOf("ipcMain.handle('media:remote-control:authorize',", configureStart);
   let configure;
@@ -1017,7 +1018,7 @@ test('停止先禁用远控并释放按键，再等待 OBS 退出后释放身份
     const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
     const calls = [];
     let releaseInput;
-    const sandbox = { nativeVideoSession: { sessionId, stopping: false,
+    const sandbox = { performance, writeMediaDiagnostic: async () => {}, nativeVideoSession: { sessionId, stopping: false,
       targetState: {}, imported: new Map(), pendingSlotReleases: new Set() },
       nativeScreenAudioSession: undefined, setTimeout, Date, lastStoppedNativeVideoSession: undefined,
       obsCaptureHost: { state: { videoSessionId: sessionId }, stop: async () => {
@@ -1048,6 +1049,50 @@ test('停止先禁用远控并释放按键，再等待 OBS 退出后释放身份
       await stopped;
       assert.deepEqual(calls, ['revoke', 'obs-stop', 'release']);
       assert.equal(sandbox.nativeVideoSession, undefined);
+    }
+  }
+});
+
+test('纹理释放超时只在宿主退出及身份释放确认后恢复重开；任一步失败仍阻挡', async () => {
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  for (const failure of [undefined, 'shutdown', 'identity']) {
+    const calls = [], events = [];
+    let now = 0;
+    const video = { sessionId, targetState: {}, stopping: false, imported: new Map([[0, {}]]), pendingSlotReleases: new Set() };
+    const sandbox = { performance, Date: { now: () => now },
+      setTimeout: (callback) => { now += 400; queueMicrotask(callback); },
+      nativeVideoSession: video, nativeScreenAudioSession: undefined, lastStoppedNativeVideoSession: undefined,
+      writeMediaDiagnostic: async entry => events.push(entry),
+      releaseNativeVideoImports: () => { calls.push('release-imports'); video.imported.clear(); },
+      releaseHelperProcessBridge: () => {},
+      obsCaptureHost: { state: { videoSessionId: sessionId },
+        shutdown: async force => {
+          calls.push('shutdown'); assert.equal(force, true);
+          if (failure === 'shutdown') throw new Error('obsCaptureStopUnconfirmed');
+          sandbox.obsCaptureHost.state = undefined;
+        }, stop: async () => { calls.push('confirm-stopped'); return { changed: false }; } },
+      mediaHelper: { videoCapture: { sessionId }, stopVideo: async () => {
+        calls.push('release-identity');
+        if (failure === 'identity') throw new Error('identityReleaseFailed');
+        sandbox.mediaHelper.videoCapture = undefined; return { changed: true };
+      } },
+    };
+    runInNewContext(main.slice(main.indexOf('async function stopObsVideo('), main.indexOf('function validMicrophoneSettings(')), sandbox);
+    const stopping = sandbox.stopNativeVideo(sessionId);
+    assert.equal(video.stopping, true);
+    assert.equal(sandbox.nativeVideoSession, video);
+    if (failure) {
+      await assert.rejects(stopping, failure === 'shutdown' ? /obsCaptureStopUnconfirmed/ : /identityReleaseFailed/);
+      assert.equal(sandbox.nativeVideoSession, video);
+      assert.equal(sandbox.lastStoppedNativeVideoSession, undefined);
+      assert.ok(!events.some(entry => entry.stage === 'screenVideoStopRecovered'));
+      if (failure === 'shutdown') assert.ok(!calls.includes('release-identity'));
+    } else {
+      await stopping;
+      assert.deepEqual(calls, ['release-imports', 'shutdown', 'confirm-stopped', 'release-identity']);
+      assert.equal(sandbox.nativeVideoSession, undefined);
+      await sandbox.stopNativeVideo(sessionId);
+      assert.ok(events.some(entry => entry.stage === 'screenVideoStopRecovered'));
     }
   }
 });

@@ -147,9 +147,9 @@ interface Window {
     onNativeVideoError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
     onNativeVideoSuspended(callback: (status: { sessionId: string; suspended: boolean }) => void): () => void;
     recordScreenShareStartupTiming(sessionId: string,
-      stage: 'screenVideoFirstFrame' | 'screenAudioStartup' | 'screenVideoPublished', durationMs: number,
+      stage: 'screenVideoFirstFrame' | 'screenVideoStartupFailed' | 'screenAudioStartup' | 'screenVideoPublished', durationMs: number,
       audioTiming?: { outcome: 'published' | 'failed'; phase: 'capture' | 'graph' | 'publish';
-        pluginLoadMs?: number; captureReadyMs?: number; graphReadyMs?: number; publishMs?: number }): void;
+        pluginLoadMs?: number; captureReadyMs?: number; graphReadyMs?: number; publishMs?: number } | { code: string }): void;
     startNativeScreenAudio(sourceId: string, sessionId: string): Promise<{
       sampleRate: number; channels: 2; bitsPerSample: 32; nominalChunkMs: 10;
       pluginLoadMs: number; captureReadyMs: number;

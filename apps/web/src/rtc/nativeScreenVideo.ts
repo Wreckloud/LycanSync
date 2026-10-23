@@ -5,7 +5,8 @@ import { screenShareDegradationPreference, screenShareQuality, screenShareThumbn
 import { applyScreenShareEncoding, readScreenShareEncoding, screenShareEncodingLimits } from './screenShareEncoding';
 
 export interface NativeVideoDesktopBridge {
-  recordScreenShareStartupTiming(sessionId: string, stage: 'screenVideoFirstFrame', durationMs: number): void;
+  recordScreenShareStartupTiming(sessionId: string, stage: 'screenVideoFirstFrame' | 'screenVideoStartupFailed',
+    durationMs: number, failure?: { code: string }): void;
   startNativeVideo(sourceId: string, maxFps: number, settings: ScreenSharePreferences, resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean }>;
   stopNativeVideo(sessionId: string): Promise<{ changed: boolean }>;
   configureNativeVideo(sessionId: string, maxFps: number, resolution?: { width: number; height: number }): Promise<{ changed: boolean }>;
@@ -178,6 +179,12 @@ export class NativeScreenVideoSession {
       await waitWithTimeout(firstFrame, this.firstFrameTimeoutMs, 'nativeVideoFirstFrameTimeout');
       return this.track;
     } catch (error) {
+      if (this.sessionId && !this.stopped) {
+        const code = error instanceof Error && ['nativeVideoFirstFrameTimeout', 'nativeVideoFrameAdjustmentFailed',
+          'nativeVideoTrackWriteFailed', 'nativeVideoSessionStopped'].includes(error.message) ? error.message : 'nativeVideoFailed';
+        this.desktop.recordScreenShareStartupTiming(this.sessionId, 'screenVideoStartupFailed',
+          Math.max(0, this.now() - this.startedAt!), { code });
+      }
       await this.stop().catch((cleanupError) => {
         console.error('原生屏幕共享启动失败后的清理未完成', cleanupError);
       });
@@ -259,38 +266,19 @@ export class NativeScreenVideoSession {
 
   private async stopResources(): Promise<void> {
     const startCommand = this.startCommand;
-    let startCleanupTimedOut: Error | undefined;
     if (startCommand) {
       try {
-        const started = await waitWithTimeout(startCommand, 1_500, 'nativeVideoStartCleanupTimeout');
+        // 启动超时由主进程统一控制；页面不能先超时并永久留下已在回收的会话。
+        const started = await startCommand;
         if (typeof started.sessionId === 'string' && started.sessionId) this.sessionId ??= started.sessionId;
-      } catch (error) {
-        if (error instanceof Error && error.message === 'nativeVideoStartCleanupTimeout') {
-          startCleanupTimedOut = error;
-          void startCommand.then((started) => {
-            if (typeof started.sessionId !== 'string' || !started.sessionId) {
-              window.removeEventListener('message', this.onWindowMessage);
-              return;
-            }
-            return this.desktop.stopNativeVideo(started.sessionId).then(() => {
-              window.removeEventListener('message', this.onWindowMessage);
-            });
-          }, () => {
-            window.removeEventListener('message', this.onWindowMessage);
-          }).catch((cleanupError) => {
-            console.error('原生屏幕共享迟到启动清理失败', cleanupError);
-          });
-        } else {
-          window.removeEventListener('message', this.onWindowMessage);
-        }
+      } catch {
+        window.removeEventListener('message', this.onWindowMessage);
       }
     }
     if (this.writePromise) await waitWithTimeout(this.writePromise, 500, 'nativeVideoWriterCloseTimeout').catch(() => {});
     await waitWithTimeout(this.writer.close(), 500, 'nativeVideoWriterCloseTimeout').catch(() => {});
     if (this.sessionId) await this.desktop.stopNativeVideo(this.sessionId);
-    else if (!startCleanupTimedOut) window.removeEventListener('message', this.onWindowMessage);
-    if (startCleanupTimedOut) throw startCleanupTimedOut;
-    if (this.sessionId) window.removeEventListener('message', this.onWindowMessage);
+    window.removeEventListener('message', this.onWindowMessage);
   }
 
   private readonly onWindowMessage = (event: MessageEvent) => {

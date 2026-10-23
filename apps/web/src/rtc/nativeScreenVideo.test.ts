@@ -36,6 +36,59 @@ afterEach(() => {
 });
 
 describe('NativeScreenVideoSession', () => {
+  it('启动中停止等待主进程的真实结果，不因超过旧的1.5秒而残留失败，迟到轨道不发布', async () => {
+    vi.useFakeTimers();
+    installWindowMessageTarget();
+    const starting = deferred<{ sessionId: string; changed: boolean }>();
+    const stopNativeVideo = vi.fn(async () => ({ changed: true }));
+    const generator = { writable: new WritableStream<VideoFrame>(), stop: vi.fn() };
+    const desktop: NativeVideoDesktopBridge = {
+      recordScreenShareStartupTiming: vi.fn(), startNativeVideo: () => starting.promise, stopNativeVideo,
+      configureNativeVideo: vi.fn(), onNativeVideoError: () => () => {}, onNativeVideoSuspended: () => () => {},
+    };
+    const session = new NativeScreenVideoSession(desktop, { maxFps: 60,
+      createGenerator: () => generator as never, createLocalTrack: () => ({ stop: vi.fn() }) as never });
+    const ready = expect(session.start('window:1:0')).rejects.toThrow('nativeVideoSessionStopped');
+    let stopped = false;
+    const stopping = session.stop().then(() => { stopped = true; });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(stopped).toBe(false);
+    expect(generator.stop).toHaveBeenCalledOnce();
+    starting.resolve({ changed: true, sessionId: 'late-start' });
+    await stopping;
+    await ready;
+    expect(stopNativeVideo).toHaveBeenCalledExactlyOnceWith('late-start');
+    expect(desktop.recordScreenShareStartupTiming).not.toHaveBeenCalled();
+  });
+
+  it('首帧未送达时记录失败阶段，确认原生停止后新会话仍能接收画面', async () => {
+    vi.useFakeTimers();
+    const target = installWindowMessageTarget();
+    let sequence = 0;
+    const desktop: NativeVideoDesktopBridge = {
+      recordScreenShareStartupTiming: vi.fn(),
+      startNativeVideo: vi.fn(async () => ({ sessionId: `attempt-${++sequence}`, changed: true })),
+      stopNativeVideo: vi.fn(async () => ({ changed: true })), configureNativeVideo: vi.fn(),
+      onNativeVideoError: () => () => {}, onNativeVideoSuspended: () => () => {},
+    };
+    const createSession = () => new NativeScreenVideoSession(desktop, { maxFps: 60, firstFrameTimeoutMs: 100,
+      createGenerator: () => ({ writable: new WritableStream<VideoFrame>(), stop: vi.fn() }) as never,
+      createLocalTrack: () => ({ stop: vi.fn() }) as never });
+    const failed = createSession();
+    const rejected = expect(failed.start('window:1:0')).rejects.toThrow('nativeVideoFirstFrameTimeout');
+    await vi.advanceTimersByTimeAsync(100);
+    await rejected;
+    expect(desktop.recordScreenShareStartupTiming).toHaveBeenCalledWith('attempt-1', 'screenVideoStartupFailed',
+      expect.any(Number), { code: 'nativeVideoFirstFrameTimeout' });
+    expect(desktop.stopNativeVideo).toHaveBeenCalledExactlyOnceWith('attempt-1');
+    const next = createSession();
+    const ready = next.start('window:1:0');
+    await vi.advanceTimersByTimeAsync(0);
+    dispatchFrame(target, createFrame(), 'attempt-2');
+    await expect(ready).resolves.toBe(next.track);
+    await next.stop();
+  });
+
   it.each([0, 15, 90, 144, 181, 30.5, NaN, Infinity])('拒绝未开放的目标帧率 %s，且不创建页面视频资源', (maxFps) => {
     const createGenerator = vi.fn();
     expect(() => new NativeScreenVideoSession({} as NativeVideoDesktopBridge, { maxFps, createGenerator }))

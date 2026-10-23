@@ -4,19 +4,21 @@ import InlineFeedback from '../InlineFeedback.vue';
 
 const props = defineProps<{ report: ReturnType<typeof useDiagnosticReport>; canStart: boolean }>();
 const { recording, sampleCount, reason, error, saving, notes } = props.report;
+const desktop = Boolean(window.lycanDesktop);
 </script>
 
 <template>
   <section class="settings-block diagnostic-report-settings">
     <h2>测试报告</h2>
-    <p>主动记录后可以返回应用继续使用。每 2 秒尝试采样，最多 30 分钟；离房自动结束，退出应用会清除未导出的记录。</p>
+    <p>主动记录后可以返回应用继续使用。每 2 秒尝试采样，最多 30 分钟；离房自动结束，退出应用会清除未导出的详细采样。</p>
     <p>记录版本、媒体参数、帧率与丢包；桌面导出附带系统信息和精简故障阶段。成员使用临时编号，不附带昵称、链接或原始日志；不录制音视频，不自动上传。</p>
+    <p v-if="desktop">桌面启动后自动保存关键阶段和故障，可直接导出；详细帧率与网络统计仍需开始记录。</p>
     <div class="settings-actions">
       <button v-if="!recording" type="button" :disabled="!canStart || saving" @click="report.start()">
         {{ reason ? '开始新记录（替换上次）' : '开始记录' }}
       </button>
       <button v-else type="button" @click="report.stop()">结束记录</button>
-      <button type="button" :disabled="recording || !reason || saving" @click="report.save(notes)">
+      <button type="button" :disabled="recording || (!reason && !desktop) || saving" @click="report.save(notes)">
         {{ saving ? '正在导出…' : '导出报告' }}
       </button>
       <span role="status">{{ recording ? '记录中' : reason === 'limit' ? '达到记录上限，已结束' : reason ? '记录已结束' : '尚未开始' }} · {{ sampleCount }} 份统计</span>

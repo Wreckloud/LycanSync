@@ -45,6 +45,18 @@ beforeEach(() => {
 });
 afterEach(() => { scopes.splice(0).forEach((scope) => scope.stop()); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
+it('未入房或开始记录也能导出自动事件，不启动媒体采样', async () => {
+  const { report, room, exportDiagnosticReport } = setup();
+  room.value = null;
+  await report.save('停止后不能再次共享');
+  expect(collect).not.toHaveBeenCalled();
+  const exported = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
+  expect(exported.stopReason).toBe('automaticEvents');
+  expect(exported.samples).toEqual([]);
+  expect(Number.isFinite(Date.parse(exported.startedAt))).toBe(true);
+  expect(Date.parse(exported.endedAt)).toBeGreaterThanOrEqual(Date.parse(exported.startedAt));
+});
+
 it('报告只导出诊断字段，摘要包含各阶段证据和编码网络统计，不推断硬件编码或端到端延迟', async () => {
   const next = snapshot();
   next.streams[0].layers[0].averageEncodeMs = 2.4;

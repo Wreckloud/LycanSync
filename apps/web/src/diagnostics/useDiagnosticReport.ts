@@ -416,9 +416,11 @@ export function useDiagnosticReport(options: {
     void poll();
   }
   async function save(notes: string) {
-    if (disposed || saving.value || recording.value || !startedAt) return;
+    if (disposed || saving.value || recording.value || (!startedAt && !window.lycanDesktop)) return;
     saving.value = true; error.value = '';
-    const report = { kind: 'lycansync-diagnostics', schemaVersion: 7, startedAt, endedAt, stopReason: reason.value,
+    const report = { kind: 'lycansync-diagnostics', schemaVersion: 7,
+      startedAt: startedAt ?? new Date().toISOString(), endedAt: endedAt ?? new Date().toISOString(),
+      stopReason: reason.value || 'automaticEvents',
       sampleIntervalMs: SAMPLE_INTERVAL_MS, notes: notes.slice(0, 2000), startSettings, endSettings, samples,
       summary: { segments: summarizeSegments(samples, packageInfo.version, Boolean(window.lycanDesktop)), limitations: [
         '各阶段统计窗口来源不同，不能直接相减计算全链路丢帧率。FPS 仅描述视频链路，不代表游戏 FPS 或每帧画面内容均不同。',

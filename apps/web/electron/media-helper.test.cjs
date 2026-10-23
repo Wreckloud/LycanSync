@@ -21,10 +21,11 @@ test('纹理交付、停止和迟到结果共用一次主进程引用释放', as
       const sent = new Promise((resolve, reject) => { resolveSend = resolve; rejectSend = reject; });
       const failures = [], notifications = [], slots = [];
       let releases = 0;
-      const video = { sessionId: 'texture-session', imported: new Map(), pendingSlotReleases: new Set() };
+      const video = { sessionId: 'texture-session', startedAt: performance.now(), imported: new Map(), pendingSlotReleases: new Set() };
       const state = { alive: true, closed: false, child: { pid: 1234 }, executablePath: 'C:\\host.exe',
         releaseSharedTextureSlot: async (...args) => slots.push(args) };
       const sandbox = {
+        performance, writeMediaDiagnostic: async () => {},
         nativeVideoSession: video, helperProcessBridges: new Map(), mainWindow: { webContents: { mainFrame: {} } },
         nativeMediaBridge: { openSpawnedMediaHelper: () => ({ duplicateSharedTexture: () => ({
           withImportHandle: (callback) => callback(Buffer.alloc(8)), release: () => {},

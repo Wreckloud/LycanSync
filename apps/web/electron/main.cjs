@@ -101,6 +101,8 @@ let nativeMicrophoneSession;
 let lastMicrophoneDroppedChunks = 0;
 const helperProcessBridges = new WeakMap();
 const writeMediaDiagnostic = createMediaDiagnostics(resolve(app.getPath('userData'), 'screen-share-error.log'));
+const diagnosticStartedAt = Date.now();
+const diagnosticStartedMonotonicAt = performance.now();
 const sourceTimingRecordedAt = new Map();
 let diagnosticExportPending = false;
 const readProcessMetrics = createProcessMetricsReader((pid, executablePath) => {
@@ -144,8 +146,9 @@ function recordSourceTiming(stage, startedAt, sourceCount) {
 }
 
 function recordVideoFailure(stage, error, frame) {
+  const code = String(error?.message ?? error).match(/(?:^|: )([a-z][A-Za-z0-9]{0,63})$/)?.[1];
   void writeMediaDiagnostic({
-    stage, message: String(error?.message ?? error).slice(0, 2000),
+    stage, code, message: String(error?.message ?? error).slice(0, 2000),
     appVersion: app.getVersion(), electronVersion: process.versions.electron,
     windowsVersion: osRelease(), gpu: app.getGPUFeatureStatus(),
     pixelFormat: frame?.pixelFormat, codedSize: frame?.codedSize,
@@ -213,8 +216,13 @@ function prepareObsCapture(graphics) {
   if (closing || obsBackgroundPreparationFailed || process.platform !== 'win32'
       || !Object.values(obsHostSettings).every(path => existsSync(path))) return;
   if (!graphics && obsCorePreparationRequested) return;
+  if (graphics && obsCaptureHost.state?.preparePromise) return;
   obsCorePreparationRequested = true;
-  void obsCaptureHost.prepare(graphics).catch(error => {
+  const startedAt = performance.now();
+  void obsCaptureHost.prepare(graphics).then(() => {
+    void writeMediaDiagnostic({ stage: graphics ? 'obsGraphicsPrepared' : 'obsCorePrepared',
+      durationMs: Math.round(performance.now() - startedAt) });
+  }).catch(error => {
     // 后台失败只记录一次；下一次用户确认共享仍可显式重试，不循环启动失败的宿主。
     obsBackgroundPreparationFailed = true;
     void writeMediaDiagnostic({ stage: 'obsPrewarmFailed', message: error.message });
@@ -673,6 +681,10 @@ function handleNativeSharedTextureFrame(state, frame) {
     return;
   }
   video.helperState = state;
+  if (!video.sourceFrameReceived) {
+    video.sourceFrameReceived = true;
+    void writeMediaDiagnostic({ stage: 'obsSourceFirstFrame', durationMs: Math.round(performance.now() - video.startedAt) });
+  }
   video.frameWidth = frame.contentSize.width;
   video.frameHeight = frame.contentSize.height;
   let helperBridge = helperProcessBridges.get(state);
@@ -748,6 +760,10 @@ function handleNativeSharedTextureFrame(state, frame) {
     }, 'native-screen-frame', video.sessionId).then(() => {
       transferPending = false;
       releaseImport();
+      if (!video.textureDelivered && !video.stopping && nativeVideoSession === video) {
+        video.textureDelivered = true;
+        void writeMediaDiagnostic({ stage: 'screenTextureDelivered', durationMs: Math.round(performance.now() - video.startedAt) });
+      }
     }).catch((error) => {
       transferPending = false;
       if (!video.failureNotified) recordVideoFailure('sendTexture', error, frame);
@@ -776,13 +792,18 @@ async function startNativeVideo(sourceId, maxFps, settings, resolution) {
   const source = nativeVideoSourcesById.get(sourceId);
   if (!source || !sourceId.startsWith(`${source.kind}:`)) throw new Error('videoSourceExpired');
   const video = { sessionId, sourceId, sourceKind: source.kind, starting: true,
+    startedAt: performance.now(),
     imported: new Map(), pendingSlotReleases: new Set(), stopping: false, failureNotified: false };
   nativeVideoSession = video;
+  void writeMediaDiagnostic({ stage: 'screenVideoStartRequested', sourceKind: source.kind,
+    width: resolution?.width, height: resolution?.height, maxFps,
+    hostReused: Boolean(obsCaptureHost.state && !obsCaptureHost.state.closed && !obsCaptureHost.state.failed) });
   try {
     const reservation = mediaHelper.reserveVideo(sessionId, sourceId);
     video.targetState = mediaHelper.videoCapture?.state;
     let target = await reservation;
     if (closing || video.stopping || nativeVideoSession !== video) throw new Error('nativeVideoSessionStopped');
+    void writeMediaDiagnostic({ stage: 'screenSourceReserved', durationMs: Math.round(performance.now() - video.startedAt) });
     if (target.kind === 'window') {
       const game = await activityMonitor.isCaptureGame(target.executable);
       // 程序分类只决定采集方式；授权范围仍是注册表预留的精确窗口实例。
@@ -838,6 +859,7 @@ async function stopNativeVideo(sessionId) {
   if (video.sessionId !== sessionId) throw new Error('videoSessionMismatch');
   if (video.stopPromise) return video.stopPromise;
   video.stopping = true;
+  const startedAt = performance.now();
   video.stopPromise = (async () => {
     // 先撤销输入和释放按住的键；画面/GPU 回收再慢也不能继续接受远控。
     const active = mediaHelper.videoCapture;
@@ -858,17 +880,27 @@ async function stopNativeVideo(sessionId) {
       await new Promise((resolveWait) => setTimeout(resolveWait, 10));
     }
     if (video.imported.size || video.pendingSlotReleases.size) {
+      void writeMediaDiagnostic({ stage: 'screenTextureReleaseTimeout',
+        importedCount: video.imported.size, pendingReleaseCount: video.pendingSlotReleases.size });
       releaseNativeVideoImports(video);
+      // 外部纹理未归还时不复用宿主；退出确认后才释放来源并允许下一次共享。
+      await obsCaptureHost.shutdown(true);
       await stopObsVideo(video);
-      video.lastError ??= 'sharedTextureReleaseTimedOut';
-      throw new Error('sharedTextureReleaseTimedOut');
+      void writeMediaDiagnostic({ stage: 'screenVideoStopRecovered' });
+    } else {
+      await stopObsVideo(video);
     }
-    const result = await stopObsVideo(video);
     if (controlFailure) throw controlFailure;
     if (nativeVideoSession === video) nativeVideoSession = undefined;
     lastStoppedNativeVideoSession = sessionId;
-    return result;
-  })();
+    void writeMediaDiagnostic({ stage: 'screenVideoStopped', durationMs: Math.round(performance.now() - startedAt) });
+    return { changed: true };
+  })().catch(error => {
+    void writeMediaDiagnostic({ stage: 'screenVideoStopFailed',
+      code: String(error?.message ?? error).match(/(?:^|: )([a-z][A-Za-z0-9]{0,63})$/)?.[1],
+      durationMs: Math.round(performance.now() - startedAt) });
+    throw error;
+  });
   return video.stopPromise;
 }
 
@@ -1124,6 +1156,9 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow?.focus();
   });
   app.whenReady().then(() => {
+    void writeMediaDiagnostic({ stage: 'applicationReady', appVersion: app.getVersion(),
+      electronVersion: process.versions.electron, platform: process.platform, arch: process.arch,
+      osVersion: osRelease(), durationMs: Math.round(performance.now() - diagnosticStartedMonotonicAt) });
     if (existsSync(accessLinkFile)) {
       try {
         if (!pendingAccessLink) pendingAccessLink = parseAccessLink(safeStorage.decryptString(require('node:fs').readFileSync(accessLinkFile)));
@@ -1153,7 +1188,13 @@ if (!app.requestSingleInstanceLock()) {
     screenShareWindows.attach(mainWindow);
     mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
     mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
-    mainWindow.webContents.on('render-process-gone', () => finishClose());
+    mainWindow.webContents.once('did-finish-load', () => {
+      void writeMediaDiagnostic({ stage: 'rendererReady', durationMs: Math.round(performance.now() - diagnosticStartedMonotonicAt) });
+    });
+    mainWindow.webContents.on('render-process-gone', (_event, details) => {
+      void writeMediaDiagnostic({ stage: 'rendererExited', outcome: details.reason });
+      finishClose();
+    });
     mainWindow.once('ready-to-show', () => mainWindow.show());
     mainWindow.on('close', (event) => {
       // app.quit 先等待 helper 清理；确认完成后的第二次退出允许关闭窗口。
@@ -1261,8 +1302,11 @@ ipcMain.handle('diagnostics:export', async (event, text) => {
   }
   diagnosticExportPending = true;
   try {
+    await writeMediaDiagnostic.flush();
+    const eventStartedAt = Math.min(diagnosticStartedAt, Date.parse(report.startedAt));
+    const eventEndedAt = Date.now();
     const events = await readDiagnosticEvents(resolve(app.getPath('userData'), 'screen-share-error.log'),
-      Date.parse(report.startedAt), Date.parse(report.endedAt));
+      eventStartedAt, eventEndedAt);
     if (!trustedSender(event) || closing) return { saved: false };
     const result = await dialog.showSaveDialog(mainWindow, {
       title: '导出诊断报告', defaultPath: `LycanSync-diagnostics-${Date.now()}.json`,
@@ -1273,7 +1317,8 @@ ipcMain.handle('diagnostics:export', async (event, text) => {
       platform: process.platform, arch: process.arch, osVersion: osRelease(), gpuFeatures: app.getGPUFeatureStatus(),
       gpuUtilization: null };
     report.events = events;
-    report.eventLimit = '最多读取当前及上一份日志各256KiB，保留记录期间最近200项；不含异常正文';
+    report.eventWindow = { startedAt: new Date(eventStartedAt).toISOString(), endedAt: new Date(eventEndedAt).toISOString() };
+    report.eventLimit = '最多读取当前及上一份日志各256KiB，保留本次启动至导出最近200项；不含异常正文';
     await writeFile(result.filePath, JSON.stringify(report), 'utf8');
     return { saved: true };
   } finally { diagnosticExportPending = false; }
@@ -1379,15 +1424,26 @@ ipcMain.handle('settings:screen-share:support', (event) => {
 });
 ipcMain.handle('media:native-video:start', (event, sourceId, maxFps, settings, resolution) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
-  return startNativeVideo(sourceId, maxFps, settings, resolution);
+  const startedAt = performance.now();
+  return startNativeVideo(sourceId, maxFps, settings, resolution).catch(error => {
+    void writeMediaDiagnostic({ stage: 'screenVideoStartFailed',
+      code: String(error?.message ?? error).match(/(?:^|: )([a-z][A-Za-z0-9]{0,63})$/)?.[1],
+      durationMs: Math.round(performance.now() - startedAt) });
+    throw error;
+  });
 });
 ipcMain.on('media:screen-share-startup', (event, sessionId, stage, durationMs, audioTiming) => {
   const video = nativeVideoSession;
   if (!trustedSender(event) || closing || !video || video.starting || video.stopping
       || video.sessionId !== sessionId
-      || !['screenVideoFirstFrame', 'screenAudioStartup', 'screenVideoPublished'].includes(stage)
+      || !['screenVideoFirstFrame', 'screenVideoStartupFailed', 'screenAudioStartup', 'screenVideoPublished'].includes(stage)
       || !Number.isFinite(durationMs) || durationMs < 0 || durationMs > 300_000) return;
   let audioDetails;
+  if (stage === 'screenVideoStartupFailed') {
+    if (!['nativeVideoFirstFrameTimeout', 'nativeVideoFrameAdjustmentFailed', 'nativeVideoTrackWriteFailed',
+      'nativeVideoSessionStopped', 'nativeVideoFailed'].includes(audioTiming?.code)) return;
+    audioDetails = { code: audioTiming.code };
+  }
   if (stage === 'screenAudioStartup') {
     if (!audioTiming || !['published', 'failed'].includes(audioTiming.outcome)
         || !['capture', 'graph', 'publish'].includes(audioTiming.phase)) return;
@@ -1552,6 +1608,7 @@ app.on('before-quit', (event) => {
     }))
     .then(() => mediaHelper.shutdown())
     .catch((error) => console.error(`media-helper shutdown failed: ${error.message}`))
+    .then(() => writeMediaDiagnostic.flush())
     .finally(() => {
       allowQuitAfterMediaHelper = true;
       app.quit();
