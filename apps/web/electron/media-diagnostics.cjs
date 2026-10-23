@@ -65,4 +65,45 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
   return events.sort((left, right) => left.time.localeCompare(right.time)).slice(-200);
 }
 
-module.exports = { createMediaDiagnostics, readDiagnosticEvents };
+function createProcessMetricsReader(openNativeProcess) {
+  const nativeReaders = new WeakMap();
+  const memoryMiB = (value, unit) => Number.isFinite(value) && value >= 0 ? Math.round(value / unit * 10) / 10 : null;
+  return (metrics, nativeProcesses, supported) => {
+    const entries = metrics.map((entry) => ({
+      role: ['Browser', 'Tab', 'GPU', 'Utility'].includes(entry.type) ? `electron-${entry.type}` : 'electron-other',
+      state: 'running', workingSetMiB: memoryMiB(entry.memory?.workingSetSize, 1024),
+      privateCommitMiB: memoryMiB(entry.memory?.privateBytes, 1024),
+    }));
+    for (const { role, children, executablePath } of nativeProcesses) {
+      const running = children.filter((child) => child.exitCode == null && child.signalCode == null);
+      if (!supported || !running.length) {
+        entries.push({ role, state: supported ? 'stopped' : 'unavailable', workingSetMiB: null, privateCommitMiB: null });
+        continue;
+      }
+      for (const child of running) {
+        try {
+          let reader = nativeReaders.get(child);
+          if (!reader) {
+            reader = openNativeProcess(child.pid, executablePath);
+            nativeReaders.set(child, reader);
+            // 固定进程句柄只随本次子进程存活，不因停止后 PID 重用而读取其他程序。
+            child.once('close', () => { reader.release(); nativeReaders.delete(child); });
+          }
+          const memory = reader.readMemory();
+          const workingSetMiB = memoryMiB(memory.workingSetBytes, 1024 * 1024);
+          const privateCommitMiB = memoryMiB(memory.privateCommitBytes, 1024 * 1024);
+          entries.push({ role, state: workingSetMiB === null || privateCommitMiB === null ? 'unavailable' : 'running',
+            workingSetMiB, privateCommitMiB });
+        } catch {
+          entries.push({ role, state: 'unavailable', workingSetMiB: null, privateCommitMiB: null });
+        }
+      }
+    }
+    return {
+      cpuPercent: Math.round(metrics.reduce((sum, entry) => sum + (entry.cpu?.percentCPUUsage ?? 0), 0) * 10) / 10,
+      memoryMb: Math.round(metrics.reduce((sum, entry) => sum + (entry.memory?.workingSetSize ?? 0), 0) / 1024), entries,
+    };
+  };
+}
+
+module.exports = { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader };

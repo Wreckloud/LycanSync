@@ -1,25 +1,22 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { expect, it } from 'vitest';
 import { RemoteTrackPublication, Room, Track, TrackEvent, VideoQuality } from 'livekit-client';
 import { observeScreenShareView, syncScreenShareViewing } from './screenShareViewing';
 
-afterEach(() => vi.unstubAllGlobals());
-
 function viewing() {
-  const page = Object.assign(new EventTarget(), { visibilityState: 'visible' });
   const callbacks = new Map<Element, IntersectionObserverCallback>();
-  vi.stubGlobal('document', page);
-  vi.stubGlobal('IntersectionObserver', class {
+  const observerWindow = Object.assign(new EventTarget(), { IntersectionObserver: class {
     constructor(private callback: IntersectionObserverCallback) {}
     private element?: Element;
     observe(element: Element) { this.element = element; callbacks.set(element, this.callback); }
     disconnect() { if (this.element) callbacks.delete(this.element); }
-  });
+  } });
+  const page = Object.assign(new EventTarget(), { visibilityState: 'visible', defaultView: observerWindow });
   const publication = new RemoteTrackPublication(Track.Kind.Video, {
     sid: 'screen', name: 'screen', type: 1, source: 3, simulcast: true,
   } as never, true);
   const updates: unknown[] = [];
   publication.on(TrackEvent.UpdateSettings, (settings) => updates.push(settings));
-  const element = () => ({ getClientRects: () => [{}] }) as unknown as HTMLVideoElement;
+  const element = () => ({ ownerDocument: page, getClientRects: () => [{}] }) as unknown as HTMLVideoElement;
   function visible(element: HTMLVideoElement, visible: boolean) {
     callbacks.get(element)?.([{ target: element, isIntersecting: visible } as unknown as IntersectionObserverEntry], {} as IntersectionObserver);
   }
@@ -27,25 +24,50 @@ function viewing() {
     page.visibilityState = hidden ? 'hidden' : 'visible';
     page.dispatchEvent(new Event('visibilitychange'));
   }
-  return { page, publication, updates, element, visible, background, callbacks };
+  return { page, observerWindow, publication, updates, element, visible, background, callbacks };
 }
 
-it('同一轨道的小窗和舞台合并为最高可见需求，隐藏不取消订阅', () => {
+it('不同窗口合并需求，主窗口隐藏不暂停辅助窗，关窗与迟到回调不影响其他位置', () => {
+  const main = viewing(), auxiliary = viewing();
+  const small = main.element(), large = auxiliary.element();
+  const low = observeScreenShareView(main.publication, small, VideoQuality.LOW);
+  const high = observeScreenShareView(main.publication, large, VideoQuality.HIGH);
+  const late = auxiliary.callbacks.get(large)!;
+  main.background(true);
+  expect(main.publication.isEnabled).toBe(true);
+  expect(main.publication.videoQuality).toBe(VideoQuality.HIGH);
+  auxiliary.background(true);
+  expect(main.publication.isEnabled).toBe(false);
+  main.background(false);
+  expect(main.publication.videoQuality).toBe(VideoQuality.LOW);
+  auxiliary.background(false);
+  auxiliary.observerWindow.dispatchEvent(new Event('pagehide'));
+  expect(main.publication.isEnabled).toBe(true);
+  expect(main.publication.videoQuality).toBe(VideoQuality.LOW);
+  const count = main.updates.length;
+  late([{ target: large, isIntersecting: true } as unknown as IntersectionObserverEntry], {} as IntersectionObserver);
+  high.setQuality(VideoQuality.HIGH); high.stop();
+  expect(main.updates).toHaveLength(count);
+  low.stop();
+  expect(main.publication.isEnabled).toBe(false);
+});
+
+it('同一轨道的小预览和独立观看合并为最高可见需求，隐藏不取消订阅', () => {
   const state = viewing();
-  const small = state.element(), stage = state.element();
+  const small = state.element(), viewer = state.element();
   const smallView = observeScreenShareView(state.publication, small, VideoQuality.LOW);
-  const stageView = observeScreenShareView(state.publication, stage, VideoQuality.HIGH);
+  const viewerView = observeScreenShareView(state.publication, viewer, VideoQuality.HIGH);
   expect(state.publication.videoQuality).toBe(VideoQuality.HIGH);
-  state.visible(stage, false);
+  state.visible(viewer, false);
   expect(state.publication.videoQuality).toBe(VideoQuality.LOW);
   expect(state.publication.isEnabled).toBe(true);
   state.visible(small, false);
   expect(state.publication.isEnabled).toBe(false);
   expect(state.publication.isDesired).toBe(true);
-  state.visible(stage, true);
+  state.visible(viewer, true);
   expect(state.publication.videoQuality).toBe(VideoQuality.HIGH);
   expect(state.publication.isEnabled).toBe(true);
-  stageView.stop(); smallView.stop();
+  viewerView.stop(); smallView.stop();
 });
 
 it('设置或最小化暂停全部位置，失焦不暂停，恢复保持原需求', () => {

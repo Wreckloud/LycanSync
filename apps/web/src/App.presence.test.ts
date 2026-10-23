@@ -60,10 +60,10 @@ function setup() {
     summaryError: ref<string | null>(null), roomOccupancies: ref<Record<string, number>>({ group: 2 }),
     roomOccupancyRequest: new AbortController(), joinAttempt: 0, lastActivationRefreshAt: 0,
     departingGroupId: ref<string | null>(null), callbarLeaving: ref(false),
-    pendingSwitchGroupId: ref<string | null>(null), membersExpanded: ref(false), viewerNotice: ref(''),
+    pendingSwitchGroupId: ref<string | null>(null), viewerNotice: ref(''),
     rtc: { status: 'connected', participants: [{ identity: 'user-self' }, { identity: 'user-friend' }],
       leave: vi.fn(() => leaving.promise) },
-    stage: { reset: vi.fn() }, selectCaptureSource: vi.fn(), releaseViewerLock: vi.fn(), endStageDrag: vi.fn(),
+    selectCaptureSource: vi.fn(), viewingWindows: { value: { closeAll: vi.fn() } },
     callSounds: { left: vi.fn(async () => {}) }, sendPresenceHeartbeat: vi.fn(async () => {}),
     refreshRoomOccupancies: vi.fn(async () => {}), refreshGroups: vi.fn(async () => {}), startGroupPresenceSync: vi.fn(),
   };

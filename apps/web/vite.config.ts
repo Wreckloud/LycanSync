@@ -5,7 +5,7 @@ const webPort = Number(process.env.WEB_PORT ?? 4173);
 
 export default defineConfig({
   plugins: [vue()],
-  build: { rollupOptions: { input: { app: 'index.html', overlay: 'overlay.html' } } },
+  build: { rollupOptions: { input: { app: 'index.html', overlay: 'overlay.html', viewer: 'viewer.html' } } },
   server: {
     host: '127.0.0.1',
     port: webPort,

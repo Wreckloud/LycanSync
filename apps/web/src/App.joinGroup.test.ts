@@ -17,9 +17,9 @@ function deferred<T>() {
 
 function joining() {
   const context = {
-    joinAttempt: 0, selectCaptureSource: vi.fn(), releaseViewerLock: vi.fn(), endStageDrag: vi.fn(),
+    joinAttempt: 0, selectCaptureSource: vi.fn(), viewingWindows: { value: { closeAll: vi.fn() } },
     selectedGroupId: { value: '' }, pendingSwitchGroupId: { value: null }, joiningGroupId: { value: '' as string | null },
-    stage: { reset: vi.fn() }, membersExpanded: { value: false }, viewerNotice: { value: '' },
+    viewerNotice: { value: '' },
     callbarLeaving: { value: false }, departingGroupId: { value: null },
     joinedGroupId: { value: null as string | null }, joinedGroupDetail: { value: null as { id: string } | null },
     locallyLeftVoiceGroupId: { value: null as string | null },

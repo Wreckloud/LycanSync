@@ -17,7 +17,7 @@ async function renderControls(enabled: boolean, listening: boolean, busy = false
     outputVolume: 1, sharing: false, shareBusy: false, choosingSource: false, shareLimitReached: false,
     quality: 'standard', shareAudio: false, audioMode: 'unavailable',
   }));
-  const cards = await Promise.all((['card', 'viewer', 'thumbnail'] as const).map((variant) =>
+  const cards = await Promise.all((['card'] as const).map((variant) =>
     renderToString(createSSRApp(ParticipantCard, {
       participant, revision: 0, isLocal: true, isListening: listening,
       localMicrophoneEnabled: enabled, variant,
@@ -26,7 +26,7 @@ async function renderControls(enabled: boolean, listening: boolean, busy = false
 }
 
 describe('本机麦克风按钮的权威状态', () => {
-  it('SDK 仍报告开麦时，底栏和三种成员卡仍一致显示禁发和停止收听', async () => {
+  it('SDK 仍报告开麦时，底栏和成员卡仍一致显示禁发和停止收听', async () => {
     const { controls, cards } = await renderControls(false, false, true);
     expect(controls).toContain('lucide-mic-off');
     expect(controls).toContain('lucide-headphone-off');
@@ -53,5 +53,16 @@ describe('本机麦克风按钮的权威状态', () => {
     expect(button).not.toContain('disabled');
     const stopping = await renderControls(false, true, true, false);
     expect(stopping.controls.match(/<button[^>]*aria-label="开启麦克风"[^>]*>/)?.[0]).toContain('disabled');
+  });
+
+  it('独立观看不重复提供房间麦克风和收听按钮', async () => {
+    const participant = { identity: 'local', name: '自己', isMicrophoneEnabled: true,
+      isSpeaking: true, isScreenShareEnabled: false, getTrackPublication: () => undefined } as unknown as Participant;
+    const html = await renderToString(createSSRApp(ParticipantCard, {
+      participant, revision: 0, isLocal: true, isListening: true, localMicrophoneEnabled: true, variant: 'viewer',
+    }));
+    expect(html).not.toContain('关闭自己的麦克风');
+    expect(html).not.toContain('停止接收所有成员声音');
+    expect(html).not.toContain('is-speaking');
   });
 });

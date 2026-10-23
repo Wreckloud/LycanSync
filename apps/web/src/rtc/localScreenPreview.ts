@@ -1,5 +1,8 @@
 // 本地预览只控制播放元素；采集轨道和对外发布由房间媒体流程持有。
 export function observeLocalScreenPreview(element: HTMLVideoElement, onPlaybackError: () => void): () => void {
+  const page = element.ownerDocument;
+  const viewWindow = page.defaultView;
+  if (!viewWindow) throw new Error('screenShareViewWindowUnavailable');
   let disposed = false;
   let intersecting = element.getClientRects().length > 0;
   let playing: boolean | undefined;
@@ -7,7 +10,7 @@ export function observeLocalScreenPreview(element: HTMLVideoElement, onPlaybackE
 
   function updatePlayback() {
     if (disposed) return;
-    const visible = intersecting && document.visibilityState !== 'hidden';
+    const visible = intersecting && page.visibilityState !== 'hidden';
     if (playing === visible) return;
     playing = visible;
     const request = ++playbackRequest;
@@ -23,25 +26,29 @@ export function observeLocalScreenPreview(element: HTMLVideoElement, onPlaybackE
 
   function preventHiddenPlayback() {
     // SDK 恢复窗口时会重新播放所有绑定元素，不能只依赖缓存的可见状态。
-    if (!disposed && (!intersecting || document.visibilityState === 'hidden')) element.pause();
+    if (!disposed && (!intersecting || page.visibilityState === 'hidden')) element.pause();
   }
 
-  const observer = new IntersectionObserver((entries) => {
+  const observer = new viewWindow.IntersectionObserver((entries) => {
     const entry = entries.find((entry) => entry.target === element);
     if (!entry || disposed) return;
     intersecting = entry.isIntersecting;
     updatePlayback();
   });
   observer.observe(element);
-  document.addEventListener('visibilitychange', updatePlayback);
+  page.addEventListener('visibilitychange', updatePlayback);
+  viewWindow.addEventListener('pagehide', stop);
   element.addEventListener('play', preventHiddenPlayback);
   updatePlayback();
 
-  return () => {
+  function stop() {
+    if (disposed) return;
     disposed = true;
     observer.disconnect();
-    document.removeEventListener('visibilitychange', updatePlayback);
+    page.removeEventListener('visibilitychange', updatePlayback);
+    viewWindow!.removeEventListener('pagehide', stop);
     element.removeEventListener('play', preventHiddenPlayback);
     element.pause();
-  };
+  }
+  return stop;
 }

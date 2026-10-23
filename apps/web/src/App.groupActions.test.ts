@@ -39,7 +39,7 @@ function setup() {
     joinedGroupId: ref<string | null>(null), joinedGroupDetail: ref<GroupDetail | null>(null), groups: ref([detail('one')]),
     editorOpen: ref(false), editingGroup: ref<GroupDetail | null>(null),
     management: ref<{ group: GroupDetail; mode: string } | null>(null), groupError: ref(''),
-    memberSearchOpen: ref(false), memberSearch: ref(''),
+    viewingWindows: { value: { closeAll: vi.fn() } },
     findGroup: vi.fn((_id: string, _signal: AbortSignal): Promise<GroupDetail> => Promise.resolve(detail('one'))),
     createGroup: vi.fn(async () => detail('created')), updateGroup: vi.fn(async () => detail('one')),
     refreshGroups: vi.fn(async () => {}), groupPresences: ref({}), presenceConnectionLost: ref(false),

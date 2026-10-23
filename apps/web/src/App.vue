@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, reactive, ref, watch } from 'vue';
-import { AudioLines, ChevronDown, ChevronLeft, ChevronRight, Copy, CornerUpLeft, Crown, Gamepad2, Headphones, Music2,
+import { AudioLines, Copy, CornerUpLeft, Headphones,
   LogOut, Minus, Plus, RadioTower,
-  Search, Settings, Square, Volume2, X } from '@lucide/vue';
+  Settings, Square, Volume2, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
 import ParticipantCard from './components/ParticipantCard.vue';
 import CallControls from './components/CallControls.vue';
@@ -37,8 +37,8 @@ import { ApiRequestError, type AuthUser, type ProfileUpdate } from './auth/authA
 import type { SettingsSectionId } from './settings/settingsSections';
 import { useActivityVisibility } from './settings/useActivityVisibility';
 import { useActivityMappings } from './settings/useActivityMappings';
-import { ScreenShareStage } from './rtc/screenShareStage';
-import { useStagePreferences } from './settings/useStagePreferences';
+import ScreenShareWindows from './components/ScreenShareWindows.vue';
+import GroupMembersPanel from './components/GroupMembersPanel.vue';
 import { useDiagnosticReport } from './diagnostics/useDiagnosticReport';
 import { useVoiceOverlay } from './overlay/useVoiceOverlay';
 
@@ -47,6 +47,7 @@ const props = defineProps<{
   windowMaximized: boolean;
   saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
   startupUpdateWarning?: string;
+  interactionBlocked?: boolean;
 }>();
 const emit = defineEmits<{ logout: []; dismissUpdateWarning: [] }>();
 
@@ -69,6 +70,17 @@ const audioProcessing = audioPreferences.processing;
 const callSounds = useCallSounds(outputVolume);
 const desktop = window.lycanDesktop;
 const viewerNotice = ref('');
+const mainWindowVisible = ref(true);
+let appDisposed = false;
+let nativeVisibilityReceived = false;
+const removeVisibilityListener = desktop?.onWindowVisibility((visible) => {
+  nativeVisibilityReceived = true;
+  mainWindowVisible.value = visible;
+});
+void desktop?.getWindowVisibility().then((visible) => {
+  if (!appDisposed && !nativeVisibilityReceived) mainWindowVisible.value = visible;
+}).catch(() => { if (!appDisposed) viewerNotice.value = '无法确认主窗口显示状态，请重启客户端。'; });
+onScopeDispose(() => { appDisposed = true; removeVisibilityListener?.(); });
 const captureRequest = ref<{ sources: ReturnType<typeof createNativeVideoSourceSelection>['options'];
   quality: ScreenShareQualityId; customQuality: CustomScreenShareQuality } | null>(null);
 const captureSourceType = ref<'window' | 'screen'>('window');
@@ -366,6 +378,7 @@ audioPreferences.mutedParticipantIdentities()
   .forEach((identity) => rtc.setRemoteAudioSubscribed(identity, false));
 const removeCloseListener = desktop?.onClose(async () => {
   selectCaptureSource(null);
+  viewingWindows.value?.closeAll();
   await reportOfflineBeforeClose();
   try { await microphoneTest.stop(); }
   finally {
@@ -375,6 +388,7 @@ const removeCloseListener = desktop?.onClose(async () => {
 });
 onScopeDispose(() => {
   joinAttempt++;
+  viewingWindows.value?.closeAll();
   selectCaptureSource(null); removeCloseListener?.();
   closeGroupEditor(); groupActionRequest?.abort();
   detailRequest?.abort(); listRequest?.abort(); void rtc.leave();
@@ -677,7 +691,6 @@ onMounted(() => {
   window.addEventListener('focus', refreshOnActivation);
   window.addEventListener('online', handlePresenceNetworkRestored);
   window.addEventListener('offline', handlePresenceNetworkLost);
-  window.addEventListener('resize', remeasureViewerHeight);
   document.addEventListener('visibilitychange', handleVisibilityChange);
   presenceIdleTimer = setInterval(() => void updateOwnPresenceStatus(), PRESENCE_IDLE_CHECK_INTERVAL_MS);
   activityClockTimer = setInterval(() => { activityClock.value = Date.now(); }, ACTIVITY_CLOCK_INTERVAL_MS);
@@ -712,7 +725,6 @@ onScopeDispose(() => {
   window.removeEventListener('focus', refreshOnActivation);
   window.removeEventListener('online', handlePresenceNetworkRestored);
   window.removeEventListener('offline', handlePresenceNetworkLost);
-  window.removeEventListener('resize', remeasureViewerHeight);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   stopGroupPresenceSync();
   roomOccupancyRequest?.abort();
@@ -808,23 +820,14 @@ const listening = computed(() => rtc.listening);
 const settingsOpen = ref(false);
 const settingsSection = ref<SettingsSectionId>('audio');
 const settingsReturnFocus = ref<HTMLElement | null>(null);
-const stage = reactive(new ScreenShareStage());
-const stagePreferences = useStagePreferences(props.user.id);
-const enlargedIdentities = computed(() => stage.slots.filter((id): id is string => id !== null));
-const stageDrag = ref<{ identity: string; room: typeof rtc.room } | null>(null);
-const stageDropSlot = ref<number | null>(null);
-const membersExpanded = ref(false);
-const filmstripPage = ref(0);
-const viewerGrid = ref<HTMLElement | null>(null);
-const lockedViewerHeight = ref<number | null>(null);
+const viewingWindows = ref<InstanceType<typeof ScreenShareWindows> | null>(null);
+const viewerInputBlocked = computed(() => Boolean(props.interactionBlocked || settingsOpen.value || editorOpen.value
+  || management.value || captureRequest.value || pendingSwitchGroupId.value || rtc.remoteControlRequest || rtc.status !== 'connected'));
+watch(viewerInputBlocked, (blocked) => { if (blocked) viewingWindows.value?.disarmAll(); }, { flush: 'sync' });
+const mutedShares = ref<string[]>([]);
 const departingGroupId = ref<string | null>(null);
 const callbarLeaving = ref(false);
-function releaseViewerLock() {
-  lockedViewerHeight.value = null;
-}
-onScopeDispose(() => {
-  releaseViewerLock();
-});
+watch(() => rtc.room, (room) => { if (room) mutedShares.value = []; }, { flush: 'sync' });
 
 async function openSettings(section: SettingsSectionId, event: Event | HTMLElement) {
   settingsReturnFocus.value = event instanceof HTMLElement ? event
@@ -913,25 +916,6 @@ const orderedMembers = computed(() => {
   return [...members.filter((member) => memberOnlineStatus(member) !== 'OFFLINE'),
     ...members.filter((member) => memberOnlineStatus(member) === 'OFFLINE')];
 });
-const memberSearchOpen = ref(false);
-const memberSearch = ref('');
-const memberSearchInput = ref<HTMLInputElement | null>(null);
-const memberSearchButton = ref<HTMLButtonElement | null>(null);
-const filteredMembers = computed(() => {
-  const query = memberSearch.value.trim().toLowerCase();
-  return orderedMembers.value.filter((member) =>
-    (member.userId === props.user.id ? props.user.nickname : member.nickname).toLowerCase().includes(query));
-});
-watch(selectedGroupId, () => {
-  memberSearchOpen.value = false;
-  memberSearch.value = '';
-});
-async function toggleMemberSearch() {
-  memberSearchOpen.value = !memberSearchOpen.value;
-  if (!memberSearchOpen.value) memberSearch.value = '';
-  await nextTick();
-  (memberSearchOpen.value ? memberSearchInput.value : memberSearchButton.value)?.focus();
-}
 function formatActivityDuration(startedAt: string) {
   const elapsedSeconds = Math.max(0, Math.floor((activityClock.value - Date.parse(startedAt)) / 1000));
   const hours = Math.floor(elapsedSeconds / 3600);
@@ -962,8 +946,6 @@ const sharingParticipants = computed(() => {
   void rtc.revision;
   return groupParticipants.value.filter((participant) => participant.isScreenShareEnabled);
 });
-const filmstripPageCount = computed(() => Math.ceil(groupParticipants.value.length / 5));
-const filmstripParticipants = computed(() => groupParticipants.value.slice(filmstripPage.value * 5, (filmstripPage.value + 1) * 5));
 const activeScreenShareCount = computed(() => {
   void rtc.revision;
   return rtc.participants.filter((participant) => participant.isScreenShareEnabled).length;
@@ -974,36 +956,6 @@ const remoteControlIsPending = (identity: string) => rtc.remoteControlPending?.i
 const remoteControlIsActive = (identity: string) => rtc.remoteControlActive?.identity === identity;
 // 测试期的客户端软限制，不代表服务端并发容量；后续按实测逐步移除。
 const screenShareLimitReached = computed(() => activeScreenShareCount.value >= 8 && !localParticipant.value?.isScreenShareEnabled);
-const sharingIdentityKey = computed(() => {
-  void rtc.revision;
-  return rtc.participants.filter((participant) => participant.isScreenShareEnabled).map((participant) => participant.identity).join('|');
-});
-const enlargedParticipants = computed(() => enlargedIdentities.value
-  .map((identity) => sharingParticipants.value.find((participant) => participant.identity === identity))
-  .filter((participant) => participant !== undefined));
-const hasStage = computed(() => enlargedParticipants.value.length > 0);
-const focusedOnSelectedGroup = computed(() => hasStage.value && showingJoinedGroup.value
-  && enlargedParticipants.value.some((participant) => participant.identity === stage.focused));
-const displayedSlots = computed(() => {
-  const slots = stage.slots.map((identity, index) => ({ index,
-    participant: sharingParticipants.value.find((participant) => participant.identity === identity) }));
-  if (focusedOnSelectedGroup.value) return slots.filter((slot) => slot.participant?.identity === stage.focused);
-  const lastOccupied = stage.slots.reduce((last, identity, index) => identity !== null ? index : last, -1);
-  const count = stageDrag.value || lastOccupied >= 2 ? 4 : lastOccupied + 1;
-  return slots.slice(0, count);
-});
-
-watch(() => [rtc.status, sharingIdentityKey.value] as const, ([status, key]) => {
-  // 重连期间轨道列表可能暂时为空，不能将它视为用户停止共享并清除手动安排。
-  if (status === 'reconnecting') { endStageDrag(); return; }
-  stage.sync(key ? key.split('|') : []);
-  if (stageDrag.value && !stage.available.includes(stageDrag.value.identity)) endStageDrag();
-}, { immediate: true });
-watch(stagePreferences.autoFill, (enabled) => stage.setAutoFill(enabled), { immediate: true });
-watch(() => rtc.room, () => { stage.reset(); stage.sync(sharingIdentityKey.value ? sharingIdentityKey.value.split('|') : []); endStageDrag(); });
-watch(() => groupParticipants.value.map((participant) => participant.identity).join('|'), () => {
-  filmstripPage.value = Math.min(filmstripPage.value, Math.max(0, filmstripPageCount.value - 1));
-});
 watch(() => [joinedGroupId.value, joiningGroupId.value, rtc.status, rtc.room], () => {
   if (joinedGroupId.value && rtc.status === 'idle' && rtc.room === null && joiningGroupId.value === null) {
     departingGroupId.value = joinedGroupId.value;
@@ -1035,14 +987,11 @@ watch([listening, remoteAudioTracks], ([enabled, tracks]) => {
 }, { flush: 'sync' });
 async function joinGroup(groupId: string) {
   selectCaptureSource(null);
-  releaseViewerLock();
+  viewingWindows.value?.closeAll();
   const attempt = ++joinAttempt;
   selectedGroupId.value = groupId;
   pendingSwitchGroupId.value = null;
   joiningGroupId.value = groupId;
-  stage.reset();
-  endStageDrag();
-  membersExpanded.value = false;
   viewerNotice.value = '';
   callbarLeaving.value = false;
   departingGroupId.value = null;
@@ -1093,9 +1042,6 @@ function requestJoin(groupId: string) {
     pendingSwitchGroupId.value = null;
     return;
   }
-  stage.focused = null;
-  endStageDrag();
-  membersExpanded.value = false;
   if (joinedGroupId.value !== null) {
     pendingSwitchGroupId.value = groupId;
     return;
@@ -1105,7 +1051,7 @@ function requestJoin(groupId: string) {
 
 function leaveVoice() {
   selectCaptureSource(null);
-  releaseViewerLock();
+  viewingWindows.value?.closeAll();
   const attempt = ++joinAttempt;
   const leavingGroupId = joinedGroupId.value ?? joiningGroupId.value;
   if (leavingGroupId !== null) {
@@ -1133,9 +1079,6 @@ function leaveVoice() {
   joinedGroupDetail.value = null;
   joiningGroupId.value = null;
   pendingSwitchGroupId.value = null;
-  stage.reset();
-  endStageDrag();
-  membersExpanded.value = false;
   viewerNotice.value = '';
   void refreshGroups(true, false);
 }
@@ -1183,98 +1126,34 @@ function updateOutputVolume(volume: number) {
 function remotePlaybackVolume(identity: string) {
   return Math.min(AUDIO_VOLUME_MAX, participantVolume(identity) * outputVolume.value);
 }
-function remoteScreenSharePlaybackVolume() {
+function remoteScreenSharePlaybackVolume(identity: string) {
+  if (mutedShares.value.includes(identity)) return 0;
   return Math.min(AUDIO_VOLUME_MAX, screenShareVolume.value * outputVolume.value);
 }
 
-function toggleEnlargedParticipant(identity: string) {
+function openParticipantViewer(identity: string) {
   viewerNotice.value = '';
-  if (stage.slots.includes(identity)) stage.remove(identity);
-  else stage.place(identity);
-  releaseViewerLock();
-  if (!enlargedIdentities.value.length) membersExpanded.value = false;
+  return viewingWindows.value?.open(identity) ?? false;
 }
 
-function toggleFocusedParticipant(identity: string) {
-  releaseViewerLock();
-  if (stage.focused !== identity) membersExpanded.value = false;
-  stage.toggleFocus(identity);
+function requestParticipantControl(identity: string) {
+  if (openParticipantViewer(identity)) void rtc.requestRemoteControl(identity);
 }
 
-function beginStageDrag(identity: string, event: DragEvent) {
-  if (focusedOnSelectedGroup.value || remoteControlIsActive(identity) || !event.dataTransfer) { event.preventDefault(); return; }
-  stageDrag.value = { identity, room: rtc.room };
-  event.dataTransfer.effectAllowed = 'move';
-  event.dataTransfer.setData('application/x-lycansync-stage', identity);
-  releaseViewerLock();
-}
-
-function endStageDrag() {
-  stageDrag.value = null;
-  stageDropSlot.value = null;
-}
-
-function moveStageParticipant(identity: string, target: number) {
-  if (!showingJoinedGroup.value || focusedOnSelectedGroup.value || remoteControlIsActive(identity)
-      || (stage.slots[target] && remoteControlIsActive(stage.slots[target]!))) return;
-  stage.move(identity, target);
-  releaseViewerLock();
-}
-
-function moveStageFromKeyboard(identity: string, index: number, offset: number) {
-  if ((offset === -1 && index % 2 === 0) || (offset === 1 && index % 2 === 1)) return;
-  moveStageParticipant(identity, index + offset);
-}
-
-function dragOverStage(slot: number, event: DragEvent) {
-  if (!stageDrag.value || stageDrag.value.room !== rtc.room || !showingJoinedGroup.value || focusedOnSelectedGroup.value) return;
-  if (stage.slots[slot] && remoteControlIsActive(stage.slots[slot]!)) return;
-  event.preventDefault();
-  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-  stageDropSlot.value = slot;
-}
-
-function dropOnStage(slot: number, event: DragEvent) {
-  const drag = stageDrag.value;
-  if (drag && drag.room === rtc.room && event.dataTransfer?.getData('application/x-lycansync-stage') === drag.identity) {
-    event.preventDefault();
-    moveStageParticipant(drag.identity, slot);
-  }
-  endStageDrag();
-}
-
-function toggleMembersExpanded() {
-  if (!membersExpanded.value) {
-    // 下方成员条展开时只占用聊天区空间，主观看区保持当前高度。
-    lockedViewerHeight.value = viewerGrid.value?.getBoundingClientRect().height ?? null;
-  }
-  membersExpanded.value = !membersExpanded.value;
-}
-
-function remeasureViewerHeight() {
-  if (!hasStage.value || !viewerGrid.value) return;
-  // 窗口变化后先让 flex 按当前展开状态重新排版，再锁定新的舞台高度。
-  lockedViewerHeight.value = null;
-  void nextTick(() => {
-    if (hasStage.value && viewerGrid.value) {
-      lockedViewerHeight.value = viewerGrid.value.getBoundingClientRect().height;
-    }
-  });
+function toggleSharedAudio(identity: string) {
+  mutedShares.value = mutedShares.value.includes(identity)
+    ? mutedShares.value.filter((current) => current !== identity) : [...mutedShares.value, identity];
+  remoteAudioTracks.value.filter((item) => item.participantIdentity === identity && item.source === Track.Source.ScreenShareAudio)
+    .forEach((item) => item.track.setVolume(listening.value ? remoteScreenSharePlaybackVolume(identity) : 0));
 }
 
 function previewGroup(groupId: string) {
   const changed = selectedGroupId.value !== groupId;
-  if (changed) releaseViewerLock();
   selectedGroupId.value = groupId;
   if (changed) selectedGroupDetail.value = null;
   if (changed) void refreshGroups();
   else void loadGroup(groupId);
   pendingSwitchGroupId.value = null;
-  if (changed) {
-    stage.focused = null;
-    endStageDrag();
-    membersExpanded.value = false;
-  }
   viewerNotice.value = '';
 }
 const diagnosticReport = useDiagnosticReport({
@@ -1282,8 +1161,7 @@ const diagnosticReport = useDiagnosticReport({
   settings: () => ({ quality: rtc.currentScreenShareQuality, customQuality: rtc.currentCustomScreenShareQuality,
     inputGain: inputGain.value, outputVolume: outputVolume.value,
     screenShareVolume: screenShareVolume.value, voiceVolumeBalance: voiceVolumeBalance.value,
-    ...audioProcessing, stageCount: enlargedIdentities.value.length,
-    focused: focusedOnSelectedGroup.value }),
+    ...audioProcessing, viewerCount: viewingWindows.value?.count ?? 0 }),
 });
 
 function participantListening(participant: Participant) {
@@ -1324,7 +1202,7 @@ function participantListening(participant: Participant) {
       远程输入尚未释放
       <button type="button" @click="rtc.retryRemoteControlCleanup">重试撤销</button>
     </div>
-    <div class="app-content" v-show="!settingsOpen" :inert="settingsOpen">
+    <div class="app-content" v-show="!settingsOpen && mainWindowVisible" :inert="settingsOpen">
     <div class="workspace" :inert="editorOpen || !!management">
       <nav class="group-rail" aria-label="群组">
         <div class="group-list">
@@ -1368,44 +1246,11 @@ function participantListening(participant: Participant) {
             </span>
           </div>
         </section>
-        <section v-if="showingJoinedGroup && groupParticipants.length > 0" class="voice-panel"
-          :class="{ 'has-sharing': hasStage, 'members-expanded': hasStage && membersExpanded && !focusedOnSelectedGroup, 'is-focused': focusedOnSelectedGroup }" aria-label="当前语音成员">
-          <div class="voice-heading">
-            <span><AudioLines :size="15" />语音中</span>
-            <span class="voice-heading-actions">
-              <button v-if="focusedOnSelectedGroup" type="button" class="viewer-return" @click="stage.focused = null; releaseViewerLock()">返回多人舞台</button>
-              <small data-testid="member-count">{{ groupParticipants.length }} 人 · {{ sharingParticipants.length }} / 8 路共享</small>
-            </span>
+        <section v-if="showingJoinedGroup && groupParticipants.length > 0" class="voice-panel" aria-label="当前语音成员">
+          <div class="voice-heading"><span><AudioLines :size="15" />语音中</span>
+            <small data-testid="member-count">{{ groupParticipants.length }} 人 · {{ sharingParticipants.length }} / 8 路共享</small>
           </div>
-          <div v-if="hasStage" ref="viewerGrid" class="viewer-grid" :class="`viewer-count-${displayedSlots.length}`"
-            :style="lockedViewerHeight === null ? undefined : { flex: `0 0 ${lockedViewerHeight}px` }">
-            <div v-for="{ participant, index } in displayedSlots" :key="index" class="stage-slot"
-              :class="{ 'is-drop-target': stageDropSlot === index }" :data-stage-slot="index"
-              @dragover="dragOverStage(index, $event)" @dragleave="stageDropSlot === index && (stageDropSlot = null)"
-              @drop="dropOnStage(index, $event)">
-            <ParticipantCard v-if="participant" :key="participant.identity" :participant="participant"
-              :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"
-              :playback-volume="participantVolume(participant.identity)" :input-gain="inputGain" :output-volume="outputVolume"
-              variant="viewer"
-              :focused="focusedOnSelectedGroup" :stage-draggable="!focusedOnSelectedGroup && !remoteControlIsActive(participant.identity)"
-              @remove="toggleEnlargedParticipant(participant.identity)"
-              @drag-start="beginStageDrag(participant.identity, $event)" @drag-end="endStageDrag"
-              @move="moveStageFromKeyboard(participant.identity, index, $event)"
-              :remote-control-available="remoteControlCanRequest(participant.identity)"
-              :remote-control-unavailable="remoteControlShare(participant.identity)?.kind === 'window'"
-              :remote-control-pending="remoteControlIsPending(participant.identity)"
-              :remote-control-active="remoteControlIsActive(participant.identity)"
-              :remote-control-name="previewParticipantName(participant.identity, participant.name || participant.identity)"
-              @focus="toggleFocusedParticipant(participant.identity)" @notice="viewerNotice = $event"
-              @request-control="rtc.requestRemoteControl(participant.identity)" @cancel-control="rtc.cancelPendingRemoteControl(participant.identity)" @stop-control="rtc.exitRemoteControl"
-              @remote-input="rtc.sendRemoteControlInput"
-              @toggle-audio="toggleParticipantAudio(participant.identity)" @volume-change="updateParticipantVolume(participant.identity, $event)"
-              @input-gain-change="updateInputGain" @output-volume-change="updateOutputVolume"
-              @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />
-              <div v-else class="stage-empty">{{ stageDrag ? '拖到这里放置画面' : '空闲位置' }}</div>
-            </div>
-          </div>
-          <div v-else class="participant-grid">
+          <div class="participant-grid">
             <ParticipantCard v-for="participant in groupParticipants" :key="participant.identity" :participant="participant"
               :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"
               :remote-control-available="remoteControlCanRequest(participant.identity)"
@@ -1414,37 +1259,29 @@ function participantListening(participant: Participant) {
               :remote-control-active="remoteControlIsActive(participant.identity)"
               :remote-control-name="previewParticipantName(participant.identity, participant.name || participant.identity)"
               :playback-volume="participantVolume(participant.identity)" :input-gain="inputGain" :output-volume="outputVolume"
-              @select="toggleEnlargedParticipant(participant.identity)"
-              @request-control="rtc.requestRemoteControl(participant.identity)" @cancel-control="rtc.cancelPendingRemoteControl(participant.identity)" @stop-control="rtc.exitRemoteControl"
-              @remote-input="rtc.sendRemoteControlInput"
+              :share-audio="Boolean(participant.getTrackPublication(Track.Source.ScreenShareAudio)?.track)"
+              :share-muted="mutedShares.includes(participant.identity)" :share-audio-listening="listening" @toggle-share-audio="toggleSharedAudio(participant.identity)"
+              @select="openParticipantViewer(participant.identity)"
+              @request-control="requestParticipantControl(participant.identity)" @cancel-control="rtc.cancelPendingRemoteControl(participant.identity)" @stop-control="rtc.exitRemoteControl"
               @toggle-audio="toggleParticipantAudio(participant.identity)" @volume-change="updateParticipantVolume(participant.identity, $event)"
               @input-gain-change="updateInputGain" @output-volume-change="updateOutputVolume"
               @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />
           </div>
-          <div v-if="hasStage && !focusedOnSelectedGroup" class="member-strip-divider">
-            <button type="button" :aria-label="membersExpanded ? '收起其他成员' : '展开其他成员'"
-              class="icon-button member-strip-toggle" :class="{ 'is-expanded': membersExpanded }" @click="toggleMembersExpanded">
-              <ChevronDown :size="17" class="toggle-chevron" />
-            </button>
-          </div>
-          <div v-if="hasStage && membersExpanded && !focusedOnSelectedGroup" class="filmstrip-row">
-            <button v-if="filmstripPageCount > 1" type="button" class="filmstrip-page-button" aria-label="上一页成员"
-              :disabled="filmstripPage === 0" @click="filmstripPage--"><ChevronLeft :size="17" /></button>
-            <div class="member-filmstrip" data-testid="member-filmstrip">
-              <ParticipantCard v-for="participant in filmstripParticipants" :key="participant.identity" :participant="participant"
-                :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"
-                :playback-volume="participantVolume(participant.identity)" :input-gain="inputGain" :output-volume="outputVolume"
-                variant="thumbnail" :selected="enlargedIdentities.includes(participant.identity)"
-                @select="toggleEnlargedParticipant(participant.identity)" @toggle-audio="toggleParticipantAudio(participant.identity)"
-                @volume-change="updateParticipantVolume(participant.identity, $event)" @toggle-microphone="toggleMicrophone"
-                @input-gain-change="updateInputGain" @output-volume-change="updateOutputVolume" @toggle-listening="toggleListening" />
-            </div>
-            <button v-if="filmstripPageCount > 1" type="button" class="filmstrip-page-button" aria-label="下一页成员"
-              :disabled="filmstripPage >= filmstripPageCount - 1" @click="filmstripPage++"><ChevronRight :size="17" /></button>
-          </div>
         </section>
-        <GroupChat v-show="!focusedOnSelectedGroup" :key="selectedGroup.id" :group="selectedGroup"
-          :members="selectedGroupDetail?.members ?? []" :user="user" />
+        <div class="group-conversation">
+          <GroupChat :key="selectedGroup.id" :group="selectedGroup"
+            :members="selectedGroupDetail?.members ?? []" :user="user" />
+          <GroupMembersPanel :key="selectedGroup.id" :members="orderedMembers" :user="user" :loading="groupLoading"
+            :member-count="selectedGroupDetail?.memberCount"
+            :error="groupError" :connection-lost="presenceConnectionLost" :status="memberOnlineStatus"
+            :status-label="memberStatusLabel" :activity="memberActivity" />
+        </div>
+      </main>
+      <main v-else class="group-main group-empty">
+        <p v-if="groupError" role="alert">{{ groupError }}</p>
+        <p v-else>还没有群组，点击左侧的 + 创建一个开黑小队。</p>
+      </main>
+      <div class="workspace-footer">
         <Transition enter-active-class="callbar-enter-active">
           <div v-if="callbarGroup || joiningGroupId" class="callbar-reveal" :class="{ 'is-leaving': callbarLeaving }" data-testid="callbar">
             <div class="callbar-content">
@@ -1475,47 +1312,11 @@ function participantListening(participant: Participant) {
             </div>
           </div>
         </Transition>
-      </main>
-      <main v-else class="group-main group-empty">
-        <p v-if="groupError" role="alert">{{ groupError }}</p>
-        <p v-else>还没有群组，点击左侧的 + 创建一个开黑小队。</p>
-      </main>
-      <aside class="members-panel" aria-label="群组成员">
-        <section class="members-directory">
-          <template v-if="selectedGroup">
-            <header class="members-header"><strong>成员<span v-if="selectedGroupDetail"> · {{ selectedGroupDetail.memberCount }}</span></strong>
-              <button ref="memberSearchButton" type="button" class="member-search-toggle" aria-label="搜索群组成员"
-                :aria-expanded="memberSearchOpen" aria-controls="group-member-search" @click="toggleMemberSearch"><Search :size="16" /></button>
-            </header>
-            <div v-if="memberSearchOpen" id="group-member-search" class="member-search">
-              <input ref="memberSearchInput" v-model="memberSearch" type="search" aria-label="按名称搜索成员"
-                placeholder="搜索成员名称" @keydown.esc.stop="toggleMemberSearch" />
-            </div>
-            <div class="members-list">
-              <p v-if="presenceConnectionLost" class="group-hint" role="status">成员状态同步中断，当前显示可能已过期。</p>
-              <p v-if="groupError" role="alert" class="group-error">{{ groupError }}</p>
-              <p v-else-if="groupLoading" class="group-hint">正在读取成员…</p>
-              <p v-if="memberSearch.trim() && !groupLoading && !groupError && filteredMembers.length === 0" class="group-hint" role="status">没有找到匹配的成员</p>
-              <div v-for="member in filteredMembers" :key="member.userId" class="group-member-row"
-                :class="{ 'is-offline': memberOnlineStatus(member) === 'OFFLINE' }">
-                <span class="group-member-avatar" :aria-label="memberStatusLabel(member)">
-                  <img v-if="member.userId === user.id ? user.avatar : member.avatar" :src="member.userId === user.id ? user.avatar : member.avatar" alt="" />
-                  <span v-else class="group-member-initial">{{ member.nickname.slice(0, 1) }}</span>
-                  <span v-if="memberOnlineStatus(member) !== 'OFFLINE'" class="status-dot" :class="memberOnlineStatus(member)" />
-                </span>
-                <span class="group-member-info">
-                  <span class="group-member-name"><span>{{ member.userId === user.id ? user.nickname : member.nickname }}</span><Crown v-if="member.role === 'OWNER'" :size="13" class="group-member-role" role="img" aria-label="群主" /></span>
-                  <span v-if="memberActivity(member)" class="member-activity" :title="memberActivity(member)?.text"><Music2 v-if="memberActivity(member)?.type === 'MUSIC'" :size="12" aria-hidden="true" /><Gamepad2 v-else :size="12" aria-hidden="true" /><span>{{ memberActivity(member)?.text }}</span></span>
-                </span>
-              </div>
-            </div>
-          </template>
-        </section>
         <PersonalStatusCard :user="user" :status="currentPresenceStatus" :status-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]"
           :activity-status="personalActivityStatus">
           <IconButton label="语音与音频设置" @click="openSettings('audio', $event)"><Settings :size="19" /></IconButton>
         </PersonalStatusCard>
-      </aside>
+      </div>
     </div>
     <GroupEntryDialog v-if="editorOpen" :group="editingGroup ?? undefined" :create-group="createGroupFromDialog"
       @joined="joinedFromCode" @close="closeGroupEditor" />
@@ -1528,8 +1329,6 @@ function participantListening(participant: Participant) {
       :preferences="audioPreferences" :rtc="rtc" :microphone-test="microphoneTest" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
       :activity="currentActivity" :activity-status="personalActivityStatus" :show-activity="showActivity" :activity-error="activityVisibilityError"
       :activity-mappings="activityMappings"
-      :stage-auto-fill="stagePreferences.autoFill.value" :stage-preference-error="stagePreferences.error.value"
-      @stage-auto-fill="stagePreferences.setAutoFill"
       @activity-visibility="setShowActivity"
       :save-profile="saveProfile" @close="closeSettings" @logout="emit('logout')" />
     <ScreenSharePicker v-if="captureRequest" ref="capturePicker" :sources="captureRequest.sources"
@@ -1539,10 +1338,14 @@ function participantListening(participant: Participant) {
       :audio-failed="captureAudioCapabilityFailed" :loading="nativeSourceLoading" :error="nativeSourceError" :notice="captureSourceNotice"
       @choose="chooseCaptureSource" @refresh-thumbnails="refreshVisibleSourceThumbnails"
       @close="selectCaptureSource(null)" @confirm="selectCaptureSource(selectedCaptureSourceId)" />
+    <ScreenShareWindows ref="viewingWindows" :rtc="rtc" :group-name="joinedGroup?.name ?? ''"
+      :avatar="participantAvatar" :muted-shares="mutedShares"
+      :input-blocked="viewerInputBlocked"
+      @notice="viewerNotice = $event" @toggle-share-audio="toggleSharedAudio" />
     <RemoteAudio v-for="item in remoteAudioTracks" :key="item.track.sid" :track="item.track"
       :context="rtc.playbackContext" :balance="voiceVolumeBalance && item.source === Track.Source.Microphone"
       @balance-error="audioPreferences.setVoiceVolumeBalance(false); viewerNotice = '成员语音音量平衡未能运行，已关闭该功能，语音继续按原音量播放。'"
       :volume="listening ? (item.source === Track.Source.ScreenShareAudio
-        ? remoteScreenSharePlaybackVolume() : remotePlaybackVolume(item.participantIdentity)) : 0" />
+        ? remoteScreenSharePlaybackVolume(item.participantIdentity) : remotePlaybackVolume(item.participantIdentity)) : 0" />
   </div>
 </template>

@@ -1,11 +1,17 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { observeLocalScreenPreview } from './localScreenPreview';
 
-afterEach(() => vi.unstubAllGlobals());
-
 function preview() {
-  const page = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+  let intersection: IntersectionObserverCallback;
+  const disconnect = vi.fn();
+  const observerWindow = Object.assign(new EventTarget(), { IntersectionObserver: class {
+    constructor(callback: IntersectionObserverCallback) { intersection = callback; }
+    observe = vi.fn();
+    disconnect = disconnect;
+  } });
+  const page = Object.assign(new EventTarget(), { visibilityState: 'visible', defaultView: observerWindow });
   const element = Object.assign(new EventTarget(), {
+    ownerDocument: page,
     paused: true,
     getClientRects: () => [Object.freeze({})],
     play: vi.fn((): Promise<void> => {
@@ -16,14 +22,6 @@ function preview() {
     pause: vi.fn(() => { element.paused = true; }),
     srcObject: Object.freeze({}),
   });
-  let intersection: IntersectionObserverCallback;
-  const disconnect = vi.fn();
-  vi.stubGlobal('document', page);
-  vi.stubGlobal('IntersectionObserver', class {
-    constructor(callback: IntersectionObserverCallback) { intersection = callback; }
-    observe = vi.fn();
-    disconnect = disconnect;
-  });
   const error = vi.fn();
   const stop = observeLocalScreenPreview(element as unknown as HTMLVideoElement, error);
   function visible(value: boolean) {
@@ -33,8 +31,22 @@ function preview() {
     page.visibilityState = value ? 'hidden' : 'visible';
     page.dispatchEvent(new Event('visibilitychange'));
   }
-  return { element, page, stop, visible, background, disconnect, error };
+  return { element, page, observerWindow, stop, visible, background, disconnect, error };
 }
+
+it('本地预览按自己的文档播放，辅助窗关闭只暂停本元素且可重复清理', () => {
+  const main = preview(), auxiliary = preview();
+  main.background(true);
+  expect(main.element.paused).toBe(true);
+  expect(auxiliary.element.paused).toBe(false);
+  auxiliary.observerWindow.dispatchEvent(new Event('pagehide'));
+  expect(auxiliary.element.paused).toBe(true);
+  expect(auxiliary.disconnect).toHaveBeenCalledOnce();
+  auxiliary.stop(); auxiliary.background(false); auxiliary.visible(true);
+  expect(auxiliary.element.play).toHaveBeenCalledOnce();
+  expect(auxiliary.element.pause).toHaveBeenCalledOnce();
+  main.stop();
+});
 
 it('隐藏和恢复本地预览只暂停和播放原元素，保留采集流', () => {
   const state = preview();

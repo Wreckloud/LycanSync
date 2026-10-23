@@ -105,8 +105,16 @@ async function refresh() {
     const currentIds = new Set(messages.value.map((message) => message.id));
     const snapshotIds = new Set(page.messages.map((message) => message.id));
     const prefixEnd = latestId ? messages.value.findIndex((message) => message.id === latestId) + 1 : 0;
-    const added = page.messages.filter((message) => !currentIds.has(message.id)).length;
-    messages.value = [...messages.value.slice(0, prefixEnd), ...page.messages,
+    const prefix = messages.value.slice(0, prefixEnd);
+    const known = new Set(prefix.map((message) => message.id));
+    // 游标之前的重复响应不能再次插入，游标之后仍按快照顺序纠正本机消息的位置。
+    const orderedPage = page.messages.filter((message) => {
+      if (known.has(message.id)) return false;
+      known.add(message.id);
+      return true;
+    });
+    const added = orderedPage.filter((message) => !currentIds.has(message.id)).length;
+    messages.value = [...prefix, ...orderedPage,
       ...messages.value.slice(prefixEnd).filter((message) => !snapshotIds.has(message.id))];
     latestFetchedMessageId = page.messages.at(-1)?.id ?? latestId;
     if (added && (initial || atBottom)) void scrollToBottom(initial ? 'auto' : 'smooth', initial);
@@ -450,7 +458,7 @@ onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange);
 });
 onScopeDispose(() => {
-  // App 按群 ID 创建独立实例；切群统一在销毁处取消，聚焦共享只隐藏此实例。
+  // App 按群 ID 创建独立实例；切群统一在销毁处取消，观看布局不重建群聊。
   disposed = true;
   pollRequest?.abort();
   historyRequest?.abort();

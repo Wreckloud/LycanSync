@@ -60,6 +60,10 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
       runStartupUpdate: async () => ({ phase: 'ready', supported: false, version: 'test', message: '测试不检查更新' } satisfies StartupUpdateState),
       onUpdateState: () => () => undefined,
       minimize: () => undefined,
+      getWindowVisibility: async () => true,
+      onWindowVisibility: () => () => undefined,
+      onViewerClosed: () => () => undefined,
+      focusViewerWindow: async () => undefined,
       isMaximized: async () => false,
       setWindowLayout: async () => undefined,
       getProcessMetrics: async () => ({ cpuPercent: 0, memoryMb: 0 }),
@@ -500,6 +504,22 @@ test('切换群组时取消旧群组的历史与轮询请求，迟到响应不�
 
 test('加号多选按原始字节和顺序发送，图片作为文件并只在第一条附带文字', async ({ page }) => {
   await mockChatShell(page);
+  // 流式 fetch 在路由拦截器中没有 postData；仅旁读本用例两个小文件的流副本。
+  await page.addInitScript(() => {
+    const bodies: Record<string, number[]> = {};
+    Object.assign(window, { __chatUploadBodies: bodies });
+    const originalFetch = window.fetch;
+    window.fetch = async (input, init) => {
+      if (String(input).endsWith('/files') && init?.body instanceof ReadableStream) {
+        const [forward, copy] = init.body.tee();
+        const bytes = new Uint8Array(await new Response(copy).arrayBuffer());
+        if (bytes.byteLength > 1024) throw new Error('测试只允许旁读小文件');
+        bodies[new Headers(init.headers).get('X-Upload-Id')!] = [...bytes];
+        init = { ...init, body: forward };
+      }
+      return originalFetch(input, init);
+    };
+  });
   const originalPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
   const uploaded: { name: string; bytes: Buffer; content: string }[] = [];
   await page.route('**/api/groups**', async (route) => {
@@ -515,9 +535,11 @@ test('加号多选按原始字节和顺序发送，图片作为文件并只在�
       const headers = await request.allHeaders();
       const name = Buffer.from(headers['x-file-name'], 'base64url').toString('utf8');
       const content = Buffer.from(headers['x-message-content'] ?? '', 'base64url').toString('utf8');
-      uploaded.push({ name, bytes: request.postDataBuffer()!, content });
+      const bytes = Buffer.from(await page.evaluate((id) =>
+        (window as unknown as { __chatUploadBodies: Record<string, number[]> }).__chatUploadBodies[id]!, String(headers['x-upload-id'])));
+      uploaded.push({ name, bytes, content });
       const message = fileMessage(`F${uploaded.length}`, String(headers['x-upload-id']), name, content);
-      message.attachment!.byteSize = request.postDataBuffer()!.length;
+      message.attachment!.byteSize = bytes.length;
       return route.fulfill({ status: 201, json: message });
     }
     return route.fulfill({ status: 404 });
@@ -570,7 +592,7 @@ test('批量文件失败后重试只再次发送失败项', async ({ page }) => 
     { name: 'second.bin', mimeType: 'application/octet-stream', buffer: Buffer.from([2]) },
   ]);
   await page.getByRole('button', { name: '发送消息' }).click();
-  await expect(page.getByText('上传失败')).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: '上传失败' })).toBeVisible();
   expect(requests.get('first.bin')).toBe(1);
   expect(requests.get('second.bin')).toBe(1);
   await page.getByRole('button', { name: '发送消息' }).click();

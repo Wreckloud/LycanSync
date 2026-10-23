@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { AppWindow, Fullscreen, GripVertical, HeadphoneOff, Headphones, Maximize2, MicOff, Minimize2, Monitor, X } from '@lucide/vue';
+import { Fullscreen, HeadphoneOff, Headphones, Maximize2, MicOff, MousePointer2 } from '@lucide/vue';
 import { Track, VideoQuality, type Participant, type RemoteTrackPublication } from 'livekit-client';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, normalizeAudioVolume } from '../rtc/audioPreferences';
 import VoiceLevelMic from './VoiceLevelMic.vue';
@@ -15,10 +15,11 @@ const props = withDefaults(defineProps<{
   isListening: boolean | null;
   localMicrophoneEnabled?: boolean;
   avatar?: string;
-  variant?: 'card' | 'viewer' | 'thumbnail';
-  selected?: boolean;
-  focused?: boolean;
-  stageDraggable?: boolean;
+  variant?: 'card' | 'viewer';
+  inputBlocked?: boolean;
+  shareAudio?: boolean;
+  shareMuted?: boolean;
+  shareAudioListening?: boolean;
   playbackVolume?: number;
   inputGain?: number;
   outputVolume?: number;
@@ -27,14 +28,10 @@ const props = withDefaults(defineProps<{
   remoteControlActive?: boolean;
   remoteControlName?: string;
   remoteControlUnavailable?: boolean;
-}>(), { variant: 'card', selected: false, playbackVolume: 1, inputGain: 1, outputVolume: 1 });
+}>(), { variant: 'card', playbackVolume: 1, inputGain: 1, outputVolume: 1 });
 const emit = defineEmits<{
   select: [];
-  focus: [];
-  remove: [];
-  dragStart: [event: DragEvent];
-  dragEnd: [];
-  move: [offset: number];
+  toggleShareAudio: [];
   notice: [message: string];
   toggleAudio: [];
   volumeChange: [volume: number];
@@ -49,7 +46,10 @@ const emit = defineEmits<{
 }>();
 const videoElement = ref<HTMLVideoElement | null>(null);
 const cardElement = ref<HTMLElement | null>(null);
-const windowFullscreen = ref(false);
+const inputArmed = ref(false);
+const ownerDocument = computed(() => cardElement.value?.ownerDocument);
+const remoteInputAllowed = computed(() => props.variant === 'viewer' && props.remoteControlActive && !props.inputBlocked);
+let ownerWindow: Window | null = null;
 const VOLUME_DRAGGER_WIDTH = 28;
 const VOLUME_DRAGGER_HEIGHT = 104;
 const VOLUME_DRAGGER_GAP = 6;
@@ -104,7 +104,7 @@ const remoteAudioLabel = computed(() => {
   return `${media.value.name}${microphoneState}，接收音量${playbackPercent.value}%，滚轮或按住上下拖动，点击取消收听`;
 });
 const selectable = computed(() => props.variant !== 'viewer' && media.value.sharing);
-const fullscreenAvailable = document.fullscreenEnabled;
+const fullscreenAvailable = computed(() => Boolean(ownerDocument.value?.fullscreenEnabled || ownerDocument.value?.defaultView?.lycanViewerWindow));
 
 watch([videoElement, () => media.value.track, () => media.value.publication, () => props.isLocal], ([element, track, publication, isLocal], _, onCleanup) => {
   if (!element || !track) return;
@@ -131,53 +131,15 @@ watch([videoElement, () => media.value.track, () => media.value.publication, () 
 
 async function openFullscreen() {
   const card = cardElement.value;
-  if (!card?.requestFullscreen) {
-    emit('notice', '当前浏览器不支持单路全屏观看。');
-    return;
-  }
   try {
-    await card.requestFullscreen();
-    if (!props.focused) emit('focus');
-  } catch {
-    emit('notice', '无法进入全屏，请再次点击或检查浏览器权限。');
-  }
+    releaseHeldRemoteInputs();
+    const bridge = card?.ownerDocument.defaultView?.lycanViewerWindow;
+    if (bridge) await bridge.toggleFullscreen();
+    else if (card?.ownerDocument.fullscreenElement) await card.ownerDocument.exitFullscreen();
+    else if (card?.requestFullscreen) await card.requestFullscreen();
+    else emit('notice', '当前浏览器不支持单路全屏观看。');
+  } catch { emit('notice', '无法切换全屏，请再次点击或检查浏览器权限。'); }
 }
-
-function toggleWindowFullscreen() {
-  windowFullscreen.value = !windowFullscreen.value;
-  if (windowFullscreen.value && !props.focused) emit('focus');
-}
-
-async function toggleFocusedView() {
-  if (props.focused) {
-    windowFullscreen.value = false;
-    if (document.fullscreenElement === cardElement.value) {
-      try { await document.exitFullscreen(); }
-      catch { emit('notice', '无法退出全屏，请使用 Esc 后重试。'); return; }
-    }
-  }
-  emit('focus');
-}
-
-function moveStageFromKeyboard(event: KeyboardEvent) {
-  if (!props.stageDraggable || !event.altKey) return;
-  const offset = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -2, ArrowDown: 2 }[event.key];
-  if (offset === undefined) return;
-  event.preventDefault();
-  event.stopPropagation();
-  emit('move', offset);
-}
-
-function exitWindowFullscreen(event: KeyboardEvent) {
-  if (!windowFullscreen.value || document.fullscreenElement || props.remoteControlActive) return;
-  event.preventDefault();
-  event.stopPropagation();
-  windowFullscreen.value = false;
-}
-
-watch([() => props.variant, () => media.value.sharing, () => props.focused], ([variant, sharing, focused]) => {
-  if (variant !== 'viewer' || !sharing || !focused) windowFullscreen.value = false;
-});
 
 function selectFromKeyboard(event: KeyboardEvent) {
   if (!selectable.value || (event.key !== 'Enter' && event.key !== ' ')) return;
@@ -207,6 +169,8 @@ function adjustOutputVolume(event: WheelEvent) {
 
 function beginVolumeDrag(event: PointerEvent, kind: VolumeDragKind, volume: number) {
   if (event.button !== 0 || !media.value.microphone) return;
+  const view = (event.currentTarget as HTMLElement).ownerDocument.defaultView;
+  if (!view) return;
   const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
   volumeDrag.value = {
     kind,
@@ -215,7 +179,7 @@ function beginVolumeDrag(event: PointerEvent, kind: VolumeDragKind, volume: numb
     startVolume: volume,
     currentVolume: volume,
     moved: false,
-    left: Math.min(window.innerWidth - VOLUME_DRAGGER_WIDTH - 8,
+    left: Math.min(view.innerWidth - VOLUME_DRAGGER_WIDTH - 8,
       Math.max(8, bounds.left + bounds.width / 2 - VOLUME_DRAGGER_WIDTH / 2)),
     top: Math.max(8, bounds.top - VOLUME_DRAGGER_HEIGHT - VOLUME_DRAGGER_GAP),
   };
@@ -259,33 +223,36 @@ function toggleRemoteAudioFromCard() {
 }
 
 function handleRemoteClick(event: MouseEvent) {
-  if (props.remoteControlActive) { event.preventDefault(); event.stopPropagation(); return; }
+  if (remoteInputAllowed.value) { event.preventDefault(); event.stopPropagation(); return; }
   if (selectable.value) emit('select');
 }
 
-function sendRemotePointer(event: PointerEvent) {
-  if (!props.remoteControlActive || !videoElement.value) return null;
+function sendRemotePointer(event: PointerEvent, activate = false) {
+  if (!remoteInputAllowed.value || (!inputArmed.value && !activate) || !videoElement.value) return null;
   const bounds = videoElement.value.getBoundingClientRect();
   const mapped = mapRemotePointerToScreen(event.clientX, event.clientY, bounds,
     { width: videoElement.value.videoWidth, height: videoElement.value.videoHeight });
-  if (mapped) emit('remoteInput', { kind: 'move', ...mapped });
+  if (mapped) {
+    if (activate) inputArmed.value = true;
+    emit('remoteInput', { kind: 'move', ...mapped });
+  }
   return mapped;
 }
 
 function remotePointerDown(event: PointerEvent) {
-  if (!props.remoteControlActive) return;
+  if (!remoteInputAllowed.value || (event.button !== 0 && event.button !== 2)) return;
   event.preventDefault();
   event.stopPropagation();
+  const mapped = sendRemotePointer(event, true);
+  if (!mapped) { releaseHeldRemoteInputs(); return; }
   (event.currentTarget as HTMLElement).focus();
-  const mapped = sendRemotePointer(event);
-  if (!mapped || (event.button !== 0 && event.button !== 2)) return;
   const button: 'left' | 'right' = event.button === 0 ? 'left' : 'right';
   heldRemoteInputs.pressButton(button, mapped.x, mapped.y).forEach((input) => emit('remoteInput', input));
   (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
 }
 
 function remotePointerMove(event: PointerEvent) {
-  if (!props.remoteControlActive) return;
+  if (!remoteInputAllowed.value || !inputArmed.value) return;
   event.preventDefault();
   event.stopPropagation();
   const mapped = sendRemotePointer(event);
@@ -293,7 +260,7 @@ function remotePointerMove(event: PointerEvent) {
 }
 
 function remotePointerUp(event: PointerEvent) {
-  if (!props.remoteControlActive) return;
+  if (!remoteInputAllowed.value || !inputArmed.value) return;
   event.preventDefault();
   event.stopPropagation();
   const button = event.button === 0 ? 'left' : event.button === 2 ? 'right' : null;
@@ -303,20 +270,22 @@ function remotePointerUp(event: PointerEvent) {
 }
 
 function remoteWheel(event: WheelEvent) {
-  if (!props.remoteControlActive) return;
+  if (!remoteInputAllowed.value || !inputArmed.value) return;
   event.preventDefault();
   event.stopPropagation();
   emit('remoteInput', { kind: 'wheel', delta: Math.max(-1200, Math.min(1200, Math.round(-event.deltaY))) });
 }
 
 function remoteKey(event: KeyboardEvent, pressed: boolean) {
-  if (!props.remoteControlActive) {
-    if (pressed) selectFromKeyboard(event);
+  if (props.variant === 'viewer' && props.remoteControlActive && event.code === 'Escape' && pressed) {
+    event.preventDefault(); event.stopPropagation(); emit('stopControl'); return;
+  }
+  if (!remoteInputAllowed.value || !inputArmed.value) {
+    if (pressed && props.variant === 'card') selectFromKeyboard(event);
     return;
   }
   event.preventDefault();
   event.stopPropagation();
-  if (event.code === 'Escape' && pressed) { emit('stopControl'); return; }
   const key = remoteKeyFromCode(event.code);
   if (!key) return;
   const inputs = pressed ? heldRemoteInputs.pressKey(event.code, key) : heldRemoteInputs.releaseKey(event.code);
@@ -324,39 +293,39 @@ function remoteKey(event: KeyboardEvent, pressed: boolean) {
 }
 
 function releaseHeldRemoteInputs() {
+  inputArmed.value = false;
   heldRemoteInputs.releaseAll().forEach((input) => emit('remoteInput', input));
 }
 
-watch(() => props.remoteControlActive, (active) => { if (!active) releaseHeldRemoteInputs(); });
-onMounted(() => window.addEventListener('blur', releaseHeldRemoteInputs));
+watch(remoteInputAllowed, (allowed) => { if (!allowed) releaseHeldRemoteInputs(); }, { flush: 'sync' });
+onMounted(() => {
+  ownerWindow = cardElement.value?.ownerDocument.defaultView ?? null;
+  ownerWindow?.addEventListener('blur', releaseHeldRemoteInputs);
+  ownerWindow?.addEventListener('lycan-viewer-disarm', releaseHeldRemoteInputs);
+});
 onBeforeUnmount(() => {
-  window.removeEventListener('blur', releaseHeldRemoteInputs);
+  ownerWindow?.removeEventListener('blur', releaseHeldRemoteInputs);
+  ownerWindow?.removeEventListener('lycan-viewer-disarm', releaseHeldRemoteInputs);
   releaseHeldRemoteInputs();
 });
 </script>
 
 <template>
-  <article ref="cardElement" class="participant-card" :class="[`is-${variant}`, { 'is-speaking': media.speaking, 'is-selected-viewer': selected, 'is-window-fullscreen': windowFullscreen }]"
-    @keydown.esc="exitWindowFullscreen"
-    :data-testid="variant === 'viewer' && media.sharing ? 'viewer-screen' : variant === 'thumbnail' ? 'member-thumbnail' : 'participant-card'">
-    <div class="participant-media" :class="{ 'is-selectable': selectable, 'is-remote-control': remoteControlActive }"
-      :role="selectable ? 'button' : undefined" :tabindex="remoteControlActive ? 0 : selectable ? 0 : undefined"
-      :aria-label="selectable ? (selected ? '从主观看区移除' : '放大') + media.name + '的共享画面' : undefined"
-      :data-select-hint="selectable ? selected ? '从主观看区移除' : '点击放大观看' : undefined"
-      @click="handleRemoteClick" @dblclick="variant === 'viewer' && media.sharing && !remoteControlActive && toggleFocusedView()"
+  <article ref="cardElement" class="participant-card" :class="[`is-${variant}`, { 'is-speaking': variant === 'card' && media.speaking }]"
+    :data-testid="variant === 'viewer' ? 'viewer-screen' : 'participant-card'">
+    <div class="participant-media" :class="{ 'is-selectable': selectable, 'is-remote-control': remoteInputAllowed }"
+      :role="selectable ? 'button' : undefined" :tabindex="remoteInputAllowed || selectable ? 0 : undefined"
+      :aria-label="selectable ? '独立观看' + media.name + '的共享画面' : undefined"
+      :data-select-hint="selectable ? '打开独立观看窗口' : undefined"
+      @click="handleRemoteClick"
       @keydown="remoteKey($event, true)" @keyup="remoteKey($event, false)"
       @blur="releaseHeldRemoteInputs"
       @pointerdown="remotePointerDown" @pointermove="remotePointerMove" @pointerup="remotePointerUp"
       @pointercancel="releaseHeldRemoteInputs" @wheel="remoteWheel"
       @contextmenu="remoteControlActive && $event.preventDefault()">
       <template v-if="media.sharing">
-        <div v-if="variant === 'thumbnail' && selected" class="selected-screen-preview" aria-hidden="true">
-          <img v-if="avatar" :src="avatar" alt="" /><Monitor v-else :size="20" />
-        </div>
-        <template v-else>
-          <video ref="videoElement" autoplay muted playsinline :aria-label="media.name + '的共享画面'" />
-          <span v-if="!media.track || media.muted" class="video-placeholder">等待共享画面…</span>
-        </template>
+        <video ref="videoElement" autoplay muted playsinline :aria-label="media.name + '的共享画面'" />
+        <span v-if="!media.track || media.muted" class="video-placeholder">等待共享画面…</span>
       </template>
       <div v-else class="large-avatar" aria-hidden="true">
         <img v-if="avatar" :src="avatar" alt="" />
@@ -364,38 +333,25 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <div class="participant-meta">
-      <strong>{{ media.name }}{{ isLocal ? '（你）' : '' }}</strong>
-      <span v-if="variant === 'viewer' && media.sharing" class="viewer-actions">
-        <button v-if="stageDraggable" type="button" class="viewer-action stage-drag-handle" draggable="true"
-          :aria-label="'拖动排列' + media.name + '的共享画面'"
-          aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown"
-          @dragstart="emit('dragStart', $event)" @dragend="emit('dragEnd')" @keydown="moveStageFromKeyboard">
-          <GripVertical :size="16" aria-hidden="true" />
-        </button>
-        <button type="button" class="viewer-action" :disabled="remoteControlActive"
-          :aria-label="(focused ? '返回多人舞台' : '单路观看') + media.name + '的共享画面'" @click="toggleFocusedView">
-          <Minimize2 v-if="focused" :size="16" aria-hidden="true" /><Maximize2 v-else :size="16" aria-hidden="true" />
-        </button>
-        <button type="button" class="viewer-action" :aria-label="'全屏观看' + media.name + '的共享画面'"
-          data-viewer-tooltip="系统全屏"
-          :disabled="!media.track || media.muted || !fullscreenAvailable" @click="openFullscreen"><Fullscreen :size="16" aria-hidden="true" /></button>
-        <button type="button" class="viewer-action" :class="{ 'is-active': windowFullscreen }"
-          :aria-label="(windowFullscreen ? '退出窗口全屏观看' : '窗口全屏观看') + media.name + '的共享画面'"
-          :data-viewer-tooltip="windowFullscreen ? '退出窗口全屏' : '窗口全屏'"
-          :disabled="!windowFullscreen && (!media.track || media.muted)" @click="toggleWindowFullscreen">
-          <Minimize2 v-if="windowFullscreen" :size="16" aria-hidden="true" /><AppWindow v-else :size="16" aria-hidden="true" />
-        </button>
-        <button type="button" class="viewer-action" :disabled="remoteControlActive"
-          :aria-label="'从舞台移出' + media.name + '的共享画面'" @click="emit('remove')"><X :size="16" aria-hidden="true" /></button>
-      </span>
+      <strong :title="media.name">{{ media.name }}{{ isLocal ? '（你）' : '' }}</strong>
+      <button v-if="variant === 'viewer'" type="button" class="viewer-action"
+        :aria-label="'切换全屏观看' + media.name + '的共享画面'" :disabled="!media.track || media.muted || !fullscreenAvailable"
+        @click="openFullscreen"><Fullscreen :size="16" /></button>
+      <button v-else-if="media.sharing" type="button" class="viewer-action"
+        :aria-label="'打开' + media.name + '的独立观看窗口'" @click="emit('select')"><Maximize2 :size="16" /></button>
+      <button v-if="variant === 'card' && media.sharing && !isLocal && shareAudio" type="button" class="viewer-action"
+        :disabled="!shareAudioListening" :aria-label="shareMuted ? '恢复这路共享声音' : '静音这路共享声音'"
+        :aria-pressed="shareMuted" @click="emit('toggleShareAudio')"><HeadphoneOff v-if="shareMuted || !shareAudioListening" :size="14" /><Headphones v-else :size="14" /></button>
       <button v-if="media.sharing && !isLocal && remoteControlAvailable" type="button" class="viewer-action remote-control-action"
+        :class="{ 'is-control-shortcut': variant === 'card' }"
         :aria-label="remoteControlActive ? '退出远程控制' : remoteControlPending ? '取消远程控制申请' : '申请远程控制'"
         @click="remoteControlActive ? emit('stopControl') : remoteControlPending ? emit('cancelControl') : emit('requestControl')">
-        {{ remoteControlActive ? '退出控制' : remoteControlPending ? '取消申请' : '申请控制' }}
+        <MousePointer2 v-if="variant === 'card'" :size="14" />
+        <span v-else>{{ remoteControlActive ? '退出控制' : remoteControlPending ? '取消申请' : '申请控制' }}</span>
       </button>
-      <small v-if="media.sharing && !isLocal && remoteControlUnavailable" class="remote-control-status">窗口共享暂不支持远程控制</small>
-      <small v-if="remoteControlActive" class="remote-control-status">正在控制 {{ remoteControlName || media.name }} · Esc 退出</small>
-      <span v-if="isLocal" class="participant-volume-control" @wheel.stop.prevent="adjustInputGain">
+      <small v-if="variant === 'viewer' && media.sharing && !isLocal && remoteControlUnavailable" class="remote-control-status">窗口共享暂不支持远程控制</small>
+      <small v-if="variant === 'viewer' && remoteControlActive" class="remote-control-status">正在控制 {{ remoteControlName || media.name }} · {{ inputArmed ? 'Esc 退出' : '点击画面开始操作' }}</small>
+      <span v-if="variant === 'card' && isLocal" class="participant-volume-control" @wheel.stop.prevent="adjustInputGain">
         <button type="button" class="participant-state participant-state-button"
           :class="{ 'is-off': !media.microphone }"
           :aria-label="media.microphone ? `关闭自己的麦克风，输入音量${inputGainPercent}%，滚轮或按住上下拖动` : '开启自己的麦克风'"
@@ -405,7 +361,7 @@ onBeforeUnmount(() => {
         </button>
         <span v-if="media.microphone && volumeDrag?.kind !== 'input'" class="participant-volume-popover" aria-hidden="true">输入 {{ inputGainPercent }}%</span>
       </span>
-      <span v-else class="participant-volume-control" @wheel.stop.prevent="adjustRemoteVolume">
+      <span v-else-if="variant === 'card'" class="participant-volume-control" @wheel.stop.prevent="adjustRemoteVolume">
         <button type="button" class="participant-state participant-state-button"
           :class="{ 'is-off': !media.microphone || playbackVolume === 0 }" :aria-label="remoteAudioLabel"
           :disabled="!media.microphone" @pointerdown="beginVolumeDrag($event, 'remote', playbackVolume)"
@@ -415,7 +371,7 @@ onBeforeUnmount(() => {
         </button>
         <span v-if="media.microphone && playbackVolume > 0 && volumeDrag?.kind !== 'remote'" class="participant-volume-popover" aria-hidden="true">接收 {{ playbackPercent }}%</span>
       </span>
-      <span v-if="isLocal" class="participant-volume-control" @wheel.stop.prevent="adjustOutputVolume">
+      <span v-if="variant === 'card' && isLocal" class="participant-volume-control" @wheel.stop.prevent="adjustOutputVolume">
         <button type="button" class="participant-state participant-state-button"
           :class="{ 'is-off': isListening === false }"
           :aria-label="isListening ? `停止接收所有成员声音，LycanSync 总输出${outputVolumePercent}%，滚轮调整` : '恢复接收所有成员声音'"
@@ -424,13 +380,13 @@ onBeforeUnmount(() => {
         </button>
         <span v-if="isListening" class="participant-volume-popover" aria-hidden="true">输出 {{ outputVolumePercent }}%</span>
       </span>
-      <span v-else class="participant-state" :class="{ 'is-off': isListening === false }"
+      <span v-else-if="variant === 'card'" class="participant-state" :class="{ 'is-off': isListening === false }"
         :aria-label="isListening === null ? '收听状态尚未同步' : isListening ? '正在接收声音' : '已停止接收声音'">
         <HeadphoneOff v-if="isListening === false" :size="14" /><Headphones v-else :size="14" />
       </span>
     </div>
   </article>
-  <Teleport to="body">
+  <Teleport v-if="ownerDocument" :to="ownerDocument.body">
     <Transition name="volume-dragger">
       <span v-if="volumeDrag" class="participant-volume-dragger" role="slider" :style="volumeDragStyle"
         :aria-label="volumeDragLabel" aria-orientation="vertical" aria-valuemin="0"

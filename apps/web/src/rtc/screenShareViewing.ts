@@ -19,6 +19,9 @@ export function syncScreenShareViewing(publication: RemoteTrackPublication) {
 
 export function observeScreenShareView(publication: RemoteTrackPublication, element: HTMLVideoElement,
   quality: VideoQuality) {
+  const page = element.ownerDocument;
+  const viewWindow = page.defaultView;
+  if (!viewWindow) throw new Error('screenShareViewWindowUnavailable');
   let disposed = false;
   let intersecting = element.getClientRects().length > 0;
   const demand: ViewDemand = { visible: false, quality };
@@ -28,32 +31,36 @@ export function observeScreenShareView(publication: RemoteTrackPublication, elem
   currentDemands.add(demand);
   function updateVisibility() {
     if (disposed) return;
-    demand.visible = intersecting && document.visibilityState !== 'hidden';
+    demand.visible = intersecting && page.visibilityState !== 'hidden';
     updateViewing(publication, currentDemands);
   }
-  const observer = new IntersectionObserver((entries) => {
+  // 每个观看位置使用所属窗口，主窗口隐藏不能暂停仍可见的独立窗。
+  const observer = new viewWindow.IntersectionObserver((entries) => {
     const entry = entries.find((entry) => entry.target === element);
     if (!entry || disposed) return;
     intersecting = entry.isIntersecting;
     updateVisibility();
   });
   observer.observe(element);
-  document.addEventListener('visibilitychange', updateVisibility);
+  page.addEventListener('visibilitychange', updateVisibility);
+  viewWindow.addEventListener('pagehide', stop);
   updateVisibility();
+  function stop() {
+    if (disposed) return;
+    disposed = true;
+    observer.disconnect();
+    page.removeEventListener('visibilitychange', updateVisibility);
+    viewWindow!.removeEventListener('pagehide', stop);
+    currentDemands.delete(demand);
+    updateViewing(publication, currentDemands);
+    if (!currentDemands.size) viewingDemands.delete(publication);
+  }
   return {
     setQuality(next: VideoQuality) {
       if (disposed || demand.quality === next) return;
       demand.quality = next;
       updateVisibility();
     },
-    stop() {
-      if (disposed) return;
-      disposed = true;
-      observer.disconnect();
-      document.removeEventListener('visibilitychange', updateVisibility);
-      currentDemands.delete(demand);
-      updateViewing(publication, currentDemands);
-      if (!currentDemands.size) viewingDemands.delete(publication);
-    },
+    stop,
   };
 }

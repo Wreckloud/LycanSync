@@ -5,7 +5,69 @@ const { runInNewContext } = require('node:vm');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { test } = require('node:test');
-const { createMediaDiagnostics, readDiagnosticEvents } = require('./media-diagnostics.cjs');
+const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
+const { EventEmitter } = require('node:events');
+
+test('分进程内存复用校验后的句柄，进程退出释放，不导出PID或路径，不重复计算原生工作集', () => {
+  const child = Object.assign(new EventEmitter(), { pid: 123, exitCode: null, signalCode: null });
+  let opens = 0, releases = 0, reads = 0;
+  const collect = createProcessMetricsReader((pid, path) => {
+    assert.equal(pid, 123); assert.equal(path, 'owned.exe'); opens++;
+    return { readMemory: () => { reads++; return { workingSetBytes: 4 * 1024 ** 2, privateCommitBytes: 8 * 1024 ** 2 }; },
+      release: () => { releases++; } };
+  });
+  const metrics = [{ type: 'GPU', pid: 999, memory: { workingSetSize: 2048, privateBytes: 1024 }, cpu: { percentCPUUsage: 2.1 } }];
+  const helpers = [{ role: 'obs', children: [child], executablePath: 'owned.exe' }, { role: 'media', children: [] }];
+  const first = collect(metrics, helpers, true);
+  assert.deepEqual(first, { cpuPercent: 2.1, memoryMb: 2, entries: [
+    { role: 'electron-GPU', state: 'running', workingSetMiB: 2, privateCommitMiB: 1 },
+    { role: 'obs', state: 'running', workingSetMiB: 4, privateCommitMiB: 8 },
+    { role: 'media', state: 'stopped', workingSetMiB: null, privateCommitMiB: null },
+  ] });
+  collect(metrics, helpers, true);
+  assert.equal(opens, 1); assert.equal(reads, 2);
+  child.exitCode = 0; child.emit('close');
+  assert.equal(releases, 1);
+  assert.equal(collect(metrics, helpers, true).entries[1].state, 'stopped');
+  assert.equal(opens, 1);
+  assert.ok(!JSON.stringify(first).includes('pid'));
+  assert.ok(!JSON.stringify(first).includes('owned.exe'));
+});
+
+test('原生读取失败和平台不支持均为不可用，不伪报未运行或零内存，不会启动进程', () => {
+  let opens = 0;
+  const collect = createProcessMetricsReader(() => { opens++; throw new Error('identity mismatch'); });
+  const helpers = [{ role: 'activity', children: [Object.assign(new EventEmitter(), { pid: 12 })], executablePath: 'activity.exe' }];
+  const result = collect([], helpers, true);
+  assert.deepEqual(result.entries, [{ role: 'activity', state: 'unavailable', workingSetMiB: null, privateCommitMiB: null }]);
+  collect([], helpers, false);
+  assert.equal(opens, 1);
+  const invalid = createProcessMetricsReader(() => ({ readMemory: () => ({ workingSetBytes: NaN, privateCommitBytes: -1 }), release() {} }));
+  assert.equal(invalid([], helpers, true).entries[0].state, 'unavailable');
+});
+
+test('诊断IPC只读取现存的三类子进程，不接受页面指定PID和不可信来源', () => {
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const start = main.indexOf("ipcMain.handle('diagnostics:process-metrics'");
+  const end = main.indexOf("ipcMain.handle('diagnostics:export'", start);
+  let handler, captured;
+  const scope = {
+    ipcMain: { handle: (_name, callback) => { handler = callback; } }, trustedSender: (event) => event.trusted,
+    app: { getAppMetrics: () => ['electron'] }, obsCaptureHost: { state: { child: 'obs-child' } },
+    obsHostSettings: { executablePath: 'obs.exe' }, mediaHelper: { children: new Set([{ child: 'media-child' }]) },
+    mediaHelperPath: () => 'media.exe', activityMonitor: { diagnosticProcesses: () => ['activity-child'] },
+    activityHelperPath: () => 'activity.exe', process: { platform: 'win32' },
+    readProcessMetrics: (...args) => { captured = JSON.parse(JSON.stringify(args)); return 'result'; },
+  };
+  runInNewContext(main.slice(start, end), scope);
+  assert.throws(() => handler({ trusted: false }, 12345), /无效/);
+  assert.equal(handler({ trusted: true }, 12345), 'result');
+  assert.deepEqual(captured, [['electron'], [
+    { role: 'obs', children: ['obs-child'], executablePath: 'obs.exe' },
+    { role: 'media', children: ['media-child'], executablePath: 'media.exe' },
+    { role: 'activity', children: ['activity-child'], executablePath: 'activity.exe' },
+  ], true]);
+});
 
 test('启动计时只接受当前可信采集会话和固定阶段，每阶段只记录一次', () => {
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
@@ -140,7 +202,7 @@ function exportFixture() {
     ipcMain: { handle: (_name, callback) => { exportReport = callback; } },
   };
   runInNewContext(main.slice(start, end), state);
-  const text = JSON.stringify({ kind: 'lycansync-diagnostics', schemaVersion: 5,
+  const text = JSON.stringify({ kind: 'lycansync-diagnostics', schemaVersion: 7,
     startedAt: '2026-10-15T00:00:00Z', endedAt: '2026-10-15T00:00:01Z', samples: [] });
   return { state, calls, text, exportReport: (...args) => exportReport(...args) };
 }
@@ -152,7 +214,7 @@ test('诊断导出仅允许可信页面，验证格式并通过用户选址写�
   assert.equal(calls.read, 0);
   state.trustedSender = () => true;
   await assert.rejects(exportReport({}, '{}'), /无效/);
-  await assert.rejects(exportReport({}, text.replace('"schemaVersion":5', '"schemaVersion":4')), /无效/);
+  await assert.rejects(exportReport({}, text.replace('"schemaVersion":7', '"schemaVersion":6')), /无效/);
   await assert.rejects(exportReport({}, 'x'.repeat(8 * 1024 * 1024 + 1)), /过大/);
   await exportReport({}, text);
   assert.equal(calls.writes.length, 1);

@@ -290,6 +290,7 @@ onMounted(async () => {
 
 <template>
   <App v-if="user && !onboarding" v-show="!accessOffer" :user="user" :window-maximized="windowMaximized" :save-profile="saveProfile"
+    :interaction-blocked="Boolean(accessOffer)"
     :startup-update-warning="updateWarning" @dismiss-update-warning="updateWarning = ''" @logout="logout" />
   <div v-if="!user || onboarding || accessOffer" ref="entryRoot" class="app-shell" :class="{ 'compact-auth': desktop }">
     <header class="titlebar" :class="{ 'desktop-titlebar': desktop }">

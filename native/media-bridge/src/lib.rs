@@ -12,6 +12,9 @@ mod windows_bridge {
         CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
         TH32CS_SNAPPROCESS,
     };
+    use windows::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
+    };
     use windows::Win32::System::Threading::{
         GetCurrentProcess, GetCurrentProcessId, GetExitCodeProcess, GetProcessHandleCount,
         OpenProcess, PROCESS_DUP_HANDLE, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -51,8 +54,41 @@ mod windows_bridge {
         process: Option<OwnedHandle>,
     }
 
+    #[napi_derive::napi(object)]
+    pub struct NativeProcessMemory {
+        pub working_set_bytes: f64,
+        pub private_commit_bytes: f64,
+    }
+
     #[napi_derive::napi]
     impl SpawnedMediaHelper {
+        #[napi_derive::napi]
+        pub fn read_memory(&self) -> Result<NativeProcessMemory> {
+            let process = self
+                .process
+                .as_ref()
+                .ok_or_else(|| error("spawnedMediaHelperReleased"))?;
+            if !process_is_running(process.raw()) {
+                return Err(error("spawnedMediaHelperExited"));
+            }
+            let mut counters = PROCESS_MEMORY_COUNTERS_EX::default();
+            let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
+            counters.cb = size;
+            // 仅读取已验证子进程的固定句柄，避免 PID 重用和每次采样重新枚举进程。
+            unsafe {
+                GetProcessMemoryInfo(
+                    process.raw(),
+                    &mut counters as *mut _ as *mut PROCESS_MEMORY_COUNTERS,
+                    size,
+                )
+            }
+            .map_err(|_| error("processMemoryUnavailable"))?;
+            Ok(NativeProcessMemory {
+                working_set_bytes: counters.WorkingSetSize as f64,
+                private_commit_bytes: counters.PrivateUsage as f64,
+            })
+        }
+
         #[napi_derive::napi]
         pub fn duplicate_shared_texture(
             &self,

@@ -58,8 +58,8 @@ test('创建群组只预览，初始只有创建者且不自动加入语音', as
   await page.goto('/');
   await expect(page.getByText('还没有群组，点击左侧的 + 创建一个开黑小队。')).toBeVisible();
   await expect(page.locator('.members-header')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '搜索群组成员' })).toHaveCount(0);
-  await expect(page.locator('.members-directory')).toBeEmpty();
+  await expect(page.getByRole('button', { name: '查看全部群组成员' })).toHaveCount(0);
+  await expect(page.locator('.members-directory')).toHaveCount(0);
   const createGroupButton = page.getByRole('button', { name: '创建群组' });
   await createGroupButton.hover();
   await expect(page.getByRole('tooltip')).toHaveCount(0);
@@ -322,8 +322,20 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   expect(proportions.personal).toBeCloseTo(proportions.member, 3);
   await expect(page.locator('.group-call-badge')).toBeVisible();
   await expect(page.locator('.group-call-badge')).toHaveCSS('width', '20px');
-  await expect(page.locator('.group-call-badge')).toHaveCSS('top', '-5px');
-  await page.locator('.members-panel').screenshot({ path: test.info().outputPath('members-panel.png') });
+  await expect(page.locator('.group-call-badge')).toHaveCSS('bottom', '-5px');
+  for (const width of [1440, 640, 420]) {
+    await page.setViewportSize({ width, height: 900 });
+    const badge = await page.locator('.group-call-badge').boundingBox();
+    const avatar = await page.locator('.group-button').filter({ has: page.locator('.group-call-badge') }).boundingBox();
+    const list = await page.locator('.group-list').boundingBox();
+    expect(badge!.y).toBeGreaterThanOrEqual(list!.y);
+    expect(badge!.y + badge!.height).toBeLessThanOrEqual(list!.y + list!.height);
+    expect(badge!.x + badge!.width).toBeLessThanOrEqual(list!.x + list!.width);
+    expect(badge!.y + badge!.height - avatar!.y - avatar!.height).toBe(4);
+    expect(badge!.x + badge!.width - avatar!.x - avatar!.width).toBe(4);
+  }
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.locator('.members-directory').screenshot({ path: test.info().outputPath('members-panel.png') });
   await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
   await expect(page.locator('.settings-footer .personal-avatar')).toHaveCSS('width', '44px');
 });

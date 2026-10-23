@@ -25,7 +25,7 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
     await expect(page.locator('.brand svg')).toHaveCount(0);
     await expect(page.getByText('本地调试', { exact: true })).toHaveCount(0);
     expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomFactor())).toBe(1);
-    await expect(page.locator('.members-panel')).not.toContainText('成员列表尚未开放');
+    await expect(page.getByRole('complementary', { name: '群组成员' })).toBeVisible();
     const chatFontSize = await page.locator('.message-list').evaluate((element) => getComputedStyle(element).fontSize);
     expect(chatFontSize).toBe('15px');
     expect(await page.getByRole('textbox', { name: '消息内容' }).evaluate((element) => getComputedStyle(element).fontSize)).toBe(chatFontSize);

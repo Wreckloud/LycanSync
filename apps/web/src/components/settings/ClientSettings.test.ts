@@ -28,7 +28,7 @@ function setup() {
     getUpdateState: vi.fn(async () => updateState), checkUpdates: vi.fn(async () => ({ ...updateState, nextVersion: '0.0.11' })),
     restartForUpdate: vi.fn(async () => {}), onUpdateState: vi.fn(() => () => {}) };
   const scope = effectScope();
-  const props = reactive({ active: true, desktop: true, stageAutoFill: true, stagePreferenceError: '' });
+  const props = reactive({ active: true, desktop: true });
   const savePreferences = vi.fn();
   const exposed = vi.fn();
   // 执行真实组件监听和更新流程，IPC 只返回受控数据，不修改系统设置。

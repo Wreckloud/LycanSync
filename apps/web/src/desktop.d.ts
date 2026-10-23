@@ -1,3 +1,11 @@
+interface DesktopProcessMetrics {
+  cpuPercent: number;
+  memoryMb: number;
+  entries: { role: 'electron-Browser' | 'electron-Tab' | 'electron-GPU' | 'electron-Utility' | 'electron-other'
+    | 'obs' | 'media' | 'activity'; state: 'running' | 'stopped' | 'unavailable';
+    workingSetMiB: number | null; privateCommitMiB: number | null }[];
+}
+
 interface DetectedActivity {
   type: 'GAME' | 'MUSIC';
   name: string;
@@ -82,6 +90,14 @@ interface StartupUpdateState {
 }
 
 interface Window {
+  lycanViewerWindow?: {
+    ready(): Promise<import('./viewing/viewerPage').ViewerWindowState>;
+    setPinned(enabled: boolean): Promise<import('./viewing/viewerPage').ViewerWindowState>;
+    toggleFullscreen(): Promise<void>;
+    exitFullscreen(): Promise<void>;
+    onState(callback: (state: import('./viewing/viewerPage').ViewerWindowState) => void): () => void;
+    onDisarm(callback: () => void): () => void;
+  };
   lycanVoiceOverlay?: import('./overlay/types').VoiceOverlayBridge;
   lycanOverlayView?: {
     ready(): Promise<void>;
@@ -103,9 +119,13 @@ interface Window {
     getServerSettings(): Promise<{ apiUrl: string; editable: boolean }>;
     setServerAddress(value: string): Promise<void>;
     minimize(): void;
+    getWindowVisibility(): Promise<boolean>;
+    focusViewerWindow(id: string): Promise<void>;
+    onWindowVisibility(callback: (visible: boolean) => void): () => void;
+    onViewerClosed(callback: (closed: { id: string; failed: boolean }) => void): () => void;
     isMaximized(): Promise<boolean>;
     setWindowLayout(mode: 'startup' | 'account' | 'invitation' | 'profile' | 'main', height: number): Promise<void>;
-    getProcessMetrics(): Promise<{ cpuPercent: number; memoryMb: number }>;
+    getProcessMetrics(): Promise<DesktopProcessMetrics>;
     exportDiagnosticReport(report: string): Promise<{ saved: boolean }>;
     getSystemIdleState(): Promise<{ state: 'active' | 'idle' | 'locked' | 'unknown'; idleSeconds: number }>;
     getAutoStart(): Promise<{ supported: boolean; enabled: boolean }>;

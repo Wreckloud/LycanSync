@@ -82,6 +82,18 @@ it('文字发送失败保留草稿与错误，允许明确重试', async () => {
   } finally { scope.stop(); }
 });
 
+it('增量响应重复带回游标或同批消息时不重复插入，仍保留本机未被快照覆盖的消息', async () => {
+  const { scope, chat, findMessages } = setup();
+  try {
+    findMessages.mockResolvedValueOnce({ messages: [message('older'), message('cursor')], hasMore: false });
+    await chat.refresh();
+    chat.text.value = '本机消息'; await chat.submit();
+    findMessages.mockResolvedValueOnce({ messages: [message('cursor'), message('new'), message('new')], hasMore: false });
+    expect(await chat.refresh()).toBe(1);
+    expect(chat.messages.value.map((entry) => entry.id)).toEqual(['older', 'cursor', 'new', 'sent']);
+  } finally { scope.stop(); }
+});
+
 it('本机发送不推进查询游标，超过一页的未读消息逐批补齐', async () => {
   const { scope, chat, findMessages } = setup();
   try {

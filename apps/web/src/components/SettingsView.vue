@@ -40,11 +40,9 @@ const props = defineProps<{
   showActivity: boolean;
   activityError: string;
   activityMappings: ReturnType<typeof useActivityMappings>;
-  stageAutoFill: boolean;
-  stagePreferenceError: string;
   saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
 }>();
-const emit = defineEmits<{ close: []; logout: []; activityVisibility: [enabled: boolean]; stageAutoFill: [enabled: boolean] }>();
+const emit = defineEmits<{ close: []; logout: []; activityVisibility: [enabled: boolean] }>();
 const heading = ref<HTMLElement | null>(null);
 const profileSettings = ref<InstanceType<typeof ProfileSettings> | null>(null);
 const clientSettings = ref<InstanceType<typeof ClientSettings> | null>(null);
@@ -128,8 +126,7 @@ async function leaveSettings(logout: boolean) {
           :input-level-percent="inputLevelPercent" />
         <SoundSettings v-show="activeSection === 'sound'" :user-id="user.id" :active="activeSection === 'sound'" />
         <OverlaySettings v-if="desktop && overlay" v-show="activeSection === 'overlay'" :overlay="overlay" :active="activeSection === 'overlay'" />
-        <ClientSettings ref="clientSettings" v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'"
-          :stage-auto-fill="stageAutoFill" :stage-preference-error="stagePreferenceError" @stage-auto-fill="emit('stageAutoFill', $event)" />
+        <ClientSettings ref="clientSettings" v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'" />
         <AboutSettings v-show="activeSection === 'about'" :active="activeSection === 'about'" :rtc="rtc" :report="diagnosticReport" />
       </div>
     </section>

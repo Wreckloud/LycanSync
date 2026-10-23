@@ -312,7 +312,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       // TODO: 根据异地实测调整共享画质，并记录连接类型、RTT、丢包和码率以排查代理影响。
       unassignedPlaybackContext = new AudioContext();
       joiningRoom = markRaw(new Room({
-        // 屏幕按小窗/舞台的明确用途合并需求，不按舞台尺寸自动限制主画面质量。
+        // 小预览与独立观看按可见用途合并需求，不因观看路数自动限制主画面质量。
         adaptiveStream: false,
         dynacast: true,
         // 房间只用一个混音上下文；由本模块释放，供成员人声平衡节点复用。

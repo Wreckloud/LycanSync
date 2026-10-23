@@ -8,6 +8,8 @@ const props = defineProps<{ room: Room; statistics: MediaDiagnosticsSnapshot | n
 const streams = computed(() => props.statistics?.streams ?? []);
 const error = computed(() => props.statistics?.failures.length ? '部分统计暂时无法读取，缺失值不代表零。' : '');
 const processMetrics = computed(() => props.statistics?.process ?? null);
+const processLabels = { 'electron-Browser': 'Electron 主进程', 'electron-Tab': '界面进程', 'electron-GPU': 'GPU 进程',
+  'electron-Utility': '工具进程', 'electron-other': '其他 Electron 进程', obs: 'OBS 宿主', media: '媒体辅助进程', activity: '动态检测进程' };
 function formatFpsInterval(intervalMs: number | null) {
   if (intervalMs === null) return '等待统计';
   const seconds = intervalMs / 1000;
@@ -19,7 +21,15 @@ function formatFpsInterval(intervalMs: number | null) {
   <aside class="media-diagnostics" aria-label="媒体诊断">
     <strong>媒体诊断 <small>每 2 秒更新</small></strong>
     <p v-if="error" role="status">{{ error }}</p>
-    <p v-if="processMetrics">Electron 进程（不含原生 helper）：CPU {{ processMetrics.cpuPercent }}% · 工作集合计 {{ processMetrics.memoryMb }} MB</p>
+    <template v-if="processMetrics">
+      <p>Electron CPU {{ processMetrics.cpuPercent }}% · 工作集合计 {{ processMetrics.memoryMb }} MiB（不含下列原生进程）</p>
+      <p v-for="(entry, index) in processMetrics.entries" :key="index">
+        {{ processLabels[entry.role] }}：
+        <template v-if="entry.state === 'running'">工作集 {{ entry.workingSetMiB ?? '—' }} MiB · 私有提交 {{ entry.privateCommitMiB ?? '—' }} MiB</template>
+        <template v-else>{{ entry.state === 'stopped' ? '未运行' : '统计不可用' }}</template>
+      </p>
+      <small>工作集含共享页，不能简单相加当作物理内存；私有提交不等于驻留 RAM。不包含显存，未运行与读取失败不计作零。</small>
+    </template>
     <p v-if="statistics?.native?.state === 'running'">{{ statistics.native.captureBackend === 'obsLibobs' ? 'OBS 计数区间 FPS' : '原生采集计数区间 FPS' }}：
       <template v-if="statistics.nativeInterval">{{ statistics.native?.captureBackend === 'obsLibobs' ? 'OBS 渲染回调' : '收到' }} {{ statistics.nativeInterval.receivedFps }} ·
         {{ statistics.native?.captureBackend === 'obsLibobs' ? '宿主发帧' : '处理' }} {{ statistics.nativeInterval.processedFps }} · {{ formatFpsInterval(statistics.nativeInterval.elapsedMs) }}</template>

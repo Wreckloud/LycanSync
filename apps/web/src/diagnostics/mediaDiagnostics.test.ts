@@ -5,7 +5,7 @@ import { createMediaDiagnosticsSampler } from './mediaDiagnostics';
 afterEach(() => vi.unstubAllGlobals());
 function setup() {
   vi.stubGlobal('document', { hidden: false });
-  const bridge = { getProcessMetrics: vi.fn(async () => ({ cpuPercent: 3, memoryMb: 120 })),
+  const bridge = { getProcessMetrics: vi.fn(async () => ({ cpuPercent: 3, memoryMb: 120, entries: [] })),
     getNativeMediaDiagnostics: vi.fn(async () => ({ state: 'running' })) };
   vi.stubGlobal('window', { lycanDesktop: bridge });
   const track = { attachedElements: [], mediaStreamTrack: { id: 'track', getSettings: () => ({ width: 1920, height: 1080, frameRate: 60 }) },
@@ -80,7 +80,7 @@ it('首次样本显示等待统计，第二份样本按实际间隔计算编码�
     receivedFps: 100, processedFps: 58 });
   expect(result.failures).toContain('videoStatsUnavailable');
   expect(result).toMatchObject({ remoteParticipantCount: 1, roomState: 'connected', dynacast: true });
-  expect(result.process).toEqual({ cpuPercent: 3, memoryMb: 120 });
+  expect(result.process).toEqual({ cpuPercent: 3, memoryMb: 120, entries: [] });
   expect(bridge.getNativeMediaDiagnostics).toHaveBeenCalledTimes(2);
 });
 

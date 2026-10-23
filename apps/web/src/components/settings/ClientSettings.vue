@@ -5,8 +5,7 @@ import InlineFeedback from '../InlineFeedback.vue';
 import UpdateRestartDialog from '../UpdateRestartDialog.vue';
 import { useClientUpdate } from '../../settings/useClientUpdate';
 
-const props = defineProps<{ desktop: boolean; active: boolean; stageAutoFill: boolean; stagePreferenceError: string }>();
-const emit = defineEmits<{ stageAutoFill: [enabled: boolean] }>();
+const props = defineProps<{ desktop: boolean; active: boolean }>();
 const autoStartSupported = ref<boolean>();
 const autoStartEnabled = ref(false);
 const autoStartBusy = ref(false);
@@ -116,15 +115,6 @@ async function updateAutoStart(event: Event) {
         :status="updateState?.error ? '' : updateState?.message" />
       <UpdateRestartDialog v-if="confirmationVersion" :version="confirmationVersion" :busy="updateBusy" :error="updateError"
         @cancel="cancelUpdate" @confirm="restartUpdate" />
-    </section>
-    <section class="settings-block">
-      <h2>共享观看</h2>
-      <label class="settings-toggle">
-        <span><strong>自动填充舞台</strong><small>按开始共享的顺序填入最多四路；停止共享或移出后自动补位。手动移出的画面不会自动返回。</small></span>
-        <input type="checkbox" :checked="stageAutoFill" aria-label="自动填充舞台"
-          @change="emit('stageAutoFill', ($event.target as HTMLInputElement).checked)" />
-      </label>
-      <InlineFeedback :message="stagePreferenceError" />
     </section>
     <section class="settings-block">
       <h2>屏幕共享</h2>

@@ -107,6 +107,18 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   getServerSettings: () => ipcRenderer.invoke('settings:server:get'),
   setServerAddress: (value) => ipcRenderer.invoke('settings:server:set', value),
   minimize: () => ipcRenderer.send('window:minimize'),
+  getWindowVisibility: () => ipcRenderer.invoke('window:visibility'),
+  focusViewerWindow: (id) => ipcRenderer.invoke('viewer:focus', id),
+  onWindowVisibility: (callback) => {
+    const listener = (_event, visible) => callback(visible);
+    ipcRenderer.on('window:visibility', listener);
+    return () => ipcRenderer.removeListener('window:visibility', listener);
+  },
+  onViewerClosed: (callback) => {
+    const listener = (_event, closed) => callback(closed);
+    ipcRenderer.on('viewer:closed', listener);
+    return () => ipcRenderer.removeListener('viewer:closed', listener);
+  },
   isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
   setWindowLayout: (mode, height) => ipcRenderer.invoke('window:layout', mode, height),
   getProcessMetrics: () => ipcRenderer.invoke('diagnostics:process-metrics'),

@@ -62,6 +62,19 @@ test('采集分类只查所选程序，不受当前动态影响，也不暴露�
   } finally { monitor.stop(); }
 });
 
+test('诊断只返回现存子进程，停止请求后仍保留至真正关闭，不启动或重建helper', () => {
+  const { monitor, children } = fixture();
+  assert.deepEqual(monitor.diagnosticProcesses(), [children[0]]);
+  monitor.stop();
+  assert.deepEqual(monitor.diagnosticProcesses(), [children[0]]);
+  children[0].emit('close');
+  assert.deepEqual(monitor.diagnosticProcesses(), []);
+  assert.equal(children.length, 1);
+  const unsupported = fixture(false);
+  assert.deepEqual(unsupported.monitor.diagnosticProcesses(), []);
+  assert.equal(unsupported.children.length, 0);
+});
+
 test('分类响应缺失、超时或配置切换时明确失败，不把未知当普通窗口', async () => {
   const { monitor, children, timers, reply } = fixture();
   try {

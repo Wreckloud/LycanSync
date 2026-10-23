@@ -34,7 +34,7 @@ export interface MediaDiagnosticsSnapshot {
   streams: StreamStats[];
   audio: { identity: string; source: 'microphone' | 'screen_share_audio'; direction: '发送' | '接收';
     sampleRate: number | null; channels: number | null; packetsLost: number | null; jitterMs: number | null }[];
-  process: { cpuPercent: number; memoryMb: number } | null;
+  process: DesktopProcessMetrics | null;
   native: NativeCaptureDiagnostics | null;
   nativeInterval: { elapsedMs: number; framesReceived: number; framesProcessed: number;
     receivedFps: number; processedFps: number } | null;

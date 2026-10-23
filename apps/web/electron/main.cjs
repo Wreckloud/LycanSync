@@ -9,7 +9,7 @@ const { readFile, writeFile, unlink, mkdir } = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
 const { MediaHelperManager } = require('./media-helper.cjs');
 const { ObsCaptureHostManager } = require('./obs-capture-host.cjs');
-const { createMediaDiagnostics, readDiagnosticEvents } = require('./media-diagnostics.cjs');
+const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
 const { matchNativeVideoSourceThumbnails, monitorDisplayId } = require('./native-video-thumbnails.cjs');
 const { parseAccessLink, accessLinkFromArguments, parseManualAccessLink } = require('./access-links.cjs');
@@ -17,6 +17,7 @@ const { createStartupUpdate } = require('./startup-update.cjs');
 const { createActivityHelper } = require('./activity-helper.cjs');
 const { createVoiceOverlay } = require('./voice-overlay.cjs');
 const { initialWindowBounds, createWindowLayout } = require('./window-layout.cjs');
+const { createScreenShareWindows } = require('./screen-share-windows.cjs');
 
 const APP_ORIGIN = 'lycan://app';
 const rendererRoot = resolve(__dirname, '../dist');
@@ -80,6 +81,7 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'lycan', privileges: {
 
 let mainWindow;
 let windowLayout;
+const screenShareWindows = createScreenShareWindows();
 let closing = false;
 let canClose = false;
 let closeTimer;
@@ -101,6 +103,10 @@ const helperProcessBridges = new WeakMap();
 const writeMediaDiagnostic = createMediaDiagnostics(resolve(app.getPath('userData'), 'screen-share-error.log'));
 const sourceTimingRecordedAt = new Map();
 let diagnosticExportPending = false;
+const readProcessMetrics = createProcessMetricsReader((pid, executablePath) => {
+  nativeMediaBridge ??= loadNativeMediaBridge();
+  return nativeMediaBridge.openSpawnedMediaHelper(pid, executablePath);
+});
 const voiceOverlay = createVoiceOverlay({
   BrowserWindow, screen, session, net, rendererRoot, devRendererUrl,
   defaultDisplay: () => mainWindow ? screen.getDisplayMatching(mainWindow.getBounds()).id : screen.getPrimaryDisplay().id,
@@ -895,6 +901,7 @@ async function saveSession(token) {
 }
 
 async function clearSession() {
+  screenShareWindows.closeAll();
   sessionToken = undefined;
   sessionLoaded = true;
   activityMonitor.clearMappings();
@@ -947,6 +954,7 @@ function denyCapture(callback) {
 function finishClose() {
   canClose = true;
   clearTimeout(closeTimer);
+  screenShareWindows.closeAll();
   voiceOverlay.clear();
   mainWindow?.destroy();
 }
@@ -1127,7 +1135,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     windowLayout = createWindowLayout(mainWindow, screen);
     mainWindow.setMenu(null);
-    mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    screenShareWindows.attach(mainWindow);
     mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
     mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
     mainWindow.webContents.on('render-process-gone', () => finishClose());
@@ -1138,6 +1146,7 @@ if (!app.requestSingleInstanceLock()) {
       event.preventDefault();
       if (closing) return;
       closing = true;
+      screenShareWindows.closeAll();
       voiceOverlay.clear();
       startupUpdate.cancel();
       // 先停止采集再退出；页面异常时由主进程兜底销毁窗口，避免后台残留。
@@ -1189,6 +1198,26 @@ ipcMain.handle('update:skip', (event) => {
 });
 
 ipcMain.on('window:minimize', (event) => { if (trustedSender(event)) mainWindow.minimize(); });
+ipcMain.handle('window:visibility', (event) => {
+  if (!trustedSender(event)) throw new Error('请求来源无效');
+  return screenShareWindows.mainVisible();
+});
+ipcMain.handle('viewer:ready', (event) => {
+  if (closing) throw new Error('应用正在关闭。');
+  return screenShareWindows.ready(event);
+});
+ipcMain.handle('viewer:pin', (event, enabled) => {
+  if (closing) throw new Error('应用正在关闭。');
+  return screenShareWindows.pin(event, enabled);
+});
+ipcMain.handle('viewer:focus', (event, id) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  screenShareWindows.focus(id);
+});
+ipcMain.handle('viewer:fullscreen', (event, enabled) => {
+  if (closing) throw new Error('应用正在关闭。');
+  screenShareWindows.fullscreen(event, enabled);
+});
 ipcMain.handle('window:layout', (event, mode, height) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
   windowLayout.apply(mode, height);
@@ -1199,17 +1228,17 @@ ipcMain.handle('window:is-maximized', (event) => {
 });
 ipcMain.handle('diagnostics:process-metrics', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
-  const metrics = app.getAppMetrics();
-  return {
-    cpuPercent: Math.round(metrics.reduce((sum, process) => sum + (process.cpu?.percentCPUUsage ?? 0), 0) * 10) / 10,
-    memoryMb: Math.round(metrics.reduce((sum, process) => sum + (process.memory?.workingSetSize ?? 0), 0) / 1024),
-  };
+  return readProcessMetrics(app.getAppMetrics(), [
+    { role: 'obs', children: obsCaptureHost.state ? [obsCaptureHost.state.child] : [], executablePath: obsHostSettings.executablePath },
+    { role: 'media', children: [...mediaHelper.children].map((state) => state.child), executablePath: mediaHelperPath() },
+    { role: 'activity', children: activityMonitor.diagnosticProcesses(), executablePath: activityHelperPath() },
+  ], process.platform === 'win32');
 });
 ipcMain.handle('diagnostics:export', async (event, text) => {
   if (!trustedSender(event) || closing || diagnosticExportPending) throw new Error('当前不能导出诊断。');
   if (typeof text !== 'string' || Buffer.byteLength(text) > 8 * 1024 * 1024) throw new Error('诊断报告过大或无效。');
   const report = JSON.parse(text);
-  if (!report || report.kind !== 'lycansync-diagnostics' || report.schemaVersion !== 5 || !Array.isArray(report.samples)
+  if (!report || report.kind !== 'lycansync-diagnostics' || report.schemaVersion !== 7 || !Array.isArray(report.samples)
       || report.samples.length > 900 || !Number.isFinite(Date.parse(report.startedAt))
       || !Number.isFinite(Date.parse(report.endedAt)) || Date.parse(report.endedAt) < Date.parse(report.startedAt)) {
     throw new Error('诊断报告无效。');

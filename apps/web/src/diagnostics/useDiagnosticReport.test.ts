@@ -32,7 +32,7 @@ function setup() {
     inputGain: 1, outputVolume: 1, screenShareVolume: 1,
     voiceVolumeBalance: false,
     noiseSuppression: true, autoGainControl: true, voiceEnhancement: true, echoCancellation: false,
-    stageCount: 1, focused: false };
+    viewerCount: 1 };
   const exportDiagnosticReport = vi.fn(async (_text: string) => ({ saved: true }));
   vi.stubGlobal('window', { lycanDesktop: { exportDiagnosticReport } });
   const report = scope.run(() => useDiagnosticReport({ room: () => room.value, participants: () => [], settings: () => ({ ...settings }) }))!;
@@ -67,6 +67,21 @@ it('报告只导出诊断字段，摘要包含各阶段证据和编码网络统�
   expect(result.measurements.powerEfficientEncoder).toContain('not-proof');
   expect(text).not.toMatch(/private-ip-address|private-remote-id/);
   expect(result.samples[0].streams[0].layers[0]).toMatchObject({ receiveLossPercent: null, jitterBufferMs: null });
+});
+
+it('分进程内存只导出角色、状态和数值，不泄露PID、路径或任意进程字段', () => {
+  const next = snapshot();
+  next.process = { cpuPercent: 2, memoryMb: 100, entries: [
+    { role: 'obs', state: 'running', workingSetMiB: 20, privateCommitMiB: 30 },
+    { role: 'activity', state: 'unavailable', workingSetMiB: null, privateCommitMiB: null },
+  ] };
+  Object.assign(next.process.entries[0], { pid: 987654, path: 'private-process-path', commandLine: 'private-command' });
+  const exported = diagnosticReportSample(next, new Map());
+  expect(exported.process).toEqual({ cpuPercent: 2, memoryMb: 100, entries: [
+    { role: 'obs', state: 'running', workingSetMiB: 20, privateCommitMiB: 30 },
+    { role: 'activity', state: 'unavailable', workingSetMiB: null, privateCommitMiB: null },
+  ] });
+  expect(JSON.stringify(exported)).not.toMatch(/987654|private-process-path|private-command/);
 });
 
 it('暂停、停层与恢复边界不进入诊断摘要，缺失网络反馈不当作正常网络', async () => {
@@ -166,9 +181,10 @@ it('导出按记录时参数保存，匿名化身份/轨道ID，不使用导出�
   expect(text).not.toContain('private-user-id'); expect(text).not.toContain('private-track-id');
   expect(text).not.toContain('私人昵称');
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(5);
-  expect(result.measurements.process).toEqual({ scope: 'electron-app-metrics', memory: 'sum-working-set',
-    includesNativeHelpers: false, sharedPagesMayBeCountedMoreThanOnce: true });
+  expect(result.schemaVersion).toBe(7);
+  expect(result.measurements.process).toEqual({ scope: 'electron-and-owned-native-processes', memoryUnit: 'MiB',
+    memoryMb: 'electron-only-sum-working-set', nativeMemory: 'GetProcessMemoryInfo; private-commit-not-resident',
+    sharedPagesMayBeCountedMoreThanOnce: true, includesGpuMemory: false, includesNativeCpu: false });
   expect(result.samples[0]).toMatchObject({ remoteParticipantCount: 0, roomState: 'connected', dynacast: true });
   expect(result.startSettings.quality).toBe('standard'); expect(result.endSettings.quality).toBe('economy');
   expect(result.startSettings.voiceVolumeBalance).toBe(false);
@@ -396,7 +412,7 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，槽位丢帧只取本
   report.stop(); await report.save('');
   const text = exportDiagnosticReport.mock.calls[0][0];
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(5);
+  expect(result.schemaVersion).toBe(7);
   expect(result.summary.segments).toHaveLength(1);
   expect(result.samples[0].native).toMatchObject({ helperVersion: '32.2.2', captureBackend: 'obsLibobs' });
   expect(result.summary.segments[0]).toMatchObject({ captureMode: 'obsLibobs',

@@ -12,7 +12,7 @@ type DiagnosticSettings = { quality: string; customQuality?: CustomScreenShareQu
   inputGain: number; outputVolume: number; screenShareVolume: number;
   voiceVolumeBalance: boolean;
   noiseSuppression: boolean; autoGainControl: boolean; voiceEnhancement: boolean; echoCancellation: boolean;
-  stageCount: number; focused: boolean };
+  viewerCount: number };
 type ReportSettings = DiagnosticSettings & { bitrateMode: 'recommended' | 'manual' | null;
   preset: { width: number; height: number; maxFrameRate: number; maxBitrate: number } | null };
 
@@ -193,6 +193,12 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
     },
     omittedParticipants: snapshot.omittedParticipants, process: snapshot.process && {
       cpuPercent: numeric(snapshot.process.cpuPercent), memoryMb: numeric(snapshot.process.memoryMb),
+      entries: snapshot.process.entries.map((entry) => ({
+        role: ['electron-Browser', 'electron-Tab', 'electron-GPU', 'electron-Utility', 'electron-other', 'obs', 'media', 'activity']
+          .includes(entry.role) ? entry.role : 'unknown',
+        state: ['running', 'stopped', 'unavailable'].includes(entry.state) ? entry.state : 'unavailable',
+        workingSetMiB: numeric(entry.workingSetMiB), privateCommitMiB: numeric(entry.privateCommitMiB),
+      })),
     }, failures: snapshot.failures.map(errorCode).filter(Boolean),
     streams: snapshot.streams.map((stream) => ({ member: alias(stream.identity), direction: stream.direction,
       target: stream.target && { resolution: stream.target.resolution, frameRate: numeric(stream.target.frameRate),
@@ -412,7 +418,7 @@ export function useDiagnosticReport(options: {
   async function save(notes: string) {
     if (disposed || saving.value || recording.value || !startedAt) return;
     saving.value = true; error.value = '';
-    const report = { kind: 'lycansync-diagnostics', schemaVersion: 5, startedAt, endedAt, stopReason: reason.value,
+    const report = { kind: 'lycansync-diagnostics', schemaVersion: 7, startedAt, endedAt, stopReason: reason.value,
       sampleIntervalMs: SAMPLE_INTERVAL_MS, notes: notes.slice(0, 2000), startSettings, endSettings, samples,
       summary: { segments: summarizeSegments(samples, packageInfo.version, Boolean(window.lycanDesktop)), limitations: [
         '各阶段统计窗口来源不同，不能直接相减计算全链路丢帧率。FPS 仅描述视频链路，不代表游戏 FPS 或每帧画面内容均不同。',
@@ -423,8 +429,9 @@ export function useDiagnosticReport(options: {
         microphonePipeline: window.lycanDesktop ? 'WASAPI + Sonora' : 'Chromium + browser processor' },
       measurements: {
         fps: 'counter-delta-divided-by-monotonic-elapsed-time; first-or-reset-sample-is-null',
-        process: { scope: 'electron-app-metrics', memory: 'sum-working-set', includesNativeHelpers: false,
-          sharedPagesMayBeCountedMoreThanOnce: true },
+        process: { scope: 'electron-and-owned-native-processes', memoryUnit: 'MiB',
+          memoryMb: 'electron-only-sum-working-set', nativeMemory: 'GetProcessMemoryInfo; private-commit-not-resident',
+          sharedPagesMayBeCountedMoreThanOnce: true, includesGpuMemory: false, includesNativeCpu: false },
         native: { scope: 'current-or-last-capture-snapshot', stateDeterminesWhetherCaptureIsRunning: true },
         nativeInterval: { scope: 'running-helper-samples', counters: ['framesReceived', 'framesProcessed'] },
         nativeInput: { scope: 'current-track-session', firstFrameMs: 'start-request-to-first-real-frame-submitted',
@@ -442,7 +449,7 @@ export function useDiagnosticReport(options: {
       limitations: ['null表示未取得；轨道目标不等于实测；统计不包含端到端延迟或GPU利用率',
         '网络统计只描述本机与SFU的一段；RTT不能除以二冒充端到端延迟；接收缓冲等待不含完整解码与显示耗时',
         '节能编码标志是浏览器提供的线索，不单独证明硬件编码；旧接收报告保留年龄，不重复计为新反馈',
-        '仅记录当前客户端；CPU/内存为Electron进程统计，不含原生helper；工作集合计可能重复计算共享页，不代表整机物理内存占用',
+        '仅记录当前客户端；CPU与memoryMb汇总仅含Electron，entries分列Electron与已启动的原生进程内存；不含原生CPU和显存。工作集可能重复计算共享页，私有提交不等于驻留RAM，不代表整机物理内存占用',
         '后台采样可能被系统节流；各采样窗口不同，不能直接相减计算丢帧率；每次最多30分钟/900份/6MiB，最多32名成员',
         '远端人数不等于观看人数；编码层启用不等于实际发送，无观看者且无有效码率时不能只凭bandwidth标签判断网络故障',
         'helper版本与采集后端以各样本为准；停止后原生统计可保留最后快照，以state判断是否仍在采集',

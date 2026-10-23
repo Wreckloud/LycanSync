@@ -37,6 +37,7 @@ function normalizeMappings(value) {
 function createActivityHelper({ enabled, executablePath, onActivity, spawnProcess = spawn,
   openLines = createInterface, fileExists = existsSync, schedule = setTimeout, cancel = clearTimeout }) {
   let child;
+  const children = new Set();
   let stopped = true;
   let restarting;
   let sequence = 0;
@@ -85,6 +86,8 @@ function createActivityHelper({ enabled, executablePath, onActivity, spawnProces
     stopped = false;
     if (!fileExists(executablePath())) return;
     const target = spawnProcess(executablePath(), [], { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+    children.add(target);
+    target.once('close', () => children.delete(target));
     child = target;
     const reader = openLines({ input: target.stdout, crlfDelay: Infinity });
     let finished = false;
@@ -202,7 +205,8 @@ function createActivityHelper({ enabled, executablePath, onActivity, spawnProces
     }
   }
 
-  return { start, stop, configure, listWindows, clearMappings, isCaptureGame };
+  return { start, stop, configure, listWindows, clearMappings, isCaptureGame,
+    diagnosticProcesses: () => [...children] };
 }
 
 module.exports = { createActivityHelper, normalizeActivity, normalizeMappings };
