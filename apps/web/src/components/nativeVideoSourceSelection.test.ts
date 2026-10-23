@@ -7,6 +7,37 @@ const sources = [
 ];
 
 describe('createNativeVideoSourceSelection', () => {
+  it('缩略图缓存最多24项，优先保留可见或选中项，淘汰不改变来源身份且可重新获取', () => {
+    const windows = Array.from({ length: 30 }, (_, index) => ({ ...sources[0], sourceId: `window:${index + 10}:0` }));
+    const selection = createNativeVideoSourceSelection(windows);
+    const selected = windows[0].sourceId;
+    selection.sourcesNeedingThumbnails(10_000, new Set([windows[1].sourceId]), selected);
+    selection.applyThumbnails(windows, windows.map((source) => ({ sourceId: source.sourceId, thumbnail: source.sourceId })));
+    expect(selection.options.filter((source) => source.thumbnail)).toHaveLength(24);
+    expect(selection.options[0].thumbnail).toBe(selected);
+    expect(selection.options[1].thumbnail).toBe(windows[1].sourceId);
+    expect(selection.options[2].thumbnail).toBeUndefined();
+    expect(selection.options.map((source) => source.id)).toEqual(windows.map((source) => source.sourceId));
+    const requested = selection.sourcesNeedingThumbnails(12_000, new Set([windows[2].sourceId]));
+    expect(requested).toHaveLength(1);
+    selection.applyThumbnails(requested, [{ sourceId: windows[2].sourceId, thumbnail: 'refetched' }]);
+    expect(selection.options[2].thumbnail).toBe('refetched');
+    selection.finish({ sourceId: selected, shareAudio: false });
+    expect(selection.options.every((source) => !source.thumbnail)).toBe(true);
+    return expect(selection.result).resolves.toEqual({ sourceId: selected, shareAudio: false });
+  });
+
+  it('较大缩略图受总字符串容量限制，超大单项不进入缓存，结束后迟到响应不能重新保留', () => {
+    const selection = createNativeVideoSourceSelection(sources);
+    selection.applyThumbnails(sources, sources.map((source) => ({ sourceId: source.sourceId, thumbnail: 'x'.repeat(1_100_000) })));
+    expect(selection.options.filter((source) => source.thumbnail)).toHaveLength(1);
+    selection.applyThumbnails(sources, [{ sourceId: sources[1].sourceId, thumbnail: 'x'.repeat(2 * 1024 * 1024 + 1) }]);
+    expect(selection.options.every((source) => !source.thumbnail)).toBe(true);
+    selection.finish(null);
+    selection.applyThumbnails(sources, [{ sourceId: sources[0].sourceId, thumbnail: 'late' }]);
+    expect(selection.options.every((source) => !source.thumbnail)).toBe(true);
+  });
+
   it('显示器按当前列表编号，不将 Windows 的 DISPLAY25 当作屏幕数量', () => {
     const monitor = { ...sources[1], title: '\\\\.\\DISPLAY25' };
     const selection = createNativeVideoSourceSelection([monitor]);

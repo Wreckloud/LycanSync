@@ -13,6 +13,9 @@ const frameStyle = computed(() => ({
 let activeUrl = '';
 let controller: AbortController | null = null;
 let observer: IntersectionObserver | null = null;
+let retentionObserver: IntersectionObserver | null = null;
+let prefetchVisible = false;
+let nearby = true;
 let disposed = false;
 
 function clearSource() {
@@ -45,20 +48,39 @@ async function load() {
 function observeFrame() {
   if (disposed || !frame.value) return;
   observer?.disconnect();
+  retentionObserver?.disconnect();
+  prefetchVisible = false;
+  nearby = true;
   const currentObserver = new IntersectionObserver((entries) => {
     // disconnect 不撤回已排队的回调；旧观察器不能重开请求或断开新的观察器。
-    if (disposed || observer !== currentObserver || !entries.some((entry) => entry.isIntersecting)) return;
-    currentObserver.disconnect();
-    observer = null;
-    void load();
+    if (disposed || observer !== currentObserver) return;
+    prefetchVisible = entries.some((entry) => entry.isIntersecting);
+    loadIfNeeded();
   }, { root: frame.value.closest('.message-list'), rootMargin: '180px 0px' });
+  const currentRetentionObserver = new IntersectionObserver((entries) => {
+    if (disposed || retentionObserver !== currentRetentionObserver) return;
+    nearby = entries.some((entry) => entry.isIntersecting);
+    if (nearby) { loadIfNeeded(); return; }
+    // 保留邻近图片避免滚动抖动；远离视口后解除 Blob 和图片引用，不改变消息尺寸。
+    controller?.abort();
+    controller = null;
+    clearSource();
+  }, { root: frame.value.closest('.message-list'), rootMargin: '1200px 0px' });
   observer = currentObserver;
+  retentionObserver = currentRetentionObserver;
   currentObserver.observe(frame.value);
+  currentRetentionObserver.observe(frame.value);
+}
+
+function loadIfNeeded() {
+  if (nearby && prefetchVisible && !source.value && !controller && !error.value) void load();
 }
 
 watch(() => [props.groupId, props.attachmentId], () => {
   observer?.disconnect();
   observer = null;
+  retentionObserver?.disconnect();
+  retentionObserver = null;
   controller?.abort();
   controller = null;
   clearSource();
@@ -70,6 +92,8 @@ onScopeDispose(() => {
   disposed = true;
   observer?.disconnect();
   observer = null;
+  retentionObserver?.disconnect();
+  retentionObserver = null;
   controller?.abort();
   clearSource();
 });

@@ -25,12 +25,15 @@ interface NativeScreenSourceSelection {
 
 const THUMBNAIL_REFRESH_INTERVAL_MS = 1_500;
 const SELECTED_THUMBNAIL_REFRESH_INTERVAL_MS = 750;
+const MAX_CACHED_THUMBNAILS = 24;
+const MAX_THUMBNAIL_CODE_UNITS = 2 * 1024 * 1024;
 
 // 持有本次来源快照与静态预览；只返回选择结果，不启动采集或发布轨道。
 export function createNativeVideoSourceSelection(sources: NativeVideoSourceOptionInput[]) {
   let currentSources = sources;
   const thumbnails = new Map<string, { title: string; thumbnail: string }>();
   const thumbnailAttempts = new Map<string, { title: string; attemptedAt: number }>();
+  let visibleSourceIds = new Set<string>();
   let settle: (selection: NativeScreenSourceSelection | null) => void = () => {};
   let settled = false;
   const result = new Promise<NativeScreenSourceSelection | null>((resolve) => { settle = resolve; });
@@ -72,6 +75,12 @@ export function createNativeVideoSourceSelection(sources: NativeVideoSourceOptio
     },
     sourcesNeedingThumbnails(now = Date.now(), visibleIds?: Set<string>, selectedId?: string) {
       if (settled) return [];
+      visibleSourceIds = new Set(visibleIds);
+      if (selectedId) visibleSourceIds.add(selectedId);
+      for (const id of visibleSourceIds) {
+        const thumbnail = thumbnails.get(id);
+        if (thumbnail) { thumbnails.delete(id); thumbnails.set(id, thumbnail); }
+      }
       return currentSources.filter((source) => {
         if (visibleIds && !visibleIds.has(source.sourceId) && source.sourceId !== selectedId) return false;
         const previous = thumbnailAttempts.get(source.sourceId);
@@ -92,7 +101,18 @@ export function createNativeVideoSourceSelection(sources: NativeVideoSourceOptio
       for (const { sourceId, thumbnail } of received) {
         const title = requested.get(sourceId);
         // 刷新期间关闭或改名的来源不能套用旧截图；真正采集仍校验原生来源身份。
-        if (title && current.get(sourceId) === title) thumbnails.set(sourceId, { title, thumbnail });
+        if (title && current.get(sourceId) === title) {
+          thumbnails.delete(sourceId);
+          if (thumbnail.length <= MAX_THUMBNAIL_CODE_UNITS) thumbnails.set(sourceId, { title, thumbnail });
+        }
+      }
+      // 限制字符串保留量，不把编码长度当作实际堆内存；优先淘汰远离视口的旧预览。
+      let codeUnits = [...thumbnails.values()].reduce((sum, entry) => sum + entry.thumbnail.length, 0);
+      while (thumbnails.size > MAX_CACHED_THUMBNAILS || codeUnits > MAX_THUMBNAIL_CODE_UNITS) {
+        const id = [...thumbnails.keys()].find((key) => !visibleSourceIds.has(key)) ?? thumbnails.keys().next().value;
+        if (id === undefined) break;
+        codeUnits -= thumbnails.get(id)!.thumbnail.length;
+        thumbnails.delete(id);
       }
       return buildOptions();
     },
@@ -100,6 +120,9 @@ export function createNativeVideoSourceSelection(sources: NativeVideoSourceOptio
       if (settled) return;
       settled = true;
       const isCurrent = currentSources.some((source) => source.sourceId === selection?.sourceId);
+      thumbnails.clear();
+      thumbnailAttempts.clear();
+      visibleSourceIds.clear();
       settle(selection && isCurrent ? selection : null);
     },
   };
