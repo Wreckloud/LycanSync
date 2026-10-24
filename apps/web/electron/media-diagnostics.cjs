@@ -111,7 +111,7 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           ...audioTiming, ...details });
       }
     } catch (error) {
-      if (error.code !== 'ENOENT') throw new Error('无法读取本机故障诊断，请检查用户目录权限。');
+      if (error.code !== 'ENOENT') throw new Error('无法读取本机故障诊断，请检查数据目录权限。');
     } finally { await handle?.close(); }
   }
   return events.sort((left, right) => left.time.localeCompare(right.time)).slice(-200);

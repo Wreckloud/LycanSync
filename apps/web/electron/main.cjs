@@ -14,6 +14,7 @@ const { loadServerSettings, saveServerSettings } = require('./server-settings.cj
 const { matchNativeVideoSourceThumbnails, monitorDisplayId } = require('./native-video-thumbnails.cjs');
 const { parseAccessLink, accessLinkFromArguments, parseManualAccessLink } = require('./access-links.cjs');
 const { createStartupUpdate } = require('./startup-update.cjs');
+const { applyRuntimePaths } = require('./runtime-paths.cjs');
 const { createActivityHelper } = require('./activity-helper.cjs');
 const { createVoiceOverlay } = require('./voice-overlay.cjs');
 const { initialWindowBounds, createWindowLayout } = require('./window-layout.cjs');
@@ -64,8 +65,15 @@ app.setName('LycanSync');
 if (process.platform === 'win32') {
   app.commandLine.appendSwitch('disable-features', 'WebRtcAllowWgcDesktopCapturer,WebRtcAllowWgcScreenCapturer');
 }
-// 遵循 Chromium 的独立用户目录参数，便于测试与日常账号数据隔离。
-if (app.commandLine.hasSwitch('user-data-dir')) app.setPath('userData', resolve(app.commandLine.getSwitchValue('user-data-dir')));
+// 运行数据、Chromium 缓存和更新包都放在安装目录；--user-data-dir 仍用于测试隔离。
+const runtimeLayout = applyRuntimePaths({
+  app,
+  packaged: app.isPackaged,
+  execPath: process.execPath,
+  projectDirectory: resolve(__dirname, '../../..'),
+  explicitUserDataDir: app.commandLine.hasSwitch('user-data-dir')
+    ? app.commandLine.getSwitchValue('user-data-dir') : undefined,
+});
 const backend = new URL(loadServerSettings({
   packaged: app.isPackaged,
   userDirectory: app.getPath('userData'),
@@ -122,6 +130,7 @@ const startupUpdate = createStartupUpdate({
   version: app.getVersion(),
   // app-update.yml 来自安装包，不能跟随用户选择的业务服务器改变。
   createUpdater: () => require('electron-updater').autoUpdater,
+  updaterCachePath: runtimeLayout.updaterCachePath,
   onChange: (state) => { if (!mainWindow?.isDestroyed()) mainWindow?.webContents.send('update:state', state); },
   beforeInstall: async () => {
     if (pendingAccessLink) {
@@ -1063,7 +1072,7 @@ async function serveApplication(request) {
         try { await clearSession(); }
         catch {
           // 服务端已结束会话，文件清理失败也不能继续展示为已登录。
-          return Response.json({ code: 'LOCAL_SESSION_CLEAR_FAILED', message: '登录已结束，但无法清理本机凭据，请检查用户目录权限。' }, {
+          return Response.json({ code: 'LOCAL_SESSION_CLEAR_FAILED', message: '登录已结束，但无法清理本机凭据，请检查数据目录权限。' }, {
             status: currentSessionUnauthorized ? 401 : 502,
             headers: { 'Cache-Control': 'no-store',
               ...(currentSessionUnauthorized ? { 'X-Lycan-Session-Expired': 'true' } : {}) },
@@ -1077,7 +1086,7 @@ async function serveApplication(request) {
             || typeof result.user?.id !== 'string' || !result.user.id
             || typeof result.user.nickname !== 'string' || typeof result.user.avatar !== 'string'
             || typeof result.user.administrator !== 'boolean') throw new Error('登录响应无效');
-        failureMessage = '无法保存本机登录凭据，请检查用户目录权限和系统加密后重试。';
+        failureMessage = '无法保存本机登录凭据，请检查数据目录权限和系统加密后重试。';
         await saveSession(result.sessionToken);
         // 会话原文只进入主进程的系统加密存储，不暴露给渲染页面。
         delete result.sessionToken;
