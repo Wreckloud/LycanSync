@@ -3,6 +3,57 @@ import { Track, type Participant, type Room } from 'livekit-client';
 import { createMediaDiagnosticsSampler } from './mediaDiagnostics';
 
 afterEach(() => vi.unstubAllGlobals());
+
+it('OBS 延误时隙不算成功渲染，使用宿主实际区间，预热均值不进入统计', async () => {
+  const { room, local, bridge } = setup();
+  const sampler = createMediaDiagnosticsSampler();
+  const sample = async (render: ObsRenderDiagnostics) => {
+    bridge.getNativeMediaDiagnostics.mockResolvedValueOnce({ state: 'running', captureBackend: 'obsLibobs',
+      sessionId: 'current', obsRender: render } as NativeCaptureDiagnostics);
+    return sampler.collect(room, [local] as unknown as Participant[]);
+  };
+  const render = { configuration: 1, elapsedMs: 500, totalFrames: 100, laggedFrames: 1,
+    activeFps: null, averageRenderMs: null };
+  expect((await sample(render)).obsRenderInterval).toBeNull();
+  const ready = { ...render, elapsedMs: 2500, totalFrames: 250, laggedFrames: 10, activeFps: 59, averageRenderMs: 1.5 };
+  expect((await sample(ready)).obsRenderInterval).toBeNull();
+  vi.stubGlobal('performance', { now: () => -99999 });
+  const next = await sample({ ...ready, elapsedMs: 5000, totalFrames: 400, laggedFrames: 14 });
+  expect(next.obsRenderInterval).toEqual({ elapsedMs: 2500, totalFrames: 150, laggedFrames: 4,
+    renderedFps: 58, laggedPercent: 2.67 });
+});
+
+it('OBS 启停、重设配置、暂停恢复、计数重置和读取缺口均重新建立基线', async () => {
+  const { room, local, bridge } = setup();
+  const sampler = createMediaDiagnosticsSampler();
+  let native = { state: 'running', captureBackend: 'obsLibobs', sessionId: 'first', captureSuspended: false,
+    obsRender: { configuration: 1, elapsedMs: 2000, totalFrames: 100, laggedFrames: 0, activeFps: 60, averageRenderMs: 1 } };
+  const sample = async () => {
+    bridge.getNativeMediaDiagnostics.mockResolvedValueOnce(native as NativeCaptureDiagnostics);
+    return sampler.collect(room, [local] as unknown as Participant[]);
+  };
+  const advance = () => { native.obsRender.elapsedMs += 2000; native.obsRender.totalFrames += 120; };
+  expect((await sample()).obsRenderInterval).toBeNull();
+  advance(); expect((await sample()).obsRenderInterval?.renderedFps).toBe(60);
+  native.obsRender.configuration++;
+  advance(); expect((await sample()).obsRenderInterval).toBeNull();
+  advance(); expect((await sample()).obsRenderInterval?.renderedFps).toBe(60);
+  native.captureSuspended = true;
+  advance(); expect((await sample()).obsRenderInterval).toBeNull();
+  native.captureSuspended = false;
+  advance(); expect((await sample()).obsRenderInterval).toBeNull();
+  advance(); expect((await sample()).obsRenderInterval?.renderedFps).toBe(60);
+  native.obsRender.totalFrames = 0;
+  advance(); expect((await sample()).obsRenderInterval).toBeNull();
+  native.sessionId = 'next';
+  advance(); expect((await sample()).obsRenderInterval).toBeNull();
+  advance(); expect((await sample()).obsRenderInterval?.renderedFps).toBe(60);
+  bridge.getNativeMediaDiagnostics.mockRejectedValueOnce(new Error('unavailable'));
+  expect((await sampler.collect(room, [local] as unknown as Participant[])).failures).toContain('nativeDiagnosticsUnavailable');
+  advance(); expect((await sample()).obsRenderInterval).toBeNull();
+  native = { ...native, state: 'idle' };
+  expect((await sample()).obsRenderInterval).toBeNull();
+});
 function setup() {
   vi.stubGlobal('document', { hidden: false });
   const bridge = { getProcessMetrics: vi.fn(async () => ({ cpuPercent: 3, memoryMb: 120, entries: [] })),

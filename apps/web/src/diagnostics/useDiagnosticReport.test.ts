@@ -11,7 +11,7 @@ const scopes: ReturnType<typeof effectScope>[] = [];
 function snapshot(): MediaDiagnosticsSnapshot {
   return { time: new Date().toISOString(), pageVisible: true, participantCount: 1, omittedParticipants: 0,
     remoteParticipantCount: 0, roomState: 'connected', dynacast: true,
-    nativeInterval: null,
+    nativeInterval: null, obsRenderInterval: null,
     streams: [{ identity: 'private-user-id', name: '私人昵称', direction: '发送', target: null,
       nativeInput: null, subscription: { subscribed: null, enabled: null, muted: false },
       sourceFrames: 200, sourceFps: 59, sourceIntervalMs: 2000, playbackFrames: null,
@@ -44,6 +44,21 @@ beforeEach(() => {
   collect.mockReset().mockImplementation(async () => snapshot());
 });
 afterEach(() => { scopes.splice(0).forEach((scope) => scope.stop()); vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+it.each(['发送', '接收'] as const)('摘要按%s方向区分编码和解码，不把观看端当作发送端', async (direction) => {
+  collect.mockImplementation(async () => {
+    const next = snapshot();
+    next.streams[0].direction = direction;
+    return next;
+  });
+  const { report, exportDiagnosticReport } = setup();
+  report.start(); await vi.advanceTimersByTimeAsync(2000); report.stop(); await report.save('');
+  const segment = JSON.parse(exportDiagnosticReport.mock.calls[0][0]).summary.segments[0];
+  const expected = direction === '发送' ? '编码' : '解码';
+  const unexpected = direction === '发送' ? '解码' : '编码';
+  expect(segment.observations).toContain(`${expected}层 FPS 分别记录为 第 1 层 58，不跨层相加。`);
+  expect(segment.observations.some((text: string) => text.startsWith(`${unexpected}层 FPS`))).toBe(false);
+});
 
 it('未入房或开始记录也能导出自动事件，不启动媒体采样', async () => {
   const { report, room, exportDiagnosticReport } = setup();
@@ -193,7 +208,7 @@ it('导出按记录时参数保存，匿名化身份/轨道ID，不使用导出�
   expect(text).not.toContain('private-user-id'); expect(text).not.toContain('private-track-id');
   expect(text).not.toContain('私人昵称');
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(7);
+  expect(result.schemaVersion).toBe(8);
   expect(result.measurements.process).toEqual({ scope: 'electron-and-owned-native-processes', memoryUnit: 'MiB',
     memoryMb: 'electron-only-sum-working-set', nativeMemory: 'GetProcessMemoryInfo; private-commit-not-resident',
     sharedPagesMayBeCountedMoreThanOnce: true, includesGpuMemory: false, includesNativeCpu: false });
@@ -406,12 +421,17 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，槽位丢帧只取本
   first.native = { helperVersion: '32.2.2', captureBackend: 'obsLibobs', state: 'running',
     sessionId: 'private-obs-session', captureSuspended: false, frameWidth: 1920, frameHeight: 1080,
     framesReceived: 200, framesProcessed: 180, obsBridgeDroppedFrames: 20 } as NativeCaptureDiagnostics;
+  first.native.obsRender = { configuration: 1, elapsedMs: 2000, totalFrames: 120, laggedFrames: 0,
+    activeFps: 60, averageRenderMs: 1 };
+  Object.assign(first.native.obsRender, { windowTitle: 'private-title', luid: 'private-device' });
   first.streams[0].sessionKey = 'private-obs-session';
   first.streams[0].nativeInput = { sessionId: 'private-obs-session', receivedFrames: 180, submittedFrames: 160,
     backpressureDroppedFrames: 20, suspendedDroppedFrames: 0, completedWrites: 160, writeFailures: 0,
     placeholderFrames: 0, pendingWrite: false, firstFrameMs: 30 };
   const next = structuredClone(first);
   Object.assign(next.native!, { framesReceived: 320, framesProcessed: 270, obsBridgeDroppedFrames: 50 });
+  Object.assign(next.native!.obsRender!, { elapsedMs: 4000, totalFrames: 240, laggedFrames: 4, averageRenderMs: 2 });
+  next.obsRenderInterval = { elapsedMs: 2000, totalFrames: 120, laggedFrames: 4, renderedFps: 58, laggedPercent: 3.33 };
   next.nativeInterval = { elapsedMs: 2000, framesReceived: 120, framesProcessed: 90, receivedFps: 60, processedFps: 45 };
   next.streams[0].sourceFps = 40;
   Object.assign(next.streams[0].nativeInput!, { receivedFrames: 264, submittedFrames: 240, backpressureDroppedFrames: 24 });
@@ -424,7 +444,7 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，槽位丢帧只取本
   report.stop(); await report.save('');
   const text = exportDiagnosticReport.mock.calls[0][0];
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(7);
+  expect(result.schemaVersion).toBe(8);
   expect(result.summary.segments).toHaveLength(1);
   expect(result.samples[0].native).toMatchObject({ helperVersion: '32.2.2', captureBackend: 'obsLibobs' });
   expect(result.summary.segments[0]).toMatchObject({ captureMode: 'obsLibobs',
@@ -435,6 +455,59 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，槽位丢帧只取本
   expect(result.samples.map((sample: { native: { obsBridgeDroppedFrames: number } }) => sample.native.obsBridgeDroppedFrames))
     .toEqual([20, 50]);
   expect(text).not.toContain('private-obs-session');
+  expect(text).not.toMatch(/private-title|private-device|windowTitle|luid/);
+  expect(result.samples[1].obsRenderInterval).toEqual(next.obsRenderInterval);
+  expect(result.samples[1].native.obsRender).toEqual({ configuration: 1, elapsedMs: 4000, totalFrames: 240,
+    laggedFrames: 4, activeFps: 60, averageRenderMs: 2 });
+  expect(result.summary.segments[0].obsRender).toEqual({ typicalFps: 58, typicalRenderMs: 1.5, validSamples: 1,
+    averageValidSamples: 2, totalFrames: 120, laggedFrames: 4, laggedPercent: 3.33 });
+  expect(result.summary.segments[0].evidence).toContainEqual({ stage: 'OBS 渲染', available: true });
+});
+
+it('相同来源与画质的 OBS 重设也另起分段，首区间及无法匹配的本机统计不混入摘要', async () => {
+  const first = snapshot();
+  first.native = { state: 'running', sessionId: 'private-session', captureBackend: 'obsLibobs',
+    obsRender: { configuration: 1, elapsedMs: 4000, totalFrames: 240, laggedFrames: 0,
+      activeFps: 60, averageRenderMs: 1 } } as NativeCaptureDiagnostics;
+  first.streams[0].nativeInput = { sessionId: 'private-session' } as NonNullable<typeof first.streams[0]['nativeInput']>;
+  first.obsRenderInterval = { elapsedMs: 2000, totalFrames: 120, laggedFrames: 0, renderedFps: 60, laggedPercent: 0 };
+  const second = structuredClone(first);
+  second.native!.obsRender!.configuration = 2;
+  second.obsRenderInterval!.renderedFps = 999;
+  const third = structuredClone(second);
+  third.native!.sessionId = 'another-session';
+  const { report, exportDiagnosticReport } = setup();
+  collect.mockResolvedValueOnce(first).mockResolvedValueOnce(second).mockResolvedValueOnce(third);
+  report.start(); await vi.advanceTimersByTimeAsync(4000); report.stop(); await report.save('');
+  const result = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
+  expect(result.samples[1].streams[0].segmentReason).toBe('render-configuration-change');
+  expect(result.samples[1].obsRenderInterval).toBeNull();
+  expect(result.samples[2].nativeVideoSessionMatched).toBe(false);
+  expect(result.summary.segments.every((segment: { obsRender: { typicalFps: number | null; totalFrames: number | null } }) =>
+    segment.obsRender.typicalFps === null && segment.obsRender.totalFrames === null)).toBe(true);
+});
+
+it('首样本缺失的 OBS 配置在可用后补记，暂时缺失不分段也不抹掉已知编号', async () => {
+  const first = snapshot();
+  first.native = { state: 'running', sessionId: 'private-session', captureBackend: 'obsLibobs',
+    obsRender: null } as NativeCaptureDiagnostics;
+  first.streams[0].nativeInput = { sessionId: 'private-session' } as NonNullable<typeof first.streams[0]['nativeInput']>;
+  const known = structuredClone(first);
+  known.native!.obsRender = { configuration: 1, elapsedMs: 4000, totalFrames: 240, laggedFrames: 0,
+    activeFps: 60, averageRenderMs: 1 };
+  const reset = structuredClone(known);
+  reset.native!.obsRender!.configuration = 2;
+  reset.obsRenderInterval = { elapsedMs: 2000, totalFrames: 120, laggedFrames: 0, renderedFps: 999, laggedPercent: 0 };
+  collect.mockResolvedValueOnce(first).mockResolvedValueOnce(known).mockResolvedValueOnce(structuredClone(first))
+    .mockResolvedValueOnce(reset);
+  const { report, exportDiagnosticReport } = setup();
+  report.start(); await vi.advanceTimersByTimeAsync(6000); report.stop(); await report.save('');
+  const result = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
+  expect(result.samples.map((sample: { streams: { segmentReason: string }[] }) => sample.streams[0].segmentReason))
+    .toEqual(['initial', 'continuation', 'continuation', 'render-configuration-change']);
+  expect(result.summary.segments).toHaveLength(2);
+  expect(result.samples[3].obsRenderInterval).toBeNull();
+  expect(result.summary.segments[1].obsRender.typicalFps).toBeNull();
 });
 
 it('导出失败保留原记录，采样处理中不会重复启动或积压任务', async () => {

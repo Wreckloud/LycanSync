@@ -33,6 +33,15 @@ interface NativeVideoSource {
   monitorOrigin?: { x: number; y: number };
 }
 
+interface ObsRenderDiagnostics {
+  configuration: number;
+  elapsedMs: number;
+  totalFrames: number;
+  laggedFrames: number;
+  activeFps: number | null;
+  averageRenderMs: number | null;
+}
+
 interface NativeCaptureDiagnostics {
   helperVersion: string;
   captureBackend: 'obsLibobs' | null;
@@ -45,6 +54,7 @@ interface NativeCaptureDiagnostics {
   framesReceived: number | null;
   framesProcessed: number | null;
   obsBridgeDroppedFrames: number | null;
+  obsRender: ObsRenderDiagnostics | null;
   captureSuspended: boolean | null;
   microphoneCaptureDroppedChunks: number;
   screenShareAudio: {

@@ -86,11 +86,20 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           'sharedTextureImportFailed', 'sharedTextureTransferFailed', 'sharedTextureReceiverFailed',
           'sharedTextureSlotReleaseFailed', 'captureTargetClosed', 'remoteControlInputFailed',
           'nativeVideoBridgeUnavailable', 'videoSourceExpired', 'videoCaptureAlreadyRunning',
-          'obsCaptureGameDetectionFailed', 'obsCaptureVersionUnsupported'].includes(entry.code)) details.code = entry.code;
+          'obsCaptureGameDetectionFailed', 'obsCaptureVersionUnsupported', 'dxgiMonitorUnavailable',
+          'dxgiAdapterMismatch'].includes(entry.code)) details.code = entry.code;
         if (['window', 'monitor'].includes(entry.sourceKind)) details.sourceKind = entry.sourceKind;
         if (typeof entry.hostReused === 'boolean') details.hostReused = entry.hostReused;
-        for (const key of ['repeatCount', 'importedCount', 'pendingReleaseCount', 'width', 'height', 'maxFps']) {
+        for (const key of ['repeatCount', 'importedCount', 'pendingReleaseCount', 'width', 'height', 'maxFps',
+          'adapterIndex', 'sourceWidth', 'sourceHeight']) {
           if (Number.isSafeInteger(entry[key]) && entry[key] >= 0 && entry[key] <= 1_000_000) details[key] = entry[key];
+        }
+        if (['dxgi', 'wgc-window', 'game'].includes(entry.captureMethod)) details.captureMethod = entry.captureMethod;
+        if (['DuplicateOutput1', 'DuplicateOutput'].includes(entry.captureApi)) details.captureApi = entry.captureApi;
+        if (typeof entry.adapterMatched === 'boolean') details.adapterMatched = entry.adapterMatched;
+        if (['graceful', 'forced', 'unexpected', 'beforeStart'].includes(entry.stopMode)) details.stopMode = entry.stopMode;
+        if (['shutdown', 'stopTimeout', 'adapterChange', 'textureTimeout', 'idle', 'failure'].includes(entry.stopReason)) {
+          details.stopReason = entry.stopReason;
         }
         if (entry.stage === 'applicationReady') {
           for (const key of ['appVersion', 'electronVersion', 'osVersion']) {

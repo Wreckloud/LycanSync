@@ -60,6 +60,8 @@ $gameSourceRoot = Join-Path $sourceDirectory 'obs-studio-32.2.2-sources'
 $gameDepsDirectory = Join-Path $cacheDirectory 'game-build-deps'
 & tar.exe -xzf $sourceArchive -C $sourceDirectory 'obs-studio-32.2.2-sources/plugins/win-capture' 'obs-studio-32.2.2-sources/plugins/win-wasapi' 'obs-studio-32.2.2-sources/libobs-winrt' 'obs-studio-32.2.2-sources/shared/obs-hook-config' 'obs-studio-32.2.2-sources/shared/obs-inject-library' 'obs-studio-32.2.2-sources/shared/ipc-util' 'obs-studio-32.2.2-sources/shared/file-updater' 'obs-studio-32.2.2-sources/deps/w32-pthreads'
 if ($LASTEXITCODE -ne 0) { throw '游戏插件固定源码解压失败。' }
+& tar.exe -xzf $sourceArchive -C $sourceDirectory 'obs-studio-32.2.2-sources/libobs-d3d11'
+if ($LASTEXITCODE -ne 0) { throw 'DXGI 图形模块固定源码解压失败。' }
 $gameDepsHash = '6f90e9598fa10cff5ad23cdcfae49b87868c07bf896b02cd464582b4ce2f2ba9'
 # 哈希与版本来自同一份已校验 OBS 源码归档中的 CMakePresets.json。
 $gameDepsArchive = Get-VerifiedArchive 'windows-deps-2026-07-15-x64.zip' $gameDepsHash 'https://github.com/obsproject/obs-deps/releases/download/2026-07-15/windows-deps-2026-07-15-x64.zip'
@@ -70,6 +72,8 @@ if ($LASTEXITCODE -ne 0) { throw '游戏插件依赖解压失败。' }
 if ($LASTEXITCODE -ne 0) { throw '固定游戏插件补丁不适用，拒绝继续构建。' }
 & git -C $projectRoot apply --recount --whitespace=error-all --directory=release/build-cache/obs-32.2.2/source/obs-studio-32.2.2-sources (Join-Path $PSScriptRoot 'patches/bound-audio-capture.patch')
 if ($LASTEXITCODE -ne 0) { throw '固定声音插件补丁不适用，拒绝继续构建。' }
+& git -C $projectRoot apply --recount --whitespace=error-all --directory=release/build-cache/obs-32.2.2/source/obs-studio-32.2.2-sources (Join-Path $PSScriptRoot 'patches/dxgi-output-compat.patch')
+if ($LASTEXITCODE -ne 0) { throw '固定 DXGI 补丁不适用，拒绝继续构建。' }
 $includeDirectory = Join-Path $preparedDirectory 'include'
 $libraryDirectory = Join-Path $preparedDirectory 'lib'
 $binaryDirectory = Join-Path $preparedDirectory 'bin/64bit'
@@ -152,6 +156,8 @@ $gamePlugin = Join-Path $buildDirectory 'game-plugin/win-capture.dll'
 Copy-Item -LiteralPath $gamePlugin -Destination (Join-Path $pluginDirectory 'win-capture.dll') -Force
 $audioPlugin = Join-Path $buildDirectory 'audio-plugin/win-wasapi.dll'
 Copy-Item -LiteralPath $audioPlugin -Destination (Join-Path $pluginDirectory 'win-wasapi.dll') -Force
+$graphicsModule = Join-Path $buildDirectory 'graphics-module/libobs-d3d11.dll'
+Copy-Item -LiteralPath $graphicsModule -Destination (Join-Path $binaryDirectory 'libobs-d3d11.dll') -Force
 
 # 静态检查 DLL 依赖；不加载 OBS、辅助程序或设备。API-set 由 Windows 装载器提供。
 $imports = @()
@@ -192,6 +198,7 @@ $hostSources = @(Get-ChildItem -LiteralPath $PSScriptRoot -File -Recurse | Where
 })
 $manifest = [ordered]@{ obsVersion = '32.2.2'; architecture = 'x64'; sourceSha256 = $sourceHash; runtimeSha256 = $runtimeHash;
     sourceUrl = 'https://github.com/obsproject/obs-studio/releases/tag/32.2.2'; sourceArchive = (Split-Path $sourceArchive -Leaf);
+    graphicsPatchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/dxgi-output-compat.patch') -Algorithm SHA256).Hash.ToLowerInvariant();
     compiler = $toolsVersion; runtimeBytes = ($files | Measure-Object -Property bytes -Sum).Sum;
     runtimeExecuted = $false; redistributionReady = $false; imports = $imports; sourceFiles = $hostSources; files = $files }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $preparedDirectory 'build-manifest.json') -Encoding utf8

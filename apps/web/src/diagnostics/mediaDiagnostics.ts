@@ -38,6 +38,8 @@ export interface MediaDiagnosticsSnapshot {
   native: NativeCaptureDiagnostics | null;
   nativeInterval: { elapsedMs: number; framesReceived: number; framesProcessed: number;
     receivedFps: number; processedFps: number } | null;
+  obsRenderInterval: { elapsedMs: number; totalFrames: number; laggedFrames: number;
+    renderedFps: number; laggedPercent: number | null } | null;
   failures: string[];
 }
 
@@ -49,6 +51,27 @@ export function createMediaDiagnosticsSampler() {
   const previousNativeInput = new Map<string, { receivedFrames: number; submittedFrames: number;
     backpressureDroppedFrames: number; timestamp: number }>();
   let previousNative: { signature: string; framesReceived: number; framesProcessed: number; timestamp: number } | null = null;
+  let previousObsRender: { signature: string; counters: ObsRenderDiagnostics } | null = null;
+
+  function readObsRenderInterval(native: NativeCaptureDiagnostics | null): MediaDiagnosticsSnapshot['obsRenderInterval'] {
+    const current = native?.obsRender;
+    if (native?.state !== 'running' || native.captureBackend !== 'obsLibobs' || native.captureSuspended === true
+        || !current || current.elapsedMs < 2000 || current.activeFps === null || current.averageRenderMs === null) {
+      previousObsRender = null;
+      return null;
+    }
+    const signature = [native.sessionId, current.configuration, native.frameWidth, native.frameHeight].join('|');
+    const previous = previousObsRender;
+    previousObsRender = { signature, counters: { ...current } };
+    if (!previous || previous.signature !== signature) return null;
+    const elapsedMs = current.elapsedMs - previous.counters.elapsedMs;
+    const totalFrames = current.totalFrames - previous.counters.totalFrames;
+    const laggedFrames = current.laggedFrames - previous.counters.laggedFrames;
+    if (elapsedMs <= 0 || totalFrames < 0 || laggedFrames < 0 || laggedFrames > totalFrames) return null;
+    // OBS 总数含错过的时隙；扣除延误后才是实际执行的渲染循环，不代表不同来源画面。
+    return { elapsedMs, totalFrames, laggedFrames, renderedFps: Math.round((totalFrames - laggedFrames) * 1000 / elapsedMs),
+      laggedPercent: totalFrames > 0 ? Math.round(laggedFrames / totalFrames * 10_000) / 100 : null };
+  }
 
   function readNativeInterval(native: NativeCaptureDiagnostics | null) {
     const timestamp = performance.now();
@@ -58,7 +81,7 @@ export function createMediaDiagnosticsSampler() {
       return null;
     }
     const signature = [native.sessionId, native.helperVersion, native.captureBackend, native.sourceKind,
-      native.frameWidth, native.frameHeight].join('|');
+      native.frameWidth, native.frameHeight, native.obsRender?.configuration].join('|');
     const last = previousNative;
     previousNative = { signature, framesReceived: native.framesReceived, framesProcessed: native.framesProcessed, timestamp };
     const elapsedMs = last && signature === last.signature ? timestamp - last.timestamp : 0;
@@ -93,7 +116,7 @@ export function createMediaDiagnosticsSampler() {
       participantCount: participants.length, omittedParticipants: Math.max(0, participants.length - 32),
       remoteParticipantCount: room.remoteParticipants?.size ?? null, roomState: room.state ?? null,
       dynacast: typeof room.options?.dynacast === 'boolean' ? room.options.dynacast : null,
-      streams: [], audio: [], process: null, native: null, nativeInterval: null, failures: [] };
+      streams: [], audio: [], process: null, native: null, nativeInterval: null, obsRenderInterval: null, failures: [] };
     const activeTrackIds = new Set<string>();
     await Promise.all(participants.slice(0, 32).map(async (participant) => {
       const local = participant === room.localParticipant;
@@ -188,10 +211,12 @@ export function createMediaDiagnosticsSampler() {
           ? bridge.getNativeMediaDiagnostics().then((value) => {
             snapshot.native = value;
             snapshot.nativeInterval = readNativeInterval(value);
+            snapshot.obsRenderInterval = readObsRenderInterval(value);
           })
             .catch(() => { snapshot.failures.push('nativeDiagnosticsUnavailable'); }) : Promise.resolve(),
       ]);
     }
+    if (!snapshot.native) { previousNative = null; previousObsRender = null; }
     snapshot.streams.sort((left, right) => left.identity.localeCompare(right.identity));
     return snapshot;
   }
