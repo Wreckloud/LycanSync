@@ -21,11 +21,13 @@ const qualityCheck = process.env.LYCANSYNC_CAPTURE_QUALITY_CHECK === '1';
 const windowCheck = process.env.LYCANSYNC_CAPTURE_WINDOW_CHECK === '1';
 const gameCheck = process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1';
 const applicationCheck = process.env.LYCANSYNC_CAPTURE_APPLICATION_CHECK === '1';
-if ([resourceCheck, qualityCheck, windowCheck, applicationCheck, gameCheck].filter(Boolean).length > 1) throw new Error('captureTestModesConflict');
+const startupCheck = process.env.LYCANSYNC_CAPTURE_STARTUP_CHECK === '1';
+if ([resourceCheck, qualityCheck, windowCheck, applicationCheck, gameCheck, startupCheck].filter(Boolean).length > 1) throw new Error('captureTestModesConflict');
 const rustPath = resolve(projectRoot, 'native/media-helper/target/release/lycansync-media.exe');
 const cases = [];
 const failures = [];
 const diagnostics = [];
+const captureEvidence = [];
 let window;
 let production;
 let manager;
@@ -116,7 +118,7 @@ async function finish(result) {
     catch { targetFixture.kill(); result.cleanupError = 'testWindowExitUnconfirmed'; }
   }
   result.helperClosed = !manager?.state;
-  process.stdout.write(`${JSON.stringify({ type: 'obsCaptureSmokeResult', ...result, cases, failures, diagnostics })}\n`);
+  process.stdout.write(`${JSON.stringify({ type: 'obsCaptureSmokeResult', ...result, cases, failures, diagnostics, captureEvidence })}\n`);
   window?.destroy();
   app.exit(result.ok && result.helperClosed && !result.cleanupError ? 0 : 1);
 }
@@ -174,6 +176,7 @@ app.whenReady().then(async () => {
     configPath: resolve(app.getPath('userData'), 'obs-capture', '32.2.2'),
     onFrame: production.handleNativeSharedTextureFrame,
     onFailure: (state, error) => {
+      diagnostics.push(`obsFailure:${error.message}`);
       const video = production.nativeVideoSession;
       if (video && video.sessionId === state.videoSessionId && !video.stopping) {
         production.recordVideoFailure('obsCaptureHost', error);
@@ -182,6 +185,7 @@ app.whenReady().then(async () => {
     },
     onClosed: production.releaseHelperProcessBridge,
     onSuspended: production.handleVideoCaptureSuspended,
+    onCaptureDiagnostic: (_state, entry) => captureEvidence.push(entry),
     onDiagnostic: (message) => { if (diagnostics.length < 30) diagnostics.push(message.slice(0, 250)); },
   });
   let sourceId = 'monitor:1:0';
@@ -208,6 +212,94 @@ app.whenReady().then(async () => {
   const point = { x: Math.round((bounds.x + 48 - display.bounds.x) / display.bounds.width * 1920),
     y: Math.round((bounds.y + 48 - display.bounds.y) / display.bounds.height * 1080) };
   const probe = () => renderer(`probe(${point.x},${point.y})`);
+  if (startupCheck) {
+    const markerVisible = async () => {
+      const windowHandle = window.getNativeWindowHandle().readBigUInt64LE().toString();
+      const bounds = window.getContentBounds();
+      const markerPoint = screen.dipToScreenPoint({ x: bounds.x + 48, y: bounds.y + 48 });
+      const { stdout } = await promisify(execFile)('powershell.exe', ['-NoProfile', '-Command', `
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class MarkerVisibility {
+  [StructLayout(LayoutKind.Sequential)] public struct Point { public int X; public int Y; }
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(Point point);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr window, uint flags);
+}
+'@
+$markerPoint = New-Object MarkerVisibility+Point
+$markerPoint.X = ${markerPoint.x}; $markerPoint.Y = ${markerPoint.y}
+$markerWindow = [IntPtr]::new([long]${windowHandle})
+[MarkerVisibility]::GetAncestor([MarkerVisibility]::WindowFromPoint($markerPoint),2) -eq $markerWindow
+`], { windowsHide: true, timeout: 5000 });
+      assert(['True', 'False'].includes(stdout.trim()), 'testMarkerVisibilityUnavailable');
+      return stdout.trim() === 'True';
+    };
+    const waitForMarker = async (color) => {
+      let lastProbe;
+      try {
+        await until(async () => {
+          const bounds = window.getContentBounds();
+          const x = Math.round((bounds.x + 48 - display.bounds.x) / display.bounds.width * 1920);
+          const y = Math.round((bounds.y + 48 - display.bounds.y) / display.bounds.height * 1080);
+          lastProbe = await renderer(`probe(${x},${y})`);
+          const pixel = lastProbe.pixel;
+          return pixel && (color === 'magenta'
+            ? pixel[0] > 150 && pixel[1] < 70 && pixel[2] > 100
+            : pixel[0] < 80 && pixel[1] > 130 && pixel[2] > 130);
+        });
+      } catch (error) {
+        // 只记录固定计数与测试点，区分遮挡和交付失败，不保存画面或其他窗口身份。
+        const visible = await markerVisible();
+        process.stdout.write(`${JSON.stringify({ phase: 'markerCheckFailed', color, visible,
+          pixel: lastProbe?.pixel, presented: lastProbe?.presented, receivedFrames: lastProbe?.input?.receivedFrames,
+          submittedFrames: lastProbe?.input?.submittedFrames, writeFailures: lastProbe?.input?.writeFailures })}\n`);
+        if (!visible) throw new Error('testMarkerOccluded', { cause: error });
+        throw new Error(`startupMarkerMissing:${color}`, { cause: error });
+      }
+    };
+    for (const [height, fps] of [[1080, 60], [1440, 180]]) {
+      for (const mode of ['cold', 'prewarmed', 'restart']) {
+        assert(await markerVisible(), 'testMarkerOccluded');
+        if (mode !== 'restart') await manager.shutdown();
+        if (mode === 'prewarmed') { await manager.prepare(false); await manager.prepare(true); }
+        const previous = manager.state;
+        const evidenceStart = captureEvidence.length;
+        process.stdout.write(`${JSON.stringify({ phase: 'startupCase', mode, height, fps })}\n`);
+        const started = await renderer(`start(${JSON.stringify(sourceId)},${JSON.stringify({ width: height * 16 / 9, height })},${fps})`);
+        const state = manager.state;
+        await waitForMarker('magenta');
+        await renderer('markerCyan()');
+        await waitForMarker('cyan');
+        const before = await manager.getDiagnostics(state.videoSessionId);
+        const beforeAt = performance.now();
+        await sleep(2200);
+        const after = await manager.getDiagnostics(state.videoSessionId);
+        assert(after.obsRender.configuration > 0 && Number.isFinite(after.obsRender.activeFps)
+          && Number.isFinite(after.obsRender.averageRenderMs), 'obsRenderStatisticsMissing');
+        const elapsedMs = performance.now() - beforeAt;
+        const page = await probe();
+        const stopAt = performance.now();
+        await renderer('stop()');
+        const evidence = captureEvidence.slice(evidenceStart);
+        assert(manager.state === state && !state.videoSessionId && !production.nativeVideoSession, 'startupStopNotConfirmed');
+        assert(mode !== 'restart' || state === previous, 'restartDidNotReuseHost');
+        assert(evidence.some(entry => entry.stage === 'obsCaptureConfigured' && entry.captureMethod === 'dxgi'
+          && entry.adapterMatched === true), 'dxgiAdapterMatchMissing');
+        assert(evidence.some(entry => entry.stage === 'obsRenderObserved')
+          && evidence.some(entry => entry.stage === 'obsSourceReady' && entry.sourceWidth > 0 && entry.sourceHeight > 0), 'sourceEvidenceMissing');
+        assert(evidence.some(entry => entry.stage === 'obsCaptureStopped' && entry.stopMode === 'graceful'), 'startupStopWasForced');
+        cases.push({ mode, requestedHeight: height, requestedFps: fps, outputWidth: page.width, outputHeight: page.height,
+          firstFrameMs: started.firstFrameMs, stopMs: Math.round(performance.now() - stopAt),
+          hostFps: Math.round((after.bridgeFrames - before.bridgeFrames) * 1000 / elapsedMs),
+          freshPixelsChecked: true, evidence, obsRender: after.obsRender, encoderMeasured: false });
+        process.stdout.write(`${JSON.stringify({ phase: 'caseComplete', ...cases.at(-1) })}\n`);
+      }
+    }
+    assert(failures.length === 0, 'startupCaptureFailed');
+    await finish({ ok: true });
+    return;
+  }
   if (applicationCheck) {
     const snapshot = await targetHelper.listVideoSources();
     const existingWindowId = process.env.LYCANSYNC_CAPTURE_APPLICATION_WINDOW_ID;
@@ -247,11 +339,11 @@ app.whenReady().then(async () => {
       assert(sourceDiagnostics.sourceKind === 'window' && sourceDiagnostics.captureBackend === 'obsLibobs', 'applicationDiagnosticsMismatch');
       const stopped = await renderer('stop()');
       await until(() => !manager.state?.videoSessionId && !production.nativeVideoSession && !targetHelper.videoCapture);
-      assert(stopped.readyState === 'ended' && state.child.exitCode === 0, 'applicationStopUnconfirmed');
+      assert(stopped.readyState === 'ended' && manager.state === state && !state.videoSessionId && !state.closed, 'applicationStopUnconfirmed');
       cases.push({ mode: browserKind ?? 'existing-application', firstFrameMs: started.firstFrameMs,
         submittedFps: Math.round((after.input.submittedFrames - before.input.submittedFrames) * 1000 / intervalMs),
         presentedFps: Math.round((after.presented - before.presented) * 1000 / intervalMs),
-        freshPixelsChecked: Boolean(browserKind), helperExitCode: state.child.exitCode });
+        freshPixelsChecked: Boolean(browserKind), hostRetained: manager.state === state && !state.closed });
     }
     if (!existingWindowId) assert(new Set(cases.map((entry) => entry.mode)).size === 2, 'browserWindowsNotDistinct');
     assert(failures.length === 0 && !diagnostics.some((entry) => /Uncaught|Double destroy/.test(entry)), 'applicationCaptureFailure');
@@ -360,7 +452,7 @@ app.whenReady().then(async () => {
       'windowRestoredDiagnosticsMismatch');
     await renderer('stop()');
     await until(() => !manager.state?.videoSessionId && !production.nativeVideoSession && !targetHelper.videoCapture);
-    assert(state.child.exitCode === 0, 'windowNormalStopWasForced');
+    assert(manager.state === state && !state.videoSessionId && !state.closed, 'windowNormalStopWasForced');
     const reopenedSources = await targetHelper.listVideoSources();
     production.nativeVideoSourcesById = new Map(reopenedSources.sources.map((source) => [source.sourceId, source]));
     await renderer(`start(${JSON.stringify(selected.sourceId)})`);
@@ -464,9 +556,14 @@ app.whenReady().then(async () => {
     }
     const stopStart = performance.now();
     const stopped = await renderer('stop()');
-    await until(() => !manager.state?.videoSessionId && !production.nativeVideoSession && production.helperProcessBridges.size === 0);
+    await until(() => !manager.state?.videoSessionId && !production.nativeVideoSession);
     assert(stopped.readyState === 'ended', 'generatedTrackNotEnded');
-    assert(state.closed && (state.child.exitCode !== null || state.child.signalCode !== null), 'helperExitNotConfirmed');
+    if (mode === 'helper-exit') {
+      assert(state.closed && (state.child.exitCode !== null || state.child.signalCode !== null)
+        && production.helperProcessBridges.size === 0, 'helperExitNotConfirmed');
+    } else if (mode === 'receiver-failure') {
+      assert(state.closed || (manager.state === state && !state.videoSessionId), 'failedReceiverCaptureNotStopped');
+    } else assert(manager.state === state && !state.closed, 'successfulStopDidNotRetainHost');
     assert(page.presented > 0 && page.width > 0 && page.height > 0, 'pageDidNotPresentContent');
     cases.push({ mode, engine: 'obs', pixelsChecked, qualityChanges,
       helperVersion: after.helperVersion,
@@ -481,7 +578,8 @@ app.whenReady().then(async () => {
       presentedFps: Math.round((page.presented - pageBefore.presented) * 1000 / intervalMs),
       slotDrops: after.bridgeDroppedFrames,
       stopMs: Math.round(performance.now() - stopStart),
-      helperExitCode: state.child.exitCode, handleCount: bridge.currentProcessHandleCount() });
+      helperExitCode: state.child.exitCode, hostRetained: manager.state === state && !state.closed,
+      handleCount: bridge.currentProcessHandleCount() });
     process.stdout.write(`${JSON.stringify({ phase: 'caseComplete', ...cases.at(-1) })}\n`);
     await sleep(200);
   }

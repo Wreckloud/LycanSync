@@ -36,6 +36,13 @@ function formatFpsInterval(intervalMs: number | null) {
       <template v-else>等待统计</template>
     </p>
     <small v-if="statistics?.native?.captureBackend === 'obsLibobs'">本次 OBS 会话槽位累计丢帧 {{ statistics.native.obsBridgeDroppedFrames ?? '—' }}；发帧计数截至宿主事件，不代表 Electron 导入或编码成功。</small>
+    <template v-if="statistics?.native?.state === 'running' && statistics.native.captureBackend === 'obsLibobs'">
+      <p>OBS 渲染循环：
+        <template v-if="statistics.obsRenderInterval">{{ statistics.obsRenderInterval.renderedFps }} FPS · 区间延误 {{ statistics.obsRenderInterval.laggedFrames }} / {{ statistics.obsRenderInterval.totalFrames }} 个时隙 · {{ formatFpsInterval(statistics.obsRenderInterval.elapsedMs) }}</template>
+        <template v-else>等待统计</template>
+      </p>
+      <small>OBS 最近约一秒均值：{{ statistics.native.obsRender?.activeFps?.toFixed(1) ?? '—' }} FPS · 渲染 {{ statistics.native.obsRender?.averageRenderMs?.toFixed(2) ?? '—' }} ms。仅反映渲染循环，不代表不同来源帧、编码或端到端延迟。</small>
+    </template>
     <div v-for="stream in streams" :key="stream.identity" class="media-diagnostic-stream">
       <b>{{ stream.name }} · {{ stream.direction }}</b>
       <small v-if="stream.target">共享源 {{ stream.target.displaySurface ?? '未知' }} · 轨道设置（目标） {{ formatTrackTarget(stream.target) }}</small>
@@ -63,12 +70,12 @@ function formatFpsInterval(intervalMs: number | null) {
       <small v-if="stream.layers.length === 0 && stream.subscription.subscribed === false">尚未订阅此路视频，暂无编解码统计。</small>
       <small v-else-if="stream.layers.length === 0">等待编解码统计…</small>
       <small v-for="layer in stream.layers" :key="layer.id">
-        {{ layer.size }} · {{ layer.fps ?? '等待统计' }} fps · {{ formatFpsInterval(layer.intervalMs) }} ·
+        {{ layer.size }} · {{ stream.direction === '发送' ? '编码' : '解码' }} {{ layer.fps ?? '等待统计' }} fps · {{ formatFpsInterval(layer.intervalMs) }} ·
         累计 {{ layer.frameCount ?? '—' }} 帧 · {{ layer.bitrateKbps ?? '—' }} kbps · {{ layer.codec }}
         <template v-if="layer.active === false"> · 编码层已停用</template>
         <template v-else-if="layer.limitation"> · 受限 {{ layer.limitation }}（不能单独作为故障结论）</template>
         <template v-if="layer.lostPackets !== null"> · 累计丢包 {{ layer.lostPackets }}</template>
-        <template v-if="layer.droppedFrames !== null"> · 累计解码丢帧 {{ layer.droppedFrames }}</template>
+        <template v-if="layer.droppedFrames !== null"> · 累计接收丢帧 {{ layer.droppedFrames }}</template>
         <template v-if="layer.averageEncodeMs !== null"> · 编码 {{ layer.averageEncodeMs }} ms/帧</template>
         <template v-if="layer.encoder"> · 编码器 {{ layer.encoder }}</template>
         <template v-if="stream.direction === '发送'"> · 节能编码标志 {{ layer.powerEfficientEncoder === null ? '未知' : layer.powerEfficientEncoder ? '是' : '否' }}（非硬件编码结论）</template>

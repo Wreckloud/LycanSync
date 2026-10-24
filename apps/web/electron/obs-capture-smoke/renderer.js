@@ -16,10 +16,10 @@ function countPresented() {
   callback = video.requestVideoFrameCallback(() => { presented++; countPresented(); });
 }
 window.obsCaptureTest = {
-  async start(sourceId = 'monitor:1:0') {
+  async start(sourceId = 'monitor:1:0', resolution = { width: 1920, height: 1080 }, maxFps = 60) {
     errors = []; presented = 0;
     marker.style.background = '#f010c0';
-    session = new NativeScreenVideoSession(window.lycanDesktop, { maxFps: 60, onError: (code) => errors.push(code) });
+    session = new NativeScreenVideoSession(window.lycanDesktop, { resolution, maxFps, onError: (code) => errors.push(code) });
     track = await session.start(sourceId);
     // 仅建立本机未连接的 sender 以调用真实参数 API；不发起房间或把本地播放冒充编码验收。
     senderConnection = new RTCPeerConnection({ iceServers: [] });

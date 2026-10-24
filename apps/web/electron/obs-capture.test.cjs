@@ -48,6 +48,9 @@ test('OBS 真实宿主固定三槽背压、恢复和正常停止，不含 Electr
       holding = true;
       await new Promise((resolveWait) => setTimeout(resolveWait, 1000));
       const blocked = await manager.getDiagnostics(sessionId);
+      assert.ok(Number.isFinite(blocked.obsRender.activeFps) && blocked.obsRender.activeFps > 0);
+      assert.ok(Number.isFinite(blocked.obsRender.averageRenderMs) && blocked.obsRender.averageRenderMs >= 0);
+      assert.ok(blocked.obsRender.totalFrames >= blocked.obsRender.laggedFrames);
       assert.equal(heldSlots.size, 3);
       assert.ok(blocked.bridgeFrames - before.bridgeFrames <= 3);
       assert.ok(blocked.bridgeDroppedFrames > before.bridgeDroppedFrames);
@@ -65,19 +68,26 @@ test('OBS 真实宿主固定三槽背压、恢复和正常停止，不含 Electr
       assert.ok(resumed.bridgeFrames > blocked.bridgeFrames + 3);
       assert.deepEqual(lastFrame.codedSize, { width: 2560, height: 1440 });
       assert.equal(state.maxFps, 120);
+      assert.equal(resumed.obsRender.configuration, blocked.obsRender.configuration + 1);
+      if (resumed.obsRender.elapsedMs < 2000) {
+        assert.equal(resumed.obsRender.activeFps, null);
+        assert.equal(resumed.obsRender.averageRenderMs, null);
+      }
       const stopStart = performance.now();
       await manager.stop(sessionId);
-      assert.equal(manager.state, undefined);
-      assert.equal(state.child.exitCode, 0);
+      assert.equal(manager.state, state);
+      assert.equal(state.videoSessionId, undefined);
+      assert.equal(state.child.exitCode, null);
       context.diagnostic(JSON.stringify({ run, actualVersion: state.helperVersion, emittedFrames: resumed.bridgeFrames,
         blockedSlotDrops: blocked.bridgeDroppedFrames - before.bridgeDroppedFrames,
+        obsRender: blocked.obsRender,
         stopMs: Math.round(performance.now() - stopStart) }));
     }
     assert.deepEqual(failures, []);
     assert.ok(!diagnostics.some((line) => /Double destroy|without specifying a canvas|GpuWaitFailed|acquireTexture/.test(line)), diagnostics.join('\n'));
     context.diagnostic(JSON.stringify({ nativeWarnings: [...new Set(diagnostics)] }));
   } finally {
-    if (manager.state) await manager.stop(manager.state.videoSessionId);
+    await manager.dispose();
   }
 });
 
@@ -119,9 +129,16 @@ test('OBS 真实来源纹理经生产入口到页面轨道，重复停止及故�
       : process.env.LYCANSYNC_CAPTURE_RESOURCE_CHECK === '1' || process.env.LYCANSYNC_CAPTURE_QUALITY_CHECK === '1'
         || process.env.LYCANSYNC_CAPTURE_WINDOW_CHECK === '1' || process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1' ? 1 : 6;
     assert.equal(result.cases.length, expectedCases, details);
+    if (process.env.LYCANSYNC_CAPTURE_STARTUP_CHECK === '1') {
+      assert.deepEqual(result.cases.map(entry => [entry.mode, entry.requestedHeight, entry.requestedFps]), [
+        ['cold', 1080, 60], ['prewarmed', 1080, 60], ['restart', 1080, 60],
+        ['cold', 1440, 180], ['prewarmed', 1440, 180], ['restart', 1440, 180],
+      ], details);
+      assert.ok(result.cases.every(entry => entry.freshPixelsChecked), details);
+    }
     if (process.env.LYCANSYNC_CAPTURE_APPLICATION_CHECK === '1' && !process.env.LYCANSYNC_CAPTURE_APPLICATION_WINDOW_ID) {
       assert.deepEqual(result.cases.map((entry) => entry.mode).sort(), ['browser-main', 'browser-popup'], details);
-      assert.ok(result.cases.every((entry) => entry.freshPixelsChecked && entry.helperExitCode === 0), details);
+      assert.ok(result.cases.every((entry) => entry.freshPixelsChecked && entry.hostRetained), details);
     }
     if (process.env.LYCANSYNC_CAPTURE_WINDOW_CHECK === '1' || process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1') {
       assert.equal(result.cases[0].mode, process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1' ? 'controlled-d3d-game' : 'window', details);
@@ -138,7 +155,7 @@ test('OBS 真实来源纹理经生产入口到页面轨道，重复停止及故�
     }
     for (const entry of result.cases.filter((entry) => entry.mode === 'success')) {
       assert.equal(entry.pixelsChecked, true, details);
-      assert.equal(entry.helperExitCode, 0, details);
+      assert.equal(entry.hostRetained, true, details);
     }
     context.diagnostic(JSON.stringify(result));
   } finally {

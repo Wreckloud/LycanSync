@@ -270,19 +270,18 @@ void ScreenAudioHost::run(const std::shared_ptr<Session> &session, bool system_m
   if (callback_added) obs_source_remove_audio_capture_callback(source, Session::capture, session.get());
   if (source) { obs_source_remove(source); obs_source_release(source); }
   // libobs 的来源销毁是异步任务，ACK 必须晚于其析构和 WASAPI 线程回收。
-  const bool destroyed = obs_wait_for_destroy_queue();
+  // bool 仅表示等待期间是否处理任务；队列提前清空同样完成清理。
+  obs_wait_for_destroy_queue();
   if (pipe != INVALID_HANDLE_VALUE) CloseHandle(pipe);
   if (completed) CloseHandle(completed);
   if (SUCCEEDED(apartment)) CoUninitialize();
   {
     const std::lock_guard<std::mutex> lock(session->mutex);
-    session->statistics.state = destroyed ? "idle" : "failed";
-    if (!destroyed) session->statistics.last_error = "screenShareAudioStopFailed";
+    session->statistics.state = "idle";
     session->statistics.dropped_chunks = session->queue.dropped();
-    session->done = destroyed;
+    session->done = true;
   }
-  if (destroyed) emit_("audioStopped", session->id, "", {});
-  else emit_("audioFailed", session->id, "screenShareAudioStopFailed", {});
+  emit_("audioStopped", session->id, "", {});
 }
 
 ScreenAudioSnapshot ScreenAudioHost::snapshot() const {

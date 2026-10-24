@@ -52,6 +52,7 @@ set_target_properties(lycansync-obs-test-d3d PROPERTIES RUNTIME_OUTPUT_DIRECTORY
 
 add_subdirectory(game-plugin)
 add_subdirectory(audio-plugin)
+add_subdirectory(graphics-module)
 
 # 只测试合成 PCM 的分块与背压，不链接或初始化 OBS/WASAPI。
 add_executable(lycansync-screen-audio-pcm-tests EXCLUDE_FROM_ALL tests/screen_audio_pcm.cpp src/screen_audio_pcm.cpp)

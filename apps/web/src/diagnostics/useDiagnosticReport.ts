@@ -63,6 +63,14 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
       stream.direction === '发送' && sample.nativeVideoSessionMatched)
       .map(({ sample }) => sample.nativeInterval?.processedFps)
       .filter((value): value is number => typeof value === 'number');
+    const renderEntries = comparableEntries.filter(({ stream, sample }) =>
+      stream.direction === '发送' && sample.nativeVideoSessionMatched);
+    const obsRenderFps = renderEntries.map(({ sample }) => sample.obsRenderInterval?.renderedFps)
+      .filter((value): value is number => typeof value === 'number');
+    const renderMs = renderEntries.map(({ sample }) => sample.native?.obsRender?.averageRenderMs)
+      .filter((value): value is number => typeof value === 'number');
+    const renderTotal = renderEntries.reduce((sum, { sample }) => sum + (sample.obsRenderInterval?.totalFrames ?? 0), 0);
+    const renderLagged = renderEntries.reduce((sum, { sample }) => sum + (sample.obsRenderInterval?.laggedFrames ?? 0), 0);
     const layerIds = [...new Set(entries.flatMap(({ stream }) => stream.layers.map((layer) => layer.layer)))];
     const layers = layerIds.map((layer) => {
       const matching = entries.flatMap(({ stream }) => stream.layers.filter((item) => item.layer === layer));
@@ -119,6 +127,7 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
       ? latestNative.obsBridgeDroppedFrames - native.obsBridgeDroppedFrames : null;
     if (native?.captureBackend === 'obsLibobs') {
       warnings.add('OBS 帧计数截至宿主事件发出，不代表 Electron 已成功导入纹理或 LiveKit 已编码。');
+      warnings.add('OBS 渲染 FPS 不代表不同来源画面；渲染耗时是内部约一秒滚动均值，不是编码或端到端延迟。');
     }
     const nativeResolution = first.stream.direction === '发送' && native?.frameWidth && native.frameHeight
       ? `${native.frameWidth}×${native.frameHeight}` : null;
@@ -131,11 +140,14 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
       typicalReceivedFps !== null ? `页面收到约 ${typicalReceivedFps} FPS。` : null,
       typicalSubmittedFps !== null ? `页面提交约 ${typicalSubmittedFps} FPS。` : null,
       layers.some((layer) => layer.typicalFps !== null)
-        ? `编码层 FPS 分别记录为 ${layers.map((layer) => `第 ${layer.layer} 层 ${layer.typicalFps ?? '等待统计'}`).join('、')}，不跨层相加。` : null,
+        ? `${first.stream.direction === '发送' ? '编码' : '解码'}层 FPS 分别记录为 ${layers.map((layer) => `第 ${layer.layer} 层 ${layer.typicalFps ?? '等待统计'}`).join('、')}，不跨层相加。` : null,
       median(playbackFps) !== null ? `本机显示约 ${median(playbackFps)} FPS。` : null,
       median(nativeCaptureFps) !== null ? `${native?.captureBackend === 'obsLibobs' ? 'OBS 渲染回调' : '原生采集收到'}约 ${median(nativeCaptureFps)} FPS。` : null,
       median(nativeProcessedFps) !== null ? `${native?.captureBackend === 'obsLibobs' ? 'OBS 宿主发出共享纹理帧' : '原生采集处理'}约 ${median(nativeProcessedFps)} FPS。` : null,
       obsBridgeDroppedFrames !== null ? `记录期间 OBS 共享纹理槽位累计丢帧 ${obsBridgeDroppedFrames}。` : null,
+      median(obsRenderFps) !== null ? `OBS 渲染循环约 ${median(obsRenderFps)} FPS。` : null,
+      median(renderMs, 2) !== null ? `OBS 平均渲染耗时典型值 ${median(renderMs, 2)} ms。` : null,
+      renderTotal > 0 ? `OBS 可比较区间延误 ${renderLagged} / ${renderTotal} 个渲染时隙。` : null,
       totalBackpressureDrops > 0 ? `页面背压期间累计丢弃 ${totalBackpressureDrops} 帧（占收到真实帧 ${totalReceived > 0
         ? `${Math.round(totalBackpressureDrops / totalReceived * 10_000) / 100}%` : '比例待统计'}）。` : null,
     ].filter((value): value is string => value !== null);
@@ -146,6 +158,7 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
       { stage: '网络反馈', available: layers.some((layer) => layer.network.validSamples.receiverReport > 0
         || layer.network.validSamples.roundTrip > 0 || layer.network.validSamples.receiveLoss > 0) },
       { stage: '本机播放', available: playbackFps.length > 0 },
+      { stage: 'OBS 渲染', available: obsRenderFps.length > 0 },
     ];
     if (first.stream.direction === '发送' && !evidence[3].available) warnings.add('没有有效的新接收报告，不能据此判断发送网络正常或异常。');
     return {
@@ -166,6 +179,10 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
       pageBackpressureDropRate: totalReceived > 0 ? Math.round(totalBackpressureDrops / totalReceived * 10_000) / 100 : null,
       pageBackpressureDroppedFrames: totalBackpressureDrops, pageReceivedFrames: totalReceived,
       localFirstFrameMs: firstNativeInput?.firstFrameMs ?? null,
+      obsRender: { typicalFps: median(obsRenderFps), typicalRenderMs: median(renderMs, 2),
+        validSamples: obsRenderFps.length, averageValidSamples: renderMs.length,
+        totalFrames: obsRenderFps.length ? renderTotal : null, laggedFrames: obsRenderFps.length ? renderLagged : null,
+        laggedPercent: renderTotal > 0 ? Math.round(renderLagged / renderTotal * 10_000) / 100 : null },
       evidence, observations, warnings: [...warnings],
     };
   });
@@ -190,6 +207,11 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
       framesProcessed: numeric(snapshot.nativeInterval.framesProcessed),
       receivedFps: numeric(snapshot.nativeInterval.receivedFps),
       processedFps: numeric(snapshot.nativeInterval.processedFps),
+    },
+    obsRenderInterval: snapshot.obsRenderInterval && {
+      elapsedMs: numeric(snapshot.obsRenderInterval.elapsedMs), totalFrames: numeric(snapshot.obsRenderInterval.totalFrames),
+      laggedFrames: numeric(snapshot.obsRenderInterval.laggedFrames), renderedFps: numeric(snapshot.obsRenderInterval.renderedFps),
+      laggedPercent: numeric(snapshot.obsRenderInterval.laggedPercent),
     },
     omittedParticipants: snapshot.omittedParticipants, process: snapshot.process && {
       cpuPercent: numeric(snapshot.process.cpuPercent), memoryMb: numeric(snapshot.process.memoryMb),
@@ -246,6 +268,10 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
       frameWidth: numeric(native.frameWidth), frameHeight: numeric(native.frameHeight),
       framesReceived: numeric(native.framesReceived), framesProcessed: numeric(native.framesProcessed),
       obsBridgeDroppedFrames: numeric(native.obsBridgeDroppedFrames),
+      obsRender: native.obsRender ? { configuration: numeric(native.obsRender.configuration),
+        elapsedMs: numeric(native.obsRender.elapsedMs), totalFrames: numeric(native.obsRender.totalFrames),
+        laggedFrames: numeric(native.obsRender.laggedFrames), activeFps: numeric(native.obsRender.activeFps),
+        averageRenderMs: numeric(native.obsRender.averageRenderMs) } : null,
       captureSuspended: native.captureSuspended,
       microphoneCaptureDroppedChunks: numeric(native.microphoneCaptureDroppedChunks),
       screenShareAudio: native.screenShareAudio && { state: native.screenShareAudio.state,
@@ -284,7 +310,7 @@ export function useDiagnosticReport(options: {
   let startedMonotonicAt = 0;
   let lastSampleMonotonicAt: number | null = null;
   let nextSegmentNumber = 1;
-  const streamSegments = new Map<string, { sessionKey: string | null; quality: string; dimensions: string;
+  const streamSegments = new Map<string, { sessionKey: string | null; quality: string; dimensions: string; renderConfiguration: number | null;
     segmentId: string; lastSampleIndex: number }>();
   const aliases = new Map<string, string>();
 
@@ -340,6 +366,8 @@ export function useDiagnosticReport(options: {
           const encodedDimensions = observed.layers.map((layer) => layer.size).sort().join(',');
           const dimensions = [observed.target?.resolution ?? '', sourceDimensions, encodedDimensions].join('|');
           const previousSegment = streamSegments.get(streamKey);
+          const renderConfiguration = stream.direction === '发送' && exported.nativeVideoSessionMatched
+            ? snapshot.native?.obsRender?.configuration ?? null : null;
           const previousStream = samples[currentSampleIndex - 1]?.streams.find((item) =>
             item.member === stream.member && item.direction === stream.direction);
           const countersReset = previousStream !== undefined && [
@@ -362,13 +390,17 @@ export function useDiagnosticReport(options: {
             else if (previousSegment.sessionKey !== observed.sessionKey) segmentReason = 'source-change';
             else if (previousSegment.quality !== quality) segmentReason = 'quality-change';
             else if (previousSegment.dimensions !== dimensions) segmentReason = 'dimensions-change';
+            else if (previousSegment.renderConfiguration !== null && renderConfiguration !== null
+                && previousSegment.renderConfiguration !== renderConfiguration) segmentReason = 'render-configuration-change';
             else if (countersReset) segmentReason = 'counter-reset';
           }
           const startsNewSegment = !previousSegment || segmentReason !== 'continuation';
           const segment = startsNewSegment
-            ? { sessionKey: observed.sessionKey, quality, dimensions,
+            ? { sessionKey: observed.sessionKey, quality, dimensions, renderConfiguration,
               segmentId: `segment-${nextSegmentNumber++}`, lastSampleIndex: currentSampleIndex }
             : previousSegment;
+          // 初次缺失的配置可在后续补齐；短暂未知不能抹掉已确认的分段基线。
+          segment.renderConfiguration = renderConfiguration ?? segment.renderConfiguration;
           segment.lastSampleIndex = currentSampleIndex;
           streamSegments.set(streamKey, segment);
           if (startsNewSegment) {
@@ -378,7 +410,7 @@ export function useDiagnosticReport(options: {
             stream.nativeInputInterval = null;
             stream.layers = stream.layers.map((layer) => ({ ...layer, fps: null, intervalMs: null,
               bitrateKbps: null, averageEncodeMs: null, receiveLossPercent: null, jitterBufferMs: null }));
-            if (stream.direction === '发送') exported.nativeInterval = null;
+            if (stream.direction === '发送') { exported.nativeInterval = null; exported.obsRenderInterval = null; }
           }
           return { ...stream, segmentId: segment.segmentId, segmentReason };
         });
@@ -418,7 +450,7 @@ export function useDiagnosticReport(options: {
   async function save(notes: string) {
     if (disposed || saving.value || recording.value || (!startedAt && !window.lycanDesktop)) return;
     saving.value = true; error.value = '';
-    const report = { kind: 'lycansync-diagnostics', schemaVersion: 7,
+    const report = { kind: 'lycansync-diagnostics', schemaVersion: 8,
       startedAt: startedAt ?? new Date().toISOString(), endedAt: endedAt ?? new Date().toISOString(),
       stopReason: reason.value || 'automaticEvents',
       sampleIntervalMs: SAMPLE_INTERVAL_MS, notes: notes.slice(0, 2000), startSettings, endSettings, samples,
@@ -436,6 +468,9 @@ export function useDiagnosticReport(options: {
           sharedPagesMayBeCountedMoreThanOnce: true, includesGpuMemory: false, includesNativeCpu: false },
         native: { scope: 'current-or-last-capture-snapshot', stateDeterminesWhetherCaptureIsRunning: true },
         nativeInterval: { scope: 'running-helper-samples', counters: ['framesReceived', 'framesProcessed'] },
+        obsRender: { scope: 'running-configuration-only', warmupMs: 2000,
+          intervalFps: '(delta-totalFrames-minus-delta-laggedFrames)/native-monotonic-seconds',
+          averages: 'OBS approximately-one-second-rolling-render-loop; not-source-or-encoder-latency' },
         nativeInput: { scope: 'current-track-session', firstFrameMs: 'start-request-to-first-real-frame-submitted',
           completedWrites: 'all-real-and-placeholder-writes-resolved-not-network-delivered',
           placeholderFrames: 'excluded-from-real-frame-submissions' },

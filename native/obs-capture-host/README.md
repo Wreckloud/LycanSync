@@ -91,7 +91,19 @@ The stock game query exposes titles, not HWNDs. The fixed-source patch adds `lyc
 
 Minimized/hidden windows reuse suspension notifications and separately counted placeholders. Ordinary-window WinRT capability checks run on libobs's existing MTA graphics thread. Unsupported/denied cursor or border hiding fails explicitly: no bordered fallback or monitor cropping. The window adapter does not create a game-capture source; shared graphics preparation still initializes the fixed capture plugin. Borderless/fullscreen and actual game/anti-cheat compatibility still require acceptance.
 
+### Monitor DXGI selection and evidence
+
+Monitor sharing explicitly selects DXGI. Before capture, the host resolves the selected attached monitor to its adapter and checks the actual graphics device LUID and OBS output index. A prewarmed-device mismatch asks Electron to rebuild the host once, after the old process has confirmed exit; cancellation or unconfirmed exit blocks the restart. LUIDs and monitor names are not included in exported diagnostics.
+
+The fixed upstream `libobs-d3d11` is rebuilt with `patches/dxgi-output-compat.patch`. Only `DXGI_ERROR_UNSUPPORTED` from `DuplicateOutput1` uses OBS's existing standard `DuplicateOutput` branch; other failures remain explicit. This remains DXGI, without WGC fallback, scope expansion or quality downgrade. The standard API supplies SDR BGRA rather than the extended HDR format path. The prepared DLL replaces the official graphics DLL, and build inputs and hashes are included in corresponding-source materials.
+
+Once per session, structured diagnostics record configuration, first render callback and first nonzero source dimensions, with actual DXGI API when known. A render callback alone is not a delivered frame. Stop records capture acknowledgement separately from graceful, forced or unexpected host exit. `obs_wait_for_destroy_queue` waits before acknowledgement; its boolean only says whether tasks were processed during the wait, not whether cleanup succeeded. An empty queue must not be reported as failure. Hung cleanup remains bounded by the existing parent-process termination deadline.
+
 ## Frames, configuration and cleanup
+
+Startup additionally records graphics preparation started/completed and source creation started, once per attempt. These distinguish a pre-source timeout from missing source dimensions or frame delivery, without enabling broad upstream debug logs.
+
+The existing diagnostic request also reads libobs render-loop counters, active FPS and average render time. Counters include missed time slots; interval render FPS uses `(delta total - delta lagged) / native monotonic seconds`, not total slots alone. Each video reset, including rollback, increments a session-local configuration number. OBS's approximately one-second rolling averages remain unknown for the first two seconds of the new configuration. The page re-establishes baselines after configuration/session changes, suspension, counter reset or read failure, and preserves zero-frame intervals. Render-loop metrics do not measure unique source frames, encoding or end-to-end delay; no additional timer or per-frame logging is used.
 
 OBS renders at the selected 2560×1440 / 1920×1080 / 1280×720 / 640×360 cap and 30/60/120/180 FPS target. Source aspect ratio is preserved without upscaling small sources; `contentSize` identifies the top-left content inside the canvas. Same-session `obs_reset_video` preserves source, process and page track. Rendering pauses while the three bounded texture slots are returned, then the pool is rebuilt at the new cap. Command processing continues during the drain so release acknowledgements cannot deadlock behind configuration. Success acknowledges applied dimensions and FPS, not measured performance. A rejected reset attempts the previous configuration; failed rollback or an uncertain three-second timeout ends capture without automatic retry. Custom 1440p/180 performance still requires real-device acceptance.
 
@@ -114,6 +126,9 @@ From `apps/web`, additionally choose **one** mode and run only `node --test --te
 | `LYCANSYNC_CAPTURE_APPLICATION_CHECK=1` | Dedicated browser fixture titles; optionally an explicitly authorized `LYCANSYNC_CAPTURE_APPLICATION_WINDOW_ID` for read-only existing-window capture. |
 | `LYCANSYNC_CAPTURE_QUALITY_CHECK=1` | Authorized primary-monitor 1080p60 → 1440p60/120/180 → 720p30 → 1080p60 changes, fresh pixels and actual content dimensions. An unconnected local sender exercises parameter APIs; this does not measure encoding or remote playback. |
 | `LYCANSYNC_CAPTURE_RESOURCE_CHECK=1` | Short authorized primary-monitor resource measurement of the sole OBS route. |
+| `LYCANSYNC_CAPTURE_STARTUP_CHECK=1` | Primary-monitor cold/prewarmed/restart checks at 1080p60 and a 1440p180 cap, fresh color transitions, render statistics and acknowledged stop. |
+
+The startup check requires its own color marker to be visible on the primary desktop. It checks the marker's topmost window before each case and reports `testMarkerOccluded` instead of starting that case when another window covers it. A pixel timeout additionally records only the fixed test-point color and frame counters, not a screenshot or other window identity. Do not move/close unrelated windows automatically or count an occluded test as passed. The original startup timeout still requires separate evidence; a later occlusion does not explain an earlier pre-source hang.
 
 Build the production media helper with `npm run build:media`. Resource checks include the separate Rust identity helper alongside OBS/Electron; working sets remain separate and are not summed as physical memory. Clear test variables afterwards. Running the whole device-test file also captures the primary monitor; window-only authorization does not authorize that.
 

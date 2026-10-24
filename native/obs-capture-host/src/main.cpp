@@ -13,10 +13,12 @@
 
 #include <array>
 #include <algorithm>
+#include <atomic>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -55,6 +57,10 @@ struct HostState {
   WindowVideoTarget window_target;
   bool suspended = false;
   bool configuration_paused = false;
+  bool rendering_reported = false;
+  bool source_ready_reported = false;
+  uint32_t render_configuration = 0;
+  std::chrono::steady_clock::time_point render_statistics_started_at;
   uint32_t output_width = 1920;
   uint32_t output_height = 1080;
   uint32_t content_width = 0;
@@ -66,12 +72,34 @@ std::mutex g_slot_mutex;
 std::mutex g_output_mutex;
 std::mutex g_render_mutex;
 std::mutex g_log_mutex;
+uint32_t g_adapter_index = 0;
+std::atomic<bool> g_dxgi_failure_reported{false};
+std::atomic<int> g_dxgi_api{0};
 
 void obs_log_handler(int level, const char *format, va_list args, void *) {
   // libobs 默认会向 stdout 写普通日志；协议通道只能包含本宿主的 JSON。
-  if (level > LOG_WARNING) return;
+  const std::string_view log_format(format);
+  if (log_format == "lycansyncDxgiApi:DuplicateOutput" || log_format == "lycansyncDxgiApi:DuplicateOutput1") {
+    if (g_dxgi_api.exchange(log_format.ends_with("1") ? 1 : 2) == 0) {
+      const std::lock_guard<std::mutex> lock(g_log_mutex);
+      std::cerr << format << '\n';
+    }
+    return;
+  }
+  const bool duplicator_failure = std::string_view(format).starts_with("device_duplicator_create:");
+  if (level > LOG_WARNING && !duplicator_failure) return;
   std::array<char, 2000> message{};
   std::vsnprintf(message.data(), message.size(), format, args);
+  if (duplicator_failure) {
+    if (g_dxgi_failure_reported.exchange(true)) return;
+    unsigned long code = 0;
+    const auto *details = std::strrchr(message.data(), '(');
+    const std::lock_guard<std::mutex> lock(g_log_mutex);
+    if (details && std::sscanf(details, "(%8lx)", &code) == 1) {
+      std::cerr << "dxgiDuplicatorCreateFailed: 0x" << std::hex << code << std::dec << '\n';
+    } else std::cerr << "dxgiDuplicatorCreateFailed\n";
+    return;
+  }
   const std::lock_guard<std::mutex> lock(g_log_mutex);
   std::cerr << message.data() << '\n';
 }
@@ -82,6 +110,29 @@ void write_event(std::string_view event) {
   std::cout.flush();
 }
 
+void write_capture_evidence(std::string_view stage, uint32_t width = 0, uint32_t height = 0) {
+  const std::lock_guard<std::mutex> lock(g_output_mutex);
+  std::cout << "{\"event\":\"captureEvidence\",\"sessionId\":\"" << g_host.session_id
+            << "\",\"stage\":\"" << stage << "\",\"captureMethod\":\""
+            << (g_host.game_source ? "game" : g_host.window_source ? "wgc-window" : "dxgi")
+            << "\",\"adapterIndex\":" << g_adapter_index << ",\"sourceWidth\":" << width
+            << ",\"sourceHeight\":" << height;
+  if (!g_host.window_source) std::cout << ",\"adapterMatched\":true";
+  const int dxgi_api = g_dxgi_api.load();
+  if (!g_host.window_source && dxgi_api) {
+    std::cout << ",\"captureApi\":\"" << (dxgi_api == 1 ? "DuplicateOutput1" : "DuplicateOutput") << "\"";
+  }
+  std::cout << "}\n";
+  std::cout.flush();
+}
+
+void write_capture_preparation(std::string_view stage, std::string_view session_id) {
+  const std::lock_guard<std::mutex> lock(g_output_mutex);
+  std::cout << "{\"event\":\"capturePreparation\",\"sessionId\":\"" << session_id
+            << "\",\"stage\":\"" << stage << "\"}\n";
+  std::cout.flush();
+}
+
 void write_started_event() {
   const std::lock_guard<std::mutex> lock(g_output_mutex);
   std::cout << "{\"event\":\"captureStarted\",\"sessionId\":\"" << g_host.session_id
@@ -89,14 +140,29 @@ void write_started_event() {
   std::cout.flush();
 }
 
+void reset_render_statistics() {
+  ++g_host.render_configuration;
+  g_host.render_statistics_started_at = std::chrono::steady_clock::now();
+}
+
 void write_diagnostics_event(std::string_view request_id, const ScreenAudioSnapshot &audio) {
   const std::lock_guard<std::mutex> render_lock(g_render_mutex);
   const std::lock_guard<std::mutex> output_lock(g_output_mutex);
+  const auto render_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - g_host.render_statistics_started_at).count();
+  // OBS 均值约每秒更新；重设画布后先隔开旧均值，不把待机或旧画质算进新共享。
+  const bool render_statistics_ready = !g_host.configuration_paused && render_elapsed_ms >= 2000;
   std::cout << "{\"event\":\"diagnostics\",\"requestId\":\"" << request_id
             << "\",\"sessionId\":\"" << g_host.session_id << "\",\"renderedFrames\":"
             << g_host.rendered_frames << ",\"bridgeFrames\":" << g_host.frame_count
             << ",\"bridgeDroppedFrames\":" << g_host.dropped_frames
-            << ",\"screenShareAudio\":{\"state\":\"" << audio.state << "\",\"sampleRate\":"
+            << ",\"obsRender\":{\"configuration\":" << g_host.render_configuration
+            << ",\"elapsedMs\":" << render_elapsed_ms << ",\"totalFrames\":" << obs_get_total_frames()
+            << ",\"laggedFrames\":" << obs_get_lagged_frames() << ",\"activeFps\":"
+            << (render_statistics_ready ? std::to_string(obs_get_active_fps()) : "null")
+            << ",\"averageRenderMs\":"
+            << (render_statistics_ready ? std::to_string(obs_get_average_frame_time_ns() / 1'000'000.0) : "null")
+            << "},\"screenShareAudio\":{\"state\":\"" << audio.state << "\",\"sampleRate\":"
             << (audio.sample_rate ? std::to_string(audio.sample_rate) : "null") << ",\"channels\":"
             << (audio.channels ? std::to_string(audio.channels) : "null")
             << ",\"packetsReceived\":" << audio.packets_received << ",\"framesReceived\":" << audio.frames_received
@@ -213,7 +279,15 @@ void render_shared_frame(void *parameter) {
   // 初始化时主画布已能渲染，但来源尚未就绪，不能把空画布计作首帧交付。
   const auto source_width = obs_source_get_width(capture_source);
   const auto source_height = obs_source_get_height(capture_source);
+  if (!g_host.rendering_reported) {
+    g_host.rendering_reported = true;
+    write_capture_evidence("rendering", source_width, source_height);
+  }
   if (!source_width || !source_height) return;
+  if (!g_host.source_ready_reported) {
+    g_host.source_ready_reported = true;
+    write_capture_evidence("sourceReady", source_width, source_height);
+  }
   const auto scale = std::min({1.0, static_cast<double>(g_host.output_width) / source_width,
       static_cast<double>(g_host.output_height) / source_height});
   g_host.content_width = std::max(1u, static_cast<uint32_t>(source_width * scale));
@@ -313,6 +387,47 @@ bool monitor_exists(std::wstring_view expected_name) {
   MonitorLookup lookup{.expected_name = expected_name};
   EnumDisplayMonitors(nullptr, nullptr, find_monitor, reinterpret_cast<LPARAM>(&lookup));
   return lookup.found;
+}
+
+struct MonitorAdapter {
+  uint32_t index;
+  LUID luid;
+  HMONITOR monitor;
+};
+
+std::optional<MonitorAdapter> find_monitor_adapter(std::wstring_view name) {
+  Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
+  if (!gpu_operation_succeeded(CreateDXGIFactory1(IID_PPV_ARGS(&factory)), "dxgiFactory")) return std::nullopt;
+  for (UINT index = 0; index < 64; ++index) {
+    Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+    if (factory->EnumAdapters1(index, &adapter) != S_OK) break;
+    DXGI_ADAPTER_DESC1 adapter_info{};
+    if (adapter->GetDesc1(&adapter_info) != S_OK || (adapter_info.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) continue;
+    for (UINT output_index = 0; ; ++output_index) {
+      Microsoft::WRL::ComPtr<IDXGIOutput> output;
+      if (adapter->EnumOutputs(output_index, &output) != S_OK) break;
+      DXGI_OUTPUT_DESC output_info{};
+      if (output->GetDesc(&output_info) != S_OK || !output_info.AttachedToDesktop) continue;
+      if (CompareStringOrdinal(output_info.DeviceName, -1, name.data(), static_cast<int>(name.size()), TRUE) == CSTR_EQUAL) {
+        return MonitorAdapter{index, adapter_info.AdapterLuid, output_info.Monitor};
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+bool graphics_matches_monitor(const MonitorAdapter &target) {
+  obs_enter_graphics();
+  auto *device = static_cast<ID3D11Device *>(gs_get_device_obj());
+  Microsoft::WRL::ComPtr<IDXGIDevice> dxgi_device;
+  Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+  DXGI_ADAPTER_DESC description{};
+  const bool matched = device && SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&dxgi_device)))
+      && SUCCEEDED(dxgi_device->GetAdapter(&adapter)) && SUCCEEDED(adapter->GetDesc(&description))
+      && description.AdapterLuid.HighPart == target.luid.HighPart && description.AdapterLuid.LowPart == target.luid.LowPart
+      && gs_duplicator_get_monitor_index(target.monitor) >= 0;
+  obs_leave_graphics();
+  return matched;
 }
 
 std::string to_utf8(std::wstring_view value) {
@@ -424,6 +539,7 @@ bool configure_video(obs_video_info &video, obs_sceneitem_t *item, std::string_v
     }
     const vec2 bounds{static_cast<float>(video.base_width), static_cast<float>(video.base_height)};
     obs_sceneitem_set_bounds(item, &bounds);
+    reset_render_statistics();
   }
   const std::lock_guard<std::mutex> output_lock(g_output_mutex);
   std::cout << "{\"event\":\"" << (accepted ? "captureConfigured" : "captureConfigurationRejected")
@@ -525,6 +641,8 @@ int capture(const std::array<std::string, 10> &arguments, const std::filesystem:
     write_event("obsVideoInitFailed");
     return 1;
   }
+  reset_render_statistics();
+  write_capture_preparation("sourceStarting", g_host.session_id);
 
   obs_source_t *source = nullptr;
   const char *source_error = "obsDisplaySourceUnavailable";
@@ -538,6 +656,8 @@ int capture(const std::array<std::string, 10> &arguments, const std::filesystem:
     // 来源 ID 的尾号不是系统显示器序号；固定版本按设备名匹配 monitor_id。
     const std::string &monitor_name = arguments[1];
     obs_data_set_string(settings, "monitor_id", monitor_name.c_str());
+    // 固定版本的 METHOD_DXGI=1；不让自动选择切到可能带黄框的 WGC。
+    obs_data_set_int(settings, "method", 1);
     obs_data_set_bool(settings, "capture_cursor", capture_cursor_argument[0] == '1');
     source = obs_source_create("monitor_capture", "LycanSync display", settings, nullptr);
     obs_data_release(settings);
@@ -572,6 +692,7 @@ int capture(const std::array<std::string, 10> &arguments, const std::filesystem:
   // scene 持有 add 返回的元素，此处没有额外引用需要释放。
   obs_set_output_source(0, obs_scene_get_source(scene));
   obs_add_main_rendered_callback(render_shared_frame, source);
+  write_capture_evidence("configured");
   write_started_event();
 
   const auto audio_module = module_path.parent_path() / L"win-wasapi.dll";
@@ -646,8 +767,8 @@ int capture(const std::array<std::string, 10> &arguments, const std::filesystem:
     obs_source_release(source);
     destroy_textures();
   }
-  // OBS 的来源析构由任务队列执行，必须确认完成后才能归还来源身份或复用宿主。
-  if (!obs_wait_for_destroy_queue()) { write_event("obsCaptureCleanupFailed"); return 1; }
+  // 等待返回即已排空；bool 表示期间是否执行任务，false 不是清理失败。
+  obs_wait_for_destroy_queue();
   // 热态仅保留小画布与低频图形循环，不保留采集、共享纹理或声音设备。
   video.base_width = video.output_width = 320;
   video.base_height = video.output_height = 180;
@@ -665,7 +786,18 @@ int capture(const std::array<std::string, 10> &arguments, const std::filesystem:
 }
 
 int wmain(int argc, wchar_t **argv) {
-  if (argc != 4 || !std::filesystem::path(argv[3]).is_absolute()) return 2;
+  if ((argc != 4 && argc != 5) || !std::filesystem::path(argv[3]).is_absolute()) return 2;
+  if (argc == 5) {
+    const auto requested = to_utf8(argv[4]);
+    const auto parsed = std::from_chars(requested.data(), requested.data() + requested.size(), g_adapter_index);
+    if (parsed.ec != std::errc{} || parsed.ptr != requested.data() + requested.size() || g_adapter_index >= 64) return 2;
+  } else {
+    MONITORINFOEXW primary{};
+    primary.cbSize = sizeof(primary);
+    if (GetMonitorInfoW(MonitorFromPoint(POINT{}, MONITOR_DEFAULTTOPRIMARY), &primary)) {
+      if (const auto adapter = find_monitor_adapter(primary.szDevice)) g_adapter_index = adapter->index;
+    }
+  }
   base_set_log_handler(obs_log_handler, nullptr);
   if (!obs_startup("en-US", to_utf8(argv[3]).c_str(), nullptr)) { write_event("obsStartupFailed"); return 1; }
   if (std::string_view(obs_get_version_string()) != "32.2.2") {
@@ -686,6 +818,7 @@ int wmain(int argc, wchar_t **argv) {
   const auto prepare = [&]() {
     if (prepared) return true;
     video.fps_num = 1;
+    video.adapter = g_adapter_index;
     video.base_width = video.output_width = 320;
     video.base_height = video.output_height = 180;
     if (obs_reset_video(&video) != OBS_VIDEO_SUCCESS) { write_event("obsVideoInitFailed"); return false; }
@@ -727,7 +860,27 @@ int wmain(int argc, wchar_t **argv) {
       if (end != std::string_view::npos) remaining.remove_prefix(end + 1);
     }
     if (!valid) { write_event("invalidCaptureArguments"); result = 1; break; }
+    g_dxgi_failure_reported = false;
+    g_dxgi_api = 0;
+    if (!valid_session_id(arguments[4])) { write_event("invalidCaptureArguments"); result = 1; break; }
+    write_capture_preparation("graphicsStarting", arguments[4]);
+    if (arguments[0] == "monitor") {
+      const auto target = find_monitor_adapter(std::wstring(arguments[1].begin(), arguments[1].end()));
+      if (!target) { write_event("dxgiMonitorUnavailable"); result = 1; break; }
+      // obs_reset_video 不会替换已有图形设备；选中另一显卡的显示器时由父进程重建宿主。
+      if (prepared && !graphics_matches_monitor(*target)) {
+        const std::lock_guard<std::mutex> output_lock(g_output_mutex);
+        std::cout << "{\"event\":\"adapterRequired\",\"sessionId\":\"" << arguments[4]
+                  << "\",\"adapterIndex\":" << target->index << "}\n";
+        std::cout.flush();
+        continue;
+      }
+      g_adapter_index = target->index;
+      if (!prepare()) { result = 1; break; }
+      if (!graphics_matches_monitor(*target)) { write_event("dxgiAdapterMismatch"); result = 1; break; }
+    }
     if (!prepare()) { result = 1; break; }
+    write_capture_preparation("graphicsReady", arguments[4]);
     result = capture(arguments, argv[1], argv[2], argv[0], video);
     if (result != 0) break;
   }

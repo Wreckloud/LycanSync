@@ -14,7 +14,8 @@ const IDLE_TIMEOUT_MS = 180_000;
 class ObsCaptureHostManager {
   constructor({ executablePath, modulePath, dataPath, configPath, platform = process.platform, spawnProcess = spawn,
     clientProcessId = process.pid, onAudioFailure = () => {}, onAudioStopped = () => {},
-    onFrame = () => {}, onFailure = () => {}, onClosed = () => {}, onSuspended = () => {}, onDiagnostic = () => {} }) {
+    onFrame = () => {}, onFailure = () => {}, onClosed = () => {}, onSuspended = () => {}, onDiagnostic = () => {},
+    onCaptureDiagnostic = () => {} }) {
     this.executablePath = executablePath;
     this.modulePath = modulePath;
     this.dataPath = dataPath;
@@ -26,6 +27,7 @@ class ObsCaptureHostManager {
     this.onClosed = onClosed;
     this.onSuspended = onSuspended;
     this.onDiagnostic = onDiagnostic;
+    this.onCaptureDiagnostic = onCaptureDiagnostic;
     this.onAudioFailure = onAudioFailure;
     this.onAudioStopped = onAudioStopped;
     this.clientProcessId = clientProcessId;
@@ -41,8 +43,9 @@ class ObsCaptureHostManager {
       return this.state;
     }
     if (typeof this.configPath !== 'string' || !win32.isAbsolute(this.configPath)) throw new Error('invalidObsCaptureArguments');
-    const child = this.spawnProcess(this.executablePath,
-      [this.modulePath, this.dataPath, this.configPath],
+    const args = [this.modulePath, this.dataPath, this.configPath];
+    if (this.adapterIndex !== undefined) args.push(String(this.adapterIndex));
+    const child = this.spawnProcess(this.executablePath, args,
       // 官方 libobs 按 bin/64bit 的相对路径查找 effect 文件，不能继承项目工作目录。
       { cwd: win32.dirname(this.executablePath), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const state = { child, alive: true, closed: false, videoSessionId: undefined, buffer: '', startTimer: undefined,
@@ -101,11 +104,11 @@ class ObsCaptureHostManager {
   scheduleIdle(state) {
     clearTimeout(state.idleTimer);
     if (this.state !== state || state.videoSessionId || state.shuttingDown || state.failed || state.closed) return;
-    state.idleTimer = setTimeout(() => { void this.shutdown().catch(error => this.onDiagnostic(error.message)); }, IDLE_TIMEOUT_MS);
+    state.idleTimer = setTimeout(() => { void this.shutdown(false, 'idle').catch(error => this.onDiagnostic(error.message)); }, IDLE_TIMEOUT_MS);
     state.idleTimer.unref?.();
   }
 
-  async start(sourceId, maxFps, sessionId, target, settings, resolution = { width: 1920, height: 1080 }) {
+  async start(sourceId, maxFps, sessionId, target, settings, resolution = { width: 1920, height: 1080 }, rebuilding = false) {
     if (typeof sourceId !== 'string' || !/^(monitor|window):[1-9]\d*:\d+$/.test(sourceId)
         || ![30, 60, 120, 180].includes(maxFps) || !validTarget(target, sourceId) || !isSessionId(sessionId)
         || !validResolution(resolution) || !settings || typeof settings.hideCursor !== 'boolean' || typeof settings.hideBorder !== 'boolean') {
@@ -121,6 +124,8 @@ class ObsCaptureHostManager {
     state.startSent = false;
     state.maxFps = maxFps;
     state.resolution = { ...resolution };
+    state.captureKind = target.kind;
+    state.evidenceStages = new Set();
     state.stopPromise = undefined;
     const started = new Promise((resolve, reject) => {
       state.startResolve = resolve;
@@ -136,7 +141,14 @@ class ObsCaptureHostManager {
         target.kind !== 'monitor' ? target.propertyName : '', target.kind !== 'monitor' ? target.propertyValue : '',
         resolution.width, resolution.height].join('|'));
     }).catch(error => failState(state, error));
-    return started;
+    const result = await started;
+    if (result.adapterIndex === undefined) return result;
+    // 预热显卡不能原地更换；只允许重建一次，并等待旧进程确实退出。
+    await this.shutdown(false, 'adapterChange');
+    if (state.stopPromise || state.stopRequested) throw new Error('obsCaptureStopping');
+    if (rebuilding) throw new Error('dxgiAdapterMismatch');
+    this.adapterIndex = result.adapterIndex;
+    return this.start(sourceId, maxFps, sessionId, target, settings, resolution, true);
   }
 
   readStdout(state, chunk) {
@@ -185,6 +197,56 @@ class ObsCaptureHostManager {
     }
     if (event.event === 'captureStopped') {
       if (event.sessionId === state.videoSessionId && state.stopRequested) this.completeStop(state);
+      return;
+    }
+    if (event.event === 'adapterRequired') {
+      if (this.state !== state || state.captureKind !== 'monitor' || event.sessionId !== state.videoSessionId
+          || !state.startResolve || state.stopRequested || !Number.isInteger(event.adapterIndex)
+          || event.adapterIndex < 0 || event.adapterIndex >= 64) {
+        failState(state, new Error('obsCaptureProtocolEventInvalid'));
+        return;
+      }
+      clearTimeout(state.startTimer);
+      state.startSent = false;
+      this.onCaptureDiagnostic(state, { stage: 'obsAdapterRebuildRequired', adapterMatched: false,
+        adapterIndex: event.adapterIndex, captureMethod: 'dxgi' });
+      state.startResolve({ adapterIndex: event.adapterIndex });
+      state.startResolve = undefined;
+      state.startReject = undefined;
+      return;
+    }
+    if (event.event === 'capturePreparation') {
+      if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
+      if (this.state !== state || event.sessionId !== state.videoSessionId
+          || !['graphicsStarting', 'graphicsReady', 'sourceStarting'].includes(event.stage)) {
+        failState(state, new Error('obsCaptureProtocolEventInvalid'));
+        return;
+      }
+      if (state.stopRequested || state.evidenceStages.has(event.stage)) return;
+      state.evidenceStages.add(event.stage);
+      this.onCaptureDiagnostic(state, { stage: { graphicsStarting: 'obsGraphicsStarting', graphicsReady: 'obsGraphicsReady',
+        sourceStarting: 'obsSourceStarting' }[event.stage] });
+      return;
+    }
+    if (event.event === 'captureEvidence') {
+      if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
+      const method = state.captureKind === 'monitor' ? 'dxgi' : state.captureKind === 'game' ? 'game' : 'wgc-window';
+      if (this.state !== state || event.sessionId !== state.videoSessionId
+          || !['configured', 'rendering', 'sourceReady'].includes(event.stage) || event.captureMethod !== method
+          || !Number.isInteger(event.adapterIndex) || event.adapterIndex < 0 || event.adapterIndex >= 64
+          || ![event.sourceWidth, event.sourceHeight].every(value => Number.isInteger(value) && value >= 0 && value <= 32768)
+          || (event.captureApi !== undefined && (method !== 'dxgi' || !['DuplicateOutput1', 'DuplicateOutput'].includes(event.captureApi)))
+          || (method === 'dxgi' && event.adapterMatched !== true)) {
+        failState(state, new Error('obsCaptureProtocolEventInvalid'));
+        return;
+      }
+      if (state.stopRequested || state.evidenceStages.has(event.stage)) return;
+      state.evidenceStages.add(event.stage);
+      this.onCaptureDiagnostic(state, { stage: { configured: 'obsCaptureConfigured', rendering: 'obsRenderObserved',
+        sourceReady: 'obsSourceReady' }[event.stage], captureMethod: method, adapterIndex: event.adapterIndex,
+        sourceWidth: event.sourceWidth, sourceHeight: event.sourceHeight,
+        ...(event.captureApi ? { captureApi: event.captureApi } : {}),
+        ...(method === 'dxgi' ? { adapterMatched: true } : {}) });
       return;
     }
     if (['audioStarted', 'audioFailed', 'audioStopped'].includes(event.event)) {
@@ -255,8 +317,16 @@ class ObsCaptureHostManager {
         failState(state, new Error('obsCaptureDiagnosticsInvalid'));
         return;
       }
+      // 统计格式错误只结束本次读取，不让诊断功能中断仍可用的共享。
+      if (!validObsRender(event.obsRender)) {
+        request.finish(new Error('obsRenderDiagnosticsInvalid'));
+        return;
+      }
       request.finish(undefined, { helperVersion: state.helperVersion, renderedFrames: event.renderedFrames,
-        bridgeFrames: event.bridgeFrames, bridgeDroppedFrames: event.bridgeDroppedFrames, screenShareAudio: event.screenShareAudio });
+        bridgeFrames: event.bridgeFrames, bridgeDroppedFrames: event.bridgeDroppedFrames, screenShareAudio: event.screenShareAudio,
+        obsRender: { configuration: event.obsRender.configuration, elapsedMs: event.obsRender.elapsedMs,
+          totalFrames: event.obsRender.totalFrames, laggedFrames: event.obsRender.laggedFrames,
+          activeFps: event.obsRender.activeFps, averageRenderMs: event.obsRender.averageRenderMs } });
       return;
     }
     if (event.event === 'captureConfigured' || event.event === 'captureConfigurationRejected') {
@@ -430,7 +500,7 @@ class ObsCaptureHostManager {
           timer.unref?.();
         })]).finally(() => clearTimeout(timer));
         // 停止未确认就退出整个宿主；进程也未退出时保留阻挡，不能复用未知资源。
-        if (!state.closed && state.videoSessionId === sessionId) await this.shutdown(true);
+        if (!state.closed && state.videoSessionId === sessionId) await this.shutdown(true, 'stopTimeout');
       }
       return { changed: true };
     })();
@@ -443,6 +513,7 @@ class ObsCaptureHostManager {
     this.onAudioStopped(state);
     state.audio = undefined;
     state.lastStoppedSessionId = state.videoSessionId;
+    this.onCaptureDiagnostic(state, { stage: 'obsCaptureStopped', stopMode: state.startSent ? 'graceful' : 'beforeStart' });
     state.videoSessionId = undefined;
     state.stopRequested = false;
     state.captureStopResolve?.();
@@ -450,16 +521,18 @@ class ObsCaptureHostManager {
     this.scheduleIdle(state);
   }
 
-  shutdown(force = false) {
+  shutdown(force = false, reason = 'shutdown') {
     const state = this.state;
     if (!state || state.closed) return Promise.resolve();
     if (state.shutdownPromise) return state.shutdownPromise;
     state.shuttingDown = true;
+    state.shutdownReason = reason;
     clearTimeout(state.idleTimer);
     state.shutdownPromise = (async () => {
       void writeLine(state.child, 'shutdown').catch(() => {});
       if (!force) await waitForClose(state, SHUTDOWN_TIMEOUT_MS);
       if (!state.closed) {
+        state.forceTerminated = true;
         state.child.kill();
         await waitForClose(state, TERMINATE_TIMEOUT_MS);
       }
@@ -490,11 +563,14 @@ class ObsCaptureHostManager {
     state.pendingDiagnostics?.finish(error ?? new Error('obsCaptureHostClosed'));
     state.pendingConfiguration?.finish(error ?? new Error('obsCaptureHostClosed'));
     const closeError = error ?? (!state.stopRequested && !state.shuttingDown ? new Error('obsCaptureHostClosedUnexpectedly') : undefined);
-    if (closeError) failState(state, closeError, false);
+    if (closeError && state.shutdownReason !== 'adapterChange') failState(state, closeError, false);
     state.startReject?.(closeError ?? new Error('obsCaptureHostClosedBeforeStart'));
     state.startResolve = undefined;
     state.startReject = undefined;
     if (this.state === state) this.state = undefined;
+    this.onCaptureDiagnostic(state, { stage: 'obsHostExited',
+      stopMode: state.forceTerminated ? 'forced' : state.shuttingDown && !error ? 'graceful' : 'unexpected',
+      stopReason: state.shutdownReason ?? 'failure' });
     state.resolveClose?.();
     state.resolveClose = undefined;
     this.onClosed(state);
@@ -528,6 +604,16 @@ function validCounters(event) {
   return [event.renderedFrames, event.bridgeFrames, event.bridgeDroppedFrames]
     .every((value) => Number.isSafeInteger(value) && value >= 0)
     && event.renderedFrames >= event.bridgeFrames + event.bridgeDroppedFrames;
+}
+
+function validObsRender(render) {
+  return render && Number.isSafeInteger(render.configuration) && render.configuration > 0
+    && Number.isSafeInteger(render.elapsedMs) && render.elapsedMs >= 0
+    && [render.totalFrames, render.laggedFrames].every(value => Number.isInteger(value) && value >= 0 && value <= 0xffffffff)
+    && render.laggedFrames <= render.totalFrames
+    && ((render.activeFps === null && render.averageRenderMs === null)
+      || (render.elapsedMs >= 2000 && Number.isFinite(render.activeFps) && render.activeFps >= 0 && render.activeFps <= 1000
+        && Number.isFinite(render.averageRenderMs) && render.averageRenderMs >= 0));
 }
 
 function validAudioCode(code) {
@@ -595,7 +681,11 @@ function failState(state, error, kill = true) {
     state.failureNotified = true;
     state.onFailure?.(state, error);
   }
-  if (kill && state.alive && !state.closed) state.child.kill();
+  if (kill && state.alive && !state.closed) {
+    state.forceTerminated = true;
+    state.shutdownReason ??= 'failure';
+    state.child.kill();
+  }
 }
 
 module.exports = { ObsCaptureHostManager };

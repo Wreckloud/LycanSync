@@ -199,7 +199,7 @@ const obsCaptureHost = new ObsCaptureHostManager({
     if (video && video.sessionId === state.videoSessionId && !video.stopping) {
       recordVideoFailure('obsCaptureHost', error);
       const code = ['captureTargetClosed', 'captureSettingsUnsupported', 'captureBorderAccessDenied',
-        'obsGameBindingUnavailable', 'obsGameTargetMismatch'].includes(error.message)
+        'obsGameBindingUnavailable', 'obsGameTargetMismatch', 'dxgiMonitorUnavailable', 'dxgiAdapterMismatch'].includes(error.message)
         ? error.message : 'obsCaptureHostFailed';
       notifyNativeVideoError(video, code);
     }
@@ -216,6 +216,7 @@ const obsCaptureHost = new ObsCaptureHostManager({
     releaseHelperProcessBridge(state);
   },
   onSuspended: handleVideoCaptureSuspended,
+  onCaptureDiagnostic: (_state, entry) => { void writeMediaDiagnostic(entry); },
   onDiagnostic: (message) => { void writeMediaDiagnostic({ stage: 'obsCaptureHostStderr', message }); },
 });
 
@@ -893,7 +894,7 @@ async function stopNativeVideo(sessionId) {
         importedCount: video.imported.size, pendingReleaseCount: video.pendingSlotReleases.size });
       releaseNativeVideoImports(video);
       // 外部纹理未归还时不复用宿主；退出确认后才释放来源并允许下一次共享。
-      await obsCaptureHost.shutdown(true);
+      await obsCaptureHost.shutdown(true, 'textureTimeout');
       await stopObsVideo(video);
       void writeMediaDiagnostic({ stage: 'screenVideoStopRecovered' });
     } else {
@@ -1304,7 +1305,7 @@ ipcMain.handle('diagnostics:export', async (event, text) => {
   if (!trustedSender(event) || closing || diagnosticExportPending) throw new Error('当前不能导出诊断。');
   if (typeof text !== 'string' || Buffer.byteLength(text) > 8 * 1024 * 1024) throw new Error('诊断报告过大或无效。');
   const report = JSON.parse(text);
-  if (!report || report.kind !== 'lycansync-diagnostics' || report.schemaVersion !== 7 || !Array.isArray(report.samples)
+  if (!report || report.kind !== 'lycansync-diagnostics' || report.schemaVersion !== 8 || !Array.isArray(report.samples)
       || report.samples.length > 900 || !Number.isFinite(Date.parse(report.startedAt))
       || !Number.isFinite(Date.parse(report.endedAt)) || Date.parse(report.endedAt) < Date.parse(report.startedAt)) {
     throw new Error('诊断报告无效。');
@@ -1560,10 +1561,12 @@ ipcMain.handle('media:diagnostics', async (event) => {
       sourceKind: video.sourceKind, frameWidth: video.frameWidth ?? null, frameHeight: video.frameHeight ?? null,
       framesReceived: obsDiagnostics.renderedFrames, framesProcessed: obsDiagnostics.bridgeFrames,
       obsBridgeDroppedFrames: obsDiagnostics.bridgeDroppedFrames, captureSuspended: video.suspended ?? null,
+      obsRender: obsDiagnostics.obsRender,
       screenShareAudio: { ...obsDiagnostics.screenShareAudio, sessionId: video.sessionId, sourceKind: video.sourceKind },
     });
   } else {
     diagnostics.obsBridgeDroppedFrames = null;
+    diagnostics.obsRender = null;
   }
   if (diagnostics.screenShareAudio) {
     const audioDrops = nativeScreenAudioSession

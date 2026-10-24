@@ -1,0 +1,47 @@
+diff --git a/libobs-d3d11/d3d11-duplicator.cpp b/libobs-d3d11/d3d11-duplicator.cpp
+--- a/libobs-d3d11/d3d11-duplicator.cpp
++++ b/libobs-d3d11/d3d11-duplicator.cpp
+@@ -59,26 +59,34 @@ void gs_duplicator::Start()
+ 		hr = output5->DuplicateOutput1(device->device, 0, _countof(supportedFormats), supportedFormats,
+ 					       duplicator.Assign());
+-		if (FAILED(hr)) {
++		if (FAILED(hr) && hr != DXGI_ERROR_UNSUPPORTED) {
+ 			throw HRError("Failed to DuplicateOutput1", hr);
+ 		}
+-		DXGI_OUTPUT_DESC desc;
+-		if (SUCCEEDED(output->GetDesc(&desc))) {
+-			gs_monitor_color_info info = device->GetMonitorColorInfo(desc.Monitor);
+-			hdr = info.hdr;
+-			sdr_white_nits = (float)info.sdr_white_nits;
++		if (SUCCEEDED(hr)) {
++			DXGI_OUTPUT_DESC desc;
++			if (SUCCEEDED(output->GetDesc(&desc))) {
++				gs_monitor_color_info info = device->GetMonitorColorInfo(desc.Monitor);
++				hdr = info.hdr;
++				sdr_white_nits = (float)info.sdr_white_nits;
++			}
++			blog(LOG_INFO, "lycansyncDxgiApi:DuplicateOutput1");
++			return;
+ 		}
+-	} else {
+-		hr = output->QueryInterface(IID_PPV_ARGS(output1.Assign()));
+-		if (FAILED(hr)) {
+-			throw HRError("Failed to query IDXGIOutput1", hr);
+-		}
++		// 扩展接口不支持当前桌面时，仍使用 OBS 已有的标准 DXGI 实现，不切换 WGC。
++	}
++	hr = output->QueryInterface(IID_PPV_ARGS(output1.Assign()));
++	if (FAILED(hr)) {
++		throw HRError("Failed to query IDXGIOutput1", hr);
++	}
+ 
+-		hr = output1->DuplicateOutput(device->device, duplicator.Assign());
+-		if (FAILED(hr)) {
+-			throw HRError("Failed to DuplicateOutput", hr);
+-		}
++	hr = output1->DuplicateOutput(device->device, duplicator.Assign());
++	if (FAILED(hr)) {
++		throw HRError("Failed to DuplicateOutput", hr);
+ 	}
++	blog(LOG_INFO, "lycansyncDxgiApi:DuplicateOutput");
+ }

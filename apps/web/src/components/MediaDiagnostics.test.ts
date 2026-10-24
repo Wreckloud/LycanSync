@@ -6,6 +6,35 @@ import MediaDiagnostics from './MediaDiagnostics.vue';
 import { readVideoLayers } from '../rtc/mediaStats';
 import type { MediaDiagnosticsSnapshot } from '../diagnostics/mediaDiagnostics';
 
+it.each(['发送', '接收'] as const)('面板按%s方向标注实际编解码帧率，接收丢帧不限定在解码阶段', async (direction) => {
+  const layers = readVideoLayers(new Map([['video', { id: 'video', kind: 'video', timestamp: 1000,
+    type: direction === '发送' ? 'outbound-rtp' : 'inbound-rtp', framesEncoded: 58, framesDecoded: 58, framesDropped: 3 }]]) as RTCStatsReport,
+  direction === '发送' ? 'outbound-rtp' : 'inbound-rtp', new Map(), 'track');
+  const statistics = { streams: [{ identity: 'member', name: '成员', direction, layers,
+    subscription: { subscribed: true, enabled: true, muted: false } }], failures: [] } as unknown as MediaDiagnosticsSnapshot;
+  const html = await renderToString(createSSRApp(MediaDiagnostics, { room: {} as Room, statistics }));
+  expect(html).toContain(`${direction === '发送' ? '编码' : '解码'} 等待统计 fps`);
+  expect(html).not.toContain('累计解码丢帧');
+  if (direction === '接收') expect(html).toContain('累计接收丢帧 3');
+});
+
+it('OBS 面板区分区间渲染、滚动耗时与等待，零延误仍显示真实零', async () => {
+  const statistics = { streams: [], failures: [], obsRenderInterval: null,
+    native: { state: 'running', captureBackend: 'obsLibobs', obsRender: { activeFps: null, averageRenderMs: null } },
+  } as unknown as MediaDiagnosticsSnapshot;
+  const render = () => renderToString(createSSRApp(MediaDiagnostics, { room: {} as Room, statistics }));
+  expect(await render()).toContain('等待统计');
+  statistics.obsRenderInterval = { elapsedMs: 2500, totalFrames: 150, laggedFrames: 0, renderedFps: 60, laggedPercent: 0 };
+  statistics.native!.obsRender!.activeFps = 59.8;
+  statistics.native!.obsRender!.averageRenderMs = 1.25;
+  const html = await render();
+  expect(html).toContain('60 FPS');
+  expect(html).toContain('区间延误 0 / 150');
+  expect(html).toContain('59.8 FPS');
+  expect(html).toContain('1.25 ms');
+  expect(html).toContain('不代表不同来源帧、编码或端到端延迟');
+});
+
 it('面板展示未知和false编码线索，网络与缓冲值不标成端到端延迟', async () => {
   const stats = new Map([
     ['video', { id: 'video', type: 'outbound-rtp', kind: 'video', timestamp: 1000, powerEfficientEncoder: false }],

@@ -8,6 +8,25 @@ const { test } = require('node:test');
 const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
 const { EventEmitter } = require('node:events');
 
+test('导出保留 DXGI、显卡匹配及停止方式证据，丢弃窗口名和设备标识', async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lycan-dxgi-diagnostics-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'events.jsonl');
+  const time = new Date().toISOString();
+  await writeFile(path, [
+    { stage: 'obsSourceReady', captureMethod: 'dxgi', captureApi: 'DuplicateOutput', adapterIndex: 1,
+      adapterMatched: true, sourceWidth: 1920, sourceHeight: 1080, monitorName: 'private-screen', luid: 'private-device' },
+    { stage: 'obsHostExited', stopMode: 'forced', stopReason: 'stopTimeout' },
+    { stage: 'obsCaptureConfigured', captureMethod: 'unknown-private', captureApi: 'private-api', stopMode: 'fake' },
+  ].map(entry => JSON.stringify({ time, ...entry })).join('\n'));
+  assert.deepEqual(await readDiagnosticEvents(path, Date.parse(time) - 1, Date.parse(time) + 1), [
+    { time, stage: 'obsSourceReady', hresults: [], captureMethod: 'dxgi', captureApi: 'DuplicateOutput', adapterIndex: 1,
+      adapterMatched: true, sourceWidth: 1920, sourceHeight: 1080 },
+    { time, stage: 'obsHostExited', hresults: [], stopMode: 'forced', stopReason: 'stopTimeout' },
+    { time, stage: 'obsCaptureConfigured', hresults: [] },
+  ]);
+});
+
 test('分进程内存复用校验后的句柄，进程退出释放，不导出PID或路径，不重复计算原生工作集', () => {
   const child = Object.assign(new EventEmitter(), { pid: 123, exitCode: null, signalCode: null });
   let opens = 0, releases = 0, reads = 0;
@@ -273,7 +292,7 @@ function exportFixture() {
     ipcMain: { handle: (_name, callback) => { exportReport = callback; } },
   };
   runInNewContext(main.slice(start, end), state);
-  const text = JSON.stringify({ kind: 'lycansync-diagnostics', schemaVersion: 7,
+  const text = JSON.stringify({ kind: 'lycansync-diagnostics', schemaVersion: 8,
     startedAt: '2026-10-15T00:00:00Z', endedAt: '2026-10-15T00:00:01Z', samples: [] });
   return { state, calls, text, exportReport: (...args) => exportReport(...args) };
 }
@@ -285,7 +304,7 @@ test('诊断导出仅允许可信页面，验证格式并通过用户选址写�
   assert.equal(calls.read, 0);
   state.trustedSender = () => true;
   await assert.rejects(exportReport({}, '{}'), /无效/);
-  await assert.rejects(exportReport({}, text.replace('"schemaVersion":7', '"schemaVersion":6')), /无效/);
+  await assert.rejects(exportReport({}, text.replace('"schemaVersion":8', '"schemaVersion":7')), /无效/);
   await assert.rejects(exportReport({}, 'x'.repeat(8 * 1024 * 1024 + 1)), /过大/);
   await exportReport({}, text);
   assert.equal(calls.writes.length, 1);

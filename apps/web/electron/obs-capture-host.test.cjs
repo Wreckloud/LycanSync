@@ -12,6 +12,7 @@ const monitorName = '\\\\.\\DISPLAY2';
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 const idleAudio = { state: 'idle', sampleRate: null, channels: null, packetsReceived: 0, framesReceived: 0,
   silentPackets: 0, droppedAudioChunks: 0, lastError: null };
+const obsRender = { configuration: 1, elapsedMs: 4000, totalFrames: 240, laggedFrames: 2, activeFps: 59.5, averageRenderMs: 1.25 };
 
 function fixture(context, { closeOnShutdown = true, closeOnKill = true, blockShutdownWrite = false, shutdownDelayMs = 0 } = {}) {
   const child = new EventEmitter();
@@ -23,6 +24,7 @@ function fixture(context, { closeOnShutdown = true, closeOnKill = true, blockShu
   const spawns = [];
   const failures = [];
   const audioFailures = [];
+  const captureDiagnostics = [];
   let kills = 0;
   child.stdin = new Writable({ write(chunk, _encoding, callback) {
     const command = chunk.toString('utf8').trim();
@@ -54,10 +56,11 @@ function fixture(context, { closeOnShutdown = true, closeOnKill = true, blockShu
       return child;
     },
     onAudioFailure: (_state, failure) => audioFailures.push(failure),
+    onCaptureDiagnostic: (_state, entry) => captureDiagnostics.push(entry),
     onFrame: (_state, frame) => frames.push(frame), onFailure: (_state, error) => failures.push(error.message) });
   const emit = (event) => {
     const output = () => child.stdout.write(JSON.stringify(event.event === 'diagnostics'
-    ? { screenShareAudio: { ...idleAudio }, ...event }
+    ? { screenShareAudio: { ...idleAudio }, obsRender: { ...obsRender }, ...event }
     : ['captureConfigured', 'captureConfigurationRejected'].includes(event.event)
       ? { width: 1920, height: 1080, ...event } : { sessionId, ...event }) + '\n');
     if (event.event === 'captureStarted') queueMicrotask(output);
@@ -74,11 +77,188 @@ function fixture(context, { closeOnShutdown = true, closeOnKill = true, blockShu
     if (manager.state) manager.state.shuttingDown = true;
     child.emit('close', 0);
   });
-  return { child, commands, captureCommands, spawns, failures, audioFailures, frames, manager, emit, start, ready, killCount: () => kills };
+  return { child, commands, captureCommands, spawns, failures, audioFailures, captureDiagnostics, frames, manager, emit, start, ready, killCount: () => kills };
 }
+
+function adapterFixture(context) {
+  const children = [], diagnostics = [], failures = [];
+  const emit = (child, event) => child.stdout.write(JSON.stringify({ sessionId, ...event }) + '\n');
+  const manager = new ObsCaptureHostManager({ executablePath: 'C:\\obs\\host.exe', modulePath: 'C:\\obs\\win-capture.dll',
+    dataPath: 'C:\\obs\\data', configPath: 'C:\\user-data\\obs', platform: 'win32',
+    onCaptureDiagnostic: (_state, entry) => diagnostics.push(entry), onFailure: (_state, error) => failures.push(error.message),
+    spawnProcess: (_path, args) => {
+      const child = Object.assign(new EventEmitter(), { pid: 1234 + children.length, args, commands: [],
+        stdout: new PassThrough(), stderr: new PassThrough(), kills: 0 });
+      child.stdin = new Writable({ write(chunk, _encoding, callback) { child.commands.push(String(chunk).trim()); callback(); } });
+      child.kill = () => { child.kills++; return true; };
+      children.push(child);
+      queueMicrotask(() => emit(child, { event: 'coreReady' }));
+      return child;
+    } });
+  const start = () => manager.start('monitor:7:0', 180, sessionId, { kind: 'monitor', monitorName },
+    { hideCursor: true, hideBorder: true }, { width: 2560, height: 1440 });
+  context.after(() => { for (const child of children) child.emit('close', 0); });
+  return { manager, children, diagnostics, failures, start, emit };
+}
+
+test('预热显卡不匹配先等待旧宿主退出，再按原来源和画质重建，不切换采集范围', async (context) => {
+  const { manager, children, diagnostics, failures, start, emit } = adapterFixture(context);
+  const started = start();
+  await flush();
+  const first = children[0];
+  emit(first, { event: 'adapterRequired', adapterIndex: 2 });
+  await flush();
+  assert.deepEqual(first.commands.slice(-1), ['shutdown']);
+  assert.equal(children.length, 1);
+  first.emit('close', 0);
+  await flush();
+  const second = children[1];
+  assert.equal(second.args.at(-1), '2');
+  assert.equal(second.commands[0], first.commands[0]);
+  assert.match(second.commands[0], /\|180\|\|\|2560\|1440$/);
+  emit(second, { event: 'captureStarted', helperVersion: '32.2.2' });
+  await started;
+  assert.equal(manager.state.child, second);
+  assert.deepEqual(failures, []);
+  assert.deepEqual(diagnostics.map(entry => entry.stage), ['obsAdapterRebuildRequired', 'obsHostExited']);
+  assert.equal(diagnostics[1].stopMode, 'graceful');
+  assert.equal(diagnostics[1].stopReason, 'adapterChange');
+});
+
+test('换显卡重建期间取消，不会在旧宿主迟到退出后重新采集', async (context) => {
+  const { manager, children, start, emit } = adapterFixture(context);
+  const rejected = assert.rejects(start(), /obsCaptureStopping/);
+  await flush();
+  emit(children[0], { event: 'adapterRequired', adapterIndex: 1 });
+  await flush();
+  await manager.stop(sessionId);
+  children[0].emit('close', 0);
+  await rejected;
+  assert.equal(children.length, 1);
+  assert.equal(manager.state, undefined);
+});
+
+test('旧宿主退出未确认时禁止重建，重复显卡不匹配最多重建一次', async (context) => {
+  const { manager, children, start, emit } = adapterFixture(context);
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const rejected = assert.rejects(start(), /obsCaptureStopUnconfirmed/);
+  await flush();
+  emit(children[0], { event: 'adapterRequired', adapterIndex: 1 });
+  await flush();
+  context.mock.timers.tick(4000);
+  await flush();
+  context.mock.timers.tick(1500);
+  await rejected;
+  assert.equal(children.length, 1);
+  assert.equal(children[0].kills, 1);
+  await assert.rejects(start(), /AlreadyRunning/);
+  assert.equal(manager.state.closed, false);
+});
+
+test('重建后仍不匹配时明确失败，不无限重试或改用窗口采集', async (context) => {
+  const { children, start, emit } = adapterFixture(context);
+  const rejected = assert.rejects(start(), /dxgiAdapterMismatch/);
+  await flush();
+  emit(children[0], { event: 'adapterRequired', adapterIndex: 1 });
+  await flush();
+  children[0].emit('close', 0);
+  await flush();
+  emit(children[1], { event: 'adapterRequired', adapterIndex: 1 });
+  await flush();
+  children[1].emit('close', 0);
+  await rejected;
+  assert.equal(children.length, 2);
+});
+
+test('采集证据仅接受当前会话固定阶段和字段，每阶段一次，停止后不记作活动采集', async (context) => {
+  const { manager, ready, emit, captureDiagnostics, failures } = fixture(context);
+  await ready();
+  const entry = { event: 'captureEvidence', stage: 'sourceReady', captureMethod: 'dxgi', captureApi: 'DuplicateOutput',
+    adapterIndex: 1, adapterMatched: true, sourceWidth: 1920, sourceHeight: 1080, windowTitle: 'private' };
+  emit(entry);
+  emit(entry);
+  assert.deepEqual(captureDiagnostics, [{ stage: 'obsSourceReady', captureMethod: 'dxgi', captureApi: 'DuplicateOutput',
+    adapterIndex: 1, adapterMatched: true, sourceWidth: 1920, sourceHeight: 1080 }]);
+  await manager.stop(sessionId);
+  emit({ ...entry, stage: 'rendering' });
+  assert.equal(captureDiagnostics.length, 2);
+  assert.equal(captureDiagnostics[1].stopMode, 'graceful');
+  assert.deepEqual(failures, []);
+});
+
+test('启动前阶段区分图形准备与来源创建，每阶段一次，不带窗口或硬件标识', async (context) => {
+  const { start, emit, manager, captureDiagnostics } = fixture(context);
+  const started = start();
+  for (const stage of ['graphicsStarting', 'graphicsReady', 'sourceStarting']) {
+    emit({ event: 'capturePreparation', stage, windowTitle: 'private', luid: 'private' });
+    emit({ event: 'capturePreparation', stage });
+  }
+  emit({ event: 'captureStarted', helperVersion: '32.2.2' });
+  await started;
+  assert.deepEqual(captureDiagnostics, [{ stage: 'obsGraphicsStarting' }, { stage: 'obsGraphicsReady' }, { stage: 'obsSourceStarting' }]);
+  await manager.stop(sessionId);
+  emit({ event: 'capturePreparation', stage: 'graphicsReady' });
+  assert.equal(captureDiagnostics.length, 4);
+});
+
+test('无效显卡索引或伪造采集方法不能通过宿主协议', async (context) => {
+  for (const event of [{ event: 'adapterRequired', adapterIndex: 64 },
+    { event: 'captureEvidence', stage: 'configured', captureMethod: 'wgc-window', adapterIndex: 0, sourceWidth: 0, sourceHeight: 0 }]) {
+    const { start, emit, failures } = fixture(context);
+    const rejected = assert.rejects(start(), /obsCaptureProtocolEventInvalid/);
+    await flush();
+    emit(event);
+    await rejected;
+    assert.deepEqual(failures, ['obsCaptureProtocolEventInvalid']);
+  }
+});
+
+test('停止超时后的强制结束单独记录，不伪报正常停止', async (context) => {
+  const { manager, ready, captureDiagnostics } = fixture(context, { closeOnShutdown: false });
+  await ready();
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const stopped = manager.stop(sessionId);
+  context.mock.timers.tick(4000);
+  await stopped;
+  assert.deepEqual(captureDiagnostics, [{ stage: 'obsHostExited', stopMode: 'forced', stopReason: 'stopTimeout' }]);
+});
+
+test('请求退出后原生进程异常退出，也不能记为正常清理', async (context) => {
+  const { manager, child, captureDiagnostics } = fixture(context, { closeOnShutdown: false });
+  await manager.prepare();
+  const stopped = manager.shutdown();
+  child.emit('close', 1);
+  await stopped;
+  assert.deepEqual(captureDiagnostics, [{ stage: 'obsHostExited', stopMode: 'unexpected', stopReason: 'shutdown' }]);
+});
 
 const audioId = '00000000-0000-0000-0000-000000000001';
 const nextAudioId = '00000000-0000-0000-0000-000000000002';
+
+test('OBS 渲染统计只投影固定字段，统计异常不结束共享，旧响应不能覆盖新请求', async (context) => {
+  const { manager, ready, emit, failures, killCount } = fixture(context);
+  await ready();
+  const reply = (requestId, render) => emit({ event: 'diagnostics', requestId, sessionId,
+    renderedFrames: 120, bridgeFrames: 100, bridgeDroppedFrames: 0, obsRender: render });
+  const reading = manager.getDiagnostics(sessionId);
+  reply('1', { ...obsRender, windowTitle: 'private-title', deviceLuid: 'private-device' });
+  assert.deepEqual((await reading).obsRender, obsRender);
+  let requestId = 1;
+  for (const render of [undefined, { ...obsRender, activeFps: -1 }, { ...obsRender, averageRenderMs: Infinity },
+    { ...obsRender, configuration: 0 }, { ...obsRender, laggedFrames: 999 },
+    { ...obsRender, totalFrames: -1 }, { ...obsRender, elapsedMs: 1000 }]) {
+    const rejected = assert.rejects(manager.getDiagnostics(sessionId), /obsRenderDiagnosticsInvalid/);
+    reply(String(++requestId), render);
+    await rejected;
+  }
+  assert.equal(killCount(), 0);
+  assert.equal(manager.state.videoSessionId, sessionId);
+  assert.deepEqual(failures, []);
+  const resumed = manager.getDiagnostics(sessionId);
+  reply('1', { ...obsRender, activeFps: 999 });
+  reply(String(++requestId), { ...obsRender, elapsedMs: 500, activeFps: null, averageRenderMs: null });
+  assert.equal((await resumed).obsRender.activeFps, null);
+});
 const audioFormat = { sampleRate: 48_000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10,
   pluginLoadMs: 12, captureReadyMs: 340 };
 
@@ -1154,7 +1334,7 @@ test('没有新增成功帧时仍主动读取真实槽位丢帧；并发诊断�
   assert.deepEqual(commands, ['diagnostics:1']);
   emit({ event: 'diagnostics', requestId: '1', sessionId, renderedFrames: 123, bridgeFrames: 3, bridgeDroppedFrames: 120 });
   assert.deepEqual(await diagnostics, { helperVersion: '32.2.2', renderedFrames: 123, bridgeFrames: 3,
-    bridgeDroppedFrames: 120, screenShareAudio: idleAudio });
+    bridgeDroppedFrames: 120, screenShareAudio: idleAudio, obsRender });
   await manager.state.releaseSharedTextureSlot(sessionId, 1);
   assert.equal(commands.at(-1), `release:${sessionId}:1`);
   await assert.rejects(manager.state.releaseSharedTextureSlot('old-session', 1), /Unavailable/);
@@ -1174,7 +1354,7 @@ test('正式诊断入口使用宿主响应的版本及计数，不读取缓存�
     obsCaptureHost: { getDiagnostics: async (id) => {
       requested.push(id);
       return { helperVersion: 'observed-version', renderedFrames: 123, bridgeFrames: 3, bridgeDroppedFrames: 120,
-        screenShareAudio: { ...idleAudio } };
+        screenShareAudio: { ...idleAudio }, obsRender: { ...obsRender } };
     } },
     nativeScreenAudioSession: undefined, lastScreenAudioDroppedChunks: 0,
     nativeMicrophoneSession: undefined, lastMicrophoneDroppedChunks: 0 };
@@ -1185,6 +1365,7 @@ test('正式诊断入口使用宿主响应的版本及计数，不读取缓存�
   assert.equal(diagnostics.framesReceived, 123);
   assert.equal(diagnostics.framesProcessed, 3);
   assert.equal(diagnostics.obsBridgeDroppedFrames, 120);
+  assert.deepEqual(diagnostics.obsRender, obsRender);
   assert.equal(diagnostics.sourceKind, 'monitor');
   assert.equal(diagnostics.captureSuspended, null);
   sandbox.nativeVideoSession.sourceKind = 'window';
