@@ -10,7 +10,7 @@ function updateFeedUrl(value) {
 
 // 启动自动更新只执行一次；设置页查版本，确认后重启复用启动流程。
 function createStartupUpdate({ enabled, version, createUpdater, onChange, beforeInstall, onInstallFailure,
-  checkTimeoutMs = 10_000 }) {
+  updaterCachePath, checkTimeoutMs = 10_000 }) {
   let state = { phase: 'idle', version, supported: enabled, message: enabled ? '等待检查更新' : '开发模式不检查更新' };
   let startupPromise;
   let resolveStartup;
@@ -61,6 +61,11 @@ function createStartupUpdate({ enabled, version, createUpdater, onChange, before
     updater.allowDowngrade = false;
     updater.disableWebInstaller = true;
     updater.logger = null;
+    // electron-updater 默认把安装包放在 %LOCALAPPDATA%，这里改到调用方给出的运行目录。
+    if (updaterCachePath && updater.app) {
+      const cachePath = updaterCachePath;
+      Object.defineProperty(updater.app, 'baseCachePath', { configurable: true, enumerable: true, get: () => cachePath });
+    }
     // 启动结束后仍接住 SDK 的 error 事件；手动检查通过自身 Promise 报错。
     updater.on('error', fail);
     return updater;

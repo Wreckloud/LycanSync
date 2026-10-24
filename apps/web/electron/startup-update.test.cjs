@@ -46,6 +46,22 @@ function fixture(options = {}) {
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
+test('更新缓存固定在运行目录，不读取系统本地应用数据目录', async () => {
+  const cachePath = join('D:', 'LycanSync', 'data', 'updater');
+  const f = fixture({ updaterCachePath: cachePath });
+  let reads = 0;
+  f.updater.app = {};
+  Object.defineProperty(f.updater.app, 'baseCachePath', {
+    configurable: true,
+    get: () => { reads += 1; return join('C:', 'Users', 'someone', 'AppData', 'Local'); },
+  });
+  const started = f.startup.start();
+  f.checks.resolve({ isUpdateAvailable: false });
+  assert.equal((await started).phase, 'ready');
+  assert.equal(f.updater.app.baseCachePath, cachePath);
+  assert.equal(reads, 0);
+});
+
 test('更新源只接受无凭据的 HTTPS 目录，不接受业务服务器输入的 HTTP 地址', () => {
   assert.equal(updateFeedUrl('https://updates.example.test/downloads'), 'https://updates.example.test/downloads/');
   for (const url of ['', 'http://127.0.0.1/', 'file:///test', 'https://user:password@example.test/',
@@ -336,6 +352,7 @@ test('真实主进程安装前加密保留邀请并允许直接退出，不传�
     require: (name) => { assert.equal(name, 'electron-updater'); return { autoUpdater: f.updater }; },
     mainWindow: undefined, closing: false, startupReady: false, canClose: false, allowQuitAfterMediaHelper: false,
     pendingAccessLink: { server: 'https://example.test', token: 'test-invitation' }, accessLinkFile: 'pending-access.bin',
+    runtimeLayout: { updaterCachePath: join('D:', 'LycanSync', 'data', 'updater') },
     safeStorage: { isEncryptionAvailable: () => true, encryptString: (link) => {
       assert.equal(link, 'lycansync://access?server=https%3A%2F%2Fexample.test#token=test-invitation');
       order.push('encrypt');

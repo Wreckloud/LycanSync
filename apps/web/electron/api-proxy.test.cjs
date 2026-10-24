@@ -145,7 +145,7 @@ test('凭据保存失败明确提示本机问题，重试仍可沿原兑换流�
   const request = () => new Request('lycan://app/api/auth/access/redeem', { method: 'POST', body: '{}' });
   const first = await serve(request());
   assert.equal(first.status, 502);
-  assert.deepEqual(await first.json(), { message: '无法保存本机登录凭据，请检查用户目录权限和系统加密后重试。' });
+  assert.deepEqual(await first.json(), { message: '无法保存本机登录凭据，请检查数据目录权限和系统加密后重试。' });
   assert.equal((await serve(request())).status, 200);
   assert.equal(writes, 2);
 });
@@ -194,7 +194,7 @@ test('服务端退出成功但本机文件清理失败明确报告已结束会�
   const response = await serve(new Request('lycan://app/api/auth/logout', { method: 'POST' }));
   assert.equal(response.status, 502);
   assert.deepEqual(await response.json(), { code: 'LOCAL_SESSION_CLEAR_FAILED',
-    message: '登录已结束，但无法清理本机凭据，请检查用户目录权限。' });
+    message: '登录已结束，但无法清理本机凭据，请检查数据目录权限。' });
 });
 
 test('群组超过 3 MiB 接口预算时本地返回明确 413，不转发到后端', async () => {

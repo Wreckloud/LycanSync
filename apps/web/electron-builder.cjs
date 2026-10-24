@@ -20,6 +20,7 @@ module.exports = {
     'electron/activity-helper.cjs',
     'electron/startup-update.cjs',
     'electron/server-settings.cjs',
+    'electron/runtime-paths.cjs',
     'electron/access-links.cjs',
     'electron/preload.cjs',
     'electron/voice-overlay.cjs',

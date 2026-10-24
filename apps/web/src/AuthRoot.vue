@@ -236,7 +236,7 @@ async function logout() {
 }
 async function clearLocalSession() {
   try { await desktop?.clearSession(); await initialize(); }
-  catch { error.value = '清理本机凭据失败，请检查用户目录权限。'; }
+  catch { error.value = '清理本机凭据失败，请检查数据目录权限。'; }
 }
 async function saveServerAddress() {
   if (!desktop || submitting.value || serverSaving.value) return;
