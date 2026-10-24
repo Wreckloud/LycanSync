@@ -17,6 +17,10 @@ npm --prefix apps/web run package:desktop
 
 产物位于 `release/desktop/`，包括未签名 NSIS x64 安装程序、同名 `.blockmap` 和 `latest.yml`；内置微软 VC++ x64 运行库并按需安装。打包必须指定 HTTPS 服务器地址；运行库默认从 Visual Studio 2022 Build Tools 的 Redist 目录获取，其他位置用 `LYCANSYNC_VC_REDIST_PATH` 指定微软原版文件。安装完成可直接启动，在未登录页面修改服务器地址并重启；选择保存在安装目录的 data 文件夹，升级不会覆盖。安装版启动、升级、自动启动、原生媒体和卸载仍需在 Windows 10/11 验收。
 
+应用自身的登录凭据、服务器选择、Chromium 存储、日志、OBS 配置和更新缓存集中在安装目录的 `data`。首次迁移只读取本机旧目录的自有文件；Windows 凭据与其 `Local State` 加密密钥一并迁入，已有新账号／新邀请和偏好不覆盖。曾误迁移的同一份密文可在保留备份后修复配套密钥；完成标记写入后不再从旧目录恢复已退出的账号。旧目录不自动删除；系统加密仍绑定 Windows 用户，不能把复制 `data` 到另一台电脑当作账号恢复方式。显式 `--user-data-dir` 仍用于调试隔离；此约束不涵盖 OBS 共用钩子／Vulkan 注册、Windows 系统服务、安装器临时文件及用户主动选择的导出／下载位置，不承诺整个进程树绝不触及安装目录外。
+
+`npm --prefix apps/web run test:runtime-migration` 验证目录迁移；Windows 下另用无界面的 Electron 进程及合成密文核验真实 `safeStorage` 解密，不连接业务服务器、不读真实账号或采集设备。
+
 每次发布先递增 `apps/web/package.json` 和 `package-lock.json` 中的应用版本，再重新打包；不得覆盖已发布的同版本安装包。发布时先上传版本化安装包、`.blockmap`、同版本 `LycanSync-版本-obs-source.tar.gz` 和第三方许可文本，最后更新 `latest.yml`。修改源码或提交 Git 不会更新已有安装包。
 
 首次打包需按 [OBS 构建说明](native/obs-capture-host/README.md) 准备固定运行文件和对应源码缓存。打包会核对构建输入、运行文件、完整源码归档及许可证，自动生成对应源码包；缺失或不匹配时拒绝发布，不用布尔开关跳过检查。源码包包含宿主／插件源码、补丁、固定 OBS 与依赖源码及构建材料；编译和静态核验不代表真实共享或性能通过。
