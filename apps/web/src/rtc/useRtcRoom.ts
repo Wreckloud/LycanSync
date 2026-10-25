@@ -976,6 +976,17 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             maxFps: selectedProfile.fps,
             resolution: { width: selectedProfile.width, height: selectedProfile.height },
             contentHint: 'motion',
+            isCurrentCapture: () => activeRoom.value === currentRoom && screenShareResource === shareResource
+              && shareResource != null && !shareResource.stopping,
+            canReduceFrameRate: () => status.value === 'connected'
+              && currentRoom.state === ConnectionState.Connected
+              && shareResource?.liveKitTrackId != null && !remoteControl.owner.value && !remoteControl.granting.value
+              && currentRoom.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track === nativeVideo?.track,
+            onFrameRateAdjustmentFailure: (frameRate) => {
+              if (activeRoom.value === currentRoom && screenShareResource === shareResource && !shareResource?.stopping) {
+                notice.value = `共享帧率自动调整失败，采集目标仍为 ${frameRate} FPS。请重新选择画质后重试。`;
+              }
+            },
             onError: (code) => {
               const failedShareResource = shareResource;
               const failedVideoSession = nativeVideo;
@@ -1351,7 +1362,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     const resource = screenShareResource;
     if (!currentRoom || !resource || screenShareQualityBusy.value || screenShareSourceBusy.value
         || pendingMedia.value.has(Track.Source.ScreenShare)
-        || (resource.quality === quality && (quality !== 'custom'
+        || (!resource.videoSession.needsFrameRateRecovery && resource.quality === quality && (quality !== 'custom'
           || (resource.customQuality.resolution === snapshot.resolution && resource.customQuality.fps === snapshot.fps
             && resource.customQuality.bitrateMbps === snapshot.bitrateMbps)))
         || currentRoom.state !== ConnectionState.Connected
@@ -1364,6 +1375,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       resource.customQuality = snapshot;
       currentScreenShareQuality.value = quality;
       currentCustomScreenShareQuality.value = snapshot;
+      if (notice.value.startsWith('共享帧率自动调整失败')) notice.value = '';
       return true;
     } catch (error) {
       if (activeRoom.value === currentRoom && screenShareResource === resource) {

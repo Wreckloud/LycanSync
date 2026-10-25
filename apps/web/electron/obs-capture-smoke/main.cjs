@@ -258,7 +258,7 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
         throw new Error(`startupMarkerMissing:${color}`, { cause: error });
       }
     };
-    for (const [height, fps] of [[1080, 60], [1440, 180]]) {
+    for (const [height, fps] of [[1080, 60], [1440, 120]]) {
       for (const mode of ['cold', 'prewarmed', 'restart']) {
         assert(await markerVisible(), 'testMarkerOccluded');
         if (mode !== 'restart') await manager.shutdown();
@@ -507,9 +507,8 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
         ['standard', { resolution: 1080, fps: 60 }],
         ['custom', { resolution: 1440, fps: 60 }],
         ['custom', { resolution: 1440, fps: 120 }],
-        ['custom', { resolution: 1440, fps: 180 }],
-        ['economy', { resolution: 1440, fps: 180 }],
-        ['standard', { resolution: 1440, fps: 180 }],
+        ['economy', { resolution: 1440, fps: 120 }],
+        ['standard', { resolution: 1440, fps: 120 }],
       ]) {
         process.stdout.write(`${JSON.stringify({ phase: 'qualityChanging', id, ...custom })}\n`);
         const configured = await renderer(`configureQuality(${JSON.stringify(id)},${JSON.stringify(custom)})`);

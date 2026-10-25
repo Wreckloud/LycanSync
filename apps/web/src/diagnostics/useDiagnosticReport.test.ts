@@ -25,7 +25,7 @@ function snapshot(): MediaDiagnosticsSnapshot {
         receiveLossPercent: null, jitterBufferMs: null }] }],
     audio: [], process: null, native: null, failures: [] };
 }
-function setup() {
+function setup(automaticDefault = false) {
   const scope = effectScope(); scopes.push(scope);
   const room = shallowRef<Room | null>({} as Room);
   const settings = { quality: 'standard', customQuality: { resolution: 1080, fps: 60 } as CustomScreenShareQuality,
@@ -35,15 +35,151 @@ function setup() {
     viewerCount: 1 };
   const exportDiagnosticReport = vi.fn(async (_text: string) => ({ saved: true }));
   vi.stubGlobal('window', { lycanDesktop: { exportDiagnosticReport } });
-  const report = scope.run(() => useDiagnosticReport({ room: () => room.value, participants: () => [], settings: () => ({ ...settings }) }))!;
+  const report = scope.run(() => useDiagnosticReport({ room: () => room.value, participants: () => [],
+    automaticDefault, settings: () => ({ ...settings }) }))!;
   return { scope, room, settings, report, exportDiagnosticReport };
 }
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal('document', { hidden: false });
+  const preferences = new Map<string, string>();
+  vi.stubGlobal('localStorage', { getItem: (key: string) => preferences.get(key) ?? null,
+    setItem: (key: string, value: string) => { preferences.set(key, value); } });
   collect.mockReset().mockImplementation(async () => snapshot());
 });
 afterEach(() => { scopes.splice(0).forEach((scope) => scope.stop()); vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+it('桌面首次进入默认自动记录，显式保存的关闭选择优先于默认值', async () => {
+  const { scope, room, settings } = setup();
+  scope.stop();
+  const enter = () => {
+    const next = effectScope(); scopes.push(next);
+    return next.run(() => useDiagnosticReport({ room: () => room.value, participants: () => [], settings: () => settings }))!;
+  };
+  const first = enter();
+  expect(first.automaticEnabled.value).toBe(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(first.sampleCount.value).toBe(1);
+  first.setAutomatic(false);
+  expect(enter().automaticEnabled.value).toBe(false);
+});
+
+it('自动记录在进入页面时开始，未入房、离房、再次入房和后台均继续，共用一个采样定时器', async () => {
+  const { report, room, scope } = setup(true);
+  expect(report.automaticEnabled.value).toBe(true);
+  expect(report.recording.value).toBe(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(report.sampleCount.value).toBe(1);
+  room.value = null;
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(collect).toHaveBeenLastCalledWith(null, []);
+  expect(report.recording.value).toBe(true);
+  const timers = vi.getTimerCount();
+  report.setViewing(true); report.setViewing(false);
+  expect(vi.getTimerCount()).toBe(timers);
+  vi.stubGlobal('document', { hidden: true });
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(report.sampleCount.value).toBeGreaterThan(2);
+  room.value = {} as Room;
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(report.recording.value).toBe(true);
+  scope.stop();
+  const count = collect.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(10000);
+  expect(collect).toHaveBeenCalledTimes(count);
+});
+
+it('自动记录中导出快照不停止、不重置样本；保存等待期间继续记录，重复导出不并发', async () => {
+  const { report, exportDiagnosticReport } = setup(true);
+  await vi.advanceTimersByTimeAsync(2000);
+  let complete!: (result: { saved: boolean }) => void;
+  exportDiagnosticReport.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
+  const saving = report.save('自动记录');
+  const frozen = exportDiagnosticReport.mock.calls[0][0];
+  const exported = JSON.parse(frozen);
+  expect(exported.stopReason).toBe('automaticSnapshot');
+  expect(exported.recordingMode).toBe('automatic');
+  expect(exported.samples).toHaveLength(2);
+  await report.save('重复');
+  await vi.advanceTimersByTimeAsync(4000);
+  expect(report.recording.value).toBe(true);
+  expect(report.sampleCount.value).toBe(4);
+  expect(exportDiagnosticReport).toHaveBeenCalledOnce();
+  expect(exportDiagnosticReport.mock.calls[0][0]).toBe(frozen);
+  complete({ saved: false }); await saving;
+  expect(report.sampleCount.value).toBe(4);
+  await report.save('再次导出');
+  expect(JSON.parse(exportDiagnosticReport.mock.calls[1][0]).samples).toHaveLength(4);
+});
+
+it('自动开关保存选择，关闭时保留记录并丢弃在途结果，重新开启继续；新页面尊重关闭选择', async () => {
+  const { report } = setup(true);
+  await vi.advanceTimersByTimeAsync(0);
+  let finish!: (value: MediaDiagnosticsSnapshot) => void;
+  collect.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+  await vi.advanceTimersByTimeAsync(2000);
+  report.setAutomatic(false);
+  expect(report.recording.value).toBe(false);
+  finish(snapshot()); await vi.advanceTimersByTimeAsync(0);
+  expect(report.sampleCount.value).toBe(1);
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(report.sampleCount.value).toBe(1);
+  const next = setup(true);
+  expect(next.report.automaticEnabled.value).toBe(false);
+  report.setAutomatic(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(report.recording.value).toBe(true);
+  expect(report.sampleCount.value).toBe(2);
+});
+
+it('设置读取失败保守停用；写入失败仍允许本次关闭并说明未记住，不影响导出', async () => {
+  vi.spyOn(localStorage, 'getItem').mockImplementationOnce(() => { throw new Error('read unavailable'); });
+  const { report, exportDiagnosticReport } = setup(true);
+  expect(report.automaticEnabled.value).toBe(false);
+  expect(report.error.value).toContain('无法读取');
+  report.setAutomatic(true); await vi.advanceTimersByTimeAsync(0);
+  vi.spyOn(localStorage, 'setItem').mockImplementationOnce(() => { throw new Error('write unavailable'); });
+  report.setAutomatic(false);
+  expect(report.recording.value).toBe(false);
+  expect(report.error.value).toContain('本次自动诊断选择已生效');
+  await report.save('');
+  expect(exportDiagnosticReport).toHaveBeenCalledOnce();
+});
+
+it('自动记录超过三十分钟持续滚动且不超过900份，导出窗口首样本不混入窗外基线', async () => {
+  const { report, exportDiagnosticReport } = setup(true);
+  await vi.advanceTimersByTimeAsync(35 * 60_000);
+  expect(report.recording.value).toBe(true);
+  expect(report.sampleCount.value).toBe(900);
+  expect(report.discardedSamples.value).toBeGreaterThan(0);
+  await report.save('');
+  const result = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
+  expect(result.samples).toHaveLength(900);
+  expect(result.samples[0]).toMatchObject({ elapsedMs: 0, actualIntervalMs: null, nativeInterval: null, obsRenderInterval: null });
+  expect(result.samples[0].streams[0]).toMatchObject({ segmentReason: 'retained-window', sourceFps: null, layers: [{ fps: null, bitrateKbps: null }] });
+  expect(result.samples.at(-1).streams[0].segmentReason).toBe('continuation');
+  expect(result.samples.at(-1).elapsedMs).toBeLessThanOrEqual(30 * 60_000);
+  expect(result.startedAt).toBe(result.samples[0].time);
+});
+
+it('滚动淘汰后仍区分新旧成员编号，换房另起来源段', async () => {
+  collect.mockImplementation(async () => {
+    const next = snapshot();
+    next.streams[0].identity = `person-${collect.mock.calls.length}`;
+    return next;
+  });
+  const { report, exportDiagnosticReport, room } = setup(true);
+  await vi.advanceTimersByTimeAsync(31 * 60_000);
+  room.value = null;
+  await vi.advanceTimersByTimeAsync(2000);
+  room.value = {} as Room;
+  await vi.advanceTimersByTimeAsync(2000);
+  await report.save('');
+  const result = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
+  const members = result.samples.flatMap((sample: { streams: { member: string }[] }) => sample.streams.map((stream) => stream.member));
+  expect(new Set(members).size).toBe(members.length);
+  expect(result.samples.at(-1).streams[0].segmentReason).toBe('initial');
+});
 
 it.each(['发送', '接收'] as const)('摘要按%s方向区分编码和解码，不把观看端当作发送端', async (direction) => {
   collect.mockImplementation(async () => {
@@ -208,7 +344,7 @@ it('导出按记录时参数保存，匿名化身份/轨道ID，不使用导出�
   expect(text).not.toContain('private-user-id'); expect(text).not.toContain('private-track-id');
   expect(text).not.toContain('私人昵称');
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(8);
+  expect(result.schemaVersion).toBe(9);
   expect(result.measurements.process).toEqual({ scope: 'electron-and-owned-native-processes', memoryUnit: 'MiB',
     memoryMb: 'electron-only-sum-working-set', nativeMemory: 'GetProcessMemoryInfo; private-commit-not-resident',
     sharedPagesMayBeCountedMoreThanOnce: true, includesGpuMemory: false, includesNativeCpu: false });
@@ -284,17 +420,17 @@ it.each(['quality-change', 'dimensions-change', 'source-change', 'sampling-gap']
 it('自定义同模式切换帧率时另起分段，摘要记录确认参数而非默认 1080p60', async () => {
   const { report, settings, exportDiagnosticReport } = setup();
   settings.quality = 'custom';
-  settings.customQuality = { resolution: 1440, fps: 180 };
+  settings.customQuality = { resolution: 1440, fps: 120 };
   report.start(); await vi.advanceTimersByTimeAsync(0);
-  settings.customQuality.fps = 120;
+  settings.customQuality.fps = 60;
   await vi.advanceTimersByTimeAsync(2000);
   report.stop(); await report.save('');
   const result = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
-  expect(result.startSettings.preset).toEqual({ width: 2560, height: 1440, maxFrameRate: 180, maxBitrate: 40_000_000 });
+  expect(result.startSettings.preset).toEqual({ width: 2560, height: 1440, maxFrameRate: 120, maxBitrate: 30_000_000 });
   expect(result.samples[1].streams[0].segmentReason).toBe('quality-change');
   expect(result.summary.segments).toHaveLength(2);
-  expect(result.summary.segments[0].preset.maxFrameRate).toBe(180);
-  expect(result.summary.segments[1].preset.maxFrameRate).toBe(120);
+  expect(result.summary.segments[0].preset.maxFrameRate).toBe(120);
+  expect(result.summary.segments[1].preset.maxFrameRate).toBe(60);
   expect(result.samples[1].streams[0].sourceFps).toBeNull();
 });
 
@@ -323,7 +459,8 @@ it.each(['capture', 'unsubscribed', 'disabled', 'muted'])(
     normal.nativeInterval = { elapsedMs: 2000, framesReceived: 120, framesProcessed: 100, receivedFps: 60, processedFps: 50 };
     normal.streams[0].nativeInput = { sessionId: 'private-native-session', receivedFrames: 200, submittedFrames: 150,
       backpressureDroppedFrames: 50, suspendedDroppedFrames: 0, completedWrites: 150, writeFailures: 0,
-      placeholderFrames: 0, pendingWrite: false, firstFrameMs: 20 };
+      placeholderFrames: 0, pendingWrite: false, firstFrameMs: 20,
+      requestedFrameRate: 120, captureFrameRate: 30, frameRateAdjustmentFailed: false };
     if (pause !== 'capture') normal.streams[0].direction = '接收';
     normal.streams[0].playbackFps = 60;
     normal.streams[0].playbackIntervalMs = 2000;
@@ -404,16 +541,30 @@ it('新增诊断只导出版本、后端和计数，不导出会话、帧对象�
     sessionId: 'private-native-session', available: true, sourceKind: 'window' } as NativeCaptureDiagnostics;
   input.streams[0].nativeInput = { sessionId: 'private-session', receivedFrames: 10, submittedFrames: 7, completedWrites: 6,
     backpressureDroppedFrames: 2, suspendedDroppedFrames: 1, writeFailures: 0, placeholderFrames: 3,
-    pendingWrite: true, firstFrameMs: 20 };
+    pendingWrite: true, firstFrameMs: 20, requestedFrameRate: 120, captureFrameRate: 30, frameRateAdjustmentFailed: true };
   Object.assign(input.streams[0].nativeInput!, { frame: { secret: 'private-frame' }, sessionId: 'private-session' });
   Object.assign(input.streams[0].subscription, { identity: 'private-identity' });
   const exported = diagnosticReportSample(input, new Map());
   expect(exported.native).toMatchObject({ helperVersion: '32.2.2', captureBackend: 'obsLibobs' });
   expect(exported.streams[0].nativeInput).toEqual({ receivedFrames: 10, submittedFrames: 7, completedWrites: 6,
     backpressureDroppedFrames: 2, suspendedDroppedFrames: 1, writeFailures: 0, placeholderFrames: 3,
-    pendingWrite: true, firstFrameMs: 20 });
+    pendingWrite: true, firstFrameMs: 20, requestedFrameRate: 120, captureFrameRate: 30, frameRateAdjustmentFailed: true });
   expect(exported.streams[0].layers[0].active).toBe(true);
   expect(JSON.stringify(exported)).not.toMatch(/private|secret|sessionId/);
+});
+
+it('自动恢复失败保留最后确认帧率并在摘要提示，不把用户目标当作已应用', async () => {
+  const next = snapshot();
+  next.streams[0].nativeInput = { sessionId: 'session', receivedFrames: 10, submittedFrames: 7, completedWrites: 6,
+    backpressureDroppedFrames: 2, suspendedDroppedFrames: 1, writeFailures: 0, placeholderFrames: 0,
+    pendingWrite: false, firstFrameMs: 20, requestedFrameRate: 120, captureFrameRate: 30, frameRateAdjustmentFailed: true };
+  collect.mockResolvedValue(next);
+  const { report, exportDiagnosticReport } = setup();
+  report.start(); await vi.advanceTimersByTimeAsync(2000); report.stop(); await report.save('');
+  const result = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
+  expect(result.schemaVersion).toBe(9);
+  expect(result.samples[1].streams[0].nativeInput).toMatchObject({ requestedFrameRate: 120, captureFrameRate: 30, frameRateAdjustmentFailed: true });
+  expect(result.summary.segments[0].warnings).toContain('采集帧率自动调整失败，保留最后确认的运行目标；不代表已恢复用户帧率。');
 });
 
 it('OBS 摘要分开记录宿主、页面和编码帧率，槽位丢帧只取本段增量', async () => {
@@ -427,7 +578,8 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，槽位丢帧只取本
   first.streams[0].sessionKey = 'private-obs-session';
   first.streams[0].nativeInput = { sessionId: 'private-obs-session', receivedFrames: 180, submittedFrames: 160,
     backpressureDroppedFrames: 20, suspendedDroppedFrames: 0, completedWrites: 160, writeFailures: 0,
-    placeholderFrames: 0, pendingWrite: false, firstFrameMs: 30 };
+    placeholderFrames: 0, pendingWrite: false, firstFrameMs: 30,
+    requestedFrameRate: 120, captureFrameRate: 30, frameRateAdjustmentFailed: false };
   const next = structuredClone(first);
   Object.assign(next.native!, { framesReceived: 320, framesProcessed: 270, obsBridgeDroppedFrames: 50 });
   Object.assign(next.native!.obsRender!, { elapsedMs: 4000, totalFrames: 240, laggedFrames: 4, averageRenderMs: 2 });
@@ -444,7 +596,7 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，槽位丢帧只取本
   report.stop(); await report.save('');
   const text = exportDiagnosticReport.mock.calls[0][0];
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(8);
+  expect(result.schemaVersion).toBe(9);
   expect(result.summary.segments).toHaveLength(1);
   expect(result.samples[0].native).toMatchObject({ helperVersion: '32.2.2', captureBackend: 'obsLibobs' });
   expect(result.summary.segments[0]).toMatchObject({ captureMode: 'obsLibobs',
@@ -523,6 +675,36 @@ it('导出失败保留原记录，采样处理中不会重复启动或积压任�
   await vi.advanceTimersByTimeAsync(10_000); report.start();
   expect(collect).toHaveBeenCalledTimes(count);
   report.stop(); finish(snapshot()); await vi.advanceTimersByTimeAsync(0);
+});
+
+it('自动记录达到体积预算时淘汰旧样本而不停采样，导出仍在容量限制内', async () => {
+  collect.mockImplementation(async () => {
+    const result = snapshot();
+    result.streams[0].layers = Array.from({ length: 1000 }, () => result.streams[0].layers[0]);
+    return result;
+  });
+  const { report, exportDiagnosticReport } = setup(true);
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(report.recording.value).toBe(true);
+  expect(report.discardedSamples.value).toBeGreaterThan(0);
+  expect(report.sampleCount.value).toBeGreaterThan(0);
+  expect(report.sampleCount.value).toBeLessThan(60);
+  await report.save('');
+  expect(new TextEncoder().encode(exportDiagnosticReport.mock.calls[0][0]).byteLength).toBeLessThan(8 * 1024 * 1024);
+});
+
+it('自动记录跨房间时相同身份不继承上个房间的统计区间', async () => {
+  const { report, room, exportDiagnosticReport } = setup(true);
+  await vi.advanceTimersByTimeAsync(2000);
+  room.value = {} as Room;
+  await vi.advanceTimersByTimeAsync(0);
+  await report.save('');
+  const samples = JSON.parse(exportDiagnosticReport.mock.calls[0][0]).samples;
+  expect(samples.at(-1).streams[0].member).toBe(samples[0].streams[0].member);
+  expect(samples.at(-1).streams[0].segmentReason).toBe('initial');
+  expect(samples.at(-1).streams[0].segmentId).not.toBe(samples[0].streams[0].segmentId);
+  expect(samples.at(-1).streams[0].sourceFps).toBeNull();
+  expect(samples.at(-1).streams[0].nativeInputInterval).toBeNull();
 });
 
 it('统计体积达到预算时结束，保留已收集的报告供导出', async () => {

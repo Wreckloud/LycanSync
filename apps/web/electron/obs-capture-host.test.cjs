@@ -95,7 +95,7 @@ function adapterFixture(context) {
       queueMicrotask(() => emit(child, { event: 'coreReady' }));
       return child;
     } });
-  const start = () => manager.start('monitor:7:0', 180, sessionId, { kind: 'monitor', monitorName },
+  const start = () => manager.start('monitor:7:0', 120, sessionId, { kind: 'monitor', monitorName },
     { hideCursor: true, hideBorder: true }, { width: 2560, height: 1440 });
   context.after(() => { for (const child of children) child.emit('close', 0); });
   return { manager, children, diagnostics, failures, start, emit };
@@ -115,7 +115,7 @@ test('预热显卡不匹配先等待旧宿主退出，再按原来源和画质�
   const second = children[1];
   assert.equal(second.args.at(-1), '2');
   assert.equal(second.commands[0], first.commands[0]);
-  assert.match(second.commands[0], /\|180\|\|\|2560\|1440$/);
+  assert.match(second.commands[0], /\|120\|\|\|2560\|1440$/);
   emit(second, { event: 'captureStarted', helperVersion: '32.2.2' });
   await started;
   assert.equal(manager.state.child, second);
@@ -790,8 +790,8 @@ test('启动按显示器设备名传参，不把来源 ID 尾号当作显示器�
   assert.equal(manager.state, undefined);
 });
 
-test('四档目标帧率均传入同一 OBS 宿主，拒绝选项以外的值', async (context) => {
-  for (const fps of [30, 60, 120, 180]) {
+test('三档目标帧率均传入同一 OBS 宿主，拒绝选项以外的值', async (context) => {
+  for (const fps of [30, 60, 120]) {
     const { manager, ready, captureCommands } = fixture(context);
     await ready(fps);
     assert.equal(captureCommands[0].split('|')[6], String(fps));
@@ -799,7 +799,7 @@ test('四档目标帧率均传入同一 OBS 宿主，拒绝选项以外的值', 
     await manager.stop(sessionId);
   }
   const { start, spawns } = fixture(context);
-  for (const fps of [0, 15, 61, 90, 121, 144, 181, 30.5, NaN, Infinity, '60']) {
+  for (const fps of [0, 15, 61, 90, 121, 144, 180, 181, 30.5, NaN, Infinity, '60']) {
     await assert.rejects(start(fps), /invalidObsCaptureArguments/);
   }
   assert.equal(spawns.length, 0);
@@ -809,7 +809,7 @@ test('共享中切换等宿主确认才更新帧率，不更换子进程或会�
   const { manager, ready, emit, commands, spawns } = fixture(context);
   await ready();
   const state = manager.state;
-  for (const [index, fps] of [30, 120, 180, 60].entries()) {
+  for (const [index, fps] of [30, 120, 60].entries()) {
     const previous = state.maxFps;
     const configured = manager.configureVideo(sessionId, fps);
     assert.equal(state.maxFps, previous);
@@ -822,14 +822,14 @@ test('共享中切换等宿主确认才更新帧率，不更换子进程或会�
   }
   assert.equal(spawns.length, 1);
   await assert.rejects(manager.configureVideo('old-session', 30), /invalidVideoConfiguration/);
-  for (const fps of [0, 61, 90, 144, 181, 30.5, NaN, Infinity, '180']) {
+  for (const fps of [0, 61, 90, 144, 180, 181, 30.5, NaN, Infinity, '120']) {
     await assert.rejects(manager.configureVideo(sessionId, fps), /invalidVideoConfiguration/);
   }
 });
 
 test('自定义尺寸贯通宿主启动与切换，只在尺寸和帧率均确认后更新，不新增进程', async (context) => {
   const { manager, emit, spawns, commands, captureCommands } = fixture(context);
-  const started = manager.start('monitor:7:0', 180, sessionId, { kind: 'monitor', monitorName },
+  const started = manager.start('monitor:7:0', 120, sessionId, { kind: 'monitor', monitorName },
     { hideCursor: false, hideBorder: false }, { width: 2560, height: 1440 });
   emit({ event: 'captureStarted', helperVersion: '32.2.2' });
   await started;
@@ -846,7 +846,7 @@ test('自定义尺寸贯通宿主启动与切换，只在尺寸和帧率均确�
   for (const size of [null, { width: 3840, height: 2160 }, { width: 2560, height: 1080 }, { width: '1920', height: 1080 }]) {
     await assert.rejects(manager.configureVideo(sessionId, 60, size), /invalidVideoConfiguration/);
   }
-  const rejected = assert.rejects(manager.configureVideo(sessionId, 180, { width: 2560, height: 1440 }), /ConfigurationRejected/);
+  const rejected = assert.rejects(manager.configureVideo(sessionId, 120, { width: 2560, height: 1440 }), /ConfigurationRejected/);
   emit({ event: 'captureConfigurationRejected', requestId: '2', sessionId, maxFps: 30, width: 640, height: 360 });
   await rejected;
   assert.equal(manager.state.maxFps, 30);
@@ -862,8 +862,8 @@ test('自定义尺寸贯通宿主启动与切换，只在尺寸和帧率均确�
 test('宿主尺寸确认不一致即失败，不能把目标尺寸冒充实际输出', async (context) => {
   const { manager, ready, emit, failures } = fixture(context);
   await ready();
-  const rejected = assert.rejects(manager.configureVideo(sessionId, 180, { width: 2560, height: 1440 }), /ConfigurationInvalid/);
-  emit({ event: 'captureConfigured', requestId: '1', sessionId, maxFps: 180, width: 1920, height: 1080 });
+  const rejected = assert.rejects(manager.configureVideo(sessionId, 120, { width: 2560, height: 1440 }), /ConfigurationInvalid/);
+  emit({ event: 'captureConfigured', requestId: '1', sessionId, maxFps: 120, width: 1920, height: 1080 });
   await rejected;
   assert.deepEqual(failures, ['obsCaptureConfigurationInvalid']);
 });
@@ -871,17 +871,17 @@ test('宿主尺寸确认不一致即失败，不能把目标尺寸冒充实际�
 test('宿主拒绝切换并恢复原帧率时明确失败，迟到旧响应不完成下一次切换', async (context) => {
   const { manager, ready, emit, failures } = fixture(context);
   await ready();
-  const rejected = assert.rejects(manager.configureVideo(sessionId, 180), /ConfigurationRejected/);
+  const rejected = assert.rejects(manager.configureVideo(sessionId, 120), /ConfigurationRejected/);
   emit({ event: 'captureConfigurationRejected', requestId: '1', sessionId, maxFps: 60 });
   await rejected;
   assert.equal(manager.state.maxFps, 60);
   assert.deepEqual(failures, []);
-  const next = manager.configureVideo(sessionId, 180);
-  emit({ event: 'captureConfigured', requestId: '1', sessionId, maxFps: 180 });
+  const next = manager.configureVideo(sessionId, 120);
+  emit({ event: 'captureConfigured', requestId: '1', sessionId, maxFps: 120 });
   assert.equal(manager.state.pendingConfiguration.id, '2');
-  emit({ event: 'captureConfigured', requestId: '2', sessionId, maxFps: 180 });
+  emit({ event: 'captureConfigured', requestId: '2', sessionId, maxFps: 120 });
   await next;
-  assert.equal(manager.state.maxFps, 180);
+  assert.equal(manager.state.maxFps, 120);
 });
 
 test('切换超时后实际配置未知，结束采集且不接受迟到成功', async (context) => {
@@ -941,14 +941,14 @@ test('主进程的显示器各档启动及共享中切换均走 OBS，不接入�
       startVideo: () => assert.fail('显示器不应按画质回到旧采集'),
       configureVideo: () => assert.fail('OBS 会话不应修改旧采集') } };
   runInNewContext(main.slice(start, end), sandbox);
-  for (const fps of [30, 60, 120, 180]) {
+  for (const fps of [30, 60, 120]) {
     sandbox.nativeVideoSession = undefined;
     await sandbox.startNativeVideo('monitor:7:0', fps, { hideCursor: true, hideBorder: false });
     assert.equal(calls.at(-1)[1], fps);
   }
-  assert.equal(timings.filter(entry => entry.stage === 'screenVideoStartRequested').length, 4);
+  assert.equal(timings.filter(entry => entry.stage === 'screenVideoStartRequested').length, 3);
   const readyTimings = timings.filter(entry => entry.stage === 'obsReady');
-  assert.equal(readyTimings.length, 4);
+  assert.equal(readyTimings.length, 3);
   assert.ok(readyTimings.every(entry => Number.isFinite(entry.durationMs) && entry.durationMs >= 0));
   const configureStart = main.indexOf("ipcMain.handle('media:native-video:configure',");
   const configureEnd = main.indexOf("ipcMain.handle('media:remote-control:authorize',", configureStart);
@@ -958,8 +958,8 @@ test('主进程的显示器各档启动及共享中切换均走 OBS，不接入�
   runInNewContext(main.slice(configureStart, configureEnd), sandbox);
   await configure({}, sessionId, 30, { width: 640, height: 360 });
   assert.deepEqual(calls.at(-1), [sessionId, 30, { width: 640, height: 360 }]);
-  await configure({}, sessionId, 180, { width: 2560, height: 1440 });
-  assert.deepEqual(calls.at(-1), [sessionId, 180, { width: 2560, height: 1440 }]);
+  await configure({}, sessionId, 120, { width: 2560, height: 1440 });
+  assert.deepEqual(calls.at(-1), [sessionId, 120, { width: 2560, height: 1440 }]);
   sandbox.nativeVideoSession.stopping = true;
   assert.throws(() => configure({}, sessionId, 120));
 });

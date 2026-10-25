@@ -8,6 +8,7 @@ const SAMPLE_INTERVAL_MS = 2_000;
 const MAX_SAMPLES = 900;
 const MAX_DURATION_MS = 30 * 60_000;
 const MAX_SAMPLE_BYTES = 6 * 1024 * 1024;
+const AUTOMATIC_DIAGNOSTICS_KEY = 'lycansync.automatic-diagnostics';
 type DiagnosticSettings = { quality: string; customQuality?: CustomScreenShareQuality;
   inputGain: number; outputVolume: number; screenShareVolume: number;
   voiceVolumeBalance: boolean;
@@ -24,7 +25,7 @@ function errorCode(value: unknown) {
   return typeof value === 'string' && /^[a-zA-Z][a-zA-Z0-9]{0,79}$/.test(value) ? value : null;
 }
 
-type DiagnosticSample = ReturnType<typeof diagnosticReportSample> & { requestedSettings: ReportSettings;
+type DiagnosticSample = Omit<ReturnType<typeof diagnosticReportSample>, 'streams'> & { requestedSettings: ReportSettings;
   elapsedMs: number; actualIntervalMs: number | null;
   streams: (ReturnType<typeof diagnosticReportSample>['streams'][number] & { segmentId: string; segmentReason: string })[] };
 
@@ -101,6 +102,7 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
         warnings.add(`存在较长采样区间（约 ${Math.round(sample.actualIntervalMs / 1000)} 秒），区间 FPS 是该时段平均值。`);
       }
       if (sample.failures.length) warnings.add('部分统计读取失败或缺失。');
+      if (stream.nativeInput?.frameRateAdjustmentFailed) warnings.add('采集帧率自动调整失败，保留最后确认的运行目标；不代表已恢复用户帧率。');
       if (stream.subscription.subscribed === false) warnings.add('接收端未订阅此路视频。');
       if (paused[index]) {
         warnings.add('记录期间存在暂停或静音状态。');
@@ -191,7 +193,12 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
 /** 导出只挑选统计字段，不能序列化原始SDK报告、来源对象、昵称或会话标识。 */
 export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, aliases: Map<string, string>) {
   const alias = (identity: string) => {
-    if (!aliases.has(identity)) aliases.set(identity, `member-${aliases.size + 1}`);
+    if (!aliases.has(identity)) {
+      const assigned = new Set(aliases.values());
+      let number = aliases.size + 1;
+      while (assigned.has(`member-${number}`)) number++;
+      aliases.set(identity, `member-${number}`);
+    }
     return aliases.get(identity)!;
   };
   const native = snapshot.native;
@@ -238,6 +245,9 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
         completedWrites: numeric(stream.nativeInput.completedWrites), writeFailures: numeric(stream.nativeInput.writeFailures),
         placeholderFrames: numeric(stream.nativeInput.placeholderFrames), pendingWrite: stream.nativeInput.pendingWrite,
         firstFrameMs: numeric(stream.nativeInput.firstFrameMs),
+        requestedFrameRate: numeric(stream.nativeInput.requestedFrameRate),
+        captureFrameRate: numeric(stream.nativeInput.captureFrameRate),
+        frameRateAdjustmentFailed: stream.nativeInput.frameRateAdjustmentFailed === true,
       },
       nativeInputInterval: stream.nativeInputInterval && {
         elapsedMs: numeric(stream.nativeInputInterval.elapsedMs),
@@ -287,6 +297,7 @@ export function useDiagnosticReport(options: {
   room: () => Room | null;
   participants: () => Participant[];
   settings: () => DiagnosticSettings;
+  automaticDefault?: boolean;
 }) {
   const latest = shallowRef<MediaDiagnosticsSnapshot | null>(null);
   const recording = ref(false);
@@ -295,6 +306,8 @@ export function useDiagnosticReport(options: {
   const error = ref('');
   const saving = ref(false);
   const notes = ref('');
+  const automaticEnabled = ref(false);
+  const discardedSamples = ref(0);
   let viewing = false;
   let disposed = false;
   let generation = 0;
@@ -305,6 +318,9 @@ export function useDiagnosticReport(options: {
   let endedAt: string | null = null;
   let samples: DiagnosticSample[] = [];
   let sampleBytes = 0;
+  let sampleSizes: number[] = [];
+  let sampleSequence = 0;
+  let automaticRecording = false;
   let startSettings: ReportSettings | null = null;
   let endSettings: ReportSettings | null = null;
   let startedMonotonicAt = 0;
@@ -329,6 +345,18 @@ export function useDiagnosticReport(options: {
     if (!timer && (viewing || recording.value)) timer = setInterval(() => void poll(), SAMPLE_INTERVAL_MS);
     if (timer && !viewing && !recording.value) { clearInterval(timer); timer = undefined; }
   }
+
+  function trimAutomaticSamples(elapsedMs: number) {
+    while (samples.length && (samples.length > MAX_SAMPLES || sampleBytes > MAX_SAMPLE_BYTES
+        || elapsedMs - samples[0].elapsedMs > MAX_DURATION_MS)) {
+      samples.shift(); sampleBytes -= sampleSizes.shift()!; discardedSamples.value++;
+    }
+    if (!discardedSamples.value) return;
+    const members = new Set(samples.flatMap((sample) => [...sample.streams, ...sample.audio].map((item) => item.member)));
+    const streamKeys = new Set(samples.flatMap((sample) => sample.streams.map((stream) => `${stream.member}:${stream.direction}`)));
+    for (const [identity, member] of aliases) if (!members.has(member)) aliases.delete(identity);
+    for (const key of streamSegments.keys()) if (!streamKeys.has(key)) streamSegments.delete(key);
+  }
   function stop(stopReason = 'user') {
     if (!recording.value) return;
     generation++;
@@ -340,19 +368,20 @@ export function useDiagnosticReport(options: {
   }
   async function poll() {
     if (disposed) return;
-    if (recording.value && startedAt && Date.now() - Date.parse(startedAt) >= MAX_DURATION_MS) stop('limit');
+    if (recording.value && !automaticRecording && performance.now() - startedMonotonicAt >= MAX_DURATION_MS) stop('limit');
     const room = options.room();
-    if (polling || !room || (!recording.value && (!viewing || document.hidden))) return;
+    if (polling || (!room && !(recording.value && automaticRecording && window.lycanDesktop))
+        || (!recording.value && (!viewing || document.hidden))) return;
     polling = true;
     const attempt = generation;
     const requestedSettings = readSettings();
     try {
-      const snapshot = await sampler.collect(room, options.participants());
+      const snapshot = await sampler.collect(room, room ? options.participants() : []);
       if (disposed || attempt !== generation || room !== options.room()) return;
       latest.value = snapshot;
       if (recording.value) {
         const monotonicNow = performance.now();
-        const currentSampleIndex = samples.length;
+        const currentSampleIndex = sampleSequence++;
         const exported = diagnosticReportSample(snapshot, aliases);
         const reportStreams = exported.streams.map((stream, index) => {
           const observed = snapshot.streams[index];
@@ -368,7 +397,7 @@ export function useDiagnosticReport(options: {
           const previousSegment = streamSegments.get(streamKey);
           const renderConfiguration = stream.direction === '发送' && exported.nativeVideoSessionMatched
             ? snapshot.native?.obsRender?.configuration ?? null : null;
-          const previousStream = samples[currentSampleIndex - 1]?.streams.find((item) =>
+          const previousStream = samples.at(-1)?.streams.find((item) =>
             item.member === stream.member && item.direction === stream.direction);
           const countersReset = previousStream !== undefined && [
             [stream.sourceFrames, previousStream.sourceFrames], [stream.playbackFrames, previousStream.playbackFrames],
@@ -378,8 +407,8 @@ export function useDiagnosticReport(options: {
             [stream.nativeInput?.backpressureDroppedFrames ?? null,
               previousStream.nativeInput?.backpressureDroppedFrames ?? null],
             ...(stream.direction === '发送' && exported.nativeVideoSessionMatched ? [
-              [exported.native?.framesReceived ?? null, samples[currentSampleIndex - 1]?.native?.framesReceived ?? null],
-              [exported.native?.framesProcessed ?? null, samples[currentSampleIndex - 1]?.native?.framesProcessed ?? null],
+              [exported.native?.framesReceived ?? null, samples.at(-1)?.native?.framesReceived ?? null],
+              [exported.native?.framesProcessed ?? null, samples.at(-1)?.native?.framesProcessed ?? null],
             ] : []),
             ...stream.layers.map((layer) => [layer.frameCount,
               previousStream.layers.find((item) => item.layer === layer.layer)?.frameCount ?? null]),
@@ -419,11 +448,16 @@ export function useDiagnosticReport(options: {
           actualIntervalMs: lastSampleMonotonicAt === null ? null : Math.round(monotonicNow - lastSampleMonotonicAt) };
         lastSampleMonotonicAt = monotonicNow;
         const size = new TextEncoder().encode(JSON.stringify(sample)).byteLength;
-        if (sampleBytes + size > MAX_SAMPLE_BYTES) { stop('limit'); return; }
+        if (size > MAX_SAMPLE_BYTES && automaticRecording) {
+          error.value = '本次统计过大，已略过；此前记录仍可导出。';
+          return;
+        }
+        if (!automaticRecording && sampleBytes + size > MAX_SAMPLE_BYTES) { stop('limit'); return; }
         sampleBytes += size;
-        samples.push(sample);
+        samples.push(sample); sampleSizes.push(size);
+        if (automaticRecording) trimAutomaticSamples(sample.elapsedMs);
         sampleCount.value = samples.length;
-        if (samples.length >= MAX_SAMPLES) stop('limit');
+        if (!automaticRecording && samples.length >= MAX_SAMPLES) stop('limit');
       }
     } catch { if (!disposed && attempt === generation) error.value = '媒体统计暂时无法读取，记录中可能存在缺口。'; }
     finally { polling = false; }
@@ -433,28 +467,63 @@ export function useDiagnosticReport(options: {
     updateTimer();
     if (enabled) void poll();
   }
-  function start() {
+  function start(automatic = false) {
     if (disposed || recording.value || saving.value) return;
-    if (!options.room()) { error.value = '请先加入语音，再开始记录。'; return; }
-    if (polling) { error.value = '统计仍在读取，请稍后再开始。'; return; }
+    if (!automatic && !options.room()) { error.value = '请先加入语音，再开始记录。'; return; }
+    if (!automatic && polling) { error.value = '统计仍在读取，请稍后再开始。'; return; }
     generation++;
     sampler = createMediaDiagnosticsSampler();
-    aliases.clear(); samples = []; sampleCount.value = 0; streamSegments.clear(); nextSegmentNumber = 1;
-    sampleBytes = 0; startSettings = readSettings(); endSettings = null;
-    startedAt = new Date().toISOString(); endedAt = null;
-    startedMonotonicAt = performance.now(); lastSampleMonotonicAt = null;
+    // 自动开关恢复时保留此前记录；手动开始仍明确替换上次记录。
+    if (!automatic || !startedAt) {
+      aliases.clear(); samples = []; sampleCount.value = 0; nextSegmentNumber = 1;
+      sampleBytes = 0; sampleSizes = []; sampleSequence = 0; discardedSamples.value = 0;
+      startSettings = readSettings(); startedAt = new Date().toISOString(); startedMonotonicAt = performance.now();
+    }
+    automaticRecording = automatic;
+    streamSegments.clear(); endSettings = null; endedAt = null; lastSampleMonotonicAt = null;
     reason.value = ''; error.value = ''; recording.value = true;
     updateTimer();
     void poll();
   }
+
+  function setAutomatic(enabled: boolean) {
+    if (disposed || saving.value) return;
+    automaticEnabled.value = enabled;
+    if (enabled) {
+      if (recording.value) automaticRecording = true;
+      else start(true);
+    } else stop('automaticDisabled');
+    try { localStorage.setItem(AUTOMATIC_DIAGNOSTICS_KEY, String(enabled)); }
+    catch { error.value = '本次自动诊断选择已生效，但无法保存；下次启动请检查开关。'; }
+  }
+
   async function save(notes: string) {
-    if (disposed || saving.value || recording.value || (!startedAt && !window.lycanDesktop)) return;
+    if (disposed || saving.value || (recording.value && !automaticRecording) || (!startedAt && !window.lycanDesktop)) return;
     saving.value = true; error.value = '';
-    const report = { kind: 'lycansync-diagnostics', schemaVersion: 8,
-      startedAt: startedAt ?? new Date().toISOString(), endedAt: endedAt ?? new Date().toISOString(),
-      stopReason: reason.value || 'automaticEvents',
-      sampleIntervalMs: SAMPLE_INTERVAL_MS, notes: notes.slice(0, 2000), startSettings, endSettings, samples,
-      summary: { segments: summarizeSegments(samples, packageInfo.version, Boolean(window.lycanDesktop)), limitations: [
+    const exportedSamples = samples.slice();
+    if (discardedSamples.value && exportedSamples.length) {
+      // 保留窗口外的基线不可冒充窗口内区间；导出副本不影响继续采样。
+      const first = exportedSamples[0];
+      exportedSamples[0] = { ...first, actualIntervalMs: null, nativeInterval: null, obsRenderInterval: null,
+        streams: first.streams.map((stream) => ({ ...stream, segmentReason: 'retained-window',
+          sourceFps: null, sourceIntervalMs: null, playbackFps: null, playbackIntervalMs: null, nativeInputInterval: null,
+          layers: stream.layers.map((layer) => ({ ...layer, fps: null, intervalMs: null, bitrateKbps: null,
+            averageEncodeMs: null, receiveLossPercent: null, jitterBufferMs: null })) })) };
+      for (let index = 0; index < exportedSamples.length; index++) {
+        exportedSamples[index] = { ...exportedSamples[index], elapsedMs: exportedSamples[index].elapsedMs - first.elapsedMs };
+      }
+    }
+    const report = { kind: 'lycansync-diagnostics', schemaVersion: 9,
+      startedAt: discardedSamples.value && exportedSamples.length ? exportedSamples[0].time : startedAt ?? new Date().toISOString(),
+      endedAt: endedAt ?? new Date().toISOString(),
+      stopReason: recording.value && automaticRecording ? 'automaticSnapshot' : reason.value || 'automaticEvents',
+      recordingMode: automaticRecording ? 'automatic' : 'manual',
+      retention: { maxSamples: MAX_SAMPLES, maxDurationMs: MAX_DURATION_MS, maxSampleBytes: MAX_SAMPLE_BYTES,
+        discardedSamples: discardedSamples.value },
+      sampleIntervalMs: SAMPLE_INTERVAL_MS, notes: notes.slice(0, 2000),
+      startSettings: discardedSamples.value && exportedSamples.length ? exportedSamples[0].requestedSettings : startSettings,
+      endSettings: recording.value ? readSettings() : endSettings, samples: exportedSamples,
+      summary: { segments: summarizeSegments(exportedSamples, packageInfo.version, Boolean(window.lycanDesktop)), limitations: [
         '各阶段统计窗口来源不同，不能直接相减计算全链路丢帧率。FPS 仅描述视频链路，不代表游戏 FPS 或每帧画面内容均不同。',
         '摘要按单个轨道和画质分段计算；首样本仅建立基线，缺失值和等待统计不计为零。',
         '明确暂停及恢复边界区间不计入摘要帧率和页面背压比例；正常运行时的零帧仍计入，原始样本保留暂停区间。',
@@ -487,7 +556,7 @@ export function useDiagnosticReport(options: {
         '网络统计只描述本机与SFU的一段；RTT不能除以二冒充端到端延迟；接收缓冲等待不含完整解码与显示耗时',
         '节能编码标志是浏览器提供的线索，不单独证明硬件编码；旧接收报告保留年龄，不重复计为新反馈',
         '仅记录当前客户端；CPU与memoryMb汇总仅含Electron，entries分列Electron与已启动的原生进程内存；不含原生CPU和显存。工作集可能重复计算共享页，私有提交不等于驻留RAM，不代表整机物理内存占用',
-        '后台采样可能被系统节流；各采样窗口不同，不能直接相减计算丢帧率；每次最多30分钟/900份/6MiB，最多32名成员',
+        '后台采样可能被系统节流；各采样窗口不同，不能直接相减计算丢帧率；自动记录滚动保留最近30分钟且不超过900份/6MiB，手动记录达到上限停止；最多32名成员',
         '远端人数不等于观看人数；编码层启用不等于实际发送，无观看者且无有效码率时不能只凭bandwidth标签判断网络故障',
         'helper版本与采集后端以各样本为准；停止后原生统计可保留最后快照，以state判断是否仍在采集',
         '页面背压与原生限帧丢弃分别计数，写入完成不代表远端收到',
@@ -504,8 +573,17 @@ export function useDiagnosticReport(options: {
     finally { saving.value = false; }
   }
   watch(options.room, () => {
-    stop('roomChanged'); generation++; latest.value = null; sampler = createMediaDiagnosticsSampler();
+    if (!automaticEnabled.value) stop('roomChanged');
+    generation++; latest.value = null; sampler = createMediaDiagnosticsSampler(); streamSegments.clear();
+    if (automaticEnabled.value) void poll();
   }, { flush: 'sync' });
+  try {
+    const stored = localStorage.getItem(AUTOMATIC_DIAGNOSTICS_KEY);
+    if (stored !== null && stored !== 'true' && stored !== 'false') throw new Error('invalidAutomaticDiagnosticsPreference');
+    automaticEnabled.value = stored === null ? options.automaticDefault ?? Boolean(window.lycanDesktop) : stored === 'true';
+  } catch { error.value = '无法读取自动诊断设置，已暂停自动记录；可手动开启。'; }
+  if (automaticEnabled.value) start(true);
   onScopeDispose(() => { stop('closed'); disposed = true; generation++; if (timer) clearInterval(timer); });
-  return { latest, recording, sampleCount, reason, error, saving, notes, setViewing, start, stop, save };
+  return { latest, recording, automaticEnabled, discardedSamples, sampleCount, reason, error, saving, notes,
+    setViewing, setAutomatic, start, stop, save };
 }

@@ -4,8 +4,9 @@ import { SCREEN_SHARE_QUALITIES, SCREEN_SHARE_RESOLUTIONS, SCREEN_SHARE_FRAME_RA
 
 afterEach(() => vi.unstubAllGlobals());
 
-it('画质按高帧率、自定义、标准、节省流量排列', () => {
-  expect(SCREEN_SHARE_QUALITIES.map((quality) => quality.id)).toEqual(['highFrameRate', 'custom', 'standard', 'economy']);
+it('画质保留三个预设，自定义固定在最后，帧率最高 120', () => {
+  expect(SCREEN_SHARE_QUALITIES.map((quality) => quality.id)).toEqual(['highFrameRate', 'standard', 'economy', 'custom']);
+  expect(SCREEN_SHARE_FRAME_RATES).toEqual([120, 60, 30]);
 });
 
 it('自定义及常用画质优先保留帧率，节省流量使用平衡策略', () => {
@@ -22,7 +23,7 @@ it('restores only known presets and remembers the confirmed selection', () => {
   expect(readScreenShareQuality()).toEqual({ quality: 'standard', customQuality: { resolution: 1080, fps: 60 } });
   stored = 'text';
   expect(readScreenShareQuality()).toEqual({ quality: 'custom', customQuality: { resolution: 1080, fps: 30 } });
-  const custom = { resolution: 1440, fps: 180 } as const;
+  const custom = { resolution: 1440, fps: 120 } as const;
   saveScreenShareQuality('custom', custom);
   expect(readScreenShareQuality()).toEqual({ quality: 'custom', customQuality: custom });
   saveScreenShareQuality('highFrameRate', custom);
@@ -54,15 +55,35 @@ it('全部自定义组合贯通尺寸、帧率及有限码率，不接受额外�
       expect(preset.encoding.maxFramerate).toBe(fps);
       expect(preset.encoding.maxBitrate).toBe(profile.bitrate);
       expect(profile.bitrate).toBeGreaterThan(0);
-      expect(profile.bitrate).toBeLessThanOrEqual(40_000_000);
+      expect(profile.bitrate).toBeLessThanOrEqual(30_000_000);
     }
   }
   const setItem = vi.fn();
   vi.stubGlobal('localStorage', { setItem });
-  for (const custom of [{ resolution: 2160, fps: 60 }, { resolution: 1080, fps: 90 }]) {
+  for (const custom of [{ resolution: 2160, fps: 60 }, { resolution: 1080, fps: 90 }, { resolution: 1440, fps: 180 }]) {
     expect(() => saveScreenShareQuality('custom', custom as never)).toThrow('invalidCustomScreenShareQuality');
   }
   expect(setItem).not.toHaveBeenCalled();
+});
+
+it.each(['custom', 'standard'])('旧 180 配置在 %s 下读取为 120，保留尺寸及手动码率，不提前写入', (quality) => {
+  const setItem = vi.fn();
+  vi.stubGlobal('localStorage', { getItem: () => JSON.stringify({ quality,
+    customQuality: { resolution: 1440, fps: 180, bitrateMbps: 25 } }), setItem });
+  expect(readScreenShareQuality()).toEqual({ quality, customQuality: { resolution: 1440, fps: 120, bitrateMbps: 25 } });
+  expect(setItem).not.toHaveBeenCalled();
+  saveScreenShareQuality('custom', readScreenShareQuality().customQuality);
+  expect(JSON.parse(setItem.mock.calls[0][1]).customQuality.fps).toBe(120);
+});
+
+it('未手动设码率的旧 180 配置沿用新的推荐值，其他非法配置仍明确失败', () => {
+  let customQuality = { resolution: 1440, fps: 180 };
+  vi.stubGlobal('localStorage', { getItem: () => JSON.stringify({ quality: 'custom', customQuality }) });
+  expect(screenShareQuality('custom', readScreenShareQuality().customQuality).bitrate).toBe(30_000_000);
+  customQuality = { resolution: 2160, fps: 180 };
+  expect(() => readScreenShareQuality()).toThrow('invalidCustomScreenShareQuality');
+  customQuality = { resolution: 1440, fps: 144 };
+  expect(() => readScreenShareQuality()).toThrow('invalidCustomScreenShareQuality');
 });
 
 it('固定模式与相同尺寸帧率的自定义共用推荐码率，手动上限不影响固定模式', () => {
@@ -82,11 +103,11 @@ it('手动码率随自定义配置记忆，切换固定模式不丢失，恢复�
   expect(readScreenShareQuality().customQuality).toEqual(custom);
   saveScreenShareQuality('standard', custom);
   expect(readScreenShareQuality().customQuality.bitrateMbps).toBe(6);
-  const larger = { ...custom, resolution: 1440, fps: 180 } as const;
+  const larger = { ...custom, resolution: 1440, fps: 120 } as const;
   expect(screenShareVideoPreset('custom', larger).encoding.maxBitrate).toBe(6_000_000);
   saveScreenShareQuality('custom', { resolution: larger.resolution, fps: larger.fps });
   expect(readScreenShareQuality().customQuality).not.toHaveProperty('bitrateMbps');
-  expect(screenShareVideoPreset('custom', readScreenShareQuality().customQuality).encoding.maxBitrate).toBe(40_000_000);
+  expect(screenShareVideoPreset('custom', readScreenShareQuality().customQuality).encoding.maxBitrate).toBe(30_000_000);
 });
 
 it.each([0, -1, 0.1, 0.75, 50.5, NaN, Infinity, '6', null])('非法码率 %s 不写入偏好', (bitrateMbps) => {

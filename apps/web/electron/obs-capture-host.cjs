@@ -110,7 +110,7 @@ class ObsCaptureHostManager {
 
   async start(sourceId, maxFps, sessionId, target, settings, resolution = { width: 1920, height: 1080 }, rebuilding = false) {
     if (typeof sourceId !== 'string' || !/^(monitor|window):[1-9]\d*:\d+$/.test(sourceId)
-        || ![30, 60, 120, 180].includes(maxFps) || !validTarget(target, sourceId) || !isSessionId(sessionId)
+        || ![30, 60, 120].includes(maxFps) || !validTarget(target, sourceId) || !isSessionId(sessionId)
         || !validResolution(resolution) || !settings || typeof settings.hideCursor !== 'boolean' || typeof settings.hideBorder !== 'boolean') {
       throw new Error('invalidObsCaptureArguments');
     }
@@ -382,7 +382,7 @@ class ObsCaptureHostManager {
   configureVideo(sessionId, maxFps, resolution = this.state?.resolution) {
     const state = this.state;
     if (!state || !state.alive || state.closed || state.failed || state.stopRequested
-        || state.videoSessionId !== sessionId || !state.helperVersion || ![30, 60, 120, 180].includes(maxFps) || !validResolution(resolution)) {
+        || state.videoSessionId !== sessionId || !state.helperVersion || ![30, 60, 120].includes(maxFps) || !validResolution(resolution)) {
       return Promise.reject(new Error('invalidVideoConfiguration'));
     }
     if (state.pendingConfiguration) return Promise.reject(new Error('obsCaptureConfigurationInProgress'));

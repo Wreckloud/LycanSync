@@ -33,7 +33,7 @@ function setup(mode: NativeScreenAudioMode = 'process') {
     captureRequest: ref<{ sources: Array<{ id: string; type: 'window' | 'screen' }>;
       quality: ScreenShareQualityId; customQuality: { resolution: number; fps: number } } | null>(null),
     captureSourceType: ref('window'), captureQuality: ref<ScreenShareQualityId>('custom'),
-    captureCustomQuality: ref<CustomScreenShareQuality>({ resolution: 1440, fps: 180 }),
+    captureCustomQuality: ref<CustomScreenShareQuality>({ resolution: 1440, fps: 120 }),
     captureAudioCapabilityReady: ref(false), captureAudioCapabilityFailed: ref(false),
     captureAudioMode: ref<NativeScreenAudioMode>('unavailable'), captureShareAudio: ref(false),
     selectedCaptureSourceId: ref(''), captureSourceNotice: ref(''), viewerNotice: ref(''),
@@ -117,16 +117,16 @@ describe('App 共享选择的音频偏好提交顺序', () => {
     const { app, state, open, setItem, stored, order } = setup();
     const waiting = open();
     await vi.waitFor(() => expect(state.captureAudioCapabilityReady.value).toBe(true));
-    state.captureCustomQuality.value = { resolution: 1440, fps: 180, bitrateMbps: 6 };
+    state.captureCustomQuality.value = { resolution: 1440, fps: 120, bitrateMbps: 6 };
     if (action === 'storageFailure') setItem.mockImplementation(() => { throw new Error('storage denied'); });
     app.selectCaptureSource(action === 'cancel' ? null : 'window:test');
     const selection = await waiting;
     if (action === 'cancel') {
       expect(selection).toBeNull();
-      expect(state.captureCustomQuality.value).toEqual({ resolution: 1440, fps: 180 });
+      expect(state.captureCustomQuality.value).toEqual({ resolution: 1440, fps: 120 });
       expect(setItem).not.toHaveBeenCalled();
     } else {
-      expect(selection?.customQuality).toEqual({ resolution: 1440, fps: 180, bitrateMbps: 6 });
+      expect(selection?.customQuality).toEqual({ resolution: 1440, fps: 120, bitrateMbps: 6 });
       expect(order[0]).toBe('finish');
       if (action === 'confirm') expect(JSON.parse(stored.get('lycansync.screen-share-quality')!).customQuality.bitrateMbps).toBe(6);
       else {
@@ -152,7 +152,7 @@ describe('App 共享选择的音频偏好提交顺序', () => {
     const nextWaiting = open();
     expect(await waiting).toBeNull();
     expect(state.captureQuality.value).toBe('custom');
-    expect(state.captureCustomQuality.value).toEqual({ resolution: 1440, fps: 180 });
+    expect(state.captureCustomQuality.value).toEqual({ resolution: 1440, fps: 120 });
     app.selectCaptureSource(null);
     await nextWaiting;
     expect(setItem).not.toHaveBeenCalled();
@@ -168,7 +168,7 @@ describe('App 共享选择的音频偏好提交顺序', () => {
     complete(success);
     await changing;
     expect(setItem).toHaveBeenCalledTimes(success ? 1 : 0);
-    expect(state.captureCustomQuality.value).toEqual(success ? { resolution: 1080, fps: 60 } : { resolution: 1440, fps: 180 });
+    expect(state.captureCustomQuality.value).toEqual(success ? { resolution: 1080, fps: 60 } : { resolution: 1440, fps: 120 });
   });
 
   it.each(['process', 'systemMix'] as const)('%s 勾选后取消不写入偏好', async (mode) => {
@@ -193,12 +193,12 @@ describe('App 共享选择的音频偏好提交顺序', () => {
       expect(setItem).not.toHaveBeenCalled();
       app.selectCaptureSource('window:test');
       expect(await waiting).toEqual({ sourceId: 'window:test', shareAudio: enabled, quality: 'custom',
-        customQuality: { resolution: 1440, fps: 180 } });
+        customQuality: { resolution: 1440, fps: 120 } });
       expect(order[0]).toBe('finish');
       expect(stored.get(`lycansync.screen-share-audio.${mode}`)).toBe(String(enabled));
       expect(stored.has(`lycansync.screen-share-audio.${mode === 'process' ? 'systemMix' : 'process'}`)).toBe(false);
       expect(JSON.parse(stored.get('lycansync.screen-share-quality')!)).toEqual({ quality: 'custom',
-        customQuality: { resolution: 1440, fps: 180 } });
+        customQuality: { resolution: 1440, fps: 120 } });
       expect(stored.get('lycansync.capture-source-type')).toBe('window');
     },
   );
@@ -253,7 +253,7 @@ describe('App 共享选择的音频偏好提交顺序', () => {
     app.updateCaptureShareAudio(true);
     expect(() => app.selectCaptureSource('window:test')).not.toThrow();
     expect(await waiting).toEqual({ sourceId: 'window:test', shareAudio: true, quality: 'custom',
-      customQuality: { resolution: 1440, fps: 180 } });
+      customQuality: { resolution: 1440, fps: 120 } });
     expect(state.captureRequest.value).toBeNull();
     expect(order[0]).toBe('finish');
     expect(state.viewerNotice.value).toContain('无法保存');

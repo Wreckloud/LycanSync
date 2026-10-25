@@ -29,12 +29,17 @@ interface NativeScreenVideoOptions {
   createSuspendedFrame?: (width: number, height: number, timestamp: number) => VideoFrame;
   createAdjustedFrame?: (frame: VideoFrame, init: VideoFrameInit) => VideoFrame;
   onError?: (code: string) => void;
+  isCurrentCapture?: () => boolean;
+  canReduceFrameRate?: () => boolean;
+  onFrameRateAdjustmentFailure?: (captureFrameRate: number) => void;
   now?: () => number;
 }
 
 const FIRST_FRAME_TIMEOUT_MS = 8_000;
 const SUSPENDED_HINT_INTERVAL_MS = 1_000;
 const SUSPENDED_HINT_TIMESTAMP_STEP_US = SUSPENDED_HINT_INTERVAL_MS * 1_000;
+const DEMAND_CHECK_INTERVAL_MS = 500;
+const THUMBNAIL_DEMAND_DELAY_MS = 3_000;
 
 const nativeVideoInputs = new WeakMap<MediaStreamTrack, NativeScreenVideoSession>();
 
@@ -43,17 +48,32 @@ export function readNativeVideoInput(track: MediaStreamTrack) {
   return nativeVideoInputs.get(track)?.readDiagnostics() ?? null;
 }
 
+export function setNativeScreenPreviewDemand(track: MediaStreamTrack, preview: HTMLVideoElement, required: boolean) {
+  nativeVideoInputs.get(track)?.setHighQualityPreview(preview, required);
+}
+
 /** 持有页面侧视频帧队列及一个 helper 采集会话，负责停止与帧释放。 */
 export class NativeScreenVideoSession {
   readonly track: LocalVideoTrack;
 
   get captureSessionId() { return this.sessionId; }
+  get needsFrameRateRecovery() { return this.frameRateAdjustmentFailed; }
 
   private readonly generator: GeneratedVideoTrack;
   private readonly writer: WritableStreamDefaultWriter<VideoFrame>;
   private maxFps: number;
+  private captureFrameRate: number;
   private resolution: { width: number; height: number };
   private configuring = false;
+  private readonly isCurrentCapture?: () => boolean;
+  private readonly canReduceFrameRate?: () => boolean;
+  private readonly onFrameRateAdjustmentFailure?: (captureFrameRate: number) => void;
+  private readonly highQualityPreviews = new Set<HTMLVideoElement>();
+  private lastDemandCheck = Number.NEGATIVE_INFINITY;
+  private lastDemandSender?: RTCRtpSender;
+  private thumbnailDemandSince?: number;
+  private demandChange?: Promise<void>;
+  private frameRateAdjustmentFailed = false;
   private readonly firstFrameTimeoutMs: number;
   private readonly now: () => number;
   private readonly onError?: (code: string) => void;
@@ -93,10 +113,14 @@ export class NativeScreenVideoSession {
     private readonly desktop: NativeVideoDesktopBridge,
     options: NativeScreenVideoOptions,
   ) {
-    if (![30, 60, 120, 180].includes(options.maxFps)) {
+    if (![30, 60, 120].includes(options.maxFps)) {
       throw new Error('invalidNativeVideoFrameRate');
     }
     this.maxFps = options.maxFps;
+    this.captureFrameRate = options.maxFps;
+    this.isCurrentCapture = options.isCurrentCapture;
+    this.canReduceFrameRate = options.canReduceFrameRate;
+    this.onFrameRateAdjustmentFailure = options.onFrameRateAdjustmentFailure;
     this.resolution = options.resolution ?? { width: 1920, height: 1080 };
     if (![this.resolution.width, this.resolution.height].every((value) => Number.isInteger(value) && value > 0 && value <= 8192)) {
       throw new Error('invalidNativeVideoResolution');
@@ -120,7 +144,54 @@ export class NativeScreenVideoSession {
       backpressureDroppedFrames: this.backpressureDroppedFrames,
       suspendedDroppedFrames: this.suspendedDroppedFrames, submittedFrames: this.submittedFrames,
       completedWrites: this.completedWrites, writeFailures: this.writeFailures,
-      placeholderFrames: this.placeholderFrames, pendingWrite: this.writing, firstFrameMs: this.firstFrameMs };
+      placeholderFrames: this.placeholderFrames, pendingWrite: this.writing, firstFrameMs: this.firstFrameMs,
+      requestedFrameRate: this.maxFps, captureFrameRate: this.captureFrameRate,
+      frameRateAdjustmentFailed: this.frameRateAdjustmentFailed };
+  }
+
+  setHighQualityPreview(preview: HTMLVideoElement, required: boolean): void {
+    if (this.stopped) return;
+    if (required) this.highQualityPreviews.add(preview);
+    else this.highQualityPreviews.delete(preview);
+    this.refreshCaptureFrameRate(true);
+  }
+
+  private refreshCaptureFrameRate(immediate = false): void {
+    if (this.stopped || !this.sessionId || !this.canReduceFrameRate || this.configuring
+        || this.demandChange || this.frameRateAdjustmentFailed || this.isCurrentCapture?.() === false) return;
+    const now = this.now();
+    if (!immediate && now - this.lastDemandCheck < DEMAND_CHECK_INTERVAL_MS) return;
+    this.lastDemandCheck = now;
+    let thumbnailOnly = false;
+    try {
+      const sender = this.track.sender;
+      if (sender !== this.lastDemandSender) this.thumbnailDemandSince = undefined;
+      this.lastDemandSender = sender;
+      const encodings = sender?.getParameters().encodings;
+      // 仅信任 SDK 已应用的明确双层状态；未知、单层和重连不能推断成低清需求。
+      thumbnailOnly = this.canReduceFrameRate() && this.highQualityPreviews.size === 0
+        && encodings?.length === 2 && encodings[0].rid === 'q' && encodings[0].active === true
+        && encodings[1].rid === 'h' && encodings[1].active === false;
+    } catch { /* sender 不可读视为未知，按用户目标恢复，不降低采集规格。 */ }
+    if (!thumbnailOnly) this.thumbnailDemandSince = undefined;
+    else this.thumbnailDemandSince ??= now;
+    const frameRate = thumbnailOnly && now - this.thumbnailDemandSince! >= THUMBNAIL_DEMAND_DELAY_MS
+      ? Math.min(this.maxFps, screenShareThumbnailPreset().encoding.maxFramerate!) : this.maxFps;
+    if (frameRate === this.captureFrameRate) return;
+    const sessionId = this.sessionId;
+    this.demandChange = this.desktop.configureNativeVideo(sessionId, frameRate, this.resolution).then((result) => {
+      if (this.stopped || this.sessionId !== sessionId) return;
+      if (result.changed !== true) throw new Error('nativeVideoDemandConfigurationRejected');
+      this.captureFrameRate = frameRate;
+    }).catch(() => {
+      if (this.stopped || this.sessionId !== sessionId) return;
+      // 可选节流失败不重试或伪报恢复，保留已确认帧率，由用户重新选择画质恢复。
+      this.frameRateAdjustmentFailed = true;
+      this.onFrameRateAdjustmentFailure?.(this.captureFrameRate);
+    }).finally(() => {
+      this.demandChange = undefined;
+      this.refreshCaptureFrameRate(true);
+    });
   }
 
   start(sourceId: string): Promise<LocalVideoTrack> {
@@ -193,14 +264,27 @@ export class NativeScreenVideoSession {
   }
 
   async configureQuality(id: ScreenShareQualityId, custom?: CustomScreenShareQuality): Promise<void> {
+    if (this.stopped || this.configuring) throw new Error('nativeVideoConfigurationUnavailable');
+    this.configuring = true;
+    try {
+      // 手动画质优先；先收口已发送的节流请求，不与同一宿主的配置命令竞争。
+      if (this.demandChange) await this.demandChange;
+      await this.applyQuality(id, custom);
+    } finally {
+      this.configuring = false;
+      this.thumbnailDemandSince = undefined;
+      this.lastDemandCheck = Number.NEGATIVE_INFINITY;
+    }
+  }
+
+  private async applyQuality(id: ScreenShareQualityId, custom?: CustomScreenShareQuality): Promise<void> {
     const quality = screenShareQuality(id, custom);
     const sender = this.track.sender;
     const sessionId = this.sessionId;
-    if (this.stopped || !sessionId || !sender || this.configuring) throw new Error('nativeVideoConfigurationUnavailable');
+    if (this.stopped || !sessionId || !sender) throw new Error('nativeVideoConfigurationUnavailable');
     const previousLimits = readScreenShareEncoding(sender);
-    const previousFps = this.maxFps;
+    const previousFps = this.captureFrameRate;
     const previousResolution = this.resolution;
-    this.configuring = true;
     let nativeRequested = false;
     try {
       await applyScreenShareEncoding(sender, screenShareEncodingLimits(id, previousLimits,
@@ -214,6 +298,8 @@ export class NativeScreenVideoSession {
       }
       if (this.stopped || this.track.sender !== sender) throw new Error('nativeVideoSessionStopped');
       this.maxFps = quality.fps;
+      this.captureFrameRate = quality.fps;
+      this.frameRateAdjustmentFailed = false;
       this.resolution = { width: quality.width, height: quality.height };
       this.generator.contentHint = 'motion';
       // SDK 重发布使用当前配置，不能重新套用最初发布时的画质。
@@ -240,14 +326,14 @@ export class NativeScreenVideoSession {
         }
       }
       throw error;
-    } finally {
-      this.configuring = false;
     }
   }
 
   stop(): Promise<void> {
     if (this.stopPromise) return this.stopPromise;
     this.stopped = true;
+    this.highQualityPreviews.clear();
+    this.lastDemandSender = undefined;
     nativeVideoInputs.delete(this.generator);
     this.removeHelperErrorListener?.();
     this.removeHelperErrorListener = undefined;
@@ -308,6 +394,8 @@ export class NativeScreenVideoSession {
       return;
     }
     this.receivedFrames++;
+    // 借现有帧到达低频检查，不另开轮询或依赖诊断面板才能节流。
+    this.refreshCaptureFrameRate();
     if (this.suspended || this.writing) {
       if (this.suspended) this.suspendedDroppedFrames++;
       else this.backpressureDroppedFrames++;
@@ -354,6 +442,8 @@ export class NativeScreenVideoSession {
   private setSuspended(suspended: boolean): void {
     if (this.stopped || this.suspended === suspended) return;
     this.suspended = suspended;
+    this.thumbnailDemandSince = undefined;
+    this.lastDemandCheck = Number.NEGATIVE_INFINITY;
     this.clearSuspensionTimer();
     if (suspended) {
       this.writeSuspendedFrame();

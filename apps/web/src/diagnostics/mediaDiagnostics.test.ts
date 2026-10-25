@@ -4,6 +4,18 @@ import { createMediaDiagnosticsSampler } from './mediaDiagnostics';
 
 afterEach(() => vi.unstubAllGlobals());
 
+it('未入房的自动诊断只读取进程统计，不访问旧成员轨道或启动原生诊断', async () => {
+  const { bridge, participants, track } = setup();
+  const result = await createMediaDiagnosticsSampler().collect(null, participants);
+  expect(result.streams).toEqual([]);
+  expect(result.audio).toEqual([]);
+  expect(result.participantCount).toBe(0);
+  expect(result.process).toEqual({ cpuPercent: 3, memoryMb: 120, entries: [] });
+  expect(bridge.getProcessMetrics).toHaveBeenCalledOnce();
+  expect(bridge.getNativeMediaDiagnostics).not.toHaveBeenCalled();
+  expect(track.getRTCStatsReport).not.toHaveBeenCalled();
+});
+
 it('OBS 延误时隙不算成功渲染，使用宿主实际区间，预热均值不进入统计', async () => {
   const { room, local, bridge } = setup();
   const sampler = createMediaDiagnosticsSampler();

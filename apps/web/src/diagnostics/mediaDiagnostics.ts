@@ -111,15 +111,16 @@ export function createMediaDiagnosticsSampler() {
       intervalMs: comparable ? Math.round(elapsedSeconds * 1000) : null, dropped: quality.droppedVideoFrames };
   }
 
-  async function collect(room: Room, participants: Participant[]): Promise<MediaDiagnosticsSnapshot> {
+  async function collect(room: Room | null, participants: Participant[]): Promise<MediaDiagnosticsSnapshot> {
+    if (!room) participants = [];
     const snapshot: MediaDiagnosticsSnapshot = { time: new Date().toISOString(), pageVisible: !document.hidden,
       participantCount: participants.length, omittedParticipants: Math.max(0, participants.length - 32),
-      remoteParticipantCount: room.remoteParticipants?.size ?? null, roomState: room.state ?? null,
-      dynacast: typeof room.options?.dynacast === 'boolean' ? room.options.dynacast : null,
+      remoteParticipantCount: room?.remoteParticipants?.size ?? null, roomState: room?.state ?? null,
+      dynacast: typeof room?.options?.dynacast === 'boolean' ? room.options.dynacast : null,
       streams: [], audio: [], process: null, native: null, nativeInterval: null, obsRenderInterval: null, failures: [] };
     const activeTrackIds = new Set<string>();
-    await Promise.all(participants.slice(0, 32).map(async (participant) => {
-      const local = participant === room.localParticipant;
+    await Promise.all((room ? participants : []).slice(0, 32).map(async (participant) => {
+      const local = participant === room?.localParticipant;
       const direction = local ? '发送' as const : '接收' as const;
       await Promise.all([Track.Source.ScreenShare, Track.Source.Microphone, Track.Source.ScreenShareAudio].map(async (source) => {
         const publication = participant.getTrackPublication(source);
@@ -207,7 +208,7 @@ export function createMediaDiagnosticsSampler() {
         bridge.getProcessMetrics().then((value) => { snapshot.process = value; })
           .catch(() => { snapshot.failures.push('processMetricsUnavailable'); }),
         // 只有本机正在发送时读取helper，不能因为查看诊断而启动空闲采集进程。
-        room.localParticipant.isMicrophoneEnabled || room.localParticipant.isScreenShareEnabled
+        room?.localParticipant.isMicrophoneEnabled || room?.localParticipant.isScreenShareEnabled
           ? bridge.getNativeMediaDiagnostics().then((value) => {
             snapshot.native = value;
             snapshot.nativeInterval = readNativeInterval(value);
