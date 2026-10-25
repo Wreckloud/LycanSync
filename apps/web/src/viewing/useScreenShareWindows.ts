@@ -1,17 +1,25 @@
 import { onScopeDispose, shallowRef, watch } from 'vue';
 import { RoomEvent, Track, type Participant, type Room, type TrackPublication } from 'livekit-client';
 
-export interface ScreenShareWindow {
+interface WindowEntry {
   id: string;
   room: Room;
-  participant: Participant;
   window: Window;
   target: HTMLElement | null;
-  ended: boolean;
-  shareSessionId?: string;
   timer?: ReturnType<typeof setTimeout>;
   stopPage?: () => void;
 }
+
+export interface ControlWindow extends WindowEntry {
+  kind: 'control';
+  participant: Participant;
+  ended: boolean;
+  shareSessionId?: string;
+  controlSessionId: string;
+}
+
+export interface WatchingWindow extends WindowEntry { kind: 'watching' }
+export type ScreenShareWindow = ControlWindow | WatchingWindow;
 
 interface WindowOptions {
   room(): Room | null;
@@ -19,8 +27,9 @@ interface WindowOptions {
   revision(): number;
   status(): string;
   shareSessionId(identity: string): string | undefined;
+  controlSessionId(identity: string): string | undefined;
   notice(message: string): void;
-  closed(identity: string, shareSessionId?: string): void;
+  closed(entry: ScreenShareWindow): void;
 }
 
 export function useScreenShareWindows(options: WindowOptions, owner: Window = window) {
@@ -35,7 +44,7 @@ export function useScreenShareWindows(options: WindowOptions, owner: Window = wi
     clearTimeout(entry.timer);
     entry.stopPage?.();
     if (!entry.window.closed) entry.window.dispatchEvent(new Event('lycan-viewer-disarm'));
-    options.closed(entry.participant.identity, entry.shareSessionId);
+    options.closed(entry);
     if (!entry.window.closed) entry.window.close();
     if (failed && !disposed) options.notice('观看窗口未能正常打开或已失效，请重新打开。');
   }
@@ -52,6 +61,7 @@ export function useScreenShareWindows(options: WindowOptions, owner: Window = wi
   function syncSharing() {
     if (options.status() !== 'connected' || reconnecting) return;
     for (const entry of entries.value) {
+      if (entry.kind !== 'control') continue;
       const current = options.participants().find((participant) => participant.identity === entry.participant.identity);
       if (!current) continue;
       const session = options.shareSessionId(current.identity);
@@ -62,14 +72,17 @@ export function useScreenShareWindows(options: WindowOptions, owner: Window = wi
     refresh();
   }
 
-  function open(identity: string) {
+  function open(kind: 'watching' | 'control', identity?: string) {
     const room = options.room();
     const participant = options.participants().find((candidate) => candidate.identity === identity);
-    if (disposed || !room || !participant?.isScreenShareEnabled || options.status() !== 'connected') return false;
-    const previous = entries.value.find((entry) => entry.room === room && entry.participant.identity === identity);
-    const shareSessionId = options.shareSessionId(identity);
-    if (previous?.shareSessionId && shareSessionId && previous.shareSessionId !== shareSessionId) previous.ended = true;
-    if (previous && !previous.ended && !previous.window.closed) {
+    const controlSessionId = identity ? options.controlSessionId(identity) : undefined;
+    if (disposed || !room || options.status() !== 'connected'
+        || (kind === 'control' && (!participant?.isScreenShareEnabled || !controlSessionId))) return false;
+    const previous = entries.value.find((entry) => entry.room === room && entry.kind === kind);
+    const shareSessionId = identity ? options.shareSessionId(identity) : undefined;
+    if (previous?.kind === 'control' && (previous.participant.identity !== identity || previous.controlSessionId !== controlSessionId
+        || previous.shareSessionId && shareSessionId && previous.shareSessionId !== shareSessionId)) previous.ended = true;
+    if (previous && (previous.kind === 'watching' || !previous.ended) && !previous.window.closed) {
       if (owner.lycanDesktop) {
         void owner.lycanDesktop.focusViewerWindow(previous.id).catch(() => {
           if (entries.value.includes(previous)) close(previous, true);
@@ -81,8 +94,10 @@ export function useScreenShareWindows(options: WindowOptions, owner: Window = wi
     const id = crypto.randomUUID();
     const child = owner.open(`/viewer.html#${id}`, `lycan-viewer-${id}`, 'popup,width=960,height=600');
     if (!child) { options.notice('观看窗口被阻止，请允许应用打开弹出窗口后重试。'); return false; }
-    const entry: ScreenShareWindow = { id, room, participant, window: child, target: null, ended: false,
-      shareSessionId };
+    const base = { id, room, window: child, target: null };
+    const entry: ScreenShareWindow = kind === 'control'
+      ? { ...base, kind, participant: participant!, ended: false, shareSessionId, controlSessionId: controlSessionId! }
+      : { ...base, kind };
     entries.value = [...entries.value, entry];
     entry.timer = setTimeout(() => close(entry, true), 8000);
     return true;
@@ -114,7 +129,9 @@ export function useScreenShareWindows(options: WindowOptions, owner: Window = wi
     if (!room) return;
     const left = (participant: Participant) => {
       if (options.room() !== room) return;
-      for (const entry of [...entries.value]) if (entry.participant.identity === participant.identity) close(entry);
+      for (const entry of [...entries.value]) {
+        if (entry.kind === 'control' && entry.participant.identity === participant.identity) close(entry);
+      }
     };
     const unpublished = (publication: TrackPublication) => {
       if (options.room() === room && publication.source === Track.Source.ScreenShare) syncSharing();
@@ -139,5 +156,10 @@ export function useScreenShareWindows(options: WindowOptions, owner: Window = wi
     stopNativeClosed?.();
     closeAll();
   });
-  return { entries, open, closeAll, disarmAll };
+  return {
+    entries, openControl: (identity: string) => open('control', identity), openWatching: () => open('watching'),
+    closeWatching: () => { for (const entry of [...entries.value]) if (entry.kind === 'watching') close(entry); },
+    closeControl: () => { for (const entry of [...entries.value]) if (entry.kind === 'control') close(entry); },
+    closeAll, disarmAll,
+  };
 }

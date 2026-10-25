@@ -322,7 +322,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   background: var(--panel-soft);
 }
 
-.voice-panel { position: relative; }
+.voice-panel { position: relative; max-height: 70%; overflow: hidden; flex-shrink: 0; }
 .voice-preview-list {
   display: flex;
   flex-wrap: wrap;
@@ -377,12 +377,6 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 }
 
 .voice-heading small { color: var(--muted); font-size: 13px; }
-
-.participant-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
-  gap: 8px;
-}
 
 .participant-card {
   min-width: 0;
@@ -868,7 +862,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .personal-copy strong { font-size: 15px; font-weight: 600; }
 .personal-copy small { color: var(--muted); font-size: 12px; }
 .personal-copy .member-activity { color: #43b6da; }
-.personal-card .icon-button { width: 28px; height: 28px; border-color: transparent; background: transparent; }
+.personal-card .icon-button { width: 28px; height: 28px; padding: 0; border-color: transparent; background: transparent; }
 .personal-card .icon-button:hover:not(:disabled) { background: var(--panel-raised); }
 
 .members-header {
