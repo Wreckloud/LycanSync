@@ -1,4 +1,5 @@
 const { updateFeedUrl } = require('./electron/startup-update.cjs');
+const { prepareInstallerFiles } = require('./electron/build-nsis.cjs');
 
 const updateUrl = updateFeedUrl(process.env.LYCANSYNC_PACKAGED_UPDATE_URL
   || (process.env.LYCANSYNC_PACKAGED_API_URL ? new URL('/downloads/', process.env.LYCANSYNC_PACKAGED_API_URL).href : ''));
@@ -10,6 +11,7 @@ module.exports = {
   electronDist: 'node_modules/electron/dist',
   directories: { output: '../../release/desktop', buildResources: '../../release/build-resources' },
   extraMetadata: { main: 'electron/main.cjs' },
+  afterPack: context => prepareInstallerFiles(context.appOutDir, context.packager.info.buildResourcesDir),
   publish: { provider: 'generic', url: updateUrl },
   files: [
     'dist/**/*',
