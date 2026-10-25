@@ -52,8 +52,7 @@ writeDesktopLicenses(join(outputDirectory, 'THIRD-PARTY-NOTICES.txt'));
 
 // 使用 npm 锁定的解压工具，避免每次构建重新从 GitHub 下载 7zip。
 const result = spawnSync(process.execPath, [
-  require.resolve('electron-builder/cli.js'),
-  '--config', 'electron-builder.cjs', '--win', '--x64', '--publish', 'never',
+  join(__dirname, 'build-nsis.cjs'),
 ], {
   cwd: appDirectory,
   stdio: 'inherit',
