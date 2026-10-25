@@ -3,9 +3,9 @@ import { readFile } from 'node:fs/promises';
 
 const user = { id: 'viewing-user', nickname: '自己', avatar: '', administrator: true };
 const groups = ['观看测试', '另一群组'].map((name, index) => ({
-  id: `viewing-group-${index}`, name, description: '', avatar: '', role: 'OWNER', memberCount: 7,
+  id: `viewing-group-${index}`, name, description: '', avatar: '', role: 'OWNER', memberCount: 9,
   createdAt: '2026-10-10T00:00:00Z', updatedAt: '2026-10-10T00:00:00Z', members: [{ userId: 'viewing-user', nickname: '自己', role: 'OWNER', avatar: '' },
-    ...['A','B','C','D','E','F'].map((id) => ({ userId: id, nickname: '成员' + id, role: 'MEMBER', avatar: '' }))],
+    ...['A','B','C','D','E','F','G','H'].map((id) => ({ userId: id, nickname: '成员' + id, role: 'MEMBER', avatar: '' }))],
 }));
 
 // 只替换网络和 RTC 边界；App、窗口登记、设置和成员组件使用生产实现。
@@ -74,7 +74,7 @@ export function useRtcRoom() {
     getTrackPublication(source) { return source === 'screen_share' && this.isScreenShareEnabled ? publication : undefined; }
   }); };
   const local = makeParticipant('user-viewing-user', '自己', true);
-  const friends = ['A','B','C','D','E','F'].map((id) => makeParticipant(id, '成员' + id));
+  const friends = ['A','B','C','D','E','F','G','H'].map((id) => makeParticipant(id, '成员' + id));
   window.__viewingTest = {
     sharing(ids) {
       for (const member of [local, ...friends]) member.isScreenShareEnabled = ids.includes(member.identity);
@@ -139,7 +139,7 @@ export function useRtcRoom() {
   });
   await page.goto('/');
   await page.getByRole('button', { name: /^观看测试，/ }).dblclick();
-  await expect(page.getByTestId('member-count')).toContainText('7 人');
+  await expect(page.getByTestId('member-count')).toContainText('9 人');
 });
 
 async function sharing(page: Page, ids: string[]) {
@@ -181,79 +181,98 @@ test('主动诊断记录返回应用后继续，离房结束并导出匿名报�
 });
 
 
-async function openViewer(page: Page, identity: string) {
+
+async function openWatching(page: Page) {
+  await page.getByRole('button', { name: '展开网格', exact: true }).click();
   const popup = page.waitForEvent('popup');
-  await page.getByRole('button', { name: '打开成员' + identity + '的独立观看窗口', exact: true }).click();
+  await page.getByRole('button', { name: '弹出观看区', exact: true }).click();
   const viewer = await popup;
-  await expect(viewer.getByTestId('viewer-screen')).toBeVisible();
+  await expect(viewer.getByRole('region', { name: '多人观看窗口' })).toBeVisible();
   return viewer;
 }
 
-test('两路独立观看不自动开窗，不重复打开，保留群聊与草稿，关闭不停止共享', async ({ page, context }) => {
+test('默认仅小预览，网格和聚焦使用原比例，整体弹出后返回保留群聊草稿', async ({ page, context }) => {
   const errors: string[] = [];
-  context.on('page', (page) => page.on('pageerror', (error) => errors.push(error.message)));
-  page.on('pageerror', (error) => errors.push(error.message));
-  await sharing(page, ['A', 'B']);
+  context.on('page', child => child.on('pageerror', error => errors.push(error.message)));
+  page.on('pageerror', error => errors.push(error.message));
+  await sharing(page, ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']);
   expect(context.pages()).toHaveLength(1);
+  await expect(page.getByRole('region', { name: '共享观看区' })).toHaveCount(0);
   const input = page.getByRole('textbox', { name: '消息内容' });
   await input.fill('稍后继续写');
   const original = await input.elementHandle();
-  const a = await openViewer(page, 'A'), b = await openViewer(page, 'B');
-  await page.getByRole('button', { name: '打开成员A的独立观看窗口', exact: true }).click();
-  expect(context.pages()).toHaveLength(3);
-  await expect(input).toBeVisible();
+  await page.getByRole('button', { name: '展开网格', exact: true }).click();
+  await expect(page.locator('.viewing-tile')).toHaveCount(8);
+  await page.getByRole('button', { name: '聚焦成员A', exact: true }).click();
+  await expect(page.locator('.viewing-tile')).toHaveCount(1);
+  const frame = await page.locator('.viewing-tile .participant-media').boundingBox();
+  expect(Math.abs(frame!.width / frame!.height - 16 / 9)).toBeLessThan(0.02);
+  await page.getByRole('button', { name: '单路全屏', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBe(true);
+  await page.getByRole('button', { name: '返回原布局', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBe(false);
+  await page.getByRole('button', { name: '网格', exact: true }).click();
+  const popup = page.waitForEvent('popup');
+  await page.getByRole('button', { name: '弹出观看区', exact: true }).click();
+  const viewer = await popup;
+  await expect(viewer.locator('.viewing-tile')).toHaveCount(8);
+  await expect(viewer.locator('.viewing-grid')).toHaveCSS('display', 'grid');
+  await expect(viewer.getByRole('region', { name: '语音成员', exact: true })).toHaveCSS('overflow-x', 'auto');
+  await expect(viewer.getByRole('region', { name: '语音成员', exact: true })).toBeInViewport({ ratio: 0.95 });
+  await expect(page.locator('.viewing-tile')).toHaveCount(0);
+  await page.getByRole('button', { name: '唤回观看窗口', exact: true }).click();
+  expect(context.pages()).toHaveLength(2);
+  expect(await viewer.locator('audio').count()).toBe(0);
+  await viewer.getByRole('button', { name: '返回主界面', exact: true }).click();
+  await expect.poll(() => viewer.isClosed()).toBe(true);
+  await expect(page.locator('.viewing-tile')).toHaveCount(8);
   await expect(input).toHaveValue('稍后继续写');
-  expect(await original!.evaluate((node) => node.isConnected)).toBe(true);
-  await expect(a).toHaveTitle('成员A · 观看测试 · LycanSync');
-  await expect(b).toHaveTitle('成员B · 观看测试 · LycanSync');
-  const quality = () => page.evaluate(() => (window as unknown as { __viewingTest: { quality(): Record<string, number> } }).__viewingTest.quality());
-  await expect.poll(quality).toMatchObject({ A: 2, B: 2 });
-  expect(await a.locator('video').evaluate((video: HTMLVideoElement) => video.muted && !video.controls)).toBe(true);
-  expect(await a.locator('audio').count()).toBe(0);
-  await a.close();
-  await expect.poll(quality).toMatchObject({ A: 0, B: 2 });
-  await expect(page.getByRole('button', { name: '打开成员A的独立观看窗口', exact: true })).toBeVisible();
-  await expect(b.getByTestId('viewer-screen')).toBeVisible();
+  expect(await original!.evaluate(node => node.isConnected)).toBe(true);
+  await page.screenshot({ path: test.info().outputPath('inline-grid.png') });
   expect(errors).toEqual([]);
 });
 
-test('设置或预览别群不关闭观看，停止共享保留结束页，新共享不自动接管；离房关闭全部', async ({ page }) => {
+test('观看窗在设置和预览别群时保留；结束占位不接管新共享，离房关闭', async ({ page }) => {
   await sharing(page, ['A', 'B']);
-  const a = await openViewer(page, 'A'), b = await openViewer(page, 'B');
-  const callbar = page.getByTestId('callbar');
-  await expect(callbar).toHaveCSS('animation-name', 'none');
-  await callbar.evaluate((element) => {
-    element.setAttribute('data-replayed', '0');
-    element.addEventListener('animationstart', () => element.setAttribute('data-replayed', '1'));
-  });
+  const viewer = await openWatching(page);
   await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
-  await expect(a.getByTestId('viewer-screen')).toBeVisible();
-  await page.getByRole('button', { name: '客户端', exact: true }).click();
-  await expect(page.getByRole('checkbox', { name: '自动填充舞台', exact: true })).toHaveCount(0);
+  await expect(viewer.locator('.viewing-tile')).toHaveCount(2);
   await page.getByRole('button', { name: '返回应用', exact: true }).click();
   await page.getByRole('button', { name: /^另一群组，/ }).click();
-  await expect(b.getByTestId('viewer-screen')).toBeVisible();
+  await expect(viewer.locator('.viewing-tile')).toHaveCount(2);
   await page.getByRole('button', { name: '返回当前通话群组' }).click();
-  await expect(callbar).toHaveAttribute('data-replayed', '0');
   await sharing(page, ['B']);
-  await expect(a.getByRole('status').filter({ hasText: '共享已结束' })).toBeVisible();
-  await expect(a.locator('video')).toHaveCount(0);
+  await expect(viewer.locator('.viewing-ended')).toHaveText('共享已结束');
   await sharing(page, ['A', 'B']);
-  await expect(a.locator('video')).toHaveCount(0);
+  await expect(viewer.locator('.viewing-ended')).toHaveText('共享已结束');
   await page.getByRole('button', { name: '离开语音', exact: true }).click();
-  await expect.poll(() => a.isClosed() && b.isClosed()).toBe(true);
+  await expect.poll(() => viewer.isClosed()).toBe(true);
 });
 
-test('真实切房和成员离开清理观看，预览切群不重播通话动画', async ({ page }) => {
-  await sharing(page, ['A', 'B']);
-  const a = await openViewer(page, 'A'), b = await openViewer(page, 'B');
-  await page.evaluate(() => (window as unknown as { __viewingTest: { disconnected(id: string): void } }).__viewingTest.disconnected('A'));
-  await expect.poll(() => a.isClosed()).toBe(true);
-  await page.getByRole('button', { name: /^另一群组，/ }).dblclick();
-  expect(b.isClosed()).toBe(false);
-  await page.getByRole('button', { name: '切换', exact: true }).click();
-  await expect.poll(() => b.isClosed()).toBe(true);
-  await expect(page.getByTestId('callbar')).toBeVisible();
+test('多人网格和成员条横向滚动，拖动不误触聚焦，窄窗不挤出聊天输入', async ({ page }) => {
+  await sharing(page, ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']);
+  await page.setViewportSize({ width: 960, height: 900 });
+  await page.getByRole('button', { name: '展开网格', exact: true }).click();
+  const strip = page.getByRole('region', { name: '语音成员', exact: true });
+  await expect.poll(() => strip.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+  await strip.hover(); await page.mouse.wheel(0, 500);
+  await expect.poll(() => strip.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+  const bounds = await strip.boundingBox();
+  await page.mouse.move(bounds!.x + bounds!.width / 2, bounds!.y + 30);
+  await page.mouse.down();
+  await page.mouse.move(bounds!.x + bounds!.width / 2 - 80, bounds!.y + 30, { steps: 5 });
+  await page.mouse.up();
+  await expect(page.locator('.viewing-tile')).toHaveCount(8);
+  const separator = page.getByRole('separator', { name: '调整观看区域高度' });
+  await separator.focus(); await separator.press('ArrowUp');
+  await expect(separator).toHaveAttribute('aria-valuenow', /\d+/);
+  for (const width of [960, 640, 420]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(page.getByRole('textbox', { name: '消息内容' })).toBeInViewport();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(page.getByRole('region', { name: '共享画面网格' })).toHaveCSS('scrollbar-width', 'none');
+  }
+  await page.screenshot({ path: test.info().outputPath('horizontal-grid-narrow.png') });
 });
 
 test('常驻成员栏保留搜索与王冠，语音横跨上方，聊天及个人名片边界对齐', async ({ page }) => {
@@ -261,14 +280,14 @@ test('常驻成员栏保留搜索与王冠，语音横跨上方，聊天及个�
   const searchButton = directory.getByRole('button', { name: '搜索群组成员' });
   await expect(directory).toBeVisible();
   await expect(directory.getByRole('img', { name: '群主' })).toHaveCount(1);
-  await expect(directory.locator('.group-member-row')).toHaveCount(7);
+  await expect(directory.locator('.group-member-row')).toHaveCount(9);
   await searchButton.click();
   await directory.getByRole('searchbox').fill('成员A');
   await expect(directory.locator('.group-member-row')).toHaveCount(1);
   await directory.getByRole('searchbox').press('Escape');
   await expect(searchButton).toBeFocused();
   await expect(directory.getByRole('searchbox')).toHaveCount(0);
-  await expect(directory.locator('.group-member-row')).toHaveCount(7);
+  await expect(directory.locator('.group-member-row')).toHaveCount(9);
   await expect(page.getByRole('button', { name: '查看全部群组成员' })).toHaveCount(0);
   const chat = page.getByRole('region', { name: '观看测试群聊' });
   const input = page.getByRole('textbox', { name: '消息内容' });
@@ -301,38 +320,30 @@ test('常驻成员栏保留搜索与王冠，语音横跨上方，聊天及个�
   await page.screenshot({ path: test.info().outputPath('members-sidebar.png') });
 });
 
-test('远控只在独立画面接收输入，失焦释放、不自动恢复，Esc与关闭结束控制', async ({ page }) => {
+
+test('远控授权和画面匹配后才打开专用控制窗，普通观看关窗不撤销控制', async ({ page, context }) => {
   await sharing(page, ['A']);
   await page.evaluate(() => (window as unknown as { __viewingTest: { control(id: string): void } }).__viewingTest.control('A'));
+  const viewer = await openWatching(page);
+  await viewer.locator('.viewing-actions').getByRole('button', { name: '申请远程控制', exact: true }).click();
+  expect(context.pages()).toHaveLength(2);
   const popup = page.waitForEvent('popup');
-  await page.getByRole('button', { name: '申请远程控制', exact: true }).click();
-  const viewer = await popup;
-  await expect(viewer.getByRole('button', { name: '取消远程控制申请' })).toBeVisible();
   await page.evaluate(() => (window as unknown as { __viewingTest: { grant(id: string): void } }).__viewingTest.grant('A'));
-  await expect(viewer.locator('.remote-control-status').filter({ hasText: '点击画面开始操作' })).toBeVisible();
-  await expect.poll(() => viewer.locator('video').evaluate((video: HTMLVideoElement) => video.videoWidth)).toBeGreaterThan(0);
-  await viewer.setViewportSize({ width: 1000, height: 900 });
-  await viewer.locator('.participant-media').click({ position: { x: 5, y: 5 } });
-  await viewer.locator('.participant-media').focus();
-  await viewer.keyboard.press('a');
-  const beforeActivation = await page.evaluate(() => (window as unknown as { __viewingTest: { inputEvents(): unknown[] } }).__viewingTest.inputEvents());
-  expect(beforeActivation).toEqual([]);
-  await viewer.locator('.participant-media').click();
-  await viewer.locator('.participant-media').press('a');
+  const controller = await popup;
+  await expect(controller.getByRole('region', { name: '成员A的远程控制窗口' })).toBeVisible();
+  await expect.poll(() => controller.locator('video').evaluate((video: HTMLVideoElement) => video.videoWidth)).toBeGreaterThan(0);
+  await controller.locator('.participant-media').click();
+  await controller.locator('.participant-media').press('a');
   const inputs = () => page.evaluate(() => (window as unknown as { __viewingTest: { inputEvents(): Array<{ kind: string; key: string }> } }).__viewingTest.inputEvents());
   await expect.poll(inputs).toContainEqual({ kind: 'keyDown', key: 'letterA' });
-  await viewer.locator('.participant-media').focus();
-  await viewer.keyboard.down('b');
-  await viewer.evaluate(() => window.dispatchEvent(new Event('lycan-viewer-disarm')));
+  await controller.keyboard.down('b');
+  await controller.evaluate(() => window.dispatchEvent(new Event('lycan-viewer-disarm')));
   await expect.poll(inputs).toContainEqual({ kind: 'keyUp', key: 'letterB' });
   const count = (await inputs()).length;
-  await viewer.keyboard.press('c');
+  await controller.keyboard.press('c');
   expect((await inputs()).length).toBe(count);
-  await viewer.keyboard.press('Escape');
-  await expect(viewer.getByRole('button', { name: '申请远程控制' })).toBeVisible();
-  await viewer.getByRole('button', { name: '申请远程控制', exact: true }).click();
-  await page.evaluate(() => (window as unknown as { __viewingTest: { grant(id: string): void } }).__viewingTest.grant('A'));
-  await expect(viewer.locator('.remote-control-status').filter({ hasText: '点击画面开始操作' })).toBeVisible();
   await viewer.close();
+  await expect(controller.locator('.remote-control-status')).toContainText('点击画面开始操作');
+  await controller.close();
   await expect(page.getByRole('button', { name: '申请远程控制', exact: true })).toBeVisible();
 });

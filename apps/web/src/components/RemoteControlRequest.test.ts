@@ -35,6 +35,6 @@ describe('远控确认与私密展示', () => {
     expect(privateView).toContain('正在被另一位好友控制中');
     expect(privateView).toContain('画面未公开');
     expect(privateView).not.toContain('<video');
-    expect(privateView).not.toContain('打开好友的独立观看窗口');
+    expect(privateView).not.toContain('聚焦好友的共享画面');
   });
 });

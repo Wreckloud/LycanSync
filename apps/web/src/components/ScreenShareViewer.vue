@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { Pin, PinOff, Volume2, VolumeX } from '@lucide/vue';
-import type { ScreenShareWindow } from '../viewing/useScreenShareWindows';
+import type { ControlWindow } from '../viewing/useScreenShareWindows';
 import type { RemoteControlInput } from '../rtc/remoteControl';
 import ParticipantCard from './ParticipantCard.vue';
 
 const props = defineProps<{
-  entry: ScreenShareWindow;
+  entry: ControlWindow;
   revision: number;
   groupName: string;
   avatar: string;
@@ -49,14 +49,14 @@ function escape() {
 }
 
 watch([name, () => props.groupName], () => {
-  props.entry.window.document.title = `${name.value} · ${props.groupName} · LycanSync`;
+  props.entry.window.document.title = `远程控制 · ${name.value} · LycanSync`;
 }, { immediate: true });
 onMounted(() => { stopState = bridge?.onState((state) => { pinned.value = state.pinned; }); });
 onScopeDispose(() => { disposed = true; stopState?.(); });
 </script>
 
 <template>
-  <section class="screen-share-viewer" :aria-label="name + '的独立观看窗口'" @keydown.esc.stop="escape">
+  <section class="screen-share-viewer" :aria-label="name + '的远程控制窗口'" @keydown.esc.stop="escape">
     <header class="viewer-toolbar">
       <span>{{ groupName }}<small v-if="reconnecting">正在重连…</small></span>
       <button v-if="!isLocal && shareAudio && !ended" type="button" class="viewer-action"

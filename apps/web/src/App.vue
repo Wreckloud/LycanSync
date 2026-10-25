@@ -822,6 +822,7 @@ const settingsOpen = ref(false);
 const settingsSection = ref<SettingsSectionId>('audio');
 const settingsReturnFocus = ref<HTMLElement | null>(null);
 const viewingWindows = ref<InstanceType<typeof ScreenShareWindows> | null>(null);
+const viewingTarget = ref<HTMLElement | null>(null);
 const viewerInputBlocked = computed(() => Boolean(props.interactionBlocked || settingsOpen.value || editorOpen.value
   || management.value || captureRequest.value || pendingSwitchGroupId.value || rtc.remoteControlRequest || rtc.status !== 'connected'));
 watch(viewerInputBlocked, (blocked) => { if (blocked) viewingWindows.value?.disarmAll(); }, { flush: 'sync' });
@@ -943,10 +944,6 @@ const previewParticipantName = (identity: string, displayName: string) =>
 const previewParticipantAvatar = (identity: string) =>
   selectedGroupDetail.value?.members.find((member) => `user-${member.userId}` === identity)?.avatar ?? '';
 const groupParticipants = computed(() => showingJoinedGroup.value ? rtc.participants : []);
-const sharingParticipants = computed(() => {
-  void rtc.revision;
-  return groupParticipants.value.filter((participant) => participant.isScreenShareEnabled);
-});
 const activeScreenShareCount = computed(() => {
   void rtc.revision;
   return rtc.participants.filter((participant) => participant.isScreenShareEnabled).length;
@@ -1137,13 +1134,13 @@ function remoteScreenSharePlaybackVolume(identity: string) {
   return Math.min(AUDIO_VOLUME_MAX, screenShareVolume.value * outputVolume.value);
 }
 
-function openParticipantViewer(identity: string) {
+function focusParticipantShare(identity: string) {
   viewerNotice.value = '';
-  return viewingWindows.value?.open(identity) ?? false;
+  return viewingWindows.value?.select(identity) ?? false;
 }
 
 function requestParticipantControl(identity: string) {
-  if (openParticipantViewer(identity)) void rtc.requestRemoteControl(identity);
+  void rtc.requestRemoteControl(identity);
 }
 
 function toggleSharedAudio(identity: string) {
@@ -1256,28 +1253,7 @@ function participantListening(participant: Participant) {
             </span>
           </div>
         </section>
-        <section v-if="showingJoinedGroup && groupParticipants.length > 0" class="voice-panel" aria-label="当前语音成员">
-          <div class="voice-heading"><span><AudioLines :size="15" />语音中</span>
-            <small data-testid="member-count">{{ groupParticipants.length }} 人 · {{ sharingParticipants.length }} / 8 路共享</small>
-          </div>
-          <div class="participant-grid">
-            <ParticipantCard v-for="participant in groupParticipants" :key="participant.identity" :participant="participant"
-              :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant" :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"
-              :remote-control-available="remoteControlCanRequest(participant.identity)"
-              :private-control="remoteControlPlaceholder(participant.identity)"
-              :remote-control-pending="remoteControlIsPending(participant.identity)"
-              :remote-control-active="remoteControlIsActive(participant.identity)"
-              :remote-control-name="previewParticipantName(participant.identity, participant.name || participant.identity)"
-              :playback-volume="participantVolume(participant.identity)" :input-gain="inputGain" :output-volume="outputVolume"
-              :share-audio="Boolean(participant.getTrackPublication(Track.Source.ScreenShareAudio)?.track)"
-              :share-muted="mutedShares.includes(participant.identity)" :share-audio-listening="listening" @toggle-share-audio="toggleSharedAudio(participant.identity)"
-              @select="openParticipantViewer(participant.identity)"
-              @request-control="requestParticipantControl(participant.identity)" @cancel-control="rtc.cancelPendingRemoteControl(participant.identity)" @stop-control="rtc.exitRemoteControl"
-              @toggle-audio="toggleParticipantAudio(participant.identity)" @volume-change="updateParticipantVolume(participant.identity, $event)"
-              @input-gain-change="updateInputGain" @output-volume-change="updateOutputVolume"
-              @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />
-          </div>
-        </section>
+        <section v-if="showingJoinedGroup && groupParticipants.length > 0" ref="viewingTarget" class="voice-panel" aria-label="当前语音成员" />
         </template>
         <div class="group-conversation">
           <GroupChat v-if="selectedGroup" :key="selectedGroup.id" :group="selectedGroup"
@@ -1349,10 +1325,28 @@ function participantListening(participant: Participant) {
       @choose="chooseCaptureSource" @refresh-thumbnails="refreshVisibleSourceThumbnails"
       @close="selectCaptureSource(null)" @confirm="selectCaptureSource(selectedCaptureSourceId)" />
     <ScreenShareWindows ref="viewingWindows" :rtc="rtc" :group-name="joinedGroup?.name ?? ''"
+      :inline-target="viewingTarget"
       :avatar="participantAvatar" :muted-shares="mutedShares"
       :control-placeholder="remoteControlPlaceholder"
       :input-blocked="viewerInputBlocked"
-      @notice="viewerNotice = $event" @toggle-share-audio="toggleSharedAudio" />
+      @notice="viewerNotice = $event" @toggle-share-audio="toggleSharedAudio" @request-control="requestParticipantControl">
+      <ParticipantCard v-for="participant in rtc.participants" :key="participant.identity" :participant="participant"
+        :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant"
+        :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"
+        :remote-control-available="remoteControlCanRequest(participant.identity)"
+        :private-control="remoteControlPlaceholder(participant.identity)"
+        :remote-control-pending="remoteControlIsPending(participant.identity)"
+        :remote-control-active="remoteControlIsActive(participant.identity)"
+        :remote-control-name="previewParticipantName(participant.identity, participant.name || participant.identity)"
+        :playback-volume="participantVolume(participant.identity)" :input-gain="inputGain" :output-volume="outputVolume"
+        :share-audio="Boolean(participant.getTrackPublication(Track.Source.ScreenShareAudio)?.track)"
+        :share-muted="mutedShares.includes(participant.identity)" :share-audio-listening="listening"
+        @toggle-share-audio="toggleSharedAudio(participant.identity)" @select="focusParticipantShare(participant.identity)"
+        @request-control="requestParticipantControl(participant.identity)" @cancel-control="rtc.cancelPendingRemoteControl(participant.identity)" @stop-control="rtc.exitRemoteControl"
+        @toggle-audio="toggleParticipantAudio(participant.identity)" @volume-change="updateParticipantVolume(participant.identity, $event)"
+        @input-gain-change="updateInputGain" @output-volume-change="updateOutputVolume"
+        @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />
+    </ScreenShareWindows>
     <RemoteAudio v-for="item in remoteAudioTracks" :key="item.track.sid" :track="item.track"
       :context="rtc.playbackContext" :balance="voiceVolumeBalance && item.source === Track.Source.Microphone"
       @balance-error="audioPreferences.setVoiceVolumeBalance(false); viewerNotice = '成员语音音量平衡未能运行，已关闭该功能，语音继续按原音量播放。'"
