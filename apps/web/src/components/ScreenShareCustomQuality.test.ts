@@ -51,11 +51,11 @@ it('编辑不提前应用，点击应用才发出手动配置；修改尺寸保�
     controls.update('resolution', { target } as unknown as Event);
     expect(target.value).toBe('1080');
     expect(emit).toHaveBeenLastCalledWith('update:modelValue', { resolution: 1440, fps: 60, bitrateMbps: 6 });
-    props.modelValue = { resolution: 1440, fps: 180, bitrateMbps: 6 };
+    props.modelValue = { resolution: 1440, fps: 120, bitrateMbps: 6 };
     await nextTick();
     expect(controls.bitrateDraft.value).toBe('6');
     controls.resetBitrate();
-    expect(emit).toHaveBeenLastCalledWith('update:modelValue', { resolution: 1440, fps: 180 });
+    expect(emit).toHaveBeenLastCalledWith('update:modelValue', { resolution: 1440, fps: 120 });
     expect(props.modelValue.bitrateMbps).toBe(6);
   } finally { scope.stop(); }
 });

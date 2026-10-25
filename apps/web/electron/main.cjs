@@ -794,7 +794,7 @@ function handleNativeSharedTextureFrame(state, frame) {
 async function startNativeVideo(sourceId, maxFps, settings, resolution) {
   if (closing) throw new Error('mediaHelperShuttingDown');
   if (process.platform !== 'win32') throw new Error('platformUnsupported');
-  if (![30, 60, 120, 180].includes(maxFps)
+  if (![30, 60, 120].includes(maxFps)
       || typeof sourceId !== 'string' || sourceId.length > 128) throw new Error('invalidVideoStart');
   if (nativeVideoSession) throw new Error('videoCaptureAlreadyRunning');
   if (!nativeMediaBridge) nativeMediaBridge = loadNativeMediaBridge();
@@ -1305,7 +1305,7 @@ ipcMain.handle('diagnostics:export', async (event, text) => {
   if (!trustedSender(event) || closing || diagnosticExportPending) throw new Error('当前不能导出诊断。');
   if (typeof text !== 'string' || Buffer.byteLength(text) > 8 * 1024 * 1024) throw new Error('诊断报告过大或无效。');
   const report = JSON.parse(text);
-  if (!report || report.kind !== 'lycansync-diagnostics' || report.schemaVersion !== 8 || !Array.isArray(report.samples)
+  if (!report || report.kind !== 'lycansync-diagnostics' || report.schemaVersion !== 9 || !Array.isArray(report.samples)
       || report.samples.length > 900 || !Number.isFinite(Date.parse(report.startedAt))
       || !Number.isFinite(Date.parse(report.endedAt)) || Date.parse(report.endedAt) < Date.parse(report.startedAt)) {
     throw new Error('诊断报告无效。');

@@ -411,7 +411,7 @@ describe('NativeScreenVideoSession', () => {
     expect(laterFrame.close).toHaveBeenCalledOnce();
   });
 
-  it.each([30, 60, 120, 180])('目标 %s FPS 只按写入背压丢帧，不在页面重复限帧', async (maxFps) => {
+  it.each([30, 60, 120])('目标 %s FPS 只按写入背压丢帧，不在页面重复限帧', async (maxFps) => {
     const target = installWindowMessageTarget();
     let finishWrite!: () => void;
     const writes: VideoFrame[] = [];
@@ -463,7 +463,7 @@ describe('NativeScreenVideoSession', () => {
     await session.stop();
   });
 
-  it.each([120, 180])('目标 %s FPS 的帧保持来源比例并按所选尺寸缩小', async (maxFps) => {
+  it.each([60, 120])('目标 %s FPS 的帧保持来源比例并按所选尺寸缩小', async (maxFps) => {
     const target = installWindowMessageTarget();
     const writes: VideoFrame[] = [];
     const desktop: NativeVideoDesktopBridge = {

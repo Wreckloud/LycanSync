@@ -62,7 +62,10 @@ vi.mock('./nativeScreenVideo', () => ({
     sessionId?: string;
     private startPromise?: Promise<never>;
     private stopPromise?: Promise<void>;
-    constructor(private readonly desktop: Window['lycanDesktop'], private readonly options: { maxFps: number; resolution: { width: number; height: number }; onError?: (code: string) => void }) {
+    needsFrameRateRecovery = false;
+    constructor(private readonly desktop: Window['lycanDesktop'], private readonly options: { maxFps: number; resolution: { width: number; height: number };
+      isCurrentCapture?: () => boolean; canReduceFrameRate?: () => boolean;
+      onFrameRateAdjustmentFailure?: (frameRate: number) => void; onError?: (code: string) => void }) {
       rtcMocks.nativeVideoInstances.push(this);
       if (options.onError) rtcMocks.nativeError.mockImplementation(options.onError);
     }
@@ -76,7 +79,12 @@ vi.mock('./nativeScreenVideo', () => ({
       return this.startPromise;
     }
     get captureSessionId() { return this.sessionId; }
-    configureQuality(id: string, custom: CustomScreenShareQuality) { return rtcMocks.nativeConfigured(id, custom); }
+    canReduceFrameRate() { return this.options.isCurrentCapture?.() && this.options.canReduceFrameRate?.(); }
+    reportFrameRateFailure(frameRate: number) { this.needsFrameRateRecovery = true; this.options.onFrameRateAdjustmentFailure?.(frameRate); }
+    async configureQuality(id: string, custom: CustomScreenShareQuality) {
+      await rtcMocks.nativeConfigured(id, custom);
+      this.needsFrameRateRecovery = false;
+    }
     stop() {
       if (!this.stopPromise) {
         this.stopPromise = (async () => {
@@ -394,6 +402,51 @@ function configureNativeScreenDesktop(options: {
 }
 
 describe('native screen share wiring', () => {
+  it('节流资格只属于已发布的当前房间，重连或远控恢复高清，旧会话警告不污染新房间', async () => {
+    configureNativeScreenDesktop({ screenAudio: true });
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false },
+      events: { selectNativeScreenSource: rtcMocks.selectedSources },
+    }))!;
+    type DemandSession = { canReduceFrameRate(): boolean; reportFrameRateFailure(frameRate: number): void };
+    const publishing = deferred<void>();
+    try {
+      await rtc.join('demand-room');
+      rtcMocks.published.mockImplementation((_track, options) => options?.source === Track.Source.ScreenShare
+        ? publishing.promise : Promise.resolve());
+      const starting = rtc.setMediaEnabled(Track.Source.ScreenShare, true);
+      await vi.waitFor(() => expect(rtcMocks.nativeVideoInstances).toHaveLength(1));
+      const session = rtcMocks.nativeVideoInstances[0] as DemandSession;
+      expect(session.canReduceFrameRate()).toBe(false);
+      publishing.resolve(); await starting; await waitForSharedAudio();
+      expect(session.canReduceFrameRate()).toBe(true);
+      mockRoom().emit('connectionStateChanged', 'reconnecting');
+      expect(session.canReduceFrameRate()).toBe(false);
+      mockRoom().emit('connectionStateChanged', 'connected');
+      expect(session.canReduceFrameRate()).toBe(true);
+      rtc.remoteControlGranting.value = true;
+      expect(session.canReduceFrameRate()).toBe(false);
+      rtc.remoteControlGranting.value = false;
+      rtc.remoteControlOwner.value = { identity: 'controller', controlSessionId: 'control', public: true };
+      expect(session.canReduceFrameRate()).toBe(false);
+      rtc.remoteControlOwner.value = null;
+      session.reportFrameRateFailure(30);
+      expect(rtc.notice.value).toContain('采集目标仍为 30 FPS');
+      const publishedCount = rtcMocks.published.mock.calls.length;
+      expect(await rtc.setScreenShareQuality('standard')).toBe(true);
+      expect(rtc.notice.value).toBe('');
+      expect(rtcMocks.published).toHaveBeenCalledTimes(publishedCount);
+      expect(rtcMocks.nativeAudioStarts).toHaveBeenCalledOnce();
+      expect(rtcMocks.nativeStops).not.toHaveBeenCalled();
+      await rtc.leave(); await rtc.join('next-demand-room');
+      rtc.notice.value = '新房间提示';
+      expect(session.canReduceFrameRate()).toBe(false);
+      session.reportFrameRateFailure(30);
+      expect(rtc.notice.value).toBe('新房间提示');
+    } finally { publishing.resolve(); await rtc.leave(); scope.stop(); }
+  });
+
   it.each(['ready', 'failed'])('视频发布不等待声音启动，声音迟到 %s 不重建画面或麦克风', async (result) => {
     configureNativeScreenDesktop({ screenAudio: true });
     const audioStart = deferred<unknown>();
@@ -1177,10 +1230,10 @@ describe('native screen share wiring', () => {
       const publishCount = rtcMocks.published.mock.calls.length;
       expect(await rtc.setScreenShareQuality('economy')).toBe(true);
       expect(rtc.currentScreenShareQuality.value).toBe('economy');
-      const custom: CustomScreenShareQuality = { resolution: 1440, fps: 180 };
+      const custom: CustomScreenShareQuality = { resolution: 1440, fps: 120 };
       expect(await rtc.setScreenShareQuality('custom', custom)).toBe(true);
       custom.fps = 30;
-      expect(rtc.currentCustomScreenShareQuality.value).toEqual({ resolution: 1440, fps: 180 });
+      expect(rtc.currentCustomScreenShareQuality.value).toEqual({ resolution: 1440, fps: 120 });
       expect(await rtc.setScreenShareQuality('custom', { resolution: 720, fps: 120 })).toBe(true);
       expect(rtcMocks.nativeConfigured).toHaveBeenLastCalledWith('custom', { resolution: 720, fps: 120 });
       expect(rtc.currentCustomScreenShareQuality.value).toEqual({ resolution: 720, fps: 120 });
@@ -1276,7 +1329,7 @@ describe('native screen share wiring', () => {
 
   it('选择器手动码率贯通首次原生启动与 WebRTC 发布，尺寸帧率仍采用自定义值', async () => {
     configureNativeScreenDesktop();
-    const customQuality = { resolution: 1440, fps: 180, bitrateMbps: 6 } as const;
+    const customQuality = { resolution: 1440, fps: 120, bitrateMbps: 6 } as const;
     rtcMocks.selectedSources.mockResolvedValueOnce({ sourceId: 'window:test:0', shareAudio: false, quality: 'custom', customQuality });
     const scope = effectScope();
     const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
@@ -1286,10 +1339,10 @@ describe('native screen share wiring', () => {
     try {
       expect(await rtc.join('manual-bitrate-room')).toBe(true);
       await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
-      expect(rtcMocks.nativeStarts).toHaveBeenCalledWith('window:test:0', 180, expect.anything(), { width: 2560, height: 1440 });
+      expect(rtcMocks.nativeStarts).toHaveBeenCalledWith('window:test:0', 120, expect.anything(), { width: 2560, height: 1440 });
       expect(rtcMocks.published).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
         source: Track.Source.ScreenShare,
-        screenShareEncoding: expect.objectContaining({ maxBitrate: 6_000_000, maxFramerate: 180 }),
+        screenShareEncoding: expect.objectContaining({ maxBitrate: 6_000_000, maxFramerate: 120 }),
       }));
       expect(rtc.currentCustomScreenShareQuality.value).toEqual(customQuality);
     } finally { await rtc.leave(); scope.stop(); }

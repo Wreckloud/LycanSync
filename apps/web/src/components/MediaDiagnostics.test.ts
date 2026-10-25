@@ -6,6 +6,17 @@ import MediaDiagnostics from './MediaDiagnostics.vue';
 import { readVideoLayers } from '../rtc/mediaStats';
 import type { MediaDiagnosticsSnapshot } from '../diagnostics/mediaDiagnostics';
 
+it('面板分开显示用户目标和已确认采集目标，调整失败不冒充成功或实际 FPS', async () => {
+  const statistics = { streams: [{ identity: 'member', name: '成员', direction: '发送', layers: [],
+    subscription: { subscribed: null, enabled: null, muted: false },
+    nativeInput: { requestedFrameRate: 120, captureFrameRate: 30, frameRateAdjustmentFailed: true },
+  }], failures: [] } as unknown as MediaDiagnosticsSnapshot;
+  const html = await renderToString(createSSRApp(MediaDiagnostics, { room: {} as Room, statistics }));
+  expect(html).toContain('用户帧率目标 120 FPS');
+  expect(html).toContain('已确认采集目标 30 FPS（非实测帧率）');
+  expect(html).toContain('自动调整失败，请重新选择画质');
+});
+
 it.each(['发送', '接收'] as const)('面板按%s方向标注实际编解码帧率，接收丢帧不限定在解码阶段', async (direction) => {
   const layers = readVideoLayers(new Map([['video', { id: 'video', kind: 'video', timestamp: 1000,
     type: direction === '发送' ? 'outbound-rtp' : 'inbound-rtp', framesEncoded: 58, framesDecoded: 58, framesDropped: 3 }]]) as RTCStatsReport,

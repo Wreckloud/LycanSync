@@ -132,7 +132,7 @@ test('OBS 真实来源纹理经生产入口到页面轨道，重复停止及故�
     if (process.env.LYCANSYNC_CAPTURE_STARTUP_CHECK === '1') {
       assert.deepEqual(result.cases.map(entry => [entry.mode, entry.requestedHeight, entry.requestedFps]), [
         ['cold', 1080, 60], ['prewarmed', 1080, 60], ['restart', 1080, 60],
-        ['cold', 1440, 180], ['prewarmed', 1440, 180], ['restart', 1440, 180],
+        ['cold', 1440, 120], ['prewarmed', 1440, 120], ['restart', 1440, 120],
       ], details);
       assert.ok(result.cases.every(entry => entry.freshPixelsChecked), details);
     }
@@ -150,7 +150,7 @@ test('OBS 真实来源纹理经生产入口到页面轨道，重复停止及故�
       assert.ok(result.cases[0].frameRateChanges.every((entry) => entry.freshPixelsChecked), details);
     }
     if (process.env.LYCANSYNC_CAPTURE_QUALITY_CHECK === '1') {
-      assert.deepEqual(result.cases[0].qualityChanges.map((entry) => entry.targetFps), [60, 60, 120, 180, 30, 60], details);
+      assert.deepEqual(result.cases[0].qualityChanges.map((entry) => entry.targetFps), [60, 60, 120, 30, 60], details);
       assert.deepEqual(result.cases[0].qualityChanges.map((entry) => entry.cap.height), [1080, 1440, 1440, 1440, 720, 1080], details);
     }
     for (const entry of result.cases.filter((entry) => entry.mode === 'success')) {

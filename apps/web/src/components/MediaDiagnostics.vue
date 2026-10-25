@@ -53,6 +53,10 @@ function formatFpsInterval(intervalMs: number | null) {
       <small v-if="stream.nativeInput">页面累计提交 {{ stream.nativeInput.submittedFrames }} 帧 ·
         写入背压丢弃 {{ stream.nativeInput.backpressureDroppedFrames }} 帧 ·
         最小化提示画面 {{ stream.nativeInput.placeholderFrames }} 帧</small>
+      <small v-if="stream.nativeInput">用户帧率目标 {{ stream.nativeInput.requestedFrameRate }} FPS ·
+        已确认采集目标 {{ stream.nativeInput.captureFrameRate }} FPS（非实测帧率）
+        <template v-if="stream.nativeInput.frameRateAdjustmentFailed"> · 自动调整失败，请重新选择画质</template>
+      </small>
       <small v-if="stream.nativeInput && stream.nativeInputInterval">
         页面收到 {{ stream.nativeInputInterval.receivedFps }} fps · 页面提交 {{ stream.nativeInputInterval.submittedFps }} fps ·
         {{ formatFpsInterval(stream.nativeInputInterval.elapsedMs) }}

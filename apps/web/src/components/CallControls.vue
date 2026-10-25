@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
-import { ChevronDown, ChevronRight, HeadphoneOff, Headphones, MicOff, MonitorUp, MonitorX, Settings } from '@lucide/vue';
+import { ChevronDown, ChevronLeft, ChevronRight, HeadphoneOff, Headphones, MicOff, MonitorUp, MonitorX, Settings } from '@lucide/vue';
 import VoiceLevelMic from './VoiceLevelMic.vue';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP } from '../rtc/audioPreferences';
 import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, SCREEN_SHARE_QUALITIES, screenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from '../rtc/screenShareQuality';
@@ -25,6 +25,7 @@ type ControlMenu = 'microphone' | 'output' | 'share';
 const root = ref<HTMLElement | null>(null);
 const menu = ref<ControlMenu | null>(null);
 const qualityOpen = ref(false);
+const qualityPlacement = ref<'left' | 'right' | 'compact'>('left');
 const menuMaxHeight = ref(520);
 let opener: HTMLButtonElement | null = null;
 const levelSegments = Array.from({ length: 16 }, (_, index) => index + 1);
@@ -41,6 +42,9 @@ function resizeMenu() {
     ? root.value?.closest('.callbar') : opener?.closest('.call-control-split');
   const titlebarBottom = document.querySelector('.titlebar')?.getBoundingClientRect().bottom ?? 0;
   menuMaxHeight.value = Math.max(60, Math.min(520, (anchor?.getBoundingClientRect().top ?? 520) - titlebarBottom - 16));
+  const right = opener?.closest('.call-control-split')?.getBoundingClientRect().right ?? 0;
+  qualityPlacement.value = window.innerWidth <= 600 ? 'compact'
+    : right - 260 - 268 >= 16 ? 'left' : right + 268 <= window.innerWidth - 16 ? 'right' : 'compact';
 }
 
 async function toggleMenu(kind: ControlMenu, event: Event) {
@@ -68,7 +72,16 @@ function openAudioSettings() {
 
 function chooseSource() { closeMenu(true); emit('changeSource'); }
 function toggleShare() { closeMenu(true); emit('share'); }
+async function toggleQuality() {
+  const opening = !qualityOpen.value;
+  qualityOpen.value = opening;
+  await nextTick();
+  if (menu.value !== 'share' || qualityOpen.value !== opening) return;
+  root.value?.querySelector<HTMLElement>(opening
+    ? '.call-quality-options input:checked' : '.call-quality-trigger')?.focus();
+}
 function chooseQuality(quality: ScreenShareQualityId) {
+  if (props.shareBusy) return;
   // 原生表单会先改变勾选；异步操作确认前仍以父层的实际状态为准。
   root.value?.querySelectorAll<HTMLInputElement>('.call-quality-options input').forEach((input) => {
     input.checked = input.value === props.quality;
@@ -84,7 +97,7 @@ function toggleShareAudio(event: Event) {
 function escape(event: KeyboardEvent) {
   if (!menu.value) return;
   event.stopPropagation();
-  if (qualityOpen.value) { qualityOpen.value = false; root.value?.querySelector<HTMLButtonElement>('.call-quality-trigger')?.focus(); }
+  if (qualityOpen.value) void toggleQuality();
   else closeMenu(true);
 }
 
@@ -143,30 +156,36 @@ onScopeDispose(() => {
       </button>
       <button type="button" class="call-control-more" aria-label="共享选项" :aria-expanded="menu === 'share'"
         :disabled="!connected || choosingSource" @click="toggleMenu('share', $event)"><ChevronDown :size="13" :class="{ 'is-open': menu === 'share' }" /></button>
-      <section v-if="menu === 'share'" class="call-control-menu" aria-label="共享选项">
-        <header>屏幕共享</header>
-        <button type="button" class="call-menu-action" :class="{ 'is-danger': sharing }" :disabled="shareBusy || shareLimitReached" @click="toggleShare">
-          <MonitorX v-if="sharing" :size="15" /><MonitorUp v-else :size="15" />{{ sharing ? '停止共享' : '开始共享' }}</button>
-        <button v-if="sharing && desktop" type="button" class="call-menu-action" :disabled="shareBusy" @click="chooseSource">更改共享<ChevronRight class="call-menu-chevron" :size="14" /></button>
-        <template v-if="desktop">
-          <button type="button" class="call-menu-action call-quality-trigger" :aria-expanded="qualityOpen" :disabled="shareBusy" @click="qualityOpen = !qualityOpen">
-            共享画质<span>{{ SCREEN_SHARE_QUALITIES.find(preset => preset.id === quality)?.label }}</span><ChevronRight class="call-menu-chevron" :size="14" :class="{ 'is-open': qualityOpen }" /></button>
-          <div v-if="qualityOpen" class="call-quality-options" role="group" aria-label="共享画质">
+      <div v-if="menu === 'share'" class="call-share-menu" :class="{ 'is-compact': qualityPlacement === 'compact' }">
+        <section v-show="!qualityOpen || qualityPlacement !== 'compact'" class="call-control-menu call-share-actions" aria-label="共享选项">
+          <header>屏幕共享</header>
+          <button type="button" class="call-menu-action" :class="{ 'is-danger': sharing }" :disabled="shareBusy || shareLimitReached" @click="toggleShare">
+            <MonitorX v-if="sharing" :size="15" /><MonitorUp v-else :size="15" />{{ sharing ? '停止共享' : '开始共享' }}</button>
+          <button v-if="sharing && desktop" type="button" class="call-menu-action" :disabled="shareBusy" @click="chooseSource">更改共享<ChevronRight class="call-menu-chevron" :size="14" /></button>
+          <template v-if="desktop">
+            <button type="button" class="call-menu-action call-quality-trigger" :aria-expanded="qualityOpen" :disabled="shareBusy" @click="toggleQuality">
+              共享画质<span>{{ SCREEN_SHARE_QUALITIES.find(preset => preset.id === quality)?.label }}</span><ChevronRight class="call-menu-chevron" :size="14" /></button>
+            <label v-if="sharing" class="call-share-audio"><span>共享音频</span><input type="checkbox" :checked="shareAudio" :disabled="shareBusy || shareAudioRestricted || audioMode === 'unavailable'"
+              @change="toggleShareAudio" /></label>
+            <small v-if="sharing && shareAudioRestricted" class="call-audio-warning">临时远控画面不共享电脑声音，频道语音不变。</small>
+            <small v-else-if="sharing && audioMode === 'systemMix'" class="call-audio-warning">包含所有系统声音，可能产生回声。</small>
+            <small v-else-if="sharing && audioMode === 'unavailable'" class="call-audio-warning">当前系统不支持共享音频。</small>
+          </template>
+          <button type="button" class="call-settings-entry" @click="openAudioSettings"><Settings :size="15" />语音设置<ChevronRight :size="14" /></button>
+        </section>
+        <section v-if="qualityOpen" class="call-control-menu call-quality-menu" :class="{ 'is-right': qualityPlacement === 'right' }" aria-label="共享画质">
+          <button type="button" class="call-menu-action call-quality-back" @click="toggleQuality"><ChevronLeft :size="14" />共享画质</button>
+          <div class="call-quality-options" role="group" aria-label="画质预设">
             <label v-for="preset in SCREEN_SHARE_QUALITIES" :key="preset.id">
               <span>{{ preset.label }}<small>{{ screenShareQuality(preset.id, customQuality).description }}</small></span>
-              <input type="radio" name="call-share-quality" :value="preset.id" :checked="quality === preset.id" :disabled="shareBusy" @change="chooseQuality(preset.id)" />
+              <input type="radio" name="call-share-quality" :value="preset.id" :checked="quality === preset.id" :disabled="shareBusy"
+                @change="chooseQuality(preset.id)" @click="quality === preset.id && chooseQuality(preset.id)" />
             </label>
-            <ScreenShareCustomQuality v-if="quality === 'custom'" :model-value="customQuality" :disabled="shareBusy"
-              @update:model-value="emit('quality', 'custom', $event)" />
           </div>
-          <label v-if="sharing" class="call-share-audio"><span>共享音频</span><input type="checkbox" :checked="shareAudio" :disabled="shareBusy || shareAudioRestricted || audioMode === 'unavailable'"
-            @change="toggleShareAudio" /></label>
-          <small v-if="sharing && shareAudioRestricted" class="call-audio-warning">临时远控画面不共享电脑声音，频道语音不变。</small>
-          <small v-else-if="sharing && audioMode === 'systemMix'" class="call-audio-warning">包含所有系统声音，可能产生回声。</small>
-          <small v-else-if="sharing && audioMode === 'unavailable'" class="call-audio-warning">当前系统不支持共享音频。</small>
-        </template>
-        <button type="button" class="call-settings-entry" @click="openAudioSettings"><Settings :size="15" />语音设置<ChevronRight :size="14" /></button>
-      </section>
+          <ScreenShareCustomQuality v-if="quality === 'custom'" :model-value="customQuality" :disabled="shareBusy"
+            @update:model-value="emit('quality', 'custom', $event)" />
+        </section>
+      </div>
     </div>
   </div>
 </template>
@@ -193,9 +212,14 @@ onScopeDispose(() => {
 .call-menu-action > span { margin-left: auto; color: var(--muted); font-size: 12px; }
 .call-menu-action > span + svg { margin-left: 0; }
 .call-menu-action.is-danger { color: var(--danger); }
-.call-quality-trigger svg.is-open { transform: rotate(90deg); }
 .call-settings-entry { border-top: 1px solid var(--border); border-radius: 0; padding-top: 12px; }
-.call-quality-options { display: grid; gap: 4px; padding-left: 8px; }
+.call-share-menu { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 8px); }
+.call-share-actions { position: relative; right: auto; bottom: auto; }
+.call-quality-menu { right: calc(100% + 8px); bottom: 0; }
+.call-quality-menu.is-right { right: auto; left: calc(100% + 8px); }
+.call-share-menu.is-compact .call-quality-menu { position: relative; right: auto; left: auto; bottom: auto; }
+.call-quality-back { border-bottom: 1px solid var(--border); border-radius: 0; }
+.call-quality-options { display: grid; gap: 4px; }
 .call-quality-options label, .call-share-audio { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
 .call-quality-options label { padding: 4px 0; }
 .call-quality-options label > span { display: grid; gap: 1px; }
@@ -207,5 +231,7 @@ onScopeDispose(() => {
   .call-controls { gap: 6px; }
   .call-control-split { position: static; }
   .call-control-menu { left: 10px; right: 10px; width: auto; max-width: 260px; }
+  .call-share-menu { left: 10px; right: 10px; max-width: 260px; }
+  .call-share-actions, .call-share-menu.is-compact .call-quality-menu { left: auto; right: auto; width: 100%; }
 }
 </style>

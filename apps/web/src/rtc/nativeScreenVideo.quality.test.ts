@@ -78,17 +78,17 @@ it('四档画质依次切换只更新同一轨道的发送参数及后续帧尺�
   } finally { await session.stop(); }
 });
 
-it('1440p180 传到原生并接收真实尺寸，保留同一轨道及 SDK 的层暂停状态', async () => {
+it('1440p120 传到原生并接收真实尺寸，保留同一轨道及 SDK 的层暂停状态', async () => {
   const { session, desktop, sender, track, sendFrame, writes } = await createSession(true);
   try {
     const parameters = sender.getParameters();
     parameters.encodings[0].active = false;
     await sender.setParameters(parameters);
-    await session.configureQuality('custom', { resolution: 1440, fps: 180 });
-    expect(desktop.configureNativeVideo).toHaveBeenLastCalledWith('quality-session', 180, { width: 2560, height: 1440 });
+    await session.configureQuality('custom', { resolution: 1440, fps: 120 });
+    expect(desktop.configureNativeVideo).toHaveBeenLastCalledWith('quality-session', 120, { width: 2560, height: 1440 });
     expect(sender.getParameters().encodings).toEqual([
       { rid: 'q', active: false, maxBitrate: 1_000_000, maxFramerate: 30, scaleResolutionDownBy: 4 },
-      { rid: 'h', active: true, maxBitrate: 40_000_000, maxFramerate: 180, scaleResolutionDownBy: 1 },
+      { rid: 'h', active: true, maxBitrate: 30_000_000, maxFramerate: 120, scaleResolutionDownBy: 1 },
     ]);
     await sendFrame(2560, 1440);
     expect([writes.at(-1)?.displayWidth, writes.at(-1)?.displayHeight]).toEqual([2560, 1440]);
@@ -98,9 +98,9 @@ it('1440p180 传到原生并接收真实尺寸，保留同一轨道及 SDK 的�
     expect(desktop.startNativeVideo).toHaveBeenCalledOnce();
     vi.mocked(desktop.configureNativeVideo).mockRejectedValueOnce(new Error('resize failed'));
     await expect(session.configureQuality('economy')).rejects.toThrow('resize failed');
-    expect(desktop.configureNativeVideo).toHaveBeenLastCalledWith('quality-session', 180, { width: 2560, height: 1440 });
-    expect(track.publishOptions.screenShareEncoding.maxFramerate).toBe(180);
-    expect(sender.getParameters().encodings[1].maxBitrate).toBe(40_000_000);
+    expect(desktop.configureNativeVideo).toHaveBeenLastCalledWith('quality-session', 120, { width: 2560, height: 1440 });
+    expect(track.publishOptions.screenShareEncoding.maxFramerate).toBe(120);
+    expect(sender.getParameters().encodings[1].maxBitrate).toBe(30_000_000);
   } finally { await session.stop(); }
 });
 
@@ -253,7 +253,7 @@ it('SDK 重发布期间 sender 被替换时，不把旧画质更新登记到新 
   let complete!: (value: { changed: boolean }) => void;
   vi.mocked(desktop.configureNativeVideo).mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
   try {
-    const changing = session.configureQuality('custom', { resolution: 1440, fps: 180 });
+    const changing = session.configureQuality('custom', { resolution: 1440, fps: 120 });
     const rejected = expect(changing).rejects.toThrow('nativeVideoSessionStopped');
     await vi.waitFor(() => expect(desktop.configureNativeVideo).toHaveBeenCalledOnce());
     track.sender = { ...sender, setParameters: vi.fn(async () => {}) };

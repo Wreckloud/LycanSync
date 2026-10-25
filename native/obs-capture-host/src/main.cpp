@@ -470,7 +470,7 @@ bool parse_diagnostics_command(std::string_view command, std::string_view &reque
 }
 
 bool valid_frame_rate(uint32_t frame_rate) {
-  return frame_rate == 30 || frame_rate == 60 || frame_rate == 120 || frame_rate == 180;
+  return frame_rate == 30 || frame_rate == 60 || frame_rate == 120;
 }
 
 bool valid_resolution(uint32_t width, uint32_t height) {
@@ -510,13 +510,15 @@ bool configure_video(obs_video_info &video, obs_sceneitem_t *item, std::string_v
   bool accepted = true;
   if (video.fps_num != frame_rate || video.base_width != width || video.base_height != height) {
     // 此时三个槽位均已归还，才能销毁旧纹理；来源、声音及房间身份保持不变。
-    destroy_textures();
+    const bool resize = video.base_width != width || video.base_height != height;
+    // 只改帧率保留同设备、同尺寸的纹理槽，减少缩略图与高清切换时的分配。
+    if (resize) destroy_textures();
     auto next = video;
     next.fps_num = frame_rate;
     next.base_width = next.output_width = width;
     next.base_height = next.output_height = height;
     accepted = obs_reset_video(&next) == OBS_VIDEO_SUCCESS;
-    if (accepted) {
+    if (accepted && resize) {
       g_host.output_width = width;
       g_host.output_height = height;
       obs_enter_graphics();
@@ -525,17 +527,19 @@ bool configure_video(obs_video_info &video, obs_sceneitem_t *item, std::string_v
     }
     if (accepted) video = next;
     else {
-      destroy_textures();
+      if (resize) destroy_textures();
       if (obs_reset_video(&video) != OBS_VIDEO_SUCCESS) {
         write_event("obsCaptureConfigurationRollbackFailed");
         return false;
       }
       g_host.output_width = video.base_width;
       g_host.output_height = video.base_height;
-      obs_enter_graphics();
-      const bool restored = initialize_textures();
-      obs_leave_graphics();
-      if (!restored) { write_event("obsCaptureConfigurationRollbackFailed"); return false; }
+      if (resize) {
+        obs_enter_graphics();
+        const bool restored = initialize_textures();
+        obs_leave_graphics();
+        if (!restored) { write_event("obsCaptureConfigurationRollbackFailed"); return false; }
+      }
     }
     const vec2 bounds{static_cast<float>(video.base_width), static_cast<float>(video.base_height)};
     obs_sceneitem_set_bounds(item, &bounds);

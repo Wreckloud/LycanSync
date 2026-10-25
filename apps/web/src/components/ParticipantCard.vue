@@ -5,6 +5,7 @@ import { Track, VideoQuality, type Participant, type RemoteTrackPublication } fr
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, normalizeAudioVolume } from '../rtc/audioPreferences';
 import VoiceLevelMic from './VoiceLevelMic.vue';
 import { observeLocalScreenPreview } from '../rtc/localScreenPreview';
+import { setNativeScreenPreviewDemand } from '../rtc/nativeScreenVideo';
 import { observeScreenShareView } from '../rtc/screenShareViewing';
 import { mapRemotePointerToScreen, RemoteInputPresses, remoteKeyFromCode, type RemoteControlInput } from '../rtc/remoteControl';
 
@@ -28,7 +29,9 @@ const props = withDefaults(defineProps<{
   remoteControlActive?: boolean;
   remoteControlName?: string;
   privateControl?: string;
-}>(), { variant: 'card', playbackVolume: 1, inputGain: 1, outputVolume: 1 });
+  showFullscreen?: boolean;
+  viewQuality?: VideoQuality;
+}>(), { variant: 'card', playbackVolume: 1, inputGain: 1, outputVolume: 1, showFullscreen: true });
 const emit = defineEmits<{
   select: [];
   toggleShareAudio: [];
@@ -43,6 +46,7 @@ const emit = defineEmits<{
   cancelControl: [];
   stopControl: [];
   remoteInput: [input: RemoteControlInput];
+  videoSize: [size: { width: number; height: number }];
 }>();
 const videoElement = ref<HTMLVideoElement | null>(null);
 const cardElement = ref<HTMLElement | null>(null);
@@ -107,27 +111,39 @@ const remoteAudioLabel = computed(() => {
 });
 const selectable = computed(() => props.variant !== 'viewer' && media.value.sharing && !props.privateControl);
 const fullscreenAvailable = computed(() => Boolean(ownerDocument.value?.fullscreenEnabled || ownerDocument.value?.defaultView?.lycanViewerWindow));
+const viewingQuality = computed(() => props.viewQuality ?? (props.variant === 'viewer' ? VideoQuality.HIGH : VideoQuality.LOW));
 
 watch([videoElement, () => media.value.track, () => media.value.publication, () => props.isLocal], ([element, track, publication, isLocal], _, onCleanup) => {
   videoReady.value = false;
   if (!element || !track) return;
-  const loaded = () => { videoReady.value = true; };
+  const loaded = () => {
+    videoReady.value = true;
+    if (element.videoWidth && element.videoHeight) emit('videoSize', { width: element.videoWidth, height: element.videoHeight });
+  };
   element.addEventListener('loadeddata', loaded);
+  element.addEventListener('resize', loaded);
   // 本地仅绑定采集轨道，远端由观看需求统一选择层；不创建第二份订阅。
   track.attach(element);
+  let localPreviewVisible = false;
+  const updateLocalPreviewDemand = () => {
+    if (isLocal) setNativeScreenPreviewDemand(track.mediaStreamTrack, element, localPreviewVisible && viewingQuality.value === VideoQuality.HIGH);
+  };
   const stopPreviewObservation = isLocal
-    ? observeLocalScreenPreview(element, () => emit('notice', '本地共享预览无法播放，请重新打开观看画面。'))
+    ? observeLocalScreenPreview(element, () => emit('notice', '本地共享预览无法播放，请重新打开观看画面。'),
+      (visible) => { localPreviewVisible = visible; updateLocalPreviewDemand(); })
     : undefined;
   const viewing = !isLocal && publication
     ? observeScreenShareView(publication as RemoteTrackPublication, element,
-      props.variant === 'viewer' ? VideoQuality.HIGH : VideoQuality.LOW)
+      viewingQuality.value)
     : undefined;
-  const stopQualityWatch = watch(() => props.variant, (variant) => {
-    viewing?.setQuality(variant === 'viewer' ? VideoQuality.HIGH : VideoQuality.LOW);
+  const stopQualityWatch = watch(viewingQuality, quality => {
+    viewing?.setQuality(quality);
+    updateLocalPreviewDemand();
   });
   // 只解除当前元素的绑定，其他主画面或缩略图仍可使用同一轨道。
   onCleanup(() => {
     element.removeEventListener('loadeddata', loaded);
+    element.removeEventListener('resize', loaded);
     videoReady.value = false;
     stopPreviewObservation?.();
     stopQualityWatch();
@@ -327,8 +343,8 @@ onBeforeUnmount(() => {
     :data-testid="variant === 'viewer' ? 'viewer-screen' : 'participant-card'">
     <div class="participant-media" :class="{ 'is-selectable': selectable, 'is-remote-control': remoteInputAllowed }"
       :role="selectable ? 'button' : undefined" :tabindex="remoteInputAllowed || selectable ? 0 : undefined"
-      :aria-label="selectable ? '独立观看' + media.name + '的共享画面' : undefined"
-      :data-select-hint="selectable ? '打开独立观看窗口' : undefined"
+      :aria-label="selectable ? '观看' + media.name + '的共享画面' : undefined"
+      :data-select-hint="selectable ? '聚焦共享画面' : undefined"
       @click="handleRemoteClick"
       @keydown="remoteKey($event, true)" @keyup="remoteKey($event, false)"
       @blur="releaseHeldRemoteInputs"
@@ -347,11 +363,11 @@ onBeforeUnmount(() => {
     </div>
     <div class="participant-meta">
       <strong :title="media.name">{{ media.name }}{{ isLocal ? '（你）' : '' }}</strong>
-      <button v-if="variant === 'viewer'" type="button" class="viewer-action"
+      <button v-if="variant === 'viewer' && showFullscreen" type="button" class="viewer-action"
         :aria-label="'切换全屏观看' + media.name + '的共享画面'" :disabled="!media.track || media.muted || !fullscreenAvailable"
         @click="openFullscreen"><Fullscreen :size="16" /></button>
-      <button v-else-if="media.sharing && !privateControl" type="button" class="viewer-action"
-        :aria-label="'打开' + media.name + '的独立观看窗口'" @click="emit('select')"><Maximize2 :size="16" /></button>
+      <button v-else-if="variant === 'card' && media.sharing && !privateControl" type="button" class="viewer-action"
+        :aria-label="'聚焦' + media.name + '的共享画面'" @click="emit('select')"><Maximize2 :size="16" /></button>
       <button v-if="variant === 'card' && media.sharing && !isLocal && shareAudio" type="button" class="viewer-action"
         :disabled="!shareAudioListening" :aria-label="shareMuted ? '恢复这路共享声音' : '静音这路共享声音'"
         :aria-pressed="shareMuted" @click="emit('toggleShareAudio')"><HeadphoneOff v-if="shareMuted || !shareAudioListening" :size="14" /><Headphones v-else :size="14" /></button>

@@ -2,24 +2,24 @@ import { VideoPreset } from 'livekit-client';
 
 // 推荐值是待实测校准的编码上限；固定模式与自定义共用同一张表。
 const RECOMMENDED_BITRATES = {
-  360: { 30: 1_000_000, 60: 1_500_000, 120: 2_000_000, 180: 3_000_000 },
-  720: { 30: 3_000_000, 60: 5_000_000, 120: 8_000_000, 180: 10_000_000 },
-  1080: { 30: 8_000_000, 60: 12_000_000, 120: 20_000_000, 180: 24_000_000 },
-  1440: { 30: 12_000_000, 60: 20_000_000, 120: 30_000_000, 180: 40_000_000 },
+  360: { 30: 1_000_000, 60: 1_500_000, 120: 2_000_000 },
+  720: { 30: 3_000_000, 60: 5_000_000, 120: 8_000_000 },
+  1080: { 30: 8_000_000, 60: 12_000_000, 120: 20_000_000 },
+  1440: { 30: 12_000_000, 60: 20_000_000, 120: 30_000_000 },
 } as const;
 
 export const SCREEN_SHARE_QUALITIES = [
   { id: 'highFrameRate', label: '高帧率', description: '1080p · 120 FPS', width: 1920, height: 1080, fps: 120, bitrate: RECOMMENDED_BITRATES[1080][120] },
-  { id: 'custom', label: '自定义', description: '自行选择分辨率和帧率', width: 1920, height: 1080, fps: 60, bitrate: RECOMMENDED_BITRATES[1080][60] },
   { id: 'standard', label: '标准', description: '1080p · 60 FPS', width: 1920, height: 1080, fps: 60, bitrate: RECOMMENDED_BITRATES[1080][60] },
   { id: 'economy', label: '节省流量', description: '720p · 30 FPS', width: 1280, height: 720, fps: 30, bitrate: RECOMMENDED_BITRATES[720][30] },
+  { id: 'custom', label: '自定义', description: '自行选择分辨率和帧率', width: 1920, height: 1080, fps: 60, bitrate: RECOMMENDED_BITRATES[1080][60] },
 ] as const;
 
 export type ScreenShareQualityId = typeof SCREEN_SHARE_QUALITIES[number]['id'];
 const STORAGE_KEY = 'lycansync.screen-share-quality';
 
 export const SCREEN_SHARE_RESOLUTIONS = [1440, 1080, 720, 360] as const;
-export const SCREEN_SHARE_FRAME_RATES = [180, 120, 60, 30] as const;
+export const SCREEN_SHARE_FRAME_RATES = [120, 60, 30] as const;
 export const SCREEN_SHARE_BITRATE_MIN_MBPS = 0.5;
 export const SCREEN_SHARE_BITRATE_MAX_MBPS = 50;
 export const SCREEN_SHARE_BITRATE_STEP_MBPS = 0.5;
@@ -78,12 +78,15 @@ export function readScreenShareQuality(): { quality: ScreenShareQualityId; custo
   if (!stored || SCREEN_SHARE_QUALITIES.some(quality => quality.id === stored)) {
     return { quality: stored ? stored as ScreenShareQualityId : 'standard', customQuality: { ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY } };
   }
-  let preference: { quality?: ScreenShareQualityId; customQuality?: CustomScreenShareQuality };
+  let preference: { quality?: ScreenShareQualityId; customQuality?: Omit<CustomScreenShareQuality, 'fps'> & { fps: number } };
   try { preference = JSON.parse(stored); } catch { throw new Error('invalidScreenShareQualityPreference'); }
   if (!preference || !SCREEN_SHARE_QUALITIES.some(quality => quality.id === preference.quality)) {
     throw new Error('invalidScreenShareQualityPreference');
   }
-  return { quality: preference.quality!, customQuality: validateCustomScreenShareQuality(preference.customQuality!) };
+  // 仅将旧版本已保存的 180 档迁到新的上限，保留用户的尺寸与手动码率。
+  const custom = preference.customQuality;
+  const customQuality = custom?.fps === 180 ? { ...custom, fps: 120 as const } : custom;
+  return { quality: preference.quality!, customQuality: validateCustomScreenShareQuality(customQuality as CustomScreenShareQuality) };
 }
 
 export function saveScreenShareQuality(id: ScreenShareQualityId, custom = DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY) {

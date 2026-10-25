@@ -1,5 +1,6 @@
-// 本地预览只控制播放元素；采集轨道和对外发布由房间媒体流程持有。
-export function observeLocalScreenPreview(element: HTMLVideoElement, onPlaybackError: () => void): () => void {
+// 本地预览上报可见性并控制元素播放；采集轨道和对外发布仍由房间媒体流程持有。
+export function observeLocalScreenPreview(element: HTMLVideoElement, onPlaybackError: () => void,
+  onVisibilityChange?: (visible: boolean) => void): () => void {
   const page = element.ownerDocument;
   const viewWindow = page.defaultView;
   if (!viewWindow) throw new Error('screenShareViewWindowUnavailable');
@@ -13,6 +14,7 @@ export function observeLocalScreenPreview(element: HTMLVideoElement, onPlaybackE
     const visible = intersecting && page.visibilityState !== 'hidden';
     if (playing === visible) return;
     playing = visible;
+    onVisibilityChange?.(visible);
     const request = ++playbackRequest;
     if (!visible) {
       element.pause();
@@ -48,6 +50,7 @@ export function observeLocalScreenPreview(element: HTMLVideoElement, onPlaybackE
     page.removeEventListener('visibilitychange', updatePlayback);
     viewWindow!.removeEventListener('pagehide', stop);
     element.removeEventListener('play', preventHiddenPlayback);
+    onVisibilityChange?.(false);
     element.pause();
   }
   return stop;

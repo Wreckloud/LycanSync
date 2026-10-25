@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { observeLocalScreenPreview } from './localScreenPreview';
 
-function preview() {
+function preview(onVisibilityChange?: (visible: boolean) => void) {
   let intersection: IntersectionObserverCallback;
   const disconnect = vi.fn();
   const observerWindow = Object.assign(new EventTarget(), { IntersectionObserver: class {
@@ -23,7 +23,7 @@ function preview() {
     srcObject: Object.freeze({}),
   });
   const error = vi.fn();
-  const stop = observeLocalScreenPreview(element as unknown as HTMLVideoElement, error);
+  const stop = observeLocalScreenPreview(element as unknown as HTMLVideoElement, error, onVisibilityChange);
   function visible(value: boolean) {
     intersection([{ target: element, isIntersecting: value } as unknown as IntersectionObserverEntry], {} as IntersectionObserver);
   }
@@ -33,6 +33,19 @@ function preview() {
   }
   return { element, page, observerWindow, stop, visible, background, disconnect, error };
 }
+
+it('本地预览可见性同步给采集需求，隐藏及关闭释放需求，迟到观察不重新登记', () => {
+  const visibility = vi.fn();
+  const state = preview(visibility);
+  expect(visibility.mock.calls).toEqual([[true]]);
+  state.visible(false); state.visible(false);
+  state.background(true); state.visible(true);
+  expect(visibility.mock.calls).toEqual([[true], [false]]);
+  state.background(false);
+  expect(visibility).toHaveBeenLastCalledWith(true);
+  state.stop(); state.visible(true); state.background(false);
+  expect(visibility.mock.calls).toEqual([[true], [false], [true], [false]]);
+});
 
 it('本地预览按自己的文档播放，辅助窗关闭只暂停本元素且可重复清理', () => {
   const main = preview(), auxiliary = preview();

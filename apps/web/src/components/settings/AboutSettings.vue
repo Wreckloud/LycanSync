@@ -38,7 +38,7 @@ onScopeDispose(() => props.report.setViewing(false));
     </section>
     <section class="settings-block">
       <h2>媒体诊断</h2>
-      <p>诊断默认关闭。查看时才读取媒体统计；视频探针需在面板内手动启动。</p>
+      <p>查看当前媒体统计，不启动采集或订阅。自动记录开关与报告导出见下方。</p>
       <p v-if="!room">当前未加入语音，没有活动房间可供诊断。</p>
       <button v-else type="button" class="settings-button" @click="diagnosticsOpen = !diagnosticsOpen">
         <Activity :size="15" />{{ diagnosticsOpen ? '关闭媒体诊断' : '查看媒体诊断' }}
