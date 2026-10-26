@@ -23,7 +23,7 @@ function createMediaDiagnostics(path, maxBytes = 1024 * 1024) {
     return pending;
   };
   const write = (entry) => {
-    if (['helperStderr', 'obsCaptureHostStderr', 'voiceOverlayCreated', 'gpuAdapters'].includes(entry.stage)) {
+    if (['helperStderr', 'obsCaptureHostStderr', 'voiceOverlayCreated', 'gpuAdapters', 'diagnosticSnapshotFailed'].includes(entry.stage)) {
       const key = JSON.stringify(entry);
       const previous = repeated.get(key);
       if (previous && performance.now() - previous.time < 30_000) {
@@ -78,6 +78,13 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
         const hresults = [...new Set(message.match(/\b0x[0-9a-fA-F]{8}\b/g) ?? [])].slice(0, 8);
         const audioTiming = {};
         const details = {};
+        if (entry.stage === 'screenSourceReserved' && typeof entry.requiresWindowCapture === 'boolean') {
+          details.requiresWindowCapture = entry.requiresWindowCapture;
+        }
+        if (entry.stage === 'diagnosticSnapshotFailed'
+            && ['EACCES', 'EPERM', 'ENOSPC', 'EIO', 'EBUSY', 'unknown'].includes(entry.storageError)) {
+          details.storageError = entry.storageError;
+        }
         if (entry.stage === 'rendererExited' && ['clean-exit', 'abnormal-exit', 'killed', 'crashed', 'oom',
           'launch-failed', 'integrity-failure', 'memory-eviction'].includes(entry.outcome)) details.outcome = entry.outcome;
         if (['nativeVideoFirstFrameTimeout', 'nativeVideoFrameAdjustmentFailed', 'nativeVideoTrackWriteFailed',
@@ -87,14 +94,36 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           'sharedTextureSlotReleaseFailed', 'captureTargetClosed', 'remoteControlInputFailed',
           'nativeVideoBridgeUnavailable', 'videoSourceExpired', 'videoCaptureAlreadyRunning',
           'obsCaptureGameDetectionFailed', 'obsCaptureVersionUnsupported', 'dxgiMonitorUnavailable',
-          'dxgiAdapterMismatch', 'obsGameTargetMismatch', 'obsGameBindingUnavailable'].includes(entry.code)) details.code = entry.code;
+          'dxgiAdapterMismatch', 'obsGameTargetMismatch', 'obsGameBindingUnavailable',
+          'captureSettingsUnsupported', 'captureBorderAccessDenied', 'obsCaptureHostFailed',
+          'obsCaptureHostDisposed', 'obsCaptureSlotReleaseUnavailable', 'obsCaptureAlreadyRunning', 'obsCaptureStopping',
+          'obsCaptureProtocolLineTooLong', 'obsCaptureProtocolLineInvalid', 'obsCaptureProtocolJsonInvalid',
+          'obsCaptureProtocolEventInvalid', 'obsCaptureFrameInvalid', 'obsCaptureFrameDeliveryFailed',
+          'obsCaptureSuspensionInvalid', 'obsCaptureDiagnosticsInvalid', 'obsCaptureConfigurationInvalid',
+          'obsCaptureConfigurationRejected', 'obsCaptureDiagnosticsUnavailable', 'obsCaptureDiagnosticsTimeout',
+          'obsCaptureConfigurationInProgress', 'obsCaptureConfigurationTimeout', 'obsCaptureConfigurationRollbackFailed',
+          'obsCaptureModuleLoadFailed', 'obsCaptureHostClosed', 'obsCaptureHostClosedUnexpectedly',
+          'obsCaptureHostClosedBeforeStart', 'sharedTextureUnavailable', 'sharedTextureDeviceUnavailable',
+          'sharedTextureSourceInvalid', 'sharedTextureAcquireFailed', 'sharedTextureGpuWaitFailed',
+          'sharedTextureGpuStalled', 'sharedTextureReleaseFailed',
+          'invalidCaptureArguments', 'invalidCaptureCommand', 'obsStartupFailed', 'obsVideoInitFailed',
+          'obsAudioInitFailed', 'obsVideoIdleFailed', 'obsSceneUnavailable', 'obsDisplaySceneAddFailed',
+          'obsDisplaySourceUnavailable', 'obsGameSourceUnavailable', 'obsWindowRuntimeUnavailable',
+          'obsWindowCaptureStartFailed', 'obsWindowCaptureStopped', 'obsWindowSourceUnavailable',
+          'obsWindowBindingUnavailable', 'obsWindowTargetMismatch'].includes(entry.code)) details.code = entry.code;
         if (['window', 'monitor'].includes(entry.sourceKind)) details.sourceKind = entry.sourceKind;
         if (typeof entry.hostReused === 'boolean') details.hostReused = entry.hostReused;
         for (const key of ['repeatCount', 'importedCount', 'pendingReleaseCount', 'width', 'height', 'maxFps',
           'adapterIndex', 'sourceWidth', 'sourceHeight']) {
           if (Number.isSafeInteger(entry[key]) && entry[key] >= 0 && entry[key] <= 1_000_000) details[key] = entry[key];
         }
-        if (['dxgi', 'wgc-window', 'game'].includes(entry.captureMethod)) details.captureMethod = entry.captureMethod;
+        if (['dxgi', 'wgc-window', 'bitblt-window', 'game'].includes(entry.captureMethod)) details.captureMethod = entry.captureMethod;
+        if (['auto', 'game', 'bitblt', 'wgc'].includes(entry.requestedMethod)) details.requestedMethod = entry.requestedMethod;
+        if (typeof entry.borderAllowed === 'boolean') details.borderAllowed = entry.borderAllowed;
+        if (typeof entry.clientArea === 'boolean') details.clientArea = entry.clientArea;
+        if (['captureSettingsUnsupported', 'captureBorderAccessDenied', 'obsWindowRuntimeUnavailable'].includes(entry.windowFallbackReason)) {
+          details.windowFallbackReason = entry.windowFallbackReason;
+        }
         if (['DuplicateOutput1', 'DuplicateOutput'].includes(entry.captureApi)) details.captureApi = entry.captureApi;
         if (typeof entry.adapterMatched === 'boolean') details.adapterMatched = entry.adapterMatched;
         if (['graceful', 'forced', 'unexpected', 'beforeStart'].includes(entry.stopMode)) details.stopMode = entry.stopMode;

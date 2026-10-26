@@ -10,6 +10,7 @@ const { randomUUID } = require('node:crypto');
 const { MediaHelperManager } = require('./media-helper.cjs');
 const { ObsCaptureHostManager } = require('./obs-capture-host.cjs');
 const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
+const { createDiagnosticReportStore, parseDiagnosticReport } = require('./diagnostic-reports.cjs');
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
 const { matchNativeVideoSourceThumbnails, monitorDisplayId } = require('./native-video-thumbnails.cjs');
 const { parseAccessLink, accessLinkFromArguments, parseManualAccessLink } = require('./access-links.cjs');
@@ -110,6 +111,8 @@ let nativeMicrophoneSession;
 let lastMicrophoneDroppedChunks = 0;
 const helperProcessBridges = new WeakMap();
 const writeMediaDiagnostic = createMediaDiagnostics(resolve(app.getPath('userData'), 'screen-share-error.log'));
+const savedDiagnosticReports = createDiagnosticReportStore(resolve(app.getPath('userData'), 'diagnostics'));
+let diagnosticReportsGeneration = 0;
 const diagnosticStartedAt = Date.now();
 const diagnosticStartedMonotonicAt = performance.now();
 const sourceTimingRecordedAt = new Map();
@@ -1303,6 +1306,60 @@ ipcMain.handle('diagnostics:process-metrics', (event) => {
     { role: 'activity', children: activityMonitor.diagnosticProcesses(), executablePath: activityHelperPath() },
   ], process.platform === 'win32');
 });
+ipcMain.handle('diagnostics:checkpoint', async (event, text) => {
+  if (!trustedSender(event) || allowQuitAfterMediaHelper) throw new Error('当前不能保存诊断。');
+  const generation = diagnosticReportsGeneration;
+  const report = parseDiagnosticReport(text);
+  // 自动落盘不保存手填说明；事件沿用导出的固定字段与错误码过滤。
+  report.notes = '';
+  await writeMediaDiagnostic.flush();
+  const eventStartedAt = Math.min(diagnosticStartedAt, Date.parse(report.startedAt));
+  const eventEndedAt = Date.now();
+  report.events = await readDiagnosticEvents(resolve(app.getPath('userData'), 'screen-share-error.log'), eventStartedAt, eventEndedAt);
+  report.eventWindow = { startedAt: new Date(eventStartedAt).toISOString(), endedAt: new Date(eventEndedAt).toISOString() };
+  report.eventLimit = '最多读取当前及上一份日志各256KiB，保留本次启动至快照最近200项；不含异常正文';
+  report.environment = { appVersion: app.getVersion(), electronVersion: process.versions.electron,
+    platform: process.platform, arch: process.arch, osVersion: osRelease(), gpuFeatures: app.getGPUFeatureStatus(), gpuUtilization: null };
+  report.persistence = { savedAt: new Date().toISOString(), checkpointIntervalMs: 15_000,
+    storage: 'installation-data-directory', unexpectedExitMayLoseLastInterval: true };
+  if (generation !== diagnosticReportsGeneration) return null;
+  try { return await savedDiagnosticReports.save(JSON.stringify(report)); }
+  catch (error) {
+    void writeMediaDiagnostic({ stage: 'diagnosticSnapshotFailed',
+      storageError: ['EACCES', 'EPERM', 'ENOSPC', 'EIO', 'EBUSY'].includes(error.code) ? error.code : 'unknown' });
+    throw error;
+  }
+});
+ipcMain.handle('diagnostics:saved', (event) => {
+  if (!trustedSender(event) || closing) throw new Error('当前不能读取已保存报告。');
+  return savedDiagnosticReports.info();
+});
+ipcMain.handle('diagnostics:clear-saved', (event) => {
+  if (!trustedSender(event) || closing) throw new Error('当前不能清除已保存报告。');
+  diagnosticReportsGeneration++;
+  return savedDiagnosticReports.clear();
+});
+ipcMain.handle('diagnostics:export-saved', async (event, notes) => {
+  if (!trustedSender(event) || closing || diagnosticExportPending) throw new Error('当前不能导出诊断。');
+  if (typeof notes !== 'string' || notes.length > 2000) throw new Error('体验说明无效。');
+  diagnosticExportPending = true;
+  try {
+    const report = await savedDiagnosticReports.previous();
+    if (!report) throw new Error('尚无上次使用的诊断报告。');
+    if (!trustedSender(event) || closing) return { saved: false };
+    const exportDirectory = resolve(app.getPath('userData'), 'exports');
+    await mkdir(exportDirectory, { recursive: true });
+    if (!trustedSender(event) || closing) return { saved: false };
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: '导出上次使用报告', defaultPath: resolve(exportDirectory, `LycanSync-diagnostics-${Date.parse(report.endedAt)}.json`),
+      filters: [{ name: 'JSON 诊断报告', extensions: ['json'] }],
+    });
+    if (result.canceled || !result.filePath || !trustedSender(event) || closing) return { saved: false };
+    // 保留上次版本和事件时间，不把本次环境或启动事件混入历史报告。
+    await writeFile(result.filePath, JSON.stringify({ ...report, notes }), 'utf8');
+    return { saved: true };
+  } finally { diagnosticExportPending = false; }
+});
 ipcMain.handle('diagnostics:export', async (event, text) => {
   if (!trustedSender(event) || closing || diagnosticExportPending) throw new Error('当前不能导出诊断。');
   if (typeof text !== 'string' || Buffer.byteLength(text) > 8 * 1024 * 1024) throw new Error('诊断报告过大或无效。');
@@ -1320,8 +1377,11 @@ ipcMain.handle('diagnostics:export', async (event, text) => {
     const events = await readDiagnosticEvents(resolve(app.getPath('userData'), 'screen-share-error.log'),
       eventStartedAt, eventEndedAt);
     if (!trustedSender(event) || closing) return { saved: false };
+    const exportDirectory = resolve(app.getPath('userData'), 'exports');
+    await mkdir(exportDirectory, { recursive: true });
+    if (!trustedSender(event) || closing) return { saved: false };
     const result = await dialog.showSaveDialog(mainWindow, {
-      title: '导出诊断报告', defaultPath: `LycanSync-diagnostics-${Date.now()}.json`,
+      title: '导出诊断报告', defaultPath: resolve(exportDirectory, `LycanSync-diagnostics-${Date.now()}.json`),
       filters: [{ name: 'JSON 诊断报告', extensions: ['json'] }],
     });
     if (result.canceled || !result.filePath || !trustedSender(event) || closing) return { saved: false };
@@ -1622,6 +1682,7 @@ app.on('before-quit', (event) => {
     }))
     .then(() => mediaHelper.shutdown())
     .catch((error) => console.error(`media-helper shutdown failed: ${error.message}`))
+    .then(() => savedDiagnosticReports.flush())
     .then(() => writeMediaDiagnostic.flush())
     .finally(() => {
       allowQuitAfterMediaHelper = true;

@@ -137,6 +137,10 @@ interface Window {
     setWindowLayout(mode: 'startup' | 'account' | 'invitation' | 'profile' | 'main', height: number): Promise<void>;
     getProcessMetrics(): Promise<DesktopProcessMetrics>;
     exportDiagnosticReport(report: string): Promise<{ saved: boolean }>;
+    saveDiagnosticSnapshot(report: string): Promise<number | null>;
+    getSavedDiagnosticReport(): Promise<{ startedAt: string; endedAt: string; clientVersion: string | null; savedAt: string; bytes: number } | null>;
+    exportSavedDiagnosticReport(notes: string): Promise<{ saved: boolean }>;
+    clearSavedDiagnosticReports(): Promise<void>;
     getSystemIdleState(): Promise<{ state: 'active' | 'idle' | 'locked' | 'unknown'; idleSeconds: number }>;
     getAutoStart(): Promise<{ supported: boolean; enabled: boolean }>;
     setAutoStart(enabled: boolean): Promise<{ supported: boolean; enabled: boolean }>;

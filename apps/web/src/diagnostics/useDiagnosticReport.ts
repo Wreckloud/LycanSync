@@ -5,6 +5,7 @@ import packageInfo from '../../package.json';
 import { SCREEN_SHARE_QUALITIES, screenShareQuality, type CustomScreenShareQuality } from '../rtc/screenShareQuality';
 
 const SAMPLE_INTERVAL_MS = 2_000;
+const CHECKPOINT_INTERVAL_MS = 15_000;
 const MAX_SAMPLES = 900;
 const MAX_DURATION_MS = 30 * 60_000;
 const MAX_SAMPLE_BYTES = 6 * 1024 * 1024;
@@ -146,7 +147,7 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
       median(playbackFps) !== null ? `本机显示约 ${median(playbackFps)} FPS。` : null,
       median(nativeCaptureFps) !== null ? `${native?.captureBackend === 'obsLibobs' ? 'OBS 渲染回调' : '原生采集收到'}约 ${median(nativeCaptureFps)} FPS。` : null,
       median(nativeProcessedFps) !== null ? `${native?.captureBackend === 'obsLibobs' ? 'OBS 宿主发出共享纹理帧' : '原生采集处理'}约 ${median(nativeProcessedFps)} FPS。` : null,
-      obsBridgeDroppedFrames !== null ? `记录期间 OBS 共享纹理槽位累计丢帧 ${obsBridgeDroppedFrames}。` : null,
+      obsBridgeDroppedFrames !== null ? `记录期间 OBS 纹理桥累计丢帧 ${obsBridgeDroppedFrames}（槽位忙或 GPU 等待跳过）。` : null,
       median(obsRenderFps) !== null ? `OBS 渲染循环约 ${median(obsRenderFps)} FPS。` : null,
       median(renderMs, 2) !== null ? `OBS 平均渲染耗时典型值 ${median(renderMs, 2)} ms。` : null,
       renderTotal > 0 ? `OBS 可比较区间延误 ${renderLagged} / ${renderTotal} 个渲染时隙。` : null,
@@ -308,6 +309,9 @@ export function useDiagnosticReport(options: {
   const notes = ref('');
   const automaticEnabled = ref(false);
   const discardedSamples = ref(0);
+  const savedSizeBytes = ref<number | null>(null);
+  const savedReport = shallowRef<Awaited<ReturnType<NonNullable<Window['lycanDesktop']>['getSavedDiagnosticReport']>>>(null);
+  const persistenceError = ref('');
   let viewing = false;
   let disposed = false;
   let generation = 0;
@@ -326,6 +330,10 @@ export function useDiagnosticReport(options: {
   let startedMonotonicAt = 0;
   let lastSampleMonotonicAt: number | null = null;
   let nextSegmentNumber = 1;
+  let lastCheckpointAt = -Infinity;
+  let checkpointPromise: Promise<void> | null = null;
+  let savedReportRefreshedAfterCheckpoint = false;
+  let savedReportGeneration = 0;
   const streamSegments = new Map<string, { sessionKey: string | null; quality: string; dimensions: string; renderConfiguration: number | null;
     segmentId: string; lastSampleIndex: number }>();
   const aliases = new Map<string, string>();
@@ -365,6 +373,7 @@ export function useDiagnosticReport(options: {
     endSettings = readSettings();
     reason.value = stopReason;
     updateTimer();
+    return checkpoint(true);
   }
   async function poll() {
     if (disposed) return;
@@ -458,6 +467,7 @@ export function useDiagnosticReport(options: {
         if (automaticRecording) trimAutomaticSamples(sample.elapsedMs);
         sampleCount.value = samples.length;
         if (!automaticRecording && samples.length >= MAX_SAMPLES) stop('limit');
+        void checkpoint();
       }
     } catch { if (!disposed && attempt === generation) error.value = '媒体统计暂时无法读取，记录中可能存在缺口。'; }
     finally { polling = false; }
@@ -477,7 +487,9 @@ export function useDiagnosticReport(options: {
     if (!automatic || !startedAt) {
       aliases.clear(); samples = []; sampleCount.value = 0; nextSegmentNumber = 1;
       sampleBytes = 0; sampleSizes = []; sampleSequence = 0; discardedSamples.value = 0;
+      savedSizeBytes.value = null;
       startSettings = readSettings(); startedAt = new Date().toISOString(); startedMonotonicAt = performance.now();
+      lastCheckpointAt = -Infinity;
     }
     automaticRecording = automatic;
     streamSegments.clear(); endSettings = null; endedAt = null; lastSampleMonotonicAt = null;
@@ -497,9 +509,7 @@ export function useDiagnosticReport(options: {
     catch { error.value = '本次自动诊断选择已生效，但无法保存；下次启动请检查开关。'; }
   }
 
-  async function save(notes: string) {
-    if (disposed || saving.value || (recording.value && !automaticRecording) || (!startedAt && !window.lycanDesktop)) return;
-    saving.value = true; error.value = '';
+  function createReport(notes: string) {
     const exportedSamples = samples.slice();
     if (discardedSamples.value && exportedSamples.length) {
       // 保留窗口外的基线不可冒充窗口内区间；导出副本不影响继续采样。
@@ -560,9 +570,96 @@ export function useDiagnosticReport(options: {
         '远端人数不等于观看人数；编码层启用不等于实际发送，无观看者且无有效码率时不能只凭bandwidth标签判断网络故障',
         'helper版本与采集后端以各样本为准；停止后原生统计可保留最后快照，以state判断是否仍在采集',
         '页面背压与原生限帧丢弃分别计数，写入完成不代表远端收到',
-        '记录仅保留在当前登录页面内存；退出或关闭应用前请主动导出'] };
+        window.lycanDesktop
+          ? '详细采样按约15秒间隔保存在安装目录；正常关闭补存，异常退出可能丢失最后一个保存间隔；重开后可导出上次报告'
+          : '记录仅保留在当前登录页面内存；退出或关闭应用前请主动导出'] };
+    return report;
+  }
+
+  function hasUsage(sample: DiagnosticSample) {
+    return sample.roomState !== null && sample.roomState !== 'disconnected'
+      || sample.streams.length > 0 || sample.audio.length > 0 || sample.failures.length > 0;
+  }
+
+  async function refreshSavedReport() {
+    const bridge = window.lycanDesktop;
+    if (!bridge?.getSavedDiagnosticReport) return;
+    const attempt = savedReportGeneration;
     try {
-      const text = JSON.stringify(report);
+      const value = await bridge.getSavedDiagnosticReport();
+      if (!disposed && attempt === savedReportGeneration) savedReport.value = value;
+    } catch {
+      if (!disposed && attempt === savedReportGeneration) persistenceError.value = '无法读取已保存报告，可关闭自动记录后清除详细报告再重试。';
+    }
+  }
+
+  async function checkpoint(force = false): Promise<void> {
+    const bridge = window.lycanDesktop;
+    if (!bridge?.saveDiagnosticSnapshot || !startedAt || !samples.length
+        || (force ? !samples.some(hasUsage) : !hasUsage(samples[samples.length - 1]))) return;
+    if (checkpointPromise) {
+      if (force) { await checkpointPromise; return checkpoint(true); }
+      return;
+    }
+    if (!force && performance.now() - lastCheckpointAt < CHECKPOINT_INTERVAL_MS) return;
+    lastCheckpointAt = performance.now();
+    const text = JSON.stringify(createReport(''));
+    checkpointPromise = bridge.saveDiagnosticSnapshot(text)
+      .then(async (bytes) => {
+        if (disposed || bytes === null) return;
+        savedSizeBytes.value = bytes;
+        persistenceError.value = '';
+        if (!savedReportRefreshedAfterCheckpoint) {
+          await refreshSavedReport(); savedReportRefreshedAfterCheckpoint = true;
+        }
+      })
+      .catch(() => { if (!disposed) persistenceError.value = '详细报告自动保存失败，当前内存记录仍可导出；请检查安装目录空间和写入权限。'; })
+      .finally(() => { checkpointPromise = null; });
+    await checkpointPromise;
+  }
+
+  async function flush() {
+    if (recording.value) await stop('closed');
+    else await checkpoint(true);
+  }
+
+  async function savePrevious() {
+    const bridge = window.lycanDesktop;
+    if (!bridge || disposed || saving.value) return;
+    saving.value = true; error.value = '';
+    try { await bridge.exportSavedDiagnosticReport(notes.value.slice(0, 2000)); }
+    catch { if (!disposed) error.value = '无法导出上次使用报告，请检查保存位置后重试。'; }
+    finally { saving.value = false; }
+  }
+
+  async function clearSaved() {
+    const bridge = window.lycanDesktop;
+    if (!bridge || disposed || saving.value || recording.value) return;
+    saving.value = true; error.value = '';
+    generation++;
+    savedReportGeneration++;
+    try {
+      await checkpointPromise;
+      await bridge.clearSavedDiagnosticReports();
+      if (disposed) return;
+      aliases.clear(); streamSegments.clear(); samples = []; sampleSizes = []; sampleBytes = 0;
+      sampleSequence = 0; nextSegmentNumber = 1; sampleCount.value = 0; discardedSamples.value = 0;
+      startedAt = null; endedAt = null; startSettings = null; endSettings = null; lastSampleMonotonicAt = null;
+      savedReport.value = null; persistenceError.value = ''; reason.value = ''; notes.value = '';
+      savedSizeBytes.value = null;
+      latest.value = null;
+      savedReportRefreshedAfterCheckpoint = false;
+      lastCheckpointAt = -Infinity;
+      sampler = createMediaDiagnosticsSampler();
+    } catch { if (!disposed) error.value = '无法清除详细报告，请检查安装目录写入权限后重试。'; }
+    finally { saving.value = false; }
+  }
+
+  async function save(notes: string) {
+    if (disposed || saving.value || (recording.value && !automaticRecording) || (!startedAt && !window.lycanDesktop)) return;
+    saving.value = true; error.value = '';
+    try {
+      const text = JSON.stringify(createReport(notes));
       if (window.lycanDesktop) await window.lycanDesktop.exportDiagnosticReport(text);
       else {
         const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
@@ -574,6 +671,7 @@ export function useDiagnosticReport(options: {
   }
   watch(options.room, () => {
     if (!automaticEnabled.value) stop('roomChanged');
+    else void checkpoint(true);
     generation++; latest.value = null; sampler = createMediaDiagnosticsSampler(); streamSegments.clear();
     if (automaticEnabled.value) void poll();
   }, { flush: 'sync' });
@@ -583,7 +681,8 @@ export function useDiagnosticReport(options: {
     automaticEnabled.value = stored === null ? options.automaticDefault ?? Boolean(window.lycanDesktop) : stored === 'true';
   } catch { error.value = '无法读取自动诊断设置，已暂停自动记录；可手动开启。'; }
   if (automaticEnabled.value) start(true);
+  void refreshSavedReport();
   onScopeDispose(() => { stop('closed'); disposed = true; generation++; if (timer) clearInterval(timer); });
   return { latest, recording, automaticEnabled, discardedSamples, sampleCount, reason, error, saving, notes,
-    setViewing, setAutomatic, start, stop, save };
+    savedReport, savedSizeBytes, persistenceError, setViewing, setAutomatic, start, stop, save, savePrevious, clearSaved, flush };
 }

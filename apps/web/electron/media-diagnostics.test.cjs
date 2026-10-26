@@ -29,6 +29,51 @@ test('导出保留 DXGI、显卡匹配及停止方式证据，丢弃窗口名和
   ]);
 });
 
+test('权限导致的采集选择只导出布尔原因，不导出生命周期或进程身份', async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lycan-window-permission-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'events.jsonl');
+  const time = new Date().toISOString();
+  await writeFile(path, JSON.stringify({ time, stage: 'screenSourceReserved', requiresWindowCapture: true,
+    lifetimeName: 'private-lifetime', processId: 12345, processCreationTime: 'private-process',
+    message: 'private-window' }));
+  assert.deepEqual(await readDiagnosticEvents(path, 0, Date.parse(time)), [
+    { time, stage: 'screenSourceReserved', hresults: [], requiresWindowCapture: true },
+  ]);
+});
+
+test('采集设置、边框授权和正常目标退出保留固定原因，不放行任意错误正文', async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lycan-capture-error-codes-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'events.jsonl');
+  const time = new Date().toISOString();
+  const codes = ['captureSettingsUnsupported', 'captureBorderAccessDenied', 'obsCaptureHostFailed',
+    'obsStartupFailed', 'obsWindowRuntimeUnavailable', 'sharedTextureGpuWaitFailed', 'obsCaptureProtocolJsonInvalid',
+    'captureTargetClosed', 'obsWindowBindingUnavailable', 'obsWindowTargetMismatch',
+    'sharedTextureGpuStalled', 'sharedTextureReleaseFailed'];
+  await writeFile(path, [...codes, 'private-code'].map(code => JSON.stringify({ time,
+    stage: code === 'captureTargetClosed' ? 'screenTargetClosed' : 'screenVideoStartFailed',
+    code, message: 'private-window-title-and-path' })).join('\n'));
+  const events = await readDiagnosticEvents(path, 0, Date.parse(time));
+  assert.deepEqual(events.slice(0, codes.length).map(entry => entry.code), codes);
+  assert.equal(events.find(entry => entry.code === 'captureTargetClosed').stage, 'screenTargetClosed');
+  assert.equal(events.at(-1).code, undefined);
+  assert.doesNotMatch(JSON.stringify(events), /private-code|private-window/);
+});
+
+test('快照保存失败只导出固定的存储错误，不导出路径或未知错误正文', async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lycan-storage-diagnostics-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'events.jsonl');
+  const time = new Date().toISOString();
+  await writeFile(path, ['ENOSPC', 'private-path'].map(storageError =>
+    JSON.stringify({ time, stage: 'diagnosticSnapshotFailed', storageError, message: 'private-path' })).join('\n'));
+  const events = await readDiagnosticEvents(path, 0, Date.parse(time));
+  assert.equal(events[0].storageError, 'ENOSPC');
+  assert.equal(events[1].storageError, undefined);
+  assert.doesNotMatch(JSON.stringify(events), /private-path/);
+});
+
 test('分进程内存复用校验后的句柄，进程退出释放，不导出PID或路径，不重复计算原生工作集', () => {
   const child = Object.assign(new EventEmitter(), { pid: 123, exitCode: null, signalCode: null });
   let opens = 0, releases = 0, reads = 0;
@@ -70,7 +115,7 @@ test('原生读取失败和平台不支持均为不可用，不伪报未运行�
 test('诊断IPC只读取现存的三类子进程，不接受页面指定PID和不可信来源', () => {
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = main.indexOf("ipcMain.handle('diagnostics:process-metrics'");
-  const end = main.indexOf("ipcMain.handle('diagnostics:export'", start);
+  const end = main.indexOf("ipcMain.handle('diagnostics:checkpoint'", start);
   let handler, captured;
   const scope = {
     ipcMain: { handle: (_name, callback) => { handler = callback; } }, trustedSender: (event) => event.trusted,
@@ -280,7 +325,7 @@ function exportFixture() {
   const end = main.indexOf("ipcMain.handle('presence:system-idle-state'", start);
   assert.ok(start >= 0 && end > start);
   let exportReport;
-  const calls = { read: 0, dialog: 0, writes: [], ranges: [], flushed: 0 };
+  const calls = { read: 0, dialog: 0, writes: [], ranges: [], flushed: 0, exportDirectory: null, dialogOptions: null };
   const state = { closing: false, diagnosticExportPending: false, trustedSender: () => true,
     diagnosticStartedAt: Date.parse('2026-10-14T00:00:00Z'), writeMediaDiagnostic: { flush: async () => { calls.flushed++; } },
     Buffer, JSON, Date, Error, resolve: join, mainWindow: {}, process: { versions: { electron: 'test' }, platform: 'win32', arch: 'x64' },
@@ -289,7 +334,10 @@ function exportFixture() {
       calls.read++; calls.ranges.push([start, end]); assert.ok(calls.flushed >= calls.read);
       return [{ stage: 'test' }];
     },
-    dialog: { showSaveDialog: async () => { calls.dialog++; return { canceled: false, filePath: '/selected/report.json' }; } },
+    mkdir: async directory => { calls.exportDirectory = directory; },
+    dialog: { showSaveDialog: async (_window, options) => {
+      calls.dialog++; calls.dialogOptions = options; return { canceled: false, filePath: '/selected/report.json' };
+    } },
     writeFile: async (...args) => { calls.writes.push(args); },
     ipcMain: { handle: (_name, callback) => { exportReport = callback; } },
   };
@@ -311,6 +359,8 @@ test('诊断导出仅允许可信页面，验证格式并通过用户选址写�
   await exportReport({}, text);
   assert.equal(calls.writes.length, 1);
   assert.equal(calls.writes[0][0], '/selected/report.json');
+  assert.equal(calls.exportDirectory, join('/private', 'exports'));
+  assert.ok(calls.dialogOptions.defaultPath.startsWith(join('/private', 'exports') + require('node:path').sep));
   const report = JSON.parse(calls.writes[0][1]);
   assert.equal(calls.ranges[0][0], state.diagnosticStartedAt);
   assert.ok(calls.ranges[0][1] > Date.parse(report.endedAt));
@@ -337,4 +387,12 @@ test('选址取消或关闭期间迟到结果不写入，保存失败后仍可�
   state.writeFile = async (...args) => { calls.writes.push(args); };
   await exportReport({}, text);
   assert.equal(calls.writes.length, 1);
+});
+
+test('默认导出目录准备期间关闭窗口，不再弹出迟到的保存对话框', async () => {
+  const { state, calls, text, exportReport } = exportFixture();
+  state.mkdir = async () => { state.closing = true; };
+  await exportReport({}, text);
+  assert.equal(calls.dialog, 0);
+  assert.equal(calls.writes.length, 0);
 });

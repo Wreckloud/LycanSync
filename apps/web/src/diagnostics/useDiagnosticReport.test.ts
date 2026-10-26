@@ -49,6 +49,74 @@ beforeEach(() => {
 });
 afterEach(() => { scopes.splice(0).forEach((scope) => scope.stop()); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
+function persistenceBridge() {
+  const bridge = window.lycanDesktop!;
+  bridge.saveDiagnosticSnapshot = vi.fn(async () => 2048);
+  bridge.getSavedDiagnosticReport = vi.fn(async () => ({ startedAt: '2026-10-25T00:00:00Z',
+    endedAt: '2026-10-25T00:01:00Z', savedAt: '2026-10-25T00:01:00Z', clientVersion: '0.1.18', bytes: 4096 }));
+  bridge.exportSavedDiagnosticReport = vi.fn(async () => ({ saved: true }));
+  bridge.clearSavedDiagnosticReports = vi.fn(async () => {});
+  return bridge;
+}
+
+it('复用现有采样低频保存脱敏报告，正常关闭补存，体验说明不自动落盘', async () => {
+  const { report } = setup(true);
+  const bridge = persistenceBridge();
+  report.notes.value = 'private feedback';
+  await vi.advanceTimersByTimeAsync(0);
+  expect(bridge.saveDiagnosticSnapshot).toHaveBeenCalledOnce();
+  expect(report.savedSizeBytes.value).toBe(2048);
+  await vi.advanceTimersByTimeAsync(14000);
+  expect(bridge.saveDiagnosticSnapshot).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(bridge.saveDiagnosticSnapshot).toHaveBeenCalledTimes(2);
+  await report.flush();
+  expect(bridge.saveDiagnosticSnapshot).toHaveBeenCalledTimes(3);
+  const text = vi.mocked(bridge.saveDiagnosticSnapshot).mock.calls.at(-1)![0];
+  const stored = JSON.parse(text);
+  expect(stored.stopReason).toBe('closed');
+  expect(stored.notes).toBe('');
+  expect(stored.samples.length).toBeGreaterThan(1);
+  expect(text).not.toMatch(/private feedback|private-user-id|私人昵称|private-track-id/);
+  expect(report.recording.value).toBe(false);
+});
+
+it('无媒体使用只读取进程的启动不覆盖上次报告，恢复入口仍可导出', async () => {
+  const { report, room } = setup(true);
+  const bridge = persistenceBridge();
+  room.value = null;
+  collect.mockImplementation(async () => ({ ...snapshot(), roomState: null, participantCount: 0, streams: [] }));
+  await vi.advanceTimersByTimeAsync(32000);
+  expect(bridge.saveDiagnosticSnapshot).not.toHaveBeenCalled();
+  expect(report.savedSizeBytes.value).toBeNull();
+  await report.flush();
+  expect(bridge.saveDiagnosticSnapshot).not.toHaveBeenCalled();
+  report.notes.value = '上次使用卡顿';
+  await report.savePrevious();
+  expect(bridge.exportSavedDiagnosticReport).toHaveBeenCalledWith('上次使用卡顿');
+});
+
+it('持久化失败明确提示且保留内存导出；关闭开关后才可清除，旧样本不回写', async () => {
+  const { report, exportDiagnosticReport } = setup(true);
+  const bridge = persistenceBridge();
+  vi.mocked(bridge.saveDiagnosticSnapshot).mockRejectedValueOnce(new Error('disk full'));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(report.persistenceError.value).toContain('自动保存失败');
+  expect(report.savedSizeBytes.value).toBeNull();
+  await report.save('仍可导出');
+  expect(exportDiagnosticReport).toHaveBeenCalledOnce();
+  await report.clearSaved();
+  expect(bridge.clearSavedDiagnosticReports).not.toHaveBeenCalled();
+  report.setAutomatic(false);
+  await report.clearSaved();
+  expect(bridge.clearSavedDiagnosticReports).toHaveBeenCalledOnce();
+  expect(report.sampleCount.value).toBe(0);
+  expect(report.savedSizeBytes.value).toBeNull();
+  const writes = vi.mocked(bridge.saveDiagnosticSnapshot).mock.calls.length;
+  await vi.advanceTimersByTimeAsync(20000);
+  expect(bridge.saveDiagnosticSnapshot).toHaveBeenCalledTimes(writes);
+});
+
 it('桌面首次进入默认自动记录，显式保存的关闭选择优先于默认值', async () => {
   const { scope, room, settings } = setup();
   scope.stop();
@@ -567,7 +635,7 @@ it('自动恢复失败保留最后确认帧率并在摘要提示，不把用户�
   expect(result.summary.segments[0].warnings).toContain('采集帧率自动调整失败，保留最后确认的运行目标；不代表已恢复用户帧率。');
 });
 
-it('OBS 摘要分开记录宿主、页面和编码帧率，槽位丢帧只取本段增量', async () => {
+it('OBS 摘要分开记录宿主、页面和编码帧率，纹理桥丢帧只取本段增量', async () => {
   const first = snapshot();
   first.native = { helperVersion: '32.2.2', captureBackend: 'obsLibobs', state: 'running',
     sessionId: 'private-obs-session', captureSuspended: false, frameWidth: 1920, frameHeight: 1080,
@@ -602,7 +670,7 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，槽位丢帧只取本
   expect(result.summary.segments[0]).toMatchObject({ captureMode: 'obsLibobs',
     typicalFps: { nativeCapture: 60, nativeProcessed: 45, pageReceived: 42, pageSubmitted: 40,
       encodingLayers: [{ typicalFps: 39 }] } });
-  expect(result.summary.segments[0].observations).toContain('记录期间 OBS 共享纹理槽位累计丢帧 30。');
+  expect(result.summary.segments[0].observations).toContain('记录期间 OBS 纹理桥累计丢帧 30（槽位忙或 GPU 等待跳过）。');
   expect(result.summary.segments[0].warnings).toContain('OBS 帧计数截至宿主事件发出，不代表 Electron 已成功导入纹理或 LiveKit 已编码。');
   expect(result.samples.map((sample: { native: { obsBridgeDroppedFrames: number } }) => sample.native.obsBridgeDroppedFrames))
     .toEqual([20, 50]);

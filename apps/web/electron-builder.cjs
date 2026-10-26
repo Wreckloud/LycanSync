@@ -30,6 +30,7 @@ module.exports = {
     'electron/media-helper.cjs',
     'electron/obs-capture-host.cjs',
     'electron/media-diagnostics.cjs',
+    'electron/diagnostic-reports.cjs',
     'electron/native-video-thumbnails.cjs',
     'node_modules/**/*',
   ],
