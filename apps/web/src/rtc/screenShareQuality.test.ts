@@ -7,6 +7,7 @@ afterEach(() => vi.unstubAllGlobals());
 it('画质保留三个预设，自定义固定在最后，帧率最高 120', () => {
   expect(SCREEN_SHARE_QUALITIES.map((quality) => quality.id)).toEqual(['highFrameRate', 'standard', 'economy', 'custom']);
   expect(SCREEN_SHARE_FRAME_RATES).toEqual([120, 60, 30]);
+  expect(SCREEN_SHARE_RESOLUTIONS).toEqual([1440, 1080, 720]);
 });
 
 it('自定义及常用画质优先保留帧率，节省流量使用平衡策略', () => {
@@ -60,7 +61,7 @@ it('全部自定义组合贯通尺寸、帧率及有限码率，不接受额外�
   }
   const setItem = vi.fn();
   vi.stubGlobal('localStorage', { setItem });
-  for (const custom of [{ resolution: 2160, fps: 60 }, { resolution: 1080, fps: 90 }, { resolution: 1440, fps: 180 }]) {
+  for (const custom of [{ resolution: 2160, fps: 60 }, { resolution: 360, fps: 30 }, { resolution: 1080, fps: 90 }, { resolution: 1440, fps: 180 }]) {
     expect(() => saveScreenShareQuality('custom', custom as never)).toThrow('invalidCustomScreenShareQuality');
   }
   expect(setItem).not.toHaveBeenCalled();
@@ -84,6 +85,17 @@ it('未手动设码率的旧 180 配置沿用新的推荐值，其他非法配�
   expect(() => readScreenShareQuality()).toThrow('invalidCustomScreenShareQuality');
   customQuality = { resolution: 1440, fps: 144 };
   expect(() => readScreenShareQuality()).toThrow('invalidCustomScreenShareQuality');
+});
+
+it.each([['custom', 30], ['standard', 60], ['custom', 180]])('旧 360p 配置在 %s、%s FPS 下迁到 720p，保留手动码率', (quality, fps) => {
+  const setItem = vi.fn();
+  vi.stubGlobal('localStorage', { getItem: () => JSON.stringify({ quality,
+    customQuality: { resolution: 360, fps, bitrateMbps: 6 } }), setItem });
+  const preference = readScreenShareQuality();
+  expect(preference).toEqual({ quality, customQuality: { resolution: 720, fps: fps === 180 ? 120 : fps, bitrateMbps: 6 } });
+  expect(setItem).not.toHaveBeenCalled();
+  saveScreenShareQuality(preference.quality, preference.customQuality);
+  expect(JSON.parse(setItem.mock.calls[0][1]).customQuality).toEqual(preference.customQuality);
 });
 
 it('固定模式与相同尺寸帧率的自定义共用推荐码率，手动上限不影响固定模式', () => {

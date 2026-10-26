@@ -109,6 +109,7 @@ it('实际模板把共享动作和画质分成两块，自定义最后；窄窗�
     const html = await renderToString(app);
     expect(html).toContain('call-share-actions');
     expect(html).toContain('call-quality-menu');
+    expect(html.includes('aria-label="返回共享选项"')).toBe(placement === 'compact');
     expect(html.indexOf('value="highFrameRate"')).toBeLessThan(html.indexOf('value="standard"'));
     expect(html.indexOf('value="standard"')).toBeLessThan(html.indexOf('value="economy"'));
     expect(html.indexOf('value="economy"')).toBeLessThan(html.indexOf('value="custom"'));
