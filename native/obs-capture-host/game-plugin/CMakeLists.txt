@@ -8,6 +8,10 @@ file(READ "${capture_source}/game-capture.c" game_capture_source)
 if(NOT game_capture_source MATCHES "lycan_game_capture_get_target")
   message(FATAL_ERROR "The exact-window patch must be applied before building the game plugin")
 endif()
+file(READ "${capture_source}/window-capture.c" window_capture_source)
+if(NOT window_capture_source MATCHES "lycan_window_get_target")
+  message(FATAL_ERROR "The exact-window patch must be applied before building the window plugin")
+endif()
 
 # 编译固定上游插件及其真实依赖，不复制采集算法，不重编官方图形钩子或注入辅助程序。
 add_library(lycansync-bound-win-capture MODULE

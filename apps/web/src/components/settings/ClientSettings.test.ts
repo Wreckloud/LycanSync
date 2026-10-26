@@ -32,18 +32,18 @@ function setup(active = true) {
   const savePreferences = vi.fn();
   const exposed = vi.fn();
   // 执行真实组件监听和更新流程，IPC 只返回受控数据，不修改系统设置。
-  const settings = scope.run(() => runInNewContext(`${compiled}\n({ borderDescription, autoStartDescription,
+  const settings = scope.run(() => runInNewContext(`${compiled}\n({ autoStartDescription,
     autoStartEnabled, autoStartBusy, autoStartError, screenPreferences, screenError,
     updateAutoStart, updateScreenPreference, checkUpdates, cancelUpdate, confirmingUpdate, updateDescription })`, {
     computed, reactive, ref, watch, useClientUpdate, Error, window: { lycanDesktop: bridge },
     defineProps: () => props, defineEmits: () => vi.fn(), defineExpose: exposed,
     readScreenSharePreferences: () => ({ hideCursor: false, hideBorder: false }), saveScreenSharePreferences: savePreferences,
   })) as {
-    borderDescription: { value: string }; autoStartDescription: { value: string };
+    autoStartDescription: { value: string };
     autoStartEnabled: { value: boolean }; autoStartBusy: { value: boolean }; autoStartError: { value: string };
     screenPreferences: { hideCursor: boolean; hideBorder: boolean }; screenError: { value: string };
     updateAutoStart: (event: Event) => Promise<void>;
-    updateScreenPreference: (key: 'hideCursor' | 'hideBorder', event: Event) => void;
+    updateScreenPreference: (key: 'hideCursor', event: Event) => void;
     checkUpdates: () => Promise<void>; cancelUpdate: () => void; confirmingUpdate: { value: boolean };
     updateDescription: { value: string };
   };
@@ -78,14 +78,12 @@ it('其他设置栏目不查更新，进入客户端栏目只查一次并更新�
 it('查询完成前显示读取中，仅确定不支持后显示限制', async () => {
   const { scope, settings, support, autoStart, bridge } = setup();
   try {
-    expect(settings.borderDescription.value).toContain('正在确认');
     expect(settings.autoStartDescription.value).toContain('正在读取');
     await settings.updateAutoStart(checked);
     expect(bridge.setAutoStart).not.toHaveBeenCalled();
     support.resolve({ hideCursor: true, hideBorder: false });
     autoStart.resolve({ supported: false, enabled: false });
     await nextTick();
-    expect(settings.borderDescription.value).toContain('当前系统无法');
     expect(settings.autoStartDescription.value).toContain('仅 Windows 安装版支持');
   } finally { scope.stop(); }
 });
@@ -99,7 +97,6 @@ it('查询失败明确报错，不将未确认的支持情况显示为不支持'
     await nextTick();
     expect(settings.screenError.value).toContain('无法确认');
     expect(settings.autoStartError.value).toContain('无法读取');
-    expect(settings.borderDescription.value).toContain('尚未确认');
     expect(settings.autoStartDescription.value).toContain('尚未确认');
   } finally { scope.stop(); }
 });
@@ -109,8 +106,6 @@ it('共享偏好只保存已支持的设置，保存失败回退并提示', asyn
   try {
     support.resolve({ hideCursor: true, hideBorder: false });
     await nextTick();
-    settings.updateScreenPreference('hideBorder', checked);
-    expect(savePreferences).not.toHaveBeenCalled();
     settings.updateScreenPreference('hideCursor', checked);
     expect(settings.screenPreferences.hideCursor).toBe(true);
     savePreferences.mockImplementationOnce(() => { throw new Error('storage denied'); });

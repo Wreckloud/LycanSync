@@ -5,6 +5,7 @@
 #include "window_capture.h"
 #include "game_capture.h"
 #include "screen_audio.h"
+#include "gpu_frame_wait.h"
 
 #include <windows.h>
 #include <d3d11.h>
@@ -33,6 +34,7 @@ static_assert(LIBOBS_API_VER == MAKE_SEMANTIC_VERSION(32, 2, 2), "OBS 32.2.2 hea
 
 constexpr size_t kTextureSlotCount = 3;
 constexpr auto kGpuFenceTimeout = std::chrono::milliseconds(250);
+constexpr auto kGpuStallTimeout = std::chrono::seconds(5);
 
 struct TextureSlot {
   Microsoft::WRL::ComPtr<ID3D11Texture2D> d3d_texture;
@@ -40,6 +42,8 @@ struct TextureSlot {
   Microsoft::WRL::ComPtr<ID3D11Query> gpu_ready;
   HANDLE shared_handle = nullptr;
   bool busy = false;
+  bool gpu_pending = false;
+  std::chrono::steady_clock::time_point gpu_pending_since;
 };
 
 struct HostState {
@@ -54,6 +58,13 @@ struct HostState {
   bool texture_setup_failed = false;
   bool window_source = false;
   bool game_source = false;
+  const char *capture_method = "dxgi";
+  std::string requested_method = "auto";
+  bool border_allowed = false;
+  const char *window_fallback_reason = nullptr;
+  bool gpu_wait_reported = false;
+  size_t next_slot = 0;
+  std::optional<std::chrono::steady_clock::time_point> mutex_wait_started;
   WindowVideoTarget window_target;
   bool suspended = false;
   bool configuration_paused = false;
@@ -116,9 +127,15 @@ void write_capture_evidence(std::string_view stage, uint32_t width = 0, uint32_t
   const std::lock_guard<std::mutex> lock(g_output_mutex);
   std::cout << "{\"event\":\"captureEvidence\",\"sessionId\":\"" << g_host.session_id
             << "\",\"stage\":\"" << stage << "\",\"captureMethod\":\""
-            << (g_host.game_source ? "game" : g_host.window_source ? "wgc-window" : "dxgi")
+            << g_host.capture_method
             << "\",\"adapterIndex\":" << g_adapter_index << ",\"sourceWidth\":" << width
             << ",\"sourceHeight\":" << height;
+  if (g_host.window_source) {
+    std::cout << ",\"requestedMethod\":\"" << g_host.requested_method << "\",\"borderAllowed\":"
+              << (g_host.border_allowed ? "true" : "false") << ",\"clientArea\":"
+              << (g_host.game_source ? "false" : "true");
+    if (g_host.window_fallback_reason) std::cout << ",\"windowFallbackReason\":\"" << g_host.window_fallback_reason << "\"";
+  }
   if (!g_host.window_source) std::cout << ",\"adapterMatched\":true";
   const int dxgi_api = g_dxgi_api.load();
   if (!g_host.window_source && dxgi_api) {
@@ -191,7 +208,8 @@ void write_frame_event(size_t slot_index, const TextureSlot &slot, uint64_t time
 bool gpu_operation_succeeded(HRESULT result, const char *stage) {
   if (result == S_OK) return true;
   const std::lock_guard<std::mutex> lock(g_log_mutex);
-  std::cerr << stage << " failed: 0x" << std::hex << static_cast<uint32_t>(result) << std::dec << '\n';
+  std::cerr << stage << " failed: 0x" << std::hex << std::setw(8) << std::setfill('0')
+            << static_cast<uint32_t>(result) << std::dec << '\n';
   return false;
 }
 
@@ -233,17 +251,32 @@ bool initialize_textures() {
   return true;
 }
 
-bool wait_for_gpu_frame(ID3D11DeviceContext *context, ID3D11Query *query) {
-  context->End(query);
-  context->Flush();
-  const auto deadline = std::chrono::steady_clock::now() + kGpuFenceTimeout;
-  while (std::chrono::steady_clock::now() < deadline) {
-    const HRESULT result = context->GetData(query, nullptr, 0, 0);
-    if (result == S_OK) return true;
-    if (result != S_FALSE) return false;
-    Sleep(1);
+void record_gpu_wait_timeout() {
+  ++g_host.dropped_frames;
+  if (!g_host.gpu_wait_reported) {
+    g_host.gpu_wait_reported = true;
+    write_capture_evidence("gpuDelayed");
   }
-  return false;
+}
+
+bool retire_pending_gpu_copies(ID3D11DeviceContext *context, ID3D11Device *device) {
+  for (auto &slot : g_host.slots) {
+    if (!slot.gpu_pending) continue;
+    const HRESULT result = context->GetData(slot.gpu_ready.Get(), nullptr, 0, D3D11_ASYNC_GETDATA_DONOTFLUSH);
+    if (result == S_OK) slot.gpu_pending = false;
+    else if (result != S_FALSE) {
+      gpu_operation_succeeded(result, "gpuQuery");
+      gpu_operation_succeeded(device->GetDeviceRemovedReason(), "gpuDevice");
+      g_host.texture_setup_failed = true;
+      write_event("sharedTextureGpuWaitFailed");
+      return false;
+    } else if (std::chrono::steady_clock::now() - slot.gpu_pending_since >= kGpuStallTimeout) {
+      g_host.texture_setup_failed = true;
+      write_event("sharedTextureGpuStalled");
+      return false;
+    }
+  }
+  return true;
 }
 
 void release_busy_slot(size_t slot_index) {
@@ -253,7 +286,8 @@ void release_busy_slot(size_t slot_index) {
 
 bool window_delivery_allowed(obs_source_t *source) {
   if (!g_host.window_source) return true;
-  const char *failure = g_host.game_source ? game_video_failure(source, g_host.window_target) : window_video_failure();
+  const char *failure = g_host.game_source ? game_video_failure(source, g_host.window_target)
+      : window_video_failure(source, g_host.window_target);
   if (failure) {
     g_host.texture_setup_failed = true;
     write_event(failure);
@@ -261,7 +295,7 @@ bool window_delivery_allowed(obs_source_t *source) {
   }
   const bool suspended = g_host.game_source
       ? IsIconic(g_host.window_target.window) || !IsWindowVisible(g_host.window_target.window)
-      : window_video_suspended();
+      : window_video_suspended(g_host.window_target);
   if (suspended != g_host.suspended) {
     g_host.suspended = suspended;
     const std::lock_guard<std::mutex> lock(g_output_mutex);
@@ -300,13 +334,24 @@ void render_shared_frame(void *parameter) {
     return;
   }
 
+  auto *device = static_cast<ID3D11Device *>(gs_get_device_obj());
+  Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+  if (device) device->GetImmediateContext(&context);
+  if (!device || !context) {
+    g_host.texture_setup_failed = true;
+    write_event("sharedTextureDeviceUnavailable");
+    return;
+  }
+  if (!retire_pending_gpu_copies(context.Get(), device)) return;
   size_t slot_index = kTextureSlotCount;
   {
     const std::lock_guard<std::mutex> lock(g_slot_mutex);
-    for (size_t index = 0; index < g_host.slots.size(); ++index) {
-      if (!g_host.slots[index].busy) {
+    for (size_t offset = 0; offset < g_host.slots.size(); ++offset) {
+      const size_t index = (g_host.next_slot + offset) % g_host.slots.size();
+      if (!g_host.slots[index].busy && !g_host.slots[index].gpu_pending) {
         slot_index = index;
         g_host.slots[index].busy = true;
+        g_host.next_slot = (index + 1) % g_host.slots.size();
         break;
       }
     }
@@ -317,15 +362,6 @@ void render_shared_frame(void *parameter) {
   }
 
   auto &slot = g_host.slots[slot_index];
-  auto *device = static_cast<ID3D11Device *>(gs_get_device_obj());
-  if (!device) {
-    release_busy_slot(slot_index);
-    g_host.texture_setup_failed = true;
-    write_event("sharedTextureDeviceUnavailable");
-    return;
-  }
-  Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
-  device->GetImmediateContext(&context);
   gs_texture_t *rendered_texture = obs_get_main_texture();
   auto *source = rendered_texture ? static_cast<ID3D11Texture2D *>(gs_texture_get_obj(rendered_texture)) : nullptr;
   D3D11_TEXTURE2D_DESC source_description{};
@@ -340,18 +376,47 @@ void render_shared_frame(void *parameter) {
     write_event("sharedTextureSourceInvalid");
     return;
   }
-  if (!gpu_operation_succeeded(slot.keyed_mutex->AcquireSync(0, static_cast<DWORD>(kGpuFenceTimeout.count())), "acquireTexture")) {
+  const HRESULT acquired = slot.keyed_mutex->AcquireSync(0, 0);
+  if (acquired == WAIT_TIMEOUT) {
+    release_busy_slot(slot_index);
+    const auto now = std::chrono::steady_clock::now();
+    if (!g_host.mutex_wait_started) g_host.mutex_wait_started = now;
+    if (now - *g_host.mutex_wait_started >= kGpuStallTimeout) {
+      g_host.texture_setup_failed = true;
+      write_event("sharedTextureGpuStalled");
+      return;
+    }
+    record_gpu_wait_timeout();
+    return;
+  }
+  if (!gpu_operation_succeeded(acquired, "acquireTexture")) {
     release_busy_slot(slot_index);
     g_host.texture_setup_failed = true;
     write_event("sharedTextureAcquireFailed");
     return;
   }
+  g_host.mutex_wait_started.reset();
   // 直接复制 OBS 已渲染的主纹理；wrap_obj 不会把外部纹理变成可绘制目标。
   context->CopyResource(slot.d3d_texture.Get(), source);
-  const bool gpu_ready = wait_for_gpu_frame(context.Get(), slot.gpu_ready.Get());
+  const HRESULT gpu_ready = wait_for_gpu_frame(context.Get(), slot.gpu_ready.Get(), kGpuFenceTimeout);
   // GPU 完成且互斥量归还后才交付，消费者释放全部引用后再复用此槽。
   const bool mutex_released = gpu_operation_succeeded(slot.keyed_mutex->ReleaseSync(0), "releaseTexture");
-  if (!gpu_ready || !mutex_released) {
+  if (!mutex_released) {
+    release_busy_slot(slot_index);
+    g_host.texture_setup_failed = true;
+    write_event("sharedTextureReleaseFailed");
+    return;
+  }
+  if (gpu_ready == S_FALSE) {
+    // 该帧未交付；查询完成前保留此槽，不能重写纹理或覆盖仍在执行的查询。
+    slot.gpu_pending = true;
+    slot.gpu_pending_since = std::chrono::steady_clock::now();
+    release_busy_slot(slot_index);
+    record_gpu_wait_timeout();
+    return;
+  }
+  if (!gpu_operation_succeeded(gpu_ready, "gpuQuery")) {
+    gpu_operation_succeeded(device->GetDeviceRemovedReason(), "gpuDevice");
     release_busy_slot(slot_index);
     g_host.texture_setup_failed = true;
     write_event("sharedTextureGpuWaitFailed");
@@ -476,7 +541,7 @@ bool valid_frame_rate(uint32_t frame_rate) {
 }
 
 bool valid_resolution(uint32_t width, uint32_t height) {
-  return (height == 360 || height == 720 || height == 1080 || height == 1440) && width == height * 16 / 9;
+  return (height == 720 || height == 1080 || height == 1440) && width == height * 16 / 9;
 }
 
 bool parse_configure_command(std::string_view command, std::string_view &request_id, uint32_t &frame_rate,
@@ -573,8 +638,8 @@ void destroy_textures() {
 
 }  // namespace
 
-int capture(const std::array<std::string, 10> &arguments, const std::filesystem::path &module_path,
-    const std::filesystem::path &data_path, const std::filesystem::path &executable_path, obs_video_info &video) {
+int capture(const std::array<std::string, 12> &arguments, const std::filesystem::path &module_path,
+    const std::filesystem::path &data_path, obs_video_info &video) {
   // 目录只在启动时接收；采集命令只允许有界 ASCII 来源身份，不能指定插件或执行路径。
   const auto wide = [&](size_t index) { return std::wstring(arguments[index].begin(), arguments[index].end()); };
   const std::string_view source_kind(arguments[0]);
@@ -591,9 +656,14 @@ int capture(const std::array<std::string, 10> &arguments, const std::filesystem:
   const auto parsed_height = std::from_chars(height_argument.data(), height_argument.data() + height_argument.size(), height);
   const std::string_view capture_cursor_argument(arguments[2]);
   const std::string_view hide_border_argument(arguments[3]);
+  const std::string_view window_method(arguments[10]);
   if (capture_cursor_argument.size() != 1
       || (capture_cursor_argument[0] != '0' && capture_cursor_argument[0] != '1')
       || (hide_border_argument != "0" && hide_border_argument != "1")
+      || (window_method != "auto" && window_method != "game" && window_method != "bitblt" && window_method != "wgc")
+      || (source_kind == "monitor" && window_method != "auto")
+      || (source_kind == "window" && window_method == "game")
+      || (source_kind == "game" && window_method != "auto" && window_method != "game")
       || (source_kind != "monitor" && !window_source)
       || !valid_session_id(session_id)
       || parsed_frame_rate.ec != std::errc{} || parsed_frame_rate.ptr != frame_rate_argument.data() + frame_rate_argument.size()
@@ -612,6 +682,9 @@ int capture(const std::array<std::string, 10> &arguments, const std::filesystem:
   g_host.output_height = height;
   g_host.window_source = window_source;
   g_host.game_source = game_source;
+  g_host.capture_method = game_source ? "game" : "dxgi";
+  g_host.requested_method = window_method;
+  g_host.border_allowed = window_source && !game_source && hide_border_argument == "0";
   WindowVideoTarget window_target;
   if (window_source) {
     const auto parse_pointer = [](const std::wstring_view argument, uintptr_t &value) {
@@ -620,15 +693,18 @@ int capture(const std::array<std::string, 10> &arguments, const std::filesystem:
       return result.ec == std::errc{} && result.ptr == text.data() + text.size() && value != 0;
     };
     uintptr_t window_handle = 0;
-    window_target.property_name = wide(6);
-    if (!parse_pointer(wide(1), window_handle) || !parse_pointer(wide(7), window_target.property_value)
-        || !window_target.property_name.starts_with(L"LycanSync.MediaHelper.Window.")
-        || window_target.property_name.size() > 128) {
+    uintptr_t process_id = 0;
+    window_target.lifetime_name = arguments[6];
+    window_target.process_creation = arguments[11];
+    if (!parse_pointer(wide(1), window_handle) || !parse_pointer(wide(7), process_id)
+        || process_id > MAXDWORD || !window_target.lifetime_name.starts_with("Local\\LycanSync.WindowLifetime.")
+        || window_target.lifetime_name.size() > 128) {
       write_event("invalidCaptureArguments");
       return 2;
     }
     window_target.window = reinterpret_cast<HWND>(window_handle);
-    if (!window_video_target_valid(window_target)) { write_event("captureTargetClosed"); return 2; }
+    window_target.process_id = static_cast<DWORD>(process_id);
+    if (!bind_window_video_target(window_target)) { write_event("captureTargetClosed"); return 2; }
     g_host.window_target = window_target;
   }
 
@@ -655,8 +731,9 @@ int capture(const std::array<std::string, 10> &arguments, const std::filesystem:
   if (game_source) {
     source = create_game_video_source(window_target, capture_cursor_argument == "0", source_error);
   } else if (window_source) {
-    source = create_window_video_source(window_target, executable_path.parent_path().wstring(),
-        capture_cursor_argument == "0", hide_border_argument == "1", source_error);
+    source = create_window_video_source(window_target, capture_cursor_argument == "0",
+        hide_border_argument == "1", window_method, source_error, g_host.window_fallback_reason);
+    if (source) g_host.capture_method = window_video_method(source);
   } else {
     obs_data_t *settings = obs_data_create();
     // 来源 ID 的尾号不是系统显示器序号；固定版本按设备名匹配 monitor_id。
@@ -775,6 +852,8 @@ int capture(const std::array<std::string, 10> &arguments, const std::filesystem:
   }
   // 等待返回即已排空；bool 表示期间是否执行任务，false 不是清理失败。
   obs_wait_for_destroy_queue();
+  g_host.window_target = WindowVideoTarget{};
+  window_target = WindowVideoTarget{};
   // 热态仅保留小画布与低频图形循环，不保留采集、共享纹理或声音设备。
   video.base_width = video.output_width = 320;
   video.base_height = video.output_height = 180;
@@ -855,7 +934,7 @@ int wmain(int argc, wchar_t **argv) {
     if (parse_release_command(command, retired_slot)) continue;
     if (!command.starts_with("start|")) { write_event("invalidCaptureCommand"); result = 1; break; }
     auto remaining = std::string_view(command).substr(6);
-    std::array<std::string, 10> arguments;
+    std::array<std::string, 12> arguments;
     bool valid = true;
     for (size_t index = 0; index < arguments.size(); ++index) {
       const auto end = remaining.find('|');
@@ -887,7 +966,7 @@ int wmain(int argc, wchar_t **argv) {
     }
     if (!prepare()) { result = 1; break; }
     write_capture_preparation("graphicsReady", arguments[4]);
-    result = capture(arguments, argv[1], argv[2], argv[0], video);
+    result = capture(arguments, argv[1], argv[2], video);
     if (result != 0) break;
   }
   obs_shutdown();

@@ -2,7 +2,7 @@
 
 #include <obs-data.h>
 #include <windows.h>
-#include <string>
+#include "bound_game_target.h"
 
 // 仅约束官方 WASAPI 的进程来源，不读取窗口标题，也不实现另一套声音采集。
 class BoundAudioTarget {
@@ -22,7 +22,6 @@ private:
   HANDLE process_ = nullptr;
   DWORD process_id_ = 0;
   HWND window_ = nullptr;
-  HANDLE property_value_ = nullptr;
-  std::string property_name_;
+  lycan_game_target target_{};
   bool exclude_ = false;
 };

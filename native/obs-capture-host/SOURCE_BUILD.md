@@ -23,6 +23,8 @@ OBS 官方构建步骤见其原始源码的 `.github/scripts`、CMake 文件及�
 
 本项目重建宿主、精确窗口／声音绑定插件和 DXGI 图形模块。`dxgi-output-compat.patch` 只在 DuplicateOutput1 明确返回 DXGI_ERROR_UNSUPPORTED 时使用 OBS 已有的 DuplicateOutput 分支；不切换 WGC，不降低分辨率或帧率。其余 DLL、官方图形钩子和注入工具使用经过校验的原始发布二进制。提供其对应源码和原始构建材料，不宣称本机已经重建全部上游二进制或做到字节一致。
 
+`bound-window-capture.patch` 将官方普通窗口源约束到同一次选中窗口，保留其 BitBlt／WGC 算法、尺寸处理和清理，关闭内置声音子源并固定客户区范围。自动模式只在来源进入场景前按无框能力选择方式；手动选择失败不切换，不保留旧独立 WinRT 采集包装。窗口、游戏和声音共用 `bound_game_target.c` 的只读生命周期校验，依赖同版 helper 产生的内核事件，不再读取目标窗口属性。游戏、普通窗口和声音补丁及所有自有构建输入一并纳入清单；原生编译与隔离回归不替代真实设备验收。
+
 ## 许可证与边界
 
 `native/obs-capture-host` 自有部分按 GPL-2.0-or-later；OBS 和各依赖保留其版权及许可证。固定 FFmpeg 构建启用 GPL 与 version3，相关 GPL v3 文本在其完整源码和安装包许可证中提供。未更改 LycanSync 其他目录的授权声明。

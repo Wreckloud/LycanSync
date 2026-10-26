@@ -29,7 +29,7 @@ set_target_properties(lycansync_libobs PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${LYCANSYNC_OBS_SDK}/include;${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 add_executable(lycansync-obs-capture-host src/main.cpp src/window_capture.cpp src/game_capture.cpp
-  src/screen_audio.cpp src/screen_audio_pcm.cpp)
+  src/screen_audio.cpp src/screen_audio_pcm.cpp src/bound_game_target.c)
 target_compile_features(lycansync-obs-capture-host PRIVATE cxx_std_20)
 target_compile_definitions(lycansync-obs-capture-host PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(lycansync-obs-capture-host PRIVATE lycansync_libobs d3d11 dxgi windowsapp ole32)
@@ -60,6 +60,20 @@ target_compile_features(lycansync-game-failure-tests PRIVATE cxx_std_20)
 target_compile_options(lycansync-game-failure-tests PRIVATE /utf-8)
 target_link_libraries(lycansync-game-failure-tests PRIVATE lycansync_libobs user32)
 set_target_properties(lycansync-game-failure-tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")
+
+# 只替换身份与插件查询，不初始化 OBS、加载采集插件或操作真实窗口。
+add_executable(lycansync-window-failure-tests EXCLUDE_FROM_ALL tests/window_failure.cpp)
+target_compile_features(lycansync-window-failure-tests PRIVATE cxx_std_20)
+target_compile_options(lycansync-window-failure-tests PRIVATE /utf-8)
+target_link_libraries(lycansync-window-failure-tests PRIVATE lycansync_libobs user32 windowsapp)
+set_target_properties(lycansync-window-failure-tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")
+
+# 仅执行合成查询结果，不创建 D3D 设备、OBS 来源或真实纹理。
+add_executable(lycansync-gpu-frame-wait-tests EXCLUDE_FROM_ALL tests/gpu_frame_wait.cpp)
+target_compile_features(lycansync-gpu-frame-wait-tests PRIVATE cxx_std_20)
+target_compile_definitions(lycansync-gpu-frame-wait-tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(lycansync-gpu-frame-wait-tests PRIVATE /utf-8)
+set_target_properties(lycansync-gpu-frame-wait-tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")
 
 # 只测试合成 PCM 的分块与背压，不链接或初始化 OBS/WASAPI。
 add_executable(lycansync-screen-audio-pcm-tests EXCLUDE_FROM_ALL tests/screen_audio_pcm.cpp src/screen_audio_pcm.cpp)

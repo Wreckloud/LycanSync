@@ -4,7 +4,6 @@ use super::{CaptureTarget, DiscoveredSource, MAX_VIDEO_SOURCES, clean_title};
 use crate::protocol::{Capability, ErrorCode, VideoSource, VideoSourceKind};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, RECT};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Graphics::Gdi::{
@@ -21,15 +20,19 @@ use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GCW_ATOM, GWL_EXSTYLE, GWL_STYLE, GetClassLongPtrW, GetClassNameW, GetPropW,
+    EnumWindows, GCW_ATOM, GWL_EXSTYLE, GWL_STYLE, GetClassLongPtrW, GetClassNameW,
     GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
-    IsWindowVisible, MONITORINFOF_PRIMARY, RemovePropW, SetPropW, WNDENUMPROC, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_MAXIMIZE, WS_MINIMIZE,
+    IsWindowVisible, MONITORINFOF_PRIMARY, WNDENUMPROC, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_MAXIMIZE, WS_MINIMIZE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
 };
-use windows::core::{BOOL, PCWSTR, PWSTR};
+use windows::core::{BOOL, PWSTR};
+
+#[path = "window_lifetime.rs"]
+mod window_lifetime;
+use window_lifetime::{WindowLifetime, WindowObserver};
 
 pub(super) use windows::Win32::Foundation::HWND as NativeHwnd;
 pub(super) use windows::Win32::Graphics::Gdi::HMONITOR as NativeHmonitor;
@@ -65,7 +68,7 @@ pub(crate) fn monitor_and_virtual_bounds(handle: usize) -> Option<(RECT, RECT)> 
 
 #[derive(Clone, Debug)]
 pub(crate) struct WindowIdentity {
-    marker: Arc<WindowIdentityMarker>,
+    lifetime: Arc<WindowLifetime>,
     process_id: u32,
     thread_id: u32,
     process_creation_time: u64,
@@ -75,39 +78,20 @@ pub(crate) struct WindowIdentity {
     extended_style: isize,
 }
 
-#[derive(Debug)]
-struct WindowIdentityMarker {
-    window: HWND,
-    property_name: Vec<u16>,
-}
-
-// 标记只跨线程调用 User32 属性 API，身份字段创建后不变，因此包装可跨线程共享。
-unsafe impl Send for WindowIdentityMarker {}
-unsafe impl Sync for WindowIdentityMarker {}
-
-impl Drop for WindowIdentityMarker {
-    fn drop(&mut self) {
-        let _ = unsafe { RemovePropW(self.window, PCWSTR(self.property_name.as_ptr())) };
-    }
-}
-
-static NEXT_WINDOW_IDENTITY: AtomicU64 = AtomicU64::new(1);
-static WINDOW_PROPERTY_MARKER: u8 = 0;
-
-fn window_property_value() -> HANDLE {
-    HANDLE(std::ptr::addr_of!(WINDOW_PROPERTY_MARKER).cast_mut().cast())
-}
-
 const MAX_CALLBACK_SOURCES: usize = MAX_VIDEO_SOURCES;
 
 pub(super) struct WindowsDiscovery {
     client_process_id: u32,
+    observer: WindowObserver,
 }
 
 impl WindowsDiscovery {
     pub(super) fn new() -> Result<Self, ErrorCode> {
         let client_process_id = parent_process_id().ok_or(ErrorCode::SourceDiscoveryFailed)?;
-        Ok(Self { client_process_id })
+        Ok(Self {
+            client_process_id,
+            observer: WindowObserver::new()?,
+        })
     }
 
     pub(super) fn capability(&self) -> Capability {
@@ -117,7 +101,7 @@ impl WindowsDiscovery {
         }
     }
 
-    pub(super) fn discover(&self) -> Result<Vec<DiscoveredSource>, ErrorCode> {
+    pub(super) fn discover(&mut self) -> Result<Vec<DiscoveredSource>, ErrorCode> {
         let _dpi_awareness = ThreadDpiAwarenessContext::per_monitor_v2()?;
         let mut context = DiscoveryContext {
             sources: Vec::new(),
@@ -125,6 +109,7 @@ impl WindowsDiscovery {
             client_process_id: self.client_process_id,
             client_executable: process_executable(self.client_process_id),
             excluded_processes: HashMap::new(),
+            observer: &mut self.observer,
         };
         let context_pointer = &mut context as *mut DiscoveryContext;
         let monitors: MONITORENUMPROC = Some(enumerate_monitor);
@@ -172,12 +157,13 @@ impl Drop for ThreadDpiAwarenessContext {
     }
 }
 
-struct DiscoveryContext {
+struct DiscoveryContext<'a> {
     sources: Vec<DiscoveredSource>,
     helper_process_id: u32,
     client_process_id: u32,
     client_executable: Option<String>,
     excluded_processes: HashMap<u32, bool>,
+    observer: &'a mut WindowObserver,
 }
 
 unsafe extern "system" fn enumerate_monitor(
@@ -270,7 +256,7 @@ unsafe extern "system" fn enumerate_window(window: HWND, parameter: LPARAM) -> B
     if title.is_empty() {
         return BOOL(1);
     }
-    let Some(identity) = window_identity(window) else {
+    let Some(identity) = window_identity(window, context.observer) else {
         return BOOL(1);
     };
     let mut rect = RECT::default();
@@ -358,33 +344,11 @@ fn is_cloaked(window: HWND) -> bool {
     .unwrap_or(true)
 }
 
-pub(crate) fn window_identity(window: HWND) -> Option<WindowIdentity> {
+fn window_identity(window: HWND, observer: &mut WindowObserver) -> Option<WindowIdentity> {
+    let lifetime = observer.watch(window)?;
     let fingerprint = read_window_fingerprint(window)?;
-    let property = format!(
-        "LycanSync.MediaHelper.Window.{}.{}.{}",
-        unsafe { GetCurrentProcessId() },
-        fingerprint.process_creation_time,
-        NEXT_WINDOW_IDENTITY.fetch_add(1, Ordering::Relaxed)
-    );
-    let mut property_name = property.encode_utf16().collect::<Vec<_>>();
-    property_name.push(0);
-    let marker = Arc::new(WindowIdentityMarker {
-        window,
-        property_name,
-    });
-    if unsafe {
-        SetPropW(
-            window,
-            PCWSTR(marker.property_name.as_ptr()),
-            Some(window_property_value()),
-        )
-    }
-    .is_err()
-    {
-        return None;
-    }
     Some(WindowIdentity {
-        marker,
+        lifetime,
         process_id: fingerprint.process_id,
         thread_id: fingerprint.thread_id,
         process_creation_time: fingerprint.process_creation_time,
@@ -396,10 +360,7 @@ pub(crate) fn window_identity(window: HWND) -> Option<WindowIdentity> {
 }
 
 pub(crate) fn window_matches_identity(window: HWND, identity: &WindowIdentity) -> bool {
-    if !unsafe { IsWindow(Some(window)) }.as_bool()
-        || unsafe { GetPropW(window, PCWSTR(identity.marker.property_name.as_ptr())) }
-            != window_property_value()
-    {
+    if !unsafe { IsWindow(Some(window)) }.as_bool() || !identity.lifetime.valid() {
         return false;
     }
     read_window_fingerprint(window).is_some_and(|current| {
@@ -428,12 +389,45 @@ pub(super) fn window_video_target(
     }
     Ok(crate::protocol::ReservedVideoTarget::Window {
         window_id: (window.0 as usize).to_string(),
-        property_name: String::from_utf16_lossy(
-            &identity.marker.property_name[..identity.marker.property_name.len() - 1],
-        ),
-        property_value: (window_property_value().0 as usize).to_string(),
+        lifetime_name: identity.lifetime.name.clone(),
+        process_id: identity.process_id,
+        process_creation_time: identity.process_creation_time.to_string(),
+        requires_window_capture: requires_window_capture(identity.process_id)?,
         executable,
     })
+}
+
+fn requires_window_capture(process_id: u32) -> Result<bool, ErrorCode> {
+    use windows::Win32::Security::{
+        GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+    };
+    use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+    fn elevated(process: HANDLE) -> Option<bool> {
+        let mut token = HANDLE::default();
+        unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) }.ok()?;
+        let mut value = TOKEN_ELEVATION::default();
+        let mut size = 0;
+        let result = unsafe {
+            GetTokenInformation(
+                token,
+                TokenElevation,
+                Some((&mut value as *mut TOKEN_ELEVATION).cast()),
+                std::mem::size_of_val(&value) as u32,
+                &mut size,
+            )
+        };
+        let _ = unsafe { CloseHandle(token) };
+        result.ok().map(|()| value.TokenIsElevated != 0)
+    }
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) }
+        .map_err(|_| ErrorCode::SourceDiscoveryFailed)?;
+    let target = elevated(process);
+    let _ = unsafe { CloseHandle(process) };
+    let current = elevated(unsafe { GetCurrentProcess() });
+    target
+        .zip(current)
+        .map(|(target, current)| target && !current)
+        .ok_or(ErrorCode::SourceDiscoveryFailed)
 }
 
 pub(super) fn monitor_video_target(

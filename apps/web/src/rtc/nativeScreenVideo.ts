@@ -21,6 +21,7 @@ type GeneratedVideoTrack = MediaStreamTrack & {
 
 interface NativeScreenVideoOptions {
   maxFps: number;
+  captureSettings?: ScreenSharePreferences;
   resolution?: { width: number; height: number };
   contentHint?: 'motion' | 'detail';
   firstFrameTimeoutMs?: number;
@@ -55,6 +56,7 @@ export function setNativeScreenPreviewDemand(track: MediaStreamTrack, preview: H
 /** 持有页面侧视频帧队列及一个 helper 采集会话，负责停止与帧释放。 */
 export class NativeScreenVideoSession {
   readonly track: LocalVideoTrack;
+  private readonly captureSettings?: ScreenSharePreferences;
 
   get captureSessionId() { return this.sessionId; }
   get needsFrameRateRecovery() { return this.frameRateAdjustmentFailed; }
@@ -117,6 +119,7 @@ export class NativeScreenVideoSession {
       throw new Error('invalidNativeVideoFrameRate');
     }
     this.maxFps = options.maxFps;
+    this.captureSettings = options.captureSettings ? { ...options.captureSettings } : undefined;
     this.captureFrameRate = options.maxFps;
     this.isCurrentCapture = options.isCurrentCapture;
     this.canReduceFrameRate = options.canReduceFrameRate;
@@ -203,7 +206,7 @@ export class NativeScreenVideoSession {
 
   private async startAndWaitForFrame(sourceId: string): Promise<LocalVideoTrack> {
     this.startedAt = this.now();
-    const settings = readScreenSharePreferences();
+    const settings = this.captureSettings ?? readScreenSharePreferences();
     const firstFrame = new Promise<void>((resolve, reject) => {
       this.firstFrameResolve = resolve;
       this.firstFrameReject = reject;

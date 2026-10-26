@@ -10,6 +10,13 @@ diff --git a/plugins/win-capture/game-capture.c b/plugins/win-capture/game-captu
 +	struct lycan_game_target bound_target;
 +	bool lycan_target_mismatch;
  	obs_source_t *source;
+@@ -388,5 +390,6 @@
+ static void game_capture_destroy(void *data)
+ {
+ 	struct game_capture *gc = data;
+ 	stop_capture(gc);
++	lycan_game_target_close(&gc->bound_target);
+ 
 @@ -436,3 +438,4 @@
 -	cfg->priority = (enum window_priority)obs_data_get_int(settings, SETTING_WINDOW_PRIORITY);
 +	cfg->mode = CAPTURE_MODE_WINDOW;
@@ -22,7 +29,7 @@ diff --git a/plugins/win-capture/game-capture.c b/plugins/win-capture/game-captu
 +{
 +	struct game_capture *gc = data;
 +	HWND captured = gc->global_hook_info ? (HWND)(uintptr_t)gc->global_hook_info->window : NULL;
-+	calldata_set_int(cd, "binding_version", 1);
++	calldata_set_int(cd, "binding_version", 2);
 +	calldata_set_ptr(cd, "window", gc->bound_target.window);
 +	calldata_set_ptr(cd, "capture_window", captured);
 +	calldata_set_bool(cd, "hooked", gc->capturing);

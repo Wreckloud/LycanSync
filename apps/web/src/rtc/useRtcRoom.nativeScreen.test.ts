@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalAudioTrack, Track } from 'livekit-client';
 import { useRtcRoom } from './useRtcRoom';
 import type { CustomScreenShareQuality } from './screenShareQuality';
+import type { ScreenSharePreferences } from '../settings/screenSharePreferences';
 import { encodeRemoteControlMessage, REMOTE_CONTROL_TOPIC, type RemoteControlMessage } from './remoteControl';
 
 const rtcMocks = vi.hoisted(() => ({
@@ -64,6 +65,7 @@ vi.mock('./nativeScreenVideo', () => ({
     private stopPromise?: Promise<void>;
     needsFrameRateRecovery = false;
     constructor(private readonly desktop: Window['lycanDesktop'], private readonly options: { maxFps: number; resolution: { width: number; height: number };
+      captureSettings?: ScreenSharePreferences;
       isCurrentCapture?: () => boolean; canReduceFrameRate?: () => boolean;
       onFrameRateAdjustmentFailure?: (frameRate: number) => void; onError?: (code: string) => void }) {
       rtcMocks.nativeVideoInstances.push(this);
@@ -71,7 +73,8 @@ vi.mock('./nativeScreenVideo', () => ({
     }
     start(sourceId: string) {
       if (!this.startPromise) {
-        this.startPromise = this.desktop!.startNativeVideo(sourceId, this.options.maxFps, { hideCursor: false, hideBorder: false }, this.options.resolution).then((result) => {
+        this.startPromise = this.desktop!.startNativeVideo(sourceId, this.options.maxFps,
+          this.options.captureSettings ?? { hideCursor: false, hideBorder: false }, this.options.resolution).then((result) => {
           this.sessionId = result.sessionId;
           return this.track as never;
         });
@@ -1844,7 +1847,8 @@ describe('native screen share wiring', () => {
     const rtc = scope.run(() => useRtcRoom())!;
     try {
       await rtc.join('controller-restore');
-      await rtc.setMediaEnabled(Track.Source.ScreenShare, true, { sourceId: 'window:test:0', shareAudio: false });
+      const captureSettings = { hideCursor: true, hideBorder: false, windowMethod: 'wgc' as const };
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true, { sourceId: 'window:test:0', shareAudio: false, captureSettings });
       receiveRemoteControl('owner-a', { type: 'state', available: true, share: null, control: null });
       await rtc.requestRemoteControl('owner-a');
       expect(rtcMocks.nativeStops).not.toHaveBeenCalled();
@@ -1855,6 +1859,8 @@ describe('native screen share wiring', () => {
       expect(rtc.screenShareActive.value).toBe(false);
       await rtc.exitRemoteControl();
       expect(rtcMocks.nativeStarts).toHaveBeenCalledTimes(2);
+      expect(rtcMocks.nativeStarts).toHaveBeenLastCalledWith('window:test:0', 60, captureSettings,
+        { width: 1920, height: 1080 });
       expect(rtc.screenShareActive.value).toBe(true);
       await rtc.requestRemoteControl('owner-a');
       const next = rtc.remoteControlPending.value!;

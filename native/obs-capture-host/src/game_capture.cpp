@@ -8,7 +8,7 @@ const char *game_video_failure(obs_source_t *source, const WindowVideoTarget &ta
   calldata_t status;
   calldata_init(&status);
   const bool queried = proc_handler_call(obs_source_get_proc_handler(source), "lycansync_get_target", &status);
-  const bool version_matches = calldata_int(&status, "binding_version") == 1;
+  const bool version_matches = calldata_int(&status, "binding_version") == 2;
   const auto selected = static_cast<HWND>(calldata_ptr(&status, "window"));
   const auto captured = static_cast<HWND>(calldata_ptr(&status, "capture_window"));
   const bool valid = calldata_bool(&status, "valid");
@@ -27,15 +27,11 @@ const char *game_video_failure(obs_source_t *source, const WindowVideoTarget &ta
 obs_source_t *create_game_video_source(const WindowVideoTarget &target, bool hide_cursor, const char *&error) {
   if (!window_video_target_valid(target)) { error = "captureTargetClosed"; return nullptr; }
   if (!obs_get_latest_input_type_id("lycansync_game_capture")) { error = "obsGameBindingUnavailable"; return nullptr; }
-  std::string property;
-  for (const wchar_t character : target.property_name) {
-    if (character > 127) { error = "invalidCaptureArguments"; return nullptr; }
-    property.push_back(static_cast<char>(character));
-  }
   obs_data_t *settings = obs_data_create();
   obs_data_set_int(settings, "lycansync_window_id", static_cast<long long>(reinterpret_cast<uintptr_t>(target.window)));
-  obs_data_set_string(settings, "lycansync_window_property", property.c_str());
-  obs_data_set_int(settings, "lycansync_window_property_value", static_cast<long long>(target.property_value));
+  obs_data_set_string(settings, "lycansync_window_lifetime", target.lifetime_name.c_str());
+  obs_data_set_int(settings, "lycansync_process_id", target.process_id);
+  obs_data_set_string(settings, "lycansync_process_creation", target.process_creation.c_str());
   obs_data_set_string(settings, "capture_mode", "window");
   obs_data_set_bool(settings, "capture_cursor", !hide_cursor);
   // 游戏浮窗仍未接入；声音由独立来源负责，不启用游戏插件的内置声音子源。

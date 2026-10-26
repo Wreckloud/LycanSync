@@ -5,6 +5,7 @@ import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, SCREEN_SHARE_QUALITIES, screenShar
 import ScreenShareCustomQuality from './ScreenShareCustomQuality.vue';
 import type { NativeScreenAudioMode } from '../rtc/nativeScreenAudioMode';
 import InlineFeedback from './InlineFeedback.vue';
+import { readScreenSharePreferences, type ScreenSharePreferences } from '../settings/screenSharePreferences';
 
 const props = withDefaults(defineProps<{
   sources: { id: string; name: string; thumbnail?: string; type: 'window' | 'screen' }[];
@@ -14,17 +15,20 @@ const props = withDefaults(defineProps<{
   customQuality?: CustomScreenShareQuality;
 }>(), { customQuality: () => ({ ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY }) });
 const emit = defineEmits<{
-  close: []; confirm: []; choose: [id: string]; refreshThumbnails: [];
+  close: []; confirm: [settings: ScreenSharePreferences]; choose: [id: string]; refreshThumbnails: [];
   'update:sourceType': [type: 'window' | 'screen']; 'update:quality': [quality: ScreenShareQualityId];
   'update:shareAudio': [enabled: boolean];
   'update:customQuality': [quality: CustomScreenShareQuality];
 }>();
 const panel = ref<HTMLElement | null>(null);
 const sourcesElement = ref<HTMLDivElement | null>(null);
+const captureSettings = ref<ScreenSharePreferences>({ hideCursor: false, hideBorder: true, windowMethod: 'auto' });
+const settingsError = ref('');
 const sources = computed(() => props.sources.filter((source) => source.type === props.sourceType));
 const quality = computed(() => screenShareQuality(props.quality, props.customQuality));
 const canChoose = computed(() => props.audioReady && !props.audioFailed);
-const canConfirm = computed(() => canChoose.value && !props.error && props.sources.some((source) => source.id === props.selectedId));
+const canConfirm = computed(() => canChoose.value && !props.error && !settingsError.value
+  && props.sources.some((source) => source.id === props.selectedId));
 const feedbackStatus = computed(() => {
   if (!props.audioReady) return '正在检查共享能力…';
   if (props.loading && !sources.value.length) return '正在读取共享来源…';
@@ -40,6 +44,13 @@ const descriptions: Record<ScreenShareQualityId, string> = {
 };
 let returnFocus: HTMLElement | null = null;
 const background = new Map<HTMLElement, boolean>();
+
+function confirm() {
+  if (!canConfirm.value) return;
+  emit('confirm', { ...captureSettings.value,
+    windowMethod: props.sourceType === 'window' ? captureSettings.value.windowMethod : 'auto',
+    hideBorder: props.sourceType !== 'window' || captureSettings.value.hideBorder });
+}
 
 function keydown(event: KeyboardEvent) {
   if (event.key === 'Escape') { event.preventDefault(); emit('close'); return; }
@@ -63,6 +74,8 @@ function qualityKeydown(event: KeyboardEvent) {
   panel.value?.querySelector<HTMLButtonElement>(`#capture-quality-${preset.id}`)?.focus();
 }
 onMounted(async () => {
+  try { captureSettings.value.hideCursor = readScreenSharePreferences().hideCursor; }
+  catch { settingsError.value = '无法读取光标偏好，请重新保存客户端设置后再试。'; }
   returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   await nextTick();
   if (!panel.value) return;
@@ -117,15 +130,33 @@ defineExpose({ sourcesElement });
         </div>
         <ScreenShareCustomQuality v-if="quality.id === 'custom'" :model-value="customQuality"
           @update:model-value="emit('update:customQuality', $event)" />
+        <details class="capture-advanced">
+          <summary>高级选项</summary>
+          <label v-if="sourceType === 'window'" class="capture-method">窗口采集方式
+            <select v-model="captureSettings.windowMethod">
+              <option value="auto">自动（优先无边框）</option>
+              <option value="game">游戏采集</option>
+              <option value="bitblt">兼容采集（BitBlt）</option>
+              <option value="wgc">系统窗口采集（WGC）</option>
+            </select>
+          </label>
+          <label class="capture-audio-option"><input v-model="captureSettings.hideCursor" type="checkbox" />隐藏共享画面中的光标</label>
+          <label v-if="sourceType === 'window' && ['auto', 'wgc'].includes(captureSettings.windowMethod ?? 'auto')" class="capture-audio-option">
+            <input type="checkbox" :checked="!captureSettings.hideBorder"
+              @change="captureSettings.hideBorder = !($event.target as HTMLInputElement).checked" />允许显示系统共享边框（仅本次）
+          </label>
+          <p v-if="sourceType === 'window'">普通窗口分享应用内容区域；手动指定方式不可用时会提示，不自动换方式。Win10 的 WGC 通常需要允许系统边框，兼容采集可能不适合部分硬件加速应用。</p>
+          <p v-else>整屏使用 DXGI，无系统共享黄框。高级选项仅用于本次共享。</p>
+        </details>
         <footer class="card-actions">
           <button type="button" class="settings-button" @click="emit('close')">取消</button>
-          <InlineFeedback class="card-feedback" :message="audioFailed ? '无法确认共享能力，请关闭后重试。' : error"
+          <InlineFeedback class="card-feedback" :message="audioFailed ? '无法确认共享能力，请关闭后重试。' : error || settingsError"
             :status="feedbackStatus" />
           <div class="capture-confirm card-actions-end">
-            <label class="capture-audio-option"><input type="checkbox" :checked="shareAudio"
+            <label class="capture-audio-option"><input type="checkbox" aria-label="共享音频" :checked="shareAudio"
               :disabled="!audioReady || audioMode === 'unavailable'" @change="emit('update:shareAudio', ($event.target as HTMLInputElement).checked)" />
               共享音频</label>
-            <button type="button" class="confirm-button" :disabled="!canConfirm" @click="emit('confirm')">开始共享</button>
+            <button type="button" class="confirm-button" :disabled="!canConfirm" @click="confirm">开始共享</button>
           </div>
         </footer>
       </section>
@@ -154,6 +185,12 @@ defineExpose({ sourcesElement });
 .capture-source-selected { position: absolute; right: 6px; bottom: 6px; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: var(--accent); color: white; }
 .capture-audio-option { display: flex; align-items: center; flex-shrink: 0; gap: 8px; font-size: 13px; line-height: 20px; }
 .capture-audio-option input { margin: 0; }
+.capture-advanced { margin: 8px 0; font-size: 13px; line-height: 20px; }
+.capture-advanced summary { color: var(--muted); cursor: pointer; }
+.capture-advanced > label { margin-top: 8px; }
+.capture-advanced p { color: var(--muted); font-size: 12px; }
+.capture-method { display: flex; align-items: center; gap: 12px; }
+.capture-method select { min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--background); color: var(--text); font: inherit; }
 .capture-quality { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 8px 0 12px; }
 .capture-quality-tabs { flex-shrink: 0; }
 .capture-quality-description { display: grid; gap: 2px; min-width: 0; line-height: 20px; }

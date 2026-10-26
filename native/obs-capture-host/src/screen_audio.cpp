@@ -158,9 +158,10 @@ bool ScreenAudioHost::command(std::string_view command) {
       if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))) { reject("screenShareAudioStartFailed"); return true; }
       module_apartment_initialized_ = true;
     }
-    obs_module_t *module = nullptr;
+    // OBS 按宿主持有模块；同一预热宿主的下一次共享不能再次加载并注册声音来源。
+    obs_module_t *module = obs_get_module("win-wasapi");
     std::replace(module_path_.begin(), module_path_.end(), '\\', '/');
-    if (obs_open_module(&module, module_path_.c_str(), data_path_.c_str()) != MODULE_SUCCESS || !obs_init_module(module)) {
+    if ((!module && obs_open_module(&module, module_path_.c_str(), data_path_.c_str()) != MODULE_SUCCESS) || !obs_init_module(module)) {
       reject("screenShareAudioStartFailed");
       return true;
     }
@@ -200,11 +201,10 @@ void ScreenAudioHost::run(const std::shared_ptr<Session> &session, bool system_m
     if (system_mix) {
       obs_data_set_string(settings, "device_id", "default");
     } else if (window_) {
-      std::string property;
-      for (const auto character : target_.property_name) property.push_back(static_cast<char>(character));
       obs_data_set_int(settings, "lycansync_window_id", static_cast<long long>(reinterpret_cast<uintptr_t>(target_.window)));
-      obs_data_set_string(settings, "lycansync_window_property", property.c_str());
-      obs_data_set_int(settings, "lycansync_window_property_value", static_cast<long long>(target_.property_value));
+      obs_data_set_string(settings, "lycansync_window_lifetime", target_.lifetime_name.c_str());
+      obs_data_set_int(settings, "lycansync_process_id", target_.process_id);
+      obs_data_set_string(settings, "lycansync_process_creation", target_.process_creation.c_str());
     } else {
       obs_data_set_bool(settings, "lycansync_exclude_process", true);
       obs_data_set_int(settings, "lycansync_process_id", client_process);

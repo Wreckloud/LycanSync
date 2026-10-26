@@ -25,6 +25,7 @@ import { canSelectNativeSource, readScreenShareAudioPreference, saveScreenShareA
   resolveNativeScreenAudioCapability, shouldShareAudioInNativeSelection,
   type NativeScreenAudioMode } from './rtc/nativeScreenAudioMode';
 import { createNativeVideoSourceSelection } from './components/nativeVideoSourceSelection';
+import type { ScreenSharePreferences } from './settings/screenSharePreferences';
 import { useRoomSummary } from './rtc/useRoomSummary';
 import { requestRoomOccupancies } from './rtc/roomSummaryApi';
 import { AUDIO_VOLUME_MAX } from './rtc/audioPreferences';
@@ -113,7 +114,8 @@ const captureAudioCapabilityReady = ref(false);
 const captureAudioCapabilityFailed = ref(false);
 const captureAudioMode = ref<NativeScreenAudioMode>('unavailable');
 const captureShareAudio = ref(false);
-type NativeScreenSourceSelection = { sourceId: string; shareAudio: boolean; quality?: ScreenShareQualityId; customQuality?: CustomScreenShareQuality };
+type NativeScreenSourceSelection = { sourceId: string; shareAudio: boolean; quality?: ScreenShareQualityId;
+  customQuality?: CustomScreenShareQuality; captureSettings?: ScreenSharePreferences };
 const NATIVE_SOURCE_REFRESH_INTERVAL_MS = 750;
 let nativeSourceChooser: ReturnType<typeof createNativeVideoSourceSelection> | undefined;
 let nativeSourceChooserGeneration = 0;
@@ -233,7 +235,7 @@ function chooseCaptureSource(sourceId: string) {
   refreshVisibleSourceThumbnails();
 }
 
-function selectCaptureSource(sourceId: string | null) {
+function selectCaptureSource(sourceId: string | null, captureSettings?: ScreenSharePreferences) {
   const request = captureRequest.value;
   if (!request) return;
   if (sourceId !== null
@@ -257,6 +259,7 @@ function selectCaptureSource(sourceId: string | null) {
     sourceId,
     quality: captureQuality.value,
     customQuality: { ...captureCustomQuality.value },
+    ...(captureSettings ? { captureSettings: { ...captureSettings } } : {}),
     shareAudio: shouldShareAudioInNativeSelection(
       captureAudioCapabilityReady.value,
       captureAudioMode.value,
@@ -1313,13 +1316,13 @@ function participantListening(participant: Participant) {
       :activity-mappings="activityMappings"
       @activity-visibility="setShowActivity"
       :save-profile="saveProfile" @close="closeSettings" @logout="emit('logout')" />
-    <ScreenSharePicker v-if="captureRequest" ref="capturePicker" :sources="captureRequest.sources"
+    <ScreenSharePicker v-if="captureRequest" :key="nativeSourceChooserGeneration" ref="capturePicker" :sources="captureRequest.sources"
       v-model:source-type="captureSourceType" v-model:quality="captureQuality" v-model:custom-quality="captureCustomQuality" :share-audio="captureShareAudio"
       @update:share-audio="updateCaptureShareAudio"
       :selected-id="selectedCaptureSourceId" :audio-mode="captureAudioMode" :audio-ready="captureAudioCapabilityReady"
       :audio-failed="captureAudioCapabilityFailed" :loading="nativeSourceLoading" :error="nativeSourceError" :notice="captureSourceNotice"
       @choose="chooseCaptureSource" @refresh-thumbnails="refreshVisibleSourceThumbnails"
-      @close="selectCaptureSource(null)" @confirm="selectCaptureSource(selectedCaptureSourceId)" />
+      @close="selectCaptureSource(null)" @confirm="selectCaptureSource(selectedCaptureSourceId, $event)" />
     <ScreenShareWindows ref="viewingWindows" :rtc="rtc" :group-name="joinedGroup?.name ?? ''"
       :inline-target="viewingTarget"
       :avatar="participantAvatar" :muted-shares="mutedShares"

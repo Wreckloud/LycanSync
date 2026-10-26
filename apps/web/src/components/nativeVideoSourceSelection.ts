@@ -1,4 +1,5 @@
 import type { CustomScreenShareQuality, ScreenShareQualityId } from '../rtc/screenShareQuality';
+import type { ScreenSharePreferences } from '../settings/screenSharePreferences';
 
 export interface NativeVideoSourceOptionInput {
   sourceId: string;
@@ -21,6 +22,7 @@ interface NativeScreenSourceSelection {
   shareAudio: boolean;
   quality?: ScreenShareQualityId;
   customQuality?: CustomScreenShareQuality;
+  captureSettings?: ScreenSharePreferences;
 }
 
 const THUMBNAIL_REFRESH_INTERVAL_MS = 1_500;
