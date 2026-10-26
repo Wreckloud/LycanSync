@@ -19,22 +19,22 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function setup() {
+function setup(active = true) {
   const support = deferred<{ hideCursor: boolean; hideBorder: boolean }>();
   const autoStart = deferred<{ supported: boolean; enabled: boolean }>();
   const updateState: StartupUpdateState = { phase: 'ready', version: '0.0.10', supported: true, message: '' };
   const bridge = { getScreenShareSupport: vi.fn(() => support.promise), getAutoStart: vi.fn(() => autoStart.promise),
     setAutoStart: vi.fn(async (enabled: boolean) => ({ supported: true, enabled })),
-    getUpdateState: vi.fn(async () => updateState), checkUpdates: vi.fn(async () => ({ ...updateState, nextVersion: '0.0.11' })),
+    getUpdateState: vi.fn(async () => updateState), checkUpdates: vi.fn(async (): Promise<StartupUpdateState> => ({ ...updateState, nextVersion: '0.0.11' })),
     restartForUpdate: vi.fn(async () => {}), onUpdateState: vi.fn(() => () => {}) };
   const scope = effectScope();
-  const props = reactive({ active: true, desktop: true });
+  const props = reactive({ active, desktop: true });
   const savePreferences = vi.fn();
   const exposed = vi.fn();
   // 执行真实组件监听和更新流程，IPC 只返回受控数据，不修改系统设置。
   const settings = scope.run(() => runInNewContext(`${compiled}\n({ borderDescription, autoStartDescription,
     autoStartEnabled, autoStartBusy, autoStartError, screenPreferences, screenError,
-    updateAutoStart, updateScreenPreference, checkUpdates, cancelUpdate, confirmingUpdate })`, {
+    updateAutoStart, updateScreenPreference, checkUpdates, cancelUpdate, confirmingUpdate, updateDescription })`, {
     computed, reactive, ref, watch, useClientUpdate, Error, window: { lycanDesktop: bridge },
     defineProps: () => props, defineEmits: () => vi.fn(), defineExpose: exposed,
     readScreenSharePreferences: () => ({ hideCursor: false, hideBorder: false }), saveScreenSharePreferences: savePreferences,
@@ -45,11 +45,35 @@ function setup() {
     updateAutoStart: (event: Event) => Promise<void>;
     updateScreenPreference: (key: 'hideCursor' | 'hideBorder', event: Event) => void;
     checkUpdates: () => Promise<void>; cancelUpdate: () => void; confirmingUpdate: { value: boolean };
+    updateDescription: { value: string };
   };
-  return { scope, settings, support, autoStart, bridge, savePreferences, exposed };
+  return { scope, props, settings, support, autoStart, bridge, savePreferences, exposed };
 }
 
 const checked = { target: { checked: true } } as unknown as Event;
+
+it('其他设置栏目不查更新，进入客户端栏目只查一次并更新原有小字，不自动弹确认', async () => {
+  const { scope, props, settings, bridge } = setup(false);
+  try {
+    await nextTick();
+    expect(bridge.getUpdateState).not.toHaveBeenCalled();
+    expect(bridge.checkUpdates).not.toHaveBeenCalled();
+    const pending = deferred<StartupUpdateState>();
+    bridge.checkUpdates.mockReturnValueOnce(pending.promise);
+    props.active = true;
+    await nextTick(); await nextTick();
+    expect(bridge.checkUpdates).toHaveBeenCalledOnce();
+    expect(settings.updateDescription.value).toBe('正在检查更新…');
+    pending.resolve({ phase: 'ready', version: '0.0.10', supported: true, message: '当前已是最新版本' });
+    await nextTick();
+    expect(settings.updateDescription.value).toBe('当前已是最新版本');
+    expect(settings.confirmingUpdate.value).toBe(false);
+    props.active = false;
+    await nextTick(); await nextTick();
+    expect(bridge.checkUpdates).toHaveBeenCalledOnce();
+    expect(bridge.restartForUpdate).not.toHaveBeenCalled();
+  } finally { scope.stop(); }
+});
 
 it('查询完成前显示读取中，仅确定不支持后显示限制', async () => {
   const { scope, settings, support, autoStart, bridge } = setup();
@@ -124,6 +148,7 @@ it('开机自启修改不并发，失败恢复原值；重试使用系统实际�
 it('只有更新确认期间向父页面报告隔离背景，取消后恢复', async () => {
   const { scope, settings, exposed } = setup();
   try {
+    await nextTick();
     await nextTick();
     expect(exposed.mock.calls[0][0].confirmingUpdate).toBe(settings.confirmingUpdate);
     expect(settings.confirmingUpdate.value).toBe(false);

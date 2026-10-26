@@ -10,7 +10,6 @@ export function useClientUpdate(bridge: UpdateBridge | undefined, active: () => 
   const busy = ref(false);
   const confirmationVersion = ref('');
   let disposed = false;
-  let loaded = false;
   let attempt = 0;
   let stateRevision = 0;
   const removeListener = bridge?.onUpdateState((next) => {
@@ -19,18 +18,27 @@ export function useClientUpdate(bridge: UpdateBridge | undefined, active: () => 
     state.value = next;
   });
 
-  watch(active, (visible) => {
-    if (!visible) { attempt++; confirmationVersion.value = ''; return; }
-    if (!bridge || loaded) return;
-    loaded = true;
-    const revision = stateRevision;
-    void bridge.getUpdateState().then((next) => {
-      if (!disposed && revision === stateRevision) state.value = next;
-    }).catch(() => { if (!disposed) error.value = '无法读取更新状态，请重新打开客户端。'; });
+  watch(active, async (visible) => {
+    const opening = ++attempt;
+    confirmationVersion.value = '';
+    if (!visible || !bridge) return;
+    if (!state.value) {
+      const revision = stateRevision;
+      try {
+        const next = await bridge.getUpdateState();
+        if (disposed || opening !== attempt) return;
+        if (revision === stateRevision) state.value = next;
+      } catch {
+        if (!disposed && opening === attempt) error.value = '无法读取更新状态，请重新进入客户端设置。';
+        return;
+      }
+    }
+    // 每次进入只查询一次，不后台轮询，也不因自动查询弹出重启确认。
+    if (!disposed && opening === attempt) void check(false);
   }, { immediate: true });
 
-  async function check() {
-    if (!bridge || busy.value || !state.value?.supported) return;
+  async function check(confirm = true) {
+    if (!bridge || disposed || !active() || busy.value || !state.value?.supported || state.value.phase === 'checking') return;
     const checking = ++attempt;
     busy.value = true;
     error.value = '';
@@ -39,7 +47,7 @@ export function useClientUpdate(bridge: UpdateBridge | undefined, active: () => 
       const next = await bridge.checkUpdates();
       if (disposed) return;
       state.value = next;
-      if (checking === attempt && active() && next.phase === 'ready' && next.supported && !next.error && next.nextVersion) {
+      if (confirm && checking === attempt && active() && next.phase === 'ready' && next.supported && !next.error && next.nextVersion) {
         confirmationVersion.value = next.nextVersion;
       }
     } catch {

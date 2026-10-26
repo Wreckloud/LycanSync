@@ -20,6 +20,11 @@ const { state: updateState, error: updateError, busy: updateBusy, confirmationVe
   () => props.active && props.desktop);
 let screenLoaded = false;
 const confirmingUpdate = computed(() => Boolean(confirmationVersion.value));
+const updateDescription = computed(() => {
+  if (updateBusy.value || updateState.value?.phase === 'checking') return '正在检查更新…';
+  if (!updateError.value && !updateState.value?.error && updateState.value?.message) return updateState.value.message;
+  return '进入本页时检查一次更新；更新需确认后重启。';
+});
 const borderDescription = computed(() => {
   if (!screenSupport.value) return screenError.value ? '尚未确认系统支持情况。' : '正在确认系统支持情况…';
   return screenSupport.value.hideBorder
@@ -108,11 +113,10 @@ async function updateAutoStart(event: Event) {
     <section v-if="desktop" class="settings-block">
       <h2>应用更新</h2>
       <div class="settings-toggle update-summary">
-        <span><strong>版本 {{ updateState?.version || '读取中…' }}</strong><small>启动时自动检查；也可手动检查并确认重启更新。</small></span>
-        <button type="button" class="settings-button" :disabled="updateBusy || !updateState?.supported || updateState.phase === 'checking'" @click="checkUpdates">{{ updateBusy || updateState?.phase === 'checking' ? '正在检查…' : '检查更新' }}</button>
+        <span><strong>版本 {{ updateState?.version || '读取中…' }}</strong><small role="status">{{ updateDescription }}</small></span>
+        <button type="button" class="settings-button" :disabled="updateBusy || !updateState?.supported || updateState.phase === 'checking'" @click="checkUpdates()">{{ updateBusy || updateState?.phase === 'checking' ? '正在检查…' : '检查更新' }}</button>
       </div>
-      <InlineFeedback :message="confirmationVersion ? '' : updateError || (updateState?.error ? updateState.message : '')"
-        :status="updateState?.error ? '' : updateState?.message" />
+      <InlineFeedback :message="confirmationVersion ? '' : updateError || (updateState?.error ? updateState.message : '')" />
       <UpdateRestartDialog v-if="confirmationVersion" :version="confirmationVersion" :busy="updateBusy" :error="updateError"
         @cancel="cancelUpdate" @confirm="restartUpdate" />
     </section>
