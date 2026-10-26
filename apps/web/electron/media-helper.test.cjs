@@ -164,8 +164,8 @@ class FakeHelper extends EventEmitter {
         sessionId: command.sessionId, sourceId: command.sourceId,
         target: this.mode.invalidVideoTarget ?? (command.sourceId.startsWith('monitor:')
           ? { kind: 'monitor', monitorName: '\\\\.\\DISPLAY1' }
-          : { kind: 'window', windowId: '123456', propertyName: 'LycanSync.MediaHelper.Window.1.2.3',
-            propertyValue: '987654', executable: 'C:\\Games\\game.exe' }) });
+          : { kind: 'window', windowId: '123456', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.123456',
+            processCreationTime: '987654', processId: 123, requiresWindowCapture: false, executable: 'C:\\Games\\game.exe' }) });
       return;
     }
     if (command.command === 'startMicrophoneCapture') {
@@ -366,7 +366,7 @@ test('停止 Promise 未完成已禁止输入和新授权，迟到授权响应�
 
 test('窗口预留只接受当前快照，坏身份响应明确失败并关闭失去同步的 helper', async () => {
   const { manager, children } = createManager({ windowSources: true,
-    invalidVideoTarget: { windowId: '123', propertyName: 'untrusted', propertyValue: '4' } });
+    invalidVideoTarget: { windowId: '123', lifetimeName: 'untrusted', processCreationTime: '4', processId: 123, requiresWindowCapture: false } });
   try {
     await assert.rejects(manager.reserveVideo('obs-session', 'window:1:0'), /videoSourceExpired/);
     assert.equal(children.length, 0);
@@ -383,8 +383,8 @@ test('窗口预留只接受当前快照，坏身份响应明确失败并关闭�
 test('窗口程序路径仅接受完整本机 exe 身份，缺失或非法响应不继续分类', async () => {
   for (const executable of [undefined, 'relative.exe', 'C:\\Apps\\not-an-exe.txt', 'C:\\Apps\\bad\n.exe']) {
     const { manager, children } = createManager({ windowSources: true,
-      invalidVideoTarget: { kind: 'window', windowId: '123', propertyName: 'LycanSync.MediaHelper.Window.1.2.3',
-        propertyValue: '456', executable } });
+      invalidVideoTarget: { kind: 'window', windowId: '123', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.123',
+        processCreationTime: '456', processId: 123, requiresWindowCapture: false, executable } });
     try {
       await manager.listVideoSources();
       await assert.rejects(manager.reserveVideo('obs-session', 'window:1:0'), /InvalidVideoTarget/);

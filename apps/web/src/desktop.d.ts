@@ -151,7 +151,8 @@ interface Window {
     listNativeVideoSources(): Promise<{ revision: number; discoveryId: string; sources: NativeVideoSource[] }>;
     getNativeVideoSourceThumbnails(sources: NativeVideoSource[]): Promise<{ sourceId: string; thumbnail: string }[]>;
     getScreenShareSupport(): Promise<{ hideCursor: boolean; hideBorder: boolean }>;
-    startNativeVideo(sourceId: string, maxFps: number, settings: { hideCursor: boolean; hideBorder: boolean }, resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean }>;
+    startNativeVideo(sourceId: string, maxFps: number, settings: { hideCursor: boolean; hideBorder: boolean;
+      windowMethod?: 'auto' | 'game' | 'bitblt' | 'wgc' }, resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean }>;
     stopNativeVideo(sessionId: string): Promise<{ changed: boolean }>;
     configureNativeVideo(sessionId: string, maxFps: number, resolution?: { width: number; height: number }): Promise<{ changed: boolean }>;
     authorizeNativeRemoteControl(sessionId: string, controlSessionId: string, controllerIdentity: string): Promise<{ changed: boolean }>;

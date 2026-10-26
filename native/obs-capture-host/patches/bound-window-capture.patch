@@ -1,0 +1,163 @@
+diff --git a/plugins/win-capture/window-capture.c b/plugins/win-capture/window-capture.c
+index 4203be2..a908236 100644
+--- a/plugins/win-capture/window-capture.c
++++ b/plugins/win-capture/window-capture.c
+@@ -4,6 +4,7 @@
+ #include <util/windows/window-helpers.h>
+ 
+ #include "dc-capture.h"
++#include "bound_game_target.h"
+ #include "audio-helpers.h"
+ #include "compat-helpers.h"
+ #ifdef OBS_LEGACY
+@@ -74,6 +75,9 @@ typedef DPI_AWARENESS_CONTEXT(WINAPI *PFN_GetThreadDpiAwarenessContext)(VOID);
+ typedef DPI_AWARENESS_CONTEXT(WINAPI *PFN_GetWindowDpiAwarenessContext)(HWND);
+ 
+ struct window_capture {
++	struct lycan_game_target bound_target;
++	bool lycan_target_mismatch;
++	bool lycan_winrt_available;
+ 	obs_source_t *source;
+ 	obs_source_t *audio_source;
+ 
+@@ -215,15 +219,21 @@ static void update_settings(struct window_capture *wc, obs_data_t *s)
+ 	bfree(wc->class);
+ 	bfree(wc->executable);
+ 
+-	ms_build_window_strings(window, &wc->class, &wc->title, &wc->executable);
++	struct dstr title = {0}, class = {0}, executable = {0};
++	ms_get_window_title(&title, wc->bound_target.window);
++	ms_get_window_class(&class, wc->bound_target.window);
++	ms_get_window_exe(&executable, wc->bound_target.window);
++	wc->title = title.array;
++	wc->class = class.array;
++	wc->executable = executable.array;
+ 
+ 	wc->method = choose_method(method, wgc_supported, wc->class);
+ 	wc->priority = (enum window_priority)priority;
+ 	wc->cursor = obs_data_get_bool(s, "cursor");
+-	wc->capture_audio = obs_data_get_bool(s, "capture_audio");
++	wc->capture_audio = false;
+ 	wc->force_sdr = obs_data_get_bool(s, "force_sdr");
+ 	wc->compatibility = obs_data_get_bool(s, "compatibility");
+-	wc->client_area = obs_data_get_bool(s, "client_area");
++	wc->client_area = true;
+ 
+ 	setup_audio_source(wc->source, &wc->audio_source, window, wc->capture_audio, wc->priority);
+ 
+@@ -260,6 +270,19 @@ static void wc_get_hooked(void *data, calldata_t *cd)
+ 	}
+ }
+ 
++static void lycan_window_get_target(void *data, calldata_t *cd)
++{
++	struct window_capture *wc = data;
++	calldata_set_int(cd, "binding_version", 2);
++	calldata_set_ptr(cd, "window", wc->bound_target.window);
++	calldata_set_ptr(cd, "capture_window", wc->window);
++	calldata_set_int(cd, "method", wc->method);
++	calldata_set_bool(cd, "available", wc->method != METHOD_WGC || wc->lycan_winrt_available);
++	calldata_set_bool(cd, "valid", !wc->lycan_target_mismatch && lycan_game_target_valid(&wc->bound_target)
++			  && (!wc->window || wc->window == wc->bound_target.window));
++	calldata_set_bool(cd, "failed", wc->previously_failed);
++}
++
+ static const char *wc_getname(void *unused)
+ {
+ 	UNUSED_PARAMETER(unused);
+@@ -301,6 +324,10 @@ extern bool graphics_uses_d3d11;
+ static void *wc_create(obs_data_t *settings, obs_source_t *source)
+ {
+ 	struct window_capture *wc = bzalloc(sizeof(struct window_capture));
++	if (!lycan_game_target_read(&wc->bound_target, settings)) {
++		bfree(wc);
++		return NULL;
++	}
+ 	wc->source = source;
+ 
+ 	pthread_mutex_init(&wc->update_mutex, NULL);
+@@ -309,7 +336,7 @@ static void *wc_create(obs_data_t *settings, obs_source_t *source)
+ 		static const char *const module = "libobs-winrt";
+ 		wc->winrt_module = os_dlopen(module);
+ 		if (wc->winrt_module) {
+-			load_winrt_imports(&wc->exports, wc->winrt_module, module);
++			wc->lycan_winrt_available = load_winrt_imports(&wc->exports, wc->winrt_module, module);
+ 		}
+ 	}
+ 
+@@ -335,6 +362,9 @@ static void *wc_create(obs_data_t *settings, obs_source_t *source)
+ 	signal_handler_add(sh, "void hooked(ptr source, string title, string class, string executable)");
+ 
+ 	proc_handler_t *ph = obs_source_get_proc_handler(source);
++	proc_handler_add(ph,
++			 "void lycansync_get_target(out int binding_version, out ptr window, out ptr capture_window, out int method, out bool available, out bool valid, out bool failed)",
++			 lycan_window_get_target, wc);
+ 	proc_handler_add(ph,
+ 			 "void get_hooked(out bool hooked, out string title, out string class, out string executable)",
+ 			 wc_get_hooked, wc);
+@@ -342,6 +372,7 @@ static void *wc_create(obs_data_t *settings, obs_source_t *source)
+ 	signal_handler_connect(sh, "rename", rename_audio_source, &wc->audio_source);
+ 
+ 	update_settings(wc, settings);
++	wc->check_window_timer = WC_CHECK_TIMER;
+ 	log_settings(wc, settings);
+ 	return wc;
+ }
+@@ -347,5 +378,6 @@
+ static void wc_actual_destroy(void *data)
+ {
+ 	struct window_capture *wc = data;
++	lycan_game_target_close(&wc->bound_target);
+ 
+ 	if (wc->capture_winrt) {
+@@ -403,7 +434,8 @@ static void wc_update(void *data, obs_data_t *settings)
+ 
+ static bool window_normal(struct window_capture *wc)
+ {
+-	return (IsWindow(wc->window) && !IsIconic(wc->window));
++	return lycan_game_target_valid(&wc->bound_target) && wc->window == wc->bound_target.window
++		&& !wc->lycan_target_mismatch && IsWindow(wc->window) && !IsIconic(wc->window);
+ }
+ 
+ static uint32_t wc_width(void *data)
+@@ -589,6 +621,11 @@ static void wc_hide(void *data)
+ static void wc_tick(void *data, float seconds)
+ {
+ 	struct window_capture *wc = data;
++	if (!lycan_game_target_valid(&wc->bound_target)
++	    || (wc->window && wc->window != wc->bound_target.window)) {
++		wc->lycan_target_mismatch = true;
++		return;
++	}
+ 	RECT rect;
+ 	bool reset_capture = false;
+ 
+@@ -627,10 +664,7 @@ static void wc_tick(void *data, float seconds)
+ 
+ 		wc->check_window_timer = 0.0f;
+ 
+-		wc->window = (wc->method == METHOD_WGC) ? ms_find_window_top_level(INCLUDE_MINIMIZED, wc->priority,
+-										   wc->class, wc->title, wc->executable)
+-							: ms_find_window(INCLUDE_MINIMIZED, wc->priority, wc->class,
+-									 wc->title, wc->executable);
++		wc->window = wc->bound_target.window;
+ 		if (!wc->window) {
+ 			if (wc->capture.valid)
+ 				dc_capture_free(&wc->capture);
+@@ -703,6 +737,7 @@ static void wc_tick(void *data, float seconds)
+ 			dc_capture_free(&wc->capture);
+ 			dc_capture_init(&wc->capture, 0, 0, rect.right - rect.left, rect.bottom - rect.top, wc->cursor,
+ 					wc->compatibility);
++			wc->previously_failed = !wc->capture.valid;
+ 			if (!wc->hooked && wc->capture.valid) {
+ 				wc->hooked = true;
+ 
+@@ -824,7 +859,7 @@ static void wc_child_enum(void *data, obs_source_enum_proc_t cb, void *param)
+ }
+ 
+ struct obs_source_info window_capture_info = {
+-	.id = "window_capture",
++	.id = "lycansync_window_capture",
+ 	.type = OBS_SOURCE_TYPE_INPUT,
+ 	.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_AUDIO | OBS_SOURCE_CUSTOM_DRAW | OBS_SOURCE_SRGB,
+ 	.get_name = wc_getname,

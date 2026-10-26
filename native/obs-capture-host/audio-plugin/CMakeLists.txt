@@ -14,7 +14,7 @@ add_library(lycansync-bound-win-wasapi MODULE
   "${audio_source}/wasapi-notify.cpp"
   "${audio_source}/enum-wasapi.cpp"
   "${audio_source}/plugin-main.cpp"
-  ../src/bound_audio_target.cpp)
+  ../src/bound_audio_target.cpp ../src/bound_game_target.c)
 target_compile_features(lycansync-bound-win-wasapi PRIVATE cxx_std_20)
 target_compile_options(lycansync-bound-win-wasapi PRIVATE /utf-8)
 target_compile_definitions(lycansync-bound-win-wasapi PRIVATE UNICODE _UNICODE NOMINMAX)
@@ -26,7 +26,7 @@ set_target_properties(lycansync-bound-win-wasapi PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/audio-plugin")
 
 add_executable(lycansync-bound-audio-target-tests EXCLUDE_FROM_ALL
-  ../tests/bound_audio_target.cpp ../src/bound_audio_target.cpp)
+  ../tests/bound_audio_target.cpp ../src/bound_audio_target.cpp ../src/bound_game_target.c)
 target_compile_features(lycansync-bound-audio-target-tests PRIVATE cxx_std_20)
 target_compile_definitions(lycansync-bound-audio-target-tests PRIVATE UNICODE _UNICODE NOMINMAX)
 target_compile_options(lycansync-bound-audio-target-tests PRIVATE /utf-8)

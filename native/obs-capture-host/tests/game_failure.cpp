@@ -15,7 +15,7 @@ HWND selected = reinterpret_cast<HWND>(1);
 HWND captured = selected;
 proc_handler_t *query_handler(obs_source_t *) { return nullptr; }
 bool query_target(proc_handler_t *, const char *, calldata_t *status) {
-  calldata_set_int(status, "binding_version", 1);
+  calldata_set_int(status, "binding_version", 2);
   calldata_set_ptr(status, "window", selected);
   calldata_set_ptr(status, "capture_window", captured);
   calldata_set_bool(status, "valid", bound_valid);
@@ -40,7 +40,7 @@ bool window_video_target_valid(const WindowVideoTarget &) { return !closes_at ||
 
 #define CHECK(condition) do { if (!(condition)) { std::fprintf(stderr, "game failure check failed at line %d\n", __LINE__); return 1; } } while (0)
 int main() {
-  WindowVideoTarget target{selected, L"test", 1};
+  WindowVideoTarget target{selected, "test", 1, "2"};
   closes_at = 2;
   bound_valid = false;
   CHECK(std::strcmp(game_video_failure(nullptr, target), "captureTargetClosed") == 0);

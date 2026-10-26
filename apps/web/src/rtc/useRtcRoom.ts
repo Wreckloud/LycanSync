@@ -10,6 +10,7 @@ import { DEFAULT_AUDIO_PREFERENCES, normalizeAudioVolume, unappliedCaptureProces
 import { ENTRANCE_SOUND_MAX_BYTES, ENTRANCE_SOUND_TOPIC, isSupportedEntranceSoundType } from './entranceSound';
 import { MicrophoneAudioProcessor } from './microphoneAudioProcessor';
 import { NativeScreenVideoSession } from './nativeScreenVideo';
+import type { ScreenSharePreferences } from '../settings/screenSharePreferences';
 import { NativeScreenAudioSession } from './nativeScreenAudio';
 import { NativeMicrophoneAudioSession, type NativeMicrophoneSettings } from './nativeMicrophoneAudio';
 import { nativeScreenAudioMode, type NativeScreenAudioMode } from './nativeScreenAudioMode';
@@ -43,7 +44,7 @@ interface RtcRoomEvents {
 }
 
 interface NativeScreenSourceSelection { sourceId: string; shareAudio: boolean; quality?: ScreenShareQualityId;
-  customQuality?: CustomScreenShareQuality; controllerIdentity?: string; controlTemporary?: boolean }
+  customQuality?: CustomScreenShareQuality; captureSettings?: ScreenSharePreferences; controllerIdentity?: string; controlTemporary?: boolean }
 
 interface ScreenShareResource {
   captureSessionId: string | null;
@@ -55,6 +56,7 @@ interface ScreenShareResource {
   remoteShare: RemoteControlShare | null;
   quality: ScreenShareQualityId;
   customQuality: CustomScreenShareQuality;
+  captureSettings?: ScreenSharePreferences;
   audioMode: NativeScreenAudioMode;
   audioChanging: boolean;
   stopping: boolean;
@@ -94,8 +96,17 @@ function captureErrorMessage(error: unknown, source: MediaSource): string {
       if (code === 'nativeVideoFirstFrameTimeout') return '共享画面未能及时送达，已结束本次共享，请重新选择后重试。';
       if (code === 'dxgiMonitorUnavailable') return '所选显示器暂不支持无边框共享，请确认显示器连接后重试。';
       if (code === 'dxgiAdapterMismatch') return '显示器与采集显卡未能匹配，已停止本次共享，请重新选择显示器后重试。';
-      if (code === 'captureSettingsUnsupported') return '当前 Windows 不支持所选屏幕共享设置，请关闭对应选项后重试。';
-      if (code === 'captureBorderAccessDenied') return '未获准隐藏共享边框。请关闭该选项后重试；此功能需要 Windows 授权及安装包权限支持。';
+      if (code === 'captureSettingsUnsupported') return '当前系统不支持所选采集方式或设置，请在高级选项中改用自动或兼容采集后重试。';
+      if (code === 'captureBorderAccessDenied') return '系统窗口采集未获准隐藏边框，请改用兼容采集，或在高级选项中允许此次显示系统边框。';
+      if (code === 'obsWindowBindingUnavailable' || code === 'obsWindowTargetMismatch') {
+        return '所选窗口身份未能确认，共享已停止。请重新选择窗口后重试。';
+      }
+      if (code && ['sharedTextureGpuWaitFailed', 'sharedTextureGpuStalled', 'sharedTextureReleaseFailed', 'sharedTextureAcquireFailed'].includes(code)) {
+        return '显卡处理共享画面失败，本次共享已停止。请重新选择来源后重试。';
+      }
+      if (code && ['obsWindowCaptureStartFailed', 'obsWindowRuntimeUnavailable', 'obsWindowSourceUnavailable'].includes(code)) {
+        return '窗口采集未能启动，请在高级选项中更换采集方式后重试；所选方式可能不兼容此应用。';
+      }
       if (code === 'obsCaptureGameDetectionFailed') return '无法确认所选程序的共享方式，请重新选择窗口后重试。';
       if (code === 'obsGameBindingUnavailable') return '游戏采集组件版本不匹配，请重新构建或更新客户端。';
       if (code === 'obsGameTargetMismatch') return '游戏绘制窗口与所选窗口不符，已停止共享，请重新选择。';
@@ -657,6 +668,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     const snapshot: NativeScreenSourceSelection | null = resource ? {
       sourceId: resource.sourceId, quality: resource.quality, customQuality: { ...resource.customQuality },
       shareAudio: Boolean(nativeScreenAudioSession?.track),
+      ...(resource.captureSettings ? { captureSettings: { ...resource.captureSettings } } : {}),
     } : null;
     if (!resource && currentRoom.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track) {
       throw new Error('screenShareCannotRestoreSource');
@@ -974,6 +986,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           const kind = sourceId.startsWith('monitor:') ? 'monitor' : 'window';
           nativeVideo = new NativeScreenVideoSession(desktop, {
             maxFps: selectedProfile.fps,
+            captureSettings: selection.captureSettings,
             resolution: { width: selectedProfile.width, height: selectedProfile.height },
             contentHint: 'motion',
             isCurrentCapture: () => activeRoom.value === currentRoom && screenShareResource === shareResource
@@ -1021,6 +1034,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             },
           });
           shareResource = { captureSessionId: null, sourceId, kind, videoSession: nativeVideo,
+            captureSettings: selection.captureSettings ? { ...selection.captureSettings } : undefined,
             videoTrack: nativeVideo.track, liveKitTrackId: null, remoteShare: null, quality: selectedQuality, customQuality: selectedCustomQuality,
             audioMode: nativeScreenAudioMode(capabilities.screenShareAudioCapture), audioChanging: false, stopping: false,
             controllerIdentity: selection.controllerIdentity, controlTemporary: selection.controlTemporary };

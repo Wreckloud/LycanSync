@@ -109,9 +109,14 @@ class ObsCaptureHostManager {
   }
 
   async start(sourceId, maxFps, sessionId, target, settings, resolution = { width: 1920, height: 1080 }, rebuilding = false) {
+    const windowMethod = settings?.windowMethod === undefined ? 'auto' : settings.windowMethod;
     if (typeof sourceId !== 'string' || !/^(monitor|window):[1-9]\d*:\d+$/.test(sourceId)
         || ![30, 60, 120].includes(maxFps) || !validTarget(target, sourceId) || !isSessionId(sessionId)
-        || !validResolution(resolution) || !settings || typeof settings.hideCursor !== 'boolean' || typeof settings.hideBorder !== 'boolean') {
+        || !validResolution(resolution) || !settings || typeof settings.hideCursor !== 'boolean' || typeof settings.hideBorder !== 'boolean'
+        || !['auto', 'game', 'bitblt', 'wgc'].includes(windowMethod)
+        || (target.kind === 'monitor' && windowMethod !== 'auto')
+        || (target.kind === 'game' && !['auto', 'game'].includes(windowMethod))
+        || (target.kind === 'window' && windowMethod === 'game')) {
       throw new Error('invalidObsCaptureArguments');
     }
     if (this.state?.videoSessionId) throw new Error('obsCaptureAlreadyRunning');
@@ -126,6 +131,9 @@ class ObsCaptureHostManager {
     state.maxFps = maxFps;
     state.resolution = { ...resolution };
     state.captureKind = target.kind;
+    state.requestedMethod = windowMethod;
+    state.borderAllowed = target.kind === 'window' && !settings.hideBorder;
+    state.captureMethod = undefined;
     state.evidenceStages = new Set();
     state.stopPromise = undefined;
     const started = new Promise((resolve, reject) => {
@@ -139,8 +147,9 @@ class ObsCaptureHostManager {
       state.startSent = true;
       return writeLine(state.child, ['start', target.kind, target.kind === 'monitor' ? target.monitorName : target.windowId,
         settings.hideCursor ? '0' : '1', settings.hideBorder ? '1' : '0', sessionId, maxFps,
-        target.kind !== 'monitor' ? target.propertyName : '', target.kind !== 'monitor' ? target.propertyValue : '',
-        resolution.width, resolution.height].join('|'));
+        target.kind !== 'monitor' ? target.lifetimeName : '', target.kind !== 'monitor' ? target.processId : '',
+        resolution.width, resolution.height, state.requestedMethod,
+        target.kind !== 'monitor' ? target.processCreationTime : ''].join('|'));
     }).catch(error => failState(state, error));
     const result = await started;
     if (result.adapterIndex === undefined) return result;
@@ -231,9 +240,18 @@ class ObsCaptureHostManager {
     }
     if (event.event === 'captureEvidence') {
       if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
-      const method = state.captureKind === 'monitor' ? 'dxgi' : state.captureKind === 'game' ? 'game' : 'wgc-window';
+      const method = event.captureMethod;
+      const expectedMethods = state.captureKind === 'monitor' ? ['dxgi'] : state.captureKind === 'game' ? ['game']
+        : state.requestedMethod === 'bitblt' ? ['bitblt-window'] : state.requestedMethod === 'wgc' ? ['wgc-window']
+          : ['bitblt-window', 'wgc-window'];
       if (this.state !== state || event.sessionId !== state.videoSessionId
-          || !['configured', 'rendering', 'sourceReady'].includes(event.stage) || event.captureMethod !== method
+          || !['configured', 'rendering', 'sourceReady', 'gpuDelayed'].includes(event.stage) || !expectedMethods.includes(method)
+          || (state.captureMethod && state.captureMethod !== method)
+          || (state.captureKind === 'window' && (event.requestedMethod !== state.requestedMethod
+            || event.borderAllowed !== state.borderAllowed || event.clientArea !== true))
+          || (event.windowFallbackReason !== undefined && (state.captureKind !== 'window'
+            || state.requestedMethod !== 'auto' || method !== 'bitblt-window'
+            || !['captureSettingsUnsupported', 'captureBorderAccessDenied', 'obsWindowRuntimeUnavailable'].includes(event.windowFallbackReason)))
           || !Number.isInteger(event.adapterIndex) || event.adapterIndex < 0 || event.adapterIndex >= 64
           || ![event.sourceWidth, event.sourceHeight].every(value => Number.isInteger(value) && value >= 0 && value <= 32768)
           || (event.captureApi !== undefined && (method !== 'dxgi' || !['DuplicateOutput1', 'DuplicateOutput'].includes(event.captureApi)))
@@ -242,11 +260,15 @@ class ObsCaptureHostManager {
         return;
       }
       if (state.stopRequested || state.evidenceStages.has(event.stage)) return;
+      state.captureMethod = method;
       state.evidenceStages.add(event.stage);
       this.onCaptureDiagnostic(state, { stage: { configured: 'obsCaptureConfigured', rendering: 'obsRenderObserved',
-        sourceReady: 'obsSourceReady' }[event.stage], captureMethod: method, adapterIndex: event.adapterIndex,
+        sourceReady: 'obsSourceReady', gpuDelayed: 'obsGpuFrameDeferred' }[event.stage], captureMethod: method, adapterIndex: event.adapterIndex,
         sourceWidth: event.sourceWidth, sourceHeight: event.sourceHeight,
         ...(event.captureApi ? { captureApi: event.captureApi } : {}),
+        ...(state.captureKind === 'window' ? { requestedMethod: event.requestedMethod,
+          borderAllowed: event.borderAllowed, clientArea: true,
+          ...(event.windowFallbackReason ? { windowFallbackReason: event.windowFallbackReason } : {}) } : {}),
         ...(method === 'dxgi' ? { adapterMatched: true } : {}) });
       return;
     }
@@ -597,10 +619,13 @@ function validTarget(target, sourceId) {
     && typeof target.monitorName === 'string' && /^\\\\\.\\DISPLAY[1-9]\d*$/i.test(target.monitorName);
   return ['window', 'game'].includes(target.kind) && sourceId.startsWith('window:')
     && typeof target.windowId === 'string' && /^[1-9]\d{0,19}$/.test(target.windowId)
-    && BigInt(target.windowId) <= 0xffffffffffffffffn && typeof target.propertyValue === 'string'
-    && /^[1-9]\d{0,19}$/.test(target.propertyValue) && BigInt(target.propertyValue) <= 0xffffffffffffffffn
-    && typeof target.propertyName === 'string' && target.propertyName.length <= 128
-    && /^LycanSync\.MediaHelper\.Window\.\d+\.\d+\.\d+$/.test(target.propertyName);
+    && BigInt(target.windowId) <= 0xffffffffffffffffn
+    && Number.isInteger(target.processId) && target.processId > 0 && target.processId <= 0xffffffff
+    && typeof target.processCreationTime === 'string' && /^[1-9]\d{0,19}$/.test(target.processCreationTime)
+    && BigInt(target.processCreationTime) <= 0xffffffffffffffffn
+    && typeof target.lifetimeName === 'string' && target.lifetimeName.length <= 128
+    && /^Local\\LycanSync\.WindowLifetime\.[1-9]\d*\.[1-9]\d*\.[1-9]\d*\.[1-9]\d*$/.test(target.lifetimeName)
+    && target.lifetimeName.endsWith(`.${target.windowId}`);
 }
 
 function validFrameEvent(event, sessionId) {
@@ -647,7 +672,7 @@ function validAudioDiagnostics(audio) {
 }
 
 function validResolution(size) {
-  return size && [360, 720, 1080, 1440].includes(size.height) && size.width === size.height * 16 / 9;
+  return size && [720, 1080, 1440].includes(size.height) && size.width === size.height * 16 / 9;
 }
 
 function isPositiveSize(size) {

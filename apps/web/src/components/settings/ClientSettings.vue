@@ -12,7 +12,7 @@ const autoStartBusy = ref(false);
 const autoStartError = ref('');
 const desktopBridge = window.lycanDesktop;
 let loaded = false;
-const screenPreferences = reactive({ hideCursor: false, hideBorder: false });
+const screenPreferences = reactive({ hideCursor: false, hideBorder: true });
 const screenSupport = ref<{ hideCursor: boolean; hideBorder: boolean }>();
 const screenError = ref('');
 const { state: updateState, error: updateError, busy: updateBusy, confirmationVersion,
@@ -24,12 +24,6 @@ const updateDescription = computed(() => {
   if (updateBusy.value || updateState.value?.phase === 'checking') return '正在检查更新…';
   if (!updateError.value && !updateState.value?.error && updateState.value?.message) return updateState.value.message;
   return '进入本页时检查一次更新；更新需确认后重启。';
-});
-const borderDescription = computed(() => {
-  if (!screenSupport.value) return screenError.value ? '尚未确认系统支持情况。' : '正在确认系统支持情况…';
-  return screenSupport.value.hideBorder
-    ? '需要 Windows 授权及安装包权限支持；未获准时会提示，其他应用也可能要求保留边框。'
-    : '需要 Windows build 20348 或以上；当前系统无法通过官方接口隐藏边框。';
 });
 const autoStartDescription = computed(() => {
   if (autoStartSupported.value === undefined) return autoStartError.value ? '尚未确认开机自启支持情况。' : '正在读取开机自启设置…';
@@ -58,7 +52,7 @@ watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
   }).catch(() => { screenError.value = '无法确认屏幕共享设置支持情况，请重新打开客户端。'; });
 }, { immediate: true });
 
-function updateScreenPreference(key: 'hideCursor' | 'hideBorder', event: Event) {
+function updateScreenPreference(key: 'hideCursor', event: Event) {
   if (!screenSupport.value?.[key]) return;
   const input = event.target as HTMLInputElement;
   const previous = screenPreferences[key];
@@ -130,11 +124,7 @@ async function updateAutoStart(event: Event) {
           <input type="checkbox" :checked="screenPreferences.hideCursor" :disabled="!screenSupport?.hideCursor"
             aria-label="隐藏共享画面中的光标" @change="updateScreenPreference('hideCursor', $event)" />
         </label>
-        <label class="settings-toggle" :class="{ 'is-disabled': !screenSupport?.hideBorder }">
-          <span><strong>隐藏黄色共享边框</strong><small>{{ borderDescription }}</small></span>
-          <input type="checkbox" :checked="screenPreferences.hideBorder" :disabled="!screenSupport?.hideBorder"
-            aria-label="隐藏黄色共享边框" @change="updateScreenPreference('hideBorder', $event)" />
-        </label>
+        <p>默认优先使用无系统边框的采集方式。窗口采集方式和是否允许系统边框，在选择共享来源时的高级选项中设置，仅本次生效。</p>
         <InlineFeedback :message="screenError" />
       </template>
     </section>

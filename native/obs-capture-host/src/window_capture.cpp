@@ -1,96 +1,40 @@
 #include "window_capture.h"
 
+#include <callback/calldata.h>
+#include <callback/proc.h>
 #include <winrt/Windows.Foundation.Metadata.h>
 #include <winrt/Windows.Graphics.Capture.h>
 #include <winrt/Windows.Security.Authorization.AppCapabilityAccess.h>
 #include <chrono>
-#include <filesystem>
 #include <cstdio>
 
 namespace {
 
-struct winrt_capture;
-
-struct WindowCapture {
-  WindowVideoTarget target;
-  HMODULE module = nullptr;
-  winrt_capture *capture = nullptr;
-  bool hide_cursor = false;
-  const char *error = nullptr;
-  // ABI 来自固定32.2.2的libobs-winrt/winrt-capture.h，不读取插件私有结构或自行实现WGC。
-  BOOL (*supported)() = nullptr;
-  BOOL (*cursor_supported)() = nullptr;
-  winrt_capture *(*initialize)(BOOL, HWND, BOOL, BOOL) = nullptr;
-  void (*free_capture)(winrt_capture *) = nullptr;
-  BOOL (*active)(const winrt_capture *) = nullptr;
-  void (*render)(winrt_capture *) = nullptr;
-  uint32_t (*width)(const winrt_capture *) = nullptr;
-  uint32_t (*height)(const winrt_capture *) = nullptr;
-
-  ~WindowCapture() {
-    if (module) FreeLibrary(module);
-  }
+struct WindowStatus {
+  HWND selected = nullptr;
+  HWND captured = nullptr;
+  int method = 0;
+  bool available = false;
+  bool valid = false;
+  bool failed = false;
 };
 
-WindowCapture g_window;
-
-bool load_exports(const std::wstring &directory) {
-  const auto path = std::filesystem::path(directory) / L"libobs-winrt.dll";
-  g_window.module = LoadLibraryExW(path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-  if (!g_window.module) {
-    std::fprintf(stderr, "window runtime load failed: %lu\n", GetLastError());
-    return false;
-  }
-  const auto load = []<typename T>(T &function, const char *name) {
-    function = reinterpret_cast<T>(GetProcAddress(g_window.module, name));
-    if (!function) std::fprintf(stderr, "window runtime export missing: %s\n", name);
-    return function != nullptr;
-  };
-  return load(g_window.supported, "winrt_capture_supported")
-      && load(g_window.cursor_supported, "winrt_capture_cursor_toggle_supported")
-      && load(g_window.initialize, "winrt_capture_init_window")
-      && load(g_window.free_capture, "winrt_capture_free")
-      && load(g_window.active, "winrt_capture_active")
-      && load(g_window.render, "winrt_capture_render")
-      && load(g_window.width, "winrt_capture_width")
-      && load(g_window.height, "winrt_capture_height");
-}
-
-void tick_window(void *, float) {
-  if (g_window.capture || g_window.error || !window_video_target_valid(g_window.target) || window_video_suspended()) return;
-  obs_enter_graphics();
-  g_window.capture = g_window.initialize(!g_window.hide_cursor, g_window.target.window, false, true);
-  obs_leave_graphics();
-  if (!window_video_target_valid(g_window.target)) g_window.error = "captureTargetClosed";
-  else if (!g_window.capture) g_window.error = "obsWindowCaptureStartFailed";
-}
-
-void free_window_capture(void *) {
-  if (g_window.capture) {
-    g_window.free_capture(g_window.capture);
-    g_window.capture = nullptr;
-  }
-}
-
-void destroy_window(void *) {
-  // 与官方窗口来源一致，在图形线程释放帧池和设备回调。
-  obs_queue_task(OBS_TASK_GRAPHICS, free_window_capture, nullptr, false);
-}
-
-uint32_t window_width(void *) {
-  return !window_video_failure() && !window_video_suspended() && g_window.capture ? g_window.width(g_window.capture) : 0;
-}
-
-uint32_t window_height(void *) {
-  return !window_video_failure() && !window_video_suspended() && g_window.capture ? g_window.height(g_window.capture) : 0;
-}
-
-void render_window(void *, gs_effect_t *) {
-  if (g_window.capture && !window_video_failure() && !window_video_suspended()) g_window.render(g_window.capture);
+bool read_window_status(obs_source_t *source, WindowStatus &status) {
+  calldata_t result;
+  calldata_init(&result);
+  const bool queried = proc_handler_call(obs_source_get_proc_handler(source), "lycansync_get_target", &result);
+  const bool version_matches = calldata_int(&result, "binding_version") == 2;
+  status.selected = static_cast<HWND>(calldata_ptr(&result, "window"));
+  status.captured = static_cast<HWND>(calldata_ptr(&result, "capture_window"));
+  status.method = static_cast<int>(calldata_int(&result, "method"));
+  status.available = calldata_bool(&result, "available");
+  status.valid = calldata_bool(&result, "valid");
+  status.failed = calldata_bool(&result, "failed");
+  calldata_free(&result);
+  return queried && version_matches && (status.method == 1 || status.method == 2);
 }
 
 struct WindowPreparation {
-  const std::wstring &runtime_directory;
   bool hide_cursor;
   bool hide_border;
   const char *error = "obsWindowRuntimeUnavailable";
@@ -99,16 +43,16 @@ struct WindowPreparation {
 void prepare_window_capture(void *opaque) {
   auto &request = *static_cast<WindowPreparation *>(opaque);
   try {
-    if (!load_exports(request.runtime_directory)) return;
-    if (!g_window.supported()) {
-      std::fprintf(stderr, "window runtime reports capture unsupported\n");
+    using namespace winrt::Windows;
+    if (!Graphics::Capture::GraphicsCaptureSession::IsSupported()) return;
+    if (request.hide_cursor && !Foundation::Metadata::ApiInformation::IsPropertyPresent(
+        L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IsCursorCaptureEnabled")) {
+      request.error = "captureSettingsUnsupported";
       return;
     }
-    if (request.hide_cursor && !g_window.cursor_supported()) { request.error = "captureSettingsUnsupported"; return; }
     if (request.hide_border) {
-      using namespace winrt::Windows;
       if (!Foundation::Metadata::ApiInformation::IsPropertyPresent(
-              L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IsBorderRequired")) {
+          L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IsBorderRequired")) {
         request.error = "captureSettingsUnsupported";
         return;
       }
@@ -122,52 +66,98 @@ void prepare_window_capture(void *opaque) {
     }
     request.error = nullptr;
   } catch (const winrt::hresult_error &failure) {
-    std::fprintf(stderr, "window runtime initialization failed: 0x%08lx\n", static_cast<unsigned long>(failure.code().value));
+    std::fprintf(stderr, "window capture capability failed: 0x%08lx\n", static_cast<unsigned long>(failure.code().value));
   }
 }
 
 }  // namespace
 
+bool bind_window_video_target(WindowVideoTarget &target) {
+  obs_data_t *settings = obs_data_create();
+  obs_data_set_int(settings, "lycansync_window_id", static_cast<long long>(reinterpret_cast<uintptr_t>(target.window)));
+  obs_data_set_string(settings, "lycansync_window_lifetime", target.lifetime_name.c_str());
+  obs_data_set_int(settings, "lycansync_process_id", target.process_id);
+  obs_data_set_string(settings, "lycansync_process_creation", target.process_creation.c_str());
+  auto binding = std::shared_ptr<lycan_game_target>(new lycan_game_target{}, [](lycan_game_target *value) {
+    lycan_game_target_close(value);
+    delete value;
+  });
+  const bool valid = lycan_game_target_read(binding.get(), settings);
+  obs_data_release(settings);
+  if (valid) target.binding = std::move(binding);
+  return valid;
+}
+
 bool window_video_target_valid(const WindowVideoTarget &target) {
-  return target.window && !target.property_name.empty() && target.property_value
-      && IsWindow(target.window)
-      && GetPropW(target.window, target.property_name.c_str()) == reinterpret_cast<HANDLE>(target.property_value);
+  return target.binding && lycan_game_target_valid(target.binding.get());
 }
 
-bool window_video_suspended() {
-  return IsIconic(g_window.target.window) || !IsWindowVisible(g_window.target.window);
+bool window_video_suspended(const WindowVideoTarget &target) {
+  return IsIconic(target.window) || !IsWindowVisible(target.window);
 }
 
-const char *window_video_failure() {
-  if (!window_video_target_valid(g_window.target)) return "captureTargetClosed";
-  if (g_window.error) return g_window.error;
-  if (g_window.capture && !g_window.active(g_window.capture)) return "obsWindowCaptureStopped";
-  return nullptr;
+const char *window_video_failure(obs_source_t *source, const WindowVideoTarget &target) {
+  if (!window_video_target_valid(target)) return "captureTargetClosed";
+  WindowStatus status;
+  const bool queried = read_window_status(source, status);
+  if (!window_video_target_valid(target)) return "captureTargetClosed";
+  if (!queried) return "obsWindowBindingUnavailable";
+  if (!status.valid || status.selected != target.window || (status.captured && status.captured != target.window)) {
+    return "obsWindowTargetMismatch";
+  }
+  if (!status.available) return "obsWindowRuntimeUnavailable";
+  return status.failed ? "obsWindowCaptureStartFailed" : nullptr;
 }
 
-obs_source_t *create_window_video_source(const WindowVideoTarget &target, const std::wstring &runtime_directory,
-                                        bool hide_cursor, bool hide_border, const char *&error) {
+const char *window_video_method(obs_source_t *source) {
+  WindowStatus status;
+  if (!read_window_status(source, status)) return nullptr;
+  return status.method == 1 ? "bitblt-window" : "wgc-window";
+}
+
+obs_source_t *create_window_video_source(const WindowVideoTarget &target, bool hide_cursor,
+    bool hide_border, std::string_view method, const char *&error, const char *&fallback_reason) {
+  fallback_reason = nullptr;
   if (!window_video_target_valid(target)) { error = "captureTargetClosed"; return nullptr; }
-  WindowPreparation request{runtime_directory, hide_cursor, hide_border};
-  // libobs 已将主线程初始化为 STA；WinRT 检查复用其已初始化的 MTA 图形线程，不改线程模型。
-  obs_queue_task(OBS_TASK_GRAPHICS, prepare_window_capture, &request, true);
-  if (request.error) { error = request.error; return nullptr; }
-  if (!window_video_target_valid(target)) { error = "captureTargetClosed"; return nullptr; }
-  g_window.target = target;
-  g_window.hide_cursor = hide_cursor;
-  obs_source_info info{};
-  info.id = "lycansync_bound_window";
-  info.type = OBS_SOURCE_TYPE_INPUT;
-  info.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW | OBS_SOURCE_SRGB;
-  info.get_name = [](void *) { return "LycanSync selected window"; };
-  info.create = [](obs_data_t *, obs_source_t *) -> void * { return &g_window; };
-  info.destroy = destroy_window;
-  info.video_tick = tick_window;
-  info.video_render = render_window;
-  info.get_width = window_width;
-  info.get_height = window_height;
-  obs_register_source(&info);
-  auto *source = obs_source_create(info.id, "LycanSync selected window", nullptr, nullptr);
+  if (!obs_get_latest_input_type_id("lycansync_window_capture")) { error = "obsWindowBindingUnavailable"; return nullptr; }
+  const int requested = method == "auto" ? 0 : method == "bitblt" ? 1 : method == "wgc" ? 2 : -1;
+  if (requested < 0) { error = "invalidCaptureArguments"; return nullptr; }
+  obs_data_t *settings = obs_data_create();
+  obs_data_set_int(settings, "lycansync_window_id", static_cast<long long>(reinterpret_cast<uintptr_t>(target.window)));
+  obs_data_set_string(settings, "lycansync_window_lifetime", target.lifetime_name.c_str());
+  obs_data_set_int(settings, "lycansync_process_id", target.process_id);
+  obs_data_set_string(settings, "lycansync_process_creation", target.process_creation.c_str());
+  obs_data_set_int(settings, "method", requested);
+  obs_data_set_bool(settings, "cursor", !hide_cursor);
+  obs_data_set_bool(settings, "capture_audio", false);
+  obs_data_set_bool(settings, "client_area", true);
+  obs_data_set_bool(settings, "force_sdr", true);
+  auto *source = obs_source_create("lycansync_window_capture", "LycanSync selected window", settings, nullptr);
   error = source ? nullptr : "obsWindowSourceUnavailable";
+  if (source) {
+    WindowStatus status;
+    if (!read_window_status(source, status)) error = "obsWindowBindingUnavailable";
+    else if (requested == 2 && status.method != 2) error = "captureSettingsUnsupported";
+    else if (status.method == 2) {
+      WindowPreparation preparation{hide_cursor, hide_border};
+      // 来源尚未加入场景，不会先启动 WGC 再补问边框授权。
+      if (status.available) obs_queue_task(OBS_TASK_GRAPHICS, prepare_window_capture, &preparation, true);
+      if (preparation.error && requested == 0) {
+        fallback_reason = preparation.error;
+        obs_data_set_int(settings, "method", 1);
+        // 视频来源 update 延迟到后续视频循环；这里只重建尚未启动的来源，不能带着旧方式进入场景。
+        obs_source_release(source);
+        source = obs_source_create("lycansync_window_capture", "LycanSync selected window", settings, nullptr);
+        if (!source) error = "obsWindowSourceUnavailable";
+      } else error = preparation.error;
+    }
+    if (!error) error = window_video_failure(source, target);
+  }
+  if (!window_video_target_valid(target)) error = "captureTargetClosed";
+  obs_data_release(settings);
+  if (error && source) {
+    obs_source_release(source);
+    source = nullptr;
+  }
   return source;
 }

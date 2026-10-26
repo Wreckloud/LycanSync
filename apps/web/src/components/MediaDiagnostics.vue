@@ -35,7 +35,7 @@ function formatFpsInterval(intervalMs: number | null) {
         {{ statistics.native?.captureBackend === 'obsLibobs' ? '宿主发帧' : '处理' }} {{ statistics.nativeInterval.processedFps }} · {{ formatFpsInterval(statistics.nativeInterval.elapsedMs) }}</template>
       <template v-else>等待统计</template>
     </p>
-    <small v-if="statistics?.native?.captureBackend === 'obsLibobs'">本次 OBS 会话槽位累计丢帧 {{ statistics.native.obsBridgeDroppedFrames ?? '—' }}；发帧计数截至宿主事件，不代表 Electron 导入或编码成功。</small>
+    <small v-if="statistics?.native?.captureBackend === 'obsLibobs'">本次 OBS 纹理桥累计丢帧 {{ statistics.native.obsBridgeDroppedFrames ?? '—' }}（槽位忙或 GPU 等待跳过）；发帧计数截至宿主事件，不代表 Electron 导入或编码成功。</small>
     <template v-if="statistics?.native?.state === 'running' && statistics.native.captureBackend === 'obsLibobs'">
       <p>OBS 渲染循环：
         <template v-if="statistics.obsRenderInterval">{{ statistics.obsRenderInterval.renderedFps }} FPS · 区间延误 {{ statistics.obsRenderInterval.laggedFrames }} / {{ statistics.obsRenderInterval.totalFrames }} 个时隙 · {{ formatFpsInterval(statistics.obsRenderInterval.elapsedMs) }}</template>

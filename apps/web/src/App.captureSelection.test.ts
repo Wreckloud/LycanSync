@@ -3,13 +3,15 @@ import { runInNewContext } from 'node:vm';
 import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
 import { ref } from 'vue';
+import type { ScreenSharePreferences } from './settings/screenSharePreferences';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNativeVideoSourceSelection } from './components/nativeVideoSourceSelection';
 import { canSelectNativeSource, readScreenShareAudioPreference, resolveNativeScreenAudioCapability,
   saveScreenShareAudioPreference, shouldShareAudioInNativeSelection, type NativeScreenAudioMode } from './rtc/nativeScreenAudioMode';
 import { readScreenShareQuality, saveScreenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from './rtc/screenShareQuality';
 
-type Selection = { sourceId: string; shareAudio: boolean; quality?: ScreenShareQualityId; customQuality?: CustomScreenShareQuality };
+type Selection = { sourceId: string; shareAudio: boolean; quality?: ScreenShareQualityId;
+  customQuality?: CustomScreenShareQuality; captureSettings?: ScreenSharePreferences };
 const callbackNames = ['restoreCapturePreferences', 'stopNativeSourceRefresh', 'selectCaptureSource', 'saveCapturePreferences',
   'updateCaptureShareAudio', 'requestNativeScreenSource', 'changeScreenShareAudio', 'changeScreenShareQuality'];
 const script = parse(readFileSync(new URL('./App.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
@@ -64,7 +66,7 @@ function setup(mode: NativeScreenAudioMode = 'process') {
     restoreCapturePreferences(): void;
     requestNativeScreenSource(capabilities: Promise<Record<string, { available: boolean; reason: string }>>): Promise<Selection | null>;
     updateCaptureShareAudio(enabled: boolean): void;
-    selectCaptureSource(sourceId: string | null): void;
+    selectCaptureSource(sourceId: string | null, settings?: ScreenSharePreferences): void;
     changeScreenShareAudio(enabled: boolean): Promise<void>;
     changeScreenShareQuality(quality: ScreenShareQualityId, custom?: CustomScreenShareQuality): Promise<void>;
   };
@@ -78,6 +80,15 @@ function setup(mode: NativeScreenAudioMode = 'process') {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('App 启动恢复共享偏好', () => {
+  it('高级采集选择只交给本次共享，不落盘为长期边框授权', async () => {
+    const { app, state, stored, open } = setup();
+    const waiting = open();
+    await vi.waitFor(() => expect(state.captureAudioCapabilityReady.value).toBe(true));
+    const settings: ScreenSharePreferences = { hideCursor: true, hideBorder: false, windowMethod: 'wgc' };
+    app.selectCaptureSource('window:test', settings);
+    expect((await waiting)?.captureSettings).toEqual(settings);
+    expect(stored.has('lycansync.screen-share')).toBe(false);
+  });
   it('沿用已保存的画质和屏幕来源', async () => {
     const { app, state, stored, open } = setup();
     stored.set('lycansync.screen-share-quality', 'highFrameRate');
@@ -147,7 +158,7 @@ describe('App 共享选择的音频偏好提交顺序', () => {
   it('取消自定义草稿立即恢复原值，连续打开也不继承已取消值', async () => {
     const { app, state, open, setItem } = setup();
     const waiting = open();
-    state.captureCustomQuality.value = { resolution: 360, fps: 30 };
+    state.captureCustomQuality.value = { resolution: 720, fps: 30 };
     state.captureQuality.value = 'economy';
     const nextWaiting = open();
     expect(await waiting).toBeNull();

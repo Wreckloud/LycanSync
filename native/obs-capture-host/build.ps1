@@ -1,5 +1,7 @@
 ﻿param([switch]$Offline, [switch]$BuildTestWindows)
 $ErrorActionPreference = 'Stop'
+# npm 可能继承另一版 PowerShell 的模块路径，固定使用当前宿主自带的哈希与 JSON 命令。
+Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1')
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or -not [Environment]::Is64BitProcess) {
     throw 'OBS 宿主构建仅支持 Windows x64 PowerShell。'
 }
@@ -70,6 +72,8 @@ New-Item -ItemType Directory -Force -Path $gameDepsDirectory | Out-Null
 if ($LASTEXITCODE -ne 0) { throw '游戏插件依赖解压失败。' }
 & git -C $projectRoot apply --recount --whitespace=error-all --directory=release/build-cache/obs-32.2.2/source/obs-studio-32.2.2-sources (Join-Path $PSScriptRoot 'patches/bound-game-capture.patch')
 if ($LASTEXITCODE -ne 0) { throw '固定游戏插件补丁不适用，拒绝继续构建。' }
+& git -C $projectRoot apply --recount --whitespace=error-all --directory=release/build-cache/obs-32.2.2/source/obs-studio-32.2.2-sources (Join-Path $PSScriptRoot 'patches/bound-window-capture.patch')
+if ($LASTEXITCODE -ne 0) { throw '固定窗口插件补丁不适用，拒绝继续构建。' }
 & git -C $projectRoot apply --recount --whitespace=error-all --directory=release/build-cache/obs-32.2.2/source/obs-studio-32.2.2-sources (Join-Path $PSScriptRoot 'patches/bound-audio-capture.patch')
 if ($LASTEXITCODE -ne 0) { throw '固定声音插件补丁不适用，拒绝继续构建。' }
 & git -C $projectRoot apply --recount --whitespace=error-all --directory=release/build-cache/obs-32.2.2/source/obs-studio-32.2.2-sources (Join-Path $PSScriptRoot 'patches/dxgi-output-compat.patch')
@@ -148,7 +152,7 @@ if ($LASTEXITCODE -ne 0) { throw 'OBS 宿主 CMake 配置失败。' }
 & $cmake --build $buildDirectory --config Release --parallel 2
 if ($LASTEXITCODE -ne 0) { throw 'OBS 宿主构建失败。' }
 if ($BuildTestWindows) {
-    & $cmake --build $buildDirectory --config Release --target lycansync-obs-test-windows lycansync-bound-game-target-tests lycansync-bound-audio-target-tests lycansync-screen-audio-pcm-tests lycansync-obs-test-d3d --parallel 2
+    & $cmake --build $buildDirectory --config Release --target lycansync-obs-test-windows lycansync-bound-game-target-tests lycansync-bound-audio-target-tests lycansync-screen-audio-pcm-tests lycansync-obs-test-d3d lycansync-game-failure-tests lycansync-window-failure-tests lycansync-gpu-frame-wait-tests --parallel 2
     if ($LASTEXITCODE -ne 0) { throw '测试色块窗口构建失败。' }
 }
 $gamePlugin = Join-Path $buildDirectory 'game-plugin/win-capture.dll'
@@ -176,6 +180,7 @@ foreach ($binary in $runtimeBinaries) {
 }
 [ordered]@{ obsVersion = '32.2.2'; sourceSha256 = $sourceHash; dependencySha256 = $gameDepsHash;
     patchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/bound-game-capture.patch') -Algorithm SHA256).Hash.ToLowerInvariant();
+    windowPatchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/bound-window-capture.patch') -Algorithm SHA256).Hash.ToLowerInvariant();
     binarySha256 = (Get-FileHash -LiteralPath $gamePlugin -Algorithm SHA256).Hash.ToLowerInvariant();
     bytes = (Get-Item -LiteralPath $gamePlugin).Length; importsChecked = $true;
     runtimeExecuted = $false; redistributionReady = $false } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $buildDirectory 'game-plugin/build-manifest.json') -Encoding utf8
@@ -199,6 +204,7 @@ $hostSources = @(Get-ChildItem -LiteralPath $PSScriptRoot -File -Recurse | Where
 $manifest = [ordered]@{ obsVersion = '32.2.2'; architecture = 'x64'; sourceSha256 = $sourceHash; runtimeSha256 = $runtimeHash;
     sourceUrl = 'https://github.com/obsproject/obs-studio/releases/tag/32.2.2'; sourceArchive = (Split-Path $sourceArchive -Leaf);
     graphicsPatchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/dxgi-output-compat.patch') -Algorithm SHA256).Hash.ToLowerInvariant();
+    windowPatchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/bound-window-capture.patch') -Algorithm SHA256).Hash.ToLowerInvariant();
     compiler = $toolsVersion; runtimeBytes = ($files | Measure-Object -Property bytes -Sum).Sum;
     runtimeExecuted = $false; redistributionReady = $false; imports = $imports; sourceFiles = $hostSources; files = $files }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $preparedDirectory 'build-manifest.json') -Encoding utf8

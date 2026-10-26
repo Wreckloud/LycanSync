@@ -301,8 +301,10 @@ pub enum ReservedVideoTarget {
     },
     Window {
         window_id: String,
-        property_name: String,
-        property_value: String,
+        lifetime_name: String,
+        process_id: u32,
+        process_creation_time: String,
+        requires_window_capture: bool,
         executable: String,
     },
 }
@@ -543,14 +545,19 @@ mod tests {
             source_id: "window:1:0".to_owned(),
             target: super::ReservedVideoTarget::Window {
                 window_id: u64::MAX.to_string(),
-                property_name: "LycanSync.MediaHelper.Window.1.2.3".to_owned(),
-                property_value: u64::MAX.to_string(),
+                lifetime_name: "Local\\LycanSync.WindowLifetime.1.2.3.4".to_owned(),
+                process_id: 123,
+                process_creation_time: u64::MAX.to_string(),
+                requires_window_capture: true,
                 executable: "C:\\Games\\game.exe".to_owned(),
             },
         };
         let value = serde_json::to_value(event).unwrap();
         assert_eq!(value["target"]["windowId"], u64::MAX.to_string());
-        assert_eq!(value["target"]["propertyValue"], u64::MAX.to_string());
+        assert_eq!(value["target"]["processCreationTime"], u64::MAX.to_string());
+        assert_eq!(value["target"]["processId"], 123);
+        assert_eq!(value["target"]["requiresWindowCapture"], true);
+        assert!(value["target"].get("propertyName").is_none());
         assert_eq!(value["target"]["kind"], "window");
         let monitor = serde_json::to_value(super::ReservedVideoTarget::Monitor {
             monitor_name: "\\\\.\\DISPLAY1".to_owned(),

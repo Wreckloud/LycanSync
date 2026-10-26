@@ -185,8 +185,10 @@ describe('NativeScreenVideoSession', () => {
       onNativeVideoSuspended: () => () => {},
     };
     let now = 0;
+    const captureSettings = { hideCursor: true, hideBorder: false, windowMethod: 'wgc' as const };
     const session = new NativeScreenVideoSession(desktop, {
       maxFps: 30,
+      captureSettings,
       now: () => now,
       createAdjustedFrame,
       createGenerator: () => ({
@@ -197,7 +199,7 @@ describe('NativeScreenVideoSession', () => {
     });
     const ready = session.start('window:1:0');
     await Promise.resolve();
-    expect(desktop.startNativeVideo).toHaveBeenCalledWith('window:1:0', 30, { hideCursor: false, hideBorder: false }, { width: 1920, height: 1080 });
+    expect(desktop.startNativeVideo).toHaveBeenCalledWith('window:1:0', 30, captureSettings, { width: 1920, height: 1080 });
     const sizes = [
       { width: 1920, height: 1080, displayWidth: 1920, displayHeight: 1088 },
       { width: 800, height: 1048, displayWidth: 1920, displayHeight: 1088 },
@@ -308,7 +310,7 @@ describe('NativeScreenVideoSession', () => {
     const frame = createFrame();
     dispatchFrame(target, frame, 'session-1');
     expect(await ready).toBe(track);
-    expect(started).toHaveBeenCalledWith('monitor:1:0', 30, { hideCursor: false, hideBorder: false }, { width: 1920, height: 1080 });
+    expect(started).toHaveBeenCalledWith('monitor:1:0', 30, { hideCursor: false, hideBorder: true }, { width: 1920, height: 1080 });
     expect(frames).toEqual([frame]);
     expect(frame.close).toHaveBeenCalledOnce();
 
@@ -451,7 +453,7 @@ describe('NativeScreenVideoSession', () => {
     expect(writes).toEqual([first]);
 
     await ready;
-    expect(desktop.startNativeVideo).toHaveBeenCalledWith('window:1:0', maxFps, { hideCursor: false, hideBorder: false }, { width: 1920, height: 1080 });
+    expect(desktop.startNativeVideo).toHaveBeenCalledWith('window:1:0', maxFps, { hideCursor: false, hideBorder: true }, { width: 1920, height: 1080 });
     expect(first.close).not.toHaveBeenCalled();
     finishWrite();
     await vi.waitFor(() => expect(first.close).toHaveBeenCalledOnce());
@@ -489,7 +491,7 @@ describe('NativeScreenVideoSession', () => {
     dispatchFrame(target, frame, 'quality-session');
     await ready;
     await vi.waitFor(() => expect(writes).toHaveLength(1));
-    expect(desktop.startNativeVideo).toHaveBeenCalledWith('window:1:0', maxFps, { hideCursor: false, hideBorder: false }, { width: 1280, height: 720 });
+    expect(desktop.startNativeVideo).toHaveBeenCalledWith('window:1:0', maxFps, { hideCursor: false, hideBorder: true }, { width: 1280, height: 720 });
     expect(writes[0].displayWidth).toBe(1280);
     expect(writes[0].displayHeight).toBe(720);
     expect(frame.close).toHaveBeenCalledOnce();

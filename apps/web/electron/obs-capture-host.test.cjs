@@ -161,7 +161,7 @@ test('预热显卡不匹配先等待旧宿主退出，再按原来源和画质�
   const second = children[1];
   assert.equal(second.args.at(-1), '2');
   assert.equal(second.commands[0], first.commands[0]);
-  assert.match(second.commands[0], /\|120\|\|\|2560\|1440$/);
+  assert.match(second.commands[0], /\|120\|\|\|2560\|1440\|auto\|$/);
   emit(second, { event: 'captureStarted', helperVersion: '32.2.2' });
   await started;
   assert.equal(manager.state.child, second);
@@ -230,6 +230,22 @@ test('采集证据仅接受当前会话固定阶段和字段，每阶段一次�
   assert.equal(captureDiagnostics.length, 2);
   assert.equal(captureDiagnostics[1].stopMode, 'graceful');
   assert.deepEqual(failures, []);
+});
+
+test('GPU 短暂延迟只记录一次证据，真实持续卡死和设备错误仍结束共享', async (context) => {
+  for (const code of ['sharedTextureGpuStalled', 'sharedTextureGpuWaitFailed', 'sharedTextureReleaseFailed']) {
+    const { manager, ready, emit, captureDiagnostics, failures } = fixture(context);
+    await ready();
+    const delayed = { event: 'captureEvidence', stage: 'gpuDelayed', captureMethod: 'dxgi',
+      adapterIndex: 0, adapterMatched: true, sourceWidth: 0, sourceHeight: 0 };
+    emit(delayed); emit(delayed);
+    assert.deepEqual(failures, []);
+    assert.notEqual(manager.state.failed, true);
+    assert.equal(captureDiagnostics.filter(entry => entry.stage === 'obsGpuFrameDeferred').length, 1);
+    emit({ event: code });
+    assert.deepEqual(failures, [code]);
+    assert.equal(manager.state.failed, true);
+  }
 });
 
 test('启动前阶段区分图形准备与来源创建，每阶段一次，不带窗口或硬件标识', async (context) => {
@@ -826,7 +842,7 @@ test('启动按显示器设备名传参，不把来源 ID 尾号当作显示器�
   const { manager, ready, spawns, captureCommands } = fixture(context);
   await ready();
   assert.deepEqual(spawns[0][1], ['C:\\obs\\win-capture.dll', 'C:\\obs\\data', 'C:\\user-data\\obs-capture\\32.2.2']);
-  assert.equal(captureCommands[0], `start|monitor|${monitorName}|0|0|${sessionId}|60|||1920|1080`);
+  assert.equal(captureCommands[0], `start|monitor|${monitorName}|0|0|${sessionId}|60|||1920|1080|auto|`);
   assert.equal(spawns[0][2].windowsHide, true);
   assert.equal(spawns[0][2].cwd, 'C:\\obs');
   assert.equal(manager.state.helperVersion, '32.2.2');
@@ -879,24 +895,24 @@ test('自定义尺寸贯通宿主启动与切换，只在尺寸和帧率均确�
     { hideCursor: false, hideBorder: false }, { width: 2560, height: 1440 });
   emit({ event: 'captureStarted', helperVersion: '32.2.2' });
   await started;
-  assert.deepEqual(captureCommands[0].split('|').slice(-2), ['2560', '1440']);
-  const resolution = { width: 640, height: 360 };
+  assert.deepEqual(captureCommands[0].split('|').slice(-4), ['2560', '1440', 'auto', '']);
+  const resolution = { width: 1280, height: 720 };
   const changing = manager.configureVideo(sessionId, 30, resolution);
-  resolution.width = 1280;
-  assert.equal(commands.at(-1), 'configure:1:30:640:360');
+  resolution.width = 1920;
+  assert.equal(commands.at(-1), 'configure:1:30:1280:720');
   assert.deepEqual(manager.state.resolution, { width: 2560, height: 1440 });
-  emit({ event: 'captureConfigured', requestId: '1', sessionId, maxFps: 30, width: 640, height: 360 });
+  emit({ event: 'captureConfigured', requestId: '1', sessionId, maxFps: 30, width: 1280, height: 720 });
   await changing;
-  assert.deepEqual(manager.state.resolution, { width: 640, height: 360 });
+  assert.deepEqual(manager.state.resolution, { width: 1280, height: 720 });
   assert.equal(spawns.length, 1);
-  for (const size of [null, { width: 3840, height: 2160 }, { width: 2560, height: 1080 }, { width: '1920', height: 1080 }]) {
+  for (const size of [null, { width: 640, height: 360 }, { width: 3840, height: 2160 }, { width: 2560, height: 1080 }, { width: '1920', height: 1080 }]) {
     await assert.rejects(manager.configureVideo(sessionId, 60, size), /invalidVideoConfiguration/);
   }
   const rejected = assert.rejects(manager.configureVideo(sessionId, 120, { width: 2560, height: 1440 }), /ConfigurationRejected/);
-  emit({ event: 'captureConfigurationRejected', requestId: '2', sessionId, maxFps: 30, width: 640, height: 360 });
+  emit({ event: 'captureConfigurationRejected', requestId: '2', sessionId, maxFps: 30, width: 1280, height: 720 });
   await rejected;
   assert.equal(manager.state.maxFps, 30);
-  assert.deepEqual(manager.state.resolution, { width: 640, height: 360 });
+  assert.deepEqual(manager.state.resolution, { width: 1280, height: 720 });
   await manager.stop(sessionId);
   for (const size of [null, { width: 3840, height: 2160 }, { width: 2560, height: 1080 }]) {
     await assert.rejects(manager.start('monitor:7:0', 60, sessionId, { kind: 'monitor', monitorName },
@@ -1030,15 +1046,15 @@ test('宿主实际版本不匹配时拒绝启动，不把目标版本冒充运�
 
 test('窗口启动只传已验证句柄和实例标记，不传标题做匹配', async (context) => {
   const { manager, emit, spawns, captureCommands } = fixture(context);
-  const target = { kind: 'window', windowId: '34567', propertyName: 'LycanSync.MediaHelper.Window.1.2.3', propertyValue: '56789' };
+  const target = { kind: 'window', windowId: '34567', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.34567', processCreationTime: '56789', processId: 123, requiresWindowCapture: false };
   const started = manager.start('window:7:0', 60, sessionId, target, { hideCursor: true, hideBorder: true });
   emit({ event: 'captureStarted', helperVersion: '32.2.2' });
   await started;
   assert.deepEqual(captureCommands[0].split('|').slice(1), ['window', '34567', '0', '1', sessionId,
-    '60', target.propertyName, target.propertyValue, '1920', '1080']);
+    '60', target.lifetimeName, String(target.processId), '1920', '1080', 'auto', target.processCreationTime]);
   await manager.stop(sessionId);
-  for (const invalid of [{ ...target, windowId: '0' }, { ...target, propertyValue: '18446744073709551616' },
-    { ...target, propertyName: 'window title' }, { ...target, kind: 'monitor' }]) {
+  for (const invalid of [{ ...target, windowId: '0' }, { ...target, processCreationTime: '18446744073709551616', processId: 123, requiresWindowCapture: false },
+    { ...target, lifetimeName: 'window title' }, { ...target, kind: 'monitor' }]) {
     await assert.rejects(manager.start('window:7:0', 60, sessionId, invalid, { hideCursor: false, hideBorder: false }), /invalidObsCaptureArguments/);
   }
   assert.equal(spawns.length, 1);
@@ -1046,17 +1062,42 @@ test('窗口启动只传已验证句柄和实例标记，不传标题做匹配',
 
 test('游戏来源仍绑定已登记窗口，不接受整屏或丢失的实例标记', async (context) => {
   const { manager, emit, spawns, captureCommands } = fixture(context);
-  const target = { kind: 'game', windowId: '34567', propertyName: 'LycanSync.MediaHelper.Window.1.2.3', propertyValue: '56789' };
+  const target = { kind: 'game', windowId: '34567', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.34567', processCreationTime: '56789', processId: 123, requiresWindowCapture: false };
   const started = manager.start('window:7:0', 120, sessionId, target, { hideCursor: true, hideBorder: true });
   emit({ event: 'captureStarted', helperVersion: '32.2.2' });
   await started;
   assert.deepEqual(captureCommands[0].split('|').slice(1), ['game', '34567', '0', '1', sessionId,
-    '120', target.propertyName, target.propertyValue, '1920', '1080']);
+    '120', target.lifetimeName, String(target.processId), '1920', '1080', 'auto', target.processCreationTime]);
   await manager.stop(sessionId);
   await assert.rejects(manager.start('monitor:7:0', 60, sessionId, target, { hideCursor: false, hideBorder: false }), /invalidObsCaptureArguments/);
-  await assert.rejects(manager.start('window:7:0', 60, sessionId, { ...target, propertyName: '' },
+  await assert.rejects(manager.start('window:7:0', 60, sessionId, { ...target, lifetimeName: '' },
     { hideCursor: false, hideBorder: false }), /invalidObsCaptureArguments/);
   assert.equal(spawns.length, 1);
+});
+
+test('普通窗口记录实际方式及无框降级原因，不能中途换方式或伪造边框授权', async (context) => {
+  for (const request of ['auto', 'bitblt', 'wgc']) {
+    const { manager, emit, captureDiagnostics, failures, captureCommands } = fixture(context);
+    const target = { kind: 'window', windowId: '34567', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.34567', processCreationTime: '56789', processId: 123, requiresWindowCapture: false };
+    const started = manager.start('window:7:0', 60, sessionId, target,
+      { hideCursor: false, hideBorder: true, windowMethod: request });
+    emit({ event: 'captureStarted', helperVersion: '32.2.2' });
+    await started;
+    const captureMethod = request === 'wgc' ? 'wgc-window' : 'bitblt-window';
+    const evidence = { event: 'captureEvidence', stage: 'configured', captureMethod,
+      requestedMethod: request, borderAllowed: false, clientArea: true,
+      ...(request === 'auto' ? { windowFallbackReason: 'captureBorderAccessDenied' } : {}),
+      adapterIndex: 0, sourceWidth: 0, sourceHeight: 0 };
+    emit(evidence);
+    assert.equal(captureCommands[0].split('|').at(-2), request);
+    assert.equal(captureDiagnostics.at(-1).captureMethod, captureMethod);
+    assert.equal(captureDiagnostics.at(-1).borderAllowed, false);
+    assert.equal(captureDiagnostics.at(-1).clientArea, true);
+    if (request === 'auto') assert.equal(captureDiagnostics.at(-1).windowFallbackReason, 'captureBorderAccessDenied');
+    emit({ ...evidence, stage: 'sourceReady', ...(request === 'auto'
+      ? { captureMethod: 'wgc-window' } : { borderAllowed: true }) });
+    assert.deepEqual(failures, ['obsCaptureProtocolEventInvalid']);
+  }
 });
 
 test('OBS 窗口暂停和恢复沿原会话同步，旧会话事件不能变更状态', async (context) => {
@@ -1091,7 +1132,7 @@ test('生产入口先预留窗口身份再启动 OBS，停止先关闭 OBS 再�
   const end = main.indexOf('function validMicrophoneSettings(', start);
   const calls = [];
   const targetState = { alive: true };
-  const target = { kind: 'window', windowId: '123', propertyName: 'LycanSync.MediaHelper.Window.1.2.3', propertyValue: '456' };
+  const target = { kind: 'window', windowId: '123', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.123', processCreationTime: '456', processId: 123, requiresWindowCapture: false };
   const sandbox = { performance, writeMediaDiagnostic: async () => {}, closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
     nativeMediaBridge: {}, randomUUID: () => sessionId, setTimeout, clearTimeout,
     nativeScreenAudioSession: undefined, lastStoppedNativeVideoSession: undefined,
@@ -1125,7 +1166,7 @@ test('生产入口先预留窗口身份再启动 OBS，停止先关闭 OBS 再�
   assert.equal(sandbox.nativeVideoSession, undefined);
 });
 
-function gameRoutingFixture(classify, startFailure) {
+function gameRoutingFixture(classify, startFailure, requiresWindowCapture = false) {
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const calls = [];
   let sequence = 0;
@@ -1146,8 +1187,8 @@ function gameRoutingFixture(classify, startFailure) {
       reserveVideo: async (id) => {
         sandbox.mediaHelper.videoCapture = { state: {}, sessionId: id };
         calls.push({ action: 'reserve', id });
-        return { kind: 'window', windowId: '123', propertyName: 'LycanSync.MediaHelper.Window.1.2.3',
-          propertyValue: '456', executable: 'C:\\Games\\selected.exe' };
+        return { kind: 'window', windowId: '123', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.123',
+          processCreationTime: '456', processId: 123, requiresWindowCapture, executable: 'C:\\Games\\selected.exe' };
       },
       stopVideo: async (id) => {
         calls.push({ action: 'release', id }); sandbox.mediaHelper.videoCapture = undefined; return { changed: true };
@@ -1155,8 +1196,32 @@ function gameRoutingFixture(classify, startFailure) {
       startVideo: () => assert.fail('不能回退到 Rust') },
     recordVideoFailure: () => {}, releaseNativeVideoImports: () => {}, releaseHelperProcessBridge: () => {} };
   runInNewContext(main.slice(main.indexOf('async function startNativeVideo('), main.indexOf('function validMicrophoneSettings(')), sandbox);
-  return { sandbox, calls, start: () => sandbox.startNativeVideo('window:7:0', 120, { hideCursor: true, hideBorder: true }) };
+  return { sandbox, calls, start: (settings = { hideCursor: true, hideBorder: true }) => sandbox.startNativeVideo('window:7:0', 120, settings) };
 }
+
+test('手动窗口方式跳过游戏猜测，手动游戏仍只绑定原窗口', async () => {
+  for (const method of ['bitblt', 'wgc', 'game']) {
+    const { start, calls } = gameRoutingFixture(() => assert.fail('手动方式不能被分类器覆盖'));
+    await start({ hideCursor: false, hideBorder: true, windowMethod: method });
+    const target = calls.find(call => call.action === 'start').target;
+    assert.equal(target.kind, method === 'game' ? 'game' : 'window');
+    assert.equal(target.windowId, '123');
+    assert.equal(target.processCreationTime, '456');
+    assert.equal(target.executable, undefined);
+  }
+});
+
+test('高权限窗口自动走普通窗口源，不尝试注入；手动游戏仍明确执行', async () => {
+  for (const method of ['auto', 'game']) {
+    const { calls, start } = gameRoutingFixture(() => assert.fail('权限受限时不依赖游戏分类'), undefined, true);
+    await start({ hideCursor: false, hideBorder: true, windowMethod: method });
+    const target = calls.find(call => call.action === 'start').target;
+    assert.equal(target.kind, method === 'game' ? 'game' : 'window');
+    assert.equal(target.windowId, '123');
+    assert.equal(target.processId, 123);
+    assert.equal(target.requiresWindowCapture, undefined);
+  }
+});
 
 test('所选游戏走精确钩子并保留来源与偏好；启动失败清理身份，不降级窗口或整屏', async () => {
   for (const failure of [undefined, 'obsGameBindingUnavailable', 'obsGameTargetMismatch']) {

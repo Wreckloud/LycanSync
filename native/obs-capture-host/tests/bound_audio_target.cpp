@@ -13,44 +13,42 @@ int main(int argc, char **argv) {
     const HANDLE signal = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(std::strtoull(argv[2], nullptr, 10)));
     return WaitForSingleObject(signal, 10'000) == WAIT_OBJECT_0 ? 0 : 1;
   }
-  // 本测试只创建自己的隐藏窗口；不初始化 OBS、WASAPI 或任何录音设备。
-  const HWND selected = CreateWindowExA(0, "STATIC", "LycanSync audio binding test", WS_OVERLAPPEDWINDOW,
+  // 仅验证隐藏窗口和进程对象，不初始化 OBS、WASAPI 或录音设备。
+  const HWND selected = CreateWindowExA(0, "STATIC", "audio binding test", WS_OVERLAPPEDWINDOW,
       0, 0, 100, 100, nullptr, nullptr, nullptr, nullptr);
-  const HWND other = CreateWindowExA(0, "STATIC", "LycanSync audio binding test", WS_OVERLAPPEDWINDOW,
+  const HWND other = CreateWindowExA(0, "STATIC", "audio binding test", WS_OVERLAPPEDWINDOW,
       0, 0, 100, 100, nullptr, nullptr, nullptr, nullptr);
   CHECK(selected && other);
-  const char *property = "LycanSync.MediaHelper.Window.1.2.3";
-  const HANDLE marker = reinterpret_cast<HANDLE>(uintptr_t{123});
-  CHECK(SetPropA(selected, property, marker));
+  FILETIME creation, exit, kernel, user;
+  CHECK(GetProcessTimes(GetCurrentProcess(), &creation, &exit, &kernel, &user));
+  const auto created = (static_cast<unsigned long long>(creation.dwHighDateTime) << 32) | creation.dwLowDateTime;
+  char name[129];
+  std::snprintf(name, sizeof(name), "Local\\LycanSync.WindowLifetime.%lu.%llu.2.%llu",
+      GetCurrentProcessId(), created, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(selected)));
+  const HANDLE lifetime = CreateEventA(nullptr, TRUE, FALSE, name);
+  CHECK(lifetime);
   obs_data_t *settings = obs_data_create();
   BoundAudioTarget missing;
   CHECK(!missing.read(settings));
   obs_data_set_int(settings, "lycansync_window_id", static_cast<long long>(reinterpret_cast<uintptr_t>(selected)));
-  obs_data_set_string(settings, "lycansync_window_property", property);
-  obs_data_set_int(settings, "lycansync_window_property_value", 456);
-  BoundAudioTarget wrong_marker;
-  CHECK(!wrong_marker.read(settings));
-  obs_data_set_int(settings, "lycansync_window_property_value", 123);
-  obs_data_set_string(settings, "lycansync_window_property", "LycanSync.MediaHelper.Window.fake");
-  BoundAudioTarget invalid_property;
-  CHECK(!invalid_property.read(settings));
-  obs_data_set_string(settings, "lycansync_window_property", property);
+  obs_data_set_string(settings, "lycansync_window_lifetime", name);
+  obs_data_set_int(settings, "lycansync_process_id", GetCurrentProcessId());
+  obs_data_set_string(settings, "lycansync_process_creation", "1");
+  BoundAudioTarget wrong_process;
+  CHECK(!wrong_process.read(settings));
+  obs_data_set_string(settings, "lycansync_process_creation", std::to_string(created).c_str());
   BoundAudioTarget target;
   CHECK(target.read(settings));
   CHECK(target.valid() && target.window() == selected && target.process_id() == GetCurrentProcessId());
   CHECK(!target.exclude());
-  CHECK(SetWindowTextA(selected, "renamed"));
-  CHECK(target.valid());
+  CHECK(SetWindowTextA(selected, "renamed") && target.valid());
   obs_data_set_int(settings, "lycansync_window_id", static_cast<long long>(reinterpret_cast<uintptr_t>(other)));
   BoundAudioTarget same_title;
   CHECK(!same_title.read(settings));
-  CHECK(RemovePropA(selected, property) == marker);
-  CHECK(!target.valid());
-  CHECK(SetPropA(selected, property, marker));
-  CHECK(target.valid());
-  CHECK(DestroyWindow(selected));
+  CHECK(SetEvent(lifetime));
   CHECK(!target.valid() && IsWindow(other));
-  CHECK(DestroyWindow(other));
+  CHECK(DestroyWindow(selected) && DestroyWindow(other));
+  CloseHandle(lifetime);
   obs_data_release(settings);
 
   settings = obs_data_create();

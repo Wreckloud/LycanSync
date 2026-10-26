@@ -147,10 +147,12 @@ class MediaHelperManager {
       const window = target?.kind === 'window' && sourceId.startsWith('window:')
         && typeof target.windowId === 'string' && /^[1-9]\d{0,19}$/.test(target.windowId)
         && BigInt(target.windowId) <= 0xffffffffffffffffn
-        && typeof target.propertyName === 'string' && target.propertyName.length <= 128
-        && /^LycanSync\.MediaHelper\.Window\.\d+\.\d+\.\d+$/.test(target.propertyName)
-        && typeof target.propertyValue === 'string' && /^[1-9]\d{0,19}$/.test(target.propertyValue)
-        && BigInt(target.propertyValue) <= 0xffffffffffffffffn
+        && typeof target.lifetimeName === 'string' && target.lifetimeName.length <= 128
+        && /^Local\\LycanSync\.WindowLifetime\.[1-9]\d*\.[1-9]\d*\.[1-9]\d*\.[1-9]\d*$/.test(target.lifetimeName)
+        && target.lifetimeName.endsWith(`.${target.windowId}`)
+        && Number.isInteger(target.processId) && target.processId > 0 && target.processId <= 0xffffffff
+        && typeof target.processCreationTime === 'string' && /^[1-9]\d{0,19}$/.test(target.processCreationTime)
+        && BigInt(target.processCreationTime) <= 0xffffffffffffffffn && typeof target.requiresWindowCapture === 'boolean'
         && typeof target.executable === 'string' && target.executable.length <= 4096
         && win32.isAbsolute(target.executable) && /\.exe$/i.test(target.executable)
         && !/[\u0000-\u001f\u007f]/.test(target.executable);
@@ -161,8 +163,9 @@ class MediaHelperManager {
       }
       active.starting = false;
       return monitor ? { kind: 'monitor', monitorName: target.monitorName }
-        : { kind: 'window', windowId: target.windowId, propertyName: target.propertyName,
-          propertyValue: target.propertyValue, executable: target.executable };
+        : { kind: 'window', windowId: target.windowId, lifetimeName: target.lifetimeName,
+          processId: target.processId, processCreationTime: target.processCreationTime,
+          requiresWindowCapture: target.requiresWindowCapture, executable: target.executable };
     } catch (error) {
       if (this.videoCapture === active) this.videoCapture = undefined;
       delete state.videoSessionId;

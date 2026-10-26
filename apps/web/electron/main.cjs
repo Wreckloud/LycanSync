@@ -204,7 +204,10 @@ const obsCaptureHost = new ObsCaptureHostManager({
       if (error.message === 'captureTargetClosed') void writeMediaDiagnostic({ stage: 'screenTargetClosed', code: error.message });
       else recordVideoFailure('obsCaptureHost', error);
       const code = ['captureTargetClosed', 'captureSettingsUnsupported', 'captureBorderAccessDenied',
-        'obsGameBindingUnavailable', 'obsGameTargetMismatch', 'dxgiMonitorUnavailable', 'dxgiAdapterMismatch'].includes(error.message)
+        'obsGameBindingUnavailable', 'obsGameTargetMismatch', 'obsWindowBindingUnavailable', 'obsWindowTargetMismatch',
+        'obsWindowCaptureStartFailed', 'obsWindowRuntimeUnavailable', 'obsWindowSourceUnavailable',
+        'sharedTextureGpuWaitFailed', 'sharedTextureGpuStalled', 'sharedTextureReleaseFailed', 'sharedTextureAcquireFailed',
+        'dxgiMonitorUnavailable', 'dxgiAdapterMismatch'].includes(error.message)
         ? error.message : 'obsCaptureHostFailed';
       notifyNativeVideoError(video, code);
     }
@@ -812,18 +815,23 @@ async function startNativeVideo(sourceId, maxFps, settings, resolution) {
   nativeVideoSession = video;
   void writeMediaDiagnostic({ stage: 'screenVideoStartRequested', sourceKind: source.kind,
     width: resolution?.width, height: resolution?.height, maxFps,
+    ...(source.kind === 'window' ? { requestedMethod: settings?.windowMethod === undefined ? 'auto' : settings.windowMethod,
+      ...(typeof settings?.hideBorder === 'boolean' ? { borderAllowed: !settings.hideBorder } : {}) } : {}),
     hostReused: Boolean(obsCaptureHost.state && !obsCaptureHost.state.closed && !obsCaptureHost.state.failed) });
   try {
     const reservation = mediaHelper.reserveVideo(sessionId, sourceId);
     video.targetState = mediaHelper.videoCapture?.state;
     let target = await reservation;
     if (closing || video.stopping || nativeVideoSession !== video) throw new Error('nativeVideoSessionStopped');
-    void writeMediaDiagnostic({ stage: 'screenSourceReserved', durationMs: Math.round(performance.now() - video.startedAt) });
+    void writeMediaDiagnostic({ stage: 'screenSourceReserved', durationMs: Math.round(performance.now() - video.startedAt),
+      ...(target.kind === 'window' ? { requiresWindowCapture: target.requiresWindowCapture } : {}) });
     if (target.kind === 'window') {
-      const game = await activityMonitor.isCaptureGame(target.executable);
+      const method = settings?.windowMethod ?? 'auto';
+      const game = method === 'game' || (method === 'auto' && !target.requiresWindowCapture
+        && await activityMonitor.isCaptureGame(target.executable));
       // 程序分类只决定采集方式；授权范围仍是注册表预留的精确窗口实例。
-      const { windowId, propertyName, propertyValue } = target;
-      target = { kind: game ? 'game' : 'window', windowId, propertyName, propertyValue };
+      const { windowId, lifetimeName, processId, processCreationTime } = target;
+      target = { kind: game ? 'game' : 'window', windowId, lifetimeName, processId, processCreationTime };
     }
     if (closing || video.stopping || nativeVideoSession !== video) throw new Error('nativeVideoSessionStopped');
     const obsStartedAt = performance.now();
