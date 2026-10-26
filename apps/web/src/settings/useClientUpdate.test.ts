@@ -12,23 +12,42 @@ function deferred<T>() {
 const current: StartupUpdateState = { phase: 'ready', version: '0.0.9', supported: true, message: '当前已是最新版本' };
 const available: StartupUpdateState = { ...current, nextVersion: '0.0.10', message: '发现新版' };
 
-async function setup() {
+async function setup(initial = current) {
   const scope = effectScope();
   const active = ref(true);
   let listener!: (state: StartupUpdateState) => void;
   const removeListener = vi.fn();
   const bridge = {
-    getUpdateState: vi.fn(async () => current),
-    checkUpdates: vi.fn(async () => available),
+    getUpdateState: vi.fn(async () => initial),
+    checkUpdates: vi.fn(async () => initial),
     restartForUpdate: vi.fn(async () => {}),
     onUpdateState: vi.fn((callback: typeof listener) => { listener = callback; return removeListener; }),
   };
   const update = scope.run(() => useClientUpdate(bridge, () => active.value))!;
   await nextTick();
-  return { scope, active, bridge, update, notify: (state: StartupUpdateState) => listener(state), removeListener };
+  await nextTick();
+  const initialChecks = bridge.checkUpdates.mock.calls.length;
+  bridge.checkUpdates.mockClear();
+  bridge.checkUpdates.mockResolvedValue(available);
+  return { scope, active, bridge, update, notify: (state: StartupUpdateState) => listener(state), removeListener, initialChecks };
 }
 
 describe('设置页确认重启更新', () => {
+  it('每次进入自动查询一次，只刷新状态不弹重启确认，不后台轮询', async () => {
+    const { scope, active, bridge, update, initialChecks } = await setup();
+    expect(initialChecks).toBe(1);
+    expect(bridge.getUpdateState).toHaveBeenCalledOnce();
+    active.value = false; await nextTick();
+    active.value = true; await nextTick(); await nextTick();
+    expect(bridge.checkUpdates).toHaveBeenCalledOnce();
+    expect(update.state.value?.nextVersion).toBe('0.0.10');
+    expect(update.confirmationVersion.value).toBe('');
+    await nextTick();
+    expect(bridge.checkUpdates).toHaveBeenCalledOnce();
+    expect(bridge.restartForUpdate).not.toHaveBeenCalled();
+    scope.stop();
+  });
+
   it('发现新版只显示确认，用户确认后才申请重启；重复确认只执行一次', async () => {
     const { scope, update, bridge } = await setup();
     await update.check();
@@ -117,7 +136,7 @@ describe('设置页确认重启更新', () => {
     const delayed = deferred<StartupUpdateState>();
     let listener!: (state: StartupUpdateState) => void;
     const bridge = { getUpdateState: () => delayed.promise,
-      checkUpdates: async () => current, restartForUpdate: async () => {},
+      checkUpdates: async () => available, restartForUpdate: async () => {},
       onUpdateState: (callback: typeof listener) => { listener = callback; return () => {}; } };
     const update = scope.run(() => useClientUpdate(bridge, () => true))!;
     listener(available);
@@ -134,8 +153,7 @@ describe('设置页确认重启更新', () => {
     await browser.restart();
     expect(browser.confirmationVersion.value).toBe('');
     scope.stop();
-    const setupDesktop = await setup();
-    setupDesktop.notify({ ...current, supported: false });
+    const setupDesktop = await setup({ ...current, supported: false });
     await setupDesktop.update.check();
     expect(setupDesktop.bridge.checkUpdates).not.toHaveBeenCalled();
     setupDesktop.scope.stop();
