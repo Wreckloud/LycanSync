@@ -159,11 +159,14 @@ Function FinishApplicationReplacement
   StrCpy $lycanReplacementPending "0"
   SetErrorLevel 0
   ${If} $lycanReplacementPrepared == "1"
+    SetDetailsPrint textonly
+    DetailPrint "正在清理旧程序暂存…"
     SetOutPath "$INSTDIR"
     RMDir /r "$lycanBackupRoot"
     ${If} ${FileExists} "$lycanBackupRoot"
       MessageBox MB_OK|MB_ICONEXCLAMATION "新版已安装，但旧程序暂存未能清理。请保留 data，并在下次升级前处理 .lycan-update-backup。" /SD IDOK
     ${EndIf}
+    SetDetailsPrint lastused
   ${EndIf}
 FunctionEnd
 

@@ -71,6 +71,7 @@ const runtimeLayout = applyRuntimePaths({
   packaged: app.isPackaged,
   execPath: process.execPath,
   projectDirectory: resolve(__dirname, '../../..'),
+  environment: process.env,
   explicitUserDataDir: app.commandLine.hasSwitch('user-data-dir')
     ? app.commandLine.getSwitchValue('user-data-dir') : undefined,
 });

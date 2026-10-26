@@ -24,9 +24,21 @@ function applicationEntries(appDirectory) {
 
 function upgradeInstallerScript(script) {
   const anchor = '  !include "installUtil.nsh"';
-  if (script.split(anchor).length !== 2) throw new Error('固定 NSIS 安装模板已变化，拒绝生成未经核验的升级流程。');
+  const installSection = '!include "installSection.nsh"';
+  if (script.split(anchor).length !== 2 || script.split(installSection).length !== 2) {
+    throw new Error('固定 NSIS 安装模板已变化，拒绝生成未经核验的升级流程。');
+  }
   // 只改安装侧的旧卸载调用，保留构建器的卸载器生成、归档校验和更新产物。
-  return script.replace(anchor, '  !include "${BUILD_RESOURCES_DIR}\\installer-util.nsh"\n  !include "${BUILD_RESOURCES_DIR}\\installer-upgrade.nsh"');
+  return script.replace(anchor, '  !include "${BUILD_RESOURCES_DIR}\\installer-util.nsh"\n  !include "${BUILD_RESOURCES_DIR}\\installer-upgrade.nsh"')
+    .replace(installSection, '!include "${BUILD_RESOURCES_DIR}\\installer-section.nsh"');
+}
+
+function upgradeInstallerSection(script) {
+  const desktopShortcut = '!insertmacro addDesktopLink $keepShortcuts';
+  if (script.split(desktopShortcut).length !== 2) throw new Error('固定 NSIS 快捷方式入口已变化，拒绝生成安装包。');
+  // 默认与静默升级仍由构建器处理，只在用户取消本次创建时跳过。
+  return script.replace(desktopShortcut, '${If} $lycanDesktopShortcut != "0"\n  '
+    + desktopShortcut + '\n${EndIf}');
 }
 
 function upgradeInstallerUtilities(script) {
@@ -56,7 +68,9 @@ function prepareInstallerFiles(appDirectory, resourcesDirectory) {
   const builderRoot = resolve(require.resolve('app-builder-lib/package.json'), '..');
   writeFileSync(join(resourcesDirectory, 'installer-util.nsh'), upgradeInstallerUtilities(
     readFileSync(join(builderRoot, 'templates/nsis/include/installUtil.nsh'), 'utf8')));
+  writeFileSync(join(resourcesDirectory, 'installer-section.nsh'), upgradeInstallerSection(
+    readFileSync(join(builderRoot, 'templates/nsis/installSection.nsh'), 'utf8')));
 }
 
-module.exports = { applicationEntries, upgradeInstallerScript, upgradeInstallerUtilities, prepareInstallerFiles };
+module.exports = { applicationEntries, upgradeInstallerScript, upgradeInstallerUtilities, upgradeInstallerSection, prepareInstallerFiles };
 if (require.main === module) buildInstaller().catch(error => { console.error(error); process.exitCode = 1; });

@@ -25,6 +25,7 @@ test('安装版运行数据放在可执行文件旁边，更新缓存也在其�
   assert.equal(layout.sessionData, root);
   assert.equal(layout.crashDumps, join(root, 'crashDumps'));
   assert.equal(layout.logs, join(root, 'logs'));
+  assert.equal(layout.temp, join(root, 'tmp'));
   assert.equal(layout.updaterCachePath, join(root, 'updater'));
   assert.equal(layout.legacyUserData, join(input.legacyRoot, 'LycanSync'));
 });
@@ -32,10 +33,17 @@ test('安装版运行数据放在可执行文件旁边，更新缓存也在其�
 test('源码运行使用仓库 data/desktop，显式目录不再读取旧的用户配置', () => {
   const source = runtimeLayout(layoutInput({ packaged: false }));
   assert.equal(source.userData, join('D:', 'repo', 'lycan-sync', 'data', 'desktop'));
-  const explicit = runtimeLayout(layoutInput({ explicitUserDataDir: join('D:', 'profiles', 'second') }));
+  const explicit = runtimeLayout(layoutInput({ packaged: false, explicitUserDataDir: join('D:', 'profiles', 'second') }));
   assert.equal(explicit.userData, resolve(join('D:', 'profiles', 'second')));
   assert.equal(explicit.legacyUserData, undefined);
   assert.equal(explicit.updaterCachePath, join(explicit.userData, 'updater'));
+});
+
+test('安装版拒绝越出安装目录的显式数据路径，允许安装目录内的隔离目录', () => {
+  assert.throws(() => runtimeLayout(layoutInput({ explicitUserDataDir: join('D:', 'profiles', 'second') })), /必须位于/);
+  const input = layoutInput();
+  const explicit = runtimeLayout({ ...input, explicitUserDataDir: join(dirname(input.execPath), 'profiles', 'second') });
+  assert.equal(explicit.userData, resolve(join(dirname(input.execPath), 'profiles', 'second')));
 });
 
 test('迁入自有配置但不覆盖已有登录，不混入旧邀请、服务器和缓存', () => {
@@ -166,6 +174,7 @@ test('启动时创建运行目录并切换 Electron 路径，目录不可写时�
   const legacyRoot = join(root, 'Roaming');
   const install = join(root, 'LycanSync');
   const calls = [];
+  const environment = { TEMP: 'old-temp', TMP: 'old-temp' };
   const app = {
     getName: () => 'LycanSync',
     getPath: (name) => {
@@ -180,6 +189,7 @@ test('启动时创建运行目录并切换 Electron 路径，目录不可写时�
     writeFileSync(join(legacyRoot, 'LycanSync', 'server-config.json'), '{"apiUrl":"https://kept.example"}');
     const layout = applyRuntimePaths({
       app, packaged: true, execPath: join(install, 'LycanSync.exe'), projectDirectory: join(root, 'repo'),
+      environment,
     });
     assert.equal(layout.userData, join(install, 'data'));
     assert.equal(readFileSync(join(layout.userData, 'server-config.json'), 'utf8'), '{"apiUrl":"https://kept.example"}');
@@ -188,8 +198,12 @@ test('启动时创建运行目录并切换 Electron 路径，目录不可写时�
       ['setPath', 'userData', layout.userData],
       ['setPath', 'sessionData', layout.userData],
       ['setPath', 'crashDumps', layout.crashDumps],
+      ['setPath', 'temp', layout.temp],
       ['logs', layout.logs],
     ]);
+    assert.equal(environment.TEMP, layout.temp);
+    assert.equal(environment.TMP, layout.temp);
+    assert.equal(environment.TMPDIR, layout.temp);
     const blocked = join(root, 'blocked.exe');
     writeFileSync(blocked, '');
     const untouched = { ...app, setPath: () => { throw new Error('不应切换路径'); }, setAppLogsPath: () => { throw new Error('不应切换日志'); } };
