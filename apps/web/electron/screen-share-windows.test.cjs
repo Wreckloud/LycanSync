@@ -108,6 +108,30 @@ test('原生显隐逐窗同步，失焦、移动和缩放只发释放信号，�
   f.manager.closeAll();
 });
 
+test('唤回已显示窗口只聚焦，不重复显示；最小化和隐藏时才恢复可见性', () => {
+  const f = fixture(), first = f.create();
+  first.ready();
+  const calls = [];
+  for (const method of ['restore', 'show', 'focus']) {
+    const original = first.child[method].bind(first.child);
+    first.child[method] = () => { calls.push(method); original(); };
+  }
+  first.child.focused = false;
+  f.manager.focus(firstId);
+  assert.deepEqual(calls, ['focus']);
+  calls.length = 0;
+  f.manager.focus(firstId);
+  assert.deepEqual(calls, []);
+  first.child.visible = false; first.child.focused = false;
+  f.manager.focus(firstId);
+  assert.deepEqual(calls, ['show', 'focus']);
+  calls.length = 0;
+  first.child.visible = true; first.child.minimized = true; first.child.focused = false;
+  f.manager.focus(firstId);
+  assert.deepEqual(calls, ['restore', 'focus']);
+  f.manager.closeAll();
+});
+
 test('单窗关闭不影响其他观看位置；全部关闭先使登记失效，旧就绪或旧关闭不能销毁新窗', () => {
   const f = fixture(), first = f.create(), second = f.create(secondId);
   first.ready(); second.ready();

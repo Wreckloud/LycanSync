@@ -127,8 +127,9 @@ function createScreenShareWindows() {
       if (!entry?.window || entry.window.isDestroyed()) throw new Error('观看窗口已失效。');
       if (!entry.ready) return;
       if (entry.window.isMinimized()) entry.window.restore();
-      entry.window.show();
-      entry.window.focus();
+      // 已显示的窗口只唤回焦点，避免重复 show 引起窗口重绘闪烁。
+      if (!entry.window.isVisible()) entry.window.show();
+      if (!entry.window.isFocused()) entry.window.focus();
     },
     ready(event) {
       const entry = trustedEntry(event);

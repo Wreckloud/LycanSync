@@ -6,7 +6,7 @@ export interface ViewedShare {
   participant: Participant;
   session?: string;
   trackSid?: string;
-  ended: boolean;
+  observedAt: number;
 }
 
 interface LayoutOptions {
@@ -22,76 +22,68 @@ export function useScreenShareLayout(options: LayoutOptions) {
   const mode = ref<'collapsed' | 'focus' | 'grid'>('collapsed');
   const shares = shallowRef<ViewedShare[]>([]);
   const focused = ref<number | null>(null);
-  const single = ref<number | null>(null);
   const membersVisible = ref(true);
   const height = ref<number | null>(null);
+  const expanded = ref(false);
   let nextKey = 0;
   let reconnecting = false;
-  let gridInitialized = false;
-  const focusedShare = computed(() => shares.value.find(share => share.key === (single.value ?? focused.value)));
-  const displayed = computed(() => single.value !== null || mode.value === 'focus'
+  const focusedShare = computed(() => shares.value.find(share => share.key === focused.value));
+  const displayed = computed(() => mode.value === 'focus'
     ? focusedShare.value ? [focusedShare.value] : [] : shares.value);
 
   function available(participant: Participant) {
     return participant.isScreenShareEnabled && !options.privateControl(participant.identity);
   }
 
-  function include(participant: Participant) {
-    const previous = shares.value.find(share => share.participant.identity === participant.identity && !share.ended);
-    if (previous) return previous;
-    const share: ViewedShare = { key: ++nextKey, participant, session: options.session(participant.identity),
-      trackSid: participant.getTrackPublication(Track.Source.ScreenShare)?.trackSid, ended: false };
-    shares.value = [...shares.value.filter(share => share.participant.identity !== participant.identity), share];
-    return share;
-  }
-
   function select(identity: string) {
-    const participant = options.participants().find(participant => participant.identity === identity);
-    if (options.status() !== 'connected' || !participant || !available(participant)) return false;
-    focused.value = include(participant).key;
-    single.value = null;
+    if (options.status() !== 'connected') return false;
+    sync();
+    const share = shares.value.find(share => share.participant.identity === identity);
+    if (!share) return false;
+    if (mode.value === 'focus' && focused.value === share.key) { collapse(); return true; }
+    focused.value = share.key;
     mode.value = 'focus';
     return true;
   }
 
   function grid() {
-    if (!gridInitialized) {
-      options.participants().filter(available).forEach(include);
-      gridInitialized = true;
-    }
-    single.value = null;
+    sync();
+    if (!shares.value.length) return;
     mode.value = 'grid';
   }
 
-  function remove(key: number) {
-    shares.value = shares.value.filter(share => share.key !== key);
-    if (single.value === key) single.value = null;
-    if (focused.value === key) { focused.value = null; mode.value = shares.value.length ? 'grid' : 'collapsed'; }
-    if (!shares.value.length) mode.value = 'collapsed';
+  function collapse() {
+    expanded.value = false;
+    focused.value = null;
+    mode.value = 'collapsed';
   }
 
   function reset() {
-    mode.value = 'collapsed'; shares.value = []; focused.value = null; single.value = null;
-    membersVisible.value = true; height.value = null; reconnecting = false; gridInitialized = false;
+    shares.value = []; focused.value = null;
+    expanded.value = false;
+    mode.value = 'collapsed';
+    membersVisible.value = true; height.value = null; reconnecting = false;
   }
 
   function sync() {
     if (reconnecting || options.status() !== 'connected') return;
-    for (const share of shares.value) {
-      const participant = options.participants().find(participant => participant.identity === share.participant.identity);
-      const session = options.session(share.participant.identity);
-      const sid = participant?.getTrackPublication(Track.Source.ScreenShare)?.trackSid;
-      // 已结束的位置只由用户重新选择，不能跟随同名用户的新共享。
-      if (!participant || !available(participant) || share.session && session && share.session !== session
-          || !share.session && share.trackSid && sid && share.trackSid !== sid) share.ended = true;
-      if (participant) share.participant = participant;
-    }
-    shares.value = [...shares.value];
+    shares.value = options.participants().filter(available).map(participant => {
+      const session = options.session(participant.identity);
+      const trackSid = participant.getTrackPublication(Track.Source.ScreenShare)?.trackSid;
+      const previous = shares.value.find(share => share.participant.identity === participant.identity);
+      const changed = previous && (previous.session && session ? previous.session !== session
+        : previous.trackSid && trackSid && previous.trackSid !== trackSid);
+      return { key: previous && !changed ? previous.key : ++nextKey, participant, session, trackSid,
+        observedAt: previous && !changed ? previous.observedAt : performance.now() };
+    });
+    // 网格随有效共享更新；聚焦目标结束或换源只能收起，不能自动接管新画面。
+    if (!shares.value.length || mode.value === 'focus' && !focusedShare.value) collapse();
   }
 
   watch(options.room, (room, _, cleanup) => {
     reset();
     if (!room) return;
+    sync();
     const reconnected = () => { reconnecting = false; sync(); };
     room.on(RoomEvent.Reconnected, reconnected);
     cleanup(() => room.off(RoomEvent.Reconnected, reconnected));
@@ -99,5 +91,5 @@ export function useScreenShareLayout(options: LayoutOptions) {
   watch(options.status, status => { if (status === 'reconnecting') reconnecting = true; }, { flush: 'sync' });
   watch(options.revision, sync, { flush: 'sync' });
   onScopeDispose(reset);
-  return { mode, shares, focused, focusedShare, single, displayed, membersVisible, height, select, grid, remove, reset };
+  return { mode, shares, focused, focusedShare, displayed, membersVisible, height, expanded, select, grid, collapse, reset };
 }

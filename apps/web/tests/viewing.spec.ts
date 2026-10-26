@@ -139,7 +139,7 @@ export function useRtcRoom() {
   });
   await page.goto('/');
   await page.getByRole('button', { name: /^观看测试，/ }).dblclick();
-  await expect(page.getByTestId('member-count')).toContainText('9 人');
+  await expect(page.getByTestId('participant-card')).toHaveCount(9);
 });
 
 async function sharing(page: Page, ids: string[]) {
@@ -183,9 +183,11 @@ test('主动诊断记录返回应用后继续，离房结束并导出匿名报�
 
 
 async function openWatching(page: Page) {
-  await page.getByRole('button', { name: '展开网格', exact: true }).click();
+  await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+  await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
   const popup = page.waitForEvent('popup');
-  await page.getByRole('button', { name: '弹出观看区', exact: true }).click();
+  await page.locator('.viewing-tile').first().hover();
+  await page.getByRole('button', { name: '弹出观看区', exact: true }).first().click();
   const viewer = await popup;
   await expect(viewer.getByRole('region', { name: '多人观看窗口' })).toBeVisible();
   return viewer;
@@ -197,42 +199,96 @@ test('默认仅小预览，网格和聚焦使用原比例，整体弹出后返�
   page.on('pageerror', error => errors.push(error.message));
   await sharing(page, ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']);
   expect(context.pages()).toHaveLength(1);
+  await expect(page.locator('.group-header')).toBeVisible();
   await expect(page.getByRole('region', { name: '共享观看区' })).toHaveCount(0);
   const input = page.getByRole('textbox', { name: '消息内容' });
   await input.fill('稍后继续写');
   const original = await input.elementHandle();
-  await page.getByRole('button', { name: '展开网格', exact: true }).click();
+  await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+  await expect(page.locator('.group-header')).toBeHidden();
+  await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
+  await expect(page.locator('.group-header')).toBeHidden();
   await expect(page.locator('.viewing-tile')).toHaveCount(8);
   await page.getByRole('button', { name: '聚焦成员A', exact: true }).click();
   await expect(page.locator('.viewing-tile')).toHaveCount(1);
   const frame = await page.locator('.viewing-tile .participant-media').boundingBox();
-  expect(Math.abs(frame!.width / frame!.height - 16 / 9)).toBeLessThan(0.02);
-  await page.getByRole('button', { name: '单路全屏', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBe(true);
-  await page.getByRole('button', { name: '返回原布局', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => Boolean(document.fullscreenElement))).toBe(false);
-  await page.getByRole('button', { name: '网格', exact: true }).click();
+  const stage = await page.locator('.viewing-stage').boundingBox();
+  expect(Math.abs(frame!.width - stage!.width)).toBeLessThan(1);
+  expect(Math.abs(frame!.height - stage!.height)).toBeLessThan(1);
+  await expect(page.locator('.viewing-tile video')).toHaveCSS('object-fit', 'contain');
+  await input.focus();
+  await input.hover();
+  await expect(page.locator('.viewing-actions')).toHaveCSS('opacity', '0');
+  await page.locator('.viewing-surface').hover();
+  await expect(page.locator('.viewing-actions')).toHaveCSS('opacity', '1');
+  expect(await page.locator('.viewing-action-buttons button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label'))))
+    .toEqual(['占满窗口', '弹出观看区', '退出观看']);
+  await expect(page.locator('.viewing-members-toggle')).toHaveCSS('border-top-width', '1px');
+  await expect(page.getByRole('button', { name: '单路全屏', exact: true })).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath('focus-video-and-members.png') });
+  const windowSize = await page.evaluate(() => [innerWidth, innerHeight, outerWidth, outerHeight]);
+  await page.getByRole('button', { name: '占满窗口', exact: true }).click();
+  await expect(page.locator('.call-viewing-panel')).toHaveClass(/is-expanded/);
+  await expect(page.locator('.viewing-members-panel')).toHaveCount(0);
+  expect(await page.evaluate(() => [innerWidth, innerHeight, outerWidth, outerHeight])).toEqual(windowSize);
+  expect(await page.evaluate(() => Boolean(document.fullscreenElement))).toBe(false);
+  const expanded = await page.locator('.viewing-stage').boundingBox();
+  expect(expanded!.x).toBe(0);
+  expect(expanded!.width).toBe(windowSize[0]);
+  expect(expanded!.y + expanded!.height).toBe(windowSize[1]);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.call-viewing-panel')).not.toHaveClass(/is-expanded/);
+  await expect(page.locator('.viewing-members-panel')).toHaveCount(1);
+  await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
   const popup = page.waitForEvent('popup');
-  await page.getByRole('button', { name: '弹出观看区', exact: true }).click();
+  await page.locator('.viewing-tile').first().hover();
+  await page.getByRole('button', { name: '弹出观看区', exact: true }).first().click();
   const viewer = await popup;
   await expect(viewer.locator('.viewing-tile')).toHaveCount(8);
   await expect(viewer.locator('.viewing-grid')).toHaveCSS('display', 'grid');
-  await expect(viewer.getByRole('region', { name: '语音成员', exact: true })).toHaveCSS('overflow-x', 'auto');
-  await expect(viewer.getByRole('region', { name: '语音成员', exact: true })).toBeInViewport({ ratio: 0.95 });
+  await expect(viewer.getByRole('region', { name: '语音成员', exact: true })).toHaveCount(0);
   await expect(page.locator('.viewing-tile')).toHaveCount(0);
-  await page.getByRole('button', { name: '唤回观看窗口', exact: true }).click();
+  await expect(page.locator('.group-header')).toBeVisible();
+  await page.getByRole('button', { name: '观看成员B的共享画面', exact: true }).click();
   expect(context.pages()).toHaveLength(2);
+  await expect(viewer.locator('.viewing-tile')).toHaveCount(8);
+  await viewer.getByRole('button', { name: '聚焦成员B', exact: true }).click();
+  await expect(viewer.locator('.viewing-tile')).toHaveCount(1);
+  await expect(viewer.getByRole('region', { name: '语音成员', exact: true })).toBeInViewport({ ratio: 0.95 });
+  await viewer.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
   expect(await viewer.locator('audio').count()).toBe(0);
-  await viewer.getByRole('button', { name: '返回主界面', exact: true }).click();
+  await viewer.locator('.viewing-tile').first().hover();
+  await viewer.getByRole('button', { name: '返回主界面', exact: true }).first().click();
   await expect.poll(() => viewer.isClosed()).toBe(true);
   await expect(page.locator('.viewing-tile')).toHaveCount(8);
+  const secondPopup = page.waitForEvent('popup');
+  await page.locator('.viewing-tile').first().hover();
+  await page.getByRole('button', { name: '弹出观看区', exact: true }).first().click();
+  const secondViewer = await secondPopup;
+  await secondViewer.getByRole('button', { name: '聚焦成员B', exact: true }).click();
+  await secondViewer.close();
+  await expect(page.locator('.viewing-tile')).toHaveCount(8);
+  await expect(page.locator('.group-header')).toBeHidden();
+  await sharing(page, ['A']);
+  await expect(page.locator('.viewing-tile')).toHaveCount(1);
+  for (const width of [1440, 640]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect.poll(async () => {
+      const tile = await page.locator('.viewing-tile').boundingBox();
+      const stage = await page.locator('.viewing-stage').boundingBox();
+      return Math.abs(tile!.x + tile!.width / 2 - stage!.x - stage!.width / 2);
+    }).toBeLessThan(1);
+  }
+  await page.locator('.viewing-tile').hover();
+  await page.getByRole('button', { name: '退出观看', exact: true }).click();
+  await expect(page.locator('.group-header')).toBeVisible();
   await expect(input).toHaveValue('稍后继续写');
   expect(await original!.evaluate(node => node.isConnected)).toBe(true);
-  await page.screenshot({ path: test.info().outputPath('inline-grid.png') });
+  await page.screenshot({ path: test.info().outputPath('restored-header.png') });
   expect(errors).toEqual([]);
 });
 
-test('观看窗在设置和预览别群时保留；结束占位不接管新共享，离房关闭', async ({ page }) => {
+test('观看窗在设置和预览别群时保留；网格跟随当前共享，离房关闭', async ({ page }) => {
   await sharing(page, ['A', 'B']);
   const viewer = await openWatching(page);
   await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
@@ -242,37 +298,70 @@ test('观看窗在设置和预览别群时保留；结束占位不接管新共�
   await expect(viewer.locator('.viewing-tile')).toHaveCount(2);
   await page.getByRole('button', { name: '返回当前通话群组' }).click();
   await sharing(page, ['B']);
-  await expect(viewer.locator('.viewing-ended')).toHaveText('共享已结束');
+  await expect(viewer.locator('.viewing-tile')).toHaveCount(1);
   await sharing(page, ['A', 'B']);
-  await expect(viewer.locator('.viewing-ended')).toHaveText('共享已结束');
+  await expect(viewer.locator('.viewing-tile')).toHaveCount(2);
   await page.getByRole('button', { name: '离开语音', exact: true }).click();
   await expect.poll(() => viewer.isClosed()).toBe(true);
 });
 
-test('多人网格和成员条横向滚动，拖动不误触聚焦，窄窗不挤出聊天输入', async ({ page }) => {
+test('统一卡片尺寸，点击切换与成员折叠记忆，横向拖动不误触', async ({ page }) => {
+  const card = page.getByTestId('participant-card').nth(1);
+  const before = await card.boundingBox();
+  const beforeMeta = await card.locator('.participant-meta').boundingBox();
   await sharing(page, ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']);
+  const after = await card.boundingBox();
+  const afterMeta = await card.locator('.participant-meta').boundingBox();
+  expect(Math.abs(before!.width - after!.width)).toBeLessThan(1);
+  expect(Math.abs(before!.height - after!.height)).toBeLessThan(1);
+  expect(Math.abs(beforeMeta!.height - afterMeta!.height)).toBeLessThan(1);
+  await expect(page.getByRole('button', { name: '展开网格', exact: true })).toHaveCount(0);
   await page.setViewportSize({ width: 960, height: 900 });
-  await page.getByRole('button', { name: '展开网格', exact: true }).click();
+  await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
   const strip = page.getByRole('region', { name: '语音成员', exact: true });
+  await expect(card).toHaveCSS('width', '220px');
   await expect.poll(() => strip.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
-  await strip.hover(); await page.mouse.wheel(0, 500);
-  await expect.poll(() => strip.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
   const bounds = await strip.boundingBox();
   await page.mouse.move(bounds!.x + bounds!.width / 2, bounds!.y + 30);
   await page.mouse.down();
   await page.mouse.move(bounds!.x + bounds!.width / 2 - 80, bounds!.y + 30, { steps: 5 });
   await page.mouse.up();
+  await expect(page.locator('.viewing-tile')).toHaveCount(1);
+  await strip.evaluate(element => { element.scrollLeft = 0; });
+  await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+  await expect(page.getByRole('region', { name: '共享观看区' })).toHaveCount(0);
+  await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+  await page.getByRole('button', { name: '收起成员', exact: true }).click();
+  await expect(strip).toHaveCount(0);
+  await expect(page.locator('.viewing-members-panel')).toHaveCount(0);
+  const foldedPanel = await page.getByRole('region', { name: '共享观看区' }).boundingBox();
+  const foldedStage = await page.locator('.viewing-stage').boundingBox();
+  expect(Math.abs(foldedPanel!.height - foldedStage!.height)).toBeLessThan(1);
+  await page.locator('.viewing-surface').hover();
+  const expand = await page.getByRole('button', { name: '展开成员', exact: true }).boundingBox();
+  expect(Math.abs(expand!.x + expand!.width / 2 - foldedStage!.x - foldedStage!.width / 2)).toBeLessThan(1);
+  await page.screenshot({ path: test.info().outputPath('focus-members-collapsed.png') });
+  await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
   await expect(page.locator('.viewing-tile')).toHaveCount(8);
+  await expect(strip).toHaveCount(0);
+  await page.getByRole('button', { name: '聚焦成员B', exact: true }).click();
+  await expect(page.getByRole('button', { name: '展开成员', exact: true })).toBeVisible();
+  await expect(strip).toHaveCount(0);
+  await page.locator('.viewing-surface').hover();
+  await page.getByRole('button', { name: '展开成员', exact: true }).click();
+  await expect(strip).toBeVisible();
+  await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
   const separator = page.getByRole('separator', { name: '调整观看区域高度' });
   await separator.focus(); await separator.press('ArrowUp');
-  await expect(separator).toHaveAttribute('aria-valuenow', /\d+/);
   for (const width of [960, 640, 420]) {
     await page.setViewportSize({ width, height: 900 });
     await expect(page.getByRole('textbox', { name: '消息内容' })).toBeInViewport();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(page.getByRole('region', { name: '共享画面网格' })).toHaveCSS('scrollbar-width', 'none');
   }
-  await page.screenshot({ path: test.info().outputPath('horizontal-grid-narrow.png') });
+  await page.locator('.viewing-tile').first().hover();
+  await page.getByRole('button', { name: '退出观看', exact: true }).first().click();
+  await expect(page.getByRole('region', { name: '共享观看区' })).toHaveCount(0);
 });
 
 test('常驻成员栏保留搜索与王冠，语音横跨上方，聊天及个人名片边界对齐', async ({ page }) => {
@@ -325,7 +414,8 @@ test('远控授权和画面匹配后才打开专用控制窗，普通观看关�
   await sharing(page, ['A']);
   await page.evaluate(() => (window as unknown as { __viewingTest: { control(id: string): void } }).__viewingTest.control('A'));
   const viewer = await openWatching(page);
-  await viewer.locator('.viewing-actions').getByRole('button', { name: '申请远程控制', exact: true }).click();
+  await page.getByTestId('participant-card').nth(1).hover();
+  await page.getByRole('button', { name: '申请远程控制', exact: true }).click();
   expect(context.pages()).toHaveLength(2);
   const popup = page.waitForEvent('popup');
   await page.evaluate(() => (window as unknown as { __viewingTest: { grant(id: string): void } }).__viewingTest.grant('A'));
@@ -345,5 +435,7 @@ test('远控授权和画面匹配后才打开专用控制窗，普通观看关�
   await viewer.close();
   await expect(controller.locator('.remote-control-status')).toContainText('点击画面开始操作');
   await controller.close();
+  await page.getByRole('button', { name: '聚焦成员A', exact: true }).click();
+  await page.getByTestId('participant-card').nth(1).hover();
   await expect(page.getByRole('button', { name: '申请远程控制', exact: true })).toBeVisible();
 });

@@ -19,76 +19,85 @@ function fixture() {
   return { room, participants, revision, status, sessions, privateShares, scope, view };
 }
 
-it('默认只展示卡片，首次网格收录当前共享，新共享不挤入；手动选择才加入', () => {
+it('预览点击切换聚焦，再点同一共享收起；头像和私密画面不进入观看', () => {
   const f = fixture();
   expect(f.view.mode.value).toBe('collapsed');
-  f.participants.value = f.participants.value.slice(0, 2);
+  f.view.select('A');
+  expect(f.view.focusedShare.value?.participant.identity).toBe('A');
+  f.view.select('B');
+  expect(f.view.focusedShare.value?.participant.identity).toBe('B');
+  f.view.select('B');
+  expect(f.view.mode.value).toBe('collapsed');
+  f.privateShares.add('A');
+  f.participants.value = f.participants.value.map(participant => participant.identity === 'B'
+    ? { ...participant, isScreenShareEnabled: false } as Participant : participant);
+  f.revision.value++;
+  expect(f.view.select('A')).toBe(false);
+  expect(f.view.select('B')).toBe(false);
+  f.scope.stop();
+});
+
+it('网格自动包含全部有效共享，新增加入、停止移除，不改变成员折叠记忆', () => {
+  const f = fixture();
+  f.view.select('B');
+  f.view.membersVisible.value = false;
   f.view.grid();
-  expect(f.view.shares.value.map(share => share.participant.identity)).toEqual(['A', 'B']);
+  expect(f.view.displayed.value.map(share => share.participant.identity)).toEqual(['A', 'B', 'C']);
   f.participants.value = [...f.participants.value, { identity: 'D', isScreenShareEnabled: true,
     getTrackPublication: () => ({ trackSid: 'd' }) } as unknown as Participant];
   f.revision.value++;
-  f.view.grid();
-  expect(f.view.shares.value).toHaveLength(2);
-  expect(f.view.select('D')).toBe(true);
-  expect(f.view.mode.value).toBe('focus');
-  expect(f.view.focusedShare.value?.participant.identity).toBe('D');
-  f.view.grid();
-  expect(f.view.displayed.value).toHaveLength(3);
+  expect(f.view.displayed.value).toHaveLength(4);
+  f.participants.value = f.participants.value.filter(participant => participant.identity !== 'A');
+  f.privateShares.add('C'); f.revision.value++;
+  expect(f.view.displayed.value.map(share => share.participant.identity)).toEqual(['B', 'D']);
+  f.view.select('D');
+  expect(f.view.membersVisible.value).toBe(false);
+  f.view.membersVisible.value = true;
+  f.view.grid(); f.view.select('B');
+  expect(f.view.membersVisible.value).toBe(true);
   f.scope.stop();
 });
 
-it('切换聚焦和单路展示不丢网格顺序；移除聚焦不自动接管别人的画面', () => {
-  const f = fixture(); f.view.grid(); f.view.select('B');
-  const key = f.view.focused.value!;
-  f.view.single.value = key;
-  expect(f.view.displayed.value.map(share => share.participant.identity)).toEqual(['B']);
-  f.view.single.value = null; f.view.grid();
-  expect(f.view.displayed.value.map(share => share.participant.identity)).toEqual(['A', 'B', 'C']);
-  f.view.remove(key);
-  expect(f.view.focused.value).toBeNull();
-  expect(f.view.mode.value).toBe('grid');
-  f.scope.stop();
-});
-
-it('先聚焦再首次打开网格仍收录当前共享，移除后不自动加回', () => {
+it('聚焦停止、换源或撤回权限后收起，新共享不自动接管；单路网格仍可切换', () => {
   const f = fixture();
-  f.view.select('B');
-  const key = f.view.focused.value!;
-  f.view.grid();
-  expect(f.view.shares.value.map(share => share.participant.identity)).toEqual(['B', 'A', 'C']);
-  f.view.remove(key);
-  f.view.grid();
-  expect(f.view.shares.value.map(share => share.participant.identity)).toEqual(['A', 'C']);
-  f.scope.stop();
-});
-
-it('停止、换源与私密撤回立即结束旧位置，新共享只有明确重新选择才进入', () => {
-  const f = fixture(); f.view.grid();
-  const old = f.view.shares.value[0]!;
-  f.sessions.A = 'new-a'; f.privateShares.add('B'); f.revision.value++;
-  expect(old.ended).toBe(true);
-  expect(f.view.shares.value[1]!.ended).toBe(true);
-  expect(f.view.select('B')).toBe(false);
   f.view.select('A');
-  expect(f.view.focusedShare.value?.key).not.toBe(old.key);
-  expect(f.view.focusedShare.value?.ended).toBe(false);
-  expect(f.view.shares.value.filter(share => share.participant.identity === 'A')).toHaveLength(1);
+  f.sessions.A = 'new-a'; f.revision.value++;
+  expect(f.view.mode.value).toBe('collapsed');
+  f.view.select('A'); f.privateShares.add('A'); f.revision.value++;
+  expect(f.view.mode.value).toBe('collapsed');
+  f.participants.value = f.participants.value.slice(1, 2); f.revision.value++;
+  f.view.select('B'); f.view.grid();
+  expect(f.view.mode.value).toBe('grid');
+  expect(f.view.displayed.value).toHaveLength(1);
+  f.participants.value = []; f.revision.value++;
+  expect(f.view.mode.value).toBe('collapsed');
   f.scope.stop();
 });
 
-it('重连的空快照不结束原共享；重连完成检查会话，切房清空且旧房结果无效', () => {
+it('网格共享停止后仍展示其他有效来源，观察起点不因界面切换重置', () => {
+  const f = fixture();
+  f.view.grid();
+  const observedAt = f.view.shares.value[1]!.observedAt;
+  f.participants.value = f.participants.value.slice(1); f.revision.value++;
+  expect(f.view.shares.value[0]!.observedAt).toBe(observedAt);
+  expect(f.view.mode.value).toBe('grid');
+  expect(f.view.displayed.value).toHaveLength(2);
+  f.scope.stop();
+});
+
+it('重连空快照不收起聚焦；重连完成核验会话，切房清空且旧事件无效', () => {
   const f = fixture(); f.view.select('A');
   const participants = f.participants.value;
   f.status.value = 'reconnecting'; f.participants.value = []; f.revision.value++;
-  expect(f.view.focusedShare.value?.ended).toBe(false);
+  expect(f.view.mode.value).toBe('focus');
   f.participants.value = participants; f.status.value = 'connected';
   f.room.value.emit(RoomEvent.Reconnected);
-  expect(f.view.focusedShare.value?.ended).toBe(false);
+  expect(f.view.focusedShare.value?.participant.identity).toBe('A');
+  f.sessions.A = 'new-a'; f.room.value.emit(RoomEvent.Reconnected);
+  expect(f.view.mode.value).toBe('collapsed');
   const oldRoom = f.room.value;
   f.room.value = new EventEmitter() as unknown as Room;
-  expect(f.view.mode.value).toBe('collapsed');
   oldRoom.emit(RoomEvent.Reconnected);
-  expect(f.view.shares.value).toEqual([]);
+  expect(f.view.mode.value).toBe('collapsed');
   f.scope.stop();
 });

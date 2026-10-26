@@ -2,7 +2,6 @@
 import '../viewing/callViewing.css';
 import { computed, reactive, watch } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
-import { AudioLines, Maximize2, Pin, PinOff } from '@lucide/vue';
 import { Track } from 'livekit-client';
 import type { useRtcRoom } from '../rtc/useRtcRoom';
 import { useScreenShareWindows, type ControlWindow } from '../viewing/useScreenShareWindows';
@@ -27,6 +26,8 @@ const view = reactive(useScreenShareLayout({
   session: identity => props.rtc.remoteControlShares[identity]?.shareSessionId,
   privateControl: identity => props.controlPlaceholder(identity),
 }));
+let beforeDetach: { id: string; room: typeof props.rtc.room; mode: typeof view.mode; focused: number | null;
+  membersVisible: boolean; height: number | null; expanded: boolean } | undefined;
 const windows = useScreenShareWindows({
   room: () => props.rtc.room, participants: () => props.rtc.participants,
   status: () => props.rtc.status, revision: () => props.rtc.revision,
@@ -34,7 +35,22 @@ const windows = useScreenShareWindows({
   controlSessionId: identity => props.rtc.remoteControlActive?.identity === identity ? props.rtc.remoteControlActive.controlSessionId : undefined,
   notice: message => emit('notice', message),
   closed: entry => {
-    if (entry.kind !== 'control') return;
+    if (entry.kind === 'watching') {
+      if (!beforeDetach || beforeDetach.id !== entry.id) return;
+      const previous = beforeDetach;
+      beforeDetach = undefined;
+      if (previous.room !== props.rtc.room) return;
+      const valid = view.shares.length > 0 && (previous.mode === 'grid'
+        || previous.mode === 'focus' && view.shares.some(share => share.key === previous.focused));
+      if (!valid) { view.collapse(); return; }
+      // 只恢复同一共享实例的布局，目标关闭、换源或撤权后不能接管新画面。
+      view.focused = previous.focused;
+      view.membersVisible = previous.membersVisible;
+      view.height = previous.height;
+      view.expanded = previous.expanded;
+      view.mode = previous.mode;
+      return;
+    }
     if (props.rtc.remoteControlActive?.identity === entry.participant.identity
         && props.rtc.remoteControlActive.controlSessionId === entry.controlSessionId) void props.rtc.exitRemoteControl();
   },
@@ -43,9 +59,7 @@ const entries = windows.entries;
 const watching = computed(() => entries.value.find(entry => entry.kind === 'watching'));
 const controls = computed(() => entries.value.filter((entry): entry is ControlWindow => entry.kind === 'control'));
 const count = computed(() => entries.value.length);
-const sharingCount = computed(() => { void props.rtc.revision; return props.rtc.participants.filter(participant => participant.isScreenShareEnabled).length; });
 const controlAvailable = (identity: string) => props.rtc.remoteControlAvailable[identity] === true;
-const pinned = reactive({ enabled: false, busy: false });
 let openedControlSession: string | undefined;
 
 function controlVideoReady(identity: string) {
@@ -56,51 +70,37 @@ function controlVideoReady(identity: string) {
 }
 
 function select(identity: string) {
-  if (!view.select(identity)) return false;
-  if (watching.value) windows.openWatching();
-  return true;
+  return watching.value ? windows.openWatching() : view.select(identity);
+}
+
+function detachWatching() {
+  if (watching.value) { windows.openWatching(); return; }
+  const previous = { room: props.rtc.room, mode: view.mode, focused: view.focused,
+    membersVisible: view.membersVisible, height: view.height, expanded: view.expanded };
+  if (windows.openWatching()) {
+    const entry = entries.value.find(entry => entry.kind === 'watching');
+    if (!entry) return;
+    beforeDetach = { ...previous, id: entry.id };
+    view.expanded = false;
+  }
 }
 
 function returnWatching() {
-  const mode = view.mode;
+  // 主动返回沿用观看窗当前布局，直接关窗恢复弹出前的主界面布局。
+  beforeDetach = undefined;
   windows.closeWatching();
-  // 主动返回保留布局；直接关窗才收起观看区。
-  view.mode = mode === 'collapsed' ? 'grid' : mode;
 }
 
-async function togglePinned() {
-  const entry = watching.value;
-  if (!entry?.window.lycanViewerWindow || pinned.busy) return;
-  pinned.busy = true;
-  try {
-    const result = await entry.window.lycanViewerWindow.setPinned(!pinned.enabled);
-    if (watching.value === entry) pinned.enabled = result.pinned;
-  } catch { emit('notice', '未能确认观看窗口置顶，请重试。'); }
-  finally { pinned.busy = false; }
+function closeAll() {
+  beforeDetach = undefined;
+  windows.closeAll();
 }
 
-async function fullscreen() {
-  const entry = watching.value;
-  if (!entry) return;
-  try {
-    if (entry.window.lycanViewerWindow) await entry.window.lycanViewerWindow.toggleFullscreen();
-    else if (entry.window.document.fullscreenElement) await entry.window.document.exitFullscreen();
-    else await entry.target?.requestFullscreen();
-  } catch { emit('notice', '无法切换观看窗口全屏，请重试。'); }
-}
-
-watch(entries, (current, old, cleanup) => {
+watch(entries, (current) => {
   const entry = current.find(entry => entry.kind === 'watching');
-  const previous = old.find(entry => entry.kind === 'watching');
-  if (entry?.id !== previous?.id) pinned.enabled = false;
-  if (!entry) {
-    if (previous) { view.single = null; view.mode = 'collapsed'; }
-    return;
-  }
-  if (entry.target) entry.window.document.title = `${props.groupName} · 观看 · LycanSync`;
-  const stop = entry.target ? entry.window.lycanViewerWindow?.onState(state => { pinned.enabled = state.pinned; }) : undefined;
-  cleanup(() => stop?.());
+  if (entry?.target) entry.window.document.title = `${props.groupName} · 观看 · LycanSync`;
 }, { flush: 'sync' });
+watch(() => view.mode, mode => { if (mode === 'collapsed') windows.closeWatching(); }, { flush: 'sync' });
 watch(() => [props.rtc.remoteControlActive, props.rtc.revision] as const, ([active]) => {
   if (!active) { openedControlSession = undefined; windows.closeControl(); return; }
   if (openedControlSession !== active.controlSessionId && controlVideoReady(active.identity)) {
@@ -108,39 +108,28 @@ watch(() => [props.rtc.remoteControlActive, props.rtc.revision] as const, ([acti
     if (!windows.openControl(active.identity)) void props.rtc.exitRemoteControl();
   }
 }, { flush: 'post' });
-defineExpose({ select, closeAll: windows.closeAll, disarmAll: windows.disarmAll, count });
+defineExpose({ closeAll, disarmAll: windows.disarmAll, count });
 </script>
 
 <template>
   <Teleport v-if="inlineTarget" :to="inlineTarget">
     <CallViewingPanel v-if="view.mode !== 'collapsed' && !watching" :view="view" :room="rtc.room" :revision="rtc.revision"
-      :avatar="avatar" :listening="rtc.listening" :muted-shares="mutedShares" :control-available="controlAvailable"
+      :avatar="avatar" :listening="rtc.listening"
       :private-control="controlPlaceholder" :reconnecting="rtc.status === 'reconnecting'"
-      @detach="windows.openWatching()" @notice="emit('notice', $event)" @toggle-share-audio="emit('toggleShareAudio', $event)" @request-control="emit('requestControl', $event)">
+      @detach="detachWatching" @notice="emit('notice', $event)">
       <HorizontalScroll label="语音成员"><div class="viewing-member-strip"><slot :select="select" /></div></HorizontalScroll>
     </CallViewingPanel>
     <template v-else>
-      <header class="voice-heading"><span><AudioLines :size="15" />语音中</span>
-        <small data-testid="member-count">{{ rtc.participants.length }} 人 · {{ sharingCount }} / 8 路共享</small>
-        <button v-if="watching" type="button" @click="windows.openWatching()">唤回观看窗口</button>
-        <button v-else-if="sharingCount" type="button" @click="view.grid()">展开网格</button>
-      </header>
       <HorizontalScroll label="语音成员"><div class="viewing-member-strip"><slot :select="select" /></div></HorizontalScroll>
     </template>
   </Teleport>
   <Teleport v-if="watching?.target" :to="watching.target">
     <section class="watching-window" aria-label="多人观看窗口">
-      <header class="viewer-toolbar">
-        <span>{{ groupName }} · 观看</span>
-        <button type="button" class="viewer-action" aria-label="返回主界面" @click="returnWatching">返回主界面</button>
-        <button type="button" class="viewer-action" aria-label="观看窗口全屏" @click="fullscreen"><Maximize2 :size="16" /></button>
-        <button v-if="watching.window.lycanViewerWindow" type="button" class="viewer-action" aria-label="观看窗口置顶" :aria-pressed="pinned.enabled" :disabled="pinned.busy" @click="togglePinned"><PinOff v-if="pinned.enabled" :size="16" /><Pin v-else :size="16" /></button>
-      </header>
       <CallViewingPanel :view="view" :room="rtc.room" :revision="rtc.revision" :avatar="avatar" :listening="rtc.listening"
-        :muted-shares="mutedShares" :control-available="controlAvailable" :private-control="controlPlaceholder"
+        :private-control="controlPlaceholder"
         :reconnecting="rtc.status === 'reconnecting'" detached
-        @notice="emit('notice', $event)" @toggle-share-audio="emit('toggleShareAudio', $event)" @request-control="emit('requestControl', $event)">
-        <HorizontalScroll label="语音成员"><div class="viewing-member-strip"><slot :select="select" /></div></HorizontalScroll>
+        @return="returnWatching" @notice="emit('notice', $event)">
+        <HorizontalScroll label="语音成员"><div class="viewing-member-strip"><slot :select="view.select" /></div></HorizontalScroll>
       </CallViewingPanel>
     </section>
   </Teleport>
