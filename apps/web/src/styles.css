@@ -444,12 +444,24 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .status-dot.ONLINE { background: #3ba55d; }
 .status-dot.AWAY { background: #f59e0b; }
 .group-member-info { display: grid; align-content: center; flex: 1; min-width: 0; }
-.group-member-name { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 15px; line-height: 16px; }
+.group-member-name { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 15px; line-height: 20px; }
 .group-member-name > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-member-role { flex-shrink: 0; color: var(--warning); }
-.member-activity { display: flex; align-items: center; gap: 3px; min-width: 0; overflow: hidden; color: #43b6da; font-size: 12px; line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.member-activity { display: flex; align-items: center; gap: 3px; min-width: 0; overflow: hidden; color: #43b6da; font-size: 12px; line-height: 14px; white-space: nowrap; }
 .member-activity svg { flex-shrink: 0; }
-.member-activity > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-prefix { flex-shrink: 0; }
+.activity-viewport { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-content { display: inline-block; white-space: nowrap; vertical-align: top; }
+.member-activity.is-scrolling .activity-viewport { text-overflow: clip; }
+.member-activity.is-scrolling .activity-content { animation: activity-marquee var(--activity-duration) ease-in-out infinite; }
+@keyframes activity-marquee {
+  0%, 12%, 100% { transform: translateX(0); }
+  50%, 62% { transform: translateX(var(--activity-offset)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .member-activity.is-scrolling .activity-content { animation: none; }
+  .member-activity.is-scrolling .activity-viewport { text-overflow: ellipsis; }
+}
 .group-member-row.is-offline { color: #6b727b; }
 .group-member-row.is-offline .group-member-avatar { filter: grayscale(1); opacity: .48; }
 .group-member-row.is-offline .group-member-role { color: #626a74; }
@@ -521,7 +533,6 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   color: var(--text);
 }
 .viewer-action.remote-control-action { width: auto; height: auto; padding: 4px 7px; font-size: 11px; line-height: 1.2; white-space: nowrap; }
-.viewer-action.is-control-shortcut { width: 25px; height: 25px; flex-shrink: 0; padding: 0; }
 
 .viewer-action.is-active { border-color: var(--accent); color: var(--text); }
 .viewer-action svg { display: block; }
@@ -859,13 +870,15 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .personal-avatar .status-dot { border-color: #0d1116; }
 .personal-copy { min-width: 0; display: grid; line-height: 16px; }
 .personal-copy strong, .personal-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.personal-copy strong { font-size: 15px; font-weight: 600; }
+.personal-copy strong { font-size: 15px; line-height: 20px; font-weight: 600; }
 .personal-copy small { color: var(--muted); font-size: 12px; }
 .personal-copy .member-activity { color: #43b6da; }
 .personal-card .icon-button { width: 28px; height: 28px; padding: 0; border-color: transparent; background: transparent; }
 .personal-card .icon-button:hover:not(:disabled) { background: var(--panel-raised); }
 
 .members-header {
+  position: relative;
+  min-height: 44px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -876,8 +889,8 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 }
 
 .members-header svg { color: var(--muted); }
-.member-search { flex-shrink: 0; padding: 0 10px 10px; }
-.member-search input { width: 100%; min-width: 0; height: 32px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--text); font-size: 13px; }
+.member-search { position: absolute; inset: 8px 10px 4px; display: flex; align-items: center; gap: 4px; }
+.member-search input { flex: 1; width: 0; min-width: 0; height: 28px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); color: var(--text); font-size: 12px; }
 
 .dialog-backdrop {
   position: fixed;
