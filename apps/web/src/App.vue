@@ -378,13 +378,14 @@ const microphoneTest = reactive(useMicrophoneTest({
 audioPreferences.mutedParticipantIdentities()
   .forEach((identity) => rtc.setRemoteAudioSubscribed(identity, false));
 const removeCloseListener = desktop?.onClose(async () => {
+  const diagnosticFlush = diagnosticReport.flush();
   selectCaptureSource(null);
   viewingWindows.value?.closeAll();
   await reportOfflineBeforeClose();
   try { await microphoneTest.stop(); }
   finally {
     try { await rtc.leave(); }
-    finally { desktop.finishClose(); }
+    finally { await diagnosticFlush; desktop.finishClose(); }
   }
 });
 onScopeDispose(() => {
