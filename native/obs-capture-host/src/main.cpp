@@ -106,7 +106,9 @@ void obs_log_handler(int level, const char *format, va_list args, void *) {
 
 void write_event(std::string_view event) {
   const std::lock_guard<std::mutex> lock(g_output_mutex);
-  std::cout << "{\"event\":\"" << event << "\"}\n";
+  std::cout << "{\"event\":\"" << event << "\"";
+  if (event == "captureTargetClosed") std::cout << ",\"sessionId\":\"" << g_host.session_id << "\"";
+  std::cout << "}\n";
   std::cout.flush();
 }
 

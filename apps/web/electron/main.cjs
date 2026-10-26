@@ -197,7 +197,8 @@ const obsCaptureHost = new ObsCaptureHostManager({
   onFailure: (state, error) => {
     const video = nativeVideoSession;
     if (video && video.sessionId === state.videoSessionId && !video.stopping) {
-      recordVideoFailure('obsCaptureHost', error);
+      if (error.message === 'captureTargetClosed') void writeMediaDiagnostic({ stage: 'screenTargetClosed', code: error.message });
+      else recordVideoFailure('obsCaptureHost', error);
       const code = ['captureTargetClosed', 'captureSettingsUnsupported', 'captureBorderAccessDenied',
         'obsGameBindingUnavailable', 'obsGameTargetMismatch', 'dxgiMonitorUnavailable', 'dxgiAdapterMismatch'].includes(error.message)
         ? error.message : 'obsCaptureHostFailed';

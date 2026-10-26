@@ -54,6 +54,13 @@ add_subdirectory(game-plugin)
 add_subdirectory(audio-plugin)
 add_subdirectory(graphics-module)
 
+# 只替换查询边界验证结束判定，不初始化 OBS、创建窗口或加载捕获插件。
+add_executable(lycansync-game-failure-tests EXCLUDE_FROM_ALL tests/game_failure.cpp)
+target_compile_features(lycansync-game-failure-tests PRIVATE cxx_std_20)
+target_compile_options(lycansync-game-failure-tests PRIVATE /utf-8)
+target_link_libraries(lycansync-game-failure-tests PRIVATE lycansync_libobs user32)
+set_target_properties(lycansync-game-failure-tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")
+
 # 只测试合成 PCM 的分块与背压，不链接或初始化 OBS/WASAPI。
 add_executable(lycansync-screen-audio-pcm-tests EXCLUDE_FROM_ALL tests/screen_audio_pcm.cpp src/screen_audio_pcm.cpp)
 target_compile_features(lycansync-screen-audio-pcm-tests PRIVATE cxx_std_20)

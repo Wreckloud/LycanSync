@@ -14,9 +14,13 @@ const char *game_video_failure(obs_source_t *source, const WindowVideoTarget &ta
   const bool valid = calldata_bool(&status, "valid");
   const bool hooked = calldata_bool(&status, "hooked");
   calldata_free(&status);
+  // 查询插件期间目标或绘制子窗口可能已退出，先区分正常结束，不能误报为串源。
+  if (!window_video_target_valid(target) || (hooked && captured && !IsWindow(captured))) return "captureTargetClosed";
   if (!queried || !version_matches) return "obsGameBindingUnavailable";
   if (selected != target.window || !valid
-      || (hooked && captured != target.window && !IsChild(target.window, captured))) return "obsGameTargetMismatch";
+      || (hooked && captured != target.window && !IsChild(target.window, captured))) {
+    return window_video_target_valid(target) ? "obsGameTargetMismatch" : "captureTargetClosed";
+  }
   return window_video_target_valid(target) ? nullptr : "captureTargetClosed";
 }
 

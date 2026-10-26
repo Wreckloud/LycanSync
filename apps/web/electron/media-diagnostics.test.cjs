@@ -17,12 +17,14 @@ test('导出保留 DXGI、显卡匹配及停止方式证据，丢弃窗口名和
     { stage: 'obsSourceReady', captureMethod: 'dxgi', captureApi: 'DuplicateOutput', adapterIndex: 1,
       adapterMatched: true, sourceWidth: 1920, sourceHeight: 1080, monitorName: 'private-screen', luid: 'private-device' },
     { stage: 'obsHostExited', stopMode: 'forced', stopReason: 'stopTimeout' },
+    { stage: 'obsCaptureHost', code: 'obsGameTargetMismatch', message: 'private-window-name' },
     { stage: 'obsCaptureConfigured', captureMethod: 'unknown-private', captureApi: 'private-api', stopMode: 'fake' },
   ].map(entry => JSON.stringify({ time, ...entry })).join('\n'));
   assert.deepEqual(await readDiagnosticEvents(path, Date.parse(time) - 1, Date.parse(time) + 1), [
     { time, stage: 'obsSourceReady', hresults: [], captureMethod: 'dxgi', captureApi: 'DuplicateOutput', adapterIndex: 1,
       adapterMatched: true, sourceWidth: 1920, sourceHeight: 1080 },
     { time, stage: 'obsHostExited', hresults: [], stopMode: 'forced', stopReason: 'stopTimeout' },
+    { time, stage: 'obsCaptureHost', hresults: [], code: 'obsGameTargetMismatch' },
     { time, stage: 'obsCaptureConfigured', hresults: [] },
   ]);
 });
