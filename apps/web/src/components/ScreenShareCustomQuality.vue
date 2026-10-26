@@ -69,7 +69,6 @@ watch(() => [props.modelValue.resolution, props.modelValue.fps, props.modelValue
       </div>
       <InlineFeedback :message="bitrateError" :status="`推荐 ${recommendedMbps} Mbps；这是上限，不是固定流量。缩略层与声音另计。`" />
     </details>
-    <label class="custom-share-auto"><input type="checkbox" disabled />根据网络状况自动调整<small>暂未开放</small></label>
   </div>
 </template>
 
@@ -86,7 +85,4 @@ watch(() => [props.modelValue.resolution, props.modelValue.fps, props.modelValue
 .custom-share-bitrate-input { display: flex; align-items: center; gap: 6px; }
 .custom-share-bitrate-input input { width: 100%; min-width: 0; min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--background); color: var(--text); font: inherit; }
 .custom-share-bitrate-controls button { min-height: 32px; padding: 4px 8px; font-size: inherit; }
-.custom-share-auto { display: flex; align-items: center; gap: 6px; color: var(--muted); }
-.custom-share-auto input { margin: 0; }
-.custom-share-auto small { margin-left: auto; white-space: nowrap; }
 </style>

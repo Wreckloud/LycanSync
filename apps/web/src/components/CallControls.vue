@@ -174,7 +174,7 @@ onScopeDispose(() => {
           <button type="button" class="call-settings-entry" @click="openAudioSettings"><Settings :size="15" />语音设置<ChevronRight :size="14" /></button>
         </section>
         <section v-if="qualityOpen" class="call-control-menu call-quality-menu" :class="{ 'is-right': qualityPlacement === 'right' }" aria-label="共享画质">
-          <button type="button" class="call-menu-action call-quality-back" @click="toggleQuality"><ChevronLeft :size="14" />共享画质</button>
+          <button v-if="qualityPlacement === 'compact'" type="button" class="call-menu-action call-quality-back" aria-label="返回共享选项" @click="toggleQuality"><ChevronLeft :size="14" /></button>
           <div class="call-quality-options" role="group" aria-label="画质预设">
             <label v-for="preset in SCREEN_SHARE_QUALITIES" :key="preset.id">
               <span>{{ preset.label }}<small>{{ screenShareQuality(preset.id, customQuality).description }}</small></span>
@@ -218,7 +218,7 @@ onScopeDispose(() => {
 .call-quality-menu { right: calc(100% + 8px); bottom: 0; }
 .call-quality-menu.is-right { right: auto; left: calc(100% + 8px); }
 .call-share-menu.is-compact .call-quality-menu { position: relative; right: auto; left: auto; bottom: auto; }
-.call-quality-back { border-bottom: 1px solid var(--border); border-radius: 0; }
+.call-quality-back { width: 32px; justify-content: center; padding: 6px; }
 .call-quality-options { display: grid; gap: 4px; }
 .call-quality-options label, .call-share-audio { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
 .call-quality-options label { padding: 4px 0; }

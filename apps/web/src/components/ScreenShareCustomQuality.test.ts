@@ -28,13 +28,14 @@ function setup(quality: CustomScreenShareQuality = { resolution: 1080, fps: 60 }
   return { scope, props, emit, controls };
 }
 
-it('码率默认折叠，显示推荐与非固定流量说明，自动调整仍禁用', async () => {
+it('码率默认折叠，显示推荐与非固定流量说明，移除未实现的自动调整入口', async () => {
   const html = await renderToString(createSSRApp(ScreenShareCustomQuality, { modelValue: { resolution: 1080, fps: 60 } }));
   expect(html.match(/<details[^>]*>/)?.[0]).not.toContain('open');
   expect(html).toContain('主画面码率上限');
   expect(html).toContain('推荐 12 Mbps');
   expect(html).toContain('不是固定流量');
-  expect(html).toMatch(/<input[^>]*type="checkbox"[^>]*disabled/);
+  expect(html).not.toContain('根据网络状况自动调整');
+  expect(html).not.toContain('value="360"');
 });
 
 it('编辑不提前应用，点击应用才发出手动配置；修改尺寸保留手动上限', async () => {

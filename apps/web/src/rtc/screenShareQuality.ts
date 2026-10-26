@@ -2,7 +2,6 @@ import { VideoPreset } from 'livekit-client';
 
 // 推荐值是待实测校准的编码上限；固定模式与自定义共用同一张表。
 const RECOMMENDED_BITRATES = {
-  360: { 30: 1_000_000, 60: 1_500_000, 120: 2_000_000 },
   720: { 30: 3_000_000, 60: 5_000_000, 120: 8_000_000 },
   1080: { 30: 8_000_000, 60: 12_000_000, 120: 20_000_000 },
   1440: { 30: 12_000_000, 60: 20_000_000, 120: 30_000_000 },
@@ -18,7 +17,7 @@ export const SCREEN_SHARE_QUALITIES = [
 export type ScreenShareQualityId = typeof SCREEN_SHARE_QUALITIES[number]['id'];
 const STORAGE_KEY = 'lycansync.screen-share-quality';
 
-export const SCREEN_SHARE_RESOLUTIONS = [1440, 1080, 720, 360] as const;
+export const SCREEN_SHARE_RESOLUTIONS = [1440, 1080, 720] as const;
 export const SCREEN_SHARE_FRAME_RATES = [120, 60, 30] as const;
 export const SCREEN_SHARE_BITRATE_MIN_MBPS = 0.5;
 export const SCREEN_SHARE_BITRATE_MAX_MBPS = 50;
@@ -78,14 +77,15 @@ export function readScreenShareQuality(): { quality: ScreenShareQualityId; custo
   if (!stored || SCREEN_SHARE_QUALITIES.some(quality => quality.id === stored)) {
     return { quality: stored ? stored as ScreenShareQualityId : 'standard', customQuality: { ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY } };
   }
-  let preference: { quality?: ScreenShareQualityId; customQuality?: Omit<CustomScreenShareQuality, 'fps'> & { fps: number } };
+  let preference: { quality?: ScreenShareQualityId; customQuality?: Omit<CustomScreenShareQuality, 'resolution' | 'fps'> & { resolution: number; fps: number } };
   try { preference = JSON.parse(stored); } catch { throw new Error('invalidScreenShareQualityPreference'); }
   if (!preference || !SCREEN_SHARE_QUALITIES.some(quality => quality.id === preference.quality)) {
     throw new Error('invalidScreenShareQualityPreference');
   }
-  // 仅将旧版本已保存的 180 档迁到新的上限，保留用户的尺寸与手动码率。
-  const custom = preference.customQuality;
-  const customQuality = custom?.fps === 180 ? { ...custom, fps: 120 as const } : custom;
+  // 只迁移已移除的旧档位，保留手动码率；读取时不提前写入偏好。
+  const customQuality = preference.customQuality;
+  if (customQuality?.resolution === 360) customQuality.resolution = 720;
+  if (customQuality?.fps === 180) customQuality.fps = 120;
   return { quality: preference.quality!, customQuality: validateCustomScreenShareQuality(customQuality as CustomScreenShareQuality) };
 }
 
