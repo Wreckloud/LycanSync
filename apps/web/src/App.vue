@@ -1134,11 +1134,6 @@ function remoteScreenSharePlaybackVolume(identity: string) {
   return Math.min(AUDIO_VOLUME_MAX, screenShareVolume.value * outputVolume.value);
 }
 
-function focusParticipantShare(identity: string) {
-  viewerNotice.value = '';
-  return viewingWindows.value?.select(identity) ?? false;
-}
-
 function requestParticipantControl(identity: string) {
   void rtc.requestRemoteControl(identity);
 }
@@ -1330,22 +1325,24 @@ function participantListening(participant: Participant) {
       :control-placeholder="remoteControlPlaceholder"
       :input-blocked="viewerInputBlocked"
       @notice="viewerNotice = $event" @toggle-share-audio="toggleSharedAudio" @request-control="requestParticipantControl">
-      <ParticipantCard v-for="participant in rtc.participants" :key="participant.identity" :participant="participant"
-        :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant"
-        :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"
-        :remote-control-available="remoteControlCanRequest(participant.identity)"
-        :private-control="remoteControlPlaceholder(participant.identity)"
-        :remote-control-pending="remoteControlIsPending(participant.identity)"
-        :remote-control-active="remoteControlIsActive(participant.identity)"
-        :remote-control-name="previewParticipantName(participant.identity, participant.name || participant.identity)"
-        :playback-volume="participantVolume(participant.identity)" :input-gain="inputGain" :output-volume="outputVolume"
-        :share-audio="Boolean(participant.getTrackPublication(Track.Source.ScreenShareAudio)?.track)"
-        :share-muted="mutedShares.includes(participant.identity)" :share-audio-listening="listening"
-        @toggle-share-audio="toggleSharedAudio(participant.identity)" @select="focusParticipantShare(participant.identity)"
-        @request-control="requestParticipantControl(participant.identity)" @cancel-control="rtc.cancelPendingRemoteControl(participant.identity)" @stop-control="rtc.exitRemoteControl"
-        @toggle-audio="toggleParticipantAudio(participant.identity)" @volume-change="updateParticipantVolume(participant.identity, $event)"
-        @input-gain-change="updateInputGain" @output-volume-change="updateOutputVolume"
-        @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />
+      <template #default="{ select }">
+        <ParticipantCard v-for="participant in rtc.participants" :key="participant.identity" :participant="participant"
+          :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant"
+          :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"
+          :remote-control-available="remoteControlCanRequest(participant.identity)"
+          :private-control="remoteControlPlaceholder(participant.identity)"
+          :remote-control-pending="remoteControlIsPending(participant.identity)"
+          :remote-control-active="remoteControlIsActive(participant.identity)"
+          :remote-control-name="previewParticipantName(participant.identity, participant.name || participant.identity)"
+          :playback-volume="participantVolume(participant.identity)" :input-gain="inputGain" :output-volume="outputVolume"
+          :share-audio="Boolean(participant.getTrackPublication(Track.Source.ScreenShareAudio)?.track)"
+          :share-muted="mutedShares.includes(participant.identity)" :share-audio-listening="listening"
+          @toggle-share-audio="toggleSharedAudio(participant.identity)" @select="viewerNotice = ''; select(participant.identity)"
+          @request-control="requestParticipantControl(participant.identity)" @cancel-control="rtc.cancelPendingRemoteControl(participant.identity)" @stop-control="rtc.exitRemoteControl"
+          @toggle-audio="toggleParticipantAudio(participant.identity)" @volume-change="updateParticipantVolume(participant.identity, $event)"
+          @input-gain-change="updateInputGain" @output-volume-change="updateOutputVolume"
+          @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />
+      </template>
     </ScreenShareWindows>
     <RemoteAudio v-for="item in remoteAudioTracks" :key="item.track.sid" :track="item.track"
       :context="rtc.playbackContext" :balance="voiceVolumeBalance && item.source === Track.Source.Microphone"

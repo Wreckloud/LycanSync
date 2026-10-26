@@ -6,7 +6,7 @@ import { Track } from 'livekit-client';
 
 const source = readFileSync(new URL('./App.vue', import.meta.url), 'utf8');
 const volumeStart = source.indexOf('function remoteScreenSharePlaybackVolume(');
-const volumeEnd = source.indexOf('function focusParticipantShare(', volumeStart);
+const volumeEnd = source.indexOf('function requestParticipantControl(', volumeStart);
 const toggleStart = source.indexOf('function toggleSharedAudio(');
 const toggleEnd = source.indexOf('function previewGroup(', toggleStart);
 const script = transpileModule(source.slice(volumeStart, volumeEnd) + source.slice(toggleStart, toggleEnd), {}).outputText;

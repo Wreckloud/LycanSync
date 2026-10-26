@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { Fullscreen, HeadphoneOff, Headphones, Maximize2, MicOff, MousePointer2 } from '@lucide/vue';
+import { Fullscreen, HeadphoneOff, Headphones, MicOff, MousePointer2 } from '@lucide/vue';
 import { Track, VideoQuality, type Participant, type RemoteTrackPublication } from 'livekit-client';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, normalizeAudioVolume } from '../rtc/audioPreferences';
 import VoiceLevelMic from './VoiceLevelMic.vue';
@@ -159,8 +159,8 @@ async function openFullscreen() {
     const bridge = card?.ownerDocument.defaultView?.lycanViewerWindow;
     if (bridge) await bridge.toggleFullscreen();
     else if (card?.ownerDocument.fullscreenElement) await card.ownerDocument.exitFullscreen();
-    else if (card?.requestFullscreen) await card.requestFullscreen();
-    else emit('notice', '当前浏览器不支持单路全屏观看。');
+    else if (card?.ownerDocument.documentElement.requestFullscreen) await card.ownerDocument.documentElement.requestFullscreen();
+    else emit('notice', '当前浏览器不支持窗口全屏。');
   } catch { emit('notice', '无法切换全屏，请再次点击或检查浏览器权限。'); }
 }
 
@@ -360,23 +360,24 @@ onBeforeUnmount(() => {
         <img v-if="avatar" :src="avatar" alt="" />
         <template v-else>{{ media.name.slice(0, 1) }}</template>
       </div>
+      <div v-if="variant === 'card' && !isLocal && (remoteControlAvailable || media.sharing && shareAudio)" class="participant-share-actions" @click.stop @keydown.stop>
+        <button v-if="media.sharing && !isLocal && shareAudio" type="button" class="viewer-action"
+          :disabled="!shareAudioListening" :aria-label="shareMuted ? '恢复这路共享声音' : '静音这路共享声音'"
+          :aria-pressed="shareMuted" @click="emit('toggleShareAudio')"><HeadphoneOff v-if="shareMuted || !shareAudioListening" :size="14" /><Headphones v-else :size="14" /></button>
+        <button v-if="!isLocal && remoteControlAvailable" type="button" class="viewer-action"
+          :aria-label="remoteControlActive ? '退出远程控制' : remoteControlPending ? '取消远程控制申请' : '申请远程控制'"
+          @click="remoteControlActive ? stopRemoteControl() : remoteControlPending ? emit('cancelControl') : emit('requestControl')"><MousePointer2 :size="14" /></button>
+      </div>
     </div>
     <div class="participant-meta">
       <strong :title="media.name">{{ media.name }}{{ isLocal ? '（你）' : '' }}</strong>
       <button v-if="variant === 'viewer' && showFullscreen" type="button" class="viewer-action"
         :aria-label="'切换全屏观看' + media.name + '的共享画面'" :disabled="!media.track || media.muted || !fullscreenAvailable"
         @click="openFullscreen"><Fullscreen :size="16" /></button>
-      <button v-else-if="variant === 'card' && media.sharing && !privateControl" type="button" class="viewer-action"
-        :aria-label="'聚焦' + media.name + '的共享画面'" @click="emit('select')"><Maximize2 :size="16" /></button>
-      <button v-if="variant === 'card' && media.sharing && !isLocal && shareAudio" type="button" class="viewer-action"
-        :disabled="!shareAudioListening" :aria-label="shareMuted ? '恢复这路共享声音' : '静音这路共享声音'"
-        :aria-pressed="shareMuted" @click="emit('toggleShareAudio')"><HeadphoneOff v-if="shareMuted || !shareAudioListening" :size="14" /><Headphones v-else :size="14" /></button>
-      <button v-if="!isLocal && remoteControlAvailable" type="button" class="viewer-action remote-control-action"
-        :class="{ 'is-control-shortcut': variant === 'card' }"
+      <button v-if="variant === 'viewer' && !isLocal && remoteControlAvailable" type="button" class="viewer-action remote-control-action"
         :aria-label="remoteControlActive ? '退出远程控制' : remoteControlPending ? '取消远程控制申请' : '申请远程控制'"
         @click="remoteControlActive ? stopRemoteControl() : remoteControlPending ? emit('cancelControl') : emit('requestControl')">
-        <MousePointer2 v-if="variant === 'card'" :size="14" />
-        <span v-else>{{ remoteControlActive ? '退出控制' : remoteControlPending ? '取消申请' : '申请控制' }}</span>
+        <span>{{ remoteControlActive ? '退出控制' : remoteControlPending ? '取消申请' : '申请控制' }}</span>
       </button>
       <small v-if="variant === 'viewer' && remoteControlActive" class="remote-control-status">正在控制 {{ remoteControlName || media.name }} · {{ inputBlocked ? '操作已暂停' : !videoReady ? '等待画面就绪' : inputArmed ? 'Esc 退出' : '点击画面开始操作' }}</small>
       <span v-if="variant === 'card' && isLocal" class="participant-volume-control" @wheel.stop.prevent="adjustInputGain">
