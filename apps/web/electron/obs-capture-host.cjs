@@ -121,6 +121,7 @@ class ObsCaptureHostManager {
     clearTimeout(state.idleTimer);
     state.videoSessionId = sessionId;
     state.stopRequested = false;
+    state.failureNotified = false;
     state.startSent = false;
     state.maxFps = maxFps;
     state.resolution = { ...resolution };
@@ -345,6 +346,19 @@ class ObsCaptureHostManager {
         state.resolution = request.resolution;
         request.finish(undefined, { changed: true });
       }
+      return;
+    }
+    if (event.event === 'captureTargetClosed' && state.helperVersion && !state.startReject) {
+      if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
+      if (event.sessionId !== state.videoSessionId) { failState(state, new Error('obsCaptureProtocolEventInvalid')); return; }
+      if (state.stopRequested) return;
+      const sessionId = state.videoSessionId;
+      // 目标退出仍走已确认的停止清理；不标记宿主故障或提前杀掉进程。
+      if (!state.failureNotified) {
+        state.failureNotified = true;
+        state.onFailure?.(state, new Error('captureTargetClosed'));
+      }
+      void this.stop(sessionId).catch(error => failState(state, error));
       return;
     }
     if (/^[a-z][A-Za-z0-9]{0,63}$/.test(event.event)) {

@@ -87,7 +87,7 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           'sharedTextureSlotReleaseFailed', 'captureTargetClosed', 'remoteControlInputFailed',
           'nativeVideoBridgeUnavailable', 'videoSourceExpired', 'videoCaptureAlreadyRunning',
           'obsCaptureGameDetectionFailed', 'obsCaptureVersionUnsupported', 'dxgiMonitorUnavailable',
-          'dxgiAdapterMismatch'].includes(entry.code)) details.code = entry.code;
+          'dxgiAdapterMismatch', 'obsGameTargetMismatch', 'obsGameBindingUnavailable'].includes(entry.code)) details.code = entry.code;
         if (['window', 'monitor'].includes(entry.sourceKind)) details.sourceKind = entry.sourceKind;
         if (typeof entry.hostReused === 'boolean') details.hostReused = entry.hostReused;
         for (const key of ['repeatCount', 'importedCount', 'pendingReleaseCount', 'width', 'height', 'maxFps',

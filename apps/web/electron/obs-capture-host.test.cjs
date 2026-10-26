@@ -101,6 +101,52 @@ function adapterFixture(context) {
   return { manager, children, diagnostics, failures, start, emit };
 }
 
+test('目标关闭等待正常停止确认，不杀宿主；复用后仍报告真正错误，旧结束事件无效', async context => {
+  const f = fixture(context);
+  await f.ready();
+  f.emit({ event: 'captureTargetClosed' });
+  await flush();
+  assert.equal(f.killCount(), 0);
+  assert.notEqual(f.manager.state.failed, true);
+  assert.equal(f.manager.state.videoSessionId, undefined);
+  assert.ok(f.captureDiagnostics.some(entry => entry.stage === 'obsCaptureStopped' && entry.stopMode === 'graceful'));
+  assert.deepEqual(f.failures, ['captureTargetClosed']);
+  const next = '00000000-0000-0000-0000-000000000007';
+  const started = f.manager.start('monitor:7:0', 60, next, { kind: 'monitor', monitorName }, { hideCursor: true, hideBorder: true });
+  f.emit({ event: 'captureStarted', sessionId: next, helperVersion: '32.2.2' });
+  await started;
+  f.emit({ event: 'captureTargetClosed', sessionId });
+  assert.equal(f.manager.state.videoSessionId, next);
+  f.emit({ event: 'obsGameTargetMismatch', sessionId: next });
+  assert.deepEqual(f.failures, ['captureTargetClosed', 'obsGameTargetMismatch']);
+  assert.equal(f.killCount(), 1);
+});
+
+test('主动停止期间的目标退出不通知故障，仍等待原停止确认', async context => {
+  const f = fixture(context, { closeOnShutdown: false });
+  await f.ready();
+  const stopped = f.manager.stop(sessionId);
+  f.emit({ event: 'captureTargetClosed' });
+  assert.deepEqual(f.failures, []);
+  assert.equal(f.killCount(), 0);
+  f.emit({ event: 'captureStopped' });
+  await stopped;
+  assert.equal(f.manager.state.videoSessionId, undefined);
+});
+
+test('热宿主再次启动时目标退出，保留正常结束错误码而不是通用停止错误', async context => {
+  const f = fixture(context);
+  await f.ready();
+  await f.manager.stop(sessionId);
+  const next = '00000000-0000-0000-0000-000000000008';
+  const starting = assert.rejects(f.manager.start('monitor:7:0', 60, next, { kind: 'monitor', monitorName },
+    { hideCursor: true, hideBorder: true }), /captureTargetClosed/);
+  await flush();
+  f.emit({ event: 'captureTargetClosed', sessionId: next });
+  await starting;
+  assert.equal(f.failures.at(-1), 'captureTargetClosed');
+});
+
 test('预热显卡不匹配先等待旧宿主退出，再按原来源和画质重建，不切换采集范围', async (context) => {
   const { manager, children, diagnostics, failures, start, emit } = adapterFixture(context);
   const started = start();
