@@ -1,10 +1,11 @@
 const { spawnSync } = require('node:child_process');
-const { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
+const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
 const { createHash } = require('node:crypto');
 const { resolve, join, normalize } = require('node:path');
 const { writeDesktopLicenses } = require('./package-licenses.cjs');
 const { serverUrl } = require('./server-settings.cjs');
 const { updateFeedUrl } = require('./startup-update.cjs');
+const { prepareVisualCppRuntime } = require('./visual-cpp-runtime.cjs');
 
 const appDirectory = resolve(__dirname, '..');
 const projectRoot = resolve(appDirectory, '../..');
@@ -43,7 +44,7 @@ if (!existsSync(runtimeInstaller)) {
 mkdirSync(outputDirectory, { recursive: true });
 const buildResources = join(projectRoot, 'release/build-resources');
 mkdirSync(buildResources, { recursive: true });
-copyFileSync(runtimeInstaller, join(buildResources, 'vc_redist.x64.exe'));
+prepareVisualCppRuntime(runtimeInstaller, buildResources);
 if (!process.env.LYCANSYNC_PACKAGED_API_URL) throw new Error('请用 LYCANSYNC_PACKAGED_API_URL 指定本包的 HTTPS 服务器地址。');
 const apiUrl = serverUrl(process.env.LYCANSYNC_PACKAGED_API_URL);
 const updateUrl = updateFeedUrl(process.env.LYCANSYNC_PACKAGED_UPDATE_URL || new URL('/downloads/', apiUrl).href);

@@ -1,5 +1,5 @@
 const { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } = require('node:fs');
-const { dirname, join, resolve } = require('node:path');
+const { dirname, isAbsolute, join, relative, resolve, sep } = require('node:path');
 
 const defaultIo = { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync };
 const MIGRATION_COMPLETE = '.legacy-migration-complete';
@@ -18,12 +18,19 @@ function sameDirectory(left, right) {
 
 function runtimeLayout({ packaged, execPath, projectDirectory, explicitUserDataDir, appName, legacyRoot }) {
   const explicit = explicitUserDataDir == null ? undefined : resolve(explicitUserDataDir);
+  if (packaged && explicit) {
+    const fromInstallation = relative(dirname(resolve(execPath)), explicit);
+    if (fromInstallation === '..' || fromInstallation.startsWith(`..${sep}`) || isAbsolute(fromInstallation)) {
+      throw new Error('安装版的数据目录必须位于所选安装目录内。');
+    }
+  }
   const userData = explicit ?? (packaged ? join(dirname(execPath), 'data') : join(projectDirectory, 'data', 'desktop'));
   return {
     userData,
     sessionData: userData,
     crashDumps: join(userData, 'crashDumps'),
     logs: join(userData, 'logs'),
+    temp: join(userData, 'tmp'),
     updaterCachePath: join(userData, 'updater'),
     legacyUserData: explicit || legacyRoot == null ? undefined : join(legacyRoot, appName),
   };
@@ -106,18 +113,25 @@ function migrateOwnedData(fromDirectory, toDirectory, io = defaultIo) {
   }
 }
 
-function applyRuntimePaths({ app, packaged, execPath, projectDirectory, explicitUserDataDir, io = defaultIo }) {
+function applyRuntimePaths({ app, packaged, execPath, projectDirectory, explicitUserDataDir, environment, io = defaultIo }) {
   const layout = runtimeLayout({
     packaged, execPath, projectDirectory, explicitUserDataDir, appName: app.getName(),
     legacyRoot: explicitUserDataDir == null ? app.getPath('appData') : undefined,
   });
-  for (const directory of [layout.userData, layout.crashDumps, layout.logs, layout.updaterCachePath]) {
+  for (const directory of [layout.userData, layout.crashDumps, layout.logs, layout.temp, layout.updaterCachePath]) {
     ensureWritableDirectory(directory, io);
   }
   app.setPath('userData', layout.userData);
   app.setPath('sessionData', layout.sessionData);
   app.setPath('crashDumps', layout.crashDumps);
+  app.setPath('temp', layout.temp);
   app.setAppLogsPath(layout.logs);
+  // 原生子进程按环境变量寻找临时目录；仅修改本进程环境，不改系统设置。
+  if (environment) {
+    environment.TEMP = layout.temp;
+    environment.TMP = layout.temp;
+    environment.TMPDIR = layout.temp;
+  }
   migrateOwnedData(layout.legacyUserData, layout.userData, io);
   return layout;
 }
