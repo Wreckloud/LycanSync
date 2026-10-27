@@ -1261,47 +1261,49 @@ function participantListening(participant: Participant) {
         <section v-if="showingJoinedGroup && groupParticipants.length > 0" ref="viewingTarget" class="voice-panel" aria-label="当前语音成员" />
         </template>
         <div class="group-conversation">
-          <GroupChat v-if="selectedGroup" :key="selectedGroup.id" :group="selectedGroup"
-            :members="selectedGroupDetail?.members ?? []" :user="user" />
-          <div v-else class="group-empty">
-            <p v-if="groupError" role="alert">{{ groupError }}</p>
-            <p v-else>还没有群组，点击左侧的 + 创建一个开黑小队。</p>
+          <div class="conversation-main">
+            <GroupChat v-if="selectedGroup" :key="selectedGroup.id" :group="selectedGroup"
+              :members="selectedGroupDetail?.members ?? []" :user="user" />
+            <div v-else class="group-empty">
+              <p v-if="groupError" role="alert">{{ groupError }}</p>
+              <p v-else>还没有群组，点击左侧的 + 创建一个开黑小队。</p>
+            </div>
+            <Transition enter-active-class="callbar-enter-active">
+              <div v-if="callbarGroup || joiningGroupId" class="callbar-reveal" :class="{ 'is-leaving': callbarLeaving }" data-testid="callbar">
+                <div class="callbar-content">
+                  <footer class="callbar">
+                    <div class="call-state" role="status">
+                      <RadioTower v-if="connected || rtc.status === 'reconnecting'" :size="17" /><Headphones v-else :size="17" />
+                      <span><strong>{{ callbarLeaving ? '正在退出' : STATUS_LABELS[rtc.status] }}</strong>
+                        <small>{{ callbarGroup?.name }}{{ joinedGroup && selectedGroupId !== joinedGroup.id && selectedGroup ? ' · 正在浏览 ' + selectedGroup.name : joiningGroupId ? ' · 加入中' : '' }}</small>
+                      </span>
+                    </div>
+                    <IconButton v-if="joinedGroup && selectedGroupId !== joinedGroup.id" label="返回当前通话群组" @click="previewGroup(joinedGroup.id)"><CornerUpLeft :size="17" /></IconButton>
+                    <CallControls :connected="connected" :desktop="Boolean(desktop)"
+                      :microphone-enabled="rtc.microphoneEnabled" :microphone-intent="rtc.microphoneIntent" :microphone-busy="rtc.busySources.includes(Track.Source.Microphone)"
+                      :microphone-level="localMicrophoneLevel" :input-level-percent="localInputLevelPercent"
+                      :listening="listening" :input-gain="inputGain" :output-volume="outputVolume"
+                      :sharing="Boolean(localParticipant?.isScreenShareEnabled)" :share-limit-reached="screenShareLimitReached" :choosing-source="Boolean(captureRequest)"
+                      :share-busy="rtc.busySources.includes(Track.Source.ScreenShare) || rtc.screenShareQualityBusy || rtc.screenShareSourceBusy"
+                      :quality="localParticipant?.isScreenShareEnabled ? rtc.currentScreenShareQuality : captureQuality"
+                      :custom-quality="localParticipant?.isScreenShareEnabled ? rtc.currentCustomScreenShareQuality : captureCustomQuality"
+                      :share-audio="sharingAudio" :audio-mode="rtc.currentScreenShareAudioMode"
+                      :share-audio-restricted="rtc.screenShareAudioRestricted"
+                      @microphone="toggleMicrophone" @listening="toggleListening"
+                      @share="captureRequest ? selectCaptureSource(null) : rtc.toggleMedia(Track.Source.ScreenShare)"
+                      @change-source="rtc.changeScreenShareSource" @quality="changeScreenShareQuality" @share-audio="changeScreenShareAudio"
+                      @input-gain="updateInputGain" @output-volume="updateOutputVolume" @settings="openSettings('audio', $event)" />
+                    <IconButton :label="joiningGroupId ? '取消连接' : '离开语音'" class="is-danger"
+                      :disabled="callbarLeaving || (!joinedGroup && joiningGroupId === null)" @click="leaveVoice"><LogOut :size="17" /></IconButton>
+                  </footer>
+                </div>
+              </div>
+            </Transition>
           </div>
           <GroupMembersPanel v-if="selectedGroup" :key="selectedGroup.id" :members="orderedMembers" :user="user" :loading="groupLoading"
             :member-count="selectedGroupDetail?.memberCount"
             :error="groupError" :connection-lost="presenceConnectionLost" :status="memberOnlineStatus"
             :status-label="memberStatusLabel" :activity="memberActivity" />
-        <Transition enter-active-class="callbar-enter-active">
-          <div v-if="callbarGroup || joiningGroupId" class="callbar-reveal" :class="{ 'is-leaving': callbarLeaving }" data-testid="callbar">
-            <div class="callbar-content">
-              <footer class="callbar">
-                <div class="call-state" role="status">
-                  <RadioTower v-if="connected || rtc.status === 'reconnecting'" :size="17" /><Headphones v-else :size="17" />
-                  <span><strong>{{ callbarLeaving ? '正在退出' : STATUS_LABELS[rtc.status] }}</strong>
-                    <small>{{ callbarGroup?.name }}{{ joinedGroup && selectedGroupId !== joinedGroup.id && selectedGroup ? ' · 正在浏览 ' + selectedGroup.name : joiningGroupId ? ' · 加入中' : '' }}</small>
-                  </span>
-                </div>
-                <IconButton v-if="joinedGroup && selectedGroupId !== joinedGroup.id" label="返回当前通话群组" @click="previewGroup(joinedGroup.id)"><CornerUpLeft :size="17" /></IconButton>
-                <CallControls :connected="connected" :desktop="Boolean(desktop)"
-                  :microphone-enabled="rtc.microphoneEnabled" :microphone-intent="rtc.microphoneIntent" :microphone-busy="rtc.busySources.includes(Track.Source.Microphone)"
-                  :microphone-level="localMicrophoneLevel" :input-level-percent="localInputLevelPercent"
-                  :listening="listening" :input-gain="inputGain" :output-volume="outputVolume"
-                  :sharing="Boolean(localParticipant?.isScreenShareEnabled)" :share-limit-reached="screenShareLimitReached" :choosing-source="Boolean(captureRequest)"
-                  :share-busy="rtc.busySources.includes(Track.Source.ScreenShare) || rtc.screenShareQualityBusy || rtc.screenShareSourceBusy"
-                  :quality="localParticipant?.isScreenShareEnabled ? rtc.currentScreenShareQuality : captureQuality"
-                  :custom-quality="localParticipant?.isScreenShareEnabled ? rtc.currentCustomScreenShareQuality : captureCustomQuality"
-                  :share-audio="sharingAudio" :audio-mode="rtc.currentScreenShareAudioMode"
-                  :share-audio-restricted="rtc.screenShareAudioRestricted"
-                  @microphone="toggleMicrophone" @listening="toggleListening"
-                  @share="captureRequest ? selectCaptureSource(null) : rtc.toggleMedia(Track.Source.ScreenShare)"
-                  @change-source="rtc.changeScreenShareSource" @quality="changeScreenShareQuality" @share-audio="changeScreenShareAudio"
-                  @input-gain="updateInputGain" @output-volume="updateOutputVolume" @settings="openSettings('audio', $event)" />
-                <IconButton :label="joiningGroupId ? '取消连接' : '离开语音'" class="is-danger"
-                  :disabled="callbarLeaving || (!joinedGroup && joiningGroupId === null)" @click="leaveVoice"><LogOut :size="17" /></IconButton>
-              </footer>
-            </div>
-          </div>
-        </Transition>
         <PersonalStatusCard :user="user" :status="currentPresenceStatus" :status-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]"
           :activity-status="personalActivityStatus">
           <IconButton label="语音与音频设置" @click="openSettings('audio', $event)"><Settings :size="19" /></IconButton>

@@ -84,6 +84,30 @@ async function scrollToBottom(behavior: ScrollBehavior = 'smooth', force = false
   if (atBottom.value) unseenMessages.value = 0;
 }
 
+// 短会话尚未产生滚动条时，补上新消息把旧消息向上推开的过渡。
+function captureMessagePositions() {
+  const element = list.value;
+  if (!element?.isConnected || !atBottom.value || scrollPreference?.matches
+      || element.scrollHeight > element.clientHeight) return [];
+  return [...element.querySelectorAll<HTMLElement>('[data-message-id]')]
+    .map(message => ({ message, top: message.getBoundingClientRect().top }));
+}
+const messageAnimations = new Set<Animation>();
+async function animateMessagePositions(positions: ReturnType<typeof captureMessagePositions>) {
+  if (!positions.length) return;
+  await nextTick();
+  if (disposed || scrollPreference?.matches) return;
+  for (const { message, top } of positions) {
+    if (!message.isConnected) continue;
+    const offset = top - message.getBoundingClientRect().top;
+    if (Math.abs(offset) < 1) continue;
+    const animation = message.animate([{ transform: `translateY(${offset}px)` }, { transform: 'translateY(0)' }],
+      { duration: 180, easing: 'ease-out' });
+    messageAnimations.add(animation);
+    animation.onfinish = animation.oncancel = () => { messageAnimations.delete(animation); };
+  }
+}
+
 function appendMessages(incoming: ChatMessage[], forceScroll = false, behavior: ScrollBehavior = 'smooth') {
   const known = new Set(messages.value.map((message) => message.id));
   const added = incoming.filter((message) => {
@@ -92,7 +116,9 @@ function appendMessages(incoming: ChatMessage[], forceScroll = false, behavior: 
     return true;
   });
   if (!added.length) return 0;
+  const positions = captureMessagePositions();
   messages.value = [...messages.value, ...added];
+  void animateMessagePositions(positions);
   if (forceScroll || atBottom.value || followingScroll) void scrollToBottom(behavior, forceScroll);
   return added.length;
 }
@@ -127,8 +153,10 @@ async function refresh() {
       return true;
     });
     const added = orderedPage.filter((message) => !currentIds.has(message.id)).length;
+    const positions = added && !initial ? captureMessagePositions() : [];
     messages.value = [...prefix, ...orderedPage,
       ...messages.value.slice(prefixEnd).filter((message) => !snapshotIds.has(message.id))];
+    void animateMessagePositions(positions);
     latestFetchedMessageId = page.messages.at(-1)?.id ?? latestId;
     if (added && (initial || atBottom.value || followingScroll)) void scrollToBottom(initial ? 'auto' : 'smooth', initial);
     else if (added) unseenMessages.value += added;
@@ -480,6 +508,7 @@ function stopAnimatedScroll() {
   const element = list.value;
   if (!scrollPreference?.matches || !element) return;
   followingScroll = false;
+  for (const animation of messageAnimations) animation.cancel();
   element.scrollTo({ top: element.scrollTop, behavior: 'auto' });
   onScrollEnd();
 }
@@ -499,6 +528,7 @@ onMounted(() => {
 onScopeDispose(() => {
   // App 按群 ID 创建独立实例；切群统一在销毁处取消，观看布局不重建群聊。
   disposed = true;
+  for (const animation of messageAnimations) animation.cancel();
   pollRequest?.abort();
   historyRequest?.abort();
   historyRequest = null;
