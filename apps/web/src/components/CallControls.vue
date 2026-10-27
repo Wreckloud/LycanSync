@@ -154,7 +154,7 @@ onScopeDispose(() => {
     </div>
     <div class="call-control-split">
       <button type="button" class="icon-button call-control-main" :aria-label="choosingSource ? '取消共享选择' : sharing ? '停止屏幕共享' : shareLimitReached ? '屏幕共享已达到 8 路上限' : '开始屏幕共享'"
-        :class="{ 'is-active': sharing, 'is-capacity-disabled': shareLimitReached }" :disabled="!connected || shareLimitReached || (!choosingSource && shareBusy)" @click="toggleShare">
+        :class="{ 'is-active': sharing }" :disabled="!connected || shareLimitReached || (!choosingSource && shareBusy)" @click="toggleShare">
         <MonitorX v-if="sharing || choosingSource" :size="17" /><MonitorUp v-else :size="17" />
       </button>
       <button type="button" class="call-control-more" aria-label="共享选项" :aria-expanded="menu === 'share'"
@@ -163,7 +163,7 @@ onScopeDispose(() => {
       <div v-if="menu === 'share'" class="call-share-menu" :class="{ 'is-compact': qualityPlacement === 'compact' }">
         <section v-show="!qualityOpen || qualityPlacement !== 'compact'" class="call-control-menu call-share-actions" aria-label="共享选项">
           <header>屏幕共享</header>
-          <button type="button" class="call-menu-action" :class="{ 'is-danger': sharing, 'is-capacity-disabled': shareLimitReached }" :disabled="shareBusy || shareLimitReached" @click="toggleShare">
+          <button type="button" class="call-menu-action" :class="{ 'is-danger': sharing }" :disabled="shareBusy || shareLimitReached" @click="toggleShare">
             <MonitorX v-if="sharing" :size="15" /><MonitorUp v-else :size="15" />{{ sharing ? '停止共享' : '开始共享' }}</button>
           <button v-if="sharing && desktop" type="button" class="call-menu-action" :disabled="shareBusy" @click="chooseSource">更改共享<ChevronRight class="call-menu-chevron" :size="14" /></button>
           <template v-if="desktop">

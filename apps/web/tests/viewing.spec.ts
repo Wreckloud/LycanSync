@@ -426,7 +426,7 @@ test('统一卡片尺寸，点击切换与成员折叠记忆，横向拖动不�
   await expect(page.getByRole('region', { name: '共享观看区' })).toHaveCount(0);
 });
 
-test('常驻成员栏保留搜索与王冠，语音横跨上方，聊天及个人名片边界对齐', async ({ page }) => {
+test('常驻成员栏保留搜索与王冠，语音覆盖聊天顶部，个人名片边界对齐', async ({ page }) => {
   const directory = page.getByRole('complementary', { name: '群组成员', exact: true });
   const searchButton = directory.getByRole('button', { name: '搜索群组成员' });
   await expect(directory).toBeVisible();
@@ -451,7 +451,7 @@ test('常驻成员栏保留搜索与王冠，语音横跨上方，聊天及个�
     const conversation = await chat.boundingBox();
     const personal = await page.getByLabel('个人状态与设置').boundingBox();
     expect(Math.abs(members!.y - (voice!.y + voice!.height))).toBeLessThanOrEqual(1);
-    expect(Math.abs(members!.y - conversation!.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(voice!.y - conversation!.y)).toBeLessThanOrEqual(1);
     expect(Math.abs(members!.x - (conversation!.x + conversation!.width))).toBeLessThanOrEqual(1);
     expect(Math.abs(members!.x - personal!.x)).toBeLessThanOrEqual(1);
     expect(Math.abs(members!.width - personal!.width)).toBeLessThanOrEqual(1);
@@ -502,6 +502,64 @@ test('远控授权和画面匹配后才打开专用控制窗，普通观看关�
   await expect(page.getByRole('button', { name: '申请远程控制', exact: true })).toBeVisible();
 });
 
+
+test('成员搜索和设置页退场时立即禁用交互，完成后移除', async ({ page }) => {
+  await page.addStyleTag({ content: ':root { --motion-surface-duration: 500ms; --motion-layout-duration: 500ms; }' });
+  const directory = page.getByRole('complementary', { name: '群组成员', exact: true });
+  await directory.getByRole('button', { name: '搜索群组成员' }).click();
+  await directory.getByRole('searchbox').press('Escape');
+  const search = page.locator('.member-search-leave-active');
+  await expect(search).toHaveCSS('pointer-events', 'none');
+  expect(await search.evaluate(element => (element as HTMLElement).inert)).toBe(true);
+  await expect(page.locator('.member-search')).toHaveCount(0);
+  await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  await page.getByRole('button', { name: '返回应用', exact: true }).click();
+  const settings = page.locator('.settings-page-leave-active');
+  await expect(settings).toHaveCSS('pointer-events', 'none');
+  expect(await settings.evaluate(element => (element as HTMLElement).inert)).toBe(true);
+  await expect(page.locator('.settings-view')).toHaveCount(0);
+  await expect(page.getByTestId('callbar')).toBeVisible();
+  expect(await page.locator('button:disabled, input:disabled').evaluateAll(elements => elements.some(element =>
+    ['not-allowed', 'no-drop'].includes(getComputedStyle(element).cursor)))).toBe(false);
+});
+
+test('聚焦网格和成员折叠只覆盖聊天，保留历史阅读位置与草稿', async ({ page }) => {
+  await page.route('**/api/groups/viewing-group-0/messages**', route => route.fulfill({ json: {
+    messages: Array.from({ length: 80 }, (_, index) => ({ id: 'history-' + index, senderUserId: user.id,
+      senderNickname: user.nickname, type: 'TEXT', content: `历史消息 ${index}，保持阅读位置。`,
+      createdAt: new Date(Date.UTC(2026, 9, 10, 0, 0, index)).toISOString(), attachment: null })), hasMore: false,
+  } }));
+  await page.reload();
+  await page.getByRole('button', { name: /^观看测试，/ }).dblclick();
+  const list = page.locator('.message-list');
+  await expect(page.locator('[data-message-id]')).toHaveCount(80);
+  await list.evaluate(element => element.scrollTo({ top: 500, behavior: 'instant' }));
+  await expect.poll(() => list.evaluate(element => element.scrollTop)).toBe(500);
+  const input = page.getByRole('textbox', { name: '消息内容' });
+  await input.fill('覆盖布局保留草稿');
+  const original = await list.elementHandle();
+  const before = await list.boundingBox();
+  await sharing(page, ['A', 'B']);
+  const unchanged = async () => {
+    await expect.poll(() => list.evaluate(element => element.scrollTop)).toBe(500);
+    const after = await list.boundingBox();
+    expect(Math.abs(after!.y - before!.y)).toBeLessThan(1);
+    expect(Math.abs(after!.height - before!.height)).toBeLessThan(1);
+    expect(await original!.evaluate(element => element.isConnected)).toBe(true);
+    await expect(input).toHaveValue('覆盖布局保留草稿');
+  };
+  await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+  await expect(page.locator('.voice-panel')).toHaveClass(/is-viewing/);
+  await unchanged();
+  await page.getByRole('button', { name: '收起成员', exact: true }).click();
+  await unchanged();
+  await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
+  await unchanged();
+  await page.getByRole('button', { name: '聚焦成员B', exact: true }).click();
+  await page.locator('.viewing-surface').hover();
+  await page.getByRole('button', { name: '退出观看', exact: true }).click();
+  await unchanged();
+});
 
 test('群菜单不被标题裁切，控制栏退出时聊天连续复位且保留草稿', async ({ page }) => {
   await page.getByRole('button', { name: '群组菜单', exact: true }).click();

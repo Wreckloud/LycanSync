@@ -1236,7 +1236,7 @@ function participantListening(participant: Participant) {
         <button class="group-button add-group" type="button" aria-label="创建群组" @click="openEditor"><Plus :size="17" /></button>
       </nav>
       <main class="group-main">
-        <template v-if="selectedGroup">
+        <div v-if="selectedGroup" class="group-heading-content">
         <div class="group-header-region" :aria-hidden="viewingWindows?.inlineExpanded || undefined" :inert="viewingWindows?.inlineExpanded">
           <div class="group-header-clip">
             <header class="group-header">
@@ -1268,10 +1268,11 @@ function participantListening(participant: Participant) {
             </span>
           </div>
         </section>
+        </div>
         <Transition name="voice-panel">
-          <section v-if="showingJoinedGroup && groupParticipants.length > 0" ref="viewingTarget" class="voice-panel" aria-label="当前语音成员" />
+          <section v-if="showingJoinedGroup && groupParticipants.length > 0" ref="viewingTarget" class="voice-panel"
+            :class="{ 'is-viewing': viewingWindows?.inlineExpanded }" aria-label="当前语音成员" />
         </Transition>
-        </template>
         <div class="group-conversation">
           <div class="conversation-main">
             <GroupChat v-if="selectedGroup" :key="selectedGroup.id" :group="selectedGroup"
@@ -1328,6 +1329,7 @@ function participantListening(participant: Participant) {
     <GroupManagementDialog v-if="management" :group="management.group" :mode="management.mode" :user-id="user.id"
       @updated="applyGroupDetail" @removed="removedFromGroup" @close="management = null" />
     </div>
+    <Transition name="settings-page" @before-leave="($event as HTMLElement).inert = true">
     <SettingsView v-if="settingsOpen" :inert="!!rtc.remoteControlRequest" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
       :overlay="desktop ? voiceOverlay : undefined"
       :presence-status="currentPresenceStatus" :presence-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]"
@@ -1336,6 +1338,7 @@ function participantListening(participant: Participant) {
       :activity-mappings="activityMappings"
       @activity-visibility="setShowActivity"
       :save-profile="saveProfile" @close="closeSettings" @logout="emit('logout')" />
+    </Transition>
     <ScreenSharePicker v-if="captureRequest" :key="nativeSourceChooserGeneration" ref="capturePicker" :sources="captureRequest.sources"
       v-model:source-type="captureSourceType" v-model:quality="captureQuality" v-model:custom-quality="captureCustomQuality" :share-audio="captureShareAudio"
       @update:share-audio="updateCaptureShareAudio"
