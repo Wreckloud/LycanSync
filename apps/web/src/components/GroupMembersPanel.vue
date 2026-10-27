@@ -39,11 +39,13 @@ async function toggleSearch() {
       <strong v-show="!searchOpen">成员<span v-if="memberCount !== undefined"> · {{ memberCount }}</span></strong>
       <button v-show="!searchOpen" ref="button" type="button" class="member-search-toggle" aria-label="搜索群组成员"
         :aria-expanded="searchOpen" aria-controls="group-member-search" @click="toggleSearch"><Search :size="16" /></button>
+      <Transition name="member-search" @before-leave="($event as HTMLElement).inert = true">
       <div v-if="searchOpen" id="group-member-search" class="member-search">
         <input ref="input" v-model="search" type="search" aria-label="按名称搜索成员"
           placeholder="搜索成员名称" @keydown.esc.stop="toggleSearch" />
         <button type="button" class="member-search-toggle" aria-label="关闭成员搜索" @click="toggleSearch"><X :size="14" /></button>
       </div>
+      </Transition>
     </header>
     <div class="members-list">
       <p v-if="connectionLost" class="group-hint" role="status">成员状态同步中断，当前显示可能已过期。</p>

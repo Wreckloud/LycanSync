@@ -6,6 +6,8 @@ function fixture() {
   let height = 132;
   const animations: { cancel: ReturnType<typeof vi.fn>; finish(): void }[] = [];
   const preference = { matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() };
+  const conversation = { style: { setProperty: vi.fn(), removeProperty: vi.fn() }, getBoundingClientRect: () => ({ top: 80 }) };
+  const observers: { update(): void; disconnect: ReturnType<typeof vi.fn> }[] = [];
   const animate = vi.fn(() => {
     let finish!: () => void;
     let reject!: (reason: Error) => void;
@@ -15,14 +17,20 @@ function fixture() {
     return animation;
   });
   const element = {
-    isConnected: true, getClientRects: () => [{}], getBoundingClientRect: () => ({ height }), animate,
+    isConnected: true, getClientRects: () => [{}], getBoundingClientRect: () => ({ height, bottom: 80 + height }), animate,
+    closest: () => ({ querySelector: () => conversation }),
     ownerDocument: { defaultView: {
+      ResizeObserver: class {
+        disconnect = vi.fn();
+        constructor(update: () => void) { observers.push({ update, disconnect: this.disconnect }); }
+        observe() {}
+      },
       matchMedia: () => preference,
       getComputedStyle: () => ({ getPropertyValue: (name: string) =>
         name === '--motion-layout-duration' ? '210ms' : 'cubic-bezier(.2, 0, 0, 1)' }),
     } },
   };
-  const target = shallowRef(element as unknown as HTMLElement);
+  const target = shallowRef<HTMLElement | null>(element as unknown as HTMLElement);
   const expanded = ref(false);
   const scope = effectScope();
   scope.run(() => useInlineViewingMotion(target, () => expanded.value));
@@ -34,7 +42,7 @@ function fixture() {
     height = to;
     await nextTick();
   }
-  return { scope, target, expanded, element, animate, animations, preference, change };
+  return { scope, target, expanded, element, animate, animations, preference, change, conversation, observers };
 }
 
 it('只过渡语音区高度，不变更媒体或缩放视频元素，完成后不留下固定高度', async () => {
@@ -84,4 +92,18 @@ it('等待布局期间销毁或切换目标，迟到任务不能启动动画', a
   f.scope.stop();
   await nextTick();
   expect(f.animate).not.toHaveBeenCalled();
+});
+
+it('只给右栏让出覆盖高度，移除覆盖层后清除占位，迟到观察不恢复旧尺寸', async () => {
+  const f = fixture();
+  await f.change(true, 132, 430);
+  expect(f.conversation.style.setProperty).toHaveBeenLastCalledWith('--voice-overlay-height', '430px');
+  f.target.value = null;
+  await nextTick();
+  expect(f.observers[0]!.disconnect).toHaveBeenCalledOnce();
+  expect(f.conversation.style.removeProperty).toHaveBeenLastCalledWith('--voice-overlay-height');
+  f.conversation.style.setProperty.mockClear();
+  f.observers[0]!.update();
+  expect(f.conversation.style.setProperty).not.toHaveBeenCalled();
+  f.scope.stop();
 });

@@ -19,8 +19,7 @@
 .settings-toggle input::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); transition: transform var(--motion-feedback-duration) ease; }
 .settings-toggle input:checked { border-color: var(--accent); background: var(--accent); }
 .settings-toggle input:checked::after { transform: translateX(16px); background: white; }
-.settings-toggle.is-disabled input:disabled { cursor: not-allowed; }
-.settings-toggle.is-disabled { opacity: .65; cursor: not-allowed; }
+.settings-toggle.is-disabled { opacity: .65; }
 .settings-error { color: var(--danger) !important; }
 .settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--button-gap); }
 .settings-section button { font-size: 13px; }
