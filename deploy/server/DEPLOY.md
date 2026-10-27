@@ -65,6 +65,8 @@ mv downloads/latest.yml.next downloads/latest.yml
 
 更新目录默认是打包 API 地址的 `/downloads/`，可用 `LYCANSYNC_PACKAGED_UPDATE_URL` 在构建时指定独立站点。用户切换业务服务器不改变更新目录；不要从用户填写的服务器获取并执行安装包。内网更新同样要求信任自己的测试 CA，不禁用 TLS 校验。SHA-512 检查用于发现文件损坏，不代替发布者签名；当前安装包未签名，正式对外发布前需评估签名并完成 Windows 安装升级验收。
 
+`latest.yml`、`LycanSync-setup.exe` 和对应别名 `.blockmap` 使用 `Cache-Control: no-store`，避免更新入口保留旧内容；版本化文件继续保留，不覆盖、不移除范围下载支持。若前面另有 CDN 或代理，须遵循该响应头；曾配置强制缓存时需先清除已有缓存。
+
 请勿公开密钥、`.env`、激活文件或恢复链接。
 
 私密群权限要求后端与 Caddy 配置一起更新：8443 端口只代理 `/rtc`、`/rtc/validate`、`/rtc/v1`、`/rtc/v1/validate`，每次连接先由 `/internal/rtc/access` 验证 LiveKit 签名及当前群成员资格。该内部路径在业务入口返回 404；API 与 LiveKit HTTP 端口保持容器内访问，不直接发布。不要将 7990 映射给客户端，也不要通过另一个未校验的代理开放信令。首次从全员测试版迁移时，旧群只保留群主，并关闭旧公开语音房间；建议无人通话时部署。成员日常退出／移除只断开目标用户，不重建房间。
@@ -86,6 +88,23 @@ curl --cacert ./lycansync-local-ca.crt https://192.168.1.50/actuator/health
 Caddy 完成首次启动后才能导出证书。把**自己这台服务器导出的** `lycansync-local-ca.crt` 复制到物理 Windows 和各 Windows VM，由你手动导入“当前用户 → 受信任的根证书颁发机构”，再启动客户端。这会增加对该测试 CA 的信任；不要导入来源不明的 CA，测试结束后可以删除该证书。不要复制服务器的私钥。这个步骤只用于你自己的内网测试，不分发到普通用户。
 
 客户端地址填写 `https://192.168.1.50`。所有后续内网维护命令都带上 `-f compose.yaml -f compose.lan.yaml`，否则会切回公网证书配置。服务器更换 IP 后，要同步修改 `.env`、客户端地址并重建连接。
+
+内网证书由 Caddy 自动维护，默认有效期 12 小时；本配置将续期检查间隔设为 1 分钟，缩短虚拟机长时间暂停、恢复计时和校时后的检查等待。检查不等于每分钟签发证书，也不会重启网关或媒体服务。保持 Docker 开机启动和虚拟机时间同步；暂停期间无法续期，恢复网络、时钟和进程调度仍需时间，不能保证恢复瞬间即可访问。不要通过延长证书有效期、删除 `caddy-data` 或关闭客户端校验处理问题。参考 [Caddy 续期检查选项](https://caddyserver.com/docs/caddyfile/options#renew-interval) 和 [内网签发配置](https://caddyserver.com/docs/caddyfile/directives/tls#internal)。
+
+仅更新网关配置时，在原部署目录验证并平滑加载，无需重启 API、LiveKit 或数据库：
+
+```bash
+docker compose -f compose.yaml -f compose.lan.yaml exec -T caddy \
+  caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+docker compose -f compose.yaml -f compose.lan.yaml exec -T caddy \
+  caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+curl --fail --cacert ./lycansync-local-ca.crt \
+  -D - https://你的内网IP/downloads/latest.yml
+```
+
+当前固定的 Caddy 2.10.2／CertMagic 0.24.0 在创建证书缓存时建立续期计时器，平滑加载只更新配置，不重建已有计时器。首次修改 `renew_interval` 后，须在无人通话时额外运行一次 `docker compose -f compose.yaml -f compose.lan.yaml restart caddy`，仅重启网关，可能短暂中断下载及信令连接；其他服务不重启。后续无需定时重启。依据：[Caddy 缓存复用](https://github.com/caddyserver/caddy/blob/v2.10.2/modules/caddytls/tls.go)、[CertMagic 计时器创建](https://github.com/caddyserver/certmagic/blob/v0.24.0/maintain.go)。
+
+确认清单版本及 `Cache-Control: no-store`，并核验版本化安装包仍支持 `Range` 请求。若 HTTPS 失败，先检查虚拟机时间、证书有效期和 `docker compose -f compose.yaml -f compose.lan.yaml logs --tail=100 caddy` 的续期错误；平滑加载只用于配置变更或明确故障排查，不设置无条件的定时重载。保留原 CA，已有客户端无需重新导入证书。
 
 ## 4. 配置 Windows 客户端
 

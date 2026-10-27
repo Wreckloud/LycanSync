@@ -4,6 +4,8 @@
     }
     handle_path /downloads/* {
         root * /srv/downloads
+        @updateEntry path /latest.yml /LycanSync-setup.exe /LycanSync-setup.exe.blockmap
+        header @updateEntry Cache-Control no-store
         file_server
     }
     handle {
