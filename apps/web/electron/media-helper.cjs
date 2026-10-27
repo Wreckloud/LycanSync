@@ -113,7 +113,20 @@ class MediaHelperManager {
     }
   }
 
-
+  async inspectVideoSource(sourceId) {
+    const snapshot = this.videoSourceSnapshot;
+    const current = this.videoCapture;
+    const active = () => current && this.videoCapture === current && !current.stopping
+      && current.sourceId === sourceId && current.state === snapshot?.state;
+    if (!snapshot || (!snapshot.ids.has(sourceId) && !active()) || !snapshot.state.alive) throw new Error('videoSourceExpired');
+    const response = await this.sendRequest(snapshot.state, 'inspectVideoSource', 'videoSourceInspected',
+      this.requestTimeoutMs, { sourceId });
+    if (this.videoSourceSnapshot?.state !== snapshot.state || (!this.videoSourceSnapshot.ids.has(sourceId) && !active())) {
+      throw new Error('videoSourceExpired');
+    }
+    if (response.sourceId !== sourceId) throw new Error('mediaHelperInvalidVideoTarget');
+    return readVideoTarget(response.target, sourceId);
+  }
 
   reserveVideo(sessionId, sourceId) {
     if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
@@ -141,31 +154,16 @@ class MediaHelperManager {
     try {
       const response = await this.sendRequest(state, 'reserveVideo', 'videoReserved', this.requestTimeoutMs,
         { sessionId, sourceId });
-      const target = response.target;
-      const monitor = target?.kind === 'monitor' && sourceId.startsWith('monitor:')
-        && typeof target.monitorName === 'string' && /^\\\\\.\\DISPLAY[1-9]\d*$/i.test(target.monitorName);
-      const window = target?.kind === 'window' && sourceId.startsWith('window:')
-        && typeof target.windowId === 'string' && /^[1-9]\d{0,19}$/.test(target.windowId)
-        && BigInt(target.windowId) <= 0xffffffffffffffffn
-        && typeof target.lifetimeName === 'string' && target.lifetimeName.length <= 128
-        && /^Local\\LycanSync\.WindowLifetime\.[1-9]\d*\.[1-9]\d*\.[1-9]\d*\.[1-9]\d*$/.test(target.lifetimeName)
-        && target.lifetimeName.endsWith(`.${target.windowId}`)
-        && Number.isInteger(target.processId) && target.processId > 0 && target.processId <= 0xffffffff
-        && typeof target.processCreationTime === 'string' && /^[1-9]\d{0,19}$/.test(target.processCreationTime)
-        && BigInt(target.processCreationTime) <= 0xffffffffffffffffn && typeof target.requiresWindowCapture === 'boolean'
-        && typeof target.executable === 'string' && target.executable.length <= 4096
-        && win32.isAbsolute(target.executable) && /\.exe$/i.test(target.executable)
-        && !/[\u0000-\u001f\u007f]/.test(target.executable);
-      if (response.sessionId !== sessionId || response.sourceId !== sourceId || (!monitor && !window)) {
+      if (response.sessionId !== sessionId || response.sourceId !== sourceId) {
         const error = new Error('mediaHelperInvalidVideoTarget');
         this.failState(state, error);
         throw error;
       }
+      let target;
+      try { target = readVideoTarget(response.target, sourceId); }
+      catch (error) { this.failState(state, error); throw error; }
       active.starting = false;
-      return monitor ? { kind: 'monitor', monitorName: target.monitorName }
-        : { kind: 'window', windowId: target.windowId, lifetimeName: target.lifetimeName,
-          processId: target.processId, processCreationTime: target.processCreationTime,
-          requiresWindowCapture: target.requiresWindowCapture, executable: target.executable };
+      return target;
     } catch (error) {
       if (this.videoCapture === active) this.videoCapture = undefined;
       delete state.videoSessionId;
@@ -876,6 +874,28 @@ function normalizeRemoteInput(input) {
     return { kind: input.kind, key: input.key };
   }
   return null;
+}
+
+function readVideoTarget(target, sourceId) {
+  if (target?.kind === 'monitor' && sourceId.startsWith('monitor:')
+      && typeof target.monitorName === 'string' && /^\\\\\.\\DISPLAY[1-9]\d*$/i.test(target.monitorName)) {
+    return { kind: 'monitor', monitorName: target.monitorName };
+  }
+  if (target?.kind !== 'window' || !sourceId.startsWith('window:')
+      || typeof target.windowId !== 'string' || !/^[1-9]\d{0,19}$/.test(target.windowId)
+      || BigInt(target.windowId) > 0xffffffffffffffffn
+      || typeof target.lifetimeName !== 'string' || target.lifetimeName.length > 128
+      || !/^Local\\LycanSync\.WindowLifetime\.[1-9]\d*\.[1-9]\d*\.[1-9]\d*\.[1-9]\d*$/.test(target.lifetimeName)
+      || !target.lifetimeName.endsWith(`.${target.windowId}`)
+      || !Number.isInteger(target.processId) || target.processId <= 0 || target.processId > 0xffffffff
+      || typeof target.processCreationTime !== 'string' || !/^[1-9]\d{0,19}$/.test(target.processCreationTime)
+      || BigInt(target.processCreationTime) > 0xffffffffffffffffn || typeof target.requiresWindowCapture !== 'boolean'
+      || typeof target.executable !== 'string' || target.executable.length > 4096
+      || !win32.isAbsolute(target.executable) || !/\.exe$/i.test(target.executable)
+      || /[\u0000-\u001f\u007f]/.test(target.executable)) throw new Error('mediaHelperInvalidVideoTarget');
+  return { kind: 'window', windowId: target.windowId, lifetimeName: target.lifetimeName,
+    processId: target.processId, processCreationTime: target.processCreationTime,
+    requiresWindowCapture: target.requiresWindowCapture, executable: target.executable };
 }
 
 function waitForClose(closedPromise, timeoutMs) {

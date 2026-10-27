@@ -34,11 +34,29 @@ test('权限导致的采集选择只导出布尔原因，不导出生命周期�
   context.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'events.jsonl');
   const time = new Date().toISOString();
-  await writeFile(path, JSON.stringify({ time, stage: 'screenSourceReserved', requiresWindowCapture: true,
+  await writeFile(path, JSON.stringify({ time, stage: 'screenSourceReserved', requiresWindowCapture: true, preparationReused: true,
     lifetimeName: 'private-lifetime', processId: 12345, processCreationTime: 'private-process',
     message: 'private-window' }));
   assert.deepEqual(await readDiagnosticEvents(path, 0, Date.parse(time)), [
-    { time, stage: 'screenSourceReserved', hresults: [], requiresWindowCapture: true },
+    { time, stage: 'screenSourceReserved', hresults: [], requiresWindowCapture: true, preparationReused: true },
+  ]);
+});
+
+test('选窗准备与设置拒绝只导出阶段耗时和固定原因', async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lycan-source-preparation-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'events.jsonl');
+  const time = new Date().toISOString();
+  await writeFile(path, [
+    { stage: 'screenSourcePrepared', sourceKind: 'window', durationMs: 12,
+      executable: 'private.exe', windowId: '12345' },
+    { stage: 'obsCaptureRejected', code: 'captureBorderUnsupported', message: 'private-error' },
+    { stage: 'screenCaptureSelectionUnavailable', code: 'captureBorderAccessDenied', windowTitle: 'private-title' },
+  ].map(entry => JSON.stringify({ time, ...entry })).join('\n'));
+  assert.deepEqual(await readDiagnosticEvents(path, 0, Date.parse(time)), [
+    { time, stage: 'screenSourcePrepared', hresults: [], sourceKind: 'window', durationMs: 12 },
+    { time, stage: 'obsCaptureRejected', hresults: [], code: 'captureBorderUnsupported' },
+    { time, stage: 'screenCaptureSelectionUnavailable', hresults: [], code: 'captureBorderAccessDenied' },
   ]);
 });
 
@@ -48,6 +66,7 @@ test('采集设置、边框授权和正常目标退出保留固定原因，不�
   const path = join(directory, 'events.jsonl');
   const time = new Date().toISOString();
   const codes = ['captureSettingsUnsupported', 'captureBorderUnsupported', 'captureBorderAccessDenied', 'obsCaptureHostFailed',
+    'nativeGameFollowFailed', 'nativeGameFollowUnavailable', 'nativeGameFollowTargetInvalid', 'nativeGameFollowTargetAmbiguous', 'nativeGameFollowBusy',
     'sharedTextureTransferTimedOut', 'sharedTextureReceiverUnavailable',
     'obsStartupFailed', 'obsWindowRuntimeUnavailable', 'sharedTextureGpuWaitFailed', 'obsCaptureProtocolJsonInvalid',
     'captureTargetClosed', 'obsWindowBindingUnavailable', 'obsWindowTargetMismatch',

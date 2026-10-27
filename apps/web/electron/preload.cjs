@@ -135,9 +135,16 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   configureActivityMappings: (mappings) => ipcRenderer.invoke('activity:configure', mappings),
   getNativeMediaCapabilities: () => ipcRenderer.invoke('media:capabilities'),
   listNativeVideoSources: () => ipcRenderer.invoke('media:video-sources'),
+  prepareNativeVideoSource: (sourceId) => ipcRenderer.invoke('media:video-source:prepare', sourceId),
   getNativeVideoSourceThumbnails: (sources) => ipcRenderer.invoke('media:video-source-thumbnails', sources),
   getScreenShareSupport: () => ipcRenderer.invoke('settings:screen-share:support'),
   startNativeVideo: (sourceId, maxFps, settings, resolution) => ipcRenderer.invoke('media:native-video:start', sourceId, maxFps, settings, resolution),
+  findNativeGameSource: (id) => ipcRenderer.invoke('media:game-follow:source', id),
+  switchNativeGameVideo: (id, sourceId, maxFps, settings, resolution) => {
+    releaseNativeVideoCanvas(nativeVideoCanvasSessionId);
+    return ipcRenderer.invoke('media:game-follow:switch', id, sourceId, maxFps, settings, resolution);
+  },
+  endNativeGameFollow: (id) => ipcRenderer.invoke('media:game-follow:end', id),
   recordScreenShareStartupTiming: (sessionId, stage, durationMs, audioTiming) =>
     ipcRenderer.send('media:screen-share-startup', sessionId, stage, durationMs, audioTiming),
   stopNativeVideo: async (sessionId) => {

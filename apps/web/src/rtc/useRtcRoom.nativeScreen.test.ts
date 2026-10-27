@@ -66,6 +66,8 @@ vi.mock('./nativeScreenVideo', () => ({
     needsFrameRateRecovery = false;
     constructor(private readonly desktop: Window['lycanDesktop'], private readonly options: { maxFps: number; resolution: { width: number; height: number };
       captureSettings?: ScreenSharePreferences;
+      canChangeGameSource?: () => boolean; onGameSourceChanging?: () => Promise<void>;
+      onGameSourceChanged?: (sourceId: string, sessionId: string) => Promise<void>;
       isCurrentCapture?: () => boolean; canReduceFrameRate?: () => boolean;
       onFrameRateAdjustmentFailure?: (frameRate: number) => void; onError?: (code: string) => void }) {
       rtcMocks.nativeVideoInstances.push(this);
@@ -82,6 +84,12 @@ vi.mock('./nativeScreenVideo', () => ({
       return this.startPromise;
     }
     get captureSessionId() { return this.sessionId; }
+    async switchGameSource(sourceId: string, sessionId: string) {
+      if (!this.options.canChangeGameSource?.()) throw new Error('game source change unavailable');
+      await this.options.onGameSourceChanging?.();
+      this.sessionId = sessionId;
+      await this.options.onGameSourceChanged?.(sourceId, sessionId);
+    }
     canReduceFrameRate() { return this.options.isCurrentCapture?.() && this.options.canReduceFrameRate?.(); }
     reportFrameRateFailure(frameRate: number) { this.needsFrameRateRecovery = true; this.options.onFrameRateAdjustmentFailure?.(frameRate); }
     async configureQuality(id: string, custom: CustomScreenShareQuality) {
@@ -405,6 +413,66 @@ function configureNativeScreenDesktop(options: {
 }
 
 describe('native screen share wiring', () => {
+  it('游戏自动跟随只切换共享声音来源，保留视频发布和麦克风，手动关声音后不自动重开', async () => {
+    configureNativeScreenDesktop({ screenAudio: true });
+    rtcMocks.selectedSources.mockResolvedValue({ sourceId: 'window:1:0', shareAudio: true,
+      captureSettings: { hideCursor: false, hideBorder: true, followGame: 'league' } });
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false },
+      events: { selectNativeScreenSource: rtcMocks.selectedSources },
+    }))!;
+    try {
+      await rtc.join('league-follow');
+      await rtc.setMediaEnabled(Track.Source.Microphone, true);
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
+      await vi.waitFor(() => expect(rtcMocks.nativeAudioStarts).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)).toBeDefined());
+      const video = mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare);
+      const microphone = mockRoom().localParticipant.getTrackPublication(Track.Source.Microphone);
+      const session = rtcMocks.nativeVideoInstances[0] as { switchGameSource(sourceId: string, sessionId: string): Promise<void> };
+      await session.switchGameSource('window:2:0', 'game-capture');
+      expect(rtcMocks.nativeAudioStarts).toHaveBeenLastCalledWith('window:2:0', 'game-capture');
+      await vi.waitFor(() => expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)).toBeDefined());
+      expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare)).toBe(video);
+      expect(mockRoom().localParticipant.getTrackPublication(Track.Source.Microphone)).toBe(microphone);
+      expect(rtcMocks.nativeStops).not.toHaveBeenCalled();
+      expect(await rtc.setScreenShareAudioEnabled(false)).toBe(true);
+      const audioStarts = rtcMocks.nativeAudioStarts.mock.calls.length;
+      await session.switchGameSource('window:3:0', 'lobby-capture');
+      expect(rtcMocks.nativeAudioStarts).toHaveBeenCalledTimes(audioStarts);
+      expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)).toBeUndefined();
+      expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare)).toBe(video);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
+  it('联盟切换完成不等待声音重新就绪，等待声音时仍可调整画质', async () => {
+    configureNativeScreenDesktop({ screenAudio: true });
+    rtcMocks.selectedSources.mockResolvedValue({ sourceId: 'window:1:0', shareAudio: true,
+      captureSettings: { hideCursor: false, hideBorder: true, followGame: 'league' } });
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false },
+      events: { selectNativeScreenSource: rtcMocks.selectedSources },
+    }))!;
+    const startup = deferred<unknown>();
+    try {
+      await rtc.join('league-late-audio');
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
+      await vi.waitFor(() => expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)).toBeDefined());
+      rtcMocks.nativeAudioStarts.mockReturnValueOnce(startup.promise);
+      const session = rtcMocks.nativeVideoInstances[0] as { switchGameSource(sourceId: string, sessionId: string): Promise<void> };
+      await session.switchGameSource('window:2:0', 'game-capture');
+      expect(rtcMocks.nativeAudioStarts).toHaveBeenLastCalledWith('window:2:0', 'game-capture');
+      expect(await rtc.setScreenShareQuality('highFrameRate')).toBe(true);
+      expect(rtc.screenShareActive.value).toBe(true);
+      expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)).toBeUndefined();
+      await rtc.leave();
+      startup.resolve({});
+      await vi.waitFor(() => expect(rtcMocks.nativeAudioStops).toHaveBeenCalledWith('game-capture'));
+    } finally { startup.resolve({}); await rtc.leave(); scope.stop(); }
+  });
+
   it.each(['captureBorderUnsupported', 'captureBorderAccessDenied'])('%s 保留同一来源的可操作反馈，不发布画面，下一次成功后清除', async (code) => {
     configureNativeScreenDesktop({ screenAudio: false });
     rtcMocks.nativeStarts.mockRejectedValueOnce(new Error(code));

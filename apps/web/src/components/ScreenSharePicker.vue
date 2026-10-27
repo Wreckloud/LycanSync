@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Monitor } from '@lucide/vue';
 import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, SCREEN_SHARE_QUALITIES, screenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from '../rtc/screenShareQuality';
 import ScreenShareCustomQuality from './ScreenShareCustomQuality.vue';
@@ -14,6 +14,7 @@ const props = withDefaults(defineProps<{
   loading: boolean; error: string; notice: string;
   customQuality?: CustomScreenShareQuality;
   settingsFailure?: { sourceId: string; code: string } | null;
+  followGameAvailable?: boolean;
 }>(), { customQuality: () => ({ ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY }) });
 const emit = defineEmits<{
   close: []; confirm: [settings: ScreenSharePreferences]; choose: [id: string]; refreshThumbnails: [];
@@ -25,6 +26,8 @@ const panel = ref<HTMLElement | null>(null);
 const sourcesElement = ref<HTMLDivElement | null>(null);
 const captureSettings = ref<ScreenSharePreferences>({ hideCursor: false, hideBorder: true, windowMethod: 'auto' });
 const settingsError = ref('');
+const followGame = ref(false);
+watch(() => props.selectedId, () => { followGame.value = false; });
 const sources = computed(() => props.sources.filter((source) => source.type === props.sourceType));
 const quality = computed(() => screenShareQuality(props.quality, props.customQuality));
 const canChoose = computed(() => props.audioReady && !props.audioFailed);
@@ -59,6 +62,8 @@ function confirm() {
   // 按钮已明确说明本次边框许可；只在用户点击后改变设置，不持久化授权。
   if (needsBorderPermission.value) captureSettings.value.hideBorder = false;
   emit('confirm', { ...captureSettings.value,
+    ...(followGame.value && props.followGameAvailable && props.sourceType === 'window'
+      && (captureSettings.value.windowMethod ?? 'auto') === 'auto' ? { followGame: 'league' as const } : {}),
     windowMethod: props.sourceType === 'window' ? captureSettings.value.windowMethod : 'auto',
     hideBorder: props.sourceType !== 'window' || captureSettings.value.hideBorder });
 }
@@ -159,6 +164,10 @@ defineExpose({ sourcesElement });
           <p v-if="sourceType === 'window'">普通窗口分享应用内容区域；自动方式无法满足本次边框或光标设置时会提示，不自动改用兼容采集。Win10 的系统窗口采集通常需要允许边框；兼容采集可能不适合部分硬件加速应用。</p>
           <p v-else>整屏使用 DXGI，无系统共享黄框。高级选项仅用于本次共享。</p>
         </details>
+        <label v-if="followGameAvailable && sourceType === 'window' && (captureSettings.windowMethod ?? 'auto') === 'auto'"
+          class="capture-audio-option capture-game-follow">
+          <input v-model="followGame" type="checkbox" />跟随英雄联盟大厅与对局（包括大厅聊天画面）
+        </label>
         <footer class="card-actions">
           <button type="button" class="settings-button" @click="emit('close')">取消</button>
           <InlineFeedback class="card-feedback" :message="audioFailed ? '无法确认共享能力，请关闭后重试。' : error || settingsError"
@@ -195,6 +204,7 @@ defineExpose({ sourcesElement });
 .capture-source-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 20px; }
 .capture-source-selected { position: absolute; right: 6px; bottom: 6px; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: var(--accent); color: white; }
 .capture-audio-option { display: flex; align-items: center; flex-shrink: 0; gap: 8px; font-size: 13px; line-height: 20px; }
+.capture-game-follow { margin: 12px 0; }
 .capture-audio-option input { margin: 0; }
 .capture-advanced { margin: 8px 0; font-size: 13px; line-height: 20px; }
 .capture-advanced summary { color: var(--muted); cursor: pointer; }

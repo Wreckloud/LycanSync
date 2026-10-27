@@ -113,7 +113,10 @@ pub fn is_capture_game(
     // 大厅可展示游戏动态，但不因此注入其浏览器界面；播放器也不当作游戏采集。
     !ignored_executable(executable)
         && music_player(executable).is_none()
-        && file_name(executable) != "leagueclient.exe"
+        && !matches!(
+            file_name(executable),
+            "leagueclient.exe" | "leagueclientux.exe"
+        )
         && (file_name(executable) == "league of legends.exe"
             || games
                 .iter()
@@ -265,7 +268,7 @@ impl ActivityDetector {
             // 国服和国际服的独立大厅都算英雄联盟；仅打开 WeGame/Riot 平台不算游戏。
             let league = matches!(
                 file_name(&process.executable),
-                "leagueclient.exe" | "league of legends.exe"
+                "leagueclient.exe" | "leagueclientux.exe" | "league of legends.exe"
             );
             let has_window = windows.iter().any(|window| window.pid == process.pid);
             let (key, kind, name) = if let Some(player) = player {
@@ -301,7 +304,7 @@ impl ActivityDetector {
                 let override_name = mappings.iter().rev().find(|mapping| {
                     matches!(
                         file_name(&mapping.executable),
-                        "leagueclient.exe" | "league of legends.exe"
+                        "leagueclient.exe" | "leagueclientux.exe" | "league of legends.exe"
                     )
                 });
                 (
@@ -427,6 +430,7 @@ mod tests {
         assert!(is_capture_game("c:\\riot\\league of legends.exe", &[], &[]));
         for executable in [
             "c:\\riot\\leagueclient.exe",
+            "c:\\riot\\leagueclientux.exe",
             "c:\\custom\\qqmusic.exe",
             "c:\\custom\\cloudmusic.exe",
             "c:\\custom\\kugou.exe",
@@ -815,6 +819,7 @@ mod tests {
     fn league_client_and_match_are_one_game_but_platform_is_not() {
         let processes = [
             process(1, "d:/lol/LeagueClient.exe", 100),
+            process(3, "d:/lol/LeagueClientUx.exe", 150),
             process(2, "d:/lol/Game/League of Legends.exe", 200),
         ];
         assert_eq!(
