@@ -72,15 +72,16 @@ function isAtBottom() {
 
 async function scrollToBottom(behavior: ScrollBehavior = 'smooth', force = false) {
   await nextTick();
-  if (disposed || (!force && !atBottom.value)) return;
+  if (disposed || (!force && !atBottom.value && !followingScroll)) return;
   const element = list.value;
   if (!element) return;
   const reduce = scrollPreference?.matches;
   followingScroll = !reduce && behavior === 'smooth'
     && element.scrollHeight - element.clientHeight - element.scrollTop > 1;
   element.scrollTo({ top: element.scrollHeight, behavior: reduce ? 'auto' : behavior });
-  atBottom.value = true;
-  unseenMessages.value = 0;
+  // 发起滚动不代表已读到最新；中途停止时必须保留尚未看到的计数。
+  atBottom.value = isAtBottom();
+  if (atBottom.value) unseenMessages.value = 0;
 }
 
 function appendMessages(incoming: ChatMessage[], forceScroll = false, behavior: ScrollBehavior = 'smooth') {
@@ -92,7 +93,7 @@ function appendMessages(incoming: ChatMessage[], forceScroll = false, behavior: 
   });
   if (!added.length) return 0;
   messages.value = [...messages.value, ...added];
-  if (forceScroll || atBottom.value) void scrollToBottom(behavior, forceScroll);
+  if (forceScroll || atBottom.value || followingScroll) void scrollToBottom(behavior, forceScroll);
   return added.length;
 }
 
@@ -129,7 +130,7 @@ async function refresh() {
     messages.value = [...prefix, ...orderedPage,
       ...messages.value.slice(prefixEnd).filter((message) => !snapshotIds.has(message.id))];
     latestFetchedMessageId = page.messages.at(-1)?.id ?? latestId;
-    if (added && (initial || atBottom.value)) void scrollToBottom(initial ? 'auto' : 'smooth', initial);
+    if (added && (initial || atBottom.value || followingScroll)) void scrollToBottom(initial ? 'auto' : 'smooth', initial);
     else if (added) unseenMessages.value += added;
     return added;
   } catch (reason) {

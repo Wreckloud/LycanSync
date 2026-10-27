@@ -35,7 +35,9 @@ function setup() {
   // 真实组件的任务、监听和销毁；只替换网络、DOM 与图片边界，不启动浏览器或传输文件。
   const chat = scope.run(() => runInNewContext(`${compiled}\n({ refresh, loadOlder, handleVisibilityChange, submit, cancelUpload,
     list, messages, text, busy, error, historyError, pendingAttachments,
-    initialLoaded, refreshing, pollError, atBottom, unseenMessages, retryRefresh })`, {
+    initialLoaded, refreshing, pollError, atBottom, unseenMessages, retryRefresh,
+    scrollToBottom, onScrollEnd, onWheel, stopAnimatedScroll,
+    setScrollPreference: value => { scrollPreference = value; } })`, {
     computed, ref, nextTick, onScopeDispose, onMounted: () => {}, defineProps: () => props,
     findMessages, sendMessage, sendFile, compressChatImage: vi.fn(), messagePollDelay: () => 8000,
     AbortController, setTimeout, clearTimeout, Error,
@@ -47,6 +49,9 @@ function setup() {
     historyError: { value: string };
     initialLoaded: { value: boolean }; refreshing: { value: boolean }; pollError: { value: string };
     atBottom: { value: boolean }; unseenMessages: { value: number }; retryRefresh(): Promise<void> | undefined;
+    scrollToBottom(behavior?: ScrollBehavior, force?: boolean): Promise<void>; onScrollEnd(): void;
+    onWheel(event: WheelEvent): void; stopAnimatedScroll(): void;
+    setScrollPreference(value: { matches: boolean; removeEventListener: ReturnType<typeof vi.fn> }): void;
     messages: { value: ChatMessage[] }; text: { value: string }; busy: { value: boolean }; error: { value: string };
     pendingAttachments: { value: Array<{ id: string; kind: 'FILE'; file: File; previewUrl: string;
       state: 'pending' | 'uploading' | 'failed' | 'sent'; progress: number; error: string }> };
@@ -105,6 +110,54 @@ it('阅读历史时只累计新取得的消息数，重复快照不重复计数'
     findMessages.mockResolvedValueOnce({ messages: [message('new')], hasMore: false });
     await chat.refresh();
     expect(chat.unseenMessages.value).toBe(1);
+  } finally { scope.stop(); }
+});
+
+it.each(['wheel', 'reduce'] as const)('平滑滚动未到底就被%s打断，保留新消息数，到底后再清零', async interruptedBy => {
+  const { scope, chat } = setup();
+  try {
+    const element = { scrollHeight: 3000, clientHeight: 600, scrollTop: 200,
+      scrollTo: vi.fn((options: ScrollToOptions) => {
+        if (options.behavior === 'auto') element.scrollTop = Math.min(options.top!, 2400);
+      }) };
+    chat.list.value = element as unknown as HTMLElement;
+    chat.atBottom.value = false;
+    chat.unseenMessages.value = 5;
+    await chat.scrollToBottom('smooth', true);
+    expect(element.scrollHeight - element.clientHeight - element.scrollTop).toBe(2200);
+    expect(chat.atBottom.value).toBe(false);
+    expect(chat.unseenMessages.value).toBe(5);
+    element.scrollTop = 700;
+    if (interruptedBy === 'reduce') {
+      chat.setScrollPreference({ matches: true, removeEventListener: vi.fn() });
+      chat.stopAnimatedScroll();
+      expect(element.scrollTo).toHaveBeenLastCalledWith({ top: 700, behavior: 'auto' });
+    } else {
+      chat.onWheel({ deltaY: -100 } as WheelEvent);
+      chat.onScrollEnd();
+    }
+    expect(chat.atBottom.value).toBe(false);
+    expect(chat.unseenMessages.value).toBe(5);
+    element.scrollTop = 2400;
+    chat.onScrollEnd();
+    expect(chat.atBottom.value).toBe(true);
+    expect(chat.unseenMessages.value).toBe(0);
+  } finally { scope.stop(); }
+});
+
+it('减少动态效果的即时定位确实到底后清零', async () => {
+  const { scope, chat } = setup();
+  try {
+    const element = { scrollHeight: 3000, clientHeight: 600, scrollTop: 200,
+      scrollTo: vi.fn((options: ScrollToOptions) => { element.scrollTop = Math.min(options.top!, 2400); }) };
+    chat.list.value = element as unknown as HTMLElement;
+    chat.atBottom.value = false;
+    chat.unseenMessages.value = 5;
+    chat.setScrollPreference({ matches: true, removeEventListener: vi.fn() });
+    await chat.scrollToBottom('smooth', true);
+    expect(element.scrollTo).toHaveBeenCalledWith({ top: 3000, behavior: 'auto' });
+    expect(chat.atBottom.value).toBe(true);
+    expect(chat.unseenMessages.value).toBe(0);
   } finally { scope.stop(); }
 });
 

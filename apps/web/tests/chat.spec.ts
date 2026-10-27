@@ -121,9 +121,18 @@ test('查看旧消息时新消息只提示，回到最新遵守减少动态效�
     const scroll = element.scrollTo.bind(element);
     element.scrollTo = ((options: ScrollToOptions) => {
       element.dataset.scrollBehavior = options.behavior;
-      scroll(options);
+      // 将平滑滚动停在中途，确定性验证已点击但尚未抵达的状态。
+      if (options.behavior !== 'smooth') scroll(options);
     }) as typeof element.scrollTo;
   });
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.getByRole('button', { name: '回到最新消息', exact: true }).click();
+  await expect(list).toHaveAttribute('data-scroll-behavior', 'smooth');
+  await expect(page.getByRole('button', { name: '回到最新消息', exact: true })).toContainText('1 条新消息');
+  await list.evaluate(element => { element.scrollTop = 200; });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(list).toHaveAttribute('data-scroll-behavior', 'auto');
+  await expect(page.getByRole('button', { name: '回到最新消息', exact: true })).toContainText('1 条新消息');
   await page.getByRole('button', { name: '回到最新消息', exact: true }).click();
   await expect(list).toHaveAttribute('data-scroll-behavior', 'auto');
   await expect.poll(() => list.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(1);
