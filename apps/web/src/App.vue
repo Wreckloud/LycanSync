@@ -16,6 +16,7 @@ import GroupMenu from './components/GroupMenu.vue';
 import GroupManagementDialog from './components/GroupManagementDialog.vue';
 import GroupChat from './components/GroupChat.vue';
 import ScreenSharePicker from './components/ScreenSharePicker.vue';
+import { useInlineViewingMotion } from './viewing/useInlineViewingMotion';
 import { createGroup, updateGroup, findGroup, findGroupPresences, findGroups, nextPresenceWaitRequest, waitForGroupPresenceChanges,
   type GroupDetail, type GroupMember, type GroupPresence, type GroupPresenceChangeCursor, type GroupSummary } from './group/groupApi';
 import { useRtcRoom } from './rtc/useRtcRoom';
@@ -827,6 +828,7 @@ const settingsSection = ref<SettingsSectionId>('audio');
 const settingsReturnFocus = ref<HTMLElement | null>(null);
 const viewingWindows = ref<InstanceType<typeof ScreenShareWindows> | null>(null);
 const viewingTarget = ref<HTMLElement | null>(null);
+useInlineViewingMotion(viewingTarget, () => viewingWindows.value?.inlineExpanded ?? false);
 const viewerInputBlocked = computed(() => Boolean(props.interactionBlocked || settingsOpen.value || editorOpen.value
   || management.value || captureRequest.value || pendingSwitchGroupId.value || rtc.remoteControlRequest || rtc.status !== 'connected'));
 watch(viewerInputBlocked, (blocked) => { if (blocked) viewingWindows.value?.disarmAll(); }, { flush: 'sync' });
@@ -1225,17 +1227,21 @@ function participantListening(participant: Participant) {
       </nav>
       <main class="group-main">
         <template v-if="selectedGroup">
-        <header class="group-header">
-          <div class="group-copy">
-            <div class="group-title-row"><GroupMenu :key="selectedGroup.id" :group="selectedGroup" @select="openGroupAction" /></div>
-            <p v-if="selectedGroup.description">{{ selectedGroup.description }}</p>
+        <div class="group-header-region" :aria-hidden="viewingWindows?.inlineExpanded || undefined" :inert="viewingWindows?.inlineExpanded">
+          <div class="group-header-clip">
+            <header class="group-header">
+              <div class="group-copy">
+                <div class="group-title-row"><GroupMenu :key="selectedGroup.id" :group="selectedGroup" @select="openGroupAction" /></div>
+                <p v-if="selectedGroup.description">{{ selectedGroup.description }}</p>
+              </div>
+              <IconButton :label="joinedGroupId === selectedGroup.id ? '离开当前群组语音' : '加入当前群组语音'"
+                :class="{ 'is-danger': joinedGroupId === selectedGroup.id }" :disabled="joiningGroupId !== null"
+                @click="joinedGroupId === selectedGroup.id ? leaveVoice() : requestJoin(selectedGroup.id)">
+                <LogOut v-if="joinedGroupId === selectedGroup.id" :size="18" /><Headphones v-else :size="18" />
+              </IconButton>
+            </header>
           </div>
-          <IconButton :label="joinedGroupId === selectedGroup.id ? '离开当前群组语音' : '加入当前群组语音'"
-            :class="{ 'is-danger': joinedGroupId === selectedGroup.id }" :disabled="joiningGroupId !== null"
-            @click="joinedGroupId === selectedGroup.id ? leaveVoice() : requestJoin(selectedGroup.id)">
-            <LogOut v-if="joinedGroupId === selectedGroup.id" :size="18" /><Headphones v-else :size="18" />
-          </IconButton>
-        </header>
+        </div>
         <div v-if="pendingSwitchGroup && joinedGroup" class="switch-confirm" role="alert">
           <span>从“{{ joinedGroup.name }}”切换到“{{ pendingSwitchGroup.name }}”？当前共享会停止，加入后默认开麦。</span>
           <button type="button" @click="pendingSwitchGroupId = null">取消</button>

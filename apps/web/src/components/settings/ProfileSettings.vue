@@ -99,7 +99,7 @@ defineExpose({ finishEditing, cropping });
 .profile-avatar-area { position: relative; flex-shrink: 0; }
 .profile-avatar-preview { position: relative; flex-shrink: 0; width: 76px; height: 76px; display: grid; place-items: center; overflow: hidden; padding: 0; border: 0; border-radius: 50%; background: var(--panel-raised); color: var(--muted); cursor: pointer; }
 .profile-avatar { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
-.profile-avatar-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; background: #0009; color: white; font-size: 12px; opacity: 0; transition: opacity 120ms; }
+.profile-avatar-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; background: #0009; color: white; font-size: 12px; opacity: 0; transition: opacity var(--motion-surface-duration) ease; }
 .profile-avatar-preview:hover .profile-avatar-overlay, .profile-avatar-preview:focus-visible .profile-avatar-overlay { opacity: 1; }
 .profile-nickname { display: grid; grid-template-rows: 40px 20px; gap: 4px; min-width: 0; flex: 1; }
 .profile-nickname button { display: flex; align-items: center; justify-content: flex-start; gap: 12px; min-width: 0; min-height: 40px; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text); text-align: left; cursor: pointer; }

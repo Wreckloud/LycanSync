@@ -39,6 +39,99 @@ async function mockChatShell(page: Page) {
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
 }
 
+test('首次加载、读取失败和空会话分开反馈，重试共用当前读取流程', async ({ page }) => {
+  await mockChatShell(page);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let requests = 0;
+  await page.route('**/api/groups**', async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/groups') return route.fulfill({ json: [group] });
+    if (path === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (path.endsWith('/messages')) {
+      if (++requests === 1) {
+        await gate;
+        return route.fulfill({ status: 503, json: { detail: '消息暂时无法读取' } });
+      }
+      return route.fulfill({ json: { messages: [], hasMore: false } });
+    }
+    return route.fulfill({ status: 404 });
+  });
+  await page.goto('/');
+  try {
+    await expect(page.getByRole('status').filter({ hasText: '正在读取消息…' })).toBeVisible();
+    await expect(page.getByText('还没有消息', { exact: true })).toHaveCount(0);
+    release();
+    await expect(page.locator('.chat-read-error')).toHaveText('消息暂时无法读取');
+    await expect(page.locator('.composer-shell .chat-error')).toHaveCount(0);
+    await page.getByRole('button', { name: '重新读取消息', exact: true }).click();
+    await expect(page.getByText('还没有消息', { exact: true })).toBeVisible();
+    await expect(page.locator('.chat-read-error')).toHaveCount(0);
+    expect(requests).toBeGreaterThanOrEqual(2);
+  } finally { release(); }
+});
+
+test('查看旧消息时新消息只提示，回到最新遵守减少动态效果且不丢草稿', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await mockChatShell(page);
+  const initial = Array.from({ length: 40 }, (_, index) => chatMessage(index + 1));
+  let newMessage = false;
+  let readError = false;
+  await page.route('**/api/groups**', route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
+    if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (url.pathname.endsWith('/messages')) {
+      if (readError) return route.fulfill({ status: 503, json: { detail: '消息同步失败' } });
+      return route.fulfill({ json: { messages: url.searchParams.has('afterMessageId')
+        ? newMessage ? [chatMessage(41)] : [] : initial, hasMore: false } });
+    }
+    return route.fulfill({ status: 404 });
+  });
+  await page.goto('/');
+  const list = page.locator('.message-list');
+  await expect(page.locator('[data-message-id="A40"]')).toHaveCount(1);
+  await expect.poll(() => list.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+  const input = page.getByRole('textbox', { name: '消息内容' });
+  await input.fill('先保留这条草稿');
+  const original = await input.elementHandle();
+  await list.evaluate(element => { element.scrollTop = 0; });
+  await expect(page.getByRole('button', { name: '回到最新消息', exact: true })).toBeVisible();
+  newMessage = true;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('[data-message-id="A41"]')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: '回到最新消息', exact: true })).toContainText('1 条新消息');
+  expect(await list.evaluate(element => element.scrollTop)).toBe(0);
+  const composerBounds = await page.locator('.composer').boundingBox();
+  readError = true;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('.chat-sync-status')).toContainText('消息同步失败');
+  expect(await page.locator('.composer').boundingBox()).toEqual(composerBounds);
+  await expect(page.locator('.composer-shell .chat-error')).toHaveCount(0);
+  for (const width of [640, 420]) {
+    await page.setViewportSize({ width, height: 800 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(page.getByRole('textbox', { name: '消息内容' })).toBeInViewport();
+  }
+  await page.screenshot({ path: test.info().outputPath('chat-feedback-narrow.png') });
+  readError = false;
+  await page.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(page.locator('.chat-sync-status')).toHaveCount(0);
+  await list.evaluate(element => {
+    const scroll = element.scrollTo.bind(element);
+    element.scrollTo = ((options: ScrollToOptions) => {
+      element.dataset.scrollBehavior = options.behavior;
+      scroll(options);
+    }) as typeof element.scrollTo;
+  });
+  await page.getByRole('button', { name: '回到最新消息', exact: true }).click();
+  await expect(list).toHaveAttribute('data-scroll-behavior', 'auto');
+  await expect.poll(() => list.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(1);
+  await expect(page.getByRole('button', { name: '回到最新消息', exact: true })).toHaveCount(0);
+  await expect(input).toHaveValue('先保留这条草稿');
+  expect(await original!.evaluate(element => element.isConnected)).toBe(true);
+});
+
 test('文本消息使用统一 multipart 接口发送，并按日期分组且仅允许消息正文复制', async ({ page }) => {
   let readFailure = true;
   const messages: Record<string, unknown>[] = [
@@ -109,10 +202,10 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
   });
 
   await page.goto('/');
-  await expect(page.locator('.chat-error')).toHaveText('群聊读取暂时失败');
+  await expect(page.locator('.chat-read-error')).toHaveText('群聊读取暂时失败');
   readFailure = false;
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect(page.locator('.chat-error')).toHaveCount(0);
+  await expect(page.locator('.chat-read-error')).toHaveCount(0);
   const composer = page.getByLabel('消息内容');
   await composer.fill('晚上见');
   await composer.press('Enter');
@@ -430,11 +523,11 @@ test('历史请求失败可重试，到底后不再请求更早消息', async ({
   await expect(page.locator('[data-message-id="A60"]')).toHaveCount(1);
   await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   await list.evaluate((element) => { element.scrollTop = 0; });
-  await expect(page.locator('.chat-error')).toHaveText('历史读取失败');
+  await expect(page.locator('.chat-history-error')).toHaveText('历史读取失败');
   expect(historyRequests).toBe(1);
-  await list.dispatchEvent('wheel', { deltaY: -100 });
+  await page.getByRole('button', { name: '重试', exact: true }).click();
   await expect(page.locator('[data-message-id="A01"]')).toHaveCount(1);
-  await expect(page.locator('.chat-error')).toHaveCount(0);
+  await expect(page.locator('.chat-history-error')).toHaveCount(0);
   await list.evaluate((element) => { element.scrollTop = 0; });
   await list.dispatchEvent('wheel', { deltaY: -100 });
   expect(historyRequests).toBe(2);

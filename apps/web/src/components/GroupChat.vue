@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import '../chat/chat.css';
 import { computed, nextTick, onMounted, onScopeDispose, ref } from 'vue';
-import { MessageSquareText, Plus, Send, X } from '@lucide/vue';
+import { ArrowDown, MessageSquareText, Plus, Send, X } from '@lucide/vue';
 import type { AuthUser } from '../auth/authApi';
 import { findMessages, sendFile, sendMessage, type ChatMessage } from '../chat/chatApi';
 import { messagePollDelay } from '../chat/messagePolling';
@@ -29,6 +30,12 @@ const preparing = ref(false);
 const error = ref('');
 const pollError = ref('');
 const historyError = ref('');
+const initialLoaded = ref(false);
+const refreshing = ref(false);
+const loadingOlder = ref(false);
+const hasMore = ref(false);
+const atBottom = ref(true);
+const unseenMessages = ref(0);
 const list = ref<HTMLElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const messageInput = ref<HTMLTextAreaElement | null>(null);
@@ -40,18 +47,16 @@ const messageDateFormatter = new Intl.DateTimeFormat('zh-CN', {
 });
 const MESSAGE_GROUP_MAX_GAP_MS = 5 * 60_000;
 const HISTORY_TOP_THRESHOLD = 80;
-let hasMore = false;
-let loadingOlder = false;
 let pollRequest: AbortController | null = null;
 let historyRequest: AbortController | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let disposed = false;
-let initialLoaded = false;
 let latestFetchedMessageId: string | undefined;
 let consecutiveEmptyPolls = 0;
 let lastActivationRefreshAt = 0;
-let atBottom = true;
 let lastScrollTop = 0;
+let followingScroll = false;
+let scrollPreference: MediaQueryList | undefined;
 
 const members = computed(() => new Map(props.members.map((member) => [member.userId, member])));
 const canSend = computed(() => !busy.value && !preparing.value
@@ -67,9 +72,15 @@ function isAtBottom() {
 
 async function scrollToBottom(behavior: ScrollBehavior = 'smooth', force = false) {
   await nextTick();
-  if (disposed || (!force && !atBottom)) return;
-  list.value?.scrollTo({ top: list.value.scrollHeight, behavior });
-  atBottom = true;
+  if (disposed || (!force && !atBottom.value)) return;
+  const element = list.value;
+  if (!element) return;
+  const reduce = scrollPreference?.matches;
+  followingScroll = !reduce && behavior === 'smooth'
+    && element.scrollHeight - element.clientHeight - element.scrollTop > 1;
+  element.scrollTo({ top: element.scrollHeight, behavior: reduce ? 'auto' : behavior });
+  atBottom.value = true;
+  unseenMessages.value = 0;
 }
 
 function appendMessages(incoming: ChatMessage[], forceScroll = false, behavior: ScrollBehavior = 'smooth') {
@@ -81,7 +92,7 @@ function appendMessages(incoming: ChatMessage[], forceScroll = false, behavior: 
   });
   if (!added.length) return 0;
   messages.value = [...messages.value, ...added];
-  if (forceScroll || atBottom) void scrollToBottom(behavior, forceScroll);
+  if (forceScroll || atBottom.value) void scrollToBottom(behavior, forceScroll);
   return added.length;
 }
 
@@ -89,8 +100,9 @@ async function refresh() {
   pollRequest?.abort();
   const controller = new AbortController();
   pollRequest = controller;
+  refreshing.value = true;
   const groupId = props.group.id;
-  const initial = !initialLoaded;
+  const initial = !initialLoaded.value;
   try {
     // 只有查询结果能推进轮询游标；本机发送成功不代表游标之前的其他消息已经读完。
     const latestId = latestFetchedMessageId;
@@ -98,8 +110,8 @@ async function refresh() {
     if (controller.signal.aborted || disposed || pollRequest !== controller || props.group.id !== groupId) return null;
     pollError.value = '';
     if (!latestId) {
-      hasMore = page.hasMore;
-      initialLoaded = true;
+      hasMore.value = page.hasMore;
+      initialLoaded.value = true;
     }
     // 历史或轮询可能晚于本机发送返回；游标之后先按服务端顺序合并，再补上快照之后发出的消息。
     const currentIds = new Set(messages.value.map((message) => message.id));
@@ -117,26 +129,27 @@ async function refresh() {
     messages.value = [...prefix, ...orderedPage,
       ...messages.value.slice(prefixEnd).filter((message) => !snapshotIds.has(message.id))];
     latestFetchedMessageId = page.messages.at(-1)?.id ?? latestId;
-    if (added && (initial || atBottom)) void scrollToBottom(initial ? 'auto' : 'smooth', initial);
+    if (added && (initial || atBottom.value)) void scrollToBottom(initial ? 'auto' : 'smooth', initial);
+    else if (added) unseenMessages.value += added;
     return added;
   } catch (reason) {
     if (controller.signal.aborted || disposed || pollRequest !== controller) return null;
     pollError.value = reason instanceof Error ? reason.message : '无法读取群聊消息';
     return 0;
   } finally {
-    if (pollRequest === controller) pollRequest = null;
+    if (pollRequest === controller) { pollRequest = null; refreshing.value = false; }
   }
 }
 
 async function loadOlder() {
   const element = list.value;
   const cursor = messages.value[0]?.id;
-  if (!element || !cursor || !initialLoaded || !hasMore || loadingOlder || disposed) return;
+  if (!element || !cursor || !initialLoaded.value || !hasMore.value || loadingOlder.value || disposed) return;
   const controller = new AbortController();
   historyRequest = controller;
-  loadingOlder = true;
+  loadingOlder.value = true;
   historyError.value = '';
-  atBottom = false;
+  atBottom.value = false;
   const groupId = props.group.id;
   try {
     const page = await findMessages(groupId, { beforeMessageId: cursor }, controller.signal);
@@ -147,7 +160,7 @@ async function loadOlder() {
       known.add(message.id);
       return true;
     });
-    hasMore = page.hasMore && older.length > 0;
+    hasMore.value = page.hasMore && older.length > 0;
     if (!older.length) return;
     // 日期分割线可能因插入旧消息而变化，锚定当前可见消息比只计算列表高度更稳定。
     const listBounds = element.getBoundingClientRect();
@@ -172,8 +185,8 @@ async function loadOlder() {
   } finally {
     if (historyRequest === controller) {
       historyRequest = null;
-      loadingOlder = false;
-      atBottom = isAtBottom();
+      loadingOlder.value = false;
+      atBottom.value = isAtBottom();
     }
   }
 }
@@ -191,11 +204,17 @@ function scheduleRefresh() {
 
 async function pollMessages() {
   clearRefreshTimer();
-  const initial = !initialLoaded;
+  const initial = !initialLoaded.value;
   const added = await refresh();
   if (added === null || disposed || document.visibilityState === 'hidden') return;
   consecutiveEmptyPolls = initial || added > 0 ? 0 : consecutiveEmptyPolls + 1;
   scheduleRefresh();
+}
+
+function retryRefresh() {
+  if (refreshing.value || disposed) return;
+  consecutiveEmptyPolls = 0;
+  return pollMessages();
 }
 
 function refreshOnActivation() {
@@ -211,8 +230,8 @@ function handleVisibilityChange() {
     pollRequest?.abort();
     historyRequest?.abort();
     historyRequest = null;
-    loadingOlder = false;
-    atBottom = isAtBottom();
+    loadingOlder.value = false;
+    atBottom.value = isAtBottom();
     return;
   }
   refreshOnActivation();
@@ -341,7 +360,6 @@ async function submit() {
           if (disposed || generation !== sendGeneration || props.group.id !== groupId) return;
           item.state = controller.signal.aborted ? 'pending' : 'failed';
           item.error = controller.signal.aborted ? '已取消，可继续发送' : reason instanceof Error ? reason.message : '文件发送失败';
-          if (!controller.signal.aborted) error.value = item.error;
           break;
         } finally {
           if (activeUpload === controller) activeUpload = null;
@@ -444,15 +462,35 @@ function onScroll() {
   if (!element) return;
   const movingUp = element.scrollTop < lastScrollTop - 1;
   lastScrollTop = element.scrollTop;
-  atBottom = isAtBottom();
+  // 自动跟随期间不把中途的位置当作主动翻历史，避免“回到最新”短暂闪现。
+  if (followingScroll) return;
+  atBottom.value = isAtBottom();
+  if (atBottom.value) unseenMessages.value = 0;
   if (movingUp && element.scrollTop <= HISTORY_TOP_THRESHOLD) void loadOlder();
 }
 
+function onScrollEnd() {
+  followingScroll = false;
+  atBottom.value = isAtBottom();
+  if (atBottom.value) unseenMessages.value = 0;
+}
+
+function stopAnimatedScroll() {
+  const element = list.value;
+  if (!scrollPreference?.matches || !element) return;
+  followingScroll = false;
+  element.scrollTo({ top: element.scrollTop, behavior: 'auto' });
+  onScrollEnd();
+}
+
 function onWheel(event: WheelEvent) {
+  if (event.deltaY < 0) followingScroll = false;
   if (event.deltaY < 0 && list.value && list.value.scrollTop <= HISTORY_TOP_THRESHOLD) void loadOlder();
 }
 
 onMounted(() => {
+  scrollPreference = list.value!.ownerDocument.defaultView!.matchMedia('(prefers-reduced-motion: reduce)');
+  scrollPreference.addEventListener('change', stopAnimatedScroll);
   void pollMessages();
   window.addEventListener('focus', refreshOnActivation);
   document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -464,6 +502,7 @@ onScopeDispose(() => {
   historyRequest?.abort();
   historyRequest = null;
   clearRefreshTimer();
+  scrollPreference?.removeEventListener('change', stopAnimatedScroll);
   window.removeEventListener('focus', refreshOnActivation);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   activeUpload?.abort();
@@ -475,28 +514,54 @@ onScopeDispose(() => {
 
 <template>
   <section class="chat-panel" :aria-label="`${group.name}群聊`" @dragover.prevent @drop="handleDrop">
-    <div class="chat-heading"><MessageSquareText :size="15" /><span>群聊</span></div>
-    <div ref="list" class="message-list" @scroll="onScroll" @wheel="onWheel">
-      <template v-for="(message, index) in messages" :key="message.id">
-        <div v-if="startsNewDate(message, index)" class="chat-date-divider"><span>{{ formatDate(message.createdAt) }}</span></div>
-        <article class="chat-message" :data-message-id="message.id" :class="{ 'is-own': message.senderUserId === user.id, 'is-grouped': !startsNewMessageGroup(message, index) }">
-          <template v-if="startsNewMessageGroup(message, index)">
-            <img v-if="senderAvatar(message)" class="chat-message-avatar" :src="senderAvatar(message)" alt="" />
-            <span v-else class="chat-message-avatar chat-message-initial">{{ senderName(message).slice(0, 1) }}</span>
+    <div class="chat-heading">
+      <span class="chat-title"><MessageSquareText :size="15" /><span>群聊</span></span>
+      <div v-if="initialLoaded && pollError" class="chat-sync-status" role="status" :aria-busy="refreshing">
+        <span>{{ pollError }}</span><button type="button" class="chat-retry" :disabled="refreshing" @click="retryRefresh">{{ refreshing ? '重试中…' : '重试' }}</button>
+      </div>
+    </div>
+    <div class="chat-timeline" :class="{ 'has-composer-feedback': Boolean(error) }">
+      <div ref="list" class="message-list" @scroll="onScroll" @scrollend="onScrollEnd" @wheel="onWheel" @pointerdown="followingScroll = false">
+        <div v-if="!initialLoaded" class="chat-initial-state" :class="{ 'is-empty': !messages.length }">
+          <template v-if="pollError">
+            <p class="chat-read-error" role="alert">{{ pollError }}</p>
+            <button type="button" class="chat-retry" :disabled="refreshing" @click="retryRefresh">{{ refreshing ? '正在重试…' : '重新读取消息' }}</button>
           </template>
-          <span v-else class="chat-message-avatar-placeholder" aria-hidden="true" />
-          <div class="chat-message-body">
-            <div v-if="startsNewMessageGroup(message, index)" class="chat-message-meta"><strong>{{ senderName(message) }}</strong><time>{{ formatTime(message.createdAt) }}</time></div>
-            <p v-if="message.content" class="chat-message-content"><template v-for="(segment, segmentIndex) in messageSegments(message.content)" :key="segmentIndex"><a v-if="segment.href" class="chat-message-link" :href="segment.href" @click.prevent="openLink(segment.href)">{{ segment.text }}</a><template v-else>{{ segment.text }}</template></template></p>
-            <ChatImage v-if="message.type === 'IMAGE' && message.attachment" :group-id="group.id" :attachment-id="message.attachment.id"
-              :width="message.attachment.width ?? 1" :height="message.attachment.height ?? 1" :alt="`${senderName(message)} 发送的图片`" />
-            <ChatFileCard v-if="message.type === 'FILE' && message.attachment" :group-id="group.id" :attachment="message.attachment" />
-          </div>
-        </article>
-      </template>
+          <p v-else role="status">正在读取消息…</p>
+        </div>
+        <p v-else-if="!messages.length" class="chat-initial-state is-empty" role="status">还没有消息</p>
+        <div v-if="initialLoaded && messages.length && (hasMore || loadingOlder || historyError)" class="chat-history-state" :aria-busy="loadingOlder">
+          <span v-if="loadingOlder" role="status">正在读取更早消息…</span>
+          <template v-else-if="historyError">
+            <span class="chat-history-error" role="alert">{{ historyError }}</span>
+            <button type="button" class="chat-retry" @click="loadOlder">重试</button>
+          </template>
+          <button v-else type="button" class="chat-retry" @click="loadOlder">查看更早消息</button>
+        </div>
+        <template v-for="(message, index) in messages" :key="message.id">
+          <div v-if="startsNewDate(message, index)" class="chat-date-divider"><span>{{ formatDate(message.createdAt) }}</span></div>
+          <article class="chat-message" :data-message-id="message.id" :class="{ 'is-own': message.senderUserId === user.id, 'is-grouped': !startsNewMessageGroup(message, index) }">
+            <template v-if="startsNewMessageGroup(message, index)">
+              <img v-if="senderAvatar(message)" class="chat-message-avatar" :src="senderAvatar(message)" alt="" />
+              <span v-else class="chat-message-avatar chat-message-initial">{{ senderName(message).slice(0, 1) }}</span>
+            </template>
+            <span v-else class="chat-message-avatar-placeholder" aria-hidden="true" />
+            <div class="chat-message-body">
+              <div v-if="startsNewMessageGroup(message, index)" class="chat-message-meta"><strong>{{ senderName(message) }}</strong><time>{{ formatTime(message.createdAt) }}</time></div>
+              <p v-if="message.content" class="chat-message-content"><template v-for="(segment, segmentIndex) in messageSegments(message.content)" :key="segmentIndex"><a v-if="segment.href" class="chat-message-link" :href="segment.href" @click.prevent="openLink(segment.href)">{{ segment.text }}</a><template v-else>{{ segment.text }}</template></template></p>
+              <ChatImage v-if="message.type === 'IMAGE' && message.attachment" :group-id="group.id" :attachment-id="message.attachment.id"
+                :width="message.attachment.width ?? 1" :height="message.attachment.height ?? 1" :alt="`${senderName(message)} 发送的图片`" />
+              <ChatFileCard v-if="message.type === 'FILE' && message.attachment" :group-id="group.id" :attachment="message.attachment" />
+            </div>
+          </article>
+        </template>
+      </div>
+      <button v-if="!atBottom && messages.length" type="button" class="chat-jump" aria-label="回到最新消息" @click="scrollToBottom('smooth', true)">
+        <ArrowDown :size="13" /><span>{{ unseenMessages ? `${unseenMessages} 条新消息 · 回到最新` : '回到最新消息' }}</span>
+      </button>
     </div>
     <div class="composer-shell">
-      <p v-if="error || historyError || pollError" class="chat-error" role="alert">{{ error || historyError || pollError }}</p>
+      <p v-if="error" class="chat-error" role="alert">{{ error }}</p>
       <form class="composer" @submit.prevent="submit">
         <input ref="fileInput" type="file" hidden multiple @change="chooseFiles" />
         <button type="button" aria-label="添加文件" :disabled="busy || preparing" @click="fileInput?.click()"><Plus :size="16" /></button>
@@ -508,7 +573,7 @@ onScopeDispose(() => {
               <span class="composer-attachment-name">{{ item.file.name }}</span>
               <small>{{ item.kind === 'IMAGE' ? '已压缩' : (item.file.size / 1024 / 1024).toFixed(2) + ' MB' }}</small>
               <progress v-if="item.state === 'uploading' && item.kind === 'FILE'" :value="item.progress" :max="item.file.size" aria-label="文件上传进度" />
-              <small v-if="item.error" class="chat-file-error">{{ item.error }}</small>
+              <small v-if="item.error" class="chat-file-error" :role="item.state === 'failed' ? 'alert' : 'status'">{{ item.error }}</small>
               <button v-if="item.state === 'uploading'" type="button" aria-label="取消文件上传" @click="cancelUpload"><X :size="13" /></button>
               <button v-else-if="item.state !== 'sent'" type="button" :aria-label="`移除 ${item.file.name}`" @click="removePendingAttachment(item.id)"><X :size="13" /></button>
               <small v-else>已发送</small>

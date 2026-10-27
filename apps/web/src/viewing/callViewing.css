@@ -8,7 +8,8 @@
 .call-viewing-panel.is-detached.is-expanded { top: 0; }
 .viewing-reconnecting { position: absolute; z-index: 2; top: 8px; left: 10px; color: var(--muted); font-size: 12px; }
 .viewing-grid { display: grid; grid-auto-flow: column; grid-template-rows: repeat(var(--view-rows), auto); grid-auto-columns: max-content; gap: 8px; width: max-content; min-width: 100%; padding-bottom: 2px; justify-content: center; }
-.viewing-stage { position: relative; width: 100%; overflow: hidden; background: #050608; }
+.viewing-stage { position: relative; width: 100%; overflow: hidden; background: #050608; transition: height var(--motion-layout-duration) var(--motion-ease); }
+.call-viewing-panel:is(.is-expanded, .is-resizing) .viewing-stage { transition: none; }
 .viewing-stage > .horizontal-scroll { height: 100%; }
 .viewing-stage .horizontal-viewport { max-height: 100%; }
 .is-focus-stage .horizontal-viewport, .viewing-grid.is-focus, .viewing-grid.is-focus .viewing-tile, .viewing-grid.is-focus .viewing-surface, .viewing-grid.is-focus .participant-card { height: 100%; }
@@ -22,7 +23,7 @@
 .viewing-tile .participant-media { min-height: 0; width: 100%; aspect-ratio: var(--tile-ratio); }
 .viewing-tile .participant-card { border-radius: 5px; }
 .viewing-tile .participant-meta { display: none; }
-.viewing-actions { position: absolute; z-index: 2; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 8px; background: #0a0e13cc; opacity: 0; pointer-events: none; transition: opacity .15s; }
+.viewing-actions { position: absolute; z-index: 2; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 8px; background: #0a0e13cc; opacity: 0; pointer-events: none; transition: opacity var(--motion-surface-duration) ease; }
 .viewing-tile:hover .viewing-actions, .viewing-tile:focus-within .viewing-actions { opacity: 1; pointer-events: auto; }
 .viewing-caption { display: flex; align-items: center; min-width: 0; font-size: 12px; }
 .viewing-caption > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -47,6 +48,5 @@
 
 
 .voice-panel:has(.call-viewing-panel) { padding: 0; }
-.group-main:has(> .voice-panel .call-viewing-panel) > .group-header { display: none; }
 @media (hover: none) { .viewing-actions { opacity: 1; pointer-events: auto; } }
 @media (prefers-reduced-motion: reduce) { .viewing-actions { transition: none; } }

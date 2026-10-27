@@ -146,6 +146,66 @@ async function sharing(page: Page, ids: string[]) {
   await page.evaluate((identities) => (window as unknown as { __viewingTest: { sharing(ids: string[]): void } }).__viewingTest.sharing(identities), ids);
 }
 
+test('横向浏览箭头跟随当前减少动态效果设置', async ({ page }) => {
+  await page.setViewportSize({ width: 960, height: 900 });
+  const strip = page.getByRole('region', { name: '语音成员', exact: true });
+  await strip.evaluate(element => {
+    const scroll = element.scrollBy.bind(element);
+    const stop = element.scrollTo.bind(element);
+    element.scrollBy = ((options: ScrollToOptions) => {
+      element.dataset.scrollBehavior = options.behavior;
+      scroll(options);
+    }) as typeof element.scrollBy;
+    element.scrollTo = ((options: ScrollToOptions) => {
+      element.dataset.scrollStopped = 'true';
+      stop(options);
+    }) as typeof element.scrollTo;
+  });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.getByRole('button', { name: '语音成员向右滚动', exact: true }).click();
+  await expect(strip).toHaveAttribute('data-scroll-behavior', 'auto');
+  await expect.poll(() => strip.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.getByRole('button', { name: '语音成员向左滚动', exact: true }).click();
+  await expect(strip).toHaveAttribute('data-scroll-behavior', 'smooth');
+  await strip.evaluate(element => { delete element.dataset.scrollStopped; });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(strip).toHaveAttribute('data-scroll-stopped', 'true');
+});
+
+for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+  test(`连贯布局保留同一视频，快速切换和减少动态效果不延迟退出：${reducedMotion}`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion });
+    await sharing(page, ['A', 'B']);
+    await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+    const video = await page.locator('.viewing-tile video').elementHandle();
+    await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
+    await page.getByRole('button', { name: '聚焦成员A', exact: true }).click();
+    expect(await video!.evaluate(element => element.isConnected && element === document.querySelector('.viewing-tile video'))).toBe(true);
+    await page.getByRole('button', { name: '收起成员', exact: true }).click();
+    expect(await page.locator('.layout-reveal-leave-active').evaluateAll(elements =>
+      elements.every(element => (element as HTMLElement).inert))).toBe(true);
+    await page.locator('.viewing-surface').hover();
+    await page.getByRole('button', { name: '展开成员', exact: true }).click();
+    await expect(page.getByRole('region', { name: '语音成员', exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: '语音成员', exact: true })).toHaveCount(1);
+    if (reducedMotion === 'reduce') {
+      await expect(page.locator('.viewing-stage')).toHaveCSS('transition-duration', '0s');
+      await expect(page.locator('.group-header-region')).toHaveCSS('visibility', 'hidden');
+    }
+    await page.locator('.viewing-surface').hover();
+    await page.getByRole('button', { name: '退出观看', exact: true }).click();
+    // 空间可以继续收起，已退出的主视频不能为退场动画继续持有。
+    await expect(page.locator('.viewing-tile')).toHaveCount(0);
+    expect(await video!.evaluate(element => element.isConnected)).toBe(false);
+    await expect(page.locator('.group-header')).toBeVisible();
+    await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+    await expect(page.getByRole('main', { name: '设置', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '返回应用', exact: true }).click();
+    await expect(page.getByTestId('callbar')).toBeVisible();
+  });
+}
+
 test('主动诊断记录返回应用后继续，离房结束并导出匿名报告', async ({ page }) => {
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
@@ -211,10 +271,12 @@ test('默认仅小预览，网格和聚焦使用原比例，整体弹出后返�
   await expect(page.locator('.viewing-tile')).toHaveCount(8);
   await page.getByRole('button', { name: '聚焦成员A', exact: true }).click();
   await expect(page.locator('.viewing-tile')).toHaveCount(1);
-  const frame = await page.locator('.viewing-tile .participant-media').boundingBox();
-  const stage = await page.locator('.viewing-stage').boundingBox();
-  expect(Math.abs(frame!.width - stage!.width)).toBeLessThan(1);
-  expect(Math.abs(frame!.height - stage!.height)).toBeLessThan(1);
+  // 同一布局帧内比较，避免高度过渡期间两次独立测量跨帧。
+  await expect.poll(() => page.locator('.viewing-stage').evaluate(stage => {
+    const frame = stage.querySelector('.participant-media')!.getBoundingClientRect();
+    const bounds = stage.getBoundingClientRect();
+    return Math.max(Math.abs(frame.width - bounds.width), Math.abs(frame.height - bounds.height));
+  })).toBeLessThan(1);
   await expect(page.locator('.viewing-tile video')).toHaveCSS('object-fit', 'contain');
   await input.focus();
   await input.hover();

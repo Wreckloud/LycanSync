@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import '../settings/settings.css';
 import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
 import { ArrowLeft } from '@lucide/vue';
