@@ -25,7 +25,7 @@ type ControlMenu = 'microphone' | 'output' | 'share';
 const root = ref<HTMLElement | null>(null);
 const menu = ref<ControlMenu | null>(null);
 const qualityOpen = ref(false);
-const qualityPlacement = ref<'left' | 'right' | 'compact'>('left');
+const qualityPlacement = ref<'right' | 'compact'>('compact');
 const menuMaxHeight = ref(520);
 let opener: HTMLButtonElement | null = null;
 const levelSegments = Array.from({ length: 16 }, (_, index) => index + 1);
@@ -43,8 +43,7 @@ function resizeMenu() {
   const titlebarBottom = document.querySelector('.titlebar')?.getBoundingClientRect().bottom ?? 0;
   menuMaxHeight.value = Math.max(60, Math.min(520, (anchor?.getBoundingClientRect().top ?? 520) - titlebarBottom - 16));
   const right = opener?.closest('.call-control-split')?.getBoundingClientRect().right ?? 0;
-  qualityPlacement.value = window.innerWidth <= 600 ? 'compact'
-    : right - 260 - 268 >= 16 ? 'left' : right + 268 <= window.innerWidth - 16 ? 'right' : 'compact';
+  qualityPlacement.value = window.innerWidth > 600 && right + 268 <= window.innerWidth - 16 ? 'right' : 'compact';
 }
 
 async function toggleMenu(kind: ControlMenu, event: Event) {
@@ -123,6 +122,7 @@ onScopeDispose(() => {
       </button>
       <button type="button" class="call-control-more" aria-label="麦克风选项" :aria-expanded="menu === 'microphone'"
         :disabled="!connected" @click="toggleMenu('microphone', $event)"><ChevronDown :size="13" :class="{ 'is-open': menu === 'microphone' }" /></button>
+      <Transition name="surface-panel">
       <section v-if="menu === 'microphone'" class="call-control-menu" aria-label="麦克风选项">
         <header>麦克风</header>
         <label class="call-control-range"><span>输入音量 <b>{{ Math.round(inputGain * 100) }}%</b></span>
@@ -135,12 +135,14 @@ onScopeDispose(() => {
         </div>
         <button type="button" class="call-settings-entry" @click="openAudioSettings"><Settings :size="15" />语音设置<ChevronRight :size="14" /></button>
       </section>
+      </Transition>
     </div>
     <div class="call-control-split">
       <button type="button" class="icon-button call-control-main" :aria-label="listening ? '停止接收声音' : '开始接收声音'"
         :class="{ 'is-off': !listening }" :disabled="!connected" @click="emit('listening')"><Headphones v-if="listening" :size="17" /><HeadphoneOff v-else :size="17" /></button>
       <button type="button" class="call-control-more" aria-label="收听选项" :aria-expanded="menu === 'output'"
         :disabled="!connected" @click="toggleMenu('output', $event)"><ChevronDown :size="13" :class="{ 'is-open': menu === 'output' }" /></button>
+      <Transition name="surface-panel">
       <section v-if="menu === 'output'" class="call-control-menu" aria-label="收听选项">
         <header>收听</header>
         <label class="call-control-range"><span>输出音量 <b>{{ Math.round(outputVolume * 100) }}%</b></span>
@@ -148,18 +150,20 @@ onScopeDispose(() => {
             @input="emit('outputVolume', Number(($event.target as HTMLInputElement).value))" /></label>
         <button type="button" class="call-settings-entry" @click="openAudioSettings"><Settings :size="15" />语音设置<ChevronRight :size="14" /></button>
       </section>
+      </Transition>
     </div>
     <div class="call-control-split">
       <button type="button" class="icon-button call-control-main" :aria-label="choosingSource ? '取消共享选择' : sharing ? '停止屏幕共享' : shareLimitReached ? '屏幕共享已达到 8 路上限' : '开始屏幕共享'"
-        :class="{ 'is-active': sharing }" :disabled="!connected || shareLimitReached || (!choosingSource && shareBusy)" @click="toggleShare">
+        :class="{ 'is-active': sharing, 'is-capacity-disabled': shareLimitReached }" :disabled="!connected || shareLimitReached || (!choosingSource && shareBusy)" @click="toggleShare">
         <MonitorX v-if="sharing || choosingSource" :size="17" /><MonitorUp v-else :size="17" />
       </button>
       <button type="button" class="call-control-more" aria-label="共享选项" :aria-expanded="menu === 'share'"
         :disabled="!connected || choosingSource" @click="toggleMenu('share', $event)"><ChevronDown :size="13" :class="{ 'is-open': menu === 'share' }" /></button>
+      <Transition name="surface-panel">
       <div v-if="menu === 'share'" class="call-share-menu" :class="{ 'is-compact': qualityPlacement === 'compact' }">
         <section v-show="!qualityOpen || qualityPlacement !== 'compact'" class="call-control-menu call-share-actions" aria-label="共享选项">
           <header>屏幕共享</header>
-          <button type="button" class="call-menu-action" :class="{ 'is-danger': sharing }" :disabled="shareBusy || shareLimitReached" @click="toggleShare">
+          <button type="button" class="call-menu-action" :class="{ 'is-danger': sharing, 'is-capacity-disabled': shareLimitReached }" :disabled="shareBusy || shareLimitReached" @click="toggleShare">
             <MonitorX v-if="sharing" :size="15" /><MonitorUp v-else :size="15" />{{ sharing ? '停止共享' : '开始共享' }}</button>
           <button v-if="sharing && desktop" type="button" class="call-menu-action" :disabled="shareBusy" @click="chooseSource">更改共享<ChevronRight class="call-menu-chevron" :size="14" /></button>
           <template v-if="desktop">
@@ -173,7 +177,8 @@ onScopeDispose(() => {
           </template>
           <button type="button" class="call-settings-entry" @click="openAudioSettings"><Settings :size="15" />语音设置<ChevronRight :size="14" /></button>
         </section>
-        <section v-if="qualityOpen" class="call-control-menu call-quality-menu" :class="{ 'is-right': qualityPlacement === 'right' }" aria-label="共享画质">
+        <Transition :name="qualityPlacement === 'right' ? 'surface-side' : 'surface-panel'">
+        <section v-if="qualityOpen" class="call-control-menu call-quality-menu" aria-label="共享画质">
           <button v-if="qualityPlacement === 'compact'" type="button" class="call-menu-action call-quality-back" aria-label="返回共享选项" @click="toggleQuality"><ChevronLeft :size="14" /></button>
           <div class="call-quality-options" role="group" aria-label="画质预设">
             <label v-for="preset in SCREEN_SHARE_QUALITIES" :key="preset.id">
@@ -185,7 +190,9 @@ onScopeDispose(() => {
           <ScreenShareCustomQuality v-if="quality === 'custom'" :model-value="customQuality" :disabled="shareBusy"
             @update:model-value="emit('quality', 'custom', $event)" />
         </section>
+        </Transition>
       </div>
+      </Transition>
     </div>
   </div>
 </template>
@@ -216,8 +223,7 @@ onScopeDispose(() => {
 .call-settings-entry { border-top: 1px solid var(--border); border-radius: 0; padding-top: 12px; }
 .call-share-menu { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 8px); }
 .call-share-actions { position: relative; right: auto; bottom: auto; }
-.call-quality-menu { right: calc(100% + 8px); bottom: 0; }
-.call-quality-menu.is-right { right: auto; left: calc(100% + 8px); }
+.call-quality-menu { left: calc(100% + 8px); bottom: 0; }
 .call-share-menu.is-compact .call-quality-menu { position: relative; right: auto; left: auto; bottom: auto; }
 .call-quality-back { width: 32px; justify-content: center; padding: 6px; }
 .call-quality-options { display: grid; gap: 4px; }

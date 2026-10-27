@@ -224,7 +224,6 @@ function keepFocus(event: KeyboardEvent) {
 .avatar-rotation-tick > span { position: absolute; top: 19px; left: 0; transform: translateX(-50%); color: var(--muted); font-size: 10px; line-height: 14px; }
 .avatar-rotation-marker { position: absolute; top: 2px; left: calc(50% - 1px); width: 2px; height: 20px; background: var(--accent); pointer-events: none; }
 .avatar-rotation-ruler input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: ew-resize; touch-action: none; }
-.avatar-rotation-ruler input:disabled { cursor: not-allowed; }
 .avatar-rotation-current { display: flex; justify-self: end; align-items: center; gap: 4px; }
 .avatar-rotation-value { width: 40px; color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
 .avatar-rotation-reset { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; }

@@ -38,7 +38,8 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   cursor: pointer;
 }
 :where(button:not([class]), .confirm-button, .settings-button):hover:not(:disabled) { border-color: var(--muted); }
-:where(button):disabled { opacity: .5; cursor: not-allowed; }
+:where(button):disabled { opacity: .5; }
+.is-capacity-disabled:disabled { cursor: not-allowed; }
 .button-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--button-gap); }
 :is(button, input, textarea, select, [tabindex]):focus { outline: none; }
 
@@ -183,7 +184,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   pointer-events: none;
 }
 
-.group-button:disabled { opacity: .4; cursor: not-allowed; }
+.group-button:disabled { opacity: .4; }
 .group-rail-avatar { display: block; width: 100%; height: 100%; border-radius: 5px; object-fit: cover; }
 .add-group { border-style: dashed; }
 
@@ -252,7 +253,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   background: #2a1b20;
 }
 
-.icon-button:disabled { opacity: .35; cursor: not-allowed; }
+.icon-button:disabled { opacity: .35; }
 
 .switch-confirm {
   display: flex;
@@ -506,7 +507,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .viewer-action.is-active { border-color: var(--accent); color: var(--text); }
 .viewer-action svg { display: block; }
 
-.viewer-action:disabled { opacity: .35; cursor: not-allowed; }
+.viewer-action:disabled { opacity: .35; }
 
 .participant-state {
   width: 20px;
@@ -731,7 +732,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 /* 卡片只统一操作位置，不耦合各表单的保存、取消和权限逻辑。 */
 .card-header-action { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; height: var(--button-height); padding: 5px 0 5px 8px; border: 0; background: transparent; color: var(--muted); font-size: 14px; line-height: 20px; cursor: pointer; }
 .card-header-action:hover:not(:disabled) { color: var(--text); }
-.card-header-action:disabled, .avatar-action:disabled { opacity: .45; cursor: not-allowed; }
+.card-header-action:disabled, .avatar-action:disabled { opacity: .45; }
 .avatar-actions { position: absolute; top: calc(100% + 2px); left: 0; width: 100%; display: flex; justify-content: center; gap: 8px; }
 .avatar-actions .avatar-action { padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 12px; line-height: 18px; white-space: nowrap; cursor: pointer; }
 .avatar-actions .avatar-action:hover:not(:disabled) { color: var(--text); background: transparent; }
@@ -741,7 +742,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .card-actions-end { justify-self: end; }
 .card-actions .confirm-button:not(.is-danger) { background: var(--accent); border-color: var(--accent); }
 .card-actions .is-danger { color: var(--danger); }
-.card-actions button:disabled { opacity: .45; cursor: not-allowed; }
+.card-actions button:disabled { opacity: .45; }
 @media (max-width: 420px) {
   .card-actions { grid-template-columns: auto minmax(0, 1fr); gap: 8px 12px; }
   .card-actions > .card-feedback { grid-column: 1 / -1; grid-row: 1; }

@@ -27,6 +27,7 @@ onScopeDispose(() => document.removeEventListener('pointerdown', dismiss));
     <button ref="trigger" type="button" class="group-menu-trigger" aria-label="群组菜单" :aria-expanded="open" @click="open = !open">
       <h1>{{ group.name }}</h1><ChevronDown :size="18" :class="{ 'is-open': open }" />
     </button>
+    <Transition name="group-menu">
     <div v-if="open" class="group-menu-options" aria-label="群组操作">
       <template v-if="group.role === 'OWNER'">
         <button type="button" @click="choose('edit')">编辑群组资料</button>
@@ -37,6 +38,7 @@ onScopeDispose(() => document.removeEventListener('pointerdown', dismiss));
       </template>
       <button v-else type="button" class="group-danger" @click="choose('leave')">退出群聊</button>
     </div>
+    </Transition>
   </div>
 </template>
 

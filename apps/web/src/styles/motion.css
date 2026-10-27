@@ -11,12 +11,23 @@
     border-color var(--motion-feedback-duration) ease;
 }
 
-/* 弹层关闭直接沿用原清理流程，不用退场动画延长操作资格。 */
-.call-control-menu, .group-menu-options {
-  animation: surface-reveal var(--motion-surface-duration) var(--motion-ease);
+.surface-panel-enter-active, .surface-panel-leave-active,
+.surface-side-enter-active, .surface-side-leave-active {
+  transition: opacity var(--motion-surface-duration) var(--motion-ease), transform var(--motion-surface-duration) var(--motion-ease);
 }
-.call-control-menu { --surface-offset: 4px; }
-.group-menu-options { --surface-offset: -4px; }
+.surface-panel-enter-from, .surface-panel-leave-to { opacity: 0; transform: translateY(4px); }
+.surface-side-enter-from, .surface-side-leave-to { opacity: 0; transform: translateX(-4px); }
+.surface-panel-leave-active, .surface-side-leave-active { pointer-events: none; }
+.voice-panel-enter-active, .voice-panel-leave-active {
+  transition: opacity var(--motion-layout-duration) var(--motion-ease), clip-path var(--motion-layout-duration) var(--motion-ease);
+}
+.voice-panel-enter-from, .voice-panel-leave-to { opacity: 0; clip-path: inset(0 0 100%); }
+.voice-panel-leave-active { pointer-events: none; }
+.group-menu-enter-active, .group-menu-leave-active {
+  transition: opacity var(--motion-surface-duration) var(--motion-ease), transform var(--motion-surface-duration) var(--motion-ease);
+}
+.group-menu-enter-from, .group-menu-leave-to { opacity: 0; transform: translateY(-4px); }
+.group-menu-leave-active { pointer-events: none; }
 .dialog-backdrop { animation: surface-fade var(--motion-surface-duration) ease; }
 .dialog-backdrop > :first-child, .custom-share-quality {
   animation: surface-reveal var(--motion-surface-duration) var(--motion-ease);

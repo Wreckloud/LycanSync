@@ -38,7 +38,7 @@ function setup(width = 1280, right = 1000) {
   return { scope, props, controls, opener, emit, inputs, focus, root };
 }
 
-it.each([[1280, 1000, 'left'], [1280, 350, 'right'], [700, 500, 'compact'], [400, 350, 'compact']])(
+it.each([[1280, 1000, 'compact'], [1280, 350, 'right'], [700, 500, 'compact'], [400, 350, 'compact']])(
   '宽 %s、锚点 %s 时二级菜单使用 %s，Esc 逐层返回并恢复焦点', async (width, right, placement) => {
     const f = setup(Number(width), Number(right));
     try {
@@ -96,7 +96,7 @@ it('外部点击、切换菜单、选择来源及断线均清除二级菜单状�
 });
 
 it('实际模板把共享动作和画质分成两块，自定义最后；窄窗只显示二级面板', async () => {
-  for (const placement of ['left', 'compact']) {
+  for (const placement of ['right', 'compact']) {
     const app = createSSRApp(CallControls, {
       connected: true, desktop: true, microphoneEnabled: false, microphoneIntent: false, microphoneBusy: false,
       microphoneLevel: 0, inputLevelPercent: 0, listening: true, inputGain: 1, outputVolume: 1,
