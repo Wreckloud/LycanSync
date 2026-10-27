@@ -148,6 +148,21 @@ The native `cmake-build/test-tools/lycansync-bound-game-target-tests.exe` runs f
 
 Earlier local checks passed ordinary windows, Edge main/popup and QQ. Two controlled D3D11 hook runs passed fresh pixels, 120/30/60/30/60 host timing and lifecycle, with first frames about 4.57/4.35 seconds. Those used a test-only routing override **before** product integration; that override is now removed. The integrated classifier/prepared bundle, commercial games, anti-cheat, audio/remote association, encoding/network, clean-machine and long-running performance remain **pending consolidated real acceptance**. Build and unit-test success do not imply acceptance or performance gains; host FPS is not distinct game frames or remote FPS. The existing one-off startup timeout remains under observation rather than hidden by retries.
 
+## DXGI window-crop feasibility probe
+
+`lycansync-dxgi-window-probe` is an explicitly built test tool, excluded from the default build and installed runtime. It is **not** a capture candidate or an automatic-mode fallback. It does not initialize OBS, load capture plugins, publish media or save images. Build it with:
+
+```powershell
+cmake --build release/build-cache/obs-32.2.2/cmake-build --config Release --target lycansync-dxgi-window-probe
+./release/build-cache/obs-32.2.2/cmake-build/test-tools/lycansync-dxgi-window-probe.exe --self-test
+```
+
+`--self-test` only checks synthetic marker pixels and padded row stride, without creating windows or a graphics device. Running without an explicit mode fails without capture. The separate `--run-controlled-windows` mode requires user authorization: it creates two nonactivating 320×180 color windows on the primary monitor, briefly covers its own green target with magenta, then removes the cover. It does not send keyboard/mouse input or change existing application windows. It requires a desktop-attached, unrotated output and a BGRA surface; unsupported or interrupted runs report an error rather than success. CPU readback is restricted to the fixture's center 16×16 pixels; the underlying DXGI resource is still a desktop image on the GPU.
+
+This deliberately schedules an occluder between the initial and final visibility checks, correlating its marker with the desktop frame's `LastPresentTime`. The JSON result describes whether a naive before/after gate would accept foreign pixels. `productionApproved` is always false: even an inconclusive run cannot approve window cropping. The experiment diagnoses a race, not performance or production privacy. Its `DwmFlush` is only for the two owned windows and must not be treated as synchronization with other applications. The installed OBS renderer currently does not expose original DXGI presentation timestamps through its monitor-source interface; adding a rectangle crop alone does not resolve that boundary.
+
+`--run-event-delay` is a separate explicitly authorized device mode using the same two fixture windows. A dedicated observer subscribes only to the current test process's overlay show/hide events, initially holds its message loop, then resumes after the final visibility decision. The result records event generations before/at the decision and after draining, plus whether callback delivery followed that decision. It tests whether unchanged **delivered** event counts can miss queued changes. Missing expected events, an observer timeout or a failed hook makes the experiment inconclusive and returns failure. The observer unhooks on its own thread and joins before fixture destruction; no DLL is injected. This mode also always reports `productionApproved: false`.
+
 ## Plugin effects and redistribution
 
 Initializing `win-capture`, even for a monitor, can update `%ProgramData%/obs-studio-hook`, run helper initialization, modify Vulkan implicit-layer files/registry entries and contact OBS's compatibility-update endpoint. Native networking is not governed by Electron session denial. Graphics preparation initializes this shared plugin before source selection, so these effects can also occur when the user later chooses an ordinary window. Do not claim system neutrality simply because OBS's installation directory is untouched; do not force-replace occupied hooks or terminate unrelated programs.

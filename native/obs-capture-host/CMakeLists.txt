@@ -50,6 +50,14 @@ target_compile_options(lycansync-obs-test-d3d PRIVATE /utf-8)
 target_link_libraries(lycansync-obs-test-d3d PRIVATE user32 d3d11 dxgi)
 set_target_properties(lycansync-obs-test-d3d PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")
 
+# 仅验证桌面裁剪的遮挡竞态，不初始化 OBS、接入正式采集或进入运行包。
+add_executable(lycansync-dxgi-window-probe EXCLUDE_FROM_ALL tests/dxgi_window_probe.cpp)
+target_compile_features(lycansync-dxgi-window-probe PRIVATE cxx_std_20)
+target_compile_definitions(lycansync-dxgi-window-probe PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(lycansync-dxgi-window-probe PRIVATE /utf-8)
+target_link_libraries(lycansync-dxgi-window-probe PRIVATE user32 gdi32 d3d11 dxgi dwmapi)
+set_target_properties(lycansync-dxgi-window-probe PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")
+
 add_subdirectory(game-plugin)
 add_subdirectory(audio-plugin)
 add_subdirectory(graphics-module)
