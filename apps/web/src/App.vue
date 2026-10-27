@@ -1258,7 +1258,9 @@ function participantListening(participant: Participant) {
             </span>
           </div>
         </section>
-        <section v-if="showingJoinedGroup && groupParticipants.length > 0" ref="viewingTarget" class="voice-panel" aria-label="当前语音成员" />
+        <Transition name="voice-panel">
+          <section v-if="showingJoinedGroup && groupParticipants.length > 0" ref="viewingTarget" class="voice-panel" aria-label="当前语音成员" />
+        </Transition>
         </template>
         <div class="group-conversation">
           <div class="conversation-main">
