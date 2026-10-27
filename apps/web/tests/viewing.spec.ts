@@ -501,3 +501,33 @@ test('远控授权和画面匹配后才打开专用控制窗，普通观看关�
   await page.getByTestId('participant-card').nth(1).hover();
   await expect(page.getByRole('button', { name: '申请远程控制', exact: true })).toBeVisible();
 });
+
+
+test('群菜单不被标题裁切，控制栏退出时聊天连续复位且保留草稿', async ({ page }) => {
+  await page.getByRole('button', { name: '群组菜单', exact: true }).click();
+  const menu = page.getByLabel('群组操作', { exact: true });
+  await expect(menu).toBeVisible();
+  await expect.poll(() => menu.evaluate(element => {
+    const target = element.lastElementChild!;
+    const bounds = target.getBoundingClientRect();
+    return target.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
+  })).toBe(true);
+  await page.getByRole('button', { name: '群组菜单', exact: true }).press('Escape');
+  const input = page.getByRole('textbox', { name: '消息内容' });
+  await input.fill('动画不清空草稿');
+  const positions = await page.evaluate(async () => {
+    const input = document.querySelector<HTMLElement>('.composer')!;
+    const positions = [input.getBoundingClientRect().bottom];
+    document.querySelector<HTMLButtonElement>('button[aria-label="离开语音"]')!.click();
+    const started = performance.now();
+    while (performance.now() - started < 300) {
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      positions.push(input.getBoundingClientRect().bottom);
+    }
+    return positions;
+  });
+  expect(positions.at(-1)! - positions[0]).toBeGreaterThan(20);
+  expect(new Set(positions.map(value => Math.round(value))).size).toBeGreaterThan(3);
+  await expect(page.getByTestId('callbar')).toHaveCount(0);
+  await expect(input).toHaveValue('动画不清空草稿');
+});
