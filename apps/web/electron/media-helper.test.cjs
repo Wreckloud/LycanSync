@@ -21,12 +21,16 @@ test('纹理交付、停止和迟到结果共用一次主进程引用释放', as
       const sent = new Promise((resolve, reject) => { resolveSend = resolve; rejectSend = reject; });
       const failures = [], notifications = [], slots = [];
       let releases = 0;
-      const video = { sessionId: 'texture-session', startedAt: performance.now(), imported: new Map(), pendingSlotReleases: new Set() };
+      const renderer = { mainFrame: {}, isDestroyed: () => false, isLoadingMainFrame: () => false,
+        getBackgroundThrottling: () => false };
+      const video = { sessionId: 'texture-session', startedAt: performance.now(), renderer,
+        imported: new Map(), pendingSlotReleases: new Set() };
       const state = { alive: true, closed: false, child: { pid: 1234 }, executablePath: 'C:\\host.exe',
         releaseSharedTextureSlot: async (...args) => slots.push(args) };
       const sandbox = {
         performance, writeMediaDiagnostic: async () => {},
-        nativeVideoSession: video, helperProcessBridges: new Map(), mainWindow: { webContents: { mainFrame: {} } },
+        nativeVideoSession: video, helperProcessBridges: new Map(),
+        mainWindow: { webContents: renderer, isDestroyed: () => false, isMinimized: () => false, isVisible: () => true },
         nativeMediaBridge: { openSpawnedMediaHelper: () => ({ duplicateSharedTexture: () => ({
           withImportHandle: (callback) => callback(Buffer.alloc(8)), release: () => {},
         }) }) },
@@ -44,6 +48,7 @@ test('纹理交付、停止和迟到结果共用一次主进程引用释放', as
       sandbox.handleNativeSharedTextureFrame(state, { sessionId: video.sessionId, slotIndex: 0,
         codedSize: { width: 1920, height: 1080 }, contentSize: { width: 1920, height: 1080 } });
       if (mode.startsWith('stop-')) {
+        video.stopping = true;
         sandbox.releaseNativeVideoImports(video);
         assert.equal(releases, 0, '交付仍等待确认时，停止也不能提前释放主进程引用');
       }
@@ -52,7 +57,7 @@ test('纹理交付、停止和迟到结果共用一次主进程引用释放', as
       await new Promise((resolve) => setImmediate(resolve));
       sandbox.releaseNativeVideoImports(video);
       assert.equal(releases, 1);
-      assert.equal(notifications.length, mode.includes('rejected') ? 1 : 0);
+      assert.equal(notifications.length, mode === 'rejected' ? 1 : 0);
       assert.equal(failures.length, notifications.length);
       // 主进程引用释放不等于消费者已用完，只有 Electron 的总释放回调归还槽位。
       assert.equal(slots.length, 0);

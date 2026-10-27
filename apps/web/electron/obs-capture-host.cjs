@@ -249,9 +249,7 @@ class ObsCaptureHostManager {
           || (state.captureMethod && state.captureMethod !== method)
           || (state.captureKind === 'window' && (event.requestedMethod !== state.requestedMethod
             || event.borderAllowed !== state.borderAllowed || event.clientArea !== true))
-          || (event.windowFallbackReason !== undefined && (state.captureKind !== 'window'
-            || state.requestedMethod !== 'auto' || method !== 'bitblt-window'
-            || !['captureSettingsUnsupported', 'captureBorderAccessDenied', 'obsWindowRuntimeUnavailable'].includes(event.windowFallbackReason)))
+          || event.windowFallbackReason !== undefined
           || !Number.isInteger(event.adapterIndex) || event.adapterIndex < 0 || event.adapterIndex >= 64
           || ![event.sourceWidth, event.sourceHeight].every(value => Number.isInteger(value) && value >= 0 && value <= 32768)
           || (event.captureApi !== undefined && (method !== 'dxgi' || !['DuplicateOutput1', 'DuplicateOutput'].includes(event.captureApi)))
@@ -267,8 +265,7 @@ class ObsCaptureHostManager {
         sourceWidth: event.sourceWidth, sourceHeight: event.sourceHeight,
         ...(event.captureApi ? { captureApi: event.captureApi } : {}),
         ...(state.captureKind === 'window' ? { requestedMethod: event.requestedMethod,
-          borderAllowed: event.borderAllowed, clientArea: true,
-          ...(event.windowFallbackReason ? { windowFallbackReason: event.windowFallbackReason } : {}) } : {}),
+          borderAllowed: event.borderAllowed, clientArea: true } : {}),
         ...(method === 'dxgi' ? { adapterMatched: true } : {}) });
       return;
     }

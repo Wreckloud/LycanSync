@@ -19,7 +19,7 @@ struct WindowVideoTarget {
 bool bind_window_video_target(WindowVideoTarget &target);
 bool window_video_target_valid(const WindowVideoTarget &target);
 obs_source_t *create_window_video_source(const WindowVideoTarget &target, bool hide_cursor,
-    bool hide_border, std::string_view method, const char *&error, const char *&fallback_reason);
+    bool hide_border, std::string_view method, const char *&error);
 const char *window_video_failure(obs_source_t *source, const WindowVideoTarget &target);
 const char *window_video_method(obs_source_t *source);
 bool window_video_suspended(const WindowVideoTarget &target);

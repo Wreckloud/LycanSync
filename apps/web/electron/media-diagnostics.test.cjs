@@ -47,7 +47,8 @@ test('采集设置、边框授权和正常目标退出保留固定原因，不�
   context.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'events.jsonl');
   const time = new Date().toISOString();
-  const codes = ['captureSettingsUnsupported', 'captureBorderAccessDenied', 'obsCaptureHostFailed',
+  const codes = ['captureSettingsUnsupported', 'captureBorderUnsupported', 'captureBorderAccessDenied', 'obsCaptureHostFailed',
+    'sharedTextureTransferTimedOut', 'sharedTextureReceiverUnavailable',
     'obsStartupFailed', 'obsWindowRuntimeUnavailable', 'sharedTextureGpuWaitFailed', 'obsCaptureProtocolJsonInvalid',
     'captureTargetClosed', 'obsWindowBindingUnavailable', 'obsWindowTargetMismatch',
     'sharedTextureGpuStalled', 'sharedTextureReleaseFailed'];
@@ -59,6 +60,20 @@ test('采集设置、边框授权和正常目标退出保留固定原因，不�
   assert.equal(events.find(entry => entry.code === 'captureTargetClosed').stage, 'screenTargetClosed');
   assert.equal(events.at(-1).code, undefined);
   assert.doesNotMatch(JSON.stringify(events), /private-code|private-window/);
+});
+
+test('纹理交付故障只导出页面与窗口状态，不导出 URL、标题或异常正文', async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), 'lycan-transfer-diagnostics-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'events.jsonl');
+  const time = new Date().toISOString();
+  await writeFile(path, JSON.stringify({ time, stage: 'sendTexture', code: 'sharedTextureTransferTimedOut',
+    rendererAlive: true, rendererLoading: false, backgroundThrottling: false, windowMinimized: true,
+    windowVisible: false, importedCount: 2, pendingReleaseCount: 1,
+    url: 'private-url', title: 'private-title', message: 'private-error' }));
+  assert.deepEqual(await readDiagnosticEvents(path, 0, Date.parse(time)), [{ time, stage: 'sendTexture',
+    hresults: [], code: 'sharedTextureTransferTimedOut', rendererAlive: true, rendererLoading: false,
+    backgroundThrottling: false, windowMinimized: true, windowVisible: false, importedCount: 2, pendingReleaseCount: 1 }]);
 });
 
 test('快照保存失败只导出固定的存储错误，不导出路径或未知错误正文', async (context) => {

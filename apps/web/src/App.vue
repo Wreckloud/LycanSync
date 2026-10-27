@@ -1329,6 +1329,7 @@ function participantListening(participant: Participant) {
       @update:share-audio="updateCaptureShareAudio"
       :selected-id="selectedCaptureSourceId" :audio-mode="captureAudioMode" :audio-ready="captureAudioCapabilityReady"
       :audio-failed="captureAudioCapabilityFailed" :loading="nativeSourceLoading" :error="nativeSourceError" :notice="captureSourceNotice"
+      :settings-failure="rtc.screenShareSettingsFailure"
       @choose="chooseCaptureSource" @refresh-thumbnails="refreshVisibleSourceThumbnails"
       @close="selectCaptureSource(null)" @confirm="selectCaptureSource(selectedCaptureSourceId, $event)" />
     <ScreenShareWindows ref="viewingWindows" :rtc="rtc" :group-name="joinedGroup?.name ?? ''"

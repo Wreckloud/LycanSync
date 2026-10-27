@@ -96,8 +96,10 @@ function captureErrorMessage(error: unknown, source: MediaSource): string {
       if (code === 'nativeVideoFirstFrameTimeout') return '共享画面未能及时送达，已结束本次共享，请重新选择后重试。';
       if (code === 'dxgiMonitorUnavailable') return '所选显示器暂不支持无边框共享，请确认显示器连接后重试。';
       if (code === 'dxgiAdapterMismatch') return '显示器与采集显卡未能匹配，已停止本次共享，请重新选择显示器后重试。';
-      if (code === 'captureSettingsUnsupported') return '当前系统不支持所选采集方式或设置，请在高级选项中改用自动或兼容采集后重试。';
+      if (code === 'captureBorderUnsupported') return '此窗口需要系统窗口采集，但当前 Windows 无法隐藏共享边框。请重新选择后允许本次显示边框，或在高级选项中手动尝试兼容采集。';
+      if (code === 'captureSettingsUnsupported') return '当前系统不支持所选采集方式或光标设置，请在高级选项中调整后重试。';
       if (code === 'captureBorderAccessDenied') return '系统窗口采集未获准隐藏边框，请改用兼容采集，或在高级选项中允许此次显示系统边框。';
+      if (code === 'sharedTextureTransferTimedOut') return '共享画面未能及时交付到客户端页面，本次共享已停止。请重新选择来源后重试。';
       if (code === 'obsWindowBindingUnavailable' || code === 'obsWindowTargetMismatch') {
         return '所选窗口身份未能确认，共享已停止。请重新选择窗口后重试。';
       }
@@ -145,6 +147,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   let microphoneCleanupFailed = false;
   const screenShareActive = ref(false);
   const screenShareSelectionCancelled = ref(false);
+  const screenShareSettingsFailure = ref<{ sourceId: string; code: string } | null>(null);
   const remoteAudioSubscriptions = new Map<string, boolean>();
   const tracksByRoom = new WeakMap<Room, RoomTrackRegistry>();
   let microphoneInputGain = normalizeAudioVolume(options?.inputGain ?? DEFAULT_AUDIO_PREFERENCES.inputGain);
@@ -572,6 +575,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   }
 
   async function leave(): Promise<void> {
+    screenShareSettingsFailure.value = null;
     microphoneVersion++;
     microphoneIntent.value = false;
     forbidMicrophone();
@@ -1040,6 +1044,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             controllerIdentity: selection.controllerIdentity, controlTemporary: selection.controlTemporary };
           screenShareResource = shareResource;
           videoStartupStartedAt = performance.now();
+          screenShareSettingsFailure.value = null;
           capturedTracks = [await nativeVideo.start(sourceId)];
           shareResource.captureSessionId = nativeVideo.captureSessionId ?? null;
           if (!isCurrentTask()) return;
@@ -1140,6 +1145,11 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         && /(?:^|: )captureTargetClosed$/.test(error.message);
       if (isCurrentTask() && !targetClosed
         && !(source === Track.Source.ScreenShare && screenShareSelectionCancelled.value)) {
+        const code = error instanceof Error ? error.message.match(/(?:^|: )([a-z][A-Za-z0-9]{0,63})$/)?.[1] : undefined;
+        if (enabled && source === Track.Source.ScreenShare && nativeSourceId
+            && (code === 'captureBorderUnsupported' || code === 'captureBorderAccessDenied')) {
+          screenShareSettingsFailure.value = { sourceId: nativeSourceId, code };
+        }
         notice.value = enabled ? captureErrorMessage(error, source)
           : nativeVideoStopFailed
             ? '原生屏幕共享停止未确认，请重启客户端后再试。'
@@ -1568,7 +1578,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   }
 
   return { revision, room, playbackContext, status, participants, notice, needsAudioPlayback, busySources, screenShareActive,
-    listening, microphoneIntent, microphoneEnabled,
+    listening, microphoneIntent, microphoneEnabled, screenShareSettingsFailure,
     currentScreenShareQuality, currentCustomScreenShareQuality, screenShareQualityBusy, setScreenShareQuality,
     currentScreenShareAudioMode, screenShareSourceBusy, changeScreenShareSource, setScreenShareAudioEnabled,
     screenShareAudioRestricted,
