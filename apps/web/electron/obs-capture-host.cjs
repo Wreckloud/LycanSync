@@ -205,6 +205,27 @@ class ObsCaptureHostManager {
       state.prepareReject = undefined;
       return;
     }
+    if (event.event === 'captureRejected') {
+      if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
+      if (this.state !== state || (!state.startReject && !state.stopRequested) || event.sessionId !== state.videoSessionId
+          || !['captureBorderUnsupported', 'captureBorderAccessDenied', 'captureSettingsUnsupported'].includes(event.code)) {
+        failState(state, new Error('obsCaptureProtocolEventInvalid'));
+        return;
+      }
+      clearTimeout(state.startTimer);
+      state.startSent = false;
+      if (state.stopRequested) { this.completeStop(state); return; }
+      const reject = state.startReject;
+      state.startResolve = undefined;
+      state.startReject = undefined;
+      state.lastStoppedSessionId = state.videoSessionId;
+      state.videoSessionId = undefined;
+      state.captureMethod = undefined;
+      this.onCaptureDiagnostic(state, { stage: 'obsCaptureRejected', code: event.code });
+      this.scheduleIdle(state);
+      reject(new Error(event.code));
+      return;
+    }
     if (event.event === 'captureStopped') {
       if (event.sessionId === state.videoSessionId && state.stopRequested) this.completeStop(state);
       return;

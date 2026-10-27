@@ -150,6 +150,24 @@ fn handle_command(runtime: &mut Runtime, envelope: &CommandEnvelope) -> Outbound
             microphone_capture_dropped_chunks: runtime.microphone_capture.dropped_chunks(),
             screen_share_audio: Box::default(),
         },
+        CommandEnvelope::InspectVideoSource {
+            request_id,
+            source_id,
+            ..
+        } => match runtime.inspect_video_source(source_id) {
+            Ok(target) => OutboundEvent::VideoSourceInspected {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: request_id.clone(),
+                source_id: source_id.clone(),
+                target,
+            },
+            Err(code) => error(
+                runtime,
+                Some(request_id.clone()),
+                code,
+                code.public_message(),
+            ),
+        },
         CommandEnvelope::ReserveVideo {
             request_id,
             session_id,
@@ -445,6 +463,28 @@ struct Runtime {
 }
 
 impl Runtime {
+    fn inspect_video_source(
+        &self,
+        source_id: &str,
+    ) -> Result<protocol::ReservedVideoTarget, ErrorCode> {
+        if !valid_identifier(source_id) {
+            return Err(ErrorCode::InvalidRequest);
+        }
+        // 选择阶段只读取身份，不占用视频会话，也不改变正在共享的来源。
+        // 最小化窗口不在可选列表中，已授权会话仍可只读核验原实例。
+        if self.active_source_id.as_deref() == Some(source_id) {
+            return self
+                .video_target
+                .as_ref()
+                .ok_or(ErrorCode::InvalidRequest)?
+                .video_target();
+        }
+        self.sources
+            .target(source_id)
+            .ok_or(ErrorCode::InvalidRequest)?
+            .video_target()
+    }
+
     fn reserve_video(
         &mut self,
         session_id: &str,
@@ -692,6 +732,23 @@ fn valid_pipe_id(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn source_inspection_never_reserves_or_replaces_a_video_session() {
+        let mut runtime = super::Runtime::default();
+        assert!(runtime.inspect_video_source("window:1:0").is_err());
+        assert_eq!(runtime.state(), super::SessionState::Idle);
+        runtime.session.begin("existing".to_owned()).unwrap();
+        runtime.session.mark_running().unwrap();
+        runtime.active_source_id = Some("window:1:0".to_owned());
+        runtime.video_target = Some(super::sources::CaptureTarget::Test(7));
+        for source in ["window:1:1", "", "invalid\nsource"] {
+            assert!(runtime.inspect_video_source(source).is_err());
+            assert_eq!(runtime.session_id(), Some("existing"));
+            assert_eq!(runtime.active_source_id.as_deref(), Some("window:1:0"));
+            assert!(runtime.video_target.is_some());
+        }
+    }
+
     #[test]
     fn external_video_reservation_owns_only_identity_and_uses_normal_stop() {
         let mut runtime = super::Runtime::default();

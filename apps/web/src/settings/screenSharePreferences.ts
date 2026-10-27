@@ -4,6 +4,7 @@ export interface ScreenSharePreferences {
   hideCursor: boolean;
   hideBorder: boolean;
   windowMethod?: WindowCaptureMethod;
+  followGame?: 'league';
 }
 
 const STORAGE_KEY = 'lycansync.screen-share';

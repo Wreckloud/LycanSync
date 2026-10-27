@@ -161,11 +161,13 @@ class FakeHelper extends EventEmitter {
       });
       return;
     }
-    if (command.command === 'reserveVideo') {
+    if (command.command === 'reserveVideo' || command.command === 'inspectVideoSource') {
       if (this.mode.reserveVideoTimeout) return;
-      this.videoState = 'running';
-      this.videoSessionId = command.sessionId;
-      this.writeResponse({ event: 'videoReserved', protocolVersion: 1, requestId: command.requestId,
+      if (command.command === 'reserveVideo') {
+        this.videoState = 'running';
+        this.videoSessionId = command.sessionId;
+      }
+      this.writeResponse({ event: command.command === 'reserveVideo' ? 'videoReserved' : 'videoSourceInspected', protocolVersion: 1, requestId: command.requestId,
         sessionId: command.sessionId, sourceId: command.sourceId,
         target: this.mode.invalidVideoTarget ?? (command.sourceId.startsWith('monitor:')
           ? { kind: 'monitor', monitorName: '\\\\.\\DISPLAY1' }
@@ -289,6 +291,77 @@ function createManager(mode = {}, options = {}) {
   });
   return { manager, children, spawnOptions };
 }
+
+test('来源预检查只返回身份，不预留视频，不改变当前采集和远控授权', async () => {
+  const { manager, children } = createManager({ windowSources: true });
+  try {
+    await assert.rejects(manager.inspectVideoSource('window:1:0'), /videoSourceExpired/);
+    assert.equal(children.length, 0);
+    const snapshot = await manager.listVideoSources();
+    const sourceId = snapshot.sources.find(source => source.kind === 'window').sourceId;
+    const target = await manager.inspectVideoSource(sourceId);
+    assert.equal(target.kind, 'window');
+    assert.equal(target.executable, 'C:\\Games\\game.exe');
+    assert.equal(manager.videoCapture, undefined);
+    assert.equal(children[0].videoState, 'idle');
+    const monitorId = snapshot.sources.find(source => source.kind === 'monitor').sourceId;
+    await manager.reserveVideo('current-monitor', monitorId);
+    await manager.setRemoteControl('current-monitor', 'control', 'friend');
+    const current = manager.videoCapture;
+    await manager.inspectVideoSource(sourceId);
+    assert.equal(manager.videoCapture, current);
+    assert.equal(children[0].videoSessionId, 'current-monitor');
+    await manager.sendRemoteInput('current-monitor', 'control', 'friend', 1, { kind: 'keyDown', key: 'letterA' });
+    assert.equal(children[0].commands.filter(command => command === 'reserveVideo').length, 1);
+    assert.equal(children[0].commands.includes('startVideo'), false);
+  } finally { await manager.shutdown(); }
+});
+
+test('来源预检查拒绝无效身份，不终止仍在工作的共享会话', async () => {
+  const { manager, children } = createManager({ windowSources: true });
+  try {
+    const snapshot = await manager.listVideoSources();
+    await manager.reserveVideo('current-monitor', snapshot.sources.find(source => source.kind === 'monitor').sourceId);
+    children[0].mode.invalidVideoTarget = { kind: 'window', windowId: '123', executable: 'private-path' };
+    await assert.rejects(manager.inspectVideoSource(snapshot.sources.find(source => source.kind === 'window').sourceId), /InvalidVideoTarget/);
+    assert.equal(manager.videoCapture.sessionId, 'current-monitor');
+    assert.equal(children[0].closed, false);
+  } finally { await manager.shutdown(); }
+});
+
+test('预检查迟到时快照已失效，不把旧 helper 的窗口身份交给调用方', async () => {
+  for (const changed of ['source', 'helper']) {
+    const { manager, children } = createManager({ windowSources: true, reserveVideoTimeout: true });
+    try {
+      const snapshot = await manager.listVideoSources();
+      const sourceId = snapshot.sources.find(source => source.kind === 'window').sourceId;
+      const inspection = assert.rejects(manager.inspectVideoSource(sourceId), /videoSourceExpired/);
+      const request = children[0].requests.at(-1);
+      if (changed === 'source') manager.videoSourceSnapshot.ids.delete(sourceId);
+      else manager.videoSourceSnapshot = { ...manager.videoSourceSnapshot, state: {} };
+      children[0].writeResponse({ event: 'videoSourceInspected', protocolVersion: 1, requestId: request.requestId,
+        sourceId, target: { kind: 'window' } });
+      await inspection;
+      assert.equal(manager.videoCapture, undefined);
+      assert.equal(children[0].closed, false);
+    } finally { await manager.shutdown(); }
+  }
+});
+
+test('已预留窗口最小化离开列表后仍可只读检查，其他未授权来源不能借用', async () => {
+  const { manager } = createManager({ windowSources: true });
+  try {
+    const snapshot = await manager.listVideoSources();
+    const sourceId = snapshot.sources.find(source => source.kind === 'window').sourceId;
+    await manager.reserveVideo('current-window', sourceId);
+    manager.videoSourceSnapshot.ids.delete(sourceId);
+    assert.equal((await manager.inspectVideoSource(sourceId)).kind, 'window');
+    await assert.rejects(manager.inspectVideoSource('window:9:0'), /videoSourceExpired/);
+    assert.equal(manager.videoCapture.sessionId, 'current-window');
+    await manager.stopVideo('current-window');
+    await assert.rejects(manager.inspectVideoSource(sourceId), /videoSourceExpired/);
+  } finally { await manager.shutdown(); }
+});
 
 test('OBS 窗口预留复用视频会话并阻止空闲退出，不启动 Rust 画面采集', async () => {
   const { manager, children } = createManager({ windowSources: true }, { idleTimeoutMs: 20 });

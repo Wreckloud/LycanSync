@@ -45,6 +45,11 @@ pub enum CommandEnvelope {
         session_id: String,
         source_id: String,
     },
+    InspectVideoSource {
+        protocol_version: u16,
+        request_id: String,
+        source_id: String,
+    },
     StartMicrophoneCapture {
         protocol_version: u16,
         request_id: String,
@@ -115,6 +120,9 @@ impl CommandEnvelope {
             | Self::ReserveVideo {
                 protocol_version, ..
             }
+            | Self::InspectVideoSource {
+                protocol_version, ..
+            }
             | Self::StartMicrophoneCapture {
                 protocol_version, ..
             }
@@ -147,6 +155,7 @@ impl CommandEnvelope {
             | Self::StopVideo { request_id, .. }
             | Self::ListVideoSources { request_id, .. }
             | Self::ReserveVideo { request_id, .. }
+            | Self::InspectVideoSource { request_id, .. }
             | Self::StartMicrophoneCapture { request_id, .. }
             | Self::ConfigureMicrophoneCapture { request_id, .. }
             | Self::StopMicrophoneCapture { request_id, .. }
@@ -377,6 +386,12 @@ pub enum OutboundEvent {
         revision: u64,
         sources: Vec<VideoSource>,
     },
+    VideoSourceInspected {
+        protocol_version: u16,
+        request_id: String,
+        source_id: String,
+        target: ReservedVideoTarget,
+    },
     VideoReserved {
         protocol_version: u16,
         request_id: String,
@@ -512,6 +527,18 @@ pub fn unavailable_capability() -> Capability {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn source_inspection_protocol_has_no_video_session_or_capture_settings() {
+        let command: super::CommandEnvelope = serde_json::from_str(
+            r#"{"command":"inspectVideoSource","protocolVersion":1,"requestId":"inspect-1","sourceId":"window:1:0"}"#,
+        ).unwrap();
+        assert_eq!(command.request_id(), "inspect-1");
+        assert_eq!(command.protocol_version(), 1);
+        assert!(
+            matches!(command, super::CommandEnvelope::InspectVideoSource { source_id, .. } if source_id == "window:1:0")
+        );
+    }
+
     #[test]
     fn removed_capture_commands_are_not_supported_or_aliased() {
         for command in [

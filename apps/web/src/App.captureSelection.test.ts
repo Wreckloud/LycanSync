@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
-import { ref } from 'vue';
+import { effectScope, nextTick, ref, watch } from 'vue';
 import type { ScreenSharePreferences } from './settings/screenSharePreferences';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNativeVideoSourceSelection } from './components/nativeVideoSourceSelection';
@@ -78,6 +78,46 @@ function setup(mode: NativeScreenAudioMode = 'process') {
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('选窗准备', () => {
+  const watcher = sourceFile.statements.find(statement => ts.isExpressionStatement(statement)
+    && ts.isCallExpression(statement.expression) && statement.expression.expression.getText(sourceFile) === 'watch'
+    && statement.expression.arguments[0]?.getText(sourceFile) === 'selectedCaptureSourceId');
+  if (!watcher) throw new Error('选窗准备监听不存在');
+  const compiledWatcher = ts.transpile(watcher.getText(sourceFile), { target: ts.ScriptTarget.ES2022 });
+
+  it('只向桌面准备当前选择，清空选择撤销准备，不调用采集或发布', async () => {
+    const selectedCaptureSourceId = ref('');
+    const prepare = vi.fn(async () => ({ prepared: true }));
+    const scope = effectScope();
+    try {
+      scope.run(() => runInNewContext(compiledWatcher, { watch, selectedCaptureSourceId, captureFollowGameAvailable: ref(false),
+        desktop: { prepareNativeVideoSource: prepare }, console }));
+      expect(prepare).not.toHaveBeenCalled();
+      selectedCaptureSourceId.value = 'window:7:0';
+      await nextTick();
+      selectedCaptureSourceId.value = 'window:7:1';
+      await nextTick();
+      selectedCaptureSourceId.value = '';
+      await nextTick();
+      expect(prepare.mock.calls).toEqual([['window:7:0'], ['window:7:1'], [null]]);
+    } finally { scope.stop(); }
+  });
+
+  it('准备失败保留用户选择，允许正式启动重新检查', async () => {
+    const selectedCaptureSourceId = ref('');
+    const error = vi.fn();
+    const scope = effectScope();
+    try {
+      scope.run(() => runInNewContext(compiledWatcher, { watch, selectedCaptureSourceId, captureFollowGameAvailable: ref(false),
+        desktop: { prepareNativeVideoSource: async () => { throw new Error('videoSourceExpired'); } }, console: { error } }));
+      selectedCaptureSourceId.value = 'window:7:0';
+      await nextTick();
+      expect(selectedCaptureSourceId.value).toBe('window:7:0');
+      await vi.waitFor(() => expect(error).toHaveBeenCalledOnce());
+    } finally { scope.stop(); }
+  });
+});
 
 describe('App 启动恢复共享偏好', () => {
   it('高级采集选择只交给本次共享，不落盘为长期边框授权', async () => {

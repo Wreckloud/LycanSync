@@ -81,6 +81,9 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
         if (entry.stage === 'screenSourceReserved' && typeof entry.requiresWindowCapture === 'boolean') {
           details.requiresWindowCapture = entry.requiresWindowCapture;
         }
+        if (entry.stage === 'screenSourceReserved' && typeof entry.preparationReused === 'boolean') {
+          details.preparationReused = entry.preparationReused;
+        }
         if (entry.stage === 'diagnosticSnapshotFailed'
             && ['EACCES', 'EPERM', 'ENOSPC', 'EIO', 'EBUSY', 'unknown'].includes(entry.storageError)) {
           details.storageError = entry.storageError;
@@ -88,7 +91,9 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
         if (entry.stage === 'rendererExited' && ['clean-exit', 'abnormal-exit', 'killed', 'crashed', 'oom',
           'launch-failed', 'integrity-failure', 'memory-eviction'].includes(entry.outcome)) details.outcome = entry.outcome;
         if (['nativeVideoFirstFrameTimeout', 'nativeVideoFrameAdjustmentFailed', 'nativeVideoTrackWriteFailed',
-          'nativeVideoSessionStopped', 'nativeVideoFailed', 'obsCaptureStopUnconfirmed', 'obsCaptureHostUnavailable',
+          'nativeVideoSessionStopped', 'nativeVideoFailed', 'nativeGameFollowFailed', 'nativeGameFollowUnavailable',
+          'nativeGameFollowTargetInvalid', 'nativeGameFollowTargetAmbiguous', 'nativeGameFollowBusy',
+          'obsCaptureStopUnconfirmed', 'obsCaptureHostUnavailable',
           'obsCapturePrepareTimeout', 'obsCaptureStartTimeout', 'sharedTextureReleaseTimedOut',
           'sharedTextureImportFailed', 'sharedTextureTransferFailed', 'sharedTextureTransferTimedOut',
           'sharedTextureReceiverUnavailable', 'sharedTextureReceiverFailed',

@@ -17,6 +17,7 @@ const { parseAccessLink, accessLinkFromArguments, parseManualAccessLink } = requ
 const { createStartupUpdate } = require('./startup-update.cjs');
 const { applyRuntimePaths } = require('./runtime-paths.cjs');
 const { createActivityHelper } = require('./activity-helper.cjs');
+const { leagueCaptureApplication, createLeagueCaptureFollow } = require('./league-capture.cjs');
 const { createVoiceOverlay } = require('./voice-overlay.cjs');
 const { initialWindowBounds, createWindowLayout } = require('./window-layout.cjs');
 const { createScreenShareWindows } = require('./screen-share-windows.cjs');
@@ -103,6 +104,7 @@ let allowQuitAfterMediaHelper = false;
 let mediaHelperShutdownPromise;
 let nativeMediaBridge;
 let nativeVideoSession;
+let nativeVideoPreparation;
 let nativeVideoSourcesById = new Map();
 let lastStoppedNativeVideoSession;
 let nativeScreenAudioSession;
@@ -314,7 +316,7 @@ function notifyNativeVideoError(video, code) {
     });
   }
   releaseNativeVideoImports(video);
-  void stopNativeVideo(video.sessionId).catch((error) => {
+  void stopNativeVideo(video.sessionId, code === 'captureTargetClosed' && Boolean(video.gameFollowId)).catch((error) => {
     recordVideoFailure('stopAfterFailure', error);
     console.error(`native video stop after capture failure failed: ${error.message}`);
   });
@@ -812,12 +814,46 @@ function handleNativeSharedTextureFrame(state, frame) {
   }
 }
 
-async function startNativeVideo(sourceId, maxFps, settings, resolution) {
+async function prepareNativeVideoSource(sourceId) {
+  if (sourceId === null) { nativeVideoPreparation = undefined; return { prepared: false }; }
+  const state = mediaHelper.videoSourceSnapshot?.state;
+  if (!nativeVideoSourcesById.has(sourceId) || !state?.alive || state.closed) throw new Error('videoSourceExpired');
+  if (nativeVideoPreparation?.sourceId === sourceId && nativeVideoPreparation.state === state) {
+    return nativeVideoPreparation.promise;
+  }
+  const preparation = { sourceId, state };
+  nativeVideoPreparation = preparation;
+  const startedAt = performance.now();
+  preparation.promise = (async () => {
+    try {
+      const target = await mediaHelper.inspectVideoSource(sourceId);
+      const game = target.kind === 'window' && !target.requiresWindowCapture
+        && await activityMonitor.isCaptureGame(target.executable);
+      if (closing || nativeVideoPreparation !== preparation || mediaHelper.videoSourceSnapshot?.state !== state
+          || !nativeVideoSourcesById.has(sourceId)) return { prepared: false };
+      preparation.result = { target, game };
+      void writeMediaDiagnostic({ stage: 'screenSourcePrepared', sourceKind: target.kind,
+        durationMs: Math.round(performance.now() - startedAt) });
+      return { prepared: true, ...(target.kind === 'window' && leagueCaptureApplication(target.executable)
+        ? { followGame: 'league' } : {}) };
+    } catch (error) {
+      if (nativeVideoPreparation === preparation) nativeVideoPreparation = undefined;
+      throw error;
+    }
+  })();
+  return preparation.promise;
+}
+
+async function startNativeVideo(sourceId, maxFps, settings, resolution, gameFollowId) {
   if (closing) throw new Error('mediaHelperShuttingDown');
   if (process.platform !== 'win32') throw new Error('platformUnsupported');
   if (![30, 60, 120].includes(maxFps)
       || typeof sourceId !== 'string' || sourceId.length > 128) throw new Error('invalidVideoStart');
+  if (settings?.followGame && (settings.followGame !== 'league' || !['auto', undefined].includes(settings.windowMethod))) {
+    throw new Error('nativeGameFollowTargetInvalid');
+  }
   if (nativeVideoSession) throw new Error('videoCaptureAlreadyRunning');
+  const continuingGameFollow = Boolean(gameFollowId);
   if (!nativeMediaBridge) nativeMediaBridge = loadNativeMediaBridge();
   const sessionId = randomUUID();
   const source = nativeVideoSourcesById.get(sourceId);
@@ -841,12 +877,29 @@ async function startNativeVideo(sourceId, maxFps, settings, resolution) {
     video.targetState = mediaHelper.videoCapture?.state;
     let target = await reservation;
     if (closing || video.stopping || nativeVideoSession !== video) throw new Error('nativeVideoSessionStopped');
+    if (settings?.followGame !== undefined && settings.followGame !== 'league') throw new Error('nativeGameFollowTargetInvalid');
+    if (settings?.followGame === 'league') {
+      if (gameFollowId) leagueCaptureFollow.bind(gameFollowId, sourceId, target);
+      else gameFollowId = leagueCaptureFollow.begin(sourceId, target);
+      video.gameFollowId = gameFollowId;
+    } else if (gameFollowId) throw new Error('nativeGameFollowTargetInvalid');
+    const preparation = nativeVideoPreparation;
+    if (preparation?.sourceId === sourceId) nativeVideoPreparation = undefined;
+    const prepared = preparation?.sourceId === sourceId && preparation.state === video.targetState
+      && preparation.result?.target.kind === target.kind ? preparation.result : undefined;
+    const preparationReused = target.kind === 'window' && prepared?.target.windowId === target.windowId
+      && prepared.target.lifetimeName === target.lifetimeName
+      && prepared.target.processId === target.processId
+      && prepared.target.processCreationTime === target.processCreationTime
+      && prepared.target.requiresWindowCapture === target.requiresWindowCapture
+      && prepared.target.executable === target.executable;
     void writeMediaDiagnostic({ stage: 'screenSourceReserved', durationMs: Math.round(performance.now() - video.startedAt),
+      preparationReused,
       ...(target.kind === 'window' ? { requiresWindowCapture: target.requiresWindowCapture } : {}) });
     if (target.kind === 'window') {
       const method = settings?.windowMethod ?? 'auto';
       const game = method === 'game' || (method === 'auto' && !target.requiresWindowCapture
-        && await activityMonitor.isCaptureGame(target.executable));
+        && (preparationReused ? prepared.game : await activityMonitor.isCaptureGame(target.executable)));
       // 程序分类只决定采集方式；授权范围仍是注册表预留的精确窗口实例。
       const { windowId, lifetimeName, processId, processCreationTime } = target;
       target = { kind: game ? 'game' : 'window', windowId, lifetimeName, processId, processCreationTime };
@@ -861,10 +914,16 @@ async function startNativeVideo(sourceId, maxFps, settings, resolution) {
     }
     video.starting = false;
     void writeMediaDiagnostic({ stage: 'obsReady', durationMs: Math.round(performance.now() - obsStartedAt) });
-    return { sessionId, changed: true };
+    if (gameFollowId && !continuingGameFollow) void writeMediaDiagnostic({ stage: 'gameFollowEnabled' });
+    return { sessionId, changed: true, ...(gameFollowId ? { gameFollowId } : {}) };
   } catch (error) {
-    if (!video.failureNotified) recordVideoFailure('startCapture', error);
+    if (!video.failureNotified) {
+      if (['captureBorderUnsupported', 'captureBorderAccessDenied', 'captureSettingsUnsupported'].includes(error.message)) {
+        void writeMediaDiagnostic({ stage: 'screenCaptureSelectionUnavailable', code: error.message });
+      } else recordVideoFailure('startCapture', error);
+    }
     video.stopping = true;
+    if (gameFollowId) leagueCaptureFollow.end(gameFollowId);
     releaseNativeVideoImports(video);
     try { await stopObsVideo(video); }
     catch (stopError) {
@@ -899,7 +958,7 @@ async function stopObsVideo(video) {
   return stopped;
 }
 
-async function stopNativeVideo(sessionId) {
+async function stopNativeVideo(sessionId, preserveGameFollow = false) {
   const video = nativeVideoSession;
   if (!video) {
     return lastStoppedNativeVideoSession === sessionId
@@ -907,6 +966,7 @@ async function stopNativeVideo(sessionId) {
       : Promise.reject(new Error('videoSessionMismatch'));
   }
   if (video.sessionId !== sessionId) throw new Error('videoSessionMismatch');
+  if (!preserveGameFollow && video.gameFollowId) leagueCaptureFollow.end(video.gameFollowId);
   if (video.stopPromise) return video.stopPromise;
   video.stopping = true;
   const startedAt = performance.now();
@@ -972,6 +1032,52 @@ const activityMonitor = createActivityHelper({ enabled: process.platform === 'wi
     currentActivity = activity;
     if (!closing && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('activity:changed', activity);
   } });
+
+const leagueCaptureFollow = createLeagueCaptureFollow({
+  discoveryState: () => mediaHelper.videoSourceSnapshot?.state,
+  inspectSource: sourceId => mediaHelper.inspectVideoSource(sourceId),
+  listSources: async () => {
+    const snapshot = await mediaHelper.listVideoSources();
+    nativeVideoSourcesById = new Map(snapshot.sources.map(source => [source.sourceId, source]));
+    return snapshot;
+  },
+});
+
+async function switchNativeGameVideo(gameFollowId, sourceId, maxFps, settings, resolution) {
+  const follow = leagueCaptureFollow.require(gameFollowId);
+  if (![30, 60, 120].includes(maxFps) || !settings || typeof settings.hideCursor !== 'boolean'
+      || typeof settings.hideBorder !== 'boolean' || !['auto', undefined].includes(settings.windowMethod)
+      || !resolution || ![720, 1080, 1440].includes(resolution.height) || resolution.width !== resolution.height * 16 / 9) {
+    throw new Error('nativeGameFollowTargetInvalid');
+  }
+  if (follow.switching) throw new Error('nativeGameFollowBusy');
+  follow.switching = true;
+  const startedAt = performance.now();
+  try {
+    const selected = await leagueCaptureFollow.findSource(gameFollowId);
+    if (selected.sourceId !== sourceId) throw new Error('nativeGameFollowTargetInvalid');
+    const old = nativeVideoSession;
+    if (old) {
+      if (old.gameFollowId !== gameFollowId) throw new Error('nativeGameFollowUnavailable');
+      await stopNativeVideo(old.sessionId, true);
+    }
+    if (closing || leagueCaptureFollow.require(gameFollowId) !== follow) throw new Error('nativeGameFollowUnavailable');
+    void writeMediaDiagnostic({ stage: 'gameFollowSourceSwitch' });
+    const started = await startNativeVideo(sourceId, maxFps, { ...settings, followGame: 'league' }, resolution, gameFollowId);
+    void writeMediaDiagnostic({ stage: 'gameFollowSourceSwitched', durationMs: Math.round(performance.now() - startedAt) });
+    return started;
+  } catch (error) {
+    if (follow.cancelled || closing) {
+      void writeMediaDiagnostic({ stage: 'gameFollowSwitchCancelled' });
+      throw error;
+    }
+    const code = ['nativeGameFollowUnavailable', 'nativeGameFollowTargetInvalid', 'nativeGameFollowTargetAmbiguous',
+      'nativeGameFollowBusy', 'captureTargetClosed'].includes(error.message) ? error.message : 'nativeGameFollowFailed';
+    void writeMediaDiagnostic({ stage: 'gameFollowSwitchFailed', code,
+      durationMs: Math.round(performance.now() - startedAt) });
+    throw error;
+  } finally { follow.switching = false; }
+}
 
 function startActivityHelper() { if (!closing) activityMonitor.start(); }
 function stopActivityHelper() { activityMonitor.stop(); }
@@ -1462,6 +1568,7 @@ ipcMain.handle('activity:windows', (event) => {
 });
 ipcMain.handle('activity:configure', (event, mappings) => {
   if (!trustedSender(event) || closing || !startupReady) throw new Error('请求来源无效');
+  nativeVideoPreparation = undefined;
   return activityMonitor.configure(mappings);
 });
 ipcMain.handle('media:capabilities', (event) => {
@@ -1490,6 +1597,11 @@ ipcMain.handle('media:video-sources', async (event) => {
   nativeVideoSourcesById = new Map(snapshot.sources.map((source) => [source.sourceId, source]));
   recordSourceTiming('enumerateSources', startedAt, snapshot.sources.length);
   return snapshot;
+});
+ipcMain.handle('media:video-source:prepare', (event, sourceId) => {
+  if (!trustedSender(event) || closing || (sourceId !== null && (typeof sourceId !== 'string'
+      || !/^(?:monitor|window):[1-9]\d*:\d+$/.test(sourceId)))) throw new Error('请求来源无效');
+  return prepareNativeVideoSource(sourceId);
 });
 ipcMain.handle('media:video-source-thumbnails', async (event, sources) => {
   if (!trustedSender(event) || closing || !Array.isArray(sources) || sources.length > 128
@@ -1576,6 +1688,25 @@ ipcMain.handle('media:native-video:stop', (event, sessionId) => {
     throw new Error('请求参数无效');
   }
   return stopNativeVideo(sessionId);
+});
+ipcMain.handle('media:game-follow:source', (event, id) => {
+  if (!trustedSender(event) || closing || typeof id !== 'string' || id.length > 128) throw new Error('请求参数无效');
+  return leagueCaptureFollow.findSource(id).catch(error => {
+    if (error.message === 'nativeGameFollowCancelled' || closing) throw error;
+    void writeMediaDiagnostic({ stage: 'gameFollowLookupFailed', code:
+      ['nativeGameFollowUnavailable', 'nativeGameFollowTargetAmbiguous'].includes(error.message)
+        ? error.message : 'nativeGameFollowFailed' });
+    throw error;
+  });
+});
+ipcMain.handle('media:game-follow:switch', (event, id, sourceId, maxFps, settings, resolution) => {
+  if (!trustedSender(event) || closing || typeof id !== 'string' || id.length > 128
+      || typeof sourceId !== 'string' || !/^window:[1-9]\d*:\d+$/.test(sourceId)) throw new Error('请求参数无效');
+  return switchNativeGameVideo(id, sourceId, maxFps, settings, resolution);
+});
+ipcMain.handle('media:game-follow:end', (event, id) => {
+  if (!trustedSender(event) || typeof id !== 'string' || id.length > 128) throw new Error('请求参数无效');
+  leagueCaptureFollow.end(id);
 });
 ipcMain.handle('media:native-video:configure', (event, sessionId, maxFps, resolution) => {
   if (!trustedSender(event) || closing || !nativeVideoSession || nativeVideoSession.stopping

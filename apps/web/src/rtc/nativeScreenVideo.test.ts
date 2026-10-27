@@ -36,6 +36,145 @@ afterEach(() => {
 });
 
 describe('NativeScreenVideoSession', () => {
+  function gameFollowFixture(options: { holdSwitch?: boolean; holdCleanup?: boolean; rejectSwitch?: boolean } = {}) {
+    const target = installWindowMessageTarget();
+    let reportError!: (failure: { sessionId: string; code: string }) => void;
+    let nextSource: string | null = 'window:1:0';
+    let nextSession = 1;
+    const switched = deferred<{ sessionId: string; changed: boolean; gameFollowId: string }>();
+    const cleanup = deferred<void>();
+    const onError = vi.fn();
+    const changed = vi.fn(async () => {});
+    const changing = vi.fn(() => options.holdCleanup ? cleanup.promise : Promise.resolve());
+    const desktop: NativeVideoDesktopBridge = {
+      recordScreenShareStartupTiming: vi.fn(),
+      startNativeVideo: vi.fn(async () => ({ sessionId: 'capture-1', changed: true, gameFollowId: 'league-1' })),
+      stopNativeVideo: vi.fn(async () => ({ changed: true })), configureNativeVideo: vi.fn(),
+      onNativeVideoError: callback => { reportError = callback; return () => {}; },
+      onNativeVideoSuspended: () => () => {},
+      findNativeGameSource: vi.fn(async () => ({ sourceId: nextSource })),
+      endNativeGameFollow: vi.fn(async () => {}),
+      switchNativeGameVideo: vi.fn(async () => {
+        if (options.rejectSwitch) throw new Error('nativeGameFollowTargetInvalid');
+        if (options.holdSwitch) return switched.promise;
+        return { sessionId: `capture-${++nextSession}`, changed: true, gameFollowId: 'league-1' };
+      }),
+    };
+    const generator = { writable: new WritableStream<VideoFrame>(), stop: vi.fn() };
+    const session = new NativeScreenVideoSession(desktop, { maxFps: 60,
+      captureSettings: { hideBorder: true, hideCursor: false, followGame: 'league' },
+      createGenerator: () => generator as never, createLocalTrack: () => ({ stop: vi.fn() }) as never,
+      createSuspendedFrame: () => createFrame(), onError, onGameSourceChanging: changing, onGameSourceChanged: changed });
+    const start = async () => {
+      const ready = session.start('window:1:0');
+      await vi.advanceTimersByTimeAsync(0);
+      dispatchFrame(target, createFrame(), 'capture-1');
+      await ready;
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    return { session, desktop, generator, onError, changing, changed, start, switched, cleanup,
+      next: (id: string | null) => { nextSource = id; },
+      frame: (id: string) => dispatchFrame(target, createFrame(), id),
+      closeTarget: (id: string) => reportError({ sessionId: id, code: 'captureTargetClosed' }) };
+  }
+
+  it('大厅与对局切换保留同一轨道，新首帧到达后才恢复声音，旧来源关闭不终止共享', async () => {
+    vi.useFakeTimers();
+    const f = gameFollowFixture();
+    await f.start();
+    const track = f.session.track;
+    f.next('window:2:0');
+    await vi.advanceTimersByTimeAsync(750);
+    expect(f.changing).toHaveBeenCalledOnce();
+    expect(f.changed).not.toHaveBeenCalled();
+    f.frame('capture-1');
+    expect(f.changed).not.toHaveBeenCalled();
+    f.frame('capture-2');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.changed).toHaveBeenLastCalledWith('window:2:0', 'capture-2');
+    expect(f.session.track).toBe(track);
+    expect(f.generator.stop).not.toHaveBeenCalled();
+    f.closeTarget('capture-2');
+    f.next('window:1:0');
+    await vi.advanceTimersByTimeAsync(750);
+    f.frame('capture-3');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.changed).toHaveBeenLastCalledWith('window:1:0', 'capture-3');
+    expect(f.onError).not.toHaveBeenCalled();
+    await f.session.stop();
+    expect(f.desktop.stopNativeVideo).toHaveBeenLastCalledWith('capture-3');
+    expect(f.desktop.endNativeGameFollow).toHaveBeenCalledWith('league-1');
+  });
+
+  it('声音清理期间主动停止，迟到清理不得启动下一局', async () => {
+    vi.useFakeTimers();
+    const f = gameFollowFixture({ holdCleanup: true });
+    await f.start();
+    f.next('window:2:0');
+    await vi.advanceTimersByTimeAsync(750);
+    await f.session.stop();
+    f.cleanup.resolve();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(f.desktop.switchNativeGameVideo).not.toHaveBeenCalled();
+    expect(f.desktop.stopNativeVideo).toHaveBeenLastCalledWith('capture-1');
+    expect(f.changed).not.toHaveBeenCalled();
+  });
+
+  it('新来源启动期间停止，等待真实响应并清理新会话，不恢复声音', async () => {
+    vi.useFakeTimers();
+    const f = gameFollowFixture({ holdSwitch: true });
+    await f.start();
+    f.next('window:2:0');
+    await vi.advanceTimersByTimeAsync(750);
+    const stopping = f.session.stop();
+    f.switched.resolve({ sessionId: 'late-capture', gameFollowId: 'league-1', changed: true });
+    await stopping;
+    expect(f.desktop.stopNativeVideo).toHaveBeenLastCalledWith('late-capture');
+    expect(f.changed).not.toHaveBeenCalled();
+    expect(f.onError).not.toHaveBeenCalled();
+  });
+
+  it('切换请求在停止旧来源之前被拒绝，最终仍清理旧会话', async () => {
+    vi.useFakeTimers();
+    const f = gameFollowFixture({ rejectSwitch: true });
+    await f.start();
+    f.next('window:2:0');
+    await vi.advanceTimersByTimeAsync(750);
+    await f.session.stop();
+    expect(f.onError).toHaveBeenCalledExactlyOnceWith('nativeGameFollowFailed');
+    expect(f.desktop.stopNativeVideo).toHaveBeenLastCalledWith('capture-1');
+  });
+
+  it('窗口退出后短暂等待不报错，三十秒没有可用窗口才正常结束，停止后不轮询', async () => {
+    vi.useFakeTimers();
+    const f = gameFollowFixture();
+    await f.start();
+    f.closeTarget('capture-1');
+    f.next(null);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(f.onError).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.onError).toHaveBeenCalledExactlyOnceWith('captureTargetClosed');
+    await f.session.stop();
+    const lookups = vi.mocked(f.desktop.findNativeGameSource!).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(f.desktop.findNativeGameSource).toHaveBeenCalledTimes(lookups);
+  });
+
+  it('初次启动途中停止也撤销迟到返回的游戏跟随授权', async () => {
+    vi.useFakeTimers();
+    const f = gameFollowFixture();
+    const started = deferred<{ sessionId: string; changed: boolean; gameFollowId: string }>();
+    vi.mocked(f.desktop.startNativeVideo).mockReturnValue(started.promise);
+    const ready = expect(f.session.start('window:1:0')).rejects.toThrow('nativeVideoSessionStopped');
+    const stopped = f.session.stop();
+    started.resolve({ sessionId: 'late-capture', changed: true, gameFollowId: 'late-follow' });
+    await stopped;
+    await ready;
+    expect(f.desktop.endNativeGameFollow).toHaveBeenCalledWith('late-follow');
+    expect(f.desktop.stopNativeVideo).toHaveBeenCalledWith('late-capture');
+  });
+
   it('启动中停止等待主进程的真实结果，不因超过旧的1.5秒而残留失败，迟到轨道不发布', async () => {
     vi.useFakeTimers();
     installWindowMessageTarget();
@@ -622,7 +761,7 @@ describe('NativeScreenVideoSession', () => {
     expect(createSuspendedFrame).not.toHaveBeenCalled();
     reportSuspension({ sessionId: 'window-session', suspended: true });
     await vi.waitFor(() => expect(frames).toHaveLength(2));
-    expect(createSuspendedFrame).toHaveBeenCalledWith(800, 500, 1_100_000);
+    expect(createSuspendedFrame).toHaveBeenCalledWith(800, 500, 1_100_000, false);
     await vi.waitFor(() => expect(pauseFrames[0].close).toHaveBeenCalledOnce());
     await vi.advanceTimersByTimeAsync(2_000);
     expect(frames).toHaveLength(4);

@@ -59,6 +59,7 @@ struct HostState {
   bool window_source = false;
   bool game_source = false;
   const char *capture_method = "dxgi";
+  const char *selection_rejection = nullptr;
   std::string requested_method = "auto";
   bool border_allowed = false;
   bool gpu_wait_reported = false;
@@ -744,6 +745,12 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
     obs_data_release(settings);
   }
   if (!source) {
+    if (std::string_view(source_error) == "captureBorderUnsupported"
+        || std::string_view(source_error) == "captureBorderAccessDenied"
+        || std::string_view(source_error) == "captureSettingsUnsupported") {
+      g_host.selection_rejection = source_error;
+      return 4;
+    }
     write_event(source_error);
     return 1;
   }
@@ -927,6 +934,7 @@ int wmain(int argc, wchar_t **argv) {
       write_event("enginePrepared");
       continue;
     }
+    if (g_host.selection_rejection && command == "stop:" + g_host.session_id) continue;
     size_t retired_slot = 0;
     // 页面撤销导入后的最后一次归还可能排在 stop 后；空闲时不再持有可修改的槽位。
     if (parse_release_command(command, retired_slot)) continue;
@@ -965,6 +973,21 @@ int wmain(int argc, wchar_t **argv) {
     if (!prepare()) { result = 1; break; }
     write_capture_preparation("graphicsReady", arguments[4]);
     result = capture(arguments, argv[1], argv[2], video);
+    if (result == 4) {
+      // 设置限制没有启动画面来源；恢复低频空闲画布，保留正常的预热设备。
+      g_host.window_target = WindowVideoTarget{};
+      obs_wait_for_destroy_queue();
+      video.base_width = video.output_width = 320;
+      video.base_height = video.output_height = 180;
+      video.fps_num = 1;
+      if (obs_reset_video(&video) != OBS_VIDEO_SUCCESS) { write_event("obsVideoIdleFailed"); result = 1; break; }
+      const std::lock_guard<std::mutex> output_lock(g_output_mutex);
+      std::cout << "{\"event\":\"captureRejected\",\"sessionId\":\"" << g_host.session_id
+                << "\",\"code\":\"" << g_host.selection_rejection << "\"}\n";
+      std::cout.flush();
+      result = 0;
+      continue;
+    }
     if (result != 0) break;
   }
   obs_shutdown();

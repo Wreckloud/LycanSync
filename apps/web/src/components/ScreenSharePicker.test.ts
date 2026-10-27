@@ -11,18 +11,25 @@ import type { NativeScreenAudioMode } from '../rtc/nativeScreenAudioMode';
 import type { ScreenSharePreferences } from '../settings/screenSharePreferences';
 
 async function renderPicker(audioMode: NativeScreenAudioMode, audioReady = true, shareAudio = false,
-  settingsFailure?: { sourceId: string; code: string }) {
+  settingsFailure?: { sourceId: string; code: string }, followGameAvailable = false) {
   const context: SSRContext = {};
   await renderToString(createSSRApp(ScreenSharePicker, {
     sources: [{ id: 'window:1:0', name: '测试窗口', type: 'window' }],
     sourceType: 'window', selectedId: 'window:1:0', quality: 'standard',
     audioMode, audioReady, audioFailed: false, shareAudio,
-    loading: false, error: '', notice: '', settingsFailure,
+    loading: false, error: '', notice: '', settingsFailure, followGameAvailable,
   }), context);
   return context.teleports?.body ?? '';
 }
 
 describe('共享选择器的声音范围说明', () => {
+  it('仅识别到联盟时展示跟随选项，说明大厅内容范围且默认不勾选', async () => {
+    expect(await renderPicker('process')).not.toContain('跟随英雄联盟');
+    const html = await renderPicker('process', true, false, undefined, true);
+    expect(html).toContain('跟随英雄联盟大厅与对局（包括大厅聊天画面）');
+    expect(html.match(/<input[^>]*>跟随英雄联盟/)?.[0]).not.toContain('checked');
+  });
+
   it('只有明确确认同一窗口后才允许边框，改用兼容采集和取消不改变授权', () => {
     const script = parse(readFileSync(new URL('./ScreenSharePicker.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
     const source = ts.createSourceFile('Picker.ts', script, ts.ScriptTarget.Latest, true);
@@ -34,9 +41,10 @@ describe('共享选择器的声音范围说明', () => {
     const captureSettings = ref<ScreenSharePreferences>({ hideCursor: true, hideBorder: true, windowMethod: 'auto' });
     const emit = vi.fn();
     const canConfirm = ref(true);
-    const props = { sourceType: 'window', selectedId: 'window:1',
+    const props = { sourceType: 'window', selectedId: 'window:1', followGameAvailable: true,
       settingsFailure: { sourceId: 'window:1', code: 'captureBorderUnsupported' } };
-    const confirm = runInNewContext(`${compiled}; confirm`, { computed, captureSettings, emit, canConfirm, props }) as () => void;
+    const followGame = ref(false);
+    const confirm = runInNewContext(`${compiled}; confirm`, { computed, captureSettings, emit, canConfirm, props, followGame }) as () => void;
     expect(captureSettings.value.hideBorder).toBe(true);
     expect(emit).not.toHaveBeenCalled();
     canConfirm.value = false;
@@ -46,6 +54,9 @@ describe('共享选择器的声音范围说明', () => {
     canConfirm.value = true;
     confirm();
     expect(emit).toHaveBeenLastCalledWith('confirm', { hideCursor: true, hideBorder: false, windowMethod: 'auto' });
+    followGame.value = true;
+    confirm();
+    expect(emit).toHaveBeenLastCalledWith('confirm', { hideCursor: true, hideBorder: false, windowMethod: 'auto', followGame: 'league' });
     captureSettings.value = { hideCursor: true, hideBorder: true, windowMethod: 'bitblt' };
     confirm();
     expect(emit).toHaveBeenLastCalledWith('confirm', { hideCursor: true, hideBorder: true, windowMethod: 'bitblt' });

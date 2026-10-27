@@ -20,6 +20,7 @@ module.exports = {
     'electron/screen-share-windows.cjs',
     'electron/viewer-preload.cjs',
     'electron/activity-helper.cjs',
+    'electron/league-capture.cjs',
     'electron/startup-update.cjs',
     'electron/server-settings.cjs',
     'electron/runtime-paths.cjs',

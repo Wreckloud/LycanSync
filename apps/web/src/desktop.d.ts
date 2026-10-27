@@ -149,10 +149,15 @@ interface Window {
     configureActivityMappings(mappings: ActivityMapping[]): Promise<void>;
     getNativeMediaCapabilities(): Promise<Record<string, { available: boolean; reason: string }>>;
     listNativeVideoSources(): Promise<{ revision: number; discoveryId: string; sources: NativeVideoSource[] }>;
+    prepareNativeVideoSource(sourceId: string | null): Promise<{ prepared: boolean; followGame?: 'league' }>;
     getNativeVideoSourceThumbnails(sources: NativeVideoSource[]): Promise<{ sourceId: string; thumbnail: string }[]>;
     getScreenShareSupport(): Promise<{ hideCursor: boolean; hideBorder: boolean }>;
     startNativeVideo(sourceId: string, maxFps: number, settings: { hideCursor: boolean; hideBorder: boolean;
-      windowMethod?: 'auto' | 'game' | 'bitblt' | 'wgc' }, resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean }>;
+      windowMethod?: 'auto' | 'game' | 'bitblt' | 'wgc'; followGame?: 'league' }, resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean; gameFollowId?: string }>;
+    findNativeGameSource(id: string): Promise<{ sourceId: string | null }>;
+    switchNativeGameVideo(id: string, sourceId: string, maxFps: number, settings: import('./settings/screenSharePreferences').ScreenSharePreferences,
+      resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean; gameFollowId?: string }>;
+    endNativeGameFollow(id: string): Promise<void>;
     stopNativeVideo(sessionId: string): Promise<{ changed: boolean }>;
     configureNativeVideo(sessionId: string, maxFps: number, resolution?: { width: number; height: number }): Promise<{ changed: boolean }>;
     authorizeNativeRemoteControl(sessionId: string, controlSessionId: string, controllerIdentity: string): Promise<{ changed: boolean }>;

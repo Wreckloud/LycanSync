@@ -59,6 +59,8 @@ interface ScreenShareResource {
   captureSettings?: ScreenSharePreferences;
   audioMode: NativeScreenAudioMode;
   audioChanging: boolean;
+  audioWanted?: boolean;
+  sourceChanging?: boolean;
   stopping: boolean;
   controllerIdentity?: string;
   controlTemporary?: boolean;
@@ -651,7 +653,9 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         } else if (resource.audioMode === 'systemMix') {
           reason = '默认播放设备已断开或声音采集失败';
         }
-        notice.value = `共享声音已停止，画面仍在共享（${reason}）。`;
+        if (!(resource.captureSettings?.followGame === 'league' && code === 'screenShareAudioTargetUnavailable')) {
+          notice.value = `共享声音已停止，画面仍在共享（${reason}）。`;
+        }
         const track = currentRoom.localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)?.track;
         if (track) {
           retireRoomTrack(currentRoom, track);
@@ -666,7 +670,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   async function suspendShareForControl(currentRoom: Room) {
     if (activeRoom.value !== currentRoom || currentRoom.state !== ConnectionState.Connected
         || pendingMedia.value.has(Track.Source.ScreenShare) || screenShareSourceBusy.value || screenShareQualityBusy.value
-        || screenShareResource?.audioChanging) throw new Error('screenShareBusy');
+        || screenShareResource?.audioChanging || screenShareResource?.sourceChanging) throw new Error('screenShareBusy');
     const version = screenShareIntentVersion;
     const resource = screenShareResource;
     const snapshot: NativeScreenSourceSelection | null = resource ? {
@@ -999,6 +1003,29 @@ export function useRtcRoom(options?: RtcRoomOptions) {
               && currentRoom.state === ConnectionState.Connected
               && shareResource?.liveKitTrackId != null && !remoteControl.owner.value && !remoteControl.granting.value
               && currentRoom.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track === nativeVideo?.track,
+            canChangeGameSource: () => activeRoom.value === currentRoom && screenShareResource === shareResource
+              && !shareResource?.stopping && !shareResource?.audioChanging && !screenShareQualityBusy.value
+              && !screenShareSourceBusy.value && !pendingMedia.value.has(Track.Source.ScreenShare)
+              && currentRoom.state === ConnectionState.Connected && shareResource?.liveKitTrackId != null,
+            onGameSourceChanging: async () => {
+              if (!shareResource || screenShareResource !== shareResource || shareResource.stopping) throw new Error('nativeVideoSessionStopped');
+              shareResource.sourceChanging = true;
+              if (!await applyScreenShareAudioEnabled(false, true)) throw new Error('nativeAudioStopNotConfirmed');
+              await remoteControl.endShare(currentRoom, shareResource.remoteShare);
+            },
+            onGameSourceChanged: async (nextSourceId, nextSessionId) => {
+              if (!shareResource || screenShareResource !== shareResource || shareResource.stopping
+                  || activeRoom.value !== currentRoom) throw new Error('nativeVideoSessionStopped');
+              shareResource.sourceId = nextSourceId;
+              shareResource.captureSessionId = nextSessionId;
+              shareResource.remoteShare = { shareId: nextSessionId, captureSessionId: nextSessionId,
+                sourceId: nextSourceId, kind: 'window', liveKitTrackId: shareResource.liveKitTrackId };
+              shareResource.sourceChanging = false;
+              remoteControl.beginShare(currentRoom);
+              revision.value++;
+              // 与首次共享一致，画面切换完成后异步接回声音，不占用画质操作。
+              if (shareResource.audioWanted) void applyScreenShareAudioEnabled(true, true);
+            },
             onFrameRateAdjustmentFailure: (frameRate) => {
               if (activeRoom.value === currentRoom && screenShareResource === shareResource && !shareResource?.stopping) {
                 notice.value = `共享帧率自动调整失败，采集目标仍为 ${frameRate} FPS。请重新选择画质后重试。`;
@@ -1011,7 +1038,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
                   || activeRoom.value !== currentRoom) return;
               failedShareResource.stopping = true;
               void remoteControl.endShare(currentRoom, failedShareResource.remoteShare);
-              if (code !== 'captureTargetClosed') notice.value = `原生屏幕共享已停止（${code}）。`;
+              if (code !== 'captureTargetClosed') notice.value = code === 'nativeGameFollowFailed'
+                ? '游戏窗口切换未能完成，共享已停止，请重新选择游戏窗口。' : `原生屏幕共享已停止（${code}）。`;
               retireRoomTrack(currentRoom, failedShareResource.videoTrack);
               void currentRoom.localParticipant.unpublishTrack(failedShareResource.videoTrack, true).catch(() => {});
               const screenAudioTrack = currentRoom.localParticipant
@@ -1040,7 +1068,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           shareResource = { captureSessionId: null, sourceId, kind, videoSession: nativeVideo,
             captureSettings: selection.captureSettings ? { ...selection.captureSettings } : undefined,
             videoTrack: nativeVideo.track, liveKitTrackId: null, remoteShare: null, quality: selectedQuality, customQuality: selectedCustomQuality,
-            audioMode: nativeScreenAudioMode(capabilities.screenShareAudioCapture), audioChanging: false, stopping: false,
+            audioMode: nativeScreenAudioMode(capabilities.screenShareAudioCapture), audioChanging: false,
+            audioWanted: selection.shareAudio, stopping: false,
             controllerIdentity: selection.controllerIdentity, controlTemporary: selection.controlTemporary };
           screenShareResource = shareResource;
           videoStartupStartedAt = performance.now();
@@ -1384,7 +1413,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     const snapshot = validateCustomScreenShareQuality(customQuality);
     const currentRoom = activeRoom.value;
     const resource = screenShareResource;
-    if (!currentRoom || !resource || screenShareQualityBusy.value || screenShareSourceBusy.value
+    if (!currentRoom || !resource || resource.sourceChanging || screenShareQualityBusy.value || screenShareSourceBusy.value
         || pendingMedia.value.has(Track.Source.ScreenShare)
         || (!resource.videoSession.needsFrameRateRecovery && resource.quality === quality && (quality !== 'custom'
           || (resource.customQuality.resolution === snapshot.resolution && resource.customQuality.fps === snapshot.fps
@@ -1422,7 +1451,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     }
     const desktop = window.lycanDesktop;
     const selectSource = options?.events?.selectNativeScreenSource;
-    if (!desktop || !selectSource || !currentRoom || !resource || screenShareSourceBusy.value
+    if (!desktop || !selectSource || !currentRoom || !resource || resource.sourceChanging || screenShareSourceBusy.value
       || screenShareQualityBusy.value || pendingMedia.value.has(Track.Source.ScreenShare)
       || currentRoom.state !== ConnectionState.Connected) return false;
     screenShareSourceBusy.value = true;
@@ -1456,16 +1485,17 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     return applyScreenShareAudioEnabled(enabled);
   }
 
-  async function applyScreenShareAudioEnabled(enabled: boolean): Promise<boolean> {
+  async function applyScreenShareAudioEnabled(enabled: boolean, preserveIntent = false): Promise<boolean> {
     const currentRoom = activeRoom.value;
     const resource = screenShareResource;
     const desktop = window.lycanDesktop;
     if (!desktop || !currentRoom || !resource?.captureSessionId || resource.audioChanging || resource.stopping
-      || resource.controlTemporary
+      || resource.controlTemporary || (resource.sourceChanging && !preserveIntent)
       || screenShareQualityBusy.value || pendingMedia.value.has(Track.Source.ScreenShare)
       || currentRoom.state !== ConnectionState.Connected
       || currentRoom.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track !== resource.videoTrack) return false;
     const operations = pendingMedia.value;
+    if (!preserveIntent) resource.audioWanted = enabled;
     const isCurrentTask = () => activeRoom.value === currentRoom && pendingMedia.value === operations
       && screenShareResource === resource && !resource.stopping;
     resource.audioChanging = true;

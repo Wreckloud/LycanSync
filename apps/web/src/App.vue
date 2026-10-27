@@ -90,6 +90,7 @@ const captureSourceType = ref<'window' | 'screen'>('window');
 const captureQuality = ref<ScreenShareQualityId>('standard');
 const captureCustomQuality = ref<CustomScreenShareQuality>({ ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY });
 const selectedCaptureSourceId = ref('');
+const captureFollowGameAvailable = ref(false);
 const captureSourceNotice = ref('');
 const capturePicker = ref<InstanceType<typeof ScreenSharePicker> | null>(null);
 const captureSourcesElement = computed(() => capturePicker.value?.sourcesElement);
@@ -245,6 +246,7 @@ function selectCaptureSource(sourceId: string | null, captureSettings?: ScreenSh
   if (sourceId !== null && !request.sources.some((source) => source.id === sourceId)) return;
   if (sourceId === null) {
     // 取消只丢弃本次草稿，不能改变下一次共享或菜单里的自定义选择。
+    selectedCaptureSourceId.value = '';
     captureQuality.value = request.quality;
     captureCustomQuality.value = { ...request.customQuality };
   }
@@ -330,6 +332,14 @@ function requestNativeScreenSource(
 watch(captureSourceType, () => {
   if (!captureSources.value.some((source) => source.id === selectedCaptureSourceId.value)) selectedCaptureSourceId.value = '';
   void nextTick().then(refreshVisibleSourceThumbnails);
+});
+watch(selectedCaptureSourceId, (sourceId) => {
+  captureFollowGameAvailable.value = false;
+  if (!desktop) return;
+  // 只准备当前选中窗口的身份和分类，不采集、不发布；真实启动仍重新校验身份。
+  void desktop.prepareNativeVideoSource(sourceId || null).then((result) => {
+    if (selectedCaptureSourceId.value === sourceId) captureFollowGameAvailable.value = result.followGame === 'league';
+  }).catch((error) => console.error('共享来源准备未完成', error));
 });
 async function changeScreenShareQuality(quality: ScreenShareQualityId,
   customQuality = localParticipant.value?.isScreenShareEnabled ? rtc.currentCustomScreenShareQuality : captureCustomQuality.value) {
@@ -1331,7 +1341,7 @@ function participantListening(participant: Participant) {
       @update:share-audio="updateCaptureShareAudio"
       :selected-id="selectedCaptureSourceId" :audio-mode="captureAudioMode" :audio-ready="captureAudioCapabilityReady"
       :audio-failed="captureAudioCapabilityFailed" :loading="nativeSourceLoading" :error="nativeSourceError" :notice="captureSourceNotice"
-      :settings-failure="rtc.screenShareSettingsFailure"
+      :settings-failure="rtc.screenShareSettingsFailure" :follow-game-available="captureFollowGameAvailable"
       @choose="chooseCaptureSource" @refresh-thumbnails="refreshVisibleSourceThumbnails"
       @close="selectCaptureSource(null)" @confirm="selectCaptureSource(selectedCaptureSourceId, $event)" />
     <ScreenShareWindows ref="viewingWindows" :rtc="rtc" :group-name="joinedGroup?.name ?? ''"
