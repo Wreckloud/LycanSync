@@ -1,0 +1,29 @@
+.settings-section { display: grid; align-content: start; gap: 16px; width: 100%; max-width: 820px; color: var(--text); font-size: 14px; line-height: 1.6; }
+.settings-section h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.settings-section p { margin: 0; color: var(--muted); }
+.settings-section small { color: var(--muted); font-size: 12px; }
+.settings-intro { margin: 0; }
+.settings-block, .settings-row { display: grid; gap: 8px; padding: 0 0 12px; border-bottom: 1px solid var(--border-soft); }
+.settings-row { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: center; gap: 16px; }
+.settings-row > div > h2, .settings-row > label > span { display: block; margin: 0 0 5px; font-size: 14px; font-weight: 600; color: var(--text); }
+.settings-row > div > p { margin: 0 0 8px; }
+.settings-field { display: grid; min-width: 0; gap: 4px; color: var(--muted); }
+.settings-field input { width: 100%; min-height: 40px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font-size: 14px; }
+.settings-field input[readonly] { color: var(--muted); }
+.settings-view :is(.settings-field input, .profile-nickname input, textarea):focus { border-color: var(--subtle); outline: none; }
+.settings-toggle { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid var(--border-soft); cursor: pointer; }
+.settings-toggle > span { display: grid; justify-items: start; gap: 4px; min-width: 0; text-align: left; }
+.settings-toggle strong { font-size: 14px; font-weight: 500; }
+.settings-toggle small { line-height: 1.5; }
+.settings-toggle input { position: relative; appearance: none; width: 36px; height: 20px; flex: 0 0 36px; margin: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--panel-raised); cursor: pointer; }
+.settings-toggle input::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--muted); transition: transform var(--motion-feedback-duration) ease; }
+.settings-toggle input:checked { border-color: var(--accent); background: var(--accent); }
+.settings-toggle input:checked::after { transform: translateX(16px); background: white; }
+.settings-toggle input:disabled { cursor: not-allowed; }
+.settings-toggle.is-disabled { opacity: .65; cursor: not-allowed; }
+.settings-error { color: var(--danger) !important; }
+.settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--button-gap); }
+.settings-section button { font-size: 13px; }
+.settings-section button:not(:disabled):hover { background: var(--panel); border-color: var(--muted); }
+.settings-section button:disabled { opacity: .45; cursor: not-allowed; }
+@media (max-width: 760px) { .settings-row { grid-template-columns: minmax(0, 1fr); } }

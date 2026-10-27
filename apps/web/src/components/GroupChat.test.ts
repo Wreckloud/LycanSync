@@ -34,7 +34,8 @@ function setup() {
   const document = { visibilityState: 'visible', removeEventListener: vi.fn() };
   // 真实组件的任务、监听和销毁；只替换网络、DOM 与图片边界，不启动浏览器或传输文件。
   const chat = scope.run(() => runInNewContext(`${compiled}\n({ refresh, loadOlder, handleVisibilityChange, submit, cancelUpload,
-    list, messages, text, busy, error, historyError, pendingAttachments })`, {
+    list, messages, text, busy, error, historyError, pendingAttachments,
+    initialLoaded, refreshing, pollError, atBottom, unseenMessages, retryRefresh })`, {
     computed, ref, nextTick, onScopeDispose, onMounted: () => {}, defineProps: () => props,
     findMessages, sendMessage, sendFile, compressChatImage: vi.fn(), messagePollDelay: () => 8000,
     AbortController, setTimeout, clearTimeout, Error,
@@ -44,6 +45,8 @@ function setup() {
     refresh: () => Promise<number | null>; submit: () => Promise<void>; cancelUpload: () => void;
     loadOlder: () => Promise<void>; handleVisibilityChange: () => void; list: { value: HTMLElement | null };
     historyError: { value: string };
+    initialLoaded: { value: boolean }; refreshing: { value: boolean }; pollError: { value: string };
+    atBottom: { value: boolean }; unseenMessages: { value: number }; retryRefresh(): Promise<void> | undefined;
     messages: { value: ChatMessage[] }; text: { value: string }; busy: { value: boolean }; error: { value: string };
     pendingAttachments: { value: Array<{ id: string; kind: 'FILE'; file: File; previewUrl: string;
       state: 'pending' | 'uploading' | 'failed' | 'sent'; progress: number; error: string }> };
@@ -64,6 +67,57 @@ it.each([false, true])('首批快照迟于本机发送，保留服务端顺序�
     expect(chat.messages.value.map((entry) => entry.id)).toEqual(includesSent ? ['older', 'sent', 'newer'] : ['older', 'sent']);
     await chat.refresh();
     expect(findMessages.mock.calls.at(-1)?.[1]).toEqual({ afterMessageId: includesSent ? 'newer' : 'older' });
+  } finally { scope.stop(); }
+});
+
+it('首次读取失败不伪装为空会话，手动重试期间不重复创建请求', async () => {
+  const { scope, chat, findMessages } = setup();
+  try {
+    findMessages.mockRejectedValueOnce(new Error('读取失败'));
+    await chat.refresh();
+    expect(chat.initialLoaded.value).toBe(false);
+    expect(chat.pollError.value).toBe('读取失败');
+    const pending = deferred<ChatMessagePage>();
+    findMessages.mockReturnValueOnce(pending.promise);
+    const retry = chat.retryRefresh();
+    chat.retryRefresh();
+    expect(findMessages).toHaveBeenCalledTimes(2);
+    expect(chat.refreshing.value).toBe(true);
+    pending.resolve({ messages: [], hasMore: false });
+    await retry;
+    expect(chat.initialLoaded.value).toBe(true);
+    expect(chat.refreshing.value).toBe(false);
+    expect(chat.pollError.value).toBe('');
+  } finally { scope.stop(); }
+});
+
+it('阅读历史时只累计新取得的消息数，重复快照不重复计数', async () => {
+  const { scope, chat, findMessages } = setup();
+  try {
+    findMessages.mockResolvedValueOnce({ messages: [message('cursor')], hasMore: false });
+    await chat.refresh();
+    await nextTick();
+    chat.atBottom.value = false;
+    findMessages.mockResolvedValueOnce({ messages: [message('new'), message('new')], hasMore: false });
+    await chat.refresh();
+    expect(chat.atBottom.value).toBe(false);
+    expect(chat.unseenMessages.value).toBe(1);
+    findMessages.mockResolvedValueOnce({ messages: [message('new')], hasMore: false });
+    await chat.refresh();
+    expect(chat.unseenMessages.value).toBe(1);
+  } finally { scope.stop(); }
+});
+
+it('附件失败由附件保留错误，不再重复写入输入区错误', async () => {
+  const { scope, chat, sendFile } = setup();
+  try {
+    chat.pendingAttachments.value = [{ id: 'upload', kind: 'FILE', file: new File(['data'], 'file.bin'),
+      previewUrl: '', state: 'pending', progress: 0, error: '' }];
+    sendFile.mockRejectedValueOnce(new Error('文件发送失败'));
+    await chat.submit();
+    expect(chat.pendingAttachments.value[0].state).toBe('failed');
+    expect(chat.pendingAttachments.value[0].error).toBe('文件发送失败');
+    expect(chat.error.value).toBe('');
   } finally { scope.stop(); }
 });
 

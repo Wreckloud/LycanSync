@@ -11,6 +11,7 @@ let frame: number | undefined;
 let owner: Window | undefined;
 let drag: { pointer: number; x: number; left: number; moved: boolean } | undefined;
 let suppressClick = false;
+let scrollPreference: MediaQueryList | undefined;
 
 function update() {
   const element = viewport.value;
@@ -21,7 +22,14 @@ function update() {
 
 function scroll(direction: number) {
   const element = viewport.value;
-  if (element) element.scrollBy({ left: direction * element.clientWidth * 0.75, behavior: 'smooth' });
+  if (!element) return;
+  const reduce = scrollPreference?.matches;
+  element.scrollBy({ left: direction * element.clientWidth * 0.75, behavior: reduce ? 'auto' : 'smooth' });
+}
+
+function stopAnimatedScroll() {
+  const element = viewport.value;
+  if (scrollPreference?.matches && element) element.scrollTo({ left: element.scrollLeft, behavior: 'auto' });
 }
 
 function wheel(event: WheelEvent) {
@@ -68,6 +76,8 @@ function click(event: MouseEvent) {
 onMounted(() => {
   const element = viewport.value!;
   owner = element.ownerDocument.defaultView!;
+  scrollPreference = owner.matchMedia('(prefers-reduced-motion: reduce)');
+  scrollPreference.addEventListener('change', stopAnimatedScroll);
   observer = new element.ownerDocument.defaultView!.ResizeObserver(() => {
     if (frame !== undefined) return;
     frame = owner!.requestAnimationFrame(() => { frame = undefined; update(); });
@@ -77,6 +87,7 @@ onMounted(() => {
   update();
 });
 onScopeDispose(() => {
+  scrollPreference?.removeEventListener('change', stopAnimatedScroll);
   observer?.disconnect();
   if (frame !== undefined) owner?.cancelAnimationFrame(frame);
   drag = undefined;

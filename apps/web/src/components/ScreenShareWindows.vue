@@ -57,6 +57,7 @@ const windows = useScreenShareWindows({
 });
 const entries = windows.entries;
 const watching = computed(() => entries.value.find(entry => entry.kind === 'watching'));
+const inlineExpanded = computed(() => view.mode !== 'collapsed' && !watching.value);
 const controls = computed(() => entries.value.filter((entry): entry is ControlWindow => entry.kind === 'control'));
 const count = computed(() => entries.value.length);
 const controlAvailable = (identity: string) => props.rtc.remoteControlAvailable[identity] === true;
@@ -108,12 +109,12 @@ watch(() => [props.rtc.remoteControlActive, props.rtc.revision] as const, ([acti
     if (!windows.openControl(active.identity)) void props.rtc.exitRemoteControl();
   }
 }, { flush: 'post' });
-defineExpose({ closeAll, disarmAll: windows.disarmAll, count });
+defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded });
 </script>
 
 <template>
   <Teleport v-if="inlineTarget" :to="inlineTarget">
-    <CallViewingPanel v-if="view.mode !== 'collapsed' && !watching" :view="view" :room="rtc.room" :revision="rtc.revision"
+    <CallViewingPanel v-if="inlineExpanded" :view="view" :room="rtc.room" :revision="rtc.revision"
       :avatar="avatar" :listening="rtc.listening"
       :private-control="controlPlaceholder" :reconnecting="rtc.status === 'reconnecting'"
       @detach="detachWatching" @notice="emit('notice', $event)">

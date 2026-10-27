@@ -197,6 +197,7 @@ onScopeDispose(() => {
 .call-control-more { display: grid; place-items: center; width: 20px; padding: 0; border: 1px solid var(--border); border-left: 0; border-radius: 0 6px 6px 0; background: var(--panel-raised); color: var(--muted); cursor: pointer; }
 .call-control-more:hover:not(:disabled), .call-control-more[aria-expanded='true'] { color: var(--text); background: var(--panel-soft); }
 .call-control-more svg.is-open { transform: rotate(180deg); }
+.call-control-more svg { transition: transform var(--motion-feedback-duration) ease; }
 .call-control-menu { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 8px); display: grid; gap: 12px; width: min(260px, calc(100vw - 32px)); max-height: var(--call-menu-max-height); overflow-y: auto; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-raised); color: var(--text); font-size: 13px; line-height: 20px; }
 .call-control-menu header { color: var(--muted); font-size: 12px; }
 .call-control-range, .call-input-level { display: grid; gap: 6px; }

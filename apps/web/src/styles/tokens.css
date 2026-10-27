@@ -1,0 +1,33 @@
+:root {
+  color-scheme: dark;
+  font-size: 18px;
+  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  color: #edf3f8;
+  background: #080b0f;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --background: #080b0f;
+  --panel: #101419;
+  --panel-soft: #151a20;
+  --panel-raised: #1a2027;
+  --border: #29313a;
+  --border-soft: #20272f;
+  --text: #edf3f8;
+  --muted: #8d99a5;
+  --subtle: #68737f;
+  --accent: #3b82f6;
+  --good: #42b883;
+  --danger: #ef5350;
+  --warning: #d99b2b;
+  --chat-font-size: 15px;
+  --voice-bar-height: 56px;
+  --voice-bar-bottom-space: 8px;
+  --rail-control-size: 46px;
+  --member-panel-width: 240px;
+  --rail-edge-space: 14px;
+  --titlebar-height: 43px;
+  --button-height: 32px;
+  --button-padding: 5px 10px;
+  --button-gap: 8px;
+}

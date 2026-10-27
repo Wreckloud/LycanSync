@@ -1,0 +1,47 @@
+:root {
+  --motion-feedback-duration: 100ms;
+  --motion-surface-duration: 120ms;
+  --motion-layout-duration: 210ms;
+  --motion-ease: cubic-bezier(.2, 0, 0, 1);
+}
+
+:where(button, input, select, textarea) {
+  transition: color var(--motion-feedback-duration) ease,
+    background-color var(--motion-feedback-duration) ease,
+    border-color var(--motion-feedback-duration) ease;
+}
+
+/* 弹层关闭直接沿用原清理流程，不用退场动画延长操作资格。 */
+.call-control-menu, .group-menu-options {
+  animation: surface-reveal var(--motion-surface-duration) var(--motion-ease);
+}
+.call-control-menu { --surface-offset: 4px; }
+.group-menu-options { --surface-offset: -4px; }
+.dialog-backdrop { animation: surface-fade var(--motion-surface-duration) ease; }
+.dialog-backdrop > :first-child, .settings-view, .custom-share-quality, .member-search {
+  animation: surface-reveal var(--motion-surface-duration) var(--motion-ease);
+  --surface-offset: 4px;
+}
+
+.group-header-region { display: grid; flex-shrink: 0; grid-template-rows: 1fr; visibility: visible; transition: grid-template-rows var(--motion-layout-duration) var(--motion-ease), opacity var(--motion-surface-duration) ease; }
+.group-header-clip { min-height: 0; overflow: hidden; }
+.group-header-region[aria-hidden='true'] { grid-template-rows: 0fr; opacity: 0; visibility: hidden; transition: grid-template-rows var(--motion-layout-duration) var(--motion-ease), opacity var(--motion-surface-duration) ease, visibility 0s var(--motion-layout-duration); }
+
+.layout-reveal { display: grid; grid-template-rows: 1fr; }
+.layout-reveal-inner { min-height: 0; overflow: hidden; }
+.layout-reveal-enter-active, .layout-reveal-leave-active {
+  transition: grid-template-rows var(--motion-layout-duration) var(--motion-ease), opacity var(--motion-surface-duration) ease;
+}
+.layout-reveal-enter-from, .layout-reveal-leave-to { grid-template-rows: 0fr; opacity: 0; }
+.layout-reveal-leave-active { pointer-events: none; }
+
+@keyframes surface-reveal {
+  from { opacity: 0; transform: translateY(var(--surface-offset, 0px)); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes surface-fade { from { opacity: 0; } to { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --motion-layout-duration: 0ms; }
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}

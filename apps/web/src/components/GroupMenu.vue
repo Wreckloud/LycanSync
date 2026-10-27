@@ -46,6 +46,7 @@ onScopeDispose(() => document.removeEventListener('pointerdown', dismiss));
 .group-menu-trigger h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-menu-trigger svg { flex-shrink: 0; color: var(--muted); }
 .group-menu-trigger svg.is-open { transform: rotate(180deg); }
+.group-menu-trigger svg { transition: transform var(--motion-feedback-duration) ease; }
 .group-menu-options { position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; display: grid; min-width: 180px; padding: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-raised); }
 .group-menu-options button { justify-content: flex-start; padding: 7px 10px; border: 0; background: transparent; text-align: left; }
 .group-menu-options button:hover { background: var(--panel-soft); }

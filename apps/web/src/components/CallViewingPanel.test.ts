@@ -19,6 +19,7 @@ function fixture() {
   const emit = vi.fn();
   const view = reactive({ shares: [], mode: 'grid', expanded: false, membersVisible: true, height: 240, collapse: vi.fn() });
   const context = { defineProps: () => ({ view }), defineEmits: () => emit,
+    useViewingSize: () => ({ width: ref(600), height: ref(300), maximumHeight: ref(420), resizing: ref(false) }),
     computed, ref, watch, onScopeDispose, onMounted: () => {}, VideoQuality, performance,
     api: null as unknown as { panel: { value: unknown }; toggleExpanded(): void; expandMembers(): void;
       escape(event: KeyboardEvent): void; elapsed(share: { observedAt: number }): string; now: { value: number } } };
