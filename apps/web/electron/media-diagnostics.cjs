@@ -90,12 +90,13 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
         if (['nativeVideoFirstFrameTimeout', 'nativeVideoFrameAdjustmentFailed', 'nativeVideoTrackWriteFailed',
           'nativeVideoSessionStopped', 'nativeVideoFailed', 'obsCaptureStopUnconfirmed', 'obsCaptureHostUnavailable',
           'obsCapturePrepareTimeout', 'obsCaptureStartTimeout', 'sharedTextureReleaseTimedOut',
-          'sharedTextureImportFailed', 'sharedTextureTransferFailed', 'sharedTextureReceiverFailed',
+          'sharedTextureImportFailed', 'sharedTextureTransferFailed', 'sharedTextureTransferTimedOut',
+          'sharedTextureReceiverUnavailable', 'sharedTextureReceiverFailed',
           'sharedTextureSlotReleaseFailed', 'captureTargetClosed', 'remoteControlInputFailed',
           'nativeVideoBridgeUnavailable', 'videoSourceExpired', 'videoCaptureAlreadyRunning',
           'obsCaptureGameDetectionFailed', 'obsCaptureVersionUnsupported', 'dxgiMonitorUnavailable',
           'dxgiAdapterMismatch', 'obsGameTargetMismatch', 'obsGameBindingUnavailable',
-          'captureSettingsUnsupported', 'captureBorderAccessDenied', 'obsCaptureHostFailed',
+          'captureSettingsUnsupported', 'captureBorderUnsupported', 'captureBorderAccessDenied', 'obsCaptureHostFailed',
           'obsCaptureHostDisposed', 'obsCaptureSlotReleaseUnavailable', 'obsCaptureAlreadyRunning', 'obsCaptureStopping',
           'obsCaptureProtocolLineTooLong', 'obsCaptureProtocolLineInvalid', 'obsCaptureProtocolJsonInvalid',
           'obsCaptureProtocolEventInvalid', 'obsCaptureFrameInvalid', 'obsCaptureFrameDeliveryFailed',
@@ -121,6 +122,12 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
         if (['auto', 'game', 'bitblt', 'wgc'].includes(entry.requestedMethod)) details.requestedMethod = entry.requestedMethod;
         if (typeof entry.borderAllowed === 'boolean') details.borderAllowed = entry.borderAllowed;
         if (typeof entry.clientArea === 'boolean') details.clientArea = entry.clientArea;
+        if (stage === 'sendTexture') {
+          for (const key of ['rendererAlive', 'rendererLoading', 'backgroundThrottling', 'windowMinimized', 'windowVisible']) {
+            if (typeof entry[key] === 'boolean') details[key] = entry[key];
+          }
+        }
+        // 仍可分析旧版本报告中的切换原因；当前宿主不再执行这条降级路径。
         if (['captureSettingsUnsupported', 'captureBorderAccessDenied', 'obsWindowRuntimeUnavailable'].includes(entry.windowFallbackReason)) {
           details.windowFallbackReason = entry.windowFallbackReason;
         }

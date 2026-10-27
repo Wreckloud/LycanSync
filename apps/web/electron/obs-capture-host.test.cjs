@@ -10,6 +10,11 @@ const { ObsCaptureHostManager } = require('./obs-capture-host.cjs');
 const sessionId = '12345678-1234-1234-1234-123456789abc';
 const monitorName = '\\\\.\\DISPLAY2';
 const flush = () => new Promise((resolve) => setImmediate(resolve));
+function mainRendererFixture() {
+  let throttled = true;
+  return { webContents: { isDestroyed: () => false, getBackgroundThrottling: () => throttled,
+    setBackgroundThrottling: (value) => { throttled = value; } } };
+}
 const idleAudio = { state: 'idle', sampleRate: null, channels: null, packetsReceived: 0, framesReceived: 0,
   silentPackets: 0, droppedAudioChunks: 0, lastError: null };
 const obsRender = { configuration: 1, elapsedMs: 4000, totalFrames: 240, laggedFrames: 2, activeFps: 59.5, averageRenderMs: 1.25 };
@@ -993,7 +998,7 @@ test('主进程的显示器各档启动及共享中切换均走 OBS，不接入�
   const end = main.indexOf('async function stopNativeVideo(', start);
   const calls = [];
   const timings = [];
-  const sandbox = { performance, writeMediaDiagnostic: async (entry) => timings.push(entry),
+  const sandbox = { mainWindow: mainRendererFixture(), performance, writeMediaDiagnostic: async (entry) => timings.push(entry),
     closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
     nativeMediaBridge: {}, randomUUID: () => sessionId,
     nativeVideoSourcesById: new Map([['monitor:7:0', { kind: 'monitor', title: monitorName }]]),
@@ -1075,7 +1080,7 @@ test('游戏来源仍绑定已登记窗口，不接受整屏或丢失的实例�
   assert.equal(spawns.length, 1);
 });
 
-test('普通窗口记录实际方式及无框降级原因，不能中途换方式或伪造边框授权', async (context) => {
+test('普通窗口记录实际方式，不能中途换方式或伪造边框授权', async (context) => {
   for (const request of ['auto', 'bitblt', 'wgc']) {
     const { manager, emit, captureDiagnostics, failures, captureCommands } = fixture(context);
     const target = { kind: 'window', windowId: '34567', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.34567', processCreationTime: '56789', processId: 123, requiresWindowCapture: false };
@@ -1086,16 +1091,14 @@ test('普通窗口记录实际方式及无框降级原因，不能中途换方�
     const captureMethod = request === 'wgc' ? 'wgc-window' : 'bitblt-window';
     const evidence = { event: 'captureEvidence', stage: 'configured', captureMethod,
       requestedMethod: request, borderAllowed: false, clientArea: true,
-      ...(request === 'auto' ? { windowFallbackReason: 'captureBorderAccessDenied' } : {}),
       adapterIndex: 0, sourceWidth: 0, sourceHeight: 0 };
     emit(evidence);
     assert.equal(captureCommands[0].split('|').at(-2), request);
     assert.equal(captureDiagnostics.at(-1).captureMethod, captureMethod);
     assert.equal(captureDiagnostics.at(-1).borderAllowed, false);
     assert.equal(captureDiagnostics.at(-1).clientArea, true);
-    if (request === 'auto') assert.equal(captureDiagnostics.at(-1).windowFallbackReason, 'captureBorderAccessDenied');
     emit({ ...evidence, stage: 'sourceReady', ...(request === 'auto'
-      ? { captureMethod: 'wgc-window' } : { borderAllowed: true }) });
+      ? { windowFallbackReason: 'captureBorderAccessDenied' } : { borderAllowed: true }) });
     assert.deepEqual(failures, ['obsCaptureProtocolEventInvalid']);
   }
 });
@@ -1133,7 +1136,7 @@ test('生产入口先预留窗口身份再启动 OBS，停止先关闭 OBS 再�
   const calls = [];
   const targetState = { alive: true };
   const target = { kind: 'window', windowId: '123', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.123', processCreationTime: '456', processId: 123, requiresWindowCapture: false };
-  const sandbox = { performance, writeMediaDiagnostic: async () => {}, closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
+  const sandbox = { mainWindow: mainRendererFixture(), performance, writeMediaDiagnostic: async () => {}, closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
     nativeMediaBridge: {}, randomUUID: () => sessionId, setTimeout, clearTimeout,
     nativeScreenAudioSession: undefined, lastStoppedNativeVideoSession: undefined,
     nativeVideoSourcesById: new Map([['window:7:0', { kind: 'window', title: 'same title' }]]),
@@ -1170,7 +1173,7 @@ function gameRoutingFixture(classify, startFailure, requiresWindowCapture = fals
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const calls = [];
   let sequence = 0;
-  const sandbox = { performance, writeMediaDiagnostic: async () => {}, closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
+  const sandbox = { mainWindow: mainRendererFixture(), performance, writeMediaDiagnostic: async () => {}, closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
     nativeMediaBridge: {}, randomUUID: () => `routing-${++sequence}`, setTimeout, clearTimeout,
     nativeScreenAudioSession: undefined, lastStoppedNativeVideoSession: undefined,
     nativeVideoSourcesById: new Map([['window:7:0', { kind: 'window', title: 'same title' }]]),
@@ -1198,6 +1201,95 @@ function gameRoutingFixture(classify, startFailure, requiresWindowCapture = fals
   runInNewContext(main.slice(main.indexOf('async function startNativeVideo('), main.indexOf('function validMicrophoneSettings(')), sandbox);
   return { sandbox, calls, start: (settings = { hideCursor: true, hideBorder: true }) => sandbox.startNativeVideo('window:7:0', 120, settings) };
 }
+
+test('只在采集会话期间关闭后台节流，停止和启动失败清理后恢复原值', async () => {
+  for (const initial of [true, false]) {
+    const f = gameRoutingFixture(async () => false);
+    const contents = f.sandbox.mainWindow.webContents;
+    contents.setBackgroundThrottling(initial);
+    const started = await f.start();
+    assert.equal(contents.getBackgroundThrottling(), false);
+    await f.sandbox.stopNativeVideo(started.sessionId);
+    assert.equal(contents.getBackgroundThrottling(), initial);
+  }
+  const failed = gameRoutingFixture(async () => false, 'captureBorderUnsupported');
+  await assert.rejects(failed.start(), /captureBorderUnsupported/);
+  assert.equal(failed.sandbox.mainWindow.webContents.getBackgroundThrottling(), true);
+  assert.equal(failed.sandbox.nativeVideoSession, undefined);
+});
+
+function textureTransferFixture() {
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const events = [], failures = [], releases = [];
+  let complete, reject, referencesReleased;
+  let mainReleases = 0;
+  const renderer = { mainFrame: {}, isDestroyed: () => false, isLoadingMainFrame: () => false,
+    getBackgroundThrottling: () => false };
+  const video = { sessionId, renderer, stopping: false, failureNotified: false, sourceFrameReceived: true,
+    imported: new Map(), pendingSlotReleases: new Set() };
+  const state = { alive: true, closed: false };
+  const imported = { release: () => { mainReleases++; referencesReleased(); } };
+  const sandbox = { performance, nativeVideoSession: video, nativeMediaBridge: {},
+    mainWindow: { isDestroyed: () => false, isMinimized: () => true, isVisible: () => false },
+    helperProcessBridges: new Map([[state, { duplicateSharedTexture: () => ({
+      withImportHandle: callback => callback('opaque'), release: () => {} }) }]]),
+    sharedTexture: {
+      importSharedTexture: options => { referencesReleased = options.allReferencesReleased; return imported; },
+      sendSharedTexture: options => {
+        assert.equal(options.frame, renderer.mainFrame);
+        return new Promise((resolve, fail) => { complete = resolve; reject = fail; });
+      },
+    },
+    releaseNativeVideoSlot: async (_state, id, slot) => releases.push([id, slot]),
+    writeMediaDiagnostic: async event => events.push(event),
+    recordVideoFailure: (stage, _error, _frame, details) => events.push({ stage, ...details }),
+    notifyNativeVideoError: (_video, code) => { failures.push(code); video.stopping = true; },
+  };
+  runInNewContext(main.slice(main.indexOf('function handleNativeSharedTextureFrame('), main.indexOf('async function startNativeVideo(')), sandbox);
+  sandbox.handleNativeSharedTextureFrame(state, { sessionId, slotIndex: 0, pixelFormat: 'bgra',
+    codedSize: { width: 1920, height: 1080 }, contentSize: { width: 1920, height: 1080 }, timestampMicros: 1 });
+  return { sandbox, video, imported, events, failures, releases, complete: () => complete(), reject: error => reject(error),
+    mainReleases: () => mainReleases };
+}
+
+test('在途纹理不能提前释放或复用，交付完成后仅归还一次', async () => {
+  const f = textureTransferFixture();
+  f.video.imported.get(0).release();
+  assert.equal(f.mainReleases(), 0);
+  assert.equal(f.releases.length, 0);
+  f.complete();
+  await flush();
+  assert.equal(f.mainReleases(), 1);
+  assert.deepEqual(f.releases, [[sessionId, 0]]);
+  assert.equal(f.video.imported.size, 0);
+  assert.deepEqual(f.failures, []);
+});
+
+test('交付超时保留安全停止，导出页面状态，不重试同一纹理', async () => {
+  const f = textureTransferFixture();
+  f.reject(new Error('transfer shared texture timed out after 1000ms, ensure you have registered receiver at renderer process.'));
+  await flush();
+  assert.deepEqual(f.failures, ['sharedTextureTransferTimedOut']);
+  const event = f.events.find(entry => entry.stage === 'sendTexture');
+  assert.equal(event.rendererAlive, true);
+  assert.equal(event.windowMinimized, true);
+  assert.equal(event.backgroundThrottling, false);
+  assert.equal(event.code, 'sharedTextureTransferTimedOut');
+  assert.equal(f.mainReleases(), 1);
+});
+
+test('主动停止或新会话开始后的迟到交付失败只回收旧引用，不误报新会话故障', async () => {
+  for (const stopped of [true, false]) {
+    const f = textureTransferFixture();
+    if (stopped) f.video.stopping = true;
+    else f.sandbox.nativeVideoSession = { sessionId: 'next' };
+    f.reject(new Error('transfer shared texture timed out after 1000ms, ensure you have registered receiver at renderer process.'));
+    await flush();
+    assert.deepEqual(f.failures, []);
+    assert.deepEqual(f.events, []);
+    assert.equal(f.mainReleases(), 1);
+  }
+});
 
 test('手动窗口方式跳过游戏猜测，手动游戏仍只绑定原窗口', async () => {
   for (const method of ['bitblt', 'wgc', 'game']) {
@@ -1325,7 +1417,7 @@ test('停止先禁用远控并释放按键，再等待 OBS 退出后释放身份
         },
         stopVideo: async () => { calls.push('release'); sandbox.mediaHelper.videoCapture = undefined; return { changed: true }; } },
       recordVideoFailure: () => calls.push('report-revoke-failure'), releaseHelperProcessBridge: () => {} };
-    runInNewContext(main.slice(main.indexOf('async function stopObsVideo('), main.indexOf('function validMicrophoneSettings(')), sandbox);
+    runInNewContext(main.slice(main.indexOf('function restoreNativeVideoBackgroundThrottling('), main.indexOf('function validMicrophoneSettings(')), sandbox);
     const stopped = sandbox.stopNativeVideo(sessionId);
     const rejected = revokeFailure ? assert.rejects(stopped, /remoteControlInputFailed/) : undefined;
     assert.equal(sandbox.nativeVideoSession.stopping, true);
@@ -1368,7 +1460,7 @@ test('纹理释放超时只在宿主退出及身份释放确认后恢复重开�
         sandbox.mediaHelper.videoCapture = undefined; return { changed: true };
       } },
     };
-    runInNewContext(main.slice(main.indexOf('async function stopObsVideo('), main.indexOf('function validMicrophoneSettings(')), sandbox);
+    runInNewContext(main.slice(main.indexOf('function restoreNativeVideoBackgroundThrottling('), main.indexOf('function validMicrophoneSettings(')), sandbox);
     const stopping = sandbox.stopNativeVideo(sessionId);
     assert.equal(video.stopping, true);
     assert.equal(sandbox.nativeVideoSession, video);
@@ -1492,7 +1584,7 @@ test('启动失败后的宿主停止未确认，主进程也保留身份阻止�
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = main.indexOf('async function startNativeVideo(');
   const end = main.indexOf('async function stopNativeVideo(', start);
-  const sandbox = { performance, writeMediaDiagnostic: async () => {}, closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
+  const sandbox = { mainWindow: mainRendererFixture(), performance, writeMediaDiagnostic: async () => {}, closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
     nativeMediaBridge: {}, randomUUID: () => sessionId,
     nativeVideoSourcesById: new Map([['monitor:7:0', { kind: 'monitor', title: monitorName }]]),
     obsCaptureHost: { start: async () => { throw new Error('start failed'); },

@@ -13,6 +13,7 @@ const props = withDefaults(defineProps<{
   audioMode: NativeScreenAudioMode; audioReady: boolean; audioFailed: boolean; shareAudio: boolean;
   loading: boolean; error: string; notice: string;
   customQuality?: CustomScreenShareQuality;
+  settingsFailure?: { sourceId: string; code: string } | null;
 }>(), { customQuality: () => ({ ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY }) });
 const emit = defineEmits<{
   close: []; confirm: [settings: ScreenSharePreferences]; choose: [id: string]; refreshThumbnails: [];
@@ -27,6 +28,14 @@ const settingsError = ref('');
 const sources = computed(() => props.sources.filter((source) => source.type === props.sourceType));
 const quality = computed(() => screenShareQuality(props.quality, props.customQuality));
 const canChoose = computed(() => props.audioReady && !props.audioFailed);
+const needsBorderPermission = computed(() => props.sourceType === 'window'
+  && props.settingsFailure?.sourceId === props.selectedId && captureSettings.value.hideBorder
+  && ['auto', 'wgc'].includes(captureSettings.value.windowMethod ?? 'auto')
+  && ['captureBorderUnsupported', 'captureBorderAccessDenied'].includes(props.settingsFailure.code));
+const borderNotice = computed(() => !needsBorderPermission.value ? ''
+  : props.settingsFailure?.code === 'captureBorderUnsupported'
+    ? '此窗口需要系统采集，当前 Windows 无法隐藏边框。可允许本次显示边框，或在高级选项中选择兼容采集。'
+    : '此窗口的无边框权限未获批准。可允许本次显示边框，或在高级选项中选择兼容采集。');
 const canConfirm = computed(() => canChoose.value && !props.error && !settingsError.value
   && props.sources.some((source) => source.id === props.selectedId));
 const feedbackStatus = computed(() => {
@@ -47,6 +56,8 @@ const background = new Map<HTMLElement, boolean>();
 
 function confirm() {
   if (!canConfirm.value) return;
+  // 按钮已明确说明本次边框许可；只在用户点击后改变设置，不持久化授权。
+  if (needsBorderPermission.value) captureSettings.value.hideBorder = false;
   emit('confirm', { ...captureSettings.value,
     windowMethod: props.sourceType === 'window' ? captureSettings.value.windowMethod : 'auto',
     hideBorder: props.sourceType !== 'window' || captureSettings.value.hideBorder });
@@ -133,8 +144,8 @@ defineExpose({ sourcesElement });
         <details class="capture-advanced">
           <summary>高级选项</summary>
           <label v-if="sourceType === 'window'" class="capture-method">窗口采集方式
-            <select v-model="captureSettings.windowMethod">
-              <option value="auto">自动（优先无边框）</option>
+            <select v-model="captureSettings.windowMethod" aria-label="窗口采集方式">
+              <option value="auto">自动</option>
               <option value="game">游戏采集</option>
               <option value="bitblt">兼容采集（BitBlt）</option>
               <option value="wgc">系统窗口采集（WGC）</option>
@@ -145,18 +156,18 @@ defineExpose({ sourcesElement });
             <input type="checkbox" :checked="!captureSettings.hideBorder"
               @change="captureSettings.hideBorder = !($event.target as HTMLInputElement).checked" />允许显示系统共享边框（仅本次）
           </label>
-          <p v-if="sourceType === 'window'">普通窗口分享应用内容区域；手动指定方式不可用时会提示，不自动换方式。Win10 的 WGC 通常需要允许系统边框，兼容采集可能不适合部分硬件加速应用。</p>
+          <p v-if="sourceType === 'window'">普通窗口分享应用内容区域；自动方式无法满足本次边框或光标设置时会提示，不自动改用兼容采集。Win10 的系统窗口采集通常需要允许边框；兼容采集可能不适合部分硬件加速应用。</p>
           <p v-else>整屏使用 DXGI，无系统共享黄框。高级选项仅用于本次共享。</p>
         </details>
         <footer class="card-actions">
           <button type="button" class="settings-button" @click="emit('close')">取消</button>
           <InlineFeedback class="card-feedback" :message="audioFailed ? '无法确认共享能力，请关闭后重试。' : error || settingsError"
-            :status="feedbackStatus" />
+            :status="borderNotice || feedbackStatus" />
           <div class="capture-confirm card-actions-end">
             <label class="capture-audio-option"><input type="checkbox" aria-label="共享音频" :checked="shareAudio"
               :disabled="!audioReady || audioMode === 'unavailable'" @change="emit('update:shareAudio', ($event.target as HTMLInputElement).checked)" />
               共享音频</label>
-            <button type="button" class="confirm-button" :disabled="!canConfirm" @click="confirm">开始共享</button>
+            <button type="button" class="confirm-button" :disabled="!canConfirm" @click="confirm">{{ needsBorderPermission ? '允许边框并共享' : '开始共享' }}</button>
           </div>
         </footer>
       </section>

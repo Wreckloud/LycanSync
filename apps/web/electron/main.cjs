@@ -158,13 +158,14 @@ function recordSourceTiming(stage, startedAt, sourceCount) {
   void writeMediaDiagnostic({ stage, durationMs: Math.round(performance.now() - startedAt), sourceCount });
 }
 
-function recordVideoFailure(stage, error, frame) {
+function recordVideoFailure(stage, error, frame, details = {}) {
   const code = String(error?.message ?? error).match(/(?:^|: )([a-z][A-Za-z0-9]{0,63})$/)?.[1];
   void writeMediaDiagnostic({
     stage, code, message: String(error?.message ?? error).slice(0, 2000),
     appVersion: app.getVersion(), electronVersion: process.versions.electron,
     windowsVersion: osRelease(), gpu: app.getGPUFeatureStatus(),
     pixelFormat: frame?.pixelFormat, codedSize: frame?.codedSize,
+    ...details,
   });
   // 只在故障时查询 GPU，不记录窗口、纹理句柄或账号信息。
   void app.getGPUInfo('basic').then((gpu) => writeMediaDiagnostic({
@@ -203,7 +204,7 @@ const obsCaptureHost = new ObsCaptureHostManager({
     if (video && video.sessionId === state.videoSessionId && !video.stopping) {
       if (error.message === 'captureTargetClosed') void writeMediaDiagnostic({ stage: 'screenTargetClosed', code: error.message });
       else recordVideoFailure('obsCaptureHost', error);
-      const code = ['captureTargetClosed', 'captureSettingsUnsupported', 'captureBorderAccessDenied',
+      const code = ['captureTargetClosed', 'captureSettingsUnsupported', 'captureBorderUnsupported', 'captureBorderAccessDenied',
         'obsGameBindingUnavailable', 'obsGameTargetMismatch', 'obsWindowBindingUnavailable', 'obsWindowTargetMismatch',
         'obsWindowCaptureStartFailed', 'obsWindowRuntimeUnavailable', 'obsWindowSourceUnavailable',
         'sharedTextureGpuWaitFailed', 'sharedTextureGpuStalled', 'sharedTextureReleaseFailed', 'sharedTextureAcquireFailed',
@@ -773,7 +774,7 @@ function handleNativeSharedTextureFrame(state, frame) {
     importStage = 'sendTexture';
     transferPending = true;
     void sharedTexture.sendSharedTexture({
-      frame: mainWindow.webContents.mainFrame,
+      frame: video.renderer.mainFrame,
       importedSharedTexture: imported,
     }, 'native-screen-frame', video.sessionId).then(() => {
       transferPending = false;
@@ -784,9 +785,21 @@ function handleNativeSharedTextureFrame(state, frame) {
       }
     }).catch((error) => {
       transferPending = false;
-      if (!video.failureNotified) recordVideoFailure('sendTexture', error, frame);
+      const code = /^transfer shared texture timed out after 1000ms,/.test(String(error?.message))
+        ? 'sharedTextureTransferTimedOut' : 'sharedTextureTransferFailed';
+      if (!video.failureNotified && !video.stopping && nativeVideoSession === video) {
+        const rendererAlive = !video.renderer.isDestroyed();
+        recordVideoFailure('sendTexture', error, frame, { code,
+          rendererAlive,
+          ...(rendererAlive ? { rendererLoading: video.renderer.isLoadingMainFrame(),
+            backgroundThrottling: video.renderer.getBackgroundThrottling() } : {}),
+          ...(mainWindow && !mainWindow.isDestroyed() ? { windowMinimized: mainWindow.isMinimized(),
+            windowVisible: mainWindow.isVisible() } : {}),
+          importedCount: video.imported.size, pendingReleaseCount: video.pendingSlotReleases.size });
+      }
       releaseImport();
-      notifyNativeVideoError(video, 'sharedTextureTransferFailed');
+      // 超时后可能仍有迟到交付；由原有停止流程回收，不能直接重发或复用槽位。
+      if (!video.stopping && nativeVideoSession === video) notifyNativeVideoError(video, code);
     });
   } catch (error) {
     transferPending = false;
@@ -819,6 +832,11 @@ async function startNativeVideo(sourceId, maxFps, settings, resolution) {
       ...(typeof settings?.hideBorder === 'boolean' ? { borderAllowed: !settings.hideBorder } : {}) } : {}),
     hostReused: Boolean(obsCaptureHost.state && !obsCaptureHost.state.closed && !obsCaptureHost.state.failed) });
   try {
+    video.renderer = mainWindow?.webContents;
+    if (!video.renderer || video.renderer.isDestroyed()) throw new Error('sharedTextureReceiverUnavailable');
+    video.backgroundThrottling = video.renderer.getBackgroundThrottling();
+    // 纹理接收与画布复制依赖主页面；共享期间切到游戏不能把该页面降为后台节流。
+    video.renderer.setBackgroundThrottling(false);
     const reservation = mediaHelper.reserveVideo(sessionId, sourceId);
     video.targetState = mediaHelper.videoCapture?.state;
     let target = await reservation;
@@ -853,9 +871,18 @@ async function startNativeVideo(sourceId, maxFps, settings, resolution) {
       recordVideoFailure('stopObsCaptureAfterStartFailure', stopError);
       throw new Error('obsCaptureStopUnconfirmed');
     }
-    if (nativeVideoSession === video) nativeVideoSession = undefined;
+    if (nativeVideoSession === video) {
+      restoreNativeVideoBackgroundThrottling(video);
+      nativeVideoSession = undefined;
+    }
     throw error;
   }
+}
+
+function restoreNativeVideoBackgroundThrottling(video) {
+  if (!video.renderer || video.renderer.isDestroyed() || video.backgroundThrottling === undefined) return;
+  video.renderer.setBackgroundThrottling(video.backgroundThrottling);
+  video.backgroundThrottling = undefined;
 }
 
 async function stopObsVideo(video) {
@@ -914,7 +941,10 @@ async function stopNativeVideo(sessionId) {
       await stopObsVideo(video);
     }
     if (controlFailure) throw controlFailure;
-    if (nativeVideoSession === video) nativeVideoSession = undefined;
+    if (nativeVideoSession === video) {
+      restoreNativeVideoBackgroundThrottling(video);
+      nativeVideoSession = undefined;
+    }
     lastStoppedNativeVideoSession = sessionId;
     void writeMediaDiagnostic({ stage: 'screenVideoStopped', durationMs: Math.round(performance.now() - startedAt) });
     return { changed: true };

@@ -61,7 +61,6 @@ struct HostState {
   const char *capture_method = "dxgi";
   std::string requested_method = "auto";
   bool border_allowed = false;
-  const char *window_fallback_reason = nullptr;
   bool gpu_wait_reported = false;
   size_t next_slot = 0;
   std::optional<std::chrono::steady_clock::time_point> mutex_wait_started;
@@ -134,7 +133,6 @@ void write_capture_evidence(std::string_view stage, uint32_t width = 0, uint32_t
     std::cout << ",\"requestedMethod\":\"" << g_host.requested_method << "\",\"borderAllowed\":"
               << (g_host.border_allowed ? "true" : "false") << ",\"clientArea\":"
               << (g_host.game_source ? "false" : "true");
-    if (g_host.window_fallback_reason) std::cout << ",\"windowFallbackReason\":\"" << g_host.window_fallback_reason << "\"";
   }
   if (!g_host.window_source) std::cout << ",\"adapterMatched\":true";
   const int dxgi_api = g_dxgi_api.load();
@@ -732,7 +730,7 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
     source = create_game_video_source(window_target, capture_cursor_argument == "0", source_error);
   } else if (window_source) {
     source = create_window_video_source(window_target, capture_cursor_argument == "0",
-        hide_border_argument == "1", window_method, source_error, g_host.window_fallback_reason);
+        hide_border_argument == "1", window_method, source_error);
     if (source) g_host.capture_method = window_video_method(source);
   } else {
     obs_data_t *settings = obs_data_create();

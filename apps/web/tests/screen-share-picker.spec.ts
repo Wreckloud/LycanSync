@@ -15,27 +15,62 @@ import '/src/styles.css';
 createApp({ components: { ScreenSharePicker }, setup() {
   const open = ref(false), quality = ref('standard'), sourceType = ref('window'), shareAudio = ref(true);
   const selectedId = ref(''), error = ref(''), confirmed = ref(false);
+  const settingsFailure = ref(null), confirmedSettings = ref(null);
   const image = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" fill="#22374d"/></svg>');
   const sources = [{ id:'window:1:0', name:'测试窗口', type:'window', thumbnail:image },
     { id:'window:1:1', name:'游戏窗口', type:'window', thumbnail:image },
     { id:'window:1:2', name:'长名称窗口的预览区域保持相同大小', type:'window', thumbnail:image },
     { id:'monitor:1:0', name:'屏幕 1', type:'screen', thumbnail:image }];
   window.pickerTest = { fail: () => { error.value = '来源读取失败'; }, recover: () => { error.value = ''; },
-    confirmed: () => confirmed.value };
+    confirmed: () => confirmed.value,
+    borderFailure: () => { settingsFailure.value = {sourceId:'window:1:0',code:'captureBorderUnsupported'}; },
+    settings: () => confirmedSettings.value };
   return () => h('div', [h('button', { onClick: () => { open.value=true; } }, '打开选择器'),
     h('button', '背景按钮'), open.value ? h(ScreenSharePicker, {
       sources:sources.filter(source => source.type === sourceType.value), sourceType:sourceType.value, quality:quality.value, shareAudio:shareAudio.value,
       selectedId:selectedId.value, audioMode:'process', audioReady:true, audioFailed:false, loading:false,
-      error:error.value, notice:'', 'onUpdate:sourceType': value => {sourceType.value=value;selectedId.value='';},
+      error:error.value, notice:'', settingsFailure:settingsFailure.value,
+      'onUpdate:sourceType': value => {sourceType.value=value;selectedId.value='';},
       'onUpdate:quality': value => {quality.value=value;}, 'onUpdate:shareAudio': value => {shareAudio.value=value;},
       onChoose:value => {selectedId.value=value;}, onClose:() => {open.value=false;},
-      onConfirm:() => {confirmed.value=true;open.value=false;}
+      onConfirm:settings => {confirmedSettings.value=settings;confirmed.value=true;open.value=false;}
     }) : null]);
 }}).mount('#root');
 ` });
   });
   await page.goto('/');
   await page.getByRole('button', { name: '打开选择器' }).click();
+});
+
+test('同一窗口无框失败后明确确认本次边框许可，窄窗口按钮可见，重开不继承许可', async ({ page }, testInfo) => {
+  await page.getByRole('button', { name: '测试窗口', exact: true }).click();
+  await page.evaluate(() => (window as unknown as { pickerTest: { borderFailure(): void } }).pickerTest.borderFailure());
+  const allow = page.getByRole('button', { name: '允许边框并共享', exact: true });
+  await expect(allow).toBeEnabled();
+  await expect(page.getByRole('dialog')).toContainText('当前 Windows 无法隐藏边框');
+  await page.setViewportSize({ width: 420, height: 720 });
+  await expect(allow).toBeInViewport();
+  expect(await page.getByRole('dialog').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('picker-border-permission.png') });
+  await allow.click();
+  expect(await page.evaluate(() => (window as unknown as { pickerTest: { settings(): unknown } }).pickerTest.settings()))
+    .toMatchObject({ hideBorder: false, windowMethod: 'auto' });
+  await page.getByRole('button', { name: '打开选择器' }).click();
+  await page.getByText('高级选项', { exact: true }).click();
+  await expect(page.getByRole('checkbox', { name: '允许显示系统共享边框（仅本次）' })).not.toBeChecked();
+});
+
+test('另选窗口或手动选择兼容采集，不擅自允许系统边框', async ({ page }) => {
+  await page.evaluate(() => (window as unknown as { pickerTest: { borderFailure(): void } }).pickerTest.borderFailure());
+  await page.getByRole('button', { name: '游戏窗口', exact: true }).click();
+  await expect(page.getByRole('button', { name: '开始共享', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: '测试窗口', exact: true }).click();
+  await expect(page.getByRole('button', { name: '允许边框并共享', exact: true })).toBeEnabled();
+  await page.getByText('高级选项', { exact: true }).click();
+  await page.getByLabel('窗口采集方式', { exact: true }).selectOption('bitblt');
+  await page.getByRole('button', { name: '开始共享', exact: true }).click();
+  expect(await page.evaluate(() => (window as unknown as { pickerTest: { settings(): unknown } }).pickerTest.settings()))
+    .toMatchObject({ hideBorder: true, windowMethod: 'bitblt' });
 });
 
 test('四种画质切换、整屏预览、失败阻止确认和恢复', async ({ page }, testInfo) => {

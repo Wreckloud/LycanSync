@@ -405,6 +405,28 @@ function configureNativeScreenDesktop(options: {
 }
 
 describe('native screen share wiring', () => {
+  it.each(['captureBorderUnsupported', 'captureBorderAccessDenied'])('%s 保留同一来源的可操作反馈，不发布画面，下一次成功后清除', async (code) => {
+    configureNativeScreenDesktop({ screenAudio: false });
+    rtcMocks.nativeStarts.mockRejectedValueOnce(new Error(code));
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false },
+      events: { selectNativeScreenSource: rtcMocks.selectedSources },
+    }))!;
+    try {
+      await rtc.join('border-failure');
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
+      expect(rtc.screenShareSettingsFailure.value).toEqual({ sourceId: 'window:test:0', code });
+      expect(rtc.notice.value).toContain('边框');
+      expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare)).toBeUndefined();
+      expect(rtcMocks.nativeStarts).toHaveBeenCalledTimes(1);
+      rtcMocks.selectedSources.mockResolvedValueOnce({ sourceId: 'window:test:0', shareAudio: false,
+        captureSettings: { hideCursor: false, hideBorder: false, windowMethod: 'wgc' } });
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
+      expect(rtc.screenShareSettingsFailure.value).toBeNull();
+      expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare)).toBeDefined();
+    } finally { await rtc.leave(); scope.stop(); }
+  });
   it('节流资格只属于已发布的当前房间，重连或远控恢复高清，旧会话警告不污染新房间', async () => {
     configureNativeScreenDesktop({ screenAudio: true });
     const scope = effectScope();

@@ -53,7 +53,7 @@ void prepare_window_capture(void *opaque) {
     if (request.hide_border) {
       if (!Foundation::Metadata::ApiInformation::IsPropertyPresent(
           L"Windows.Graphics.Capture.GraphicsCaptureSession", L"IsBorderRequired")) {
-        request.error = "captureSettingsUnsupported";
+        request.error = "captureBorderUnsupported";
         return;
       }
       request.error = "captureBorderAccessDenied";
@@ -116,8 +116,7 @@ const char *window_video_method(obs_source_t *source) {
 }
 
 obs_source_t *create_window_video_source(const WindowVideoTarget &target, bool hide_cursor,
-    bool hide_border, std::string_view method, const char *&error, const char *&fallback_reason) {
-  fallback_reason = nullptr;
+    bool hide_border, std::string_view method, const char *&error) {
   if (!window_video_target_valid(target)) { error = "captureTargetClosed"; return nullptr; }
   if (!obs_get_latest_input_type_id("lycansync_window_capture")) { error = "obsWindowBindingUnavailable"; return nullptr; }
   const int requested = method == "auto" ? 0 : method == "bitblt" ? 1 : method == "wgc" ? 2 : -1;
@@ -142,14 +141,8 @@ obs_source_t *create_window_video_source(const WindowVideoTarget &target, bool h
       WindowPreparation preparation{hide_cursor, hide_border};
       // 来源尚未加入场景，不会先启动 WGC 再补问边框授权。
       if (status.available) obs_queue_task(OBS_TASK_GRAPHICS, prepare_window_capture, &preparation, true);
-      if (preparation.error && requested == 0) {
-        fallback_reason = preparation.error;
-        obs_data_set_int(settings, "method", 1);
-        // 视频来源 update 延迟到后续视频循环；这里只重建尚未启动的来源，不能带着旧方式进入场景。
-        obs_source_release(source);
-        source = obs_source_create("lycansync_window_capture", "LycanSync selected window", settings, nullptr);
-        if (!source) error = "obsWindowSourceUnavailable";
-      } else error = preparation.error;
+      // 自动选择也必须满足本次授权；不能把需要 WGC 的窗口静默改成 BitBlt。
+      error = preparation.error;
     }
     if (!error) error = window_video_failure(source, target);
   }
