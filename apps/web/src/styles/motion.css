@@ -2,6 +2,7 @@
   --motion-feedback-duration: 100ms;
   --motion-surface-duration: 120ms;
   --motion-layout-duration: 210ms;
+  --motion-expand-duration: 160ms;
   --motion-ease: cubic-bezier(.2, 0, 0, 1);
 }
 
@@ -19,21 +20,21 @@
 .surface-side-enter-from { opacity: 0; transform: translateX(-4px); }
 .surface-side-leave-to { opacity: 0; transform: translateX(4px); }
 .surface-panel-leave-active, .surface-side-leave-active { pointer-events: none; }
-.voice-panel-enter-active, .voice-panel-leave-active {
-  transition: opacity var(--motion-layout-duration) var(--motion-ease), clip-path var(--motion-layout-duration) var(--motion-ease);
-}
-.voice-panel-enter-from, .voice-panel-leave-to { opacity: 0; clip-path: inset(0 0 100%); }
-.voice-panel-leave-active { pointer-events: none; }
 .group-menu-enter-active, .group-menu-leave-active {
   transition: opacity var(--motion-surface-duration) var(--motion-ease), transform var(--motion-surface-duration) var(--motion-ease);
 }
 .group-menu-enter-from, .group-menu-leave-to { opacity: 0; transform: translateY(-4px); }
 .group-menu-leave-active { pointer-events: none; }
-.dialog-backdrop { animation: surface-fade var(--motion-surface-duration) ease; }
-.dialog-backdrop > :first-child, .custom-share-quality {
-  animation: surface-reveal var(--motion-surface-duration) var(--motion-ease);
-  --surface-offset: 4px;
+.dialog-enter-active, .dialog-leave-active { animation: none; transition: opacity var(--motion-surface-duration) var(--motion-ease); }
+.dialog-enter-active > :first-child, .dialog-leave-active > :first-child {
+  animation: none;
+  transition: transform var(--motion-surface-duration) var(--motion-ease);
 }
+.dialog-enter-from, .dialog-leave-to { opacity: 0; }
+.dialog-enter-from > :first-child, .dialog-leave-to > :first-child { transform: translateY(4px); }
+.entry-mode-enter-active, .entry-mode-leave-active { transition: opacity var(--motion-expand-duration) var(--motion-ease), transform var(--motion-expand-duration) var(--motion-ease); }
+.entry-mode-leave-active { position: absolute; top: 0; right: 0; left: 0; pointer-events: none; }
+.entry-mode-enter-from, .entry-mode-leave-to { opacity: 0; transform: translateY(4px); }
 
 .group-header-region { display: grid; grid-template-rows: 1fr; visibility: visible; transition: opacity var(--motion-surface-duration) ease; }
 .group-header-clip { min-height: 0; overflow: visible; }
@@ -54,12 +55,6 @@
 .member-search-enter-active, .member-search-leave-active { transition: opacity var(--motion-layout-duration) var(--motion-ease), clip-path var(--motion-layout-duration) var(--motion-ease); }
 .member-search-enter-from, .member-search-leave-to { opacity: 0; clip-path: inset(0 0 0 100%); }
 .member-search-leave-active { pointer-events: none; }
-
-@keyframes surface-reveal {
-  from { opacity: 0; transform: translateY(var(--surface-offset, 0px)); }
-  to { opacity: 1; transform: translateY(0); }
-}
-@keyframes surface-fade { from { opacity: 0; } to { opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
   :root { --motion-layout-duration: 0ms; }

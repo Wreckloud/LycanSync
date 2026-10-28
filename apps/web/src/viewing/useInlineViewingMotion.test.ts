@@ -33,7 +33,7 @@ function fixture() {
   const target = shallowRef<HTMLElement | null>(element as unknown as HTMLElement);
   const expanded = ref(false);
   const scope = effectScope();
-  scope.run(() => useInlineViewingMotion(target, () => expanded.value));
+  const motion = scope.run(() => useInlineViewingMotion(target, () => expanded.value))!;
 
   async function change(open: boolean, from: number, to: number) {
     height = from;
@@ -42,7 +42,7 @@ function fixture() {
     height = to;
     await nextTick();
   }
-  return { scope, target, expanded, element, animate, animations, preference, change, conversation, observers };
+  return { scope, target, expanded, element, animate, animations, preference, change, conversation, observers, motion, setHeight(value: number) { height = value; } };
 }
 
 it('只过渡语音区高度，不变更媒体或缩放视频元素，完成后不留下固定高度', async () => {
@@ -105,5 +105,32 @@ it('只给右栏让出覆盖高度，移除覆盖层后清除占位，迟到观�
   f.conversation.style.setProperty.mockClear();
   f.observers[0]!.update();
   expect(f.conversation.style.setProperty).not.toHaveBeenCalled();
+  f.scope.stop();
+});
+
+it('新成员区从零展开，离开后仍按可见高度联动右栏，退场结束再移除占位', async () => {
+  const f = fixture();
+  f.target.value = null;
+  await nextTick();
+  f.target.value = f.element as unknown as HTMLElement;
+  await nextTick();
+  await nextTick();
+  expect(f.animate.mock.calls.at(-1)).toEqual([[{ height: '0px' }, { height: '132px' }], {
+    duration: 210, easing: 'cubic-bezier(.2, 0, 0, 1)',
+  }]);
+  f.animations[0]!.finish();
+  await nextTick();
+  const removed = vi.fn();
+  f.motion.leave(f.element as unknown as Element, removed);
+  f.target.value = null;
+  await nextTick();
+  expect(removed).not.toHaveBeenCalled();
+  f.setHeight(66);
+  f.observers.at(-1)!.update();
+  expect(f.conversation.style.setProperty).toHaveBeenLastCalledWith('--voice-overlay-height', '66px');
+  f.animations.at(-1)!.finish();
+  await nextTick();
+  expect(removed).toHaveBeenCalledOnce();
+  expect(f.conversation.style.removeProperty).toHaveBeenLastCalledWith('--voice-overlay-height');
   f.scope.stop();
 });

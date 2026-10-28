@@ -11,6 +11,7 @@ test.beforeEach(async ({ page }) => {
     await route.fulfill({ contentType: 'text/javascript', body: `
 import { createApp, ref, h } from ${JSON.stringify(vuePath)};
 import ScreenSharePicker from '/src/components/ScreenSharePicker.vue';
+import DialogTransition from '/src/components/DialogTransition.vue';
 import '/src/styles.css';
 createApp({ components: { ScreenSharePicker }, setup() {
   const open = ref(false), quality = ref('standard'), sourceType = ref('window'), shareAudio = ref(true);
@@ -26,7 +27,7 @@ createApp({ components: { ScreenSharePicker }, setup() {
     borderFailure: () => { settingsFailure.value = {sourceId:'window:1:0',code:'captureBorderUnsupported'}; },
     settings: () => confirmedSettings.value };
   return () => h('div', [h('button', { onClick: () => { open.value=true; } }, '打开选择器'),
-    h('button', '背景按钮'), open.value ? h(ScreenSharePicker, {
+    h('button', '背景按钮'), h(DialogTransition, null, { default: () => open.value ? h(ScreenSharePicker, {
       sources:sources.filter(source => source.type === sourceType.value), sourceType:sourceType.value, quality:quality.value, shareAudio:shareAudio.value,
       selectedId:selectedId.value, audioMode:'process', audioReady:true, audioFailed:false, loading:false,
       error:error.value, notice:'', settingsFailure:settingsFailure.value,
@@ -34,7 +35,7 @@ createApp({ components: { ScreenSharePicker }, setup() {
       'onUpdate:quality': value => {quality.value=value;}, 'onUpdate:shareAudio': value => {shareAudio.value=value;},
       onChoose:value => {selectedId.value=value;}, onClose:() => {open.value=false;},
       onConfirm:settings => {confirmedSettings.value=settings;confirmed.value=true;open.value=false;}
-    }) : null]);
+    }) : null })]);
 }}).mount('#root');
 ` });
   });

@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { Monitor } from '@lucide/vue';
+import { computed, nextTick, onMounted, ref, useId, watch } from 'vue';
+import { ChevronRight, Monitor } from '@lucide/vue';
 import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, SCREEN_SHARE_QUALITIES, screenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from '../rtc/screenShareQuality';
 import ScreenShareCustomQuality from './ScreenShareCustomQuality.vue';
+import ExpandSection from './ExpandSection.vue';
 import type { NativeScreenAudioMode } from '../rtc/nativeScreenAudioMode';
 import InlineFeedback from './InlineFeedback.vue';
 import { readScreenSharePreferences, type ScreenSharePreferences } from '../settings/screenSharePreferences';
+import { useBackdropDismiss } from './useBackdropDismiss';
 
 const props = withDefaults(defineProps<{
   sources: { id: string; name: string; thumbnail?: string; type: 'window' | 'screen' }[];
@@ -54,8 +56,9 @@ const descriptions: Record<ScreenShareQualityId, string> = {
   economy: '减少带宽占用，适合网络受限时观看。', standard: '平衡清晰度与流畅度，适合日常游戏分享。',
   highFrameRate: '优先展示快速运动画面，对设备和网络要求较高。', custom: '按来源比例输出，尽量保持所选帧率。',
 };
-let returnFocus: HTMLElement | null = null;
-const background = new Map<HTMLElement, boolean>();
+const backdropEvents = useBackdropDismiss(() => emit('close'));
+const advancedOpen = ref(false);
+const advancedId = useId();
 
 function confirm() {
   if (!canConfirm.value) return;
@@ -71,7 +74,7 @@ function confirm() {
 function keydown(event: KeyboardEvent) {
   if (event.key === 'Escape') { event.preventDefault(); emit('close'); return; }
   if (event.key !== 'Tab') return;
-  const buttons = [...(panel.value?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)') ?? [])];
+  const buttons = [...(panel.value?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)') ?? [])].filter((control) => control.getClientRects().length > 0 && !control.closest('[inert]'));
   const first = buttons[0], last = buttons.at(-1);
   if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.value)) { event.preventDefault(); last?.focus(); }
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
@@ -92,28 +95,16 @@ function qualityKeydown(event: KeyboardEvent) {
 onMounted(async () => {
   try { captureSettings.value.hideCursor = readScreenSharePreferences().hideCursor; }
   catch { settingsError.value = '无法读取光标偏好，请重新保存客户端设置后再试。'; }
-  returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   await nextTick();
   if (!panel.value) return;
-  // 弹层传送到 body 后隔离业务区域，保留媒体实例，仅限制背景交互。
-  for (const element of document.body.children) {
-    if (!(element instanceof HTMLElement) || element.contains(panel.value)) continue;
-    background.set(element, element.inert); element.inert = true;
-  }
   panel.value.focus();
   emit('refreshThumbnails');
-});
-onBeforeUnmount(() => {
-  for (const [element, inert] of background) element.inert = inert;
-  background.clear();
-  if (returnFocus?.isConnected) returnFocus.focus();
 });
 defineExpose({ sourcesElement });
 </script>
 
 <template>
-  <Teleport to="body">
-    <div class="dialog-backdrop" @keydown.stop="keydown">
+    <div class="dialog-backdrop" v-on="backdropEvents" @keydown.stop="keydown">
       <section ref="panel" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-title" tabindex="-1">
         <header class="capture-header">
           <div><h2 id="capture-title">选择共享的窗口或屏幕</h2><p>选择画面和画质，然后开始共享。</p></div>
@@ -144,10 +135,16 @@ defineExpose({ sourcesElement });
               :aria-selected="quality.id === preset.id" @click="emit('update:quality', preset.id)">{{ preset.label }}</button>
           </div>
         </div>
-        <ScreenShareCustomQuality v-if="quality.id === 'custom'" :model-value="customQuality"
+        <ExpandSection :open="quality.id === 'custom'">
+          <ScreenShareCustomQuality :model-value="customQuality"
           @update:model-value="emit('update:customQuality', $event)" />
-        <details class="capture-advanced">
-          <summary>高级选项</summary>
+        </ExpandSection>
+        <div class="capture-advanced">
+          <button type="button" class="disclosure-trigger" :aria-expanded="advancedOpen" :aria-controls="advancedId" @click="advancedOpen = !advancedOpen">
+            <ChevronRight :size="12" aria-hidden="true" class="disclosure-arrow" :class="{ 'is-open': advancedOpen }" />高级选项
+          </button>
+          <ExpandSection :open="advancedOpen" :id="advancedId">
+          <div class="capture-advanced-content">
           <label v-if="sourceType === 'window'" class="capture-method">窗口采集方式
             <select v-model="captureSettings.windowMethod" aria-label="窗口采集方式">
               <option value="auto">自动</option>
@@ -163,7 +160,9 @@ defineExpose({ sourcesElement });
           </label>
           <p v-if="sourceType === 'window'">普通窗口分享应用内容区域；自动方式无法满足本次边框或光标设置时会提示，不自动改用兼容采集。Win10 的系统窗口采集通常需要允许边框；兼容采集可能不适合部分硬件加速应用。</p>
           <p v-else>整屏使用 DXGI，无系统共享黄框。高级选项仅用于本次共享。</p>
-        </details>
+          </div>
+          </ExpandSection>
+        </div>
         <label v-if="followGameAvailable && sourceType === 'window' && (captureSettings.windowMethod ?? 'auto') === 'auto'"
           class="capture-audio-option capture-game-follow">
           <input v-model="followGame" type="checkbox" />跟随英雄联盟大厅与对局（包括大厅聊天画面）
@@ -181,7 +180,6 @@ defineExpose({ sourcesElement });
         </footer>
       </section>
     </div>
-  </Teleport>
 </template>
 
 <style scoped>
@@ -207,8 +205,8 @@ defineExpose({ sourcesElement });
 .capture-game-follow { margin: 12px 0; }
 .capture-audio-option input { margin: 0; }
 .capture-advanced { margin: 8px 0; font-size: 13px; line-height: 20px; }
-.capture-advanced summary { color: var(--muted); cursor: pointer; }
-.capture-advanced > label { margin-top: 8px; }
+.capture-advanced-content { display: grid; gap: 8px; padding-top: 8px; }
+.capture-dialog > .expand-section { flex-shrink: 0; }
 .capture-advanced p { color: var(--muted); font-size: 12px; }
 .capture-method { display: flex; align-items: center; gap: 12px; }
 .capture-method select { min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--background); color: var(--text); font: inherit; }

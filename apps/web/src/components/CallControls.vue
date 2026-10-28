@@ -5,6 +5,7 @@ import VoiceLevelMic from './VoiceLevelMic.vue';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP } from '../rtc/audioPreferences';
 import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, SCREEN_SHARE_QUALITIES, screenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from '../rtc/screenShareQuality';
 import ScreenShareCustomQuality from './ScreenShareCustomQuality.vue';
+import ExpandSection from './ExpandSection.vue';
 import type { NativeScreenAudioMode } from '../rtc/nativeScreenAudioMode';
 
 const props = withDefaults(defineProps<{
@@ -187,8 +188,10 @@ onScopeDispose(() => {
                 @change="chooseQuality(preset.id)" @click="quality === preset.id && chooseQuality(preset.id)" />
             </label>
           </div>
-          <ScreenShareCustomQuality v-if="quality === 'custom'" :model-value="customQuality" :disabled="shareBusy"
+          <ExpandSection :open="quality === 'custom'">
+          <ScreenShareCustomQuality :model-value="customQuality" :disabled="shareBusy"
             @update:model-value="emit('quality', 'custom', $event)" />
+        </ExpandSection>
         </section>
         </Transition>
       </div>

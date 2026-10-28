@@ -6,8 +6,10 @@ import {
 } from '../profile/avatarImage';
 import type { AvatarCropSource } from '../profile/useAvatarCrop';
 import InlineFeedback from './InlineFeedback.vue';
+import { useBackdropDismiss } from './useBackdropDismiss';
 
 const props = defineProps<{ source: AvatarCropSource; title: string; shape?: 'circle' | 'square' }>();
+const backdropEvents = useBackdropDismiss(() => { if (!processing.value) emit('cancel'); });
 const emit = defineEmits<{ apply: [avatar: string]; cancel: [] }>();
 const dialog = ref<HTMLElement | null>(null);
 const viewport = shallowRef<HTMLElement | null>(null);
@@ -18,7 +20,6 @@ const offsetX = ref(0);
 const offsetY = ref(0);
 const error = ref('');
 const processing = ref(false);
-const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 let disposed = false;
 let resizeObserver: ResizeObserver | null = null;
 let drag: {
@@ -90,7 +91,6 @@ onMounted(async () => {
 onScopeDispose(() => {
   disposed = true;
   resizeObserver?.disconnect();
-  void nextTick(() => { if (returnFocus?.isConnected) returnFocus.focus(); });
 });
 
 function beginDrag(event: PointerEvent) {
@@ -153,7 +153,7 @@ async function applyCrop() {
 
 function keepFocus(event: KeyboardEvent) {
   if (event.key !== 'Tab' || !dialog.value) return;
-  const controls = [...dialog.value.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)')];
+  const controls = [...dialog.value.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)')].filter((control) => control.getClientRects().length > 0 && !control.closest('[inert]'));
   const first = controls[0];
   const last = controls[controls.length - 1];
   if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.value)) {
@@ -167,8 +167,7 @@ function keepFocus(event: KeyboardEvent) {
 </script>
 
 <template>
-  <Teleport to="body">
-    <div class="dialog-backdrop avatar-crop-backdrop" @keydown.esc.stop="!processing && emit('cancel')">
+    <div class="dialog-backdrop avatar-crop-backdrop" v-on="backdropEvents" @keydown.esc.stop="!processing && emit('cancel')">
       <section ref="dialog" class="avatar-crop-dialog" role="dialog" aria-modal="true"
         aria-labelledby="avatar-crop-title" tabindex="-1" @keydown="keepFocus">
         <header><h2 id="avatar-crop-title">{{ title }}</h2><p>拖动调整位置，滚轮缩放</p></header>
@@ -202,7 +201,6 @@ function keepFocus(event: KeyboardEvent) {
         </footer>
       </section>
     </div>
-  </Teleport>
 </template>
 
 <style scoped>

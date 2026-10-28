@@ -20,7 +20,7 @@ function setup(quality: CustomScreenShareQuality = { resolution: 1080, fps: 60 }
   const emit = vi.fn();
   // 运行正式组件的回调和监听，不创建浏览器、房间或设备。
   const controls = scope.run(() => runInNewContext(`${compiled}\n({ update, applyBitrate, resetBitrate, bitrateDraft, bitrateError })`, {
-    computed, ref, watch, defineProps: () => props, defineEmits: () => emit,
+    computed, ref, watch, useId: () => 'test-bitrate', defineProps: () => props, defineEmits: () => emit,
     screenShareQuality, validateCustomScreenShareQuality,
     SCREEN_SHARE_BITRATE_MIN_MBPS, SCREEN_SHARE_BITRATE_MAX_MBPS, SCREEN_SHARE_BITRATE_STEP_MBPS,
   })) as { update(field: 'resolution' | 'fps', event: Event): void; applyBitrate(): void; resetBitrate(): void;
@@ -30,7 +30,8 @@ function setup(quality: CustomScreenShareQuality = { resolution: 1080, fps: 60 }
 
 it('码率默认折叠，显示推荐与非固定流量说明，移除未实现的自动调整入口', async () => {
   const html = await renderToString(createSSRApp(ScreenShareCustomQuality, { modelValue: { resolution: 1080, fps: 60 } }));
-  expect(html.match(/<details[^>]*>/)?.[0]).not.toContain('open');
+  expect(html.match(/<button[^>]*class="disclosure-trigger"[^>]*>/)?.[0]).toContain('aria-expanded="false"');
+  expect(html).toContain('display:none');
   expect(html).toContain('主画面码率上限');
   expect(html).toContain('推荐 12 Mbps');
   expect(html).toContain('不是固定流量');

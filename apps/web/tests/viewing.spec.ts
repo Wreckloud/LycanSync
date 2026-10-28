@@ -140,6 +140,7 @@ export function useRtcRoom() {
   await page.goto('/');
   await page.getByRole('button', { name: /^观看测试，/ }).dblclick();
   await expect(page.getByTestId('participant-card')).toHaveCount(9);
+  await expect(page.locator('.callbar-enter-active')).toHaveCount(0);
 });
 
 async function sharing(page: Page, ids: string[]) {
@@ -531,6 +532,7 @@ test('聚焦网格和成员折叠只覆盖聊天，保留历史阅读位置与�
   } }));
   await page.reload();
   await page.getByRole('button', { name: /^观看测试，/ }).dblclick();
+  await expect(page.locator('.callbar-enter-active')).toHaveCount(0);
   const list = page.locator('.message-list');
   await expect(page.locator('[data-message-id]')).toHaveCount(80);
   await list.evaluate(element => element.scrollTo({ top: 500, behavior: 'instant' }));

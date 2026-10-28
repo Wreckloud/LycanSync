@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref, useId, watch } from 'vue';
+import { ChevronRight } from '@lucide/vue';
 import { SCREEN_SHARE_RESOLUTIONS, SCREEN_SHARE_FRAME_RATES, SCREEN_SHARE_BITRATE_MIN_MBPS, SCREEN_SHARE_BITRATE_MAX_MBPS,
   SCREEN_SHARE_BITRATE_STEP_MBPS, screenShareQuality, validateCustomScreenShareQuality, type CustomScreenShareQuality } from '../rtc/screenShareQuality';
 import InlineFeedback from './InlineFeedback.vue';
+import ExpandSection from './ExpandSection.vue';
 
 const props = defineProps<{ modelValue: CustomScreenShareQuality; disabled?: boolean }>();
 const emit = defineEmits<{ 'update:modelValue': [quality: CustomScreenShareQuality] }>();
@@ -11,6 +13,8 @@ const recommendedMbps = computed(() => screenShareQuality('custom', {
 }).bitrate / 1_000_000);
 const bitrateDraft = ref(String(props.modelValue.bitrateMbps ?? recommendedMbps.value));
 const bitrateError = ref('');
+const bitrateOpen = ref(false);
+const bitrateId = useId();
 
 function update(field: 'resolution' | 'fps', event: Event) {
   const select = event.target as HTMLSelectElement;
@@ -56,8 +60,11 @@ watch(() => [props.modelValue.resolution, props.modelValue.fps, props.modelValue
         <option v-for="fps in SCREEN_SHARE_FRAME_RATES" :key="fps" :value="fps">{{ fps }} FPS</option>
       </select></label>
     </div>
-    <details class="custom-share-bitrate">
-      <summary>码率设置<span>{{ modelValue.bitrateMbps === undefined ? '推荐' : `手动 · ${modelValue.bitrateMbps} Mbps` }}</span></summary>
+    <div class="custom-share-bitrate">
+      <button type="button" class="disclosure-trigger" :aria-expanded="bitrateOpen" :aria-controls="bitrateId" @click="bitrateOpen = !bitrateOpen">
+        <ChevronRight :size="12" aria-hidden="true" class="disclosure-arrow" :class="{ 'is-open': bitrateOpen }" />码率设置<span class="disclosure-value">{{ modelValue.bitrateMbps === undefined ? '推荐' : `手动 · ${modelValue.bitrateMbps} Mbps` }}</span>
+      </button>
+      <ExpandSection :open="bitrateOpen" :id="bitrateId">
       <div class="custom-share-bitrate-controls">
         <label>主画面码率上限<span class="custom-share-bitrate-input">
           <input v-model="bitrateDraft" type="number" :min="SCREEN_SHARE_BITRATE_MIN_MBPS" :max="SCREEN_SHARE_BITRATE_MAX_MBPS"
@@ -68,7 +75,8 @@ watch(() => [props.modelValue.resolution, props.modelValue.fps, props.modelValue
           @click="resetBitrate">恢复推荐</button>
       </div>
       <InlineFeedback :message="bitrateError" :status="`推荐 ${recommendedMbps} Mbps；这是上限，不是固定流量。缩略层与声音另计。`" />
-    </details>
+      </ExpandSection>
+    </div>
   </div>
 </template>
 
@@ -78,8 +86,7 @@ watch(() => [props.modelValue.resolution, props.modelValue.fps, props.modelValue
 .custom-share-selects label { display: grid; flex: 1; gap: 4px; min-width: 100px; color: var(--muted); }
 .custom-share-selects select { width: 100%; min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--background); color: var(--text); font: inherit; }
 .custom-share-bitrate { min-width: 0; }
-.custom-share-bitrate summary { cursor: pointer; color: var(--muted); line-height: 24px; }
-.custom-share-bitrate summary span { float: right; color: var(--text); }
+
 .custom-share-bitrate-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
 .custom-share-bitrate-controls label { display: grid; flex: 1; gap: 4px; min-width: 100px; color: var(--muted); }
 .custom-share-bitrate-input { display: flex; align-items: center; gap: 6px; }

@@ -3,6 +3,7 @@ import { computed, nextTick, ref, toRef } from 'vue';
 import { Pencil, UserRound } from '@lucide/vue';
 import type { AuthUser, ProfileUpdate } from '../../auth/authApi';
 import AvatarCropDialog from '../AvatarCropDialog.vue';
+import DialogTransition from '../DialogTransition.vue';
 import InlineFeedback from '../InlineFeedback.vue';
 import { useAvatarCrop } from '../../profile/useAvatarCrop';
 import { useProfileDraft } from '../../profile/useProfileDraft';
@@ -87,8 +88,10 @@ defineExpose({ finishEditing, cropping });
     </div>
     <InlineFeedback :message="error"
       :status="busy ? '正在保存…' : picking ? '正在读取图片…' : ''" />
+    <DialogTransition>
     <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整头像"
       @apply="applyAvatar" @cancel="clearCrop" />
+    </DialogTransition>
   </section>
 </template>
 

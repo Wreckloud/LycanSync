@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onScopeDispose, ref } from 'vue';
+import { onMounted, onScopeDispose, ref } from 'vue';
 import InlineFeedback from './InlineFeedback.vue';
+import { useBackdropDismiss } from './useBackdropDismiss';
 
 defineProps<{ name: string; busy: boolean }>();
 const emit = defineEmits<{ reject: []; allow: [sourceId: string, publicVideo: boolean] }>();
@@ -10,7 +11,7 @@ const publicVideo = ref(true);
 const loading = ref(false);
 const error = ref('');
 const dialog = ref<HTMLElement | null>(null);
-const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+const backdropEvents = useBackdropDismiss(() => emit('reject'));
 let disposed = false;
 
 function keepFocus(event: KeyboardEvent) {
@@ -45,12 +46,11 @@ async function loadMonitors() {
 onMounted(() => { dialog.value?.focus(); void loadMonitors(); });
 onScopeDispose(() => {
   disposed = true;
-  void nextTick(() => { if (returnFocus?.isConnected) returnFocus.focus(); });
 });
 </script>
 
 <template>
-  <div class="dialog-backdrop" @keydown.esc.stop.prevent="emit('reject')">
+  <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop.prevent="emit('reject')">
     <section ref="dialog" class="remote-request-card" role="dialog" aria-modal="true" aria-labelledby="remote-request-title"
       tabindex="-1" @keydown="keepFocus">
       <header><h2 id="remote-request-title">{{ name }}申请远程控制</h2>
