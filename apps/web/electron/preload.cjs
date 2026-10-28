@@ -4,7 +4,7 @@ contextBridge.exposeInMainWorld('lycanVoiceOverlay', {
   begin: () => ipcRenderer.invoke('voice-overlay:begin'),
   configure: (owner, settings) => ipcRenderer.invoke('voice-overlay:configure', owner, settings),
   update: (owner, snapshot) => ipcRenderer.invoke('voice-overlay:update', owner, snapshot),
-  edit: (owner, enabled) => ipcRenderer.invoke('voice-overlay:edit', owner, enabled),
+  edit: (owner, enabled, preview = false) => ipcRenderer.invoke('voice-overlay:edit', owner, enabled, preview),
   end: (owner) => ipcRenderer.invoke('voice-overlay:end', owner),
   displays: () => ipcRenderer.invoke('voice-overlay:displays'),
   onError: (callback) => {

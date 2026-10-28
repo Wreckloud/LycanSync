@@ -10,6 +10,7 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
   let conversation: HTMLElement | null = null;
   let activeElement: HTMLElement | null = null;
   let finishLeave: (() => void) | undefined;
+  let frame: number | undefined;
 
   function updateDirectory() {
     if (!activeElement || !conversation) return;
@@ -23,7 +24,12 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
     conversation = null;
     activeElement = null;
   }
+  function stopFrame() {
+    if (frame !== undefined) activeElement?.ownerDocument.defaultView?.cancelAnimationFrame(frame);
+    frame = undefined;
+  }
   function cancel() {
+    stopFrame();
     animation?.cancel();
     animation = undefined;
     const finish = finishLeave;
@@ -47,25 +53,35 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
       preference.addEventListener('change', reduceMotion);
     }
   }
-  function animateHeight(element: HTMLElement, from: number, to: number, finish?: () => void) {
+  function animateSurface(element: HTMLElement, from: number, to: number, finish?: () => void, offset?: number) {
     const owner = element.ownerDocument.defaultView!;
     const style = owner.getComputedStyle(element);
     const duration = Number.parseFloat(style.getPropertyValue('--motion-layout-duration'));
-    if (preference?.matches || Math.abs(from - to) < 1 || typeof element.animate !== 'function'
+    const unchanged = offset === undefined ? Math.abs(from - to) < 1 : !Number.isFinite(offset) || Math.abs(offset) < 1;
+    if (preference?.matches || unchanged || typeof element.animate !== 'function'
       || !Number.isFinite(duration) || duration <= 0) {
       updateDirectory();
       finish?.();
       return;
     }
-    const active = element.animate([{ height: `${from}px` }, { height: `${to}px` }], {
+    const active = element.animate(offset === undefined
+      ? [{ height: `${from}px` }, { height: `${to}px` }]
+      : [{ top: `${offset}px` }, { top: '0px' }], {
       duration, easing: style.getPropertyValue('--motion-ease').trim(),
     });
     animation = active;
     finishLeave = finish;
     updateDirectory();
+    const followPosition = () => {
+      if (animation !== active) return;
+      updateDirectory();
+      frame = owner.requestAnimationFrame(followPosition);
+    };
+    if (typeof owner.requestAnimationFrame === 'function') frame = owner.requestAnimationFrame(followPosition);
     // 取消是快速切换的正常收尾；旧动画不能清理新覆盖层。
     active.finished.then(() => {
       if (animation !== active) return;
+      stopFrame();
       animation = undefined;
       finishLeave = undefined;
       if (finish) finish();
@@ -75,13 +91,16 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
 
   watch([target, expanded], async ([element], [previous]) => {
     if (!element) { if (!finishLeave) clearDirectory(); return; }
-    const from = element === previous ? element.getBoundingClientRect().height : 0;
+    const bounds = element.getBoundingClientRect();
+    const from = element === previous ? bounds.height : 0;
     cancel();
     const current = ++generation;
     await nextTick();
     if (current !== generation || element !== target.value || !element.isConnected) return;
     observe(element);
-    animateHeight(element, from, element.getBoundingClientRect().height);
+    const next = element.getBoundingClientRect();
+    // 内部观看和成员条各自改变实际高度；外层只衔接顶边，避免两套高度动画相互追赶。
+    animateSurface(element, from, next.height, undefined, element === previous ? bounds.top - next.top : undefined);
   }, { flush: 'pre' });
 
   function leave(element: Element, done: () => void) {
@@ -91,7 +110,7 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
     cancel();
     surface.inert = true;
     observe(surface);
-    animateHeight(surface, from, 0, () => { clearDirectory(); done(); });
+    animateSurface(surface, from, 0, () => { clearDirectory(); done(); });
   }
 
   onScopeDispose(() => {

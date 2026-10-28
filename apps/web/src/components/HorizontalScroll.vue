@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onScopeDispose, ref } from 'vue';
-import { ChevronLeft, ChevronRight } from '@lucide/vue';
+import { onMounted, onScopeDispose, onUpdated, ref } from 'vue';
 
 defineProps<{ label: string }>();
 const viewport = ref<HTMLElement | null>(null);
@@ -12,6 +11,17 @@ let owner: Window | undefined;
 let drag: { pointer: number; x: number; left: number; moved: boolean } | undefined;
 let suppressClick = false;
 let scrollPreference: MediaQueryList | undefined;
+let content: Element | null = null;
+
+function observeContent() {
+  const current = viewport.value?.firstElementChild ?? null;
+  if (current !== content) {
+    if (content) observer?.unobserve(content);
+    if (current) observer?.observe(current);
+    content = current;
+  }
+  update();
+}
 
 function update() {
   const element = viewport.value;
@@ -83,9 +93,9 @@ onMounted(() => {
     frame = owner!.requestAnimationFrame(() => { frame = undefined; update(); });
   });
   observer.observe(element);
-  if (element.firstElementChild) observer.observe(element.firstElementChild);
-  update();
+  observeContent();
 });
+onUpdated(observeContent);
 onScopeDispose(() => {
   scrollPreference?.removeEventListener('change', stopAnimatedScroll);
   observer?.disconnect();
@@ -96,15 +106,12 @@ onScopeDispose(() => {
 
 <template>
   <div class="horizontal-scroll">
-    <button v-if="previous || next" type="button" class="scroll-arrow" :aria-label="label + '向左滚动'"
-      :disabled="!previous" @click="scroll(-1)"><ChevronLeft :size="16" /></button>
-    <div ref="viewport" class="horizontal-viewport" role="region" :aria-label="label" tabindex="0"
+    <div ref="viewport" class="horizontal-viewport" :class="{ 'can-scroll-left': previous, 'can-scroll-right': next }"
+      role="region" :aria-label="label" tabindex="0"
       @scroll="update" @wheel="wheel" @pointerdown="startDrag" @pointermove="moveDrag"
       @pointerup="endDrag" @pointercancel="endDrag" @click.capture="click"
       @keydown.left.self.prevent="scroll(-1)" @keydown.right.self.prevent="scroll(1)">
       <slot />
     </div>
-    <button v-if="previous || next" type="button" class="scroll-arrow" :aria-label="label + '向右滚动'"
-      :disabled="!next" @click="scroll(1)"><ChevronRight :size="16" /></button>
   </div>
 </template>

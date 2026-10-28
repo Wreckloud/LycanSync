@@ -353,7 +353,7 @@ onBeforeUnmount(() => {
       @contextmenu="remoteControlActive && $event.preventDefault()">
       <span v-if="privateControl" class="video-placeholder private-control-placeholder" role="status">{{ privateControl }}<small>画面未公开</small></span>
       <template v-else-if="media.sharing">
-        <video ref="videoElement" autoplay muted playsinline :aria-label="media.name + '的共享画面'" />
+        <video ref="videoElement" :class="{ 'is-video-ready': videoReady }" autoplay muted playsinline :aria-label="media.name + '的共享画面'" />
         <span v-if="!videoReady || !media.track || media.muted" class="video-placeholder">等待共享画面…</span>
       </template>
       <div v-else class="large-avatar" aria-hidden="true">

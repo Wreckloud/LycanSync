@@ -1871,9 +1871,9 @@ ipcMain.handle('voice-overlay:update', (event, owner, snapshot) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
   voiceOverlay.update(owner, snapshot);
 });
-ipcMain.handle('voice-overlay:edit', (event, owner, enabled) => {
+ipcMain.handle('voice-overlay:edit', (event, owner, enabled, preview = false) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
-  return voiceOverlay.edit(owner, enabled);
+  return voiceOverlay.edit(owner, enabled, preview);
 });
 ipcMain.handle('voice-overlay:end', (event, owner) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');

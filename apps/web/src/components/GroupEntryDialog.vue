@@ -70,14 +70,14 @@ watch(mode, async () => {
   const generation = ++modeGeneration;
   await nextTick();
   if (!shell || generation !== modeGeneration) return;
-  const to = shell.getBoundingClientRect().height;
+  const to = dialog.value?.offsetHeight ?? shell.getBoundingClientRect().height;
   if (!modePreference?.matches && typeof shell.animate === 'function') {
     modeAnimation = shell.animate([{ height: `${from}px` }, { height: `${to}px` }], {
       duration: Number.parseFloat(getComputedStyle(shell).getPropertyValue('--motion-expand-duration')),
       easing: getComputedStyle(shell).getPropertyValue('--motion-ease').trim(),
     });
   }
-  shell.querySelector<HTMLInputElement>('input:not([type="file"])')?.focus({ preventScroll: true });
+  dialog.value?.querySelector<HTMLInputElement>('input:not([type="file"])')?.focus({ preventScroll: true });
 });
 function reduceModeMotion() { if (modePreference?.matches) modeAnimation?.cancel(); }
 onScopeDispose(() => {
@@ -95,7 +95,9 @@ onMounted(() => {
 
 <template>
   <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="close">
-    <form ref="dialog" class="group-entry" role="dialog" aria-modal="true" tabindex="-1"
+    <div ref="modeShell" class="entry-mode-shell">
+    <Transition name="entry-card" @before-enter="($event as HTMLElement).inert = false" @before-leave="($event as HTMLElement).inert = true">
+    <form :key="mode" ref="dialog" class="group-entry" role="dialog" aria-modal="true" tabindex="-1"
       :aria-label="group ? '编辑群组资料' : mode === 'join' ? '加入群组' : '创建群组'"
       :inert="!!cropSource" @submit.prevent="submit" @keydown="keepFocus">
       <header class="entry-header">
@@ -103,9 +105,7 @@ onMounted(() => {
         <button v-if="!group" type="button" class="card-header-action" :disabled="busy || picking || !!cropSource"
           @click="mode = mode === 'create' ? 'join' : 'create'; error = ''">{{ mode === 'create' ? '加入群聊' : '创建群聊' }}<ArrowRight :size="16" aria-hidden="true" /></button>
       </header>
-      <div ref="modeShell" class="entry-mode-shell">
-      <Transition name="entry-mode" @before-enter="($event as HTMLElement).inert = false" @before-leave="($event as HTMLElement).inert = true">
-      <div v-if="mode === 'create'" key="create" class="entry-body">
+      <div v-if="mode === 'create'" class="entry-body">
         <div class="entry-identity">
           <div class="entry-avatar-area">
             <button type="button" class="group-avatar-preview" aria-label="选择群组头像"
@@ -132,11 +132,9 @@ onMounted(() => {
             maxlength="200" rows="3" :readonly="busy" placeholder="常玩的游戏，或想和朋友一起做的事" />
         </div>
       </div>
-      <div v-else key="join" class="entry-body entry-join-body">
+      <div v-else class="entry-body entry-join-body">
         <label class="entry-field">群组邀请码<input v-model="code" aria-label="群组邀请码" maxlength="16" autocomplete="off" :readonly="busy" placeholder="输入群主提供的邀请码" /></label>
         <p>邀请码仅用于加入当前服务器的群组，不会连接语音。</p>
-      </div>
-      </Transition>
       </div>
       <footer class="card-actions">
         <button type="button" class="settings-button" :disabled="busy || picking" @click="close">取消</button>
@@ -144,6 +142,8 @@ onMounted(() => {
         <button type="submit" class="confirm-button card-actions-end" :disabled="busy || picking || !!cropSource || (mode === 'join' ? !code.trim() : !name.trim())">{{ group ? '保存修改' : mode === 'join' ? '加入群组' : '创建群组' }}</button>
       </footer>
     </form>
+    </Transition>
+    </div>
     <DialogTransition>
     <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整群组头像" shape="square" @apply="finishCrop" @cancel="finishCrop()" />
     </DialogTransition>
@@ -151,15 +151,15 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.group-entry { width: min(480px, 100%); max-height: calc(100dvh - 36px); overflow-y: auto; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); font-size: 14px; line-height: 20px; }
+.group-entry { width: 100%; max-height: calc(100dvh - 36px); overflow-y: auto; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); font-size: 14px; line-height: 20px; }
 .entry-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .entry-body.entry-join-body { gap: 12px; align-content: start; }
-.entry-mode-shell { position: relative; overflow: hidden; margin: 24px 0 20px; }
+.entry-mode-shell { position: relative; width: min(480px, 100%); }
 .entry-join-body input { width: 100%; }
 .entry-join-body p { margin: 0; color: var(--muted); font-size: 13px; }
 .entry-header h2 { margin: 0; font-size: 22px; line-height: 32px; }
 .entry-header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 20px; }
-.entry-body { display: grid; gap: 20px; }
+.entry-body { display: grid; gap: 20px; margin: 24px 0 20px; }
 .entry-identity { position: relative; display: flex; align-items: center; gap: 16px; height: 96px; }
 .entry-avatar-area { position: relative; flex-shrink: 0; }
 .group-avatar-preview { position: relative; display: grid; place-items: center; width: 72px; height: 72px; overflow: hidden; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-raised); color: var(--muted); cursor: pointer; }

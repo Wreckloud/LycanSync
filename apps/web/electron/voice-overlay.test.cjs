@@ -85,7 +85,7 @@ test('默认关闭且无房间不建窗口；已开启且加入语音后才显�
   assert.equal(window.topmost, true);
   assert.equal(window.protected, true);
   assert.ok(window.operations.indexOf('protection') < window.operations.indexOf('showInactive'));
-  assert.equal(window.bounds.x, 1680);
+  assert.equal(window.bounds.x + window.bounds.width, 1920);
   assert.equal(window.message.payload.portraits[0].avatar, portrait.avatar);
   f.manager.clear();
 });
@@ -95,14 +95,14 @@ test('紧凑成员行随缩放计算窗口高度，多列及编辑预览仍保�
     const f = fixture(); f.configure({ scale, displayId: 2 });
     f.update(0, { members: [member, { ...member, identity: 'two' }] });
     const window = f.ready();
-    const rowHeight = 40 * scale / 100;
-    assert.equal(window.bounds.height, rowHeight * 2 + 8);
+    const rowHeight = Math.ceil(36 * scale / 100);
+    assert.equal(window.bounds.height, rowHeight * 2 + 4);
     f.manager.edit(f.owner, true);
-    assert.equal(window.bounds.height, rowHeight * 2 + 40);
-    const maxRows = Math.floor((1080 - 64) / rowHeight);
+    assert.equal(window.bounds.height, rowHeight * 2 + 4);
+    const maxRows = Math.floor((1080 - 4) / rowHeight);
     f.update(1, { members: Array.from({ length: maxRows + 1 }, (_, index) => ({ ...member, identity: String(index) })) });
-    assert.equal(window.bounds.width, 480);
-    assert.equal(window.bounds.height, maxRows * rowHeight + 40);
+    assert.equal(window.bounds.width, window.message.payload.columnWidth * 2 + 4);
+    assert.equal(window.bounds.height, maxRows * rowHeight + 4);
     assert.ok(window.bounds.y + window.bounds.height <= 1080);
     f.manager.clear();
   }
@@ -170,7 +170,7 @@ test('编辑结束恢复穿透，无通话仅在显式编辑时预览；禁用�
 });
 
 test('跨屏拖动只保存用户操作，断屏临时回主屏，缩放及负坐标边界仍在工作区内', () => {
-  const f = fixture(); f.configure({ displayId: 2, width: 300, scale: 150 }); f.update(); f.ready();
+  const f = fixture(); f.configure({ displayId: 2, scale: 150 }); f.update(); f.ready();
   f.manager.edit(f.owner, true);
   assert.equal(f.placements.length, 0);
   const window = f.windows[0];
@@ -270,7 +270,7 @@ test('独立静态协议拒绝业务API、任意路径与写请求，不调用�
 });
 
 test('只接受有界设置与纯头像数据，不接收可执行图片URL或伪造静音说话状态', () => {
-  for (const patch of [{ scale: 0 }, { width: 9999 }, { x: -1 }, { displayId: '1' }, { mode: 'other' }]) {
+  for (const patch of [{ scale: 0 }, { x: -1 }, { displayId: '1' }, { mode: 'other' }]) {
     assert.throws(() => validateSettings({ ...DEFAULT_SETTINGS, ...patch }));
   }
   assert.throws(() => validateSnapshot({ sequence: 1, roomId: 'r', status: 'connected', members: [member],
@@ -298,5 +298,27 @@ test('正式IPC隔离主页面与覆盖页面，结束旧owner不会清除新会
   const f = fixture(); const second = f.manager.begin();
   f.manager.end(f.owner);
   assert.doesNotThrow(() => f.manager.configure(second, DEFAULT_SETTINGS));
+  f.manager.clear();
+});
+
+test('旧捕获开关和手动宽度被移除，覆盖始终排除采集；测试成员仅限编辑并保留完成位置', () => {
+  const f = fixture();
+  f.configure({ includeInCapture: true, width: 420 }); f.update();
+  const window = f.ready();
+  assert.equal(window.protected, true);
+  assert.equal('includeInCapture' in window.message.payload.settings, false);
+  assert.equal('width' in window.message.payload.settings, false);
+  const normal = { ...window.bounds };
+  f.manager.edit(f.owner, true);
+  assert.deepEqual(window.bounds, normal);
+  f.manager.edit(f.owner, true, true);
+  assert.deepEqual(window.message.payload.members.slice(-3).map(member => member.name), ['狼', 'wolf', '非常个性的昵称用户']);
+  assert.ok(window.bounds.width > normal.width);
+  assert.equal(window.bounds.y, normal.y);
+  f.manager.edit(f.owner, false);
+  assert.equal(window.message.payload.members.length, 1);
+  assert.deepEqual(window.bounds, normal);
+  f.manager.edit(f.owner, true);
+  assert.equal(window.message.payload.members.length, 1);
   f.manager.clear();
 });

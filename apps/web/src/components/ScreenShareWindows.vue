@@ -114,15 +114,12 @@ defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded });
 
 <template>
   <Teleport v-if="inlineTarget" :to="inlineTarget">
-    <CallViewingPanel v-if="inlineExpanded" :view="view" :room="rtc.room" :revision="rtc.revision"
+    <CallViewingPanel :active="inlineExpanded" :view="view" :room="rtc.room" :revision="rtc.revision"
       :avatar="avatar" :listening="rtc.listening"
       :private-control="controlPlaceholder" :reconnecting="rtc.status === 'reconnecting'"
       @detach="detachWatching" @notice="emit('notice', $event)">
-      <HorizontalScroll label="语音成员"><div class="viewing-member-strip"><slot :select="select" /></div></HorizontalScroll>
+      <HorizontalScroll label="语音成员"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" @before-leave="($event as HTMLElement).inert = true"><slot :select="select" /></TransitionGroup></HorizontalScroll>
     </CallViewingPanel>
-    <template v-else>
-      <HorizontalScroll label="语音成员"><div class="viewing-member-strip"><slot :select="select" /></div></HorizontalScroll>
-    </template>
   </Teleport>
   <Teleport v-if="watching?.target" :to="watching.target">
     <section class="watching-window" aria-label="多人观看窗口">
@@ -130,7 +127,7 @@ defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded });
         :private-control="controlPlaceholder"
         :reconnecting="rtc.status === 'reconnecting'" detached
         @return="returnWatching" @notice="emit('notice', $event)">
-        <HorizontalScroll label="语音成员"><div class="viewing-member-strip"><slot :select="view.select" /></div></HorizontalScroll>
+        <HorizontalScroll label="语音成员"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" @before-leave="($event as HTMLElement).inert = true"><slot :select="view.select" /></TransitionGroup></HorizontalScroll>
       </CallViewingPanel>
     </section>
   </Teleport>

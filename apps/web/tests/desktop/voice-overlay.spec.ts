@@ -11,14 +11,14 @@ declare global {
     manager: {
       configure(owner: string, settings: VoiceOverlaySettings): void;
       update(owner: string, snapshot: VoiceOverlaySnapshot): void;
-      edit(owner: string, enabled: boolean): void;
+      edit(owner: string, enabled: boolean, preview?: boolean): void;
       clear(): void;
     };
   };
 }
 
-const settings: VoiceOverlaySettings = { enabled: true, mode: 'all', scale: 100, width: 240,
-  displayId: null, x: 1, y: 0.5, includeInCapture: false };
+const settings: VoiceOverlaySettings = { enabled: true, mode: 'all', scale: 100,
+  displayId: null, x: 1, y: 0.5 };
 const snapshot: VoiceOverlaySnapshot = { sequence: 1, roomId: 'synthetic-room', status: 'connected',
   members: [{ identity: 'one', name: '测试成员', microphone: true, listening: true, speaking: true }],
   portraits: [{ identity: 'one', avatar: '' }] };
@@ -31,13 +31,13 @@ test('隔离覆盖页：真实协议与preload、说话展示、权限隔离、�
   const messages: string[] = [];
   try {
     await expect.poll(() => application.evaluate(() => Boolean(global.voiceOverlayTest))).toBe(true);
-    const windowPromise = application.waitForEvent('window');
     await application.evaluate((_electron, payload) => {
       const { manager, owner } = global.voiceOverlayTest;
       manager.configure(owner, payload.settings);
       manager.update(owner, payload.snapshot);
     }, { settings, snapshot });
-    const overlay = await windowPromise;
+    await expect.poll(() => application.windows().some(window => window.url().startsWith('lycan://overlay/'))).toBe(true);
+    const overlay = application.windows().find(window => window.url().startsWith('lycan://overlay/'))!;
     overlay.on('console', (message) => { if (message.type() === 'error') messages.push(message.text().slice(0, 500)); });
     overlay.on('pageerror', (error) => messages.push(error.message.slice(0, 500)));
     overlay.on('requestfailed', (request) => messages.push(`${request.url()} ${request.failure()?.errorText}`));
@@ -80,9 +80,35 @@ test('隔离覆盖页：真实协议与preload、说话展示、权限隔离、�
       manager.configure(owner, next);
       manager.edit(owner, true);
     }, { ...settings, scale: 125 });
-    await expect(overlay.getByText('拖动调整位置', { exact: false })).toBeVisible();
+    await expect(overlay.locator('.voice-overlay')).toHaveClass(/editing/);
     expect(await overlay.locator('.avatar').evaluate((element) => getComputedStyle(element).width)).toBe('40px');
     await overlay.screenshot({ path: test.info().outputPath('overlay-preview.png'), omitBackground: true });
+    const previous = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
+      .find(window => window.id !== global.voiceOverlayTest.mainId)!.getBounds());
+    await application.evaluate(() => {
+      const { manager, owner } = global.voiceOverlayTest;
+      manager.edit(owner, true, true);
+    });
+    await expect(overlay.locator('.member')).toHaveCount(4);
+    for (const name of ['狼', 'wolf', '非常个性的昵称用户']) await expect(overlay.getByText(name, { exact: true })).toBeVisible();
+    const geometry = await overlay.locator('.member').first().evaluate(element => {
+      const avatar = element.querySelector('.avatar')!;
+      const name = element.querySelector('.name')!;
+      return { avatarHeight: avatar.getBoundingClientRect().height, nameHeight: name.getBoundingClientRect().height,
+        border: getComputedStyle(avatar).borderWidth, font: getComputedStyle(name).fontSize,
+        rowHeight: element.getBoundingClientRect().height, defaultAvatar: !!element.querySelector('.avatar svg'),
+        frame: getComputedStyle(element.closest('.voice-overlay')!).borderWidth };
+    });
+    expect(geometry).toEqual({ avatarHeight: 40, nameHeight: 40, border: '0px', font: '40px', rowHeight: 45, defaultAvatar: true, frame: '0px' });
+    await overlay.screenshot({ path: test.info().outputPath('overlay-test-members.png'), omitBackground: true });
+    await application.evaluate(() => {
+      const { manager, owner } = global.voiceOverlayTest;
+      manager.edit(owner, false);
+    });
+    await expect(overlay.locator('.member')).toHaveCount(1);
+    expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
+      .find(window => window.id !== global.voiceOverlayTest.mainId)!.getBounds())).toEqual(previous);
+
     await application.evaluate((_electron, next) => {
       const { manager, owner } = global.voiceOverlayTest;
       manager.edit(owner, false);

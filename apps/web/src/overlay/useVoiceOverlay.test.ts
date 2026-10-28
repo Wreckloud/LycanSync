@@ -128,7 +128,7 @@ it('覆盖故障只显示独立错误；位置事件保存到本机，结束编�
     expect(f.model.error.value).toBe('覆盖不可用');
     expect(f.room.value).not.toBeNull();
     await f.model.edit(false);
-    expect(f.bridge.edit).toHaveBeenLastCalledWith('owner-1', false);
+    expect(f.bridge.edit).toHaveBeenLastCalledWith('owner-1', false, false);
   } finally { f.scope.stop(); }
 });
 
