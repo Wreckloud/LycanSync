@@ -1363,7 +1363,8 @@ function participantListening(participant: Participant) {
       :input-blocked="viewerInputBlocked"
       @notice="viewerNotice = $event" @toggle-share-audio="toggleSharedAudio" @request-control="requestParticipantControl">
       <template #default="{ select }">
-        <ParticipantCard v-for="participant in rtc.participants" :key="participant.identity" :participant="participant"
+        <div v-for="participant in rtc.participants" :key="participant.identity" class="member-card">
+        <ParticipantCard :participant="participant"
           :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant"
           :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"
           :remote-control-available="remoteControlCanRequest(participant.identity)"
@@ -1379,6 +1380,7 @@ function participantListening(participant: Participant) {
           @toggle-audio="toggleParticipantAudio(participant.identity)" @volume-change="updateParticipantVolume(participant.identity, $event)"
           @input-gain-change="updateInputGain" @output-volume-change="updateOutputVolume"
           @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />
+        </div>
       </template>
     </ScreenShareWindows>
     <RemoteAudio v-for="item in remoteAudioTracks" :key="item.track.sid" :track="item.track"

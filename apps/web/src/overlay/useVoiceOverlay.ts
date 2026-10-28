@@ -3,16 +3,14 @@ import { RoomEvent, type Participant, type Room } from 'livekit-client';
 import type { VoiceOverlayBridge, VoiceOverlaySettings, VoiceOverlaySnapshot } from './types';
 
 export const DEFAULT_OVERLAY_SETTINGS: VoiceOverlaySettings = { enabled: false, mode: 'all', scale: 100,
-  width: 240, displayId: null, x: 1, y: 0.5, includeInCapture: false };
+  displayId: null, x: 1, y: 0.5 };
 
 function validStoredSettings(value: VoiceOverlaySettings) {
   return value && typeof value.enabled === 'boolean' && ['all', 'speaking'].includes(value.mode)
     && Number.isInteger(value.scale) && value.scale >= 75 && value.scale <= 150
-    && Number.isInteger(value.width) && value.width >= 180 && value.width <= 420
     && (value.displayId === null || Number.isInteger(value.displayId))
     && Number.isFinite(value.x) && value.x >= 0 && value.x <= 1
-    && Number.isFinite(value.y) && value.y >= 0 && value.y <= 1
-    && typeof value.includeInCapture === 'boolean';
+    && Number.isFinite(value.y) && value.y >= 0 && value.y <= 1;
 }
 
 export function useVoiceOverlay(options: {
@@ -33,6 +31,7 @@ export function useVoiceOverlay(options: {
   const busy = ref(false);
   const ready = ref(false);
   const editing = ref(false);
+  const preview = ref(false);
   const key = `lycansync.voice-overlay.v1.${options.userId}`;
   let owner: string | undefined;
   let disposed = false;
@@ -98,9 +97,9 @@ export function useVoiceOverlay(options: {
     return room ? [room.localParticipant, ...room.remoteParticipants.values()].map((member) => options.avatar(member.identity)) : [];
   }, publish, { flush: 'sync' });
 
-  const removeErrorListener = bridge?.onError((message) => { error.value = message; editing.value = false; });
+  const removeErrorListener = bridge?.onError((message) => { error.value = message; editing.value = false; preview.value = false; });
   const removePlacementListener = bridge?.onPlacement((next) => { if (!disposed) saveSettings(next); });
-  const removeEditingListener = bridge?.onEditingChange((enabled) => { if (!disposed) editing.value = enabled; });
+  const removeEditingListener = bridge?.onEditingChange((enabled) => { if (!disposed) { editing.value = enabled; if (!enabled) preview.value = false; } });
 
   async function initialize() {
     if (!bridge) return;
@@ -109,7 +108,8 @@ export function useVoiceOverlay(options: {
       if (stored !== null) {
         const parsed = JSON.parse(stored) as VoiceOverlaySettings;
         if (!validStoredSettings(parsed)) throw new Error('invalid overlay preference');
-        settings.value = parsed;
+        const { enabled, mode, scale, displayId, x, y } = parsed;
+        settings.value = { enabled, mode, scale, displayId, x, y };
       }
     } catch { error.value = '无法读取本机覆盖设置，当前保持关闭。'; }
     try {
@@ -131,7 +131,7 @@ export function useVoiceOverlay(options: {
     try {
       const next = await bridge.configure(owner, { ...settings.value, ...patch });
       if (disposed) return;
-      if (!next.enabled) editing.value = false;
+      if (!next.enabled) { editing.value = false; preview.value = false; }
       lastSnapshot = '';
       lastPortraits.clear();
       saveSettings(next);
@@ -140,11 +140,11 @@ export function useVoiceOverlay(options: {
     finally { busy.value = false; }
   }
 
-  async function edit(enabled: boolean) {
+  async function edit(enabled: boolean, showPreview = false) {
     if (!bridge || !owner || disposed) return;
     try {
-      const applied = await bridge.edit(owner, enabled);
-      if (!disposed) editing.value = applied;
+      const applied = await bridge.edit(owner, enabled, enabled && showPreview);
+      if (!disposed) { editing.value = applied; preview.value = applied && showPreview; }
     } catch { if (!disposed) error.value = '无法切换覆盖编辑模式，请重试。'; }
   }
 
@@ -163,5 +163,5 @@ export function useVoiceOverlay(options: {
     removeEditingListener?.();
     if (bridge && owner) void bridge.end(owner).catch(() => console.error('屏幕覆盖关闭未确认。'));
   });
-  return { settings, displays, error, busy, ready, editing, configure, edit, refreshDisplays };
+  return { settings, displays, error, busy, ready, editing, preview, configure, edit, refreshDisplays };
 }

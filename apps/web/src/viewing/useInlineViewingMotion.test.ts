@@ -4,6 +4,7 @@ import { useInlineViewingMotion } from './useInlineViewingMotion';
 
 function fixture() {
   let height = 132;
+  let top = 80;
   const animations: { cancel: ReturnType<typeof vi.fn>; finish(): void }[] = [];
   const preference = { matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() };
   const conversation = { style: { setProperty: vi.fn(), removeProperty: vi.fn() }, getBoundingClientRect: () => ({ top: 80 }) };
@@ -17,7 +18,7 @@ function fixture() {
     return animation;
   });
   const element = {
-    isConnected: true, getClientRects: () => [{}], getBoundingClientRect: () => ({ height, bottom: 80 + height }), animate,
+    isConnected: true, getClientRects: () => [{}], getBoundingClientRect: () => ({ height, top, bottom: top + height }), animate,
     closest: () => ({ querySelector: () => conversation }),
     ownerDocument: { defaultView: {
       ResizeObserver: class {
@@ -37,18 +38,20 @@ function fixture() {
 
   async function change(open: boolean, from: number, to: number) {
     height = from;
+    top = open ? 80 : 0;
     expanded.value = open;
     await nextTick();
     height = to;
+    top = open ? 0 : 80;
     await nextTick();
   }
   return { scope, target, expanded, element, animate, animations, preference, change, conversation, observers, motion, setHeight(value: number) { height = value; } };
 }
 
-it('只过渡语音区高度，不变更媒体或缩放视频元素，完成后不留下固定高度', async () => {
+it('观看切换只衔接覆盖层顶边，内部高度独立变化，不缩放视频元素', async () => {
   const f = fixture();
   await f.change(true, 132, 430);
-  expect(f.animate).toHaveBeenCalledExactlyOnceWith([{ height: '132px' }, { height: '430px' }], {
+  expect(f.animate).toHaveBeenCalledExactlyOnceWith([{ top: '80px' }, { top: '0px' }], {
     duration: 210, easing: 'cubic-bezier(.2, 0, 0, 1)',
   });
   f.animations[0]!.finish();
@@ -63,7 +66,7 @@ it('快速反向操作取消旧过渡，从当前可见高度衔接，不排队�
   await f.change(false, 260, 132);
   expect(f.animations[0]!.cancel).toHaveBeenCalledOnce();
   expect(f.animate.mock.calls).toHaveLength(2);
-  expect(f.animate.mock.calls.at(-1)).toEqual([[{ height: '260px' }, { height: '132px' }], {
+  expect(f.animate.mock.calls.at(-1)).toEqual([[{ top: '-80px' }, { top: '0px' }], {
     duration: 210, easing: 'cubic-bezier(.2, 0, 0, 1)',
   }]);
   f.scope.stop();
@@ -97,7 +100,7 @@ it('等待布局期间销毁或切换目标，迟到任务不能启动动画', a
 it('只给右栏让出覆盖高度，移除覆盖层后清除占位，迟到观察不恢复旧尺寸', async () => {
   const f = fixture();
   await f.change(true, 132, 430);
-  expect(f.conversation.style.setProperty).toHaveBeenLastCalledWith('--voice-overlay-height', '430px');
+  expect(f.conversation.style.setProperty).toHaveBeenLastCalledWith('--voice-overlay-height', '350px');
   f.target.value = null;
   await nextTick();
   expect(f.observers[0]!.disconnect).toHaveBeenCalledOnce();

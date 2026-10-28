@@ -6,7 +6,7 @@ import InlineFeedback from '../InlineFeedback.vue';
 
 const props = defineProps<{ overlay: ReturnType<typeof useVoiceOverlay>; active: boolean }>();
 
-async function toggleSetting(key: 'enabled' | 'includeInCapture', event: Event) {
+async function toggleSetting(key: 'enabled', event: Event) {
   const input = event.target as HTMLInputElement;
   await props.overlay.configure({ [key]: input.checked });
   // 系统拒绝修改时也立即还原控件，不能让原生状态与开关显示不一致。
@@ -54,25 +54,18 @@ onScopeDispose(() => { void props.overlay.edit(false); });
       <label class="overlay-field"><span>整体大小 · {{ overlay.settings.value.scale }}%</span><input type="range" min="75" max="150" step="5"
         :value="overlay.settings.value.scale" :disabled="!overlay.ready.value || overlay.busy.value" aria-label="覆盖整体大小"
         @change="overlay.configure({ scale: Number(($event.target as HTMLInputElement).value) })" /></label>
-      <label class="overlay-field"><span>每列宽度 · {{ overlay.settings.value.width }}</span><input type="range" min="180" max="420" step="10"
-        :value="overlay.settings.value.width" :disabled="!overlay.ready.value || overlay.busy.value" aria-label="覆盖每列宽度"
-        @change="overlay.configure({ width: Number(($event.target as HTMLInputElement).value) })" /></label>
       <div class="settings-toggle">
-        <span><strong>编辑覆盖位置</strong><small>开启覆盖后可拖动顶部说明条；无通话时显示示例。离开本栏目即结束编辑。</small></span>
+        <span><strong>编辑覆盖位置</strong><small>编辑时直接拖动头像或昵称，离开本栏目即结束编辑。</small></span>
         <button class="settings-button" type="button" :disabled="!overlay.ready.value || !overlay.settings.value.enabled || overlay.busy.value"
           @click="overlay.edit(!overlay.editing.value)">{{ overlay.editing.value ? '完成编辑' : '编辑位置' }}</button>
       </div>
-      <button class="settings-button" type="button" :disabled="!overlay.ready.value || overlay.busy.value" @click="overlay.configure({ displayId: null, x: 1, y: 0.5, scale: 100, width: 240 })">恢复默认位置与大小</button>
-    </section>
-    <section class="settings-block">
-      <h2>屏幕共享</h2>
-      <label class="settings-toggle">
-        <span><strong>允许覆盖进入整屏共享</strong><small>默认排除在屏幕采集外，也可能影响其他录屏软件。开启后才允许出现在整屏画面中；不额外叠加到窗口共享。</small></span>
-        <input type="checkbox" :checked="overlay.settings.value.includeInCapture" :disabled="!overlay.ready.value || overlay.busy.value"
-          @change="toggleSetting('includeInCapture', $event)" />
+      <label v-if="overlay.editing.value" class="settings-toggle">
+        <span><strong>显示测试成员</strong><small>加入三个默认头像，比较短昵称、英文和长昵称的排列；仅编辑期间显示。</small></span>
+        <input type="checkbox" :checked="overlay.preview.value" @change="overlay.edit(true, ($event.target as HTMLInputElement).checked)" />
       </label>
-      <p class="settings-intro">适用于大多数桌面、窗口和无边框游戏。独占全屏、锁屏及系统安全界面可能无法显示；实际捕获排除效果仍取决于系统与录屏方式。</p>
+      <button class="settings-button" type="button" :disabled="!overlay.ready.value || overlay.busy.value" @click="overlay.configure({ displayId: null, x: 1, y: 0.5, scale: 100 })">恢复默认位置与大小</button>
     </section>
+    <p class="settings-intro">覆盖默认排除在屏幕采集外。适用于大多数桌面、窗口和无边框游戏；独占全屏、锁屏及系统安全界面可能无法显示，实际排除效果取决于系统与录屏方式。</p>
   </div>
 </template>
 

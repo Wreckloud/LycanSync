@@ -32,9 +32,10 @@
 }
 .dialog-enter-from, .dialog-leave-to { opacity: 0; }
 .dialog-enter-from > :first-child, .dialog-leave-to > :first-child { transform: translateY(4px); }
-.entry-mode-enter-active, .entry-mode-leave-active { transition: opacity var(--motion-expand-duration) var(--motion-ease), transform var(--motion-expand-duration) var(--motion-ease); }
-.entry-mode-leave-active { position: absolute; top: 0; right: 0; left: 0; pointer-events: none; }
-.entry-mode-enter-from, .entry-mode-leave-to { opacity: 0; transform: translateY(4px); }
+.entry-card-enter-active, .entry-card-leave-active { transition: opacity var(--motion-expand-duration) var(--motion-ease), transform var(--motion-expand-duration) var(--motion-ease); }
+.entry-card-leave-active { position: absolute; top: 0; right: 0; left: 0; pointer-events: none; }
+.entry-card-enter-from { opacity: 0; transform: translateX(-4px) scale(.985); }
+.entry-card-leave-to { opacity: 0; transform: translateX(4px) scale(.985); }
 
 .group-header-region { display: grid; grid-template-rows: 1fr; visibility: visible; transition: opacity var(--motion-surface-duration) ease; }
 .group-header-clip { min-height: 0; overflow: visible; }
@@ -52,8 +53,9 @@
 .settings-page-enter-active, .settings-page-leave-active { transition: opacity var(--motion-surface-duration) var(--motion-ease), transform var(--motion-surface-duration) var(--motion-ease); }
 .settings-page-enter-from, .settings-page-leave-to { opacity: 0; transform: translateX(4px); }
 .settings-page-leave-active { position: fixed; z-index: 3; inset: var(--titlebar-height) 0 0; pointer-events: none; }
-.member-search-enter-active, .member-search-leave-active { transition: opacity var(--motion-layout-duration) var(--motion-ease), clip-path var(--motion-layout-duration) var(--motion-ease); }
-.member-search-enter-from, .member-search-leave-to { opacity: 0; clip-path: inset(0 0 0 100%); }
+.member-search { clip-path: inset(0); }
+.member-search-enter-active, .member-search-leave-active { transition: opacity var(--motion-expand-duration) var(--motion-ease), clip-path var(--motion-expand-duration) var(--motion-ease), transform var(--motion-expand-duration) var(--motion-ease); }
+.member-search-enter-from, .member-search-leave-to { opacity: 0; clip-path: inset(0 0 0 calc(100% - 24px)); transform: translateX(4px); }
 .member-search-leave-active { pointer-events: none; }
 
 @media (prefers-reduced-motion: reduce) {

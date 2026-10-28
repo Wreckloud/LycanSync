@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
 import { ArrowLeft, ChevronDown, ChevronUp, Fullscreen, Maximize2, X } from '@lucide/vue';
 import { VideoQuality, type Room } from 'livekit-client';
@@ -8,23 +8,34 @@ import { useViewingSize } from '../viewing/useViewingSize';
 import ParticipantCard from './ParticipantCard.vue';
 import HorizontalScroll from './HorizontalScroll.vue';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   view: UnwrapNestedRefs<ReturnType<typeof useScreenShareLayout>>;
   room: Room | null;
   revision: number;
   avatar: (identity: string) => string;
   listening: boolean;
   privateControl: (identity: string) => string;
+  active?: boolean;
   detached?: boolean;
   reconnecting: boolean;
-}>();
+}>(), { active: true });
 const emit = defineEmits<{ detach: []; return: []; notice: [message: string] }>();
 const panel = ref<HTMLElement | null>(null);
 const ratios = ref<Record<number, number>>({});
+const framing = ref(false);
+let panelAnimation: Animation | undefined;
+let panelGeneration = 0;
+let motionPreference: MediaQueryList | undefined;
+function stopPanelMotion() {
+  panelAnimation?.cancel();
+  panelAnimation = undefined;
+  framing.value = false;
+}
+function reducePanelMotion() { if (motionPreference?.matches) stopPanelMotion(); }
 let clock: ReturnType<typeof setInterval> | undefined;
 const now = ref(performance.now());
 const focus = computed(() => props.view.mode === 'focus');
-const showMembers = computed(() => focus.value && props.view.membersVisible && !props.view.expanded);
+const showMembers = computed(() => !props.active || focus.value && props.view.membersVisible && !props.view.expanded);
 const { width, height, minimumHeight, maximumHeight, resizing, changeHeight, beginResize, moveResize, endResize } = useViewingSize(panel, {
   detached: () => Boolean(props.detached), expanded: () => props.view.expanded,
   showMembers: () => showMembers.value, preferredHeight: () => props.view.height,
@@ -51,7 +62,8 @@ function ratio(share: ViewedShare) { return ratios.value[share.key] ?? 16 / 9; }
 
 function tileStyle(share: ViewedShare) {
   const aspect = ratio(share);
-  return focus.value ? {} : { width: sizing.value.width / (16 / 9) * aspect + 'px', '--tile-ratio': aspect };
+  const tileWidth = focus.value ? width.value : sizing.value.width / (16 / 9) * aspect;
+  return { width: tileWidth + 'px', height: (focus.value ? height.value : tileWidth / aspect) + 'px', '--tile-ratio': aspect };
 }
 
 function elapsed(share: ViewedShare) {
@@ -101,19 +113,55 @@ watch(() => props.view.shares.map(share => share.key).join(','), () => {
   ratios.value = Object.fromEntries(Object.entries(ratios.value).filter(([key]) => keys.has(key)));
 });
 
+watch(() => props.active, (active) => {
+  if (clock) clearInterval(clock);
+  now.value = performance.now();
+  if (active) clock = setInterval(() => { now.value = performance.now(); }, 1000);
+}, { immediate: true });
+watch(() => props.view.expanded, async () => {
+  const element = panel.value;
+  const before = element?.getBoundingClientRect();
+  stopPanelMotion();
+  const generation = ++panelGeneration;
+  if (!element || !before || !props.active) return;
+  framing.value = true;
+  await nextTick();
+  if (generation !== panelGeneration || !element.isConnected) return;
+  const owner = element.ownerDocument.defaultView!;
+  const after = element.getBoundingClientRect();
+  const style = owner.getComputedStyle(element);
+  if (motionPreference?.matches || typeof element.animate !== 'function') { framing.value = false; return; }
+  const top = Number.parseFloat(style.top) || 0;
+  const left = Number.parseFloat(style.left) || 0;
+  // 改变窗口边界而不缩放视频像素；尺寸观察仍按实际可用空间选择 contain 比例。
+  const active = element.animate([
+    { top: `${top + before.top - after.top}px`, left: `${left + before.left - after.left}px`, width: `${before.width}px`, height: `${before.height}px` },
+    { top: `${top}px`, left: `${left}px`, width: `${after.width}px`, height: `${after.height}px` },
+  ], { duration: Number.parseFloat(style.getPropertyValue('--motion-layout-duration')),
+    easing: style.getPropertyValue('--motion-ease').trim() });
+  panelAnimation = active;
+  active.finished.then(() => { if (panelAnimation === active) stopPanelMotion(); }, () => {});
+}, { flush: 'pre' });
 onMounted(() => {
-  clock = setInterval(() => { now.value = performance.now(); }, 1000);
+  motionPreference = panel.value!.ownerDocument.defaultView!.matchMedia('(prefers-reduced-motion: reduce)');
+  motionPreference.addEventListener('change', reducePanelMotion);
 });
-onScopeDispose(() => { if (clock) clearInterval(clock); });
+onScopeDispose(() => {
+  panelGeneration++;
+  stopPanelMotion();
+  if (clock) clearInterval(clock);
+  motionPreference?.removeEventListener('change', reducePanelMotion);
+});
 </script>
 
 <template>
-  <section ref="panel" class="call-viewing-panel" :class="{ 'is-detached': detached, 'is-expanded': view.expanded, 'is-resizing': resizing }"
-    aria-label="共享观看区" @keydown.esc="escape" @keydown.tab="trapFocus">
-    <div class="viewing-stage" :class="{ 'is-focus-stage': focus }" :style="{ height: height + 'px' }">
+  <section ref="panel" class="call-viewing-panel" :class="{ 'is-detached': detached, 'is-expanded': active && view.expanded, 'is-resizing': resizing, 'is-collapsed': !active, 'is-framing': framing }"
+    :aria-label="active ? '共享观看区' : undefined" @keydown.esc="escape" @keydown.tab="trapFocus">
+    <div class="viewing-stage" :class="{ 'is-focus-stage': focus }" :style="{ height: (active ? height : 0) + 'px' }" :inert="!active">
       <span v-if="reconnecting" class="viewing-reconnecting" role="status">正在重连…</span>
       <HorizontalScroll label="共享画面网格">
-        <div class="viewing-grid" :class="{ 'is-focus': focus }" :style="{ '--view-rows': sizing.rows }">
+        <TransitionGroup v-if="active" name="view-tile" tag="div" class="viewing-grid" :class="{ 'is-focus': focus }" :style="{ '--view-rows': sizing.rows }"
+          @before-leave="($event as HTMLElement).inert = true">
           <div v-for="share in view.displayed" :key="share.key" class="viewing-tile" :style="tileStyle(share)">
             <div class="viewing-surface" role="button" tabindex="0"
               :aria-label="focus ? '查看全部共享画面' : '聚焦' + share.participant.name"
@@ -139,18 +187,18 @@ onScopeDispose(() => { if (clock) clearInterval(clock); });
               </div>
             </div>
           </div>
-        </div>
+        </TransitionGroup>
       </HorizontalScroll>
-      <div v-if="!detached && !view.expanded" class="viewing-resize" role="separator" aria-label="调整观看区域高度"
+      <div v-if="active && !detached && !view.expanded" class="viewing-resize" role="separator" aria-label="调整观看区域高度"
         aria-orientation="horizontal" tabindex="0" :aria-valuenow="Math.round(height)" :aria-valuemin="Math.round(minimumHeight)" :aria-valuemax="Math.round(maximumHeight)"
         @pointerdown="beginResize" @pointermove="moveResize" @pointerup="endResize" @pointercancel="endResize"
         @keydown.up.prevent="changeHeight(height - 20)" @keydown.down.prevent="changeHeight(height + 20)" />
     </div>
-    <Transition name="layout-reveal" @before-leave="($event as HTMLElement).inert = true">
-      <div v-if="showMembers" class="layout-reveal">
+    <Transition name="layout-reveal" @before-enter="($event as HTMLElement).inert = false" @before-leave="($event as HTMLElement).inert = true">
+      <div v-show="showMembers" class="layout-reveal">
         <div class="layout-reveal-inner">
           <div class="viewing-members-panel">
-            <div class="viewing-members-toggle">
+            <div v-if="active" class="viewing-members-toggle">
               <button type="button" aria-label="收起成员" title="收起成员" :aria-expanded="true" @click="view.membersVisible = false"><ChevronUp :size="16" /></button>
             </div>
             <slot />

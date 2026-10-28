@@ -2,11 +2,9 @@ export interface VoiceOverlaySettings {
   enabled: boolean;
   mode: 'all' | 'speaking';
   scale: number;
-  width: number;
   displayId: number | null;
   x: number;
   y: number;
-  includeInCapture: boolean;
 }
 
 export interface VoiceOverlayMember {
@@ -29,7 +27,7 @@ export interface VoiceOverlayBridge {
   begin(): Promise<string>;
   configure(owner: string, settings: VoiceOverlaySettings): Promise<VoiceOverlaySettings>;
   update(owner: string, snapshot: VoiceOverlaySnapshot): Promise<void>;
-  edit(owner: string, enabled: boolean): Promise<boolean>;
+  edit(owner: string, enabled: boolean, preview?: boolean): Promise<boolean>;
   end(owner: string): Promise<void>;
   displays(): Promise<{ id: number; label: string }[]>;
   onError(callback: (message: string) => void): () => void;
@@ -40,6 +38,7 @@ export interface VoiceOverlayBridge {
 export interface VoiceOverlayView {
   settings: VoiceOverlaySettings;
   editing: boolean;
+  columnWidth: number;
   status: VoiceOverlaySnapshot['status'];
   members: (VoiceOverlayMember & { visible: boolean })[];
   portraits?: { identity: string; avatar: string }[];

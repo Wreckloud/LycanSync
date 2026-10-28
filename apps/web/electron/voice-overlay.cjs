@@ -3,17 +3,15 @@ const { pathToFileURL } = require('node:url');
 const { randomUUID } = require('node:crypto');
 
 const OVERLAY_URL = 'lycan://overlay/overlay.html';
-const DEFAULT_SETTINGS = { enabled: false, mode: 'all', scale: 100, width: 240,
-  displayId: null, x: 1, y: 0.5, includeInCapture: false };
+const DEFAULT_SETTINGS = { enabled: false, mode: 'all', scale: 100,
+  displayId: null, x: 1, y: 0.5 };
 
 function validateSettings(value) {
   if (!value || typeof value.enabled !== 'boolean' || !['all', 'speaking'].includes(value.mode)
       || !Number.isInteger(value.scale) || value.scale < 75 || value.scale > 150
-      || !Number.isInteger(value.width) || value.width < 180 || value.width > 420
       || (value.displayId !== null && !Number.isInteger(value.displayId))
       || !Number.isFinite(value.x) || value.x < 0 || value.x > 1
-      || !Number.isFinite(value.y) || value.y < 0 || value.y > 1
-      || typeof value.includeInCapture !== 'boolean') throw new Error('屏幕覆盖设置无效');
+      || !Number.isFinite(value.y) || value.y < 0 || value.y > 1) throw new Error('屏幕覆盖设置无效');
   return Object.fromEntries(Object.keys(DEFAULT_SETTINGS).map((key) => [key, value[key]]));
 }
 
@@ -84,6 +82,7 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
   let ready = false;
   let failed = false;
   let editing = false;
+  let preview = false;
   let settings = { ...DEFAULT_SETTINGS };
   let snapshot = { sequence: -1, roomId: null, status: 'hidden', members: [] };
   let portraits = new Map();
@@ -114,22 +113,39 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
 
   function view() {
     const connected = snapshot.status === 'connected';
-    return { settings, editing, status: snapshot.status, members: snapshot.members.map((member) => ({
+    const members = snapshot.members.map((member) => ({
       ...member, speaking: connected && member.speaking,
       visible: settings.mode === 'all' || (connected && (member.speaking || (speakingUntil.get(member.identity) ?? 0) > Date.now())),
       avatar: portraits.get(member.identity) ?? '',
-    })) };
+    }));
+    if (editing && preview) ['狼', 'wolf', '非常个性的昵称用户'].forEach((name, index) => members.push({
+      identity: `overlay-preview-${index}`, name, microphone: true, listening: true, speaking: false, visible: true, avatar: '',
+    }));
+    // 按完整名单估算最长昵称宽度，说话状态切换不反复改变窗口宽度。
+    const nameWidth = Math.max(32, ...members.map((member) => Array.from(member.name).reduce((width, character) =>
+      width + (/[^\u0000-\u00ff]/.test(character) ? 32 : 20), 0)));
+    const columnWidth = Math.min(display().workArea.width - 4, Math.ceil((32 + 8 + nameWidth + 2) * settings.scale / 100));
+    return { settings, editing, columnWidth, status: snapshot.status, members };
   }
 
-  function place(count) {
+  function place(count, columnWidth, preservePlacement) {
     if (!overlay) return;
     const area = display().workArea;
-    const rowHeight = Math.ceil(40 * settings.scale / 100);
-    const maxRows = Math.max(1, Math.floor((area.height - 64) / rowHeight));
+    const rowHeight = Math.ceil(36 * settings.scale / 100);
+    const maxRows = Math.max(1, Math.floor((area.height - 4) / rowHeight));
     const rows = Math.max(1, Math.min(count, maxRows));
     const columns = Math.max(1, Math.ceil(count / rows));
-    const width = Math.min(area.width, settings.width * columns);
-    const height = Math.min(area.height, rows * rowHeight + (editing ? 40 : 8));
+    const width = Math.min(area.width, columnWidth * columns + 4);
+    const height = Math.min(area.height, rows * rowHeight + 4);
+    if (preservePlacement && appliedBounds) {
+      const left = settings.x > 0.5 ? appliedBounds.x + appliedBounds.width - width : appliedBounds.x;
+      const x = Math.max(0, Math.min(1, (left - area.x) / Math.max(1, area.width - width)));
+      const y = Math.max(0, Math.min(1, (appliedBounds.y - area.y) / Math.max(1, area.height - height)));
+      if (settings.x !== x || settings.y !== y) {
+        settings = { ...settings, x, y };
+        onPlacement(settings);
+      }
+    }
     const bounds = { x: area.x + Math.round((area.width - width) * settings.x),
       y: area.y + Math.round((area.height - height) * settings.y), width, height };
     if (!appliedBounds || Object.keys(bounds).some((key) => appliedBounds[key] !== bounds[key])) {
@@ -149,11 +165,11 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
     if (previous && !previous.isDestroyed()) previous.destroy();
   }
 
-  function refreshWindow() {
+  function refreshWindow(preservePlacement = false) {
     const visible = owner && settings.enabled && (editing || (snapshot.roomId && snapshot.status !== 'hidden'));
     if (!visible || failed) { destroyWindow(); return; }
     if (!overlay) {
-      overlay = new BrowserWindow({ width: settings.width, height: 64, show: false,
+      overlay = new BrowserWindow({ width: 100, height: 64, show: false,
         frame: false, transparent: true, hasShadow: false, resizable: false, maximizable: false,
         fullscreenable: false, skipTaskbar: true, focusable: editing, title: 'LycanSync 屏幕覆盖',
         webPreferences: { session: overlaySession, preload: resolve(__dirname, 'voice-overlay-preload.cjs'),
@@ -164,11 +180,11 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
         if (overlay === current && !ready) reportFailure('voiceOverlayReadyTimeout');
       }, 10_000);
       // 在第一次显示前设置捕获策略，避免先显示后排除造成可见首帧。
-      current.setContentProtection(!settings.includeInCapture);
+      current.setContentProtection(true);
       current.setAlwaysOnTop(true, 'screen-saver');
       current.setIgnoreMouseEvents(!editing);
-      appliedSettings = { editing, includeInCapture: settings.includeInCapture };
-      onDiagnostic({ stage: 'voiceOverlayCreated', editing, captureExcluded: !settings.includeInCapture });
+      appliedSettings = { editing };
+      onDiagnostic({ stage: 'voiceOverlayCreated', editing, captureExcluded: true });
       current.setMenu(null);
       current.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
       current.webContents.on('will-navigate', (event) => event.preventDefault());
@@ -206,15 +222,15 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
       });
       void current.loadURL(OVERLAY_URL).catch(() => { if (overlay === current) reportFailure('voiceOverlayLoadFailed'); });
     }
-    if (appliedSettings.includeInCapture !== settings.includeInCapture) overlay.setContentProtection(!settings.includeInCapture);
     if (appliedSettings.editing !== editing) {
       overlay.setFocusable(editing);
       overlay.setIgnoreMouseEvents(!editing);
     }
-    appliedSettings = { editing, includeInCapture: settings.includeInCapture };
+    appliedSettings = { editing };
     const nextView = view();
-    const count = editing ? Math.max(2, snapshot.members.length) : nextView.members.filter((member) => member.visible).length;
-    place(count);
+    const count = nextView.members.filter((member) => editing || member.visible).length;
+    place(count, nextView.columnWidth, preservePlacement);
+    nextView.settings = settings;
     if (ready) {
       // 头像仅随资料变化发送，说话事件只携带轻量成员状态。
       const roster = `${portraitRevision}:${JSON.stringify(nextView.members.map(({ identity, name }) => ({ identity, name })))}`;
@@ -227,8 +243,8 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
     }
   }
 
-  function refresh() {
-    try { refreshWindow(); }
+  function refresh(preservePlacement = false) {
+    try { refreshWindow(preservePlacement); }
     catch { reportFailure('voiceOverlayWindowFailed'); }
   }
 
@@ -250,6 +266,7 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
   function clear() {
     owner = null;
     editing = false;
+    preview = false;
     failed = false;
     snapshot = { sequence: -1, roomId: null, status: 'hidden', members: [] };
     portraits.clear();
@@ -297,6 +314,7 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
       if (!settings.enabled || (next.displayId === null && settings.displayId !== null)) initialDisplay = defaultDisplay();
       if (!next.enabled) {
         editing = false;
+        preview = false;
         failed = false;
         snapshot = { ...snapshot, roomId: null, status: 'hidden', members: [] };
         portraits.clear();
@@ -306,7 +324,7 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
       if (settings.displayId !== next.displayId) editDisplay = next.displayId;
       settings = next;
       onDiagnostic({ stage: 'voiceOverlayConfigured', enabled: settings.enabled, mode: settings.mode,
-        captureExcluded: !settings.includeInCapture, scale: settings.scale, width: settings.width });
+        captureExcluded: true, scale: settings.scale });
       refresh();
       return settings;
     },
@@ -333,13 +351,15 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
       scheduleSpeakingExpiry();
       refresh();
     },
-    edit(token, enabled) {
+    edit(token, enabled, showPreview = false) {
       requireOwner(token);
-      if (typeof enabled !== 'boolean') throw new Error('编辑状态无效');
+      if (typeof enabled !== 'boolean' || typeof showPreview !== 'boolean') throw new Error('编辑状态无效');
       if (failed && enabled) throw new Error('请先关闭覆盖再重新开启');
       editing = settings.enabled && enabled;
+      preview = editing && showPreview;
       editDisplay = settings.displayId;
-      refresh();
+      // 去掉编辑或测试名单后保留内容顶部和所靠边缘，不按新窗口高度重新居中。
+      refresh(true);
       return editing;
     },
     ready(event) {

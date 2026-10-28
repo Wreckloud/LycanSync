@@ -147,7 +147,7 @@ async function sharing(page: Page, ids: string[]) {
   await page.evaluate((identities) => (window as unknown as { __viewingTest: { sharing(ids: string[]): void } }).__viewingTest.sharing(identities), ids);
 }
 
-test('横向浏览箭头跟随当前减少动态效果设置', async ({ page }) => {
+test('横向浏览渐变跟随滚动位置，键盘滚动遵循减少动态效果设置', async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 900 });
   const strip = page.getByRole('region', { name: '语音成员', exact: true });
   await strip.evaluate(element => {
@@ -163,20 +163,30 @@ test('横向浏览箭头跟随当前减少动态效果设置', async ({ page }) 
     }) as typeof element.scrollTo;
   });
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.getByRole('button', { name: '语音成员向右滚动', exact: true }).click();
+  await expect(strip).toHaveClass(/can-scroll-right/);
+  await expect(page.locator('.scroll-arrow')).toHaveCount(0);
+  await strip.focus();
+  await strip.press('ArrowRight');
   await expect(strip).toHaveAttribute('data-scroll-behavior', 'auto');
   await expect.poll(() => strip.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await page.getByRole('button', { name: '语音成员向左滚动', exact: true }).click();
+  await expect(strip).toHaveClass(/can-scroll-left/);
+  await strip.press('ArrowLeft');
   await expect(strip).toHaveAttribute('data-scroll-behavior', 'smooth');
   await strip.evaluate(element => { delete element.dataset.scrollStopped; });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(strip).toHaveAttribute('data-scroll-stopped', 'true');
+  await strip.evaluate(element => { element.scrollLeft = element.scrollWidth; });
+  await expect(strip).toHaveClass(/can-scroll-left/);
+  await expect(strip).not.toHaveClass(/can-scroll-right/);
+  await expect(strip).toHaveCSS('mask-image', /linear-gradient/);
+  await expect(page.locator('.message-list')).toHaveCSS('mask-image', 'none');
 });
 
 for (const reducedMotion of ['no-preference', 'reduce'] as const) {
   test(`连贯布局保留同一视频，快速切换和减少动态效果不延迟退出：${reducedMotion}`, async ({ page }) => {
     await page.emulateMedia({ reducedMotion });
+    const memberStrip = await page.locator('.viewing-member-strip').elementHandle();
     await sharing(page, ['A', 'B']);
     await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
     const video = await page.locator('.viewing-tile video').elementHandle();
@@ -186,7 +196,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     await page.getByRole('button', { name: '收起成员', exact: true }).click();
     expect(await page.locator('.layout-reveal-leave-active').evaluateAll(elements =>
       elements.every(element => (element as HTMLElement).inert))).toBe(true);
-    await page.locator('.viewing-surface').hover();
+    await page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').hover();
     await page.getByRole('button', { name: '展开成员', exact: true }).click();
     await expect(page.getByRole('region', { name: '语音成员', exact: true })).toBeVisible();
     await expect(page.getByRole('region', { name: '语音成员', exact: true })).toHaveCount(1);
@@ -194,12 +204,14 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       await expect(page.locator('.viewing-stage')).toHaveCSS('transition-duration', '0s');
       await expect(page.locator('.group-header-region')).toHaveCSS('visibility', 'hidden');
     }
-    await page.locator('.viewing-surface').hover();
+    await page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').hover();
     await page.getByRole('button', { name: '退出观看', exact: true }).click();
     // 空间可以继续收起，已退出的主视频不能为退场动画继续持有。
     await expect(page.locator('.viewing-tile')).toHaveCount(0);
     expect(await video!.evaluate(element => element.isConnected)).toBe(false);
     await expect(page.locator('.group-header')).toBeVisible();
+    expect(await memberStrip!.evaluate(element => element.isConnected
+      && element === document.querySelector('.viewing-member-strip'))).toBe(true);
     await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
     await expect(page.getByRole('main', { name: '设置', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '返回应用', exact: true }).click();
@@ -282,7 +294,7 @@ test('默认仅小预览，网格和聚焦使用原比例，整体弹出后返�
   await input.focus();
   await input.hover();
   await expect(page.locator('.viewing-actions')).toHaveCSS('opacity', '0');
-  await page.locator('.viewing-surface').hover();
+  await page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').hover();
   await expect(page.locator('.viewing-actions')).toHaveCSS('opacity', '1');
   expect(await page.locator('.viewing-action-buttons button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label'))))
     .toEqual(['占满窗口', '弹出观看区', '退出观看']);
@@ -292,7 +304,7 @@ test('默认仅小预览，网格和聚焦使用原比例，整体弹出后返�
   const windowSize = await page.evaluate(() => [innerWidth, innerHeight, outerWidth, outerHeight]);
   await page.getByRole('button', { name: '占满窗口', exact: true }).click();
   await expect(page.locator('.call-viewing-panel')).toHaveClass(/is-expanded/);
-  await expect(page.locator('.viewing-members-panel')).toHaveCount(0);
+  await expect(page.locator('.viewing-members-panel')).not.toBeVisible();
   expect(await page.evaluate(() => [innerWidth, innerHeight, outerWidth, outerHeight])).toEqual(windowSize);
   expect(await page.evaluate(() => Boolean(document.fullscreenElement))).toBe(false);
   const expanded = await page.locator('.viewing-stage').boundingBox();
@@ -384,6 +396,7 @@ test('统一卡片尺寸，点击切换与成员折叠记忆，横向拖动不�
   const strip = page.getByRole('region', { name: '语音成员', exact: true });
   await expect(card).toHaveCSS('width', '220px');
   await expect.poll(() => strip.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+  await expect.poll(() => page.evaluate(() => document.getAnimations().filter(animation => animation.playState === 'running').length)).toBe(0);
   const bounds = await strip.boundingBox();
   await page.mouse.move(bounds!.x + bounds!.width / 2, bounds!.y + 30);
   await page.mouse.down();
@@ -396,11 +409,11 @@ test('统一卡片尺寸，点击切换与成员折叠记忆，横向拖动不�
   await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
   await page.getByRole('button', { name: '收起成员', exact: true }).click();
   await expect(strip).toHaveCount(0);
-  await expect(page.locator('.viewing-members-panel')).toHaveCount(0);
+  await expect(page.locator('.viewing-members-panel')).not.toBeVisible();
   const foldedPanel = await page.getByRole('region', { name: '共享观看区' }).boundingBox();
   const foldedStage = await page.locator('.viewing-stage').boundingBox();
   expect(Math.abs(foldedPanel!.height - foldedStage!.height)).toBeLessThan(1);
-  await page.locator('.viewing-surface').hover();
+  await page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').hover();
   const expand = await page.getByRole('button', { name: '展开成员', exact: true }).boundingBox();
   expect(Math.abs(expand!.x + expand!.width / 2 - foldedStage!.x - foldedStage!.width / 2)).toBeLessThan(1);
   await page.screenshot({ path: test.info().outputPath('focus-members-collapsed.png') });
@@ -410,7 +423,7 @@ test('统一卡片尺寸，点击切换与成员折叠记忆，横向拖动不�
   await page.getByRole('button', { name: '聚焦成员B', exact: true }).click();
   await expect(page.getByRole('button', { name: '展开成员', exact: true })).toBeVisible();
   await expect(strip).toHaveCount(0);
-  await page.locator('.viewing-surface').hover();
+  await page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').hover();
   await page.getByRole('button', { name: '展开成员', exact: true }).click();
   await expect(strip).toBeVisible();
   await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
@@ -558,7 +571,7 @@ test('聚焦网格和成员折叠只覆盖聊天，保留历史阅读位置与�
   await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
   await unchanged();
   await page.getByRole('button', { name: '聚焦成员B', exact: true }).click();
-  await page.locator('.viewing-surface').hover();
+  await page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').hover();
   await page.getByRole('button', { name: '退出观看', exact: true }).click();
   await unchanged();
 });
