@@ -561,6 +561,38 @@ test('聚焦网格和成员折叠只覆盖聊天，保留历史阅读位置与�
   await unchanged();
 });
 
+test('观看默认高度和拖动上限一致，缩窗保留偏好且不遮住必要操作', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await sharing(page, ['A']);
+  await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+  const separator = page.getByRole('separator', { name: '调整观看区域高度' });
+  await expect(separator).toBeVisible();
+  const initial = Number(await separator.getAttribute('aria-valuenow'));
+  const maximum = Number(await separator.getAttribute('aria-valuemax'));
+  expect(initial).toBeLessThanOrEqual(maximum);
+  await separator.press('ArrowDown');
+  const increased = Number(await separator.getAttribute('aria-valuenow'));
+  expect(increased).toBeGreaterThanOrEqual(initial);
+  await separator.press('ArrowUp');
+  const preferred = Number(await separator.getAttribute('aria-valuenow'));
+  for (const height of [560, 900]) {
+    await page.setViewportSize({ width: 1280, height });
+    await expect(page.getByRole('textbox', { name: '消息内容' })).toBeInViewport();
+    await expect(page.getByTestId('callbar')).toBeInViewport();
+    await expect(page.getByRole('button', { name: '搜索群组成员' })).toBeInViewport();
+    await expect.poll(async () => {
+      const voice = await page.getByRole('region', { name: '当前语音成员', exact: true }).boundingBox();
+      const composer = await page.locator('.composer').boundingBox();
+      return voice!.y + voice!.height <= composer!.y + 1;
+    }).toBe(true);
+    const panel = await page.getByRole('region', { name: '共享观看区', exact: true }).boundingBox();
+    const voice = await page.getByRole('region', { name: '当前语音成员', exact: true }).boundingBox();
+    expect(panel!.y + panel!.height).toBeLessThanOrEqual(voice!.y + voice!.height + 1);
+  }
+  await expect.poll(async () => Number(await separator.getAttribute('aria-valuenow'))).toBe(preferred);
+});
+
 test('群菜单不被标题裁切，控制栏退出时聊天连续复位且保留草稿', async ({ page }) => {
   await page.getByRole('button', { name: '群组菜单', exact: true }).click();
   const menu = page.getByLabel('群组操作', { exact: true });
