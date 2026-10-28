@@ -50,15 +50,23 @@ docker compose exec -T api cat /var/bootstrap/admin-activation.txt
 
 `downloads/LycanSync-setup.exe` 是网页使用的安装程序别名；版本化的安装包、同名 `.blockmap` 和 `latest.yml` 供自动更新使用，由 Caddy 提供，API、PostgreSQL 仍不直接暴露。`package-server.ps1` 检查清单名称及 SHA-512 与安装包一致，不允许混用不同构建批次。首次接入自动更新需手动安装 0.0.4 或以后版本。
 
-发布新客户端时先递增 `apps/web/package.json` 与锁文件的版本，再按 README 构建。将版本化安装包及 `.blockmap` 上传到打包时固定的 HTTPS 更新目录，更新 `LycanSync-setup.exe` 别名，最后将同批 `latest.yml` 原子替换到位；不得先发布清单，也不要覆盖旧的版本化文件。保留旧 `.blockmap` 供差量下载；缺失时更新库会尝试完整下载。只发布静态文件不需要重启 API 或清理数据库。
+发布新客户端时先递增 `apps/web/package.json` 与锁文件的版本，再按 README 构建。先上传版本化安装包、`.blockmap`、同版本 `LycanSync-版本-obs-source.tar.gz` 及第三方许可，确认下载文件哈希与构建记录匹配，再更新 `LycanSync-setup.exe` 及其 `.blockmap` 别名，最后原子替换同批 `latest.yml`；不得先发布清单，也不要覆盖旧的版本化文件。保留旧 `.blockmap` 供差量下载；缺失时更新库会尝试完整下载。只发布静态文件不需要重启 API 或清理数据库。
 
-例如在服务器目录已收到同批产物后（将 `0.0.5` 换成实际版本；这些文件必须先上传完整）：
+`package-server.ps1` 目前尚未自动收集 OBS 源码包和第三方许可；首次使用服务器 ZIP 部署时也须从同批 `release/desktop/` 补齐，不能省略。许可证按版本命名为 `LycanSync-版本-THIRD-PARTY-NOTICES.txt`，避免覆盖旧版本材料。
+
+例如在服务器目录已收到并核对同批产物后（将 `client_version` 换成实际版本；新版本下载路径不得已存在）：
 
 ```bash
-cp incoming/LycanSync-0.0.5-windows-x64-setup.exe downloads/
-cp incoming/LycanSync-0.0.5-windows-x64-setup.exe.blockmap downloads/
-cp incoming/LycanSync-0.0.5-windows-x64-setup.exe downloads/LycanSync-setup.exe.next
+client_version=0.2.5
+installer="LycanSync-${client_version}-windows-x64-setup.exe"
+cp "incoming/$installer" downloads/
+cp "incoming/$installer.blockmap" downloads/
+cp "incoming/LycanSync-${client_version}-obs-source.tar.gz" downloads/
+cp incoming/THIRD-PARTY-NOTICES.txt "downloads/LycanSync-${client_version}-THIRD-PARTY-NOTICES.txt"
+cp "incoming/$installer" downloads/LycanSync-setup.exe.next
 mv downloads/LycanSync-setup.exe.next downloads/LycanSync-setup.exe
+cp "incoming/$installer.blockmap" downloads/LycanSync-setup.exe.blockmap.next
+mv downloads/LycanSync-setup.exe.blockmap.next downloads/LycanSync-setup.exe.blockmap
 cp incoming/latest.yml downloads/latest.yml.next
 mv downloads/latest.yml.next downloads/latest.yml
 ```
