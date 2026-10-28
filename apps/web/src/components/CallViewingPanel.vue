@@ -25,7 +25,7 @@ let clock: ReturnType<typeof setInterval> | undefined;
 const now = ref(performance.now());
 const focus = computed(() => props.view.mode === 'focus');
 const showMembers = computed(() => focus.value && props.view.membersVisible && !props.view.expanded);
-const { width, height, maximumHeight, resizing, changeHeight, beginResize, moveResize, endResize } = useViewingSize(panel, {
+const { width, height, minimumHeight, maximumHeight, resizing, changeHeight, beginResize, moveResize, endResize } = useViewingSize(panel, {
   detached: () => Boolean(props.detached), expanded: () => props.view.expanded,
   showMembers: () => showMembers.value, preferredHeight: () => props.view.height,
   setHeight: value => { props.view.height = value; },
@@ -142,7 +142,7 @@ onScopeDispose(() => { if (clock) clearInterval(clock); });
         </div>
       </HorizontalScroll>
       <div v-if="!detached && !view.expanded" class="viewing-resize" role="separator" aria-label="调整观看区域高度"
-        aria-orientation="horizontal" tabindex="0" :aria-valuenow="Math.round(height)" :aria-valuemin="140" :aria-valuemax="Math.round(maximumHeight)"
+        aria-orientation="horizontal" tabindex="0" :aria-valuenow="Math.round(height)" :aria-valuemin="Math.round(minimumHeight)" :aria-valuemax="Math.round(maximumHeight)"
         @pointerdown="beginResize" @pointermove="moveResize" @pointerup="endResize" @pointercancel="endResize"
         @keydown.up.prevent="changeHeight(height - 20)" @keydown.down.prevent="changeHeight(height + 20)" />
     </div>
