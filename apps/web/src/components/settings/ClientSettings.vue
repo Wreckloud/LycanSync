@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import { readScreenSharePreferences, saveScreenSharePreferences } from '../../settings/screenSharePreferences';
 import InlineFeedback from '../InlineFeedback.vue';
 import UpdateRestartDialog from '../UpdateRestartDialog.vue';
+import DialogTransition from '../DialogTransition.vue';
 import { useClientUpdate } from '../../settings/useClientUpdate';
 
 const props = defineProps<{ desktop: boolean; active: boolean }>();
@@ -111,8 +112,10 @@ async function updateAutoStart(event: Event) {
         <button type="button" class="settings-button" :disabled="updateBusy || !updateState?.supported || updateState.phase === 'checking'" @click="checkUpdates()">{{ updateBusy || updateState?.phase === 'checking' ? '正在检查…' : '检查更新' }}</button>
       </div>
       <InlineFeedback :message="confirmationVersion ? '' : updateError || (updateState?.error ? updateState.message : '')" />
+      <DialogTransition>
       <UpdateRestartDialog v-if="confirmationVersion" :version="confirmationVersion" :busy="updateBusy" :error="updateError"
         @cancel="cancelUpdate" @confirm="restartUpdate" />
+      </DialogTransition>
     </section>
     <section class="settings-block">
       <h2>屏幕共享</h2>

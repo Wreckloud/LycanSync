@@ -116,6 +116,7 @@ test('创建群组时可选择头像，群组栏显示裁剪后的图片', async
   const cropDialog = page.getByRole('dialog', { name: '调整群组头像' });
   await expect(cropDialog.getByAltText('待裁剪头像')).toHaveJSProperty('naturalWidth', 1);
   await cropDialog.getByRole('button', { name: '应用头像' }).click();
+  await expect(cropDialog).toHaveCount(0);
   await expect(page.locator('.group-avatar-preview img')).toHaveJSProperty('naturalWidth', 512);
   await expect(page.locator('.avatar-actions button')).toHaveCount(1);
   await expect(page.locator('.avatar-actions button')).toHaveText('更换头像');
@@ -206,6 +207,7 @@ test('群组与成员独立滚动，固定入口不移动，成员搜索只影�
   await expect(searchButton).not.toBeVisible();
   await page.setViewportSize({ width: 760, height: 320 });
   const settingsPersonal = page.getByLabel('个人状态与返回应用');
+  await expect(page.locator('.settings-page-enter-active')).toHaveCount(0);
   const settingsBounds = await settingsPersonal.boundingBox();
   await page.locator('.settings-navigation').evaluate((element) => { element.scrollTop = element.scrollHeight; });
   expect(await page.locator('.settings-navigation').evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
@@ -213,7 +215,8 @@ test('群组与成员独立滚动，固定入口不移动，成员搜索只影�
   await expect(settingsPersonal).toBeInViewport();
   await settingsPersonal.getByRole('button', { name: '返回应用' }).click();
   await page.setViewportSize({ width: 760, height: 720 });
-  await expect(searchButton).toBeVisible();
+  await expect(search).toBeVisible();
+  await expect(searchButton).not.toBeVisible();
 });
 
 test('启动、窗口激活和成员变化时自动更新群组，无需刷新按钮', async ({ page }) => {
@@ -301,7 +304,8 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   await expect(page.locator('.group-member-name').first().getByRole('img', { name: '群主' })).toBeVisible();
   await expect(page.locator('.group-member-row').filter({ hasText: '语音朋友' }).locator('img')).toHaveAttribute('src', avatar);
   await expect(page.getByLabel('群组成员').getByText('语音中', { exact: true })).toHaveCount(0);
-  await expect(page.locator('.group-member-row').nth(1)).toContainText('正在玩 Core Keeper');
+  await expect(page.locator('.group-member-row').nth(1).locator('.activity-prefix')).toHaveText('正在玩');
+  await expect(page.locator('.group-member-row').nth(1).locator('.activity-content')).toHaveText(/^Core Keeper · \d+:\d{2}$/);
   await expect(page.locator('.group-member-row').nth(1).locator('.status-dot')).toHaveClass(/AWAY/);
   await expect(page.locator('.group-member-row').nth(2).locator('.status-dot')).toHaveCount(0);
   await page.locator('.group-member-row').nth(2).hover();
@@ -312,7 +316,7 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   await expect(page.locator('.group-member-name').first()).toHaveCSS('font-size', '15px');
   await expect(page.locator('.member-activity').first()).toHaveCSS('font-size', '12px');
   await expect(page.locator('.personal-avatar')).toHaveCSS('width', '32px');
-  await expect(page.locator('.group-member-row').nth(1).locator('.group-member-info')).toHaveCSS('height', '32px');
+  await expect(page.locator('.group-member-row').nth(1).locator('.group-member-info')).toHaveCSS('height', '34px');
   await expect(page.locator('.group-member-row').nth(1)).toHaveCSS('height', '40px');
   const proportions = await page.evaluate(() => {
     const ratio = (selector: string) => {

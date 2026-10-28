@@ -47,6 +47,5 @@
 @media (hover: none) { .participant-share-actions { opacity: 1; pointer-events: auto; } }
 
 
-.voice-panel:has(.call-viewing-panel) { padding: 0; }
 @media (hover: none) { .viewing-actions { opacity: 1; pointer-events: auto; } }
 @media (prefers-reduced-motion: reduce) { .viewing-actions { transition: none; } }

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onScopeDispose, ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import InlineFeedback from './InlineFeedback.vue';
+import { useBackdropDismiss } from './useBackdropDismiss';
 
 const props = defineProps<{ version: string; busy: boolean; error: string }>();
 const emit = defineEmits<{ cancel: []; confirm: [] }>();
 const dialog = ref<HTMLElement | null>(null);
-const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+const backdropEvents = useBackdropDismiss(cancel);
 
 function cancel() { if (!props.busy) emit('cancel'); }
 function confirm() { if (!props.busy) emit('confirm'); }
@@ -23,12 +24,10 @@ function keepFocus(event: KeyboardEvent) {
 }
 
 onMounted(() => dialog.value?.focus());
-onScopeDispose(() => { void nextTick(() => { if (returnFocus?.isConnected) returnFocus.focus(); }); });
 </script>
 
 <template>
-  <Teleport to="body">
-    <div class="dialog-backdrop" @keydown.esc.stop="cancel">
+    <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="cancel">
       <section ref="dialog" class="update-restart-dialog" role="dialog" aria-modal="true"
         aria-labelledby="update-restart-title" aria-describedby="update-restart-description" tabindex="-1" @keydown="keepFocus">
         <header><h2 id="update-restart-title">发现新版本 {{ version }}</h2><p>重启软件并更新？</p></header>
@@ -40,7 +39,6 @@ onScopeDispose(() => { void nextTick(() => { if (returnFocus?.isConnected) retur
         </footer>
       </section>
     </div>
-  </Teleport>
 </template>
 
 <style scoped>

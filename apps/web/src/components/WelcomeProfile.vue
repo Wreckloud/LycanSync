@@ -3,6 +3,7 @@ import { computed, nextTick, ref, toRef } from 'vue';
 import { ArrowRight, Pencil, UserRound } from '@lucide/vue';
 import type { AuthUser, ProfileUpdate } from '../auth/authApi';
 import AvatarCropDialog from './AvatarCropDialog.vue';
+import DialogTransition from './DialogTransition.vue';
 import InlineFeedback from './InlineFeedback.vue';
 import { useAvatarCrop } from '../profile/useAvatarCrop';
 import { useProfileDraft } from '../profile/useProfileDraft';
@@ -95,7 +96,9 @@ async function save() {
         <button type="submit" class="confirm-button card-actions-end" :disabled="busy || picking || !!cropSource">保存并进入</button>
       </footer>
     </form>
+    <DialogTransition>
     <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整头像" @apply="applyAvatar" @cancel="clearCrop" />
+    </DialogTransition>
   </main>
 </template>
 

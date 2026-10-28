@@ -6,9 +6,7 @@ import UpdateRestartDialog from './UpdateRestartDialog.vue';
 async function renderDialog(busy = false, error = '') {
   vi.stubGlobal('document', { activeElement: null });
   vi.stubGlobal('HTMLElement', class {});
-  const context: { teleports?: Record<string, string> } = {};
-  await renderToString(createSSRApp(UpdateRestartDialog, { version: '0.0.10', busy, error }), context);
-  return context.teleports?.body ?? '';
+  return renderToString(createSSRApp(UpdateRestartDialog, { version: '0.0.10', busy, error }));
 }
 afterEach(() => vi.unstubAllGlobals());
 

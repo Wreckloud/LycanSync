@@ -12,6 +12,7 @@ import IconButton from './components/IconButton.vue';
 import SettingsView from './components/SettingsView.vue';
 import AppNotice from './components/AppNotice.vue';
 import GroupEntryDialog from './components/GroupEntryDialog.vue';
+import DialogTransition from './components/DialogTransition.vue';
 import GroupMenu from './components/GroupMenu.vue';
 import GroupManagementDialog from './components/GroupManagementDialog.vue';
 import GroupChat from './components/GroupChat.vue';
@@ -838,7 +839,7 @@ const settingsSection = ref<SettingsSectionId>('audio');
 const settingsReturnFocus = ref<HTMLElement | null>(null);
 const viewingWindows = ref<InstanceType<typeof ScreenShareWindows> | null>(null);
 const viewingTarget = ref<HTMLElement | null>(null);
-useInlineViewingMotion(viewingTarget, () => viewingWindows.value?.inlineExpanded ?? false);
+const voicePanelMotion = useInlineViewingMotion(viewingTarget, () => viewingWindows.value?.inlineExpanded ?? false);
 const viewerInputBlocked = computed(() => Boolean(props.interactionBlocked || settingsOpen.value || editorOpen.value
   || management.value || captureRequest.value || pendingSwitchGroupId.value || rtc.remoteControlRequest || rtc.status !== 'connected'));
 watch(viewerInputBlocked, (blocked) => { if (blocked) viewingWindows.value?.disarmAll(); }, { flush: 'sync' });
@@ -1200,10 +1201,12 @@ function participantListening(participant: Participant) {
     </header>
     <AppNotice v-if="rtc.notice || viewerNotice" :message="rtc.notice || viewerNotice" />
     <AppNotice v-else-if="startupUpdateWarning" :message="startupUpdateWarning" dismissible @dismiss="emit('dismissUpdateWarning')" />
+    <DialogTransition>
     <RemoteControlRequest v-if="rtc.remoteControlRequest" :key="rtc.remoteControlRequest.requestId"
       :name="previewParticipantName(rtc.remoteControlRequest.identity,
         rtc.participants.find(participant => participant.identity === rtc.remoteControlRequest?.identity)?.name || rtc.remoteControlRequest.identity)"
       :busy="rtc.remoteControlGranting" @reject="rtc.rejectRemoteControl" @allow="rtc.allowRemoteControl" />
+    </DialogTransition>
     <div v-if="rtc.remoteControlOwner" class="remote-control-owner-status" role="status">
       正在由 {{ previewParticipantName(rtc.remoteControlOwner.identity,
         rtc.participants.find((participant) => participant.identity === rtc.remoteControlOwner?.identity)?.name || rtc.remoteControlOwner.identity) }} 控制
@@ -1269,7 +1272,7 @@ function participantListening(participant: Participant) {
           </div>
         </section>
         </div>
-        <Transition name="voice-panel">
+        <Transition :css="false" @leave="voicePanelMotion.leave">
           <section v-if="showingJoinedGroup && groupParticipants.length > 0" ref="viewingTarget" class="voice-panel"
             :class="{ 'is-viewing': viewingWindows?.inlineExpanded }" aria-label="当前语音成员" />
         </Transition>
@@ -1324,10 +1327,14 @@ function participantListening(participant: Participant) {
         </div>
       </main>
     </div>
+    <DialogTransition>
     <GroupEntryDialog v-if="editorOpen" :group="editingGroup ?? undefined" :create-group="createGroupFromDialog"
       @joined="joinedFromCode" @close="closeGroupEditor" />
+    </DialogTransition>
+    <DialogTransition>
     <GroupManagementDialog v-if="management" :group="management.group" :mode="management.mode" :user-id="user.id"
       @updated="applyGroupDetail" @removed="removedFromGroup" @close="management = null" />
+    </DialogTransition>
     </div>
     <Transition name="settings-page" @before-leave="($event as HTMLElement).inert = true">
     <SettingsView v-if="settingsOpen" :inert="!!rtc.remoteControlRequest" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
@@ -1339,6 +1346,7 @@ function participantListening(participant: Participant) {
       @activity-visibility="setShowActivity"
       :save-profile="saveProfile" @close="closeSettings" @logout="emit('logout')" />
     </Transition>
+    <DialogTransition>
     <ScreenSharePicker v-if="captureRequest" :key="nativeSourceChooserGeneration" ref="capturePicker" :sources="captureRequest.sources"
       v-model:source-type="captureSourceType" v-model:quality="captureQuality" v-model:custom-quality="captureCustomQuality" :share-audio="captureShareAudio"
       @update:share-audio="updateCaptureShareAudio"
@@ -1347,6 +1355,7 @@ function participantListening(participant: Participant) {
       :settings-failure="rtc.screenShareSettingsFailure" :follow-game-available="captureFollowGameAvailable"
       @choose="chooseCaptureSource" @refresh-thumbnails="refreshVisibleSourceThumbnails"
       @close="selectCaptureSource(null)" @confirm="selectCaptureSource(selectedCaptureSourceId, $event)" />
+    </DialogTransition>
     <ScreenShareWindows ref="viewingWindows" :rtc="rtc" :group-name="joinedGroup?.name ?? ''"
       :inline-target="viewingTarget"
       :avatar="participantAvatar" :muted-shares="mutedShares"

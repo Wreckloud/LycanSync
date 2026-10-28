@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
+import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { Crown, UserRound } from '@lucide/vue';
 import InlineFeedback from './InlineFeedback.vue';
 import { addGroupMember, dissolveGroup, findGroup, findGroupCandidates, getGroupInviteCode,
   removeGroupMember, transferGroupOwner, type GroupCandidate, type GroupDetail } from '../group/groupApi';
+import { useBackdropDismiss } from './useBackdropDismiss';
 
 const props = defineProps<{ group: GroupDetail; userId: string; mode: 'invite' | 'members' | 'transfer' | 'leave' | 'dissolve' }>();
 const emit = defineEmits<{ close: []; updated: [group: GroupDetail]; removed: [groupId: string] }>();
@@ -17,6 +18,7 @@ const error = ref('');
 const candidateError = ref('');
 const status = ref('');
 const busy = ref(false);
+const backdropEvents = useBackdropDismiss(close);
 const loading = ref(false);
 const confirmation = ref<{ userId: string; nickname: string } | null>(null);
 const dissolveName = ref('');
@@ -26,7 +28,6 @@ const allMembers = computed(() => props.group.members.filter((member) => member.
 const members = computed(() => allMembers.value.slice(offset.value, offset.value + 20));
 const moreMembers = computed(() => offset.value + 20 < allMembers.value.length);
 const confirming = computed(() => !!confirmation.value || props.mode === 'leave' || props.mode === 'dissolve');
-const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 let request: AbortController | null = null;
 let disposed = false;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -132,7 +133,7 @@ watch(() => props.group.role, (role) => { if (role !== 'OWNER' && props.mode !==
 
 function keepFocus(event: KeyboardEvent) {
   if (event.key !== 'Tab' || !dialog.value) return;
-  const controls = [...dialog.value.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)')];
+  const controls = [...dialog.value.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)')].filter((control) => control.getClientRects().length > 0 && !control.closest('[inert]'));
   const first = controls[0]; const last = controls[controls.length - 1];
   if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.value)) { event.preventDefault(); last?.focus(); }
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
@@ -148,12 +149,11 @@ onMounted(() => {
 });
 onScopeDispose(() => {
   disposed = true; request?.abort(); clearTimeout(searchTimer); clearTimeout(statusTimer); clearInterval(refreshTimer);
-  void nextTick(() => { if (returnFocus?.isConnected) returnFocus.focus(); });
 });
 </script>
 
 <template>
-  <div class="dialog-backdrop" @keydown.esc.stop="close">
+  <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="close">
     <section ref="dialog" class="group-management" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1" @keydown="keepFocus">
       <header><h2>{{ title }}</h2><p>{{ group.name }}</p></header>
       <div v-if="confirming" class="management-confirm">

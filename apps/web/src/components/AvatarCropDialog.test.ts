@@ -4,6 +4,7 @@ import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
 import { computed, effectScope, nextTick, onScopeDispose, ref, shallowRef, watch, type ComputedRef, type Ref } from 'vue';
 import { expect, it, vi } from 'vitest';
+import { useBackdropDismiss } from './useBackdropDismiss';
 import { AvatarImageError, calculateAvatarCrop, zoomAvatarWithWheel, type AvatarCrop } from '../profile/avatarImage';
 
 const script = parse(readFileSync(new URL('./AvatarCropDialog.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
@@ -21,7 +22,7 @@ function setup(width: number, height: number) {
   // 使用正式组件的计算属性和监听器，避免只验证独立公式而遗漏旋转时的状态更新。
   const cropper = scope.run(() => runInNewContext(`${compiled}\n({ zoom, rotation, viewportSize,
     offsetX, offsetY, crop, imageStyle, clampOffset, applyCrop })`, {
-    computed, ref, shallowRef, watch, nextTick, onScopeDispose,
+    computed, ref, shallowRef, watch, nextTick, onScopeDispose, useBackdropDismiss,
     defineProps: () => ({ source }), defineEmits: () => emit,
     document: { activeElement: null }, HTMLElement: class {},
     AvatarImageError, calculateAvatarCrop, zoomAvatarWithWheel, encodeAvatarCrop,
