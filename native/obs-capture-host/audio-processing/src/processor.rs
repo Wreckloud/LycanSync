@@ -47,6 +47,7 @@ impl MicrophoneProcessor {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn settings(&self) -> ProcessingSettings {
         self.settings
     }

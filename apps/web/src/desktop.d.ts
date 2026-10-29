@@ -2,7 +2,7 @@ interface DesktopProcessMetrics {
   cpuPercent: number;
   memoryMb: number;
   entries: { role: 'electron-Browser' | 'electron-Tab' | 'electron-GPU' | 'electron-Utility' | 'electron-other'
-    | 'obs' | 'media' | 'activity'; state: 'running' | 'stopped' | 'unavailable';
+    | 'obs' | 'obs-audio' | 'media' | 'activity'; state: 'running' | 'stopped' | 'unavailable';
     workingSetMiB: number | null; privateCommitMiB: number | null }[];
 }
 
@@ -56,7 +56,8 @@ interface NativeCaptureDiagnostics {
   obsBridgeDroppedFrames: number | null;
   obsRender: ObsRenderDiagnostics | null;
   captureSuspended: boolean | null;
-  microphoneCaptureDroppedChunks: number;
+  microphoneCaptureDroppedChunks: number | null;
+  microphoneCapture?: { sourceState: number; sourceFrames: number; framesReceived: number } | null;
   screenShareAudio: {
     state: 'idle' | 'starting' | 'running' | 'stopping' | 'failed';
     sessionId: string | null;

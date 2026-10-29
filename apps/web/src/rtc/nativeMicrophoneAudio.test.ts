@@ -154,7 +154,7 @@ function cleanupHarness() {
     configureNativeMicrophone: vi.fn(async () => ({ changed: true })),
     onNativeMicrophoneChunk: () => removeChunks,
     acknowledgeNativeMicrophoneChunk: vi.fn(),
-    onNativeMicrophoneError: (callback) => { reportError = () => callback({ sessionId: 'session', code: 'audioDeviceUnavailable' }); return removeErrors; },
+    onNativeMicrophoneError: (callback) => { reportError = () => callback({ sessionId: 'session', code: 'microphoneDeviceUnavailable' }); return removeErrors; },
   };
   const session = new NativeMicrophoneAudioSession(desktop, { onError,
     createContext: () => fakes.context, createWorkletNode: () => fakes.node,
@@ -206,7 +206,7 @@ describe('NativeMicrophoneAudioSession cleanup failures', () => {
     expect(harness.stopped).toHaveBeenCalledOnce();
   });
 
-  it('waits for late startup and its native stop acknowledgement after cancellation', async () => {
+  it('requests native stop before pending startup completes and still waits for cleanup acknowledgement', async () => {
     const harness = cleanupHarness();
     const nativeReady = deferred<typeof harness.format>();
     const startRequested = deferred<void>();
@@ -220,12 +220,12 @@ describe('NativeMicrophoneAudioSession cleanup failures', () => {
     const stopping = harness.session.stop();
     let finished = false;
     void stopping.then(() => { finished = true; });
-    nativeReady.resolve(harness.format);
     await stopRequested.promise;
     expect(finished).toBe(false);
     expect(harness.session.stop()).toBe(stopping);
     stopAcknowledged.resolve({ changed: true });
     await stopping;
+    nativeReady.resolve(harness.format);
     expect(await startResult).toMatchObject({ message: 'microphoneSessionStopped' });
     expect(harness.stopped).toHaveBeenCalledOnce();
     expect(harness.onError).not.toHaveBeenCalled();

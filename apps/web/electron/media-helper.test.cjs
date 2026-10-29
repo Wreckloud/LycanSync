@@ -73,7 +73,6 @@ test('纹理交付、停止和迟到结果共用一次主进程引用释放', as
 
 const capabilities = {
   videoSourceDiscovery: { available: true, reason: 'windowsGraphicsCapture' },
-  microphoneCapture: { available: true, reason: 'windowsWasapiSharedModeSonora' },
   systemAudioCapture: { available: false, reason: 'notImplemented' },
   processAudioCapture: { available: false, reason: 'notImplemented' },
 };
@@ -89,8 +88,6 @@ class FakeHelper extends EventEmitter {
     this.sourceRevision = 0;
     this.videoState = 'idle';
     this.videoSessionId = null;
-    this.microphoneState = 'idle';
-    this.microphoneSessionId = null;
     this.requests = [];
     this.stdout = new PassThrough();
     this.stderr = new PassThrough();
@@ -175,32 +172,6 @@ class FakeHelper extends EventEmitter {
             processCreationTime: '987654', processId: 123, requiresWindowCapture: false, executable: 'C:\\Games\\game.exe' }) });
       return;
     }
-    if (command.command === 'startMicrophoneCapture') {
-      if (this.mode.holdMicrophoneStart) {
-        this.pendingMicrophoneStart = command;
-        return;
-      }
-      const acknowledge = () => {
-        if (this.closed) return;
-        this.microphoneState = 'running';
-        this.microphoneSessionId = command.sessionId;
-        this.writeResponse({ event: 'microphoneCaptureStarted', protocolVersion: 1,
-          requestId: command.requestId, sessionId: command.sessionId, state: 'running',
-          sampleRate: 48000, channels: 1, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
-      };
-      if (this.mode.microphoneStartDelayMs) setTimeout(acknowledge, this.mode.microphoneStartDelayMs);
-      else acknowledge();
-      return;
-    }
-    if (command.command === 'configureMicrophoneCapture' || command.command === 'stopMicrophoneCapture') {
-      if (command.command === 'stopMicrophoneCapture') {
-        this.microphoneState = 'idle';
-        this.microphoneSessionId = null;
-      }
-      this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
-        command: command.command, state: 'running', changed: true });
-      return;
-    }
     if (['setRemoteControl', 'remoteInput', 'clearRemoteControl'].includes(command.command)) {
       if (command.command === 'setRemoteControl' && this.mode.deferRemoteControl) return;
       this.writeResponse({ event: 'acknowledged', protocolVersion: 1, requestId: command.requestId,
@@ -221,7 +192,6 @@ class FakeHelper extends EventEmitter {
         helperVersion: '0.1.0', captureBackend: null,
         state: this.videoState, sessionId: this.videoSessionId,
         available: true, sourceKind: null,
-        microphoneCaptureDroppedChunks: 0,
         frameWidth: null,
         frameHeight: null,
         framesReceived: null,
@@ -234,7 +204,6 @@ class FakeHelper extends EventEmitter {
           framesReceived: null,
           silentPackets: 0, droppedAudioChunks: 0, lastError: null },
       };
-      if (this.mode.omitMicrophoneCaptureDroppedChunks) delete diagnostics.microphoneCaptureDroppedChunks;
       if (this.mode.captureSuspended !== undefined) diagnostics.captureSuspended = this.mode.captureSuspended;
       this.writeResponse({ ...diagnostics, ...this.mode.diagnosticsOverrides });
       return;
@@ -282,7 +251,6 @@ function createManager(mode = {}, options = {}) {
     createRequestId: (() => { let next = 0; return () => `request-${++next}`; })(),
     handshakeTimeoutMs: 40,
     requestTimeoutMs: 80,
-    audioStartTimeoutMs: 80,
     shutdownTimeoutMs: 40,
     killTimeoutMs: 40,
     idleTimeoutMs: 1000,
@@ -573,7 +541,7 @@ test('helper stderr 保留原生错误并且不干扰协议响应', async () => 
     children[0].stderr.write('x'.repeat(9000));
     assert.equal(diagnostics[0], 'stage=initialize hresult=0x80070057\n');
     assert.ok(diagnostics.every((message) => message.length <= 4096));
-    assert.deepEqual((await manager.getCapabilities()).microphoneCapture, capabilities.microphoneCapture);
+    assert.deepEqual((await manager.getCapabilities()).videoSourceDiscovery, capabilities.videoSourceDiscovery);
   } finally {
     await manager.shutdown();
   }
@@ -588,7 +556,7 @@ test('helper starts lazily and concurrent capability requests share one process 
   assert.deepEqual(spawnOptions[0].stdio, ['pipe', 'pipe', 'pipe']);
   assert.equal(children[0].commands.filter((command) => command === 'hello').length, 1);
   assert.equal(children[0].commands.filter((command) => command === 'capabilities').length, 1);
-  assert.deepEqual(results[0].microphoneCapture, capabilities.microphoneCapture);
+  assert.deepEqual(results[0].videoSourceDiscovery, capabilities.videoSourceDiscovery);
   await manager.shutdown();
 });
 
@@ -654,56 +622,6 @@ test('idle helper receives shutdown and closes normally', async () => {
   await manager.shutdown();
 });
 
-test('native microphone capture validates settings, configures the active session, and stops idempotently', async () => {
-  const { manager, children } = createManager({}, { idleTimeoutMs: 20 });
-  const settings = { inputGain: 0.8, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false };
-  const pipeId = '58d00436-8ac2-4d0c-9283-9d5d5f70ed01';
-  const sessionId = 'microphone-session';
-  const started = await manager.startMicrophoneCapture(pipeId, sessionId, settings);
-  assert.deepEqual(started, { sampleRate: 48000, channels: 1, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
-  assert.deepEqual(await manager.startMicrophoneCapture(pipeId, sessionId, settings), { ...started, changed: false });
-  await assert.rejects(manager.startMicrophoneCapture(pipeId, 'other-session', settings), /microphoneCaptureAlreadyRunning/);
-  assert.deepEqual(await manager.configureMicrophoneCapture(sessionId, { ...settings, inputGain: 1.2 }), { changed: true });
-  assert.deepEqual(await manager.stopMicrophoneCapture(sessionId), { changed: true });
-  assert.deepEqual(await manager.stopMicrophoneCapture(sessionId), { changed: false });
-  assert.equal(children[0].requests.filter((request) => request.command === 'startMicrophoneCapture').length, 1);
-  assert.equal(children[0].requests.find((request) => request.command === 'startMicrophoneCapture').pipeId, pipeId);
-  await waitUntil(() => children[0].closed);
-  await manager.shutdown();
-});
-
-test('microphone startup allows the Rust worker startup deadline beyond the general request timeout', async () => {
-  const { manager, children } = createManager({ microphoneStartDelayMs: 65 }, {
-    requestTimeoutMs: 30,
-    audioStartTimeoutMs: 150,
-  });
-  const settings = { inputGain: 1, noiseSuppression: false, autoGainControl: false, voiceEnhancement: false };
-  const sessionId = 'delayed-microphone-session';
-  const started = await manager.startMicrophoneCapture(
-    '58d00436-8ac2-4d0c-9283-9d5d5f70ed01', sessionId, settings,
-  );
-  assert.equal(started.changed, true);
-  assert.equal(children[0].killCount, 0);
-  await manager.stopMicrophoneCapture(sessionId);
-  await manager.shutdown();
-});
-
-test('stopping the native microphone while start is pending waits for start then stops the same session', async () => {
-  const { manager, children } = createManager({ holdMicrophoneStart: true });
-  const settings = { inputGain: 1, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true };
-  const sessionId = 'pending-microphone-session';
-  const start = manager.startMicrophoneCapture('58d00436-8ac2-4d0c-9283-9d5d5f70ed01', sessionId, settings);
-  await waitUntil(() => children[0]?.pendingMicrophoneStart);
-  const stop = manager.stopMicrophoneCapture(sessionId);
-  children[0].writeResponse({ event: 'microphoneCaptureStarted', protocolVersion: 1,
-    requestId: children[0].pendingMicrophoneStart.requestId, sessionId, state: 'running',
-    sampleRate: 48000, channels: 1, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
-  await start;
-  assert.deepEqual(await stop, { changed: true });
-  assert.deepEqual(children[0].commands.slice(-2), ['startMicrophoneCapture', 'stopMicrophoneCapture']);
-  await manager.shutdown();
-});
-
 test('pending source refresh allows confirmation and replaces the snapshot only after completion', async () => {
   const { manager, children } = createManager({}, { requestTimeoutMs: 1000 });
   try {
@@ -749,14 +667,14 @@ test('source ids expire when the lazy helper is reclaimed and do not start a rep
   await manager.shutdown();
 });
 
-test('诊断保留真实helper版本和麦克风统计，不再补回已移除的视频探针字段', async () => {
-  const { manager } = createManager({ omitMicrophoneCaptureDroppedChunks: true });
+test('身份 helper 诊断不再伪造媒体宿主的麦克风计数', async () => {
+  const { manager } = createManager();
   const diagnostics = await manager.getDiagnostics();
   assert.equal(diagnostics.helperVersion, '0.1.0');
   assert.equal(diagnostics.captureBackend, null);
   assert.equal('framePoolRecreates' in diagnostics, false);
   assert.equal('probeProcessedFps' in diagnostics, false);
-  assert.equal((await manager.getDiagnostics()).microphoneCaptureDroppedChunks, 0);
+  assert.equal('microphoneCaptureDroppedChunks' in diagnostics, false);
   await manager.shutdown();
 });
 

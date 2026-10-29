@@ -50,30 +50,6 @@ pub enum CommandEnvelope {
         request_id: String,
         source_id: String,
     },
-    StartMicrophoneCapture {
-        protocol_version: u16,
-        request_id: String,
-        session_id: String,
-        pipe_id: String,
-        input_gain: f32,
-        noise_suppression: bool,
-        auto_gain_control: bool,
-        voice_enhancement: bool,
-    },
-    ConfigureMicrophoneCapture {
-        protocol_version: u16,
-        request_id: String,
-        session_id: String,
-        input_gain: f32,
-        noise_suppression: bool,
-        auto_gain_control: bool,
-        voice_enhancement: bool,
-    },
-    StopMicrophoneCapture {
-        protocol_version: u16,
-        request_id: String,
-        session_id: String,
-    },
     SetRemoteControl {
         protocol_version: u16,
         request_id: String,
@@ -123,15 +99,6 @@ impl CommandEnvelope {
             | Self::InspectVideoSource {
                 protocol_version, ..
             }
-            | Self::StartMicrophoneCapture {
-                protocol_version, ..
-            }
-            | Self::ConfigureMicrophoneCapture {
-                protocol_version, ..
-            }
-            | Self::StopMicrophoneCapture {
-                protocol_version, ..
-            }
             | Self::SetRemoteControl {
                 protocol_version, ..
             }
@@ -156,9 +123,6 @@ impl CommandEnvelope {
             | Self::ListVideoSources { request_id, .. }
             | Self::ReserveVideo { request_id, .. }
             | Self::InspectVideoSource { request_id, .. }
-            | Self::StartMicrophoneCapture { request_id, .. }
-            | Self::ConfigureMicrophoneCapture { request_id, .. }
-            | Self::StopMicrophoneCapture { request_id, .. }
             | Self::SetRemoteControl { request_id, .. }
             | Self::RemoteInput { request_id, .. }
             | Self::ClearRemoteControl { request_id, .. }
@@ -359,7 +323,6 @@ pub enum OutboundEvent {
         state: SessionState,
         windows_only: bool,
         video_source_discovery: Capability,
-        microphone_capture: Capability,
         system_audio_capture: Capability,
         process_audio_capture: Capability,
     },
@@ -377,7 +340,6 @@ pub enum OutboundEvent {
         frames_received: Option<u64>,
         frames_processed: Option<u64>,
         capture_suspended: Option<bool>,
-        microphone_capture_dropped_chunks: u64,
         screen_share_audio: Box<ScreenShareAudioDiagnostics>,
     },
     VideoSources {
@@ -406,22 +368,6 @@ pub enum OutboundEvent {
         state: SessionState,
         changed: bool,
     },
-    MicrophoneCaptureStarted {
-        protocol_version: u16,
-        request_id: String,
-        session_id: String,
-        state: SessionState,
-        sample_rate: u32,
-        channels: u16,
-        bits_per_sample: u16,
-        nominal_chunk_ms: u8,
-        changed: bool,
-    },
-    MicrophoneCaptureEnded {
-        protocol_version: u16,
-        session_id: String,
-        code: ErrorCode,
-    },
     Error {
         protocol_version: u16,
         request_id: Option<String>,
@@ -448,17 +394,6 @@ pub enum ErrorCode {
     RemoteControlInvalidSession,
     RemoteControlInputFailed,
     RemoteControlTargetUnavailable,
-    #[cfg_attr(target_os = "windows", allow(dead_code))]
-    AudioPlatformUnsupported,
-    AudioDeviceUnavailable,
-    MicrophoneCaptureAlreadyRunning,
-    MicrophoneCaptureSessionMismatch,
-    MicrophoneCaptureStartFailed,
-    MicrophoneCaptureStartTimedOut,
-    MicrophoneCaptureStopFailed,
-    MicrophoneCaptureFailed,
-    MicrophoneCapturePipeFailed,
-    MicrophoneCaptureFormatUnsupported,
 }
 
 impl ErrorCode {
@@ -472,16 +407,6 @@ impl ErrorCode {
             Self::RemoteControlInvalidSession => "远程控制会话无效或已过期",
             Self::RemoteControlInputFailed => "远程输入无法应用",
             Self::RemoteControlTargetUnavailable => "共享显示器已不可用",
-            Self::AudioPlatformUnsupported => "当前平台不支持音频来源发现",
-            Self::AudioDeviceUnavailable => "没有可用的活动音频端点",
-            Self::MicrophoneCaptureAlreadyRunning => "麦克风采集已在运行",
-            Self::MicrophoneCaptureSessionMismatch => "麦克风采集会话不匹配",
-            Self::MicrophoneCaptureStartFailed => "麦克风采集启动失败",
-            Self::MicrophoneCaptureStartTimedOut => "麦克风采集启动等待超时",
-            Self::MicrophoneCaptureStopFailed => "麦克风采集停止失败",
-            Self::MicrophoneCaptureFailed => "麦克风采集运行失败",
-            Self::MicrophoneCapturePipeFailed => "麦克风数据通道失败",
-            Self::MicrophoneCaptureFormatUnsupported => "麦克风格式暂不支持",
             _ => "请求无法处理",
         }
     }
@@ -493,7 +418,6 @@ impl ErrorCode {
             Self::UnsupportedProtocolVersion => "unsupportedProtocolVersion",
             Self::InvalidRequest => "invalidRequest",
             Self::PlatformUnsupported => "platformUnsupported",
-            Self::AudioPlatformUnsupported => "audioPlatformUnsupported",
             Self::SourceDiscoveryFailed => "sourceDiscoveryFailed",
             Self::CaptureStartFailed => "captureStartFailed",
             Self::CaptureSessionMismatch => "captureSessionMismatch",
@@ -501,15 +425,6 @@ impl ErrorCode {
             Self::RemoteControlInvalidSession => "remoteControlInvalidSession",
             Self::RemoteControlInputFailed => "remoteControlInputFailed",
             Self::RemoteControlTargetUnavailable => "remoteControlTargetUnavailable",
-            Self::AudioDeviceUnavailable => "audioDeviceUnavailable",
-            Self::MicrophoneCaptureAlreadyRunning => "microphoneCaptureAlreadyRunning",
-            Self::MicrophoneCaptureSessionMismatch => "microphoneCaptureSessionMismatch",
-            Self::MicrophoneCaptureStartFailed => "microphoneCaptureStartFailed",
-            Self::MicrophoneCaptureStartTimedOut => "microphoneCaptureStartTimedOut",
-            Self::MicrophoneCaptureStopFailed => "microphoneCaptureStopFailed",
-            Self::MicrophoneCaptureFailed => "microphoneCaptureFailed",
-            Self::MicrophoneCapturePipeFailed => "microphoneCapturePipeFailed",
-            Self::MicrophoneCaptureFormatUnsupported => "microphoneCaptureFormatUnsupported",
         }
     }
 }
@@ -630,14 +545,6 @@ mod tests {
         let output = serialized.to_string();
         assert!(!output.contains("HWND"));
         assert!(!output.contains("processId"));
-    }
-
-    #[test]
-    fn active_microphone_device_error_has_a_stable_code() {
-        assert_eq!(
-            serde_json::to_value(ErrorCode::AudioDeviceUnavailable).unwrap(),
-            "audioDeviceUnavailable"
-        );
     }
 
     #[test]

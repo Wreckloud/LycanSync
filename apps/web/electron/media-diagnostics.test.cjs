@@ -8,6 +8,39 @@ const { test } = require('node:test');
 const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
 const { EventEmitter } = require('node:events');
 
+test('OBS 麦克风导出处理实现和固定故障，不泄露设备或异常正文', async context => {
+  const directory = await mkdtemp(join(tmpdir(), 'lycan-voice-diagnostics-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'events.jsonl');
+  const time = new Date().toISOString();
+  await writeFile(path, [
+    { stage: 'microphoneReady', backend: 'obsLibobs', processing: 'sonora-0.2.0', device: 'private-device' },
+    ...['microphoneDeviceUnavailable', 'microphoneProcessingFailed', 'microphoneCaptureStopFailed', 'private-path']
+      .map(code => ({ stage: 'microphoneCaptureFailed', code, message: 'private-device-error' })),
+  ].map(entry => JSON.stringify({ time, ...entry })).join('\n'));
+  const events = await readDiagnosticEvents(path, 0, Date.parse(time));
+  assert.equal(events[0].backend, 'obsLibobs');
+  assert.equal(events[0].processing, 'sonora-0.2.0');
+  assert.deepEqual(events.slice(1, 4).map(event => event.code),
+    ['microphoneDeviceUnavailable', 'microphoneProcessingFailed', 'microphoneCaptureStopFailed']);
+  assert.doesNotMatch(JSON.stringify(events), /private-device|private-path/);
+});
+
+test('麦克风来源故障保留 HRESULT 和退出码，丢弃设备与异常正文', async context => {
+  const directory = await mkdtemp(join(tmpdir(), 'lycan-voice-source-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'events.jsonl'), time = new Date().toISOString();
+  await writeFile(path, [
+    { stage: 'microphoneSourceFailed', code: 'microphoneCaptureStartFailed', message: '0x80070005 private-device' },
+    { stage: 'microphoneHostExited', exitCode: 1, device: 'private-device' },
+  ].map(entry => JSON.stringify({ time, ...entry })).join('\n'));
+  const events = await readDiagnosticEvents(path, 0, Date.parse(time));
+  assert.deepEqual(events[0].hresults, ['0x80070005']);
+  assert.equal(events[0].code, 'microphoneCaptureStartFailed');
+  assert.equal(events[1].exitCode, 1);
+  assert.doesNotMatch(JSON.stringify(events), /private-device/);
+});
+
 test('导出保留 DXGI、显卡匹配及停止方式证据，丢弃窗口名和设备标识', async (context) => {
   const directory = await mkdtemp(join(tmpdir(), 'lycan-dxgi-diagnostics-'));
   context.after(() => rm(directory, { recursive: true, force: true }));
@@ -146,7 +179,7 @@ test('原生读取失败和平台不支持均为不可用，不伪报未运行�
   assert.equal(invalid([], helpers, true).entries[0].state, 'unavailable');
 });
 
-test('诊断IPC只读取现存的三类子进程，不接受页面指定PID和不可信来源', () => {
+test('诊断IPC只读取现存的四类子进程，不接受页面指定PID和不可信来源', () => {
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = main.indexOf("ipcMain.handle('diagnostics:process-metrics'");
   const end = main.indexOf("ipcMain.handle('diagnostics:checkpoint'", start);
@@ -154,7 +187,8 @@ test('诊断IPC只读取现存的三类子进程，不接受页面指定PID和�
   const scope = {
     ipcMain: { handle: (_name, callback) => { handler = callback; } }, trustedSender: (event) => event.trusted,
     app: { getAppMetrics: () => ['electron'] }, obsCaptureHost: { state: { child: 'obs-child' } },
-    obsHostSettings: { executablePath: 'obs.exe' }, mediaHelper: { children: new Set([{ child: 'media-child' }]) },
+    obsHostSettings: { executablePath: 'obs.exe' }, obsAudioHost: { state: { child: 'audio-child' } },
+    obsAudioSettings: { executablePath: 'audio.exe' }, mediaHelper: { children: new Set([{ child: 'media-child' }]) },
     mediaHelperPath: () => 'media.exe', activityMonitor: { diagnosticProcesses: () => ['activity-child'] },
     activityHelperPath: () => 'activity.exe', process: { platform: 'win32' },
     readProcessMetrics: (...args) => { captured = JSON.parse(JSON.stringify(args)); return 'result'; },
@@ -164,6 +198,7 @@ test('诊断IPC只读取现存的三类子进程，不接受页面指定PID和�
   assert.equal(handler({ trusted: true }, 12345), 'result');
   assert.deepEqual(captured, [['electron'], [
     { role: 'obs', children: ['obs-child'], executablePath: 'obs.exe' },
+    { role: 'obs-audio', children: ['audio-child'], executablePath: 'audio.exe' },
     { role: 'media', children: ['media-child'], executablePath: 'media.exe' },
     { role: 'activity', children: ['activity-child'], executablePath: 'activity.exe' },
   ], true]);

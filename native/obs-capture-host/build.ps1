@@ -145,11 +145,24 @@ if ($LASTEXITCODE -ne 0) { throw 'pthread 导入库生成失败。' }
 Set-Content -LiteralPath (Join-Path $preparedDirectory 'sdk-version.txt') -Value '32.2.2' -Encoding ascii
 
 $buildDirectory = Join-Path $cacheDirectory 'cmake-build'
+$voiceTarget = Join-Path $cacheDirectory 'voice-processing-target'
+$voiceManifest = Join-Path $PSScriptRoot 'audio-processing/Cargo.toml'
+$voiceArguments = @('build', '--release', '--locked', '--manifest-path', $voiceManifest, '--target-dir', $voiceTarget)
+$voiceVendor = Join-Path $PSScriptRoot 'audio-processing/vendor'
+if (Test-Path -LiteralPath $voiceVendor) {
+    $voiceArguments += @('--config', 'source.crates-io.replace-with="vendored-sources"',
+        '--config', ('source.vendored-sources.directory="' + $voiceVendor.Replace('\', '/') + '"'))
+}
+if ($Offline) { $voiceArguments += '--offline' }
+& cargo @voiceArguments
+if ($LASTEXITCODE -ne 0) { throw 'Sonora 静态音频处理库构建失败。' }
+$voiceLibrary = Join-Path $voiceTarget 'release/lycansync_obs_audio_processing.lib'
 # vswhere 的 productLineVersion 是年份，生成器主版本来自 installationVersion。
 $generator = "Visual Studio $($visualStudio.installationVersion.Split('.')[0]) $($visualStudio.catalog.productLineVersion)"
-& $cmake -S $PSScriptRoot -B $buildDirectory -G $generator -A x64 "-DLYCANSYNC_OBS_SDK=$preparedDirectory" "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=$binaryDirectory" "-DLYCANSYNC_OBS_SOURCE=$gameSourceRoot" "-DLYCANSYNC_OBS_DEPS=$gameDepsDirectory"
+& $cmake -S $PSScriptRoot -B $buildDirectory -G $generator -A x64 "-DLYCANSYNC_OBS_SDK=$preparedDirectory" "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=$binaryDirectory" "-DLYCANSYNC_OBS_SOURCE=$gameSourceRoot" "-DLYCANSYNC_OBS_DEPS=$gameDepsDirectory" "-DLYCANSYNC_VOICE_PROCESSING_LIBRARY=$voiceLibrary"
 if ($LASTEXITCODE -ne 0) { throw 'OBS 宿主 CMake 配置失败。' }
-& $cmake --build $buildDirectory --config Release --parallel 2
+# 解包会恢复上游旧时间戳；清理对象文件，避免补丁变化后复用旧插件实现。
+& $cmake --build $buildDirectory --config Release --clean-first --parallel 2
 if ($LASTEXITCODE -ne 0) { throw 'OBS 宿主构建失败。' }
 if ($BuildTestWindows) {
     & $cmake --build $buildDirectory --config Release --target lycansync-obs-test-windows lycansync-bound-game-target-tests lycansync-bound-audio-target-tests lycansync-screen-audio-pcm-tests lycansync-obs-test-d3d lycansync-game-failure-tests lycansync-window-failure-tests lycansync-gpu-frame-wait-tests lycansync-window-isolation-test --parallel 2
@@ -196,12 +209,13 @@ $files = @(Get-ChildItem -LiteralPath $preparedDirectory -File -Recurse | Where-
         sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
 })
 $hostSources = @(Get-ChildItem -LiteralPath $PSScriptRoot -File -Recurse | Where-Object {
-    $_.Extension -in @('.cpp', '.hpp', '.c', '.h', '.txt', '.cmake', '.ps1', '.patch')
+    $_.Extension -in @('.cpp', '.hpp', '.c', '.h', '.txt', '.cmake', '.ps1', '.patch', '.rs', '.toml', '.lock')
 } | Sort-Object FullName | ForEach-Object {
     [pscustomobject][ordered]@{ path = $_.FullName.Substring($projectRoot.Length + 1).Replace('\', '/'); bytes = $_.Length;
         sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
 })
 $manifest = [ordered]@{ obsVersion = '32.2.2'; architecture = 'x64'; sourceSha256 = $sourceHash; runtimeSha256 = $runtimeHash;
+    voiceProcessing = [ordered]@{ name = 'sonora'; version = '0.2.0'; sampleRate = 48000; channels = 1; chunkFrames = 480 };
     sourceUrl = 'https://github.com/obsproject/obs-studio/releases/tag/32.2.2'; sourceArchive = (Split-Path $sourceArchive -Leaf);
     graphicsPatchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/dxgi-output-compat.patch') -Algorithm SHA256).Hash.ToLowerInvariant();
     windowPatchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/bound-window-capture.patch') -Algorithm SHA256).Hash.ToLowerInvariant();

@@ -83,6 +83,7 @@ interface MainAudioState {
   sequence: number;
   inFlight?: number;
   stopping: boolean;
+  publishing: boolean;
   droppedChunks: number;
   rendererDroppedChunks: number;
   sampleRate: number;
@@ -98,7 +99,7 @@ function mainAudio(channels: number) {
     return source.slice(start, source.indexOf('\nfunction ', start + 1));
   };
   const audio: MainAudioState = { sessionId: 'session-b', buffer: Buffer.alloc(0), queue: [], sequence: 0,
-    stopping: false, droppedChunks: 0, rendererDroppedChunks: 0, sampleRate: 48000 };
+    stopping: false, publishing: true, droppedChunks: 0, rendererDroppedChunks: 0, sampleRate: 48000 };
   if (channels === 2) audio.format = { sampleRate: 48_000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10 };
   const sent: { sessionId: string; sequence: number; pcm: Uint8Array }[] = [];
   const mainWindow = { isDestroyed: () => false, webContents: {

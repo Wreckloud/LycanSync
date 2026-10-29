@@ -33,7 +33,7 @@ interface NativeMicrophoneOptions {
   createLocalTrack?: (track: MediaStreamTrack, context: AudioContext) => LocalAudioTrack;
 }
 
-/** 将单声道 WASAPI PCM 接为麦克风音轨，持有页面侧资源；是否发布由调用方决定。 */
+/** 将 OBS 处理后的单声道 PCM 接为麦克风音轨，持有页面侧资源；是否发布由调用方决定。 */
 export class NativeMicrophoneAudioSession {
   track?: LocalAudioTrack;
 
@@ -143,12 +143,7 @@ export class NativeMicrophoneAudioSession {
         Promise.resolve().then(() => context && context.state !== 'closed' ? context.close() : undefined),
         Promise.resolve().then(async () => {
           if (!this.nativeStartCommand || !this.sessionId) return;
-          try {
-            await this.nativeStartCommand;
-          } catch {
-            // 启动被拒绝时没有取得采集会话，无需发送对应停止命令。
-            return;
-          }
+          // 宿主支持启动中撤销，不等待设备就绪再发停止。
           this.started = false;
           await this.desktop.stopNativeMicrophone(this.sessionId);
         }),

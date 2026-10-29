@@ -304,12 +304,14 @@ it('分进程内存只导出角色、状态和数值，不泄露PID、路径或�
   const next = snapshot();
   next.process = { cpuPercent: 2, memoryMb: 100, entries: [
     { role: 'obs', state: 'running', workingSetMiB: 20, privateCommitMiB: 30 },
+    { role: 'obs-audio', state: 'running', workingSetMiB: 12, privateCommitMiB: 22 },
     { role: 'activity', state: 'unavailable', workingSetMiB: null, privateCommitMiB: null },
   ] };
   Object.assign(next.process.entries[0], { pid: 987654, path: 'private-process-path', commandLine: 'private-command' });
   const exported = diagnosticReportSample(next, new Map());
   expect(exported.process).toEqual({ cpuPercent: 2, memoryMb: 100, entries: [
     { role: 'obs', state: 'running', workingSetMiB: 20, privateCommitMiB: 30 },
+    { role: 'obs-audio', state: 'running', workingSetMiB: 12, privateCommitMiB: 22 },
     { role: 'activity', state: 'unavailable', workingSetMiB: null, privateCommitMiB: null },
   ] });
   expect(JSON.stringify(exported)).not.toMatch(/987654|private-process-path|private-command/);
@@ -640,6 +642,8 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，纹理桥丢帧只取
   first.native = { helperVersion: '32.2.2', captureBackend: 'obsLibobs', state: 'running',
     sessionId: 'private-obs-session', captureSuspended: false, frameWidth: 1920, frameHeight: 1080,
     framesReceived: 200, framesProcessed: 180, obsBridgeDroppedFrames: 20 } as NativeCaptureDiagnostics;
+  first.native.microphoneCapture = { sourceState: 1, sourceFrames: 48000, framesReceived: 47040 };
+  Object.assign(first.native.microphoneCapture, { device: 'private-device' });
   first.native.obsRender = { configuration: 1, elapsedMs: 2000, totalFrames: 120, laggedFrames: 0,
     activeFps: 60, averageRenderMs: 1 };
   Object.assign(first.native.obsRender, { windowTitle: 'private-title', luid: 'private-device' });
@@ -667,6 +671,7 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，纹理桥丢帧只取
   expect(result.schemaVersion).toBe(9);
   expect(result.summary.segments).toHaveLength(1);
   expect(result.samples[0].native).toMatchObject({ helperVersion: '32.2.2', captureBackend: 'obsLibobs' });
+  expect(result.samples[0].native.microphoneCapture).toEqual({ sourceState: 1, sourceFrames: 48000, framesReceived: 47040 });
   expect(result.summary.segments[0]).toMatchObject({ captureMode: 'obsLibobs',
     typicalFps: { nativeCapture: 60, nativeProcessed: 45, pageReceived: 42, pageSubmitted: 40,
       encodingLayers: [{ typicalFps: 39 }] } });

@@ -224,7 +224,7 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
     omittedParticipants: snapshot.omittedParticipants, process: snapshot.process && {
       cpuPercent: numeric(snapshot.process.cpuPercent), memoryMb: numeric(snapshot.process.memoryMb),
       entries: snapshot.process.entries.map((entry) => ({
-        role: ['electron-Browser', 'electron-Tab', 'electron-GPU', 'electron-Utility', 'electron-other', 'obs', 'media', 'activity']
+        role: ['electron-Browser', 'electron-Tab', 'electron-GPU', 'electron-Utility', 'electron-other', 'obs', 'obs-audio', 'media', 'activity']
           .includes(entry.role) ? entry.role : 'unknown',
         state: ['running', 'stopped', 'unavailable'].includes(entry.state) ? entry.state : 'unavailable',
         workingSetMiB: numeric(entry.workingSetMiB), privateCommitMiB: numeric(entry.privateCommitMiB),
@@ -285,6 +285,11 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
         averageRenderMs: numeric(native.obsRender.averageRenderMs) } : null,
       captureSuspended: native.captureSuspended,
       microphoneCaptureDroppedChunks: numeric(native.microphoneCaptureDroppedChunks),
+      microphoneCapture: native.microphoneCapture ? {
+        sourceState: [0, 1, 2].includes(native.microphoneCapture.sourceState) ? native.microphoneCapture.sourceState : null,
+        sourceFrames: numeric(native.microphoneCapture.sourceFrames),
+        framesReceived: numeric(native.microphoneCapture.framesReceived),
+      } : null,
       screenShareAudio: native.screenShareAudio && { state: native.screenShareAudio.state,
         sampleRate: numeric(native.screenShareAudio.sampleRate), channels: numeric(native.screenShareAudio.channels),
         packetsReceived: numeric(native.screenShareAudio.packetsReceived), framesReceived: numeric(native.screenShareAudio.framesReceived),
@@ -539,7 +544,7 @@ export function useDiagnosticReport(options: {
         '明确暂停及恢复边界区间不计入摘要帧率和页面背压比例；正常运行时的零帧仍计入，原始样本保留暂停区间。',
       ] },
       runtime: { clientVersion: packageInfo.version, desktop: Boolean(window.lycanDesktop),
-        microphonePipeline: window.lycanDesktop ? 'WASAPI + Sonora' : 'Chromium + browser processor' },
+        microphonePipeline: window.lycanDesktop ? 'OBS WASAPI + Sonora' : 'Chromium + browser processor' },
       measurements: {
         fps: 'counter-delta-divided-by-monotonic-elapsed-time; first-or-reset-sample-is-null',
         process: { scope: 'electron-and-owned-native-processes', memoryUnit: 'MiB',

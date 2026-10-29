@@ -3,12 +3,13 @@ const { release: osRelease } = require('node:os');
 const { createServer } = require('node:net');
 const { existsSync } = require('node:fs');
 const { Module } = require('node:module');
-const { isAbsolute, resolve, sep } = require('node:path');
+const { dirname, isAbsolute, resolve, sep } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { readFile, writeFile, unlink, mkdir } = require('node:fs/promises');
 const { randomUUID } = require('node:crypto');
 const { MediaHelperManager } = require('./media-helper.cjs');
 const { ObsCaptureHostManager } = require('./obs-capture-host.cjs');
+const { ObsAudioHostManager } = require('./obs-audio-host.cjs');
 const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
 const { createDiagnosticReportStore, parseDiagnosticReport } = require('./diagnostic-reports.cjs');
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
@@ -182,7 +183,6 @@ const mediaHelper = new MediaHelperManager({
   platform: process.platform,
   executablePath: mediaHelperPath,
   onDiagnostic: (message) => { void writeMediaDiagnostic({ stage: 'helperStderr', message }); },
-  onMicrophoneCaptureEnded: handleMicrophoneCaptureEnded,
   onHelperFailure: handleMediaHelperFailure,
 });
 
@@ -229,6 +229,20 @@ const obsCaptureHost = new ObsCaptureHostManager({
   onSuspended: handleVideoCaptureSuspended,
   onCaptureDiagnostic: (_state, entry) => { void writeMediaDiagnostic(entry); },
   onDiagnostic: (message) => { void writeMediaDiagnostic({ stage: 'obsCaptureHostStderr', message }); },
+});
+
+const obsAudioSettings = {
+  executablePath: resolve(dirname(obsHostSettings.executablePath), 'lycansync-obs-audio-host.exe'),
+  modulePath: resolve(dirname(obsHostSettings.modulePath), 'win-wasapi.dll'),
+  dataPath: resolve(dirname(obsHostSettings.dataPath), 'win-wasapi'),
+};
+const obsAudioHost = new ObsAudioHostManager({
+  ...obsAudioSettings,
+  configPath: resolve(app.getPath('userData'), 'obs-audio', '32.2.2'),
+  onFailure: (sessionId, code) => {
+    if (nativeMicrophoneSession?.sessionId === sessionId) notifyNativeMicrophoneError(nativeMicrophoneSession, code);
+  },
+  onDiagnostic: (entry) => { void writeMediaDiagnostic(entry); },
 });
 
 let obsCorePreparationRequested = false;
@@ -424,29 +438,29 @@ function notifyNativeMicrophoneError(audio, code) {
   if (!audio || audio.failureNotified || audio.stopping) return;
   audio.failureNotified = true;
   const safeCode = /^[a-z][A-Za-z0-9]{0,63}$/.test(code) ? code : 'microphoneCaptureFailed';
+  void writeMediaDiagnostic({ stage: 'microphoneCaptureFailed', code: safeCode });
   finishNativeMicrophonePipe(audio, { destroy: true });
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('media:native-microphone-error', { sessionId: audio.sessionId, code: safeCode });
   }
-  void mediaHelper.stopMicrophoneCapture(audio.sessionId).catch(() => {}).finally(() => {
-    lastMicrophoneDroppedChunks = audio.droppedChunks + audio.rendererDroppedChunks;
+  void obsAudioHost.stop(audio.sessionId).catch(error => {
+    void writeMediaDiagnostic({ stage: 'microphoneStopFailed', code: error.message });
+  }).finally(() => {
+    lastMicrophoneDroppedChunks = audio.hostDroppedChunks === null ? null
+      : audio.hostDroppedChunks + audio.droppedChunks + audio.rendererDroppedChunks;
     if (nativeMicrophoneSession === audio) nativeMicrophoneSession = undefined;
   });
 }
 
-function handleMicrophoneCaptureEnded(_state, event) {
-  const audio = nativeMicrophoneSession;
-  if (!audio || audio.sessionId !== event.sessionId || audio.stopping) return;
-  notifyNativeMicrophoneError(audio, event.code);
-}
-
 async function startNativeMicrophoneCapture(sessionId, settings) {
   if (closing || process.platform !== 'win32') throw new Error('platformUnsupported');
-  if (typeof sessionId !== 'string' || sessionId.length > 128 || !validMicrophoneSettings(settings)) {
+  if (!validNativeAudioSessionId(sessionId) || !validMicrophoneSettings(settings)) {
     throw new Error('invalidMicrophoneCaptureStart');
   }
   if (nativeMicrophoneSession) {
-    if (nativeMicrophoneSession.sessionId === sessionId) return nativeMicrophoneSession.format;
+    if (nativeMicrophoneSession.sessionId === sessionId && !nativeMicrophoneSession.stopping) {
+      return nativeMicrophoneSession.startPromise;
+    }
     throw new Error('microphoneCaptureAlreadyRunning');
   }
   lastMicrophoneDroppedChunks = 0;
@@ -455,7 +469,7 @@ async function startNativeMicrophoneCapture(sessionId, settings) {
   const audio = {
     sessionId, pipeId, server, socket: undefined, buffer: Buffer.alloc(0), queue: [],
     inFlight: undefined, sequence: 0, droppedChunks: 0, rendererDroppedChunks: 0,
-    stopping: false, failureNotified: false,
+    stopping: false, failureNotified: false, hostDroppedChunks: null, hostStarted: false,
   };
   nativeMicrophoneSession = audio;
   server.on('connection', (socket) => {
@@ -471,26 +485,34 @@ async function startNativeMicrophoneCapture(sessionId, settings) {
     });
   });
   server.on('error', () => notifyNativeMicrophoneError(audio, 'microphoneCapturePipeFailed'));
-  let helperStarted = false;
-  try {
-    await new Promise((resolveListen, rejectListen) => {
-      const onError = (error) => { server.removeListener('listening', onListening); rejectListen(error); };
-      const onListening = () => { server.removeListener('error', onError); resolveListen(); };
-      server.once('error', onError);
-      server.once('listening', onListening);
-      server.listen(`\\\\.\\pipe\\lycansync-microphone-audio-${pipeId}`);
-    });
-    const format = await mediaHelper.startMicrophoneCapture(pipeId, sessionId, settings);
-    helperStarted = true;
-    if (nativeMicrophoneSession !== audio || audio.stopping) throw new Error('microphoneCaptureSessionStopped');
-    audio.format = format;
-    return format;
-  } catch (error) {
-    finishNativeMicrophonePipe(audio, { destroy: true });
-    if (helperStarted) await mediaHelper.stopMicrophoneCapture(sessionId).catch(() => {});
-    if (nativeMicrophoneSession === audio) nativeMicrophoneSession = undefined;
-    throw error;
-  }
+  audio.startPromise = (async () => {
+    try {
+      await new Promise((resolveListen, rejectListen) => {
+        const onError = (error) => { server.removeListener('listening', onListening); rejectListen(error); };
+        const onListening = () => { server.removeListener('error', onError); resolveListen(); };
+        server.once('error', onError);
+        server.once('listening', onListening);
+        server.listen(`\\\\.\\pipe\\lycansync-microphone-audio-${pipeId}`);
+      });
+      if (nativeMicrophoneSession !== audio || audio.stopping) throw new Error('microphoneCaptureSessionStopped');
+      audio.hostStarted = true;
+      const format = await obsAudioHost.start(pipeId, sessionId, settings);
+      if (nativeMicrophoneSession !== audio || audio.stopping) throw new Error('microphoneCaptureSessionStopped');
+      return format;
+    } catch (error) {
+      finishNativeMicrophonePipe(audio, { destroy: true });
+      if (audio.hostStarted) await obsAudioHost.stop(sessionId).catch(failure => {
+        void writeMediaDiagnostic({ stage: 'microphoneStopFailed', code: failure.message });
+      });
+      if (nativeMicrophoneSession === audio) nativeMicrophoneSession = undefined;
+      if (error.message !== 'microphoneCaptureSessionStopped') {
+        const code = /^[a-z][A-Za-z0-9]{0,63}$/.test(error.message) ? error.message : 'microphoneCaptureStartFailed';
+        void writeMediaDiagnostic({ stage: 'microphoneStartFailed', code });
+      }
+      throw error;
+    }
+  })();
+  return audio.startPromise;
 }
 
 async function stopNativeMicrophoneCapture(sessionId) {
@@ -499,11 +521,14 @@ async function stopNativeMicrophoneCapture(sessionId) {
   if (audio.sessionId !== sessionId) throw new Error('microphoneCaptureSessionMismatch');
   if (audio.stopPromise) return audio.stopPromise;
   audio.stopPromise = (async () => {
-    const helperStop = mediaHelper.stopMicrophoneCapture(sessionId);
-    finishNativeMicrophonePipe(audio, { destroy: true });
-    try { return await helperStop; }
+    // 立即撤销页面交付，但保持管道排空至宿主停止，避免正常停止被误报为写管道故障。
+    audio.stopping = true;
+    audio.queue.length = 0;
+    try { return audio.hostStarted ? await obsAudioHost.stop(sessionId) : { changed: false }; }
     finally {
-      lastMicrophoneDroppedChunks = audio.droppedChunks + audio.rendererDroppedChunks;
+      finishNativeMicrophonePipe(audio, { destroy: true });
+      lastMicrophoneDroppedChunks = audio.hostDroppedChunks === null ? null
+        : audio.hostDroppedChunks + audio.droppedChunks + audio.rendererDroppedChunks;
       if (nativeMicrophoneSession === audio) nativeMicrophoneSession = undefined;
     }
   })();
@@ -686,10 +711,6 @@ function handleMediaHelperFailure(state, code) {
   const audio = nativeScreenAudioSession;
   if (audio && (state.videoSessionId === audio.sessionId || state === video?.helperState)) {
     notifyNativeScreenAudioError(audio, code);
-  }
-  const microphone = nativeMicrophoneSession;
-  if (microphone && state.microphoneCaptureSessionId === microphone.sessionId) {
-    notifyNativeMicrophoneError(microphone, code);
   }
 }
 
@@ -1446,6 +1467,7 @@ ipcMain.handle('diagnostics:process-metrics', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
   return readProcessMetrics(app.getAppMetrics(), [
     { role: 'obs', children: obsCaptureHost.state ? [obsCaptureHost.state.child] : [], executablePath: obsHostSettings.executablePath },
+    { role: 'obs-audio', children: obsAudioHost.state ? [obsAudioHost.state.child] : [], executablePath: obsAudioSettings.executablePath },
     { role: 'media', children: [...mediaHelper.children].map((state) => state.child), executablePath: mediaHelperPath() },
     { role: 'activity', children: activityMonitor.diagnosticProcesses(), executablePath: activityHelperPath() },
   ], process.platform === 'win32');
@@ -1584,6 +1606,9 @@ ipcMain.handle('media:capabilities', (event) => {
     const runtimeAvailable = Object.values(obsHostSettings).every((path) => existsSync(path));
     capabilities.videoCapture = { available: bridgeAvailable && runtimeAvailable,
       reason: !bridgeAvailable ? 'nativeVideoBridgeUnavailable' : runtimeAvailable ? 'available' : 'obsCaptureHostUnavailable' };
+    const microphoneAvailable = Object.values(obsAudioSettings).every(path => existsSync(path));
+    capabilities.microphoneCapture = { available: microphoneAvailable,
+      reason: microphoneAvailable ? 'obsWasapiSonora' : 'obsAudioHostUnavailable' };
     capabilities.screenShareAudioCapture = screenShareAudioCapability();
     return capabilities;
   });
@@ -1760,7 +1785,7 @@ ipcMain.handle('media:native-microphone:start', (event, sessionId, settings) => 
 ipcMain.handle('media:native-microphone:configure', (event, sessionId, settings) => {
   if (!trustedSender(event) || closing || typeof sessionId !== 'string' || sessionId.length > 128
       || !validMicrophoneSettings(settings)) throw new Error('请求参数无效');
-  return mediaHelper.configureMicrophoneCapture(sessionId, settings);
+  return obsAudioHost.configure(sessionId, settings);
 });
 ipcMain.handle('media:native-microphone:stop', (event, sessionId) => {
   if (!trustedSender(event) || typeof sessionId !== 'string' || sessionId.length > 128) {
@@ -1805,10 +1830,24 @@ ipcMain.handle('media:diagnostics', async (event) => {
       : lastScreenAudioDroppedChunks;
     diagnostics.screenShareAudio.droppedAudioChunks = (diagnostics.screenShareAudio.droppedAudioChunks ?? 0) + audioDrops;
   }
-  diagnostics.microphoneCaptureDroppedChunks = (diagnostics.microphoneCaptureDroppedChunks ?? 0)
-    + (nativeMicrophoneSession
-      ? nativeMicrophoneSession.droppedChunks + nativeMicrophoneSession.rendererDroppedChunks
-      : lastMicrophoneDroppedChunks);
+  const microphone = nativeMicrophoneSession;
+  let microphoneDrops = null;
+  diagnostics.microphoneCapture = null;
+  if (microphone && !microphone.stopping) {
+    try {
+      const capture = await obsAudioHost.getDiagnostics(microphone.sessionId);
+      microphoneDrops = capture.droppedChunks;
+      if (nativeMicrophoneSession === microphone && !microphone.stopping) {
+        diagnostics.microphoneCapture = { sourceState: capture.sourceState, sourceFrames: capture.sourceFrames,
+          framesReceived: capture.framesReceived };
+      }
+      microphone.hostDroppedChunks = microphoneDrops;
+    } catch { /* 可选统计缺失不终止语音；报告保留未知值。 */ }
+    if (nativeMicrophoneSession !== microphone) microphoneDrops = null;
+  }
+  diagnostics.microphoneCaptureDroppedChunks = microphone
+    ? microphoneDrops === null ? null : microphoneDrops + microphone.droppedChunks + microphone.rendererDroppedChunks
+    : lastMicrophoneDroppedChunks;
   return diagnostics;
 });
 ipcMain.on('window:maximize', (event) => {
@@ -1848,6 +1887,9 @@ app.on('before-quit', (event) => {
     : Promise.resolve())
     .then(() => obsCaptureHost.dispose().catch(error => {
       console.error(`OBS host shutdown failed: ${error.message}`);
+    }))
+    .then(() => obsAudioHost.dispose().catch(error => {
+      console.error(`OBS audio shutdown failed: ${error.message}`);
     }))
     .then(() => mediaHelper.shutdown())
     .catch((error) => console.error(`media-helper shutdown failed: ${error.message}`))

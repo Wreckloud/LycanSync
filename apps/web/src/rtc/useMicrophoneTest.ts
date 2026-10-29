@@ -34,11 +34,11 @@ const CLEANUP_NOTICE = '麦克风试听停止未确认，请重启客户端后�
 function captureMessage(error: unknown, desktop: boolean) {
   if (error instanceof Error) {
     if (error.name === 'NotAllowedError') return '麦克风未获授权，请允许后重试。';
-    if (error.name === 'NotFoundError' || error.message === 'audioDeviceUnavailable') {
+    if (error.name === 'NotFoundError' || error.message === 'microphoneDeviceUnavailable') {
       return '默认麦克风不可用，请检查设备连接和录音权限。';
     }
     if (error.name === 'NotReadableError') return '麦克风无法采集，请检查录音权限或设备占用。';
-    if (error.message === 'microphoneCaptureFormatUnsupported') return '当前麦克风音频格式暂不支持。';
+    if (error.message === 'microphoneProcessingFailed') return '麦克风声音处理失败，请重新试听。';
     if (error.message === 'platformUnsupported') return '当前桌面系统不支持原生麦克风采集。';
   }
   return desktop ? '麦克风试听采集失败，请检查默认输入设备和 Windows 录音权限。'

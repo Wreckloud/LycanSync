@@ -61,6 +61,10 @@ function prepareSourceBundle(projectRoot) {
   if (manifest.obsVersion !== '32.2.2' || manifest.architecture !== 'x64') {
     throw new Error('OBS 构建版本或架构不符合固定发布范围。');
   }
+  if (manifest.files.some(file => file.path === 'bin/64bit/lycansync-obs-audio-host.exe')
+      && (manifest.voiceProcessing?.name !== 'sonora' || manifest.voiceProcessing.version !== '0.2.0')) {
+    throw new Error('OBS 麦克风宿主缺少对应声音处理依赖记录，请重新构建。');
+  }
   for (const file of manifest.files) verifyFile(prepared, file);
   if (!manifest.sourceFiles?.length) throw new Error('OBS 构建缺少自有源码记录，请重新构建。');
   for (const file of manifest.sourceFiles) verifyFile(projectRoot, file);
@@ -102,7 +106,7 @@ function prepareSourceBundle(projectRoot) {
     }
     manifest.files.sort((a, b) => a.path.localeCompare(b.path, 'en'));
     manifest.runtimeBytes = manifest.files.reduce((bytes, file) => bytes + file.bytes, 0);
-    const runtimeSha256 = sha256(JSON.stringify(manifest.files));
+    let runtimeSha256 = sha256(JSON.stringify(manifest.files));
     const sourceFiles = [];
     function copySources(directory) {
       for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -117,6 +121,35 @@ function prepareSourceBundle(projectRoot) {
       }
     }
     copySources(sourceRoot);
+    if (manifest.voiceProcessing) {
+      const processingRoot = join(bundleRoot, 'native/obs-capture-host/audio-processing');
+      mkdirSync(join(processingRoot, 'vendor'), { recursive: true });
+      const result = spawnSync('cargo', ['vendor', '--offline', '--locked', '--versioned-dirs',
+        '--manifest-path', join(processingRoot, 'Cargo.toml'), join(processingRoot, 'vendor')],
+      { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, windowsHide: true });
+      if (result.error) throw result.error;
+      if (result.status !== 0) throw new Error(`OBS 声音处理对应依赖源码不完整：${result.stderr}`);
+      function recordVendor(directory) {
+        for (const entry of readdirSync(directory, { withFileTypes: true })) {
+          const file = join(directory, entry.name);
+          if (entry.isDirectory()) recordVendor(file);
+          else if (entry.isFile()) {
+            sourceFiles.push(fileRecord(bundleRoot, relative(bundleRoot, file)));
+            if (/^(license|copying|notice)([._-]|$)/i.test(entry.name)) {
+              const target = join('licenses/voice-processing', relative(join(processingRoot, 'vendor'), file));
+              mkdirSync(dirname(join(prepared, target)), { recursive: true });
+              copyFileSync(file, join(prepared, target));
+              manifest.files = manifest.files.filter(record => record.path !== target.replaceAll('\\', '/'));
+              manifest.files.push(fileRecord(prepared, target));
+            }
+          } else throw new Error('OBS 声音处理依赖源码出现非普通文件。');
+        }
+      }
+      recordVendor(join(processingRoot, 'vendor'));
+      manifest.files.sort((a, b) => a.path.localeCompare(b.path, 'en'));
+      manifest.runtimeBytes = manifest.files.reduce((bytes, file) => bytes + file.bytes, 0);
+      runtimeSha256 = sha256(JSON.stringify(manifest.files));
+    }
     for (const archive of lock.archives) {
       const target = join(bundleRoot, 'release/build-cache/obs-32.2.2', archive.path);
       mkdirSync(dirname(target), { recursive: true });
