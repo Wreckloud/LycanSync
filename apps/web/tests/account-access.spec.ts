@@ -27,7 +27,7 @@ test('仅服主显示邀请面板且生成链接只在成功后展示', async ({
   await page.route('**/api/auth/access/links*', (route) => route.fulfill({ json: route.request().method() === 'POST'
     ? { record: { id: 'new-link' }, url: `https://example.com/join#token=${'a'.repeat(43)}` } : [] }));
   await page.goto('/');
-  await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '邀请与成员', exact: true }).click();
   await page.getByRole('button', { name: '邀请新朋友', exact: true }).click();
   await expect(page.getByLabel('生成的链接')).toHaveValue(`https://example.com/join#token=${'a'.repeat(43)}`);

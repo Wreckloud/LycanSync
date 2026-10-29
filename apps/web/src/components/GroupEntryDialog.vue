@@ -11,7 +11,6 @@ import { useBackdropDismiss } from './useBackdropDismiss';
 const props = defineProps<{ createGroup: (name: string, description: string, avatar: string) => Promise<void>; group?: GroupDetail }>();
 const emit = defineEmits<{ close: []; joined: [group: GroupDetail] }>();
 const mode = ref<'create' | 'join'>('create');
-const modeShell = ref<HTMLElement | null>(null);
 let modeAnimation: Animation | undefined;
 let modePreference: MediaQueryList | undefined;
 let modeGeneration = 0;
@@ -63,21 +62,29 @@ function keepFocus(event: KeyboardEvent) {
   }
 }
 
+function retireMode(element: Element) {
+  const page = element as HTMLElement;
+  page.inert = true;
+  // 退场字段仍短暂留在同一个 form 内，不能参与原生必填校验或再次提交。
+  page.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement>('input, textarea, button')
+    .forEach((control) => { control.disabled = true; });
+}
+
 watch(mode, async () => {
-  const shell = modeShell.value;
+  const shell = dialog.value;
   const from = shell?.getBoundingClientRect().height ?? 0;
   modeAnimation?.cancel();
   const generation = ++modeGeneration;
   await nextTick();
   if (!shell || generation !== modeGeneration) return;
-  const to = dialog.value?.offsetHeight ?? shell.getBoundingClientRect().height;
+  const to = shell.offsetHeight;
   if (!modePreference?.matches && typeof shell.animate === 'function') {
-    modeAnimation = shell.animate([{ height: `${from}px` }, { height: `${to}px` }], {
-      duration: Number.parseFloat(getComputedStyle(shell).getPropertyValue('--motion-expand-duration')),
+    modeAnimation = shell.animate([{ height: `${from}px`, overflow: 'hidden' }, { height: `${to}px`, overflow: 'hidden' }], {
+      duration: Number.parseFloat(getComputedStyle(shell).getPropertyValue('--motion-layout-duration')),
       easing: getComputedStyle(shell).getPropertyValue('--motion-ease').trim(),
     });
   }
-  dialog.value?.querySelector<HTMLInputElement>('input:not([type="file"])')?.focus({ preventScroll: true });
+  shell.querySelector<HTMLInputElement>('.entry-mode-page:not([inert]) input:not([type="file"])')?.focus({ preventScroll: true });
 });
 function reduceModeMotion() { if (modePreference?.matches) modeAnimation?.cancel(); }
 onScopeDispose(() => {
@@ -95,11 +102,11 @@ onMounted(() => {
 
 <template>
   <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="close">
-    <div ref="modeShell" class="entry-mode-shell">
-    <Transition name="entry-card" @before-enter="($event as HTMLElement).inert = false" @before-leave="($event as HTMLElement).inert = true">
-    <form :key="mode" ref="dialog" class="group-entry" role="dialog" aria-modal="true" tabindex="-1"
+    <form ref="dialog" class="group-entry" role="dialog" aria-modal="true" tabindex="-1"
       :aria-label="group ? '编辑群组资料' : mode === 'join' ? '加入群组' : '创建群组'"
       :inert="!!cropSource" @submit.prevent="submit" @keydown="keepFocus">
+      <Transition name="entry-mode" @before-leave="retireMode">
+      <div :key="mode" class="entry-mode-page">
       <header class="entry-header">
         <div><h2>{{ group ? '编辑群组资料' : mode === 'join' ? '加入群组' : '创建群组' }}</h2><p>{{ mode === 'join' ? '和熟悉的人相聚' : '让朋友们有个相聚的地方' }}</p></div>
         <button v-if="!group" type="button" class="card-header-action" :disabled="busy || picking || !!cropSource"
@@ -141,9 +148,9 @@ onMounted(() => {
         <InlineFeedback class="card-feedback" :message="error" :status="busy ? (group ? '正在保存…' : mode === 'join' ? '正在加入…' : '正在创建…') : picking ? '正在读取图片…' : ''" />
         <button type="submit" class="confirm-button card-actions-end" :disabled="busy || picking || !!cropSource || (mode === 'join' ? !code.trim() : !name.trim())">{{ group ? '保存修改' : mode === 'join' ? '加入群组' : '创建群组' }}</button>
       </footer>
+      </div>
+      </Transition>
     </form>
-    </Transition>
-    </div>
     <DialogTransition>
     <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整群组头像" shape="square" @apply="finishCrop" @cancel="finishCrop()" />
     </DialogTransition>
@@ -151,10 +158,11 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.group-entry { width: 100%; max-height: calc(100dvh - 36px); overflow-y: auto; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); font-size: 14px; line-height: 20px; }
+.group-entry { position: relative; width: min(480px, 100%); max-height: calc(100dvh - 36px); overflow-y: auto; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); font-size: 14px; line-height: 20px; }
+.entry-mode-page { display: flow-root; min-width: 0; }
+.entry-mode-leave-active { position: absolute; top: 24px; right: 24px; left: 24px; }
 .entry-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .entry-body.entry-join-body { gap: 12px; align-content: start; }
-.entry-mode-shell { position: relative; width: min(480px, 100%); }
 .entry-join-body input { width: 100%; }
 .entry-join-body p { margin: 0; color: var(--muted); font-size: 13px; }
 .entry-header h2 { margin: 0; font-size: 22px; line-height: 32px; }
@@ -176,5 +184,5 @@ onMounted(() => {
 .entry-field-heading label span, .entry-count { color: var(--muted); font-size: 12px; }
 .entry-description textarea { width: 100%; height: 88px; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; line-height: 22px; }
 .entry-description textarea { resize: none; }
-@media (max-width: 420px) { .group-entry { padding: 20px; } .entry-header h2 { font-size: 20px; } .entry-identity { gap: 12px; } .group-avatar-preview { width: 64px; height: 64px; } }
+@media (max-width: 420px) { .group-entry { padding: 20px; } .entry-mode-leave-active { top: 20px; right: 20px; left: 20px; } .entry-header h2 { font-size: 20px; } .entry-identity { gap: 12px; } .group-avatar-preview { width: 64px; height: 64px; } }
 </style>

@@ -74,7 +74,7 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
       supported: false, enabled: false,
     });
     if (!await page.locator('.settings-view').isVisible()) {
-      await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+      await page.getByRole('button', { name: '设置', exact: true }).click();
     }
     await page.getByRole('button', { name: '账号设置', exact: true }).click();
     await page.getByRole('button', { name: '客户端', exact: true }).click();
