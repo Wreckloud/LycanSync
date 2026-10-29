@@ -153,7 +153,7 @@ interface Window {
     getNativeVideoSourceThumbnails(sources: NativeVideoSource[]): Promise<{ sourceId: string; thumbnail: string }[]>;
     getScreenShareSupport(): Promise<{ hideCursor: boolean; hideBorder: boolean }>;
     startNativeVideo(sourceId: string, maxFps: number, settings: { hideCursor: boolean; hideBorder: boolean;
-      windowMethod?: 'auto' | 'game' | 'bitblt' | 'wgc'; followGame?: 'league' }, resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean; gameFollowId?: string }>;
+      windowMethod?: 'auto' | 'game'; followGame?: 'league' }, resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean; gameFollowId?: string }>;
     findNativeGameSource(id: string): Promise<{ sourceId: string | null }>;
     switchNativeGameVideo(id: string, sourceId: string, maxFps: number, settings: import('./settings/screenSharePreferences').ScreenSharePreferences,
       resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean; gameFollowId?: string }>;

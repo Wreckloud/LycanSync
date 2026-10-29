@@ -113,7 +113,7 @@ class ObsCaptureHostManager {
     if (typeof sourceId !== 'string' || !/^(monitor|window):[1-9]\d*:\d+$/.test(sourceId)
         || ![30, 60, 120].includes(maxFps) || !validTarget(target, sourceId) || !isSessionId(sessionId)
         || !validResolution(resolution) || !settings || typeof settings.hideCursor !== 'boolean' || typeof settings.hideBorder !== 'boolean'
-        || !['auto', 'game', 'bitblt', 'wgc'].includes(windowMethod)
+        || !['auto', 'game'].includes(windowMethod)
         || (target.kind === 'monitor' && windowMethod !== 'auto')
         || (target.kind === 'game' && !['auto', 'game'].includes(windowMethod))
         || (target.kind === 'window' && windowMethod === 'game')) {
@@ -208,7 +208,7 @@ class ObsCaptureHostManager {
     if (event.event === 'captureRejected') {
       if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
       if (this.state !== state || (!state.startReject && !state.stopRequested) || event.sessionId !== state.videoSessionId
-          || !['captureBorderUnsupported', 'captureBorderAccessDenied', 'captureSettingsUnsupported'].includes(event.code)) {
+          || !['captureBorderUnsupported', 'captureBorderAccessDenied', 'captureSettingsUnsupported', 'captureMethodNotIsolated'].includes(event.code)) {
         failState(state, new Error('obsCaptureProtocolEventInvalid'));
         return;
       }
@@ -263,8 +263,7 @@ class ObsCaptureHostManager {
       if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
       const method = event.captureMethod;
       const expectedMethods = state.captureKind === 'monitor' ? ['dxgi'] : state.captureKind === 'game' ? ['game']
-        : state.requestedMethod === 'bitblt' ? ['bitblt-window'] : state.requestedMethod === 'wgc' ? ['wgc-window']
-          : ['bitblt-window', 'wgc-window'];
+        : ['wgc-window'];
       if (this.state !== state || event.sessionId !== state.videoSessionId
           || !['configured', 'rendering', 'sourceReady', 'gpuDelayed'].includes(event.stage) || !expectedMethods.includes(method)
           || (state.captureMethod && state.captureMethod !== method)
@@ -330,6 +329,10 @@ class ObsCaptureHostManager {
     }
     if (event.event === 'sharedTextureFrame') {
       if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
+      if (state.failed || state.closed) return;
+      if (state.captureKind === 'window' && state.captureMethod !== 'wgc-window') {
+        failState(state, new Error('captureMethodNotIsolated')); return;
+      }
       if (this.state !== state || state.closed || !validFrameEvent(event, state.videoSessionId)) {
         failState(state, new Error('obsCaptureFrameInvalid'));
         return;

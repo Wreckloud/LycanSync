@@ -124,7 +124,7 @@ describe('App 启动恢复共享偏好', () => {
     const { app, state, stored, open } = setup();
     const waiting = open();
     await vi.waitFor(() => expect(state.captureAudioCapabilityReady.value).toBe(true));
-    const settings: ScreenSharePreferences = { hideCursor: true, hideBorder: false, windowMethod: 'wgc' };
+    const settings: ScreenSharePreferences = { hideCursor: true, hideBorder: false, windowMethod: 'auto' };
     app.selectCaptureSource('window:test', settings);
     expect((await waiting)?.captureSettings).toEqual(settings);
     expect(stored.has('lycansync.screen-share')).toBe(false);

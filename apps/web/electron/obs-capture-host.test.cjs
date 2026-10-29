@@ -108,7 +108,7 @@ function adapterFixture(context) {
 }
 
 test('设置拒绝返回固定原因，保留宿主供下次共享，不通知运行时故障', async context => {
-  for (const code of ['captureBorderUnsupported', 'captureBorderAccessDenied', 'captureSettingsUnsupported']) {
+  for (const code of ['captureBorderUnsupported', 'captureBorderAccessDenied', 'captureSettingsUnsupported', 'captureMethodNotIsolated']) {
     const f = fixture(context);
     const rejected = assert.rejects(f.start(), new RegExp(code));
     await flush();
@@ -1132,14 +1132,15 @@ test('游戏来源仍绑定已登记窗口，不接受整屏或丢失的实例�
 });
 
 test('普通窗口记录实际方式，不能中途换方式或伪造边框授权', async (context) => {
-  for (const request of ['auto', 'bitblt', 'wgc']) {
+  for (const borderChanged of [false, true]) {
+    const request = 'auto';
     const { manager, emit, captureDiagnostics, failures, captureCommands } = fixture(context);
     const target = { kind: 'window', windowId: '34567', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.34567', processCreationTime: '56789', processId: 123, requiresWindowCapture: false };
     const started = manager.start('window:7:0', 60, sessionId, target,
       { hideCursor: false, hideBorder: true, windowMethod: request });
     emit({ event: 'captureStarted', helperVersion: '32.2.2' });
     await started;
-    const captureMethod = request === 'wgc' ? 'wgc-window' : 'bitblt-window';
+    const captureMethod = 'wgc-window';
     const evidence = { event: 'captureEvidence', stage: 'configured', captureMethod,
       requestedMethod: request, borderAllowed: false, clientArea: true,
       adapterIndex: 0, sourceWidth: 0, sourceHeight: 0 };
@@ -1148,10 +1149,26 @@ test('普通窗口记录实际方式，不能中途换方式或伪造边框授�
     assert.equal(captureDiagnostics.at(-1).captureMethod, captureMethod);
     assert.equal(captureDiagnostics.at(-1).borderAllowed, false);
     assert.equal(captureDiagnostics.at(-1).clientArea, true);
-    emit({ ...evidence, stage: 'sourceReady', ...(request === 'auto'
+    emit({ ...evidence, stage: 'sourceReady', ...(!borderChanged
       ? { windowFallbackReason: 'captureBorderAccessDenied' } : { borderAllowed: true }) });
     assert.deepEqual(failures, ['obsCaptureProtocolEventInvalid']);
   }
+});
+
+test('普通窗口拒绝 BitBlt 证据，失败后丢弃同批迟到帧，不向页面交付', async context => {
+  const f = fixture(context);
+  const target = { kind: 'window', windowId: '34567', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.34567',
+    processCreationTime: '56789', processId: 123, requiresWindowCapture: false };
+  const starting = f.manager.start('window:7:0', 60, sessionId, target,
+    { hideCursor: false, hideBorder: false, windowMethod: 'auto' });
+  f.emit({ event: 'captureStarted', helperVersion: '32.2.2' }); await starting;
+  f.emit({ event: 'captureEvidence', stage: 'configured', captureMethod: 'bitblt-window', requestedMethod: 'auto',
+    borderAllowed: true, clientArea: true, adapterIndex: 0, sourceWidth: 320, sourceHeight: 180 });
+  f.emit({ event: 'sharedTextureFrame', sessionId, slotIndex: 0, sourceHandleHex: '0000000000000001', pixelFormat: 'bgra',
+    timestampMicros: 1, codedSize: { width: 320, height: 180 }, contentSize: { width: 320, height: 180 },
+    renderedFrames: 1, bridgeFrames: 1, bridgeDroppedFrames: 0 });
+  assert.equal(f.frames.length, 0);
+  assert.deepEqual(f.failures, ['obsCaptureProtocolEventInvalid']);
 });
 
 test('OBS 窗口暂停和恢复沿原会话同步，旧会话事件不能变更状态', async (context) => {

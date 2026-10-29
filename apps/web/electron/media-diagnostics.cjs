@@ -101,7 +101,7 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           'nativeVideoBridgeUnavailable', 'videoSourceExpired', 'videoCaptureAlreadyRunning',
           'obsCaptureGameDetectionFailed', 'obsCaptureVersionUnsupported', 'dxgiMonitorUnavailable',
           'dxgiAdapterMismatch', 'obsGameTargetMismatch', 'obsGameBindingUnavailable',
-          'captureSettingsUnsupported', 'captureBorderUnsupported', 'captureBorderAccessDenied', 'obsCaptureHostFailed',
+          'captureSettingsUnsupported', 'captureMethodNotIsolated', 'captureBorderUnsupported', 'captureBorderAccessDenied', 'obsCaptureHostFailed',
           'obsCaptureHostDisposed', 'obsCaptureSlotReleaseUnavailable', 'obsCaptureAlreadyRunning', 'obsCaptureStopping',
           'obsCaptureProtocolLineTooLong', 'obsCaptureProtocolLineInvalid', 'obsCaptureProtocolJsonInvalid',
           'obsCaptureProtocolEventInvalid', 'obsCaptureFrameInvalid', 'obsCaptureFrameDeliveryFailed',

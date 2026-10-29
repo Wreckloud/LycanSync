@@ -105,6 +105,7 @@ const char *window_video_failure(obs_source_t *source, const WindowVideoTarget &
   if (!status.valid || status.selected != target.window || (status.captured && status.captured != target.window)) {
     return "obsWindowTargetMismatch";
   }
+  if (status.method != 2) return "captureMethodNotIsolated";
   if (!status.available) return "obsWindowRuntimeUnavailable";
   return status.failed ? "obsWindowCaptureStartFailed" : nullptr;
 }
@@ -119,7 +120,9 @@ obs_source_t *create_window_video_source(const WindowVideoTarget &target, bool h
     bool hide_border, std::string_view method, const char *&error) {
   if (!window_video_target_valid(target)) { error = "captureTargetClosed"; return nullptr; }
   if (!obs_get_latest_input_type_id("lycansync_window_capture")) { error = "obsWindowBindingUnavailable"; return nullptr; }
-  const int requested = method == "auto" ? 0 : method == "bitblt" ? 1 : method == "wgc" ? 2 : -1;
+  // GDI 窗口 DC 可能包含遮挡像素；窗口身份正确不等于画面隔离，不能作为共享路径。
+  if (method == "bitblt") { error = "captureMethodNotIsolated"; return nullptr; }
+  const int requested = method == "auto" || method == "wgc" ? 2 : -1;
   if (requested < 0) { error = "invalidCaptureArguments"; return nullptr; }
   obs_data_t *settings = obs_data_create();
   obs_data_set_int(settings, "lycansync_window_id", static_cast<long long>(reinterpret_cast<uintptr_t>(target.window)));
@@ -136,12 +139,12 @@ obs_source_t *create_window_video_source(const WindowVideoTarget &target, bool h
   if (source) {
     WindowStatus status;
     if (!read_window_status(source, status)) error = "obsWindowBindingUnavailable";
-    else if (requested == 2 && status.method != 2) error = "captureSettingsUnsupported";
+    else if (status.method != 2) error = "captureMethodNotIsolated";
     else if (status.method == 2) {
       WindowPreparation preparation{hide_cursor, hide_border};
       // 来源尚未加入场景，不会先启动 WGC 再补问边框授权。
       if (status.available) obs_queue_task(OBS_TASK_GRAPHICS, prepare_window_capture, &preparation, true);
-      // 自动选择也必须满足本次授权；不能把需要 WGC 的窗口静默改成 BitBlt。
+      // 自动选择也必须满足本次边框授权；不允许以桌面合成像素代替所选窗口。
       error = preparation.error;
     }
     if (!error) error = window_video_failure(source, target);

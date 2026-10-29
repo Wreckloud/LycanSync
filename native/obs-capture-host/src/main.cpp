@@ -747,7 +747,8 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
   if (!source) {
     if (std::string_view(source_error) == "captureBorderUnsupported"
         || std::string_view(source_error) == "captureBorderAccessDenied"
-        || std::string_view(source_error) == "captureSettingsUnsupported") {
+        || std::string_view(source_error) == "captureSettingsUnsupported"
+        || std::string_view(source_error) == "captureMethodNotIsolated") {
       g_host.selection_rejection = source_error;
       return 4;
     }

@@ -15,7 +15,6 @@ const props = withDefaults(defineProps<{
   audioMode: NativeScreenAudioMode; audioReady: boolean; audioFailed: boolean; shareAudio: boolean;
   loading: boolean; error: string; notice: string;
   customQuality?: CustomScreenShareQuality;
-  settingsFailure?: { sourceId: string; code: string } | null;
   followGameAvailable?: boolean;
 }>(), { customQuality: () => ({ ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY }) });
 const emit = defineEmits<{
@@ -26,21 +25,19 @@ const emit = defineEmits<{
 }>();
 const panel = ref<HTMLElement | null>(null);
 const sourcesElement = ref<HTMLDivElement | null>(null);
-const captureSettings = ref<ScreenSharePreferences>({ hideCursor: false, hideBorder: true, windowMethod: 'auto' });
+const captureSettings = ref<ScreenSharePreferences>({ hideCursor: false, hideBorder: false, windowMethod: 'auto' });
+const borderSupport = ref<boolean>();
 const settingsError = ref('');
 const followGame = ref(false);
 watch(() => props.selectedId, () => { followGame.value = false; });
 const sources = computed(() => props.sources.filter((source) => source.type === props.sourceType));
 const quality = computed(() => screenShareQuality(props.quality, props.customQuality));
 const canChoose = computed(() => props.audioReady && !props.audioFailed);
-const needsBorderPermission = computed(() => props.sourceType === 'window'
-  && props.settingsFailure?.sourceId === props.selectedId && captureSettings.value.hideBorder
-  && ['auto', 'wgc'].includes(captureSettings.value.windowMethod ?? 'auto')
-  && ['captureBorderUnsupported', 'captureBorderAccessDenied'].includes(props.settingsFailure.code));
-const borderNotice = computed(() => !needsBorderPermission.value ? ''
-  : props.settingsFailure?.code === 'captureBorderUnsupported'
-    ? '此窗口需要系统采集，当前 Windows 无法隐藏边框。可允许本次显示边框，或在高级选项中选择兼容采集。'
-    : '此窗口的无边框权限未获批准。可允许本次显示边框，或在高级选项中选择兼容采集。');
+const borderNotice = computed(() => {
+  if (props.sourceType !== 'window' || captureSettings.value.windowMethod === 'game') return '';
+  if (borderSupport.value === false) return '当前 Windows 共享普通窗口时会显示系统边框，点击开始共享即确认本次使用。';
+  return '普通窗口将尽量隐藏系统边框；系统限制或权限不允许时可能显示边框，点击开始共享即确认本次使用。';
+});
 const canConfirm = computed(() => canChoose.value && !props.error && !settingsError.value
   && props.sources.some((source) => source.id === props.selectedId));
 const feedbackStatus = computed(() => {
@@ -62,13 +59,12 @@ const advancedId = useId();
 
 function confirm() {
   if (!canConfirm.value) return;
-  // 按钮已明确说明本次边框许可；只在用户点击后改变设置，不持久化授权。
-  if (needsBorderPermission.value) captureSettings.value.hideBorder = false;
+  // 选择器已说明可能出现系统边框；点击开始只确认本次所选窗口，不保存长期许可。
   emit('confirm', { ...captureSettings.value,
     ...(followGame.value && props.followGameAvailable && props.sourceType === 'window'
       && (captureSettings.value.windowMethod ?? 'auto') === 'auto' ? { followGame: 'league' as const } : {}),
     windowMethod: props.sourceType === 'window' ? captureSettings.value.windowMethod : 'auto',
-    hideBorder: props.sourceType !== 'window' || captureSettings.value.hideBorder });
+    hideBorder: props.sourceType !== 'window' || captureSettings.value.windowMethod === 'game' });
 }
 
 function keydown(event: KeyboardEvent) {
@@ -95,6 +91,12 @@ function qualityKeydown(event: KeyboardEvent) {
 onMounted(async () => {
   try { captureSettings.value.hideCursor = readScreenSharePreferences().hideCursor; }
   catch { settingsError.value = '无法读取光标偏好，请重新保存客户端设置后再试。'; }
+  const desktop = window.lycanDesktop;
+  if (desktop?.getScreenShareSupport) {
+    void desktop.getScreenShareSupport().then(support => {
+      if (panel.value) borderSupport.value = support.hideBorder;
+    }).catch(() => { console.error('无法确认共享边框隐藏能力，将按可能显示系统边框说明。'); });
+  }
   await nextTick();
   if (!panel.value) return;
   panel.value.focus();
@@ -149,16 +151,10 @@ defineExpose({ sourcesElement });
             <select v-model="captureSettings.windowMethod" aria-label="窗口采集方式">
               <option value="auto">自动</option>
               <option value="game">游戏采集</option>
-              <option value="bitblt">兼容采集（BitBlt）</option>
-              <option value="wgc">系统窗口采集（WGC）</option>
             </select>
           </label>
           <label class="capture-audio-option"><input v-model="captureSettings.hideCursor" type="checkbox" />隐藏共享画面中的光标</label>
-          <label v-if="sourceType === 'window' && ['auto', 'wgc'].includes(captureSettings.windowMethod ?? 'auto')" class="capture-audio-option">
-            <input type="checkbox" :checked="!captureSettings.hideBorder"
-              @change="captureSettings.hideBorder = !($event.target as HTMLInputElement).checked" />允许显示系统共享边框（仅本次）
-          </label>
-          <p v-if="sourceType === 'window'">普通窗口分享应用内容区域；自动方式无法满足本次边框或光标设置时会提示，不自动改用兼容采集。Win10 的系统窗口采集通常需要允许边框；兼容采集可能不适合部分硬件加速应用。</p>
+          <p v-if="sourceType === 'window'">自动识别支持的游戏，其余窗口只分享所选应用的内容区域。游戏采集仅用于需要手动指定的游戏。</p>
           <p v-else>整屏使用 DXGI，无系统共享黄框。高级选项仅用于本次共享。</p>
           </div>
           </ExpandSection>
@@ -167,15 +163,16 @@ defineExpose({ sourcesElement });
           class="capture-audio-option capture-game-follow">
           <input v-model="followGame" type="checkbox" />跟随英雄联盟大厅与对局（包括大厅聊天画面）
         </label>
+        <p v-if="borderNotice" class="capture-border-notice">{{ borderNotice }}</p>
         <footer class="card-actions">
           <button type="button" class="settings-button" @click="emit('close')">取消</button>
           <InlineFeedback class="card-feedback" :message="audioFailed ? '无法确认共享能力，请关闭后重试。' : error || settingsError"
-            :status="borderNotice || feedbackStatus" />
+            :status="feedbackStatus" />
           <div class="capture-confirm card-actions-end">
             <label class="capture-audio-option"><input type="checkbox" aria-label="共享音频" :checked="shareAudio"
               :disabled="!audioReady || audioMode === 'unavailable'" @change="emit('update:shareAudio', ($event.target as HTMLInputElement).checked)" />
               共享音频</label>
-            <button type="button" class="confirm-button" :disabled="!canConfirm" @click="confirm">{{ needsBorderPermission ? '允许边框并共享' : '开始共享' }}</button>
+            <button type="button" class="confirm-button" :disabled="!canConfirm" @click="confirm">开始共享</button>
           </div>
         </footer>
       </section>
@@ -186,6 +183,7 @@ defineExpose({ sourcesElement });
 .capture-dialog { display: flex; flex-direction: column; width: min(860px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 24px; border: 1px solid var(--border); background: var(--panel); border-radius: 8px; }
 .capture-header, .capture-tabs, .capture-quality, .card-actions { flex-shrink: 0; }
 .capture-dialog :deep(.inline-feedback) { flex-shrink: 0; }
+.capture-border-notice { flex-shrink: 0; margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 18px; }
 .capture-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .capture-header h2 { margin: 0; font-size: 22px; line-height: 32px; }
 .capture-header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }

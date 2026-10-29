@@ -1352,7 +1352,7 @@ function participantListening(participant: Participant) {
       @update:share-audio="updateCaptureShareAudio"
       :selected-id="selectedCaptureSourceId" :audio-mode="captureAudioMode" :audio-ready="captureAudioCapabilityReady"
       :audio-failed="captureAudioCapabilityFailed" :loading="nativeSourceLoading" :error="nativeSourceError" :notice="captureSourceNotice"
-      :settings-failure="rtc.screenShareSettingsFailure" :follow-game-available="captureFollowGameAvailable"
+      :follow-game-available="captureFollowGameAvailable"
       @choose="chooseCaptureSource" @refresh-thumbnails="refreshVisibleSourceThumbnails"
       @close="selectCaptureSource(null)" @confirm="selectCaptureSource(selectedCaptureSourceId, $event)" />
     </DialogTransition>

@@ -152,7 +152,7 @@ if ($LASTEXITCODE -ne 0) { throw 'OBS 宿主 CMake 配置失败。' }
 & $cmake --build $buildDirectory --config Release --parallel 2
 if ($LASTEXITCODE -ne 0) { throw 'OBS 宿主构建失败。' }
 if ($BuildTestWindows) {
-    & $cmake --build $buildDirectory --config Release --target lycansync-obs-test-windows lycansync-bound-game-target-tests lycansync-bound-audio-target-tests lycansync-screen-audio-pcm-tests lycansync-obs-test-d3d lycansync-game-failure-tests lycansync-window-failure-tests lycansync-gpu-frame-wait-tests --parallel 2
+    & $cmake --build $buildDirectory --config Release --target lycansync-obs-test-windows lycansync-bound-game-target-tests lycansync-bound-audio-target-tests lycansync-screen-audio-pcm-tests lycansync-obs-test-d3d lycansync-game-failure-tests lycansync-window-failure-tests lycansync-gpu-frame-wait-tests lycansync-window-isolation-test --parallel 2
     if ($LASTEXITCODE -ne 0) { throw '测试色块窗口构建失败。' }
 }
 $gamePlugin = Join-Path $buildDirectory 'game-plugin/win-capture.dll'

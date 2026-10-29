@@ -11,7 +11,8 @@ namespace {
 int checks = 0;
 int closes_at = 0;
 int binding_version = 2;
-int method = 1;
+int method = 2;
+int requested_method = 0;
 bool queried = true;
 bool bound_valid = true;
 bool available = true;
@@ -42,6 +43,7 @@ bool settings_valid = true;
 obs_source_t *create_source(const char *id, const char *, obs_data_t *settings, obs_data_t *) {
   ++created;
   const auto requested = static_cast<int>(obs_data_get_int(settings, "method"));
+  requested_method = requested;
   method = requested == 1 || !wgc_supported ? 1 : 2;
   settings_valid = std::strcmp(id, "lycansync_window_capture") == 0
       && obs_data_get_int(settings, "lycansync_window_id") == 1
@@ -87,7 +89,10 @@ void capability_task(enum obs_task_type, obs_task_t, void *parameter, bool) {
 int main() {
   WindowVideoTarget target{selected, "test", 5, "6", std::make_shared<lycan_game_target>()};
   CHECK(window_video_failure(nullptr, target) == nullptr);
-  CHECK(std::strcmp(window_video_method(nullptr), "bitblt-window") == 0);
+  CHECK(std::strcmp(window_video_method(nullptr), "wgc-window") == 0);
+  method = 1;
+  CHECK(std::strcmp(window_video_failure(nullptr, target), "captureMethodNotIsolated") == 0);
+  method = 2;
   captured = reinterpret_cast<HWND>(2);
   CHECK(std::strcmp(window_video_failure(nullptr, target), "obsWindowTargetMismatch") == 0);
   captured = selected;
@@ -116,12 +121,12 @@ int main() {
   CHECK(window_video_method(nullptr) == nullptr);
   const char *error = nullptr;
   auto *source = create_window_video_source(target, true, true, "bitblt", error);
-  CHECK(source && !error && created == 1 && capability_checks == 0 && settings_valid);
+  CHECK(!source && std::strcmp(error, "captureMethodNotIsolated") == 0 && created == 0 && capability_checks == 0);
   created = released = 0;
   capability_error = "captureBorderAccessDenied";
   source = create_window_video_source(target, false, true, "auto", error);
   CHECK(!source && created == 1 && released == 1 && requested_borderless && settings_valid);
-  CHECK(std::strcmp(error, "captureBorderAccessDenied") == 0 && method == 2);
+  CHECK(std::strcmp(error, "captureBorderAccessDenied") == 0 && method == 2 && requested_method == 2);
   created = released = 0;
   source = create_window_video_source(target, false, true, "wgc", error);
   CHECK(!source && created == 1 && released == 1);
@@ -136,7 +141,7 @@ int main() {
   CHECK(source && !error && method == 2 && !requested_borderless);
   wgc_supported = false;
   source = create_window_video_source(target, false, false, "wgc", error);
-  CHECK(!source && std::strcmp(error, "captureSettingsUnsupported") == 0);
+  CHECK(!source && std::strcmp(error, "captureMethodNotIsolated") == 0);
   wgc_supported = true;
   available = false;
   const int before_unavailable = capability_checks;

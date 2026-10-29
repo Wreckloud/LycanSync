@@ -65,7 +65,7 @@ test('采集设置、边框授权和正常目标退出保留固定原因，不�
   context.after(() => rm(directory, { recursive: true, force: true }));
   const path = join(directory, 'events.jsonl');
   const time = new Date().toISOString();
-  const codes = ['captureSettingsUnsupported', 'captureBorderUnsupported', 'captureBorderAccessDenied', 'obsCaptureHostFailed',
+  const codes = ['captureMethodNotIsolated', 'captureSettingsUnsupported', 'captureBorderUnsupported', 'captureBorderAccessDenied', 'obsCaptureHostFailed',
     'nativeGameFollowFailed', 'nativeGameFollowUnavailable', 'nativeGameFollowTargetInvalid', 'nativeGameFollowTargetAmbiguous', 'nativeGameFollowBusy',
     'sharedTextureTransferTimedOut', 'sharedTextureReceiverUnavailable',
     'obsStartupFailed', 'obsWindowRuntimeUnavailable', 'sharedTextureGpuWaitFailed', 'obsCaptureProtocolJsonInvalid',
