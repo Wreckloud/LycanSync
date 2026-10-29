@@ -206,7 +206,7 @@ const obsCaptureHost = new ObsCaptureHostManager({
     if (video && video.sessionId === state.videoSessionId && !video.stopping) {
       if (error.message === 'captureTargetClosed') void writeMediaDiagnostic({ stage: 'screenTargetClosed', code: error.message });
       else recordVideoFailure('obsCaptureHost', error);
-      const code = ['captureTargetClosed', 'captureSettingsUnsupported', 'captureBorderUnsupported', 'captureBorderAccessDenied',
+      const code = ['captureTargetClosed', 'captureMethodNotIsolated', 'captureSettingsUnsupported', 'captureBorderUnsupported', 'captureBorderAccessDenied',
         'obsGameBindingUnavailable', 'obsGameTargetMismatch', 'obsWindowBindingUnavailable', 'obsWindowTargetMismatch',
         'obsWindowCaptureStartFailed', 'obsWindowRuntimeUnavailable', 'obsWindowSourceUnavailable',
         'sharedTextureGpuWaitFailed', 'sharedTextureGpuStalled', 'sharedTextureReleaseFailed', 'sharedTextureAcquireFailed',
@@ -918,7 +918,7 @@ async function startNativeVideo(sourceId, maxFps, settings, resolution, gameFoll
     return { sessionId, changed: true, ...(gameFollowId ? { gameFollowId } : {}) };
   } catch (error) {
     if (!video.failureNotified) {
-      if (['captureBorderUnsupported', 'captureBorderAccessDenied', 'captureSettingsUnsupported'].includes(error.message)) {
+      if (['captureBorderUnsupported', 'captureBorderAccessDenied', 'captureSettingsUnsupported', 'captureMethodNotIsolated'].includes(error.message)) {
         void writeMediaDiagnostic({ stage: 'screenCaptureSelectionUnavailable', code: error.message });
       } else recordVideoFailure('startCapture', error);
     }

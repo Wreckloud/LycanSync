@@ -484,14 +484,12 @@ describe('native screen share wiring', () => {
     try {
       await rtc.join('border-failure');
       await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
-      expect(rtc.screenShareSettingsFailure.value).toEqual({ sourceId: 'window:test:0', code });
-      expect(rtc.notice.value).toContain('边框');
+      expect(rtc.notice.value).toContain('系统窗口采集');
       expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare)).toBeUndefined();
       expect(rtcMocks.nativeStarts).toHaveBeenCalledTimes(1);
       rtcMocks.selectedSources.mockResolvedValueOnce({ sourceId: 'window:test:0', shareAudio: false,
-        captureSettings: { hideCursor: false, hideBorder: false, windowMethod: 'wgc' } });
+        captureSettings: { hideCursor: false, hideBorder: false, windowMethod: 'auto' } });
       await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
-      expect(rtc.screenShareSettingsFailure.value).toBeNull();
       expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare)).toBeDefined();
     } finally { await rtc.leave(); scope.stop(); }
   });
@@ -1937,7 +1935,7 @@ describe('native screen share wiring', () => {
     const rtc = scope.run(() => useRtcRoom())!;
     try {
       await rtc.join('controller-restore');
-      const captureSettings = { hideCursor: true, hideBorder: false, windowMethod: 'wgc' as const };
+      const captureSettings = { hideCursor: true, hideBorder: false, windowMethod: 'auto' as const };
       await rtc.setMediaEnabled(Track.Source.ScreenShare, true, { sourceId: 'window:test:0', shareAudio: false, captureSettings });
       receiveRemoteControl('owner-a', { type: 'state', available: true, share: null, control: null });
       await rtc.requestRemoteControl('owner-a');
