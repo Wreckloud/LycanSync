@@ -21,6 +21,8 @@ import ClientSettings from './settings/ClientSettings.vue';
 import OverlaySettings from './settings/OverlaySettings.vue';
 import ProfileSettings from './settings/ProfileSettings.vue';
 import SoundSettings from './settings/SoundSettings.vue';
+import RecordingSettings from './settings/RecordingSettings.vue';
+import type { useRecording } from '../recording/useRecording';
 import { SETTINGS_SECTIONS, settingsSectionTitle, type SettingsSectionId } from '../settings/settingsSections';
 import type { UserActivity, UserPresenceStatus } from '../presence/presenceApi';
 
@@ -30,6 +32,7 @@ const props = defineProps<{
   presenceStatus: UserPresenceStatus;
   presenceLabel: string;
   desktop: boolean;
+  recording?: ReturnType<typeof useRecording>;
   overlay?: ReturnType<typeof useVoiceOverlay>;
   preferences: ReturnType<typeof useAudioPreferences>;
   rtc: UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>;
@@ -51,6 +54,7 @@ const activeSection = ref<SettingsSectionId>(props.section);
 const leaving = ref(false);
 const sectionTitle = computed(() => settingsSectionTitle(activeSection.value));
 const visibleSections = computed(() => SETTINGS_SECTIONS.filter((item) => (item.id !== 'members' || props.user.administrator)
+  && (item.id !== 'recording' || (props.desktop && props.recording))
   && (item.id !== 'overlay' || (props.desktop && props.overlay))));
 const interactionBlocked = computed(() => Boolean(profileSettings.value?.cropping || clientSettings.value?.confirmingUpdate));
 
@@ -127,6 +131,7 @@ async function leaveSettings(logout: boolean) {
           :input-level-percent="inputLevelPercent" />
         <SoundSettings v-show="activeSection === 'sound'" :user-id="user.id" :active="activeSection === 'sound'" />
         <OverlaySettings v-if="desktop && overlay" v-show="activeSection === 'overlay'" :overlay="overlay" :active="activeSection === 'overlay'" />
+        <RecordingSettings v-if="recording" v-show="activeSection === 'recording'" :recording="recording" :desktop="desktop" :sharing="rtc.screenShareActive" />
         <ClientSettings ref="clientSettings" v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'" />
         <AboutSettings v-show="activeSection === 'about'" :active="activeSection === 'about'" :rtc="rtc" :report="diagnosticReport" />
       </div>

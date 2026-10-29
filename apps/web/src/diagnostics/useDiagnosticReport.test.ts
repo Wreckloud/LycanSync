@@ -59,6 +59,23 @@ function persistenceBridge() {
   return bridge;
 }
 
+it('资源阶段只导出状态与所选声音，不把录制路径或身份带入报告', () => {
+  const input = snapshot();
+  input.native = { state: 'running', recording: { phase: 'recording', holdingResources: true,
+    applicationAudio: true, microphone: false, friends: true } } as NativeCaptureDiagnostics;
+  Object.assign(input.native.recording!, { path: 'private-recording-path', recordingId: 'private-recording-id' });
+  const exported = diagnosticReportSample(input, new Map());
+  expect(exported.activity).toMatchObject({ localCapture: 'running', publishedVideo: true, subscribedVideo: false,
+    localRecording: 'recording' });
+  expect(exported.native?.recording).toEqual({ phase: 'recording', holdingResources: true,
+    applicationAudio: true, microphone: false, friends: true });
+  expect(JSON.stringify(exported)).not.toMatch(/private-recording/);
+  Object.assign(input.native.recording!, { phase: 'private-recording-path' });
+  const invalid = diagnosticReportSample(input, new Map());
+  expect(invalid.activity.localRecording).toBeNull();
+  expect(invalid.native?.recording?.phase).toBeNull();
+});
+
 it('复用现有采样低频保存脱敏报告，正常关闭补存，体验说明不自动落盘', async () => {
   const { report } = setup(true);
   const bridge = persistenceBridge();

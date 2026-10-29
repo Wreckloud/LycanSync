@@ -203,10 +203,18 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
     return aliases.get(identity)!;
   };
   const native = snapshot.native;
+  const recordingPhase = native?.recording && ['idle', 'starting', 'recording', 'stopping', 'saved', 'failed'].includes(native.recording.phase)
+    ? native.recording.phase : null;
   return {
     time: snapshot.time, pageVisible: snapshot.pageVisible, participantCount: snapshot.participantCount,
     remoteParticipantCount: numeric(snapshot.remoteParticipantCount), roomState: label(snapshot.roomState),
     dynacast: snapshot.dynacast,
+    activity: { localCapture: native && ['idle', 'starting', 'running', 'stopping'].includes(native.state) ? native.state : null,
+      publishedVideo: snapshot.streams.some(stream => stream.direction === '发送'),
+      subscribedVideo: snapshot.streams.some(stream => stream.direction === '接收' && stream.subscription.subscribed === true
+        && stream.subscription.enabled !== false && stream.subscription.muted !== true),
+      microphoneTrack: snapshot.audio.some(track => track.source === 'microphone' && track.direction === '发送'),
+      localRecording: recordingPhase },
     nativeVideoSessionMatched: Boolean(snapshot.native?.sessionId && snapshot.streams.some((stream) =>
       stream.direction === '发送' && stream.nativeInput?.sessionId === snapshot.native?.sessionId)),
     nativeInterval: snapshot.nativeInterval && {
@@ -283,6 +291,13 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
         elapsedMs: numeric(native.obsRender.elapsedMs), totalFrames: numeric(native.obsRender.totalFrames),
         laggedFrames: numeric(native.obsRender.laggedFrames), activeFps: numeric(native.obsRender.activeFps),
         averageRenderMs: numeric(native.obsRender.averageRenderMs) } : null,
+      recording: native.recording ? {
+        phase: recordingPhase,
+        holdingResources: typeof native.recording.holdingResources === 'boolean' ? native.recording.holdingResources : null,
+        applicationAudio: typeof native.recording.applicationAudio === 'boolean' ? native.recording.applicationAudio : null,
+        microphone: typeof native.recording.microphone === 'boolean' ? native.recording.microphone : null,
+        friends: typeof native.recording.friends === 'boolean' ? native.recording.friends : null,
+      } : null,
       captureSuspended: native.captureSuspended,
       microphoneCaptureDroppedChunks: numeric(native.microphoneCaptureDroppedChunks),
       microphoneCapture: native.microphoneCapture ? {

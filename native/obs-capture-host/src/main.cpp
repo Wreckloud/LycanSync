@@ -5,6 +5,7 @@
 #include "window_capture.h"
 #include "game_capture.h"
 #include "screen_audio.h"
+#include "recording.h"
 #include "gpu_frame_wait.h"
 
 #include <windows.h>
@@ -18,6 +19,9 @@
 #include <charconv>
 #include <chrono>
 #include <cstdint>
+#include <condition_variable>
+#include <deque>
+#include <thread>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -31,6 +35,56 @@
 namespace {
 
 static_assert(LIBOBS_API_VER == MAKE_SEMANTIC_VERSION(32, 2, 2), "OBS 32.2.2 headers are required");
+
+// 管道读取负责立即唤醒命令线程；输出收尾可定期处理，不延迟纹理槽归还。
+class CommandReader {
+public:
+  CommandReader() : reader_([this] { read(); }) {}
+  ~CommandReader() {
+    stopping_ = true;
+    const auto thread = static_cast<HANDLE>(reader_.native_handle());
+    while (WaitForSingleObject(thread, 1) == WAIT_TIMEOUT) CancelSynchronousIo(thread);
+    reader_.join();
+  }
+  bool next(std::string &command, bool maintenance = false) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    const auto ready = [&] { return closed_ || !commands_.empty(); };
+    if (maintenance) ready_.wait_for(lock, std::chrono::milliseconds(25), ready);
+    else ready_.wait(lock, ready);
+    if (commands_.empty()) return false;
+    command = std::move(commands_.front());
+    commands_.pop_front();
+    return true;
+  }
+  bool closed() { const std::lock_guard<std::mutex> lock(mutex_); return closed_; }
+private:
+  std::atomic<bool> stopping_ = false;
+  std::mutex mutex_;
+  std::condition_variable ready_;
+  std::deque<std::string> commands_;
+  bool closed_ = false;
+  std::thread reader_;
+  void read() {
+    std::string line;
+    char buffer[4096];
+    DWORD count = 0;
+    bool valid = true;
+    while (!stopping_ && valid && ReadFile(GetStdHandle(STD_INPUT_HANDLE), buffer, sizeof(buffer), &count, nullptr) && count) {
+      for (DWORD index = 0; index < count; ++index) {
+        const char ch = buffer[index];
+        if (ch == '\n') {
+          if (!line.empty() && line.back() == '\r') line.pop_back();
+          const std::lock_guard<std::mutex> lock(mutex_);
+          if (commands_.size() >= 512) { valid = false; break; }
+          commands_.push_back(std::move(line)); line.clear(); ready_.notify_one();
+        } else if (line.size() < 65536) line.push_back(ch);
+        else { valid = false; break; }
+      }
+    }
+    const std::lock_guard<std::mutex> lock(mutex_);
+    closed_ = true; ready_.notify_one();
+  }
+};
 
 constexpr size_t kTextureSlotCount = 3;
 constexpr auto kGpuFenceTimeout = std::chrono::milliseconds(250);
@@ -638,7 +692,7 @@ void destroy_textures() {
 }  // namespace
 
 int capture(const std::array<std::string, 12> &arguments, const std::filesystem::path &module_path,
-    const std::filesystem::path &data_path, obs_video_info &video) {
+    const std::filesystem::path &data_path, obs_video_info &video, CommandReader &commands) {
   // 目录只在启动时接收；采集命令只允许有界 ASCII 来源身份，不能指定插件或执行路径。
   const auto wide = [&](size_t index) { return std::wstring(arguments[index].begin(), arguments[index].end()); };
   const std::string_view source_kind(arguments[0]);
@@ -713,7 +767,8 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
   video.base_height = g_host.output_height;
   video.output_width = g_host.output_width;
   video.output_height = g_host.output_height;
-  video.output_format = VIDEO_FORMAT_BGRA;
+  video.output_format = VIDEO_FORMAT_NV12;
+  video.colorspace = VIDEO_CS_709;
   video.gpu_conversion = true;
   video.colorspace = VIDEO_CS_SRGB;
   video.range = VIDEO_RANGE_PARTIAL;
@@ -802,14 +857,52 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
         std::cout.flush();
       });
 
+  RecordingOutput recording(to_utf8(module_path.parent_path().wstring()), to_utf8(capture_data.parent_path().wstring()),
+      [&](std::string_view event, std::string_view id, std::string_view code) {
+        if (event == "recordingStopped" || event == "recordingFailed") screen_audio.recording(false);
+        const std::lock_guard<std::mutex> lock(g_output_mutex);
+        std::cout << "{\"event\":\"" << event << "\",\"sessionId\":\"" << g_host.session_id
+                  << "\",\"recordingId\":\"" << id << "\"";
+        if (!code.empty()) std::cout << ",\"code\":\"" << code << "\"";
+        if (event == "recordingStopped") std::cout << ",\"outputFrames\":" << recording.frames();
+        std::cout << "}\n" << std::flush;
+      });
   std::string command;
   struct PendingConfiguration { std::string id; uint32_t fps; uint32_t width; uint32_t height; };
   std::optional<PendingConfiguration> pending_configuration;
   bool keep_host = false;
-  while (std::getline(std::cin, command)) {
+  while (true) {
+    recording.poll();
+    if (!commands.next(command, recording.active())) { if (commands.closed()) break; continue; }
     if (command == "shutdown") break;
     if (command == "stop:" + g_host.session_id) { keep_host = true; break; }
     if (command == "prepare") { write_event("enginePrepared"); continue; }
+    if (command.starts_with("recordStart|")) {
+      const auto separator = command.find('|', 12);
+      const auto end = command.find('|', separator == command.npos ? command.size() : separator + 1);
+      const auto id = command.substr(12, separator - 12);
+      if (separator == command.npos || end == command.npos || !valid_session_id(id)) { write_event("invalidCaptureCommand"); continue; }
+      const auto encoded = std::string_view(command).substr(separator + 1, end - separator - 1);
+      std::string path;
+      if (encoded.size() > 16384 || encoded.size() % 2) { write_event("invalidCaptureCommand"); continue; }
+      bool valid = true;
+      for (size_t i = 0; i < encoded.size(); i += 2) {
+        unsigned byte = 0;
+        const auto parsed = std::from_chars(encoded.data() + i, encoded.data() + i + 2, byte, 16);
+        if (parsed.ec != std::errc{} || parsed.ptr != encoded.data() + i + 2 || !byte) { valid = false; break; }
+        path.push_back(static_cast<char>(byte));
+      }
+      const auto audio = command.substr(end + 1);
+      if (!valid || audio.size() != 2 || (audio[0] != '0' && audio[0] != '1')
+          || (audio[1] != '0' && audio[1] != '1')) { write_event("invalidCaptureCommand"); continue; }
+      if (audio[0] == '1' && !screen_audio.recording(true)) {
+        const std::lock_guard<std::mutex> lock(g_output_mutex);
+        std::cout << "{\"event\":\"recordingFailed\",\"sessionId\":\"" << g_host.session_id
+                  << "\",\"recordingId\":\"" << id << "\",\"code\":\"recordingApplicationAudioUnavailable\"}\n" << std::flush;
+      } else recording.start(id, path, audio[1] == '1');
+      continue;
+    }
+    if (command == "recordStop") { recording.stop(); continue; }
     if (screen_audio.command(command)) continue;
     size_t slot_index = 0;
     if (parse_release_command(command, slot_index)) {
@@ -820,6 +913,13 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
     if (parse_diagnostics_command(command, request_id)) write_diagnostics_event(request_id, screen_audio.snapshot());
     uint32_t next_frame_rate = 0, next_width = 0, next_height = 0;
     if (!pending_configuration && parse_configure_command(command, request_id, next_frame_rate, next_width, next_height)) {
+      if (recording.active()) {
+        const std::lock_guard<std::mutex> lock(g_output_mutex);
+        std::cout << "{\"event\":\"captureConfigurationRejected\",\"requestId\":\"" << request_id
+                  << "\",\"sessionId\":\"" << g_host.session_id << "\",\"maxFps\":" << video.fps_num
+                  << ",\"width\":" << video.base_width << ",\"height\":" << video.base_height << "}\n" << std::flush;
+        continue;
+      }
       obs_remove_main_rendered_callback(render_shared_frame, source);
       const std::lock_guard<std::mutex> render_lock(g_render_mutex);
       g_host.configuration_paused = true;
@@ -845,6 +945,8 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
     }
   }
 
+  if (!recording.shutdown()) { write_event("recordingStopUnconfirmed"); return 1; }
+  screen_audio.recording(false);
   screen_audio.shutdown();
   obs_remove_main_rendered_callback(render_shared_frame, source);
   {
@@ -928,7 +1030,9 @@ int wmain(int argc, wchar_t **argv) {
   };
   std::string command;
   int result = 0;
-  while (std::getline(std::cin, command)) {
+  CommandReader commands;
+  while (true) {
+    if (!commands.next(command)) { if (commands.closed()) break; continue; }
     if (command == "shutdown") break;
     if (command == "prepare") {
       if (!prepare()) { result = 1; break; }
@@ -973,7 +1077,7 @@ int wmain(int argc, wchar_t **argv) {
     }
     if (!prepare()) { result = 1; break; }
     write_capture_preparation("graphicsReady", arguments[4]);
-    result = capture(arguments, argv[1], argv[2], video);
+    result = capture(arguments, argv[1], argv[2], video, commands);
     if (result == 4) {
       // 设置限制没有启动画面来源；恢复低频空闲画布，保留正常的预热设备。
       g_host.window_target = WindowVideoTarget{};

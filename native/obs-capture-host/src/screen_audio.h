@@ -30,6 +30,7 @@ public:
   ~ScreenAudioHost();
   bool command(std::string_view command);
   ScreenAudioSnapshot snapshot() const;
+  bool recording(bool enabled);
   void shutdown();
 
 private:

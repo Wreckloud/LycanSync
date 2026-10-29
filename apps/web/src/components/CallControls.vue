@@ -15,12 +15,13 @@ const props = withDefaults(defineProps<{
   sharing: boolean; shareBusy: boolean; choosingSource: boolean; shareLimitReached: boolean;
   quality: ScreenShareQualityId; shareAudio: boolean; audioMode: NativeScreenAudioMode;
   shareAudioRestricted?: boolean;
+  recordingActive?: boolean; recordingBusy?: boolean; recordingElapsed?: string;
   customQuality?: CustomScreenShareQuality;
 }>(), { customQuality: () => ({ ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY }) });
 const emit = defineEmits<{
   microphone: []; listening: []; share: []; changeSource: []; shareAudio: [enabled: boolean];
   quality: [quality: ScreenShareQualityId, customQuality?: CustomScreenShareQuality]; inputGain: [volume: number]; outputVolume: [volume: number];
-  settings: [opener: HTMLElement];
+  settings: [opener: HTMLElement]; recording: []; recordingSettings: [opener: HTMLElement];
 }>();
 type ControlMenu = 'microphone' | 'output' | 'share';
 const root = ref<HTMLElement | null>(null);
@@ -176,6 +177,9 @@ onScopeDispose(() => {
             <small v-else-if="sharing && audioMode === 'systemMix'" class="call-audio-warning">包含所有系统声音，可能产生回声。</small>
             <small v-else-if="sharing && audioMode === 'unavailable'" class="call-audio-warning">当前系统不支持共享音频。</small>
           </template>
+          <button v-if="desktop && sharing" type="button" class="call-menu-action" :disabled="recordingBusy || shareAudioRestricted"
+            @click="closeMenu(true); emit('recording')">{{ recordingActive ? `停止录制 · ${recordingElapsed}` : '开始录制' }}</button>
+          <button v-if="desktop" type="button" class="call-menu-action" @click="emit('recordingSettings', opener!); closeMenu()">录制设置<ChevronRight class="call-menu-chevron" :size="14" /></button>
           <button type="button" class="call-settings-entry" @click="openAudioSettings"><Settings :size="15" />语音设置<ChevronRight :size="14" /></button>
         </section>
         <Transition :name="qualityPlacement === 'right' ? 'surface-side' : 'surface-panel'">

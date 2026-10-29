@@ -1435,7 +1435,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     }
   }
 
-  async function changeScreenShareSource(): Promise<boolean> {
+  async function changeScreenShareSource(beforeChange?: () => Promise<void>): Promise<boolean> {
     const currentRoom = activeRoom.value;
     const resource = screenShareResource;
     if (resource?.controllerIdentity) {
@@ -1452,6 +1452,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       // 选择期间保留原共享；只有确认且原房间、采集仍有效时才撤销授权并重建。
       const selection = await selectSource(desktop.getNativeMediaCapabilities());
       if (!selection || activeRoom.value !== currentRoom || screenShareResource !== resource) return false;
+      await beforeChange?.();
+      if (activeRoom.value !== currentRoom || screenShareResource !== resource) return false;
       await setMediaEnabled(Track.Source.ScreenShare, false);
       if (activeRoom.value !== currentRoom || currentRoom.state !== ConnectionState.Connected
         || screenShareResource || nativeScreenAudioSession

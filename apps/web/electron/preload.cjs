@@ -121,6 +121,20 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   },
   isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
   setWindowLayout: (mode, height) => ipcRenderer.invoke('window:layout', mode, height),
+  getRecordingSettings: () => ipcRenderer.invoke('recording:settings'),
+  configureRecording: (settings) => ipcRenderer.invoke('recording:configure', settings),
+  chooseRecordingDirectory: () => ipcRenderer.invoke('recording:directory'),
+  failRecordingVoice: (id) => ipcRenderer.invoke('recording:voice-failed', id),
+  sendRecordingVoice: (id, position, pcm) => ipcRenderer.invoke('recording:voice', id, position, pcm),
+  startRecording: () => ipcRenderer.invoke('recording:start'),
+  stopRecording: (id) => ipcRenderer.invoke('recording:stop', id),
+  getRecordingStatus: () => ipcRenderer.invoke('recording:status'),
+  revealRecording: () => ipcRenderer.invoke('recording:reveal'),
+  onRecordingState: (callback) => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on('recording:state', listener);
+    return () => ipcRenderer.removeListener('recording:state', listener);
+  },
   getProcessMetrics: () => ipcRenderer.invoke('diagnostics:process-metrics'),
   exportDiagnosticReport: (report) => ipcRenderer.invoke('diagnostics:export', report),
   saveDiagnosticSnapshot: (report) => ipcRenderer.invoke('diagnostics:checkpoint', report),

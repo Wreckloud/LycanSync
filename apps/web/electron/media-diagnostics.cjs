@@ -121,7 +121,19 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           'microphoneCapturePipeFailed', 'microphoneCaptureStartTimedOut', 'microphoneCaptureFailed',
           'microphoneDeviceUnavailable', 'invalidMicrophoneCommand', 'obsAudioProtocolInvalid',
           'microphoneRequestTimedOut', 'microphoneCaptureStopFailed', 'microphoneCapturePipeClosed',
-          'microphoneCaptureInvalidPacket', 'microphoneCaptureBufferOverflow'].includes(entry.code)) details.code = entry.code;
+          'microphoneCaptureInvalidPacket', 'microphoneCaptureBufferOverflow',
+          'recordingShareUnavailable', 'recordingBusy', 'recordingPathInvalid', 'recordingHardwareEncoderUnavailable',
+          'recordingEncoderStartFailed', 'recordingAudioEncoderUnavailable', 'recordingOutputUnavailable',
+          'recordingModuleUnavailable', 'recordingApplicationAudioUnavailable', 'recordingDiskFull',
+          'recordingWriteFailed', 'recordingHostExited', 'recordingStartTimedOut', 'recordingStopUnconfirmed', 'recordingVoiceUnavailable'].includes(entry.code)) details.code = entry.code;
+        if (['recordingStarted', 'recordingStopped', 'recordingFailed'].includes(stage)) {
+          for (const key of ['applicationAudio', 'microphone', 'friends', 'saved']) {
+            if (typeof entry[key] === 'boolean') details[key] = entry[key];
+          }
+          for (const key of ['bytes', 'outputFrames']) {
+            if (Number.isSafeInteger(entry[key]) && entry[key] >= 0) details[key] = entry[key];
+          }
+        }
         if (stage === 'microphoneReady' && entry.backend === 'obsLibobs' && entry.processing === 'sonora-0.2.0') {
           details.backend = entry.backend;
           details.processing = entry.processing;
