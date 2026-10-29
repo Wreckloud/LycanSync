@@ -35,6 +35,17 @@ target_compile_definitions(lycansync-obs-capture-host PRIVATE UNICODE _UNICODE W
 target_link_libraries(lycansync-obs-capture-host PRIVATE lycansync_libobs d3d11 dxgi windowsapp ole32)
 target_compile_options(lycansync-obs-capture-host PRIVATE /utf-8)
 
+set(LYCANSYNC_VOICE_PROCESSING_LIBRARY "" CACHE FILEPATH "Built Sonora processing static library")
+if(NOT EXISTS "${LYCANSYNC_VOICE_PROCESSING_LIBRARY}")
+  message(FATAL_ERROR "Build the pinned voice processor with build.ps1")
+endif()
+add_executable(lycansync-obs-audio-host src/voice_main.cpp src/voice_filter.cpp)
+target_compile_features(lycansync-obs-audio-host PRIVATE cxx_std_20)
+target_compile_definitions(lycansync-obs-audio-host PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(lycansync-obs-audio-host PRIVATE /utf-8)
+target_link_libraries(lycansync-obs-audio-host PRIVATE lycansync_libobs "${LYCANSYNC_VOICE_PROCESSING_LIBRARY}"
+  ole32 userenv ws2_32 bcrypt ntdll)
+
 # 仅供显式设备测试创建色块窗口，不进入宿主运行包或默认构建。
 add_executable(lycansync-obs-test-windows EXCLUDE_FROM_ALL tests/window_fixture.cpp)
 target_compile_features(lycansync-obs-test-windows PRIVATE cxx_std_20)

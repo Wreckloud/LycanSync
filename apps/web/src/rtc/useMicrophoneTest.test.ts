@@ -266,7 +266,7 @@ describe('独立麦克风测试', () => {
   });
 
   it('原生失败明确提示，不退回浏览器采集', async () => {
-    mocks.nativeStart.mockRejectedValue(new Error('audioDeviceUnavailable'));
+    mocks.nativeStart.mockRejectedValue(new Error('microphoneDeviceUnavailable'));
     const { test, scope } = setup(true);
     await test.start();
     await test.stop();

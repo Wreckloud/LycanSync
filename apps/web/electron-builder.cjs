@@ -30,6 +30,7 @@ module.exports = {
     'electron/voice-overlay-preload.cjs',
     'electron/media-helper.cjs',
     'electron/obs-capture-host.cjs',
+    'electron/obs-audio-host.cjs',
     'electron/media-diagnostics.cjs',
     'electron/diagnostic-reports.cjs',
     'electron/native-video-thumbnails.cjs',

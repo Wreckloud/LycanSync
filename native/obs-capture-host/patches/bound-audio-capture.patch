@@ -82,7 +82,7 @@ diff --git a/plugins/win-wasapi/win-wasapi.cpp b/plugins/win-wasapi/win-wasapi.c
 @@ -936,6 +946,8 @@
  bool WASAPISource::TryInitialize()
  {
-+	if (capture_status.load() == 2) return false;
++	if (sourceType != SourceType::Input && capture_status.load() == 2) return false;
  	bool success = false;
  	try {
  		Initialize();
@@ -90,7 +90,8 @@ diff --git a/plugins/win-wasapi/win-wasapi.cpp b/plugins/win-wasapi/win-wasapi.c
 +		int waiting = 0;
 +		capture_sample_rate = sampleRate;
 +		capture_channels = get_audio_channels(speakers);
-+		success = capture_status.compare_exchange_strong(waiting, 1);
++		if (sourceType == SourceType::Input) { capture_status = 1; success = true; }
++		else success = capture_status.compare_exchange_strong(waiting, 1);
  
 @@ -955,3 +967,4 @@
  	previouslyFailed = !success;
@@ -99,7 +100,7 @@ diff --git a/plugins/win-wasapi/win-wasapi.cpp b/plugins/win-wasapi/win-wasapi.c
 @@ -995,3 +1008,22 @@
  bool WASAPISource::ProcessCaptureData()
 +{
-+	if (capture_status.load() == 2 || !ReadCaptureData()) {
++	if ((sourceType != SourceType::Input && capture_status.load() == 2) || !ReadCaptureData()) {
 +		capture_status = 2;
 +		return false;
 +	}
@@ -179,9 +180,3 @@ diff --git a/plugins/win-wasapi/win-wasapi.cpp b/plugins/win-wasapi/win-wasapi.c
 -	info.id = "wasapi_process_output_capture";
 +	info.id = "lycansync_process_output_capture";
  	info.type = OBS_SOURCE_TYPE_INPUT;
-diff --git a/plugins/win-wasapi/plugin-main.cpp b/plugins/win-wasapi/plugin-main.cpp
---- a/plugins/win-wasapi/plugin-main.cpp
-+++ b/plugins/win-wasapi/plugin-main.cpp
-@@ -60,3 +60,2 @@
--	RegisterWASAPIInput();
- 	RegisterWASAPIDeviceOutput();

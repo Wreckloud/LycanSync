@@ -134,7 +134,7 @@ fn hello_and_shutdown_keep_protocol_v1_but_removed_video_start_is_rejected() {
 }
 
 #[test]
-fn capabilities_advertise_platform_audio_support_without_opening_streams() {
+fn capabilities_only_advertise_helper_owned_features_without_opening_devices() {
     let mut helper = HelperProcess::spawn();
     // Capability reporting is metadata; this test never opens an audio stream.
     helper.send(
@@ -143,28 +143,9 @@ fn capabilities_advertise_platform_audio_support_without_opening_streams() {
     let capabilities = helper.next_event();
     assert_eq!(capabilities["event"], "capabilities");
     assert_eq!(capabilities["protocolVersion"], 1);
-    assert!(capabilities["microphoneCapture"]["available"].is_boolean());
+    assert!(capabilities.get("microphoneCapture").is_none());
     assert!(capabilities.get("audioSourceDiscovery").is_none());
     assert!(capabilities.get("microphoneProbe").is_none());
-    #[cfg(target_os = "windows")]
-    {
-        assert_eq!(capabilities["microphoneCapture"]["available"], true);
-        assert_eq!(
-            capabilities["microphoneCapture"]["reason"],
-            "windowsWasapiSharedModeSonora"
-        );
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        assert_eq!(capabilities["microphoneCapture"]["available"], false);
-        assert_eq!(
-            capabilities["microphoneCapture"]["reason"],
-            "platformUnsupported"
-        );
-    }
-    assert_eq!(capabilities["systemAudioCapture"]["available"], false);
-    assert_eq!(capabilities["processAudioCapture"]["available"], false);
-
     helper.send("{\"protocolVersion\":1,\"requestId\":\"shutdown-1\",\"command\":\"shutdown\"}\n");
     assert_eq!(helper.next_event()["command"], "shutdown");
     assert!(helper.wait_for_exit(PROCESS_TIMEOUT).unwrap().success());

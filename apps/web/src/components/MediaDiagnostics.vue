@@ -9,7 +9,7 @@ const streams = computed(() => props.statistics?.streams ?? []);
 const error = computed(() => props.statistics?.failures.length ? '部分统计暂时无法读取，缺失值不代表零。' : '');
 const processMetrics = computed(() => props.statistics?.process ?? null);
 const processLabels = { 'electron-Browser': 'Electron 主进程', 'electron-Tab': '界面进程', 'electron-GPU': 'GPU 进程',
-  'electron-Utility': '工具进程', 'electron-other': '其他 Electron 进程', obs: 'OBS 宿主', media: '媒体辅助进程', activity: '动态检测进程' };
+  'electron-Utility': '工具进程', 'electron-other': '其他 Electron 进程', obs: 'OBS 画面宿主', 'obs-audio': 'OBS 麦克风宿主', media: '媒体辅助进程', activity: '动态检测进程' };
 function formatFpsInterval(intervalMs: number | null) {
   if (intervalMs === null) return '等待统计';
   const seconds = intervalMs / 1000;

@@ -32,7 +32,7 @@ function writeDesktopLicenses(outputFile) {
   }
 
   // 收集原生静态依赖的声明与随源发布的许可文本，不包含本机路径或源码。
-  for (const helper of ['media-helper', 'media-bridge', 'activity-helper']) {
+  for (const helper of ['media-helper', 'media-bridge', 'activity-helper', 'obs-capture-host/audio-processing']) {
     const result = spawnSync('cargo', ['metadata', '--manifest-path',
       join(projectRoot, 'native', helper, 'Cargo.toml'), '--offline', '--locked',
       '--format-version', '1', '--filter-platform', 'x86_64-pc-windows-msvc'],

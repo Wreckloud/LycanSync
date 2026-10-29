@@ -882,7 +882,7 @@ describe('native screen share wiring', () => {
     try {
       await rtc.join('failed-restore');
       await rtc.updateListeningState(false);
-      rtcMocks.microphoneStarted.mockRejectedValueOnce(new Error('audioDeviceUnavailable'));
+      rtcMocks.microphoneStarted.mockRejectedValueOnce(new Error('microphoneDeviceUnavailable'));
       await rtc.updateListeningState(true);
       expect(rtc.microphoneIntent.value).toBe(true);
       expect(rtc.microphoneEnabled.value).toBe(false);
@@ -1564,7 +1564,7 @@ describe('native screen share wiring', () => {
       const pendingUnpublish = deferred<void>();
       rtcMocks.unpublishing.mockImplementation(() => pendingUnpublish.promise);
 
-      rtcMocks.nativeMicrophoneError('audioDeviceUnavailable');
+      rtcMocks.nativeMicrophoneError('microphoneDeviceUnavailable');
       await vi.waitFor(() => expect(rtcMocks.unpublishing).toHaveBeenCalledWith(microphonePublication.track, true));
       room.emit('localTrackPublished', { ...microphonePublication, trackSid: 'late-microphone-error-sid' });
       const permissions = [...rtcMocks.subscriptionPermissions].at(-1)?.permissions as Array<{

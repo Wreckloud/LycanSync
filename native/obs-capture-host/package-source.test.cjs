@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
 const { spawnSync } = require('node:child_process');
-const { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
+const { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { dirname, join } = require('node:path');
 const test = require('node:test');
@@ -91,4 +91,27 @@ test('真实归档完成后才授予发布资格，并保留构建输入、许�
   assert.match(result.stdout, /corresponding-source\/FFmpeg-fixture.tar.gz/);
   assert.ok(manifest.files.some(file => file.path === 'licenses/FFmpeg-COPYING.GPLv3.txt'));
   assert.equal(f.current().redistributionReady, true);
+});
+
+test('麦克风运行文件缺少声音处理依赖记录时禁止发布', context => {
+  const f = fixture(context);
+  f.write(`${f.cache}/prepared/bin/64bit/lycansync-obs-audio-host.exe`, 'controlled voice host');
+  f.manifest.files.push({ path: 'bin/64bit/lycansync-obs-audio-host.exe', bytes: 21, sha256: 'unused' });
+  f.save();
+  assert.throws(() => prepareSourceBundle(f.root), /缺少对应声音处理依赖记录/);
+  assert.equal(f.current().redistributionReady, false);
+});
+
+test('声音处理依赖源码和许可证随包交付，许可加入最终运行文件哈希', context => {
+  const f = fixture(context);
+  cpSync(join(__dirname, 'audio-processing'), join(f.root, f.native, 'audio-processing'), { recursive: true });
+  f.manifest.voiceProcessing = { name: 'sonora', version: '0.2.0' };
+  f.save();
+  const manifest = prepareSourceBundle(f.root);
+  assert.ok(manifest.files.some(file => file.path.startsWith('licenses/voice-processing/sonora-0.2.0/')));
+  assert.equal(manifest.sourceBundle.runtimeSha256, createHash('sha256').update(JSON.stringify(manifest.files)).digest('hex'));
+  const result = spawnSync('tar.exe', ['-tzf', join(f.root, 'release/desktop', manifest.sourceBundle.path)], { encoding: 'utf8' });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /audio-processing\/vendor\/sonora-0\.2\.0\/Cargo.toml/);
+  assert.match(result.stdout, /audio-processing\/Cargo.lock/);
 });

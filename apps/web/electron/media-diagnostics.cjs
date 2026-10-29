@@ -116,7 +116,18 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           'obsAudioInitFailed', 'obsVideoIdleFailed', 'obsSceneUnavailable', 'obsDisplaySceneAddFailed',
           'obsDisplaySourceUnavailable', 'obsGameSourceUnavailable', 'obsWindowRuntimeUnavailable',
           'obsWindowCaptureStartFailed', 'obsWindowCaptureStopped', 'obsWindowSourceUnavailable',
-          'obsWindowBindingUnavailable', 'obsWindowTargetMismatch'].includes(entry.code)) details.code = entry.code;
+          'obsWindowBindingUnavailable', 'obsWindowTargetMismatch',
+          'microphoneModuleLoadFailed', 'microphoneCaptureStartFailed', 'microphoneProcessingFailed',
+          'microphoneCapturePipeFailed', 'microphoneCaptureStartTimedOut', 'microphoneCaptureFailed',
+          'microphoneDeviceUnavailable', 'invalidMicrophoneCommand', 'obsAudioProtocolInvalid',
+          'microphoneRequestTimedOut', 'microphoneCaptureStopFailed', 'microphoneCapturePipeClosed',
+          'microphoneCaptureInvalidPacket', 'microphoneCaptureBufferOverflow'].includes(entry.code)) details.code = entry.code;
+        if (stage === 'microphoneReady' && entry.backend === 'obsLibobs' && entry.processing === 'sonora-0.2.0') {
+          details.backend = entry.backend;
+          details.processing = entry.processing;
+        }
+        if (stage === 'microphoneHostExited' && Number.isInteger(entry.exitCode)
+            && entry.exitCode >= -2147483648 && entry.exitCode <= 4294967295) details.exitCode = entry.exitCode;
         if (['window', 'monitor'].includes(entry.sourceKind)) details.sourceKind = entry.sourceKind;
         if (typeof entry.hostReused === 'boolean') details.hostReused = entry.hostReused;
         for (const key of ['repeatCount', 'importedCount', 'pendingReleaseCount', 'width', 'height', 'maxFps',

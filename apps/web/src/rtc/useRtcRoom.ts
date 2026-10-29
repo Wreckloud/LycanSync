@@ -87,8 +87,8 @@ function captureErrorMessage(error: unknown, source: MediaSource): string {
     if (error.name === 'NotFoundError') return `未找到可用的${label}设备。`;
     if (error.name === 'NotReadableError') return `${label}无法采集，请检查系统权限或设备占用。`;
     if (source === Track.Source.Microphone && window.lycanDesktop) {
-      if (error.message === 'audioDeviceUnavailable') return '默认麦克风不可用，请检查设备连接或 Windows 录音权限。';
-      if (error.message === 'microphoneCaptureFormatUnsupported') return '当前麦克风音频格式暂不支持。';
+      if (error.message === 'microphoneDeviceUnavailable') return '默认麦克风不可用，请检查设备连接或 Windows 录音权限。';
+      if (error.message === 'microphoneProcessingFailed') return '麦克风声音处理失败，请重新开启麦克风。';
       if (error.message === 'platformUnsupported') return '当前桌面系统不支持原生麦克风采集。';
       return '原生麦克风采集失败，请检查默认输入设备和 Windows 录音权限。';
     }
@@ -922,10 +922,10 @@ export function useRtcRoom(options?: RtcRoomOptions) {
               forbidMicrophone();
               // 原生中断同样走房间的关麦清理，不留下另一条吞错的取消发布路径。
               void applyMediaEnabled(Track.Source.Microphone, false);
-              const reason = code === 'audioDeviceUnavailable'
+              const reason = code === 'microphoneDeviceUnavailable'
                 ? '默认麦克风已断开或切换'
-                : code === 'microphoneCaptureFormatUnsupported'
-                  ? '当前麦克风格式暂不支持'
+                : code === 'microphoneProcessingFailed'
+                  ? '麦克风声音处理无法继续'
                   : '原生麦克风采集连接已中断';
               notice.value = `麦克风已停止：${reason}。`;
               revision.value++;
