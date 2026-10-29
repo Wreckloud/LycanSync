@@ -21,6 +21,53 @@ function report(version) {
     events: [{ stage: 'screenVideoPublished' }] });
 }
 
+function screenReport(version, lastActiveAt, ended = false) {
+  const sample = { time: lastActiveAt, streams: [{ member: 'member-1', direction: '发送', sourceFps: 60 }] };
+  return JSON.stringify({ ...JSON.parse(report(version)), endedAt: '2026-10-26T00:10:00Z',
+    samples: ended ? [sample, { time: '2026-10-26T00:10:00Z', streams: [] }] : [sample] });
+}
+
+test('共享结束固定完整窗口，随后闲置、裁剪窗口及重启不会冲掉性能证据', async context => {
+  const { directory, store } = await fixture(context);
+  await store.save(screenReport('screen-session', '2026-10-26T00:01:00Z'));
+  await store.save(screenReport('screen-session', '2026-10-26T00:02:00Z', true));
+  const path = join(directory, 'last-screen-usage.json');
+  const retained = await readFile(path, 'utf8');
+  assert.equal((await store.info()).kind, 'screen-media');
+  await store.save(screenReport('trimmed-window', '2026-10-26T00:02:00Z', true));
+  await store.save(report('idle-no-screen'));
+  assert.equal(await readFile(path, 'utf8'), retained);
+  const reopened = createDiagnosticReportStore(directory);
+  assert.equal((await reopened.previous()).runtime.clientVersion, 'screen-session');
+  assert.equal((await reopened.previous()).samples[0].streams[0].sourceFps, 60);
+  assert.equal((await reopened.info()).bytes, Buffer.byteLength(retained));
+});
+
+test('后续画面使用结束替换固定窗口，清理不留下副本或删除手动导出', async context => {
+  const { directory, store } = await fixture(context);
+  await store.save(screenReport('first', '2026-10-26T00:01:00Z', true));
+  await store.save(screenReport('second', '2026-10-26T00:03:00Z'));
+  assert.equal((await store.previous()).runtime.clientVersion, 'first');
+  await store.save(screenReport('second', '2026-10-26T00:04:00Z', true));
+  assert.equal((await store.previous()).runtime.clientVersion, 'second');
+  await writeFile(join(directory, 'manual-export.json'), 'keep');
+  await store.clear();
+  assert.equal(await createDiagnosticReportStore(directory).previous(), null);
+  await assert.rejects(readFile(join(directory, 'last-screen-usage.json')), { code: 'ENOENT' });
+  assert.equal(await readFile(join(directory, 'manual-export.json'), 'utf8'), 'keep');
+});
+
+test('画面尚在运行时异常退出，下一启动的空闲快照先保留旧使用证据', async context => {
+  const { directory, store } = await fixture(context);
+  await store.save(screenReport('interrupted', '2026-10-26T00:05:00Z'));
+  const reopened = createDiagnosticReportStore(directory);
+  await reopened.save(report('new-idle-run'));
+  await reopened.save(report('new-idle-run-later'));
+  const afterAnotherExit = createDiagnosticReportStore(directory);
+  assert.equal((await afterAnotherExit.previous()).runtime.clientVersion, 'interrupted');
+  assert.equal((await afterAnotherExit.info()).kind, 'screen-media');
+});
+
 test('重新打开只读设置不覆盖上次使用，本次连续快照只轮转一次', async (context) => {
   const { directory, store } = await fixture(context);
   const first = JSON.stringify({ ...JSON.parse(report('first')), notes: '测试字节大小' }, null, 2);

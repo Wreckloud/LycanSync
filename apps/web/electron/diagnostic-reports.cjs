@@ -14,11 +14,23 @@ function parseDiagnosticReport(text) {
   return report;
 }
 
-// 只管理本次与上次报告文件；采样和脱敏继续由原诊断模块负责。
+function hasScreenMedia(sample) {
+  return Array.isArray(sample?.streams) && sample.streams.length > 0 || sample?.native?.state === 'running';
+}
+function lastScreenActivity(report) {
+  const sample = report?.samples.findLast(hasScreenMedia);
+  const time = Date.parse(sample?.time);
+  return Number.isFinite(time) ? time : null;
+}
+
+// 复用有界报告，画面结束后额外固定保留最近一次；不另建采样器或无限历史。
 function createDiagnosticReportStore(directory) {
   const current = join(directory, 'current.json');
   const previous = join(directory, 'previous.json');
   const temporary = join(directory, 'current.pending');
+  const screenUsage = join(directory, 'last-screen-usage.json');
+  const screenTemporary = join(directory, 'last-screen-usage.pending');
+  let retainedScreenTime;
   let savedThisRun = false;
   let pending = Promise.resolve();
 
@@ -48,17 +60,42 @@ function createDiagnosticReportStore(directory) {
     } finally { await handle?.close(); }
   }
 
+  async function retainScreenReport(report) {
+    const time = lastScreenActivity(report);
+    if (time === null || retainedScreenTime !== null && time <= retainedScreenTime) return;
+    const retained = { ...report, persistence: { ...report.persistence,
+      retainedScreenUsage: true, lastScreenActivityAt: new Date(time).toISOString() } };
+    const text = JSON.stringify(retained);
+    parseDiagnosticReport(text);
+    await writeFile(screenTemporary, text, 'utf8');
+    await rename(screenTemporary, screenUsage);
+    retainedScreenTime = time;
+  }
   async function previousReport() {
     // 本次尚未采样时 current 仍属于上次启动；只打开设置不能覆盖它。
-    return savedThisRun ? read(previous) : (await read(current)) ?? read(previous);
+    const prior = savedThisRun ? await read(previous) : (await read(current)) ?? await read(previous);
+    const retained = await read(screenUsage);
+    const retainedTime = lastScreenActivity(retained?.report);
+    const priorTime = lastScreenActivity(prior?.report);
+    return retainedTime !== null && (priorTime === null || retainedTime >= priorTime) ? retained : prior;
   }
 
   return {
     save(text) {
-      parseDiagnosticReport(text);
+      const report = parseDiagnosticReport(text);
       return serialize(async () => {
         await mkdir(directory, { recursive: true });
-        if (!savedThisRun) await read(current);
+        if (retainedScreenTime === undefined) retainedScreenTime = lastScreenActivity((await read(screenUsage))?.report);
+        if (!savedThisRun) {
+          const prior = (await read(current)) ?? await read(previous);
+          if (lastScreenActivity(prior?.report) === null) {
+            const older = await read(previous);
+            if (older) await retainScreenReport(older.report);
+          }
+          if (prior) await retainScreenReport(prior.report);
+        }
+        // 首个无画面的快照固定完整使用窗口，后续空闲不能逐步冲掉它。
+        if (!hasScreenMedia(report.samples.at(-1))) await retainScreenReport(report);
         await writeFile(temporary, text, 'utf8');
         if (!savedThisRun) {
           try { await rename(current, previous); }
@@ -74,15 +111,16 @@ function createDiagnosticReportStore(directory) {
       const saved = await previousReport();
       if (!saved) return null;
       const { report, bytes } = saved;
-      return { startedAt: report.startedAt, endedAt: report.endedAt, bytes,
+      return { kind: report.persistence?.retainedScreenUsage ? 'screen-media' : 'previous-run',
+        startedAt: report.startedAt, endedAt: report.endedAt, bytes,
         clientVersion: report.runtime?.clientVersion ?? null, savedAt: report.persistence?.savedAt ?? report.endedAt };
     }),
     clear: () => serialize(async () => {
-      for (const path of [current, previous, temporary]) {
+      for (const path of [current, previous, temporary, screenUsage, screenTemporary]) {
         try { await unlink(path); }
         catch (error) { if (error.code !== 'ENOENT') throw error; }
       }
-      savedThisRun = false;
+      savedThisRun = false; retainedScreenTime = null;
     }),
     flush: () => pending,
   };

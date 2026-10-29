@@ -487,7 +487,7 @@ export function useDiagnosticReport(options: {
         if (automaticRecording) trimAutomaticSamples(sample.elapsedMs);
         sampleCount.value = samples.length;
         if (!automaticRecording && samples.length >= MAX_SAMPLES) stop('limit');
-        void checkpoint();
+        void checkpoint(hasScreenMedia(samples.at(-2)) && !hasScreenMedia(sample));
       }
     } catch { if (!disposed && attempt === generation) error.value = '媒体统计暂时无法读取，记录中可能存在缺口。'; }
     finally { polling = false; }
@@ -591,13 +591,16 @@ export function useDiagnosticReport(options: {
         'helper版本与采集后端以各样本为准；停止后原生统计可保留最后快照，以state判断是否仍在采集',
         '页面背压与原生限帧丢弃分别计数，写入完成不代表远端收到',
         window.lycanDesktop
-          ? '详细采样按约15秒间隔保存在安装目录；正常关闭补存，异常退出可能丢失最后一个保存间隔；重开后可导出上次报告'
+          ? '详细采样按约15秒间隔保存在安装目录；画面结束后固定保留最近画面使用报告，后续空闲不覆盖；正常关闭补存，异常退出可能丢失最后一个保存间隔'
           : '记录仅保留在当前登录页面内存；退出或关闭应用前请主动导出'] };
     return report;
   }
 
+  function hasScreenMedia(sample: DiagnosticSample | undefined) {
+    return Boolean(sample && (sample.streams.length > 0 || sample.native?.state === 'running'));
+  }
   function hasUsage(sample: DiagnosticSample) {
-    return sample.roomState !== null && sample.roomState !== 'disconnected'
+    return hasScreenMedia(sample) || sample.roomState !== null && sample.roomState !== 'disconnected'
       || sample.streams.length > 0 || sample.audio.length > 0 || sample.failures.length > 0;
   }
 
@@ -629,7 +632,7 @@ export function useDiagnosticReport(options: {
         if (disposed || bytes === null) return;
         savedSizeBytes.value = bytes;
         persistenceError.value = '';
-        if (!savedReportRefreshedAfterCheckpoint) {
+        if (force || !savedReportRefreshedAfterCheckpoint) {
           await refreshSavedReport(); savedReportRefreshedAfterCheckpoint = true;
         }
       })

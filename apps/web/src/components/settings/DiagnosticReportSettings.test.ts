@@ -27,3 +27,15 @@ it.each([true, false])('自动记录为 %s 时开关、导出和手动操作保�
   if (automatic) expect(html).toContain('1.0 MiB');
   expect(html).not.toMatch(/份统计|旧统计|滚动|900 份|两份/);
 });
+
+it('最近画面报告使用明确入口，不展示保存份数或轮转细节', async () => {
+  vi.stubGlobal('window', { lycanDesktop: {} });
+  const report = { recording: ref(true), automaticEnabled: ref(true), reason: ref(''), error: ref(''),
+    saving: ref(false), notes: ref(''), savedSizeBytes: ref(2048), persistenceError: ref(''),
+    savedReport: ref({ kind: 'screen-media', endedAt: '2026-10-29T00:01:00Z', bytes: 4096, clientVersion: '0.2.8' }),
+  } as unknown as ReturnType<typeof useDiagnosticReport>;
+  const html = await renderToString(createSSRApp(DiagnosticReportSettings, { report, canStart: true }));
+  expect(html).toContain('导出最近画面使用');
+  expect(html).not.toContain('导出上次使用');
+  expect(html).not.toMatch(/份统计|旧统计|滚动|900 份|两份/);
+});
