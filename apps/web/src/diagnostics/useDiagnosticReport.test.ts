@@ -59,6 +59,24 @@ function persistenceBridge() {
   return bridge;
 }
 
+it('画面消失立即复用现有流程补存，空闲采样继续，不增加第二个采样器', async () => {
+  const { report } = setup();
+  const bridge = persistenceBridge();
+  report.setAutomatic(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(bridge.saveDiagnosticSnapshot).toHaveBeenCalledTimes(1);
+  collect.mockImplementation(async () => ({ ...snapshot(), streams: [] }));
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(bridge.saveDiagnosticSnapshot).toHaveBeenCalledTimes(2);
+  const retained = JSON.parse(vi.mocked(bridge.saveDiagnosticSnapshot).mock.calls[1]![0]);
+  expect(retained.samples[0].streams).toHaveLength(1);
+  expect(retained.samples[1].streams).toEqual([]);
+  expect(collect).toHaveBeenCalledTimes(2);
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(collect).toHaveBeenCalledTimes(3);
+  expect(bridge.saveDiagnosticSnapshot).toHaveBeenCalledTimes(2);
+});
+
 it('资源阶段只导出状态与所选声音，不把录制路径或身份带入报告', () => {
   const input = snapshot();
   input.native = { state: 'running', recording: { phase: 'recording', holdingResources: true,
