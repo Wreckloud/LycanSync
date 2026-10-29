@@ -27,6 +27,8 @@ OBS 官方构建步骤见其原始源码的 `.github/scripts`、CMake 文件及�
 
 ## 许可证与边界
 
+麦克风使用独立 `lycansync-obs-audio-host.exe`，只加载 WASAPI，不初始化图形设备。`audio-processing` 将固定 Sonora 0.2.0 静态链接为 OBS 滤镜；重建还需 Rust 2024 edition 工具链及 Cargo。对应源码包包含锁定的 Cargo.lock、全部 Rust 依赖源码和许可证；`build.ps1 -Offline` 在包内自动使用 `audio-processing/vendor`，不要求联网下载 crate。原项目工作区可使用已有 Cargo 缓存。处理后的 PCM 继续通过既有有界通道交给 Chromium，停止屏幕共享不停止语音。
+
 `native/obs-capture-host` 自有部分按 GPL-2.0-or-later；OBS 和各依赖保留其版权及许可证。固定 FFmpeg 构建启用 GPL 与 version3，相关 GPL v3 文本在其完整源码和安装包许可证中提供。未更改 LycanSync 其他目录的授权声明。
 
 正式下载目录应同时提供此版本源码包、安装包、blockmap 与第三方许可文本，源码包不能被下一版覆盖。源码编译、静态依赖和打包核验不等于真实设备、反作弊兼容性、音画同步或性能验收。
