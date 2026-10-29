@@ -60,6 +60,12 @@ export function setNativeScreenPreviewDemand(track: MediaStreamTrack, preview: H
   nativeVideoInputs.get(track)?.setHighQualityPreview(preview, required);
 }
 
+export function setNativeScreenRecordingDemand(track: MediaStreamTrack, required: boolean) {
+  const input = nativeVideoInputs.get(track);
+  if (!input) return required ? Promise.reject(new Error('recordingShareUnavailable')) : Promise.resolve();
+  return input.setRecordingDemand(required);
+}
+
 /** 持有页面侧视频帧队列及一个 helper 采集会话，负责停止与帧释放。 */
 export class NativeScreenVideoSession {
   readonly track: LocalVideoTrack;
@@ -82,6 +88,7 @@ export class NativeScreenVideoSession {
   private lastDemandSender?: RTCRtpSender;
   private thumbnailDemandSince?: number;
   private demandChange?: Promise<void>;
+  private recordingRequired = false;
   private frameRateAdjustmentFailed = false;
   private readonly firstFrameTimeoutMs: number;
   private readonly now: () => number;
@@ -180,6 +187,15 @@ export class NativeScreenVideoSession {
     this.refreshCaptureFrameRate(true);
   }
 
+  async setRecordingDemand(required: boolean) {
+    if (required && this.stopped) throw new Error('recordingShareUnavailable');
+    this.recordingRequired = required;
+    await this.demandChange;
+    this.refreshCaptureFrameRate(true);
+    await this.demandChange;
+    if (required && this.captureFrameRate !== this.maxFps) throw new Error('recordingCaptureRateUnavailable');
+  }
+
   private refreshCaptureFrameRate(immediate = false): void {
     if (this.stopped || !this.sessionId || !this.canReduceFrameRate || this.configuring || this.gameSourceChanging || this.gameTargetClosed
         || this.demandChange || this.frameRateAdjustmentFailed || this.isCurrentCapture?.() === false) return;
@@ -193,7 +209,7 @@ export class NativeScreenVideoSession {
       this.lastDemandSender = sender;
       const encodings = sender?.getParameters().encodings;
       // 仅信任 SDK 已应用的明确双层状态；未知、单层和重连不能推断成低清需求。
-      thumbnailOnly = this.canReduceFrameRate() && this.highQualityPreviews.size === 0
+      thumbnailOnly = !this.recordingRequired && this.canReduceFrameRate() && this.highQualityPreviews.size === 0
         && encodings?.length === 2 && encodings[0].rid === 'q' && encodings[0].active === true
         && encodings[1].rid === 'h' && encodings[1].active === false;
     } catch { /* sender 不可读视为未知，按用户目标恢复，不降低采集规格。 */ }

@@ -82,6 +82,8 @@ struct ScreenAudioHost::Session {
   std::thread worker;
   mutable std::mutex mutex;
   ScreenAudioSnapshot statistics;
+  obs_source_t *source = nullptr;
+  bool system_mix = false;
 
   ~Session() {
     request_stop();
@@ -213,6 +215,12 @@ void ScreenAudioHost::run(const std::shared_ptr<Session> &session, bool system_m
         "LycanSync shared audio", settings);
     obs_data_release(settings);
     if (!source) { failure = "screenShareAudioStartFailed"; break; }
+    obs_source_set_audio_mixers(source, 0);
+    {
+      const std::lock_guard<std::mutex> lock(session->mutex);
+      session->source = source;
+      session->system_mix = system_mix;
+    }
     obs_source_set_monitoring_type(source, OBS_MONITORING_TYPE_NONE);
     obs_source_add_audio_capture_callback(source, Session::capture, session.get());
     callback_added = true;
@@ -267,6 +275,11 @@ void ScreenAudioHost::run(const std::shared_ptr<Session> &session, bool system_m
     }
     emit_("audioFailed", session->id, failure, {});
   }
+  {
+    const std::lock_guard<std::mutex> lock(session->mutex);
+    session->source = nullptr;
+    obs_set_output_source(1, nullptr);
+  }
   if (callback_added) obs_source_remove_audio_capture_callback(source, Session::capture, session.get());
   if (source) { obs_source_remove(source); obs_source_release(source); }
   // libobs 的来源销毁是异步任务，ACK 必须晚于其析构和 WASAPI 线程回收。
@@ -288,6 +301,17 @@ ScreenAudioSnapshot ScreenAudioHost::snapshot() const {
   if (!session_) return {};
   const std::lock_guard<std::mutex> lock(session_->mutex);
   return session_->statistics;
+}
+
+bool ScreenAudioHost::recording(bool enabled) {
+  if (!session_) return !enabled;
+  const std::lock_guard<std::mutex> lock(session_->mutex);
+  auto *source = session_->source;
+  // 系统混音不能保证排除频道语音，不得用它冒充应用声音录制。
+  if (enabled && (!source || session_->system_mix || session_->statistics.state != "running")) return false;
+  if (source) obs_source_set_audio_mixers(source, enabled ? 1 : 0);
+  obs_set_output_source(1, enabled ? source : nullptr);
+  return true;
 }
 
 void ScreenAudioHost::shutdown() {

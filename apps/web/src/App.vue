@@ -22,6 +22,7 @@ import { createGroup, updateGroup, findGroup, findGroupPresences, findGroups, ne
   type GroupDetail, type GroupMember, type GroupPresence, type GroupPresenceChangeCursor, type GroupSummary } from './group/groupApi';
 import { useRtcRoom } from './rtc/useRtcRoom';
 import { useMicrophoneTest } from './rtc/useMicrophoneTest';
+import { useRecording } from './recording/useRecording';
 import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, readScreenShareQuality, saveScreenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from './rtc/screenShareQuality';
 import { canSelectNativeSource, readScreenShareAudioPreference, saveScreenShareAudioPreference,
   resolveNativeScreenAudioCapability, shouldShareAudioInNativeSelection,
@@ -835,6 +836,32 @@ const joiningGroupId = ref<string | null>(null);
 const pendingSwitchGroupId = ref<string | null>(null);
 const listening = computed(() => rtc.listening);
 const settingsOpen = ref(false);
+const recording = useRecording({
+  track: () => rtc.room?.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track?.mediaStreamTrack,
+  canStart: () => rtc.screenShareActive && !rtc.screenShareAudioRestricted && !rtc.screenShareQualityBusy
+    && !rtc.screenShareSourceBusy && !rtc.busySources.includes(Track.Source.ScreenShare),
+  voices: (settings) => {
+    void rtc.revision;
+    const tracks: { track: MediaStreamTrack; gain: number }[] = [];
+    const room = rtc.room;
+    if (!room) return tracks;
+    if (settings.microphone && rtc.microphoneIntent && rtc.microphoneEnabled) {
+      const publication = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+      if (publication?.track && !publication.isMuted) tracks.push({ track: publication.track.mediaStreamTrack, gain: 1 });
+    }
+    if (settings.friends && rtc.listening) {
+      for (const participant of room.remoteParticipants.values()) {
+        const publication = participant.getTrackPublication(Track.Source.Microphone);
+        const track = publication?.track;
+        const gain = remotePlaybackVolume(participant.identity);
+        if (track instanceof RemoteAudioTrack && publication?.isSubscribed && !publication.isMuted && gain > 0) {
+          tracks.push({ track: track.mediaStreamTrack, gain: Math.min(gain, track.getVolume()) });
+        }
+      }
+    }
+    return tracks;
+  },
+});
 const settingsSection = ref<SettingsSectionId>('audio');
 const settingsReturnFocus = ref<HTMLElement | null>(null);
 const viewingWindows = ref<InstanceType<typeof ScreenShareWindows> | null>(null);
@@ -1200,6 +1227,7 @@ function participantListening(participant: Participant) {
       <div v-else class="window-actions" aria-hidden="true"><span><Minus :size="14" /></span><span><Square :size="11" /></span><span><X :size="14" /></span></div>
     </header>
     <AppNotice v-if="rtc.notice || viewerNotice" :message="rtc.notice || viewerNotice" />
+    <AppNotice v-else-if="recording.notice.value && (!settingsOpen || settingsSection !== 'recording')" :message="recording.notice.value" dismissible @dismiss="recording.notice.value = ''" />
     <AppNotice v-else-if="startupUpdateWarning" :message="startupUpdateWarning" dismissible @dismiss="emit('dismissUpdateWarning')" />
     <DialogTransition>
     <RemoteControlRequest v-if="rtc.remoteControlRequest" :key="rtc.remoteControlRequest.requestId"
@@ -1305,9 +1333,12 @@ function participantListening(participant: Participant) {
                       :custom-quality="localParticipant?.isScreenShareEnabled ? rtc.currentCustomScreenShareQuality : captureCustomQuality"
                       :share-audio="sharingAudio" :audio-mode="rtc.currentScreenShareAudioMode"
                       :share-audio-restricted="rtc.screenShareAudioRestricted"
+                      :recording-active="recording.active.value" :recording-busy="recording.busy.value" :recording-elapsed="recording.elapsed.value"
+                      @recording="recording.active.value ? recording.stop() : recording.start()"
+                      @recording-settings="openSettings('recording', $event)"
                       @microphone="toggleMicrophone" @listening="toggleListening"
                       @share="captureRequest ? selectCaptureSource(null) : rtc.toggleMedia(Track.Source.ScreenShare)"
-                      @change-source="rtc.changeScreenShareSource" @quality="changeScreenShareQuality" @share-audio="changeScreenShareAudio"
+                      @change-source="recording.withSourceChange(before => rtc.changeScreenShareSource(before))" @quality="changeScreenShareQuality" @share-audio="changeScreenShareAudio"
                       @input-gain="updateInputGain" @output-volume="updateOutputVolume" @settings="openSettings('audio', $event)" />
                     <IconButton :label="joiningGroupId ? '取消连接' : '离开语音'" class="is-danger"
                       :disabled="callbarLeaving || (!joinedGroup && joiningGroupId === null)" @click="leaveVoice"><LogOut :size="17" /></IconButton>
@@ -1340,7 +1371,7 @@ function participantListening(participant: Participant) {
     <SettingsView v-if="settingsOpen" :inert="!!rtc.remoteControlRequest" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
       :overlay="desktop ? voiceOverlay : undefined"
       :presence-status="currentPresenceStatus" :presence-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]"
-      :preferences="audioPreferences" :rtc="rtc" :microphone-test="microphoneTest" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
+      :recording="recording" :preferences="audioPreferences" :rtc="rtc" :microphone-test="microphoneTest" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
       :activity="currentActivity" :activity-status="personalActivityStatus" :show-activity="showActivity" :activity-error="activityVisibilityError"
       :activity-mappings="activityMappings"
       @activity-visibility="setShowActivity"

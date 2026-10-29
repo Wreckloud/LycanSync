@@ -29,7 +29,7 @@ set_target_properties(lycansync_libobs PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${LYCANSYNC_OBS_SDK}/include;${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 add_executable(lycansync-obs-capture-host src/main.cpp src/window_capture.cpp src/game_capture.cpp
-  src/screen_audio.cpp src/screen_audio_pcm.cpp src/bound_game_target.c)
+  src/screen_audio.cpp src/screen_audio_pcm.cpp src/recording.cpp src/recording_audio.cpp src/bound_game_target.c)
 target_compile_features(lycansync-obs-capture-host PRIVATE cxx_std_20)
 target_compile_definitions(lycansync-obs-capture-host PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(lycansync-obs-capture-host PRIVATE lycansync_libobs d3d11 dxgi windowsapp ole32)

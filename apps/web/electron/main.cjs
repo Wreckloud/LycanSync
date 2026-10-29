@@ -10,6 +10,8 @@ const { randomUUID } = require('node:crypto');
 const { MediaHelperManager } = require('./media-helper.cjs');
 const { ObsCaptureHostManager } = require('./obs-capture-host.cjs');
 const { ObsAudioHostManager } = require('./obs-audio-host.cjs');
+const { createRecording } = require('./recording.cjs');
+const { createRecordingVoice } = require('./recording-voice.cjs');
 const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
 const { createDiagnosticReportStore, parseDiagnosticReport } = require('./diagnostic-reports.cjs');
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
@@ -199,6 +201,7 @@ function obsCaptureHostSettings() {
 const obsHostSettings = obsCaptureHostSettings();
 const obsCaptureHost = new ObsCaptureHostManager({
   ...obsHostSettings,
+  onRecordingEvent: (state, event) => recording.hostEvent(state, event),
   configPath: resolve(app.getPath('userData'), 'obs-capture', '32.2.2'),
   onFrame: handleNativeSharedTextureFrame,
   onFailure: (state, error) => {
@@ -243,6 +246,30 @@ const obsAudioHost = new ObsAudioHostManager({
     if (nativeMicrophoneSession?.sessionId === sessionId) notifyNativeMicrophoneError(nativeMicrophoneSession, code);
   },
   onDiagnostic: (entry) => { void writeMediaDiagnostic(entry); },
+});
+
+const recordingVoice = createRecordingVoice();
+const recording = createRecording({
+  dataDirectory: app.getPath('userData'), host: obsCaptureHost, getVideo: () => nativeVideoSession,
+  ensureVoice: id => recordingVoice.open(id),
+  releaseVoice: id => recordingVoice.close(id),
+  ensureAudio: async (sessionId) => {
+    if (screenShareAudioCapability().reason !== 'windowsApplicationLoopbackProcessTree') {
+      throw new Error('recordingApplicationAudioUnavailable');
+    }
+    await startNativeScreenAudio(nativeVideoSession.sourceId, sessionId, false);
+  },
+  releaseAudio: async (sessionId) => {
+    if (nativeScreenAudioSession?.sessionId === sessionId && !nativeScreenAudioSession.publishing) {
+      await stopNativeScreenAudio(sessionId, true);
+    }
+  },
+  onChange: state => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send('recording:state', state);
+    }
+  },
+  onDiagnostic: entry => { void writeMediaDiagnostic(entry); },
 });
 
 let obsCorePreparationRequested = false;
@@ -552,7 +579,7 @@ function handleNativeScreenAudioPipeData(audio, incoming) {
       audio.queue.shift();
       audio.droppedChunks++;
     }
-    audio.queue.push({ frames, pcm });
+    if (audio.publishing) audio.queue.push({ frames, pcm });
   }
   if (audio.buffer.length > 65_536) {
     notifyNativeScreenAudioError(audio, 'screenShareAudioBufferOverflow');
@@ -562,7 +589,7 @@ function handleNativeScreenAudioPipeData(audio, incoming) {
 }
 
 function sendNextNativeScreenAudioChunk(audio) {
-  if (nativeScreenAudioSession !== audio || audio.stopping || !audio.format || audio.inFlight || !audio.queue.length
+  if (!audio.publishing || nativeScreenAudioSession !== audio || audio.stopping || !audio.format || audio.inFlight || !audio.queue.length
       || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
   const sequence = ++audio.sequence;
   const packet = audio.queue.shift();
@@ -590,17 +617,20 @@ function acknowledgeNativeScreenAudioChunk(sessionId, sequence, droppedChunks) {
 function notifyNativeScreenAudioError(audio, code) {
   if (!audio || audio.failureNotified || audio.stopping) return;
   audio.failureNotified = true;
+  if (recording.active?.videoSessionId === audio.sessionId && recording.active.options.applicationAudio) {
+    void recording.fail(recording.active.id, 'recordingApplicationAudioUnavailable').catch(() => {});
+  }
   const safeCode = /^[a-z][A-Za-z0-9]{0,63}$/.test(code) ? code : 'screenShareAudioFailed';
   finishNativeScreenAudioPipe(audio, { destroy: true });
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('media:native-screen-audio-error', { sessionId: audio.sessionId, code: safeCode });
   }
-  void stopNativeScreenAudio(audio.sessionId).catch((error) => {
+  void stopNativeScreenAudio(audio.sessionId, true).catch((error) => {
     void writeMediaDiagnostic({ stage: 'stopScreenAudioAfterFailure', message: String(error.message).slice(0, 500) });
   });
 }
 
-async function startNativeScreenAudio(sourceId, sessionId) {
+async function startNativeScreenAudio(sourceId, sessionId, publishing = true) {
   const video = nativeVideoSession;
   if (closing || process.platform !== 'win32') throw new Error('platformUnsupported');
   if (!video || video.starting || video.stopping || video.sessionId !== sessionId || video.sourceId !== sourceId) {
@@ -608,6 +638,7 @@ async function startNativeScreenAudio(sourceId, sessionId) {
   }
   if (nativeScreenAudioSession) {
     if (nativeScreenAudioSession.sessionId === sessionId && !nativeScreenAudioSession.stopping) {
+      nativeScreenAudioSession.publishing ||= publishing;
       return nativeScreenAudioSession.startPromise;
     }
     throw new Error('screenShareAudioAlreadyRunning');
@@ -618,7 +649,7 @@ async function startNativeScreenAudio(sourceId, sessionId) {
   const audio = {
     sessionId, pipeId, server, socket: undefined, buffer: Buffer.alloc(0), queue: [],
     inFlight: undefined, sequence: 0, sampleRate: undefined, droppedChunks: 0,
-    rendererDroppedChunks: 0, stopping: false, failureNotified: false,
+    rendererDroppedChunks: 0, stopping: false, failureNotified: false, publishing,
   };
   nativeScreenAudioSession = audio;
   server.on('connection', (socket) => {
@@ -680,10 +711,15 @@ async function stopScreenAudioCapture(audio) {
   return obsCaptureHost.stopScreenAudio(audio.sessionId, audio.pipeId);
 }
 
-async function stopNativeScreenAudio(sessionId) {
+async function stopNativeScreenAudio(sessionId, force = false) {
   const audio = nativeScreenAudioSession;
   if (!audio) return { changed: false };
   if (audio.sessionId !== sessionId) throw new Error('screenShareAudioSessionMismatch');
+  if (!force && !nativeVideoSession?.stopping && recording.active?.videoSessionId === sessionId
+      && recording.active.options.applicationAudio) {
+    audio.publishing = false; audio.queue.length = 0; audio.inFlight = undefined;
+    return { changed: true };
+  }
   if (audio.stopPromise) return audio.stopPromise;
   audio.stopPromise = (async () => {
     const helperStop = stopScreenAudioCapture(audio);
@@ -1002,6 +1038,11 @@ async function stopNativeVideo(sessionId, preserveGameFollow = false) {
         controlFailure = error;
         recordVideoFailure('revokeRemoteControlBeforeVideoStop', error);
       }
+    }
+    if (recording.active?.videoSessionId === sessionId) {
+      await recording.stop().catch(error => {
+        void writeMediaDiagnostic({ stage: 'recordingFailed', code: error.message });
+      });
     }
     if (nativeScreenAudioSession?.sessionId === sessionId) {
       await stopNativeScreenAudio(sessionId).catch(() => {});
@@ -1727,7 +1768,7 @@ ipcMain.handle('media:game-follow:source', (event, id) => {
 ipcMain.handle('media:game-follow:switch', (event, id, sourceId, maxFps, settings, resolution) => {
   if (!trustedSender(event) || closing || typeof id !== 'string' || id.length > 128
       || typeof sourceId !== 'string' || !/^window:[1-9]\d*:\d+$/.test(sourceId)) throw new Error('请求参数无效');
-  return switchNativeGameVideo(id, sourceId, maxFps, settings, resolution);
+  return recording.withVideoChange(() => switchNativeGameVideo(id, sourceId, maxFps, settings, resolution));
 });
 ipcMain.handle('media:game-follow:end', (event, id) => {
   if (!trustedSender(event) || typeof id !== 'string' || id.length > 128) throw new Error('请求参数无效');
@@ -1736,7 +1777,50 @@ ipcMain.handle('media:game-follow:end', (event, id) => {
 ipcMain.handle('media:native-video:configure', (event, sessionId, maxFps, resolution) => {
   if (!trustedSender(event) || closing || !nativeVideoSession || nativeVideoSession.stopping
       || nativeVideoSession.sessionId !== sessionId) throw new Error('请求参数无效');
-  return obsCaptureHost.configureVideo(sessionId, maxFps, resolution);
+  return recording.withVideoChange(() => obsCaptureHost.configureVideo(sessionId, maxFps, resolution));
+});
+ipcMain.handle('recording:settings', (event) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return recording.load();
+});
+ipcMain.handle('recording:configure', (event, settings) => {
+  if (!trustedSender(event) || closing || !settings || Object.keys(settings).length !== 3
+      || !['applicationAudio', 'microphone', 'friends'].every(key => typeof settings[key] === 'boolean')) throw new Error('请求参数无效');
+  return recording.configure(settings);
+});
+ipcMain.handle('recording:directory', async (event) => {
+  if (!trustedSender(event) || closing || recording.active) throw new Error('当前不能修改录像目录');
+  const result = await dialog.showOpenDialog(mainWindow, { title: '选择录像保存目录', properties: ['openDirectory', 'createDirectory'],
+    defaultPath: (await recording.load()).directory });
+  return result.canceled ? recording.load() : recording.configure({ directory: result.filePaths[0] });
+});
+ipcMain.handle('recording:start', (event) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return recording.start();
+});
+ipcMain.handle('recording:stop', (event, id) => {
+  if (!trustedSender(event) || typeof id !== 'string' || recording.snapshot().recordingId !== id) throw new Error('recordingSessionMismatch');
+  return recording.stop();
+});
+ipcMain.handle('recording:voice-failed', (event, id) => {
+  if (!trustedSender(event) || recording.active?.id !== id) throw new Error('recordingSessionMismatch');
+  return recording.fail(id, 'recordingVoiceUnavailable');
+});
+ipcMain.handle('recording:voice', (event, id, position, pcm) => {
+  if (!trustedSender(event) || closing || recording.active?.id !== id
+      || !['starting', 'recording'].includes(recording.active.phase)
+      || !(recording.active.options.microphone || recording.active.options.friends)) return false;
+  return recordingVoice.write(id, position, pcm);
+});
+ipcMain.handle('recording:status', (event) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return recording.status();
+});
+ipcMain.handle('recording:reveal', async (event) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  const path = await recording.revealPath();
+  if (path.endsWith('.mkv')) shell.showItemInFolder(path);
+  else { const error = await shell.openPath(path); if (error) throw new Error('无法打开录像目录'); }
 });
 ipcMain.handle('media:remote-control:authorize', (event, sessionId, controlSessionId, controllerIdentity) => {
   if (!trustedSender(event) || closing || typeof sessionId !== 'string'
@@ -1848,6 +1932,10 @@ ipcMain.handle('media:diagnostics', async (event) => {
   diagnostics.microphoneCaptureDroppedChunks = microphone
     ? microphoneDrops === null ? null : microphoneDrops + microphone.droppedChunks + microphone.rendererDroppedChunks
     : lastMicrophoneDroppedChunks;
+  const localRecording = recording.snapshot();
+  diagnostics.recording = { phase: localRecording.phase, holdingResources: localRecording.holdingResources,
+    applicationAudio: Boolean(recording.active?.options.applicationAudio),
+    microphone: Boolean(recording.active?.options.microphone), friends: Boolean(recording.active?.options.friends) };
   return diagnostics;
 });
 ipcMain.on('window:maximize', (event) => {
@@ -1870,11 +1958,13 @@ app.on('before-quit', (event) => {
   if (allowQuitAfterMediaHelper) return;
   event.preventDefault();
   if (mediaHelperShutdownPromise) return;
-  mediaHelperShutdownPromise = (nativeScreenAudioSession
+  mediaHelperShutdownPromise = recording.stop().catch(error => {
+    console.error(`recording shutdown failed: ${error.message}`);
+  }).then(() => (nativeScreenAudioSession
     ? stopNativeScreenAudio(nativeScreenAudioSession.sessionId).catch((error) => {
       console.error(`native screen audio shutdown failed: ${error.message}`);
     })
-    : Promise.resolve())
+    : Promise.resolve()))
     .then(() => nativeMicrophoneSession
       ? stopNativeMicrophoneCapture(nativeMicrophoneSession.sessionId).catch((error) => {
         console.error(`native microphone shutdown failed: ${error.message}`);

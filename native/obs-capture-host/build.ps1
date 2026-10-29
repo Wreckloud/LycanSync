@@ -89,10 +89,11 @@ foreach ($header in Get-ChildItem -LiteralPath $libobsSource -File -Recurse | Wh
 }
 Copy-Item -LiteralPath (Join-Path $libobsSource 'obsconfig.h.in') -Destination $includeDirectory -Force
 
-# 仅收集共享来源的运行依赖，不带 UI、浏览器、录制输出或其他插件。
+# 仅收集采集和录制需要的官方模块，不携带 OBS 桌面界面或浏览器。
 $runtimeFiles = @('obs.dll', 'libobs-d3d11.dll', 'libobs-winrt.dll', 'avcodec-62.dll', 'avformat-62.dll',
     'avutil-60.dll', 'swscale-9.dll', 'swresample-6.dll', 'w32-pthreads.dll', 'zlib.dll',
-    'libx264-164.dll', 'librist.dll', 'srt.dll', 'libcurl.dll')
+    'libx264-164.dll', 'librist.dll', 'srt.dll', 'libcurl.dll', 'avdevice-62.dll', 'avfilter-11.dll',
+    'obs-ffmpeg-mux.exe', 'obs-nvenc-test.exe', 'obs-qsv-test.exe')
 foreach ($runtimeFile in $runtimeFiles) {
     Copy-Item -LiteralPath (Join-Path $upstreamDirectory "bin/64bit/$runtimeFile") -Destination $binaryDirectory -Force
 }
@@ -101,6 +102,10 @@ $dataDirectory = Join-Path $preparedDirectory 'data'
 New-Item -ItemType Directory -Force -Path $pluginDirectory, $dataDirectory | Out-Null
 Copy-Item -LiteralPath (Join-Path $upstreamDirectory 'data/libobs') -Destination $dataDirectory -Recurse -Force
 New-Item -ItemType Directory -Force -Path (Join-Path $dataDirectory 'obs-plugins') | Out-Null
+foreach ($module in @('obs-ffmpeg', 'obs-nvenc', 'obs-qsv11')) {
+    Copy-Item -LiteralPath (Join-Path $upstreamDirectory "obs-plugins/64bit/$module.dll") -Destination $pluginDirectory -Force
+    Copy-Item -LiteralPath (Join-Path $upstreamDirectory "data/obs-plugins/$module") -Destination (Join-Path $dataDirectory 'obs-plugins') -Recurse -Force
+}
 $captureDataSource = Join-Path $upstreamDirectory 'data/obs-plugins/win-capture'
 foreach ($captureFile in Get-ChildItem -LiteralPath $captureDataSource -File -Recurse | Where-Object { $_.Extension -ne '.pdb' }) {
     $destination = Join-Path $dataDirectory "obs-plugins/win-capture/$($captureFile.FullName.Substring($captureDataSource.Length + 1))"
@@ -178,7 +183,7 @@ Copy-Item -LiteralPath $graphicsModule -Destination (Join-Path $binaryDirectory 
 
 # 静态检查 DLL 依赖；不加载 OBS、辅助程序或设备。API-set 由 Windows 装载器提供。
 $imports = @()
-$runtimeBinaries = @(Get-ChildItem -LiteralPath $binaryDirectory -File) + @(Get-Item (Join-Path $pluginDirectory 'win-capture.dll')) + @(Get-Item (Join-Path $pluginDirectory 'win-wasapi.dll'))
+$runtimeBinaries = @(Get-ChildItem -LiteralPath $binaryDirectory -File) + @(Get-ChildItem -LiteralPath $pluginDirectory -Filter '*.dll' -File)
 foreach ($binary in $runtimeBinaries) {
     $dependencies = & $dumpbin /nologo /dependents $binary.FullName
     if ($LASTEXITCODE -ne 0) { throw "无法静态检查运行依赖：$($binary.Name)" }

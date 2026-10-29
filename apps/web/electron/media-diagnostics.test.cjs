@@ -8,6 +8,20 @@ const { test } = require('node:test');
 const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
 const { EventEmitter } = require('node:events');
 
+test('录制摘要保留真实输出数和固定故障，排除文件名及原始声音信息', async context => {
+  const directory = await mkdtemp(join(tmpdir(), 'lycan-recording-diagnostics-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'events.jsonl');
+  const time = new Date().toISOString();
+  await writeFile(path, JSON.stringify({ time, stage: 'recordingStopped', code: 'recordingDiskFull',
+    bytes: 4096, outputFrames: 60, durationMs: 1000, saved: false,
+    path: 'private-recording.mkv', recordingId: 'private-id', pcm: 'private-audio', message: 'private-error' }));
+  const [event] = await readDiagnosticEvents(path, 0, Date.parse(time));
+  assert.equal(event.outputFrames, 60); assert.equal(event.bytes, 4096);
+  assert.equal(event.code, 'recordingDiskFull'); assert.equal(event.saved, false);
+  assert.doesNotMatch(JSON.stringify(event), /private-/);
+});
+
 test('OBS 麦克风导出处理实现和固定故障，不泄露设备或异常正文', async context => {
   const directory = await mkdtemp(join(tmpdir(), 'lycan-voice-diagnostics-'));
   context.after(() => rm(directory, { recursive: true, force: true }));

@@ -1,3 +1,21 @@
+interface RecordingSettings {
+  directory: string;
+  applicationAudio: boolean;
+  microphone: boolean;
+  friends: boolean;
+}
+interface DesktopRecordingStatus {
+  holdingResources: boolean;
+  phase: 'idle' | 'starting' | 'recording' | 'stopping' | 'saved' | 'failed';
+  recordingId: string | null;
+  startedAt: number | null;
+  bytes: number;
+  error: string | null;
+  saved: boolean;
+  continuing: boolean;
+  applicationAudio: boolean;
+}
+
 interface DesktopProcessMetrics {
   cpuPercent: number;
   memoryMb: number;
@@ -55,6 +73,7 @@ interface NativeCaptureDiagnostics {
   framesProcessed: number | null;
   obsBridgeDroppedFrames: number | null;
   obsRender: ObsRenderDiagnostics | null;
+  recording?: Pick<DesktopRecordingStatus, 'phase' | 'holdingResources'> & { applicationAudio: boolean; microphone: boolean; friends: boolean };
   captureSuspended: boolean | null;
   microphoneCaptureDroppedChunks: number | null;
   microphoneCapture?: { sourceState: number; sourceFrames: number; framesReceived: number } | null;
@@ -136,6 +155,16 @@ interface Window {
     onViewerClosed(callback: (closed: { id: string; failed: boolean }) => void): () => void;
     isMaximized(): Promise<boolean>;
     setWindowLayout(mode: 'startup' | 'account' | 'invitation' | 'profile' | 'main', height: number): Promise<void>;
+    getRecordingSettings(): Promise<RecordingSettings>;
+    configureRecording(settings: Omit<RecordingSettings, 'directory'>): Promise<RecordingSettings>;
+    chooseRecordingDirectory(): Promise<RecordingSettings>;
+    failRecordingVoice(id: string): Promise<DesktopRecordingStatus>;
+    sendRecordingVoice(id: string, position: number, pcm: Uint8Array): Promise<boolean>;
+    startRecording(): Promise<DesktopRecordingStatus>;
+    stopRecording(id: string | null): Promise<DesktopRecordingStatus>;
+    getRecordingStatus(): Promise<DesktopRecordingStatus>;
+    revealRecording(): Promise<void>;
+    onRecordingState(callback: (state: DesktopRecordingStatus) => void): () => void;
     getProcessMetrics(): Promise<DesktopProcessMetrics>;
     exportDiagnosticReport(report: string): Promise<{ saved: boolean }>;
     saveDiagnosticSnapshot(report: string): Promise<number | null>;

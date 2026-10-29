@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { NativeScreenVideoSession, setNativeScreenPreviewDemand, type NativeVideoDesktopBridge } from './nativeScreenVideo';
+import { NativeScreenVideoSession, setNativeScreenPreviewDemand, setNativeScreenRecordingDemand, type NativeVideoDesktopBridge } from './nativeScreenVideo';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -78,6 +78,22 @@ it('低层需求稳定三秒才降低 OBS 帧率，高清需求恢复；用户�
     expect(f.session.readDiagnostics().captureFrameRate).toBe(120);
     expect(f.desktop.startNativeVideo).toHaveBeenCalledOnce();
     expect(f.desktop.stopNativeVideo).not.toHaveBeenCalled();
+  } finally { await f.session.stop(); }
+});
+
+it('录制开始前恢复目标帧率，持续录制不降到缩略图帧率，结束后恢复原需求策略', async () => {
+  const f = await fixture();
+  try {
+    await f.settleLow();
+    expect(f.session.readDiagnostics().captureFrameRate).toBe(30);
+    await setNativeScreenRecordingDemand(f.generator as unknown as MediaStreamTrack, true);
+    expect(f.session.readDiagnostics().captureFrameRate).toBe(120);
+    for (let index = 0; index < 10; index++) await f.frame();
+    expect(f.session.readDiagnostics().captureFrameRate).toBe(120);
+    await setNativeScreenRecordingDemand(f.generator as unknown as MediaStreamTrack, false);
+    for (let index = 0; index < 7; index++) await f.frame();
+    expect(f.session.readDiagnostics().captureFrameRate).toBe(30);
+    expect(f.desktop.startNativeVideo).toHaveBeenCalledTimes(1);
   } finally { await f.session.stop(); }
 });
 

@@ -15,7 +15,7 @@ class ObsCaptureHostManager {
   constructor({ executablePath, modulePath, dataPath, configPath, platform = process.platform, spawnProcess = spawn,
     clientProcessId = process.pid, onAudioFailure = () => {}, onAudioStopped = () => {},
     onFrame = () => {}, onFailure = () => {}, onClosed = () => {}, onSuspended = () => {}, onDiagnostic = () => {},
-    onCaptureDiagnostic = () => {} }) {
+    onCaptureDiagnostic = () => {}, onRecordingEvent = () => {} }) {
     this.executablePath = executablePath;
     this.modulePath = modulePath;
     this.dataPath = dataPath;
@@ -28,6 +28,7 @@ class ObsCaptureHostManager {
     this.onSuspended = onSuspended;
     this.onDiagnostic = onDiagnostic;
     this.onCaptureDiagnostic = onCaptureDiagnostic;
+    this.onRecordingEvent = onRecordingEvent;
     this.onAudioFailure = onAudioFailure;
     this.onAudioStopped = onAudioStopped;
     this.clientProcessId = clientProcessId;
@@ -224,6 +225,28 @@ class ObsCaptureHostManager {
       this.onCaptureDiagnostic(state, { stage: 'obsCaptureRejected', code: event.code });
       this.scheduleIdle(state);
       reject(new Error(event.code));
+      return;
+    }
+    if (['recordingStarted', 'recordingFailed', 'recordingStopped'].includes(event.event)) {
+      const recording = state.recording;
+      if (!recording || event.sessionId !== state.videoSessionId || event.recordingId !== recording.id) return;
+      const codes = ['recordingAlreadyRunning', 'recordingPathInvalid', 'recordingModuleUnavailable',
+        'recordingHardwareEncoderUnavailable', 'recordingEncoderStartFailed', 'recordingAudioEncoderUnavailable',
+        'recordingOutputUnavailable', 'recordingApplicationAudioUnavailable', 'recordingVoiceUnavailable', 'recordingDiskFull', 'recordingWriteFailed'];
+      if ((event.code !== undefined && !codes.includes(event.code))
+          || (event.event === 'recordingStopped' && (!Number.isSafeInteger(event.outputFrames) || event.outputFrames < 0))) {
+        failState(state, new Error('obsCaptureProtocolEventInvalid')); return;
+      }
+      if (event.event === 'recordingStarted') {
+        clearTimeout(recording.startTimer);
+        recording.resolveStart({ changed: true });
+      } else {
+        clearTimeout(recording.startTimer); clearTimeout(recording.stopTimer);
+        recording.rejectStart(new Error(event.code || 'recordingStopped'));
+        recording.resolveStop?.({ changed: true, outputFrames: event.outputFrames ?? 0 });
+        state.recording = undefined;
+      }
+      this.onRecordingEvent(state, event);
       return;
     }
     if (event.event === 'captureStopped') {
@@ -462,6 +485,43 @@ class ObsCaptureHostManager {
     return promise;
   }
 
+  startRecording(sessionId, id, path, applicationAudio, voices = false) {
+    const state = this.state;
+    if (!state?.alive || state.failed || state.stopRequested || state.videoSessionId !== sessionId || !state.helperVersion) {
+      return Promise.reject(new Error('recordingShareUnavailable'));
+    }
+    if (state.recording || state.pendingConfiguration) return Promise.reject(new Error('recordingBusy'));
+    if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id) || typeof path !== 'string' || !win32.isAbsolute(path)
+        || !path.endsWith('.mkv') || path.includes('\0') || Buffer.byteLength(path) > 8192 || typeof applicationAudio !== 'boolean'
+        || typeof voices !== 'boolean') {
+      return Promise.reject(new Error('recordingPathInvalid'));
+    }
+    const recording = { id };
+    state.recording = recording;
+    recording.start = new Promise((resolve, reject) => { recording.resolveStart = resolve; recording.rejectStart = reject; });
+    recording.startTimer = setTimeout(() => {
+      recording.rejectStart(new Error('recordingStartTimedOut'));
+      void this.stopRecording(sessionId, id).catch(() => {});
+    }, 15_000);
+    recording.startTimer.unref?.();
+    void writeLine(state.child, `recordStart|${id}|${Buffer.from(path).toString('hex')}|${Number(applicationAudio)}${Number(voices)}`)
+      .catch(error => failState(state, error));
+    return recording.start;
+  }
+
+  stopRecording(sessionId, id) {
+    const state = this.state;
+    const recording = state?.recording;
+    if (!recording) return Promise.resolve({ changed: false });
+    if (state.videoSessionId !== sessionId || recording.id !== id) return Promise.reject(new Error('recordingSessionMismatch'));
+    if (recording.stop) return recording.stop;
+    recording.stop = new Promise((resolve, reject) => { recording.resolveStop = resolve; recording.rejectStop = reject; });
+    recording.stopTimer = setTimeout(() => recording.rejectStop(new Error('recordingStopUnconfirmed')), 10_000);
+    recording.stopTimer.unref?.();
+    void writeLine(state.child, 'recordStop').catch(error => failState(state, error));
+    return recording.stop;
+  }
+
   startScreenAudio(sessionId, pipeId, mode) {
     const state = this.state;
     if (!state || !state.alive || state.closed || state.failed || state.stopRequested
@@ -607,6 +667,13 @@ class ObsCaptureHostManager {
     if (state.closed) return;
     state.alive = false;
     state.closed = true;
+    if (state.recording) {
+      clearTimeout(state.recording.startTimer); clearTimeout(state.recording.stopTimer);
+      state.recording.rejectStart(new Error('recordingHostExited'));
+      state.recording.resolveStop?.({ changed: true, outputFrames: 0 });
+      this.onRecordingEvent(state, { event: 'recordingFailed', recordingId: state.recording.id, code: 'recordingHostExited' });
+      state.recording = undefined;
+    }
     state.audio?.finishStart?.(error ?? new Error('obsCaptureHostClosed'));
     state.audio?.finishStop?.(undefined, { changed: true });
     state.audio = undefined;
