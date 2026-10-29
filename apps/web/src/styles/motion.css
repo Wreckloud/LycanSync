@@ -32,10 +32,12 @@
 }
 .dialog-enter-from, .dialog-leave-to { opacity: 0; }
 .dialog-enter-from > :first-child, .dialog-leave-to > :first-child { transform: translateY(4px); }
-.entry-card-enter-active, .entry-card-leave-active { transition: opacity var(--motion-expand-duration) var(--motion-ease), transform var(--motion-expand-duration) var(--motion-ease); }
-.entry-card-leave-active { position: absolute; top: 0; right: 0; left: 0; pointer-events: none; }
-.entry-card-enter-from { opacity: 0; transform: translateX(-4px) scale(.985); }
-.entry-card-leave-to { opacity: 0; transform: translateX(4px) scale(.985); }
+.entry-mode-enter-active, .entry-mode-leave-active {
+  transition: opacity var(--motion-expand-duration) var(--motion-ease), transform var(--motion-expand-duration) var(--motion-ease);
+}
+.entry-mode-enter-from { opacity: 0; transform: translateX(-4px); }
+.entry-mode-leave-to { opacity: 0; transform: translateX(4px); }
+.entry-mode-leave-active { pointer-events: none; }
 
 .group-header-region { display: grid; grid-template-rows: 1fr; visibility: visible; transition: opacity var(--motion-surface-duration) ease; }
 .group-header-clip { min-height: 0; overflow: visible; }

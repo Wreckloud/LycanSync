@@ -111,20 +111,28 @@ it('只给右栏让出覆盖高度，移除覆盖层后清除占位，迟到观�
   f.scope.stop();
 });
 
-it('新成员区从零展开，离开后仍按可见高度联动右栏，退场结束再移除占位', async () => {
+it('等待 Teleport 填入成员后从零展开，内容先清理仍能按可见高度收起', async () => {
   const f = fixture();
   f.target.value = null;
   await nextTick();
+  f.setHeight(0);
   f.target.value = f.element as unknown as HTMLElement;
   await nextTick();
   await nextTick();
+  expect(f.animate).not.toHaveBeenCalled();
+  f.setHeight(132);
+  f.observers.at(-1)!.update();
   expect(f.animate.mock.calls.at(-1)).toEqual([[{ height: '0px' }, { height: '132px' }], {
     duration: 210, easing: 'cubic-bezier(.2, 0, 0, 1)',
   }]);
   f.animations[0]!.finish();
   await nextTick();
+  f.setHeight(0);
   const removed = vi.fn();
   f.motion.leave(f.element as unknown as Element, removed);
+  expect(f.animate).toHaveBeenLastCalledWith([{ height: '132px' }, { height: '0px' }], {
+    duration: 210, easing: 'cubic-bezier(.2, 0, 0, 1)',
+  });
   f.target.value = null;
   await nextTick();
   expect(removed).not.toHaveBeenCalled();

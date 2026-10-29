@@ -212,7 +212,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     await expect(page.locator('.group-header')).toBeVisible();
     expect(await memberStrip!.evaluate(element => element.isConnected
       && element === document.querySelector('.viewing-member-strip'))).toBe(true);
-    await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+    await page.getByRole('button', { name: '设置', exact: true }).click();
     await expect(page.getByRole('main', { name: '设置', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '返回应用', exact: true }).click();
     await expect(page.getByTestId('callbar')).toBeVisible();
@@ -223,7 +223,7 @@ test('主动诊断记录返回应用后继续，离房结束并导出匿名报�
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await sharing(page, ['A', 'B']);
-  await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '关于与诊断', exact: true }).click();
   const report = page.locator('.diagnostic-report-settings');
   await report.getByRole('textbox', { name: '体验说明（选填）' }).fill('合成界面回归');
@@ -233,7 +233,7 @@ test('主动诊断记录返回应用后继续，离房结束并导出匿名报�
   await page.getByRole('button', { name: '返回应用', exact: true }).click();
   await page.waitForTimeout(2200);
   await page.getByRole('button', { name: '离开语音', exact: true }).click();
-  await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '关于与诊断', exact: true }).click();
   await expect(report.getByRole('status')).toContainText('记录已结束');
   await expect(report.getByRole('textbox', { name: '体验说明（选填）' })).toHaveValue('合成界面回归');
@@ -366,7 +366,7 @@ test('默认仅小预览，网格和聚焦使用原比例，整体弹出后返�
 test('观看窗在设置和预览别群时保留；网格跟随当前共享，离房关闭', async ({ page }) => {
   await sharing(page, ['A', 'B']);
   const viewer = await openWatching(page);
-  await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
   await expect(viewer.locator('.viewing-tile')).toHaveCount(2);
   await page.getByRole('button', { name: '返回应用', exact: true }).click();
   await page.getByRole('button', { name: /^另一群组，/ }).click();
@@ -471,7 +471,7 @@ test('常驻成员栏保留搜索与王冠，语音覆盖聊天顶部，个人�
     expect(Math.abs(members!.width - personal!.width)).toBeLessThanOrEqual(1);
     expect(Math.abs(voice!.x + voice!.width - members!.x - members!.width)).toBeLessThanOrEqual(1);
     await expect(input).toBeInViewport();
-    await expect(page.getByRole('button', { name: '语音与音频设置', exact: true })).toBeInViewport();
+    await expect(page.getByRole('button', { name: '设置', exact: true })).toBeInViewport();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   }
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -526,7 +526,7 @@ test('成员搜索和设置页退场时立即禁用交互，完成后移除', as
   await expect(search).toHaveCSS('pointer-events', 'none');
   expect(await search.evaluate(element => (element as HTMLElement).inert)).toBe(true);
   await expect(page.locator('.member-search')).toHaveCount(0);
-  await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '返回应用', exact: true }).click();
   const settings = page.locator('.settings-page-leave-active');
   await expect(settings).toHaveCSS('pointer-events', 'none');

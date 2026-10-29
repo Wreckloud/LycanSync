@@ -18,6 +18,7 @@ const avatarInput = ref<HTMLInputElement | null>(null);
 const nicknameInput = ref<HTMLInputElement | null>(null);
 const nicknameButton = ref<HTMLButtonElement | null>(null);
 const editingNickname = ref(false);
+const savingAvatar = ref(false);
 const { cropSource, picking, pickAvatar, editAvatar, clearCrop } = useAvatarCrop(error);
 const registrationDate = computed(() => formatRegistrationDate(props.user.createdAt));
 const cropping = computed(() => !!cropSource.value);
@@ -40,10 +41,12 @@ async function editNickname() {
   nicknameInput.value?.select();
 }
 
-function applyAvatar(value: string) {
+async function applyAvatar(value: string) {
   avatar.value = value;
   clearCrop();
-  void finishEditing();
+  savingAvatar.value = true;
+  try { await finishEditing(); }
+  finally { savingAvatar.value = false; }
 }
 
 async function submitNickname(event: KeyboardEvent) {
@@ -62,10 +65,10 @@ defineExpose({ finishEditing, cropping });
   <section class="settings-section profile-settings">
     <div class="profile-details">
       <div class="profile-identity">
-        <div class="profile-avatar-area"><button type="button" class="profile-avatar-preview" aria-label="修改头像" :disabled="busy || picking" @click="avatar ? editAvatar(avatar) : avatarInput?.click()">
+        <div class="profile-avatar-area"><button type="button" class="profile-avatar-preview" aria-label="修改头像" :aria-busy="savingAvatar" :disabled="busy || picking" @click="avatar ? editAvatar(avatar) : avatarInput?.click()">
           <img v-if="avatar" :src="avatar" class="profile-avatar" alt="头像预览" referrerpolicy="no-referrer" />
           <UserRound v-else :size="42" />
-          <span class="profile-avatar-overlay" aria-hidden="true"><Pencil :size="20" /><span>编辑</span></span>
+          <span class="profile-avatar-overlay" :class="{ 'is-saving': savingAvatar }" :aria-hidden="!savingAvatar" role="status"><Pencil v-if="!savingAvatar" :size="20" /><span>{{ savingAvatar ? '正在保存' : '编辑' }}</span></span>
         </button><div class="avatar-actions">
           <button type="button" class="avatar-action" :disabled="busy || picking" @click="avatarInput?.click()">更换头像</button>
         </div></div>
@@ -87,7 +90,7 @@ defineExpose({ finishEditing, cropping });
       </div>
     </div>
     <InlineFeedback :message="error"
-      :status="busy ? '正在保存…' : picking ? '正在读取图片…' : ''" />
+      :status="busy && !savingAvatar ? '正在保存…' : picking ? '正在读取图片…' : ''" />
     <DialogTransition>
     <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整头像"
       @apply="applyAvatar" @cancel="clearCrop" />
@@ -103,7 +106,8 @@ defineExpose({ finishEditing, cropping });
 .profile-avatar-preview { position: relative; flex-shrink: 0; width: 76px; height: 76px; display: grid; place-items: center; overflow: hidden; padding: 0; border: 0; border-radius: 50%; background: var(--panel-raised); color: var(--muted); cursor: pointer; }
 .profile-avatar { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 .profile-avatar-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; background: #0009; color: white; font-size: 12px; opacity: 0; transition: opacity var(--motion-surface-duration) ease; }
-.profile-avatar-preview:hover .profile-avatar-overlay, .profile-avatar-preview:focus-visible .profile-avatar-overlay { opacity: 1; }
+.profile-avatar-preview:hover .profile-avatar-overlay, .profile-avatar-preview:focus-visible .profile-avatar-overlay, .profile-avatar-overlay.is-saving { opacity: 1; }
+.profile-avatar-preview:disabled { opacity: 1; }
 .profile-nickname { display: grid; grid-template-rows: 40px 20px; gap: 4px; min-width: 0; flex: 1; }
 .profile-nickname button { display: flex; align-items: center; justify-content: flex-start; gap: 12px; min-width: 0; min-height: 40px; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
 .profile-nickname button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 20px; font-weight: 600; line-height: 24px; }

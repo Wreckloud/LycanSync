@@ -11,6 +11,8 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
   let activeElement: HTMLElement | null = null;
   let finishLeave: (() => void) | undefined;
   let frame: number | undefined;
+  let entering = false;
+  let lastHeight = 0;
 
   function updateDirectory() {
     if (!activeElement || !conversation) return;
@@ -23,6 +25,8 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
     conversation?.style.removeProperty('--voice-overlay-height');
     conversation = null;
     activeElement = null;
+    entering = false;
+    lastHeight = 0;
   }
   function stopFrame() {
     if (frame !== undefined) activeElement?.ownerDocument.defaultView?.cancelAnimationFrame(frame);
@@ -41,12 +45,24 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
     cancel();
     updateDirectory();
   }
-  function observe(element: HTMLElement) {
+  function measure(element: HTMLElement) {
+    if (activeElement !== element) return;
+    const height = element.getBoundingClientRect().height;
+    if (height > 0 && !finishLeave) lastHeight = height;
+    // Teleport 在空容器挂载后才填入成员；首次有效尺寸到达时再展开。
+    if (entering && height > 0) {
+      entering = false;
+      animateSurface(element, 0, height);
+    }
+    updateDirectory();
+  }
+  function observe(element: HTMLElement, reveal = false) {
     clearDirectory();
     activeElement = element;
+    entering = reveal;
     const owner = element.ownerDocument.defaultView!;
     conversation = element.closest('.group-main')?.querySelector<HTMLElement>('.group-conversation') ?? null;
-    observer = new owner.ResizeObserver(() => { if (activeElement === element) updateDirectory(); });
+    observer = new owner.ResizeObserver(() => measure(element));
     observer.observe(element);
     if (!preference) {
       preference = owner.matchMedia('(prefers-reduced-motion: reduce)');
@@ -92,20 +108,21 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
   watch([target, expanded], async ([element], [previous]) => {
     if (!element) { if (!finishLeave) clearDirectory(); return; }
     const bounds = element.getBoundingClientRect();
-    const from = element === previous ? bounds.height : 0;
     cancel();
     const current = ++generation;
     await nextTick();
     if (current !== generation || element !== target.value || !element.isConnected) return;
-    observe(element);
+    observe(element, element !== previous);
     const next = element.getBoundingClientRect();
     // 内部观看和成员条各自改变实际高度；外层只衔接顶边，避免两套高度动画相互追赶。
-    animateSurface(element, from, next.height, undefined, element === previous ? bounds.top - next.top : undefined);
+    if (element === previous) animateSurface(element, bounds.height, next.height, undefined, bounds.top - next.top);
+    measure(element);
   }, { flush: 'pre' });
 
   function leave(element: Element, done: () => void) {
     const surface = element as HTMLElement;
-    const from = surface.getBoundingClientRect().height;
+    // 退场前 Teleport 的成员可能已被清理，仍用上一份可见尺寸收起背景。
+    const from = Math.max(surface.getBoundingClientRect().height, activeElement === surface ? lastHeight : 0);
     generation++;
     cancel();
     surface.inert = true;

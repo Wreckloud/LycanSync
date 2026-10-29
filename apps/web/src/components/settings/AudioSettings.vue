@@ -47,10 +47,9 @@ function updateInputGain(event: Event) {
 
 <template>
   <div class="settings-section audio-settings">
-    <p class="settings-intro">更改会立即应用并保存在这台设备。</p>
     <section class="settings-block">
       <h2>输入</h2>
-      <p>Windows 桌面使用系统默认通讯输入设备；浏览器使用 Chromium 当前默认设备。</p>
+      <p>{{ desktop ? '自动跟随系统默认通讯输入设备。' : '自动使用系统默认麦克风。' }}</p>
       <div class="settings-range-row">
         <label for="settings-input-gain">麦克风输入音量 <strong>{{ Math.round(inputGain * 100) }}%</strong></label>
         <input id="settings-input-gain" type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP"
@@ -108,15 +107,19 @@ function updateInputGain(event: Event) {
 </template>
 
 <style scoped>
-.audio-settings { max-width: 860px; }
+.audio-settings { max-width: 820px; }
 .settings-meter { display: grid; gap: 7px; margin-top: 18px; color: var(--muted); font-size: 13px; }
 .settings-meter > span { display: flex; justify-content: space-between; }
 .settings-meter strong { color: var(--accent); }
 .settings-meter > div { display: flex; gap: 3px; height: 12px; }
 .settings-meter i { flex: 1; border-radius: 2px; background: var(--panel-raised); }
 .settings-meter i.is-active { background: var(--accent); }
-.settings-range-row { display: grid; gap: 9px; margin-top: 16px; color: var(--text); font-size: 14px; }
-.settings-range-row span, .settings-range-row label { display: flex; justify-content: space-between; }
-.settings-range-row strong { color: var(--accent); }
+.settings-range-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 240px); align-items: center; gap: 24px; margin-top: 16px; color: var(--text); font-size: 14px; }
+.settings-range-row span, .settings-range-row label { display: flex; justify-content: space-between; gap: 12px; }
+.settings-range-row strong { flex-shrink: 0; color: var(--accent); }
 .settings-range-row input { width: 100%; margin: 0; accent-color: var(--accent); }
+@media (max-width: 760px) {
+  .settings-range-row { grid-template-columns: minmax(0, 1fr); gap: 9px; }
+  .settings-range-row input { max-width: 240px; }
+}
 </style>

@@ -32,6 +32,12 @@ watch(() => props.active, (active) => {
 <template>
   <section class="settings-section activity-settings">
     <h2>当前动态</h2>
+    <label class="settings-toggle activity-toggle">
+      <span><strong>显示当前动态</strong><small>向群组成员展示游戏或音乐动态，仅影响当前设备。</small></span>
+      <input type="checkbox" :checked="showActivity" :disabled="!desktop" aria-label="显示当前动态"
+        @change="emit('visibility', ($event.target as HTMLInputElement).checked)" />
+    </label>
+    <InlineFeedback :message="error" />
     <div class="activity-current">
       <Music2 v-if="activity?.type === 'MUSIC'" :size="40" aria-hidden="true" /><Gamepad2 v-else :size="40" aria-hidden="true" />
       <div><strong>{{ activity ? activity.name : (desktop ? '未检测到动态' : '动态检测仅在 Windows 桌面版提供') }}</strong>
@@ -62,12 +68,6 @@ watch(() => props.active, (active) => {
       <div class="activity-mapping-feedback"><InlineFeedback :message="mappings.error.value || mappings.windowError.value" />
         <button v-if="!mappings.ready.value && !mappings.busy.value" type="button" @click="mappings.initialize">重试</button></div>
     </div>
-    <label class="settings-toggle activity-toggle">
-      <span><strong>显示当前动态</strong><small>向群组成员展示游戏或音乐动态，仅影响当前设备。</small></span>
-      <input type="checkbox" :checked="showActivity" :disabled="!desktop" aria-label="显示当前动态"
-        @change="emit('visibility', ($event.target as HTMLInputElement).checked)" />
-    </label>
-    <InlineFeedback :message="error" />
   </section>
 </template>
 
@@ -78,7 +78,7 @@ watch(() => props.active, (active) => {
 .activity-current > div { display: grid; gap: 5px; min-width: 0; }
 .activity-current strong { overflow-wrap: anywhere; color: var(--text); font-size: 16px; font-weight: 500; }
 .activity-current span { font-size: 13px; }
-.activity-toggle { padding-bottom: 0; }
+.activity-toggle { padding: 0; border-top: 0; }
 .activity-mappings { display: grid; gap: 8px; min-width: 0; }
 .activity-window-choice, .activity-name-editor { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .activity-window-choice select, .activity-name-editor input { flex: 1; min-width: 0; width: 0; }

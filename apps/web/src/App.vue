@@ -862,7 +862,7 @@ const recording = useRecording({
     return tracks;
   },
 });
-const settingsSection = ref<SettingsSectionId>('audio');
+const settingsSection = ref<SettingsSectionId>('account');
 const settingsReturnFocus = ref<HTMLElement | null>(null);
 const viewingWindows = ref<InstanceType<typeof ScreenShareWindows> | null>(null);
 const viewingTarget = ref<HTMLElement | null>(null);
@@ -1353,7 +1353,7 @@ function participantListening(participant: Participant) {
             :status-label="memberStatusLabel" :activity="memberActivity" />
         <PersonalStatusCard :user="user" :status="currentPresenceStatus" :status-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]"
           :activity-status="personalActivityStatus">
-          <IconButton label="语音与音频设置" @click="openSettings('audio', $event)"><Settings :size="19" /></IconButton>
+          <IconButton label="设置" @click="openSettings('account', $event)"><Settings :size="19" /></IconButton>
         </PersonalStatusCard>
         </div>
       </main>

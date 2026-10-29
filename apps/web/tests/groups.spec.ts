@@ -128,7 +128,7 @@ test('创建群组时可选择头像，群组栏显示裁剪后的图片', async
   await expect(page.locator('.group-rail > button')).toHaveAttribute('aria-label', '创建群组');
   await expect(railButtons).toHaveCount(2);
   await expect(page.getByLabel('个人状态与设置')).toBeVisible();
-  await expect(page.getByLabel('个人状态与设置').getByRole('button', { name: '语音与音频设置' })).toBeVisible();
+  await expect(page.getByLabel('个人状态与设置').getByRole('button', { name: '设置' })).toBeVisible();
   await expect(page.getByLabel('个人状态与设置').getByRole('button', { name: '个人资料' })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: '头像小队' })).toHaveCSS('user-select', 'none');
   await expect(page.locator('.message-list')).toHaveCSS('user-select', 'none');
@@ -202,7 +202,7 @@ test('群组与成员独立滚动，固定入口不移动，成员搜索只影�
   await searchButton.click();
   await expect(search).toBeInViewport();
   await expect(personal).toBeInViewport();
-  await personal.getByRole('button', { name: '语音与音频设置' }).click();
+  await personal.getByRole('button', { name: '设置' }).click();
   await expect(page.getByRole('navigation', { name: '设置栏目' })).toBeVisible();
   await expect(searchButton).not.toBeVisible();
   await page.setViewportSize({ width: 760, height: 320 });
@@ -342,7 +342,7 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.locator('.members-directory').screenshot({ path: test.info().outputPath('members-panel.png') });
-  await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
   await expect(page.locator('.settings-footer .personal-avatar')).toHaveCSS('width', '32px');
 });
 

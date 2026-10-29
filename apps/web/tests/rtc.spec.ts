@@ -248,7 +248,7 @@ test('未共享时显示群成员头像，停止共享后恢复头像', async ({
   await localCard.getByRole('button', { name: '恢复接收所有成员声音' }).click();
   await expect(localCard.getByRole('button', { name: /停止接收所有成员声音/ })).toBeEnabled();
   await expect(page.locator('.callbar').getByRole('button', { name: '语音设置' })).toHaveCount(0);
-  await expect(page.getByLabel('个人状态与设置').getByRole('button', { name: '语音与音频设置' })).toBeVisible();
+  await expect(page.getByLabel('个人状态与设置').getByRole('button', { name: '设置' })).toBeVisible();
   expect(await page.evaluate(() => window.__rtcTest.tracks.some((track) => track.kind === 'audio'))).toBe(true);
   await expect(localCard.locator('.large-avatar img')).toHaveAttribute('src', avatar);
   await page.getByRole('button', { name: '开始屏幕共享' }).click();
@@ -300,7 +300,7 @@ test('通话中单击其他群只预览，双击时要求确认切换', async ({
   await expect(page.getByRole('heading', { name: '周末车队' })).toBeVisible();
   await expect(page.getByRole('status')).toContainText('开黑小队 · 正在浏览 周末车队');
   await expect(page.getByRole('button', { name: '返回当前通话群组' })).toBeEnabled();
-  await page.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '返回应用', exact: true }).click();
   await expect(page.getByTestId('callbar')).toHaveCSS('animation-name', 'none');
   await page.getByRole('button', { name: /周末车队，单击预览，双击加入语音/ }).dblclick();
@@ -345,7 +345,7 @@ test('自定义入场音通过房间数据流播放给已在语音中的成员',
     const entrantPage = await entrant.newPage();
     await entrantPage.goto('/');
     if (!await entrantPage.locator('.settings-view').isVisible()) {
-      await entrantPage.getByRole('button', { name: '语音与音频设置', exact: true }).click();
+      await entrantPage.getByRole('button', { name: '设置', exact: true }).click();
     }
     await entrantPage.getByRole('button', { name: '账号设置', exact: true }).click();
     await entrantPage.getByRole('button', { name: '音效', exact: true }).click();
