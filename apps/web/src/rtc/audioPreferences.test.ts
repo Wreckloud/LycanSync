@@ -23,6 +23,7 @@ describe('audioPreferences', () => {
     const storage = memoryStorage();
     expect(saveAudioPreferences('local-user', {
       inputDeviceId: 'default',
+      outputDeviceId: 'default',
       inputGain: 1.25,
       outputVolume: 0.8,
       screenShareVolume: 0.65,
@@ -37,6 +38,7 @@ describe('audioPreferences', () => {
 
     expect(loadAudioPreferences('local-user', storage)).toEqual({
       inputDeviceId: 'default',
+      outputDeviceId: 'default',
       inputGain: 1.25,
       outputVolume: 0.8,
       screenShareVolume: 0.65,

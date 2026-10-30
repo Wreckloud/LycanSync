@@ -70,6 +70,30 @@ test('preload 仅提供原生共享接口，不再暴露旧来源选择 IPC', ()
   assert.equal('onSources' in bridge, false);
 });
 
+test('声音输出选择仅允许受信任主窗口，摄像头和外部页面仍拒绝', () => {
+  const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const start = source.indexOf('function configurePermissions(');
+  const end = source.indexOf('if (!app.requestSingleInstanceLock(', start);
+  const contents = {};
+  let check, request;
+  runInNewContext(`${source.slice(start, end)}\nconfigurePermissions();`, {
+    session: { defaultSession: {
+      setPermissionCheckHandler: value => { check = value; },
+      setPermissionRequestHandler: value => { request = value; },
+      setDisplayMediaRequestHandler() {},
+    } }, mainWindow: { webContents: contents }, trustedUrl: url => url === 'app://trusted', denyCapture() {},
+  });
+  assert.equal(check(contents, 'speaker-selection', 'app://trusted', {}), true);
+  assert.equal(check({}, 'speaker-selection', 'app://trusted', {}), false);
+  assert.equal(check(contents, 'speaker-selection', 'https://untrusted', {}), false);
+  assert.equal(check(contents, 'media', 'app://trusted', { mediaType: 'video' }), false);
+  let allowed;
+  request(contents, 'speaker-selection', value => { allowed = value; }, { requestingUrl: 'app://trusted' });
+  assert.equal(allowed, true);
+  request(contents, 'media', value => { allowed = value; }, { requestingUrl: 'app://trusted', mediaTypes: ['video'] });
+  assert.equal(allowed, false);
+});
+
 test('退出尚未完成媒体清理时阻止关闭，完成后允许 app.quit 关闭窗口', () => {
   const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = source.indexOf("mainWindow.on('close'");

@@ -7,6 +7,7 @@ import type { useAudioPreferences } from '../../rtc/useAudioPreferences';
 import type { useRtcRoom } from '../../rtc/useRtcRoom';
 import type { useMicrophoneTest } from '../../rtc/useMicrophoneTest';
 import type { useMicrophoneDevices } from '../../rtc/useMicrophoneDevices';
+import type { useAudioOutput } from '../../rtc/useAudioOutput';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, type AudioProcessingSettings } from '../../rtc/audioPreferences';
 
 const props = defineProps<{
@@ -15,6 +16,7 @@ const props = defineProps<{
   rtc: UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>;
   microphoneTest: UnwrapNestedRefs<ReturnType<typeof useMicrophoneTest>>;
   microphoneDevices: UnwrapNestedRefs<ReturnType<typeof useMicrophoneDevices>>;
+  audioOutput: ReturnType<typeof useAudioOutput>;
   inputLevelPercent: number;
   active: boolean;
 }>();
@@ -62,8 +64,8 @@ function updateInputGain(event: Event) {
         </select>
       </label>
       <p>指定麦克风断开后停止发声，不自动换用其他设备。</p>
-      <button type="button" class="settings-button" :disabled="microphoneDevices.loading || microphoneDevices.changing"
-        @click="microphoneDevices.refresh()">刷新设备</button>
+      <button type="button" class="settings-button device-refresh" :disabled="microphoneDevices.loading || microphoneDevices.changing"
+        @click="microphoneDevices.refresh(); audioOutput.refresh()">刷新设备</button>
       <InlineFeedback :message="microphoneDevices.notice" />
       <div class="settings-range-row">
         <label for="settings-input-gain">麦克风输入音量 <strong>{{ Math.round(inputGain * 100) }}%</strong></label>
@@ -94,6 +96,19 @@ function updateInputGain(event: Event) {
     </section>
     <section class="settings-block">
       <h2>输出</h2>
+      <label class="settings-range-row"><span>扬声器</span>
+        <select aria-label="声音输出设备" :value="preferences.outputDeviceId.value" :disabled="audioOutput.changing.value"
+          @change="audioOutput.select(($event.target as HTMLSelectElement).value)">
+          <option value="default">系统默认输出设备</option>
+          <option v-if="preferences.outputDeviceId.value !== 'default'
+            && !audioOutput.devices.value.some(device => device.id === preferences.outputDeviceId.value)"
+            :value="preferences.outputDeviceId.value" disabled>所选设备不可用</option>
+          <option v-for="device in audioOutput.devices.value" :key="device.id" :value="device.id"
+            :disabled="!audioOutput.supported">{{ device.label }}</option>
+        </select>
+      </label>
+      <p>{{ audioOutput.supported ? '通话、共享声音、提示音和试听统一使用此设备。' : '当前浏览器仅支持系统默认输出。' }}</p>
+      <InlineFeedback :message="audioOutput.notice.value" />
       <p>成员音量与共享声音音量分开控制，并受 LycanSync 总输出音量影响。</p>
       <label class="settings-toggle"><span><strong>平衡成员语音音量</strong>
         <small>在本机拉近不同成员的人声响度，不处理共享声音。成员音量、总音量和静音仍由你控制。</small></span>
@@ -133,6 +148,8 @@ function updateInputGain(event: Event) {
 .settings-range-row span, .settings-range-row label { display: flex; justify-content: space-between; gap: 12px; }
 .settings-range-row strong { flex-shrink: 0; color: var(--accent); }
 .settings-range-row input { width: 100%; margin: 0; accent-color: var(--accent); }
+.settings-range-row select { min-width: 0; width: 100%; min-height: 34px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-raised); color: var(--text); font: inherit; }
+.device-refresh { justify-self: end; padding: 6px 14px; }
 @media (max-width: 760px) {
   .settings-range-row { grid-template-columns: minmax(0, 1fr); gap: 9px; }
   .settings-range-row input { max-width: 240px; }

@@ -1,4 +1,5 @@
-import { onScopeDispose, type Ref } from 'vue';
+import { onScopeDispose, watch, type Ref } from 'vue';
+import type { AudioOutputBinding, AudioOutputRouting } from './useAudioOutput';
 import { ENTRANCE_SOUND_MAX_DURATION_SECONDS } from './entranceSound';
 import { normalizeAudioVolume } from './audioPreferences';
 import type { CallSoundEvent, useCallSoundPreferences } from '../settings/useCallSoundPreferences';
@@ -26,10 +27,11 @@ const SCREEN_SHARE_STOP_TONES: Tone[] = [
 ];
 
 /** 播放通话状态提示；默认音效由振荡器生成，不增加静态资源和网络请求。 */
-export function useCallSounds(outputVolume: Ref<number>, preferences: ReturnType<typeof useCallSoundPreferences>) {
+export function useCallSounds(outputVolume: Ref<number>, preferences: ReturnType<typeof useCallSoundPreferences>, output?: AudioOutputRouting) {
   const pendingEntrances = new Map<string, ReturnType<typeof setTimeout>>();
   const activeSounds = new Map<AudioScheduledSourceNode, { gain: GainNode; preview: boolean }>();
   let context: AudioContext | null = null;
+  let outputBinding: AudioOutputBinding | undefined;
   let disposed = false;
   let previewVersion = 0;
   const eventTones: Record<CallSoundEvent, Tone[]> = {
@@ -43,7 +45,7 @@ export function useCallSounds(outputVolume: Ref<number>, preferences: ReturnType
 
   function volume() { return normalizeAudioVolume(outputVolume.value) * preferences.volume.value; }
   function canPlay(event: CallSoundEvent, preview = false) {
-    return !disposed && volume() > 0 && (preview || preferences.enabled[event]);
+    return !disposed && (output?.available.value ?? true) && volume() > 0 && (preview || preferences.enabled[event]);
   }
   function track(source: AudioScheduledSourceNode, gain: GainNode, preview: boolean) {
     activeSounds.set(source, { gain, preview });
@@ -58,9 +60,15 @@ export function useCallSounds(outputVolume: Ref<number>, preferences: ReturnType
   }
 
   async function audioContext() {
-    context ??= new AudioContext();
-    if (context.state === 'suspended') await context.resume();
-    return context;
+    if (!context) {
+      context = new AudioContext();
+      outputBinding = output?.bindContext(context);
+    }
+    const current = context;
+    const resumed = current.state === 'suspended' ? current.resume() : undefined;
+    if (outputBinding) await Promise.all([outputBinding.ready, resumed]);
+    else if (resumed) await resumed;
+    return current;
   }
 
   async function playEvent(event: CallSoundEvent, preview = false) {
@@ -145,12 +153,20 @@ export function useCallSounds(outputVolume: Ref<number>, preferences: ReturnType
     if (!await playCustomEntrance(bytes)) void playEvent('participantJoined');
   }
 
+  watch(() => output?.available.value ?? true, (available) => {
+    if (available) return;
+    previewVersion++;
+    for (const [source, sound] of activeSounds) { source.stop(); source.disconnect(); sound.gain.disconnect(); }
+    activeSounds.clear();
+  }, { flush: 'sync' });
+
   onScopeDispose(() => {
     disposed = true;
     pendingEntrances.forEach(clearTimeout);
     pendingEntrances.clear();
     for (const [source, sound] of activeSounds) { source.stop(); source.disconnect(); sound.gain.disconnect(); }
     activeSounds.clear();
+    outputBinding?.release();
     if (context) void context.close();
     context = null;
   });

@@ -5,16 +5,18 @@ import InlineFeedback from '../InlineFeedback.vue';
 import CallSoundSettings from './CallSoundSettings.vue';
 import type { useCallSoundPreferences } from '../../settings/useCallSoundPreferences';
 import type { useCallSounds } from '../../rtc/useCallSounds';
+import type { AudioOutputBinding, AudioOutputRouting } from '../../rtc/useAudioOutput';
 import { createEntranceSound, ENTRANCE_SOUND_MAX_BYTES, ENTRANCE_SOUND_MAX_DURATION_SECONDS,
   loadEntranceSound, saveEntranceSound } from '../../rtc/entranceSound';
 
 const props = defineProps<{ userId: string; active: boolean;
-  preferences: ReturnType<typeof useCallSoundPreferences>; sounds: ReturnType<typeof useCallSounds> }>();
+  preferences: ReturnType<typeof useCallSoundPreferences>; sounds: ReturnType<typeof useCallSounds>; output?: AudioOutputRouting }>();
 const sound = ref(loadEntranceSound(props.userId));
 const busy = ref(false);
 const error = ref('');
 const input = ref<HTMLInputElement | null>(null);
 let preview: HTMLAudioElement | null = null;
+let outputBinding: AudioOutputBinding | undefined;
 let upload: AbortController | undefined;
 let disposed = false;
 const soundSize = computed(() => {
@@ -25,7 +27,9 @@ const soundSize = computed(() => {
 });
 
 function stopPreview() {
-  preview?.pause();
+  outputBinding?.release();
+  outputBinding = undefined;
+  if (preview) { preview.onended = null; preview.pause(); }
   preview = null;
 }
 
@@ -57,13 +61,24 @@ async function chooseSound(event: Event) {
   }
 }
 
-function playPreview() {
+async function playPreview() {
   if (!props.active || !sound.value) return;
   stopPreview();
   const player = new Audio(sound.value.dataUrl);
   preview = player;
+  player.onended = () => { if (preview === player) stopPreview(); };
   player.volume = 0.5;
   error.value = '';
+  if (props.output) {
+    if (!props.output.available.value) { error.value = '请先选择可用的声音输出设备。'; stopPreview(); return; }
+    outputBinding = props.output.bindElement(player);
+    try { await outputBinding.ready; }
+    catch {
+      if (preview === player) { error.value = '所选声音输出不可用。'; stopPreview(); }
+      return;
+    }
+    if (preview !== player || !props.active || disposed) return;
+  }
   // 被新试听或栏目退出停止的旧播放器，不再改写当前反馈。
   void player.play().catch(() => {
     if (preview === player) error.value = '当前系统未允许播放声音';
@@ -79,6 +94,7 @@ function removeSound() {
   sound.value = null;
   error.value = '';
 }
+watch(() => props.output?.available.value ?? true, (available) => { if (!available) stopPreview(); }, { flush: 'sync' });
 </script>
 
 <template>

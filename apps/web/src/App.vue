@@ -23,6 +23,7 @@ import { createGroup, updateGroup, findGroup, findGroupPresences, findGroups, ne
 import { useRtcRoom } from './rtc/useRtcRoom';
 import { useMicrophoneTest } from './rtc/useMicrophoneTest';
 import { useMicrophoneDevices } from './rtc/useMicrophoneDevices';
+import { useAudioOutput } from './rtc/useAudioOutput';
 import { useRecording } from './recording/useRecording';
 import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, readScreenShareQuality, saveScreenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from './rtc/screenShareQuality';
 import { canSelectNativeSource, readScreenShareAudioPreference, saveScreenShareAudioPreference,
@@ -72,7 +73,8 @@ const audioPreferences = useAudioPreferences(props.user.id);
 const { inputGain, outputVolume, screenShareVolume, voiceVolumeBalance } = audioPreferences;
 const audioProcessing = audioPreferences.processing;
 const callSoundPreferences = useCallSoundPreferences(props.user.id);
-const callSounds = useCallSounds(outputVolume, callSoundPreferences);
+const audioOutput = useAudioOutput(audioPreferences);
+const callSounds = useCallSounds(outputVolume, callSoundPreferences, audioOutput);
 const desktop = window.lycanDesktop;
 const viewerNotice = ref('');
 const mainWindowVisible = ref(true);
@@ -380,8 +382,9 @@ const rtc = reactive(useRtcRoom({
 }));
 const microphoneTest = reactive(useMicrophoneTest({
   preferences: audioPreferences,
+  output: audioOutput,
   desktop,
-  canStart: () => rtc.status !== 'joining' && rtc.status !== 'reconnecting'
+  canStart: () => audioOutput.available.value && rtc.status !== 'joining' && rtc.status !== 'reconnecting'
     && !rtc.busySources.includes(Track.Source.Microphone),
   publishedTrack: () => {
     void rtc.revision;
@@ -402,6 +405,17 @@ const microphoneDevices = reactive(useMicrophoneDevices({
     if (room && rtc.room === room) rtc.notice = '所选麦克风已断开，已停止发声。请检查设备或在语音设置中重新选择。';
   },
 }));
+
+watch(() => rtc.playbackContext, (context, _, onCleanup) => {
+  if (!context) return;
+  const binding = audioOutput.bindContext(context);
+  void binding.ready.catch(() => {});
+  onCleanup(binding.release);
+}, { flush: 'sync' });
+watch(audioOutput.notice, (message, previous) => {
+  if (message) viewerNotice.value = message;
+  else if (viewerNotice.value === previous) viewerNotice.value = '';
+});
 
 // 预先恢复被静音成员的订阅策略；之后只有跨越 0% 时才更新网络订阅。
 audioPreferences.mutedParticipantIdentities()
@@ -1454,7 +1468,7 @@ function participantListening(participant: Participant) {
       :audio-shortcuts="audioShortcuts" :call-sound-preferences="callSoundPreferences" :call-sounds="callSounds"
       :overlay="desktop ? voiceOverlay : undefined"
       :presence-status="publicPresenceStatus" :presence-label="personalPresenceLabel"
-      :recording="recording" :preferences="audioPreferences" :rtc="rtc" :microphone-test="microphoneTest" :microphone-devices="microphoneDevices" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
+      :recording="recording" :preferences="audioPreferences" :audio-output="audioOutput" :rtc="rtc" :microphone-test="microphoneTest" :microphone-devices="microphoneDevices" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
       :activity="currentActivity" :activity-status="personalActivityStatus" :show-activity="showActivity" :activity-error="activityVisibilityError"
       :activity-mappings="activityMappings"
       @activity-visibility="setShowActivity"
@@ -1500,9 +1514,11 @@ function participantListening(participant: Participant) {
       </template>
     </ScreenShareWindows>
     <RemoteAudio v-for="item in remoteAudioTracks" :key="item.track.sid" :track="item.track"
+      :output="audioOutput"
       :context="rtc.playbackContext" :balance="voiceVolumeBalance && item.source === Track.Source.Microphone"
       @balance-error="audioPreferences.setVoiceVolumeBalance(false); viewerNotice = '成员语音音量平衡未能运行，已关闭该功能，语音继续按原音量播放。'"
-      :volume="listening ? (item.source === Track.Source.ScreenShareAudio
+      @playback-error="viewerNotice = '远端声音未能开始播放，请检查输出设备或重新连接语音。'"
+      :volume="listening && audioOutput.available.value ? (item.source === Track.Source.ScreenShareAudio
         ? remoteScreenSharePlaybackVolume(item.participantIdentity) : remotePlaybackVolume(item.participantIdentity)) : 0" />
   </div>
 </template>

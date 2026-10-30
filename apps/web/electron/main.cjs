@@ -1355,7 +1355,7 @@ function configurePermissions() {
   desktopSession.setPermissionCheckHandler((contents, permission, origin, details) => {
     if (contents !== mainWindow?.webContents || !trustedUrl(origin)) return false;
     if (permission === 'media') return details.mediaType === 'audio';
-    return ['display-capture', 'fullscreen'].includes(permission);
+    return ['display-capture', 'fullscreen', 'speaker-selection'].includes(permission);
   });
   desktopSession.setPermissionRequestHandler((contents, permission, callback, details) => {
     const trusted = contents === mainWindow?.webContents && trustedUrl(details.requestingUrl);
@@ -1363,7 +1363,7 @@ function configurePermissions() {
     // 摄像头请求包含 video，明确拒绝；undefined 不视为已知的采集类型。
     const allowedMedia = permission === 'media' && Array.isArray(details.mediaTypes)
       && details.mediaTypes.every((type) => type === 'audio');
-    callback(Boolean(trusted && (allowedMedia || ['display-capture', 'fullscreen'].includes(permission))));
+    callback(Boolean(trusted && (allowedMedia || ['display-capture', 'fullscreen', 'speaker-selection'].includes(permission))));
   });
   // 桌面只允许正式原生共享；保留拒绝处理器，避免误调用 getDisplayMedia 启动另一条采集链路。
   desktopSession.setDisplayMediaRequestHandler((_request, callback) => denyCapture(callback));

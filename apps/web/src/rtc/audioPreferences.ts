@@ -7,6 +7,7 @@ export interface AudioProcessingSettings {
 
 export interface AudioPreferences extends AudioProcessingSettings {
   inputDeviceId: string;
+  outputDeviceId: string;
   inputGain: number;
   outputVolume: number;
   screenShareVolume: number;
@@ -21,6 +22,7 @@ const AUDIO_VOLUME_SCALE = 1 / AUDIO_VOLUME_STEP;
 
 export const DEFAULT_AUDIO_PREFERENCES: AudioPreferences = {
   inputDeviceId: 'default',
+  outputDeviceId: 'default',
   inputGain: 1,
   outputVolume: 1,
   screenShareVolume: 1,
@@ -69,6 +71,9 @@ export function loadAudioPreferences(userId: string, storage: Pick<Storage, 'get
       inputDeviceId: typeof stored.inputDeviceId === 'string' && stored.inputDeviceId.length > 0
         && stored.inputDeviceId.length <= 1024 && !/[\u0000-\u001f\u007f]/.test(stored.inputDeviceId)
         ? stored.inputDeviceId : 'default',
+      outputDeviceId: typeof stored.outputDeviceId === 'string' && stored.outputDeviceId.length > 0
+        && stored.outputDeviceId.length <= 1024 && !/[\u0000-\u001f\u007f]/.test(stored.outputDeviceId)
+        ? stored.outputDeviceId : 'default',
       inputGain: normalizeAudioVolume(stored.inputGain ?? 1),
       outputVolume: normalizeAudioVolume(stored.outputVolume ?? 1),
       screenShareVolume: normalizeAudioVolume(stored.screenShareVolume ?? 1),

@@ -6,12 +6,14 @@ import { MicrophoneLoopback } from './microphoneLoopback';
 import { NativeMicrophoneAudioSession, type NativeMicrophoneDesktopBridge } from './nativeMicrophoneAudio';
 import type { useAudioPreferences } from './useAudioPreferences';
 import { normalizeVoiceLevel } from './voiceLevel';
+import type { AudioOutputBinding, AudioOutputRouting } from './useAudioOutput';
 
 interface MicrophoneTestOptions {
   preferences: ReturnType<typeof useAudioPreferences>;
   desktop?: NativeMicrophoneDesktopBridge;
   publishedTrack: () => MediaStreamTrack | undefined;
   canStart: () => boolean;
+  output?: AudioOutputRouting;
 }
 
 interface TestSession {
@@ -26,6 +28,7 @@ interface TestSession {
   meterSource?: MediaStreamAudioSourceNode;
   meterTimer?: ReturnType<typeof setInterval>;
   starting?: Promise<void>;
+  outputBinding?: AudioOutputBinding;
 }
 
 const SETTINGS_NOTICE = '部分音频处理设置需要停止并重新试听后生效。';
@@ -63,6 +66,7 @@ export function useMicrophoneTest(options: MicrophoneTestOptions) {
     state.value = 'stopping';
     inputLevelPercent.value = 0;
     if (previous.meterTimer !== undefined) clearInterval(previous.meterTimer);
+    previous.outputBinding?.release();
     const playbackStop = Promise.resolve().then(() => previous.loopback.stop());
     const nativeStop = Promise.resolve().then(() => previous.native?.stop());
     // 停止可能先于启动完成；先观察拒绝，后面仍统一等待并报告。
@@ -129,7 +133,9 @@ export function useMicrophoneTest(options: MicrophoneTestOptions) {
   async function startSession(current: TestSession) {
     let captured = current.borrowed;
     try {
-      await current.context.resume();
+      current.outputBinding = options.output?.bindContext(current.context);
+      if (current.outputBinding) await Promise.all([current.outputBinding.ready, current.context.resume()]);
+      else await current.context.resume();
       if (session !== current) return;
       if (!current.borrowed) {
         if (options.desktop) {
@@ -233,6 +239,7 @@ export function useMicrophoneTest(options: MicrophoneTestOptions) {
   });
   watch(preferences.outputVolume, (volume) => session?.loopback.setVolume(normalizeAudioVolume(volume)));
   watch(preferences.inputDeviceId, () => { void stop(); }, { flush: 'sync' });
+  watch(() => options.output?.available.value ?? true, (available) => { if (!available) void stop(); }, { flush: 'sync' });
   watch(options.publishedTrack, (track) => {
     if (session?.borrowed && session.sourceTrack !== track) void stop();
   }, { flush: 'sync' });
