@@ -34,6 +34,9 @@ let manager;
 let targetHelper;
 let targetFixture;
 let finishing = false;
+let testPhase = 'initialization';
+let windowSample;
+let gpuDiagnostics;
 
 async function readResources(state) {
   // 只读取本测试持有的子进程；工作集分开记录，不能当作整机物理内存。
@@ -118,7 +121,7 @@ async function finish(result) {
     catch { targetFixture.kill(); result.cleanupError = 'testWindowExitUnconfirmed'; }
   }
   result.helperClosed = !manager?.state;
-  process.stdout.write(`${JSON.stringify({ type: 'obsCaptureSmokeResult', ...result, cases, failures, diagnostics, captureEvidence })}\n`);
+  process.stdout.write(`${JSON.stringify({ type: 'obsCaptureSmokeResult', testPhase, windowSample, gpuDiagnostics, ...result, cases, failures, diagnostics, captureEvidence })}\n`);
   window?.destroy();
   app.exit(result.ok && result.helperClosed && !result.cleanupError ? 0 : 1);
 }
@@ -145,6 +148,10 @@ app.whenReady().then(async () => {
     if (event.level === 'error') diagnostics.push(String(event.message).slice(0, 250));
   });
   production = { closing: false, process, performance, writeMediaDiagnostic: async () => {},
+    nativeVideoPreparation: undefined,
+    // 此用例不启动录像；保留生产入口对空闲录像状态的查询和变更包裹。
+    recording: { active: undefined, snapshot: () => ({ phase: 'idle', holdingResources: false }),
+      withVideoChange: operation => operation() },
     console: { error: (...args) => diagnostics.push(args.map(String).join(' ').slice(0, 250)) },
     setTimeout, clearTimeout, randomUUID, sharedTexture, ipcMain, mainWindow: window,
     nativeMediaBridge: bridge, nativeVideoSession: undefined, lastStoppedNativeVideoSession: undefined,
@@ -153,8 +160,8 @@ app.whenReady().then(async () => {
     nativeVideoSourcesById: new Map([['monitor:1:0', { kind: 'monitor', title: monitorName }]]),
     loadNativeMediaBridge: () => bridge, mediaHelperPath: () => rustPath,
     trustedSender: (event) => event.sender === window.webContents,
-    recordVideoFailure: (stage, error) => {
-      const failure = { stage, code: String(error.message ?? error).slice(0, 160) };
+    recordVideoFailure: (stage, error, _frame, details = {}) => {
+      const failure = { stage, code: String(error.message ?? error).slice(0, 160), ...details };
       failures.push(failure);
       process.stdout.write(`${JSON.stringify({ phase: 'captureFailure', ...failure })}\n`);
     },
@@ -185,7 +192,7 @@ app.whenReady().then(async () => {
     },
     onClosed: production.releaseHelperProcessBridge,
     onSuspended: production.handleVideoCaptureSuspended,
-    onCaptureDiagnostic: (_state, entry) => captureEvidence.push(entry),
+    onCaptureDiagnostic: (_state, entry) => captureEvidence.push({ ...entry, atMs: Math.round(performance.now()) }),
     onDiagnostic: (message) => { if (diagnostics.length < 30) diagnostics.push(message.slice(0, 250)); },
   });
   let sourceId = 'monitor:1:0';
@@ -207,6 +214,10 @@ app.whenReady().then(async () => {
   await window.loadFile(resolve(projectRoot, 'release/build-cache/obs-32.2.2/smoke-page/renderer.html'));
   process.stdout.write('{"phase":"pageLoaded"}\n');
   window.showInactive();
+  const gpuInfo = await app.getGPUInfo('complete');
+  gpuDiagnostics = { devices: gpuInfo.gpuDevice?.map(device => ({ vendorId: device.vendorId, deviceId: device.deviceId, active: device.active })),
+    renderer: gpuInfo.auxAttributes?.glRenderer, features: app.getGPUFeatureStatus() };
+  testPhase = 'renderer-ready';
   await until(() => window.webContents.executeJavaScript('Boolean(window.obsCaptureTest)'));
   const bounds = window.getContentBounds();
   const point = { x: Math.round((bounds.x + 48 - display.bounds.x) / display.bounds.width * 1920),
@@ -310,7 +321,9 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
     assert(sources.length === (existingWindowId ? 1 : 2), 'applicationTestSourcesMissing');
     production.nativeVideoSourcesById = new Map(snapshot.sources.map((source) => [source.sourceId, source]));
     for (const source of sources) {
+      testPhase = 'application-start';
       const started = await renderer(`start(${JSON.stringify(source.sourceId)})`);
+      testPhase = 'application-playback';
       const state = manager.state;
       const palette = new Set();
       const before = await renderer('probe(960,540)');
@@ -335,15 +348,74 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
       assert(existingWindowId || (browserKind && palette.size === 2), 'browserWindowPixelsMismatch');
       assert(after.input.submittedFrames > before.input.submittedFrames + 10
         && after.presented > before.presented + 10, 'applicationFramesStalled');
+      if (existingWindowId) {
+        // 只移动测试接收窗，让色块覆盖已授权来源中心；不激活或操作被采集应用。
+        const readCenter = async () => {
+          const { stdout } = await promisify(execFile)('powershell.exe', ['-NoProfile', '-Command', `
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class ApplicationCaptureCenter {
+  [StructLayout(LayoutKind.Sequential)] public struct Point { public int X; public int Y; }
+  [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left; public int Top; public int Right; public int Bottom; }
+  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr window, out Rect rect);
+  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr window, ref Point point);
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(Point point);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr window, uint flags);
+}
+'@
+$captureWindow = [IntPtr]::new([long]${existingWindowId})
+$captureRect = New-Object ApplicationCaptureCenter+Rect
+if(-not [ApplicationCaptureCenter]::GetClientRect($captureWindow,[ref]$captureRect)){throw 'applicationClientRectUnavailable'}
+$captureCenter = New-Object ApplicationCaptureCenter+Point
+$captureCenter.X = ($captureRect.Right-$captureRect.Left)/2
+$captureCenter.Y = ($captureRect.Bottom-$captureRect.Top)/2
+if(-not [ApplicationCaptureCenter]::ClientToScreen($captureWindow,[ref]$captureCenter)){throw 'applicationClientCenterUnavailable'}
+$coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter]::WindowFromPoint($captureCenter),2)
+[pscustomobject]@{X=$captureCenter.X;Y=$captureCenter.Y;Covered=($coverWindow -eq [IntPtr]::new([long]${window.getNativeWindowHandle().readBigUInt64LE()}))} | ConvertTo-Json -Compress
+`], { windowsHide: true, timeout: 5000 });
+          return JSON.parse(stdout);
+        };
+        const center = await readCenter();
+        assert(Number.isInteger(center.X) && Number.isInteger(center.Y), 'applicationClientCenterInvalid');
+        const point = screen.screenToDipPoint({ x: center.X, y: center.Y });
+        const previousBounds = window.getContentBounds();
+        let coveredPresented;
+        try {
+          window.setContentBounds({ ...previousBounds, x: point.x - 48, y: point.y - 48 });
+          assert((await readCenter()).Covered, 'applicationMarkerDidNotCoverTarget');
+          for (const color of ['Magenta', 'Cyan']) {
+            testPhase = `application-occlusion-${color.toLowerCase()}`;
+            await renderer(`marker${color}()`);
+            const beforeMarker = (await renderer('probe(960,540)')).presented;
+            for (let index = 0; index < 20; index++) {
+              await sleep(75);
+              const sample = await renderer('probe(960,540)');
+              assert(sample.pixel && sample.errors.length === 0, 'applicationOcclusionSampleUnavailable');
+              const [red, green, blue] = sample.pixel;
+              assert(!(color === 'Magenta' ? red > 220 && green < 50 && blue > 170
+                : red < 50 && green > 190 && blue > 210), 'applicationOcclusionPixelsLeaked');
+              coveredPresented = sample.presented;
+            }
+            assert(coveredPresented > beforeMarker + 10, 'applicationOcclusionPlaybackStalled');
+            const covered = await readCenter();
+            assert(covered.X === center.X && covered.Y === center.Y, 'applicationTargetMovedDuringOcclusion');
+            assert(covered.Covered, 'applicationMarkerOccludedDuringCheck');
+          }
+        } finally { window.setContentBounds(previousBounds); }
+        await until(async () => (await renderer('probe(960,540)')).presented > coveredPresented + 10);
+      }
       const sourceDiagnostics = await renderer('diagnostics()');
       assert(sourceDiagnostics.sourceKind === 'window' && sourceDiagnostics.captureBackend === 'obsLibobs', 'applicationDiagnosticsMismatch');
+      assert(['bitblt-window', 'wgc-window'].includes(state.captureMethod), 'applicationAutomaticMethodMissing');
       const stopped = await renderer('stop()');
       await until(() => !manager.state?.videoSessionId && !production.nativeVideoSession && !targetHelper.videoCapture);
       assert(stopped.readyState === 'ended' && manager.state === state && !state.videoSessionId && !state.closed, 'applicationStopUnconfirmed');
-      cases.push({ mode: browserKind ?? 'existing-application', firstFrameMs: started.firstFrameMs,
+      cases.push({ mode: browserKind ?? 'existing-application', actualMethod: state.captureMethod, firstFrameMs: started.firstFrameMs,
         submittedFps: Math.round((after.input.submittedFrames - before.input.submittedFrames) * 1000 / intervalMs),
         presentedFps: Math.round((after.presented - before.presented) * 1000 / intervalMs),
-        freshPixelsChecked: Boolean(browserKind), hostRetained: manager.state === state && !state.closed });
+        freshPixelsChecked: Boolean(browserKind), occlusionChecked: Boolean(existingWindowId),
+        hostRetained: manager.state === state && !state.closed });
     }
     if (!existingWindowId) assert(new Set(cases.map((entry) => entry.mode)).size === 2, 'browserWindowsNotDistinct');
     assert(failures.length === 0 && !diagnostics.some((entry) => /Uncaught|Double destroy/.test(entry)), 'applicationCaptureFailure');
@@ -351,12 +423,22 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
     return;
   }
   if (windowCheck || gameCheck) {
+    // 正式选择器读取来源时会预热图形；冷启动场景仍可显式单独运行。
+    if (windowCheck && process.env.LYCANSYNC_CAPTURE_WINDOW_COLD !== '1') {
+      testPhase = 'window-prewarm';
+      await manager.prepare(true);
+    }
+    testPhase = 'fixture-start';
     const fixturePath = resolve(projectRoot, 'release/build-cache/obs-32.2.2/cmake-build/test-tools',
       gameCheck ? 'lycansync-obs-test-d3d.exe' : 'lycansync-obs-test-windows.exe');
     assert(existsSync(fixturePath), 'buildWithBuildTestWindowsFirst');
     const events = [];
     let buffer = '';
-    targetFixture = spawn(fixturePath, [], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const ordinaryMethod = process.env.LYCANSYNC_CAPTURE_WINDOW_WGC === '1' ? 'wgc-window' : 'bitblt-window';
+    const mixedMethods = windowCheck && process.env.LYCANSYNC_CAPTURE_WINDOW_MIXED === '1';
+    assert(!mixedMethods || ordinaryMethod === 'bitblt-window', 'mixedWindowTestMustStartWithBitblt');
+    targetFixture = spawn(fixturePath, mixedMethods ? ['--mixed'] : windowCheck && ordinaryMethod === 'wgc-window' ? ['--wgc'] : [],
+      { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     targetFixture.stdout.on('data', (chunk) => {
       buffer += String(chunk);
       let newline;
@@ -367,7 +449,11 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
     });
     targetFixture.stderr.on('data', (chunk) => diagnostics.push(String(chunk).slice(0, 250)));
     targetFixture.on('error', (error) => { void finish({ ok: false, error: error.message }); });
-    const ready = await until(() => events.find((event) => event.event === 'ready'));
+    const ready = await until(() => {
+      if (targetFixture.exitCode !== null || targetFixture.signalCode !== null) throw new Error(`testWindowExited:${targetFixture.exitCode ?? targetFixture.signalCode}`);
+      return events.find((event) => event.event === 'ready');
+    }, 20000);
+    testPhase = 'fixture-source-list';
     const snapshot = await targetHelper.listVideoSources();
     const selected = snapshot.sources.find((source) => source.windowId === ready.windowId);
     const other = snapshot.sources.find((source) => source.windowId === ready.otherWindowId);
@@ -382,20 +468,25 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
         onActivity: () => {} });
       await production.activityMonitor.configure([{ executable: fixturePath, name: 'Controlled D3D fixture' }]);
     }
+    testPhase = 'window-start';
     const started = await renderer(`start(${JSON.stringify(selected.sourceId)})`);
+    testPhase = 'window-initial-color';
     const state = manager.state;
     let cyan = false;
     const selectedColorMatches = async () => { const sample = await renderer('probe(960,540)');
+      windowSample = sample;
       return sample.pixel && sample.pixel[0] < 100 && sample.pixel[1] > 120
         && (cyan ? sample.pixel[2] > 160 : sample.pixel[2] < 120); };
     await until(selectedColorMatches);
     const initialWindow = await renderer('probe(960,540)');
+    assert(captureEvidence.some(entry => entry.stage === 'obsSourceReady'
+      && entry.captureMethod === (gameCheck ? 'game' : ordinaryMethod)), 'automaticWindowMethodMismatch');
     const reserved = await targetHelper.getDiagnostics();
     assert(reserved.state === 'running' && reserved.captureBackend === null && reserved.framesReceived === null, 'identityHelperStartedCapture');
     const command = async (text, event) => {
       const before = events.length;
       targetFixture.stdin.write(`${text}\n`);
-      await until(() => events.slice(before).some((entry) => entry.event === event));
+      return until(() => events.slice(before).find((entry) => entry.event === event));
     };
     const frameRateChanges = [];
     const identityState = targetHelper.videoCapture;
@@ -407,6 +498,7 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
       ['economy', { resolution: 1440, fps: 30 }],
       ['standard', { resolution: 1440, fps: 30 }],
     ]) {
+      testPhase = `window-quality-${id}`;
       const configured = await renderer(`configureQuality(${JSON.stringify(id)},${JSON.stringify(custom)})`);
       const { fps } = configured.profile;
       assert(configured.changed && configured.sameTrack && configured.readyState === 'live', 'windowConfigurationReplacedTrack');
@@ -430,10 +522,16 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
       frameRateChanges.push({ targetFps: fps, cap: configured.profile.height,
         output: { width: pageAfter.width, height: pageAfter.height }, hostFps, freshPixelsChecked: true, encoderMeasured: false });
     }
+    testPhase = 'window-rename';
     await command('rename', 'renamed');
     const refreshed = await targetHelper.listVideoSources();
     assert(refreshed.sources.some((source) => source.windowId === ready.windowId && source.sourceId === selected.sourceId), 'renamedWindowIdentityChanged');
     await until(selectedColorMatches);
+    testPhase = 'window-minimize';
+    if (windowCheck) {
+      const covered = await command(`check-cover:${window.getNativeWindowHandle().readBigUInt64LE()}`, 'coverChecked');
+      assert(covered.receiverCoversTarget, 'receiverDidNotCoverBeforeMinimize');
+    }
     await command('minimize', 'minimized');
     await until(() => statuses.at(-1) === true);
     const pausedDiagnostics = await renderer('diagnostics()');
@@ -444,19 +542,62 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
     const pauseEnd = await renderer('probe(960,540)');
     assert(pauseEnd.input.submittedFrames <= paused.input.submittedFrames + 1
       && pauseEnd.input.placeholderFrames > paused.input.placeholderFrames, 'minimizedFramesNotSeparated');
+    testPhase = 'window-restore';
     await command('restore', 'restored');
     await until(() => statuses.at(-1) === false);
-    await until(selectedColorMatches);
+    if (windowCheck) {
+      const covered = await command(`check-cover:${window.getNativeWindowHandle().readBigUInt64LE()}`, 'coverChecked');
+      assert(covered.receiverCoversTarget, 'receiverDidNotCoverAfterRestore');
+    }
+    try { await until(selectedColorMatches); }
+    catch (error) {
+      // 失败时直接读取同一个受控来源，区分取图污染和 Electron 交付污染；不放宽原断言。
+      const probePath = resolve(prepared, '../cmake-build/test-tools/lycansync-window-isolation-test.exe');
+      if (windowCheck && existsSync(probePath)) {
+        const probeArguments = [resolve(prepared, 'obs-plugins/64bit/win-capture.dll'),
+          resolve(prepared, 'data/obs-plugins/win-capture'), resolve(app.getPath('userData'), 'native-source-check'),
+          '--observe-test-window', ready.windowId];
+        try {
+          const { stdout } = await promisify(execFile)(probePath, probeArguments, { cwd: resolve(prepared, 'bin/64bit'), timeout: 12000, windowsHide: true });
+          diagnostics.push(`native-source-check:${stdout.trim().slice(-500)}`);
+        } catch (failure) { diagnostics.push(`native-source-check:${String(failure.stdout ?? failure.message).trim().slice(-500)}`); }
+      }
+      throw error;
+    }
     const restoredDiagnostics = await renderer('diagnostics()');
     assert(restoredDiagnostics.sourceKind === 'window' && restoredDiagnostics.captureSuspended === false,
       'windowRestoredDiagnosticsMismatch');
+    testPhase = 'window-stop';
     await renderer('stop()');
     await until(() => !manager.state?.videoSessionId && !production.nativeVideoSession && !targetHelper.videoCapture);
     assert(manager.state === state && !state.videoSessionId && !state.closed, 'windowNormalStopWasForced');
     const reopenedSources = await targetHelper.listVideoSources();
     production.nativeVideoSourcesById = new Map(reopenedSources.sources.map((source) => [source.sourceId, source]));
+    testPhase = 'window-restart';
     await renderer(`start(${JSON.stringify(selected.sourceId)})`);
     await until(selectedColorMatches);
+    const methodSwitches = [];
+    if (mixedMethods) {
+      methodSwitches.push(manager.state.captureMethod);
+      await renderer('stop()');
+      await until(() => !state.videoSessionId && !production.nativeVideoSession && !targetHelper.videoCapture);
+      testPhase = 'window-switch-wgc';
+      await renderer(`start(${JSON.stringify(other.sourceId)})`);
+      await until(async () => {
+        const sample = await renderer('probe(960,540)');
+        return sample.pixel && sample.pixel[0] > 150 && sample.pixel[1] < 70 && sample.pixel[2] > 150;
+      });
+      assert(manager.state === state && state.captureMethod === 'wgc-window', 'retainedHostDidNotChooseWgc');
+      methodSwitches.push(state.captureMethod);
+      await renderer('stop()');
+      await until(() => !state.videoSessionId && !production.nativeVideoSession && !targetHelper.videoCapture);
+      testPhase = 'window-switch-bitblt';
+      await renderer(`start(${JSON.stringify(selected.sourceId)})`);
+      await until(selectedColorMatches);
+      assert(manager.state === state && state.captureMethod === 'bitblt-window', 'retainedHostDidNotChooseBitblt');
+      methodSwitches.push(state.captureMethod);
+    }
+    testPhase = 'window-close';
     await command('close', 'targetClosed');
     await until(() => !manager.state?.videoSessionId && !production.nativeVideoSession && !targetHelper.videoCapture);
     const ended = await renderer('probe(960,540)');
@@ -465,7 +606,9 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
     assert(remaining.sources.some((source) => source.windowId === ready.otherWindowId)
       && !remaining.sources.some((source) => source.windowId === ready.windowId), 'otherWindowWasTakenOver');
     assert(failures.length === 1 && failures[0].code === 'captureTargetClosed', 'unexpectedWindowFailure');
-    cases.push({ mode: gameCheck ? 'controlled-d3d-game' : 'window', pixelsChecked: true, diagnosticsChecked: true, firstFrameMs: started.firstFrameMs, frameRateChanges,
+    cases.push({ mode: gameCheck ? 'controlled-d3d-game' : 'window', actualMethod: gameCheck ? 'game' : ordinaryMethod,
+      pixelsChecked: true, diagnosticsChecked: true, firstFrameMs: started.firstFrameMs, frameRateChanges,
+      methodSwitches,
       windowActions: ['same-title', 'rename-and-refresh', 'minimize', 'restore', 'stop-and-reopen', 'close-without-takeover'],
       helperExitCode: state.child.exitCode, helperSignal: state.child.signalCode,
       handleCount: bridge.currentProcessHandleCount() });

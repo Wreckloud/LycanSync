@@ -99,7 +99,6 @@ function captureErrorMessage(error: unknown, source: MediaSource): string {
       if (code === 'dxgiMonitorUnavailable') return '所选显示器暂不支持无边框共享，请确认显示器连接后重试。';
       if (code === 'dxgiAdapterMismatch') return '显示器与采集显卡未能匹配，已停止本次共享，请重新选择显示器后重试。';
       if (code === 'captureBorderUnsupported') return '系统窗口采集设置不可用，请重新选择窗口后重试。';
-      if (code === 'captureMethodNotIsolated') return '已停止此采集方式，避免把其他窗口的画面分享出去。请重新选择窗口，并使用自动采集。';
       if (code === 'captureSettingsUnsupported') return '当前系统不支持所选采集方式或光标设置，请在高级选项中调整后重试。';
       if (code === 'captureBorderAccessDenied') return '系统窗口采集授权失败，请检查 Windows 采集权限后重试。';
       if (code === 'sharedTextureTransferTimedOut') return '共享画面未能及时交付到客户端页面，本次共享已停止。请重新选择来源后重试。';

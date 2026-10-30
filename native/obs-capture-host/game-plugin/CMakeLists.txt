@@ -31,19 +31,18 @@ add_library(lycansync-bound-win-capture MODULE
   "${LYCANSYNC_OBS_SOURCE}/libobs/util/windows/obfuscate.c"
   "${LYCANSYNC_OBS_SOURCE}/shared/obs-inject-library/inject-library.c"
   "${LYCANSYNC_OBS_SOURCE}/shared/ipc-util/ipc-util/pipe-windows.c"
-  "${LYCANSYNC_OBS_SOURCE}/shared/file-updater/file-updater/file-updater.c"
   ../src/bound_game_target.c)
 target_compile_features(lycansync-bound-win-capture PRIVATE c_std_11)
 target_compile_options(lycansync-bound-win-capture PRIVATE /utf-8)
 target_compile_definitions(lycansync-bound-win-capture PRIVATE
-  UNICODE _UNICODE OBS_VERSION="32.2.2" COMPAT_URL="https://obsproject.com/obs2_update/win-capture" ENABLE_COMPAT_UPDATES)
+  UNICODE _UNICODE OBS_VERSION="32.2.2")
 target_include_directories(lycansync-bound-win-capture PRIVATE
   ../src "${LYCANSYNC_OBS_DEPS}/include" "${LYCANSYNC_OBS_SOURCE}/deps/w32-pthreads"
   "${LYCANSYNC_OBS_SOURCE}/libobs-winrt"
   "${LYCANSYNC_OBS_SOURCE}/shared/obs-hook-config" "${LYCANSYNC_OBS_SOURCE}/shared/obs-inject-library"
-  "${LYCANSYNC_OBS_SOURCE}/shared/ipc-util" "${LYCANSYNC_OBS_SOURCE}/shared/file-updater")
+  "${LYCANSYNC_OBS_SOURCE}/shared/ipc-util")
 target_link_libraries(lycansync-bound-win-capture PRIVATE lycansync_libobs
-  "${LYCANSYNC_OBS_DEPS}/lib/jansson.lib" "${LYCANSYNC_OBS_DEPS}/lib/libcurl_imp.lib"
+  "${LYCANSYNC_OBS_DEPS}/lib/jansson.lib"
   "${LYCANSYNC_OBS_SDK}/lib/w32-pthreads.lib" advapi32 gdi32 shell32 ole32 version)
 target_link_options(lycansync-bound-win-capture PRIVATE /IGNORE:4098)
 set_target_properties(lycansync-bound-win-capture PROPERTIES

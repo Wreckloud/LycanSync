@@ -29,7 +29,7 @@ async function toggle(key: 'applicationAudio' | 'microphone' | 'friends', event:
     </section>
     <section v-if="desktop" class="settings-block">
       <h2>文件与画质</h2>
-      <p>使用当前共享尺寸和帧率，硬件 H.264 编码、推荐质量，保存为 MKV。网络码率不会直接限制录像质量。</p>
+      <p>按来源比例确定尺寸，不超过共享分辨率上限，沿用所选帧率。硬件 H.264 编码、推荐质量，保存为 MKV。网络码率不会直接限制录像质量。</p>
       <p class="recording-directory">{{ recording.settings.value?.directory ?? '—' }}</p>
       <div class="recording-actions">
         <button type="button" class="settings-button" :disabled="recording.active.value || recording.busy.value" @click="recording.chooseDirectory">更换目录</button>

@@ -74,6 +74,8 @@ if ($LASTEXITCODE -ne 0) { throw '游戏插件依赖解压失败。' }
 if ($LASTEXITCODE -ne 0) { throw '固定游戏插件补丁不适用，拒绝继续构建。' }
 & git -C $projectRoot apply --recount --whitespace=error-all --directory=release/build-cache/obs-32.2.2/source/obs-studio-32.2.2-sources (Join-Path $PSScriptRoot 'patches/bound-window-capture.patch')
 if ($LASTEXITCODE -ne 0) { throw '固定窗口插件补丁不适用，拒绝继续构建。' }
+& git -C $projectRoot apply --recount --whitespace=error-all --directory=release/build-cache/obs-32.2.2/source/obs-studio-32.2.2-sources (Join-Path $PSScriptRoot 'patches/offline-capture-module.patch')
+if ($LASTEXITCODE -ne 0) { throw '固定采集模块离线补丁不适用，拒绝继续构建。' }
 & git -C $projectRoot apply --recount --whitespace=error-all --directory=release/build-cache/obs-32.2.2/source/obs-studio-32.2.2-sources (Join-Path $PSScriptRoot 'patches/bound-audio-capture.patch')
 if ($LASTEXITCODE -ne 0) { throw '固定声音插件补丁不适用，拒绝继续构建。' }
 & git -C $projectRoot apply --recount --whitespace=error-all --directory=release/build-cache/obs-32.2.2/source/obs-studio-32.2.2-sources (Join-Path $PSScriptRoot 'patches/dxgi-output-compat.patch')
@@ -190,6 +192,9 @@ foreach ($binary in $runtimeBinaries) {
     foreach ($line in $dependencies) {
         if ($line -notmatch '^\s+([^\s]+\.dll)\s*$') { continue }
         $dependency = $Matches[1]
+        if ($binary.Name -eq 'win-capture.dll' -and $dependency -match '^(libcurl[^\s]*|winhttp|wininet)\.dll$') {
+            throw '固定采集插件不得包含独立在线更新依赖。'
+        }
         $provided = Test-Path -LiteralPath (Join-Path $binaryDirectory $dependency)
         $systemProvided = $dependency -match '^(api|ext)-ms-' -or (Test-Path -LiteralPath (Join-Path $env:SystemRoot "System32/$dependency"))
         if (-not $provided -and -not $systemProvided) { throw "运行依赖缺失：$($binary.Name) → $dependency" }
@@ -199,6 +204,7 @@ foreach ($binary in $runtimeBinaries) {
 [ordered]@{ obsVersion = '32.2.2'; sourceSha256 = $sourceHash; dependencySha256 = $gameDepsHash;
     patchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/bound-game-capture.patch') -Algorithm SHA256).Hash.ToLowerInvariant();
     windowPatchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/bound-window-capture.patch') -Algorithm SHA256).Hash.ToLowerInvariant();
+    modulePatchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/offline-capture-module.patch') -Algorithm SHA256).Hash.ToLowerInvariant();
     binarySha256 = (Get-FileHash -LiteralPath $gamePlugin -Algorithm SHA256).Hash.ToLowerInvariant();
     bytes = (Get-Item -LiteralPath $gamePlugin).Length; importsChecked = $true;
     runtimeExecuted = $false; redistributionReady = $false } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $buildDirectory 'game-plugin/build-manifest.json') -Encoding utf8
@@ -224,6 +230,7 @@ $manifest = [ordered]@{ obsVersion = '32.2.2'; architecture = 'x64'; sourceSha25
     sourceUrl = 'https://github.com/obsproject/obs-studio/releases/tag/32.2.2'; sourceArchive = (Split-Path $sourceArchive -Leaf);
     graphicsPatchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/dxgi-output-compat.patch') -Algorithm SHA256).Hash.ToLowerInvariant();
     windowPatchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/bound-window-capture.patch') -Algorithm SHA256).Hash.ToLowerInvariant();
+    modulePatchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/offline-capture-module.patch') -Algorithm SHA256).Hash.ToLowerInvariant();
     compiler = $toolsVersion; runtimeBytes = ($files | Measure-Object -Property bytes -Sum).Sum;
     runtimeExecuted = $false; redistributionReady = $false; imports = $imports; sourceFiles = $hostSources; files = $files }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $preparedDirectory 'build-manifest.json') -Encoding utf8

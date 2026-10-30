@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <chrono>
 #include <array>
+#include <algorithm>
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
@@ -38,7 +39,7 @@ bool RecordingOutput::load_modules() {
   return true;
 }
 
-bool RecordingOutput::start(std::string id, std::string path, bool voices) {
+bool RecordingOutput::start(std::string id, std::string path, bool voices, obs_source_t *source) {
   if (active()) { emit_("recordingFailed", id, "recordingAlreadyRunning"); return false; }
   release();
   id_ = std::move(id);
@@ -67,6 +68,38 @@ bool RecordingOutput::start(std::string id, std::string path, bool voices) {
     if (codec && std::string_view(codec) == "h264") { encoder_id = candidate; break; }
   }
   if (!encoder_id) return fail("recordingHardwareEncoderUnavailable");
+  obs_video_info video_info{};
+  const auto source_width = source ? obs_source_get_width(source) : 0;
+  const auto source_height = source ? obs_source_get_height(source) : 0;
+  if (!source_width || !source_height || !obs_get_video_info(&video_info)) return fail("recordingShareUnavailable");
+  const auto scale = std::min({1.0, static_cast<double>(video_info.output_width) / source_width,
+      static_cast<double>(video_info.output_height) / source_height});
+  // libobs 输出宽度按四像素、高度按两像素对齐；固定本段尺寸，不录入共享画布的空白区域。
+  width_ = static_cast<uint32_t>(source_width * scale) & ~3u;
+  height_ = static_cast<uint32_t>(source_height * scale) & ~1u;
+  if (!width_ || !height_) return fail("recordingShareUnavailable");
+  scene_ = obs_canvas_scene_create(obs_get_main_canvas(), "LycanSync recording framing");
+  auto *item = scene_ ? obs_scene_add(scene_, source) : nullptr;
+  if (!item) return fail("recordingOutputUnavailable");
+  obs_transform_info transform{};
+  transform.pos = {width_ / 2.0f, height_ / 2.0f};
+  transform.scale = {1.0f, 1.0f};
+  transform.alignment = OBS_ALIGN_CENTER;
+  transform.bounds_type = OBS_BOUNDS_MAX_ONLY;
+  transform.bounds_alignment = OBS_ALIGN_CENTER;
+  transform.bounds = {static_cast<float>(width_), static_cast<float>(height_)};
+  obs_sceneitem_set_info2(item, &transform);
+  // 复用同一个已授权来源，仅录像期间增加合成输出；不启动第二路捕获或回读 CPU 像素。
+  view_ = obs_view_create();
+  if (!view_) return fail("recordingOutputUnavailable");
+  obs_view_set_source(view_, 0, obs_scene_get_source(scene_));
+  video_info.base_width = video_info.output_width = width_;
+  video_info.base_height = video_info.output_height = height_;
+  video_info.output_format = VIDEO_FORMAT_NV12;
+  video_info.gpu_conversion = true;
+  video_info.colorspace = VIDEO_CS_709;
+  auto *recording_video = obs_view_add2(view_, &video_info);
+  if (!recording_video) return fail("recordingOutputUnavailable");
   obs_data_t *settings = obs_encoder_defaults(encoder_id);
   if (std::string_view(encoder_id) == "obs_nvenc_h264_tex") {
     obs_data_set_string(settings, "rate_control", "cqp");
@@ -85,7 +118,7 @@ bool RecordingOutput::start(std::string id, std::string path, bool voices) {
   video_ = obs_video_encoder_create(encoder_id, "LycanSync recording video", settings, nullptr);
   obs_data_release(settings);
   if (!video_) return fail("recordingEncoderStartFailed");
-  obs_encoder_set_video(video_, obs_get_video());
+  obs_encoder_set_video(video_, recording_video);
   {
     settings = obs_encoder_defaults("ffmpeg_aac");
     obs_data_set_int(settings, "bitrate", 192);
@@ -149,6 +182,8 @@ void RecordingOutput::poll() {
 }
 uint64_t RecordingOutput::bytes() const { return output_ ? obs_output_get_total_bytes(output_) : 0; }
 uint64_t RecordingOutput::frames() const { return output_ ? obs_output_get_total_frames(output_) : 0; }
+uint32_t RecordingOutput::width() const { return width_; }
+uint32_t RecordingOutput::height() const { return height_; }
 void RecordingOutput::stop() {
   if (voice_) voice_->request_stop();
   if (output_ && active()) obs_output_stop(output_);
@@ -174,4 +209,7 @@ void RecordingOutput::release() {
   }
   if (video_) { obs_encoder_release(video_); video_ = nullptr; }
   if (audio_) { obs_encoder_release(audio_); audio_ = nullptr; }
+  // 编码器先脱离输出，再移除视图；共享来源仍由采集场景持有，不能随录像销毁。
+  if (view_) { obs_view_remove(view_); obs_view_destroy(view_); view_ = nullptr; }
+  if (scene_) { obs_source_remove(obs_scene_get_source(scene_)); obs_scene_release(scene_); scene_ = nullptr; }
 }

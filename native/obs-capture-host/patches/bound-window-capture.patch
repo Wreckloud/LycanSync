@@ -1,5 +1,5 @@
 diff --git a/plugins/win-capture/window-capture.c b/plugins/win-capture/window-capture.c
-index 4203be2..a908236 100644
+index 4203be2..4cf6538 100644
 --- a/plugins/win-capture/window-capture.c
 +++ b/plugins/win-capture/window-capture.c
 @@ -4,6 +4,7 @@
@@ -103,14 +103,15 @@ index 4203be2..a908236 100644
  	log_settings(wc, settings);
  	return wc;
  }
-@@ -347,5 +378,6 @@
+@@ -349,6 +380,7 @@ static void *wc_create(obs_data_t *settings, obs_source_t *source)
  static void wc_actual_destroy(void *data)
  {
  	struct window_capture *wc = data;
 +	lycan_game_target_close(&wc->bound_target);
  
  	if (wc->capture_winrt) {
-@@ -403,7 +434,8 @@ static void wc_update(void *data, obs_data_t *settings)
+ 		wc->exports.winrt_capture_free(wc->capture_winrt);
+@@ -403,7 +435,8 @@ static void wc_update(void *data, obs_data_t *settings)
  
  static bool window_normal(struct window_capture *wc)
  {
@@ -120,7 +121,7 @@ index 4203be2..a908236 100644
  }
  
  static uint32_t wc_width(void *data)
-@@ -589,6 +621,11 @@ static void wc_hide(void *data)
+@@ -589,6 +622,11 @@ static void wc_hide(void *data)
  static void wc_tick(void *data, float seconds)
  {
  	struct window_capture *wc = data;
@@ -132,7 +133,7 @@ index 4203be2..a908236 100644
  	RECT rect;
  	bool reset_capture = false;
  
-@@ -627,10 +664,7 @@ static void wc_tick(void *data, float seconds)
+@@ -627,10 +665,7 @@ static void wc_tick(void *data, float seconds)
  
  		wc->check_window_timer = 0.0f;
  
@@ -144,7 +145,7 @@ index 4203be2..a908236 100644
  		if (!wc->window) {
  			if (wc->capture.valid)
  				dc_capture_free(&wc->capture);
-@@ -703,6 +737,7 @@ static void wc_tick(void *data, float seconds)
+@@ -703,6 +738,7 @@ static void wc_tick(void *data, float seconds)
  			dc_capture_free(&wc->capture);
  			dc_capture_init(&wc->capture, 0, 0, rect.right - rect.left, rect.bottom - rect.top, wc->cursor,
  					wc->compatibility);
@@ -152,7 +153,19 @@ index 4203be2..a908236 100644
  			if (!wc->hooked && wc->capture.valid) {
  				wc->hooked = true;
  
-@@ -824,7 +859,7 @@ static void wc_child_enum(void *data, obs_source_enum_proc_t cb, void *param)
+@@ -730,6 +766,11 @@ static void wc_tick(void *data, float seconds)
+ 		}
+ 
+ 		dc_capture_capture(&wc->capture, wc->window);
++		if (!wc->capture.texture_written) {
++			if (!wc->previously_failed)
++				blog(LOG_WARNING, "[lycansync-window] BitBlt frame copy failed");
++			wc->previously_failed = true;
++		}
+ 
+ 		if (previous)
+ 			wc->set_thread_dpi_awareness_context(previous);
+@@ -824,7 +865,7 @@ static void wc_child_enum(void *data, obs_source_enum_proc_t cb, void *param)
  }
  
  struct obs_source_info window_capture_info = {
@@ -161,3 +174,38 @@ index 4203be2..a908236 100644
  	.type = OBS_SOURCE_TYPE_INPUT,
  	.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_AUDIO | OBS_SOURCE_CUSTOM_DRAW | OBS_SOURCE_SRGB,
  	.get_name = wc_getname,
+diff --git a/plugins/win-capture/dc-capture.c b/plugins/win-capture/dc-capture.c
+index 6a8d09e..7b19455 100644
+--- a/plugins/win-capture/dc-capture.c
++++ b/plugins/win-capture/dc-capture.c
+@@ -152,6 +152,7 @@ void dc_capture_capture(struct dc_capture *capture, HWND window)
+ {
+ 	HDC hdc_target;
+ 	HDC hdc;
++	capture->texture_written = false;
+ 
+ 	if (capture->capture_cursor) {
+ 		memset(&capture->ci, 0, sizeof(CURSORINFO));
+@@ -168,16 +169,18 @@ void dc_capture_capture(struct dc_capture *capture, HWND window)
+ 
+ 	hdc_target = GetDC(window);
+ 
+-	BitBlt(hdc, 0, 0, capture->width, capture->height, hdc_target, capture->x, capture->y, SRCCOPY);
++	const bool copied = hdc_target &&
++		BitBlt(hdc, 0, 0, capture->width, capture->height, hdc_target, capture->x, capture->y, SRCCOPY);
+ 
+-	ReleaseDC(NULL, hdc_target);
++	if (hdc_target)
++		ReleaseDC(NULL, hdc_target);
+ 
+-	if (capture->cursor_captured && !capture->cursor_hidden)
++	if (copied && capture->cursor_captured && !capture->cursor_hidden)
+ 		draw_cursor(capture, hdc, window);
+ 
+ 	dc_capture_release_dc(capture);
+ 
+-	capture->texture_written = true;
++	capture->texture_written = copied;
+ }
+ 
+ void dc_capture_render(struct dc_capture *capture, bool texcoords_centered)

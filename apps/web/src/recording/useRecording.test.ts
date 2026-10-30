@@ -4,7 +4,7 @@ import { setNativeScreenRecordingDemand } from '../rtc/nativeScreenVideo';
 import { useRecording } from './useRecording';
 
 vi.mock('../rtc/nativeScreenVideo', () => ({ setNativeScreenRecordingDemand: vi.fn(async () => {}) }));
-afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 async function fixture() {
   let id = 0;
@@ -65,5 +65,41 @@ it('保存未确认时不执行来源替换，也不叠加新的录像', async (
     const change = vi.fn(async (before: () => Promise<void>) => { await before(); return true; });
     await expect(f.recording.withSourceChange(change)).rejects.toThrow('recordingStopUnconfirmed');
     expect(f.desktop.startRecording).toHaveBeenCalledTimes(1);
+  } finally { f.scope.stop(); }
+});
+
+it('长时间录像显示小时，系统时间调整不改变时长，停止后移除计时器', async () => {
+  const f = await fixture();
+  try {
+    vi.useFakeTimers();
+    let monotonic = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => monotonic);
+    await f.recording.start(); await nextTick();
+    expect(f.recording.elapsed.value).toBe('00:00');
+    vi.setSystemTime(Date.now() + 86_400_000);
+    monotonic = 3_661_000;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.recording.elapsed.value).toBe('1:01:01');
+    monotonic = 90_061_000;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.recording.elapsed.value).toBe('25:01:01');
+    await f.recording.stop(); await nextTick();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { f.scope.stop(); }
+});
+
+it('慢磁盘读取未返回时不叠加查询，结束后停止轮询', async () => {
+  const f = await fixture();
+  try {
+    vi.useFakeTimers();
+    await f.recording.start(); await nextTick();
+    let resolve!: () => void;
+    const saved = f.recording.state.value;
+    f.desktop.getRecordingStatus.mockImplementationOnce(() => new Promise(done => { resolve = () => done(saved); }));
+    const before = f.desktop.getRecordingStatus.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(f.desktop.getRecordingStatus.mock.calls.length).toBe(before + 1);
+    await f.recording.stop(); resolve(); await nextTick();
+    expect(f.recording.state.value.phase).toBe('saved');
   } finally { f.scope.stop(); }
 });

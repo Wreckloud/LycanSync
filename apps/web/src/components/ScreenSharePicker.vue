@@ -35,8 +35,8 @@ const quality = computed(() => screenShareQuality(props.quality, props.customQua
 const canChoose = computed(() => props.audioReady && !props.audioFailed);
 const borderNotice = computed(() => {
   if (props.sourceType !== 'window' || captureSettings.value.windowMethod === 'game') return '';
-  if (borderSupport.value === false) return '当前 Windows 共享普通窗口时会显示系统边框，点击开始共享即确认本次使用。';
-  return '普通窗口将尽量隐藏系统边框；系统限制或权限不允许时可能显示边框，点击开始共享即确认本次使用。';
+  if (borderSupport.value === false) return '自动选择系统窗口采集时，当前 Windows 会显示系统边框。';
+  return '自动选择系统窗口采集时会尽量隐藏系统边框，系统限制或权限不允许时可能显示边框。';
 });
 const canConfirm = computed(() => canChoose.value && !props.error && !settingsError.value
   && props.sources.some((source) => source.id === props.selectedId));
@@ -154,7 +154,7 @@ defineExpose({ sourcesElement });
             </select>
           </label>
           <label class="capture-audio-option"><input v-model="captureSettings.hideCursor" type="checkbox" />隐藏共享画面中的光标</label>
-          <p v-if="sourceType === 'window'">自动识别支持的游戏，其余窗口只分享所选应用的内容区域。游戏采集仅用于需要手动指定的游戏。</p>
+          <p v-if="sourceType === 'window'">自动选择适合所选窗口的采集方式，只分享应用内容区域。游戏采集用于手动指定游戏。</p>
           <p v-else>整屏使用 DXGI，无系统共享黄框。高级选项仅用于本次共享。</p>
           </div>
           </ExpandSection>

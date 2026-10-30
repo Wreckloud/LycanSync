@@ -49,7 +49,7 @@ describe('共享选择器的声音范围说明', () => {
   it('边框说明在开始前可见，不再先失败后要求重新授权，也不提供重复方式', async () => {
     const html = await renderPicker('process');
     expect(html).toContain('系统边框');
-    expect(html).toContain('点击开始共享即确认本次使用');
+    expect(html).toContain('自动选择系统窗口采集时');
     expect(html).toContain('开始共享');
     expect(html).not.toContain('允许边框并共享');
     expect(html).not.toContain('允许显示系统共享边框');

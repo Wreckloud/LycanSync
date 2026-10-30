@@ -22,7 +22,7 @@ window.obsCaptureTest = {
     session = new NativeScreenVideoSession(window.lycanDesktop, { resolution, maxFps, onError: (code) => errors.push(code) });
     track = await session.start(sourceId);
     // 仅建立本机未连接的 sender 以调用真实参数 API；不发起房间或把本地播放冒充编码验收。
-    senderConnection = new RTCPeerConnection({ iceServers: [] });
+    senderConnection = new RTCPeerConnection({ iceServers: [], iceTransportPolicy: 'relay' });
     track.sender = senderConnection.addTrack(track.mediaStreamTrack);
     await senderConnection.setLocalDescription(await senderConnection.createOffer());
     video.srcObject = new MediaStream([track.mediaStreamTrack]);

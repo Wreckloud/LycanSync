@@ -72,14 +72,24 @@ set_target_properties(lycansync-dxgi-window-probe PROPERTIES RUNTIME_OUTPUT_DIRE
 add_subdirectory(game-plugin)
 
 # 显式实测仅创建自己的色块窗，验证实际窗口源的遮挡隔离；不进入运行包。
-add_executable(lycansync-window-isolation-test EXCLUDE_FROM_ALL tests/window_isolation.cpp src/window_capture.cpp src/bound_game_target.c)
+add_executable(lycansync-window-isolation-test EXCLUDE_FROM_ALL tests/window_isolation.cpp src/window_capture.cpp
+  src/bound_game_target.c "${LYCANSYNC_OBS_SOURCE}/plugins/win-capture/dc-capture.c")
+target_include_directories(lycansync-window-isolation-test PRIVATE "${LYCANSYNC_OBS_SOURCE}/plugins/win-capture")
 target_compile_features(lycansync-window-isolation-test PRIVATE cxx_std_20)
-target_compile_definitions(lycansync-window-isolation-test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_definitions(lycansync-window-isolation-test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN= NOMINMAX)
 target_compile_options(lycansync-window-isolation-test PRIVATE /utf-8)
 target_link_libraries(lycansync-window-isolation-test PRIVATE lycansync_libobs d3d11 dxgi user32 gdi32 windowsapp)
 set_target_properties(lycansync-window-isolation-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")
 add_subdirectory(audio-plugin)
 add_subdirectory(graphics-module)
+
+# 显式录像验证只编码合成画面，不接触真实采集来源，不进入安装包。
+add_executable(lycansync-recording-framing-test EXCLUDE_FROM_ALL tests/recording_framing.cpp src/recording.cpp src/recording_audio.cpp)
+target_compile_features(lycansync-recording-framing-test PRIVATE cxx_std_20)
+target_compile_definitions(lycansync-recording-framing-test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(lycansync-recording-framing-test PRIVATE /utf-8)
+target_link_libraries(lycansync-recording-framing-test PRIVATE lycansync_libobs d3d11 dxgi)
+set_target_properties(lycansync-recording-framing-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")
 
 # 只替换查询边界验证结束判定，不初始化 OBS、创建窗口或加载捕获插件。
 add_executable(lycansync-game-failure-tests EXCLUDE_FROM_ALL tests/game_failure.cpp)

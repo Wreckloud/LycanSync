@@ -26,30 +26,40 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
   const pending = ref(false);
   const changingSource = ref(false);
   let sourceChangeVersion = 0;
-  const now = ref(Date.now());
+  const now = ref(performance.now());
+  let elapsedAnchor: { id: string; at: number; seconds: number } | undefined;
   const active = computed(() => changingSource.value || state.value.holdingResources || state.value.continuing || ['starting', 'recording', 'stopping'].includes(state.value.phase));
   const busy = computed(() => changingSource.value || !settings.value || pending.value || (state.value.holdingResources && state.value.phase === 'failed') || state.value.continuing || ['starting', 'stopping'].includes(state.value.phase));
   const elapsed = computed(() => {
-    const seconds = Math.max(0, Math.floor((now.value - (state.value.startedAt ?? now.value)) / 1000));
-    return `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
+    const seconds = elapsedAnchor?.id === state.value.recordingId
+      ? Math.max(0, Math.floor(elapsedAnchor.seconds + (now.value - elapsedAnchor.at) / 1000)) : 0;
+    const hours = Math.floor(seconds / 3600);
+    return (hours ? hours + ':' : '') + `${(Math.floor(seconds / 60) % 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
   });
   let disposed = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let demandTrack: MediaStreamTrack | undefined;
   let voice: RecordingVoice | undefined;
   let stateRevision = 0;
+  let refreshing = false;
   const setState = (next: DesktopRecordingStatus) => {
     if (disposed) return;
     stateRevision++;
+    if (next.recordingId && next.startedAt !== null && elapsedAnchor?.id !== next.recordingId) {
+      now.value = performance.now();
+      elapsedAnchor = { id: next.recordingId, at: now.value, seconds: Math.max(0, (Date.now() - next.startedAt) / 1000) };
+    }
     state.value = next;
     if (next.error) notice.value = messages[next.error] ?? '录制未完成，请检查录像目录和诊断记录。';
   };
   const removeListener = desktop?.onRecordingState(setState);
   async function refresh() {
-    if (!desktop) return;
+    if (!desktop || refreshing) return;
+    refreshing = true;
     const version = stateRevision;
     try { const next = await desktop.getRecordingStatus(); if (version === stateRevision) setState(next); }
     catch { if (!disposed) notice.value = '暂时无法读取录制状态。'; }
+    finally { refreshing = false; }
   }
   async function load() {
     if (!desktop) return;
@@ -125,7 +135,12 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
   }
   watch(active, (value) => {
     if (timer) clearInterval(timer);
-    if (value) timer = setInterval(() => { now.value = Date.now(); void refresh(); }, 2000);
+    let ticks = 0;
+    if (value) timer = setInterval(() => {
+      now.value = performance.now();
+      // 时长每秒更新，文件状态仍低频读取；慢磁盘不能叠加未完成的查询。
+      if (++ticks % 2 === 0) void refresh();
+    }, 1000);
     else if (demandTrack) {
       void setNativeScreenRecordingDemand(demandTrack, false); demandTrack = undefined;
     }

@@ -710,7 +710,7 @@ describe('NativeScreenVideoSession', () => {
     expect(stopNativeVideo).toHaveBeenCalledWith('current-session');
   });
 
-  it('repeats monotonic pause hints on the live track and stops them on resume', async () => {
+  it('暂停提示沿宿主时钟递增，页面已运行较久时恢复仍保留真实帧间隔', async () => {
     vi.useFakeTimers();
     const target = installWindowMessageTarget();
     const frames: VideoFrame[] = [];
@@ -729,7 +729,7 @@ describe('NativeScreenVideoSession', () => {
         return () => {};
       },
     };
-    let now = 0;
+    let now = 10_000;
     const createSuspendedFrame = vi.fn((_width: number, _height: number, timestamp: number) => {
       const frame = Object.assign(createFrame(), { timestamp });
       pauseFrames.push(frame);
@@ -740,8 +740,8 @@ describe('NativeScreenVideoSession', () => {
       now: () => now,
       onError,
       createSuspendedFrame,
-      createAdjustedFrame: (_frame, init) => {
-        const adjusted = Object.assign(createFrame(), init);
+      createAdjustedFrame: (frame, init) => {
+        const adjusted = Object.assign({}, frame, init, { close: vi.fn() });
         adjustedFrames.push(adjusted);
         return adjusted;
       },
@@ -761,11 +761,14 @@ describe('NativeScreenVideoSession', () => {
     expect(createSuspendedFrame).not.toHaveBeenCalled();
     reportSuspension({ sessionId: 'window-session', suspended: true });
     await vi.waitFor(() => expect(frames).toHaveLength(2));
-    expect(createSuspendedFrame).toHaveBeenCalledWith(800, 500, 1_100_000, false);
+    expect(createSuspendedFrame).toHaveBeenCalledWith(800, 500, 100_001, false);
     await vi.waitFor(() => expect(pauseFrames[0].close).toHaveBeenCalledOnce());
-    await vi.advanceTimersByTimeAsync(2_000);
+    now = 11_000;
+    await vi.advanceTimersByTimeAsync(1_000);
+    now = 12_000;
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(frames).toHaveLength(4);
-    expect(pauseFrames.map((frame) => frame.timestamp)).toEqual([1_100_000, 2_100_000, 3_100_000]);
+    expect(pauseFrames.map((frame) => frame.timestamp)).toEqual([100_001, 1_100_000, 2_100_000]);
     expect(pauseFrames[1].timestamp).toBeGreaterThan(pauseFrames[0].timestamp!);
     expect(pauseFrames[2].timestamp).toBeGreaterThan(pauseFrames[1].timestamp!);
     const staleFrame = createFrame();
@@ -773,21 +776,26 @@ describe('NativeScreenVideoSession', () => {
     expect(staleFrame.close).toHaveBeenCalledOnce();
 
     reportSuspension({ sessionId: 'window-session', suspended: false });
-    now = 100;
+    now = 12_200;
     const resumedFrame = Object.assign(createFrame(), {
-      timestamp: 200_000, displayWidth: 1280, displayHeight: 720,
+      timestamp: 2_300_000, displayWidth: 1280, displayHeight: 720,
       visibleRect: { x: 0, y: 0, width: 800, height: 500 },
     });
     dispatchFrame(target, resumedFrame, 'window-session');
     await vi.waitFor(() => expect(frames).toHaveLength(5));
     expect(resumedFrame.close).toHaveBeenCalledOnce();
     expect(frames[4]).toBe(adjustedFrames[0]);
-    expect(adjustedFrames[0].timestamp).toBe(pauseFrames[2].timestamp! + 1);
+    expect(adjustedFrames[0].timestamp).toBe(2_300_000);
     expect(adjustedFrames[0].displayWidth).toBe(800);
     expect(adjustedFrames[0].displayHeight).toBe(500);
     expect(adjustedFrames).toHaveLength(1);
+    await vi.waitFor(() => expect(adjustedFrames[0].close).toHaveBeenCalledOnce());
+    const nextFrame = Object.assign(createFrame(), { timestamp: 2_333_333, displayWidth: 800, displayHeight: 500 });
+    dispatchFrame(target, nextFrame, 'window-session');
+    await vi.waitFor(() => expect(frames).toHaveLength(6));
+    expect(frames[5].timestamp! - frames[4].timestamp!).toBe(33_333);
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(frames).toHaveLength(5);
+    expect(frames).toHaveLength(6);
     expect(onError).not.toHaveBeenCalled();
     await session.stop();
   });

@@ -12,6 +12,7 @@ const props = withDefaults(defineProps<{
   view: UnwrapNestedRefs<ReturnType<typeof useScreenShareLayout>>;
   room: Room | null;
   revision: number;
+  recordingElapsed?: string;
   avatar: (identity: string) => string;
   listening: boolean;
   privateControl: (identity: string) => string;
@@ -63,7 +64,7 @@ function ratio(share: ViewedShare) { return ratios.value[share.key] ?? 16 / 9; }
 function tileStyle(share: ViewedShare) {
   const aspect = ratio(share);
   const tileWidth = focus.value ? width.value : sizing.value.width / (16 / 9) * aspect;
-  return { width: tileWidth + 'px', height: (focus.value ? height.value : tileWidth / aspect) + 'px', '--tile-ratio': aspect };
+  return { width: tileWidth + 'px', height: (focus.value ? height.value : tileWidth / aspect) + 'px' };
 }
 
 function elapsed(share: ViewedShare) {
@@ -168,6 +169,7 @@ onScopeDispose(() => {
               @click="select(share)" @keydown.enter.self.prevent="select(share)" @keydown.space.self.prevent="select(share)">
               <ParticipantCard :participant="share.participant" :revision="revision" variant="viewer"
                 :avatar="avatar(share.participant.identity)" :is-local="share.participant === room?.localParticipant"
+                :recording-elapsed="recordingElapsed"
                 :is-listening="listening" :input-blocked="true" :show-fullscreen="false"
                 :private-control="privateControl(share.participant.identity)" :view-quality="quality"
                 @video-size="videoSize(share.key, $event)" @notice="emit('notice', $event)" />
