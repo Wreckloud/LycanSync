@@ -15,6 +15,7 @@ async function renderAudioSettings(testState: 'idle' | 'listening' | 'stopping' 
       desktop: true, preferences, active: true, inputLevelPercent: 0,
       rtc: { status: 'idle', room: null, busySources: busy ? [Track.Source.Microphone] : [] } as unknown as
         UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>,
+      microphoneDevices: { devices: [], notice: '', changing: false, loading: false, refresh: async () => {}, select: async () => {} },
       microphoneTest: { state: testState, notice: '测试错误', inputLevelPercent: 45,
         start: async () => {}, stop: async () => {} },
     }));
@@ -25,7 +26,7 @@ describe('语音设置的本机试听入口', () => {
   it('没有房间也能开始试听，没有旧的先入房提示', async () => {
     const html = await renderAudioSettings();
     expect(html).toMatch(/<button[^>]*class="settings-button"[^>]*>开始试听<\/button>/);
-    expect(html.match(/<button[^>]*class="settings-button"[^>]*>/)?.[0]).not.toContain('disabled');
+    expect([...html.matchAll(/<button[^>]*class="settings-button"[^>]*>/g)].at(-1)?.[0]).not.toContain('disabled');
     expect(html).not.toContain('请先加入通话');
     expect(html).toContain('class="inline-feedback"');
     expect(html).toContain('测试错误');
@@ -38,12 +39,12 @@ describe('语音设置的本机试听入口', () => {
     expect(listening).toContain('aria-valuenow="45"');
     expect(listening).toContain('停止麦克风试听');
     const stopping = await renderAudioSettings('stopping');
-    expect(stopping.match(/<button[^>]*class="settings-button"[^>]*>/)?.[0]).toContain('disabled');
+    expect([...stopping.matchAll(/<button[^>]*class="settings-button"[^>]*>/g)].at(-1)?.[0]).toContain('disabled');
     expect(stopping).toContain('正在停止');
   });
 
   it('麦克风操作未完成时禁用新的测试启动', async () => {
     const html = await renderAudioSettings('idle', true);
-    expect(html.match(/<button[^>]*class="settings-button"[^>]*>/)?.[0]).toContain('disabled');
+    expect([...html.matchAll(/<button[^>]*class="settings-button"[^>]*>/g)].at(-1)?.[0]).toContain('disabled');
   });
 });

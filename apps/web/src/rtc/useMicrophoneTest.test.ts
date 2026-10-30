@@ -270,7 +270,7 @@ describe('独立麦克风测试', () => {
     const { test, scope } = setup(true);
     await test.start();
     await test.stop();
-    expect(test.notice.value).toContain('默认麦克风不可用');
+    expect(test.notice.value).toContain('所选麦克风不可用');
     expect(mocks.createTrack).not.toHaveBeenCalled();
     scope.stop();
   });

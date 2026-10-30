@@ -22,6 +22,7 @@ import { createGroup, updateGroup, findGroup, findGroupPresences, findGroups, ne
   type GroupDetail, type GroupMember, type GroupPresence, type GroupPresenceChangeCursor, type GroupSummary } from './group/groupApi';
 import { useRtcRoom } from './rtc/useRtcRoom';
 import { useMicrophoneTest } from './rtc/useMicrophoneTest';
+import { useMicrophoneDevices } from './rtc/useMicrophoneDevices';
 import { useRecording } from './recording/useRecording';
 import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, readScreenShareQuality, saveScreenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from './rtc/screenShareQuality';
 import { canSelectNativeSource, readScreenShareAudioPreference, saveScreenShareAudioPreference,
@@ -359,6 +360,7 @@ async function changeScreenShareAudio(enabled: boolean) {
   catch { viewerNotice.value = '本次音频设置已生效，但无法保存到本机。'; }
 }
 const rtc = reactive(useRtcRoom({
+  inputDeviceId: audioPreferences.inputDeviceId.value,
   screenShareQuality: captureQuality.value,
   customScreenShareQuality: captureCustomQuality.value,
   inputGain: inputGain.value,
@@ -386,6 +388,18 @@ const microphoneTest = reactive(useMicrophoneTest({
     if (rtc.status !== 'connected' || !rtc.microphoneEnabled) return undefined;
     const publication = rtc.room?.localParticipant.getTrackPublication(Track.Source.Microphone);
     return publication && !publication.isMuted ? publication.track?.mediaStreamTrack : undefined;
+  },
+}));
+
+const microphoneDevices = reactive(useMicrophoneDevices({
+  preferences: audioPreferences,
+  desktop,
+  stopTest: () => microphoneTest.stop(),
+  changeInput: (deviceId) => rtc.setMicrophoneDeviceId(deviceId),
+  inputLost: async () => {
+    const room = rtc.room;
+    await rtc.setMediaEnabled(Track.Source.Microphone, false);
+    if (room && rtc.room === room) rtc.notice = '所选麦克风已断开，已停止发声。请检查设备或在语音设置中重新选择。';
   },
 }));
 
@@ -1440,7 +1454,7 @@ function participantListening(participant: Participant) {
       :audio-shortcuts="audioShortcuts" :call-sound-preferences="callSoundPreferences" :call-sounds="callSounds"
       :overlay="desktop ? voiceOverlay : undefined"
       :presence-status="publicPresenceStatus" :presence-label="personalPresenceLabel"
-      :recording="recording" :preferences="audioPreferences" :rtc="rtc" :microphone-test="microphoneTest" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
+      :recording="recording" :preferences="audioPreferences" :rtc="rtc" :microphone-test="microphoneTest" :microphone-devices="microphoneDevices" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
       :activity="currentActivity" :activity-status="personalActivityStatus" :show-activity="showActivity" :activity-error="activityVisibilityError"
       :activity-mappings="activityMappings"
       @activity-visibility="setShowActivity"

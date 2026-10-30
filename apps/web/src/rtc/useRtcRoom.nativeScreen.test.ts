@@ -146,13 +146,13 @@ vi.mock('./nativeMicrophoneAudio', () => ({
     private sessionId = '';
     private starting?: Promise<unknown>;
     private stopping?: Promise<void>;
-    constructor(private readonly desktop: Window['lycanDesktop'], options: { onError?: (code: string) => void }) {
+    constructor(private readonly desktop: Window['lycanDesktop'], private readonly options: { deviceId?: string; onError?: (code: string) => void }) {
       rtcMocks.microphoneInstances.push(this);
       if (options.onError) rtcMocks.nativeMicrophoneError.mockImplementation(options.onError);
     }
     async start(sessionId: string, settings: unknown) {
       this.sessionId = sessionId;
-      this.starting = this.desktop!.startNativeMicrophone(sessionId, settings as never);
+      this.starting = this.desktop!.startNativeMicrophone(sessionId, settings as never, this.options.deviceId ?? 'default');
       await this.starting;
       return this.track as never;
     }
@@ -2604,6 +2604,7 @@ describe('native screen share wiring', () => {
     });
     const scope = effectScope();
     const rtc = scope.run(() => useRtcRoom({
+      inputDeviceId: 'mic-one',
       inputGain: 0.8,
       processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true },
     }))!;
@@ -2614,10 +2615,19 @@ describe('native screen share wiring', () => {
         inputGain: 0.8, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true,
       });
       expect(rtcMocks.published).toHaveBeenCalledWith(expect.anything(), { source: Track.Source.Microphone });
+      expect(rtcMocks.microphoneStarted.mock.calls[0][2]).toBe('mic-one');
+      await rtc.setMicrophoneDeviceId('mic-two');
+      expect(rtcMocks.microphoneStopped).toHaveBeenCalledOnce();
+      expect(rtcMocks.microphoneStarted.mock.calls.at(-1)?.[2]).toBe('mic-two');
+      expect(rtc.microphoneEnabled.value).toBe(true);
+      expect(rtc.microphoneIntent.value).toBe(true);
       rtc.setMicrophoneInputGain(0.5);
       expect(rtcMocks.microphoneConfigured).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ inputGain: 0.5 }));
       await rtc.toggleMedia(Track.Source.Microphone);
-      expect(rtcMocks.microphoneStopped).toHaveBeenCalledOnce();
+      expect(rtcMocks.microphoneStopped).toHaveBeenCalledTimes(2);
+      await rtc.setMicrophoneDeviceId('mic-three');
+      expect(rtcMocks.microphoneStarted).toHaveBeenCalledTimes(2);
+      expect(rtc.microphoneEnabled.value).toBe(false);
     } finally {
       scope.stop();
     }

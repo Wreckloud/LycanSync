@@ -7,6 +7,7 @@ import type { AuthUser, ProfileUpdate } from '../auth/authApi';
 import type { useAudioPreferences } from '../rtc/useAudioPreferences';
 import type { useRtcRoom } from '../rtc/useRtcRoom';
 import type { useMicrophoneTest } from '../rtc/useMicrophoneTest';
+import type { useMicrophoneDevices } from '../rtc/useMicrophoneDevices';
 import type { useDiagnosticReport } from '../diagnostics/useDiagnosticReport';
 import type { useActivityMappings } from '../settings/useActivityMappings';
 import type { useVoiceOverlay } from '../overlay/useVoiceOverlay';
@@ -44,6 +45,7 @@ const props = defineProps<{
   preferences: ReturnType<typeof useAudioPreferences>;
   rtc: UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>;
   microphoneTest: UnwrapNestedRefs<ReturnType<typeof useMicrophoneTest>>;
+  microphoneDevices: UnwrapNestedRefs<ReturnType<typeof useMicrophoneDevices>>;
   diagnosticReport: ReturnType<typeof useDiagnosticReport>;
   inputLevelPercent: number;
   activity: UserActivity | null;
@@ -134,7 +136,7 @@ async function leaveSettings(logout: boolean) {
           <AccountSettings :active="activeSection === 'account'" :leaving="leaving" @logout="requestLogout" />
         </div>
         <AudioSettings v-show="activeSection === 'audio'" :active="activeSection === 'audio'"
-          :desktop="desktop" :preferences="preferences" :rtc="rtc" :microphone-test="microphoneTest"
+          :desktop="desktop" :preferences="preferences" :rtc="rtc" :microphone-test="microphoneTest" :microphone-devices="microphoneDevices"
           :input-level-percent="inputLevelPercent" />
         <SoundSettings v-show="activeSection === 'sound'" :user-id="user.id" :active="activeSection === 'sound'"
           :preferences="callSoundPreferences" :sounds="callSounds" />

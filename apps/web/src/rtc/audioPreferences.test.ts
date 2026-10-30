@@ -22,6 +22,7 @@ describe('audioPreferences', () => {
   it('按当前账号保存总音量、处理开关和成员音量', () => {
     const storage = memoryStorage();
     expect(saveAudioPreferences('local-user', {
+      inputDeviceId: 'default',
       inputGain: 1.25,
       outputVolume: 0.8,
       screenShareVolume: 0.65,
@@ -35,6 +36,7 @@ describe('audioPreferences', () => {
     }, storage)).toBe(true);
 
     expect(loadAudioPreferences('local-user', storage)).toEqual({
+      inputDeviceId: 'default',
       inputGain: 1.25,
       outputVolume: 0.8,
       screenShareVolume: 0.65,

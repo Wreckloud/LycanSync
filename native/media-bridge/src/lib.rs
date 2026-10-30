@@ -7,6 +7,9 @@ use napi::{Error, Result, Status};
 mod audio_hotkeys;
 
 #[cfg(target_os = "windows")]
+mod audio_devices;
+
+#[cfg(target_os = "windows")]
 mod windows_bridge {
     use super::*;
     use std::path::Path;

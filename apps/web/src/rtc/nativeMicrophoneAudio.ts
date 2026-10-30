@@ -16,7 +16,7 @@ export interface NativeMicrophoneChunk {
 }
 
 export interface NativeMicrophoneDesktopBridge {
-  startNativeMicrophone(sessionId: string, settings: NativeMicrophoneSettings): Promise<{
+  startNativeMicrophone(sessionId: string, settings: NativeMicrophoneSettings, deviceId: string): Promise<{
     sampleRate: 48000; channels: 1; bitsPerSample: 32; nominalChunkMs: 10;
   }>;
   configureNativeMicrophone(sessionId: string, settings: NativeMicrophoneSettings): Promise<{ changed: boolean }>;
@@ -27,6 +27,7 @@ export interface NativeMicrophoneDesktopBridge {
 }
 
 interface NativeMicrophoneOptions {
+  deviceId?: string;
   onError?: (code: string) => void;
   createContext?: (sampleRate: number) => AudioContext;
   createWorkletNode?: (context: AudioContext) => AudioWorkletNode;
@@ -49,11 +50,13 @@ export class NativeMicrophoneAudioSession {
   private started = false;
   private droppedChunks = 0;
   private readonly onError?: (code: string) => void;
+  private readonly inputDeviceId: string;
   private readonly createContext: (sampleRate: number) => AudioContext;
   private readonly createWorkletNode: (context: AudioContext) => AudioWorkletNode;
   private readonly createLocalTrack: (track: MediaStreamTrack, context: AudioContext) => LocalAudioTrack;
 
   constructor(private readonly desktop: NativeMicrophoneDesktopBridge, options: NativeMicrophoneOptions = {}) {
+    this.inputDeviceId = options.deviceId ?? 'default';
     this.onError = options.onError;
     this.createContext = options.createContext ?? ((sampleRate) => new AudioContext({ sampleRate }));
     this.createWorkletNode = options.createWorkletNode ?? ((context) => new AudioWorkletNode(context,
@@ -107,7 +110,7 @@ export class NativeMicrophoneAudioSession {
       await this.context.resume();
       if (this.stopped) throw new Error('microphoneSessionStopped');
       this.track = this.createLocalTrack(destination.stream.getAudioTracks()[0], this.context);
-      this.nativeStartCommand = this.desktop.startNativeMicrophone(sessionId, settings);
+      this.nativeStartCommand = this.desktop.startNativeMicrophone(sessionId, settings, this.inputDeviceId);
       await this.nativeStartCommand;
       this.started = true;
       if (this.stopped) throw new Error('microphoneSessionStopped');
