@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { Fullscreen, HeadphoneOff, Headphones, MicOff, MousePointer2 } from '@lucide/vue';
+import { Circle, Fullscreen, HeadphoneOff, Headphones, MicOff, MousePointer2 } from '@lucide/vue';
 import { Track, VideoQuality, type Participant, type RemoteTrackPublication } from 'livekit-client';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, normalizeAudioVolume } from '../rtc/audioPreferences';
 import VoiceLevelMic from './VoiceLevelMic.vue';
@@ -13,6 +13,7 @@ const props = withDefaults(defineProps<{
   participant: Participant;
   revision: number;
   isLocal: boolean;
+  recordingElapsed?: string;
   isListening: boolean | null;
   localMicrophoneEnabled?: boolean;
   avatar?: string;
@@ -360,6 +361,9 @@ onBeforeUnmount(() => {
         <img v-if="avatar" :src="avatar" alt="" />
         <template v-else>{{ media.name.slice(0, 1) }}</template>
       </div>
+      <span v-if="isLocal && recordingElapsed" class="recording-indicator" :aria-label="'正在录制 ' + recordingElapsed" title="正在录制">
+        <Circle :size="10" fill="currentColor" aria-hidden="true" /><time>{{ recordingElapsed }}</time>
+      </span>
       <div v-if="variant === 'card' && !isLocal && (remoteControlAvailable || media.sharing && shareAudio)" class="participant-share-actions" @click.stop @keydown.stop>
         <button v-if="media.sharing && !isLocal && shareAudio" type="button" class="viewer-action"
           :disabled="!shareAudioListening" :aria-label="shareMuted ? '恢复这路共享声音' : '静音这路共享声音'"
@@ -427,6 +431,8 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.recording-indicator { position: absolute; top: 8px; right: 8px; z-index: 1; display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px; border-radius: 4px; background: #0b0f14cc; color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; line-height: 16px; pointer-events: none; }
+.recording-indicator svg { color: var(--danger); flex-shrink: 0; }
 .private-control-placeholder { display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 12px; text-align: center; }
 .private-control-placeholder small { font-size: 12px; }
 </style>

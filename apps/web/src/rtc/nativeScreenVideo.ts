@@ -45,7 +45,6 @@ interface NativeScreenVideoOptions {
 
 const FIRST_FRAME_TIMEOUT_MS = 8_000;
 const SUSPENDED_HINT_INTERVAL_MS = 1_000;
-const SUSPENDED_HINT_TIMESTAMP_STEP_US = SUSPENDED_HINT_INTERVAL_MS * 1_000;
 const DEMAND_CHECK_INTERVAL_MS = 500;
 const THUMBNAIL_DEMAND_DELAY_MS = 3_000;
 
@@ -110,6 +109,7 @@ export class NativeScreenVideoSession {
   private pendingFrame?: VideoFrame;
   private pendingFrameSessionId?: string;
   private lastTimestamp = Number.NEGATIVE_INFINITY;
+  private timestampClock?: { localMicros: number; frameMicros: number; offset: number };
   private frameWidth = 1280;
   private frameHeight = 720;
   private suspended = false;
@@ -480,7 +480,12 @@ export class NativeScreenVideoSession {
       }
     }
     if (Number.isFinite(frame.timestamp)) {
-      const timestamp = Math.max(frame.timestamp!, this.lastTimestamp + 1);
+      if (!this.timestampClock) {
+        const aligned = Math.max(frame.timestamp!, this.lastTimestamp + 1);
+        this.timestampClock = { localMicros: Math.round(this.now() * 1000), frameMicros: aligned,
+          offset: aligned - frame.timestamp! };
+      }
+      const timestamp = Math.max(frame.timestamp! + this.timestampClock.offset, this.lastTimestamp + 1);
       if (timestamp !== frame.timestamp) init.timestamp = timestamp;
     }
     if (init.displayWidth !== undefined || init.timestamp !== undefined) {
@@ -521,7 +526,11 @@ export class NativeScreenVideoSession {
     const scale = Math.min(1, this.resolution.width / this.frameWidth, this.resolution.height / this.frameHeight);
     const width = Math.max(1, Math.round(this.frameWidth * scale));
     const height = Math.max(1, Math.round(this.frameHeight * scale));
-    const timestamp = Math.max(Math.round(this.now() * 1000), this.lastTimestamp + SUSPENDED_HINT_TIMESTAMP_STEP_US);
+    // 提示帧沿用当前宿主帧的时钟；页面运行时长不能让恢复画面跳到未来。
+    const localMicros = Math.round(this.now() * 1000);
+    const frameMicros = this.timestampClock
+      ? this.timestampClock.frameMicros + Math.max(0, localMicros - this.timestampClock.localMicros) : localMicros;
+    const timestamp = Math.max(frameMicros, this.lastTimestamp + 1);
     try {
       this.writeFrame(this.createSuspendedFrame(width, height, timestamp,
         Boolean(this.gameFollowId && (this.gameTargetClosed || this.gameSourceChanging))));
@@ -596,6 +605,7 @@ export class NativeScreenVideoSession {
         throw error;
       });
       this.sessionId = started.sessionId;
+      this.timestampClock = undefined;
       if (this.stopped) return;
       if (started.changed !== true || !started.sessionId || started.gameFollowId !== id) throw new Error('nativeGameFollowUnavailable');
       this.sourceId = next.sourceId;

@@ -15,13 +15,15 @@ public:
   using Emit = std::function<void(std::string_view, std::string_view, std::string_view)>;
   RecordingOutput(std::string plugin_directory, std::string data_directory, Emit emit);
   ~RecordingOutput();
-  bool start(std::string id, std::string path, bool voices);
+  bool start(std::string id, std::string path, bool voices, obs_source_t *source);
   void stop();
   bool shutdown();
   bool active() const;
   void poll();
   uint64_t bytes() const;
   uint64_t frames() const;
+  uint32_t width() const;
+  uint32_t height() const;
 
 private:
   std::string plugin_directory_, data_directory_, id_;
@@ -29,6 +31,9 @@ private:
   obs_output_t *output_ = nullptr;
   obs_encoder_t *video_ = nullptr;
   obs_encoder_t *audio_ = nullptr;
+  obs_view_t *view_ = nullptr;
+  obs_scene_t *scene_ = nullptr;
+  uint32_t width_ = 0, height_ = 0;
   std::atomic<bool> running_ = false;
   std::mutex mutex_;
   std::condition_variable stopped_;

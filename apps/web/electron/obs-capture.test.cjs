@@ -2,14 +2,15 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { spawn, execFileSync } = require('node:child_process');
 const { existsSync } = require('node:fs');
-const { mkdtemp } = require('node:fs/promises');
+const { mkdir, mkdtemp } = require('node:fs/promises');
 const { once } = require('node:events');
 const { resolve, join } = require('node:path');
-const { tmpdir } = require('node:os');
 const { randomUUID } = require('node:crypto');
 const { ObsCaptureHostManager } = require('./obs-capture-host.cjs');
 const deviceTestSkip = process.env.LYCANSYNC_RUN_OBS_CAPTURE_TEST === '1' ? false
   : '真实显示器及插件系统副作用测试需获得授权后设置 LYCANSYNC_RUN_OBS_CAPTURE_TEST=1';
+const windowOnly = ['LYCANSYNC_CAPTURE_WINDOW_CHECK', 'LYCANSYNC_CAPTURE_GAME_CHECK', 'LYCANSYNC_CAPTURE_APPLICATION_CHECK']
+  .some(name => process.env[name] === '1');
 
 function primaryMonitorName() {
   return execFileSync('powershell.exe', ['-NoProfile', '-Command',
@@ -17,7 +18,8 @@ function primaryMonitorName() {
   { encoding: 'utf8', windowsHide: true }).trim();
 }
 
-test('OBS 真实宿主固定三槽背压、恢复和正常停止，不含 Electron 导入验收', { skip: deviceTestSkip, timeout: 35_000 }, async (context) => {
+test('OBS 真实宿主固定三槽背压、恢复和正常停止，不含 Electron 导入验收',
+  { skip: windowOnly ? '本次为窗口测试，不采集显示器' : deviceTestSkip, timeout: 35_000 }, async (context) => {
   assert.equal(process.platform, 'win32');
   const prepared = resolve(__dirname, '../../../release/build-cache/obs-32.2.2/prepared');
   const failures = [], diagnostics = [];
@@ -101,7 +103,9 @@ test('OBS 真实来源纹理经生产入口到页面轨道，重复停止及故�
   await build({ configFile: false, root: resolve(__dirname, 'obs-capture-smoke'), base: './',
     build: { outDir: resolve(projectRoot, 'release/build-cache/obs-32.2.2/smoke-page'), emptyOutDir: false,
       rollupOptions: { input: resolve(__dirname, 'obs-capture-smoke/renderer.html') } } });
-  const profile = await mkdtemp(join(tmpdir(), 'lycan-obs-capture-test-'));
+  const testCache = resolve(projectRoot, 'release/test-cache');
+  await mkdir(testCache, { recursive: true });
+  const profile = await mkdtemp(join(testCache, 'lycan-obs-capture-test-'));
   const child = spawn(require('electron'), [`--user-data-dir=${profile}`, resolve(__dirname, 'obs-capture-smoke/main.cjs'), monitor],
     { cwd: resolve(__dirname, '..'), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   const output = [], errors = [];
@@ -140,12 +144,20 @@ test('OBS 真实来源纹理经生产入口到页面轨道，重复停止及故�
       assert.deepEqual(result.cases.map((entry) => entry.mode).sort(), ['browser-main', 'browser-popup'], details);
       assert.ok(result.cases.every((entry) => entry.freshPixelsChecked && entry.hostRetained), details);
     }
+    if (process.env.LYCANSYNC_CAPTURE_APPLICATION_CHECK === '1' && process.env.LYCANSYNC_CAPTURE_APPLICATION_WINDOW_ID) {
+      assert.equal(result.cases[0].occlusionChecked, true, details);
+    }
     if (process.env.LYCANSYNC_CAPTURE_WINDOW_CHECK === '1' || process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1') {
       assert.equal(result.cases[0].mode, process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1' ? 'controlled-d3d-game' : 'window', details);
+      assert.equal(result.cases[0].actualMethod, process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1' ? 'game'
+        : process.env.LYCANSYNC_CAPTURE_WINDOW_WGC === '1' ? 'wgc-window' : 'bitblt-window', details);
       assert.deepEqual(result.cases[0].windowActions,
         ['same-title', 'rename-and-refresh', 'minimize', 'restore', 'stop-and-reopen', 'close-without-takeover'], details);
       assert.equal(result.cases[0].pixelsChecked, true, details);
       assert.equal(result.cases[0].diagnosticsChecked, true, details);
+      if (process.env.LYCANSYNC_CAPTURE_WINDOW_MIXED === '1') {
+        assert.deepEqual(result.cases[0].methodSwitches, ['bitblt-window', 'wgc-window', 'bitblt-window'], details);
+      }
       assert.deepEqual(result.cases[0].frameRateChanges.map((entry) => entry.targetFps), [120, 30, 60, 30, 60], details);
       assert.ok(result.cases[0].frameRateChanges.every((entry) => entry.freshPixelsChecked), details);
     }

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <thread>
+#include <charconv>
 
 namespace {
 HWND g_target = nullptr;
@@ -44,6 +45,16 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM word, LPARAM para
         UpdateWindow(g_target);
         event = "colorChanged";
         break;
+      case 7: {
+        RECT client{}; POINT center{};
+        if (!GetClientRect(g_target, &client)) return 0;
+        center.x = client.right / 2; center.y = client.bottom / 2;
+        if (!ClientToScreen(g_target, &center)) return 0;
+        const auto cover = GetAncestor(WindowFromPoint(center), GA_ROOT);
+        std::cout << "{\"event\":\"coverChecked\",\"receiverCoversTarget\":"
+                  << (cover == reinterpret_cast<HWND>(parameter) ? "true" : "false") << "}\n" << std::flush;
+        return 0;
+      }
     }
     std::cout << "{\"event\":\"" << event << "\"}\n" << std::flush;
     return 0;
@@ -52,26 +63,43 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM word, LPARAM para
 }
 }  // namespace
 
-int wmain() {
+int wmain(int argc, wchar_t **argv) {
+  const bool wgc = argc == 2 && std::wstring_view(argv[1]) == L"--wgc";
+  const bool mixed = argc == 2 && std::wstring_view(argv[1]) == L"--mixed";
+  if (argc != 1 && !wgc && !mixed) return 2;
   const auto instance = GetModuleHandleW(nullptr);
   WNDCLASSW window_class{};
   window_class.hInstance = instance;
   window_class.lpfnWndProc = window_proc;
-  window_class.lpszClassName = L"LycanSyncObsCaptureTest";
-  if (!RegisterClassW(&window_class)) return 1;
+  window_class.lpszClassName = wgc ? L"Chrome_WidgetWin_LycanSyncObsCaptureTest" : L"LycanSyncObsCaptureTest";
+  if (!RegisterClassW(&window_class)) { std::cerr << "testWindowClassFailed:" << GetLastError() << '\n'; return 1; }
+  if (mixed) {
+    window_class.lpszClassName = L"Chrome_WidgetWin_LycanSyncObsCaptureTest";
+    if (!RegisterClassW(&window_class)) { std::cerr << "testWindowClassFailed:" << GetLastError() << '\n'; return 1; }
+  }
   // 两个同名窗口分属同一进程；只绘制受控色块，不接入真实应用或媒体设备。
-  g_target = CreateWindowExW(0, window_class.lpszClassName, L"LycanSync selected window test", WS_OVERLAPPEDWINDOW,
+  g_target = CreateWindowExW(0, wgc ? L"Chrome_WidgetWin_LycanSyncObsCaptureTest" : L"LycanSyncObsCaptureTest",
+                            L"LycanSync selected window test", WS_OVERLAPPEDWINDOW,
                             80, 120, 420, 310, nullptr, nullptr, instance, nullptr);
   g_other = CreateWindowExW(0, window_class.lpszClassName, L"LycanSync selected window test", WS_OVERLAPPEDWINDOW,
                            540, 120, 420, 310, nullptr, nullptr, instance, reinterpret_cast<void *>(1));
-  if (!g_target || !g_other) return 1;
+  if (!g_target || !g_other) { std::cerr << "testWindowCreateFailed:" << GetLastError() << '\n'; return 1; }
+  std::cerr << "test-window: created\n";
   ShowWindow(g_target, SW_SHOWNOACTIVATE);
   ShowWindow(g_other, SW_SHOWNOACTIVATE);
+  std::cerr << "test-window: shown\n";
   std::cout << "{\"event\":\"ready\",\"windowId\":\"" << reinterpret_cast<uintptr_t>(g_target)
             << "\",\"otherWindowId\":\"" << reinterpret_cast<uintptr_t>(g_other) << "\"}\n" << std::flush;
   std::thread reader([] {
     std::string command;
     while (std::getline(std::cin, command)) {
+      if (command.starts_with("check-cover:")) {
+        uintptr_t cover = 0;
+        const auto parsed = std::from_chars(command.data() + 12, command.data() + command.size(), cover);
+        if (parsed.ec == std::errc{} && parsed.ptr == command.data() + command.size() && cover)
+          PostMessageW(g_other, kCommand, 7, static_cast<LPARAM>(cover));
+        continue;
+      }
       const WPARAM code = command == "rename" ? 1 : command == "minimize" ? 2 : command == "restore" ? 3
           : command == "close" ? 4 : command == "quit" ? 5 : command == "toggle-color" ? 6 : 0;
       if (code) PostMessageW(g_other, kCommand, code, 0);

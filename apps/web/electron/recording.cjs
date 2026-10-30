@@ -104,12 +104,13 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
         }
         if (active !== current || current.phase !== 'starting' || getVideo() !== video) throw new Error('recordingShareUnavailable');
         current.hostStarted = true;
-        await host.startRecording(current.videoSessionId, current.id, current.path, current.options.applicationAudio,
+        const started = await host.startRecording(current.videoSessionId, current.id, current.path, current.options.applicationAudio,
           current.options.microphone || current.options.friends);
         if (active !== current || current.phase !== 'starting') throw new Error('recordingShareUnavailable');
         if (current.hostEnded) throw new Error(current.error ?? 'recordingWriteFailed');
         current.phase = 'recording'; current.startedAt = Date.now();
         onDiagnostic({ stage: 'recordingStarted', applicationAudio: current.options.applicationAudio,
+          width: started?.width, height: started?.height,
           microphone: current.options.microphone, friends: current.options.friends }); publish(); return snapshot();
       } catch (error) {
         const cancelled = current.phase === 'stopping' && !current.error;

@@ -209,7 +209,7 @@ class ObsCaptureHostManager {
     if (event.event === 'captureRejected') {
       if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
       if (this.state !== state || (!state.startReject && !state.stopRequested) || event.sessionId !== state.videoSessionId
-          || !['captureBorderUnsupported', 'captureBorderAccessDenied', 'captureSettingsUnsupported', 'captureMethodNotIsolated'].includes(event.code)) {
+          || !['captureBorderUnsupported', 'captureBorderAccessDenied', 'captureSettingsUnsupported'].includes(event.code)) {
         failState(state, new Error('obsCaptureProtocolEventInvalid'));
         return;
       }
@@ -234,12 +234,14 @@ class ObsCaptureHostManager {
         'recordingHardwareEncoderUnavailable', 'recordingEncoderStartFailed', 'recordingAudioEncoderUnavailable',
         'recordingOutputUnavailable', 'recordingApplicationAudioUnavailable', 'recordingVoiceUnavailable', 'recordingDiskFull', 'recordingWriteFailed'];
       if ((event.code !== undefined && !codes.includes(event.code))
+          || (event.event === 'recordingStarted' && [event.width, event.height].some(value => value !== undefined
+            && (!Number.isInteger(value) || value < 1 || value > 16384)))
           || (event.event === 'recordingStopped' && (!Number.isSafeInteger(event.outputFrames) || event.outputFrames < 0))) {
         failState(state, new Error('obsCaptureProtocolEventInvalid')); return;
       }
       if (event.event === 'recordingStarted') {
         clearTimeout(recording.startTimer);
-        recording.resolveStart({ changed: true });
+        recording.resolveStart({ changed: true, width: event.width, height: event.height });
       } else {
         clearTimeout(recording.startTimer); clearTimeout(recording.stopTimer);
         recording.rejectStart(new Error(event.code || 'recordingStopped'));
@@ -286,7 +288,7 @@ class ObsCaptureHostManager {
       if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
       const method = event.captureMethod;
       const expectedMethods = state.captureKind === 'monitor' ? ['dxgi'] : state.captureKind === 'game' ? ['game']
-        : ['wgc-window'];
+        : ['bitblt-window', 'wgc-window'];
       if (this.state !== state || event.sessionId !== state.videoSessionId
           || !['configured', 'rendering', 'sourceReady', 'gpuDelayed'].includes(event.stage) || !expectedMethods.includes(method)
           || (state.captureMethod && state.captureMethod !== method)
@@ -353,8 +355,8 @@ class ObsCaptureHostManager {
     if (event.event === 'sharedTextureFrame') {
       if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
       if (state.failed || state.closed) return;
-      if (state.captureKind === 'window' && state.captureMethod !== 'wgc-window') {
-        failState(state, new Error('captureMethodNotIsolated')); return;
+      if (state.captureKind === 'window' && !['bitblt-window', 'wgc-window'].includes(state.captureMethod)) {
+        failState(state, new Error('obsCaptureProtocolEventInvalid')); return;
       }
       if (this.state !== state || state.closed || !validFrameEvent(event, state.videoSessionId)) {
         failState(state, new Error('obsCaptureFrameInvalid'));

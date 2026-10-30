@@ -361,6 +361,8 @@ bool window_delivery_allowed(obs_source_t *source) {
 
 void render_shared_frame(void *parameter) {
   const std::lock_guard<std::mutex> render_lock(g_render_mutex);
+  // libobs 对录像辅助视图也调用此回调，只交付共享主画布，避免重复提交与错误计数。
+  if (gs_get_render_target() != obs_get_main_texture()) return;
   if (g_host.texture_setup_failed || g_host.configuration_paused) return;
   ++g_host.rendered_frames;
   auto *capture_source = static_cast<obs_source_t *>(parameter);
@@ -767,8 +769,7 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
   video.base_height = g_host.output_height;
   video.output_width = g_host.output_width;
   video.output_height = g_host.output_height;
-  video.output_format = VIDEO_FORMAT_NV12;
-  video.colorspace = VIDEO_CS_709;
+  video.output_format = VIDEO_FORMAT_BGRA;
   video.gpu_conversion = true;
   video.colorspace = VIDEO_CS_SRGB;
   video.range = VIDEO_RANGE_PARTIAL;
@@ -802,8 +803,7 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
   if (!source) {
     if (std::string_view(source_error) == "captureBorderUnsupported"
         || std::string_view(source_error) == "captureBorderAccessDenied"
-        || std::string_view(source_error) == "captureSettingsUnsupported"
-        || std::string_view(source_error) == "captureMethodNotIsolated") {
+        || std::string_view(source_error) == "captureSettingsUnsupported") {
       g_host.selection_rejection = source_error;
       return 4;
     }
@@ -865,6 +865,7 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
                   << "\",\"recordingId\":\"" << id << "\"";
         if (!code.empty()) std::cout << ",\"code\":\"" << code << "\"";
         if (event == "recordingStopped") std::cout << ",\"outputFrames\":" << recording.frames();
+        if (event == "recordingStarted") std::cout << ",\"width\":" << recording.width() << ",\"height\":" << recording.height();
         std::cout << "}\n" << std::flush;
       });
   std::string command;
@@ -899,7 +900,7 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
         const std::lock_guard<std::mutex> lock(g_output_mutex);
         std::cout << "{\"event\":\"recordingFailed\",\"sessionId\":\"" << g_host.session_id
                   << "\",\"recordingId\":\"" << id << "\",\"code\":\"recordingApplicationAudioUnavailable\"}\n" << std::flush;
-      } else recording.start(id, path, audio[1] == '1');
+      } else recording.start(id, path, audio[1] == '1', source);
       continue;
     }
     if (command == "recordStop") { recording.stop(); continue; }

@@ -50,6 +50,15 @@ test('没有共享时明确失败，不打开音频或建立录像文件', async
   assert.equal(f.calls.length, 0);
 });
 
+test('开始日志保留宿主确认的录像尺寸，不把共享画布当作实际编码尺寸', async context => {
+  const f = await fixture(context, { host: { startRecording: async () => ({ width: 1220, height: 786 }) } });
+  await f.recording.start();
+  const started = f.diagnostics.find(entry => entry.stage === 'recordingStarted');
+  assert.equal(started.width, 1220);
+  assert.equal(started.height, 786);
+  await f.recording.stop();
+});
+
 test('两个可选人声开关独立保存，录制只增加一个 PCM 消费者', async context => {
   const f = await fixture(context);
   await f.recording.configure({ applicationAudio: false, microphone: false, friends: true });
