@@ -120,6 +120,15 @@ interface StartupUpdateState {
 }
 
 interface Window {
+  lycanAudioShortcuts?: {
+    begin(): Promise<string>;
+    configure(owner: string, bindings: import('./settings/useAudioShortcuts').AudioShortcutBindings): Promise<void>;
+    activate(owner: string, roomId: string | null): Promise<void>;
+    capture(owner: string, enabled: boolean): Promise<void>;
+    end(owner: string): Promise<void>;
+    onAction(callback: (event: { owner: string; roomId: string; action: 'microphone' | 'listening' }) => void): () => void;
+    onError(callback: (event: { owner: string; message: string }) => void): () => void;
+  };
   lycanViewerWindow?: {
     ready(): Promise<import('./viewing/viewerPage').ViewerWindowState>;
     setPinned(enabled: boolean): Promise<import('./viewing/viewerPage').ViewerWindowState>;

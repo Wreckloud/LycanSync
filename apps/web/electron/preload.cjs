@@ -1,5 +1,23 @@
 const { contextBridge, ipcRenderer, sharedTexture } = require('electron');
 
+if (process.platform === 'win32') contextBridge.exposeInMainWorld('lycanAudioShortcuts', {
+  begin: () => ipcRenderer.invoke('audio-shortcuts:begin'),
+  configure: (owner, bindings) => ipcRenderer.invoke('audio-shortcuts:configure', owner, bindings),
+  activate: (owner, roomId) => ipcRenderer.invoke('audio-shortcuts:activate', owner, roomId),
+  capture: (owner, enabled) => ipcRenderer.invoke('audio-shortcuts:capture', owner, enabled),
+  end: owner => ipcRenderer.invoke('audio-shortcuts:end', owner),
+  onAction: callback => {
+    const listener = (_event, action) => callback(action);
+    ipcRenderer.on('audio-shortcuts:action', listener);
+    return () => ipcRenderer.removeListener('audio-shortcuts:action', listener);
+  },
+  onError: callback => {
+    const listener = (_event, error) => callback(error);
+    ipcRenderer.on('audio-shortcuts:error', listener);
+    return () => ipcRenderer.removeListener('audio-shortcuts:error', listener);
+  },
+});
+
 contextBridge.exposeInMainWorld('lycanVoiceOverlay', {
   begin: () => ipcRenderer.invoke('voice-overlay:begin'),
   configure: (owner, settings) => ipcRenderer.invoke('voice-overlay:configure', owner, settings),

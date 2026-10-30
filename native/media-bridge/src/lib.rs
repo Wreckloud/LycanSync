@@ -1,7 +1,10 @@
-//! Electron 原生桥：验证 helper 身份后复制共享纹理句柄，并管理本地副本生命周期。
+//! Electron 原生桥：验证 helper 身份与纹理句柄，读取进程指标并注册受限音频热键。
 
 use napi::bindgen_prelude::{Buffer, FnArgs, Function, Unknown};
 use napi::{Error, Result, Status};
+
+#[cfg(target_os = "windows")]
+mod audio_hotkeys;
 
 #[cfg(target_os = "windows")]
 mod windows_bridge {
