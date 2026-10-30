@@ -53,7 +53,7 @@ $desktopVersion = (Get-Content ./apps/web/package.json -Raw | ConvertFrom-Json).
 
 产物位于 `release/server/`。部署步骤见 [服务器部署说明](deploy/server/DEPLOY.md)，支持域名证书和内网 VMware 测试 CA 两种明确配置。服务器使用 `rtc-server` profile；`rtc-local` 的本机监听约束保持不变。服务器首次运行需要联网获取 Docker 镜像，并执行数据库迁移；本包不包含现有数据库、聊天文件或密钥。
 
-当前 Linux 打包脚本自动收集安装包、版本化 `.blockmap` 和更新清单，尚未自动收集 OBS 对应源码及第三方许可。发布包含 OBS 的客户端前，必须按部署说明补齐同版本源码包和许可文件；不能把服务器 ZIP 生成成功当作客户端分发材料完整。
+完整客户端打包后生成 `LycanSync-版本-release.json`，记录同批安装包、差量文件、OBS 源码、版本化第三方许可和更新清单的大小及 SHA-256。Linux 打包脚本核对这些材料及安装包 SHA-512，复制后再次校验，一并装入部署 ZIP，并包含安装程序和差量别名；缺失、损坏或版本不符时明确失败。使用独立暂存目录，失败保留旧 ZIP，旧解包目录和运行时密钥不进入新包。旧客户端产物没有记录时需重新完整打包，不拼用不同批次材料。
 
 ## 运行环境
 

@@ -1,5 +1,5 @@
 const { spawnSync } = require('node:child_process');
-const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
+const { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
 const { createHash } = require('node:crypto');
 const { resolve, join, normalize } = require('node:path');
 const { writeDesktopLicenses } = require('./package-licenses.cjs');
@@ -87,3 +87,15 @@ writeFileSync(join(outputDirectory, '安装说明.txt'),
   + '发布时保留版本化安装包和 blockmap，最后更新 latest.yml；旧版本首次接入自动更新需手动安装此包。\n'
   + '内网测试仍需手动信任服务器的 CA 证书；正式可信 HTTPS 服务无需此步骤。\n'
   + '当前为未签名测试版本，安装和真实设备行为仍需验收。\n', 'utf8');
+
+// 完整打包校验通过后才出具同批分发记录，部署脚本不再依赖当前机器的构建缓存。
+const noticesName = `LycanSync-${version}-THIRD-PARTY-NOTICES.txt`;
+copyFileSync(join(outputDirectory, 'THIRD-PARTY-NOTICES.txt'), join(outputDirectory, noticesName));
+const releaseFiles = [`LycanSync-${version}-windows-x64-setup.exe`,
+  `LycanSync-${version}-windows-x64-setup.exe.blockmap`, obsSource.path, noticesName, 'latest.yml'];
+const releaseRecord = { schemaVersion: 1, version, obsVersion: obsManifest.obsVersion,
+  runtimeSha256: obsSource.runtimeSha256, files: releaseFiles.map(name => {
+    const contents = readFileSync(join(outputDirectory, name));
+    return { name, bytes: contents.length, sha256: createHash('sha256').update(contents).digest('hex') };
+  }) };
+writeFileSync(join(outputDirectory, `LycanSync-${version}-release.json`), `${JSON.stringify(releaseRecord, null, 2)}\n`, 'utf8');
