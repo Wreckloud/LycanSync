@@ -12,6 +12,7 @@ const { ObsCaptureHostManager } = require('./obs-capture-host.cjs');
 const { ObsAudioHostManager } = require('./obs-audio-host.cjs');
 const { createRecording } = require('./recording.cjs');
 const { createAudioShortcuts } = require('./audio-shortcuts.cjs');
+const { createMediaBackgroundPolicy } = require('./media-background.cjs');
 const { createRecordingVoice } = require('./recording-voice.cjs');
 const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
 const { createDiagnosticReportStore, parseDiagnosticReport } = require('./diagnostic-reports.cjs');
@@ -109,8 +110,11 @@ let startupReady = false;
 let allowQuitAfterMediaHelper = false;
 let mediaHelperShutdownPromise;
 let nativeMediaBridge;
+const setMediaBackgroundActive = createMediaBackgroundPolicy();
 const audioShortcuts = createAudioShortcuts({ getWindow: () => mainWindow,
-  bridge: () => nativeMediaBridge ??= loadNativeMediaBridge() });
+  bridge: () => nativeMediaBridge ??= loadNativeMediaBridge(),
+  onActivityChanged: active => setMediaBackgroundActive(mainWindow?.webContents, 'pushToTalk', active),
+  onRelease: () => { if (nativeMicrophoneSession) obsAudioHost.cancelTransmission(nativeMicrophoneSession.sessionId); } });
 let nativeVideoSession;
 let nativeVideoPreparation;
 let nativeVideoSourcesById = new Map();
@@ -422,21 +426,22 @@ function validNativeAudioSessionId(sessionId) {
 function handleNativeMicrophonePipeData(audio, incoming) {
   if (nativeMicrophoneSession !== audio || audio.stopping) return;
   audio.buffer = audio.buffer.length ? Buffer.concat([audio.buffer, incoming]) : incoming;
-  while (audio.buffer.length >= 4) {
+  while (audio.buffer.length >= 8) {
     const frames = audio.buffer.readUInt32LE(0);
+    const transmissionEpoch = audio.buffer.readUInt32LE(4);
     if (frames !== 480) {
       notifyNativeMicrophoneError(audio, 'microphoneCaptureInvalidPacket');
       return;
     }
-    const packetBytes = 4 + frames * 4;
+    const packetBytes = 8 + frames * 4;
     if (audio.buffer.length < packetBytes) break;
-    const pcm = Uint8Array.from(audio.buffer.subarray(4, packetBytes));
+    const pcm = Uint8Array.from(audio.buffer.subarray(8, packetBytes));
     audio.buffer = audio.buffer.subarray(packetBytes);
     if (audio.queue.length === 12) {
       audio.queue.shift();
       audio.droppedChunks++;
     }
-    audio.queue.push({ frames, pcm });
+    audio.queue.push({ frames, pcm, transmissionEpoch });
   }
   if (audio.buffer.length > 65_536) {
     notifyNativeMicrophoneError(audio, 'microphoneCaptureBufferOverflow');
@@ -452,7 +457,7 @@ function sendNextNativeMicrophoneChunk(audio) {
   const packet = audio.queue.shift();
   audio.inFlight = sequence;
   mainWindow.webContents.send('media:native-microphone-frame', {
-    sessionId: audio.sessionId, sequence, frames: packet.frames, sampleRate: 48_000, channels: 1, pcm: packet.pcm,
+    sessionId: audio.sessionId, sequence, frames: packet.frames, sampleRate: 48_000, channels: 1, pcm: packet.pcm, transmissionEpoch: packet.transmissionEpoch,
   });
 }
 
@@ -484,7 +489,7 @@ function notifyNativeMicrophoneError(audio, code) {
   });
 }
 
-async function startNativeMicrophoneCapture(sessionId, settings, deviceId) {
+async function startNativeMicrophoneCapture(sessionId, settings, deviceId, pushToTalk) {
   if (closing || process.platform !== 'win32') throw new Error('platformUnsupported');
   if (!validNativeAudioSessionId(sessionId) || !validMicrophoneSettings(settings)) {
     throw new Error('invalidMicrophoneCaptureStart');
@@ -528,7 +533,7 @@ async function startNativeMicrophoneCapture(sessionId, settings, deviceId) {
       });
       if (nativeMicrophoneSession !== audio || audio.stopping) throw new Error('microphoneCaptureSessionStopped');
       audio.hostStarted = true;
-      const format = await obsAudioHost.start(pipeId, sessionId, settings, deviceId);
+      const format = await obsAudioHost.start(pipeId, sessionId, settings, deviceId, pushToTalk);
       if (nativeMicrophoneSession !== audio || audio.stopping) throw new Error('microphoneCaptureSessionStopped');
       return format;
     } catch (error) {
@@ -932,9 +937,9 @@ async function startNativeVideo(sourceId, maxFps, settings, resolution, gameFoll
   try {
     video.renderer = mainWindow?.webContents;
     if (!video.renderer || video.renderer.isDestroyed()) throw new Error('sharedTextureReceiverUnavailable');
-    video.backgroundThrottling = video.renderer.getBackgroundThrottling();
     // 纹理接收与画布复制依赖主页面；共享期间切到游戏不能把该页面降为后台节流。
-    video.renderer.setBackgroundThrottling(false);
+    setMediaBackgroundActive(video.renderer, 'video', true);
+    video.backgroundActive = true;
     const reservation = mediaHelper.reserveVideo(sessionId, sourceId);
     video.targetState = mediaHelper.videoCapture?.state;
     let target = await reservation;
@@ -1001,9 +1006,9 @@ async function startNativeVideo(sourceId, maxFps, settings, resolution, gameFoll
 }
 
 function restoreNativeVideoBackgroundThrottling(video) {
-  if (!video.renderer || video.renderer.isDestroyed() || video.backgroundThrottling === undefined) return;
-  video.renderer.setBackgroundThrottling(video.backgroundThrottling);
-  video.backgroundThrottling = undefined;
+  if (!video.backgroundActive) return;
+  setMediaBackgroundActive(video.renderer, 'video', false);
+  video.backgroundActive = false;
 }
 
 async function stopObsVideo(video) {
@@ -1403,6 +1408,10 @@ if (!app.requestSingleInstanceLock()) {
     screen.on('display-metrics-changed', voiceOverlay.correctPlacement);
     powerMonitor.on('resume', voiceOverlay.correctPlacement);
     powerMonitor.on('unlock-screen', voiceOverlay.correctPlacement);
+    powerMonitor.on('lock-screen', () => audioShortcuts.block('lock', true));
+    powerMonitor.on('unlock-screen', () => audioShortcuts.block('lock', false));
+    powerMonitor.on('suspend', () => audioShortcuts.block('sleep', true));
+    powerMonitor.on('resume', () => audioShortcuts.block('sleep', false));
     const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
     // 首次显示即使用紧凑尺寸，避免先闪出主窗口再收缩。
     mainWindow = new BrowserWindow({
@@ -1874,11 +1883,17 @@ ipcMain.handle('media:microphone-devices', (event) => {
   nativeMediaBridge ??= loadNativeMediaBridge();
   return nativeMediaBridge.listMicrophoneDevices();
 });
-ipcMain.handle('media:native-microphone:start', (event, sessionId, settings, deviceId) => {
+ipcMain.handle('media:native-microphone:start', (event, sessionId, settings, deviceId, pushToTalk) => {
   if (!trustedSender(event) || closing || typeof sessionId !== 'string' || sessionId.length > 128
       || typeof deviceId !== 'string' || !deviceId || deviceId.length > 1024 || /[\u0000-\u001f\u007f]/.test(deviceId)
+      || typeof pushToTalk !== 'boolean'
       || !validMicrophoneSettings(settings)) throw new Error('请求参数无效');
-  return startNativeMicrophoneCapture(sessionId, settings, deviceId);
+  return startNativeMicrophoneCapture(sessionId, settings, deviceId, pushToTalk);
+});
+ipcMain.on('media:native-microphone:transmission', (event, sessionId, pushToTalk, held, epoch) => {
+  if (!trustedSender(event) || closing || typeof pushToTalk !== 'boolean' || typeof held !== 'boolean'
+      || !Number.isSafeInteger(epoch) || epoch < 0 || epoch > 0xffffffff || nativeMicrophoneSession?.sessionId !== sessionId) return;
+  obsAudioHost.setTransmission(sessionId, pushToTalk, held && audioShortcuts.transmissionAllowed(), epoch);
 });
 ipcMain.handle('media:native-microphone:configure', (event, sessionId, settings) => {
   if (!trustedSender(event) || closing || typeof sessionId !== 'string' || sessionId.length > 128
@@ -1937,7 +1952,7 @@ ipcMain.handle('media:diagnostics', async (event) => {
       microphoneDrops = capture.droppedChunks;
       if (nativeMicrophoneSession === microphone && !microphone.stopping) {
         diagnostics.microphoneCapture = { sourceState: capture.sourceState, sourceFrames: capture.sourceFrames,
-          framesReceived: capture.framesReceived };
+          framesReceived: capture.framesReceived, pushToTalk: capture.pushToTalk, transmissionAllowed: capture.transmissionAllowed };
       }
       microphone.hostDroppedChunks = microphoneDrops;
     } catch { /* 可选统计缺失不终止语音；报告保留未知值。 */ }
@@ -2010,7 +2025,8 @@ function requireShortcutSender(event) {
   if (!trustedSender(event) || closing || !sessionToken || process.platform !== 'win32') throw new Error('当前无法使用全局快捷键');
 }
 ipcMain.handle('audio-shortcuts:begin', event => { requireShortcutSender(event); return audioShortcuts.begin(); });
-ipcMain.handle('audio-shortcuts:configure', (event, owner, bindings) => { requireShortcutSender(event); audioShortcuts.configure(owner, bindings); });
+ipcMain.handle('audio-shortcuts:configure', (event, owner, bindings, pushToTalk) => { requireShortcutSender(event); audioShortcuts.configure(owner, bindings, pushToTalk); });
+ipcMain.handle('audio-shortcuts:hold', (event, owner, roomId, sequence) => { requireShortcutSender(event); return audioShortcuts.readHold(owner, roomId, sequence); });
 ipcMain.handle('audio-shortcuts:activate', (event, owner, roomId) => { requireShortcutSender(event); audioShortcuts.activate(owner, roomId); });
 ipcMain.handle('audio-shortcuts:capture', (event, owner, enabled) => { requireShortcutSender(event); audioShortcuts.capture(owner, enabled); });
 ipcMain.handle('audio-shortcuts:end', (event, owner) => { if (!trustedSender(event)) throw new Error('请求来源无效'); audioShortcuts.end(owner); });

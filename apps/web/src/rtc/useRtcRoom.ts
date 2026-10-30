@@ -84,6 +84,7 @@ interface RtcRoomOptions {
 function captureErrorMessage(error: unknown, source: MediaSource): string {
   const label = source === Track.Source.Microphone ? '麦克风' : '屏幕共享';
   if (error instanceof Error) {
+    if (error.message === 'pushToTalkUnsupported') return '全局按键说话需要 Windows 桌面客户端；请选择自由发言后重新开启麦克风。';
     if (error.name === 'NotAllowedError') return `${label}未获授权或已取消，请允许后重试。`;
     if (error.name === 'NotFoundError') return `未找到可用的${label}设备。`;
     if (error.name === 'NotReadableError') return `${label}无法采集，请检查系统权限或设备占用。`;
@@ -147,6 +148,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   let microphoneVersion = 0;
   let microphoneInputDeviceId = options?.inputDeviceId ?? 'default';
   let microphoneDeviceChanging = false;
+  let microphonePushToTalk = false;
   let microphoneTask: { room: Room; promise: Promise<void> } | null = null;
   let listeningTask: { room: Room; promise: Promise<void> } | null = null;
   let microphoneCleanupFailed = false;
@@ -910,6 +912,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       // 2. 用户点击后才请求采集；浏览器路径保留原有无共享声音行为。
       if (source === Track.Source.Microphone) {
         const desktop = window.lycanDesktop;
+        if (microphonePushToTalk && !desktop) throw new Error('pushToTalkUnsupported');
         if (desktop) {
           const nativeSettings: NativeMicrophoneSettings = {
             inputGain: microphoneInputGain,
@@ -919,6 +922,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           };
           nativeMicrophone = new NativeMicrophoneAudioSession(desktop, {
             deviceId: microphoneInputDeviceId,
+            pushToTalk: microphonePushToTalk,
             onError: (code) => {
               if (nativeMicrophoneSession !== nativeMicrophone || activeRoom.value !== currentRoom) return;
               microphoneVersion++;
@@ -1308,6 +1312,16 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     return task.promise;
   }
 
+  function setMicrophoneVoiceMode(mode: 'voice' | 'pushToTalk') {
+    microphonePushToTalk = mode === 'pushToTalk';
+    nativeMicrophoneSession?.setTransmission(microphonePushToTalk, false);
+  }
+
+  function setPushToTalkHeld(held: boolean) {
+    nativeMicrophoneSession?.setTransmission(microphonePushToTalk,
+      held && microphoneIntent.value && listening.value && status.value === 'connected');
+  }
+
   async function setMicrophoneDeviceId(deviceId: string) {
     if (microphoneDeviceChanging) throw new Error('microphoneDeviceChangeBusy');
     if (deviceId === microphoneInputDeviceId) return;
@@ -1635,7 +1649,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     remoteControlRestoring: remoteControl.restoring,
     remoteControlPending: remoteControl.pending, remoteControlGranting: remoteControl.granting,
     join, leave, toggleMedia, setMediaEnabled, enableAudioPlayback, updateListeningState,
-    setMicrophoneDeviceId, setMicrophoneInputGain, setMicrophoneProcessing, setRemoteAudioSubscribed, sendEntranceSound,
+    setMicrophoneVoiceMode, setPushToTalkHeld, setMicrophoneDeviceId, setMicrophoneInputGain, setMicrophoneProcessing, setRemoteAudioSubscribed, sendEntranceSound,
     requestRemoteControl: (identity: string) => remoteControl.requestControl(identity),
     sendRemoteControlInput: (input: RemoteControlInput) => remoteControl.sendInput(input),
     exitRemoteControl: () => remoteControl.exitControl(),

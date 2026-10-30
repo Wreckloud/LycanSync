@@ -1,4 +1,5 @@
 #include "voice_filter.h"
+#include "voice_transmission.h"
 
 #include <windows.h>
 #include <obs-module.h>
@@ -81,8 +82,8 @@ void configure(obs_source_t *filter, Settings settings) {
   obs_source_update(filter, values);
   obs_data_release(values);
 }
-struct Packet { uint32_t frames = 480; std::array<float, 480> samples{}; };
-static_assert(sizeof(Packet) == 1924);
+struct Packet { uint32_t frames = 480; uint32_t transmission_epoch = 0; std::array<float, 480> samples{}; };
+static_assert(sizeof(Packet) == 1928);
 
 struct AudioPipe {
   HANDLE stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -96,6 +97,8 @@ struct AudioPipe {
   bool accepting = true;
   std::atomic<bool> delivered = false;
   std::atomic<bool> failed = false;
+  VoiceTransmission transmission;
+  uint32_t transmission_epoch = 0;
   std::thread writer;
   ~AudioPipe() { shutdown(); if (stop) CloseHandle(stop); }
   void shutdown() {
@@ -111,8 +114,10 @@ struct AudioPipe {
     if (!pipe.accepting) return;
     if (!muted && !samples) { pipe.failed = true; return; }
     pipe.received += audio->frames;
+    const bool transmitting = pipe.transmission.allowed();
+    pipe.partial.transmission_epoch = pipe.transmission_epoch;
     for (uint32_t i = 0; i < audio->frames; ++i) {
-      pipe.partial.samples[pipe.cursor++] = muted ? 0.0f : samples[i];
+      pipe.partial.samples[pipe.cursor++] = muted || !transmitting ? 0.0f : samples[i];
       if (pipe.cursor != 480) continue;
       if (pipe.count == pipe.packets.size()) { pipe.head = (pipe.head + 1) % pipe.packets.size(); --pipe.count; ++pipe.dropped; }
       pipe.packets[(pipe.head + pipe.count++) % pipe.packets.size()] = pipe.partial;
@@ -202,7 +207,8 @@ struct CaptureCallback {
 };
 
 int capture(int argc, wchar_t **argv) {
-  if (argc != 7 || !pipe_id(argv[4]) || !argv[6][0] || wcslen(argv[6]) > 1024) return 2;
+  if (argc != 8 || !pipe_id(argv[4]) || !argv[6][0] || wcslen(argv[6]) > 1024
+      || (std::wstring_view(argv[7]) != L"0" && std::wstring_view(argv[7]) != L"1")) return 2;
   Settings settings;
   if (!parse_settings(utf8(argv[5]), settings)) return 2;
   base_set_log_handler(audio_log, nullptr);
@@ -243,6 +249,7 @@ int capture(int argc, wchar_t **argv) {
   obs_source_set_monitoring_type(source, OBS_MONITORING_TYPE_NONE);
   obs_source_set_audio_mixers(source, 0);
   AudioPipe pipe;
+  pipe.transmission.set_mode(std::wstring_view(argv[7]) == L"1");
   if (!pipe.stop) { event("failed", ",\"code\":\"microphoneCapturePipeFailed\""); return 1; }
   CaptureCallback callback(source, pipe);
   pipe.writer = std::thread([&] { pipe.run(L"\\\\.\\pipe\\lycansync-microphone-audio-" + std::wstring(argv[4])); });
@@ -256,7 +263,25 @@ int capture(int argc, wchar_t **argv) {
     const auto command = commands.next();
     if (commands.invalid) { failure = "invalidMicrophoneCommand"; break; }
     if (command == "stop" || (commands.closed && command.empty())) break;
-    if (!command.empty()) {
+    if (command == "mode|0" || command == "mode|1") {
+      const std::lock_guard<std::mutex> lock(pipe.mutex);
+      pipe.transmission.set_mode(command.back() == '1');
+    } else if (command.starts_with("transmit|")) {
+      const auto split = command.find('|', 9);
+      uint32_t epoch = 0;
+      if (split == command.npos) { failure = "invalidMicrophoneCommand"; break; }
+      const auto parsed = std::from_chars(command.data() + 9, command.data() + split, epoch);
+      const auto duration = std::string_view(command).substr(split + 1);
+      if (parsed.ec != std::errc{} || parsed.ptr != command.data() + split || (duration != "0" && duration != "350")) {
+        failure = "invalidMicrophoneCommand"; break;
+      }
+      const std::lock_guard<std::mutex> lock(pipe.mutex);
+      if (pipe.transmission_epoch != epoch) {
+        pipe.count = 0; pipe.cursor = 0; pipe.partial = Packet{};
+        pipe.transmission_epoch = epoch;
+      }
+      pipe.transmission.renew(duration == "350");
+    } else if (!command.empty()) {
       const bool statistics = command.starts_with("statistics|");
       const size_t prefix = statistics ? 11 : 10;
       const auto separator = statistics ? command.size() : command.find('|', prefix);
@@ -276,7 +301,9 @@ int capture(int argc, wchar_t **argv) {
         event("statistics", ",\"requestId\":" + std::to_string(request) + ",\"framesReceived\":"
           + std::to_string(received) + ",\"droppedChunks\":" + std::to_string(dropped)
           + ",\"sourceState\":" + std::to_string(calldata_int(&status, "capture_state"))
-          + ",\"sourceFrames\":" + std::to_string(calldata_int(&status, "frames_received")));
+          + ",\"sourceFrames\":" + std::to_string(calldata_int(&status, "frames_received"))
+          + ",\"pushToTalk\":" + (pipe.transmission.enabled() ? "true" : "false")
+          + ",\"transmissionAllowed\":" + (pipe.transmission.allowed() ? "true" : "false"));
         calldata_free(&status);
       } else {
         configure(filter, settings);

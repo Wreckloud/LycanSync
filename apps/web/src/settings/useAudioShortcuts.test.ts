@@ -1,19 +1,25 @@
 import { effectScope, nextTick, ref } from 'vue';
-import { expect, it, vi } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { shortcutFromKey, useAudioShortcuts } from './useAudioShortcuts';
 
 async function settle() { for (let index = 0; index < 8; index++) await nextTick(); }
+afterEach(() => vi.useRealTimers());
 function fixture(begin: () => Promise<string> = async () => 'owner') {
   const scope = effectScope();
   const room = ref<string | null>(null);
   let action!: Parameters<NonNullable<Window['lycanAudioShortcuts']>['onAction']>[0];
+  let hold!: Parameters<NonNullable<Window['lycanAudioShortcuts']>['onHold']>[0];
   const bridge = { begin: vi.fn(begin), configure: vi.fn(async () => {}), activate: vi.fn(async () => {}),
     capture: vi.fn(async () => {}), end: vi.fn(async () => {}),
+    readHold: vi.fn(async () => false), onHold: (callback: typeof hold) => { hold = callback; return vi.fn(); },
     onAction: (callback: typeof action) => { action = callback; return vi.fn(); }, onError: () => vi.fn() };
   const microphone = vi.fn(async () => {}), listening = vi.fn(async () => {});
   const storage = { getItem: vi.fn(() => null), setItem: vi.fn() };
-  const shortcuts = scope.run(() => useAudioShortcuts('self', { roomId: () => room.value, microphone, listening }, bridge, storage))!;
-  return { scope, room, bridge, microphone, listening, storage, shortcuts,
+  const modeChanged = vi.fn(), transmissionChanged = vi.fn();
+  const shortcuts = scope.run(() => useAudioShortcuts('self', { roomId: () => room.value,
+    microphone, listening, modeChanged, transmissionChanged }, bridge, storage))!;
+  return { scope, room, bridge, microphone, listening, storage, shortcuts, modeChanged, transmissionChanged,
+    hold: (sequence: number, held: boolean, roomId = room.value!) => hold({ owner: 'owner', roomId, sequence, held }),
     action: (roomId: string) => action({ roomId, owner: 'owner', action: 'microphone' }) };
 }
 
@@ -23,6 +29,58 @@ it('录入组合不接受普通字母、系统保留键或 F12', () => {
   expect(() => shortcutFromKey({ ...event, code: 'KeyF', ctrlKey: false })).toThrow();
   expect(() => shortcutFromKey({ ...event, code: 'F12' })).toThrow();
   expect(() => shortcutFromKey({ ...event, metaKey: true })).toThrow();
+});
+
+it('按住后确认当前键状态才续期，松开停止查询，不切换手动静音意愿', async () => {
+  const f = fixture(); await settle();
+  vi.useFakeTimers();
+  await f.shortcuts.setBinding('pushToTalk', 'F2');
+  await f.shortcuts.setVoiceMode('pushToTalk');
+  f.room.value = 'room'; await settle();
+  f.bridge.readHold.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+  f.hold(1, true); await settle();
+  expect(f.transmissionChanged).toHaveBeenLastCalledWith(true);
+  expect(f.shortcuts.held.value).toBe(true);
+  await vi.advanceTimersByTimeAsync(40);
+  expect(f.transmissionChanged).toHaveBeenLastCalledWith(false);
+  expect(f.shortcuts.held.value).toBe(false);
+  const calls = f.bridge.readHold.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(500);
+  expect(f.bridge.readHold).toHaveBeenCalledTimes(calls);
+  expect(f.microphone).not.toHaveBeenCalled();
+  expect(f.modeChanged).toHaveBeenLastCalledWith('pushToTalk');
+  f.scope.stop();
+});
+
+it('迟到的查询和旧房间事件不能开口，主进程不回复时关闭并提示', async () => {
+  const f = fixture(); await settle();
+  vi.useFakeTimers();
+  await f.shortcuts.setVoiceMode('pushToTalk');
+  f.room.value = 'room'; await settle();
+  let complete!: (held: boolean) => void;
+  f.bridge.readHold.mockImplementationOnce(() => new Promise<boolean>(resolve => { complete = resolve; }));
+  f.hold(1, true); await settle();
+  await vi.advanceTimersByTimeAsync(160);
+  expect(f.shortcuts.error.value).toContain('响应中断');
+  expect(f.shortcuts.held.value).toBe(false);
+  complete(true); await settle();
+  expect(f.transmissionChanged).not.toHaveBeenLastCalledWith(true);
+  f.room.value = 'new'; await settle();
+  f.hold(2, true, 'room'); await settle();
+  expect(f.bridge.readHold).toHaveBeenCalledOnce();
+  f.scope.stop();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('模式意愿先关闭自由发送，注册失败也保存按键模式，不能悄悄恢复自由发言', async () => {
+  const f = fixture(); await settle();
+  f.bridge.configure.mockRejectedValueOnce(new Error('occupied'));
+  await f.shortcuts.setVoiceMode('pushToTalk');
+  expect(f.shortcuts.voiceMode.value).toBe('pushToTalk');
+  expect(f.modeChanged).toHaveBeenLastCalledWith('pushToTalk');
+  expect(f.shortcuts.error.value).toContain('占用');
+  expect(JSON.parse(f.storage.setItem.mock.calls.at(-1)![1]).voiceMode).toBe('pushToTalk');
+  f.scope.stop();
 });
 
 it('全局事件只操作当前房间，录入期间不触发，释放后恢复且偏好只在成功时保存', async () => {

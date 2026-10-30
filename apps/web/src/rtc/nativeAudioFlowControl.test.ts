@@ -118,9 +118,10 @@ function mainAudio(channels: number) {
     { Buffer, Number, [`native${kind}Session`]: audio, mainWindow },
   ) as (sessionId: string, sequence: number, droppedChunks: number) => void;
   const packet = (value: number) => {
-    const bytes = Buffer.alloc(4 + 480 * channels * 4);
+    const header = channels === 1 ? 8 : 4;
+    const bytes = Buffer.alloc(header + 480 * channels * 4);
     bytes.writeUInt32LE(480);
-    for (let index = 0; index < 480 * channels; index++) bytes.writeFloatLE(value, 4 + index * 4);
+    for (let index = 0; index < 480 * channels; index++) bytes.writeFloatLE(value, header + index * 4);
     return bytes;
   };
   const acknowledge = (sessionId = audio.sessionId, sequence = audio.inFlight!, droppedChunks = 0) =>

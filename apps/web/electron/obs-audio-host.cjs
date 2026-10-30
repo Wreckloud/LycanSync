@@ -24,12 +24,13 @@ class ObsAudioHostManager {
     this.lastStopped = undefined;
   }
 
-  start(pipeId, sessionId, settings, deviceId = 'default') {
+  start(pipeId, sessionId, settings, deviceId = 'default', pushToTalk = false) {
     if (this.disposed) return Promise.reject(new Error('obsAudioHostDisposed'));
     if (this.platform !== 'win32') return Promise.reject(new Error('platformUnsupported'));
     if (typeof pipeId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(pipeId)
         || typeof sessionId !== 'string' || !sessionId || Buffer.byteLength(sessionId) > 128 || /[\u0000-\u001f\u007f]/.test(sessionId)
         || typeof deviceId !== 'string' || !deviceId || deviceId.length > 1024 || /[\u0000-\u001f\u007f]/.test(deviceId)
+        || typeof pushToTalk !== 'boolean'
         || !validSettings(settings) || !win32.isAbsolute(this.configPath)) {
       return Promise.reject(new Error('invalidMicrophoneCaptureStart'));
     }
@@ -38,11 +39,11 @@ class ObsAudioHostManager {
     let child;
     try {
       child = this.spawnProcess(this.executablePath, [this.modulePath, this.dataPath, this.configPath,
-        pipeId, settingsCommand(settings), deviceId], { cwd: win32.dirname(this.executablePath), windowsHide: true,
+        pipeId, settingsCommand(settings), deviceId, pushToTalk ? '1' : '0'], { cwd: win32.dirname(this.executablePath), windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'] });
     } catch { return Promise.reject(new Error('microphoneCaptureStartFailed')); }
     const state = { child, sessionId, alive: true, buffer: '', requests: new Map(), sequence: 0,
-      ready: false, stopped: false, startedAt: performance.now() };
+      ready: false, stopped: false, pushToTalk, startedAt: performance.now() };
     this.state = state;
     state.start = new Promise((resolve, reject) => { state.resolveStart = resolve; state.rejectStart = reject; });
     void state.start.catch(() => {});
@@ -83,11 +84,12 @@ class ObsAudioHostManager {
         clearTimeout(request.timer); state.requests.delete(event.requestId); request.resolve({ changed: true });
       } else if (event.event === 'statistics' && state.requests.get(event.requestId)?.kind === 'statistics'
           && [event.framesReceived, event.droppedChunks, event.sourceFrames].every(value => Number.isSafeInteger(value) && value >= 0)
-          && [0, 1, 2].includes(event.sourceState)) {
+          && [0, 1, 2].includes(event.sourceState) && typeof event.pushToTalk === 'boolean' && typeof event.transmissionAllowed === 'boolean') {
         const request = state.requests.get(event.requestId);
         clearTimeout(request.timer); state.requests.delete(event.requestId);
         request.resolve({ framesReceived: event.framesReceived, droppedChunks: event.droppedChunks,
-          sourceState: event.sourceState, sourceFrames: event.sourceFrames });
+          sourceState: event.sourceState, sourceFrames: event.sourceFrames,
+          pushToTalk: event.pushToTalk, transmissionAllowed: event.transmissionAllowed });
       } else if (event.event === 'statistics' && Number.isSafeInteger(event.requestId)
           && event.requestId > 0 && event.requestId <= state.sequence && !state.requests.has(event.requestId)) {
         // 诊断超时的迟到响应不改变采集状态。
@@ -124,6 +126,23 @@ class ObsAudioHostManager {
   }
 
   getDiagnostics(sessionId) { return this.request(sessionId, 'statistics', id => `statistics|${id}`); }
+
+  setTransmission(sessionId, pushToTalk, held, epoch) {
+    const state = this.state;
+    if (!state || state.sessionId !== sessionId || !state.ready || state.stopping || state.failed) return;
+    if (typeof pushToTalk !== 'boolean' || typeof held !== 'boolean' || !Number.isSafeInteger(epoch)
+        || epoch < 0 || epoch > 0xffffffff) throw new Error('invalidMicrophoneTransmission');
+    const mode = state.pushToTalk !== pushToTalk ? `mode|${Number(pushToTalk)}\n` : '';
+    state.pushToTalk = pushToTalk;
+    state.transmissionEpoch = epoch;
+    state.child.stdin.write(`${mode}transmit|${epoch}|${held && pushToTalk ? 350 : 0}\n`, error => {
+      if (error) this.fail(state, 'microphoneCapturePipeFailed');
+    });
+  }
+
+  cancelTransmission(sessionId) {
+    if (this.state?.pushToTalk) this.setTransmission(sessionId, true, false, this.state.transmissionEpoch ?? 0);
+  }
 
   fail(state, code) {
     if (!state.alive || state.failed) return;

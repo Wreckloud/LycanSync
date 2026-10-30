@@ -1,6 +1,7 @@
 import { onScopeDispose, ref, watch } from 'vue';
 
-export type AudioShortcutAction = 'microphone' | 'listening';
+export type AudioShortcutAction = 'microphone' | 'listening' | 'pushToTalk';
+export type VoiceMode = 'voice' | 'pushToTalk';
 export type AudioShortcutBindings = Record<AudioShortcutAction, string>;
 
 export function shortcutFromKey(event: Pick<KeyboardEvent, 'code' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey'>): string {
@@ -17,8 +18,12 @@ export function useAudioShortcuts(userId: string, options: {
   roomId: () => string | null;
   microphone: () => Promise<void>;
   listening: () => Promise<void>;
+  modeChanged: (mode: VoiceMode) => void;
+  transmissionChanged: (held: boolean) => void;
 }, bridge = window.lycanAudioShortcuts, storage: Pick<Storage, 'getItem' | 'setItem'> = localStorage) {
-  const bindings = ref<AudioShortcutBindings>({ microphone: '', listening: '' });
+  const bindings = ref<AudioShortcutBindings>({ microphone: '', listening: '', pushToTalk: '' });
+  const voiceMode = ref<VoiceMode>('voice');
+  const held = ref(false);
   const error = ref('');
   const ready = ref(false);
   const busy = ref(false);
@@ -29,6 +34,10 @@ export function useAudioShortcuts(userId: string, options: {
   let captureVersion = 0;
   let activationVersion = 0;
   let actionPending = false;
+  let holdVersion = 0;
+  let holdSequence = 0;
+  let holdTimer: ReturnType<typeof setTimeout> | undefined;
+  let holdResponseTimer: ReturnType<typeof setTimeout> | undefined;
   const failure = '快捷键无法生效，可能已被其他程序占用。请修改或重新启用。';
   try {
     const stored = storage.getItem(storageKey);
@@ -38,9 +47,53 @@ export function useAudioShortcuts(userId: string, options: {
       if (!parsed || ['microphone', 'listening'].some(action => typeof parsed[action] !== 'string'
           || (parsed[action] !== '' && !pattern.test(parsed[action])))
           || (parsed.microphone && parsed.microphone === parsed.listening)) throw new Error('invalid shortcut preferences');
-      bindings.value = { microphone: parsed.microphone, listening: parsed.listening };
+      const pushToTalk = parsed.pushToTalk ?? '';
+      const mode = parsed.voiceMode ?? 'voice';
+      if (typeof pushToTalk !== 'string' || (pushToTalk && !pattern.test(pushToTalk))
+          || !['voice', 'pushToTalk'].includes(mode)
+          || (pushToTalk && [parsed.microphone, parsed.listening].includes(pushToTalk))) throw new Error('invalid speech preferences');
+      bindings.value = { microphone: parsed.microphone, listening: parsed.listening, pushToTalk };
+      voiceMode.value = mode;
     }
-  } catch { error.value = '无法读取快捷键偏好，本次不启用；请重新设置。'; }
+  } catch { voiceMode.value = 'pushToTalk'; error.value = '无法读取发言偏好，本次停止发声，请重新选择发言模式。'; }
+  options.modeChanged(voiceMode.value);
+
+  function stopHold() {
+    holdVersion++;
+    clearTimeout(holdTimer); holdTimer = undefined;
+    clearTimeout(holdResponseTimer); holdResponseTimer = undefined;
+    held.value = false;
+    options.transmissionChanged(false);
+  }
+  function save() {
+    try { storage.setItem(storageKey, JSON.stringify({ ...bindings.value, voiceMode: voiceMode.value })); }
+    catch { error.value = '本次设置已生效，但无法保存到本机。'; }
+  }
+  async function pollHold(sequence: number, version: number) {
+    if (!bridge || !owner || disposed || version !== holdVersion) return;
+    const roomId = options.roomId();
+    if (!roomId) { stopHold(); return; }
+    const requestedAt = performance.now();
+    let responseTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeout = new Promise<never>((_, reject) => {
+        responseTimer = setTimeout(() => reject(new Error('pushToTalkTimedOut')), 150);
+        holdResponseTimer = responseTimer;
+      });
+      const pressed = await Promise.race([bridge.readHold(owner, roomId, sequence), timeout]);
+      if (disposed || version !== holdVersion || options.roomId() !== roomId) return;
+      // 迟到消息须重新确认真实按键；旧回复不能续期已经关闭的音频。
+      if (!pressed || performance.now() - requestedAt > 150) { stopHold(); return; }
+      held.value = true;
+      options.transmissionChanged(true);
+      holdTimer = setTimeout(() => { void pollHold(sequence, version); }, 40);
+    } catch {
+      if (!disposed && version === holdVersion) { stopHold(); error.value = '按键说话响应中断，请松开按键后重试。'; }
+    } finally {
+      clearTimeout(responseTimer);
+      if (holdResponseTimer === responseTimer) holdResponseTimer = undefined;
+    }
+  }
 
   const initialized = (async () => {
     if (!bridge) return;
@@ -48,7 +101,7 @@ export function useAudioShortcuts(userId: string, options: {
       const token = await bridge.begin();
       if (disposed) { await bridge.end(token); return; }
       owner = token;
-      await bridge.configure(token, bindings.value);
+      await bridge.configure(token, bindings.value, voiceMode.value === 'pushToTalk');
       if (!disposed) await bridge.activate(token, options.roomId());
     } catch { if (!disposed) error.value = failure; }
     finally { if (!disposed) ready.value = true; }
@@ -61,7 +114,16 @@ export function useAudioShortcuts(userId: string, options: {
     void options[event.action]().catch(() => { if (!disposed) error.value = '音频操作未完成，请查看通话状态后重试。'; })
       .finally(() => { actionPending = false; });
   });
-  const removeError = bridge?.onError(event => { if (!disposed && event.owner === owner) error.value = event.message; });
+  const removeHold = bridge?.onHold(event => {
+    if (disposed || event.owner !== owner || event.roomId !== options.roomId()
+        || !Number.isSafeInteger(event.sequence) || event.sequence <= holdSequence) return;
+    holdSequence = event.sequence;
+    stopHold();
+    if (event.held && voiceMode.value === 'pushToTalk' && !capturing.value && !busy.value) {
+      void pollHold(event.sequence, holdVersion);
+    }
+  });
+  const removeError = bridge?.onError(event => { if (!disposed && event.owner === owner) { stopHold(); error.value = event.message; } });
 
   async function activate() {
     const version = ++activationVersion;
@@ -70,11 +132,12 @@ export function useAudioShortcuts(userId: string, options: {
     try { await bridge.activate(owner, options.roomId()); }
     catch { if (!disposed && version === activationVersion) error.value = failure; }
   }
-  watch(options.roomId, () => { void activate(); });
+  watch(options.roomId, () => { stopHold(); void activate(); }, { flush: 'sync' });
 
   async function startCapture(action: AudioShortcutAction) {
     if (!bridge || !owner || !ready.value || busy.value) return;
     const version = ++captureVersion;
+    stopHold();
     capturing.value = action;
     busy.value = true;
     try {
@@ -97,17 +160,33 @@ export function useAudioShortcuts(userId: string, options: {
   async function setBinding(action: AudioShortcutAction, binding: string) {
     if (!bridge || !owner || !ready.value || busy.value) return;
     const next = { ...bindings.value, [action]: binding };
-    if (binding && next.microphone === next.listening) { error.value = '两个动作不能使用同一快捷键'; return; }
+    const used = Object.values(next).filter(Boolean);
+    if (new Set(used).size !== used.length) { error.value = '动作不能使用同一快捷键'; return; }
+    stopHold();
     busy.value = true;
     try {
-      await bridge.configure(owner, next);
+      await bridge.configure(owner, next, voiceMode.value === 'pushToTalk');
       if (disposed) return;
       bindings.value = next;
       error.value = '';
-      try { storage.setItem(storageKey, JSON.stringify(next)); }
-      catch { error.value = '快捷键本次已生效，但无法保存到本机。'; }
+      save();
     } catch { if (!disposed) error.value = failure; }
     finally { capturing.value = null; busy.value = false; }
+  }
+
+  async function setVoiceMode(mode: VoiceMode) {
+    if (disposed || busy.value || !['voice', 'pushToTalk'].includes(mode)) return;
+    if (mode === 'pushToTalk' && !bridge) { error.value = '全局按键说话仅支持 Windows 桌面客户端。'; return; }
+    stopHold();
+    voiceMode.value = mode;
+    options.modeChanged(mode);
+    error.value = '';
+    save();
+    if (!bridge || !owner) return;
+    busy.value = true;
+    try { await bridge.configure(owner, bindings.value, mode === 'pushToTalk'); }
+    catch { if (!disposed) error.value = failure; }
+    finally { busy.value = false; }
   }
 
   async function retry() {
@@ -118,8 +197,10 @@ export function useAudioShortcuts(userId: string, options: {
         const token = await bridge.begin();
         if (disposed) { await bridge.end(token); return; }
         owner = token;
+        holdSequence = 0;
       }
-      await bridge.configure(owner, bindings.value);
+      stopHold();
+      await bridge.configure(owner, bindings.value, voiceMode.value === 'pushToTalk');
       if (!disposed) { await bridge.activate(owner, options.roomId()); error.value = ''; }
     }
     catch { error.value = failure; }
@@ -128,8 +209,10 @@ export function useAudioShortcuts(userId: string, options: {
 
   onScopeDispose(() => {
     disposed = true;
-    removeAction?.(); removeError?.();
+    stopHold();
+    removeAction?.(); removeError?.(); removeHold?.();
     if (owner) void bridge?.end(owner).catch(() => console.warn('audio shortcut cleanup failed'));
   });
-  return { supported: Boolean(bridge), bindings, error, ready, busy, capturing, startCapture, cancelCapture, setBinding, retry };
+  return { supported: Boolean(bridge), bindings, voiceMode, held, error, ready, busy, capturing,
+    startCapture, cancelCapture, setBinding, setVoiceMode, retry };
 }

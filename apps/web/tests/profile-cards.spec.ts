@@ -213,6 +213,7 @@ test('快捷键录入松开后保存，冲突保持原设置，取消不会丢�
   await page.addInitScript(() => {
     window.lycanAudioShortcuts = {
       begin: async () => 'mock-owner',
+      readHold: async () => false, onHold: () => () => {},
       configure: async (_owner, bindings) => { if (bindings.microphone === 'Ctrl+K') throw new Error('occupied'); },
       activate: async () => {}, capture: async () => {}, end: async () => {}, onAction: () => () => {}, onError: () => () => {},
     };
@@ -236,6 +237,19 @@ test('快捷键录入松开后保存，冲突保持原设置，取消不会丢�
   await page.screenshot({ path: test.info().outputPath('shortcut-settings.png') });
   await page.getByRole('button', { name: '清除麦克风静音／恢复快捷键', exact: true }).click();
   await expect(recorder).toHaveText('未设置');
+  await page.getByRole('radio', { name: '按键说话', exact: true }).check();
+  await expect(page.locator('.shortcut-settings')).toContainText('设置前保持静音');
+  const talk = page.getByRole('button', { name: '设置按键说话快捷键', exact: true });
+  await talk.click();
+  await talk.press('F2');
+  await expect(talk).toHaveText('F2');
+  await page.reload();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '快捷键', exact: true }).click();
+  await expect(page.getByRole('radio', { name: '按键说话', exact: true })).toBeChecked();
+  await expect(page.getByRole('button', { name: '设置按键说话快捷键', exact: true })).toHaveText('F2');
+  await page.screenshot({ path: test.info().outputPath('push-to-talk-settings.png') });
+  await page.getByRole('radio', { name: '自由发言', exact: true }).check();
 });
 
 test('本机提示音只提供统一音量和逐项开关，重开后恢复，保留入场音效操作', async ({ page }) => {
