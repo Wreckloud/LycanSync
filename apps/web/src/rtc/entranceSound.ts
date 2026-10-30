@@ -1,3 +1,5 @@
+import { authenticatedFetch, readApiError } from '../auth/authApi';
+
 export const ENTRANCE_SOUND_TOPIC = 'lycansync.entrance-sound.v1';
 export const ENTRANCE_SOUND_MAX_BYTES = 512 * 1024;
 export const ENTRANCE_SOUND_MAX_DURATION_SECONDS = 5;
@@ -14,6 +16,7 @@ export interface StoredEntranceSound {
   name: string;
   mimeType: string;
   dataUrl: string;
+  normalization: 'rms-v1';
 }
 
 export function isSupportedEntranceSoundType(mimeType: string) {
@@ -32,7 +35,7 @@ function isValidStoredSound(value: unknown): value is StoredEntranceSound {
   if (!value || typeof value !== 'object') return false;
   const sound = value as Partial<StoredEntranceSound>;
   return typeof sound.name === 'string' && sound.name.length > 0 && sound.name.length <= 128
-    && typeof sound.mimeType === 'string' && isSupportedEntranceSoundType(sound.mimeType)
+    && sound.mimeType === 'audio/wav' && sound.normalization === 'rms-v1'
     && typeof sound.dataUrl === 'string'
     && sound.dataUrl.startsWith(`data:${sound.mimeType};base64,`)
     && byteLength(sound.dataUrl) > 0 && byteLength(sound.dataUrl) <= ENTRANCE_SOUND_MAX_BYTES;
@@ -73,29 +76,30 @@ function readAsDataUrl(file: File) {
   });
 }
 
-export async function createEntranceSound(file: File): Promise<StoredEntranceSound> {
+export async function createEntranceSound(file: File, signal?: AbortSignal): Promise<StoredEntranceSound> {
   if (!isSupportedEntranceSoundType(file.type)) throw new Error('仅支持 MP3、OGG、WAV 或 WebM 音频');
   if (file.size <= 0 || file.size > ENTRANCE_SOUND_MAX_BYTES) throw new Error('入场音效不能超过 512 KB');
 
-  const AudioContextClass = window.AudioContext;
-  const context = new AudioContextClass();
-  try {
-    const buffer = await context.decodeAudioData(await file.arrayBuffer());
-    if (!Number.isFinite(buffer.duration) || buffer.duration <= 0) throw new Error('无法识别音频时长');
-    if (buffer.duration > ENTRANCE_SOUND_MAX_DURATION_SECONDS + 0.05) {
-      throw new Error('入场音效不能超过 5 秒');
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('入场音效')) throw error;
-    throw new Error('无法解码这段音频，请改用 MP3、OGG、WAV 或 WebM');
-  } finally {
-    void context.close();
+  const response = await authenticatedFetch('/api/audio/entrance-sound/normalize', {
+    method: 'POST', headers: { 'Content-Type': 'application/octet-stream', Accept: 'audio/wav' }, body: file,
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) throw await readApiError(response);
+  const bytes = await response.arrayBuffer();
+  if (bytes.byteLength <= 44 || bytes.byteLength > ENTRANCE_SOUND_MAX_BYTES
+      || response.headers.get('Content-Type')?.split(';')[0].trim() !== 'audio/wav') throw new Error('服务器返回的规范音效无效');
+  const view = new DataView(bytes);
+  const header = new TextDecoder('ascii').decode(new Uint8Array(bytes, 0, 44));
+  if (!header.startsWith('RIFF') || header.slice(8, 16) !== 'WAVEfmt ' || header.slice(36, 40) !== 'data'
+      || view.getUint32(16, true) !== 16 || view.getUint16(20, true) !== 1 || view.getUint16(22, true) !== 1
+      || view.getUint32(24, true) !== 48000 || view.getUint16(34, true) !== 16
+      || view.getUint32(40, true) !== bytes.byteLength - 44 || (bytes.byteLength - 44) / 96000 > 5) {
+    throw new Error('服务器返回的规范音效无效');
   }
-
   return {
-    name: file.name.slice(0, 128) || 'entrance-sound',
-    mimeType: file.type,
-    dataUrl: await readAsDataUrl(file),
+    name: (file.name.replace(/\.[^.]+$/, '').slice(0, 124) || 'entrance-sound') + '.wav',
+    mimeType: 'audio/wav', normalization: 'rms-v1',
+    dataUrl: await readAsDataUrl(new File([bytes], 'entrance.wav', { type: 'audio/wav' })),
   };
 }
 

@@ -11,7 +11,7 @@ const sourceFile = ts.createSourceFile('SoundSettings.ts', script, ts.ScriptTarg
 const callbacks = sourceFile.statements.filter((statement) => !ts.isImportDeclaration(statement))
   .map((statement) => statement.getText(sourceFile)).join('\n');
 const compiled = ts.transpile(callbacks, { target: ts.ScriptTarget.ES2022 });
-const clip: StoredEntranceSound = { name: '测试音效', mimeType: 'audio/wav', dataUrl: 'data:audio/wav;base64,YQ==' };
+const clip: StoredEntranceSound = { name: '测试音效', normalization: 'rms-v1', mimeType: 'audio/wav', dataUrl: 'data:audio/wav;base64,YQ==' };
 
 function setup() {
   const players: FakeAudio[] = [];
@@ -28,7 +28,7 @@ function setup() {
   const saveEntranceSound = vi.fn(() => true);
   // 挂载真实监听和清理到 Vue scope；播放器仅记录调用，不产生声音或访问设备。
   const settings = scope.run(() => runInNewContext(`${compiled}\n({ playPreview, chooseSound, error, sound })`, {
-    ref, computed, watch, onScopeDispose, defineProps: () => props, Audio: FakeAudio, Error,
+    ref, computed, watch, onScopeDispose, defineProps: () => props, Audio: FakeAudio, Error, AbortController,
     createEntranceSound, saveEntranceSound, loadEntranceSound: () => clip,
   })) as { playPreview: () => void; chooseSound: (event: Event) => Promise<void>;
     error: { value: string }; sound: { value: StoredEntranceSound } };
@@ -88,4 +88,17 @@ it('选择新音效前停止旧试听，继续保存所选音效', async () => {
     await Promise.resolve();
     expect(settings.error.value).toBe('');
   } finally { scope.stop(); }
+});
+
+it('切栏取消上传，旧结果不保存或覆盖当前音效', async () => {
+  const { scope, props, settings, createEntranceSound, saveEntranceSound } = setup();
+  let complete!: (sound: StoredEntranceSound) => void;
+  createEntranceSound.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+  const uploading = settings.chooseSound({ target: { value: 'clip', files: [{}] } } as unknown as Event);
+  props.active = false;
+  await nextTick();
+  complete(clip);
+  await uploading;
+  expect(saveEntranceSound).not.toHaveBeenCalled();
+  scope.stop();
 });

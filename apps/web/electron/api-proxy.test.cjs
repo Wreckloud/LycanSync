@@ -44,6 +44,22 @@ test('成员资料只开放明确的同源 GET 路径并保留认证', async () 
   assert.equal(forwarded.length, 1);
 });
 
+test('音效处理只开放固定 POST，上传字节有界且返回原始音频响应', async () => {
+  const { serve, forwarded } = proxyFixture({ net: { fetch: async (url, options) => {
+    forwarded.push({ url, options });
+    return new Response(new Uint8Array([1, 2]), { headers: { 'Content-Type': 'audio/wav', 'X-Content-Type-Options': 'nosniff' } });
+  } } });
+  const path = 'lycan://app/api/audio/entrance-sound/normalize';
+  const result = await serve(new Request(path, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: new Uint8Array([4]) }));
+  assert.equal(result.headers.get('Content-Type'), 'audio/wav');
+  assert.deepEqual([...new Uint8Array(await result.arrayBuffer())], [1, 2]);
+  assert.equal(forwarded[0].options.headers.Authorization, 'Bearer test-session');
+  assert.equal((await serve(new Request(path, { method: 'POST', body: new Uint8Array(512 * 1024 + 1) }))).status, 413);
+  assert.equal((await serve(new Request(path))).status, 404);
+  assert.equal((await serve(new Request(path + '/extra', { method: 'POST' }))).status, 404);
+  assert.equal(forwarded.length, 1);
+});
+
 test('群组创建允许 2 MiB 裁剪图的 Base64 和文本，转发保持认证', async () => {
   const { serve, forwarded } = proxyFixture();
   const body = JSON.stringify({ name: '小队', description: '一起开黑',

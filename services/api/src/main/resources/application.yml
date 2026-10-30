@@ -38,6 +38,9 @@ server:
   max-http-request-header-size: 16KB
 
 lycansync:
+  audio:
+    ffmpeg-executable: ${AUDIO_FFMPEG_EXECUTABLE:ffmpeg}
+    processing-directory: ${AUDIO_PROCESSING_DIR:./var/audio-processing}
   account:
     mode: ${ACCOUNT_MODE:invite}
     public-url: ${ACCOUNT_PUBLIC_URL:}

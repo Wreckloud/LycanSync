@@ -77,6 +77,10 @@ mv downloads/latest.yml.next downloads/latest.yml
 
 请勿公开密钥、`.env`、激活文件或恢复链接。
 
+从 0.2.15 起，入场音效处理要求 API 镜像包含 FFmpeg；仓库 Dockerfile 使用 Java 17 的 Ubuntu Noble 基础镜像，在构建时安装该软件源的 `ffmpeg`，升级 API 时须同时更新 Dockerfile 并重建镜像，不只替换 JAR。应用不将音频转码放在通话实时链路；登录用户主动上传时才短暂启动单个解码进程，8 秒超时，不排队启动多个进程。仅接受固定音频容器与本地文件协议，不接收任意 URL、路径或 FFmpeg 参数；解码子进程不继承 API 凭据环境。失败返回固定原因，不向客户端或日志输出原音频及工具正文。
+
+临时文件位于 API 工作目录下的 `./var/audio-processing`（镜像内 `/app/var/audio-processing`），正常成功和失败均删除，不写数据库或长期音效库。开发部署可用 `AUDIO_FFMPEG_EXECUTABLE` 指定受信任的 FFmpeg 可执行文件，`AUDIO_PROCESSING_DIR` 指定服务自身可写目录；不要由请求参数决定。缺少工具仅使音效处理返回不可用，不影响已有语音／共享。音效页保存的是处理后返回的本机副本，不提供跨设备同步。
+
 私密群权限要求后端与 Caddy 配置一起更新：8443 端口只代理 `/rtc`、`/rtc/validate`、`/rtc/v1`、`/rtc/v1/validate`，每次连接先由 `/internal/rtc/access` 验证 LiveKit 签名及当前群成员资格。该内部路径在业务入口返回 404；API 与 LiveKit HTTP 端口保持容器内访问，不直接发布。不要将 7990 映射给客户端，也不要通过另一个未校验的代理开放信令。首次从全员测试版迁移时，旧群只保留群主，并关闭旧公开语音房间；建议无人通话时部署。成员日常退出／移除只断开目标用户，不重建房间。
 
 同版本 `compose.yaml` 配置 LiveKit 签名 webhook 到 `http://api:18080/internal/rtc/events`，用于复核迟到入房，不轮询房间。升级已有部署时需要加载这项 LiveKit 配置；先确认无人通话，再更新后端及 LiveKit，最后验证并重新加载 Caddy。不要对外开放回调路径，不关闭签名和正文 SHA-256 校验。此异步复核不等于零帧暴露保证。
