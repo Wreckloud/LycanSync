@@ -146,16 +146,17 @@ vi.mock('./nativeMicrophoneAudio', () => ({
     private sessionId = '';
     private starting?: Promise<unknown>;
     private stopping?: Promise<void>;
-    constructor(private readonly desktop: Window['lycanDesktop'], private readonly options: { deviceId?: string; onError?: (code: string) => void }) {
+    constructor(private readonly desktop: Window['lycanDesktop'], private readonly options: { deviceId?: string; pushToTalk?: boolean; onError?: (code: string) => void }) {
       rtcMocks.microphoneInstances.push(this);
       if (options.onError) rtcMocks.nativeMicrophoneError.mockImplementation(options.onError);
     }
     async start(sessionId: string, settings: unknown) {
       this.sessionId = sessionId;
-      this.starting = this.desktop!.startNativeMicrophone(sessionId, settings as never, this.options.deviceId ?? 'default');
+      this.starting = this.desktop!.startNativeMicrophone(sessionId, settings as never, this.options.deviceId ?? 'default', this.options.pushToTalk ?? false);
       await this.starting;
       return this.track as never;
     }
+    setTransmission = vi.fn();
     configure(settings: unknown) {
       return this.desktop!.configureNativeMicrophone!(this.sessionId, settings as never);
     }
@@ -2609,7 +2610,13 @@ describe('native screen share wiring', () => {
       processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true },
     }))!;
     try {
+      rtc.setMicrophoneVoiceMode('pushToTalk');
       expect(await rtc.join('microphone-group')).toBe(true);
+      expect(rtcMocks.microphoneStarted).toHaveBeenCalledOnce();
+      expect(rtcMocks.microphoneStarted.mock.calls[0][3]).toBe(true);
+      const sending = rtcMocks.microphoneInstances.at(-1) as { setTransmission: ReturnType<typeof vi.fn> };
+      for (let index = 0; index < 10; index++) { rtc.setPushToTalkHeld(true); rtc.setPushToTalkHeld(false); }
+      expect(sending.setTransmission).toHaveBeenLastCalledWith(true, false);
       expect(rtcMocks.microphoneStarted).toHaveBeenCalledOnce();
       expect(rtcMocks.microphoneStarted.mock.calls[0][1]).toEqual({
         inputGain: 0.8, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true,
@@ -2621,6 +2628,9 @@ describe('native screen share wiring', () => {
       expect(rtcMocks.microphoneStarted.mock.calls.at(-1)?.[2]).toBe('mic-two');
       expect(rtc.microphoneEnabled.value).toBe(true);
       expect(rtc.microphoneIntent.value).toBe(true);
+      rtc.setMicrophoneVoiceMode('voice');
+      const current = rtcMocks.microphoneInstances.at(-1) as { setTransmission: ReturnType<typeof vi.fn> };
+      expect(current.setTransmission).toHaveBeenLastCalledWith(false, false);
       rtc.setMicrophoneInputGain(0.5);
       expect(rtcMocks.microphoneConfigured).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ inputGain: 0.5 }));
       await rtc.toggleMedia(Track.Source.Microphone);

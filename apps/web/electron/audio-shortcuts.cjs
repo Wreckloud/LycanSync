@@ -1,6 +1,6 @@
 const { randomUUID } = require('node:crypto');
 
-const ACTIONS = ['microphone', 'listening'];
+const ACTIONS = ['microphone', 'listening', 'pushToTalk'];
 const WM_HOTKEY = 0x0312;
 
 function parseBinding(value) {
@@ -20,22 +20,47 @@ function parseBinding(value) {
 }
 
 function validateBindings(value) {
-  if (!value || Object.keys(value).length !== 2 || ACTIONS.some(action => typeof value[action] !== 'string')) throw new Error('快捷键设置无效');
+  if (!value || Object.keys(value).length !== 3 || ACTIONS.some(action => typeof value[action] !== 'string')) throw new Error('快捷键设置无效');
   ACTIONS.forEach(action => parseBinding(value[action]));
-  if (value.microphone && value.microphone === value.listening) throw new Error('两个动作不能使用同一快捷键');
-  return { microphone: value.microphone, listening: value.listening };
+  const used = ACTIONS.map(action => value[action]).filter(Boolean);
+  if (new Set(used).size !== used.length) throw new Error('动作不能使用同一快捷键');
+  return { microphone: value.microphone, listening: value.listening, pushToTalk: value.pushToTalk };
 }
 
-function createAudioShortcuts({ getWindow, bridge }) {
+function createAudioShortcuts({ getWindow, bridge, onRelease = () => {}, onActivityChanged = () => {} }) {
   let owner;
   let roomId = null;
   let suspended = false;
-  let bindings = { microphone: '', listening: '' };
+  let bindings = { microphone: '', listening: '', pushToTalk: '' };
+  let pushToTalk = false;
+  let held = false;
+  let holdSequence = 0;
+  let needsRelease = false;
+  let releaseTimer;
+  const blockers = new Set();
   const registered = new Map();
   let hookedWindow;
 
   function requireOwner(token) { if (!owner || owner !== token) throw new Error('快捷键会话已失效'); }
+  function updateActivity() { onActivityChanged(Boolean(owner && roomId && pushToTalk && bindings.pushToTalk && !suspended && !blockers.size)); }
+  function releaseHold() {
+    const wasHeld = held;
+    held = false;
+    holdSequence++;
+    if (wasHeld) onRelease();
+    if (wasHeld && owner && roomId) getWindow()?.webContents.send('audio-shortcuts:hold', { owner, roomId, sequence: holdSequence, held: false });
+  }
+  function pressed() {
+    const binding = parseBinding(bindings.pushToTalk);
+    const window = getWindow();
+    return Boolean(binding && window && !window.isDestroyed()
+      && bridge().audioHotkeyPressed(window.getNativeWindowHandle(), binding.modifiers, binding.key));
+  }
   function unregister() {
+    needsRelease ||= held;
+    onActivityChanged(false);
+    releaseHold();
+    clearInterval(releaseTimer); releaseTimer = undefined;
     let failure;
     for (const [id, window] of registered) {
       try {
@@ -50,6 +75,7 @@ function createAudioShortcuts({ getWindow, bridge }) {
     if (!window || window.isDestroyed()) throw new Error('快捷键窗口不可用');
     try {
       ACTIONS.forEach((action, index) => {
+        if (action === 'pushToTalk' && !pushToTalk) return;
         const binding = parseBinding(next[action]);
         if (!binding) return;
         const id = 0x4c01 + index;
@@ -73,24 +99,34 @@ function createAudioShortcuts({ getWindow, bridge }) {
     hookedWindow.hookWindowMessage(WM_HOTKEY, wParam => {
       const id = wParam.readUInt32LE(0);
       const action = ACTIONS[id - 0x4c01];
-      if (owner && roomId && !suspended && registered.has(id) && action) {
-        hookedWindow.webContents.send('audio-shortcuts:action', { owner, roomId, action });
+      if (owner && roomId && !suspended && !blockers.size && registered.has(id) && action) {
+        if (action === 'pushToTalk') {
+          try { if (needsRelease || !pressed()) return; }
+          catch { releaseHold(); notifyError(new Error('按键状态无法读取，请重新启用快捷键')); return; }
+          held = true;
+          hookedWindow.webContents.send('audio-shortcuts:hold', { owner, roomId, sequence: ++holdSequence, held: true });
+        } else hookedWindow.webContents.send('audio-shortcuts:action', { owner, roomId, action });
       }
     });
     return owner;
   }
-  function configure(token, value) {
+  function configure(token, value, nextPushToTalk = false) {
     requireOwner(token);
     const next = validateBindings(value);
+    if (typeof nextPushToTalk !== 'boolean') throw new Error('发言模式无效');
     const previous = bindings;
+    const previousMode = pushToTalk;
     unregister();
     suspended = false;
+    pushToTalk = nextPushToTalk;
     try { register(next, Boolean(roomId)); }
     catch (error) {
-      try { register(previous, Boolean(roomId)); } catch (restoreError) { notifyError(restoreError); }
+      pushToTalk = previousMode;
+      try { register(previous, Boolean(roomId)); waitForRelease(); } catch (restoreError) { notifyError(restoreError); }
       throw error;
     }
     bindings = next;
+    waitForRelease();
   }
   function activate(token, nextRoom) {
     requireOwner(token);
@@ -98,6 +134,7 @@ function createAudioShortcuts({ getWindow, bridge }) {
     unregister();
     roomId = nextRoom;
     if (roomId && !suspended) register(bindings, true);
+    waitForRelease();
   }
   function capture(token, enabled) {
     requireOwner(token);
@@ -105,9 +142,11 @@ function createAudioShortcuts({ getWindow, bridge }) {
     unregister();
     suspended = enabled;
     if (!suspended && roomId) register(bindings, true);
+    waitForRelease();
   }
   function end(token) {
     if (!owner || token !== owner) return;
+    releaseHold();
     roomId = null;
     suspended = true;
     try { unregister(); }
@@ -115,10 +154,46 @@ function createAudioShortcuts({ getWindow, bridge }) {
       hookedWindow?.unhookWindowMessage(WM_HOTKEY);
       hookedWindow = undefined;
       owner = undefined;
-      bindings = { microphone: '', listening: '' };
+      bindings = { microphone: '', listening: '', pushToTalk: '' };
+      pushToTalk = false;
     }
   }
-  return { begin, configure, activate, capture, end, clear: () => end(owner) };
+  function readHold(token, currentRoom, sequence) {
+    requireOwner(token);
+    if (typeof currentRoom !== 'string' || !Number.isSafeInteger(sequence) || sequence < 0) throw new Error('按键说话会话无效');
+    if (!pushToTalk || !held || blockers.size || suspended || currentRoom !== roomId || sequence !== holdSequence) return false;
+    if (!pressed()) { releaseHold(); return false; }
+    return true;
+  }
+  function transmissionAllowed() {
+    if (!owner || !roomId || !pushToTalk || !held || suspended || blockers.size) return false;
+    try { if (pressed()) return true; }
+    catch { notifyError(new Error('按键状态无法读取，请重新启用快捷键')); }
+    releaseHold();
+    return false;
+  }
+  function waitForRelease() {
+    updateActivity();
+    clearInterval(releaseTimer); releaseTimer = undefined;
+    if (!blockers.size && !suspended && owner && roomId && pushToTalk && bindings.pushToTalk) {
+      try { needsRelease ||= pressed(); }
+      catch { needsRelease = true; notifyError(new Error('按键状态无法读取，请重新启用快捷键')); return; }
+      if (!needsRelease) return;
+      // 锁屏／休眠后必须先见到组合松开，旧的排队消息不能重新开口。
+      releaseTimer = setInterval(() => {
+        try { if (pressed()) return; needsRelease = false; }
+        catch { notifyError(new Error('按键状态无法读取，请重新启用快捷键')); }
+        clearInterval(releaseTimer); releaseTimer = undefined;
+      }, 50);
+      releaseTimer.unref?.();
+    }
+  }
+  function block(reason, enabled) {
+    if (enabled) { blockers.add(reason); needsRelease ||= held; releaseHold(); }
+    else blockers.delete(reason);
+    waitForRelease();
+  }
+  return { begin, configure, activate, capture, end, readHold, block, transmissionAllowed, clear: () => end(owner) };
 }
 
 module.exports = { createAudioShortcuts, parseBinding, validateBindings };

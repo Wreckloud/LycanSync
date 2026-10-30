@@ -118,3 +118,9 @@ target_compile_features(lycansync-screen-audio-pcm-tests PRIVATE cxx_std_20)
 target_compile_options(lycansync-screen-audio-pcm-tests PRIVATE /utf-8)
 target_include_directories(lycansync-screen-audio-pcm-tests PRIVATE src)
 set_target_properties(lycansync-screen-audio-pcm-tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")
+
+# 仅验证发送授权与超时，不初始化采集、设备或图形资源。
+add_executable(lycansync-voice-transmission-tests EXCLUDE_FROM_ALL tests/voice_transmission.cpp)
+target_compile_features(lycansync-voice-transmission-tests PRIVATE cxx_std_20)
+target_compile_options(lycansync-voice-transmission-tests PRIVATE /utf-8)
+set_target_properties(lycansync-voice-transmission-tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")

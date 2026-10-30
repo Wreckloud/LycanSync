@@ -35,7 +35,7 @@ function fixture(context, mode = {}) {
           child.send({ event: 'configured', requestId: Number(command.split('|')[1]) });
         });
         if (command.startsWith('statistics|') && !mode.statisticsHang) queueMicrotask(() => {
-          child.send({ event: 'statistics', requestId: Number(command.split('|')[1]), framesReceived: 960, droppedChunks: 2, sourceState: 1, sourceFrames: 960 });
+          child.send({ event: 'statistics', requestId: Number(command.split('|')[1]), framesReceived: 960, droppedChunks: 2, sourceState: 1, sourceFrames: 960, pushToTalk: false, transmissionAllowed: true });
         });
       } });
       child.kill = () => { child.kills++; if (!mode.killHang) queueMicrotask(() => child.emit('close', 1)); return true; };
@@ -58,10 +58,10 @@ test('麦克风按需启动，首块确认、配置和正常停止只持有一�
   await delay(1); assert.equal(settled, false);
   children[0].send(ready);
   assert.equal((await pending).sampleRate, 48000);
-  assert.deepEqual(spawns[0][1], ['C:\\obs\\win-wasapi.dll', 'C:\\obs\\data', 'C:\\app\\data\\obs-audio', pipeId, '1|111', 'default']);
+  assert.deepEqual(spawns[0][1], ['C:\\obs\\win-wasapi.dll', 'C:\\obs\\data', 'C:\\app\\data\\obs-audio', pipeId, '1|111', 'default', '0']);
   assert.equal(spawns[0][2].windowsHide, true);
   assert.deepEqual(await manager.configure('voice-session', { ...settings, inputGain: 0.6 }), { changed: true });
-  assert.deepEqual(await manager.getDiagnostics('voice-session'), { framesReceived: 960, droppedChunks: 2, sourceState: 1, sourceFrames: 960 });
+  assert.deepEqual(await manager.getDiagnostics('voice-session'), { framesReceived: 960, droppedChunks: 2, sourceState: 1, sourceFrames: 960, pushToTalk: false, transmissionAllowed: true });
   assert.equal(diagnostics[0].stage, 'microphoneReady');
   assert.deepEqual(await manager.stop('voice-session'), { changed: true });
   assert.deepEqual(await manager.stop('voice-session'), { changed: false });
@@ -85,11 +85,27 @@ test('指定端点只传给本次采集，不写入诊断；无效端点参数�
   const pending = manager.start(pipeId, 'selected-session', settings, selected);
   children[0].send(ready);
   await pending;
-  assert.equal(spawns[0][1].at(-1), selected);
+  assert.equal(spawns[0][1].at(-2), selected);
   assert.ok(!JSON.stringify(diagnostics).includes(selected));
   await manager.stop('selected-session');
   await assert.rejects(manager.start(pipeId, 'invalid-session', settings, 'bad\nendpoint'), /invalidMicrophoneCaptureStart/);
   assert.equal(children.length, 1);
+});
+
+test('发送授权仅应用当前宿主，模式与批次变化不重启 OBS，取消保留按键模式', async context => {
+  const f = fixture(context);
+  await f.started();
+  f.manager.setTransmission('old-session', true, true, 1);
+  assert.equal(f.children[0].commands.length, 0);
+  f.manager.setTransmission('voice-session', true, true, 1);
+  f.manager.setTransmission('voice-session', true, true, 1);
+  assert.deepEqual(f.children[0].commands, ['mode|1\ntransmit|1|350', 'transmit|1|350']);
+  f.manager.cancelTransmission('voice-session');
+  assert.equal(f.children[0].commands.at(-1), 'transmit|1|0');
+  f.manager.setTransmission('voice-session', false, false, 2);
+  assert.equal(f.children[0].commands.at(-1), 'mode|0\ntransmit|2|0');
+  assert.equal(f.children.length, 1);
+  await f.manager.stop('voice-session');
 });
 
 test('正常停止后可重启，旧子进程关闭不能清理新会话', async context => {

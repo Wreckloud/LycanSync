@@ -304,6 +304,8 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
         sourceState: [0, 1, 2].includes(native.microphoneCapture.sourceState) ? native.microphoneCapture.sourceState : null,
         sourceFrames: numeric(native.microphoneCapture.sourceFrames),
         framesReceived: numeric(native.microphoneCapture.framesReceived),
+        pushToTalk: typeof native.microphoneCapture.pushToTalk === 'boolean' ? native.microphoneCapture.pushToTalk : null,
+        transmissionAllowed: typeof native.microphoneCapture.transmissionAllowed === 'boolean' ? native.microphoneCapture.transmissionAllowed : null,
       } : null,
       screenShareAudio: native.screenShareAudio && { state: native.screenShareAudio.state,
         sampleRate: numeric(native.screenShareAudio.sampleRate), channels: numeric(native.screenShareAudio.channels),

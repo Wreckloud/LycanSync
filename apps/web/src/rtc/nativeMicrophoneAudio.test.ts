@@ -26,6 +26,40 @@ function createFakes() {
 afterEach(() => vi.restoreAllMocks());
 
 describe('NativeMicrophoneAudioSession', () => {
+  it('按键只更新发送授权，不重启采集，旧批次 PCM 不能进入新一次按住', async () => {
+    const f = createFakes();
+    let receive!: Parameters<NativeMicrophoneDesktopBridge['onNativeMicrophoneChunk']>[0];
+    const transmission = vi.fn(), acknowledge = vi.fn();
+    const start = vi.fn(async () => ({ sampleRate: 48000 as const, channels: 1 as const,
+      bitsPerSample: 32 as const, nominalChunkMs: 10 as const }));
+    const session = new NativeMicrophoneAudioSession({
+      startNativeMicrophone: start, setNativeMicrophoneTransmission: transmission,
+      configureNativeMicrophone: vi.fn(async () => ({ changed: true })),
+      stopNativeMicrophone: vi.fn(async () => ({ changed: true })),
+      onNativeMicrophoneChunk: callback => { receive = callback; return vi.fn(); },
+      acknowledgeNativeMicrophoneChunk: acknowledge, onNativeMicrophoneError: () => vi.fn(),
+    }, { pushToTalk: true, createContext: () => f.context, createWorkletNode: () => f.node,
+      createLocalTrack: () => ({ stop: vi.fn() }) as never });
+    await session.start('ptt-session', { inputGain: 1, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true });
+    session.setTransmission(true, true);
+    const firstEpoch = transmission.mock.calls.at(-1)![3];
+    session.setTransmission(true, false);
+    session.setTransmission(true, true);
+    const nextEpoch = transmission.mock.calls.at(-1)![3];
+    expect(nextEpoch).toBeGreaterThan(firstEpoch);
+    f.port.postMessage.mockClear();
+    receive({ sessionId: 'ptt-session', sequence: 1, transmissionEpoch: firstEpoch, frames: 480,
+      sampleRate: 48000, channels: 1, pcm: new Uint8Array(1920) });
+    expect(f.port.postMessage).not.toHaveBeenCalled();
+    expect(acknowledge).toHaveBeenCalledWith('ptt-session', 1, 1);
+    receive({ sessionId: 'ptt-session', sequence: 2, transmissionEpoch: nextEpoch, frames: 480,
+      sampleRate: 48000, channels: 1, pcm: new Uint8Array(1920) });
+    expect(f.port.postMessage).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledOnce();
+    session.setTransmission(false, false);
+    expect(transmission.mock.calls.at(-1)!.slice(0, 3)).toEqual(['ptt-session', false, false]);
+    await session.stop();
+  });
   it('sends bounded mono PCM to the worklet and releases the capture session', async () => {
     const fakes = createFakes();
     const settings = { inputGain: 1, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true };
@@ -37,6 +71,7 @@ describe('NativeMicrophoneAudioSession', () => {
     let receiveChunk: Parameters<NativeMicrophoneDesktopBridge['onNativeMicrophoneChunk']>[0] | undefined;
     const desktop: NativeMicrophoneDesktopBridge = {
       startNativeMicrophone: started,
+      setNativeMicrophoneTransmission: vi.fn(),
       configureNativeMicrophone: configured,
       stopNativeMicrophone: stopped,
       onNativeMicrophoneChunk: (callback) => { receiveChunk = callback; return () => { receiveChunk = undefined; }; },
@@ -55,7 +90,7 @@ describe('NativeMicrophoneAudioSession', () => {
     expect(fakes.addModule.mock.calls[0][0]).not.toMatch(/^(blob:|data:)/);
     await session.configure({ ...settings, inputGain: 0.75 });
     receiveChunk?.({ sessionId: 'microphone-session', sequence: 3, frames: 480, sampleRate: 48_000,
-      channels: 1, pcm: new Uint8Array(480 * 4) });
+      channels: 1, transmissionEpoch: 0, pcm: new Uint8Array(480 * 4) });
     expect(fakes.port.postMessage).toHaveBeenCalledOnce();
     const [message, transfer] = fakes.port.postMessage.mock.calls[0];
     expect(message).toMatchObject({ type: 'chunk', sequence: 3 });
@@ -68,7 +103,7 @@ describe('NativeMicrophoneAudioSession', () => {
     await session.stop();
     fakes.port.dispatch({ type: 'accepted', sequence: 3, droppedChunks: 0 });
     expect(acknowledge).toHaveBeenCalledOnce();
-    expect(started).toHaveBeenCalledWith('microphone-session', settings, 'default');
+    expect(started).toHaveBeenCalledWith('microphone-session', settings, 'default', false);
     expect(configured).toHaveBeenCalledOnce();
     expect(stopped).toHaveBeenCalledWith('microphone-session');
     expect(track.stop).toHaveBeenCalledOnce();
@@ -84,6 +119,7 @@ describe('NativeMicrophoneAudioSession', () => {
     const desktop: NativeMicrophoneDesktopBridge = {
       startNativeMicrophone: vi.fn(async () => ({ sampleRate: 48_000 as const, channels: 1 as const,
         bitsPerSample: 32 as const, nominalChunkMs: 10 as const })),
+      setNativeMicrophoneTransmission: vi.fn(),
       configureNativeMicrophone: vi.fn(async () => ({ changed: true })),
       stopNativeMicrophone: vi.fn(async () => ({ changed: true })),
       onNativeMicrophoneChunk: (callback) => { receiveChunk = callback; return () => { receiveChunk = undefined; }; },
@@ -97,7 +133,7 @@ describe('NativeMicrophoneAudioSession', () => {
     });
     await session.start('microphone-session', { inputGain: 1, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true });
     receiveChunk?.({ sessionId: 'microphone-session', sequence: 4, frames: 479, sampleRate: 48_000,
-      channels: 1, pcm: new Uint8Array(479 * 4) });
+      channels: 1, transmissionEpoch: 0, pcm: new Uint8Array(479 * 4) });
     expect(fakes.port.postMessage).not.toHaveBeenCalled();
     expect(acknowledge).toHaveBeenCalledWith('microphone-session', 4, 1);
     await session.stop();
@@ -110,6 +146,7 @@ describe('NativeMicrophoneAudioSession', () => {
     const desktop: NativeMicrophoneDesktopBridge = {
       startNativeMicrophone: vi.fn(async () => ({ sampleRate: 48_000 as const, channels: 1 as const,
         bitsPerSample: 32 as const, nominalChunkMs: 10 as const })),
+      setNativeMicrophoneTransmission: vi.fn(),
       configureNativeMicrophone: vi.fn(async () => ({ changed: true })),
       stopNativeMicrophone: vi.fn(async () => ({ changed: true })),
       onNativeMicrophoneChunk: (callback) => { receiveChunk = callback; return () => { receiveChunk = undefined; }; },
@@ -124,12 +161,12 @@ describe('NativeMicrophoneAudioSession', () => {
     await session.start('session-b', { inputGain: 1, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true });
 
     receiveChunk?.({ sessionId: 'session-a', sequence: 1, frames: 480, sampleRate: 48_000,
-      channels: 1, pcm: new Uint8Array(480 * 4) });
+      channels: 1, transmissionEpoch: 0, pcm: new Uint8Array(480 * 4) });
     expect(fakes.port.postMessage).not.toHaveBeenCalled();
     expect(acknowledge).not.toHaveBeenCalled();
 
     receiveChunk?.({ sessionId: 'session-b', sequence: 1, frames: 480, sampleRate: 48_000,
-      channels: 1, pcm: new Uint8Array(480 * 4) });
+      channels: 1, transmissionEpoch: 0, pcm: new Uint8Array(480 * 4) });
     expect(fakes.port.postMessage).toHaveBeenCalledOnce();
     fakes.port.dispatch({ type: 'accepted', sequence: 1, droppedChunks: 0 });
     expect(acknowledge).toHaveBeenCalledWith('session-b', 1, 0);
@@ -150,6 +187,7 @@ function cleanupHarness() {
   let reportError!: () => void;
   const desktop: NativeMicrophoneDesktopBridge = {
     startNativeMicrophone: started,
+    setNativeMicrophoneTransmission: vi.fn(),
     stopNativeMicrophone: stopped,
     configureNativeMicrophone: vi.fn(async () => ({ changed: true })),
     onNativeMicrophoneChunk: () => removeChunks,

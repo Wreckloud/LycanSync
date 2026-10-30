@@ -5,7 +5,20 @@ class LycanMicrophoneProcessor extends AudioWorkletProcessor {
     this.current = null;
     this.dropped = 0;
     this.pendingAcknowledgements = [];
+    this.pushToTalk = false;
+    this.remaining = 0;
     this.port.onmessage = ({ data }) => {
+      if (data?.type === 'gate' && typeof data.pushToTalk === 'boolean' && typeof data.held === 'boolean') {
+        const wasOpen = !this.pushToTalk || this.remaining > 0;
+        this.pushToTalk = data.pushToTalk;
+        this.remaining = data.held ? Math.round(sampleRate * 0.35) : 0;
+        if (wasOpen !== (!this.pushToTalk || this.remaining > 0)) {
+          this.queue.length = 0;
+          this.current = null;
+          this.acknowledgeAvailableCapacity();
+        }
+        return;
+      }
       if (data?.type !== 'chunk' || !(data.pcm instanceof ArrayBuffer)) return;
       if (this.queue.length >= 12) {
         const discarded = this.queue.shift();
@@ -35,7 +48,9 @@ class LycanMicrophoneProcessor extends AudioWorkletProcessor {
     const samples = output[0];
     for (let index = 0; index < samples.length; index++) {
       if (!this.current || this.current.offset >= this.current.samples.length) this.current = this.queue.shift() || null;
-      samples[index] = this.current ? this.current.samples[this.current.offset++] : 0;
+      const value = this.current ? this.current.samples[this.current.offset++] : 0;
+      samples[index] = !this.pushToTalk || this.remaining > 0 ? value : 0;
+      if (this.remaining > 0) this.remaining--;
     }
     this.acknowledgeAvailableCapacity();
     return true;

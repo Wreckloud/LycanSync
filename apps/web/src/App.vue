@@ -1235,6 +1235,8 @@ watch(() => connected.value ? rtc.room : null, room => {
 const audioShortcuts = reactive(useAudioShortcuts(props.user.id, {
   roomId: () => audioShortcutRoomId.value,
   microphone: toggleMicrophone, listening: toggleListening,
+  modeChanged: rtc.setMicrophoneVoiceMode,
+  transmissionChanged: rtc.setPushToTalkHeld,
 }));
 
 function participantVolume(identity: string) {

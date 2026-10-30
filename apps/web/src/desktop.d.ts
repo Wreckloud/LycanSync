@@ -76,7 +76,8 @@ interface NativeCaptureDiagnostics {
   recording?: Pick<DesktopRecordingStatus, 'phase' | 'holdingResources'> & { applicationAudio: boolean; microphone: boolean; friends: boolean };
   captureSuspended: boolean | null;
   microphoneCaptureDroppedChunks: number | null;
-  microphoneCapture?: { sourceState: number; sourceFrames: number; framesReceived: number } | null;
+  microphoneCapture?: { sourceState: number; sourceFrames: number; framesReceived: number;
+    pushToTalk?: boolean; transmissionAllowed?: boolean } | null;
   screenShareAudio: {
     state: 'idle' | 'starting' | 'running' | 'stopping' | 'failed';
     sessionId: string | null;
@@ -101,6 +102,7 @@ interface NativeScreenAudioChunk {
 }
 
 interface NativeMicrophoneChunk {
+  transmissionEpoch: number;
   sessionId: string;
   sequence: number;
   frames: number;
@@ -122,7 +124,9 @@ interface StartupUpdateState {
 interface Window {
   lycanAudioShortcuts?: {
     begin(): Promise<string>;
-    configure(owner: string, bindings: import('./settings/useAudioShortcuts').AudioShortcutBindings): Promise<void>;
+    configure(owner: string, bindings: import('./settings/useAudioShortcuts').AudioShortcutBindings, pushToTalk: boolean): Promise<void>;
+    readHold(owner: string, roomId: string, sequence: number): Promise<boolean>;
+    onHold(callback: (event: { owner: string; roomId: string; sequence: number; held: boolean }) => void): () => void;
     activate(owner: string, roomId: string | null): Promise<void>;
     capture(owner: string, enabled: boolean): Promise<void>;
     end(owner: string): Promise<void>;
@@ -218,11 +222,12 @@ interface Window {
     acknowledgeNativeScreenAudioChunk(sessionId: string, sequence: number, droppedChunks: number): void;
     onNativeScreenAudioError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
     listMicrophoneDevices(): Promise<{ id: string; label: string }[]>;
-    startNativeMicrophone(sessionId: string, settings: import('./rtc/nativeMicrophoneAudio').NativeMicrophoneSettings, deviceId: string): Promise<{
+    startNativeMicrophone(sessionId: string, settings: import('./rtc/nativeMicrophoneAudio').NativeMicrophoneSettings, deviceId: string, pushToTalk: boolean): Promise<{
       sampleRate: 48000; channels: 1; bitsPerSample: 32; nominalChunkMs: 10;
     }>;
     configureNativeMicrophone(sessionId: string, settings: import('./rtc/nativeMicrophoneAudio').NativeMicrophoneSettings): Promise<{ changed: boolean }>;
     stopNativeMicrophone(sessionId: string): Promise<{ changed: boolean }>;
+    setNativeMicrophoneTransmission(sessionId: string, pushToTalk: boolean, held: boolean, epoch: number): void;
     onNativeMicrophoneChunk(callback: (chunk: NativeMicrophoneChunk) => void): () => void;
     acknowledgeNativeMicrophoneChunk(sessionId: string, sequence: number, droppedChunks: number): void;
     onNativeMicrophoneError(callback: (failure: { sessionId: string; code: string }) => void): () => void;

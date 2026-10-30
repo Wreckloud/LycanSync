@@ -4,7 +4,12 @@ const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { PassThrough, Writable } = require('node:stream');
 const { test } = require('node:test');
-const { runInNewContext } = require('node:vm');
+const { runInNewContext: runVm } = require('node:vm');
+const { createMediaBackgroundPolicy } = require('./media-background.cjs');
+function runInNewContext(source, sandbox) {
+  sandbox.setMediaBackgroundActive ??= createMediaBackgroundPolicy();
+  return runVm(source, sandbox);
+}
 const { ObsCaptureHostManager } = require('./obs-capture-host.cjs');
 const { leagueCaptureApplication } = require('./league-capture.cjs');
 

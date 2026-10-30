@@ -13,14 +13,16 @@ export interface NativeMicrophoneChunk {
   sampleRate: number;
   channels: 1;
   pcm: Uint8Array;
+  transmissionEpoch: number;
 }
 
 export interface NativeMicrophoneDesktopBridge {
-  startNativeMicrophone(sessionId: string, settings: NativeMicrophoneSettings, deviceId: string): Promise<{
+  startNativeMicrophone(sessionId: string, settings: NativeMicrophoneSettings, deviceId: string, pushToTalk: boolean): Promise<{
     sampleRate: 48000; channels: 1; bitsPerSample: 32; nominalChunkMs: 10;
   }>;
   configureNativeMicrophone(sessionId: string, settings: NativeMicrophoneSettings): Promise<{ changed: boolean }>;
   stopNativeMicrophone(sessionId: string): Promise<{ changed: boolean }>;
+  setNativeMicrophoneTransmission(sessionId: string, pushToTalk: boolean, held: boolean, epoch: number): void;
   onNativeMicrophoneChunk(callback: (chunk: NativeMicrophoneChunk) => void): () => void;
   acknowledgeNativeMicrophoneChunk(sessionId: string, sequence: number, droppedChunks: number): void;
   onNativeMicrophoneError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
@@ -28,6 +30,7 @@ export interface NativeMicrophoneDesktopBridge {
 
 interface NativeMicrophoneOptions {
   deviceId?: string;
+  pushToTalk?: boolean;
   onError?: (code: string) => void;
   createContext?: (sampleRate: number) => AudioContext;
   createWorkletNode?: (context: AudioContext) => AudioWorkletNode;
@@ -51,12 +54,16 @@ export class NativeMicrophoneAudioSession {
   private droppedChunks = 0;
   private readonly onError?: (code: string) => void;
   private readonly inputDeviceId: string;
+  private pushToTalk: boolean;
+  private transmissionHeld = false;
+  private transmissionEpoch = 0;
   private readonly createContext: (sampleRate: number) => AudioContext;
   private readonly createWorkletNode: (context: AudioContext) => AudioWorkletNode;
   private readonly createLocalTrack: (track: MediaStreamTrack, context: AudioContext) => LocalAudioTrack;
 
   constructor(private readonly desktop: NativeMicrophoneDesktopBridge, options: NativeMicrophoneOptions = {}) {
     this.inputDeviceId = options.deviceId ?? 'default';
+    this.pushToTalk = options.pushToTalk ?? false;
     this.onError = options.onError;
     this.createContext = options.createContext ?? ((sampleRate) => new AudioContext({ sampleRate }));
     this.createWorkletNode = options.createWorkletNode ?? ((context) => new AudioWorkletNode(context,
@@ -84,6 +91,21 @@ export class NativeMicrophoneAudioSession {
     });
   }
 
+  setTransmission(pushToTalk: boolean, held: boolean) {
+    if (this.stopped) return;
+    const previous = this.pushToTalk;
+    const nextHeld = pushToTalk && held;
+    if (previous !== pushToTalk || this.transmissionHeld !== nextHeld) this.transmissionEpoch++;
+    this.pushToTalk = pushToTalk;
+    this.transmissionHeld = nextHeld;
+    if (this.node && (previous || pushToTalk)) {
+      this.node.port.postMessage({ type: 'gate', pushToTalk, held: pushToTalk && held });
+    }
+    if (this.started && this.sessionId) {
+      this.desktop.setNativeMicrophoneTransmission(this.sessionId, pushToTalk, held, this.transmissionEpoch);
+    }
+  }
+
   private async startGraphAndCapture(sessionId: string, settings: NativeMicrophoneSettings) {
     this.sessionId = sessionId;
     this.removeChunkListener = this.desktop.onNativeMicrophoneChunk((chunk) => this.acceptChunk(chunk));
@@ -95,6 +117,7 @@ export class NativeMicrophoneAudioSession {
       await this.context.audioWorklet.addModule(processorUrl);
       if (this.stopped) throw new Error('microphoneSessionStopped');
       this.node = this.createWorkletNode(this.context);
+      this.setTransmission(this.pushToTalk, false);
       const workletSessionId = sessionId;
       const destination = this.context.createMediaStreamDestination();
       destination.channelCount = 1;
@@ -110,9 +133,10 @@ export class NativeMicrophoneAudioSession {
       await this.context.resume();
       if (this.stopped) throw new Error('microphoneSessionStopped');
       this.track = this.createLocalTrack(destination.stream.getAudioTracks()[0], this.context);
-      this.nativeStartCommand = this.desktop.startNativeMicrophone(sessionId, settings, this.inputDeviceId);
+      this.nativeStartCommand = this.desktop.startNativeMicrophone(sessionId, settings, this.inputDeviceId, this.pushToTalk);
       await this.nativeStartCommand;
       this.started = true;
+      this.setTransmission(this.pushToTalk, false);
       if (this.stopped) throw new Error('microphoneSessionStopped');
     } catch (error) {
       try {
@@ -166,7 +190,7 @@ export class NativeMicrophoneAudioSession {
       this.desktop.acknowledgeNativeMicrophoneChunk(this.sessionId!, chunk.sequence, ++this.droppedChunks);
       return;
     }
-    if (chunk.frames !== 480 || chunk.sampleRate !== 48_000 || chunk.channels !== 1
+    if (chunk.transmissionEpoch !== this.transmissionEpoch || chunk.frames !== 480 || chunk.sampleRate !== 48_000 || chunk.channels !== 1
         || !(chunk.pcm instanceof Uint8Array) || chunk.pcm.byteLength !== 480 * 4) {
       this.desktop.acknowledgeNativeMicrophoneChunk(this.sessionId!, chunk.sequence, ++this.droppedChunks);
       return;

@@ -3,12 +3,12 @@ use napi::{Error, Result, Status};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    HOT_KEY_MODIFIERS, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
+    GetAsyncKeyState, HOT_KEY_MODIFIERS, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
 };
 use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
 fn owned_window(handle: &Buffer, id: u32) -> Result<HWND> {
-    if handle.len() != 8 || !matches!(id, 0x4c01 | 0x4c02) {
+    if handle.len() != 8 || !matches!(id, 0x4c01..=0x4c03) {
         return Err(Error::new(Status::InvalidArg, "audioShortcutInvalid"));
     }
     let address = u64::from_le_bytes(handle.as_ref().try_into().unwrap()) as usize;
@@ -20,6 +20,21 @@ fn owned_window(handle: &Buffer, id: u32) -> Result<HWND> {
         return Err(Error::new(Status::InvalidArg, "audioShortcutWindowInvalid"));
     }
     Ok(window)
+}
+
+#[napi_derive::napi]
+pub fn audio_hotkey_pressed(handle: Buffer, modifiers: u32, key: u32) -> Result<bool> {
+    owned_window(&handle, 0x4c03)?;
+    let function_key = (0x70..=0x7a).contains(&key);
+    let character_key = (0x30..=0x39).contains(&key) || (0x41..=0x5a).contains(&key);
+    if modifiers > 7 || (!function_key && (!character_key || modifiers & 3 == 0)) {
+        return Err(Error::new(Status::InvalidArg, "audioShortcutInvalid"));
+    }
+    // 只读取已绑定组合的当前高位状态；低位的历史按下标记不可靠。
+    Ok(unsafe { GetAsyncKeyState(key as i32) } < 0
+        && (modifiers & 1 == 0 || unsafe { GetAsyncKeyState(0x12) } < 0)
+        && (modifiers & 2 == 0 || unsafe { GetAsyncKeyState(0x11) } < 0)
+        && (modifiers & 4 == 0 || unsafe { GetAsyncKeyState(0x10) } < 0))
 }
 
 #[napi_derive::napi]

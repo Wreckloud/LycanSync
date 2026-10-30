@@ -7,7 +7,8 @@ const props = defineProps<{ active: boolean; shortcuts: UnwrapNestedRefs<ReturnT
 const draft = ref('');
 const draftCode = ref('');
 const keyError = ref('');
-const actions = [{ id: 'microphone', label: '麦克风静音／恢复' }, { id: 'listening', label: '停止／恢复收听' }] as const;
+const actions = [{ id: 'microphone', label: '麦克风静音／恢复' }, { id: 'listening', label: '停止／恢复收听' },
+  { id: 'pushToTalk', label: '按键说话' }] as const;
 
 function keyDown(event: KeyboardEvent) {
   if (props.shortcuts.busy) return;
@@ -31,6 +32,17 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
   <div class="settings-section shortcut-settings">
     <p class="settings-intro">全局快捷键在游戏或其他窗口前台时也生效；仅在已连接的语音中操作，不会自动入房。默认不绑定。</p>
     <p v-if="!shortcuts.supported">全局快捷键仅在 Windows 桌面客户端提供。</p>
+    <section class="settings-block">
+      <h2>发言模式</h2>
+      <label class="voice-mode"><input type="radio" name="voice-mode" :checked="shortcuts.voiceMode === 'voice'"
+        :disabled="shortcuts.busy" @change="shortcuts.setVoiceMode('voice')" />自由发言</label>
+      <label class="voice-mode"><input type="radio" name="voice-mode" :checked="shortcuts.voiceMode === 'pushToTalk'"
+        :disabled="!shortcuts.supported || !shortcuts.ready || shortcuts.busy"
+        @change="shortcuts.setVoiceMode('pushToTalk')" />按键说话</label>
+      <small>按键说话需要先在通话中开启麦克风；手动静音、停止收听和离房始终优先。松开按键即停止发声。</small>
+      <small v-if="shortcuts.voiceMode === 'pushToTalk'">{{ !shortcuts.bindings.pushToTalk
+        ? '请设置下方的按键说话快捷键；设置前保持静音。' : shortcuts.held ? '按键已按住' : '等待按住快捷键' }}</small>
+    </section>
     <section class="settings-block">
       <h2>语音快捷键</h2>
       <div v-for="action in actions" :key="action.id" class="shortcut-setting-row">
@@ -58,4 +70,6 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
 .shortcut-settings { max-width: 760px; }
 .shortcut-setting-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; min-height: 44px; }
 .shortcut-setting-row .settings-actions { margin: 0; }
+.voice-mode { display: flex; align-items: center; gap: 8px; }
+.voice-mode input { margin: 0; accent-color: var(--accent); }
 </style>

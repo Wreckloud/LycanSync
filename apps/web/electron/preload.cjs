@@ -2,7 +2,13 @@ const { contextBridge, ipcRenderer, sharedTexture } = require('electron');
 
 if (process.platform === 'win32') contextBridge.exposeInMainWorld('lycanAudioShortcuts', {
   begin: () => ipcRenderer.invoke('audio-shortcuts:begin'),
-  configure: (owner, bindings) => ipcRenderer.invoke('audio-shortcuts:configure', owner, bindings),
+  configure: (owner, bindings, pushToTalk) => ipcRenderer.invoke('audio-shortcuts:configure', owner, bindings, pushToTalk),
+  readHold: (owner, roomId, sequence) => ipcRenderer.invoke('audio-shortcuts:hold', owner, roomId, sequence),
+  onHold: callback => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on('audio-shortcuts:hold', listener);
+    return () => ipcRenderer.removeListener('audio-shortcuts:hold', listener);
+  },
   activate: (owner, roomId) => ipcRenderer.invoke('audio-shortcuts:activate', owner, roomId),
   capture: (owner, enabled) => ipcRenderer.invoke('audio-shortcuts:capture', owner, enabled),
   end: owner => ipcRenderer.invoke('audio-shortcuts:end', owner),
@@ -217,7 +223,8 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
     return () => ipcRenderer.removeListener('media:native-screen-audio-error', listener);
   },
   listMicrophoneDevices: () => ipcRenderer.invoke('media:microphone-devices'),
-  startNativeMicrophone: (sessionId, settings, deviceId) => ipcRenderer.invoke('media:native-microphone:start', sessionId, settings, deviceId),
+  startNativeMicrophone: (sessionId, settings, deviceId, pushToTalk) => ipcRenderer.invoke('media:native-microphone:start', sessionId, settings, deviceId, pushToTalk),
+  setNativeMicrophoneTransmission: (sessionId, pushToTalk, held, epoch) => ipcRenderer.send('media:native-microphone:transmission', sessionId, pushToTalk, held, epoch),
   configureNativeMicrophone: (sessionId, settings) => ipcRenderer.invoke('media:native-microphone:configure', sessionId, settings),
   stopNativeMicrophone: (sessionId) => ipcRenderer.invoke('media:native-microphone:stop', sessionId),
   onNativeMicrophoneChunk: (callback) => {
