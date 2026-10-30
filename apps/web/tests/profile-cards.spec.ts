@@ -255,3 +255,38 @@ test('本机提示音只提供统一音量和逐项开关，重开后恢复，�
   await expect(muted).not.toBeChecked();
   await expect(page.getByRole('slider', { name: '提示音音量', exact: true })).toHaveValue('40');
 });
+
+test('上传入场音效保存规范 WAV，服务端失败保留旧音效，切栏取消未完成上传', async ({ page }) => {
+  const wave = Buffer.alloc(46);
+  wave.write('RIFF', 0); wave.write('WAVEfmt ', 8); wave.write('data', 36);
+  wave.writeUInt32LE(16, 16); wave.writeUInt16LE(1, 20); wave.writeUInt16LE(1, 22);
+  wave.writeUInt32LE(48000, 24); wave.writeUInt16LE(16, 34); wave.writeUInt32LE(2, 40);
+  let mode: 'success' | 'fail' | 'slow' = 'success';
+  let complete: (() => void) | undefined;
+  await page.route('**/api/audio/entrance-sound/normalize', async route => {
+    expect(route.request().headers()['content-type']).toBe('application/octet-stream');
+    if (mode === 'slow') await new Promise<void>(resolve => { complete = resolve; });
+    if (mode === 'fail') return route.fulfill({ status: 503, json: { detail: '服务器音效处理暂不可用' } });
+    await route.fulfill({ contentType: 'audio/wav', body: wave }).catch(() => {});
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '音效', exact: true }).click();
+  const input = page.getByLabel('选择入场音效', { exact: true });
+  await input.setInputFiles({ name: '打招呼.mp3', mimeType: 'audio/mpeg', buffer: Buffer.from('source') });
+  await expect(page.locator('.sound-settings')).toContainText('打招呼.wav');
+  const saved = await page.evaluate(() => localStorage.getItem('lycansync.entrance-sound.v1.2d983469-4442-44f5-b5a8-f3819f16a611'));
+  expect(JSON.parse(saved!).normalization).toBe('rms-v1');
+  mode = 'fail';
+  await input.setInputFiles({ name: '失败.wav', mimeType: 'audio/wav', buffer: Buffer.from('source') });
+  await expect(page.getByRole('alert')).toContainText('暂不可用');
+  await expect(page.locator('.sound-settings')).toContainText('打招呼.wav');
+  mode = 'slow';
+  await input.setInputFiles({ name: '迟到.wav', mimeType: 'audio/wav', buffer: Buffer.from('source') });
+  await expect.poll(() => Boolean(complete)).toBe(true);
+  await page.getByRole('button', { name: '账号设置', exact: true }).click();
+  complete!();
+  await page.getByRole('button', { name: '音效', exact: true }).click();
+  await expect(page.locator('.sound-settings')).toContainText('打招呼.wav');
+  expect(await page.evaluate(() => localStorage.getItem('lycansync.entrance-sound.v1.2d983469-4442-44f5-b5a8-f3819f16a611'))).toBe(saved);
+});

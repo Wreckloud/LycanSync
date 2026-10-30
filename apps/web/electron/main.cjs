@@ -51,6 +51,7 @@ const apiRoutePolicies = new Map([
   ['GET /api/rtc/room-summary', {}],
   ['GET /api/rtc/room-occupancies', {}],
   ['POST /api/presence/heartbeat', {}],
+  ['POST /api/audio/entrance-sound/normalize', { maxBodyBytes: 512 * 1024 }],
   ['GET /api/groups', {}],
   // 后端接受最多 2 MiB 的裁剪图片，另留 Base64 膨胀、文本与 JSON 的空间。
   ['POST /api/groups', { maxBodyBytes: 3 * 1024 * 1024 }],

@@ -1,6 +1,7 @@
 package com.lycansync.api.common.error;
 
 import com.lycansync.api.auth.exception.AuthException;
+import com.lycansync.api.audio.exception.AudioProcessingException;
 import com.lycansync.api.group.exception.GroupException;
 import com.lycansync.api.rtc.exception.RtcServiceUnavailableException;
 import com.lycansync.api.system.exception.SystemStateNotFoundException;
@@ -24,6 +25,11 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice
 @Slf4j
 public class ApiExceptionHandler {
+
+    @ExceptionHandler(AudioProcessingException.class)
+    public ProblemDetail handleAudioProcessing(AudioProcessingException exception) {
+        return createProblemDetail(exception.getStatus(), exception.getCode(), "音效处理失败", exception.getMessage());
+    }
 
     @ExceptionHandler(AuthException.class)
     public ProblemDetail handleAuth(AuthException exception) {
