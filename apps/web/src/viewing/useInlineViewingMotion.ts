@@ -122,7 +122,8 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
   function leave(element: Element, done: () => void) {
     const surface = element as HTMLElement;
     // 退场前 Teleport 的成员可能已被清理，仍用上一份可见尺寸收起背景。
-    const from = Math.max(surface.getBoundingClientRect().height, activeElement === surface ? lastHeight : 0);
+    const height = surface.getBoundingClientRect().height;
+    const from = height > 0 ? height : activeElement === surface ? lastHeight : 0;
     generation++;
     cancel();
     surface.inert = true;

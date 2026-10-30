@@ -5,6 +5,7 @@ import ts from 'typescript';
 import { computed, effectScope, nextTick, onScopeDispose, reactive, ref } from 'vue';
 import { expect, it, vi } from 'vitest';
 import type { ChatMessage, ChatMessagePage } from '../chat/chatApi';
+import { formatFullMessageTime, formatMessageDate, formatMessageTime, localDateKey } from '../chat/messageTime';
 
 const script = parse(readFileSync(new URL('./GroupChat.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('GroupChat.ts', script, ts.ScriptTarget.Latest, true);
@@ -36,11 +37,13 @@ function setup() {
   const chat = scope.run(() => runInNewContext(`${compiled}\n({ refresh, loadOlder, handleVisibilityChange, submit, cancelUpload,
     list, messages, text, busy, error, historyError, pendingAttachments,
     initialLoaded, refreshing, pollError, atBottom, unseenMessages, retryRefresh,
-    scrollToBottom, onScrollEnd, onWheel, stopAnimatedScroll,
+    unreadMessageIds, showMessageJump, messageJumpLabel, jumpToMessages, updateReadMessages,
+    scrollToBottom, onScroll, onScrollEnd, onWheel, stopAnimatedScroll, refreshCalendar, calendarNow,
     setScrollPreference: value => { scrollPreference = value; } })`, {
     computed, ref, nextTick, onScopeDispose, onMounted: () => {}, defineProps: () => props,
     findMessages, sendMessage, sendFile, compressChatImage: vi.fn(), messagePollDelay: () => 8000,
-    AbortController, setTimeout, clearTimeout, Error,
+    formatFullMessageTime, formatMessageDate, formatMessageTime, localDateKey,
+    AbortController, setTimeout, clearTimeout, Error, Date,
     document,
     window: { removeEventListener: vi.fn() }, URL: { revokeObjectURL: vi.fn() },
   })) as {
@@ -49,6 +52,9 @@ function setup() {
     historyError: { value: string };
     initialLoaded: { value: boolean }; refreshing: { value: boolean }; pollError: { value: string };
     atBottom: { value: boolean }; unseenMessages: { value: number }; retryRefresh(): Promise<void> | undefined;
+    unreadMessageIds: { value: string[] }; showMessageJump: { value: boolean }; messageJumpLabel: { value: string };
+    jumpToMessages(): Promise<void>; updateReadMessages(): void; onScroll(): void;
+    refreshCalendar(): void; calendarNow: { value: Date };
     scrollToBottom(behavior?: ScrollBehavior, force?: boolean): Promise<void>; onScrollEnd(): void;
     onWheel(event: WheelEvent): void; stopAnimatedScroll(): void;
     setScrollPreference(value: { matches: boolean; removeEventListener: ReturnType<typeof vi.fn> }): void;
@@ -103,11 +109,12 @@ it('阅读历史时只累计新取得的消息数，重复快照不重复计数'
     await chat.refresh();
     await nextTick();
     chat.atBottom.value = false;
-    findMessages.mockResolvedValueOnce({ messages: [message('new'), message('new')], hasMore: false });
+    const incoming = { ...message('new'), senderUserId: 'friend' };
+    findMessages.mockResolvedValueOnce({ messages: [incoming, incoming, message('own')], hasMore: false });
     await chat.refresh();
     expect(chat.atBottom.value).toBe(false);
     expect(chat.unseenMessages.value).toBe(1);
-    findMessages.mockResolvedValueOnce({ messages: [message('new')], hasMore: false });
+    findMessages.mockResolvedValueOnce({ messages: [incoming], hasMore: false });
     await chat.refresh();
     expect(chat.unseenMessages.value).toBe(1);
   } finally { scope.stop(); }
@@ -117,12 +124,13 @@ it.each(['wheel', 'reduce'] as const)('平滑滚动未到底就被%s打断，保
   const { scope, chat } = setup();
   try {
     const element = { scrollHeight: 3000, clientHeight: 600, scrollTop: 200,
+      getBoundingClientRect: () => ({ top: 0, bottom: 600 }), querySelectorAll: () => [],
       scrollTo: vi.fn((options: ScrollToOptions) => {
         if (options.behavior === 'auto') element.scrollTop = Math.min(options.top!, 2400);
       }) };
     chat.list.value = element as unknown as HTMLElement;
     chat.atBottom.value = false;
-    chat.unseenMessages.value = 5;
+    chat.unreadMessageIds.value = ['one', 'two', 'three', 'four', 'five'];
     await chat.scrollToBottom('smooth', true);
     expect(element.scrollHeight - element.clientHeight - element.scrollTop).toBe(2200);
     expect(chat.atBottom.value).toBe(false);
@@ -152,13 +160,148 @@ it('减少动态效果的即时定位确实到底后清零', async () => {
       scrollTo: vi.fn((options: ScrollToOptions) => { element.scrollTop = Math.min(options.top!, 2400); }) };
     chat.list.value = element as unknown as HTMLElement;
     chat.atBottom.value = false;
-    chat.unseenMessages.value = 5;
+    chat.unreadMessageIds.value = ['one', 'two', 'three', 'four', 'five'];
     chat.setScrollPreference({ matches: true, removeEventListener: vi.fn() });
     await chat.scrollToBottom('smooth', true);
     expect(element.scrollTo).toHaveBeenCalledWith({ top: 3000, behavior: 'auto' });
     expect(chat.atBottom.value).toBe(true);
     expect(chat.unseenMessages.value).toBe(0);
   } finally { scope.stop(); }
+});
+
+it('向上翻历史不显示回到最新；向下返回且超过一屏才显示', () => {
+  const { scope, chat } = setup();
+  try {
+    const element = { scrollHeight: 3000, clientHeight: 600, scrollTop: 2400,
+      getBoundingClientRect: () => ({ top: 0, bottom: 600 }) };
+    chat.list.value = element as HTMLElement;
+    chat.onScroll();
+    expect(chat.showMessageJump.value).toBe(false);
+    element.scrollTop = 500;
+    chat.onScroll();
+    expect(chat.showMessageJump.value).toBe(false);
+    element.scrollTop = 700;
+    chat.onScroll();
+    expect(chat.showMessageJump.value).toBe(true);
+    element.scrollTop = 650;
+    chat.onScroll();
+    expect(chat.showMessageJump.value).toBe(false);
+    element.scrollTop = 1790;
+    chat.onScroll();
+    expect(chat.showMessageJump.value).toBe(true);
+    element.scrollTop = 1800;
+    chat.onScroll();
+    expect(chat.showMessageJump.value).toBe(false);
+    element.scrollTop = 1799;
+    chat.onScroll();
+    element.scrollTop = 1801;
+    chat.onScroll();
+    expect(chat.showMessageJump.value).toBe(false);
+  } finally { scope.stop(); }
+});
+
+it.each([false, true])('跳转首条未读，不跳过后续未读，减少动态效果：%s', async reduce => {
+  const { scope, chat, findMessages } = setup();
+  try {
+    findMessages.mockResolvedValueOnce({ messages: [message('cursor')], hasMore: false });
+    await chat.refresh();
+    await nextTick();
+    const positions = new Map([['first', 1200], ['second', 2100], ['third', 2700]]);
+    const element = { scrollHeight: 4000, clientHeight: 600, scrollTop: 200,
+      getBoundingClientRect: () => ({ top: 100, bottom: 700 }),
+      querySelectorAll: () => [...positions].map(([id, top]) => ({ dataset: { messageId: id },
+        getBoundingClientRect: () => ({ top: 100 + top - element.scrollTop, bottom: 180 + top - element.scrollTop }) })),
+      scrollTo: vi.fn((options: ScrollToOptions) => {
+        if (options.behavior === 'auto') element.scrollTop = options.top!;
+      }) };
+    chat.list.value = element as unknown as HTMLElement;
+    chat.atBottom.value = false;
+    chat.setScrollPreference({ matches: reduce, removeEventListener: vi.fn() });
+    const incoming = ['first', 'second'].map(id => ({ ...message(id), senderUserId: 'friend' }));
+    findMessages.mockResolvedValueOnce({ messages: incoming, hasMore: false });
+    await chat.refresh();
+    expect(chat.showMessageJump.value).toBe(true);
+    expect(chat.messageJumpLabel.value).toBe('2 条新消息 · 跳转到未读');
+    await chat.jumpToMessages();
+    expect(element.scrollTo).toHaveBeenLastCalledWith({ top: 1200, behavior: reduce ? 'auto' : 'smooth' });
+    if (!reduce) {
+      expect(chat.unseenMessages.value).toBe(2);
+      // 动画尚未抵达时的新消息不能把“跳转未读”改成“跟随到底”。
+      findMessages.mockResolvedValueOnce({ messages: [{ ...message('third'), senderUserId: 'friend' }], hasMore: false });
+      await chat.refresh();
+      expect(element.scrollTo).toHaveBeenCalledTimes(1);
+      expect(chat.unseenMessages.value).toBe(3);
+      element.scrollTop = 1200;
+      chat.onScrollEnd();
+    }
+    expect(chat.unreadMessageIds.value).toEqual(reduce ? ['second'] : ['second', 'third']);
+    expect(chat.atBottom.value).toBe(false);
+    element.scrollTop = 3400;
+    chat.onScrollEnd();
+    expect(chat.unseenMessages.value).toBe(0);
+  } finally { scope.stop(); }
+});
+
+it('未读定位中途被打断不清零；手动读到其中一条只移除该条', async () => {
+  const { scope, chat } = setup();
+  try {
+    const element = { scrollHeight: 4000, clientHeight: 600, scrollTop: 100,
+      getBoundingClientRect: () => ({ top: 0, bottom: 600 }),
+      querySelectorAll: () => [1500, 2500].map((top, index) => ({ dataset: { messageId: String(index) },
+        getBoundingClientRect: () => ({ top: top - element.scrollTop, bottom: top + 80 - element.scrollTop }) })),
+      scrollTo: vi.fn() };
+    chat.list.value = element as unknown as HTMLElement;
+    chat.unreadMessageIds.value = ['0', '1'];
+    await chat.jumpToMessages();
+    element.scrollTop = 500;
+    chat.onWheel({ deltaY: -100 } as WheelEvent);
+    chat.onScrollEnd();
+    expect(chat.unseenMessages.value).toBe(2);
+    element.scrollTop = 1500;
+    chat.onScroll();
+    expect(chat.unreadMessageIds.value).toEqual(['1']);
+  } finally { scope.stop(); }
+});
+
+it('语音覆盖下的消息不能误标已读，定位时避开覆盖区域', async () => {
+  const { scope, chat } = setup();
+  try {
+    const element = { scrollHeight: 3000, clientHeight: 600, scrollTop: 500,
+      parentElement: { closest: () => ({ querySelector: () => ({ getBoundingClientRect: () => ({ bottom: 400 }) }) }) },
+      getBoundingClientRect: () => ({ top: 100, bottom: 700 }),
+      querySelectorAll: () => [{ dataset: { messageId: 'covered' },
+        getBoundingClientRect: () => ({ top: 700 - element.scrollTop, bottom: 780 - element.scrollTop }) }],
+      scrollTo: vi.fn((options: ScrollToOptions) => { element.scrollTop = options.top!; }) };
+    chat.list.value = element as unknown as HTMLElement;
+    chat.unreadMessageIds.value = ['covered'];
+    chat.updateReadMessages();
+    expect(chat.unseenMessages.value).toBe(1);
+    chat.setScrollPreference({ matches: true, removeEventListener: vi.fn() });
+    await chat.jumpToMessages();
+    expect(element.scrollTo).toHaveBeenCalledWith({ top: 300, behavior: 'auto' });
+    expect(chat.unseenMessages.value).toBe(0);
+  } finally { scope.stop(); }
+});
+
+it('午夜更新日历基准，后台取消日历任务，销毁后不残留计时器', () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(2026, 9, 30, 23, 59, 59));
+  const { scope, chat, document } = setup();
+  try {
+    chat.refreshCalendar();
+    expect(chat.calendarNow.value.getDate()).toBe(30);
+    vi.advanceTimersByTime(1100);
+    expect(chat.calendarNow.value.getDate()).toBe(31);
+    expect(vi.getTimerCount()).toBe(1);
+    document.visibilityState = 'hidden';
+    chat.handleVisibilityChange();
+    expect(vi.getTimerCount()).toBe(0);
+    document.visibilityState = 'visible';
+    chat.refreshCalendar();
+    expect(vi.getTimerCount()).toBe(1);
+    scope.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally { scope.stop(); vi.useRealTimers(); }
 });
 
 it('附件失败由附件保留错误，不再重复写入输入区错误', async () => {

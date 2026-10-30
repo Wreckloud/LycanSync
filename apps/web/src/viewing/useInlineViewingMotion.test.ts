@@ -145,3 +145,14 @@ it('等待 Teleport 填入成员后从零展开，内容先清理仍能按可见
   expect(f.conversation.style.removeProperty).toHaveBeenLastCalledWith('--voice-overlay-height');
   f.scope.stop();
 });
+
+it('展开中途离开从当前可见高度收起，不跳回上一份较大的尺寸', async () => {
+  const f = fixture();
+  await f.change(true, 132, 430);
+  f.setHeight(70);
+  f.motion.leave(f.element as unknown as Element, vi.fn());
+  expect(f.animate).toHaveBeenLastCalledWith([{ height: '70px' }, { height: '0px' }], {
+    duration: 210, easing: 'cubic-bezier(.2, 0, 0, 1)',
+  });
+  f.scope.stop();
+});

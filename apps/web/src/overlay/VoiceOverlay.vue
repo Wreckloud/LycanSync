@@ -14,7 +14,7 @@ const removeListener = bridge?.onView((next) => {
 const members = computed(() => state.value?.members.filter((member) => state.value?.editing || member.visible) ?? []);
 const scaleStyle = computed(() => ({ '--scale': (state.value?.settings.scale ?? 100) / 100,
   '--column-width': `${state.value?.columnWidth ?? 100}px`,
-  '--row-height': `${Math.ceil(36 * (state.value?.settings.scale ?? 100) / 100)}px` }));
+  '--row-height': `${Math.ceil(34 * (state.value?.settings.scale ?? 100) / 100)}px` }));
 if (bridge) void bridge.ready().catch(() => { failure.value = '覆盖状态连接失败'; });
 onScopeDispose(() => removeListener?.());
 </script>
@@ -43,14 +43,14 @@ body { color: #e7ebef; font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; u
 .empty-edit { display: block; font-size: calc(12px * var(--scale)); line-height: calc(32px * var(--scale)); text-align: center; text-shadow: 0 1px 2px #000; }
 .members { height: 100%; display: flex; flex-flow: column wrap; align-content: flex-start; gap: 0; }
 .align-right .members { flex-wrap: wrap-reverse; }
-.member { width: var(--column-width); height: var(--row-height); flex: 0 0 auto; display: flex; align-items: center; gap: calc(8px * var(--scale)); padding: calc(2px * var(--scale)) 0; }
+.member { width: var(--column-width); height: var(--row-height); flex: 0 0 auto; display: flex; align-items: center; gap: calc(6px * var(--scale)); padding: calc(3px * var(--scale)) 0; }
 .align-right .member { flex-direction: row-reverse; }
 .align-right .name { text-align: right; }
-.avatar { display: grid; place-items: center; flex-shrink: 0; width: calc(32px * var(--scale)); height: calc(32px * var(--scale)); border-radius: 50%; background: #3c4854; }
-.avatar svg { width: calc(20px * var(--scale)); height: calc(20px * var(--scale)); }
+.avatar { display: grid; place-items: center; flex-shrink: 0; width: calc(28px * var(--scale)); height: calc(28px * var(--scale)); border-radius: 50%; background: #3c4854; }
+.avatar svg { width: calc(18px * var(--scale)); height: calc(18px * var(--scale)); }
 .avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 .speaking .name { color: #8de3c3; }
-.name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(32px * var(--scale)); line-height: calc(32px * var(--scale)); text-shadow: 0 1px 2px #000, 1px 0 2px #000, -1px 0 2px #000; }
+.name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(15px * var(--scale)); line-height: calc(28px * var(--scale)); text-shadow: 0 1px 2px #000, 1px 0 2px #000, -1px 0 2px #000; }
 .is-muted .name { color: #aab4be; }
 .voice-overlay, .voice-overlay * { animation: none; transition: none; }
 .connection { position: absolute; bottom: 2px; right: 6px; font-size: 11px; color: #b5c6d9; text-shadow: 0 1px 2px #000; }

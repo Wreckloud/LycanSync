@@ -71,10 +71,10 @@ test('首次加载、读取失败和空会话分开反馈，重试共用当前�
   } finally { release(); }
 });
 
-test('查看旧消息时新消息只提示，回到最新遵守减少动态效果且不丢草稿', async ({ page }) => {
+test('向下返回历史才显示回到最新；新消息定位未读且不丢草稿', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await mockChatShell(page);
-  const initial = Array.from({ length: 40 }, (_, index) => chatMessage(index + 1));
+  const initial = Array.from({ length: 80 }, (_, index) => chatMessage(index + 1));
   let newMessage = false;
   let readError = false;
   await page.route('**/api/groups**', route => {
@@ -84,23 +84,27 @@ test('查看旧消息时新消息只提示，回到最新遵守减少动态效�
     if (url.pathname.endsWith('/messages')) {
       if (readError) return route.fulfill({ status: 503, json: { detail: '消息同步失败' } });
       return route.fulfill({ json: { messages: url.searchParams.has('afterMessageId')
-        ? newMessage ? [chatMessage(41)] : [] : initial, hasMore: false } });
+        ? newMessage ? [{ ...chatMessage(81), senderUserId: 'friend' }] : [] : initial, hasMore: false } });
     }
     return route.fulfill({ status: 404 });
   });
   await page.goto('/');
   const list = page.locator('.message-list');
-  await expect(page.locator('[data-message-id="A40"]')).toHaveCount(1);
+  await expect(page.locator('[data-message-id="A80"]')).toHaveCount(1);
   await expect.poll(() => list.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
   const input = page.getByRole('textbox', { name: '消息内容' });
   await input.fill('先保留这条草稿');
   const original = await input.elementHandle();
   await list.evaluate(element => { element.scrollTop = 0; });
+  await expect(page.locator('.chat-jump')).toHaveCount(0);
+  await list.evaluate(element => { element.scrollTop = 100; });
   await expect(page.getByRole('button', { name: '回到最新消息', exact: true })).toBeVisible();
+  await list.evaluate(element => { element.scrollTop = 0; });
+  await expect(page.locator('.chat-jump')).toHaveCount(0);
   newMessage = true;
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect(page.locator('[data-message-id="A41"]')).toHaveCount(1);
-  await expect(page.getByRole('button', { name: '回到最新消息', exact: true })).toContainText('1 条新消息');
+  await expect(page.locator('[data-message-id="A81"]')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: '1 条新消息 · 跳转到未读', exact: true })).toBeVisible();
   expect(await list.evaluate(element => element.scrollTop)).toBe(0);
   const composerBounds = await page.locator('.composer').boundingBox();
   readError = true;
@@ -126,22 +130,23 @@ test('查看旧消息时新消息只提示，回到最新遵守减少动态效�
     }) as typeof element.scrollTo;
   });
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await page.getByRole('button', { name: '回到最新消息', exact: true }).click();
+  await page.getByRole('button', { name: '1 条新消息 · 跳转到未读', exact: true }).click();
   await expect(list).toHaveAttribute('data-scroll-behavior', 'smooth');
-  await expect(page.getByRole('button', { name: '回到最新消息', exact: true })).toContainText('1 条新消息');
+  await expect(page.locator('.chat-jump')).toContainText('1 条新消息');
   await list.evaluate(element => { element.scrollTop = 200; });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(list).toHaveAttribute('data-scroll-behavior', 'auto');
-  await expect(page.getByRole('button', { name: '回到最新消息', exact: true })).toContainText('1 条新消息');
-  await page.getByRole('button', { name: '回到最新消息', exact: true }).click();
+  await expect(page.locator('.chat-jump')).toContainText('1 条新消息');
+  await page.getByRole('button', { name: '1 条新消息 · 跳转到未读', exact: true }).click();
   await expect(list).toHaveAttribute('data-scroll-behavior', 'auto');
   await expect.poll(() => list.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(1);
-  await expect(page.getByRole('button', { name: '回到最新消息', exact: true })).toHaveCount(0);
+  await expect(page.locator('.chat-jump')).toHaveCount(0);
   await expect(input).toHaveValue('先保留这条草稿');
   expect(await original!.evaluate(element => element.isConnected)).toBe(true);
 });
 
 test('文本消息使用统一 multipart 接口发送，并按日期分组且仅允许消息正文复制', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-10-30T04:00:00Z'));
   let readFailure = true;
   const messages: Record<string, unknown>[] = [
     { id: '19b81ea9-04d8-45f7-9407-808c13a51fd0', senderUserId: user.id,
@@ -178,6 +183,10 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
       finishClose: () => undefined,
       openExternal: async (url: string) => { document.documentElement.dataset.externalUrl = url; },
       onClose: () => () => undefined,
+      getRecordingSettings: async () => ({ directory: 'test-recordings', applicationAudio: true, microphone: false, friends: false }),
+      getRecordingStatus: async () => ({ holdingResources: false, phase: 'idle', recordingId: null, startedAt: null,
+        bytes: 0, error: null, saved: false, continuing: false, applicationAudio: true }),
+      onRecordingState: () => () => undefined,
     } });
   });
   await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
@@ -219,10 +228,10 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
   await composer.fill('晚上见');
   await composer.press('Enter');
   await expect(page.locator('.chat-message-content').last()).toHaveText('晚上见 https://example.com/docs。');
-  await expect(page.locator('.chat-date-divider')).toHaveText(['2026年9月13日', '2026年9月14日']);
+  await expect(page.locator('.chat-date-divider')).toHaveText(['9月13日 周日', '9月14日 周一']);
   await expect(page.locator('.chat-message-meta')).toHaveCount(4);
   await expect(page.locator('.chat-message.is-grouped')).toHaveCount(1);
-  await expect(page.locator('.chat-message-meta time').nth(1)).toHaveText('9月14日 12:00');
+  await expect(page.locator('.chat-message-meta time').nth(1)).toHaveText('9月14日 周一 12:00');
   const link = page.getByRole('link', { name: 'https://example.com/docs' });
   await expect(link).toHaveAttribute('href', 'https://example.com/docs');
   await link.click();

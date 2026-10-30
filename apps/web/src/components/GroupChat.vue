@@ -6,6 +6,7 @@ import type { AuthUser } from '../auth/authApi';
 import { findMessages, sendFile, sendMessage, type ChatMessage } from '../chat/chatApi';
 import { messagePollDelay } from '../chat/messagePolling';
 import { compressChatImage } from '../chat/messageImage';
+import { formatFullMessageTime, formatMessageDate, formatMessageTime, localDateKey } from '../chat/messageTime';
 import type { GroupMember, GroupSummary } from '../group/groupApi';
 import ChatImage from './ChatImage.vue';
 import ChatFileCard from './ChatFileCard.vue';
@@ -35,30 +36,34 @@ const refreshing = ref(false);
 const loadingOlder = ref(false);
 const hasMore = ref(false);
 const atBottom = ref(true);
-const unseenMessages = ref(0);
+const followingScroll = ref(false);
+const unreadMessageIds = ref<string[]>([]);
+const unseenMessages = computed(() => unreadMessageIds.value.length);
+const returningToLatest = ref(false);
+const moreThanScreenAway = ref(false);
+const calendarNow = ref(new Date());
 const list = ref<HTMLElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const messageInput = ref<HTMLTextAreaElement | null>(null);
-const messageTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
-  hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-});
-const messageDateFormatter = new Intl.DateTimeFormat('zh-CN', {
-  year: 'numeric', month: 'long', day: 'numeric',
-});
 const MESSAGE_GROUP_MAX_GAP_MS = 5 * 60_000;
 const HISTORY_TOP_THRESHOLD = 80;
 let pollRequest: AbortController | null = null;
 let historyRequest: AbortController | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
+let calendarTimer: ReturnType<typeof setTimeout> | null = null;
 let disposed = false;
 let latestFetchedMessageId: string | undefined;
 let consecutiveEmptyPolls = 0;
 let lastActivationRefreshAt = 0;
 let lastScrollTop = 0;
-let followingScroll = false;
+let jumpingToUnread = false;
 let scrollPreference: MediaQueryList | undefined;
 
 const members = computed(() => new Map(props.members.map((member) => [member.userId, member])));
+const showMessageJump = computed(() => !followingScroll.value && (unseenMessages.value > 0
+  || (!atBottom.value && returningToLatest.value && moreThanScreenAway.value)));
+const messageJumpLabel = computed(() => unseenMessages.value
+  ? `${unseenMessages.value} 条新消息 · 跳转到未读` : '回到最新消息');
 const canSend = computed(() => !busy.value && !preparing.value
   && (text.value.trim().length > 0 || pendingAttachments.value.some((item) => item.state !== 'sent')));
 let activeUpload: AbortController | null = null;
@@ -72,16 +77,61 @@ function isAtBottom() {
 
 async function scrollToBottom(behavior: ScrollBehavior = 'smooth', force = false) {
   await nextTick();
-  if (disposed || (!force && !atBottom.value && !followingScroll)) return;
+  if (disposed || (!force && !atBottom.value && !followingScroll.value)) return;
   const element = list.value;
   if (!element) return;
   const reduce = scrollPreference?.matches;
-  followingScroll = !reduce && behavior === 'smooth'
+  jumpingToUnread = false;
+  followingScroll.value = !reduce && behavior === 'smooth'
     && element.scrollHeight - element.clientHeight - element.scrollTop > 1;
   element.scrollTo({ top: element.scrollHeight, behavior: reduce ? 'auto' : behavior });
   // 发起滚动不代表已读到最新；中途停止时必须保留尚未看到的计数。
   atBottom.value = isAtBottom();
-  if (atBottom.value) unseenMessages.value = 0;
+  if (atBottom.value) unreadMessageIds.value = [];
+  lastScrollTop = element.scrollTop;
+}
+
+function updateReadMessages() {
+  const element = list.value;
+  if (!element || followingScroll.value || jumpingToUnread || document.visibilityState === 'hidden'
+      || !unreadMessageIds.value.length) return;
+  if (isAtBottom()) { unreadMessageIds.value = []; return; }
+  const bounds = visibleMessageBounds(element);
+  const unread = new Set(unreadMessageIds.value);
+  for (const message of element.querySelectorAll<HTMLElement>('[data-message-id]')) {
+    const id = message.dataset.messageId!;
+    if (!unread.has(id)) continue;
+    const rect = message.getBoundingClientRect();
+    if (rect.top < bounds.bottom && rect.bottom > bounds.top) unread.delete(id);
+  }
+  unreadMessageIds.value = unreadMessageIds.value.filter(id => unread.has(id));
+}
+
+function visibleMessageBounds(element: HTMLElement) {
+  const bounds = element.getBoundingClientRect();
+  const overlay = element.parentElement?.closest('.group-main')?.querySelector<HTMLElement>('.voice-panel');
+  const top = Math.max(bounds.top, overlay?.getBoundingClientRect().bottom ?? bounds.top);
+  return { top: Math.min(top, bounds.bottom), bottom: bounds.bottom };
+}
+
+async function jumpToMessages() {
+  const firstUnread = unreadMessageIds.value[0];
+  if (!firstUnread) { await scrollToBottom('smooth', true); return; }
+  await nextTick();
+  const element = list.value;
+  if (disposed || !element) return;
+  const target = [...element.querySelectorAll<HTMLElement>('[data-message-id]')]
+    .find(message => message.dataset.messageId === firstUnread);
+  if (!target) return;
+  // 仅滚动消息容器，不能让整个页面或语音覆盖区一起移动。
+  const top = Math.max(0, Math.min(element.scrollHeight - element.clientHeight,
+    element.scrollTop + target.getBoundingClientRect().top - visibleMessageBounds(element).top));
+  followingScroll.value = false;
+  jumpingToUnread = !scrollPreference?.matches && Math.abs(top - element.scrollTop) > 1;
+  element.scrollTo({ top, behavior: scrollPreference?.matches ? 'auto' : 'smooth' });
+  atBottom.value = isAtBottom();
+  lastScrollTop = element.scrollTop;
+  if (!jumpingToUnread) updateReadMessages();
 }
 
 // 短会话尚未产生滚动条时，补上新消息把旧消息向上推开的过渡。
@@ -119,7 +169,7 @@ function appendMessages(incoming: ChatMessage[], forceScroll = false, behavior: 
   const positions = captureMessagePositions();
   messages.value = [...messages.value, ...added];
   void animateMessagePositions(positions);
-  if (forceScroll || atBottom.value || followingScroll) void scrollToBottom(behavior, forceScroll);
+  if (forceScroll || atBottom.value || followingScroll.value) void scrollToBottom(behavior, forceScroll);
   return added.length;
 }
 
@@ -152,14 +202,22 @@ async function refresh() {
       known.add(message.id);
       return true;
     });
-    const added = orderedPage.filter((message) => !currentIds.has(message.id)).length;
+    const newMessages = orderedPage.filter((message) => !currentIds.has(message.id));
+    const added = newMessages.length;
     const positions = added && !initial ? captureMessagePositions() : [];
     messages.value = [...prefix, ...orderedPage,
       ...messages.value.slice(prefixEnd).filter((message) => !snapshotIds.has(message.id))];
     void animateMessagePositions(positions);
     latestFetchedMessageId = page.messages.at(-1)?.id ?? latestId;
-    if (added && (initial || atBottom.value || followingScroll)) void scrollToBottom(initial ? 'auto' : 'smooth', initial);
-    else if (added) unseenMessages.value += added;
+    if (!initial) {
+      unreadMessageIds.value.push(...newMessages.filter(message => message.senderUserId !== props.user.id)
+        .map(message => message.id));
+    }
+    if (added && (initial || atBottom.value || followingScroll.value)) void scrollToBottom(initial ? 'auto' : 'smooth', initial);
+    else if (added) {
+      await nextTick();
+      if (!disposed) updateReadMessages();
+    }
     return added;
   } catch (reason) {
     if (controller.signal.aborted || disposed || pollRequest !== controller) return null;
@@ -247,7 +305,9 @@ function retryRefresh() {
 }
 
 function refreshOnActivation() {
-  if (document.visibilityState === 'hidden' || Date.now() - lastActivationRefreshAt < 500) return;
+  if (document.visibilityState === 'hidden') return;
+  refreshCalendar();
+  if (Date.now() - lastActivationRefreshAt < 500) return;
   lastActivationRefreshAt = Date.now();
   consecutiveEmptyPolls = 0;
   void pollMessages();
@@ -256,6 +316,8 @@ function refreshOnActivation() {
 function handleVisibilityChange() {
   if (document.visibilityState === 'hidden') {
     clearRefreshTimer();
+    if (calendarTimer) clearTimeout(calendarTimer);
+    calendarTimer = null;
     pollRequest?.abort();
     historyRequest?.abort();
     historyRequest = null;
@@ -423,19 +485,14 @@ function senderAvatar(message: ChatMessage) {
   return message.senderUserId === props.user.id ? props.user.avatar : members.value.get(message.senderUserId)?.avatar ?? '';
 }
 
-function formatTime(value: string) {
-  const date = new Date(value);
-  const now = new Date();
-  const time = messageTimeFormatter.format(date);
-  if (localDateKey(value) === localDateKey(now.toISOString())) return time;
-  const dateLabel = `${date.getMonth() + 1}月${date.getDate()}日`;
-  return date.getFullYear() === now.getFullYear() ? `${dateLabel} ${time}`
-    : `${date.getFullYear()}年${dateLabel} ${time}`;
-}
-
-function localDateKey(value: string) {
-  const date = new Date(value);
-  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+function refreshCalendar() {
+  if (calendarTimer) clearTimeout(calendarTimer);
+  calendarTimer = null;
+  calendarNow.value = new Date();
+  if (disposed || document.visibilityState === 'hidden') return;
+  const now = calendarNow.value;
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  calendarTimer = setTimeout(refreshCalendar, midnight.getTime() - now.getTime() + 100);
 }
 
 function startsNewDate(message: ChatMessage, index: number) {
@@ -447,10 +504,6 @@ function startsNewMessageGroup(message: ChatMessage, index: number) {
   const previous = messages.value[index - 1];
   const gap = Date.parse(message.createdAt) - Date.parse(previous.createdAt);
   return previous.senderUserId !== message.senderUserId || gap < 0 || gap > MESSAGE_GROUP_MAX_GAP_MS;
-}
-
-function formatDate(value: string) {
-  return messageDateFormatter.format(new Date(value));
 }
 
 function messageSegments(content: string): MessageSegment[] {
@@ -490,37 +543,49 @@ function onScroll() {
   const element = list.value;
   if (!element) return;
   const movingUp = element.scrollTop < lastScrollTop - 1;
+  const movingDown = element.scrollTop > lastScrollTop + 1;
   lastScrollTop = element.scrollTop;
   // 自动跟随期间不把中途的位置当作主动翻历史，避免“回到最新”短暂闪现。
-  if (followingScroll) return;
+  if (followingScroll.value || jumpingToUnread) return;
+  if (movingUp || movingDown) returningToLatest.value = movingDown;
+  const bounds = visibleMessageBounds(element);
+  moreThanScreenAway.value = element.scrollHeight - element.scrollTop - element.clientHeight > bounds.bottom - bounds.top;
   atBottom.value = isAtBottom();
-  if (atBottom.value) unseenMessages.value = 0;
+  updateReadMessages();
   if (movingUp && element.scrollTop <= HISTORY_TOP_THRESHOLD) void loadOlder();
 }
 
 function onScrollEnd() {
-  followingScroll = false;
+  followingScroll.value = false;
+  jumpingToUnread = false;
   atBottom.value = isAtBottom();
-  if (atBottom.value) unseenMessages.value = 0;
+  updateReadMessages();
 }
 
 function stopAnimatedScroll() {
   const element = list.value;
   if (!scrollPreference?.matches || !element) return;
-  followingScroll = false;
+  followingScroll.value = false;
+  jumpingToUnread = false;
   for (const animation of messageAnimations) animation.cancel();
   element.scrollTo({ top: element.scrollTop, behavior: 'auto' });
   onScrollEnd();
 }
 
 function onWheel(event: WheelEvent) {
-  if (event.deltaY < 0) followingScroll = false;
+  if (jumpingToUnread || event.deltaY < 0) cancelScrollFollow();
   if (event.deltaY < 0 && list.value && list.value.scrollTop <= HISTORY_TOP_THRESHOLD) void loadOlder();
+}
+
+function cancelScrollFollow() {
+  followingScroll.value = false;
+  jumpingToUnread = false;
 }
 
 onMounted(() => {
   scrollPreference = list.value!.ownerDocument.defaultView!.matchMedia('(prefers-reduced-motion: reduce)');
   scrollPreference.addEventListener('change', stopAnimatedScroll);
+  refreshCalendar();
   void pollMessages();
   window.addEventListener('focus', refreshOnActivation);
   document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -533,6 +598,7 @@ onScopeDispose(() => {
   historyRequest?.abort();
   historyRequest = null;
   clearRefreshTimer();
+  if (calendarTimer) clearTimeout(calendarTimer);
   scrollPreference?.removeEventListener('change', stopAnimatedScroll);
   window.removeEventListener('focus', refreshOnActivation);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -552,7 +618,7 @@ onScopeDispose(() => {
       </div>
     </div>
     <div class="chat-timeline" :class="{ 'has-composer-feedback': Boolean(error) }">
-      <div ref="list" class="message-list" @scroll="onScroll" @scrollend="onScrollEnd" @wheel="onWheel" @pointerdown="followingScroll = false">
+      <div ref="list" class="message-list" @scroll="onScroll" @scrollend="onScrollEnd" @wheel="onWheel" @pointerdown="cancelScrollFollow">
         <div v-if="!initialLoaded" class="chat-initial-state" :class="{ 'is-empty': !messages.length }">
           <template v-if="pollError">
             <p class="chat-read-error" role="alert">{{ pollError }}</p>
@@ -570,7 +636,7 @@ onScopeDispose(() => {
           <button v-else type="button" class="chat-retry" @click="loadOlder">查看更早消息</button>
         </div>
         <template v-for="(message, index) in messages" :key="message.id">
-          <div v-if="startsNewDate(message, index)" class="chat-date-divider"><span>{{ formatDate(message.createdAt) }}</span></div>
+          <div v-if="startsNewDate(message, index)" class="chat-date-divider"><time :datetime="message.createdAt" :title="formatFullMessageTime(message.createdAt)">{{ formatMessageDate(message.createdAt, calendarNow) }}</time></div>
           <article class="chat-message" :data-message-id="message.id" :class="{ 'is-own': message.senderUserId === user.id, 'is-grouped': !startsNewMessageGroup(message, index) }">
             <template v-if="startsNewMessageGroup(message, index)">
               <img v-if="senderAvatar(message)" class="chat-message-avatar" :src="senderAvatar(message)" alt="" />
@@ -578,7 +644,7 @@ onScopeDispose(() => {
             </template>
             <span v-else class="chat-message-avatar-placeholder" aria-hidden="true" />
             <div class="chat-message-body">
-              <div v-if="startsNewMessageGroup(message, index)" class="chat-message-meta"><strong>{{ senderName(message) }}</strong><time>{{ formatTime(message.createdAt) }}</time></div>
+              <div v-if="startsNewMessageGroup(message, index)" class="chat-message-meta"><strong>{{ senderName(message) }}</strong><time :datetime="message.createdAt" :title="formatFullMessageTime(message.createdAt)">{{ formatMessageTime(message.createdAt, calendarNow) }}</time></div>
               <p v-if="message.content" class="chat-message-content"><template v-for="(segment, segmentIndex) in messageSegments(message.content)" :key="segmentIndex"><a v-if="segment.href" class="chat-message-link" :href="segment.href" @click.prevent="openLink(segment.href)">{{ segment.text }}</a><template v-else>{{ segment.text }}</template></template></p>
               <ChatImage v-if="message.type === 'IMAGE' && message.attachment" :group-id="group.id" :attachment-id="message.attachment.id"
                 :width="message.attachment.width ?? 1" :height="message.attachment.height ?? 1" :alt="`${senderName(message)} 发送的图片`" />
@@ -587,8 +653,8 @@ onScopeDispose(() => {
           </article>
         </template>
       </div>
-      <button v-if="!atBottom && messages.length" type="button" class="chat-jump" aria-label="回到最新消息" @click="scrollToBottom('smooth', true)">
-        <ArrowDown :size="13" /><span>{{ unseenMessages ? `${unseenMessages} 条新消息 · 回到最新` : '回到最新消息' }}</span>
+      <button v-if="showMessageJump && messages.length" type="button" class="chat-jump" :aria-label="messageJumpLabel" @click="jumpToMessages">
+        <ArrowDown :size="13" /><span>{{ messageJumpLabel }}</span>
       </button>
     </div>
     <div class="composer-shell">

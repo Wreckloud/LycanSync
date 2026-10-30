@@ -34,7 +34,9 @@ onScopeDispose(() => document.removeEventListener('pointerdown', dismiss));
         <button type="button" @click="choose('invite')">邀请成员</button>
         <button type="button" @click="choose('members')">管理成员</button>
         <button type="button" @click="choose('transfer')">转让群主</button>
-        <button type="button" class="group-danger" @click="choose('dissolve')">解散群聊</button>
+        <div class="group-menu-session">
+          <button type="button" class="group-danger" @click="choose('dissolve')">解散群聊</button>
+        </div>
       </template>
       <button v-else type="button" class="group-danger" @click="choose('leave')">退出群聊</button>
     </div>
@@ -50,7 +52,8 @@ onScopeDispose(() => document.removeEventListener('pointerdown', dismiss));
 .group-menu-trigger svg.is-open { transform: rotate(180deg); }
 .group-menu-trigger svg { transition: transform var(--motion-feedback-duration) ease; }
 .group-menu-options { position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; display: grid; min-width: 180px; padding: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-raised); }
-.group-menu-options button { justify-content: flex-start; padding: 7px 10px; border: 0; background: transparent; text-align: left; }
+.group-menu-options button { display: flex; align-items: center; justify-content: flex-start; width: 100%; min-height: 32px; padding: 6px 10px; border: 0; border-radius: 5px; background: transparent; font-size: 14px; line-height: 20px; text-align: left; }
 .group-menu-options button:hover { background: var(--panel-soft); }
-.group-menu-options .group-danger { color: var(--danger); border-top: 1px solid var(--border-soft); margin-top: 4px; }
+.group-menu-session { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border-soft); }
+.group-menu-options .group-danger { color: var(--danger); }
 </style>
