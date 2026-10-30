@@ -84,6 +84,7 @@ test('默认关闭且无房间不建窗口；已开启且加入语音后才显�
   assert.equal(window.ignoresMouse, true);
   assert.equal(window.topmost, true);
   assert.equal(window.protected, true);
+  assert.equal(window.options.thickFrame, false);
   assert.ok(window.operations.indexOf('protection') < window.operations.indexOf('showInactive'));
   assert.equal(window.bounds.x + window.bounds.width, 1920);
   assert.equal(window.message.payload.portraits[0].avatar, portrait.avatar);
@@ -95,7 +96,7 @@ test('紧凑成员行随缩放计算窗口高度，多列及编辑预览仍保�
     const f = fixture(); f.configure({ scale, displayId: 2 });
     f.update(0, { members: [member, { ...member, identity: 'two' }] });
     const window = f.ready();
-    const rowHeight = Math.ceil(36 * scale / 100);
+    const rowHeight = Math.ceil(34 * scale / 100);
     assert.equal(window.bounds.height, rowHeight * 2 + 4);
     f.manager.edit(f.owner, true);
     assert.equal(window.bounds.height, rowHeight * 2 + 4);

@@ -20,6 +20,7 @@ const description = ref(props.group?.description ?? '');
 const avatar = ref(props.group?.avatar ?? '');
 const avatarInput = ref<HTMLInputElement | null>(null);
 const dialog = ref<HTMLFormElement | null>(null);
+const viewport = ref<HTMLElement | null>(null);
 const busy = ref(false);
 const backdropEvents = useBackdropDismiss(close);
 const error = ref('');
@@ -72,24 +73,43 @@ function retireMode(element: Element) {
 
 watch(mode, async () => {
   const shell = dialog.value;
-  const from = shell?.getBoundingClientRect().height ?? 0;
+  if (!shell) return;
+  const from = Number.parseFloat(getComputedStyle(shell).height);
   modeAnimation?.cancel();
+  modeAnimation = undefined;
+  // 外框先保持当前可见高度，内层独立排版，避免自动尺寸先跳到新值。
+  shell.style.height = `${from}px`;
   const generation = ++modeGeneration;
   await nextTick();
-  if (!shell || generation !== modeGeneration) return;
-  const to = shell.offsetHeight;
+  if (generation !== modeGeneration || !viewport.value) return;
+  viewport.value.scrollTop = 0;
+  const style = getComputedStyle(shell);
+  const to = Number.parseFloat(getComputedStyle(viewport.value).height)
+    + Number.parseFloat(style.borderTopWidth) + Number.parseFloat(style.borderBottomWidth);
   if (!modePreference?.matches && typeof shell.animate === 'function') {
-    modeAnimation = shell.animate([{ height: `${from}px`, overflow: 'hidden' }, { height: `${to}px`, overflow: 'hidden' }], {
-      duration: Number.parseFloat(getComputedStyle(shell).getPropertyValue('--motion-layout-duration')),
-      easing: getComputedStyle(shell).getPropertyValue('--motion-ease').trim(),
+    shell.style.height = `${to}px`;
+    const animation = shell.animate([{ height: `${from}px` }, { height: `${to}px` }], {
+      duration: Number.parseFloat(style.getPropertyValue('--motion-layout-duration')),
+      easing: style.getPropertyValue('--motion-ease').trim(),
     });
-  }
+    modeAnimation = animation;
+    animation.finished.then(() => {
+      if (modeAnimation !== animation) return;
+      modeAnimation = undefined;
+      shell.style.removeProperty('height');
+    }, () => {});
+  } else shell.style.removeProperty('height');
   shell.querySelector<HTMLInputElement>('.entry-mode-page:not([inert]) input:not([type="file"])')?.focus({ preventScroll: true });
 });
-function reduceModeMotion() { if (modePreference?.matches) modeAnimation?.cancel(); }
+function stopModeMotion() {
+  modeAnimation?.cancel();
+  modeAnimation = undefined;
+  dialog.value?.style.removeProperty('height');
+}
+function reduceModeMotion() { if (modePreference?.matches) stopModeMotion(); }
 onScopeDispose(() => {
   modeGeneration++;
-  modeAnimation?.cancel();
+  stopModeMotion();
   modePreference?.removeEventListener('change', reduceModeMotion);
 });
 onMounted(() => {
@@ -105,6 +125,7 @@ onMounted(() => {
     <form ref="dialog" class="group-entry" role="dialog" aria-modal="true" tabindex="-1"
       :aria-label="group ? '编辑群组资料' : mode === 'join' ? '加入群组' : '创建群组'"
       :inert="!!cropSource" @submit.prevent="submit" @keydown="keepFocus">
+      <div ref="viewport" class="entry-viewport">
       <Transition name="entry-mode" @before-leave="retireMode">
       <div :key="mode" class="entry-mode-page">
       <header class="entry-header">
@@ -150,6 +171,7 @@ onMounted(() => {
       </footer>
       </div>
       </Transition>
+      </div>
     </form>
     <DialogTransition>
     <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整群组头像" shape="square" @apply="finishCrop" @cancel="finishCrop()" />
@@ -158,9 +180,11 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.group-entry { position: relative; width: min(480px, 100%); max-height: calc(100dvh - 36px); overflow-y: auto; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); font-size: 14px; line-height: 20px; }
+.group-entry { --entry-padding: 24px; width: min(480px, 100%); min-height: 0; max-height: calc(100dvh - 36px); overflow: clip; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); font-size: 14px; line-height: 20px; }
+.entry-viewport { position: relative; max-height: calc(100dvh - 38px); overflow-x: hidden; overflow-y: auto; padding: var(--entry-padding); scrollbar-width: none; }
+.entry-viewport::-webkit-scrollbar { display: none; }
 .entry-mode-page { display: flow-root; min-width: 0; }
-.entry-mode-leave-active { position: absolute; top: 24px; right: 24px; left: 24px; }
+.entry-mode-leave-active { position: absolute; top: var(--entry-padding); right: var(--entry-padding); left: var(--entry-padding); }
 .entry-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .entry-body.entry-join-body { gap: 12px; align-content: start; }
 .entry-join-body input { width: 100%; }
@@ -184,5 +208,5 @@ onMounted(() => {
 .entry-field-heading label span, .entry-count { color: var(--muted); font-size: 12px; }
 .entry-description textarea { width: 100%; height: 88px; padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; line-height: 22px; }
 .entry-description textarea { resize: none; }
-@media (max-width: 420px) { .group-entry { padding: 20px; } .entry-mode-leave-active { top: 20px; right: 20px; left: 20px; } .entry-header h2 { font-size: 20px; } .entry-identity { gap: 12px; } .group-avatar-preview { width: 64px; height: 64px; } }
+@media (max-width: 420px) { .group-entry { --entry-padding: 20px; } .entry-header h2 { font-size: 20px; } .entry-identity { gap: 12px; } .group-avatar-preview { width: 64px; height: 64px; } }
 </style>

@@ -99,6 +99,7 @@ export function useRtcRoom() {
     stream.getTracks().forEach((track) => track.stop());
   }, { once: true });
   return { revision, status, room, participants, notice: ref(''), busySources: ref([]),
+    get screenShareActive() { void revision.value; return local.isScreenShareEnabled; },
     listening, microphoneIntent, microphoneEnabled,
     needsAudioPlayback: ref(false), remoteControlShares, remoteControlActive, remoteControlAvailable,
     remoteControlPresentations: ref({}), remoteControlRestoring: ref(false),
@@ -190,8 +191,27 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     await sharing(page, ['A', 'B']);
     await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
     const video = await page.locator('.viewing-tile video').elementHandle();
-    await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
-    await page.getByRole('button', { name: '聚焦成员A', exact: true }).click();
+    for (let step = 0; step < 2; step++) {
+      const excess = await page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').first().evaluate(async (element) => {
+        (element as HTMLElement).click();
+        const started = performance.now();
+        let maximum = 0;
+        await new Promise<void>((resolve) => {
+          function measure() {
+            for (const tile of document.querySelectorAll('.viewing-tile:not(.view-tile-leave-active)')) {
+              const bounds = tile.getBoundingClientRect();
+              const media = tile.querySelector('.participant-media')!.getBoundingClientRect();
+              maximum = Math.max(maximum, media.height - bounds.height, media.width - bounds.width);
+            }
+            if (performance.now() - started < 250) requestAnimationFrame(measure);
+            else resolve();
+          }
+          measure();
+        });
+        return maximum;
+      });
+      expect(excess).toBeLessThanOrEqual(1);
+    }
     expect(await video!.evaluate(element => element.isConnected && element === document.querySelector('.viewing-tile video'))).toBe(true);
     await page.getByRole('button', { name: '收起成员', exact: true }).click();
     expect(await page.locator('.layout-reveal-leave-active').evaluateAll(elements =>

@@ -122,22 +122,22 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
       identity: `overlay-preview-${index}`, name, microphone: true, listening: true, speaking: false, visible: true, avatar: '',
     }));
     // 按完整名单估算最长昵称宽度，说话状态切换不反复改变窗口宽度。
-    const nameWidth = Math.max(32, ...members.map((member) => Array.from(member.name).reduce((width, character) =>
-      width + (/[^\u0000-\u00ff]/.test(character) ? 32 : 20), 0)));
-    const columnWidth = Math.min(display().workArea.width - 4, Math.ceil((32 + 8 + nameWidth + 2) * settings.scale / 100));
+    const nameWidth = Math.max(15, ...members.map((member) => Array.from(member.name).reduce((width, character) =>
+      width + (/[^\u0000-\u00ff]/.test(character) ? 15 : 9), 0)));
+    const columnWidth = Math.min(display().workArea.width - 4, Math.ceil((28 + 6 + nameWidth + 2) * settings.scale / 100));
     return { settings, editing, columnWidth, status: snapshot.status, members };
   }
 
   function place(count, columnWidth, preservePlacement) {
     if (!overlay) return;
     const area = display().workArea;
-    const rowHeight = Math.ceil(36 * settings.scale / 100);
+    const rowHeight = Math.ceil(34 * settings.scale / 100);
     const maxRows = Math.max(1, Math.floor((area.height - 4) / rowHeight));
     const rows = Math.max(1, Math.min(count, maxRows));
     const columns = Math.max(1, Math.ceil(count / rows));
     const width = Math.min(area.width, columnWidth * columns + 4);
     const height = Math.min(area.height, rows * rowHeight + 4);
-    if (preservePlacement && appliedBounds) {
+    if (preservePlacement && appliedBounds && (appliedBounds.width !== width || appliedBounds.height !== height)) {
       const left = settings.x > 0.5 ? appliedBounds.x + appliedBounds.width - width : appliedBounds.x;
       const x = Math.max(0, Math.min(1, (left - area.x) / Math.max(1, area.width - width)));
       const y = Math.max(0, Math.min(1, (appliedBounds.y - area.y) / Math.max(1, area.height - height)));
@@ -170,7 +170,7 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
     if (!visible || failed) { destroyWindow(); return; }
     if (!overlay) {
       overlay = new BrowserWindow({ width: 100, height: 64, show: false,
-        frame: false, transparent: true, hasShadow: false, resizable: false, maximizable: false,
+        frame: false, thickFrame: false, transparent: true, hasShadow: false, resizable: false, maximizable: false,
         fullscreenable: false, skipTaskbar: true, focusable: editing, title: 'LycanSync 屏幕覆盖',
         webPreferences: { session: overlaySession, preload: resolve(__dirname, 'voice-overlay-preload.cjs'),
           contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false },
