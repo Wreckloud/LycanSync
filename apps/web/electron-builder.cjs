@@ -16,6 +16,7 @@ module.exports = {
   files: [
     'dist/**/*',
     'electron/main.cjs',
+    'electron/audio-shortcuts.cjs',
     'electron/window-layout.cjs',
     'electron/screen-share-windows.cjs',
     'electron/viewer-preload.cjs',
