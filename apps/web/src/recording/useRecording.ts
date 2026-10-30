@@ -14,6 +14,7 @@ const messages: Record<string, string> = {
   recordingStartTimedOut: '录像启动超时，请结束共享后重试。',
   recordingWriteFailed: '录像写入失败，请检查保存目录和磁盘空间。',
   recordingVoiceUnavailable: '人声录制已中断，录像已停止，已写入的文件会保留。',
+  recordingLibraryUnavailable: '录像列表未能保存，请检查安装目录的读写权限；已写入的原片仍保留在录像目录。',
 };
 
 export function useRecording(options: { track: () => MediaStreamTrack | undefined; canStart: () => boolean;
@@ -83,7 +84,7 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
     catch { notice.value = '保存目录未能修改，请重试。'; }
     finally { pending.value = false; }
   }
-  async function start() {
+  async function startCurrent(previousId?: string) {
     if (!desktop || busy.value || active.value || !options.canStart()) return;
     const track = options.track();
     if (!track) { notice.value = messages.recordingShareUnavailable; return; }
@@ -92,7 +93,7 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
       demandTrack = track;
       await setNativeScreenRecordingDemand(track, true);
       if (disposed || options.track() !== track || !options.canStart()) return;
-      const next = await desktop.startRecording();
+      const next = await desktop.startRecording(previousId);
       if (disposed) { await desktop.stopRecording(next.recordingId); return; }
       setState(next);
     } catch (error) {
@@ -118,14 +119,16 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
   async function withSourceChange(change: (beforeChange: () => Promise<void>) => Promise<boolean>) {
     const version = ++sourceChangeVersion;
     let resume = false;
+    let previousId: string | undefined;
     try {
       const changed = await change(async () => {
         if (state.value.phase !== 'recording') return;
+        previousId = state.value.recordingId ?? undefined;
         resume = true; changingSource.value = true;
         if (!await stopCurrent()) throw new Error('recordingStopUnconfirmed');
       });
       changingSource.value = false;
-      if (resume && changed && version === sourceChangeVersion && !disposed) await start();
+      if (resume && changed && version === sourceChangeVersion && !disposed) await startCurrent(previousId);
       return changed;
     } finally { changingSource.value = false; }
   }
@@ -172,5 +175,5 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
     const stop = active.value && state.value.recordingId ? desktop?.stopRecording(state.value.recordingId) : undefined;
     void Promise.resolve(stop).catch(() => {}).finally(() => { if (track) void setNativeScreenRecordingDemand(track, false); });
   });
-  return { settings, state, notice, active, busy, elapsed, load, configure, chooseDirectory, start, stop, reveal, withSourceChange };
+  return { settings, state, notice, active, busy, elapsed, load, configure, chooseDirectory, start: () => startCurrent(), stop, reveal, withSourceChange };
 }

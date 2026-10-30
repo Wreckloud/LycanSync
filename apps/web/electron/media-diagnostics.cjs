@@ -125,7 +125,7 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           'recordingShareUnavailable', 'recordingBusy', 'recordingPathInvalid', 'recordingHardwareEncoderUnavailable',
           'recordingEncoderStartFailed', 'recordingAudioEncoderUnavailable', 'recordingOutputUnavailable',
           'recordingModuleUnavailable', 'recordingApplicationAudioUnavailable', 'recordingDiskFull',
-          'recordingWriteFailed', 'recordingHostExited', 'recordingStartTimedOut', 'recordingStopUnconfirmed', 'recordingVoiceUnavailable'].includes(entry.code)) details.code = entry.code;
+          'recordingWriteFailed', 'recordingHostExited', 'recordingStartTimedOut', 'recordingStopUnconfirmed', 'recordingVoiceUnavailable', 'recordingLibraryUnavailable'].includes(entry.code)) details.code = entry.code;
         if (['recordingStarted', 'recordingStopped', 'recordingFailed'].includes(stage)) {
           for (const key of ['applicationAudio', 'microphone', 'friends', 'saved']) {
             if (typeof entry[key] === 'boolean') details[key] = entry[key];

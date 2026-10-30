@@ -1811,9 +1811,9 @@ ipcMain.handle('recording:directory', async (event) => {
     defaultPath: (await recording.load()).directory });
   return result.canceled ? recording.load() : recording.configure({ directory: result.filePaths[0] });
 });
-ipcMain.handle('recording:start', (event) => {
-  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
-  return recording.start();
+ipcMain.handle('recording:start', (event, previousId) => {
+  if (!trustedSender(event) || closing || (previousId !== undefined && typeof previousId !== 'string')) throw new Error('请求来源无效');
+  return recording.start(previousId);
 });
 ipcMain.handle('recording:stop', (event, id) => {
   if (!trustedSender(event) || typeof id !== 'string' || recording.snapshot().recordingId !== id) throw new Error('recordingSessionMismatch');
@@ -1838,6 +1838,24 @@ ipcMain.handle('recording:reveal', async (event) => {
   const path = await recording.revealPath();
   if (path.endsWith('.mkv')) shell.showItemInFolder(path);
   else { const error = await shell.openPath(path); if (error) throw new Error('无法打开录像目录'); }
+});
+ipcMain.handle('recording:library', (event, offset) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return recording.library.list(offset);
+});
+ipcMain.handle('recording:file', async (event, id, action) => {
+  if (!trustedSender(event) || closing || !['play', 'reveal', 'delete'].includes(action)) throw new Error('请求来源无效');
+  if (action === 'delete') {
+    const result = await dialog.showMessageBox(mainWindow, { type: 'warning', title: '删除本地录像',
+      message: '永久删除这个录像文件？', detail: '此操作不能撤销。已发送到群聊的副本不受影响；文件已丢失或被替换时，只移除列表记录。',
+      buttons: ['取消', '删除'], defaultId: 0, cancelId: 0, noLink: true });
+    if (result.response !== 1 || closing) return false;
+    await recording.library.remove(id); return true;
+  }
+  const path = await recording.library.filePath(id);
+  if (action === 'reveal') shell.showItemInFolder(path);
+  else if (await shell.openPath(path)) throw new Error('recordingPlayerUnavailable');
+  return true;
 });
 ipcMain.handle('media:remote-control:authorize', (event, sessionId, controlSessionId, controllerIdentity) => {
   if (!trustedSender(event) || closing || typeof sessionId !== 'string'

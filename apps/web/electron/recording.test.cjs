@@ -8,7 +8,7 @@ const { createRecording } = require('./recording.cjs');
 function deferred() { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 async function fixture(context, overrides = {}) {
   const root = await mkdtemp(join(tmpdir(), 'lycan-recording-'));
-  context.after(() => rm(root, { recursive: true, force: true }));
+  context.after(() => rm(root, { recursive: true, force: true, maxRetries: 3 }));
   let video = { sessionId: 'video-1' };
   let id = 0;
   const calls = [], events = [], diagnostics = [];
@@ -186,4 +186,142 @@ test('应用声音准备失败不冒充磁盘错误，录制中的应用声音�
   assert.equal(running.recording.snapshot().phase, 'failed');
   assert.equal(running.recording.active, undefined);
   assert.equal(running.calls.filter(call => call[0] === 'releaseAudio').length, 1);
+});
+
+test('录像索引在重启后保留原片信息，读取列表不暴露路径或扫描未登记文件', async context => {
+  const f = await fixture(context, { host: { startRecording: async (...args) => {
+    await writeFile(args[2], 'recorded'); return { width: 1920, height: 1080 };
+  } } });
+  await f.recording.start(); await f.recording.stop();
+  await writeFile(join(f.root, 'recordings', 'unregistered.mkv'), 'not-registered');
+  const { createRecordingLibrary } = require('./recording-library.cjs');
+  const reopened = createRecordingLibrary({ dataDirectory: f.root, isActive: () => false });
+  const result = await reopened.list();
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].state, 'saved');
+  assert.equal(result.items[0].availability, 'available');
+  assert.equal(result.items[0].bytes, 8);
+  assert.equal(result.items[0].width, 1920); assert.equal(result.items[0].height, 1080);
+  assert.ok(result.items[0].durationMs >= 0);
+  assert.doesNotMatch(JSON.stringify(result), /\.mkv|recordings[\\/]|fileIdentity/);
+  assert.equal(await readFile(await reopened.filePath(result.items[0].id), 'utf8'), 'recorded');
+});
+
+test('重启时未收尾的录像显示保存未确认，不伪造成功，活动原片禁止打开或删除', async context => {
+  const f = await fixture(context); await f.recording.start();
+  const id = f.recording.snapshot().recordingId;
+  assert.equal((await f.recording.library.list()).items[0].state, 'recording');
+  await assert.rejects(f.recording.library.filePath(id), /recordingBusy/);
+  await assert.rejects(f.recording.library.remove(id), /recordingBusy/);
+  const { createRecordingLibrary } = require('./recording-library.cjs');
+  const reopened = createRecordingLibrary({ dataDirectory: f.root, isActive: () => false });
+  const entry = (await reopened.list()).items[0];
+  assert.equal(entry.state, 'interrupted'); assert.equal(entry.durationMs, null);
+  assert.equal(await readFile(await reopened.filePath(id), 'utf8'), 'controlled-recorded-content');
+  await f.recording.stop();
+});
+
+test('画质与来源续录归为同一组，独立开始为新组，不能续接任意旧条目', async context => {
+  const f = await fixture(context); await f.recording.start();
+  const first = f.recording.snapshot().recordingId;
+  await f.recording.withVideoChange(async () => {});
+  const second = f.recording.snapshot().recordingId;
+  await f.recording.stop();
+  await f.recording.start(second); await f.recording.stop();
+  await f.recording.start(); await f.recording.stop();
+  const entries = (await f.recording.library.list()).items;
+  assert.equal(entries.filter(entry => entry.sessionId === first).length, 3);
+  assert.equal(new Set(entries.map(entry => entry.sessionId)).size, 2);
+  await assert.rejects(f.recording.start(first), /recordingSessionMismatch/);
+});
+
+test('原片被移动或替换后只移除索引，不删除其他文件', async context => {
+  const fs = require('node:fs/promises');
+  const f = await fixture(context); await f.recording.start(); await f.recording.stop();
+  const id = f.recording.snapshot().recordingId;
+  const path = await f.recording.library.filePath(id);
+  await fs.rename(path, path + '.original');
+  assert.equal((await f.recording.library.list()).items[0].availability, 'missing');
+  await assert.rejects(f.recording.library.filePath(id), /recordingFileUnavailable/);
+  await fs.writeFile(path, 'other-file');
+  assert.equal((await f.recording.library.list()).items[0].availability, 'changed');
+  await f.recording.library.remove(id);
+  assert.equal(await fs.readFile(path, 'utf8'), 'other-file');
+  assert.equal((await f.recording.library.list()).items.length, 0);
+  await assert.rejects(f.recording.library.remove(path), /recordingEntryMissing/);
+});
+
+test('删除指定原片后同步索引，目录变更不改变旧条目的授权路径', async context => {
+  const f = await fixture(context); await f.recording.start(); await f.recording.stop();
+  const id = f.recording.snapshot().recordingId;
+  const path = await f.recording.library.filePath(id);
+  await f.recording.configure({ directory: join(f.root, 'new-recordings') });
+  assert.equal(await f.recording.library.filePath(id), path);
+  await f.recording.library.remove(id);
+  await assert.rejects(readFile(path), { code: 'ENOENT' });
+  const stored = JSON.parse(await readFile(join(f.root, 'recording-library.json'), 'utf8'));
+  assert.deepEqual(stored.entries, []);
+});
+
+test('索引损坏不覆盖为新空列表，不启动输出；修正后可重新读取', async context => {
+  const f = await fixture(context);
+  const path = join(f.root, 'recording-library.json');
+  await writeFile(path, '{invalid');
+  await assert.rejects(f.recording.start(), /recordingLibraryUnavailable/);
+  assert.equal(f.calls.length, 0);
+  assert.equal(await readFile(path, 'utf8'), '{invalid');
+  await writeFile(path, JSON.stringify({ schemaVersion: 1, entries: [] }));
+  assert.deepEqual((await f.recording.library.list()).items, []);
+  await f.recording.start(); await f.recording.stop();
+});
+
+test('列表分页只检查本页已登记文件，不读取视频内容', async context => {
+  const fs = require('node:fs/promises');
+  const f = await fixture(context); await f.recording.start(); await f.recording.stop();
+  const path = join(f.root, 'recording-library.json');
+  const stored = JSON.parse(await readFile(path, 'utf8'));
+  stored.entries = Array.from({ length: 55 }, (_, index) => {
+    const id = `12345678-1234-1234-1234-${String(index + 1).padStart(12, '0')}`;
+    return { ...stored.entries[0], id, sessionId: id, path: join(f.root, `LycanSync-test-${id}.mkv`) };
+  });
+  await writeFile(path, JSON.stringify(stored));
+  let checks = 0;
+  const { createRecordingLibrary } = require('./recording-library.cjs');
+  const library = createRecordingLibrary({ dataDirectory: f.root, isActive: () => false,
+    io: { ...fs, lstat: async path => { checks++; return fs.lstat(path); } } });
+  assert.equal((await library.list()).items.length, 50); assert.equal(checks, 50);
+  const next = await library.list(50);
+  assert.equal(next.items.length, 5); assert.equal(next.hasMore, false); assert.equal(checks, 55);
+  await assert.rejects(library.list(-1), /recordingEntryMissing/);
+});
+
+test('文件IPC只信任主窗口和条目ID，删除取消不写文件，确认后再次检查活动状态', async context => {
+  const f = await fixture(context); await f.recording.start(); await f.recording.stop();
+  const id = f.recording.snapshot().recordingId;
+  const handlers = new Map(); let response = 0; const opened = [];
+  const { readFileSync } = require('node:fs');
+  const { runInNewContext } = require('node:vm');
+  const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const sandbox = { ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    trustedSender: event => event.trusted === true, closing: false, mainWindow: {}, recording: f.recording,
+    dialog: { showMessageBox: async () => ({ response }) },
+    shell: { openPath: async path => { opened.push(path); return ''; }, showItemInFolder: path => opened.push(path) }, Error };
+  runInNewContext(source.slice(source.indexOf("ipcMain.handle('recording:library'"),
+    source.indexOf("ipcMain.handle('media:remote-control:authorize'")), sandbox);
+  const operation = handlers.get('recording:file');
+  const trusted = { trusted: true };
+  await assert.rejects(operation({}, id, 'play'), /请求来源无效/);
+  await assert.rejects(operation(trusted, await f.recording.library.filePath(id), 'play'), /recordingEntryMissing/);
+  await assert.rejects(operation(trusted, id, 'execute'), /请求来源无效/);
+  assert.equal(await operation(trusted, id, 'delete'), false);
+  assert.equal((await f.recording.library.list()).items.length, 1);
+  await operation(trusted, id, 'play'); assert.equal(opened.length, 1);
+  response = 1;
+  const starting = await f.recording.start();
+  await assert.rejects(operation(trusted, starting.recordingId, 'delete'), /recordingBusy/);
+  await f.recording.stop();
+  sandbox.closing = true;
+  await assert.rejects(operation(trusted, id, 'play'), /请求来源无效/);
+  sandbox.closing = false;
+  assert.equal(await operation(trusted, id, 'delete'), true);
 });

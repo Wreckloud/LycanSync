@@ -150,10 +150,12 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   chooseRecordingDirectory: () => ipcRenderer.invoke('recording:directory'),
   failRecordingVoice: (id) => ipcRenderer.invoke('recording:voice-failed', id),
   sendRecordingVoice: (id, position, pcm) => ipcRenderer.invoke('recording:voice', id, position, pcm),
-  startRecording: () => ipcRenderer.invoke('recording:start'),
+  startRecording: (previousId) => ipcRenderer.invoke('recording:start', previousId),
   stopRecording: (id) => ipcRenderer.invoke('recording:stop', id),
   getRecordingStatus: () => ipcRenderer.invoke('recording:status'),
   revealRecording: () => ipcRenderer.invoke('recording:reveal'),
+  getRecordingLibrary: (offset) => ipcRenderer.invoke('recording:library', offset),
+  recordingFile: (id, action) => ipcRenderer.invoke('recording:file', id, action),
   onRecordingState: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('recording:state', listener);

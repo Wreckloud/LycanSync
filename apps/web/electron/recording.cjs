@@ -1,11 +1,12 @@
 const { mkdir, readFile, writeFile, rename, open, stat, statfs } = require('node:fs/promises');
 const { join, isAbsolute } = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { createRecordingLibrary } = require('./recording-library.cjs');
 
 const RECORDING_CODES = new Set(['recordingShareUnavailable', 'recordingBusy', 'recordingPathInvalid',
   'recordingHardwareEncoderUnavailable', 'recordingEncoderStartFailed', 'recordingAudioEncoderUnavailable',
   'recordingOutputUnavailable', 'recordingModuleUnavailable', 'recordingApplicationAudioUnavailable',
-  'recordingDiskFull', 'recordingWriteFailed', 'recordingHostExited', 'recordingStartTimedOut', 'recordingStopUnconfirmed', 'recordingVoiceUnavailable']);
+  'recordingDiskFull', 'recordingWriteFailed', 'recordingHostExited', 'recordingStartTimedOut', 'recordingStopUnconfirmed', 'recordingVoiceUnavailable', 'recordingLibraryUnavailable']);
 
 function recordingError(error) {
   return RECORDING_CODES.has(error?.message) ? error.message
@@ -23,6 +24,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
   let continuing = false;
   let generation = 0;
   let saveSettings = Promise.resolve();
+  const library = createRecordingLibrary({ dataDirectory, isActive: id => active?.id === id });
 
   function snapshot() {
     const current = active ?? latest;
@@ -72,22 +74,26 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
     const failed = results.find(result => result.status === 'rejected');
     if (failed) throw failed.reason;
   }
-  async function start() {
+  async function start(previousId) {
     await load();
     if (active) throw new Error('recordingBusy');
+    if (previousId !== undefined && (latest?.id !== previousId || latest.error || !['saved', 'idle'].includes(latest.phase))) throw new Error('recordingSessionMismatch');
     const video = getVideo();
     if (!video || video.starting || video.stopping) throw new Error('recordingShareUnavailable');
     const current = { id: createId(), videoSessionId: video.sessionId, options: { ...settings },
       phase: 'starting', startedAt: null, bytes: 0, error: null, saved: false, generation: ++generation };
+    current.librarySessionId = previousId ? latest.librarySessionId : current.id;
     active = current; publish();
     current.start = (async () => {
       try {
+        await library.ready();
         await io.mkdir(current.options.directory, { recursive: true });
         const space = await io.statfs(current.options.directory);
         if (space.bavail * space.bsize < 256 * 1024 * 1024) throw new Error('recordingDiskFull');
         current.path = join(current.options.directory, `LycanSync-${new Date().toISOString().replace(/[:.]/g, '-')}-${current.id}.mkv`);
         // 独占预留，绝不覆盖已有文件；失败时保留部分录像供用户检查。
         const file = await io.open(current.path, 'wx'); await file.close();
+        await library.register(current); current.registered = true;
         if (active !== current || current.phase !== 'starting' || getVideo() !== video) throw new Error('recordingShareUnavailable');
         if (current.options.applicationAudio) {
           current.audioPreparing = true;
@@ -109,6 +115,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
         if (active !== current || current.phase !== 'starting') throw new Error('recordingShareUnavailable');
         if (current.hostEnded) throw new Error(current.error ?? 'recordingWriteFailed');
         current.phase = 'recording'; current.startedAt = Date.now();
+        current.monotonicStart = performance.now(); current.width = started?.width; current.height = started?.height;
         onDiagnostic({ stage: 'recordingStarted', applicationAudio: current.options.applicationAudio,
           width: started?.width, height: started?.height,
           microphone: current.options.microphone, friends: current.options.friends }); publish(); return snapshot();
@@ -125,6 +132,10 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
         await finishAudio(current).catch(() => { current.error ??= 'recordingApplicationAudioUnavailable'; });
         current.phase = cancelled ? 'idle' : 'failed';
         if (!cancelled) current.error ??= recordingError(error);
+        if (current.registered && !cancelled) {
+          try { await library.finish(current); }
+          catch { current.error = 'recordingLibraryUnavailable'; }
+        }
         if (active === current) { active = undefined; latest = current; publish(); }
         if (!cancelled) onDiagnostic({ stage: 'recordingFailed', code: current.error });
         throw new Error(cancelled ? 'recordingCancelled' : current.error);
@@ -152,6 +163,8 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
         await finishAudio(current);
         await updateSize(current);
         current.saved = current.startedAt !== null && current.outputFrames > 0 && current.bytes > 0 && !current.error;
+        current.durationMs = current.monotonicStart === undefined ? null : Math.max(0, Math.round(performance.now() - current.monotonicStart));
+        if (current.registered) await library.finish(current);
         current.phase = current.error ? 'failed' : current.saved ? 'saved' : 'idle';
         onDiagnostic({ stage: 'recordingStopped', ...(current.error ? { code: current.error } : {}), bytes: current.bytes, outputFrames: current.outputFrames ?? 0,
           durationMs: current.startedAt === null ? 0 : Date.now() - current.startedAt, saved: current.saved });
@@ -189,16 +202,17 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
     if (continuing || active.phase !== 'recording') throw new Error('recordingBusy');
     continuing = true;
     try {
+      const previousId = active.id;
       await stop(true);
       const version = generation;
       const result = await operation();
       if (version === generation && getVideo()) {
-        try { await start(); } catch { /* 共享配置已成功，录像失败由独立状态反馈。 */ }
+        try { await start(previousId); } catch { /* 共享配置已成功，录像失败由独立状态反馈。 */ }
       }
       return result;
     } finally { continuing = false; publish(); }
   }
-  return { load, configure, start, stop, fail, hostEvent, withVideoChange, snapshot,
+  return { load, configure, start, stop, fail, hostEvent, withVideoChange, snapshot, library,
     get active() { return active; },
     async status() { if (active?.path) await updateSize(active); return snapshot(); },
     async revealPath() {
