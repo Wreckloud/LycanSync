@@ -58,6 +58,7 @@ const apiRoutePolicies = new Map([
 const groupPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const groupManagementPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/(?:candidates|members|owner|invite-code(?:\/refresh)?)$/i;
 const groupMemberPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/members\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const groupMemberProfilePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/members\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/profile$/i;
 const groupPresencePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/presences$/i;
 const groupPresenceChangesPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/presence-changes$/i;
 const groupMessagePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/messages$/i;
@@ -209,7 +210,7 @@ const obsCaptureHost = new ObsCaptureHostManager({
     if (video && video.sessionId === state.videoSessionId && !video.stopping) {
       if (error.message === 'captureTargetClosed') void writeMediaDiagnostic({ stage: 'screenTargetClosed', code: error.message });
       else recordVideoFailure('obsCaptureHost', error);
-      const code = ['captureTargetClosed', 'captureMethodNotIsolated', 'captureSettingsUnsupported', 'captureBorderUnsupported', 'captureBorderAccessDenied',
+      const code = ['captureTargetClosed', 'captureSettingsUnsupported', 'captureBorderUnsupported', 'captureBorderAccessDenied',
         'obsGameBindingUnavailable', 'obsGameTargetMismatch', 'obsWindowBindingUnavailable', 'obsWindowTargetMismatch',
         'obsWindowCaptureStartFailed', 'obsWindowRuntimeUnavailable', 'obsWindowSourceUnavailable',
         'sharedTextureGpuWaitFailed', 'sharedTextureGpuStalled', 'sharedTextureReleaseFailed', 'sharedTextureAcquireFailed',
@@ -975,7 +976,7 @@ async function startNativeVideo(sourceId, maxFps, settings, resolution, gameFoll
     return { sessionId, changed: true, ...(gameFollowId ? { gameFollowId } : {}) };
   } catch (error) {
     if (!video.failureNotified) {
-      if (['captureBorderUnsupported', 'captureBorderAccessDenied', 'captureSettingsUnsupported', 'captureMethodNotIsolated'].includes(error.message)) {
+      if (['captureBorderUnsupported', 'captureBorderAccessDenied', 'captureSettingsUnsupported'].includes(error.message)) {
         void writeMediaDiagnostic({ stage: 'screenCaptureSelectionUnavailable', code: error.message });
       } else recordVideoFailure('startCapture', error);
     }
@@ -1236,7 +1237,7 @@ async function serveApplication(request) {
       ?? (/^\/api\/auth\/access\/links\/[0-9a-f-]{36}(?:\/renew)?$/i.test(url.pathname)
         && ((request.method === 'POST' && url.pathname.endsWith('/renew'))
           || (request.method === 'DELETE' && !url.pathname.endsWith('/renew'))) ? {} : undefined)
-      ?? (request.method === 'GET' && (groupPath.test(url.pathname) || groupPresencePath.test(url.pathname) || groupMessagePath.test(url.pathname)
+      ?? (request.method === 'GET' && (groupPath.test(url.pathname) || groupMemberProfilePath.test(url.pathname) || groupPresencePath.test(url.pathname) || groupMessagePath.test(url.pathname)
         || groupAttachmentPath.test(url.pathname) || groupFilePath.test(url.pathname)) ? {} : undefined)
       ?? (request.method === 'GET' && groupPresenceChangesPath.test(url.pathname) ? { longPolling: true } : undefined)
       ?? (request.method === 'PUT' && groupPath.test(url.pathname) ? { maxBodyBytes: 3 * 1024 * 1024 } : undefined)

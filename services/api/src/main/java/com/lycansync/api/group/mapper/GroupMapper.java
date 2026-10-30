@@ -1,6 +1,7 @@
 package com.lycansync.api.group.mapper;
 
 import com.lycansync.api.group.dto.GroupCandidateResponse;
+import com.lycansync.api.group.dto.GroupMemberProfileResponse;
 import com.lycansync.api.group.model.ChatGroup;
 import com.lycansync.api.group.model.GroupMember;
 import com.lycansync.api.group.model.GroupView;
@@ -27,6 +28,9 @@ public interface GroupMapper {
     GroupView findGroup(@Param("groupId") UUID groupId, @Param("userId") UUID userId);
 
     List<GroupMember> findMembers(@Param("groupId") UUID groupId);
+
+    GroupMemberProfileResponse findMemberProfile(@Param("groupId") UUID groupId,
+            @Param("memberUserId") UUID memberUserId, @Param("requesterUserId") UUID requesterUserId);
 
     List<String> findMemberIds(@Param("groupId") UUID groupId);
 

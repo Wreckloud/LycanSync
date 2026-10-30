@@ -2,6 +2,7 @@ package com.lycansync.api.group.service;
 
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.group.dto.CreateGroupRequest;
+import com.lycansync.api.group.dto.GroupMemberProfileResponse;
 import com.lycansync.api.group.exception.GroupException;
 import com.lycansync.api.group.mapper.GroupMapper;
 import com.lycansync.api.group.model.ChatGroup;
@@ -37,6 +38,25 @@ import static org.mockito.Mockito.when;
  * @since 2026-10-11
  */
 class GroupServiceTests {
+
+    @Test
+    void shouldReadOnlySameGroupMemberProfile() {
+        GroupMapper mapper = mock(GroupMapper.class);
+        GroupService service = new GroupService(mapper, Clock.systemUTC(), mock(ApplicationEventPublisher.class), mock(GroupRtcAccessService.class));
+        AuthenticatedUser user = new AuthenticatedUser(UUID.randomUUID(), "成员", false);
+        UUID groupId = UUID.randomUUID();
+        UUID targetId = UUID.randomUUID();
+        when(mapper.memberExists(groupId, user.id())).thenReturn(true);
+        when(mapper.findMemberProfile(groupId, targetId, user.id()))
+                .thenReturn(new GroupMemberProfileResponse(targetId, "今晚开黑"));
+
+        assertThat(service.findMemberProfile(groupId, targetId, user).signature()).isEqualTo("今晚开黑");
+        assertThatThrownBy(() -> service.findMemberProfile(groupId, UUID.randomUUID(), user))
+                .isInstanceOf(GroupException.class).hasMessage("成员资料不存在或已无法访问");
+        AuthenticatedUser outsider = new AuthenticatedUser(UUID.randomUUID(), "其他用户", false);
+        assertThatThrownBy(() -> service.findMemberProfile(groupId, targetId, outsider))
+                .isInstanceOf(GroupException.class).hasMessage("群组不存在或你已不在此群");
+    }
 
     @Test
     void shouldStoreAndReturnNormalizedAvatar() throws Exception {

@@ -39,10 +39,12 @@ public class GroupMemberPresenceService {
     private GroupPresenceResponse withPresence(UUID userId, Map<UUID, UserPresence> presences) {
         UserPresence presence = presences.get(userId);
         UserPresenceStatus status = presence == null ? UserPresenceStatus.OFFLINE : presence.status();
+        // 离线与隐身使用相同公开结果，不通过持续更新的活跃时间或旧动态暴露隐身。
+        if (status == UserPresenceStatus.OFFLINE) {
+            return new GroupPresenceResponse(userId, status, null, null, null, null);
+        }
         return new GroupPresenceResponse(
-                userId, status, presence == null ? null : presence.lastSeenAt(),
-                presence == null ? null : presence.activityType(),
-                presence == null ? null : presence.activityName(),
-                presence == null ? null : presence.activityStartedAt());
+                userId, status, presence.lastSeenAt(), presence.activityType(),
+                presence.activityName(), presence.activityStartedAt());
     }
 }

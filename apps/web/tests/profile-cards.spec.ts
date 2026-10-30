@@ -1,0 +1,210 @@
+import { expect, test } from '@playwright/test';
+
+const groupId = '01b08c29-d1e5-4bca-987f-64946541e93b';
+const friendId = 'a1ae7096-049b-46ed-8e62-4f3dd0e7f80d';
+const secondId = 'b2ae7096-049b-46ed-8e62-4f3dd0e7f80d';
+const user = { id: '2d983469-4442-44f5-b5a8-f3819f16a611', nickname: '维克罗德', avatar: '',
+  signature: '一起开黑，慢慢来。', administrator: true, createdAt: '2026-09-01T00:00:00Z' };
+const members = [
+  { userId: user.id, nickname: user.nickname, avatar: '', role: 'OWNER', joinedAt: user.createdAt },
+  { userId: friendId, nickname: '阿岚', avatar: '', role: 'MEMBER', joinedAt: user.createdAt },
+  { userId: secondId, nickname: '小满', avatar: '', role: 'MEMBER', joinedAt: user.createdAt },
+];
+const group = { id: groupId, name: '周末开黑', description: '资料卡布局检查', avatar: '', role: 'OWNER',
+  memberCount: members.length, createdAt: user.createdAt, updatedAt: user.createdAt, members };
+
+test.beforeEach(async ({ page }) => {
+  // 所有业务请求都停在本地模拟，不连接真实服务器或设备。
+  await page.route('**/api/**', route => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
+  await page.route('**/api/auth/options', route => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
+  await page.route('**/api/system/initialization', route => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/auth/me', route => route.fulfill({ json: user }));
+  await page.route('**/api/presence/heartbeat', route => route.fulfill({ status: 204 }));
+  await page.route('**/api/rtc/room-occupancies', route => route.fulfill({ json: [] }));
+  await page.route('**/api/rtc/room-summary*', route => route.fulfill({ json: { participantCount: 0, participants: [] } }));
+  await page.route('**/api/groups**', route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
+    if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (url.pathname.endsWith('/messages')) return route.fulfill({ json: { messages: [], hasMore: false } });
+    if (url.pathname.endsWith('/presence-changes')) return new Promise<void>(() => {});
+    if (url.pathname.endsWith('/presences')) return route.fulfill({ json: members.map(member => ({ userId: member.userId,
+      status: 'ONLINE', lastSeenAt: null, activityType: member.userId === friendId ? 'GAME' : null,
+      activityName: member.userId === friendId ? '最终幻想14' : null,
+      activityStartedAt: member.userId === friendId ? new Date(Date.now() - 600_000).toISOString() : null })) });
+    if (url.pathname.endsWith('/profile')) return route.fulfill({ json: {
+      userId: url.pathname.split('/').at(-2), signature: '今晚一起玩游戏。',
+    } });
+    return route.fulfill({ status: 404 });
+  });
+});
+
+test('底部整块资料打开菜单，编辑沿用设置且返回原入口，不改底部布局', async ({ page }) => {
+  await page.goto('/');
+  const footer = page.locator('.group-conversation > .personal-card');
+  const bounds = await footer.boundingBox();
+  await page.getByRole('button', { name: '个人菜单', exact: true }).click();
+  const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
+  await expect(menu).toBeVisible();
+  await expect(menu).toContainText(user.signature);
+  await expect(menu.getByRole('button', { name: '退出登录', exact: true })).toHaveCount(1);
+  await expect(menu.getByRole('button', { name: '隐身', exact: true })).toHaveCount(0);
+  expect(await footer.boundingBox()).toEqual(bounds);
+  await page.screenshot({ path: test.info().outputPath('personal-menu.png') });
+  await menu.getByRole('button', { name: '编辑个人资料', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '账号设置', exact: true })).toBeVisible();
+  await expect(menu).toHaveCount(0);
+  await page.getByRole('button', { name: '返回应用', exact: true }).click();
+  await expect(page.getByRole('button', { name: '个人菜单', exact: true })).toBeFocused();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '账号设置', exact: true })).toBeVisible();
+  await expect(menu).toHaveCount(0);
+});
+
+test('成员悬浮按需读签名，移入卡片保持，Esc 关闭且缓存避免重复读取', async ({ page }) => {
+  let requests = 0;
+  await page.route(`**/api/groups/${groupId}/members/${friendId}/profile`, route => {
+    requests++;
+    return route.fulfill({ json: { userId: friendId, signature: '准备打团。' } });
+  });
+  await page.goto('/');
+  expect(requests).toBe(0);
+  const friend = page.getByRole('button', { name: '查看 阿岚 的资料', exact: true });
+  await friend.hover();
+  const card = page.getByRole('dialog', { name: '成员资料', exact: true });
+  await expect(card).toContainText('准备打团。');
+  await expect(card).toContainText('最终幻想14');
+  await card.hover();
+  await expect(card).toBeVisible();
+  await page.waitForTimeout(300);
+  await expect(card).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('member-profile.png') });
+  await page.keyboard.press('Escape');
+  await expect(card).toHaveCount(0);
+  await expect(friend).toBeFocused();
+  await page.mouse.move(400, 200);
+  await friend.hover();
+  await expect(card).toBeVisible();
+  expect(requests).toBe(1);
+  await page.getByRole('button', { name: '个人菜单', exact: true }).click();
+  await expect(card).toHaveCount(0);
+  await friend.hover();
+  await expect(page.getByRole('dialog', { name: '个人菜单', exact: true })).toBeVisible();
+  await expect(card).toHaveCount(0);
+});
+
+test('签名读取失败可以在卡片重试，旧请求不能覆盖新成员', async ({ page }) => {
+  let attempts = 0;
+  await page.route(`**/api/groups/${groupId}/members/${friendId}/profile`, async route => {
+    if (++attempts === 1) return route.fulfill({ status: 503, json: { detail: '签名暂时不可用' } });
+    await new Promise(resolve => setTimeout(resolve, 700));
+    try { await route.fulfill({ json: { userId: friendId, signature: '旧成员的迟到签名' } }); }
+    catch { /* 切换成员已取消请求。 */ }
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '查看 阿岚 的资料', exact: true }).hover();
+  const card = page.getByRole('dialog', { name: '成员资料', exact: true });
+  await expect(card).toContainText('签名暂时不可用');
+  await card.getByRole('button', { name: '重试', exact: true }).click();
+  await page.getByRole('button', { name: '查看 小满 的资料', exact: true }).click();
+  await expect(card).toContainText('小满');
+  await expect(card).toContainText('今晚一起玩游戏。');
+  await page.waitForTimeout(800);
+  await expect(card).not.toContainText('旧成员的迟到签名');
+});
+
+test('窄窗口卡片保持在可视区，自己的成员卡不请求补充资料', async ({ page }) => {
+  await page.setViewportSize({ width: 440, height: 640 });
+  let requests = 0;
+  page.on('request', request => { if (request.url().endsWith('/profile')) requests++; });
+  await page.goto('/');
+  await page.getByRole('button', { name: `查看 ${user.nickname} 的资料`, exact: true }).click();
+  const card = page.getByRole('dialog', { name: '成员资料', exact: true });
+  await expect(card).toContainText(user.signature);
+  expect(requests).toBe(0);
+  const bounds = (await card.boundingBox())!;
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(440);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(640);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(card).toHaveCount(0);
+  await page.getByRole('button', { name: '个人菜单', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '个人菜单', exact: true })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('personal-menu-narrow.png') });
+});
+
+test('个人菜单退出登录复用认证流程', async ({ page }) => {
+  let logoutRequests = 0;
+  await page.route('**/api/auth/logout', route => { logoutRequests++; return route.fulfill({ status: 204 }); });
+  await page.goto('/');
+  await page.getByRole('button', { name: '个人菜单', exact: true }).click();
+  await page.getByRole('dialog', { name: '个人菜单', exact: true }).getByRole('button', { name: '退出登录', exact: true }).click();
+  await expect.poll(() => logoutRequests).toBe(1);
+  await expect(page.getByRole('button', { name: '个人菜单', exact: true })).toHaveCount(0);
+});
+
+test('头像只给卡片头部提供暗色调，快速开关后菜单仍可操作', async ({ page }) => {
+  const avatar = await page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 24;
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = 'rgb(236, 73, 62)';
+    context.fillRect(0, 0, 24, 24);
+    return canvas.toDataURL('image/png');
+  });
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { ...user, avatar } }));
+  await page.goto('/');
+  const trigger = page.getByRole('button', { name: '个人菜单', exact: true });
+  await trigger.click();
+  const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
+  await expect(menu.locator('.profile-popover-banner')).toHaveCSS('background-color', 'rgb(73, 38, 41)');
+  await page.keyboard.press('Escape');
+  await trigger.click();
+  await menu.getByRole('button', { name: '语音与音频', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '语音与音频', exact: true })).toBeVisible();
+});
+
+test('个人菜单选择隐身后恢复偏好，首个心跳不短暂在线，切回在线可继续使用', async ({ page }) => {
+  const heartbeats: Array<{ status: string; activity: unknown }> = [];
+  await page.route('**/api/presence/heartbeat', route => {
+    heartbeats.push(route.request().postDataJSON());
+    return route.fulfill({ status: 204 });
+  });
+  await page.goto('/');
+  const trigger = page.getByRole('button', { name: '个人菜单', exact: true });
+  await trigger.click();
+  const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
+  await menu.getByRole('button', { name: '在线状态', exact: true }).click();
+  await menu.getByRole('button', { name: '隐身', exact: true }).click();
+  await expect.poll(() => heartbeats.at(-1)?.status).toBe('OFFLINE');
+  await expect(menu.locator('.profile-popover-status')).toHaveText('隐身');
+  await expect(menu.getByRole('button', { name: '隐身', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.screenshot({ path: test.info().outputPath('invisible-menu.png') });
+  heartbeats.length = 0;
+  await page.reload();
+  await expect.poll(() => heartbeats.length).toBeGreaterThan(0);
+  expect(heartbeats.every(heartbeat => heartbeat.status === 'OFFLINE' && heartbeat.activity === null)).toBe(true);
+  await trigger.click();
+  await menu.getByRole('button', { name: '在线状态', exact: true }).click();
+  await menu.getByRole('button', { name: '在线', exact: true }).click();
+  await expect.poll(() => heartbeats.at(-1)?.status).toBe('ONLINE');
+  await expect(menu.locator('.profile-popover-status')).toHaveText('在线');
+});
+
+test('状态同步失败在菜单内提示，重试不退出账号或清除选择', async ({ page }) => {
+  let fail = false;
+  await page.route('**/api/presence/heartbeat', route => route.fulfill({ status: fail ? 503 : 204 }));
+  await page.goto('/');
+  await page.getByRole('button', { name: '个人菜单', exact: true }).click();
+  const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
+  await menu.getByRole('button', { name: '在线状态', exact: true }).click();
+  fail = true;
+  await menu.getByRole('button', { name: '隐身', exact: true }).click();
+  await expect(menu.getByRole('alert')).toContainText('尚未确认同步');
+  await expect(menu.getByRole('button', { name: '隐身', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  fail = false;
+  await menu.getByRole('button', { name: '隐身', exact: true }).click();
+  await expect(menu.getByRole('alert')).toHaveCount(0);
+  await expect(menu.locator('.profile-popover-status')).toHaveText('隐身');
+});

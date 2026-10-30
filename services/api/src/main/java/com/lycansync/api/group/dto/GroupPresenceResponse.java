@@ -17,7 +17,7 @@ import java.util.UUID;
 public record GroupPresenceResponse(
         UUID userId,
         UserPresenceStatus status,
-        Instant lastSeenAt,
+        @Schema(description = "在线或闲置时的最近心跳时间；离线时为空") Instant lastSeenAt,
         UserActivityType activityType,
         String activityName,
         Instant activityStartedAt

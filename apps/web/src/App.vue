@@ -36,7 +36,8 @@ import { useAudioPreferences, type AudioVolumeChange } from './rtc/useAudioPrefe
 import { entranceSoundToFile, loadEntranceSound } from './rtc/entranceSound';
 import { useCallSounds } from './rtc/useCallSounds';
 import { normalizeVoiceLevel } from './rtc/voiceLevel';
-import { sendPresenceHeartbeat, type UserActivity, type UserPresenceStatus } from './presence/presenceApi';
+import { PRESENCE_STATUS_LABELS, sendPresenceHeartbeat, type UserActivity, type UserPresenceStatus } from './presence/presenceApi';
+import { usePresencePreference, type PresenceMode } from './presence/usePresencePreference';
 import { ApiRequestError, type AuthUser, type ProfileUpdate } from './auth/authApi';
 import type { SettingsSectionId } from './settings/settingsSections';
 import { useActivityVisibility } from './settings/useActivityVisibility';
@@ -64,11 +65,6 @@ const PRESENCE_HEARTBEAT_INTERVAL_MS = 20_000;
 const PRESENCE_IDLE_TIMEOUT_MS = 5 * 60_000;
 const PRESENCE_IDLE_CHECK_INTERVAL_MS = 2_000;
 const ACTIVITY_CLOCK_INTERVAL_MS = 10_000;
-const PRESENCE_STATUS_LABELS: Record<UserPresenceStatus, string> = {
-  ONLINE: '在线',
-  AWAY: '离开',
-  OFFLINE: '离线',
-};
 const audioPreferences = useAudioPreferences(props.user.id);
 const { inputGain, outputVolume, screenShareVolume, voiceVolumeBalance } = audioPreferences;
 const audioProcessing = audioPreferences.processing;
@@ -442,10 +438,20 @@ let activityClockTimer: ReturnType<typeof setInterval> | null = null;
 let presenceAbort: AbortController | null = null;
 let presenceStopped = false;
 const currentPresenceStatus = ref<UserPresenceStatus>('ONLINE');
+const presencePreference = usePresencePreference(props.user.id, desktop);
+const { mode: presenceMode, ready: presenceReady, error: presencePreferenceError } = presencePreference;
+const publicPresenceStatus = computed<UserPresenceStatus>(() => presenceMode.value === 'invisible' ? 'OFFLINE' : currentPresenceStatus.value);
+const personalPresenceLabel = computed(() => !presenceReady.value ? '正在读取状态…'
+  : presenceMode.value === 'invisible' ? '隐身' : PRESENCE_STATUS_LABELS[currentPresenceStatus.value]);
+const presenceSyncing = ref(false);
+const presenceSyncError = ref('');
+let presenceSending: Promise<void> | null = null;
+let presenceHeartbeatPending = false;
+let presenceModeChange = 0;
 const currentActivity = ref<(UserActivity & { startedAt: string }) | null>(null);
 const { showActivity, error: activityVisibilityError, setShowActivity } = useActivityVisibility(props.user.id);
 const activityMappings = useActivityMappings(props.user.id, desktop);
-const sharedActivity = computed(() => showActivity.value ? currentActivity.value : null);
+const sharedActivity = computed(() => showActivity.value && presenceMode.value === 'online' ? currentActivity.value : null);
 const activityClock = ref(Date.now());
 let activityRevision = 0;
 const activitySnapshotRevision = activityRevision;
@@ -464,19 +470,46 @@ void desktop?.getCurrentActivity().then((activity) => {
 }).catch(() => undefined);
 onScopeDispose(() => removeActivityListener?.());
 
-async function sendHeartbeat() {
-  if (presenceStopped) return;
-  presenceAbort?.abort();
-  const controller = new AbortController();
-  presenceAbort = controller;
+function sendHeartbeat(): Promise<void> {
+  if (presenceStopped) return Promise.resolve();
+  presenceHeartbeatPending = true;
+  // 同一会话串行发送并合并待发状态，旧在线请求结束后再提交最新隐身选择。
+  if (!presenceSending) presenceSending = flushPresenceHeartbeats();
+  return presenceSending;
+}
+
+async function flushPresenceHeartbeats() {
   try {
-    const activity = sharedActivity.value
-      ? { type: sharedActivity.value.type, name: sharedActivity.value.name }
-      : null;
-    await sendPresenceHeartbeat(currentPresenceStatus.value, activity, controller.signal);
-  } catch {
-    // 心跳失败不阻塞 UI；下一次周期再试。
+    await presencePreference.loaded;
+    while (presenceHeartbeatPending && !presenceStopped) {
+      presenceHeartbeatPending = false;
+      const controller = new AbortController();
+      presenceAbort = controller;
+      const status = publicPresenceStatus.value;
+      const activity = sharedActivity.value ? { type: sharedActivity.value.type, name: sharedActivity.value.name } : null;
+      presenceSyncing.value = true;
+      try {
+        await sendPresenceHeartbeat(status, activity, controller.signal);
+        if (!presenceStopped && !controller.signal.aborted && status === publicPresenceStatus.value) presenceSyncError.value = '';
+      } catch {
+        if (!presenceStopped && !controller.signal.aborted) presenceSyncError.value = '状态尚未确认同步，将自动重试。';
+      } finally {
+        if (presenceAbort === controller) presenceAbort = null;
+      }
+    }
+  } finally {
+    presenceSending = null;
+    presenceSyncing.value = false;
   }
+}
+
+async function changePresenceMode(mode: PresenceMode) {
+  if (!presenceReady.value) return;
+  const change = ++presenceModeChange;
+  if (mode === 'online') await updateOwnPresenceStatus();
+  if (presenceStopped || change !== presenceModeChange) return;
+  presencePreference.setMode(mode);
+  await sendHeartbeat();
 }
 
 function startPresenceHeartbeat() {
@@ -488,6 +521,7 @@ function startPresenceHeartbeat() {
 
 function stopPresenceHeartbeat() {
   presenceStopped = true;
+  presenceHeartbeatPending = false;
   presenceAbort?.abort();
   presenceAbort = null;
   if (presenceHeartbeatTimer) clearInterval(presenceHeartbeatTimer);
@@ -836,6 +870,10 @@ const joiningGroupId = ref<string | null>(null);
 const pendingSwitchGroupId = ref<string | null>(null);
 const listening = computed(() => rtc.listening);
 const settingsOpen = ref(false);
+const personalMenuOpen = ref(false);
+const profileCardsBlocked = computed(() => Boolean(props.interactionBlocked || settingsOpen.value || !mainWindowVisible.value
+  || editorOpen.value || management.value || captureRequest.value || pendingSwitchGroupId.value || rtc.remoteControlRequest));
+watch(profileCardsBlocked, blocked => { if (blocked) personalMenuOpen.value = false; });
 const recording = useRecording({
   track: () => rtc.room?.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track?.mediaStreamTrack,
   canStart: () => rtc.screenShareActive && !rtc.screenShareAudioRestricted && !rtc.screenShareQualityBusy
@@ -940,7 +978,7 @@ const groupHasVoiceActivity = (groupId: string) => {
 };
 const currentMembers = computed(() => joinedGroupDetail.value?.members ?? []);
 const memberOnlineStatus = (member: Pick<GroupMember, 'userId'>) => {
-  if (member.userId === props.user.id) return currentPresenceStatus.value;
+  if (member.userId === props.user.id) return publicPresenceStatus.value;
   return groupPresences.value[member.userId]?.status ?? 'OFFLINE';
 };
 const memberActivity = (member: Pick<GroupMember, 'userId'>) => {
@@ -1348,11 +1386,15 @@ function participantListening(participant: Participant) {
             </Transition>
           </div>
           <GroupMembersPanel v-if="selectedGroup" :key="selectedGroup.id" :members="orderedMembers" :user="user" :loading="groupLoading"
+            :group-id="selectedGroup.id" :profile-blocked="profileCardsBlocked || personalMenuOpen"
             :member-count="selectedGroupDetail?.memberCount"
             :error="groupError" :connection-lost="presenceConnectionLost" :status="memberOnlineStatus"
             :status-label="memberStatusLabel" :activity="memberActivity" />
-        <PersonalStatusCard :user="user" :status="currentPresenceStatus" :status-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]"
-          :activity-status="personalActivityStatus">
+        <PersonalStatusCard :user="user" :status="publicPresenceStatus" :status-label="personalPresenceLabel"
+          v-model:menu-open="personalMenuOpen" menu-enabled :active="!profileCardsBlocked"
+          :presence-mode="presenceMode" :presence-ready="presenceReady" :presence-syncing="presenceSyncing"
+          :presence-error="presencePreferenceError || presenceSyncError" @presence-mode="changePresenceMode"
+          :activity-status="personalActivityStatus" @settings="openSettings" @logout="emit('logout')">
           <IconButton label="设置" @click="openSettings('account', $event)"><Settings :size="19" /></IconButton>
         </PersonalStatusCard>
         </div>
@@ -1370,7 +1412,7 @@ function participantListening(participant: Participant) {
     <Transition name="settings-page" @before-leave="($event as HTMLElement).inert = true">
     <SettingsView v-if="settingsOpen" :inert="!!rtc.remoteControlRequest" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
       :overlay="desktop ? voiceOverlay : undefined"
-      :presence-status="currentPresenceStatus" :presence-label="PRESENCE_STATUS_LABELS[currentPresenceStatus]"
+      :presence-status="publicPresenceStatus" :presence-label="personalPresenceLabel"
       :recording="recording" :preferences="audioPreferences" :rtc="rtc" :microphone-test="microphoneTest" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
       :activity="currentActivity" :activity-status="personalActivityStatus" :show-activity="showActivity" :activity-error="activityVisibilityError"
       :activity-mappings="activityMappings"
@@ -1388,6 +1430,7 @@ function participantListening(participant: Participant) {
       @close="selectCaptureSource(null)" @confirm="selectCaptureSource(selectedCaptureSourceId, $event)" />
     </DialogTransition>
     <ScreenShareWindows ref="viewingWindows" :rtc="rtc" :group-name="joinedGroup?.name ?? ''"
+      :recording-elapsed="recording.state.value.phase === 'recording' ? recording.elapsed.value : undefined"
       :inline-target="viewingTarget"
       :avatar="participantAvatar" :muted-shares="mutedShares"
       :control-placeholder="remoteControlPlaceholder"
@@ -1397,6 +1440,7 @@ function participantListening(participant: Participant) {
         <div v-for="participant in rtc.participants" :key="participant.identity" class="member-card">
         <ParticipantCard :participant="participant"
           :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant"
+          :recording-elapsed="recording.state.value.phase === 'recording' ? recording.elapsed.value : undefined"
           :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"
           :remote-control-available="remoteControlCanRequest(participant.identity)"
           :private-control="remoteControlPlaceholder(participant.identity)"
