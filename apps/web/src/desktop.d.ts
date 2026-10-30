@@ -15,6 +15,17 @@ interface DesktopRecordingStatus {
   continuing: boolean;
   applicationAudio: boolean;
 }
+interface RecordingLibraryEntry {
+  id: string;
+  sessionId: string;
+  createdAt: number;
+  durationMs: number | null;
+  width: number | null;
+  height: number | null;
+  bytes: number;
+  state: 'recording' | 'saved' | 'interrupted';
+  availability: 'available' | 'missing' | 'changed' | 'unavailable';
+}
 
 interface DesktopProcessMetrics {
   cpuPercent: number;
@@ -173,10 +184,12 @@ interface Window {
     chooseRecordingDirectory(): Promise<RecordingSettings>;
     failRecordingVoice(id: string): Promise<DesktopRecordingStatus>;
     sendRecordingVoice(id: string, position: number, pcm: Uint8Array): Promise<boolean>;
-    startRecording(): Promise<DesktopRecordingStatus>;
+    startRecording(previousId?: string): Promise<DesktopRecordingStatus>;
     stopRecording(id: string | null): Promise<DesktopRecordingStatus>;
     getRecordingStatus(): Promise<DesktopRecordingStatus>;
     revealRecording(): Promise<void>;
+    getRecordingLibrary(offset?: number): Promise<{ items: RecordingLibraryEntry[]; hasMore: boolean }>;
+    recordingFile(id: string, action: 'play' | 'reveal' | 'delete'): Promise<boolean>;
     onRecordingState(callback: (state: DesktopRecordingStatus) => void): () => void;
     getProcessMetrics(): Promise<DesktopProcessMetrics>;
     exportDiagnosticReport(report: string): Promise<{ saved: boolean }>;

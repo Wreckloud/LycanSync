@@ -34,6 +34,7 @@ module.exports = {
     'electron/obs-capture-host.cjs',
     'electron/obs-audio-host.cjs',
     'electron/recording.cjs',
+    'electron/recording-library.cjs',
     'electron/recording-voice.cjs',
     'electron/media-diagnostics.cjs',
     'electron/diagnostic-reports.cjs',

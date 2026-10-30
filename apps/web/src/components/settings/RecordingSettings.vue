@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { useRecording } from '../../recording/useRecording';
 import InlineFeedback from '../InlineFeedback.vue';
+import RecordingLibrary from './RecordingLibrary.vue';
 
 const props = defineProps<{ recording: ReturnType<typeof useRecording>; desktop: boolean; sharing: boolean }>();
 async function toggle(key: 'applicationAudio' | 'microphone' | 'friends', event: Event) {
@@ -50,6 +51,7 @@ async function toggle(key: 'applicationAudio' | 'microphone' | 'friends', event:
       <button v-else type="button" class="confirm-button" :disabled="!sharing || recording.busy.value" @click="recording.start">开始录制</button>
       <InlineFeedback :message="recording.notice.value" />
     </section>
+    <RecordingLibrary v-if="desktop" :status="recording.state.value" />
   </div>
 </template>
 

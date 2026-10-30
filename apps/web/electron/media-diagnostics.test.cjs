@@ -20,6 +20,10 @@ test('录制摘要保留真实输出数和固定故障，排除文件名及原�
   assert.equal(event.outputFrames, 60); assert.equal(event.bytes, 4096);
   assert.equal(event.code, 'recordingDiskFull'); assert.equal(event.saved, false);
   assert.doesNotMatch(JSON.stringify(event), /private-/);
+  await writeFile(path, JSON.stringify({ time, stage: 'recordingFailed', code: 'recordingLibraryUnavailable', path: 'private-path' }));
+  const [failure] = await readDiagnosticEvents(path, 0, Date.parse(time));
+  assert.equal(failure.code, 'recordingLibraryUnavailable');
+  assert.doesNotMatch(JSON.stringify(failure), /private-/);
 });
 
 test('OBS 麦克风导出处理实现和固定故障，不泄露设备或异常正文', async context => {

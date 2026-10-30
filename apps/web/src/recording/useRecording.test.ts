@@ -43,6 +43,7 @@ it('来源选择取消不影响当前录像；确认后先保存再换源，换�
       await nextTick(); return true;
     });
     expect(f.desktop.startRecording).toHaveBeenCalledTimes(2);
+    expect(f.desktop.startRecording).toHaveBeenLastCalledWith('file-1');
     expect(setNativeScreenRecordingDemand).toHaveBeenCalledWith(f.track.value, true);
   } finally { f.scope.stop(); }
 });
