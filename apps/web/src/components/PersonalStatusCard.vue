@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { Check, ChevronDown, LogOut, Pencil, SlidersHorizontal, UserRound } from '@lucide/vue';
+import { Check, ChevronDown, Keyboard, LogOut, Pencil, SlidersHorizontal, UserRound } from '@lucide/vue';
 import ActivityStatus from './ActivityStatus.vue';
 import InlineFeedback from './InlineFeedback.vue';
 import ProfilePopover from './ProfilePopover.vue';
@@ -11,7 +11,7 @@ import type { UserActivity, UserPresenceStatus } from '../presence/presenceApi';
 const props = defineProps<{ user: AuthUser; status: UserPresenceStatus; statusLabel: string;
   activityStatus?: { type: UserActivity['type']; text: string } | null; menuEnabled?: boolean; active?: boolean;
   presenceMode?: PresenceMode; presenceReady?: boolean; presenceSyncing?: boolean; presenceError?: string }>();
-const emit = defineEmits<{ settings: [section: 'account' | 'audio', trigger: HTMLElement]; logout: [];
+const emit = defineEmits<{ settings: [section: 'account' | 'audio' | 'shortcuts', trigger: HTMLElement]; logout: [];
   presenceMode: [mode: PresenceMode] }>();
 const menuOpen = defineModel<boolean>('menuOpen', { default: false });
 const hovered = ref(false);
@@ -20,7 +20,7 @@ const statusExpanded = ref(false);
 watch(() => props.active, active => { if (active === false) menuOpen.value = false; });
 watch(menuOpen, open => { if (!open) statusExpanded.value = false; });
 
-function selectSettings(section: 'account' | 'audio') {
+function selectSettings(section: 'account' | 'audio' | 'shortcuts') {
   menuOpen.value = false;
   if (trigger.value) emit('settings', section, trigger.value);
 }
@@ -72,6 +72,7 @@ function logout() {
           <InlineFeedback :message="presenceError" :status="!presenceReady ? '正在读取状态偏好…' : presenceSyncing ? '正在同步状态…' : ''" />
         </template>
         <button type="button" @click="selectSettings('audio')"><SlidersHorizontal :size="15" />语音与音频</button>
+        <button type="button" @click="selectSettings('shortcuts')"><Keyboard :size="15" />快捷键</button>
         <div class="personal-menu-session">
           <button type="button" @click="logout"><LogOut :size="15" />退出登录</button>
         </div>

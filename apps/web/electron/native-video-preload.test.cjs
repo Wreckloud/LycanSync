@@ -26,6 +26,7 @@ function fixture() {
     close() { this.closed++; }
   }
   runInNewContext(readFileSync(join(__dirname, 'preload.cjs'), 'utf8'), {
+    process: { platform: 'win32' },
     OffscreenCanvas: Canvas, VideoFrame: CopiedFrame,
     window: { postMessage: (...args) => { if (options.postFails) throw new Error('postFailed'); posts.push(args); } },
     require: () => ({

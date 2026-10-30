@@ -11,6 +11,7 @@ const { MediaHelperManager } = require('./media-helper.cjs');
 const { ObsCaptureHostManager } = require('./obs-capture-host.cjs');
 const { ObsAudioHostManager } = require('./obs-audio-host.cjs');
 const { createRecording } = require('./recording.cjs');
+const { createAudioShortcuts } = require('./audio-shortcuts.cjs');
 const { createRecordingVoice } = require('./recording-voice.cjs');
 const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
 const { createDiagnosticReportStore, parseDiagnosticReport } = require('./diagnostic-reports.cjs');
@@ -107,6 +108,8 @@ let startupReady = false;
 let allowQuitAfterMediaHelper = false;
 let mediaHelperShutdownPromise;
 let nativeMediaBridge;
+const audioShortcuts = createAudioShortcuts({ getWindow: () => mainWindow,
+  bridge: () => nativeMediaBridge ??= loadNativeMediaBridge() });
 let nativeVideoSession;
 let nativeVideoPreparation;
 let nativeVideoSourcesById = new Map();
@@ -1170,6 +1173,7 @@ async function saveSession(token) {
 }
 
 async function clearSession() {
+  try { audioShortcuts.clear(); } catch { console.error('audio shortcut cleanup failed'); }
   screenShareWindows.closeAll();
   sessionToken = undefined;
   sessionLoaded = true;
@@ -1414,6 +1418,7 @@ if (!app.requestSingleInstanceLock()) {
       void writeMediaDiagnostic({ stage: 'rendererReady', durationMs: Math.round(performance.now() - diagnosticStartedMonotonicAt) });
     });
     mainWindow.webContents.on('render-process-gone', (_event, details) => {
+      try { audioShortcuts.clear(); } catch { console.error('audio shortcut cleanup failed'); }
       void writeMediaDiagnostic({ stage: 'rendererExited', outcome: details.reason });
       finishClose();
     });
@@ -1424,6 +1429,7 @@ if (!app.requestSingleInstanceLock()) {
       event.preventDefault();
       if (closing) return;
       closing = true;
+      try { audioShortcuts.clear(); } catch { console.error('audio shortcut cleanup failed'); }
       screenShareWindows.closeAll();
       voiceOverlay.clear();
       startupUpdate.cancel();
@@ -1953,6 +1959,7 @@ ipcMain.handle('external:open', async (event, value) => {
 });
 app.on('before-quit', (event) => {
   closing = true;
+  try { audioShortcuts.clear(); } catch { console.error('audio shortcut cleanup failed'); }
   voiceOverlay.clear();
   if (startupUpdate.getState().phase !== 'installing') startupUpdate.cancel();
   stopActivityHelper();
@@ -1992,6 +1999,14 @@ app.on('before-quit', (event) => {
     });
 });
 app.on('window-all-closed', () => app.quit());
+function requireShortcutSender(event) {
+  if (!trustedSender(event) || closing || !sessionToken || process.platform !== 'win32') throw new Error('当前无法使用全局快捷键');
+}
+ipcMain.handle('audio-shortcuts:begin', event => { requireShortcutSender(event); return audioShortcuts.begin(); });
+ipcMain.handle('audio-shortcuts:configure', (event, owner, bindings) => { requireShortcutSender(event); audioShortcuts.configure(owner, bindings); });
+ipcMain.handle('audio-shortcuts:activate', (event, owner, roomId) => { requireShortcutSender(event); audioShortcuts.activate(owner, roomId); });
+ipcMain.handle('audio-shortcuts:capture', (event, owner, enabled) => { requireShortcutSender(event); audioShortcuts.capture(owner, enabled); });
+ipcMain.handle('audio-shortcuts:end', (event, owner) => { if (!trustedSender(event)) throw new Error('请求来源无效'); audioShortcuts.end(owner); });
 ipcMain.handle('voice-overlay:begin', (event) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
   return voiceOverlay.begin();

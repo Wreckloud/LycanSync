@@ -21,6 +21,10 @@ import ClientSettings from './settings/ClientSettings.vue';
 import OverlaySettings from './settings/OverlaySettings.vue';
 import ProfileSettings from './settings/ProfileSettings.vue';
 import SoundSettings from './settings/SoundSettings.vue';
+import ShortcutSettings from './settings/ShortcutSettings.vue';
+import type { useAudioShortcuts } from '../settings/useAudioShortcuts';
+import type { useCallSoundPreferences } from '../settings/useCallSoundPreferences';
+import type { useCallSounds } from '../rtc/useCallSounds';
 import RecordingSettings from './settings/RecordingSettings.vue';
 import type { useRecording } from '../recording/useRecording';
 import { SETTINGS_SECTIONS, settingsSectionTitle, type SettingsSectionId } from '../settings/settingsSections';
@@ -32,6 +36,9 @@ const props = defineProps<{
   presenceStatus: UserPresenceStatus;
   presenceLabel: string;
   desktop: boolean;
+  audioShortcuts: UnwrapNestedRefs<ReturnType<typeof useAudioShortcuts>>;
+  callSoundPreferences: ReturnType<typeof useCallSoundPreferences>;
+  callSounds: ReturnType<typeof useCallSounds>;
   recording?: ReturnType<typeof useRecording>;
   overlay?: ReturnType<typeof useVoiceOverlay>;
   preferences: ReturnType<typeof useAudioPreferences>;
@@ -129,7 +136,9 @@ async function leaveSettings(logout: boolean) {
         <AudioSettings v-show="activeSection === 'audio'" :active="activeSection === 'audio'"
           :desktop="desktop" :preferences="preferences" :rtc="rtc" :microphone-test="microphoneTest"
           :input-level-percent="inputLevelPercent" />
-        <SoundSettings v-show="activeSection === 'sound'" :user-id="user.id" :active="activeSection === 'sound'" />
+        <SoundSettings v-show="activeSection === 'sound'" :user-id="user.id" :active="activeSection === 'sound'"
+          :preferences="callSoundPreferences" :sounds="callSounds" />
+        <ShortcutSettings v-show="activeSection === 'shortcuts'" :active="activeSection === 'shortcuts'" :shortcuts="audioShortcuts" />
         <OverlaySettings v-if="desktop && overlay" v-show="activeSection === 'overlay'" :overlay="overlay" :active="activeSection === 'overlay'" />
         <RecordingSettings v-if="recording" v-show="activeSection === 'recording'" :recording="recording" :desktop="desktop" :sharing="rtc.screenShareActive" />
         <ClientSettings ref="clientSettings" v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'" />

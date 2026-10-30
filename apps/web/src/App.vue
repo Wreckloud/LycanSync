@@ -42,6 +42,8 @@ import { ApiRequestError, type AuthUser, type ProfileUpdate } from './auth/authA
 import type { SettingsSectionId } from './settings/settingsSections';
 import { useActivityVisibility } from './settings/useActivityVisibility';
 import { useActivityMappings } from './settings/useActivityMappings';
+import { useAudioShortcuts } from './settings/useAudioShortcuts';
+import { useCallSoundPreferences } from './settings/useCallSoundPreferences';
 import ScreenShareWindows from './components/ScreenShareWindows.vue';
 import RemoteControlRequest from './components/RemoteControlRequest.vue';
 import GroupMembersPanel from './components/GroupMembersPanel.vue';
@@ -68,7 +70,8 @@ const ACTIVITY_CLOCK_INTERVAL_MS = 10_000;
 const audioPreferences = useAudioPreferences(props.user.id);
 const { inputGain, outputVolume, screenShareVolume, voiceVolumeBalance } = audioPreferences;
 const audioProcessing = audioPreferences.processing;
-const callSounds = useCallSounds(outputVolume);
+const callSoundPreferences = useCallSoundPreferences(props.user.id);
+const callSounds = useCallSounds(outputVolume, callSoundPreferences);
 const desktop = window.lycanDesktop;
 const viewerNotice = ref('');
 const mainWindowVisible = ref(true);
@@ -1168,20 +1171,43 @@ function leaveVoice() {
   void refreshGroups(true, false);
 }
 
+let audioToggleVersion = 0;
 async function toggleMicrophone() {
   if (!connected.value || !localParticipant.value) return;
+  const version = ++audioToggleVersion;
+  const room = rtc.room;
+  const wasEnabled = rtc.microphoneEnabled;
   await rtc.toggleMedia(Track.Source.Microphone);
+  if (version === audioToggleVersion && room === rtc.room && connected.value && wasEnabled !== rtc.microphoneEnabled) {
+    void callSounds.microphoneChanged(rtc.microphoneEnabled);
+  }
 }
 
 async function toggleListening() {
   if (!connected.value) return;
+  const version = ++audioToggleVersion;
+  const room = rtc.room;
   const enabled = !listening.value;
   const changing = rtc.updateListeningState(enabled);
   if (rtc.needsAudioPlayback && enabled) {
     await rtc.enableAudioPlayback();
   }
   await changing;
+  if (version === audioToggleVersion && room === rtc.room && connected.value && rtc.listening === enabled) {
+    void callSounds.listeningChanged(enabled);
+  }
 }
+
+const audioShortcutRoomId = ref<string | null>(null);
+let audioShortcutRoomVersion = 0;
+watch(() => connected.value ? rtc.room : null, room => {
+  audioToggleVersion++;
+  audioShortcutRoomId.value = room ? String(++audioShortcutRoomVersion) : null;
+}, { immediate: true, flush: 'sync' });
+const audioShortcuts = reactive(useAudioShortcuts(props.user.id, {
+  roomId: () => audioShortcutRoomId.value,
+  microphone: toggleMicrophone, listening: toggleListening,
+}));
 
 function participantVolume(identity: string) {
   return audioPreferences.participantVolume(identity);
@@ -1411,6 +1437,7 @@ function participantListening(participant: Participant) {
     </div>
     <Transition name="settings-page" @before-leave="($event as HTMLElement).inert = true">
     <SettingsView v-if="settingsOpen" :inert="!!rtc.remoteControlRequest" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
+      :audio-shortcuts="audioShortcuts" :call-sound-preferences="callSoundPreferences" :call-sounds="callSounds"
       :overlay="desktop ? voiceOverlay : undefined"
       :presence-status="publicPresenceStatus" :presence-label="personalPresenceLabel"
       :recording="recording" :preferences="audioPreferences" :rtc="rtc" :microphone-test="microphoneTest" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"

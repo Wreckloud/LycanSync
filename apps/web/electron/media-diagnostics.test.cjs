@@ -287,6 +287,7 @@ test('preload 的启动计时只转发固定 IPC，不向页面开放任意日�
   let desktop;
   const calls = [];
   runInNewContext(readFileSync(join(__dirname, 'preload.cjs'), 'utf8'), {
+    process: { platform: 'win32' },
     require: () => ({ contextBridge: { exposeInMainWorld: (name, value) => {
       if (name === 'lycanDesktop') desktop = value;
     } }, ipcRenderer: { on() {}, send: (...args) => calls.push(args) } }),

@@ -208,3 +208,50 @@ test('状态同步失败在菜单内提示，重试不退出账号或清除选�
   await expect(menu.getByRole('alert')).toHaveCount(0);
   await expect(menu.locator('.profile-popover-status')).toHaveText('隐身');
 });
+
+test('快捷键录入松开后保存，冲突保持原设置，取消不会丢失绑定', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.lycanAudioShortcuts = {
+      begin: async () => 'mock-owner',
+      configure: async (_owner, bindings) => { if (bindings.microphone === 'Ctrl+K') throw new Error('occupied'); },
+      activate: async () => {}, capture: async () => {}, end: async () => {}, onAction: () => () => {}, onError: () => () => {},
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '个人菜单', exact: true }).click();
+  await page.getByRole('dialog', { name: '个人菜单', exact: true }).getByRole('button', { name: '快捷键', exact: true }).click();
+  const recorder = page.getByRole('button', { name: '设置麦克风静音／恢复快捷键', exact: true });
+  await expect(recorder).toHaveText('未设置');
+  await recorder.click();
+  await expect(recorder).toHaveAttribute('aria-pressed', 'true');
+  await recorder.press('Control+m');
+  await expect(recorder).toHaveText('Ctrl+M');
+  await recorder.click();
+  await recorder.press('Control+k');
+  await expect(page.getByRole('alert')).toContainText('占用');
+  await expect(recorder).toHaveText('Ctrl+M');
+  await recorder.click();
+  await recorder.press('Escape');
+  await expect(recorder).toHaveText('Ctrl+M');
+  await page.screenshot({ path: test.info().outputPath('shortcut-settings.png') });
+  await page.getByRole('button', { name: '清除麦克风静音／恢复快捷键', exact: true }).click();
+  await expect(recorder).toHaveText('未设置');
+});
+
+test('本机提示音只提供统一音量和逐项开关，重开后恢复，保留入场音效操作', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '音效', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '本机提示音', exact: true })).toBeVisible();
+  const muted = page.getByRole('checkbox', { name: '麦克风静音', exact: true });
+  await muted.uncheck();
+  await page.getByRole('slider', { name: '提示音音量', exact: true }).fill('40');
+  await expect(page.getByRole('checkbox', { name: '成员加入语音', exact: true })).toBeChecked();
+  await expect(page.getByRole('button', { name: '选择音效', exact: true })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('call-sound-settings.png') });
+  await page.reload();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '音效', exact: true }).click();
+  await expect(muted).not.toBeChecked();
+  await expect(page.getByRole('slider', { name: '提示音音量', exact: true })).toHaveValue('40');
+});

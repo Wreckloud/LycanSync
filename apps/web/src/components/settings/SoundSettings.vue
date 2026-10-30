@@ -2,10 +2,14 @@
 import { computed, onScopeDispose, ref, watch } from 'vue';
 import { Play, Trash2, Upload } from '@lucide/vue';
 import InlineFeedback from '../InlineFeedback.vue';
+import CallSoundSettings from './CallSoundSettings.vue';
+import type { useCallSoundPreferences } from '../../settings/useCallSoundPreferences';
+import type { useCallSounds } from '../../rtc/useCallSounds';
 import { createEntranceSound, ENTRANCE_SOUND_MAX_BYTES, ENTRANCE_SOUND_MAX_DURATION_SECONDS,
   loadEntranceSound, saveEntranceSound } from '../../rtc/entranceSound';
 
-const props = defineProps<{ userId: string; active: boolean }>();
+const props = defineProps<{ userId: string; active: boolean;
+  preferences: ReturnType<typeof useCallSoundPreferences>; sounds: ReturnType<typeof useCallSounds> }>();
 const sound = ref(loadEntranceSound(props.userId));
 const busy = ref(false);
 const error = ref('');
@@ -71,6 +75,7 @@ function removeSound() {
 
 <template>
   <div class="settings-section sound-settings">
+    <CallSoundSettings :active="active" :preferences="preferences" :sounds="sounds" />
     <p class="settings-intro">入场音效会在加入语音时播放给房间内的其他成员，仅保存在这台设备。</p>
     <section class="settings-block">
       <h2>入场音效</h2>
