@@ -35,13 +35,13 @@ function captureMessage(error: unknown, desktop: boolean) {
   if (error instanceof Error) {
     if (error.name === 'NotAllowedError') return '麦克风未获授权，请允许后重试。';
     if (error.name === 'NotFoundError' || error.message === 'microphoneDeviceUnavailable') {
-      return '默认麦克风不可用，请检查设备连接和录音权限。';
+      return '所选麦克风不可用，请检查设备连接和录音权限。';
     }
     if (error.name === 'NotReadableError') return '麦克风无法采集，请检查录音权限或设备占用。';
     if (error.message === 'microphoneProcessingFailed') return '麦克风声音处理失败，请重新试听。';
     if (error.message === 'platformUnsupported') return '当前桌面系统不支持原生麦克风采集。';
   }
-  return desktop ? '麦克风试听采集失败，请检查默认输入设备和 Windows 录音权限。'
+  return desktop ? '麦克风试听采集失败，请检查所选输入设备和 Windows 录音权限。'
     : '麦克风试听采集失败，请检查输入设备和浏览器权限。';
 }
 
@@ -134,6 +134,7 @@ export function useMicrophoneTest(options: MicrophoneTestOptions) {
       if (!current.borrowed) {
         if (options.desktop) {
           current.native = new NativeMicrophoneAudioSession(options.desktop, {
+            deviceId: preferences.inputDeviceId.value,
             onError: (code) => {
               if (session !== current) return;
               notice.value = captureMessage(new Error(code), true);
@@ -149,6 +150,7 @@ export function useMicrophoneTest(options: MicrophoneTestOptions) {
           current.sourceTrack = track.mediaStreamTrack;
         } else {
           current.browserTrack = await createLocalAudioTrack({
+            deviceId: preferences.inputDeviceId.value === 'default' ? undefined : { exact: preferences.inputDeviceId.value },
             echoCancellation: preferences.processing.echoCancellation,
             noiseSuppression: preferences.processing.noiseSuppression,
             autoGainControl: preferences.processing.autoGainControl,
@@ -230,6 +232,7 @@ export function useMicrophoneTest(options: MicrophoneTestOptions) {
     if (session?.sourceTrack) void configure(session);
   });
   watch(preferences.outputVolume, (volume) => session?.loopback.setVolume(normalizeAudioVolume(volume)));
+  watch(preferences.inputDeviceId, () => { void stop(); }, { flush: 'sync' });
   watch(options.publishedTrack, (track) => {
     if (session?.borrowed && session.sourceTrack !== track) void stop();
   }, { flush: 'sync' });

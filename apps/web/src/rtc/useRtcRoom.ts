@@ -73,6 +73,7 @@ interface RoomTrackRegistry {
 }
 
 interface RtcRoomOptions {
+  inputDeviceId?: string;
   screenShareQuality?: ScreenShareQualityId;
   customScreenShareQuality?: CustomScreenShareQuality;
   inputGain: number;
@@ -87,10 +88,10 @@ function captureErrorMessage(error: unknown, source: MediaSource): string {
     if (error.name === 'NotFoundError') return `未找到可用的${label}设备。`;
     if (error.name === 'NotReadableError') return `${label}无法采集，请检查系统权限或设备占用。`;
     if (source === Track.Source.Microphone && window.lycanDesktop) {
-      if (error.message === 'microphoneDeviceUnavailable') return '默认麦克风不可用，请检查设备连接或 Windows 录音权限。';
+      if (error.message === 'microphoneDeviceUnavailable') return '所选麦克风不可用，请检查设备连接或 Windows 录音权限。';
       if (error.message === 'microphoneProcessingFailed') return '麦克风声音处理失败，请重新开启麦克风。';
       if (error.message === 'platformUnsupported') return '当前桌面系统不支持原生麦克风采集。';
-      return '原生麦克风采集失败，请检查默认输入设备和 Windows 录音权限。';
+      return '原生麦克风采集失败，请检查所选输入设备和 Windows 录音权限。';
     }
     if (source === Track.Source.ScreenShare) {
       const code = error.message.match(/(?:^|: )([a-z][A-Za-z0-9]{0,63})$/)?.[1];
@@ -144,6 +145,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   const microphoneTracks = new Map<LocalTrack, MediaStreamTrack>();
   const microphoneMutes = new WeakMap<LocalTrack, Promise<LocalTrack>>();
   let microphoneVersion = 0;
+  let microphoneInputDeviceId = options?.inputDeviceId ?? 'default';
+  let microphoneDeviceChanging = false;
   let microphoneTask: { room: Room; promise: Promise<void> } | null = null;
   let listeningTask: { room: Room; promise: Promise<void> } | null = null;
   let microphoneCleanupFailed = false;
@@ -268,7 +271,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       let appliedVersion: number;
       do {
         appliedVersion = microphoneVersion;
-        const enabled = listening.value && microphoneIntent.value && status.value === 'connected';
+        const enabled = listening.value && microphoneIntent.value && !microphoneDeviceChanging && status.value === 'connected';
         if (enabled && microphoneCleanupFailed) {
           notice.value = MICROPHONE_STOP_NOTICE;
           return;
@@ -915,6 +918,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             voiceEnhancement: microphoneProcessing.voiceEnhancement,
           };
           nativeMicrophone = new NativeMicrophoneAudioSession(desktop, {
+            deviceId: microphoneInputDeviceId,
             onError: (code) => {
               if (nativeMicrophoneSession !== nativeMicrophone || activeRoom.value !== currentRoom) return;
               microphoneVersion++;
@@ -922,7 +926,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
               // 原生中断同样走房间的关麦清理，不留下另一条吞错的取消发布路径。
               void applyMediaEnabled(Track.Source.Microphone, false);
               const reason = code === 'microphoneDeviceUnavailable'
-                ? '默认麦克风已断开或切换'
+                ? '所选麦克风已断开或不可用'
                 : code === 'microphoneProcessingFailed'
                   ? '麦克风声音处理无法继续'
                   : '原生麦克风采集连接已中断';
@@ -941,6 +945,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           const processor = new MicrophoneAudioProcessor(microphoneInputGain, microphoneProcessing.voiceEnhancement);
           capturedTracks = await participant.createTracks({
             audio: {
+              deviceId: microphoneInputDeviceId === 'default' ? undefined : { exact: microphoneInputDeviceId },
               echoCancellation: microphoneProcessing.echoCancellation,
               noiseSuppression: microphoneProcessing.noiseSuppression,
               autoGainControl: microphoneProcessing.autoGainControl,
@@ -1303,6 +1308,24 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     return task.promise;
   }
 
+  async function setMicrophoneDeviceId(deviceId: string) {
+    if (microphoneDeviceChanging) throw new Error('microphoneDeviceChangeBusy');
+    if (deviceId === microphoneInputDeviceId) return;
+    const requestRoom = activeRoom.value;
+    microphoneDeviceChanging = true;
+    microphoneInputDeviceId = deviceId;
+    microphoneVersion++;
+    forbidMicrophone();
+    try {
+      // 先禁发并等旧任务回收，不能在切换时重叠打开两支麦克风。
+      await synchronizeMicrophone();
+      if (requestRoom && activeRoom.value === requestRoom) await applyMediaEnabled(Track.Source.Microphone, false);
+    } finally {
+      microphoneDeviceChanging = false;
+    }
+    if (requestRoom && activeRoom.value === requestRoom) await synchronizeMicrophone();
+  }
+
   function setMicrophoneInputGain(value: number) {
     microphoneInputGain = normalizeAudioVolume(value);
     microphoneProcessor?.setInputGain(microphoneInputGain);
@@ -1612,7 +1635,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     remoteControlRestoring: remoteControl.restoring,
     remoteControlPending: remoteControl.pending, remoteControlGranting: remoteControl.granting,
     join, leave, toggleMedia, setMediaEnabled, enableAudioPlayback, updateListeningState,
-    setMicrophoneInputGain, setMicrophoneProcessing, setRemoteAudioSubscribed, sendEntranceSound,
+    setMicrophoneDeviceId, setMicrophoneInputGain, setMicrophoneProcessing, setRemoteAudioSubscribed, sendEntranceSound,
     requestRemoteControl: (identity: string) => remoteControl.requestControl(identity),
     sendRemoteControlInput: (input: RemoteControlInput) => remoteControl.sendInput(input),
     exitRemoteControl: () => remoteControl.exitControl(),

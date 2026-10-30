@@ -6,6 +6,7 @@ import InlineFeedback from '../InlineFeedback.vue';
 import type { useAudioPreferences } from '../../rtc/useAudioPreferences';
 import type { useRtcRoom } from '../../rtc/useRtcRoom';
 import type { useMicrophoneTest } from '../../rtc/useMicrophoneTest';
+import type { useMicrophoneDevices } from '../../rtc/useMicrophoneDevices';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, type AudioProcessingSettings } from '../../rtc/audioPreferences';
 
 const props = defineProps<{
@@ -13,6 +14,7 @@ const props = defineProps<{
   preferences: ReturnType<typeof useAudioPreferences>;
   rtc: UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>;
   microphoneTest: UnwrapNestedRefs<ReturnType<typeof useMicrophoneTest>>;
+  microphoneDevices: UnwrapNestedRefs<ReturnType<typeof useMicrophoneDevices>>;
   inputLevelPercent: number;
   active: boolean;
 }>();
@@ -49,7 +51,20 @@ function updateInputGain(event: Event) {
   <div class="settings-section audio-settings">
     <section class="settings-block">
       <h2>输入</h2>
-      <p>{{ desktop ? '自动跟随系统默认通讯输入设备。' : '自动使用系统默认麦克风。' }}</p>
+      <label class="settings-range-row"><span>麦克风</span>
+        <select aria-label="麦克风设备" :value="preferences.inputDeviceId.value" :disabled="microphoneDevices.changing"
+          @change="microphoneDevices.select(($event.target as HTMLSelectElement).value)">
+          <option value="default">{{ desktop ? '系统默认通讯设备' : '系统默认麦克风' }}</option>
+          <option v-if="preferences.inputDeviceId.value !== 'default'
+            && !microphoneDevices.devices.some(device => device.id === preferences.inputDeviceId.value)"
+            :value="preferences.inputDeviceId.value" disabled>所选设备不可用</option>
+          <option v-for="device in microphoneDevices.devices" :key="device.id" :value="device.id">{{ device.label }}</option>
+        </select>
+      </label>
+      <p>指定麦克风断开后停止发声，不自动换用其他设备。</p>
+      <button type="button" class="settings-button" :disabled="microphoneDevices.loading || microphoneDevices.changing"
+        @click="microphoneDevices.refresh()">刷新设备</button>
+      <InlineFeedback :message="microphoneDevices.notice" />
       <div class="settings-range-row">
         <label for="settings-input-gain">麦克风输入音量 <strong>{{ Math.round(inputGain * 100) }}%</strong></label>
         <input id="settings-input-gain" type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP"

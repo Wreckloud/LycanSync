@@ -13,6 +13,7 @@ export type AudioVolumeChange = Readonly<{
 export function useAudioPreferences(userId: string,
   storage: Pick<Storage, 'getItem' | 'setItem'> = localStorage) {
   const stored = loadAudioPreferences(userId, storage);
+  const inputDeviceId = ref(stored.inputDeviceId);
   const inputGain = ref(stored.inputGain);
   const outputVolume = ref(stored.outputVolume);
   const screenShareVolume = ref(stored.screenShareVolume);
@@ -30,6 +31,7 @@ export function useAudioPreferences(userId: string,
 
   function snapshot(): AudioPreferences {
     return {
+      inputDeviceId: inputDeviceId.value,
       inputGain: inputGain.value,
       outputVolume: outputVolume.value,
       screenShareVolume: screenShareVolume.value,
@@ -88,6 +90,12 @@ export function useAudioPreferences(userId: string,
     return true;
   }
 
+  function setInputDeviceId(value: string) {
+    if (inputDeviceId.value === value) return;
+    inputDeviceId.value = value;
+    scheduleSave();
+  }
+
   function setOutputVolume(value: number) {
     const next = normalizeAudioVolume(value);
     if (next === outputVolume.value) return false;
@@ -121,6 +129,8 @@ export function useAudioPreferences(userId: string,
   onScopeDispose(saveNow);
 
   return {
+    inputDeviceId,
+    setInputDeviceId,
     inputGain,
     outputVolume,
     screenShareVolume,

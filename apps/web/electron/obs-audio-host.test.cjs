@@ -58,7 +58,7 @@ test('麦克风按需启动，首块确认、配置和正常停止只持有一�
   await delay(1); assert.equal(settled, false);
   children[0].send(ready);
   assert.equal((await pending).sampleRate, 48000);
-  assert.deepEqual(spawns[0][1], ['C:\\obs\\win-wasapi.dll', 'C:\\obs\\data', 'C:\\app\\data\\obs-audio', pipeId, '1|111']);
+  assert.deepEqual(spawns[0][1], ['C:\\obs\\win-wasapi.dll', 'C:\\obs\\data', 'C:\\app\\data\\obs-audio', pipeId, '1|111', 'default']);
   assert.equal(spawns[0][2].windowsHide, true);
   assert.deepEqual(await manager.configure('voice-session', { ...settings, inputGain: 0.6 }), { changed: true });
   assert.deepEqual(await manager.getDiagnostics('voice-session'), { framesReceived: 960, droppedChunks: 2, sourceState: 1, sourceFrames: 960 });
@@ -77,6 +77,19 @@ test('启动中取消不等待设备就绪，迟到首块不能恢复旧会话',
   children[0].send(ready);
   await rejected; await stopped;
   assert.equal(manager.state, undefined);
+});
+
+test('指定端点只传给本次采集，不写入诊断；无效端点参数不启动宿主', async context => {
+  const { manager, children, diagnostics, spawns } = fixture(context);
+  const selected = '{0.0.1.00000000}.{test-microphone}';
+  const pending = manager.start(pipeId, 'selected-session', settings, selected);
+  children[0].send(ready);
+  await pending;
+  assert.equal(spawns[0][1].at(-1), selected);
+  assert.ok(!JSON.stringify(diagnostics).includes(selected));
+  await manager.stop('selected-session');
+  await assert.rejects(manager.start(pipeId, 'invalid-session', settings, 'bad\nendpoint'), /invalidMicrophoneCaptureStart/);
+  assert.equal(children.length, 1);
 });
 
 test('正常停止后可重启，旧子进程关闭不能清理新会话', async context => {

@@ -68,7 +68,7 @@ describe('NativeMicrophoneAudioSession', () => {
     await session.stop();
     fakes.port.dispatch({ type: 'accepted', sequence: 3, droppedChunks: 0 });
     expect(acknowledge).toHaveBeenCalledOnce();
-    expect(started).toHaveBeenCalledWith('microphone-session', settings);
+    expect(started).toHaveBeenCalledWith('microphone-session', settings, 'default');
     expect(configured).toHaveBeenCalledOnce();
     expect(stopped).toHaveBeenCalledWith('microphone-session');
     expect(track.stop).toHaveBeenCalledOnce();

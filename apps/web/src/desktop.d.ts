@@ -217,7 +217,8 @@ interface Window {
     onNativeScreenAudioChunk(callback: (chunk: NativeScreenAudioChunk) => void): () => void;
     acknowledgeNativeScreenAudioChunk(sessionId: string, sequence: number, droppedChunks: number): void;
     onNativeScreenAudioError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
-    startNativeMicrophone(sessionId: string, settings: import('./rtc/nativeMicrophoneAudio').NativeMicrophoneSettings): Promise<{
+    listMicrophoneDevices(): Promise<{ id: string; label: string }[]>;
+    startNativeMicrophone(sessionId: string, settings: import('./rtc/nativeMicrophoneAudio').NativeMicrophoneSettings, deviceId: string): Promise<{
       sampleRate: 48000; channels: 1; bitsPerSample: 32; nominalChunkMs: 10;
     }>;
     configureNativeMicrophone(sessionId: string, settings: import('./rtc/nativeMicrophoneAudio').NativeMicrophoneSettings): Promise<{ changed: boolean }>;

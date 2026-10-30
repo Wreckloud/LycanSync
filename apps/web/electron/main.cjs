@@ -484,7 +484,7 @@ function notifyNativeMicrophoneError(audio, code) {
   });
 }
 
-async function startNativeMicrophoneCapture(sessionId, settings) {
+async function startNativeMicrophoneCapture(sessionId, settings, deviceId) {
   if (closing || process.platform !== 'win32') throw new Error('platformUnsupported');
   if (!validNativeAudioSessionId(sessionId) || !validMicrophoneSettings(settings)) {
     throw new Error('invalidMicrophoneCaptureStart');
@@ -528,7 +528,7 @@ async function startNativeMicrophoneCapture(sessionId, settings) {
       });
       if (nativeMicrophoneSession !== audio || audio.stopping) throw new Error('microphoneCaptureSessionStopped');
       audio.hostStarted = true;
-      const format = await obsAudioHost.start(pipeId, sessionId, settings);
+      const format = await obsAudioHost.start(pipeId, sessionId, settings, deviceId);
       if (nativeMicrophoneSession !== audio || audio.stopping) throw new Error('microphoneCaptureSessionStopped');
       return format;
     } catch (error) {
@@ -1869,10 +1869,16 @@ ipcMain.on('media:native-screen-audio:consumed', (event, sessionId, sequence, dr
   if (!trustedSender(event)) return;
   acknowledgeNativeScreenAudioChunk(sessionId, sequence, droppedChunks);
 });
-ipcMain.handle('media:native-microphone:start', (event, sessionId, settings) => {
+ipcMain.handle('media:microphone-devices', (event) => {
+  if (!trustedSender(event) || closing || process.platform !== 'win32') throw new Error('请求参数无效');
+  nativeMediaBridge ??= loadNativeMediaBridge();
+  return nativeMediaBridge.listMicrophoneDevices();
+});
+ipcMain.handle('media:native-microphone:start', (event, sessionId, settings, deviceId) => {
   if (!trustedSender(event) || closing || typeof sessionId !== 'string' || sessionId.length > 128
+      || typeof deviceId !== 'string' || !deviceId || deviceId.length > 1024 || /[\u0000-\u001f\u007f]/.test(deviceId)
       || !validMicrophoneSettings(settings)) throw new Error('请求参数无效');
-  return startNativeMicrophoneCapture(sessionId, settings);
+  return startNativeMicrophoneCapture(sessionId, settings, deviceId);
 });
 ipcMain.handle('media:native-microphone:configure', (event, sessionId, settings) => {
   if (!trustedSender(event) || closing || typeof sessionId !== 'string' || sessionId.length > 128

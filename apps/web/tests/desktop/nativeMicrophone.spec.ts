@@ -53,7 +53,7 @@ test('桌面真实麦克风经主进程管道传入音频模块并正常停止',
         await context.resume();
         const format = await desktop.startNativeMicrophone(sessionId, {
           inputGain: 1, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true,
-        });
+        }, 'default');
         started = true;
         await new Promise((resolveSample) => setTimeout(resolveSample, 3000));
         return { format, chunks, bytes, malformed, captureError };

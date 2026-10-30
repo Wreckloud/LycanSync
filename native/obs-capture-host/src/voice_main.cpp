@@ -202,7 +202,7 @@ struct CaptureCallback {
 };
 
 int capture(int argc, wchar_t **argv) {
-  if (argc != 6 || !pipe_id(argv[4])) return 2;
+  if (argc != 7 || !pipe_id(argv[4]) || !argv[6][0] || wcslen(argv[6]) > 1024) return 2;
   Settings settings;
   if (!parse_settings(utf8(argv[5]), settings)) return 2;
   base_set_log_handler(audio_log, nullptr);
@@ -221,7 +221,7 @@ int capture(int argc, wchar_t **argv) {
   }
   register_voice_filter();
   obs_data_t *values = obs_data_create();
-  obs_data_set_string(values, "device_id", "default");
+  obs_data_set_string(values, "device_id", utf8(argv[6]).c_str());
   Source sourceOwner(obs_source_create_private("wasapi_input_capture", "LycanSync microphone", values));
   auto *source = sourceOwner.get();
   obs_data_release(values);

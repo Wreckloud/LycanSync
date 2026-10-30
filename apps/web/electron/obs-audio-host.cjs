@@ -24,11 +24,12 @@ class ObsAudioHostManager {
     this.lastStopped = undefined;
   }
 
-  start(pipeId, sessionId, settings) {
+  start(pipeId, sessionId, settings, deviceId = 'default') {
     if (this.disposed) return Promise.reject(new Error('obsAudioHostDisposed'));
     if (this.platform !== 'win32') return Promise.reject(new Error('platformUnsupported'));
     if (typeof pipeId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(pipeId)
         || typeof sessionId !== 'string' || !sessionId || Buffer.byteLength(sessionId) > 128 || /[\u0000-\u001f\u007f]/.test(sessionId)
+        || typeof deviceId !== 'string' || !deviceId || deviceId.length > 1024 || /[\u0000-\u001f\u007f]/.test(deviceId)
         || !validSettings(settings) || !win32.isAbsolute(this.configPath)) {
       return Promise.reject(new Error('invalidMicrophoneCaptureStart'));
     }
@@ -37,7 +38,7 @@ class ObsAudioHostManager {
     let child;
     try {
       child = this.spawnProcess(this.executablePath, [this.modulePath, this.dataPath, this.configPath,
-        pipeId, settingsCommand(settings)], { cwd: win32.dirname(this.executablePath), windowsHide: true,
+        pipeId, settingsCommand(settings), deviceId], { cwd: win32.dirname(this.executablePath), windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'] });
     } catch { return Promise.reject(new Error('microphoneCaptureStartFailed')); }
     const state = { child, sessionId, alive: true, buffer: '', requests: new Map(), sequence: 0,

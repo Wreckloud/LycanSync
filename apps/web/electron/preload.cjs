@@ -216,7 +216,8 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
     ipcRenderer.on('media:native-screen-audio-error', listener);
     return () => ipcRenderer.removeListener('media:native-screen-audio-error', listener);
   },
-  startNativeMicrophone: (sessionId, settings) => ipcRenderer.invoke('media:native-microphone:start', sessionId, settings),
+  listMicrophoneDevices: () => ipcRenderer.invoke('media:microphone-devices'),
+  startNativeMicrophone: (sessionId, settings, deviceId) => ipcRenderer.invoke('media:native-microphone:start', sessionId, settings, deviceId),
   configureNativeMicrophone: (sessionId, settings) => ipcRenderer.invoke('media:native-microphone:configure', sessionId, settings),
   stopNativeMicrophone: (sessionId) => ipcRenderer.invoke('media:native-microphone:stop', sessionId),
   onNativeMicrophoneChunk: (callback) => {
