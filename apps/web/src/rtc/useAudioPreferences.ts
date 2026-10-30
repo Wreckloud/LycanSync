@@ -14,6 +14,7 @@ export function useAudioPreferences(userId: string,
   storage: Pick<Storage, 'getItem' | 'setItem'> = localStorage) {
   const stored = loadAudioPreferences(userId, storage);
   const inputDeviceId = ref(stored.inputDeviceId);
+  const outputDeviceId = ref(stored.outputDeviceId);
   const inputGain = ref(stored.inputGain);
   const outputVolume = ref(stored.outputVolume);
   const screenShareVolume = ref(stored.screenShareVolume);
@@ -32,6 +33,7 @@ export function useAudioPreferences(userId: string,
   function snapshot(): AudioPreferences {
     return {
       inputDeviceId: inputDeviceId.value,
+      outputDeviceId: outputDeviceId.value,
       inputGain: inputGain.value,
       outputVolume: outputVolume.value,
       screenShareVolume: screenShareVolume.value,
@@ -96,6 +98,12 @@ export function useAudioPreferences(userId: string,
     scheduleSave();
   }
 
+  function setOutputDeviceId(value: string) {
+    if (outputDeviceId.value === value) return;
+    outputDeviceId.value = value;
+    scheduleSave();
+  }
+
   function setOutputVolume(value: number) {
     const next = normalizeAudioVolume(value);
     if (next === outputVolume.value) return false;
@@ -131,6 +139,8 @@ export function useAudioPreferences(userId: string,
   return {
     inputDeviceId,
     setInputDeviceId,
+    outputDeviceId,
+    setOutputDeviceId,
     inputGain,
     outputVolume,
     screenShareVolume,

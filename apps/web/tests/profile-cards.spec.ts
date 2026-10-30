@@ -256,6 +256,43 @@ test('本机提示音只提供统一音量和逐项开关，重开后恢复，�
   await expect(page.getByRole('slider', { name: '提示音音量', exact: true })).toHaveValue('40');
 });
 
+test('设备选择保存在本机，设备丢失明确提示且不换默认，不触发采集', async ({ page }) => {
+  await page.addInitScript(() => {
+    const state = window as unknown as { testAudioDevices: { deviceId: string; kind: string; label: string }[] };
+    state.testAudioDevices = [{ deviceId: 'mic-test', kind: 'audioinput', label: '模拟麦克风' },
+      { deviceId: 'speaker-test', kind: 'audiooutput', label: '模拟扬声器' }];
+    Object.defineProperty(navigator.mediaDevices, 'enumerateDevices', { value: async () => state.testAudioDevices });
+    Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { value: () => { throw new Error('本场景不应采集设备'); } });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '语音与音频', exact: true }).click();
+  const microphone = page.getByRole('combobox', { name: '麦克风设备', exact: true });
+  const speaker = page.getByRole('combobox', { name: '声音输出设备', exact: true });
+  await microphone.selectOption('mic-test');
+  await speaker.selectOption('speaker-test');
+  await expect(microphone).toHaveValue('mic-test');
+  await expect(speaker).toHaveValue('speaker-test');
+  await page.evaluate(() => {
+    (window as unknown as { testAudioDevices: unknown[] }).testAudioDevices = [];
+    navigator.mediaDevices.dispatchEvent(new Event('devicechange'));
+  });
+  await expect(page.locator('.audio-settings')).toContainText('所选麦克风不可用');
+  await expect(page.locator('.audio-settings')).toContainText('所选扬声器不可用');
+  await expect(microphone).toHaveValue('mic-test');
+  await expect(speaker).toHaveValue('speaker-test');
+  await speaker.selectOption('default');
+  await microphone.selectOption('default');
+  await expect(speaker).toHaveValue('default');
+  await expect(microphone).toHaveValue('default');
+  await page.screenshot({ path: test.info().outputPath('audio-device-settings.png') });
+  await page.setViewportSize({ width: 1000, height: 900 });
+  await expect(microphone).toBeVisible();
+  const bounds = await microphone.boundingBox();
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(1000);
+  await page.screenshot({ path: test.info().outputPath('audio-device-settings-narrow.png') });
+});
+
 test('上传入场音效保存规范 WAV，服务端失败保留旧音效，切栏取消未完成上传', async ({ page }) => {
   const wave = Buffer.alloc(46);
   wave.write('RIFF', 0); wave.write('WAVEfmt ', 8); wave.write('data', 36);

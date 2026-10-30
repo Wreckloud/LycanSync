@@ -8,6 +8,7 @@ import type { useAudioPreferences } from '../rtc/useAudioPreferences';
 import type { useRtcRoom } from '../rtc/useRtcRoom';
 import type { useMicrophoneTest } from '../rtc/useMicrophoneTest';
 import type { useMicrophoneDevices } from '../rtc/useMicrophoneDevices';
+import type { useAudioOutput } from '../rtc/useAudioOutput';
 import type { useDiagnosticReport } from '../diagnostics/useDiagnosticReport';
 import type { useActivityMappings } from '../settings/useActivityMappings';
 import type { useVoiceOverlay } from '../overlay/useVoiceOverlay';
@@ -46,6 +47,7 @@ const props = defineProps<{
   rtc: UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>;
   microphoneTest: UnwrapNestedRefs<ReturnType<typeof useMicrophoneTest>>;
   microphoneDevices: UnwrapNestedRefs<ReturnType<typeof useMicrophoneDevices>>;
+  audioOutput: ReturnType<typeof useAudioOutput>;
   diagnosticReport: ReturnType<typeof useDiagnosticReport>;
   inputLevelPercent: number;
   activity: UserActivity | null;
@@ -136,9 +138,9 @@ async function leaveSettings(logout: boolean) {
           <AccountSettings :active="activeSection === 'account'" :leaving="leaving" @logout="requestLogout" />
         </div>
         <AudioSettings v-show="activeSection === 'audio'" :active="activeSection === 'audio'"
-          :desktop="desktop" :preferences="preferences" :rtc="rtc" :microphone-test="microphoneTest" :microphone-devices="microphoneDevices"
+          :desktop="desktop" :preferences="preferences" :audio-output="audioOutput" :rtc="rtc" :microphone-test="microphoneTest" :microphone-devices="microphoneDevices"
           :input-level-percent="inputLevelPercent" />
-        <SoundSettings v-show="activeSection === 'sound'" :user-id="user.id" :active="activeSection === 'sound'"
+        <SoundSettings v-show="activeSection === 'sound'" :user-id="user.id" :active="activeSection === 'sound'" :output="audioOutput"
           :preferences="callSoundPreferences" :sounds="callSounds" />
         <ShortcutSettings v-show="activeSection === 'shortcuts'" :active="activeSection === 'shortcuts'" :shortcuts="audioShortcuts" />
         <OverlaySettings v-if="desktop && overlay" v-show="activeSection === 'overlay'" :overlay="overlay" :active="activeSection === 'overlay'" />
