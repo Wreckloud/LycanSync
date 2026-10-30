@@ -895,6 +895,38 @@ test('打包前读取真实清单，未完成发布材料或文件变化时明�
   assert.throws(check, /文件与构建清单不一致/);
 });
 
+test('完整客户端分发记录绑定同版安装包、源码、差量和版本化许可的字节哈希', () => {
+  const source = readFileSync(join(__dirname, 'package-desktop.cjs'), 'utf8');
+  const start = source.indexOf('const noticesName =');
+  assert.ok(start > source.indexOf('安装包内 OBS 文件校验失败'));
+  const files = new Map([
+    ['LycanSync-0.2.99-windows-x64-setup.exe', Buffer.from('installer')],
+    ['LycanSync-0.2.99-windows-x64-setup.exe.blockmap', Buffer.from('blockmap')],
+    ['LycanSync-0.2.99-obs-source.tar.gz', Buffer.from('source')],
+    ['THIRD-PARTY-NOTICES.txt', Buffer.from('notices')], ['latest.yml', Buffer.from('manifest')],
+  ]);
+  const sandbox = { version: '0.2.99', outputDirectory: 'output', obsManifest: { obsVersion: '32.2.2' },
+    obsSource: { path: 'LycanSync-0.2.99-obs-source.tar.gz', runtimeSha256: 'a'.repeat(64) },
+    createHash: require('node:crypto').createHash, join: (...paths) => paths.at(-1),
+    readFileSync: name => { assert.ok(files.has(name), `missing ${name}`); return files.get(name); },
+    copyFileSync: (from, to) => { assert.ok(files.has(from)); files.set(to, files.get(from)); },
+    writeFileSync: (name, contents) => files.set(name, Buffer.from(contents)) };
+  runInNewContext(source.slice(start), { ...sandbox });
+  const record = JSON.parse(files.get('LycanSync-0.2.99-release.json'));
+  assert.equal(record.version, '0.2.99');
+  assert.equal(record.runtimeSha256, sandbox.obsSource.runtimeSha256);
+  assert.equal(record.files.length, 5);
+  for (const file of record.files) {
+    assert.equal(file.bytes, files.get(file.name).length);
+    assert.equal(file.sha256, require('node:crypto').createHash('sha256').update(files.get(file.name)).digest('hex'));
+  }
+  assert.ok(record.files.some(file => file.name === 'LycanSync-0.2.99-THIRD-PARTY-NOTICES.txt'));
+  files.delete('LycanSync-0.2.99-release.json');
+  files.delete('LycanSync-0.2.99-obs-source.tar.gz');
+  assert.throws(() => runInNewContext(source.slice(start), { ...sandbox }), /missing/);
+  assert.equal(files.has('LycanSync-0.2.99-release.json'), false);
+});
+
 test('正式包和开发环境都使用固定 OBS 路径，不通过环境变量切回旧采集', () => {
   const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = source.indexOf('function obsCaptureHostSettings(');

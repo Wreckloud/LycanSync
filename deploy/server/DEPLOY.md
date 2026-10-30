@@ -48,11 +48,13 @@ docker compose exec -T api cat /var/bootstrap/admin-activation.txt
 
 在服主设置“邀请与成员”中生成每人一条的 3 天邀请，或为原成员生成 12 小时恢复链接。成功恢复后旧会话失效，原资料和权限保留；服主自身恢复暂不提供。本机和虚拟机同样使用邀请登录，运行环境不支持 `ACCOUNT_MODE=test`。QQ 尚未开通，当前使用邀请身份与系统加密的桌面会话。
 
-`downloads/LycanSync-setup.exe` 是网页使用的安装程序别名；版本化的安装包、同名 `.blockmap` 和 `latest.yml` 供自动更新使用，由 Caddy 提供，API、PostgreSQL 仍不直接暴露。`package-server.ps1` 检查清单名称及 SHA-512 与安装包一致，不允许混用不同构建批次。首次接入自动更新需手动安装 0.0.4 或以后版本。
+`downloads/LycanSync-setup.exe` 是网页使用的安装程序别名；版本化的安装包、同名 `.blockmap` 和 `latest.yml` 供自动更新使用，由 Caddy 提供，API、PostgreSQL 仍不直接暴露。`package-server.ps1` 检查清单版本、名称及 SHA-512 与安装包一致，再按同批 `LycanSync-版本-release.json` 核对全部分发文件的大小与 SHA-256；复制后复核，拒绝缺失、损坏或版本不符的材料。首次接入自动更新需手动安装 0.0.4 或以后版本。
 
 发布新客户端时先递增 `apps/web/package.json` 与锁文件的版本，再按 README 构建。先上传版本化安装包、`.blockmap`、同版本 `LycanSync-版本-obs-source.tar.gz` 及第三方许可，确认下载文件哈希与构建记录匹配，再更新 `LycanSync-setup.exe` 及其 `.blockmap` 别名，最后原子替换同批 `latest.yml`；不得先发布清单，也不要覆盖旧的版本化文件。保留旧 `.blockmap` 供差量下载；缺失时更新库会尝试完整下载。只发布静态文件不需要重启 API 或清理数据库。
 
-`package-server.ps1` 目前尚未自动收集 OBS 源码包和第三方许可；首次使用服务器 ZIP 部署时也须从同批 `release/desktop/` 补齐，不能省略。许可证按版本命名为 `LycanSync-版本-THIRD-PARTY-NOTICES.txt`，避免覆盖旧版本材料。
+完整客户端构建会生成分发校验记录与 `LycanSync-版本-THIRD-PARTY-NOTICES.txt`。部署 ZIP 自动收集同版本安装包、`.blockmap`、OBS 源码归档、版本化许可、分发记录及 `latest.yml`，并包含 `LycanSync-setup.exe` 和 `.blockmap` 别名；不再需要人工补齐。脚本从独立暂存目录生成新 ZIP，失败保留旧包并清理本次暂存，不收集旧输出目录、数据库、运行时密钥或本机用户文件。
+
+将同批构建产物一起保留，不手工修改分发记录来跳过校验；旧产物没有记录时请重新执行完整客户端打包。记录用于验证一致性，不替代发布者签名。Windows PowerShell 5.1 和 PowerShell 7 均有合成打包回归，真实 Linux 启动／迁移仍按集中验收执行。
 
 例如在服务器目录已收到并核对同批产物后（将 `client_version` 换成实际版本；新版本下载路径不得已存在）：
 
@@ -62,6 +64,7 @@ installer="LycanSync-${client_version}-windows-x64-setup.exe"
 cp "incoming/$installer" downloads/
 cp "incoming/$installer.blockmap" downloads/
 cp "incoming/LycanSync-${client_version}-obs-source.tar.gz" downloads/
+cp "incoming/LycanSync-${client_version}-release.json" downloads/
 cp incoming/THIRD-PARTY-NOTICES.txt "downloads/LycanSync-${client_version}-THIRD-PARTY-NOTICES.txt"
 cp "incoming/$installer" downloads/LycanSync-setup.exe.next
 mv downloads/LycanSync-setup.exe.next downloads/LycanSync-setup.exe

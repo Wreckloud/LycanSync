@@ -14,5 +14,8 @@ indent_size = 2
 [*.rs]
 end_of_line = lf
 
+[deploy/package-server*.ps1]
+charset = utf-8-bom
+
 [*.md]
 trim_trailing_whitespace = false
