@@ -107,6 +107,44 @@ class GroupApplicationIT {
     }
 
     @Test
+    void shouldExposeOnlySignatureToCurrentSameGroupMembers() throws Exception {
+        var ownerSession = localAuth.register(new LocalRegistrationRequest("ProfileOwner", PASSWORD));
+        var friendSession = localAuth.register(new LocalRegistrationRequest("ProfileFriend", PASSWORD));
+        var outsiderSession = localAuth.register(new LocalRegistrationRequest("ProfileOutsider", PASSWORD));
+        UUID ownerId = ownerSession.user().id();
+        UUID friendId = friendSession.user().id();
+        String ownerToken = ownerSession.sessionToken();
+        String friendToken = friendSession.sessionToken();
+        jdbc.sql("UPDATE app_user SET signature = :signature WHERE id = :id")
+                .param("signature", "今晚开黑").param("id", friendId).update();
+        var created = mvc.perform(post("/api/groups").header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"资料测试\",\"description\":\"\"}"))
+                .andExpect(status().isCreated()).andReturn();
+        String groupId = objectMapper.readTree(created.getResponse().getContentAsString()).get("id").asText();
+        mvc.perform(post("/api/groups/{groupId}/members", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"userId\":\"" + friendId + "\"}"))
+                .andExpect(status().isOk());
+        String path = "/api/groups/" + groupId + "/members/" + friendId + "/profile";
+        var profile = mvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken))
+                .andExpect(status().isOk()).andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
+                .andExpect(jsonPath("$.userId").value(friendId.toString()))
+                .andExpect(jsonPath("$.signature").value("今晚开黑")).andReturn();
+        assertThat(objectMapper.readTree(profile.getResponse().getContentAsString()).size()).isEqualTo(2);
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        mvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, "Bearer " + outsiderSession.sessionToken()))
+                .andExpect(status().isNotFound());
+        mvc.perform(get("/api/groups/{groupId}/members/{userId}/profile", groupId, outsiderSession.user().id())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken))
+                .andExpect(status().isNotFound());
+        mvc.perform(delete("/api/groups/{groupId}/members/{userId}", groupId, friendId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)).andExpect(status().isNoContent());
+        mvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)).andExpect(status().isNotFound());
+        mvc.perform(get("/api/groups/{groupId}/members/{userId}/profile", groupId, ownerId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + friendToken)).andExpect(status().isNotFound());
+    }
+
+    @Test
     void shouldOnlyShowGroupAfterOwnerAddsMember() throws Exception {
         String ownerToken = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
         String friendToken = localAuth.register(new LocalRegistrationRequest("Friend", PASSWORD)).sessionToken();
@@ -344,6 +382,31 @@ class GroupApplicationIT {
         assertThat(delayedUpdateCount).isZero();
         assertThat(jdbc.sql("SELECT status FROM user_presence WHERE user_id = ?")
                 .param(user.id()).query(String.class).single()).isEqualTo("OFFLINE");
+    }
+
+    @Test
+    void shouldReturnTheSameOfflineSnapshotAcrossInvisibleHeartbeats() throws Exception {
+        String token = localAuth.register(new LocalRegistrationRequest("InvisibleMember", PASSWORD)).sessionToken();
+        AuthenticatedUser user = authService.authenticate(token);
+        UUID groupId = groupService.createGroup(user, new CreateGroupRequest("隐身测试", null, null)).id();
+        presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE,
+                new PresenceHeartbeatRequest.Activity(UserActivityType.GAME, "游戏")));
+        String previous = null;
+        for (int heartbeat = 0; heartbeat < 2; heartbeat++) {
+            presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.OFFLINE,
+                    new PresenceHeartbeatRequest.Activity(UserActivityType.GAME, "不应公开的活动")));
+            String body = mvc.perform(get("/api/groups/{groupId}/presences", groupId)
+                            .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$[0].status").value("OFFLINE"))
+                    .andExpect(jsonPath("$[0].lastSeenAt").isEmpty())
+                    .andExpect(jsonPath("$[0].activityType").isEmpty())
+                    .andExpect(jsonPath("$[0].activityName").isEmpty())
+                    .andExpect(jsonPath("$[0].activityStartedAt").isEmpty())
+                    .andReturn().getResponse().getContentAsString();
+            if (previous != null) assertThat(body).isEqualTo(previous);
+            previous = body;
+        }
     }
 
     @Test

@@ -22,6 +22,11 @@ export interface GroupMember {
   joinedAt: string;
 }
 
+export interface GroupMemberProfile {
+  userId: string;
+  signature: string;
+}
+
 export interface GroupPresence {
   userId: string;
   status: UserPresenceStatus;
@@ -29,6 +34,10 @@ export interface GroupPresence {
   activityType: UserActivityType | null;
   activityName: string | null;
   activityStartedAt: string | null;
+}
+
+export function findGroupMemberProfile(groupId: string, userId: string, signal: AbortSignal): Promise<GroupMemberProfile> {
+  return groupRequest(`/${encodeURIComponent(groupId)}/members/${encodeURIComponent(userId)}/profile`, 'GET', undefined, signal);
 }
 
 export interface GroupPresenceChangeCursor {

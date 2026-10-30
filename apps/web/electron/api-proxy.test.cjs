@@ -30,6 +30,20 @@ function proxyFixture(overrides = {}) {
   return { serve, forwarded };
 }
 
+test('成员资料只开放明确的同源 GET 路径并保留认证', async () => {
+  const { serve, forwarded } = proxyFixture();
+  const path = '/api/groups/11111111-1111-4111-8111-111111111111/members/22222222-2222-4222-8222-222222222222/profile';
+  await serve(new Request('lycan://app' + path));
+  assert.equal(forwarded.length, 1);
+  assert.equal(forwarded[0].options.headers.Authorization, 'Bearer test-session');
+  assert.equal(forwarded[0].url, 'https://example.test' + path);
+  for (const method of ['POST', 'PUT', 'DELETE']) {
+    assert.equal((await serve(new Request('lycan://app' + path, { method }))).status, 404);
+  }
+  assert.equal((await serve(new Request('lycan://app' + path + '/extra'))).status, 404);
+  assert.equal(forwarded.length, 1);
+});
+
 test('群组创建允许 2 MiB 裁剪图的 Base64 和文本，转发保持认证', async () => {
   const { serve, forwarded } = proxyFixture();
   const body = JSON.stringify({ name: '小队', description: '一起开黑',

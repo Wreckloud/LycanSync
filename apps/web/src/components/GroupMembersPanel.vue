@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue';
+import { computed, nextTick, onScopeDispose, ref, watch } from 'vue';
 import { Crown, Search, X } from '@lucide/vue';
 import ActivityStatus from './ActivityStatus.vue';
-import type { GroupMember } from '../group/groupApi';
+import ProfilePopover from './ProfilePopover.vue';
+import { findGroupMemberProfile, type GroupMember } from '../group/groupApi';
 import type { AuthUser } from '../auth/authApi';
-import type { UserPresenceStatus } from '../presence/presenceApi';
+import { PRESENCE_STATUS_LABELS, type UserPresenceStatus } from '../presence/presenceApi';
 
 const props = defineProps<{
   members: GroupMember[];
@@ -16,6 +17,8 @@ const props = defineProps<{
   status: (member: GroupMember) => UserPresenceStatus;
   statusLabel: (member: GroupMember) => string;
   activity: (member: GroupMember) => { type: string; text: string } | null;
+  groupId: string;
+  profileBlocked?: boolean;
 }>();
 const searchOpen = ref(false);
 const search = ref('');
@@ -24,9 +27,97 @@ const button = ref<HTMLButtonElement | null>(null);
 const input = ref<HTMLInputElement | null>(null);
 const filtered = computed(() => props.members.filter((member) =>
   (member.userId === props.user.id ? props.user.nickname : member.nickname).toLowerCase().includes(search.value.trim().toLowerCase())));
+const profileAnchor = ref<HTMLElement | null>(null);
+const profileUserId = ref('');
+const profileMember = computed(() => props.members.find(member => member.userId === profileUserId.value));
+const profileSignature = ref('');
+const profileLoading = ref(false);
+const profileError = ref('');
+const profileCard = ref<InstanceType<typeof ProfilePopover> | null>(null);
+let openTimer: ReturnType<typeof setTimeout> | undefined;
+let closeTimer: ReturnType<typeof setTimeout> | undefined;
+let profileRequest: AbortController | undefined;
+const signatures = new Map<string, { value: string; fetchedAt: number }>();
+
+function cancelProfileTimers() {
+  clearTimeout(openTimer);
+  clearTimeout(closeTimer);
+}
+
+function closeProfile() {
+  cancelProfileTimers();
+  profileRequest?.abort();
+  profileRequest = undefined;
+  profileLoading.value = false;
+  profileAnchor.value = null;
+}
+
+async function loadProfile() {
+  const member = profileMember.value;
+  if (!profileAnchor.value || !member) return;
+  profileRequest?.abort();
+  profileError.value = '';
+  if (member.userId === props.user.id) { profileSignature.value = props.user.signature ?? ''; return; }
+  const controller = new AbortController();
+  profileRequest = controller;
+  profileLoading.value = true;
+  const groupId = props.groupId;
+  try {
+    const profile = await findGroupMemberProfile(groupId, member.userId, controller.signal);
+    if (controller.signal.aborted || profileRequest !== controller || props.groupId !== groupId) return;
+    if (profile.userId !== member.userId || typeof profile.signature !== 'string') throw new Error('成员资料响应无效');
+    profileSignature.value = profile.signature;
+    if (signatures.size >= 8) signatures.delete(signatures.keys().next().value!);
+    signatures.set(member.userId, { value: profile.signature, fetchedAt: Date.now() });
+  } catch (reason) {
+    if (!controller.signal.aborted && profileRequest === controller) {
+      profileError.value = reason instanceof Error ? reason.message : '无法读取成员签名';
+    }
+  } finally {
+    if (profileRequest === controller) { profileRequest = undefined; profileLoading.value = false; }
+  }
+}
+
+function showProfile(member: GroupMember, anchor: HTMLElement) {
+  cancelProfileTimers();
+  if (props.profileBlocked || !anchor.isConnected) return;
+  if (profileUserId.value === member.userId && profileAnchor.value === anchor) return;
+  closeProfile();
+  profileUserId.value = member.userId;
+  profileAnchor.value = anchor;
+  profileError.value = '';
+  const cached = signatures.get(member.userId);
+  profileSignature.value = member.userId === props.user.id ? props.user.signature ?? '' : cached?.value ?? '';
+  if (member.userId !== props.user.id && (!cached || Date.now() - cached.fetchedAt >= 60_000)) void loadProfile();
+}
+
+function queueProfile(member: GroupMember, event: MouseEvent) {
+  hoveredMember.value = member.userId;
+  cancelProfileTimers();
+  if (props.profileBlocked) return;
+  const anchor = event.currentTarget as HTMLElement;
+  openTimer = setTimeout(() => showProfile(member, anchor), 250);
+}
+
+function keepProfile() { clearTimeout(closeTimer); }
+
+function leaveProfile() {
+  hoveredMember.value = null;
+  clearTimeout(openTimer);
+  const focus = profileAnchor.value?.ownerDocument.activeElement ?? null;
+  if (profileAnchor.value?.contains(focus) || profileCard.value?.contains(focus)) return;
+  clearTimeout(closeTimer);
+  closeTimer = setTimeout(closeProfile, 180);
+}
+
+watch(() => props.profileBlocked, blocked => { if (blocked) closeProfile(); });
+watch(profileMember, member => { if (!member) closeProfile(); });
+watch(() => props.groupId, () => { closeProfile(); signatures.clear(); });
+onScopeDispose(closeProfile);
 
 async function toggleSearch() {
   searchOpen.value = !searchOpen.value;
+  closeProfile();
   if (!searchOpen.value) search.value = '';
   await nextTick();
   (searchOpen.value ? input.value : button.value)?.focus();
@@ -53,7 +144,12 @@ async function toggleSearch() {
       <p v-else-if="loading" class="group-hint">正在读取成员…</p>
       <p v-if="search.trim() && !loading && !error && !filtered.length" class="group-hint" role="status">没有找到匹配的成员</p>
       <div v-for="member in filtered" :key="member.userId" class="group-member-row" :class="{ 'is-offline': status(member) === 'OFFLINE' }"
-        @mouseenter="hoveredMember = member.userId" @mouseleave="hoveredMember = null">
+        tabindex="0" role="button" :aria-label="`查看 ${member.userId === user.id ? user.nickname : member.nickname} 的资料`" aria-haspopup="dialog"
+        @mouseenter="queueProfile(member, $event)" @mouseleave="leaveProfile"
+        @focus="showProfile(member, $event.currentTarget as HTMLElement)"
+        @click="showProfile(member, $event.currentTarget as HTMLElement)"
+        @keydown.enter.prevent="showProfile(member, $event.currentTarget as HTMLElement)"
+        @keydown.space.prevent="showProfile(member, $event.currentTarget as HTMLElement)">
         <span class="group-member-avatar" :aria-label="statusLabel(member)">
           <img v-if="member.userId === user.id ? user.avatar : member.avatar" :src="member.userId === user.id ? user.avatar : member.avatar" alt="" />
           <span v-else class="group-member-initial">{{ member.nickname.slice(0, 1) }}</span>
@@ -66,6 +162,13 @@ async function toggleSearch() {
         </span>
       </div>
     </div>
+    <ProfilePopover ref="profileCard" :anchor="profileAnchor" placement="left" label="成员资料"
+      :nickname="profileMember?.userId === user.id ? user.nickname : profileMember?.nickname ?? ''"
+      :avatar="profileMember?.userId === user.id ? user.avatar : profileMember?.avatar ?? ''"
+      :signature="profileMember?.userId === user.id ? user.signature : profileSignature"
+      :status="profileMember ? status(profileMember) : 'OFFLINE'" :status-label="profileMember ? PRESENCE_STATUS_LABELS[status(profileMember)] : ''"
+      :activity="profileMember ? activity(profileMember)?.text : undefined" :loading="profileLoading" :error="profileError"
+      @close="closeProfile" @enter="keepProfile" @leave="leaveProfile" @retry="loadProfile" />
   </aside>
 </template>
 

@@ -5,6 +5,7 @@ import com.lycansync.api.auth.service.AuthSecrets;
 import com.lycansync.api.common.error.ApiErrorCode;
 import com.lycansync.api.common.image.AvatarImageProcessor;
 import com.lycansync.api.group.dto.CreateGroupRequest;
+import com.lycansync.api.group.dto.GroupMemberProfileResponse;
 import com.lycansync.api.group.dto.GroupCandidateResponse;
 import com.lycansync.api.group.dto.GroupDetailResponse;
 import com.lycansync.api.group.dto.GroupMemberResponse;
@@ -96,6 +97,15 @@ public class GroupService {
         if (!mapper.memberExists(groupId, user.id())) {
             throw new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.GROUP_NOT_FOUND, "群组不存在或你已不在此群");
         }
+    }
+
+    public GroupMemberProfileResponse findMemberProfile(UUID groupId, UUID memberUserId, AuthenticatedUser user) {
+        requireMember(groupId, user);
+        GroupMemberProfileResponse profile = mapper.findMemberProfile(groupId, memberUserId, user.id());
+        if (profile == null) {
+            throw new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.ACCOUNT_NOT_FOUND, "成员资料不存在或已无法访问");
+        }
+        return profile;
     }
 
     public List<UUID> findMemberIds(UUID groupId) {

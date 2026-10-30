@@ -8,7 +8,7 @@ import type { RtcRoomSummary } from './rtc/roomSummaryApi';
 
 const script = parse(readFileSync(new URL('./App.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('App.ts', script, ts.ScriptTarget.Latest, true);
-const functionNames = ['applyDetectedActivity', 'sendHeartbeat', 'stopPresenceHeartbeat', 'updateOwnPresenceStatus',
+const functionNames = ['applyDetectedActivity', 'sendHeartbeat', 'flushPresenceHeartbeats', 'changePresenceMode', 'stopPresenceHeartbeat', 'updateOwnPresenceStatus',
   'refreshOnActivation', 'handlePresenceNetworkRestored', 'refreshGroupPresences', 'leaveVoice'];
 const variableNames = ['PRESENCE_IDLE_TIMEOUT_MS', 'activityRevision', 'activitySnapshotRevision', 'removeActivityListener',
   'fetchedRoomSummary', 'roomSummary', 'groupHasVoiceActivity'];
@@ -42,13 +42,17 @@ function setup() {
     onActivityChange: vi.fn((listener: typeof activityListener) => { activityListener = listener; return removeActivityListener; }) };
   const currentActivity = ref<DetectedActivity | null>(null);
   const showActivity = ref(true);
+  const presenceMode = ref<'online' | 'invisible'>('online');
   const rawSummary = ref<RtcRoomSummary | null>({ participantCount: 2, participants: [
     { participantIdentity: 'user-self', displayName: '自己' }, { participantIdentity: 'user-friend', displayName: '朋友' },
   ] });
   const state = {
     props: { user: { id: 'self' } }, currentActivity, showActivity,
-    sharedActivity: computed(() => showActivity.value ? currentActivity.value : null),
+    sharedActivity: computed(() => showActivity.value && presenceMode.value === 'online' ? currentActivity.value : null),
     currentPresenceStatus: ref('ONLINE'), presenceStopped: false,
+    presenceMode, presenceReady: ref(true), presencePreference: { loaded: Promise.resolve(), setMode: (mode: 'online' | 'invisible') => { presenceMode.value = mode; } },
+    presenceSyncing: ref(false), presenceSyncError: ref(''), presenceSending: null as Promise<void> | null,
+    presenceHeartbeatPending: false, presenceModeChange: 0,
     presenceAbort: null as AbortController | null, presenceHeartbeatTimer: null,
     selectedGroupId: ref<string | null>('group'), joinedGroupId: ref<string | null>('group'),
     selectedGroupDetail: ref({ id: 'group', members: [{ userId: 'self' }] }), groupPresences: ref({}),
@@ -68,14 +72,16 @@ function setup() {
     refreshRoomOccupancies: vi.fn(async () => {}), refreshGroups: vi.fn(async () => {}), startGroupPresenceSync: vi.fn(),
   };
   const showingJoinedGroup = computed(() => state.joinedGroupId.value !== null && state.joinedGroupId.value === state.selectedGroupId.value);
+  const publicPresenceStatus = computed(() => presenceMode.value === 'invisible' ? 'OFFLINE' : state.currentPresenceStatus.value);
   // 正式 App 回调、派生状态和监听；RTC/系统闲置/活动/HTTP 边界受控，不连接房间或设备。
   const sandbox = {
-    ...state, desktop, showingJoinedGroup, computed, watch, onScopeDispose, AbortController, clearInterval,
+    ...state, desktop, showingJoinedGroup, publicPresenceStatus, computed, watch, onScopeDispose, AbortController, clearInterval,
     document: { visibilityState: 'visible' }, useRoomSummary: () => rawSummary,
   };
   const app = scope.run(() => runInNewContext(`${compiled}\n({ ${functionNames.join(', ')}, roomSummary, groupHasVoiceActivity })`, sandbox)) as {
     applyDetectedActivity: (activity: DetectedActivity | null) => void; stopPresenceHeartbeat: () => void;
     updateOwnPresenceStatus: () => Promise<void>; refreshOnActivation: () => void; handlePresenceNetworkRestored: () => void;
+    sendHeartbeat: () => Promise<void>; changePresenceMode: (mode: 'online' | 'invisible') => Promise<void>;
     refreshGroupPresences: (groupId: string, generation: number, signal: AbortSignal) => Promise<boolean>;
     leaveVoice: () => void; roomSummary: { value: RtcRoomSummary | null }; groupHasVoiceActivity: (groupId: string) => boolean;
   };
@@ -199,6 +205,7 @@ it('网络或窗口恢复立即上报心跳、复核闲置及刷新成员，不�
   const { state, app, desktop, stop } = setup();
   try {
     app.handlePresenceNetworkRestored();
+    await settle();
     expect(state.sendPresenceHeartbeat).toHaveBeenCalledOnce();
     expect(desktop.getSystemIdleState).toHaveBeenCalledOnce();
     expect(state.startGroupPresenceSync).toHaveBeenCalledWith('group', true);
@@ -255,11 +262,98 @@ it('音乐沿用同一公开开关，只上报类型和名称，不附带窗口�
   } finally { stop(); }
 });
 
+it('旧在线心跳未完成时合并隐身请求，完成后只发送最新离线状态', async () => {
+  const { state, app, notifyActivity, stop } = setup();
+  const first = deferred<void>();
+  state.sendPresenceHeartbeat.mockReturnValueOnce(first.promise);
+  try {
+    const sending = app.sendHeartbeat();
+    await settle();
+    const hiding = app.changePresenceMode('invisible');
+    notifyActivity({ type: 'GAME', name: '仍在游戏', startedAt: '2026-10-30T04:00:00Z' });
+    await settle();
+    expect(state.sendPresenceHeartbeat).toHaveBeenCalledOnce();
+    first.resolve();
+    await Promise.all([sending, hiding]);
+    expect(state.sendPresenceHeartbeat).toHaveBeenCalledTimes(2);
+    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('OFFLINE', null, expect.any(AbortSignal));
+    expect(state.currentActivity.value?.name).toBe('仍在游戏');
+    expect(state.rtc.leave).not.toHaveBeenCalled();
+  } finally { stop(); }
+});
+
+it('首次心跳等待偏好，恢复隐身后活动与闲置变化不能公开在线', async () => {
+  const { state, app, notifyActivity, desktop, stop } = setup();
+  const reading = deferred<void>();
+  state.presencePreference.loaded = reading.promise;
+  try {
+    const sending = app.sendHeartbeat();
+    await settle();
+    expect(state.sendPresenceHeartbeat).not.toHaveBeenCalled();
+    state.presenceMode.value = 'invisible';
+    notifyActivity({ type: 'MUSIC', name: '歌曲', startedAt: '2026-10-30T04:00:00Z' });
+    desktop.getSystemIdleState.mockResolvedValueOnce({ state: 'locked', idleSeconds: 600 });
+    await app.updateOwnPresenceStatus();
+    reading.resolve();
+    await sending;
+    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('OFFLINE', null, expect.any(AbortSignal));
+    desktop.getSystemIdleState.mockResolvedValueOnce({ state: 'active', idleSeconds: 0 });
+    await app.changePresenceMode('online');
+    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('ONLINE', { type: 'MUSIC', name: '歌曲' }, expect.any(AbortSignal));
+    state.showActivity.value = false;
+    await app.changePresenceMode('invisible');
+    await app.changePresenceMode('online');
+    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('ONLINE', null, expect.any(AbortSignal));
+  } finally { stop(); }
+});
+
+it('同步失败保留隐身意愿并显示未确认，下次成功清除提示', async () => {
+  const { state, app, stop } = setup();
+  state.sendPresenceHeartbeat.mockRejectedValueOnce(new Error('network'));
+  try {
+    await app.changePresenceMode('invisible');
+    expect(state.presenceMode.value).toBe('invisible');
+    expect(state.presenceSyncError.value).toContain('尚未确认');
+    await app.sendHeartbeat();
+    expect(state.presenceSyncError.value).toBe('');
+    expect(state.rtc.leave).not.toHaveBeenCalled();
+  } finally { stop(); }
+});
+
+it('停止期间仍在读取偏好时，迟到读取不能再发送心跳', async () => {
+  const { state, app, stop } = setup();
+  const reading = deferred<void>();
+  state.presencePreference.loaded = reading.promise;
+  const sending = app.sendHeartbeat();
+  stop();
+  reading.resolve();
+  await sending;
+  expect(state.sendPresenceHeartbeat).not.toHaveBeenCalled();
+});
+
+it('切回在线沿用当前闲置，迟到的在线选择不能覆盖更新的隐身操作', async () => {
+  const { state, app, desktop, stop } = setup();
+  try {
+    await app.changePresenceMode('invisible');
+    desktop.getSystemIdleState.mockResolvedValueOnce({ state: 'locked', idleSeconds: 600 });
+    await app.changePresenceMode('online');
+    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('AWAY', null, expect.any(AbortSignal));
+    const reading = deferred<{ state: string; idleSeconds: number }>();
+    desktop.getSystemIdleState.mockReturnValueOnce(reading.promise);
+    const online = app.changePresenceMode('online');
+    await app.changePresenceMode('invisible');
+    reading.resolve({ state: 'active', idleSeconds: 0 });
+    await online;
+    expect(state.presenceMode.value).toBe('invisible');
+    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('OFFLINE', null, expect.any(AbortSignal));
+  } finally { stop(); }
+});
+
 it('本人和群成员的音乐/游戏展示一致，离线和关闭动态均不占用第二行', () => {
   const names = ['memberActivity', 'memberOnlineStatus', 'personalActivityStatus'];
   const statements = sourceFile.statements.filter((statement) => ts.isVariableStatement(statement)
     && statement.declarationList.declarations.some((declaration) => names.includes(declaration.name.getText(sourceFile))));
-  const state = { props: { user: { id: 'self' } }, currentPresenceStatus: ref('ONLINE'),
+  const state = { props: { user: { id: 'self' } }, publicPresenceStatus: ref('ONLINE'),
     sharedActivity: ref<DetectedActivity | null>({ type: 'MUSIC', name: '歌曲', startedAt: '2026-10-15T00:00:00Z' }),
     groupPresences: ref({ friend: { status: 'ONLINE', activityType: 'MUSIC', activityName: '歌曲', activityStartedAt: '2026-10-15T00:00:00Z' } }),
     formatActivityDuration: () => '1:00', computed };

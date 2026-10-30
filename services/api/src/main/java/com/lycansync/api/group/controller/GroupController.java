@@ -4,6 +4,7 @@ import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.group.dto.CreateGroupRequest;
 import com.lycansync.api.group.dto.GroupCandidateResponse;
 import com.lycansync.api.group.dto.GroupDetailResponse;
+import com.lycansync.api.group.dto.GroupMemberProfileResponse;
 import com.lycansync.api.group.dto.GroupPresenceChangeResponse;
 import com.lycansync.api.group.dto.GroupPresenceResponse;
 import com.lycansync.api.group.dto.GroupSummaryResponse;
@@ -71,6 +72,17 @@ public class GroupController {
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noStore())
                 .body(groupService.findGroups(user));
+    }
+
+    @GetMapping("/{groupId}/members/{memberUserId}/profile")
+    @Operation(summary = "读取成员资料卡", description = "请求人与目标必须仍为同群成员，仅返回补充公开资料")
+    public ResponseEntity<GroupMemberProfileResponse> findMemberProfile(
+            @PathVariable @Parameter(description = "群组 ID") UUID groupId,
+            @PathVariable @Parameter(description = "成员账号 ID") UUID memberUserId,
+            @AuthenticationPrincipal AuthenticatedUser user
+    ) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(groupService.findMemberProfile(groupId, memberUserId, user));
     }
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)

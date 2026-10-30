@@ -1,6 +1,9 @@
 import { authenticatedFetch } from '../auth/authApi';
 
 export type UserPresenceStatus = 'ONLINE' | 'AWAY' | 'OFFLINE';
+export const PRESENCE_STATUS_LABELS: Record<UserPresenceStatus, string> = {
+  ONLINE: '在线', AWAY: '离开', OFFLINE: '离线',
+};
 export type UserActivityType = 'GAME' | 'MUSIC';
 
 export interface UserActivity {

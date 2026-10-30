@@ -14,7 +14,8 @@ describe('底部个人名片', () => {
     const active = await renderToString(createSSRApp(PersonalStatusCard, { user, status: 'ONLINE', statusLabel: '在线',
       activityStatus: { type: 'GAME', text: '正在玩 游戏 · 1:00' } }));
     expect(active).toContain('正在玩 游戏 · 1:00');
-    expect(active).toMatch(/class="[^"]*\bONLINE\b[^"]*\bstatus-dot\b/);
+    const statusClasses = active.match(/class="([^"]*\bstatus-dot\b[^"]*)"/)?.[1].split(' ');
+    expect(statusClasses).toEqual(expect.arrayContaining(['status-dot', 'ONLINE']));
     expect(active).toContain('member-activity');
   });
 });
