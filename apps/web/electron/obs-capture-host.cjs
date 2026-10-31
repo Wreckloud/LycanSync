@@ -15,7 +15,7 @@ class ObsCaptureHostManager {
   constructor({ executablePath, modulePath, dataPath, configPath, platform = process.platform, spawnProcess = spawn,
     clientProcessId = process.pid, onAudioFailure = () => {}, onAudioStopped = () => {},
     onFrame = () => {}, onFailure = () => {}, onClosed = () => {}, onSuspended = () => {}, onDiagnostic = () => {},
-    onCaptureDiagnostic = () => {}, onRecordingEvent = () => {} }) {
+    onCaptureDiagnostic = () => {}, onRecordingEvent = () => {}, onReplayEvent = () => {} }) {
     this.executablePath = executablePath;
     this.modulePath = modulePath;
     this.dataPath = dataPath;
@@ -29,6 +29,7 @@ class ObsCaptureHostManager {
     this.onDiagnostic = onDiagnostic;
     this.onCaptureDiagnostic = onCaptureDiagnostic;
     this.onRecordingEvent = onRecordingEvent;
+    this.onReplayEvent = onReplayEvent;
     this.onAudioFailure = onAudioFailure;
     this.onAudioStopped = onAudioStopped;
     this.clientProcessId = clientProcessId;
@@ -227,13 +228,52 @@ class ObsCaptureHostManager {
       reject(new Error(event.code));
       return;
     }
+    if (['replayStarted', 'replayFailed', 'replayStopped', 'replaySaved', 'replaySaveFailed'].includes(event.event)) {
+      const replay = state.replay;
+      if (!replay || event.sessionId !== state.videoSessionId || event.replayId !== replay.id) return;
+      const codes = ['recordingBusy', 'recordingPathInvalid', 'recordingModuleUnavailable', 'recordingHardwareEncoderUnavailable',
+        'recordingEncoderStartFailed', 'recordingAudioEncoderUnavailable', 'recordingOutputUnavailable',
+        'recordingApplicationAudioUnavailable', 'recordingVoiceUnavailable', 'recordingWriteFailed'];
+      if (event.code !== undefined && !codes.includes(event.code)
+          || event.encoder !== undefined && !['nvenc', 'qsv', 'amf', 'unknown'].includes(event.encoder)
+          || event.configuredRateControl !== undefined && !['CQP', 'ICQ', 'unknown'].includes(event.configuredRateControl)
+          || event.configuredLookahead !== undefined && typeof event.configuredLookahead !== 'boolean'
+          || event.configuredFrameRate !== undefined && ![30, 60, 120].includes(event.configuredFrameRate)
+          || event.memoryBudgetMb !== undefined && ![256, 512, 1024].includes(event.memoryBudgetMb)
+          || event.event === 'replayStarted' && [event.width, event.height].some(value => !Number.isInteger(value) || value < 1 || value > 16384)) {
+        failState(state, new Error('obsCaptureProtocolEventInvalid')); return;
+      }
+      if (event.event === 'replayStarted') {
+        clearTimeout(replay.startTimer); replay.resolveStart({ width: event.width, height: event.height, frameRate: event.configuredFrameRate,
+          encoder: event.encoder, configuredRateControl: event.configuredRateControl, configuredLookahead: event.configuredLookahead,
+          memoryBudgetMb: event.memoryBudgetMb });
+      } else if (event.event === 'replaySaved' || event.event === 'replaySaveFailed') {
+        if (!replay.save || event.saveId !== replay.save.id) return;
+        clearTimeout(replay.save.timer);
+        if (event.event === 'replaySaved') replay.save.resolve({ changed: true });
+        else replay.save.reject(new Error(event.code || 'recordingWriteFailed'));
+        replay.save = undefined;
+      } else {
+        clearTimeout(replay.startTimer); clearTimeout(replay.stopTimer); clearTimeout(replay.save?.timer);
+        replay.rejectStart(new Error(event.code || 'replayStopped'));
+        replay.save?.reject(new Error(event.code || 'recordingWriteFailed'));
+        replay.resolveStop?.({ changed: true });
+        state.replay = undefined;
+      }
+      this.onReplayEvent(state, event);
+      return;
+    }
     if (['recordingStarted', 'recordingFailed', 'recordingStopped'].includes(event.event)) {
       const recording = state.recording;
       if (!recording || event.sessionId !== state.videoSessionId || event.recordingId !== recording.id) return;
-      const codes = ['recordingAlreadyRunning', 'recordingPathInvalid', 'recordingModuleUnavailable',
+      const codes = ['recordingAlreadyRunning', 'recordingBusy', 'recordingPathInvalid', 'recordingModuleUnavailable',
         'recordingHardwareEncoderUnavailable', 'recordingEncoderStartFailed', 'recordingAudioEncoderUnavailable',
         'recordingOutputUnavailable', 'recordingApplicationAudioUnavailable', 'recordingVoiceUnavailable', 'recordingDiskFull', 'recordingWriteFailed'];
       if ((event.code !== undefined && !codes.includes(event.code))
+          || event.encoder !== undefined && !['nvenc', 'qsv', 'amf', 'unknown'].includes(event.encoder)
+          || event.configuredRateControl !== undefined && !['CQP', 'ICQ', 'unknown'].includes(event.configuredRateControl)
+          || event.configuredLookahead !== undefined && typeof event.configuredLookahead !== 'boolean'
+          || event.configuredFrameRate !== undefined && ![30, 60, 120].includes(event.configuredFrameRate)
           || (event.event === 'recordingStarted' && [event.width, event.height].some(value => value !== undefined
             && (!Number.isInteger(value) || value < 1 || value > 16384)))
           || (event.event === 'recordingStopped' && (!Number.isSafeInteger(event.outputFrames) || event.outputFrames < 0))) {
@@ -241,7 +281,8 @@ class ObsCaptureHostManager {
       }
       if (event.event === 'recordingStarted') {
         clearTimeout(recording.startTimer);
-        recording.resolveStart({ changed: true, width: event.width, height: event.height });
+        recording.resolveStart({ changed: true, width: event.width, height: event.height, frameRate: event.configuredFrameRate,
+          encoder: event.encoder, configuredRateControl: event.configuredRateControl, configuredLookahead: event.configuredLookahead });
       } else {
         clearTimeout(recording.startTimer); clearTimeout(recording.stopTimer);
         recording.rejectStart(new Error(event.code || 'recordingStopped'));
@@ -398,11 +439,12 @@ class ObsCaptureHostManager {
           activeFps: event.obsRender.activeFps, averageRenderMs: event.obsRender.averageRenderMs } });
       return;
     }
-    if (event.event === 'captureConfigured' || event.event === 'captureConfigurationRejected') {
+    if (event.event === 'captureConfigured' || event.event === 'captureConfigurationRejected' || event.event === 'deliveryConfigured') {
       const request = state.pendingConfiguration;
       if (!request || event.requestId !== request.id) return;
       if (this.state !== state || event.sessionId !== state.videoSessionId
-          || event.maxFps !== (event.event === 'captureConfigured' ? request.maxFps : state.maxFps)
+          || (event.event === 'deliveryConfigured') !== request.deliveryOnly
+          || event.maxFps !== (event.event !== 'captureConfigurationRejected' ? request.maxFps : state.maxFps)
           || event.width !== (event.event === 'captureConfigured' ? request.resolution.width : state.resolution.width)
           || event.height !== (event.event === 'captureConfigured' ? request.resolution.height : state.resolution.height)) {
         failState(state, new Error('obsCaptureConfigurationInvalid'));
@@ -410,7 +452,7 @@ class ObsCaptureHostManager {
       }
       if (event.event === 'captureConfigurationRejected') request.finish(new Error('obsCaptureConfigurationRejected'));
       else {
-        state.maxFps = event.maxFps;
+        if (!request.deliveryOnly) state.maxFps = event.maxFps;
         state.resolution = request.resolution;
         request.finish(undefined, { changed: true });
       }
@@ -461,16 +503,18 @@ class ObsCaptureHostManager {
     return promise;
   }
 
-  configureVideo(sessionId, maxFps, resolution = this.state?.resolution) {
+  configureVideo(sessionId, maxFps, resolution = this.state?.resolution, deliveryOnly = false) {
     const state = this.state;
     if (!state || !state.alive || state.closed || state.failed || state.stopRequested
-        || state.videoSessionId !== sessionId || !state.helperVersion || ![30, 60, 120].includes(maxFps) || !validResolution(resolution)) {
+        || state.videoSessionId !== sessionId || !state.helperVersion || ![30, 60, 120].includes(maxFps) || !validResolution(resolution)
+        || typeof deliveryOnly !== 'boolean' || deliveryOnly && (maxFps > state.maxFps
+          || resolution.width !== state.resolution.width || resolution.height !== state.resolution.height)) {
       return Promise.reject(new Error('invalidVideoConfiguration'));
     }
     if (state.pendingConfiguration) return Promise.reject(new Error('obsCaptureConfigurationInProgress'));
     let resolveRequest, rejectRequest;
     const promise = new Promise((resolve, reject) => { resolveRequest = resolve; rejectRequest = reject; });
-    const request = { id: String(++state.configurationSequence), maxFps, resolution: { ...resolution }, timer: undefined, finish: (error, result) => {
+    const request = { id: String(++state.configurationSequence), maxFps, deliveryOnly, resolution: { ...resolution }, timer: undefined, finish: (error, result) => {
       if (state.pendingConfiguration !== request) return;
       clearTimeout(request.timer);
       state.pendingConfiguration = undefined;
@@ -478,16 +522,23 @@ class ObsCaptureHostManager {
       else resolveRequest(result);
     } };
     state.pendingConfiguration = request;
-    // 超时后实际尺寸和帧率未知，结束本次采集，不能按旧配置继续发送。
-    request.timer = setTimeout(() => failState(state, new Error('obsCaptureConfigurationTimeout')), CONFIGURE_TIMEOUT_MS);
+    // 渲染重设超时不能继续采集；交付节流超时只撤销本次确认，不中断仍可用的共享。
+    request.timer = setTimeout(() => {
+      const error = new Error('obsCaptureConfigurationTimeout');
+      if (deliveryOnly) request.finish(error);
+      else failState(state, error);
+    }, CONFIGURE_TIMEOUT_MS);
     request.timer.unref?.();
-    void writeLine(state.child, `configure:${request.id}:${maxFps}:${resolution.width}:${resolution.height}`).catch((error) => {
-      if (state.pendingConfiguration === request) failState(state, error);
+    const command = deliveryOnly ? `delivery:${request.id}:${maxFps}` : `configure:${request.id}:${maxFps}:${resolution.width}:${resolution.height}`;
+    void writeLine(state.child, command).catch((error) => {
+      if (state.pendingConfiguration !== request) return;
+      if (deliveryOnly) request.finish(error);
+      else failState(state, error);
     });
     return promise;
   }
 
-  startRecording(sessionId, id, path, applicationAudio, voices = false) {
+  startRecording(sessionId, id, path, applicationAudio, voices = false, pipelineId = id, profile = { videoHeight: 1080, videoFps: 60 }) {
     const state = this.state;
     if (!state?.alive || state.failed || state.stopRequested || state.videoSessionId !== sessionId || !state.helperVersion) {
       return Promise.reject(new Error('recordingShareUnavailable'));
@@ -495,7 +546,7 @@ class ObsCaptureHostManager {
     if (state.recording || state.pendingConfiguration) return Promise.reject(new Error('recordingBusy'));
     if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id) || typeof path !== 'string' || !win32.isAbsolute(path)
         || !path.endsWith('.mkv') || path.includes('\0') || Buffer.byteLength(path) > 8192 || typeof applicationAudio !== 'boolean'
-        || typeof voices !== 'boolean') {
+        || typeof voices !== 'boolean' || !isSessionId(pipelineId) || ![720, 1080, 1440].includes(profile.videoHeight) || ![30, 60, 120].includes(profile.videoFps)) {
       return Promise.reject(new Error('recordingPathInvalid'));
     }
     const recording = { id };
@@ -506,7 +557,7 @@ class ObsCaptureHostManager {
       void this.stopRecording(sessionId, id).catch(() => {});
     }, 15_000);
     recording.startTimer.unref?.();
-    void writeLine(state.child, `recordStart|${id}|${Buffer.from(path).toString('hex')}|${Number(applicationAudio)}${Number(voices)}`)
+    void writeLine(state.child, `recordStart|${id}|${Buffer.from(path).toString('hex')}|${Number(applicationAudio)}${Number(voices)}|${pipelineId}|${profile.videoHeight}|${profile.videoFps}`)
       .catch(error => failState(state, error));
     return recording.start;
   }
@@ -522,6 +573,53 @@ class ObsCaptureHostManager {
     recording.stopTimer.unref?.();
     void writeLine(state.child, 'recordStop').catch(error => failState(state, error));
     return recording.stop;
+  }
+
+  startReplay(sessionId, id, seconds, applicationAudio, voices, pipelineId, profile) {
+    const state = this.state;
+    if (!state?.alive || state.failed || state.stopRequested || state.videoSessionId !== sessionId || !state.helperVersion) return Promise.reject(new Error('recordingShareUnavailable'));
+    if (state.replay || state.pendingConfiguration) return Promise.reject(new Error('recordingBusy'));
+    if (!isSessionId(id) || !isSessionId(pipelineId) || ![30, 60, 120].includes(seconds)
+        || typeof applicationAudio !== 'boolean' || typeof voices !== 'boolean' || !profile
+        || ![720, 1080, 1440].includes(profile.videoHeight) || ![30, 60, 120].includes(profile.videoFps)) return Promise.reject(new Error('recordingPathInvalid'));
+    const replay = { id };
+    state.replay = replay;
+    replay.start = new Promise((resolve, reject) => { replay.resolveStart = resolve; replay.rejectStart = reject; });
+    replay.startTimer = setTimeout(() => {
+      replay.rejectStart(new Error('recordingStartTimedOut'));
+      void this.stopReplay(sessionId, id).catch(() => {});
+    }, 15_000);
+    replay.startTimer.unref?.();
+    void writeLine(state.child, `replayStart|${id}|${seconds}|${Number(applicationAudio)}${Number(voices)}|${pipelineId}|${profile.videoHeight}|${profile.videoFps}`).catch(error => failState(state, error));
+    return replay.start;
+  }
+  saveReplay(sessionId, replayId, saveId, path) {
+    const state = this.state;
+    const replay = state?.replay;
+    if (!state?.alive || state.failed || state.videoSessionId !== sessionId || !replay || replay.id !== replayId || replay.stop) return Promise.reject(new Error('recordingShareUnavailable'));
+    if (replay.save) return Promise.reject(new Error('recordingBusy'));
+    if (!isSessionId(saveId) || typeof path !== 'string' || !win32.isAbsolute(path) || !path.endsWith('.mkv')
+        || path.includes('\0') || Buffer.byteLength(path) > 8192) return Promise.reject(new Error('recordingPathInvalid'));
+    const save = { id: saveId };
+    replay.save = save;
+    save.promise = new Promise((resolve, reject) => { save.resolve = resolve; save.reject = reject; });
+    // 超时仍保留保存任务，迟到写入结束前不能叠加另一份缓存快照。
+    save.timer = setTimeout(() => save.reject(new Error('replaySaveUnconfirmed')), 30_000);
+    save.timer.unref?.();
+    void writeLine(state.child, `replaySave|${saveId}|${Buffer.from(path).toString('hex')}|${replayId}`).catch(error => failState(state, error));
+    return save.promise;
+  }
+  stopReplay(sessionId, id) {
+    const state = this.state;
+    const replay = state?.replay;
+    if (!replay) return Promise.resolve({ changed: false });
+    if (state.videoSessionId !== sessionId || replay.id !== id) return Promise.reject(new Error('recordingSessionMismatch'));
+    if (replay.stop) return replay.stop;
+    replay.stop = new Promise((resolve, reject) => { replay.resolveStop = resolve; replay.rejectStop = reject; });
+    replay.stopTimer = setTimeout(() => replay.rejectStop(new Error('recordingStopUnconfirmed')), 10_000);
+    replay.stopTimer.unref?.();
+    void writeLine(state.child, 'replayStop').catch(error => failState(state, error));
+    return replay.stop;
   }
 
   startScreenAudio(sessionId, pipeId, mode) {
@@ -669,6 +767,15 @@ class ObsCaptureHostManager {
     if (state.closed) return;
     state.alive = false;
     state.closed = true;
+    if (state.replay) {
+      const replay = state.replay;
+      clearTimeout(replay.startTimer); clearTimeout(replay.stopTimer); clearTimeout(replay.save?.timer);
+      replay.rejectStart(new Error('recordingHostExited'));
+      replay.save?.reject(new Error('recordingHostExited'));
+      replay.resolveStop?.({ changed: true });
+      this.onReplayEvent(state, { event: 'replayFailed', replayId: replay.id, code: 'recordingHostExited' });
+      state.replay = undefined;
+    }
     if (state.recording) {
       clearTimeout(state.recording.startTimer); clearTimeout(state.recording.stopTimer);
       state.recording.rejectStart(new Error('recordingHostExited'));

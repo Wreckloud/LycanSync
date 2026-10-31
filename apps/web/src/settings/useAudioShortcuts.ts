@@ -1,6 +1,6 @@
 import { onScopeDispose, ref, watch } from 'vue';
 
-export type AudioShortcutAction = 'microphone' | 'listening' | 'pushToTalk';
+export type AudioShortcutAction = 'microphone' | 'listening' | 'pushToTalk' | 'replay';
 export type VoiceMode = 'voice' | 'pushToTalk';
 export type AudioShortcutBindings = Record<AudioShortcutAction, string>;
 
@@ -18,10 +18,12 @@ export function useAudioShortcuts(userId: string, options: {
   roomId: () => string | null;
   microphone: () => Promise<void>;
   listening: () => Promise<void>;
+  replay: () => Promise<void>;
+  replayId: () => string | null;
   modeChanged: (mode: VoiceMode) => void;
   transmissionChanged: (held: boolean) => void;
 }, bridge = window.lycanAudioShortcuts, storage: Pick<Storage, 'getItem' | 'setItem'> = localStorage) {
-  const bindings = ref<AudioShortcutBindings>({ microphone: '', listening: '', pushToTalk: '' });
+  const bindings = ref<AudioShortcutBindings>({ microphone: '', listening: '', pushToTalk: '', replay: '' });
   const voiceMode = ref<VoiceMode>('voice');
   const held = ref(false);
   const error = ref('');
@@ -34,6 +36,7 @@ export function useAudioShortcuts(userId: string, options: {
   let captureVersion = 0;
   let activationVersion = 0;
   let actionPending = false;
+  let replayPending = false;
   let holdVersion = 0;
   let holdSequence = 0;
   let holdTimer: ReturnType<typeof setTimeout> | undefined;
@@ -48,11 +51,14 @@ export function useAudioShortcuts(userId: string, options: {
           || (parsed[action] !== '' && !pattern.test(parsed[action])))
           || (parsed.microphone && parsed.microphone === parsed.listening)) throw new Error('invalid shortcut preferences');
       const pushToTalk = parsed.pushToTalk ?? '';
+      const replay = parsed.replay ?? '';
       const mode = parsed.voiceMode ?? 'voice';
       if (typeof pushToTalk !== 'string' || (pushToTalk && !pattern.test(pushToTalk))
           || !['voice', 'pushToTalk'].includes(mode)
           || (pushToTalk && [parsed.microphone, parsed.listening].includes(pushToTalk))) throw new Error('invalid speech preferences');
-      bindings.value = { microphone: parsed.microphone, listening: parsed.listening, pushToTalk };
+      if (typeof replay !== 'string' || (replay && !pattern.test(replay))
+          || replay && [parsed.microphone, parsed.listening, pushToTalk].includes(replay)) throw new Error('invalid replay preferences');
+      bindings.value = { microphone: parsed.microphone, listening: parsed.listening, pushToTalk, replay };
       voiceMode.value = mode;
     }
   } catch { voiceMode.value = 'pushToTalk'; error.value = '无法读取发言偏好，本次停止发声，请重新选择发言模式。'; }
@@ -108,7 +114,14 @@ export function useAudioShortcuts(userId: string, options: {
   })();
 
   const removeAction = bridge?.onAction(event => {
-    if (disposed || event.owner !== owner || !event.roomId || event.roomId !== options.roomId()
+    if (disposed || event.owner !== owner || capturing.value || busy.value) return;
+    if (event.action === 'replay') {
+      if (replayPending || !event.replayId || event.replayId !== options.replayId()) return;
+      replayPending = true;
+      void options.replay().catch(() => { if (!disposed) error.value = '回放保存未完成，请查看录制状态。'; }).finally(() => { replayPending = false; });
+      return;
+    }
+    if (!event.roomId || event.roomId !== options.roomId()
         || capturing.value || busy.value || actionPending || !['microphone', 'listening'].includes(event.action)) return;
     actionPending = true;
     void options[event.action]().catch(() => { if (!disposed) error.value = '音频操作未完成，请查看通话状态后重试。'; })

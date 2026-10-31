@@ -7,6 +7,7 @@ function fixture() {
   const registered = new Map(), sent = [], hooks = new Map();
   let rejectedKey;
   let held = false;
+  let replayId = null;
   const releases = [];
   const window = { isDestroyed: () => false, getNativeWindowHandle: () => Buffer.alloc(8, 1),
     hookWindowMessage: (id, fn) => hooks.set(id, fn), unhookWindowMessage: id => hooks.delete(id),
@@ -20,9 +21,9 @@ function fixture() {
     },
     unregisterAudioHotkey: (_window, id) => { assert.equal(registered.delete(id), true); },
   };
-  const shortcuts = createAudioShortcuts({ getWindow: () => window, bridge: () => bridge, onRelease: () => releases.push(true) });
+  const shortcuts = createAudioShortcuts({ getWindow: () => window, bridge: () => bridge, getReplayId: () => replayId, onRelease: () => releases.push(true) });
   const owner = shortcuts.begin();
-  return { shortcuts, owner, registered, sent, hooks, releases, setHeld: value => { held = value; }, rejectKey: key => { rejectedKey = key; },
+  return { shortcuts, owner, registered, sent, hooks, releases, setReplay: value => { replayId = value; }, setHeld: value => { held = value; }, rejectKey: key => { rejectedKey = key; },
     press: id => { const param = Buffer.alloc(8); param.writeUInt32LE(id); hooks.get(0x0312)?.(param); } };
 }
 
@@ -32,13 +33,27 @@ test('只接受固定组合和两个不同的音频动作', () => {
   for (const value of ['M', 'Shift+F', 'F12', 'Win+M', 'Alt+F4', 'Ctrl+Ctrl+M', 'Alt+Ctrl+M', null]) {
     assert.throws(() => parseBinding(value));
   }
-  assert.throws(() => validateBindings({ microphone: 'Ctrl+M', listening: 'Ctrl+M', pushToTalk: '' }));
+  assert.throws(() => validateBindings({ microphone: 'Ctrl+M', listening: 'Ctrl+M', pushToTalk: '', replay: '' }));
   assert.throws(() => validateBindings({ microphone: '', listening: '', other: '' }));
+});
+
+test('离房只保留回放键，尚未开启缓存时不发动作，不会启用麦克风', () => {
+  const f = fixture();
+  try {
+    f.shortcuts.configure(f.owner, { microphone: 'Ctrl+M', listening: '', pushToTalk: '', replay: 'Ctrl+F10' });
+    f.shortcuts.activate(f.owner, null);
+    assert.deepEqual([...f.registered.keys()], [0x4c04]);
+    f.press(0x4c04); assert.equal(f.sent.length, 0);
+    f.setReplay('buffer'); f.press(0x4c04);
+    assert.deepEqual(f.sent[0][1], { owner: f.owner, roomId: null, action: 'replay', replayId: 'buffer' });
+    f.shortcuts.capture(f.owner, true);
+    f.press(0x4c04); assert.equal(f.sent.length, 1);
+  } finally { f.shortcuts.end(f.owner); }
 });
 
 test('按键说话仅在启用时注册，真实松开后撤销授权，旧房间与旧按下不能续期', () => {
   const f = fixture();
-  const bindings = { microphone: '', listening: '', pushToTalk: 'F2' };
+  const bindings = { microphone: '', listening: '', pushToTalk: 'F2', replay: '' };
   f.shortcuts.configure(f.owner, bindings, false);
   f.shortcuts.activate(f.owner, 'room');
   assert.equal(f.registered.size, 0);
@@ -62,7 +77,7 @@ test('按键说话仅在启用时注册，真实松开后撤销授权，旧房�
 
 test('锁屏与休眠分别拦住按键，恢复后必须松开旧组合再按；结束回收等待计时器', async () => {
   const f = fixture();
-  f.shortcuts.configure(f.owner, { microphone: '', listening: '', pushToTalk: 'F2' }, true);
+  f.shortcuts.configure(f.owner, { microphone: '', listening: '', pushToTalk: 'F2', replay: '' }, true);
   f.shortcuts.activate(f.owner, 'room');
   f.setHeld(true); f.press(0x4c03);
   f.shortcuts.block('lock', true);
@@ -103,7 +118,7 @@ test('共享与按键说话按任意顺序结束，最后一个用途才恢复�
 
 test('只在当前通话注册，事件只包含动作和会话，离房释放', () => {
   const f = fixture();
-  f.shortcuts.configure(f.owner, { microphone: 'Ctrl+M', listening: 'Alt+F2', pushToTalk: '' });
+  f.shortcuts.configure(f.owner, { microphone: 'Ctrl+M', listening: 'Alt+F2', pushToTalk: '', replay: '' });
   assert.equal(f.registered.size, 0);
   f.shortcuts.activate(f.owner, 'room-one');
   assert.equal(f.registered.size, 2);
@@ -117,14 +132,14 @@ test('只在当前通话注册，事件只包含动作和会话，离房释放',
 
 test('录入暂停两项绑定，冲突恢复原绑定且不会假报配置成功', () => {
   const f = fixture();
-  f.shortcuts.configure(f.owner, { microphone: 'Ctrl+M', listening: 'Ctrl+L', pushToTalk: '' });
+  f.shortcuts.configure(f.owner, { microphone: 'Ctrl+M', listening: 'Ctrl+L', pushToTalk: '', replay: '' });
   f.shortcuts.activate(f.owner, 'room');
   f.shortcuts.capture(f.owner, true);
   assert.equal(f.registered.size, 0);
   f.press(0x4c01);
   assert.equal(f.sent.length, 0);
   f.rejectKey(75);
-  assert.throws(() => f.shortcuts.configure(f.owner, { microphone: 'Ctrl+K', listening: 'Ctrl+L', pushToTalk: '' }), /占用/);
+  assert.throws(() => f.shortcuts.configure(f.owner, { microphone: 'Ctrl+K', listening: 'Ctrl+L', pushToTalk: '', replay: '' }), /占用/);
   assert.equal(f.registered.get(0x4c01).key, 77);
   assert.equal(f.registered.get(0x4c02).key, 76);
 });
@@ -133,7 +148,7 @@ test('失效会话不能修改配置或清理新会话，结束后释放窗口�
   const f = fixture();
   const next = f.shortcuts.begin();
   assert.throws(() => f.shortcuts.activate(f.owner, 'old'), /失效/);
-  f.shortcuts.configure(next, { microphone: 'Ctrl+M', listening: '', pushToTalk: '' });
+  f.shortcuts.configure(next, { microphone: 'Ctrl+M', listening: '', pushToTalk: '', replay: '' });
   f.shortcuts.activate(next, 'new');
   f.shortcuts.end(f.owner);
   assert.equal(f.registered.size, 1);

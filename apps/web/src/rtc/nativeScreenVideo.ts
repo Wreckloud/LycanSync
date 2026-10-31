@@ -13,7 +13,7 @@ export interface NativeVideoDesktopBridge {
     resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean; gameFollowId?: string }>;
   endNativeGameFollow?(id: string): Promise<void>;
   stopNativeVideo(sessionId: string): Promise<{ changed: boolean }>;
-  configureNativeVideo(sessionId: string, maxFps: number, resolution?: { width: number; height: number }): Promise<{ changed: boolean }>;
+  configureNativeVideo(sessionId: string, maxFps: number, resolution?: { width: number; height: number }, deliveryOnly?: boolean): Promise<{ changed: boolean }>;
   onNativeVideoError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
   onNativeVideoSuspended(callback: (status: { sessionId: string; suspended: boolean }) => void): () => void;
 }
@@ -77,6 +77,7 @@ export class NativeScreenVideoSession {
   private readonly writer: WritableStreamDefaultWriter<VideoFrame>;
   private maxFps: number;
   private captureFrameRate: number;
+  private deliveryFrameRate: number;
   private resolution: { width: number; height: number };
   private configuring = false;
   private readonly isCurrentCapture?: () => boolean;
@@ -144,6 +145,7 @@ export class NativeScreenVideoSession {
       throw new Error('invalidNativeVideoFrameRate');
     }
     this.maxFps = options.maxFps;
+    this.deliveryFrameRate = options.maxFps;
     this.captureSettings = options.captureSettings ? { ...options.captureSettings } : undefined;
     this.captureFrameRate = options.maxFps;
     this.isCurrentCapture = options.isCurrentCapture;
@@ -177,6 +179,7 @@ export class NativeScreenVideoSession {
       completedWrites: this.completedWrites, writeFailures: this.writeFailures,
       placeholderFrames: this.placeholderFrames, pendingWrite: this.writing, firstFrameMs: this.firstFrameMs,
       requestedFrameRate: this.maxFps, captureFrameRate: this.captureFrameRate,
+      deliveryFrameRate: this.deliveryFrameRate,
       frameRateAdjustmentFailed: this.frameRateAdjustmentFailed };
   }
 
@@ -209,7 +212,7 @@ export class NativeScreenVideoSession {
       this.lastDemandSender = sender;
       const encodings = sender?.getParameters().encodings;
       // 仅信任 SDK 已应用的明确双层状态；未知、单层和重连不能推断成低清需求。
-      thumbnailOnly = !this.recordingRequired && this.canReduceFrameRate() && this.highQualityPreviews.size === 0
+      thumbnailOnly = this.canReduceFrameRate() && this.highQualityPreviews.size === 0
         && encodings?.length === 2 && encodings[0].rid === 'q' && encodings[0].active === true
         && encodings[1].rid === 'h' && encodings[1].active === false;
     } catch { /* sender 不可读视为未知，按用户目标恢复，不降低采集规格。 */ }
@@ -217,12 +220,19 @@ export class NativeScreenVideoSession {
     else this.thumbnailDemandSince ??= now;
     const frameRate = thumbnailOnly && now - this.thumbnailDemandSince! >= THUMBNAIL_DEMAND_DELAY_MS
       ? Math.min(this.maxFps, screenShareThumbnailPreset().encoding.maxFramerate!) : this.maxFps;
-    if (frameRate === this.captureFrameRate) return;
+    // 本地输出运行时保持 OBS 渲染配置，单独减少网页交付，不能因观看需求改变而清空回放。
+    const captureFrameRate = this.recordingRequired ? this.maxFps : frameRate;
+    const deliveryOnly = captureFrameRate === this.captureFrameRate;
+    if (deliveryOnly && frameRate === this.deliveryFrameRate) return;
     const sessionId = this.sessionId;
-    this.demandChange = this.desktop.configureNativeVideo(sessionId, frameRate, this.resolution).then((result) => {
+    const configuration = deliveryOnly
+      ? this.desktop.configureNativeVideo(sessionId, frameRate, this.resolution, true)
+      : this.desktop.configureNativeVideo(sessionId, captureFrameRate, this.resolution);
+    this.demandChange = configuration.then((result) => {
       if (this.stopped || this.sessionId !== sessionId) return;
       if (result.changed !== true) throw new Error('nativeVideoDemandConfigurationRejected');
-      this.captureFrameRate = frameRate;
+      this.captureFrameRate = captureFrameRate;
+      this.deliveryFrameRate = deliveryOnly ? frameRate : captureFrameRate;
     }).catch(() => {
       if (this.stopped || this.sessionId !== sessionId) return;
       // 可选节流失败不重试或伪报恢复，保留已确认帧率，由用户重新选择画质恢复。
@@ -351,6 +361,7 @@ export class NativeScreenVideoSession {
       if (this.stopped || this.track.sender !== sender) throw new Error('nativeVideoSessionStopped');
       this.maxFps = quality.fps;
       this.captureFrameRate = quality.fps;
+      if (nativeRequested) this.deliveryFrameRate = quality.fps;
       this.frameRateAdjustmentFailed = false;
       this.resolution = { width: quality.width, height: quality.height };
       this.generator.contentHint = 'motion';
@@ -369,6 +380,7 @@ export class NativeScreenVideoSession {
           ...(this.track.sender === sender ? [applyScreenShareEncoding(sender, previousLimits)] : []),
           ...(nativeRequested ? [this.desktop.configureNativeVideo(sessionId, previousFps, previousResolution).then((result) => {
             if (result.changed !== true) throw new Error('nativeVideoConfigurationRollbackRejected');
+            this.deliveryFrameRate = previousFps;
           })] : []),
         ]);
         if (rollback.some((result) => result.status === 'rejected')) {
@@ -610,6 +622,7 @@ export class NativeScreenVideoSession {
       if (started.changed !== true || !started.sessionId || started.gameFollowId !== id) throw new Error('nativeGameFollowUnavailable');
       this.sourceId = next.sourceId;
       this.captureFrameRate = this.maxFps;
+      this.deliveryFrameRate = this.maxFps;
       this.setSuspended(false);
       const pending = this.pendingFrame;
       this.pendingFrame = undefined;

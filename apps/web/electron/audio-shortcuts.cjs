@@ -1,6 +1,6 @@
 const { randomUUID } = require('node:crypto');
 
-const ACTIONS = ['microphone', 'listening', 'pushToTalk'];
+const ACTIONS = ['microphone', 'listening', 'pushToTalk', 'replay'];
 const WM_HOTKEY = 0x0312;
 
 function parseBinding(value) {
@@ -20,18 +20,18 @@ function parseBinding(value) {
 }
 
 function validateBindings(value) {
-  if (!value || Object.keys(value).length !== 3 || ACTIONS.some(action => typeof value[action] !== 'string')) throw new Error('快捷键设置无效');
+  if (!value || Object.keys(value).length !== 4 || ACTIONS.some(action => typeof value[action] !== 'string')) throw new Error('快捷键设置无效');
   ACTIONS.forEach(action => parseBinding(value[action]));
   const used = ACTIONS.map(action => value[action]).filter(Boolean);
   if (new Set(used).size !== used.length) throw new Error('动作不能使用同一快捷键');
-  return { microphone: value.microphone, listening: value.listening, pushToTalk: value.pushToTalk };
+  return { microphone: value.microphone, listening: value.listening, pushToTalk: value.pushToTalk, replay: value.replay };
 }
 
-function createAudioShortcuts({ getWindow, bridge, onRelease = () => {}, onActivityChanged = () => {} }) {
+function createAudioShortcuts({ getWindow, bridge, getReplayId = () => null, onRelease = () => {}, onActivityChanged = () => {} }) {
   let owner;
   let roomId = null;
   let suspended = false;
-  let bindings = { microphone: '', listening: '', pushToTalk: '' };
+  let bindings = { microphone: '', listening: '', pushToTalk: '', replay: '' };
   let pushToTalk = false;
   let held = false;
   let holdSequence = 0;
@@ -76,6 +76,7 @@ function createAudioShortcuts({ getWindow, bridge, onRelease = () => {}, onActiv
     try {
       ACTIONS.forEach((action, index) => {
         if (action === 'pushToTalk' && !pushToTalk) return;
+        if (retain && action !== 'replay' && !roomId) return;
         const binding = parseBinding(next[action]);
         if (!binding) return;
         const id = 0x4c01 + index;
@@ -99,7 +100,12 @@ function createAudioShortcuts({ getWindow, bridge, onRelease = () => {}, onActiv
     hookedWindow.hookWindowMessage(WM_HOTKEY, wParam => {
       const id = wParam.readUInt32LE(0);
       const action = ACTIONS[id - 0x4c01];
-      if (owner && roomId && !suspended && !blockers.size && registered.has(id) && action) {
+      if (owner && (roomId || action === 'replay') && !suspended && !blockers.size && registered.has(id) && action) {
+        if (action === 'replay') {
+          const replayId = getReplayId();
+          if (replayId) hookedWindow.webContents.send('audio-shortcuts:action', { owner, roomId, action, replayId });
+          return;
+        }
         if (action === 'pushToTalk') {
           try { if (needsRelease || !pressed()) return; }
           catch { releaseHold(); notifyError(new Error('按键状态无法读取，请重新启用快捷键')); return; }
@@ -119,10 +125,10 @@ function createAudioShortcuts({ getWindow, bridge, onRelease = () => {}, onActiv
     unregister();
     suspended = false;
     pushToTalk = nextPushToTalk;
-    try { register(next, Boolean(roomId)); }
+    try { register(next, false); register(next, true); }
     catch (error) {
       pushToTalk = previousMode;
-      try { register(previous, Boolean(roomId)); waitForRelease(); } catch (restoreError) { notifyError(restoreError); }
+      try { register(previous, true); waitForRelease(); } catch (restoreError) { notifyError(restoreError); }
       throw error;
     }
     bindings = next;
@@ -133,7 +139,7 @@ function createAudioShortcuts({ getWindow, bridge, onRelease = () => {}, onActiv
     if (nextRoom !== null && (typeof nextRoom !== 'string' || nextRoom.length > 200 || !nextRoom)) throw new Error('快捷键房间无效');
     unregister();
     roomId = nextRoom;
-    if (roomId && !suspended) register(bindings, true);
+    if (!suspended) register(bindings, true);
     waitForRelease();
   }
   function capture(token, enabled) {
@@ -141,7 +147,7 @@ function createAudioShortcuts({ getWindow, bridge, onRelease = () => {}, onActiv
     if (typeof enabled !== 'boolean') throw new Error('快捷键录入状态无效');
     unregister();
     suspended = enabled;
-    if (!suspended && roomId) register(bindings, true);
+    if (!suspended) register(bindings, true);
     waitForRelease();
   }
   function end(token) {
@@ -154,7 +160,7 @@ function createAudioShortcuts({ getWindow, bridge, onRelease = () => {}, onActiv
       hookedWindow?.unhookWindowMessage(WM_HOTKEY);
       hookedWindow = undefined;
       owner = undefined;
-      bindings = { microphone: '', listening: '', pushToTalk: '' };
+      bindings = { microphone: '', listening: '', pushToTalk: '', replay: '' };
       pushToTalk = false;
     }
   }

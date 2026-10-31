@@ -86,12 +86,18 @@ it('资源阶段只导出状态与所选声音，不把录制路径或身份带�
   expect(exported.activity).toMatchObject({ localCapture: 'running', publishedVideo: true, subscribedVideo: false,
     localRecording: 'recording' });
   expect(exported.native?.recording).toEqual({ phase: 'recording', holdingResources: true,
-    applicationAudio: true, microphone: false, friends: true });
+    applicationAudio: true, microphone: false, friends: true, replay: null });
   expect(JSON.stringify(exported)).not.toMatch(/private-recording/);
   Object.assign(input.native.recording!, { phase: 'private-recording-path' });
   const invalid = diagnosticReportSample(input, new Map());
   expect(invalid.activity.localRecording).toBeNull();
   expect(invalid.native?.recording?.phase).toBeNull();
+  input.native.recording!.replay = { phase: 'buffering', holdingResources: true, saving: true };
+  Object.assign(input.native.recording!.replay, { id: 'private-replay-id', path: 'private-replay-path' });
+  const replay = diagnosticReportSample(input, new Map());
+  expect(replay.activity.localReplay).toBe('buffering');
+  expect(replay.native?.recording?.replay).toEqual({ phase: 'buffering', holdingResources: true, saving: true });
+  expect(JSON.stringify(replay)).not.toMatch(/private-replay/);
 });
 
 it('复用现有采样低频保存脱敏报告，正常关闭补存，体验说明不自动落盘', async () => {
@@ -449,7 +455,7 @@ it('导出按记录时参数保存，匿名化身份/轨道ID，不使用导出�
   expect(text).not.toContain('private-user-id'); expect(text).not.toContain('private-track-id');
   expect(text).not.toContain('私人昵称');
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(9);
+  expect(result.schemaVersion).toBe(10);
   expect(result.measurements.process).toEqual({ scope: 'electron-and-owned-native-processes', memoryUnit: 'MiB',
     memoryMb: 'electron-only-sum-working-set', nativeMemory: 'GetProcessMemoryInfo; private-commit-not-resident',
     sharedPagesMayBeCountedMoreThanOnce: true, includesGpuMemory: false, includesNativeCpu: false });
@@ -565,7 +571,7 @@ it.each(['capture', 'unsubscribed', 'disabled', 'muted'])(
     normal.streams[0].nativeInput = { sessionId: 'private-native-session', receivedFrames: 200, submittedFrames: 150,
       backpressureDroppedFrames: 50, suspendedDroppedFrames: 0, completedWrites: 150, writeFailures: 0,
       placeholderFrames: 0, pendingWrite: false, firstFrameMs: 20,
-      requestedFrameRate: 120, captureFrameRate: 30, frameRateAdjustmentFailed: false };
+      requestedFrameRate: 120, captureFrameRate: 30, deliveryFrameRate: 30, frameRateAdjustmentFailed: false };
     if (pause !== 'capture') normal.streams[0].direction = '接收';
     normal.streams[0].playbackFps = 60;
     normal.streams[0].playbackIntervalMs = 2000;
@@ -646,14 +652,14 @@ it('新增诊断只导出版本、后端和计数，不导出会话、帧对象�
     sessionId: 'private-native-session', available: true, sourceKind: 'window' } as NativeCaptureDiagnostics;
   input.streams[0].nativeInput = { sessionId: 'private-session', receivedFrames: 10, submittedFrames: 7, completedWrites: 6,
     backpressureDroppedFrames: 2, suspendedDroppedFrames: 1, writeFailures: 0, placeholderFrames: 3,
-    pendingWrite: true, firstFrameMs: 20, requestedFrameRate: 120, captureFrameRate: 30, frameRateAdjustmentFailed: true };
+    pendingWrite: true, firstFrameMs: 20, requestedFrameRate: 120, captureFrameRate: 30, deliveryFrameRate: 30, frameRateAdjustmentFailed: true };
   Object.assign(input.streams[0].nativeInput!, { frame: { secret: 'private-frame' }, sessionId: 'private-session' });
   Object.assign(input.streams[0].subscription, { identity: 'private-identity' });
   const exported = diagnosticReportSample(input, new Map());
   expect(exported.native).toMatchObject({ helperVersion: '32.2.2', captureBackend: 'obsLibobs' });
   expect(exported.streams[0].nativeInput).toEqual({ receivedFrames: 10, submittedFrames: 7, completedWrites: 6,
     backpressureDroppedFrames: 2, suspendedDroppedFrames: 1, writeFailures: 0, placeholderFrames: 3,
-    pendingWrite: true, firstFrameMs: 20, requestedFrameRate: 120, captureFrameRate: 30, frameRateAdjustmentFailed: true });
+    pendingWrite: true, firstFrameMs: 20, requestedFrameRate: 120, captureFrameRate: 30, deliveryFrameRate: 30, frameRateAdjustmentFailed: true });
   expect(exported.streams[0].layers[0].active).toBe(true);
   expect(JSON.stringify(exported)).not.toMatch(/private|secret|sessionId/);
 });
@@ -662,12 +668,12 @@ it('自动恢复失败保留最后确认帧率并在摘要提示，不把用户�
   const next = snapshot();
   next.streams[0].nativeInput = { sessionId: 'session', receivedFrames: 10, submittedFrames: 7, completedWrites: 6,
     backpressureDroppedFrames: 2, suspendedDroppedFrames: 1, writeFailures: 0, placeholderFrames: 0,
-    pendingWrite: false, firstFrameMs: 20, requestedFrameRate: 120, captureFrameRate: 30, frameRateAdjustmentFailed: true };
+    pendingWrite: false, firstFrameMs: 20, requestedFrameRate: 120, captureFrameRate: 30, deliveryFrameRate: 30, frameRateAdjustmentFailed: true };
   collect.mockResolvedValue(next);
   const { report, exportDiagnosticReport } = setup();
   report.start(); await vi.advanceTimersByTimeAsync(2000); report.stop(); await report.save('');
   const result = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
-  expect(result.schemaVersion).toBe(9);
+  expect(result.schemaVersion).toBe(10);
   expect(result.samples[1].streams[0].nativeInput).toMatchObject({ requestedFrameRate: 120, captureFrameRate: 30, frameRateAdjustmentFailed: true });
   expect(result.summary.segments[0].warnings).toContain('采集帧率自动调整失败，保留最后确认的运行目标；不代表已恢复用户帧率。');
 });
@@ -686,7 +692,7 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，纹理桥丢帧只取
   first.streams[0].nativeInput = { sessionId: 'private-obs-session', receivedFrames: 180, submittedFrames: 160,
     backpressureDroppedFrames: 20, suspendedDroppedFrames: 0, completedWrites: 160, writeFailures: 0,
     placeholderFrames: 0, pendingWrite: false, firstFrameMs: 30,
-    requestedFrameRate: 120, captureFrameRate: 30, frameRateAdjustmentFailed: false };
+    requestedFrameRate: 120, captureFrameRate: 30, deliveryFrameRate: 30, frameRateAdjustmentFailed: false };
   const next = structuredClone(first);
   Object.assign(next.native!, { framesReceived: 320, framesProcessed: 270, obsBridgeDroppedFrames: 50 });
   Object.assign(next.native!.obsRender!, { elapsedMs: 4000, totalFrames: 240, laggedFrames: 4, averageRenderMs: 2 });
@@ -703,7 +709,7 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，纹理桥丢帧只取
   report.stop(); await report.save('');
   const text = exportDiagnosticReport.mock.calls[0][0];
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(9);
+  expect(result.schemaVersion).toBe(10);
   expect(result.summary.segments).toHaveLength(1);
   expect(result.samples[0].native).toMatchObject({ helperVersion: '32.2.2', captureBackend: 'obsLibobs' });
   expect(result.samples[0].native.microphoneCapture).toEqual({ sourceState: 1, sourceFrames: 48000, framesReceived: 47040, pushToTalk: true, transmissionAllowed: false });

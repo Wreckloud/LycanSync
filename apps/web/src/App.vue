@@ -1222,6 +1222,7 @@ watch(() => connected.value ? rtc.room : null, room => {
 const audioShortcuts = reactive(useAudioShortcuts(props.user.id, {
   roomId: () => audioShortcutRoomId.value,
   microphone: toggleMicrophone, listening: toggleListening,
+  replay: recording.saveReplay, replayId: () => recording.state.value.replay?.id ?? null,
   modeChanged: rtc.setMicrophoneVoiceMode,
   transmissionChanged: rtc.setPushToTalkHeld,
 }));
@@ -1309,6 +1310,7 @@ function participantListening(participant: Participant) {
     </header>
     <AppNotice v-if="rtc.notice || viewerNotice" :message="rtc.notice || viewerNotice" />
     <AppNotice v-else-if="recording.notice.value && (!settingsOpen || settingsSection !== 'recording')" :message="recording.notice.value" dismissible @dismiss="recording.notice.value = ''" />
+    <AppNotice v-else-if="recording.replaySaved.value" :message="recording.replaySavedMessage.value" kind="success" dismissible @dismiss="recording.replaySaved.value = false" />
     <AppNotice v-else-if="startupUpdateWarning" :message="startupUpdateWarning" dismissible @dismiss="emit('dismissUpdateWarning')" />
     <DialogTransition>
     <RemoteControlRequest v-if="rtc.remoteControlRequest" :key="rtc.remoteControlRequest.requestId"

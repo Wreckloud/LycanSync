@@ -1,13 +1,14 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const { mkdtemp, rm, readFile, writeFile } = require('node:fs/promises');
-const { tmpdir } = require('node:os');
-const { join } = require('node:path');
+const { mkdir, mkdtemp, rm, readFile, writeFile } = require('node:fs/promises');
+const { join, resolve } = require('node:path');
 const { createRecording } = require('./recording.cjs');
 
 function deferred() { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 async function fixture(context, overrides = {}) {
-  const root = await mkdtemp(join(tmpdir(), 'lycan-recording-'));
+  const cache = resolve(__dirname, '../../../release/test-cache/recordings');
+  await mkdir(cache, { recursive: true });
+  const root = await mkdtemp(join(cache, 'recording-'));
   context.after(() => rm(root, { recursive: true, force: true, maxRetries: 3 }));
   let video = { sessionId: 'video-1' };
   let id = 0;
@@ -15,6 +16,9 @@ async function fixture(context, overrides = {}) {
   const host = {
     startRecording: async (...args) => { calls.push(['start', ...args]); await writeFile(args[2], 'controlled-recorded-content'); },
     stopRecording: async (...args) => { calls.push(['stop', ...args]); return { outputFrames: 12 }; },
+    startReplay: async (...args) => { calls.push(['replayStart', ...args]); return { width: 1920, height: 1080, frameRate: 60 }; },
+    stopReplay: async (...args) => { calls.push(['replayStop', ...args]); },
+    saveReplay: async (...args) => { calls.push(['replaySave', ...args]); await writeFile(args[3], 'controlled-replay-content'); },
     ...overrides.host,
   };
   const recording = createRecording({ dataDirectory: root, host, getVideo: () => video,
@@ -44,9 +48,147 @@ test('默认只录应用声音，主进程生成独占文件，停止保存不�
   assert.doesNotMatch(JSON.stringify(f.diagnostics), /recordings[\\/]|\.mkv/);
 });
 
+test('回放与录像共用同一音频和编码身份，停止一路不回收另一路所需资源', async context => {
+  const f = await fixture(context);
+  await f.recording.configure({ microphone: true });
+  const replay = await f.recording.startReplay();
+  assert.equal(replay.replay.phase, 'buffering');
+  assert.equal(replay.mediaVoices, true);
+  await f.recording.start();
+  assert.equal(f.calls.filter(call => call[0] === 'audio').length, 1);
+  assert.equal(f.calls.filter(call => call[0] === 'voice').length, 1);
+  const replayStart = f.calls.find(call => call[0] === 'replayStart');
+  const fileStart = f.calls.find(call => call[0] === 'start');
+  assert.equal(replayStart[6], fileStart[6]);
+  assert.equal(replayStart[7].videoFps, 60); assert.equal(fileStart[7].videoHeight, 1080);
+  await f.recording.stop();
+  assert.equal(f.calls.filter(call => call[0] === 'releaseAudio').length, 0);
+  assert.equal(f.recording.snapshot().replay.holdingResources, true);
+  await f.recording.stopReplay();
+  assert.equal(f.calls.filter(call => call[0] === 'releaseAudio').length, 1);
+  assert.equal(f.calls.filter(call => call[0] === 'releaseVoice').length, 1);
+  assert.equal(f.recording.snapshot().mediaId, null);
+});
+
+test('回放保存后登记真实文件，不把配置时长当成片段实测时长，不泄露路径', async context => {
+  const f = await fixture(context);
+  await f.recording.startReplay();
+  await assert.rejects(f.recording.configure({ videoFps: 120 }), /recordingBusy/);
+  const result = await f.recording.saveReplay();
+  assert.equal(result.replay.saving, false);
+  assert.equal(result.replay.lastSavedDuringWarmup, true);
+  assert.equal(result.replay.warming, true);
+  const entry = (await f.recording.library.list()).items[0];
+  assert.equal(entry.id, result.replay.lastSavedId);
+  assert.equal(entry.state, 'saved'); assert.equal(entry.durationMs, null);
+  assert.equal(await readFile(await f.recording.library.filePath(entry.id), 'utf8'), 'controlled-replay-content');
+  assert.doesNotMatch(JSON.stringify(f.diagnostics), /\.mkv|recordings[\\/]|12345678/);
+  await f.recording.stopReplay();
+  assert.equal(f.recording.snapshot().replay.warming, false);
+});
+
+test('连续保存只允许一个快照，停止等待已提交的保存完成，不丢已确认文件', async context => {
+  const writing = deferred();
+  const f = await fixture(context, { host: { saveReplay: async (...args) => {
+    await writing.promise; await writeFile(args[3], 'saved');
+  } } });
+  await f.recording.startReplay();
+  const saving = f.recording.saveReplay();
+  await assert.rejects(f.recording.saveReplay(), /recordingBusy/);
+  const stopping = f.recording.stopReplay();
+  assert.equal(f.recording.snapshot().replay.phase, 'stopping');
+  writing.resolve(); await saving; await stopping;
+  assert.equal((await f.recording.library.list()).items[0].state, 'saved');
+  assert.equal(f.recording.snapshot().replay.holdingResources, false);
+});
+
+test('保存超时阻挡下一次快照，正常停止确认后保留部分文件，不误报成功', async context => {
+  const f = await fixture(context, { host: { saveReplay: async (...args) => {
+    await writeFile(args[3], 'partial'); throw new Error('replaySaveUnconfirmed');
+  } } });
+  await f.recording.startReplay();
+  await assert.rejects(f.recording.saveReplay(), /replaySaveUnconfirmed/);
+  assert.equal(f.recording.snapshot().replay.lastSavedId, null);
+  await assert.rejects(f.recording.saveReplay(), /recordingBusy/);
+  assert.equal((await f.recording.library.list()).items.length, 0);
+  await f.recording.stopReplay();
+  const entry = (await f.recording.library.list()).items[0];
+  assert.equal(entry.state, 'interrupted'); assert.equal(entry.bytes, 7);
+});
+
+test('关闭回放不停止普通录像，重设规格先结束两个输出再续录', async context => {
+  const f = await fixture(context); await f.recording.start(); await f.recording.startReplay();
+  await f.recording.stopReplay();
+  assert.equal(f.recording.snapshot().phase, 'recording');
+  assert.equal(f.calls.filter(call => call[0] === 'releaseAudio').length, 0);
+  await f.recording.startReplay();
+  await f.recording.withVideoChange(async () => { f.calls.push(['configure']); });
+  const calls = f.calls.filter(call => ['replayStop', 'stop', 'configure', 'replayStart', 'start'].includes(call[0])).map(call => call[0]);
+  assert.deepEqual(calls.slice(-5), ['replayStop', 'stop', 'configure', 'replayStart', 'start']);
+  assert.equal(f.recording.snapshot().replay.phase, 'buffering');
+  await f.recording.stopAll();
+  assert.equal(f.recording.media, undefined);
+});
+
+test('回放停止未确认仍持有资源，不能修改配置；迟到的确认解除阻挡', async context => {
+  const f = await fixture(context, { host: { stopReplay: async () => { throw new Error('recordingStopUnconfirmed'); } } });
+  await f.recording.startReplay(); const id = f.recording.replay.id;
+  await assert.rejects(f.recording.stopReplay(), /recordingStopUnconfirmed/);
+  await assert.rejects(f.recording.configure({ videoHeight: 720 }), /recordingBusy/);
+  assert.ok(f.recording.media);
+  f.recording.replayHostEvent({}, { event: 'replayStopped', replayId: id });
+  while (f.recording.replay) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.recording.media, undefined);
+});
+
+test('回放宿主意外退出保留故障证据，释放音频且允许重新开启', async context => {
+  const f = await fixture(context); await f.recording.startReplay();
+  f.recording.replayHostEvent({}, { event: 'replayFailed', replayId: f.recording.replay.id, code: 'recordingHostExited' });
+  while (f.recording.replay) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.recording.snapshot().replay.phase, 'failed');
+  assert.equal(f.recording.snapshot().replay.error, 'recordingHostExited');
+  assert.equal(f.recording.media, undefined);
+  assert.ok(f.diagnostics.some(entry => entry.stage === 'replayStopped' && entry.code === 'recordingHostExited'));
+  await f.recording.startReplay(); await f.recording.stopReplay();
+  assert.equal(f.recording.snapshot().replay.error, null);
+});
+
+test('回放准备声音时取消，不继续打开麦克风或启动编码输出', async context => {
+  const preparing = deferred(), entered = deferred();
+  const f = await fixture(context, { ensureAudio: () => { entered.resolve(); return preparing.promise; } });
+  await f.recording.configure({ microphone: true });
+  const starting = assert.rejects(f.recording.startReplay(), /recordingCancelled/);
+  await entered.promise;
+  const stopping = f.recording.stopReplay();
+  assert.equal(f.recording.snapshot().mediaVoices, false);
+  preparing.resolve(); await starting; await stopping;
+  assert.equal(f.calls.some(call => call[0] === 'voice' || call[0] === 'replayStart'), false);
+  assert.equal(f.recording.media, undefined);
+  assert.equal(f.recording.snapshot().replay.error, null);
+});
+
+test('取消迟到的回放启动但停止未确认，仍明确保留失败与资源阻挡', async context => {
+  const entered = deferred(), preparing = deferred();
+  const f = await fixture(context, { host: {
+    startReplay: async () => { entered.resolve(); return preparing.promise; },
+    stopReplay: async () => { throw new Error('recordingStopUnconfirmed'); },
+  } });
+  const starting = assert.rejects(f.recording.startReplay(), /recordingStopUnconfirmed/);
+  await entered.promise;
+  await assert.rejects(f.recording.stopReplay(), /recordingStopUnconfirmed/);
+  preparing.resolve({ width: 1920, height: 1080 }); await starting;
+  assert.equal(f.recording.snapshot().replay.phase, 'failed');
+  assert.equal(f.recording.snapshot().replay.holdingResources, true);
+  assert.equal(f.recording.snapshot().replay.error, 'recordingStopUnconfirmed');
+  await assert.rejects(f.recording.configure({ videoFps: 30 }), /recordingBusy/);
+  f.recording.replayHostEvent({}, { event: 'replayStopped', replayId: f.recording.replay.id });
+  while (f.recording.replay) await new Promise(resolve => setImmediate(resolve));
+});
+
 test('没有共享时明确失败，不打开音频或建立录像文件', async context => {
   const f = await fixture(context); f.setVideo(undefined);
   await assert.rejects(f.recording.start(), /recordingShareUnavailable/);
+  await assert.rejects(f.recording.startReplay(), /recordingShareUnavailable/);
   assert.equal(f.calls.length, 0);
 });
 
@@ -182,7 +324,7 @@ test('应用声音准备失败不冒充磁盘错误，录制中的应用声音�
   assert.equal(f.calls.some(call => call[0] === 'start'), false);
   assert.doesNotMatch(JSON.stringify(f.diagnostics), /private-device/);
   const running = await fixture(context); await running.recording.start();
-  await running.recording.fail(running.recording.snapshot().recordingId, 'recordingApplicationAudioUnavailable');
+  await running.recording.failMedia(running.recording.media.id, 'recordingApplicationAudioUnavailable');
   assert.equal(running.recording.snapshot().phase, 'failed');
   assert.equal(running.recording.active, undefined);
   assert.equal(running.calls.filter(call => call[0] === 'releaseAudio').length, 1);

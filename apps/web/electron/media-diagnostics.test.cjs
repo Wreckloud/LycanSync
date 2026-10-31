@@ -24,6 +24,13 @@ test('录制摘要保留真实输出数和固定故障，排除文件名及原�
   const [failure] = await readDiagnosticEvents(path, 0, Date.parse(time));
   assert.equal(failure.code, 'recordingLibraryUnavailable');
   assert.doesNotMatch(JSON.stringify(failure), /private-/);
+  await writeFile(path, JSON.stringify({ time, stage: 'replayStarted', encoder: 'nvenc', configuredRateControl: 'CQP',
+    configuredLookahead: false, configuredFrameRate: 60, seconds: 60, memoryBudgetMb: 512, replayId: 'private-id', path: 'private-path' }));
+  const [replay] = await readDiagnosticEvents(path, 0, Date.parse(time));
+  assert.equal(replay.encoder, 'nvenc'); assert.equal(replay.configuredLookahead, false);
+  assert.equal(replay.configuredRateControl, 'CQP'); assert.equal(replay.configuredFrameRate, 60);
+  assert.equal(replay.memoryBudgetMb, 512);
+  assert.doesNotMatch(JSON.stringify(replay), /private-/);
 });
 
 test('OBS 麦克风导出处理实现和固定故障，不泄露设备或异常正文', async context => {

@@ -21,6 +21,17 @@ function report(version) {
     events: [{ stage: 'screenVideoPublished' }] });
 }
 
+test('新回放报告使用 schema 10，已有 schema 9 报告仍能保留并导出', async context => {
+  const f = await fixture(context);
+  await writeFile(join(f.directory, 'current.json'), report('previous'));
+  const current = report('current').replace('"schemaVersion":9', '"schemaVersion":10');
+  await f.store.save(current);
+  const previous = await f.store.previous();
+  assert.equal(previous.schemaVersion, 9);
+  assert.equal(previous.runtime.clientVersion, 'previous');
+  assert.equal(parseDiagnosticReport(current).schemaVersion, 10);
+});
+
 function screenReport(version, lastActiveAt, ended = false) {
   const sample = { time: lastActiveAt, streams: [{ member: 'member-1', direction: '发送', sourceFps: 60 }] };
   return JSON.stringify({ ...JSON.parse(report(version)), endedAt: '2026-10-26T00:10:00Z',

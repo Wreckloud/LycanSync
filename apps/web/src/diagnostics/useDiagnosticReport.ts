@@ -205,6 +205,8 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
   const native = snapshot.native;
   const recordingPhase = native?.recording && ['idle', 'starting', 'recording', 'stopping', 'saved', 'failed'].includes(native.recording.phase)
     ? native.recording.phase : null;
+  const replayPhase = native?.recording?.replay && ['idle', 'starting', 'buffering', 'stopping', 'failed'].includes(native.recording.replay.phase)
+    ? native.recording.replay.phase : null;
   return {
     time: snapshot.time, pageVisible: snapshot.pageVisible, participantCount: snapshot.participantCount,
     remoteParticipantCount: numeric(snapshot.remoteParticipantCount), roomState: label(snapshot.roomState),
@@ -214,7 +216,7 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
       subscribedVideo: snapshot.streams.some(stream => stream.direction === '接收' && stream.subscription.subscribed === true
         && stream.subscription.enabled !== false && stream.subscription.muted !== true),
       microphoneTrack: snapshot.audio.some(track => track.source === 'microphone' && track.direction === '发送'),
-      localRecording: recordingPhase },
+      localRecording: recordingPhase, localReplay: replayPhase },
     nativeVideoSessionMatched: Boolean(snapshot.native?.sessionId && snapshot.streams.some((stream) =>
       stream.direction === '发送' && stream.nativeInput?.sessionId === snapshot.native?.sessionId)),
     nativeInterval: snapshot.nativeInterval && {
@@ -256,6 +258,7 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
         firstFrameMs: numeric(stream.nativeInput.firstFrameMs),
         requestedFrameRate: numeric(stream.nativeInput.requestedFrameRate),
         captureFrameRate: numeric(stream.nativeInput.captureFrameRate),
+        deliveryFrameRate: numeric(stream.nativeInput.deliveryFrameRate),
         frameRateAdjustmentFailed: stream.nativeInput.frameRateAdjustmentFailed === true,
       },
       nativeInputInterval: stream.nativeInputInterval && {
@@ -297,6 +300,9 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
         applicationAudio: typeof native.recording.applicationAudio === 'boolean' ? native.recording.applicationAudio : null,
         microphone: typeof native.recording.microphone === 'boolean' ? native.recording.microphone : null,
         friends: typeof native.recording.friends === 'boolean' ? native.recording.friends : null,
+        replay: native.recording.replay ? { phase: replayPhase,
+          holdingResources: typeof native.recording.replay.holdingResources === 'boolean' ? native.recording.replay.holdingResources : null,
+          saving: typeof native.recording.replay.saving === 'boolean' ? native.recording.replay.saving : null } : null,
       } : null,
       captureSuspended: native.captureSuspended,
       microphoneCaptureDroppedChunks: numeric(native.microphoneCaptureDroppedChunks),
@@ -545,7 +551,7 @@ export function useDiagnosticReport(options: {
         exportedSamples[index] = { ...exportedSamples[index], elapsedMs: exportedSamples[index].elapsedMs - first.elapsedMs };
       }
     }
-    const report = { kind: 'lycansync-diagnostics', schemaVersion: 9,
+    const report = { kind: 'lycansync-diagnostics', schemaVersion: 10,
       startedAt: discardedSamples.value && exportedSamples.length ? exportedSamples[0].time : startedAt ?? new Date().toISOString(),
       endedAt: endedAt ?? new Date().toISOString(),
       stopReason: recording.value && automaticRecording ? 'automaticSnapshot' : reason.value || 'automaticEvents',

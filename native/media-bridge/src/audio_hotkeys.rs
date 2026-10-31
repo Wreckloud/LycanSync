@@ -8,7 +8,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
 fn owned_window(handle: &Buffer, id: u32) -> Result<HWND> {
-    if handle.len() != 8 || !matches!(id, 0x4c01..=0x4c03) {
+    if handle.len() != 8 || !matches!(id, 0x4c01..=0x4c04) {
         return Err(Error::new(Status::InvalidArg, "audioShortcutInvalid"));
     }
     let address = u64::from_le_bytes(handle.as_ref().try_into().unwrap()) as usize;

@@ -90,6 +90,12 @@ it('录制开始前恢复目标帧率，持续录制不降到缩略图帧率，�
     expect(f.session.readDiagnostics().captureFrameRate).toBe(120);
     for (let index = 0; index < 10; index++) await f.frame();
     expect(f.session.readDiagnostics().captureFrameRate).toBe(120);
+    expect(f.session.readDiagnostics().deliveryFrameRate).toBe(30);
+    expect(f.desktop.configureNativeVideo).toHaveBeenLastCalledWith('demand-session', 30, { width: 1920, height: 1080 }, true);
+    f.high(); await f.frame();
+    expect(f.session.readDiagnostics().deliveryFrameRate).toBe(120);
+    expect(f.desktop.configureNativeVideo).toHaveBeenLastCalledWith('demand-session', 120, { width: 1920, height: 1080 }, true);
+    f.low();
     await setNativeScreenRecordingDemand(f.generator as unknown as MediaStreamTrack, false);
     for (let index = 0; index < 7; index++) await f.frame();
     expect(f.session.readDiagnostics().captureFrameRate).toBe(30);

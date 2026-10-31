@@ -118,14 +118,52 @@ test('录像输出只接受当前会话，文件路径用有界协议传递，�
   const starting = f.manager.startRecording(sessionId, id, 'C:\\recordings\\test.mkv', false, true);
   f.emit({ event: 'recordingStarted', recordingId: 'old' });
   assert.ok(f.manager.state.recording);
-  f.emit({ event: 'recordingStarted', recordingId: id, width: 1220, height: 786 });
-  assert.deepEqual(await starting, { changed: true, width: 1220, height: 786 });
-  assert.ok(f.commands.some(command => command.startsWith(`recordStart|${id}|`) && command.endsWith('|01')));
+  f.emit({ event: 'recordingStarted', recordingId: id, width: 1220, height: 786, configuredFrameRate: 60,
+    encoder: 'nvenc', configuredRateControl: 'CQP', configuredLookahead: false });
+  assert.deepEqual(await starting, { changed: true, width: 1220, height: 786, frameRate: 60,
+    encoder: 'nvenc', configuredRateControl: 'CQP', configuredLookahead: false });
+  assert.ok(f.commands.some(command => command.startsWith(`recordStart|${id}|`) && command.endsWith(`|01|${id}|1080|60`)));
   assert.equal(f.commands.some(command => command.includes('C:\\recordings')), false);
   const stopping = f.manager.stopRecording(sessionId, id);
   f.emit({ event: 'recordingStopped', recordingId: id, outputFrames: 120, code: 'recordingDiskFull' });
   assert.equal((await stopping).outputFrames, 120);
   assert.equal(f.manager.state.recording, undefined);
+});
+
+test('回放保存绑定当前来源和快照身份，旧回复不能结束新任务，停止录像保留回放', async context => {
+  const f = fixture(context); await f.ready();
+  const id = '12345678-1234-1234-1234-123456789001';
+  const file = '12345678-1234-1234-1234-123456789002';
+  const profile = { videoHeight: 1080, videoFps: 60 };
+  const starting = f.manager.startReplay(sessionId, id, 60, true, false, id, profile);
+  f.emit({ event: 'replayStarted', replayId: id, width: 1920, height: 1080, configuredFrameRate: 60, memoryBudgetMb: 512 });
+  const started = await starting;
+  assert.equal(started.frameRate, 60); assert.equal(started.memoryBudgetMb, 512);
+  const recording = f.manager.startRecording(sessionId, file, 'C:\\recordings\\file.mkv', true, false, id, profile);
+  f.emit({ event: 'recordingStarted', recordingId: file }); await recording;
+  const stopped = f.manager.stopRecording(sessionId, file);
+  f.emit({ event: 'recordingStopped', recordingId: file, outputFrames: 10 }); await stopped;
+  assert.equal(f.manager.state.replay.id, id);
+  const saving = f.manager.saveReplay(sessionId, id, file, 'C:\\recordings\\replay.mkv');
+  await assert.rejects(f.manager.saveReplay(sessionId, id, file, 'C:\\recordings\\another.mkv'), /recordingBusy/);
+  f.emit({ event: 'replaySaved', replayId: id, saveId: 'old' });
+  assert.equal(f.manager.state.replay.save.id, file);
+  f.emit({ event: 'replaySaved', replayId: id, saveId: file }); await saving;
+  assert.equal(f.manager.state.replay.save, undefined);
+  assert.ok(f.commands.some(command => command.startsWith(`replaySave|${file}|`) && !command.includes('recordings')));
+  const closing = f.manager.stopReplay(sessionId, id);
+  f.emit({ event: 'replayStopped', replayId: id }); await closing;
+  assert.equal(f.manager.state.replay, undefined);
+});
+
+test('宿主退出拒绝进行中的回放保存并解除输出资源，不假报保存成功', async context => {
+  const f = fixture(context); await f.ready();
+  const id = '12345678-1234-1234-1234-123456789001';
+  const starting = f.manager.startReplay(sessionId, id, 30, false, false, id, { videoHeight: 720, videoFps: 30 });
+  f.emit({ event: 'replayStarted', replayId: id, width: 1280, height: 720 }); await starting;
+  const saving = f.manager.saveReplay(sessionId, id, id, 'C:\\recordings\\replay.mkv');
+  const rejected = assert.rejects(saving, /recordingHostExited/);
+  f.child.emit('close', 1); await rejected;
 });
 
 test('窗口测试模式即使运行整个设备测试文件也不会注册可执行的整屏用例', () => {
@@ -988,6 +1026,33 @@ test('三档目标帧率均传入同一 OBS 宿主，拒绝选项以外的值', 
   assert.equal(spawns.length, 0);
 });
 
+test('仅降低纹理交付不改变 OBS 渲染规格，也不发送录像或回放停止命令', async context => {
+  const { manager, ready, emit, commands } = fixture(context);
+  await ready(120);
+  const changing = manager.configureVideo(sessionId, 30, { width: 1920, height: 1080 }, true);
+  assert.equal(commands.at(-1), 'delivery:1:30');
+  emit({ event: 'deliveryConfigured', requestId: '1', sessionId, maxFps: 30, width: 1920, height: 1080 });
+  await changing;
+  assert.equal(manager.state.maxFps, 120);
+  assert.equal(commands.some(command => command.startsWith('recordStop') || command.startsWith('replayStop') || command.startsWith('configure:')), false);
+  await assert.rejects(manager.configureVideo(sessionId, 60, { width: 1280, height: 720 }, true), /invalidVideoConfiguration/);
+  await assert.rejects(manager.configureVideo('old-session', 30, undefined, true), /invalidVideoConfiguration/);
+});
+
+test('纹理交付节流超时不杀掉共享宿主，迟到回复也不覆盖新状态', async context => {
+  const f = fixture(context); await f.ready(120);
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const changing = assert.rejects(f.manager.configureVideo(sessionId, 30, undefined, true), /ConfigurationTimeout/);
+    context.mock.timers.tick(3_000); await changing;
+    assert.equal(f.manager.state.alive, true);
+    assert.notEqual(f.manager.state.failed, true);
+    assert.equal(f.manager.state.maxFps, 120);
+    f.emit({ event: 'deliveryConfigured', requestId: '1', sessionId, maxFps: 30, width: 1920, height: 1080 });
+    assert.equal(f.manager.state.maxFps, 120);
+  } finally { context.mock.timers.reset(); }
+});
+
 test('共享中切换等宿主确认才更新帧率，不更换子进程或会话', async (context) => {
   const { manager, ready, emit, commands, spawns } = fixture(context);
   await ready();
@@ -1752,7 +1817,8 @@ test('正式诊断入口使用宿主响应的版本及计数，不读取缓存�
   assert.ok(start >= 0 && end > start);
   let handler;
   const requested = [];
-  const sandbox = { recording: { active: undefined, snapshot: () => ({ phase: 'idle', holdingResources: false }), withVideoChange: operation => operation() }, ipcMain: { handle: (_name, callback) => { handler = callback; } },
+  const sandbox = { recording: { active: undefined, snapshot: () => ({ phase: 'idle', holdingResources: false,
+    replay: { phase: 'idle', holdingResources: false, saving: false } }), withVideoChange: operation => operation() }, ipcMain: { handle: (_name, callback) => { handler = callback; } },
     trustedSender: () => true, closing: false,
     mediaHelper: { getDiagnostics: async () => ({ helperVersion: 'rust', framesReceived: 999 }) },
     nativeVideoSession: { sessionId, sourceKind: 'monitor', helperState: { alive: true } },
