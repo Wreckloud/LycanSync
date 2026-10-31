@@ -74,6 +74,13 @@ test('成员悬浮按需读签名，移入卡片保持，Esc 关闭且缓存避�
   const card = page.getByRole('dialog', { name: '成员资料', exact: true });
   await expect(card).toContainText('准备打团。');
   await expect(card).toContainText('最终幻想14');
+  await expect(card.locator('.profile-popover-status')).toHaveCount(0);
+  await expect(friend.locator('.member-activity')).toHaveText(/^正在玩\s*最终幻想14$/);
+  const directoryBounds = await page.locator('.members-directory').boundingBox();
+  const cardBounds = await card.boundingBox();
+  expect(cardBounds!.x + cardBounds!.width).toBeLessThanOrEqual(directoryBounds!.x - 6);
+  const elapsed = await card.locator('.profile-popover-activity').innerText();
+  await expect.poll(() => card.locator('.profile-popover-activity').innerText(), { timeout: 2500 }).not.toBe(elapsed);
   await card.hover();
   await expect(card).toBeVisible();
   await page.waitForTimeout(300);
@@ -86,6 +93,25 @@ test('成员悬浮按需读签名，移入卡片保持，Esc 关闭且缓存避�
   await friend.hover();
   await expect(card).toBeVisible();
   expect(requests).toBe(1);
+  await page.evaluate(() => {
+    const starts: string[] = [];
+    const observer = new MutationObserver(records => {
+      for (const record of records) {
+        const element = record.target as HTMLElement;
+        if (element.matches?.('.profile-popover.profile-popover-enter-active')) {
+          starts.push(element.querySelector('.profile-popover-identity strong')?.textContent ?? '');
+        }
+      }
+    });
+    observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
+    (window as unknown as { profileEntrances: string[] }).profileEntrances = starts;
+  });
+  await page.getByRole('button', { name: '查看 小满 的资料', exact: true }).hover();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { profileEntrances: string[] }).profileEntrances)).toContain('小满');
+  await expect(card).toHaveCount(1);
+  await expect(card).toContainText('小满');
+  await card.hover();
+  await page.screenshot({ path: test.info().outputPath('member-profile-switched.png') });
   await page.getByRole('button', { name: '个人菜单', exact: true }).click();
   await expect(card).toHaveCount(0);
   await friend.hover();
@@ -178,7 +204,7 @@ test('个人菜单选择隐身后恢复偏好，首个心跳不短暂在线，�
   await menu.getByRole('button', { name: '在线状态', exact: true }).click();
   await menu.getByRole('button', { name: '隐身', exact: true }).click();
   await expect.poll(() => heartbeats.at(-1)?.status).toBe('OFFLINE');
-  await expect(menu.locator('.profile-popover-status')).toHaveText('隐身');
+  await expect(menu.locator('.profile-popover-identity .personal-avatar')).toHaveAttribute('aria-label', '隐身');
   await expect(menu.getByRole('button', { name: '隐身', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await page.screenshot({ path: test.info().outputPath('invisible-menu.png') });
   heartbeats.length = 0;
@@ -189,7 +215,7 @@ test('个人菜单选择隐身后恢复偏好，首个心跳不短暂在线，�
   await menu.getByRole('button', { name: '在线状态', exact: true }).click();
   await menu.getByRole('button', { name: '在线', exact: true }).click();
   await expect.poll(() => heartbeats.at(-1)?.status).toBe('ONLINE');
-  await expect(menu.locator('.profile-popover-status')).toHaveText('在线');
+  await expect(menu.locator('.profile-popover-identity .personal-avatar')).toHaveAttribute('aria-label', '在线');
 });
 
 test('状态同步失败在菜单内提示，重试不退出账号或清除选择', async ({ page }) => {
@@ -206,7 +232,7 @@ test('状态同步失败在菜单内提示，重试不退出账号或清除选�
   fail = false;
   await menu.getByRole('button', { name: '隐身', exact: true }).click();
   await expect(menu.getByRole('alert')).toHaveCount(0);
-  await expect(menu.locator('.profile-popover-status')).toHaveText('隐身');
+  await expect(menu.locator('.profile-popover-identity .personal-avatar')).toHaveAttribute('aria-label', '隐身');
 });
 
 test('快捷键录入松开后保存，冲突保持原设置，取消不会丢失绑定', async ({ page }) => {
