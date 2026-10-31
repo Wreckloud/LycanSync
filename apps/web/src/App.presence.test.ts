@@ -356,10 +356,10 @@ it('本人和群成员的音乐/游戏展示一致，离线和关闭动态均不
   const state = { props: { user: { id: 'self' } }, publicPresenceStatus: ref('ONLINE'),
     sharedActivity: ref<DetectedActivity | null>({ type: 'MUSIC', name: '歌曲', startedAt: '2026-10-15T00:00:00Z' }),
     groupPresences: ref({ friend: { status: 'ONLINE', activityType: 'MUSIC', activityName: '歌曲', activityStartedAt: '2026-10-15T00:00:00Z' } }),
-    formatActivityDuration: () => '1:00', computed };
+    computed };
   const body = statements.map((statement) => statement.getText(sourceFile)).join('\n');
   const result = runInNewContext(`${ts.transpile(body)}\n({ memberActivity, personalActivityStatus })`, state) as {
-    memberActivity: (member: { userId: string }) => { type: string; text: string } | null;
+    memberActivity: (member: { userId: string }) => { type: string; text: string; startedAt?: string } | null;
     personalActivityStatus: { value: { type: string; text: string } | null };
   };
   const display = result.memberActivity;
@@ -372,7 +372,11 @@ it('本人和群成员的音乐/游戏展示一致，离线和关闭动态均不
   expect(display({ userId: 'self' })).toBeNull();
   expect(result.personalActivityStatus.value).toBeNull();
   state.sharedActivity.value = { type: 'GAME', name: '游戏', startedAt: '2026-10-15T00:00:00Z' };
-  expect(display({ userId: 'self' })?.text).toBe('正在玩 游戏 · 1:00');
+  expect(display({ userId: 'self' })?.text).toBe('正在玩 游戏');
+  expect(display({ userId: 'self' })?.startedAt).toBe('2026-10-15T00:00:00Z');
+  state.groupPresences.value.friend = { status: 'ONLINE', activityType: 'GAME', activityName: '游戏', activityStartedAt: '2026-10-15T00:00:00Z' };
+  expect(display({ userId: 'friend' })?.text).toBe('正在玩 游戏');
+  expect(display({ userId: 'friend' })?.startedAt).toBe('2026-10-15T00:00:00Z');
 });
 
 function setupOccupancies() {

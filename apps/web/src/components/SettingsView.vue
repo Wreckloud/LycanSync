@@ -51,7 +51,7 @@ const props = defineProps<{
   diagnosticReport: ReturnType<typeof useDiagnosticReport>;
   inputLevelPercent: number;
   activity: UserActivity | null;
-  activityStatus?: { type: UserActivity['type']; text: string } | null;
+  activityStatus?: { type: UserActivity['type']; text: string; startedAt?: string } | null;
   showActivity: boolean;
   activityError: string;
   activityMappings: ReturnType<typeof useActivityMappings>;

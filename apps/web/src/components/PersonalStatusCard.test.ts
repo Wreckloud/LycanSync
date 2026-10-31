@@ -12,8 +12,9 @@ describe('底部个人名片', () => {
     expect(idle).toContain('在线');
     expect(idle).not.toContain('member-activity');
     const active = await renderToString(createSSRApp(PersonalStatusCard, { user, status: 'ONLINE', statusLabel: '在线',
-      activityStatus: { type: 'GAME', text: '正在玩 游戏 · 1:00' } }));
-    expect(active).toContain('正在玩 游戏 · 1:00');
+      activityStatus: { type: 'GAME', text: '正在玩 游戏', startedAt: '2026-10-15T00:00:00Z' } }));
+    expect(active).toContain('正在玩 游戏');
+    expect(active).not.toContain('1:00');
     const statusClasses = active.match(/class="([^"]*\bstatus-dot\b[^"]*)"/)?.[1].split(' ');
     expect(statusClasses).toEqual(expect.arrayContaining(['status-dot', 'ONLINE']));
     expect(active).toContain('member-activity');

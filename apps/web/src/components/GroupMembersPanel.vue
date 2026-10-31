@@ -16,7 +16,7 @@ const props = defineProps<{
   connectionLost: boolean;
   status: (member: GroupMember) => UserPresenceStatus;
   statusLabel: (member: GroupMember) => string;
-  activity: (member: GroupMember) => { type: string; text: string } | null;
+  activity: (member: GroupMember) => { type: string; text: string; startedAt?: string } | null;
   groupId: string;
   profileBlocked?: boolean;
 }>();
@@ -162,12 +162,13 @@ async function toggleSearch() {
         </span>
       </div>
     </div>
-    <ProfilePopover ref="profileCard" :anchor="profileAnchor" placement="left" label="成员资料"
+    <ProfilePopover ref="profileCard" :anchor="profileAnchor" :profile-key="profileUserId" placement="left" label="成员资料"
       :nickname="profileMember?.userId === user.id ? user.nickname : profileMember?.nickname ?? ''"
       :avatar="profileMember?.userId === user.id ? user.avatar : profileMember?.avatar ?? ''"
       :signature="profileMember?.userId === user.id ? user.signature : profileSignature"
       :status="profileMember ? status(profileMember) : 'OFFLINE'" :status-label="profileMember ? PRESENCE_STATUS_LABELS[status(profileMember)] : ''"
-      :activity="profileMember ? activity(profileMember)?.text : undefined" :loading="profileLoading" :error="profileError"
+      :activity="profileMember ? activity(profileMember)?.text : undefined"
+      :activity-started-at="profileMember ? activity(profileMember)?.startedAt : undefined" :loading="profileLoading" :error="profileError"
       @close="closeProfile" @enter="keepProfile" @leave="leaveProfile" @retry="loadProfile" />
   </aside>
 </template>

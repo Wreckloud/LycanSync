@@ -68,7 +68,6 @@ const ROOM_OCCUPANCY_REFRESH_INTERVAL_MS = 5_000;
 const PRESENCE_HEARTBEAT_INTERVAL_MS = 20_000;
 const PRESENCE_IDLE_TIMEOUT_MS = 5 * 60_000;
 const PRESENCE_IDLE_CHECK_INTERVAL_MS = 2_000;
-const ACTIVITY_CLOCK_INTERVAL_MS = 10_000;
 const audioPreferences = useAudioPreferences(props.user.id);
 const { inputGain, outputVolume, screenShareVolume, voiceVolumeBalance } = audioPreferences;
 const audioProcessing = audioPreferences.processing;
@@ -465,7 +464,6 @@ let roomOccupancyRequest: AbortController | null = null;
 let joinAttempt = 0;
 let presenceHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let presenceIdleTimer: ReturnType<typeof setInterval> | null = null;
-let activityClockTimer: ReturnType<typeof setInterval> | null = null;
 let presenceAbort: AbortController | null = null;
 let presenceStopped = false;
 const currentPresenceStatus = ref<UserPresenceStatus>('ONLINE');
@@ -483,7 +481,6 @@ const currentActivity = ref<(UserActivity & { startedAt: string }) | null>(null)
 const { showActivity, error: activityVisibilityError, setShowActivity } = useActivityVisibility(props.user.id);
 const activityMappings = useActivityMappings(props.user.id, desktop);
 const sharedActivity = computed(() => showActivity.value && presenceMode.value === 'online' ? currentActivity.value : null);
-const activityClock = ref(Date.now());
 let activityRevision = 0;
 const activitySnapshotRevision = activityRevision;
 watch(showActivity, () => { void sendHeartbeat(); });
@@ -776,7 +773,6 @@ onMounted(() => {
   window.addEventListener('offline', handlePresenceNetworkLost);
   document.addEventListener('visibilitychange', handleVisibilityChange);
   presenceIdleTimer = setInterval(() => void updateOwnPresenceStatus(), PRESENCE_IDLE_CHECK_INTERVAL_MS);
-  activityClockTimer = setInterval(() => { activityClock.value = Date.now(); }, ACTIVITY_CLOCK_INTERVAL_MS);
   groupListRefreshTimer = setInterval(() => {
     if (document.visibilityState !== 'hidden') void refreshGroups(false, false);
   }, GROUP_LIST_REFRESH_INTERVAL_MS);
@@ -813,7 +809,6 @@ onScopeDispose(() => {
   roomOccupancyRequest?.abort();
   stopPresenceHeartbeat();
   if (presenceIdleTimer) clearInterval(presenceIdleTimer);
-  if (activityClockTimer) clearInterval(activityClockTimer);
   if (groupListRefreshTimer) clearInterval(groupListRefreshTimer);
   if (roomOccupancyRefreshTimer) clearInterval(roomOccupancyRefreshTimer);
 });
@@ -1022,8 +1017,8 @@ const memberActivity = (member: Pick<GroupMember, 'userId'>) => {
           startedAt: groupPresences.value[member.userId].activityStartedAt! }
       : null;
   if (memberOnlineStatus(member) === 'OFFLINE' || !activity) return null;
-  return { type: activity.type, text: activity.type === 'MUSIC' ? `正在听 ${activity.name}`
-    : `正在玩 ${activity.name} · ${formatActivityDuration(activity.startedAt)}` };
+  return { type: activity.type, text: activity.type === 'MUSIC' ? `正在听 ${activity.name}` : `正在玩 ${activity.name}`,
+    startedAt: activity.type === 'GAME' ? activity.startedAt : undefined };
 };
 const personalActivityStatus = computed(() => memberActivity({ userId: props.user.id }));
 const orderedMembers = computed(() => {
@@ -1031,14 +1026,6 @@ const orderedMembers = computed(() => {
   return [...members.filter((member) => memberOnlineStatus(member) !== 'OFFLINE'),
     ...members.filter((member) => memberOnlineStatus(member) === 'OFFLINE')];
 });
-function formatActivityDuration(startedAt: string) {
-  const elapsedSeconds = Math.max(0, Math.floor((activityClock.value - Date.parse(startedAt)) / 1000));
-  const hours = Math.floor(elapsedSeconds / 3600);
-  const minutes = Math.floor((elapsedSeconds % 3600) / 60);
-  const seconds = elapsedSeconds % 60;
-  return hours > 0 ? `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
-    : `${minutes}:${String(seconds).padStart(2, '0')}`;
-}
 const memberStatusLabel = (member: GroupMember) => {
   const status = memberOnlineStatus(member);
   const activity = memberActivity(member);

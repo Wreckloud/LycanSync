@@ -9,7 +9,7 @@ import type { AuthUser } from '../auth/authApi';
 import type { UserActivity, UserPresenceStatus } from '../presence/presenceApi';
 
 const props = defineProps<{ user: AuthUser; status: UserPresenceStatus; statusLabel: string;
-  activityStatus?: { type: UserActivity['type']; text: string } | null; menuEnabled?: boolean; active?: boolean;
+  activityStatus?: { type: UserActivity['type']; text: string; startedAt?: string } | null; menuEnabled?: boolean; active?: boolean;
   presenceMode?: PresenceMode; presenceReady?: boolean; presenceSyncing?: boolean; presenceError?: string }>();
 const emit = defineEmits<{ settings: [section: 'account' | 'audio' | 'shortcuts', trigger: HTMLElement]; logout: [];
   presenceMode: [mode: PresenceMode] }>();
@@ -51,7 +51,7 @@ function logout() {
     <slot />
     <ProfilePopover :anchor="menuEnabled && active !== false && menuOpen ? trigger : null" placement="above" label="个人菜单"
       :nickname="user.nickname" :avatar="user.avatar" :signature="user.signature" :status="status" :status-label="statusLabel"
-      :activity="activityStatus?.text" autofocus @close="menuOpen = false">
+      :activity="activityStatus?.text" :activity-started-at="activityStatus?.startedAt" autofocus @close="menuOpen = false">
       <div class="personal-menu-actions">
         <button type="button" @click="selectSettings('account')"><Pencil :size="15" />编辑个人资料</button>
         <template v-if="presenceMode">
