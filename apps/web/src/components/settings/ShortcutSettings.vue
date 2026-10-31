@@ -8,7 +8,7 @@ const draft = ref('');
 const draftCode = ref('');
 const keyError = ref('');
 const actions = [{ id: 'microphone', label: '麦克风静音／恢复' }, { id: 'listening', label: '停止／恢复收听' },
-  { id: 'pushToTalk', label: '按键说话' }] as const;
+  { id: 'pushToTalk', label: '按键说话' }, { id: 'replay', label: '保存即时回放' }] as const;
 
 function keyDown(event: KeyboardEvent) {
   if (props.shortcuts.busy) return;
@@ -30,7 +30,7 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
 
 <template>
   <div class="settings-section shortcut-settings">
-    <p class="settings-intro">全局快捷键在游戏或其他窗口前台时也生效；仅在已连接的语音中操作，不会自动入房。默认不绑定。</p>
+    <p class="settings-intro">全局快捷键在游戏或其他窗口前台时也生效。语音操作只用于已连接的通话；保存回放需要提前开启缓存，不会自动采集或入房。默认不绑定。</p>
     <p v-if="!shortcuts.supported">全局快捷键仅在 Windows 桌面客户端提供。</p>
     <section class="settings-block">
       <h2>发言模式</h2>

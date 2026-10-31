@@ -13,15 +13,36 @@ function fixture(begin: () => Promise<string> = async () => 'owner') {
     capture: vi.fn(async () => {}), end: vi.fn(async () => {}),
     readHold: vi.fn(async () => false), onHold: (callback: typeof hold) => { hold = callback; return vi.fn(); },
     onAction: (callback: typeof action) => { action = callback; return vi.fn(); }, onError: () => vi.fn() };
-  const microphone = vi.fn(async () => {}), listening = vi.fn(async () => {});
+  const microphone = vi.fn(async () => {}), listening = vi.fn(async () => {}), replay = vi.fn(async () => {});
+  const replayId = ref<string | null>(null);
   const storage = { getItem: vi.fn(() => null), setItem: vi.fn() };
   const modeChanged = vi.fn(), transmissionChanged = vi.fn();
   const shortcuts = scope.run(() => useAudioShortcuts('self', { roomId: () => room.value,
-    microphone, listening, modeChanged, transmissionChanged }, bridge, storage))!;
-  return { scope, room, bridge, microphone, listening, storage, shortcuts, modeChanged, transmissionChanged,
+    microphone, listening, replay, replayId: () => replayId.value, modeChanged, transmissionChanged }, bridge, storage))!;
+  return { scope, room, bridge, microphone, listening, replay, replayId, storage, shortcuts, modeChanged, transmissionChanged,
+    replayAction: (id: string) => action({ owner: 'owner', roomId: null, action: 'replay', replayId: id }),
     hold: (sequence: number, held: boolean, roomId = room.value!) => hold({ owner: 'owner', roomId, sequence, held }),
     action: (roomId: string) => action({ roomId, owner: 'owner', action: 'microphone' }) };
 }
+
+it('保存回放绑定当前缓存身份，不依赖通话，慢保存不阻挡麦克风快捷键', async () => {
+  const f = fixture();
+  try {
+    await settle();
+    f.replayId.value = 'buffer-new';
+    f.replayAction('buffer-old'); expect(f.replay).not.toHaveBeenCalled();
+    let finish!: () => void;
+    f.replay.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    f.replayAction('buffer-new'); f.replayAction('buffer-new');
+    expect(f.replay).toHaveBeenCalledTimes(1);
+    f.room.value = 'room'; await settle();
+    f.action('room'); await settle();
+    expect(f.microphone).toHaveBeenCalledTimes(1);
+    finish(); await settle();
+    f.replayId.value = null;
+    f.replayAction('buffer-new'); expect(f.replay).toHaveBeenCalledTimes(1);
+  } finally { f.scope.stop(); }
+});
 
 it('录入组合不接受普通字母、系统保留键或 F12', () => {
   const event = { code: 'KeyM', ctrlKey: true, altKey: false, shiftKey: true, metaKey: false };

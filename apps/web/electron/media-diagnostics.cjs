@@ -125,14 +125,20 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           'recordingShareUnavailable', 'recordingBusy', 'recordingPathInvalid', 'recordingHardwareEncoderUnavailable',
           'recordingEncoderStartFailed', 'recordingAudioEncoderUnavailable', 'recordingOutputUnavailable',
           'recordingModuleUnavailable', 'recordingApplicationAudioUnavailable', 'recordingDiskFull',
-          'recordingWriteFailed', 'recordingHostExited', 'recordingStartTimedOut', 'recordingStopUnconfirmed', 'recordingVoiceUnavailable', 'recordingLibraryUnavailable'].includes(entry.code)) details.code = entry.code;
-        if (['recordingStarted', 'recordingStopped', 'recordingFailed'].includes(stage)) {
-          for (const key of ['applicationAudio', 'microphone', 'friends', 'saved']) {
+          'recordingWriteFailed', 'recordingHostExited', 'recordingStartTimedOut', 'recordingStopUnconfirmed', 'recordingVoiceUnavailable', 'recordingLibraryUnavailable', 'replaySaveUnconfirmed'].includes(entry.code)) details.code = entry.code;
+        if (['recordingStarted', 'recordingStopped', 'recordingFailed', 'replayStarted', 'replayStopRequested', 'replayStopped', 'replaySaved', 'replayFailed'].includes(stage)) {
+          for (const key of ['applicationAudio', 'microphone', 'friends', 'saved', 'saving', 'duringWarmup']) {
             if (typeof entry[key] === 'boolean') details[key] = entry[key];
           }
           for (const key of ['bytes', 'outputFrames']) {
             if (Number.isSafeInteger(entry[key]) && entry[key] >= 0) details[key] = entry[key];
           }
+          if (['nvenc', 'qsv', 'amf', 'unknown'].includes(entry.encoder)) details.encoder = entry.encoder;
+          if (['CQP', 'ICQ', 'unknown'].includes(entry.configuredRateControl)) details.configuredRateControl = entry.configuredRateControl;
+          if (typeof entry.configuredLookahead === 'boolean') details.configuredLookahead = entry.configuredLookahead;
+          if ([30, 60, 120].includes(entry.seconds)) details.seconds = entry.seconds;
+          if ([256, 512, 1024].includes(entry.memoryBudgetMb)) details.memoryBudgetMb = entry.memoryBudgetMb;
+          if ([30, 60, 120].includes(entry.configuredFrameRate)) details.configuredFrameRate = entry.configuredFrameRate;
         }
         if (stage === 'microphoneReady' && entry.backend === 'obsLibobs' && entry.processing === 'sonora-0.2.0') {
           details.backend = entry.backend;

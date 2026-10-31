@@ -28,7 +28,7 @@ function state(entry: RecordingLibraryEntry) {
   if (entry.availability === 'unavailable') return '暂时无法读取';
   return entry.state === 'saved' ? '已保存' : '保存未确认，请检查原片';
 }
-watch(() => [props.status.recordingId, props.status.phase], () => { void library.load(); });
+watch(() => [props.status.recordingId, props.status.phase, props.status.replay?.lastSavedId], () => { void library.load(); });
 onMounted(() => { void library.load(); });
 </script>
 

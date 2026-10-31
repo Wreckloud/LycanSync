@@ -3,6 +3,9 @@ interface RecordingSettings {
   applicationAudio: boolean;
   microphone: boolean;
   friends: boolean;
+  replaySeconds: 30 | 60 | 120;
+  videoHeight: 720 | 1080 | 1440;
+  videoFps: 30 | 60 | 120;
 }
 interface DesktopRecordingStatus {
   holdingResources: boolean;
@@ -14,6 +17,19 @@ interface DesktopRecordingStatus {
   saved: boolean;
   continuing: boolean;
   applicationAudio: boolean;
+  mediaId?: string | null;
+  mediaVoices?: boolean;
+  replay?: {
+    id: string | null;
+    holdingResources: boolean;
+    phase: 'idle' | 'starting' | 'buffering' | 'stopping' | 'failed';
+    seconds: number;
+    saving: boolean;
+    error: string | null;
+    lastSavedId: string | null;
+    warming?: boolean;
+    lastSavedDuringWarmup?: boolean;
+  };
 }
 interface RecordingLibraryEntry {
   id: string;
@@ -84,7 +100,8 @@ interface NativeCaptureDiagnostics {
   framesProcessed: number | null;
   obsBridgeDroppedFrames: number | null;
   obsRender: ObsRenderDiagnostics | null;
-  recording?: Pick<DesktopRecordingStatus, 'phase' | 'holdingResources'> & { applicationAudio: boolean; microphone: boolean; friends: boolean };
+  recording?: Pick<DesktopRecordingStatus, 'phase' | 'holdingResources'> & { applicationAudio: boolean; microphone: boolean; friends: boolean;
+    replay?: Pick<NonNullable<DesktopRecordingStatus['replay']>, 'phase' | 'holdingResources' | 'saving'> };
   captureSuspended: boolean | null;
   microphoneCaptureDroppedChunks: number | null;
   microphoneCapture?: { sourceState: number; sourceFrames: number; framesReceived: number;
@@ -141,7 +158,7 @@ interface Window {
     activate(owner: string, roomId: string | null): Promise<void>;
     capture(owner: string, enabled: boolean): Promise<void>;
     end(owner: string): Promise<void>;
-    onAction(callback: (event: { owner: string; roomId: string; action: 'microphone' | 'listening' }) => void): () => void;
+    onAction(callback: (event: { owner: string; roomId: string | null; action: 'microphone' | 'listening' | 'replay'; replayId?: string }) => void): () => void;
     onError(callback: (event: { owner: string; message: string }) => void): () => void;
   };
   lycanViewerWindow?: {
@@ -180,12 +197,16 @@ interface Window {
     isMaximized(): Promise<boolean>;
     setWindowLayout(mode: 'startup' | 'account' | 'invitation' | 'profile' | 'main', height: number): Promise<void>;
     getRecordingSettings(): Promise<RecordingSettings>;
-    configureRecording(settings: Omit<RecordingSettings, 'directory'>): Promise<RecordingSettings>;
+    configureRecording(settings: Omit<RecordingSettings, 'directory' | 'replaySeconds'>): Promise<RecordingSettings>;
     chooseRecordingDirectory(): Promise<RecordingSettings>;
     failRecordingVoice(id: string): Promise<DesktopRecordingStatus>;
     sendRecordingVoice(id: string, position: number, pcm: Uint8Array): Promise<boolean>;
     startRecording(previousId?: string): Promise<DesktopRecordingStatus>;
     stopRecording(id: string | null): Promise<DesktopRecordingStatus>;
+    startReplay(): Promise<DesktopRecordingStatus>;
+    saveReplay(): Promise<DesktopRecordingStatus>;
+    stopReplay(): Promise<DesktopRecordingStatus>;
+    configureReplay(seconds: number): Promise<RecordingSettings>;
     getRecordingStatus(): Promise<DesktopRecordingStatus>;
     revealRecording(): Promise<void>;
     getRecordingLibrary(offset?: number): Promise<{ items: RecordingLibraryEntry[]; hasMore: boolean }>;
@@ -215,7 +236,7 @@ interface Window {
       resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean; gameFollowId?: string }>;
     endNativeGameFollow(id: string): Promise<void>;
     stopNativeVideo(sessionId: string): Promise<{ changed: boolean }>;
-    configureNativeVideo(sessionId: string, maxFps: number, resolution?: { width: number; height: number }): Promise<{ changed: boolean }>;
+    configureNativeVideo(sessionId: string, maxFps: number, resolution?: { width: number; height: number }, deliveryOnly?: boolean): Promise<{ changed: boolean }>;
     authorizeNativeRemoteControl(sessionId: string, controlSessionId: string, controllerIdentity: string): Promise<{ changed: boolean }>;
     sendNativeRemoteInput(sessionId: string, controlSessionId: string, controllerIdentity: string, sequence: number,
       input: import('./rtc/remoteControl').RemoteControlInput): Promise<{ changed: boolean; dropped?: boolean }>;

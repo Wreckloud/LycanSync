@@ -130,6 +130,9 @@ struct HostState {
   uint32_t output_height = 1080;
   uint32_t content_width = 0;
   uint32_t content_height = 0;
+  uint32_t render_fps = 60;
+  uint32_t delivery_fps = 60;
+  std::optional<std::chrono::steady_clock::time_point> next_delivery;
 };
 
 HostState g_host;
@@ -379,6 +382,13 @@ void render_shared_frame(void *parameter) {
     g_host.source_ready_reported = true;
     write_capture_evidence("sourceReady", source_width, source_height);
   }
+  if (g_host.delivery_fps < g_host.render_fps) {
+    const auto now = std::chrono::steady_clock::now();
+    if (g_host.next_delivery && now < *g_host.next_delivery) return;
+    const auto interval = std::chrono::nanoseconds(1'000'000'000 / g_host.delivery_fps);
+    g_host.next_delivery = g_host.next_delivery && now < *g_host.next_delivery + interval
+        ? *g_host.next_delivery + interval : now + interval;
+  }
   const auto scale = std::min({1.0, static_cast<double>(g_host.output_width) / source_width,
       static_cast<double>(g_host.output_height) / source_height});
   g_host.content_width = std::max(1u, static_cast<uint32_t>(source_width * scale));
@@ -572,6 +582,19 @@ bool valid_session_id(std::string_view value) {
          });
 }
 
+bool parse_recording_profile(std::string_view value, std::string &pipeline, uint32_t &height, uint32_t &fps) {
+  if (value.size() > 64 || value.size() < 43 || value[36] != '|') return false;
+  pipeline = value.substr(0, 36);
+  const auto separator = value.find('|', 37);
+  if (!valid_session_id(pipeline) || separator == value.npos) return false;
+  const auto resolution = value.substr(37, separator - 37);
+  const auto rate = value.substr(separator + 1);
+  if ((resolution != "720" && resolution != "1080" && resolution != "1440") || (rate != "30" && rate != "60" && rate != "120")) return false;
+  height = resolution == "720" ? 720 : resolution == "1080" ? 1080 : 1440;
+  fps = rate == "30" ? 30 : rate == "60" ? 60 : 120;
+  return true;
+}
+
 bool parse_release_command(std::string_view command, size_t &slot_index) {
   const std::string prefix = "release:" + g_host.session_id + ":";
   if (!command.starts_with(prefix)) return false;
@@ -668,6 +691,10 @@ bool configure_video(obs_video_info &video, obs_sceneitem_t *item, std::string_v
     reset_render_statistics();
   }
   const std::lock_guard<std::mutex> output_lock(g_output_mutex);
+  if (accepted) {
+    g_host.render_fps = g_host.delivery_fps = video.fps_num;
+    g_host.next_delivery.reset();
+  }
   std::cout << "{\"event\":\"" << (accepted ? "captureConfigured" : "captureConfigurationRejected")
             << "\",\"requestId\":\"" << request_id << "\",\"sessionId\":\"" << g_host.session_id
             << "\",\"maxFps\":" << video.fps_num << ",\"width\":" << video.base_width
@@ -779,6 +806,8 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
     return 1;
   }
   reset_render_statistics();
+  g_host.render_fps = g_host.delivery_fps = video.fps_num;
+  g_host.next_delivery.reset();
   write_capture_preparation("sourceStarting", g_host.session_id);
 
   obs_source_t *source = nullptr;
@@ -859,13 +888,16 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
 
   RecordingOutput recording(to_utf8(module_path.parent_path().wstring()), to_utf8(capture_data.parent_path().wstring()),
       [&](std::string_view event, std::string_view id, std::string_view code) {
-        if (event == "recordingStopped" || event == "recordingFailed") screen_audio.recording(false);
+        if (!recording.active()) screen_audio.recording(false);
         const std::lock_guard<std::mutex> lock(g_output_mutex);
         std::cout << "{\"event\":\"" << event << "\",\"sessionId\":\"" << g_host.session_id
-                  << "\",\"recordingId\":\"" << id << "\"";
+                  << (event.starts_with("replay") ? "\",\"replayId\":\"" : "\",\"recordingId\":\"") << id << "\"";
+        if (event == "replaySaved" || event == "replaySaveFailed") std::cout << ",\"saveId\":\"" << recording.saved_id() << "\"";
         if (!code.empty()) std::cout << ",\"code\":\"" << code << "\"";
         if (event == "recordingStopped") std::cout << ",\"outputFrames\":" << recording.frames();
-        if (event == "recordingStarted") std::cout << ",\"width\":" << recording.width() << ",\"height\":" << recording.height();
+        if (event == "recordingStarted" || event == "replayStarted") std::cout << ",\"width\":" << recording.width() << ",\"height\":" << recording.height() << ",\"configuredFrameRate\":" << recording.frame_rate();
+        if (event == "recordingStarted" || event == "replayStarted") std::cout << recording.encoding_diagnostics();
+        if (event == "replayStarted") std::cout << ",\"memoryBudgetMb\":" << recording.replay_memory_mb();
         std::cout << "}\n" << std::flush;
       });
   std::string command;
@@ -878,10 +910,32 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
     if (command == "shutdown") break;
     if (command == "stop:" + g_host.session_id) { keep_host = true; break; }
     if (command == "prepare") { write_event("enginePrepared"); continue; }
-    if (command.starts_with("recordStart|")) {
-      const auto separator = command.find('|', 12);
+    if (command.starts_with("delivery:")) {
+      const auto separator = command.find(':', 9);
+      const auto request = std::string_view(command).substr(9, separator - 9);
+      uint32_t fps = 0;
+      const auto value = std::string_view(command).substr(separator == command.npos ? command.size() : separator + 1);
+      const auto parsed = std::from_chars(value.data(), value.data() + value.size(), fps);
+      if (separator == command.npos || request.empty() || request.size() > 16
+          || !std::all_of(request.begin(), request.end(), [](char ch) { return ch >= '0' && ch <= '9'; })
+          || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || !valid_frame_rate(fps) || fps > video.fps_num) {
+        write_event("invalidCaptureCommand"); continue;
+      }
+      // 仅改变主画布的纹理交付频率，不重置 OBS 视频或正在运行的录像／回放。
+      const std::lock_guard<std::mutex> render_lock(g_render_mutex);
+      g_host.delivery_fps = fps; g_host.next_delivery.reset();
+      const std::lock_guard<std::mutex> output_lock(g_output_mutex);
+      std::cout << "{\"event\":\"deliveryConfigured\",\"requestId\":\"" << request
+                << "\",\"sessionId\":\"" << g_host.session_id << "\",\"maxFps\":" << fps
+                << ",\"width\":" << video.base_width << ",\"height\":" << video.base_height << "}\n" << std::flush;
+      continue;
+    }
+    if (command.starts_with("recordStart|") || command.starts_with("replaySave|")) {
+      const bool save_replay = command.starts_with("replaySave|");
+      const size_t prefix = save_replay ? 11 : 12;
+      const auto separator = command.find('|', prefix);
       const auto end = command.find('|', separator == command.npos ? command.size() : separator + 1);
-      const auto id = command.substr(12, separator - 12);
+      const auto id = command.substr(prefix, separator - prefix);
       if (separator == command.npos || end == command.npos || !valid_session_id(id)) { write_event("invalidCaptureCommand"); continue; }
       const auto encoded = std::string_view(command).substr(separator + 1, end - separator - 1);
       std::string path;
@@ -893,17 +947,47 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
         if (parsed.ec != std::errc{} || parsed.ptr != encoded.data() + i + 2 || !byte) { valid = false; break; }
         path.push_back(static_cast<char>(byte));
       }
-      const auto audio = command.substr(end + 1);
-      if (!valid || audio.size() != 2 || (audio[0] != '0' && audio[0] != '1')
+      const auto tail = command.substr(end + 1);
+      if (save_replay) {
+        if (!valid || !valid_session_id(tail)) { write_event("invalidCaptureCommand"); continue; }
+        if (!recording.save_replay(id, path, tail)) {
+          const std::lock_guard<std::mutex> lock(g_output_mutex);
+          std::cout << "{\"event\":\"replaySaveFailed\",\"sessionId\":\"" << g_host.session_id
+                    << "\",\"replayId\":\"" << tail << "\",\"saveId\":\"" << id << "\",\"code\":\"recordingWriteFailed\"}\n" << std::flush;
+        }
+        continue;
+      }
+      const auto audio = tail.substr(0, 2);
+      std::string pipeline; uint32_t height = 0, fps = 0;
+      if (!valid || tail.size() < 3 || tail[2] != '|' || !parse_recording_profile(std::string_view(tail).substr(3), pipeline, height, fps) || (audio[0] != '0' && audio[0] != '1')
           || (audio[1] != '0' && audio[1] != '1')) { write_event("invalidCaptureCommand"); continue; }
       if (audio[0] == '1' && !screen_audio.recording(true)) {
         const std::lock_guard<std::mutex> lock(g_output_mutex);
         std::cout << "{\"event\":\"recordingFailed\",\"sessionId\":\"" << g_host.session_id
                   << "\",\"recordingId\":\"" << id << "\",\"code\":\"recordingApplicationAudioUnavailable\"}\n" << std::flush;
-      } else recording.start(id, path, audio[1] == '1', source);
+      } else recording.start(id, path, audio[1] == '1', source, pipeline, height, fps);
       continue;
     }
     if (command == "recordStop") { recording.stop(); continue; }
+    if (command.starts_with("replayStart|")) {
+      const auto separator = command.find('|', 12);
+      const auto next = command.find('|', separator == command.npos ? command.size() : separator + 1);
+      const auto last = command.find('|', next == command.npos ? command.size() : next + 1);
+      if (separator == command.npos || next == command.npos || last == command.npos) { write_event("invalidCaptureCommand"); continue; }
+      const auto id = command.substr(12, separator - 12);
+      const auto seconds = command.substr(separator + 1, next - separator - 1);
+      const auto audio = command.substr(next + 1, last - next - 1);
+      std::string pipeline; uint32_t height = 0, fps = 0;
+      if (!valid_session_id(id) || !parse_recording_profile(std::string_view(command).substr(last + 1), pipeline, height, fps) || (seconds != "30" && seconds != "60" && seconds != "120")
+          || audio.size() != 2 || (audio[0] != '0' && audio[0] != '1') || (audio[1] != '0' && audio[1] != '1')) { write_event("invalidCaptureCommand"); continue; }
+      if (audio[0] == '1' && !screen_audio.recording(true)) {
+        const std::lock_guard<std::mutex> lock(g_output_mutex);
+        std::cout << "{\"event\":\"replayFailed\",\"sessionId\":\"" << g_host.session_id
+                  << "\",\"replayId\":\"" << id << "\",\"code\":\"recordingApplicationAudioUnavailable\"}\n" << std::flush;
+      } else recording.start_replay(id, audio[1] == '1', source, pipeline, static_cast<uint32_t>(std::stoi(seconds)), height, fps);
+      continue;
+    }
+    if (command == "replayStop") { recording.stop_replay(); continue; }
     if (screen_audio.command(command)) continue;
     size_t slot_index = 0;
     if (parse_release_command(command, slot_index)) {

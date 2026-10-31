@@ -113,6 +113,7 @@ let nativeMediaBridge;
 const setMediaBackgroundActive = createMediaBackgroundPolicy();
 const audioShortcuts = createAudioShortcuts({ getWindow: () => mainWindow,
   bridge: () => nativeMediaBridge ??= loadNativeMediaBridge(),
+  getReplayId: () => recording.replay?.phase === 'buffering' && !recording.replay.error && !recording.replay.saving ? recording.replay.id : null,
   onActivityChanged: active => setMediaBackgroundActive(mainWindow?.webContents, 'pushToTalk', active),
   onRelease: () => { if (nativeMicrophoneSession) obsAudioHost.cancelTransmission(nativeMicrophoneSession.sessionId); } });
 let nativeVideoSession;
@@ -211,6 +212,7 @@ const obsHostSettings = obsCaptureHostSettings();
 const obsCaptureHost = new ObsCaptureHostManager({
   ...obsHostSettings,
   onRecordingEvent: (state, event) => recording.hostEvent(state, event),
+  onReplayEvent: (state, event) => recording.replayHostEvent(state, event),
   configPath: resolve(app.getPath('userData'), 'obs-capture', '32.2.2'),
   onFrame: handleNativeSharedTextureFrame,
   onFailure: (state, error) => {
@@ -627,8 +629,8 @@ function acknowledgeNativeScreenAudioChunk(sessionId, sequence, droppedChunks) {
 function notifyNativeScreenAudioError(audio, code) {
   if (!audio || audio.failureNotified || audio.stopping) return;
   audio.failureNotified = true;
-  if (recording.active?.videoSessionId === audio.sessionId && recording.active.options.applicationAudio) {
-    void recording.fail(recording.active.id, 'recordingApplicationAudioUnavailable').catch(() => {});
+  if (recording.media?.videoSessionId === audio.sessionId && recording.media.options.applicationAudio) {
+    void recording.failMedia(recording.media.id, 'recordingApplicationAudioUnavailable').catch(() => {});
   }
   const safeCode = /^[a-z][A-Za-z0-9]{0,63}$/.test(code) ? code : 'screenShareAudioFailed';
   finishNativeScreenAudioPipe(audio, { destroy: true });
@@ -725,8 +727,8 @@ async function stopNativeScreenAudio(sessionId, force = false) {
   const audio = nativeScreenAudioSession;
   if (!audio) return { changed: false };
   if (audio.sessionId !== sessionId) throw new Error('screenShareAudioSessionMismatch');
-  if (!force && !nativeVideoSession?.stopping && recording.active?.videoSessionId === sessionId
-      && recording.active.options.applicationAudio) {
+  if (!force && !nativeVideoSession?.stopping && recording.media?.videoSessionId === sessionId
+      && recording.media.options.applicationAudio) {
     audio.publishing = false; audio.queue.length = 0; audio.inFlight = undefined;
     return { changed: true };
   }
@@ -1049,8 +1051,13 @@ async function stopNativeVideo(sessionId, preserveGameFollow = false) {
         recordVideoFailure('revokeRemoteControlBeforeVideoStop', error);
       }
     }
-    if (recording.active?.videoSessionId === sessionId) {
-      await recording.stop().catch(error => {
+    if (recording.active?.videoSessionId === sessionId || recording.replay?.videoSessionId === sessionId) {
+      if (nativeScreenAudioSession?.sessionId === sessionId) {
+        nativeScreenAudioSession.publishing = false;
+        nativeScreenAudioSession.queue.length = 0;
+        nativeScreenAudioSession.inFlight = undefined;
+      }
+      await recording.stopAll().catch(error => {
         void writeMediaDiagnostic({ stage: 'recordingFailed', code: error.message });
       });
     }
@@ -1791,9 +1798,10 @@ ipcMain.handle('media:game-follow:end', (event, id) => {
   if (!trustedSender(event) || typeof id !== 'string' || id.length > 128) throw new Error('请求参数无效');
   leagueCaptureFollow.end(id);
 });
-ipcMain.handle('media:native-video:configure', (event, sessionId, maxFps, resolution) => {
+ipcMain.handle('media:native-video:configure', (event, sessionId, maxFps, resolution, deliveryOnly = false) => {
   if (!trustedSender(event) || closing || !nativeVideoSession || nativeVideoSession.stopping
-      || nativeVideoSession.sessionId !== sessionId) throw new Error('请求参数无效');
+      || nativeVideoSession.sessionId !== sessionId || typeof deliveryOnly !== 'boolean') throw new Error('请求参数无效');
+  if (deliveryOnly) return obsCaptureHost.configureVideo(sessionId, maxFps, resolution, true);
   return recording.withVideoChange(() => obsCaptureHost.configureVideo(sessionId, maxFps, resolution));
 });
 ipcMain.handle('recording:settings', (event) => {
@@ -1801,12 +1809,13 @@ ipcMain.handle('recording:settings', (event) => {
   return recording.load();
 });
 ipcMain.handle('recording:configure', (event, settings) => {
-  if (!trustedSender(event) || closing || !settings || Object.keys(settings).length !== 3
-      || !['applicationAudio', 'microphone', 'friends'].every(key => typeof settings[key] === 'boolean')) throw new Error('请求参数无效');
+  if (!trustedSender(event) || closing || !settings || Object.keys(settings).length !== 5
+      || !['applicationAudio', 'microphone', 'friends'].every(key => typeof settings[key] === 'boolean')
+      || ![720, 1080, 1440].includes(settings.videoHeight) || ![30, 60, 120].includes(settings.videoFps)) throw new Error('请求参数无效');
   return recording.configure(settings);
 });
 ipcMain.handle('recording:directory', async (event) => {
-  if (!trustedSender(event) || closing || recording.active) throw new Error('当前不能修改录像目录');
+  if (!trustedSender(event) || closing || recording.active || recording.replay) throw new Error('当前不能修改录像目录');
   const result = await dialog.showOpenDialog(mainWindow, { title: '选择录像保存目录', properties: ['openDirectory', 'createDirectory'],
     defaultPath: (await recording.load()).directory });
   return result.canceled ? recording.load() : recording.configure({ directory: result.filePaths[0] });
@@ -1820,18 +1829,33 @@ ipcMain.handle('recording:stop', (event, id) => {
   return recording.stop();
 });
 ipcMain.handle('recording:voice-failed', (event, id) => {
-  if (!trustedSender(event) || recording.active?.id !== id) throw new Error('recordingSessionMismatch');
-  return recording.fail(id, 'recordingVoiceUnavailable');
+  if (!trustedSender(event) || recording.media?.id !== id) throw new Error('recordingSessionMismatch');
+  return recording.failMedia(id, 'recordingVoiceUnavailable');
 });
 ipcMain.handle('recording:voice', (event, id, position, pcm) => {
-  if (!trustedSender(event) || closing || recording.active?.id !== id
-      || !['starting', 'recording'].includes(recording.active.phase)
-      || !(recording.active.options.microphone || recording.active.options.friends)) return false;
+  if (!trustedSender(event) || closing || recording.media?.id !== id || recording.media.stopping
+      || !(recording.media.options.microphone || recording.media.options.friends)) return false;
   return recordingVoice.write(id, position, pcm);
 });
 ipcMain.handle('recording:status', (event) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
   return recording.status();
+});
+ipcMain.handle('recording:replay-start', (event) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return recording.startReplay();
+});
+ipcMain.handle('recording:replay-save', (event) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return recording.saveReplay();
+});
+ipcMain.handle('recording:replay-stop', (event) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return recording.stopReplay();
+});
+ipcMain.handle('recording:replay-settings', (event, seconds) => {
+  if (!trustedSender(event) || closing || ![30, 60, 120].includes(seconds)) throw new Error('请求参数无效');
+  return recording.configure({ replaySeconds: seconds });
 });
 ipcMain.handle('recording:reveal', async (event) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
@@ -1981,8 +2005,9 @@ ipcMain.handle('media:diagnostics', async (event) => {
     : lastMicrophoneDroppedChunks;
   const localRecording = recording.snapshot();
   diagnostics.recording = { phase: localRecording.phase, holdingResources: localRecording.holdingResources,
-    applicationAudio: Boolean(recording.active?.options.applicationAudio),
-    microphone: Boolean(recording.active?.options.microphone), friends: Boolean(recording.active?.options.friends) };
+    applicationAudio: Boolean(recording.media?.options.applicationAudio),
+    microphone: Boolean(recording.media?.options.microphone), friends: Boolean(recording.media?.options.friends),
+    replay: { phase: localRecording.replay.phase, holdingResources: localRecording.replay.holdingResources, saving: localRecording.replay.saving } };
   return diagnostics;
 });
 ipcMain.on('window:maximize', (event) => {
@@ -2006,7 +2031,7 @@ app.on('before-quit', (event) => {
   if (allowQuitAfterMediaHelper) return;
   event.preventDefault();
   if (mediaHelperShutdownPromise) return;
-  mediaHelperShutdownPromise = recording.stop().catch(error => {
+  mediaHelperShutdownPromise = recording.stopAll().catch(error => {
     console.error(`recording shutdown failed: ${error.message}`);
   }).then(() => (nativeScreenAudioSession
     ? stopNativeScreenAudio(nativeScreenAudioSession.sessionId).catch((error) => {

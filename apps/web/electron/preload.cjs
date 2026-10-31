@@ -152,6 +152,10 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   sendRecordingVoice: (id, position, pcm) => ipcRenderer.invoke('recording:voice', id, position, pcm),
   startRecording: (previousId) => ipcRenderer.invoke('recording:start', previousId),
   stopRecording: (id) => ipcRenderer.invoke('recording:stop', id),
+  startReplay: () => ipcRenderer.invoke('recording:replay-start'),
+  saveReplay: () => ipcRenderer.invoke('recording:replay-save'),
+  stopReplay: () => ipcRenderer.invoke('recording:replay-stop'),
+  configureReplay: (seconds) => ipcRenderer.invoke('recording:replay-settings', seconds),
   getRecordingStatus: () => ipcRenderer.invoke('recording:status'),
   revealRecording: () => ipcRenderer.invoke('recording:reveal'),
   getRecordingLibrary: (offset) => ipcRenderer.invoke('recording:library', offset),
@@ -193,7 +197,7 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
     try { return await ipcRenderer.invoke('media:native-video:stop', sessionId); }
     finally { releaseNativeVideoCanvas(sessionId); }
   },
-  configureNativeVideo: (sessionId, maxFps, resolution) => ipcRenderer.invoke('media:native-video:configure', sessionId, maxFps, resolution),
+  configureNativeVideo: (sessionId, maxFps, resolution, deliveryOnly = false) => ipcRenderer.invoke('media:native-video:configure', sessionId, maxFps, resolution, deliveryOnly),
   authorizeNativeRemoteControl: (sessionId, controlSessionId, controllerIdentity) =>
     ipcRenderer.invoke('media:remote-control:authorize', sessionId, controlSessionId, controllerIdentity),
   sendNativeRemoteInput: (sessionId, controlSessionId, controllerIdentity, sequence, input) =>
