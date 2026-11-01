@@ -12,8 +12,10 @@ function entry(fetchMock: ReturnType<typeof vi.fn>, hash = `#token=${token}`) {
       addEventListener(event: string, callback: () => void | Promise<void>) { this.listeners[event] = callback; } }]));
   const location = { hash, host: 'friends.example', origin: 'https://friends.example', href: '' };
   const document = { title: '', getElementById: (id: string) => elements[id] };
-  runInNewContext(script, { document, location, fetch: fetchMock, URLSearchParams, AbortSignal, Error });
-  return { elements, location, document };
+  const events: Record<string, () => void | Promise<void>> = {};
+  const window = { addEventListener: (name: string, callback: () => void | Promise<void>) => { events[name] = callback; } };
+  runInNewContext(script, { window, document, location, fetch: fetchMock, URLSearchParams, AbortSignal, AbortController, Error });
+  return { elements, location, document, changeHash: (hash: string) => { location.hash = hash; return events.hashchange!(); } };
 }
 
 function preview(kind = 'INVITE', status = 'PENDING') {
@@ -21,6 +23,51 @@ function preview(kind = 'INVITE', status = 'PENDING') {
 }
 
 describe('浏览器账号入口', () => {
+  test('同一网页从旧链接切到新恢复链接，重新检查并使用新凭据唤起', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(preview('ACTIVATE', 'COMPLETED'))
+      .mockResolvedValue(preview('RECOVERY'));
+    const state = entry(fetchMock);
+    await vi.waitFor(() => expect(state.elements.status.textContent).toContain('已使用'));
+    await state.changeHash(`#token=${'c'.repeat(43)}`);
+    expect(state.elements.open.disabled).toBe(false);
+    expect(state.elements.kind.textContent).toContain('恢复登录');
+    state.elements.open.listeners.click();
+    expect(state.location.href).toContain(`#token=${'c'.repeat(43)}`);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/auth/access/preview', expect.objectContaining({
+      body: JSON.stringify({ token: 'c'.repeat(43) }),
+    }));
+  });
+
+  test.each(['response', 'error'])('换链接中断旧检查，迟到%s不覆盖新链接状态', async result => {
+    let complete!: (response: Response) => void;
+    let fail!: (error: Error) => void;
+    const old = new Promise<Response>((resolve, reject) => { complete = resolve; fail = reject; });
+    const fetchMock = vi.fn().mockReturnValueOnce(old).mockResolvedValue(preview('RECOVERY'));
+    const state = entry(fetchMock);
+    const previousSignal = fetchMock.mock.calls[0]![1].signal as AbortSignal;
+    await state.changeHash(`#token=${'d'.repeat(43)}`);
+    expect(previousSignal.aborted).toBe(true);
+    if (result === 'response') complete(preview('ACTIVATE', 'COMPLETED'));
+    else fail(new Error('旧请求失败'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(state.elements.status.textContent).toContain('链接有效');
+    expect(state.elements.error.textContent).toBe('');
+    expect(state.elements.open.disabled).toBe(false);
+  });
+
+  test('片段已变化但尚未核验时禁止唤起；非法片段不发请求', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(preview());
+    const state = entry(fetchMock);
+    await vi.waitFor(() => expect(state.elements.open.disabled).toBe(false));
+    state.location.hash = '#token=invalid';
+    state.elements.open.listeners.click();
+    expect(state.location.href).toBe('');
+    await state.changeHash('#token=invalid');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(state.elements.open.disabled).toBe(true);
+    expect(state.elements.status.textContent).toContain('链接不完整');
+  });
+
   test.each([['ACTIVATE', '服主激活'], ['INVITE', '邀请加入'], ['RECOVERY', '恢复登录']])('%s 沿用同一页面并显示对应操作', async (kind, label) => {
     const fetchMock = vi.fn().mockResolvedValue(preview(kind));
     const { elements, location, document } = entry(fetchMock);
