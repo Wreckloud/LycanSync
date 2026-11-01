@@ -31,12 +31,18 @@ import RecordingSettings from './settings/RecordingSettings.vue';
 import type { useRecording } from '../recording/useRecording';
 import { SETTINGS_SECTIONS, settingsSectionTitle, type SettingsSectionId } from '../settings/settingsSections';
 import type { UserActivity, UserPresenceStatus } from '../presence/presenceApi';
+import type { PresenceMode } from '../presence/usePresencePreference';
 
 const props = defineProps<{
   section: SettingsSectionId;
   user: AuthUser;
   presenceStatus: UserPresenceStatus;
   presenceLabel: string;
+  presenceMode: PresenceMode;
+  presenceReady: boolean;
+  presenceSyncing: boolean;
+  presenceError: string;
+  blocked?: boolean;
   desktop: boolean;
   audioShortcuts: UnwrapNestedRefs<ReturnType<typeof useAudioShortcuts>>;
   callSoundPreferences: ReturnType<typeof useCallSoundPreferences>;
@@ -58,7 +64,7 @@ const props = defineProps<{
   activityMappings: ReturnType<typeof useActivityMappings>;
   saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
 }>();
-const emit = defineEmits<{ close: []; logout: []; activityVisibility: [enabled: boolean]; lastOnlineVisibility: [enabled: boolean] }>();
+const emit = defineEmits<{ close: []; logout: []; activityVisibility: [enabled: boolean]; lastOnlineVisibility: [enabled: boolean]; presenceMode: [mode: PresenceMode] }>();
 const heading = ref<HTMLElement | null>(null);
 const profileSettings = ref<InstanceType<typeof ProfileSettings> | null>(null);
 const clientSettings = ref<InstanceType<typeof ClientSettings> | null>(null);
@@ -68,7 +74,7 @@ const sectionTitle = computed(() => settingsSectionTitle(activeSection.value));
 const visibleSections = computed(() => SETTINGS_SECTIONS.filter((item) => (item.id !== 'members' || props.user.administrator)
   && (item.id !== 'recording' || (props.desktop && props.recording))
   && (item.id !== 'overlay' || (props.desktop && props.overlay))));
-const interactionBlocked = computed(() => Boolean(profileSettings.value?.cropping || clientSettings.value?.confirmingUpdate));
+const interactionBlocked = computed(() => Boolean(props.blocked || profileSettings.value?.cropping || clientSettings.value?.confirmingUpdate));
 
 watch(() => props.section, (section) => { activeSection.value = section; });
 watch(activeSection, async () => {
@@ -119,7 +125,10 @@ async function leaveSettings(logout: boolean) {
           :disabled="leaving" @click="selectSection(item.id)">{{ item.title }}</button>
       </div>
       <PersonalStatusCard class="settings-footer" aria-label="个人状态与返回应用"
-        :user="user" :status="presenceStatus" :status-label="presenceLabel" :activity-status="activityStatus">
+        :user="user" :status="presenceStatus" :status-label="presenceLabel" :activity-status="activityStatus"
+        menu-enabled :active="!interactionBlocked && !leaving" :presence-mode="presenceMode" :presence-ready="presenceReady"
+        :presence-syncing="presenceSyncing" :presence-error="presenceError"
+        @settings="selectSection" @logout="requestLogout" @presence-mode="emit('presenceMode', $event)">
         <IconButton label="返回应用" :disabled="leaving" @click="closeSettings"><ArrowLeft :size="19" /></IconButton>
       </PersonalStatusCard>
     </nav>
@@ -175,14 +184,14 @@ async function leaveSettings(logout: boolean) {
   min-height: 0;
   overflow: hidden;
   border-left: 1px solid var(--border);
-  background: #0d1116;
+  background: var(--panel-sidebar);
 }
 .settings-navigation { display: flex; flex-direction: column; gap: 4px; min-height: 0; overflow-y: auto; padding: 20px 14px; }
 .settings-navigation > button { flex: 0 0 auto; min-height: 38px; padding: 8px 11px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); text-align: left; cursor: pointer; }
 .settings-navigation > button:hover { background: var(--panel-soft); color: var(--text); }
 .settings-navigation > button.is-selected { background: var(--panel-raised); color: var(--text); }
-.settings-footer { background: #0d1116; }
-.settings-main { grid-area: main; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.settings-footer { background: var(--panel-sidebar); }
+.settings-main { grid-area: main; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--panel); }
 .settings-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 64px; padding: 12px 24px; border-bottom: 1px solid var(--border-soft); }
 .settings-header-content { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; max-width: 820px; margin-inline: auto; }
 .settings-header h1 { margin: 0; font-size: 19px; font-weight: 600; }

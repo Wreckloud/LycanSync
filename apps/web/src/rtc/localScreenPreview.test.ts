@@ -23,7 +23,7 @@ function preview(onVisibilityChange?: (visible: boolean) => void) {
     srcObject: Object.freeze({}),
   });
   const error = vi.fn();
-  const stop = observeLocalScreenPreview(element as unknown as HTMLVideoElement, error, onVisibilityChange);
+  const observation = observeLocalScreenPreview(element as unknown as HTMLVideoElement, error, onVisibilityChange);
   function visible(value: boolean) {
     intersection([{ target: element, isIntersecting: value } as unknown as IntersectionObserverEntry], {} as IntersectionObserver);
   }
@@ -31,8 +31,26 @@ function preview(onVisibilityChange?: (visible: boolean) => void) {
     page.visibilityState = value ? 'hidden' : 'visible';
     page.dispatchEvent(new Event('visibilitychange'));
   }
-  return { element, page, observerWindow, stop, visible, background, disconnect, error };
+  return { element, page, observerWindow, stop: observation.stop, setActive: observation.setActive, visible, background, disconnect, error };
 }
+
+it('设置覆盖只暂停本位置的预览，SDK 的自动播放不能绕过；返回沿用同一流', async () => {
+  const visibility = vi.fn();
+  const main = preview(visibility), auxiliary = preview();
+  const stream = main.element.srcObject;
+  main.setActive(false);
+  expect(main.element.paused).toBe(true);
+  expect(auxiliary.element.paused).toBe(false);
+  main.visible(true);
+  await main.element.play();
+  expect(main.element.paused).toBe(true);
+  expect(visibility).toHaveBeenLastCalledWith(false);
+  main.setActive(true);
+  expect(main.element.paused).toBe(false);
+  expect(main.element.srcObject).toBe(stream);
+  expect(visibility).toHaveBeenLastCalledWith(true);
+  main.stop(); auxiliary.stop();
+});
 
 it('本地预览可见性同步给采集需求，隐藏及关闭释放需求，迟到观察不重新登记', () => {
   const visibility = vi.fn();

@@ -177,7 +177,7 @@ async function toggleSearch() {
 </template>
 
 <style scoped>
-.members-directory { border-left: 1px solid var(--border); background: var(--panel); }
+.members-directory { border-left: 1px solid var(--border); background: var(--panel-sidebar); }
 .member-search-toggle { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
 .member-search-toggle:hover { color: var(--text); }
 </style>

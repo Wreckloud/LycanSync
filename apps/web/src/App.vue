@@ -912,7 +912,7 @@ const joiningGroupId = ref<string | null>(null);
 const pendingSwitchGroupId = ref<string | null>(null);
 const listening = computed(() => rtc.listening);
 const settingsOpen = ref(false);
-// 完整覆盖后继续沿用隐藏行为，让背后的共享预览暂停；退场开始即恢复。
+// 覆盖只影响绘制；保留聊天和观看尺寸，视频需求由各个观看位置单独控制。
 const settingsCovered = ref(false);
 const personalMenuOpen = ref(false);
 const profileCardsBlocked = computed(() => Boolean(props.interactionBlocked || settingsOpen.value || !mainWindowVisible.value
@@ -1356,7 +1356,7 @@ function participantListening(participant: Participant) {
         <LoaderCircle :size="20" aria-hidden="true" /><span>正在准备群聊…</span>
       </div>
     </Transition>
-    <div class="app-content" v-show="mainWindowVisible && !settingsCovered" :inert="initialLoading || settingsOpen || !!rtc.remoteControlRequest"
+    <div class="app-content" v-show="mainWindowVisible" :style="{ visibility: settingsCovered ? 'hidden' : undefined }" :inert="initialLoading || settingsOpen || !!rtc.remoteControlRequest"
       :aria-hidden="initialLoading || settingsOpen || undefined">
     <div class="workspace" :inert="editorOpen || !!management">
       <nav class="group-rail" aria-label="群组">
@@ -1481,10 +1481,12 @@ function participantListening(participant: Participant) {
     </div>
     <Transition name="settings-page" @after-enter="settingsCovered = settingsOpen" @enter-cancelled="settingsCovered = false"
       @before-leave="settingsCovered = false; ($event as HTMLElement).inert = true">
-    <SettingsView v-if="settingsOpen" :inert="!!rtc.remoteControlRequest" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
+    <SettingsView v-if="settingsOpen" :blocked="Boolean(props.interactionBlocked || rtc.remoteControlRequest || !mainWindowVisible)" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
       :audio-shortcuts="audioShortcuts" :call-sound-preferences="callSoundPreferences" :call-sounds="callSounds"
       :overlay="desktop ? voiceOverlay : undefined"
       :presence-status="publicPresenceStatus" :presence-label="personalPresenceLabel"
+      :presence-mode="presenceMode" :presence-ready="presenceReady" :presence-syncing="presenceSyncing"
+      :presence-error="presencePreferenceError || presenceSyncError" @presence-mode="changePresenceMode"
       :recording="recording" :preferences="audioPreferences" :audio-output="audioOutput" :rtc="rtc" :microphone-test="microphoneTest" :microphone-devices="microphoneDevices" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
       :activity="currentActivity" :activity-status="personalActivityStatus" :show-activity="showActivity" :show-last-online="showLastOnline" :activity-error="activityVisibilityError || presenceSyncError"
       :activity-mappings="activityMappings"
@@ -1503,14 +1505,15 @@ function participantListening(participant: Participant) {
     </DialogTransition>
     <ScreenShareWindows ref="viewingWindows" :rtc="rtc" :group-name="joinedGroup?.name ?? ''"
       :recording-elapsed="recording.state.value.phase === 'recording' ? recording.elapsed.value : undefined"
-      :inline-target="viewingTarget"
+      :inline-target="viewingTarget" :inline-visible="mainWindowVisible && !settingsOpen"
       :avatar="participantAvatar" :muted-shares="mutedShares"
       :control-placeholder="remoteControlPlaceholder"
       :input-blocked="viewerInputBlocked"
       @notice="viewerNotice = $event" @toggle-share-audio="toggleSharedAudio" @request-control="requestParticipantControl">
-      <template #default="{ select }">
+      <template #default="{ select, visible }">
         <div v-for="participant in rtc.participants" :key="participant.identity" class="member-card">
         <ParticipantCard :participant="participant"
+          :view-active="visible"
           :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant"
           :recording-elapsed="recording.state.value.phase === 'recording' ? recording.elapsed.value : undefined"
           :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"

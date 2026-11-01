@@ -587,6 +587,19 @@ test('聚焦网格和成员折叠只覆盖聊天，保留历史阅读位置与�
   await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
   await expect(page.locator('.voice-panel')).toHaveClass(/is-viewing/);
   await unchanged();
+  const separator = page.getByRole('separator', { name: '调整观看区域高度' });
+  const viewingHeight = await separator.getAttribute('aria-valuenow');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await page.getByRole('button', { name: '设置', exact: true }).click();
+    const settings = page.getByRole('main', { name: '设置', exact: true });
+    await expect(settings).toHaveCSS('clip-path', 'inset(0px)');
+    await expect(page.locator('.app-content')).toHaveCSS('visibility', 'hidden');
+    expect(await list.evaluate(element => element.getBoundingClientRect().height)).toBeCloseTo(before!.height, 0);
+    expect(await list.evaluate(element => element.scrollTop)).toBe(500);
+    await settings.getByRole('button', { name: '返回应用', exact: true }).click();
+    await unchanged();
+    await expect(separator).toHaveAttribute('aria-valuenow', viewingHeight!);
+  }
   await page.getByRole('button', { name: '收起成员', exact: true }).click();
   await unchanged();
   await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();

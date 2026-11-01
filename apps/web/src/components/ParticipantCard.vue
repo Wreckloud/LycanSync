@@ -19,6 +19,7 @@ const props = withDefaults(defineProps<{
   avatar?: string;
   variant?: 'card' | 'viewer';
   inputBlocked?: boolean;
+  viewActive?: boolean;
   shareAudio?: boolean;
   shareMuted?: boolean;
   shareAudioListening?: boolean;
@@ -32,7 +33,7 @@ const props = withDefaults(defineProps<{
   privateControl?: string;
   showFullscreen?: boolean;
   viewQuality?: VideoQuality;
-}>(), { variant: 'card', playbackVolume: 1, inputGain: 1, outputVolume: 1, showFullscreen: true });
+}>(), { variant: 'card', playbackVolume: 1, inputGain: 1, outputVolume: 1, showFullscreen: true, viewActive: true });
 const emit = defineEmits<{
   select: [];
   toggleShareAudio: [];
@@ -129,24 +130,29 @@ watch([videoElement, () => media.value.track, () => media.value.publication, () 
   const updateLocalPreviewDemand = () => {
     if (isLocal) setNativeScreenPreviewDemand(track.mediaStreamTrack, element, localPreviewVisible && viewingQuality.value === VideoQuality.HIGH);
   };
-  const stopPreviewObservation = isLocal
+  const preview = isLocal
     ? observeLocalScreenPreview(element, () => emit('notice', '本地共享预览无法播放，请重新打开观看画面。'),
-      (visible) => { localPreviewVisible = visible; updateLocalPreviewDemand(); })
+      (visible) => { localPreviewVisible = visible; updateLocalPreviewDemand(); }, props.viewActive)
     : undefined;
   const viewing = !isLocal && publication
     ? observeScreenShareView(publication as RemoteTrackPublication, element,
-      viewingQuality.value)
+      viewingQuality.value, props.viewActive)
     : undefined;
   const stopQualityWatch = watch(viewingQuality, quality => {
     viewing?.setQuality(quality);
     updateLocalPreviewDemand();
   });
+  const stopVisibilityWatch = watch(() => props.viewActive, active => {
+    preview?.setActive(active);
+    viewing?.setActive(active);
+  }, { flush: 'sync' });
   // 只解除当前元素的绑定，其他主画面或缩略图仍可使用同一轨道。
   onCleanup(() => {
     element.removeEventListener('loadeddata', loaded);
     element.removeEventListener('resize', loaded);
     videoReady.value = false;
-    stopPreviewObservation?.();
+    stopVisibilityWatch();
+    preview?.stop();
     stopQualityWatch();
     viewing?.stop();
     track.detach(element);

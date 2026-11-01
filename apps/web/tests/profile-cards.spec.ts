@@ -55,10 +55,20 @@ test('底部整块资料打开菜单，编辑沿用设置且返回原入口，�
   await expect(page.getByRole('heading', { name: '账号设置', exact: true })).toBeVisible();
   await expect(menu).toHaveCount(0);
   await page.getByRole('button', { name: '返回应用', exact: true }).click();
-  await expect(page.getByRole('button', { name: '个人菜单', exact: true })).toBeFocused();
+  await expect(page.locator('.group-conversation > .personal-card').getByRole('button', { name: '个人菜单', exact: true })).toBeFocused();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await expect(page.getByRole('heading', { name: '账号设置', exact: true })).toBeVisible();
   await expect(menu).toHaveCount(0);
+  const settingsIdentity = page.getByLabel('个人状态与返回应用', { exact: true });
+  await settingsIdentity.getByRole('button', { name: '个人菜单', exact: true }).click();
+  await expect(menu).toBeVisible();
+  await menu.getByRole('button', { name: '语音与音频', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '语音与音频', exact: true })).toBeVisible();
+  await expect(menu).toHaveCount(0);
+  await settingsIdentity.getByRole('button', { name: '个人菜单', exact: true }).click();
+  await menu.getByRole('button', { name: '编辑个人资料', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '账号设置', exact: true })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('settings-identity-menu.png') });
 });
 
 test('成员悬浮按需读签名，移入卡片保持，Esc 关闭且缓存避免重复读取', async ({ page }) => {
@@ -272,13 +282,14 @@ test('头像只给卡片头部提供暗色调，快速开关后菜单仍可操�
   await expect(page.getByRole('heading', { name: '语音与音频', exact: true })).toBeVisible();
 });
 
-test('个人菜单选择隐身后恢复偏好，首个心跳不短暂在线，切回在线可继续使用', async ({ page }) => {
+test('设置身份菜单选择隐身与主界面同步，首个心跳不短暂在线，切回在线可继续使用', async ({ page }) => {
   const heartbeats: Array<{ status: string; activity: unknown }> = [];
   await page.route('**/api/presence/heartbeat', route => {
     heartbeats.push(route.request().postDataJSON());
     return route.fulfill({ status: 204 });
   });
   await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
   const trigger = page.getByRole('button', { name: '个人菜单', exact: true });
   await trigger.click();
   const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
