@@ -3,7 +3,7 @@ import { computed, nextTick, onScopeDispose, ref, watch } from 'vue';
 import { Crown, Search, X } from '@lucide/vue';
 import ActivityStatus from './ActivityStatus.vue';
 import ProfilePopover from './ProfilePopover.vue';
-import { findGroupMemberProfile, type GroupMember } from '../group/groupApi';
+import { findGroupMemberProfile, type GroupMember, type GroupPresence } from '../group/groupApi';
 import type { AuthUser } from '../auth/authApi';
 import { PRESENCE_STATUS_LABELS, type UserPresenceStatus } from '../presence/presenceApi';
 
@@ -18,6 +18,7 @@ const props = defineProps<{
   statusLabel: (member: GroupMember) => string;
   activity: (member: GroupMember) => { type: string; text: string; startedAt?: string } | null;
   groupId: string;
+  presences: Record<string, GroupPresence>;
   profileBlocked?: boolean;
 }>();
 const searchOpen = ref(false);
@@ -30,6 +31,7 @@ const filtered = computed(() => props.members.filter((member) =>
 const profileAnchor = ref<HTMLElement | null>(null);
 const profileUserId = ref('');
 const profileMember = computed(() => props.members.find(member => member.userId === profileUserId.value));
+const profilePresence = computed(() => props.presences[profileUserId.value]);
 const profileSignature = ref('');
 const profileLoading = ref(false);
 const profileError = ref('');
@@ -168,6 +170,7 @@ async function toggleSearch() {
       :signature="profileMember?.userId === user.id ? user.signature : profileSignature"
       :status="profileMember ? status(profileMember) : 'OFFLINE'" :status-label="profileMember ? PRESENCE_STATUS_LABELS[status(profileMember)] : ''"
       :activity="profileMember ? activity(profileMember)?.text : undefined"
+      :last-online-at="profilePresence?.lastOnlineAt" :recent-game="profilePresence?.recentGame"
       :activity-started-at="profileMember ? activity(profileMember)?.startedAt : undefined" :loading="profileLoading" :error="profileError"
       @close="closeProfile" @enter="keepProfile" @leave="leaveProfile" @retry="loadProfile" />
   </aside>

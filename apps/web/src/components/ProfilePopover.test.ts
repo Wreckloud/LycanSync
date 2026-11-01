@@ -4,12 +4,13 @@ import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
 import { computed, effectScope, markRaw, nextTick, onScopeDispose, reactive, ref, watch } from 'vue';
 import { afterEach, expect, it, vi } from 'vitest';
+import { formatPresenceAgo, formatRecentGame } from '../profile/presenceHistory';
 
 const script = parse(readFileSync(new URL('./ProfilePopover.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const parsed = ts.createSourceFile('ProfilePopover.ts', script, ts.ScriptTarget.Latest, true);
 const clock = parsed.statements.filter(statement => (ts.isVariableStatement(statement)
-  && statement.declarationList.declarations.some(item => ['activitySeconds', 'activityDuration'].includes(item.name.getText(parsed))))
-  || statement.getText(parsed).startsWith('watch(() => [props.anchor, props.activityStartedAt]'))
+  && statement.declarationList.declarations.some(item => ['activitySeconds', 'activityDuration', 'historyNow', 'lastOnline', 'recentGameDescription'].includes(item.name.getText(parsed))))
+  || statement.getText(parsed).startsWith('watch(() => [props.anchor, props.activityStartedAt'))
   .map(statement => statement.getText(parsed)).join('\n');
 const positioning = parsed.statements.filter(statement => statement.getText(parsed)
   .startsWith('watch(() => [props.anchor, surface.value, props.placement]')
@@ -126,10 +127,11 @@ function fixture() {
     removeEventListener: documentEvents.removeEventListener.bind(documentEvents),
     defaultView: { performance, setInterval, clearInterval, addEventListener: windowEvents.addEventListener.bind(windowEvents),
       removeEventListener: windowEvents.removeEventListener.bind(windowEvents) } };
-  const props = reactive({ anchor: null as { ownerDocument: typeof document } | null, activityStartedAt: '2026-10-30T11:59:58Z' });
+  const props = reactive({ anchor: null as { ownerDocument: typeof document } | null, activityStartedAt: '2026-10-30T11:59:58Z', status: 'ONLINE', lastOnlineAt: null as string | null,
+    recentGame: null as { name: string; endedAt: string; playedSeconds: number } | null });
   const scope = effectScope();
-  const state = scope.run(() => runInNewContext(`${ts.transpile(clock, { target: ts.ScriptTarget.ES2022 })}\n({ activityDuration })`,
-    { props, computed, ref, watch, Date })) as { activityDuration: { value: string } };
+  const state = scope.run(() => runInNewContext(`${ts.transpile(clock, { target: ts.ScriptTarget.ES2022 })}\n({ activityDuration, lastOnline, recentGameDescription })`,
+    { props, computed, ref, watch, Date, formatPresenceAgo, formatRecentGame })) as { activityDuration: { value: string }; lastOnline: { value: string }; recentGameDescription: { value: string } };
   return { props, state, scope, document, documentEvents };
 }
 
@@ -170,5 +172,26 @@ it('后台不轮询，返回立即按实际经过时间补齐；换活动重置�
     expect(f.state.activityDuration.value).toBe('0:00');
     await vi.advanceTimersByTimeAsync(2000);
     expect(f.state.activityDuration.value).toBe('0:01');
+  } finally { f.scope.stop(); }
+});
+
+it('历史用同一计时器按分钟更新，在线不展示上次在线，收起即清理', async () => {
+  const f = fixture();
+  try {
+    f.props.activityStartedAt = 'invalid';
+    f.props.status = 'OFFLINE';
+    f.props.lastOnlineAt = new Date(Date.now() - 30_000).toISOString();
+    f.props.recentGame = { name: '游戏', endedAt: new Date(Date.now() - 30_000).toISOString(), playedSeconds: 3600 };
+    f.props.anchor = { ownerDocument: f.document }; await nextTick();
+    expect(f.state.lastOnline.value).toBe('刚刚');
+    expect(f.state.recentGameDescription.value).toContain('玩了约1小时');
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(f.state.lastOnline.value).toBe('1分钟前');
+    f.props.status = 'ONLINE'; await nextTick();
+    expect(f.state.lastOnline.value).toBe('');
+    expect(f.state.recentGameDescription.value).toContain('1分钟前');
+    f.props.anchor = null; await nextTick();
+    expect(vi.getTimerCount()).toBe(0);
   } finally { f.scope.stop(); }
 });

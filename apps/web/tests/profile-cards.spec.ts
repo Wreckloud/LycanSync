@@ -448,3 +448,81 @@ test('上传入场音效保存规范 WAV，服务端失败保留旧音效，切�
   await expect(page.locator('.sound-settings')).toContainText('打招呼.wav');
   expect(await page.evaluate(() => localStorage.getItem('lycansync.entrance-sound.v1.2d983469-4442-44f5-b5a8-f3819f16a611'))).toBe(saved);
 });
+
+
+test('离线资料卡展示冻结的上次在线和最近游戏，在线只展示最近游戏，未知记录省略', async ({ page }) => {
+  let status: 'ONLINE' | 'OFFLINE' = 'OFFLINE';
+  let known = true;
+  await page.route(`**/api/groups/${groupId}/presences`, route => route.fulfill({ json: members.map(member => ({
+    userId: member.userId, status: member.userId === friendId ? status : 'ONLINE',
+    lastSeenAt: null, activityType: null, activityName: null, activityStartedAt: null,
+    lastOnlineAt: known ? new Date(Date.now() - 1800_000).toISOString() : null,
+    recentGame: known ? { name: '最终幻想14', endedAt: new Date(Date.now() - 1200_000).toISOString(), playedSeconds: 3600 } : null,
+  })) }));
+  await page.goto('/');
+  const friend = page.getByRole('button', { name: '查看 阿岚 的资料', exact: true });
+  const card = page.getByRole('dialog', { name: '成员资料', exact: true });
+  await friend.hover();
+  await expect(card).toContainText('上次在线：半小时前');
+  await expect(card).toContainText('20分钟前 · 玩了约1小时《最终幻想14》');
+  await expect(card).toHaveCSS('opacity', '1');
+  await page.screenshot({ path: test.info().outputPath('offline-history.png') });
+  status = 'ONLINE';
+  await page.reload();
+  await friend.hover();
+  await expect(card).toContainText('20分钟前 · 玩了约1小时');
+  await expect(card).not.toContainText('上次在线');
+  known = false;
+  status = 'OFFLINE';
+  await page.reload();
+  await friend.hover();
+  await expect(card).toBeVisible();
+  await expect(card.locator('.profile-popover-history')).toHaveCount(0);
+});
+
+test('动态和上次在线两个开关独立上报，重新打开恢复选择', async ({ page }) => {
+  const heartbeats: Array<{ showActivity: boolean; showLastOnline: boolean }> = [];
+  await page.route('**/api/presence/heartbeat', route => {
+    heartbeats.push(route.request().postDataJSON());
+    return route.fulfill({ status: 204 });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const game = page.getByRole('checkbox', { name: '显示动态', exact: true });
+  const lastOnline = page.getByRole('checkbox', { name: '显示上次在线时间', exact: true });
+  await game.uncheck();
+  await expect(lastOnline).toBeChecked();
+  await expect.poll(() => heartbeats.at(-1)).toMatchObject({ showActivity: false, showLastOnline: true });
+  await lastOnline.uncheck();
+  await game.check();
+  await expect.poll(() => heartbeats.at(-1)).toMatchObject({ showActivity: true, showLastOnline: false });
+  await page.reload();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(game).toBeChecked();
+  await expect(lastOnline).not.toBeChecked();
+  await expect(page.locator('.settings-view')).toHaveCSS('opacity', '1');
+  await page.screenshot({ path: test.info().outputPath('presence-visibility-settings.png') });
+});
+
+test('关闭动态的心跳尚未返回就退出时，离线请求仍带上最新隐私选择', async ({ page }) => {
+  let release: (() => void) | undefined;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const heartbeats: Array<{ status: string; showActivity: boolean; showLastOnline: boolean }> = [];
+  await page.route('**/api/presence/heartbeat', async route => {
+    const heartbeat = route.request().postDataJSON();
+    heartbeats.push(heartbeat);
+    if (heartbeat.status !== 'OFFLINE' && heartbeat.showActivity === false) await pending;
+    await route.fulfill({ status: 204 }).catch(() => {});
+  });
+  try {
+    await page.goto('/');
+    await page.getByRole('button', { name: '设置', exact: true }).click();
+    await page.getByRole('checkbox', { name: '显示动态', exact: true }).uncheck();
+    await expect.poll(() => heartbeats.at(-1)).toMatchObject({ status: 'ONLINE', showActivity: false });
+    await page.locator('.account-session').getByRole('button', { name: '退出登录', exact: true }).click();
+    await page.getByRole('dialog', { name: '退出当前账号？', exact: true })
+      .getByRole('button', { name: '退出登录', exact: true }).click();
+    await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
+    await expect.poll(() => heartbeats.at(-1)).toMatchObject({ status: 'OFFLINE', showActivity: false, showLastOnline: true });
+  } finally { release!(); }
+});

@@ -23,6 +23,7 @@ type PendingAttachment = {
 };
 
 const props = defineProps<{ group: GroupSummary; members: GroupMember[]; user: AuthUser }>();
+const emit = defineEmits<{ initialLoad: [groupId: string] }>();
 const messages = ref<ChatMessage[]>([]);
 const text = ref('');
 const pendingAttachments = ref<PendingAttachment[]>([]);
@@ -224,7 +225,11 @@ async function refresh() {
     pollError.value = reason instanceof Error ? reason.message : '无法读取群聊消息';
     return 0;
   } finally {
-    if (pollRequest === controller) { pollRequest = null; refreshing.value = false; }
+    if (pollRequest === controller) {
+      pollRequest = null;
+      refreshing.value = false;
+      if (initial && !disposed && !controller.signal.aborted) emit('initialLoad', groupId);
+    }
   }
 }
 

@@ -27,6 +27,12 @@ export interface GroupMemberProfile {
   signature: string;
 }
 
+export interface RecentGame {
+  name: string;
+  endedAt: string;
+  playedSeconds: number;
+}
+
 export interface GroupPresence {
   userId: string;
   status: UserPresenceStatus;
@@ -34,6 +40,8 @@ export interface GroupPresence {
   activityType: UserActivityType | null;
   activityName: string | null;
   activityStartedAt: string | null;
+  lastOnlineAt?: string | null;
+  recentGame?: RecentGame | null;
 }
 
 export function findGroupMemberProfile(groupId: string, userId: string, signal: AbortSignal): Promise<GroupMemberProfile> {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, reactive, ref, watch } from 'vue';
 import { AudioLines, Copy, CornerUpLeft, Headphones,
-  LogOut, Minus, Plus, RadioTower,
+  LoaderCircle, LogOut, Minus, Plus, RadioTower,
   Settings, Square, Volume2, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
 import ParticipantCard from './components/ParticipantCard.vue';
@@ -42,7 +42,7 @@ import { PRESENCE_STATUS_LABELS, sendPresenceHeartbeat, type UserActivity, type 
 import { usePresencePreference, type PresenceMode } from './presence/usePresencePreference';
 import { ApiRequestError, type AuthUser, type ProfileUpdate } from './auth/authApi';
 import type { SettingsSectionId } from './settings/settingsSections';
-import { useActivityVisibility } from './settings/useActivityVisibility';
+import { usePresenceVisibility } from './settings/usePresenceVisibility';
 import { useActivityMappings } from './settings/useActivityMappings';
 import { useAudioShortcuts } from './settings/useAudioShortcuts';
 import { useCallSoundPreferences } from './settings/useCallSoundPreferences';
@@ -446,6 +446,14 @@ const groupPresences = ref<Record<string, GroupPresence>>({});
 const groupError = ref('');
 const summaryError = ref<string | null>(null);
 const groupLoading = ref(false);
+const initialLoading = ref(true);
+const initialGroupsLoaded = ref(false);
+const initialChatGroupId = ref<string | null>(null);
+watch(() => [initialGroupsLoaded.value, groupLoading.value, selectedGroupId.value, initialChatGroupId.value] as const,
+  ([groupsLoaded, detailLoading, groupId, chatGroupId]) => {
+    // 只等待首批必要请求；后续刷新沿用区域内反馈，不再盖住已经可用的应用。
+    if (groupsLoaded && !detailLoading && (!groupId || chatGroupId === groupId)) initialLoading.value = false;
+  }, { flush: 'post' });
 const editorOpen = ref(false);
 const editingGroup = ref<GroupDetail | null>(null);
 const management = ref<{ group: GroupDetail; mode: 'invite' | 'members' | 'transfer' | 'leave' | 'dissolve' } | null>(null);
@@ -478,12 +486,12 @@ let presenceSending: Promise<void> | null = null;
 let presenceHeartbeatPending = false;
 let presenceModeChange = 0;
 const currentActivity = ref<(UserActivity & { startedAt: string }) | null>(null);
-const { showActivity, error: activityVisibilityError, setShowActivity } = useActivityVisibility(props.user.id);
+const { showActivity, showLastOnline, error: activityVisibilityError, setShowActivity, setShowLastOnline } = usePresenceVisibility(props.user.id);
 const activityMappings = useActivityMappings(props.user.id, desktop);
 const sharedActivity = computed(() => showActivity.value && presenceMode.value === 'online' ? currentActivity.value : null);
 let activityRevision = 0;
 const activitySnapshotRevision = activityRevision;
-watch(showActivity, () => { void sendHeartbeat(); });
+watch([showActivity, showLastOnline], () => { void sendHeartbeat(); });
 
 function applyDetectedActivity(activity: DetectedActivity | null) {
   if (presenceStopped) return;
@@ -517,10 +525,10 @@ async function flushPresenceHeartbeats() {
       const activity = sharedActivity.value ? { type: sharedActivity.value.type, name: sharedActivity.value.name } : null;
       presenceSyncing.value = true;
       try {
-        await sendPresenceHeartbeat(status, activity, controller.signal);
+        await sendPresenceHeartbeat(status, activity, controller.signal, { showActivity: showActivity.value, showLastOnline: showLastOnline.value });
         if (!presenceStopped && !controller.signal.aborted && status === publicPresenceStatus.value) presenceSyncError.value = '';
       } catch {
-        if (!presenceStopped && !controller.signal.aborted) presenceSyncError.value = '状态尚未确认同步，将自动重试。';
+        if (!presenceStopped && !controller.signal.aborted) presenceSyncError.value = '状态与展示设置尚未确认同步，将自动重试。';
       } finally {
         if (presenceAbort === controller) presenceAbort = null;
       }
@@ -556,10 +564,16 @@ function stopPresenceHeartbeat() {
   presenceHeartbeatTimer = null;
 }
 
-async function reportOfflineBeforeClose() {
+function prepareLogout() {
   stopPresenceHeartbeat();
-  await sendPresenceHeartbeat('OFFLINE', null, AbortSignal.timeout(1_200)).catch(() => undefined);
+  return { showActivity: showActivity.value, showLastOnline: showLastOnline.value };
 }
+
+async function reportOfflineBeforeClose() {
+  await sendPresenceHeartbeat('OFFLINE', null, AbortSignal.timeout(1_200), prepareLogout()).catch(() => undefined);
+}
+
+defineExpose({ prepareLogout });
 
 async function updateOwnPresenceStatus() {
   const systemIdle = await desktop?.getSystemIdleState().catch(() => null);
@@ -747,6 +761,8 @@ async function refreshGroups(refreshDetail = true, refreshOccupancy = true) {
     } else selectedGroupDetail.value = null;
   } catch (error) {
     if (!request.signal.aborted) groupError.value = error instanceof Error ? error.message : '无法读取群组列表';
+  } finally {
+    if (!request.signal.aborted) initialGroupsLoaded.value = true;
   }
 }
 let groupListRefreshTimer: ReturnType<typeof setInterval> | null = null;
@@ -896,6 +912,8 @@ const joiningGroupId = ref<string | null>(null);
 const pendingSwitchGroupId = ref<string | null>(null);
 const listening = computed(() => rtc.listening);
 const settingsOpen = ref(false);
+// 完整覆盖后继续沿用隐藏行为，让背后的共享预览暂停；退场开始即恢复。
+const settingsCovered = ref(false);
 const personalMenuOpen = ref(false);
 const profileCardsBlocked = computed(() => Boolean(props.interactionBlocked || settingsOpen.value || !mainWindowVisible.value
   || editorOpen.value || management.value || captureRequest.value || pendingSwitchGroupId.value || rtc.remoteControlRequest));
@@ -1333,7 +1351,13 @@ function participantListening(participant: Participant) {
       <button type="button" @click="rtc.cancelPendingRemoteControl()">取消申请</button>
     </div>
     <div v-else-if="rtc.remoteControlRestoring" class="remote-control-owner-status" role="status">正在恢复原共享…</div>
-    <div class="app-content" v-show="!settingsOpen && mainWindowVisible" :inert="settingsOpen || !!rtc.remoteControlRequest">
+    <Transition name="app-loading">
+      <div v-if="initialLoading" class="app-loading" role="status" aria-live="polite">
+        <LoaderCircle :size="20" aria-hidden="true" /><span>正在准备群聊…</span>
+      </div>
+    </Transition>
+    <div class="app-content" v-show="mainWindowVisible && !settingsCovered" :inert="initialLoading || settingsOpen || !!rtc.remoteControlRequest"
+      :aria-hidden="initialLoading || settingsOpen || undefined">
     <div class="workspace" :inert="editorOpen || !!management">
       <nav class="group-rail" aria-label="群组">
         <div class="group-list">
@@ -1390,10 +1414,11 @@ function participantListening(participant: Participant) {
         <div class="group-conversation">
           <div class="conversation-main">
             <GroupChat v-if="selectedGroup" :key="selectedGroup.id" :group="selectedGroup"
-              :members="selectedGroupDetail?.members ?? []" :user="user" />
+              :members="selectedGroupDetail?.members ?? []" :user="user" @initial-load="initialChatGroupId = $event" />
             <div v-else class="group-empty">
               <p v-if="groupError" role="alert">{{ groupError }}</p>
               <p v-else>还没有群组，点击左侧的 + 创建一个开黑小队。</p>
+              <button v-if="groupError" type="button" @click="refreshGroups()">重新读取群组</button>
             </div>
             <Transition enter-active-class="callbar-enter-active">
               <div v-if="callbarGroup || joiningGroupId" class="callbar-reveal" :class="{ 'is-leaving': callbarLeaving }" data-testid="callbar">
@@ -1434,7 +1459,7 @@ function participantListening(participant: Participant) {
             :group-id="selectedGroup.id" :profile-blocked="profileCardsBlocked || personalMenuOpen"
             :member-count="selectedGroupDetail?.memberCount"
             :error="groupError" :connection-lost="presenceConnectionLost" :status="memberOnlineStatus"
-            :status-label="memberStatusLabel" :activity="memberActivity" />
+            :status-label="memberStatusLabel" :activity="memberActivity" :presences="groupPresences" />
         <PersonalStatusCard :user="user" :status="publicPresenceStatus" :status-label="personalPresenceLabel"
           v-model:menu-open="personalMenuOpen" menu-enabled :active="!profileCardsBlocked"
           :presence-mode="presenceMode" :presence-ready="presenceReady" :presence-syncing="presenceSyncing"
@@ -1454,15 +1479,16 @@ function participantListening(participant: Participant) {
       @updated="applyGroupDetail" @removed="removedFromGroup" @close="management = null" />
     </DialogTransition>
     </div>
-    <Transition name="settings-page" @before-leave="($event as HTMLElement).inert = true">
+    <Transition name="settings-page" @after-enter="settingsCovered = settingsOpen" @enter-cancelled="settingsCovered = false"
+      @before-leave="settingsCovered = false; ($event as HTMLElement).inert = true">
     <SettingsView v-if="settingsOpen" :inert="!!rtc.remoteControlRequest" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
       :audio-shortcuts="audioShortcuts" :call-sound-preferences="callSoundPreferences" :call-sounds="callSounds"
       :overlay="desktop ? voiceOverlay : undefined"
       :presence-status="publicPresenceStatus" :presence-label="personalPresenceLabel"
       :recording="recording" :preferences="audioPreferences" :audio-output="audioOutput" :rtc="rtc" :microphone-test="microphoneTest" :microphone-devices="microphoneDevices" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
-      :activity="currentActivity" :activity-status="personalActivityStatus" :show-activity="showActivity" :activity-error="activityVisibilityError"
+      :activity="currentActivity" :activity-status="personalActivityStatus" :show-activity="showActivity" :show-last-online="showLastOnline" :activity-error="activityVisibilityError || presenceSyncError"
       :activity-mappings="activityMappings"
-      @activity-visibility="setShowActivity"
+      @activity-visibility="setShowActivity" @last-online-visibility="setShowLastOnline"
       :save-profile="saveProfile" @close="closeSettings" @logout="emit('logout')" />
     </Transition>
     <DialogTransition>
