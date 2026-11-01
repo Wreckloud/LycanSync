@@ -157,7 +157,27 @@ test('窄窗口卡片保持在可视区，自己的成员卡不请求补充资�
   await expect(card).toHaveCount(0);
   await page.getByRole('button', { name: '个人菜单', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '个人菜单', exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: '个人菜单', exact: true })).toHaveCSS('opacity', '1');
   await page.screenshot({ path: test.info().outputPath('personal-menu-narrow.png') });
+});
+
+test('已展开资料卡随窗口与内容尺寸变化保持在可视区', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '个人菜单', exact: true }).click();
+  const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
+  await expect(menu).toHaveCSS('opacity', '1');
+  await page.setViewportSize({ width: 440, height: 640 });
+  await menu.getByRole('button', { name: '在线状态', exact: true }).click();
+  await expect(menu.getByRole('button', { name: '隐身', exact: true })).toBeVisible();
+  await expect.poll(async () => {
+    const bounds = await menu.boundingBox();
+    return Boolean(bounds && bounds.x >= 7 && bounds.y >= 7
+      && bounds.x + bounds.width <= 433 && bounds.y + bounds.height <= 633);
+  }).toBe(true);
+  await page.screenshot({ path: test.info().outputPath('personal-menu-resized.png') });
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '个人菜单', exact: true })).toBeFocused();
 });
 
 test('个人菜单退出登录复用认证流程', async ({ page }) => {
@@ -166,8 +186,69 @@ test('个人菜单退出登录复用认证流程', async ({ page }) => {
   await page.goto('/');
   await page.getByRole('button', { name: '个人菜单', exact: true }).click();
   await page.getByRole('dialog', { name: '个人菜单', exact: true }).getByRole('button', { name: '退出登录', exact: true }).click();
-  await expect.poll(() => logoutRequests).toBe(1);
+  const confirmation = page.getByRole('dialog', { name: '退出当前账号？', exact: true });
+  await expect(confirmation).toBeVisible();
+  expect(logoutRequests).toBe(0);
+  await expect(confirmation).toContainText('保留本机凭据');
+  await confirmation.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '个人菜单', exact: true })).toBeFocused();
+  expect(logoutRequests).toBe(0);
+  await page.getByRole('button', { name: '个人菜单', exact: true }).click();
+  await page.getByRole('dialog', { name: '个人菜单', exact: true }).getByRole('button', { name: '退出登录', exact: true }).click();
+  await confirmation.getByRole('button', { name: '退出登录', exact: true }).click();
+  await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
+  expect(logoutRequests).toBe(0);
+  await expect(page.getByRole('checkbox', { name: '自动登录', exact: true })).toBeChecked();
+  await expect(confirmation).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath('account-preview.png') });
   await expect(page.getByRole('button', { name: '个人菜单', exact: true })).toHaveCount(0);
+  await page.getByRole('checkbox', { name: '自动登录', exact: true }).uncheck();
+  await expect(page.getByRole('button', { name: '个人菜单', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await expect(page.getByRole('button', { name: '个人菜单', exact: true })).toBeVisible();
+});
+
+test('账号设置退出也需确认，Esc 取消保留当前页面且不注销', async ({ page }) => {
+  let logoutRequests = 0;
+  await page.route('**/api/auth/logout', route => { logoutRequests++; return route.fulfill({ status: 204 }); });
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const exit = page.locator('.account-session').getByRole('button', { name: '退出登录', exact: true });
+  await exit.click();
+  const confirmation = page.getByRole('dialog', { name: '退出当前账号？', exact: true });
+  await expect(page.locator('.dialog-backdrop')).toHaveCSS('opacity', '1');
+  expect(logoutRequests).toBe(0);
+  await page.screenshot({ path: test.info().outputPath('logout-confirmation.png') });
+  await page.keyboard.press('Escape');
+  await expect(confirmation).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '账号设置', exact: true })).toBeVisible();
+  await expect(exit).toBeFocused();
+  expect(logoutRequests).toBe(0);
+});
+
+test('清除凭据有独立确认，取消保留账号，确认后才撤销', async ({ page }) => {
+  let logoutRequests = 0;
+  await page.route('**/api/auth/logout', route => { logoutRequests++; return route.fulfill({ status: 204 }); });
+  await page.goto('/');
+  await page.getByRole('button', { name: '个人菜单', exact: true }).click();
+  await page.getByRole('dialog', { name: '个人菜单', exact: true }).getByRole('button', { name: '退出登录', exact: true }).click();
+  await page.getByRole('dialog', { name: '退出当前账号？', exact: true }).getByRole('button', { name: '退出登录', exact: true }).click();
+  await page.getByText('更多', { exact: true }).click();
+  const clear = page.getByRole('button', { name: '清除本机登录凭据', exact: true });
+  await clear.click();
+  const confirmation = page.getByRole('dialog', { name: '从此设备移除账号？', exact: true });
+  await expect(confirmation).toContainText('服务器维护者协助恢复');
+  expect(logoutRequests).toBe(0);
+  await page.keyboard.press('Escape');
+  await expect(confirmation).toHaveCount(0);
+  await expect(clear).toBeFocused();
+  await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
+  await clear.click();
+  await confirmation.getByRole('button', { name: '清除凭据', exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
+  expect(logoutRequests).toBe(1);
+  await expect(page.getByRole('button', { name: '登录', exact: true })).toHaveCount(0);
 });
 
 test('头像只给卡片头部提供暗色调，快速开关后菜单仍可操作', async ({ page }) => {

@@ -188,7 +188,7 @@ test('确认重启只接受已发现新版的可信安装版页面，沿正常�
     trustedSender: event => event.trusted, closing: false, startupReady: true,
     startupUpdate: { getState: () => state },
     app: { relaunch: () => calls.push('relaunch') },
-    mainWindow: { close: () => { calls.push('close'); context.closing = true; } },
+    desktopTray: { quit: () => { calls.push('close'); context.closing = true; } },
   };
   runInNewContext(main.slice(start, end), context);
   assert.throws(() => handler({ trusted: false }), /当前不能重启/);

@@ -1,17 +1,18 @@
 <script setup lang="ts">
 import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
-import { Minus, X } from '@lucide/vue';
+import { Minus, UserRound, X } from '@lucide/vue';
 import App from './App.vue';
 import AccountAccessPrompt from './components/AccountAccessPrompt.vue';
 import WelcomeProfile from './components/WelcomeProfile.vue';
 import StartupUpdate from './components/StartupUpdate.vue';
 import AppNotice from './components/AppNotice.vue';
 import InlineFeedback from './components/InlineFeedback.vue';
+import LogoutConfirmDialog from './components/LogoutConfirmDialog.vue';
+import DialogTransition from './components/DialogTransition.vue';
 import type { AccessOffer } from './auth/accountAccess';
 import {
   authRequest,
   authenticatedFetch,
-  ApiRequestError,
   setBrowserSession,
   type AuthSessionStatus,
   type AuthUser,
@@ -23,6 +24,14 @@ const desktop = window.lycanDesktop;
 const pageOrigin = window.location.origin;
 const SESSION_HEARTBEAT_INTERVAL_MS = 20_000;
 const user = ref<AuthUser | null>(null);
+const entryUser = ref<AuthUser | null>(null);
+const autoLogin = ref(true);
+const manualEntryRequired = ref(false);
+const preferenceSaving = ref(false);
+const removeConfirm = ref(false);
+const removing = ref(false);
+const logoutTarget = ref<AuthUser | null>(null);
+const logoutBusy = ref(false);
 const ready = ref(false);
 const accessOffer = ref<AccessOffer | null>(null);
 const onboarding = ref(false);
@@ -41,9 +50,11 @@ const updateWarning = ref('');
 const entryRoot = ref<HTMLElement | null>(null);
 const windowMode = computed(() => {
   if (startupChecking.value) return 'startup';
+  // 退出清理期间保留主窗口尺寸，完成后再切回账号页。
+  if (logoutTarget.value) return 'main';
   if (accessOffer.value) return 'invitation';
-  if (!user.value) return 'account';
-  return onboarding.value ? 'profile' : 'main';
+  if (onboarding.value && entryUser.value) return 'profile';
+  return user.value ? 'main' : 'account';
 });
 let layoutFrame: number | undefined;
 let layoutResizeObserver: ResizeObserver | undefined;
@@ -97,11 +108,12 @@ watch([entryRoot, windowMode], ([root]) => {
 function expired() {
   initializationRequest?.abort();
   user.value = null;
+  entryUser.value = null;
   onboarding.value = false;
 }
 const removeAccessLink = desktop?.onAccessLink((offer) => {
   // 当前确认未结束前不切换链接，避免两次兑换的响应互相覆盖。
-  if (!user.value && !accessOffer.value) accessOffer.value = offer;
+  if (!user.value && !entryUser.value && !logoutInProgress && !removing.value && !accessOffer.value) accessOffer.value = offer;
 });
 const removeMaximizedChange = desktop?.onMaximizedChange((maximized) => { windowMaximized.value = maximized; });
 const removeUpdateState = desktop?.onUpdateState((state) => { updateState.value = state; });
@@ -122,7 +134,7 @@ onScopeDispose(() => {
   window.removeEventListener('lycan:unauthorized', expired);
 });
 
-async function initialize() {
+async function initialize(automatic = false) {
   if (disposed) return;
   initializationRequest?.abort();
   const request = new AbortController();
@@ -138,11 +150,23 @@ async function initialize() {
     });
     if (request.signal.aborted) return;
     if (response.ok) {
-      const restoredUser = await response.json();
-      // 邀请确认或新的重连已接管身份，旧响应正文也不能恢复先前账号。
-      if (!request.signal.aborted) user.value = restoredUser;
+      const restoredUser: AuthUser = await response.json();
+      if (request.signal.aborted) return;
+      entryUser.value = restoredUser;
+      const previousPreference = autoLogin.value;
+      autoLogin.value = false;
+      const preference = desktop ? await desktop.getAutoLogin(restoredUser.id)
+        : { enabled: previousPreference, manualEntryRequired: manualEntryRequired.value };
+      // 只有进程启动可自动进入；退出、重连和勾选设置都只更新账号确认页。
+      if (!request.signal.aborted) {
+        autoLogin.value = preference.enabled;
+        manualEntryRequired.value = preference.manualEntryRequired;
+        entryUser.value = restoredUser;
+        if (automatic && preference.enabled && !preference.manualEntryRequired && !accessOffer.value) { user.value = restoredUser; entryUser.value = null; }
+      }
     }
-    else if (response.status !== 401) throw new Error('无法恢复登录，请稍后重试。');
+    else if (response.status === 401) entryUser.value = null;
+    else throw new Error('无法恢复登录，请稍后重试。');
   } catch (exception) {
     if (!request.signal.aborted) error.value = exception instanceof Error ? exception.message : '无法连接服务器';
   } finally {
@@ -159,12 +183,56 @@ function acceptSession(result: { sessionToken?: string; user: AuthUser }) {
     setBrowserSession(result.sessionToken);
   }
   initializationRequest?.abort();
-  user.value = result.user;
+  entryUser.value = result.user;
+  user.value = null;
 }
-function completeAccess(result: { sessionToken?: string; user: AuthUser }, kind: string) {
+async function completeAccess(result: { sessionToken?: string; user: AuthUser }, kind: string) {
   acceptSession(result);
   accessOffer.value = null;
   onboarding.value = kind !== 'RECOVERY';
+  autoLogin.value = true;
+  manualEntryRequired.value = true;
+  if (desktop) {
+    preferenceSaving.value = true;
+    try { await desktop.setAutoLogin(result.user.id, true, true); }
+    catch { autoLogin.value = false; error.value = '自动登录设置保存失败，请重新选择后手动登录。'; }
+    finally { preferenceSaving.value = false; }
+  }
+}
+
+async function changeAutoLogin(event: Event) {
+  const account = entryUser.value;
+  if (!account || preferenceSaving.value || submitting.value || removing.value) return;
+  const enabled = (event.target as HTMLInputElement).checked;
+  const previous = autoLogin.value;
+  autoLogin.value = enabled;
+  preferenceSaving.value = true;
+  error.value = '';
+  try { if (desktop) await desktop.setAutoLogin(account.id, enabled, manualEntryRequired.value); }
+  catch { autoLogin.value = previous; error.value = '自动登录设置保存失败，请重试。'; }
+  finally { preferenceSaving.value = false; }
+}
+
+async function enterAccount() {
+  if (!entryUser.value || submitting.value || preferenceSaving.value || logoutBusy.value || removing.value) return;
+  const accountId = entryUser.value.id;
+  submitting.value = true;
+  error.value = '';
+  let failureMessage = '通话资源尚未完全停止，请重试或重新打开应用。';
+  try {
+    if (desktop) await desktop.returnToAccountEntry();
+    await initialize();
+    if (entryUser.value && !error.value && !disposed) {
+      if (entryUser.value.id !== accountId) { error.value = '账号已变化，请确认当前资料后再次登录。'; return; }
+      failureMessage = '登录设置保存失败，请检查安装目录权限后重试。';
+      if (desktop) await desktop.setAutoLogin(entryUser.value.id, autoLogin.value, false);
+      if (disposed || !entryUser.value) return;
+      manualEntryRequired.value = false;
+      user.value = entryUser.value;
+      entryUser.value = null;
+    }
+  } catch { error.value = failureMessage; }
+  finally { submitting.value = false; }
 }
 
 async function verifyCurrentSession() {
@@ -187,15 +255,17 @@ async function verifyCurrentSession() {
 }
 
 async function saveProfile(profile: ProfileUpdate) {
-  const currentUserId = user.value?.id;
+  const currentUserId = (user.value ?? entryUser.value)?.id;
   if (!currentUserId) throw new Error('登录状态已结束，请重新登录。');
   const updated = await authRequest<AuthUser>('me', 'PUT', profile);
-  if (user.value?.id !== currentUserId) throw new Error('当前账号已切换，资料没有更新到新账号。');
-  user.value = updated;
+  if ((user.value ?? entryUser.value)?.id !== currentUserId) throw new Error('当前账号已切换，资料没有更新到新账号。');
+  if (user.value) user.value = updated;
+  else entryUser.value = updated;
   return updated;
 }
 
 watch(() => user.value?.id ?? null, (currentUserId) => {
+  if (!logoutBusy.value && logoutTarget.value?.id !== currentUserId) logoutTarget.value = null;
   // 有效会话直接进入应用；打开邀请不能切换身份或遮住已有通话。
   if (currentUserId) accessOffer.value = null;
   if (sessionHeartbeat !== null) window.clearInterval(sessionHeartbeat);
@@ -205,41 +275,64 @@ watch(() => user.value?.id ?? null, (currentUserId) => {
   }, SESSION_HEARTBEAT_INTERVAL_MS) : null;
 });
 
+function requestLogout() {
+  if (!user.value || logoutInProgress || logoutBusy.value) return;
+  error.value = '';
+  logoutTarget.value = user.value;
+}
+
+async function confirmLogout() {
+  const target = logoutTarget.value;
+  if (!target || logoutBusy.value || user.value?.id !== target.id) return;
+  logoutBusy.value = true;
+  try {
+    await logout();
+    if (user.value?.id !== target.id) logoutTarget.value = null;
+  } finally { logoutBusy.value = false; }
+}
+
 async function logout() {
   initializationRequest?.abort();
   error.value = '';
   const previousUser = user.value;
   logoutInProgress = true;
   user.value = null;
-  await sendPresenceHeartbeat('OFFLINE', null, AbortSignal.timeout(1_200)).catch(() => undefined);
+  entryUser.value = previousUser;
+  onboarding.value = false;
   try {
-    // 退出期间已通过邀请接入新身份时，不再使用新会话发送旧退出请求。
-    if (disposed || user.value) return;
-    await authRequest<void>('logout', 'POST');
-    if (disposed || user.value) return;
+    // 先卸载房间，再确认原生资源停止；保留加密凭据，不调用撤销会话接口。
+    await sendPresenceHeartbeat('OFFLINE', null, AbortSignal.timeout(1_200)).catch(() => undefined);
+    if (desktop) await desktop.returnToAccountEntry();
+  } catch { error.value = '部分通话资源未完全停止，请重试登录或重新打开应用；凭据已保留。'; }
+  finally { logoutInProgress = false; }
+}
+
+function requestClearSession() {
+  if (!ready.value || user.value || submitting.value || logoutBusy.value || removing.value || preferenceSaving.value) return;
+  error.value = '';
+  removeConfirm.value = true;
+}
+
+async function clearLocalSession() {
+  if (user.value || !removeConfirm.value || removing.value) return;
+  initializationRequest?.abort();
+  removing.value = true;
+  error.value = '';
+  let revoked = false;
+  try {
+    try { await authRequest<void>('logout', 'POST'); revoked = true; }
+    catch { /* 离线或损坏的凭据仍允许从本机移除。 */ }
+    if (desktop) await desktop.clearSession();
     setBrowserSession(null);
     expired();
-  } catch (exception) {
-    if (disposed || user.value) return;
-    if (exception instanceof ApiRequestError
-        && (exception.status === 401 || exception.code === 'LOCAL_SESSION_CLEAR_FAILED')) {
-      setBrowserSession(null);
-      expired();
-      if (exception.status !== 401) error.value = exception.message;
-      return;
-    }
-    if (previousUser) user.value = previousUser;
-    error.value = exception instanceof Error ? exception.message : '退出登录失败';
-  } finally {
-    logoutInProgress = false;
-  }
-}
-async function clearLocalSession() {
-  try { await desktop?.clearSession(); await initialize(); }
-  catch { error.value = '清理本机凭据失败，请检查数据目录权限。'; }
+    autoLogin.value = true;
+    removeConfirm.value = false;
+    if (!revoked) error.value = '本机凭据已移除；服务器会话未确认撤销，请联系服主恢复或撤销。';
+  } catch { error.value = '清理本机凭据失败，请检查数据目录权限后重试。'; }
+  finally { removing.value = false; }
 }
 async function saveServerAddress() {
-  if (!desktop || submitting.value || serverSaving.value) return;
+  if (!desktop || submitting.value || serverSaving.value || entryUser.value || removing.value || logoutBusy.value) return;
   serverSaving.value = true;
   serverError.value = '';
   try { await desktop.setServerAddress(serverAddress.value); }
@@ -249,12 +342,12 @@ async function saveServerAddress() {
   }
 }
 async function openManualAccessLink() {
-  if (!desktop || submitting.value || serverSaving.value || user.value || accessOffer.value) return;
+  if (!desktop || submitting.value || serverSaving.value || user.value || entryUser.value || accessOffer.value) return;
   submitting.value = true;
   manualAccessError.value = '';
   try {
     const offer = await desktop.parseAccessLink(manualAccessLink.value);
-    if (disposed || user.value || accessOffer.value) return;
+    if (disposed || user.value || entryUser.value || accessOffer.value) return;
     manualAccessLink.value = '';
     accessOffer.value = offer;
   } catch (exception) {
@@ -278,8 +371,8 @@ onMounted(async () => {
     startupChecking.value = false;
   }
   // 更新期间不读走邀请、不恢复登录，也不挂载房间或启动心跳。
-  void initialize();
-  void desktop?.getAccessLink().then((offer) => { if (!user.value && offer && !accessOffer.value) accessOffer.value = offer; })
+  void initialize(true);
+  void desktop?.getAccessLink().then((offer) => { if (!user.value && !entryUser.value && offer && !accessOffer.value) accessOffer.value = offer; })
     .catch(() => { error.value = '无法读取邀请链接，请从网页重新打开。'; });
   void desktop?.getServerSettings?.().then((settings) => {
     serverAddress.value = settings.apiUrl;
@@ -290,8 +383,16 @@ onMounted(async () => {
 
 <template>
   <App v-if="user && !onboarding" v-show="!accessOffer" :user="user" :window-maximized="windowMaximized" :save-profile="saveProfile"
-    :interaction-blocked="Boolean(accessOffer)"
-    :startup-update-warning="updateWarning" @dismiss-update-warning="updateWarning = ''" @logout="logout" />
+    :interaction-blocked="Boolean(accessOffer || logoutTarget)"
+    :startup-update-warning="updateWarning" @dismiss-update-warning="updateWarning = ''" @logout="requestLogout" />
+  <DialogTransition>
+    <LogoutConfirmDialog v-if="logoutTarget" :administrator="logoutTarget.administrator" :busy="logoutBusy" :error="error"
+      @cancel="logoutTarget = null" @confirm="confirmLogout" />
+  </DialogTransition>
+  <DialogTransition>
+    <LogoutConfirmDialog v-if="removeConfirm" mode="remove" :administrator="entryUser?.administrator ?? false"
+      :busy="removing" :error="error" @cancel="removeConfirm = false" @confirm="clearLocalSession" />
+  </DialogTransition>
   <div v-if="!user || onboarding || accessOffer" ref="entryRoot" class="app-shell" :class="{ 'compact-auth': desktop }">
     <header class="titlebar" :class="{ 'desktop-titlebar': desktop }">
       <div class="brand">LycanSync</div>
@@ -302,30 +403,47 @@ onMounted(async () => {
     </header>
     <AppNotice v-if="updateWarning" :message="updateWarning" dismissible @dismiss="updateWarning = ''" />
     <StartupUpdate v-if="startupChecking" :state="updateState" @skip="desktop?.skipStartupUpdate()" />
-    <WelcomeProfile v-else-if="user && onboarding" :user="user" :save-profile="saveProfile" @finish="onboarding = false" />
+    <WelcomeProfile v-else-if="entryUser && onboarding" :user="entryUser" :save-profile="saveProfile" @finish="onboarding = false" />
     <main v-else class="auth-screen">
-      <AccountAccessPrompt v-if="accessOffer && ready" :offer="accessOffer" :current-user="user" :current-server="serverAddress || pageOrigin"
+      <AccountAccessPrompt v-if="accessOffer && ready" :offer="accessOffer" :current-user="user ?? entryUser" :current-server="serverAddress || pageOrigin"
         @cancel="accessOffer = null" @joined="completeAccess" />
       <section v-else class="auth-card">
         <h1>一起开黑，一起看</h1>
         <p>登录 LycanSync，继续和朋友一起玩。</p>
         <p v-if="!ready">正在连接服务器…</p>
         <template v-else-if="ready">
-          <p>请打开服主发来的邀请或恢复登录链接；首次部署请使用服务器生成的激活链接。</p>
-          <div v-if="error" class="button-actions">
-            <button @click="initialize">重新连接</button>
-            <button v-if="desktop" @click="clearLocalSession">清理本机登录凭据</button>
+          <div v-if="entryUser" class="account-preview">
+            <img v-if="entryUser.avatar" :src="entryUser.avatar" alt="账号头像" referrerpolicy="no-referrer" />
+            <span v-else class="account-avatar-placeholder"><UserRound :size="26" aria-hidden="true" /></span>
+            <div><strong>{{ entryUser.nickname }}</strong><small>{{ entryUser.administrator ? '服主' : '成员' }} · {{ serverAddress || pageOrigin }}</small></div>
+          </div>
+          <template v-if="entryUser">
+            <label class="auto-login-option"><input type="checkbox" :checked="autoLogin"
+              :disabled="submitting || preferenceSaving || logoutBusy || removing" @change="changeAutoLogin" />自动登录</label>
+            <p class="account-entry-note">下次启动时自动进入；退出登录后仍在这里确认账号。</p>
+            <div class="button-actions"><button class="confirm-button" :disabled="submitting || preferenceSaving || logoutBusy || removing"
+              @click="enterAccount">{{ submitting ? '正在登录…' : '登录' }}</button></div>
+          </template>
+          <template v-else>
+            <p>新成员使用服主发来的邀请链接；更换电脑或凭据失效时使用新的恢复登录链接。</p>
+            <p>服主丢失凭据需由服务器维护者恢复，旧激活链接不能重复使用。</p>
+          </template>
+          <div v-if="error && !removeConfirm" class="button-actions">
+            <button :disabled="submitting || logoutBusy || removing" @click="initialize()">重新连接</button>
           </div>
         </template>
-        <p v-if="error" role="alert" class="auth-error">{{ error }}</p>
-        <details v-if="desktop || serverEditable" class="auth-server-settings">
+        <p v-if="error && !removeConfirm && !logoutTarget" role="alert" class="auth-error">{{ error }}</p>
+        <details v-if="desktop || serverEditable || entryUser" class="auth-server-settings">
           <summary>更多</summary>
+          <button v-if="desktop || entryUser" type="button" :disabled="!ready || submitting || logoutBusy || removing || preferenceSaving"
+            @click="requestClearSession">清除本机登录凭据</button>
+          <p v-if="entryUser" class="account-entry-note">使用其他账号或服务器前，请先清除本机凭据。</p>
           <form v-if="desktop" @submit.prevent="openManualAccessLink">
             <label for="manual-access-link">邀请或恢复登录链接</label>
             <div class="auth-input-row">
               <input v-model="manualAccessLink" type="text" required maxlength="2048" autocomplete="off" spellcheck="false"
-                id="manual-access-link" aria-describedby="manual-access-feedback" placeholder="粘贴服主发来的完整链接" :disabled="submitting || serverSaving" />
-              <button type="submit" class="confirm-button" :disabled="submitting || serverSaving">检查链接</button>
+                id="manual-access-link" aria-describedby="manual-access-feedback" placeholder="粘贴服主发来的完整链接" :disabled="submitting || serverSaving || !!entryUser" />
+              <button type="submit" class="confirm-button" :disabled="submitting || serverSaving || !!entryUser">检查链接</button>
             </div>
             <InlineFeedback id="manual-access-feedback" :message="manualAccessError"
               :status="submitting ? '正在检查…' : '在当前窗口打开，不会立即使用邀请；检查后仍需确认。'" />
@@ -334,8 +452,8 @@ onMounted(async () => {
             <label for="auth-server-address">服务器地址</label>
             <div class="auth-input-row">
               <input v-model="serverAddress" id="auth-server-address" type="url" required autocomplete="off"
-                aria-describedby="server-address-feedback" :disabled="submitting || serverSaving" />
-              <button type="submit" class="confirm-button" :disabled="submitting || serverSaving">{{ serverSaving ? '正在重启…' : '保存并重启' }}</button>
+                aria-describedby="server-address-feedback" :disabled="submitting || serverSaving || !!entryUser" />
+              <button type="submit" class="confirm-button" :disabled="submitting || serverSaving || !!entryUser">{{ serverSaving ? '正在重启…' : '保存并重启' }}</button>
             </div>
             <InlineFeedback id="server-address-feedback" :message="serverError"
               :status="serverSaving ? '正在重启…' : '保存后重启应用，使用该服务器的账号登录。'" />
@@ -347,6 +465,16 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.account-preview { display: flex; align-items: center; gap: 12px; margin: 20px 0; min-width: 0; }
+.account-avatar-placeholder { display: grid; place-items: center; width: 48px; height: 48px; flex-shrink: 0; border-radius: 50%; background: var(--panel-raised); color: var(--muted); }
+.account-preview img { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; }
+.account-preview > div { min-width: 0; }
+.account-preview strong { display: block; overflow-wrap: anywhere; }
+.account-preview small { display: block; color: var(--muted); overflow-wrap: anywhere; }
+.auto-login-option { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
+.auto-login-option input { flex-shrink: 0; width: 16px; height: 16px; margin: 0; padding: 0; }
+.account-entry-note { color: var(--muted); font-size: 12px; line-height: 18px; }
+
 .compact-auth { display: flex; flex-direction: column; }
 .compact-auth > .titlebar { flex: 0 0 var(--titlebar-height); }
 .compact-auth :deep(.auth-screen), .compact-auth :deep(.startup-update-screen) {

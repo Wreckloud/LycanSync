@@ -15,7 +15,7 @@ watch(() => props.active, (active) => {
 
 <template>
   <section class="settings-section account-settings">
-    <p>更换电脑或丢失登录时，请联系服主生成“恢复成员登录”链接。</p>
+    <p>退出登录会返回账号确认页并保留本机凭据；更换电脑或丢失凭据时，仍需新的恢复登录链接。</p>
     <section class="settings-block">
       <h2>第三方账号</h2>
       <div class="account-row"><div class="account-copy"><span>QQ 登录</span>

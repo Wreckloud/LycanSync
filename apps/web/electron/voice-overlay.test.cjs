@@ -287,7 +287,7 @@ test('正式IPC隔离主页面与覆盖页面，结束旧owner不会清除新会
   const methods = ['begin', 'configure', 'update', 'edit', 'end', 'displays', 'ready'];
   const voiceOverlay = Object.fromEntries(methods.map((name) => [name, (...args) => calls.push({ name, args })]));
   const start = source.indexOf("ipcMain.handle('voice-overlay:begin'");
-  const end = source.indexOf("ipcMain.handle('auth:clear'", start);
+  const end = source.indexOf('async function returnToAccountEntry()', start);
   runInNewContext(source.slice(start, end), { ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
     trustedSender: (event) => event.trusted, closing: false, voiceOverlay });
   for (const [name, handler] of handlers) {

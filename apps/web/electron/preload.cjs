@@ -120,6 +120,9 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
     return () => ipcRenderer.removeListener('update:state', listener);
   },
   clearSession: () => ipcRenderer.invoke('auth:clear'),
+  returnToAccountEntry: () => ipcRenderer.invoke('auth:return'),
+  getAutoLogin: (accountId) => ipcRenderer.invoke('auth:auto-login:get', accountId),
+  setAutoLogin: (accountId, enabled, manualEntryRequired) => ipcRenderer.invoke('auth:auto-login:set', accountId, enabled, manualEntryRequired),
   getAccessLink: () => ipcRenderer.invoke('auth:access:get'),
   parseAccessLink: (value) => ipcRenderer.invoke('auth:access:parse', value),
   prepareAccessLink: (offer) => ipcRenderer.invoke('auth:access:prepare', offer),
@@ -174,6 +177,8 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   getSystemIdleState: () => ipcRenderer.invoke('presence:system-idle-state'),
   getAutoStart: () => ipcRenderer.invoke('settings:auto-start:get'),
   setAutoStart: (enabled) => ipcRenderer.invoke('settings:auto-start:set', enabled),
+  getTraySettings: () => ipcRenderer.invoke('settings:tray:get'),
+  setCloseToTray: (enabled) => ipcRenderer.invoke('settings:tray:set', enabled),
   getCurrentActivity: () => ipcRenderer.invoke('activity:current'),
   listActivityWindows: () => ipcRenderer.invoke('activity:windows'),
   configureActivityMappings: (mappings) => ipcRenderer.invoke('activity:configure', mappings),

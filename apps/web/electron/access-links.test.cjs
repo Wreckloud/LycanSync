@@ -89,7 +89,7 @@ test('手动链接 IPC 仅允许可信未登录窗口，拒绝时不解析输入
   const link = `https://example.com/join#token=${token}`;
   await assert.rejects(handler(false, false, null)({}, link), /当前不能/);
   await assert.rejects(handler(true, true, null)({}, link), /当前不能/);
-  await assert.rejects(handler(true, false, 'existing-session')({}, link), /退出当前账号/);
+  await assert.rejects(handler(true, false, 'existing-session')({}, link), /移除当前账号/);
   assert.equal(parsed, 0);
   assert.deepEqual(await handler(true, false, null)({}, link), { server: 'https://example.com', token });
   assert.equal(parsed, 1);

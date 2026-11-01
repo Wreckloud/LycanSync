@@ -183,6 +183,9 @@ interface Window {
     skipStartupUpdate(): Promise<void>;
     onUpdateState(callback: (state: StartupUpdateState) => void): () => void;
     clearSession(): Promise<void>;
+    returnToAccountEntry(): Promise<void>;
+    getAutoLogin(accountId: string): Promise<{ enabled: boolean; manualEntryRequired: boolean }>;
+    setAutoLogin(accountId: string, enabled: boolean, manualEntryRequired: boolean): Promise<boolean>;
     getAccessLink(): Promise<import('./auth/accountAccess').AccessOffer | null>;
     parseAccessLink(value: string): Promise<import('./auth/accountAccess').AccessOffer>;
     prepareAccessLink(offer: import('./auth/accountAccess').AccessOffer): Promise<void>;
@@ -221,6 +224,8 @@ interface Window {
     getSystemIdleState(): Promise<{ state: 'active' | 'idle' | 'locked' | 'unknown'; idleSeconds: number }>;
     getAutoStart(): Promise<{ supported: boolean; enabled: boolean }>;
     setAutoStart(enabled: boolean): Promise<{ supported: boolean; enabled: boolean }>;
+    getTraySettings(): Promise<{ supported: boolean; enabled: boolean; error: string }>;
+    setCloseToTray(enabled: boolean): Promise<{ supported: boolean; enabled: boolean; error: string }>;
     getCurrentActivity(): Promise<DetectedActivity | null>;
     listActivityWindows(): Promise<ActivityWindow[]>;
     configureActivityMappings(mappings: ActivityMapping[]): Promise<void>;

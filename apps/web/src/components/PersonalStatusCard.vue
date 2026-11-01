@@ -27,6 +27,7 @@ function selectSettings(section: 'account' | 'audio' | 'shortcuts') {
 
 function logout() {
   menuOpen.value = false;
+  trigger.value?.focus();
   emit('logout');
 }
 </script>

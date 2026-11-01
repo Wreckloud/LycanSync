@@ -79,7 +79,7 @@ async function switchServer() {
     </header>
     <div class="access-body">
       <template v-if="currentUser">
-        <p>已登录 {{ currentUser.nickname }}。如需使用其他账号，请先退出登录。</p>
+        <p>本机已保存 {{ currentUser.nickname }} 的账号。如需使用其他账号，请先返回并清除本机登录凭据。</p>
       </template>
       <template v-else-if="offer.server !== currentServer">
         <p>连接到 {{ offer.server }}，确认后应用将切换服务器并重启。</p>
@@ -94,7 +94,7 @@ async function switchServer() {
     <footer class="card-actions" :class="{ 'card-actions-no-cancel': !!currentUser, 'card-actions-no-primary': !currentUser && offer.server === currentServer && !canRedeem && !error }">
       <button v-if="!currentUser" type="button" class="settings-button" :disabled="busy" @click="close">取消</button>
       <InlineFeedback class="card-feedback" :message="error" :status="busy ? '正在处理…' : ''" />
-      <button v-if="currentUser" type="button" class="confirm-button card-actions-end" :disabled="busy" @click="close">返回应用</button>
+      <button v-if="currentUser" type="button" class="confirm-button card-actions-end" :disabled="busy" @click="close">返回</button>
       <button v-else-if="offer.server !== currentServer" type="button" class="confirm-button card-actions-end" :disabled="busy" @click="switchServer">连接并重启</button>
       <button v-else-if="canRedeem" type="button" class="confirm-button card-actions-end" :disabled="busy" @click="join">{{ preview?.kind === 'ACTIVATE' ? '确认激活' : preview?.kind === 'RECOVERY' ? '恢复登录' : '确认加入' }}</button>
       <button v-else-if="error" type="button" class="confirm-button card-actions-end" :disabled="busy" @click="checkLink">重新检查</button>

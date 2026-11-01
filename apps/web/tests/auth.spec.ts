@@ -77,6 +77,7 @@ test('浏览器旧会话的延迟 401 不退出新会话，当前会话 401 仍�
     await expect(page.getByRole('button', { name: '重新连接', exact: true })).toBeVisible();
     await exchange();
     await page.getByRole('button', { name: '重新连接', exact: true }).click();
+    await page.getByRole('button', { name: '登录', exact: true }).click();
     await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible();
     await page.clock.fastForward(20_100);
     await started;
@@ -93,7 +94,7 @@ test('浏览器旧会话的延迟 401 不退出新会话，当前会话 401 仍�
     await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible();
     revoked = true;
     await page.clock.fastForward(20_100);
-    await expect(page.getByText('请打开服主发来的邀请或恢复登录链接', { exact: false })).toBeVisible();
+    await expect(page.getByText('新成员使用服主发来的邀请链接', { exact: false })).toBeVisible();
     expect(redemptions).toBe(2);
   } finally { releaseSession(); }
 });
@@ -116,7 +117,7 @@ test('新设备替换会话后旧客户端通过心跳静默退出', async ({ pa
   await page.goto('/');
   await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible();
   await page.clock.fastForward(20_100);
-  await expect(page.getByText('请打开服主发来的邀请或恢复登录链接', { exact: false })).toBeVisible();
+  await expect(page.getByText('新成员使用服主发来的邀请链接', { exact: false })).toBeVisible();
   expect(sessionRequests).toBeGreaterThanOrEqual(1);
 });
 
@@ -475,7 +476,7 @@ test('签名自动保存与注册日期展示，反馈不推动下方内容', as
   expect(updates).toBe(3);
 });
 
-test('动态开关按账号保存，账号设置明确标出尚未接入的功能', async ({ page }) => {
+test('浏览器账号设置明确标出未接入功能与桌面动态限制', async ({ page }) => {
   const user = { id: 'settings-account-user', nickname: '设置测试', avatar: '', administrator: false };
   await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
@@ -488,17 +489,16 @@ test('动态开关按账号保存，账号设置明确标出尚未接入的功�
   await expect(page.getByRole('navigation', { name: '设置栏目' }).getByRole('button', { name: '当前动态', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '修改头像', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '修改密码', exact: true })).toHaveCount(0);
-  await expect(page.getByText('更换电脑或丢失登录时，请联系服主生成“恢复成员登录”链接。')).toBeVisible();
+  await expect(page.getByText('退出登录会返回账号确认页并保留本机凭据；更换电脑或丢失凭据时，仍需新的恢复登录链接。')).toBeVisible();
   await expect(page.getByRole('button', { name: '查看 QQ 绑定说明', exact: true })).toBeVisible();
-  await expect(page.locator('.activity-settings')).toContainText('动态检测仅在桌面版提供');
+  await expect(page.locator('.activity-settings')).toContainText('动态检测仅在 Windows 桌面版提供');
   const toggle = page.getByRole('checkbox', { name: '显示当前动态', exact: true });
   await expect(toggle).toBeChecked();
-  await toggle.uncheck();
-  expect(await page.evaluate(() => localStorage.getItem('lycansync.activity-visible.v1.settings-account-user'))).toBe('false');
+  await expect(toggle).toBeDisabled();
   await page.getByRole('button', { name: '返回应用' }).click();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '账号设置', exact: true }).click();
-  await expect(toggle).not.toBeChecked();
+  await expect(toggle).toBeDisabled();
 
   await expect(page.getByRole('textbox', { name: '新密码' })).toHaveCount(0);
   await page.getByRole('button', { name: '查看 QQ 绑定说明', exact: true }).click();
