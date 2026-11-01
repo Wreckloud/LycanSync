@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onScopeDispose, ref, watch } from 'vue';
+import { computed, onScopeDispose, ref, watch } from 'vue';
+import { autoUpdate, computePosition, flip, offset, shift } from '@floating-ui/dom';
 import { UserRound } from '@lucide/vue';
 import type { UserPresenceStatus } from '../presence/presenceApi';
 import { readAvatarTint } from '../profile/avatarTint';
@@ -25,7 +26,6 @@ const surface = ref<HTMLElement | null>(null);
 const avatarImage = ref<HTMLImageElement | null>(null);
 const tint = ref<string>();
 const position = ref({ left: '0px', top: '0px', visibility: 'hidden' as 'visible' | 'hidden' });
-let observer: ResizeObserver | undefined;
 let generation = 0;
 const activitySeconds = ref<number | null>(null);
 const activityDuration = computed(() => {
@@ -65,24 +65,6 @@ watch(() => [props.anchor, props.activityStartedAt] as const, ([anchor, startedA
   });
 }, { immediate: true });
 
-function place() {
-  const anchor = props.anchor;
-  const element = surface.value;
-  if (!anchor || !element) return;
-  if (!anchor.isConnected) { emit('close'); return; }
-  const bounds = anchor.getBoundingClientRect();
-  const owner = anchor.ownerDocument.defaultView!;
-  const width = element.offsetWidth;
-  const height = element.offsetHeight;
-  const gap = props.placement === 'above' ? 8 : 20;
-  let left = props.placement === 'above' ? bounds.right - width : bounds.left - width - gap;
-  let top = props.placement === 'above' ? bounds.top - height - 8 : bounds.top;
-  if (props.placement === 'left' && left < 8 && bounds.right + width + gap <= owner.innerWidth) left = bounds.right + gap;
-  left = Math.max(8, Math.min(left, owner.innerWidth - width - 8));
-  top = Math.max(8, Math.min(top, owner.innerHeight - height - 8));
-  position.value = { left: `${left}px`, top: `${top}px`, visibility: 'visible' };
-}
-
 function tintAvatar() {
   tint.value = avatarImage.value ? readAvatarTint(avatarImage.value) : undefined;
 }
@@ -106,34 +88,45 @@ function dismissOnEscape(event: KeyboardEvent) {
 }
 
 watch(() => props.avatar, () => { tint.value = undefined; });
-watch(() => props.anchor, async (anchor, _, onCleanup) => {
+watch(() => [props.anchor, surface.value, props.placement] as const, ([anchor, element, placement], _, onCleanup) => {
   const revision = ++generation;
-  if (!anchor) return;
+  if (!anchor || !element) return;
   position.value.visibility = 'hidden';
   const document = anchor.ownerDocument;
-  const owner = document.defaultView!;
   document.addEventListener('pointerdown', dismissOutside);
   document.addEventListener('focusin', dismissOutside);
   document.addEventListener('keydown', dismissOnEscape, true);
-  owner.addEventListener('resize', place);
-  document.addEventListener('scroll', place, true);
+  let stopPositioning: (() => void) | undefined;
   onCleanup(() => {
     document.removeEventListener('pointerdown', dismissOutside);
     document.removeEventListener('focusin', dismissOutside);
     document.removeEventListener('keydown', dismissOnEscape, true);
-    owner.removeEventListener('resize', place);
-    document.removeEventListener('scroll', place, true);
-    observer?.disconnect();
-    observer = undefined;
+    stopPositioning?.();
   });
-  await nextTick();
-  if (revision !== generation || !surface.value) return;
-  place();
+  let request = 0;
+  let positioned = false;
+  function updatePosition() {
+    if (!anchor!.isConnected) { emit('close'); return; }
+    const currentRequest = ++request;
+    void computePosition(anchor!, element!, {
+      strategy: 'fixed', placement: placement === 'above' ? 'top-end' : 'left-start',
+      middleware: [offset(placement === 'above' ? 8 : 20), flip({ padding: 8, crossAxis: false }),
+        shift({ padding: 8, crossAxis: true })],
+    }).then(({ x, y }) => {
+      // 换成员、退场和尺寸变化后的旧计算不能覆盖当前卡片。
+      if (revision !== generation || currentRequest !== request || props.anchor !== anchor || surface.value !== element) return;
+      position.value = { left: `${x}px`, top: `${y}px`, visibility: 'visible' };
+      if (!positioned && props.autofocus) element!.querySelector<HTMLButtonElement>('button')?.focus();
+      positioned = true;
+    }).catch(() => {
+      if (revision !== generation || currentRequest !== request) return;
+      console.error('无法定位资料卡');
+      emit('close');
+    });
+  }
   tintAvatar();
-  if (props.autofocus) surface.value.querySelector<HTMLButtonElement>('button')?.focus();
-  observer = new owner.ResizeObserver(place);
-  observer.observe(surface.value);
-}, { immediate: true });
+  stopPositioning = autoUpdate(anchor, element, updatePosition);
+}, { immediate: true, flush: 'post' });
 onScopeDispose(() => { generation++; });
 
 defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contains(target)) });
