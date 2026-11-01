@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
-import { computed, effectScope, nextTick, reactive, ref, watch } from 'vue';
+import { computed, effectScope, markRaw, nextTick, onScopeDispose, reactive, ref, watch } from 'vue';
 import { afterEach, expect, it, vi } from 'vitest';
 
 const script = parse(readFileSync(new URL('./ProfilePopover.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
@@ -11,7 +11,111 @@ const clock = parsed.statements.filter(statement => (ts.isVariableStatement(stat
   && statement.declarationList.declarations.some(item => ['activitySeconds', 'activityDuration'].includes(item.name.getText(parsed))))
   || statement.getText(parsed).startsWith('watch(() => [props.anchor, props.activityStartedAt]'))
   .map(statement => statement.getText(parsed)).join('\n');
+const positioning = parsed.statements.filter(statement => statement.getText(parsed)
+  .startsWith('watch(() => [props.anchor, surface.value, props.placement]')
+  || statement.getText(parsed).startsWith('onScopeDispose('))
+  .map(statement => statement.getText(parsed)).join('\n');
 afterEach(() => { vi.useRealTimers(); });
+
+function positioningFixture() {
+  const events = new EventTarget();
+  const document = { addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events) };
+  const anchor = markRaw({ ownerDocument: document, isConnected: true }) as unknown as HTMLElement;
+  const focus = vi.fn();
+  const element = markRaw({ querySelector: () => ({ focus }) }) as unknown as HTMLElement;
+  const props = reactive({ anchor: null as HTMLElement | null, placement: 'left', autofocus: true });
+  const surface = ref<HTMLElement | null>(null);
+  const position = ref({ left: '0px', top: '0px', visibility: 'hidden' });
+  const pending: Array<{ resolve: (point: { x: number; y: number }) => void; reject: (error: Error) => void }> = [];
+  const updates: Array<() => void> = [];
+  const cleanups: Array<ReturnType<typeof vi.fn>> = [];
+  const emit = vi.fn();
+  const computePosition = vi.fn(() => new Promise<{ x: number; y: number }>((resolve, reject) => pending.push({ resolve, reject })));
+  const autoUpdate = vi.fn((_anchor, _element, update: () => void) => {
+    updates.push(update);
+    update();
+    const cleanup = vi.fn();
+    cleanups.push(cleanup);
+    return cleanup;
+  });
+  const scope = effectScope();
+  scope.run(() => runInNewContext(ts.transpile(positioning, { target: ts.ScriptTarget.ES2022 }), {
+    props, surface, position, generation: 0, watch, onScopeDispose, computePosition, autoUpdate,
+    offset: vi.fn(), flip: vi.fn(), shift: vi.fn(), emit, tintAvatar: vi.fn(),
+    dismissOutside: vi.fn(), dismissOnEscape: vi.fn(), console,
+  }));
+  return { props, surface, position, pending, updates, cleanups, emit, scope, anchor, element, focus, computePosition, autoUpdate };
+}
+
+it('只有展开资料卡才观察定位，首次定位完成再聚焦；关闭立即释放', async () => {
+  const f = positioningFixture();
+  try {
+    expect(f.autoUpdate).not.toHaveBeenCalled();
+    f.props.anchor = f.anchor; f.surface.value = f.element;
+    await nextTick();
+    expect(f.position.value.visibility).toBe('hidden');
+    expect(f.focus).not.toHaveBeenCalled();
+    f.pending[0]!.resolve({ x: 100, y: 80 });
+    await nextTick();
+    expect(f.position.value).toEqual({ left: '100px', top: '80px', visibility: 'visible' });
+    expect(f.focus).toHaveBeenCalledOnce();
+    f.updates[0]!();
+    f.pending[1]!.resolve({ x: 100, y: 90 });
+    await nextTick();
+    expect(f.focus).toHaveBeenCalledOnce();
+    f.props.anchor = null;
+    await nextTick();
+    expect(f.cleanups[0]).toHaveBeenCalledOnce();
+  } finally { f.scope.stop(); }
+});
+
+it('快速换成员及尺寸变化时，迟到定位不能覆盖新卡片；销毁后不再写入', async () => {
+  const f = positioningFixture();
+  try {
+    f.props.anchor = f.anchor; f.surface.value = f.element;
+    await nextTick();
+    f.props.anchor = markRaw({ ownerDocument: f.anchor.ownerDocument, isConnected: true }) as unknown as HTMLElement;
+    await nextTick();
+    expect(f.cleanups[0]).toHaveBeenCalledOnce();
+    f.pending[0]!.resolve({ x: 900, y: 900 });
+    await nextTick();
+    expect(f.position.value.visibility).toBe('hidden');
+    f.updates[1]!();
+    f.pending[2]!.resolve({ x: 120, y: 150 });
+    await nextTick();
+    f.pending[1]!.resolve({ x: 800, y: 800 });
+    await nextTick();
+    expect(f.position.value.left).toBe('120px');
+    f.updates[1]!();
+    f.scope.stop();
+    f.pending[3]!.resolve({ x: 700, y: 700 });
+    await nextTick();
+    expect(f.position.value.left).toBe('120px');
+    expect(f.cleanups[1]).toHaveBeenCalledOnce();
+  } finally { f.scope.stop(); }
+});
+
+it('同一入口更换卡片 DOM 重新绑定；定位失败或入口失效会结束卡片', async () => {
+  const f = positioningFixture();
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    f.props.anchor = f.anchor; f.surface.value = f.element;
+    await nextTick();
+    f.surface.value = markRaw({ querySelector: () => null }) as unknown as HTMLElement;
+    await nextTick();
+    expect(f.cleanups[0]).toHaveBeenCalledOnce();
+    expect(f.autoUpdate).toHaveBeenCalledTimes(2);
+    f.pending[1]!.reject(new Error('private failure details'));
+    await nextTick(); await nextTick();
+    expect(log).toHaveBeenCalledWith('无法定位资料卡');
+    expect(f.emit).toHaveBeenCalledWith('close');
+    f.emit.mockClear();
+    Object.defineProperty(f.anchor, 'isConnected', { value: false });
+    f.updates[1]!();
+    expect(f.emit).toHaveBeenCalledWith('close');
+    expect(f.computePosition).toHaveBeenCalledTimes(2);
+  } finally { f.scope.stop(); log.mockRestore(); }
+});
 
 function fixture() {
   vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval', 'performance'] });
