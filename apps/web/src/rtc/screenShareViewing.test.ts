@@ -27,6 +27,24 @@ function viewing() {
   return { page, observerWindow, publication, updates, element, visible, background, callbacks };
 }
 
+it('设置覆盖只撤销主界面的观看需求，独立窗继续观看；返回保留订阅和画质', () => {
+  const main = viewing(), auxiliary = viewing();
+  const inline = observeScreenShareView(main.publication, main.element(), VideoQuality.HIGH);
+  const detached = observeScreenShareView(main.publication, auxiliary.element(), VideoQuality.LOW);
+  inline.setActive(false);
+  expect(main.publication.isEnabled).toBe(true);
+  expect(main.publication.videoQuality).toBe(VideoQuality.LOW);
+  detached.setActive(false);
+  expect(main.publication.isEnabled).toBe(false);
+  expect(main.publication.isDesired).toBe(true);
+  inline.setActive(true);
+  expect(main.publication.videoQuality).toBe(VideoQuality.HIGH);
+  inline.stop(); detached.stop();
+  const count = main.updates.length;
+  inline.setActive(false); detached.setActive(true);
+  expect(main.updates).toHaveLength(count);
+});
+
 it('不同窗口合并需求，主窗口隐藏不暂停辅助窗，关窗与迟到回调不影响其他位置', () => {
   const main = viewing(), auxiliary = viewing();
   const small = main.element(), large = auxiliary.element();

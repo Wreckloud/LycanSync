@@ -1,17 +1,18 @@
 // 本地预览上报可见性并控制元素播放；采集轨道和对外发布仍由房间媒体流程持有。
 export function observeLocalScreenPreview(element: HTMLVideoElement, onPlaybackError: () => void,
-  onVisibilityChange?: (visible: boolean) => void): () => void {
+  onVisibilityChange?: (visible: boolean) => void, initiallyActive = true) {
   const page = element.ownerDocument;
   const viewWindow = page.defaultView;
   if (!viewWindow) throw new Error('screenShareViewWindowUnavailable');
   let disposed = false;
+  let active = initiallyActive;
   let intersecting = element.getClientRects().length > 0;
   let playing: boolean | undefined;
   let playbackRequest = 0;
 
   function updatePlayback() {
     if (disposed) return;
-    const visible = intersecting && page.visibilityState !== 'hidden';
+    const visible = active && intersecting && page.visibilityState !== 'hidden';
     if (playing === visible) return;
     playing = visible;
     onVisibilityChange?.(visible);
@@ -28,7 +29,7 @@ export function observeLocalScreenPreview(element: HTMLVideoElement, onPlaybackE
 
   function preventHiddenPlayback() {
     // SDK 恢复窗口时会重新播放所有绑定元素，不能只依赖缓存的可见状态。
-    if (!disposed && (!intersecting || page.visibilityState === 'hidden')) element.pause();
+    if (!disposed && (!active || !intersecting || page.visibilityState === 'hidden')) element.pause();
   }
 
   const observer = new viewWindow.IntersectionObserver((entries) => {
@@ -53,5 +54,12 @@ export function observeLocalScreenPreview(element: HTMLVideoElement, onPlaybackE
     onVisibilityChange?.(false);
     element.pause();
   }
-  return stop;
+  return {
+    setActive(enabled: boolean) {
+      if (disposed || active === enabled) return;
+      active = enabled;
+      updatePlayback();
+    },
+    stop,
+  };
 }

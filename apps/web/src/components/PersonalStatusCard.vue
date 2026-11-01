@@ -93,8 +93,8 @@ function logout() {
 .personal-identity.is-interactive { display: grid; grid-column: 1 / span 2; grid-template-columns: 32px minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; padding: 0; border: 0; border-radius: 5px; background: transparent; color: inherit; text-align: left; }
 .personal-identity.is-interactive:hover, .personal-identity.is-interactive[aria-expanded='true'] { background: var(--panel-raised); }
 .personal-menu-actions { display: grid; padding-top: 4px; border-top: 1px solid var(--border-soft); }
-.personal-menu-actions button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; min-height: 32px; padding: 6px 8px; border: 0; border-radius: 0; background: transparent; color: var(--muted); font-size: 13px; line-height: 20px; text-align: left; }
-.personal-menu-actions button:hover:not(:disabled) { background: var(--panel-raised); color: var(--text); }
+.personal-menu-actions button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; min-height: 32px; padding: 7px 0; border: 0; background: transparent; color: var(--muted); font-size: 13px; line-height: 18px; text-align: left; }
+.personal-menu-actions button:hover:not(:disabled) { color: var(--text); }
 .personal-menu-session { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border-soft); }
 .personal-menu-session button { color: var(--danger); }
 .personal-presence-dot { flex-shrink: 0; width: 10px; height: 10px; margin: 0 2.5px; border-radius: 50%; background: var(--subtle); }

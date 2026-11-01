@@ -178,7 +178,6 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
 
 <style>
 .profile-popover { position: fixed; z-index: 60; width: min(292px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); text-align: left; }
-.profile-popover.is-personal { border-radius: 0; }
 .profile-popover-banner { height: 38px; background: var(--profile-tint, var(--panel-raised)); }
 .profile-popover-body { display: grid; gap: 8px; padding: 0 14px 12px; }
 .profile-popover-identity { display: flex; align-items: flex-end; gap: 10px; min-width: 0; margin-top: -18px; }

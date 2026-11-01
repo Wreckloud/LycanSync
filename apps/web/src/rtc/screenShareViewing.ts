@@ -18,11 +18,12 @@ export function syncScreenShareViewing(publication: RemoteTrackPublication) {
 }
 
 export function observeScreenShareView(publication: RemoteTrackPublication, element: HTMLVideoElement,
-  quality: VideoQuality) {
+  quality: VideoQuality, initiallyActive = true) {
   const page = element.ownerDocument;
   const viewWindow = page.defaultView;
   if (!viewWindow) throw new Error('screenShareViewWindowUnavailable');
   let disposed = false;
+  let active = initiallyActive;
   let intersecting = element.getClientRects().length > 0;
   const demand: ViewDemand = { visible: false, quality };
   let demands = viewingDemands.get(publication);
@@ -31,7 +32,7 @@ export function observeScreenShareView(publication: RemoteTrackPublication, elem
   currentDemands.add(demand);
   function updateVisibility() {
     if (disposed) return;
-    demand.visible = intersecting && page.visibilityState !== 'hidden';
+    demand.visible = active && intersecting && page.visibilityState !== 'hidden';
     updateViewing(publication, currentDemands);
   }
   // 每个观看位置使用所属窗口，主窗口隐藏不能暂停仍可见的独立窗。
@@ -56,6 +57,11 @@ export function observeScreenShareView(publication: RemoteTrackPublication, elem
     if (!currentDemands.size) viewingDemands.delete(publication);
   }
   return {
+    setActive(enabled: boolean) {
+      if (disposed || active === enabled) return;
+      active = enabled;
+      updateVisibility();
+    },
     setQuality(next: VideoQuality) {
       if (disposed || demand.quality === next) return;
       demand.quality = next;

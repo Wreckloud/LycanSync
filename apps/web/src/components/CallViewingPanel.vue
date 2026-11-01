@@ -17,9 +17,10 @@ const props = withDefaults(defineProps<{
   listening: boolean;
   privateControl: (identity: string) => string;
   active?: boolean;
+  videoActive?: boolean;
   detached?: boolean;
   reconnecting: boolean;
-}>(), { active: true });
+}>(), { active: true, videoActive: true });
 const emit = defineEmits<{ detach: []; return: []; notice: [message: string] }>();
 const panel = ref<HTMLElement | null>(null);
 const ratios = ref<Record<number, number>>({});
@@ -168,6 +169,7 @@ onScopeDispose(() => {
               :aria-label="focus ? '查看全部共享画面' : '聚焦' + share.participant.name"
               @click="select(share)" @keydown.enter.self.prevent="select(share)" @keydown.space.self.prevent="select(share)">
               <ParticipantCard :participant="share.participant" :revision="revision" variant="viewer"
+                :view-active="videoActive"
                 :avatar="avatar(share.participant.identity)" :is-local="share.participant === room?.localParticipant"
                 :recording-elapsed="recordingElapsed"
                 :is-listening="listening" :input-blocked="true" :show-fullscreen="false"

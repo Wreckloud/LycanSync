@@ -13,6 +13,7 @@ import HorizontalScroll from './HorizontalScroll.vue';
 const props = defineProps<{
   rtc: UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>;
   inlineTarget: HTMLElement | null;
+  inlineVisible: boolean;
   groupName: string;
   recordingElapsed?: string;
   avatar: (identity: string) => string;
@@ -115,11 +116,11 @@ defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded });
 
 <template>
   <Teleport v-if="inlineTarget" :to="inlineTarget">
-    <CallViewingPanel :active="inlineExpanded" :view="view" :room="rtc.room" :revision="rtc.revision"
+    <CallViewingPanel :active="inlineExpanded" :video-active="inlineVisible" :view="view" :room="rtc.room" :revision="rtc.revision"
       :avatar="avatar" :listening="rtc.listening" :recording-elapsed="recordingElapsed"
       :private-control="controlPlaceholder" :reconnecting="rtc.status === 'reconnecting'"
       @detach="detachWatching" @notice="emit('notice', $event)">
-      <HorizontalScroll label="语音成员"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" appear @before-leave="($event as HTMLElement).inert = true"><slot :select="select" /></TransitionGroup></HorizontalScroll>
+      <HorizontalScroll label="语音成员"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" appear @before-leave="($event as HTMLElement).inert = true"><slot :select="select" :visible="inlineVisible" /></TransitionGroup></HorizontalScroll>
     </CallViewingPanel>
   </Teleport>
   <Teleport v-if="watching?.target" :to="watching.target">
@@ -128,7 +129,7 @@ defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded });
         :private-control="controlPlaceholder" :recording-elapsed="recordingElapsed"
         :reconnecting="rtc.status === 'reconnecting'" detached
         @return="returnWatching" @notice="emit('notice', $event)">
-        <HorizontalScroll label="语音成员"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" appear @before-leave="($event as HTMLElement).inert = true"><slot :select="view.select" /></TransitionGroup></HorizontalScroll>
+        <HorizontalScroll label="语音成员"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" appear @before-leave="($event as HTMLElement).inert = true"><slot :select="view.select" :visible="true" /></TransitionGroup></HorizontalScroll>
       </CallViewingPanel>
     </section>
   </Teleport>
