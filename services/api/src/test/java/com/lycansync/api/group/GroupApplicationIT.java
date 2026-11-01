@@ -237,7 +237,7 @@ class GroupApplicationIT {
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].status").value("OFFLINE"))
-                .andExpect(jsonPath("$[0].lastSeenAt").isNotEmpty());
+                .andExpect(jsonPath("$[0].lastSeenAt").isEmpty());
 
         mvc.perform(post("/api/presence/heartbeat")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken)
@@ -330,7 +330,7 @@ class GroupApplicationIT {
         AuthenticatedUser oldSession = authService.authenticate(oldToken);
         localAuth.login(new com.lycansync.api.auth.dto.LocalLoginRequest("PresenceSession", PASSWORD));
 
-        presenceService.heartbeat(oldSession, new PresenceHeartbeatRequest(UserPresenceStatus.OFFLINE, null));
+        presenceService.heartbeat(oldSession, new PresenceHeartbeatRequest(UserPresenceStatus.OFFLINE, null, null, null));
 
         assertThat(jdbc.sql("SELECT count(*) FROM user_presence WHERE user_id = ?")
                 .param(oldSession.id()).query(Long.class).single()).isZero();
@@ -372,12 +372,13 @@ class GroupApplicationIT {
     void shouldNotLetAnOlderHeartbeatResurrectAnOfflinePresence() {
         String token = localAuth.register(new LocalRegistrationRequest("PresenceRace", PASSWORD)).sessionToken();
         AuthenticatedUser user = authService.authenticate(token);
-        presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE, null));
+        presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE, null, null, null));
         Instant delayedHeartbeatAt = Instant.now();
-        presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.OFFLINE, null));
+        presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.OFFLINE, null, null, null));
 
-        int delayedUpdateCount = presenceMapper.upsert(user.id(), user.sessionHash(), UserPresenceStatus.ONLINE,
-                null, null, delayedHeartbeatAt);
+        int delayedUpdateCount = presenceMapper.upsert(new com.lycansync.api.presence.model.UserPresence(
+                user.id(), UserPresenceStatus.ONLINE, delayedHeartbeatAt, null, null, null, delayedHeartbeatAt,
+                true, true, delayedHeartbeatAt, null, null, null), user.sessionHash());
 
         assertThat(delayedUpdateCount).isZero();
         assertThat(jdbc.sql("SELECT status FROM user_presence WHERE user_id = ?")
@@ -390,11 +391,12 @@ class GroupApplicationIT {
         AuthenticatedUser user = authService.authenticate(token);
         UUID groupId = groupService.createGroup(user, new CreateGroupRequest("隐身测试", null, null)).id();
         presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE,
-                new PresenceHeartbeatRequest.Activity(UserActivityType.GAME, "游戏")));
+                new PresenceHeartbeatRequest.Activity(UserActivityType.GAME, "游戏"), null, null));
+        jdbc.sql("UPDATE user_presence SET activity_started_at = now() - interval '30 minutes'").update();
         String previous = null;
         for (int heartbeat = 0; heartbeat < 2; heartbeat++) {
             presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.OFFLINE,
-                    new PresenceHeartbeatRequest.Activity(UserActivityType.GAME, "不应公开的活动")));
+                    new PresenceHeartbeatRequest.Activity(UserActivityType.GAME, "不应公开的活动"), null, null));
             String body = mvc.perform(get("/api/groups/{groupId}/presences", groupId)
                             .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
                     .andExpect(status().isOk())
@@ -403,10 +405,71 @@ class GroupApplicationIT {
                     .andExpect(jsonPath("$[0].activityType").isEmpty())
                     .andExpect(jsonPath("$[0].activityName").isEmpty())
                     .andExpect(jsonPath("$[0].activityStartedAt").isEmpty())
+                    .andExpect(jsonPath("$[0].lastOnlineAt").isNotEmpty())
+                    .andExpect(jsonPath("$[0].recentGame.name").value("游戏"))
                     .andReturn().getResponse().getContentAsString();
             if (previous != null) assertThat(body).isEqualTo(previous);
             previous = body;
         }
+    }
+
+    @Test
+    void shouldPersistRecentGameAndIndependentVisibilityAcrossOfflineRequests() throws Exception {
+        String token = localAuth.register(new LocalRegistrationRequest("RecentGame", PASSWORD)).sessionToken();
+        AuthenticatedUser user = authService.authenticate(token);
+        UUID groupId = groupService.createGroup(user, new CreateGroupRequest("最近游戏", null, null)).id();
+        var game = new PresenceHeartbeatRequest.Activity(UserActivityType.GAME, "最终幻想14");
+        presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE, game, true, true));
+        jdbc.sql("UPDATE user_presence SET activity_started_at = now() - interval '30 minutes'").update();
+        presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE, null, null, null));
+        mvc.perform(get("/api/groups/{groupId}/presences", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].status").value("ONLINE"))
+                .andExpect(jsonPath("$[0].lastOnlineAt").isEmpty())
+                .andExpect(jsonPath("$[0].recentGame.name").value("最终幻想14"));
+        assertThat(presenceMapper.findByUserForUpdate(user.id()).recentGamePlayedSeconds()).isGreaterThanOrEqualTo(1800L);
+
+        mvc.perform(post("/api/presence/heartbeat").header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"ONLINE\",\"showActivity\":false,\"showLastOnline\":true}"))
+                .andExpect(status().isNoContent());
+        presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.OFFLINE, null, null, null));
+        mvc.perform(get("/api/groups/{groupId}/presences", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].lastOnlineAt").isNotEmpty())
+                .andExpect(jsonPath("$[0].recentGame").isEmpty());
+        assertThat(presenceMapper.findByUserForUpdate(user.id()).showActivity()).isFalse();
+
+        presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE, game, true, false));
+        jdbc.sql("UPDATE user_presence SET activity_started_at = now() - interval '20 minutes'").update();
+        presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.OFFLINE, null, null, null));
+        mvc.perform(get("/api/groups/{groupId}/presences", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].lastOnlineAt").isEmpty())
+                .andExpect(jsonPath("$[0].recentGame.name").value("最终幻想14"));
+        assertThat(presenceMapper.findByUserForUpdate(user.id()).showLastOnline()).isFalse();
+    }
+
+    @Test
+    void shouldEndExpiredGameAtLastHeartbeatWithoutCountingTheOfflineWait() {
+        String token = localAuth.register(new LocalRegistrationRequest("ExpiredGame", PASSWORD)).sessionToken();
+        AuthenticatedUser user = authService.authenticate(token);
+        presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE,
+                new PresenceHeartbeatRequest.Activity(UserActivityType.GAME, "游戏"), true, true));
+        jdbc.sql("""
+                UPDATE user_presence SET activity_started_at = now() - interval '5 minutes',
+                    last_seen_at = now() - interval '2 minutes', last_online_at = now() - interval '2 minutes'
+                """).update();
+        var previous = presenceMapper.findByUserForUpdate(user.id());
+        presenceService.markExpiredOffline();
+        var ended = presenceMapper.findByUserForUpdate(user.id());
+        assertThat(ended.status()).isEqualTo(UserPresenceStatus.OFFLINE);
+        assertThat(ended.lastOnlineAt()).isEqualTo(previous.lastOnlineAt());
+        assertThat(ended.recentGameEndedAt()).isEqualTo(previous.lastSeenAt());
+        assertThat(ended.recentGamePlayedSeconds()).isEqualTo(180L);
     }
 
     @Test
@@ -560,15 +623,22 @@ class GroupApplicationIT {
                         """)
                 .param(userId).update();
         var previous = isolated.sql("SELECT * FROM user_presence WHERE user_id = ?").param(userId).query().singleRow();
+        UUID invisibleId = UUID.randomUUID();
+        isolated.sql("INSERT INTO app_user(id, nickname, avatar, created_at) VALUES (?, '隐身成员', '', now())")
+                .param(invisibleId).update();
+        isolated.sql("INSERT INTO user_presence(user_id, status) VALUES (?, 'OFFLINE')").param(invisibleId).update();
         assertThatThrownBy(() -> isolated.sql("UPDATE user_presence SET activity_type = 'MUSIC' WHERE user_id = ?")
                 .param(userId).update()).isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
 
         var migration = Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .schemas(schema).load().migrate();
-        assertThat(migration.migrationsExecuted).isOne();
+        assertThat(migration.migrationsExecuted).isEqualTo(2);
         assertThat(isolated.sql("SELECT * FROM user_presence WHERE user_id = ?").param(userId).query().singleRow())
-                .isEqualTo(previous);
-        assertThat(isolated.sql("SELECT count(*) FROM app_user").query(Long.class).single()).isOne();
+                .containsAllEntriesOf(previous);
+        assertThat(isolated.sql("SELECT last_online_at FROM user_presence WHERE user_id = ?").param(userId).query(java.time.OffsetDateTime.class).single()).isNotNull();
+        assertThat(isolated.sql("SELECT count(*) FROM app_user").query(Long.class).single()).isEqualTo(2);
+        assertThat(isolated.sql("SELECT last_online_at IS NULL FROM user_presence WHERE user_id = ?")
+                .param(invisibleId).query(Boolean.class).single()).isTrue();
         assertThat(isolated.sql("UPDATE user_presence SET activity_type = 'MUSIC' WHERE user_id = ?")
                 .param(userId).update()).isOne();
         assertThatThrownBy(() -> isolated.sql("UPDATE user_presence SET activity_type = 'OTHER' WHERE user_id = ?")

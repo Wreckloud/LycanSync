@@ -38,7 +38,7 @@ class GroupMemberPresenceServiceTests {
         AuthenticatedUser requester = new AuthenticatedUser(UUID.randomUUID(), "查看者", false, "session");
         when(groups.findMemberIds(groupId)).thenReturn(List.of(userId));
         when(presences.findPresenceByUsers(Set.of(userId))).thenReturn(Map.of(userId,
-                new UserPresence(userId, UserPresenceStatus.OFFLINE, now, UserActivityType.GAME, "旧游戏", now, now)));
+                new UserPresence(userId, UserPresenceStatus.OFFLINE, now, UserActivityType.GAME, "旧游戏", now, now, true, true, null, null, null, null)));
 
         var result = service.findPresences(groupId, requester).get(0);
 
@@ -59,7 +59,7 @@ class GroupMemberPresenceServiceTests {
         when(groups.findMemberIds(groupId)).thenReturn(List.of(userId));
         for (UserPresenceStatus status : List.of(UserPresenceStatus.ONLINE, UserPresenceStatus.AWAY)) {
             when(presences.findPresenceByUsers(Set.of(userId))).thenReturn(Map.of(userId,
-                    new UserPresence(userId, status, now, UserActivityType.MUSIC, "歌曲", now, now)));
+                    new UserPresence(userId, status, now, UserActivityType.MUSIC, "歌曲", now, now, true, true, null, null, null, null)));
             var result = service.findPresences(groupId, requester).get(0);
             assertThat(result.status()).isEqualTo(status);
             assertThat(result.lastSeenAt()).isEqualTo(now);
@@ -67,4 +67,44 @@ class GroupMemberPresenceServiceTests {
             assertThat(result.activityStartedAt()).isEqualTo(now);
         }
     }
+
+    @Test
+    void shouldExposeFrozenOfflineHistoryButNeverThePrivateHeartbeatTime() {
+        UUID groupId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        Instant publicAt = Instant.parse("2026-11-01T07:00:00Z");
+        AuthenticatedUser requester = new AuthenticatedUser(UUID.randomUUID(), "查看者", false, "session");
+        when(groups.findMemberIds(groupId)).thenReturn(List.of(userId));
+        when(presences.findPresenceByUsers(Set.of(userId))).thenReturn(Map.of(userId,
+                new UserPresence(userId, UserPresenceStatus.OFFLINE, publicAt.plusSeconds(600), null, null, null,
+                        publicAt.plusSeconds(600), true, true, publicAt, "游戏", publicAt, 3600L)));
+        var response = service.findPresences(groupId, requester).get(0);
+        assertThat(response.lastSeenAt()).isNull();
+        assertThat(response.lastOnlineAt()).isEqualTo(publicAt);
+        assertThat(response.recentGame().name()).isEqualTo("游戏");
+        assertThat(response.recentGame().playedSeconds()).isEqualTo(3600L);
+    }
+
+    @Test
+    void shouldEnforceVisibilityIndependentlyEvenWhenStoredFieldsAreStale() {
+        UUID groupId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        Instant now = Instant.parse("2026-11-01T08:00:00Z");
+        AuthenticatedUser requester = new AuthenticatedUser(UUID.randomUUID(), "查看者", false, "session");
+        when(groups.findMemberIds(groupId)).thenReturn(List.of(userId));
+        when(presences.findPresenceByUsers(Set.of(userId))).thenReturn(Map.of(userId,
+                new UserPresence(userId, UserPresenceStatus.OFFLINE, now, null, null, null,
+                        now, false, true, now.minusSeconds(600), "不应返回的游戏", now, 3600L)));
+        var hiddenGame = service.findPresences(groupId, requester).get(0);
+        assertThat(hiddenGame.lastOnlineAt()).isEqualTo(now.minusSeconds(600));
+        assertThat(hiddenGame.recentGame()).isNull();
+        when(presences.findPresenceByUsers(Set.of(userId))).thenReturn(Map.of(userId,
+                new UserPresence(userId, UserPresenceStatus.ONLINE, now, UserActivityType.GAME, "当前游戏", now,
+                        now, true, false, now.minusSeconds(600), "最近游戏", now.minusSeconds(600), 3600L)));
+        var hiddenOnlineTime = service.findPresences(groupId, requester).get(0);
+        assertThat(hiddenOnlineTime.lastOnlineAt()).isNull();
+        assertThat(hiddenOnlineTime.activityName()).isEqualTo("当前游戏");
+        assertThat(hiddenOnlineTime.recentGame().name()).isEqualTo("最近游戏");
+    }
+
 }

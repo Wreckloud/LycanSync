@@ -33,7 +33,7 @@ public class PresenceController {
     private final PresenceService presenceService;
 
     @PostMapping(value = "/heartbeat", consumes = MediaType.APPLICATION_JSON_VALUE)
-    @Operation(summary = "在线状态心跳", description = "客户端定期上报当前状态；离线会清除公开动态，查询不返回离线账号的最近活跃时间")
+    @Operation(summary = "在线状态心跳", description = "客户端定期上报当前状态；离线结束当前公开动态并冻结历史；分别控制游戏动态及上次公开在线时间的展示")
     public ResponseEntity<Void> heartbeat(@AuthenticationPrincipal AuthenticatedUser user,
                                           @Valid @RequestBody PresenceHeartbeatRequest request) {
         presenceService.heartbeat(user, request);

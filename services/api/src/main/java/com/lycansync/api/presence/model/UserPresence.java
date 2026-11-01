@@ -16,6 +16,12 @@ public record UserPresence(
         UserActivityType activityType,
         String activityName,
         Instant activityStartedAt,
-        Instant updatedAt
+        Instant updatedAt,
+        boolean showActivity,
+        boolean showLastOnline,
+        Instant lastOnlineAt,
+        String recentGameName,
+        Instant recentGameEndedAt,
+        Long recentGamePlayedSeconds
 ) {
 }
