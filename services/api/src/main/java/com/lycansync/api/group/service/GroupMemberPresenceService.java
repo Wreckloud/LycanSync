@@ -39,12 +39,18 @@ public class GroupMemberPresenceService {
     private GroupPresenceResponse withPresence(UUID userId, Map<UUID, UserPresence> presences) {
         UserPresence presence = presences.get(userId);
         UserPresenceStatus status = presence == null ? UserPresenceStatus.OFFLINE : presence.status();
-        // 离线与隐身使用相同公开结果，不通过持续更新的活跃时间或旧动态暴露隐身。
-        if (status == UserPresenceStatus.OFFLINE) {
-            return new GroupPresenceResponse(userId, status, null, null, null, null);
-        }
-        return new GroupPresenceResponse(
-                userId, status, presence.lastSeenAt(), presence.activityType(),
-                presence.activityName(), presence.activityStartedAt());
+        boolean offline = status == UserPresenceStatus.OFFLINE;
+        GroupPresenceResponse.RecentGame recentGame = presence != null && presence.showActivity()
+                && presence.recentGameName() != null && presence.recentGameEndedAt() != null
+                && presence.recentGamePlayedSeconds() != null && presence.recentGamePlayedSeconds() > 0
+                ? new GroupPresenceResponse.RecentGame(presence.recentGameName(), presence.recentGameEndedAt(),
+                        presence.recentGamePlayedSeconds()) : null;
+        // 离线只公开冻结的历史，不返回仍会被隐身心跳刷新的 lastSeenAt。
+        return new GroupPresenceResponse(userId, status,
+                offline ? null : presence.lastSeenAt(),
+                offline || !presence.showActivity() ? null : presence.activityType(),
+                offline || !presence.showActivity() ? null : presence.activityName(),
+                offline || !presence.showActivity() ? null : presence.activityStartedAt(),
+                offline && presence != null && presence.showLastOnline() ? presence.lastOnlineAt() : null, recentGame);
     }
 }

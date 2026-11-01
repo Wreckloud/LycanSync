@@ -3,50 +3,55 @@
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.lycansync.api.presence.mapper.PresenceMapper">
 
+    <sql id="presenceColumns">
+        user_id AS userId, status, last_seen_at AS lastSeenAt,
+        activity_type AS activityType, activity_name AS activityName,
+        activity_started_at AS activityStartedAt, updated_at AS updatedAt,
+        show_activity AS showActivity, show_last_online AS showLastOnline, last_online_at AS lastOnlineAt,
+        recent_game_name AS recentGameName, recent_game_ended_at AS recentGameEndedAt,
+        recent_game_played_seconds AS recentGamePlayedSeconds
+    </sql>
+
     <select id="findByUserForUpdate" resultType="com.lycansync.api.presence.model.UserPresence">
-        SELECT user_id AS userId, status, last_seen_at AS lastSeenAt,
-               activity_type AS activityType, activity_name AS activityName,
-               activity_started_at AS activityStartedAt, updated_at AS updatedAt
-        FROM user_presence WHERE user_id = #{userId} FOR UPDATE
+        SELECT <include refid="presenceColumns" /> FROM user_presence WHERE user_id = #{userId} FOR UPDATE
     </select>
 
     <insert id="upsert">
-        INSERT INTO user_presence (user_id, status, last_seen_at, activity_type, activity_name, activity_started_at, updated_at)
-        SELECT #{userId}, #{status}, #{now}, #{activityType}, #{activityName},
-               CASE WHEN CAST(#{activityName} AS VARCHAR) IS NULL
-                   THEN NULL ELSE CAST(#{now} AS TIMESTAMPTZ) END, #{now}
+        INSERT INTO user_presence (user_id, status, last_seen_at, activity_type, activity_name,
+            activity_started_at, updated_at, show_activity, show_last_online, last_online_at,
+            recent_game_name, recent_game_ended_at, recent_game_played_seconds)
+        SELECT #{presence.userId}, #{presence.status}, #{presence.lastSeenAt}, #{presence.activityType},
+            #{presence.activityName}, #{presence.activityStartedAt}, #{presence.updatedAt},
+            #{presence.showActivity}, #{presence.showLastOnline}, #{presence.lastOnlineAt},
+            #{presence.recentGameName}, #{presence.recentGameEndedAt}, #{presence.recentGamePlayedSeconds}
         WHERE EXISTS (
             SELECT 1 FROM auth_session
-            WHERE user_id = #{userId} AND token_hash = #{sessionHash} AND expires_at &gt; #{now}
+            WHERE user_id = #{presence.userId} AND token_hash = #{sessionHash} AND expires_at &gt; #{presence.lastSeenAt}
             FOR UPDATE
         )
         ON CONFLICT (user_id) DO UPDATE
-        SET status = EXCLUDED.status,
-            last_seen_at = EXCLUDED.last_seen_at,
-            activity_type = EXCLUDED.activity_type,
-            activity_name = EXCLUDED.activity_name,
-            activity_started_at = CASE
-                WHEN user_presence.activity_type IS NOT DISTINCT FROM EXCLUDED.activity_type
-                    AND user_presence.activity_name IS NOT DISTINCT FROM EXCLUDED.activity_name
-                    THEN user_presence.activity_started_at
-                ELSE EXCLUDED.activity_started_at
-            END,
-            updated_at = EXCLUDED.updated_at
+        SET status = EXCLUDED.status, last_seen_at = EXCLUDED.last_seen_at,
+            activity_type = EXCLUDED.activity_type, activity_name = EXCLUDED.activity_name,
+            activity_started_at = EXCLUDED.activity_started_at, updated_at = EXCLUDED.updated_at,
+            show_activity = EXCLUDED.show_activity, show_last_online = EXCLUDED.show_last_online,
+            last_online_at = EXCLUDED.last_online_at, recent_game_name = EXCLUDED.recent_game_name,
+            recent_game_ended_at = EXCLUDED.recent_game_ended_at,
+            recent_game_played_seconds = EXCLUDED.recent_game_played_seconds
         WHERE (user_presence.last_seen_at &lt; EXCLUDED.last_seen_at
-               OR (EXCLUDED.status = 'OFFLINE' AND user_presence.status &lt;&gt; 'OFFLINE'
-                   AND user_presence.last_seen_at = EXCLUDED.last_seen_at))
+               OR (user_presence.last_seen_at = EXCLUDED.last_seen_at
+                   AND ((EXCLUDED.status = 'OFFLINE' AND user_presence.status &lt;&gt; 'OFFLINE')
+                       OR (EXCLUDED.status = user_presence.status
+                           AND (user_presence.show_activity &lt;&gt; EXCLUDED.show_activity
+                               OR user_presence.show_last_online &lt;&gt; EXCLUDED.show_last_online)))))
           AND EXISTS (
               SELECT 1 FROM auth_session
-              WHERE user_id = #{userId} AND token_hash = #{sessionHash} AND expires_at &gt; #{now}
+              WHERE user_id = #{presence.userId} AND token_hash = #{sessionHash} AND expires_at &gt; #{presence.lastSeenAt}
               FOR UPDATE
           )
     </insert>
 
     <select id="findByUsers" resultType="com.lycansync.api.presence.model.UserPresence">
-        SELECT user_id AS userId, status, last_seen_at AS lastSeenAt,
-               activity_type AS activityType, activity_name AS activityName,
-               activity_started_at AS activityStartedAt, updated_at AS updatedAt
-        FROM user_presence
+        SELECT <include refid="presenceColumns" /> FROM user_presence
         WHERE user_id IN
         <foreach collection="userIds" item="userId" open="(" separator="," close=")">
             CAST(#{userId} AS UUID)
@@ -54,17 +59,18 @@
     </select>
 
     <select id="findExpired" resultType="com.lycansync.api.presence.model.PresenceExpiryCandidate">
-        SELECT user_id AS userId, last_seen_at AS lastSeenAt
-        FROM user_presence
+        SELECT user_id AS userId, last_seen_at AS lastSeenAt FROM user_presence
         WHERE status &lt;&gt; 'OFFLINE' AND last_seen_at &lt;= #{cutoff}
     </select>
 
     <update id="markOfflineIfUnchanged">
         UPDATE user_presence
         SET status = 'OFFLINE', activity_type = NULL, activity_name = NULL,
-            activity_started_at = NULL, updated_at = #{now}
-        WHERE user_id = #{userId} AND status &lt;&gt; 'OFFLINE'
-          AND last_seen_at = #{lastSeenAt} AND last_seen_at &lt;= #{cutoff}
+            activity_started_at = NULL, updated_at = #{now},
+            recent_game_name = #{presence.recentGameName}, recent_game_ended_at = #{presence.recentGameEndedAt},
+            recent_game_played_seconds = #{presence.recentGamePlayedSeconds}
+        WHERE user_id = #{presence.userId} AND status &lt;&gt; 'OFFLINE'
+          AND last_seen_at = #{presence.lastSeenAt} AND last_seen_at &lt;= #{cutoff}
     </update>
 
 </mapper>

@@ -20,6 +20,11 @@ public record GroupPresenceResponse(
         @Schema(description = "在线或闲置时的最近心跳时间；离线时为空") Instant lastSeenAt,
         UserActivityType activityType,
         String activityName,
-        Instant activityStartedAt
+        Instant activityStartedAt,
+        @Schema(description = "上次公开在线时间；在线、未开放或未知时为空") Instant lastOnlineAt,
+        @Schema(description = "最近一段已结束的公开游戏；未开放或未知时为空") RecentGame recentGame
 ) {
+    @Schema(description = "最近一段公开游戏，不包含隐身或关闭动态期间")
+    public record RecentGame(String name, Instant endedAt, long playedSeconds) {
+    }
 }

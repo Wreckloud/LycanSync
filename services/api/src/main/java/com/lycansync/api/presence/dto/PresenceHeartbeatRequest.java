@@ -20,7 +20,9 @@ public record PresenceHeartbeatRequest(
         @NotNull @Schema(description = "当前状态", example = "ONLINE")
         UserPresenceStatus status,
         @Valid @Schema(description = "当前公开活动；没有可公开活动时为空")
-        Activity activity
+        Activity activity,
+        @Schema(description = "展示当前动态与最近游戏；缺省沿用上次选择") Boolean showActivity,
+        @Schema(description = "离线时展示上次公开在线时间；缺省沿用上次选择") Boolean showLastOnline
 ) {
 
     @Schema(description = "用户当前公开活动")

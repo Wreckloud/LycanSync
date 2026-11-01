@@ -6,6 +6,7 @@ import com.lycansync.api.presence.event.PresenceChangedEvent;
 import com.lycansync.api.presence.mapper.PresenceMapper;
 import com.lycansync.api.presence.model.PresenceExpiryCandidate;
 import com.lycansync.api.presence.model.UserPresence;
+import com.lycansync.api.presence.model.UserActivityType;
 import com.lycansync.api.presence.model.UserPresenceStatus;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -46,12 +47,16 @@ public class PresenceService {
     public void heartbeat(AuthenticatedUser user, PresenceHeartbeatRequest request) {
         Instant now = Instant.now(systemClock);
         UserPresence previous = mapper.findByUserForUpdate(user.id());
-        PresenceHeartbeatRequest.Activity activity = request.status() == UserPresenceStatus.OFFLINE
-                ? null : request.activity();
-        String activityName = activity == null ? null : activity.name().strip();
-        int updated = mapper.upsert(user.id(), user.sessionHash(), request.status(),
-                activity == null ? null : activity.type(), activityName, now);
-        if (updated > 0 && hasMeaningfulChange(previous, request.status(), activity, activityName)) {
+        UserPresence observed = previous;
+        if (previous != null && previous.status() != UserPresenceStatus.OFFLINE
+                && !previous.lastSeenAt().isAfter(now.minus(OFFLINE_THRESHOLD))) {
+            // 服务重启或过期任务迟到时，也不能把断线间隔延续到新的一段游戏。
+            observed = nextPresence(user.id(), previous,
+                    new PresenceHeartbeatRequest(UserPresenceStatus.OFFLINE, null, null, null), previous.lastSeenAt());
+        }
+        UserPresence next = nextPresence(user.id(), observed, request, now);
+        int updated = mapper.upsert(next, user.sessionHash());
+        if (updated > 0 && hasMeaningfulChange(previous, next)) {
             events.publishEvent(new PresenceChangedEvent());
         }
     }
@@ -63,7 +68,15 @@ public class PresenceService {
         Instant cutoff = now.minus(OFFLINE_THRESHOLD);
         boolean changed = false;
         for (PresenceExpiryCandidate candidate : mapper.findExpired(cutoff)) {
-            changed |= mapper.markOfflineIfUnchanged(candidate.userId(), candidate.lastSeenAt(), cutoff, now) > 0;
+            UserPresence previous = mapper.findByUserForUpdate(candidate.userId());
+            if (previous == null || previous.status() == UserPresenceStatus.OFFLINE
+                    || !previous.lastSeenAt().equals(candidate.lastSeenAt()) || previous.lastSeenAt().isAfter(cutoff)) {
+                continue;
+            }
+            // 断线时只累计到最后有效心跳，不能将离线判定的等待时间计入游戏。
+            UserPresence next = nextPresence(candidate.userId(), previous,
+                    new PresenceHeartbeatRequest(UserPresenceStatus.OFFLINE, null, null, null), previous.lastSeenAt());
+            changed |= mapper.markOfflineIfUnchanged(next, cutoff, now) > 0;
         }
         if (changed) {
             events.publishEvent(new PresenceChangedEvent());
@@ -78,13 +91,48 @@ public class PresenceService {
                 UserPresence::userId, presence -> presence, (first, second) -> first));
     }
 
-    private boolean hasMeaningfulChange(UserPresence previous, UserPresenceStatus status,
-                                        PresenceHeartbeatRequest.Activity activity, String activityName) {
-        if (previous == null) {
-            return status != UserPresenceStatus.OFFLINE || activity != null;
+    private UserPresence nextPresence(UUID userId, UserPresence previous, PresenceHeartbeatRequest request, Instant now) {
+        boolean showActivity = request.showActivity() != null ? request.showActivity()
+                : previous == null || previous.showActivity();
+        boolean showLastOnline = request.showLastOnline() != null ? request.showLastOnline()
+                : previous == null || previous.showLastOnline();
+        PresenceHeartbeatRequest.Activity activity = showActivity && request.status() != UserPresenceStatus.OFFLINE
+                ? request.activity() : null;
+        UserActivityType activityType = activity == null ? null : activity.type();
+        String activityName = activity == null ? null : activity.name().strip();
+        boolean sameActivity = previous != null && previous.status() != UserPresenceStatus.OFFLINE
+                && previous.activityType() == activityType && Objects.equals(previous.activityName(), activityName);
+        Instant startedAt = activity == null ? null
+                : sameActivity && previous.activityStartedAt() != null ? previous.activityStartedAt() : now;
+        Instant lastOnline = !showLastOnline ? null : request.status() != UserPresenceStatus.OFFLINE
+                ? now : previous == null ? null : previous.lastOnlineAt();
+        String recentGame = showActivity && previous != null ? previous.recentGameName() : null;
+        Instant recentEnd = showActivity && previous != null ? previous.recentGameEndedAt() : null;
+        Long recentSeconds = showActivity && previous != null ? previous.recentGamePlayedSeconds() : null;
+        // 隐身仅结束上一段公开游戏，重复离线心跳不刷新历史；重新公开时另起一段。
+        if (showActivity && previous != null && previous.showActivity() && !sameActivity
+                && previous.status() != UserPresenceStatus.OFFLINE && previous.activityType() == UserActivityType.GAME
+                && previous.activityName() != null && previous.activityStartedAt() != null) {
+            long seconds = Duration.between(previous.activityStartedAt(), now).getSeconds();
+            if (seconds > 0) {
+                recentGame = previous.activityName();
+                recentEnd = now;
+                recentSeconds = seconds;
+            }
         }
-        return previous.status() != status
-                || previous.activityType() != (activity == null ? null : activity.type())
-                || !Objects.equals(previous.activityName(), activityName);
+        return new UserPresence(userId, request.status(), now, activityType, activityName, startedAt, now,
+                showActivity, showLastOnline, lastOnline, recentGame, recentEnd, recentSeconds);
+    }
+
+    private boolean hasMeaningfulChange(UserPresence previous, UserPresence next) {
+        if (previous == null) {
+            return next.status() != UserPresenceStatus.OFFLINE;
+        }
+        return previous.status() != next.status() || previous.activityType() != next.activityType()
+                || !Objects.equals(previous.activityStartedAt(), next.activityStartedAt())
+                || !Objects.equals(previous.activityName(), next.activityName())
+                || previous.showActivity() != next.showActivity() || previous.showLastOnline() != next.showLastOnline()
+                || !Objects.equals(previous.recentGameName(), next.recentGameName())
+                || !Objects.equals(previous.recentGameEndedAt(), next.recentGameEndedAt());
     }
 }

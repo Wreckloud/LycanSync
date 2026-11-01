@@ -12,8 +12,7 @@ import com.lycansync.api.presence.model.UserPresence;
 import com.lycansync.api.presence.model.UserPresenceStatus;
 import jakarta.validation.Validation;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Clock;
@@ -22,85 +21,168 @@ import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+/**
+ * 核对公开在线时间、最近游戏与隐身边界。
+ *
+ * @author Wreckloud
+ * @since 2026-11-01
+ */
 class PresenceServiceTests {
-
-    private static final Instant NOW = Instant.parse("2026-09-30T12:00:00Z");
+    private static final Instant NOW = Instant.parse("2026-11-01T08:00:00Z");
     private static final UUID USER_ID = UUID.fromString("487d94a4-24d4-4529-b284-26e4fba2b32a");
     private static final String SESSION_HASH = "server-only-session-hash";
-
     private final PresenceMapper mapper = mock(PresenceMapper.class);
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
-    private final PresenceService service = new PresenceService(mapper,
-            Clock.fixed(NOW, ZoneOffset.UTC), events);
+    private final PresenceService service = new PresenceService(mapper, Clock.fixed(NOW, ZoneOffset.UTC), events);
 
-    @ParameterizedTest
-    @EnumSource(UserActivityType.class)
-    void shouldNotifyOnlyWhenStatusOrActivityChanges(UserActivityType activityType) {
-        AuthenticatedUser user = user();
-        UserPresence current = presence(UserPresenceStatus.ONLINE, activityType, "名称");
-        when(mapper.findByUserForUpdate(USER_ID)).thenReturn(current);
-        when(mapper.upsert(eq(USER_ID), eq(SESSION_HASH), eq(UserPresenceStatus.ONLINE),
-                eq(activityType), eq("名称"), eq(NOW))).thenReturn(1);
-
-        service.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE,
-                new PresenceHeartbeatRequest.Activity(activityType, "名称")));
-
+    @Test
+    void shouldPreserveAnOngoingPublicGameWithoutNotifyingEachHeartbeat() {
+        UserPresence previous = presence(UserPresenceStatus.ONLINE, UserActivityType.GAME, "游戏", true, true);
+        UserPresence next = heartbeat(previous, UserPresenceStatus.ONLINE, game("游戏"), null, null);
+        assertThat(next.activityStartedAt()).isEqualTo(previous.activityStartedAt());
+        assertThat(next.lastOnlineAt()).isEqualTo(NOW);
+        assertThat(next.recentGameName()).isEqualTo("上一款游戏");
         verify(events, never()).publishEvent(any(PresenceChangedEvent.class));
-        verify(mapper).upsert(USER_ID, SESSION_HASH, UserPresenceStatus.ONLINE,
-                activityType, "名称", NOW);
     }
 
     @Test
-    void shouldPublishMusicChangeUsingTheSamePresenceChain() {
-        when(mapper.findByUserForUpdate(USER_ID)).thenReturn(presence(UserPresenceStatus.ONLINE, UserActivityType.GAME, "游戏"));
-        when(mapper.upsert(eq(USER_ID), eq(SESSION_HASH), eq(UserPresenceStatus.ONLINE),
-                eq(UserActivityType.MUSIC), eq("网易云音乐"), eq(NOW))).thenReturn(1);
-
-        service.heartbeat(user(), new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE,
-                new PresenceHeartbeatRequest.Activity(UserActivityType.MUSIC, " 网易云音乐 ")));
-
-        verify(mapper).upsert(USER_ID, SESSION_HASH, UserPresenceStatus.ONLINE, UserActivityType.MUSIC, "网易云音乐", NOW);
+    void shouldKeepTheLastFinishedGameWhileMusicUsesTheExistingActivityChain() {
+        UserPresence next = heartbeat(presence(UserPresenceStatus.ONLINE, UserActivityType.GAME, "游戏", true, true),
+                UserPresenceStatus.ONLINE, new PresenceHeartbeatRequest.Activity(UserActivityType.MUSIC, " 歌曲 "), null, null);
+        assertThat(next.activityType()).isEqualTo(UserActivityType.MUSIC);
+        assertThat(next.activityName()).isEqualTo("歌曲");
+        assertThat(next.recentGameName()).isEqualTo("游戏");
+        assertThat(next.recentGameEndedAt()).isEqualTo(NOW);
+        assertThat(next.recentGamePlayedSeconds()).isEqualTo(3600L);
         verify(events).publishEvent(any(PresenceChangedEvent.class));
     }
 
     @Test
-    void shouldClearMusicWhenReportingOfflineEvenIfClientStillHasACandidate() {
-        when(mapper.findByUserForUpdate(USER_ID)).thenReturn(presence(UserPresenceStatus.ONLINE, UserActivityType.MUSIC, "网易云音乐"));
-        when(mapper.upsert(eq(USER_ID), eq(SESSION_HASH), eq(UserPresenceStatus.OFFLINE),
-                eq(null), eq(null), eq(NOW))).thenReturn(1);
+    void shouldFreezePublicHistoryAcrossRepeatedInvisibleHeartbeats() {
+        UserPresence next = heartbeat(presence(UserPresenceStatus.ONLINE, UserActivityType.GAME, "公开游戏", true, true),
+                UserPresenceStatus.OFFLINE, game("隐身游戏"), null, null);
+        assertThat(next.activityName()).isNull();
+        assertThat(next.lastOnlineAt()).isEqualTo(NOW.minusSeconds(20));
+        assertThat(next.recentGameName()).isEqualTo("公开游戏");
+        reset(mapper, events);
+        when(mapper.findByUserForUpdate(USER_ID)).thenReturn(next);
+        when(mapper.upsert(any(), eq(SESSION_HASH))).thenReturn(1);
+        new PresenceService(mapper, Clock.fixed(NOW.plusSeconds(600), ZoneOffset.UTC), events)
+                .heartbeat(user(), new PresenceHeartbeatRequest(UserPresenceStatus.OFFLINE, game("另一游戏"), null, null));
+        ArgumentCaptor<UserPresence> captured = ArgumentCaptor.forClass(UserPresence.class);
+        verify(mapper).upsert(captured.capture(), eq(SESSION_HASH));
+        assertThat(captured.getValue().lastSeenAt()).isEqualTo(NOW.plusSeconds(600));
+        assertThat(captured.getValue().lastOnlineAt()).isEqualTo(next.lastOnlineAt());
+        assertThat(captured.getValue().recentGameEndedAt()).isEqualTo(next.recentGameEndedAt());
+        assertThat(captured.getValue().recentGamePlayedSeconds()).isEqualTo(next.recentGamePlayedSeconds());
+        verify(events, never()).publishEvent(any(PresenceChangedEvent.class));
+    }
 
-        service.heartbeat(user(), new PresenceHeartbeatRequest(UserPresenceStatus.OFFLINE,
-                new PresenceHeartbeatRequest.Activity(UserActivityType.MUSIC, "网易云音乐")));
+    @Test
+    void shouldStartANewPublicSegmentAfterInvisibleTime() {
+        UserPresence previous = presence(UserPresenceStatus.OFFLINE, null, null, true, true);
+        UserPresence next = heartbeat(previous, UserPresenceStatus.ONLINE, game("游戏"), null, null);
+        assertThat(next.activityStartedAt()).isEqualTo(NOW);
+        assertThat(next.recentGameName()).isEqualTo(previous.recentGameName());
+    }
 
-        verify(mapper).upsert(USER_ID, SESSION_HASH, UserPresenceStatus.OFFLINE, null, null, NOW);
+    @Test
+    void shouldClearCurrentAndRecentGameWhenDisabledButKeepLastOnlineIndependently() {
+        UserPresence next = heartbeat(presence(UserPresenceStatus.ONLINE, UserActivityType.GAME, "游戏", true, true),
+                UserPresenceStatus.OFFLINE, game("游戏"), false, true);
+        assertThat(next.showActivity()).isFalse();
+        assertThat(next.recentGameName()).isNull();
+        assertThat(next.recentGameEndedAt()).isNull();
+        assertThat(next.recentGamePlayedSeconds()).isNull();
+        assertThat(next.activityName()).isNull();
+        assertThat(next.lastOnlineAt()).isNotNull();
+    }
+
+    @Test
+    void shouldHideLastOnlineWithoutDisablingGames() {
+        UserPresence next = heartbeat(presence(UserPresenceStatus.ONLINE, UserActivityType.GAME, "游戏", true, true),
+                UserPresenceStatus.ONLINE, game("游戏"), true, false);
+        assertThat(next.lastOnlineAt()).isNull();
+        assertThat(next.activityName()).isEqualTo("游戏");
+        assertThat(next.recentGameName()).isNotNull();
         verify(events).publishEvent(any(PresenceChangedEvent.class));
     }
 
     @Test
-    void shouldAcceptMusicInTheExistingPayloadAndRetainNameValidation() throws Exception {
+    void shouldPreserveDisabledVisibilityForPayloadsWithoutNewFields() {
+        UserPresence previous = new UserPresence(USER_ID, UserPresenceStatus.OFFLINE, NOW.minusSeconds(20),
+                null, null, null, NOW.minusSeconds(20), false, false, null, null, null, null);
+        UserPresence next = heartbeat(previous, UserPresenceStatus.ONLINE, game("不应公开"), null, null);
+        assertThat(next.lastOnlineAt()).isNull();
+        assertThat(next.activityName()).isNull();
+        assertThat(next.recentGameName()).isNull();
+    }
+
+    @Test
+    void shouldNotInventHistoryForAnUnknownOfflineUser() {
+        UserPresence next = heartbeat(null, UserPresenceStatus.OFFLINE, null, null, null);
+        assertThat(next.lastOnlineAt()).isNull();
+        assertThat(next.recentGameName()).isNull();
+    }
+
+    @Test
+    void shouldNotNotifyWhenSessionStopsBeingCurrent() {
+        when(mapper.findByUserForUpdate(USER_ID)).thenReturn(presence(UserPresenceStatus.ONLINE, null, null, true, true));
+        when(mapper.upsert(any(), eq(SESSION_HASH))).thenReturn(0);
+        service.heartbeat(user(), new PresenceHeartbeatRequest(UserPresenceStatus.OFFLINE, null, null, null));
+        verify(events, never()).publishEvent(any(PresenceChangedEvent.class));
+    }
+
+    @Test
+    void shouldFinishAStaleGameAtTheLastValidHeartbeatInsteadOfTheExpiryCheck() {
+        Instant lastSeen = NOW.minusSeconds(70);
+        when(mapper.findExpired(NOW.minusSeconds(65))).thenReturn(List.of(new PresenceExpiryCandidate(USER_ID, lastSeen)));
+        UserPresence previous = new UserPresence(USER_ID, UserPresenceStatus.ONLINE, lastSeen, UserActivityType.GAME,
+                "游戏", NOW.minusSeconds(3600), lastSeen, true, true, lastSeen, null, null, null);
+        when(mapper.findByUserForUpdate(USER_ID)).thenReturn(previous);
+        when(mapper.markOfflineIfUnchanged(any(), eq(NOW.minusSeconds(65)), eq(NOW))).thenReturn(1);
+        service.markExpiredOffline();
+        ArgumentCaptor<UserPresence> captured = ArgumentCaptor.forClass(UserPresence.class);
+        verify(mapper).markOfflineIfUnchanged(captured.capture(), eq(NOW.minusSeconds(65)), eq(NOW));
+        assertThat(captured.getValue().recentGameEndedAt()).isEqualTo(lastSeen);
+        assertThat(captured.getValue().recentGamePlayedSeconds()).isEqualTo(3530L);
+        verify(events).publishEvent(any(PresenceChangedEvent.class));
+    }
+
+    @Test
+    void shouldNotExpireAConcurrentHeartbeat() {
+        when(mapper.findExpired(NOW.minusSeconds(65)))
+                .thenReturn(List.of(new PresenceExpiryCandidate(USER_ID, NOW.minusSeconds(70))));
+        when(mapper.findByUserForUpdate(USER_ID)).thenReturn(presence(UserPresenceStatus.ONLINE, null, null, true, true));
+        service.markExpiredOffline();
+        verify(mapper, never()).markOfflineIfUnchanged(any(), any(), any());
+        verify(events, never()).publishEvent(any(PresenceChangedEvent.class));
+    }
+
+    @Test
+    void shouldAcceptOldPayloadsAndRetainActivityValidation() throws Exception {
         ObjectMapper json = new ObjectMapper();
         PresenceHeartbeatRequest request = json.readValue("""
-                {"status":"ONLINE","activity":{"type":"MUSIC","name":"网易云音乐"}}
+                {"status":"ONLINE","activity":{"type":"MUSIC","name":"歌曲"}}
                 """, PresenceHeartbeatRequest.class);
-        assertEquals(UserActivityType.MUSIC, request.activity().type());
+        assertThat(request.showActivity()).isNull();
+        assertThat(request.showLastOnline()).isNull();
         try (var factory = Validation.buildDefaultValidatorFactory()) {
-            var validator = factory.getValidator();
-            assertTrue(validator.validate(request).isEmpty());
-            assertFalse(validator.validate(new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE,
-                    new PresenceHeartbeatRequest.Activity(UserActivityType.MUSIC, "x".repeat(81)))).isEmpty());
-            assertFalse(validator.validate(new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE,
-                    new PresenceHeartbeatRequest.Activity(UserActivityType.MUSIC, "歌曲\n"))).isEmpty());
+            assertThat(factory.getValidator().validate(request)).isEmpty();
+            assertThat(factory.getValidator().validate(new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE,
+                    game("x".repeat(81)), null, null))).isNotEmpty();
+            assertThat(factory.getValidator().validate(new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE,
+                    game("控制\n字符"), null, null))).isNotEmpty();
         }
         assertThrows(JsonProcessingException.class, () -> json.readValue("""
                 {"status":"ONLINE","activity":{"type":"OTHER","name":"任意程序"}}
@@ -108,73 +190,38 @@ class PresenceServiceTests {
     }
 
     @Test
-    void shouldNotifyAfterACommittedMeaningfulHeartbeatChange() {
-        when(mapper.findByUserForUpdate(USER_ID)).thenReturn(presence(UserPresenceStatus.AWAY, null, null));
-        when(mapper.upsert(eq(USER_ID), eq(SESSION_HASH), eq(UserPresenceStatus.ONLINE),
-                eq(null), eq(null), eq(NOW))).thenReturn(1);
-
-        service.heartbeat(user(), new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE, null));
-
-        verify(events).publishEvent(any(PresenceChangedEvent.class));
+    void shouldNotBridgeAStaleGameAcrossAnUnprocessedDisconnect() {
+        Instant lastSeen = NOW.minusSeconds(90);
+        UserPresence previous = new UserPresence(USER_ID, UserPresenceStatus.ONLINE, lastSeen, UserActivityType.GAME,
+                "游戏", NOW.minusSeconds(3600), lastSeen, true, true, lastSeen, null, null, null);
+        UserPresence next = heartbeat(previous, UserPresenceStatus.ONLINE, game("游戏"), null, null);
+        assertThat(next.activityStartedAt()).isEqualTo(NOW);
+        assertThat(next.recentGameEndedAt()).isEqualTo(lastSeen);
+        assertThat(next.recentGamePlayedSeconds()).isEqualTo(3510L);
     }
 
-    @Test
-    void shouldNotifyWhenGameActivityStartsOrEnds() {
-        when(mapper.findByUserForUpdate(USER_ID))
-                .thenReturn(presence(UserPresenceStatus.ONLINE, null, null))
-                .thenReturn(presence(UserPresenceStatus.ONLINE, UserActivityType.GAME, "Core Keeper"));
-        when(mapper.upsert(eq(USER_ID), eq(SESSION_HASH), eq(UserPresenceStatus.ONLINE),
-                eq(UserActivityType.GAME), eq("Core Keeper"), eq(NOW))).thenReturn(1);
-        when(mapper.upsert(eq(USER_ID), eq(SESSION_HASH), eq(UserPresenceStatus.ONLINE),
-                eq(null), eq(null), eq(NOW))).thenReturn(1);
-
-        service.heartbeat(user(), new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE,
-                new PresenceHeartbeatRequest.Activity(UserActivityType.GAME, "Core Keeper")));
-        service.heartbeat(user(), new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE, null));
-
-        verify(events, org.mockito.Mockito.times(2)).publishEvent(any(PresenceChangedEvent.class));
+    private UserPresence heartbeat(UserPresence previous, UserPresenceStatus status,
+                                   PresenceHeartbeatRequest.Activity activity, Boolean showActivity, Boolean showLastOnline) {
+        when(mapper.findByUserForUpdate(USER_ID)).thenReturn(previous);
+        when(mapper.upsert(any(), eq(SESSION_HASH))).thenReturn(1);
+        service.heartbeat(user(), new PresenceHeartbeatRequest(status, activity, showActivity, showLastOnline));
+        ArgumentCaptor<UserPresence> captured = ArgumentCaptor.forClass(UserPresence.class);
+        verify(mapper).upsert(captured.capture(), eq(SESSION_HASH));
+        return captured.getValue();
     }
 
-    @Test
-    void shouldIgnoreAHeartbeatWhoseSessionStoppedBeingCurrent() {
-        when(mapper.findByUserForUpdate(USER_ID)).thenReturn(presence(UserPresenceStatus.ONLINE, null, null));
-        when(mapper.upsert(eq(USER_ID), eq(SESSION_HASH), eq(UserPresenceStatus.OFFLINE),
-                eq(null), eq(null), eq(NOW))).thenReturn(0);
-
-        service.heartbeat(user(), new PresenceHeartbeatRequest(UserPresenceStatus.OFFLINE, null));
-
-        verify(events, never()).publishEvent(any(PresenceChangedEvent.class));
-    }
-
-    @Test
-    void shouldClearActivityAndNotifyOnlyAfterAStaleRowWasUpdated() {
-        Instant lastSeenAt = NOW.minusSeconds(66);
-        when(mapper.findExpired(NOW.minusSeconds(65))).thenReturn(List.of(new PresenceExpiryCandidate(USER_ID, lastSeenAt)));
-        when(mapper.markOfflineIfUnchanged(USER_ID, lastSeenAt, NOW.minusSeconds(65), NOW)).thenReturn(1);
-
-        service.markExpiredOffline();
-
-        verify(mapper).markOfflineIfUnchanged(USER_ID, lastSeenAt, NOW.minusSeconds(65), NOW);
-        verify(events).publishEvent(any(PresenceChangedEvent.class));
-    }
-
-    @Test
-    void shouldNotNotifyWhenAConcurrentHeartbeatWonTheExpiryRace() {
-        Instant lastSeenAt = NOW.minusSeconds(66);
-        when(mapper.findExpired(NOW.minusSeconds(65))).thenReturn(List.of(new PresenceExpiryCandidate(USER_ID, lastSeenAt)));
-        when(mapper.markOfflineIfUnchanged(USER_ID, lastSeenAt, NOW.minusSeconds(65), NOW)).thenReturn(0);
-
-        service.markExpiredOffline();
-
-        verify(events, never()).publishEvent(any(PresenceChangedEvent.class));
+    private static PresenceHeartbeatRequest.Activity game(String name) {
+        return new PresenceHeartbeatRequest.Activity(UserActivityType.GAME, name);
     }
 
     private static AuthenticatedUser user() {
         return new AuthenticatedUser(USER_ID, "Tester", false, SESSION_HASH);
     }
 
-    private static UserPresence presence(UserPresenceStatus status, UserActivityType activityType, String activityName) {
-        return new UserPresence(USER_ID, status, NOW.minusSeconds(1), activityType, activityName,
-                activityName == null ? null : NOW.minusSeconds(1), NOW.minusSeconds(1));
+    private static UserPresence presence(UserPresenceStatus status, UserActivityType type, String name,
+                                          boolean showActivity, boolean showLastOnline) {
+        return new UserPresence(USER_ID, status, NOW.minusSeconds(20), type, name,
+                name == null ? null : NOW.minusSeconds(3600), NOW.minusSeconds(20), showActivity, showLastOnline,
+                NOW.minusSeconds(20), "上一款游戏", NOW.minusSeconds(4000), 600L);
     }
 }
