@@ -1,5 +1,7 @@
 'use strict';
-const token = new URLSearchParams(location.hash.slice(1)).get('token');
+let token;
+let generation = 0;
+let previewController;
 // 保留片段以支持安装后刷新；片段不会随 HTTP 请求或 Referer 发往服务器。
 const status = document.getElementById('status');
 const open = document.getElementById('open');
@@ -14,32 +16,44 @@ const labels = { PENDING: '链接有效，请在应用中确认。', COMPLETED: 
 document.getElementById('server').textContent = location.host;
 
 open.addEventListener('click', () => {
-  if (open.disabled) return;
+  if (open.disabled || token !== new URLSearchParams(location.hash.slice(1)).get('token')) return;
   location.href = `lycansync://access?server=${encodeURIComponent(location.origin)}#token=${token}`;
 });
 document.getElementById('download').addEventListener('click', () => {
   document.getElementById('instruction').textContent = '安装完成后，点击本页“打开应用”继续。';
 });
 retry.addEventListener('click', checkLink);
-
-if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) {
-  status.textContent = '链接不完整，请重新打开服主发来的链接。';
-} else {
-  checkLink();
-}
+// 浏览器可能复用同一网页，只更换片段；新链接必须重新核验，不能沿用旧状态。
+window.addEventListener('hashchange', checkLink);
+checkLink();
 
 async function checkLink() {
-  if (retry.disabled) return;
+  const currentToken = new URLSearchParams(location.hash.slice(1)).get('token');
+  if (retry.disabled && currentToken === token) return;
+  token = currentToken;
+  const task = ++generation;
+  previewController?.abort();
+  previewController = undefined;
   retry.disabled = true;
+  retry.hidden = true;
   open.disabled = true;
   error.textContent = '';
+  if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) {
+    status.textContent = '链接不完整，请重新打开服主发来的链接。';
+    retry.disabled = false;
+    return;
+  }
   status.textContent = '正在检查链接…';
+  const request = new AbortController();
+  previewController = request;
   try {
     const response = await fetch('/api/auth/access/preview', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      credentials: 'omit', cache: 'no-store', body: JSON.stringify({ token }), signal: AbortSignal.timeout(15000),
+      credentials: 'omit', cache: 'no-store', body: JSON.stringify({ token }),
+      signal: AbortSignal.any([request.signal, AbortSignal.timeout(15000)]),
     });
     const result = await response.json().catch(() => { throw new Error('服务器暂时无法检查链接，请稍后重试。'); });
+    if (task !== generation) return;
     if (!response.ok) throw new Error(result.detail || '无法检查链接，请稍后重试。');
     if (!result || !Object.hasOwn(kinds, result.kind) || !Object.hasOwn(labels, result.status) || typeof result.serverName !== 'string') {
       throw new Error('链接状态无法确认，请稍后重试。');
@@ -52,10 +66,14 @@ async function checkLink() {
     open.disabled = result.status !== 'PENDING';
     retry.hidden = true;
   } catch (exception) {
+    if (task !== generation) return;
     status.textContent = '链接检查未完成';
     error.textContent = exception instanceof Error && exception.name === 'Error' ? exception.message : '无法连接服务器，请检查网络后重试。';
     retry.hidden = false;
   } finally {
-    retry.disabled = false;
+    if (task === generation) {
+      retry.disabled = false;
+      previewController = undefined;
+    }
   }
 }
