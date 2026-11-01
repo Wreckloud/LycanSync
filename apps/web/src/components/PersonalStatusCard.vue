@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue';
 import { Check, ChevronDown, Keyboard, LogOut, Pencil, SlidersHorizontal, UserRound } from '@lucide/vue';
 import ActivityStatus from './ActivityStatus.vue';
+import ExpandSection from './ExpandSection.vue';
 import InlineFeedback from './InlineFeedback.vue';
 import ProfilePopover from './ProfilePopover.vue';
 import type { PresenceMode } from '../presence/usePresencePreference';
@@ -57,20 +58,25 @@ function logout() {
         <button type="button" @click="selectSettings('account')"><Pencil :size="15" />编辑个人资料</button>
         <template v-if="presenceMode">
           <button type="button" class="personal-presence-toggle" :disabled="!presenceReady" :aria-expanded="statusExpanded"
-            aria-controls="personal-presence-options" @click="statusExpanded = !statusExpanded">
+            aria-label="在线状态" aria-controls="personal-presence-options" :aria-busy="presenceSyncing || !presenceReady"
+            @click="statusExpanded = !statusExpanded">
             <span class="personal-presence-dot" :class="presenceMode" aria-hidden="true" />
-            <span>在线状态</span><ChevronDown :size="14" :class="{ 'is-open': statusExpanded }" />
+            <span>{{ presenceMode === 'invisible' ? '隐身' : '在线' }}</span><ChevronDown :size="14" :class="{ 'is-open': statusExpanded }" />
           </button>
-          <div v-if="statusExpanded" id="personal-presence-options" class="personal-presence-options" aria-label="在线状态选择">
-            <button type="button" aria-label="在线" :aria-pressed="presenceMode === 'online'" @click="emit('presenceMode', 'online')">
-              <span><span>在线</span><small>自动显示闲置</small></span><Check v-if="presenceMode === 'online'" :size="14" />
-            </button>
-            <button type="button" aria-label="隐身" :aria-pressed="presenceMode === 'invisible'" @click="emit('presenceMode', 'invisible')">
-              <span><span>隐身</span><small>对其他成员显示离线</small></span><Check v-if="presenceMode === 'invisible'" :size="14" />
-            </button>
-            <p>语音、发消息和主动共享仍可被看到。</p>
-          </div>
-          <InlineFeedback :message="presenceError" :status="!presenceReady ? '正在读取状态偏好…' : presenceSyncing ? '正在同步状态…' : ''" />
+          <ExpandSection :open="statusExpanded" id="personal-presence-options">
+            <div class="personal-presence-options" aria-label="在线状态选择">
+              <button type="button" aria-label="在线" :aria-pressed="presenceMode === 'online'" @click="emit('presenceMode', 'online')">
+                <span class="personal-presence-dot online" aria-hidden="true" /><span>在线</span><Check v-if="presenceMode === 'online'" :size="14" />
+              </button>
+              <button type="button" aria-label="隐身" :aria-pressed="presenceMode === 'invisible'" @click="emit('presenceMode', 'invisible')">
+                <span class="personal-presence-dot invisible" aria-hidden="true" /><span>隐身</span><Check v-if="presenceMode === 'invisible'" :size="14" />
+              </button>
+            </div>
+          </ExpandSection>
+          <ExpandSection :open="!!presenceError || !presenceReady || !!presenceSyncing">
+            <InlineFeedback class="personal-presence-feedback" :message="presenceError"
+              :status="!presenceReady ? '正在读取状态偏好…' : presenceSyncing ? '正在同步状态…' : ''" />
+          </ExpandSection>
         </template>
         <button type="button" @click="selectSettings('audio')"><SlidersHorizontal :size="15" />语音与音频</button>
         <button type="button" @click="selectSettings('shortcuts')"><Keyboard :size="15" />快捷键</button>
@@ -87,18 +93,16 @@ function logout() {
 .personal-identity.is-interactive { display: grid; grid-column: 1 / span 2; grid-template-columns: 32px minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; padding: 0; border: 0; border-radius: 5px; background: transparent; color: inherit; text-align: left; }
 .personal-identity.is-interactive:hover, .personal-identity.is-interactive[aria-expanded='true'] { background: var(--panel-raised); }
 .personal-menu-actions { display: grid; padding-top: 4px; border-top: 1px solid var(--border-soft); }
-.personal-menu-actions button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; min-height: 32px; padding: 7px 0; border: 0; background: transparent; color: var(--muted); font-size: 13px; line-height: 18px; text-align: left; }
-.personal-menu-actions button:hover { color: var(--text); }
+.personal-menu-actions button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; min-height: 32px; padding: 6px 8px; border: 0; border-radius: 0; background: transparent; color: var(--muted); font-size: 13px; line-height: 20px; text-align: left; }
+.personal-menu-actions button:hover:not(:disabled) { background: var(--panel-raised); color: var(--text); }
 .personal-menu-session { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border-soft); }
 .personal-menu-session button { color: var(--danger); }
 .personal-presence-dot { flex-shrink: 0; width: 10px; height: 10px; margin: 0 2.5px; border-radius: 50%; background: var(--subtle); }
 .personal-presence-dot.online { background: var(--good); }
 .personal-presence-toggle > svg { margin-left: auto; transition: transform var(--motion-feedback-duration) ease; }
 .personal-presence-toggle > svg.is-open { transform: rotate(180deg); }
-.personal-presence-options { padding: 0 0 4px 23px; }
-.personal-presence-options button { justify-content: space-between; }
-.personal-presence-options button > span { display: grid; gap: 2px; }
+.personal-presence-feedback { height: auto; padding: 4px 8px; }
+.personal-presence-options { padding-left: 23px; }
+.personal-presence-options button > svg { margin-left: auto; }
 .personal-presence-options button[aria-pressed='true'] { color: var(--text); }
-.personal-presence-options small, .personal-presence-options p { color: var(--muted); font-size: 12px; line-height: 16px; }
-.personal-presence-options p { margin: 4px 0 0; }
 </style>

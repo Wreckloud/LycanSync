@@ -492,13 +492,13 @@ test('浏览器账号设置明确标出未接入功能与桌面动态限制', as
   await expect(page.getByText('退出登录会返回账号确认页并保留本机凭据；更换电脑或丢失凭据时，仍需新的恢复登录链接。')).toBeVisible();
   await expect(page.getByRole('button', { name: '查看 QQ 绑定说明', exact: true })).toBeVisible();
   await expect(page.locator('.activity-settings')).toContainText('动态检测仅在 Windows 桌面版提供');
-  const toggle = page.getByRole('checkbox', { name: '显示当前动态', exact: true });
+  const toggle = page.getByRole('checkbox', { name: '显示动态', exact: true });
   await expect(toggle).toBeChecked();
-  await expect(toggle).toBeDisabled();
+  await expect(toggle).toBeEnabled();
   await page.getByRole('button', { name: '返回应用' }).click();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '账号设置', exact: true }).click();
-  await expect(toggle).toBeDisabled();
+  await expect(toggle).toBeEnabled();
 
   await expect(page.getByRole('textbox', { name: '新密码' })).toHaveCount(0);
   await page.getByRole('button', { name: '查看 QQ 绑定说明', exact: true }).click();
@@ -508,6 +508,11 @@ test('浏览器账号设置明确标出未接入功能与桌面动态限制', as
 });
 
 test('自定义入场音按账号保存在本机并可移除', async ({ page }) => {
+  const normalized = Buffer.alloc(46);
+  normalized.write('RIFF', 0); normalized.write('WAVEfmt ', 8); normalized.write('data', 36);
+  normalized.writeUInt32LE(16, 16); normalized.writeUInt16LE(1, 20); normalized.writeUInt16LE(1, 22);
+  normalized.writeUInt32LE(48000, 24); normalized.writeUInt16LE(16, 34); normalized.writeUInt32LE(2, 40);
+  await page.route('**/api/audio/entrance-sound/normalize', route => route.fulfill({ contentType: 'audio/wav', body: normalized }));
   const user = { id: 'entrance-sound-user', nickname: '音效测试', avatar: '', administrator: true };
   await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
@@ -527,13 +532,13 @@ test('自定义入场音按账号保存在本机并可移除', async ({ page }) 
     buffer: silentWav(),
   });
 
-  await expect(page.getByRole('button', { name: '试听' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '试听', exact: true })).toBeVisible();
   await expect(page.locator('.sound-settings')).toContainText('hello.wav');
   await expect.poll(() => page.evaluate(() => localStorage.getItem(
     'lycansync.entrance-sound.v1.entrance-sound-user'))).not.toBeNull();
 
   await page.getByRole('button', { name: '移除' }).click();
-  await expect(page.getByRole('button', { name: '试听' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '试听', exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem(
     'lycansync.entrance-sound.v1.entrance-sound-user'))).toBeNull();
 });
@@ -551,7 +556,7 @@ test('离开音效栏目或关闭设置会停止音效试听', async ({ page }) 
     }
     Object.defineProperty(window, 'Audio', { value: AudioPreviewStub });
     localStorage.setItem('lycansync.entrance-sound.v1.preview-user', JSON.stringify({
-      name: 'hello.wav', mimeType: 'audio/wav', dataUrl: 'data:audio/wav;base64,AAAA',
+      name: 'hello.wav', mimeType: 'audio/wav', dataUrl: 'data:audio/wav;base64,AAAA', normalization: 'rms-v1',
     }));
   });
   await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
@@ -565,7 +570,7 @@ test('离开音效栏目或关闭设置会停止音效试听', async ({ page }) 
   await page.getByRole('button', { name: '账号设置', exact: true }).click();
   await page.getByRole('button', { name: '音效', exact: true }).click();
   await expect(page.locator('.sound-settings')).toContainText('格式：audio/wav · 文件大小：3 字节');
-  await page.getByRole('button', { name: '试听' }).click();
+  await page.getByRole('button', { name: '试听', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as Window & {
     __previewCounts?: { plays: number; pauses: number };
   }).__previewCounts?.plays)).toBe(1);

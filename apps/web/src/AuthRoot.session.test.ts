@@ -25,6 +25,7 @@ function setup() {
   const user = ref<AuthUser | null>({ id: 'member', nickname: '旧昵称', avatar: '', administrator: false });
   const authRequest = vi.fn((path: string) => path === 'session' ? pending : Promise.resolve({ mode: 'invite' }));
   const context = { user, authRequest, disposed: false, sessionHeartbeatInFlight: false,
+    application: ref({ prepareLogout: vi.fn(() => ({ showActivity: false, showLastOnline: true })) }),
     entryUser: ref<AuthUser | null>(null), autoLogin: ref(true), manualEntryRequired: ref(false), preferenceSaving: ref(false),
     removeConfirm: ref(false), removing: ref(false), submitting: ref(false), ready: ref(true), accessOffer: ref(null),
     onboarding: ref(false), error: ref(''), logoutTarget: ref<AuthUser | null>(null), logoutBusy: ref(false),
@@ -53,6 +54,9 @@ it('普通退出先确认，取消不动凭据；确认后只停止媒体并返�
   await f.confirmLogout();
   expect(f.context.user.value).toBeNull();
   expect(f.context.entryUser.value?.id).toBe('member');
+  expect(f.context.application.value.prepareLogout).toHaveBeenCalledOnce();
+  expect(f.context.sendPresenceHeartbeat).toHaveBeenLastCalledWith('OFFLINE', null, expect.any(AbortSignal),
+    { showActivity: false, showLastOnline: true });
   expect(f.context.desktop.returnToAccountEntry).toHaveBeenCalledOnce();
   expect(f.context.authRequest).not.toHaveBeenCalled();
   expect(f.context.desktop.clearSession).not.toHaveBeenCalled();

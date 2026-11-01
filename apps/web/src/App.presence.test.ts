@@ -8,7 +8,7 @@ import type { RtcRoomSummary } from './rtc/roomSummaryApi';
 
 const script = parse(readFileSync(new URL('./App.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('App.ts', script, ts.ScriptTarget.Latest, true);
-const functionNames = ['applyDetectedActivity', 'sendHeartbeat', 'flushPresenceHeartbeats', 'changePresenceMode', 'stopPresenceHeartbeat', 'updateOwnPresenceStatus',
+const functionNames = ['applyDetectedActivity', 'sendHeartbeat', 'flushPresenceHeartbeats', 'changePresenceMode', 'stopPresenceHeartbeat', 'prepareLogout', 'reportOfflineBeforeClose', 'updateOwnPresenceStatus',
   'refreshOnActivation', 'handlePresenceNetworkRestored', 'refreshGroupPresences', 'leaveVoice'];
 const variableNames = ['PRESENCE_IDLE_TIMEOUT_MS', 'activityRevision', 'activitySnapshotRevision', 'removeActivityListener',
   'fetchedRoomSummary', 'roomSummary', 'groupHasVoiceActivity'];
@@ -17,7 +17,7 @@ const callbacks = sourceFile.statements.filter((statement) => {
   if (ts.isVariableStatement(statement)) return statement.declarationList.declarations
     .some((declaration) => variableNames.includes(declaration.name.getText(sourceFile)));
   const text = statement.getText(sourceFile);
-  return text.startsWith('void desktop?.getCurrentActivity()') || text.startsWith('watch(showActivity,')
+  return text.startsWith('void desktop?.getCurrentActivity()') || text.startsWith('watch([showActivity, showLastOnline],')
     || text.startsWith('watch(fetchedRoomSummary,') || text.startsWith('onScopeDispose(() => removeActivityListener');
 }).map((statement) => statement.getText(sourceFile)).join('\n');
 const compiled = ts.transpile(callbacks, { target: ts.ScriptTarget.ES2022 });
@@ -47,7 +47,7 @@ function setup() {
     { participantIdentity: 'user-self', displayName: '自己' }, { participantIdentity: 'user-friend', displayName: '朋友' },
   ] });
   const state = {
-    props: { user: { id: 'self' } }, currentActivity, showActivity,
+    props: { user: { id: 'self' } }, currentActivity, showActivity, showLastOnline: ref(true),
     sharedActivity: computed(() => showActivity.value && presenceMode.value === 'online' ? currentActivity.value : null),
     currentPresenceStatus: ref('ONLINE'), presenceStopped: false,
     presenceMode, presenceReady: ref(true), presencePreference: { loaded: Promise.resolve(), setMode: (mode: 'online' | 'invisible') => { presenceMode.value = mode; } },
@@ -75,13 +75,14 @@ function setup() {
   const publicPresenceStatus = computed(() => presenceMode.value === 'invisible' ? 'OFFLINE' : state.currentPresenceStatus.value);
   // 正式 App 回调、派生状态和监听；RTC/系统闲置/活动/HTTP 边界受控，不连接房间或设备。
   const sandbox = {
-    ...state, desktop, showingJoinedGroup, publicPresenceStatus, computed, watch, onScopeDispose, AbortController, clearInterval,
+    ...state, desktop, showingJoinedGroup, publicPresenceStatus, computed, watch, onScopeDispose, AbortController, AbortSignal, clearInterval,
     document: { visibilityState: 'visible' }, useRoomSummary: () => rawSummary,
   };
   const app = scope.run(() => runInNewContext(`${compiled}\n({ ${functionNames.join(', ')}, roomSummary, groupHasVoiceActivity })`, sandbox)) as {
     applyDetectedActivity: (activity: DetectedActivity | null) => void; stopPresenceHeartbeat: () => void;
     updateOwnPresenceStatus: () => Promise<void>; refreshOnActivation: () => void; handlePresenceNetworkRestored: () => void;
     sendHeartbeat: () => Promise<void>; changePresenceMode: (mode: 'online' | 'invisible') => Promise<void>;
+    prepareLogout: () => { showActivity: boolean; showLastOnline: boolean }; reportOfflineBeforeClose: () => Promise<void>;
     refreshGroupPresences: (groupId: string, generation: number, signal: AbortSignal) => Promise<boolean>;
     leaveVoice: () => void; roomSummary: { value: RtcRoomSummary | null }; groupHasVoiceActivity: (groupId: string) => boolean;
   };
@@ -89,6 +90,20 @@ function setup() {
     notifyActivity: (activity: DetectedActivity | null) => activityListener(activity),
     stop: () => { app.stopPresenceHeartbeat(); scope.stop(); } };
 }
+
+it('关闭前取消待发在线心跳，离线请求带上本次尚未同步的隐私选择', async () => {
+  const { state, app, stop } = setup();
+  try {
+    state.showActivity.value = false;
+    state.showLastOnline.value = false;
+    await app.reportOfflineBeforeClose();
+    expect(state.presenceStopped).toBe(true);
+    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('OFFLINE', null, expect.any(AbortSignal),
+      { showActivity: false, showLastOnline: false });
+    await settle();
+    expect(state.sendPresenceHeartbeat).toHaveBeenCalledOnce();
+  } finally { stop(); }
+});
 
 it('离房立即过滤自己并保留朋友；清理确认后再刷新，旧占用请求已取消', async () => {
   const { state, app, leaving, stop } = setup();
@@ -229,7 +244,7 @@ it('初始旧活动快照不覆盖新事件，关闭隐私只上报空活动并�
     expect(state.currentActivity.value?.name).toBe('当前游戏');
     state.showActivity.value = false;
     await settle();
-    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('ONLINE', null, expect.any(AbortSignal));
+    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('ONLINE', null, expect.any(AbortSignal), { showActivity: state.showActivity.value, showLastOnline: state.showLastOnline.value });
     expect(state.currentActivity.value?.name).toBe('当前游戏');
   } finally { stop(); }
 });
@@ -254,10 +269,10 @@ it('音乐沿用同一公开开关，只上报类型和名称，不附带窗口�
   try {
     notifyActivity({ type: 'MUSIC', name: '歌曲', startedAt: '2026-10-15T00:00:00Z' });
     await settle();
-    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('ONLINE', { type: 'MUSIC', name: '歌曲' }, expect.any(AbortSignal));
+    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('ONLINE', { type: 'MUSIC', name: '歌曲' }, expect.any(AbortSignal), { showActivity: state.showActivity.value, showLastOnline: state.showLastOnline.value });
     state.showActivity.value = false;
     await settle();
-    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('ONLINE', null, expect.any(AbortSignal));
+    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('ONLINE', null, expect.any(AbortSignal), { showActivity: state.showActivity.value, showLastOnline: state.showLastOnline.value });
     expect(state.currentActivity.value?.name).toBe('歌曲');
   } finally { stop(); }
 });
@@ -276,7 +291,7 @@ it('旧在线心跳未完成时合并隐身请求，完成后只发送最新离�
     first.resolve();
     await Promise.all([sending, hiding]);
     expect(state.sendPresenceHeartbeat).toHaveBeenCalledTimes(2);
-    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('OFFLINE', null, expect.any(AbortSignal));
+    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('OFFLINE', null, expect.any(AbortSignal), { showActivity: state.showActivity.value, showLastOnline: state.showLastOnline.value });
     expect(state.currentActivity.value?.name).toBe('仍在游戏');
     expect(state.rtc.leave).not.toHaveBeenCalled();
   } finally { stop(); }
@@ -296,14 +311,14 @@ it('首次心跳等待偏好，恢复隐身后活动与闲置变化不能公开�
     await app.updateOwnPresenceStatus();
     reading.resolve();
     await sending;
-    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('OFFLINE', null, expect.any(AbortSignal));
+    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('OFFLINE', null, expect.any(AbortSignal), { showActivity: state.showActivity.value, showLastOnline: state.showLastOnline.value });
     desktop.getSystemIdleState.mockResolvedValueOnce({ state: 'active', idleSeconds: 0 });
     await app.changePresenceMode('online');
-    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('ONLINE', { type: 'MUSIC', name: '歌曲' }, expect.any(AbortSignal));
+    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('ONLINE', { type: 'MUSIC', name: '歌曲' }, expect.any(AbortSignal), { showActivity: state.showActivity.value, showLastOnline: state.showLastOnline.value });
     state.showActivity.value = false;
     await app.changePresenceMode('invisible');
     await app.changePresenceMode('online');
-    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('ONLINE', null, expect.any(AbortSignal));
+    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('ONLINE', null, expect.any(AbortSignal), { showActivity: state.showActivity.value, showLastOnline: state.showLastOnline.value });
   } finally { stop(); }
 });
 
@@ -337,7 +352,7 @@ it('切回在线沿用当前闲置，迟到的在线选择不能覆盖更新的�
     await app.changePresenceMode('invisible');
     desktop.getSystemIdleState.mockResolvedValueOnce({ state: 'locked', idleSeconds: 600 });
     await app.changePresenceMode('online');
-    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('AWAY', null, expect.any(AbortSignal));
+    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('AWAY', null, expect.any(AbortSignal), { showActivity: state.showActivity.value, showLastOnline: state.showLastOnline.value });
     const reading = deferred<{ state: string; idleSeconds: number }>();
     desktop.getSystemIdleState.mockReturnValueOnce(reading.promise);
     const online = app.changePresenceMode('online');
@@ -345,7 +360,7 @@ it('切回在线沿用当前闲置，迟到的在线选择不能覆盖更新的�
     reading.resolve({ state: 'active', idleSeconds: 0 });
     await online;
     expect(state.presenceMode.value).toBe('invisible');
-    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('OFFLINE', null, expect.any(AbortSignal));
+    expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('OFFLINE', null, expect.any(AbortSignal), { showActivity: state.showActivity.value, showLastOnline: state.showLastOnline.value });
   } finally { stop(); }
 });
 

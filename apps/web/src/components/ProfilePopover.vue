@@ -4,6 +4,8 @@ import { autoUpdate, computePosition, flip, offset, shift } from '@floating-ui/d
 import { UserRound } from '@lucide/vue';
 import type { UserPresenceStatus } from '../presence/presenceApi';
 import { readAvatarTint } from '../profile/avatarTint';
+import { formatPresenceAgo, formatRecentGame } from '../profile/presenceHistory';
+import type { RecentGame } from '../group/groupApi';
 
 const props = defineProps<{
   anchor: HTMLElement | null;
@@ -16,6 +18,8 @@ const props = defineProps<{
   statusLabel: string;
   activity?: string;
   activityStartedAt?: string;
+  lastOnlineAt?: string | null;
+  recentGame?: RecentGame | null;
   profileKey?: string;
   loading?: boolean;
   error?: string;
@@ -28,6 +32,9 @@ const tint = ref<string>();
 const position = ref({ left: '0px', top: '0px', visibility: 'hidden' as 'visible' | 'hidden' });
 let generation = 0;
 const activitySeconds = ref<number | null>(null);
+const historyNow = ref(Date.now());
+const lastOnline = computed(() => props.status === 'OFFLINE' ? formatPresenceAgo(props.lastOnlineAt, historyNow.value) : '');
+const recentGameDescription = computed(() => formatRecentGame(props.recentGame, historyNow.value));
 const activityDuration = computed(() => {
   const elapsed = activitySeconds.value;
   if (elapsed === null) return '';
@@ -37,22 +44,26 @@ const activityDuration = computed(() => {
   return (hours ? `${hours}:` : '') + `${hours ? String(minutes).padStart(2, '0') : minutes}:${String(seconds).padStart(2, '0')}`;
 });
 
-watch(() => [props.anchor, props.activityStartedAt] as const, ([anchor, startedAt], _, onCleanup) => {
+watch(() => [props.anchor, props.activityStartedAt, props.lastOnlineAt, props.recentGame?.endedAt, props.status] as const, ([anchor, startedAt], _, onCleanup) => {
   activitySeconds.value = null;
   const started = Date.parse(startedAt ?? '');
-  if (!anchor || !Number.isFinite(started)) return;
+  historyNow.value = Date.now();
+  if (!anchor || (!Number.isFinite(started) && !lastOnline.value && !recentGameDescription.value)) return;
   const document = anchor.ownerDocument;
   const owner = document.defaultView!;
-  const initialSeconds = (Date.now() - started) / 1000;
+  const observedWallTime = Date.now();
   const observedAt = owner.performance.now();
-  const tick = () => { activitySeconds.value = Math.floor(Math.max(0, initialSeconds + (owner.performance.now() - observedAt) / 1000)); };
+  const tick = () => {
+    historyNow.value = observedWallTime + owner.performance.now() - observedAt;
+    activitySeconds.value = Number.isFinite(started) ? Math.floor(Math.max(0, (historyNow.value - started) / 1000)) : null;
+  };
   let timer: number | undefined;
   const refresh = () => {
     owner.clearInterval(timer);
     timer = undefined;
     if (document.visibilityState === 'hidden') return;
     tick();
-    timer = owner.setInterval(tick, 1000);
+    timer = owner.setInterval(tick, Number.isFinite(started) ? 1000 : 60_000);
   };
   // 只在卡片可见时读秒；从开始时间推算，后台节流不会累计误差。
   refresh();
@@ -154,6 +165,10 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
             <p v-else>{{ signature || '尚未填写个性签名' }}</p>
           </div>
           <div v-if="activity" class="profile-popover-activity">{{ activity }}<span v-if="activityDuration"> · {{ activityDuration }}</span></div>
+          <div v-if="lastOnline || recentGameDescription" class="profile-popover-history">
+            <p v-if="lastOnline">上次在线：{{ lastOnline }}</p>
+            <p v-if="recentGameDescription">{{ recentGameDescription }}</p>
+          </div>
           <slot />
         </div>
       </section>
@@ -163,6 +178,7 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
 
 <style>
 .profile-popover { position: fixed; z-index: 60; width: min(292px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); text-align: left; }
+.profile-popover.is-personal { border-radius: 0; }
 .profile-popover-banner { height: 38px; background: var(--profile-tint, var(--panel-raised)); }
 .profile-popover-body { display: grid; gap: 8px; padding: 0 14px 12px; }
 .profile-popover-identity { display: flex; align-items: flex-end; gap: 10px; min-width: 0; margin-top: -18px; }
@@ -174,6 +190,8 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
 .profile-popover-signature [role='alert'] { color: var(--danger); }
 .profile-popover-signature button { margin-left: 6px; padding: 0; border: 0; background: transparent; color: var(--accent); font-size: 12px; }
 .profile-popover-activity { padding-top: 8px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+.profile-popover-history { display: grid; gap: 4px; color: var(--muted); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+.profile-popover-history p { margin: 0; }
 .profile-popover-enter-active, .profile-popover-leave-active { transition: opacity var(--motion-surface-duration) var(--motion-ease), transform var(--motion-surface-duration) var(--motion-ease); }
 .profile-popover-enter-from, .profile-popover-leave-to { opacity: 0; transform: translateY(4px); }
 .profile-popover:not(.is-personal).profile-popover-enter-from, .profile-popover:not(.is-personal).profile-popover-leave-to { transform: translateX(-4px); }

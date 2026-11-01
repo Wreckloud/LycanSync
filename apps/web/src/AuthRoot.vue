@@ -21,6 +21,7 @@ import {
 import { sendPresenceHeartbeat } from './presence/presenceApi';
 
 const desktop = window.lycanDesktop;
+const application = ref<InstanceType<typeof App> | null>(null);
 const pageOrigin = window.location.origin;
 const SESSION_HEARTBEAT_INTERVAL_MS = 20_000;
 const user = ref<AuthUser | null>(null);
@@ -295,13 +296,14 @@ async function logout() {
   initializationRequest?.abort();
   error.value = '';
   const previousUser = user.value;
+  const visibility = application.value?.prepareLogout();
   logoutInProgress = true;
   user.value = null;
   entryUser.value = previousUser;
   onboarding.value = false;
   try {
     // 先卸载房间，再确认原生资源停止；保留加密凭据，不调用撤销会话接口。
-    await sendPresenceHeartbeat('OFFLINE', null, AbortSignal.timeout(1_200)).catch(() => undefined);
+    await sendPresenceHeartbeat('OFFLINE', null, AbortSignal.timeout(1_200), visibility).catch(() => undefined);
     if (desktop) await desktop.returnToAccountEntry();
   } catch { error.value = '部分通话资源未完全停止，请重试登录或重新打开应用；凭据已保留。'; }
   finally { logoutInProgress = false; }
@@ -382,7 +384,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <App v-if="user && !onboarding" v-show="!accessOffer" :user="user" :window-maximized="windowMaximized" :save-profile="saveProfile"
+  <App v-if="user && !onboarding" v-show="!accessOffer" ref="application" :user="user" :window-maximized="windowMaximized" :save-profile="saveProfile"
     :interaction-blocked="Boolean(accessOffer || logoutTarget)"
     :startup-update-warning="updateWarning" @dismiss-update-warning="updateWarning = ''" @logout="requestLogout" />
   <DialogTransition>

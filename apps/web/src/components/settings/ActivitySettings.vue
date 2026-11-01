@@ -6,8 +6,8 @@ import type { UserActivity } from '../../presence/presenceApi';
 import type { useActivityMappings } from '../../settings/useActivityMappings';
 
 const props = defineProps<{ desktop: boolean; active: boolean; activity: UserActivity | null;
-  showActivity: boolean; error: string; mappings: ReturnType<typeof useActivityMappings> }>();
-const emit = defineEmits<{ visibility: [enabled: boolean] }>();
+  showActivity: boolean; showLastOnline: boolean; error: string; mappings: ReturnType<typeof useActivityMappings> }>();
+const emit = defineEmits<{ visibility: [enabled: boolean]; lastOnlineVisibility: [enabled: boolean] }>();
 const executable = ref('');
 const name = ref('');
 
@@ -31,11 +31,16 @@ watch(() => props.active, (active) => {
 
 <template>
   <section class="settings-section activity-settings">
-    <h2>当前动态</h2>
+    <h2>动态与在线展示</h2>
     <label class="settings-toggle activity-toggle">
-      <span><strong>显示当前动态</strong><small>向群组成员展示游戏或音乐动态，仅影响当前设备。</small></span>
-      <input type="checkbox" :checked="showActivity" :disabled="!desktop" aria-label="显示当前动态"
+      <span><strong>显示动态</strong><small>展示当前游戏或音乐，以及最近一次公开游戏；关闭后清除最近游戏记录。</small></span>
+      <input type="checkbox" :checked="showActivity" aria-label="显示动态"
         @change="emit('visibility', ($event.target as HTMLInputElement).checked)" />
+    </label>
+    <label class="settings-toggle activity-toggle">
+      <span><strong>显示上次在线时间</strong><small>离线时向同群成员展示上次公开在线时间，隐身期间不刷新。</small></span>
+      <input type="checkbox" :checked="showLastOnline" aria-label="显示上次在线时间"
+        @change="emit('lastOnlineVisibility', ($event.target as HTMLInputElement).checked)" />
     </label>
     <InlineFeedback :message="error" />
     <div class="activity-current">

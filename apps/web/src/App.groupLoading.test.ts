@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
-import { ref } from 'vue';
+import { effectScope, nextTick, ref, watch } from 'vue';
 import { expect, it, vi } from 'vitest';
 import { ApiRequestError } from './auth/authApi';
 import type { GroupDetail } from './group/groupApi';
@@ -12,6 +12,52 @@ const sourceFile = ts.createSourceFile('App.ts', script, ts.ScriptTarget.Latest,
 const loadGroup = sourceFile.statements.find((statement) => ts.isFunctionDeclaration(statement)
   && statement.name?.text === 'loadGroup')!.getText(sourceFile);
 const compiled = ts.transpile(loadGroup, { target: ts.ScriptTarget.ES2022 });
+const initialLoad = sourceFile.statements.filter(statement => (ts.isVariableStatement(statement)
+  && statement.declarationList.declarations.some(item => ['initialLoading', 'initialGroupsLoaded', 'initialChatGroupId'].includes(item.name.getText(sourceFile))))
+  || statement.getText(sourceFile).startsWith('watch(() => [initialGroupsLoaded.value'))
+  .map(statement => statement.getText(sourceFile)).join('\n');
+
+function setupInitialLoad(groupId: string | null) {
+  const scope = effectScope();
+  const groupLoading = ref(false);
+  const selectedGroupId = ref(groupId);
+  const state = scope.run(() => runInNewContext(`${ts.transpile(initialLoad, { target: ts.ScriptTarget.ES2022 })}\n({ initialLoading, initialGroupsLoaded, initialChatGroupId })`,
+    { ref, watch, groupLoading, selectedGroupId })) as {
+      initialLoading: { value: boolean }; initialGroupsLoaded: { value: boolean }; initialChatGroupId: { value: string | null };
+    };
+  return { ...state, groupLoading, selectedGroupId, scope };
+}
+
+it('首次展示等待群组、成员和对应群首批消息；完成后后台刷新不再次遮盖', async () => {
+  const state = setupInitialLoad('one');
+  try {
+    state.groupLoading.value = true;
+    state.initialGroupsLoaded.value = true;
+    await nextTick();
+    expect(state.initialLoading.value).toBe(true);
+    state.initialChatGroupId.value = 'old';
+    state.groupLoading.value = false;
+    await nextTick();
+    expect(state.initialLoading.value).toBe(true);
+    state.initialChatGroupId.value = 'one';
+    await nextTick();
+    expect(state.initialLoading.value).toBe(false);
+    state.selectedGroupId.value = 'two';
+    state.groupLoading.value = true;
+    await nextTick();
+    expect(state.initialLoading.value).toBe(false);
+  } finally { state.scope.stop(); }
+});
+
+it('没有群组或列表请求失败后无需等待不存在的消息，初始等待正常结束', async () => {
+  const state = setupInitialLoad(null);
+  try {
+    expect(state.initialLoading.value).toBe(true);
+    state.initialGroupsLoaded.value = true;
+    await nextTick();
+    expect(state.initialLoading.value).toBe(false);
+  } finally { state.scope.stop(); }
+});
 
 function detail(id: string): GroupDetail {
   return { id, name: id, avatar: '', description: '', role: 'MEMBER', memberCount: 1, members: [],

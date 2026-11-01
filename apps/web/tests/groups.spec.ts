@@ -305,7 +305,7 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   await expect(page.locator('.group-member-row').filter({ hasText: '语音朋友' }).locator('img')).toHaveAttribute('src', avatar);
   await expect(page.getByLabel('群组成员').getByText('语音中', { exact: true })).toHaveCount(0);
   await expect(page.locator('.group-member-row').nth(1).locator('.activity-prefix')).toHaveText('正在玩');
-  await expect(page.locator('.group-member-row').nth(1).locator('.activity-content')).toHaveText(/^Core Keeper · \d+:\d{2}$/);
+  await expect(page.locator('.group-member-row').nth(1).locator('.activity-content')).toHaveText('Core Keeper');
   await expect(page.locator('.group-member-row').nth(1).locator('.status-dot')).toHaveClass(/AWAY/);
   await expect(page.locator('.group-member-row').nth(2).locator('.status-dot')).toHaveCount(0);
   await page.locator('.group-member-row').nth(2).hover();

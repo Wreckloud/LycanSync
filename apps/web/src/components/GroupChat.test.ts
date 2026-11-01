@@ -33,6 +33,7 @@ function setup() {
   const sendMessage = vi.fn(async (_groupId: string, _text: string, _image?: File, _signal?: AbortSignal, _id?: string) => message('sent'));
   const sendFile = vi.fn(async (_groupId: string, _file: File, _text: string, id: string, _signal: AbortSignal) => message(id));
   const document = { visibilityState: 'visible', removeEventListener: vi.fn() };
+  const emit = vi.fn();
   // 真实组件的任务、监听和销毁；只替换网络、DOM 与图片边界，不启动浏览器或传输文件。
   const chat = scope.run(() => runInNewContext(`${compiled}\n({ refresh, loadOlder, handleVisibilityChange, submit, cancelUpload,
     list, messages, text, busy, error, historyError, pendingAttachments,
@@ -40,7 +41,7 @@ function setup() {
     unreadMessageIds, showMessageJump, messageJumpLabel, jumpToMessages, updateReadMessages,
     scrollToBottom, onScroll, onScrollEnd, onWheel, stopAnimatedScroll, refreshCalendar, calendarNow,
     setScrollPreference: value => { scrollPreference = value; } })`, {
-    computed, ref, nextTick, onScopeDispose, onMounted: () => {}, defineProps: () => props,
+    computed, ref, nextTick, onScopeDispose, onMounted: () => {}, defineProps: () => props, defineEmits: () => emit,
     findMessages, sendMessage, sendFile, compressChatImage: vi.fn(), messagePollDelay: () => 8000,
     formatFullMessageTime, formatMessageDate, formatMessageTime, localDateKey,
     AbortController, setTimeout, clearTimeout, Error, Date,
@@ -62,8 +63,27 @@ function setup() {
     pendingAttachments: { value: Array<{ id: string; kind: 'FILE'; file: File; previewUrl: string;
       state: 'pending' | 'uploading' | 'failed' | 'sent'; progress: number; error: string }> };
   };
-  return { scope, props, chat, findMessages, sendMessage, sendFile, document };
+  return { scope, props, chat, findMessages, sendMessage, sendFile, document, emit };
 }
+
+it('首批消息失败也通知初始等待结束，保留区域内重试；取消的旧请求不通知', async () => {
+  const { scope, chat, findMessages, emit } = setup();
+  const old = deferred<ChatMessagePage>();
+  const current = deferred<ChatMessagePage>();
+  findMessages.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+  try {
+    const first = chat.refresh();
+    const second = chat.refresh();
+    old.resolve({ messages: [], hasMore: false });
+    await first;
+    expect(emit).not.toHaveBeenCalled();
+    current.reject(new Error('消息暂时不可用'));
+    await second;
+    expect(emit).toHaveBeenCalledExactlyOnceWith('initialLoad', 'first');
+    expect(chat.pollError.value).toBe('消息暂时不可用');
+    expect(chat.initialLoaded.value).toBe(false);
+  } finally { scope.stop(); }
+});
 
 it.each([false, true])('首批快照迟于本机发送，保留服务端顺序并去重（快照含本机消息：%s）', async (includesSent) => {
   const { scope, chat, findMessages } = setup();

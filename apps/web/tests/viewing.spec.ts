@@ -120,6 +120,7 @@ export function useRtcRoom() {
       local.isMicrophoneEnabled = microphoneEnabled.value; revision.value++;
     },
     async enableAudioPlayback() {},
+    setMicrophoneVoiceMode() {}, setPushToTalkHeld() {},
     setMicrophoneInputGain() {}, setMicrophoneProcessing() {}, setRemoteAudioSubscribed() {},
     async sendEntranceSound() {}, async toggleMedia(source) {
       if (source !== Track.Source.Microphone || status.value !== 'connected') return;
@@ -538,7 +539,7 @@ test('远控授权和画面匹配后才打开专用控制窗，普通观看关�
 
 
 test('成员搜索和设置页退场时立即禁用交互，完成后移除', async ({ page }) => {
-  await page.addStyleTag({ content: ':root { --motion-surface-duration: 500ms; --motion-layout-duration: 500ms; }' });
+  await page.addStyleTag({ content: ':root { --motion-surface-duration: 500ms; --motion-layout-duration: 500ms; --motion-expand-duration: 500ms; }' });
   const directory = page.getByRole('complementary', { name: '群组成员', exact: true });
   await directory.getByRole('button', { name: '搜索群组成员' }).click();
   await directory.getByRole('searchbox').press('Escape');

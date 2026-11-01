@@ -14,15 +14,18 @@ export interface UserActivity {
 export interface PresenceHeartbeatRequest {
   status: UserPresenceStatus;
   activity: UserActivity | null;
+  showActivity?: boolean;
+  showLastOnline?: boolean;
 }
 
 export async function sendPresenceHeartbeat(
   status: UserPresenceStatus, activity: UserActivity | null, signal?: AbortSignal,
+  visibility?: Pick<PresenceHeartbeatRequest, 'showActivity' | 'showLastOnline'>,
 ): Promise<void> {
   const response = await authenticatedFetch('/api/presence/heartbeat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ status, activity } satisfies PresenceHeartbeatRequest),
+    body: JSON.stringify({ status, activity, ...visibility } satisfies PresenceHeartbeatRequest),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
   });
   if (!response.ok) {

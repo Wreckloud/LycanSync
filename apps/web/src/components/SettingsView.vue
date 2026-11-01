@@ -53,11 +53,12 @@ const props = defineProps<{
   activity: UserActivity | null;
   activityStatus?: { type: UserActivity['type']; text: string; startedAt?: string } | null;
   showActivity: boolean;
+  showLastOnline: boolean;
   activityError: string;
   activityMappings: ReturnType<typeof useActivityMappings>;
   saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
 }>();
-const emit = defineEmits<{ close: []; logout: []; activityVisibility: [enabled: boolean] }>();
+const emit = defineEmits<{ close: []; logout: []; activityVisibility: [enabled: boolean]; lastOnlineVisibility: [enabled: boolean] }>();
 const heading = ref<HTMLElement | null>(null);
 const profileSettings = ref<InstanceType<typeof ProfileSettings> | null>(null);
 const clientSettings = ref<InstanceType<typeof ClientSettings> | null>(null);
@@ -132,9 +133,9 @@ async function leaveSettings(logout: boolean) {
         <MemberAccessSettings v-if="user.administrator && activeSection === 'members'" :active="true" />
         <div v-show="activeSection === 'account'" class="settings-account-page">
           <ProfileSettings ref="profileSettings" :user="user" :save-profile="saveProfile" />
-          <ActivitySettings :desktop="desktop" :activity="activity" :show-activity="showActivity"
+          <ActivitySettings :desktop="desktop" :activity="activity" :show-activity="showActivity" :show-last-online="showLastOnline"
             :mappings="activityMappings" :active="activeSection === 'account'"
-            :error="activityError" @visibility="emit('activityVisibility', $event)" />
+            :error="activityError" @visibility="emit('activityVisibility', $event)" @last-online-visibility="emit('lastOnlineVisibility', $event)" />
           <AccountSettings :active="activeSection === 'account'" :leaving="leaving" @logout="requestLogout" />
         </div>
         <AudioSettings v-show="activeSection === 'audio'" :active="activeSection === 'audio'"
@@ -154,6 +155,9 @@ async function leaveSettings(logout: boolean) {
 
 <style scoped>
 .settings-view {
+  position: fixed;
+  z-index: 3;
+  inset: var(--titlebar-height) 0 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--member-panel-width);
   grid-template-areas: 'main sidebar';

@@ -21,6 +21,7 @@ const avatar = ref(props.group?.avatar ?? '');
 const avatarInput = ref<HTMLInputElement | null>(null);
 const dialog = ref<HTMLFormElement | null>(null);
 const viewport = ref<HTMLElement | null>(null);
+const modeStage = ref<HTMLElement | null>(null);
 const busy = ref(false);
 const backdropEvents = useBackdropDismiss(close);
 const error = ref('');
@@ -72,23 +73,24 @@ function retireMode(element: Element) {
 }
 
 watch(mode, async () => {
-  const shell = dialog.value;
-  if (!shell) return;
-  const from = Number.parseFloat(getComputedStyle(shell).height);
+  const stage = modeStage.value;
+  if (!stage) return;
+  const from = Number.parseFloat(getComputedStyle(stage).height);
   modeAnimation?.cancel();
   modeAnimation = undefined;
-  // 外框先保持当前可见高度，内层独立排版，避免自动尺寸先跳到新值。
-  shell.style.height = `${from}px`;
+  // 只衔接内容区高度；标题、切换入口和操作区始终保留同一份 DOM。
+  stage.style.height = `${from}px`;
   const generation = ++modeGeneration;
   await nextTick();
-  if (generation !== modeGeneration || !viewport.value) return;
+  if (generation !== modeGeneration || !viewport.value || modeStage.value !== stage) return;
   viewport.value.scrollTop = 0;
-  const style = getComputedStyle(shell);
-  const to = Number.parseFloat(getComputedStyle(viewport.value).height)
-    + Number.parseFloat(style.borderTopWidth) + Number.parseFloat(style.borderBottomWidth);
-  if (!modePreference?.matches && typeof shell.animate === 'function') {
-    shell.style.height = `${to}px`;
-    const animation = shell.animate([{ height: `${from}px` }, { height: `${to}px` }], {
+  const page = stage.querySelector<HTMLElement>('.entry-mode-page:not([inert])');
+  if (!page) { stage.style.removeProperty('height'); return; }
+  const style = getComputedStyle(stage);
+  const to = Number.parseFloat(getComputedStyle(page).height);
+  if (!modePreference?.matches && typeof stage.animate === 'function') {
+    stage.style.height = `${to}px`;
+    const animation = stage.animate([{ height: `${from}px` }, { height: `${to}px` }], {
       duration: Number.parseFloat(style.getPropertyValue('--motion-layout-duration')),
       easing: style.getPropertyValue('--motion-ease').trim(),
     });
@@ -96,15 +98,15 @@ watch(mode, async () => {
     animation.finished.then(() => {
       if (modeAnimation !== animation) return;
       modeAnimation = undefined;
-      shell.style.removeProperty('height');
+      stage.style.removeProperty('height');
     }, () => {});
-  } else shell.style.removeProperty('height');
-  shell.querySelector<HTMLInputElement>('.entry-mode-page:not([inert]) input:not([type="file"])')?.focus({ preventScroll: true });
+  } else stage.style.removeProperty('height');
+  page.querySelector<HTMLInputElement>('input:not([type="file"])')?.focus({ preventScroll: true });
 });
 function stopModeMotion() {
   modeAnimation?.cancel();
   modeAnimation = undefined;
-  dialog.value?.style.removeProperty('height');
+  modeStage.value?.style.removeProperty('height');
 }
 function reduceModeMotion() { if (modePreference?.matches) stopModeMotion(); }
 onScopeDispose(() => {
@@ -126,13 +128,14 @@ onMounted(() => {
       :aria-label="group ? '编辑群组资料' : mode === 'join' ? '加入群组' : '创建群组'"
       :inert="!!cropSource" @submit.prevent="submit" @keydown="keepFocus">
       <div ref="viewport" class="entry-viewport">
-      <Transition name="entry-mode" @before-leave="retireMode">
-      <div :key="mode" class="entry-mode-page">
       <header class="entry-header">
         <div><h2>{{ group ? '编辑群组资料' : mode === 'join' ? '加入群组' : '创建群组' }}</h2><p>{{ mode === 'join' ? '和熟悉的人相聚' : '让朋友们有个相聚的地方' }}</p></div>
         <button v-if="!group" type="button" class="card-header-action" :disabled="busy || picking || !!cropSource"
           @click="mode = mode === 'create' ? 'join' : 'create'; error = ''">{{ mode === 'create' ? '加入群聊' : '创建群聊' }}<ArrowRight :size="16" aria-hidden="true" /></button>
       </header>
+      <div ref="modeStage" class="entry-mode-stage">
+      <Transition name="entry-mode" @before-leave="retireMode">
+      <div :key="mode" class="entry-mode-page">
       <div v-if="mode === 'create'" class="entry-body">
         <div class="entry-identity">
           <div class="entry-avatar-area">
@@ -164,13 +167,14 @@ onMounted(() => {
         <label class="entry-field">群组邀请码<input v-model="code" aria-label="群组邀请码" maxlength="16" autocomplete="off" :readonly="busy" placeholder="输入群主提供的邀请码" /></label>
         <p>邀请码仅用于加入当前服务器的群组，不会连接语音。</p>
       </div>
+      </div>
+      </Transition>
+      </div>
       <footer class="card-actions">
         <button type="button" class="settings-button" :disabled="busy || picking" @click="close">取消</button>
         <InlineFeedback class="card-feedback" :message="error" :status="busy ? (group ? '正在保存…' : mode === 'join' ? '正在加入…' : '正在创建…') : picking ? '正在读取图片…' : ''" />
         <button type="submit" class="confirm-button card-actions-end" :disabled="busy || picking || !!cropSource || (mode === 'join' ? !code.trim() : !name.trim())">{{ group ? '保存修改' : mode === 'join' ? '加入群组' : '创建群组' }}</button>
       </footer>
-      </div>
-      </Transition>
       </div>
     </form>
     <DialogTransition>
@@ -183,8 +187,9 @@ onMounted(() => {
 .group-entry { --entry-padding: 24px; width: min(480px, 100%); min-height: 0; max-height: calc(100dvh - 36px); overflow: clip; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); font-size: 14px; line-height: 20px; }
 .entry-viewport { position: relative; max-height: calc(100dvh - 38px); overflow-x: hidden; overflow-y: auto; padding: var(--entry-padding); scrollbar-width: none; }
 .entry-viewport::-webkit-scrollbar { display: none; }
+.entry-mode-stage { position: relative; overflow: clip; }
 .entry-mode-page { display: flow-root; min-width: 0; }
-.entry-mode-leave-active { position: absolute; top: var(--entry-padding); right: var(--entry-padding); left: var(--entry-padding); }
+.entry-mode-leave-active { position: absolute; inset: 0 0 auto; }
 .entry-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .entry-body.entry-join-body { gap: 12px; align-content: start; }
 .entry-join-body input { width: 100%; }
