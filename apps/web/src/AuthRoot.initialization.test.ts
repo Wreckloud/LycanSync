@@ -24,6 +24,7 @@ function deferred<T>() {
 function setup() {
   let dispose!: () => void;
   const state = {
+    entryUser: ref<AuthUser | null>(null), autoLogin: ref(true), manualEntryRequired: ref(false), accessOffer: ref(null),
     user: ref<AuthUser | null>(null), error: ref(''), ready: ref(false), onboarding: ref(false), disposed: false,
     initializationRequest: null as AbortController | null, desktop: undefined, sessionHeartbeat: null,
     layoutFrame: 1, cancelAnimationFrame: vi.fn(),
@@ -53,7 +54,8 @@ it('正常恢复账号，并保留未登录时的普通 401 语义', async () =>
   expect(state.user.value).toBeNull();
   state.authenticatedFetch.mockResolvedValue({ ok: true, status: 200, json: async () => member });
   await app.initialize();
-  expect(state.user.value).toEqual(member);
+  expect(state.entryUser.value).toEqual(member);
+  expect(state.user.value).toBeNull();
 });
 
 it('新的重连取消旧登录方式检查，旧响应不继续读取账号', async () => {
@@ -82,7 +84,8 @@ it('旧恢复响应正文迟到时，不能覆盖刚确认邀请的新账号', a
   app.acceptSession({ user: member, sessionToken: 'b'.repeat(43) });
   body.resolve({ ...member, id: 'old-member', nickname: '旧账号' });
   await restoring;
-  expect(state.user.value).toEqual(member);
+  expect(state.entryUser.value).toEqual(member);
+  expect(state.user.value).toBeNull();
   expect(state.setBrowserSession).toHaveBeenCalledWith('b'.repeat(43));
 });
 

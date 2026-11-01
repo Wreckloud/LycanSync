@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, net, powerMonitor, protocol, screen, session, safeStorage, shell, sharedTexture } = require('electron');
+const { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, Menu, net, powerMonitor, protocol, screen, session, safeStorage, shell, sharedTexture, Tray } = require('electron');
 const { release: osRelease } = require('node:os');
 const { createServer } = require('node:net');
 const { existsSync } = require('node:fs');
@@ -13,6 +13,8 @@ const { ObsAudioHostManager } = require('./obs-audio-host.cjs');
 const { createRecording } = require('./recording.cjs');
 const { createAudioShortcuts } = require('./audio-shortcuts.cjs');
 const { createMediaBackgroundPolicy } = require('./media-background.cjs');
+const { createDesktopTray } = require('./desktop-tray.cjs');
+const { createLoginPreferences } = require('./login-preferences.cjs');
 const { createRecordingVoice } = require('./recording-voice.cjs');
 const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
 const { createDiagnosticReportStore, parseDiagnosticReport } = require('./diagnostic-reports.cjs');
@@ -90,6 +92,7 @@ const backend = new URL(loadServerSettings({
   resourcesDirectory: app.isPackaged ? process.resourcesPath : __dirname,
   developmentUrl: process.env.LYCANSYNC_API_URL,
 }));
+const loginPreferences = createLoginPreferences(resolve(app.getPath('userData'), 'login-settings.json'), backend.origin);
 let pendingAccessLink = accessLinkFromArguments(process.argv);
 let pendingAccessError = false;
 const accessLinkFile = resolve(app.getPath('userData'), 'pending-access.bin');
@@ -110,6 +113,14 @@ let startupReady = false;
 let allowQuitAfterMediaHelper = false;
 let mediaHelperShutdownPromise;
 let nativeMediaBridge;
+const desktopTray = createDesktopTray({ Tray, Menu,
+  iconPath: resolve(__dirname, 'tray.ico'), settingsPath: resolve(app.getPath('userData'), 'desktop-settings.json'),
+  getWindow: () => mainWindow,
+  onQuit: () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+    else app.quit();
+  },
+});
 const setMediaBackgroundActive = createMediaBackgroundPolicy();
 const audioShortcuts = createAudioShortcuts({ getWindow: () => mainWindow,
   bridge: () => nativeMediaBridge ??= loadNativeMediaBridge(),
@@ -1176,8 +1187,10 @@ async function loadSession() {
   return sessionToken;
 }
 
-async function saveSession(token) {
+async function saveSession(token, accountId) {
   if (!safeStorage.isEncryptionAvailable()) throw new Error('系统加密不可用，不能保存自动登录凭据。');
+  // 新凭据持久化前记录首次手动确认，避免关窗重开绕过账号确认。
+  await loginPreferences.set(accountId, true, true);
   const encrypted = safeStorage.encryptString(JSON.stringify({ server: backend.origin, token }));
   await mkdir(app.getPath('userData'), { recursive: true });
   await writeFile(resolve(app.getPath('userData'), 'session.bin'), encrypted);
@@ -1277,7 +1290,7 @@ async function serveApplication(request) {
       failureMessage = '无法读取本机登录凭据，请清理本机登录凭据后重试。';
       const token = await loadSession();
       if (url.pathname === '/api/auth/access/redeem' && token) {
-        return Response.json({ detail: '请先退出当前账号，再使用邀请链接。' }, { status: 409 });
+        return Response.json({ detail: '请先从此设备移除当前账号，再使用邀请链接。' }, { status: 409 });
       }
       failureMessage = '无法连接业务服务，请检查网络和服务器状态。';
       const response = await net.fetch(new URL(url.pathname + url.search, backend).href, {
@@ -1317,7 +1330,7 @@ async function serveApplication(request) {
             || typeof result.user.nickname !== 'string' || typeof result.user.avatar !== 'string'
             || typeof result.user.administrator !== 'boolean') throw new Error('登录响应无效');
         failureMessage = '无法保存本机登录凭据，请检查数据目录权限和系统加密后重试。';
-        await saveSession(result.sessionToken);
+        await saveSession(result.sessionToken, result.user.id);
         // 会话原文只进入主进程的系统加密存储，不暴露给渲染页面。
         delete result.sessionToken;
         return Response.json(result, { headers: { 'Cache-Control': 'no-store' } });
@@ -1390,9 +1403,7 @@ if (!app.requestSingleInstanceLock()) {
       pendingAccessLink = offer;
       mainWindow?.webContents.send('auth:access:offer', offer);
     }
-    if (mainWindow?.isMinimized()) mainWindow.restore();
-    mainWindow?.show();
-    mainWindow?.focus();
+    desktopTray.show();
   });
   app.whenReady().then(() => {
     void writeMediaDiagnostic({ stage: 'applicationReady', appVersion: app.getVersion(),
@@ -1428,6 +1439,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     windowLayout = createWindowLayout(mainWindow, screen);
     mainWindow.setMenu(null);
+    desktopTray.initialize();
     screenShareWindows.attach(mainWindow);
     mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
     mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
@@ -1443,9 +1455,11 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow.on('close', (event) => {
       // app.quit 先等待 helper 清理；确认完成后的第二次退出允许关闭窗口。
       if (canClose || allowQuitAfterMediaHelper) return;
+      if (!closing && desktopTray.handleClose(event)) return;
       event.preventDefault();
       if (closing) return;
       closing = true;
+      desktopTray.prepareToQuit();
       try { audioShortcuts.clear(); } catch { console.error('audio shortcut cleanup failed'); }
       screenShareWindows.closeAll();
       voiceOverlay.clear();
@@ -1456,6 +1470,7 @@ if (!app.requestSingleInstanceLock()) {
     });
     mainWindow.on('maximize', () => mainWindow?.webContents.send('window:maximized-changed', true));
     mainWindow.on('unmaximize', () => mainWindow?.webContents.send('window:maximized-changed', false));
+    mainWindow.on('query-session-end', () => desktopTray.prepareToQuit());
     mainWindow.on('closed', () => { clearTimeout(closeTimer); mainWindow = undefined; });
     mainWindow.loadURL(APP_ORIGIN + '/');
   });
@@ -1491,7 +1506,7 @@ ipcMain.handle('update:restart', (event) => {
   }
   // 走普通关窗清理通话、共享和 helper；新进程再使用唯一的启动更新链路。
   app.relaunch();
-  mainWindow.close();
+  desktopTray.quit();
 });
 ipcMain.handle('update:skip', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
@@ -1644,6 +1659,14 @@ ipcMain.handle('settings:auto-start:set', (event, enabled) => {
   // 使用 Windows 登录项启动现有程序，不创建额外服务或常驻辅助进程。
   app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath });
   return autoStartSettings();
+});
+ipcMain.handle('settings:tray:get', (event) => {
+  if (!trustedSender(event) || closing) throw new Error('当前无法读取托盘设置');
+  return desktopTray.settings();
+});
+ipcMain.handle('settings:tray:set', (event, enabled) => {
+  if (!trustedSender(event) || closing || typeof enabled !== 'boolean') throw new Error('请求参数无效');
+  return desktopTray.setEnabled(enabled);
 });
 ipcMain.handle('activity:current', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
@@ -2024,6 +2047,7 @@ ipcMain.handle('external:open', async (event, value) => {
 });
 app.on('before-quit', (event) => {
   closing = true;
+  desktopTray.dispose();
   try { audioShortcuts.clear(); } catch { console.error('audio shortcut cleanup failed'); }
   voiceOverlay.clear();
   if (startupUpdate.getState().phase !== 'installing') startupUpdate.cancel();
@@ -2098,9 +2122,42 @@ ipcMain.handle('voice-overlay:displays', (event) => {
   return voiceOverlay.displays();
 });
 ipcMain.handle('voice-overlay:ready', (event) => voiceOverlay.ready(event));
+async function returnToAccountEntry() {
+  let failed = false;
+  // 各资源由原持有者停止，某一路失败仍继续回收其余资源。
+  for (const stop of [
+    () => audioShortcuts.clear(),
+    () => screenShareWindows.closeAll(),
+    () => activityMonitor.clearMappings(),
+    () => voiceOverlay.clear(),
+    () => recording.stopAll(),
+    () => nativeVideoSession && stopNativeVideo(nativeVideoSession.sessionId),
+    () => nativeScreenAudioSession && stopNativeScreenAudio(nativeScreenAudioSession.sessionId, true),
+    () => nativeMicrophoneSession && stopNativeMicrophoneCapture(nativeMicrophoneSession.sessionId),
+  ]) {
+    try { await stop(); }
+    catch { failed = true; }
+  }
+  if (failed) throw new Error('通话资源尚未完全停止，请重试；登录凭据已保留。');
+}
+
+ipcMain.handle('auth:return', async (event) => {
+  if (!trustedSender(event) || closing) throw new Error('当前不能返回登录页。');
+  await returnToAccountEntry();
+});
+ipcMain.handle('auth:auto-login:get', (event, accountId) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return loginPreferences.get(accountId);
+});
+ipcMain.handle('auth:auto-login:set', (event, accountId, enabled, manualEntryRequired) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return loginPreferences.set(accountId, enabled, manualEntryRequired);
+});
 ipcMain.handle('auth:clear', async (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
+  await returnToAccountEntry();
   await clearSession();
+  await loginPreferences.clear();
 });
 
 ipcMain.handle('settings:server:get', (event) => {
@@ -2116,13 +2173,13 @@ ipcMain.handle('auth:access:get', (event) => {
 });
 ipcMain.handle('auth:access:parse', async (event, value) => {
   if (!trustedSender(event) || closing) throw new Error('当前不能打开邀请链接。');
-  if (await loadSession()) throw new Error('请先退出当前账号。');
+  if (await loadSession()) throw new Error('请先从此设备移除当前账号。');
   if (!trustedSender(event) || closing) throw new Error('当前不能打开邀请链接。');
   return parseManualAccessLink(value);
 });
 ipcMain.handle('auth:access:prepare', async (event, offer) => {
   if (!trustedSender(event) || closing) throw new Error('当前不能打开邀请链接。');
-  if (await loadSession()) throw new Error('请先退出当前账号。');
+  if (await loadSession()) throw new Error('请先从此设备移除当前账号。');
   if (!trustedSender(event) || closing) throw new Error('当前不能打开邀请链接。');
   const link = `lycansync://access?server=${encodeURIComponent(offer?.server ?? '')}#token=${offer?.token ?? ''}`;
   const validated = parseAccessLink(link);
@@ -2136,7 +2193,7 @@ ipcMain.handle('auth:access:prepare', async (event, offer) => {
 });
 ipcMain.handle('settings:server:set', async (event, value) => {
   if (!trustedSender(event) || closing) throw new Error('当前不能修改服务器地址。');
-  if (await loadSession()) throw new Error('请退出登录后再修改服务器地址。');
+  if (await loadSession()) throw new Error('请先清除本机登录凭据，再修改服务器地址。');
   if (!trustedSender(event) || closing) throw new Error('当前不能修改服务器地址。');
   await saveServerSettings(app.getPath('userData'), value);
   // 配置可能已经落盘；用户已关窗时留待下次启动，不再因迟到结果重新打开应用。

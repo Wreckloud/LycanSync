@@ -11,8 +11,13 @@ const autoStartSupported = ref<boolean>();
 const autoStartEnabled = ref(false);
 const autoStartBusy = ref(false);
 const autoStartError = ref('');
+const traySupported = ref(false);
+const closeToTray = ref(false);
+const trayBusy = ref(false);
+const trayError = ref('');
 const desktopBridge = window.lycanDesktop;
 let loaded = false;
+let trayLoaded = false;
 const screenPreferences = reactive({ hideCursor: false, hideBorder: true });
 const screenSupport = ref<{ hideCursor: boolean; hideBorder: boolean }>();
 const screenError = ref('');
@@ -82,6 +87,39 @@ watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
   }).catch(() => { autoStartError.value = '无法读取开机自启设置'; });
 }, { immediate: true });
 
+watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
+  if (!active || !desktop || trayLoaded) return;
+  trayLoaded = true;
+  if (!desktopBridge?.getTraySettings) {
+    trayError.value = '请重新启动客户端以读取托盘设置。';
+    return;
+  }
+  void desktopBridge.getTraySettings().then((settings) => {
+    traySupported.value = settings.supported;
+    closeToTray.value = settings.enabled;
+    trayError.value = settings.error;
+  }).catch(() => { trayError.value = '无法读取托盘设置，请重新打开客户端。'; });
+}, { immediate: true });
+
+async function updateCloseToTray(event: Event) {
+  if (trayBusy.value || !traySupported.value || !desktopBridge) return;
+  const input = event.target as HTMLInputElement;
+  const previous = closeToTray.value;
+  closeToTray.value = input.checked;
+  trayBusy.value = true;
+  trayError.value = '';
+  try {
+    const settings = await desktopBridge.setCloseToTray(input.checked);
+    closeToTray.value = settings.enabled;
+    traySupported.value = settings.supported;
+    trayError.value = settings.error;
+  } catch (exception) {
+    closeToTray.value = previous;
+    input.checked = previous;
+    trayError.value = exception instanceof Error ? exception.message : '无法保存托盘设置';
+  } finally { trayBusy.value = false; }
+}
+
 async function updateAutoStart(event: Event) {
   if (autoStartBusy.value || !autoStartSupported.value || !desktopBridge) return;
   const enabled = (event.target as HTMLInputElement).checked;
@@ -133,13 +171,21 @@ async function updateAutoStart(event: Event) {
     </section>
     <section class="settings-block">
       <h2>系统</h2>
-      <p v-if="!desktop">开机自启仅在 Windows 桌面版提供。</p>
-      <label v-else class="settings-toggle" :class="{ 'is-disabled': !autoStartSupported || autoStartBusy }">
-        <span><strong>开机自动启动</strong><small>{{ autoStartDescription }}</small></span>
-        <input type="checkbox" :checked="autoStartEnabled" :disabled="!autoStartSupported || autoStartBusy"
-          aria-label="开机自动启动" @change="updateAutoStart" />
-      </label>
-      <InlineFeedback :message="autoStartError" />
+      <p v-if="!desktop">托盘和开机自启仅在 Windows 桌面版提供。</p>
+      <template v-else>
+        <label class="settings-toggle" :class="{ 'is-disabled': !traySupported || trayBusy }">
+          <span><strong>关闭时收起到托盘</strong><small>默认关闭。开启后，关闭主窗口仍继续通话、共享和录制；右键托盘选择“退出”才结束应用。</small></span>
+          <input type="checkbox" :checked="closeToTray" :disabled="!traySupported || trayBusy"
+            aria-label="关闭时收起到托盘" @change="updateCloseToTray" />
+        </label>
+        <InlineFeedback :message="trayError" />
+        <label class="settings-toggle" :class="{ 'is-disabled': !autoStartSupported || autoStartBusy }">
+          <span><strong>开机自动启动</strong><small>{{ autoStartDescription }}</small></span>
+          <input type="checkbox" :checked="autoStartEnabled" :disabled="!autoStartSupported || autoStartBusy"
+            aria-label="开机自动启动" @change="updateAutoStart" />
+        </label>
+        <InlineFeedback :message="autoStartError" />
+      </template>
     </section>
   </div>
 </template>

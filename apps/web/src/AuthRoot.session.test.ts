@@ -9,7 +9,8 @@ import { ApiRequestError } from './auth/authApi';
 
 const script = parse(readFileSync(new URL('./AuthRoot.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('AuthRoot.ts', script, ts.ScriptTarget.Latest, true);
-const callbackNames = ['verifyCurrentSession', 'expired', 'logout'];
+const callbackNames = ['verifyCurrentSession', 'expired', 'requestLogout', 'confirmLogout', 'logout',
+  'requestClearSession', 'clearLocalSession', 'initialize', 'acceptSession', 'completeAccess', 'enterAccount', 'changeAutoLogin'];
 const callbacks = callbackNames.map((name) => {
   const declaration = sourceFile.statements.find((statement) => ts.isFunctionDeclaration(statement)
     && statement.name?.text === name);
@@ -22,16 +23,148 @@ function setup() {
   let resolve!: (status: AuthSessionStatus) => void;
   const pending = new Promise<AuthSessionStatus>((done) => { resolve = done; });
   const user = ref<AuthUser | null>({ id: 'member', nickname: '旧昵称', avatar: '', administrator: false });
-  const authRequest = vi.fn(() => pending);
-  // 执行正式心跳和退出回调，只控制请求结果，不启动页面、客户端或服务器。
+  const authRequest = vi.fn((path: string) => path === 'session' ? pending : Promise.resolve({ mode: 'invite' }));
   const context = { user, authRequest, disposed: false, sessionHeartbeatInFlight: false,
-    onboarding: ref(false), error: ref(''), logoutInProgress: false, initializationRequest: null, ApiRequestError, Error, AbortSignal,
+    entryUser: ref<AuthUser | null>(null), autoLogin: ref(true), manualEntryRequired: ref(false), preferenceSaving: ref(false),
+    removeConfirm: ref(false), removing: ref(false), submitting: ref(false), ready: ref(true), accessOffer: ref(null),
+    onboarding: ref(false), error: ref(''), logoutTarget: ref<AuthUser | null>(null), logoutBusy: ref(false),
+    logoutInProgress: false, initializationRequest: null, ApiRequestError, Error, AbortSignal, AbortController,
+    desktop: { returnToAccountEntry: vi.fn(async () => {}), clearSession: vi.fn(async () => {}),
+      getAutoLogin: vi.fn(async () => ({ enabled: true, manualEntryRequired: false })), setAutoLogin: vi.fn(async (_id: string, enabled: boolean) => enabled) },
+    authenticatedFetch: vi.fn(async () => Response.json({ id: 'member', nickname: '服务端昵称', avatar: '', administrator: false })),
     sendPresenceHeartbeat: vi.fn(async (): Promise<void> => undefined), setBrowserSession: vi.fn() };
-  const callbacks = runInNewContext(`${compiled}\n({ verifyCurrentSession, logout })`, context) as {
-    verifyCurrentSession: () => Promise<void>; logout: () => Promise<void>;
+  const functions = runInNewContext(`${compiled}\n({ ${callbackNames.join(', ')} })`, context) as {
+    verifyCurrentSession: () => Promise<void>; logout: () => Promise<void>; requestLogout: () => void; confirmLogout: () => Promise<void>;
+    requestClearSession: () => void; clearLocalSession: () => Promise<void>; initialize: (automatic?: boolean) => Promise<void>;
+    completeAccess: (result: { user: AuthUser }, kind: string) => Promise<void>; enterAccount: () => Promise<void>;
+    changeAutoLogin: (event: unknown) => Promise<void>;
   };
-  return { context, verify: callbacks.verifyCurrentSession, logout: callbacks.logout, resolve };
+  return { context, verify: functions.verifyCurrentSession, ...functions, resolve };
 }
+
+it('普通退出先确认，取消不动凭据；确认后只停止媒体并返回账号页', async () => {
+  const f = setup();
+  f.requestLogout();
+  expect(f.context.logoutTarget.value?.id).toBe('member');
+  f.context.logoutTarget.value = null;
+  await f.confirmLogout();
+  expect(f.context.desktop.returnToAccountEntry).not.toHaveBeenCalled();
+  f.requestLogout();
+  await f.confirmLogout();
+  expect(f.context.user.value).toBeNull();
+  expect(f.context.entryUser.value?.id).toBe('member');
+  expect(f.context.desktop.returnToAccountEntry).toHaveBeenCalledOnce();
+  expect(f.context.authRequest).not.toHaveBeenCalled();
+  expect(f.context.desktop.clearSession).not.toHaveBeenCalled();
+  expect(f.context.setBrowserSession).not.toHaveBeenCalled();
+  expect(f.context.logoutTarget.value).toBeNull();
+});
+
+it('资源停止失败仍保留账号与凭据，并明确提示；重新进入前再次回收', async () => {
+  const f = setup();
+  f.context.desktop.returnToAccountEntry.mockRejectedValueOnce(new Error('stop failed'));
+  await f.logout();
+  expect(f.context.user.value).toBeNull();
+  expect(f.context.entryUser.value?.id).toBe('member');
+  expect(f.context.error.value).toContain('凭据已保留');
+  await f.enterAccount();
+  expect(f.context.desktop.returnToAccountEntry).toHaveBeenCalledTimes(2);
+  expect(f.context.user.value?.nickname).toBe('服务端昵称');
+});
+
+it('清除必须单独确认，取消不发送撤销请求或删除文件；双击只执行一次', async () => {
+  const f = setup();
+  await f.logout();
+  await f.clearLocalSession();
+  expect(f.context.authRequest).not.toHaveBeenCalled();
+  f.requestClearSession();
+  f.context.removeConfirm.value = false;
+  await f.clearLocalSession();
+  expect(f.context.desktop.clearSession).not.toHaveBeenCalled();
+  f.requestClearSession();
+  const pending = f.clearLocalSession();
+  await f.clearLocalSession();
+  await pending;
+  expect(f.context.authRequest).toHaveBeenCalledExactlyOnceWith('logout', 'POST');
+  expect(f.context.desktop.clearSession).toHaveBeenCalledOnce();
+  expect(f.context.entryUser.value).toBeNull();
+  expect(f.context.removeConfirm.value).toBe(false);
+});
+
+it('离线仍能移除本机凭据，但不声称已撤销服务器会话', async () => {
+  const f = setup();
+  await f.logout();
+  f.context.authRequest.mockRejectedValueOnce(new Error('offline'));
+  f.requestClearSession();
+  await f.clearLocalSession();
+  expect(f.context.entryUser.value).toBeNull();
+  expect(f.context.error.value).toContain('未确认撤销');
+});
+
+it('文件删除失败保持确认框并允许重试', async () => {
+  const f = setup();
+  await f.logout();
+  f.context.desktop.clearSession.mockRejectedValueOnce(new Error('permission denied'));
+  f.requestClearSession();
+  await f.clearLocalSession();
+  expect(f.context.removeConfirm.value).toBe(true);
+  expect(f.context.error.value).toContain('目录权限');
+  expect(f.context.removing.value).toBe(false);
+});
+
+it.each([true, false])('启动时遵循自动登录 %s，重连绝不自动进入', async enabled => {
+  const f = setup();
+  f.context.user.value = null;
+  f.context.desktop.getAutoLogin.mockResolvedValue({ enabled, manualEntryRequired: false });
+  await f.initialize(true);
+  expect(Boolean(f.context.user.value)).toBe(enabled);
+  f.context.user.value = null;
+  await f.initialize();
+  expect(f.context.user.value).toBeNull();
+  expect(f.context.entryUser.value?.id).toBe('member');
+});
+
+it.each(['INVITE', 'ACTIVATE', 'RECOVERY'])('首次%s完成只确认账号，不能直接进入', async kind => {
+  const f = setup();
+  const account = f.context.user.value!;
+  await f.completeAccess({ user: account }, kind);
+  expect(f.context.user.value).toBeNull();
+  expect(f.context.entryUser.value).toEqual(account);
+  expect(f.context.onboarding.value).toBe(kind !== 'RECOVERY');
+  expect(f.context.autoLogin.value).toBe(true);
+  expect(f.context.desktop.setAutoLogin).toHaveBeenCalledWith('member', true, true);
+});
+
+it('修改自动登录只保存偏好，不立即进入；失败恢复原选择', async () => {
+  const f = setup();
+  await f.logout();
+  await f.changeAutoLogin({ target: { checked: false } });
+  expect(f.context.autoLogin.value).toBe(false);
+  expect(f.context.user.value).toBeNull();
+  f.context.desktop.setAutoLogin.mockRejectedValueOnce(new Error('disk error'));
+  await f.changeAutoLogin({ target: { checked: true } });
+  expect(f.context.autoLogin.value).toBe(false);
+  expect(f.context.error.value).toContain('保存失败');
+});
+
+it('偏好损坏不能自动进入，但仍显示可确认的账号', async () => {
+  const f = setup();
+  f.context.user.value = null;
+  f.context.desktop.getAutoLogin.mockRejectedValueOnce(new Error('设置损坏'));
+  await f.initialize(true);
+  expect(f.context.user.value).toBeNull();
+  expect(f.context.entryUser.value?.id).toBe('member');
+  expect(f.context.autoLogin.value).toBe(false);
+});
+
+it('手动登录前凭据已失效，不使用旧预览身份进入', async () => {
+  const f = setup();
+  await f.logout();
+  f.context.authenticatedFetch.mockResolvedValueOnce(new Response(null, { status: 401 }));
+  await f.enterAccount();
+  expect(f.context.user.value).toBeNull();
+  expect(f.context.entryUser.value).toBeNull();
+});
 
 it.each(['profile', 'same-account', 'other-account', 'logout'])(
   '旧心跳成功返回不覆盖后来发生的 %s 状态', async (change) => {
@@ -80,64 +213,34 @@ it('没有登录账号时不发送心跳', async () => {
   expect(context.authRequest).not.toHaveBeenCalled();
 });
 
-it.each([401, 502])('退出已在服务端完成时，本机返回%s不恢复旧身份', async (status) => {
-  const { context, logout } = setup();
-  context.onboarding.value = true;
-  context.authRequest.mockRejectedValue(new ApiRequestError(status,
-    status === 401 ? 'INVALID_SESSION' : 'LOCAL_SESSION_CLEAR_FAILED', '登录已结束，但本机凭据清理失败'));
-  await logout();
-  expect(context.user.value).toBeNull();
-  expect(context.onboarding.value).toBe(false);
-  expect(context.setBrowserSession).toHaveBeenCalledWith(null);
-  expect(context.logoutInProgress).toBe(false);
-  expect(context.error.value).toBe(status === 401 ? '' : '登录已结束，但本机凭据清理失败');
+
+it('首次确认前重启仍停在账号页，勾选自动登录也不绕过首次确认', async () => {
+  const f = setup();
+  f.context.user.value = null;
+  f.context.desktop.getAutoLogin.mockResolvedValue({ enabled: true, manualEntryRequired: true });
+  await f.initialize(true);
+  expect(f.context.user.value).toBeNull();
+  expect(f.context.autoLogin.value).toBe(true);
+  await f.enterAccount();
+  expect((f.context.user.value as AuthUser | null)?.id).toBe('member');
+  expect(f.context.desktop.setAutoLogin).toHaveBeenCalledWith('member', true, false);
 });
 
-it('服务端退出失败才恢复原账号，保留明确错误', async () => {
-  const { context, logout } = setup();
-  const original = context.user.value;
-  context.authRequest.mockRejectedValue(new ApiRequestError(503, 'AUTH_SERVICE_UNAVAILABLE', '账号服务暂不可用'));
-  await logout();
-  expect(context.user.value).toBe(original);
-  expect(context.error.value).toBe('账号服务暂不可用');
-  expect(context.setBrowserSession).not.toHaveBeenCalled();
+it('登录核验返回不同账号时，先展示新资料再要求手动确认', async () => {
+  const f = setup();
+  await f.logout();
+  f.context.authenticatedFetch.mockResolvedValueOnce(Response.json({ id: 'another', nickname: '另一账号', avatar: '', administrator: false }));
+  await f.enterAccount();
+  expect(f.context.user.value).toBeNull();
+  expect(f.context.entryUser.value?.id).toBe('another');
+  expect(f.context.error.value).toContain('账号已变化');
 });
 
-it('离线上报期间已接入新账号，不使用新会话发送旧退出请求', async () => {
-  const { context, logout } = setup();
-  let complete!: () => void;
-  context.sendPresenceHeartbeat.mockReturnValueOnce(new Promise<void>((resolve) => { complete = resolve; }));
-  const pending = logout();
-  const current = { id: 'new-member', nickname: '新账号', avatar: '', administrator: false };
-  context.user.value = current;
-  complete();
-  await pending;
-  expect(context.user.value).toEqual(current);
-  expect(context.authRequest).not.toHaveBeenCalled();
-  expect(context.setBrowserSession).not.toHaveBeenCalled();
-  expect(context.logoutInProgress).toBe(false);
-});
-
-it.each([200, 401, 503])('旧退出返回%s时，不清除或覆盖之后接入的新账号', async (status) => {
-  const { context, logout } = setup();
-  let complete!: () => void;
-  let started!: () => void;
-  const entered = new Promise<void>((resolve) => { started = resolve; });
-  context.authRequest.mockImplementationOnce(async () => {
-    started();
-    await new Promise<void>((resolve) => { complete = resolve; });
-    if (status !== 200) throw new ApiRequestError(status, 'INVALID_SESSION', '旧退出结果');
-    return { id: 'member', nickname: '旧昵称', administrator: false };
-  });
-  const pending = logout();
-  await entered;
-  const current = { id: 'new-member', nickname: '新账号', avatar: '', administrator: false };
-  context.user.value = current;
-  context.error.value = '新状态提示';
-  complete();
-  await pending;
-  expect(context.user.value).toEqual(current);
-  expect(context.error.value).toBe('新状态提示');
-  expect(context.setBrowserSession).not.toHaveBeenCalled();
-  expect(context.logoutInProgress).toBe(false);
+it('首次登录确认无法落盘时停在账号页，明确提示目录权限而不是媒体错误', async () => {
+  const f = setup();
+  await f.logout();
+  f.context.desktop.setAutoLogin.mockRejectedValueOnce(new Error('permission denied'));
+  await f.enterAccount();
+  expect(f.context.user.value).toBeNull();
+  expect(f.context.error.value).toContain('安装目录权限');
 });

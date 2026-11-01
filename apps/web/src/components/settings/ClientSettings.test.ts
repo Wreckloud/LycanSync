@@ -24,6 +24,8 @@ function setup(active = true) {
   const autoStart = deferred<{ supported: boolean; enabled: boolean }>();
   const updateState: StartupUpdateState = { phase: 'ready', version: '0.0.10', supported: true, message: '' };
   const bridge = { getScreenShareSupport: vi.fn(() => support.promise), getAutoStart: vi.fn(() => autoStart.promise),
+    getTraySettings: vi.fn(async () => ({ supported: true, enabled: false, error: '' })),
+    setCloseToTray: vi.fn(async (enabled: boolean) => ({ supported: true, enabled, error: '' })),
     setAutoStart: vi.fn(async (enabled: boolean) => ({ supported: true, enabled })),
     getUpdateState: vi.fn(async () => updateState), checkUpdates: vi.fn(async (): Promise<StartupUpdateState> => ({ ...updateState, nextVersion: '0.0.11' })),
     restartForUpdate: vi.fn(async () => {}), onUpdateState: vi.fn(() => () => {}) };
@@ -34,12 +36,15 @@ function setup(active = true) {
   // 执行真实组件监听和更新流程，IPC 只返回受控数据，不修改系统设置。
   const settings = scope.run(() => runInNewContext(`${compiled}\n({ autoStartDescription,
     autoStartEnabled, autoStartBusy, autoStartError, screenPreferences, screenError,
+    closeToTray, traySupported, trayBusy, trayError, updateCloseToTray,
     updateAutoStart, updateScreenPreference, checkUpdates, cancelUpdate, confirmingUpdate, updateDescription })`, {
     computed, reactive, ref, watch, useClientUpdate, Error, window: { lycanDesktop: bridge },
     defineProps: () => props, defineEmits: () => vi.fn(), defineExpose: exposed,
     readScreenSharePreferences: () => ({ hideCursor: false, hideBorder: false }), saveScreenSharePreferences: savePreferences,
   })) as {
     autoStartDescription: { value: string };
+    closeToTray: { value: boolean }; traySupported: { value: boolean }; trayBusy: { value: boolean }; trayError: { value: string };
+    updateCloseToTray: (event: Event) => Promise<void>;
     autoStartEnabled: { value: boolean }; autoStartBusy: { value: boolean }; autoStartError: { value: string };
     screenPreferences: { hideCursor: boolean; hideBorder: boolean }; screenError: { value: string };
     updateAutoStart: (event: Event) => Promise<void>;
@@ -51,6 +56,50 @@ function setup(active = true) {
 }
 
 const checked = { target: { checked: true } } as unknown as Event;
+
+it('进入客户端设置才读取托盘偏好，默认关闭且不修改开机自启', async () => {
+  const f = setup(false);
+  try {
+    expect(f.bridge.getTraySettings).not.toHaveBeenCalled();
+    f.props.active = true;
+    await nextTick(); await nextTick();
+    expect(f.bridge.getTraySettings).toHaveBeenCalledOnce();
+    expect(f.settings.closeToTray.value).toBe(false);
+    expect(f.settings.traySupported.value).toBe(true);
+    await f.settings.updateCloseToTray({ target: { checked: true } } as unknown as Event);
+    expect(f.settings.closeToTray.value).toBe(true);
+    expect(f.bridge.setAutoStart).not.toHaveBeenCalled();
+    f.props.active = false;
+    await nextTick();
+    f.props.active = true;
+    await nextTick();
+    expect(f.bridge.getTraySettings).toHaveBeenCalledOnce();
+  } finally { f.scope.stop(); }
+});
+
+it('托盘保存期间禁止并发，失败恢复开关并允许重试', async () => {
+  const f = setup();
+  try {
+    await nextTick();
+    const pending = deferred<{ supported: boolean; enabled: boolean; error: string }>();
+    f.bridge.setCloseToTray.mockReturnValueOnce(pending.promise);
+    const input = { checked: true };
+    const event = { target: input } as unknown as Event;
+    const saving = f.settings.updateCloseToTray(event);
+    await f.settings.updateCloseToTray(event);
+    expect(f.bridge.setCloseToTray).toHaveBeenCalledOnce();
+    expect(f.settings.trayBusy.value).toBe(true);
+    pending.reject(new Error('无法保存托盘设置，请重试。'));
+    await saving;
+    expect(input.checked).toBe(false);
+    expect(f.settings.closeToTray.value).toBe(false);
+    expect(f.settings.trayBusy.value).toBe(false);
+    expect(f.settings.trayError.value).toBe('无法保存托盘设置，请重试。');
+    await f.settings.updateCloseToTray({ target: { checked: true } } as unknown as Event);
+    expect(f.settings.trayError.value).toBe('');
+    expect(f.settings.closeToTray.value).toBe(true);
+  } finally { f.scope.stop(); }
+});
 
 it('其他设置栏目不查更新，进入客户端栏目只查一次并更新原有小字，不自动弹确认', async () => {
   const { scope, props, settings, bridge } = setup(false);
