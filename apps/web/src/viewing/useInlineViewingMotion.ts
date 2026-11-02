@@ -1,5 +1,6 @@
 import { nextTick, onScopeDispose, watch } from 'vue';
 import type { Ref } from 'vue';
+import { motionDurationMs } from '../styles/motion';
 
 // 覆盖层与右栏共用实际展开高度，聊天尺寸和消息滚动位置保持稳定。
 export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded: () => boolean) {
@@ -72,9 +73,7 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
   function animateSurface(element: HTMLElement, from: number, to: number, finish?: () => void, offset?: number) {
     const owner = element.ownerDocument.defaultView!;
     const style = owner.getComputedStyle(element);
-    const durationText = style.getPropertyValue('--motion-layout-duration').trim();
-    const duration = durationText.endsWith('ms') ? Number.parseFloat(durationText)
-      : durationText.endsWith('s') ? Number.parseFloat(durationText) * 1000 : 0;
+    const duration = motionDurationMs(style.getPropertyValue('--motion-layout-duration'));
     const unchanged = offset === undefined ? Math.abs(from - to) < 1 : !Number.isFinite(offset) || Math.abs(offset) < 1;
     if (preference?.matches || unchanged || typeof element.animate !== 'function'
       || !Number.isFinite(duration) || duration <= 0) {
