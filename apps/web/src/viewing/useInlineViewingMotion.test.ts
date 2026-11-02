@@ -2,7 +2,7 @@ import { effectScope, nextTick, ref, shallowRef } from 'vue';
 import { expect, it, vi } from 'vitest';
 import { useInlineViewingMotion } from './useInlineViewingMotion';
 
-function fixture() {
+function fixture(duration = '210ms') {
   let height = 132;
   let top = 80;
   const animations: { cancel: ReturnType<typeof vi.fn>; finish(): void }[] = [];
@@ -28,7 +28,7 @@ function fixture() {
       },
       matchMedia: () => preference,
       getComputedStyle: () => ({ getPropertyValue: (name: string) =>
-        name === '--motion-layout-duration' ? '210ms' : 'cubic-bezier(.2, 0, 0, 1)' }),
+        name === '--motion-layout-duration' ? duration : 'cubic-bezier(.2, 0, 0, 1)' }),
     } },
   };
   const target = shallowRef<HTMLElement | null>(element as unknown as HTMLElement);
@@ -155,4 +155,14 @@ it('展开中途离开从当前可见高度收起，不跳回上一份较大的�
     duration: 210, easing: 'cubic-bezier(.2, 0, 0, 1)',
   });
   f.scope.stop();
+});
+
+it('生产样式使用秒作为单位时，观看空间仍按 210ms 衔接', async () => {
+  const f = fixture('.21s');
+  try {
+    await f.change(true, 132, 430);
+    expect(f.animate).toHaveBeenLastCalledWith([{ top: '80px' }, { top: '0px' }], {
+      duration: 210, easing: 'cubic-bezier(.2, 0, 0, 1)',
+    });
+  } finally { f.scope.stop(); }
 });
