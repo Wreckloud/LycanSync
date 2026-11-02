@@ -47,7 +47,7 @@ public class GroupRtcAdmissionController {
             @Parameter(description = "LiveKit 签名与正文校验凭据")
             @RequestHeader(value = "Authorization", required = false) String authorization,
             @RequestBody String body) {
-        admission.checkJoinedParticipant(body, authorization);
+        admission.acceptEvent(body, authorization);
         return ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build();
     }
 }

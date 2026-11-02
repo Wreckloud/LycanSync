@@ -48,7 +48,7 @@ class GroupServiceTests {
         UUID targetId = UUID.randomUUID();
         when(mapper.memberExists(groupId, user.id())).thenReturn(true);
         when(mapper.findMemberProfile(groupId, targetId, user.id()))
-                .thenReturn(new GroupMemberProfileResponse(targetId, "今晚开黑"));
+                .thenReturn(new GroupMemberProfileResponse(targetId, "今晚开黑", 0L));
 
         assertThat(service.findMemberProfile(groupId, targetId, user).signature()).isEqualTo("今晚开黑");
         assertThatThrownBy(() -> service.findMemberProfile(groupId, UUID.randomUUID(), user))

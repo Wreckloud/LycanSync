@@ -16,6 +16,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -37,31 +38,46 @@ public class GroupRtcAdmissionService {
     private final JWTVerifier verifier;
     private final WebhookReceiver webhooks;
     private final GroupRtcAccessService rtcAccess;
+    private final SharedVoiceTimeService sharedTime;
 
-    public GroupRtcAdmissionService(GroupMapper groups, LiveKitProperties properties, GroupRtcAccessService rtcAccess) {
+    public GroupRtcAdmissionService(GroupMapper groups, LiveKitProperties properties, GroupRtcAccessService rtcAccess,
+                                    SharedVoiceTimeService sharedTime) {
         this.groups = groups;
         this.rtcAccess = rtcAccess;
+        this.sharedTime = sharedTime;
         this.verifier = JWT.require(Algorithm.HMAC256(properties.getApiSecret()))
                 .withIssuer(properties.getApiKey()).withClaimPresence("exp").build();
         this.webhooks = new WebhookReceiver(properties.getApiKey(), properties.getApiSecret());
     }
 
     @Transactional
-    public void checkJoinedParticipant(String body, String authorization) {
+    public void acceptEvent(String body, String authorization) {
         LivekitWebhook.WebhookEvent event;
         try {
             event = webhooks.receive(body, authorization);
         } catch (JWTVerificationException | IllegalArgumentException exception) {
             throw invalidToken();
         }
-        if (!"participant_joined".equals(event.getEvent())
-                || !event.getRoom().getName().startsWith(GroupRtcRooms.ROOM_PREFIX)) return;
+        if (!event.getRoom().getName().startsWith(GroupRtcRooms.ROOM_PREFIX)) return;
+        String roomSid = event.getRoom().getSid();
+        String participantSid = event.getParticipant().getSid();
+        if (event.getCreatedAt() > 0 && !roomSid.isBlank()) {
+            Instant at = Instant.ofEpochSecond(event.getCreatedAt());
+            if ("room_finished".equals(event.getEvent())) { sharedTime.roomFinished(roomSid, at); return; }
+            if ("participant_left".equals(event.getEvent()) && !participantSid.isBlank()) {
+                sharedTime.left(roomSid, participantSid, at);
+                return;
+            }
+        }
+        if (!"participant_joined".equals(event.getEvent())) return;
         UUID roomKey = identifier(event.getRoom().getName(), GroupRtcRooms.ROOM_PREFIX);
         UUID userId = identifier(event.getParticipant().getIdentity(), "user-");
         String groupId = groups.lockRtcGroup(roomKey);
         // 入房是外部异步操作：复核网关放行后、真正入房前发生的撤权，不轮询或重建房间。
         if (groupId == null || !groups.memberExists(UUID.fromString(groupId), userId)) {
             rtcAccess.removeParticipant(roomKey, userId);
+        } else if (!roomSid.isBlank() && !participantSid.isBlank() && event.getCreatedAt() > 0) {
+            sharedTime.joined(roomSid, participantSid, userId, Instant.ofEpochSecond(event.getCreatedAt()));
         }
     }
 
