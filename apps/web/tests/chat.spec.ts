@@ -59,7 +59,7 @@ test('首次加载、读取失败和空会话分开反馈，重试共用当前�
   });
   await page.goto('/');
   try {
-    await expect(page.getByRole('status').filter({ hasText: '正在读取消息…' })).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: '正在准备群聊…' })).toBeVisible();
     await expect(page.getByText('还没有消息', { exact: true })).toHaveCount(0);
     release();
     await expect(page.locator('.chat-read-error')).toHaveText('消息暂时无法读取');
@@ -161,6 +161,7 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
   await page.addInitScript(() => {
     Object.defineProperty(window, 'lycanDesktop', { value: {
       clearSession: async () => undefined,
+      getAutoLogin: async () => ({ enabled: true, manualEntryRequired: false }),
       getAccessLink: async () => null,
       onAccessLink: () => () => undefined,
       getUpdateState: async () => ({ phase: 'ready', supported: false, version: 'test', message: '测试不检查更新' } satisfies StartupUpdateState),
@@ -172,7 +173,7 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
       onViewerClosed: () => () => undefined,
       focusViewerWindow: async () => undefined,
       isMaximized: async () => false,
-      setWindowLayout: async () => undefined,
+      prepareCapture: async () => undefined,
       getProcessMetrics: async () => ({ cpuPercent: 0, memoryMb: 0 }),
       getSystemIdleState: async () => ({ state: 'active', idleSeconds: 0 }),
       getCurrentActivity: async () => null,

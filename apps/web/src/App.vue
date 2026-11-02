@@ -782,6 +782,7 @@ function handleVisibilityChange() {
   refreshOnActivation();
 }
 onMounted(() => {
+  void desktop?.prepareCapture().catch(() => { if (!appDisposed) console.warn('capture preparation request failed'); });
   void updateOwnPresenceStatus();
   refreshOnActivation();
   startPresenceHeartbeat();
@@ -913,6 +914,7 @@ const joiningGroupId = ref<string | null>(null);
 const pendingSwitchGroupId = ref<string | null>(null);
 const listening = computed(() => rtc.listening);
 const settingsOpen = ref(false);
+const settingsPresented = ref(false);
 const settingsView = ref<InstanceType<typeof SettingsView> | null>(null);
 // 覆盖只影响绘制；保留聊天和观看尺寸，视频需求由各个观看位置单独控制。
 const settingsCovered = ref(false);
@@ -967,6 +969,7 @@ async function openSettings(section: SettingsSectionId, event: Event | HTMLEleme
   settingsReturnFocus.value = event instanceof HTMLElement ? event
     : event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
   settingsSection.value = section;
+  settingsPresented.value = true;
   settingsOpen.value = true;
   await nextTick();
   document.querySelector<HTMLElement>('.settings-header h1')?.focus();
@@ -978,6 +981,17 @@ async function closeSettings() {
   settingsOpen.value = false;
   await nextTick();
   settingsReturnFocus.value?.focus();
+}
+
+async function finishSettingsLeave() {
+  if (settingsOpen.value) return;
+  const target = settingsReturnFocus.value;
+  const restoreFocus = document.activeElement === target || document.activeElement === document.body;
+  settingsPresented.value = false;
+  await nextTick();
+  if (settingsOpen.value) return;
+  // 移回同一名片会让浏览器丢失焦点；用户已经操作其他区域时不再抢回焦点。
+  if (restoreFocus && target?.isConnected) target.focus();
   settingsReturnFocus.value = null;
 }
 
@@ -1473,11 +1487,12 @@ function participantListening(participant: Participant) {
             :member-count="selectedGroupDetail?.memberCount"
             :error="groupError" :connection-lost="presenceConnectionLost" :status="memberOnlineStatus"
             :status-label="memberStatusLabel" :activity="memberActivity" :presences="groupPresences" />
-        <div v-if="settingsOpen" class="personal-card-space" aria-hidden="true" />
-        <Teleport to="body" :disabled="!settingsOpen">
+        <aside v-else class="members-directory members-directory-empty" aria-label="群组成员" />
+        <div v-if="settingsPresented" class="personal-card-space" aria-hidden="true" />
+        <Teleport to="body" :disabled="!settingsPresented">
         <PersonalStatusCard :user="user" :status="publicPresenceStatus" :status-label="personalPresenceLabel"
           :aria-label="settingsOpen ? '个人状态与返回应用' : '个人状态与设置'"
-          :class="{ 'settings-footer': settingsOpen }" @keydown.esc.stop="settingsOpen && settingsView?.closeSettings()"
+          :class="{ 'settings-footer': settingsPresented }" @keydown.esc.stop="settingsOpen && settingsView?.closeSettings()"
           v-model:menu-open="personalMenuOpen" menu-enabled :active="personalCardActive"
           :presence-mode="presenceMode" :presence-ready="presenceReady" :presence-syncing="presenceSyncing"
           :presence-error="presencePreferenceError || presenceSyncError" @presence-mode="changePresenceMode"
@@ -1501,6 +1516,7 @@ function participantListening(participant: Participant) {
     </DialogTransition>
     </div>
     <Transition name="settings-page" @after-enter="settingsCovered = settingsOpen" @enter-cancelled="settingsCovered = false"
+      @after-leave="finishSettingsLeave" @leave-cancelled="settingsPresented = true"
       @before-leave="settingsCovered = false; ($event as HTMLElement).inert = true">
     <SettingsView v-if="settingsOpen" ref="settingsView" :blocked="Boolean(props.interactionBlocked || rtc.remoteControlRequest || !mainWindowVisible)" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
       :audio-shortcuts="audioShortcuts" :call-sound-preferences="callSoundPreferences" :call-sounds="callSounds"

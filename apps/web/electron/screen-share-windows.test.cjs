@@ -205,7 +205,7 @@ test('观看 preload 只暴露固定窗口能力，监听可以注销，不暴�
 test('正式 IPC 仅主页面可唤回窗口，就绪／置顶／全屏仍交由对应窗口校验，退出期间拒绝操作', () => {
   const source = readFileSync(resolve(__dirname, 'main.cjs'), 'utf8');
   const start = source.indexOf("ipcMain.handle('window:visibility'");
-  const end = source.indexOf("ipcMain.handle('window:layout'", start);
+  const end = source.indexOf("ipcMain.handle('capture:prepare'", start);
   const handlers = new Map(), calls = [];
   const mainEvent = {};
   const realm = {

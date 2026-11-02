@@ -59,7 +59,9 @@ test('创建群组只预览，初始只有创建者且不自动加入语音', as
   await expect(page.getByText('还没有群组，点击左侧的 + 创建一个开黑小队。')).toBeVisible();
   await expect(page.locator('.members-header')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '查看全部群组成员' })).toHaveCount(0);
-  await expect(page.locator('.members-directory')).toHaveCount(0);
+  await expect(page.locator('.members-directory')).toHaveCount(1);
+  await expect(page.locator('.members-directory')).toHaveText('');
+  await expect(page.locator('.members-directory')).toHaveCSS('border-left-style', 'solid');
   const createGroupButton = page.getByRole('button', { name: '创建群组' });
   await createGroupButton.hover();
   await expect(page.getByRole('tooltip')).toHaveCount(0);

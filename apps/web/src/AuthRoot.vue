@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
-import { Minus, UserRound, X } from '@lucide/vue';
+import { onMounted, onScopeDispose, ref, watch } from 'vue';
+import { ChevronDown, Minus, Square, UserRound, X } from '@lucide/vue';
 import App from './App.vue';
 import AccountAccessPrompt from './components/AccountAccessPrompt.vue';
 import WelcomeProfile from './components/WelcomeProfile.vue';
@@ -9,6 +9,7 @@ import AppNotice from './components/AppNotice.vue';
 import InlineFeedback from './components/InlineFeedback.vue';
 import LogoutConfirmDialog from './components/LogoutConfirmDialog.vue';
 import DialogTransition from './components/DialogTransition.vue';
+import ExpandSection from './components/ExpandSection.vue';
 import type { AccessOffer } from './auth/accountAccess';
 import {
   authRequest,
@@ -49,73 +50,21 @@ const manualAccessError = ref('');
 const startupChecking = ref(Boolean(desktop));
 const updateState = ref<StartupUpdateState | null>(null);
 const updateWarning = ref('');
-const entryRoot = ref<HTMLElement | null>(null);
+const moreOpen = ref(false);
 const applicationReady = ref(false);
 watch(() => user.value?.id, () => { applicationReady.value = false; }, { flush: 'sync' });
-const windowMode = computed(() => {
-  if (startupChecking.value) return 'startup';
-  // 退出清理期间保留主窗口尺寸，完成后再切回账号页。
-  if (logoutTarget.value) return 'main';
-  if (accessOffer.value) return 'invitation';
-  if (onboarding.value && entryUser.value) return 'profile';
-  return user.value ? 'main' : 'account';
-});
-let layoutFrame: number | undefined;
-let layoutResizeObserver: ResizeObserver | undefined;
-let layoutMutationObserver: MutationObserver | undefined;
-let observedCard: HTMLElement | null = null;
-let observedNotice: HTMLElement | null = null;
-let lastWindowLayout = '';
 let disposed = false;
 let sessionHeartbeat: number | null = null;
 let sessionHeartbeatInFlight = false;
 let logoutInProgress = false;
 let initializationRequest: AbortController | null = null;
-let windowLayoutTask: Promise<unknown> = Promise.resolve();
 
 useIdentityTransition(() => ({
   id: (user.value ?? entryUser.value)?.id ?? null,
   phase: startupChecking.value || accessOffer.value ? null
     : user.value ? (applicationReady.value ? 'main' : 'loading')
       : logoutBusy.value ? 'leaving' : onboarding.value ? 'profile' : 'account',
-}), () => windowLayoutTask);
-
-function updateWindowLayout() {
-  layoutFrame = undefined;
-  if (!desktop || disposed) return;
-  const card = entryRoot.value?.querySelector<HTMLElement>('.startup-update-card, .auth-card') ?? null;
-  const notice = entryRoot.value?.querySelector<HTMLElement>('.app-notice') ?? null;
-  if (windowMode.value !== 'main' && !card) return;
-  if (card !== observedCard || notice !== observedNotice) {
-    layoutResizeObserver?.disconnect();
-    observedCard = card;
-    observedNotice = notice;
-    if (card) layoutResizeObserver?.observe(card);
-    if (notice) layoutResizeObserver?.observe(notice);
-  }
-  const height = card ? Math.ceil(card.getBoundingClientRect().height
-    + (entryRoot.value?.querySelector('.titlebar')?.getBoundingClientRect().height ?? 43)
-    + (notice?.getBoundingClientRect().height ?? 0)) : 0;
-  const signature = `${windowMode.value}:${height}`;
-  if (signature === lastWindowLayout) return;
-  lastWindowLayout = signature;
-  windowLayoutTask = desktop.setWindowLayout(windowMode.value, height).catch(() => {
-    if (!disposed) error.value = '窗口尺寸调整失败，请重新打开应用。';
-  });
-}
-
-function scheduleWindowLayout() {
-  if (layoutFrame === undefined) layoutFrame = requestAnimationFrame(updateWindowLayout);
-}
-
-watch([entryRoot, windowMode], ([root]) => {
-  if (!desktop) return;
-  layoutMutationObserver?.disconnect();
-  layoutResizeObserver ??= new ResizeObserver(scheduleWindowLayout);
-  layoutMutationObserver ??= new MutationObserver(scheduleWindowLayout);
-  if (root) layoutMutationObserver.observe(root, { childList: true, subtree: true });
-  scheduleWindowLayout();
-}, { flush: 'post' });
+}));
 
 function expired() {
   initializationRequest?.abort();
@@ -134,9 +83,6 @@ void desktop?.isMaximized().then((maximized) => { windowMaximized.value = maximi
 window.addEventListener('lycan:unauthorized', expired);
 onScopeDispose(() => {
   disposed = true;
-  if (layoutFrame !== undefined) cancelAnimationFrame(layoutFrame);
-  layoutResizeObserver?.disconnect();
-  layoutMutationObserver?.disconnect();
   initializationRequest?.abort();
   if (sessionHeartbeat !== null) window.clearInterval(sessionHeartbeat);
   removeMaximizedChange?.();
@@ -406,18 +352,21 @@ onMounted(async () => {
     <LogoutConfirmDialog v-if="removeConfirm" mode="remove" :administrator="entryUser?.administrator ?? false"
       :busy="removing" :error="error" @cancel="removeConfirm = false" @confirm="clearLocalSession" />
   </DialogTransition>
-  <div v-if="!user || onboarding || accessOffer" ref="entryRoot" class="app-shell" :class="{ 'compact-auth': desktop }">
+  <div v-if="!user || onboarding || accessOffer" class="app-shell entry-shell">
     <header class="titlebar" :class="{ 'desktop-titlebar': desktop }">
       <div class="brand">LycanSync</div>
       <div v-if="desktop" class="window-actions">
         <button aria-label="最小化窗口" @click="desktop.minimize()"><Minus :size="16" /></button>
+        <button :aria-label="windowMaximized ? '还原窗口' : '最大化窗口'" @click="desktop.toggleMaximize()"><Square :size="13" /></button>
         <button aria-label="关闭窗口" @click="desktop.close()"><X :size="17" /></button>
       </div>
     </header>
     <AppNotice v-if="updateWarning" :message="updateWarning" dismissible @dismiss="updateWarning = ''" />
-    <StartupUpdate v-if="startupChecking" :state="updateState" @skip="desktop?.skipStartupUpdate()" />
-    <WelcomeProfile v-else-if="entryUser && onboarding" :user="entryUser" :save-profile="saveProfile" @finish="onboarding = false" />
-    <main v-else class="auth-screen">
+    <div class="entry-pages">
+    <Transition name="entry-page" @before-enter="($event as HTMLElement).inert = false" @before-leave="($event as HTMLElement).inert = true">
+    <StartupUpdate v-if="startupChecking" key="startup" :state="updateState" @skip="desktop?.skipStartupUpdate()" />
+    <WelcomeProfile v-else-if="entryUser && onboarding" key="profile" :user="entryUser" :save-profile="saveProfile" @finish="onboarding = false" />
+    <main v-else :key="accessOffer ? 'invitation' : 'account'" class="auth-screen">
       <AccountAccessPrompt v-if="accessOffer && ready" :offer="accessOffer" :current-user="user ?? entryUser" :current-server="serverAddress || pageOrigin"
         @cancel="accessOffer = null" @joined="completeAccess" />
       <section v-else class="auth-card">
@@ -446,8 +395,12 @@ onMounted(async () => {
           </div>
         </template>
         <p v-if="error && !removeConfirm && !logoutTarget" role="alert" class="auth-error">{{ error }}</p>
-        <details v-if="desktop || serverEditable || entryUser" class="auth-server-settings">
-          <summary>更多</summary>
+        <section v-if="desktop || serverEditable || entryUser" class="auth-server-settings">
+          <button type="button" class="auth-more-toggle" :aria-expanded="moreOpen" aria-controls="account-more-options" @click="moreOpen = !moreOpen">
+            更多<ChevronDown :size="14" :class="{ 'is-open': moreOpen }" />
+          </button>
+          <ExpandSection :open="moreOpen" id="account-more-options">
+          <div class="auth-more-content">
           <button v-if="desktop || entryUser" type="button" :disabled="!ready || submitting || logoutBusy || removing || preferenceSaving"
             @click="requestClearSession">清除本机登录凭据</button>
           <p v-if="entryUser" class="account-entry-note">使用其他账号或服务器前，请先清除本机凭据。</p>
@@ -471,9 +424,13 @@ onMounted(async () => {
             <InlineFeedback id="server-address-feedback" :message="serverError"
               :status="serverSaving ? '正在重启…' : '保存后重启应用，使用该服务器的账号登录。'" />
           </form>
-        </details>
+          </div>
+          </ExpandSection>
+        </section>
       </section>
     </main>
+    </Transition>
+    </div>
   </div>
 </template>
 
@@ -488,13 +445,14 @@ onMounted(async () => {
 .auto-login-option input { flex-shrink: 0; width: 16px; height: 16px; margin: 0; padding: 0; }
 .account-entry-note { color: var(--muted); font-size: 12px; line-height: 18px; }
 
-.compact-auth { display: flex; flex-direction: column; }
-.compact-auth > .titlebar { flex: 0 0 var(--titlebar-height); }
-.compact-auth :deep(.auth-screen), .compact-auth :deep(.startup-update-screen) {
-  display: block; flex: 1; min-height: 0; overflow: auto; padding: 0;
-}
-.compact-auth :deep(.auth-card), .compact-auth :deep(.startup-update-card) {
-  width: 100%; border: 0; border-radius: 0; background: var(--panel);
-}
-.compact-auth :deep(.app-notice) { position: static; transform: none; width: 100%; flex: 0 0 auto; }
+.entry-shell { display: flex; flex-direction: column; }
+.entry-shell > .titlebar { flex: 0 0 var(--titlebar-height); }
+.entry-pages { position: relative; display: flex; flex: 1; min-height: 0; }
+.entry-shell :deep(.auth-screen), .entry-shell :deep(.startup-update-screen) { flex: 1; }
+.entry-shell :deep(.app-notice) { position: static; transform: none; width: 100%; flex: 0 0 auto; }
+.auth-more-toggle { display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 13px; }
+.auth-more-toggle:hover { color: var(--text); }
+.auth-more-toggle svg { transition: transform var(--motion-expand-duration) var(--motion-ease); }
+.auth-more-toggle svg.is-open { transform: rotate(180deg); }
+.auth-more-content { padding-top: 12px; }
 </style>

@@ -52,7 +52,7 @@ function fixture(duration = '260ms') {
   });
   const state = ref<{ id: string | null; phase: 'account' | 'loading' | 'main' | 'leaving' | null }>({ id: 'member', phase: 'account' });
   const scope = effectScope();
-  scope.run(() => useIdentityTransition(() => ({ ...state.value }), async () => {}));
+  scope.run(() => useIdentityTransition(() => ({ ...state.value })));
   async function flush() {
     await nextTick();
     for (let step = 0; step < 5; step++) {
@@ -71,6 +71,7 @@ it('加载转主界面会取消旧过渡，完成后只恢复真实目标，不�
     f.state.value.phase = 'loading';
     await f.flush();
     expect(f.identities.loading!.children[0]!.style.visibility).toBe('hidden');
+    expect(f.layers[0]!.children[0]!.style.borderRadius).toBe('50%');
     const old = [...f.animations];
     f.state.value.phase = 'main';
     await f.flush();
@@ -135,17 +136,16 @@ it('减少动态效果跳过移动，销毁时取消等待帧并恢复原元素'
   } finally { f.scope.stop(); }
 });
 
-it('桌面窗口收紧后将窗口外的起点收回可见边缘，不从窗口外等待飞入', async () => {
+it('用户调整窗口时取消旧位置过渡，并立即恢复真实头像和昵称', async () => {
   const f = fixture();
   try {
     f.state.value.phase = 'loading';
-    await nextTick();
-    Object.assign(window, { innerWidth: 440, screenX: 200 });
     await f.flush();
-    expect(f.animate.mock.calls[0]?.[0]).toEqual([
-      { transform: 'none', width: '48px' },
-      { transform: 'translate(20px, 0px) scale(1, 1)', width: '48px' },
-    ]);
+    const resize = vi.mocked(window.addEventListener).mock.calls.find(([type]) => type === 'resize')![1] as () => void;
+    resize();
+    expect(f.layers).toHaveLength(0);
+    expect(f.identities.loading!.children.map(element => element.style.visibility)).toEqual(['', '']);
+    f.animations.forEach(animation => expect(animation.cancel).toHaveBeenCalledOnce());
   } finally { f.scope.stop(); }
 });
 

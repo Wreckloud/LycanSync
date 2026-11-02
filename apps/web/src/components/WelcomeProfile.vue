@@ -111,7 +111,7 @@ async function save() {
 .welcome-identity { display: flex; align-items: center; gap: 12px; min-width: 0; min-height: 96px; }
 .welcome-avatar-area { position: relative; flex-shrink: 0; }
 .welcome-avatar { position: relative; flex-shrink: 0; display: grid; place-items: center; width: 80px; height: 80px; padding: 0; overflow: hidden; border: 0; border-radius: 50%; background: var(--panel-raised); color: var(--muted); cursor: pointer; }
-.welcome-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.welcome-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
 .welcome-avatar-visual { display: grid; place-items: center; width: 80px; height: 80px; border-radius: inherit; background: var(--panel-raised); }
 .welcome-avatar-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; background: #0009; color: white; font-size: 12px; opacity: 0; }
 .welcome-avatar:hover .welcome-avatar-overlay, .welcome-avatar:focus-visible .welcome-avatar-overlay { opacity: 1; }

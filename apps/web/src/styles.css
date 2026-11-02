@@ -693,6 +693,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .call-state small { margin-top: 2px; color: var(--muted); font-size: 12px; }
 
 .members-directory { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.members-directory-empty { border-left: 1px solid var(--border); background: var(--panel-sidebar); }
 .members-list { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: 0 10px 12px; }
 .personal-card { position: relative; display: grid; grid-template-columns: 32px minmax(0, 1fr) 28px; align-items: center; gap: 8px; height: calc(var(--voice-bar-height) + var(--voice-bar-bottom-space)); margin: 0; padding: 9px 10px calc(8px + var(--voice-bar-bottom-space)); }
 .personal-card::before { content: ''; position: absolute; top: 0; left: 10px; right: 10px; height: 1px; background: var(--border-soft); pointer-events: none; }
@@ -784,7 +785,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 /* 仅隐藏可滚动内容区的滚动条，仍保留滚轮、触控板与键盘滚动能力。 */
 :is(.group-list, .members-list, .message-list, .voice-panel, .voice-preview, .settings-navigation, .settings-content) { scrollbar-width: none; }
 :is(.group-list, .members-list, .message-list, .voice-panel, .voice-preview, .settings-navigation, .settings-content)::-webkit-scrollbar { display: none; }
-.auth-screen { display: grid; place-items: center; min-height: 0; overflow: auto; padding: 24px; }
+.auth-screen { display: grid; place-items: safe center; min-height: 0; overflow: auto; padding: 24px; }
 .auth-card { width: min(440px, 100%); padding: 24px; background: var(--panel-soft); border: 1px solid var(--border); border-radius: 8px; font-size: 14px; line-height: 1.5; }
 .auth-card h1 { margin: 0; font-size: 22px; line-height: 32px; }
 .auth-card > h1 + p { margin: 4px 0 20px; font-size: 13px; line-height: 20px; }
@@ -799,7 +800,6 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .profile-avatar { width: 64px; height: 64px; object-fit: cover; border-radius: 50%; }
 
 .auth-server-settings { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border); }
-.auth-server-settings summary { color: var(--muted); cursor: pointer; }
 .auth-server-settings form { gap: 8px; margin: 16px 0 0; }
 .auth-input-row { display: flex; align-items: center; gap: 12px; }
 .auth-input-row input { flex: 1; width: 0; min-height: var(--button-height); padding: var(--button-padding); line-height: 20px; }

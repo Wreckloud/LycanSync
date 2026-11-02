@@ -1,11 +1,12 @@
 import { nextTick, onScopeDispose, watch } from 'vue';
+import { motionDurationMs } from '../styles/motion';
 
 type IdentityPhase = 'profile' | 'account' | 'loading' | 'main' | 'leaving' | null;
 type IdentityState = { id: string | null; phase: IdentityPhase };
 type IdentityPart = { copy: HTMLElement; bounds: DOMRect };
 
 // 只衔接身份的绘制；登录资格、页面挂载和媒体清理始终由原流程决定。
-export function useIdentityTransition(state: () => IdentityState, layoutReady: () => Promise<unknown>) {
+export function useIdentityTransition(state: () => IdentityState) {
   const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
   let layer: HTMLElement | undefined;
   let animations: Animation[] = [];
@@ -34,7 +35,7 @@ export function useIdentityTransition(state: () => IdentityState, layoutReady: (
   }
 
   function snapshot(elements: HTMLElement[]): IdentityPart[] {
-    return elements.map(element => {
+    return elements.map((element, index) => {
       const bounds = element.getBoundingClientRect();
       const copy = element.cloneNode(true) as HTMLElement;
       const style = window.getComputedStyle(element);
@@ -45,7 +46,7 @@ export function useIdentityTransition(state: () => IdentityState, layoutReady: (
       // 克隆只保留视觉内容，不复制交互或裁剪层；字体按原尺寸绘制再整体缩放。
       Object.assign(copy.style, { position: 'absolute', left: `${bounds.left}px`, top: `${bounds.top}px`,
         width: `${bounds.width}px`, height: `${bounds.height}px`, margin: '0', padding: '0',
-        font: style.font, color: style.color, background: style.background, borderRadius: style.borderRadius,
+        font: style.font, color: style.color, background: style.background, borderRadius: index === 0 ? '50%' : style.borderRadius,
         display: style.display, alignItems: style.alignItems, justifyContent: style.justifyContent,
         objectFit: style.objectFit, visibility: 'visible', transform: 'none', transformOrigin: '0 0',
         overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' });
@@ -74,7 +75,6 @@ export function useIdentityTransition(state: () => IdentityState, layoutReady: (
     if (next.id === previous.id && next.phase === previous.phase) return;
     const current = ++generation;
     if (!next.id || !next.phase || next.id !== previous.id || preference.matches) { clear(); return; }
-    const viewport = { width: window.innerWidth, height: window.innerHeight, left: window.screenX, top: window.screenY };
     const source = layer ? [...layer.children] as HTMLElement[] : parts(previous.phase);
     const from = snapshot(source);
     clear();
@@ -89,13 +89,9 @@ export function useIdentityTransition(state: () => IdentityState, layoutReady: (
     hide(parts(previous.phase));
     await nextTick();
     if (current !== generation) return;
-    // 退出收尾期间暂留身份，资源释放完毕后才衔接收紧的账号窗口。
+    // 退出收尾期间暂留身份，资源释放完毕后再衔接账号卡片。
     if (next.phase === 'leaving') return;
     hide(parts(next.phase));
-    await nextFrame();
-    if (current !== generation) return;
-    await layoutReady();
-    if (current !== generation) return;
     await nextFrame();
     if (current !== generation) return;
     const target = parts(next.phase);
@@ -103,27 +99,16 @@ export function useIdentityTransition(state: () => IdentityState, layoutReady: (
     if (target.length !== 2 || to.some(bounds => bounds.width <= 0 || bounds.height <= 0)) { clear(); return; }
     hide(target);
     const style = window.getComputedStyle(target[0]!);
-    const durationText = style.getPropertyValue('--motion-identity-duration').trim();
-    const duration = durationText.endsWith('ms') ? Number.parseFloat(durationText)
-      : durationText.endsWith('s') ? Number.parseFloat(durationText) * 1000 : 0;
+    const duration = motionDurationMs(style.getPropertyValue('--motion-identity-duration'));
     if (!Number.isFinite(duration) || duration <= 0 || typeof target[0]!.animate !== 'function') { clear(); return; }
     animations = from.map(({ copy, bounds }, index) => {
       const end = to[index]!;
-      let left = bounds.left;
-      let top = bounds.top;
-      // 入口窗口会收紧／恢复尺寸；按屏幕位置接续，窗口外的起点收回到可见边缘。
-      if (viewport.width !== window.innerWidth || viewport.height !== window.innerHeight) {
-        left = Math.max(0, Math.min(left + viewport.left - window.screenX, window.innerWidth - bounds.width));
-        top = Math.max(0, Math.min(top + viewport.top - window.screenY, window.innerHeight - bounds.height));
-        copy.style.left = `${left}px`;
-        copy.style.top = `${top}px`;
-      }
       const targetStyle = window.getComputedStyle(target[index]!);
       const scaleY = index === 0 ? end.height / bounds.height
         : Number.parseFloat(targetStyle.fontSize) / Number.parseFloat(copy.style.fontSize);
       const scaleX = index === 0 ? end.width / bounds.width : scaleY;
       return copy.animate([{ transform: 'none', width: `${bounds.width}px` }, {
-        transform: `translate(${end.left - left}px, ${end.top - top}px) scale(${scaleX}, ${scaleY})`,
+        transform: `translate(${end.left - bounds.left}px, ${end.top - bounds.top}px) scale(${scaleX}, ${scaleY})`,
         width: `${end.width / scaleX}px`,
         ...(index === 1 && targetStyle.lineHeight !== 'normal' ? { lineHeight: `${Number.parseFloat(targetStyle.lineHeight) / scaleY}px` } : {}),
       }], { duration, easing: style.getPropertyValue('--motion-ease').trim(), fill: 'forwards' });
@@ -137,9 +122,11 @@ export function useIdentityTransition(state: () => IdentityState, layoutReady: (
   function reduceMotion() { if (preference.matches) cancel(); }
   preference.addEventListener('change', reduceMotion);
   window.addEventListener('pagehide', cancel);
+  window.addEventListener('resize', cancel);
   onScopeDispose(() => {
     cancel();
     preference.removeEventListener('change', reduceMotion);
     window.removeEventListener('pagehide', cancel);
+    window.removeEventListener('resize', cancel);
   });
 }

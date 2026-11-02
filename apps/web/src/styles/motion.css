@@ -37,6 +37,9 @@
 .entry-mode-leave-active { pointer-events: none; transition: opacity var(--motion-feedback-duration) var(--motion-ease); }
 .entry-mode-leave-to { opacity: 0; }
 @keyframes entry-mode-in { 0%, 45% { opacity: 0; } 100% { opacity: 1; } }
+.entry-page-enter-active { animation: entry-mode-in calc(var(--motion-feedback-duration) + var(--motion-surface-duration)) var(--motion-ease) both; }
+.entry-page-leave-active { position: absolute; inset: 0; pointer-events: none; transition: opacity var(--motion-feedback-duration) var(--motion-ease); }
+.entry-page-leave-to { opacity: 0; }
 
 .group-header-region { display: grid; grid-template-rows: 1fr; visibility: visible; transition: opacity var(--motion-surface-duration) ease; }
 .group-header-clip { min-height: 0; overflow: visible; }
