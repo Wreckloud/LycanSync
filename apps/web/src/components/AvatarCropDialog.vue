@@ -13,6 +13,7 @@ const backdropEvents = useBackdropDismiss(() => { if (!processing.value) emit('c
 const emit = defineEmits<{ apply: [avatar: string]; cancel: [] }>();
 const dialog = ref<HTMLElement | null>(null);
 const viewport = shallowRef<HTMLElement | null>(null);
+const cropStage = shallowRef<HTMLElement | null>(null);
 const viewportSize = ref(280);
 const zoom = ref(1);
 const rotation = ref(0);
@@ -79,14 +80,17 @@ function zoomWithWheel(event: WheelEvent) {
 onMounted(async () => {
   await nextTick();
   dialog.value?.focus();
-  if (disposed || !viewport.value) return;
+  if (disposed || !viewport.value || !cropStage.value) return;
   const updateSize = () => {
+    const size = Math.floor(Math.min(300, cropStage.value!.clientWidth, cropStage.value!.clientHeight));
+    viewport.value!.style.width = `${size}px`;
+    viewport.value!.style.height = `${size}px`;
     viewportSize.value = viewport.value!.clientWidth;
     clampOffset();
   };
   updateSize();
   resizeObserver = new ResizeObserver(updateSize);
-  resizeObserver.observe(viewport.value);
+  resizeObserver.observe(cropStage.value);
 });
 onScopeDispose(() => {
   disposed = true;
@@ -171,9 +175,11 @@ function keepFocus(event: KeyboardEvent) {
       <section ref="dialog" class="avatar-crop-dialog" role="dialog" aria-modal="true"
         aria-labelledby="avatar-crop-title" tabindex="-1" @keydown="keepFocus">
         <header><h2 id="avatar-crop-title">{{ title }}</h2><p>拖动调整位置，滚轮缩放</p></header>
+        <div ref="cropStage" class="avatar-crop-stage">
         <div ref="viewport" class="avatar-crop-viewport" :class="{ 'is-square': shape === 'square' }" aria-label="拖动调整头像位置"
           @pointerdown="beginDrag" @pointermove="moveDrag" @pointerup="endDrag" @pointercancel="endDrag" @wheel.prevent="zoomWithWheel">
           <img :src="source.previewUrl" :style="imageStyle" alt="待裁剪头像" draggable="false" />
+        </div>
         </div>
         <div class="avatar-crop-rotation"><span class="avatar-rotation-label">旋转</span>
           <span class="avatar-rotation-ruler">
@@ -205,11 +211,12 @@ function keepFocus(event: KeyboardEvent) {
 
 <style scoped>
 .avatar-crop-backdrop { z-index: 110; }
-.avatar-crop-dialog { width: min(400px, 100%); max-height: calc(100dvh - 36px); overflow-y: auto; display: grid; justify-items: center; gap: 16px; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); font-size: 14px; line-height: 20px; }
+.avatar-crop-dialog { width: min(400px, 100%); height: min(600px, calc(100dvh - 36px)); max-height: calc(100dvh - 36px); overflow-y: auto; display: grid; grid-template-rows: auto minmax(96px, 1fr) auto auto; justify-items: center; gap: 16px; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); font-size: 14px; line-height: 20px; }
+.avatar-crop-stage { display: grid; place-items: center; width: 100%; min-width: 0; min-height: 0; }
 .avatar-crop-dialog header { width: 100%; }
 .avatar-crop-dialog h2 { margin: 0; font-size: 22px; line-height: 32px; }
 .avatar-crop-dialog header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 20px; }
-.avatar-crop-viewport { position: relative; width: min(300px, 100%); aspect-ratio: 1; overflow: hidden; border: 2px solid var(--subtle); border-radius: 50%; background: var(--background); cursor: grab; touch-action: none; }
+.avatar-crop-viewport { position: relative; width: 96px; height: 96px; aspect-ratio: 1; overflow: hidden; border: 2px solid var(--subtle); border-radius: 50%; background: var(--background); cursor: grab; touch-action: none; }
 .avatar-crop-viewport.is-square { border-radius: 8px; }
 .avatar-crop-viewport:active { cursor: grabbing; }
 .avatar-crop-viewport img { position: absolute; max-width: none; transform: translate(-50%, -50%); pointer-events: none; user-select: none; }

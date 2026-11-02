@@ -22,7 +22,7 @@ defineEmits<{ skip: [] }>();
 </template>
 
 <style scoped>
-.startup-update-screen { display: grid; place-items: center; flex: 1; min-height: 0; padding: 24px; }
+.startup-update-screen { display: grid; place-items: safe center; flex: 1; min-height: 0; overflow: auto; padding: 24px; }
 .startup-update-card { width: min(420px, 100%); padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 14px; line-height: 20px; }
 .startup-update-card h1 { margin: 0 0 4px; font-size: 22px; line-height: 32px; }
 .startup-update-card p { margin: 0 0 20px; color: var(--muted); font-size: 13px; }

@@ -26,7 +26,7 @@ const { applyRuntimePaths } = require('./runtime-paths.cjs');
 const { createActivityHelper } = require('./activity-helper.cjs');
 const { leagueCaptureApplication, createLeagueCaptureFollow } = require('./league-capture.cjs');
 const { createVoiceOverlay } = require('./voice-overlay.cjs');
-const { initialWindowBounds, createWindowLayout } = require('./window-layout.cjs');
+const { initialWindowBounds } = require('./window-layout.cjs');
 const { createScreenShareWindows } = require('./screen-share-windows.cjs');
 
 const APP_ORIGIN = 'lycan://app';
@@ -101,7 +101,6 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'lycan', privileges: {
 } }]);
 
 let mainWindow;
-let windowLayout;
 const screenShareWindows = createScreenShareWindows();
 let closing = false;
 let canClose = false;
@@ -1431,13 +1430,13 @@ if (!app.requestSingleInstanceLock()) {
     powerMonitor.on('suspend', () => audioShortcuts.block('sleep', true));
     powerMonitor.on('resume', () => audioShortcuts.block('sleep', false));
     const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-    // 首次显示即使用紧凑尺寸，避免先闪出主窗口再收缩。
+    // 所有入口和主界面共用一个可调整的窗体，页面切换不改变用户的窗口状态。
     mainWindow = new BrowserWindow({
-      ...initialWindowBounds(workArea), resizable: false, maximizable: false,
+      ...initialWindowBounds(workArea), resizable: true, maximizable: true,
+      minWidth: Math.min(920, workArea.width - 32), minHeight: Math.min(640, workArea.height - 32),
       title: 'LycanSync', frame: false, show: false, backgroundColor: '#10151a',
       webPreferences: { preload: resolve(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false },
     });
-    windowLayout = createWindowLayout(mainWindow, screen);
     mainWindow.setMenu(null);
     desktopTray.initialize();
     screenShareWindows.attach(mainWindow);
@@ -1534,10 +1533,9 @@ ipcMain.handle('viewer:fullscreen', (event, enabled) => {
   if (closing) throw new Error('应用正在关闭。');
   screenShareWindows.fullscreen(event, enabled);
 });
-ipcMain.handle('window:layout', (event, mode, height) => {
+ipcMain.handle('capture:prepare', (event) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
-  windowLayout.apply(mode, height);
-  if (mode === 'main') prepareObsCapture(false);
+  prepareObsCapture(false);
 });
 ipcMain.handle('window:is-maximized', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');

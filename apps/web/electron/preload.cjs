@@ -147,7 +147,7 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
     return () => ipcRenderer.removeListener('viewer:closed', listener);
   },
   isMaximized: () => ipcRenderer.invoke('window:is-maximized'),
-  setWindowLayout: (mode, height) => ipcRenderer.invoke('window:layout', mode, height),
+  prepareCapture: () => ipcRenderer.invoke('capture:prepare'),
   getRecordingSettings: () => ipcRenderer.invoke('recording:settings'),
   configureRecording: (settings) => ipcRenderer.invoke('recording:configure', settings),
   chooseRecordingDirectory: () => ipcRenderer.invoke('recording:directory'),

@@ -7,6 +7,7 @@ import InlineFeedback from './InlineFeedback.vue';
 import { joinGroupByCode, type GroupDetail } from '../group/groupApi';
 import { useAvatarCrop } from '../profile/useAvatarCrop';
 import { useBackdropDismiss } from './useBackdropDismiss';
+import { motionDurationMs } from '../styles/motion';
 
 const props = defineProps<{ createGroup: (name: string, description: string, avatar: string) => Promise<void>; group?: GroupDetail }>();
 const emit = defineEmits<{ close: []; joined: [group: GroupDetail] }>();
@@ -91,7 +92,7 @@ watch(mode, async () => {
   if (!modePreference?.matches && typeof stage.animate === 'function') {
     stage.style.height = `${to}px`;
     const animation = stage.animate([{ height: `${from}px` }, { height: `${to}px` }], {
-      duration: Number.parseFloat(style.getPropertyValue('--motion-layout-duration')),
+      duration: motionDurationMs(style.getPropertyValue('--motion-layout-duration')),
       easing: style.getPropertyValue('--motion-ease').trim(),
     });
     modeAnimation = animation;
@@ -123,7 +124,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="close">
+  <div class="dialog-backdrop group-entry-backdrop" v-on="backdropEvents" @keydown.esc.stop="close">
     <form ref="dialog" class="group-entry" role="dialog" aria-modal="true" tabindex="-1"
       :aria-label="group ? '编辑群组资料' : mode === 'join' ? '加入群组' : '创建群组'"
       :inert="!!cropSource" @submit.prevent="submit" @keydown="keepFocus">
@@ -184,8 +185,9 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.group-entry { --entry-padding: 24px; width: min(480px, 100%); min-height: 0; max-height: calc(100dvh - 36px); overflow: clip; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); font-size: 14px; line-height: 20px; }
-.entry-viewport { position: relative; max-height: calc(100dvh - 38px); overflow-x: hidden; overflow-y: auto; padding: var(--entry-padding); scrollbar-width: none; }
+.group-entry-backdrop { --entry-top: clamp(18px, 15dvh, 120px); align-items: start; padding-top: var(--entry-top); }
+.group-entry { --entry-padding: 24px; width: min(480px, 100%); min-height: 0; max-height: calc(100dvh - var(--entry-top) - 18px); overflow: clip; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); font-size: 14px; line-height: 20px; }
+.entry-viewport { position: relative; max-height: calc(100dvh - var(--entry-top) - 20px); overflow-x: hidden; overflow-y: auto; padding: var(--entry-padding); scrollbar-width: none; }
 .entry-viewport::-webkit-scrollbar { display: none; }
 .entry-mode-stage { position: relative; overflow: clip; }
 .entry-mode-page { display: flow-root; min-width: 0; }
