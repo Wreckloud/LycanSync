@@ -3,6 +3,7 @@
   --motion-surface-duration: 120ms;
   --motion-layout-duration: 210ms;
   --motion-expand-duration: 160ms;
+  --motion-identity-duration: 260ms;
   --motion-ease: cubic-bezier(.2, 0, 0, 1);
 }
 
@@ -55,7 +56,12 @@
 .settings-page-enter-from, .settings-page-leave-to { clip-path: inset(0 0 0 calc(100% - 24px)); }
 .settings-page-leave-active { pointer-events: none; }
 .app-loading { position: fixed; z-index: 4; inset: var(--titlebar-height) 0 0; display: flex; align-items: center; justify-content: center; gap: 10px; background: var(--panel); color: var(--muted); font-size: 13px; }
-.app-loading > svg { animation: app-loading-spin 1s linear infinite; }
+.app-loading-identity { display: grid; justify-items: center; gap: 12px; min-width: 0; }
+.app-loading-identity > img, .app-loading-avatar { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 50%; object-fit: cover; background: var(--panel-raised); }
+.app-loading-identity > strong { max-width: min(320px, calc(100vw - 48px)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; line-height: 22px; color: var(--text); }
+.app-loading-status { display: flex; align-items: center; gap: 8px; }
+.app-loading-status > svg { animation: app-loading-spin 1s linear infinite; }
+.identity-flight { position: fixed; z-index: 5; inset: 0; pointer-events: none; overflow: hidden; }
 .app-loading-leave-active { pointer-events: none; transition: opacity var(--motion-surface-duration) var(--motion-ease); }
 .app-loading-leave-to { opacity: 0; }
 @keyframes app-loading-spin { to { transform: rotate(360deg); } }
