@@ -2,6 +2,7 @@
 
 mod catalog;
 mod detection;
+mod known_games;
 mod windows;
 
 use detection::{ActivityDetector, ActivityMapping, DetectedActivity, ProcessSnapshot};
@@ -35,6 +36,7 @@ enum Command {
 }
 
 fn main() {
+    known_games::bundled();
     let (sender, receiver) = mpsc::sync_channel(8);
     thread::spawn(move || {
         for line in io::stdin().lock().lines() {
@@ -158,6 +160,24 @@ fn process_snapshot(system: &mut System) -> Vec<ProcessSnapshot> {
         true,
         ProcessRefreshKind::nothing().with_exe(UpdateKind::OnlyIfNotSet),
     );
+    // 仅为具有参数条件的候选程序读取命令行，不扫描或输出其他程序的参数。
+    let argument_pids: Vec<_> = system
+        .processes()
+        .iter()
+        .filter_map(|(pid, process)| {
+            let executable = detection::normalize_path(&process.exe()?.to_string_lossy());
+            known_games::bundled()
+                .needs_arguments(&executable)
+                .then_some(*pid)
+        })
+        .collect();
+    if !argument_pids.is_empty() {
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&argument_pids),
+            false,
+            ProcessRefreshKind::nothing().with_cmd(UpdateKind::OnlyIfNotSet),
+        );
+    }
     system
         .processes()
         .iter()
@@ -166,6 +186,11 @@ fn process_snapshot(system: &mut System) -> Vec<ProcessSnapshot> {
                 pid: pid.as_u32(),
                 executable: detection::normalize_path(&process.exe()?.to_string_lossy()),
                 started_at: process.start_time(),
+                arguments: process
+                    .cmd()
+                    .iter()
+                    .map(|value| value.to_string_lossy().into_owned())
+                    .collect(),
             })
         })
         .collect()

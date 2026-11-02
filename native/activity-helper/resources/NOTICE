@@ -1,0 +1,12 @@
+游戏识别基础数据来自 Discord Detectable Applications：
+https://discord.com/api/v10/applications/detectable
+
+games.json 仅保留 Windows 识别规则、名称、Steam 标识及本项目修正。
+source.sha256 标识本次导入的原始响应；此数据来源不承诺第三方接口稳定性。
+第三方游戏名称与标识属于各自权利人；本项目不将上游数据声明为 MIT 授权。
+未复制 arRPC 的实现代码，也不包含 Discord RPC 服务。
+
+game-overrides.json 维护常用中文展示名及少量行为修正，不是完整翻译库。
+维护时编辑该文件，再从 apps/web 运行 npm run update:activity-catalog（使用 Windows PowerShell 系统代理下载）；
+也可用 node native/activity-helper/update-game-catalog.cjs --source <上游JSON文件> 离线生成。
+生成失败不替换已有快照；通过 helper 测试后，连同快照随客户端版本发布。

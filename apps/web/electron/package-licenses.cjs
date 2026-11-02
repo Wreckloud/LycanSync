@@ -6,6 +6,7 @@ function writeDesktopLicenses(outputFile) {
   const appDirectory = resolve(__dirname, '..');
   const projectRoot = resolve(appDirectory, '../..');
   const sections = ['LycanSync 第三方组件许可证\nElectron/Chromium 许可证另见安装目录 LICENSE.electron.txt 和 LICENSES.chromium.html。'];
+  sections.push(`\n===== 游戏识别数据来源 =====\n${readFileSync(join(projectRoot, 'native/activity-helper/resources/NOTICE'), 'utf8')}`);
   const included = new Set();
 
   // OBS 及其运行依赖不能遗漏在 Cargo/npm 许可证清单之外。

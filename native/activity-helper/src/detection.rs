@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
+use crate::known_games::{self, ExecutableRole};
+
 #[derive(Clone)]
 pub struct GameInstall {
     pub key: String,
@@ -12,6 +14,7 @@ pub struct ProcessSnapshot {
     pub pid: u32,
     pub executable: String,
     pub started_at: u64,
+    pub arguments: Vec<String>,
 }
 
 pub struct WindowSnapshot {
@@ -110,14 +113,14 @@ pub fn is_capture_game(
     games: &[GameInstall],
     mappings: &[ActivityMapping],
 ) -> bool {
-    // 大厅可展示游戏动态，但不因此注入其浏览器界面；播放器也不当作游戏采集。
+    let known = known_games::find(executable, &[]);
+    // 动态中的客户端/启动器不因此变成游戏注入目标；播放器也不当作游戏采集。
     !ignored_executable(executable)
         && music_player(executable).is_none()
-        && !matches!(
-            file_name(executable),
-            "leagueclient.exe" | "leagueclientux.exe"
-        )
-        && (file_name(executable) == "league of legends.exe"
+        && known
+            .as_ref()
+            .is_none_or(|matched| matched.role == ExecutableRole::Game)
+        && (known.is_some()
             || games
                 .iter()
                 .any(|game| game.key != "steam:431960" && executable.starts_with(&game.directory))
@@ -241,6 +244,14 @@ pub struct ActivityDetector {
 struct RunningSession {
     started_at: u64,
     processes: HashSet<(u32, u64)>,
+    default_name: String,
+}
+
+struct ActivityCandidate {
+    activity: DetectedActivity,
+    processes: HashSet<(u32, u64)>,
+    default_name: String,
+    override_name: Option<String>,
 }
 
 impl ActivityDetector {
@@ -251,8 +262,7 @@ impl ActivityDetector {
         games: &[GameInstall],
         mappings: &[ActivityMapping],
     ) -> Option<DetectedActivity> {
-        let mut candidates: BTreeMap<String, (DetectedActivity, HashSet<(u32, u64)>)> =
-            BTreeMap::new();
+        let mut candidates: BTreeMap<String, ActivityCandidate> = BTreeMap::new();
         for process in processes {
             if process.started_at == 0 || ignored_executable(&process.executable) {
                 continue;
@@ -265,13 +275,15 @@ impl ActivityDetector {
             let game = games.iter().find(|game| {
                 game.key != "steam:431960" && process.executable.starts_with(&game.directory)
             });
-            // 国服和国际服的独立大厅都算英雄联盟；仅打开 WeGame/Riot 平台不算游戏。
-            let league = matches!(
-                file_name(&process.executable),
-                "leagueclient.exe" | "leagueclientux.exe" | "league of legends.exe"
-            );
+            let matched = known_games::find(&process.executable, &process.arguments);
+            let launcher = matched
+                .as_ref()
+                .is_some_and(|matched| matched.role == ExecutableRole::Launcher);
+            let known = game
+                .and_then(|game| known_games::bundled().installed_game(&game.key))
+                .or_else(|| matched.as_ref().map(|matched| matched.game));
             let has_window = windows.iter().any(|window| window.pid == process.pid);
-            let (key, kind, name) = if let Some(player) = player {
+            let (key, kind, default_name, override_name) = if let Some(player) = player {
                 if !has_window {
                     continue;
                 }
@@ -285,34 +297,28 @@ impl ActivityDetector {
                     format!("music:{}", process.executable),
                     ActivityType::Music,
                     name,
+                    None,
                 )
-            } else if let Some(game) = game {
-                let override_name = mappings
-                    .iter()
-                    .rev()
-                    .find(|mapping| mapping.executable.starts_with(&game.directory));
-                (
-                    game.key.clone(),
-                    ActivityType::Game,
-                    display_name(
-                        override_name
-                            .map(|mapping| mapping.name.as_str())
-                            .unwrap_or(&game.name),
-                    ),
-                )
-            } else if league {
+            } else if !launcher && (game.is_some() || known.is_some()) {
                 let override_name = mappings.iter().rev().find(|mapping| {
-                    matches!(
-                        file_name(&mapping.executable),
-                        "leagueclient.exe" | "leagueclientux.exe" | "league of legends.exe"
-                    )
+                    mapping.executable == process.executable
+                        || game.is_some_and(|game| mapping.executable.starts_with(&game.directory))
+                        || known.is_some_and(|known| {
+                            known_games::mapped_game(&mapping.executable)
+                                .is_some_and(|mapped| mapped.id == known.id)
+                        })
                 });
                 (
-                    "known:league-of-legends".to_owned(),
+                    known
+                        .map(|known| known.key())
+                        .unwrap_or_else(|| game.unwrap().key.clone()),
                     ActivityType::Game,
-                    override_name
-                        .map(|mapping| display_name(&mapping.name))
-                        .unwrap_or_else(|| "英雄联盟".to_owned()),
+                    display_name(
+                        known
+                            .map(|known| known.display_name(game.map(|game| game.name.as_str())))
+                            .unwrap_or_else(|| game.unwrap().name.as_str()),
+                    ),
+                    override_name.map(|mapping| display_name(&mapping.name)),
                 )
             } else if let Some(mapping) = mapping {
                 // 手动游戏随有效窗口关闭而清除；隐藏辅助窗口不代表用户仍在玩。
@@ -325,46 +331,62 @@ impl ActivityDetector {
                     format!("custom:{}", process.executable),
                     ActivityType::Game,
                     display_name(&mapping.name),
+                    Some(display_name(&mapping.name)),
                 )
             } else {
                 continue;
             };
-            if name.is_empty() {
+            if default_name.is_empty() {
                 continue;
             }
-            let candidate = candidates.entry(key.clone()).or_insert_with(|| {
-                (
-                    DetectedActivity {
+            let candidate = candidates
+                .entry(key.clone())
+                .or_insert_with(|| ActivityCandidate {
+                    activity: DetectedActivity {
                         kind,
-                        name,
+                        name: default_name.clone(),
                         started_at: process.started_at,
                         key,
                     },
-                    HashSet::new(),
-                )
-            });
-            candidate.0.started_at = candidate.0.started_at.min(process.started_at);
-            candidate.1.insert((process.pid, process.started_at));
+                    processes: HashSet::new(),
+                    default_name,
+                    override_name,
+                });
+            candidate.activity.started_at = candidate.activity.started_at.min(process.started_at);
+            candidate
+                .processes
+                .insert((process.pid, process.started_at));
         }
         self.sessions.retain(|key, _| candidates.contains_key(key));
-        for (key, (activity, processes)) in &mut candidates {
+        for (key, candidate) in &mut candidates {
+            let activity = &mut candidate.activity;
             // 同一游戏仍有原进程存活时保留本次启动时间，辅助进程重建不能抢占排序。
             if let Some(previous) = self.sessions.get(key)
-                && !previous.processes.is_disjoint(processes)
+                && !previous.processes.is_disjoint(&candidate.processes)
             {
                 activity.started_at = activity.started_at.min(previous.started_at);
+                // 清单刷新不能因自动名称变化切断公开动态；主动修正名称仍立即生效。
+                if activity.kind == ActivityType::Game {
+                    candidate.default_name.clone_from(&previous.default_name);
+                }
             }
+            activity.name = candidate
+                .override_name
+                .as_ref()
+                .unwrap_or(&candidate.default_name)
+                .clone();
             self.sessions.insert(
                 key.clone(),
                 RunningSession {
                     started_at: activity.started_at,
-                    processes: processes.clone(),
+                    processes: candidate.processes.clone(),
+                    default_name: candidate.default_name.clone(),
                 },
             );
         }
         candidates
             .into_values()
-            .map(|(activity, _)| activity)
+            .map(|candidate| candidate.activity)
             .max_by(|left, right| {
                 (left.kind == ActivityType::Game)
                     .cmp(&(right.kind == ActivityType::Game))
@@ -392,6 +414,7 @@ mod tests {
             pid,
             executable: normalize_path(executable),
             started_at,
+            arguments: Vec::new(),
         }
     }
     fn window(pid: u32, title: &str) -> WindowSnapshot {
@@ -796,7 +819,7 @@ mod tests {
             "d:/steamapps/common/wallpaper_engine/wallpaper64.exe",
             200,
         )];
-        assert!(select_activity(&processes, &[], &[wallpaper.clone()], &[]).is_none());
+        assert!(select_activity(&processes, &[], std::slice::from_ref(&wallpaper), &[]).is_none());
         let mut installed = games();
         installed.push(wallpaper);
         let processes = [
@@ -928,5 +951,131 @@ mod tests {
         );
         assert_eq!(options.len(), 1);
         assert_eq!(options[0].title, "窗口名称");
+    }
+
+    #[test]
+    fn known_game_without_platform_install_uses_chinese_and_manual_name() {
+        let processes = [process(1, "d:/standalone/genshinimpact.exe", 100)];
+        let mut detector = ActivityDetector::default();
+        let first = detector.detect(&processes, &[], &[], &[]).unwrap();
+        assert_eq!(first.name, "原神");
+        let mappings = [ActivityMapping {
+            executable: processes[0].executable.clone(),
+            name: "我的名称".into(),
+        }];
+        let renamed = detector.detect(&processes, &[], &[], &mappings).unwrap();
+        assert_eq!(renamed.name, "我的名称");
+        assert_eq!(renamed.started_at, first.started_at);
+        assert_eq!(
+            detector.detect(&processes, &[], &[], &[]).unwrap().name,
+            "原神"
+        );
+        assert!(detector.detect(&[], &[], &[], &[]).is_none());
+    }
+
+    #[test]
+    fn install_discovery_and_name_refresh_do_not_split_a_running_game() {
+        let processes = [process(1, "d:/standalone/win64/cs2.exe", 100)];
+        let mut detector = ActivityDetector::default();
+        let first = detector.detect(&processes, &[], &[], &[]).unwrap();
+        let installed = [GameInstall {
+            key: "steam:730".into(),
+            name: "Counter-Strike 2".into(),
+            directory: normalize_path("d:/standalone/"),
+        }];
+        assert_eq!(
+            detector.detect(&processes, &[], &installed, &[]).unwrap(),
+            first
+        );
+
+        let processes = [process(2, "d:/games/a/game.exe", 200)];
+        let mut installed = games();
+        assert_eq!(
+            detector
+                .detect(&processes, &[], &installed, &[])
+                .unwrap()
+                .name,
+            "游戏 A"
+        );
+        installed[0].name = "清单更新的名字".into();
+        assert_eq!(
+            detector
+                .detect(&processes, &[], &installed, &[])
+                .unwrap()
+                .name,
+            "游戏 A"
+        );
+        let mappings = [ActivityMapping {
+            executable: processes[0].executable.clone(),
+            name: "主动修正".into(),
+        }];
+        assert_eq!(
+            detector
+                .detect(&processes, &[], &installed, &mappings)
+                .unwrap()
+                .name,
+            "主动修正"
+        );
+        assert_eq!(
+            detector
+                .detect(&processes, &[], &installed, &[])
+                .unwrap()
+                .name,
+            "游戏 A"
+        );
+    }
+
+    #[test]
+    fn manual_unknown_game_can_be_renamed_during_the_same_session() {
+        let processes = [process(1, "c:/custom/app.exe", 100)];
+        let windows = [window(1, "窗口")];
+        let mut mappings = [ActivityMapping {
+            executable: processes[0].executable.clone(),
+            name: "原名称".into(),
+        }];
+        let mut detector = ActivityDetector::default();
+        let first = detector
+            .detect(&processes, &windows, &[], &mappings)
+            .unwrap();
+        mappings[0].name = "新名称".into();
+        let renamed = detector
+            .detect(&processes, &windows, &[], &mappings)
+            .unwrap();
+        assert_eq!(renamed.name, "新名称");
+        assert_eq!(renamed.started_at, first.started_at);
+    }
+
+    #[test]
+    fn database_clients_and_launchers_do_not_become_game_capture_targets() {
+        let installed = [GameInstall {
+            key: "custom-install".into(),
+            name: "游戏目录".into(),
+            directory: normalize_path("d:/games/"),
+        }];
+        for executable in [
+            "d:\\games\\leagueclient.exe",
+            "d:\\games\\leagueclientux.exe",
+            "d:\\games\\boot\\ffxivboot.exe",
+            "d:\\games\\rust.exe",
+        ] {
+            assert!(!is_capture_game(executable, &installed, &[]));
+        }
+        assert!(
+            select_activity(
+                &[process(1, "d:/games/rust.exe", 100)],
+                &[],
+                &installed,
+                &[]
+            )
+            .is_none()
+        );
+        assert!(is_capture_game(
+            "d:\\standalone\\genshinimpact.exe",
+            &[],
+            &[]
+        ));
+        let lobby =
+            select_activity(&[process(1, "d:/leagueclientux.exe", 100)], &[], &[], &[]).unwrap();
+        assert_eq!(lobby.name, "英雄联盟");
     }
 }
