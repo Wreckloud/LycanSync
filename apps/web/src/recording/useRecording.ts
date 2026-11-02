@@ -5,7 +5,7 @@ import { RecordingVoice, type RecordingVoiceTrack } from './recordingVoice';
 const messages: Record<string, string> = {
   recordingShareUnavailable: '请先开启自己的画面共享。',
   recordingHardwareEncoderUnavailable: '没有可用的硬件录像编码器，请检查显卡驱动。',
-  recordingEncoderStartFailed: '硬件编码器启动失败，请降低共享规格或检查显卡驱动。',
+  recordingEncoderStartFailed: '硬件编码器启动失败，请降低本地录制画质或检查显卡驱动。',
   recordingApplicationAudioUnavailable: '无法单独录入应用声音，请关闭应用声音选项后重试。',
   recordingDiskFull: '录像目录可用空间不足，请腾出空间或更换目录。',
   recordingStopUnconfirmed: '本地录制的停止尚未确认，请先结束共享后重试。',
@@ -153,6 +153,7 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
         await setNativeScreenRecordingDemand(track, true);
         if (disposed || options.track() !== track || !options.canStart()) return;
         const next = await desktop.startReplay();
+        if (disposed) { await desktop.stopReplay(); return; }
         if (revision === stateRevision) setState(next);
       } else {
         const next = await (action === 'save' ? desktop.saveReplay() : desktop.stopReplay());

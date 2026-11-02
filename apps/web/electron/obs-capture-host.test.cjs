@@ -261,6 +261,62 @@ test('主动停止期间的目标退出不通知故障，仍等待原停止确�
   assert.equal(f.manager.state.videoSessionId, undefined);
 });
 
+test('录像提高渲染帧率但保留共享30帧，最后一路结束后恢复共享预算', async context => {
+  const f = fixture(context);
+  await f.ready(30);
+  const preparing = f.manager.setRecordingFrameRate(sessionId, 60);
+  assert.equal(f.commands.at(-1), 'configure:1:30:1920:1080:60');
+  f.emit({ event: 'captureConfigured', requestId: '1', sessionId, maxFps: 30 });
+  await preparing;
+  assert.equal(f.manager.state.maxFps, 30);
+  assert.equal(f.manager.state.recordingFps, 60);
+  const starting = f.manager.startRecording(sessionId, sessionId, 'C:\\recordings\\test.mkv', false);
+  f.emit({ event: 'recordingStarted', recordingId: sessionId, configuredFrameRate: 60 });
+  await starting;
+  await assert.rejects(f.manager.setRecordingFrameRate(sessionId, 0), /recordingBusy/);
+  const stopping = f.manager.stopRecording(sessionId, sessionId);
+  f.emit({ event: 'recordingStopped', recordingId: sessionId, outputFrames: 600 });
+  await stopping;
+  const restoring = f.manager.setRecordingFrameRate(sessionId, 0);
+  assert.equal(f.commands.at(-1), 'configure:2:30:1920:1080:30');
+  f.emit({ event: 'captureConfigured', requestId: '2', sessionId, maxFps: 30 });
+  await restoring;
+  assert.equal(f.manager.state.recordingFps, 0);
+  assert.equal(f.killCount(), 0);
+});
+
+test('目标关闭时给录像留足原生收尾时间，四秒后仍等待正常确认', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture(context, { closeOnShutdown: false });
+  await f.ready();
+  const starting = f.manager.startRecording(sessionId, sessionId, 'C:\\recordings\\test.mkv', false);
+  f.emit({ event: 'recordingStarted', recordingId: sessionId });
+  await starting;
+  f.emit({ event: 'captureTargetClosed' });
+  await flush();
+  context.mock.timers.tick(5000);
+  await flush();
+  assert.equal(f.killCount(), 0);
+  f.emit({ event: 'recordingStopped', recordingId: sessionId, outputFrames: 600 });
+  f.emit({ event: 'captureStopped' });
+  await flush();
+  assert.equal(f.manager.state.videoSessionId, undefined);
+  assert.equal(f.killCount(), 0);
+});
+
+test('录像准备等待已有纹理交付调整完成，不与低频共享配置竞争', async context => {
+  const f = fixture(context);
+  await f.ready(60);
+  const delivering = f.manager.configureVideo(sessionId, 30, { width: 1920, height: 1080 }, true);
+  const preparing = f.manager.setRecordingFrameRate(sessionId, 60);
+  assert.equal(f.commands.at(-1), 'delivery:1:30');
+  f.emit({ event: 'deliveryConfigured', requestId: '1', sessionId, maxFps: 30, width: 1920, height: 1080 });
+  await delivering; await preparing;
+  assert.equal(f.manager.state.recordingFps, 60);
+  assert.equal(f.manager.state.maxFps, 60);
+  assert.equal(f.commands.at(-1), 'delivery:1:30');
+});
+
 test('热宿主再次启动时目标退出，保留正常结束错误码而不是通用停止错误', async context => {
   const f = fixture(context);
   await f.ready();
@@ -1061,7 +1117,7 @@ test('共享中切换等宿主确认才更新帧率，不更换子进程或会�
     const previous = state.maxFps;
     const configured = manager.configureVideo(sessionId, fps);
     assert.equal(state.maxFps, previous);
-    assert.equal(commands.at(-1), `configure:${index + 1}:${fps}:1920:1080`);
+    assert.equal(commands.at(-1), `configure:${index + 1}:${fps}:1920:1080:${fps}`);
     await assert.rejects(manager.configureVideo(sessionId, fps), /ConfigurationInProgress/);
     emit({ event: 'captureConfigured', requestId: String(index + 1), sessionId, maxFps: fps });
     assert.deepEqual(await configured, { changed: true });
@@ -1085,7 +1141,7 @@ test('自定义尺寸贯通宿主启动与切换，只在尺寸和帧率均确�
   const resolution = { width: 1280, height: 720 };
   const changing = manager.configureVideo(sessionId, 30, resolution);
   resolution.width = 1920;
-  assert.equal(commands.at(-1), 'configure:1:30:1280:720');
+  assert.equal(commands.at(-1), 'configure:1:30:1280:720:30');
   assert.deepEqual(manager.state.resolution, { width: 2560, height: 1440 });
   emit({ event: 'captureConfigured', requestId: '1', sessionId, maxFps: 30, width: 1280, height: 720 });
   await changing;

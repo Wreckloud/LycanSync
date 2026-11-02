@@ -3,6 +3,7 @@
 #include <graphics/graphics.h>
 #include <util/base.h>
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -30,8 +31,12 @@ std::string utf8(const std::filesystem::path &path) {
 
 // 仅编码合成色块，不加载捕获插件、创建窗口、读取设备或连接房间。
 int wmain(int argc, wchar_t **argv) {
-  if (argc != 3 && argc != 4) return 2;
-  const unsigned duration = argc == 4 ? static_cast<unsigned>(std::wcstoul(argv[3], nullptr, 10)) : 3;
+  if (argc != 3 && argc != 4 && argc != 6) return 2;
+  const unsigned duration = argc >= 4 ? static_cast<unsigned>(std::wcstoul(argv[3], nullptr, 10)) : 3;
+  const unsigned shared_fps = argc == 6 ? static_cast<unsigned>(std::wcstoul(argv[4], nullptr, 10)) : 30;
+  const unsigned recording_fps = argc == 6 ? static_cast<unsigned>(std::wcstoul(argv[5], nullptr, 10)) : 30;
+  if ((shared_fps != 30 && shared_fps != 60 && shared_fps != 120)
+      || (recording_fps != 30 && recording_fps != 60 && recording_fps != 120)) return 2;
   if (duration < 3 || duration > 3600) return 2;
   const auto sdk = std::filesystem::absolute(argv[1]);
   const auto directory = std::filesystem::absolute(argv[2]);
@@ -48,7 +53,7 @@ int wmain(int argc, wchar_t **argv) {
   const auto graphics = utf8(sdk / "bin/64bit/libobs-d3d11.dll");
   video.graphics_module = graphics.c_str();
   video.base_width = video.output_width = 1920; video.base_height = video.output_height = 1080;
-  video.fps_num = 30; video.fps_den = 1; video.output_format = VIDEO_FORMAT_BGRA;
+  video.fps_num = std::max(shared_fps, recording_fps); video.fps_den = 1; video.output_format = VIDEO_FORMAT_BGRA;
   video.gpu_conversion = true; video.colorspace = VIDEO_CS_SRGB; video.range = VIDEO_RANGE_PARTIAL;
   obs_audio_info audio{}; audio.samples_per_sec = 48000; audio.speakers = SPEAKERS_STEREO;
   if (obs_reset_video(&video) != OBS_VIDEO_SUCCESS || !obs_reset_audio(&audio)) { obs_shutdown(); return 4; }
@@ -68,17 +73,21 @@ int wmain(int argc, wchar_t **argv) {
   obs_add_main_rendered_callback(count_frames, nullptr);
   int result = 0;
   {
-    bool started = false, stopped = false, failed = false;
+    bool started = false, stopped = false, failed = false, replay_saved = false;
     RecordingOutput recording(utf8(sdk / "obs-plugins/64bit"), utf8(sdk / "data/obs-plugins"),
         [&](std::string_view event, std::string_view, std::string_view code) {
           std::printf("%.*s %.*s\n", static_cast<int>(event.size()), event.data(), static_cast<int>(code.size()), code.data());
+          std::fflush(stdout);
           started |= event == "recordingStarted";
           stopped |= event == "recordingStopped";
+          replay_saved |= event == "replaySaved";
           failed |= !code.empty();
         });
     for (unsigned segment = 0; segment < 2 && !result; ++segment) {
-      started = stopped = failed = false; pattern.width = 1222; pattern.height = 787;
-      if (!recording.start("framing-test", utf8(directory / ("framing-" + std::to_string(segment) + ".mkv")), false, source)) { result = 6; break; }
+      started = stopped = failed = replay_saved = false; pattern.width = 1222; pattern.height = 787;
+      if (!recording.start_replay("framing-replay", false, source, "framing-test", 30, 1080, recording_fps)) { result = 10; break; }
+      if (!recording.start("framing-test", utf8(directory / ("framing-" + std::to_string(segment) + ".mkv")), false,
+          source, "framing-test", 1080, recording_fps)) { result = 6; break; }
       if (recording.width() != 1220 || recording.height() != 786) { result = 7; break; }
       const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(duration);
       while (std::chrono::steady_clock::now() < deadline && !failed) {
@@ -86,7 +95,18 @@ int wmain(int argc, wchar_t **argv) {
         if (std::chrono::steady_clock::now() > deadline - std::chrono::seconds(1)) { pattern.width = 800; pattern.height = 800; }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
+      if (!recording.save_replay("framing-save", utf8(directory / ("replay-" + std::to_string(segment) + ".mkv")), "framing-replay")) { result = 11; break; }
+      const auto save_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+      while (!replay_saved && !failed && std::chrono::steady_clock::now() < save_deadline) {
+        recording.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      if (!replay_saved || failed) { result = 12; break; }
+      // 第一段沿用主动停止；第二段模拟目标关闭后直接进入宿主收尾。
+      if (segment == 0) recording.stop();
+      std::printf("shutdown segment=%u\n", segment); std::fflush(stdout);
       if (!recording.shutdown() || !started || !stopped || failed) result = 8;
+      std::printf("shutdown complete segment=%u result=%d\n", segment, result); std::fflush(stdout);
     }
   }
   obs_remove_main_rendered_callback(count_frames, nullptr);
@@ -94,6 +114,11 @@ int wmain(int argc, wchar_t **argv) {
   if (!main_frames || !auxiliary_frames) result = 9;
   obs_set_output_source(0, nullptr);
   obs_source_release(source);
+  obs_wait_for_destroy_queue();
+  video.base_width = video.output_width = 320;
+  video.base_height = video.output_height = 180;
+  video.fps_num = 1;
+  if (obs_reset_video(&video) != OBS_VIDEO_SUCCESS) result = 13;
   obs_shutdown();
   RemoveDllDirectory(dll_directory);
   return result;

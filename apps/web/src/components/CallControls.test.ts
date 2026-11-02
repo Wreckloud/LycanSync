@@ -118,3 +118,22 @@ it('实际模板把共享动作和画质分成两块，自定义最后；窄窗�
     expect(actions?.includes('display:none')).toBe(placement === 'compact');
   }
 });
+
+it('共享菜单仅在回放已开启时提供保存，正在录像不限制保存，写入中禁止重复提交', async () => {
+  for (const [replayActive, recordingActive, replaySaving] of [[false, true, false], [true, false, false], [true, true, false], [true, true, true]]) {
+    const app = createSSRApp(CallControls, {
+      connected: true, desktop: true, microphoneEnabled: false, microphoneIntent: false, microphoneBusy: false,
+      microphoneLevel: 0, inputLevelPercent: 0, listening: true, inputGain: 1, outputVolume: 1,
+      sharing: true, shareBusy: false, choosingSource: false, shareLimitReached: false,
+      quality: 'standard', shareAudio: false, audioMode: 'process', replayActive, recordingActive, replaySaving,
+    });
+    app.mixin({ created() { Object.assign(this.$.setupState, { menu: 'share' }); } });
+    const html = await renderToString(app);
+    if (!replayActive) expect(html).not.toContain('保存回放');
+    else {
+      const button = html.match(/<button[^>]*>[^<]*保存回放[^<]*<\/button>/)?.[0];
+      expect(button).toBeDefined();
+      expect(button?.includes('disabled')).toBe(replaySaving);
+    }
+  }
+});

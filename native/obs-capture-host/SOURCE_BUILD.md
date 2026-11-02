@@ -3,7 +3,7 @@
 本包对应同版本 LycanSync Windows x64 安装包的 OBS 32.2.2 采集组件，不包含账号、服务器配置、设备记录或画面。
 `source-materials.json` 列出固定归档、来源、版本、SHA-256 和自有源码文件；`runtime-build-manifest.json` 记录对应的运行文件哈希及静态依赖检查，不代表实机或性能验收。
 
-## 重建 LycanSync 宿主、插件与 DXGI 图形模块
+## 重建 LycanSync 宿主、采集／封装插件与 DXGI 图形模块
 
 需要 Windows x64、已有的 Visual Studio C++ Build Tools、Windows SDK、Git 与 CMake（使用 Visual Studio 自带版本）。不需要安装或运行 OBS。
 
@@ -13,7 +13,7 @@
 ./native/obs-capture-host/build.ps1
 ```
 
-脚本使用已包含的官方 OBS 源码和 Windows 依赖 SDK，按固定 SHA-256 下载官方 OBS 运行 ZIP，生成真实 DLL 的导入库，然后从原始源码应用本包补丁并构建宿主、win-capture、win-wasapi 和 libobs-d3d11。网络受限时可自行从 `build.ps1` 中的官方地址下载对应运行 ZIP，校验后放入 `release/build-cache/obs-32.2.2/downloads`，再加 `-Offline` 构建。已有 OBS 安装不被替换，也不会在构建中初始化插件或设备。
+脚本使用已包含的官方 OBS 源码和 Windows 依赖 SDK，按固定 SHA-256 下载官方 OBS 运行 ZIP，生成真实 DLL 的导入库，然后从原始源码应用本包补丁并构建宿主、win-capture、win-wasapi、libobs-d3d11 和 obs-ffmpeg。网络受限时可自行从 `build.ps1` 中的官方地址下载对应运行 ZIP，校验后放入 `release/build-cache/obs-32.2.2/downloads`，再加 `-Offline` 构建。已有 OBS 安装不被替换，也不会在构建中初始化插件或设备。
 
 ## 官方组件与依赖
 
