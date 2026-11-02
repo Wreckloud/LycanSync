@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lycansync.api.rtc.mapper.SharedVoiceTimeMapper">
+    <insert id="join">
+        INSERT INTO rtc_voice_time(participant_sid, room_sid, user_id, confirmed_at, observing)
+        VALUES (#{participantSid}, #{roomSid}, #{userId}, #{at}, true)
+        ON CONFLICT (participant_sid) DO NOTHING
+    </insert>
+    <update id="confirm">
+        UPDATE rtc_voice_time SET
+            connected_periods = connected_periods + tstzmultirange(tstzrange(
+                CASE WHEN observing AND confirmed_at &gt;= #{at}::timestamptz - INTERVAL '45 seconds'
+                     THEN confirmed_at ELSE #{at}::timestamptz END, #{at}, '[)')),
+            confirmed_at = #{at}, observing = true
+        WHERE participant_sid = #{participantSid} AND ended_at IS NULL AND confirmed_at &lt;= #{at}
+    </update>
+    <!-- 迟到的离房事件可以裁掉已确认区间的尾部，重复事件不能再次累计。 -->
+    <sql id="finish">
+        SET connected_periods = (connected_periods * tstzmultirange(tstzrange(NULL, #{at}, '()')))
+            + CASE WHEN observing AND confirmed_at &lt;= #{at}
+                        AND confirmed_at &gt;= #{at}::timestamptz - INTERVAL '45 seconds'
+                   THEN tstzmultirange(tstzrange(confirmed_at, #{at}, '[)')) ELSE '{}'::tstzmultirange END,
+            confirmed_at = LEAST(confirmed_at, #{at}), ended_at = #{at}, observing = false
+    </sql>
+    <update id="leave">
+        UPDATE rtc_voice_time <include refid="finish" />
+        WHERE participant_sid = #{participantSid} AND room_sid = #{roomSid}
+            AND (ended_at IS NULL OR ended_at &gt; #{at})
+    </update>
+    <update id="finishRoom">
+        UPDATE rtc_voice_time <include refid="finish" />
+        WHERE room_sid = #{roomSid} AND (ended_at IS NULL OR ended_at &gt; #{at})
+    </update>
+    <update id="pauseMissingParticipants">
+        UPDATE rtc_voice_time SET observing = false
+        WHERE room_sid = #{roomSid} AND observing AND confirmed_at &lt;= #{at}
+        <if test="!participantSids.isEmpty()">
+            AND participant_sid NOT IN
+            <foreach collection="participantSids" item="sid" open="(" separator="," close=")">#{sid}</foreach>
+        </if>
+    </update>
+    <update id="pauseMissingRooms">
+        UPDATE rtc_voice_time SET observing = false WHERE observing AND confirmed_at &lt;= #{at}
+        <if test="!roomSids.isEmpty()">
+            AND room_sid NOT IN
+            <foreach collection="roomSids" item="sid" open="(" separator="," close=")">#{sid}</foreach>
+        </if>
+    </update>
+</mapper>

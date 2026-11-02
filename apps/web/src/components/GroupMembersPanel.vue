@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onScopeDispose, ref, watch } from 'vue';
-import { Crown, Search, X } from '@lucide/vue';
+import { Crown, Headphones, Search, X } from '@lucide/vue';
 import ActivityStatus from './ActivityStatus.vue';
 import ProfilePopover from './ProfilePopover.vue';
 import { findGroupMemberProfile, type GroupMember, type GroupPresence } from '../group/groupApi';
 import type { AuthUser } from '../auth/authApi';
 import { PRESENCE_STATUS_LABELS, type UserPresenceStatus } from '../presence/presenceApi';
+import { formatSharedVoiceTime } from '../profile/sharedVoiceTime';
 
 const props = defineProps<{
   members: GroupMember[];
@@ -33,13 +34,14 @@ const profileUserId = ref('');
 const profileMember = computed(() => props.members.find(member => member.userId === profileUserId.value));
 const profilePresence = computed(() => props.presences[profileUserId.value]);
 const profileSignature = ref('');
+const sharedVoiceSeconds = ref<number | null>(null);
 const profileLoading = ref(false);
 const profileError = ref('');
 const profileCard = ref<InstanceType<typeof ProfilePopover> | null>(null);
 let openTimer: ReturnType<typeof setTimeout> | undefined;
 let closeTimer: ReturnType<typeof setTimeout> | undefined;
 let profileRequest: AbortController | undefined;
-const signatures = new Map<string, { value: string; fetchedAt: number }>();
+const profiles = new Map<string, { signature: string; sharedVoiceSeconds: number; fetchedAt: number }>();
 
 function cancelProfileTimers() {
   clearTimeout(openTimer);
@@ -59,7 +61,7 @@ async function loadProfile() {
   if (!profileAnchor.value || !member) return;
   profileRequest?.abort();
   profileError.value = '';
-  if (member.userId === props.user.id) { profileSignature.value = props.user.signature ?? ''; return; }
+  if (member.userId === props.user.id) { profileSignature.value = props.user.signature ?? ''; sharedVoiceSeconds.value = null; return; }
   const controller = new AbortController();
   profileRequest = controller;
   profileLoading.value = true;
@@ -67,13 +69,16 @@ async function loadProfile() {
   try {
     const profile = await findGroupMemberProfile(groupId, member.userId, controller.signal);
     if (controller.signal.aborted || profileRequest !== controller || props.groupId !== groupId) return;
-    if (profile.userId !== member.userId || typeof profile.signature !== 'string') throw new Error('成员资料响应无效');
+    const seconds = profile.sharedVoiceSeconds;
+    if (profile.userId !== member.userId || typeof profile.signature !== 'string'
+      || typeof seconds !== 'number' || !Number.isSafeInteger(seconds) || seconds < 0) throw new Error('成员资料响应无效');
     profileSignature.value = profile.signature;
-    if (signatures.size >= 8) signatures.delete(signatures.keys().next().value!);
-    signatures.set(member.userId, { value: profile.signature, fetchedAt: Date.now() });
+    sharedVoiceSeconds.value = seconds;
+    if (profiles.size >= 8) profiles.delete(profiles.keys().next().value!);
+    profiles.set(member.userId, { signature: profile.signature, sharedVoiceSeconds: seconds, fetchedAt: Date.now() });
   } catch (reason) {
     if (!controller.signal.aborted && profileRequest === controller) {
-      profileError.value = reason instanceof Error ? reason.message : '无法读取成员签名';
+      profileError.value = reason instanceof Error ? reason.message : '无法读取成员资料';
     }
   } finally {
     if (profileRequest === controller) { profileRequest = undefined; profileLoading.value = false; }
@@ -88,8 +93,9 @@ function showProfile(member: GroupMember, anchor: HTMLElement) {
   profileUserId.value = member.userId;
   profileAnchor.value = anchor;
   profileError.value = '';
-  const cached = signatures.get(member.userId);
-  profileSignature.value = member.userId === props.user.id ? props.user.signature ?? '' : cached?.value ?? '';
+  const cached = profiles.get(member.userId);
+  profileSignature.value = member.userId === props.user.id ? props.user.signature ?? '' : cached?.signature ?? '';
+  sharedVoiceSeconds.value = member.userId === props.user.id ? null : cached?.sharedVoiceSeconds ?? null;
   if (member.userId !== props.user.id && (!cached || Date.now() - cached.fetchedAt >= 60_000)) void loadProfile();
 }
 
@@ -114,7 +120,7 @@ function leaveProfile() {
 
 watch(() => props.profileBlocked, blocked => { if (blocked) closeProfile(); });
 watch(profileMember, member => { if (!member) closeProfile(); });
-watch(() => props.groupId, () => { closeProfile(); signatures.clear(); });
+watch(() => props.groupId, () => { closeProfile(); profiles.clear(); });
 onScopeDispose(closeProfile);
 
 async function toggleSearch() {
@@ -172,7 +178,11 @@ async function toggleSearch() {
       :activity="profileMember ? activity(profileMember)?.text : undefined"
       :last-online-at="profilePresence?.lastOnlineAt" :recent-game="profilePresence?.recentGame"
       :activity-started-at="profileMember ? activity(profileMember)?.startedAt : undefined" :loading="profileLoading" :error="profileError"
-      @close="closeProfile" @enter="keepProfile" @leave="leaveProfile" @retry="loadProfile" />
+      @close="closeProfile" @enter="keepProfile" @leave="leaveProfile" @retry="loadProfile">
+      <p v-if="profileMember?.userId !== user.id && sharedVoiceSeconds !== null && !profileLoading && !profileError" class="profile-shared-voice">
+        <Headphones :size="13" aria-hidden="true" />{{ formatSharedVoiceTime(sharedVoiceSeconds) }}
+      </p>
+    </ProfilePopover>
   </aside>
 </template>
 
@@ -180,4 +190,6 @@ async function toggleSearch() {
 .members-directory { border-left: 1px solid var(--border); background: var(--panel-sidebar); }
 .member-search-toggle { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
 .member-search-toggle:hover { color: var(--text); }
+.profile-shared-voice { display: flex; align-items: center; gap: 8px; margin: 0; padding-top: 8px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 12px; line-height: 18px; }
+.profile-shared-voice > svg { flex-shrink: 0; }
 </style>

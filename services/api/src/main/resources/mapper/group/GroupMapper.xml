@@ -33,7 +33,17 @@
         SELECT user_id::text FROM group_member WHERE group_id = #{groupId} ORDER BY joined_at, user_id
     </select>
     <select id="findMemberProfile" resultType="com.lycansync.api.group.dto.GroupMemberProfileResponse">
-        SELECT users.id AS user_id, users.signature
+        <!-- 先求同房连接的交集，再合并重叠区间，多设备不能重复累计。 -->
+        SELECT users.id AS user_id, users.signature,
+            CASE WHEN users.id = #{requesterUserId} THEN NULL ELSE (
+                SELECT COALESCE(FLOOR(SUM(EXTRACT(EPOCH FROM upper(period) - lower(period)))), 0)::bigint
+                FROM unnest((
+                    SELECT range_agg(common_period)
+                    FROM rtc_voice_time own JOIN rtc_voice_time peer ON own.room_sid = peer.room_sid,
+                        LATERAL unnest(own.connected_periods * peer.connected_periods) common_period
+                    WHERE own.user_id = #{requesterUserId} AND peer.user_id = users.id
+                )) period
+            ) END AS shared_voice_seconds
         FROM group_member membership JOIN app_user users ON users.id = membership.user_id
         WHERE membership.group_id = #{groupId} AND membership.user_id = #{memberUserId}
             AND EXISTS(SELECT 1 FROM group_member requester

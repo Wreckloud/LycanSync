@@ -33,8 +33,9 @@ class GroupRtcAdmissionServiceTests {
     private final UUID userId = UUID.randomUUID();
     private final GroupMapper groups = mock(GroupMapper.class);
     private final GroupRtcAccessService rtc = mock(GroupRtcAccessService.class);
+    private final SharedVoiceTimeService sharedTime = mock(SharedVoiceTimeService.class);
     private final GroupRtcAdmissionService admission = new GroupRtcAdmissionService(groups,
-            new LiveKitProperties("wss://localhost:8443", "http://localhost:7990", "test-key", SECRET), rtc);
+            new LiveKitProperties("wss://localhost:8443", "http://localhost:7990", "test-key", SECRET), rtc, sharedTime);
 
     @Test
     void acceptsCurrentMemberUsingQueryOrBearerCredential() {
@@ -110,7 +111,7 @@ class GroupRtcAdmissionServiceTests {
     void signedLateJoinEventDisconnectsOnlyRemovedParticipant() throws Exception {
         when(groups.lockRtcGroup(roomKey)).thenReturn(groupId.toString());
         String body = joinedEvent();
-        admission.checkJoinedParticipant(body, eventToken(body));
+        admission.acceptEvent(body, eventToken(body));
         verify(rtc).removeParticipant(roomKey, userId);
     }
 
@@ -119,17 +120,17 @@ class GroupRtcAdmissionServiceTests {
         when(groups.lockRtcGroup(roomKey)).thenReturn(groupId.toString());
         when(groups.memberExists(groupId, userId)).thenReturn(true);
         String body = joinedEvent();
-        admission.checkJoinedParticipant(body, eventToken(body));
+        admission.acceptEvent(body, eventToken(body));
         verifyNoInteractions(rtc);
     }
 
     @Test
     void forgedOrAlteredWebhookCannotTriggerParticipantRemoval() throws Exception {
         String body = joinedEvent();
-        assertThatThrownBy(() -> admission.checkJoinedParticipant(body, "forged"))
+        assertThatThrownBy(() -> admission.acceptEvent(body, "forged"))
                 .isInstanceOf(AuthException.class);
         String signature = eventToken(body);
-        assertThatThrownBy(() -> admission.checkJoinedParticipant(body + " ", signature))
+        assertThatThrownBy(() -> admission.acceptEvent(body + " ", signature))
                 .isInstanceOf(AuthException.class);
         verifyNoInteractions(groups, rtc);
     }
@@ -137,6 +138,19 @@ class GroupRtcAdmissionServiceTests {
     private String joinedEvent() {
         return "{\"event\":\"participant_joined\",\"room\":{\"name\":\"lycan-sync-group-" + roomKey
                 + "\"},\"participant\":{\"identity\":\"user-" + userId + "\"}}";
+    }
+
+    @Test
+    void signedEventsRecordOnlyAuthorizedJoinAndMatchingLeave() throws Exception {
+        when(groups.lockRtcGroup(roomKey)).thenReturn(groupId.toString());
+        when(groups.memberExists(groupId, userId)).thenReturn(true);
+        String body = "{\"event\":\"participant_joined\",\"createdAt\":1793577600,\"room\":{\"sid\":\"RM_test\",\"name\":\"lycan-sync-group-"
+                + roomKey + "\"},\"participant\":{\"sid\":\"PA_test\",\"identity\":\"user-" + userId + "\"}}";
+        admission.acceptEvent(body, eventToken(body));
+        verify(sharedTime).joined("RM_test", "PA_test", userId, Instant.ofEpochSecond(1793577600));
+        String leave = body.replace("participant_joined", "participant_left");
+        admission.acceptEvent(leave, eventToken(leave));
+        verify(sharedTime).left("RM_test", "PA_test", Instant.ofEpochSecond(1793577600));
     }
 
     private String eventToken(String body) throws Exception {

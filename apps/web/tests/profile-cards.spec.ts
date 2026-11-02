@@ -33,7 +33,7 @@ test.beforeEach(async ({ page }) => {
       activityName: member.userId === friendId ? '最终幻想14' : null,
       activityStartedAt: member.userId === friendId ? new Date(Date.now() - 600_000).toISOString() : null })) });
     if (url.pathname.endsWith('/profile')) return route.fulfill({ json: {
-      userId: url.pathname.split('/').at(-2), signature: '今晚一起玩游戏。',
+      userId: url.pathname.split('/').at(-2), signature: '今晚一起玩游戏。', sharedVoiceSeconds: 0,
     } });
     return route.fulfill({ status: 404 });
   });
@@ -71,11 +71,11 @@ test('底部整块资料打开菜单，编辑沿用设置且返回原入口，�
   await page.screenshot({ path: test.info().outputPath('settings-identity-menu.png') });
 });
 
-test('成员悬浮按需读签名，移入卡片保持，Esc 关闭且缓存避免重复读取', async ({ page }) => {
+test('成员悬浮按需读资料与共同连麦，移入卡片保持，Esc 关闭且缓存避免重复读取', async ({ page }) => {
   let requests = 0;
   await page.route(`**/api/groups/${groupId}/members/${friendId}/profile`, route => {
     requests++;
-    return route.fulfill({ json: { userId: friendId, signature: '准备打团。' } });
+    return route.fulfill({ json: { userId: friendId, signature: '准备打团。', sharedVoiceSeconds: 151200 } });
   });
   await page.goto('/');
   expect(requests).toBe(0);
@@ -83,6 +83,7 @@ test('成员悬浮按需读签名，移入卡片保持，Esc 关闭且缓存避�
   await friend.hover();
   const card = page.getByRole('dialog', { name: '成员资料', exact: true });
   await expect(card).toContainText('准备打团。');
+  await expect(card.locator('.profile-shared-voice')).toHaveText('一起开黑的时间，已经有 42 小时了。');
   await expect(card).toContainText('最终幻想14');
   await expect(card.locator('.profile-popover-status')).toHaveCount(0);
   await expect(friend.locator('.member-activity')).toHaveText(/^正在玩\s*最终幻想14$/);
@@ -127,6 +128,25 @@ test('成员悬浮按需读签名，移入卡片保持，Esc 关闭且缓存避�
   await friend.hover();
   await expect(page.getByRole('dialog', { name: '个人菜单', exact: true })).toBeVisible();
   await expect(card).toHaveCount(0);
+});
+
+test('共同连麦读取失败不冒充无记录，重试后展示真实空记录，查看自己不展示', async ({ page }) => {
+  let failed = true;
+  await page.route(`**/api/groups/${groupId}/members/${friendId}/profile`, route => failed
+    ? route.fulfill({ status: 503, json: { detail: '成员资料暂时无法读取' } })
+    : route.fulfill({ json: { userId: friendId, signature: '准备打团。', sharedVoiceSeconds: 0 } }));
+  await page.goto('/');
+  await page.getByRole('button', { name: '查看 阿岚 的资料', exact: true }).hover();
+  const card = page.getByRole('dialog', { name: '成员资料', exact: true });
+  await expect(card.getByRole('alert')).toBeVisible();
+  await expect(card.locator('.profile-shared-voice')).toHaveCount(0);
+  failed = false;
+  await card.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(card.locator('.profile-shared-voice')).toHaveText('还没有记录下共同开黑的时间呢。');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: `查看 ${user.nickname} 的资料`, exact: true }).click();
+  await expect(card).toContainText(user.signature);
+  await expect(card.locator('.profile-shared-voice')).toHaveCount(0);
 });
 
 test('签名读取失败可以在卡片重试，旧请求不能覆盖新成员', async ({ page }) => {
