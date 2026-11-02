@@ -40,7 +40,7 @@ async function changeReplay(event: Event) {
     </section>
     <section v-if="desktop" class="settings-block">
       <h2>文件与画质</h2>
-      <p>录像与回放共用以下本地画质，和网络码率分开。按来源比例缩放，不放大较小的来源；帧率不超过当前采集帧率。硬件 H.264 编码、推荐质量，保存为 MKV。</p>
+      <p>录像与回放共用以下画质、声音选项和保存目录，与共享画质分开。按来源比例缩放，不放大较小的来源；共享降低帧率不会降低这里的目标。硬件 H.264 编码，保存为 MKV。</p>
       <div v-if="recording.settings.value" class="recording-actions">
         <label class="replay-duration">分辨率上限<select aria-label="本地录制分辨率上限" :value="recording.settings.value.videoHeight"
           :disabled="recording.localActive.value || recording.busy.value" @change="changeVideo('videoHeight', $event)">
@@ -73,7 +73,7 @@ async function changeReplay(event: Event) {
     </section>
     <section v-if="desktop" class="settings-block">
       <h2>即时回放</h2>
-      <p>提前开启，随时保存刚刚过去的一段画面。录像和回放共用本地编码；开启后会持续采集和编码，不会自动上传。</p>
+      <p>共享时提前开启，即使忘记开始录制，也能保存最近一段画面。正在录制时同样可用，两者共用编码；保存回放不会中断录像，也不会自动上传。</p>
       <label class="replay-duration">回溯时长
         <select aria-label="回放目标时长" :value="recording.settings.value?.replaySeconds ?? 60"
           :disabled="recording.localActive.value || recording.busy.value"

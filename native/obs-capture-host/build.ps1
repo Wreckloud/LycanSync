@@ -64,12 +64,16 @@ $gameDepsDirectory = Join-Path $cacheDirectory 'game-build-deps'
 if ($LASTEXITCODE -ne 0) { throw '游戏插件固定源码解压失败。' }
 & tar.exe -xzf $sourceArchive -C $sourceDirectory 'obs-studio-32.2.2-sources/libobs-d3d11'
 if ($LASTEXITCODE -ne 0) { throw 'DXGI 图形模块固定源码解压失败。' }
+& tar.exe -xzf $sourceArchive -C $sourceDirectory 'obs-studio-32.2.2-sources/plugins/obs-ffmpeg' 'obs-studio-32.2.2-sources/shared/media-playback' 'obs-studio-32.2.2-sources/shared/opts-parser'
+if ($LASTEXITCODE -ne 0) { throw '录像封装模块固定源码解压失败。' }
 $gameDepsHash = '6f90e9598fa10cff5ad23cdcfae49b87868c07bf896b02cd464582b4ce2f2ba9'
 # 哈希与版本来自同一份已校验 OBS 源码归档中的 CMakePresets.json。
 $gameDepsArchive = Get-VerifiedArchive 'windows-deps-2026-07-15-x64.zip' $gameDepsHash 'https://github.com/obsproject/obs-deps/releases/download/2026-07-15/windows-deps-2026-07-15-x64.zip'
 New-Item -ItemType Directory -Force -Path $gameDepsDirectory | Out-Null
 & tar.exe -xf $gameDepsArchive -C $gameDepsDirectory 'include/curl' 'include/jansson.h' 'include/jansson_config.h' 'lib/jansson.lib' 'lib/libcurl_imp.lib' 'licenses'
 if ($LASTEXITCODE -ne 0) { throw '游戏插件依赖解压失败。' }
+& tar.exe -xf $gameDepsArchive -C $gameDepsDirectory 'include' 'lib/avcodec.lib' 'lib/avformat.lib' 'lib/avutil.lib' 'lib/avfilter.lib' 'lib/avdevice.lib' 'lib/swscale.lib' 'lib/swresample.lib'
+if ($LASTEXITCODE -ne 0) { throw '录像封装依赖解压失败。' }
 & git -C $projectRoot apply --recount --whitespace=error-all --directory=release/build-cache/obs-32.2.2/source/obs-studio-32.2.2-sources (Join-Path $PSScriptRoot 'patches/bound-game-capture.patch')
 if ($LASTEXITCODE -ne 0) { throw '固定游戏插件补丁不适用，拒绝继续构建。' }
 & git -C $projectRoot apply --recount --whitespace=error-all --directory=release/build-cache/obs-32.2.2/source/obs-studio-32.2.2-sources (Join-Path $PSScriptRoot 'patches/bound-window-capture.patch')
@@ -80,6 +84,8 @@ if ($LASTEXITCODE -ne 0) { throw '固定采集模块离线补丁不适用，拒�
 if ($LASTEXITCODE -ne 0) { throw '固定声音插件补丁不适用，拒绝继续构建。' }
 & git -C $projectRoot apply --recount --whitespace=error-all --directory=release/build-cache/obs-32.2.2/source/obs-studio-32.2.2-sources (Join-Path $PSScriptRoot 'patches/dxgi-output-compat.patch')
 if ($LASTEXITCODE -ne 0) { throw '固定 DXGI 补丁不适用，拒绝继续构建。' }
+& git -C $projectRoot apply --recount --whitespace=error-all --directory=release/build-cache/obs-32.2.2/source/obs-studio-32.2.2-sources (Join-Path $PSScriptRoot 'patches/encoder-video-mux.patch')
+if ($LASTEXITCODE -ne 0) { throw '固定录像封装补丁不适用，拒绝继续构建。' }
 $includeDirectory = Join-Path $preparedDirectory 'include'
 $libraryDirectory = Join-Path $preparedDirectory 'lib'
 $binaryDirectory = Join-Path $preparedDirectory 'bin/64bit'
@@ -182,6 +188,8 @@ $audioPlugin = Join-Path $buildDirectory 'audio-plugin/win-wasapi.dll'
 Copy-Item -LiteralPath $audioPlugin -Destination (Join-Path $pluginDirectory 'win-wasapi.dll') -Force
 $graphicsModule = Join-Path $buildDirectory 'graphics-module/libobs-d3d11.dll'
 Copy-Item -LiteralPath $graphicsModule -Destination (Join-Path $binaryDirectory 'libobs-d3d11.dll') -Force
+$recordingPlugin = Join-Path $buildDirectory 'recording-plugin/obs-ffmpeg.dll'
+Copy-Item -LiteralPath $recordingPlugin -Destination (Join-Path $pluginDirectory 'obs-ffmpeg.dll') -Force
 
 # 静态检查 DLL 依赖；不加载 OBS、辅助程序或设备。API-set 由 Windows 装载器提供。
 $imports = @()
@@ -232,6 +240,7 @@ $manifest = [ordered]@{ obsVersion = '32.2.2'; architecture = 'x64'; sourceSha25
     windowPatchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/bound-window-capture.patch') -Algorithm SHA256).Hash.ToLowerInvariant();
     modulePatchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/offline-capture-module.patch') -Algorithm SHA256).Hash.ToLowerInvariant();
     compiler = $toolsVersion; runtimeBytes = ($files | Measure-Object -Property bytes -Sum).Sum;
+    recordingPatchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/encoder-video-mux.patch') -Algorithm SHA256).Hash.ToLowerInvariant();
     runtimeExecuted = $false; redistributionReady = $false; imports = $imports; sourceFiles = $hostSources; files = $files }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $preparedDirectory 'build-manifest.json') -Encoding utf8
 Write-Host "构建和静态依赖检查完成（未运行）：$preparedDirectory"

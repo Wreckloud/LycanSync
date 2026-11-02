@@ -14,6 +14,7 @@ async function fixture(context, overrides = {}) {
   let id = 0;
   const calls = [], events = [], diagnostics = [];
   const host = {
+    setRecordingFrameRate: async () => {},
     startRecording: async (...args) => { calls.push(['start', ...args]); await writeFile(args[2], 'controlled-recorded-content'); },
     stopRecording: async (...args) => { calls.push(['stop', ...args]); return { outputFrames: 12 }; },
     startReplay: async (...args) => { calls.push(['replayStart', ...args]); return { width: 1920, height: 1080, frameRate: 60 }; },
@@ -68,6 +69,60 @@ test('回放与录像共用同一音频和编码身份，停止一路不回收�
   assert.equal(f.calls.filter(call => call[0] === 'releaseAudio').length, 1);
   assert.equal(f.calls.filter(call => call[0] === 'releaseVoice').length, 1);
   assert.equal(f.recording.snapshot().mediaId, null);
+});
+
+test('录像和回放共用一份视频帧率需求，最后一路停止才归还', async context => {
+  const rates = [];
+  const f = await fixture(context, { host: { setRecordingFrameRate: async (...args) => rates.push(args) } });
+  await f.recording.startReplay();
+  await f.recording.start();
+  assert.deepEqual(rates, [['video-1', 60]]);
+  await f.recording.stop();
+  assert.equal(rates.length, 1);
+  await f.recording.stopReplay();
+  assert.deepEqual(rates, [['video-1', 60], ['video-1', 0]]);
+});
+
+test('录像启动失败也归还已提高的帧率需求，不遗留额外渲染负载', async context => {
+  const rates = [];
+  const f = await fixture(context, { host: {
+    setRecordingFrameRate: async (...args) => rates.push(args),
+    startRecording: async () => { throw new Error('recordingEncoderStartFailed'); },
+  } });
+  await assert.rejects(f.recording.start(), /recordingEncoderStartFailed/);
+  assert.deepEqual(rates, [['video-1', 60], ['video-1', 0]]);
+});
+
+test('普通录像启动失败保留正在缓存的回放，仍能保存近期片段', async context => {
+  const rates = [];
+  const f = await fixture(context, { host: {
+    setRecordingFrameRate: async (...args) => rates.push(args),
+    startRecording: async () => { throw new Error('recordingEncoderStartFailed'); },
+  } });
+  await f.recording.startReplay();
+  await assert.rejects(f.recording.start(), /recordingEncoderStartFailed/);
+  assert.equal(f.recording.snapshot().replay.phase, 'buffering');
+  assert.deepEqual(rates, [['video-1', 60]]);
+  const saved = await f.recording.saveReplay();
+  assert.ok(saved.replay.lastSavedId);
+  assert.equal(f.calls.filter(call => call[0] === 'replayStop').length, 0);
+  await f.recording.stopReplay();
+  assert.deepEqual(rates, [['video-1', 60], ['video-1', 0]]);
+});
+
+test('回放启动失败不结束已在进行的录像，也不提前归还共享编码需求', async context => {
+  const rates = [];
+  const f = await fixture(context, { host: {
+    setRecordingFrameRate: async (...args) => rates.push(args),
+    startReplay: async () => { throw new Error('recordingEncoderStartFailed'); },
+  } });
+  await f.recording.start();
+  await assert.rejects(f.recording.startReplay(), /recordingEncoderStartFailed/);
+  assert.equal(f.recording.snapshot().phase, 'recording');
+  assert.deepEqual(rates, [['video-1', 60]]);
+  assert.equal(f.calls.filter(call => call[0] === 'stop').length, 0);
+  assert.equal((await f.recording.stop()).saved, true);
+  assert.deepEqual(rates, [['video-1', 60], ['video-1', 0]]);
 });
 
 test('回放保存后登记真实文件，不把配置时长当成片段实测时长，不泄露路径', async context => {

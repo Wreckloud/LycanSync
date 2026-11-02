@@ -92,6 +92,9 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
       const shared = { id: current.id, videoSessionId: current.videoSessionId, options: current.options, owners: new Set() };
       media = shared;
       shared.start = (async () => {
+        await host.setRecordingFrameRate(shared.videoSessionId, shared.options.videoFps);
+        shared.videoPrepared = true;
+        if (shared.cancelled) throw new Error('recordingCancelled');
         if (shared.options.applicationAudio) {
           shared.audioPreparing = true;
           try { await ensureAudio(shared.videoSessionId); shared.audioAcquired = true; }
@@ -120,7 +123,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
     if (shared.audioPreparing) await releaseAudio(shared.videoSessionId);
     if (shared.voicePreparing) await releaseVoice(shared.id);
   }
-  async function finishAudio(current) {
+  async function finishMedia(current) {
     const shared = current.media;
     if (!shared) return;
     current.media = undefined;
@@ -130,6 +133,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
     const cleanups = [];
     if (shared.voiceAcquired) { shared.voiceAcquired = false; cleanups.push(releaseVoice(shared.id)); }
     if (shared.audioAcquired) { shared.audioAcquired = false; cleanups.push(releaseAudio(shared.videoSessionId)); }
+    if (shared.videoPrepared) { shared.videoPrepared = false; cleanups.push(host.setRecordingFrameRate(shared.videoSessionId, 0)); }
     const results = await Promise.allSettled(cleanups);
     if (media === shared) media = undefined;
     publish();
@@ -142,8 +146,9 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
     if (previousId !== undefined && (latest?.id !== previousId || latest.error || !['saved', 'idle'].includes(latest.phase))) throw new Error('recordingSessionMismatch');
     const video = getVideo();
     if (!video || video.starting || video.stopping) throw new Error('recordingShareUnavailable');
+    generation++;
     const current = { id: createId(), videoSessionId: video.sessionId, options: { ...settings },
-      phase: 'starting', startedAt: null, bytes: 0, error: null, saved: false, generation: ++generation };
+      phase: 'starting', startedAt: null, bytes: 0, error: null, saved: false };
     current.librarySessionId = previousId ? latest.librarySessionId : current.id;
     active = current; publish();
     current.start = (async () => {
@@ -180,7 +185,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
           current.phase = 'failed'; publish();
           throw new Error(current.error);
         }
-        await finishAudio(current).catch(() => { current.error ??= 'recordingApplicationAudioUnavailable'; });
+        await finishMedia(current).catch(error => { current.error ??= recordingError(error); });
         current.phase = cancelled ? 'idle' : 'failed';
         if (!cancelled) current.error ??= recordingError(error);
         if (current.registered && !cancelled) {
@@ -210,7 +215,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
           current.outputFrames = result?.outputFrames ?? current.outputFrames ?? 0;
         }
         if (current.start) await current.start.catch(() => {});
-        await finishAudio(current);
+        await finishMedia(current);
         await updateSize(current);
         current.saved = current.startedAt !== null && current.outputFrames > 0 && current.bytes > 0 && !current.error;
         current.durationMs = current.monotonicStart === undefined ? null : Math.max(0, Math.round(performance.now() - current.monotonicStart));
@@ -261,7 +266,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
           catch { current.error = 'recordingStopUnconfirmed'; }
         }
         if (current.error !== 'recordingStopUnconfirmed') {
-          await finishAudio(current).catch(() => { current.error ??= 'recordingApplicationAudioUnavailable'; });
+          await finishMedia(current).catch(error => { current.error ??= recordingError(error); });
           if (replay === current) { replay = undefined; latestReplay = current; }
         }
         current.phase = cancelled && !current.error ? 'idle' : 'failed';
@@ -325,7 +330,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
           await host.stopReplay(current.videoSessionId, current.id); current.hostEnded = true;
         }
         await current.start?.catch(() => {});
-        await finishAudio(current);
+        await finishMedia(current);
         if (current.unconfirmed) await keepReplayFile(current.unconfirmed, false);
       } catch (error) {
         current.phase = 'failed'; current.error = recordingError(error);

@@ -16,12 +16,13 @@ const props = withDefaults(defineProps<{
   quality: ScreenShareQualityId; shareAudio: boolean; audioMode: NativeScreenAudioMode;
   shareAudioRestricted?: boolean;
   recordingActive?: boolean; recordingBusy?: boolean; recordingElapsed?: string;
+  replayActive?: boolean; replaySaving?: boolean; replayError?: boolean;
   customQuality?: CustomScreenShareQuality;
 }>(), { customQuality: () => ({ ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY }) });
 const emit = defineEmits<{
   microphone: []; listening: []; share: []; changeSource: []; shareAudio: [enabled: boolean];
   quality: [quality: ScreenShareQualityId, customQuality?: CustomScreenShareQuality]; inputGain: [volume: number]; outputVolume: [volume: number];
-  settings: [opener: HTMLElement]; recording: []; recordingSettings: [opener: HTMLElement];
+  settings: [opener: HTMLElement]; recording: []; recordingSettings: [opener: HTMLElement]; saveReplay: [];
 }>();
 type ControlMenu = 'microphone' | 'output' | 'share';
 const root = ref<HTMLElement | null>(null);
@@ -179,6 +180,9 @@ onScopeDispose(() => {
           </template>
           <button v-if="desktop && sharing" type="button" class="call-menu-action" :disabled="recordingBusy || shareAudioRestricted"
             @click="closeMenu(true); emit('recording')">{{ recordingActive ? `停止录制 · ${recordingElapsed}` : '开始录制' }}</button>
+          <button v-if="desktop && sharing && replayActive" type="button" class="call-menu-action"
+            :disabled="recordingBusy || replaySaving || replayError || shareAudioRestricted"
+            @click="closeMenu(true); emit('saveReplay')">{{ replaySaving ? '正在保存回放…' : '保存回放' }}</button>
           <button v-if="desktop" type="button" class="call-menu-action" @click="emit('recordingSettings', opener!); closeMenu()">录制设置<ChevronRight class="call-menu-chevron" :size="14" /></button>
           <button type="button" class="call-settings-entry" @click="openAudioSettings"><Settings :size="15" />语音设置<ChevronRight :size="14" /></button>
         </section>

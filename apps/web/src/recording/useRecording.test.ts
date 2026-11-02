@@ -81,6 +81,32 @@ it('回放保持采集需求，单独停止录像不降低采集，保存确认�
   } finally { f.scope.stop(); }
 });
 
+it('仅开回放也能保存片段，不要求普通录像或偷偷开始录像', async () => {
+  const f = await fixture();
+  try {
+    await f.recording.startReplay();
+    await f.recording.saveReplay();
+    expect(f.desktop.startRecording).not.toHaveBeenCalled();
+    expect(f.desktop.saveReplay).toHaveBeenCalledOnce();
+    expect(f.recording.replaySaved.value).toBe(true);
+    expect(f.recording.active.value).toBe(false);
+  } finally { f.scope.stop(); }
+});
+
+it('回放启动尚未返回时销毁页面，迟到成功仍归还原生回放资源', async () => {
+  const f = await fixture();
+  let complete!: (status: DesktopRecordingStatus) => void;
+  f.desktop.startReplay.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+  const starting = f.recording.startReplay();
+  await vi.waitFor(() => expect(f.desktop.startReplay).toHaveBeenCalledOnce());
+  f.scope.stop();
+  complete({ ...f.recording.state.value, replay: { id: 'late', holdingResources: true, phase: 'buffering',
+    seconds: 60, saving: false, error: null, lastSavedId: null } });
+  await starting;
+  expect(f.desktop.stopReplay).toHaveBeenCalledOnce();
+  expect(setNativeScreenRecordingDemand).toHaveBeenCalledWith(f.track.value, false);
+});
+
 it('回放保存失败不假报成功，已有录像和回放状态保持，错误正文不进入界面', async () => {
   const f = await fixture();
   try {

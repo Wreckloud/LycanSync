@@ -82,6 +82,7 @@ target_link_libraries(lycansync-window-isolation-test PRIVATE lycansync_libobs d
 set_target_properties(lycansync-window-isolation-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")
 add_subdirectory(audio-plugin)
 add_subdirectory(graphics-module)
+add_subdirectory(recording-plugin)
 
 # 显式录像验证只编码合成画面，不接触真实采集来源，不进入安装包。
 add_executable(lycansync-recording-framing-test EXCLUDE_FROM_ALL tests/recording_framing.cpp src/recording.cpp src/recording_audio.cpp)

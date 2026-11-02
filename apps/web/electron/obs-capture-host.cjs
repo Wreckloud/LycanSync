@@ -4,6 +4,7 @@ const { win32 } = require('node:path');
 const MAX_LINE_BYTES = 64 * 1024;
 const START_TIMEOUT_MS = 10_000;
 const SHUTDOWN_TIMEOUT_MS = 4_000;
+const RECORDING_SHUTDOWN_TIMEOUT_MS = 10_000;
 const TERMINATE_TIMEOUT_MS = 1_500;
 const DIAGNOSTIC_TIMEOUT_MS = 2_000;
 const CONFIGURE_TIMEOUT_MS = 3_000;
@@ -503,18 +504,18 @@ class ObsCaptureHostManager {
     return promise;
   }
 
-  configureVideo(sessionId, maxFps, resolution = this.state?.resolution, deliveryOnly = false) {
+  configureVideo(sessionId, maxFps, resolution = this.state?.resolution, deliveryOnly = false, recordingFps = this.state?.recordingFps ?? 0) {
     const state = this.state;
     if (!state || !state.alive || state.closed || state.failed || state.stopRequested
         || state.videoSessionId !== sessionId || !state.helperVersion || ![30, 60, 120].includes(maxFps) || !validResolution(resolution)
-        || typeof deliveryOnly !== 'boolean' || deliveryOnly && (maxFps > state.maxFps
+        || ![0, 30, 60, 120].includes(recordingFps) || typeof deliveryOnly !== 'boolean' || deliveryOnly && (maxFps > state.maxFps
           || resolution.width !== state.resolution.width || resolution.height !== state.resolution.height)) {
       return Promise.reject(new Error('invalidVideoConfiguration'));
     }
     if (state.pendingConfiguration) return Promise.reject(new Error('obsCaptureConfigurationInProgress'));
     let resolveRequest, rejectRequest;
     const promise = new Promise((resolve, reject) => { resolveRequest = resolve; rejectRequest = reject; });
-    const request = { id: String(++state.configurationSequence), maxFps, deliveryOnly, resolution: { ...resolution }, timer: undefined, finish: (error, result) => {
+    const request = { id: String(++state.configurationSequence), promise, maxFps, deliveryOnly, resolution: { ...resolution }, timer: undefined, finish: (error, result) => {
       if (state.pendingConfiguration !== request) return;
       clearTimeout(request.timer);
       state.pendingConfiguration = undefined;
@@ -529,13 +530,37 @@ class ObsCaptureHostManager {
       else failState(state, error);
     }, CONFIGURE_TIMEOUT_MS);
     request.timer.unref?.();
-    const command = deliveryOnly ? `delivery:${request.id}:${maxFps}` : `configure:${request.id}:${maxFps}:${resolution.width}:${resolution.height}`;
+    const command = deliveryOnly ? `delivery:${request.id}:${maxFps}`
+      : `configure:${request.id}:${maxFps}:${resolution.width}:${resolution.height}:${Math.max(maxFps, recordingFps)}`;
     void writeLine(state.child, command).catch((error) => {
       if (state.pendingConfiguration !== request) return;
       if (deliveryOnly) request.finish(error);
       else failState(state, error);
     });
     return promise;
+  }
+
+  async setRecordingFrameRate(sessionId, fps) {
+    const state = this.state;
+    // 共享已停止时，图形资源由宿主结束流程回收，不再向新会话追加重设。
+    if (fps === 0 && (!state || state.closed || state.stopRequested || state.videoSessionId !== sessionId)) return;
+    if (!state || state.videoSessionId !== sessionId || ![0, 30, 60, 120].includes(fps)) throw new Error('recordingShareUnavailable');
+    if (state.pendingConfiguration) {
+      await state.pendingConfiguration.promise;
+      if (this.state !== state || state.videoSessionId !== sessionId || state.stopRequested) {
+        if (fps === 0) return;
+        throw new Error('recordingShareUnavailable');
+      }
+    }
+    if (state.recording || state.replay || state.pendingConfiguration) throw new Error('recordingBusy');
+    if ((state.recordingFps ?? 0) === fps) return;
+    if (Math.max(state.maxFps, state.recordingFps ?? 0) === Math.max(state.maxFps, fps)) {
+      state.recordingFps = fps;
+      return;
+    }
+    await this.configureVideo(sessionId, state.maxFps, state.resolution, false, fps);
+    if (this.state !== state || state.videoSessionId !== sessionId || state.stopRequested) throw new Error('recordingShareUnavailable');
+    state.recordingFps = fps;
   }
 
   startRecording(sessionId, id, path, applicationAudio, voices = false, pipelineId = id, profile = { videoHeight: 1080, videoFps: 60 }) {
@@ -713,7 +738,7 @@ class ObsCaptureHostManager {
         void writeLine(state.child, `stop:${sessionId}`).catch(() => {});
         let timer;
         await Promise.race([state.captureStopPromise, state.closePromise, new Promise(resolve => {
-          timer = setTimeout(resolve, SHUTDOWN_TIMEOUT_MS);
+          timer = setTimeout(resolve, state.recording || state.replay ? RECORDING_SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS);
           timer.unref?.();
         })]).finally(() => clearTimeout(timer));
         // 停止未确认就退出整个宿主；进程也未退出时保留阻挡，不能复用未知资源。
@@ -732,6 +757,7 @@ class ObsCaptureHostManager {
     state.lastStoppedSessionId = state.videoSessionId;
     this.onCaptureDiagnostic(state, { stage: 'obsCaptureStopped', stopMode: state.startSent ? 'graceful' : 'beforeStart' });
     state.videoSessionId = undefined;
+    state.recordingFps = 0;
     state.stopRequested = false;
     state.captureStopResolve?.();
     state.captureStopResolve = undefined;
@@ -747,7 +773,7 @@ class ObsCaptureHostManager {
     clearTimeout(state.idleTimer);
     state.shutdownPromise = (async () => {
       void writeLine(state.child, 'shutdown').catch(() => {});
-      if (!force) await waitForClose(state, SHUTDOWN_TIMEOUT_MS);
+      if (!force) await waitForClose(state, state.recording || state.replay ? RECORDING_SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS);
       if (!state.closed) {
         state.forceTerminated = true;
         state.child.kill();

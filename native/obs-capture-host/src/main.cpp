@@ -132,6 +132,7 @@ struct HostState {
   uint32_t content_height = 0;
   uint32_t render_fps = 60;
   uint32_t delivery_fps = 60;
+  uint32_t share_fps = 60;
   std::optional<std::chrono::steady_clock::time_point> next_delivery;
 };
 
@@ -623,7 +624,7 @@ bool valid_resolution(uint32_t width, uint32_t height) {
 }
 
 bool parse_configure_command(std::string_view command, std::string_view &request_id, uint32_t &frame_rate,
-    uint32_t &width, uint32_t &height) {
+    uint32_t &width, uint32_t &height, uint32_t &render_fps) {
   constexpr std::string_view prefix = "configure:";
   if (!command.starts_with(prefix)) return false;
   const auto values = command.substr(prefix.size());
@@ -633,33 +634,33 @@ bool parse_configure_command(std::string_view command, std::string_view &request
   if (request_id.empty() || request_id.size() > 16
       || !std::all_of(request_id.begin(), request_id.end(), [](char digit) { return digit >= '0' && digit <= '9'; })) return false;
   auto remaining = values.substr(separator + 1);
-  for (auto *number : {&frame_rate, &width, &height}) {
+  for (auto *number : {&frame_rate, &width, &height, &render_fps}) {
     const auto end = remaining.find(':');
     const auto value = remaining.substr(0, end);
     const auto parsed = std::from_chars(value.data(), value.data() + value.size(), *number);
     if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) return false;
-    if (number == &height) {
+    if (number == &render_fps) {
       if (end != std::string_view::npos) return false;
     } else {
       if (end == std::string_view::npos) return false;
       remaining.remove_prefix(end + 1);
     }
   }
-  return valid_frame_rate(frame_rate) && valid_resolution(width, height);
+  return valid_frame_rate(frame_rate) && valid_frame_rate(render_fps) && render_fps >= frame_rate && valid_resolution(width, height);
 }
 
 void destroy_textures();
 
 bool configure_video(obs_video_info &video, obs_sceneitem_t *item, std::string_view request_id,
-    uint32_t frame_rate, uint32_t width, uint32_t height) {
+    uint32_t frame_rate, uint32_t width, uint32_t height, uint32_t render_fps) {
   bool accepted = true;
-  if (video.fps_num != frame_rate || video.base_width != width || video.base_height != height) {
+  if (video.fps_num != render_fps || video.base_width != width || video.base_height != height) {
     // 此时三个槽位均已归还，才能销毁旧纹理；来源、声音及房间身份保持不变。
     const bool resize = video.base_width != width || video.base_height != height;
     // 只改帧率保留同设备、同尺寸的纹理槽，减少缩略图与高清切换时的分配。
     if (resize) destroy_textures();
     auto next = video;
-    next.fps_num = frame_rate;
+    next.fps_num = render_fps;
     next.base_width = next.output_width = width;
     next.base_height = next.output_height = height;
     accepted = obs_reset_video(&next) == OBS_VIDEO_SUCCESS;
@@ -692,12 +693,13 @@ bool configure_video(obs_video_info &video, obs_sceneitem_t *item, std::string_v
   }
   const std::lock_guard<std::mutex> output_lock(g_output_mutex);
   if (accepted) {
-    g_host.render_fps = g_host.delivery_fps = video.fps_num;
+    g_host.render_fps = video.fps_num;
+    g_host.share_fps = g_host.delivery_fps = frame_rate;
     g_host.next_delivery.reset();
   }
   std::cout << "{\"event\":\"" << (accepted ? "captureConfigured" : "captureConfigurationRejected")
             << "\",\"requestId\":\"" << request_id << "\",\"sessionId\":\"" << g_host.session_id
-            << "\",\"maxFps\":" << video.fps_num << ",\"width\":" << video.base_width
+            << "\",\"maxFps\":" << g_host.share_fps << ",\"width\":" << video.base_width
             << ",\"height\":" << video.base_height << "}\n";
   std::cout.flush();
   return true;
@@ -807,6 +809,7 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
   }
   reset_render_statistics();
   g_host.render_fps = g_host.delivery_fps = video.fps_num;
+  g_host.share_fps = video.fps_num;
   g_host.next_delivery.reset();
   write_capture_preparation("sourceStarting", g_host.session_id);
 
@@ -901,7 +904,7 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
         std::cout << "}\n" << std::flush;
       });
   std::string command;
-  struct PendingConfiguration { std::string id; uint32_t fps; uint32_t width; uint32_t height; };
+  struct PendingConfiguration { std::string id; uint32_t fps; uint32_t width; uint32_t height; uint32_t render_fps; };
   std::optional<PendingConfiguration> pending_configuration;
   bool keep_host = false;
   while (true) {
@@ -996,19 +999,19 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
     }
     std::string_view request_id;
     if (parse_diagnostics_command(command, request_id)) write_diagnostics_event(request_id, screen_audio.snapshot());
-    uint32_t next_frame_rate = 0, next_width = 0, next_height = 0;
-    if (!pending_configuration && parse_configure_command(command, request_id, next_frame_rate, next_width, next_height)) {
+    uint32_t next_frame_rate = 0, next_width = 0, next_height = 0, next_render_fps = 0;
+    if (!pending_configuration && parse_configure_command(command, request_id, next_frame_rate, next_width, next_height, next_render_fps)) {
       if (recording.active()) {
         const std::lock_guard<std::mutex> lock(g_output_mutex);
         std::cout << "{\"event\":\"captureConfigurationRejected\",\"requestId\":\"" << request_id
-                  << "\",\"sessionId\":\"" << g_host.session_id << "\",\"maxFps\":" << video.fps_num
+                  << "\",\"sessionId\":\"" << g_host.session_id << "\",\"maxFps\":" << g_host.share_fps
                   << ",\"width\":" << video.base_width << ",\"height\":" << video.base_height << "}\n" << std::flush;
         continue;
       }
       obs_remove_main_rendered_callback(render_shared_frame, source);
       const std::lock_guard<std::mutex> render_lock(g_render_mutex);
       g_host.configuration_paused = true;
-      pending_configuration = PendingConfiguration{std::string(request_id), next_frame_rate, next_width, next_height};
+      pending_configuration = PendingConfiguration{std::string(request_id), next_frame_rate, next_width, next_height, next_render_fps};
     }
     if (pending_configuration) {
       bool slots_released;
@@ -1019,7 +1022,7 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
       // 等待期间继续处理 release 命令，不能在命令线程阻塞归还路径。
       if (slots_released) {
         const auto &next = *pending_configuration;
-        if (!configure_video(video, item, next.id, next.fps, next.width, next.height)) break;
+        if (!configure_video(video, item, next.id, next.fps, next.width, next.height, next.render_fps)) break;
         pending_configuration.reset();
         {
           const std::lock_guard<std::mutex> render_lock(g_render_mutex);

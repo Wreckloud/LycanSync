@@ -1442,6 +1442,8 @@ function participantListening(participant: Participant) {
                       :share-audio="sharingAudio" :audio-mode="rtc.currentScreenShareAudioMode"
                       :share-audio-restricted="rtc.screenShareAudioRestricted"
                       :recording-active="recording.active.value" :recording-busy="recording.busy.value" :recording-elapsed="recording.elapsed.value"
+                      :replay-active="recording.replayActive.value" :replay-saving="recording.state.value.replay?.saving"
+                      :replay-error="!!recording.state.value.replay?.error" @save-replay="recording.saveReplay"
                       @recording="recording.active.value ? recording.stop() : recording.start()"
                       @recording-settings="openSettings('recording', $event)"
                       @microphone="toggleMicrophone" @listening="toggleListening"
