@@ -4,6 +4,7 @@ import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
 import { computed, effectScope, onScopeDispose, reactive, ref, watch } from 'vue';
 import { VideoQuality } from 'livekit-client';
+import { motionDurationMs } from '../styles/motion';
 import { expect, it, vi } from 'vitest';
 
 const script = parse(readFileSync(new URL('./CallViewingPanel.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
@@ -20,7 +21,7 @@ function fixture() {
   const view = reactive({ shares: [], mode: 'grid', expanded: false, membersVisible: true, height: 240, collapse: vi.fn() });
   const context = { withDefaults: (props: object, defaults: object) => ({ ...defaults, ...props }), defineProps: () => ({ view }), defineEmits: () => emit,
     useViewingSize: () => ({ width: ref(600), height: ref(300), maximumHeight: ref(420), resizing: ref(false) }),
-    computed, ref, watch, onScopeDispose, setInterval, clearInterval, onMounted: () => {}, VideoQuality, performance,
+    computed, ref, watch, onScopeDispose, setInterval, clearInterval, onMounted: () => {}, VideoQuality, performance, motionDurationMs,
     api: null as unknown as { panel: { value: unknown }; toggleExpanded(): void; expandMembers(): void;
       escape(event: KeyboardEvent): void; elapsed(share: { observedAt: number }): string; now: { value: number } } };
   const scope = effectScope();

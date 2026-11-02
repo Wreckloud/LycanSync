@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { motionDurationMs } from '../styles/motion';
 import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
 import { ArrowLeft, ChevronDown, ChevronUp, Fullscreen, Maximize2, X } from '@lucide/vue';
@@ -139,7 +140,7 @@ watch(() => props.view.expanded, async () => {
   const active = element.animate([
     { top: `${top + before.top - after.top}px`, left: `${left + before.left - after.left}px`, width: `${before.width}px`, height: `${before.height}px` },
     { top: `${top}px`, left: `${left}px`, width: `${after.width}px`, height: `${after.height}px` },
-  ], { duration: Number.parseFloat(style.getPropertyValue('--motion-layout-duration')),
+  ], { duration: motionDurationMs(style.getPropertyValue('--motion-layout-duration')),
     easing: style.getPropertyValue('--motion-ease').trim() });
   panelAnimation = active;
   active.finished.then(() => { if (panelAnimation === active) stopPanelMotion(); }, () => {});
