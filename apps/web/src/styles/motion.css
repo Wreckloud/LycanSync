@@ -40,6 +40,9 @@
 .entry-page-enter-active { animation: entry-mode-in calc(var(--motion-feedback-duration) + var(--motion-surface-duration)) var(--motion-ease) both; }
 .entry-page-leave-active { position: absolute; inset: 0; pointer-events: none; transition: opacity var(--motion-feedback-duration) var(--motion-ease); }
 .entry-page-leave-to { opacity: 0; }
+.entry-shell-enter-active, .entry-shell-leave-active { transition: opacity var(--motion-surface-duration) ease-in-out; }
+.entry-shell-enter-from, .entry-shell-leave-to { opacity: 0; }
+.entry-shell-leave-active { position: fixed; z-index: 4; inset: 0; pointer-events: none; }
 
 .group-header-region { display: grid; grid-template-rows: 1fr; visibility: visible; transition: opacity var(--motion-surface-duration) ease; }
 .group-header-clip { min-height: 0; overflow: visible; }
@@ -55,8 +58,8 @@
 .layout-reveal-leave-active { pointer-events: none; }
 
 .settings-view { clip-path: inset(0); }
-.settings-page-enter-active, .settings-page-leave-active { transition: clip-path var(--motion-expand-duration) var(--motion-ease); }
-.settings-page-enter-from, .settings-page-leave-to { clip-path: inset(0 0 0 calc(100% - 24px)); }
+.settings-page-enter-active, .settings-page-leave-active { transition: clip-path var(--motion-expand-duration) ease-in-out; }
+.settings-page-enter-from, .settings-page-leave-to { clip-path: inset(0 0 0 100%); }
 .settings-page-leave-active { pointer-events: none; }
 .app-loading { position: fixed; z-index: 4; inset: var(--titlebar-height) 0 0; display: flex; align-items: center; justify-content: center; gap: 10px; background: var(--panel); color: var(--muted); font-size: 13px; }
 .app-loading-identity { display: grid; justify-items: center; gap: 12px; min-width: 0; }

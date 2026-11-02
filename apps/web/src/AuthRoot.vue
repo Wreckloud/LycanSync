@@ -352,6 +352,7 @@ onMounted(async () => {
     <LogoutConfirmDialog v-if="removeConfirm" mode="remove" :administrator="entryUser?.administrator ?? false"
       :busy="removing" :error="error" @cancel="removeConfirm = false" @confirm="clearLocalSession" />
   </DialogTransition>
+  <Transition name="entry-shell" @before-enter="($event as HTMLElement).inert = false" @before-leave="($event as HTMLElement).inert = true">
   <div v-if="!user || onboarding || accessOffer" class="app-shell entry-shell">
     <header class="titlebar" :class="{ 'desktop-titlebar': desktop }">
       <div class="brand">LycanSync</div>
@@ -432,6 +433,7 @@ onMounted(async () => {
     </Transition>
     </div>
   </div>
+  </Transition>
 </template>
 
 <style scoped>

@@ -10,7 +10,7 @@ test('邀请模式不展示测试密码注册入口', async ({ page }) => {
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: false } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ status: 401, json: { detail: '请先登录' } }));
   await page.goto('/');
-  await expect(page.getByText('请打开服主发来的邀请或恢复登录链接', { exact: false })).toBeVisible();
+  await expect(page.getByText('新成员使用服主发来的邀请链接', { exact: false })).toBeVisible();
   await expect(page.getByLabel('用户名', { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('密码', { exact: true })).toHaveCount(0);
 });

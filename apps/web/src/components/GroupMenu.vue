@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onScopeDispose, ref } from 'vue';
-import { ChevronDown } from '@lucide/vue';
+import { ArrowRightLeft, ChevronDown, LogOut, Pencil, Trash2, UserPlus, UsersRound } from '@lucide/vue';
 import type { GroupSummary } from '../group/groupApi';
 
 defineProps<{ group: GroupSummary }>();
@@ -30,15 +30,15 @@ onScopeDispose(() => document.removeEventListener('pointerdown', dismiss));
     <Transition name="group-menu">
     <div v-if="open" class="group-menu-options" aria-label="群组操作">
       <template v-if="group.role === 'OWNER'">
-        <button type="button" @click="choose('edit')">编辑群组资料</button>
-        <button type="button" @click="choose('invite')">邀请成员</button>
-        <button type="button" @click="choose('members')">管理成员</button>
-        <button type="button" @click="choose('transfer')">转让群主</button>
+        <button type="button" @click="choose('edit')"><Pencil :size="15" aria-hidden="true" />编辑群组资料</button>
+        <button type="button" @click="choose('invite')"><UserPlus :size="15" aria-hidden="true" />邀请成员</button>
+        <button type="button" @click="choose('members')"><UsersRound :size="15" aria-hidden="true" />管理成员</button>
+        <button type="button" @click="choose('transfer')"><ArrowRightLeft :size="15" aria-hidden="true" />转让群主</button>
         <div class="group-menu-session">
-          <button type="button" class="group-danger" @click="choose('dissolve')">解散群聊</button>
+          <button type="button" class="group-danger" @click="choose('dissolve')"><Trash2 :size="15" aria-hidden="true" />解散群聊</button>
         </div>
       </template>
-      <button v-else type="button" class="group-danger" @click="choose('leave')">退出群聊</button>
+      <button v-else type="button" class="group-danger" @click="choose('leave')"><LogOut :size="15" aria-hidden="true" />退出群聊</button>
     </div>
     </Transition>
   </div>
@@ -52,7 +52,8 @@ onScopeDispose(() => document.removeEventListener('pointerdown', dismiss));
 .group-menu-trigger svg.is-open { transform: rotate(180deg); }
 .group-menu-trigger svg { transition: transform var(--motion-feedback-duration) ease; }
 .group-menu-options { position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; display: grid; min-width: 180px; padding: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-raised); }
-.group-menu-options button { display: flex; align-items: center; justify-content: flex-start; width: 100%; min-height: 32px; padding: 6px 10px; border: 0; border-radius: 5px; background: transparent; font-size: 14px; line-height: 20px; text-align: left; }
+.group-menu-options button { display: flex; align-items: center; justify-content: flex-start; gap: 8px; width: 100%; min-height: 32px; padding: 6px 10px; border: 0; border-radius: 5px; background: transparent; font-size: 14px; line-height: 20px; text-align: left; }
+.group-menu-options button > svg { flex-shrink: 0; }
 .group-menu-options button:hover { background: var(--panel-soft); }
 .group-menu-session { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border-soft); }
 .group-menu-options .group-danger { color: var(--danger); }

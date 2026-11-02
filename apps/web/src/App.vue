@@ -1442,7 +1442,7 @@ function participantListening(participant: Participant) {
               :members="selectedGroupDetail?.members ?? []" :user="user" @initial-load="initialChatGroupId = $event" />
             <div v-else class="group-empty">
               <p v-if="groupError" role="alert">{{ groupError }}</p>
-              <p v-else>还没有群组，点击左侧的 + 创建一个开黑小队。</p>
+              <p v-else class="group-empty-hint">还没有群组，点击左侧的 + 创建一个开黑小队。</p>
               <button v-if="groupError" type="button" @click="refreshGroups()">重新读取群组</button>
             </div>
             <Transition enter-active-class="callbar-enter-active">
