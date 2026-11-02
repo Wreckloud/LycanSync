@@ -300,6 +300,11 @@ impl ActivityDetector {
                     None,
                 )
             } else if !launcher && (game.is_some() || known.is_some()) {
+                let installed_name = game.map(|game| {
+                    known_games::bundled()
+                        .localized_install_name(&game.key)
+                        .unwrap_or(&game.name)
+                });
                 let override_name = mappings.iter().rev().find(|mapping| {
                     mapping.executable == process.executable
                         || game.is_some_and(|game| mapping.executable.starts_with(&game.directory))
@@ -314,9 +319,13 @@ impl ActivityDetector {
                         .unwrap_or_else(|| game.unwrap().key.clone()),
                     ActivityType::Game,
                     display_name(
-                        known
-                            .map(|known| known.display_name(game.map(|game| game.name.as_str())))
-                            .unwrap_or_else(|| game.unwrap().name.as_str()),
+                        // 安装标识明确时保留该版本名称，避免本篇短名覆盖试玩版或其他同名作品。
+                        game.and_then(|game| {
+                            known_games::bundled().localized_install_name(&game.key)
+                        })
+                        .or_else(|| known.map(|known| known.display_name(installed_name)))
+                        .or(installed_name)
+                        .expect("自动游戏必须有规则或安装清单身份"),
                     ),
                     override_name.map(|mapping| display_name(&mapping.name)),
                 )
@@ -951,6 +960,100 @@ mod tests {
         );
         assert_eq!(options.len(), 1);
         assert_eq!(options[0].title, "窗口名称");
+    }
+
+    #[test]
+    fn common_names_stay_readable_and_install_versions_remain_distinct() {
+        for (executable, expected) in [
+            ("c:/games/hearthstone.exe", "炉石传说"),
+            ("c:/games/peak/peak.exe", "PEAK"),
+            ("c:/games/repo/repo.exe", "R.E.P.O."),
+        ] {
+            assert_eq!(
+                select_activity(&[process(1, executable, 100)], &[], &[], &[])
+                    .unwrap()
+                    .name,
+                expected
+            );
+        }
+        for (key, expected) in [
+            ("steam:2200650", "啵点节奏 试玩版"),
+            ("steam:1929290", "啵点节奏"),
+            ("steam:271590", "GTA V 传承版"),
+            ("steam:3240220", "GTA V 增强版"),
+            ("steam:265300", "堕落之王"),
+            ("steam:1501750", "堕落之主"),
+        ] {
+            let installed = [GameInstall {
+                key: key.into(),
+                name: "English title".into(),
+                directory: normalize_path("d:/selected/"),
+            }];
+            assert_eq!(
+                select_activity(
+                    &[process(1, "d:/selected/unknown.exe", 100)],
+                    &[],
+                    &installed,
+                    &[]
+                )
+                .unwrap()
+                .name,
+                expected
+            );
+        }
+        let standalone = [process(1, "d:/games/lordsofthefallen.exe", 100)];
+        assert_eq!(
+            select_activity(&standalone, &[], &[], &[]).unwrap().name,
+            "Lords of the Fallen"
+        );
+    }
+
+    #[test]
+    fn localized_install_name_works_without_a_process_database_entry() {
+        let installed = [GameInstall {
+            key: "steam:10".into(),
+            name: "Counter-Strike".into(),
+            directory: normalize_path("d:/steam/counter-strike/"),
+        }];
+        let processes = [process(1, "d:/steam/counter-strike/unknown-game.exe", 100)];
+        let selected = select_activity(&processes, &[], &installed, &[]).unwrap();
+        assert_eq!(selected.name, "反恐精英");
+    }
+
+    #[test]
+    fn chinese_name_wins_over_english_manifest_and_process_rules() {
+        let installed = [GameInstall {
+            key: "steam:1887840".into(),
+            name: "Another Crab's Treasure".into(),
+            directory: normalize_path("d:/steam/common/crab/"),
+        }];
+        let processes = [process(
+            1,
+            "d:/steam/common/crab/anothercrabstreasure.exe",
+            100,
+        )];
+        let activity = select_activity(&processes, &[], &installed, &[]).unwrap();
+        assert_eq!(activity.name, "蟹蟹寻宝奇遇");
+        let standalone = [process(
+            1,
+            "d:/games/Another Crab's Treasure/anothercrabstreasure.exe",
+            100,
+        )];
+        assert_eq!(
+            select_activity(&standalone, &[], &[], &[]).unwrap().name,
+            activity.name
+        );
+
+        let mappings = [ActivityMapping {
+            executable: processes[0].executable.clone(),
+            name: "自己指定的名字".into(),
+        }];
+        assert_eq!(
+            select_activity(&processes, &[], &installed, &mappings)
+                .unwrap()
+                .name,
+            "自己指定的名字"
+        );
     }
 
     #[test]

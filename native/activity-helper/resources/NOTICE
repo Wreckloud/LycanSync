@@ -6,7 +6,25 @@ source.sha256 标识本次导入的原始响应；此数据来源不承诺第三
 第三方游戏名称与标识属于各自权利人；本项目不将上游数据声明为 MIT 授权。
 未复制 arRPC 的实现代码，也不包含 Discord RPC 服务。
 
-game-overrides.json 维护常用中文展示名及少量行为修正，不是完整翻译库。
-维护时编辑该文件，再从 apps/web 运行 npm run update:activity-catalog（使用 Windows PowerShell 系统代理下载）；
+game-names.json 通过 Steam AppID 关联批量名称，优先使用 Steam 简体中文商店名，
+商店仍为英文或不可用时使用 Wikidata 简体/中文标签。每个名称保留来源引用。
+Wikidata 结构化数据按 CC0 发布：https://www.wikidata.org/wiki/Wikidata:Licensing
+Steam 名称来自公开的 IStoreBrowseService/GetItems 接口，保留游戏权利人的名称权益，
+不将 Steam 数据声明为 MIT 授权；公共接口可能变化，不承诺覆盖所有中文名。
+相同 AppID 的多实体冲突、不同版本的名称冲突不自动猜测；不做机器翻译。
+game-overrides.json 维护名称、安装标识及行为修正，人工修正优先于批量名称。
+displayName 可指定通行英文名或明确短名；nameInstallKey 指定已核对的默认名称来源，
+installKeys 修正上游误关联。更新原始规则和仅更新名称均会应用这些数据修正。
+展示名称只移除与原名完整重复的英文、外层书名号及商标符号，不任意翻译或截断。
+原始名称与中文来源仍保留；已有安装标识使用该版本名称，保留试玩/重制等区别。
+
+从 apps/web 运行 npm run update:activity-names 获取全部现有规则的 Steam AppID 名称，
+并合并全量 Wikidata Steam 中文标签；该命令同步刷新现有离线规则快照。
+默认复用 release/build-cache/game-names 中成功批次，失败后可继续；
+需要重新查询全部来源时使用 npm run update:activity-names -- -Refresh。
+采集器使用 Windows PowerShell 系统代理；仅维护时联网，安装客户端不联网查名称。
+更新进程识别规则则运行 npm run update:activity-catalog；
+完整同步使用 npm run update:activity-data（先更新规则，再采集新规则中的全部标识），
+重新查询缓存数据时使用 npm run update:activity-data -- -Refresh；
 也可用 node native/activity-helper/update-game-catalog.cjs --source <上游JSON文件> 离线生成。
-生成失败不替换已有快照；通过 helper 测试后，连同快照随客户端版本发布。
+生成失败不替换对应的已有快照；通过 npm run test:activity 后，连同数据随客户端发布。

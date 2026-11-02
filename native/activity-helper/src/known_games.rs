@@ -24,14 +24,16 @@ pub struct KnownGame {
     pub id: String,
     name: String,
     name_zh_cn: Option<String>,
+    display_name: Option<String>,
     install_keys: Vec<String>,
     executables: Vec<ExecutableRule>,
 }
 
 impl KnownGame {
     pub fn display_name<'a>(&'a self, installed_name: Option<&'a str>) -> &'a str {
-        self.name_zh_cn
+        self.display_name
             .as_deref()
+            .or(self.name_zh_cn.as_deref())
             .or(installed_name)
             .unwrap_or(&self.name)
     }
@@ -45,6 +47,7 @@ impl KnownGame {
 struct Snapshot {
     schema_version: u32,
     games: Vec<KnownGame>,
+    localized_names: HashMap<String, String>,
 }
 
 pub struct GameMatch<'a> {
@@ -56,6 +59,7 @@ pub struct GameCatalog {
     games: Vec<KnownGame>,
     by_executable: HashMap<String, Vec<(usize, usize)>>,
     by_install_key: HashMap<String, Option<usize>>,
+    localized_names: HashMap<String, String>,
 }
 
 impl GameCatalog {
@@ -67,6 +71,7 @@ impl GameCatalog {
         }
         let mut catalog = Self {
             games: snapshot.games,
+            localized_names: snapshot.localized_names,
             by_executable: HashMap::new(),
             by_install_key: HashMap::new(),
         };
@@ -92,6 +97,10 @@ impl GameCatalog {
     pub fn installed_game(&self, key: &str) -> Option<&KnownGame> {
         let index = self.by_install_key.get(key)?.as_ref()?;
         Some(&self.games[*index])
+    }
+
+    pub fn localized_install_name(&self, key: &str) -> Option<&str> {
+        self.localized_names.get(key).map(String::as_str)
     }
 
     pub fn needs_arguments(&self, executable: &str) -> bool {
@@ -211,7 +220,7 @@ mod tests {
     #[test]
     fn equal_rules_for_different_games_are_not_guessed_and_specific_paths_win() {
         let catalog = GameCatalog::from_json(
-            r#"{"schema_version":1,"games":[
+            r#"{"schema_version":1,"localized_names":{},"games":[
                 {"id":"1","name":"A","install_keys":[],"executables":[{"path":"game.exe","role":"game"}]},
                 {"id":"2","name":"B","install_keys":[],"executables":[{"path":"game.exe","role":"game"},
                     {"path":"b\\game.exe","role":"game"}]}
