@@ -475,13 +475,13 @@ test('离线资料卡展示冻结的上次在线和最近游戏，在线只展�
   const card = page.getByRole('dialog', { name: '成员资料', exact: true });
   await friend.hover();
   await expect(card).toContainText('上次在线：半小时前');
-  await expect(card).toContainText('20分钟前 · 玩了约1小时《最终幻想14》');
+  await expect(card).toContainText('不久前玩了一个多小时的 最终幻想14');
   await expect(card).toHaveCSS('opacity', '1');
   await page.screenshot({ path: test.info().outputPath('offline-history.png') });
   status = 'ONLINE';
   await page.reload();
   await friend.hover();
-  await expect(card).toContainText('20分钟前 · 玩了约1小时');
+  await expect(card).toContainText('不久前玩了一个多小时的 最终幻想14');
   await expect(card).not.toContainText('上次在线');
   known = false;
   status = 'OFFLINE';

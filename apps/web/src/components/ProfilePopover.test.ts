@@ -184,13 +184,15 @@ it('历史用同一计时器按分钟更新，在线不展示上次在线，收�
     f.props.recentGame = { name: '游戏', endedAt: new Date(Date.now() - 30_000).toISOString(), playedSeconds: 3600 };
     f.props.anchor = { ownerDocument: f.document }; await nextTick();
     expect(f.state.lastOnline.value).toBe('刚刚');
-    expect(f.state.recentGameDescription.value).toContain('玩了约1小时');
+    expect(f.state.recentGameDescription.value).toBe('刚刚玩了一个多小时的 游戏');
     expect(vi.getTimerCount()).toBe(1);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(f.state.lastOnline.value).toBe('1分钟前');
     f.props.status = 'ONLINE'; await nextTick();
     expect(f.state.lastOnline.value).toBe('');
-    expect(f.state.recentGameDescription.value).toContain('1分钟前');
+    expect(f.state.recentGameDescription.value).toBe('刚刚玩了一个多小时的 游戏');
+    await vi.advanceTimersByTimeAsync(4 * 60_000);
+    expect(f.state.recentGameDescription.value).toBe('不久前玩了一个多小时的 游戏');
     f.props.anchor = null; await nextTick();
     expect(vi.getTimerCount()).toBe(0);
   } finally { f.scope.stop(); }
