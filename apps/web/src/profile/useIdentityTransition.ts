@@ -103,7 +103,9 @@ export function useIdentityTransition(state: () => IdentityState, layoutReady: (
     if (target.length !== 2 || to.some(bounds => bounds.width <= 0 || bounds.height <= 0)) { clear(); return; }
     hide(target);
     const style = window.getComputedStyle(target[0]!);
-    const duration = Number.parseFloat(style.getPropertyValue('--motion-identity-duration'));
+    const durationText = style.getPropertyValue('--motion-identity-duration').trim();
+    const duration = durationText.endsWith('ms') ? Number.parseFloat(durationText)
+      : durationText.endsWith('s') ? Number.parseFloat(durationText) * 1000 : 0;
     if (!Number.isFinite(duration) || duration <= 0 || typeof target[0]!.animate !== 'function') { clear(); return; }
     animations = from.map(({ copy, bounds }, index) => {
       const end = to[index]!;

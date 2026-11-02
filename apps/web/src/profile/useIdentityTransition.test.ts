@@ -4,7 +4,7 @@ import { useIdentityTransition } from './useIdentityTransition';
 
 afterEach(() => vi.unstubAllGlobals());
 
-function fixture() {
+function fixture(duration = '260ms') {
   const animations: { cancel: ReturnType<typeof vi.fn>; finish(): void }[] = [];
   const animate = vi.fn((_frames: Keyframe[], _options: KeyframeAnimationOptions) => {
     let finish!: () => void;
@@ -44,7 +44,7 @@ function fixture() {
     requestAnimationFrame: (callback: () => void) => { frames.set(++frameId, callback); return frameId; },
     cancelAnimationFrame: (id: number) => frames.delete(id),
     getComputedStyle: (element: Element) => ({ ...element.style, font: '16px sans-serif', fontSize: '16px', lineHeight: '20px',
-      getPropertyValue: (name: string) => name === '--motion-identity-duration' ? '260ms' : 'ease' }),
+      getPropertyValue: (name: string) => name === '--motion-identity-duration' ? duration : 'ease' }),
   });
   vi.stubGlobal('document', {
     querySelector: (selector: string) => identities[selector.split('"')[1]!],
@@ -146,5 +146,14 @@ it('桌面窗口收紧后将窗口外的起点收回可见边缘，不从窗口�
       { transform: 'none', width: '48px' },
       { transform: 'translate(20px, 0px) scale(1, 1)', width: '48px' },
     ]);
+  } finally { f.scope.stop(); }
+});
+
+it('生产样式将毫秒压缩成秒后，身份过渡仍使用相同的实际时长', async () => {
+  const f = fixture('.26s');
+  try {
+    f.state.value.phase = 'loading';
+    await f.flush();
+    expect(f.animate.mock.calls[0]?.[1].duration).toBe(260);
   } finally { f.scope.stop(); }
 });

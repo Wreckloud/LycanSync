@@ -72,7 +72,9 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
   function animateSurface(element: HTMLElement, from: number, to: number, finish?: () => void, offset?: number) {
     const owner = element.ownerDocument.defaultView!;
     const style = owner.getComputedStyle(element);
-    const duration = Number.parseFloat(style.getPropertyValue('--motion-layout-duration'));
+    const durationText = style.getPropertyValue('--motion-layout-duration').trim();
+    const duration = durationText.endsWith('ms') ? Number.parseFloat(durationText)
+      : durationText.endsWith('s') ? Number.parseFloat(durationText) * 1000 : 0;
     const unchanged = offset === undefined ? Math.abs(from - to) < 1 : !Number.isFinite(offset) || Math.abs(offset) < 1;
     if (preference?.matches || unchanged || typeof element.animate !== 'function'
       || !Number.isFinite(duration) || duration <= 0) {
