@@ -2,7 +2,6 @@
 import '../settings/settings.css';
 import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
-import { ArrowLeft } from '@lucide/vue';
 import type { AuthUser, ProfileUpdate } from '../auth/authApi';
 import type { useAudioPreferences } from '../rtc/useAudioPreferences';
 import type { useRtcRoom } from '../rtc/useRtcRoom';
@@ -12,8 +11,6 @@ import type { useAudioOutput } from '../rtc/useAudioOutput';
 import type { useDiagnosticReport } from '../diagnostics/useDiagnosticReport';
 import type { useActivityMappings } from '../settings/useActivityMappings';
 import type { useVoiceOverlay } from '../overlay/useVoiceOverlay';
-import IconButton from './IconButton.vue';
-import PersonalStatusCard from './PersonalStatusCard.vue';
 import AboutSettings from './settings/AboutSettings.vue';
 import AccountSettings from './settings/AccountSettings.vue';
 import MemberAccessSettings from './settings/MemberAccessSettings.vue';
@@ -30,18 +27,11 @@ import type { useCallSounds } from '../rtc/useCallSounds';
 import RecordingSettings from './settings/RecordingSettings.vue';
 import type { useRecording } from '../recording/useRecording';
 import { SETTINGS_SECTIONS, settingsSectionTitle, type SettingsSectionId } from '../settings/settingsSections';
-import type { UserActivity, UserPresenceStatus } from '../presence/presenceApi';
-import type { PresenceMode } from '../presence/usePresencePreference';
+import type { UserActivity } from '../presence/presenceApi';
 
 const props = defineProps<{
   section: SettingsSectionId;
   user: AuthUser;
-  presenceStatus: UserPresenceStatus;
-  presenceLabel: string;
-  presenceMode: PresenceMode;
-  presenceReady: boolean;
-  presenceSyncing: boolean;
-  presenceError: string;
   blocked?: boolean;
   desktop: boolean;
   audioShortcuts: UnwrapNestedRefs<ReturnType<typeof useAudioShortcuts>>;
@@ -57,14 +47,13 @@ const props = defineProps<{
   diagnosticReport: ReturnType<typeof useDiagnosticReport>;
   inputLevelPercent: number;
   activity: UserActivity | null;
-  activityStatus?: { type: UserActivity['type']; text: string; startedAt?: string } | null;
   showActivity: boolean;
   showLastOnline: boolean;
   activityError: string;
   activityMappings: ReturnType<typeof useActivityMappings>;
   saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
 }>();
-const emit = defineEmits<{ close: []; logout: []; activityVisibility: [enabled: boolean]; lastOnlineVisibility: [enabled: boolean]; presenceMode: [mode: PresenceMode] }>();
+const emit = defineEmits<{ close: []; logout: []; activityVisibility: [enabled: boolean]; lastOnlineVisibility: [enabled: boolean] }>();
 const heading = ref<HTMLElement | null>(null);
 const profileSettings = ref<InstanceType<typeof ProfileSettings> | null>(null);
 const clientSettings = ref<InstanceType<typeof ClientSettings> | null>(null);
@@ -114,6 +103,7 @@ async function leaveSettings(logout: boolean) {
     leaving.value = false;
   }
 }
+defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, leaving });
 </script>
 
 <template>
@@ -124,13 +114,7 @@ async function leaveSettings(logout: boolean) {
           :class="{ 'is-selected': activeSection === item.id }" :aria-current="activeSection === item.id ? 'page' : undefined"
           :disabled="leaving" @click="selectSection(item.id)">{{ item.title }}</button>
       </div>
-      <PersonalStatusCard class="settings-footer" aria-label="个人状态与返回应用"
-        :user="user" :status="presenceStatus" :status-label="presenceLabel" :activity-status="activityStatus"
-        menu-enabled :active="!interactionBlocked && !leaving" :presence-mode="presenceMode" :presence-ready="presenceReady"
-        :presence-syncing="presenceSyncing" :presence-error="presenceError"
-        @settings="selectSection" @logout="requestLogout" @presence-mode="emit('presenceMode', $event)">
-        <IconButton label="返回应用" :disabled="leaving" @click="closeSettings"><ArrowLeft :size="19" /></IconButton>
-      </PersonalStatusCard>
+      <div class="settings-footer-space" aria-hidden="true" />
     </nav>
     <section class="settings-main">
       <header class="settings-header">
@@ -190,7 +174,7 @@ async function leaveSettings(logout: boolean) {
 .settings-navigation > button { flex: 0 0 auto; min-height: 38px; padding: 8px 11px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); text-align: left; cursor: pointer; }
 .settings-navigation > button:hover { background: var(--panel-soft); color: var(--text); }
 .settings-navigation > button.is-selected { background: var(--panel-raised); color: var(--text); }
-.settings-footer { background: var(--panel-sidebar); }
+.settings-footer-space { height: calc(var(--voice-bar-height) + var(--voice-bar-bottom-space)); }
 .settings-main { grid-area: main; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--panel); }
 .settings-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 64px; padding: 12px 24px; border-bottom: 1px solid var(--border-soft); }
 .settings-header-content { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; max-width: 820px; margin-inline: auto; }

@@ -19,6 +19,7 @@ import {
   type ProfileUpdate,
 } from './auth/authApi';
 import { sendPresenceHeartbeat } from './presence/presenceApi';
+import { useIdentityTransition } from './profile/useIdentityTransition';
 
 const desktop = window.lycanDesktop;
 const application = ref<InstanceType<typeof App> | null>(null);
@@ -49,6 +50,8 @@ const startupChecking = ref(Boolean(desktop));
 const updateState = ref<StartupUpdateState | null>(null);
 const updateWarning = ref('');
 const entryRoot = ref<HTMLElement | null>(null);
+const applicationReady = ref(false);
+watch(() => user.value?.id, () => { applicationReady.value = false; }, { flush: 'sync' });
 const windowMode = computed(() => {
   if (startupChecking.value) return 'startup';
   // 退出清理期间保留主窗口尺寸，完成后再切回账号页。
@@ -68,6 +71,14 @@ let sessionHeartbeat: number | null = null;
 let sessionHeartbeatInFlight = false;
 let logoutInProgress = false;
 let initializationRequest: AbortController | null = null;
+let windowLayoutTask: Promise<unknown> = Promise.resolve();
+
+useIdentityTransition(() => ({
+  id: (user.value ?? entryUser.value)?.id ?? null,
+  phase: startupChecking.value || accessOffer.value ? null
+    : user.value ? (applicationReady.value ? 'main' : 'loading')
+      : logoutBusy.value ? 'leaving' : onboarding.value ? 'profile' : 'account',
+}), () => windowLayoutTask);
 
 function updateWindowLayout() {
   layoutFrame = undefined;
@@ -88,7 +99,7 @@ function updateWindowLayout() {
   const signature = `${windowMode.value}:${height}`;
   if (signature === lastWindowLayout) return;
   lastWindowLayout = signature;
-  void desktop.setWindowLayout(windowMode.value, height).catch(() => {
+  windowLayoutTask = desktop.setWindowLayout(windowMode.value, height).catch(() => {
     if (!disposed) error.value = '窗口尺寸调整失败，请重新打开应用。';
   });
 }
@@ -386,7 +397,7 @@ onMounted(async () => {
 <template>
   <App v-if="user && !onboarding" v-show="!accessOffer" ref="application" :user="user" :window-maximized="windowMaximized" :save-profile="saveProfile"
     :interaction-blocked="Boolean(accessOffer || logoutTarget)"
-    :startup-update-warning="updateWarning" @dismiss-update-warning="updateWarning = ''" @logout="requestLogout" />
+    :startup-update-warning="updateWarning" @dismiss-update-warning="updateWarning = ''" @logout="requestLogout" @ready="applicationReady = true" />
   <DialogTransition>
     <LogoutConfirmDialog v-if="logoutTarget" :administrator="logoutTarget.administrator" :busy="logoutBusy" :error="error"
       @cancel="logoutTarget = null" @confirm="confirmLogout" />
@@ -414,10 +425,10 @@ onMounted(async () => {
         <p>登录 LycanSync，继续和朋友一起玩。</p>
         <p v-if="!ready">正在连接服务器…</p>
         <template v-else-if="ready">
-          <div v-if="entryUser" class="account-preview">
-            <img v-if="entryUser.avatar" :src="entryUser.avatar" alt="账号头像" referrerpolicy="no-referrer" />
-            <span v-else class="account-avatar-placeholder"><UserRound :size="26" aria-hidden="true" /></span>
-            <div><strong>{{ entryUser.nickname }}</strong><small>{{ entryUser.administrator ? '服主' : '成员' }} · {{ serverAddress || pageOrigin }}</small></div>
+          <div v-if="entryUser" class="account-preview" data-identity="account">
+            <img v-if="entryUser.avatar" :src="entryUser.avatar" alt="账号头像" referrerpolicy="no-referrer" data-identity-avatar />
+            <span v-else class="account-avatar-placeholder" data-identity-avatar><UserRound :size="26" aria-hidden="true" /></span>
+            <div><strong data-identity-name>{{ entryUser.nickname }}</strong><small>{{ entryUser.administrator ? '服主' : '成员' }} · {{ serverAddress || pageOrigin }}</small></div>
           </div>
           <template v-if="entryUser">
             <label class="auto-login-option"><input type="checkbox" :checked="autoLogin"
@@ -471,7 +482,7 @@ onMounted(async () => {
 .account-avatar-placeholder { display: grid; place-items: center; width: 48px; height: 48px; flex-shrink: 0; border-radius: 50%; background: var(--panel-raised); color: var(--muted); }
 .account-preview img { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; }
 .account-preview > div { min-width: 0; }
-.account-preview strong { display: block; overflow-wrap: anywhere; }
+.account-preview strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-preview small { display: block; color: var(--muted); overflow-wrap: anywhere; }
 .auto-login-option { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
 .auto-login-option input { flex-shrink: 0; width: 16px; height: 16px; margin: 0; padding: 0; }

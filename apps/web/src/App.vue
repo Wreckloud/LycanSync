@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, reactive, ref, watch } from 'vue';
-import { AudioLines, Copy, CornerUpLeft, Headphones,
+import { ArrowLeft, AudioLines, Copy, CornerUpLeft, Headphones,
   LoaderCircle, LogOut, Minus, Plus, RadioTower,
-  Settings, Square, Volume2, X } from '@lucide/vue';
+  Settings, Square, UserRound, Volume2, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
 import ParticipantCard from './components/ParticipantCard.vue';
 import CallControls from './components/CallControls.vue';
@@ -59,7 +59,7 @@ const props = defineProps<{
   startupUpdateWarning?: string;
   interactionBlocked?: boolean;
 }>();
-const emit = defineEmits<{ logout: []; dismissUpdateWarning: [] }>();
+const emit = defineEmits<{ logout: []; dismissUpdateWarning: []; ready: [] }>();
 
 const STATUS_LABELS = { idle: '未加入语音', joining: '正在连接', connected: '语音已连接', reconnecting: '正在重连' };
 const CALLBAR_EXIT_DURATION_MS = 180;
@@ -447,6 +447,7 @@ const groupError = ref('');
 const summaryError = ref<string | null>(null);
 const groupLoading = ref(false);
 const initialLoading = ref(true);
+watch(initialLoading, loading => { if (!loading) emit('ready'); }, { flush: 'sync' });
 const initialGroupsLoaded = ref(false);
 const initialChatGroupId = ref<string | null>(null);
 watch(() => [initialGroupsLoaded.value, groupLoading.value, selectedGroupId.value, initialChatGroupId.value] as const,
@@ -912,11 +913,15 @@ const joiningGroupId = ref<string | null>(null);
 const pendingSwitchGroupId = ref<string | null>(null);
 const listening = computed(() => rtc.listening);
 const settingsOpen = ref(false);
+const settingsView = ref<InstanceType<typeof SettingsView> | null>(null);
 // 覆盖只影响绘制；保留聊天和观看尺寸，视频需求由各个观看位置单独控制。
 const settingsCovered = ref(false);
 const personalMenuOpen = ref(false);
 const profileCardsBlocked = computed(() => Boolean(props.interactionBlocked || settingsOpen.value || !mainWindowVisible.value
   || editorOpen.value || management.value || captureRequest.value || pendingSwitchGroupId.value || rtc.remoteControlRequest));
+const personalCardActive = computed(() => settingsOpen.value
+  ? Boolean(settingsView.value) && !settingsView.value?.interactionBlocked && !settingsView.value?.leaving
+  : !profileCardsBlocked.value);
 watch(profileCardsBlocked, blocked => { if (blocked) personalMenuOpen.value = false; });
 const recording = useRecording({
   track: () => rtc.room?.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track?.mediaStreamTrack,
@@ -958,6 +963,7 @@ const callbarLeaving = ref(false);
 watch(() => rtc.room, (room) => { if (room) mutedShares.value = []; }, { flush: 'sync' });
 
 async function openSettings(section: SettingsSectionId, event: Event | HTMLElement) {
+  if (settingsOpen.value) { await settingsView.value?.selectSection(section); return; }
   settingsReturnFocus.value = event instanceof HTMLElement ? event
     : event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
   settingsSection.value = section;
@@ -1353,7 +1359,12 @@ function participantListening(participant: Participant) {
     <div v-else-if="rtc.remoteControlRestoring" class="remote-control-owner-status" role="status">正在恢复原共享…</div>
     <Transition name="app-loading">
       <div v-if="initialLoading" class="app-loading" role="status" aria-live="polite">
-        <LoaderCircle :size="20" aria-hidden="true" /><span>正在准备群聊…</span>
+        <div class="app-loading-identity" data-identity="loading">
+          <img v-if="user.avatar" :src="user.avatar" alt="" referrerpolicy="no-referrer" data-identity-avatar />
+          <span v-else class="app-loading-avatar" data-identity-avatar><UserRound :size="26" aria-hidden="true" /></span>
+          <strong data-identity-name>{{ user.nickname }}</strong>
+          <span class="app-loading-status"><LoaderCircle :size="16" aria-hidden="true" />正在准备群聊…</span>
+        </div>
       </div>
     </Transition>
     <div class="app-content" v-show="mainWindowVisible" :style="{ visibility: settingsCovered ? 'hidden' : undefined }" :inert="initialLoading || settingsOpen || !!rtc.remoteControlRequest"
@@ -1462,13 +1473,21 @@ function participantListening(participant: Participant) {
             :member-count="selectedGroupDetail?.memberCount"
             :error="groupError" :connection-lost="presenceConnectionLost" :status="memberOnlineStatus"
             :status-label="memberStatusLabel" :activity="memberActivity" :presences="groupPresences" />
+        <div v-if="settingsOpen" class="personal-card-space" aria-hidden="true" />
+        <Teleport to="body" :disabled="!settingsOpen">
         <PersonalStatusCard :user="user" :status="publicPresenceStatus" :status-label="personalPresenceLabel"
-          v-model:menu-open="personalMenuOpen" menu-enabled :active="!profileCardsBlocked"
+          :aria-label="settingsOpen ? '个人状态与返回应用' : '个人状态与设置'"
+          :class="{ 'settings-footer': settingsOpen }" @keydown.esc.stop="settingsOpen && settingsView?.closeSettings()"
+          v-model:menu-open="personalMenuOpen" menu-enabled :active="personalCardActive"
           :presence-mode="presenceMode" :presence-ready="presenceReady" :presence-syncing="presenceSyncing"
           :presence-error="presencePreferenceError || presenceSyncError" @presence-mode="changePresenceMode"
-          :activity-status="personalActivityStatus" @settings="openSettings" @logout="emit('logout')">
-          <IconButton label="设置" @click="openSettings('account', $event)"><Settings :size="19" /></IconButton>
+          :activity-status="personalActivityStatus" @settings="openSettings" @logout="settingsOpen ? settingsView?.requestLogout() : emit('logout')">
+          <IconButton :label="settingsOpen ? '返回应用' : '设置'" :disabled="settingsOpen && !personalCardActive"
+            @click="settingsOpen ? settingsView?.closeSettings() : openSettings('account', $event)">
+            <component :is="settingsOpen ? ArrowLeft : Settings" :size="19" />
+          </IconButton>
         </PersonalStatusCard>
+        </Teleport>
         </div>
       </main>
     </div>
@@ -1483,14 +1502,11 @@ function participantListening(participant: Participant) {
     </div>
     <Transition name="settings-page" @after-enter="settingsCovered = settingsOpen" @enter-cancelled="settingsCovered = false"
       @before-leave="settingsCovered = false; ($event as HTMLElement).inert = true">
-    <SettingsView v-if="settingsOpen" :blocked="Boolean(props.interactionBlocked || rtc.remoteControlRequest || !mainWindowVisible)" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
+    <SettingsView v-if="settingsOpen" ref="settingsView" :blocked="Boolean(props.interactionBlocked || rtc.remoteControlRequest || !mainWindowVisible)" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
       :audio-shortcuts="audioShortcuts" :call-sound-preferences="callSoundPreferences" :call-sounds="callSounds"
       :overlay="desktop ? voiceOverlay : undefined"
-      :presence-status="publicPresenceStatus" :presence-label="personalPresenceLabel"
-      :presence-mode="presenceMode" :presence-ready="presenceReady" :presence-syncing="presenceSyncing"
-      :presence-error="presencePreferenceError || presenceSyncError" @presence-mode="changePresenceMode"
       :recording="recording" :preferences="audioPreferences" :audio-output="audioOutput" :rtc="rtc" :microphone-test="microphoneTest" :microphone-devices="microphoneDevices" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
-      :activity="currentActivity" :activity-status="personalActivityStatus" :show-activity="showActivity" :show-last-online="showLastOnline" :activity-error="activityVisibilityError || presenceSyncError"
+      :activity="currentActivity" :show-activity="showActivity" :show-last-online="showLastOnline" :activity-error="activityVisibilityError || presenceSyncError"
       :activity-mappings="activityMappings"
       @activity-visibility="setShowActivity" @last-online-visibility="setShowLastOnline"
       :save-profile="saveProfile" @close="closeSettings" @logout="emit('logout')" />

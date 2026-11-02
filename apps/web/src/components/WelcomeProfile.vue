@@ -63,10 +63,10 @@ async function save() {
         </button>
       </header>
       <div class="welcome-details">
-        <div class="welcome-identity">
+        <div class="welcome-identity" data-identity="profile">
           <div class="welcome-avatar-area"><button type="button" class="welcome-avatar" aria-label="修改头像" :disabled="busy || picking" @click="avatar ? editAvatar(avatar) : avatarInput?.click()">
-            <img v-if="avatar" :src="avatar" alt="头像预览" referrerpolicy="no-referrer" />
-            <UserRound v-else :size="42" />
+            <img v-if="avatar" :src="avatar" alt="头像预览" referrerpolicy="no-referrer" data-identity-avatar />
+            <span v-else class="welcome-avatar-visual" data-identity-avatar><UserRound :size="42" /></span>
             <span class="welcome-avatar-overlay" aria-hidden="true"><Pencil :size="20" /><span>编辑</span></span>
           </button><div class="avatar-actions">
             <button type="button" class="avatar-action" :disabled="busy || picking" @click="avatarInput?.click()">更换头像</button>
@@ -76,7 +76,7 @@ async function save() {
             <input v-if="editingNickname" ref="nicknameInput" v-model="nickname" aria-label="昵称" maxlength="32"
               :readonly="busy" :aria-invalid="!nickname.trim()" @blur="finishNicknameEdit" @keydown.enter="submitNickname" />
             <button v-else ref="nicknameButton" type="button" :aria-label="`修改昵称，${nickname}`" :disabled="busy" @click="editNickname">
-              <span>{{ nickname }}</span><Pencil :size="15" aria-hidden="true" />
+              <span data-identity-name>{{ nickname }}</span><Pencil :size="15" aria-hidden="true" />
             </button>
             <span class="welcome-registration">注册于 <time v-if="registrationDate" :datetime="user.createdAt">{{ registrationDate }}</time><span v-else>暂不可用</span></span>
           </div>
@@ -112,6 +112,7 @@ async function save() {
 .welcome-avatar-area { position: relative; flex-shrink: 0; }
 .welcome-avatar { position: relative; flex-shrink: 0; display: grid; place-items: center; width: 80px; height: 80px; padding: 0; overflow: hidden; border: 0; border-radius: 50%; background: var(--panel-raised); color: var(--muted); cursor: pointer; }
 .welcome-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.welcome-avatar-visual { display: grid; place-items: center; width: 80px; height: 80px; border-radius: inherit; background: var(--panel-raised); }
 .welcome-avatar-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; background: #0009; color: white; font-size: 12px; opacity: 0; }
 .welcome-avatar:hover .welcome-avatar-overlay, .welcome-avatar:focus-visible .welcome-avatar-overlay { opacity: 1; }
 .welcome-nickname { display: grid; grid-template-rows: 40px 20px; gap: 4px; flex: 1; min-width: 0; }

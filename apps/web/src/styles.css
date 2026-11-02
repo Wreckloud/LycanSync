@@ -623,7 +623,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .group-conversation { grid-column: 1; grid-row: 2; display: grid; grid-template-columns: minmax(0, 1fr) var(--member-panel-width); grid-template-rows: minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
 .conversation-main { grid-column: 1; grid-row: 1 / span 2; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .group-conversation > .members-directory { grid-column: 2; grid-row: 1; margin-top: var(--voice-overlay-height, 0px); }
-.group-conversation > .personal-card { grid-column: 2; grid-row: 2; align-self: stretch; height: auto; min-height: calc(var(--voice-bar-height) + var(--voice-bar-bottom-space)); border-left: 1px solid var(--border); background: var(--panel-sidebar); }
+.group-conversation > :is(.personal-card, .personal-card-space) { grid-column: 2; grid-row: 2; align-self: stretch; height: auto; min-height: calc(var(--voice-bar-height) + var(--voice-bar-bottom-space)); border-left: 1px solid var(--border); background: var(--panel-sidebar); }
 .participant-card:fullscreen { display: flex; flex-direction: column; background: #050608; }
 .participant-card:fullscreen .participant-media { flex: 1; min-height: 0; }
 
@@ -707,6 +707,8 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .personal-copy .member-activity { color: #43b6da; }
 .personal-card .icon-button { width: 28px; height: 28px; padding: 0; border-color: transparent; background: transparent; }
 .personal-card .icon-button:hover:not(:disabled) { background: var(--panel-raised); }
+/* 设置和主界面移动同一份名片，头像不再随设置挂载或被展开遮罩裁切。 */
+.personal-card.settings-footer { position: fixed; z-index: 4; right: 0; bottom: 0; width: var(--member-panel-width); border-left: 1px solid var(--border); background: var(--panel-sidebar); }
 
 .members-header {
   position: relative;
@@ -761,10 +763,12 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 
 @media (max-width: 760px) {
   .workspace { --member-panel-width: 176px; }
+  .personal-card.settings-footer { width: 176px; }
 }
 
 @media (max-width: 520px) {
   .workspace { --member-panel-width: 132px; }
+  .personal-card.settings-footer { width: 132px; }
 }
 
 @media (max-width: 600px) {

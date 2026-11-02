@@ -35,17 +35,17 @@ function logout() {
 
 <template>
   <footer class="personal-card" aria-label="个人状态与设置" @mouseenter="hovered = true" @mouseleave="hovered = false">
-    <component :is="menuEnabled ? 'button' : 'div'" ref="trigger" class="personal-identity" :class="{ 'is-interactive': menuEnabled }"
+    <component :is="menuEnabled ? 'button' : 'div'" ref="trigger" class="personal-identity" data-identity="main" :class="{ 'is-interactive': menuEnabled }"
       :type="menuEnabled ? 'button' : undefined" :aria-label="menuEnabled ? '个人菜单' : undefined"
       :disabled="menuEnabled && active === false"
       :aria-expanded="menuEnabled ? menuOpen : undefined" :aria-haspopup="menuEnabled ? 'dialog' : undefined"
       @click="menuEnabled && active !== false && (menuOpen = !menuOpen)">
     <span class="personal-avatar">
-      <img v-if="user.avatar" :src="user.avatar" class="profile-avatar" alt="" referrerpolicy="no-referrer" />
-      <span v-else class="profile-avatar-placeholder"><UserRound :size="22" /></span>
+      <img v-if="user.avatar" :src="user.avatar" class="profile-avatar" alt="" referrerpolicy="no-referrer" data-identity-avatar />
+      <span v-else class="profile-avatar-placeholder" data-identity-avatar><UserRound :size="22" /></span>
       <span class="status-dot" :class="status" aria-hidden="true" />
     </span>
-    <span class="personal-copy"><strong>{{ user.nickname }}</strong>
+    <span class="personal-copy"><strong data-identity-name>{{ user.nickname }}</strong>
       <ActivityStatus v-if="activityStatus" :type="activityStatus.type" :text="activityStatus.text" :active="hovered" />
       <small v-else>{{ statusLabel }}</small>
     </span>
