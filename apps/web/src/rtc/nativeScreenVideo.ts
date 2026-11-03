@@ -107,14 +107,15 @@ export class NativeScreenVideoSession {
   private firstFrameReject?: (error: Error) => void;
   private suspensionTimer?: ReturnType<typeof setInterval>;
   private writePromise?: Promise<void>;
-  private pendingFrame?: VideoFrame;
-  private pendingFrameSessionId?: string;
+  private unconfirmedFrame?: VideoFrame;
+  private writingFrame?: VideoFrame;
+  private unconfirmedFrameSessionId?: string;
   private lastTimestamp = Number.NEGATIVE_INFINITY;
   private timestampClock?: { localMicros: number; frameMicros: number; offset: number };
   private frameWidth = 1280;
   private frameHeight = 720;
   private suspended = false;
-  private writing = false;
+  private get writing() { return this.writingFrame !== undefined; }
   private stopped = false;
   private receivedFrames = 0;
   private backpressureDroppedFrames = 0;
@@ -293,13 +294,13 @@ export class NativeScreenVideoSession {
       this.sourceId = sourceId;
       this.gameFollowId = started.gameFollowId;
       if (settings.followGame && !this.gameFollowId) throw new Error('nativeGameFollowUnavailable');
-      if (this.pendingFrame) {
-        const pendingFrame = this.pendingFrame;
-        const pendingSessionId = this.pendingFrameSessionId;
-        this.pendingFrame = undefined;
-        this.pendingFrameSessionId = undefined;
-        if (pendingSessionId === this.sessionId && !this.stopped) this.acceptFrame(pendingFrame);
-        else pendingFrame.close();
+      if (this.unconfirmedFrame) {
+        const unconfirmedFrame = this.unconfirmedFrame;
+        const pendingSessionId = this.unconfirmedFrameSessionId;
+        this.unconfirmedFrame = undefined;
+        this.unconfirmedFrameSessionId = undefined;
+        if (pendingSessionId === this.sessionId && !this.stopped) this.acceptFrame(unconfirmedFrame);
+        else unconfirmedFrame.close();
       }
       const pendingSuspension = this.pendingSuspension;
       this.pendingSuspension = undefined;
@@ -412,9 +413,9 @@ export class NativeScreenVideoSession {
     this.gameFirstFrameReject = undefined;
     this.generator.stop();
     this.track.stop();
-    this.pendingFrame?.close();
-    this.pendingFrame = undefined;
-    this.pendingFrameSessionId = undefined;
+    this.unconfirmedFrame?.close();
+    this.unconfirmedFrame = undefined;
+    this.unconfirmedFrameSessionId = undefined;
     this.stopPromise = this.stopResources(endFollow, this.gameFollowId);
     return this.stopPromise;
   }
@@ -454,9 +455,9 @@ export class NativeScreenVideoSession {
     }
     if (!this.sessionId) {
       // 启动响应可能晚于首帧；只保留一帧，取得会话标识后再确认归属。
-      this.pendingFrame?.close();
-      this.pendingFrame = frame;
-      this.pendingFrameSessionId = frameSessionId;
+      this.unconfirmedFrame?.close();
+      this.unconfirmedFrame = frame;
+      this.unconfirmedFrameSessionId = frameSessionId;
       return;
     }
     this.acceptFrame(frame);
@@ -554,8 +555,7 @@ export class NativeScreenVideoSession {
 
   private writeFrame(frame: VideoFrame): void {
     if (Number.isFinite(frame.timestamp)) this.lastTimestamp = Math.max(this.lastTimestamp, frame.timestamp);
-    this.writing = true;
-    this.pendingFrame = frame;
+    this.writingFrame = frame;
     this.writePromise = this.writer.write(frame).then(() => {
       this.completedWrites++;
     }, () => {
@@ -563,8 +563,7 @@ export class NativeScreenVideoSession {
       this.fail('nativeVideoTrackWriteFailed');
     }).finally(() => {
       frame.close();
-      if (this.pendingFrame === frame) this.pendingFrame = undefined;
-      this.writing = false;
+      if (this.writingFrame === frame) this.writingFrame = undefined;
     });
     // 首帧已交给轨道；write 要等 LiveKit 开始读取才可能完成，不能以它作为发布前提。
     this.firstFrameResolve?.();
@@ -624,10 +623,10 @@ export class NativeScreenVideoSession {
       this.captureFrameRate = this.maxFps;
       this.deliveryFrameRate = this.maxFps;
       this.setSuspended(false);
-      const pending = this.pendingFrame;
-      this.pendingFrame = undefined;
-      const frameSessionId = this.pendingFrameSessionId;
-      this.pendingFrameSessionId = undefined;
+      const pending = this.unconfirmedFrame;
+      this.unconfirmedFrame = undefined;
+      const frameSessionId = this.unconfirmedFrameSessionId;
+      this.unconfirmedFrameSessionId = undefined;
       if (pending) {
         if (frameSessionId === this.sessionId) this.acceptFrame(pending);
         else pending.close();

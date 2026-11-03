@@ -455,7 +455,7 @@ test('真实手动更新先通知页面并等待媒体收尾，保留窗口直�
   const order = [];
   let options;
   const context = {
-    app: { isPackaged: true, getVersion: () => '0.3.7' }, process: { platform: 'win32' },
+    app: { isPackaged: true, getVersion: () => '0.3.7', quit: () => { order.push('quit'); } }, process: { platform: 'win32' },
     createStartupUpdate: value => { options = value; return {}; },
     runtimeLayout: { updaterCachePath: 'test-updater' }, pendingAccessLink: null,
     closing: false, startupReady: true, updatePreparing: false, resolveUpdateRelease: undefined,
@@ -463,7 +463,8 @@ test('真实手动更新先通知页面并等待媒体收尾，保留窗口直�
     mainWindow: { webContents: { send: event => {
       assert.equal(event, 'window:release-media'); order.push('release'); context.resolveUpdateRelease();
     } } },
-    shutdownMediaResources: () => { order.push('stop'); return prepared.promise; },
+    mediaHelperShutdownPromise: undefined,
+    shutdownMediaResources: () => { order.push('stop'); context.mediaHelperShutdownPromise = prepared.promise; return prepared.promise; },
   };
   runInNewContext(main.slice(start, end), context);
   const completing = options.beforeInstall('manual');
@@ -474,6 +475,16 @@ test('真实手动更新先通知页面并等待媒体收尾，保留窗口直�
   assert.equal(context.canClose, true);
   assert.equal(context.allowQuitAfterMediaHelper, true);
   options.onInstallFailure();
+  assert.equal(context.closing, true);
+  assert.equal(order.at(-1), 'quit');
+
+  // 尚未开始永久清理时的准备失败，可以继续使用本进程。
+  order.length = 0;
+  context.mediaHelperShutdownPromise = undefined;
+  context.updatePreparing = true;
+  context.closing = true;
+  options.onInstallFailure();
   assert.equal(context.closing, false);
   assert.equal(context.canClose, false);
+  assert.deepEqual(order, []);
 });

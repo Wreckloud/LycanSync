@@ -212,3 +212,47 @@ test('启动时创建运行目录并切换 Electron 路径，目录不可写时�
     }), /无法在运行目录保存数据/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+
+test('首次迁移包含登录、托盘、录像设置和录像索引', () => {
+  const root = mkdtempSync(join(tmpdir(), 'lycansync-settings-first-'));
+  const legacy = join(root, 'legacy'), destination = join(root, 'data');
+  const files = ['login-settings.json', 'desktop-settings.json', 'recording-settings.json', 'recording-library.json'];
+  try {
+    mkdirSync(legacy); mkdirSync(destination);
+    for (const name of files) writeFileSync(join(legacy, name), JSON.stringify({ file: name }));
+    migrateOwnedData(legacy, destination);
+    for (const name of files) assert.equal(readFileSync(join(destination, name), 'utf8'), readFileSync(join(legacy, name), 'utf8'));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('已完成旧迁移时只补缺失设置，复制失败可重试且不恢复旧凭据', () => {
+  const root = mkdtempSync(join(tmpdir(), 'lycansync-settings-repair-'));
+  const legacy = join(root, 'legacy'), destination = join(root, 'data');
+  try {
+    mkdirSync(legacy); mkdirSync(destination);
+    writeFileSync(join(destination, '.legacy-migration-complete'), '');
+    for (const name of ['login-settings.json', 'desktop-settings.json', 'recording-settings.json', 'recording-library.json']) writeFileSync(join(legacy, name), 'legacy-' + name);
+    writeFileSync(join(legacy, 'session.bin'), 'old-secret');
+    writeFileSync(join(legacy, 'pending-access.bin'), 'old-offer');
+    writeFileSync(join(destination, 'recording-settings.json'), 'current-settings');
+    assert.throws(() => migrateOwnedData(legacy, destination, { ...filesystem, copyFileSync: (source, target) => {
+      if (source.endsWith('recording-library.json')) { writeFileSync(target, 'partial'); throw new Error('copy failed'); }
+      filesystem.copyFileSync(source, target);
+    } }), /copy failed/);
+    assert.equal(existsSync(join(destination, '.legacy-settings-migration-complete')), false);
+    assert.equal(existsSync(join(destination, 'recording-library.json')), false);
+    writeFileSync(join(destination, 'desktop-settings.json'), 'new-choice');
+    migrateOwnedData(legacy, destination);
+    assert.equal(readFileSync(join(destination, 'desktop-settings.json'), 'utf8'), 'new-choice');
+    assert.equal(readFileSync(join(destination, 'recording-settings.json'), 'utf8'), 'current-settings');
+    assert.equal(readFileSync(join(destination, 'recording-library.json'), 'utf8'), 'legacy-recording-library.json');
+    assert.equal(existsSync(join(destination, 'session.bin')), false);
+    assert.equal(existsSync(join(destination, 'pending-access.bin')), false);
+    rmSync(join(destination, 'login-settings.json'));
+    migrateOwnedData(legacy, destination, { existsSync: path => {
+      assert.ok(path.startsWith(destination), '补迁完成后不再访问旧目录'); return existsSync(path);
+    } });
+    assert.equal(existsSync(join(destination, 'login-settings.json')), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

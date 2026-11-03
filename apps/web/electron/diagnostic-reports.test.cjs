@@ -137,7 +137,7 @@ test('清除排在在途保存之后，不会被旧写入恢复，清除后可�
 function ipcFixture() {
   const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = source.indexOf("ipcMain.handle('diagnostics:checkpoint'");
-  const end = source.indexOf("ipcMain.handle('diagnostics:export'", start);
+  const end = source.indexOf("ipcMain.handle(", source.indexOf("ipcMain.handle('diagnostics:export',", start) + 1);
   const handlers = new Map();
   const saved = [], writes = [], exportDirectories = [], dialogOptions = [], failures = [];
   let cleared = 0;
@@ -214,4 +214,19 @@ test('自动保存失败明确拒绝并留下固定存储原因，不把磁盘�
   state.savedDiagnosticReports.save = async () => { throw Object.assign(new Error('private-path'), { code: 'ENOSPC' }); };
   await assert.rejects(handlers.get('diagnostics:checkpoint')({ trusted: true }, report('current')), /private-path/);
   assert.deepEqual(JSON.parse(JSON.stringify(failures)), [{ stage: 'diagnosticSnapshotFailed', storageError: 'ENOSPC' }]);
+});
+
+
+test('手动导出与自动保存共用9和10版校验，非法报告不打开保存框', async () => {
+  const f = ipcFixture();
+  const exportReport = f.handlers.get('diagnostics:export');
+  for (const schemaVersion of [9, 10]) {
+    await exportReport({ trusted: true }, JSON.stringify({ ...JSON.parse(report('current')), schemaVersion }));
+    assert.equal(f.writes.at(-1).report.schemaVersion, schemaVersion);
+  }
+  const opened = f.dialogOptions.length;
+  for (const schemaVersion of [8, 11]) {
+    await assert.rejects(exportReport({ trusted: true }, JSON.stringify({ ...JSON.parse(report('bad')), schemaVersion })), /无效/);
+  }
+  assert.equal(f.dialogOptions.length, opened);
 });
