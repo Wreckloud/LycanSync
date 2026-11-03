@@ -27,11 +27,12 @@ const props = defineProps<{
   error?: string;
   autofocus?: boolean;
   inline?: boolean;
+  relatedSurface?: HTMLElement | null;
   voiceSeconds?: number | null;
   ownVoice?: boolean;
   voiceError?: string;
 }>();
-const emit = defineEmits<{ close: []; enter: []; leave: []; retry: [] }>();
+const emit = defineEmits<{ close: []; enter: []; leave: []; retry: []; escape: [event: KeyboardEvent] }>();
 const surface = ref<HTMLElement | null>(null);
 const avatarImage = ref<HTMLImageElement | null>(null);
 const tint = ref<string>();
@@ -94,11 +95,13 @@ function setCardActive(element: Element, active: boolean) {
 
 function dismissOutside(event: Event) {
   const target = event.target as Node | null;
-  if (!surface.value?.contains(target) && !props.anchor?.contains(target)) emit('close');
+  if (!surface.value?.contains(target) && !props.anchor?.contains(target) && !props.relatedSurface?.contains(target)) emit('close');
 }
 
 function dismissOnEscape(event: KeyboardEvent) {
   if (event.key !== 'Escape' || !props.anchor) return;
+  emit('escape', event);
+  if (event.defaultPrevented) return;
   event.preventDefault();
   event.stopPropagation();
   props.anchor.focus();
@@ -152,7 +155,7 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
 
 <template>
   <Teleport to="body" :disabled="inline">
-    <Transition name="profile-popover" @before-enter="setCardActive($event, true)" @before-leave="setCardActive($event, false)">
+    <Transition :name="placement === 'above' ? 'personal-popover' : 'profile-popover'" @before-enter="setCardActive($event, true)" @before-leave="setCardActive($event, false)">
       <section v-if="inline || anchor" :key="profileKey" ref="surface" class="profile-popover" :class="{ 'is-personal': placement === 'above', 'is-inline': inline }"
         :role="inline ? 'region' : 'dialog'" :aria-label="label" :style="{ ...(inline ? {} : position), '--profile-tint': tint }"
         @mouseenter="emit('enter')" @mouseleave="emit('leave')">
@@ -206,7 +209,9 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
 .profile-popover-history { display: grid; gap: 4px; color: var(--muted); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
 .profile-popover-history p { margin: 0; }
 .profile-popover-enter-active, .profile-popover-leave-active { transition: opacity var(--motion-surface-duration) var(--motion-ease), transform var(--motion-surface-duration) var(--motion-ease); }
-.profile-popover-enter-from, .profile-popover-leave-to { opacity: 0; transform: translateY(4px); }
-.profile-popover:not(.is-personal).profile-popover-enter-from, .profile-popover:not(.is-personal).profile-popover-leave-to { transform: translateX(-4px); }
+.profile-popover-enter-from, .profile-popover-leave-to { opacity: 0; transform: translateX(-4px); }
 .profile-popover-leave-active { pointer-events: none; }
+.personal-popover-enter-active, .personal-popover-leave-active { transition: opacity var(--motion-surface-duration) var(--motion-ease); }
+.personal-popover-enter-from, .personal-popover-leave-to { opacity: 0; }
+.personal-popover-leave-active { pointer-events: none; }
 </style>
