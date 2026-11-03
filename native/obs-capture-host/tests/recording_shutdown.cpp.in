@@ -1,0 +1,148 @@
+#include <algorithm>
+#include <chrono>
+#include <iostream>
+#include <mutex>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace {
+std::vector<std::string> events;
+void check(bool valid, const char *message) { if (!valid) throw std::runtime_error(message); }
+size_t position(const char *name) {
+  const auto found = std::find(events.begin(), events.end(), name);
+  check(found != events.end(), name);
+  return static_cast<size_t>(found - events.begin());
+}
+struct obs_output_t { bool active = true; };
+bool obs_output_active(obs_output_t *output) { return output->active; }
+void obs_output_force_stop(obs_output_t *output) { output->active = false; events.emplace_back("force"); }
+void obs_output_release(obs_output_t *output) {
+  check(!output->active, "output released before force stop"); events.emplace_back("release");
+}
+void *obs_output_get_signal_handler(obs_output_t *) { return nullptr; }
+void signal_handler_disconnect(void *, const char *, void (*)(void *, void *), void *) {}
+
+struct Completion {
+  bool confirm = false;
+  unsigned waits = 0;
+  template<typename Predicate>
+  bool wait_for(std::unique_lock<std::mutex> &lock, std::chrono::seconds duration, Predicate ready) {
+    check(lock.owns_lock(), "completion wait requires lock");
+    check(duration == std::chrono::seconds(8), "unexpected graceful timeout");
+    if (ready()) return true;
+    ++waits;
+    return confirm;
+  }
+};
+class RecordingOutput {
+public:
+  obs_output_t *output_ = nullptr, *replay_ = nullptr;
+  bool completed_ = false, replay_completed_ = false;
+  std::mutex mutex_;
+  Completion stopped_;
+  ~RecordingOutput();
+  void stop() { events.emplace_back("stop-recording"); }
+  void stop_replay() { events.emplace_back("stop-replay"); }
+  bool shutdown();
+  void release();
+  void release_output(obs_output_t *&, bool);
+  void release_pipeline() { events.emplace_back("pipeline"); }
+  void poll() {
+    events.emplace_back("poll");
+    if (output_) output_->active = false;
+    if (replay_) replay_->active = false;
+    release();
+  }
+  static void started(void *, void *) {}
+  static void stopped(void *, void *) {}
+  static void replay_started(void *, void *) {}
+  static void replay_stopped(void *, void *) {}
+  static void replay_saved(void *, void *) {}
+};
+@RECORDING_DESTRUCTOR@
+@RECORDING_SHUTDOWN@
+
+struct WindowVideoTarget { bool bound = false; };
+struct Host { WindowVideoTarget window_target; std::string session_id = "test-session"; } g_host;
+struct Video { unsigned base_width, output_width, base_height, output_height, fps_num; } video{};
+struct Audio {
+  void recording(bool enabled) { check(!enabled, "audio recording remains enabled"); events.emplace_back("audio-recording-off"); }
+  void shutdown() { events.emplace_back("audio-shutdown"); }
+} screen_audio;
+std::mutex g_render_mutex, g_output_mutex;
+void *scene = nullptr, *source = nullptr;
+WindowVideoTarget window_target;
+void render_shared_frame() {}
+void obs_remove_main_rendered_callback(void (*)(), void *) { events.emplace_back("render-off"); }
+void obs_set_output_source(unsigned, void *) { events.emplace_back("canvas-off"); }
+void *obs_scene_get_source(void *value) { return value; }
+void obs_source_remove(void *) { events.emplace_back("remove-source"); }
+void obs_scene_release(void *) { events.emplace_back("release-scene"); }
+void obs_source_release(void *) { events.emplace_back("release-source"); }
+void destroy_textures() { events.emplace_back("textures"); }
+void obs_wait_for_destroy_queue() { events.emplace_back("drain"); }
+constexpr int OBS_VIDEO_SUCCESS = 0;
+int obs_reset_video(Video *) { events.emplace_back("idle"); return OBS_VIDEO_SUCCESS; }
+void write_event(std::string_view event) { events.emplace_back(event); }
+
+int capture_cleanup(RecordingOutput &recording, bool keep_host) {
+@CAPTURE_CLEANUP@
+
+void verify_cleanup(bool recording_active, bool replay_active, bool confirm, bool keep_host) {
+  events.clear();
+  obs_output_t output, replay;
+  unsigned waits = 0;
+  std::ostringstream protocol;
+  auto *previous = std::cout.rdbuf(protocol.rdbuf());
+  try {
+    {
+      RecordingOutput recording;
+      recording.output_ = recording_active ? &output : nullptr;
+      recording.replay_ = replay_active ? &replay : nullptr;
+      recording.stopped_.confirm = confirm;
+      g_host.window_target.bound = window_target.bound = true;
+      const auto result = capture_cleanup(recording, keep_host);
+      check(result == (!confirm ? 1 : keep_host ? 0 : 3), "unexpected capture result");
+      check(!recording.output_ && !recording.replay_, "recording output retained");
+      check(!g_host.window_target.bound && !window_target.bound, "window target retained");
+      check(position("audio-shutdown") < position("render-off"), "audio cleanup order");
+      check(position("render-off") < position("release-source"), "source cleanup order");
+      check(position("release-source") < position("textures"), "texture cleanup order");
+      check(position("textures") < position("drain"), "destroy queue order");
+      if (!confirm) {
+        check(position("pipeline") < position("audio-shutdown"), "recording pipeline retained during capture cleanup");
+        check(position("drain") < position("recordingStopUnconfirmed"), "failure emitted before cleanup");
+        check(std::count(events.begin(), events.end(), "force") == unsigned(recording_active) + unsigned(replay_active), "force stop missing");
+        check(std::find(events.begin(), events.end(), "idle") == events.end(), "failed host reused");
+        check(protocol.str().find("captureStopped") == std::string::npos, "failure reported as success");
+      } else {
+        check(std::find(events.begin(), events.end(), "recordingStopUnconfirmed") == events.end(), "false shutdown failure");
+        check(protocol.str().find("captureStopped") != std::string::npos, "successful stop not reported");
+      }
+      waits = recording.stopped_.waits;
+      const auto polled = std::count(events.begin(), events.end(), "poll");
+      // 显式执行一次析构会执行的 shutdown，确认不会再次等待或强停。
+      check(recording.shutdown(), "repeat shutdown remains incomplete");
+      check(recording.stopped_.waits == waits, "repeat shutdown waits another eight seconds");
+      check(std::count(events.begin(), events.end(), "poll") == polled, "repeat shutdown polls released outputs");
+    }
+    std::cout.rdbuf(previous);
+  } catch (...) { std::cout.rdbuf(previous); throw; }
+}
+}
+
+int main() {
+  try {
+    verify_cleanup(true, false, false, true);
+    verify_cleanup(false, true, false, true);
+    verify_cleanup(true, true, false, false);
+    verify_cleanup(true, true, true, true);
+    verify_cleanup(true, false, true, false);
+    std::cout << "recording shutdown: 5 scenarios passed\n";
+  } catch (const std::exception &error) {
+    std::cerr << error.what() << '\n'; return 1;
+  }
+}

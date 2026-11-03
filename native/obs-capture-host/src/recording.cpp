@@ -242,12 +242,17 @@ void RecordingOutput::stop() {
   if (output_ && running_) obs_output_stop(output_);
 }
 bool RecordingOutput::shutdown() {
+  if (!output_ && !replay_) return true;
   stop();
   stop_replay();
   std::unique_lock<std::mutex> lock(mutex_);
   const bool completed = stopped_.wait_for(lock, std::chrono::seconds(8), [&] { return (!output_ || completed_) && (!replay_ || replay_completed_); });
   lock.unlock();
   if (completed) poll();
+  else {
+    // 超时后先释放输出与录像管线，让共享来源仍能继续销毁；不伪报正常保存。
+    release();
+  }
   return completed;
 }
 void RecordingOutput::release() {
