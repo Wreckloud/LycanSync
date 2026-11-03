@@ -11,6 +11,8 @@ import { compressChatImage } from '../chat/messageImage';
 import { formatFullMessageTime, formatMessageDate, formatMessageTime, localDateKey } from '../chat/messageTime';
 import type { GroupMember, GroupSummary } from '../group/groupApi';
 import ChatImage from './ChatImage.vue';
+import ProfilePopover from './ProfilePopover.vue';
+import { findGroupMemberProfile, type GroupMemberProfile } from '../group/groupApi';
 import ChatFileCard from './ChatFileCard.vue';
 
 type MessageSegment = { text: string; href?: string };
@@ -27,6 +29,27 @@ type PendingAttachment = {
 const props = defineProps<{ group: GroupSummary; members: GroupMember[]; user: AuthUser }>();
 const emit = defineEmits<{ initialLoad: [groupId: string] }>();
 const cache = inject(ACCOUNT_CACHE, null);
+const historicalSender = ref<ChatMessage | null>(null);
+const historicalAnchor = ref<HTMLElement | null>(null);
+const historicalProfile = ref<GroupMemberProfile | null>(null);
+const historicalError = ref('');
+const historicalLoading = ref(false);
+let historicalRequest: AbortController | undefined;
+function closeHistoricalProfile() {
+  historicalRequest?.abort(); historicalAnchor.value = null;
+}
+async function showHistoricalProfile(message: ChatMessage, anchor: HTMLElement) {
+  closeHistoricalProfile();
+  historicalSender.value = message; historicalAnchor.value = anchor;
+  historicalProfile.value = null; historicalError.value = ''; historicalLoading.value = true;
+  const request = historicalRequest = new AbortController();
+  try {
+    const profile = await findGroupMemberProfile(props.group.id, message.senderUserId, request.signal);
+    if (!request.signal.aborted) historicalProfile.value = profile;
+  } catch (reason) {
+    if (!request.signal.aborted) historicalError.value = reason instanceof Error ? reason.message : '无法读取历史资料';
+  } finally { if (!request.signal.aborted) historicalLoading.value = false; }
+}
 let cacheLoaded = false;
 let initialLoadNotified = false;
 let cacheWriteTimer: ReturnType<typeof setTimeout> | null = null;
@@ -546,7 +569,7 @@ function senderName(message: ChatMessage) {
 }
 
 function senderAvatar(message: ChatMessage) {
-  return message.senderUserId === props.user.id ? props.user.avatar : members.value.get(message.senderUserId)?.avatar ?? '';
+  return message.senderUserId === props.user.id ? props.user.avatar : members.value.get(message.senderUserId)?.avatar ?? message.senderAvatar ?? '';
 }
 
 function refreshCalendar() {
@@ -657,6 +680,7 @@ onMounted(() => {
 onScopeDispose(() => {
   // App 按群 ID 创建独立实例；切群统一在销毁处取消，观看布局不重建群聊。
   disposed = true;
+  closeHistoricalProfile();
   if (cacheWriteTimer) {
     clearTimeout(cacheWriteTimer);
     cacheWriteTimer = null;
@@ -713,7 +737,7 @@ onScopeDispose(() => {
             </template>
             <span v-else class="chat-message-avatar-placeholder" aria-hidden="true" />
             <div class="chat-message-body">
-              <div v-if="startsNewMessageGroup(message, index)" class="chat-message-meta"><strong>{{ senderName(message) }}</strong><time :datetime="message.createdAt" :title="formatFullMessageTime(message.createdAt)">{{ formatMessageTime(message.createdAt, calendarNow) }}</time></div>
+              <div v-if="startsNewMessageGroup(message, index)" class="chat-message-meta"><button v-if="message.senderDeletedAt" type="button" class="chat-historical-sender" @click="showHistoricalProfile(message, $event.currentTarget as HTMLElement)">{{ senderName(message) }}</button><strong v-else>{{ senderName(message) }}</strong><span v-if="message.senderDeletedAt" class="chat-deleted-account">已注销</span><time :datetime="message.createdAt" :title="formatFullMessageTime(message.createdAt)">{{ formatMessageTime(message.createdAt, calendarNow) }}</time></div>
               <p v-if="message.content" class="chat-message-content"><template v-for="(segment, segmentIndex) in messageSegments(message.content)" :key="segmentIndex"><a v-if="segment.href" class="chat-message-link" :href="segment.href" @click.prevent="openLink(segment.href)">{{ segment.text }}</a><template v-else>{{ segment.text }}</template></template></p>
               <ChatImage v-if="message.type === 'IMAGE' && message.attachment" :group-id="group.id" :attachment-id="message.attachment.id"
                 :width="message.attachment.width ?? 1" :height="message.attachment.height ?? 1" :alt="`${senderName(message)} 发送的图片`" />
@@ -750,5 +774,10 @@ onScopeDispose(() => {
         <button type="submit" aria-label="发送消息" :disabled="!canSend"><Send :size="15" /></button>
       </form>
     </div>
+    <ProfilePopover :anchor="historicalAnchor" :profile-key="historicalSender?.senderUserId" placement="left" label="历史成员资料"
+      :nickname="historicalSender?.senderNickname ?? ''" :avatar="historicalSender?.senderAvatar ?? ''"
+      :deleted-at="historicalSender?.senderDeletedAt" :signature="historicalProfile?.signature" status="OFFLINE" status-label="已注销"
+      :loading="historicalLoading" :error="historicalError" :voice-seconds="historicalProfile?.sharedVoiceSeconds"
+      @close="closeHistoricalProfile" @retry="historicalSender && historicalAnchor && showHistoricalProfile(historicalSender, historicalAnchor)" />
   </section>
 </template>

@@ -13,7 +13,8 @@ export default defineConfig({
     proxy: {
       // 浏览器开发与桌面测试连接同一邀请服务器；证书仍须受系统信任。
       // 只代理业务 HTTP；音视频和信令由浏览器直接连接 LiveKit。
-      '/api': { target: process.env.LYCANSYNC_API_URL ?? 'https://192.168.150.108' },
+      // Caddy 按 Host 选择站点。不改写时仍带本机地址，虚拟机会返回空内容。
+      '/api': { target: process.env.LYCANSYNC_API_URL ?? 'https://192.168.150.108', changeOrigin: true },
     },
   },
 });

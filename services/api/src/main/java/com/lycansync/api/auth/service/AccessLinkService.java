@@ -41,6 +41,7 @@ public class AccessLinkService {
     private final AccountAccessProperties settings;
     private final TransactionTemplate transactions;
     private final Clock systemClock;
+    private final AccountLifecycleService lifecycle;
 
     public record GeneratedLink(AccessLink record, String url) { }
     public record LinkPreview(String kind, String status, String serverName) { }
@@ -51,9 +52,10 @@ public class AccessLinkService {
         if (("RECOVERY".equals(request.kind())) != (request.targetId() != null)) throw invalid("邀请不能指定旧账号，恢复必须指定成员");
         return transactions.execute(status -> {
             requireInitialized();
+            requireAdministrator(administrator);
             if (request.targetId() != null) {
                 AuthUser target = users.findUserProfile(request.targetId());
-                if (target == null) throw notFound();
+                if (target == null || target.deletedAt() != null) throw notFound();
                 if (target.administrator()) throw invalid("此入口只恢复普通成员登录");
                 links.revokeRecovery(request.targetId(), now());
             }
@@ -65,6 +67,7 @@ public class AccessLinkService {
         requireAdministrator(administrator);
         return transactions.execute(status -> {
             requireInitialized();
+            requireAdministrator(administrator);
             AccessLink previous = links.lockById(id);
             if (previous == null || "ACTIVATE".equals(previous.kind())) throw notFound();
             if (previous.consumedAt() != null) throw invalid("已使用邀请不能重新生成；请为该成员创建恢复链接");
@@ -78,6 +81,7 @@ public class AccessLinkService {
         requireAdministrator(administrator);
         transactions.executeWithoutResult(status -> {
             requireInitialized();
+            requireAdministrator(administrator);
             AccessLink link = links.lockById(id);
             if (link == null || "ACTIVATE".equals(link.kind())) throw notFound();
             if (link.consumedAt() != null) throw invalid("已使用链接不能撤销成员账号");
@@ -107,12 +111,16 @@ public class AccessLinkService {
     }
 
     public LoginResponse redeem(String token, String redemptionKey, AuthenticatedUser current) {
+        return redeem(token, redemptionKey, current, null);
+    }
+
+    public LoginResponse redeem(String token, String redemptionKey, AuthenticatedUser current, String recoveryPassword) {
         String hash = tokenHash(token);
         String keyHash = tokenHash(redemptionKey);
         try {
             String sessionToken = Base64.getUrlEncoder().withoutPadding().encodeToString(
                     HexFormat.of().parseHex(AuthSecrets.hash(token + ":" + redemptionKey)));
-            return transactions.execute(status -> redeemInTransaction(hash, keyHash, sessionToken, current));
+            return transactions.execute(status -> redeemInTransaction(hash, keyHash, sessionToken, current, recoveryPassword));
         } catch (AuthException | DataAccessException exception) {
             // 业务失败在回滚后记录，不把部分账号或会话提交为成功。
             try {
@@ -125,7 +133,7 @@ public class AccessLinkService {
         }
     }
 
-    private LoginResponse redeemInTransaction(String hash, String keyHash, String sessionToken, AuthenticatedUser current) {
+    private LoginResponse redeemInTransaction(String hash, String keyHash, String sessionToken, AuthenticatedUser current, String recoveryPassword) {
         // 所有链接变更先锁同一初始化行，固定顺序避免激活、恢复与撤销交错死锁。
         boolean initialized = initializedForUpdate();
         AccessLink link = links.lockByHash(hash);
@@ -146,13 +154,14 @@ public class AccessLinkService {
         AuthUser user;
         if ("RECOVERY".equals(link.kind())) {
             user = users.findUserProfile(link.targetId());
-            if (user == null) throw notFound();
+            if (user == null || user.deletedAt() != null || user.administrator()) throw notFound();
         } else {
             boolean administrator = "ACTIVATE".equals(link.kind());
             if (administrator ? initialized : !initialized) throw invalid("服务器初始化状态不允许此次操作");
             if (administrator && users.markInitialized(now) != 1) throw invalid("服务器已经激活");
             user = new AuthUser(UUID.randomUUID(), "行者" + links.nextGuestNumber(), DefaultAvatar.value(), administrator, "", now);
             users.insertUser(user, now);
+            if (administrator) lifecycle.initializeRecovery(user.id(), recoveryPassword);
         }
         if (links.consume(link.id(), user.id(), keyHash, now) != 1) throw invalid("链接已被使用，请重新检查");
         return new LoginResponse(sessions.issueSession(user, sessionToken), user);
@@ -193,6 +202,10 @@ public class AccessLinkService {
     private void requireInitialized() { if (!initializedForUpdate()) throw invalid("请先完成管理员激活"); }
     private void requireAdministrator(AuthenticatedUser user) {
         if (user == null || !user.administrator()) throw new AuthException(HttpStatus.FORBIDDEN, ApiErrorCode.ACCESS_DENIED, "只有服主可以管理邀请和成员");
+        AuthUser current = users.findUserProfile(user.id());
+        if (current == null || current.deletedAt() != null || !current.administrator()) {
+            throw new AuthException(HttpStatus.FORBIDDEN, ApiErrorCode.ACCESS_DENIED, "服主身份已变化，请重新进入账号设置");
+        }
     }
     private String tokenHash(String token) {
         if (token == null || !token.matches("[A-Za-z0-9_-]{43}")) throw invalid("链接凭据无效");

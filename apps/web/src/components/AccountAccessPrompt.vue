@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
 import InlineFeedback from './InlineFeedback.vue';
+import PasswordField from './PasswordField.vue';
 import { authRequest, type AuthUser } from '../auth/authApi';
 import { redemptionKey, type AccessOffer, type AccessPreview } from '../auth/accountAccess';
 const props = defineProps<{ offer: AccessOffer; currentUser: AuthUser | null; currentServer: string }>();
@@ -8,6 +9,8 @@ const emit = defineEmits<{ cancel: []; joined: [result: { sessionToken?: string;
 const preview = ref<AccessPreview | null>(null);
 const error = ref('');
 const busy = ref(false);
+const recoveryPassword = ref('');
+const recoveryConfirmation = ref('');
 const canRetryRedemption = ref(false);
 const heading = ref<HTMLElement | null>(null);
 const title = computed(() => {
@@ -44,7 +47,7 @@ async function checkLink() {
 function close() { if (!busy.value) emit('cancel'); }
 watch(() => [props.offer.token, props.offer.server, props.currentServer], () => { void checkLink(); }, { immediate: true });
 onMounted(() => heading.value?.focus());
-onScopeDispose(() => { generation++; controller.abort(); });
+onScopeDispose(() => { generation++; controller.abort(); recoveryPassword.value = ''; recoveryConfirmation.value = ''; });
 
 async function join() {
   if (busy.value || props.currentUser || !canRedeem.value || !preview.value) return;
@@ -53,12 +56,18 @@ async function join() {
   const token = props.offer.token;
   const task = generation;
   const kind = preview.value.kind;
+  if (kind === 'ACTIVATE' && (recoveryPassword.value.length < 15 || recoveryPassword.value !== recoveryConfirmation.value)) {
+    error.value = '请设置至少 15 个字符的恢复密码，并确保两次输入一致。'; busy.value = false; return;
+  }
   try {
-    const result = await authRequest<{ sessionToken?: string; user: AuthUser }>('access/redeem', 'POST', { token, redemptionKey: redemptionKey(token) });
+    const result = await authRequest<{ sessionToken?: string; user: AuthUser }>('access/redeem', 'POST', {
+      token, redemptionKey: redemptionKey(token), ...(kind === 'ACTIVATE' ? { recoveryPassword: recoveryPassword.value } : {}),
+    });
     if (task !== generation) return;
     // 服务端兑换已完成；临时重试凭据清理失败不能把成功登录误报为兑换失败。
     try { sessionStorage.removeItem(`lycan:redeem:${token}`); }
     catch { console.warn('登录已完成，但本页临时重试凭据未能清理。'); }
+    recoveryPassword.value = ''; recoveryConfirmation.value = '';
     emit('joined', result, kind);
   } catch (exception) { if (task === generation) error.value = exception instanceof Error ? exception.message : '操作未完成，请重试'; }
   finally { busy.value = false; }
@@ -87,6 +96,11 @@ async function switchServer() {
       <template v-else-if="preview">
         <p v-if="!canRedeem">链接已使用、过期或撤销，请联系服主获取新链接。</p>
         <p v-else>{{ preview.kind === 'ACTIVATE' ? '确认后成为本服务器的服主，管理成员与邀请。' : preview.kind === 'RECOVERY' ? '保留原账号的资料与权限，旧设备将退出登录。' : '这是你的专属邀请，加入后链接即失效。' }}</p>
+        <div v-if="preview.kind === 'ACTIVATE' && canRedeem" class="activation-passwords">
+          <PasswordField id="activation-password" v-model="recoveryPassword" label="恢复密码（15–128 个字符）" :disabled="busy" new-password required />
+          <PasswordField id="activation-password-confirm" v-model="recoveryConfirmation" label="确认恢复密码" :disabled="busy" new-password required />
+          <p>请妥善保管，丢失本机凭据后可独立恢复服主账号，不需要绑定 QQ。</p>
+        </div>
       </template>
       <p v-else-if="!error">正在检查邀请…</p>
       <p v-else>暂时无法检查此链接，请重试。</p>
@@ -110,5 +124,6 @@ async function switchServer() {
 .access-header p { margin: 4px 0 0; font-size: 13px; line-height: 20px; }
 .access-body { min-height: 64px; margin: 20px 0; }
 .access-body p { margin: 0; color: var(--muted); font-size: 14px; line-height: 22px; overflow-wrap: anywhere; }
+.activation-passwords { display: grid; gap: 12px; margin-top: 16px; }
 @media (max-width: 420px) { .access-prompt { padding: 20px; } .access-header h1 { font-size: 20px; } }
 </style>

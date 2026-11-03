@@ -38,6 +38,11 @@ server:
   max-http-request-header-size: 16KB
 
 lycansync:
+  qq:
+    enabled: ${QQ_ENABLED:false}
+    app-id: ${QQ_APP_ID:}
+    app-key: ${QQ_APP_KEY:}
+    callback-url: ${QQ_CALLBACK_URL:}
   audio:
     ffmpeg-executable: ${AUDIO_FFMPEG_EXECUTABLE:ffmpeg}
     processing-directory: ${AUDIO_PROCESSING_DIR:./var/audio-processing}

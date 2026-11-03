@@ -2,6 +2,7 @@ package com.lycansync.api.auth.controller;
 
 import com.lycansync.api.auth.config.AccountAccessProperties;
 import com.lycansync.api.auth.config.AuthConfiguration;
+import com.lycansync.api.auth.config.QqLoginProperties;
 import com.lycansync.api.auth.dto.ProfileUpdateRequest;
 import com.lycansync.api.auth.exception.AuthException;
 import com.lycansync.api.auth.model.AuthenticatedUser;
@@ -43,6 +44,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest({AuthController.class, AccessLinkController.class})
 @Import(AuthConfiguration.class)
 class AuthControllerTests {
+    @MockitoBean
+    private QqLoginProperties qqLoginProperties;
 
     private static final String SESSION_TOKEN = "a".repeat(43);
     private static final UUID USER_ID = UUID.fromString("2d983469-4442-44f5-b5a8-f3819f16a611");

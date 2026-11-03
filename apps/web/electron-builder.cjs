@@ -30,6 +30,7 @@ module.exports = {
     'electron/server-settings.cjs',
     'electron/runtime-paths.cjs',
     'electron/access-links.cjs',
+    'electron/qq-login.cjs',
     'electron/preload.cjs',
     'electron/voice-overlay.cjs',
     'electron/voice-overlay-preload.cjs',

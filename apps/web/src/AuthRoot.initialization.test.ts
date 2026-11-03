@@ -24,7 +24,7 @@ function deferred<T>() {
 function setup() {
   let dispose!: () => void;
   const state = {
-    entryUser: ref<AuthUser | null>(null), autoLogin: ref(true), manualEntryRequired: ref(false), accessOffer: ref(null),
+    entryUser: ref<AuthUser | null>(null), qqAvailable: ref(false), autoLogin: ref(true), manualEntryRequired: ref(false), accessOffer: ref(null),
     user: ref<AuthUser | null>(null), error: ref(''), ready: ref(false), onboarding: ref(false), disposed: false,
     initializationRequest: null as AbortController | null, desktop: undefined, sessionHeartbeat: null,
     authRequest: vi.fn(async (_path: string, _method?: string, _body?: unknown, _signal?: AbortSignal): Promise<unknown> => ({ mode: 'invite' })),

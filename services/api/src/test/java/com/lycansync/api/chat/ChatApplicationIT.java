@@ -121,10 +121,10 @@ class ChatApplicationIT {
 
     @BeforeEach
     void resetDatabase() throws IOException {
-        jdbc.sql("TRUNCATE auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_file_upload_reservation, "
+        jdbc.sql("TRUNCATE system_state, auth_qq_identity, auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_file_upload_reservation, "
                 + "chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
         jdbc.sql("UPDATE chat_file_storage_quota SET used_bytes = 0, reserved_bytes = 0 WHERE id = 1").update();
-        jdbc.sql("UPDATE system_state SET initialized_at = NULL WHERE id = 1").update();
+        jdbc.sql("INSERT INTO system_state(id) VALUES (1)").update();
         if (Files.exists(FILE_STORAGE)) {
             try (var paths = Files.walk(FILE_STORAGE)) {
                 for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);

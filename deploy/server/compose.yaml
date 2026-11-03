@@ -54,6 +54,10 @@ services:
       ACCOUNT_MODE: ${ACCOUNT_MODE:-invite}
       ACCOUNT_PUBLIC_URL: https://${SERVER_DOMAIN:?请填写域名}
       ACCOUNT_SERVER_NAME: ${ACCOUNT_SERVER_NAME:-LycanSync}
+      QQ_ENABLED: ${QQ_ENABLED:-false}
+      QQ_APP_ID: ${QQ_APP_ID:-}
+      QQ_APP_KEY: ${QQ_APP_KEY:-}
+      QQ_CALLBACK_URL: ${QQ_CALLBACK_URL:-}
       ACCOUNT_BOOTSTRAP_FILE: /var/bootstrap/admin-activation.txt
       LYCANSYNC_ACCOUNT_TRUST_PROXY: "true"
       DB_URL: jdbc:postgresql://postgres:5432/lycansync

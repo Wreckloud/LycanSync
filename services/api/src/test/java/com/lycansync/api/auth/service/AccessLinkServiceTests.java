@@ -50,13 +50,14 @@ class AccessLinkServiceTests {
 
     @BeforeEach
     void setup() {
+        when(users.findUserProfile(owner.id())).thenReturn(new AuthUser(owner.id(), "服主", "", true, "", NOW));
         settings.setPublicUrl("https://example.com");
         when(transactions.execute(any())).thenAnswer(invocation ->
                 ((TransactionCallback<?>) invocation.getArgument(0)).doInTransaction(new SimpleTransactionStatus()));
         when(links.lockInitialization()).thenReturn(true);
         when(links.consume(any(), any(), anyString(), any())).thenReturn(1);
         when(sessions.issueSession(any(), anyString())).thenAnswer(invocation -> invocation.getArgument(1));
-        service = new AccessLinkService(links, users, sessions, settings, transactions, Clock.fixed(NOW, ZoneOffset.UTC));
+        service = new AccessLinkService(links, users, sessions, settings, transactions, Clock.fixed(NOW, ZoneOffset.UTC), mock(AccountLifecycleService.class));
     }
 
     @Test

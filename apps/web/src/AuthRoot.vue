@@ -22,6 +22,7 @@ import {
 import { sendPresenceHeartbeat } from './presence/presenceApi';
 import { clearLocalContentCache } from './cache/localCache';
 import { useIdentityTransition } from './profile/useIdentityTransition';
+import { useQqLogin } from './auth/useQqLogin';
 
 const desktop = window.lycanDesktop;
 const application = ref<InstanceType<typeof App> | null>(null);
@@ -37,6 +38,7 @@ const removing = ref(false);
 const logoutTarget = ref<AuthUser | null>(null);
 const logoutBusy = ref(false);
 const ready = ref(false);
+const qqAvailable = ref(false);
 const accessOffer = ref<AccessOffer | null>(null);
 const onboarding = ref(false);
 const error = ref('');
@@ -61,6 +63,16 @@ let sessionHeartbeat: number | null = null;
 let sessionHeartbeatInFlight = false;
 let logoutInProgress = false;
 let initializationRequest: AbortController | null = null;
+const qq = useQqLogin(async (account, newAccount) => {
+  acceptSession({ user: account });
+  onboarding.value = newAccount;
+  autoLogin.value = true;
+  manualEntryRequired.value = true;
+  if (desktop) {
+    try { await desktop.setAutoLogin(account.id, true, true); }
+    catch { autoLogin.value = false; error.value = '自动登录设置保存失败，请手动登录后重试。'; }
+  }
+});
 
 useIdentityTransition(() => ({
   id: (user.value ?? entryUser.value)?.id ?? null,
@@ -102,9 +114,10 @@ async function initialize(automatic = false) {
   initializationRequest = request;
   error.value = '';
   try {
-    const options = await authRequest<{ mode: 'invite' }>('options', 'GET', undefined, request.signal);
+    const options = await authRequest<{ mode: 'invite'; qqAvailable?: boolean }>('options', 'GET', undefined, request.signal);
     if (request.signal.aborted) return;
     if (options.mode !== 'invite') throw new Error('服务器尚未启用邀请登录，请联系服主。');
+    qqAvailable.value = Boolean(options.qqAvailable);
     // 没有 Cookie 或页面持久化凭据；桌面主进程会自动附加已保存会话。
     const response = await authenticatedFetch('/api/auth/me', {
       signal: AbortSignal.any([request.signal, AbortSignal.timeout(15000)]),
@@ -400,6 +413,11 @@ onMounted(async () => {
               @click="enterAccount">{{ submitting ? '正在登录…' : '登录' }}</button></div>
           </template>
           <template v-else>
+            <div v-if="qqAvailable" class="auth-qq-login">
+              <button type="button" class="auth-qq-button" :disabled="qq.busy.value || submitting || removing" @click="qq.start()"><img src="/qq-login.png" width="170" height="32" alt="QQ 登录" /></button>
+              <button v-if="qq.busy.value" type="button" :disabled="qq.finishing.value" @click="qq.cancel">{{ qq.finishing.value ? '正在确认账号…' : '取消授权等待' }}</button>
+              <InlineFeedback :message="qq.error.value" :status="qq.busy.value ? '请在系统浏览器确认 QQ 授权，然后返回应用' : ''" />
+            </div>
             <p>新成员使用服主发来的邀请链接；更换电脑或凭据失效时使用新的恢复登录链接。</p>
             <p>服主丢失凭据需由服务器维护者恢复，旧激活链接不能重复使用。</p>
           </template>
@@ -449,6 +467,9 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.auth-qq-login { display: grid; justify-items: start; gap: 8px; margin-bottom: 18px; }
+.auth-qq-button { padding: 0; border: 0; border-radius: 0; background: transparent; }
+.auth-qq-button img { display: block; }
 .account-preview { display: flex; align-items: center; gap: 12px; margin: 20px 0; min-width: 0; }
 .account-avatar-placeholder { display: grid; place-items: center; width: 48px; height: 48px; flex-shrink: 0; border-radius: 50%; background: var(--panel-raised); color: var(--muted); }
 .account-preview img { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; }

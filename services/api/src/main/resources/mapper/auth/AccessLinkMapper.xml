@@ -34,7 +34,7 @@
         WHERE kind != 'ACTIVATE' ORDER BY created_at DESC, id DESC LIMIT 100 OFFSET #{offset}
     </select>
     <select id="members" resultType="com.lycansync.api.auth.model.AuthUser">
-        SELECT id, nickname, avatar, administrator, signature, created_at AS createdAt
-        FROM app_user WHERE administrator = FALSE ORDER BY created_at, id LIMIT 100 OFFSET #{offset}
+        SELECT id, nickname, avatar, administrator, signature, created_at AS createdAt, deleted_at AS deletedAt
+        FROM app_user WHERE administrator = FALSE AND deleted_at IS NULL ORDER BY created_at, id LIMIT 100 OFFSET #{offset}
     </select>
 </mapper>

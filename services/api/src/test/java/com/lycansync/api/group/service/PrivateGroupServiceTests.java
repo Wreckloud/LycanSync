@@ -39,6 +39,8 @@ class PrivateGroupServiceTests {
 
     @BeforeEach
     void setUp() {
+        when(mapper.lockAccountState()).thenReturn(1L);
+        when(mapper.activeUser(any())).thenReturn(true);
         when(mapper.lockOwner(groupId)).thenReturn(owner.id().toString());
         when(mapper.memberExists(groupId, owner.id())).thenReturn(true);
         when(mapper.findRtcRoomKey(groupId)).thenReturn(roomKey.toString());

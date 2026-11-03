@@ -1,6 +1,7 @@
 package com.lycansync.api.auth.model;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import org.apache.ibatis.annotations.AutomapConstructor;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -20,6 +21,13 @@ public record AuthUser(
         @Schema(description = "个性签名，未填写时为空串")
         String signature,
         @Schema(description = "账号注册时间", accessMode = Schema.AccessMode.READ_ONLY)
-        Instant createdAt
+        Instant createdAt,
+        @Schema(description = "注销时间；资料与历史保留") Instant deletedAt
 ) {
+    @AutomapConstructor
+    public AuthUser { }
+
+    public AuthUser(UUID id, String nickname, String avatar, boolean administrator, String signature, Instant createdAt) {
+        this(id, nickname, avatar, administrator, signature, createdAt, null);
+    }
 }

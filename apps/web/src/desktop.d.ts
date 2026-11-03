@@ -189,6 +189,8 @@ interface Window {
     getAutoLogin(accountId: string): Promise<{ enabled: boolean; manualEntryRequired: boolean }>;
     setAutoLogin(accountId: string, enabled: boolean, manualEntryRequired: boolean): Promise<boolean>;
     getAccessLink(): Promise<import('./auth/accountAccess').AccessOffer | null>;
+    openQqLogin(url: string): Promise<void>;
+    onQqLogin(callback: (request: string) => void): () => void;
     parseAccessLink(value: string): Promise<import('./auth/accountAccess').AccessOffer>;
     prepareAccessLink(offer: import('./auth/accountAccess').AccessOffer): Promise<void>;
     onAccessLink(callback: (offer: import('./auth/accountAccess').AccessOffer) => void): () => void;

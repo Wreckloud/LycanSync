@@ -125,6 +125,12 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   getAutoLogin: (accountId) => ipcRenderer.invoke('auth:auto-login:get', accountId),
   setAutoLogin: (accountId, enabled, manualEntryRequired) => ipcRenderer.invoke('auth:auto-login:set', accountId, enabled, manualEntryRequired),
   getAccessLink: () => ipcRenderer.invoke('auth:access:get'),
+  openQqLogin: (url) => ipcRenderer.invoke('auth:qq:open', url),
+  onQqLogin: (callback) => {
+    const listener = (_event, request) => callback(request);
+    ipcRenderer.on('auth:qq:complete', listener);
+    return () => ipcRenderer.removeListener('auth:qq:complete', listener);
+  },
   parseAccessLink: (value) => ipcRenderer.invoke('auth:access:parse', value),
   prepareAccessLink: (offer) => ipcRenderer.invoke('auth:access:prepare', offer),
   onAccessLink: (callback) => {

@@ -48,10 +48,10 @@ class AccessLinkApplicationIT {
 
     @BeforeEach
     void setup() {
-        jdbc.sql("TRUNCATE auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_file_upload_reservation, chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
-        jdbc.sql("UPDATE system_state SET initialized_at = NULL WHERE id = 1").update();
+        jdbc.sql("TRUNCATE system_state, auth_qq_identity, auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_file_upload_reservation, chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
+        jdbc.sql("INSERT INTO system_state(id) VALUES (1)").update();
         var activation = links.activation();
-        var result = links.redeem(token(activation), AuthSecrets.generate(), null);
+        var result = links.redeem(token(activation), AuthSecrets.generate(), null, "owner-recovery-test-password");
         owner = sessions.authenticate(result.sessionToken());
         assertThat(owner.administrator()).isTrue();
     }

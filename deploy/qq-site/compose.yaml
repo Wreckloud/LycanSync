@@ -1,0 +1,52 @@
+name: lycansync-qq
+services:
+  postgres:
+    image: postgres:18.6-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: lycansync
+      POSTGRES_USER: lycansync
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请填写私有 .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    mem_limit: 192m
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U lycansync -d lycansync"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: &logging
+      driver: local
+      options: {max-size: 5m, max-file: "2"}
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/lycansync
+      DB_USERNAME: lycansync
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请填写私有 .env}
+      ACCOUNT_MODE: invite
+      ACCOUNT_PUBLIC_URL: https://lycansync.wreckloud.com
+      ACCOUNT_SERVER_NAME: LycanSync
+      ACCOUNT_BOOTSTRAP_FILE: /var/bootstrap/admin-activation.txt
+      LYCANSYNC_ACCOUNT_TRUST_PROXY: "true"
+      QQ_ENABLED: "true"
+      QQ_APP_ID: ${QQ_APP_ID:?请填写私有 .env}
+      QQ_APP_KEY: ${QQ_APP_KEY:?请填写私有 .env}
+      QQ_CALLBACK_URL: https://lycansync.wreckloud.com/api/auth/qq/callback
+      OPENAPI_ENABLED: "false"
+      SWAGGER_UI_ENABLED: "false"
+      JAVA_TOOL_OPTIONS: -Xms64m -Xmx256m -XX:MaxMetaspaceSize=160m -XX:ActiveProcessorCount=2
+    ports: ["127.0.0.1:18081:18080"]
+    volumes:
+      - account-bootstrap:/var/bootstrap
+      - chat-files:/var/chat-files
+    mem_limit: 512m
+    stop_grace_period: 30s
+    logging: *logging
+volumes:
+  postgres-data:
+  account-bootstrap:
+  chat-files:

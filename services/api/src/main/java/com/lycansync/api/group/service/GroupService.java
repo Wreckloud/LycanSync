@@ -61,6 +61,7 @@ public class GroupService {
 
     @Transactional
     public GroupDetailResponse createGroup(AuthenticatedUser user, CreateGroupRequest request) {
+        lockAccountState(user);
         // 避免保存只有空白或包含控制字符的名称与描述。
         String name = normalizeName(request.name());
         String description = normalizeDescription(request.description());
@@ -133,6 +134,7 @@ public class GroupService {
 
     @Transactional
     public GroupDetailResponse updateGroup(UUID groupId, AuthenticatedUser user, CreateGroupRequest request) {
+        lockAccountState(user);
         requireOwner(groupId, user);
         String name = normalizeName(request.name());
         String description = normalizeDescription(request.description());
@@ -149,6 +151,7 @@ public class GroupService {
 
     @Transactional
     public GroupDetailResponse addMember(UUID groupId, AuthenticatedUser user, UUID memberId) {
+        lockAccountState(user);
         requireOwner(groupId, user);
         addMember(groupId, memberId);
         return findGroup(groupId, user);
@@ -166,6 +169,7 @@ public class GroupService {
 
     @Transactional
     public void removeMember(UUID groupId, AuthenticatedUser user, UUID memberId) {
+        lockAccountState(user);
         String owner = mapper.lockOwner(groupId);
         if (owner == null) throw missing();
         requireMember(groupId, user);
@@ -182,6 +186,7 @@ public class GroupService {
 
     @Transactional
     public GroupDetailResponse transferOwner(UUID groupId, AuthenticatedUser user, UUID memberId) {
+        lockAccountState(user);
         requireOwner(groupId, user);
         if (user.id().equals(memberId) || !mapper.memberExists(groupId, memberId)) {
             throw invalid("请选择群内的其他成员");
@@ -194,6 +199,7 @@ public class GroupService {
 
     @Transactional
     public String inviteCode(UUID groupId, AuthenticatedUser user, boolean refresh) {
+        lockAccountState(user);
         requireOwner(groupId, user);
         String code = mapper.findInviteCode(groupId);
         if (refresh || code == null) {
@@ -205,6 +211,7 @@ public class GroupService {
 
     @Transactional
     public GroupDetailResponse joinByCode(AuthenticatedUser user, String code) {
+        lockAccountState(user);
         Instant now = Instant.now(systemClock);
         joinAttempts.entrySet().removeIf(entry -> entry.getValue().isBefore(now.minusSeconds(60)));
         joinAttempts.compute(user.id(), (id, previous) -> {
@@ -226,6 +233,7 @@ public class GroupService {
 
     @Transactional
     public void dissolve(UUID groupId, AuthenticatedUser user) {
+        lockAccountState(user);
         requireOwner(groupId, user);
         rtcAccess.closeRoom(roomKey(groupId));
         mapper.deleteGroup(groupId);
@@ -247,6 +255,12 @@ public class GroupService {
 
     private String newCode() {
         return AuthSecrets.generate().substring(0, 16);
+    }
+
+    private void lockAccountState(AuthenticatedUser user) {
+        // 账号注销和群组成员变更遵循同一锁顺序，避免注销期间又成为群主或重新入群。
+        if (mapper.lockAccountState() == null) throw new IllegalStateException("服务器状态记录缺失");
+        if (!mapper.activeUser(user.id())) throw denied();
     }
 
     private void changed(UUID groupId, boolean deleted) {

@@ -55,6 +55,8 @@ public class AuthConfiguration {
                                 "/join", "/join.js", "/api/system/initialization", "/actuator/health", "/actuator/info",
                                 "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/error",
                                 "/internal/rtc/access", "/internal/rtc/events").permitAll()
+                        .requestMatchers("/", "/account", "/privacy", "/terms", "/qq/result", "/site.css", "/site.js", "/qq-login.png", "/site-icon.png",
+                                "/api/auth/qq/start", "/api/auth/qq/authorize", "/api/auth/qq/callback", "/api/auth/qq/result", "/api/auth/qq/exchange").permitAll()
                         .requestMatchers("/api/**").authenticated()
                         .anyRequest().denyAll())
                 .exceptionHandling(errors -> errors
@@ -92,7 +94,8 @@ public class AuthConfiguration {
                             return;
                         }
                         boolean loginAttempt = "/api/auth/access/preview".equals(path)
-                                || "/api/auth/access/redeem".equals(path);
+                                || "/api/auth/access/redeem".equals(path)
+                                || path.startsWith("/api/auth/qq/");
                         String source = trustProxy ? request.getHeader("X-Lycan-Client-IP") : null;
                         if (source == null || source.isBlank() || source.length() > 64) source = request.getRemoteAddr();
                         if (loginAttempt && !allowAttempt(source)) {

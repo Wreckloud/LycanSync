@@ -2,6 +2,7 @@ package com.lycansync.api.chat.model;
 
 import java.time.Instant;
 import java.util.UUID;
+import org.apache.ibatis.annotations.AutomapConstructor;
 
 /**
  * 群聊列表的消息查询投影。
@@ -12,5 +13,13 @@ import java.util.UUID;
 public record ChatMessageView(UUID id, UUID senderUserId, String senderNickname, ChatMessageType type,
                               String content, Instant createdAt, UUID attachmentId, String attachmentContentType,
                               Integer attachmentWidth, Integer attachmentHeight, Long attachmentByteSize,
-                              String attachmentFileName) {
+                              String attachmentFileName, String senderAvatar, Instant senderDeletedAt) {
+    @AutomapConstructor
+    public ChatMessageView { }
+    public ChatMessageView(UUID id, UUID senderUserId, String senderNickname, ChatMessageType type,
+                           String content, Instant createdAt, UUID attachmentId, String attachmentContentType,
+                           Integer attachmentWidth, Integer attachmentHeight, Long attachmentByteSize, String attachmentFileName) {
+        this(id, senderUserId, senderNickname, type, content, createdAt, attachmentId, attachmentContentType,
+                attachmentWidth, attachmentHeight, attachmentByteSize, attachmentFileName, "", null);
+    }
 }

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lycansync.api.auth.mapper.AccountLifecycleMapper">
+    <select id="state" resultType="com.lycansync.api.auth.mapper.AccountLifecycleMapper$State" useCache="false">
+        SELECT initialized_at IS NOT NULL AS initialized,
+            (SELECT id FROM app_user WHERE administrator = TRUE AND deleted_at IS NULL) AS owner_id,
+            owner_recovery_user_id AS recovery_user_id, owner_recovery_hash AS recovery_hash,
+            transfer_target_user_id AS transfer_target_id, transfer_expires_at
+        FROM system_state WHERE id = 1
+    </select>
+    <update id="saveRecovery">
+        UPDATE system_state SET owner_recovery_user_id = #{userId}, owner_recovery_hash = #{hash}
+        WHERE id = 1
+    </update>
+    <update id="offerTransfer">
+        UPDATE system_state SET transfer_target_user_id = #{targetId}, transfer_expires_at = #{expires} WHERE id = 1
+    </update>
+    <update id="clearTransfer">
+        UPDATE system_state SET transfer_target_user_id = NULL, transfer_expires_at = NULL WHERE id = 1
+    </update>
+    <update id="demoteOwner">
+        UPDATE app_user SET administrator = FALSE WHERE id = #{userId} AND administrator = TRUE AND deleted_at IS NULL
+    </update>
+    <update id="promoteOwner">
+        UPDATE app_user SET administrator = TRUE WHERE id = #{userId} AND administrator = FALSE AND deleted_at IS NULL
+    </update>
+    <select id="candidates" resultType="com.lycansync.api.auth.mapper.AccountLifecycleMapper$Candidate">
+        SELECT id, nickname FROM app_user WHERE administrator = FALSE AND deleted_at IS NULL ORDER BY created_at, id
+    </select>
+    <update id="closeAccount">
+        UPDATE app_user SET deleted_at = #{now} WHERE id = #{userId} AND administrator = FALSE AND deleted_at IS NULL
+    </update>
+    <delete id="revokeSessions">DELETE FROM auth_session WHERE user_id = #{userId}</delete>
+    <update id="revokeLinks">
+        UPDATE auth_access_link SET revoked_at = #{now}
+        WHERE (creator_id = #{userId} OR target_id = #{userId}) AND consumed_at IS NULL AND revoked_at IS NULL
+    </update>
+    <update id="revokePendingLinks">
+        UPDATE auth_access_link SET revoked_at = #{now} WHERE consumed_at IS NULL AND revoked_at IS NULL
+    </update>
+</mapper>
