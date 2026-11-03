@@ -36,13 +36,15 @@ afterEach(() => {
 });
 
 describe('NativeScreenVideoSession', () => {
-  function gameFollowFixture(options: { holdSwitch?: boolean; holdCleanup?: boolean; rejectSwitch?: boolean } = {}) {
+  function gameFollowFixture(options: { holdSwitch?: boolean; holdCleanup?: boolean; rejectSwitch?: boolean; holdHintWrite?: boolean } = {}) {
     const target = installWindowMessageTarget();
     let reportError!: (failure: { sessionId: string; code: string }) => void;
     let nextSource: string | null = 'window:1:0';
     let nextSession = 1;
     const switched = deferred<{ sessionId: string; changed: boolean; gameFollowId: string }>();
     const cleanup = deferred<void>();
+    const hintWrite = deferred<void>();
+    const hints: FakeVideoFrame[] = [];
     const onError = vi.fn();
     const changed = vi.fn(async () => {});
     const changing = vi.fn(() => options.holdCleanup ? cleanup.promise : Promise.resolve());
@@ -60,11 +62,15 @@ describe('NativeScreenVideoSession', () => {
         return { sessionId: `capture-${++nextSession}`, changed: true, gameFollowId: 'league-1' };
       }),
     };
-    const generator = { writable: new WritableStream<VideoFrame>(), stop: vi.fn() };
+    const generator = { writable: new WritableStream<VideoFrame>({ write: frame => {
+      if (options.holdHintWrite && hints.length >= 2 && hints.includes(frame as FakeVideoFrame)) {
+        return hintWrite.promise.then(() => { if ((frame as FakeVideoFrame).close.mock.calls.length) throw new Error('frameAlreadyClosed'); });
+      }
+    } }), stop: vi.fn() };
     const session = new NativeScreenVideoSession(desktop, { maxFps: 60,
       captureSettings: { hideBorder: true, hideCursor: false, followGame: 'league' },
       createGenerator: () => generator as never, createLocalTrack: () => ({ stop: vi.fn() }) as never,
-      createSuspendedFrame: () => createFrame(), onError, onGameSourceChanging: changing, onGameSourceChanged: changed });
+      createSuspendedFrame: () => { const frame = createFrame(); hints.push(frame); return frame; }, onError, onGameSourceChanging: changing, onGameSourceChanged: changed });
     const start = async () => {
       const ready = session.start('window:1:0');
       await vi.advanceTimersByTimeAsync(0);
@@ -72,7 +78,7 @@ describe('NativeScreenVideoSession', () => {
       await ready;
       await vi.advanceTimersByTimeAsync(0);
     };
-    return { session, desktop, generator, onError, changing, changed, start, switched, cleanup,
+    return { session, desktop, generator, target, hints, hintWrite, onError, changing, changed, start, switched, cleanup,
       next: (id: string | null) => { nextSource = id; },
       frame: (id: string) => dispatchFrame(target, createFrame(), id),
       closeTarget: (id: string) => reportError({ sessionId: id, code: 'captureTargetClosed' }) };
@@ -104,6 +110,33 @@ describe('NativeScreenVideoSession', () => {
     await f.session.stop();
     expect(f.desktop.stopNativeVideo).toHaveBeenLastCalledWith('capture-3');
     expect(f.desktop.endNativeGameFollow).toHaveBeenCalledWith('league-1');
+  });
+
+  it('慢换窗期间提示帧与待确认帧分别释放，不提前关闭写入中的提示帧', async () => {
+    vi.useFakeTimers();
+    const f = gameFollowFixture({ holdSwitch: true, holdHintWrite: true });
+    await f.start();
+    f.next('window:2:0');
+    await vi.advanceTimersByTimeAsync(750);
+    const replaced = createFrame();
+    dispatchFrame(f.target, replaced, 'capture-2');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.hints).toHaveLength(2);
+    expect(replaced.close).not.toHaveBeenCalled();
+    const latest = createFrame();
+    dispatchFrame(f.target, latest, 'capture-2');
+    expect(replaced.close).toHaveBeenCalledOnce();
+    expect(f.hints[1]!.close).not.toHaveBeenCalled();
+    f.hintWrite.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.hints[1]!.close).toHaveBeenCalledOnce();
+    f.switched.resolve({ sessionId: 'capture-2', changed: true, gameFollowId: 'league-1' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(latest.close).toHaveBeenCalledOnce();
+    expect(f.changed).toHaveBeenCalledWith('window:2:0', 'capture-2');
+    expect(f.onError).not.toHaveBeenCalled();
+    expect(f.generator.stop).not.toHaveBeenCalled();
+    await f.session.stop();
   });
 
   it('声音清理期间主动停止，迟到清理不得启动下一局', async () => {

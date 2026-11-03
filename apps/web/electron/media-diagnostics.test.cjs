@@ -7,6 +7,7 @@ const { join } = require('node:path');
 const { test } = require('node:test');
 const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
 const { EventEmitter } = require('node:events');
+const { parseDiagnosticReport } = require('./diagnostic-reports.cjs');
 
 test('录制摘要保留真实输出数和固定故障，排除文件名及原始声音信息', async context => {
   const directory = await mkdtemp(join(tmpdir(), 'lycan-recording-diagnostics-'));
@@ -421,7 +422,7 @@ function exportFixture() {
   assert.ok(start >= 0 && end > start);
   let exportReport;
   const calls = { read: 0, dialog: 0, writes: [], ranges: [], flushed: 0, exportDirectory: null, dialogOptions: null };
-  const state = { closing: false, diagnosticExportPending: false, trustedSender: () => true,
+  const state = { closing: false, diagnosticExportPending: false, trustedSender: () => true, parseDiagnosticReport,
     diagnosticStartedAt: Date.parse('2026-10-14T00:00:00Z'), writeMediaDiagnostic: { flush: async () => { calls.flushed++; } },
     Buffer, JSON, Date, Error, resolve: join, mainWindow: {}, process: { versions: { electron: 'test' }, platform: 'win32', arch: 'x64' },
     osRelease: () => 'test-os', app: { getPath: () => '/private', getVersion: () => 'test-version', getGPUFeatureStatus: () => ({ video_encode: 'enabled' }) },

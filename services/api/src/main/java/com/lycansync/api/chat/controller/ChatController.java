@@ -102,7 +102,8 @@ public class ChatController {
     @PostMapping(value = "/files", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
     @Operation(summary = "发送群聊文件", description = "以原始字节流上传一个文件，不使用客户端 MIME 类型作为内容判断")
     @ApiResponses({
-            @ApiResponse(responseCode = "201", description = "文件消息发送成功"),
+            @ApiResponse(responseCode = "201", description = "文件消息发送成功或返回已完成的同编号消息"),
+            @ApiResponse(responseCode = "409", description = "同编号上传仍在进行或收尾，请稍后重试"),
             @ApiResponse(responseCode = "413", description = "文件超过单文件大小限制"),
             @ApiResponse(responseCode = "507", description = "服务器文件存储空间不足")
     })

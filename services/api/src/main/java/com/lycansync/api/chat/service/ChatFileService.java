@@ -18,6 +18,7 @@ import com.lycansync.api.group.service.GroupService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -90,9 +91,20 @@ public class ChatFileService {
         Lock uploadLock = coordinator.uploadLock();
         uploadLock.lock();
         try {
-            quotaService.reserve(uploadId, groupId, expectedSize, coordinator.processInstanceId());
+            try {
+                quotaService.reserve(uploadId, groupId, expectedSize, coordinator.processInstanceId());
+            } catch (DuplicateKeyException exception) {
+                // 预留事务已回滚；这里只重查，不清理另一请求持有的文件或额度。
+                ChatMessageView completedUpload = mapper.findFileMessage(groupId, uploadId, user.id());
+                if (completedUpload != null) return toResponse(completedUpload);
+                throw new GroupException(HttpStatus.CONFLICT, ApiErrorCode.INVALID_REQUEST,
+                        "同一文件仍在上传或收尾，请稍后重试");
+            }
             boolean completed = false;
             try {
+                // 另一请求可能在等待额度行锁时完成；归还本次预留，不重复接收文件。
+                ChatMessageView completedUpload = mapper.findFileMessage(groupId, uploadId, user.id());
+                if (completedUpload != null) return toResponse(completedUpload);
                 writeTemporaryFile(input, temporaryFile, expectedSize);
                 moveToStorage(temporaryFile, storedFile);
                 ChatMessageResponse response = transactions.execute(status -> persistMessageInTransaction(groupId,

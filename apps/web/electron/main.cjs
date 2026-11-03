@@ -205,6 +205,11 @@ const startupUpdate = createStartupUpdate({
     allowQuitAfterMediaHelper = true;
   },
   onInstallFailure: () => {
+    // 原生宿主已永久释放，安装失败也不能把此进程交还给用户继续采集。
+    if (updatePreparing && mediaHelperShutdownPromise) {
+      app.quit();
+      return;
+    }
     canClose = false;
     allowQuitAfterMediaHelper = false;
     if (updatePreparing) { updatePreparing = false; closing = false; }
@@ -1656,13 +1661,7 @@ ipcMain.handle('diagnostics:export-saved', async (event, notes) => {
 });
 ipcMain.handle('diagnostics:export', async (event, text) => {
   if (!trustedSender(event) || closing || diagnosticExportPending) throw new Error('当前不能导出诊断。');
-  if (typeof text !== 'string' || Buffer.byteLength(text) > 8 * 1024 * 1024) throw new Error('诊断报告过大或无效。');
-  const report = JSON.parse(text);
-  if (!report || report.kind !== 'lycansync-diagnostics' || report.schemaVersion !== 9 || !Array.isArray(report.samples)
-      || report.samples.length > 900 || !Number.isFinite(Date.parse(report.startedAt))
-      || !Number.isFinite(Date.parse(report.endedAt)) || Date.parse(report.endedAt) < Date.parse(report.startedAt)) {
-    throw new Error('诊断报告无效。');
-  }
+  const report = parseDiagnosticReport(text);
   diagnosticExportPending = true;
   try {
     await writeMediaDiagnostic.flush();

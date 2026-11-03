@@ -3,10 +3,12 @@ const { dirname, isAbsolute, join, relative, resolve, sep } = require('node:path
 
 const defaultIo = { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync };
 const MIGRATION_COMPLETE = '.legacy-migration-complete';
+const SETTINGS_MIGRATION_COMPLETE = '.legacy-settings-migration-complete';
+const SETTINGS_FILES = ['login-settings.json', 'desktop-settings.json', 'recording-settings.json', 'recording-library.json'];
 const ENCRYPTED_FILES = ['session.bin', 'pending-access.bin'];
 // 只迁入程序自己的文件。Chromium 缓存留在旧目录，避免把用户目录里的缓存再复制一份。
 const OWNED_FILES = [
-  'session.bin', 'server-config.json', 'pending-access.bin',
+  'session.bin', 'server-config.json', 'pending-access.bin', ...SETTINGS_FILES,
   'screen-share-error.log', 'screen-share-error.log.previous',
 ];
 
@@ -52,10 +54,24 @@ function ensureWritableDirectory(directory, io = defaultIo) {
 }
 
 function migrateOwnedData(fromDirectory, toDirectory, io = defaultIo) {
-  if (!fromDirectory || !toDirectory || sameDirectory(fromDirectory, toDirectory)
-      || io.existsSync(join(toDirectory, MIGRATION_COMPLETE))) return;
+  if (!fromDirectory || !toDirectory || sameDirectory(fromDirectory, toDirectory)) return;
   try {
+    if (io.existsSync(join(toDirectory, MIGRATION_COMPLETE))) {
+      if (io.existsSync(join(toDirectory, SETTINGS_MIGRATION_COMPLETE))) return;
+      // 只补迁旧版本遗漏的设置与索引，不能重新捡回已清除的账号凭据。
+      for (const name of SETTINGS_FILES) {
+        const source = join(fromDirectory, name), target = join(toDirectory, name);
+        if (!io.existsSync(target) && io.existsSync(source)) {
+          const temporary = join(toDirectory, `.${name}.legacy-migration`);
+          io.copyFileSync(source, temporary);
+          io.renameSync(temporary, target);
+        }
+      }
+      io.writeFileSync(join(toDirectory, SETTINGS_MIGRATION_COMPLETE), '');
+      return;
+    }
     if (!io.existsSync(fromDirectory)) {
+      io.writeFileSync(join(toDirectory, SETTINGS_MIGRATION_COMPLETE), '');
       io.writeFileSync(join(toDirectory, MIGRATION_COMPLETE), '');
       return;
     }
@@ -97,7 +113,13 @@ function migrateOwnedData(fromDirectory, toDirectory, io = defaultIo) {
       const target = join(toDirectory, name);
       // 已有独立加密状态时不混入另一份旧密文；保留当前账号和邀请。
       if ((ENCRYPTED_FILES.includes(name) || name === 'server-config.json') && newEncrypted.length && !copiedEncrypted) continue;
-      if (io.existsSync(source) && !io.existsSync(target)) io.copyFileSync(source, target);
+      if (io.existsSync(source) && !io.existsSync(target)) {
+        if (SETTINGS_FILES.includes(name)) {
+          const temporary = join(toDirectory, `.${name}.legacy-migration`);
+          io.copyFileSync(source, temporary);
+          io.renameSync(temporary, target);
+        } else io.copyFileSync(source, target);
+      }
     }
     for (const name of ['obs-capture', 'Local Storage']) {
       const source = join(fromDirectory, name), target = join(toDirectory, name);
@@ -107,6 +129,7 @@ function migrateOwnedData(fromDirectory, toDirectory, io = defaultIo) {
       io.renameSync(temporary, target);
     }
     // 退出登录后不能再次从旧目录捡回凭据，也不再持续读取安装目录外的旧配置。
+    io.writeFileSync(join(toDirectory, SETTINGS_MIGRATION_COMPLETE), '');
     io.writeFileSync(join(toDirectory, MIGRATION_COMPLETE), '');
   } catch (error) {
     throw new Error(`无法把原有数据复制到运行目录（${error.code ?? error.message ?? '复制失败'}）：${toDirectory}`, { cause: error });
