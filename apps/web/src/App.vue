@@ -1545,7 +1545,7 @@ function participantListening(participant: Participant) {
       :audio-shortcuts="audioShortcuts" :call-sound-preferences="callSoundPreferences" :call-sounds="callSounds"
       :overlay="desktop ? voiceOverlay : undefined"
       :recording="recording" :preferences="audioPreferences" :audio-output="audioOutput" :rtc="rtc" :microphone-test="microphoneTest" :microphone-devices="microphoneDevices" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
-      :activity="currentActivity" :show-activity="showActivity" :show-last-online="showLastOnline" :activity-error="activityVisibilityError || presenceSyncError"
+      :activity="currentActivity" :presence-status="publicPresenceStatus" :show-activity="showActivity" :show-last-online="showLastOnline" :activity-error="activityVisibilityError || presenceSyncError"
       :activity-mappings="activityMappings"
       @activity-visibility="setShowActivity" @last-online-visibility="setShowLastOnline"
       :save-profile="saveProfile" @close="closeSettings" @logout="emit('logout')" />

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onScopeDispose, ref, watch } from 'vue';
 import { autoUpdate, computePosition, flip, offset, shift } from '@floating-ui/dom';
-import { UserRound } from '@lucide/vue';
+import { Headphones, UserRound } from '@lucide/vue';
+import { formatSharedVoiceTime } from '../profile/sharedVoiceTime';
 import type { UserPresenceStatus } from '../presence/presenceApi';
 import { readAvatarTint } from '../profile/avatarTint';
 import { formatPresenceAgo, formatRecentGame } from '../profile/presenceHistory';
@@ -24,6 +25,10 @@ const props = defineProps<{
   loading?: boolean;
   error?: string;
   autofocus?: boolean;
+  inline?: boolean;
+  voiceSeconds?: number | null;
+  ownVoice?: boolean;
+  voiceError?: string;
 }>();
 const emit = defineEmits<{ close: []; enter: []; leave: []; retry: [] }>();
 const surface = ref<HTMLElement | null>(null);
@@ -35,6 +40,7 @@ const activitySeconds = ref<number | null>(null);
 const historyNow = ref(Date.now());
 const lastOnline = computed(() => props.status === 'OFFLINE' ? formatPresenceAgo(props.lastOnlineAt, historyNow.value) : '');
 const recentGameDescription = computed(() => formatRecentGame(props.recentGame, historyNow.value));
+const voiceDescription = computed(() => props.voiceSeconds == null ? '' : formatSharedVoiceTime(props.voiceSeconds, props.ownVoice));
 const activityDuration = computed(() => {
   const elapsed = activitySeconds.value;
   if (elapsed === null) return '';
@@ -101,7 +107,7 @@ function dismissOnEscape(event: KeyboardEvent) {
 watch(() => props.avatar, () => { tint.value = undefined; });
 watch(() => [props.anchor, surface.value, props.placement] as const, ([anchor, element, placement], _, onCleanup) => {
   const revision = ++generation;
-  if (!anchor || !element) return;
+  if (props.inline || !anchor || !element) return;
   position.value.visibility = 'hidden';
   const document = anchor.ownerDocument;
   document.addEventListener('pointerdown', dismissOutside);
@@ -144,10 +150,10 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
 </script>
 
 <template>
-  <Teleport to="body">
+  <Teleport to="body" :disabled="inline">
     <Transition name="profile-popover" @before-enter="setCardActive($event, true)" @before-leave="setCardActive($event, false)">
-      <section v-if="anchor" :key="profileKey" ref="surface" class="profile-popover" :class="{ 'is-personal': placement === 'above' }"
-        role="dialog" :aria-label="label" :style="{ ...position, '--profile-tint': tint }"
+      <section v-if="inline || anchor" :key="profileKey" ref="surface" class="profile-popover" :class="{ 'is-personal': placement === 'above', 'is-inline': inline }"
+        :role="inline ? 'region' : 'dialog'" :aria-label="label" :style="{ ...(inline ? {} : position), '--profile-tint': tint }"
         @mouseenter="emit('enter')" @mouseleave="emit('leave')">
         <div class="profile-popover-banner" aria-hidden="true" />
         <div class="profile-popover-body">
@@ -162,7 +168,7 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
           <div class="profile-popover-signature" :aria-busy="loading">
             <span v-if="loading" role="status">正在读取签名…</span>
             <template v-else-if="error"><span role="alert">{{ error }}</span><button type="button" @click="emit('retry')">重试</button></template>
-            <p v-else>{{ signature || '尚未填写个性签名' }}</p>
+            <p v-else>{{ signature || '这只狼暂时没留下什么话。' }}</p>
           </div>
           <div v-if="activity" class="profile-popover-activity">{{ activity }}<span v-if="activityDuration"> · {{ activityDuration }}</span></div>
           <div v-if="lastOnline || recentGameDescription" class="profile-popover-history">
@@ -170,6 +176,8 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
             <p v-if="recentGameDescription">{{ recentGameDescription }}</p>
           </div>
           <slot />
+          <p v-if="voiceDescription && !voiceError" class="profile-voice-time"><Headphones :size="13" aria-hidden="true" />{{ voiceDescription }}</p>
+          <p v-else-if="voiceError" class="profile-voice-error" role="status">{{ voiceError }}</p>
         </div>
       </section>
     </Transition>
@@ -179,6 +187,10 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
 <style>
 .profile-popover { position: fixed; z-index: 60; width: min(292px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); text-align: left; }
 .profile-popover-banner { height: 38px; background: var(--profile-tint, var(--panel-raised)); }
+.profile-popover.is-inline { position: relative; z-index: auto; width: 100%; max-height: none; overflow: visible; }
+.profile-voice-time { display: flex; align-items: center; gap: 8px; margin: 0; padding-top: 10px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 12px; line-height: 18px; }
+.profile-voice-time > svg { flex-shrink: 0; }
+.profile-voice-error { margin: 0; color: var(--muted); font-size: 12px; line-height: 18px; }
 .profile-popover-body { display: grid; gap: 8px; padding: 0 14px 12px; }
 .profile-popover-identity { display: flex; align-items: flex-end; gap: 10px; min-width: 0; margin-top: -18px; }
 .profile-popover-identity .personal-avatar { --avatar-size: 48px; flex-shrink: 0; }

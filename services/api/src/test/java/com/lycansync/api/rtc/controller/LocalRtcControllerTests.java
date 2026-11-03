@@ -12,6 +12,7 @@ import com.lycansync.api.rtc.dto.RtcTokenResponse;
 import com.lycansync.api.rtc.exception.RtcServiceUnavailableException;
 import com.lycansync.api.rtc.service.LocalRtcRoomSummaryService;
 import com.lycansync.api.rtc.service.LocalRtcTokenService;
+import com.lycansync.api.rtc.service.SharedVoiceTimeService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -67,6 +68,18 @@ class LocalRtcControllerTests {
 
     @MockitoBean
     private AuthService authService;
+
+    @MockitoBean
+    private SharedVoiceTimeService sharedVoiceTimeService;
+
+    @Test
+    void ownVoiceTimeUsesAuthenticatedIdentityAndDoesNotCache() throws Exception {
+        when(sharedVoiceTimeService.findOwnSeconds(AUTHENTICATED_USER.id())).thenReturn(460800L);
+        mockMvc.perform(get("/api/rtc/voice-time").header(HttpHeaders.AUTHORIZATION, AUTHORIZATION))
+                .andExpect(status().isOk()).andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
+                .andExpect(jsonPath("$.seconds").value(460800));
+        mockMvc.perform(get("/api/rtc/voice-time")).andExpect(status().isUnauthorized());
+    }
 
     @BeforeEach
     void authenticateRequest() {

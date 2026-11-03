@@ -7,6 +7,8 @@ import com.lycansync.api.rtc.dto.RtcRoomSummaryResponse;
 import com.lycansync.api.rtc.dto.RtcTokenResponse;
 import com.lycansync.api.rtc.service.LocalRtcRoomSummaryService;
 import com.lycansync.api.rtc.service.LocalRtcTokenService;
+import com.lycansync.api.rtc.service.SharedVoiceTimeService;
+import com.lycansync.api.rtc.dto.VoiceTimeResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -50,6 +52,14 @@ public class LocalRtcController {
 
     private final LocalRtcTokenService localRtcTokenService;
     private final LocalRtcRoomSummaryService localRtcRoomSummaryService;
+    private final SharedVoiceTimeService sharedVoiceTimeService;
+
+    @GetMapping("/voice-time")
+    @Operation(summary = "查询自己的累计语音时长", description = "仅统计服务器确认过的连接区间，多设备重叠时间不重复计算")
+    public ResponseEntity<VoiceTimeResponse> getVoiceTime(@AuthenticationPrincipal AuthenticatedUser user) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(new VoiceTimeResponse(sharedVoiceTimeService.findOwnSeconds(user.id())));
+    }
 
     @PostMapping(value = "/token", consumes = MediaType.APPLICATION_JSON_VALUE)
     @Operation(summary = "签发群组语音凭证", description = "仅当前群成员可进入语音房间")

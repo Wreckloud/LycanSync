@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.lycansync.api.rtc.mapper.SharedVoiceTimeMapper">
+    <!-- 合并已确认区间，同一账号跨房间、跨设备的重叠时间只累计一次。 -->
+    <select id="findOwnSeconds" resultType="long">
+        SELECT COALESCE(FLOOR(SUM(EXTRACT(EPOCH FROM upper(period) - lower(period)))), 0)::bigint
+        FROM unnest((SELECT range_agg(period)
+            FROM rtc_voice_time, LATERAL unnest(connected_periods) period
+            WHERE user_id = #{userId})) period
+    </select>
     <insert id="join">
         INSERT INTO rtc_voice_time(participant_sid, room_sid, user_id, confirmed_at, observing)
         VALUES (#{participantSid}, #{roomSid}, #{userId}, #{at}, true)

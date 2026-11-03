@@ -27,7 +27,7 @@ import type { useCallSounds } from '../rtc/useCallSounds';
 import RecordingSettings from './settings/RecordingSettings.vue';
 import type { useRecording } from '../recording/useRecording';
 import { SETTINGS_SECTIONS, settingsSectionTitle, type SettingsSectionId } from '../settings/settingsSections';
-import type { UserActivity } from '../presence/presenceApi';
+import type { UserActivity, UserPresenceStatus } from '../presence/presenceApi';
 
 const props = defineProps<{
   section: SettingsSectionId;
@@ -47,6 +47,7 @@ const props = defineProps<{
   diagnosticReport: ReturnType<typeof useDiagnosticReport>;
   inputLevelPercent: number;
   activity: UserActivity | null;
+  presenceStatus?: UserPresenceStatus;
   showActivity: boolean;
   showLastOnline: boolean;
   activityError: string;
@@ -126,7 +127,7 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
         <MemberAccessSettings v-if="user.administrator && activeSection === 'members'" :active="true" />
         <div v-show="activeSection === 'account'" class="settings-account-page">
           <ProfileSettings ref="profileSettings" :user="user" :save-profile="saveProfile" />
-          <ActivitySettings :desktop="desktop" :activity="activity" :show-activity="showActivity" :show-last-online="showLastOnline"
+          <ActivitySettings :user="profileSettings?.preview ?? user" :status="presenceStatus" :desktop="desktop" :activity="activity" :show-activity="showActivity" :show-last-online="showLastOnline"
             :mappings="activityMappings" :active="activeSection === 'account'"
             :error="activityError" @visibility="emit('activityVisibility', $event)" @last-online-visibility="emit('lastOnlineVisibility', $event)" />
           <AccountSettings :active="activeSection === 'account'" :leaving="leaving" @logout="requestLogout" />

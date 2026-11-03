@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue';
 import { Check, ChevronDown, Keyboard, LogOut, Pencil, SlidersHorizontal, UserRound } from '@lucide/vue';
 import ActivityStatus from './ActivityStatus.vue';
+import { useOwnVoiceTime } from '../profile/useOwnVoiceTime';
 import ExpandSection from './ExpandSection.vue';
 import InlineFeedback from './InlineFeedback.vue';
 import ProfilePopover from './ProfilePopover.vue';
@@ -15,6 +16,7 @@ const props = defineProps<{ user: AuthUser; status: UserPresenceStatus; statusLa
 const emit = defineEmits<{ settings: [section: 'account' | 'audio' | 'shortcuts', trigger: HTMLElement]; logout: [];
   presenceMode: [mode: PresenceMode] }>();
 const menuOpen = defineModel<boolean>('menuOpen', { default: false });
+const voiceTime = useOwnVoiceTime(() => menuOpen.value && props.active !== false);
 const hovered = ref(false);
 const trigger = ref<HTMLElement | null>(null);
 const statusExpanded = ref(false);
@@ -53,7 +55,8 @@ function logout() {
     <slot />
     <ProfilePopover :anchor="menuEnabled && active !== false && menuOpen ? trigger : null" placement="above" label="个人菜单"
       :nickname="user.nickname" :avatar="user.avatar" :signature="user.signature" :status="status" :status-label="statusLabel"
-      :activity="activityStatus?.text" :activity-started-at="activityStatus?.startedAt" autofocus @close="menuOpen = false">
+      :activity="activityStatus?.text" :activity-started-at="activityStatus?.startedAt" :voice-seconds="voiceTime.seconds.value"
+      :voice-error="voiceTime.error.value" own-voice autofocus @close="menuOpen = false">
       <div class="personal-menu-actions">
         <button type="button" @click="selectSettings('account')"><Pencil :size="15" />编辑个人资料</button>
         <template v-if="presenceMode">

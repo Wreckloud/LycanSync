@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { Gamepad2, Music2 } from '@lucide/vue';
 
 const props = defineProps<{ type: string; text: string; active: boolean }>();
 const viewport = ref<HTMLElement | null>(null);
@@ -28,7 +27,6 @@ watch([viewport, content, () => props.active, () => props.text], (_, __, cleanup
 
 <template>
   <span class="member-activity" :title="text" :style="motion" :class="{ 'is-scrolling': active && distance > 1 }">
-    <Music2 v-if="type === 'MUSIC'" :size="12" aria-hidden="true" /><Gamepad2 v-else :size="12" aria-hidden="true" />
     <span class="activity-prefix">{{ prefix }} </span>
     <span ref="viewport" class="activity-viewport"><span ref="content" class="activity-content">{{ name }}</span></span>
   </span>

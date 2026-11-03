@@ -70,6 +70,18 @@ class SharedVoiceTimeApplicationIT {
     }
 
     @Test
+    void ownTimeUnionsMultipleDevicesAndRoomsWithoutInventingHistory() {
+        assertThat(time.findOwnSeconds(own)).isZero();
+        for (String room : List.of("RM_one", "RM_two")) {
+            String participant = "PA_" + room;
+            time.joined(room, participant, own, START);
+            time.confirmRoom(room, List.of(new SharedVoiceTimeService.ConnectedMember(participant, own)), START.plusSeconds(30));
+        }
+        assertThat(time.findOwnSeconds(own)).isEqualTo(30);
+        assertThat(time.findOwnSeconds(peer)).isZero();
+    }
+
+    @Test
     void countsIntersectionAndDoesNotReopenAfterRepeatedJoinOrLeave() {
         time.joined("RM_test", "PA_own", own, START);
         time.joined("RM_test", "PA_peer", peer, START.plusSeconds(5));

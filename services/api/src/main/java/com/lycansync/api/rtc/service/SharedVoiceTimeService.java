@@ -22,6 +22,10 @@ public class SharedVoiceTimeService {
 
     public record ConnectedMember(String participantSid, UUID userId) { }
 
+    public long findOwnSeconds(UUID userId) {
+        return mapper.findOwnSeconds(userId);
+    }
+
     @Transactional
     public void joined(String roomSid, String participantSid, UUID userId, Instant at) {
         mapper.join(participantSid, roomSid, userId, at);
