@@ -6,8 +6,11 @@
 !ifndef BUILD_UNINSTALLER
   Var lycanDesktopShortcut
   Var lycanDesktopShortcutCheckbox
+  Var lycanInstallStartedAt
 
   !macro customInit
+    System::Call 'kernel32::GetTickCount() i .r0'
+    StrCpy $lycanInstallStartedAt $0
     StrCpy $lycanDesktopShortcut "1"
     ; 手动与静默升级都保留用户取消或删除的快捷方式。
     SetRegView 64
@@ -45,10 +48,17 @@
 !macroend
 
 !macro customWelcomePage
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE LycanWelcomePagePre
   !define MUI_WELCOMEPAGE_TEXT "此向导将安装 LycanSync。$\r$\n$\r$\n升级请沿用原安装目录，data 中的账号与设置会保留。$\r$\n$\r$\n单击“下一步”继续。"
   !define MUI_PAGE_CUSTOMFUNCTION_SHOW LycanWelcomeOptionsShow
   !define MUI_PAGE_CUSTOMFUNCTION_LEAVE LycanWelcomeOptionsLeave
   !insertmacro MUI_PAGE_WELCOME
+
+  Function LycanWelcomePagePre
+    ${If} ${isUpdated}
+      Abort
+    ${EndIf}
+  FunctionEnd
 
   Function LycanWelcomeOptionsShow
     ${NSD_CreateCheckbox} 120u 165u 195u 14u "创建桌面快捷方式"
@@ -59,6 +69,28 @@
 
   Function LycanWelcomeOptionsLeave
     ${NSD_GetState} $lycanDesktopShortcutCheckbox $lycanDesktopShortcut
+  FunctionEnd
+!macroend
+
+!macro customFinishPage
+  !define MUI_FINISHPAGE_RUN
+  !define MUI_FINISHPAGE_RUN_FUNCTION LycanRunApplication
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE LycanFinishPagePre
+  !insertmacro MUI_PAGE_FINISH
+
+  Function LycanRunApplication
+    StrCpy $1 ""
+    ${If} ${isUpdated}
+      StrCpy $1 "--updated"
+    ${EndIf}
+    ${StdUtils.ExecShellAsUser} $0 "$launchLink" "open" "$1"
+  FunctionEnd
+  Function LycanFinishPagePre
+    ${If} ${isUpdated}
+      Call LycanRunApplication
+      SetErrorLevel 0
+      Quit
+    ${EndIf}
   FunctionEnd
 !macroend
 
@@ -123,6 +155,15 @@ FunctionEnd
   WriteRegStr HKCU "Software\Classes\lycansync\shell\open\command" "" '$\"$INSTDIR\${APP_EXECUTABLE_FILENAME}$\" $\"%1$\"'
   Call FinishApplicationReplacement
   Call CleanInstallationPayloads
+  ${If} ${isUpdated}
+    System::Call 'kernel32::GetTickCount() i .r0'
+    IntOp $0 $0 - $lycanInstallStartedAt
+    CreateDirectory "$INSTDIR\data\updater"
+    WriteINIStr "$INSTDIR\data\updater\last-install.ini" "update" "version" "${VERSION}"
+    WriteINIStr "$INSTDIR\data\updater\last-install.ini" "update" "durationMs" "$0"
+    ; 计时写入不影响已经完成的程序安装。
+    ClearErrors
+  ${EndIf}
 !macroend
 
 !macro customRemoveFiles

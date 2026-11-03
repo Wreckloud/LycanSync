@@ -56,7 +56,8 @@ describe('设置页确认重启更新', () => {
     await update.restart();
     await update.restart();
     expect(bridge.restartForUpdate).toHaveBeenCalledOnce();
-    expect(update.busy.value).toBe(true);
+    expect(update.busy.value).toBe(false);
+    expect(update.confirmationVersion.value).toBe('');
     scope.stop();
   });
 
@@ -104,16 +105,16 @@ describe('设置页确认重启更新', () => {
     scope.stop();
   });
 
-  it('重启申请失败保留确认并就近报错，允许取消或重试', async () => {
+  it('更新失败就近报错，重新检查后允许重试', async () => {
     const { scope, update, bridge } = await setup();
     await update.check();
     bridge.restartForUpdate.mockRejectedValueOnce(new Error('restart failed'));
     await update.restart();
-    expect(update.error.value).toContain('无法重启更新');
-    expect(update.confirmationVersion.value).toBe('0.0.10');
-    expect(update.busy.value).toBe(false);
-    update.cancel();
+    expect(update.error.value).toContain('无法完成更新');
     expect(update.confirmationVersion.value).toBe('');
+    expect(update.busy.value).toBe(false);
+    await update.check();
+    expect(update.confirmationVersion.value).toBe('0.0.10');
     scope.stop();
   });
 

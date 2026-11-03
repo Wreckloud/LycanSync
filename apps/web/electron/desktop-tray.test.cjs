@@ -167,27 +167,23 @@ test('真实关窗入口：驻留不触发媒体清理，退出仍发出 release
   assert.deepEqual(cleanups, ['shortcuts', 'viewers', 'window:release-media']);
 });
 
-test('开启驻留时确认重启更新仍请求真正关窗，不会隐藏到托盘', context => {
+test('开启驻留时更新仍由安装器退出，不先重启或收起到托盘', async context => {
   const f = fixture(context, '{"closeToTray":true}');
   const calls = [];
-  let manager;
-  manager = createDesktopTray({ ...f.options, onQuit: () => {
-    assert.equal(manager.handleClose({ preventDefault() { assert.fail('重启不应被驻留拦截'); } }), false);
-    calls.push('close');
-  } });
+  const manager = createDesktopTray({ ...f.options, onQuit: () => assert.fail('下载准备不应退出到托盘') });
   manager.initialize();
   const source = readFileSync(resolve(__dirname, 'main.cjs'), 'utf8');
   const start = source.indexOf("ipcMain.handle('update:restart'");
-  const end = source.indexOf("ipcMain.handle('update:skip'", start);
+  const end = source.indexOf("ipcMain.on('app:startup-timing'", start);
   let restart;
   runInNewContext(source.slice(start, end), {
     ipcMain: { handle: (_name, callback) => { restart = callback; } },
     trustedSender: () => true, closing: false, startupReady: true, desktopTray: manager,
-    startupUpdate: { getState: () => ({ supported: true, phase: 'ready', nextVersion: 'next' }) },
-    app: { relaunch: () => calls.push('relaunch') },
+    startupUpdate: { getState: () => ({ supported: true, phase: 'ready', nextVersion: 'next' }),
+      install: async () => { calls.push('install'); return { error: false }; } },
   });
-  restart({});
-  assert.deepEqual(calls, ['relaunch', 'close']);
+  await restart({});
+  assert.deepEqual(calls, ['install']);
   assert.deepEqual(f.calls, []);
 });
 

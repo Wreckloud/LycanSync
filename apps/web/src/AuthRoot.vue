@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onScopeDispose, ref, watch } from 'vue';
+import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { ChevronDown, Minus, Square, UserRound, X } from '@lucide/vue';
 import App from './App.vue';
 import AccountAccessPrompt from './components/AccountAccessPrompt.vue';
@@ -50,6 +50,8 @@ const manualAccessLink = ref('');
 const manualAccessError = ref('');
 const startupChecking = ref(Boolean(desktop));
 const updateState = ref<StartupUpdateState | null>(null);
+const manualUpdateActive = computed(() => Boolean(user.value && updateState.value?.intent === 'manual'
+  && ['checking', 'downloading', 'preparing', 'installing'].includes(updateState.value.phase)));
 const updateWarning = ref('');
 const moreOpen = ref(false);
 const applicationReady = ref(false);
@@ -347,8 +349,13 @@ onMounted(async () => {
 
 <template>
   <App v-if="user && !onboarding" v-show="!accessOffer" ref="application" :user="user" :window-maximized="windowMaximized" :save-profile="saveProfile"
-    :interaction-blocked="Boolean(accessOffer || logoutTarget)"
+    :interaction-blocked="Boolean(accessOffer || logoutTarget || manualUpdateActive)"
     :startup-update-warning="updateWarning" @dismiss-update-warning="updateWarning = ''" @logout="requestLogout" @ready="applicationReady = true" />
+  <DialogTransition>
+    <div v-if="manualUpdateActive" class="dialog-backdrop">
+      <StartupUpdate :state="updateState" modal @skip="desktop?.skipStartupUpdate()" />
+    </div>
+  </DialogTransition>
   <DialogTransition>
     <LogoutConfirmDialog v-if="logoutTarget" :administrator="logoutTarget.administrator" :busy="logoutBusy" :error="error"
       @cancel="logoutTarget = null" @confirm="confirmLogout" />

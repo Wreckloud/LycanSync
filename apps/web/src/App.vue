@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, provide, reactive, ref, watch } from 'vue';
 import { ACCOUNT_CACHE, createAccountCache } from './cache/localCache';
+import { useInitialLoading } from './profile/useInitialLoading';
 import { ArrowLeft, AudioLines, Copy, CornerUpLeft, Headphones,
   LoaderCircle, LogOut, Minus, Plus, RadioTower,
   Settings, Square, UserRound, Volume2, X } from '@lucide/vue';
@@ -449,15 +450,12 @@ const groupPresences = ref<Record<string, GroupPresence>>({});
 const groupError = ref('');
 const summaryError = ref<string | null>(null);
 const groupLoading = ref(false);
-const initialLoading = ref(true);
-watch(initialLoading, loading => { if (!loading) emit('ready'); }, { flush: 'sync' });
 const initialGroupsLoaded = ref(false);
 const initialChatGroupId = ref<string | null>(null);
-watch(() => [initialGroupsLoaded.value, groupLoading.value, selectedGroupId.value, initialChatGroupId.value] as const,
-  ([groupsLoaded, detailLoading, groupId, chatGroupId]) => {
-    // 只等待首批必要请求；后续刷新沿用区域内反馈，不再盖住已经可用的应用。
-    if (groupsLoaded && !detailLoading && (!groupId || chatGroupId === groupId)) initialLoading.value = false;
-  }, { flush: 'post' });
+const initialLoading = useInitialLoading(() => initialGroupsLoaded.value && !groupLoading.value
+  && (!selectedGroupId.value || initialChatGroupId.value === selectedGroupId.value),
+  (stage, durationMs) => desktop?.reportStartupTiming?.(stage, durationMs));
+watch(initialLoading, loading => { if (!loading) emit('ready'); }, { flush: 'sync' });
 const editorOpen = ref(false);
 const editingGroup = ref<GroupDetail | null>(null);
 const management = ref<{ group: GroupDetail; mode: 'invite' | 'members' | 'transfer' | 'leave' | 'dissolve' } | null>(null);
