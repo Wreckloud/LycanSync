@@ -22,6 +22,7 @@ const savingAvatar = ref(false);
 const { cropSource, picking, pickAvatar, editAvatar, clearCrop } = useAvatarCrop(error);
 const registrationDate = computed(() => formatRegistrationDate(props.user.createdAt));
 const cropping = computed(() => !!cropSource.value);
+const preview = computed(() => ({ ...props.user, nickname: nickname.value, avatar: avatar.value, signature: signature.value }));
 
 async function finishEditing() {
   if (picking.value || cropSource.value) return false;
@@ -58,7 +59,7 @@ async function submitNickname(event: KeyboardEvent) {
   }
 }
 
-defineExpose({ finishEditing, cropping });
+defineExpose({ finishEditing, cropping, preview });
 </script>
 
 <template>

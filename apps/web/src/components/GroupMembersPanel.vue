@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onScopeDispose, ref, watch } from 'vue';
-import { Crown, Headphones, Search, X } from '@lucide/vue';
+import { Crown, Search, X } from '@lucide/vue';
 import ActivityStatus from './ActivityStatus.vue';
 import ProfilePopover from './ProfilePopover.vue';
 import { findGroupMemberProfile, type GroupMember, type GroupPresence } from '../group/groupApi';
 import type { AuthUser } from '../auth/authApi';
 import { PRESENCE_STATUS_LABELS, type UserPresenceStatus } from '../presence/presenceApi';
-import { formatSharedVoiceTime } from '../profile/sharedVoiceTime';
+import { useOwnVoiceTime } from '../profile/useOwnVoiceTime';
 
 const props = defineProps<{
   members: GroupMember[];
@@ -32,6 +32,7 @@ const filtered = computed(() => props.members.filter((member) =>
 const profileAnchor = ref<HTMLElement | null>(null);
 const profileUserId = ref('');
 const profileMember = computed(() => props.members.find(member => member.userId === profileUserId.value));
+const ownVoice = useOwnVoiceTime(() => !!profileAnchor.value && profileUserId.value === props.user.id);
 const profilePresence = computed(() => props.presences[profileUserId.value]);
 const profileSignature = ref('');
 const sharedVoiceSeconds = ref<number | null>(null);
@@ -178,11 +179,9 @@ async function toggleSearch() {
       :activity="profileMember ? activity(profileMember)?.text : undefined"
       :last-online-at="profilePresence?.lastOnlineAt" :recent-game="profilePresence?.recentGame"
       :activity-started-at="profileMember ? activity(profileMember)?.startedAt : undefined" :loading="profileLoading" :error="profileError"
-      @close="closeProfile" @enter="keepProfile" @leave="leaveProfile" @retry="loadProfile">
-      <p v-if="profileMember?.userId !== user.id && sharedVoiceSeconds !== null && !profileLoading && !profileError" class="profile-shared-voice">
-        <Headphones :size="13" aria-hidden="true" />{{ formatSharedVoiceTime(sharedVoiceSeconds) }}
-      </p>
-    </ProfilePopover>
+      :own-voice="profileUserId === user.id" :voice-error="profileUserId === user.id ? ownVoice.error.value : ''"
+      :voice-seconds="profileUserId === user.id ? ownVoice.seconds.value : (!profileLoading && !profileError ? sharedVoiceSeconds : null)"
+      @close="closeProfile" @enter="keepProfile" @leave="leaveProfile" @retry="loadProfile" />
   </aside>
 </template>
 
@@ -190,6 +189,4 @@ async function toggleSearch() {
 .members-directory { border-left: 1px solid var(--border); background: var(--panel-sidebar); }
 .member-search-toggle { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
 .member-search-toggle:hover { color: var(--text); }
-.profile-shared-voice { display: flex; align-items: center; gap: 8px; margin: 0; padding-top: 8px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 12px; line-height: 18px; }
-.profile-shared-voice > svg { flex-shrink: 0; }
 </style>

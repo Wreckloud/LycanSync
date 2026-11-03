@@ -15,6 +15,7 @@ import java.util.UUID;
  */
 @Mapper
 public interface SharedVoiceTimeMapper {
+    long findOwnSeconds(@Param("userId") UUID userId);
     void join(@Param("participantSid") String participantSid, @Param("roomSid") String roomSid,
               @Param("userId") UUID userId, @Param("at") Instant at);
     void confirm(@Param("participantSid") String participantSid, @Param("at") Instant at);

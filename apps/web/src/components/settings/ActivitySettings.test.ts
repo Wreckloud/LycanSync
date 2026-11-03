@@ -11,6 +11,7 @@ async function render(activity: UserActivity | null, desktop = true) {
     initialize: vi.fn(async () => {}), refreshWindows: vi.fn(async () => {}),
     save: vi.fn(async () => true), remove: vi.fn(async () => true) };
   const html = await renderToString(createSSRApp(ActivitySettings, {
+    user: { id: 'self', nickname: '测试成员', avatar: '', administrator: false },
     active: false, activity, desktop, showActivity: true, showLastOnline: true, error: '', mappings,
   }));
   return { html, mappings };

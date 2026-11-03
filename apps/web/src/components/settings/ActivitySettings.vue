@@ -2,14 +2,19 @@
 import { ref, watch } from 'vue';
 import { Gamepad2, Music2, RotateCw } from '@lucide/vue';
 import InlineFeedback from '../InlineFeedback.vue';
-import type { UserActivity } from '../../presence/presenceApi';
+import ProfilePopover from '../ProfilePopover.vue';
+import { useOwnVoiceTime } from '../../profile/useOwnVoiceTime';
+import type { AuthUser } from '../../auth/authApi';
+import { PRESENCE_STATUS_LABELS, type UserActivity, type UserPresenceStatus } from '../../presence/presenceApi';
 import type { useActivityMappings } from '../../settings/useActivityMappings';
 
-const props = defineProps<{ desktop: boolean; active: boolean; activity: UserActivity | null;
+const props = defineProps<{ user: AuthUser; desktop: boolean; active: boolean; activity: UserActivity | null;
+  status?: UserPresenceStatus;
   showActivity: boolean; showLastOnline: boolean; error: string; mappings: ReturnType<typeof useActivityMappings> }>();
 const emit = defineEmits<{ visibility: [enabled: boolean]; lastOnlineVisibility: [enabled: boolean] }>();
 const executable = ref('');
 const name = ref('');
+const voiceTime = useOwnVoiceTime(() => props.active);
 
 function chooseWindow() {
   const selected = props.mappings.windows.value.find((window) => window.executable === executable.value);
@@ -31,6 +36,13 @@ watch(() => props.active, (active) => {
 
 <template>
   <section class="settings-section activity-settings">
+    <aside class="activity-profile-preview" aria-label="资料卡预览">
+      <ProfilePopover inline :anchor="null" placement="left" label="资料卡预览" :nickname="user.nickname" :avatar="user.avatar"
+        :signature="user.signature" :status="status ?? 'ONLINE'" :status-label="PRESENCE_STATUS_LABELS[status ?? 'ONLINE']" :voice-seconds="voiceTime.seconds.value"
+        :voice-error="voiceTime.error.value" own-voice
+        :activity="showActivity && status !== 'OFFLINE' && activity ? `${activity.type === 'MUSIC' ? '正在听' : '正在玩'} ${activity.name}` : undefined" />
+    </aside>
+    <div class="activity-settings-controls">
     <h2>动态与在线展示</h2>
     <label class="settings-toggle activity-toggle">
       <span><strong>显示动态</strong><small>展示当前游戏或音乐，以及最近一次公开游戏；关闭后清除最近游戏记录。</small></span>
@@ -73,11 +85,15 @@ watch(() => props.active, (active) => {
       <div class="activity-mapping-feedback"><InlineFeedback :message="mappings.error.value || mappings.windowError.value" />
         <button v-if="!mappings.ready.value && !mappings.busy.value" type="button" @click="mappings.initialize">重试</button></div>
     </div>
+    </div>
   </section>
 </template>
 
 <style scoped>
-.activity-settings { gap: 12px; padding-bottom: 20px; border-bottom: 1px solid var(--border-soft); }
+.activity-settings { grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: 24px; padding-bottom: 20px; border-bottom: 1px solid var(--border-soft); }
+.activity-settings-controls { display: grid; gap: 12px; min-width: 0; }
+.activity-profile-preview { min-width: 0; align-self: start; }
+@media (max-width: 1050px) { .activity-settings { grid-template-columns: minmax(0, 1fr); } .activity-profile-preview { max-width: 292px; } }
 .activity-current { display: flex; align-items: center; gap: 16px; min-height: 64px; color: var(--muted); }
 .activity-current svg { flex-shrink: 0; }
 .activity-current > div { display: grid; gap: 5px; min-width: 0; }

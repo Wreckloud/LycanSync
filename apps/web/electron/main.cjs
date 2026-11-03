@@ -52,6 +52,7 @@ const apiRoutePolicies = new Map([
   ['POST /api/auth/logout', { clearsSession: true }],
   ['POST /api/rtc/token', {}],
   ['GET /api/rtc/room-summary', {}],
+  ['GET /api/rtc/voice-time', {}],
   ['GET /api/rtc/room-occupancies', {}],
   ['POST /api/presence/heartbeat', {}],
   ['POST /api/audio/entrance-sound/normalize', { maxBodyBytes: 512 * 1024 }],

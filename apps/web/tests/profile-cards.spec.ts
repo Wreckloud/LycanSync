@@ -21,6 +21,7 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/api/auth/me', route => route.fulfill({ json: user }));
   await page.route('**/api/presence/heartbeat', route => route.fulfill({ status: 204 }));
   await page.route('**/api/rtc/room-occupancies', route => route.fulfill({ json: [] }));
+  await page.route('**/api/rtc/voice-time', route => route.fulfill({ json: { seconds: 0 } }));
   await page.route('**/api/rtc/room-summary*', route => route.fulfill({ json: { participantCount: 0, participants: [] } }));
   await page.route('**/api/groups**', route => {
     const url = new URL(route.request().url());
@@ -83,7 +84,7 @@ test('成员悬浮按需读资料与共同连麦，移入卡片保持，Esc 关�
   await friend.hover();
   const card = page.getByRole('dialog', { name: '成员资料', exact: true });
   await expect(card).toContainText('准备打团。');
-  await expect(card.locator('.profile-shared-voice')).toHaveText('一起开黑的时间，已经有 42 小时了。');
+  await expect(card.locator('.profile-voice-time')).toHaveText('一起开黑的时间已经有 42 小时了');
   await expect(card).toContainText('最终幻想14');
   await expect(card.locator('.profile-popover-status')).toHaveCount(0);
   await expect(friend.locator('.member-activity')).toHaveText(/^正在玩\s*最终幻想14$/);
@@ -130,7 +131,7 @@ test('成员悬浮按需读资料与共同连麦，移入卡片保持，Esc 关�
   await expect(card).toHaveCount(0);
 });
 
-test('共同连麦读取失败不冒充无记录，重试后展示真实空记录，查看自己不展示', async ({ page }) => {
+test('共同连麦读取失败不冒充无记录，重试无记录时隐藏，自己无记录也隐藏', async ({ page }) => {
   let failed = true;
   await page.route(`**/api/groups/${groupId}/members/${friendId}/profile`, route => failed
     ? route.fulfill({ status: 503, json: { detail: '成员资料暂时无法读取' } })
@@ -139,14 +140,14 @@ test('共同连麦读取失败不冒充无记录，重试后展示真实空记�
   await page.getByRole('button', { name: '查看 阿岚 的资料', exact: true }).hover();
   const card = page.getByRole('dialog', { name: '成员资料', exact: true });
   await expect(card.getByRole('alert')).toBeVisible();
-  await expect(card.locator('.profile-shared-voice')).toHaveCount(0);
+  await expect(card.locator('.profile-voice-time')).toHaveCount(0);
   failed = false;
   await card.getByRole('button', { name: '重试', exact: true }).click();
-  await expect(card.locator('.profile-shared-voice')).toHaveText('还没有记录下共同开黑的时间呢。');
+  await expect(card.locator('.profile-voice-time')).toHaveCount(0);
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: `查看 ${user.nickname} 的资料`, exact: true }).click();
   await expect(card).toContainText(user.signature);
-  await expect(card.locator('.profile-shared-voice')).toHaveCount(0);
+  await expect(card.locator('.profile-voice-time')).toHaveCount(0);
 });
 
 test('签名读取失败可以在卡片重试，旧请求不能覆盖新成员', async ({ page }) => {
@@ -556,4 +557,29 @@ test('关闭动态的心跳尚未返回就退出时，离线请求仍带上最�
     await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
     await expect.poll(() => heartbeats.at(-1)).toMatchObject({ status: 'OFFLINE', showActivity: false, showLastOnline: true });
   } finally { release!(); }
+});
+
+test('自己语音记录在卡片底部，动态设置左侧复用预览并跟随签名编辑', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.route('**/api/rtc/voice-time', route => route.fulfill({ json: { seconds: 460800 } }));
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { ...user, signature: '' } }));
+  await page.goto('/');
+  await page.getByRole('button', { name: '个人菜单', exact: true }).click();
+  const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
+  await expect(menu.locator('.profile-voice-time')).toHaveText('已经在语音里待了 128 小时');
+  await expect(menu).toContainText('这只狼暂时没留下什么话。');
+  await menu.getByRole('button', { name: '编辑个人资料', exact: true }).click();
+  const preview = page.getByRole('region', { name: '资料卡预览', exact: true });
+  await expect(preview).toBeVisible();
+  await expect(preview.locator('.profile-voice-time')).toHaveText('已经在语音里待了 128 小时');
+  const card = await preview.boundingBox();
+  const controls = await page.locator('.activity-settings-controls').boundingBox();
+  expect(card!.x + card!.width).toBeLessThan(controls!.x);
+  await page.getByRole('textbox', { name: '个性签名', exact: true }).fill('新的签名预览');
+  await expect(preview).toContainText('新的签名预览');
+  await page.screenshot({ path: test.info().outputPath('activity-profile-preview.png') });
+  await page.setViewportSize({ width: 800, height: 760 });
+  const narrowCard = await preview.boundingBox();
+  const narrowControls = await page.locator('.activity-settings-controls').boundingBox();
+  expect(narrowCard!.y + narrowCard!.height).toBeLessThan(narrowControls!.y);
 });
