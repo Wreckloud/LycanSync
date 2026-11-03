@@ -140,7 +140,8 @@ interface NativeMicrophoneChunk {
 }
 
 interface StartupUpdateState {
-  phase: 'idle' | 'checking' | 'downloading' | 'installing' | 'ready';
+  intent?: 'startup' | 'manual';
+  phase: 'idle' | 'checking' | 'downloading' | 'preparing' | 'installing' | 'ready';
   version: string;
   supported: boolean;
   message: string;
@@ -181,6 +182,7 @@ interface Window {
     checkUpdates(): Promise<StartupUpdateState>;
     restartForUpdate(): Promise<void>;
     skipStartupUpdate(): Promise<void>;
+    reportStartupTiming(stage: 'loginDataReady' | 'loginReady', durationMs: number): void;
     onUpdateState(callback: (state: StartupUpdateState) => void): () => void;
     clearSession(): Promise<void>;
     returnToAccountEntry(): Promise<void>;

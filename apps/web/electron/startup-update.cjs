@@ -8,9 +8,9 @@ function updateFeedUrl(value) {
   return url.href;
 }
 
-// 启动自动更新只执行一次；设置页查版本，确认后重启复用启动流程。
+// 启动和手动确认共用下载、校验与安装，只允许一个在途更新任务。
 function createStartupUpdate({ enabled, version, createUpdater, onChange, beforeInstall, onInstallFailure,
-  updaterCachePath, checkTimeoutMs = 10_000 }) {
+  updaterCachePath, checkTimeoutMs = 10_000, onTiming = () => {} }) {
   let state = { phase: 'idle', version, supported: enabled, message: enabled ? '等待检查更新' : '开发模式不检查更新' };
   let startupPromise;
   let resolveStartup;
@@ -19,6 +19,8 @@ function createStartupUpdate({ enabled, version, createUpdater, onChange, before
   let checkTimer;
   let finished = false;
   let manualCheckPromise;
+  let installPromise;
+  let generation = 0;
 
   function publish(changes) {
     state = { ...state, ...changes };
@@ -37,7 +39,7 @@ function createStartupUpdate({ enabled, version, createUpdater, onChange, before
 
   function fail(error) {
     if (finished) return;
-    const installing = state.phase === 'installing';
+    const installing = ['preparing', 'installing'].includes(state.phase);
     if (installing) onInstallFailure();
     // 不向页面透传安装路径、远端响应正文或 SDK 堆栈。
     console.error('客户端启动更新失败', state.phase, error?.code ?? error?.name ?? 'Error');
@@ -67,19 +69,23 @@ function createStartupUpdate({ enabled, version, createUpdater, onChange, before
       Object.defineProperty(updater.app, 'baseCachePath', { configurable: true, enumerable: true, get: () => cachePath });
     }
     // 启动结束后仍接住 SDK 的 error 事件；手动检查通过自身 Promise 报错。
-    updater.on('error', fail);
+    updater.on('error', error => { if (state.phase === 'installing') fail(error); });
     return updater;
   }
 
-  async function checkAndInstall() {
+  async function checkAndInstall(current) {
+    const active = () => !finished && current === generation;
     try {
       getUpdater();
       updater.on('download-progress', progress);
-      publish({ phase: 'checking', message: '正在检查更新…' });
+      publish({ phase: 'checking', error: false, percent: undefined, message: '正在检查更新…' });
+      const checkingAt = performance.now();
       checkTimer = setTimeout(() => complete('更新检查超时，仍可使用当前版本。下次打开时重试。', true), checkTimeoutMs);
       const result = await updater.checkForUpdates();
+      if (!active()) return;
       clearTimeout(checkTimer);
-      if (finished) return;
+      await onTiming('updateCheck', Math.round(performance.now() - checkingAt));
+      if (!active()) return;
       if (!result) throw new Error('更新检查没有返回结果');
       if (!result.isUpdateAvailable) {
         complete('当前已是最新版本');
@@ -87,15 +93,23 @@ function createStartupUpdate({ enabled, version, createUpdater, onChange, before
       }
       cancellationToken = result.cancellationToken;
       publish({ phase: 'downloading', nextVersion: result.updateInfo.version, percent: 0, message: '正在下载新版…' });
+      const downloadingAt = performance.now();
       // SDK 负责缓存复用、SHA-512 与可用的签名校验；校验成功才会结束 downloadUpdate。
       const files = await updater.downloadUpdate(cancellationToken);
-      if (finished) return;
+      if (!active()) return;
+      await onTiming('updateDownloadAndVerify', Math.round(performance.now() - downloadingAt));
+      if (!active()) return;
       if (!files?.length) throw new Error('更新安装包不可用');
-      publish({ phase: 'installing', percent: 100, message: '正在安装，即将重新打开…' });
-      await beforeInstall();
-      if (finished) { onInstallFailure(); return; }
-      updater.quitAndInstall(true, true);
-    } catch (error) { fail(error); }
+      publish({ phase: 'preparing', percent: undefined, message: '正在保存录制并准备安装…' });
+      const preparingAt = performance.now();
+      await beforeInstall(state.intent);
+      if (!active()) { onInstallFailure(); return; }
+      await onTiming('updatePrepare', Math.round(performance.now() - preparingAt));
+      if (!active()) return;
+      publish({ phase: 'installing', message: '即将打开安装进度，完成后自动重新打开…' });
+      updater.autoRunAppAfterInstall = true;
+      updater.quitAndInstall(false, true);
+    } catch (error) { if (active()) fail(error); }
   }
 
   async function checkVersion() {
@@ -124,14 +138,29 @@ function createStartupUpdate({ enabled, version, createUpdater, onChange, before
         startupPromise = new Promise((resolve) => { resolveStartup = resolve; });
         if (finished) resolveStartup({ ...state });
         else if (!enabled) complete(state.message);
-        else void checkAndInstall();
+        else {
+          publish({ intent: 'startup' });
+          void checkAndInstall(++generation);
+        }
       }
       return startupPromise;
     },
     cancel: () => complete('本次更新已跳过，下次打开时检查。'),
+    install: () => {
+      if (installPromise) return installPromise;
+      if (!enabled || !finished || manualCheckPromise || state.error || !state.nextVersion) {
+        return Promise.reject(new Error('请先检查并确认有可用的新版本'));
+      }
+      finished = false;
+      cancellationToken = undefined;
+      installPromise = new Promise(resolve => { resolveStartup = resolve; }).finally(() => { installPromise = undefined; });
+      publish({ intent: 'manual' });
+      void checkAndInstall(++generation);
+      return installPromise;
+    },
     checkOnly: () => {
       if (!enabled) return Promise.resolve({ ...state });
-      if (!finished) return Promise.reject(new Error('启动更新尚未结束，请稍后检查。'));
+      if (!finished || installPromise) return Promise.reject(new Error('更新尚未结束，请稍后检查。'));
       // 同一次点击任务共用结果；超时后的 SDK 迟到结果不会进入安装链路。
       if (!manualCheckPromise) manualCheckPromise = checkVersion().finally(() => { manualCheckPromise = undefined; });
       return manualCheckPromise;
@@ -139,4 +168,12 @@ function createStartupUpdate({ enabled, version, createUpdater, onChange, before
   };
 }
 
-module.exports = { updateFeedUrl, createStartupUpdate };
+function parseInstallTiming(text, version) {
+  if (typeof text !== 'string' || text.length > 1024) return null;
+  const installedVersion = text.match(/^version=([^\r\n]+)\r?$/m)?.[1];
+  const duration = text.match(/^durationMs=(\d{1,9})\r?$/m)?.[1];
+  if (installedVersion !== version || !duration || Number(duration) > 30 * 60_000) return null;
+  return { stage: 'updateInstall', durationMs: Number(duration) };
+}
+
+module.exports = { updateFeedUrl, createStartupUpdate, parseInstallTiming };

@@ -21,7 +21,7 @@ const { createDiagnosticReportStore, parseDiagnosticReport } = require('./diagno
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
 const { matchNativeVideoSourceThumbnails, monitorDisplayId } = require('./native-video-thumbnails.cjs');
 const { parseAccessLink, accessLinkFromArguments, parseManualAccessLink } = require('./access-links.cjs');
-const { createStartupUpdate } = require('./startup-update.cjs');
+const { createStartupUpdate, parseInstallTiming } = require('./startup-update.cjs');
 const { applyRuntimePaths } = require('./runtime-paths.cjs');
 const { createActivityHelper } = require('./activity-helper.cjs');
 const { leagueCaptureApplication, createLeagueCaptureFollow } = require('./league-capture.cjs');
@@ -112,6 +112,10 @@ let currentActivity = null;
 let startupReady = false;
 let allowQuitAfterMediaHelper = false;
 let mediaHelperShutdownPromise;
+let mediaQuitPending = false;
+let updatePreparing = false;
+let resolveUpdateRelease;
+const startupUiTimings = new Set();
 let nativeMediaBridge;
 const desktopTray = createDesktopTray({ Tray, Menu,
   iconPath: resolve(__dirname, 'tray.ico'), settingsPath: resolve(app.getPath('userData'), 'desktop-settings.json'),
@@ -162,19 +166,37 @@ const startupUpdate = createStartupUpdate({
   createUpdater: () => require('electron-updater').autoUpdater,
   updaterCachePath: runtimeLayout.updaterCachePath,
   onChange: (state) => { if (!mainWindow?.isDestroyed()) mainWindow?.webContents.send('update:state', state); },
-  beforeInstall: async () => {
+  onTiming: (stage, durationMs) => writeMediaDiagnostic({ stage, durationMs }),
+  beforeInstall: async (intent) => {
+    if (closing || (startupReady && intent !== 'manual')) throw new Error('当前不能安装更新');
     if (pendingAccessLink) {
       if (!safeStorage.isEncryptionAvailable()) throw new Error('无法保存待确认邀请');
       const link = `lycansync://access?server=${encodeURIComponent(pendingAccessLink.server)}#token=${pendingAccessLink.token}`;
       await mkdir(app.getPath('userData'), { recursive: true });
       await writeFile(accessLinkFile, safeStorage.encryptString(link));
     }
-    if (closing || startupReady) throw new Error('启动更新已结束');
-    // 更新发生在认证和 helper 启动之前，不进入普通的媒体退出等待。
+    if (intent === 'manual') {
+      updatePreparing = true;
+      closing = true;
+      let timer;
+      const released = new Promise(resolve => {
+        resolveUpdateRelease = resolve;
+        timer = setTimeout(resolve, 2_000);
+      });
+      mainWindow?.webContents.send('window:release-media');
+      await released;
+      clearTimeout(timer);
+      resolveUpdateRelease = undefined;
+      await shutdownMediaResources();
+    }
     canClose = true;
     allowQuitAfterMediaHelper = true;
   },
-  onInstallFailure: () => { canClose = false; allowQuitAfterMediaHelper = false; },
+  onInstallFailure: () => {
+    canClose = false;
+    allowQuitAfterMediaHelper = false;
+    if (updatePreparing) { updatePreparing = false; closing = false; }
+  },
 });
 
 function recordSourceTiming(stage, startedAt, sourceCount) {
@@ -1411,6 +1433,12 @@ if (!app.requestSingleInstanceLock()) {
     void writeMediaDiagnostic({ stage: 'applicationReady', appVersion: app.getVersion(),
       electronVersion: process.versions.electron, platform: process.platform, arch: process.arch,
       osVersion: osRelease(), durationMs: Math.round(performance.now() - diagnosticStartedMonotonicAt) });
+    const installTimingFile = resolve(runtimeLayout.updaterCachePath, 'last-install.ini');
+    void readFile(installTimingFile, 'utf8').then(async text => {
+      const timing = parseInstallTiming(text, app.getVersion());
+      if (timing) await writeMediaDiagnostic(timing);
+      await unlink(installTimingFile);
+    }).catch(error => { if (error.code !== 'ENOENT') console.error('无法读取更新安装计时'); });
     if (existsSync(accessLinkFile)) {
       try {
         if (!pendingAccessLink) pendingAccessLink = parseAccessLink(safeStorage.decryptString(require('node:fs').readFileSync(accessLinkFile)));
@@ -1500,15 +1528,20 @@ ipcMain.handle('update:check', (event) => {
   if (!trustedSender(event) || closing || !startupReady) throw new Error('当前不能检查更新');
   return startupUpdate.checkOnly();
 });
-ipcMain.handle('update:restart', (event) => {
+ipcMain.handle('update:restart', async (event) => {
   if (!trustedSender(event) || closing || !startupReady) throw new Error('当前不能重启更新');
   const state = startupUpdate.getState();
   if (!state.supported || state.phase !== 'ready' || state.error || !state.nextVersion) {
     throw new Error('请先检查并确认有可用的新版本');
   }
-  // 走普通关窗清理通话、共享和 helper；新进程再使用唯一的启动更新链路。
-  app.relaunch();
-  desktopTray.quit();
+  const result = await startupUpdate.install();
+  if (result.error) throw new Error('更新未完成，请重试或重新打开应用。');
+});
+ipcMain.on('app:startup-timing', (event, stage, durationMs) => {
+  if (!trustedSender(event) || !['loginDataReady', 'loginReady'].includes(stage) || startupUiTimings.has(stage)
+      || typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs < 0 || durationMs > 300_000) return;
+  startupUiTimings.add(stage);
+  void writeMediaDiagnostic({ stage, durationMs: Math.round(durationMs) });
 });
 ipcMain.handle('update:skip', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
@@ -2039,23 +2072,22 @@ ipcMain.on('window:maximize', (event) => {
   if (mainWindow.isMaximized()) mainWindow.unmaximize(); else mainWindow.maximize();
 });
 ipcMain.on('window:close', (event) => { if (trustedSender(event)) mainWindow.close(); });
-ipcMain.on('window:closed-media', (event) => { if (trustedSender(event) && closing) finishClose(); });
+ipcMain.on('window:closed-media', (event) => {
+  if (!trustedSender(event) || !closing) return;
+  if (updatePreparing) resolveUpdateRelease?.();
+  else finishClose();
+});
 ipcMain.handle('external:open', async (event, value) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
   const url = externalHttpUrl(value);
   if (!url) throw new Error('只允许打开 HTTP 或 HTTPS 链接。');
   await shell.openExternal(url);
 });
-app.on('before-quit', (event) => {
-  closing = true;
-  desktopTray.dispose();
+function shutdownMediaResources() {
+  if (mediaHelperShutdownPromise) return mediaHelperShutdownPromise;
   try { audioShortcuts.clear(); } catch { console.error('audio shortcut cleanup failed'); }
   voiceOverlay.clear();
-  if (startupUpdate.getState().phase !== 'installing') startupUpdate.cancel();
   stopActivityHelper();
-  if (allowQuitAfterMediaHelper) return;
-  event.preventDefault();
-  if (mediaHelperShutdownPromise) return;
   mediaHelperShutdownPromise = recording.stopAll().catch(error => {
     console.error(`recording shutdown failed: ${error.message}`);
   }).then(() => (nativeScreenAudioSession
@@ -2082,11 +2114,21 @@ app.on('before-quit', (event) => {
     .then(() => mediaHelper.shutdown())
     .catch((error) => console.error(`media-helper shutdown failed: ${error.message}`))
     .then(() => savedDiagnosticReports.flush())
-    .then(() => writeMediaDiagnostic.flush())
-    .finally(() => {
-      allowQuitAfterMediaHelper = true;
-      app.quit();
-    });
+    .then(() => writeMediaDiagnostic.flush());
+  return mediaHelperShutdownPromise;
+}
+app.on('before-quit', (event) => {
+  closing = true;
+  desktopTray.dispose();
+  if (startupUpdate.getState().phase !== 'installing') startupUpdate.cancel();
+  if (allowQuitAfterMediaHelper) return;
+  event.preventDefault();
+  if (mediaQuitPending) return;
+  mediaQuitPending = true;
+  void shutdownMediaResources().finally(() => {
+    allowQuitAfterMediaHelper = true;
+    app.quit();
+  });
 });
 app.on('window-all-closed', () => app.quit());
 function requireShortcutSender(event) {

@@ -114,6 +114,7 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   checkUpdates: () => ipcRenderer.invoke('update:check'),
   restartForUpdate: () => ipcRenderer.invoke('update:restart'),
   skipStartupUpdate: () => ipcRenderer.invoke('update:skip'),
+  reportStartupTiming: (stage, durationMs) => ipcRenderer.send('app:startup-timing', stage, durationMs),
   onUpdateState: (callback) => {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on('update:state', listener);

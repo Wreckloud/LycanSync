@@ -4,7 +4,7 @@ const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { test } = require('node:test');
 const { runInNewContext } = require('node:vm');
-const { createStartupUpdate, updateFeedUrl } = require('./startup-update.cjs');
+const { createStartupUpdate, updateFeedUrl, parseInstallTiming } = require('./startup-update.cjs');
 
 function deferred() {
   let resolve;
@@ -92,7 +92,7 @@ test('开发模式不加载更新库或连接更新源', async () => {
 
 test('启动尚未结束时禁止设置页检查；手动检查不会重跑启动任务', async () => {
   const f = fixture();
-  await assert.rejects(f.startup.checkOnly(), /启动更新尚未结束/);
+  await assert.rejects(f.startup.checkOnly(), /更新尚未结束/);
   const started = f.startup.start();
   f.checks.resolve({ isUpdateAvailable: false });
   const initial = await started;
@@ -175,10 +175,10 @@ test('主进程手动检查仅接受启动完成后的可信页面，不启动 h
   assert.throws(() => handler({ trusted: true }), /当前不能检查/);
 });
 
-test('确认重启只接受已发现新版的可信安装版页面，沿正常关窗而不直接调用安装器', () => {
+test('确认更新只接受已发现新版的可信页面，同一进程完成下载准备', async () => {
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = main.indexOf("ipcMain.handle('update:restart'");
-  const end = main.indexOf("ipcMain.handle('update:skip'", start);
+  const end = main.indexOf("ipcMain.on('app:startup-timing'", start);
   assert.ok(start >= 0 && end > start);
   let handler;
   const calls = [];
@@ -186,26 +186,24 @@ test('确认重启只接受已发现新版的可信安装版页面，沿正常�
   const context = {
     ipcMain: { handle: (_, value) => { handler = value; } },
     trustedSender: event => event.trusted, closing: false, startupReady: true,
-    startupUpdate: { getState: () => state },
-    app: { relaunch: () => calls.push('relaunch') },
-    desktopTray: { quit: () => { calls.push('close'); context.closing = true; } },
+    startupUpdate: { getState: () => state, install: async () => { calls.push('install'); return { error: false }; } },
   };
   runInNewContext(main.slice(start, end), context);
-  assert.throws(() => handler({ trusted: false }), /当前不能重启/);
+  await assert.rejects(handler({ trusted: false }), /当前不能重启/);
   context.startupReady = false;
-  assert.throws(() => handler({ trusted: true }), /当前不能重启/);
+  await assert.rejects(handler({ trusted: true }), /当前不能重启/);
   context.startupReady = true;
   const available = { ...state };
   for (const changes of [{ supported: false }, { phase: 'checking' }, { error: true }, { nextVersion: undefined }]) {
     state = { ...available, ...changes };
-    assert.throws(() => handler({ trusted: true }), /请先检查/);
+    await assert.rejects(handler({ trusted: true }), /请先检查/);
   }
   assert.deepEqual(calls, []);
   state = available;
-  handler({ trusted: true });
-  assert.deepEqual(calls, ['relaunch', 'close']);
-  assert.throws(() => handler({ trusted: true }), /当前不能重启/);
-  assert.deepEqual(calls, ['relaunch', 'close']);
+  await handler({ trusted: true });
+  assert.deepEqual(calls, ['install']);
+  context.closing = true;
+  await assert.rejects(handler({ trusted: true }), /当前不能重启/);
 });
 
 test('设置重启更新桥接是无参数固定 IPC，不接受下载源或安装路径', () => {
@@ -213,7 +211,78 @@ test('设置重启更新桥接是无参数固定 IPC，不接受下载源或安�
   assert.match(preload, /restartForUpdate: \(\) => ipcRenderer\.invoke\('update:restart'\)/);
 });
 
-test('下载完成并通过 SDK 校验后才准备退出及调用静默安装重启', async () => {
+test('手动更新复用下载链路，重复确认共用任务，准备期间不显示虚假的完成百分比', async () => {
+  const prepared = deferred();
+  const timings = [];
+  const f = fixture({ beforeInstall: intent => { assert.equal(intent, 'manual'); return prepared.promise; },
+    onTiming: (stage, duration) => { assert.ok(duration >= 0); timings.push(stage); } });
+  f.startup.cancel();
+  f.available();
+  await f.startup.checkOnly();
+  const installing = f.startup.install();
+  assert.equal(f.startup.install(), installing);
+  await flush();
+  assert.equal(f.startup.getState().intent, 'manual');
+  assert.equal(f.startup.getState().phase, 'downloading');
+  await assert.rejects(f.startup.checkOnly(), /更新尚未结束/);
+  f.downloads.resolve(['verified-installer.exe']);
+  await flush();
+  assert.equal(f.startup.getState().phase, 'preparing');
+  assert.equal(f.startup.getState().percent, undefined);
+  assert.equal(f.installs.length, 0);
+  prepared.resolve();
+  await flush();
+  assert.deepEqual(f.installs, [[false, true]]);
+  assert.deepEqual(timings, ['updateCheck', 'updateDownloadAndVerify', 'updatePrepare']);
+});
+
+test('手动下载取消后留在当前界面，迟到结果不进入媒体收尾', async () => {
+  const f = fixture();
+  f.startup.cancel();
+  f.available();
+  await f.startup.checkOnly();
+  const installing = f.startup.install();
+  await flush();
+  f.startup.cancel();
+  assert.equal((await installing).error, false);
+  f.downloads.resolve(['verified-installer.exe']);
+  await flush();
+  assert.equal(f.counts().prepared, 0);
+  assert.equal(f.installs.length, 0);
+});
+
+test('安装计时只接受当前版本及有界数字，不带入其他安装字段', () => {
+  assert.deepEqual(parseInstallTiming('[update]\r\nversion=0.3.7\r\ndurationMs=12345\r\n', '0.3.7'),
+    { stage: 'updateInstall', durationMs: 12345 });
+  for (const text of ['version=0.3.6\ndurationMs=10', 'version=0.3.7\ndurationMs=-1',
+    'version=0.3.7\ndurationMs=1800001', 'version=0.3.7\ndurationMs=NaN', 'x'.repeat(1025)]) {
+    assert.equal(parseInstallTiming(text, '0.3.7'), null);
+  }
+});
+
+test('登录计时仅接受可信页面的两个固定阶段，每次启动每阶段最多一条', () => {
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const start = main.indexOf("ipcMain.on('app:startup-timing'");
+  const end = main.indexOf("ipcMain.handle('update:skip'", start);
+  let timing;
+  const entries = [];
+  runInNewContext(main.slice(start, end), {
+    ipcMain: { on: (_, callback) => { timing = callback; } }, trustedSender: event => event.trusted,
+    startupUiTimings: new Set(), writeMediaDiagnostic: entry => entries.push(JSON.stringify(entry)),
+  });
+  timing({ trusted: false }, 'loginReady', 1000);
+  for (const duration of [-1, Infinity, NaN, 300001, '1000']) timing({ trusted: true }, 'loginReady', duration);
+  timing({ trusted: true }, 'user-provided-text', 1000);
+  assert.equal(entries.length, 0);
+  timing({ trusted: true }, 'loginDataReady', 150.4);
+  timing({ trusted: true }, 'loginReady', 1000);
+  timing({ trusted: true }, 'loginReady', 1001);
+  assert.deepEqual(entries.map(entry => JSON.parse(entry)), [
+    { stage: 'loginDataReady', durationMs: 150 }, { stage: 'loginReady', durationMs: 1000 },
+  ]);
+});
+
+test('下载完成并通过 SDK 校验后才准备退出，安装显示进度并重新打开', async () => {
   const f = fixture();
   void f.startup.start();
   f.available();
@@ -227,7 +296,8 @@ test('下载完成并通过 SDK 校验后才准备退出及调用静默安装重
   await flush();
   assert.equal(f.startup.getState().phase, 'installing');
   assert.equal(f.counts().prepared, 1);
-  assert.deepEqual(f.installs, [[true, true]]);
+  assert.deepEqual(f.installs, [[false, true]]);
+  assert.equal(f.updater.autoRunAppAfterInstall, true);
 });
 
 test('检查超时允许使用旧版，迟到的新版结果不下载或安装', async () => {
@@ -320,7 +390,7 @@ test('真实主进程更新入口等检查结束再启动活动 helper，重复�
   const handlers = new Map();
   let activityStarts = 0;
   const context = {
-    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler), on: () => {} },
     trustedSender: (event) => event.trusted,
     closing: false, startupReady: false,
     startupUpdate: { start: () => completion.promise, getState: () => ({ phase: 'checking' }), cancel: () => {} },
@@ -348,7 +418,7 @@ test('真实主进程安装前加密保留邀请并允许直接退出，不传�
   const order = [];
   const context = {
     app: { isPackaged: true, getVersion: () => '0.0.3', getPath: () => 'test-user-directory' },
-    process: { platform: 'win32' }, createStartupUpdate,
+    process: { platform: 'win32' }, createStartupUpdate, writeMediaDiagnostic: async () => {},
     require: (name) => { assert.equal(name, 'electron-updater'); return { autoUpdater: f.updater }; },
     mainWindow: undefined, closing: false, startupReady: false, canClose: false, allowQuitAfterMediaHelper: false,
     pendingAccessLink: { server: 'https://example.test', token: 'test-invitation' }, accessLinkFile: 'pending-access.bin',
@@ -366,7 +436,7 @@ test('真实主进程安装前加密保留邀请并允许直接退出，不传�
     },
   };
   const startup = runInNewContext(`${main.slice(start, end)}; startupUpdate`, context);
-  f.updater.quitAndInstall = (...args) => { assert.deepEqual(args, [true, true]); order.push('install'); };
+  f.updater.quitAndInstall = (...args) => { assert.deepEqual(args, [false, true]); order.push('install'); };
   void startup.start();
   f.available();
   await flush();
@@ -375,4 +445,35 @@ test('真实主进程安装前加密保留邀请并允许直接退出，不传�
   assert.deepEqual(order, ['mkdir', 'encrypt', 'write', 'install']);
   assert.equal(context.canClose, true);
   assert.equal(context.allowQuitAfterMediaHelper, true);
+});
+
+test('真实手动更新先通知页面并等待媒体收尾，保留窗口直到安装器启动', async () => {
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const start = main.indexOf('const startupUpdate = createStartupUpdate(');
+  const end = main.indexOf('function recordSourceTiming(', start);
+  const prepared = deferred();
+  const order = [];
+  let options;
+  const context = {
+    app: { isPackaged: true, getVersion: () => '0.3.7' }, process: { platform: 'win32' },
+    createStartupUpdate: value => { options = value; return {}; },
+    runtimeLayout: { updaterCachePath: 'test-updater' }, pendingAccessLink: null,
+    closing: false, startupReady: true, updatePreparing: false, resolveUpdateRelease: undefined,
+    canClose: false, allowQuitAfterMediaHelper: false, setTimeout, clearTimeout,
+    mainWindow: { webContents: { send: event => {
+      assert.equal(event, 'window:release-media'); order.push('release'); context.resolveUpdateRelease();
+    } } },
+    shutdownMediaResources: () => { order.push('stop'); return prepared.promise; },
+  };
+  runInNewContext(main.slice(start, end), context);
+  const completing = options.beforeInstall('manual');
+  await flush();
+  assert.deepEqual(order, ['release', 'stop']);
+  assert.equal(context.canClose, false);
+  prepared.resolve(); await completing;
+  assert.equal(context.canClose, true);
+  assert.equal(context.allowQuitAfterMediaHelper, true);
+  options.onInstallFailure();
+  assert.equal(context.closing, false);
+  assert.equal(context.canClose, false);
 });

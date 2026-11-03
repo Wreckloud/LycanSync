@@ -3,7 +3,7 @@ import { onScopeDispose, ref, watch } from 'vue';
 type UpdateBridge = Pick<NonNullable<Window['lycanDesktop']>,
   'getUpdateState' | 'checkUpdates' | 'restartForUpdate' | 'onUpdateState'>;
 
-/** 设置页只检查和确认重启；下载、校验与安装仍由主进程启动流程负责。 */
+/** 设置页确认后复用主进程的更新流程，不先重启到另一轮启动检查。 */
 export function useClientUpdate(bridge: UpdateBridge | undefined, active: () => boolean) {
   const state = ref<StartupUpdateState>();
   const error = ref('');
@@ -61,15 +61,14 @@ export function useClientUpdate(bridge: UpdateBridge | undefined, active: () => 
     if (!bridge || busy.value || !confirmationVersion.value) return;
     busy.value = true;
     error.value = '';
+    confirmationVersion.value = '';
     try {
       await bridge.restartForUpdate();
-      // 成功后保持禁用，窗口正在执行正常媒体退出，不能重复排队重启。
     } catch {
       if (!disposed) {
-        error.value = '无法重启更新，请稍后重试。';
-        busy.value = false;
+        error.value = state.value?.error ? state.value.message : '无法完成更新，请稍后重试。';
       }
-    }
+    } finally { if (!disposed) busy.value = false; }
   }
 
   onScopeDispose(() => { disposed = true; attempt++; removeListener?.(); });

@@ -6,6 +6,7 @@ import { effectScope, nextTick, ref, watch } from 'vue';
 import { expect, it, vi } from 'vitest';
 import { ApiRequestError } from './auth/authApi';
 import type { GroupDetail } from './group/groupApi';
+import { useInitialLoading } from './profile/useInitialLoading';
 
 const script = parse(readFileSync(new URL('./App.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('App.ts', script, ts.ScriptTarget.Latest, true);
@@ -22,13 +23,14 @@ function setupInitialLoad(groupId: string | null) {
   const groupLoading = ref(false);
   const selectedGroupId = ref(groupId);
   const state = scope.run(() => runInNewContext(`${ts.transpile(initialLoad, { target: ts.ScriptTarget.ES2022 })}\n({ initialLoading, initialGroupsLoaded, initialChatGroupId })`,
-    { ref, watch, groupLoading, selectedGroupId })) as {
+    { ref, watch, groupLoading, selectedGroupId, useInitialLoading, desktop: undefined })) as {
       initialLoading: { value: boolean }; initialGroupsLoaded: { value: boolean }; initialChatGroupId: { value: string | null };
     };
   return { ...state, groupLoading, selectedGroupId, scope };
 }
 
 it('首次展示等待群组、成员和对应群首批消息；完成后后台刷新不再次遮盖', async () => {
+  vi.useFakeTimers();
   const state = setupInitialLoad('one');
   try {
     state.groupLoading.value = true;
@@ -41,22 +43,25 @@ it('首次展示等待群组、成员和对应群首批消息；完成后后台�
     expect(state.initialLoading.value).toBe(true);
     state.initialChatGroupId.value = 'one';
     await nextTick();
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(state.initialLoading.value).toBe(false);
     state.selectedGroupId.value = 'two';
     state.groupLoading.value = true;
     await nextTick();
     expect(state.initialLoading.value).toBe(false);
-  } finally { state.scope.stop(); }
+  } finally { state.scope.stop(); vi.useRealTimers(); }
 });
 
 it('没有群组或列表请求失败后无需等待不存在的消息，初始等待正常结束', async () => {
+  vi.useFakeTimers();
   const state = setupInitialLoad(null);
   try {
     expect(state.initialLoading.value).toBe(true);
     state.initialGroupsLoaded.value = true;
     await nextTick();
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(state.initialLoading.value).toBe(false);
-  } finally { state.scope.stop(); }
+  } finally { state.scope.stop(); vi.useRealTimers(); }
 });
 
 function detail(id: string): GroupDetail {
