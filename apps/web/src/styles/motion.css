@@ -13,6 +13,10 @@
     border-color var(--motion-feedback-duration) ease;
 }
 
+.group-selection-marker { transition: transform var(--motion-layout-duration) var(--motion-ease); }
+.group-content-ready { animation: group-content-reveal var(--motion-surface-duration) var(--motion-ease); }
+@keyframes group-content-reveal { from { opacity: .82; } to { opacity: 1; } }
+
 .surface-panel-enter-active, .surface-panel-leave-active,
 .surface-side-enter-active, .surface-side-leave-active {
   transition: opacity var(--motion-surface-duration) var(--motion-ease), transform var(--motion-surface-duration) var(--motion-ease);
@@ -44,8 +48,8 @@
 .entry-shell-enter-from, .entry-shell-leave-to { opacity: 0; }
 .entry-shell-leave-active { position: fixed; z-index: 4; inset: 0; pointer-events: none; }
 
-.group-header-region { display: grid; grid-template-rows: 1fr; visibility: visible; transition: opacity var(--motion-surface-duration) ease; }
-.group-header-clip { min-height: 0; overflow: visible; }
+.group-header-region { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 1fr; min-width: 0; visibility: visible; transition: opacity var(--motion-surface-duration) ease; }
+.group-header-clip { min-width: 0; min-height: 0; overflow: visible; }
 .group-header-region[aria-hidden='true'] .group-header-clip { overflow: hidden; }
 .group-header-region[aria-hidden='true'] { opacity: 0; visibility: hidden; transition: opacity var(--motion-surface-duration) ease, visibility 0s var(--motion-surface-duration); }
 

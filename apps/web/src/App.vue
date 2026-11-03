@@ -1017,6 +1017,7 @@ async function finishSettingsLeave() {
 }
 
 const selectedGroup = computed(() => groups.value.find((group) => group.id === selectedGroupId.value) ?? null);
+const selectedGroupIndex = computed(() => groups.value.findIndex((group) => group.id === selectedGroupId.value));
 const joinedGroup = computed(() => groups.value.find((group) => group.id === joinedGroupId.value) ?? null);
 const callbarGroup = computed(() => joinedGroup.value
   ?? groups.value.find((group) => group.id === joiningGroupId.value)
@@ -1333,9 +1334,8 @@ function toggleSharedAudio(identity: string) {
 function previewGroup(groupId: string) {
   const changed = selectedGroupId.value !== groupId;
   selectedGroupId.value = groupId;
-  if (changed) selectedGroupDetail.value = null;
-  if (changed) void refreshGroups();
-  else void loadGroup(groupId);
+  void loadGroup(groupId, !changed && selectedGroupDetail.value?.id === groupId);
+  if (changed) void refreshRoomOccupancies();
   pendingSwitchGroupId.value = null;
   viewerNotice.value = '';
 }
@@ -1407,6 +1407,8 @@ function participantListening(participant: Participant) {
     <div class="workspace" :inert="editorOpen || !!management">
       <nav class="group-rail" aria-label="群组">
         <div class="group-list">
+          <span v-if="selectedGroupIndex >= 0" class="group-selection-marker" aria-hidden="true"
+            :style="{ '--selected-group-index': selectedGroupIndex }" />
           <button v-for="group in groups" :key="group.id" type="button" class="group-button"
             :class="{ 'is-selected': selectedGroupId === group.id, 'is-in-call': joinedGroupId === group.id }"
             :aria-label="`${group.name}${groupHasVoiceActivity(group.id) ? '，当前有语音成员' : ''}，单击预览，双击加入语音`" :aria-pressed="selectedGroupId === group.id"
@@ -1424,9 +1426,9 @@ function participantListening(participant: Participant) {
         <div class="group-header-region" :aria-hidden="viewingWindows?.inlineExpanded || undefined" :inert="viewingWindows?.inlineExpanded">
           <div class="group-header-clip">
             <header class="group-header">
-              <div class="group-copy">
+              <div :key="selectedGroup.id" class="group-copy group-content-ready">
                 <div class="group-title-row"><GroupMenu :key="selectedGroup.id" :group="selectedGroup" @select="openGroupAction" /></div>
-                <p v-if="selectedGroup.description">{{ selectedGroup.description }}</p>
+                <p :title="selectedGroup.description || undefined">{{ selectedGroup.description }}</p>
               </div>
               <IconButton :label="joinedGroupId === selectedGroup.id ? '离开当前群组语音' : '加入当前群组语音'"
                 :class="{ 'is-danger': joinedGroupId === selectedGroup.id }" :disabled="joiningGroupId !== null"

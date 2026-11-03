@@ -132,7 +132,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   background: #0d1116;
 }
 
-.group-list { display: flex; flex-direction: column; align-items: center; gap: 10px; flex: 1; width: 100%; min-height: 0; overflow-y: auto; padding-inline: 9px; padding-bottom: 5px; }
+.group-list { --group-list-gap: 10px; position: relative; display: flex; flex-direction: column; align-items: center; gap: var(--group-list-gap); flex: 1; width: 100%; min-height: 0; overflow-y: auto; padding-inline: 9px; padding-bottom: 5px; }
 
 .group-button {
   position: relative;
@@ -157,14 +157,16 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   background: #162439;
 }
 
-.group-button.is-selected::before {
-  content: "";
+.group-selection-marker {
   position: absolute;
-  left: -10px;
+  top: calc((var(--rail-control-size) - 24px) / 2);
+  left: 0;
   width: 3px;
   height: 24px;
   border-radius: 0 2px 2px 0;
   background: var(--accent);
+  pointer-events: none;
+  transform: translateY(calc(var(--selected-group-index) * (var(--rail-control-size) + var(--group-list-gap))));
 }
 
 .group-call-badge {
@@ -203,7 +205,8 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 
 .group-header {
   flex-shrink: 0;
-  min-height: 79px;
+  height: 80px;
+  min-height: 80px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -224,9 +227,10 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   margin: 0;
   font-size: 22px;
   font-weight: 650;
+  line-height: 28px;
 }
 
-.group-copy p { margin: 4px 0 0; color: var(--muted); font-size: 15px; }
+.group-copy p { height: 18px; margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .icon-button {
   position: relative;
@@ -776,7 +780,6 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   .titlebar { grid-template-columns: 1fr auto; }
   .workspace { grid-template-columns: 56px minmax(0, 1fr); --rail-control-size: 42px; }
   .group-list { padding-inline: 5px; }
-  .group-button.is-selected::before { left: -6px; }
   .group-header, .voice-preview, .chat-panel, .callbar { padding-left: 10px; padding-right: 10px; }
   .callbar { flex-wrap: wrap; }
   .call-state { flex-basis: 100%; }

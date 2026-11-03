@@ -6,7 +6,8 @@ import { computed, effectScope, nextTick, onScopeDispose, reactive, ref } from '
 import { expect, it, vi } from 'vitest';
 import type { ChatMessage, ChatMessagePage } from '../chat/chatApi';
 import type { AccountCache } from '../cache/localCache';
-import { formatFullMessageTime, formatMessageDate, formatMessageTime, localDateKey } from '../chat/messageTime';
+import { formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey } from '../chat/messageTime';
+import { useLoadingHint } from './useLoadingHint';
 
 const script = parse(readFileSync(new URL('./GroupChat.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('GroupChat.ts', script, ts.ScriptTarget.Latest, true);
@@ -38,14 +39,14 @@ function setup(cache: AccountCache | null = null) {
   // 真实组件的任务、监听和销毁；只替换网络、DOM 与图片边界，不启动浏览器或传输文件。
   const chat = scope.run(() => runInNewContext(`${compiled}\n({ refresh, loadOlder, handleVisibilityChange, submit, cancelUpload,
     list, messages, text, busy, error, historyError, pendingAttachments,
-    initialLoaded, refreshing, pollError, atBottom, unseenMessages, retryRefresh,
+    initialLoaded, initialLoadingHint, historyLoadingHint, refreshing, pollError, atBottom, unseenMessages, retryRefresh,
     unreadMessageIds, showMessageJump, messageJumpLabel, jumpToMessages, updateReadMessages,
     scrollToBottom, onScroll, onScrollEnd, onWheel, stopAnimatedScroll, refreshCalendar, calendarNow,
     setScrollPreference: value => { scrollPreference = value; } })`, {
-    computed, ref, nextTick, onScopeDispose, onMounted: () => {}, defineProps: () => props, defineEmits: () => emit,
+    computed, ref, nextTick, onScopeDispose, useLoadingHint, onMounted: () => {}, defineProps: () => props, defineEmits: () => emit,
     inject: () => cache, ACCOUNT_CACHE: Symbol(), ApiRequestError: class extends Error {},
     findMessages, sendMessage, sendFile, compressChatImage: vi.fn(), messagePollDelay: () => 8000,
-    formatFullMessageTime, formatMessageDate, formatMessageTime, localDateKey,
+    formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey,
     AbortController, setTimeout, clearTimeout, Error, Date,
     document,
     window: { removeEventListener: vi.fn() }, URL: { revokeObjectURL: vi.fn() },
@@ -53,7 +54,8 @@ function setup(cache: AccountCache | null = null) {
     refresh: () => Promise<number | null>; submit: () => Promise<void>; cancelUpload: () => void;
     loadOlder: () => Promise<void>; handleVisibilityChange: () => void; list: { value: HTMLElement | null };
     historyError: { value: string };
-    initialLoaded: { value: boolean }; refreshing: { value: boolean }; pollError: { value: string };
+    initialLoaded: { value: boolean }; initialLoadingHint: { value: boolean }; historyLoadingHint: { value: boolean };
+    refreshing: { value: boolean }; pollError: { value: string };
     atBottom: { value: boolean }; unseenMessages: { value: number }; retryRefresh(): Promise<void> | undefined;
     unreadMessageIds: { value: string[] }; showMessageJump: { value: boolean }; messageJumpLabel: { value: string };
     jumpToMessages(): Promise<void>; updateReadMessages(): void; onScroll(): void;
@@ -67,6 +69,51 @@ function setup(cache: AccountCache | null = null) {
   };
   return { scope, props, chat, findMessages, sendMessage, sendFile, document, emit };
 }
+
+it('空聊天也保存确认快照，返回时沿用已知空状态并直接同步新消息', async () => {
+  const cache = { read: vi.fn().mockResolvedValue(null), write: vi.fn(),
+    revokeGroup: vi.fn(), allowGroups: vi.fn() } as AccountCache;
+  const first = setup(cache);
+  await first.chat.refresh();
+  first.scope.stop();
+  expect(cache.write).toHaveBeenCalledWith('messages', 'first', { messages: [], hasMore: false });
+  vi.mocked(cache.read).mockResolvedValueOnce({ messages: [], hasMore: false });
+  const next = setup(cache);
+  const page = deferred<ChatMessagePage>();
+  next.findMessages.mockReturnValueOnce(page.promise);
+  try {
+    const reading = next.chat.refresh();
+    await vi.waitFor(() => expect(next.findMessages).toHaveBeenCalledOnce());
+    expect(next.chat.initialLoaded.value).toBe(true);
+    expect(next.chat.initialLoadingHint.value).toBe(false);
+    page.resolve({ messages: [message('new')], hasMore: false });
+    await reading;
+    expect(next.chat.messages.value.map(message => message.id)).toEqual(['new']);
+    expect(next.findMessages).toHaveBeenCalledTimes(1);
+  } finally { next.scope.stop(); }
+});
+
+it('短暂读取磁盘期间不显示加载字样，缓存到达即展示并取消加载提示', async () => {
+  vi.useFakeTimers();
+  const cached = deferred<{ messages: ChatMessage[]; hasMore: boolean }>();
+  const page = deferred<ChatMessagePage>();
+  const cache = { read: vi.fn().mockReturnValue(cached.promise), write: vi.fn(),
+    revokeGroup: vi.fn(), allowGroups: vi.fn() } as AccountCache;
+  const f = setup(cache);
+  f.findMessages.mockReturnValueOnce(page.promise);
+  try {
+    const reading = f.chat.refresh();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(f.chat.initialLoadingHint.value).toBe(false);
+    cached.resolve({ messages: [message('cached')], hasMore: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.chat.messages.value.map(message => message.id)).toEqual(['cached']);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.chat.initialLoadingHint.value).toBe(false);
+    page.resolve({ messages: [], hasMore: false });
+    await reading;
+  } finally { f.scope.stop(); vi.useRealTimers(); }
+});
 
 it('命中历史先展示已确认快照，随后按最后游标补齐新消息并更新缓存', async () => {
   const cache = { read: vi.fn().mockResolvedValue({ messages: [message('cached')], hasMore: true }),

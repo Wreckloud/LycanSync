@@ -7,6 +7,7 @@ import { findGroupMemberProfile, type GroupMember, type GroupPresence } from '..
 import type { AuthUser } from '../auth/authApi';
 import { PRESENCE_STATUS_LABELS, type UserPresenceStatus } from '../presence/presenceApi';
 import { useOwnVoiceTime } from '../profile/useOwnVoiceTime';
+import { useLoadingHint } from './useLoadingHint';
 
 const props = defineProps<{
   members: GroupMember[];
@@ -29,6 +30,7 @@ const button = ref<HTMLButtonElement | null>(null);
 const input = ref<HTMLInputElement | null>(null);
 const filtered = computed(() => props.members.filter((member) =>
   (member.userId === props.user.id ? props.user.nickname : member.nickname).toLowerCase().includes(search.value.trim().toLowerCase())));
+const loadingHint = useLoadingHint(() => props.loading && !props.members.length && !props.error);
 const profileAnchor = ref<HTMLElement | null>(null);
 const profileUserId = ref('');
 const profileMember = computed(() => props.members.find(member => member.userId === profileUserId.value));
@@ -147,10 +149,10 @@ async function toggleSearch() {
       </div>
       </Transition>
     </header>
-    <div class="members-list">
+    <div class="members-list" :class="{ 'group-content-ready': members.length > 0 }">
       <p v-if="connectionLost" class="group-hint" role="status">成员状态同步中断，当前显示可能已过期。</p>
       <p v-if="error" role="alert" class="group-error">{{ error }}</p>
-      <p v-else-if="loading" class="group-hint">正在读取成员…</p>
+      <p v-else-if="loadingHint" class="group-hint" role="status">正在读取成员…</p>
       <p v-if="search.trim() && !loading && !error && !filtered.length" class="group-hint" role="status">没有找到匹配的成员</p>
       <div v-for="member in filtered" :key="member.userId" class="group-member-row" :class="{ 'is-offline': status(member) === 'OFFLINE' }"
         tabindex="0" role="button" :aria-label="`查看 ${member.userId === user.id ? user.nickname : member.nickname} 的资料`" aria-haspopup="dialog"

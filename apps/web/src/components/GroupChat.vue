@@ -2,13 +2,14 @@
 import '../chat/chat.css';
 import { computed, inject, nextTick, onMounted, onScopeDispose, ref } from 'vue';
 import { ACCOUNT_CACHE } from '../cache/localCache';
+import { useLoadingHint } from './useLoadingHint';
 import { ApiRequestError } from '../auth/authApi';
 import { ArrowDown, MessageSquareText, Plus, Send, X } from '@lucide/vue';
 import type { AuthUser } from '../auth/authApi';
 import { findMessages, sendFile, sendMessage, type ChatMessage } from '../chat/chatApi';
 import { messagePollDelay } from '../chat/messagePolling';
 import { compressChatImage } from '../chat/messageImage';
-import { formatFullMessageTime, formatMessageDate, formatMessageTime, localDateKey } from '../chat/messageTime';
+import { formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey } from '../chat/messageTime';
 import type { GroupMember, GroupSummary } from '../group/groupApi';
 import ChatImage from './ChatImage.vue';
 import ProfilePopover from './ProfilePopover.vue';
@@ -64,6 +65,8 @@ const historyError = ref('');
 const initialLoaded = ref(false);
 const refreshing = ref(false);
 const loadingOlder = ref(false);
+const initialLoadingHint = useLoadingHint(() => !initialLoaded.value && !messages.value.length && !pollError.value);
+const historyLoadingHint = useLoadingHint(() => loadingOlder.value);
 const hasMore = ref(false);
 const atBottom = ref(true);
 const followingScroll = ref(false);
@@ -205,7 +208,7 @@ function appendMessages(incoming: ChatMessage[], forceScroll = false, behavior: 
 
 function writeMessageCache() {
   const confirmedEnd = latestFetchedMessageId ? messages.value.findIndex(message => message.id === latestFetchedMessageId) + 1 : 0;
-  if (!confirmedEnd) return;
+  if (!confirmedEnd && (!initialLoaded.value || messages.value.length)) return;
   const confirmed = messages.value.slice(0, confirmedEnd);
   void cache?.write('messages', props.group.id, {
     messages: confirmed.slice(-500), hasMore: hasMore.value || confirmed.length > 500,
@@ -231,10 +234,10 @@ async function refresh(wait = false) {
       cacheLoaded = true;
       const cached = cache ? await cache.read<{ messages: ChatMessage[]; hasMore: boolean }>('messages', groupId) : null;
       if (controller.signal.aborted || disposed || pollRequest !== controller) return null;
-      if (cached && Array.isArray(cached.messages) && cached.messages.length && cached.messages.length <= 500
+      if (cached && Array.isArray(cached.messages) && cached.messages.length <= 500
           && cached.messages.every(message => typeof message.id === 'string' && typeof message.content === 'string')) {
         const cachedIds = new Set(cached.messages.map(message => message.id));
-        restoredIds = cachedIds;
+        restoredIds = cachedIds.size ? cachedIds : null;
         messages.value = [...cached.messages, ...messages.value.filter(message => !cachedIds.has(message.id))];
         hasMore.value = Boolean(cached.hasMore);
         latestFetchedMessageId = cached.messages.at(-1)?.id;
@@ -711,25 +714,26 @@ onScopeDispose(() => {
       </div>
     </div>
     <div class="chat-timeline" :class="{ 'has-composer-feedback': Boolean(error) }">
-      <div ref="list" class="message-list" @scroll="onScroll" @scrollend="onScrollEnd" @wheel="onWheel" @pointerdown="cancelScrollFollow">
-        <div v-if="!initialLoaded" class="chat-initial-state" :class="{ 'is-empty': !messages.length }">
+      <div ref="list" class="message-list" :class="{ 'group-content-ready': initialLoaded }"
+        @scroll="onScroll" @scrollend="onScrollEnd" @wheel="onWheel" @pointerdown="cancelScrollFollow">
+        <div v-if="!initialLoaded && (pollError || initialLoadingHint)" class="chat-initial-state" :class="{ 'is-empty': !messages.length }">
           <template v-if="pollError">
             <p class="chat-read-error" role="alert">{{ pollError }}</p>
             <button type="button" class="chat-retry" :disabled="refreshing" @click="retryRefresh">{{ refreshing ? '正在重试…' : '重新读取消息' }}</button>
           </template>
           <p v-else role="status">正在读取消息…</p>
         </div>
-        <p v-else-if="!messages.length" class="chat-initial-state is-empty" role="status">还没有消息</p>
+        <p v-else-if="initialLoaded && !messages.length" class="chat-initial-state is-empty" role="status">还没有消息</p>
         <div v-if="initialLoaded && messages.length && (hasMore || loadingOlder || historyError)" class="chat-history-state" :aria-busy="loadingOlder">
-          <span v-if="loadingOlder" role="status">正在读取更早消息…</span>
+          <span v-if="historyLoadingHint" role="status">正在读取更早消息…</span>
           <template v-else-if="historyError">
             <span class="chat-history-error" role="alert">{{ historyError }}</span>
             <button type="button" class="chat-retry" @click="loadOlder">重试</button>
           </template>
-          <button v-else type="button" class="chat-retry" @click="loadOlder">查看更早消息</button>
+          <button v-else type="button" class="chat-retry" :disabled="loadingOlder" @click="loadOlder">查看更早消息</button>
         </div>
         <template v-for="(message, index) in messages" :key="message.id">
-          <div v-if="startsNewDate(message, index)" class="chat-date-divider"><time :datetime="message.createdAt" :title="formatFullMessageTime(message.createdAt)">{{ formatMessageDate(message.createdAt, calendarNow) }}</time></div>
+          <div v-if="startsNewDate(message, index)" class="chat-date-divider"><time :datetime="message.createdAt">{{ formatMessageDateDivider(message.createdAt) }}</time></div>
           <article class="chat-message" :data-message-id="message.id" :class="{ 'is-own': message.senderUserId === user.id, 'is-grouped': !startsNewMessageGroup(message, index) }">
             <template v-if="startsNewMessageGroup(message, index)">
               <img v-if="senderAvatar(message)" class="chat-message-avatar" :src="senderAvatar(message)" alt="" />
