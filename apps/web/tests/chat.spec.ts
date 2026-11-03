@@ -59,6 +59,7 @@ test('首次加载、读取失败和空会话分开反馈，重试共用当前�
   });
   await page.goto('/');
   try {
+    await expect(page.getByText('还没有消息', { exact: true })).toHaveCount(0);
     await expect(page.getByRole('status').filter({ hasText: '正在准备群聊…' })).toBeVisible();
     await expect(page.getByText('还没有消息', { exact: true })).toHaveCount(0);
     release();
@@ -229,7 +230,7 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
   await composer.fill('晚上见');
   await composer.press('Enter');
   await expect(page.locator('.chat-message-content').last()).toHaveText('晚上见 https://example.com/docs。');
-  await expect(page.locator('.chat-date-divider')).toHaveText(['9月13日 周日', '9月14日 周一']);
+  await expect(page.locator('.chat-date-divider')).toHaveText(['2026年9月13日', '2026年9月14日']);
   await expect(page.locator('.chat-message-meta')).toHaveCount(4);
   await expect(page.locator('.chat-message.is-grouped')).toHaveCount(1);
   await expect(page.locator('.chat-message-meta time').nth(1)).toHaveText('9月14日 周一 12:00');

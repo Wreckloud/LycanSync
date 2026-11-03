@@ -2,6 +2,7 @@ const timeFormatter = new Intl.DateTimeFormat('zh-CN', {
   hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
 });
 const weekdayFormatter = new Intl.DateTimeFormat('zh-CN', { weekday: 'short' });
+const dateFormatter = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
 const fullFormatter = new Intl.DateTimeFormat('zh-CN', {
   year: 'numeric', month: 'long', day: 'numeric', weekday: 'short',
   hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
@@ -28,6 +29,10 @@ export function formatMessageDate(value: string, now: Date) {
 
 export function formatMessageTime(value: string, now: Date) {
   return `${formatMessageDate(value, now)} ${timeFormatter.format(new Date(value))}`;
+}
+
+export function formatMessageDateDivider(value: string) {
+  return dateFormatter.format(new Date(value));
 }
 
 export function formatFullMessageTime(value: string) {

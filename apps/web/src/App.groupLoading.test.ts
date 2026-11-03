@@ -12,7 +12,9 @@ const script = parse(readFileSync(new URL('./App.vue', import.meta.url), 'utf8')
 const sourceFile = ts.createSourceFile('App.ts', script, ts.ScriptTarget.Latest, true);
 const loadGroup = sourceFile.statements.find((statement) => ts.isFunctionDeclaration(statement)
   && statement.name?.text === 'loadGroup')!.getText(sourceFile);
-const compiled = ts.transpile(loadGroup, { target: ts.ScriptTarget.ES2022 });
+const previewGroup = sourceFile.statements.find((statement) => ts.isFunctionDeclaration(statement)
+  && statement.name?.text === 'previewGroup')!.getText(sourceFile);
+const compiled = ts.transpile(loadGroup + '\n' + previewGroup, { target: ts.ScriptTarget.ES2022 });
 const initialLoad = sourceFile.statements.filter(statement => (ts.isVariableStatement(statement)
   && statement.declarationList.declarations.some(item => ['initialLoading', 'initialGroupsLoaded', 'initialChatGroupId'].includes(item.name.getText(sourceFile))))
   || statement.getText(sourceFile).startsWith('watch(() => [initialGroupsLoaded.value'))
@@ -84,14 +86,57 @@ function setup() {
     joinedGroupId: ref<string | null>('one'), joiningGroupId: ref<string | null>(null),
     joinedGroupDetail: ref<GroupDetail | null>(detail('one')), management: ref<{ group: GroupDetail } | null>(null),
     groupError: ref(''), groupLoading: ref(false), detailRequest: null,
+    pendingSwitchGroupId: ref<string | null>(null), viewerNotice: ref(''),
     findGroup: vi.fn((_id: string, _signal: AbortSignal) => request.promise),
-    leaveVoice: vi.fn(), refreshGroups: vi.fn(async () => {}),
+    leaveVoice: vi.fn(), refreshGroups: vi.fn(async () => {}), refreshRoomOccupancies: vi.fn(async () => {}),
   };
   // 只控制 HTTP 返回顺序，执行正式群资料查询及其失败清理。
-  const load = runInNewContext(`${compiled}\nloadGroup`, { ...state, AbortController, Error, ApiRequestError }) as
-    (groupId: string, keepExisting?: boolean) => Promise<void>;
-  return { state, load, request };
+  const methods = runInNewContext(`${compiled}\n({ load: loadGroup, preview: previewGroup })`, { ...state, AbortController, Error, ApiRequestError }) as {
+    load(groupId: string, keepExisting?: boolean): Promise<void>; preview(groupId: string): void;
+  };
+  return { state, ...methods, request };
 }
+
+it('切群直接读取目标资料，重复点击当前群时保留成员，不等待群列表网络往返', async () => {
+  const f = setup();
+  f.preview('one');
+  expect(f.state.selectedGroupDetail.value?.id).toBe('one');
+  expect(f.state.groupLoading.value).toBe(false);
+  expect(f.state.refreshRoomOccupancies).not.toHaveBeenCalled();
+  f.preview('two');
+  expect(f.state.selectedGroupId.value).toBe('two');
+  expect(f.state.selectedGroupDetail.value).toBeNull();
+  expect(f.state.findGroup).toHaveBeenLastCalledWith('two', expect.any(AbortSignal));
+  expect(f.state.refreshGroups).not.toHaveBeenCalled();
+  expect(f.state.refreshRoomOccupancies).toHaveBeenCalledOnce();
+  f.request.resolve(detail('two'));
+  await Promise.resolve();
+});
+
+it('成员缓存先显示，联网结果覆盖；迟到的磁盘结果不能覆盖新资料', async () => {
+  const first = setup();
+  first.state.accountCache.read.mockResolvedValueOnce({ ...detail('one'), members: [
+    { userId: 'cached-member', nickname: '缓存成员', avatar: '', role: 'MEMBER', joinedAt: '2026-11-03T00:00:00Z' },
+  ] });
+  const reading = first.load('one');
+  await Promise.resolve();
+  expect(first.state.selectedGroupDetail.value?.id).toBe('one');
+  expect(first.state.selectedGroupDetail.value?.members[0]?.nickname).toBe('缓存成员');
+  expect(first.state.groupLoading.value).toBe(true);
+  first.request.resolve({ ...detail('one'), name: '新资料' });
+  await reading;
+  expect(first.state.selectedGroupDetail.value?.name).toBe('新资料');
+
+  const second = setup();
+  const cached = deferred<GroupDetail>();
+  second.state.accountCache.read.mockReturnValueOnce(cached.promise);
+  const fresh = second.load('one');
+  second.request.resolve({ ...detail('one'), name: '已联网' });
+  await fresh;
+  cached.resolve({ ...detail('one'), name: '迟到缓存' });
+  await Promise.resolve();
+  expect(second.state.selectedGroupDetail.value?.name).toBe('已联网');
+});
 
 it('旧群失败不覆盖新预览的提示或加载状态', async () => {
   const { state, load, request } = setup();
