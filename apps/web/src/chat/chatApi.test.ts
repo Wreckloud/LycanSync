@@ -1,8 +1,20 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { authenticatedFetch } from '../auth/authApi';
-import { downloadFile } from './chatApi';
+import { downloadFile, findMessages } from './chatApi';
 
 vi.mock('../auth/authApi', () => ({ authenticatedFetch: vi.fn(), readApiError: vi.fn() }));
+
+it('等待新消息沿用增量游标与固定路径，历史读取不进入长轮询', async () => {
+  vi.mocked(authenticatedFetch).mockImplementation(async () => Response.json({ messages: [], hasMore: false }));
+  await findMessages('group', { afterMessageId: 'cursor' }, undefined, true);
+  const url = new URL(vi.mocked(authenticatedFetch).mock.calls[0][0], 'https://example.test');
+  expect(url.pathname).toBe('/api/groups/group/messages');
+  expect(url.searchParams.get('afterMessageId')).toBe('cursor');
+  expect(url.searchParams.get('wait')).toBe('true');
+  expect(Number(url.searchParams.get('requestId'))).toBeGreaterThan(0);
+  await findMessages('group', { beforeMessageId: 'older' });
+  expect(vi.mocked(authenticatedFetch).mock.calls[1][0]).toBe('/api/groups/group/messages?beforeMessageId=older');
+});
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 const attachment = { id: 'file', byteSize: 3, contentType: 'application/octet-stream', fileName: 'sample.bin' };

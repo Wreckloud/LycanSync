@@ -63,6 +63,7 @@ function setup() {
     locallyLeftVoiceGroupId: ref<string | null>(null), roomSummaryRefreshVersion: ref(0),
     summaryError: ref<string | null>(null), roomOccupancies: ref<Record<string, number>>({ group: 2 }),
     roomOccupancyRequest: new AbortController(), joinAttempt: 0, lastActivationRefreshAt: 0,
+    listRequest: null,
     departingGroupId: ref<string | null>(null), callbarLeaving: ref(false),
     pendingSwitchGroupId: ref<string | null>(null), viewerNotice: ref(''),
     rtc: { status: 'connected', participants: [{ identity: 'user-self' }, { identity: 'user-friend' }],

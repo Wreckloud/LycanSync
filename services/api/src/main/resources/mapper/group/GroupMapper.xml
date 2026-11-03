@@ -16,6 +16,9 @@
         JOIN group_member membership ON membership.group_id = g.id AND membership.user_id = #{userId}
         ORDER BY g.created_at, g.id
     </select>
+    <select id="findGroupIdsByMember" resultType="string">
+        SELECT group_id::text FROM group_member WHERE user_id = #{userId}
+    </select>
     <select id="findGroup" resultType="com.lycansync.api.group.model.GroupView">
         SELECT <include refid="groupFields"/> FROM chat_group g
         JOIN group_member membership ON membership.group_id = g.id AND membership.user_id = #{userId}

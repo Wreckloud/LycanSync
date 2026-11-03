@@ -2,6 +2,7 @@ package com.lycansync.api.group.service;
 
 import com.lycansync.api.group.dto.GroupPresenceChangeResponse;
 import com.lycansync.api.group.event.GroupChangedEvent;
+import com.lycansync.api.group.mapper.GroupMapper;
 import com.lycansync.api.presence.event.PresenceChangedEvent;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.event.TransactionalEventListener;
@@ -32,6 +33,11 @@ public class GroupPresenceChangeService {
     private final UUID serverInstanceId = UUID.randomUUID();
     private final ConcurrentMap<UUID, GroupState> groups = new ConcurrentHashMap<>();
     private final ConcurrentMap<WaiterKey, Waiter> waiters = new ConcurrentHashMap<>();
+    private final GroupMapper mapper;
+
+    public GroupPresenceChangeService(GroupMapper mapper) {
+        this.mapper = mapper;
+    }
 
     public DeferredResult<GroupPresenceChangeResponse> await(UUID userId, UUID groupId, UUID clientId, long requestId,
                                                               UUID previousInstanceId, Long previousVersion) {
@@ -60,13 +66,20 @@ public class GroupPresenceChangeService {
 
     @TransactionalEventListener(phase = AFTER_COMMIT)
     public void presenceChanged(PresenceChangedEvent event) {
-        groups.values().forEach(GroupState::publish);
+        Set<UUID> affected = new HashSet<>();
+        for (UUID userId : event.userIds()) {
+            mapper.findGroupIdsByMember(userId).stream().map(UUID::fromString).forEach(affected::add);
+        }
+        for (UUID groupId : affected) {
+            GroupState state = groups.get(groupId);
+            if (state != null) state.publish(false);
+        }
     }
 
     @TransactionalEventListener(phase = AFTER_COMMIT)
     public void groupChanged(GroupChangedEvent event) {
         GroupState state = event.deleted() ? groups.remove(event.groupId()) : groups.get(event.groupId());
-        if (state != null) state.publish();
+        if (state != null) state.publish(true);
     }
 
     private void remove(Waiter waiter) {
@@ -78,6 +91,7 @@ public class GroupPresenceChangeService {
 
         private final Set<Waiter> pending = new HashSet<>();
         private long version;
+        private long detailVersion;
 
         private void register(Waiter waiter, UUID previousInstanceId, Long previousVersion) {
             GroupPresenceChangeResponse immediate;
@@ -93,11 +107,12 @@ public class GroupPresenceChangeService {
             complete(waiter, immediate);
         }
 
-        private void publish() {
+        private void publish(boolean detailChanged) {
             List<Waiter> recipients;
             GroupPresenceChangeResponse change;
             synchronized (this) {
                 version++;
+                if (detailChanged) detailVersion++;
                 change = response(version, true);
                 recipients = new ArrayList<>(pending);
                 pending.clear();
@@ -128,7 +143,7 @@ public class GroupPresenceChangeService {
         }
 
         private GroupPresenceChangeResponse response(long currentVersion, boolean changed) {
-            return new GroupPresenceChangeResponse(serverInstanceId, currentVersion, changed);
+            return new GroupPresenceChangeResponse(serverInstanceId, currentVersion, detailVersion, changed);
         }
 
         private synchronized void remove(Waiter waiter) {

@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -57,7 +58,7 @@ public class PresenceService {
         UserPresence next = nextPresence(user.id(), observed, request, now);
         int updated = mapper.upsert(next, user.sessionHash());
         if (updated > 0 && hasMeaningfulChange(previous, next)) {
-            events.publishEvent(new PresenceChangedEvent());
+            events.publishEvent(new PresenceChangedEvent(Set.of(user.id())));
         }
     }
 
@@ -66,7 +67,7 @@ public class PresenceService {
     public void markExpiredOffline() {
         Instant now = Instant.now(systemClock);
         Instant cutoff = now.minus(OFFLINE_THRESHOLD);
-        boolean changed = false;
+        Set<UUID> changed = new HashSet<>();
         for (PresenceExpiryCandidate candidate : mapper.findExpired(cutoff)) {
             UserPresence previous = mapper.findByUserForUpdate(candidate.userId());
             if (previous == null || previous.status() == UserPresenceStatus.OFFLINE
@@ -76,10 +77,10 @@ public class PresenceService {
             // 断线时只累计到最后有效心跳，不能将离线判定的等待时间计入游戏。
             UserPresence next = nextPresence(candidate.userId(), previous,
                     new PresenceHeartbeatRequest(UserPresenceStatus.OFFLINE, null, null, null), previous.lastSeenAt());
-            changed |= mapper.markOfflineIfUnchanged(next, cutoff, now) > 0;
+            if (mapper.markOfflineIfUnchanged(next, cutoff, now) > 0) changed.add(candidate.userId());
         }
-        if (changed) {
-            events.publishEvent(new PresenceChangedEvent());
+        if (!changed.isEmpty()) {
+            events.publishEvent(new PresenceChangedEvent(Set.copyOf(changed)));
         }
     }
 

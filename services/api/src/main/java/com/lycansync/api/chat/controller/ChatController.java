@@ -7,6 +7,7 @@ import com.lycansync.api.chat.model.ChatAttachmentContent;
 import com.lycansync.api.chat.model.ChatFileMetadata;
 import com.lycansync.api.chat.service.ChatFileService;
 import com.lycansync.api.chat.service.ChatService;
+import com.lycansync.api.chat.service.ChatMessageWaitService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -31,8 +32,10 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.context.request.async.DeferredResult;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.constraints.Positive;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
@@ -51,6 +54,19 @@ public class ChatController {
 
     private final ChatService chatService;
     private final ChatFileService chatFileService;
+    private final ChatMessageWaitService chatMessageWaitService;
+
+    @GetMapping(value = "/messages", params = "wait=true")
+    @Operation(summary = "等待群聊新消息", description = "无新消息时最多等待 25 秒；返回前重新核对成员资格")
+    public DeferredResult<ChatMessagePageResponse> waitForMessages(
+            @PathVariable @Parameter(description = "群组 ID") UUID groupId,
+            @RequestParam(required = false) @Parameter(description = "已确认的最新消息游标") UUID afterMessageId,
+            @RequestParam @Parameter(description = "当前客户端标识") UUID clientId,
+            @RequestParam @Positive @Parameter(description = "递增请求序号") long requestId,
+            @AuthenticationPrincipal AuthenticatedUser user
+    ) {
+        return chatMessageWaitService.await(groupId, user, afterMessageId, clientId, requestId);
+    }
 
     @GetMapping("/messages")
     @Operation(summary = "查询群聊消息")

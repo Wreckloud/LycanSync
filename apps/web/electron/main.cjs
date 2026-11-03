@@ -1266,6 +1266,8 @@ async function serveApplication(request) {
       ?? (/^\/api\/auth\/access\/links\/[0-9a-f-]{36}(?:\/renew)?$/i.test(url.pathname)
         && ((request.method === 'POST' && url.pathname.endsWith('/renew'))
           || (request.method === 'DELETE' && !url.pathname.endsWith('/renew'))) ? {} : undefined)
+      ?? (request.method === 'GET' && groupMessagePath.test(url.pathname) && url.searchParams.get('wait') === 'true'
+        ? { longPolling: true } : undefined)
       ?? (request.method === 'GET' && (groupPath.test(url.pathname) || groupMemberProfilePath.test(url.pathname) || groupPresencePath.test(url.pathname) || groupMessagePath.test(url.pathname)
         || groupAttachmentPath.test(url.pathname) || groupFilePath.test(url.pathname)) ? {} : undefined)
       ?? (request.method === 'GET' && groupPresenceChangesPath.test(url.pathname) ? { longPolling: true } : undefined)

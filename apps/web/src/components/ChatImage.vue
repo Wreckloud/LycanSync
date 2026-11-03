@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
+import { computed, inject, onMounted, onScopeDispose, ref, watch } from 'vue';
+import { ACCOUNT_CACHE } from '../cache/localCache';
 import { fetchAttachment } from '../chat/chatApi';
 
 const props = defineProps<{ groupId: string; attachmentId: string; width: number; height: number; alt: string }>();
+const cache = inject(ACCOUNT_CACHE, null);
 const frame = ref<HTMLElement | null>(null);
 const source = ref('');
 const error = ref('');
@@ -32,8 +34,13 @@ async function load() {
   clearSource();
   error.value = '';
   try {
-    const blob = await fetchAttachment(props.groupId, props.attachmentId, currentController.signal);
+    const groupId = props.groupId;
+    const attachmentId = props.attachmentId;
+    const cached = cache ? await cache.read<Blob>('image', groupId, attachmentId) : null;
     if (currentController.signal.aborted || controller !== currentController) return;
+    const blob = cached instanceof Blob ? cached : await fetchAttachment(groupId, attachmentId, currentController.signal);
+    if (currentController.signal.aborted || controller !== currentController) return;
+    if (!cached) void cache?.write('image', groupId, blob, attachmentId);
     activeUrl = URL.createObjectURL(blob);
     source.value = activeUrl;
   } catch (reason) {

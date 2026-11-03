@@ -63,7 +63,7 @@ function writeDesktopLicenses(outputFile) {
       }
     }
   }
-  for (const name of ['@floating-ui/dom', '@lucide/vue', 'livekit-client', 'vue']) includeBundledPackage(`node_modules/${name}`);
+  for (const name of ['@floating-ui/dom', '@lucide/vue', 'idb', 'livekit-client', 'vue']) includeBundledPackage(`node_modules/${name}`);
   for (const [location, pkg] of Object.entries(lock.packages)) {
     if (!location || ((pkg.dev || pkg.devOptional) && !bundledPackages.has(location))) continue;
     const directory = join(appDirectory, location);

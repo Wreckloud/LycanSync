@@ -30,6 +30,23 @@ function proxyFixture(overrides = {}) {
   return { serve, forwarded };
 }
 
+test('消息长轮询保留固定路由、认证、取消信号与长等待预算', async () => {
+  const timeouts = [];
+  const { serve, forwarded } = proxyFixture({ AbortSignal: {
+    any: signals => AbortSignal.any(signals),
+    timeout: milliseconds => { timeouts.push(milliseconds); return AbortSignal.timeout(milliseconds); },
+  } });
+  const controller = new AbortController();
+  const path = '/api/groups/11111111-1111-4111-8111-111111111111/messages?wait=true&requestId=1';
+  await serve(new Request('lycan://app' + path, { signal: controller.signal }));
+  assert.equal(timeouts.at(-1), 52_000);
+  assert.equal(forwarded[0].options.headers.Authorization, 'Bearer test-session');
+  controller.abort();
+  assert.equal(forwarded[0].options.signal.aborted, true);
+  await serve(new Request('lycan://app' + path.replace('?wait=true&requestId=1', '')));
+  assert.equal(timeouts.at(-1), 15_000);
+});
+
 test('成员资料只开放明确的同源 GET 路径并保留认证', async () => {
   const { serve, forwarded } = proxyFixture();
   const path = '/api/groups/11111111-1111-4111-8111-111111111111/members/22222222-2222-4222-8222-222222222222/profile';

@@ -6,6 +6,9 @@ import com.lycansync.api.auth.mapper.AuthMapper;
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.model.AuthUser;
 import com.lycansync.api.common.image.AvatarImageProcessor;
+import com.lycansync.api.group.mapper.GroupMapper;
+import com.lycansync.api.group.event.GroupChangedEvent;
+import org.springframework.context.ApplicationEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -16,6 +19,7 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.UUID;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -38,11 +42,15 @@ class ProfileServiceTests {
 
     private AuthMapper mapper;
     private ProfileService profileService;
+    private GroupMapper groupMapper;
+    private ApplicationEventPublisher events;
 
     @BeforeEach
     void setUp() {
         mapper = mock(AuthMapper.class);
-        profileService = new ProfileService(mapper);
+        groupMapper = mock(GroupMapper.class);
+        events = mock(ApplicationEventPublisher.class);
+        profileService = new ProfileService(mapper, groupMapper, events);
     }
 
     @Test
@@ -54,11 +62,14 @@ class ProfileServiceTests {
         String normalizedAvatar = AvatarImageProcessor.normalize(avatar);
         when(mapper.updateProfile(USER_ID, "透明头像", normalizedAvatar, null)).thenReturn(1);
         when(mapper.findUserProfile(USER_ID)).thenReturn(new AuthUser(USER_ID, "透明头像", normalizedAvatar, false, "", CREATED_AT));
+        UUID groupId = UUID.randomUUID();
+        when(groupMapper.findGroupIdsByMember(USER_ID)).thenReturn(List.of(groupId.toString()));
 
         AuthUser updated = profileService.update(USER, new ProfileUpdateRequest("透明头像", avatar, null));
 
         assertThat(updated.avatar()).isEqualTo(normalizedAvatar).isNotEqualTo(avatar);
         verify(mapper).updateProfile(USER_ID, "透明头像", normalizedAvatar, null);
+        verify(events).publishEvent(new GroupChangedEvent(groupId, false));
     }
 
     @Test

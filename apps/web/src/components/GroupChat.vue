@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import '../chat/chat.css';
-import { computed, nextTick, onMounted, onScopeDispose, ref } from 'vue';
+import { computed, inject, nextTick, onMounted, onScopeDispose, ref } from 'vue';
+import { ACCOUNT_CACHE } from '../cache/localCache';
+import { ApiRequestError } from '../auth/authApi';
 import { ArrowDown, MessageSquareText, Plus, Send, X } from '@lucide/vue';
 import type { AuthUser } from '../auth/authApi';
 import { findMessages, sendFile, sendMessage, type ChatMessage } from '../chat/chatApi';
@@ -24,6 +26,10 @@ type PendingAttachment = {
 
 const props = defineProps<{ group: GroupSummary; members: GroupMember[]; user: AuthUser }>();
 const emit = defineEmits<{ initialLoad: [groupId: string] }>();
+const cache = inject(ACCOUNT_CACHE, null);
+let cacheLoaded = false;
+let initialLoadNotified = false;
+let cacheWriteTimer: ReturnType<typeof setTimeout> | null = null;
 const messages = ref<ChatMessage[]>([]);
 const text = ref('');
 const pendingAttachments = ref<PendingAttachment[]>([]);
@@ -174,7 +180,22 @@ function appendMessages(incoming: ChatMessage[], forceScroll = false, behavior: 
   return added.length;
 }
 
-async function refresh() {
+function writeMessageCache() {
+  const confirmedEnd = latestFetchedMessageId ? messages.value.findIndex(message => message.id === latestFetchedMessageId) + 1 : 0;
+  if (!confirmedEnd) return;
+  const confirmed = messages.value.slice(0, confirmedEnd);
+  void cache?.write('messages', props.group.id, {
+    messages: confirmed.slice(-500), hasMore: hasMore.value || confirmed.length > 500,
+  });
+}
+
+function saveMessageCache() {
+  if (!cache || cacheWriteTimer) return;
+  // 连续消息合并落盘，切群时再补最后一份快照。
+  cacheWriteTimer = setTimeout(() => { cacheWriteTimer = null; writeMessageCache(); }, 1_000);
+}
+
+async function refresh(wait = false) {
   pollRequest?.abort();
   const controller = new AbortController();
   pollRequest = controller;
@@ -182,10 +203,33 @@ async function refresh() {
   const groupId = props.group.id;
   const initial = !initialLoaded.value;
   try {
+    let restoredIds: Set<string> | null = null;
+    if (!cacheLoaded) {
+      cacheLoaded = true;
+      const cached = cache ? await cache.read<{ messages: ChatMessage[]; hasMore: boolean }>('messages', groupId) : null;
+      if (controller.signal.aborted || disposed || pollRequest !== controller) return null;
+      if (cached && Array.isArray(cached.messages) && cached.messages.length && cached.messages.length <= 500
+          && cached.messages.every(message => typeof message.id === 'string' && typeof message.content === 'string')) {
+        const cachedIds = new Set(cached.messages.map(message => message.id));
+        restoredIds = cachedIds;
+        messages.value = [...cached.messages, ...messages.value.filter(message => !cachedIds.has(message.id))];
+        hasMore.value = Boolean(cached.hasMore);
+        latestFetchedMessageId = cached.messages.at(-1)?.id;
+        initialLoaded.value = true;
+        void scrollToBottom('auto', true);
+      }
+    }
     // 只有查询结果能推进轮询游标；本机发送成功不代表游标之前的其他消息已经读完。
-    const latestId = latestFetchedMessageId;
-    const page = await findMessages(groupId, latestId ? { afterMessageId: latestId } : undefined, controller.signal);
+    let latestId = latestFetchedMessageId;
+    let page = await findMessages(groupId, latestId ? { afterMessageId: latestId } : undefined, controller.signal, wait);
     if (controller.signal.aborted || disposed || pollRequest !== controller || props.group.id !== groupId) return null;
+    if (restoredIds && page.messages.length >= 30) {
+      // 缓存落后较多时回到最近一页，避免启动后连续追赶大量旧消息，也不拼出缺口历史。
+      page = await findMessages(groupId, undefined, controller.signal);
+      if (controller.signal.aborted || disposed || pollRequest !== controller) return null;
+      messages.value = messages.value.filter(message => !restoredIds.has(message.id));
+      latestId = undefined;
+    }
     pollError.value = '';
     if (!latestId) {
       hasMore.value = page.hasMore;
@@ -210,6 +254,7 @@ async function refresh() {
       ...messages.value.slice(prefixEnd).filter((message) => !snapshotIds.has(message.id))];
     void animateMessagePositions(positions);
     latestFetchedMessageId = page.messages.at(-1)?.id ?? latestId;
+    if (added || initial) saveMessageCache();
     if (!initial) {
       unreadMessageIds.value.push(...newMessages.filter(message => message.senderUserId !== props.user.id)
         .map(message => message.id));
@@ -223,12 +268,21 @@ async function refresh() {
   } catch (reason) {
     if (controller.signal.aborted || disposed || pollRequest !== controller) return null;
     pollError.value = reason instanceof Error ? reason.message : '无法读取群聊消息';
+    if (reason instanceof ApiRequestError && [400, 403, 404].includes(reason.status)) {
+      messages.value = [];
+      latestFetchedMessageId = undefined;
+      initialLoaded.value = false;
+      if (reason.status !== 400) await cache?.revokeGroup(groupId);
+    }
     return 0;
   } finally {
     if (pollRequest === controller) {
       pollRequest = null;
       refreshing.value = false;
-      if (initial && !disposed && !controller.signal.aborted) emit('initialLoad', groupId);
+      if (!initialLoadNotified && !disposed && !controller.signal.aborted) {
+        initialLoadNotified = true;
+        emit('initialLoad', groupId);
+      }
     }
   }
 }
@@ -262,6 +316,7 @@ async function loadOlder() {
     const previousHeight = element.scrollHeight;
     const previousTop = element.scrollTop;
     messages.value = [...older, ...messages.value];
+    saveMessageCache();
     await nextTick();
     if (controller.signal.aborted || disposed || list.value !== element) return;
     if (anchor && anchorTop !== undefined) {
@@ -296,11 +351,14 @@ function scheduleRefresh() {
 
 async function pollMessages() {
   clearRefreshTimer();
-  const initial = !initialLoaded.value;
-  const added = await refresh();
+  const initial = !initialLoadNotified;
+  const startedAt = Date.now();
+  const added = await refresh(!initial);
   if (added === null || disposed || document.visibilityState === 'hidden') return;
-  consecutiveEmptyPolls = initial || added > 0 ? 0 : consecutiveEmptyPolls + 1;
-  scheduleRefresh();
+  consecutiveEmptyPolls = pollError.value ? consecutiveEmptyPolls + 1 : 0;
+  // 正常空响应已在服务器等待；异常提前返回时限速，避免代理或旧服务造成空转。
+  if (pollError.value || (!initial && added === 0 && Date.now() - startedAt < 1_000)) scheduleRefresh();
+  else timer = setTimeout(() => void pollMessages(), 0);
 }
 
 function retryRefresh() {
@@ -312,6 +370,7 @@ function retryRefresh() {
 function refreshOnActivation() {
   if (document.visibilityState === 'hidden') return;
   refreshCalendar();
+  if (pollRequest && !pollRequest.signal.aborted) return;
   if (Date.now() - lastActivationRefreshAt < 500) return;
   lastActivationRefreshAt = Date.now();
   consecutiveEmptyPolls = 0;
@@ -598,6 +657,11 @@ onMounted(() => {
 onScopeDispose(() => {
   // App 按群 ID 创建独立实例；切群统一在销毁处取消，观看布局不重建群聊。
   disposed = true;
+  if (cacheWriteTimer) {
+    clearTimeout(cacheWriteTimer);
+    cacheWriteTimer = null;
+    writeMessageCache();
+  }
   for (const animation of messageAnimations) animation.cancel();
   pollRequest?.abort();
   historyRequest?.abort();
