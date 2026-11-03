@@ -3,8 +3,9 @@ import { onScopeDispose, ref, watch } from 'vue';
 import { authRequest } from '../../auth/authApi';
 import { useQqLogin } from '../../auth/useQqLogin';
 import InlineFeedback from '../InlineFeedback.vue';
+import AccountLifecycleSettings from './AccountLifecycleSettings.vue';
 
-const props = defineProps<{ active: boolean; leaving: boolean }>();
+const props = defineProps<{ active: boolean; leaving: boolean; administrator?: boolean }>();
 const emit = defineEmits<{ logout: [] }>();
 const expanded = ref<'qq' | null>(null);
 const qqAvailable = ref(false);
@@ -42,7 +43,7 @@ watch(() => props.active, (active) => {
 
 <template>
   <section class="settings-section account-settings">
-    <p>退出登录会返回账号确认页并保留本机凭据；已绑定 QQ 的账号可通过 QQ 重新登录，未绑定时仍需恢复登录链接。</p>
+    <p>退出登录会返回账号确认页并保留本机凭据；更换电脑或丢失凭据时，服主可使用恢复密码，普通成员需向服主获取恢复链接。</p>
     <section class="settings-block">
       <h2>第三方账号</h2>
       <div v-if="qqAvailable" class="account-row"><div class="account-copy"><span>QQ 登录</span>
@@ -50,7 +51,7 @@ watch(() => props.active, (active) => {
         <button v-if="!binding?.bound" type="button" :disabled="!binding || leaving || qq.busy.value" @click="qq.start(true)">绑定 QQ</button>
         <button v-if="qq.busy.value" type="button" :disabled="qq.finishing.value" @click="qq.cancel">{{ qq.finishing.value ? '正在确认绑定…' : '取消等待' }}</button></div>
       <div v-else class="account-row"><div class="account-copy"><span>QQ 登录</span>
-        <div class="account-row-description"><p v-if="expanded === 'qq'" id="qq-entry" class="account-entry-note">此服务器尚未开启 QQ 登录，暂时不能绑定账号。</p><small v-else>未开启</small></div></div>
+        <div class="account-row-description"><p v-if="expanded === 'qq'" id="qq-entry" class="account-entry-note">QQ 账号绑定尚未接入，暂时不能用于登录或关联当前账号。</p><small v-else>尚未接入</small></div></div>
         <button type="button" :aria-expanded="expanded === 'qq'" aria-controls="qq-entry" @click="toggleEntry('qq')">{{ expanded === 'qq' ? '收起说明' : '查看 QQ 绑定说明' }}</button></div>
       <InlineFeedback :message="qq.error.value || qqError" :status="qq.busy.value ? '请在浏览器确认 QQ 身份，再返回应用完成绑定' : ''" />
     </section>
@@ -58,9 +59,8 @@ watch(() => props.active, (active) => {
       <h2>账号操作</h2>
       <div class="account-row"><div class="account-copy"><span>退出当前账号</span></div>
         <button type="button" :disabled="leaving" @click="emit('logout')">退出登录</button></div>
-      <div class="account-row"><div class="account-copy"><span>注销账号</span><small>永久注销尚未支持</small></div>
-        <button type="button" class="account-danger" disabled>注销账号</button></div>
     </section>
+    <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="administrator" />
   </section>
 </template>
 

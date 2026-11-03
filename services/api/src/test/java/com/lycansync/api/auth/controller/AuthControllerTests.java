@@ -67,6 +67,9 @@ class AuthControllerTests {
     @MockitoBean
     private ProfileService profileService;
 
+    @MockitoBean
+    private com.lycansync.api.auth.service.AccountLifecycleService lifecycle;
+
     @Test
     void shouldDistinguishInvalidLinkFromRateLimit() throws Exception {
         when(accessLinkService.preview(SESSION_TOKEN)).thenThrow(new AuthException(

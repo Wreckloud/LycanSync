@@ -10,6 +10,7 @@ import InlineFeedback from './components/InlineFeedback.vue';
 import LogoutConfirmDialog from './components/LogoutConfirmDialog.vue';
 import DialogTransition from './components/DialogTransition.vue';
 import ExpandSection from './components/ExpandSection.vue';
+import OwnerRecoveryCard from './components/OwnerRecoveryCard.vue';
 import type { AccessOffer } from './auth/accountAccess';
 import {
   authRequest,
@@ -39,6 +40,8 @@ const logoutTarget = ref<AuthUser | null>(null);
 const logoutBusy = ref(false);
 const ready = ref(false);
 const qqAvailable = ref(false);
+const initialized = ref<boolean | null>(null);
+const recoveryOpen = ref(false);
 const accessOffer = ref<AccessOffer | null>(null);
 const onboarding = ref(false);
 const error = ref('');
@@ -96,6 +99,8 @@ const removeUpdateState = desktop?.onUpdateState((state) => { updateState.value 
 const removeClose = desktop?.onClose(() => { if (!user.value && !logoutInProgress) desktop.finishClose(); });
 void desktop?.isMaximized().then((maximized) => { windowMaximized.value = maximized; }).catch(() => undefined);
 window.addEventListener('lycan:unauthorized', expired);
+const accountUpdated = () => { void verifyCurrentSession(); };
+window.addEventListener('lycan:account-updated', accountUpdated);
 onScopeDispose(() => {
   disposed = true;
   initializationRequest?.abort();
@@ -105,6 +110,7 @@ onScopeDispose(() => {
   removeAccessLink?.();
   removeUpdateState?.();
   window.removeEventListener('lycan:unauthorized', expired);
+  window.removeEventListener('lycan:account-updated', accountUpdated);
 });
 
 async function initialize(automatic = false) {
@@ -114,10 +120,11 @@ async function initialize(automatic = false) {
   initializationRequest = request;
   error.value = '';
   try {
-    const options = await authRequest<{ mode: 'invite'; qqAvailable?: boolean }>('options', 'GET', undefined, request.signal);
+    const options = await authRequest<{ mode: 'invite'; qqAvailable?: boolean; initialized?: boolean }>('options', 'GET', undefined, request.signal);
     if (request.signal.aborted) return;
     if (options.mode !== 'invite') throw new Error('服务器尚未启用邀请登录，请联系服主。');
     qqAvailable.value = Boolean(options.qqAvailable);
+    initialized.value = typeof options.initialized === 'boolean' ? options.initialized : null;
     // 没有 Cookie 或页面持久化凭据；桌面主进程会自动附加已保存会话。
     const response = await authenticatedFetch('/api/auth/me', {
       signal: AbortSignal.any([request.signal, AbortSignal.timeout(15000)]),
@@ -392,9 +399,11 @@ onMounted(async () => {
     <Transition name="entry-page" @before-enter="($event as HTMLElement).inert = false" @before-leave="($event as HTMLElement).inert = true">
     <StartupUpdate v-if="startupChecking" key="startup" :state="updateState" @skip="desktop?.skipStartupUpdate()" />
     <WelcomeProfile v-else-if="entryUser && onboarding" key="profile" :user="entryUser" :save-profile="saveProfile" @finish="onboarding = false" />
-    <main v-else :key="accessOffer ? 'invitation' : 'account'" class="auth-screen">
+    <main v-else :key="accessOffer ? 'invitation' : recoveryOpen ? 'recovery' : 'account'" class="auth-screen">
       <AccountAccessPrompt v-if="accessOffer && ready" :offer="accessOffer" :current-user="user ?? entryUser" :current-server="serverAddress || pageOrigin"
         @cancel="accessOffer = null" @joined="completeAccess" />
+      <OwnerRecoveryCard v-else-if="recoveryOpen && !entryUser" @cancel="recoveryOpen = false"
+        @recovered="recoveryOpen = false; completeAccess($event, 'RECOVERY')" />
       <section v-else class="auth-card">
         <h1>一起开黑，一起看</h1>
         <p>登录 LycanSync，继续和朋友一起玩。</p>
@@ -418,8 +427,13 @@ onMounted(async () => {
               <button v-if="qq.busy.value" type="button" :disabled="qq.finishing.value" @click="qq.cancel">{{ qq.finishing.value ? '正在确认账号…' : '取消授权等待' }}</button>
               <InlineFeedback :message="qq.error.value" :status="qq.busy.value ? '请在系统浏览器确认 QQ 授权，然后返回应用' : ''" />
             </div>
-            <p>新成员使用服主发来的邀请链接；更换电脑或凭据失效时使用新的恢复登录链接。</p>
-            <p>服主丢失凭据需由服务器维护者恢复，旧激活链接不能重复使用。</p>
+            <div class="auth-guest">
+              <p v-if="initialized === false">当前群组尚未完成服主认证，请等待服主完成首次设置。</p>
+              <p v-else-if="initialized === true">使用服主分享的邀请链接即可加入。更换设备或需要重新登录时，请向服主获取新的恢复链接。</p>
+              <p v-else>暂时无法确认服主认证状态，请重新连接。</p>
+              <p>服主首次设置时，请设置恢复密码，以便在无法登录时恢复账号。</p>
+            </div>
+            <p class="auth-guest-note">如果你是服主且无法登录，请尝试 <button type="button" class="auth-recovery-link" @click="recoveryOpen = true">群组恢复</button>。</p>
           </template>
           <div v-if="error && !removeConfirm" class="button-actions">
             <button :disabled="submitting || logoutBusy || removing" @click="initialize()">重新连接</button>
@@ -468,8 +482,12 @@ onMounted(async () => {
 
 <style scoped>
 .auth-qq-login { display: grid; justify-items: start; gap: 8px; margin-bottom: 18px; }
+.auth-recovery-link { padding: 0; border: 0; border-radius: 0; color: var(--accent); background: transparent; text-decoration: underline; text-underline-offset: 3px; }
 .auth-qq-button { padding: 0; border: 0; border-radius: 0; background: transparent; }
 .auth-qq-button img { display: block; }
+</style>
+
+<style scoped>
 .account-preview { display: flex; align-items: center; gap: 12px; margin: 20px 0; min-width: 0; }
 .account-avatar-placeholder { display: grid; place-items: center; width: 48px; height: 48px; flex-shrink: 0; border-radius: 50%; background: var(--panel-raised); color: var(--muted); }
 .account-preview img { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; }
@@ -479,6 +497,10 @@ onMounted(async () => {
 .auto-login-option { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
 .auto-login-option input { flex-shrink: 0; width: 16px; height: 16px; margin: 0; padding: 0; }
 .account-entry-note { color: var(--muted); font-size: 12px; line-height: 18px; }
+.auth-guest { display: grid; gap: 16px; }
+.auth-guest h2 { margin: 0; color: var(--text); font-size: 14px; font-weight: 600; line-height: 20px; }
+.auth-guest p { margin: 4px 0 0; }
+.auth-guest-note { margin: 20px 0 0; padding-top: 14px; border-top: 1px solid var(--border); }
 
 .entry-shell { display: flex; flex-direction: column; }
 .entry-shell > .titlebar { flex: 0 0 var(--titlebar-height); }

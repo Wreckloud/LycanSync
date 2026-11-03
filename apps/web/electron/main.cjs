@@ -43,6 +43,13 @@ const apiRoutePolicies = new Map([
   ['GET /api/auth/options', { public: true }],
   ['POST /api/auth/access/preview', { public: true }],
   ['POST /api/auth/access/redeem', { public: true, savesSession: true }],
+  ['GET /api/auth/account', {}],
+  ['POST /api/auth/account/recover', { public: true, savesSession: true }],
+  ['PUT /api/auth/account/recovery-password', {}],
+  ['POST /api/auth/account/transfer', {}],
+  ['DELETE /api/auth/account/transfer', {}],
+  ['POST /api/auth/account/transfer/accept', {}],
+  ['POST /api/auth/account/close', { clearsSession: true }],
   ['POST /api/auth/qq/start', {}],
   ['POST /api/auth/qq/exchange', { public: true, savesSession: true }],
   ['POST /api/auth/qq/binding/confirm', {}],
@@ -1318,8 +1325,8 @@ async function serveApplication(request) {
       }
       failureMessage = '无法读取本机登录凭据，请清理本机登录凭据后重试。';
       const token = await loadSession();
-      if (url.pathname === '/api/auth/access/redeem' && token) {
-        return Response.json({ detail: '请先从此设备移除当前账号，再使用邀请链接。' }, { status: 409 });
+      if (['/api/auth/access/redeem', '/api/auth/account/recover'].includes(url.pathname) && token) {
+        return Response.json({ detail: '请先从此设备移除当前账号，再恢复账号或使用邀请链接。' }, { status: 409 });
       }
       failureMessage = '无法连接业务服务，请检查网络和服务器状态。';
       const response = await net.fetch(new URL(url.pathname + url.search, backend).href, {

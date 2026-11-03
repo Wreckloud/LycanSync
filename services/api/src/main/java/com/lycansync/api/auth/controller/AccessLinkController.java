@@ -9,6 +9,7 @@ import com.lycansync.api.auth.model.AccessLink;
 import com.lycansync.api.auth.model.AuthUser;
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.service.AccessLinkService;
+import com.lycansync.api.auth.service.AccountLifecycleService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -43,14 +44,15 @@ public class AccessLinkController {
     private final AccessLinkService links;
     private final AccountAccessProperties settings;
     private final QqLoginProperties qq;
+    private final AccountLifecycleService lifecycle;
 
-    public record LoginOptions(String mode, String serverName, boolean qqAvailable) { }
+    public record LoginOptions(String mode, String serverName, boolean qqAvailable, boolean initialized) { }
 
     @GetMapping("/options")
     @SecurityRequirements
     @Operation(summary = "获取服务器支持的登录方式")
     public ResponseEntity<LoginOptions> options() {
-        return noStore(new LoginOptions(settings.getMode(), settings.getServerName(), qq.isEnabled()));
+        return noStore(new LoginOptions(settings.getMode(), settings.getServerName(), qq.isEnabled(), lifecycle.state().initialized()));
     }
 
     @PostMapping("/access/preview")
@@ -65,7 +67,7 @@ public class AccessLinkController {
     @Operation(summary = "确认加入、激活或恢复", description = "成功后原子消耗链接并签发当前设备会话")
     public ResponseEntity<LoginResponse> redeem(@Valid @RequestBody AccessRedeemRequest request,
                                               @AuthenticationPrincipal AuthenticatedUser user) {
-        return noStore(links.redeem(request.token(), request.redemptionKey(), user));
+        return noStore(links.redeem(request.token(), request.redemptionKey(), user, request.recoveryPassword()));
     }
 
     @GetMapping("/access/links")
