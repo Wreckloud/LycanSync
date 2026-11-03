@@ -1,10 +1,13 @@
 package com.lycansync.api.presence.event;
 
+import java.util.Set;
+import java.util.UUID;
+
 /**
  * 已提交的在线状态或活动变化。
  *
  * @author Wreckloud
  * @since 2026-09-30
  */
-public record PresenceChangedEvent() {
+public record PresenceChangedEvent(Set<UUID> userIds) {
 }

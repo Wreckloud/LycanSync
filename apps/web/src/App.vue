@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onScopeDispose, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onScopeDispose, provide, reactive, ref, watch } from 'vue';
+import { ACCOUNT_CACHE, createAccountCache } from './cache/localCache';
 import { ArrowLeft, AudioLines, Copy, CornerUpLeft, Headphones,
   LoaderCircle, LogOut, Minus, Plus, RadioTower,
   Settings, Square, UserRound, Volume2, X } from '@lucide/vue';
@@ -60,6 +61,8 @@ const props = defineProps<{
   interactionBlocked?: boolean;
 }>();
 const emit = defineEmits<{ logout: []; dismissUpdateWarning: []; ready: [] }>();
+const accountCache = createAccountCache(props.user.id);
+provide(ACCOUNT_CACHE, accountCache);
 
 const STATUS_LABELS = { idle: '未加入语音', joining: '正在连接', connected: '语音已连接', reconnecting: '正在重连' };
 const CALLBAR_EXIT_DURATION_MS = 180;
@@ -467,7 +470,7 @@ let groupPresenceWaitRequest: AbortController | null = null;
 let groupPresenceWatchGeneration = 0;
 let groupPresenceRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let cancelGroupPresenceRetry: (() => void) | null = null;
-const presenceCursors = new Map<string, Pick<GroupPresenceChangeCursor, 'serverInstanceId' | 'version'>>();
+const presenceCursors = new Map<string, Pick<GroupPresenceChangeCursor, 'serverInstanceId' | 'version' | 'detailVersion'>>();
 const presenceConnectionLost = ref(false);
 let roomOccupancyRequest: AbortController | null = null;
 let joinAttempt = 0;
@@ -665,7 +668,12 @@ function startGroupPresenceSync(groupId: string | null, refreshImmediately = fal
           presenceCursors.get(groupId) ?? null, controller.signal);
         if (controller.signal.aborted || generation !== groupPresenceWatchGeneration
             || selectedGroupId.value !== groupId) return;
-        presenceCursors.set(groupId, { serverInstanceId: response.serverInstanceId, version: response.version });
+        const previous = presenceCursors.get(groupId);
+        // 首次建立游标后也复核资料，覆盖初始读取与订阅之间恰好提交的修改。
+        if (!previous || previous.serverInstanceId !== response.serverInstanceId || previous.detailVersion !== response.detailVersion) {
+          void loadGroup(groupId, selectedGroupDetail.value?.id === groupId);
+        }
+        presenceCursors.set(groupId, { serverInstanceId: response.serverInstanceId, version: response.version, detailVersion: response.detailVersion });
         presenceConnectionLost.value = false;
         retryDelayMs = 1_000;
         if (response.changed) refreshSnapshot = true;
@@ -706,12 +714,19 @@ async function loadGroup(groupId: string, keepExisting = false) {
   if (!keepExisting) selectedGroupDetail.value = null;
   groupError.value = '';
   groupLoading.value = !keepExisting;
+  if (!keepExisting) void accountCache.read<GroupDetail>('members', groupId).then(cached => {
+    if (cached?.id === groupId && Array.isArray(cached.members) && !request.signal.aborted
+        && selectedGroupId.value === groupId && groupLoading.value && !selectedGroupDetail.value) {
+      selectedGroupDetail.value = { ...cached, ...selectedGroup.value, members: cached.members };
+    }
+  });
   try {
     const detail = await findGroup(groupId, request.signal);
     if (!request.signal.aborted && selectedGroupId.value === groupId) {
       selectedGroupDetail.value = detail;
       if (joinedGroupId.value === groupId) joinedGroupDetail.value = detail;
       if (management.value?.group.id === groupId) management.value.group = detail;
+      void accountCache.write('members', groupId, detail);
     }
   } catch (error) {
     if (!request.signal.aborted) {
@@ -719,7 +734,8 @@ async function loadGroup(groupId: string, keepExisting = false) {
         groupError.value = error instanceof Error ? error.message : '无法读取群组资料';
       }
       // 旧预览不覆盖当前提示；若它仍是通话群，失去成员资格仍须正常离房。
-      if (error instanceof ApiRequestError && error.status === 404) {
+      if (error instanceof ApiRequestError && (error.status === 404 || error.status === 403)) {
+        void accountCache.revokeGroup(groupId);
         if (joinedGroupId.value === groupId || joiningGroupId.value === groupId) leaveVoice();
         if (selectedGroupDetail.value?.id === groupId) selectedGroupDetail.value = null;
         if (management.value?.group.id === groupId) management.value = null;
@@ -738,6 +754,10 @@ async function refreshGroups(refreshDetail = true, refreshOccupancy = true) {
   try {
     const result = await findGroups(request.signal);
     if (request.signal.aborted) return;
+    for (const previous of groups.value) {
+      if (!result.some(group => group.id === previous.id)) void accountCache.revokeGroup(previous.id);
+    }
+    accountCache.allowGroups(result.map(group => group.id));
     groups.value = result;
     if (joinedGroupId.value && !result.some((group) => group.id === joinedGroupId.value)) leaveVoice();
     if (joiningGroupId.value && !result.some((group) => group.id === joiningGroupId.value)) leaveVoice();
@@ -764,18 +784,19 @@ async function refreshGroups(refreshDetail = true, refreshOccupancy = true) {
     if (!request.signal.aborted) groupError.value = error instanceof Error ? error.message : '无法读取群组列表';
   } finally {
     if (!request.signal.aborted) initialGroupsLoaded.value = true;
+    if (listRequest === request) listRequest = null;
   }
 }
 let groupListRefreshTimer: ReturnType<typeof setInterval> | null = null;
 let roomOccupancyRefreshTimer: ReturnType<typeof setInterval> | null = null;
 let lastActivationRefreshAt = 0;
 function refreshOnActivation() {
-  if (document.visibilityState === 'hidden' || Date.now() - lastActivationRefreshAt < 500) return;
+  if (document.visibilityState === 'hidden' || Date.now() - lastActivationRefreshAt < 2_000) return;
   lastActivationRefreshAt = Date.now();
   void updateOwnPresenceStatus();
   void sendHeartbeat();
   roomSummaryRefreshVersion.value++;
-  void refreshGroups();
+  if (!listRequest) void refreshGroups(false);
   if (selectedGroupId.value) startGroupPresenceSync(selectedGroupId.value, true);
 }
 function handleVisibilityChange() {

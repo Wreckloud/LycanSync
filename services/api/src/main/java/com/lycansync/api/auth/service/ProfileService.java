@@ -7,10 +7,15 @@ import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.model.AuthUser;
 import com.lycansync.api.common.error.ApiErrorCode;
 import com.lycansync.api.common.image.AvatarImageProcessor;
+import com.lycansync.api.group.mapper.GroupMapper;
+import com.lycansync.api.group.event.GroupChangedEvent;
+import org.springframework.context.ApplicationEventPublisher;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.UUID;
 
 
 /**
@@ -24,6 +29,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class ProfileService {
 
     private final AuthMapper mapper;
+    private final GroupMapper groupMapper;
+    private final ApplicationEventPublisher events;
 
     public AuthUser findProfile(AuthenticatedUser user) {
         AuthUser profile = mapper.findUserProfile(user.id());
@@ -57,6 +64,8 @@ public class ProfileService {
         if (mapper.updateProfile(user.id(), nickname, avatar, signature) != 1) {
             throw new AuthException(HttpStatus.NOT_FOUND, ApiErrorCode.ACCOUNT_NOT_FOUND, "账号不存在");
         }
+        groupMapper.findGroupIdsByMember(user.id()).stream().map(UUID::fromString)
+                .forEach(groupId -> events.publishEvent(new GroupChangedEvent(groupId, false)));
         return findProfile(user);
     }
 

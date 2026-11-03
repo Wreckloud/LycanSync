@@ -14,6 +14,7 @@ import java.util.UUID;
 public record GroupPresenceChangeResponse(
         UUID serverInstanceId,
         long version,
+        @Schema(description = "成员名单或资料的变化版本；在线动态变化不推进此版本") long detailVersion,
         boolean changed
 ) {
 }

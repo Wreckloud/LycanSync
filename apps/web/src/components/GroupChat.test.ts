@@ -5,6 +5,7 @@ import ts from 'typescript';
 import { computed, effectScope, nextTick, onScopeDispose, reactive, ref } from 'vue';
 import { expect, it, vi } from 'vitest';
 import type { ChatMessage, ChatMessagePage } from '../chat/chatApi';
+import type { AccountCache } from '../cache/localCache';
 import { formatFullMessageTime, formatMessageDate, formatMessageTime, localDateKey } from '../chat/messageTime';
 
 const script = parse(readFileSync(new URL('./GroupChat.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
@@ -25,7 +26,7 @@ function message(id: string): ChatMessage {
     createdAt: '2026-10-14T12:00:00Z', attachment: null };
 }
 
-function setup() {
+function setup(cache: AccountCache | null = null) {
   const scope = effectScope();
   const props = reactive({ group: { id: 'first', name: '群聊' }, members: [], user: { id: 'self', nickname: '自己' } });
   const findMessages = vi.fn(async (_groupId: string, _cursor?: unknown, _signal?: AbortSignal): Promise<ChatMessagePage> =>
@@ -42,6 +43,7 @@ function setup() {
     scrollToBottom, onScroll, onScrollEnd, onWheel, stopAnimatedScroll, refreshCalendar, calendarNow,
     setScrollPreference: value => { scrollPreference = value; } })`, {
     computed, ref, nextTick, onScopeDispose, onMounted: () => {}, defineProps: () => props, defineEmits: () => emit,
+    inject: () => cache, ACCOUNT_CACHE: Symbol(), ApiRequestError: class extends Error {},
     findMessages, sendMessage, sendFile, compressChatImage: vi.fn(), messagePollDelay: () => 8000,
     formatFullMessageTime, formatMessageDate, formatMessageTime, localDateKey,
     AbortController, setTimeout, clearTimeout, Error, Date,
@@ -65,6 +67,76 @@ function setup() {
   };
   return { scope, props, chat, findMessages, sendMessage, sendFile, document, emit };
 }
+
+it('命中历史先展示已确认快照，随后按最后游标补齐新消息并更新缓存', async () => {
+  const cache = { read: vi.fn().mockResolvedValue({ messages: [message('cached')], hasMore: true }),
+    write: vi.fn(), revokeGroup: vi.fn(), allowGroups: vi.fn() } as AccountCache;
+  const f = setup(cache);
+  const page = deferred<ChatMessagePage>();
+  f.findMessages.mockReturnValueOnce(page.promise);
+  try {
+    const refreshing = f.chat.refresh();
+    await vi.waitFor(() => expect(f.findMessages).toHaveBeenCalledOnce());
+    expect(f.chat.messages.value.map(message => message.id)).toEqual(['cached']);
+    expect(f.findMessages).toHaveBeenCalledWith('first', { afterMessageId: 'cached' }, expect.any(AbortSignal), false);
+    page.resolve({ messages: [message('new')], hasMore: false });
+    await refreshing;
+    expect(f.chat.messages.value.map(message => message.id)).toEqual(['cached', 'new']);
+    expect(cache.write).not.toHaveBeenCalled();
+    f.scope.stop();
+    expect(cache.write).toHaveBeenCalledWith('messages', 'first', { messages: [message('cached'), message('new')], hasMore: true });
+  } finally { f.scope.stop(); }
+});
+
+it('切群销毁后迟到的缓存不能展示，也不能发起旧群网络读取', async () => {
+  const cached = deferred<{ messages: ChatMessage[]; hasMore: boolean }>();
+  const cache = { read: vi.fn().mockReturnValue(cached.promise), write: vi.fn(),
+    revokeGroup: vi.fn(), allowGroups: vi.fn() } as AccountCache;
+  const f = setup(cache);
+  const refreshing = f.chat.refresh();
+  f.scope.stop();
+  cached.resolve({ messages: [message('old')], hasMore: false });
+  await refreshing;
+  expect(f.findMessages).not.toHaveBeenCalled();
+  expect(f.chat.messages.value).toEqual([]);
+});
+
+it('命中缓存后首次联网被隐藏取消，恢复时直接同步并只通知一次加载完成', async () => {
+  const cache = { read: vi.fn().mockResolvedValue({ messages: [message('cached')], hasMore: false }),
+    write: vi.fn(), revokeGroup: vi.fn(), allowGroups: vi.fn() } as AccountCache;
+  const f = setup(cache);
+  const page = deferred<ChatMessagePage>();
+  f.findMessages.mockReturnValueOnce(page.promise);
+  try {
+    const reading = f.chat.refresh();
+    await vi.waitFor(() => expect(f.findMessages).toHaveBeenCalledOnce());
+    f.document.visibilityState = 'hidden';
+    f.chat.handleVisibilityChange();
+    page.resolve({ messages: [], hasMore: false });
+    await reading;
+    expect(f.emit).not.toHaveBeenCalled();
+    f.document.visibilityState = 'visible';
+    await f.chat.retryRefresh();
+    expect(f.findMessages).toHaveBeenLastCalledWith('first', { afterMessageId: 'cached' }, expect.any(AbortSignal), false);
+    expect(f.emit).toHaveBeenCalledExactlyOnceWith('initialLoad', 'first');
+    await f.chat.refresh();
+    expect(f.emit).toHaveBeenCalledTimes(1);
+  } finally { f.scope.stop(); }
+});
+
+it('历史落后较多时只补取最近一页，不拼接有缺口的缓存历史', async () => {
+  const cache = { read: vi.fn().mockResolvedValue({ messages: [message('old')], hasMore: false }),
+    write: vi.fn(), revokeGroup: vi.fn(), allowGroups: vi.fn() } as AccountCache;
+  const f = setup(cache);
+  try {
+    f.findMessages.mockResolvedValueOnce({ messages: Array.from({ length: 31 }, (_, index) => message(`missed-${index}`)), hasMore: false })
+      .mockResolvedValueOnce({ messages: [message('latest')], hasMore: true });
+    await f.chat.refresh();
+    expect(f.findMessages).toHaveBeenCalledTimes(2);
+    expect(f.findMessages.mock.calls[1][1]).toBeUndefined();
+    expect(f.chat.messages.value.map(message => message.id)).toEqual(['latest']);
+  } finally { f.scope.stop(); }
+});
 
 it('首批消息失败也通知初始等待结束，保留区域内重试；取消的旧请求不通知', async () => {
   const { scope, chat, findMessages, emit } = setup();

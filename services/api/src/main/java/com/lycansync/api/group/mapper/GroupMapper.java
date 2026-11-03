@@ -25,6 +25,8 @@ public interface GroupMapper {
 
     List<GroupView> findGroups(@Param("userId") UUID userId);
 
+    List<String> findGroupIdsByMember(@Param("userId") UUID userId);
+
     GroupView findGroup(@Param("groupId") UUID groupId, @Param("userId") UUID userId);
 
     List<GroupMember> findMembers(@Param("groupId") UUID groupId);

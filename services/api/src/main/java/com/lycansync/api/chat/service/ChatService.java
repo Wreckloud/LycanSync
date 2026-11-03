@@ -4,6 +4,8 @@ import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.chat.dto.ChatAttachmentResponse;
 import com.lycansync.api.chat.dto.ChatMessagePageResponse;
 import com.lycansync.api.chat.dto.ChatMessageResponse;
+import com.lycansync.api.chat.event.ChatMessageCreatedEvent;
+import org.springframework.context.ApplicationEventPublisher;
 import com.lycansync.api.chat.mapper.ChatMapper;
 import com.lycansync.api.chat.model.ChatAttachment;
 import com.lycansync.api.chat.model.ChatAttachmentContent;
@@ -36,11 +38,13 @@ public class ChatService {
     private final ChatMapper mapper;
     private final GroupService groupService;
     private final Clock systemClock;
+    private final ApplicationEventPublisher events;
 
-    public ChatService(ChatMapper mapper, GroupService groupService, Clock systemClock) {
+    public ChatService(ChatMapper mapper, GroupService groupService, Clock systemClock, ApplicationEventPublisher events) {
         this.mapper = mapper;
         this.groupService = groupService;
         this.systemClock = systemClock;
+        this.events = events;
     }
 
     public ChatMessagePageResponse findMessages(
@@ -100,6 +104,7 @@ public class ChatService {
             attachment = new ChatAttachmentResponse(attachmentId, validatedImage.contentType(),
                     validatedImage.width(), validatedImage.height(), (long) validatedImage.data().length, null);
         }
+        events.publishEvent(new ChatMessageCreatedEvent(groupId));
         return new ChatMessageResponse(messageId, user.id(), user.nickname(),
                 validatedImage == null ? ChatMessageType.TEXT : ChatMessageType.IMAGE, text, now, attachment);
     }

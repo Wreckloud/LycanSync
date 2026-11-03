@@ -1,4 +1,5 @@
 import { authenticatedFetch, readApiError } from '../auth/authApi';
+import { nextPresenceWaitRequest } from '../group/groupApi';
 
 export type ChatMessageType = 'TEXT' | 'IMAGE' | 'FILE';
 
@@ -32,12 +33,14 @@ function messagePath(groupId: string) {
 
 export async function findMessages(groupId: string,
   cursor?: { beforeMessageId: string; afterMessageId?: never } | { afterMessageId: string; beforeMessageId?: never },
-  signal?: AbortSignal): Promise<ChatMessagePage> {
+  signal?: AbortSignal, wait = false): Promise<ChatMessagePage> {
   const search = cursor?.beforeMessageId ? '?beforeMessageId=' + encodeURIComponent(cursor.beforeMessageId)
     : cursor?.afterMessageId ? '?afterMessageId=' + encodeURIComponent(cursor.afterMessageId) : '';
-  const response = await authenticatedFetch(messagePath(groupId) + search, {
+  const waiter = wait ? nextPresenceWaitRequest() : null;
+  const waiting = waiter ? new URLSearchParams({ wait: 'true', clientId: waiter.clientId, requestId: String(waiter.requestId) }) : null;
+  const response = await authenticatedFetch(messagePath(groupId) + search + (waiting ? (search ? '&' : '?') + waiting : ''), {
     headers: { Accept: 'application/json' },
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(wait ? 35_000 : 15_000)]) : AbortSignal.timeout(wait ? 35_000 : 15_000),
   });
   if (!response.ok) throw await readApiError(response);
   return response.json() as Promise<ChatMessagePage>;

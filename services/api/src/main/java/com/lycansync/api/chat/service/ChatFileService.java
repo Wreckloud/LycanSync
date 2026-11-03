@@ -4,6 +4,8 @@ import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.chat.config.ChatFileProperties;
 import com.lycansync.api.chat.dto.ChatAttachmentResponse;
 import com.lycansync.api.chat.dto.ChatMessageResponse;
+import com.lycansync.api.chat.event.ChatMessageCreatedEvent;
+import org.springframework.context.ApplicationEventPublisher;
 import com.lycansync.api.chat.mapper.ChatMapper;
 import com.lycansync.api.chat.model.ChatFileAttachment;
 import com.lycansync.api.chat.model.ChatFileMetadata;
@@ -56,10 +58,11 @@ public class ChatFileService {
     private final Clock systemClock;
     private final TransactionTemplate transactions;
     private final ChatFileStorageCoordinator coordinator;
+    private final ApplicationEventPublisher events;
 
     public ChatFileService(ChatMapper mapper, ChatFileQuotaService quotaService, GroupService groupService,
                           ChatFileProperties properties, Clock systemClock, TransactionTemplate transactions,
-                          ChatFileStorageCoordinator coordinator) {
+                          ChatFileStorageCoordinator coordinator, ApplicationEventPublisher events) {
         this.mapper = mapper;
         this.quotaService = quotaService;
         this.groupService = groupService;
@@ -67,6 +70,7 @@ public class ChatFileService {
         this.systemClock = systemClock;
         this.transactions = transactions;
         this.coordinator = coordinator;
+        this.events = events;
     }
 
     public ChatMessageResponse upload(UUID groupId, AuthenticatedUser user, UUID uploadId,
@@ -164,6 +168,7 @@ public class ChatFileService {
                 createdAt, sequenceNumber));
         mapper.insertFileAttachment(new ChatFileAttachment(attachmentId, messageId, uploadId, fileName, byteSize));
         quotaService.complete(reservationId, byteSize);
+        events.publishEvent(new ChatMessageCreatedEvent(groupId));
         ChatAttachmentResponse attachment = new ChatAttachmentResponse(attachmentId,
                 "application/octet-stream", null, null, byteSize, fileName);
         return new ChatMessageResponse(messageId, user.id(), user.nickname(), ChatMessageType.FILE,

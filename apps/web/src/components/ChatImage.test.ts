@@ -4,6 +4,7 @@ import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
 import { computed, effectScope, nextTick, onScopeDispose, reactive, ref, watch } from 'vue';
 import { expect, it, vi } from 'vitest';
+import type { AccountCache } from '../cache/localCache';
 
 const script = parse(readFileSync(new URL('./ChatImage.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('ChatImage.ts', script, ts.ScriptTarget.Latest, true);
@@ -16,7 +17,7 @@ async function settleRequests() {
   for (let turn = 0; turn < 4; turn++) await nextTick();
 }
 
-function setup() {
+function setup(cache: AccountCache | null = null) {
   const scope = effectScope();
   const props = reactive({ groupId: 'first', attachmentId: 'image', width: 20, height: 10, alt: '图片' });
   const observers: FakeObserver[] = [];
@@ -37,6 +38,7 @@ function setup() {
   // 回调可以在断开观察之后人工送达，验证正式监听/销毁边界，不读取图片或运行浏览器。
   const image = scope.run(() => runInNewContext(`${compiled}\n({ frame, source, error, observeFrame, load })`, {
     computed, ref, watch, onScopeDispose, onMounted: () => {}, defineProps: () => props,
+    inject: () => cache, ACCOUNT_CACHE: Symbol(), Blob,
     fetchAttachment, AbortController, Error, IntersectionObserver: FakeObserver,
     URL: { createObjectURL, revokeObjectURL },
   })) as { frame: { value: HTMLElement | null }; source: { value: string }; error: { value: string };
@@ -45,6 +47,25 @@ function setup() {
   image.observeFrame();
   return { scope, props, image, observers, pending, fetchAttachment, createObjectURL, revokeObjectURL };
 }
+
+it('磁盘图片命中不重新下载，远离后仍释放解码引用，再返回可重新读取缓存', async () => {
+  const cache = { read: vi.fn().mockResolvedValue(new Blob(['cached image'])), write: vi.fn(),
+    revokeGroup: vi.fn(), allowGroups: vi.fn() } as AccountCache;
+  const f = setup(cache);
+  try {
+    f.observers[0].intersect();
+    await settleRequests();
+    expect(f.fetchAttachment).not.toHaveBeenCalled();
+    expect(f.createObjectURL).toHaveBeenCalledOnce();
+    f.observers[1].leave();
+    expect(f.revokeObjectURL).toHaveBeenCalledOnce();
+    expect(f.image.source.value).toBe('');
+    f.observers[1].intersect();
+    await settleRequests();
+    expect(cache.read).toHaveBeenCalledTimes(2);
+    expect(f.fetchAttachment).not.toHaveBeenCalled();
+  } finally { f.scope.stop(); }
+});
 
 it('销毁后旧可见回调不重开请求，不创建新的预览URL', async () => {
   const { scope, observers, fetchAttachment, image } = setup();

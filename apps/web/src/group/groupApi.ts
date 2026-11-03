@@ -52,6 +52,7 @@ export function findGroupMemberProfile(groupId: string, userId: string, signal: 
 export interface GroupPresenceChangeCursor {
   serverInstanceId: string;
   version: number;
+  detailVersion: number;
   changed: boolean;
 }
 

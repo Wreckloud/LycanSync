@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.HttpStatus;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.ByteArrayInputStream;
@@ -46,7 +47,7 @@ class ChatFileServiceTests {
     void setUp(@TempDir Path temporaryDirectory) {
         properties.setStorageDirectory(temporaryDirectory.resolve("chat-files"));
         service = new ChatFileService(mapper, quotaService, groupService, properties,
-                Clock.systemUTC(), transactions, coordinator);
+                Clock.systemUTC(), transactions, coordinator, mock(ApplicationEventPublisher.class));
     }
 
     @Test

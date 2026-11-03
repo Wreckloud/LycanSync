@@ -25,6 +25,7 @@ function setup() {
   const user = ref<AuthUser | null>({ id: 'member', nickname: '旧昵称', avatar: '', administrator: false });
   const authRequest = vi.fn((path: string) => path === 'session' ? pending : Promise.resolve({ mode: 'invite' }));
   const context = { user, authRequest, disposed: false, sessionHeartbeatInFlight: false,
+    clearLocalContentCache: vi.fn(async () => {}),
     application: ref({ prepareLogout: vi.fn(() => ({ showActivity: false, showLastOnline: true })) }),
     entryUser: ref<AuthUser | null>(null), autoLogin: ref(true), manualEntryRequired: ref(false), preferenceSaving: ref(false),
     removeConfirm: ref(false), removing: ref(false), submitting: ref(false), ready: ref(true), accessOffer: ref(null),
@@ -61,7 +62,20 @@ it('普通退出先确认，取消不动凭据；确认后只停止媒体并返�
   expect(f.context.authRequest).not.toHaveBeenCalled();
   expect(f.context.desktop.clearSession).not.toHaveBeenCalled();
   expect(f.context.setBrowserSession).not.toHaveBeenCalled();
+  expect(f.context.clearLocalContentCache).not.toHaveBeenCalled();
   expect(f.context.logoutTarget.value).toBeNull();
+});
+
+it('缓存删除失败仍允许移除凭据，但明确提示残留缓存', async () => {
+  const f = setup();
+  f.context.user.value = null;
+  f.context.entryUser.value = { id: 'member', nickname: '成员', avatar: '', administrator: false };
+  f.context.clearLocalContentCache.mockRejectedValueOnce(new Error('storage unavailable'));
+  f.requestClearSession();
+  await f.clearLocalSession();
+  expect(f.context.desktop.clearSession).toHaveBeenCalledOnce();
+  expect(f.context.entryUser.value).toBeNull();
+  expect(f.context.error.value).toContain('聊天缓存未能清理');
 });
 
 it('资源停止失败仍保留账号与凭据，并明确提示；重新进入前再次回收', async () => {
