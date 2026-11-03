@@ -198,14 +198,33 @@ test('已展开资料卡随窗口与内容尺寸变化保持在可视区', async
   const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
   await expect(menu).toHaveCSS('opacity', '1');
   await page.setViewportSize({ width: 440, height: 640 });
-  await menu.getByRole('button', { name: '在线状态', exact: true }).click();
-  await expect(menu.getByRole('button', { name: '隐身', exact: true })).toBeVisible();
   await expect.poll(async () => {
     const bounds = await menu.boundingBox();
     return Boolean(bounds && bounds.x >= 7 && bounds.y >= 7
       && bounds.x + bounds.width <= 433 && bounds.y + bounds.height <= 633);
   }).toBe(true);
+  const original = await menu.boundingBox();
+  const status = menu.getByRole('button', { name: '在线状态', exact: true });
+  await status.click();
+  const options = page.getByRole('group', { name: '在线状态选择', exact: true });
+  await expect(options.getByRole('button', { name: '隐身', exact: true })).toBeVisible();
+  await expect(options.getByRole('button', { name: '在线', exact: true })).toBeFocused();
+  expect(await menu.boundingBox()).toEqual(original);
   await page.screenshot({ path: test.info().outputPath('personal-menu-resized.png') });
+  await page.keyboard.press('Escape');
+  await expect(options).toHaveCount(0);
+  await expect(menu).toBeVisible();
+  await expect(status).toBeFocused();
+  await status.press('ArrowLeft');
+  await expect(options.getByRole('button', { name: '在线', exact: true })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(options).toHaveCount(0);
+  await expect(status).toContainText('隐身');
+  await status.press('ArrowLeft');
+  await expect(options.getByRole('button', { name: '隐身', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(options).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(menu).toHaveCount(0);
   await expect(page.getByRole('button', { name: '个人菜单', exact: true })).toBeFocused();
@@ -269,7 +288,7 @@ test('清除凭据有独立确认，取消保留账号，确认后才撤销', as
   const clear = page.getByRole('button', { name: '清除本机登录凭据', exact: true });
   await clear.click();
   const confirmation = page.getByRole('dialog', { name: '从此设备移除账号？', exact: true });
-  await expect(confirmation).toContainText('服务器维护者协助恢复');
+  await expect(confirmation).toContainText('再次登录需要已设置的服主恢复密码');
   expect(logoutRequests).toBe(0);
   await page.keyboard.press('Escape');
   await expect(confirmation).toHaveCount(0);
@@ -315,10 +334,12 @@ test('设置身份菜单选择隐身与主界面同步，首个心跳不短暂�
   await trigger.click();
   const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
   await menu.getByRole('button', { name: '在线状态', exact: true }).click();
-  await menu.getByRole('button', { name: '隐身', exact: true }).click();
+  const options = page.getByRole('group', { name: '在线状态选择', exact: true });
+  await options.getByRole('button', { name: '隐身', exact: true }).click();
   await expect.poll(() => heartbeats.at(-1)?.status).toBe('OFFLINE');
   await expect(menu.locator('.profile-popover-identity .personal-avatar')).toHaveAttribute('aria-label', '隐身');
-  await expect(menu.getByRole('button', { name: '隐身', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await menu.getByRole('button', { name: '在线状态', exact: true }).click();
+  await expect(options.getByRole('button', { name: '隐身', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await page.screenshot({ path: test.info().outputPath('invisible-menu.png') });
   heartbeats.length = 0;
   await page.reload();
@@ -326,7 +347,7 @@ test('设置身份菜单选择隐身与主界面同步，首个心跳不短暂�
   expect(heartbeats.every(heartbeat => heartbeat.status === 'OFFLINE' && heartbeat.activity === null)).toBe(true);
   await trigger.click();
   await menu.getByRole('button', { name: '在线状态', exact: true }).click();
-  await menu.getByRole('button', { name: '在线', exact: true }).click();
+  await options.getByRole('button', { name: '在线', exact: true }).click();
   await expect.poll(() => heartbeats.at(-1)?.status).toBe('ONLINE');
   await expect(menu.locator('.profile-popover-identity .personal-avatar')).toHaveAttribute('aria-label', '在线');
 });
@@ -338,13 +359,14 @@ test('状态同步失败在菜单内提示，重试不退出账号或清除选�
   await page.getByRole('button', { name: '个人菜单', exact: true }).click();
   const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
   await menu.getByRole('button', { name: '在线状态', exact: true }).click();
+  const options = page.getByRole('group', { name: '在线状态选择', exact: true });
   fail = true;
-  await menu.getByRole('button', { name: '隐身', exact: true }).click();
-  await expect(menu.getByRole('alert')).toContainText('尚未确认同步');
-  await expect(menu.getByRole('button', { name: '隐身', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await options.getByRole('button', { name: '隐身', exact: true }).click();
+  await expect(options.getByRole('alert')).toContainText('尚未确认同步');
+  await expect(options.getByRole('button', { name: '隐身', exact: true })).toHaveAttribute('aria-pressed', 'true');
   fail = false;
-  await menu.getByRole('button', { name: '隐身', exact: true }).click();
-  await expect(menu.getByRole('alert')).toHaveCount(0);
+  await options.getByRole('button', { name: '隐身', exact: true }).click();
+  await expect(options).toHaveCount(0);
   await expect(menu.locator('.profile-popover-identity .personal-avatar')).toHaveAttribute('aria-label', '隐身');
 });
 
