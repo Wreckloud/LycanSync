@@ -26,6 +26,7 @@ export interface GroupMemberProfile {
   userId: string;
   signature: string;
   sharedVoiceSeconds: number | null;
+  deletedAt?: string | null;
 }
 
 export interface RecentGame {

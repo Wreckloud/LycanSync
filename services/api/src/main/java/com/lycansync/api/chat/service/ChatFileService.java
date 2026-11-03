@@ -264,7 +264,7 @@ public class ChatFileService {
                 message.attachmentContentType(), message.attachmentWidth(), message.attachmentHeight(),
                 message.attachmentByteSize(), message.attachmentFileName());
         return new ChatMessageResponse(message.id(), message.senderUserId(), message.senderNickname(), message.type(),
-                message.content(), message.createdAt(), attachment);
+                message.content(), message.createdAt(), attachment, message.senderAvatar(), message.senderDeletedAt());
     }
 
     private Path temporaryPath(UUID uploadId) {

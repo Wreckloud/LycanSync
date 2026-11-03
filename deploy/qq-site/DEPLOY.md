@@ -1,0 +1,15 @@
+# QQ 官网与账号入口
+
+此部署只提供官网、QQ 授权、账号及资料接口，不启动媒体服务器，也不迁移局域网测试库。适用于现有 Nginx 公网服务器，独立使用 `lycansync.wreckloud.com` 和本机 `127.0.0.1:18081`，不替换主域名网站。
+
+1. 在私有部署目录放置本目录文件及编译后的 `api.jar`。`.env` 只填写 `POSTGRES_PASSWORD`、`QQ_APP_ID`、`QQ_APP_KEY`，权限设为 `600`；不要提交或显示它的内容。
+2. `docker compose up -d --build`。数据库不对外开放；首次启动自动执行 Flyway V18。确认 `curl --fail http://127.0.0.1:18081/actuator/health` 成功。
+3. 管理员审阅并执行 `sudo sh install-nginx.sh`。脚本只安装独立 Nginx 站点、为子域名申请证书和平滑重载；证书申请失败不会暴露 HTTP 登录入口。使用服务器现有 Certbot 账号，续期成功后校验并重载 Nginx。
+4. 沿用原有首次管理员激活流程，私有激活文件位于 API 容器 `/var/bootstrap/admin-activation.txt`。不能将激活链接放入官网或日志，也不能将首个 QQ 登录者直接升级为服主。
+5. 在 QQ 互联修改网站地址为 `https://lycansync.wreckloud.com/`，网站回调为 `https://lycansync.wreckloud.com/api/auth/qq/callback`。使用开发者／调试 QQ 完整验证登录、资料确认和退出，再由开发者手动提交审核。
+
+未审核应用需核对基本信息中的调试 QQ。平台在授权页返回 `100008` 时，请核对应用编号及平台状态；服务端不能绕过腾讯的审核／调试权限。申请已进入审核、不能修改时，保留当前申请并等待结果，不能把接口和模拟验证视为真实 QQ 授权通过。
+
+网页会话仅保存在当前页面内存；QQ access token 不落库、不发给浏览器或桌面。授权请求与发起端随机校验值绑定；桌面通过系统浏览器授权并返回原客户端。原账号需先登录，再主动绑定 QQ，不能按昵称合并。
+
+升级前备份独立 PostgreSQL 卷；不要将这套账号库当成已迁移的测试服务器。`Dockerfile` 不包含媒体或音效处理工具，不能作为完整语音服务器发布包使用。

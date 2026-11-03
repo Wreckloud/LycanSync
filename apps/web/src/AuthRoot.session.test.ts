@@ -27,7 +27,7 @@ function setup() {
   const context = { user, authRequest, disposed: false, sessionHeartbeatInFlight: false,
     clearLocalContentCache: vi.fn(async () => {}),
     application: ref({ prepareLogout: vi.fn(() => ({ showActivity: false, showLastOnline: true })) }),
-    entryUser: ref<AuthUser | null>(null), autoLogin: ref(true), manualEntryRequired: ref(false), preferenceSaving: ref(false),
+    entryUser: ref<AuthUser | null>(null), qqAvailable: ref(false), autoLogin: ref(true), manualEntryRequired: ref(false), preferenceSaving: ref(false),
     removeConfirm: ref(false), removing: ref(false), submitting: ref(false), ready: ref(true), accessOffer: ref(null),
     onboarding: ref(false), error: ref(''), logoutTarget: ref<AuthUser | null>(null), logoutBusy: ref(false),
     logoutInProgress: false, initializationRequest: null, ApiRequestError, Error, AbortSignal, AbortController,

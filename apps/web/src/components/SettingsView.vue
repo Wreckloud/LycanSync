@@ -130,7 +130,7 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
           <ActivitySettings :user="profileSettings?.preview ?? user" :status="presenceStatus" :desktop="desktop" :activity="activity" :show-activity="showActivity" :show-last-online="showLastOnline"
             :mappings="activityMappings" :active="activeSection === 'account'"
             :error="activityError" @visibility="emit('activityVisibility', $event)" @last-online-visibility="emit('lastOnlineVisibility', $event)" />
-          <AccountSettings :active="activeSection === 'account'" :leaving="leaving" @logout="requestLogout" />
+          <AccountSettings :active="activeSection === 'account'" :leaving="leaving" :administrator="user.administrator" @logout="requestLogout" />
         </div>
         <AudioSettings v-show="activeSection === 'audio'" :active="activeSection === 'audio'"
           :desktop="desktop" :preferences="preferences" :audio-output="audioOutput" :rtc="rtc" :microphone-test="microphoneTest" :microphone-devices="microphoneDevices"

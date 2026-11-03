@@ -20,6 +20,8 @@ import java.util.UUID;
  */
 @Mapper
 public interface GroupMapper {
+    Long lockAccountState();
+    boolean activeUser(@Param("userId") UUID userId);
 
     int insertGroup(@Param("group") ChatGroup group);
 

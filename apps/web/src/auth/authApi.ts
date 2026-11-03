@@ -58,6 +58,8 @@ const publicApiPaths = new Set([
   '/api/auth/options',
   '/api/auth/access/preview',
   '/api/auth/access/redeem',
+  '/api/auth/qq/start',
+  '/api/auth/qq/exchange',
   '/api/system/initialization',
 ]);
 

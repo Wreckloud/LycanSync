@@ -94,7 +94,7 @@ test('浏览器旧会话的延迟 401 不退出新会话，当前会话 401 仍�
     await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible();
     revoked = true;
     await page.clock.fastForward(20_100);
-    await expect(page.getByText('新成员使用服主发来的邀请链接', { exact: false })).toBeVisible();
+    await expect(page.getByText('打开服主分享的邀请链接', { exact: false })).toBeVisible();
     expect(redemptions).toBe(2);
   } finally { releaseSession(); }
 });
@@ -117,7 +117,7 @@ test('新设备替换会话后旧客户端通过心跳静默退出', async ({ pa
   await page.goto('/');
   await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible();
   await page.clock.fastForward(20_100);
-  await expect(page.getByText('新成员使用服主发来的邀请链接', { exact: false })).toBeVisible();
+  await expect(page.getByText('打开服主分享的邀请链接', { exact: false })).toBeVisible();
   expect(sessionRequests).toBeGreaterThanOrEqual(1);
 });
 

@@ -291,3 +291,37 @@ test('群组成员制路由严格限制路径和方法，头像编辑沿用载�
   }
   assert.equal((await serve(new Request(`lycan://app/api/groups/${groupId}`, { method: 'PUT', body: 'x'.repeat(3 * 1024 * 1024 + 1) }))).status, 413);
 });
+
+
+test('服主恢复失败保留凭据，成功只在主进程保存并移除响应中的令牌', async () => {
+  const token = 'r'.repeat(43);
+  const saved = [];
+  let cleared = false;
+  let success = false;
+  const { serve, forwarded } = proxyFixture({ loadSession: async () => null, sessionToken: null,
+    saveSession: async (...args) => { saved.push(args); }, clearSession: async () => { cleared = true; },
+    net: { fetch: async (url, options) => {
+      forwarded.push({ url, options });
+      return success ? Response.json({ sessionToken: token, user: { id: 'owner', nickname: '服主', avatar: '', administrator: true } })
+        : Response.json({ detail: '密码错误' }, { status: 401 });
+    } },
+  });
+  const request = () => new Request('lycan://app/api/auth/account/recover', { method: 'POST', body: '{}' });
+  assert.equal((await serve(request())).status, 401);
+  assert.equal(cleared, false);
+  assert.equal(saved.length, 0);
+  success = true;
+  const result = await serve(request());
+  assert.equal((await result.json()).sessionToken, undefined);
+  assert.deepEqual(saved, [[token, 'owner']]);
+  assert.equal(forwarded[0].options.headers.Authorization, undefined);
+});
+
+test('注销成功清除当前会话，服主恢复不能覆盖已有登录', async () => {
+  let cleared = false;
+  const f = proxyFixture({ clearSession: async () => { cleared = true; } });
+  assert.equal((await f.serve(new Request('lycan://app/api/auth/account/recover', { method: 'POST', body: '{}' }))).status, 409);
+  assert.equal(f.forwarded.length, 0);
+  await f.serve(new Request('lycan://app/api/auth/account/close', { method: 'POST', body: '{}' }));
+  assert.equal(cleared, true);
+});

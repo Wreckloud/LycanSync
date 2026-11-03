@@ -32,7 +32,7 @@
                message.content, message.created_at, attachment.id AS attachment_id,
                attachment.content_type AS attachment_content_type, attachment.width AS attachment_width,
                attachment.height AS attachment_height, attachment.byte_size AS attachment_byte_size,
-               NULL AS attachment_file_name
+               NULL AS attachment_file_name, users.avatar AS sender_avatar, users.deleted_at AS sender_deleted_at
         FROM chat_message message
         JOIN app_user users ON users.id = message.sender_user_id
         JOIN chat_attachment attachment ON attachment.message_id = message.id
@@ -42,7 +42,7 @@
     <select id="findMessages" resultType="com.lycansync.api.chat.model.ChatMessageView">
         SELECT page.id, page.sender_user_id, page.sender_nickname, page.type, page.content, page.created_at,
                page.attachment_id, page.attachment_content_type, page.attachment_width,
-               page.attachment_height, page.attachment_byte_size, page.attachment_file_name
+               page.attachment_height, page.attachment_byte_size, page.attachment_file_name, page.sender_avatar, page.sender_deleted_at
         FROM (
             SELECT m.id, m.sequence_number, m.sender_user_id, users.nickname AS sender_nickname,
                    m.type, m.content, m.created_at,
@@ -50,7 +50,7 @@
                    COALESCE(attachment.content_type, 'application/octet-stream') AS attachment_content_type,
                    attachment.width AS attachment_width, attachment.height AS attachment_height,
                    COALESCE(attachment.byte_size, file_attachment.byte_size) AS attachment_byte_size,
-                   file_attachment.file_name AS attachment_file_name
+                   file_attachment.file_name AS attachment_file_name, users.avatar AS sender_avatar, users.deleted_at AS sender_deleted_at
             FROM chat_message m
             JOIN app_user users ON users.id = m.sender_user_id
             LEFT JOIN chat_attachment attachment ON attachment.message_id = m.id
@@ -85,7 +85,7 @@
                message.content, message.created_at, attachment.id AS attachment_id,
                'application/octet-stream' AS attachment_content_type, NULL AS attachment_width,
                NULL AS attachment_height, attachment.byte_size AS attachment_byte_size,
-               attachment.file_name AS attachment_file_name
+               attachment.file_name AS attachment_file_name, users.avatar AS sender_avatar, users.deleted_at AS sender_deleted_at
         FROM chat_file_attachment attachment
         JOIN chat_message message ON message.id = attachment.message_id
         JOIN app_user users ON users.id = message.sender_user_id

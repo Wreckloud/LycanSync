@@ -15,6 +15,7 @@ const props = defineProps<{
   nickname: string;
   avatar: string;
   signature?: string;
+  deletedAt?: string | null;
   status: UserPresenceStatus;
   statusLabel: string;
   activity?: string;
@@ -163,7 +164,7 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
               <span v-else class="profile-avatar-placeholder"><UserRound :size="28" /></span>
               <span class="status-dot" :class="status" aria-hidden="true" />
             </span>
-            <strong>{{ nickname }}</strong>
+            <strong>{{ nickname }}</strong><small v-if="deletedAt" class="profile-deleted-account">已注销</small>
           </div>
           <div class="profile-popover-signature" :aria-busy="loading">
             <span v-if="loading" role="status">正在读取签名…</span>
@@ -185,6 +186,7 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
 </template>
 
 <style>
+.profile-deleted-account { color: var(--muted); font-size: 11px; }
 .profile-popover { position: fixed; z-index: 60; width: min(292px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); text-align: left; }
 .profile-popover-banner { height: 38px; background: var(--profile-tint, var(--panel-raised)); }
 .profile-popover.is-inline { position: relative; z-index: auto; width: 100%; max-height: none; overflow: visible; }

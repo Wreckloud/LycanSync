@@ -76,8 +76,8 @@ class AuthApplicationIT {
 
     @BeforeEach
     void resetDatabase() {
-        jdbc.sql("TRUNCATE auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
-        jdbc.sql("UPDATE system_state SET initialized_at = NULL WHERE id = 1").update();
+        jdbc.sql("TRUNCATE system_state, auth_qq_identity, auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
+        jdbc.sql("INSERT INTO system_state(id) VALUES (1)").update();
     }
 
     private String registerAdmin() {

@@ -1,6 +1,7 @@
 package com.lycansync.api.auth.controller;
 
 import com.lycansync.api.auth.config.AccountAccessProperties;
+import com.lycansync.api.auth.config.QqLoginProperties;
 import com.lycansync.api.auth.dto.AccessLinkRequest;
 import com.lycansync.api.auth.dto.AccessRedeemRequest;
 import com.lycansync.api.auth.dto.LoginResponse;
@@ -41,6 +42,7 @@ import java.util.UUID;
 public class AccessLinkController {
     private final AccessLinkService links;
     private final AccountAccessProperties settings;
+    private final QqLoginProperties qq;
 
     public record LoginOptions(String mode, String serverName, boolean qqAvailable) { }
 
@@ -48,7 +50,7 @@ public class AccessLinkController {
     @SecurityRequirements
     @Operation(summary = "获取服务器支持的登录方式")
     public ResponseEntity<LoginOptions> options() {
-        return noStore(new LoginOptions(settings.getMode(), settings.getServerName(), false));
+        return noStore(new LoginOptions(settings.getMode(), settings.getServerName(), qq.isEnabled()));
     }
 
     @PostMapping("/access/preview")

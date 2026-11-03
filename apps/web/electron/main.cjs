@@ -21,6 +21,7 @@ const { createDiagnosticReportStore, parseDiagnosticReport } = require('./diagno
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
 const { matchNativeVideoSourceThumbnails, monitorDisplayId } = require('./native-video-thumbnails.cjs');
 const { parseAccessLink, accessLinkFromArguments, parseManualAccessLink } = require('./access-links.cjs');
+const { qqLoginFromArguments, validateQqAuthorization } = require('./qq-login.cjs');
 const { createStartupUpdate, parseInstallTiming } = require('./startup-update.cjs');
 const { applyRuntimePaths } = require('./runtime-paths.cjs');
 const { createActivityHelper } = require('./activity-helper.cjs');
@@ -42,6 +43,10 @@ const apiRoutePolicies = new Map([
   ['GET /api/auth/options', { public: true }],
   ['POST /api/auth/access/preview', { public: true }],
   ['POST /api/auth/access/redeem', { public: true, savesSession: true }],
+  ['POST /api/auth/qq/start', {}],
+  ['POST /api/auth/qq/exchange', { public: true, savesSession: true }],
+  ['POST /api/auth/qq/binding/confirm', {}],
+  ['GET /api/auth/qq/binding', {}],
   ['GET /api/auth/access/links', {}],
   ['POST /api/auth/access/links', {}],
   ['GET /api/auth/access/members', {}],
@@ -1422,6 +1427,8 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', (_event, argv) => {
+    const qq = qqLoginFromArguments(argv);
+    if (qq && qq.server === backend.origin) mainWindow?.webContents.send('auth:qq:complete', qq.request);
     const offer = accessLinkFromArguments(argv);
     if (offer) {
       pendingAccessLink = offer;
@@ -2187,6 +2194,10 @@ async function returnToAccountEntry() {
 ipcMain.handle('auth:return', async (event) => {
   if (!trustedSender(event) || closing) throw new Error('当前不能返回登录页。');
   await returnToAccountEntry();
+});
+ipcMain.handle('auth:qq:open', async (event, url) => {
+  if (!trustedSender(event) || closing || typeof url !== 'string' || url.length > 2048) throw new Error('当前不能打开 QQ 授权');
+  await shell.openExternal(validateQqAuthorization(url, backend.href));
 });
 ipcMain.handle('auth:auto-login:get', (event, accountId) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');

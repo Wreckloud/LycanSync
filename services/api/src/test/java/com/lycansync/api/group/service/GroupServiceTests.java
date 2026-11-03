@@ -28,7 +28,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 /**
@@ -42,6 +42,8 @@ class GroupServiceTests {
     @Test
     void shouldReadOnlySameGroupMemberProfile() {
         GroupMapper mapper = mock(GroupMapper.class);
+        when(mapper.lockAccountState()).thenReturn(1L);
+        when(mapper.activeUser(any())).thenReturn(true);
         GroupService service = new GroupService(mapper, Clock.systemUTC(), mock(ApplicationEventPublisher.class), mock(GroupRtcAccessService.class));
         AuthenticatedUser user = new AuthenticatedUser(UUID.randomUUID(), "成员", false);
         UUID groupId = UUID.randomUUID();
@@ -61,6 +63,8 @@ class GroupServiceTests {
     @Test
     void shouldStoreAndReturnNormalizedAvatar() throws Exception {
         GroupMapper mapper = mock(GroupMapper.class);
+        when(mapper.lockAccountState()).thenReturn(1L);
+        when(mapper.activeUser(any())).thenReturn(true);
         AuthenticatedUser user = new AuthenticatedUser(UUID.randomUUID(), "群主", false);
         ArgumentCaptor<ChatGroup> inserted = ArgumentCaptor.forClass(ChatGroup.class);
         when(mapper.findGroup(any(UUID.class), eq(user.id()))).thenAnswer(invocation -> {
@@ -89,12 +93,14 @@ class GroupServiceTests {
     @Test
     void shouldRejectDamagedAvatarBeforeWritingGroup() {
         GroupMapper mapper = mock(GroupMapper.class);
+        when(mapper.lockAccountState()).thenReturn(1L);
+        when(mapper.activeUser(any())).thenReturn(true);
         GroupService service = new GroupService(mapper, Clock.systemUTC(), mock(ApplicationEventPublisher.class), mock(GroupRtcAccessService.class));
         AuthenticatedUser user = new AuthenticatedUser(UUID.randomUUID(), "群主", false);
 
         assertThatThrownBy(() -> service.createGroup(user,
                 new CreateGroupRequest("小队", "", "data:image/png;base64,YWJj")))
                 .isInstanceOf(GroupException.class).hasMessage("头像文件无效");
-        verifyNoInteractions(mapper);
+        verify(mapper, never()).insertGroup(any());
     }
 }

@@ -48,6 +48,9 @@ public class AuthService {
     }
 
     String issueSession(AuthUser user, String token) {
+        if (user == null || user.deletedAt() != null) {
+            throw new AuthException(HttpStatus.FORBIDDEN, ApiErrorCode.ACCESS_DENIED, "账号已注销，无法恢复登录");
+        }
         // 重试兑换使用同一凭据，避免响应逆序到达后保存已经失效的会话。
         mapper.replaceSession(AuthSecrets.hash(token), user.id(), Instant.now(systemClock).plus(SESSION_TTL));
         return token;
