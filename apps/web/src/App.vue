@@ -976,11 +976,13 @@ async function openSettings(section: SettingsSectionId, event: Event | HTMLEleme
 }
 
 async function closeSettings() {
-  try { await microphoneTest.stop(); }
-  catch { viewerNotice.value = '麦克风试听停止未确认，请重启客户端后再试。'; }
+  // 停止会立即撤销试听资格；资源收尾与退场并行，不能让原生停止等待挡住动画。
+  const stopped = microphoneTest.stop();
   settingsOpen.value = false;
   await nextTick();
   settingsReturnFocus.value?.focus();
+  try { await stopped; }
+  catch { if (!appDisposed) viewerNotice.value = '麦克风试听停止未确认，请重启客户端后再试。'; }
 }
 
 async function finishSettingsLeave() {
@@ -1539,7 +1541,7 @@ function participantListening(participant: Participant) {
     </DialogTransition>
     <ScreenShareWindows ref="viewingWindows" :rtc="rtc" :group-name="joinedGroup?.name ?? ''"
       :recording-elapsed="recording.state.value.phase === 'recording' ? recording.elapsed.value : undefined"
-      :inline-target="viewingTarget" :inline-visible="mainWindowVisible && !settingsOpen"
+      :inline-target="viewingTarget" :inline-visible="mainWindowVisible && !settingsPresented"
       :avatar="participantAvatar" :muted-shares="mutedShares"
       :control-placeholder="remoteControlPlaceholder"
       :input-blocked="viewerInputBlocked"
