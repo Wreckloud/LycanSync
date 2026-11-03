@@ -596,7 +596,7 @@ test('聚焦网格和成员折叠只覆盖聊天，保留历史阅读位置与�
     await expect(page.locator('.app-content')).toHaveCSS('visibility', 'hidden');
     expect(await list.evaluate(element => element.getBoundingClientRect().height)).toBeCloseTo(before!.height, 0);
     expect(await list.evaluate(element => element.scrollTop)).toBe(500);
-    await settings.getByRole('button', { name: '返回应用', exact: true }).click();
+    await page.getByRole('button', { name: '返回应用', exact: true }).click();
     await unchanged();
     await expect(separator).toHaveAttribute('aria-valuenow', viewingHeight!);
   }
