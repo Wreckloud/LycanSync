@@ -5,6 +5,7 @@ export interface AuthUser {
   administrator: boolean;
   signature?: string;
   createdAt?: string;
+  deletedAt?: string | null;
 }
 
 export interface ProfileUpdate {
@@ -58,6 +59,7 @@ const publicApiPaths = new Set([
   '/api/auth/options',
   '/api/auth/access/preview',
   '/api/auth/access/redeem',
+  '/api/auth/account/recover',
   '/api/auth/qq/start',
   '/api/auth/qq/exchange',
   '/api/system/initialization',

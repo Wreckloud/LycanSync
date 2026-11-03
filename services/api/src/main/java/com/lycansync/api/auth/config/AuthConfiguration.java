@@ -51,7 +51,7 @@ public class AuthConfiguration {
                 .requestCache(cache -> cache.disable())
                 .formLogin(form -> form.disable()).httpBasic(basic -> basic.disable())
                 .authorizeHttpRequests(requests -> requests
-                        .requestMatchers("/api/auth/options", "/api/auth/access/preview", "/api/auth/access/redeem",
+                        .requestMatchers("/api/auth/options", "/api/auth/access/preview", "/api/auth/access/redeem", "/api/auth/account/recover",
                                 "/join", "/join.js", "/api/system/initialization", "/actuator/health", "/actuator/info",
                                 "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html", "/error",
                                 "/internal/rtc/access", "/internal/rtc/events").permitAll()
@@ -72,7 +72,7 @@ public class AuthConfiguration {
                         return false;
                     }
 
-                    private synchronized boolean allowAttempt(String source) {
+                    private synchronized boolean allowAttempt(String source, int limit) {
                         long now = System.nanoTime();
                         attempts.entrySet().removeIf(entry -> now - entry.getValue()[0] > 60_000_000_000L);
                         long[] counter = attempts.get(source);
@@ -81,7 +81,7 @@ public class AuthConfiguration {
                             counter = new long[] {now, 0};
                             attempts.put(source, counter);
                         }
-                        return ++counter[1] <= 60;
+                        return ++counter[1] <= limit;
                     }
 
                     @Override
@@ -94,11 +94,13 @@ public class AuthConfiguration {
                             return;
                         }
                         boolean loginAttempt = "/api/auth/access/preview".equals(path)
+                                || "/api/auth/account/recover".equals(path)
                                 || "/api/auth/access/redeem".equals(path)
                                 || path.startsWith("/api/auth/qq/");
                         String source = trustProxy ? request.getHeader("X-Lycan-Client-IP") : null;
                         if (source == null || source.isBlank() || source.length() > 64) source = request.getRemoteAddr();
-                        if (loginAttempt && !allowAttempt(source)) {
+                        boolean recovering = "/api/auth/account/recover".equals(path);
+                        if (loginAttempt && !allowAttempt((recovering ? "recovery:" : "auth:") + source, recovering ? 5 : 60)) {
                             writeProblem(
                                     json, response, 429, ApiErrorCode.AUTH_RATE_LIMITED, "登录请求过于频繁，请一分钟后重试");
                             return;
