@@ -1033,7 +1033,7 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
     }
   }
 
-  if (!recording.shutdown()) { write_event("recordingStopUnconfirmed"); return 1; }
+  const bool recording_stopped = recording.shutdown();
   screen_audio.recording(false);
   screen_audio.shutdown();
   obs_remove_main_rendered_callback(render_shared_frame, source);
@@ -1050,6 +1050,8 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
   obs_wait_for_destroy_queue();
   g_host.window_target = WindowVideoTarget{};
   window_target = WindowVideoTarget{};
+  // 父进程收到错误会立即终止宿主，必须先完成共享资源清理。
+  if (!recording_stopped) { write_event("recordingStopUnconfirmed"); return 1; }
   // 热态仅保留小画布与低频图形循环，不保留采集、共享纹理或声音设备。
   video.base_width = video.output_width = 320;
   video.base_height = video.output_height = 180;
