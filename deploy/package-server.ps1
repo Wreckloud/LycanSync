@@ -53,7 +53,7 @@ foreach ($name in $downloadFiles) {
         throw "分发材料与构建校验记录不一致：$name"
     }
 }
-$bundleFiles = @('Dockerfile', 'compose.yaml', 'compose.lan.yaml', 'Caddyfile', 'Caddyfile.lan', '.env.example', '.dockerignore', 'DEPLOY.md')
+$bundleFiles = @('Dockerfile', 'compose.yaml', 'compose.lan.yaml', 'Caddyfile', 'Caddyfile.lan', '.env.example', '.dockerignore', 'DEPLOY.md', 'maintenance/maintain-releases.py')
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $outputRoot = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $temporaryName = '.lycansync-server-' + [guid]::NewGuid().ToString('N')
@@ -77,7 +77,9 @@ try {
     Copy-Item -LiteralPath (Join-Path $downloadDirectory $installerName) -Destination (Join-Path $downloadDirectory 'LycanSync-setup.exe')
     Copy-Item -LiteralPath (Join-Path $downloadDirectory "$installerName.blockmap") -Destination (Join-Path $downloadDirectory 'LycanSync-setup.exe.blockmap')
     foreach ($bundleFile in $bundleFiles) {
-        Copy-Item -LiteralPath (Join-Path $PSScriptRoot "server/$bundleFile") -Destination $bundleDirectory
+        $destination = Join-Path $bundleDirectory $bundleFile
+        New-Item -ItemType Directory -Force -Path (Split-Path $destination -Parent) | Out-Null
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot "server/$bundleFile") -Destination $destination
     }
     Copy-Item -LiteralPath $serverJar -Destination (Join-Path $bundleDirectory 'api.jar')
     # 只压入明确材料；新包完整生成前不覆盖原部署包，也不读取旧输出目录。
