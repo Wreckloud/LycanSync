@@ -42,15 +42,22 @@ function fixture(context, saved) {
     } };
 }
 
-test('托盘仅有显示与退出，默认关窗不驻留；初始化不抢焦点', context => {
+test('托盘仅有显示与退出，默认关窗驻留；初始化不抢焦点', context => {
   const f = fixture(context);
   f.manager.initialize(); f.manager.initialize();
   assert.equal(f.icons.length, 1);
   assert.deepEqual(f.icons[0].menu.map(item => item.label), ['显示主界面', '退出']);
   assert.equal(f.icons[0].tooltip, 'LycanSync');
-  assert.deepEqual(f.manager.settings(), { supported: true, enabled: false, error: '' });
-  assert.deepEqual(f.close(), { hidden: false, prevented: false });
+  assert.deepEqual(f.manager.settings(), { supported: true, enabled: true, error: '' });
   assert.deepEqual(f.calls, []);
+  assert.deepEqual(f.close(), { hidden: true, prevented: true });
+});
+
+test('已保存的关闭托盘偏好不被新默认值覆盖', context => {
+  const f = fixture(context, '{"closeToTray":false}');
+  f.manager.initialize();
+  assert.equal(f.manager.settings().enabled, false);
+  assert.deepEqual(f.close(), { hidden: false, prevented: false });
 });
 
 test('开启后只隐藏窗口，一次无声提示；保存后重启恢复偏好', async context => {
@@ -101,8 +108,8 @@ test('系统结束会话绕过驻留；保存失败保留旧值并允许重试',
   const f = fixture(context);
   f.manager.initialize();
   mkdirSync(f.settingsPath);
-  await assert.rejects(f.manager.setEnabled(true), /无法保存托盘设置/);
-  assert.equal(f.manager.settings().enabled, false);
+  await assert.rejects(f.manager.setEnabled(false), /无法保存托盘设置/);
+  assert.equal(f.manager.settings().enabled, true);
   rmSync(f.settingsPath, { recursive: true });
   await f.manager.setEnabled(true);
   f.manager.prepareToQuit();
@@ -111,7 +118,7 @@ test('系统结束会话绕过驻留；保存失败保留旧值并允许重试',
 });
 
 test('保存中拒绝并发及非法参数，成功写入之前不改变关窗行为', async context => {
-  const f = fixture(context);
+  const f = fixture(context, '{"closeToTray":false}');
   f.manager.initialize();
   await assert.rejects(f.manager.setEnabled('true'), /托盘设置无效/);
   const saving = f.manager.setEnabled(true);
@@ -214,4 +221,42 @@ test('托盘 IPC 只允许主窗口且校验布尔值；preload 不暴露任意�
   });
   bridge.getTraySettings(); bridge.setCloseToTray(true);
   assert.deepEqual(calls, [['settings:tray:get'], ['settings:tray:set', true]]);
+});
+
+
+test('自启读取系统实际启用状态，保存后核对；开发版和非法来源不写系统', () => {
+  const source = readFileSync(resolve(__dirname, 'main.cjs'), 'utf8');
+  const handlers = new Map();
+  let login = { openAtLogin: true, executableWillLaunchAtLogin: false };
+  const writes = [];
+  const app = { isPackaged: true,
+    getLoginItemSettings: options => {
+      assert.equal(options.path, 'D:/LycanSync/LycanSync.exe');
+      assert.equal(options.args.length, 0);
+      return login;
+    },
+    setLoginItemSettings: options => {
+      writes.push(JSON.parse(JSON.stringify(options)));
+      login = { openAtLogin: options.openAtLogin, executableWillLaunchAtLogin: options.enabled };
+    } };
+  const scope = { app, process: { platform: 'win32', execPath: 'D:/LycanSync/LycanSync.exe' },
+    trustedSender: event => event.trusted, ipcMain: { handle: (name, callback) => handlers.set(name, callback) } };
+  runInNewContext(source.slice(source.indexOf('function autoStartSettings()'), source.indexOf('function externalHttpUrl(')), scope);
+  runInNewContext(source.slice(source.indexOf("ipcMain.handle('settings:auto-start:get'"),
+    source.indexOf("ipcMain.handle('settings:tray:get'")), scope);
+  const read = handlers.get('settings:auto-start:get');
+  const save = handlers.get('settings:auto-start:set');
+  const event = { trusted: true };
+  assert.equal(read(event).enabled, false);
+  assert.throws(() => read({ trusted: false }), /来源无效/);
+  assert.throws(() => save(event, 'true'), /参数无效/);
+  assert.throws(() => save({ trusted: false }, true), /参数无效/);
+  assert.equal(save(event, true).enabled, true);
+  assert.deepEqual(writes[0], { openAtLogin: true, enabled: true, path: 'D:/LycanSync/LycanSync.exe', args: [] });
+  assert.equal(save(event, false).enabled, false);
+  app.setLoginItemSettings = () => {};
+  assert.throws(() => save(event, true), /无法确认/);
+  app.isPackaged = false;
+  assert.equal(save(event, true).supported, false);
+  assert.equal(writes.length, 2);
 });

@@ -57,7 +57,7 @@ function setup(active = true) {
 
 const checked = { target: { checked: true } } as unknown as Event;
 
-it('进入客户端设置才读取托盘偏好，默认关闭且不修改开机自启', async () => {
+it('进入客户端设置才读取托盘偏好，沿用已关闭选择且不修改开机自启', async () => {
   const f = setup(false);
   try {
     expect(f.bridge.getTraySettings).not.toHaveBeenCalled();
@@ -173,7 +173,9 @@ it('开机自启修改不并发，失败恢复原值；重试使用系统实际�
     await nextTick();
     const pending = deferred<{ supported: boolean; enabled: boolean }>();
     bridge.setAutoStart.mockReturnValueOnce(pending.promise);
-    const saving = settings.updateAutoStart(checked);
+    const input = { checked: true };
+    const event = { target: input } as unknown as Event;
+    const saving = settings.updateAutoStart(event);
     await settings.updateAutoStart(checked);
     expect(bridge.setAutoStart).toHaveBeenCalledOnce();
     expect(settings.autoStartBusy.value).toBe(true);
@@ -181,6 +183,7 @@ it('开机自启修改不并发，失败恢复原值；重试使用系统实际�
     await saving;
     expect(settings.autoStartEnabled.value).toBe(false);
     expect(settings.autoStartError.value).toBe('系统拒绝修改');
+    expect(input.checked).toBe(false);
     expect(settings.autoStartBusy.value).toBe(false);
     bridge.setAutoStart.mockResolvedValueOnce({ supported: true, enabled: false });
     await settings.updateAutoStart(checked);
