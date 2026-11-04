@@ -29,12 +29,21 @@ const framing = ref(false);
 let panelAnimation: Animation | undefined;
 let panelGeneration = 0;
 let motionPreference: MediaQueryList | undefined;
+let switchGeneration = 0;
+let ownsSwitch = false;
+function finishSwitch() {
+  switchGeneration++;
+  if (ownsSwitch) props.view.switching = false;
+  ownsSwitch = false;
+}
 function stopPanelMotion() {
   panelAnimation?.cancel();
   panelAnimation = undefined;
   framing.value = false;
 }
-function reducePanelMotion() { if (motionPreference?.matches) stopPanelMotion(); }
+function reducePanelMotion() {
+  if (motionPreference?.matches) { stopPanelMotion(); finishSwitch(); }
+}
 let clock: ReturnType<typeof setInterval> | undefined;
 const now = ref(performance.now());
 const focus = computed(() => props.view.mode === 'focus');
@@ -117,10 +126,28 @@ watch(() => props.view.shares.map(share => share.key).join(','), () => {
 });
 
 watch(() => props.active, (active) => {
+  if (!active) finishSwitch();
   if (clock) clearInterval(clock);
   now.value = performance.now();
   if (active) clock = setInterval(() => { now.value = performance.now(); }, 1000);
 }, { immediate: true });
+watch(() => props.view.mode, async (mode, previous) => {
+  finishSwitch();
+  const element = panel.value;
+  if (!props.active || mode === 'collapsed' || previous === 'collapsed' || !element || motionPreference?.matches) return;
+  ownsSwitch = true;
+  props.view.switching = true;
+  const generation = switchGeneration;
+  const owner = element.ownerDocument.defaultView!;
+  await nextTick();
+  // Vue 在后续绘制帧启动进退场；等待真实动画收尾，连点不排队补执行。
+  await new Promise<void>(done => owner.requestAnimationFrame(() => owner.requestAnimationFrame(() => done())));
+  if (generation !== switchGeneration || !element.isConnected) return;
+  const animations = element.getAnimations({ subtree: true }).filter(animation =>
+    animation.playState !== 'paused' && Number.isFinite(animation.effect?.getComputedTiming().endTime));
+  await Promise.allSettled(animations.map(animation => animation.finished));
+  if (generation === switchGeneration) finishSwitch();
+}, { flush: 'sync' });
 watch(() => props.view.expanded, async () => {
   const element = panel.value;
   const before = element?.getBoundingClientRect();
@@ -150,6 +177,7 @@ onMounted(() => {
   motionPreference.addEventListener('change', reducePanelMotion);
 });
 onScopeDispose(() => {
+  finishSwitch();
   panelGeneration++;
   stopPanelMotion();
   if (clock) clearInterval(clock);
