@@ -6,6 +6,21 @@ const { tmpdir } = require('node:os');
 const { dirname, join, resolve } = require('node:path');
 const { applyRuntimePaths, migrateOwnedData, runtimeLayout } = require('./runtime-paths.cjs');
 
+test('运行目录不可写时展示可操作说明并退出，不再抛出主进程异常', () => {
+  const { runInNewContext } = require('node:vm');
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const failure = new Error('无法在运行目录保存数据（EPERM）：C:\\Program Files\\LycanSync\\data');
+  const exited = new Error('controlled exit');
+  const messages = [];
+  const sandbox = { applyRuntimePaths: () => { throw failure; }, app: { commandLine: { hasSwitch: () => false } },
+    process: { env: {}, exit: code => { assert.equal(code, 1); throw exited; } },
+    resolve: () => 'test-project', __dirname, dialog: { showErrorBox: (...args) => messages.push(args) } };
+  assert.throws(() => runInNewContext(main.slice(main.indexOf('const runtimeLayout ='), main.indexOf('const backend =')), sandbox), error => error === exited);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0][1], /EPERM/);
+  assert.match(messages[0][1], /保留该文件夹/);
+});
+
 function layoutInput(overrides = {}) {
   return {
     packaged: true,

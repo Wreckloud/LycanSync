@@ -15,7 +15,7 @@ onMounted(() => { if (props.modal) panel.value?.focus(); });
 </script>
 
 <template>
-  <main class="startup-update-screen">
+  <main class="startup-update-screen" :class="{ 'is-modal': modal }">
     <section ref="panel" class="startup-update-card" aria-labelledby="startup-update-title"
       :role="modal ? 'dialog' : undefined" :aria-modal="modal || undefined" :tabindex="modal ? -1 : undefined" @keydown="keydown">
       <h1 id="startup-update-title">{{ modal ? '更新 LycanSync' : '准备进入 LycanSync' }}</h1>
@@ -36,6 +36,7 @@ onMounted(() => { if (props.modal) panel.value?.focus(); });
 
 <style scoped>
 .startup-update-screen { display: grid; place-items: safe center; flex: 1; min-height: 0; overflow: auto; padding: 24px; }
+.startup-update-screen.is-modal { width: min(468px, 100vw); max-height: 100%; flex: none; }
 .startup-update-card { width: min(420px, 100%); padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 14px; line-height: 20px; }
 .startup-update-card h1 { margin: 0 0 4px; font-size: 22px; line-height: 32px; }
 .startup-update-card p { margin: 0 0 20px; color: var(--muted); font-size: 13px; }

@@ -90,15 +90,22 @@ if (process.platform === 'win32') {
   app.commandLine.appendSwitch('disable-features', 'WebRtcAllowWgcDesktopCapturer,WebRtcAllowWgcScreenCapturer');
 }
 // 运行数据、Chromium 缓存和更新包都放在安装目录；--user-data-dir 仍用于测试隔离。
-const runtimeLayout = applyRuntimePaths({
-  app,
-  packaged: app.isPackaged,
-  execPath: process.execPath,
-  projectDirectory: resolve(__dirname, '../../..'),
-  environment: process.env,
-  explicitUserDataDir: app.commandLine.hasSwitch('user-data-dir')
-    ? app.commandLine.getSwitchValue('user-data-dir') : undefined,
-});
+const runtimeLayout = (() => {
+  try {
+    return applyRuntimePaths({
+      app,
+      packaged: app.isPackaged,
+      execPath: process.execPath,
+      projectDirectory: resolve(__dirname, '../../..'),
+      environment: process.env,
+      explicitUserDataDir: app.commandLine.hasSwitch('user-data-dir')
+        ? app.commandLine.getSwitchValue('user-data-dir') : undefined,
+    });
+  } catch (error) {
+    dialog.showErrorBox('无法准备 LycanSync 运行目录', `${error.message}\n\n请将 LycanSync 安装到当前用户可写的目录，例如 D:\\Programs\\LycanSync，避免 Program Files 或 Windows 目录。\n已有账号与设置保存在原安装目录的 data 中，请保留该文件夹，不要卸载或删除后再尝试。`);
+    process.exit(1);
+  }
+})();
 const backend = new URL(loadServerSettings({
   packaged: app.isPackaged,
   userDirectory: app.getPath('userData'),

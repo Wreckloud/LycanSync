@@ -43,6 +43,7 @@ OutFile "${executable}"
 Function EnsureVisualCppRuntime
 FunctionEnd
 Section
+${mode === 'protected' ? '  StrCpy $INSTDIR "$PROGRAMFILES64\\LycanSync"\n  Call EnsureUserInstallLocation\n  Return' : ''}
   SetOutPath $INSTDIR
 ${mode === 'uninstall' ? '  !insertmacro customRemoveFiles' : `  !insertmacro uninstallOldVersion SHELL_CONTEXT
   !insertmacro handleUninstallResult SHELL_CONTEXT
@@ -64,6 +65,7 @@ SectionEnd
     assert.equal(result.status, 0, result.stdout + result.stderr);
     return executable;
   }
+  assert.notEqual(run(compile('protected'), []).status, 0, '系统目录必须在文件操作前拒绝');
   const upgrade = compile('upgrade'); const abort = compile('abort'); const quit = compile('quit'); const uninstall = compile('uninstall');
   function fixture(name, installer) {
     const path = join(directory, name); mkdirSync(join(path, 'resources'), { recursive: true });

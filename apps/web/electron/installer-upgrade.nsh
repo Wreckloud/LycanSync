@@ -65,6 +65,7 @@ Function RestoreApplicationReplacement
 FunctionEnd
 
 Function PrepareApplicationReplacement
+  Call EnsureUserInstallLocation
   ${If} $lycanReplacementPrepared == "1"
     ClearErrors
     StrCpy $R0 0
