@@ -542,16 +542,18 @@ test('成员搜索和设置页退场时立即禁用交互，完成后移除', as
   await page.addStyleTag({ content: ':root { --motion-surface-duration: 500ms; --motion-layout-duration: 500ms; --motion-expand-duration: 500ms; }' });
   const directory = page.getByRole('complementary', { name: '群组成员', exact: true });
   await directory.getByRole('button', { name: '搜索群组成员' }).click();
+  await expect(page.locator('.member-search-enter-active')).toHaveCount(0);
   await directory.getByRole('searchbox').press('Escape');
   const search = page.locator('.member-search-leave-active');
-  await expect(search).toHaveCSS('pointer-events', 'none');
-  expect(await search.evaluate(element => (element as HTMLElement).inert)).toBe(true);
+  expect(await search.evaluate(element => ({ inert: (element as HTMLElement).inert,
+    pointerEvents: getComputedStyle(element).pointerEvents }))).toEqual({ inert: true, pointerEvents: 'none' });
   await expect(page.locator('.member-search')).toHaveCount(0);
   await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.locator('.settings-page-enter-active')).toHaveCount(0);
   await page.getByRole('button', { name: '返回应用', exact: true }).click();
   const settings = page.locator('.settings-page-leave-active');
-  await expect(settings).toHaveCSS('pointer-events', 'none');
-  expect(await settings.evaluate(element => (element as HTMLElement).inert)).toBe(true);
+  expect(await settings.evaluate(element => ({ inert: (element as HTMLElement).inert,
+    pointerEvents: getComputedStyle(element).pointerEvents }))).toEqual({ inert: true, pointerEvents: 'none' });
   await expect(page.locator('.settings-view')).toHaveCount(0);
   await expect(page.getByTestId('callbar')).toBeVisible();
   expect(await page.locator('button:disabled, input:disabled').evaluateAll(elements => elements.some(element =>

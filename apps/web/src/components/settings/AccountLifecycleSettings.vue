@@ -101,8 +101,12 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); clearSecre
       </ExpandSection>
       <ExpandSection :open="expanded === 'transfer'">
         <form class="lifecycle-form" @submit.prevent="submit('offer')">
-          <label for="owner-transfer-target">接任成员</label>
-          <select id="owner-transfer-target" v-model="targetId" :disabled="busy || leaving" required><option value="" disabled>选择本服务器的成员</option><option v-for="candidate in status.candidates" :key="candidate.id" :value="candidate.id">{{ candidate.nickname }}</option></select>
+          <label class="settings-field" for="owner-transfer-target">接任成员
+            <select id="owner-transfer-target" v-model="targetId" :disabled="busy || leaving" required>
+              <option value="" disabled>选择本服务器的成员</option>
+              <option v-for="candidate in status.candidates" :key="candidate.id" :value="candidate.id">{{ candidate.nickname }}</option>
+            </select>
+          </label>
           <PasswordField id="owner-transfer-password" v-model="previousPassword" label="当前服主恢复密码" :disabled="busy || leaving" required />
           <p>对方须在 24 小时内确认并设置自己的恢复密码。完成后，你将成为普通成员，原恢复密码及未使用的账号邀请／恢复链接将失效。</p>
           <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button class="confirm-button card-actions-end" :disabled="busy || leaving">发起转让</button></div>
@@ -121,11 +125,13 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); clearSecre
     <p>注销后无法再次登录。昵称、头像、签名、消息和共同语音等历史记录保留，并显示“已注销”。</p>
     <p v-if="status?.administrator">请先完成服主转让，再注销账号。</p>
     <div v-if="status?.ownedGroups.length"><p>请先转让或解散以下群组：</p><ul><li v-for="group in status.ownedGroups" :key="group.id">{{ group.name }}</li></ul></div>
-    <button type="button" class="account-danger" :disabled="!status || busy || leaving || status.administrator || status.ownedGroups.length > 0" @click="toggle('close')">注销账号</button>
+    <button type="button" class="settings-button account-danger" :disabled="!status || busy || leaving || status.administrator || status.ownedGroups.length > 0" @click="toggle('close')">注销账号</button>
     <ExpandSection :open="expanded === 'close'">
       <form class="lifecycle-form" @submit.prevent="submit('close')">
-        <label for="close-account-confirmation">请输入“注销账号”确认，此操作不能撤回</label><input id="close-account-confirmation" v-model="closeConfirmation" required maxlength="4" :disabled="busy || leaving" autocomplete="off" />
-        <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button class="account-danger card-actions-end" :disabled="busy || leaving || closeConfirmation !== '注销账号'">确认注销</button></div>
+        <label class="settings-field" for="close-account-confirmation">请输入“注销账号”确认，此操作不能撤回
+          <input id="close-account-confirmation" v-model="closeConfirmation" required maxlength="4" :disabled="busy || leaving" autocomplete="off" />
+        </label>
+        <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button class="settings-button account-danger card-actions-end" :disabled="busy || leaving || closeConfirmation !== '注销账号'">确认注销</button></div>
       </form>
     </ExpandSection>
     <InlineFeedback :message="error" :status="busy ? '正在处理…' : feedback" />
@@ -136,6 +142,7 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); clearSecre
 <style scoped>
 .lifecycle-settings { display: grid; gap: 12px; }
 .lifecycle-settings p { margin: 0; color: var(--muted); line-height: 1.6; }
+.lifecycle-settings > button { justify-self: start; }
 .lifecycle-form { display: grid; gap: 12px; padding-top: 12px; max-width: 480px; }
 .account-danger { color: var(--danger); }
 </style>

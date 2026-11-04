@@ -486,9 +486,6 @@ onMounted(async () => {
 .auth-recovery-link { padding: 0; border: 0; border-radius: 0; color: var(--accent); background: transparent; text-decoration: underline; text-underline-offset: 3px; }
 .auth-qq-button { padding: 0; border: 0; border-radius: 0; background: transparent; }
 .auth-qq-button img { display: block; }
-</style>
-
-<style scoped>
 .account-preview { display: flex; align-items: center; gap: 12px; margin: 20px 0; min-width: 0; }
 .account-avatar-placeholder { display: grid; place-items: center; width: 48px; height: 48px; flex-shrink: 0; border-radius: 50%; background: var(--panel-raised); color: var(--muted); }
 .account-preview img { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; }
@@ -499,7 +496,6 @@ onMounted(async () => {
 .auto-login-option input { flex-shrink: 0; width: 16px; height: 16px; margin: 0; padding: 0; }
 .account-entry-note { color: var(--muted); font-size: 12px; line-height: 18px; }
 .auth-guest { display: grid; gap: 16px; }
-.auth-guest h2 { margin: 0; color: var(--text); font-size: 14px; font-weight: 600; line-height: 20px; }
 .auth-guest p { margin: 4px 0 0; }
 .auth-guest-note { margin: 20px 0 0; padding-top: 14px; border-top: 1px solid var(--border); }
 

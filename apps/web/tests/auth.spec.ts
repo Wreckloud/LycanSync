@@ -47,7 +47,7 @@ test('浏览器旧会话的延迟 401 不退出新会话，当前会话 401 仍�
   const gate = new Promise<void>((resolve) => { releaseSession = resolve; });
   await page.route('**/api/auth/options', (route) => ++optionsRequests === 1
     ? route.fulfill({ status: 503, json: { detail: '测试初始化等待兑换' } })
-    : route.fulfill({ json: { mode: 'invite' } }));
+    : route.fulfill({ json: { mode: 'invite', qqAvailable: false, initialized: true } }));
   await page.route('**/api/auth/access/redeem', (route) => {
     expect(route.request().postDataJSON()).toMatchObject({ token: (redemptions ? 'e' : 'a').repeat(43), redemptionKey: 'b'.repeat(43) });
     currentToken = (++redemptions === 1 ? 'c' : 'd').repeat(43);
@@ -94,7 +94,8 @@ test('浏览器旧会话的延迟 401 不退出新会话，当前会话 401 仍�
     await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible();
     revoked = true;
     await page.clock.fastForward(20_100);
-    await expect(page.getByText('打开服主分享的邀请链接', { exact: false })).toBeVisible();
+    await expect(page.getByRole('button', { name: '群组恢复', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '设置', exact: true })).toHaveCount(0);
     expect(redemptions).toBe(2);
   } finally { releaseSession(); }
 });
@@ -103,7 +104,7 @@ test('新设备替换会话后旧客户端通过心跳静默退出', async ({ pa
   await page.clock.install();
   const user = { id: 'old-session', nickname: '旧设备', avatar: '', administrator: true };
   let sessionRequests = 0;
-  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
+  await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false, initialized: true } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
   await page.route('**/api/auth/session', (route) => {
@@ -117,7 +118,8 @@ test('新设备替换会话后旧客户端通过心跳静默退出', async ({ pa
   await page.goto('/');
   await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible();
   await page.clock.fastForward(20_100);
-  await expect(page.getByText('打开服主分享的邀请链接', { exact: false })).toBeVisible();
+  await expect(page.getByRole('button', { name: '群组恢复', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '设置', exact: true })).toHaveCount(0);
   expect(sessionRequests).toBeGreaterThanOrEqual(1);
 });
 

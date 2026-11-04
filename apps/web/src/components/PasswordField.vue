@@ -7,7 +7,7 @@ const visible = ref(false);
 </script>
 
 <template>
-  <div class="password-field">
+  <div class="password-field settings-field">
     <label :for="id">{{ label }}</label>
     <div class="password-field-input">
       <input :id="id" v-model="password" :type="visible ? 'text' : 'password'" :disabled="disabled"
