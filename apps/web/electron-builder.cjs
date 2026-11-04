@@ -55,7 +55,7 @@ module.exports = {
     { from: '../../native/activity-helper/target/release/lycansync-activity.exe', to: 'activity-helper/lycansync-activity.exe' },
   ],
   // 未签名测试包仍保留产品名称、图标和版本资源，避免 Windows 将其识别为 Electron。
-  win: { target: [{ target: 'nsis', arch: ['x64'] }], signExecutable: false, icon: '../../services/api/src/main/resources/account/default.png' },
+  win: { target: [{ target: 'nsis', arch: ['x64'] }], signExecutable: false, icon: 'electron/app.ico' },
   nsis: {
     oneClick: false,
     perMachine: false,
