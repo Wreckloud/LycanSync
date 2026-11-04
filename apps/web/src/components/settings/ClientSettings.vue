@@ -122,7 +122,8 @@ async function updateCloseToTray(event: Event) {
 
 async function updateAutoStart(event: Event) {
   if (autoStartBusy.value || !autoStartSupported.value || !desktopBridge) return;
-  const enabled = (event.target as HTMLInputElement).checked;
+  const input = event.target as HTMLInputElement;
+  const enabled = input.checked;
   const previous = autoStartEnabled.value;
   autoStartEnabled.value = enabled;
   autoStartBusy.value = true;
@@ -133,6 +134,7 @@ async function updateAutoStart(event: Event) {
     autoStartEnabled.value = settings.enabled;
   } catch (exception) {
     autoStartEnabled.value = previous;
+    input.checked = previous;
     autoStartError.value = exception instanceof Error ? exception.message : '无法修改开机自启设置';
   } finally {
     autoStartBusy.value = false;
@@ -173,18 +175,18 @@ async function updateAutoStart(event: Event) {
       <h2>系统</h2>
       <p v-if="!desktop">托盘和开机自启仅在 Windows 桌面版提供。</p>
       <template v-else>
-        <label class="settings-toggle" :class="{ 'is-disabled': !traySupported || trayBusy }">
-          <span><strong>关闭时收起到托盘</strong><small>默认关闭。开启后，关闭主窗口仍继续通话、共享和录制；右键托盘选择“退出”才结束应用。</small></span>
-          <input type="checkbox" :checked="closeToTray" :disabled="!traySupported || trayBusy"
-            aria-label="关闭时收起到托盘" @change="updateCloseToTray" />
-        </label>
-        <InlineFeedback :message="trayError" />
         <label class="settings-toggle" :class="{ 'is-disabled': !autoStartSupported || autoStartBusy }">
           <span><strong>开机自动启动</strong><small>{{ autoStartDescription }}</small></span>
           <input type="checkbox" :checked="autoStartEnabled" :disabled="!autoStartSupported || autoStartBusy"
             aria-label="开机自动启动" @change="updateAutoStart" />
         </label>
         <InlineFeedback :message="autoStartError" />
+        <label class="settings-toggle" :class="{ 'is-disabled': !traySupported || trayBusy }">
+          <span><strong>关闭时收起到托盘</strong><small>关闭主窗口后继续通话、共享和录制；右键托盘选择“退出”结束应用。</small></span>
+          <input type="checkbox" :checked="closeToTray" :disabled="!traySupported || trayBusy"
+            aria-label="关闭时收起到托盘" @change="updateCloseToTray" />
+        </label>
+        <InlineFeedback :message="trayError" />
       </template>
     </section>
   </div>

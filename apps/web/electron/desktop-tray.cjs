@@ -5,7 +5,7 @@ const { dirname } = require('node:path');
 // 托盘只管理窗口可见性；真正退出仍由主窗口执行现有媒体收尾。
 function createDesktopTray({ Tray, Menu, iconPath, settingsPath, getWindow, onQuit, platform = process.platform }) {
   let tray;
-  let closeToTray = false;
+  let closeToTray = true;
   let quitting = false;
   let saving = false;
   let notified = false;
@@ -42,6 +42,7 @@ function createDesktopTray({ Tray, Menu, iconPath, settingsPath, getWindow, onQu
         closeToTray = saved.closeToTray;
       } catch (failure) {
         if (failure.code !== 'ENOENT') {
+          closeToTray = false;
           error = '无法读取托盘设置，请重新保存。';
           console.error('无法读取托盘设置');
         }

@@ -1262,9 +1262,11 @@ function trustedSender(event) {
 
 function autoStartSettings() {
   const supported = process.platform === 'win32' && app.isPackaged;
+  if (!supported) return { supported, enabled: false };
+  const settings = app.getLoginItemSettings({ path: process.execPath, args: [] });
   return {
     supported,
-    enabled: supported && app.getLoginItemSettings().openAtLogin,
+    enabled: settings.openAtLogin && settings.executableWillLaunchAtLogin,
   };
 }
 
@@ -1704,8 +1706,10 @@ ipcMain.handle('settings:auto-start:set', (event, enabled) => {
   const settings = autoStartSettings();
   if (!settings.supported) return settings;
   // 使用 Windows 登录项启动现有程序，不创建额外服务或常驻辅助进程。
-  app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath });
-  return autoStartSettings();
+  app.setLoginItemSettings({ openAtLogin: enabled, enabled, path: process.execPath, args: [] });
+  const updated = autoStartSettings();
+  if (updated.enabled !== enabled) throw new Error('无法确认开机自启设置已生效，请检查 Windows 启动应用设置。');
+  return updated;
 });
 ipcMain.handle('settings:tray:get', (event) => {
   if (!trustedSender(event) || closing) throw new Error('当前无法读取托盘设置');
