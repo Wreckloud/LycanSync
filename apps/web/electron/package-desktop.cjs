@@ -65,6 +65,17 @@ const result = spawnSync(process.execPath, [
 });
 if (result.error) throw result.error;
 if (result.status !== 0) process.exit(result.status || 1);
+const metadata = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+  '$version = [Diagnostics.FileVersionInfo]::GetVersionInfo($env:LYCANSYNC_VERIFY_EXECUTABLE); '
+  + '[pscustomobject]@{ name=$version.FileDescription; product=$version.ProductName; version=$version.FileVersion } | ConvertTo-Json -Compress'], {
+  encoding: 'utf8', windowsHide: true,
+  env: { ...process.env, LYCANSYNC_VERIFY_EXECUTABLE: join(outputDirectory, 'win-unpacked/LycanSync.exe') },
+});
+if (metadata.error || metadata.status !== 0) throw new Error('无法读取安装包主程序的 Windows 产品信息。');
+const executable = JSON.parse(metadata.stdout);
+if (executable.name !== 'LycanSync' || executable.product !== 'LycanSync' || executable.version !== version) {
+  throw new Error('安装包的程序名称或版本资源不正确，拒绝发布。');
+}
 // 页面依赖已进入 dist；主进程更新库必须实际进入 asar，不能只验证开发目录可用。
 const archive = join(outputDirectory, 'win-unpacked/resources/app.asar');
 for (const file of ['electron/login-preferences.cjs', 'electron/desktop-tray.cjs', 'electron/tray.ico', 'electron/media-background.cjs', 'electron/audio-shortcuts.cjs', 'electron/recording-voice.cjs', 'electron/recording.cjs', 'electron/recording-library.cjs', 'electron/obs-audio-host.cjs', 'electron/startup-update.cjs', 'electron/runtime-paths.cjs', 'electron/diagnostic-reports.cjs', 'electron/activity-helper.cjs', 'electron/window-layout.cjs', 'electron/voice-overlay.cjs',

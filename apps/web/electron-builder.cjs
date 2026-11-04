@@ -54,7 +54,8 @@ module.exports = {
     { from: '../../native/media-bridge/target/x86_64-pc-windows-msvc/release/lycansync_shared_texture_bridge.dll', to: 'media-bridge/lycansync_shared_texture_bridge.dll' },
     { from: '../../native/activity-helper/target/release/lycansync-activity.exe', to: 'activity-helper/lycansync-activity.exe' },
   ],
-  win: { target: [{ target: 'nsis', arch: ['x64'] }], signAndEditExecutable: false },
+  // 未签名测试包仍保留产品名称、图标和版本资源，避免 Windows 将其识别为 Electron。
+  win: { target: [{ target: 'nsis', arch: ['x64'] }], signExecutable: false, icon: '../../services/api/src/main/resources/account/default.png' },
   nsis: {
     oneClick: false,
     perMachine: false,
