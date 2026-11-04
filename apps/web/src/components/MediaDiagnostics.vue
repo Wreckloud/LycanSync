@@ -83,7 +83,8 @@ function formatFpsInterval(intervalMs: number | null) {
         <template v-if="layer.averageEncodeMs !== null"> · 编码 {{ layer.averageEncodeMs }} ms/帧</template>
         <template v-if="layer.encoder"> · 编码器 {{ layer.encoder }}</template>
         <template v-if="stream.direction === '发送'"> · 节能编码标志 {{ layer.powerEfficientEncoder === null ? '未知' : layer.powerEfficientEncoder ? '是' : '否' }}（非硬件编码结论）</template>
-        <template v-if="layer.roundTripMs !== null"> · 到 SFU RTT {{ layer.roundTripMs }} ms</template>
+        <template v-if="layer.transportRoundTripMs !== null"> · 到 SFU 连接 RTT {{ layer.transportRoundTripMs }} ms</template>
+        <template v-if="layer.roundTripMs !== null"> · RTCP 报告 RTT {{ layer.roundTripMs }} ms</template>
         <template v-if="layer.receiverReportedLossPercent !== null"> · SFU 报告丢包 {{ layer.receiverReportedLossPercent }}%</template>
         <template v-if="layer.feedbackAgeMs !== null"> · 接收报告距今 {{ layer.feedbackAgeMs }} ms</template>
         <template v-if="layer.receiveLossPercent !== null"> · 接收区间丢包 {{ layer.receiveLossPercent }}%</template>

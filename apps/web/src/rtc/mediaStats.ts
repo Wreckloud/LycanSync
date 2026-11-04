@@ -14,6 +14,7 @@ export interface VideoLayerStats {
   averageEncodeMs: number | null;
   droppedFrames: number | null;
   roundTripMs: number | null;
+  transportRoundTripMs: number | null;
   receiverReportedLossPercent: number | null;
   feedbackAgeMs: number | null;
   receiveLossPercent: number | null;
@@ -22,7 +23,8 @@ export interface VideoLayerStats {
 
 type PreviousSample = { bytes: number | null; frames: number | null; timestamp: number; encodeTime: number | null;
   packetsReceived: number | null; packetsLost: number | null; jitterBufferDelay: number | null;
-  jitterBufferEmittedCount: number | null; feedbackTimestamp: number | null };
+  jitterBufferEmittedCount: number | null; feedbackTimestamp: number | null;
+  candidatePairId: string | null; candidatePairResponses: number | null };
 type PreviousSourceSample = { frames: number; timestamp: number };
 
 export interface VideoSourceSample {
@@ -108,6 +110,17 @@ export function readVideoLayers(
       || last?.feedbackTimestamp === undefined || feedbackTimestamp > last.feedbackTimestamp);
     const roundTripTime = finite(remote?.roundTripTime);
     const fractionLost = finite(remote?.fractionLost);
+    // 必须沿当前轨道的传输关系查找已选 ICE 连接，不能拿其他候选或轨道补缺。
+    const transport = report.get(stat.transportId);
+    const pair = transport?.type === 'transport' ? report.get(transport.selectedCandidatePairId) : undefined;
+    const selectedPair = pair?.type === 'candidate-pair' && pair.state === 'succeeded' ? pair : undefined;
+    const candidatePairId = typeof selectedPair?.id === 'string' ? selectedPair.id : null;
+    const responses = finite(selectedPair?.responsesReceived);
+    const candidatePairResponses = responses !== null && Number.isSafeInteger(responses) && responses >= 0 ? responses : null;
+    const transportRoundTripTime = finite(selectedPair?.currentRoundTripTime);
+    const hasNewTransportFeedback = candidatePairId !== null && candidatePairResponses !== null && candidatePairResponses > 0
+      && (!last || last.candidatePairId !== candidatePairId || last.candidatePairResponses === null
+        || candidatePairResponses > last.candidatePairResponses);
     const packetsReceived = direction === 'inbound-rtp' ? finite(stat.packetsReceived) : null;
     const packetsLost = direction === 'inbound-rtp' ? finite(stat.packetsLost) : null;
     const jitterBufferDelay = direction === 'inbound-rtp' ? finite(stat.jitterBufferDelay) : null;
@@ -116,6 +129,7 @@ export function readVideoLayers(
       bytes: finite(bytes),
       frames: typeof frames === 'number' ? frames : null, timestamp: stat.timestamp, encodeTime,
       packetsReceived, packetsLost, jitterBufferDelay, jitterBufferEmittedCount, feedbackTimestamp,
+      candidatePairId, candidatePairResponses,
     });
     const elapsedSeconds = last ? (stat.timestamp - last.timestamp) / 1000 : 0;
     const receivedDelta = elapsedSeconds > 0 ? counterDelta(packetsReceived, last?.packetsReceived) : null;
@@ -163,6 +177,8 @@ export function readVideoLayers(
       // RTT/报告丢包仅代表本机到 SFU；旧 RTCP 报告不重复冒充本区间的新反馈。
       roundTripMs: hasNewFeedback && roundTripTime !== null && roundTripTime >= 0
         ? Math.round(roundTripTime * 1000) : null,
+      transportRoundTripMs: hasNewTransportFeedback && transportRoundTripTime !== null && transportRoundTripTime >= 0
+        ? Math.round(transportRoundTripTime * 1000) : null,
       receiverReportedLossPercent: hasNewFeedback && fractionLost !== null
         && fractionLost >= 0 && fractionLost <= 1 ? Math.round(fractionLost * 10_000) / 100 : null,
       feedbackAgeMs: feedbackTimestamp !== null && stat.timestamp >= feedbackTimestamp

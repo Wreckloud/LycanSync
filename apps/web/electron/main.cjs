@@ -391,7 +391,7 @@ function releaseNativeVideoImports(video) {
   for (const imported of video.imported.values()) {
     try { imported.release(); } catch { /* Electron may already have released this import. */ }
   }
-  video.imported.clear();
+  // 主进程引用释放不等于 GPU 已用完；保留槽位登记，直到 allReferencesReleased 删除。
 }
 
 function releaseNativeVideoSlot(state, sessionId, slotIndex) {
@@ -1042,16 +1042,10 @@ async function startNativeVideo(sourceId, maxFps, settings, resolution, gameFoll
       } else recordVideoFailure('startCapture', error);
     }
     video.stopping = true;
-    if (gameFollowId) leagueCaptureFollow.end(gameFollowId);
-    releaseNativeVideoImports(video);
-    try { await stopObsVideo(video); }
+    try { await (video.stopPromise ?? stopNativeVideo(sessionId)); }
     catch (stopError) {
       recordVideoFailure('stopObsCaptureAfterStartFailure', stopError);
       throw new Error('obsCaptureStopUnconfirmed');
-    }
-    if (nativeVideoSession === video) {
-      restoreNativeVideoBackgroundThrottling(video);
-      nativeVideoSession = undefined;
     }
     throw error;
   }
@@ -1088,6 +1082,9 @@ async function stopNativeVideo(sessionId, preserveGameFollow = false) {
   if (!preserveGameFollow && video.gameFollowId) leagueCaptureFollow.end(video.gameFollowId);
   if (video.stopPromise) return video.stopPromise;
   video.stopping = true;
+  if (video.renderer && !video.renderer.isDestroyed()) {
+    video.renderer.send('media:native-video-stopping', { sessionId });
+  }
   const startedAt = performance.now();
   video.stopPromise = (async () => {
     // 先撤销输入和释放按住的键；画面/GPU 回收再慢也不能继续接受远控。
@@ -1114,6 +1111,7 @@ async function stopNativeVideo(sessionId, preserveGameFollow = false) {
     if (nativeScreenAudioSession?.sessionId === sessionId) {
       await stopNativeScreenAudio(sessionId).catch(() => {});
     }
+    releaseNativeVideoImports(video);
     const deadline = Date.now() + 1_200;
     while ((video.imported.size || video.pendingSlotReleases.size) && Date.now() < deadline) {
       await new Promise((resolveWait) => setTimeout(resolveWait, 10));
@@ -1121,7 +1119,6 @@ async function stopNativeVideo(sessionId, preserveGameFollow = false) {
     if (video.imported.size || video.pendingSlotReleases.size) {
       void writeMediaDiagnostic({ stage: 'screenTextureReleaseTimeout',
         importedCount: video.imported.size, pendingReleaseCount: video.pendingSlotReleases.size });
-      releaseNativeVideoImports(video);
       // 外部纹理未归还时不复用宿主；退出确认后才释放来源并允许下一次共享。
       await obsCaptureHost.shutdown(true, 'textureTimeout');
       await stopObsVideo(video);

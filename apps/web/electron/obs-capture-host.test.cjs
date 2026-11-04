@@ -18,7 +18,7 @@ const monitorName = '\\\\.\\DISPLAY2';
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 function mainRendererFixture() {
   let throttled = true;
-  return { webContents: { isDestroyed: () => false, getBackgroundThrottling: () => throttled,
+  return { webContents: { isDestroyed: () => false, send: () => {}, getBackgroundThrottling: () => throttled,
     setBackgroundThrottling: (value) => { throttled = value; } } };
 }
 const idleAudio = { state: 'idle', sampleRate: null, channels: null, packetsReceived: 0, framesReceived: 0,
@@ -1727,6 +1727,7 @@ test('停止先禁用远控并释放按键，再等待 OBS 退出后释放身份
     const sandbox = { recording: { active: undefined, withVideoChange: operation => operation() }, performance, writeMediaDiagnostic: async () => {}, nativeVideoSession: { sessionId, stopping: false,
       targetState: {}, imported: new Map(), pendingSlotReleases: new Set() },
       nativeScreenAudioSession: undefined, setTimeout, Date, lastStoppedNativeVideoSession: undefined,
+      releaseNativeVideoImports: () => {},
       obsCaptureHost: { state: { videoSessionId: sessionId }, stop: async () => {
         calls.push('obs-stop'); sandbox.obsCaptureHost.state = undefined; return { changed: true };
       } },
@@ -1759,6 +1760,38 @@ test('停止先禁用远控并释放按键，再等待 OBS 退出后释放身份
   }
 });
 
+test('停止通知页面禁收后等待总纹理及槽位确认，再结束宿主来源，不提前清空登记', async () => {
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const calls = [], ticks = [];
+  const video = { sessionId, targetState: {}, stopping: false,
+    renderer: { isDestroyed: () => false, send: (channel, status) => {
+      assert.equal(channel, 'media:native-video-stopping'); assert.equal(status.sessionId, sessionId);
+      calls.push('notify');
+    } }, imported: new Map([[0, { release: () => calls.push('release-reference') }]]), pendingSlotReleases: new Set() };
+  const sandbox = { performance, Date, setTimeout: callback => ticks.push(callback),
+    recording: {}, nativeVideoSession: video, nativeScreenAudioSession: undefined, lastStoppedNativeVideoSession: undefined,
+    writeMediaDiagnostic: async event => { assert.notEqual(event.stage, 'screenTextureReleaseTimeout'); },
+    releaseHelperProcessBridge: () => {}, obsCaptureHost: { state: { videoSessionId: sessionId },
+      stop: async () => { calls.push('obs-stop'); return { changed: true }; } },
+    mediaHelper: { videoCapture: { sessionId }, stopVideo: async () => { calls.push('identity-stop'); return { changed: true }; } },
+  };
+  runInNewContext(main.slice(main.indexOf('function releaseNativeVideoImports('), main.indexOf('function releaseNativeVideoSlot('))
+    + main.slice(main.indexOf('function restoreNativeVideoBackgroundThrottling('), main.indexOf('function validMicrophoneSettings(')), sandbox);
+  const stopping = sandbox.stopNativeVideo(sessionId);
+  assert.deepEqual(calls, ['notify', 'release-reference']);
+  assert.equal(video.imported.size, 1);
+  video.imported.delete(0);
+  video.pendingSlotReleases.add(0);
+  ticks.shift()();
+  await flush();
+  assert.deepEqual(calls, ['notify', 'release-reference']);
+  video.pendingSlotReleases.delete(0);
+  ticks.shift()();
+  await stopping;
+  assert.deepEqual(calls, ['notify', 'release-reference', 'obs-stop', 'identity-stop']);
+  assert.equal(sandbox.nativeVideoSession, undefined);
+});
+
 test('纹理释放超时只在宿主退出及身份释放确认后恢复重开；任一步失败仍阻挡', async () => {
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   for (const failure of [undefined, 'shutdown', 'identity']) {
@@ -1769,7 +1802,7 @@ test('纹理释放超时只在宿主退出及身份释放确认后恢复重开�
       setTimeout: (callback) => { now += 400; queueMicrotask(callback); },
       nativeVideoSession: video, nativeScreenAudioSession: undefined, lastStoppedNativeVideoSession: undefined,
       writeMediaDiagnostic: async entry => events.push(entry),
-      releaseNativeVideoImports: () => { calls.push('release-imports'); video.imported.clear(); },
+      releaseNativeVideoImports: () => { calls.push('release-imports'); },
       releaseHelperProcessBridge: () => {},
       obsCaptureHost: { state: { videoSessionId: sessionId },
         shutdown: async force => {

@@ -80,7 +80,7 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
       const values = comparableEntries.flatMap(({ stream }) => stream.layers.filter((item) => item.layer === layer && item.active !== false)
         .map((item) => item.fps).filter((value): value is number => value !== null));
       const measured = comparableEntries.flatMap(({ stream }) => stream.layers.filter((item) => item.layer === layer && item.active !== false));
-      const numbers = (field: 'bitrateKbps' | 'averageEncodeMs' | 'roundTripMs' | 'receiverReportedLossPercent' | 'receiveLossPercent' | 'jitterBufferMs') =>
+      const numbers = (field: 'bitrateKbps' | 'averageEncodeMs' | 'roundTripMs' | 'transportRoundTripMs' | 'receiverReportedLossPercent' | 'receiveLossPercent' | 'jitterBufferMs') =>
         measured.map((item) => item[field]).filter((value): value is number => value !== null);
       return { layer, active, size: matching.find((item) => item.size !== '未知')?.size ?? null,
         typicalFps: median(values), validSamples: values.length,
@@ -88,9 +88,11 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
         encoderImplementations: [...new Set(matching.map((item) => item.encoder).filter((value) => value !== null))],
         powerEfficientEncoderValues: [...new Set(matching.map((item) => item.powerEfficientEncoder).filter((value) => value !== null))],
         network: { typicalRoundTripMs: median(numbers('roundTripMs')),
+          typicalTransportRoundTripMs: median(numbers('transportRoundTripMs')),
           typicalReceiverReportedLossPercent: median(numbers('receiverReportedLossPercent'), 2),
           typicalReceiveLossPercent: median(numbers('receiveLossPercent'), 2), typicalJitterBufferMs: median(numbers('jitterBufferMs'), 1),
-          validSamples: { roundTrip: numbers('roundTripMs').length, receiverReport: numbers('receiverReportedLossPercent').length,
+          validSamples: { roundTrip: numbers('roundTripMs').length, transportRoundTrip: numbers('transportRoundTripMs').length,
+            receiverReport: numbers('receiverReportedLossPercent').length,
             receiveLoss: numbers('receiveLossPercent').length, jitterBuffer: numbers('jitterBufferMs').length } } };
     });
     const totalReceived = comparableEntries.reduce((sum, { stream }) => sum + (stream.nativeInputInterval?.receivedFrames ?? 0), 0);
@@ -159,7 +161,8 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
       { stage: '页面交付', available: submittedFps.length > 0 },
       { stage: first.stream.direction === '发送' ? '编码' : '解码', available: layers.some((layer) => layer.validSamples > 0) },
       { stage: '网络反馈', available: layers.some((layer) => layer.network.validSamples.receiverReport > 0
-        || layer.network.validSamples.roundTrip > 0 || layer.network.validSamples.receiveLoss > 0) },
+        || layer.network.validSamples.roundTrip > 0 || layer.network.validSamples.transportRoundTrip > 0
+        || layer.network.validSamples.receiveLoss > 0) },
       { stage: '本机播放', available: playbackFps.length > 0 },
       { stage: 'OBS 渲染', available: obsRenderFps.length > 0 },
     ];
@@ -275,7 +278,8 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
         frameCount: numeric(layer.frameCount), fps: numeric(layer.fps), intervalMs: numeric(layer.intervalMs),
         bitrateKbps: numeric(layer.bitrateKbps), encoder: label(layer.encoder),
         powerEfficientEncoder: typeof layer.powerEfficientEncoder === 'boolean' ? layer.powerEfficientEncoder : null,
-        roundTripMs: numeric(layer.roundTripMs), receiverReportedLossPercent: numeric(layer.receiverReportedLossPercent),
+        roundTripMs: numeric(layer.roundTripMs), transportRoundTripMs: numeric(layer.transportRoundTripMs),
+        receiverReportedLossPercent: numeric(layer.receiverReportedLossPercent),
         feedbackAgeMs: numeric(layer.feedbackAgeMs), receiveLossPercent: numeric(layer.receiveLossPercent),
         jitterBufferMs: numeric(layer.jitterBufferMs),
         limitation: label(layer.limitation), averageEncodeMs: numeric(layer.averageEncodeMs),
@@ -551,7 +555,7 @@ export function useDiagnosticReport(options: {
         exportedSamples[index] = { ...exportedSamples[index], elapsedMs: exportedSamples[index].elapsedMs - first.elapsedMs };
       }
     }
-    const report = { kind: 'lycansync-diagnostics', schemaVersion: 10,
+    const report = { kind: 'lycansync-diagnostics', schemaVersion: 11,
       startedAt: discardedSamples.value && exportedSamples.length ? exportedSamples[0].time : startedAt ?? new Date().toISOString(),
       endedAt: endedAt ?? new Date().toISOString(),
       stopReason: recording.value && automaticRecording ? 'automaticSnapshot' : reason.value || 'automaticEvents',
@@ -584,6 +588,7 @@ export function useDiagnosticReport(options: {
         layerActive: 'outbound-rtp-active-or-matching-sender-encoding',
         remoteParticipantCount: 'room-members-not-viewers',
         network: { roundTripMs: 'new-rtcp-receiver-report-client-to-sfu-not-end-to-end',
+          transportRoundTripMs: 'selected-ice-candidate-pair-currentRoundTripTime-new-responsesReceived-client-to-sfu-not-end-to-end',
           receiverReportedLossPercent: 'new-rtcp-report-fractionLost-not-local-sample-interval',
           receiveLossPercent: 'interval-lost-divided-by-received-plus-lost; reset-or-late-recovery-is-null',
           jitterBufferMs: 'interval-buffer-delay-divided-by-emitted-frames-not-end-to-end',
@@ -591,7 +596,7 @@ export function useDiagnosticReport(options: {
         powerEfficientEncoder: 'browser-reported-hint-not-proof-of-hardware-encoding',
       },
       limitations: ['null表示未取得；轨道目标不等于实测；统计不包含端到端延迟或GPU利用率',
-        '网络统计只描述本机与SFU的一段；RTT不能除以二冒充端到端延迟；接收缓冲等待不含完整解码与显示耗时',
+        '网络统计只描述本机与SFU的一段；ICE连接RTT与RTCP报告RTT分别保留，不相互替代或截断大值；RTT不能除以二冒充端到端延迟；接收缓冲等待不含完整解码与显示耗时',
         '节能编码标志是浏览器提供的线索，不单独证明硬件编码；旧接收报告保留年龄，不重复计为新反馈',
         '仅记录当前客户端；CPU与memoryMb汇总仅含Electron，entries分列Electron与已启动的原生进程内存；不含原生CPU和显存。工作集可能重复计算共享页，私有提交不等于驻留RAM，不代表整机物理内存占用',
         '后台采样可能被系统节流；各采样窗口不同，不能直接相减计算丢帧率；自动记录滚动保留最近30分钟且不超过900份/6MiB，手动记录达到上限停止；最多32名成员',

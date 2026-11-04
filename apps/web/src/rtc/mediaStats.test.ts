@@ -6,6 +6,37 @@ function report(stats: Record<string, unknown>[]): RTCStatsReport {
 }
 
 describe('屏幕共享媒体统计', () => {
+  it('分开记录当前传输连接 RTT 与异常 RTCP 值，旧 ICE 响应不重复统计，切换候选不串源', () => {
+    const previous = new Map();
+    const sample = (pairId: string, responses: number, rtt = 0.006) => report([
+      { id: 'out', type: 'outbound-rtp', kind: 'video', timestamp: 2000, transportId: 'transport' },
+      { id: 'transport', type: 'transport', selectedCandidatePairId: pairId },
+      { id: pairId, type: 'candidate-pair', state: 'succeeded', responsesReceived: responses, currentRoundTripTime: rtt },
+      { id: 'unused', type: 'candidate-pair', state: 'succeeded', responsesReceived: 99, currentRoundTripTime: 9 },
+      { id: 'rr', type: 'remote-inbound-rtp', localId: 'out', timestamp: 1900, roundTripTime: 24422.3 },
+    ]);
+    expect(readVideoLayers(sample('selected', 1), 'outbound-rtp', previous, 'track')[0])
+      .toMatchObject({ roundTripMs: 24422300, transportRoundTripMs: 6 });
+    expect(readVideoLayers(sample('selected', 1), 'outbound-rtp', previous, 'track')[0].transportRoundTripMs).toBeNull();
+    expect(readVideoLayers(sample('selected', 2, 0.009), 'outbound-rtp', previous, 'track')[0].transportRoundTripMs).toBe(9);
+    expect(readVideoLayers(sample('next', 1, 0), 'outbound-rtp', previous, 'track')[0].transportRoundTripMs).toBe(0);
+    expect(readVideoLayers(sample('next', 0), 'outbound-rtp', previous, 'track')[0].transportRoundTripMs).toBeNull();
+    const missing = report([...sample('next', 2).values()].filter(stat => stat.id !== 'transport'));
+    expect(readVideoLayers(missing, 'outbound-rtp', previous, 'track')[0].transportRoundTripMs).toBeNull();
+  });
+
+  it('接收侧同样按选中连接读取 RTT，缺失／未成功或非法 ICE 数据不伪造网络数值', () => {
+    for (const [state, responsesReceived, currentRoundTripTime, expected] of [
+      ['succeeded', 1, 0.012, 12], ['in-progress', 1, 0.012, null], ['succeeded', 0, 0.012, null],
+      ['succeeded', undefined, 0.012, null], ['succeeded', 1, -1, null], ['succeeded', 1, Infinity, null],
+    ]) {
+      const stats = report([{ id: 'in', type: 'inbound-rtp', kind: 'video', timestamp: 2000, transportId: 'transport' },
+        { id: 'transport', type: 'transport', selectedCandidatePairId: 'pair' },
+        { id: 'pair', type: 'candidate-pair', state, responsesReceived, currentRoundTripTime }]);
+      expect(readVideoLayers(stats, 'inbound-rtp', new Map(), 'track')[0].transportRoundTripMs).toBe(expected);
+    }
+  });
+
   it('按编码层关联SFU接收报告，旧报告不重复计为新反馈，并保留报告年龄', () => {
     const previous = new Map();
     const sample = (timestamp: number, feedbackTimestamp: number) => report([

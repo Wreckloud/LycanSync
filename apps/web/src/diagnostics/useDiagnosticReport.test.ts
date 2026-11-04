@@ -21,7 +21,7 @@ function snapshot(): MediaDiagnosticsSnapshot {
       sessionKey: null, layers: [{ id: 'private-track-id', active: true, size: '1920×1080', frameCount: 180,
         fps: 58, intervalMs: 2000, bitrateKbps: 8000, codec: 'H264', limitation: null, lostPackets: null, encoder: 'testEncoder',
         averageEncodeMs: 2, droppedFrames: null, powerEfficientEncoder: true,
-        roundTripMs: 25, receiverReportedLossPercent: 1.5, feedbackAgeMs: 20,
+        roundTripMs: 25, transportRoundTripMs: 5, receiverReportedLossPercent: 1.5, feedbackAgeMs: 20,
         receiveLossPercent: null, jitterBufferMs: null }] }],
     audio: [], process: null, native: null, failures: [] };
 }
@@ -328,11 +328,12 @@ it('报告只导出诊断字段，摘要包含各阶段证据和编码网络统�
   const text = exportDiagnosticReport.mock.calls[0][0];
   const result = JSON.parse(text);
   expect(result.samples[1].streams[0].layers[0]).toMatchObject({ powerEfficientEncoder: true,
-    roundTripMs: 25, receiverReportedLossPercent: 1.5, receiveLossPercent: 3, jitterBufferMs: 18.5 });
+    roundTripMs: 25, transportRoundTripMs: 5, receiverReportedLossPercent: 1.5, receiveLossPercent: 3, jitterBufferMs: 18.5 });
   const segment = result.summary.segments[0];
   expect(segment.typicalFps.encodingLayers[0]).toMatchObject({ typicalBitrateKbps: 8000, typicalEncodeMs: 2.4,
     encoderImplementations: ['testEncoder'], powerEfficientEncoderValues: [true],
-    network: { typicalRoundTripMs: 25, typicalReceiverReportedLossPercent: 1.5, typicalReceiveLossPercent: 3,
+    network: { typicalRoundTripMs: 25, typicalTransportRoundTripMs: 5,
+      typicalReceiverReportedLossPercent: 1.5, typicalReceiveLossPercent: 3,
       typicalJitterBufferMs: 18.5, validSamples: { receiveLoss: 1, jitterBuffer: 1 } } });
   expect(segment.evidence).toContainEqual({ stage: '网络反馈', available: true });
   expect(segment.evidence).toContainEqual({ stage: '本机播放', available: false });
@@ -369,7 +370,9 @@ it('暂停、停层与恢复边界不进入诊断摘要，缺失网络反馈不�
   const result = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
   // 初始接收报告仍是有效快照，但暂停与恢复时的极端值不得污染摘要。
   expect(result.summary.segments[0].typicalFps.encodingLayers[0].network.typicalRoundTripMs).toBe(25);
-  const unavailable = snapshot(); Object.assign(unavailable.streams[0].layers[0], { roundTripMs: null, receiverReportedLossPercent: null });
+  const unavailable = snapshot(); Object.assign(unavailable.streams[0].layers[0], {
+    roundTripMs: null, transportRoundTripMs: null, receiverReportedLossPercent: null,
+  });
   collect.mockResolvedValue(unavailable);
   report.start(); await vi.advanceTimersByTimeAsync(2000); report.stop(); await report.save('');
   const missing = JSON.parse(exportDiagnosticReport.mock.calls[1][0]).summary.segments[0];
@@ -455,7 +458,7 @@ it('导出按记录时参数保存，匿名化身份/轨道ID，不使用导出�
   expect(text).not.toContain('private-user-id'); expect(text).not.toContain('private-track-id');
   expect(text).not.toContain('私人昵称');
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(10);
+  expect(result.schemaVersion).toBe(11);
   expect(result.measurements.process).toEqual({ scope: 'electron-and-owned-native-processes', memoryUnit: 'MiB',
     memoryMb: 'electron-only-sum-working-set', nativeMemory: 'GetProcessMemoryInfo; private-commit-not-resident',
     sharedPagesMayBeCountedMoreThanOnce: true, includesGpuMemory: false, includesNativeCpu: false });
@@ -673,7 +676,7 @@ it('自动恢复失败保留最后确认帧率并在摘要提示，不把用户�
   const { report, exportDiagnosticReport } = setup();
   report.start(); await vi.advanceTimersByTimeAsync(2000); report.stop(); await report.save('');
   const result = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
-  expect(result.schemaVersion).toBe(10);
+  expect(result.schemaVersion).toBe(11);
   expect(result.samples[1].streams[0].nativeInput).toMatchObject({ requestedFrameRate: 120, captureFrameRate: 30, frameRateAdjustmentFailed: true });
   expect(result.summary.segments[0].warnings).toContain('采集帧率自动调整失败，保留最后确认的运行目标；不代表已恢复用户帧率。');
 });
@@ -709,7 +712,7 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，纹理桥丢帧只取
   report.stop(); await report.save('');
   const text = exportDiagnosticReport.mock.calls[0][0];
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(10);
+  expect(result.schemaVersion).toBe(11);
   expect(result.summary.segments).toHaveLength(1);
   expect(result.samples[0].native).toMatchObject({ helperVersion: '32.2.2', captureBackend: 'obsLibobs' });
   expect(result.samples[0].native.microphoneCapture).toEqual({ sourceState: 1, sourceFrames: 48000, framesReceived: 47040, pushToTalk: true, transmissionAllowed: false });

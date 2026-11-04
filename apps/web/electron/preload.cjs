@@ -51,6 +51,8 @@ contextBridge.exposeInMainWorld('lycanVoiceOverlay', {
 let nativeVideoCanvas;
 let nativeVideoContext;
 let nativeVideoCanvasSessionId;
+let stoppedNativeVideoSessionId;
+let suspendedNativeVideoSessionId;
 
 function releaseNativeVideoCanvas(sessionId) {
   if (!nativeVideoCanvas || nativeVideoCanvasSessionId !== sessionId) return;
@@ -59,6 +61,12 @@ function releaseNativeVideoCanvas(sessionId) {
   nativeVideoCanvas = undefined;
   nativeVideoContext = undefined;
   nativeVideoCanvasSessionId = undefined;
+}
+
+function stopReceivingNativeVideo(sessionId) {
+  if (typeof sessionId !== 'string' || !sessionId) return;
+  stoppedNativeVideoSessionId = sessionId;
+  releaseNativeVideoCanvas(sessionId);
 }
 
 function copyNativeVideoFrame(frame, sessionId) {
@@ -84,7 +92,8 @@ sharedTexture?.setSharedTextureReceiver(async ({ importedSharedTexture }, token,
   let frame;
   let copiedFrame;
   try {
-    if (token !== 'native-screen-frame' || typeof sessionId !== 'string' || !sessionId) return;
+    if (token !== 'native-screen-frame' || typeof sessionId !== 'string' || !sessionId
+        || sessionId === stoppedNativeVideoSessionId || sessionId === suspendedNativeVideoSessionId) return;
     frame = importedSharedTexture.getVideoFrame();
     copiedFrame = copyNativeVideoFrame(frame, sessionId);
     window.postMessage({ type: 'lycan-native-screen-frame', sessionId, frame: copiedFrame }, '*', [copiedFrame]);
@@ -101,9 +110,13 @@ sharedTexture?.setSharedTextureReceiver(async ({ importedSharedTexture }, token,
   }
 });
 
-ipcRenderer.on('media:native-video-error', (_event, failure) => releaseNativeVideoCanvas(failure?.sessionId));
+ipcRenderer.on('media:native-video-error', (_event, failure) => stopReceivingNativeVideo(failure?.sessionId));
+ipcRenderer.on('media:native-video-stopping', (_event, status) => stopReceivingNativeVideo(status?.sessionId));
 ipcRenderer.on('media:native-video-suspended', (_event, status) => {
-  if (status?.suspended) releaseNativeVideoCanvas(status.sessionId);
+  if (status?.suspended) {
+    suspendedNativeVideoSessionId = status.sessionId;
+    releaseNativeVideoCanvas(status.sessionId);
+  } else if (suspendedNativeVideoSessionId === status?.sessionId) suspendedNativeVideoSessionId = undefined;
 });
 
 // 只暴露固定操作，不向页面开放 Node.js 或任意 IPC 通道。
@@ -197,15 +210,15 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   startNativeVideo: (sourceId, maxFps, settings, resolution) => ipcRenderer.invoke('media:native-video:start', sourceId, maxFps, settings, resolution),
   findNativeGameSource: (id) => ipcRenderer.invoke('media:game-follow:source', id),
   switchNativeGameVideo: (id, sourceId, maxFps, settings, resolution) => {
-    releaseNativeVideoCanvas(nativeVideoCanvasSessionId);
+    stopReceivingNativeVideo(nativeVideoCanvasSessionId);
     return ipcRenderer.invoke('media:game-follow:switch', id, sourceId, maxFps, settings, resolution);
   },
   endNativeGameFollow: (id) => ipcRenderer.invoke('media:game-follow:end', id),
   recordScreenShareStartupTiming: (sessionId, stage, durationMs, audioTiming) =>
     ipcRenderer.send('media:screen-share-startup', sessionId, stage, durationMs, audioTiming),
   stopNativeVideo: async (sessionId) => {
-    // 停止等待前释放画布；清理期间迟到的旧帧也不能留下缓存或影响新会话。
-    releaseNativeVideoCanvas(sessionId);
+    // 等待主进程清理时，迟到帧只能归还纹理，不能重建持有最后一帧的画布。
+    stopReceivingNativeVideo(sessionId);
     try { return await ipcRenderer.invoke('media:native-video:stop', sessionId); }
     finally { releaseNativeVideoCanvas(sessionId); }
   },

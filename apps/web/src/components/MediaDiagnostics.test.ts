@@ -52,12 +52,14 @@ it('面板展示未知和false编码线索，网络与缓冲值不标成端到�
     ['rr', { id: 'rr', type: 'remote-inbound-rtp', localId: 'video', timestamp: 900, roundTripTime: 0.045, fractionLost: 0.02 }],
   ]) as RTCStatsReport;
   const layers = readVideoLayers(stats, 'outbound-rtp', new Map(), 'track');
+  layers[0].transportRoundTripMs = 6;
   const snapshot = { streams: [{ identity: 'local', name: '自己', direction: '发送', layers,
     sourceFrames: null, sourceFps: null, sourceIntervalMs: null, playbackFps: null,
     subscription: { subscribed: null, enabled: null, muted: false } }], failures: [] } as unknown as MediaDiagnosticsSnapshot;
   const html = await renderToString(createSSRApp(MediaDiagnostics, { room: {} as Room, statistics: snapshot }));
   expect(html).toContain('节能编码标志 否');
-  expect(html).toContain('到 SFU RTT 45 ms');
+  expect(html).toContain('RTCP 报告 RTT 45 ms');
+  expect(html).toContain('到 SFU 连接 RTT 6 ms');
   expect(html).toContain('SFU 报告丢包 2%');
   expect(html).toContain('不是端到端画面延迟');
   layers[0].powerEfficientEncoder = null;

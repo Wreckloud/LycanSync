@@ -109,21 +109,43 @@ test('停止在异步等待前释放画布，迟到停止不清空新会话，�
   assert.equal(f.canvases[1].width, 1920);
   f.listeners.get('media:native-video-suspended')({}, { sessionId: 'session-b', suspended: true });
   assert.equal(f.canvases[1].width, 0);
+  const paused = await f.deliver('session-b');
+  assert.equal(paused.imported.reads, 0);
+  assert.equal(paused.imported.releases, 1);
+  f.listeners.get('media:native-video-suspended')({}, { sessionId: 'session-b', suspended: false });
   await f.deliver('session-b');
   f.listeners.get('media:native-video-error')({}, { sessionId: 'session-b' });
   assert.equal(f.canvases[2].width, 0);
 });
 
-test('停止失败仍释放画布且不伪报成功，停止期间的迟到帧最终也被清理', async () => {
+test('主进程发起的停止也立即禁收旧帧，新会话正常交付', async () => {
+  const f = fixture();
+  await f.deliver();
+  f.listeners.get('media:native-video-stopping')({}, { sessionId: 'session-a' });
+  const late = await f.deliver('session-a');
+  assert.equal(late.imported.reads, 0);
+  assert.equal(late.imported.releases, 1);
+  assert.equal(f.canvases[0].width, 0);
+  await f.deliver('session-b');
+  assert.equal(f.canvases[1].width, 1920);
+  assert.equal(f.posts.length, 2);
+});
+
+test('停止失败仍释放画布且不伪报成功，迟到帧在等待期间及失败后都不能重建画布', async () => {
   const f = fixture();
   await f.deliver();
   let rejectStop;
   f.options.invoke = () => new Promise((_resolve, reject) => { rejectStop = reject; });
   const stopped = f.bridge.stopNativeVideo('session-a');
   const rejected = assert.rejects(stopped, /controlledStopFailure/);
-  await f.deliver('session-a');
+  const late = await f.deliver('session-a');
+  assert.equal(late.imported.reads, 0);
+  assert.equal(late.imported.releases, 1);
+  assert.equal(f.canvases.length, 1);
   rejectStop(new Error('controlledStopFailure'));
   await rejected;
   assert.equal(f.canvases[0].width, 0);
-  assert.equal(f.canvases[1].width, 0);
+  const afterFailure = await f.deliver('session-a');
+  assert.equal(afterFailure.imported.reads, 0);
+  assert.equal(f.canvases.length, 1);
 });

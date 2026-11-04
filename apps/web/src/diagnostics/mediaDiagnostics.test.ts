@@ -90,18 +90,20 @@ function setup() {
 it('复用当前轨道统计补充网络反馈，不增加采样、连接或媒体采集', async () => {
   const { room, local, track, bridge } = setup();
   const stats = new Map([
-    ['video', { id: 'video', type: 'outbound-rtp', kind: 'video', timestamp: 1000,
+    ['video', { id: 'video', type: 'outbound-rtp', kind: 'video', timestamp: 1000, transportId: 'transport',
       powerEfficientEncoder: false, encoderImplementation: 'OpenH264' }],
+    ['transport', { id: 'transport', type: 'transport', selectedCandidatePairId: 'pair' }],
+    ['pair', { id: 'pair', type: 'candidate-pair', state: 'succeeded', responsesReceived: 2, currentRoundTripTime: 0.004 }],
     ['rr', { id: 'rr', type: 'remote-inbound-rtp', localId: 'video', timestamp: 950,
       roundTripTime: 0.05, fractionLost: 0.01 }],
   ] as [string, Record<string, unknown>][]);
   track.getRTCStatsReport.mockResolvedValue(stats);
   const sampler = createMediaDiagnosticsSampler();
   const first = await sampler.collect(room, [local] as unknown as Participant[]);
-  expect(first.streams[0].layers[0]).toMatchObject({ roundTripMs: 50, receiverReportedLossPercent: 1,
+  expect(first.streams[0].layers[0]).toMatchObject({ roundTripMs: 50, transportRoundTripMs: 4, receiverReportedLossPercent: 1,
     feedbackAgeMs: 50, powerEfficientEncoder: false });
   const next = await sampler.collect(room, [local] as unknown as Participant[]);
-  expect(next.streams[0].layers[0]).toMatchObject({ roundTripMs: null, receiverReportedLossPercent: null });
+  expect(next.streams[0].layers[0]).toMatchObject({ roundTripMs: null, transportRoundTripMs: null, receiverReportedLossPercent: null });
   expect(track.getRTCStatsReport).toHaveBeenCalledTimes(2);
   expect(bridge.getNativeMediaDiagnostics).toHaveBeenCalledTimes(2);
 });

@@ -57,6 +57,7 @@ test('纹理交付、停止和迟到结果共用一次主进程引用释放', as
       await new Promise((resolve) => setImmediate(resolve));
       sandbox.releaseNativeVideoImports(video);
       assert.equal(releases, 1);
+      assert.equal(video.imported.size, 1, '总释放回调之前必须继续登记未归还纹理，停止不能提前越过等待');
       assert.equal(notifications.length, mode === 'rejected' ? 1 : 0);
       assert.equal(failures.length, notifications.length);
       // 主进程引用释放不等于消费者已用完，只有 Electron 的总释放回调归还槽位。
