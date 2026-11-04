@@ -1,6 +1,8 @@
 package com.lycansync.api.auth.controller;
 
+import com.lycansync.api.auth.service.QqSiteService;
 import io.swagger.v3.oas.annotations.Hidden;
+import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.CacheControl;
@@ -18,7 +20,10 @@ import jakarta.servlet.http.HttpServletRequest;
  */
 @Hidden
 @RestController
+@RequiredArgsConstructor
 public class QqSiteController {
+    private final QqSiteService site;
+
     @GetMapping({"/", "/account", "/privacy", "/terms", "/qq/result", "/site.css", "/site.js", "/qq-login.png", "/site-icon.png"})
     public ResponseEntity<Resource> page(HttpServletRequest request) {
         String path = request.getRequestURI();
@@ -38,6 +43,7 @@ public class QqSiteController {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(type)
                 .header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
                 .header("Referrer-Policy", "no-referrer").header("X-Content-Type-Options", "nosniff")
-                .body(new ClassPathResource("site-icon.png".equals(file) ? "account/default.png" : "qq-site/" + file));
+                .body("index.html".equals(file) ? site.index()
+                        : new ClassPathResource("site-icon.png".equals(file) ? "account/default.png" : "qq-site/" + file));
     }
 }

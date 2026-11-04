@@ -7,7 +7,7 @@ export const SETTINGS_SECTIONS = [
   { id: 'overlay', title: '屏幕覆盖' },
   { id: 'client', title: '客户端' },
   { id: 'about', title: '关于与诊断' },
-  { id: 'members', title: '邀请与成员' },
+  { id: 'members', title: '服主管理' },
 ] as const;
 
 export type SettingsSectionId = typeof SETTINGS_SECTIONS[number]['id'];

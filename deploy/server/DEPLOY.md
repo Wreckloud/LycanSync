@@ -48,7 +48,7 @@ docker compose exec -T api cat /var/bootstrap/admin-activation.txt
 
 复制输出链接到浏览器，下载应用后返回原页面点击“打开应用”，确认成为服主。激活链接 12 小时有效；未激活时重启 API 会生成新链接，旧链接失效。激活文件在私有 `account-bootstrap` 卷中，不能映射到公开网站；输出不要分享给成员。激活后的重启会删除旧文件。
 
-在服主设置“邀请与成员”中生成每人一条的 3 天邀请，或为原成员生成 12 小时恢复链接。成功恢复后旧会话失效，原资料和权限保留；服主自身可使用独立恢复密码从欢迎页“群组恢复”重新登录。首次激活需设置恢复密码；已有服主升级后必须先到账号设置中设置，升级不会替其生成密码。本机和虚拟机同样使用邀请登录，运行环境不支持 `ACCOUNT_MODE=test`。QQ 登录默认关闭；启用时填写 QQ_ENABLED、QQ_APP_ID、QQ_APP_KEY、QQ_CALLBACK_URL，回调使用同源 HTTPS 的 /api/auth/qq/callback。QQ 首次登录创建普通账号且不自动入群；老账号在设置中主动绑定后保留原资料和权限。独立官网部署见 ../qq-site/DEPLOY.md，平台未审核不代表所有 QQ 都能测试登录。
+在服主设置“服主管理”中生成每人一条的 3 天邀请，或为原成员生成 12 小时恢复链接。成功恢复后旧会话失效，原资料和权限保留；服主自身可使用独立恢复密码从欢迎页“群组恢复”重新登录。首次激活需设置恢复密码；已有服主升级后必须先到账号设置中设置，升级不会替其生成密码。本机和虚拟机同样使用邀请登录，运行环境不支持 `ACCOUNT_MODE=test`。QQ 登录默认关闭；启用时填写 QQ_ENABLED、QQ_APP_ID、QQ_APP_KEY、QQ_CALLBACK_URL，回调使用同源 HTTPS 的 /api/auth/qq/callback。QQ 首次登录创建普通账号且不自动入群；老账号在设置中主动绑定后保留原资料和权限。独立官网部署见 ../qq-site/DEPLOY.md，平台未审核不代表所有 QQ 都能测试登录。
 
 `downloads/LycanSync-setup.exe` 是网页使用的安装程序别名；版本化的安装包、同名 `.blockmap` 和 `latest.yml` 供自动更新使用，由 Caddy 提供，API、PostgreSQL 仍不直接暴露。`package-server.ps1` 检查清单版本、名称及 SHA-512 与安装包一致，再按同批 `LycanSync-版本-release.json` 核对全部分发文件的大小与 SHA-256；复制后复核，拒绝缺失、损坏或版本不符的材料。首次接入自动更新需手动安装 0.0.4 或以后版本。
 

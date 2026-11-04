@@ -59,6 +59,13 @@ test('对应源码缺失或损坏时撤销旧资格，不写成可发布', conte
   assert.equal(f.current().redistributionReady, false);
 });
 
+test('源码目录内出现私有配置时拒绝归档，即使文件被 Git 忽略', context => {
+  const f = fixture(context);
+  f.write(`${f.native}/.env.local`, 'PRIVATE_FIXTURE=not-for-distribution');
+  assert.throws(() => prepareSourceBundle(f.root), /含私有配置或运行数据/);
+  assert.equal(f.current().redistributionReady, false);
+});
+
 test('构建后源码或运行文件变化时拒绝错配源码包', context => {
   const f = fixture(context);
   f.write(`${f.native}/src/fixture.cpp`, 'changed after build');

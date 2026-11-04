@@ -51,6 +51,8 @@ lycansync:
     public-url: ${ACCOUNT_PUBLIC_URL:}
     server-name: ${ACCOUNT_SERVER_NAME:LycanSync}
     bootstrap-file: ${ACCOUNT_BOOTSTRAP_FILE:./var/bootstrap/admin-activation.txt}
+    site-icp-number: ${SITE_ICP_NUMBER:}
+    site-contact-url: ${SITE_CONTACT_URL:}
   chat:
     files:
       storage-directory: ${CHAT_FILE_STORAGE_DIR:./var/chat-files}

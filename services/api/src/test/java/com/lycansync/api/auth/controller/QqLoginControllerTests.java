@@ -1,9 +1,11 @@
 package com.lycansync.api.auth.controller;
 
 import com.lycansync.api.auth.config.AuthConfiguration;
+import com.lycansync.api.auth.config.AccountAccessProperties;
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.service.AuthService;
 import com.lycansync.api.auth.service.QqLoginService;
+import com.lycansync.api.auth.service.QqSiteService;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,7 +36,7 @@ import static org.hamcrest.Matchers.containsString;
  * @since 2026-11-03
  */
 @WebMvcTest({QqLoginController.class, QqSiteController.class})
-@Import(AuthConfiguration.class)
+@Import({AuthConfiguration.class, AccountAccessProperties.class, QqSiteService.class})
 class QqLoginControllerTests {
     @Autowired private MockMvc mvc;
     @MockitoBean private QqLoginService login;

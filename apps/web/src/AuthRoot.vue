@@ -429,6 +429,7 @@ onMounted(async () => {
             </div>
             <div class="auth-guest">
               <p v-if="initialized === false">当前群组尚未完成服主认证，请等待服主完成首次设置。</p>
+              <p v-else-if="initialized === true && qqAvailable">通过 QQ 登录；加入群聊仍需服主邀请。已有账号请先登录，再在账号设置中绑定 QQ。</p>
               <p v-else-if="initialized === true">使用服主分享的邀请链接即可加入。更换设备或需要重新登录时，请向服主获取新的恢复链接。</p>
               <p v-else>暂时无法确认服主认证状态，请重新连接。</p>
               <p>服主首次设置时，请设置恢复密码，以便在无法登录时恢复账号。</p>

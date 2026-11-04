@@ -111,6 +111,11 @@ function prepareSourceBundle(projectRoot) {
     function copySources(directory) {
       for (const entry of readdirSync(directory, { withFileTypes: true })) {
         const file = join(directory, entry.name);
+        // Git 忽略规则不会自动约束文件系统归档；发现私有配置时拒绝发布，而不是带入源码包。
+        if (/^\.env(?:\.|$)|\.(?:pem|key|p12|jks)$|\.local\.(?:json|ya?ml)$/i.test(entry.name)
+            || entry.isDirectory() && ['data', 'logs', 'secrets', 'node_modules', 'target', '.git'].includes(entry.name)) {
+          throw new Error(`OBS 源码目录含私有配置或运行数据，拒绝归档：${relative(sourceRoot, file)}`);
+        }
         if (entry.isDirectory()) copySources(file);
         else if (entry.isFile()) {
           const target = join(bundleRoot, 'native/obs-capture-host', relative(sourceRoot, file));

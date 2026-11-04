@@ -19,4 +19,6 @@ public class AccountAccessProperties {
     private String publicUrl = "";
     private String serverName = "LycanSync";
     private String bootstrapFile = "./var/bootstrap/admin-activation.txt";
+    private String siteIcpNumber = "";
+    private String siteContactUrl = "";
 }

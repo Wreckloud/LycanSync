@@ -11,4 +11,4 @@ lycansync:
 
   account:
     mode: invite
-    public-url: ${ACCOUNT_PUBLIC_URL:https://192.168.150.108}
+    public-url: ${ACCOUNT_PUBLIC_URL:http://127.0.0.1:18080}

@@ -28,6 +28,7 @@ test-results/
 **/application-local.yaml
 docker-compose.override.yml
 secrets/
+apps/web/electron/server-config.local.json
 *.jks
 *.p12
 *.pem

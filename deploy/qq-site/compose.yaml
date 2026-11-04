@@ -28,14 +28,16 @@ services:
       DB_USERNAME: lycansync
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请填写私有 .env}
       ACCOUNT_MODE: invite
-      ACCOUNT_PUBLIC_URL: https://lycansync.wreckloud.com
+      ACCOUNT_PUBLIC_URL: https://${SERVER_DOMAIN:?请填写私有 .env 中的 SERVER_DOMAIN}
       ACCOUNT_SERVER_NAME: LycanSync
       ACCOUNT_BOOTSTRAP_FILE: /var/bootstrap/admin-activation.txt
       LYCANSYNC_ACCOUNT_TRUST_PROXY: "true"
       QQ_ENABLED: "true"
       QQ_APP_ID: ${QQ_APP_ID:?请填写私有 .env}
       QQ_APP_KEY: ${QQ_APP_KEY:?请填写私有 .env}
-      QQ_CALLBACK_URL: https://lycansync.wreckloud.com/api/auth/qq/callback
+      QQ_CALLBACK_URL: https://${SERVER_DOMAIN:?请填写私有 .env 中的 SERVER_DOMAIN}/api/auth/qq/callback
+      SITE_ICP_NUMBER: ${SITE_ICP_NUMBER:-}
+      SITE_CONTACT_URL: ${SITE_CONTACT_URL:-}
       OPENAPI_ENABLED: "false"
       SWAGGER_UI_ENABLED: "false"
       JAVA_TOOL_OPTIONS: -Xms64m -Xmx256m -XX:MaxMetaspaceSize=160m -XX:ActiveProcessorCount=2

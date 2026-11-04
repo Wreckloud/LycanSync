@@ -7,8 +7,23 @@ const { runInNewContext } = require('node:vm');
 const { serverUrl, loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
 const { parseAccessLink, parseManualAccessLink } = require('./access-links.cjs');
 
+test('私有开发默认地址不会进入安装版，并且不覆盖用户已选地址', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'lycan-private-server-'));
+  try {
+    const userDirectory = join(directory, 'data');
+    writeFileSync(join(directory, 'server-config.json'), JSON.stringify({ apiUrl: 'https://default.example' }));
+    writeFileSync(join(directory, 'server-config.local.json'), JSON.stringify({ apiUrl: 'https://private.example' }));
+    const options = { userDirectory, resourcesDirectory: directory, packaged: false };
+    assert.equal(loadServerSettings(options), 'https://private.example');
+    assert.equal(loadServerSettings({ ...options, packaged: true }), 'https://default.example');
+    await saveServerSettings(userDirectory, 'https://selected.example');
+    assert.equal(loadServerSettings(options), 'https://selected.example');
+    assert.equal(loadServerSettings({ ...options, developmentUrl: 'https://explicit.example' }), 'https://explicit.example');
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test('服务器地址拒绝外部 HTTP、凭据、路径和非法输入', () => {
-  for (const url of ['http://192.168.150.108', 'https://user:pass@example.com', 'https://example.com/api', 'https://example.com/?key=1', '', null]) {
+  for (const url of ['http://192.0.2.10', 'https://user:pass@example.com', 'https://example.com/api', 'https://example.com/?key=1', '', null]) {
     assert.throws(() => serverUrl(url));
   }
   assert.equal(serverUrl(' https://example.com/ '), 'https://example.com');
@@ -22,13 +37,13 @@ test('用户服务器地址在安装版和开发版一致保留，显式测试�
     writeFileSync(join(directory, 'server-config.json'), JSON.stringify({ apiUrl: 'https://default.example' }));
     const options = { packaged: true, userDirectory, resourcesDirectory: directory };
     assert.equal(loadServerSettings(options), 'https://default.example');
-    await saveServerSettings(userDirectory, 'https://192.168.150.108/');
+    await saveServerSettings(userDirectory, 'https://192.0.2.10/');
     writeFileSync(join(directory, 'server-config.json'), JSON.stringify({ apiUrl: 'https://updated.example' }));
-    assert.equal(loadServerSettings(options), 'https://192.168.150.108');
-    assert.equal(loadServerSettings({ ...options, packaged: false }), 'https://192.168.150.108');
+    assert.equal(loadServerSettings(options), 'https://192.0.2.10');
+    assert.equal(loadServerSettings({ ...options, packaged: false }), 'https://192.0.2.10');
     assert.equal(loadServerSettings({ ...options, packaged: false, developmentUrl: 'http://127.0.0.1:18080' }), 'http://127.0.0.1:18080');
     await assert.rejects(saveServerSettings(userDirectory, 'http://external.example'));
-    assert.equal(loadServerSettings(options), 'https://192.168.150.108');
+    assert.equal(loadServerSettings(options), 'https://192.0.2.10');
     writeFileSync(join(userDirectory, 'server-config.json'), '{broken');
     assert.throws(() => loadServerSettings(options));
   } finally { rmSync(directory, { recursive: true, force: true }); }

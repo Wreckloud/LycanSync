@@ -1,12 +1,12 @@
 # QQ 官网与账号入口
 
-此部署只提供官网、QQ 授权、账号及资料接口，不启动媒体服务器，也不迁移局域网测试库。适用于现有 Nginx 公网服务器，独立使用 `lycansync.wreckloud.com` 和本机 `127.0.0.1:18081`，不替换主域名网站。
+此部署只提供官网、QQ 授权、账号及资料接口，不启动媒体服务器，也不迁移局域网测试库。适用于现有 Nginx 公网服务器，独立使用 `voice.example.com` 和本机 `127.0.0.1:18081`，不替换主域名网站。
 
-1. 在私有部署目录放置本目录文件及编译后的 `api.jar`。`.env` 只填写 `POSTGRES_PASSWORD`、`QQ_APP_ID`、`QQ_APP_KEY`，权限设为 `600`；不要提交或显示它的内容。
+1. 在私有部署目录放置本目录文件及编译后的 `api.jar`。从 `.env.example` 复制私有 `.env`，填写 `SERVER_DOMAIN`、`POSTGRES_PASSWORD`、`QQ_APP_ID`、`QQ_APP_KEY`；备案号和维护者联系地址分别通过 `SITE_ICP_NUMBER`、`SITE_CONTACT_URL` 设置，权限设为 `600`；不要提交或显示它的内容。
 2. `docker compose up -d --build`。数据库不对外开放；首次启动自动执行 Flyway 迁移，包括 V18 QQ 关联及 V19 账号生命周期字段。已有部署升级前先备份数据库。确认 `curl --fail http://127.0.0.1:18081/actuator/health` 成功。
-3. 管理员审阅并执行 `sudo sh install-nginx.sh`。脚本只安装独立 Nginx 站点、为子域名申请证书和平滑重载；证书申请失败不会暴露 HTTP 登录入口。使用服务器现有 Certbot 账号，续期成功后校验并重载 Nginx。
-4. 沿用首次管理员激活流程，私有激活文件位于 API 容器 `/var/bootstrap/admin-activation.txt`。首次激活需在客户端设置恢复密码；已有服主升级后自行在账号设置中配置，不自动生成密码。不能将激活链接放入官网或日志，也不能将首个 QQ 登录者直接升级为服主。
-5. 在 QQ 互联修改网站地址为 `https://lycansync.wreckloud.com/`，网站回调为 `https://lycansync.wreckloud.com/api/auth/qq/callback`。使用开发者／调试 QQ 完整验证登录、资料确认和退出，再由开发者手动提交审核。
+3. 管理员审阅并执行 `sudo sh install-nginx.sh voice.example.com`。脚本只安装独立 Nginx 站点、为子域名申请证书和平滑重载；证书申请失败不会暴露 HTTP 登录入口。使用服务器现有 Certbot 账号，续期成功后校验并重载 Nginx。
+4. 沿用首次管理员激活流程，私有激活文件位于 API 容器 `/var/bootstrap/admin-activation.txt`。首次激活需在客户端设置恢复密码；已有服主升级后自行在服主管理中配置，不自动生成密码。不能将激活链接放入官网或日志，也不能将首个 QQ 登录者直接升级为服主。
+5. 在 QQ 互联修改网站地址为 `https://voice.example.com/`，网站回调为 `https://voice.example.com/api/auth/qq/callback`。使用开发者／调试 QQ 完整验证登录、资料确认和退出，再由开发者手动提交审核。
 
 未审核应用需核对基本信息中的调试 QQ。平台在授权页返回 `100008` 时，请核对应用编号及平台状态；服务端不能绕过腾讯的审核／调试权限。申请已进入审核、不能修改时，保留当前申请并等待结果，不能把接口和模拟验证视为真实 QQ 授权通过。
 

@@ -7,7 +7,9 @@ import { resolve } from 'node:path';
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 
 export async function startEncodingBenchmarkServer() {
-  const host = process.env.LYCANSYNC_BENCHMARK_SSH_HOST ?? 'root@192.168.150.108';
+  const host = process.env.LYCANSYNC_BENCHMARK_SSH_HOST;
+  const livekitUrl = process.env.LYCANSYNC_BENCHMARK_LIVEKIT_URL;
+  if (!host || !livekitUrl) throw new Error('请指定 LYCANSYNC_BENCHMARK_SSH_HOST 和 LYCANSYNC_BENCHMARK_LIVEKIT_URL');
   // 服务密钥只用于签发本次房间的短时令牌，不写测试产物或输出日志。
   const settings = Object.fromEntries(execFileSync('ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=6', host,
     'cat /opt/lycansync-invite/.env'], { encoding: 'utf8', timeout: 10_000 }).split(/\r?\n/)
@@ -18,7 +20,6 @@ export async function startEncodingBenchmarkServer() {
   const key = settings.LIVEKIT_API_KEY;
   const secret = settings.LIVEKIT_API_SECRET;
   if (!key || !secret) throw new Error('测试服务器缺少 LiveKit 配置');
-  const livekitUrl = process.env.LYCANSYNC_BENCHMARK_LIVEKIT_URL ?? 'wss://192.168.150.108:8443';
   const ca = readFileSync(resolve(process.env.LYCANSYNC_BENCHMARK_CA_FILE ?? '../../release/server/lycansync-current-local-ca.crt'));
   const room = 'lycansync-encoding-benchmark-' + randomUUID();
   function token(video: object, identity: string) {

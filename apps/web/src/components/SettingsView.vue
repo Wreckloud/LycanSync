@@ -13,7 +13,7 @@ import type { useActivityMappings } from '../settings/useActivityMappings';
 import type { useVoiceOverlay } from '../overlay/useVoiceOverlay';
 import AboutSettings from './settings/AboutSettings.vue';
 import AccountSettings from './settings/AccountSettings.vue';
-import MemberAccessSettings from './settings/MemberAccessSettings.vue';
+import OwnerSettings from './settings/OwnerSettings.vue';
 import ActivitySettings from './settings/ActivitySettings.vue';
 import AudioSettings from './settings/AudioSettings.vue';
 import ClientSettings from './settings/ClientSettings.vue';
@@ -124,7 +124,7 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
         </div>
       </header>
       <div class="settings-content">
-        <MemberAccessSettings v-if="user.administrator && activeSection === 'members'" :active="true" />
+        <OwnerSettings v-if="user.administrator && activeSection === 'members'" :active="true" :leaving="leaving" />
         <div v-show="activeSection === 'account'" class="settings-account-page">
           <ProfileSettings ref="profileSettings" :user="user" :save-profile="saveProfile" />
           <ActivitySettings :user="profileSettings?.preview ?? user" :status="presenceStatus" :desktop="desktop" :activity="activity" :show-activity="showActivity" :show-last-online="showLastOnline"
