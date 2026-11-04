@@ -54,6 +54,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [IO.Compression.ZipFile]::OpenRead($archive)
 try {
     $names = @($zip.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+    if ('maintenance/maintain-releases.py' -cnotin $names) { throw '部署 ZIP 缺少发布维护工具' }
     if ($zip.Entries | Where-Object { $_.FullName.Contains('\') }) { throw 'ZIP 含非 Linux 目录分隔符' }
     foreach ($name in @($files + $recordName + 'LycanSync-setup.exe' + 'LycanSync-setup.exe.blockmap')) {
         $entry = $zip.Entries | Where-Object { $_.FullName.Replace('\', '/') -ceq "downloads/$name" }

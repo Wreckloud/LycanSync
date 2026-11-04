@@ -61,24 +61,54 @@ docker compose exec -T api cat /var/bootstrap/admin-activation.txt
 例如在服务器目录已收到并核对同批产物后（将 `client_version` 换成实际版本；新版本下载路径不得已存在）：
 
 ```bash
-client_version=0.2.5
+set -euo pipefail
+client_version=0.3.11
+stage="incoming/$client_version"
 installer="LycanSync-${client_version}-windows-x64-setup.exe"
-cp "incoming/$installer" downloads/
-cp "incoming/$installer.blockmap" downloads/
-cp "incoming/LycanSync-${client_version}-obs-source.tar.gz" downloads/
-cp "incoming/LycanSync-${client_version}-release.json" downloads/
-cp incoming/THIRD-PARTY-NOTICES.txt "downloads/LycanSync-${client_version}-THIRD-PARTY-NOTICES.txt"
-cp "incoming/$installer" downloads/LycanSync-setup.exe.next
+# 上传前确认可用空间；同批材料放在 stage，校验后再执行以下步骤。
+df -h .
+mkdir -p "releases/$client_version"
+cp downloads/latest.yml "releases/$client_version/previous-latest.yml"
+ln "$stage/$installer" downloads/
+ln "$stage/$installer.blockmap" downloads/
+ln "$stage/LycanSync-${client_version}-obs-source.tar.gz" downloads/
+ln "$stage/LycanSync-${client_version}-release.json" downloads/
+ln "$stage/LycanSync-${client_version}-THIRD-PARTY-NOTICES.txt" downloads/
+ln "downloads/$installer" downloads/LycanSync-setup.exe.next
 mv downloads/LycanSync-setup.exe.next downloads/LycanSync-setup.exe
-cp "incoming/$installer.blockmap" downloads/LycanSync-setup.exe.blockmap.next
+ln "downloads/$installer.blockmap" downloads/LycanSync-setup.exe.blockmap.next
 mv downloads/LycanSync-setup.exe.blockmap.next downloads/LycanSync-setup.exe.blockmap
-cp incoming/latest.yml downloads/latest.yml.next
+cp "$stage/latest.yml" "releases/$client_version/latest.yml"
+cp "$stage/latest.yml" downloads/latest.yml.next
 mv downloads/latest.yml.next downloads/latest.yml
 ```
 
+## 发布目录与保留规则
+
+现有部署根目录保留运行入口：api.jar、Dockerfile、Compose、Caddyfile 和 .env。不为整理目录迁移正在使用的挂载点或 Docker 命名卷，也不将私有配置放入下载区。
+
+| 目录 | 用途与规则 |
+| --- | --- |
+| downloads/ | 唯一公开分发目录。保留当前版和上一版安装包、稳定下载别名与最新清单；所有已发布 OBS 对应源码、版本化许可证、分发记录和旧 blockmap 继续保留。更早安装包链接可退役。 |
+| incoming/版本/ | 私有上传暂存，权限 700。核验完成再发布，不把临时目录放在 downloads 下。同一文件系统使用硬链接交付，避免复制一整套载荷；不要原地改写已经发布的文件。 |
+| releases/版本/ | 小型发布记录、清单快照与历史部署脚本。不重复保存下载区已有的大载荷；清理后的历史脚本仅供追溯，不直接重新执行。客户端回退所需完整载荷在 downloads 保留两版。 |
+| backups/ | 数据库、配置和旧后端备份；私有保存，不随客户端清理自动删除。后端回退与客户端保留规则分开。 |
+| maintenance/ | 维护工具与操作报告。清理报告记录相对路径、原因和大小，不记录凭据正文。 |
+
+数据库、聊天文件、账号初始化材料及网关证书继续使用 Compose 声明的命名卷，不在发布清理范围内。旧散落上传目录收进 incoming/legacy；无法确认相同内容的文件保留，不按名字猜测删除。
+
+先预览，再显式执行（部署根目录按实际路径填写）：
+
+```bash
+python3 maintenance/maintain-releases.py /opt/lycansync-invite
+python3 maintenance/maintain-releases.py /opt/lycansync-invite --apply
+```
+
+脚本先核对当前／上一版分发记录、校验和及下载别名，再按大小和 SHA-256 清理已确认的暂存副本与更早安装包；保留全部公开源码和许可证，忽略符号链接。更新清单变化或保留载荷损坏时停止，操作清单留在 maintenance。仅手动执行，不增加定时后台任务。发布与清理应串行进行；日后如使用外部磁盘，硬链接会明确失败，需另行设计交付步骤，不静默复制到占满磁盘。
+
 更新目录默认是打包 API 地址的 `/downloads/`，可用 `LYCANSYNC_PACKAGED_UPDATE_URL` 在构建时指定独立站点。用户切换业务服务器不改变更新目录；不要从用户填写的服务器获取并执行安装包。内网更新同样要求信任自己的测试 CA，不禁用 TLS 校验。SHA-512 检查用于发现文件损坏，不代替发布者签名；当前安装包未签名，正式对外发布前需评估签名并完成 Windows 安装升级验收。
 
-`latest.yml`、`LycanSync-setup.exe` 和对应别名 `.blockmap` 使用 `Cache-Control: no-store`，避免更新入口保留旧内容；版本化文件继续保留，不覆盖、不移除范围下载支持。若前面另有 CDN 或代理，须遵循该响应头；曾配置强制缓存时需先清除已有缓存。
+`latest.yml`、`LycanSync-setup.exe` 和对应别名 `.blockmap` 使用 `Cache-Control: no-store`，避免更新入口保留旧内容；保留期内的版本化文件不覆盖，并继续支持范围下载；源码、许可证和旧 blockmap 按前述规则保留。若前面另有 CDN 或代理，须遵循该响应头；曾配置强制缓存时需先清除已有缓存。
 
 请勿公开密钥、`.env`、激活文件或恢复链接。
 
