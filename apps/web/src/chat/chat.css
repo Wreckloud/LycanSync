@@ -148,6 +148,7 @@
   padding: 10px 0;
   resize: none;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   font-size: var(--chat-font-size);
   line-height: 22px;
   font-family: SimHei, "Microsoft YaHei", sans-serif;
@@ -159,6 +160,12 @@
 }
 
 .composer textarea::placeholder { color: var(--subtle); }
+.composer textarea::-webkit-scrollbar { width: 6px; }
+.composer textarea::-webkit-scrollbar-track { margin-block: 8px; background: transparent; }
+.composer textarea::-webkit-scrollbar-button { display: none; height: 0; }
+.composer textarea::-webkit-scrollbar-thumb { min-height: 24px; border: 1px solid transparent; border-radius: 3px; background: transparent; background-clip: padding-box; }
+.composer textarea:is(:hover, :focus)::-webkit-scrollbar-thumb { background-color: var(--subtle); }
+.composer textarea::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
 .composer-attachments { display: grid; gap: 4px; max-height: 180px; overflow-y: auto; padding-top: 6px; }
 .composer-attachment { display: flex; min-width: 0; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
 .composer-attachment img { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 4px; object-fit: cover; }
