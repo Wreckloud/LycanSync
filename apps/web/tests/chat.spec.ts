@@ -226,8 +226,11 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
   readFailure = false;
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(page.locator('.chat-read-error')).toHaveCount(0);
+  // 消息已返回不代表登录过渡已解除交互限制。
+  await expect(page.locator('.app-content')).not.toHaveAttribute('inert');
   const composer = page.getByLabel('消息内容');
   await composer.fill('晚上见');
+  await expect(composer).toHaveValue('晚上见');
   await composer.press('Enter');
   await expect(page.locator('.chat-message-content').last()).toHaveText('晚上见 https://example.com/docs。');
   await expect(page.locator('.chat-date-divider')).toHaveText(['2026年9月13日', '2026年9月14日']);
@@ -285,6 +288,7 @@ test('触顶只取一页旧消息，与新消息轮询并行，去重并保持�
   await expect(page.locator('[data-message-id="A60"]')).toHaveCount(1);
   await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   await list.evaluate((element) => { element.scrollTop = 0; });
+  await list.dispatchEvent('wheel', { deltaY: -100 });
   await expect.poll(() => beforeCursors).toEqual(['A31']);
   await list.dispatchEvent('wheel', { deltaY: -100 });
   expect(beforeCursors).toEqual(['A31']);
@@ -319,7 +323,7 @@ test('空频道恢复后更新历史分页状态，带游标轮询不清除它',
   let emptyCursorRequests = 0;
   let releaseSecondEmptyPoll!: () => void;
   const secondEmptyPollGate = new Promise<void>((resolve) => { releaseSecondEmptyPoll = resolve; });
-  let afterCursors = 0;
+  const afterCursors: string[] = [];
   const beforeCursors: string[] = [];
   await page.route('**/api/groups**', async (route) => {
     const url = new URL(route.request().url());
@@ -331,9 +335,13 @@ test('空频道恢复后更新历史分页状态，带游标轮询不清除它',
         beforeCursors.push(before);
         return route.fulfill({ json: { messages: older, hasMore: false } });
       }
-      if (url.searchParams.has('afterMessageId')) {
-        afterCursors++;
-        return route.fulfill({ json: { messages: [chatMessage(61)], hasMore: false } });
+      const after = url.searchParams.get('afterMessageId');
+      if (after) {
+        afterCursors.push(after);
+        if (after === 'A60') return route.fulfill({ json: { messages: [chatMessage(61)], hasMore: false } });
+        // 已到最新游标时保持等待，不用重复返回同一消息冒充长轮询。
+        if (after === 'A61') return new Promise<void>(() => {});
+        throw new Error(`意外的消息轮询游标：${after}`);
       }
       emptyCursorRequests++;
       if (emptyCursorRequests === 2) {
@@ -358,7 +366,7 @@ test('空频道恢复后更新历史分页状态，带游标轮询不清除它',
     .setTestVisibility('visible'));
   await expect(page.locator('[data-message-id="A60"]')).toHaveCount(1);
   await expect.poll(() => emptyCursorRequests).toBe(3);
-  await expect.poll(() => afterCursors).toBe(1);
+  await expect.poll(() => afterCursors).toEqual(['A60', 'A61']);
   await expect(page.locator('[data-message-id="A61"]')).toBeVisible();
   const list = page.locator('.message-list');
   await list.evaluate((element) => { element.scrollTop = 0; });
@@ -659,7 +667,9 @@ test('加号多选按原始字节和顺序发送，图片作为文件并只在�
   });
 
   await page.goto('/');
+  await expect(page.locator('.app-content')).not.toHaveAttribute('inert');
   await page.getByLabel('消息内容').fill('附在第一条');
+  await expect(page.getByLabel('消息内容')).toHaveValue('附在第一条');
   await page.locator('input[type="file"]').setInputFiles([
     { name: '原图.png', mimeType: 'image/png', buffer: originalPng },
     { name: '资料.dat', mimeType: 'application/x-custom', buffer: Buffer.from([9, 8, 7]) },
