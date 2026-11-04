@@ -24,6 +24,8 @@ const statusTrigger = ref<HTMLButtonElement | null>(null);
 const statusMenu = ref<HTMLElement | null>(null);
 const statusSide = ref<'left' | 'right'>('left');
 const statusPosition = ref({ left: '0px', top: '0px', visibility: 'hidden' as 'visible' | 'hidden' });
+const pendingPresence = ref<PresenceMode | null>(null);
+let statusPointer: { id: number; anchor: HTMLButtonElement } | undefined;
 let closeStatusTimer: ReturnType<typeof setTimeout> | undefined;
 let focusStatusOnOpen = false;
 let positionGeneration = 0;
@@ -47,6 +49,7 @@ function keepStatus() { clearTimeout(closeStatusTimer); }
 
 function closeStatus(restoreFocus = false) {
   clearTimeout(closeStatusTimer);
+  releaseStatusPointer();
   statusExpanded.value = false;
   focusStatusOnOpen = false;
   if (restoreFocus) statusTrigger.value?.focus();
@@ -54,6 +57,7 @@ function closeStatus(restoreFocus = false) {
 
 function leaveStatus() {
   clearTimeout(closeStatusTimer);
+  if (statusPointer) return;
   const focus = statusTrigger.value?.ownerDocument.activeElement ?? null;
   if (statusTrigger.value?.contains(focus) || statusMenu.value?.contains(focus)) return;
   closeStatusTimer = setTimeout(() => closeStatus(), 180);
@@ -91,6 +95,57 @@ function choosePresence(mode: PresenceMode) {
   closeStatus(true);
 }
 
+function releaseStatusPointer() {
+  const pointer = statusPointer;
+  statusPointer = undefined;
+  pendingPresence.value = null;
+  if (!pointer) return;
+  pointer.anchor.ownerDocument.defaultView?.removeEventListener('blur', cancelStatusSelection);
+  if (pointer.anchor.hasPointerCapture(pointer.id)) pointer.anchor.releasePointerCapture(pointer.id);
+}
+
+function cancelStatusSelection() {
+  if (statusPointer) closeStatus(true);
+}
+
+function presenceAtPointer(event: PointerEvent): PresenceMode | null {
+  const button = statusMenu.value?.ownerDocument.elementFromPoint(event.clientX, event.clientY)
+    ?.closest<HTMLButtonElement>('button[data-presence]');
+  if (!button || button.disabled || !statusMenu.value?.contains(button)) return null;
+  return button.dataset.presence === 'online' ? 'online' : 'invisible';
+}
+
+function beginStatusSelection(event: PointerEvent) {
+  if (!event.isPrimary || event.button !== 0) return;
+  event.preventDefault();
+  releaseStatusPointer();
+  openStatus();
+  const anchor = event.currentTarget as HTMLButtonElement;
+  statusPointer = { id: event.pointerId, anchor };
+  anchor.setPointerCapture(event.pointerId);
+  anchor.ownerDocument.defaultView?.addEventListener('blur', cancelStatusSelection);
+}
+
+function moveStatusSelection(event: PointerEvent) {
+  if (statusPointer?.id === event.pointerId) pendingPresence.value = presenceAtPointer(event);
+}
+
+function finishStatusSelection(event: PointerEvent) {
+  if (statusPointer?.id !== event.pointerId) return;
+  // 指针捕获后事件目标仍是入口，用松开位置决定选择，移出选项不改变状态。
+  const mode = presenceAtPointer(event);
+  const overTrigger = statusPointer.anchor.contains(statusPointer.anchor.ownerDocument.elementFromPoint(event.clientX, event.clientY));
+  releaseStatusPointer();
+  if (mode) choosePresence(mode);
+  else if (overTrigger) openStatus(true);
+  else closeStatus(true);
+}
+
+function clickStatus(event: MouseEvent) {
+  // 鼠标已由 pointerup 完成操作；保留键盘和辅助技术的点击入口。
+  if (event.detail === 0) openStatus(true);
+}
+
 watch(() => props.active, active => { if (active === false) menuOpen.value = false; });
 watch(menuOpen, open => { if (!open) closeStatus(); else if (props.presenceError) openStatus(); });
 watch(() => props.presenceError, error => { if (error && menuOpen.value) openStatus(); });
@@ -120,7 +175,7 @@ watch(() => [menuOpen.value, statusExpanded.value, statusTrigger.value, statusMe
     });
     onCleanup(() => { positionGeneration++; stop(); });
   }, { flush: 'post' });
-onScopeDispose(() => clearTimeout(closeStatusTimer));
+onScopeDispose(() => { clearTimeout(closeStatusTimer); releaseStatusPointer(); });
 
 function selectSettings(section: 'account' | 'audio' | 'shortcuts') {
   menuOpen.value = false;
@@ -162,8 +217,9 @@ function logout() {
         <template v-if="presenceMode">
           <button ref="statusTrigger" type="button" class="personal-presence-toggle" :aria-expanded="statusExpanded"
             aria-label="在线状态" aria-controls="personal-presence-options" :aria-busy="presenceSyncing || !presenceReady"
-            @mouseenter="openStatus()" @mouseleave="leaveStatus" @keydown="statusKeydown"
-            @click="openStatus(true)">
+            @mouseenter="keepStatus" @mouseleave="leaveStatus" @keydown="statusKeydown"
+            @pointerdown="beginStatusSelection" @pointermove="moveStatusSelection" @pointerup="finishStatusSelection"
+            @pointercancel="cancelStatusSelection" @lostpointercapture="cancelStatusSelection" @click="clickStatus">
             <span class="personal-presence-dot" :class="presenceMode" aria-hidden="true" />
             <span>{{ presenceMode === 'invisible' ? '隐身' : '在线' }}</span><component :is="statusSide === 'left' ? ChevronLeft : ChevronRight" :size="14" />
           </button>
@@ -178,13 +234,16 @@ function logout() {
     <Teleport to="body">
       <Transition name="personal-presence" @before-enter="($event as HTMLElement).inert = false" @before-leave="($event as HTMLElement).inert = true">
         <div v-if="menuOpen && statusExpanded" id="personal-presence-options" ref="statusMenu" class="personal-presence-panel"
+          :class="{ 'is-left': statusSide === 'left' }"
           role="group" aria-label="在线状态选择" :style="statusPosition" @mouseenter="keepStatus"
           @mouseleave="leaveStatus" @keydown="statusKeydown"
           @focusout="($event.relatedTarget && !statusMenu?.contains($event.relatedTarget as Node) && !statusTrigger?.contains($event.relatedTarget as Node)) && closeStatus()">
-          <button type="button" aria-label="在线" :aria-pressed="presenceReady && presenceMode === 'online'" :disabled="!presenceReady" @click="choosePresence('online')">
+          <button type="button" class="personal-presence-option" data-presence="online" :class="{ 'is-highlighted': pendingPresence === 'online' }"
+            aria-label="在线" :aria-pressed="presenceReady && presenceMode === 'online'" :disabled="!presenceReady" @click="choosePresence('online')">
             <span class="personal-presence-dot online" aria-hidden="true" /><span>在线</span><Check v-if="presenceReady && presenceMode === 'online'" :size="14" />
           </button>
-          <button type="button" aria-label="隐身" :aria-pressed="presenceReady && presenceMode === 'invisible'" :disabled="!presenceReady" @click="choosePresence('invisible')">
+          <button type="button" class="personal-presence-option" data-presence="invisible" :class="{ 'is-highlighted': pendingPresence === 'invisible' }"
+            aria-label="隐身" :aria-pressed="presenceReady && presenceMode === 'invisible'" :disabled="!presenceReady" @click="choosePresence('invisible')">
             <span class="personal-presence-dot invisible" aria-hidden="true" /><span>隐身</span><Check v-if="presenceReady && presenceMode === 'invisible'" :size="14" />
           </button>
           <InlineFeedback v-if="presenceError || !presenceReady || presenceSyncing" class="personal-presence-feedback" :message="presenceError"
@@ -206,14 +265,15 @@ function logout() {
 .personal-menu-session button { color: var(--danger); }
 .personal-presence-dot { flex-shrink: 0; width: 10px; height: 10px; margin: 0 2.5px; border-radius: 50%; background: var(--subtle); }
 .personal-presence-dot.online { background: var(--good); }
+.personal-presence-toggle { touch-action: none; user-select: none; }
 .personal-presence-toggle > svg { margin-left: auto; }
 .personal-presence-panel { position: fixed; z-index: 61; width: min(156px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; padding: 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-raised); }
-.personal-presence-panel button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 6px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 13px; text-align: left; }
-.personal-presence-panel button:hover:not(:disabled) { background: var(--panel-soft); color: var(--text); }
-.personal-presence-panel button > svg { margin-left: auto; }
+.personal-presence-option { display: grid; grid-template-columns: 15px minmax(0, 1fr) 14px; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 6px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 13px; line-height: 20px; text-align: left; user-select: none; }
+.personal-presence-option:hover:not(:disabled), .personal-presence-option.is-highlighted:not(:disabled) { background: var(--panel-soft); color: var(--text); }
 .personal-presence-panel button[aria-pressed='true'] { color: var(--text); }
 .personal-presence-feedback { height: auto; padding: 4px 8px; }
-.personal-presence-enter-active, .personal-presence-leave-active { transition: opacity var(--motion-surface-duration) var(--motion-ease); }
-.personal-presence-enter-from, .personal-presence-leave-to { opacity: 0; }
+.personal-presence-enter-active, .personal-presence-leave-active { transition: opacity var(--motion-surface-duration) var(--motion-ease), transform var(--motion-surface-duration) var(--motion-ease); }
+.personal-presence-enter-from, .personal-presence-leave-to { opacity: 0; transform: translateX(-4px); }
+.personal-presence-panel.is-left:is(.personal-presence-enter-from, .personal-presence-leave-to) { transform: translateX(4px); }
 .personal-presence-leave-active { pointer-events: none; }
 </style>
