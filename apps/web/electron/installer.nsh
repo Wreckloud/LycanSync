@@ -26,24 +26,6 @@
   !macroend
 !endif
 
-!macro LycanRejectProtectedDirectory ROOT
-  GetFullPathName $1 "${ROOT}"
-  StrCpy $1 "$1\"
-  StrLen $2 $1
-  StrCpy $3 $0 $2
-  ${If} $3 == $1
-    MessageBox MB_OK|MB_ICONSTOP "LycanSync 将数据保存在安装目录内，不能安装到 Program Files 或 Windows 等系统目录。请选择当前用户可写的目录，例如 D:\Programs\LycanSync。已有 data 请保留，不要删除。" /SD IDOK
-    Abort
-  ${EndIf}
-!macroend
-
-Function EnsureUserInstallLocation
-  GetFullPathName $0 "$INSTDIR"
-  StrCpy $0 "$0\"
-  !insertmacro LycanRejectProtectedDirectory "$PROGRAMFILES64"
-  !insertmacro LycanRejectProtectedDirectory "$PROGRAMFILES32"
-  !insertmacro LycanRejectProtectedDirectory "$WINDIR"
-FunctionEnd
 
 !macro LycanCheckEntry NAME KIND
   ${If} ${FileExists} "$INSTDIR\${NAME}"
