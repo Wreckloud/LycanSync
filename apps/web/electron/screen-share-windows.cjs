@@ -99,7 +99,7 @@ function createScreenShareWindows() {
       viewers.set(id, entry);
       return { action: 'allow', outlivesOpener: false, overrideBrowserWindowOptions: {
         width: 960, height: 600, minWidth: 320, minHeight: 240,
-        frame: true, show: false, backgroundColor: '#10151a', title: 'LycanSync · 观看共享',
+        frame: true, show: false, backgroundColor: '#10151a', title: 'LycanSync · 观看共享', icon: resolve(__dirname, 'app.ico'),
         autoHideMenuBar: true, alwaysOnTop: false, resizable: true, maximizable: true, minimizable: true,
         // 与主窗口保持同进程安全设置，复用轨道；观看页只直接安装自己的固定窗口桥。
         webPreferences: { preload: resolve(__dirname, 'viewer-preload.cjs'), sandbox: true,

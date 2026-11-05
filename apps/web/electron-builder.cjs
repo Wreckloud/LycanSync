@@ -20,7 +20,7 @@ module.exports = {
     'electron/media-background.cjs',
     'electron/desktop-tray.cjs',
     'electron/login-preferences.cjs',
-    'electron/tray.ico',
+    'electron/app.ico',
     'electron/window-layout.cjs',
     'electron/screen-share-windows.cjs',
     'electron/viewer-preload.cjs',

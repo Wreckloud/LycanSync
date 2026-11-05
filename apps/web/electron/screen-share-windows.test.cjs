@@ -66,6 +66,7 @@ test('仅允许固定观看页和对应匿名窗口名，覆盖安全配置并�
   const first = f.create();
   assert.equal(first.child.visible, false);
   assert.equal(first.options.frame, true);
+  assert.equal(first.options.icon, resolve(__dirname, 'app.ico'));
   assert.equal(first.options.alwaysOnTop, false);
   assert.equal(first.options.parent, undefined);
   assert.equal(first.options.webPreferences.preload, resolve(__dirname, 'viewer-preload.cjs'));

@@ -137,7 +137,7 @@ let resolveUpdateRelease;
 const startupUiTimings = new Set();
 let nativeMediaBridge;
 const desktopTray = createDesktopTray({ Tray, Menu,
-  iconPath: resolve(__dirname, 'tray.ico'), settingsPath: resolve(app.getPath('userData'), 'desktop-settings.json'),
+  iconPath: resolve(__dirname, 'app.ico'), settingsPath: resolve(app.getPath('userData'), 'desktop-settings.json'),
   getWindow: () => mainWindow,
   onQuit: () => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
@@ -1455,6 +1455,7 @@ if (!app.requestSingleInstanceLock()) {
     desktopTray.show();
   });
   app.whenReady().then(() => {
+    if (process.platform === 'win32') app.setAppUserModelId('com.lycansync.desktop');
     void writeMediaDiagnostic({ stage: 'applicationReady', appVersion: app.getVersion(),
       electronVersion: process.versions.electron, platform: process.platform, arch: process.arch,
       osVersion: osRelease(), durationMs: Math.round(performance.now() - diagnosticStartedMonotonicAt) });
@@ -1490,7 +1491,7 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow = new BrowserWindow({
       ...initialWindowBounds(workArea), resizable: true, maximizable: true,
       minWidth: Math.min(920, workArea.width - 32), minHeight: Math.min(640, workArea.height - 32),
-      title: 'LycanSync', frame: false, show: false, backgroundColor: '#10151a',
+      title: 'LycanSync', icon: resolve(__dirname, 'app.ico'), frame: false, show: false, backgroundColor: '#10151a',
       webPreferences: { preload: resolve(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false },
     });
     mainWindow.setMenu(null);

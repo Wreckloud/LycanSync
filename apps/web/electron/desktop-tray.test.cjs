@@ -31,7 +31,7 @@ function fixture(context, saved) {
     setContextMenu(value) { this.menu = value; }
     displayBalloon(value) { calls.push(value); }
   }
-  const options = { Tray, Menu: { buildFromTemplate: menu => menu }, iconPath: resolve(__dirname, 'tray.ico'),
+  const options = { Tray, Menu: { buildFromTemplate: menu => menu }, iconPath: resolve(__dirname, 'app.ico'),
     settingsPath, getWindow: () => window, onQuit: () => calls.push('quit'), platform: 'win32' };
   const manager = createDesktopTray(options);
   return { manager, options, icons, calls, window, settingsPath,
