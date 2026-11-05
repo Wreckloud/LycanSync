@@ -65,7 +65,7 @@ const emit = defineEmits<{ logout: []; dismissUpdateWarning: []; ready: [] }>();
 const accountCache = createAccountCache(props.user.id);
 provide(ACCOUNT_CACHE, accountCache);
 
-const STATUS_LABELS = { idle: '未加入语音', joining: '正在连接', connected: '语音已连接', reconnecting: '正在重连' };
+const STATUS_LABELS = { idle: '未加入语音', joining: '正在连接语音', connected: '语音已连接', reconnecting: '正在重连' };
 const CALLBAR_EXIT_DURATION_MS = 180;
 const GROUP_LIST_REFRESH_INTERVAL_MS = 30_000;
 const ROOM_OCCUPANCY_REFRESH_INTERVAL_MS = 5_000;
@@ -128,9 +128,11 @@ type NativeScreenSourceSelection = { sourceId: string; shareAudio: boolean; qual
 const NATIVE_SOURCE_REFRESH_INTERVAL_MS = 750;
 let nativeSourceChooser: ReturnType<typeof createNativeVideoSourceSelection> | undefined;
 let nativeSourceChooserGeneration = 0;
+let nativeSourceChooserOpenedAt = 0;
+let nativeSourcePreviewReported = false;
 let nativeSourceRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 let nativeSourceRefresh: { promise: Promise<void> } | undefined;
-let nativeThumbnailRefresh: Promise<void> | undefined;
+let nativeThumbnailRefresh: { generation: number; promise: Promise<void> } | undefined;
 const nativeSourceLoading = ref(false);
 const nativeSourceError = ref('');
 const captureSources = computed(() => captureRequest.value?.sources
@@ -152,6 +154,7 @@ async function loadNativeSourceThumbnails(
   generation: number,
   chooser: ReturnType<typeof createNativeVideoSourceSelection>,
 ) {
+  if (nativeThumbnailRefresh && nativeThumbnailRefresh.generation !== generation) await nativeThumbnailRefresh.promise;
   if (!desktop || nativeThumbnailRefresh || document.hidden
       || generation !== nativeSourceChooserGeneration || nativeSourceChooser !== chooser) return;
   const container = captureSourcesElement.value;
@@ -165,23 +168,31 @@ async function loadNativeSourceThumbnails(
   const requested = chooser.sourcesNeedingThumbnails(Date.now(), visibleIds, selectedCaptureSourceId.value);
   if (!requested.length) return;
   const discoveryId = currentNativeDiscoveryId;
-  const promise = desktop.getNativeVideoSourceThumbnails(requested).then((thumbnails) => {
+  const promise = desktop.getNativeVideoSourceThumbnails(requested).then(async (thumbnails) => {
     if (generation !== nativeSourceChooserGeneration || nativeSourceChooser !== chooser
         || currentNativeDiscoveryId !== discoveryId) return;
     chooser.applyThumbnails(requested, thumbnails);
     updateNativeSourceOptions(generation, chooser);
+    if (!nativeSourcePreviewReported && captureSources.value.some((source) => visibleIds.has(source.id) && source.thumbnail)) {
+      nativeSourcePreviewReported = true;
+      await nextTick();
+      if (generation === nativeSourceChooserGeneration && nativeSourceChooser === chooser) {
+        desktop.reportCapturePickerTiming?.('screenPickerPreviewReady', performance.now() - nativeSourceChooserOpenedAt);
+      }
+    }
   }).catch((error) => {
     console.error('共享来源缩略图更新失败', error);
   });
-  nativeThumbnailRefresh = promise;
+  nativeThumbnailRefresh = { generation, promise };
   try { await promise; }
-  finally { if (nativeThumbnailRefresh === promise) nativeThumbnailRefresh = undefined; }
+  finally { if (nativeThumbnailRefresh?.promise === promise) nativeThumbnailRefresh = undefined; }
 }
 
 async function refreshNativeSources(
   generation: number,
   chooser: ReturnType<typeof createNativeVideoSourceSelection>,
 ) {
+  if (nativeSourceRefresh) await nativeSourceRefresh.promise;
   if (!desktop || document.hidden || generation !== nativeSourceChooserGeneration || nativeSourceRefresh) return;
   const promise = (async () => {
     try {
@@ -209,6 +220,9 @@ async function refreshNativeSources(
       nativeSourceLoading.value = false;
       nativeSourceError.value = '';
       await nextTick();
+      if (firstSnapshot && generation === nativeSourceChooserGeneration && nativeSourceChooser === chooser) {
+        desktop?.reportCapturePickerTiming?.('screenPickerSourcesReady', performance.now() - nativeSourceChooserOpenedAt);
+      }
       void loadNativeSourceThumbnails(generation, chooser);
     } catch (error) {
       if (generation !== nativeSourceChooserGeneration || nativeSourceChooser !== chooser
@@ -305,6 +319,8 @@ function requestNativeScreenSource(
   selectCaptureSource(null);
   const chooser = createNativeVideoSourceSelection([]);
   const generation = ++nativeSourceChooserGeneration;
+  nativeSourceChooserOpenedAt = performance.now();
+  nativeSourcePreviewReported = false;
   nativeSourceChooser = chooser;
   nativeSourceLoading.value = true;
   nativeSourceError.value = '';
@@ -1023,6 +1039,8 @@ const callbarGroup = computed(() => joinedGroup.value
   ?? groups.value.find((group) => group.id === joiningGroupId.value)
   ?? groups.value.find((group) => group.id === departingGroupId.value)
   ?? null);
+const callbarStatus = computed(() => callbarLeaving.value ? '正在退出'
+  : STATUS_LABELS[joiningGroupId.value && rtc.status === 'idle' ? 'joining' : rtc.status]);
 const pendingSwitchGroup = computed(() => groups.value.find((group) => group.id === pendingSwitchGroupId.value) ?? null);
 const localParticipant = computed(() => rtc.room?.localParticipant);
 const sharingAudio = computed(() => {
@@ -1474,8 +1492,9 @@ function participantListening(participant: Participant) {
                   <footer class="callbar">
                     <div class="call-state" role="status">
                       <RadioTower v-if="connected || rtc.status === 'reconnecting'" :size="17" /><Headphones v-else :size="17" />
-                      <span><strong>{{ callbarLeaving ? '正在退出' : STATUS_LABELS[rtc.status] }}</strong>
-                        <small>{{ callbarGroup?.name }}{{ joinedGroup && selectedGroupId !== joinedGroup.id && selectedGroup ? ' · 正在浏览 ' + selectedGroup.name : joiningGroupId ? ' · 加入中' : '' }}</small>
+                      <span><strong>{{ callbarStatus }}</strong>
+                        <small v-if="!callbarLeaving && connected && rtc.screenShareStarting">正在启动屏幕共享…</small>
+                        <small v-else>{{ callbarGroup?.name }}{{ joinedGroup && selectedGroupId !== joinedGroup.id && selectedGroup ? ' · 正在浏览 ' + selectedGroup.name : '' }}</small>
                       </span>
                     </div>
                     <IconButton v-if="joinedGroup && selectedGroupId !== joinedGroup.id" label="返回当前通话群组" @click="previewGroup(joinedGroup.id)"><CornerUpLeft :size="17" /></IconButton>

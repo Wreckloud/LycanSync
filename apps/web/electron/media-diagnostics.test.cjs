@@ -344,6 +344,35 @@ test('声音启动只导出固定摘要字段，缺失阶段不补零，不泄�
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test('语音入房摘要校验阶段耗时并保留关麦状态，不记录附加字段', async () => {
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const start = main.indexOf("ipcMain.on('media:voice-join-timing'");
+  const end = main.indexOf("ipcMain.on('window:minimize'", start);
+  const entries = [];
+  let receive;
+  runInNewContext(main.slice(start, end), {
+    closing: false, trustedSender: event => event.trusted,
+    ipcMain: { on: (_channel, listener) => { receive = listener; } },
+    writeMediaDiagnostic: entry => entries.push(entry),
+  });
+  const timing = { durationMs: 901, preflightMs: 20, tokenMs: 111, connectMs: 450,
+    microphoneMs: 305, listeningMs: 37, microphoneEnabled: false };
+  receive({ trusted: false }, timing);
+  receive({ trusted: true }, { ...timing, connectMs: -1 });
+  receive({ trusted: true }, { ...timing, token: 'private-token' });
+  assert.deepEqual(JSON.parse(JSON.stringify(entries)), [{ stage: 'voiceJoinReady', ...timing }]);
+
+  const directory = await mkdtemp(join(tmpdir(), 'lycansync-voice-join-'));
+  try {
+    const path = join(directory, 'voice.log');
+    const time = '2026-11-05T00:00:01.000Z';
+    await writeFile(path, JSON.stringify({ time, ...entries[0], token: 'private-token' }));
+    assert.deepEqual(await readDiagnosticEvents(path, 0, Date.parse(time)), [
+      { time, stage: 'voiceJoinReady', hresults: [], ...timing },
+    ]);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test('故障日志串行写入并轮转，保留最近一份历史', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'lycansync-diagnostics-'));
   try {

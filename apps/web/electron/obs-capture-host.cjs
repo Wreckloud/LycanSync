@@ -315,15 +315,21 @@ class ObsCaptureHostManager {
     }
     if (event.event === 'capturePreparation') {
       if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
+      const stages = { graphicsStarting: 'obsGraphicsStarting', graphicsReady: 'obsGraphicsReady',
+        sourceStarting: 'obsSourceStarting', gameHookAttempt: 'obsGameHookAttempt',
+        gameHookRetry: 'obsGameHookRetry', gameHookSignalled: 'obsGameHookSignalled' };
       if (this.state !== state || event.sessionId !== state.videoSessionId
-          || !['graphicsStarting', 'graphicsReady', 'sourceStarting'].includes(event.stage)) {
+          || !Object.hasOwn(stages, event.stage)
+          || (stages[event.stage].startsWith('obsGameHook') && state.captureKind !== 'game')
+          || (event.durationMs !== undefined && (event.stage !== 'sourceStarting'
+            || !Number.isInteger(event.durationMs) || event.durationMs < 0 || event.durationMs > START_TIMEOUT_MS))) {
         failState(state, new Error('obsCaptureProtocolEventInvalid'));
         return;
       }
       if (state.stopRequested || state.evidenceStages.has(event.stage)) return;
       state.evidenceStages.add(event.stage);
-      this.onCaptureDiagnostic(state, { stage: { graphicsStarting: 'obsGraphicsStarting', graphicsReady: 'obsGraphicsReady',
-        sourceStarting: 'obsSourceStarting' }[event.stage] });
+      this.onCaptureDiagnostic(state, { stage: stages[event.stage],
+        ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}) });
       return;
     }
     if (event.event === 'captureEvidence') {

@@ -45,8 +45,9 @@ function setup(mode: NativeScreenAudioMode = 'process') {
     currentCustomScreenShareQuality: { resolution: 1080, fps: 60 } as CustomScreenShareQuality, setScreenShareQuality: vi.fn(async () => true) };
   const localParticipant = ref({ isScreenShareEnabled: true });
   const sandbox = {
-    ...state, localStorage: storage, rtc, localParticipant,
+    ...state, localStorage: storage, rtc, localParticipant, performance,
     nativeSourceChooser: undefined, nativeSourceChooserGeneration: 0, nativeSourceRefreshTimer: undefined,
+    nativeSourceChooserOpenedAt: 0, nativeSourcePreviewReported: false,
     lastCaptureSourceType: 'window', lastNativeSelection: undefined, currentNativeDiscoveryId: '',
     clearTimeout, canSelectNativeSource, readScreenShareQuality, saveScreenShareQuality, readScreenShareAudioPreference,
     saveScreenShareAudioPreference, resolveNativeScreenAudioCapability, shouldShareAudioInNativeSelection,
@@ -80,6 +81,36 @@ function setup(mode: NativeScreenAudioMode = 'process') {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('选窗准备', () => {
+  it('取消后立即重开会等旧枚举释放后直接读取新名单，旧结果不进入新选择', async () => {
+    const declaration = sourceFile.statements.find(statement => ts.isFunctionDeclaration(statement)
+      && statement.name?.text === 'refreshNativeSources')!;
+    const refreshScript = ts.transpile(declaration.getText(sourceFile), { target: ts.ScriptTarget.ES2022 });
+    const chooser = createNativeVideoSourceSelection([]);
+    let finishOld!: () => void;
+    const oldRequest = new Promise<void>(resolve => { finishOld = resolve; });
+    const list = vi.fn(async () => ({ discoveryId: 'fresh-helper', sources: [
+      { sourceId: 'window:2:0', kind: 'window' as const, title: 'New window', width: 640, height: 480, primary: false },
+    ] }));
+    const captureRequest = ref({ sources: chooser.options });
+    const sandbox = { desktop: { listNativeVideoSources: list, reportCapturePickerTiming: vi.fn() },
+      document: { hidden: false }, performance, nextTick, console,
+      nativeSourceRefresh: undefined as { promise: Promise<void> } | undefined,
+      nativeSourceChooserGeneration: 2, nativeSourceChooser: chooser, currentNativeDiscoveryId: '',
+      nativeSourceChooserOpenedAt: performance.now(), captureRequest, lastNativeSelection: undefined,
+      selectedCaptureSourceId: ref(''), captureSourceType: ref('window'), captureSourceNotice: ref(''),
+      nativeSourceLoading: ref(true), nativeSourceError: ref(''), loadNativeSourceThumbnails: vi.fn() };
+    sandbox.nativeSourceRefresh = { promise: oldRequest.then(() => { sandbox.nativeSourceRefresh = undefined; }) };
+    const refresh = runInNewContext(refreshScript + '; refreshNativeSources', sandbox) as
+      (generation: number, chooser: ReturnType<typeof createNativeVideoSourceSelection>) => Promise<void>;
+    const waiting = refresh(2, chooser);
+    expect(list).not.toHaveBeenCalled();
+    finishOld();
+    await waiting;
+    expect(list).toHaveBeenCalledOnce();
+    expect(captureRequest.value.sources.map(source => source.id)).toEqual(['window:2:0']);
+    expect(sandbox.nativeSourceLoading.value).toBe(false);
+  });
+
   const watcher = sourceFile.statements.find(statement => ts.isExpressionStatement(statement)
     && ts.isCallExpression(statement.expression) && statement.expression.expression.getText(sourceFile) === 'watch'
     && statement.expression.arguments[0]?.getText(sourceFile) === 'selectedCaptureSourceId');

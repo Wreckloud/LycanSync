@@ -458,6 +458,25 @@ test('无效显卡索引或伪造采集方法不能通过宿主协议', async (c
   }
 });
 
+test('游戏首帧等待记录首次钩子、一次重试和就绪，不导出附加身份', async (context) => {
+  const { manager, emit, captureDiagnostics } = fixture(context);
+  const target = { kind: 'game', windowId: '34567',
+    lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.34567', processCreationTime: '56789', processId: 123 };
+  const started = manager.start('window:7:0', 60, sessionId, target,
+    { hideCursor: true, hideBorder: false, windowMethod: 'auto' });
+  emit({ event: 'capturePreparation', stage: 'sourceStarting', durationMs: 184, processName: 'private' });
+  for (const stage of ['gameHookAttempt', 'gameHookRetry', 'gameHookSignalled']) {
+    emit({ event: 'capturePreparation', stage, processName: 'private' });
+    emit({ event: 'capturePreparation', stage });
+  }
+  emit({ event: 'captureStarted', helperVersion: '32.2.2' });
+  await started;
+  assert.deepEqual(captureDiagnostics, [
+    { stage: 'obsSourceStarting', durationMs: 184 }, { stage: 'obsGameHookAttempt' },
+    { stage: 'obsGameHookRetry' }, { stage: 'obsGameHookSignalled' },
+  ]);
+});
+
 test('停止超时后的强制结束单独记录，不伪报正常停止', async (context) => {
   const { manager, ready, captureDiagnostics } = fixture(context, { closeOnShutdown: false });
   await ready();
@@ -631,6 +650,21 @@ test('退出中、非 Windows 或缺少固定运行文件时不发起后台准�
     prepare(false);
     prepare(true);
   }
+});
+
+test('选择器持续枚举时续用已准备宿主，关闭后的空闲回收仍由宿主管理', () => {
+  const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const state = { preparePromise: Promise.resolve() };
+  const calls = [];
+  const sandbox = { closing: false, process: { platform: 'win32' }, existsSync: () => true,
+    obsHostSettings: { executablePath: 'host' }, obsCaptureHost: { state,
+      scheduleIdle: current => { assert.equal(current, state); calls.push('idle'); },
+      prepare: () => assert.fail('已准备的宿主不需要再次初始化') } };
+  const prepare = runInNewContext(source.slice(source.indexOf('let obsCorePreparationRequested ='),
+    source.indexOf('function activityHelperPath(')) + '; prepareObsCapture', sandbox);
+  prepare(true);
+  prepare(true);
+  assert.deepEqual(calls, ['idle', 'idle']);
 });
 
 test('应用退出永久封闭宿主，等待空闲退出的准备和新采集都不能再次创建进程', async (context) => {

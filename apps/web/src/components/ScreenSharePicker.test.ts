@@ -20,6 +20,13 @@ async function renderPicker(audioMode: NativeScreenAudioMode, audioReady = true,
 }
 
 describe('共享选择器的声音范围说明', () => {
+  it('能力检查尚未返回时可先选择窗口，确认共享继续等待检查', async () => {
+    const html = await renderPicker('process', false);
+    const option = html.match(/<button[^>]*data-source-id="window:1:0"[^>]*>/)?.[0];
+    expect(option).toBeDefined();
+    expect(option).not.toContain('disabled');
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>开始共享/);
+  });
   it('仅识别到联盟时展示跟随选项，说明大厅内容范围且默认不勾选', async () => {
     expect(await renderPicker('process')).not.toContain('跟随英雄联盟');
     const html = await renderPicker('process', true, false, true);

@@ -153,6 +153,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   let listeningTask: { room: Room; promise: Promise<void> } | null = null;
   let microphoneCleanupFailed = false;
   const screenShareActive = ref(false);
+  const screenShareStarting = ref(false);
   const screenShareSelectionCancelled = ref(false);
   const remoteAudioSubscriptions = new Map<string, boolean>();
   const tracksByRoom = new WeakMap<Room, RoomTrackRegistry>();
@@ -329,6 +330,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   async function join(groupId: string): Promise<boolean> {
     if (pendingJoin.value || activeRoom.value) return false;
 
+    const startedAt = performance.now();
     // 1. 先申请临时凭证；取消入房时中止请求，过期请求不能建立新连接。
     const request = new AbortController();
     pendingJoin.value = request;
@@ -348,8 +350,10 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         }
       }
       if (request.signal.aborted) return false;
+      const tokenStartedAt = performance.now();
       const credential = await requestRtcToken(groupId, request.signal);
       if (request.signal.aborted) return false;
+      const tokenMs = performance.now() - tokenStartedAt;
 
       // 2. 建立独立的 RTC 会话；连接本身不采集麦克风、摄像头或屏幕。
       // TODO: 根据异地实测调整共享画质，并记录连接类型、RTT、丢包和码率以排查代理影响。
@@ -546,7 +550,9 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       });
 
       // 4. 凭证只用于连接 LiveKit，不写入本地存储，也不通过日志输出。
+      const connectStartedAt = performance.now();
       await currentRoom.connect(credential.serverUrl, credential.token);
+      const connectMs = performance.now() - connectStartedAt;
       if (request.signal.aborted || activeRoom.value !== currentRoom) {
         await currentRoom.disconnect();
         return false;
@@ -560,10 +566,16 @@ export function useRtcRoom(options?: RtcRoomOptions) {
 
       // 5. 明确加入语音后默认开麦；权限失败只保持关麦，不退出已经建立的语音会话。
       listening.value = true;
-      await setMediaEnabled(Track.Source.Microphone, true);
+      const mediaStartedAt = performance.now();
+      const [microphoneMs, listeningMs] = await Promise.all([
+        setMediaEnabled(Track.Source.Microphone, true).then(() => performance.now() - mediaStartedAt),
+        synchronizeListeningAttribute(currentRoom).then(() => performance.now() - mediaStartedAt),
+      ]);
       if (request.signal.aborted || activeRoom.value !== currentRoom) return false;
-      await synchronizeListeningAttribute(currentRoom);
-      if (request.signal.aborted || activeRoom.value !== currentRoom) return false;
+      window.lycanDesktop?.reportVoiceJoinTiming?.({
+        durationMs: performance.now() - startedAt, preflightMs: tokenStartedAt - startedAt,
+        tokenMs, connectMs, microphoneMs, listeningMs, microphoneEnabled: microphoneEnabled.value,
+      });
       return true;
     } catch (error) {
       if (request.signal.aborted) return false;
@@ -625,6 +637,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     pendingMedia.value = new Set();
     busySources.value = [];
     screenShareActive.value = false;
+    screenShareStarting.value = false;
     screenShareSelectionCancelled.value = false;
     microphoneProcessor = null;
     room.value = null;
@@ -809,6 +822,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     const roomTracks = tracksByRoom.get(currentRoom);
     const cancelCapture = () => {
       // 发布结果可能仍在等待 SDK，取消时先撤销本任务的视频资格，迟到 SID 不能得到权限。
+      if (activeRoom.value === currentRoom && pendingMedia.value === operations) screenShareStarting.value = false;
       if (activeRoom.value === currentRoom && shareResource && screenShareResource === shareResource) {
         shareResource.stopping = true;
         retireRoomTrack(currentRoom, shareResource.videoTrack);
@@ -987,6 +1001,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           }
           const selection = selectedSource ?? await selectSource!(capabilitiesPromise);
           if (!isCurrentTask() || screenShareSelectionCancelled.value || !selection) return;
+          screenShareStarting.value = true;
           const capabilities = await capabilitiesPromise;
           if (!isCurrentTask() || screenShareSelectionCancelled.value) return;
           if (!capabilities.videoCapture?.available) {
@@ -1257,6 +1272,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       if (releaseTracks) updateTrackSubscriptionPermissions(currentRoom);
       operations.delete(source);
       if (source === Track.Source.ScreenShare && activeRoom.value === currentRoom && pendingMedia.value === operations) {
+        screenShareStarting.value = false;
         screenShareSelectionCancelled.value = false;
       }
       if (activeRoom.value === currentRoom && pendingMedia.value === operations) busySources.value = [...operations];
@@ -1630,6 +1646,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   function cancelPendingScreenShareSelection() {
     if (!pendingMedia.value.has(Track.Source.ScreenShare)) return;
     screenShareSelectionCancelled.value = true;
+    screenShareStarting.value = false;
     const resource = screenShareResource;
     const currentRoom = activeRoom.value;
     if (resource && currentRoom) {
@@ -1639,6 +1656,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   }
 
   return { revision, room, playbackContext, status, participants, notice, needsAudioPlayback, busySources, screenShareActive,
+    screenShareStarting,
     listening, microphoneIntent, microphoneEnabled,
     currentScreenShareQuality, currentCustomScreenShareQuality, screenShareQualityBusy, setScreenShareQuality,
     currentScreenShareAudioMode, screenShareSourceBusy, changeScreenShareSource, setScreenShareAudioEnabled,

@@ -87,6 +87,8 @@ private:
 };
 
 constexpr size_t kTextureSlotCount = 3;
+// 重设画布会等待上一帧的休眠结束；空画布用 200ms 周期限制启动等待。
+constexpr uint32_t kIdleFrameRate = 5;
 constexpr auto kGpuFenceTimeout = std::chrono::milliseconds(250);
 constexpr auto kGpuStallTimeout = std::chrono::seconds(5);
 
@@ -144,10 +146,33 @@ std::mutex g_log_mutex;
 uint32_t g_adapter_index = 0;
 std::atomic<bool> g_dxgi_failure_reported{false};
 std::atomic<int> g_dxgi_api{0};
+std::atomic<unsigned> g_game_hook_attempts{0};
+std::atomic<bool> g_game_hook_signalled{false};
+
+void write_capture_preparation(std::string_view stage, std::string_view session_id,
+    std::optional<int64_t> duration_ms = std::nullopt) {
+  const std::lock_guard<std::mutex> lock(g_output_mutex);
+  std::cout << "{\"event\":\"capturePreparation\",\"sessionId\":\"" << session_id
+            << "\",\"stage\":\"" << stage << "\"";
+  if (duration_ms) std::cout << ",\"durationMs\":" << *duration_ms;
+  std::cout << "}\n";
+  std::cout.flush();
+}
 
 void obs_log_handler(int level, const char *format, va_list args, void *) {
   // libobs 默认会向 stdout 写普通日志；协议通道只能包含本宿主的 JSON。
   const std::string_view log_format(format);
+  // 固定版本的游戏钩子只取阶段，不格式化含进程名的参数。
+  if (log_format == "[game-capture: '%s'] attempting to hook process: %s") {
+    if (g_game_hook_attempts < 2) {
+      write_capture_preparation(g_game_hook_attempts++ == 0 ? "gameHookAttempt" : "gameHookRetry", g_host.session_id);
+    }
+    return;
+  }
+  if (log_format == "[game-capture: '%s'] capture initializing!") {
+    if (!g_game_hook_signalled.exchange(true)) write_capture_preparation("gameHookSignalled", g_host.session_id);
+    return;
+  }
   if (log_format == "lycansyncDxgiApi:DuplicateOutput" || log_format == "lycansyncDxgiApi:DuplicateOutput1") {
     if (g_dxgi_api.exchange(log_format.ends_with("1") ? 1 : 2) == 0) {
       const std::lock_guard<std::mutex> lock(g_log_mutex);
@@ -199,13 +224,6 @@ void write_capture_evidence(std::string_view stage, uint32_t width = 0, uint32_t
     std::cout << ",\"captureApi\":\"" << (dxgi_api == 1 ? "DuplicateOutput1" : "DuplicateOutput") << "\"";
   }
   std::cout << "}\n";
-  std::cout.flush();
-}
-
-void write_capture_preparation(std::string_view stage, std::string_view session_id) {
-  const std::lock_guard<std::mutex> lock(g_output_mutex);
-  std::cout << "{\"event\":\"capturePreparation\",\"sessionId\":\"" << session_id
-            << "\",\"stage\":\"" << stage << "\"}\n";
   std::cout.flush();
 }
 
@@ -803,6 +821,7 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
   video.colorspace = VIDEO_CS_SRGB;
   video.range = VIDEO_RANGE_PARTIAL;
   video.scale_type = OBS_SCALE_BICUBIC;
+  const auto reset_started_at = std::chrono::steady_clock::now();
   if (obs_reset_video(&video) != OBS_VIDEO_SUCCESS) {
     write_event("obsVideoInitFailed");
     return 1;
@@ -811,7 +830,9 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
   g_host.render_fps = g_host.delivery_fps = video.fps_num;
   g_host.share_fps = video.fps_num;
   g_host.next_delivery.reset();
-  write_capture_preparation("sourceStarting", g_host.session_id);
+  const auto reset_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - reset_started_at).count();
+  write_capture_preparation("sourceStarting", g_host.session_id, reset_ms);
 
   obs_source_t *source = nullptr;
   const char *source_error = "obsDisplaySourceUnavailable";
@@ -1055,7 +1076,7 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
   // 热态仅保留小画布与低频图形循环，不保留采集、共享纹理或声音设备。
   video.base_width = video.output_width = 320;
   video.base_height = video.output_height = 180;
-  video.fps_num = 1;
+  video.fps_num = kIdleFrameRate;
   if (keep_host && obs_reset_video(&video) != OBS_VIDEO_SUCCESS) {
     write_event("obsVideoIdleFailed");
     return 1;
@@ -1100,7 +1121,7 @@ int wmain(int argc, wchar_t **argv) {
   video.scale_type = OBS_SCALE_BICUBIC;
   const auto prepare = [&]() {
     if (prepared) return true;
-    video.fps_num = 1;
+    video.fps_num = kIdleFrameRate;
     video.adapter = g_adapter_index;
     video.base_width = video.output_width = 320;
     video.base_height = video.output_height = 180;
@@ -1148,6 +1169,8 @@ int wmain(int argc, wchar_t **argv) {
     if (!valid) { write_event("invalidCaptureArguments"); result = 1; break; }
     g_dxgi_failure_reported = false;
     g_dxgi_api = 0;
+    g_game_hook_attempts = 0;
+    g_game_hook_signalled = false;
     if (!valid_session_id(arguments[4])) { write_event("invalidCaptureArguments"); result = 1; break; }
     write_capture_preparation("graphicsStarting", arguments[4]);
     if (arguments[0] == "monitor") {
@@ -1174,7 +1197,7 @@ int wmain(int argc, wchar_t **argv) {
       obs_wait_for_destroy_queue();
       video.base_width = video.output_width = 320;
       video.base_height = video.output_height = 180;
-      video.fps_num = 1;
+      video.fps_num = kIdleFrameRate;
       if (obs_reset_video(&video) != OBS_VIDEO_SUCCESS) { write_event("obsVideoIdleFailed"); result = 1; break; }
       const std::lock_guard<std::mutex> output_lock(g_output_mutex);
       std::cout << "{\"event\":\"captureRejected\",\"sessionId\":\"" << g_host.session_id

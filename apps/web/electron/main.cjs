@@ -346,7 +346,11 @@ function prepareObsCapture(graphics) {
   if (closing || obsBackgroundPreparationFailed || process.platform !== 'win32'
       || !Object.values(obsHostSettings).every(path => existsSync(path))) return;
   if (!graphics && obsCorePreparationRequested) return;
-  if (graphics && obsCaptureHost.state?.preparePromise) return;
+  if (graphics && obsCaptureHost.state?.preparePromise) {
+    // 选择器仍在读取来源时属于使用中；关闭后才开始计算空闲退出时间。
+    obsCaptureHost.scheduleIdle(obsCaptureHost.state);
+    return;
+  }
   obsCorePreparationRequested = true;
   const startedAt = performance.now();
   void obsCaptureHost.prepare(graphics).then(() => {
@@ -1574,6 +1578,17 @@ ipcMain.handle('update:skip', (event) => {
   if (['idle', 'checking', 'downloading'].includes(startupUpdate.getState().phase)) startupUpdate.cancel();
 });
 
+ipcMain.on('media:voice-join-timing', (event, timing) => {
+  if (!trustedSender(event) || closing || !timing || typeof timing.microphoneEnabled !== 'boolean') return;
+  const entry = { stage: 'voiceJoinReady', microphoneEnabled: timing.microphoneEnabled };
+  for (const key of ['durationMs', 'preflightMs', 'tokenMs', 'connectMs', 'microphoneMs', 'listeningMs']) {
+    const duration = timing[key];
+    if (!Number.isFinite(duration) || duration < 0 || duration > 300_000) return;
+    entry[key] = Math.round(duration);
+  }
+  void writeMediaDiagnostic(entry);
+});
+
 ipcMain.on('window:minimize', (event) => { if (trustedSender(event)) mainWindow.minimize(); });
 ipcMain.handle('window:visibility', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
@@ -1772,6 +1787,11 @@ ipcMain.handle('media:video-source:prepare', (event, sourceId) => {
       || !/^(?:monitor|window):[1-9]\d*:\d+$/.test(sourceId)))) throw new Error('请求来源无效');
   return prepareNativeVideoSource(sourceId);
 });
+ipcMain.on('media:screen-picker-timing', (event, stage, durationMs) => {
+  if (!trustedSender(event) || closing || !['screenPickerSourcesReady', 'screenPickerPreviewReady'].includes(stage)
+      || !Number.isFinite(durationMs) || durationMs < 0 || durationMs > 300_000) return;
+  recordSourceTiming(stage, performance.now() - durationMs);
+});
 ipcMain.handle('media:video-source-thumbnails', async (event, sources) => {
   if (!trustedSender(event) || closing || !Array.isArray(sources) || sources.length > 128
       || sources.some((source) => !source || !/^(?:monitor|window):[1-9]\d*:\d+$/.test(source.sourceId)
@@ -1791,7 +1811,7 @@ ipcMain.handle('media:video-source-thumbnails', async (event, sources) => {
   try {
     const desktopSources = await desktopCapturer.getSources({
       types: [...new Set(sources.map((source) => source.kind === 'monitor' ? 'screen' : 'window'))],
-      thumbnailSize: { width: 320, height: 180 },
+      thumbnailSize: { width: 256, height: 144 },
     });
     recordSourceTiming('sourceThumbnails', startedAt, desktopSources.length);
     return matchNativeVideoSourceThumbnails(sources.map((source) => ({ ...source, displayId: monitorDisplayId(source, screen) })), desktopSources.map((source) => ({

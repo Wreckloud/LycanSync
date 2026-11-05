@@ -143,6 +143,9 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
         if (stage === 'microphoneReady' && entry.backend === 'obsLibobs' && entry.processing === 'sonora-0.2.0') {
           details.backend = entry.backend;
           details.processing = entry.processing;
+          for (const key of ['coreReadyMs', 'pluginLoadMs', 'sourceSetupMs', 'firstBlockWaitMs']) {
+            if (Number.isInteger(entry[key]) && entry[key] >= 0 && entry[key] <= 300_000) details[key] = entry[key];
+          }
         }
         if (stage === 'microphoneHostExited' && Number.isInteger(entry.exitCode)
             && entry.exitCode >= -2147483648 && entry.exitCode <= 4294967295) details.exitCode = entry.exitCode;
@@ -184,6 +187,12 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           for (const key of ['pluginLoadMs', 'captureReadyMs', 'graphReadyMs', 'publishMs']) {
             if (Number.isFinite(entry[key]) && entry[key] >= 0 && entry[key] <= 300_000) audioTiming[key] = entry[key];
           }
+        }
+        if (stage === 'voiceJoinReady') {
+          for (const key of ['preflightMs', 'tokenMs', 'connectMs', 'microphoneMs', 'listeningMs']) {
+            if (Number.isFinite(entry[key]) && entry[key] >= 0 && entry[key] <= 300_000) details[key] = entry[key];
+          }
+          if (typeof entry.microphoneEnabled === 'boolean') details.microphoneEnabled = entry.microphoneEnabled;
         }
         events.push({ time: new Date(time).toISOString(), stage, hresults,
           ...(typeof entry.durationMs === 'number' && Number.isFinite(entry.durationMs) ? { durationMs: entry.durationMs } : {}),

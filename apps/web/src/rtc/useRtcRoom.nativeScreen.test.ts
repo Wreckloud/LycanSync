@@ -599,7 +599,9 @@ describe('native screen share wiring', () => {
       const sharing = rtc.setMediaEnabled(Track.Source.ScreenShare, true);
       await vi.waitFor(() => expect(rtcMocks.published.mock.calls.some(call => call[1]?.source === Track.Source.ScreenShare)).toBe(true));
       expect(rtcMocks.nativeAudioStarts).not.toHaveBeenCalled();
+      expect(rtc.screenShareStarting.value).toBe(true);
       rtc.cancelPendingScreenShareSelection();
+      expect(rtc.screenShareStarting.value).toBe(false);
       videoPublish.resolve();
       await sharing;
       expect(rtcMocks.nativeAudioStarts).not.toHaveBeenCalled();
@@ -1677,6 +1679,7 @@ describe('native screen share wiring', () => {
       const joiningA = rtc.join('join-room-a');
       await vi.waitFor(() => expect(rtcMocks.createTracks).toHaveBeenCalledOnce());
       const roomA = rtcMocks.rooms[0] as { attributes: Array<Record<string, string>> };
+      expect(roomA.attributes).toEqual([{ 'lycansync.listening': 'true' }]);
 
       await rtc.leave();
       expect(await rtc.join('join-room-b')).toBe(true);
@@ -1685,7 +1688,7 @@ describe('native screen share wiring', () => {
 
       delayedMicrophone.resolve([] as never[]);
       expect(await joiningA).toBe(false);
-      expect(roomA.attributes).toEqual([]);
+      expect(roomA.attributes).toEqual([{ 'lycansync.listening': 'true' }]);
       expect(roomB.attributes).toEqual([{ 'lycansync.listening': 'true' }]);
     } finally {
       await rtc.leave();

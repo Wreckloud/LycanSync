@@ -106,20 +106,23 @@ describe('createNativeVideoSourceSelection', () => {
     await expect(selection.result).resolves.toBeNull();
   });
 
-  it('按间隔刷新缩略图，缺失预览仍可继续重试', () => {
+  it('缺失预览按间隔重试，取得静态预览后不再反复扫描窗口', () => {
     const selection = createNativeVideoSourceSelection([sources[0]]);
     expect(selection.sourcesNeedingThumbnails(10_000)).toHaveLength(1);
     expect(selection.sourcesNeedingThumbnails(11_499)).toHaveLength(0);
     expect(selection.sourcesNeedingThumbnails(11_500)).toHaveLength(1);
     selection.applyThumbnails(sources, [{ sourceId: sources[0].sourceId, thumbnail: 'old' }]);
-    expect(selection.sourcesNeedingThumbnails(14_000)).toHaveLength(1);
+    expect(selection.sourcesNeedingThumbnails(14_000)).toHaveLength(0);
     expect(selection.options[0].thumbnail).toBe('old');
-    selection.applyThumbnails(sources, [{ sourceId: sources[0].sourceId, thumbnail: 'new' }]);
+    selection.replaceSources([{ ...sources[0], title: 'Renamed' }]);
+    const requested = selection.sourcesNeedingThumbnails(14_001);
+    expect(requested).toHaveLength(1);
+    selection.applyThumbnails(requested, [{ sourceId: sources[0].sourceId, thumbnail: 'new' }]);
     expect(selection.options[0].thumbnail).toBe('new');
-    expect(selection.sourcesNeedingThumbnails(16_000)).toHaveLength(1);
+    expect(selection.sourcesNeedingThumbnails(16_000)).toHaveLength(0);
   });
 
-  it('只请求可见或选中的来源，选中来源按 750 毫秒间隔优先更新', () => {
+  it('只请求可见或选中来源的缺失预览，同一次截图期间不会重复请求', () => {
     const selection = createNativeVideoSourceSelection(sources);
     const visible = new Set([sources[0].sourceId]);
     expect(selection.sourcesNeedingThumbnails(10_000, visible).map((source) => source.sourceId))
@@ -128,6 +131,9 @@ describe('createNativeVideoSourceSelection', () => {
       .map((source) => source.sourceId)).toEqual([sources[1].sourceId]);
     expect(selection.sourcesNeedingThumbnails(10_750, visible, sources[1].sourceId)).toHaveLength(0);
     expect(selection.sourcesNeedingThumbnails(10_751, visible, sources[1].sourceId)
+      .map((source) => source.sourceId)).toEqual([]);
+    selection.applyThumbnails([sources[0]], [{ sourceId: sources[0].sourceId, thumbnail: 'ready' }]);
+    expect(selection.sourcesNeedingThumbnails(11_501, visible, sources[1].sourceId)
       .map((source) => source.sourceId)).toEqual([sources[1].sourceId]);
   });
 

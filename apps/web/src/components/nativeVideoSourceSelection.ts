@@ -26,7 +26,6 @@ interface NativeScreenSourceSelection {
 }
 
 const THUMBNAIL_REFRESH_INTERVAL_MS = 1_500;
-const SELECTED_THUMBNAIL_REFRESH_INTERVAL_MS = 750;
 const MAX_CACHED_THUMBNAILS = 24;
 const MAX_THUMBNAIL_CODE_UNITS = 2 * 1024 * 1024;
 
@@ -85,10 +84,10 @@ export function createNativeVideoSourceSelection(sources: NativeVideoSourceOptio
       }
       return currentSources.filter((source) => {
         if (visibleIds && !visibleIds.has(source.sourceId) && source.sourceId !== selectedId) return false;
+        // 已取得的静态预览可用于本次选择；重复截图会扫描同类的所有窗口。
+        if (thumbnails.has(source.sourceId)) return false;
         const previous = thumbnailAttempts.get(source.sourceId);
-        const interval = source.sourceId === selectedId
-          ? SELECTED_THUMBNAIL_REFRESH_INTERVAL_MS : THUMBNAIL_REFRESH_INTERVAL_MS;
-        if (previous && now - previous.attemptedAt < interval) return false;
+        if (previous && now - previous.attemptedAt < THUMBNAIL_REFRESH_INTERVAL_MS) return false;
         thumbnailAttempts.set(source.sourceId, {
           title: source.title,
           attemptedAt: now,

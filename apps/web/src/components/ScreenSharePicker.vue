@@ -32,13 +32,12 @@ const followGame = ref(false);
 watch(() => props.selectedId, () => { followGame.value = false; });
 const sources = computed(() => props.sources.filter((source) => source.type === props.sourceType));
 const quality = computed(() => screenShareQuality(props.quality, props.customQuality));
-const canChoose = computed(() => props.audioReady && !props.audioFailed);
 const borderNotice = computed(() => {
   if (props.sourceType !== 'window' || captureSettings.value.windowMethod === 'game') return '';
   if (borderSupport.value === false) return '自动选择系统窗口采集时，当前 Windows 会显示系统边框。';
   return '自动选择系统窗口采集时会尽量隐藏系统边框，系统限制或权限不允许时可能显示边框。';
 });
-const canConfirm = computed(() => canChoose.value && !props.error && !settingsError.value
+const canConfirm = computed(() => props.audioReady && !props.audioFailed && !props.error && !settingsError.value
   && props.sources.some((source) => source.id === props.selectedId));
 const feedbackStatus = computed(() => {
   if (!props.audioReady) return '正在检查共享能力…';
@@ -121,7 +120,7 @@ defineExpose({ sourcesElement });
         <div ref="sourcesElement" id="capture-source-options" class="capture-sources" role="tabpanel"
           :aria-labelledby="`capture-source-tab-${sourceType}`" @scroll.passive="emit('refreshThumbnails')">
           <button v-for="source in sources" :key="source.id" type="button" :aria-label="source.name"
-            :data-source-id="source.id" :aria-pressed="selectedId === source.id" :disabled="!canChoose" @click="emit('choose', source.id)">
+            :data-source-id="source.id" :aria-pressed="selectedId === source.id" @click="emit('choose', source.id)">
             <span class="capture-source-preview"><img v-if="source.thumbnail" :src="source.thumbnail" alt="" />
               <span v-else class="capture-source-placeholder"><Monitor :size="32" /></span>
               <span v-if="selectedId === source.id" class="capture-source-selected" aria-hidden="true">✓</span></span>

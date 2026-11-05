@@ -211,17 +211,20 @@ int capture(int argc, wchar_t **argv) {
       || (std::wstring_view(argv[7]) != L"0" && std::wstring_view(argv[7]) != L"1")) return 2;
   Settings settings;
   if (!parse_settings(utf8(argv[5]), settings)) return 2;
+  const auto initialization_started = Clock::now();
   base_set_log_handler(audio_log, nullptr);
   if (!obs_startup("en-US", utf8(argv[3]).c_str(), nullptr)) { event("failed", ",\"code\":\"obsAudioInitFailed\""); return 1; }
   struct Core { ~Core() { obs_shutdown(); } } core;
   if (std::string_view(obs_get_version_string()) != "32.2.2") { event("failed", ",\"code\":\"obsCaptureVersionUnsupported\""); return 1; }
   obs_audio_info format{}; format.samples_per_sec = 48'000; format.speakers = SPEAKERS_MONO;
   if (!obs_reset_audio(&format)) { event("failed", ",\"code\":\"obsAudioInitFailed\""); return 1; }
+  const auto core_ready = Clock::now();
   obs_module_t *module = nullptr;
   if (obs_open_module(&module, utf8(argv[1]).c_str(), utf8(argv[2]).c_str()) != MODULE_SUCCESS || !obs_init_module(module)) {
     event("failed", ",\"code\":\"microphoneModuleLoadFailed\""); return 1;
   }
   obs_post_load_modules();
+  const auto module_ready = Clock::now();
   if (!obs_get_latest_input_type_id("wasapi_input_capture")) {
     event("failed", ",\"code\":\"microphoneModuleLoadFailed\""); return 1;
   }
@@ -320,7 +323,14 @@ int capture(int argc, wchar_t **argv) {
     if (ready && Clock::now() - lastAudio > std::chrono::seconds(8)) { failure = "microphoneDeviceUnavailable"; break; }
     if (!ready && pipe.delivered) {
       ready = true;
-      event("ready", ",\"obsVersion\":\"32.2.2\",\"processing\":\"sonora-0.2.0\",\"sampleRate\":48000,\"channels\":1,\"bitsPerSample\":32,\"nominalChunkMs\":10");
+      const auto milliseconds = [](Clock::duration elapsed) {
+        return std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+      };
+      event("ready", ",\"obsVersion\":\"32.2.2\",\"processing\":\"sonora-0.2.0\",\"sampleRate\":48000,\"channels\":1,\"bitsPerSample\":32,\"nominalChunkMs\":10"
+          ",\"coreReadyMs\":" + milliseconds(core_ready - initialization_started)
+          + ",\"pluginLoadMs\":" + milliseconds(module_ready - core_ready)
+          + ",\"sourceSetupMs\":" + milliseconds(started - module_ready)
+          + ",\"firstBlockWaitMs\":" + milliseconds(Clock::now() - started));
     }
     if (!ready && Clock::now() - started > std::chrono::seconds(10)) { failure = "microphoneCaptureStartTimedOut"; break; }
   }

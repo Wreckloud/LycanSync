@@ -77,8 +77,12 @@ class ObsAudioHostManager {
         state.ready = true;
         clearTimeout(state.startTimer);
         state.resolveStart({ sampleRate: 48000, channels: 1, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
+        const timing = {};
+        for (const key of ['coreReadyMs', 'pluginLoadMs', 'sourceSetupMs', 'firstBlockWaitMs']) {
+          if (Number.isInteger(event[key]) && event[key] >= 0 && event[key] <= this.startTimeoutMs) timing[key] = event[key];
+        }
         this.onDiagnostic({ stage: 'microphoneReady', backend: 'obsLibobs', processing: 'sonora-0.2.0',
-          durationMs: Math.round(performance.now() - state.startedAt) });
+          durationMs: Math.round(performance.now() - state.startedAt), ...timing });
       } else if (event.event === 'configured' && state.requests.get(event.requestId)?.kind === 'configure') {
         const request = state.requests.get(event.requestId);
         clearTimeout(request.timer); state.requests.delete(event.requestId); request.resolve({ changed: true });

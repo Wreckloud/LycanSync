@@ -183,6 +183,9 @@ interface Window {
     restartForUpdate(): Promise<void>;
     skipStartupUpdate(): Promise<void>;
     reportStartupTiming(stage: 'loginDataReady' | 'loginReady', durationMs: number): void;
+    reportVoiceJoinTiming(timing: { durationMs: number; preflightMs: number; tokenMs: number; connectMs: number;
+      microphoneMs: number; listeningMs: number; microphoneEnabled: boolean }): void;
+    reportCapturePickerTiming(stage: 'screenPickerSourcesReady' | 'screenPickerPreviewReady', durationMs: number): void;
     onUpdateState(callback: (state: StartupUpdateState) => void): () => void;
     clearSession(): Promise<void>;
     returnToAccountEntry(): Promise<void>;
