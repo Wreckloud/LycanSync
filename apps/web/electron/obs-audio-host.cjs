@@ -63,7 +63,7 @@ class ObsAudioHostManager {
   }
 
   read(state, chunk) {
-    if (!state.alive || state.failed) return;
+    if (!state.alive) return;
     state.buffer += String(chunk);
     if (Buffer.byteLength(state.buffer) > 8192) { this.fail(state, 'obsAudioProtocolInvalid'); return; }
     for (let end = state.buffer.indexOf('\n'); end >= 0; end = state.buffer.indexOf('\n')) {
@@ -71,6 +71,8 @@ class ObsAudioHostManager {
       let event;
       try { event = JSON.parse(line); } catch { this.fail(state, 'obsAudioProtocolInvalid'); return; }
       if (!event || typeof event !== 'object' || Array.isArray(event)) { this.fail(state, 'obsAudioProtocolInvalid'); return; }
+      // 失败后只接收停止确认，迟到就绪不能恢复已撤销的采集。
+      if (state.failed && event.event !== 'stopped') continue;
       if (event.event === 'ready' && !state.ready && !state.stopping
           && event.obsVersion === '32.2.2' && event.processing === 'sonora-0.2.0'
           && event.sampleRate === 48000 && event.channels === 1 && event.bitsPerSample === 32 && event.nominalChunkMs === 10) {
@@ -181,7 +183,8 @@ class ObsAudioHostManager {
     this.rejectRequests(state, 'microphoneCaptureSessionStopped');
     if (this.state === state) this.state = undefined;
     this.lastStopped = state.sessionId;
-    state.resolveClose(expected);
+    // close 已确认进程及标准流结束；是否正常退出只影响诊断，不再冒充资源仍被占用。
+    state.resolveClose(true);
     this.onDiagnostic({ stage: 'microphoneHostExited', stopMode: expected ? 'graceful' : state.killed ? 'forced' : 'unexpected',
       ...(Number.isInteger(code) ? { exitCode: code } : {}),
       ...(state.stopStartedAt !== undefined ? { durationMs: Math.round(performance.now() - state.stopStartedAt) } : {}) });
@@ -199,8 +202,8 @@ class ObsAudioHostManager {
     clearTimeout(state.startTimer);
     state.rejectStart(new Error('microphoneCaptureSessionStopped'));
     this.rejectRequests(state, 'microphoneCaptureSessionStopped');
-    state.stop = state.closed.then(expected => {
-      if (!expected) {
+    state.stop = state.closed.then(closed => {
+      if (!closed) {
         this.onDiagnostic({ stage: 'microphoneStopFailed', code: 'microphoneCaptureStopFailed' });
         throw new Error('microphoneCaptureStopFailed');
       }

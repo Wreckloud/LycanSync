@@ -153,6 +153,58 @@ test('启动超时与运行失败明确上报并回收', async context => {
   assert.equal(second.manager.state, undefined);
 });
 
+test('启动等待超时后仍接收正常停止确认，保留启动错误并允许手动重试', async context => {
+  const f = fixture(context);
+  const rejected = assert.rejects(f.start(), /microphoneCaptureStartTimedOut/);
+  const state = f.manager.state;
+  await delay(80); await rejected;
+  assert.deepEqual(await state.stop, { changed: true });
+  assert.equal(f.diagnostics.find(entry => entry.stage === 'microphoneHostExited').stopMode, 'graceful');
+  assert.equal(f.children.length, 1);
+  assert.equal(f.children[0].kills, 0);
+  await f.started();
+  await f.manager.stop('voice-session');
+});
+
+test('授权等待中取消，强制退出确认后可以重开；迟到就绪不会恢复旧采集', async context => {
+  const f = fixture(context, { stopHang: true });
+  const pending = f.start();
+  const rejected = assert.rejects(pending, /microphoneCaptureSessionStopped/);
+  const stopping = f.manager.stop('voice-session');
+  f.children[0].send(ready);
+  await rejected;
+  await delay(50);
+  assert.deepEqual(await stopping, { changed: true });
+  assert.equal(f.manager.state, undefined);
+  assert.equal(f.children[0].kills, 1);
+  assert.equal(f.diagnostics.some(entry => entry.stage === 'microphoneReady'), false);
+  assert.equal(f.diagnostics.find(entry => entry.stage === 'microphoneHostExited').stopMode, 'forced');
+  await f.started();
+  f.children[0].emit('close', 1);
+  assert.equal(f.manager.state.child, f.children[1]);
+  const stopped = f.manager.stop('voice-session');
+  f.children[1].send({ event: 'stopped' });
+  f.children[1].emit('close', 0);
+  await stopped;
+});
+
+test('等待授权超过启动期限，宿主无停止响应但确认强制退出后不锁死开麦', async context => {
+  const f = fixture(context, { stopHang: true });
+  const rejected = assert.rejects(f.start(), /microphoneCaptureStartTimedOut/);
+  const state = f.manager.state;
+  await delay(110); await rejected;
+  assert.deepEqual(await state.stop, { changed: true });
+  assert.equal(f.manager.state, undefined);
+  assert.equal(f.children.length, 1);
+  assert.equal(f.children[0].kills, 1);
+  assert.equal(f.diagnostics.some(entry => entry.stage === 'microphoneStopFailed'), false);
+  await f.started();
+  const stopped = f.manager.stop('voice-session');
+  f.children[1].send({ event: 'stopped' });
+  f.children[1].emit('close', 0);
+  await stopped;
+});
+
 test('意外退出只影响自己的音频会话', async context => {
   const { manager, children, failures, started } = fixture(context);
   await started(); children[0].emit('close', 17);
@@ -275,7 +327,7 @@ test('来源创建失败保留固定原因和 HRESULT，不输出设备或异常
   assert.equal(diagnostics.find(entry => entry.stage === 'microphoneHostExited').exitCode, 0);
 });
 
-test('主进程和宿主同时收尾时停止失败只记录一次，退出后仍可重新开麦', async context => {
+test('主进程和宿主同时收尾时强制退出仍确认停止，退出后可重新开麦', async context => {
   const f = fixture(context, { stopHang: true });
   const bridge = microphoneBridge();
   bridge.scope.obsAudioHost = f.manager;
@@ -287,7 +339,8 @@ test('主进程和宿主同时收尾时停止失败只记录一次，退出后�
   bridge.listen(); await delay(0); f.children[0].send(ready); await starting;
   f.children[0].send({ event: 'failed', code: 'microphoneCapturePipeFailed' });
   await delay(70);
-  assert.equal(f.diagnostics.filter(entry => entry.stage === 'microphoneStopFailed').length, 1);
+  assert.equal(f.diagnostics.filter(entry => entry.stage === 'microphoneStopFailed').length, 0);
+  assert.equal(f.diagnostics.find(entry => entry.stage === 'microphoneHostExited').stopMode, 'forced');
   assert.equal(f.manager.state, undefined);
   assert.equal(bridge.scope.nativeMicrophoneSession, undefined);
   const restarting = bridge.scope.startNativeMicrophoneCapture('new-session', settings);
