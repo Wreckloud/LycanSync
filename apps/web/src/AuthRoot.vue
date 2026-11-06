@@ -394,7 +394,7 @@ onMounted(async () => {
         <button aria-label="关闭窗口" @click="desktop.close()"><X :size="17" /></button>
       </div>
     </header>
-    <AppNotice v-if="updateWarning" :message="updateWarning" dismissible @dismiss="updateWarning = ''" />
+    <AppNotice v-if="updateWarning" :message="updateWarning" @dismiss="updateWarning = ''" />
     <div class="entry-pages">
     <Transition name="entry-page" @before-enter="($event as HTMLElement).inert = false" @before-leave="($event as HTMLElement).inert = true">
     <StartupUpdate v-if="startupChecking" key="startup" :state="updateState" @skip="desktop?.skipStartupUpdate()" />

@@ -37,8 +37,25 @@ async function fixture() {
   const scope = effectScope();
   const recording = scope.run(() => useRecording({ track: () => track.value, canStart: () => true, voices: () => [] }))!;
   await vi.waitFor(() => expect(recording.busy.value).toBe(false));
-  return { recording, desktop, scope, track };
+  return { recording, desktop, scope, track, publish: (next: DesktopRecordingStatus) => { status = next; listener(next); } };
 }
+
+it('开始与保存只在确认新状态后提示，周期快照不重复提示', async () => {
+  const f = await fixture();
+  try {
+    expect(f.recording.successNotice.value).toBeNull();
+    await f.recording.start();
+    expect(f.recording.successNotice.value?.message).toBe('已开始录制');
+    const started = f.recording.successNotice.value;
+    f.publish({ ...f.recording.state.value, bytes: 1024 });
+    expect(f.recording.successNotice.value).toBe(started);
+    await f.recording.stop();
+    expect(f.recording.successNotice.value?.message).toBe('录像已保存到本地录像');
+    const saved = f.recording.successNotice.value;
+    f.publish({ ...f.recording.state.value });
+    expect(f.recording.successNotice.value).toBe(saved);
+  } finally { f.scope.stop(); }
+});
 
 it('来源选择取消不影响当前录像；确认后先保存再换源，换完再开始新段', async () => {
   const f = await fixture();
@@ -72,9 +89,11 @@ it('回放保持采集需求，单独停止录像不降低采集，保存确认�
     expect(f.recording.localActive.value).toBe(true);
     expect(setNativeScreenRecordingDemand).not.toHaveBeenCalledWith(f.track.value, false);
     await f.recording.saveReplay();
-    expect(f.recording.replaySaved.value).toBe(true);
-    await vi.advanceTimersByTimeAsync(3000);
-    expect(f.recording.replaySaved.value).toBe(false);
+    expect(f.recording.successNotice.value?.message).toBe('回放已保存到本地录像');
+    const savedNotice = f.recording.successNotice.value;
+    await f.recording.saveReplay();
+    expect(f.recording.successNotice.value).not.toBe(savedNotice);
+    expect(f.recording.successNotice.value?.message).toBe('回放已保存到本地录像');
     await f.recording.stopReplay(); await nextTick();
     expect(setNativeScreenRecordingDemand).toHaveBeenCalledWith(f.track.value, false);
     expect(vi.getTimerCount()).toBe(0);
@@ -88,7 +107,7 @@ it('仅开回放也能保存片段，不要求普通录像或偷偷开始录像'
     await f.recording.saveReplay();
     expect(f.desktop.startRecording).not.toHaveBeenCalled();
     expect(f.desktop.saveReplay).toHaveBeenCalledOnce();
-    expect(f.recording.replaySaved.value).toBe(true);
+    expect(f.recording.successNotice.value?.message).toBe('回放已保存到本地录像');
     expect(f.recording.active.value).toBe(false);
   } finally { f.scope.stop(); }
 });
@@ -111,9 +130,10 @@ it('回放保存失败不假报成功，已有录像和回放状态保持，错�
   const f = await fixture();
   try {
     await f.recording.startReplay(); await f.recording.start();
+    f.recording.successNotice.value = null;
     f.desktop.saveReplay.mockRejectedValueOnce(new Error('replaySaveUnconfirmed'));
     await f.recording.saveReplay();
-    expect(f.recording.replaySaved.value).toBe(false);
+    expect(f.recording.successNotice.value).toBeNull();
     expect(f.recording.notice.value).toContain('保存尚未确认');
     expect(f.recording.active.value).toBe(true);
     expect(f.recording.replayActive.value).toBe(true);

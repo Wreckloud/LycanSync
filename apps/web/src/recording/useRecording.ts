@@ -27,9 +27,7 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
   const notice = ref('');
   const pending = ref(false);
   let replaySavePending = false;
-  const replaySaved = ref(false);
-  const replaySavedMessage = ref('回放已保存到本地录像');
-  let replaySavedTimer: ReturnType<typeof setTimeout> | undefined;
+  const successNotice = shallowRef<{ message: string } | null>(null);
   const changingSource = ref(false);
   let sourceChangeVersion = 0;
   const now = ref(performance.now());
@@ -52,6 +50,7 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
   let voice: RecordingVoice | undefined;
   let stateRevision = 0;
   let refreshing = false;
+  let statusLoaded = false;
   const setState = (next: DesktopRecordingStatus) => {
     if (disposed) return;
     stateRevision++;
@@ -59,14 +58,23 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
       now.value = performance.now();
       elapsedAnchor = { id: next.recordingId, at: now.value, seconds: Math.max(0, (Date.now() - next.startedAt) / 1000) };
     }
-    if (next.replay?.lastSavedId && next.replay.lastSavedId !== state.value.replay?.lastSavedId) {
-      replaySaved.value = true;
-      replaySavedMessage.value = next.replay.lastSavedDuringWarmup ? '回放已保存；缓存尚在积累，本次保存已有片段。' : '回放已保存到本地录像';
-      clearTimeout(replaySavedTimer);
-      replaySavedTimer = setTimeout(() => { replaySaved.value = false; }, 3000);
-    }
-    state.value = next;
     const code = next.error ?? next.replay?.error;
+    // 仅提示已确认的新状态，不把初次读取的历史录像当成本次操作成功。
+    if (statusLoaded && !code) {
+      if (next.phase === 'recording' && state.value.phase !== 'recording') {
+        successNotice.value = { message: '已开始录制' };
+      } else if (next.saved && (!state.value.saved || next.recordingId !== state.value.recordingId)) {
+        successNotice.value = { message: '录像已保存到本地录像' };
+      } else if (next.replay?.phase === 'buffering' && state.value.replay?.phase !== 'buffering') {
+        successNotice.value = { message: '即时回放已开启' };
+      }
+      if (next.replay?.lastSavedId && next.replay.lastSavedId !== state.value.replay?.lastSavedId) {
+        successNotice.value = { message: next.replay.lastSavedDuringWarmup
+          ? '回放已保存；缓存尚在积累，本次保存已有片段。' : '回放已保存到本地录像' };
+      }
+    }
+    statusLoaded = true;
+    state.value = next;
     if (code) notice.value = messages[code] ?? '本地录制未完成，请检查录像目录和诊断记录。';
   };
   const removeListener = desktop?.onRecordingState(setState);
@@ -239,13 +247,13 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
   watch(() => settings.value ? options.voices(settings.value) : [], tracks => voice?.update(tracks), { flush: 'sync' });
   void load();
   onScopeDispose(() => {
-    disposed = true; sourceChangeVersion++; removeListener?.(); if (timer) clearInterval(timer); clearTimeout(replaySavedTimer);
+    disposed = true; sourceChangeVersion++; removeListener?.(); if (timer) clearInterval(timer);
     const track = demandTrack;
     const cleanups = [active.value && state.value.recordingId ? desktop?.stopRecording(state.value.recordingId) : undefined,
       replayActive.value ? desktop?.stopReplay() : undefined];
     void Promise.allSettled(cleanups).finally(() => { if (track) void setNativeScreenRecordingDemand(track, false); });
   });
-  return { settings, state, notice, active, localActive, replayActive, replaySaved, replaySavedMessage, busy, elapsed, load, configure, chooseDirectory,
+  return { settings, state, notice, active, localActive, replayActive, successNotice, busy, elapsed, load, configure, chooseDirectory,
     start: () => startCurrent(), stop, reveal, withSourceChange, configureReplay,
     startReplay: () => replayAction('start'), saveReplay: () => replayAction('save'), stopReplay: () => replayAction('stop') };
 }

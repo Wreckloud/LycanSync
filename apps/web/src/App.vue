@@ -987,6 +987,22 @@ const recording = useRecording({
   },
 });
 const settingsSection = ref<SettingsSectionId>('account');
+const appNotice = ref<{ id: number; message: string; kind?: 'success'; source: string } | null>(null);
+let appNoticeId = 0;
+function showAppNotice(message: string, source: string, kind?: 'success') {
+  appNotice.value = { id: ++appNoticeId, message, source, kind };
+}
+function dismissAppNotice() {
+  if (appNotice.value?.source === 'update') emit('dismissUpdateWarning');
+  appNotice.value = null;
+}
+watch(() => rtc.notice, message => { if (message) showAppNotice(message, 'rtc'); }, { immediate: true });
+watch(viewerNotice, message => { if (message) showAppNotice(message, 'viewer'); }, { immediate: true });
+watch(recording.notice, message => {
+  if (message && (!settingsOpen.value || settingsSection.value !== 'recording')) showAppNotice(message, 'recording');
+});
+watch(recording.successNotice, notice => { if (notice) showAppNotice(notice.message, 'recording', 'success'); });
+watch(() => props.startupUpdateWarning, message => { if (message) showAppNotice(message, 'update'); }, { immediate: true });
 const settingsReturnFocus = ref<HTMLElement | null>(null);
 const viewingWindows = ref<InstanceType<typeof ScreenShareWindows> | null>(null);
 const viewingTarget = ref<HTMLElement | null>(null);
@@ -1385,10 +1401,7 @@ function participantListening(participant: Participant) {
       </div>
       <div v-else class="window-actions" aria-hidden="true"><span><Minus :size="14" /></span><span><Square :size="11" /></span><span><X :size="14" /></span></div>
     </header>
-    <AppNotice v-if="rtc.notice || viewerNotice" :message="rtc.notice || viewerNotice" />
-    <AppNotice v-else-if="recording.notice.value && (!settingsOpen || settingsSection !== 'recording')" :message="recording.notice.value" dismissible @dismiss="recording.notice.value = ''" />
-    <AppNotice v-else-if="recording.replaySaved.value" :message="recording.replaySavedMessage.value" kind="success" dismissible @dismiss="recording.replaySaved.value = false" />
-    <AppNotice v-else-if="startupUpdateWarning" :message="startupUpdateWarning" dismissible @dismiss="emit('dismissUpdateWarning')" />
+    <AppNotice v-if="appNotice" :key="appNotice.id" :message="appNotice.message" :kind="appNotice.kind" @dismiss="dismissAppNotice" />
     <DialogTransition>
     <RemoteControlRequest v-if="rtc.remoteControlRequest" :key="rtc.remoteControlRequest.requestId"
       :name="previewParticipantName(rtc.remoteControlRequest.identity,
