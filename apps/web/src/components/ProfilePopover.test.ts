@@ -13,20 +13,17 @@ const clock = parsed.statements.filter(statement => (ts.isVariableStatement(stat
   || statement.getText(parsed).startsWith('watch(() => [props.anchor, props.activityStartedAt'))
   .map(statement => statement.getText(parsed)).join('\n');
 const positioning = parsed.statements.filter(statement => statement.getText(parsed)
-  .startsWith('watch(() => [props.anchor, surface.value, props.placement]')
+  .startsWith('watch(() => [props.anchor, surface.value, props.placement,')
   || statement.getText(parsed).startsWith('onScopeDispose('))
   .map(statement => statement.getText(parsed)).join('\n');
 afterEach(() => { vi.useRealTimers(); });
 
-it('二级菜单属于同一浮层，点击或聚焦其中不关闭主卡，Esc 逐层处理', () => {
+it('卡片内部操作不关闭，Esc 关闭主卡并恢复入口焦点', () => {
   const target = {} as Node;
   const focus = vi.fn();
-  const props = { anchor: { contains: () => false, focus }, relatedSurface: { contains: (node: Node) => node === target } };
-  const surface = ref({ contains: () => false });
-  let nested = true;
-  const emit = vi.fn((name: string, event?: KeyboardEvent) => {
-    if (name === 'escape' && nested) { nested = false; event!.preventDefault(); }
-  });
+  const props = { anchor: { contains: () => false, focus } };
+  const surface = ref({ contains: (node: Node) => node === target });
+  const emit = vi.fn();
   const methods = parsed.statements.filter(statement => ts.isFunctionDeclaration(statement)
     && ['dismissOutside', 'dismissOnEscape'].includes(statement.name?.text ?? '')).map(statement => statement.getText(parsed)).join('\n');
   const callbacks = runInNewContext(`${ts.transpile(methods)}\n({ dismissOutside, dismissOnEscape })`, { props, surface, emit }) as {
@@ -36,9 +33,6 @@ it('二级菜单属于同一浮层，点击或聚焦其中不关闭主卡，Esc 
   expect(emit).not.toHaveBeenCalled();
   const escape = () => ({ key: 'Escape', defaultPrevented: false,
     preventDefault(this: { defaultPrevented: boolean }) { this.defaultPrevented = true; }, stopPropagation: vi.fn() }) as unknown as KeyboardEvent;
-  callbacks.dismissOnEscape(escape());
-  expect(emit).not.toHaveBeenCalledWith('close');
-  expect(focus).not.toHaveBeenCalled();
   callbacks.dismissOnEscape(escape());
   expect(emit).toHaveBeenCalledWith('close');
   expect(focus).toHaveBeenCalledOnce();

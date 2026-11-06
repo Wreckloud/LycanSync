@@ -1,40 +1,50 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { Check } from '@lucide/vue';
+import ActivityNameDialog from '../ActivityNameDialog.vue';
+import DialogTransition from '../DialogTransition.vue';
 import InlineFeedback from '../InlineFeedback.vue';
 import ProfilePopover from '../ProfilePopover.vue';
 import { useOwnVoiceTime } from '../../profile/useOwnVoiceTime';
 import type { AuthUser } from '../../auth/authApi';
 import { PRESENCE_STATUS_LABELS, type UserActivity, type UserPresenceStatus } from '../../presence/presenceApi';
 import type { useActivityMappings } from '../../settings/useActivityMappings';
+import type { PresenceMode } from '../../presence/usePresencePreference';
 
 const props = defineProps<{ user: AuthUser; desktop: boolean; active: boolean; activity: UserActivity | null;
   status?: UserPresenceStatus;
+  presenceMode?: PresenceMode; presenceReady?: boolean; presenceSyncing?: boolean; presenceError?: string;
   showActivity: boolean; showLastOnline: boolean; error: string; mappings: ReturnType<typeof useActivityMappings> }>();
-const emit = defineEmits<{ visibility: [enabled: boolean]; lastOnlineVisibility: [enabled: boolean] }>();
+const emit = defineEmits<{ visibility: [enabled: boolean]; lastOnlineVisibility: [enabled: boolean]; presenceMode: [mode: PresenceMode] }>();
 const executable = ref('');
-const name = ref('');
+const editingName = ref(false);
+const selectedName = computed(() => props.mappings.entries.value.find((entry) => entry.executable === executable.value)?.name
+  ?? props.mappings.windows.value.find((window) => window.executable === executable.value)?.title ?? '');
 const voiceTime = useOwnVoiceTime(() => props.active);
 
-function chooseWindow() {
-  const selected = props.mappings.windows.value.find((window) => window.executable === executable.value);
-  name.value = props.mappings.entries.value.find((entry) => entry.executable === executable.value)?.name
-    ?? selected?.title ?? '';
+function openEditor() {
+  if (!executable.value || props.mappings.busy.value || !props.mappings.ready.value) return;
+  props.mappings.error.value = '';
+  editingName.value = true;
 }
 
-function edit(entry: ActivityMapping) { executable.value = entry.executable; name.value = entry.name; }
-function cancelEdit() { executable.value = ''; name.value = ''; }
-async function saveName() {
-  if (await props.mappings.save(executable.value, name.value)) cancelEdit();
+function edit(entry: ActivityMapping) { executable.value = entry.executable; openEditor(); }
+function resetSelection() { executable.value = ''; }
+async function saveName(name: string) {
+  if (await props.mappings.save(executable.value, name)) editingName.value = false;
 }
 
 watch(() => props.active, (active) => {
-  cancelEdit();
+  editingName.value = false;
+  resetSelection();
   if (active && props.desktop) void props.mappings.refreshWindows();
 }, { immediate: true });
+defineExpose({ editingName });
 </script>
 
 <template>
   <section class="settings-section activity-settings">
+    <h2 class="activity-heading">动态与在线展示</h2>
     <aside class="activity-profile-preview" aria-label="资料卡预览">
       <ProfilePopover inline :anchor="null" placement="left" label="资料卡预览" :nickname="user.nickname" :avatar="user.avatar"
         :signature="user.signature" :status="status ?? 'ONLINE'" :status-label="PRESENCE_STATUS_LABELS[status ?? 'ONLINE']" :voice-seconds="voiceTime.seconds.value"
@@ -42,9 +52,8 @@ watch(() => props.active, (active) => {
         :activity="showActivity && status !== 'OFFLINE' && activity ? `${activity.type === 'MUSIC' ? '正在听' : '正在玩'} ${activity.name}` : undefined" />
     </aside>
     <div class="activity-settings-controls">
-    <h2>动态与在线展示</h2>
     <label class="settings-toggle activity-toggle">
-      <span><strong>显示动态</strong><small>展示当前游戏或音乐，以及最近一次公开游戏；关闭后清除最近游戏记录。</small></span>
+      <span><strong>显示动态</strong><small>展示当前游戏或音乐及最近一次公开游戏；关闭后隐藏并保留记录，重新开启可恢复展示。</small></span>
       <input type="checkbox" :checked="showActivity" aria-label="显示动态"
         @change="emit('visibility', ($event.target as HTMLInputElement).checked)" />
     </label>
@@ -53,82 +62,83 @@ watch(() => props.active, (active) => {
       <input type="checkbox" :checked="showLastOnline" aria-label="显示上次在线时间"
         @change="emit('lastOnlineVisibility', ($event.target as HTMLInputElement).checked)" />
     </label>
-    <InlineFeedback :message="error" />
-    <div class="activity-current">
-      <strong>{{ activity ? activity.name : (desktop ? '未检测到动态' : '动态检测仅在 Windows 桌面版提供') }}</strong>
+    <div class="settings-toggle activity-toggle activity-presence">
+      <span><strong>在线状态</strong><small>在线时闲置会自动显示离开；隐身不影响通话。</small></span>
+      <div class="presence-options" role="group" aria-label="在线状态" :aria-busy="presenceSyncing || !presenceReady" aria-describedby="activity-visibility-feedback">
+        <button v-for="mode in (['online', 'invisible'] as const)" :key="mode" type="button" class="presence-option"
+          :aria-label="mode === 'online' ? '在线' : '隐身'" :aria-pressed="presenceReady && presenceMode === mode" :disabled="!presenceReady"
+          @click="emit('presenceMode', mode)">
+          <span class="presence-option-dot" :class="mode" aria-hidden="true" />{{ mode === 'online' ? '在线' : '隐身' }}
+          <Check :size="14" class="presence-option-check" aria-hidden="true" />
+        </button>
+      </div>
+    </div>
+    <InlineFeedback id="activity-visibility-feedback" :message="error || presenceError" :status="!presenceReady ? '正在读取状态偏好…' : presenceSyncing ? '正在同步状态…' : ''" />
+    <p v-if="!desktop">动态检测仅在 Windows 桌面版提供</p>
     </div>
     <div v-if="desktop" class="activity-mappings">
-      <label for="activity-window">识别修正</label>
+      <header class="activity-mappings-heading">
+        <h2>动态识别修正</h2>
+        <p class="activity-current" :title="activity?.name">{{ activity ? `当前识别：${activity.name}` : '未检测到动态' }}</p>
+      </header>
       <div class="activity-window-choice">
-        <select id="activity-window" v-model="executable" :disabled="mappings.busy.value || !mappings.ready.value" @pointerdown="mappings.refreshWindows" @focus="mappings.refreshWindows" @change="chooseWindow">
-          <option value="" disabled>{{ mappings.loading.value ? '正在读取窗口…' : '选择正在运行的窗口' }}</option>
+        <label for="activity-window">运行中的程序</label>
+        <select id="activity-window" v-model="executable" :aria-busy="mappings.loading.value" aria-describedby="activity-mapping-feedback" :disabled="mappings.busy.value || !mappings.ready.value" @pointerdown="mappings.refreshWindows" @focus="mappings.refreshWindows">
+          <option value="" disabled>选择正在运行的窗口</option>
           <option v-for="entry in mappings.windows.value" :key="entry.executable" :value="entry.executable">{{ entry.title }}</option>
-          <option v-if="executable && !mappings.windows.value.some((entry) => entry.executable === executable)" :value="executable">{{ name }}（未运行）</option>
+          <option v-if="executable && !mappings.windows.value.some((entry) => entry.executable === executable)" :value="executable">{{ selectedName }}（未运行）</option>
         </select>
-        <button type="button" :disabled="!executable || mappings.busy.value" @click="cancelEdit">重置</button>
+        <div class="activity-window-actions">
+          <button type="button" :disabled="!executable || mappings.busy.value" title="清除当前选择，保留已保存的修正" @click="resetSelection">重置</button>
+          <button type="button" :disabled="!executable || mappings.busy.value || !mappings.ready.value" @click="openEditor">修改名称</button>
+        </div>
       </div>
-      <form v-if="executable" class="activity-name-editor" @submit.prevent="saveName">
-        <input v-model="name" aria-label="动态显示名称" maxlength="80" :disabled="mappings.busy.value" placeholder="显示名称" />
-        <button type="button" :disabled="mappings.busy.value" @click="cancelEdit">取消</button>
-        <button type="submit" :disabled="mappings.busy.value || !name.trim()">保存名称</button>
-      </form>
+      <div class="activity-mapping-feedback"><InlineFeedback id="activity-mapping-feedback" :message="(!editingName && mappings.error.value) || mappings.windowError.value"
+        :status="mappings.loading.value ? '正在读取窗口…' : ''" />
+        <button v-if="!mappings.ready.value && !mappings.busy.value" type="button" @click="mappings.initialize">重试</button></div>
       <div v-if="mappings.entries.value.length" class="activity-saved-names">
+        <h3>已保存的修正</h3>
         <div v-for="entry in mappings.entries.value" :key="entry.executable">
           <span>{{ entry.name }}</span><button type="button" :disabled="mappings.busy.value" :aria-label="`编辑动态名称 ${entry.name}`" @click="edit(entry)">编辑</button>
           <button type="button" :disabled="mappings.busy.value" :aria-label="`移除动态名称 ${entry.name}`" @click="mappings.remove(entry.executable)">移除</button>
         </div>
       </div>
       <small>名称按程序记忆，仍优先展示最新启动的游戏；音乐暂停后可能继续显示动态。</small>
-      <div class="activity-mapping-feedback"><InlineFeedback :message="mappings.error.value || mappings.windowError.value" />
-        <button v-if="!mappings.ready.value && !mappings.busy.value" type="button" @click="mappings.initialize">重试</button></div>
-    </div>
     </div>
   </section>
+  <DialogTransition>
+    <ActivityNameDialog v-if="editingName" :initial-name="selectedName" :busy="mappings.busy.value" :error="mappings.error.value"
+      @cancel="editingName = false" @save="saveName" />
+  </DialogTransition>
 </template>
 
 <style scoped>
-.activity-settings { grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: 24px; padding-bottom: 20px; border-bottom: 1px solid var(--border-soft); }
+.activity-settings { grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: 16px 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border-soft); }
+.activity-heading { grid-column: 1 / -1; }
 .activity-settings-controls { display: grid; align-content: start; gap: 12px; min-width: 0; }
 .activity-profile-preview { min-width: 0; align-self: start; }
 @media (max-width: 1050px) { .activity-settings { grid-template-columns: minmax(0, 1fr); } .activity-profile-preview { max-width: 292px; } }
-.activity-current { min-width: 0; color: var(--muted); }
-.activity-current strong { overflow-wrap: anywhere; color: var(--text); font-size: 14px; font-weight: 500; }
+.activity-mappings-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; min-width: 0; }
+.activity-mappings-heading h2 { flex-shrink: 0; }
+.activity-current { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .activity-toggle { padding: 0; border-top: 0; }
-.activity-mappings { display: grid; gap: 8px; min-width: 0; }
-.activity-mappings > label { font-size: 14px; font-weight: 500; }
-.activity-window-choice, .activity-name-editor { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.activity-window-choice select, .activity-name-editor input { flex: 1; min-width: 0; width: 0; }
-.activity-window-choice button, .activity-name-editor button { flex-shrink: 0; }
-.activity-window-choice button { display: grid; place-items: center; }
-.activity-window-choice select, .activity-name-editor input { height: var(--button-height); padding: var(--button-padding); border: 1px solid var(--border); border-radius: 6px; background: var(--background); color: var(--text); font: inherit; font-size: 13px; }
+.activity-presence { flex-wrap: wrap; }
+.activity-mappings { grid-column: 1 / -1; display: grid; gap: 8px; min-width: 0; padding-top: 16px; border-top: 1px solid var(--border-soft); }
+.activity-window-choice { display: grid; grid-template-columns: 100px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-width: 0; }
+.activity-window-actions { display: flex; gap: 8px; }
+.activity-window-actions button { white-space: nowrap; }
+.activity-window-choice select { min-width: 0; width: 100%; box-sizing: border-box; }
 .activity-mappings small { color: var(--muted); font-size: 12px; line-height: 18px; }
 .activity-mapping-feedback { display: flex; align-items: center; gap: 8px; min-height: 32px; }
 .activity-mapping-feedback .inline-feedback { flex: 1; }
 .activity-saved-names { display: grid; gap: 4px; }
+.activity-saved-names h3 { margin: 0 0 4px; color: var(--muted); font-size: 13px; font-weight: 500; }
 .activity-saved-names > div { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .activity-saved-names span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-saved-names button { padding: 2px 4px; min-height: 26px; border: 0; background: transparent; color: var(--muted); }
-@media (max-width: 520px) { .activity-name-editor { flex-wrap: wrap; } .activity-name-editor input { flex-basis: 100%; } }
-@supports (appearance: base-select) {
-  .activity-window-choice select, .activity-window-choice select::picker(select) { appearance: base-select; }
-  .activity-window-choice select { display: flex; align-items: center; gap: 8px; overflow: hidden; }
-  .activity-window-choice select::picker-icon { flex-shrink: 0; margin-inline-start: auto; color: var(--muted); transition: transform var(--motion-surface-duration) var(--motion-ease); }
-  .activity-window-choice select:open::picker-icon { transform: rotate(180deg); }
-  .activity-window-choice select::picker(select) {
-    min-width: anchor-size(width); max-width: calc(100vw - 32px); max-height: min(300px, 60dvh); margin-block: 4px;
-    padding: 4px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-soft); color: var(--text);
-    opacity: 0; transform: translateY(-4px);
-    transition: opacity var(--motion-surface-duration) var(--motion-ease), transform var(--motion-surface-duration) var(--motion-ease),
-      display var(--motion-surface-duration) allow-discrete, overlay var(--motion-surface-duration) allow-discrete;
-  }
-  .activity-window-choice select:open::picker(select) { opacity: 1; transform: translateY(0); }
-  .activity-window-choice select:not(:open)::picker(select) { pointer-events: none; }
-  @starting-style { .activity-window-choice select:open::picker(select) { opacity: 0; transform: translateY(-4px); } }
-  .activity-window-choice option { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 6px 10px; border-radius: 4px; font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
-  .activity-window-choice option:disabled { display: none; }
-  .activity-window-choice option:hover, .activity-window-choice option:focus-visible, .activity-window-choice option:checked { background: var(--panel-raised); }
-  .activity-window-choice option:checked { font-weight: 500; }
-  .activity-window-choice option::checkmark { order: 1; margin-inline-start: auto; color: var(--accent); }
-  @media (prefers-reduced-motion: reduce) { .activity-window-choice select::picker(select), .activity-window-choice select::picker-icon { transition: none; } }
+@media (max-width: 640px) {
+  .activity-window-choice { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .activity-window-choice label { grid-column: 1 / -1; }
+  .activity-mappings-heading { display: grid; gap: 4px; }
 }
 </style>

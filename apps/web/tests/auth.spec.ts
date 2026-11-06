@@ -648,7 +648,7 @@ test('裁剪中更换头像沿用次级按钮，取消保留调整，合规头�
   await expect(slider).toHaveValue('1');
   await expect(image).toHaveCSS('width', imageWidth);
   const [cancelled] = await Promise.all([
-    page.waitForEvent('filechooser'), dialog.getByRole('button', { name: '更换头像', exact: true }).click(),
+    page.waitForEvent('filechooser'), dialog.getByRole('button', { name: '重新选择', exact: true }).click(),
   ]);
   await cancelled.setFiles([]);
   await expect(slider).toHaveValue('1');
@@ -663,14 +663,14 @@ test('裁剪中更换头像沿用次级按钮，取消保留调整，合规头�
   await expect(slider).toHaveValue('1');
   const replacement = await avatarPng(page, 128, 256);
   const [chooser] = await Promise.all([
-    page.waitForEvent('filechooser'), dialog.getByRole('button', { name: '更换头像', exact: true }).click(),
+    page.waitForEvent('filechooser'), dialog.getByRole('button', { name: '重新选择', exact: true }).click(),
   ]);
   await chooser.setFiles({ name: 'replacement.png', mimeType: 'image/png', buffer: Buffer.from(replacement.split(',')[1], 'base64') });
   await expect(dialog).toHaveCount(1);
   await expect(image).toHaveJSProperty('naturalWidth', 128);
   await expect(image).toHaveJSProperty('naturalHeight', 256);
   await expect(slider).toHaveValue('0');
-  const replace = dialog.getByRole('button', { name: '更换头像', exact: true });
+  const replace = dialog.getByRole('button', { name: '重新选择', exact: true });
   await expect(replace).toHaveClass('settings-button');
   await page.setViewportSize({ width: 420, height: 720 });
   await expect(replace).toBeInViewport();

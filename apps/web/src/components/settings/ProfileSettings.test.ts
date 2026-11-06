@@ -22,7 +22,7 @@ function setup() {
   const draft = scope.run(() => useProfileDraft(user, saveProfile))!;
   // 执行设置页正式回调和真实草稿模型，控制服务端失败而不复制回退逻辑。
   const state = { ...draft, saveDraft: draft.save, editingNickname: ref(true), picking: ref(false), cropSource: ref(null) };
-  const finish = runInNewContext(`${compiled}\nfinishEditing`, state) as () => Promise<boolean>;
+  const finish = runInNewContext(`${compiled}\nfinishEditing`, state) as (field?: 'avatar' | 'nickname' | 'signature') => Promise<boolean>;
   return { scope, user, draft, state, saveProfile, finish };
 }
 
@@ -84,4 +84,27 @@ it('读取头像时等待处理，不提前结束编辑', async () => {
     expect(state.editingNickname.value).toBe(true);
     expect(saveProfile).not.toHaveBeenCalled();
   } finally { scope.stop(); }
+});
+
+it.each(['avatar', 'nickname', 'signature'] as const)('%s 保存失败留在触发操作的区域，仍回退资料', async field => {
+  const f = setup();
+  try {
+    f.draft[field].value = '新内容';
+    f.saveProfile.mockRejectedValueOnce(new Error('无法保存，请重试。'));
+    expect(await f.finish(field)).toBe(true);
+    expect(f.draft.errorField.value).toBe(field);
+    expect(f.draft.error.value).toBe('无法保存，请重试。');
+    expect(f.draft[field].value).toBe(initial[field]);
+  } finally { f.scope.stop(); }
+});
+
+it('头像提交同时遇到非法昵称时，校验错误仍归昵称而非头像', async () => {
+  const f = setup();
+  try {
+    f.draft.nickname.value = '';
+    f.draft.avatar.value = '新头像';
+    await f.finish('avatar');
+    expect(f.draft.errorField.value).toBe('nickname');
+    expect(f.saveProfile).not.toHaveBeenCalled();
+  } finally { f.scope.stop(); }
 });

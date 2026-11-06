@@ -13,22 +13,23 @@ const props = defineProps<{
   user: AuthUser;
   saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
 }>();
-const { nickname, avatar, signature, busy, error, dirty, save: saveDraft, resetDraft } = useProfileDraft(toRef(props, 'user'), props.saveProfile);
+const { nickname, avatar, signature, busy, error, errorField, dirty, save: saveDraft, resetDraft } = useProfileDraft(toRef(props, 'user'), props.saveProfile);
 const avatarInput = ref<HTMLInputElement | null>(null);
 const nicknameInput = ref<HTMLInputElement | null>(null);
 const nicknameButton = ref<HTMLButtonElement | null>(null);
 const editingNickname = ref(false);
 const savingAvatar = ref(false);
-const { cropSource, picking, pickAvatar, editAvatar, clearCrop } = useAvatarCrop(error);
+const avatarError = ref('');
+const { cropSource, picking, pickAvatar, editAvatar, clearCrop } = useAvatarCrop(avatarError);
 const registrationDate = computed(() => formatRegistrationDate(props.user.createdAt));
 const cropping = computed(() => !!cropSource.value);
 const preview = computed(() => ({ ...props.user, nickname: nickname.value, avatar: avatar.value, signature: signature.value }));
 
-async function finishEditing() {
+async function finishEditing(field: 'avatar' | 'nickname' | 'signature' | null = null) {
   if (picking.value || cropSource.value) return false;
   // 返回值只表示可以结束编辑；保存失败回退资料，保留错误，不阻断离开设置。
   if (busy.value || dirty.value) {
-    if (!await saveDraft()) resetDraft();
+    if (!await saveDraft(field)) resetDraft();
   }
   editingNickname.value = false;
   return true;
@@ -46,14 +47,14 @@ async function applyAvatar(value: string) {
   avatar.value = value;
   clearCrop();
   savingAvatar.value = true;
-  try { await finishEditing(); }
+  try { await finishEditing('avatar'); }
   finally { savingAvatar.value = false; }
 }
 
 async function submitNickname(event: KeyboardEvent) {
   if (event.isComposing) return;
   event.preventDefault();
-  if (await finishEditing()) {
+  if (await finishEditing('nickname')) {
     await nextTick();
     nicknameButton.value?.focus();
   }
@@ -76,22 +77,26 @@ defineExpose({ finishEditing, cropping, preview });
         <input ref="avatarInput" type="file" hidden aria-label="上传头像" accept="image/png,image/jpeg" @change="pickAvatar" />
         <div class="profile-nickname">
           <input v-if="editingNickname" ref="nicknameInput" v-model="nickname" aria-label="昵称" maxlength="32"
-            :readonly="busy" :aria-invalid="!nickname.trim()" @blur="finishEditing" @keydown.enter="submitNickname" />
+            :readonly="busy" :aria-invalid="!nickname.trim()" aria-describedby="profile-nickname-feedback" @blur="finishEditing('nickname')" @keydown.enter="submitNickname" />
           <button v-else ref="nicknameButton" type="button" :aria-label="`修改昵称，${nickname}`" :disabled="busy" @click="editNickname">
             <span>{{ nickname }}</span><Pencil :size="15" aria-hidden="true" />
           </button>
           <span class="profile-registration">注册于 <time v-if="registrationDate" :datetime="user.createdAt">{{ registrationDate }}</time><span v-else>暂不可用</span></span>
+          <InlineFeedback id="profile-nickname-feedback" :message="errorField === 'nickname' ? error : ''" />
         </div>
+        <InlineFeedback class="profile-avatar-feedback" :message="avatarError || (errorField === 'avatar' ? error : '')"
+          :status="picking ? '正在读取图片…' : ''" />
       </div>
       <div class="profile-signature">
         <div class="profile-signature-heading"><label for="profile-signature">个性签名 <span>选填</span></label>
           <span class="profile-signature-count">{{ signature.length }} / 120</span></div>
         <textarea id="profile-signature" v-model="signature" aria-label="个性签名" maxlength="120" rows="2"
-          :readonly="busy" placeholder="写一句想让朋友看到的话" @blur="finishEditing" />
+          :readonly="busy" aria-describedby="profile-signature-feedback" placeholder="写一句想让朋友看到的话" @blur="finishEditing('signature')" />
+        <InlineFeedback id="profile-signature-feedback" :message="errorField === 'signature' ? error : ''" />
       </div>
     </div>
-    <InlineFeedback :message="error"
-      :status="busy && !savingAvatar ? '正在保存…' : picking ? '正在读取图片…' : ''" />
+    <InlineFeedback :message="errorField === null ? error : ''"
+      :status="busy && !savingAvatar ? '正在保存…' : ''" />
     <DialogTransition>
     <AvatarCropDialog v-if="cropSource" :key="cropSource.previewUrl" :source="cropSource" title="调整头像"
       @apply="applyAvatar" @replace="pickAvatar" @cancel="clearCrop" />
@@ -102,14 +107,15 @@ defineExpose({ finishEditing, cropping, preview });
 <style scoped>
 .profile-settings { max-width: 820px; gap: 4px; border-bottom: 1px solid var(--border-soft); }
 .profile-details { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: center; padding-top: 4px; }
-.profile-identity { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.profile-identity { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; min-width: 0; }
+.profile-avatar-feedback { flex-basis: 100%; }
 .profile-avatar-area { position: relative; flex-shrink: 0; }
 .profile-avatar-preview { position: relative; flex-shrink: 0; width: 76px; height: 76px; display: grid; place-items: center; overflow: hidden; padding: 0; border: 0; border-radius: 50%; background: var(--panel-raised); color: var(--muted); cursor: pointer; }
 .profile-avatar { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 .profile-avatar-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; background: #0009; color: white; font-size: 12px; opacity: 0; transition: opacity var(--motion-surface-duration) ease; }
 .profile-avatar-preview:hover .profile-avatar-overlay, .profile-avatar-preview:focus-visible .profile-avatar-overlay, .profile-avatar-overlay.is-saving { opacity: 1; }
 .profile-avatar-preview:disabled { opacity: 1; }
-.profile-nickname { display: grid; grid-template-rows: 40px 20px; gap: 4px; min-width: 0; flex: 1; }
+.profile-nickname { display: grid; grid-template-rows: 40px 20px 32px; gap: 4px; min-width: 0; flex: 1; }
 .profile-nickname button { display: flex; align-items: center; justify-content: flex-start; gap: 12px; min-width: 0; min-height: 40px; padding: 6px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
 .profile-nickname button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 20px; font-weight: 600; line-height: 24px; }
 .profile-nickname button svg { flex-shrink: 0; color: var(--muted); }

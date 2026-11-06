@@ -1,4 +1,5 @@
 import { computed, markRaw, onScopeDispose, ref, shallowRef } from 'vue';
+import { useNotice } from '../feedback/useNotice';
 import {
   ConnectionState, DisconnectReason, LocalAudioTrack, Room, RoomEvent, Track,
   type LocalTrack, type Participant, type RemoteParticipant,
@@ -137,7 +138,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   const playbackContext = shallowRef<AudioContext | null>(null);
   const status = ref<RoomStatus>('idle');
   const participants = shallowRef<Participant[]>([]);
-  const notice = ref('');
+  const { notice, noticeEvent } = useNotice();
   const needsAudioPlayback = ref(false);
   const busySources = ref<MediaSource[]>([]);
   const listening = ref(true);
@@ -1655,7 +1656,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     }
   }
 
-  return { revision, room, playbackContext, status, participants, notice, needsAudioPlayback, busySources, screenShareActive,
+  return { revision, room, playbackContext, status, participants, notice, noticeEvent, needsAudioPlayback, busySources, screenShareActive,
     screenShareStarting,
     listening, microphoneIntent, microphoneEnabled,
     currentScreenShareQuality, currentCustomScreenShareQuality, screenShareQualityBusy, setScreenShareQuality,

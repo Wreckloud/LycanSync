@@ -503,7 +503,6 @@ onMounted(async () => {
 .entry-shell > .titlebar { flex: 0 0 var(--titlebar-height); }
 .entry-pages { position: relative; display: flex; flex: 1; min-height: 0; }
 .entry-shell :deep(.auth-screen), .entry-shell :deep(.startup-update-screen) { flex: 1; }
-.entry-shell :deep(.app-notice) { position: static; transform: none; width: 100%; flex: 0 0 auto; }
 .auth-more-toggle { display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 13px; }
 .auth-more-toggle:hover { color: var(--text); }
 .auth-more-toggle svg { transition: transform var(--motion-expand-duration) var(--motion-ease); }

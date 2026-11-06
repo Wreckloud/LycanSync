@@ -57,6 +57,38 @@ it('开始与保存只在确认新状态后提示，周期快照不重复提示'
   } finally { f.scope.stop(); }
 });
 
+it('回放操作错误归回放，手动重试同一错误重新通知', async () => {
+  const f = await fixture();
+  try {
+    f.desktop.startReplay.mockRejectedValue(new Error('replaySaveUnconfirmed'));
+    await f.recording.startReplay();
+    expect(f.recording.noticeTarget.value).toBe('replay');
+    const first = f.recording.noticeEvent.value;
+    expect(first?.message).toContain('回放保存尚未确认');
+    await f.recording.startReplay();
+    expect(f.recording.noticeEvent.value).not.toBe(first);
+    expect(f.recording.noticeEvent.value?.message).toBe(first?.message);
+  } finally { f.scope.stop(); }
+});
+
+it('周期快照保留故障状态但不重复弹通知，新的故障才重新提示', async () => {
+  const f = await fixture();
+  try {
+    const failed = { ...f.recording.state.value, error: 'recordingDiskFull' };
+    f.publish(failed);
+    expect(f.recording.noticeTarget.value).toBe('recording');
+    const event = f.recording.noticeEvent.value;
+    f.publish({ ...failed });
+    expect(f.recording.noticeEvent.value).toBe(event);
+    f.recording.notice.value = '';
+    f.publish({ ...failed });
+    expect(f.recording.notice.value).toContain('录像目录可用空间不足');
+    f.publish({ ...failed, error: null });
+    f.publish(failed);
+    expect(f.recording.noticeEvent.value).not.toBe(event);
+  } finally { f.scope.stop(); }
+});
+
 it('来源选择取消不影响当前录像；确认后先保存再换源，换完再开始新段', async () => {
   const f = await fixture();
   try {

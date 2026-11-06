@@ -206,7 +206,6 @@ defineExpose({ sourcesElement });
 .capture-dialog > .expand-section { flex-shrink: 0; }
 .capture-advanced p { color: var(--muted); font-size: 12px; }
 .capture-method { display: flex; align-items: center; gap: 12px; }
-.capture-method select { min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--background); color: var(--text); font: inherit; }
 .capture-quality { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 8px 0 12px; }
 .capture-quality-tabs { flex-shrink: 0; }
 .capture-quality-description { display: grid; gap: 2px; min-width: 0; line-height: 20px; }

@@ -13,6 +13,7 @@ export function useProfileDraft(
   const signature = ref(savedSignature.value);
   const busy = ref(false);
   const error = ref('');
+  const errorField = ref<'avatar' | 'nickname' | 'signature' | null>(null);
   const dirty = computed(() => nickname.value.trim() !== savedNickname.value || avatar.value !== savedAvatar.value
     || signature.value.trim() !== savedSignature.value);
   let pendingSave: Promise<boolean> | null = null;
@@ -32,14 +33,16 @@ export function useProfileDraft(
     signature.value = savedSignature.value;
   }
 
-  function save(): Promise<boolean> {
+  function save(field: typeof errorField.value = null): Promise<boolean> {
     if (pendingSave) return pendingSave;
     const profile = { nickname: nickname.value.trim(), avatar: avatar.value, signature: signature.value.trim() };
     if (!profile.nickname) {
+      errorField.value = 'nickname';
       error.value = '昵称不能为空。';
       return Promise.resolve(false);
     }
     if (profile.signature.length > 120) {
+      errorField.value = 'signature';
       error.value = '个性签名最多 120 个字符。';
       return Promise.resolve(false);
     }
@@ -51,6 +54,7 @@ export function useProfileDraft(
     }
     busy.value = true;
     error.value = '';
+    errorField.value = field;
     pendingSave = Promise.resolve().then(async () => {
       try {
         const updated = await saveProfile(profile);
@@ -75,5 +79,5 @@ export function useProfileDraft(
     return pendingSave;
   }
 
-  return { nickname, avatar, signature, busy, error, dirty, save, resetDraft };
+  return { nickname, avatar, signature, busy, error, errorField, dirty, save, resetDraft };
 }

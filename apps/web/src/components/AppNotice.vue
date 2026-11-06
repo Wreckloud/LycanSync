@@ -31,7 +31,7 @@ onScopeDispose(() => clearTimeout(timer));
 </template>
 
 <style scoped>
-.app-notice { position: fixed; z-index: 50; top: 54px; left: 50%; transform: translateX(-50%); width: min(680px, calc(100% - 32px)); }
+.app-notice { position: fixed; z-index: 120; top: 54px; left: 50%; transform: translateX(-50%); width: min(680px, calc(100% - 32px)); }
 .notice { display: flex; align-items: flex-start; gap: 12px; padding: 10px 13px; border: 1px solid #6c533a; border-radius: 5px; background: #332820; color: #f3cfaa; box-shadow: 0 12px 35px #0008; font-size: 14px; }
 .notice-message { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 24px; }
 .is-success .notice { border-color: var(--good); background: var(--panel); color: var(--text); }

@@ -74,6 +74,6 @@ onScopeDispose(() => { void props.overlay.edit(false); });
 .overlay-options legend { padding: 0; font-weight: 600; }
 .overlay-options label { display: flex; gap: 8px; align-items: center; }
 .overlay-field { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 16px; align-items: center; padding: 12px 0; }
-.overlay-field select { width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel-soft); color: var(--text); font: inherit; }
+.overlay-field select { width: 100%; }
 @media (max-width: 760px) { .overlay-field { grid-template-columns: 1fr; gap: 8px; } }
 </style>

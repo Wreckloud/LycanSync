@@ -11,7 +11,7 @@ mkdirSync(join(root, 'release/diagnostics'), { recursive: true });
 const templates = resolve(require.resolve('app-builder-lib/package.json'), '../templates/nsis');
 const utilities = readFileSync(join(templates, 'include/installUtil.nsh'), 'utf8');
 
-test('真实 NSIS 隔离升级：数据内运行、文件占用回退、解包中止及卸载均不删除 data', { skip: process.platform !== 'win32' }, () => {
+test('真实 NSIS 隔离安装：继承唯一旧安装范围，升级、回退及卸载均保留 data', { skip: process.platform !== 'win32' }, () => {
   const directory = mkdtempSync(join(root, 'release/diagnostics/installer-regression-'));
   const nsisDirectory = join(root, 'release/build-cache/nsis-3.0.4.1');
   assert.ok(existsSync(nsisDirectory), '请先完成桌面打包以准备固定 NSIS 缓存，再运行隔离安装回归。');
@@ -26,6 +26,43 @@ test('真实 NSIS 隔离升级：数据内运行、文件占用回退、解包�
     if (result.error) throw result.error;
     return result;
   }
+  // 执行实际宏及固定构建器的接入条件，不写注册表或触碰真实安装。
+  const installerSource = readFileSync(join(__dirname, 'installer.nsh'), 'utf8');
+  const modeMacro = installerSource.match(/^  !macro customInstallMode\r?\n[\s\S]*?^  !macroend/m)?.[0];
+  const modeUi = readFileSync(join(templates, 'multiUserUi.nsh'), 'utf8');
+  const modeHook = modeUi.match(/!ifmacrodef customInstallmode\r?\n\s*!insertmacro customInstallMode\r?\n\s*!endif/)?.[0];
+  assert.ok(modeMacro && modeHook, '固定 NSIS 安装范围接入点已变化');
+  const modeExecutable = join(directory, 'install-mode.exe');
+  const modeResults = join(directory, 'install-mode.txt');
+  const modeSource = join(directory, 'install-mode.nsi');
+  writeFileSync(modeSource, `Unicode true
+RequestExecutionLevel user
+SilentInstall silent
+OutFile "${modeExecutable}"
+!include LogicLib.nsh
+Var hasPerUserInstallation
+Var hasPerMachineInstallation
+Var isForceCurrentInstall
+Var isForceMachineInstall
+${modeMacro}
+Section
+  FileOpen $0 "${modeResults}" w
+${[[0, 0], [1, 0], [0, 1], [1, 1]].map(([user, machine]) => `
+  StrCpy $hasPerUserInstallation "${user}"
+  StrCpy $hasPerMachineInstallation "${machine}"
+  StrCpy $isForceCurrentInstall "0"
+  StrCpy $isForceMachineInstall "0"
+  ${modeHook}
+  FileWrite $0 "$isForceCurrentInstall,$isForceMachineInstall$\\r$\\n"
+`).join('')}
+  FileClose $0
+SectionEnd
+`);
+  const modeBuild = run(compiler, ['/V2', '/INPUTCHARSET', 'UTF8', modeSource]);
+  assert.equal(modeBuild.status, 0, modeBuild.stdout + modeBuild.stderr);
+  assert.equal(run(modeExecutable, []).status, 0);
+  assert.equal(readFileSync(modeResults, 'utf8').replaceAll('\r\n', '\n'), '0,0\n1,0\n0,1\n0,0\n');
+
   function compile(mode) {
     const executable = join(directory, `${mode}.exe`);
     const script = `Unicode true

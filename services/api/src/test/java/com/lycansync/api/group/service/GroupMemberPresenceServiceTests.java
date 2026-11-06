@@ -92,12 +92,17 @@ class GroupMemberPresenceServiceTests {
         Instant now = Instant.parse("2026-11-01T08:00:00Z");
         AuthenticatedUser requester = new AuthenticatedUser(UUID.randomUUID(), "查看者", false, "session");
         when(groups.findMemberIds(groupId)).thenReturn(List.of(userId));
-        when(presences.findPresenceByUsers(Set.of(userId))).thenReturn(Map.of(userId,
-                new UserPresence(userId, UserPresenceStatus.OFFLINE, now, null, null, null,
-                        now, false, true, now.minusSeconds(600), "不应返回的游戏", now, 3600L)));
-        var hiddenGame = service.findPresences(groupId, requester).get(0);
-        assertThat(hiddenGame.lastOnlineAt()).isEqualTo(now.minusSeconds(600));
-        assertThat(hiddenGame.recentGame()).isNull();
+        for (UserPresenceStatus status : List.of(UserPresenceStatus.ONLINE, UserPresenceStatus.AWAY, UserPresenceStatus.OFFLINE)) {
+            when(presences.findPresenceByUsers(Set.of(userId))).thenReturn(Map.of(userId,
+                    new UserPresence(userId, status, now, UserActivityType.GAME, "旧动态", now,
+                            now, false, true, now.minusSeconds(600), "保留但不公开的游戏", now, 3600L)));
+            var hiddenGame = service.findPresences(groupId, requester).get(0);
+            assertThat(hiddenGame.lastOnlineAt()).isEqualTo(status == UserPresenceStatus.OFFLINE ? now.minusSeconds(600) : null);
+            assertThat(hiddenGame.activityType()).isNull();
+            assertThat(hiddenGame.activityName()).isNull();
+            assertThat(hiddenGame.activityStartedAt()).isNull();
+            assertThat(hiddenGame.recentGame()).isNull();
+        }
         when(presences.findPresenceByUsers(Set.of(userId))).thenReturn(Map.of(userId,
                 new UserPresence(userId, UserPresenceStatus.ONLINE, now, UserActivityType.GAME, "当前游戏", now,
                         now, true, false, now.minusSeconds(600), "最近游戏", now.minusSeconds(600), 3600L)));

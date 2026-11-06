@@ -8,6 +8,17 @@
   Var lycanDesktopShortcutCheckbox
   Var lycanInstallStartedAt
 
+  !macro customInstallMode
+    ; 只有唯一旧安装时继承范围；首次安装或两种范围并存仍由用户选择。
+    ${If} $hasPerUserInstallation == "1"
+    ${AndIf} $hasPerMachineInstallation == "0"
+      StrCpy $isForceCurrentInstall "1"
+    ${ElseIf} $hasPerUserInstallation == "0"
+    ${AndIf} $hasPerMachineInstallation == "1"
+      StrCpy $isForceMachineInstall "1"
+    ${EndIf}
+  !macroend
+
   !macro customInit
     System::Call 'kernel32::GetTickCount() i .r0'
     StrCpy $lycanInstallStartedAt $0

@@ -148,7 +148,7 @@ function updateInputGain(event: Event) {
 .settings-range-row span, .settings-range-row label { display: flex; justify-content: space-between; gap: 12px; }
 .settings-range-row strong { flex-shrink: 0; color: var(--accent); }
 .settings-range-row input { width: 100%; margin: 0; accent-color: var(--accent); }
-.settings-range-row select { min-width: 0; width: 100%; min-height: 34px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-raised); color: var(--text); font: inherit; }
+.settings-range-row select { width: 100%; }
 .device-refresh { justify-self: end; padding: 6px 14px; }
 @media (max-width: 760px) {
   .settings-range-row { grid-template-columns: minmax(0, 1fr); gap: 9px; }

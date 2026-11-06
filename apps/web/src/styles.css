@@ -1,5 +1,6 @@
 @import './styles/tokens.css';
 @import './styles/motion.css';
+@import './styles/select.css';
 
 * { box-sizing: border-box; }
 
@@ -816,3 +817,12 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .disclosure-value { margin-left: auto; color: var(--text); }
 .disclosure-arrow { flex-shrink: 0; transition: transform var(--motion-expand-duration) var(--motion-ease); }
 .disclosure-arrow.is-open { transform: rotate(90deg); }
+
+.presence-options { display: flex; gap: 4px; flex-shrink: 0; }
+.presence-option { display: grid; grid-template-columns: 8px auto 14px; align-items: center; gap: 6px; min-height: 32px; padding: 5px 7px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--muted); font-size: 13px; line-height: 20px; }
+.presence-option:hover:not(:disabled), .presence-option[aria-pressed='true'] { background: var(--panel-raised); color: var(--text); }
+.presence-option[aria-pressed='true'] { border-color: var(--border); }
+.presence-option-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--subtle); }
+.presence-option-dot.online { background: var(--good); }
+.presence-option-check { visibility: hidden; }
+.presence-option[aria-pressed='true'] .presence-option-check { visibility: visible; }

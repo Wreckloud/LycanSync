@@ -21,6 +21,7 @@ const compiled = ts.transpile(`${blockedState.getText(sourceFile)}\n${callbacks}
 function setup() {
   const state = { activeSection: ref<SettingsSectionId>('account'), leaving: ref(false),
     profileSettings: ref({ cropping: false, finishEditing: vi.fn(async () => true) }),
+      activitySettings: ref({ editingName: false }),
     clientSettings: ref({ confirmingUpdate: false }), computed,
     props: { user: { administrator: false } }, emit: vi.fn() };
   const callbacks = runInNewContext(`${compiled}\n({ selectSection, leaveSettings })`, state) as {
@@ -58,7 +59,7 @@ it('头像尚未处理完时保留账号页，不发出返回或退出事件', a
   state.profileSettings.value.finishEditing.mockResolvedValue(false);
   await leaveSettings(false);
   expect(state.activeSection.value).toBe('account');
-  expect(state.emit).not.toHaveBeenCalled();
+  expect(state.emit).toHaveBeenCalledExactlyOnceWith('update:section', 'account');
   expect(state.leaving.value).toBe(false);
 });
 
@@ -74,18 +75,22 @@ it('更新确认期间隔离栏目、返回和退出；取消确认后可以继�
   expect(state.emit).not.toHaveBeenCalled();
   state.clientSettings.value.confirmingUpdate = false;
   await selectSection('account');
+  expect(state.emit).toHaveBeenCalledWith('update:section', 'account');
+  state.emit.mockClear();
   await leaveSettings(false);
   expect(state.emit).toHaveBeenCalledExactlyOnceWith('close');
 });
 
-it('裁剪弹窗期间不启动背景操作，关闭裁剪后恢复操作', async () => {
+  it.each(['cropping', 'editingName'] as const)('资料弹窗 %s 期间不启动背景操作，关闭后恢复操作', async (dialog) => {
   const { state, selectSection, leaveSettings } = setup();
-  state.profileSettings.value.cropping = true;
+    if (dialog === 'cropping') state.profileSettings.value.cropping = true;
+    else state.activitySettings.value.editingName = true;
   await selectSection('client');
   await leaveSettings(false);
   expect(state.profileSettings.value.finishEditing).not.toHaveBeenCalled();
   expect(state.emit).not.toHaveBeenCalled();
   state.profileSettings.value.cropping = false;
+    state.activitySettings.value.editingName = false;
   await selectSection('client');
   expect(state.activeSection.value).toBe('client');
 });

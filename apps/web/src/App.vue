@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, provide, reactive, ref, watch } from 'vue';
 import { ACCOUNT_CACHE, createAccountCache } from './cache/localCache';
+import { useNotice } from './feedback/useNotice';
 import { useInitialLoading } from './profile/useInitialLoading';
 import { ArrowLeft, AudioLines, Copy, CornerUpLeft, Headphones,
   LoaderCircle, LogOut, Minus, Plus, RadioTower,
@@ -79,7 +80,7 @@ const callSoundPreferences = useCallSoundPreferences(props.user.id);
 const audioOutput = useAudioOutput(audioPreferences);
 const callSounds = useCallSounds(outputVolume, callSoundPreferences, audioOutput);
 const desktop = window.lycanDesktop;
-const viewerNotice = ref('');
+const { notice: viewerNotice, noticeEvent: viewerNoticeEvent } = useNotice();
 const mainWindowVisible = ref(true);
 let appDisposed = false;
 let nativeVisibilityReceived = false;
@@ -431,10 +432,6 @@ watch(() => rtc.playbackContext, (context, _, onCleanup) => {
   void binding.ready.catch(() => {});
   onCleanup(binding.release);
 }, { flush: 'sync' });
-watch(audioOutput.notice, (message, previous) => {
-  if (message) viewerNotice.value = message;
-  else if (viewerNotice.value === previous) viewerNotice.value = '';
-});
 
 // 预先恢复被静音成员的订阅策略；之后只有跨越 0% 时才更新网络订阅。
 audioPreferences.mutedParticipantIdentities()
@@ -996,10 +993,19 @@ function dismissAppNotice() {
   if (appNotice.value?.source === 'update') emit('dismissUpdateWarning');
   appNotice.value = null;
 }
-watch(() => rtc.notice, message => { if (message) showAppNotice(message, 'rtc'); }, { immediate: true });
-watch(viewerNotice, message => { if (message) showAppNotice(message, 'viewer'); }, { immediate: true });
-watch(recording.notice, message => {
-  if (message && (!settingsOpen.value || settingsSection.value !== 'recording')) showAppNotice(message, 'recording');
+watch(() => rtc.noticeEvent, event => { if (event) showAppNotice(event.message, 'rtc'); }, { immediate: true });
+watch(viewerNoticeEvent, event => { if (event) showAppNotice(event.message, 'viewer'); }, { immediate: true });
+watch(recording.noticeEvent, event => {
+  if (event && (!settingsOpen.value || settingsSection.value !== 'recording')) showAppNotice(event.message, 'recording');
+});
+watch(audioOutput.notice, message => {
+  if (message && (!settingsOpen.value || settingsSection.value !== 'audio')) showAppNotice(message, 'audioOutput');
+}, { flush: 'sync' });
+watch([settingsOpen, settingsSection], () => {
+  if (settingsOpen.value && ((settingsSection.value === 'audio' && appNotice.value?.source === 'audioOutput')
+      || (settingsSection.value === 'recording' && appNotice.value?.source === 'recording' && !appNotice.value.kind))) {
+    dismissAppNotice();
+  }
 });
 watch(recording.successNotice, notice => { if (notice) showAppNotice(notice.message, 'recording', 'success'); });
 watch(() => props.startupUpdateWarning, message => { if (message) showAppNotice(message, 'update'); }, { immediate: true });
@@ -1573,11 +1579,13 @@ function participantListening(participant: Participant) {
     <Transition name="settings-page" @after-enter="settingsCovered = settingsOpen" @enter-cancelled="settingsCovered = false"
       @after-leave="finishSettingsLeave" @leave-cancelled="settingsPresented = true"
       @before-leave="settingsCovered = false; ($event as HTMLElement).inert = true">
-    <SettingsView v-if="settingsOpen" ref="settingsView" :blocked="Boolean(props.interactionBlocked || rtc.remoteControlRequest || !mainWindowVisible)" :section="settingsSection" :user="user" :desktop="Boolean(desktop)"
+    <SettingsView v-if="settingsOpen" ref="settingsView" :blocked="Boolean(props.interactionBlocked || rtc.remoteControlRequest || !mainWindowVisible)" v-model:section="settingsSection" :user="user" :desktop="Boolean(desktop)"
       :audio-shortcuts="audioShortcuts" :call-sound-preferences="callSoundPreferences" :call-sounds="callSounds"
       :overlay="desktop ? voiceOverlay : undefined"
       :recording="recording" :preferences="audioPreferences" :audio-output="audioOutput" :rtc="rtc" :microphone-test="microphoneTest" :microphone-devices="microphoneDevices" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
       :activity="currentActivity" :presence-status="publicPresenceStatus" :show-activity="showActivity" :show-last-online="showLastOnline" :activity-error="activityVisibilityError || presenceSyncError"
+      :presence-mode="presenceMode" :presence-ready="presenceReady" :presence-syncing="presenceSyncing"
+      :presence-error="presencePreferenceError" @presence-mode="changePresenceMode"
       :activity-mappings="activityMappings"
       @activity-visibility="setShowActivity" @last-online-visibility="setShowLastOnline"
       :save-profile="saveProfile" @close="closeSettings" @logout="emit('logout')" />

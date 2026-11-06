@@ -87,7 +87,8 @@ async function copy() {
 label { display: flex; align-items: baseline; gap: 8px; font-size: 14px; line-height: 20px; }
 label span { color: var(--muted); font-size: 12px; }
 .access-form-row { display: flex; align-items: center; gap: 12px; }
-.access-form-row input, .access-form-row select { flex: 1; width: 0; min-width: 0; height: var(--button-height); padding: 5px 10px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel); color: var(--text); font: inherit; font-size: 14px; line-height: 20px; }
+.access-form-row input, .access-form-row select { flex: 1; width: 0; min-width: 0; }
+.access-form-row input { height: var(--button-height); padding: 5px 10px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel); color: var(--text); font: inherit; font-size: 14px; line-height: 20px; }
 .access-form-row button { flex-shrink: 0; min-width: 108px; white-space: nowrap; font-size: 14px; }
 .access-records-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
 .access-record { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border-soft); }

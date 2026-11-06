@@ -84,7 +84,7 @@ watch(() => [props.modelValue.resolution, props.modelValue.fps, props.modelValue
 .custom-share-quality { display: grid; gap: 8px; font-size: 12px; }
 .custom-share-selects { display: flex; flex-wrap: wrap; gap: 8px 12px; }
 .custom-share-selects label { display: grid; flex: 1; gap: 4px; min-width: 100px; color: var(--muted); }
-.custom-share-selects select { width: 100%; min-height: 32px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--background); color: var(--text); font: inherit; }
+.custom-share-selects select { width: 100%; }
 .custom-share-bitrate { min-width: 0; }
 
 .custom-share-bitrate-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; margin: 6px 0; }

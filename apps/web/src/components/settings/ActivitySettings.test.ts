@@ -4,15 +4,16 @@ import { expect, it, vi } from 'vitest';
 import ActivitySettings from './ActivitySettings.vue';
 import type { UserActivity } from '../../presence/presenceApi';
 
-async function render(activity: UserActivity | null, desktop = true) {
+async function render(activity: UserActivity | null, desktop = true, loading = false) {
   const mappings = { entries: ref([{ executable: 'c:\\game.exe', name: '固定游戏名' }]),
     windows: ref([{ executable: 'c:\\game.exe', title: '当前窗口' }]), busy: ref(false),
-    loading: ref(false), ready: ref(true), error: ref(''), windowError: ref(''),
+    loading: ref(loading), ready: ref(true), error: ref(''), windowError: ref(''),
     initialize: vi.fn(async () => {}), refreshWindows: vi.fn(async () => {}),
     save: vi.fn(async () => true), remove: vi.fn(async () => true) };
   const html = await renderToString(createSSRApp(ActivitySettings, {
     user: { id: 'self', nickname: '测试成员', avatar: '', administrator: false },
     active: false, activity, desktop, showActivity: true, showLastOnline: true, error: '', mappings,
+    presenceMode: 'online', presenceReady: true,
   }));
   return { html, mappings };
 }
@@ -38,12 +39,28 @@ it('浏览器不展示系统窗口入口，未检测到动态不误报正在玩'
   expect(html.match(/<input[^>]*type="checkbox"[^>]*>/)?.[0]).not.toContain('disabled');
 });
 
-it('右侧动态只显示名称，识别修正对齐开关，未选择时重置禁用', async () => {
+it('识别结果放在修正标题旁，页面仅保留紧凑选择与操作，不预留名称编辑空白', async () => {
   const { html } = await render({ type: 'GAME', name: '游戏' });
-  const current = html.match(/<div class="activity-current"[^>]*>([\s\S]*?)<\/div>/)?.[1];
+  const current = html.match(/<p class="activity-current"[^>]*>([\s\S]*?)<\/p>/)?.[1];
   expect(current).toContain('游戏');
   expect(current).not.toContain('正在玩');
   expect(current).not.toContain('<svg');
+  expect(current).toContain('当前识别：');
+  expect(html).toContain('动态识别修正');
+  expect(html).not.toContain('activity-name-editor');
+  expect(html).not.toContain('activity-display-name');
   expect(html).toMatch(/<button[^>]*disabled[^>]*>重置<\/button>/);
+  expect(html).toMatch(/<button[^>]*disabled[^>]*>修改名称<\/button>/);
+  expect(html).toContain('关闭后隐藏并保留记录');
+  expect(html).not.toContain('关闭后清除');
   expect(html).not.toContain('刷新运行窗口');
+});
+
+it('刷新窗口时保留选择框文字，只在固定反馈区显示读取状态', async () => {
+  const { html } = await render(null, true, true);
+  const select = html.match(/<select id="activity-window"[^>]*>[\s\S]*?<\/select>/)?.[0];
+  expect(select).toContain('aria-busy="true"');
+  expect(select).toContain('选择正在运行的窗口');
+  expect(select).not.toContain('正在读取窗口');
+  expect(html).toMatch(/id="activity-mapping-feedback"[^>]*><span[^>]*>正在读取窗口…<\/span>/);
 });

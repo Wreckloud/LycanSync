@@ -97,15 +97,42 @@ class PresenceServiceTests {
     }
 
     @Test
-    void shouldClearCurrentAndRecentGameWhenDisabledButKeepLastOnlineIndependently() {
+    void shouldFinishAndKeepPublicGameWhenDisabledButKeepLastOnlineIndependently() {
         UserPresence next = heartbeat(presence(UserPresenceStatus.ONLINE, UserActivityType.GAME, "游戏", true, true),
                 UserPresenceStatus.OFFLINE, game("游戏"), false, true);
         assertThat(next.showActivity()).isFalse();
-        assertThat(next.recentGameName()).isNull();
-        assertThat(next.recentGameEndedAt()).isNull();
-        assertThat(next.recentGamePlayedSeconds()).isNull();
+        assertThat(next.recentGameName()).isEqualTo("游戏");
+        assertThat(next.recentGameEndedAt()).isEqualTo(NOW);
+        assertThat(next.recentGamePlayedSeconds()).isEqualTo(3600L);
         assertThat(next.activityName()).isNull();
         assertThat(next.lastOnlineAt()).isNotNull();
+    }
+
+    @Test
+    void shouldKeepHistoryWhileDisabledAndRestoreWithoutCountingHiddenTime() {
+        UserPresence previous = presence(UserPresenceStatus.ONLINE, null, null, true, true);
+        UserPresence hidden = heartbeat(previous, UserPresenceStatus.ONLINE, game("不应记录"), false, null);
+        assertThat(hidden.recentGameName()).isEqualTo(previous.recentGameName());
+        assertThat(hidden.recentGameEndedAt()).isEqualTo(previous.recentGameEndedAt());
+        assertThat(hidden.recentGamePlayedSeconds()).isEqualTo(previous.recentGamePlayedSeconds());
+        assertThat(hidden.activityName()).isNull();
+        for (boolean visible : List.of(false, true)) {
+            reset(mapper, events);
+            when(mapper.findByUserForUpdate(USER_ID)).thenReturn(hidden);
+            when(mapper.upsert(any(), eq(SESSION_HASH))).thenReturn(1);
+            Instant later = NOW.plusSeconds(600);
+            new PresenceService(mapper, Clock.fixed(later, ZoneOffset.UTC), events)
+                    .heartbeat(user(), new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE, game("新游戏"), visible, null));
+            ArgumentCaptor<UserPresence> captured = ArgumentCaptor.forClass(UserPresence.class);
+            verify(mapper).upsert(captured.capture(), eq(SESSION_HASH));
+            UserPresence next = captured.getValue();
+            assertThat(next.showActivity()).isEqualTo(visible);
+            assertThat(next.activityName()).isEqualTo(visible ? "新游戏" : null);
+            assertThat(next.activityStartedAt()).isEqualTo(visible ? later : null);
+            assertThat(next.recentGameName()).isEqualTo(hidden.recentGameName());
+            assertThat(next.recentGameEndedAt()).isEqualTo(hidden.recentGameEndedAt());
+            assertThat(next.recentGamePlayedSeconds()).isEqualTo(hidden.recentGamePlayedSeconds());
+        }
     }
 
     @Test

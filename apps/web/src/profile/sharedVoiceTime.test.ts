@@ -12,7 +12,7 @@ it.each([
 });
 
 it('自己的时长使用独立文案，无记录及未知值不展示', () => {
-  expect(formatSharedVoiceTime(460800, true)).toBe('已经在语音里待了 128 小时');
+  expect(formatSharedVoiceTime(460800, true)).toBe('累计已与朋友开黑了 128 小时');
   expect(formatSharedVoiceTime(0, true)).toBe('');
   expect(formatSharedVoiceTime(NaN, true)).toBe('');
 });

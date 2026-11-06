@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onScopeDispose, ref, watch } from 'vue';
+import type { CSSProperties } from 'vue';
 import { autoUpdate, computePosition, flip, offset, shift } from '@floating-ui/dom';
 import { Headphones, UserRound } from '@lucide/vue';
 import { formatSharedVoiceTime } from '../profile/sharedVoiceTime';
@@ -10,6 +11,7 @@ import type { RecentGame } from '../group/groupApi';
 
 const props = defineProps<{
   anchor: HTMLElement | null;
+  positionAnchor?: HTMLElement | null;
   placement: 'above' | 'left';
   label: string;
   nickname: string;
@@ -27,16 +29,16 @@ const props = defineProps<{
   error?: string;
   autofocus?: boolean;
   inline?: boolean;
-  relatedSurface?: HTMLElement | null;
   voiceSeconds?: number | null;
   ownVoice?: boolean;
   voiceError?: string;
 }>();
-const emit = defineEmits<{ close: []; enter: []; leave: []; retry: []; escape: [event: KeyboardEvent] }>();
+const emit = defineEmits<{ close: []; enter: []; leave: []; retry: [] }>();
 const surface = ref<HTMLElement | null>(null);
+const content = ref<HTMLElement | null>(null);
 const avatarImage = ref<HTMLImageElement | null>(null);
 const tint = ref<string>();
-const position = ref({ left: '0px', top: '0px', visibility: 'hidden' as 'visible' | 'hidden' });
+const position = ref<CSSProperties>({ left: '0px', top: '0px', visibility: 'hidden' });
 let generation = 0;
 const activitySeconds = ref<number | null>(null);
 const historyNow = ref(Date.now());
@@ -95,13 +97,11 @@ function setCardActive(element: Element, active: boolean) {
 
 function dismissOutside(event: Event) {
   const target = event.target as Node | null;
-  if (!surface.value?.contains(target) && !props.anchor?.contains(target) && !props.relatedSurface?.contains(target)) emit('close');
+  if (!surface.value?.contains(target) && !props.anchor?.contains(target)) emit('close');
 }
 
 function dismissOnEscape(event: KeyboardEvent) {
   if (event.key !== 'Escape' || !props.anchor) return;
-  emit('escape', event);
-  if (event.defaultPrevented) return;
   event.preventDefault();
   event.stopPropagation();
   props.anchor.focus();
@@ -109,7 +109,7 @@ function dismissOnEscape(event: KeyboardEvent) {
 }
 
 watch(() => props.avatar, () => { tint.value = undefined; });
-watch(() => [props.anchor, surface.value, props.placement] as const, ([anchor, element, placement], _, onCleanup) => {
+watch(() => [props.anchor, surface.value, props.placement, props.positionAnchor] as const, ([anchor, element, placement, positionAnchor], _, onCleanup) => {
   const revision = ++generation;
   if (props.inline || !anchor || !element) return;
   position.value.visibility = 'hidden';
@@ -126,19 +126,34 @@ watch(() => [props.anchor, surface.value, props.placement] as const, ([anchor, e
   });
   let request = 0;
   let positioned = false;
+  const reference = positionAnchor ?? anchor;
+  function focusOnce() {
+    if (!positioned && props.autofocus) (element!.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')
+      ?? element!.querySelector<HTMLButtonElement>('button'))?.focus();
+    positioned = true;
+  }
   function updatePosition() {
-    if (!anchor!.isConnected) { emit('close'); return; }
+    if (!anchor!.isConnected || !reference.isConnected) { emit('close'); return; }
+    if (placement === 'above') {
+      const rect = reference.getBoundingClientRect();
+      const viewport = document.documentElement;
+      // 个人面板固定右下锚点，内容增减只向上伸缩，不因高度变化翻转位置。
+      const right = Math.min(Math.max(8, viewport.clientWidth - rect.right), Math.max(8, viewport.clientWidth - element!.offsetWidth - 8));
+      position.value = { right: `${right}px`, bottom: `${Math.max(8, viewport.clientHeight - rect.top + 8)}px`,
+        maxHeight: `${Math.max(0, rect.top - 16)}px`, visibility: 'visible' };
+      focusOnce();
+      return;
+    }
     const currentRequest = ++request;
     void computePosition(anchor!, element!, {
-      strategy: 'fixed', placement: placement === 'above' ? 'top-end' : 'left-start',
-      middleware: [offset(placement === 'above' ? 8 : 20), flip({ padding: 8, crossAxis: false }),
+      strategy: 'fixed', placement: 'left-start',
+      middleware: [offset(20), flip({ padding: 8, crossAxis: false }),
         shift({ padding: 8, crossAxis: true })],
     }).then(({ x, y }) => {
       // 换成员、退场和尺寸变化后的旧计算不能覆盖当前卡片。
       if (revision !== generation || currentRequest !== request || props.anchor !== anchor || surface.value !== element) return;
       position.value = { left: `${x}px`, top: `${y}px`, visibility: 'visible' };
-      if (!positioned && props.autofocus) element!.querySelector<HTMLButtonElement>('button')?.focus();
-      positioned = true;
+      focusOnce();
     }).catch(() => {
       if (revision !== generation || currentRequest !== request) return;
       console.error('无法定位资料卡');
@@ -146,8 +161,27 @@ watch(() => [props.anchor, surface.value, props.placement] as const, ([anchor, e
     });
   }
   tintAvatar();
-  stopPositioning = autoUpdate(anchor, element, updatePosition);
+  stopPositioning = autoUpdate(reference, element, updatePosition);
 }, { immediate: true, flush: 'post' });
+
+watch(() => [props.anchor, surface.value, content.value, props.placement, props.inline] as const,
+  ([anchor, element, body, placement, inline], _, onCleanup) => {
+    if (!anchor || !element || !body || placement !== 'above' || inline) return;
+    const owner = element.ownerDocument.defaultView!;
+    let frame = 0;
+    const resize = () => {
+      const height = `${body.getBoundingClientRect().height + 2}px`;
+      if (element.style.height !== height) element.style.height = height;
+    };
+    resize();
+    // 尺寸回调后再写外框高度，避免同一轮布局触发观察器循环。
+    const observer = new ResizeObserver(() => {
+      owner.cancelAnimationFrame(frame);
+      frame = owner.requestAnimationFrame(resize);
+    });
+    observer.observe(body);
+    onCleanup(() => { observer.disconnect(); owner.cancelAnimationFrame(frame); });
+  }, { immediate: true, flush: 'post' });
 onScopeDispose(() => { generation++; });
 
 defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contains(target)) });
@@ -159,29 +193,31 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
       <section v-if="inline || anchor" :key="profileKey" ref="surface" class="profile-popover" :class="{ 'is-personal': placement === 'above', 'is-inline': inline }"
         :role="inline ? 'region' : 'dialog'" :aria-label="label" :style="{ ...(inline ? {} : position), '--profile-tint': tint }"
         @mouseenter="emit('enter')" @mouseleave="emit('leave')">
-        <div class="profile-popover-banner" aria-hidden="true" />
-        <div class="profile-popover-body">
-          <div class="profile-popover-identity">
-            <span class="personal-avatar" role="img" :aria-label="statusLabel">
-              <img v-if="avatar" ref="avatarImage" :src="avatar" class="profile-avatar" alt="" @load="tintAvatar" />
-              <span v-else class="profile-avatar-placeholder"><UserRound :size="28" /></span>
-              <span class="status-dot" :class="status" aria-hidden="true" />
-            </span>
-            <strong>{{ nickname }}</strong><small v-if="deletedAt" class="profile-deleted-account">已注销</small>
+        <div ref="content" class="profile-popover-content">
+          <div class="profile-popover-banner" aria-hidden="true" />
+          <div class="profile-popover-body">
+            <div class="profile-popover-identity">
+              <span class="personal-avatar" role="img" :aria-label="statusLabel">
+                <img v-if="avatar" ref="avatarImage" :src="avatar" class="profile-avatar" alt="" @load="tintAvatar" />
+                <span v-else class="profile-avatar-placeholder"><UserRound :size="28" /></span>
+                <span class="status-dot" :class="status" aria-hidden="true" />
+              </span>
+              <strong>{{ nickname }}</strong><small v-if="deletedAt" class="profile-deleted-account">已注销</small>
+            </div>
+            <div class="profile-popover-signature" :aria-busy="loading">
+              <span v-if="loading" role="status">正在读取签名…</span>
+              <template v-else-if="error"><span role="alert">{{ error }}</span><button type="button" @click="emit('retry')">重试</button></template>
+              <p v-else>{{ signature || '这只狼暂时没留下什么话。' }}</p>
+            </div>
+            <div v-if="activity" class="profile-popover-activity">{{ activity }}<span v-if="activityDuration"> · {{ activityDuration }}</span></div>
+            <div v-if="lastOnline || recentGameDescription" class="profile-popover-history">
+              <p v-if="lastOnline">上次在线：{{ lastOnline }}</p>
+              <p v-if="recentGameDescription">{{ recentGameDescription }}</p>
+            </div>
+            <p v-if="voiceDescription && !voiceError" class="profile-voice-time"><Headphones :size="13" aria-hidden="true" />{{ voiceDescription }}</p>
+            <p v-else-if="voiceError" class="profile-voice-error" role="status">{{ voiceError }}</p>
+            <slot />
           </div>
-          <div class="profile-popover-signature" :aria-busy="loading">
-            <span v-if="loading" role="status">正在读取签名…</span>
-            <template v-else-if="error"><span role="alert">{{ error }}</span><button type="button" @click="emit('retry')">重试</button></template>
-            <p v-else>{{ signature || '这只狼暂时没留下什么话。' }}</p>
-          </div>
-          <div v-if="activity" class="profile-popover-activity">{{ activity }}<span v-if="activityDuration"> · {{ activityDuration }}</span></div>
-          <div v-if="lastOnline || recentGameDescription" class="profile-popover-history">
-            <p v-if="lastOnline">上次在线：{{ lastOnline }}</p>
-            <p v-if="recentGameDescription">{{ recentGameDescription }}</p>
-          </div>
-          <slot />
-          <p v-if="voiceDescription && !voiceError" class="profile-voice-time"><Headphones :size="13" aria-hidden="true" />{{ voiceDescription }}</p>
-          <p v-else-if="voiceError" class="profile-voice-error" role="status">{{ voiceError }}</p>
         </div>
       </section>
     </Transition>
@@ -191,6 +227,8 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
 <style>
 .profile-deleted-account { color: var(--muted); font-size: 11px; }
 .profile-popover { position: fixed; z-index: 60; width: min(292px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); text-align: left; }
+.profile-popover.is-personal { box-sizing: border-box; transition: height var(--motion-layout-duration) var(--motion-ease), opacity var(--motion-surface-duration) var(--motion-ease); }
+.profile-popover.is-personal.surface-panel-enter-from, .profile-popover.is-personal.surface-panel-leave-to { transform: none; }
 .profile-popover-banner { height: 38px; background: var(--profile-tint, var(--panel-raised)); }
 .profile-popover.is-inline { position: relative; z-index: auto; width: 100%; max-height: none; overflow: visible; }
 .profile-voice-time { display: flex; align-items: center; gap: 8px; margin: 0; padding-top: 10px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 12px; line-height: 18px; }

@@ -107,11 +107,11 @@ public class PresenceService {
                 : sameActivity && previous.activityStartedAt() != null ? previous.activityStartedAt() : now;
         Instant lastOnline = !showLastOnline ? null : request.status() != UserPresenceStatus.OFFLINE
                 ? now : previous == null ? null : previous.lastOnlineAt();
-        String recentGame = showActivity && previous != null ? previous.recentGameName() : null;
-        Instant recentEnd = showActivity && previous != null ? previous.recentGameEndedAt() : null;
-        Long recentSeconds = showActivity && previous != null ? previous.recentGamePlayedSeconds() : null;
-        // 隐身仅结束上一段公开游戏，重复离线心跳不刷新历史；重新公开时另起一段。
-        if (showActivity && previous != null && previous.showActivity() && !sameActivity
+        String recentGame = previous != null ? previous.recentGameName() : null;
+        Instant recentEnd = previous != null ? previous.recentGameEndedAt() : null;
+        Long recentSeconds = previous != null ? previous.recentGamePlayedSeconds() : null;
+        // 关闭展示或隐身只结束上一段公开游戏并保留历史，隐藏期间不累计；重新公开时另起一段。
+        if (previous != null && previous.showActivity() && !sameActivity
                 && previous.status() != UserPresenceStatus.OFFLINE && previous.activityType() == UserActivityType.GAME
                 && previous.activityName() != null && previous.activityStartedAt() != null) {
             long seconds = Duration.between(previous.activityStartedAt(), now).getSeconds();

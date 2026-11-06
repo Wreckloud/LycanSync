@@ -24,6 +24,7 @@ async function changeReplay(event: Event) {
 <template>
   <div class="settings-section">
     <p class="settings-intro">保存自己正在共享的画面。录制在本机完成，不录入其他人的共享轨道，也不会自动上传。</p>
+    <InlineFeedback :message="recording.noticeTarget.value === 'settings' ? recording.notice.value : ''" />
     <section class="settings-block">
       <h2>录制内容</h2>
       <template v-if="desktop && recording.settings.value">
@@ -37,6 +38,7 @@ async function changeReplay(event: Event) {
         </label>
       </template>
       <p v-else>{{ desktop ? '正在读取录制设置…' : '录制需要使用 Windows 桌面客户端。' }}</p>
+      <InlineFeedback :message="recording.noticeTarget.value === 'content' ? recording.notice.value : ''" />
     </section>
     <section v-if="desktop" class="settings-block">
       <h2>文件与画质</h2>
@@ -57,6 +59,7 @@ async function changeReplay(event: Event) {
         <button type="button" class="settings-button" @click="recording.reveal">打开目录</button>
       </div>
       <small>选择整屏时，屏幕上可见的观看窗口也会入镜；只想录游戏时，请选择游戏或应用窗口。系统若只支持完整混音，需关闭应用声音选项后录制。</small>
+      <InlineFeedback :message="recording.noticeTarget.value === 'files' ? recording.notice.value : ''" />
     </section>
     <section v-if="desktop" class="settings-block">
       <h2>当前录像</h2>
@@ -69,7 +72,7 @@ async function changeReplay(event: Event) {
       </p>
       <button v-if="recording.active.value" type="button" class="settings-button" :disabled="recording.state.value.phase === 'stopping'" @click="recording.stop">停止并保存</button>
       <button v-else type="button" class="confirm-button" :disabled="!sharing || recording.busy.value" @click="recording.start">开始录制</button>
-      <InlineFeedback :message="recording.notice.value" />
+      <InlineFeedback :message="recording.noticeTarget.value === 'recording' ? recording.notice.value : ''" />
     </section>
     <section v-if="desktop" class="settings-block">
       <h2>即时回放</h2>
@@ -93,6 +96,7 @@ async function changeReplay(event: Event) {
           <button type="button" class="settings-button" :disabled="recording.busy.value" @click="recording.stopReplay">关闭回放</button>
         </template>
       </div>
+      <InlineFeedback :message="recording.noticeTarget.value === 'replay' ? recording.notice.value : ''" />
     </section>
     <RecordingLibrary v-if="desktop" :status="recording.state.value" />
   </div>

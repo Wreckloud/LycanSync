@@ -28,6 +28,7 @@ import RecordingSettings from './settings/RecordingSettings.vue';
 import type { useRecording } from '../recording/useRecording';
 import { SETTINGS_SECTIONS, settingsSectionTitle, type SettingsSectionId } from '../settings/settingsSections';
 import type { UserActivity, UserPresenceStatus } from '../presence/presenceApi';
+import type { PresenceMode } from '../presence/usePresencePreference';
 
 const props = defineProps<{
   section: SettingsSectionId;
@@ -48,15 +49,20 @@ const props = defineProps<{
   inputLevelPercent: number;
   activity: UserActivity | null;
   presenceStatus?: UserPresenceStatus;
+  presenceMode?: PresenceMode;
+  presenceReady?: boolean;
+  presenceSyncing?: boolean;
+  presenceError?: string;
   showActivity: boolean;
   showLastOnline: boolean;
   activityError: string;
   activityMappings: ReturnType<typeof useActivityMappings>;
   saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
 }>();
-const emit = defineEmits<{ close: []; logout: []; activityVisibility: [enabled: boolean]; lastOnlineVisibility: [enabled: boolean] }>();
+const emit = defineEmits<{ close: []; logout: []; 'update:section': [section: SettingsSectionId]; activityVisibility: [enabled: boolean]; lastOnlineVisibility: [enabled: boolean]; presenceMode: [mode: PresenceMode] }>();
 const heading = ref<HTMLElement | null>(null);
 const profileSettings = ref<InstanceType<typeof ProfileSettings> | null>(null);
+const activitySettings = ref<InstanceType<typeof ActivitySettings> | null>(null);
 const clientSettings = ref<InstanceType<typeof ClientSettings> | null>(null);
 const activeSection = ref<SettingsSectionId>(props.section);
 const leaving = ref(false);
@@ -64,7 +70,8 @@ const sectionTitle = computed(() => settingsSectionTitle(activeSection.value));
 const visibleSections = computed(() => SETTINGS_SECTIONS.filter((item) => (item.id !== 'members' || props.user.administrator)
   && (item.id !== 'recording' || (props.desktop && props.recording))
   && (item.id !== 'overlay' || (props.desktop && props.overlay))));
-const interactionBlocked = computed(() => Boolean(props.blocked || profileSettings.value?.cropping || clientSettings.value?.confirmingUpdate));
+const interactionBlocked = computed(() => Boolean(props.blocked || profileSettings.value?.cropping
+  || activitySettings.value?.editingName || clientSettings.value?.confirmingUpdate));
 
 watch(() => props.section, (section) => { activeSection.value = section; });
 watch(activeSection, async () => {
@@ -80,6 +87,7 @@ async function selectSection(section: SettingsSectionId) {
   if (interactionBlocked.value || leaving.value || section === activeSection.value) return;
   if (activeSection.value === 'account' && !await profileSettings.value?.finishEditing()) return;
   activeSection.value = section;
+  emit('update:section', section);
 }
 
 function closeSettings() {
@@ -96,6 +104,7 @@ async function leaveSettings(logout: boolean) {
   try {
     if (!await profileSettings.value?.finishEditing()) {
       activeSection.value = 'account';
+      emit('update:section', 'account');
       return;
     }
     if (logout) emit('logout');
@@ -127,7 +136,9 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
         <OwnerSettings v-if="user.administrator && activeSection === 'members'" :active="true" :leaving="leaving" />
         <div v-show="activeSection === 'account'" class="settings-account-page">
           <ProfileSettings ref="profileSettings" :user="user" :save-profile="saveProfile" />
-          <ActivitySettings :user="profileSettings?.preview ?? user" :status="presenceStatus" :desktop="desktop" :activity="activity" :show-activity="showActivity" :show-last-online="showLastOnline"
+          <ActivitySettings ref="activitySettings" :user="profileSettings?.preview ?? user" :status="presenceStatus" :desktop="desktop" :activity="activity" :show-activity="showActivity" :show-last-online="showLastOnline"
+            :presence-mode="presenceMode" :presence-ready="presenceReady" :presence-syncing="presenceSyncing" :presence-error="presenceError"
+            @presence-mode="emit('presenceMode', $event)"
             :mappings="activityMappings" :active="activeSection === 'account'"
             :error="activityError" @visibility="emit('activityVisibility', $event)" @last-online-visibility="emit('lastOnlineVisibility', $event)" />
           <AccountSettings :active="activeSection === 'account'" :leaving="leaving" :administrator="user.administrator" @logout="requestLogout" />
