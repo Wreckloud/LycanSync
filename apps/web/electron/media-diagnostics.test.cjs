@@ -521,3 +521,22 @@ test('默认导出目录准备期间关闭窗口，不再弹出迟到的保存�
   assert.equal(calls.dialog, 0);
   assert.equal(calls.writes.length, 0);
 });
+
+test('管道故障导出固定阶段与系统错误，不将原始正文或非法值写入报告', async context => {
+  const directory = await mkdtemp(join(tmpdir(), 'lycan-voice-pipe-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'events.jsonl'), time = new Date().toISOString();
+  await writeFile(path, [
+    { stage: 'microphoneSourceFailed', code: 'microphoneCapturePipeFailed', pipePhase: 'writeWait', win32Error: 258,
+      device: 'private-device', message: 'private-message' },
+    { stage: 'microphoneSourceFailed', code: 'microphoneCapturePipeFailed', pipePhase: 'private-path', win32Error: 5 },
+    { stage: 'microphoneSourceFailed', code: 'microphoneCapturePipeFailed', pipePhase: 'open', win32Error: -1 },
+    { stage: 'microphoneSourceFailed', code: 'microphoneDeviceUnavailable', pipePhase: 'write', win32Error: 5 },
+  ].map(entry => JSON.stringify({ time, ...entry })).join('\n'));
+  const events = await readDiagnosticEvents(path, 0, Date.parse(time));
+  assert.equal(events[0].pipePhase, 'writeWait'); assert.equal(events[0].win32Error, 258);
+  assert.equal(events[1].pipePhase, undefined); assert.equal(events[1].win32Error, undefined);
+  assert.equal(events[2].pipePhase, 'open'); assert.equal(events[2].win32Error, undefined);
+  assert.equal(events[3].pipePhase, undefined); assert.equal(events[3].win32Error, undefined);
+  assert.doesNotMatch(JSON.stringify(events), /private-/);
+});

@@ -274,3 +274,41 @@ test('来源创建失败保留固定原因和 HRESULT，不输出设备或异常
   assert.doesNotMatch(JSON.stringify(diagnostics), /private-/);
   assert.equal(diagnostics.find(entry => entry.stage === 'microphoneHostExited').exitCode, 0);
 });
+
+test('主进程和宿主同时收尾时停止失败只记录一次，退出后仍可重新开麦', async context => {
+  const f = fixture(context, { stopHang: true });
+  const bridge = microphoneBridge();
+  bridge.scope.obsAudioHost = f.manager;
+  bridge.scope.writeMediaDiagnostic = async entry => { f.diagnostics.push(entry); };
+  f.manager.onFailure = (_sessionId, code) => {
+    bridge.scope.notifyNativeMicrophoneError(bridge.scope.nativeMicrophoneSession, code);
+  };
+  const starting = bridge.scope.startNativeMicrophoneCapture('voice-session', settings);
+  bridge.listen(); await delay(0); f.children[0].send(ready); await starting;
+  f.children[0].send({ event: 'failed', code: 'microphoneCapturePipeFailed' });
+  await delay(70);
+  assert.equal(f.diagnostics.filter(entry => entry.stage === 'microphoneStopFailed').length, 1);
+  assert.equal(f.manager.state, undefined);
+  assert.equal(bridge.scope.nativeMicrophoneSession, undefined);
+  const restarting = bridge.scope.startNativeMicrophoneCapture('new-session', settings);
+  bridge.listen(); await delay(0); f.children[1].send(ready); await restarting;
+  const stopping = bridge.scope.stopNativeMicrophoneCapture('new-session');
+  f.children[1].send({ event: 'stopped' }); f.children[1].emit('close', 0); await stopping;
+  assert.equal(f.children.length, 2);
+});
+
+test('管道故障保留固定阶段和 Win32 错误，不透传设备或任意阶段', async context => {
+  const f = fixture(context);
+  await f.started();
+  f.children[0].send({ event: 'failed', code: 'microphoneCapturePipeFailed', pipePhase: 'writeWait',
+    win32Error: 258, device: 'private-device', message: 'private-message' });
+  await delay(0);
+  assert.deepEqual(f.diagnostics[1], { stage: 'microphoneSourceFailed', code: 'microphoneCapturePipeFailed',
+    pipePhase: 'writeWait', win32Error: 258 });
+  const second = fixture(context);
+  await second.started();
+  second.children[0].send({ event: 'failed', code: 'microphoneCapturePipeFailed', pipePhase: 'private-path', win32Error: -1 });
+  await delay(0);
+  assert.deepEqual(second.diagnostics[1], { stage: 'microphoneSourceFailed', code: 'microphoneCapturePipeFailed' });
+  assert.doesNotMatch(JSON.stringify([f.diagnostics, second.diagnostics]), /private-/);
+});

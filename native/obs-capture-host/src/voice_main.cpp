@@ -64,12 +64,16 @@ bool pipe_id(std::wstring_view value) {
 void event(const char *name, std::string_view fields = "") {
   std::cout << "{\"event\":\"" << name << '"' << fields << "}\n" << std::flush;
 }
-void failure_event(std::string_view code) {
+void failure_event(std::string_view code, const char *pipe_phase = "", DWORD pipe_error = ERROR_SUCCESS) {
   std::string fields = ",\"code\":\"" + std::string(code) + "\"";
-  if (const auto result = audio_hresult.load()) {
+  if (const auto result = audio_hresult.load(); result && code != "microphoneCapturePipeFailed") {
     char value[11]{};
     std::snprintf(value, sizeof(value), "0x%08lX", result);
     fields += ",\"hresult\":\"" + std::string(value) + "\"";
+  }
+  if (*pipe_phase) {
+    fields += ",\"pipePhase\":\"" + std::string(pipe_phase) + "\"";
+    if (pipe_error) fields += ",\"win32Error\":" + std::to_string(pipe_error);
   }
   event("failed", fields);
 }
@@ -97,6 +101,8 @@ struct AudioPipe {
   bool accepting = true;
   std::atomic<bool> delivered = false;
   std::atomic<bool> failed = false;
+  const char *failure_phase = "";
+  DWORD failure_error = ERROR_SUCCESS;
   VoiceTransmission transmission;
   uint32_t transmission_epoch = 0;
   std::thread writer;
@@ -107,12 +113,20 @@ struct AudioPipe {
     changed.notify_all();
     if (writer.joinable()) writer.join();
   }
+  void fail(const char *phase, DWORD error) {
+    const std::lock_guard<std::mutex> lock(mutex);
+    if (failed) return;
+    failure_phase = phase; failure_error = error; failed = true;
+  }
   static void capture(void *context, obs_source_t *, const audio_data *audio, bool muted) {
     auto &pipe = *static_cast<AudioPipe *>(context);
     const auto *samples = reinterpret_cast<const float *>(audio->data[0]);
     const std::lock_guard<std::mutex> lock(pipe.mutex);
     if (!pipe.accepting) return;
-    if (!muted && !samples) { pipe.failed = true; return; }
+    if (!muted && !samples) {
+      if (!pipe.failed) { pipe.failure_phase = "samples"; pipe.failed = true; }
+      return;
+    }
     pipe.received += audio->frames;
     const bool transmitting = pipe.transmission.allowed();
     pipe.partial.transmission_epoch = pipe.transmission_epoch;
@@ -127,8 +141,9 @@ struct AudioPipe {
   }
   void run(std::wstring name) {
     HANDLE pipe = CreateFileW(name.c_str(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+    if (pipe == INVALID_HANDLE_VALUE) { fail("open", GetLastError()); return; }
     HANDLE completed = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (pipe == INVALID_HANDLE_VALUE || !completed) failed = true;
+    if (!completed) { fail("completionEvent", GetLastError()); CloseHandle(pipe); return; }
     while (!failed && WaitForSingleObject(stop, 0) != WAIT_OBJECT_0) {
       Packet packet;
       {
@@ -140,16 +155,22 @@ struct AudioPipe {
       OVERLAPPED operation{}; operation.hEvent = completed;
       ResetEvent(completed);
       DWORD written = 0;
-      if (!WriteFile(pipe, &packet, sizeof(packet), &written, &operation) && GetLastError() != ERROR_IO_PENDING) { failed = true; break; }
+      if (!WriteFile(pipe, &packet, sizeof(packet), &written, &operation)) {
+        const auto error = GetLastError();
+        if (error != ERROR_IO_PENDING) { fail("write", error); break; }
+      }
       const HANDLE signals[] = {stop, completed};
       const auto ready = WaitForMultipleObjects(2, signals, FALSE, 1000);
       if (ready != WAIT_OBJECT_0 + 1) {
+        const auto error = ready == WAIT_FAILED ? GetLastError() : ready;
+        // 取消之后仍等待本次 I/O 完成，不能提前释放栈上的 packet 和 OVERLAPPED。
         CancelIoEx(pipe, &operation);
         GetOverlappedResult(pipe, &operation, &written, TRUE);
-        if (ready != WAIT_OBJECT_0) failed = true;
+        if (ready != WAIT_OBJECT_0) fail("writeWait", error);
         break;
       }
-      if (!GetOverlappedResult(pipe, &operation, &written, FALSE) || written != sizeof(packet)) { failed = true; break; }
+      if (!GetOverlappedResult(pipe, &operation, &written, FALSE)) { fail("writeResult", GetLastError()); break; }
+      if (written != sizeof(packet)) { fail("shortWrite", ERROR_WRITE_FAULT); break; }
       delivered = true;
     }
     if (completed) CloseHandle(completed);
@@ -340,7 +361,11 @@ int capture(int argc, wchar_t **argv) {
   filterOwner.reset();
   sourceOwner.reset();
   obs_wait_for_destroy_queue();
-  if (!failure.empty()) { failure_event(failure); return 1; }
+  if (!failure.empty()) {
+    if (failure == "microphoneCapturePipeFailed" && pipe.failed) failure_event(failure, pipe.failure_phase, pipe.failure_error);
+    else failure_event(failure);
+    return 1;
+  }
   event("stopped");
   return 0;
 }

@@ -99,7 +99,15 @@ class ObsAudioHostManager {
         // 诊断超时的迟到响应不改变采集状态。
       } else if (event.event === 'stopped' && state.stopping && !state.stopped) state.stopped = true;
       else if (event.event === 'failed' && ERROR_CODES.has(event.code)) {
-        this.onDiagnostic({ stage: 'microphoneSourceFailed', code: event.code,
+        const pipeFailure = {};
+        if (event.code === 'microphoneCapturePipeFailed'
+            && ['samples', 'open', 'completionEvent', 'write', 'writeWait', 'writeResult', 'shortWrite'].includes(event.pipePhase)) {
+          pipeFailure.pipePhase = event.pipePhase;
+          if (Number.isInteger(event.win32Error) && event.win32Error > 0 && event.win32Error <= 0xffffffff) {
+            pipeFailure.win32Error = event.win32Error;
+          }
+        }
+        this.onDiagnostic({ stage: 'microphoneSourceFailed', code: event.code, ...pipeFailure,
           ...(typeof event.hresult === 'string' && /^0x[0-9a-fA-F]{8}$/.test(event.hresult) ? { message: event.hresult } : {}) });
         this.fail(state, event.code);
       } else if (!state.stopping) this.fail(state, 'obsAudioProtocolInvalid');
@@ -155,7 +163,8 @@ class ObsAudioHostManager {
     state.rejectStart(new Error(code));
     this.rejectRequests(state, code);
     if (state.ready && !state.stopping) this.onFailure(state.sessionId, code);
-    void this.stop(state.sessionId).catch(error => this.onDiagnostic({ stage: 'microphoneStopFailed', code: error.message }));
+    // 停止结果由同一份 stop Promise 记录，主进程同步请求清理时不重复报错。
+    void this.stop(state.sessionId).catch(() => {});
   }
 
   rejectRequests(state, code) {
@@ -191,7 +200,10 @@ class ObsAudioHostManager {
     state.rejectStart(new Error('microphoneCaptureSessionStopped'));
     this.rejectRequests(state, 'microphoneCaptureSessionStopped');
     state.stop = state.closed.then(expected => {
-      if (!expected) throw new Error('microphoneCaptureStopFailed');
+      if (!expected) {
+        this.onDiagnostic({ stage: 'microphoneStopFailed', code: 'microphoneCaptureStopFailed' });
+        throw new Error('microphoneCaptureStopFailed');
+      }
       return { changed: true };
     });
     state.child.stdin.write('stop\n', () => {});

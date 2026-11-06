@@ -140,6 +140,13 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           if ([256, 512, 1024].includes(entry.memoryBudgetMb)) details.memoryBudgetMb = entry.memoryBudgetMb;
           if ([30, 60, 120].includes(entry.configuredFrameRate)) details.configuredFrameRate = entry.configuredFrameRate;
         }
+        if (stage === 'microphoneSourceFailed' && entry.code === 'microphoneCapturePipeFailed'
+            && ['samples', 'open', 'completionEvent', 'write', 'writeWait', 'writeResult', 'shortWrite'].includes(entry.pipePhase)) {
+          details.pipePhase = entry.pipePhase;
+          if (Number.isInteger(entry.win32Error) && entry.win32Error > 0 && entry.win32Error <= 0xffffffff) {
+            details.win32Error = entry.win32Error;
+          }
+        }
         if (stage === 'microphoneReady' && entry.backend === 'obsLibobs' && entry.processing === 'sonora-0.2.0') {
           details.backend = entry.backend;
           details.processing = entry.processing;

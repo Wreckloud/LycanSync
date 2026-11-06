@@ -543,9 +543,8 @@ function notifyNativeMicrophoneError(audio, code) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('media:native-microphone-error', { sessionId: audio.sessionId, code: safeCode });
   }
-  void obsAudioHost.stop(audio.sessionId).catch(error => {
-    void writeMediaDiagnostic({ stage: 'microphoneStopFailed', code: error.message });
-  }).finally(() => {
+  // 宿主管理器统一记录停止失败；这里仅清理页面管道与会话。
+  void obsAudioHost.stop(audio.sessionId).catch(() => {}).finally(() => {
     lastMicrophoneDroppedChunks = audio.hostDroppedChunks === null ? null
       : audio.hostDroppedChunks + audio.droppedChunks + audio.rendererDroppedChunks;
     if (nativeMicrophoneSession === audio) nativeMicrophoneSession = undefined;
@@ -601,9 +600,7 @@ async function startNativeMicrophoneCapture(sessionId, settings, deviceId, pushT
       return format;
     } catch (error) {
       finishNativeMicrophonePipe(audio, { destroy: true });
-      if (audio.hostStarted) await obsAudioHost.stop(sessionId).catch(failure => {
-        void writeMediaDiagnostic({ stage: 'microphoneStopFailed', code: failure.message });
-      });
+      if (audio.hostStarted) await obsAudioHost.stop(sessionId).catch(() => {});
       if (nativeMicrophoneSession === audio) nativeMicrophoneSession = undefined;
       if (error.message !== 'microphoneCaptureSessionStopped') {
         const code = /^[a-z][A-Za-z0-9]{0,63}$/.test(error.message) ? error.message : 'microphoneCaptureStartFailed';
