@@ -10,8 +10,9 @@ import { useBackdropDismiss } from './useBackdropDismiss';
 
 const props = defineProps<{ source: AvatarCropSource; title: string; shape?: 'circle' | 'square' }>();
 const backdropEvents = useBackdropDismiss(() => { if (!processing.value) emit('cancel'); });
-const emit = defineEmits<{ apply: [avatar: string]; cancel: [] }>();
+const emit = defineEmits<{ apply: [avatar: string]; cancel: []; replace: [event: Event] }>();
 const dialog = ref<HTMLElement | null>(null);
+const replacementInput = ref<HTMLInputElement | null>(null);
 const viewport = shallowRef<HTMLElement | null>(null);
 const cropStage = shallowRef<HTMLElement | null>(null);
 const viewportSize = ref(280);
@@ -33,7 +34,7 @@ const rotationTicks = Array.from({ length: 73 }, (_, index) => (index - 36) * 5)
 let rotationDrag: { pointerId: number; startX: number; rotation: number } | null = null;
 
 const crop = computed(() => calculateAvatarCrop(props.source.bitmap.width, props.source.bitmap.height,
-  viewportSize.value, zoom.value, offsetX.value, offsetY.value, rotation.value));
+  viewportSize.value, zoom.value, offsetX.value, offsetY.value, rotation.value, props.shape));
 const imageStyle = computed(() => {
   const source = props.source.bitmap;
   const scale = viewportSize.value / crop.value.size;
@@ -62,7 +63,7 @@ watch(rotation, (_, previousRotation) => {
   // 围绕取景框内已选中的原图位置旋转，不能沿用旋转前的屏幕拖动量。
   const source = props.source.bitmap;
   const previous = calculateAvatarCrop(source.width, source.height, viewportSize.value,
-    zoom.value, offsetX.value, offsetY.value, previousRotation);
+    zoom.value, offsetX.value, offsetY.value, previousRotation, props.shape);
   const shiftX = source.width / 2 - previous.x - previous.size / 2;
   const shiftY = source.height / 2 - previous.y - previous.size / 2;
   const scale = viewportSize.value / crop.value.size;
@@ -145,8 +146,11 @@ async function applyCrop() {
   processing.value = true;
   error.value = '';
   try {
-    const source = props.source.bitmap;
-    const avatar = await blobToDataUrl(await encodeAvatarCrop(source, crop.value));
+    const { bitmap, savedAvatar } = props.source;
+    // 仅复用已保存的头像；新上传的文件仍重绘去掉元数据。
+    const unchanged = savedAvatar && bitmap.width === bitmap.height && zoom.value === 1
+      && rotation.value === 0 && offsetX.value === 0 && offsetY.value === 0;
+    const avatar = unchanged ? savedAvatar : await blobToDataUrl(await encodeAvatarCrop(bitmap, crop.value));
     if (!disposed) emit('apply', avatar);
   } catch (exception) {
     if (!disposed) error.value = exception instanceof AvatarImageError ? exception.message : '无法处理头像图片。';
@@ -175,6 +179,7 @@ function keepFocus(event: KeyboardEvent) {
       <section ref="dialog" class="avatar-crop-dialog" role="dialog" aria-modal="true"
         aria-labelledby="avatar-crop-title" tabindex="-1" @keydown="keepFocus">
         <header><h2 id="avatar-crop-title">{{ title }}</h2><p>拖动调整位置，滚轮缩放</p></header>
+        <input ref="replacementInput" type="file" hidden aria-label="重新选择头像" accept="image/png,image/jpeg" @change="emit('replace', $event)" />
         <div ref="cropStage" class="avatar-crop-stage">
         <div ref="viewport" class="avatar-crop-viewport" :class="{ 'is-square': shape === 'square' }" aria-label="拖动调整头像位置"
           @pointerdown="beginDrag" @pointermove="moveDrag" @pointerup="endDrag" @pointercancel="endDrag" @wheel.prevent="zoomWithWheel">
@@ -203,7 +208,10 @@ function keepFocus(event: KeyboardEvent) {
         <footer class="card-actions">
           <button type="button" class="settings-button" :disabled="processing" @click="emit('cancel')">取消</button>
           <InlineFeedback class="card-feedback" :message="error" :status="processing ? '正在处理…' : ''" />
-          <button type="button" class="confirm-button card-actions-end" :disabled="processing" @click="applyCrop">应用头像</button>
+          <div class="avatar-crop-actions card-actions-end">
+            <button type="button" class="settings-button" :disabled="processing" @click="replacementInput?.click()">更换头像</button>
+            <button type="button" class="confirm-button" :disabled="processing" @click="applyCrop">应用头像</button>
+          </div>
         </footer>
       </section>
     </div>
@@ -211,6 +219,7 @@ function keepFocus(event: KeyboardEvent) {
 
 <style scoped>
 .avatar-crop-backdrop { z-index: 110; }
+.avatar-crop-actions { display: flex; align-items: center; gap: 8px; }
 .avatar-crop-dialog { width: min(400px, 100%); height: min(600px, calc(100dvh - 36px)); max-height: calc(100dvh - 36px); overflow-y: auto; display: grid; grid-template-rows: auto minmax(96px, 1fr) auto auto; justify-items: center; gap: 16px; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); font-size: 14px; line-height: 20px; }
 .avatar-crop-stage { display: grid; place-items: center; width: 100%; min-width: 0; min-height: 0; }
 .avatar-crop-dialog header { width: 100%; }

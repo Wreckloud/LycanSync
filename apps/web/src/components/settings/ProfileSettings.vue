@@ -93,8 +93,8 @@ defineExpose({ finishEditing, cropping, preview });
     <InlineFeedback :message="error"
       :status="busy && !savingAvatar ? '正在保存…' : picking ? '正在读取图片…' : ''" />
     <DialogTransition>
-    <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整头像"
-      @apply="applyAvatar" @cancel="clearCrop" />
+    <AvatarCropDialog v-if="cropSource" :key="cropSource.previewUrl" :source="cropSource" title="调整头像"
+      @apply="applyAvatar" @replace="pickAvatar" @cancel="clearCrop" />
     </DialogTransition>
   </section>
 </template>

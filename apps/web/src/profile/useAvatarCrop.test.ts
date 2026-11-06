@@ -93,6 +93,7 @@ test('已有头像本机解码，不请求被安装版 CSP 禁止的 data URL', 
   expect(file.type).toBe('image/png');
   expect(await file.text()).toBe('abc');
   expect(crop.cropSource.value?.bitmap).toBe(bitmap);
+  expect(crop.cropSource.value?.savedAvatar).toBe('data:image/png;base64,YWJj');
   expect(error.value).toBe('');
   scope.stop();
   expect(bitmap.close).toHaveBeenCalledOnce();
@@ -124,4 +125,19 @@ test('非法已有头像保持裁剪器关闭并显示读取错误', async () =>
   expect(crop.picking.value).toBe(false);
   expect(error.value).toBe('无法读取当前头像，请更换图片。');
   scope.stop();
+});
+
+test('裁剪中取消更换文件不丢失已有位图或裁剪来源', async () => {
+  const bitmap = { width: 256, height: 256, close: vi.fn() };
+  vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue(bitmap));
+  vi.stubGlobal('URL', { createObjectURL: vi.fn(() => 'blob:avatar'), revokeObjectURL: vi.fn() });
+  const scope = effectScope();
+  const crop = scope.run(() => useAvatarCrop(ref('')))!;
+  await crop.editAvatar('data:image/png;base64,YWJj');
+  const original = crop.cropSource.value;
+  await crop.pickAvatar({ target: { files: [], value: '' } } as unknown as Event);
+  expect(crop.cropSource.value).toBe(original);
+  expect(bitmap.close).not.toHaveBeenCalled();
+  scope.stop();
+  expect(bitmap.close).toHaveBeenCalledOnce();
 });

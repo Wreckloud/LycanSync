@@ -7,6 +7,17 @@ async function editNickname(page: Page, nickname?: string) {
   return input;
 }
 
+async function avatarPng(page: Page, width: number, height = width) {
+  return page.evaluate(({ width, height }) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = width; canvas.height = height;
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = '#5682a4'; context.fillRect(0, 0, width, height);
+    context.fillStyle = '#17212b'; context.fillRect(width / 4, height / 4, width / 2, height / 2);
+    return canvas.toDataURL('image/png');
+  }, { width, height });
+}
+
 function silentWav(durationMs = 100) {
   const sampleRate = 8_000;
   const dataLength = Math.round(sampleRate * durationMs / 1_000);
@@ -386,14 +397,15 @@ test('更换头像在整页资料设置中裁剪并保存', async ({ page }) => 
   await page.getByRole('button', { name: '修改头像', exact: true }).hover();
   await expect(page.locator('.profile-avatar-overlay')).toHaveCSS('opacity', '1');
   await expect(page.getByRole('button', { name: '移除头像' })).toHaveCount(0);
+  const uploadedAvatar = await avatarPng(page, 512);
   await page.getByLabel('上传头像').setInputFiles({
     name: 'avatar.png',
     mimeType: 'image/png',
-    buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'),
+    buffer: Buffer.from(uploadedAvatar.split(',')[1], 'base64'),
   });
   const cropDialog = page.getByRole('dialog', { name: '调整头像' });
   await expect(cropDialog).toBeVisible();
-  await expect(cropDialog.getByAltText('待裁剪头像')).toHaveJSProperty('naturalWidth', 1);
+  await expect(cropDialog.getByAltText('待裁剪头像')).toHaveJSProperty('naturalWidth', 512);
   expect(await cropDialog.getByAltText('待裁剪头像').getAttribute('src')).toMatch(/^blob:/);
   expect(await settings.boundingBox()).toEqual(initialSettings);
   const cropViewport = cropDialog.getByLabel('拖动调整头像位置');
@@ -426,6 +438,26 @@ test('更换头像在整页资料设置中裁剪并保存', async ({ page }) => 
   expect(await settings.boundingBox()).toEqual(initialSettings);
   await expect.poll(() => profileUpdate?.avatar).toMatch(/^data:image\/png;base64,/);
   expect(Buffer.from(profileUpdate!.avatar!.split(',')[1], 'base64').length).toBeLessThanOrEqual(2 * 1024 * 1024);
+
+  // 复核已保存的 512px 头像再次编辑，旋转只改变角度，预览和导出仍保持原倍率。
+  await page.getByRole('button', { name: '修改头像', exact: true }).click();
+  await expect(cropDialog).toBeVisible();
+  await expect(cropImage).toHaveJSProperty('naturalWidth', 512);
+  const savedWidth = await cropImage.evaluate(image => getComputedStyle(image).width);
+  const savedHeight = await cropImage.evaluate(image => getComputedStyle(image).height);
+  const slider = cropDialog.getByRole('slider', { name: '头像旋转', exact: true });
+  const ruler = (await slider.boundingBox())!;
+  const centerX = ruler.x + ruler.width / 2, centerY = ruler.y + ruler.height / 2;
+  await page.mouse.move(centerX, centerY);
+  await page.mouse.down();
+  await page.mouse.move(centerX - 45, centerY, { steps: 6 });
+  await page.mouse.up();
+  await expect(slider).toHaveValue('45');
+  await expect(cropImage).toHaveCSS('width', savedWidth);
+  await expect(cropImage).toHaveCSS('height', savedHeight);
+  await page.getByRole('button', { name: '应用头像' }).click();
+  await expect(cropDialog).toHaveCount(0);
+  await expect(preview).toHaveJSProperty('naturalWidth', 512);
 });
 
 test('签名自动保存与注册日期展示，反馈不推动下方内容', async ({ page }) => {
@@ -584,4 +616,66 @@ test('离开音效栏目或关闭设置会停止音效试听', async ({ page }) 
   await expect.poll(() => page.evaluate(() => (window as Window & {
     __previewCounts?: { plays: number; pauses: number };
   }).__previewCounts?.pauses)).toBe(1);
+});
+
+test('裁剪中更换头像沿用次级按钮，取消保留调整，合规头像无操作不重绘', async ({ page }) => {
+  const originalAvatar = await avatarPng(page, 256);
+  let user = { id: 'avatar-replace-user', nickname: '头像测试', avatar: originalAvatar, administrator: false };
+  let updates = 0;
+  await page.route('**/api/auth/options', route => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
+  await page.route('**/api/system/initialization', route => route.fulfill({ json: { initialized: true } }));
+  await page.route('**/api/auth/me', route => {
+    if (route.request().method() === 'PUT') { updates++; user = { ...user, ...route.request().postDataJSON() }; }
+    return route.fulfill({ json: user });
+  });
+  await page.route('**/api/rtc/room-summary*', route => route.fulfill({ json: { participantCount: 0, participants: [] } }));
+  await page.goto('/');
+  if (!await page.locator('.settings-view').isVisible()) await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '修改头像', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '调整头像' });
+  const image = dialog.getByAltText('待裁剪头像');
+  const slider = dialog.getByRole('slider', { name: '头像旋转', exact: true });
+  await expect(image).toHaveJSProperty('naturalWidth', 256);
+  await dialog.getByRole('button', { name: '应用头像', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(updates).toBe(0);
+  expect(user.avatar).toBe(originalAvatar);
+
+  await page.getByRole('button', { name: '修改头像', exact: true }).click();
+  await expect(image).toHaveJSProperty('naturalWidth', 256);
+  const imageWidth = await image.evaluate(element => getComputedStyle(element).width);
+  await slider.focus(); await page.keyboard.press('ArrowRight');
+  await expect(slider).toHaveValue('1');
+  await expect(image).toHaveCSS('width', imageWidth);
+  const [cancelled] = await Promise.all([
+    page.waitForEvent('filechooser'), dialog.getByRole('button', { name: '更换头像', exact: true }).click(),
+  ]);
+  await cancelled.setFiles([]);
+  await expect(slider).toHaveValue('1');
+  await expect(image).toHaveJSProperty('naturalWidth', 256);
+  await dialog.getByRole('button', { name: '应用头像', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect.poll(() => updates).toBe(1);
+  await expect(page.getByAltText('头像预览')).toHaveJSProperty('naturalWidth', 256);
+
+  await page.getByRole('button', { name: '修改头像', exact: true }).click();
+  await slider.focus(); await page.keyboard.press('ArrowRight');
+  await expect(slider).toHaveValue('1');
+  const replacement = await avatarPng(page, 128, 256);
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser'), dialog.getByRole('button', { name: '更换头像', exact: true }).click(),
+  ]);
+  await chooser.setFiles({ name: 'replacement.png', mimeType: 'image/png', buffer: Buffer.from(replacement.split(',')[1], 'base64') });
+  await expect(dialog).toHaveCount(1);
+  await expect(image).toHaveJSProperty('naturalWidth', 128);
+  await expect(image).toHaveJSProperty('naturalHeight', 256);
+  await expect(slider).toHaveValue('0');
+  const replace = dialog.getByRole('button', { name: '更换头像', exact: true });
+  await expect(replace).toHaveClass('settings-button');
+  await page.setViewportSize({ width: 420, height: 720 });
+  await expect(replace).toBeInViewport();
+  await expect(dialog.getByRole('button', { name: '应用头像', exact: true })).toBeInViewport();
+  expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
 });

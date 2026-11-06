@@ -4,6 +4,7 @@ import { AvatarImageError, decodeAvatarFile } from './avatarImage';
 export interface AvatarCropSource {
   bitmap: ImageBitmap;
   previewUrl: string;
+  savedAvatar?: string;
 }
 
 export function useAvatarCrop(error: Ref<string>) {
@@ -40,7 +41,7 @@ export function useAvatarCrop(error: Ref<string>) {
       // 已保存的头像就在内存中，直接解码；安装版 connect-src 不允许 fetch(data:)。
       const binary = atob(avatar.slice(header[0].length));
       const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-      await loadAvatar(new File([bytes], 'avatar', { type: header[1] }));
+      await loadAvatar(new File([bytes], 'avatar', { type: header[1] }), avatar);
     } catch (exception) {
       if (!disposed && current === selection) error.value = exception instanceof AvatarImageError ? exception.message : '无法读取当前头像，请更换图片。';
     } finally {
@@ -48,7 +49,7 @@ export function useAvatarCrop(error: Ref<string>) {
     }
   }
 
-  async function loadAvatar(file: File) {
+  async function loadAvatar(file: File, savedAvatar?: string) {
     if (disposed) return;
     clearCrop();
     const current = selection;
@@ -61,7 +62,7 @@ export function useAvatarCrop(error: Ref<string>) {
       if (current !== selection) return;
       // 原图只在本机预览，不复制成可能很大的 Base64 字符串。
       const previewUrl = URL.createObjectURL(file);
-      cropSource.value = { bitmap, previewUrl };
+      cropSource.value = { bitmap, previewUrl, ...(savedAvatar ? { savedAvatar } : {}) };
       bitmap = null;
     } catch (exception) {
       if (current === selection) error.value = exception instanceof AvatarImageError ? exception.message : '无法读取头像文件，请重新选择。';

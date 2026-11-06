@@ -97,7 +97,7 @@ async function save() {
       </footer>
     </form>
     <DialogTransition>
-    <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整头像" @apply="applyAvatar" @cancel="clearCrop" />
+    <AvatarCropDialog v-if="cropSource" :key="cropSource.previewUrl" :source="cropSource" title="调整头像" @apply="applyAvatar" @replace="pickAvatar" @cancel="clearCrop" />
     </DialogTransition>
   </main>
 </template>

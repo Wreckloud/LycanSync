@@ -179,7 +179,7 @@ onMounted(() => {
       </div>
     </form>
     <DialogTransition>
-    <AvatarCropDialog v-if="cropSource" :source="cropSource" title="调整群组头像" shape="square" @apply="finishCrop" @cancel="finishCrop()" />
+    <AvatarCropDialog v-if="cropSource" :key="cropSource.previewUrl" :source="cropSource" title="调整群组头像" shape="square" @apply="finishCrop" @replace="pickAvatar" @cancel="finishCrop()" />
     </DialogTransition>
   </div>
 </template>

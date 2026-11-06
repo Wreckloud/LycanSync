@@ -119,7 +119,8 @@ test('创建群组时可选择头像，群组栏显示裁剪后的图片', async
   await expect(cropDialog.getByAltText('待裁剪头像')).toHaveJSProperty('naturalWidth', 1);
   await cropDialog.getByRole('button', { name: '应用头像' }).click();
   await expect(cropDialog).toHaveCount(0);
-  await expect(page.locator('.group-avatar-preview img')).toHaveJSProperty('naturalWidth', 512);
+  // 模拟接口原样返回客户端裁剪结果，1像素素材不在前端人为放大。
+  await expect(page.locator('.group-avatar-preview img')).toHaveJSProperty('naturalWidth', 1);
   await expect(page.locator('.avatar-actions button')).toHaveCount(1);
   await expect(page.locator('.avatar-actions button')).toHaveText('更换头像');
   await page.getByLabel('群组名称').fill('头像小队');

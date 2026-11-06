@@ -50,15 +50,16 @@ export function calculateAvatarCrop(
   offsetX: number,
   offsetY: number,
   rotation = 0,
+  shape: 'circle' | 'square' = 'circle',
 ): AvatarCrop {
   const radians = rotation * Math.PI / 180;
   const cosine = Math.cos(radians);
   const sine = Math.sin(radians);
-  const coverage = Math.abs(cosine) + Math.abs(sine);
-  // 旋转只提高防露白所需的最低倍率，不叠乘用户已经选择的放大倍率。
+  // 圆形取景范围旋转后不变；只有方形裁剪需要为四角补足覆盖，避免头像随角度缩放。
+  const coverage = shape === 'circle' ? 1 : Math.abs(cosine) + Math.abs(sine);
   const displayScale = viewportSize / Math.min(sourceWidth, sourceHeight) * Math.max(coverage, zoom);
   const size = viewportSize / displayScale;
-  // 将拖动量转回图片坐标；四个裁剪角始终落在原图范围内。
+  // 将拖动量转回图片坐标，并按实际取景形状限制边缘，避免可见区域露白。
   const marginX = Math.max(0, sourceWidth / 2 - size * coverage / 2);
   const marginY = Math.max(0, sourceHeight / 2 - size * coverage / 2);
   const shiftX = Math.max(-marginX, Math.min(marginX, (cosine * offsetX + sine * offsetY) / displayScale));
@@ -80,16 +81,18 @@ export async function encodeAvatarCrop(
     throw new AvatarImageError('头像裁剪区域无效。');
   }
   const canvas = document.createElement('canvas');
-  canvas.width = AVATAR_CROP_SIZE;
-  canvas.height = AVATAR_CROP_SIZE;
+  // 已保存的小头像不先放大再交给服务器缩回，避免重复插值。
+  const outputSize = Math.min(AVATAR_CROP_SIZE, source.width, source.height);
+  canvas.width = outputSize;
+  canvas.height = outputSize;
   const context = canvas.getContext('2d');
   if (!context) throw new AvatarImageError('当前设备无法处理头像图片。');
   // 只提交用户选中的区域，保留透明度；最终尺寸和压缩由服务器统一处理。
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = 'high';
-  context.translate(AVATAR_CROP_SIZE / 2, AVATAR_CROP_SIZE / 2);
+  context.translate(outputSize / 2, outputSize / 2);
   context.rotate((crop.rotation ?? 0) * Math.PI / 180);
-  context.scale(AVATAR_CROP_SIZE / crop.size, AVATAR_CROP_SIZE / crop.size);
+  context.scale(outputSize / crop.size, outputSize / crop.size);
   context.drawImage(source, -crop.x - crop.size / 2, -crop.y - crop.size / 2);
   const blob = await canvasToBlob(canvas);
   if (!blob) throw new AvatarImageError('无法生成裁剪后的头像，请重试。');

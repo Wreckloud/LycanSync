@@ -71,6 +71,17 @@ describe('头像图片处理', () => {
     expect(mocked.toBlob).toHaveBeenCalledOnce();
   });
 
+  it('微调已保存的256像素头像不先放大，仍用无损PNG输出', async () => {
+    const { canvas, translate, rotate, scale } = installCanvas((done, type) => done(new Blob(['png'], { type })));
+    const result = await encodeAvatarCrop(bitmap(256, 256), { x: 0, y: 0, size: 256, rotation: 1 });
+    expect(canvas.width).toBe(256);
+    expect(canvas.height).toBe(256);
+    expect(translate).toHaveBeenCalledWith(128, 128);
+    expect(scale).toHaveBeenCalledWith(1, 1);
+    expect(rotate).toHaveBeenCalledWith(Math.PI / 180);
+    expect(result.type).toBe('image/png');
+  });
+
   it('生成裁剪图失败时显示明确错误', async () => {
     const { toBlob } = installCanvas((done) => done(null));
 
@@ -97,7 +108,7 @@ describe('头像图片处理', () => {
 
   it('旋转和极端拖动后四角仍位于原图中，不露空白', () => {
     for (const zoom of [1, 2, 9]) for (const rotation of [-180, -90, -45, 0, 30, 45, 90, 180]) {
-      const crop = calculateAvatarCrop(1200, 800, 300, zoom, 10000, -10000, rotation);
+      const crop = calculateAvatarCrop(1200, 800, 300, zoom, 10000, -10000, rotation, 'square');
       const radians = rotation * Math.PI / 180;
       for (const x of [-crop.size / 2, crop.size / 2]) {
         for (const y of [-crop.size / 2, crop.size / 2]) {
@@ -112,12 +123,31 @@ describe('头像图片处理', () => {
     }
   });
 
-  it('放大足够时旋转保持相同像素比例，倍率不足才补足取景框', () => {
+  it('方形裁剪放大足够时保持比例，倍率不足才补足四角', () => {
     for (const rotation of [-180, -90, -71, -45, 0, 30, 45, 71, 90, 180]) {
       expect(calculateAvatarCrop(1200, 800, 300, 2, 0, 0, rotation).size).toBeCloseTo(400);
       expect(calculateAvatarCrop(800, 1200, 300, 9, 0, 0, rotation).size).toBeCloseTo(800 / 9);
     }
-    expect(calculateAvatarCrop(800, 800, 300, 1, 0, 0, 45).size).toBeCloseTo(800 / Math.SQRT2);
+    expect(calculateAvatarCrop(800, 800, 300, 1, 0, 0, 45, 'square').size).toBeCloseTo(800 / Math.SQRT2);
+  });
+
+  it('圆形头像旋转不改变倍率，极端拖动也不让圆内露白', () => {
+    for (const [width, height] of [[512, 512], [1200, 800], [800, 1200]]) {
+      for (const zoom of [1, 1.1, 2, 9]) for (const rotation of [-180, -90, -45, 0, 30, 45, 90, 180]) {
+        const crop = calculateAvatarCrop(width, height, 300, zoom, 10000, -10000, rotation);
+        expect(crop.size).toBeCloseTo(Math.min(width, height) / zoom);
+        const centerX = crop.x + crop.size / 2, centerY = crop.y + crop.size / 2;
+        for (let angle = 0; angle < 360; angle += 10) {
+          const radians = (angle - rotation) * Math.PI / 180;
+          const sourceX = centerX + Math.cos(radians) * crop.size / 2;
+          const sourceY = centerY + Math.sin(radians) * crop.size / 2;
+          expect(sourceX).toBeGreaterThanOrEqual(-0.000001);
+          expect(sourceX).toBeLessThanOrEqual(width + 0.000001);
+          expect(sourceY).toBeGreaterThanOrEqual(-0.000001);
+          expect(sourceY).toBeLessThanOrEqual(height + 0.000001);
+        }
+      }
+    }
   });
 
   it('输出使用与预览相同的旋转和中心位置', async () => {
