@@ -98,8 +98,10 @@ test('向下返回历史才显示回到最新；新消息定位未读且不丢�
   const original = await input.elementHandle();
   await list.evaluate(element => { element.scrollTop = 0; });
   await expect(page.locator('.chat-jump')).toHaveCount(0);
+  await list.evaluate(element => { element.scrollTop = 20; });
+  await expect(page.locator('.chat-jump')).toHaveCount(0);
   await list.evaluate(element => { element.scrollTop = 100; });
-  await expect(page.getByRole('button', { name: '回到最新消息', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '回到最新', exact: true })).toBeVisible();
   await list.evaluate(element => { element.scrollTop = 0; });
   await expect(page.locator('.chat-jump')).toHaveCount(0);
   newMessage = true;

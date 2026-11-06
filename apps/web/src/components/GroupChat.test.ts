@@ -339,6 +339,32 @@ it('向上翻历史不显示回到最新；向下返回且超过一屏才显示'
   } finally { scope.stop(); }
 });
 
+it('向下累计48像素才显示，向上返回后重新累计，不因小幅滚动反复触发', () => {
+  const { scope, chat } = setup();
+  try {
+    const element = { scrollHeight: 3000, clientHeight: 600, scrollTop: 2400,
+      getBoundingClientRect: () => ({ top: 0, bottom: 600 }) };
+    chat.list.value = element as HTMLElement;
+    chat.onScroll();
+    element.scrollTop = 500; chat.onScroll();
+    for (const top of [501, 510, 547]) {
+      element.scrollTop = top; chat.onScroll();
+      expect(chat.showMessageJump.value).toBe(false);
+    }
+    element.scrollTop = 548; chat.onScroll();
+    expect(chat.showMessageJump.value).toBe(true);
+    expect(chat.messageJumpLabel.value).toBe('回到最新');
+    element.scrollTop = 500; chat.onScroll();
+    element.scrollTop = 530; chat.onScroll();
+    expect(chat.showMessageJump.value).toBe(false);
+    element.scrollTop = 520; chat.onScroll();
+    element.scrollTop = 567; chat.onScroll();
+    expect(chat.showMessageJump.value).toBe(false);
+    element.scrollTop = 568; chat.onScroll();
+    expect(chat.showMessageJump.value).toBe(true);
+  } finally { scope.stop(); }
+});
+
 it.each([false, true])('跳转首条未读，不跳过后续未读，减少动态效果：%s', async reduce => {
   const { scope, chat, findMessages } = setup();
   try {

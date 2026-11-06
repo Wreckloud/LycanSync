@@ -60,7 +60,7 @@ export function useActivityMappings(userId: string, desktop?: ActivityBridge,
       const snapshot = await desktop.listActivityWindows();
       if (!disposed && revision === windowRevision) windows.value = snapshot;
     } catch {
-      if (!disposed && revision === windowRevision) windowError.value = '无法读取运行窗口，请刷新重试。';
+      if (!disposed && revision === windowRevision) windowError.value = '无法读取运行窗口，请重新打开选择框重试。';
     } finally {
       if (!disposed && revision === windowRevision) loading.value = false;
     }

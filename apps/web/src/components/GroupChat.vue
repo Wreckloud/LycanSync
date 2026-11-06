@@ -80,6 +80,7 @@ const fileInput = ref<HTMLInputElement | null>(null);
 const messageInput = ref<HTMLTextAreaElement | null>(null);
 const MESSAGE_GROUP_MAX_GAP_MS = 5 * 60_000;
 const HISTORY_TOP_THRESHOLD = 80;
+const RETURN_SCROLL_THRESHOLD = 48;
 let pollRequest: AbortController | null = null;
 let historyRequest: AbortController | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -89,6 +90,7 @@ let latestFetchedMessageId: string | undefined;
 let consecutiveEmptyPolls = 0;
 let lastActivationRefreshAt = 0;
 let lastScrollTop = 0;
+let downwardScrollDistance = 0;
 let jumpingToUnread = false;
 let scrollPreference: MediaQueryList | undefined;
 
@@ -96,7 +98,7 @@ const members = computed(() => new Map(props.members.map((member) => [member.use
 const showMessageJump = computed(() => !followingScroll.value && (unseenMessages.value > 0
   || (!atBottom.value && returningToLatest.value && moreThanScreenAway.value)));
 const messageJumpLabel = computed(() => unseenMessages.value
-  ? `${unseenMessages.value} 条新消息 · 跳转到未读` : '回到最新消息');
+  ? `${unseenMessages.value} 条新消息 · 跳转到未读` : '回到最新');
 const canSend = computed(() => !busy.value && !preparing.value
   && (text.value.trim().length > 0 || pendingAttachments.value.some((item) => item.state !== 'sent')));
 let activeUpload: AbortController | null = null;
@@ -115,6 +117,8 @@ async function scrollToBottom(behavior: ScrollBehavior = 'smooth', force = false
   if (!element) return;
   const reduce = scrollPreference?.matches;
   jumpingToUnread = false;
+  downwardScrollDistance = 0;
+  returningToLatest.value = false;
   followingScroll.value = !reduce && behavior === 'smooth'
     && element.scrollHeight - element.clientHeight - element.scrollTop > 1;
   element.scrollTo({ top: element.scrollHeight, behavior: reduce ? 'auto' : behavior });
@@ -160,6 +164,8 @@ async function jumpToMessages() {
   const top = Math.max(0, Math.min(element.scrollHeight - element.clientHeight,
     element.scrollTop + target.getBoundingClientRect().top - visibleMessageBounds(element).top));
   followingScroll.value = false;
+  downwardScrollDistance = 0;
+  returningToLatest.value = false;
   jumpingToUnread = !scrollPreference?.matches && Math.abs(top - element.scrollTop) > 1;
   element.scrollTo({ top, behavior: scrollPreference?.matches ? 'auto' : 'smooth' });
   atBottom.value = isAtBottom();
@@ -632,12 +638,15 @@ function openLink(url: string) {
 function onScroll() {
   const element = list.value;
   if (!element) return;
-  const movingUp = element.scrollTop < lastScrollTop - 1;
-  const movingDown = element.scrollTop > lastScrollTop + 1;
+  const scrollDelta = element.scrollTop - lastScrollTop;
+  const movingUp = scrollDelta < -1;
   lastScrollTop = element.scrollTop;
   // 自动跟随期间不把中途的位置当作主动翻历史，避免“回到最新”短暂闪现。
   if (followingScroll.value || jumpingToUnread) return;
-  if (movingUp || movingDown) returningToLatest.value = movingDown;
+  // 同方向累计一小段距离再展示，忽略触控板细小回弹；未读入口不受此门槛影响。
+  if (movingUp) downwardScrollDistance = 0;
+  else if (scrollDelta > 0) downwardScrollDistance += scrollDelta;
+  returningToLatest.value = downwardScrollDistance >= RETURN_SCROLL_THRESHOLD;
   const bounds = visibleMessageBounds(element);
   moreThanScreenAway.value = element.scrollHeight - element.scrollTop - element.clientHeight > bounds.bottom - bounds.top;
   atBottom.value = isAtBottom();
@@ -750,9 +759,11 @@ onScopeDispose(() => {
           </article>
         </template>
       </div>
-      <button v-if="showMessageJump && messages.length" type="button" class="chat-jump" :aria-label="messageJumpLabel" @click="jumpToMessages">
-        <ArrowDown :size="13" /><span>{{ messageJumpLabel }}</span>
-      </button>
+      <Transition name="surface-panel">
+        <button v-if="showMessageJump && messages.length" type="button" class="chat-jump" :aria-label="messageJumpLabel" @click="jumpToMessages">
+          <ArrowDown :size="13" /><span>{{ messageJumpLabel }}</span>
+        </button>
+      </Transition>
     </div>
     <div class="composer-shell">
       <p v-if="error" class="chat-error" role="alert">{{ error }}</p>

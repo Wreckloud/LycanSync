@@ -37,3 +37,13 @@ it('浏览器不展示系统窗口入口，未检测到动态不误报正在玩'
   expect(html).not.toContain('正在玩');
   expect(html.match(/<input[^>]*type="checkbox"[^>]*>/)?.[0]).not.toContain('disabled');
 });
+
+it('右侧动态只显示名称，识别修正对齐开关，未选择时重置禁用', async () => {
+  const { html } = await render({ type: 'GAME', name: '游戏' });
+  const current = html.match(/<div class="activity-current"[^>]*>([\s\S]*?)<\/div>/)?.[1];
+  expect(current).toContain('游戏');
+  expect(current).not.toContain('正在玩');
+  expect(current).not.toContain('<svg');
+  expect(html).toMatch(/<button[^>]*disabled[^>]*>重置<\/button>/);
+  expect(html).not.toContain('刷新运行窗口');
+});

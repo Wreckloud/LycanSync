@@ -312,10 +312,9 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 5px 8px 5px 5px;
-  border: 1px solid var(--border-soft);
-  border-radius: 4px;
-  background: var(--panel);
+  padding: 6px 9px 6px 6px;
+  border: 0;
+  background: transparent;
 }
 
 .voice-preview-member i {
