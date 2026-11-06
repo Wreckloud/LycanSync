@@ -68,7 +68,7 @@ async function open(id) {
   viewers.set(id, state);
   const cleanup = () => {
     releaseInputs(id);
-    state.view?.stop(); state.preview?.();
+    state.view?.stop(); state.preview?.stop();
     if (state.video) entry.track.detach(state.video);
     if (viewers.get(id) === state) viewers.delete(id);
   };
@@ -128,7 +128,7 @@ window.screenShareWindowsScenario = {
     disposed = true;
     for (const state of [...viewers.values()]) { state.cleanup(); state.child.close(); }
     for (const entry of sources.values()) {
-      clearInterval(entry.timer); entry.view.stop(); entry.preview(); entry.track.detach(entry.video);
+      clearInterval(entry.timer); entry.view.stop(); entry.preview.stop(); entry.track.detach(entry.video);
       entry.source.stop(); entry.video.remove();
     }
   },

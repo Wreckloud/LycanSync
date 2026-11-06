@@ -9,7 +9,7 @@ function holdPresencePoll(route: Route) {
   const query = new URL(route.request().url()).searchParams;
   if (!query.has('serverInstanceId')) {
     return route.fulfill({ json: {
-      serverInstanceId: 'e5965682-9948-41b0-b9cf-c12eeb927e53', version: 0, changed: true,
+      serverInstanceId: 'e5965682-9948-41b0-b9cf-c12eeb927e53', version: 0, detailVersion: 0, changed: true,
     } });
   }
   return new Promise<void>(() => {});
@@ -229,6 +229,7 @@ test('启动、窗口激活和成员变化时自动更新群组，无需刷新�
   ];
   let visible = false;
   let memberCount = 2;
+  let detailVersion = 0;
   await page.clock.install();
   await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
@@ -239,7 +240,14 @@ test('启动、窗口激活和成员变化时自动更新群组，无需刷新�
     const path = new URL(route.request().url()).pathname;
     const group = { id: groupId, name: '周末开黑', description: '', avatar: '', role: 'OWNER', memberCount,
       createdAt: '2026-09-12T00:00:00Z', updatedAt: '2026-09-12T00:00:00Z' };
-    if (path === `/api/groups/${groupId}/presence-changes`) return holdPresencePoll(route);
+    if (path === `/api/groups/${groupId}/presence-changes`) {
+      const version = new URL(route.request().url()).searchParams.get('version');
+      if (version !== String(detailVersion)) return route.fulfill({ json: {
+        serverInstanceId: 'e5965682-9948-41b0-b9cf-c12eeb927e53', version: detailVersion, detailVersion, changed: true,
+      } });
+      return holdPresencePoll(route);
+    }
+    if (path === `/api/groups/${groupId}/presences`) return route.fulfill({ json: [] });
     if (path === '/api/groups') return route.fulfill({ json: visible ? [group] : [] });
     if (path === `/api/groups/${groupId}`) return route.fulfill({ json: { ...group, members } });
     if (path === `/api/groups/${groupId}/messages`) return route.fulfill({ json: { messages: [], hasMore: false } });
@@ -249,7 +257,8 @@ test('启动、窗口激活和成员变化时自动更新群组，无需刷新�
   await expect(page.getByText('还没有群组，点击左侧的 + 创建一个开黑小队。')).toBeVisible();
   await expect(page.getByRole('button', { name: /刷新/ })).toHaveCount(0);
   visible = true;
-  await page.clock.fastForward(600);
+  // 跳过启动激活的 2 秒合并窗口，复核真实的再次激活。
+  await page.clock.fastForward(2_100);
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(page.getByRole('heading', { name: '周末开黑' })).toBeVisible();
   await expect(page.locator('.group-member-row')).toHaveCount(2);
@@ -258,7 +267,9 @@ test('启动、窗口激活和成员变化时自动更新群组，无需刷新�
   members.push({ userId: '4e602970-b857-431e-8b44-0aa92818c887', nickname: '新朋友', avatar: '', role: 'MEMBER', joinedAt: '2026-09-13T00:00:00Z' });
   await page.clock.fastForward(30_000);
   await expect(page.locator('.group-member-row')).toHaveCount(3);
+  // 昵称修改通过成员资料版本通知，不要求激活时重读未变化的完整成员名单。
   members[1].nickname = '新昵称';
+  detailVersion++;
   await page.clock.fastForward(600);
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(page.locator('.group-member-row').filter({ hasText: '新昵称' })).toBeVisible();

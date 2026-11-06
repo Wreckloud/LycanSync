@@ -6,7 +6,7 @@ import { desktopTestEnvironment } from './fixtures/desktopTestEnvironment';
 test.skip(process.platform !== 'win32' || process.env.LYCANSYNC_RUN_DEVICE_TESTS !== '1',
   '需在 Windows 明确启用真实默认麦克风采集测试');
 
-test('桌面真实麦克风经主进程管道传入音频模块并正常停止', async () => {
+test('桌面真实麦克风连续三次启动、交付和停止，无残留错误', async () => {
   const worklet = readdirSync(resolve('dist/assets'))
     .find((file) => file.startsWith('nativeMicrophoneAudio.worklet-') && file.endsWith('.js'));
   expect(worklet).toBeTruthy();
@@ -20,57 +20,64 @@ test('桌面真实麦克风经主进程管道传入音频模块并正常停止',
     const page = await application.firstWindow();
     const result = await page.evaluate(async (workletUrl) => {
       const desktop = window.lycanDesktop!;
-      const sessionId = crypto.randomUUID();
-      const context = new AudioContext({ sampleRate: 48000 });
-      let node: AudioWorkletNode | undefined;
-      let started = false;
-      let chunks = 0;
-      let bytes = 0;
-      let malformed = 0;
-      let captureError: string | undefined;
-      let removeChunks: (() => void) | undefined;
-      const removeErrors = desktop.onNativeMicrophoneError((event) => {
-        if (event.sessionId === sessionId) captureError = event.code;
-      });
-      try {
-        await context.audioWorklet.addModule(workletUrl);
-        node = new AudioWorkletNode(context, 'lycan-native-microphone', {
-          numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1],
+      const results = [];
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const sessionId = crypto.randomUUID();
+        const context = new AudioContext({ sampleRate: 48000 });
+        let node: AudioWorkletNode | undefined;
+        let started = false;
+        let chunks = 0;
+        let bytes = 0;
+        let malformed = 0;
+        let captureError: string | undefined;
+        let removeChunks: (() => void) | undefined;
+        const removeErrors = desktop.onNativeMicrophoneError((event) => {
+          if (event.sessionId === sessionId) captureError = event.code;
         });
-        node.connect(context.createMediaStreamDestination());
-        node.port.onmessage = ({ data }) => {
-          if (data?.type === 'accepted') desktop.acknowledgeNativeMicrophoneChunk(sessionId, data.sequence, data.droppedChunks);
-        };
-        removeChunks = desktop.onNativeMicrophoneChunk((chunk) => {
-          if (chunk.sessionId !== sessionId) return;
-          if (chunk.frames !== 480 || chunk.sampleRate !== 48000 || chunk.channels !== 1
-              || chunk.pcm.byteLength !== 1920) malformed++;
-          chunks++;
-          bytes += chunk.pcm.byteLength;
-          const pcm = chunk.pcm.slice();
-          node!.port.postMessage({ type: 'chunk', sequence: chunk.sequence, pcm: pcm.buffer }, [pcm.buffer]);
-        });
-        await context.resume();
-        const format = await desktop.startNativeMicrophone(sessionId, {
-          inputGain: 1, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true,
-        }, 'default', false);
-        started = true;
-        await new Promise((resolveSample) => setTimeout(resolveSample, 3000));
-        return { format, chunks, bytes, malformed, captureError };
-      } finally {
-        if (started) await desktop.stopNativeMicrophone(sessionId);
-        removeChunks?.();
-        removeErrors();
-        node?.port.close();
-        node?.disconnect();
-        await context.close();
+        try {
+          await context.audioWorklet.addModule(workletUrl);
+          node = new AudioWorkletNode(context, 'lycan-native-microphone', {
+            numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1],
+          });
+          node.connect(context.createMediaStreamDestination());
+          node.port.onmessage = ({ data }) => {
+            if (data?.type === 'accepted') desktop.acknowledgeNativeMicrophoneChunk(sessionId, data.sequence, data.droppedChunks);
+          };
+          removeChunks = desktop.onNativeMicrophoneChunk((chunk) => {
+            if (chunk.sessionId !== sessionId) return;
+            if (chunk.frames !== 480 || chunk.sampleRate !== 48000 || chunk.channels !== 1
+                || chunk.pcm.byteLength !== 1920) malformed++;
+            chunks++;
+            bytes += chunk.pcm.byteLength;
+            const pcm = chunk.pcm.slice();
+            node!.port.postMessage({ type: 'chunk', sequence: chunk.sequence, pcm: pcm.buffer }, [pcm.buffer]);
+          });
+          await context.resume();
+          const format = await desktop.startNativeMicrophone(sessionId, {
+            inputGain: 1, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true,
+          }, 'default', false);
+          started = true;
+          await new Promise((resolveSample) => setTimeout(resolveSample, 3000));
+          results.push({ format, chunks, bytes, malformed, captureError });
+        } finally {
+          if (started) await desktop.stopNativeMicrophone(sessionId);
+          removeChunks?.();
+          removeErrors();
+          node?.port.close();
+          node?.disconnect();
+          await context.close();
+        }
       }
+      return results;
     }, `/assets/${worklet}`);
-    expect(result.format).toMatchObject({ sampleRate: 48000, channels: 1, bitsPerSample: 32, nominalChunkMs: 10 });
-    expect(result.chunks).toBeGreaterThan(0);
-    expect(result.bytes).toBe(result.chunks * 1920);
-    expect(result.malformed).toBe(0);
-    expect(result.captureError).toBeUndefined();
+    expect(result).toHaveLength(3);
+    for (const attempt of result) {
+      expect(attempt.format).toMatchObject({ sampleRate: 48000, channels: 1, bitsPerSample: 32, nominalChunkMs: 10 });
+      expect(attempt.chunks).toBeGreaterThan(0);
+      expect(attempt.bytes).toBe(attempt.chunks * 1920);
+      expect(attempt.malformed).toBe(0);
+      expect(attempt.captureError).toBeUndefined();
+    }
   } finally {
     await application.close();
   }
