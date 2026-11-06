@@ -1,4 +1,4 @@
-import { effectScope, nextTick, ref } from 'vue';
+import { effectScope, isProxy, nextTick, ref } from 'vue';
 import { afterEach, expect, it, vi } from 'vitest';
 import { shortcutFromKey, useAudioShortcuts } from './useAudioShortcuts';
 
@@ -9,7 +9,10 @@ function fixture(begin: () => Promise<string> = async () => 'owner') {
   const room = ref<string | null>(null);
   let action!: Parameters<NonNullable<Window['lycanAudioShortcuts']>['onAction']>[0];
   let hold!: Parameters<NonNullable<Window['lycanAudioShortcuts']>['onHold']>[0];
-  const bridge = { begin: vi.fn(begin), configure: vi.fn(async () => {}), activate: vi.fn(async () => {}),
+  const bridge = { begin: vi.fn(begin), configure: vi.fn(async (_owner: string, bindings: unknown) => {
+    expect(isProxy(bindings)).toBe(false);
+    structuredClone(bindings);
+  }), activate: vi.fn(async () => {}),
     capture: vi.fn(async () => {}), end: vi.fn(async () => {}),
     readHold: vi.fn(async () => false), onHold: (callback: typeof hold) => { hold = callback; return vi.fn(); },
     onAction: (callback: typeof action) => { action = callback; return vi.fn(); }, onError: () => vi.fn() };
@@ -50,6 +53,25 @@ it('录入组合不接受普通字母、系统保留键或 F12', () => {
   expect(() => shortcutFromKey({ ...event, code: 'KeyF', ctrlKey: false })).toThrow();
   expect(() => shortcutFromKey({ ...event, code: 'F12' })).toThrow();
   expect(() => shortcutFromKey({ ...event, metaKey: true })).toThrow();
+});
+
+it('初始化、切换发言模式及重试均传递可克隆配置并激活当前房间', async () => {
+  const f = fixture();
+  try {
+    await settle();
+    expect(f.shortcuts.error.value).toBe('');
+    expect(f.bridge.activate).toHaveBeenCalledWith('owner', null);
+    await f.shortcuts.setBinding('pushToTalk', 'F2');
+    await f.shortcuts.setVoiceMode('pushToTalk');
+    expect(f.shortcuts.error.value).toBe('');
+    f.room.value = 'room'; await settle();
+    await f.shortcuts.retry();
+    expect(f.shortcuts.error.value).toBe('');
+    expect(f.bridge.configure).toHaveBeenLastCalledWith('owner', {
+      microphone: '', listening: '', pushToTalk: 'F2', replay: '',
+    }, true);
+    expect(f.bridge.activate).toHaveBeenLastCalledWith('owner', 'room');
+  } finally { f.scope.stop(); }
 });
 
 it('按住后确认当前键状态才续期，松开停止查询，不切换手动静音意愿', async () => {

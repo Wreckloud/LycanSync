@@ -413,10 +413,14 @@ test('快捷键录入松开后保存，冲突保持原设置，取消不会丢�
   await page.getByRole('dialog', { name: '个人菜单', exact: true }).getByRole('button', { name: '快捷键', exact: true }).click();
   const recorder = page.getByRole('button', { name: '设置麦克风静音／恢复快捷键', exact: true });
   await expect(recorder).toHaveText('未设置');
+  const bindingWidth = (await recorder.boundingBox())!.width;
   await recorder.click();
   await expect(recorder).toHaveAttribute('aria-pressed', 'true');
+  expect((await recorder.boundingBox())!.width).toBe(bindingWidth);
   await recorder.press('Control+m');
   await expect(recorder).toHaveText('Ctrl+M');
+  expect((await recorder.boundingBox())!.width).toBe(bindingWidth);
+  expect((await page.getByRole('button', { name: '设置停止／恢复收听快捷键', exact: true }).boundingBox())!.width).toBe(bindingWidth);
   await recorder.click();
   await recorder.press('Control+k');
   await expect(page.getByRole('alert')).toContainText('占用');

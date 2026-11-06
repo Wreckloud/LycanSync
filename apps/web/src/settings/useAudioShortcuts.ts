@@ -1,4 +1,4 @@
-import { onScopeDispose, ref, watch } from 'vue';
+import { onScopeDispose, ref, shallowRef, watch } from 'vue';
 
 export type AudioShortcutAction = 'microphone' | 'listening' | 'pushToTalk' | 'replay';
 export type VoiceMode = 'voice' | 'pushToTalk';
@@ -23,7 +23,8 @@ export function useAudioShortcuts(userId: string, options: {
   modeChanged: (mode: VoiceMode) => void;
   transmissionChanged: (held: boolean) => void;
 }, bridge = window.lycanAudioShortcuts, storage: Pick<Storage, 'getItem' | 'setItem'> = localStorage) {
-  const bindings = ref<AudioShortcutBindings>({ microphone: '', listening: '', pushToTalk: '', replay: '' });
+  // 配置按整体替换，保持普通对象才能通过 Electron 的上下文桥。
+  const bindings = shallowRef<AudioShortcutBindings>({ microphone: '', listening: '', pushToTalk: '', replay: '' });
   const voiceMode = ref<VoiceMode>('voice');
   const held = ref(false);
   const error = ref('');

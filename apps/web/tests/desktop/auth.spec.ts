@@ -21,7 +21,8 @@ async function createAccountServer(administrator = true) {
     response.setHeader('Content-Type', 'application/json');
     const reply = (status: number, value?: unknown) => { response.writeHead(status); response.end(value === undefined ? undefined : JSON.stringify(value)); };
     const authenticated = !!token && !revoked && request.headers.authorization === 'Bearer ' + token;
-    if (request.url === '/api/auth/options') return reply(200, { mode: 'invite' });
+    if (request.url === '/api/auth/options') return reply(200, { mode: 'invite', initialized: true, qqAvailable: false });
+    if (request.url === '/api/system/initialization') return reply(200, { initialized: true });
     if (request.url === '/api/auth/access/preview') return reply(200, { kind: redemptions ? 'RECOVERY' : administrator ? 'ACTIVATE' : 'INVITE', status: 'PENDING', serverName: '测试服务器' });
     if (request.url === '/api/auth/access/redeem') {
       const redemption = JSON.parse(body);
@@ -60,16 +61,63 @@ async function createAccountServer(administrator = true) {
 
 async function redeem(application: ElectronApplication, origin: string, recovery = false) {
   const page = await application.firstWindow();
-  await expect(page.getByText('请打开服主发来的邀请或恢复登录链接', { exact: false })).toBeVisible();
+  await expect(page.getByText('使用服主分享的邀请链接即可加入。', { exact: false })).toBeVisible();
   // 协议解析另有冷启动／第二实例用例；此处用受控事件验证真实兑换、加密和会话处理。
   await application.evaluate(({ BrowserWindow }, offer) => {
     BrowserWindow.getAllWindows()[0].webContents.send('auth:access:offer', offer);
   }, { server: origin, token: (recovery ? 'e' : 'a').repeat(43) });
   await page.getByRole('button', { name: /^(确认激活|确认加入|恢复登录)$/ }).click();
   if (!recovery) await page.getByRole('button', { name: '跳过', exact: true }).click();
+  await page.getByRole('button', { name: '登录', exact: true }).click();
+  await expect(page.locator('.app-content')).toBeAttached();
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('window:visibility', true));
   await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible();
   return page;
 }
+
+test('快捷键真实桌面桥接：初始化、模式切换和重启恢复不因响应式对象失效', async () => {
+  test.setTimeout(60_000);
+  const api = await createAccountServer(false);
+  const directory = test.info().outputPath('shortcuts');
+  let application: ElectronApplication | undefined;
+  const errors: string[] = [];
+  try {
+    ({ application } = await launchIsolatedDesktop(directory, api.origin));
+    (await application.firstWindow()).on('pageerror', error => errors.push(error.message));
+    let page = await redeem(application, api.origin);
+    const openShortcuts = async () => {
+      await page.getByRole('button', { name: '设置', exact: true }).click();
+      await page.getByRole('button', { name: '快捷键', exact: true }).click();
+      await expect(page.locator('.shortcut-settings [role="alert"]')).toHaveCount(0);
+    };
+    await openShortcuts();
+    const binding = page.getByRole('button', { name: '设置保存即时回放快捷键', exact: true });
+    await binding.click();
+    await binding.press('Control+Alt+Shift+F10');
+    await expect(binding).toHaveText('Ctrl+Alt+Shift+F10');
+    await page.getByRole('radio', { name: '按键说话', exact: true }).check();
+    await expect(page.locator('.shortcut-settings [role="alert"]')).toHaveCount(0);
+    await expect.poll(() => application!.evaluate(({ globalShortcut }) => {
+      // 同进程另一注册入口也应被已生效的原生绑定拒绝，不能仅检查界面文本。
+      const registered = globalShortcut.register('Control+Alt+Shift+F10', () => {});
+      if (registered) globalShortcut.unregister('Control+Alt+Shift+F10');
+      return registered;
+    })).toBe(false);
+    await application.close();
+    ({ application } = await launchIsolatedDesktop(directory, api.origin));
+    page = await application.firstWindow();
+    page.on('pageerror', error => errors.push(error.message));
+    await expect(page.locator('.app-content')).toBeAttached();
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('window:visibility', true));
+    await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible();
+    await openShortcuts();
+    await expect(page.getByRole('radio', { name: '按键说话', exact: true })).toBeChecked();
+    await expect(page.getByRole('button', { name: '设置保存即时回放快捷键', exact: true })).toHaveText('Ctrl+Alt+Shift+F10');
+    await page.getByRole('radio', { name: '自由发言', exact: true }).check();
+    await expect(page.locator('.shortcut-settings [role="alert"]')).toHaveCount(0);
+    expect(errors).toEqual([]);
+  } finally { await application?.close(); await api.close(); }
+});
 
 for (const administrator of [true, false]) {
   test(`${administrator ? '服主激活' : '成员邀请'}兑换后加密保存、重启恢复并退出`, async () => {

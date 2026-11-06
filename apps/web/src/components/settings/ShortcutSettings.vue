@@ -48,7 +48,7 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
       <div v-for="action in actions" :key="action.id" class="shortcut-setting-row">
         <span>{{ action.label }}</span>
         <div class="settings-actions">
-          <button type="button" :aria-label="`设置${action.label}快捷键`" :aria-pressed="shortcuts.capturing === action.id"
+          <button type="button" class="shortcut-binding" :aria-label="`设置${action.label}快捷键`" :aria-pressed="shortcuts.capturing === action.id"
             :disabled="!shortcuts.supported || !shortcuts.ready || (shortcuts.busy && shortcuts.capturing !== action.id)"
             @click="shortcuts.startCapture(action.id)" @blur="shortcuts.cancelCapture()"
             @keydown="shortcuts.capturing === action.id && (keyDown($event), $event.preventDefault(), $event.stopPropagation())"
@@ -70,6 +70,7 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
 .shortcut-settings { max-width: 760px; }
 .shortcut-setting-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; min-height: 44px; }
 .shortcut-setting-row .settings-actions { margin: 0; }
+.shortcut-binding { width: 208px; flex: 0 0 208px; white-space: nowrap; }
 .voice-mode { display: flex; align-items: center; gap: 8px; }
 .voice-mode input { margin: 0; accent-color: var(--accent); }
 </style>
