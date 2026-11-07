@@ -392,9 +392,21 @@ pub(super) fn window_video_target(
         lifetime_name: identity.lifetime.name.clone(),
         process_id: identity.process_id,
         process_creation_time: identity.process_creation_time.to_string(),
-        requires_window_capture: requires_window_capture(identity.process_id)?,
+        requires_window_capture: requires_window_capture(identity.process_id)?
+            || uses_separate_game_surface(&executable, &identity.class_name),
         executable,
     })
+}
+
+fn uses_separate_game_surface(executable: &str, class_name: &str) -> bool {
+    // 饥荒 GLES 渲染器的钩子报告隐藏的 1×1 辅助窗，不能据此授权可见游戏窗。
+    class_name == "opengles2.0"
+        && std::path::Path::new(executable)
+            .file_name()
+            .is_some_and(|name| {
+                name.to_string_lossy()
+                    .eq_ignore_ascii_case("dontstarve_steam_x64.exe")
+            })
 }
 
 fn requires_window_capture(process_id: u32) -> Result<bool, ErrorCode> {
@@ -570,6 +582,23 @@ mod tests {
         WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZE, WS_MINIMIZE, is_client_executable,
         is_helper_window_style, should_exclude_window, stable_window_style,
     };
+
+    #[test]
+    fn routes_confirmed_dont_starve_gles_surface_to_window_capture() {
+        use super::uses_separate_game_surface;
+        assert!(uses_separate_game_surface(
+            r"D:\Games\dontstarve_steam_x64.exe",
+            "opengles2.0"
+        ));
+        assert!(!uses_separate_game_surface(
+            r"D:\Games\other.exe",
+            "opengles2.0"
+        ));
+        assert!(!uses_separate_game_surface(
+            r"D:\Games\dontstarve_steam_x64.exe",
+            "SDL_app"
+        ));
+    }
 
     #[test]
     fn window_identity_style_ignores_minimize_and_maximize_bits() {

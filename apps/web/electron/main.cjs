@@ -19,7 +19,7 @@ const { createRecordingVoice } = require('./recording-voice.cjs');
 const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
 const { createDiagnosticReportStore, parseDiagnosticReport } = require('./diagnostic-reports.cjs');
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
-const { matchNativeVideoSourceThumbnails, monitorDisplayId } = require('./native-video-thumbnails.cjs');
+const { createNativeThumbnailCache, monitorDisplayId } = require('./native-video-thumbnails.cjs');
 const { parseAccessLink, accessLinkFromArguments, parseManualAccessLink } = require('./access-links.cjs');
 const { qqLoginFromArguments, validateQqAuthorization } = require('./qq-login.cjs');
 const { createStartupUpdate, parseInstallTiming } = require('./startup-update.cjs');
@@ -153,6 +153,7 @@ const audioShortcuts = createAudioShortcuts({ getWindow: () => mainWindow,
 let nativeVideoSession;
 let nativeVideoPreparation;
 let nativeVideoSourcesById = new Map();
+const loadNativeThumbnailBatch = createNativeThumbnailCache();
 let lastStoppedNativeVideoSession;
 let nativeScreenAudioSession;
 let lastScreenAudioDroppedChunks = 0;
@@ -1607,9 +1608,9 @@ ipcMain.handle('viewer:fullscreen', (event, enabled) => {
   if (closing) throw new Error('应用正在关闭。');
   screenShareWindows.fullscreen(event, enabled);
 });
-ipcMain.handle('capture:prepare', (event) => {
-  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
-  prepareObsCapture(false);
+ipcMain.handle('capture:prepare', (event, graphics = false) => {
+  if (!trustedSender(event) || closing || typeof graphics !== 'boolean') throw new Error('请求来源无效');
+  prepareObsCapture(graphics);
 });
 ipcMain.handle('window:is-maximized', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
@@ -1806,19 +1807,33 @@ ipcMain.handle('media:video-source-thumbnails', async (event, sources) => {
   if (!sources.length) return [];
   const startedAt = performance.now();
   try {
-    const desktopSources = await desktopCapturer.getSources({
-      types: [...new Set(sources.map((source) => source.kind === 'monitor' ? 'screen' : 'window'))],
-      thumbnailSize: { width: 256, height: 144 },
-    });
-    recordSourceTiming('sourceThumbnails', startedAt, desktopSources.length);
-    return matchNativeVideoSourceThumbnails(sources.map((source) => ({ ...source, displayId: monitorDisplayId(source, screen) })), desktopSources.map((source) => ({
-      id: source.id,
-      type: captureSourceType(source),
-      displayId: source.display_id,
-      name: source.name,
-      thumbnail: { isEmpty: () => source.thumbnail.isEmpty(),
-        toDataURL: () => 'data:image/jpeg;base64,' + source.thumbnail.toJPEG(80).toString('base64') },
-    })));
+    const state = mediaHelper.videoSourceSnapshot?.state;
+    if (!state?.alive || state.closed) return [];
+    const batches = await Promise.all([...new Set(sources.map(source => source.kind))].map(kind => {
+      const currentSources = [...nativeVideoSourcesById.values()].filter(source => source.kind === kind)
+        .map(source => ({ ...source, displayId: monitorDisplayId(source, screen) }));
+      if (!currentSources.length) return [];
+      return loadNativeThumbnailBatch(state, kind, currentSources, async () => {
+        const desktopSources = await desktopCapturer.getSources({
+          types: [kind === 'monitor' ? 'screen' : 'window'], thumbnailSize: { width: 256, height: 144 },
+        });
+        recordSourceTiming('sourceThumbnails', startedAt, desktopSources.length);
+        return desktopSources.map((source) => ({
+          id: source.id,
+          type: captureSourceType(source),
+          displayId: source.display_id,
+          name: source.name,
+          thumbnail: { isEmpty: () => source.thumbnail.isEmpty(),
+            toDataURL: () => 'data:image/jpeg;base64,' + source.thumbnail.toJPEG(80).toString('base64') },
+        }));
+      });
+    }));
+    if (mediaHelper.videoSourceSnapshot?.state !== state || !state.alive || state.closed) return [];
+    const requested = new Set(sources.filter(source => {
+      const current = nativeVideoSourcesById.get(source.sourceId);
+      return current && current.title === source.title && current.windowId === source.windowId;
+    }).map(source => source.sourceId));
+    return batches.flat().filter(source => requested.has(source.sourceId));
   } catch (error) {
     void writeMediaDiagnostic({ stage: 'sourceThumbnailsFailed', message: String(error.message).slice(0, 500) });
     // 缩略图不决定来源是否可选，失败后保留图标并按间隔重试。

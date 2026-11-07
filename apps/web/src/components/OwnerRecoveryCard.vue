@@ -34,7 +34,7 @@ async function recover() {
       <PasswordField id="owner-recovery-password" v-model="password" label="恢复密码" :disabled="busy" required />
       <footer class="card-actions">
         <button type="button" class="settings-button" :disabled="busy" @click="emit('cancel')">返回</button>
-        <InlineFeedback class="card-feedback" :message="error" :status="busy ? '正在恢复…' : ''" />
+        <InlineFeedback class="card-feedback" :message="error" :pending="busy ? '正在恢复…' : ''" />
         <button type="submit" class="confirm-button card-actions-end" :disabled="busy">恢复登录</button>
       </footer>
     </form>

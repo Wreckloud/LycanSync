@@ -34,8 +34,8 @@ onMounted(() => dialog.value?.focus());
         <p id="update-restart-description">先下载并校验新版，随后保存录制并结束当前通话、屏幕共享和远控。安装完成后自动重新打开；下载失败仍可使用当前版本。</p>
         <footer class="card-actions">
           <button type="button" :disabled="busy" @click="cancel">取消</button>
-          <InlineFeedback class="card-feedback" :message="error" :status="busy ? '正在准备更新…' : ''" />
-          <button type="button" class="confirm-button card-actions-end" :disabled="busy" @click="confirm">{{ busy ? '正在重启…' : '重启更新' }}</button>
+          <InlineFeedback class="card-feedback" :message="error" :pending="busy ? '正在准备更新…' : ''" />
+          <button type="button" class="confirm-button card-actions-end" :disabled="busy" @click="confirm">重启更新</button>
         </footer>
       </section>
     </div>

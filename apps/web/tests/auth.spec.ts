@@ -423,9 +423,8 @@ test('更换头像在整页资料设置中裁剪并保存', async ({ page }) => 
   await expect(cropDialog).toHaveCount(0);
   await page.mouse.move(5, 5);
   await expect(page.getByRole('button', { name: '修改头像', exact: true })).toHaveAttribute('aria-busy', 'true');
-  await expect(page.locator('.profile-avatar-overlay')).toHaveText('正在保存');
-  await expect(page.locator('.profile-avatar-overlay')).toHaveCSS('opacity', '1');
-  await expect(page.locator('.profile-settings > .inline-feedback')).not.toContainText('正在保存');
+  await expect(page.locator('.profile-avatar-overlay')).toHaveText('编辑');
+  await expect(page.locator('.profile-settings').getByRole('status')).toHaveText('正在保存…');
   finishSave();
   await expect(page.getByRole('button', { name: '修改头像', exact: true })).toHaveAttribute('aria-busy', 'false');
   await expect(page.locator('.profile-avatar-overlay')).toHaveText('编辑');
@@ -460,7 +459,7 @@ test('更换头像在整页资料设置中裁剪并保存', async ({ page }) => 
   await expect(preview).toHaveJSProperty('naturalWidth', 512);
 });
 
-test('签名自动保存与注册日期展示，反馈不推动下方内容', async ({ page }) => {
+test('签名快速保存不移动布局，失败时就近展开反馈并支持重试', async ({ page }) => {
   const user = {
     id: 'signature-user', nickname: '签名测试', avatar: '', administrator: false,
     signature: '', createdAt: '2026-09-06T12:00:00Z',
@@ -501,7 +500,10 @@ test('签名自动保存与注册日期展示，反馈不推动下方内容', as
   await expect(page.locator('.profile-settings [role="alert"]')).toContainText('暂时无法保存');
   await expect(signature).toHaveValue('一起开黑');
   expect(user.signature).toBe('一起开黑');
-  expect(await page.locator('.activity-settings').boundingBox()).toEqual(activityPosition);
+  const feedback = await page.locator('#profile-signature-feedback').boundingBox();
+  const activityAfterError = await page.locator('.activity-settings').boundingBox();
+  expect(feedback).not.toBeNull();
+  expect(activityAfterError!.y).toBeGreaterThanOrEqual(feedback!.y + feedback!.height);
 
   await signature.fill('');
   await page.getByRole('heading', { name: '账号设置', exact: true }).click();

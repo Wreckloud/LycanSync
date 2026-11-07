@@ -36,9 +36,7 @@ function updateAutomatic(event: Event) {
         {{ reason ? '开始新记录（替换本次）' : '开始记录' }}
       </button>
       <button v-else-if="!automaticEnabled" type="button" @click="report.stop()">结束记录</button>
-      <button type="button" :disabled="(recording && !automaticEnabled) || (!reason && !desktop && !automaticEnabled) || saving" @click="report.save(notes)">
-        {{ saving ? '正在导出…' : '导出报告' }}
-      </button>
+      <button type="button" :disabled="(recording && !automaticEnabled) || (!reason && !desktop && !automaticEnabled) || saving" @click="report.save(notes)">导出报告</button>
       <button v-if="desktop" type="button" :disabled="!savedReport || saving" @click="report.savePrevious()">{{ savedReport?.kind === 'screen-media' ? '导出最近画面使用' : '导出上次使用' }}</button>
       <button v-if="desktop" type="button" :disabled="recording || saving" @click="report.clearSaved()">清除详细报告</button>
       <span role="status">{{ recording ? automaticEnabled ? '自动记录中' : '记录中' : reason === 'limit' ? '达到记录上限，已结束' : reason ? '记录已结束' : '尚未开始' }}<template v-if="desktop"> · {{ savedSizeBytes === null ? '尚未保存' : `文件大小 ${formatReportSize(savedSizeBytes)}` }}</template></span>
@@ -48,7 +46,7 @@ function updateAutomatic(event: Event) {
     <label class="report-notes">体验说明（选填）
       <textarea v-model="notes" maxlength="2000" rows="2" placeholder="例如：四路观看时卡顿，单路观看恢复正常" />
     </label>
-    <InlineFeedback :message="error" />
+    <InlineFeedback :message="error" :pending="saving ? '正在导出报告…' : ''" />
     <InlineFeedback :message="persistenceError" />
   </section>
 </template>

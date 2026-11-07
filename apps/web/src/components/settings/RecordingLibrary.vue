@@ -36,7 +36,7 @@ onMounted(() => { void library.load(); });
   <section class="settings-block recording-library">
     <div class="library-heading"><h2>本地录像</h2><button type="button" :disabled="loading || !!pendingId" @click="library.load()">刷新</button></div>
     <p>原片保留在本机，不会自动上传或清理。播放使用系统播放器；切换来源或画质产生的文件段分别保存。</p>
-    <InlineFeedback :message="notice" :status="loading ? '正在读取录像列表…' : ''" />
+    <InlineFeedback :message="notice" :pending="loading ? '正在读取录像列表…' : ''" />
     <p v-if="!entries.length && !loading && !notice">暂无已登记的录像。更新前的原片仍可从录像目录打开。</p>
     <details v-for="group in groups" :key="group.id" :open="group.items.length === 1" class="library-session">
       <summary>{{ new Date(group.createdAt).toLocaleString() }}<small v-if="group.items.length > 1"> · {{ group.items.length }} 个文件段</small></summary>

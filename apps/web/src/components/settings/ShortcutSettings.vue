@@ -60,14 +60,13 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
         </div>
       </div>
       <small>支持 Ctrl／Alt 加字母或数字，以及 F1–F11；不使用 Windows 保留键。松开按键后保存，长按不反复切换。</small>
-      <InlineFeedback :message="keyError || shortcuts.error" :status="shortcuts.busy ? '正在更新快捷键…' : ''" />
+      <InlineFeedback :message="keyError || shortcuts.error" />
       <button v-if="shortcuts.error && shortcuts.supported" type="button" :disabled="shortcuts.busy" @click="shortcuts.retry()">重新启用</button>
     </section>
   </div>
 </template>
 
 <style scoped>
-.shortcut-settings { max-width: 760px; }
 .shortcut-setting-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; min-height: 44px; }
 .shortcut-setting-row .settings-actions { margin: 0; }
 .shortcut-binding { width: 208px; flex: 0 0 208px; white-space: nowrap; }

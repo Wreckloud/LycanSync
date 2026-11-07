@@ -207,7 +207,7 @@ function keepFocus(event: KeyboardEvent) {
         </div>
         <footer class="card-actions">
           <button type="button" class="settings-button" :disabled="processing" @click="emit('cancel')">取消</button>
-          <InlineFeedback class="card-feedback" :message="error" :status="processing ? '正在处理…' : ''" />
+          <InlineFeedback class="card-feedback" :message="error" :pending="processing ? '正在处理…' : ''" />
           <div class="avatar-crop-actions card-actions-end">
             <button type="button" class="settings-button" :disabled="processing" @click="replacementInput?.click()">重新选择</button>
             <button type="button" class="confirm-button" :disabled="processing" @click="applyCrop">应用头像</button>

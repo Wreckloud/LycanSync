@@ -63,7 +63,7 @@ defineExpose({ editingName });
         @change="emit('lastOnlineVisibility', ($event.target as HTMLInputElement).checked)" />
     </label>
     <div class="settings-toggle activity-toggle activity-presence">
-      <span><strong>在线状态</strong><small>在线时闲置会自动显示离开；隐身不影响通话。</small></span>
+      <span><strong>在线状态</strong></span>
       <div class="presence-options" role="group" aria-label="在线状态" :aria-busy="presenceSyncing || !presenceReady" aria-describedby="activity-visibility-feedback">
         <button v-for="mode in (['online', 'invisible'] as const)" :key="mode" type="button" class="presence-option"
           :aria-label="mode === 'online' ? '在线' : '隐身'" :aria-pressed="presenceReady && presenceMode === mode" :disabled="!presenceReady"
@@ -73,7 +73,7 @@ defineExpose({ editingName });
         </button>
       </div>
     </div>
-    <InlineFeedback id="activity-visibility-feedback" :message="error || presenceError" :status="!presenceReady ? '正在读取状态偏好…' : presenceSyncing ? '正在同步状态…' : ''" />
+    <InlineFeedback id="activity-visibility-feedback" :message="error || presenceError" />
     <p v-if="!desktop">动态检测仅在 Windows 桌面版提供</p>
     </div>
     <div v-if="desktop" class="activity-mappings">
@@ -94,7 +94,7 @@ defineExpose({ editingName });
         </div>
       </div>
       <div class="activity-mapping-feedback"><InlineFeedback id="activity-mapping-feedback" :message="(!editingName && mappings.error.value) || mappings.windowError.value"
-        :status="mappings.loading.value ? '正在读取窗口…' : ''" />
+        :pending="mappings.loading.value ? '正在读取窗口…' : ''" />
         <button v-if="!mappings.ready.value && !mappings.busy.value" type="button" @click="mappings.initialize">重试</button></div>
       <div v-if="mappings.entries.value.length" class="activity-saved-names">
         <h3>已保存的修正</h3>
@@ -129,7 +129,8 @@ defineExpose({ editingName });
 .activity-window-actions button { white-space: nowrap; }
 .activity-window-choice select { min-width: 0; width: 100%; box-sizing: border-box; }
 .activity-mappings small { color: var(--muted); font-size: 12px; line-height: 18px; }
-.activity-mapping-feedback { display: flex; align-items: center; gap: 8px; min-height: 32px; }
+.activity-mapping-feedback { display: flex; align-items: center; gap: 8px; }
+.activity-mapping-feedback:not(:has(> *)) { display: none; }
 .activity-mapping-feedback .inline-feedback { flex: 1; }
 .activity-saved-names { display: grid; gap: 4px; }
 .activity-saved-names h3 { margin: 0 0 4px; color: var(--muted); font-size: 13px; font-weight: 500; }

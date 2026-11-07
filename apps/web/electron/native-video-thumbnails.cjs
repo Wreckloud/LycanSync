@@ -47,4 +47,35 @@ function monitorDisplayId(source, screen) {
   return String(display.id);
 }
 
-module.exports = { matchNativeVideoSourceThumbnails, monitorDisplayId };
+// 一次 Electron 抓取已包含同类所有窗口；短暂复用，避免滚动或重开重复整批等待。
+function createNativeThumbnailCache(now = Date.now) {
+  let owner;
+  const batches = new Map();
+  return async (state, kind, sources, capture) => {
+    if (owner !== state) { owner = state; batches.clear(); }
+    let batch = batches.get(kind);
+    if (!batch || now() - batch.createdAt >= 10_000 || sources.some(source => {
+      const previous = batch.sources.get(source.sourceId);
+      return !previous || previous.title !== source.title || previous.windowId !== source.windowId
+        || previous.displayId !== source.displayId || previous.width !== source.width || previous.height !== source.height;
+    })) {
+      batch = { createdAt: now(), sources: new Map(sources.map(source => [source.sourceId, source])) };
+      batch.promise = Promise.resolve().then(capture).then(desktopSources => {
+        batch.createdAt = now();
+        return matchNativeVideoSourceThumbnails([...batch.sources.values()], desktopSources);
+      });
+      batches.set(kind, batch);
+      batch.promise.catch(() => { if (batches.get(kind) === batch) batches.delete(kind); });
+    }
+    const thumbnails = await batch.promise;
+    if (owner !== state) return [];
+    const current = new Map(sources.map(source => [source.sourceId, source]));
+    return thumbnails.filter(({ sourceId }) => {
+      const previous = batch.sources.get(sourceId), source = current.get(sourceId);
+      return source && previous.title === source.title && previous.windowId === source.windowId
+        && previous.displayId === source.displayId && previous.width === source.width && previous.height === source.height;
+    });
+  };
+}
+
+module.exports = { matchNativeVideoSourceThumbnails, monitorDisplayId, createNativeThumbnailCache };

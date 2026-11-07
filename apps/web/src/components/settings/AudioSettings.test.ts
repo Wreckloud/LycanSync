@@ -41,7 +41,8 @@ describe('语音设置的本机试听入口', () => {
     expect(listening).toContain('停止麦克风试听');
     const stopping = await renderAudioSettings('stopping');
     expect([...stopping.matchAll(/<button[^>]*class="settings-button(?: [^"]+)?"[^>]*>/g)].at(-1)?.[0]).toContain('disabled');
-    expect(stopping).toContain('正在停止');
+    expect(stopping).toContain('停止麦克风试听');
+    expect(stopping).not.toContain('正在停止');
   });
 
   it('麦克风操作未完成时禁用新的测试启动', async () => {

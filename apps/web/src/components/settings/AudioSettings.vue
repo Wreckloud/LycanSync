@@ -129,9 +129,9 @@ function updateInputGain(event: Event) {
           || rtc.busySources.includes(Track.Source.Microphone)))"
         @click="toggleTest">
         {{ microphoneTest.state === 'starting' ? '取消试听' : microphoneTest.state === 'listening' ? '停止麦克风试听'
-          : microphoneTest.state === 'stopping' ? '正在停止' : '开始试听' }}
+          : microphoneTest.state === 'stopping' ? '停止麦克风试听' : '开始试听' }}
       </button>
-      <InlineFeedback :message="microphoneTest.notice" />
+      <InlineFeedback :message="microphoneTest.notice" :pending="microphoneTest.state === 'starting' ? '正在准备麦克风试听…' : microphoneTest.state === 'stopping' ? '正在停止试听…' : ''" />
     </section>
   </div>
 </template>

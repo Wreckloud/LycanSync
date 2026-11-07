@@ -11,7 +11,7 @@ async function renderDialog(busy = false, error = '') {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('更新重启确认卡片', () => {
-  it('展示版本和中断影响，取消在左、重启在右，反馈有固定区域', async () => {
+  it('展示版本和中断影响，取消在左、重启在右，无反馈时不占空白', async () => {
     const html = await renderDialog();
     expect(html).toContain('发现新版本 0.0.10');
     expect(html).toContain('结束当前通话、屏幕共享和远控');
@@ -19,13 +19,13 @@ describe('更新重启确认卡片', () => {
     expect(html).toContain('class="card-actions"');
     expect(html).toContain('confirm-button card-actions-end');
     expect(html.indexOf('>取消</button>')).toBeLessThan(html.indexOf('>重启更新</button>'));
-    expect(html).toContain('inline-feedback card-feedback');
+    expect(html).not.toContain('inline-feedback');
   });
 
   it('申请重启期间禁用两个操作，失败只在卡片内显示', async () => {
     const busy = await renderDialog(true);
     expect(busy.match(/<button[^>]*disabled/g)).toHaveLength(2);
-    expect(busy).toContain('正在重启…');
+    expect(busy).not.toContain('正在重启…');
     const failed = await renderDialog(false, '无法重启更新，请稍后重试。');
     expect(failed).toContain('role="alert"');
     expect(failed).toContain('无法重启更新，请稍后重试。');

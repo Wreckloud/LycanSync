@@ -51,7 +51,7 @@ onScopeDispose(() => request?.abort());
         <dt>媒体服务</dt><dd>{{ status.mediaConfigured ? '已配置' : '未配置' }}</dd>
       </dl>
       <p>这里显示当前服务读取的配置，不代表网络连接或 QQ 授权已验证。部署值在服务器私有配置中修改，重启服务后生效；密钥不会返回客户端。</p>
-      <InlineFeedback :message="error" :status="loading && !status ? '正在读取配置状态…' : ''" />
+      <InlineFeedback :message="error" :pending="loading && !status ? '正在读取配置状态…' : ''" />
     </section>
     <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="true" />
     <MemberAccessSettings :active="active" />

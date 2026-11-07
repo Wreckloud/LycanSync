@@ -36,7 +36,7 @@ onMounted(() => { input.value?.focus(); input.value?.select(); });
       <label for="activity-display-name">显示名称</label>
       <input id="activity-display-name" ref="input" v-model="name" aria-label="动态显示名称" maxlength="80"
         aria-describedby="activity-name-feedback" :readonly="busy" @keydown.enter="($event.isComposing || busy) && $event.preventDefault()" />
-      <InlineFeedback id="activity-name-feedback" :message="error" :status="busy ? '正在保存…' : ''" />
+      <InlineFeedback id="activity-name-feedback" :message="error" :pending="busy ? '正在保存…' : ''" />
       <footer class="card-actions">
         <button type="button" :disabled="busy" @click="cancel">取消</button>
         <button type="submit" class="confirm-button card-actions-end" :disabled="busy || !name.trim()">保存名称</button>

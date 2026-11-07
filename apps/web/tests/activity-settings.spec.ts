@@ -100,7 +100,7 @@ createApp({ render: () => h('main', { style: 'padding:32px;max-width:1000px;marg
   await name.fill('保存失败');
   await dialog.getByRole('button', { name: '保存名称' }).click();
   await expect(dialog).toContainText('动态名称未能应用，请重试。');
-  await expect(page.locator('#activity-mapping-feedback')).not.toContainText('动态名称未能应用');
+  await expect(page.locator('#activity-mapping-feedback')).toHaveCount(0);
   await name.fill('新的游戏名');
   await dialog.getByRole('button', { name: '保存名称' }).click();
   await expect(dialog).toHaveCount(0);

@@ -38,8 +38,8 @@ onMounted(() => dialog.value?.focus());
       <p v-if="removing">{{ administrator ? '你是服主，请先确认已在服主管理中设置恢复密码。移除后可从欢迎页“群组恢复”找回账号，旧激活链接不能再次登录。' : '请先确认能联系服主获取新的恢复登录链接，旧邀请链接不能重复使用。' }}</p>
       <footer class="card-actions">
         <button type="button" :disabled="busy" @click="cancel">取消</button>
-        <InlineFeedback class="card-feedback" :message="error" :status="busy ? '正在处理…' : ''" />
-        <button type="button" class="confirm-button card-actions-end" :disabled="busy" @click="confirm">{{ busy ? '正在处理…' : action }}</button>
+        <InlineFeedback class="card-feedback" :message="error" :pending="busy ? '正在处理…' : ''" />
+        <button type="button" class="confirm-button card-actions-end" :disabled="busy" @click="confirm">{{ action }}</button>
       </footer>
     </section>
   </div>

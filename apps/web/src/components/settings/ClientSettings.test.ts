@@ -5,6 +5,7 @@ import ts from 'typescript';
 import { computed, effectScope, nextTick, reactive, ref, watch } from 'vue';
 import { expect, it, vi } from 'vitest';
 import { useClientUpdate } from '../../settings/useClientUpdate';
+import { useLoadingHint } from '../useLoadingHint';
 
 const script = parse(readFileSync(new URL('./ClientSettings.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('ClientSettings.ts', script, ts.ScriptTarget.Latest, true);
@@ -38,7 +39,7 @@ function setup(active = true) {
     autoStartEnabled, autoStartBusy, autoStartError, screenPreferences, screenError,
     closeToTray, traySupported, trayBusy, trayError, updateCloseToTray,
     updateAutoStart, updateScreenPreference, checkUpdates, cancelUpdate, confirmingUpdate, updateDescription })`, {
-    computed, reactive, ref, watch, useClientUpdate, Error, window: { lycanDesktop: bridge },
+    computed, reactive, ref, watch, useClientUpdate, useLoadingHint, Error, window: { lycanDesktop: bridge },
     defineProps: () => props, defineEmits: () => vi.fn(), defineExpose: exposed,
     readScreenSharePreferences: () => ({ hideCursor: false, hideBorder: false }), saveScreenSharePreferences: savePreferences,
   })) as {
@@ -112,7 +113,7 @@ it('其他设置栏目不查更新，进入客户端栏目只查一次并更新�
     props.active = true;
     await nextTick(); await nextTick();
     expect(bridge.checkUpdates).toHaveBeenCalledOnce();
-    expect(settings.updateDescription.value).toBe('正在检查更新…');
+    expect(settings.updateDescription.value).not.toContain('正在检查');
     pending.resolve({ phase: 'ready', version: '0.0.10', supported: true, message: '当前已是最新版本' });
     await nextTick();
     expect(settings.updateDescription.value).toBe('当前已是最新版本');
@@ -124,10 +125,10 @@ it('其他设置栏目不查更新，进入客户端栏目只查一次并更新�
   } finally { scope.stop(); }
 });
 
-it('查询完成前显示读取中，仅确定不支持后显示限制', async () => {
+it('查询完成前保持说明，仅确定不支持后显示限制', async () => {
   const { scope, settings, support, autoStart, bridge } = setup();
   try {
-    expect(settings.autoStartDescription.value).toContain('正在读取');
+    expect(settings.autoStartDescription.value).toBe('随 Windows 登录自动启动客户端。');
     await settings.updateAutoStart(checked);
     expect(bridge.setAutoStart).not.toHaveBeenCalled();
     support.resolve({ hideCursor: true, hideBorder: false });

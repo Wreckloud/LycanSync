@@ -69,7 +69,7 @@ function logout() {
             </button>
           </div>
         </div>
-        <InlineFeedback :message="presenceError" :status="!presenceReady ? '正在读取状态偏好…' : presenceSyncing ? '正在同步状态…' : '隐身时向其他成员显示离线，通话照常。'" />
+        <InlineFeedback :message="presenceError" />
       </div>
       <div class="personal-menu-actions">
         <button type="button" @click="selectSettings('account')"><Pencil :size="15" />编辑个人资料</button>

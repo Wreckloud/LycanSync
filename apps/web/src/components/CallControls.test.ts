@@ -16,7 +16,7 @@ const compiled = ts.transpile(source.statements.filter(statement => !ts.isImport
 afterEach(() => vi.unstubAllGlobals());
 
 function setup(width = 1280, right = 1000) {
-  const props = reactive({ connected: true, choosingSource: false, sharing: true, shareBusy: false, quality: 'standard' as ScreenShareQualityId });
+  const props = reactive({ desktop: true, connected: true, choosingSource: false, sharing: true, shareBusy: false, shareLimitReached: false, quality: 'standard' as ScreenShareQualityId });
   const focus = vi.fn();
   const inputs = [{ value: 'standard', checked: false }, { value: 'custom', checked: true }];
   const root = { contains: (target: unknown) => target === 'inside', closest: () => ({ getBoundingClientRect: () => ({ top: 700 }) }),
@@ -28,15 +28,46 @@ function setup(width = 1280, right = 1000) {
   const scope = effectScope();
   // 执行正式菜单回调，仅替换 DOM 边界；不连接房间、采集或启动客户端。
   const controls = scope.run(() => runInNewContext(`${compiled}\n({ root, menu, qualityOpen, qualityPlacement,
-    toggleMenu, toggleQuality, chooseQuality, escape, dismiss, dismissAfterFocus })`, {
+    toggleMenu, toggleQuality, chooseQuality, escape, dismiss, dismissAfterFocus, prepareShare, scheduleShareIntent, cancelShareIntent })`, {
+    setTimeout, clearTimeout,
     ref, watch, nextTick, onScopeDispose, document, window, onMounted: () => {}, defineProps: () => props,
     withDefaults: (value: unknown) => value, defineEmits: () => emit, DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY,
   })) as { root: Ref<unknown>; menu: Ref<string | null>; qualityOpen: Ref<boolean>; qualityPlacement: Ref<string>;
     toggleMenu(kind: string, event: unknown): Promise<void>; toggleQuality(): Promise<void>; chooseQuality(id: string): void;
-    escape(event: unknown): void; dismiss(event: unknown): void; dismissAfterFocus(event: unknown): void };
+    escape(event: unknown): void; dismiss(event: unknown): void; dismissAfterFocus(event: unknown): void;
+    prepareShare(): void; scheduleShareIntent(): void; cancelShareIntent(): void };
   controls.root.value = root;
   return { scope, props, controls, opener, emit, inputs, focus, root };
 }
+
+it('共享意图停留 300ms 才预取，移出或销毁取消，键盘聚焦可立即准备', async () => {
+  vi.useFakeTimers();
+  const f = setup();
+  f.props.sharing = false;
+  try {
+    f.controls.scheduleShareIntent();
+    await vi.advanceTimersByTimeAsync(299);
+    expect(f.emit).not.toHaveBeenCalled();
+    f.controls.cancelShareIntent();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(f.emit).not.toHaveBeenCalled();
+    f.controls.scheduleShareIntent();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(f.emit).toHaveBeenCalledWith('prepareShare');
+    f.emit.mockClear();
+    f.props.shareBusy = true;
+    f.controls.prepareShare();
+    expect(f.emit).not.toHaveBeenCalled();
+    f.props.shareBusy = false;
+    f.controls.prepareShare();
+    expect(f.emit).toHaveBeenCalledWith('prepareShare');
+    f.emit.mockClear();
+    f.controls.scheduleShareIntent();
+    f.scope.stop();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(f.emit).not.toHaveBeenCalled();
+  } finally { f.scope.stop(); vi.useRealTimers(); }
+});
 
 it.each([[1280, 1000, 'compact'], [1280, 350, 'right'], [700, 500, 'compact'], [400, 350, 'compact']])(
   '宽 %s、锚点 %s 时二级菜单使用 %s，Esc 逐层返回并恢复焦点', async (width, right, placement) => {

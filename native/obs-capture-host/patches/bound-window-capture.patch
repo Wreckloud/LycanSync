@@ -20,6 +20,10 @@ index 4203be2..4cf6538 100644
  	obs_source_t *source;
  	obs_source_t *audio_source;
  
+@@ -132,2 +132,3 @@
+ 	"SDL_app",
++	"opengles2.0", /* GLES 游戏的可见窗口不能用隐藏 D3D 辅助窗代替。 */
+ 	NULL,
 @@ -215,15 +219,21 @@ static void update_settings(struct window_capture *wc, obs_data_t *s)
  	bfree(wc->class);
  	bfree(wc->executable);

@@ -196,7 +196,7 @@ onScopeDispose(() => {
       </div>
       <footer class="card-actions" :class="{ 'card-actions-no-primary': !confirming }">
         <button type="button" class="settings-button" :disabled="busy" @click="close">取消</button>
-        <InlineFeedback class="card-feedback" :message="error || candidateError" :status="busy ? '正在处理…' : loading ? '正在读取…' : status" />
+        <InlineFeedback class="card-feedback" :message="error || candidateError" :pending="busy ? '正在处理…' : loading ? '正在读取…' : ''" :status="busy || loading ? '' : status" />
         <button v-if="mode === 'dissolve'" type="submit" form="group-dissolve-form" class="confirm-button is-danger card-actions-end" :disabled="busy || !dissolveNameMatches">确认解散</button>
         <button v-else-if="confirming" type="button" class="confirm-button card-actions-end" :class="{ 'is-danger': mode !== 'transfer' }" :disabled="busy" @click="confirm">{{ mode === 'transfer' ? '确认转让' : mode === 'leave' ? '退出群聊' : '移出成员' }}</button>
       </footer>

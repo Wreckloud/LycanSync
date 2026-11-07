@@ -92,7 +92,7 @@ async function save() {
       </div>
       <footer class="card-actions card-actions-no-cancel">
         <InlineFeedback class="card-feedback" :message="error"
-          :status="busy ? '正在保存…' : picking ? '正在读取图片…' : ''" />
+          :pending="busy ? '正在保存…' : picking ? '正在读取图片…' : ''" />
         <button type="submit" class="confirm-button card-actions-end" :disabled="busy || picking || !!cropSource">保存并继续</button>
       </footer>
     </form>

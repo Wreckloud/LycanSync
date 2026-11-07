@@ -102,12 +102,12 @@ async function switchServer() {
           <p>请妥善保管，丢失本机凭据后可独立恢复服主账号，不需要绑定 QQ。</p>
         </div>
       </template>
-      <p v-else-if="!error">正在检查邀请…</p>
+      <InlineFeedback v-else-if="!error" pending="正在检查邀请…" />
       <p v-else>暂时无法检查此链接，请重试。</p>
     </div>
     <footer class="card-actions" :class="{ 'card-actions-no-cancel': !!currentUser, 'card-actions-no-primary': !currentUser && offer.server === currentServer && !canRedeem && !error }">
       <button v-if="!currentUser" type="button" class="settings-button" :disabled="busy" @click="close">取消</button>
-      <InlineFeedback class="card-feedback" :message="error" :status="busy ? '正在处理…' : ''" />
+      <InlineFeedback class="card-feedback" :message="error" :pending="busy ? '正在处理…' : ''" />
       <button v-if="currentUser" type="button" class="confirm-button card-actions-end" :disabled="busy" @click="close">返回</button>
       <button v-else-if="offer.server !== currentServer" type="button" class="confirm-button card-actions-end" :disabled="busy" @click="switchServer">连接并重启</button>
       <button v-else-if="canRedeem" type="button" class="confirm-button card-actions-end" :disabled="busy" @click="join">{{ preview?.kind === 'ACTIVATE' ? '确认激活' : preview?.kind === 'RECOVERY' ? '恢复登录' : '确认加入' }}</button>

@@ -19,7 +19,7 @@ describe('远控确认与私密展示', () => {
     expect(html.indexOf('>拒绝</button>')).toBeLessThan(html.indexOf('>接受并共享</button>'));
     const busy = await renderToString(createSSRApp(RemoteControlRequest, { name: '好友', busy: true }));
     expect(busy).toContain('>取消准备</button>');
-    expect(busy).toContain('正在准备远程控制');
+    expect(busy).not.toContain('正在准备远程控制');
   });
 
   it('未共享成员也有申请入口；私密状态不渲染视频或沿用上一帧背景', async () => {

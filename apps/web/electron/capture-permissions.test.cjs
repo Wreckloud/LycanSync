@@ -3,7 +3,7 @@ const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { test } = require('node:test');
 const { runInNewContext } = require('node:vm');
-const { matchNativeVideoSourceThumbnails, monitorDisplayId } = require('./native-video-thumbnails.cjs');
+const { matchNativeVideoSourceThumbnails, monitorDisplayId, createNativeThumbnailCache } = require('./native-video-thumbnails.cjs');
 
 test('缩略图 IPC 保留窗口句柄，同标题的分离窗口分别匹配并校验字段', async () => {
   const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
@@ -11,21 +11,24 @@ test('缩略图 IPC 保留窗口句柄，同标题的分离窗口分别匹配并
   const end = source.indexOf("ipcMain.handle('settings:screen-share:support'", start);
   let handler;
   let calls = 0;
+  const sources = ['10', '20'].map((windowId, index) => ({ sourceId: `window:1:${index}`,
+    kind: 'window', title: 'Same browser title', windowId }));
   runInNewContext(source.slice(start, end), {
     ipcMain: { handle: (_name, callback) => { handler = callback; } },
     trustedSender: () => true, closing: false, performance, Buffer, screen: {},
     recordSourceTiming() {}, writeMediaDiagnostic: async () => {},
     captureSourceType: source => source.id.startsWith('window:') ? 'window' : 'screen',
     matchNativeVideoSourceThumbnails, monitorDisplayId,
+    loadNativeThumbnailBatch: createNativeThumbnailCache(),
+    mediaHelper: { videoSourceSnapshot: { state: { alive: true } } },
+    nativeVideoSourcesById: new Map(sources.map(source => [source.sourceId, source])),
     desktopCapturer: { getSources: async () => {
       calls++;
       return ['10', '20'].map(id => ({ id: `window:${id}:0`, name: 'Same browser title', display_id: '',
         thumbnail: { isEmpty: () => false, toJPEG: () => Buffer.from(id) } }));
     } },
   });
-  const sources = ['10', '20'].map((windowId, index) => ({ sourceId: `window:1:${index}`,
-    kind: 'window', title: 'Same browser title', windowId }));
-  assert.deepEqual(await handler({}, sources), [
+  assert.deepEqual(Array.from(await handler({}, sources)), [
     { sourceId: 'window:1:0', thumbnail: 'data:image/jpeg;base64,MTA=' },
     { sourceId: 'window:1:1', thumbnail: 'data:image/jpeg;base64,MjA=' },
   ]);

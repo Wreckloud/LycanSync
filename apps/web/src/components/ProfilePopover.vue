@@ -5,6 +5,7 @@ import { autoUpdate, computePosition, flip, offset, shift } from '@floating-ui/d
 import { Headphones, UserRound } from '@lucide/vue';
 import { formatSharedVoiceTime } from '../profile/sharedVoiceTime';
 import type { UserPresenceStatus } from '../presence/presenceApi';
+import { useLoadingHint } from './useLoadingHint';
 import { readAvatarTint } from '../profile/avatarTint';
 import { formatPresenceAgo, formatRecentGame } from '../profile/presenceHistory';
 import type { RecentGame } from '../group/groupApi';
@@ -34,6 +35,7 @@ const props = defineProps<{
   voiceError?: string;
 }>();
 const emit = defineEmits<{ close: []; enter: []; leave: []; retry: [] }>();
+const loadingHint = useLoadingHint(() => Boolean(props.loading), 1000);
 const surface = ref<HTMLElement | null>(null);
 const content = ref<HTMLElement | null>(null);
 const avatarImage = ref<HTMLImageElement | null>(null);
@@ -205,7 +207,7 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
               <strong>{{ nickname }}</strong><small v-if="deletedAt" class="profile-deleted-account">已注销</small>
             </div>
             <div class="profile-popover-signature" :aria-busy="loading">
-              <span v-if="loading" role="status">正在读取签名…</span>
+              <template v-if="loading"><span v-if="loadingHint" role="status">正在读取签名…</span></template>
               <template v-else-if="error"><span role="alert">{{ error }}</span><button type="button" @click="emit('retry')">重试</button></template>
               <p v-else>{{ signature || '这只狼暂时没留下什么话。' }}</p>
             </div>

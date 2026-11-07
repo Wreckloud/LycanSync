@@ -205,7 +205,7 @@ interface Window {
     onWindowVisibility(callback: (visible: boolean) => void): () => void;
     onViewerClosed(callback: (closed: { id: string; failed: boolean }) => void): () => void;
     isMaximized(): Promise<boolean>;
-    prepareCapture(): Promise<void>;
+    prepareCapture(graphics?: boolean): Promise<void>;
     getRecordingSettings(): Promise<RecordingSettings>;
     configureRecording(settings: Omit<RecordingSettings, 'directory' | 'replaySeconds'>): Promise<RecordingSettings>;
     chooseRecordingDirectory(): Promise<RecordingSettings>;

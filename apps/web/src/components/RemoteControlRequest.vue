@@ -64,7 +64,7 @@ onScopeDispose(() => {
       <p class="remote-scope-note">{{ publicVideo ? '频道成员可以观看，但只有申请者能够控制；频道语音保持不变。' : '只有申请者能观看画面，其他成员仅看到控制状态；频道语音保持不变。' }}</p>
       <footer class="card-actions">
         <button type="button" @click="emit('reject')">{{ busy ? '取消准备' : '拒绝' }}</button>
-        <InlineFeedback :message="error" :status="busy ? '正在准备远程控制…' : loading ? '正在读取显示器…' : ''" />
+        <InlineFeedback :message="error" :pending="busy ? '正在准备远程控制…' : loading ? '正在读取显示器…' : ''" />
         <button v-if="error" type="button" :disabled="busy || loading" @click="loadMonitors">重试</button>
         <button type="button" class="confirm-button" :disabled="busy || loading || !sourceId || Boolean(error)"
           @click="emit('allow', sourceId, publicVideo)">接受并共享</button>
@@ -81,5 +81,6 @@ onScopeDispose(() => {
 .remote-scope-note { min-height: 40px; }
 .remote-request-card .card-actions { display: flex; align-items: center; gap: 8px; }
 .remote-request-card .inline-feedback { flex: 1; }
-@media (max-width: 520px) { .remote-request-card { padding: 20px; } .remote-request-card .card-actions { flex-wrap: wrap; } .remote-request-card .inline-feedback { flex-basis: 100%; order: -1; } .confirm-button { margin-left: auto; } }
+.remote-request-card .confirm-button { margin-left: auto; }
+@media (max-width: 520px) { .remote-request-card { padding: 20px; } .remote-request-card .card-actions { flex-wrap: wrap; } .remote-request-card .inline-feedback { flex-basis: 100%; order: -1; } }
 </style>

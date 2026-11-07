@@ -1081,6 +1081,32 @@ const localInputLevel = computed(() => {
 });
 const localInputLevelPercent = computed(() => Math.round(localInputLevel.value * 100));
 const connected = computed(() => rtc.status === 'connected');
+watch(() => connected.value ? rtc.room : null, (room, _, onCleanup) => {
+  if (!desktop || !room) return;
+  // 避开入房建链与声音初始化；这里只准备图形环境，不创建采集来源。
+  const timer = setTimeout(() => {
+    void desktop.prepareCapture(true).catch(() => console.warn('capture graphics preparation failed'));
+  }, 1000);
+  onCleanup(() => clearTimeout(timer));
+});
+let captureIntentPending: Promise<void> | undefined;
+let captureIntentAt = -Infinity;
+async function preloadCaptureSources() {
+  if (!desktop || appDisposed || document.hidden || !connected.value || captureRequest.value
+      || rtc.screenShareActive || captureIntentPending || Date.now() - captureIntentAt < 10_000) return;
+  const room = rtc.room;
+  const sourceType = lastCaptureSourceType;
+  captureIntentAt = Date.now();
+  captureIntentPending = (async () => {
+    const snapshot = await desktop.listNativeVideoSources();
+    if (appDisposed || document.hidden || !connected.value || rtc.room !== room || captureRequest.value || rtc.screenShareActive) return;
+    const sources = snapshot.sources.filter(source => source.kind === (sourceType === 'window' ? 'window' : 'monitor'));
+    // 仅预取本机静态预览；正式选择器仍重新枚举身份并复用主进程的同一批请求。
+    await desktop.getNativeVideoSourceThumbnails(sources.slice(0, 128));
+  })().catch(error => console.warn('共享预览预加载失败', error));
+  try { await captureIntentPending; }
+  finally { captureIntentPending = undefined; }
+}
 const showingJoinedGroup = computed(() => joinedGroupId.value !== null && selectedGroupId.value === joinedGroupId.value);
 const fetchedRoomSummary = useRoomSummary(selectedGroupId, computed(() => !showingJoinedGroup.value),
   (message) => { summaryError.value = message; }, roomSummaryRefreshVersion);
@@ -1533,6 +1559,7 @@ function participantListening(participant: Participant) {
                       @recording="recording.active.value ? recording.stop() : recording.start()"
                       @recording-settings="openSettings('recording', $event)"
                       @microphone="toggleMicrophone" @listening="toggleListening"
+                      @prepare-share="preloadCaptureSources"
                       @share="captureRequest ? selectCaptureSource(null) : rtc.toggleMedia(Track.Source.ScreenShare)"
                       @change-source="recording.withSourceChange(before => rtc.changeScreenShareSource(before))" @quality="changeScreenShareQuality" @share-audio="changeScreenShareAudio"
                       @input-gain="updateInputGain" @output-volume="updateOutputVolume" @settings="openSettings('audio', $event)" />

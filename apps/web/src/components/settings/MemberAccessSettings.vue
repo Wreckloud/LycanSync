@@ -51,13 +51,13 @@ async function copy() {
       <p>请保存并发给对应朋友；离开此页后无法再次查看原链接。</p>
       <div class="access-form-row">
         <input ref="linkInput" :value="generatedUrl" readonly aria-label="生成的链接" />
-        <button :disabled="copying" @click="copy">{{ copying ? '正在复制…' : '复制链接' }}</button>
+        <button :disabled="copying" @click="copy">复制链接</button>
       </div>
       <InlineFeedback :message="linkError" :status="copyStatus" />
     </section>
     <section class="settings-block">
       <div class="access-records-heading"><h2>链接记录</h2><button :disabled="locked" @click="refresh(true)">刷新状态</button></div>
-      <InlineFeedback :message="recordsError" :status="refreshing && !links.length ? '正在读取记录…' : ''" />
+      <InlineFeedback :message="recordsError" :pending="refreshing && !links.length ? '正在读取记录…' : ''" />
       <p v-if="!links.length && !refreshing && !recordsError">暂无记录</p>
       <article v-for="link in links" :key="link.id" class="access-record">
         <div class="access-record-details">

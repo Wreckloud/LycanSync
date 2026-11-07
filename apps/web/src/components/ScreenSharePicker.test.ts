@@ -102,7 +102,7 @@ describe('共享选择器的声音范围说明', () => {
 
   it('能力未返回前不误报仅支持画面，确认按钮保持禁用', async () => {
     const html = await renderPicker('unavailable', false);
-    expect(html).toContain('正在检查共享能力');
+    expect(html).not.toContain('正在检查共享能力');
     expect(html).not.toContain('当前系统仅支持共享画面。');
     expect(html.match(/<button[^>]*class="confirm-button"[^>]*>/)?.[0]).toContain('disabled');
   });

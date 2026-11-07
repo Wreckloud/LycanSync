@@ -209,11 +209,11 @@ test('个人面板固定在个人栏上方，切换状态不移动，窄窗可�
   await page.keyboard.press('Space');
   await expect(menu.getByRole('button', { name: '在线', exact: true })).toHaveAttribute('aria-pressed', 'true');
   expect(await menu.boundingBox()).toEqual(original);
-  await page.setViewportSize({ width: 440, height: 400 });
+  await page.setViewportSize({ width: 440, height: 320 });
   await expect.poll(async () => {
     const bounds = await menu.boundingBox();
     return Boolean(bounds && bounds.x >= 7 && bounds.y >= 7
-      && bounds.x + bounds.width <= 433 && bounds.y + bounds.height <= 393);
+      && bounds.x + bounds.width <= 433 && bounds.y + bounds.height <= 313);
   }).toBe(true);
   expect(await menu.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
   await menu.getByRole('button', { name: '退出登录', exact: true }).scrollIntoViewIfNeeded();

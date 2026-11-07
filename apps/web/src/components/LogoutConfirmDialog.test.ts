@@ -23,10 +23,10 @@ it('退出前说明媒体与凭据影响，区分服主和成员的恢复方式'
   expect(member).not.toContain('你是服主');
 });
 
-it('退出中禁用两个操作，失败在原固定反馈区展示', async () => {
+it('退出中禁用两个操作，失败在卡片内展示', async () => {
   const busy = await renderDialog(true, true);
   expect(busy.match(/<button[^>]*disabled/g)).toHaveLength(2);
-  expect(busy).toContain('正在处理…');
+  expect(busy).not.toContain('正在处理…');
   const failed = await renderDialog(true, false, '服务暂时不可用');
   expect(failed).toContain('inline-feedback card-feedback');
   expect(failed).toContain('role="alert"');

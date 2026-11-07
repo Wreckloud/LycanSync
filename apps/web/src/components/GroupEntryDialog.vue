@@ -173,7 +173,7 @@ onMounted(() => {
       </div>
       <footer class="card-actions">
         <button type="button" class="settings-button" :disabled="busy || picking" @click="close">取消</button>
-        <InlineFeedback class="card-feedback" :message="error" :status="busy ? (group ? '正在保存…' : mode === 'join' ? '正在加入…' : '正在创建…') : picking ? '正在读取图片…' : ''" />
+        <InlineFeedback class="card-feedback" :message="error" :pending="busy ? (group ? '正在保存…' : mode === 'join' ? '正在加入…' : '正在创建…') : picking ? '正在读取图片…' : ''" />
         <button type="submit" class="confirm-button card-actions-end" :disabled="busy || picking || !!cropSource || (mode === 'join' ? !code.trim() : !name.trim())">{{ group ? '保存修改' : mode === 'join' ? '加入群组' : '创建群组' }}</button>
       </footer>
       </div>

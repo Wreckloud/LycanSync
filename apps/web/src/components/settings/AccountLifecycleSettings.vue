@@ -134,7 +134,7 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); clearSecre
         <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button class="settings-button account-danger card-actions-end" :disabled="busy || leaving || closeConfirmation !== '注销账号'">确认注销</button></div>
       </form>
     </ExpandSection>
-    <InlineFeedback :message="error" :status="busy ? '正在处理…' : feedback" />
+    <InlineFeedback :message="error" :pending="busy ? '正在处理…' : ''" :status="feedback" />
     <button v-if="error && !status" type="button" :disabled="busy" @click="refresh">重新读取</button>
   </section>
 </template>

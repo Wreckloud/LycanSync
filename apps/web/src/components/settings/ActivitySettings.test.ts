@@ -56,11 +56,11 @@ it('识别结果放在修正标题旁，页面仅保留紧凑选择与操作，�
   expect(html).not.toContain('刷新运行窗口');
 });
 
-it('刷新窗口时保留选择框文字，只在固定反馈区显示读取状态', async () => {
+it('刷新窗口时保留选择框文字，不立即闪现读取状态', async () => {
   const { html } = await render(null, true, true);
   const select = html.match(/<select id="activity-window"[^>]*>[\s\S]*?<\/select>/)?.[0];
   expect(select).toContain('aria-busy="true"');
   expect(select).toContain('选择正在运行的窗口');
   expect(select).not.toContain('正在读取窗口');
-  expect(html).toMatch(/id="activity-mapping-feedback"[^>]*><span[^>]*>正在读取窗口…<\/span>/);
+  expect(html).not.toContain('正在读取窗口…');
 });

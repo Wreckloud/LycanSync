@@ -20,7 +20,7 @@ const props = withDefaults(defineProps<{
   customQuality?: CustomScreenShareQuality;
 }>(), { customQuality: () => ({ ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY }) });
 const emit = defineEmits<{
-  microphone: []; listening: []; share: []; changeSource: []; shareAudio: [enabled: boolean];
+  microphone: []; listening: []; share: []; prepareShare: []; changeSource: []; shareAudio: [enabled: boolean];
   quality: [quality: ScreenShareQualityId, customQuality?: CustomScreenShareQuality]; inputGain: [volume: number]; outputVolume: [volume: number];
   settings: [opener: HTMLElement]; recording: []; recordingSettings: [opener: HTMLElement]; saveReplay: [];
 }>();
@@ -32,6 +32,19 @@ const qualityPlacement = ref<'right' | 'compact'>('compact');
 const menuMaxHeight = ref(520);
 let opener: HTMLButtonElement | null = null;
 const levelSegments = Array.from({ length: 16 }, (_, index) => index + 1);
+let shareIntentTimer: ReturnType<typeof setTimeout> | undefined;
+function cancelShareIntent() {
+  clearTimeout(shareIntentTimer);
+  shareIntentTimer = undefined;
+}
+function prepareShare() {
+  cancelShareIntent();
+  if (props.desktop && props.connected && !props.sharing && !props.shareBusy && !props.choosingSource && !props.shareLimitReached) emit('prepareShare');
+}
+function scheduleShareIntent() {
+  cancelShareIntent();
+  shareIntentTimer = setTimeout(prepareShare, 300);
+}
 
 function closeMenu(restoreFocus = false) {
   menu.value = null;
@@ -111,6 +124,7 @@ onMounted(() => {
   window.addEventListener('resize', resizeMenu);
 });
 onScopeDispose(() => {
+  cancelShareIntent();
   document.removeEventListener('pointerdown', dismiss);
   window.removeEventListener('resize', resizeMenu);
 });
@@ -157,7 +171,8 @@ onScopeDispose(() => {
     </div>
     <div class="call-control-split">
       <button type="button" class="icon-button call-control-main" :aria-label="choosingSource ? '取消共享选择' : sharing ? '停止屏幕共享' : shareLimitReached ? '屏幕共享已达到 8 路上限' : '开始屏幕共享'"
-        :class="{ 'is-active': sharing }" :disabled="!connected || shareLimitReached || (!choosingSource && shareBusy)" @click="toggleShare">
+        :class="{ 'is-active': sharing }" :disabled="!connected || shareLimitReached || (!choosingSource && shareBusy)" @click="toggleShare"
+        @pointerenter="scheduleShareIntent" @pointerleave="cancelShareIntent" @focus="prepareShare" @blur="cancelShareIntent">
         <MonitorX v-if="sharing || choosingSource" :size="17" /><MonitorUp v-else :size="17" />
       </button>
       <button type="button" class="call-control-more" aria-label="共享选项" :aria-expanded="menu === 'share'"

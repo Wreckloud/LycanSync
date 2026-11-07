@@ -1,9 +1,18 @@
 <script setup lang="ts">
+import { computed } from 'vue';
+import { useLoadingHint } from '../useLoadingHint';
 import type { useRecording } from '../../recording/useRecording';
 import InlineFeedback from '../InlineFeedback.vue';
 import RecordingLibrary from './RecordingLibrary.vue';
 
 const props = defineProps<{ recording: ReturnType<typeof useRecording>; desktop: boolean; sharing: boolean }>();
+const recordingProgress = computed(() => props.recording.state.value.phase === 'stopping' ? '正在保存…'
+  : props.recording.state.value.phase === 'starting' ? '正在准备录制…' : '');
+const replayProgress = computed(() => props.recording.state.value.replay?.phase === 'stopping' ? '正在关闭回放，已提交的保存仍会收尾…'
+  : props.recording.state.value.replay?.saving ? '正在保存回放…'
+    : props.recording.state.value.replay?.phase === 'starting' ? '正在准备回放…' : '');
+const recordingProgressVisible = useLoadingHint(() => recordingProgress.value, 1000);
+const replayProgressVisible = useLoadingHint(() => replayProgress.value, 1000);
 async function toggle(key: 'applicationAudio' | 'microphone' | 'friends', event: Event) {
   const input = event.target as HTMLInputElement;
   await props.recording.configure({ [key]: input.checked });
@@ -37,7 +46,8 @@ async function changeReplay(event: Event) {
             @change="toggle(item.key, $event)" />
         </label>
       </template>
-      <p v-else>{{ desktop ? '正在读取录制设置…' : '录制需要使用 Windows 桌面客户端。' }}</p>
+      <p v-else-if="!desktop">录制需要使用 Windows 桌面客户端。</p>
+      <InlineFeedback :pending="desktop && !recording.settings.value && !recording.notice.value ? '正在读取录制设置…' : ''" />
       <InlineFeedback :message="recording.noticeTarget.value === 'content' ? recording.notice.value : ''" />
     </section>
     <section v-if="desktop" class="settings-block">
@@ -63,11 +73,9 @@ async function changeReplay(event: Event) {
     </section>
     <section v-if="desktop" class="settings-block">
       <h2>当前录像</h2>
-      <p>{{ recording.state.value.phase === 'recording' ? `正在录制 · ${recording.elapsed.value}`
-        : recording.state.value.phase === 'stopping' ? '正在保存…'
-          : recording.state.value.phase === 'starting' ? '正在准备录制…'
-            : recording.state.value.holdingResources ? '正在等待录制资源释放，请先结束共享。'
-              : recording.state.value.saved ? '录像已保存' : '尚未录制' }}
+      <p class="recording-status" role="status">{{ recordingProgress ? (recordingProgressVisible ? recordingProgress : '') : (recording.state.value.phase === 'recording' ? `正在录制 · ${recording.elapsed.value}`
+        : recording.state.value.holdingResources ? '正在等待录制资源释放，请先结束共享。'
+          : recording.state.value.saved ? '录像已保存' : '尚未录制') }}
         <template v-if="recording.state.value.bytes"> · {{ (recording.state.value.bytes / 1024 / 1024).toFixed(1) }} MiB</template>
       </p>
       <button v-if="recording.active.value" type="button" class="settings-button" :disabled="recording.state.value.phase === 'stopping'" @click="recording.stop">停止并保存</button>
@@ -85,10 +93,8 @@ async function changeReplay(event: Event) {
         </select>
       </label>
       <small>保留现有画质，30／60／120 秒分别使用 256／512／1024 MiB 缓存预算，保存时可能额外持有一份片段。缓存攒满后尽量保留目标时长，关键帧对齐可能多约两秒；刚开启、换源或内存预算不足时只能保存已有部分。切换来源／规格后重新缓存，关闭后丢弃未保存内容。当前需先共享自己的画面，不会自动选择来源或开启。</small>
-      <p role="status">{{ recording.state.value.replay?.phase === 'stopping' ? '正在关闭回放，已提交的保存仍会收尾…'
-        : recording.state.value.replay?.saving ? '正在保存回放…'
-          : recording.state.value.replay?.phase === 'starting' ? '正在准备回放…'
-            : recording.replayActive.value ? recording.state.value.replay?.warming ? '正在积累回放，尚未达到目标时长' : '回放缓存已开启' : '回放缓存未开启' }}</p>
+      <p class="recording-status" role="status">{{ replayProgress ? (replayProgressVisible ? replayProgress : '') : (recording.replayActive.value
+        ? recording.state.value.replay?.warming ? '正在积累回放，尚未达到目标时长' : '回放缓存已开启' : '回放缓存未开启') }}</p>
       <div class="recording-actions">
         <button v-if="!recording.replayActive.value" type="button" class="confirm-button" :disabled="!sharing || recording.busy.value" @click="recording.startReplay">开启回放</button>
         <template v-else>
@@ -104,6 +110,7 @@ async function changeReplay(event: Event) {
 
 <style scoped>
 .recording-directory { overflow-wrap: anywhere; color: var(--muted); }
+.recording-status { min-height: 20px; }
 .recording-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .replay-duration { display: flex; align-items: center; gap: 12px; font-size: 13px; }
 </style>

@@ -39,9 +39,10 @@ const borderNotice = computed(() => {
 });
 const canConfirm = computed(() => props.audioReady && !props.audioFailed && !props.error && !settingsError.value
   && props.sources.some((source) => source.id === props.selectedId));
+const feedbackPending = computed(() => !props.audioReady ? '正在检查共享能力…'
+  : props.loading && !sources.value.length ? '正在读取共享来源…' : '');
 const feedbackStatus = computed(() => {
-  if (!props.audioReady) return '正在检查共享能力…';
-  if (props.loading && !sources.value.length) return '正在读取共享来源…';
+  if (feedbackPending.value) return '';
   if (props.notice) return props.notice;
   if (!sources.value.length) return '没有可共享的来源，请切换分类或等待新窗口出现。';
   // 勾选前就说明采集范围，不能让系统混音看起来只包含所选应用。
@@ -166,7 +167,7 @@ defineExpose({ sourcesElement });
         <footer class="card-actions">
           <button type="button" class="settings-button" @click="emit('close')">取消</button>
           <InlineFeedback class="card-feedback" :message="audioFailed ? '无法确认共享能力，请关闭后重试。' : error || settingsError"
-            :status="feedbackStatus" />
+            :status="feedbackStatus" :pending="feedbackPending" />
           <div class="capture-confirm card-actions-end">
             <label class="capture-audio-option"><input type="checkbox" aria-label="共享音频" :checked="shareAudio"
               :disabled="!audioReady || audioMode === 'unavailable'" @change="emit('update:shareAudio', ($event.target as HTMLInputElement).checked)" />

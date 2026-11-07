@@ -33,7 +33,10 @@ test('采集预备独立于窗口布局，仅可信主页面可调用，关闭�
   assert.deepEqual(calls, []);
   handler({ trusted: true });
   assert.deepEqual(calls, [false]);
+  handler({ trusted: true }, true);
+  assert.deepEqual(calls, [false, true]);
+  assert.throws(() => handler({ trusted: true }, 'true'), /来源无效/);
   realm.closing = true;
   assert.throws(() => handler({ trusted: true }), /来源无效/);
-  assert.deepEqual(calls, [false]);
+  assert.deepEqual(calls, [false, true]);
 });

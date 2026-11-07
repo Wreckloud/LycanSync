@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { readScreenSharePreferences, saveScreenSharePreferences } from '../../settings/screenSharePreferences';
 import InlineFeedback from '../InlineFeedback.vue';
+import { useLoadingHint } from '../useLoadingHint';
 import UpdateRestartDialog from '../UpdateRestartDialog.vue';
 import DialogTransition from '../DialogTransition.vue';
 import { useClientUpdate } from '../../settings/useClientUpdate';
@@ -26,13 +27,15 @@ const { state: updateState, error: updateError, busy: updateBusy, confirmationVe
   () => props.active && props.desktop);
 let screenLoaded = false;
 const confirmingUpdate = computed(() => Boolean(confirmationVersion.value));
+const updateLoadingHint = useLoadingHint(() => props.active && (updateBusy.value || updateState.value?.phase === 'checking'), 1000);
+const autoStartLoadingHint = useLoadingHint(() => props.active && autoStartSupported.value === undefined && !autoStartError.value, 1000);
 const updateDescription = computed(() => {
-  if (updateBusy.value || updateState.value?.phase === 'checking') return '正在检查更新…';
+  if (updateBusy.value || updateState.value?.phase === 'checking') return updateLoadingHint.value ? '正在检查更新…' : '进入本页时检查一次更新；更新需确认后重启。';
   if (!updateError.value && !updateState.value?.error && updateState.value?.message) return updateState.value.message;
   return '进入本页时检查一次更新；更新需确认后重启。';
 });
 const autoStartDescription = computed(() => {
-  if (autoStartSupported.value === undefined) return autoStartError.value ? '尚未确认开机自启支持情况。' : '正在读取开机自启设置…';
+  if (autoStartSupported.value === undefined) return autoStartError.value ? '尚未确认开机自启支持情况。' : autoStartLoadingHint.value ? '正在读取开机自启设置…' : '随 Windows 登录自动启动客户端。';
   return autoStartSupported.value
     ? '使用 Windows 登录项启动，不增加额外常驻进程。'
     : '仅 Windows 安装版支持，开发模式不会修改系统启动项。';
@@ -148,8 +151,8 @@ async function updateAutoStart(event: Event) {
     <section v-if="desktop" class="settings-block">
       <h2>应用更新</h2>
       <div class="settings-toggle update-summary">
-        <span><strong>版本 {{ updateState?.version || '读取中…' }}</strong><small role="status">{{ updateDescription }}</small></span>
-        <button type="button" class="settings-button" :disabled="updateBusy || !updateState?.supported || updateState.phase === 'checking'" @click="checkUpdates()">{{ updateBusy || updateState?.phase === 'checking' ? '正在检查…' : '检查更新' }}</button>
+        <span><strong>{{ updateState?.version ? `版本 ${updateState.version}` : '客户端版本' }}</strong><small role="status">{{ updateDescription }}</small></span>
+        <button type="button" class="settings-button" :disabled="updateBusy || !updateState?.supported || updateState.phase === 'checking'" @click="checkUpdates()">检查更新</button>
       </div>
       <InlineFeedback :message="confirmationVersion ? '' : updateError || (updateState?.error ? updateState.message : '')" />
       <DialogTransition>
@@ -193,7 +196,6 @@ async function updateAutoStart(event: Event) {
 </template>
 
 <style scoped>
-.client-settings { max-width: 760px; }
 .update-summary { cursor: default; }
 .update-summary > button { flex-shrink: 0; }
 </style>

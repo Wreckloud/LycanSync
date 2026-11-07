@@ -114,7 +114,7 @@ watch(() => props.output?.available.value ?? true, (available) => { if (!availab
         <button v-if="sound" type="button" :disabled="busy" @click="playPreview"><Play :size="15" />试听</button>
         <button v-if="sound" type="button" :disabled="busy" @click="removeSound"><Trash2 :size="15" />移除</button>
       </div>
-      <InlineFeedback :message="error" :status="busy ? '正在上传并处理音效…' : ''" />
+      <InlineFeedback :message="error" :pending="busy ? '正在上传并处理音效…' : ''" />
     </section>
   </div>
 </template>

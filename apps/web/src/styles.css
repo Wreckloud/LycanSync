@@ -750,14 +750,16 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .card-actions { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; padding-top: 16px; border-top: 1px solid var(--border-soft); }
 .card-actions-no-cancel { grid-template-columns: minmax(0, 1fr) auto; }
 .card-actions-no-primary { grid-template-columns: auto minmax(0, 1fr); }
-.card-actions-end { justify-self: end; }
+.card-actions-end { grid-column: -2 / -1; justify-self: end; }
+.card-actions > .card-feedback { grid-column: 2; }
+.card-actions-no-cancel > .card-feedback { grid-column: 1; }
 .card-actions .confirm-button:not(.is-danger) { background: var(--accent); border-color: var(--accent); }
 .card-actions .is-danger { color: var(--danger); }
 .card-actions button:disabled { opacity: .45; }
 @media (max-width: 420px) {
   .card-actions { grid-template-columns: auto minmax(0, 1fr); gap: 8px 12px; }
   .card-actions > .card-feedback { grid-column: 1 / -1; grid-row: 1; }
-  .card-actions > button, .card-actions > .card-actions-end { grid-row: 2; }
+  .card-actions:has(> .card-feedback) > button, .card-actions:has(> .card-feedback) > .card-actions-end { grid-row: 2; }
   .card-actions-no-cancel > .card-actions-end { grid-column: 2; }
 }
 
