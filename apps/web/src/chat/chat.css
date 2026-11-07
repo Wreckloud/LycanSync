@@ -45,6 +45,9 @@
   flex-direction: column;
   gap: 14px;
   padding: 24px 2px 18px;
+  padding-top: calc(24px + max(0px, var(--voice-overlay-height, 0px) - var(--chat-list-offset, 0px)));
+  /* 阅读位置由布局补偿和历史消息锚点维护，避免浏览器再次补偿同一次高度变化。 */
+  overflow-anchor: none;
 }
 
 /* 短对话贴底，长对话从顶部正常滚动，避免 flex-end 把早期消息推到不可达区域。 */

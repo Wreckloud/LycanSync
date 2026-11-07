@@ -25,7 +25,7 @@ const mappings = { entries, windows: ref([{ executable: 'game.exe', title: '游�
   },
   remove: async executable => { entries.value = entries.value.filter(entry => entry.executable !== executable); return true; } };
 createApp({ render: () => h('main', { style: 'padding:32px;max-width:1000px;margin:auto' }, [h(ActivitySettings, {
-  user: { id: 'test', nickname: '测试成员', avatar: '', signature: '', administrator: false },
+  user: { id: 'test', nickname: '测试成员', avatar: '', signature: '旧签名'.repeat(40), administrator: false },
   desktop: true, active: true, activity: { type: 'GAME', name: '最终幻想14' },
   presenceMode: presenceMode.value, presenceReady: true, status: presenceMode.value === 'invisible' ? 'OFFLINE' : 'ONLINE',
   onPresenceMode: value => { presenceMode.value = value; },
@@ -47,11 +47,35 @@ createApp({ render: () => h('main', { style: 'padding:32px;max-width:1000px;marg
   const presence = page.getByRole('group', { name: '在线状态', exact: true });
   await expect(presence.getByRole('button', { name: '在线', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('.activity-profile-preview')).toContainText('累计已与朋友开黑了 2 小时');
+  const card = page.getByRole('region', { name: '资料卡预览', exact: true });
+  await expect(card.locator('.profile-popover-signature p')).toHaveCSS('height', '36px');
+  await expect(card.locator('.profile-popover-signature p')).toHaveAttribute('title', '旧签名'.repeat(40));
+  await expect.poll(() => card.evaluate(element => element.getAnimations().length)).toBe(0);
+  const before = (await card.boundingBox())!;
+  const mappingsBefore = (await page.locator('.activity-mappings').boundingBox())!;
+  const framesPromise = card.evaluate(async element => {
+    const frames = [];
+    for (let index = 0; index < 36; index++) {
+      await new Promise(requestAnimationFrame);
+      const bounds = element.getBoundingClientRect();
+      frames.push({ height: bounds.height, bottom: bounds.bottom });
+    }
+    return frames;
+  });
   await presence.getByRole('button', { name: '隐身', exact: true }).click();
   await expect(presence.getByRole('button', { name: '隐身', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('.activity-profile-preview')).not.toContainText('正在玩');
+  const frames = await framesPromise;
+  const after = (await card.boundingBox())!;
+  expect(after.height).toBeLessThan(before.height);
+  expect(after.y + after.height).toBeCloseTo(before.y + before.height, 1);
+  expect(frames.some(frame => frame.height > after.height + 1 && frame.height < before.height - 1)).toBe(true);
+  for (const frame of frames) expect(frame.bottom).toBeCloseTo(before.y + before.height, 1);
+  expect((await page.locator('.activity-mappings').boundingBox())!.y).toBe(mappingsBefore.y);
   await presence.getByRole('button', { name: '在线', exact: true }).click();
   await expect(page.locator('.activity-profile-preview')).toContainText('正在玩');
+  await expect.poll(() => card.evaluate(element => element.getBoundingClientRect().height)).toBeCloseTo(before.height, 0);
+  expect((await page.locator('.activity-mappings').boundingBox())!.y).toBe(mappingsBefore.y);
   const alignment = await page.locator('.activity-settings').evaluate(element => {
     const preview = element.querySelector('.activity-profile-preview')!.getBoundingClientRect();
     const controls = element.querySelector('.activity-settings-controls')!.getBoundingClientRect();

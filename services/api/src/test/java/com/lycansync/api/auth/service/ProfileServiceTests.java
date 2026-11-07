@@ -150,8 +150,21 @@ class ProfileServiceTests {
     }
 
     @Test
+    void shouldSaveFortyCharacterSignatureAndKeepLegacySignatureWhenOmitted() {
+        String legacySignature = "旧".repeat(120);
+        when(mapper.updateProfile(USER_ID, "新昵称", "", null)).thenReturn(1);
+        when(mapper.findUserProfile(USER_ID)).thenReturn(new AuthUser(USER_ID, "新昵称", "", false, legacySignature, CREATED_AT));
+        assertThat(profileService.update(USER, new ProfileUpdateRequest("新昵称", "", null)).signature()).isEqualTo(legacySignature);
+
+        String signature = "字".repeat(40);
+        when(mapper.updateProfile(USER_ID, "新昵称", "", signature)).thenReturn(1);
+        when(mapper.findUserProfile(USER_ID)).thenReturn(new AuthUser(USER_ID, "新昵称", "", false, signature, CREATED_AT));
+        assertThat(profileService.update(USER, new ProfileUpdateRequest("新昵称", "", signature)).signature()).isEqualTo(signature);
+    }
+
+    @Test
     void shouldRejectOversizedSignatureAndInvalidControlCharacters() {
-        assertThatThrownBy(() -> profileService.update(USER, new ProfileUpdateRequest("小狼", "", "字".repeat(121))))
+        assertThatThrownBy(() -> profileService.update(USER, new ProfileUpdateRequest("小狼", "", "字".repeat(41))))
                 .isInstanceOf(AuthException.class);
         assertThatThrownBy(() -> profileService.update(USER, new ProfileUpdateRequest("小狼", "", "签\u0000名")))
                 .isInstanceOf(AuthException.class);

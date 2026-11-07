@@ -5,9 +5,12 @@ use sonora::config::{
     NoiseSuppressionLevel, Pipeline,
 };
 use sonora::{AudioProcessing, Config, StreamConfig};
+use sonora_agc2::limiter::Limiter;
 
 pub(super) const SAMPLE_RATE: u32 = 48_000;
 pub(super) const FRAMES_PER_CHUNK: usize = 480;
+const OUTPUT_CEILING: f32 = 0.95;
+const FLOAT_S16_SCALE: f32 = 32768.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct ProcessingSettings {
@@ -31,6 +34,8 @@ impl Default for ProcessingSettings {
 pub(super) struct MicrophoneProcessor {
     settings: ProcessingSettings,
     audio_processing: AudioProcessing,
+    output_limiter: Limiter,
+    current_gain: f32,
 }
 
 impl MicrophoneProcessor {
@@ -44,6 +49,8 @@ impl MicrophoneProcessor {
         Self {
             settings,
             audio_processing,
+            output_limiter: Limiter::new(FRAMES_PER_CHUNK),
+            current_gain: settings.input_gain,
         }
     }
 
@@ -80,13 +87,25 @@ impl MicrophoneProcessor {
         self.audio_processing
             .process_capture_f32(&source, &mut destination)
             .expect("fixed 48 kHz mono audio processing format");
+        // 用户增益仍在 AGC 后应用；一个现有音频块内渐变，避免滑块调整造成阶跃。
+        let target_gain = self.settings.input_gain;
+        if target_gain == 0.0 {
+            self.current_gain = 0.0;
+        }
+        let gain_step = (target_gain - self.current_gain) / FRAMES_PER_CHUNK as f32;
         for sample in &mut output {
+            self.current_gain += gain_step;
             *sample = if sample.is_finite() {
-                // 用户增益放在 AGC 后应用，避免自动增益抵消用户主动调整的音量。
-                (*sample * self.settings.input_gain).clamp(-1.0, 1.0)
+                *sample * self.current_gain * FLOAT_S16_SCALE / OUTPUT_CEILING
             } else {
                 0.0
             };
+        }
+        self.current_gain = target_gain;
+        // 复用同版 Sonora 的子帧限幅器；在最后一次放大后保护输出，不再增加块延迟。
+        self.output_limiter.process(&mut [&mut output[..]]);
+        for sample in &mut output {
+            *sample *= OUTPUT_CEILING / FLOAT_S16_SCALE;
         }
         output
     }
@@ -156,7 +175,94 @@ mod tests {
             voice_enhancement: false,
         });
         let loud = processor.process(&[0.8; FRAMES_PER_CHUNK]);
-        assert!(loud.iter().all(|sample| *sample == 1.0));
+        assert!(
+            loud.iter()
+                .all(|sample| sample.abs() <= super::OUTPUT_CEILING)
+        );
+    }
+
+    #[test]
+    fn final_limiter_preserves_quiet_audio_and_scales_overload_without_flattening_the_wave() {
+        let mut processor = MicrophoneProcessor::new(ProcessingSettings {
+            input_gain: 2.0,
+            noise_suppression: false,
+            auto_gain_control: false,
+            voice_enhancement: false,
+        });
+        let quiet = tone(0.05, 500.0, 0);
+        let output = processor.process(&quiet);
+        assert!(
+            output
+                .iter()
+                .zip(quiet)
+                .all(|(output, input)| (*output - input * 2.0).abs() < 1e-6)
+        );
+        let mut loud = [0.0; FRAMES_PER_CHUNK];
+        for block in 1..100 {
+            loud = processor.process(&tone(0.8, 500.0, block));
+            assert!(
+                loud.iter()
+                    .all(|value| value.is_finite() && value.abs() <= super::OUTPUT_CEILING)
+            );
+        }
+        let input = tone(0.8, 500.0, 99);
+        let scale = loud
+            .iter()
+            .zip(input)
+            .map(|(output, input)| output * input)
+            .sum::<f32>()
+            / input.iter().map(|value| value * value).sum::<f32>();
+        let residual: f32 = loud
+            .iter()
+            .zip(input)
+            .map(|(output, input)| (output - scale * input).powi(2))
+            .sum();
+        assert!(
+            residual < 0.001,
+            "steady overloaded tone lost its shape: {residual}"
+        );
+    }
+
+    #[test]
+    fn user_gain_changes_are_ramped_but_zero_does_not_leak_a_fade_out() {
+        let settings = ProcessingSettings {
+            input_gain: 1.0,
+            noise_suppression: false,
+            auto_gain_control: false,
+            voice_enhancement: false,
+        };
+        let mut processor = MicrophoneProcessor::new(settings);
+        processor.process(&[0.2; FRAMES_PER_CHUNK]);
+        processor.set_settings(ProcessingSettings {
+            input_gain: 0.5,
+            ..settings
+        });
+        let lowered = processor.process(&[0.2; FRAMES_PER_CHUNK]);
+        assert!((lowered[0] - 0.2).abs() < 0.001);
+        assert!((lowered[FRAMES_PER_CHUNK - 1] - 0.1).abs() < 1e-5);
+        assert!(
+            lowered
+                .windows(2)
+                .all(|pair| (pair[1] - pair[0]).abs() < 0.001)
+        );
+        processor.set_settings(ProcessingSettings {
+            input_gain: 0.0,
+            ..settings
+        });
+        assert!(
+            processor
+                .process(&[0.8; FRAMES_PER_CHUNK])
+                .iter()
+                .all(|value| *value == 0.0)
+        );
+        processor.set_settings(settings);
+        let restored = processor.process(&[0.2; FRAMES_PER_CHUNK]);
+        assert!(restored[0].abs() < 0.001);
+        assert!(
+            restored
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0)
+        );
     }
 
     #[test]
@@ -361,6 +467,9 @@ mod tests {
             ..initial
         });
         let input = tone(0.01, 220.0, 300);
+        let _ = updated.process(&input);
+        let _ = unchanged.process(&input);
+        let input = tone(0.01, 220.0, 301);
         let updated_output = updated.process(&input);
         let unchanged_output = unchanged.process(&input);
 

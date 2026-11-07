@@ -64,6 +64,7 @@ it('快速反向操作取消旧过渡，从当前可见高度衔接，不排队�
   const f = fixture();
   await f.change(true, 132, 430);
   await f.change(false, 260, 132);
+  expect(f.conversation.style.removeProperty).not.toHaveBeenCalled();
   expect(f.animations[0]!.cancel).toHaveBeenCalledOnce();
   expect(f.animate.mock.calls).toHaveLength(2);
   expect(f.animate.mock.calls.at(-1)).toEqual([[{ top: '-80px' }, { top: '0px' }], {

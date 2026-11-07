@@ -14,6 +14,34 @@ function memoryStorage() {
 afterEach(() => vi.useRealTimers());
 
 describe('useAudioPreferences', () => {
+  it('统一切换处理设置并保存，保留输入音量、成员平衡和原有存储字段', () => {
+    vi.useFakeTimers();
+    const storage = memoryStorage();
+    const scope = effectScope();
+    const preferences = scope.run(() => useAudioPreferences('local-user', storage))!;
+    preferences.setInputGain(1.4);
+    const disabled = { echoCancellation: false, noiseSuppression: false,
+      autoGainControl: false, voiceEnhancement: false };
+    expect(preferences.setProcessing(disabled)).toBe(true);
+    expect(preferences.setProcessing(disabled)).toBe(false);
+    expect(preferences.processing).toEqual(disabled);
+    expect(preferences.inputGain.value).toBe(1.4);
+    expect(preferences.voiceVolumeBalance.value).toBe(true);
+    vi.advanceTimersByTime(150);
+    expect(storage.setItem).toHaveBeenCalledTimes(1);
+    scope.stop();
+    const next = effectScope();
+    const restored = next.run(() => useAudioPreferences('local-user', storage))!;
+    expect(restored.processing).toEqual(disabled);
+    expect(restored.setProcessing({ echoCancellation: true, noiseSuppression: true,
+      autoGainControl: true, voiceEnhancement: true })).toBe(true);
+    next.stop();
+    expect(JSON.parse([...storage.values.values()][0])).toMatchObject({
+      echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true,
+      inputGain: 1.4, voiceVolumeBalance: true,
+    });
+  });
+
   it('人声平衡默认开启，独立保存关闭选择且不改动成员静音和麦克风处理', () => {
     vi.useFakeTimers();
     const storage = memoryStorage();

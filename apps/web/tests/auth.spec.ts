@@ -487,7 +487,7 @@ test('签名快速保存不移动布局，失败时就近展开反馈并支持�
   await expect(page.locator('.profile-registration time')).toHaveAttribute('datetime', user.createdAt);
   const activityPosition = await page.locator('.activity-settings').boundingBox();
   const signature = page.getByRole('textbox', { name: '个性签名', exact: true });
-  await expect(signature).toHaveAttribute('maxlength', '120');
+  await expect(signature).toHaveAttribute('maxlength', '40');
   await signature.fill('一起开黑');
   await page.getByRole('heading', { name: '账号设置', exact: true }).click();
   await expect.poll(() => user.signature).toBe('一起开黑');
@@ -669,6 +669,7 @@ test('裁剪中更换头像沿用次级按钮，取消保留调整，合规头�
   ]);
   await chooser.setFiles({ name: 'replacement.png', mimeType: 'image/png', buffer: Buffer.from(replacement.split(',')[1], 'base64') });
   await expect(dialog).toHaveCount(1);
+  await expect(image).toHaveCount(1);
   await expect(image).toHaveJSProperty('naturalWidth', 128);
   await expect(image).toHaveJSProperty('naturalHeight', 256);
   await expect(slider).toHaveValue('0');

@@ -1,4 +1,9 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
+
+async function selectPersonalPresence(menu: Locator, label: string) {
+  await menu.getByRole('button', { name: '切换在线状态', exact: true }).click();
+  await menu.getByRole('menuitemradio', { name: label, exact: true }).click();
+}
 
 const groupId = '01b08c29-d1e5-4bca-987f-64946541e93b';
 const friendId = 'a1ae7096-049b-46ed-8e62-4f3dd0e7f80d';
@@ -49,7 +54,7 @@ test('底部整块资料打开菜单，编辑沿用设置且返回原入口，�
   await expect(menu).toBeVisible();
   await expect(menu).toContainText(user.signature);
   await expect(menu.getByRole('button', { name: '退出登录', exact: true })).toHaveCount(1);
-  await expect(menu.getByRole('button', { name: '隐身', exact: true })).toHaveCount(1);
+  await expect(menu.getByRole('button', { name: '切换在线状态', exact: true })).toHaveCount(1);
   expect(await footer.boundingBox()).toEqual(bounds);
   await page.screenshot({ path: test.info().outputPath('personal-menu.png') });
   await menu.getByRole('button', { name: '编辑个人资料', exact: true }).click();
@@ -202,12 +207,23 @@ test('个人面板固定在个人栏上方，切换状态不移动，窄窗可�
   const footer = (await page.locator('.group-conversation > .personal-card').boundingBox())!;
   expect(original.y + original.height).toBeCloseTo(footer.y - 8, 0);
   expect(original.x + original.width).toBeCloseTo(Math.min(footer.x + footer.width, page.viewportSize()!.width - 8), 0);
-  await menu.getByRole('button', { name: '隐身', exact: true }).click();
-  await expect(menu.getByRole('button', { name: '隐身', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const statusTrigger = menu.getByRole('button', { name: '切换在线状态', exact: true });
+  const nameBefore = await trigger.locator('[data-identity-name]').boundingBox();
+  const statusBounds = (await statusTrigger.boundingBox())!;
+  await page.mouse.move(statusBounds.x + 30, statusBounds.y + 16);
+  await page.mouse.down();
+  await expect(menu.getByRole('menu', { name: '在线状态' })).toBeVisible();
+  await page.mouse.move(statusBounds.x + 30, statusBounds.y + 48);
+  await expect(statusTrigger).toContainText('在线');
+  await page.mouse.up();
+  await expect(statusTrigger).toContainText('隐身');
+  expect(await trigger.locator('[data-identity-name]').boundingBox()).toEqual(nameBefore);
   expect(await menu.boundingBox()).toEqual(original);
-  await menu.getByRole('button', { name: '在线', exact: true }).focus();
-  await page.keyboard.press('Space');
-  await expect(menu.getByRole('button', { name: '在线', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await statusTrigger.focus();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(statusTrigger).toContainText('在线');
   expect(await menu.boundingBox()).toEqual(original);
   await page.setViewportSize({ width: 440, height: 320 });
   await expect.poll(async () => {
@@ -243,7 +259,8 @@ test('迟到的语音时长使个人面板平滑向上伸展，右边与底边�
     for (let frame = 0; frame < 36; frame++) {
       await new Promise(requestAnimationFrame);
       const rect = element.getBoundingClientRect();
-      frames.push({ height: rect.height, bottom: rect.bottom, right: rect.right });
+      frames.push({ height: rect.height, bottom: rect.bottom, right: rect.right,
+        actionsBottom: element.querySelector('.personal-menu-actions')!.getBoundingClientRect().bottom });
     }
     return frames;
   });
@@ -256,6 +273,7 @@ test('迟到的语音时长使个人面板平滑向上伸展，右边与底边�
   for (const frame of frames) {
     expect(frame.bottom).toBeCloseTo(before.y + before.height, 0);
     expect(frame.right).toBeCloseTo(before.x + before.width, 0);
+    expect(frame.actionsBottom).toBeCloseTo(before.y + before.height - 13, 0);
   }
   await page.screenshot({ path: test.info().outputPath('personal-menu-stable.png') });
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -366,18 +384,18 @@ test('设置身份菜单选择隐身与主界面同步，首个心跳不短暂�
   const trigger = page.getByRole('button', { name: '个人菜单', exact: true });
   await trigger.click();
   const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
-  const options = menu.getByRole('group', { name: '在线状态', exact: true });
-  await options.getByRole('button', { name: '隐身', exact: true }).click();
+  const statusTrigger = menu.getByRole('button', { name: '切换在线状态', exact: true });
+  await selectPersonalPresence(menu, '隐身');
   await expect.poll(() => heartbeats.at(-1)?.status).toBe('OFFLINE');
   await expect(menu.locator('.profile-popover-identity .personal-avatar')).toHaveAttribute('aria-label', '隐身');
-  await expect(options.getByRole('button', { name: '隐身', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(statusTrigger).toContainText('隐身');
   await page.screenshot({ path: test.info().outputPath('invisible-menu.png') });
   heartbeats.length = 0;
   await page.reload();
   await expect.poll(() => heartbeats.length).toBeGreaterThan(0);
   expect(heartbeats.every(heartbeat => heartbeat.status === 'OFFLINE' && heartbeat.activity === null)).toBe(true);
   await trigger.click();
-  await options.getByRole('button', { name: '在线', exact: true }).click();
+  await selectPersonalPresence(menu, '在线');
   await expect.poll(() => heartbeats.at(-1)?.status).toBe('ONLINE');
   await expect(menu.locator('.profile-popover-identity .personal-avatar')).toHaveAttribute('aria-label', '在线');
 });
@@ -388,13 +406,13 @@ test('状态同步失败在菜单内提示，重试不退出账号或清除选�
   await page.goto('/');
   await page.getByRole('button', { name: '个人菜单', exact: true }).click();
   const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
-  const options = menu.getByRole('group', { name: '在线状态', exact: true });
+  const statusTrigger = menu.getByRole('button', { name: '切换在线状态', exact: true });
   fail = true;
-  await options.getByRole('button', { name: '隐身', exact: true }).click();
+  await selectPersonalPresence(menu, '隐身');
   await expect(menu.getByRole('alert')).toContainText('尚未确认同步');
-  await expect(options.getByRole('button', { name: '隐身', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(statusTrigger).toContainText('隐身');
   fail = false;
-  await options.getByRole('button', { name: '隐身', exact: true }).click();
+  await selectPersonalPresence(menu, '隐身');
   await expect(menu.getByRole('alert')).toHaveCount(0);
   await expect(menu.locator('.profile-popover-identity .personal-avatar')).toHaveAttribute('aria-label', '隐身');
 });

@@ -18,6 +18,51 @@ const positioning = parsed.statements.filter(statement => statement.getText(pars
   .map(statement => statement.getText(parsed)).join('\n');
 afterEach(() => { vi.useRealTimers(); });
 
+it('设置预览无浮层入口也持续测量高度，溢出时恢复滚动，销毁清理待执行帧', () => {
+  const resizeSource = parsed.statements.find(statement => statement.getText(parsed)
+    .startsWith('watch(() => [props.anchor, surface.value, content.value, props.inline]'))!.getText(parsed);
+  let height = 160;
+  let callback!: () => void;
+  let frame: (() => void) | undefined;
+  const disconnect = vi.fn();
+  const observe = vi.fn();
+  const toggle = vi.fn();
+  const owner = { requestAnimationFrame: (next: () => void) => { frame = next; return 1; },
+    cancelAnimationFrame: vi.fn(() => { frame = undefined; }) };
+  const element = markRaw({ ownerDocument: { defaultView: owner }, parentElement: { clientHeight: 216 },
+    style: { height: '', maxHeight: '100%' }, classList: { toggle } });
+  const body = markRaw({ getBoundingClientRect: () => ({ height }) });
+  const scope = effectScope();
+  scope.run(() => runInNewContext(ts.transpile(resizeSource), {
+    props: { anchor: null, inline: true, placement: 'left' }, surface: ref(element), content: ref(body), watch,
+    ResizeObserver: class {
+      constructor(next: () => void) { callback = next; }
+      observe = observe;
+      disconnect = disconnect;
+    },
+  }));
+  try {
+    expect(element.style.height).toBe('162px');
+    expect(observe).toHaveBeenCalledWith(body);
+    expect(observe).toHaveBeenCalledWith(element);
+    height = 200;
+    callback(); frame!();
+    expect(element.style.height).toBe('202px');
+    expect(toggle).toHaveBeenLastCalledWith('is-scrollable', false);
+    height = 240;
+    callback(); frame!();
+    expect(element.style.height).toBe('242px');
+    expect(toggle).toHaveBeenLastCalledWith('is-scrollable', true);
+    height = 150;
+    callback(); frame!();
+    expect(toggle).toHaveBeenLastCalledWith('is-scrollable', false);
+    callback();
+    scope.stop();
+    expect(frame).toBeUndefined();
+    expect(disconnect).toHaveBeenCalledOnce();
+  } finally { scope.stop(); }
+});
+
 it('卡片内部操作不关闭，Esc 关闭主卡并恢复入口焦点', () => {
   const target = {} as Node;
   const focus = vi.fn();

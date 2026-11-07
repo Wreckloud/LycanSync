@@ -20,10 +20,10 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
     conversation.style.setProperty('--voice-overlay-height',
       `${Math.max(0, activeElement.getBoundingClientRect().bottom - conversation.getBoundingClientRect().top)}px`);
   }
-  function clearDirectory() {
+  function clearDirectory(preserveOffset = false) {
     observer?.disconnect();
     observer = undefined;
-    conversation?.style.removeProperty('--voice-overlay-height');
+    if (!preserveOffset) conversation?.style.removeProperty('--voice-overlay-height');
     conversation = null;
     activeElement = null;
     entering = false;
@@ -58,11 +58,13 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
     updateDirectory();
   }
   function observe(element: HTMLElement, reveal = false) {
-    clearDirectory();
+    const nextConversation = element.closest('.group-main')?.querySelector<HTMLElement>('.group-conversation') ?? null;
+    // 重设观察时保留同一聊天区的占位，避免中途收缩滚动范围把贴底位置夹紧。
+    clearDirectory(conversation === nextConversation);
     activeElement = element;
     entering = reveal;
     const owner = element.ownerDocument.defaultView!;
-    conversation = element.closest('.group-main')?.querySelector<HTMLElement>('.group-conversation') ?? null;
+    conversation = nextConversation;
     observer = new owner.ResizeObserver(() => measure(element));
     observer.observe(element);
     if (!preference) {

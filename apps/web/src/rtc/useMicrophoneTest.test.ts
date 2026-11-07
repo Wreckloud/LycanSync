@@ -156,7 +156,7 @@ describe('独立麦克风测试', () => {
     expect(mocks.nativeStart).toHaveBeenCalledWith({ inputGain: 0.5, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true });
     expect(mocks.createTrack).not.toHaveBeenCalled();
     preferences.setInputGain(1.5);
-    preferences.setProcessing('noiseSuppression', false);
+    preferences.setProcessing({ ...preferences.processing, noiseSuppression: false });
     preferences.setOutputVolume(0.5);
     await nextTick();
     expect(mocks.nativeConfigure).toHaveBeenLastCalledWith({ inputGain: 1.5, noiseSuppression: false, autoGainControl: true, voiceEnhancement: true });

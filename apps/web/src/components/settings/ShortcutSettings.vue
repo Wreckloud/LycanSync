@@ -48,7 +48,7 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
       <div v-for="action in actions" :key="action.id" class="shortcut-setting-row">
         <span>{{ action.label }}</span>
         <div class="settings-actions">
-          <button type="button" class="shortcut-binding" :aria-label="`设置${action.label}快捷键`" :aria-pressed="shortcuts.capturing === action.id"
+          <button type="button" class="settings-button shortcut-binding" :aria-label="`设置${action.label}快捷键`" :aria-pressed="shortcuts.capturing === action.id"
             :disabled="!shortcuts.supported || !shortcuts.ready || (shortcuts.busy && shortcuts.capturing !== action.id)"
             @click="shortcuts.startCapture(action.id)" @blur="shortcuts.cancelCapture()"
             @keydown="shortcuts.capturing === action.id && (keyDown($event), $event.preventDefault(), $event.stopPropagation())"

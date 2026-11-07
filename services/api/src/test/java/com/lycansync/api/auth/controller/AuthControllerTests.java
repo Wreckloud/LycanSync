@@ -134,7 +134,7 @@ class AuthControllerTests {
         mvc.perform(put("/api/auth/me")
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + SESSION_TOKEN)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"nickname\":\"小狼\",\"avatar\":\"\",\"signature\":\"" + "字".repeat(121) + "\"}"))
+                        .content("{\"nickname\":\"小狼\",\"avatar\":\"\",\"signature\":\"" + "字".repeat(41) + "\"}"))
                 .andExpect(status().isBadRequest());
         verifyNoInteractions(profileService);
     }

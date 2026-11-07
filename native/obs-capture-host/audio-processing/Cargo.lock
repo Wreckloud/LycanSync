@@ -64,6 +64,7 @@ name = "lycansync-obs-audio-processing"
 version = "0.1.0"
 dependencies = [
  "sonora",
+ "sonora-agc2",
 ]
 
 [[package]]

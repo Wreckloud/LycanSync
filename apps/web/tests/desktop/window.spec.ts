@@ -81,8 +81,8 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
     await expect(page.getByLabel('开机自动启动')).toBeDisabled();
     await expect(page.getByText('仅 Windows 安装版支持，开发模式不会修改系统启动项。')).toBeVisible();
     await page.getByRole('button', { name: '语音与音频', exact: true }).click();
-    await expect(page.locator('.audio-settings').getByRole('checkbox', { name: '回声消除' })).toBeDisabled();
-    await expect(page.locator('.audio-settings').getByText('低频过滤', { exact: true })).toBeVisible();
+    await expect(page.locator('.audio-settings').getByRole('checkbox', { name: '智能声音处理' })).toBeEnabled();
+    await expect(page.locator('.audio-settings').getByText('桌面版暂不支持回声消除，建议使用耳机通话。')).toBeVisible();
     await page.getByRole('button', { name: '返回应用' }).click();
     expect(await page.evaluate(async () => window.lycanDesktop?.getCurrentActivity())).toBeNull();
     expect(await page.evaluate(async () => (await fetch('/api/not-allowed')).status)).toBe(404);

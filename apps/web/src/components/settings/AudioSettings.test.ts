@@ -4,15 +4,17 @@ import { describe, expect, it } from 'vitest';
 import { Track } from 'livekit-client';
 import AudioSettings from './AudioSettings.vue';
 import { useAudioPreferences } from '../../rtc/useAudioPreferences';
+import type { AudioProcessingSettings } from '../../rtc/audioPreferences';
 import type { useRtcRoom } from '../../rtc/useRtcRoom';
 import type { UnwrapNestedRefs } from 'vue';
 
-async function renderAudioSettings(testState: 'idle' | 'listening' | 'stopping' = 'idle', busy = false) {
+async function renderAudioSettings(testState: 'idle' | 'listening' | 'stopping' = 'idle', busy = false,
+  desktop = true, stored: Partial<AudioProcessingSettings> = {}) {
   const scope = effectScope();
-  const preferences = scope.run(() => useAudioPreferences('test', { getItem: () => null, setItem: () => {} }))!;
+  const preferences = scope.run(() => useAudioPreferences('test', { getItem: () => JSON.stringify(stored), setItem: () => {} }))!;
   try {
     return await renderToString(createSSRApp(AudioSettings, {
-      desktop: true, preferences, active: true, inputLevelPercent: 0,
+      desktop, preferences, active: true, inputLevelPercent: 0,
       rtc: { status: 'idle', room: null, busySources: busy ? [Track.Source.Microphone] : [] } as unknown as
         UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>,
       audioOutput: { devices: { value: [] }, notice: { value: '' }, available: { value: true }, changing: { value: false }, supported: true, refresh: async () => {}, select: async () => {} },
@@ -24,6 +26,28 @@ async function renderAudioSettings(testState: 'idle' | 'listening' | 'stopping' 
 }
 
 describe('语音设置的本机试听入口', () => {
+  it('统一处理开关按平台展示支持范围，试听排在处理之前', async () => {
+    const desktop = await renderAudioSettings();
+    expect(desktop).toMatch(/aria-label="智能声音处理"[^>]*checked[^>]*aria-checked="true"/);
+    expect(desktop).toContain('桌面版暂不支持回声消除');
+    expect(desktop).not.toMatch(/<strong[^>]*>自动增益<\/strong>/);
+    expect([...desktop.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map(match => match[1]))
+      .toEqual(['输入', '麦克风试听', '声音处理', '输出']);
+    const browser = await renderAudioSettings('idle', false, false);
+    expect(browser).toContain('开启后同时请求浏览器进行回声消除');
+    expect(browser).not.toContain('桌面版暂不支持');
+  });
+
+  it('旧的混合选择明确显示部分开启，不因打开设置覆盖用户偏好', async () => {
+    const partial = await renderAudioSettings('idle', false, true, { noiseSuppression: false });
+    expect(partial).toContain('aria-checked="mixed"');
+    expect(partial).toContain('已保留之前的部分处理设置');
+    const desktop = await renderAudioSettings('idle', false, true, { echoCancellation: false });
+    expect(desktop).not.toContain('aria-checked="mixed"');
+    const browser = await renderAudioSettings('idle', false, false, { echoCancellation: false });
+    expect(browser).toContain('aria-checked="mixed"');
+  });
+
   it('没有房间也能开始试听，没有旧的先入房提示', async () => {
     const html = await renderAudioSettings();
     expect(html).toMatch(/<button[^>]*class="settings-button(?: [^"]+)?"[^>]*>开始试听<\/button>/);

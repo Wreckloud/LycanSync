@@ -113,17 +113,17 @@ defineExpose({ editingName });
 </template>
 
 <style scoped>
-.activity-settings { grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: 16px 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border-soft); }
+.activity-settings { grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: 24px; padding-bottom: 24px; border-bottom: 1px solid var(--border-soft); }
 .activity-heading { grid-column: 1 / -1; }
 .activity-settings-controls { display: grid; align-content: start; gap: 12px; min-width: 0; }
-.activity-profile-preview { min-width: 0; align-self: start; }
+.activity-profile-preview { position: relative; min-width: 0; height: 216px; align-self: start; }
 @media (max-width: 1050px) { .activity-settings { grid-template-columns: minmax(0, 1fr); } .activity-profile-preview { max-width: 292px; } }
 .activity-mappings-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; min-width: 0; }
 .activity-mappings-heading h2 { flex-shrink: 0; }
 .activity-current { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .activity-toggle { padding: 0; border-top: 0; }
 .activity-presence { flex-wrap: wrap; }
-.activity-mappings { grid-column: 1 / -1; display: grid; gap: 8px; min-width: 0; padding-top: 16px; border-top: 1px solid var(--border-soft); }
+.activity-mappings { grid-column: 1 / -1; display: grid; gap: 8px; min-width: 0; padding-top: 24px; border-top: 1px solid var(--border-soft); }
 .activity-window-choice { display: grid; grid-template-columns: 100px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-width: 0; }
 .activity-window-actions { display: flex; gap: 8px; }
 .activity-window-actions button { white-space: nowrap; }
@@ -136,7 +136,6 @@ defineExpose({ editingName });
 .activity-saved-names h3 { margin: 0 0 4px; color: var(--muted); font-size: 13px; font-weight: 500; }
 .activity-saved-names > div { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .activity-saved-names span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.activity-saved-names button { padding: 2px 4px; min-height: 26px; border: 0; background: transparent; color: var(--muted); }
 @media (max-width: 640px) {
   .activity-window-choice { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
   .activity-window-choice label { grid-column: 1 / -1; }

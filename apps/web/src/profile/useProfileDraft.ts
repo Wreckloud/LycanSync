@@ -41,9 +41,10 @@ export function useProfileDraft(
       error.value = '昵称不能为空。';
       return Promise.resolve(false);
     }
-    if (profile.signature.length > 120) {
+    const keepStoredSignature = profile.signature === savedSignature.value && profile.signature.length > 40;
+    if (profile.signature.length > 40 && !keepStoredSignature) {
       errorField.value = 'signature';
-      error.value = '个性签名最多 120 个字符。';
+      error.value = '个性签名最多 40 个字符。';
       return Promise.resolve(false);
     }
     if (!dirty.value) {
@@ -57,7 +58,8 @@ export function useProfileDraft(
     errorField.value = field;
     pendingSave = Promise.resolve().then(async () => {
       try {
-        const updated = await saveProfile(profile);
+        // 旧签名不截断；仅修改昵称或头像时省略签名，沿用服务端保留语义。
+        const updated = await saveProfile(keepStoredSignature ? { nickname: profile.nickname, avatar: profile.avatar } : profile);
         if (typeof updated.signature !== 'string') {
           throw new Error('服务端未返回签名，无法确认保存结果。');
         }

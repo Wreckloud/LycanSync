@@ -216,14 +216,22 @@ test('未共享时显示群成员头像，停止共享后恢复头像', async ({
   await expect(settingsPage).not.toHaveAttribute('aria-modal', 'true');
   const audioSettingsSection = page.locator('.audio-settings');
   await expect(audioSettingsSection).toBeVisible();
-  await expect(audioSettingsSection.getByRole('checkbox', { name: '回声消除' })).toBeEnabled();
-  await expect(audioSettingsSection.getByText('人声增强', { exact: true })).toBeVisible();
+  await expect(audioSettingsSection.getByRole('checkbox', { name: '智能声音处理' })).toBeChecked();
   await expect(audioSettingsSection.getByRole('meter', { name: '麦克风输入等级' })).toBeVisible();
   const inputGainSlider = audioSettingsSection.getByRole('slider', { name: '麦克风输入音量' });
   await inputGainSlider.fill('2');
-  await audioSettingsSection.getByRole('checkbox', { name: '环境降噪' }).uncheck();
+  await audioSettingsSection.getByRole('checkbox', { name: '智能声音处理' }).uncheck();
   await expect.poll(() => page.evaluate(() => window.__rtcTest.tracks
     .find((track) => track.kind === 'audio')?.getConstraints().noiseSuppression)).toBe(false);
+  expect(await page.evaluate(() => window.__rtcTest.tracks
+    .find((track) => track.kind === 'audio')?.getConstraints())).toMatchObject({
+    echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+  });
+  await audioSettingsSection.getByRole('checkbox', { name: '智能声音处理' }).check();
+  await expect.poll(() => page.evaluate(() => window.__rtcTest.tracks
+    .find((track) => track.kind === 'audio')?.getConstraints())).toMatchObject({
+    echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+  });
   await audioSettingsSection.getByRole('slider', { name: 'LycanSync 总输出音量' }).fill('2');
   await page.getByRole('button', { name: '关于与诊断', exact: true }).click();
   await expect(page.locator('.media-diagnostics')).toHaveCount(0);

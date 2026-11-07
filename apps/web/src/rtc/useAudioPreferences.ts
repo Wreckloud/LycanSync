@@ -120,9 +120,12 @@ export function useAudioPreferences(userId: string,
     return true;
   }
 
-  function setProcessing(setting: keyof AudioProcessingSettings, enabled: boolean) {
-    if (processing[setting] === enabled) return false;
-    processing[setting] = enabled;
+  function setProcessing(settings: AudioProcessingSettings) {
+    if (processing.echoCancellation === settings.echoCancellation
+      && processing.noiseSuppression === settings.noiseSuppression
+      && processing.autoGainControl === settings.autoGainControl
+      && processing.voiceEnhancement === settings.voiceEnhancement) return false;
+    Object.assign(processing, settings);
     scheduleSave();
     return true;
   }

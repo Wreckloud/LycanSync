@@ -194,7 +194,7 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
 .settings-header h1:focus { outline: none; }
 .settings-content { min-width: 0; min-height: 0; overflow: auto; padding: 20px 24px 24px; }
 .settings-content > * { width: 100%; max-width: 820px; margin-inline: auto; }
-.settings-account-page { display: grid; gap: 16px; width: 100%; max-width: 820px; }
+.settings-account-page { display: grid; gap: 24px; width: 100%; max-width: 820px; }
 @media (max-width: 760px) {
   .settings-view { grid-template-columns: minmax(0, 1fr) 176px; }
   .settings-navigation { padding: 14px 8px; }

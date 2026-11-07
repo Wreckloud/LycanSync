@@ -84,9 +84,9 @@ async function save() {
         <div class="welcome-signature">
           <div class="welcome-signature-heading">
             <label for="welcome-signature">个性签名 <span>选填</span></label>
-            <span class="welcome-signature-count">{{ signature.length }} / 120</span>
+            <span class="welcome-signature-count">{{ signature.length }} / 40</span>
           </div>
-          <textarea id="welcome-signature" v-model="signature" aria-label="个性签名" maxlength="120" rows="2"
+          <textarea id="welcome-signature" v-model="signature" aria-label="个性签名" maxlength="40" rows="2"
             :readonly="busy" placeholder="写一句想让朋友看到的话" />
         </div>
       </div>

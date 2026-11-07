@@ -47,10 +47,10 @@ public class ProfileService {
             throw invalid("昵称不能为空或包含控制字符");
         }
         String signature = request.signature() == null ? null : request.signature().strip();
-        if (signature != null && (signature.length() > 120
+        if (signature != null && (signature.length() > 40
                 || signature.codePoints().anyMatch(value -> Character.isISOControl(value)
                 && value != '\n' && value != '\r'))) {
-            throw invalid("个性签名不能超过 120 个字符或包含非法控制字符");
+            throw invalid("个性签名不能超过 40 个字符或包含非法控制字符");
         }
         String avatar = request.avatar();
         // 只处理客户端裁剪的图片，不抓取用户网址；随包默认头像仍原样保留。

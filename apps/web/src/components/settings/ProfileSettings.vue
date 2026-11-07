@@ -89,8 +89,8 @@ defineExpose({ finishEditing, cropping, preview });
       </div>
       <div class="profile-signature">
         <div class="profile-signature-heading"><label for="profile-signature">个性签名 <span>选填</span></label>
-          <span class="profile-signature-count">{{ signature.length }} / 120</span></div>
-        <textarea id="profile-signature" v-model="signature" aria-label="个性签名" maxlength="120" rows="2"
+          <span class="profile-signature-count">{{ signature.length }} / 40</span></div>
+        <textarea id="profile-signature" v-model="signature" aria-label="个性签名" maxlength="40" rows="2"
           :readonly="busy" aria-describedby="profile-signature-feedback" placeholder="写一句想让朋友看到的话" @blur="finishEditing('signature')" />
         <InlineFeedback id="profile-signature-feedback" :message="errorField === 'signature' ? error : ''" />
       </div>
@@ -105,7 +105,7 @@ defineExpose({ finishEditing, cropping, preview });
 </template>
 
 <style scoped>
-.profile-settings { max-width: 820px; gap: 4px; border-bottom: 1px solid var(--border-soft); }
+.profile-settings { max-width: 820px; gap: 4px; padding-bottom: 24px; border-bottom: 1px solid var(--border-soft); }
 .profile-details { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: center; padding-top: 4px; }
 .profile-identity { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; min-width: 0; }
 .profile-avatar-feedback { flex-basis: 100%; }

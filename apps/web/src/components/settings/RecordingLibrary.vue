@@ -49,7 +49,7 @@ onMounted(() => { void library.load(); });
           <div class="library-actions">
             <button type="button" :disabled="!!pendingId || entry.state === 'recording' || entry.availability !== 'available' || !entry.bytes" @click="library.file(entry, 'play')">播放</button>
             <button type="button" :disabled="!!pendingId || entry.state === 'recording' || entry.availability !== 'available' || !entry.bytes" @click="library.file(entry, 'reveal')">打开位置</button>
-            <button type="button" class="danger-button" :disabled="!!pendingId || entry.state === 'recording'" @click="library.file(entry, 'delete')">{{ entry.availability === 'missing' || entry.availability === 'changed' ? '移除记录' : '删除' }}</button>
+            <button type="button" class="settings-button" :disabled="!!pendingId || entry.state === 'recording'" @click="library.file(entry, 'delete')">{{ entry.availability === 'missing' || entry.availability === 'changed' ? '移除记录' : '删除' }}</button>
           </div>
         </li>
       </ul>

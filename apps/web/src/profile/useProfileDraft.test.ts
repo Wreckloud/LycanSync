@@ -121,12 +121,31 @@ describe('个人资料草稿与保存', () => {
 
   it('超长签名不提交，草稿保留', async () => {
     const { scope, draft, saveProfile } = setup();
-    draft.signature.value = '字'.repeat(121);
+    draft.signature.value = '字'.repeat(41);
     expect(await draft.save()).toBe(false);
     expect(saveProfile).not.toHaveBeenCalled();
-    expect(draft.error.value).toBe('个性签名最多 120 个字符。');
-    expect(draft.signature.value).toHaveLength(121);
+    expect(draft.error.value).toBe('个性签名最多 40 个字符。');
+    expect(draft.signature.value).toHaveLength(41);
     scope.stop();
+  });
+
+  it('40 字签名可保存，旧长签名不截断且不阻止修改昵称', async () => {
+    const legacySignature = '旧'.repeat(120);
+    const saveProfile = vi.fn(async (profile: ProfileUpdate) => ({ ...initialUser, signature: legacySignature, ...profile }));
+    const { scope, user, draft } = setup(saveProfile);
+    try {
+      user.value = { ...initialUser, signature: legacySignature };
+      await nextTick();
+      expect(await draft.save()).toBe(true);
+      expect(saveProfile).not.toHaveBeenCalled();
+      draft.nickname.value = '新昵称';
+      expect(await draft.save()).toBe(true);
+      expect(saveProfile).toHaveBeenLastCalledWith({ nickname: '新昵称', avatar: '' });
+      expect(draft.signature.value).toBe(legacySignature);
+      draft.signature.value = '新'.repeat(40);
+      expect(await draft.save('signature')).toBe(true);
+      expect(saveProfile).toHaveBeenLastCalledWith({ nickname: '新昵称', avatar: '', signature: '新'.repeat(40) });
+    } finally { scope.stop(); }
   });
 
   it('缺少签名的旧资料也沿用当前签名提交约定，不保留旧服务保存分支', async () => {

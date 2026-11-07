@@ -705,7 +705,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .personal-avatar .profile-avatar, .profile-avatar-placeholder { display: block; width: var(--avatar-size); height: var(--avatar-size); border-radius: 50%; object-fit: cover; }
 .profile-avatar-placeholder { display: grid; place-items: center; background: var(--panel-soft); color: var(--muted); }
 .personal-avatar .status-dot { border-color: #0d1116; }
-.personal-copy { min-width: 0; display: grid; line-height: 16px; }
+.personal-copy { min-width: 0; display: grid; grid-template-rows: 20px 16px; line-height: 16px; }
 .personal-copy strong, .personal-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .personal-copy strong { font-size: 15px; line-height: 20px; font-weight: 600; }
 .personal-copy small { color: var(--muted); font-size: 12px; }

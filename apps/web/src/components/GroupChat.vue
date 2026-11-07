@@ -93,6 +93,10 @@ let lastScrollTop = 0;
 let downwardScrollDistance = 0;
 let jumpingToUnread = false;
 let scrollPreference: MediaQueryList | undefined;
+let layoutObserver: ResizeObserver | undefined;
+let previousListHeight: number | undefined;
+let previousTopPadding = 0;
+let layoutScrollRemainder = 0;
 
 const members = computed(() => new Map(props.members.map((member) => [member.userId, member])));
 const showMessageJump = computed(() => !followingScroll.value && (unseenMessages.value > 0
@@ -149,6 +153,35 @@ function visibleMessageBounds(element: HTMLElement) {
   const overlay = element.parentElement?.closest('.group-main')?.querySelector<HTMLElement>('.voice-panel');
   const top = Math.max(bounds.top, overlay?.getBoundingClientRect().bottom ?? bounds.top);
   return { top: Math.min(top, bounds.bottom), bottom: bounds.bottom };
+}
+
+function syncChatLayout() {
+  const element = list.value;
+  if (disposed || !element || !layoutObserver) return false;
+  const conversation = element.closest('.group-conversation');
+  const owner = element.ownerDocument.defaultView!;
+  const offset = conversation ? element.getBoundingClientRect().top - conversation.getBoundingClientRect().top : 0;
+  element.style.setProperty('--chat-list-offset', `${offset}px`);
+  const padding = Number.parseFloat(owner.getComputedStyle(element).paddingTop);
+  const height = element.clientHeight;
+  const previousHeight = previousListHeight;
+  const paddingDelta = padding - previousTopPadding;
+  previousListHeight = height;
+  previousTopPadding = padding;
+  if (previousHeight === undefined) { lastScrollTop = element.scrollTop; return false; }
+  if (height === previousHeight && Math.abs(paddingDelta) < 0.01) return false;
+  // 顶部留白只增加可滚动范围；底部控制栏改变高度时，消息与输入框一起移动。
+  const target = atBottom.value ? element.scrollHeight - height : Math.max(0,
+    Math.min(element.scrollHeight - height, lastScrollTop + layoutScrollRemainder + paddingDelta + previousHeight - height));
+  element.scrollTop = target;
+  // 滚动位置可能按整像素取整，保留余量，避免连续动画逐帧累积偏移。
+  layoutScrollRemainder = target - element.scrollTop;
+  lastScrollTop = element.scrollTop;
+  atBottom.value = isAtBottom();
+  const bounds = visibleMessageBounds(element);
+  moreThanScreenAway.value = element.scrollHeight - element.scrollTop - height > bounds.bottom - bounds.top;
+  updateReadMessages();
+  return true;
 }
 
 async function jumpToMessages() {
@@ -638,7 +671,9 @@ function openLink(url: string) {
 function onScroll() {
   const element = list.value;
   if (!element) return;
+  if (syncChatLayout()) return;
   const scrollDelta = element.scrollTop - lastScrollTop;
+  if (scrollDelta !== 0) layoutScrollRemainder = 0;
   const movingUp = scrollDelta < -1;
   lastScrollTop = element.scrollTop;
   // 自动跟随期间不把中途的位置当作主动翻历史，避免“回到最新”短暂闪现。
@@ -655,6 +690,7 @@ function onScroll() {
 }
 
 function onScrollEnd() {
+  syncChatLayout();
   followingScroll.value = false;
   jumpingToUnread = false;
   atBottom.value = isAtBottom();
@@ -682,6 +718,9 @@ function cancelScrollFollow() {
 }
 
 onMounted(() => {
+  layoutObserver = new list.value!.ownerDocument.defaultView!.ResizeObserver(syncChatLayout);
+  syncChatLayout();
+  layoutObserver.observe(list.value!);
   scrollPreference = list.value!.ownerDocument.defaultView!.matchMedia('(prefers-reduced-motion: reduce)');
   scrollPreference.addEventListener('change', stopAnimatedScroll);
   refreshCalendar();
@@ -692,6 +731,7 @@ onMounted(() => {
 onScopeDispose(() => {
   // App 按群 ID 创建独立实例；切群统一在销毁处取消，观看布局不重建群聊。
   disposed = true;
+  layoutObserver?.disconnect();
   closeHistoricalProfile();
   if (cacheWriteTimer) {
     clearTimeout(cacheWriteTimer);

@@ -166,13 +166,18 @@ watch(() => [props.anchor, surface.value, props.placement, props.positionAnchor]
   stopPositioning = autoUpdate(reference, element, updatePosition);
 }, { immediate: true, flush: 'post' });
 
-watch(() => [props.anchor, surface.value, content.value, props.placement, props.inline] as const,
-  ([anchor, element, body, placement, inline], _, onCleanup) => {
-    if (!anchor || !element || !body || placement !== 'above' || inline) return;
+watch(() => [props.anchor, surface.value, content.value, props.inline] as const,
+  ([anchor, element, body, inline], _, onCleanup) => {
+    if (!element || !body || (!inline && !anchor)) return;
     const owner = element.ownerDocument.defaultView!;
     let frame = 0;
     const resize = () => {
-      const height = `${body.getBoundingClientRect().height + 2}px`;
+      const contentHeight = body.getBoundingClientRect().height;
+      if (!contentHeight) return;
+      const height = `${contentHeight + 2}px`;
+      // 个人菜单和设置预览都贴底伸缩；超出可用高度时恢复正常流，保证全文可滚动到达。
+      const availableHeight = inline ? element.parentElement!.clientHeight : parseFloat(element.style.maxHeight);
+      element.classList.toggle('is-scrollable', contentHeight + 2 > availableHeight);
       if (element.style.height !== height) element.style.height = height;
     };
     resize();
@@ -182,6 +187,7 @@ watch(() => [props.anchor, surface.value, content.value, props.placement, props.
       frame = owner.requestAnimationFrame(resize);
     });
     observer.observe(body);
+    if (props.placement === 'above' || inline) observer.observe(element);
     onCleanup(() => { observer.disconnect(); owner.cancelAnimationFrame(frame); });
   }, { immediate: true, flush: 'post' });
 onScopeDispose(() => { generation++; });
@@ -209,7 +215,7 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
             <div class="profile-popover-signature" :aria-busy="loading">
               <template v-if="loading"><span v-if="loadingHint" role="status">正在读取签名…</span></template>
               <template v-else-if="error"><span role="alert">{{ error }}</span><button type="button" @click="emit('retry')">重试</button></template>
-              <p v-else>{{ signature || '这只狼暂时没留下什么话。' }}</p>
+              <p v-else :title="signature">{{ signature || '这只狼暂时没留下什么话。' }}</p>
             </div>
             <div v-if="activity" class="profile-popover-activity">{{ activity }}<span v-if="activityDuration"> · {{ activityDuration }}</span></div>
             <div v-if="lastOnline || recentGameDescription" class="profile-popover-history">
@@ -229,10 +235,12 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
 <style>
 .profile-deleted-account { color: var(--muted); font-size: 11px; }
 .profile-popover { position: fixed; z-index: 60; width: min(292px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); text-align: left; }
-.profile-popover.is-personal { box-sizing: border-box; transition: height var(--motion-layout-duration) var(--motion-ease), opacity var(--motion-surface-duration) var(--motion-ease); }
+.profile-popover { box-sizing: border-box; transition: height var(--motion-layout-duration) var(--motion-ease), opacity var(--motion-surface-duration) var(--motion-ease); }
 .profile-popover.is-personal.surface-panel-enter-from, .profile-popover.is-personal.surface-panel-leave-to { transform: none; }
+.profile-popover:is(.is-personal, .is-inline):not(.is-scrollable) .profile-popover-content { position: absolute; right: 0; bottom: 0; left: 0; }
+.profile-popover:is(.is-personal, .is-inline):not(.is-scrollable) { overflow: clip; }
 .profile-popover-banner { height: 38px; background: var(--profile-tint, var(--panel-raised)); }
-.profile-popover.is-inline { position: relative; z-index: auto; width: 100%; max-height: none; overflow: visible; }
+.profile-popover.is-inline { position: absolute; right: 0; bottom: 0; left: 0; z-index: auto; width: 100%; max-height: 100%; overflow-y: auto; }
 .profile-voice-time { display: flex; align-items: center; gap: 8px; margin: 0; padding-top: 10px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 12px; line-height: 18px; }
 .profile-voice-time > svg { flex-shrink: 0; }
 .profile-voice-error { margin: 0; color: var(--muted); font-size: 12px; line-height: 18px; }
@@ -241,8 +249,8 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
 .profile-popover-identity .personal-avatar { --avatar-size: 48px; flex-shrink: 0; }
 .profile-popover-identity .personal-avatar > :first-child { border: 3px solid var(--panel); }
 .profile-popover-identity strong { min-width: 0; padding-bottom: 3px; overflow-wrap: anywhere; font-size: 16px; line-height: 20px; }
-.profile-popover-signature { min-height: 28px; color: var(--muted); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; white-space: pre-wrap; }
-.profile-popover-signature p { margin: 0; }
+.profile-popover-signature { min-height: 36px; color: var(--muted); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.profile-popover-signature p { margin: 0; height: 36px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .profile-popover-signature [role='alert'] { color: var(--danger); }
 .profile-popover-signature button { margin-left: 6px; padding: 0; border: 0; background: transparent; color: var(--accent); font-size: 12px; }
 .profile-popover-activity { padding-top: 8px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }

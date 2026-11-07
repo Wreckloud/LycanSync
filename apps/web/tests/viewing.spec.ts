@@ -214,6 +214,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       expect(excess).toBeLessThanOrEqual(1);
     }
     expect(await video!.evaluate(element => element.isConnected && element === document.querySelector('.viewing-tile video'))).toBe(true);
+    await page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').hover();
     await page.getByRole('button', { name: '收起成员', exact: true }).click();
     expect(await page.locator('.layout-reveal-leave-active').evaluateAll(elements =>
       elements.every(element => (element as HTMLElement).inert))).toBe(true);
@@ -577,9 +578,11 @@ test('聚焦网格和成员折叠只覆盖聊天，保留历史阅读位置与�
   await input.fill('覆盖布局保留草稿');
   const original = await list.elementHandle();
   const before = await list.boundingBox();
+  const readingAnchor = page.locator('[data-message-id="history-30"]');
+  const anchorBefore = await readingAnchor.boundingBox();
   await sharing(page, ['A', 'B']);
   const unchanged = async () => {
-    await expect.poll(() => list.evaluate(element => element.scrollTop)).toBe(500);
+    await expect.poll(async () => (await readingAnchor.boundingBox())!.y).toBeCloseTo(anchorBefore!.y, 0);
     const after = await list.boundingBox();
     expect(Math.abs(after!.y - before!.y)).toBeLessThan(1);
     expect(Math.abs(after!.height - before!.height)).toBeLessThan(1);
@@ -597,7 +600,7 @@ test('聚焦网格和成员折叠只覆盖聊天，保留历史阅读位置与�
     await expect(settings).toHaveCSS('clip-path', 'inset(0px)');
     await expect(page.locator('.app-content')).toHaveCSS('visibility', 'hidden');
     expect(await list.evaluate(element => element.getBoundingClientRect().height)).toBeCloseTo(before!.height, 0);
-    expect(await list.evaluate(element => element.scrollTop)).toBe(500);
+    expect((await readingAnchor.boundingBox())!.y).toBeCloseTo(anchorBefore!.y, 0);
     await page.getByRole('button', { name: '返回应用', exact: true }).click();
     await unchanged();
     await expect(separator).toHaveAttribute('aria-valuenow', viewingHeight!);
@@ -610,6 +613,59 @@ test('聚焦网格和成员折叠只覆盖聊天，保留历史阅读位置与�
   await page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').hover();
   await page.getByRole('button', { name: '退出观看', exact: true }).click();
   await unchanged();
+  const firstMessage = page.locator('[data-message-id="history-0"]');
+  for (const focused of [false, true]) {
+    if (focused) await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+    await list.evaluate(element => element.scrollTo({ top: 0, behavior: 'instant' }));
+    await expect.poll(async () => {
+      const first = await firstMessage.boundingBox();
+      const overlay = await page.locator('.voice-panel').boundingBox();
+      return first!.y >= overlay!.y + overlay!.height;
+    }).toBe(true);
+    await expect(firstMessage).toBeInViewport();
+  }
+});
+
+test('入退语音在历史顶部、中部和底部都保持消息与输入框的相对位置', async ({ page }) => {
+  await page.route('**/api/groups/viewing-group-0/messages**', route => route.fulfill({ json: {
+    messages: Array.from({ length: 80 }, (_, index) => ({ id: 'history-' + index, senderUserId: user.id,
+      senderNickname: user.nickname, type: 'TEXT', content: `历史消息 ${index}，随输入框移动。`,
+      createdAt: new Date(Date.UTC(2026, 9, 10, 0, 0, index)).toISOString(), attachment: null })), hasMore: false,
+  } }));
+  await page.reload();
+  await expect(page.locator('[data-message-id]')).toHaveCount(80);
+  const list = page.locator('.message-list');
+  const anchor = page.locator('[data-message-id="history-30"]');
+  const composer = page.locator('.composer');
+  const input = page.getByRole('textbox', { name: '消息内容' });
+  await input.fill('进入语音不丢阅读位置');
+  const original = await input.elementHandle();
+  for (const position of [0, 800, Number.MAX_SAFE_INTEGER]) {
+    await list.evaluate(async (element, top) => {
+      element.scrollTo({ top: element.scrollHeight, behavior: 'instant' });
+      await new Promise(requestAnimationFrame);
+      await new Promise(requestAnimationFrame);
+      element.scrollTo({ top, behavior: 'instant' });
+      await new Promise(requestAnimationFrame);
+      await new Promise(requestAnimationFrame);
+    }, position);
+    const before = (await anchor.boundingBox())!.y - (await composer.boundingBox())!.y;
+    const composerBefore = (await composer.boundingBox())!.y;
+    await page.getByRole('button', { name: /^观看测试，/ }).dblclick();
+    await expect(page.getByTestId('participant-card')).toHaveCount(9);
+    await expect(page.locator('.callbar-enter-active')).toHaveCount(0);
+    await expect.poll(async () => Math.abs((await anchor.boundingBox())!.y
+      - (await composer.boundingBox())!.y - before)).toBeLessThan(2);
+    expect((await composer.boundingBox())!.y).toBeLessThan(composerBefore - 20);
+    await expect(page.locator('.chat-jump')).toHaveCount(0);
+    await page.getByRole('button', { name: '离开语音', exact: true }).click();
+    await expect(page.getByTestId('callbar')).toHaveCount(0);
+    await expect(page.locator('.voice-panel')).toHaveCount(0);
+    await expect.poll(async () => Math.abs((await anchor.boundingBox())!.y
+      - (await composer.boundingBox())!.y - before)).toBeLessThan(2);
+    await expect(input).toHaveValue('进入语音不丢阅读位置');
+    expect(await original!.evaluate(element => element.isConnected)).toBe(true);
+  }
 });
 
 test('观看默认高度和拖动上限一致，缩窗保留偏好且不遮住必要操作', async ({ page }) => {

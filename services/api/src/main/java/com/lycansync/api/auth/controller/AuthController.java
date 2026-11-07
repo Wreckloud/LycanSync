@@ -51,7 +51,7 @@ public class AuthController {
     }
 
     @PutMapping("/me")
-    @Operation(summary = "修改昵称、头像和个性签名", description = "提交裁剪后的 PNG/JPEG data URL，最多 2 MiB、1024×1024；服务器统一为 256×256 PNG；签名选填，最多 120 个字符，省略时保留原值")
+    @Operation(summary = "修改昵称、头像和个性签名", description = "提交裁剪后的 PNG/JPEG data URL，最多 2 MiB、1024×1024；服务器统一为 256×256 PNG；签名选填，最多 40 个字符，省略时保留原值")
     public AuthUser update(@AuthenticationPrincipal AuthenticatedUser user,
                            @Valid @RequestBody ProfileUpdateRequest request) {
         return profileService.update(user, request);
