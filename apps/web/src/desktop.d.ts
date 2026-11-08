@@ -55,6 +55,7 @@ interface DetectedActivity {
   type: 'GAME' | 'MUSIC';
   name: string;
   startedAt: string;
+  windowIds?: string[];
 }
 
 interface ActivityMapping {

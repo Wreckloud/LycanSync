@@ -52,6 +52,7 @@ pub fn snapshot(wanted_pids: &HashSet<u32>) -> Result<Vec<WindowSnapshot>, Strin
             if pid != 0 {
                 enumeration.windows.push(WindowSnapshot {
                     pid,
+                    window_id: (window.0 as usize).to_string(),
                     title: String::from_utf16_lossy(&title[..length as usize]),
                     visible,
                     selectable,

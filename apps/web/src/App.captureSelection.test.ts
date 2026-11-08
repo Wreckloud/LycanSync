@@ -49,6 +49,7 @@ function setup(mode: NativeScreenAudioMode = 'process') {
     nativeSourceChooser: undefined, nativeSourceChooserGeneration: 0, nativeSourceRefreshTimer: undefined,
     nativeSourceChooserOpenedAt: 0, nativeSourcePreviewReported: false,
     lastCaptureSourceType: 'window', lastNativeSelection: undefined, currentNativeDiscoveryId: '',
+    captureGameWindowIds: ref<string[] | null>(null), requestedGameWindowIds: null,
     clearTimeout, canSelectNativeSource, readScreenShareQuality, saveScreenShareQuality, readScreenShareAudioPreference,
     saveScreenShareAudioPreference, resolveNativeScreenAudioCapability, shouldShareAudioInNativeSelection,
     createNativeVideoSourceSelection: () => {
@@ -97,6 +98,7 @@ describe('选窗准备', () => {
       nativeSourceRefresh: undefined as { promise: Promise<void> } | undefined,
       nativeSourceChooserGeneration: 2, nativeSourceChooser: chooser, currentNativeDiscoveryId: '',
       nativeSourceChooserOpenedAt: performance.now(), captureRequest, lastNativeSelection: undefined,
+      captureGameWindowIds: ref<string[] | null>(null),
       selectedCaptureSourceId: ref(''), captureSourceType: ref('window'), captureSourceNotice: ref(''),
       nativeSourceLoading: ref(true), nativeSourceError: ref(''), loadNativeSourceThumbnails: vi.fn() };
     sandbox.nativeSourceRefresh = { promise: oldRequest.then(() => { sandbox.nativeSourceRefresh = undefined; }) };

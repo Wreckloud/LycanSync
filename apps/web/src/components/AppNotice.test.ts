@@ -42,7 +42,7 @@ it('新提示重新计时，销毁后不再触发关闭事件', async () => {
   const f = fixture();
   try {
     await vi.advanceTimersByTimeAsync(3000);
-    f.props.message = '已开始录制';
+    f.props.message = '录像已保存';
     await nextTick();
     await vi.advanceTimersByTimeAsync(1000);
     expect(f.notice.visible.value).toBe(true);

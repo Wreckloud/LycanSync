@@ -43,6 +43,22 @@ function fixture(enabled = true) {
   return { monitor, children, readers, activities, timers, reply, activity };
 }
 
+test('游戏窗口身份只接受有界数字句柄，音乐不附带窗口信息', () => {
+  const { monitor, children, readers, activities } = fixture();
+  const configurationId = children[0].commands.findLast(command => command.method === 'configure').requestId;
+  const send = (windowIds, activityType = 'GAME') => readers[0].emit('line', JSON.stringify({ configurationId,
+    activityType, activityName: '游戏', startedAtEpochSeconds: Math.floor(Date.now() / 1000), windowIds }));
+  try {
+    send(['12', '12', '34']);
+    assert.deepEqual(activities.at(-1).windowIds, ['12', '34']);
+    const count = activities.length;
+    for (const invalid of [['0'], ['-1'], ['window:123'], [123], Array(33).fill('12')]) send(invalid);
+    assert.equal(activities.length, count);
+    send(['12'], 'MUSIC');
+    assert.equal(activities.at(-1).windowIds, undefined);
+  } finally { monitor.stop(); }
+});
+
 test('采集分类只查所选程序，不受当前动态影响，也不暴露路径给动态订阅者', async () => {
   const { monitor, children, activities, reply, activity } = fixture();
   try {

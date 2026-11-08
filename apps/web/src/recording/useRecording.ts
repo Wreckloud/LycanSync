@@ -67,9 +67,7 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
     const code = next.error ?? next.replay?.error;
     // 仅提示已确认的新状态，不把初次读取的历史录像当成本次操作成功。
     if (statusLoaded && !code) {
-      if (next.phase === 'recording' && state.value.phase !== 'recording') {
-        successNotice.value = { message: '已开始录制' };
-      } else if (next.saved && (!state.value.saved || next.recordingId !== state.value.recordingId)) {
+      if (next.saved && (!state.value.saved || next.recordingId !== state.value.recordingId)) {
         successNotice.value = { message: '录像已保存到本地录像' };
       } else if (next.replay?.phase === 'buffering' && state.value.replay?.phase !== 'buffering') {
         successNotice.value = { message: '即时回放已开启' };

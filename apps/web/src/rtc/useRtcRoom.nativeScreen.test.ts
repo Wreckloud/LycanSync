@@ -1,4 +1,4 @@
-import { effectScope } from 'vue';
+import { computed, effectScope, watch } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalAudioTrack, Track } from 'livekit-client';
 import { useRtcRoom } from './useRtcRoom';
@@ -414,6 +414,30 @@ function configureNativeScreenDesktop(options: {
 }
 
 describe('native screen share wiring', () => {
+  it('远端取消订阅先发事件再清空轨道时，同步观察者不会缓存旧播放轨道', async () => {
+    configureNativeMicrophoneDesktop();
+    const track = { sid: 'remote-microphone' };
+    const publication = { track: track as typeof track | undefined };
+    rtcMocks.initialRemoteParticipants.push({ identity: 'remote', getTrackPublication: () => publication });
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    const tracks = scope.run(() => {
+      const current = computed(() => rtc.participants.value.filter(participant => participant.identity === 'remote')
+        .map(participant => participant.getTrackPublication(Track.Source.Microphone)?.track));
+      watch(current, () => {}, { flush: 'sync' });
+      return current;
+    })!;
+    try {
+      expect(await rtc.join('unsubscribe-order')).toBe(true);
+      expect(tracks.value).toEqual([track]);
+      // LiveKit 在 setTrack(undefined) 之前同步通知取消订阅。
+      mockRoom().emit('trackUnsubscribed', track, publication);
+      publication.track = undefined;
+      await Promise.resolve();
+      expect(tracks.value).toEqual([undefined]);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
   it('游戏自动跟随只切换共享声音来源，保留视频发布和麦克风，手动关声音后不自动重开', async () => {
     configureNativeScreenDesktop({ screenAudio: true });
     rtcMocks.selectedSources.mockResolvedValue({ sourceId: 'window:1:0', shareAudio: true,

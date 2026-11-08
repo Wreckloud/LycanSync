@@ -8,9 +8,9 @@ import type { RtcRoomSummary } from './rtc/roomSummaryApi';
 
 const script = parse(readFileSync(new URL('./App.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('App.ts', script, ts.ScriptTarget.Latest, true);
-const functionNames = ['applyDetectedActivity', 'sendHeartbeat', 'flushPresenceHeartbeats', 'changePresenceMode', 'stopPresenceHeartbeat', 'prepareLogout', 'reportOfflineBeforeClose', 'updateOwnPresenceStatus',
+const functionNames = ['applyDetectedActivity', 'sendHeartbeat', 'flushPresenceHeartbeats', 'changePresenceMode', 'stopPresenceHeartbeat', 'prepareLogout', 'reportOfflineBeforeClose', 'updateOwnPresenceStatus', 'confirmPresenceInteraction',
   'refreshOnActivation', 'handlePresenceNetworkRestored', 'refreshGroupPresences', 'leaveVoice'];
-const variableNames = ['PRESENCE_IDLE_TIMEOUT_MS', 'activityRevision', 'activitySnapshotRevision', 'removeActivityListener',
+const variableNames = ['PRESENCE_IDLE_TIMEOUT_MS', 'presenceIdleRequest', 'presenceRecovery', 'activityRevision', 'activitySnapshotRevision', 'removeActivityListener',
   'fetchedRoomSummary', 'roomSummary', 'groupHasVoiceActivity'];
 const callbacks = sourceFile.statements.filter((statement) => {
   if (ts.isFunctionDeclaration(statement)) return Boolean(statement.name && functionNames.includes(statement.name.text));
@@ -31,7 +31,20 @@ function deferred<T>() {
 
 async function settle() { for (let turn = 0; turn < 4; turn++) await nextTick(); }
 
+it('游戏快捷共享的本机窗口身份不会进入公开心跳', async () => {
+  const f = setup();
+  try {
+    f.app.applyDetectedActivity({ type: 'GAME', name: '游戏', startedAt: '2026-11-08T00:00:00Z', windowIds: ['123'] });
+    await settle();
+    expect(f.state.sendPresenceHeartbeat).toHaveBeenCalledWith('ONLINE', { type: 'GAME', name: '游戏' },
+      expect.any(AbortSignal), { showActivity: true, showLastOnline: true });
+  } finally { f.stop(); }
+});
+
 function setup() {
+  let clock = 0;
+  class TestElement { closest() { return this; } }
+  class TestKeyboardEvent { repeat = false; key = 'a'; }
   const scope = effectScope();
   const initialActivity = deferred<DetectedActivity | null>();
   const leaving = deferred<void>();
@@ -77,17 +90,19 @@ function setup() {
   // 正式 App 回调、派生状态和监听；RTC/系统闲置/活动/HTTP 边界受控，不连接房间或设备。
   const sandbox = {
     ...state, desktop, showingJoinedGroup, publicPresenceStatus, computed, watch, onScopeDispose, AbortController, AbortSignal, clearInterval,
+    performance: { now: () => clock }, Element: TestElement, KeyboardEvent: TestKeyboardEvent,
     document: { visibilityState: 'visible' }, useRoomSummary: () => rawSummary,
   };
   const app = scope.run(() => runInNewContext(`${compiled}\n({ ${functionNames.join(', ')}, roomSummary, groupHasVoiceActivity })`, sandbox)) as {
     applyDetectedActivity: (activity: DetectedActivity | null) => void; stopPresenceHeartbeat: () => void;
+    confirmPresenceInteraction: (event: Event) => void;
     updateOwnPresenceStatus: () => Promise<void>; refreshOnActivation: () => void; handlePresenceNetworkRestored: () => void;
     sendHeartbeat: () => Promise<void>; changePresenceMode: (mode: 'online' | 'invisible') => Promise<void>;
     prepareLogout: () => { showActivity: boolean; showLastOnline: boolean }; reportOfflineBeforeClose: () => Promise<void>;
     refreshGroupPresences: (groupId: string, generation: number, signal: AbortSignal) => Promise<boolean>;
     leaveVoice: () => void; roomSummary: { value: RtcRoomSummary | null }; groupHasVoiceActivity: (groupId: string) => boolean;
   };
-  return { scope, state: sandbox, app, desktop, rawSummary, leaving, initialActivity, removeActivityListener,
+  return { advanceClock: (ms: number) => { clock += ms; }, interact: (trusted = true) => app.confirmPresenceInteraction({ isTrusted: trusted, target: new TestElement() } as unknown as Event), scope, state: sandbox, app, desktop, rawSummary, leaving, initialActivity, removeActivityListener,
     notifyActivity: (activity: DetectedActivity | null) => activityListener(activity),
     stop: () => { app.stopPresenceHeartbeat(); scope.stop(); } };
 }
@@ -197,8 +212,8 @@ it('成员快照的名单变化立即复核资料，仅状态变化不重复加�
   } finally { stop(); }
 });
 
-it('闲置五分钟或锁屏判离开，恢复输入立即判在线，查询失败保留原状态', async () => {
-  const { state, app, desktop, stop } = setup();
+it('闲置五分钟或锁屏判离开，持续输入确认后判在线，查询失败保留原状态', async () => {
+  const { state, app, desktop, stop, advanceClock } = setup();
   try {
     desktop.getSystemIdleState.mockResolvedValueOnce({ state: 'active', idleSeconds: 300 });
     await app.updateOwnPresenceStatus();
@@ -210,6 +225,8 @@ it('闲置五分钟或锁屏判离开，恢复输入立即判在线，查询失�
     await app.updateOwnPresenceStatus();
     expect(state.currentPresenceStatus.value).toBe('AWAY');
     await app.updateOwnPresenceStatus();
+    expect(state.currentPresenceStatus.value).toBe('AWAY');
+    for (let i = 0; i < 3; i++) { advanceClock(2000); await app.updateOwnPresenceStatus(); }
     expect(state.currentPresenceStatus.value).toBe('ONLINE');
     desktop.getSystemIdleState.mockResolvedValueOnce({ state: 'locked', idleSeconds: 0 });
     await app.updateOwnPresenceStatus();
@@ -313,6 +330,7 @@ it('首次心跳等待偏好，恢复隐身后活动与闲置变化不能公开�
     reading.resolve();
     await sending;
     expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('OFFLINE', null, expect.any(AbortSignal), { showActivity: state.showActivity.value, showLastOnline: state.showLastOnline.value });
+    state.currentPresenceStatus.value = 'ONLINE';
     desktop.getSystemIdleState.mockResolvedValueOnce({ state: 'active', idleSeconds: 0 });
     await app.changePresenceMode('online');
     expect(state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('ONLINE', { type: 'MUSIC', name: '歌曲' }, expect.any(AbortSignal), { showActivity: state.showActivity.value, showLastOnline: state.showLastOnline.value });
@@ -449,4 +467,40 @@ it('占用查询失败保留最后人数并结束等待，下一轮能够重试'
   pending[1].resolve([{ groupId: 'group', participantCount: 0 }]);
   await retrying;
   expect(state.roomOccupancies.value.group).toBe(0);
+});
+
+it('单次误触后等待不会恢复在线，连续采样同一次输入也不累计', async () => {
+  const f = setup();
+  try {
+    f.state.currentPresenceStatus.value = 'AWAY';
+    await f.app.updateOwnPresenceStatus();
+    for (let seconds = 1; seconds <= 8; seconds++) {
+      f.advanceClock(1000);
+      f.desktop.getSystemIdleState.mockResolvedValueOnce({ state: 'active', idleSeconds: seconds });
+      await f.app.updateOwnPresenceStatus();
+    }
+    expect(f.state.currentPresenceStatus.value).toBe('AWAY');
+    expect(f.state.sendPresenceHeartbeat).not.toHaveBeenCalled();
+  } finally { f.stop(); }
+});
+
+it('可信应用操作立即恢复，但不会解除隐身；迟到的闲置查询不能覆盖操作', async () => {
+  const f = setup();
+  try {
+    f.state.currentPresenceStatus.value = 'AWAY';
+    f.interact(false);
+    expect(f.state.currentPresenceStatus.value).toBe('AWAY');
+    f.state.presenceMode.value = 'invisible';
+    const pending = deferred<{ state: string; idleSeconds: number }>();
+    f.desktop.getSystemIdleState.mockReturnValueOnce(pending.promise);
+    const reading = f.app.updateOwnPresenceStatus();
+    f.interact();
+    expect(f.state.currentPresenceStatus.value).toBe('ONLINE');
+    expect(f.state.presenceMode.value).toBe('invisible');
+    pending.resolve({ state: 'locked', idleSeconds: 500 });
+    await reading;
+    await settle();
+    expect(f.state.currentPresenceStatus.value).toBe('ONLINE');
+    expect(f.state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('OFFLINE', null, expect.any(AbortSignal), expect.any(Object));
+  } finally { f.stop(); }
 });

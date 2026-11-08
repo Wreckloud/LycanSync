@@ -419,11 +419,13 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         }, SPEAKER_REFRESH_INTERVAL_MS);
       };
       [
-        RoomEvent.TrackSubscribed, RoomEvent.TrackUnsubscribed,
+        RoomEvent.TrackSubscribed,
         RoomEvent.TrackMuted, RoomEvent.TrackUnmuted,
         RoomEvent.ParticipantAttributesChanged,
         RoomEvent.AudioPlaybackStatusChanged,
       ].forEach((event) => currentRoom.on(event, refresh));
+      // SDK 先发取消订阅事件，再清空 publication.track；同步重读会缓存旧播放轨道。
+      currentRoom.on(RoomEvent.TrackUnsubscribed, () => queueMicrotask(refresh));
       currentRoom.on(RoomEvent.TrackSubscribed, (_track, publication) => {
         if (activeRoom.value === currentRoom && publication.source === Track.Source.ScreenShare) {
           syncScreenShareViewing(publication);

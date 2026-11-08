@@ -16,7 +16,8 @@ const compiled = ts.transpile(source.statements.filter(statement => !ts.isImport
 afterEach(() => vi.unstubAllGlobals());
 
 function setup(width = 1280, right = 1000) {
-  const props = reactive({ desktop: true, connected: true, choosingSource: false, sharing: true, shareBusy: false, shareLimitReached: false, quality: 'standard' as ScreenShareQualityId });
+  const props = reactive({ desktop: true, connected: true, choosingSource: false, sharing: true, shareBusy: false, shareLimitReached: false, quality: 'standard' as ScreenShareQualityId,
+    shortcutsReady: true, shortcutsBusy: false, shortcutsSupported: true, pushToTalkBinding: '' });
   const focus = vi.fn();
   const inputs = [{ value: 'standard', checked: false }, { value: 'custom', checked: true }];
   const root = { contains: (target: unknown) => target === 'inside', closest: () => ({ getBoundingClientRect: () => ({ top: 700 }) }),
@@ -28,11 +29,12 @@ function setup(width = 1280, right = 1000) {
   const scope = effectScope();
   // 执行正式菜单回调，仅替换 DOM 边界；不连接房间、采集或启动客户端。
   const controls = scope.run(() => runInNewContext(`${compiled}\n({ root, menu, qualityOpen, qualityPlacement,
-    toggleMenu, toggleQuality, chooseQuality, escape, dismiss, dismissAfterFocus, prepareShare, scheduleShareIntent, cancelShareIntent })`, {
+    recordingOpen, toggleRecordingMenu, changeVoiceMode, toggleMenu, toggleQuality, chooseQuality, escape, dismiss, dismissAfterFocus, prepareShare, scheduleShareIntent, cancelShareIntent })`, {
     setTimeout, clearTimeout,
     ref, watch, nextTick, onScopeDispose, document, window, onMounted: () => {}, defineProps: () => props,
     withDefaults: (value: unknown) => value, defineEmits: () => emit, DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY,
   })) as { root: Ref<unknown>; menu: Ref<string | null>; qualityOpen: Ref<boolean>; qualityPlacement: Ref<string>;
+    recordingOpen: Ref<boolean>; toggleRecordingMenu(): Promise<void>; changeVoiceMode(mode: string): void;
     toggleMenu(kind: string, event: unknown): Promise<void>; toggleQuality(): Promise<void>; chooseQuality(id: string): void;
     escape(event: unknown): void; dismiss(event: unknown): void; dismissAfterFocus(event: unknown): void;
     prepareShare(): void; scheduleShareIntent(): void; cancelShareIntent(): void };
@@ -158,7 +160,7 @@ it('共享菜单仅在回放已开启时提供保存，正在录像不限制保�
       sharing: true, shareBusy: false, choosingSource: false, shareLimitReached: false,
       quality: 'standard', shareAudio: false, audioMode: 'process', replayActive, recordingActive, replaySaving,
     });
-    app.mixin({ created() { Object.assign(this.$.setupState, { menu: 'share' }); } });
+    app.mixin({ created() { Object.assign(this.$.setupState, { menu: 'share', recordingOpen: true }); } });
     const html = await renderToString(app);
     if (!replayActive) expect(html).not.toContain('保存回放');
     else {
@@ -167,4 +169,41 @@ it('共享菜单仅在回放已开启时提供保存，正在录像不限制保�
       expect(button?.includes('disabled')).toBe(replaySaving);
     }
   }
+});
+
+it('未绑定按键时收起菜单再交给设置入口，已绑定时留在菜单，忙碌或不支持时不切换', async () => {
+  const f = setup();
+  try {
+    await f.controls.toggleMenu('microphone', { currentTarget: f.opener });
+    f.controls.changeVoiceMode('pushToTalk');
+    expect(f.controls.menu.value).toBeNull();
+    expect(f.emit).toHaveBeenLastCalledWith('voiceMode', 'pushToTalk', f.opener);
+    f.props.pushToTalkBinding = 'F2';
+    await f.controls.toggleMenu('microphone', { currentTarget: f.opener });
+    f.controls.changeVoiceMode('pushToTalk');
+    expect(f.controls.menu.value).toBe('microphone');
+    f.emit.mockClear();
+    f.props.shortcutsBusy = true;
+    f.controls.changeVoiceMode('voice');
+    f.props.shortcutsBusy = false;
+    f.props.shortcutsSupported = false;
+    f.controls.changeVoiceMode('pushToTalk');
+    expect(f.emit).not.toHaveBeenCalled();
+  } finally { f.scope.stop(); }
+});
+
+it('录制子菜单与画质互斥，Esc 返回入口并恢复焦点', async () => {
+  const f = setup();
+  try {
+    await f.controls.toggleMenu('share', { currentTarget: f.opener });
+    await f.controls.toggleQuality();
+    await f.controls.toggleRecordingMenu();
+    expect(f.controls.qualityOpen.value).toBe(false);
+    expect(f.controls.recordingOpen.value).toBe(true);
+    f.controls.escape({ stopPropagation: vi.fn() });
+    await nextTick();
+    expect(f.controls.recordingOpen.value).toBe(false);
+    expect(f.controls.menu.value).toBe('share');
+    await vi.waitFor(() => expect(f.root.querySelector).toHaveBeenLastCalledWith('.call-recording-trigger'));
+  } finally { f.scope.stop(); }
 });

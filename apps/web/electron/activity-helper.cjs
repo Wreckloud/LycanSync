@@ -11,7 +11,10 @@ function normalizeActivity(value) {
   const startedAt = value.startedAtEpochSeconds * 1000;
   if (!name || name.length > 80 || /[\u0000-\u001f\u007f]/.test(name)
       || startedAt <= 0 || startedAt > Date.now() + 60_000) return undefined;
-  return { type: value.activityType, name, startedAt: new Date(startedAt).toISOString() };
+  if (value.windowIds !== undefined && (!Array.isArray(value.windowIds) || value.windowIds.length > 32
+      || value.windowIds.some(id => typeof id !== 'string' || !/^[1-9]\d{0,19}$/.test(id)))) return undefined;
+  return { type: value.activityType, name, startedAt: new Date(startedAt).toISOString(),
+    ...(value.activityType === 'GAME' && value.windowIds ? { windowIds: [...new Set(value.windowIds)] } : {}) };
 }
 
 function validExecutable(value) {

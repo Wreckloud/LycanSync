@@ -202,6 +202,7 @@ fn write_activity(activity: Option<&DetectedActivity>, configuration_id: u64) {
         "activityType": activity.map(|activity| activity.kind),
         "activityName": activity.map(|activity| activity.name.as_str()),
         "startedAtEpochSeconds": activity.map(|activity| activity.started_at),
+        "windowIds": activity.map(|activity| &activity.window_ids),
     }));
 }
 

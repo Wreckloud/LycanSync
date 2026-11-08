@@ -7,6 +7,8 @@ import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, SCREEN_SHARE_QUALITIES, screenShar
 import ScreenShareCustomQuality from './ScreenShareCustomQuality.vue';
 import ExpandSection from './ExpandSection.vue';
 import type { NativeScreenAudioMode } from '../rtc/nativeScreenAudioMode';
+import type { VoiceMode } from '../settings/useAudioShortcuts';
+import InlineFeedback from './InlineFeedback.vue';
 
 const props = withDefaults(defineProps<{
   connected: boolean; desktop: boolean;
@@ -18,16 +20,20 @@ const props = withDefaults(defineProps<{
   recordingActive?: boolean; recordingBusy?: boolean; recordingElapsed?: string;
   replayActive?: boolean; replaySaving?: boolean; replayError?: boolean;
   customQuality?: CustomScreenShareQuality;
+  voiceMode?: VoiceMode; pushToTalkBinding?: string; shortcutsReady?: boolean; shortcutsBusy?: boolean; shortcutsSupported?: boolean;
+  processingEnabled?: boolean; processingPartial?: boolean; microphoneError?: string;
 }>(), { customQuality: () => ({ ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY }) });
 const emit = defineEmits<{
   microphone: []; listening: []; share: []; prepareShare: []; changeSource: []; shareAudio: [enabled: boolean];
   quality: [quality: ScreenShareQualityId, customQuality?: CustomScreenShareQuality]; inputGain: [volume: number]; outputVolume: [volume: number];
   settings: [opener: HTMLElement]; recording: []; recordingSettings: [opener: HTMLElement]; saveReplay: [];
+  voiceMode: [mode: VoiceMode, opener: HTMLElement]; processing: [enabled: boolean];
 }>();
 type ControlMenu = 'microphone' | 'output' | 'share';
 const root = ref<HTMLElement | null>(null);
 const menu = ref<ControlMenu | null>(null);
 const qualityOpen = ref(false);
+const recordingOpen = ref(false);
 const qualityPlacement = ref<'right' | 'compact'>('compact');
 const menuMaxHeight = ref(520);
 let opener: HTMLButtonElement | null = null;
@@ -49,6 +55,7 @@ function scheduleShareIntent() {
 function closeMenu(restoreFocus = false) {
   menu.value = null;
   qualityOpen.value = false;
+  recordingOpen.value = false;
   if (restoreFocus) opener?.focus();
 }
 
@@ -66,6 +73,7 @@ async function toggleMenu(kind: ControlMenu, event: Event) {
   if (menu.value === kind) { closeMenu(true); return; }
   opener = event.currentTarget as HTMLButtonElement;
   qualityOpen.value = false;
+  recordingOpen.value = false;
   menu.value = kind;
   resizeMenu();
   await nextTick();
@@ -85,9 +93,34 @@ function openAudioSettings() {
   if (returnFocus) emit('settings', returnFocus);
 }
 
+function changeVoiceMode(mode: VoiceMode) {
+  if (props.shortcutsBusy || !props.shortcutsReady || !opener) return;
+  if (mode === 'pushToTalk' && !props.shortcutsSupported) return;
+  const returnFocus = opener;
+  if (mode === 'pushToTalk' && !props.pushToTalkBinding) closeMenu();
+  emit('voiceMode', mode, returnFocus);
+}
+
+function toggleProcessing(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const enabled = input.checked;
+  input.checked = !!props.processingEnabled;
+  emit('processing', enabled);
+}
+
+async function toggleRecordingMenu() {
+  const opening = !recordingOpen.value;
+  recordingOpen.value = opening;
+  qualityOpen.value = false;
+  await nextTick();
+  if (menu.value === 'share' && recordingOpen.value === opening) root.value?.querySelector<HTMLElement>(opening
+    ? '.call-recording-menu button' : '.call-recording-trigger')?.focus();
+}
+
 function chooseSource() { closeMenu(true); emit('changeSource'); }
 function toggleShare() { closeMenu(true); emit('share'); }
 async function toggleQuality() {
+  recordingOpen.value = false;
   const opening = !qualityOpen.value;
   qualityOpen.value = opening;
   await nextTick();
@@ -113,6 +146,7 @@ function escape(event: KeyboardEvent) {
   if (!menu.value) return;
   event.stopPropagation();
   if (qualityOpen.value) void toggleQuality();
+  else if (recordingOpen.value) void toggleRecordingMenu();
   else closeMenu(true);
 }
 
@@ -150,6 +184,16 @@ onScopeDispose(() => {
             <i v-for="segment in levelSegments" :key="segment" :class="{ 'is-active': segment * 100 / levelSegments.length <= inputLevelPercent }" />
           </div>
         </div>
+        <div class="call-voice-mode" role="group" aria-label="发言模式">
+          <button type="button" :aria-pressed="voiceMode !== 'pushToTalk'" :disabled="shortcutsBusy || !shortcutsReady"
+            @click="changeVoiceMode('voice')">自由发言</button>
+          <button type="button" :aria-pressed="voiceMode === 'pushToTalk'" :disabled="shortcutsBusy || !shortcutsReady || !shortcutsSupported"
+            :title="shortcutsSupported ? pushToTalkBinding || '设置按键说话快捷键' : '仅支持 Windows 桌面客户端'"
+            @click="changeVoiceMode('pushToTalk')">按键说话<small v-if="pushToTalkBinding">{{ pushToTalkBinding }}</small></button>
+        </div>
+        <label class="call-share-audio"><span>智能声音处理</span><input type="checkbox" :checked="processingEnabled"
+          :indeterminate="processingPartial" :aria-checked="processingPartial ? 'mixed' : !!processingEnabled" :disabled="microphoneBusy" @change="toggleProcessing" /></label>
+        <InlineFeedback :message="microphoneError" />
         <button type="button" class="call-settings-entry" @click="openAudioSettings"><Settings :size="15" />语音设置<ChevronRight :size="14" /></button>
       </section>
       </Transition>
@@ -179,12 +223,12 @@ onScopeDispose(() => {
         :disabled="!connected || choosingSource" @click="toggleMenu('share', $event)"><ChevronDown :size="13" :class="{ 'is-open': menu === 'share' }" /></button>
       <Transition name="surface-panel">
       <div v-if="menu === 'share'" class="call-share-menu" :class="{ 'is-compact': qualityPlacement === 'compact' }">
-        <section v-show="!qualityOpen || qualityPlacement !== 'compact'" class="call-control-menu call-share-actions" aria-label="共享选项">
+        <section v-show="(!qualityOpen && !recordingOpen) || qualityPlacement !== 'compact'" class="call-control-menu call-share-actions" aria-label="共享选项">
           <header>屏幕共享</header>
           <button type="button" class="call-menu-action" :class="{ 'is-danger': sharing }" :disabled="shareBusy || shareLimitReached" @click="toggleShare">
             <MonitorX v-if="sharing" :size="15" /><MonitorUp v-else :size="15" />{{ sharing ? '停止共享' : '开始共享' }}</button>
           <button v-if="sharing && desktop" type="button" class="call-menu-action" :disabled="shareBusy" @click="chooseSource">更改共享<ChevronRight class="call-menu-chevron" :size="14" /></button>
-          <template v-if="desktop">
+          <template v-if="desktop && sharing">
             <button type="button" class="call-menu-action call-quality-trigger" :aria-expanded="qualityOpen" :disabled="shareBusy" @click="toggleQuality">
               共享画质<span>{{ SCREEN_SHARE_QUALITIES.find(preset => preset.id === quality)?.label }}</span><ChevronRight class="call-menu-chevron" :size="14" /></button>
             <label v-if="sharing" class="call-share-audio"><span>共享音频</span><input type="checkbox" :checked="shareAudio" :disabled="shareBusy || shareAudioRestricted || audioMode === 'unavailable'"
@@ -195,12 +239,18 @@ onScopeDispose(() => {
           </template>
           <button v-if="desktop && sharing" type="button" class="call-menu-action" :disabled="recordingBusy || shareAudioRestricted"
             @click="closeMenu(true); emit('recording')">{{ recordingActive ? `停止录制 · ${recordingElapsed}` : '开始录制' }}</button>
-          <button v-if="desktop && sharing && replayActive" type="button" class="call-menu-action"
+          <button v-if="desktop" type="button" class="call-menu-action call-recording-trigger" :aria-expanded="recordingOpen" @click="toggleRecordingMenu">录制与回放<ChevronRight class="call-menu-chevron" :size="14" /></button>
+        </section>
+        <Transition :name="qualityPlacement === 'right' ? 'surface-side' : 'surface-panel'">
+        <section v-if="recordingOpen" class="call-control-menu call-quality-menu call-recording-menu" aria-label="录制与回放">
+          <button v-if="qualityPlacement === 'compact'" type="button" class="call-menu-action call-quality-back" aria-label="返回共享选项" @click="toggleRecordingMenu"><ChevronLeft :size="14" /></button>
+          <header>录制与回放</header>
+          <button v-if="sharing && replayActive" type="button" class="call-menu-action"
             :disabled="recordingBusy || replaySaving || replayError || shareAudioRestricted"
             @click="closeMenu(true); emit('saveReplay')">{{ replaySaving ? '正在保存回放…' : '保存回放' }}</button>
-          <button v-if="desktop" type="button" class="call-menu-action" @click="emit('recordingSettings', opener!); closeMenu()">录制设置<ChevronRight class="call-menu-chevron" :size="14" /></button>
-          <button type="button" class="call-settings-entry" @click="openAudioSettings"><Settings :size="15" />语音设置<ChevronRight :size="14" /></button>
+          <button type="button" class="call-menu-action" @click="emit('recordingSettings', opener!); closeMenu()">录制设置<ChevronRight class="call-menu-chevron" :size="14" /></button>
         </section>
+        </Transition>
         <Transition :name="qualityPlacement === 'right' ? 'surface-side' : 'surface-panel'">
         <section v-if="qualityOpen" class="call-control-menu call-quality-menu" aria-label="共享画质">
           <button v-if="qualityPlacement === 'compact'" type="button" class="call-menu-action call-quality-back" aria-label="返回共享选项" @click="toggleQuality"><ChevronLeft :size="14" /></button>
@@ -240,6 +290,10 @@ onScopeDispose(() => {
 .call-input-level > div { display: grid; grid-template-columns: repeat(16, 1fr); gap: 3px; height: 10px; }
 .call-input-level i { border-radius: 2px; background: var(--panel-soft); }
 .call-input-level i.is-active { background: var(--accent); }
+.call-voice-mode { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 3px; border-radius: 6px; background: var(--panel); }
+.call-voice-mode button { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px; min-width: 0; min-height: 32px; padding: 4px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
+.call-voice-mode button[aria-pressed='true'] { background: var(--panel-soft); color: var(--text); }
+.call-voice-mode small { font-size: 11px; overflow-wrap: anywhere; }
 .call-menu-action, .call-settings-entry { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 6px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text); font-size: 13px; text-align: left; cursor: pointer; }
 .call-menu-action:hover:not(:disabled), .call-settings-entry:hover { background: var(--panel-soft); }
 .call-menu-chevron, .call-settings-entry > svg:last-child { margin-left: auto; }

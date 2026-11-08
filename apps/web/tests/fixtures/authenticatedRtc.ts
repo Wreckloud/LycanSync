@@ -97,6 +97,10 @@ export async function installAuthenticatedRtc(context: BrowserContext) {
   contexts.set(context, user);
   await context.route('**/api/**', async (route) => {
     const url = new URL(route.request().url());
+    if (url.pathname === '/api/presence/heartbeat') {
+      await route.fulfill({ status: 204 });
+      return;
+    }
     try {
       const result = await api(url.pathname + url.search, route.request().postData() ?? '', user);
       await route.fulfill({ json: result });

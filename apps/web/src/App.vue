@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onScopeDispose, provide, reactive, ref, 
 import { ACCOUNT_CACHE, clearOtherAccountContentCaches, createAccountCache } from './cache/localCache';
 import { useNotice } from './feedback/useNotice';
 import { useInitialLoading } from './profile/useInitialLoading';
-import { ArrowLeft, AudioLines, Copy, CornerUpLeft, Headphones,
+import { ArrowLeft, AudioLines, Copy, CornerUpLeft, Gamepad2, Headphones, MonitorUp,
   LoaderCircle, LogOut, Minus, Plus, RadioTower,
   Settings, Square, UserRound, Volume2, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
@@ -41,13 +41,13 @@ import { useAudioPreferences, type AudioVolumeChange } from './rtc/useAudioPrefe
 import { entranceSoundToFile, loadEntranceSound } from './rtc/entranceSound';
 import { useCallSounds } from './rtc/useCallSounds';
 import { normalizeVoiceLevel } from './rtc/voiceLevel';
-import { PRESENCE_STATUS_LABELS, sendPresenceHeartbeat, type UserActivity, type UserPresenceStatus } from './presence/presenceApi';
+import { PRESENCE_STATUS_LABELS, sendPresenceHeartbeat, type UserPresenceStatus } from './presence/presenceApi';
 import { usePresencePreference, type PresenceMode } from './presence/usePresencePreference';
 import { ApiRequestError, type AuthUser, type ProfileUpdate } from './auth/authApi';
 import type { SettingsSectionId } from './settings/settingsSections';
 import { usePresenceVisibility } from './settings/usePresenceVisibility';
 import { useActivityMappings } from './settings/useActivityMappings';
-import { useAudioShortcuts } from './settings/useAudioShortcuts';
+import { useAudioShortcuts, type VoiceMode } from './settings/useAudioShortcuts';
 import { useCallSoundPreferences } from './settings/useCallSoundPreferences';
 import ScreenShareWindows from './components/ScreenShareWindows.vue';
 import RemoteControlRequest from './components/RemoteControlRequest.vue';
@@ -105,6 +105,8 @@ const captureCustomQuality = ref<CustomScreenShareQuality>({ ...DEFAULT_CUSTOM_S
 const selectedCaptureSourceId = ref('');
 const captureFollowGameAvailable = ref(false);
 const captureSourceNotice = ref('');
+const captureGameWindowIds = ref<string[] | null>(null);
+let requestedGameWindowIds: string[] | null = null;
 const capturePicker = ref<InstanceType<typeof ScreenSharePicker> | null>(null);
 const captureSourcesElement = computed(() => capturePicker.value?.sourcesElement);
 let lastCaptureSourceType: 'window' | 'screen' = 'window';
@@ -142,7 +144,9 @@ let nativeThumbnailRefresh: { generation: number; promise: Promise<void> } | und
 const nativeSourceLoading = ref(false);
 const nativeSourceError = ref('');
 const captureSources = computed(() => captureRequest.value?.sources
-  .filter((source) => source.type === captureSourceType.value) ?? []);
+  .filter((source) => source.type === captureSourceType.value)
+  .sort((left, right) => Number(!!right.windowId && !!captureGameWindowIds.value?.includes(right.windowId))
+    - Number(!!left.windowId && !!captureGameWindowIds.value?.includes(left.windowId))) ?? []);
 function stopNativeSourceRefresh() {
   // IPC 无法在页面侧取消；使本次选择失效，迟到结果不能改写下次打开的选择器。
   nativeSourceChooserGeneration++;
@@ -214,7 +218,14 @@ async function refreshNativeSources(
         captureSourceNotice.value = '共享来源已重新连接，请重新选择。';
       }
       currentNativeDiscoveryId = snapshot.discoveryId;
-      if (firstSnapshot && lastNativeSelection?.discoveryId === snapshot.discoveryId
+      if (firstSnapshot && captureGameWindowIds.value !== null) {
+        const candidates = options.filter((source) => source.type === 'window' && source.windowId
+          && captureGameWindowIds.value?.includes(source.windowId)
+          && currentActivity.value?.type === 'GAME' && currentActivity.value.windowIds?.includes(source.windowId));
+        selectedCaptureSourceId.value = candidates.length === 1 ? candidates[0]!.id : '';
+        captureSourceNotice.value = candidates.length === 1 ? '' : candidates.length > 1
+          ? '找到了多个游戏窗口，请选择要共享的画面。' : '未找到可共享的游戏窗口，请恢复游戏窗口或手动选择。';
+      } else if (firstSnapshot && lastNativeSelection?.discoveryId === snapshot.discoveryId
           && options.some((source) => source.id === lastNativeSelection?.sourceId && source.type === captureSourceType.value)) {
         selectedCaptureSourceId.value = lastNativeSelection.sourceId;
       }
@@ -282,6 +293,7 @@ function selectCaptureSource(sourceId: string | null, captureSettings?: ScreenSh
     lastNativeSelection = { discoveryId: currentNativeDiscoveryId, sourceId };
   }
   captureRequest.value = null;
+  captureGameWindowIds.value = null;
   const chooser = nativeSourceChooser;
   nativeSourceChooser = undefined;
   stopNativeSourceRefresh();
@@ -334,7 +346,8 @@ function requestNativeScreenSource(
   captureAudioCapabilityFailed.value = false;
   captureAudioMode.value = 'unavailable';
   captureShareAudio.value = false;
-  captureSourceType.value = lastCaptureSourceType;
+  captureGameWindowIds.value = requestedGameWindowIds;
+  captureSourceType.value = captureGameWindowIds.value !== null ? 'window' : lastCaptureSourceType;
   selectedCaptureSourceId.value = '';
   captureSourceNotice.value = '';
   currentNativeDiscoveryId = '';
@@ -492,6 +505,8 @@ let roomOccupancyRequest: AbortController | null = null;
 let joinAttempt = 0;
 let presenceHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let presenceIdleTimer: ReturnType<typeof setInterval> | null = null;
+let presenceIdleRequest = 0;
+let presenceRecovery: { startedAt: number; lastInputAt: number; samples: number } | null = null;
 let presenceAbort: AbortController | null = null;
 let presenceStopped = false;
 const currentPresenceStatus = ref<UserPresenceStatus>('ONLINE');
@@ -505,7 +520,18 @@ const presenceSyncError = ref('');
 let presenceSending: Promise<void> | null = null;
 let presenceHeartbeatPending = false;
 let presenceModeChange = 0;
-const currentActivity = ref<(UserActivity & { startedAt: string }) | null>(null);
+const currentActivity = ref<DetectedActivity | null>(null);
+const currentGame = computed(() => desktop && currentActivity.value?.type === 'GAME' ? currentActivity.value : null);
+const gameShareBusy = computed(() => !connected.value || !!captureRequest.value || screenShareLimitReached.value
+  || rtc.busySources.includes(Track.Source.ScreenShare) || rtc.screenShareQualityBusy || rtc.screenShareSourceBusy);
+async function shareCurrentGame() {
+  if (!currentGame.value || gameShareBusy.value) return;
+  requestedGameWindowIds = [...(currentGame.value.windowIds ?? [])];
+  try {
+    if (rtc.screenShareActive) await recording.withSourceChange(before => rtc.changeScreenShareSource(before));
+    else await rtc.toggleMedia(Track.Source.ScreenShare);
+  } finally { requestedGameWindowIds = null; }
+}
 const { showActivity, showLastOnline, error: activityVisibilityError, setShowActivity, setShowLastOnline } = usePresenceVisibility(props.user.id);
 const activityMappings = useActivityMappings(props.user.id, desktop);
 const sharedActivity = computed(() => showActivity.value && presenceMode.value === 'online' ? currentActivity.value : null);
@@ -596,13 +622,42 @@ async function reportOfflineBeforeClose() {
 defineExpose({ prepareLogout });
 
 async function updateOwnPresenceStatus() {
+  const request = ++presenceIdleRequest;
+  const sampledAt = performance.now();
   const systemIdle = await desktop?.getSystemIdleState().catch(() => null);
   // 系统查询失败时保留上次状态，下一轮重试，不能据此判定用户已经恢复操作。
-  if (presenceStopped || (desktop && (!systemIdle || systemIdle.state === 'unknown'))) return;
+  if (presenceStopped || request !== presenceIdleRequest) return;
+  if (desktop && (!systemIdle || systemIdle.state === 'unknown')) { presenceRecovery = null; return; }
   const nextStatus = systemIdle && (systemIdle.state === 'idle' || systemIdle.state === 'locked'
     || systemIdle.idleSeconds >= PRESENCE_IDLE_TIMEOUT_MS / 1000) ? 'AWAY' : 'ONLINE';
+  if (nextStatus === 'AWAY' || currentPresenceStatus.value !== 'AWAY') presenceRecovery = null;
+  else if (systemIdle) {
+    // 闲置秒数会取整；只有新的输入时间明显前进，才算另一轮操作。
+    const lastInputAt = sampledAt - systemIdle.idleSeconds * 1000;
+    if (systemIdle.idleSeconds > 2) { presenceRecovery = null; return; }
+    if (!presenceRecovery || lastInputAt - presenceRecovery.lastInputAt > 4000) {
+      presenceRecovery = { startedAt: sampledAt, lastInputAt, samples: 1 };
+      return;
+    }
+    if (lastInputAt - presenceRecovery.lastInputAt <= 1000) return;
+    presenceRecovery.lastInputAt = lastInputAt;
+    presenceRecovery.samples++;
+    if (sampledAt - presenceRecovery.startedAt < 6000 || presenceRecovery.samples < 3) return;
+    presenceRecovery = null;
+  }
   if (nextStatus === currentPresenceStatus.value) return;
   currentPresenceStatus.value = nextStatus;
+  void sendHeartbeat();
+}
+
+function confirmPresenceInteraction(event: Event) {
+  if (!event.isTrusted || presenceStopped || document.visibilityState === 'hidden'
+      || currentPresenceStatus.value !== 'AWAY') return;
+  if (event instanceof KeyboardEvent && (event.repeat || ['Shift', 'Control', 'Alt', 'Meta'].includes(event.key))) return;
+  if (!(event.target instanceof Element) || !event.target.closest('button, a[href], input, textarea, [contenteditable="true"], [role="button"]')) return;
+  presenceIdleRequest++;
+  presenceRecovery = null;
+  currentPresenceStatus.value = 'ONLINE';
   void sendHeartbeat();
 }
 
@@ -831,6 +886,8 @@ onMounted(() => {
   window.addEventListener('online', handlePresenceNetworkRestored);
   window.addEventListener('offline', handlePresenceNetworkLost);
   document.addEventListener('visibilitychange', handleVisibilityChange);
+  document.addEventListener('click', confirmPresenceInteraction, true);
+  document.addEventListener('keydown', confirmPresenceInteraction, true);
   presenceIdleTimer = setInterval(() => void updateOwnPresenceStatus(), PRESENCE_IDLE_CHECK_INTERVAL_MS);
   groupListRefreshTimer = setInterval(() => {
     if (document.visibilityState !== 'hidden') void refreshGroups(false, false);
@@ -864,6 +921,8 @@ onScopeDispose(() => {
   window.removeEventListener('online', handlePresenceNetworkRestored);
   window.removeEventListener('offline', handlePresenceNetworkLost);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
+  document.removeEventListener('click', confirmPresenceInteraction, true);
+  document.removeEventListener('keydown', confirmPresenceInteraction, true);
   stopGroupPresenceSync();
   roomOccupancyRequest?.abort();
   stopPresenceHeartbeat();
@@ -1384,6 +1443,23 @@ function updateInputGain(volume: number) {
   if (audioPreferences.setInputGain(volume)) rtc.setMicrophoneInputGain(inputGain.value);
 }
 
+const supportedMicrophoneProcessing = computed(() => [audioPreferences.processing.noiseSuppression,
+  audioPreferences.processing.autoGainControl, audioPreferences.processing.voiceEnhancement,
+  ...(desktop ? [] : [audioPreferences.processing.echoCancellation])]);
+const microphoneProcessingEnabled = computed(() => supportedMicrophoneProcessing.value.every(Boolean));
+const microphoneProcessingPartial = computed(() => !microphoneProcessingEnabled.value && supportedMicrophoneProcessing.value.some(Boolean));
+function updateMicrophoneProcessing(enabled: boolean) {
+  if (audioPreferences.setProcessing({ echoCancellation: enabled, noiseSuppression: enabled,
+    autoGainControl: enabled, voiceEnhancement: enabled })) void rtc.setMicrophoneProcessing(audioPreferences.processing);
+}
+function updateVoiceMode(mode: VoiceMode, opener: HTMLElement) {
+  if (mode === 'pushToTalk' && !audioShortcuts.bindings.pushToTalk) {
+    void openSettings('shortcuts', opener);
+    return;
+  }
+  void audioShortcuts.setVoiceMode(mode);
+}
+
 function updateOutputVolume(volume: number) {
   audioPreferences.setOutputVolume(volume);
 }
@@ -1442,7 +1518,9 @@ function participantListening(participant: Participant) {
       </div>
       <div v-else class="window-actions" aria-hidden="true"><span><Minus :size="14" /></span><span><Square :size="11" /></span><span><X :size="14" /></span></div>
     </header>
+    <Transition name="app-notice-motion" mode="out-in" appear @before-leave="($event as HTMLElement).inert = true">
     <AppNotice v-if="appNotice" :key="appNotice.id" :message="appNotice.message" :kind="appNotice.kind" @dismiss="dismissAppNotice" />
+    </Transition>
     <DialogTransition>
     <RemoteControlRequest v-if="rtc.remoteControlRequest" :key="rtc.remoteControlRequest.requestId"
       :name="previewParticipantName(rtc.remoteControlRequest.identity,
@@ -1556,10 +1634,14 @@ function participantListening(participant: Participant) {
                       :microphone-enabled="rtc.microphoneEnabled" :microphone-intent="rtc.microphoneIntent" :microphone-busy="rtc.busySources.includes(Track.Source.Microphone)"
                       :microphone-level="localMicrophoneLevel" :input-level-percent="localInputLevelPercent"
                       :listening="listening" :input-gain="inputGain" :output-volume="outputVolume"
-                      :sharing="Boolean(localParticipant?.isScreenShareEnabled)" :share-limit-reached="screenShareLimitReached" :choosing-source="Boolean(captureRequest)"
+                      :voice-mode="audioShortcuts.voiceMode" :push-to-talk-binding="audioShortcuts.bindings.pushToTalk"
+                      :shortcuts-ready="audioShortcuts.ready" :shortcuts-busy="audioShortcuts.busy" :shortcuts-supported="audioShortcuts.supported"
+                      :processing-enabled="microphoneProcessingEnabled" :processing-partial="microphoneProcessingPartial" :microphone-error="audioShortcuts.error"
+                      @voice-mode="updateVoiceMode" @processing="updateMicrophoneProcessing"
+                      :sharing="rtc.screenShareActive" :share-limit-reached="screenShareLimitReached" :choosing-source="Boolean(captureRequest)"
                       :share-busy="rtc.busySources.includes(Track.Source.ScreenShare) || rtc.screenShareQualityBusy || rtc.screenShareSourceBusy"
-                      :quality="localParticipant?.isScreenShareEnabled ? rtc.currentScreenShareQuality : captureQuality"
-                      :custom-quality="localParticipant?.isScreenShareEnabled ? rtc.currentCustomScreenShareQuality : captureCustomQuality"
+                      :quality="rtc.screenShareActive ? rtc.currentScreenShareQuality : captureQuality"
+                      :custom-quality="rtc.screenShareActive ? rtc.currentCustomScreenShareQuality : captureCustomQuality"
                       :share-audio="sharingAudio" :audio-mode="rtc.currentScreenShareAudioMode"
                       :share-audio-restricted="rtc.screenShareAudioRestricted"
                       :recording-active="recording.active.value" :recording-busy="recording.busy.value" :recording-elapsed="recording.elapsed.value"
@@ -1585,6 +1667,14 @@ function participantListening(participant: Participant) {
             :error="groupError" :connection-lost="presenceConnectionLost" :status="memberOnlineStatus"
             :status-label="memberStatusLabel" :activity="memberActivity" :presences="groupPresences" />
         <aside v-else class="members-directory members-directory-empty" aria-label="群组成员" />
+        <div class="personal-footer">
+        <div v-if="currentGame" class="current-game-share" aria-label="当前游戏">
+          <Gamepad2 :size="22" aria-hidden="true" />
+          <span :title="currentGame.name">{{ currentGame.name }}</span>
+          <IconButton :label="connected ? `共享 ${currentGame.name}` : '加入语音后共享游戏'" :disabled="gameShareBusy"
+            :title="connected ? `共享 ${currentGame.name}` : '加入语音后共享游戏'"
+            @click="shareCurrentGame"><MonitorUp :size="18" /></IconButton>
+        </div>
         <div v-if="settingsPresented" class="personal-card-space" aria-hidden="true" />
         <Teleport to="body" :disabled="!settingsPresented">
         <PersonalStatusCard :user="user" :status="publicPresenceStatus" :status-label="personalPresenceLabel"
@@ -1600,6 +1690,7 @@ function participantListening(participant: Participant) {
           </IconButton>
         </PersonalStatusCard>
         </Teleport>
+        </div>
         </div>
       </main>
     </div>

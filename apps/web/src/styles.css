@@ -640,7 +640,12 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .group-conversation { grid-column: 1; grid-row: 2; display: grid; grid-template-columns: minmax(0, 1fr) var(--member-panel-width); grid-template-rows: minmax(0, 1fr) auto; min-width: 0; min-height: 0; }
 .conversation-main { grid-column: 1; grid-row: 1 / span 2; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .group-conversation > .members-directory { grid-column: 2; grid-row: 1; margin-top: var(--voice-overlay-height, 0px); }
-.group-conversation > :is(.personal-card, .personal-card-space) { grid-column: 2; grid-row: 2; align-self: stretch; height: auto; min-height: calc(var(--voice-bar-height) + var(--voice-bar-bottom-space)); border-left: 1px solid var(--border); background: var(--panel-sidebar); }
+.group-conversation > .personal-footer { grid-column: 2; grid-row: 2; align-self: stretch; min-width: 0; border-left: 1px solid var(--border); background: var(--panel-sidebar); }
+.personal-footer > :is(.personal-card, .personal-card-space) { min-height: calc(var(--voice-bar-height) + var(--voice-bar-bottom-space)); }
+.current-game-share { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0 8px; padding: 8px; border-radius: 6px; background: var(--panel-raised); font-size: 13px; }
+.current-game-share > svg { flex-shrink: 0; color: var(--muted); }
+.current-game-share > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.current-game-share .icon-button { flex-shrink: 0; width: 30px; height: 30px; border: 0; }
 .participant-card:fullscreen { display: flex; flex-direction: column; background: #050608; }
 .participant-card:fullscreen .participant-media { flex: 1; min-height: 0; }
 

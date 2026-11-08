@@ -40,12 +40,12 @@ async function fixture() {
   return { recording, desktop, scope, track, publish: (next: DesktopRecordingStatus) => { status = next; listener(next); } };
 }
 
-it('开始与保存只在确认新状态后提示，周期快照不重复提示', async () => {
+it('开始录制不弹提示，保存成功提示且周期快照不重复提示', async () => {
   const f = await fixture();
   try {
     expect(f.recording.successNotice.value).toBeNull();
     await f.recording.start();
-    expect(f.recording.successNotice.value?.message).toBe('已开始录制');
+    expect(f.recording.successNotice.value).toBeNull();
     const started = f.recording.successNotice.value;
     f.publish({ ...f.recording.state.value, bytes: 1024 });
     expect(f.recording.successNotice.value).toBe(started);

@@ -19,6 +19,7 @@ pub struct ProcessSnapshot {
 
 pub struct WindowSnapshot {
     pub pid: u32,
+    pub window_id: String,
     pub title: String,
     pub visible: bool,
     pub selectable: bool,
@@ -53,6 +54,7 @@ pub struct DetectedActivity {
     pub kind: ActivityType,
     pub name: String,
     pub started_at: u64,
+    pub window_ids: Vec<String>,
     key: String,
 }
 
@@ -355,6 +357,7 @@ impl ActivityDetector {
                         kind,
                         name: default_name.clone(),
                         started_at: process.started_at,
+                        window_ids: Vec::new(),
                         key,
                     },
                     processes: HashSet::new(),
@@ -369,6 +372,25 @@ impl ActivityDetector {
         self.sessions.retain(|key, _| candidates.contains_key(key));
         for (key, candidate) in &mut candidates {
             let activity = &mut candidate.activity;
+            // 本机共享入口按进程所属窗口匹配，显示名称允许修改，不能作为采集身份。
+            if activity.kind == ActivityType::Game {
+                activity.window_ids = windows
+                    .iter()
+                    .filter(|window| {
+                        window.visible
+                            && window.selectable
+                            && !window.title.trim().is_empty()
+                            && candidate
+                                .processes
+                                .iter()
+                                .any(|(pid, _)| *pid == window.pid)
+                    })
+                    .map(|window| window.window_id.clone())
+                    .collect();
+                activity.window_ids.sort();
+                activity.window_ids.dedup();
+                activity.window_ids.truncate(32);
+            }
             // 同一游戏仍有原进程存活时保留本次启动时间，辅助进程重建不能抢占排序。
             if let Some(previous) = self.sessions.get(key)
                 && !previous.processes.is_disjoint(&candidate.processes)
@@ -429,10 +451,39 @@ mod tests {
     fn window(pid: u32, title: &str) -> WindowSnapshot {
         WindowSnapshot {
             pid,
+            window_id: pid.to_string(),
             title: title.to_owned(),
             visible: true,
             selectable: true,
         }
+    }
+
+    #[test]
+    fn game_windows_follow_process_identity_and_exclude_minimized_windows() {
+        let processes = [
+            process(1, "c:/custom.exe", 100),
+            process(2, "c:/other.exe", 200),
+        ];
+        let mappings = [ActivityMapping {
+            executable: normalize_path("c:/custom.exe"),
+            name: "自定义显示名".to_owned(),
+        }];
+        let mut windows = vec![window(1, "真实游戏窗口"), window(2, "自定义显示名")];
+        let first = select_activity(&processes, &windows, &[], &mappings).unwrap();
+        assert_eq!(first.window_ids, vec!["1"]);
+        windows.push(WindowSnapshot {
+            window_id: "3".to_owned(),
+            ..window(1, "另一个游戏窗口")
+        });
+        let multiple = select_activity(&processes, &windows, &[], &mappings).unwrap();
+        assert_eq!(multiple.window_ids, vec!["1", "3"]);
+        windows[0].selectable = false;
+        assert_eq!(
+            select_activity(&processes, &windows, &[], &mappings)
+                .unwrap()
+                .window_ids,
+            vec!["3"]
+        );
     }
     fn games() -> Vec<GameInstall> {
         vec![

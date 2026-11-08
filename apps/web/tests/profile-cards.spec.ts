@@ -45,9 +45,57 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test('游戏快捷栏随本机游戏显示，未入房不能共享，出现与消失不移动聊天输入框', async ({ page }, testInfo) => {
+  await page.route('**/src/main.ts*', async route => {
+    const original = await (await route.fetch()).text();
+    const vuePath = original.match(/from ["']([^"']*\/vue\.js[^"']*)["']/)?.[1];
+    if (!vuePath) throw new Error('未找到 Vite Vue 模块');
+    await route.fulfill({ contentType: 'text/javascript', body: `
+import { createApp } from ${JSON.stringify(vuePath)};
+import App from '/src/App.vue';
+import '/src/styles.css';
+window.lycanDesktop = {
+  getWindowVisibility:async () => true, onWindowVisibility:() => () => {},
+  onClose:() => () => {}, onViewerClosed:() => () => {},
+  getCurrentActivity:async () => null,
+  onActivityChange:listener => {
+    const callback = event => listener(event.detail);
+    window.addEventListener('test-activity', callback);
+    return () => window.removeEventListener('test-activity', callback);
+  },
+  configureActivityMappings:async () => {}, prepareCapture:async () => {},
+  getSystemIdleState:async () => ({state:'active',idleSeconds:0}),
+  getRecordingSettings:async () => ({directory:'test',applicationAudio:true,microphone:false,friends:false}),
+  getRecordingStatus:async () => ({holdingResources:false,phase:'idle',recordingId:null,startedAt:null,bytes:0,error:null,saved:false,continuing:false,applicationAudio:true}),
+  onRecordingState:() => () => {}
+};
+createApp(App, {user:${JSON.stringify(user)},windowMaximized:false,saveProfile:async profile => profile}).mount('#root');` });
+  });
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/');
+  const input = page.getByRole('textbox', { name: '消息内容', exact: true });
+  await expect(input).toBeVisible();
+  const before = (await input.boundingBox())!;
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('test-activity', {
+    detail: { type: 'GAME', name: '饥荒联机版', startedAt: new Date().toISOString(), windowIds: ['22'] },
+  })));
+  const game = page.getByLabel('当前游戏', { exact: true });
+  await expect(game).toContainText('饥荒联机版');
+  await expect(game.getByRole('button', { name: '加入语音后共享游戏' })).toBeDisabled();
+  expect((await input.boundingBox())!.y).toBe(before.y);
+  await page.screenshot({ path: testInfo.outputPath('current-game-bar.png') });
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('test-activity', {
+    detail: { type: 'MUSIC', name: '歌曲', startedAt: new Date().toISOString() },
+  })));
+  await expect(game).toHaveCount(0);
+  expect((await input.boundingBox())!.y).toBe(before.y);
+  expect(errors).toEqual([]);
+});
+
 test('底部整块资料打开菜单，编辑沿用设置且返回原入口，不改底部布局', async ({ page }) => {
   await page.goto('/');
-  const footer = page.locator('.group-conversation > .personal-card');
+  const footer = page.locator('.personal-footer > .personal-card');
   const bounds = await footer.boundingBox();
   await page.getByRole('button', { name: '个人菜单', exact: true }).click();
   const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
@@ -61,7 +109,7 @@ test('底部整块资料打开菜单，编辑沿用设置且返回原入口，�
   await expect(page.getByRole('heading', { name: '账号设置', exact: true })).toBeVisible();
   await expect(menu).toHaveCount(0);
   await page.getByRole('button', { name: '返回应用', exact: true }).click();
-  await expect(page.locator('.group-conversation > .personal-card').getByRole('button', { name: '个人菜单', exact: true })).toBeFocused();
+  await expect(page.locator('.personal-footer > .personal-card').getByRole('button', { name: '个人菜单', exact: true })).toBeFocused();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await expect(page.getByRole('heading', { name: '账号设置', exact: true })).toBeVisible();
   await expect(menu).toHaveCount(0);
@@ -204,7 +252,7 @@ test('个人面板固定在个人栏上方，切换状态不移动，窄窗可�
   const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
   await expect(menu).toHaveCSS('opacity', '1');
   const original = (await menu.boundingBox())!;
-  const footer = (await page.locator('.group-conversation > .personal-card').boundingBox())!;
+  const footer = (await page.locator('.personal-footer > .personal-card').boundingBox())!;
   expect(original.y + original.height).toBeCloseTo(footer.y - 8, 0);
   expect(original.x + original.width).toBeCloseTo(Math.min(footer.x + footer.width, page.viewportSize()!.width - 8), 0);
   const statusTrigger = menu.getByRole('button', { name: '切换在线状态', exact: true });
