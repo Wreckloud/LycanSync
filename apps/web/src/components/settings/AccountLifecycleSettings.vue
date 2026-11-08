@@ -15,6 +15,7 @@ interface LifecycleStatus {
   transferTargetId: string | null;
 }
 const status = ref<LifecycleStatus | null>(null);
+const qqBound = ref<boolean | null>(null);
 const expanded = ref<'password' | 'transfer' | 'close' | null>(null);
 const password = ref('');
 const confirmation = ref('');
@@ -32,9 +33,16 @@ async function refresh() {
   request?.abort();
   request = new AbortController();
   const current = ++revision;
+  qqBound.value = null;
+  error.value = '';
   try {
     const result = await authRequest<LifecycleStatus>('account', 'GET', undefined, request.signal);
-    if (!disposed && current === revision) status.value = result;
+    if (disposed || current !== revision) return;
+    status.value = result;
+    if (result.administrator && !result.recoveryConfigured) {
+      const binding = await authRequest<{ bound: boolean }>('qq/binding', 'GET', undefined, request.signal);
+      if (!disposed && current === revision) qqBound.value = binding.bound;
+    }
   } catch (reason) {
     if (!disposed && current === revision && !request.signal.aborted) error.value = reason instanceof Error ? reason.message : '无法读取账号状态';
   }
@@ -86,7 +94,7 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); clearSecre
     <template v-if="status?.administrator">
       <h2>服主恢复与转让</h2>
       <p v-if="status.recoveryConfigured">已设置恢复密码。无法登录时，可从欢迎页的“群组恢复”找回原账号。</p>
-      <p v-else class="recovery-warning" role="status">安全建议：请设置服主恢复密码，避免本机登录信息丢失后无法找回账号。</p>
+      <p v-else-if="qqBound === false" class="recovery-warning" role="status">安全建议：请设置服主恢复密码，避免本机登录信息丢失后无法找回账号。</p>
       <div class="button-actions">
         <button type="button" :disabled="busy || leaving" @click="toggle('password')">{{ status.recoveryConfigured ? '修改恢复密码' : '设置恢复密码' }}</button>
         <button type="button" :disabled="busy || leaving || !status.recoveryConfigured" @click="toggle('transfer')">转让服主</button>
@@ -136,7 +144,7 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); clearSecre
       </form>
     </ExpandSection>
     <InlineFeedback :message="error" :pending="busy ? '正在处理…' : ''" :status="feedback" />
-    <button v-if="error && !status" type="button" :disabled="busy" @click="refresh">重新读取</button>
+    <button v-if="error && (!status || qqBound === null && status.administrator && !status.recoveryConfigured)" type="button" :disabled="busy" @click="refresh">重新读取</button>
   </section>
 </template>
 

@@ -15,6 +15,9 @@ test('邀请模式不展示测试密码注册入口', async ({ page }) => {
 });
 
 test('仅服主显示邀请面板且生成链接只在成功后展示', async ({ page }) => {
+  let recoveryConfigured = false;
+  let qqBound = false;
+  let bindingFailed = false;
   const user = { id: 'admin', nickname: '服主', avatar: '', signature: '', administrator: true };
   await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
@@ -27,8 +30,11 @@ test('仅服主显示邀请面板且生成链接只在成功后展示', async ({
     serverName: '测试服务器', publicUrlConfigured: true, qqEnabled: false, mediaConfigured: true,
   } }));
   await page.route('**/api/auth/account', (route) => route.fulfill({ json: {
-    administrator: true, recoveryConfigured: false, ownedGroups: [], candidates: [], incomingTransfer: null, transferTargetId: null,
+    administrator: true, recoveryConfigured, ownedGroups: [], candidates: [], incomingTransfer: null, transferTargetId: null,
   } }));
+  await page.route('**/api/auth/qq/binding', route => route.fulfill(bindingFailed
+    ? { status: 503, json: { detail: '无法读取 QQ 绑定状态' } }
+    : { json: { bound: qqBound, nickname: qqBound ? '测试 QQ' : '' } }));
   await page.route('**/api/auth/access/links*', (route) => route.fulfill({ json: route.request().method() === 'POST'
     ? { record: { id: 'new-link' }, url: `https://example.com/join#token=${'a'.repeat(43)}` } : [] }));
   await page.goto('/');
@@ -46,4 +52,23 @@ test('仅服主显示邀请面板且生成链接只在成功后展示', async ({
   await page.getByRole('button', { name: '邀请新朋友', exact: true }).click();
   await expect(page.getByLabel('生成的链接')).toHaveValue(`https://example.com/join#token=${'a'.repeat(43)}`);
   await expect(page.getByRole('button', { name: '恢复成员登录', exact: true })).toBeDisabled();
+  for (const [password, bound] of [[false, true], [true, false], [true, true], [false, false]]) {
+    recoveryConfigured = password;
+    qqBound = bound;
+    await page.getByRole('button', { name: '账号设置', exact: true }).click();
+    const accountResponse = page.waitForResponse('**/api/auth/account');
+    const bindingResponse = password ? null : page.waitForResponse('**/api/auth/qq/binding');
+    await page.getByRole('button', { name: '服主管理', exact: true }).click();
+    await accountResponse;
+    if (bindingResponse) await bindingResponse;
+    await expect(recommendation).toHaveCount(password || bound ? 0 : 1);
+  }
+  bindingFailed = true;
+  await page.getByRole('button', { name: '账号设置', exact: true }).click();
+  await page.getByRole('button', { name: '服主管理', exact: true }).click();
+  await expect(page.getByText('无法读取 QQ 绑定状态', { exact: true })).toBeVisible();
+  await expect(recommendation).toHaveCount(0);
+  bindingFailed = false;
+  await page.getByRole('button', { name: '重新读取', exact: true }).click();
+  await expect(recommendation).toHaveCount(1);
 });
