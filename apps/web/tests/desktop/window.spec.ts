@@ -51,7 +51,8 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
     });
     expect(await page.locator('.message-list').evaluate((list) => {
       list.scrollTop = list.scrollHeight;
-      return list.scrollHeight > list.clientHeight && list.scrollTop > 0 && getComputedStyle(list).scrollbarWidth === 'none';
+      return list.scrollHeight > list.clientHeight && list.scrollTop > 0
+        && getComputedStyle(list, '::-webkit-scrollbar').width === '6px';
     })).toBe(true);
     const composerBounds = await page.locator('.composer').boundingBox();
     expect(composerBounds!.y + composerBounds!.height).toBeLessThanOrEqual(await page.evaluate(() => window.innerHeight));

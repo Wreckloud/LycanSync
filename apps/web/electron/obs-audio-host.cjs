@@ -1,6 +1,14 @@
 const { spawn } = require('node:child_process');
 const { win32 } = require('node:path');
 
+function readProcessingMetrics(value) {
+  if (!value || !Number.isSafeInteger(value.samples) || value.samples <= 0
+      || !['limitedSamples', 'fullScaleSamples'].every(key => Number.isSafeInteger(value[key]) && value[key] >= 0 && value[key] <= value.samples)
+      || !['inputRms', 'outputRms', 'inputPeak', 'outputPeak'].every(key => Number.isFinite(value[key]) && value[key] >= 0)) return null;
+  return { samples: value.samples, limitedSamples: value.limitedSamples, fullScaleSamples: value.fullScaleSamples,
+    inputRms: value.inputRms, outputRms: value.outputRms, inputPeak: value.inputPeak, outputPeak: value.outputPeak };
+}
+
 const ERROR_CODES = new Set(['obsAudioInitFailed', 'obsCaptureVersionUnsupported', 'microphoneModuleLoadFailed',
   'microphoneCaptureStartFailed', 'microphoneProcessingFailed', 'microphoneCapturePipeFailed',
   'microphoneCaptureStartTimedOut', 'microphoneCaptureFailed', 'microphoneDeviceUnavailable', 'invalidMicrophoneCommand']);
@@ -95,7 +103,8 @@ class ObsAudioHostManager {
         clearTimeout(request.timer); state.requests.delete(event.requestId);
         request.resolve({ framesReceived: event.framesReceived, droppedChunks: event.droppedChunks,
           sourceState: event.sourceState, sourceFrames: event.sourceFrames,
-          pushToTalk: event.pushToTalk, transmissionAllowed: event.transmissionAllowed });
+          pushToTalk: event.pushToTalk, transmissionAllowed: event.transmissionAllowed,
+          processingMetrics: readProcessingMetrics(event.processingMetrics) });
       } else if (event.event === 'statistics' && Number.isSafeInteger(event.requestId)
           && event.requestId > 0 && event.requestId <= state.sequence && !state.requests.has(event.requestId)) {
         // 诊断超时的迟到响应不改变采集状态。

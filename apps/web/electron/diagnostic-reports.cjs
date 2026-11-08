@@ -6,10 +6,15 @@ const MAX_REPORT_BYTES = 8 * 1024 * 1024;
 function parseDiagnosticReport(text) {
   if (typeof text !== 'string' || Buffer.byteLength(text) > MAX_REPORT_BYTES) throw new Error('诊断报告过大或无效。');
   const report = JSON.parse(text);
-  if (!report || report.kind !== 'lycansync-diagnostics' || ![9, 10, 11].includes(report.schemaVersion) || !Array.isArray(report.samples)
+  if (!report || report.kind !== 'lycansync-diagnostics' || ![9, 10, 11, 12].includes(report.schemaVersion) || !Array.isArray(report.samples)
       || report.samples.length > 900 || !Number.isFinite(Date.parse(report.startedAt))
       || !Number.isFinite(Date.parse(report.endedAt)) || Date.parse(report.endedAt) < Date.parse(report.startedAt)) {
     throw new Error('诊断报告无效。');
+  }
+  if (report.problemMarkers !== undefined && (!Array.isArray(report.problemMarkers) || report.problemMarkers.length > 100
+      || report.problemMarkers.some(marker => !marker || !Number.isFinite(Date.parse(marker.time))
+        || !['no-audio', 'audio-breakup', 'video-stutter', 'other'].includes(marker.category) || marker.recording !== true))) {
+    throw new Error('诊断问题标记无效。');
   }
   return report;
 }
@@ -77,6 +82,10 @@ function createDiagnosticReportStore(directory) {
     const retained = await read(screenUsage);
     const retainedTime = lastScreenActivity(retained?.report);
     const priorTime = lastScreenActivity(prior?.report);
+    // 用户在共享结束后或纯语音中标记的问题，不能被较旧的画面报告遮住。
+    const markerTime = report => Math.max(-Infinity, ...(report?.problemMarkers ?? [])
+      .map(marker => Date.parse(marker.time)).filter(Number.isFinite));
+    if (prior && markerTime(prior.report) > Math.max(retainedTime ?? -Infinity, markerTime(retained?.report))) return prior;
     return retainedTime !== null && (priorTime === null || retainedTime >= priorTime) ? retained : prior;
   }
 

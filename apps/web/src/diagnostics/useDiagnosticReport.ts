@@ -287,7 +287,13 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
     })),
     audio: snapshot.audio.map((audio) => ({ member: alias(audio.identity), source: audio.source, direction: audio.direction,
       sampleRate: numeric(audio.sampleRate), channels: numeric(audio.channels), packetsLost: numeric(audio.packetsLost),
-      jitterMs: numeric(audio.jitterMs) })),
+      jitterMs: numeric(audio.jitterMs), quality: audio.quality ? {
+        intervalMs: numeric(audio.quality.intervalMs), receivedPackets: numeric(audio.quality.receivedPackets),
+        lostPackets: numeric(audio.quality.lostPackets), lossPercent: numeric(audio.quality.lossPercent),
+        concealedSamples: numeric(audio.quality.concealedSamples), silentConcealedSamples: numeric(audio.quality.silentConcealedSamples),
+        concealmentEvents: numeric(audio.quality.concealmentEvents), concealmentPercent: numeric(audio.quality.concealmentPercent),
+        jitterBufferMs: numeric(audio.quality.jitterBufferMs),
+      } : null })),
     native: native && {
       helperVersion: label(native.helperVersion), captureBackend: label(native.captureBackend),
       state: native.state, available: native.available, sourceKind: native.sourceKind,
@@ -316,6 +322,15 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
         framesReceived: numeric(native.microphoneCapture.framesReceived),
         pushToTalk: typeof native.microphoneCapture.pushToTalk === 'boolean' ? native.microphoneCapture.pushToTalk : null,
         transmissionAllowed: typeof native.microphoneCapture.transmissionAllowed === 'boolean' ? native.microphoneCapture.transmissionAllowed : null,
+        processingMetrics: native.microphoneCapture.processingMetrics ? {
+          samples: numeric(native.microphoneCapture.processingMetrics.samples),
+          limitedSamples: numeric(native.microphoneCapture.processingMetrics.limitedSamples),
+          fullScaleSamples: numeric(native.microphoneCapture.processingMetrics.fullScaleSamples),
+          inputRms: numeric(native.microphoneCapture.processingMetrics.inputRms),
+          outputRms: numeric(native.microphoneCapture.processingMetrics.outputRms),
+          inputPeak: numeric(native.microphoneCapture.processingMetrics.inputPeak),
+          outputPeak: numeric(native.microphoneCapture.processingMetrics.outputPeak),
+        } : null,
       } : null,
       screenShareAudio: native.screenShareAudio && { state: native.screenShareAudio.state,
         sampleRate: numeric(native.screenShareAudio.sampleRate), channels: numeric(native.screenShareAudio.channels),
@@ -339,6 +354,7 @@ export function useDiagnosticReport(options: {
   const error = ref('');
   const saving = ref(false);
   const notes = ref('');
+  const problemMarkers = ref<{ time: string; category: string; recording: boolean }[]>([]);
   const automaticEnabled = ref(false);
   const discardedSamples = ref(0);
   const savedSizeBytes = ref<number | null>(null);
@@ -517,6 +533,7 @@ export function useDiagnosticReport(options: {
     sampler = createMediaDiagnosticsSampler();
     // 自动开关恢复时保留此前记录；手动开始仍明确替换上次记录。
     if (!automatic || !startedAt) {
+      problemMarkers.value = [];
       aliases.clear(); samples = []; sampleCount.value = 0; nextSegmentNumber = 1;
       sampleBytes = 0; sampleSizes = []; sampleSequence = 0; discardedSamples.value = 0;
       savedSizeBytes.value = null;
@@ -541,12 +558,21 @@ export function useDiagnosticReport(options: {
     catch { error.value = '本次自动诊断选择已生效，但无法保存；下次启动请检查开关。'; }
   }
 
+  function markProblem(category: string) {
+    if (disposed || !recording.value || !['no-audio', 'audio-breakup', 'video-stutter', 'other'].includes(category)) return;
+    const time = new Date().toISOString();
+    problemMarkers.value = [...problemMarkers.value.filter(marker => Date.parse(time) - Date.parse(marker.time) <= MAX_DURATION_MS),
+      { time, category, recording: true }].slice(-100);
+    void checkpoint(true);
+  }
+
   function createReport(notes: string) {
     const exportedSamples = samples.slice();
     if (discardedSamples.value && exportedSamples.length) {
       // 保留窗口外的基线不可冒充窗口内区间；导出副本不影响继续采样。
       const first = exportedSamples[0];
       exportedSamples[0] = { ...first, actualIntervalMs: null, nativeInterval: null, obsRenderInterval: null,
+        audio: first.audio.map(audio => ({ ...audio, quality: null })),
         streams: first.streams.map((stream) => ({ ...stream, segmentReason: 'retained-window',
           sourceFps: null, sourceIntervalMs: null, playbackFps: null, playbackIntervalMs: null, nativeInputInterval: null,
           layers: stream.layers.map((layer) => ({ ...layer, fps: null, intervalMs: null, bitrateKbps: null,
@@ -555,7 +581,7 @@ export function useDiagnosticReport(options: {
         exportedSamples[index] = { ...exportedSamples[index], elapsedMs: exportedSamples[index].elapsedMs - first.elapsedMs };
       }
     }
-    const report = { kind: 'lycansync-diagnostics', schemaVersion: 11,
+    const report = { kind: 'lycansync-diagnostics', schemaVersion: 12,
       startedAt: discardedSamples.value && exportedSamples.length ? exportedSamples[0].time : startedAt ?? new Date().toISOString(),
       endedAt: endedAt ?? new Date().toISOString(),
       stopReason: recording.value && automaticRecording ? 'automaticSnapshot' : reason.value || 'automaticEvents',
@@ -563,6 +589,8 @@ export function useDiagnosticReport(options: {
       retention: { maxSamples: MAX_SAMPLES, maxDurationMs: MAX_DURATION_MS, maxSampleBytes: MAX_SAMPLE_BYTES,
         discardedSamples: discardedSamples.value },
       sampleIntervalMs: SAMPLE_INTERVAL_MS, notes: notes.slice(0, 2000),
+      problemMarkers: problemMarkers.value.filter(marker => !discardedSamples.value || !exportedSamples.length
+        || Date.parse(marker.time) >= Date.parse(exportedSamples[0].time)),
       startSettings: discardedSamples.value && exportedSamples.length ? exportedSamples[0].requestedSettings : startSettings,
       endSettings: recording.value ? readSettings() : endSettings, samples: exportedSamples,
       summary: { segments: summarizeSegments(exportedSamples, packageInfo.version, Boolean(window.lycanDesktop)), limitations: [
@@ -573,6 +601,10 @@ export function useDiagnosticReport(options: {
       runtime: { clientVersion: packageInfo.version, desktop: Boolean(window.lycanDesktop),
         microphonePipeline: window.lycanDesktop ? 'OBS WASAPI + Sonora' : 'Chromium + browser processor' },
       measurements: {
+        audio: { scope: 'local-receiver-from-SFU', firstOrResetInterval: null,
+          concealment: 'synthesized-samples-not-a-perceptual-quality-score', jitterBuffer: 'interval-delay-per-emitted-sample-not-end-to-end',
+          microphone: 'native-48k-mono-blocks-since-last-query; RMS-and-peak-linear; limitedSamples-final-limiter-attenuation; fullScaleSamples-input-at-or-above-one-not-proof-of-hardware-clipping',
+          includesAudioContent: false },
         fps: 'counter-delta-divided-by-monotonic-elapsed-time; first-or-reset-sample-is-null',
         process: { scope: 'electron-and-owned-native-processes', memoryUnit: 'MiB',
           memoryMb: 'electron-only-sum-working-set', nativeMemory: 'GetProcessMemoryInfo; private-commit-not-resident',
@@ -631,8 +663,8 @@ export function useDiagnosticReport(options: {
 
   async function checkpoint(force = false): Promise<void> {
     const bridge = window.lycanDesktop;
-    if (!bridge?.saveDiagnosticSnapshot || !startedAt || !samples.length
-        || (force ? !samples.some(hasUsage) : !hasUsage(samples[samples.length - 1]))) return;
+    if (!bridge?.saveDiagnosticSnapshot || !startedAt || (!samples.length && !problemMarkers.value.length)
+        || (!problemMarkers.value.length && (force ? !samples.some(hasUsage) : !hasUsage(samples[samples.length - 1])))) return;
     if (checkpointPromise) {
       if (force) { await checkpointPromise; return checkpoint(true); }
       return;
@@ -679,6 +711,7 @@ export function useDiagnosticReport(options: {
       await bridge.clearSavedDiagnosticReports();
       if (disposed) return;
       aliases.clear(); streamSegments.clear(); samples = []; sampleSizes = []; sampleBytes = 0;
+      problemMarkers.value = [];
       sampleSequence = 0; nextSegmentNumber = 1; sampleCount.value = 0; discardedSamples.value = 0;
       startedAt = null; endedAt = null; startSettings = null; endSettings = null; lastSampleMonotonicAt = null;
       savedReport.value = null; persistenceError.value = ''; reason.value = ''; notes.value = '';
@@ -719,6 +752,6 @@ export function useDiagnosticReport(options: {
   if (automaticEnabled.value) start(true);
   void refreshSavedReport();
   onScopeDispose(() => { stop('closed'); disposed = true; generation++; if (timer) clearInterval(timer); });
-  return { latest, recording, automaticEnabled, discardedSamples, sampleCount, reason, error, saving, notes,
+  return { latest, recording, automaticEnabled, discardedSamples, sampleCount, reason, error, saving, notes, problemMarkers, markProblem,
     savedReport, savedSizeBytes, persistenceError, setViewing, setAutomatic, start, stop, save, savePrevious, clearSaved, flush };
 }

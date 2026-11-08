@@ -186,8 +186,7 @@ onMounted(() => {
 
 <style scoped>
 .group-entry { --entry-padding: 24px; width: min(480px, 100%); min-height: 0; max-height: calc(100dvh - 36px); overflow: clip; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); font-size: 14px; line-height: 20px; }
-.entry-viewport { position: relative; max-height: calc(100dvh - 38px); overflow-x: hidden; overflow-y: auto; padding: var(--entry-padding); scrollbar-width: none; }
-.entry-viewport::-webkit-scrollbar { display: none; }
+.entry-viewport { position: relative; max-height: calc(100dvh - 38px); overflow-x: hidden; overflow-y: auto; padding: var(--entry-padding); }
 .entry-mode-stage { position: relative; overflow: clip; }
 .entry-mode-page { display: flow-root; min-width: 0; }
 .entry-mode-leave-active { position: absolute; inset: 0 0 auto; }

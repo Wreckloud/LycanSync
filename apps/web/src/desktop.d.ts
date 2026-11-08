@@ -105,7 +105,9 @@ interface NativeCaptureDiagnostics {
   captureSuspended: boolean | null;
   microphoneCaptureDroppedChunks: number | null;
   microphoneCapture?: { sourceState: number; sourceFrames: number; framesReceived: number;
-    pushToTalk?: boolean; transmissionAllowed?: boolean } | null;
+    pushToTalk?: boolean; transmissionAllowed?: boolean;
+    processingMetrics?: { samples: number; limitedSamples: number; fullScaleSamples: number;
+      inputRms: number; outputRms: number; inputPeak: number; outputPeak: number } | null } | null;
   screenShareAudio: {
     state: 'idle' | 'starting' | 'running' | 'stopping' | 'failed';
     sessionId: string | null;

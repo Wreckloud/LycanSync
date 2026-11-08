@@ -11,6 +11,11 @@
 .settings-field input { width: 100%; min-height: 40px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font-size: 14px; }
 .settings-field select { width: 100%; }
 .settings-field input[readonly] { color: var(--muted); }
+.settings-range-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 240px); align-items: center; gap: 24px; margin-top: 16px; color: var(--text); font-size: 14px; }
+.settings-range-row span, .settings-range-row label { display: flex; justify-content: space-between; gap: 12px; }
+.settings-range-row strong { flex-shrink: 0; color: var(--accent); }
+.settings-range-row input { width: 100%; margin: 0; accent-color: var(--accent); }
+.settings-range-row select { width: 100%; }
 .settings-view :is(.settings-field input, .settings-field select, .profile-nickname input, textarea):focus { border-color: var(--subtle); outline: none; }
 .settings-toggle { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-top: 1px solid var(--border-soft); cursor: pointer; }
 .settings-toggle > span { display: grid; justify-items: start; gap: 4px; min-width: 0; text-align: left; }
@@ -26,4 +31,8 @@
 .settings-section button { font-size: 13px; }
 .settings-section button:not(:disabled):hover { background: var(--panel); border-color: var(--muted); }
 .settings-section button:disabled { opacity: .45; }
-@media (max-width: 760px) { .settings-row { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) {
+  .settings-row { grid-template-columns: minmax(0, 1fr); }
+  .settings-range-row { grid-template-columns: minmax(0, 1fr); gap: 9px; }
+  .settings-range-row input { max-width: 240px; }
+}

@@ -35,7 +35,7 @@ function fixture(context, mode = {}) {
           child.send({ event: 'configured', requestId: Number(command.split('|')[1]) });
         });
         if (command.startsWith('statistics|') && !mode.statisticsHang) queueMicrotask(() => {
-          child.send({ event: 'statistics', requestId: Number(command.split('|')[1]), framesReceived: 960, droppedChunks: 2, sourceState: 1, sourceFrames: 960, pushToTalk: false, transmissionAllowed: true });
+          child.send({ event: 'statistics', requestId: Number(command.split('|')[1]), framesReceived: 960, droppedChunks: 2, sourceState: 1, sourceFrames: 960, pushToTalk: false, transmissionAllowed: true, processingMetrics: mode.processingMetrics });
         });
       } });
       child.kill = () => { child.kills++; if (!mode.killHang) queueMicrotask(() => child.emit('close', 1)); return true; };
@@ -61,12 +61,25 @@ test('麦克风按需启动，首块确认、配置和正常停止只持有一�
   assert.deepEqual(spawns[0][1], ['C:\\obs\\win-wasapi.dll', 'C:\\obs\\data', 'C:\\app\\data\\obs-audio', pipeId, '1|111', 'default', '0']);
   assert.equal(spawns[0][2].windowsHide, true);
   assert.deepEqual(await manager.configure('voice-session', { ...settings, inputGain: 0.6 }), { changed: true });
-  assert.deepEqual(await manager.getDiagnostics('voice-session'), { framesReceived: 960, droppedChunks: 2, sourceState: 1, sourceFrames: 960, pushToTalk: false, transmissionAllowed: true });
+  assert.deepEqual(await manager.getDiagnostics('voice-session'), { framesReceived: 960, droppedChunks: 2, sourceState: 1, sourceFrames: 960, pushToTalk: false, transmissionAllowed: true, processingMetrics: null });
   assert.equal(diagnostics[0].stage, 'microphoneReady');
   assert.deepEqual(await manager.stop('voice-session'), { changed: true });
   assert.deepEqual(await manager.stop('voice-session'), { changed: false });
   assert.equal(children[0].kills, 0);
   assert.equal(manager.state, undefined);
+});
+
+test('麦克风统计只传受校验的电平计数，缺失或非法指标不终止通话', async context => {
+  const metrics = { samples: 960, limitedSamples: 120, fullScaleSamples: 0,
+    inputRms: 0.2, outputRms: 0.3, inputPeak: 0.8, outputPeak: 0.95 };
+  const mode = { processingMetrics: { ...metrics, secret: 'not-exported' } };
+  const { manager, started, failures } = fixture(context, mode);
+  await started();
+  assert.deepEqual((await manager.getDiagnostics('voice-session')).processingMetrics, metrics);
+  mode.processingMetrics.limitedSamples = 961;
+  assert.equal((await manager.getDiagnostics('voice-session')).processingMetrics, null);
+  assert.deepEqual(failures, []);
+  await manager.stop('voice-session');
 });
 
 test('启动中取消不等待设备就绪，迟到首块不能恢复旧会话', async context => {

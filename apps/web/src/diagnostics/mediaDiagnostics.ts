@@ -1,6 +1,7 @@
 import { Track, type LocalVideoTrack, type Participant, type Room } from 'livekit-client';
 import { readTrackTarget, readVideoLayers, readVideoSourceSample, type TrackTarget, type VideoLayerStats } from '../rtc/mediaStats';
 import { readNativeVideoInput } from '../rtc/nativeScreenVideo';
+import { audioCounters, readAudioQuality } from './audioQuality';
 
 export interface StreamStats {
   identity: string;
@@ -33,7 +34,8 @@ export interface MediaDiagnosticsSnapshot {
   omittedParticipants: number;
   streams: StreamStats[];
   audio: { identity: string; source: 'microphone' | 'screen_share_audio'; direction: '发送' | '接收';
-    sampleRate: number | null; channels: number | null; packetsLost: number | null; jitterMs: number | null }[];
+    sampleRate: number | null; channels: number | null; packetsLost: number | null; jitterMs: number | null;
+    quality?: ReturnType<typeof readAudioQuality> | null }[];
   process: DesktopProcessMetrics | null;
   native: NativeCaptureDiagnostics | null;
   nativeInterval: { elapsedMs: number; framesReceived: number; framesProcessed: number;
@@ -45,6 +47,7 @@ export interface MediaDiagnosticsSnapshot {
 
 /** 面板和主动记录共用同一采样器；只读现有轨道，不创建采集、订阅或房间。 */
 export function createMediaDiagnosticsSampler() {
+  const previousAudio = new Map<string, ReturnType<typeof audioCounters>>();
   const previous: Parameters<typeof readVideoLayers>[2] = new Map();
   const previousSource: Parameters<typeof readVideoSourceSample>[2] = new Map();
   const previousPlayback = new WeakMap<HTMLVideoElement, { trackId: string; frames: number; timestamp: number }>();
@@ -186,21 +189,31 @@ export function createMediaDiagnosticsSampler() {
             const settings = track.mediaStreamTrack.getSettings();
             let packetsLost: number | null = null;
             let jitterMs: number | null = null;
+            let quality: ReturnType<typeof readAudioQuality> | null = null;
             report?.forEach((stat) => {
               if (stat.type !== 'inbound-rtp' || stat.kind !== 'audio') return;
+              if (subscription.muted || subscription.enabled === false || subscription.subscribed === false) return;
+              const counters = audioCounters(stat);
+              quality = readAudioQuality(counters, previousAudio.get(track.mediaStreamTrack.id));
+              previousAudio.set(track.mediaStreamTrack.id, counters);
               if (typeof stat.packetsLost === 'number') packetsLost = stat.packetsLost;
               if (typeof stat.jitter === 'number') jitterMs = Math.round(stat.jitter * 1000);
             });
             snapshot.audio.push({ identity: participant.identity, source: source === Track.Source.Microphone
               ? 'microphone' : 'screen_share_audio', direction, sampleRate: settings.sampleRate ?? null,
-              channels: settings.channelCount ?? null, packetsLost, jitterMs });
+              channels: settings.channelCount ?? null, packetsLost, jitterMs, quality });
+            if (!quality) previousAudio.delete(track.mediaStreamTrack.id);
           }
-        } catch { snapshot.failures.push(source === Track.Source.ScreenShare ? 'videoStatsUnavailable' : 'audioStatsUnavailable'); }
+        } catch {
+          previousAudio.delete(trackId);
+          snapshot.failures.push(source === Track.Source.ScreenShare ? 'videoStatsUnavailable' : 'audioStatsUnavailable');
+        }
       }));
     }));
     // 重发布或切换来源后不保留旧轨道统计，避免记录越久缓存越大。
     for (const key of previous.keys()) if (![...activeTrackIds].some((id) => key.startsWith(id + ':'))) previous.delete(key);
     for (const key of previousSource.keys()) if (!activeTrackIds.has(key)) previousSource.delete(key);
+    for (const key of previousAudio.keys()) if (!activeTrackIds.has(key)) previousAudio.delete(key);
     for (const key of previousNativeInput.keys()) if (!activeTrackIds.has(key)) previousNativeInput.delete(key);
     const bridge = window.lycanDesktop;
     if (bridge) {

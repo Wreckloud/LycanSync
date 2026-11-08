@@ -213,8 +213,6 @@ defineExpose({ sourcesElement });
 .capture-quality-description strong { font-size: 14px; }
 .capture-quality-description span { font-size: 12px; color: var(--muted); }
 .capture-confirm { display: flex; align-items: center; gap: 12px; }
-.capture-sources { scrollbar-width: none; }
-.capture-sources::-webkit-scrollbar { display: none; }
 @media (max-width: 620px) { .capture-dialog { padding: 20px; } .capture-sources { grid-template-columns: repeat(2, minmax(0, 1fr)); } .capture-quality { align-items: stretch; flex-direction: column; gap: 8px; } }
 @media (max-width: 360px) { .capture-quality-tabs { flex-wrap: wrap; } .capture-quality-tabs button { flex-basis: 40%; } }
 </style>

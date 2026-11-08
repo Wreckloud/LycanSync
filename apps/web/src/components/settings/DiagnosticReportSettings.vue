@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from 'vue';
 import type { useDiagnosticReport } from '../../diagnostics/useDiagnosticReport';
 import InlineFeedback from '../InlineFeedback.vue';
 
@@ -6,6 +7,7 @@ const props = defineProps<{ report: ReturnType<typeof useDiagnosticReport>; canS
 const { recording, automaticEnabled, reason, error, saving, notes,
   savedReport, savedSizeBytes, persistenceError } = props.report;
 const desktop = Boolean(window.lycanDesktop);
+const problemCategory = ref('audio-breakup');
 function formatReportSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
@@ -46,6 +48,15 @@ function updateAutomatic(event: Event) {
     <label class="report-notes">体验说明（选填）
       <textarea v-model="notes" maxlength="2000" rows="2" placeholder="例如：四路观看时卡顿，单路观看恢复正常" />
     </label>
+    <div class="button-actions">
+      <select v-model="problemCategory" aria-label="问题类型">
+        <option value="no-audio">没声音</option><option value="audio-breakup">声音断续或失真</option>
+        <option value="video-stutter">画面卡顿</option><option value="other">其他问题</option>
+      </select>
+      <button type="button" :disabled="!recording || saving" @click="report.markProblem(problemCategory)">标记刚才的问题</button>
+      <span v-if="report.problemMarkers?.value.length">最近标记：{{ new Date(report.problemMarkers.value.at(-1)!.time).toLocaleTimeString() }}</span>
+    </div>
+    <p>标记点击时刻并随报告导出，不录音；请尽快标记并在体验说明中补充现象。未开启记录时无法补回此前统计。</p>
     <InlineFeedback :message="error" :pending="saving ? '正在导出报告…' : ''" />
     <InlineFeedback :message="persistenceError" />
   </section>

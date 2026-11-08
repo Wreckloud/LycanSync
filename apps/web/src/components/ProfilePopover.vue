@@ -175,7 +175,7 @@ watch(() => [props.anchor, surface.value, content.value, props.inline] as const,
       const contentHeight = body.getBoundingClientRect().height;
       if (!contentHeight) return;
       const height = `${contentHeight + 2}px`;
-      // 个人菜单和设置预览都贴底伸缩；超出可用高度时恢复正常流，保证全文可滚动到达。
+      // 个人菜单贴底、设置预览居中伸缩；超出可用高度时恢复正常流，保证全文可滚动到达。
       const availableHeight = inline ? element.parentElement!.clientHeight : parseFloat(element.style.maxHeight);
       element.classList.toggle('is-scrollable', contentHeight + 2 > availableHeight);
       if (element.style.height !== height) element.style.height = height;
@@ -237,10 +237,11 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
 .profile-popover { position: fixed; z-index: 60; width: min(292px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); text-align: left; }
 .profile-popover { box-sizing: border-box; transition: height var(--motion-layout-duration) var(--motion-ease), opacity var(--motion-surface-duration) var(--motion-ease); }
 .profile-popover.is-personal.surface-panel-enter-from, .profile-popover.is-personal.surface-panel-leave-to { transform: none; }
-.profile-popover:is(.is-personal, .is-inline):not(.is-scrollable) .profile-popover-content { position: absolute; right: 0; bottom: 0; left: 0; }
+.profile-popover.is-personal:not(.is-scrollable) .profile-popover-content { position: absolute; right: 0; bottom: 0; left: 0; }
+.profile-popover.is-inline:not(.is-scrollable) .profile-popover-content { position: absolute; top: 50%; right: 0; left: 0; transform: translateY(-50%); }
 .profile-popover:is(.is-personal, .is-inline):not(.is-scrollable) { overflow: clip; }
 .profile-popover-banner { height: 38px; background: var(--profile-tint, var(--panel-raised)); }
-.profile-popover.is-inline { position: absolute; right: 0; bottom: 0; left: 0; z-index: auto; width: 100%; max-height: 100%; overflow-y: auto; }
+.profile-popover.is-inline { position: absolute; top: 50%; right: 0; left: 0; transform: translateY(-50%); z-index: auto; width: 100%; max-height: 100%; overflow-y: auto; }
 .profile-voice-time { display: flex; align-items: center; gap: 8px; margin: 0; padding-top: 10px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 12px; line-height: 18px; }
 .profile-voice-time > svg { flex-shrink: 0; }
 .profile-voice-error { margin: 0; color: var(--muted); font-size: 12px; line-height: 18px; }

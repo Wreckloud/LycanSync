@@ -59,6 +59,42 @@ function persistenceBridge() {
   return bridge;
 }
 
+it('问题标记即时持久化并随导出保留，关闭记录不伪造之前的采样', async () => {
+  const { report, exportDiagnosticReport } = setup();
+  const bridge = persistenceBridge();
+  report.markProblem('no-audio');
+  expect(report.problemMarkers.value).toHaveLength(0);
+  report.setAutomatic(true);
+  await vi.advanceTimersByTimeAsync(0);
+  report.markProblem('audio-breakup');
+  await vi.advanceTimersByTimeAsync(0);
+  const saved = JSON.parse(vi.mocked(bridge.saveDiagnosticSnapshot).mock.calls.at(-1)![0]);
+  expect(saved.problemMarkers).toEqual([{ time: expect.any(String), category: 'audio-breakup', recording: true }]);
+  await report.save('声音短暂断续');
+  expect(JSON.parse(exportDiagnosticReport.mock.calls.at(-1)![0]).problemMarkers).toEqual(saved.problemMarkers);
+  report.setAutomatic(false);
+  report.markProblem('other');
+  expect(report.problemMarkers.value).toHaveLength(1);
+  await report.clearSaved();
+  expect(report.problemMarkers.value).toHaveLength(0);
+});
+
+it('采样失败明确留缺口，恢复后的报告保留问题时间而不制造正常样本', async () => {
+  const { report, exportDiagnosticReport } = setup();
+  report.setAutomatic(true);
+  await vi.advanceTimersByTimeAsync(0);
+  collect.mockRejectedValueOnce(new Error('simulated-disconnect'));
+  await vi.advanceTimersByTimeAsync(2000);
+  expect(report.error.value).toContain('缺口');
+  report.markProblem('no-audio');
+  await vi.advanceTimersByTimeAsync(2000);
+  await report.save('');
+  const exported = JSON.parse(exportDiagnosticReport.mock.calls.at(-1)![0]);
+  expect(exported.samples).toHaveLength(2);
+  expect(exported.samples[1].actualIntervalMs).toBe(4000);
+  expect(exported.problemMarkers).toHaveLength(1);
+});
+
 it('画面消失立即复用现有流程补存，空闲采样继续，不增加第二个采样器', async () => {
   const { report } = setup();
   const bridge = persistenceBridge();
@@ -458,7 +494,7 @@ it('导出按记录时参数保存，匿名化身份/轨道ID，不使用导出�
   expect(text).not.toContain('private-user-id'); expect(text).not.toContain('private-track-id');
   expect(text).not.toContain('私人昵称');
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(11);
+  expect(result.schemaVersion).toBe(12);
   expect(result.measurements.process).toEqual({ scope: 'electron-and-owned-native-processes', memoryUnit: 'MiB',
     memoryMb: 'electron-only-sum-working-set', nativeMemory: 'GetProcessMemoryInfo; private-commit-not-resident',
     sharedPagesMayBeCountedMoreThanOnce: true, includesGpuMemory: false, includesNativeCpu: false });
@@ -676,7 +712,7 @@ it('自动恢复失败保留最后确认帧率并在摘要提示，不把用户�
   const { report, exportDiagnosticReport } = setup();
   report.start(); await vi.advanceTimersByTimeAsync(2000); report.stop(); await report.save('');
   const result = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
-  expect(result.schemaVersion).toBe(11);
+  expect(result.schemaVersion).toBe(12);
   expect(result.samples[1].streams[0].nativeInput).toMatchObject({ requestedFrameRate: 120, captureFrameRate: 30, frameRateAdjustmentFailed: true });
   expect(result.summary.segments[0].warnings).toContain('采集帧率自动调整失败，保留最后确认的运行目标；不代表已恢复用户帧率。');
 });
@@ -712,10 +748,10 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，纹理桥丢帧只取
   report.stop(); await report.save('');
   const text = exportDiagnosticReport.mock.calls[0][0];
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(11);
+  expect(result.schemaVersion).toBe(12);
   expect(result.summary.segments).toHaveLength(1);
   expect(result.samples[0].native).toMatchObject({ helperVersion: '32.2.2', captureBackend: 'obsLibobs' });
-  expect(result.samples[0].native.microphoneCapture).toEqual({ sourceState: 1, sourceFrames: 48000, framesReceived: 47040, pushToTalk: true, transmissionAllowed: false });
+  expect(result.samples[0].native.microphoneCapture).toEqual({ sourceState: 1, sourceFrames: 48000, framesReceived: 47040, pushToTalk: true, transmissionAllowed: false, processingMetrics: null });
   expect(result.summary.segments[0]).toMatchObject({ captureMode: 'obsLibobs',
     typicalFps: { nativeCapture: 60, nativeProcessed: 45, pageReceived: 42, pageSubmitted: 40,
       encodingLayers: [{ typicalFps: 39 }] } });

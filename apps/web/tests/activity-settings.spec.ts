@@ -44,8 +44,8 @@ createApp({ render: () => h('main', { style: 'padding:32px;max-width:1000px;marg
   await expect(page.locator('.activity-name-editor')).toHaveCount(0);
   await expect(edit).toBeDisabled();
   await expect(reset).toBeDisabled();
-  const presence = page.getByRole('group', { name: '在线状态', exact: true });
-  await expect(presence.getByRole('button', { name: '在线', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const presence = page.getByRole('button', { name: '切换在线状态', exact: true });
+  await expect(presence).toContainText('在线');
   await expect(page.locator('.activity-profile-preview')).toContainText('累计已与朋友开黑了 2 小时');
   const card = page.getByRole('region', { name: '资料卡预览', exact: true });
   await expect(card.locator('.profile-popover-signature p')).toHaveCSS('height', '36px');
@@ -53,26 +53,43 @@ createApp({ render: () => h('main', { style: 'padding:32px;max-width:1000px;marg
   await expect.poll(() => card.evaluate(element => element.getAnimations().length)).toBe(0);
   const before = (await card.boundingBox())!;
   const mappingsBefore = (await page.locator('.activity-mappings').boundingBox())!;
-  const framesPromise = card.evaluate(async element => {
+  const sampleFrames = () => card.evaluate(async element => {
     const frames = [];
     for (let index = 0; index < 36; index++) {
       await new Promise(requestAnimationFrame);
       const bounds = element.getBoundingClientRect();
-      frames.push({ height: bounds.height, bottom: bounds.bottom });
+      frames.push({ height: bounds.height, centerY: bounds.y + bounds.height / 2, centerX: bounds.x + bounds.width / 2 });
     }
     return frames;
   });
-  await presence.getByRole('button', { name: '隐身', exact: true }).click();
-  await expect(presence.getByRole('button', { name: '隐身', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const triggerBounds = (await presence.boundingBox())!;
+  await page.mouse.move(triggerBounds.x + 30, triggerBounds.y + 16);
+  await page.mouse.down();
+  const presenceMenu = page.getByRole('menu', { name: '在线状态', exact: true });
+  await expect(presenceMenu).toContainText('向朋友显示在线或闲置');
+  await expect(presenceMenu).toContainText('仍可聊天、语音和共享');
+  const invisibleBounds = (await presenceMenu.getByRole('menuitemradio', { name: '隐身', exact: true }).boundingBox())!;
+  await page.mouse.move(triggerBounds.x + 30, invisibleBounds.y + 16);
+  await expect(presence).toContainText('在线');
+  const framesPromise = sampleFrames();
+  await page.mouse.up();
+  await expect(presence).toContainText('隐身');
   await expect(page.locator('.activity-profile-preview')).not.toContainText('正在玩');
   const frames = await framesPromise;
   const after = (await card.boundingBox())!;
   expect(after.height).toBeLessThan(before.height);
-  expect(after.y + after.height).toBeCloseTo(before.y + before.height, 1);
+  const centerY = before.y + before.height / 2;
+  const centerX = before.x + before.width / 2;
+  expect(after.y + after.height / 2).toBeCloseTo(centerY, 1);
+  expect(after.y).toBeGreaterThan(before.y);
   expect(frames.some(frame => frame.height > after.height + 1 && frame.height < before.height - 1)).toBe(true);
-  for (const frame of frames) expect(frame.bottom).toBeCloseTo(before.y + before.height, 1);
+  for (const frame of frames) {
+    expect(frame.centerY).toBeCloseTo(centerY, 1);
+    expect(frame.centerX).toBeCloseTo(centerX, 1);
+  }
   expect((await page.locator('.activity-mappings').boundingBox())!.y).toBe(mappingsBefore.y);
-  await presence.getByRole('button', { name: '在线', exact: true }).click();
+  await presence.click();
+  await presenceMenu.getByRole('menuitemradio', { name: '在线', exact: true }).click();
   await expect(page.locator('.activity-profile-preview')).toContainText('正在玩');
   await expect.poll(() => card.evaluate(element => element.getBoundingClientRect().height)).toBeCloseTo(before.height, 0);
   expect((await page.locator('.activity-mappings').boundingBox())!.y).toBe(mappingsBefore.y);

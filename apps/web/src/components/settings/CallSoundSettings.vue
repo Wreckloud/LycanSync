@@ -21,10 +21,9 @@ onScopeDispose(stopPreview);
   <section class="settings-block call-sound-settings">
     <h2>本机提示音</h2>
     <p>只影响这台设备的提示，不改变朋友的语音音量，也不修改发送给朋友的入场音效。</p>
-    <label class="sound-volume-row">提示音音量
+    <label class="settings-range-row"><span>提示音音量 <strong>{{ Math.round(preferences.volume.value * 100) }}%</strong></span>
       <input type="range" min="0" max="100" step="1" aria-label="提示音音量" :value="Math.round(preferences.volume.value * 100)"
         @change="preferences.setVolume(Number(($event.target as HTMLInputElement).value) / 100)" />
-      <span>{{ Math.round(preferences.volume.value * 100) }}%</span>
     </label>
     <div v-for="event in CALL_SOUND_EVENTS" :key="event.id" class="call-sound-row">
       <label><input type="checkbox" :checked="preferences.enabled[event.id]"
@@ -39,8 +38,6 @@ onScopeDispose(stopPreview);
 </template>
 
 <style scoped>
-.call-sound-row, .sound-volume-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 36px; }
-.call-sound-row label, .call-sound-settings > label { display: flex; align-items: center; gap: 8px; }
-.sound-volume-row input { flex: 1; min-width: 40px; }
-.sound-volume-row span { width: 40px; text-align: right; }
+.call-sound-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 36px; }
+.call-sound-row label, .call-sound-settings > label:not(.settings-range-row) { display: flex; align-items: center; gap: 8px; }
 </style>

@@ -29,7 +29,7 @@ describe('语音设置的本机试听入口', () => {
   it('统一处理开关按平台展示支持范围，试听排在处理之前', async () => {
     const desktop = await renderAudioSettings();
     expect(desktop).toMatch(/aria-label="智能声音处理"[^>]*checked[^>]*aria-checked="true"/);
-    expect(desktop).toContain('桌面版暂不支持回声消除');
+    expect(desktop).not.toContain('桌面版暂不支持回声消除');
     expect(desktop).not.toMatch(/<strong[^>]*>自动增益<\/strong>/);
     expect([...desktop.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map(match => match[1]))
       .toEqual(['输入', '麦克风试听', '声音处理', '输出']);

@@ -327,7 +327,8 @@ int capture(int argc, wchar_t **argv) {
           + ",\"sourceState\":" + std::to_string(calldata_int(&status, "capture_state"))
           + ",\"sourceFrames\":" + std::to_string(calldata_int(&status, "frames_received"))
           + ",\"pushToTalk\":" + (pipe.transmission.enabled() ? "true" : "false")
-          + ",\"transmissionAllowed\":" + (pipe.transmission.allowed() ? "true" : "false"));
+          + ",\"transmissionAllowed\":" + (pipe.transmission.allowed() ? "true" : "false")
+          + ",\"processingMetrics\":" + voice_filter_metrics(filter));
         calldata_free(&status);
       } else {
         configure(filter, settings);

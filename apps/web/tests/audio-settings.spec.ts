@@ -40,8 +40,8 @@ createApp({ setup() {
     await expect(page.getByTestId('applied-processing')).toHaveText('[]');
     await expect(page.getByText('已保留之前的部分处理设置，开启后统一启用。')).toBeVisible();
     await expect(page.getByRole('checkbox')).toHaveCount(2);
-    await expect(page.getByText(desktop ? '桌面版暂不支持回声消除，建议使用耳机通话。'
-      : '开启后同时请求浏览器进行回声消除。')).toBeVisible();
+    await expect(page.getByText('桌面版暂不支持回声消除，建议使用耳机通话。')).toHaveCount(0);
+    if (!desktop) await expect(page.getByText('开启后同时请求浏览器进行回声消除。')).toBeVisible();
 
     const enabled = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true };
     const disabled = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, voiceEnhancement: false };

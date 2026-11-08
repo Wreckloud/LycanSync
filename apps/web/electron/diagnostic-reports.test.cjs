@@ -38,6 +38,20 @@ function screenReport(version, lastActiveAt, ended = false) {
     samples: ended ? [sample, { time: '2026-10-26T00:10:00Z', streams: [] }] : [sample] });
 }
 
+test('重启后优先导出较新的问题标记，不能总被旧共享报告遮住', async context => {
+  const f = await fixture(context);
+  await f.store.save(screenReport('old-screen', '2026-10-26T00:05:00Z', true));
+  const marked = { ...JSON.parse(report('marked-voice')), schemaVersion: 12, endedAt: '2026-10-26T00:15:00Z',
+    problemMarkers: [{ time: '2026-10-26T00:14:00Z', category: 'no-audio', recording: true }] };
+  await f.store.save(JSON.stringify(marked));
+  const restarted = createDiagnosticReportStore(f.directory);
+  const previous = await restarted.previous();
+  assert.equal(previous.runtime.clientVersion, 'marked-voice');
+  assert.deepEqual(previous.problemMarkers, marked.problemMarkers);
+  assert.throws(() => parseDiagnosticReport(JSON.stringify({ ...marked, problemMarkers: 'invalid' })), /标记无效/);
+  assert.throws(() => parseDiagnosticReport(JSON.stringify({ ...marked, problemMarkers: Array(101).fill(marked.problemMarkers[0]) })), /标记无效/);
+});
+
 test('共享结束固定完整窗口，随后闲置、裁剪窗口及重启不会冲掉性能证据', async context => {
   const { directory, store } = await fixture(context);
   await store.save(screenReport('screen-session', '2026-10-26T00:01:00Z'));
@@ -217,15 +231,15 @@ test('自动保存失败明确拒绝并留下固定存储原因，不把磁盘�
 });
 
 
-test('手动导出与自动保存共用9至11版校验，非法报告不打开保存框', async () => {
+test('手动导出与自动保存共用9至12版校验，非法报告不打开保存框', async () => {
   const f = ipcFixture();
   const exportReport = f.handlers.get('diagnostics:export');
-  for (const schemaVersion of [9, 10, 11]) {
+  for (const schemaVersion of [9, 10, 11, 12]) {
     await exportReport({ trusted: true }, JSON.stringify({ ...JSON.parse(report('current')), schemaVersion }));
     assert.equal(f.writes.at(-1).report.schemaVersion, schemaVersion);
   }
   const opened = f.dialogOptions.length;
-  for (const schemaVersion of [8, 12]) {
+  for (const schemaVersion of [8, 13]) {
     await assert.rejects(exportReport({ trusted: true }, JSON.stringify({ ...JSON.parse(report('bad')), schemaVersion })), /无效/);
   }
   assert.equal(f.dialogOptions.length, opened);

@@ -30,6 +30,21 @@ function proxyFixture(overrides = {}) {
   return { serve, forwarded };
 }
 
+test('服主配置状态仅转发固定 GET 路径并附带会话，权限由后端复核', async () => {
+  const { serve, forwarded } = proxyFixture();
+  const path = '/api/auth/server-settings';
+  const response = await serve(new Request('lycan://app' + path));
+  assert.equal(response.status, 201);
+  assert.equal(forwarded.length, 1);
+  assert.equal(forwarded[0].url, 'https://example.test' + path);
+  assert.equal(forwarded[0].options.headers.Authorization, 'Bearer test-session');
+  for (const method of ['POST', 'PUT', 'DELETE']) {
+    assert.equal((await serve(new Request('lycan://app' + path, { method }))).status, 404);
+  }
+  assert.equal((await serve(new Request('lycan://app' + path + '/extra'))).status, 404);
+  assert.equal(forwarded.length, 1);
+});
+
 test('消息长轮询保留固定路由、认证、取消信号与长等待预算', async () => {
   const timeouts = [];
   const { serve, forwarded } = proxyFixture({ AbortSignal: {

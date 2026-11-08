@@ -12,6 +12,18 @@ pub(super) const FRAMES_PER_CHUNK: usize = 480;
 const OUTPUT_CEILING: f32 = 0.95;
 const FLOAT_S16_SCALE: f32 = 32768.0;
 
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+pub struct VoiceMetrics {
+    pub samples: u64,
+    pub limited_samples: u64,
+    pub full_scale_samples: u64,
+    pub input_energy: f64,
+    pub output_energy: f64,
+    pub input_peak: f32,
+    pub output_peak: f32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct ProcessingSettings {
     pub(super) input_gain: f32,
@@ -36,6 +48,7 @@ pub(super) struct MicrophoneProcessor {
     audio_processing: AudioProcessing,
     output_limiter: Limiter,
     current_gain: f32,
+    metrics: VoiceMetrics,
 }
 
 impl MicrophoneProcessor {
@@ -51,6 +64,7 @@ impl MicrophoneProcessor {
             audio_processing,
             output_limiter: Limiter::new(FRAMES_PER_CHUNK),
             current_gain: settings.input_gain,
+            metrics: VoiceMetrics::default(),
         }
     }
 
@@ -71,6 +85,7 @@ impl MicrophoneProcessor {
             self.audio_processing
                 .apply_config(processing_config(settings));
         }
+        self.metrics = VoiceMetrics::default();
         self.settings = settings;
     }
 
@@ -103,11 +118,26 @@ impl MicrophoneProcessor {
         }
         self.current_gain = target_gain;
         // 复用同版 Sonora 的子帧限幅器；在最后一次放大后保护输出，不再增加块延迟。
+        let before_limiter = output;
         self.output_limiter.process(&mut [&mut output[..]]);
-        for sample in &mut output {
+        for (index, sample) in output.iter_mut().enumerate() {
+            if sample.abs() + 0.01 < before_limiter[index].abs() {
+                self.metrics.limited_samples += 1;
+            }
             *sample *= OUTPUT_CEILING / FLOAT_S16_SCALE;
+            let input = clean_input[index];
+            self.metrics.input_energy += f64::from(input).powi(2);
+            self.metrics.output_energy += f64::from(*sample).powi(2);
+            self.metrics.input_peak = self.metrics.input_peak.max(input.abs());
+            self.metrics.output_peak = self.metrics.output_peak.max(sample.abs());
+            self.metrics.full_scale_samples += u64::from(input.abs() >= 1.0);
         }
+        self.metrics.samples += FRAMES_PER_CHUNK as u64;
         output
+    }
+
+    pub(super) fn take_metrics(&mut self) -> VoiceMetrics {
+        std::mem::take(&mut self.metrics)
     }
 }
 

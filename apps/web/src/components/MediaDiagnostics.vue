@@ -92,6 +92,17 @@ function formatFpsInterval(intervalMs: number | null) {
       </small>
       <small v-if="stream.direction === '发送' && stream.layers.length && stream.layers.every(layer => layer.roundTripMs === null && layer.receiverReportedLossPercent === null)">本次采样没有新的接收报告，不代表网络正常或异常。</small>
     </div>
-    <small>网络数据仅描述本机与 SFU 之间的一段；RTT 和接收缓冲等待都不是端到端画面延迟。</small>
+    <p v-if="statistics?.native?.microphoneCapture?.processingMetrics">
+      本机麦克风处理：输入峰值 {{ statistics.native.microphoneCapture.processingMetrics.inputPeak.toFixed(3) }} ·
+      输出峰值 {{ statistics.native.microphoneCapture.processingMetrics.outputPeak.toFixed(3) }} ·
+      最终限幅涉及 {{ statistics.native.microphoneCapture.processingMetrics.limitedSamples }} / {{ statistics.native.microphoneCapture.processingMetrics.samples }} 个采样。
+      此统计不证明硬件是否失真。
+    </p>
+    <div v-for="(audio, index) in (statistics?.audio ?? []).filter(audio => audio.direction === '接收')" :key="index" class="media-diagnostic-stream">
+      <b>{{ audio.source === 'microphone' ? '成员语音' : '共享声音' }} · {{ audio.direction }}</b>
+      <small>区间丢包 {{ audio.quality?.lossPercent?.toFixed(2) ?? '—' }}% · 抖动 {{ audio.jitterMs ?? '—' }} ms · 缓冲等待 {{ audio.quality?.jitterBufferMs?.toFixed(1) ?? '—' }} ms</small>
+      <small>补偿样本 {{ audio.quality?.concealmentPercent?.toFixed(2) ?? '—' }}% · 补偿事件 {{ audio.quality?.concealmentEvents ?? '—' }}。首个区间或未提供的统计显示 —，不代表零。</small>
+    </div>
+    <small>网络数据仅描述本机与 SFU 之间的一段；RTT 和接收缓冲等待都不是端到端延迟；补偿数据不能直接判断主观听感。</small>
   </aside>
 </template>

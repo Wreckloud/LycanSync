@@ -44,6 +44,7 @@ const apiRoutePolicies = new Map([
   ['POST /api/auth/access/preview', { public: true }],
   ['POST /api/auth/access/redeem', { public: true, savesSession: true }],
   ['GET /api/auth/account', {}],
+  ['GET /api/auth/server-settings', {}],
   ['POST /api/auth/account/recover', { public: true, savesSession: true }],
   ['PUT /api/auth/account/recovery-password', {}],
   ['POST /api/auth/account/transfer', {}],
@@ -2105,7 +2106,8 @@ ipcMain.handle('media:diagnostics', async (event) => {
       microphoneDrops = capture.droppedChunks;
       if (nativeMicrophoneSession === microphone && !microphone.stopping) {
         diagnostics.microphoneCapture = { sourceState: capture.sourceState, sourceFrames: capture.sourceFrames,
-          framesReceived: capture.framesReceived, pushToTalk: capture.pushToTalk, transmissionAllowed: capture.transmissionAllowed };
+          framesReceived: capture.framesReceived, pushToTalk: capture.pushToTalk, transmissionAllowed: capture.transmissionAllowed,
+          processingMetrics: capture.processingMetrics };
       }
       microphone.hostDroppedChunks = microphoneDrops;
     } catch { /* 可选统计缺失不终止语音；报告保留未知值。 */ }

@@ -74,9 +74,9 @@ function updateInputGain(event: Event) {
           <option v-for="device in microphoneDevices.devices" :key="device.id" :value="device.id">{{ device.label }}</option>
         </select>
       </label>
-      <p>指定麦克风断开后停止发声，不自动换用其他设备。</p>
       <button type="button" class="settings-button device-refresh" :disabled="microphoneDevices.loading || microphoneDevices.changing"
         @click="microphoneDevices.refresh(); audioOutput.refresh()">刷新设备</button>
+      <p>指定麦克风断开后停止发声，不自动换用其他设备。</p>
       <InlineFeedback :message="microphoneDevices.notice" />
       <div class="settings-range-row">
         <label for="settings-input-gain">麦克风输入音量 <strong>{{ Math.round(inputGain * 100) }}%</strong></label>
@@ -110,7 +110,7 @@ function updateInputGain(event: Event) {
           :aria-checked="processingPartial ? 'mixed' : processingEnabled" @change="updateProcessing" />
       </label>
       <p v-if="processingPartial">已保留之前的部分处理设置，开启后统一启用。</p>
-      <p>{{ desktop ? '桌面版暂不支持回声消除，建议使用耳机通话。' : '开启后同时请求浏览器进行回声消除。' }}</p>
+      <p v-if="!desktop">开启后同时请求浏览器进行回声消除。</p>
     </section>
     <section class="settings-block">
       <h2>输出</h2>
@@ -162,14 +162,5 @@ function updateInputGain(event: Event) {
 .settings-meter > div { display: flex; gap: 3px; height: 12px; }
 .settings-meter i { flex: 1; border-radius: 2px; background: var(--panel-raised); }
 .settings-meter i.is-active { background: var(--accent); }
-.settings-range-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 240px); align-items: center; gap: 24px; margin-top: 16px; color: var(--text); font-size: 14px; }
-.settings-range-row span, .settings-range-row label { display: flex; justify-content: space-between; gap: 12px; }
-.settings-range-row strong { flex-shrink: 0; color: var(--accent); }
-.settings-range-row input { width: 100%; margin: 0; accent-color: var(--accent); }
-.settings-range-row select { width: 100%; }
 .device-refresh { justify-self: end; padding: 6px 14px; }
-@media (max-width: 760px) {
-  .settings-range-row { grid-template-columns: minmax(0, 1fr); gap: 9px; }
-  .settings-range-row input { max-width: 240px; }
-}
 </style>

@@ -645,14 +645,15 @@ test('自己语音记录在卡片底部，动态设置左侧复用预览并跟�
   const preview = page.getByRole('region', { name: '资料卡预览', exact: true });
   await expect(preview).toBeVisible();
   await expect(preview.locator('.profile-voice-time')).toHaveText('累计已与朋友开黑了 128 小时');
-  const statusSelect = page.getByRole('group', { name: '在线状态', exact: true });
-  await expect(statusSelect.getByRole('button', { name: '在线', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const statusSelect = page.getByRole('button', { name: '切换在线状态', exact: true });
+  await expect(statusSelect).toContainText('在线');
   for (const mode of ['invisible', 'online']) {
     const heartbeat = page.waitForRequest(request => request.url().endsWith('/api/presence/heartbeat')
       && request.postDataJSON().status === (mode === 'invisible' ? 'OFFLINE' : 'ONLINE'));
-    await statusSelect.getByRole('button', { name: mode === 'invisible' ? '隐身' : '在线', exact: true }).click();
+    await statusSelect.click();
+    await page.getByRole('menuitemradio', { name: mode === 'invisible' ? '隐身' : '在线', exact: true }).click();
     await heartbeat;
-    await expect(statusSelect.getByRole('button', { name: mode === 'invisible' ? '隐身' : '在线', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(statusSelect).toContainText(mode === 'invisible' ? '隐身' : '在线');
   }
   const card = await preview.boundingBox();
   const controls = await page.locator('.activity-settings-controls').boundingBox();

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import { Check } from '@lucide/vue';
+import PresenceSettingsMenu from './PresenceSettingsMenu.vue';
 import ActivityNameDialog from '../ActivityNameDialog.vue';
 import DialogTransition from '../DialogTransition.vue';
 import InlineFeedback from '../InlineFeedback.vue';
@@ -64,14 +64,8 @@ defineExpose({ editingName });
     </label>
     <div class="settings-toggle activity-toggle activity-presence">
       <span><strong>在线状态</strong></span>
-      <div class="presence-options" role="group" aria-label="在线状态" :aria-busy="presenceSyncing || !presenceReady" aria-describedby="activity-visibility-feedback">
-        <button v-for="mode in (['online', 'invisible'] as const)" :key="mode" type="button" class="presence-option"
-          :aria-label="mode === 'online' ? '在线' : '隐身'" :aria-pressed="presenceReady && presenceMode === mode" :disabled="!presenceReady"
-          @click="emit('presenceMode', mode)">
-          <span class="presence-option-dot" :class="mode" aria-hidden="true" />{{ mode === 'online' ? '在线' : '隐身' }}
-          <Check :size="14" class="presence-option-check" aria-hidden="true" />
-        </button>
-      </div>
+      <PresenceSettingsMenu :mode="presenceMode" :ready="presenceReady" :syncing="presenceSyncing" :error="presenceError"
+        :active="active" @select="emit('presenceMode', $event)" />
     </div>
     <InlineFeedback id="activity-visibility-feedback" :message="error || presenceError" />
     <p v-if="!desktop">动态检测仅在 Windows 桌面版提供</p>

@@ -252,6 +252,9 @@ test('主动诊断记录返回应用后继续，离房结束并导出匿名报�
   await report.getByRole('button', { name: '开始记录', exact: true }).click();
   await expect(report.getByRole('status')).toContainText('记录中');
   await expect(report.getByRole('status')).not.toContainText('0 份统计');
+  await report.getByRole('combobox', { name: '问题类型' }).selectOption('video-stutter');
+  await report.getByRole('button', { name: '标记刚才的问题' }).click();
+  await expect(report).toContainText('最近标记：');
   await page.getByRole('button', { name: '返回应用', exact: true }).click();
   await page.waitForTimeout(2200);
   await page.getByRole('button', { name: '离开语音', exact: true }).click();
@@ -270,6 +273,8 @@ test('主动诊断记录返回应用后继续，离房结束并导出匿名报�
   expect(result.stopReason).toBe('roomChanged');
   expect(result.samples.length).toBeGreaterThan(1);
   expect(result.notes).toBe('合成界面回归');
+  expect(result.schemaVersion).toBe(12);
+  expect(result.problemMarkers).toEqual([{ time: expect.any(String), category: 'video-stutter', recording: true }]);
   expect(text).not.toContain('user-viewing-user');
   expect(text).not.toContain('成员A');
   expect(pageErrors).toEqual([]);
@@ -618,6 +623,8 @@ test('聚焦网格和成员折叠只覆盖聊天，保留历史阅读位置与�
     if (focused) await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
     await list.evaluate(element => element.scrollTo({ top: 0, behavior: 'instant' }));
     await expect.poll(async () => {
+      // 展开期间会补偿阅读位置，持续尝试触顶直到布局稳定后仍能看到最早消息。
+      await list.evaluate(element => element.scrollTo({ top: 0, behavior: 'instant' }));
       const first = await firstMessage.boundingBox();
       const overlay = await page.locator('.voice-panel').boundingBox();
       return first!.y >= overlay!.y + overlay!.height;

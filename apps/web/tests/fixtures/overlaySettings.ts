@@ -3,6 +3,7 @@ import OverlaySettings from '../../src/components/settings/OverlaySettings.vue';
 import { useVoiceOverlay } from '../../src/overlay/useVoiceOverlay';
 import type { VoiceOverlayBridge, VoiceOverlaySettings } from '../../src/overlay/types';
 import '../../src/styles.css';
+import '../../src/settings/settings.css';
 
 const calls: string[] = [];
 let rejectNext = false;

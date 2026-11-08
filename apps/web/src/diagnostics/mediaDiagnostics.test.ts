@@ -199,6 +199,31 @@ it('只采样有限成员并说明省略数量，音频格式和丢包读取自�
   expect(result.audio[0]).toMatchObject({ sampleRate: 48000, channels: 1, packetsLost: 3, jitterMs: 12 });
 });
 
+it('语音补偿区间在统计失败、静音和轨道移除后重新建立，避免把缺口算成正常', async () => {
+  const { room } = setup();
+  let stats = { id: 'audio-stats', timestamp: 1000, type: 'inbound-rtp', kind: 'audio',
+    packetsReceived: 100, packetsLost: 0, totalSamplesReceived: 48000, concealedSamples: 0 };
+  const track = { mediaStreamTrack: { id: 'voice-track', getSettings: () => ({}) },
+    getRTCStatsReport: vi.fn(async () => new Map([['audio', stats]])) };
+  const publication = { track, isMuted: false };
+  const remote = { identity: 'remote', name: '', getTrackPublication: (source: Track.Source) =>
+    source === Track.Source.Microphone ? publication : undefined } as unknown as Participant;
+  const sampler = createMediaDiagnosticsSampler();
+  expect((await sampler.collect(room, [remote])).audio[0].quality?.lossPercent).toBeNull();
+  stats = { ...stats, timestamp: 3000, packetsReceived: 190, packetsLost: 10, totalSamplesReceived: 144000, concealedSamples: 4800 };
+  expect((await sampler.collect(room, [remote])).audio[0].quality).toMatchObject({ lossPercent: 10, concealmentPercent: 5 });
+  track.getRTCStatsReport.mockRejectedValueOnce(new Error('unavailable'));
+  expect((await sampler.collect(room, [remote])).failures).toContain('audioStatsUnavailable');
+  stats = { ...stats, timestamp: 7000, packetsReceived: 390 };
+  expect((await sampler.collect(room, [remote])).audio[0].quality?.intervalMs).toBeNull();
+  publication.isMuted = true;
+  expect((await sampler.collect(room, [remote])).audio[0].quality).toBeNull();
+  publication.isMuted = false;
+  expect((await sampler.collect(room, [remote])).audio[0].quality?.intervalMs).toBeNull();
+  await sampler.collect(room, []);
+  expect((await sampler.collect(room, [remote])).audio[0].quality?.intervalMs).toBeNull();
+});
+
 it('无人观看时保留真实停层状态，不因bandwidth标签推断网络故障', async () => {
   const { room, local, track } = setup();
   Object.assign(track, { sender: { getParameters: () => ({ encodings: [{ active: false }] }) } });

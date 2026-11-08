@@ -1,6 +1,7 @@
 //! OBS 音频滤镜的窄 FFI：复用 Sonora，10 ms 分块，不持有设备或管道。
 
 mod processor;
+pub use processor::VoiceMetrics;
 
 use processor::{FRAMES_PER_CHUNK, MicrophoneProcessor, ProcessingSettings};
 
@@ -98,9 +99,41 @@ pub unsafe extern "C" fn lycan_voice_destroy(ptr: *mut VoiceProcessor) {
     }
 }
 
+/// # Safety
+/// ptr 与 output 独占有效且不重叠，调用者与处理回调使用同一把锁。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lycan_voice_take_metrics(
+    ptr: *mut VoiceProcessor,
+    output: *mut VoiceMetrics,
+) -> bool {
+    let (Some(state), Some(output)) = (unsafe { ptr.as_mut() }, unsafe { output.as_mut() }) else {
+        return false;
+    };
+    *output = state.processor.take_metrics();
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostic_metrics_are_bounded_summaries_and_reset_without_resetting_audio() {
+        let state = lycan_voice_create(2.0, 0, 0, 0);
+        let mut input = [0.8; 480];
+        assert!(unsafe { lycan_voice_process(state, input.as_mut_ptr(), 480) });
+        let mut metrics = VoiceMetrics::default();
+        assert!(unsafe { lycan_voice_take_metrics(state, &mut metrics) });
+        assert_eq!(metrics.samples, 480);
+        assert!(metrics.limited_samples > 0);
+        assert_eq!(metrics.full_scale_samples, 0);
+        assert!((metrics.input_peak - 0.8).abs() < 0.001);
+        assert!(metrics.output_peak <= 0.95);
+        assert!(metrics.input_energy > 0.0 && metrics.output_energy > 0.0);
+        assert!(unsafe { lycan_voice_take_metrics(state, &mut metrics) });
+        assert_eq!(metrics.samples, 0);
+        unsafe { lycan_voice_destroy(state) };
+    }
 
     #[test]
     fn variable_blocks_preserve_stream_and_user_gain_with_one_block_delay() {

@@ -51,7 +51,7 @@ onScopeDispose(() => { void props.overlay.edit(false); });
         <option value="">主窗口所在屏幕（默认）</option><option v-for="display in overlay.displays.value" :key="display.id" :value="display.id">{{ display.label }}</option>
         <option v-if="overlay.settings.value.displayId !== null && !overlay.displays.value.some((display) => display.id === overlay.settings.value.displayId)" :value="overlay.settings.value.displayId">原显示器已断开（临时使用主屏）</option>
       </select></label>
-      <label class="overlay-field"><span>整体大小 · {{ overlay.settings.value.scale }}%</span><input type="range" min="75" max="150" step="5"
+      <label class="settings-range-row"><span>整体大小 <strong>{{ overlay.settings.value.scale }}%</strong></span><input type="range" min="75" max="150" step="5"
         :value="overlay.settings.value.scale" :disabled="!overlay.ready.value || overlay.busy.value" aria-label="覆盖整体大小"
         @change="overlay.configure({ scale: Number(($event.target as HTMLInputElement).value) })" /></label>
       <div class="settings-toggle">
