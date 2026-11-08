@@ -14,7 +14,8 @@ async function renderDialog(administrator: boolean, busy = false, error = '', mo
 it('退出前说明媒体与凭据影响，区分服主和成员的恢复方式', async () => {
   const owner = await renderDialog(true, false, '', 'remove');
   expect(owner).toContain('aria-modal="true"');
-  expect(owner).toContain('将清除本机登录凭据');
+  expect(owner).toContain('将清除本机登录信息');
+  expect(owner).toContain('不会注销账号或清理聊天缓存');
   expect(owner).toContain('已保存的录像和诊断报告会保留');
   expect(owner).toContain('请先确认已在服主管理中设置恢复密码');
   expect(owner.indexOf('>取消</button>')).toBeLessThan(owner.indexOf('>清除凭据</button>'));

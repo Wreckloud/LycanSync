@@ -85,7 +85,8 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); clearSecre
   <section class="settings-block lifecycle-settings">
     <template v-if="status?.administrator">
       <h2>服主恢复与转让</h2>
-      <p>{{ status.recoveryConfigured ? '已设置恢复密码。无法登录时，可从欢迎页的“群组恢复”找回原账号。' : '尚未设置恢复密码，请在清除本机登录凭据前完成设置。' }}</p>
+      <p v-if="status.recoveryConfigured">已设置恢复密码。无法登录时，可从欢迎页的“群组恢复”找回原账号。</p>
+      <p v-else class="recovery-warning" role="status">安全建议：请设置服主恢复密码，避免本机登录信息丢失后无法找回账号。</p>
       <div class="button-actions">
         <button type="button" :disabled="busy || leaving" @click="toggle('password')">{{ status.recoveryConfigured ? '修改恢复密码' : '设置恢复密码' }}</button>
         <button type="button" :disabled="busy || leaving || !status.recoveryConfigured" @click="toggle('transfer')">转让服主</button>
@@ -142,6 +143,7 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); clearSecre
 <style scoped>
 .lifecycle-settings { display: grid; gap: 12px; }
 .lifecycle-settings p { margin: 0; color: var(--muted); line-height: 1.6; }
+.lifecycle-settings .recovery-warning { color: var(--danger); }
 .lifecycle-settings > button { justify-self: start; }
 .lifecycle-form { display: grid; gap: 12px; padding-top: 12px; max-width: 480px; }
 .account-danger { color: var(--danger); }

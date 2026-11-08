@@ -36,13 +36,13 @@ function setup(cache: AccountCache | null = null) {
   const createObjectURL = vi.fn(() => `blob:preview-${pending.length}`);
   const revokeObjectURL = vi.fn();
   // 回调可以在断开观察之后人工送达，验证正式监听/销毁边界，不读取图片或运行浏览器。
-  const image = scope.run(() => runInNewContext(`${compiled}\n({ frame, source, error, observeFrame, load })`, {
+  const image = scope.run(() => runInNewContext(`${compiled}\n({ frame, source, error, observeFrame, load, imageFailed })`, {
     computed, ref, watch, onScopeDispose, onMounted: () => {}, defineProps: () => props,
     inject: () => cache, ACCOUNT_CACHE: Symbol(), Blob,
     fetchAttachment, AbortController, Error, IntersectionObserver: FakeObserver,
     URL: { createObjectURL, revokeObjectURL },
   })) as { frame: { value: HTMLElement | null }; source: { value: string }; error: { value: string };
-    observeFrame: () => void; load: () => Promise<void> };
+    observeFrame: () => void; load: () => Promise<void>; imageFailed: () => Promise<void> };
   image.frame.value = { closest: () => null } as unknown as HTMLElement;
   image.observeFrame();
   return { scope, props, image, observers, pending, fetchAttachment, createObjectURL, revokeObjectURL };
@@ -50,7 +50,7 @@ function setup(cache: AccountCache | null = null) {
 
 it('磁盘图片命中不重新下载，远离后仍释放解码引用，再返回可重新读取缓存', async () => {
   const cache = { read: vi.fn().mockResolvedValue(new Blob(['cached image'])), write: vi.fn(),
-    revokeGroup: vi.fn(), allowGroups: vi.fn() } as AccountCache;
+    revokeGroup: vi.fn(), allowGroups: vi.fn(), revision: 0, dispose: vi.fn(), discard: vi.fn() } as AccountCache;
   const f = setup(cache);
   try {
     f.observers[0].intersect();
@@ -64,6 +64,41 @@ it('磁盘图片命中不重新下载，远离后仍释放解码引用，再返�
     await settleRequests();
     expect(cache.read).toHaveBeenCalledTimes(2);
     expect(f.fetchAttachment).not.toHaveBeenCalled();
+  } finally { f.scope.stop(); }
+});
+
+it('损坏的缓存图片只重试下载一次，下载图仍损坏则保留明确错误', async () => {
+  const cache = { read: vi.fn().mockResolvedValue(new Blob(['bad image'])), write: vi.fn(), discard: vi.fn(),
+    revokeGroup: vi.fn(), allowGroups: vi.fn(), revision: 0, dispose: vi.fn() } as AccountCache;
+  const f = setup(cache);
+  try {
+    await f.image.load();
+    const retry = f.image.imageFailed();
+    await settleRequests();
+    expect(cache.discard).toHaveBeenCalledWith('image', 'first', 'image');
+    expect(f.fetchAttachment).toHaveBeenCalledOnce();
+    f.pending[0].resolve(new Blob(['still invalid']));
+    await retry;
+    await f.image.imageFailed();
+    expect(f.fetchAttachment).toHaveBeenCalledOnce();
+    expect(f.image.source.value).toBe('');
+    expect(f.image.error.value).toBe('图片加载失败');
+  } finally { f.scope.stop(); }
+});
+
+it('清理之前开始的图片下载可显示但不重新写回磁盘', async () => {
+  let revision = 0;
+  const cache = { read: vi.fn().mockResolvedValue(null), write: vi.fn(), discard: vi.fn(),
+    revokeGroup: vi.fn(), allowGroups: vi.fn(), get revision() { return revision; }, dispose: vi.fn() } as AccountCache;
+  const f = setup(cache);
+  try {
+    const loading = f.image.load();
+    await settleRequests();
+    revision++;
+    f.pending[0].resolve(new Blob(['late']));
+    await loading;
+    expect(f.image.source.value).not.toBe('');
+    expect(cache.write).not.toHaveBeenCalled();
   } finally { f.scope.stop(); }
 });
 

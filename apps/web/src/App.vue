@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, provide, reactive, ref, watch } from 'vue';
-import { ACCOUNT_CACHE, createAccountCache } from './cache/localCache';
+import { ACCOUNT_CACHE, clearOtherAccountContentCaches, createAccountCache } from './cache/localCache';
 import { useNotice } from './feedback/useNotice';
 import { useInitialLoading } from './profile/useInitialLoading';
 import { ArrowLeft, AudioLines, Copy, CornerUpLeft, Headphones,
@@ -64,6 +64,11 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ logout: []; dismissUpdateWarning: []; ready: [] }>();
 const accountCache = createAccountCache(props.user.id);
+const cacheCleanup = new AbortController();
+void clearOtherAccountContentCaches(props.user.id, cacheCleanup.signal).catch(() => {
+  if (!cacheCleanup.signal.aborted) console.warn('previous account content cache cleanup failed');
+});
+onScopeDispose(() => { accountCache.dispose(); cacheCleanup.abort(); });
 provide(ACCOUNT_CACHE, accountCache);
 
 const STATUS_LABELS = { idle: '未加入语音', joining: '正在连接语音', connected: '语音已连接', reconnecting: '正在重连' };
@@ -719,6 +724,7 @@ async function refreshRoomOccupancies(force = false) {
 }
 
 async function loadGroup(groupId: string, keepExisting = false) {
+  const cacheRevision = accountCache.revision;
   detailRequest?.abort();
   const request = new AbortController();
   detailRequest = request;
@@ -726,7 +732,10 @@ async function loadGroup(groupId: string, keepExisting = false) {
   groupError.value = '';
   groupLoading.value = !keepExisting;
   if (!keepExisting) void accountCache.read<GroupDetail>('members', groupId).then(cached => {
-    if (cached?.id === groupId && Array.isArray(cached.members) && !request.signal.aborted
+    const valid = cached?.id === groupId && Array.isArray(cached.members)
+      && cached.members.every(member => member && typeof member.userId === 'string' && typeof member.nickname === 'string');
+    if (cached && !valid) void accountCache.discard('members', groupId);
+    if (valid && !request.signal.aborted
         && selectedGroupId.value === groupId && groupLoading.value && !selectedGroupDetail.value) {
       selectedGroupDetail.value = { ...cached, ...selectedGroup.value, members: cached.members };
     }
@@ -737,7 +746,7 @@ async function loadGroup(groupId: string, keepExisting = false) {
       selectedGroupDetail.value = detail;
       if (joinedGroupId.value === groupId) joinedGroupDetail.value = detail;
       if (management.value?.group.id === groupId) management.value.group = detail;
-      void accountCache.write('members', groupId, detail);
+      if (accountCache.revision === cacheRevision) void accountCache.write('members', groupId, detail);
     }
   } catch (error) {
     if (!request.signal.aborted) {

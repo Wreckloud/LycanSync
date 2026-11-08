@@ -66,7 +66,7 @@ it('普通退出先确认，取消不动凭据；确认后只停止媒体并返�
   expect(f.context.logoutTarget.value).toBeNull();
 });
 
-it('缓存删除失败仍允许移除凭据，但明确提示残留缓存', async () => {
+it('移除登录信息不清理内容缓存，也不受缓存存储失败影响', async () => {
   const f = setup();
   f.context.user.value = null;
   f.context.entryUser.value = { id: 'member', nickname: '成员', avatar: '', administrator: false };
@@ -75,7 +75,8 @@ it('缓存删除失败仍允许移除凭据，但明确提示残留缓存', asyn
   await f.clearLocalSession();
   expect(f.context.desktop.clearSession).toHaveBeenCalledOnce();
   expect(f.context.entryUser.value).toBeNull();
-  expect(f.context.error.value).toContain('聊天缓存未能清理');
+  expect(f.context.clearLocalContentCache).not.toHaveBeenCalled();
+  expect(f.context.error.value).toBe('');
 });
 
 it('资源停止失败仍保留账号与凭据，并明确提示；重新进入前再次回收', async () => {

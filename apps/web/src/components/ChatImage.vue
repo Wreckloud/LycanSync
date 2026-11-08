@@ -19,6 +19,7 @@ let retentionObserver: IntersectionObserver | null = null;
 let prefetchVisible = false;
 let nearby = true;
 let disposed = false;
+let cachedSource = false;
 
 function clearSource() {
   if (activeUrl) URL.revokeObjectURL(activeUrl);
@@ -26,21 +27,24 @@ function clearSource() {
   source.value = '';
 }
 
-async function load() {
+async function load(skipCache = false) {
   if (disposed) return;
   controller?.abort();
   const currentController = new AbortController();
   controller = currentController;
   clearSource();
   error.value = '';
+  cachedSource = false;
+  const cacheRevision = cache?.revision;
   try {
     const groupId = props.groupId;
     const attachmentId = props.attachmentId;
-    const cached = cache ? await cache.read<Blob>('image', groupId, attachmentId) : null;
+    const cached = cache && !skipCache ? await cache.read<Blob>('image', groupId, attachmentId) : null;
     if (currentController.signal.aborted || controller !== currentController) return;
     const blob = cached instanceof Blob ? cached : await fetchAttachment(groupId, attachmentId, currentController.signal);
     if (currentController.signal.aborted || controller !== currentController) return;
-    if (!cached) void cache?.write('image', groupId, blob, attachmentId);
+    cachedSource = cached instanceof Blob;
+    if (!cachedSource && cache?.revision === cacheRevision) void cache?.write('image', groupId, blob, attachmentId);
     activeUrl = URL.createObjectURL(blob);
     source.value = activeUrl;
   } catch (reason) {
@@ -50,6 +54,17 @@ async function load() {
   } finally {
     if (controller === currentController) controller = null;
   }
+}
+
+async function imageFailed() {
+  const retry = cachedSource;
+  cachedSource = false;
+  clearSource();
+  error.value = '图片加载失败';
+  const groupId = props.groupId;
+  const attachmentId = props.attachmentId;
+  await cache?.discard('image', groupId, attachmentId);
+  if (retry && !disposed && groupId === props.groupId && attachmentId === props.attachmentId) await load(true);
 }
 
 function observeFrame() {
@@ -108,7 +123,7 @@ onScopeDispose(() => {
 
 <template>
   <div ref="frame" class="chat-image-frame" :style="frameStyle">
-    <img v-if="source" class="chat-image" :src="source" :alt="alt" />
-    <button v-else-if="error" class="chat-image-error" type="button" @click="load">图片加载失败，点击重试</button>
+    <img v-if="source" class="chat-image" :src="source" :alt="alt" @error="imageFailed" />
+    <button v-else-if="error" class="chat-image-error" type="button" @click="load(true)">图片加载失败，点击重试</button>
   </div>
 </template>

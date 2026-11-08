@@ -16,8 +16,11 @@ interface CacheDatabase extends DBSchema {
 }
 
 export interface AccountCache {
+  readonly revision: number;
+  dispose(): void;
   allowGroups(groupIds: string[]): void;
   revokeGroup(groupId: string): Promise<void>;
+  discard(kind: CacheKind, groupId: string, id?: string): Promise<void>;
   read<T>(kind: CacheKind, groupId: string, id?: string): Promise<T | null>;
   write(kind: CacheKind, groupId: string, value: unknown, id?: string): Promise<void>;
 }
@@ -28,6 +31,7 @@ const CACHE_MAX_ENTRIES = 2_000;
 const CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
 let database: ReturnType<typeof openDatabase> | undefined;
 let generation = 0;
+let clearing = 0;
 let warned = false;
 
 function openDatabase() {
@@ -62,14 +66,29 @@ async function accountKey(userId: string) {
 }
 
 export function createAccountCache(userId: string): AccountCache {
-  const createdGeneration = generation;
   const account = accountKey(userId).catch(() => { reportCacheFailure(); return null; });
+  let disposed = false;
+  let permissionsRevision = 0;
   let allowed = new Set<string>();
-  const usable = (groupId: string) => createdGeneration === generation && allowed.has(groupId);
+  const usable = (groupId: string) => !disposed && !clearing && allowed.has(groupId);
+  const operation = (groupId: string) => {
+    const started = generation;
+    const permissions = permissionsRevision;
+    const available = usable(groupId);
+    return () => available && started === generation && permissions === permissionsRevision && usable(groupId);
+  };
   const key = (owner: string, kind: CacheKind, groupId: string, id = '') => JSON.stringify([owner, groupId, kind, id]);
   return {
-    allowGroups(groupIds) { allowed = new Set(groupIds); },
+    get revision() { return generation; },
+    dispose() { disposed = true; allowed.clear(); },
+    allowGroups(groupIds) {
+      if (disposed) return;
+      const next = new Set(groupIds);
+      if ([...allowed].some(groupId => !next.has(groupId))) permissionsRevision++;
+      allowed = next;
+    },
     async revokeGroup(groupId) {
+      permissionsRevision++;
       allowed.delete(groupId);
       try {
         const owner = await account;
@@ -85,13 +104,26 @@ export function createAccountCache(userId: string): AccountCache {
         await tx.done;
       } catch { reportCacheFailure(); }
     },
-    async read<T>(kind: CacheKind, groupId: string, id = ''): Promise<T | null> {
-      if (!usable(groupId)) return null;
+    async discard(kind, groupId, id = '') {
       try {
         const owner = await account;
-        if (!owner || !usable(groupId)) return null;
+        if (!owner) return;
         const db = await getDatabase();
-        if (!usable(groupId)) return null;
+        const tx = db.transaction(['entries', 'contents'], 'readwrite');
+        const entryKey = key(owner, kind, groupId, id);
+        await tx.objectStore('entries').delete(entryKey);
+        await tx.objectStore('contents').delete(entryKey);
+        await tx.done;
+      } catch { reportCacheFailure(); }
+    },
+    async read<T>(kind: CacheKind, groupId: string, id = ''): Promise<T | null> {
+      const current = operation(groupId);
+      if (!current()) return null;
+      try {
+        const owner = await account;
+        if (!owner || !current()) return null;
+        const db = await getDatabase();
+        if (!current()) return null;
         const tx = db.transaction(['entries', 'contents'], 'readwrite');
         const entryKey = key(owner, kind, groupId, id);
         const entry = await tx.objectStore('entries').get(entryKey);
@@ -104,20 +136,21 @@ export function createAccountCache(userId: string): AccountCache {
           await tx.objectStore('contents').delete(entryKey);
         }
         await tx.done;
-        return usable(groupId) ? (value as T | undefined) ?? null : null;
+        return current() ? (value as T | undefined) ?? null : null;
       } catch { reportCacheFailure(); return null; }
     },
     async write(kind, groupId, value, id = '') {
-      if (!usable(groupId)) return;
+      const current = operation(groupId);
+      if (!current()) return;
       try {
         const serialized = value instanceof Blob ? null : JSON.stringify(value);
         const stored = serialized === null ? value : JSON.parse(serialized);
         const bytes = value instanceof Blob ? value.size : new TextEncoder().encode(serialized!).byteLength;
         if (bytes > CACHE_BUDGET_BYTES) return;
         const owner = await account;
-        if (!owner || !usable(groupId)) return;
+        if (!owner || !current()) return;
         const db = await getDatabase();
-        if (!usable(groupId)) return;
+        if (!current()) return;
         const tx = db.transaction(['entries', 'contents'], 'readwrite');
         const entries = tx.objectStore('entries');
         const contents = tx.objectStore('contents');
@@ -135,18 +168,55 @@ export function createAccountCache(userId: string): AccountCache {
           used -= entry.bytes;
           count--;
         }
-        await entries.put({ key: entryKey, account: owner, groupId, kind, bytes, touchedAt: Date.now() });
-        await contents.put(stored, entryKey);
+        if (current()) {
+          await entries.put({ key: entryKey, account: owner, groupId, kind, bytes, touchedAt: Date.now() });
+          await contents.put(stored, entryKey);
+        }
         await tx.done;
       } catch { reportCacheFailure(); }
     },
   };
 }
 
-export async function clearLocalContentCache() {
-  // 先撤销旧实例的写资格，避免清除凭据后迟到的请求重新落盘。
-  generation++;
+export async function getLocalContentCacheUsage(userId?: string) {
+  const owner = userId ? await accountKey(userId) : undefined;
   const db = await getDatabase();
+  const entries = owner ? await db.getAllFromIndex('entries', 'account', owner) : await db.getAll('entries');
+  return { bytes: entries.reduce((total, entry) => total + entry.bytes, 0), entries: entries.length };
+}
+
+export async function clearOtherAccountContentCaches(userId: string, signal: AbortSignal) {
+  const owner = await accountKey(userId);
+  if (signal.aborted) return;
+  const db = await getDatabase();
+  if (signal.aborted) return;
   const tx = db.transaction(['entries', 'contents'], 'readwrite');
-  await Promise.all([tx.objectStore('entries').clear(), tx.objectStore('contents').clear(), tx.done]);
+  for (const entry of await tx.objectStore('entries').getAll()) {
+    if (signal.aborted) { tx.abort(); break; }
+    if (entry.account === owner) continue;
+    await tx.objectStore('entries').delete(entry.key);
+    await tx.objectStore('contents').delete(entry.key);
+  }
+  await tx.done;
+}
+
+export async function clearLocalContentCache(userId?: string) {
+  // 撤销清理前的异步读写；清理完成后仍允许当前账号发起新的缓存请求。
+  generation++;
+  clearing++;
+  try {
+    const owner = userId ? await accountKey(userId) : undefined;
+    const db = await getDatabase();
+    const tx = db.transaction(['entries', 'contents'], 'readwrite');
+    if (owner) {
+      for (const entry of await tx.objectStore('entries').index('account').getAll(owner)) {
+        await tx.objectStore('entries').delete(entry.key);
+        await tx.objectStore('contents').delete(entry.key);
+      }
+    } else {
+      await tx.objectStore('entries').clear();
+      await tx.objectStore('contents').clear();
+    }
+    await tx.done;
+  } finally { clearing--; }
 }

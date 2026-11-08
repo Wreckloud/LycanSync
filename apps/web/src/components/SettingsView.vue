@@ -71,7 +71,7 @@ const visibleSections = computed(() => SETTINGS_SECTIONS.filter((item) => (item.
   && (item.id !== 'recording' || (props.desktop && props.recording))
   && (item.id !== 'overlay' || (props.desktop && props.overlay))));
 const interactionBlocked = computed(() => Boolean(props.blocked || profileSettings.value?.cropping
-  || activitySettings.value?.editingName || clientSettings.value?.confirmingUpdate));
+  || activitySettings.value?.editingName || clientSettings.value?.confirmingUpdate || clientSettings.value?.confirmingCache));
 
 watch(() => props.section, (section) => { activeSection.value = section; });
 watch(activeSection, async () => {
@@ -151,7 +151,7 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
         <ShortcutSettings v-show="activeSection === 'shortcuts'" :active="activeSection === 'shortcuts'" :shortcuts="audioShortcuts" />
         <OverlaySettings v-if="desktop && overlay" v-show="activeSection === 'overlay'" :overlay="overlay" :active="activeSection === 'overlay'" />
         <RecordingSettings v-if="recording" v-show="activeSection === 'recording'" :recording="recording" :desktop="desktop" :sharing="rtc.screenShareActive" />
-        <ClientSettings ref="clientSettings" v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'" />
+        <ClientSettings ref="clientSettings" v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'" :user-id="user.id" />
         <AboutSettings v-show="activeSection === 'about'" :active="activeSection === 'about'" :rtc="rtc" :report="diagnosticReport" />
       </div>
     </section>

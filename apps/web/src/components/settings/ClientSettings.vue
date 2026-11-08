@@ -6,8 +6,11 @@ import { useLoadingHint } from '../useLoadingHint';
 import UpdateRestartDialog from '../UpdateRestartDialog.vue';
 import DialogTransition from '../DialogTransition.vue';
 import { useClientUpdate } from '../../settings/useClientUpdate';
+import CacheSettings from './CacheSettings.vue';
 
-const props = defineProps<{ desktop: boolean; active: boolean }>();
+const props = defineProps<{ desktop: boolean; active: boolean; userId?: string }>();
+const cacheSettings = ref<InstanceType<typeof CacheSettings> | null>(null);
+const confirmingCache = computed(() => Boolean(cacheSettings.value?.confirming));
 const autoStartSupported = ref<boolean>();
 const autoStartEnabled = ref(false);
 const autoStartBusy = ref(false);
@@ -42,7 +45,7 @@ const autoStartDescription = computed(() => {
 });
 
 // 弹窗通过 Teleport 展示；由设置页隔离背景，避免确认期间切栏或返回。
-defineExpose({ confirmingUpdate });
+defineExpose({ confirmingUpdate, confirmingCache });
 
 watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
   if (!active || !desktop || screenLoaded) return;
@@ -148,6 +151,7 @@ async function updateAutoStart(event: Event) {
 <template>
   <div class="settings-section client-settings">
     <p class="settings-intro">客户端选项只影响当前设备。</p>
+    <CacheSettings v-if="userId" ref="cacheSettings" :user-id="userId" :active="active" />
     <section v-if="desktop" class="settings-block">
       <h2>应用更新</h2>
       <div class="settings-toggle update-summary">

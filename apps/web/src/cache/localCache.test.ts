@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { openDB } from 'idb';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
-import { clearLocalContentCache, createAccountCache } from './localCache';
+import { clearLocalContentCache, clearOtherAccountContentCaches, createAccountCache, getLocalContentCacheUsage } from './localCache';
 
 beforeEach(async () => {
   vi.stubGlobal('window', { location: { origin: 'https://first.example' } });
@@ -37,7 +37,7 @@ it('成员资格未确认时不读写，撤销资格删除本群历史与图片'
   expect(await first.read('messages', 'group')).toBeNull();
 });
 
-it('清除后旧实例与尚未完成的账号解析均不能重新落盘', async () => {
+it('清除前尚未完成的账号解析不能重新落盘', async () => {
   let complete!: (value: { apiUrl: string }) => void;
   vi.stubGlobal('window', { lycanDesktop: { getServerSettings: () => new Promise(resolve => { complete = resolve; }) } });
   const first = cache();
@@ -47,6 +47,69 @@ it('清除后旧实例与尚未完成的账号解析均不能重新落盘', asyn
   await pending;
   vi.stubGlobal('window', { location: { origin: 'https://first.example' } });
   expect(await cache().read('messages', 'group')).toBeNull();
+});
+
+it('清理当前账号不删除其他账号，现有实例之后仍能缓存新内容', async () => {
+  const first = cache();
+  const second = cache('bob');
+  await first.write('messages', 'group', ['first']);
+  await second.write('messages', 'group', ['second']);
+  expect((await getLocalContentCacheUsage('alice')).bytes).toBeGreaterThan(0);
+  expect((await getLocalContentCacheUsage()).entries).toBe(2);
+  await clearLocalContentCache('alice');
+  expect(await first.read('messages', 'group')).toBeNull();
+  expect(await second.read('messages', 'group')).toEqual(['second']);
+  expect(await getLocalContentCacheUsage('alice')).toEqual({ bytes: 0, entries: 0 });
+  await first.write('messages', 'group', ['new']);
+  expect(await first.read('messages', 'group')).toEqual(['new']);
+});
+
+it('退出立即停用旧实例，迟到结果和再次授权不能恢复写入', async () => {
+  const first = cache();
+  await first.write('messages', 'group', ['saved']);
+  const late = first.write('messages', 'group', ['late']);
+  first.dispose();
+  first.allowGroups(['group']);
+  await late;
+  await first.write('messages', 'group', ['disposed']);
+  expect(await first.read('messages', 'group')).toBeNull();
+  expect(await cache().read('messages', 'group')).toEqual(['saved']);
+});
+
+it('仅移除损坏的单条图片，不影响其他图片和聊天记录', async () => {
+  const first = cache();
+  await first.write('messages', 'group', ['saved']);
+  await first.write('image', 'group', new Blob(['bad']), 'bad');
+  await first.write('image', 'group', new Blob(['good']), 'good');
+  await first.discard('image', 'group', 'bad');
+  expect(await first.read('image', 'group', 'bad')).toBeNull();
+  expect(await first.read('image', 'group', 'good')).toBeInstanceOf(Blob);
+  expect(await first.read('messages', 'group')).toEqual(['saved']);
+});
+
+it('重新认证进入后清理其他账号和服务器的残留，保留当前账号缓存', async () => {
+  const first = cache();
+  await first.write('messages', 'group', ['first']);
+  first.dispose();
+  const other = cache('bob');
+  await other.write('messages', 'group', ['second']);
+  other.dispose();
+  vi.stubGlobal('window', { location: { origin: 'https://second.example' } });
+  const current = cache();
+  await current.write('messages', 'group', ['current server']);
+  await clearOtherAccountContentCaches('alice', new AbortController().signal);
+  expect(await current.read('messages', 'group')).toEqual(['current server']);
+  expect((await getLocalContentCacheUsage()).entries).toBe(1);
+});
+
+it('登录实例取消后不再执行迟到的其他账号清理', async () => {
+  const current = cache('bob');
+  await current.write('messages', 'group', ['keep']);
+  const controller = new AbortController();
+  const clearing = clearOtherAccountContentCaches('alice', controller.signal);
+  controller.abort();
+  await clearing;
+  expect(await current.read('messages', 'group')).toEqual(['keep']);
 });
 
 it('总预算跨账号共享，按最近使用淘汰；不会读取全部图片来统计大小', async () => {

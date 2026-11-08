@@ -54,6 +54,7 @@ async function showHistoricalProfile(message: ChatMessage, anchor: HTMLElement) 
 let cacheLoaded = false;
 let initialLoadNotified = false;
 let cacheWriteTimer: ReturnType<typeof setTimeout> | null = null;
+let cacheWriteRevision = cache?.revision;
 const messages = ref<ChatMessage[]>([]);
 const text = ref('');
 const pendingAttachments = ref<PendingAttachment[]>([]);
@@ -246,6 +247,7 @@ function appendMessages(incoming: ChatMessage[], forceScroll = false, behavior: 
 }
 
 function writeMessageCache() {
+  if (cache?.revision !== cacheWriteRevision) return;
   const confirmedEnd = latestFetchedMessageId ? messages.value.findIndex(message => message.id === latestFetchedMessageId) + 1 : 0;
   if (!confirmedEnd && (!initialLoaded.value || messages.value.length)) return;
   const confirmed = messages.value.slice(0, confirmedEnd);
@@ -256,11 +258,13 @@ function writeMessageCache() {
 
 function saveMessageCache() {
   if (!cache || cacheWriteTimer) return;
+  cacheWriteRevision = cache.revision;
   // 连续消息合并落盘，切群时再补最后一份快照。
   cacheWriteTimer = setTimeout(() => { cacheWriteTimer = null; writeMessageCache(); }, 1_000);
 }
 
 async function refresh(wait = false) {
+  const cacheRevision = cache?.revision;
   pollRequest?.abort();
   const controller = new AbortController();
   pollRequest = controller;
@@ -274,7 +278,9 @@ async function refresh(wait = false) {
       const cached = cache ? await cache.read<{ messages: ChatMessage[]; hasMore: boolean }>('messages', groupId) : null;
       if (controller.signal.aborted || disposed || pollRequest !== controller) return null;
       if (cached && Array.isArray(cached.messages) && cached.messages.length <= 500
-          && cached.messages.every(message => typeof message.id === 'string' && typeof message.content === 'string')) {
+          && cached.messages.every(message => message && typeof message.id === 'string' && typeof message.content === 'string'
+            && typeof message.senderUserId === 'string' && typeof message.senderNickname === 'string'
+            && typeof message.createdAt === 'string' && Number.isFinite(Date.parse(message.createdAt)))) {
         const cachedIds = new Set(cached.messages.map(message => message.id));
         restoredIds = cachedIds.size ? cachedIds : null;
         messages.value = [...cached.messages, ...messages.value.filter(message => !cachedIds.has(message.id))];
@@ -282,7 +288,7 @@ async function refresh(wait = false) {
         latestFetchedMessageId = cached.messages.at(-1)?.id;
         initialLoaded.value = true;
         void scrollToBottom('auto', true);
-      }
+      } else if (cached) { void cache?.discard('messages', groupId); }
     }
     // 只有查询结果能推进轮询游标；本机发送成功不代表游标之前的其他消息已经读完。
     let latestId = latestFetchedMessageId;
@@ -319,7 +325,7 @@ async function refresh(wait = false) {
       ...messages.value.slice(prefixEnd).filter((message) => !snapshotIds.has(message.id))];
     void animateMessagePositions(positions);
     latestFetchedMessageId = page.messages.at(-1)?.id ?? latestId;
-    if (added || initial) saveMessageCache();
+    if ((added || initial) && cache?.revision === cacheRevision) saveMessageCache();
     if (!initial) {
       unreadMessageIds.value.push(...newMessages.filter(message => message.senderUserId !== props.user.id)
         .map(message => message.id));
@@ -353,6 +359,7 @@ async function refresh(wait = false) {
 }
 
 async function loadOlder() {
+  const cacheRevision = cache?.revision;
   const element = list.value;
   const cursor = messages.value[0]?.id;
   if (!element || !cursor || !initialLoaded.value || !hasMore.value || loadingOlder.value || disposed) return;
@@ -381,7 +388,7 @@ async function loadOlder() {
     const previousHeight = element.scrollHeight;
     const previousTop = element.scrollTop;
     messages.value = [...older, ...messages.value];
-    saveMessageCache();
+    if (cache?.revision === cacheRevision) saveMessageCache();
     await nextTick();
     if (controller.signal.aborted || disposed || list.value !== element) return;
     if (anchor && anchorTop !== undefined) {

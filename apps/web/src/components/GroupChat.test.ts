@@ -72,7 +72,7 @@ function setup(cache: AccountCache | null = null) {
 
 it('空聊天也保存确认快照，返回时沿用已知空状态并直接同步新消息', async () => {
   const cache = { read: vi.fn().mockResolvedValue(null), write: vi.fn(),
-    revokeGroup: vi.fn(), allowGroups: vi.fn() } as AccountCache;
+    revokeGroup: vi.fn(), allowGroups: vi.fn(), revision: 0, dispose: vi.fn(), discard: vi.fn() } as AccountCache;
   const first = setup(cache);
   await first.chat.refresh();
   first.scope.stop();
@@ -98,7 +98,7 @@ it('短暂读取磁盘期间不显示加载字样，缓存到达即展示并取�
   const cached = deferred<{ messages: ChatMessage[]; hasMore: boolean }>();
   const page = deferred<ChatMessagePage>();
   const cache = { read: vi.fn().mockReturnValue(cached.promise), write: vi.fn(),
-    revokeGroup: vi.fn(), allowGroups: vi.fn() } as AccountCache;
+    revokeGroup: vi.fn(), allowGroups: vi.fn(), revision: 0, dispose: vi.fn(), discard: vi.fn() } as AccountCache;
   const f = setup(cache);
   f.findMessages.mockReturnValueOnce(page.promise);
   try {
@@ -117,7 +117,7 @@ it('短暂读取磁盘期间不显示加载字样，缓存到达即展示并取�
 
 it('命中历史先展示已确认快照，随后按最后游标补齐新消息并更新缓存', async () => {
   const cache = { read: vi.fn().mockResolvedValue({ messages: [message('cached')], hasMore: true }),
-    write: vi.fn(), revokeGroup: vi.fn(), allowGroups: vi.fn() } as AccountCache;
+    write: vi.fn(), revokeGroup: vi.fn(), allowGroups: vi.fn(), revision: 0, dispose: vi.fn(), discard: vi.fn() } as AccountCache;
   const f = setup(cache);
   const page = deferred<ChatMessagePage>();
   f.findMessages.mockReturnValueOnce(page.promise);
@@ -138,7 +138,7 @@ it('命中历史先展示已确认快照，随后按最后游标补齐新消息�
 it('切群销毁后迟到的缓存不能展示，也不能发起旧群网络读取', async () => {
   const cached = deferred<{ messages: ChatMessage[]; hasMore: boolean }>();
   const cache = { read: vi.fn().mockReturnValue(cached.promise), write: vi.fn(),
-    revokeGroup: vi.fn(), allowGroups: vi.fn() } as AccountCache;
+    revokeGroup: vi.fn(), allowGroups: vi.fn(), revision: 0, dispose: vi.fn(), discard: vi.fn() } as AccountCache;
   const f = setup(cache);
   const refreshing = f.chat.refresh();
   f.scope.stop();
@@ -150,7 +150,7 @@ it('切群销毁后迟到的缓存不能展示，也不能发起旧群网络读�
 
 it('命中缓存后首次联网被隐藏取消，恢复时直接同步并只通知一次加载完成', async () => {
   const cache = { read: vi.fn().mockResolvedValue({ messages: [message('cached')], hasMore: false }),
-    write: vi.fn(), revokeGroup: vi.fn(), allowGroups: vi.fn() } as AccountCache;
+    write: vi.fn(), revokeGroup: vi.fn(), allowGroups: vi.fn(), revision: 0, dispose: vi.fn(), discard: vi.fn() } as AccountCache;
   const f = setup(cache);
   const page = deferred<ChatMessagePage>();
   f.findMessages.mockReturnValueOnce(page.promise);
@@ -173,7 +173,7 @@ it('命中缓存后首次联网被隐藏取消，恢复时直接同步并只通�
 
 it('历史落后较多时只补取最近一页，不拼接有缺口的缓存历史', async () => {
   const cache = { read: vi.fn().mockResolvedValue({ messages: [message('old')], hasMore: false }),
-    write: vi.fn(), revokeGroup: vi.fn(), allowGroups: vi.fn() } as AccountCache;
+    write: vi.fn(), revokeGroup: vi.fn(), allowGroups: vi.fn(), revision: 0, dispose: vi.fn(), discard: vi.fn() } as AccountCache;
   const f = setup(cache);
   try {
     f.findMessages.mockResolvedValueOnce({ messages: Array.from({ length: 31 }, (_, index) => message(`missed-${index}`)), hasMore: false })

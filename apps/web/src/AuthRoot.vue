@@ -21,7 +21,6 @@ import {
   type ProfileUpdate,
 } from './auth/authApi';
 import { sendPresenceHeartbeat } from './presence/presenceApi';
-import { clearLocalContentCache } from './cache/localCache';
 import { useIdentityTransition } from './profile/useIdentityTransition';
 import { useQqLogin } from './auth/useQqLogin';
 
@@ -301,10 +300,7 @@ async function clearLocalSession() {
   removing.value = true;
   error.value = '';
   let revoked = false;
-  let cacheCleared = false;
   try {
-    try { await clearLocalContentCache(); cacheCleared = true; }
-    catch { /* 缓存清理失败仍允许移除凭据，完成后明确提示残留。 */ }
     try { await authRequest<void>('logout', 'POST'); revoked = true; }
     catch { /* 离线或损坏的凭据仍允许从本机移除。 */ }
     if (desktop) await desktop.clearSession();
@@ -313,7 +309,6 @@ async function clearLocalSession() {
     autoLogin.value = true;
     removeConfirm.value = false;
     if (!revoked) error.value = '本机凭据已移除；服务器会话未确认撤销，请联系服主恢复或撤销。';
-    if (!cacheCleared) error.value += (error.value ? ' ' : '') + '本地聊天缓存未能清理，请检查安装目录权限后重试清理。';
   } catch { error.value = '清理本机凭据失败，请检查数据目录权限后重试。'; }
   finally { removing.value = false; }
 }

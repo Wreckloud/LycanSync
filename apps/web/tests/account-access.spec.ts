@@ -36,6 +36,13 @@ test('仅服主显示邀请面板且生成链接只在成功后展示', async ({
   await page.getByRole('button', { name: '服主管理', exact: true }).click();
   await expect(page.getByText('测试服务器', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '设置恢复密码', exact: true })).toBeVisible();
+  const recommendation = page.locator('.recovery-warning');
+  await expect(recommendation).toContainText('安全建议：请设置服主恢复密码');
+  expect(await recommendation.evaluate(element => getComputedStyle(element).color)).toBe(
+    await recommendation.evaluate(element => {
+      const probe = document.createElement('span'); probe.style.color = 'var(--danger)'; element.append(probe);
+      const color = getComputedStyle(probe).color; probe.remove(); return color;
+    }));
   await page.getByRole('button', { name: '邀请新朋友', exact: true }).click();
   await expect(page.getByLabel('生成的链接')).toHaveValue(`https://example.com/join#token=${'a'.repeat(43)}`);
   await expect(page.getByRole('button', { name: '恢复成员登录', exact: true })).toBeDisabled();
