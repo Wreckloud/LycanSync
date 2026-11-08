@@ -37,13 +37,13 @@ export async function requestRtcToken(
     const problem = await response.json().catch(() => null);
     throw new TokenRequestError(problem?.code === 'GROUP_NOT_FOUND'
       ? '群组不存在或你不是群组成员。'
-      : '入房接口未启用，请以 rtc-local 模式启动后端。');
+      : '服务器尚未开启语音功能，请联系服主。');
   }
   if (response.status === 400) {
-    throw new TokenRequestError('入房参数无效，请检查群组标识。');
+    throw new TokenRequestError('无法加入此群组的语音。');
   }
   if (!response.ok) {
-    throw new TokenRequestError(`申请入房凭证失败（HTTP ${response.status}），请检查后端是否启动。`);
+    throw new TokenRequestError('无法连接语音服务。');
   }
 
   // 3. TypeScript 类型不会校验网络数据，使用凭证前检查响应结构。
@@ -51,10 +51,10 @@ export async function requestRtcToken(
   try {
     credential = await response.json();
   } catch {
-    throw new TokenRequestError('后端返回的内容不是有效 JSON，请检查开发代理配置。');
+    throw new TokenRequestError('语音服务返回异常。');
   }
   if (!isRtcTokenResponse(credential)) {
-    throw new TokenRequestError('入房凭证缺少必要字段，请确认前后端接口一致。');
+    throw new TokenRequestError('无法取得加入语音所需的信息。');
   }
   return credential;
 }

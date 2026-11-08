@@ -98,7 +98,7 @@ public class ChatFileService {
                 ChatMessageView completedUpload = mapper.findFileMessage(groupId, uploadId, user.id());
                 if (completedUpload != null) return toResponse(completedUpload);
                 throw new GroupException(HttpStatus.CONFLICT, ApiErrorCode.INVALID_REQUEST,
-                        "同一文件仍在上传或收尾，请稍后重试");
+                        "这个文件还在上传，请稍后重试。");
             }
             boolean completed = false;
             try {
@@ -113,7 +113,7 @@ public class ChatFileService {
                 return response;
             } catch (IncompleteUploadException exception) {
                 throw new GroupException(HttpStatus.BAD_REQUEST, ApiErrorCode.INVALID_REQUEST,
-                        "文件内容未完整接收或与声明大小不符");
+                        "文件未能完整上传，或大小不一致，请重新上传。");
             } catch (IOException exception) {
                 log.error("群聊文件存储失败", exception);
                 throw new GroupException(HttpStatus.INTERNAL_SERVER_ERROR, ApiErrorCode.CHAT_FILE_STORAGE_FAILED,

@@ -54,14 +54,14 @@ onScopeDispose(() => {
     <section ref="dialog" class="remote-request-card" role="dialog" aria-modal="true" aria-labelledby="remote-request-title"
       tabindex="-1" @keydown="keepFocus">
       <header><h2 id="remote-request-title">{{ name }}申请远程控制</h2>
-        <p>接受后自动共享所选显示器，对方可以使用鼠标和常用键盘按键。你可以随时停止。</p></header>
+        <p>接受后将共享所选屏幕，并允许对方使用鼠标和常用按键。你可以随时停止。</p></header>
       <label for="remote-control-monitor">共享显示器</label>
       <select id="remote-control-monitor" v-model="sourceId" :disabled="busy || loading">
         <option v-for="monitor in monitors" :key="monitor.sourceId" :value="monitor.sourceId">{{ monitor.title }}</option>
       </select>
       <label class="remote-public-option"><input v-model="publicVideo" type="checkbox" :disabled="busy">
         向语音频道其他成员公开画面</label>
-      <p class="remote-scope-note">{{ publicVideo ? '频道成员可以观看，但只有申请者能够控制；频道语音保持不变。' : '只有申请者能观看画面，其他成员仅看到控制状态；频道语音保持不变。' }}</p>
+      <p class="remote-scope-note">{{ publicVideo ? '频道成员都能观看，只有申请者能控制；语音通话不受影响。' : '只有申请者能观看和控制，其他成员只能看到控制状态；语音通话不受影响。' }}</p>
       <footer class="card-actions">
         <button type="button" @click="emit('reject')">{{ busy ? '取消准备' : '拒绝' }}</button>
         <InlineFeedback :message="error" :pending="busy ? '正在准备远程控制…' : loading ? '正在读取显示器…' : ''" />

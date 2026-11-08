@@ -106,7 +106,7 @@ function createStartupUpdate({ enabled, version, createUpdater, onChange, before
       if (!active()) { onInstallFailure(); return; }
       await onTiming('updatePrepare', Math.round(performance.now() - preparingAt));
       if (!active()) return;
-      publish({ phase: 'installing', message: '即将打开安装进度，完成后自动重新打开…' });
+      publish({ phase: 'installing', message: '即将开始安装，完成后自动打开应用…' });
       updater.autoRunAppAfterInstall = true;
       updater.quitAndInstall(false, true);
     } catch (error) { if (active()) fail(error); }

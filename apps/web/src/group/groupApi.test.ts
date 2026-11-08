@@ -7,7 +7,7 @@ describe('group presence change waiting API', () => {
   test('创建群组的空正文 413 使用统一错误文案，不返回默认群组', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 413 })));
     await expect(createGroup('开黑', '', 'data:image/png;base64,abc')).rejects.toMatchObject({
-      status: 413, code: 'REQUEST_TOO_LARGE', message: '提交内容过大，请缩小图片或减少内容后重试。',
+      status: 413, code: 'REQUEST_TOO_LARGE', message: '提交的内容过大，请缩小图片或减少内容后重试。',
     });
   });
 

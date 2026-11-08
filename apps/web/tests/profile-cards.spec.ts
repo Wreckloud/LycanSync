@@ -300,11 +300,11 @@ test('个人菜单退出登录复用认证流程', async ({ page }) => {
   await confirmation.getByRole('button', { name: '退出登录', exact: true }).click();
   await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
   expect(logoutRequests).toBe(0);
-  await expect(page.getByRole('checkbox', { name: '自动登录', exact: true })).toBeChecked();
+  await expect(page.getByRole('checkbox', { name: '记住账号', exact: true })).toBeChecked();
   await expect(confirmation).toHaveCount(0);
   await page.screenshot({ path: test.info().outputPath('account-preview.png') });
   await expect(page.getByRole('button', { name: '个人菜单', exact: true })).toHaveCount(0);
-  await page.getByRole('checkbox', { name: '自动登录', exact: true }).uncheck();
+  await page.getByRole('checkbox', { name: '记住账号', exact: true }).uncheck();
   await expect(page.getByRole('button', { name: '个人菜单', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page.getByRole('button', { name: '个人菜单', exact: true })).toBeVisible();
@@ -346,7 +346,7 @@ test('清除凭据有独立确认，取消保留账号，确认后才撤销', as
   await expect(clear).toBeFocused();
   await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
   await clear.click();
-  await confirmation.getByRole('button', { name: '清除凭据', exact: true }).click();
+  await confirmation.getByRole('button', { name: '清除登录信息', exact: true }).click();
   await expect(confirmation).toHaveCount(0);
   expect(logoutRequests).toBe(1);
   await expect(page.getByRole('button', { name: '登录', exact: true })).toHaveCount(0);
@@ -409,7 +409,7 @@ test('状态同步失败在菜单内提示，重试不退出账号或清除选�
   const statusTrigger = menu.getByRole('button', { name: '切换在线状态', exact: true });
   fail = true;
   await selectPersonalPresence(menu, '隐身');
-  await expect(menu.getByRole('alert')).toContainText('尚未确认同步');
+  await expect(menu.getByRole('alert')).toContainText('尚未同步');
   await expect(statusTrigger).toContainText('隐身');
   fail = false;
   await selectPersonalPresence(menu, '隐身');
@@ -449,8 +449,10 @@ test('快捷键录入松开后保存，冲突保持原设置，取消不会丢�
   await page.screenshot({ path: test.info().outputPath('shortcut-settings.png') });
   await page.getByRole('button', { name: '清除麦克风静音／恢复快捷键', exact: true }).click();
   await expect(recorder).toHaveText('未设置');
-  await page.getByRole('radio', { name: '按键说话', exact: true }).check();
-  await expect(page.locator('.shortcut-settings')).toContainText('设置前保持静音');
+  const beforeMode = await recorder.boundingBox();
+  await page.getByRole('combobox', { name: '发言模式', exact: true }).selectOption('pushToTalk');
+  expect((await recorder.boundingBox())!.y).toBe(beforeMode!.y);
+  await expect(page.locator('.shortcut-settings')).not.toContainText('等待按住快捷键');
   const talk = page.getByRole('button', { name: '设置按键说话快捷键', exact: true });
   await talk.click();
   await talk.press('F2');
@@ -458,10 +460,10 @@ test('快捷键录入松开后保存，冲突保持原设置，取消不会丢�
   await page.reload();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '快捷键', exact: true }).click();
-  await expect(page.getByRole('radio', { name: '按键说话', exact: true })).toBeChecked();
+  await expect(page.getByRole('combobox', { name: '发言模式', exact: true })).toHaveValue('pushToTalk');
   await expect(page.getByRole('button', { name: '设置按键说话快捷键', exact: true })).toHaveText('F2');
   await page.screenshot({ path: test.info().outputPath('push-to-talk-settings.png') });
-  await page.getByRole('radio', { name: '自由发言', exact: true }).check();
+  await page.getByRole('combobox', { name: '发言模式', exact: true }).selectOption('voice');
 });
 
 test('本机提示音只提供统一音量和逐项开关，重开后恢复，保留入场音效操作', async ({ page }) => {

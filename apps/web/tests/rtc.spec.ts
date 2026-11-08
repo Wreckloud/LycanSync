@@ -232,7 +232,7 @@ test('未共享时显示群成员头像，停止共享后恢复头像', async ({
     .find((track) => track.kind === 'audio')?.getConstraints())).toMatchObject({
     echoCancellation: true, noiseSuppression: true, autoGainControl: true,
   });
-  await audioSettingsSection.getByRole('slider', { name: 'LycanSync 总输出音量' }).fill('2');
+  await audioSettingsSection.getByRole('slider', { name: 'lycanclaw 总输出音量' }).fill('2');
   await page.getByRole('button', { name: '关于与诊断', exact: true }).click();
   await expect(page.locator('.media-diagnostics')).toHaveCount(0);
   await page.getByRole('button', { name: '查看媒体诊断' }).click();
@@ -244,7 +244,7 @@ test('未共享时显示群成员头像，停止共享后恢复头像', async ({
   await localCard.getByRole('button', { name: /输入音量200%/ }).hover();
   await expect(localCard.locator('.participant-volume-popover').filter({ hasText: '输入 200%' })).toBeVisible();
   await expect(page.locator('.callbar').getByRole('button', { name: '停止接收声音', exact: true })).toBeEnabled();
-  await localCard.getByRole('button', { name: /LycanSync 总输出200%/ }).hover();
+  await localCard.getByRole('button', { name: /lycanclaw 总输出200%/ }).hover();
   await expect(localCard.locator('.participant-volume-popover').filter({ hasText: '输出 200%' })).toBeVisible();
   await localCard.getByRole('button', { name: '关闭自己的麦克风' }).click();
   await expect(localCard.locator('.participant-volume-popover').filter({ hasText: /^输入/ })).toHaveCount(0);
@@ -275,13 +275,13 @@ test('单击只预览；入房接口未启用时明确提示', async ({ page }) 
   await expect(page.getByTestId('callbar')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '开启麦克风' })).toHaveCount(0);
   await page.getByRole('button', { name: /周末车队，单击预览，双击加入语音/ }).dblclick();
-  await expect(page.getByRole('alert')).toContainText('rtc-local');
+  await expect(page.getByRole('alert')).toContainText('服务器尚未开启语音功能');
   await expect(page.getByRole('button', { name: '加入当前群组语音' })).toBeEnabled();
   await page.getByRole('button', { name: '关闭提示', exact: true }).click();
   await expect(page.locator('.app-notice [role="alert"]')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '展开提示', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '加入当前群组语音' }).click();
-  await expect(page.locator('.app-notice [role="alert"]')).toContainText('rtc-local');
+  await expect(page.locator('.app-notice [role="alert"]')).toContainText('服务器尚未开启语音功能');
   await page.screenshot({ path: 'test-results/lobby.png', fullPage: true });
 });
 

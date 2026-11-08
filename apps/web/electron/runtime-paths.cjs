@@ -48,8 +48,8 @@ function ensureWritableDirectory(directory, io = defaultIo) {
       try { io.unlinkSync(probe); } catch { /* 探针未留下时无需清理。 */ }
     }
   } catch (error) {
-    if (String(error.message).startsWith('无法在运行目录保存数据')) throw error;
-    throw new Error(`无法在运行目录保存数据（${error.code ?? '写入失败'}）：${directory}`, { cause: error });
+    if (String(error.message).startsWith('无法在此目录保存数据')) throw error;
+    throw new Error(`无法在此目录保存数据：${directory}（${error.code ?? '写入失败'}）。`, { cause: error });
   }
 }
 
@@ -83,18 +83,18 @@ function migrateOwnedData(fromDirectory, toDirectory, io = defaultIo) {
       io.existsSync(join(fromDirectory, name))
       && io.readFileSync(join(fromDirectory, name)).equals(io.readFileSync(join(toDirectory, name))));
     if (process.platform === 'win32' && oldEncrypted.length && (!newEncrypted.length || copiedEncrypted)) {
-      if (!io.existsSync(oldStateFile)) throw new Error('旧凭据缺少配套的加密状态，请保留原目录以便恢复。');
+      if (!io.existsSync(oldStateFile)) throw new Error('旧登录信息缺少解密所需的数据，请保留原目录以便恢复。');
       let oldState, newState;
       try {
         oldState = JSON.parse(io.readFileSync(oldStateFile, 'utf8'));
         newState = io.existsSync(newStateFile) ? JSON.parse(io.readFileSync(newStateFile, 'utf8')) : {};
-      } catch { throw new Error('登录加密状态无法解析，请保留原文件以便恢复。'); }
+      } catch { throw new Error('无法读取登录信息的加密数据，请保留原文件以便恢复。'); }
       if (!oldState || !newState || typeof oldState !== 'object' || typeof newState !== 'object'
           || Array.isArray(oldState) || Array.isArray(newState)) {
-        throw new Error('登录加密状态格式无效，请保留原文件以便恢复。');
+        throw new Error('登录信息的加密数据无效，请保留原文件以便恢复。');
       }
       if (typeof oldState.os_crypt?.encrypted_key !== 'string' || !oldState.os_crypt.encrypted_key) {
-        throw new Error('旧凭据缺少配套的加密密钥，请保留原目录以便恢复。');
+        throw new Error('旧登录信息缺少解密所需的密钥，请保留原目录以便恢复。');
       }
       if (newState.os_crypt?.encrypted_key !== oldState.os_crypt.encrypted_key) {
         // 只修复仍是旧密文的误迁移；新账号或新邀请依赖的新密钥不能被覆盖。
@@ -132,7 +132,7 @@ function migrateOwnedData(fromDirectory, toDirectory, io = defaultIo) {
     io.writeFileSync(join(toDirectory, SETTINGS_MIGRATION_COMPLETE), '');
     io.writeFileSync(join(toDirectory, MIGRATION_COMPLETE), '');
   } catch (error) {
-    throw new Error(`无法把原有数据复制到运行目录（${error.code ?? error.message ?? '复制失败'}）：${toDirectory}`, { cause: error });
+    throw new Error(`无法复制原有数据到 ${toDirectory}（${error.code ?? error.message ?? '复制失败'}）。`, { cause: error });
   }
 }
 

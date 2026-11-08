@@ -111,7 +111,7 @@ it('应用设置失败不保存假成功；本机存储失败明确反馈已生�
     f.storage.setItem.mockImplementation(() => { throw new Error('disk failure'); });
     await f.model.configure({ scale: 125 });
     expect(f.model.settings.value.scale).toBe(125);
-    expect(f.model.error.value).toContain('无法保存');
+    expect(f.model.error.value).toContain('未能保存');
   } finally { f.scope.stop(); }
 });
 

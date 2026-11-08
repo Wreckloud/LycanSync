@@ -53,6 +53,6 @@ describe('批量查询群组语音人数', () => {
     [{ groupId, participantCount: 1.5 }],
   ])('拒绝非法人数响应 %j', async (occupancies) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(occupancies)));
-    await expect(requestRoomOccupancies(new AbortController().signal)).rejects.toThrow('不是有效 JSON');
+    await expect(requestRoomOccupancies(new AbortController().signal)).rejects.toThrow('暂时无法读取群组的语音人数');
   });
 });

@@ -912,6 +912,7 @@ test('取消文件上传后可重新发送且不会重复创建成功消息', as
   });
 
   await page.goto('/');
+  await expect(page.getByText('还没有消息', { exact: true })).toBeVisible();
   await page.locator('input[type="file"]').setInputFiles({
     name: 'cancel.bin', mimeType: 'application/octet-stream', buffer: Buffer.from([5, 6, 7]),
   });

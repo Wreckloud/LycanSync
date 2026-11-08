@@ -61,7 +61,7 @@ export function useProfileDraft(
         // 旧签名不截断；仅修改昵称或头像时省略签名，沿用服务端保留语义。
         const updated = await saveProfile(keepStoredSignature ? { nickname: profile.nickname, avatar: profile.avatar } : profile);
         if (typeof updated.signature !== 'string') {
-          throw new Error('服务端未返回签名，无法确认保存结果。');
+          throw new Error('无法确认签名是否保存成功，请重新打开资料查看。');
         }
         savedNickname.value = updated.nickname;
         savedAvatar.value = updated.avatar;

@@ -18,7 +18,7 @@ export function useQqLogin(onLogin: (user: AuthUser, newAccount: boolean) => Pro
 
   async function start(binding = false) {
     if (busy.value) return;
-    if (!desktop?.openQqLogin || !desktop.onQqLogin) { error.value = '请使用支持 QQ 登录的 Windows 客户端版本'; return; }
+    if (!desktop?.openQqLogin || !desktop.onQqLogin) { error.value = '当前客户端不支持 QQ 登录，请使用支持 QQ 登录的 Windows 客户端。'; return; }
     busy.value = true;
     error.value = '';
     const attempt = ++generation;
@@ -29,9 +29,9 @@ export function useQqLogin(onLogin: (user: AuthUser, newAccount: boolean) => Pro
       const challenge = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('');
       const response = await authRequest<{ request: string; authorizationUrl: string }>('qq/start', 'POST', { challenge, desktop: true, binding });
       if (generation !== attempt) return;
-      if (!/^[A-Za-z0-9_-]{43}$/.test(response.request)) throw new Error('QQ 登录请求响应无效');
+      if (!/^[A-Za-z0-9_-]{43}$/.test(response.request)) throw new Error('暂时无法开始 QQ 登录。');
       pending = { request: response.request, verifier, binding };
-      timer = setTimeout(() => { cancel(); error.value = 'QQ 授权等待已结束，请重新发起'; }, 10 * 60_000);
+      timer = setTimeout(() => { cancel(); error.value = '本次 QQ 登录未完成，请重新发起。'; }, 10 * 60_000);
       await desktop.openQqLogin(response.authorizationUrl);
     } catch (reason) {
       if (generation === attempt) { cancel(); error.value = reason instanceof Error ? reason.message : '无法开始 QQ 授权'; }
@@ -51,7 +51,7 @@ export function useQqLogin(onLogin: (user: AuthUser, newAccount: boolean) => Pro
         if (generation === attempt) await onBound();
       } else {
         const result = await authRequest<{ user: AuthUser; newAccount: boolean }>('qq/exchange', 'POST', { request, verifier: flow.verifier });
-        if (typeof result.newAccount !== 'boolean') throw new Error('QQ 登录响应缺少账号确认信息');
+        if (typeof result.newAccount !== 'boolean') throw new Error('QQ 身份确认未完成。');
         if (generation === attempt) await onLogin(result.user, result.newAccount);
       }
     } catch (reason) {

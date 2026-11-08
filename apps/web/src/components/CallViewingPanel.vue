@@ -207,7 +207,7 @@ onScopeDispose(() => {
             </div>
             <div class="viewing-actions">
               <span class="viewing-caption" :title="share.participant.name"><span>{{ share.participant.name || share.participant.identity }}</span>
-                <time title="本客户端观察到的本次共享时长">{{ elapsed(share) }}</time>
+                <time title="本次共享时长（以这台设备收到的状态为准）">{{ elapsed(share) }}</time>
               </span>
               <button v-if="focus && (!view.membersVisible || view.expanded)" type="button" class="viewing-expand-members"
                 aria-label="展开成员" title="展开成员" @click="expandMembers"><ChevronDown :size="16" /></button>

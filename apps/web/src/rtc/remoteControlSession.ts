@@ -208,7 +208,7 @@ export class RemoteControlSession {
     if (!room || !this.options.isCurrentRoom(room) || !room.remoteParticipants.has(identity)
         || !this.available.value[identity]) return false;
     if (this.busy()) {
-      this.options.setNotice('请先结束当前远程控制、申请或清理，再申请新的控制。');
+      this.options.setNotice('请先结束当前远程控制或申请，再发起新的申请。');
       return false;
     }
     const pending = { identity, requestId: crypto.randomUUID(), phase: 'waiting' as const };
@@ -243,7 +243,7 @@ export class RemoteControlSession {
       // 本机暂停已完成后仍需等待对方授权，不能让准备任务的结束撤销超时资格。
       if (this.options.isCurrentRoom(room) && this.pending.value === preparing) {
         void this.cancelPending(pending.identity, room);
-        this.options.setNotice('远程控制准备已超时，已取消本次申请。');
+        this.options.setNotice('远程控制准备超时，本次申请已取消。');
       }
     }, 20_000);
     try {
@@ -325,8 +325,8 @@ export class RemoteControlSession {
       if (this.options.isCurrentRoom(room)) {
         void this.send(room, pending.identity, { type: 'reject', requestId: pending.requestId }).catch(() => {});
         if (error instanceof Error && error.message === 'remoteControlShareRestoreFailed') {
-          this.options.setNotice('远程控制未开始，画面清理或原共享恢复失败，请检查共享状态后重试。');
-        } else if (!attempt.controller.signal.aborted && restored) this.options.setNotice('无法准备远程控制，请检查共享状态后重新申请。');
+          this.options.setNotice('远程控制未能开始，原共享状态也未能确认。');
+        } else if (!attempt.controller.signal.aborted && restored) this.options.setNotice('远程控制未能开始，请检查共享状态后重新申请。');
       }
       return false;
     } finally {
@@ -361,7 +361,7 @@ export class RemoteControlSession {
     clearTimeout(this.pendingTimer);
     if (room) {
       void this.send(room, pending.identity, { type: 'cancel', requestId: pending.requestId }).catch(() => {
-        if (this.options.isCurrentRoom(room)) this.options.setNotice('取消通知发送失败，本地不会接受迟到授权。');
+        if (this.options.isCurrentRoom(room)) this.options.setNotice('取消通知未能送达，但本次授权已取消。');
       });
     }
     await this.finishController();
@@ -383,7 +383,7 @@ export class RemoteControlSession {
     void desktop.sendNativeRemoteInput(share.captureSessionId, message.controlSessionId, identity,
       message.sequence, message.input).catch(() => {
         if (this.options.isCurrentRoom(room) && this.authorization.controller?.controlSessionId === message.controlSessionId) {
-          this.options.setNotice('远程输入失败，控制已撤销。');
+          this.options.setNotice('鼠标或键盘操作失败，远程控制已取消。');
           void this.revokeOwnerControl(room);
         }
       });
@@ -398,7 +398,7 @@ export class RemoteControlSession {
       return true;
     } catch {
       if (this.controllerInput === session) {
-        this.options.setNotice('远程输入发送失败，请退出控制后重试。');
+        this.options.setNotice('鼠标或键盘操作未能发送，请退出远程控制后重试。');
         void this.exitControl(session);
       }
       return false;
@@ -425,7 +425,7 @@ export class RemoteControlSession {
     void this.send(session.room, session.identity, { type: 'revoke', shareSessionId: session.shareId,
       controlSessionId: session.controlSessionId }).catch(() => {
       if (this.options.isCurrentRoom(session.room) && !this.pending.value && !this.active.value) {
-        this.options.setNotice('退出通知发送失败，本地输入已停止。');
+        this.options.setNotice('退出通知未能送达，但已停止控制对方电脑。');
       }
     });
     await this.finishController();
@@ -436,7 +436,7 @@ export class RemoteControlSession {
     this.restoring.value = true;
     try { await restore(); return true; }
     catch {
-      this.options.setNotice('远程控制已停止，画面清理或原共享恢复失败，请检查共享状态后重试。');
+      this.options.setNotice('远程控制已停止，画面状态仍有异常。');
       return false;
     }
     finally { this.restoring.value = false; }
@@ -473,7 +473,7 @@ export class RemoteControlSession {
     } catch {
       if (this.nativeCleanup === cleanup) {
         this.cleanupPending.value = true;
-        if (this.options.isCurrentRoom(cleanup.room)) this.options.setNotice('远程控制输入尚未释放，请重试撤销。');
+        if (this.options.isCurrentRoom(cleanup.room)) this.options.setNotice('停止远程控制时发生问题，请再次点击停止。');
       }
       return false;
     }

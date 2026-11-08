@@ -43,17 +43,17 @@ watch(() => props.active, (active) => {
 
 <template>
   <section class="settings-section account-settings">
-    <p>退出登录会保留本机凭据。已绑定 QQ 的账号可通过 QQ 重新登录；未绑定时，服主使用恢复密码，成员向服主获取恢复链接。</p>
+    <p>退出后仍会记住此账号。需要重新登录时，可使用已绑定的 QQ；服主也可使用恢复密码，成员可向服主获取恢复链接。</p>
     <section class="settings-block">
       <h2>第三方账号</h2>
       <div v-if="qqAvailable" class="account-row"><div class="account-copy"><span>QQ 登录</span>
-        <small>{{ binding?.bound ? `已绑定 · ${binding.nickname}` : '绑定后可通过 QQ 登录原账号，保留资料与权限' }}</small></div>
+        <small>{{ binding?.bound ? `已绑定 · ${binding.nickname}` : '绑定后可用 QQ 登录当前账号' }}</small></div>
         <button v-if="!binding?.bound" type="button" :disabled="!binding || leaving || qq.busy.value" @click="qq.start(true)">绑定 QQ</button>
         <button v-if="qq.busy.value" type="button" :disabled="qq.finishing.value" @click="qq.cancel">取消等待</button></div>
       <div v-else class="account-row"><div class="account-copy"><span>QQ 登录</span>
-        <div class="account-row-description"><p v-if="expanded === 'qq'" id="qq-entry" class="account-entry-note">当前服务器尚未开启 QQ 登录，已有账号与群聊仍可正常使用。</p><small v-else>当前服务器未开启</small></div></div>
+        <div class="account-row-description"><p v-if="expanded === 'qq'" id="qq-entry" class="account-entry-note">当前服务器尚未开启 QQ 登录。</p><small v-else>当前服务器未开启</small></div></div>
         <button type="button" :aria-expanded="expanded === 'qq'" aria-controls="qq-entry" @click="toggleEntry('qq')">{{ expanded === 'qq' ? '收起说明' : '查看 QQ 绑定说明' }}</button></div>
-      <InlineFeedback :message="qq.error.value || qqError" :status="qq.busy.value && !qq.finishing.value ? '请在浏览器确认 QQ 身份，再返回应用完成绑定' : ''"
+      <InlineFeedback :message="qq.error.value || qqError" :status="qq.busy.value && !qq.finishing.value ? '请在浏览器确认 QQ 绑定' : ''"
         :pending="qq.finishing.value ? '正在确认绑定…' : qqAvailable && !binding && !qqError ? '正在读取绑定状态…' : ''" />
     </section>
     <section class="settings-block account-session">

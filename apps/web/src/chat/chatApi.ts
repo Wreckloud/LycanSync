@@ -131,7 +131,7 @@ interface FilePickerWindow extends Window {
 export async function downloadFile(groupId: string, attachment: ChatAttachment, signal: AbortSignal,
   onProgress: (loadedBytes: number) => void): Promise<void> {
   const picker = (window as FilePickerWindow).showSaveFilePicker;
-  if (!picker) throw new Error('当前客户端不支持大文件流式保存');
+  if (!picker) throw new Error('当前客户端不支持保存这类大文件。');
   signal.throwIfAborted();
   const handle = await picker.call(window, { suggestedName: attachment.fileName ?? 'download' });
   // 系统保存对话框不能强制关闭，但取消后的迟到选择不得创建写入或发起下载。

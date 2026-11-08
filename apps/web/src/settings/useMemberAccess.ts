@@ -29,7 +29,7 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>) {
   function visible() { return active.value && !controller.signal.aborted && document.visibilityState === 'visible'; }
   function current(request: AbortController) { return request === controller && !request.signal.aborted; }
   function requestSignal(request: AbortController) { return AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]); }
-  function message(exception: unknown) { return exception instanceof Error ? exception.message : '操作失败，请重试。'; }
+  function message(exception: unknown) { return exception instanceof Error ? exception.message : '操作失败。'; }
 
   function scheduleRefresh() {
     clearTimeout(timer);

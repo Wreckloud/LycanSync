@@ -184,7 +184,7 @@ describe('App 启动恢复共享偏好', () => {
       });
       expect(() => app.restoreCapturePreferences()).not.toThrow();
       expect(state.captureQuality.value).toBe('standard');
-      expect(state.viewerNotice.value).toContain('无法读取本机共享偏好');
+      expect(state.viewerNotice.value).toContain('无法读取上次的共享设置');
       expect(setItem).not.toHaveBeenCalled();
       const waiting = open();
       expect(state.captureSourceType.value).toBe('window');
@@ -213,7 +213,7 @@ describe('App 共享选择的音频偏好提交顺序', () => {
       if (action === 'confirm') expect(JSON.parse(stored.get('lycansync.screen-share-quality')!).customQuality.bitrateMbps).toBe(6);
       else {
         expect(stored.has('lycansync.screen-share-quality')).toBe(false);
-        expect(state.viewerNotice.value).toContain('无法保存');
+        expect(state.viewerNotice.value).toContain('未能保存');
       }
     }
   });
@@ -338,7 +338,7 @@ describe('App 共享选择的音频偏好提交顺序', () => {
       customQuality: { resolution: 1440, fps: 120 } });
     expect(state.captureRequest.value).toBeNull();
     expect(order[0]).toBe('finish');
-    expect(state.viewerNotice.value).toContain('无法保存');
+    expect(state.viewerNotice.value).toContain('未能保存');
     expect(state.viewerNotice.value).not.toContain('已生效');
   });
 

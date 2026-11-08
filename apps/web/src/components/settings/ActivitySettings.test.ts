@@ -35,7 +35,7 @@ it('浏览器不展示系统窗口入口，未检测到动态不误报正在玩'
   const { html } = await render(null, false);
   expect(html).toContain('动态检测仅在 Windows 桌面版提供');
   expect(html).not.toContain('activity-window');
-  expect(html).not.toContain('正在玩');
+  expect(html.match(/<aside[\s\S]*?<\/aside>/)?.[0]).not.toContain('正在玩');
   expect(html.match(/<input[^>]*type="checkbox"[^>]*>/)?.[0]).not.toContain('disabled');
 });
 
@@ -51,7 +51,7 @@ it('识别结果放在修正标题旁，页面仅保留紧凑选择与操作，�
   expect(html).not.toContain('activity-display-name');
   expect(html).toMatch(/<button[^>]*disabled[^>]*>重置<\/button>/);
   expect(html).toMatch(/<button[^>]*disabled[^>]*>修改名称<\/button>/);
-  expect(html).toContain('关闭后隐藏并保留记录');
+  expect(html).toContain('关闭后隐藏，重新开启可恢复展示');
   expect(html).not.toContain('关闭后清除');
   expect(html).not.toContain('刷新运行窗口');
 });

@@ -44,7 +44,7 @@ export function useVoiceOverlay(options: {
   function saveSettings(next: VoiceOverlaySettings) {
     settings.value = next;
     try { (options.storage ?? localStorage).setItem(key, JSON.stringify(next)); }
-    catch { error.value = '本次覆盖设置已生效，但无法保存到本机。'; }
+    catch { error.value = '本次屏幕覆盖设置已生效，但未能保存。'; }
   }
 
   function publish() {
@@ -73,7 +73,7 @@ export function useVoiceOverlay(options: {
     lastSnapshot = signature;
     if (portraitsChanged) lastPortraits = new Map(nextPortraits.map((portrait) => [portrait.identity, portrait.avatar]));
     void bridge.update(owner, snapshot).catch(() => {
-      if (!disposed) error.value = '屏幕覆盖状态未能更新；语音不受影响，请关闭覆盖后重新开启。';
+      if (!disposed) error.value = '屏幕覆盖状态更新失败，请关闭后重新开启；语音不受影响。';
     });
   }
 
@@ -111,7 +111,7 @@ export function useVoiceOverlay(options: {
         const { enabled, mode, scale, displayId, x, y } = parsed;
         settings.value = { enabled, mode, scale, displayId, x, y };
       }
-    } catch { error.value = '无法读取本机覆盖设置，当前保持关闭。'; }
+    } catch { error.value = '无法读取屏幕覆盖设置，暂时保持关闭。'; }
     try {
       const token = await bridge.begin();
       if (disposed) { await bridge.end(token); return; }
@@ -121,7 +121,7 @@ export function useVoiceOverlay(options: {
       ready.value = true;
       publish();
       displays.value = await bridge.displays();
-    } catch { if (!disposed) error.value = '屏幕覆盖初始化失败；语音不受影响。'; }
+    } catch { if (!disposed) error.value = '屏幕覆盖启动失败，语音不受影响。'; }
   }
 
   async function configure(patch: Partial<VoiceOverlaySettings>) {

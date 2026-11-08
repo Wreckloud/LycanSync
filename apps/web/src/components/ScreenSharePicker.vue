@@ -34,8 +34,8 @@ const sources = computed(() => props.sources.filter((source) => source.type === 
 const quality = computed(() => screenShareQuality(props.quality, props.customQuality));
 const borderNotice = computed(() => {
   if (props.sourceType !== 'window' || captureSettings.value.windowMethod === 'game') return '';
-  if (borderSupport.value === false) return '自动选择系统窗口采集时，当前 Windows 会显示系统边框。';
-  return '自动选择系统窗口采集时会尽量隐藏系统边框，系统限制或权限不允许时可能显示边框。';
+  if (borderSupport.value === false) return '共享此窗口时，Windows 会显示系统边框。';
+  return '共享此窗口时会尽量隐藏系统边框；受系统或权限限制时仍可能显示。';
 });
 const canConfirm = computed(() => props.audioReady && !props.audioFailed && !props.error && !settingsError.value
   && props.sources.some((source) => source.id === props.selectedId));
@@ -44,9 +44,9 @@ const feedbackPending = computed(() => !props.audioReady ? '正在检查共享�
 const feedbackStatus = computed(() => {
   if (feedbackPending.value) return '';
   if (props.notice) return props.notice;
-  if (!sources.value.length) return '没有可共享的来源，请切换分类或等待新窗口出现。';
+  if (!sources.value.length) return '没有可共享的窗口或屏幕，请切换分类，或打开要分享的窗口。';
   // 勾选前就说明采集范围，不能让系统混音看起来只包含所选应用。
-  if (props.audioMode === 'systemMix') return '共享音频包含全部电脑声音，包括 LycanSync，可能产生回声。';
+  if (props.audioMode === 'systemMix') return '将共享全部电脑声音，包括 lycanclaw 的声音，可能产生回声。';
   return props.audioMode === 'unavailable' ? '当前系统仅支持共享画面。' : '';
 });
 const descriptions: Record<ScreenShareQualityId, string> = {
@@ -90,7 +90,7 @@ function qualityKeydown(event: KeyboardEvent) {
 }
 onMounted(async () => {
   try { captureSettings.value.hideCursor = readScreenSharePreferences().hideCursor; }
-  catch { settingsError.value = '无法读取光标偏好，请重新保存客户端设置后再试。'; }
+  catch { settingsError.value = '无法读取光标设置，请在客户端设置中重新保存后再试。'; }
   const desktop = window.lycanDesktop;
   if (desktop?.getScreenShareSupport) {
     void desktop.getScreenShareSupport().then(support => {
@@ -109,7 +109,7 @@ defineExpose({ sourcesElement });
     <div class="dialog-backdrop" v-on="backdropEvents" @keydown.stop="keydown">
       <section ref="panel" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-title" tabindex="-1">
         <header class="capture-header">
-          <div><h2 id="capture-title">选择共享的窗口或屏幕</h2><p>选择画面和画质，然后开始共享。</p></div>
+          <div><h2 id="capture-title">选择共享的窗口或屏幕</h2></div>
         </header>
         <div class="capture-tabs" role="tablist" aria-label="共享来源类型">
           <button v-for="type in (['window', 'screen'] as const)" :key="type" type="button" role="tab"
@@ -154,8 +154,8 @@ defineExpose({ sourcesElement });
             </select>
           </label>
           <label class="capture-audio-option"><input v-model="captureSettings.hideCursor" type="checkbox" />隐藏共享画面中的光标</label>
-          <p v-if="sourceType === 'window'">自动选择适合所选窗口的采集方式，只分享应用内容区域。游戏采集用于手动指定游戏。</p>
-          <p v-else>整屏使用 DXGI，无系统共享黄框。高级选项仅用于本次共享。</p>
+          <p v-if="sourceType === 'window'">自动选择适合此窗口的共享方式，仅分享应用内容。也可手动选择游戏采集。</p>
+          <p v-else>整屏共享不显示系统黄框。高级选项仅对本次共享生效。</p>
           </div>
           </ExpandSection>
         </div>

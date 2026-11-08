@@ -93,7 +93,7 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); clearSecre
   <section class="settings-block lifecycle-settings">
     <template v-if="status?.administrator">
       <h2>服主恢复与转让</h2>
-      <p v-if="status.recoveryConfigured">已设置恢复密码。无法登录时，可从欢迎页的“群组恢复”找回原账号。</p>
+      <p v-if="status.recoveryConfigured">已设置恢复密码，无法登录时可通过“群组恢复”找回账号。</p>
       <p v-else-if="qqBound === false" class="recovery-warning" role="status">安全建议：请设置服主恢复密码，避免本机登录信息丢失后无法找回账号。</p>
       <div class="button-actions">
         <button type="button" :disabled="busy || leaving" @click="toggle('password')">{{ status.recoveryConfigured ? '修改恢复密码' : '设置恢复密码' }}</button>
@@ -117,7 +117,7 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); clearSecre
             </select>
           </label>
           <PasswordField id="owner-transfer-password" v-model="previousPassword" label="当前服主恢复密码" :disabled="busy || leaving" required />
-          <p>对方须在 24 小时内确认并设置自己的恢复密码。完成后，你将成为普通成员，原恢复密码及未使用的账号邀请／恢复链接将失效。</p>
+          <p>对方需在 24 小时内确认并设置恢复密码。转让后你将成为普通成员，原服主恢复密码及未使用的账号邀请、恢复链接将失效。</p>
           <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button class="confirm-button card-actions-end" :disabled="busy || leaving">发起转让</button></div>
         </form>
       </ExpandSection>
@@ -131,7 +131,7 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); clearSecre
       </form>
     </template>
     <h2>注销账号</h2>
-    <p>注销后无法再次登录。昵称、头像、签名、消息和共同语音等历史记录保留，并显示“已注销”。</p>
+    <p>注销后无法再登录。历史昵称、头像、签名、消息和共同语音记录仍会保留，并标记为“已注销”。</p>
     <p v-if="status?.administrator">请先完成服主转让，再注销账号。</p>
     <div v-if="status?.ownedGroups.length"><p>请先转让或解散以下群组：</p><ul><li v-for="group in status.ownedGroups" :key="group.id">{{ group.name }}</li></ul></div>
     <button type="button" class="settings-button account-danger" :disabled="!status || busy || leaving || status.administrator || status.ownedGroups.length > 0" @click="toggle('close')">注销账号</button>

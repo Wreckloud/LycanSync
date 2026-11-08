@@ -25,13 +25,13 @@ function updateAutomatic(event: Event) {
   <section class="settings-block diagnostic-report-settings">
     <h2>测试报告</h2>
     <label class="settings-toggle">
-      <span><strong>自动记录诊断</strong><small>桌面测试版默认开启，记住本机选择；进入应用后自动记录，无需先加入语音。</small></span>
+      <span><strong>自动记录诊断</strong><small>进入应用后自动记录，是否开启会保存在这台设备。</small></span>
       <input type="checkbox" aria-label="自动记录诊断" :checked="automaticEnabled" :disabled="saving" @change="updateAutomatic" />
     </label>
     <p>关闭开关保留已有记录，再次开启继续记录。</p>
-    <p>记录版本、媒体参数、帧率与丢包；桌面导出附带系统信息和精简故障阶段。成员使用临时编号，不附带昵称、链接或原始日志；不录制音视频，不自动上传。</p>
-    <p v-if="desktop">关闭开关只停止详细采样；桌面启动后的有界关键阶段与故障日志仍保留。导出不会停止自动记录。</p>
-    <p v-if="desktop">详细报告每约 15 秒保存在安装目录 data/diagnostics，画面结束后固定保留最近一次使用，后续空闲不覆盖；正常关闭时补存。异常退出或后台节流可能缺少最后一个保存间隔。关闭应用或退出账号后仍可导出，仅重新打开设置不会覆盖上次使用。自动保存不包含体验说明。</p>
+    <p>记录版本、设备与通话质量等排查信息，成员使用临时编号。不包含昵称、链接或原始日志，不录制音视频，也不会自动上传。</p>
+    <p v-if="desktop">关闭后停止详细记录，基础故障日志仍会保留。导出报告不会停止记录。</p>
+    <p v-if="desktop">详细报告约每 15 秒自动保存至 data/diagnostics。共享结束后保留最近一次记录，退出账号或关闭应用后仍可导出。异常退出可能缺少最后一段记录；体验说明不会自动保存。</p>
     <p v-else>浏览器详细记录仅保存在页面内存，请在退出前导出。</p>
     <div class="settings-actions">
       <button v-if="!automaticEnabled && !recording" type="button" :disabled="!canStart || saving" @click="report.start()">
@@ -44,7 +44,7 @@ function updateAutomatic(event: Event) {
       <span role="status">{{ recording ? automaticEnabled ? '自动记录中' : '记录中' : reason === 'limit' ? '达到记录上限，已结束' : reason ? '记录已结束' : '尚未开始' }}<template v-if="desktop"> · {{ savedSizeBytes === null ? '尚未保存' : `文件大小 ${formatReportSize(savedSizeBytes)}` }}</template></span>
     </div>
     <p v-if="desktop && savedReport">{{ savedReport.kind === 'screen-media' ? '最近画面使用' : '上次使用' }}：{{ new Date(savedReport.endedAt).toLocaleString() }}<template v-if="savedReport.clientVersion"> · {{ savedReport.clientVersion }}</template> · {{ formatReportSize(savedReport.bytes) }}</p>
-    <p v-if="desktop">导出默认保存在安装目录 data/exports，每次仍可选择桌面等其他位置。清除前请先关闭自动记录；清除自动保存的详细报告和当前内存采样，不删除手动导出的文件，不影响账号、设置或有界基础故障日志。</p>
+    <p v-if="desktop">报告默认导出至 data/exports，也可另选位置。清除记录前请关闭自动记录；只清除自动保存和当前记录，手动导出的文件、账号设置及基础故障日志会保留。</p>
     <label class="report-notes">体验说明（选填）
       <textarea v-model="notes" maxlength="2000" rows="2" placeholder="例如：四路观看时卡顿，单路观看恢复正常" />
     </label>
@@ -56,7 +56,7 @@ function updateAutomatic(event: Event) {
       <button type="button" :disabled="!recording || saving" @click="report.markProblem(problemCategory)">标记刚才的问题</button>
       <span v-if="report.problemMarkers?.value.length">最近标记：{{ new Date(report.problemMarkers.value.at(-1)!.time).toLocaleTimeString() }}</span>
     </div>
-    <p>标记点击时刻并随报告导出，不录音；请尽快标记并在体验说明中补充现象。未开启记录时无法补回此前统计。</p>
+    <p>遇到问题时尽快标记，并在体验说明中描述现象。标记会随报告导出，不会录音；未开启记录时无法补回此前数据。</p>
     <InlineFeedback :message="error" :pending="saving ? '正在导出报告…' : ''" />
     <InlineFeedback :message="persistenceError" />
   </section>

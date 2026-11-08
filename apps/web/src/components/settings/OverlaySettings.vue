@@ -29,7 +29,7 @@ onScopeDispose(() => { void props.overlay.edit(false); });
 
 <template>
   <div class="settings-section overlay-settings">
-    <p class="settings-intro">显示当前语音房间的成员。平时不接收鼠标操作，主窗口最小化后仍可显示。</p>
+    <p class="settings-intro">在屏幕上显示语音成员，不影响鼠标操作。主窗口最小化后仍可显示。</p>
     <section class="settings-block">
       <h2>屏幕覆盖</h2>
       <label class="settings-toggle">
@@ -55,17 +55,17 @@ onScopeDispose(() => { void props.overlay.edit(false); });
         :value="overlay.settings.value.scale" :disabled="!overlay.ready.value || overlay.busy.value" aria-label="覆盖整体大小"
         @change="overlay.configure({ scale: Number(($event.target as HTMLInputElement).value) })" /></label>
       <div class="settings-toggle">
-        <span><strong>编辑覆盖位置</strong><small>编辑时直接拖动头像或昵称，离开本栏目即结束编辑。</small></span>
+        <span><strong>编辑覆盖位置</strong><small>拖动头像或昵称调整位置，离开此栏目后结束编辑。</small></span>
         <button class="settings-button" type="button" :disabled="!overlay.ready.value || !overlay.settings.value.enabled || overlay.busy.value"
           @click="overlay.edit(!overlay.editing.value)">{{ overlay.editing.value ? '完成编辑' : '编辑位置' }}</button>
       </div>
       <label v-if="overlay.editing.value" class="settings-toggle">
-        <span><strong>显示测试成员</strong><small>加入三个默认头像，比较短昵称、英文和长昵称的排列；仅编辑期间显示。</small></span>
+        <span><strong>显示测试成员</strong><small>用三个示例成员预览不同长度的昵称，仅在编辑时显示。</small></span>
         <input type="checkbox" :checked="overlay.preview.value" @change="overlay.edit(true, ($event.target as HTMLInputElement).checked)" />
       </label>
       <button class="settings-button" type="button" :disabled="!overlay.ready.value || overlay.busy.value" @click="overlay.configure({ displayId: null, x: 1, y: 0.5, scale: 100 })">恢复默认位置与大小</button>
     </section>
-    <p class="settings-intro">覆盖默认排除在屏幕采集外。适用于大多数桌面、窗口和无边框游戏；独占全屏、锁屏及系统安全界面可能无法显示，实际排除效果取决于系统与录屏方式。</p>
+    <p class="settings-intro">通常不会录入共享画面。独占全屏、锁屏等场景可能无法显示，是否入镜仍取决于系统和录屏方式。</p>
   </div>
 </template>
 

@@ -131,7 +131,7 @@ watch([videoElement, () => media.value.track, () => media.value.publication, () 
     if (isLocal) setNativeScreenPreviewDemand(track.mediaStreamTrack, element, localPreviewVisible && viewingQuality.value === VideoQuality.HIGH);
   };
   const preview = isLocal
-    ? observeLocalScreenPreview(element, () => emit('notice', '本地共享预览无法播放，请重新打开观看画面。'),
+    ? observeLocalScreenPreview(element, () => emit('notice', '无法播放自己的共享预览，请重新打开观看窗口。'),
       (visible) => { localPreviewVisible = visible; updateLocalPreviewDemand(); }, props.viewActive)
     : undefined;
   const viewing = !isLocal && publication
@@ -413,7 +413,7 @@ onBeforeUnmount(() => {
       <span v-if="variant === 'card' && isLocal" class="participant-volume-control" @wheel.stop.prevent="adjustOutputVolume">
         <button type="button" class="participant-state participant-state-button"
           :class="{ 'is-off': isListening === false }"
-          :aria-label="isListening ? `停止接收所有成员声音，LycanSync 总输出${outputVolumePercent}%，滚轮调整` : '恢复接收所有成员声音'"
+          :aria-label="isListening ? `停止接收所有成员声音，lycanclaw 总输出${outputVolumePercent}%，滚轮调整` : '恢复接收所有成员声音'"
           @click="emit('toggleListening')">
           <HeadphoneOff v-if="isListening === false" :size="14" /><Headphones v-else :size="14" />
         </button>

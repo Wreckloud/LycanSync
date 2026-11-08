@@ -20,7 +20,7 @@ onScopeDispose(stopPreview);
 <template>
   <section class="settings-block call-sound-settings">
     <h2>本机提示音</h2>
-    <p>只影响这台设备的提示，不改变朋友的语音音量，也不修改发送给朋友的入场音效。</p>
+    <p>调整你听到的提示音，不影响朋友的语音或你播放给朋友的入场音效。</p>
     <label class="settings-range-row"><span>提示音音量 <strong>{{ Math.round(preferences.volume.value * 100) }}%</strong></span>
       <input type="range" min="0" max="100" step="1" aria-label="提示音音量" :value="Math.round(preferences.volume.value * 100)"
         @change="preferences.setVolume(Number(($event.target as HTMLInputElement).value) / 100)" />
@@ -32,7 +32,7 @@ onScopeDispose(stopPreview);
     </div>
     <label><input type="checkbox" :checked="preferences.customEntrances.value"
       @change="preferences.setCustomEntrances(($event.target as HTMLInputElement).checked)" />播放成员自定义入场音效</label>
-    <small>关闭自定义入场音效时使用默认加入提示；关闭“成员加入语音”则两者都不播放。提示音仍跟随总输出音量。</small>
+    <small>关闭自定义入场音效后使用默认提示音；关闭“成员加入语音”则都不播放。音量跟随提示音设置。</small>
     <InlineFeedback :message="preferences.error.value || previewError" />
   </section>
 </template>

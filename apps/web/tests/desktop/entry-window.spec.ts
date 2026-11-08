@@ -38,7 +38,7 @@ require(${JSON.stringify(resolve('electron/main.cjs'))});
     env: desktopTestEnvironment(directory, origin) });
   try {
     const page = await application.firstWindow();
-    await expect(page.getByRole('heading', { name: '准备进入 LycanSync' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '准备进入 lycanclaw' })).toBeVisible();
     const bounds = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
     await expect.poll(async () => (await bounds()).width).toBeLessThanOrEqual(428);
     const fitsCard = () => page.evaluate(() => {

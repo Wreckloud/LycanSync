@@ -16,6 +16,7 @@ interface OutputEntry {
 }
 type RoutedContext = AudioContext & { setSinkId?: (id: string | { type: 'none' }) => Promise<void>;
   sinkId?: string | { type: 'none' } };
+const DEVICE_LIST_ERROR = '无法读取播放设备列表。';
 
 /** 统一现有播放资源的去向，不创建音频图、不拥有采集或播放器。 */
 export function useAudioOutput(preferences: ReturnType<typeof useAudioPreferences>, media = navigator.mediaDevices) {
@@ -111,16 +112,18 @@ export function useAudioOutput(preferences: ReturnType<typeof useAudioPreference
       if (desiredId !== 'default' && !devices.value.some((device) => device.id === desiredId)) {
         notice.value = '所选扬声器不可用，已暂停声音输出。请重新连接设备或手动选择系统默认。';
         silence();
+      } else if (notice.value === DEVICE_LIST_ERROR) {
+        notice.value = blocked.value ? '声音输出尚未恢复，请重新选择设备。' : '';
       }
     } catch {
-      if (!disposed && version === refreshVersion) notice.value = '无法读取声音输出列表，请检查权限后刷新。';
+      if (!disposed && version === refreshVersion) notice.value = DEVICE_LIST_ERROR;
     }
   }
 
   async function select(id: string) {
     if (disposed || changing.value || (id === desiredId && !blocked.value)) return;
     if ((id !== 'default' && (!supported || !devices.value.some((device) => device.id === id)))) {
-      notice.value = '当前声音输出不可用，请刷新设备列表。';
+      notice.value = '当前声音输出不可用，请重新打开设备列表选择。';
       return;
     }
     const previousId = desiredId;
@@ -140,7 +143,7 @@ export function useAudioOutput(preferences: ReturnType<typeof useAudioPreference
       blocked.value = previouslyBlocked;
       const rollback = await Promise.allSettled([...entries].map(apply));
       if (rollback.some((result) => result.status === 'rejected')) silence();
-      if (!disposed) notice.value = '声音输出切换失败，未保存新选择。请检查设备后重试。';
+      if (!disposed) notice.value = '播放设备切换失败，新选择未保存。';
     } finally { changing.value = false; }
   }
 

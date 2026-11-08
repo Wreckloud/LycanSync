@@ -485,7 +485,7 @@ describe('native screen share wiring', () => {
     try {
       await rtc.join('border-failure');
       await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
-      expect(rtc.notice.value).toContain('系统窗口采集');
+      expect(rtc.notice.value).toContain('窗口共享');
       expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare)).toBeUndefined();
       expect(rtcMocks.nativeStarts).toHaveBeenCalledTimes(1);
       rtcMocks.selectedSources.mockResolvedValueOnce({ sourceId: 'window:test:0', shareAudio: false,
@@ -524,7 +524,7 @@ describe('native screen share wiring', () => {
       expect(session.canReduceFrameRate()).toBe(false);
       rtc.remoteControlOwner.value = null;
       session.reportFrameRateFailure(30);
-      expect(rtc.notice.value).toContain('采集目标仍为 30 FPS');
+      expect(rtc.notice.value).toContain('仍以 30 FPS 为目标');
       const publishedCount = rtcMocks.published.mock.calls.length;
       expect(await rtc.setScreenShareQuality('standard')).toBe(true);
       expect(rtc.notice.value).toBe('');
@@ -702,7 +702,7 @@ describe('native screen share wiring', () => {
       expect(await rtc.join('microphone-source-settings')).toBe(true);
       await rtc.setMicrophoneProcessing({ echoCancellation: true, noiseSuppression: true,
         autoGainControl: true, voiceEnhancement: true });
-      expect(rtc.notice.value).toBe('部分音频处理设置需要重新开麦后生效。');
+      expect(rtc.notice.value).toBe('重新开启麦克风后，部分声音处理设置才会生效。');
     } finally { await rtc.leave(); scope.stop(); }
   });
 
@@ -754,7 +754,7 @@ describe('native screen share wiring', () => {
     expect(await rtc.join('test-microphone')).toBe(false);
     expect(rtcMocks.token).not.toHaveBeenCalled();
     expect(rtc.status.value).toBe('idle');
-    expect(rtc.notice.value).toContain('试听停止未确认');
+    expect(rtc.notice.value).toContain('停止麦克风试听时发生问题');
     scope.stop();
   });
 
@@ -788,7 +788,7 @@ describe('native screen share wiring', () => {
       beforeMicrophoneChange.mockRejectedValueOnce(new Error('test stop failed'));
       await rtc.setMediaEnabled(Track.Source.Microphone, true);
       expect(rtcMocks.microphoneStarted).toHaveBeenCalledOnce();
-      expect(rtc.notice.value).toContain('试听停止未确认');
+      expect(rtc.notice.value).toContain('停止麦克风试听时发生问题');
       expect(rtc.busySources.value).toEqual([]);
     } finally { await rtc.leave(); scope.stop(); }
   });
@@ -807,7 +807,7 @@ describe('native screen share wiring', () => {
       await rtc.setMediaEnabled(Track.Source.Microphone, false);
       expect(rtcMocks.unpublishing).toHaveBeenCalledOnce();
       expect(rtcMocks.microphoneStopped).toHaveBeenCalledOnce();
-      expect(rtc.notice.value).toContain('试听停止未确认');
+      expect(rtc.notice.value).toContain('停止麦克风试听时发生问题');
     } finally { await rtc.leave(); scope.stop(); }
   });
   it.each([true, false])('停止收听后恢复只沿用此前开麦意愿：%s', async (intent) => {
@@ -867,14 +867,14 @@ describe('native screen share wiring', () => {
       else (failure === 'native' ? rtcMocks.microphoneStopped : rtcMocks.unpublishing)
         .mockRejectedValueOnce(new Error('stop failed'));
       await rtc.updateListeningState(false);
-      expect(rtc.notice.value).toContain('停止未确认');
+      expect(rtc.notice.value).toContain('发生问题');
       expect(track.mediaStreamTrack.enabled).toBe(false);
       expect(rtc.microphoneEnabled.value).toBe(false);
       expect(rtcMocks.microphoneStopped).toHaveBeenCalledOnce();
       await rtc.updateListeningState(true);
       expect(rtcMocks.microphoneStarted).toHaveBeenCalledOnce();
       expect(rtc.microphoneEnabled.value).toBe(false);
-      expect(rtc.notice.value).toContain('停止未确认');
+      expect(rtc.notice.value).toContain('发生问题');
     } finally { await rtc.leave(); scope.stop(); log.mockRestore(); }
   });
 
@@ -1301,7 +1301,7 @@ describe('native screen share wiring', () => {
       rtcMocks.selectedSources.mockResolvedValueOnce({ sourceId: 'window:next:0', shareAudio: false });
       expect(await rtc.changeScreenShareSource()).toBe(false);
       expect(rtcMocks.nativeStarts).toHaveBeenCalledOnce();
-      expect(rtc.notice.value).toContain('停止未确认');
+      expect(rtc.notice.value).toContain('发生问题');
     } finally {
       await rtc.leave();
       scope.stop();
@@ -1731,7 +1731,7 @@ describe('native screen share wiring', () => {
     try {
       expect(await rtc.join('microphone-failed-room')).toBe(true);
       expect(rtc.status.value).toBe('connected');
-      expect(rtc.notice.value).toContain('麦克风操作失败');
+      expect(rtc.notice.value).toContain('麦克风失败');
       expect((rtcMocks.rooms[0] as { attributes: Array<Record<string, string>> }).attributes)
         .toEqual([{ 'lycansync.listening': 'true' }]);
     } finally {
@@ -1918,7 +1918,7 @@ describe('native screen share wiring', () => {
       const control = rtc.remoteControlOwner.value!;
       expect(await rtc.revokeRemoteControl()).toBe(false);
       expect(rtc.remoteControlCleanupPending.value).toBe(true);
-      expect(rtc.notice.value).toContain('尚未释放');
+      expect(rtc.notice.value).toContain('停止远程控制时发生问题');
       receiveRemoteControl('viewer-a', { type: 'input', shareSessionId: 'monitor:1:0-session',
         controlSessionId: control.controlSessionId, sequence: 1, input: { kind: 'keyDown', key: 'letterA' } });
       receiveRemoteControl('other', { type: 'request', requestId: 'must-deny' });
@@ -2152,7 +2152,7 @@ describe('native screen share wiring', () => {
       });
       expect(await rtc.exitRemoteControl()).toBe(true);
       expect(rtc.remoteControlActive.value).toBeNull();
-      await vi.waitFor(() => expect(rtc.notice.value).toContain('本地输入已停止'));
+      await vi.waitFor(() => expect(rtc.notice.value).toContain('已停止控制对方电脑'));
       expect(await rtc.requestRemoteControl('owner-a')).toBe(true);
       await rtc.cancelPendingRemoteControl();
       mockRoom().remoteParticipants.delete('owner-b');
@@ -2443,7 +2443,7 @@ describe('native screen share wiring', () => {
 
       expect(await rtc.revokeRemoteControl()).toBe(false);
       expect(rtc.remoteControlCleanupPending.value).toBe(true);
-      expect(rtc.notice.value).toContain('尚未释放');
+      expect(rtc.notice.value).toContain('停止远程控制时发生问题');
       receiveRemoteControl('viewer-a', { type: 'input', shareSessionId: 'share-session', controlSessionId: granted.controlSessionId,
         sequence: 4, input: { kind: 'keyDown', key: 'letterB' } });
       await Promise.resolve();
@@ -2478,7 +2478,7 @@ describe('native screen share wiring', () => {
     try {
       expect(await rtc.join('microphone-group')).toBe(true);
       await rtc.setMediaEnabled(Track.Source.Microphone, false);
-      expect(rtc.notice.value).toBe('麦克风停止未确认，已禁止发送，请重启客户端后再开麦。');
+      expect(rtc.notice.value).toBe('停止麦克风时发生问题，已禁止发送声音。请重启应用后再开麦。');
       expect(rtc.busySources.value).toEqual([]);
     } finally {
       rtcMocks.microphoneStopped.mockResolvedValue({ changed: true });
@@ -2714,13 +2714,13 @@ describe('native screen share wiring', () => {
       await rtc.setMediaEnabled(Track.Source.ScreenShare, false);
       expect(rtcMocks.nativeStops).toHaveBeenCalledWith('window:test:0-session');
       expect(rtcMocks.nativeAudioStops).toHaveBeenCalledWith('window:test:0-session');
-      expect(rtc.notice.value).toContain('停止未确认');
+      expect(rtc.notice.value).toContain('发生问题');
       expect(rtc.screenShareActive.value).toBe(false);
       if (audioStopFails) expect(cleanupError).toHaveBeenCalledWith('原生音频清理未完成', expect.any(Error));
 
       await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
       expect(rtcMocks.nativeStarts).toHaveBeenCalledTimes(startsBeforeStop);
-      expect(rtc.notice.value).toContain('重启客户端');
+      expect(rtc.notice.value).toContain('重启应用');
     } finally {
       cleanupError.mockRestore();
       await rtc.leave();
@@ -2958,7 +2958,7 @@ describe('native screen share wiring', () => {
       await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
       await waitForSharedAudio();
       await rtcMocks.nativeAudioError('screenShareAudioTargetUnavailable');
-      expect(rtc.notice.value).toContain('所选应用已关闭或声音目标不可用');
+      expect(rtc.notice.value).toContain('共享声音的应用已关闭，或当前无法取得声音');
       expect(rtc.notice.value).not.toContain('默认播放设备');
       expect(rtcMocks.unpublishing).toHaveBeenCalledWith(rtcMocks.published.mock.calls[1][0], true);
       expect(rtcMocks.unpublishing.mock.calls[0][0]).not.toBe(rtcMocks.published.mock.calls[0][0]);
@@ -3002,7 +3002,7 @@ describe('native screen share wiring', () => {
   it.each([
     ['obsCaptureGameDetectionFailed', '无法确认所选程序的共享方式'],
     ['obsGameBindingUnavailable', '游戏采集组件版本不匹配'],
-    ['obsGameTargetMismatch', '游戏绘制窗口与所选窗口不符'],
+    ['obsGameTargetMismatch', '未能匹配所选游戏窗口'],
   ])('游戏采集错误 %s 展示可操作提示，不发布画面', async (code, message) => {
     rtcMocks.token.mockResolvedValue({ serverUrl: 'wss://example.test', token: 'test-token' });
     Object.defineProperty(globalThis, 'window', {

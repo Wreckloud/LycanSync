@@ -22,7 +22,7 @@ describe('申请 RTC 入房凭证', () => {
   });
 
   it.each([
-    [400, '入房参数无效'], [404, 'rtc-local'], [503, 'HTTP 503'],
+    [400, '无法加入此群组的语音'], [404, '服务器尚未开启语音功能'], [503, '无法连接语音服务'],
   ])('HTTP %s 明确失败，不返回默认凭证', async (status, message) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: Number(status) })));
     await expect(requestRtcToken(groupId, new AbortController().signal)).rejects.toThrow(String(message));
@@ -30,14 +30,14 @@ describe('申请 RTC 入房凭证', () => {
 
   it('拒绝开发代理返回的 HTML', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>proxy</html>')));
-    await expect(requestRtcToken(groupId, new AbortController().signal)).rejects.toThrow('有效 JSON');
+    await expect(requestRtcToken(groupId, new AbortController().signal)).rejects.toThrow('语音服务返回异常');
   });
 
   it.each([
     {}, null, { ...credential, token: '' }, { ...credential, expiresAt: 'invalid' },
   ])('拒绝无效的成功响应 %j', async (response) => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(response)));
-    await expect(requestRtcToken(groupId, new AbortController().signal)).rejects.toThrow('缺少必要字段');
+    await expect(requestRtcToken(groupId, new AbortController().signal)).rejects.toThrow('无法取得加入语音所需的信息');
   });
 
   it('保留取消请求的异常，交给会话逻辑判断是否仍需提示', async () => {

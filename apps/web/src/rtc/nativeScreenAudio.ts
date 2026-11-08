@@ -116,7 +116,7 @@ export class NativeScreenAudioSession {
       try {
         await this.stop();
       } catch (cleanupError) {
-        throw new AggregateError([error, cleanupError], '共享声音启动失败，清理未完成。');
+        throw new AggregateError([error, cleanupError], '共享声音启动失败，请重启应用后再试。');
       }
       throw error;
     }

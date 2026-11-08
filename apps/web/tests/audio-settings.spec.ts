@@ -21,15 +21,23 @@ if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify({
 createApp({ setup() {
   const preferences = useAudioPreferences('audio-settings-test');
   const applied = ref([]);
-  return () => h('main', { style: 'padding:24px' }, [h(AudioSettings, {
-    desktop: ${desktop}, preferences, active: true, inputLevelPercent: 0,
+  const active = ref(true);
+  const shown = ref(true);
+  const refreshes = ref({ input: 0, output: 0 });
+  return () => h('main', { style: 'padding:24px' }, [shown.value && h(AudioSettings, {
+    desktop: ${desktop}, preferences, active: active.value, inputLevelPercent: 0,
     rtc: { status: 'idle', busySources: [], setMicrophoneProcessing: async settings => {
       applied.value.push({ ...settings });
     } },
-    microphoneTest: { state: 'idle', notice: '', inputLevelPercent: 0 },
-    microphoneDevices: { devices: [], notice: '', changing: false, loading: false },
-    audioOutput: { devices: ref([]), notice: ref(''), changing: ref(false), supported: true },
-  }), h('output', { 'data-testid': 'applied-processing' }, JSON.stringify(applied.value))]);
+    microphoneTest: { state: 'idle', notice: '', inputLevelPercent: 0, stop: async () => {} },
+    microphoneDevices: { devices: [], notice: '', changing: false, loading: false,
+      refresh: async () => { refreshes.value.input++; } },
+    audioOutput: { devices: ref([]), notice: ref(''), changing: ref(false), supported: true,
+      refresh: async () => { refreshes.value.output++; } },
+  }), h('output', { 'data-testid': 'applied-processing' }, JSON.stringify(applied.value)),
+    h('output', { 'data-testid': 'device-refreshes' }, JSON.stringify(refreshes.value)),
+    h('button', { onClick: () => { active.value = !active.value; } }, '切换测试页'),
+    h('button', { onClick: () => { shown.value = false; } }, '卸载测试页')]);
 } }).mount('#root');
 ` });
     });
@@ -38,10 +46,10 @@ createApp({ setup() {
     await expect(toggle).toHaveJSProperty('indeterminate', true);
     await expect(toggle).toHaveAttribute('aria-checked', 'mixed');
     await expect(page.getByTestId('applied-processing')).toHaveText('[]');
-    await expect(page.getByText('已保留之前的部分处理设置，开启后统一启用。')).toBeVisible();
+    await expect(page.getByText('仍在使用你之前的处理设置，开启后将统一启用声音处理。')).toBeVisible();
     await expect(page.getByRole('checkbox')).toHaveCount(2);
     await expect(page.getByText('桌面版暂不支持回声消除，建议使用耳机通话。')).toHaveCount(0);
-    if (!desktop) await expect(page.getByText('开启后同时请求浏览器进行回声消除。')).toBeVisible();
+    if (!desktop) await expect(page.getByText('同时使用浏览器的回声消除。')).toBeVisible();
 
     const enabled = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true };
     const disabled = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, voiceEnhancement: false };
@@ -68,6 +76,28 @@ createApp({ setup() {
     await sharedVolumeToggle.click();
     await expect(sharedVolume).toBeHidden();
     await expect(sharedVolumeToggle).toContainText('40%');
+    await expect(page.getByRole('button', { name: '刷新设备', exact: true })).toHaveCount(0);
+    const counts = () => page.getByTestId('device-refreshes').evaluate(element => JSON.parse(element.textContent!) as { input: number; output: number });
+    const initial = await counts();
+    expect(initial.input).toBeGreaterThan(0);
+    expect(initial.output).toBeGreaterThan(0);
+    await page.getByRole('combobox', { name: '麦克风设备', exact: true }).focus();
+    await expect.poll(counts).toMatchObject({ input: initial.input + 1 });
+    await page.getByRole('combobox', { name: '声音输出设备', exact: true }).focus();
+    await expect.poll(counts).toMatchObject({ output: initial.output + 1 });
+    const beforeFocus = await counts();
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await expect.poll(counts).toEqual({ input: beforeFocus.input + 1, output: beforeFocus.output + 1 });
+    await page.getByRole('button', { name: '切换测试页' }).click();
+    const inactive = await counts();
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    expect(await counts()).toEqual(inactive);
+    await page.getByRole('button', { name: '切换测试页' }).click();
+    await expect.poll(counts).toEqual({ input: inactive.input + 1, output: inactive.output + 1 });
+    await page.getByRole('button', { name: '卸载测试页' }).click();
+    const unmounted = await counts();
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    expect(await counts()).toEqual(unmounted);
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem(
       'lycansync.audio-preferences.v1.audio-settings-test')!))).toMatchObject({
       ...disabled, inputGain: 1.4, outputVolume: 0.8, screenShareVolume: 0.4,

@@ -14,7 +14,7 @@ describe('更新重启确认卡片', () => {
   it('展示版本和中断影响，取消在左、重启在右，无反馈时不占空白', async () => {
     const html = await renderDialog();
     expect(html).toContain('发现新版本 0.0.10');
-    expect(html).toContain('结束当前通话、屏幕共享和远控');
+    expect(html).toContain('结束通话、共享和远控');
     expect(html).toContain('role="dialog"');
     expect(html).toContain('class="card-actions"');
     expect(html).toContain('confirm-button card-actions-end');

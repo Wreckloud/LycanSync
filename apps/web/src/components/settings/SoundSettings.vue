@@ -100,13 +100,13 @@ watch(() => props.output?.available.value ?? true, (available) => { if (!availab
 <template>
   <div class="settings-section sound-settings">
     <CallSoundSettings :active="active" :preferences="preferences" :sounds="sounds" />
-    <p class="settings-intro">入场音效先上传至当前服务器统一处理，返回后仅保存在这台设备；加入语音时播放给其他成员。服务器不长期保存原文件。</p>
+    <p class="settings-intro">音效会上传到当前服务器处理，再保存到这台设备，加入语音时播放给朋友。服务器不会长期保留原文件。</p>
     <section class="settings-block">
       <h2>入场音效</h2>
       <p>{{ sound ? sound.name : '尚未选择入场音效' }}</p>
       <small v-if="sound">格式：{{ sound.mimeType }} · 文件大小：{{ soundSize }} 字节</small>
       <small>支持 MP3、OGG、WAV、WebM；最长 {{ ENTRANCE_SOUND_MAX_DURATION_SECONDS }} 秒，最大 {{ Math.round(ENTRANCE_SOUND_MAX_BYTES / 1024) }} KB。</small>
-      <small>统一为单声道 WAV，限制音量增益及峰值；旧版音效请重新选择后使用。播放时仍受接收方提示音开关与音量控制。</small>
+      <small>自动调整音量并转换为单声道 WAV。旧版音效需重新选择；朋友仍可通过提示音设置控制播放与音量。</small>
       <div class="settings-actions sound-actions">
         <input ref="input" type="file" hidden aria-label="选择入场音效"
           accept="audio/mpeg,audio/ogg,audio/wav,audio/webm,.mp3,.ogg,.wav,.webm" @change="chooseSound" />

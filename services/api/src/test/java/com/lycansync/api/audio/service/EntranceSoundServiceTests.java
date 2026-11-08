@@ -54,7 +54,7 @@ class EntranceSoundServiceTests {
         assertThatThrownBy(() -> service.normalize(new ByteArrayInputStream(new byte[512 * 1024 + 1])))
                 .isInstanceOf(AudioProcessingException.class).hasMessageContaining("512 KB");
         assertThatThrownBy(() -> service.normalize(new ByteArrayInputStream("https://example.test/audio".getBytes())))
-                .isInstanceOf(AudioProcessingException.class).hasMessageContaining("无法解码");
+                .isInstanceOf(AudioProcessingException.class).hasMessageContaining("无法读取这段音效");
     }
 
     @Test

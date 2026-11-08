@@ -74,7 +74,7 @@ describe('浏览器账号入口', () => {
     expect(elements.open.disabled).toBe(true);
     await vi.waitFor(() => expect(elements.open.disabled).toBe(false));
     expect(elements.title.textContent).toBe('朋友的小队');
-    expect(document.title).toBe(`LycanSync · ${label}`);
+    expect(document.title).toBe(`lycanclaw · ${label}`);
     elements.download.listeners.click();
     expect(elements.instruction.textContent).toContain('安装完成后');
     expect(fetchMock).toHaveBeenCalledTimes(1);

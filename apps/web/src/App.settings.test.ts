@@ -38,7 +38,7 @@ it('停止失败保留明确提示，不阻挡界面退出或伪装回收成功'
   f.reject(new Error('stop failed'));
   await closing;
   expect(f.state.settingsOpen.value).toBe(false);
-  expect(f.state.viewerNotice.value).toContain('麦克风试听停止未确认');
+  expect(f.state.viewerNotice.value).toContain('停止麦克风试听时发生问题');
 });
 
 it('应用已销毁时迟到的停止失败不再更新界面', async () => {

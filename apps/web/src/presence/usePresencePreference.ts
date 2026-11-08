@@ -18,7 +18,7 @@ export function usePresencePreference(userId: string,
       if (stored !== null && stored !== 'online' && stored !== 'invisible') throw new Error('invalid presence preference');
       mode.value = stored === 'invisible' ? 'invisible' : 'online';
     } catch {
-      error.value = '无法读取状态偏好，本次先隐身；可手动选择状态。';
+      error.value = '无法读取上次的在线状态，暂时保持隐身；你可以手动切换。';
     } finally {
       ready.value = true;
     }
@@ -32,7 +32,7 @@ export function usePresencePreference(userId: string,
       if (!key) throw new Error('presence preference server unavailable');
       (storage ?? localStorage).setItem(key, next);
     } catch {
-      error.value = '状态已选择，但无法保存到本机，重启后可能无法恢复。';
+      error.value = '当前状态已生效，但未能保存，重启后可能恢复原设置。';
     }
   }
 

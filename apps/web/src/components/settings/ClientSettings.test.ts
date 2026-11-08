@@ -134,7 +134,7 @@ it('查询完成前保持说明，仅确定不支持后显示限制', async () =
     support.resolve({ hideCursor: true, hideBorder: false });
     autoStart.resolve({ supported: false, enabled: false });
     await nextTick();
-    expect(settings.autoStartDescription.value).toContain('仅 Windows 安装版支持');
+    expect(settings.autoStartDescription.value).toContain('开机启动仅支持 Windows 安装版');
   } finally { scope.stop(); }
 });
 

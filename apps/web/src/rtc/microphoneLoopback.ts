@@ -74,14 +74,14 @@ export class MicrophoneLoopback {
       this.clonedTrack = track.clone();
       const transceiver = this.sender.addTransceiver(this.clonedTrack, { direction: 'sendonly' });
       const opus = RTCRtpSender.getCapabilities('audio')?.codecs.filter((codec) => codec.mimeType.toLowerCase() === 'audio/opus');
-      if (!opus?.length) throw new Error('当前客户端不支持 Opus 麦克风试听。');
+      if (!opus?.length) throw new Error('当前客户端不支持此麦克风试听方式。');
       transceiver.setCodecPreferences(opus);
       await this.sender.setLocalDescription(await this.sender.createOffer());
       await this.waitForIce(this.sender);
       await this.receiver.setRemoteDescription(this.sender.localDescription!);
       const answer = await this.receiver.createAnswer();
       const opusPayload = answer.sdp?.match(/a=rtpmap:(\d+) opus\/48000/i)?.[1];
-      if (!opusPayload) throw new Error('麦克风试听未协商到 Opus。');
+      if (!opusPayload) throw new Error('麦克风试听连接未能建立，请重新试听。');
       answer.sdp = answer.sdp!.replace(new RegExp(`a=fmtp:${opusPayload} ([^\\r\\n]*)`), (_line, existing: string) => {
         const settings = existing.split(';').filter((setting) => !/^(maxaveragebitrate|usedtx|stereo)=/.test(setting.trim()));
         return `a=fmtp:${opusPayload} ${settings.join(';')};maxaveragebitrate=${maxBitrate};usedtx=${dtx ? 1 : 0};stereo=0`;

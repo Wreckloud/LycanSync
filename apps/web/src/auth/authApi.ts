@@ -37,9 +37,9 @@ const requestErrorMessages: Record<number, string> = {
   400: '提交内容不符合要求，请检查后重试。',
   401: '登录已失效，请重新登录。',
   403: '没有权限执行此操作。',
-  404: '请求的内容不存在或已被移除。',
+  404: '内容不存在或已被移除。',
   409: '当前状态无法完成此操作，请刷新后重试。',
-  413: '提交内容过大，请缩小图片或减少内容后重试。',
+  413: '提交的内容过大，请缩小图片或减少内容后重试。',
   429: '操作过于频繁，请稍后重试。',
 };
 
@@ -66,7 +66,7 @@ const publicApiPaths = new Set([
 ]);
 
 export function setBrowserSession(token: string | null) {
-  if (token !== null && !/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error('登录响应缺少有效会话');
+  if (token !== null && !/^[A-Za-z0-9_-]{43}$/.test(token)) throw new Error('登录未完成。');
   browserSession = token;
 }
 

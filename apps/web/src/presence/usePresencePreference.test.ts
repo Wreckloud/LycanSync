@@ -38,7 +38,7 @@ it('写入失败保留当前选择，明确提示不能恢复偏好', async () =
   await preference.loaded;
   preference.setMode('invisible');
   expect(preference.mode.value).toBe('invisible');
-  expect(preference.error.value).toContain('无法保存');
+  expect(preference.error.value).toContain('未能保存');
 });
 
 it('无法确定服务器时保持隐身，不写入其他账号的存储键', async () => {
@@ -48,5 +48,5 @@ it('无法确定服务器时保持隐身，不写入其他账号的存储键', a
   expect(preference.mode.value).toBe('invisible');
   preference.setMode('online');
   expect(storage.setItem).not.toHaveBeenCalled();
-  expect(preference.error.value).toContain('无法保存');
+  expect(preference.error.value).toContain('未能保存');
 });

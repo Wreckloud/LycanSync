@@ -85,7 +85,7 @@ it('资源停止失败仍保留账号与凭据，并明确提示；重新进入�
   await f.logout();
   expect(f.context.user.value).toBeNull();
   expect(f.context.entryUser.value?.id).toBe('member');
-  expect(f.context.error.value).toContain('凭据已保留');
+  expect(f.context.error.value).toContain('退出时发生问题');
   await f.enterAccount();
   expect(f.context.desktop.returnToAccountEntry).toHaveBeenCalledTimes(2);
   expect(f.context.user.value?.nickname).toBe('服务端昵称');
@@ -117,7 +117,7 @@ it('离线仍能移除本机凭据，但不声称已撤销服务器会话', asyn
   f.requestClearSession();
   await f.clearLocalSession();
   expect(f.context.entryUser.value).toBeNull();
-  expect(f.context.error.value).toContain('未确认撤销');
+  expect(f.context.error.value).toContain('未能完成服务器端退出');
 });
 
 it('文件删除失败保持确认框并允许重试', async () => {
@@ -127,7 +127,7 @@ it('文件删除失败保持确认框并允许重试', async () => {
   f.requestClearSession();
   await f.clearLocalSession();
   expect(f.context.removeConfirm.value).toBe(true);
-  expect(f.context.error.value).toContain('目录权限');
+  expect(f.context.error.value).toContain('读写权限');
   expect(f.context.removing.value).toBe(false);
 });
 
@@ -252,7 +252,7 @@ it('登录核验返回不同账号时，先展示新资料再要求手动确认'
   await f.enterAccount();
   expect(f.context.user.value).toBeNull();
   expect(f.context.entryUser.value?.id).toBe('another');
-  expect(f.context.error.value).toContain('账号已变化');
+  expect(f.context.error.value).toContain('账号发生变化');
 });
 
 it('首次登录确认无法落盘时停在账号页，明确提示目录权限而不是媒体错误', async () => {

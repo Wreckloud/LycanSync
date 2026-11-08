@@ -43,7 +43,7 @@
     System::Call 'kernel32::GetFileAttributesW(w "$INSTDIR\${NAME}") i .r2'
     IntOp $2 $2 & 0x400
     ${If} $2 != 0
-      MessageBox MB_OK|MB_ICONSTOP "程序路径包含链接，已停止操作；请保留 data 并核对安装目录。" /SD IDOK
+      MessageBox MB_OK|MB_ICONSTOP "安装路径包含文件系统链接，已停止操作。请保留 data 文件夹，并检查安装目录。" /SD IDOK
       Abort
     ${EndIf}
   ${EndIf}
@@ -153,9 +153,6 @@ Function CleanInstallationPayloads
       Delete "$PLUGINSDIR\app-64.${COMPRESSION_METHOD}"
     ${EndIf}
   !endif
-  ${If} ${Errors}
-    DetailPrint "部分临时文件将在安装器退出时继续清理。"
-  ${EndIf}
   ClearErrors
   SetDetailsPrint lastused
 FunctionEnd
@@ -184,7 +181,7 @@ FunctionEnd
   ClearErrors
   !insertmacro LycanApplicationEntries LycanDeleteEntry
   ${If} ${Errors}
-    MessageBox MB_OK|MB_ICONSTOP "部分程序文件仍被占用，卸载未完成。请退出 LycanSync 后重试；data 已保留。" /SD IDOK
+    MessageBox MB_OK|MB_ICONSTOP "部分程序文件仍被占用，卸载未完成。请完全退出 lycanclaw 后重试；账号和设置所在的 data 文件夹已保留。" /SD IDOK
     Abort
   ${EndIf}
   ReadRegStr $0 HKCU "Software\Classes\lycansync\shell\open\command" ""

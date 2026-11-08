@@ -14,7 +14,7 @@ const recoveryConfirmation = ref('');
 const canRetryRedemption = ref(false);
 const heading = ref<HTMLElement | null>(null);
 const title = computed(() => {
-  const server = preview.value?.serverName ?? 'LycanSync';
+  const server = preview.value?.serverName ?? 'lycanclaw';
   if (props.currentUser) return server;
   if (preview.value?.kind === 'ACTIVATE') return `激活 ${server}`;
   if (preview.value?.kind === 'RECOVERY') return `恢复登录 · ${server}`;
@@ -91,15 +91,15 @@ async function switchServer() {
         <p>本机已保存 {{ currentUser.nickname }} 的账号。如需使用其他账号，请先返回并清除本机登录凭据。</p>
       </template>
       <template v-else-if="offer.server !== currentServer">
-        <p>连接到 {{ offer.server }}，确认后应用将切换服务器并重启。</p>
+        <p>即将连接到 {{ offer.server }} 并重启应用。</p>
       </template>
       <template v-else-if="preview">
         <p v-if="!canRedeem">链接已使用、过期或撤销，请联系服主获取新链接。</p>
-        <p v-else>{{ preview.kind === 'ACTIVATE' ? '确认后成为本服务器的服主，管理成员与邀请。' : preview.kind === 'RECOVERY' ? '保留原账号的资料与权限，旧设备将退出登录。' : '这是你的专属邀请，加入后链接即失效。' }}</p>
+        <p v-else>{{ preview.kind === 'ACTIVATE' ? '即将确认并成为本服务器的服主，即可邀请并管理成员。' : preview.kind === 'RECOVERY' ? '即将确认并恢复账号资料，旧设备将退出登录。' : '这是你的专属邀请，使用并加入 lycanclaw 吧！' }}</p>
         <div v-if="preview.kind === 'ACTIVATE' && canRedeem" class="activation-passwords">
           <PasswordField id="activation-password" v-model="recoveryPassword" label="恢复密码（15–128 个字符）" :disabled="busy" new-password required />
           <PasswordField id="activation-password-confirm" v-model="recoveryConfirmation" label="确认恢复密码" :disabled="busy" new-password required />
-          <p>请妥善保管，丢失本机凭据后可独立恢复服主账号，不需要绑定 QQ。</p>
+          <p>请妥善保管恢复密码，无法登录时可用此恢复权限。</p>
         </div>
       </template>
       <InlineFeedback v-else-if="!error" pending="正在检查邀请…" />

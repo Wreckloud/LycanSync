@@ -118,6 +118,6 @@ public class GroupRtcAdmissionService {
 
     private AuthException invalidToken() {
         return new AuthException(HttpStatus.UNAUTHORIZED, ApiErrorCode.INVALID_AUTHORIZATION,
-                "语音凭证无效或已过期，请重新加入");
+                "加入语音的授权已失效，请重新加入。");
     }
 }

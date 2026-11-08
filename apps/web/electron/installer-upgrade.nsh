@@ -30,7 +30,7 @@ Function WriteReplacementState
   FileWrite $1 "$0"
   FileClose $1
   ${If} ${Errors}
-    MessageBox MB_OK|MB_ICONSTOP "无法保存升级恢复状态，已停止替换。请保留 data 和 .lycan-update-backup。" /SD IDOK
+    MessageBox MB_OK|MB_ICONSTOP "无法保存升级恢复信息，升级已停止。请保留 data 和 .lycan-update-backup 文件夹。" /SD IDOK
     Abort
   ${EndIf}
 FunctionEnd
@@ -79,7 +79,7 @@ Function RestoreApplicationReplacement
     RMDir /r "$lycanBackupRoot"
     StrCpy $lycanReplacementPending "0"
   ${Else}
-    MessageBox MB_OK|MB_ICONSTOP "旧程序未能完整恢复，请保留 $lycanBackupRoot。登录数据仍保存在 data 中，请勿卸载或删除目录。" /SD IDOK
+    MessageBox MB_OK|MB_ICONSTOP "旧版程序未能完整恢复，请保留 $lycanBackupRoot 和 data 文件夹，不要卸载或删除目录。" /SD IDOK
   ${EndIf}
 FunctionEnd
 
@@ -143,14 +143,14 @@ Function PrepareApplicationReplacement
       Call RestoreApplicationReplacement
     ${EndIf}
     ${If} ${FileExists} "$lycanBackupRoot"
-      MessageBox MB_OK|MB_ICONSTOP "上次升级暂存未能安全恢复，请保留 .lycan-update-backup 和 data，暂勿卸载。" /SD IDOK
+      MessageBox MB_OK|MB_ICONSTOP "上次升级的备份未能恢复，请保留 .lycan-update-backup 和 data 文件夹，暂时不要卸载。" /SD IDOK
       Abort
     ${EndIf}
   ${EndIf}
   ClearErrors
   CreateDirectory "$lycanBackupRoot"
   ${If} ${Errors}
-    MessageBox MB_OK|MB_ICONSTOP "无法创建升级暂存目录，尚未替换旧程序。请检查目录权限和磁盘空间。" /SD IDOK
+    MessageBox MB_OK|MB_ICONSTOP "无法准备升级文件，旧程序尚未替换。请检查目录权限和磁盘空间。" /SD IDOK
     Abort
   ${EndIf}
   SetErrorLevel 2
@@ -163,7 +163,7 @@ Function PrepareApplicationReplacement
   ${If} $lycanReplacementFailure != ""
     DetailPrint "程序文件仍被占用：$lycanReplacementFailure"
     Call RestoreApplicationReplacement
-    MessageBox MB_OK|MB_ICONSTOP "程序文件仍被占用或无法移动，升级已停止；请完全退出 LycanSync 后重试，不要删除 data。" /SD IDOK
+    MessageBox MB_OK|MB_ICONSTOP "程序文件仍被占用或无法移动，升级已停止。请完全退出 lycanclaw 后重试，不要删除 data 文件夹。" /SD IDOK
     Abort
   ${EndIf}
   StrCpy $0 "staged"
@@ -184,7 +184,7 @@ Function FinishApplicationReplacement
     SetOutPath "$INSTDIR"
     RMDir /r "$lycanBackupRoot"
     ${If} ${FileExists} "$lycanBackupRoot"
-      MessageBox MB_OK|MB_ICONEXCLAMATION "新版已安装，但旧程序暂存未能清理。请保留 data，并在下次升级前处理 .lycan-update-backup。" /SD IDOK
+      MessageBox MB_OK|MB_ICONEXCLAMATION "新版已安装，但旧版备份未能清理。请保留 data 文件夹，并在下次升级前处理 .lycan-update-backup。" /SD IDOK
     ${EndIf}
     SetDetailsPrint lastused
   ${EndIf}

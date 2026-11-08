@@ -22,7 +22,7 @@ function validateQqAuthorization(value, server) {
   if (url.origin !== new URL(server).origin || url.protocol !== 'https:' || url.username || url.password
       || url.pathname !== '/api/auth/qq/authorize' || url.hash
       || url.searchParams.getAll('request').length !== 1 || [...url.searchParams.keys()].some(key => key !== 'request')
-      || !/^[A-Za-z0-9_-]{43}$/.test(url.searchParams.get('request') ?? '')) throw new Error('QQ 授权地址不符合当前服务器设置');
+      || !/^[A-Za-z0-9_-]{43}$/.test(url.searchParams.get('request') ?? '')) throw new Error('QQ 授权地址与当前服务器不匹配，请联系服主检查配置。');
   return url.href;
 }
 

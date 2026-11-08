@@ -159,7 +159,7 @@ async function initialize(automatic = false) {
 
 function acceptSession(result: { sessionToken?: string; user: AuthUser }) {
   if (!desktop) {
-    if (!result.sessionToken) throw new Error('登录响应缺少会话');
+    if (!result.sessionToken) throw new Error('登录未完成，请重试。');
     setBrowserSession(result.sessionToken);
   }
   initializationRequest?.abort();
@@ -203,7 +203,7 @@ async function enterAccount() {
     if (desktop) await desktop.returnToAccountEntry();
     await initialize();
     if (entryUser.value && !error.value && !disposed) {
-      if (entryUser.value.id !== accountId) { error.value = '账号已变化，请确认当前资料后再次登录。'; return; }
+      if (entryUser.value.id !== accountId) { error.value = '账号发生变化，请确认当前资料后重新尝试登录。'; return; }
       failureMessage = '登录设置保存失败，请检查安装目录权限后重试。';
       if (desktop) await desktop.setAutoLogin(entryUser.value.id, autoLogin.value, false);
       if (disposed || !entryUser.value) return;
@@ -236,9 +236,9 @@ async function verifyCurrentSession() {
 
 async function saveProfile(profile: ProfileUpdate) {
   const currentUserId = (user.value ?? entryUser.value)?.id;
-  if (!currentUserId) throw new Error('登录状态已结束，请重新登录。');
+  if (!currentUserId) throw new Error('当前未登录，请登录后再保存。');
   const updated = await authRequest<AuthUser>('me', 'PUT', profile);
-  if ((user.value ?? entryUser.value)?.id !== currentUserId) throw new Error('当前账号已切换，资料没有更新到新账号。');
+  if ((user.value ?? entryUser.value)?.id !== currentUserId) throw new Error('登录状态已变化，请重新登录原账号查看保存结果。');
   if (user.value) user.value = updated;
   else entryUser.value = updated;
   return updated;
@@ -284,7 +284,7 @@ async function logout() {
     // 先卸载房间，再确认原生资源停止；保留加密凭据，不调用撤销会话接口。
     await sendPresenceHeartbeat('OFFLINE', null, AbortSignal.timeout(1_200), visibility).catch(() => undefined);
     if (desktop) await desktop.returnToAccountEntry();
-  } catch { error.value = '部分通话资源未完全停止，请重试登录或重新打开应用；凭据已保留。'; }
+  } catch { error.value = '退出时发生问题，请关闭并重新打开应用。'; }
   finally { logoutInProgress = false; }
 }
 
@@ -308,8 +308,8 @@ async function clearLocalSession() {
     expired();
     autoLogin.value = true;
     removeConfirm.value = false;
-    if (!revoked) error.value = '本机凭据已移除；服务器会话未确认撤销，请联系服主恢复或撤销。';
-  } catch { error.value = '清理本机凭据失败，请检查数据目录权限后重试。'; }
+    if (!revoked) error.value = '本机登录信息已清除，但未能完成服务器端退出。';
+  } catch { error.value = '无法清除本机登录信息，请检查数据目录的读写权限后重试。'; }
   finally { removing.value = false; }
 }
 async function saveServerAddress() {
@@ -346,7 +346,7 @@ onMounted(async () => {
       const result = await desktop.runStartupUpdate();
       if (result.error) updateWarning.value = result.message;
     } catch {
-      updateWarning.value = '启动更新不可用，仍可使用当前版本。请稍后重新打开应用。';
+      updateWarning.value = '暂时无法启动更新，可继续使用当前版本。';
     }
     if (disposed) return;
     startupChecking.value = false;
@@ -382,7 +382,7 @@ onMounted(async () => {
   <Transition name="entry-shell" @before-enter="($event as HTMLElement).inert = false" @before-leave="($event as HTMLElement).inert = true">
   <div v-if="!user || onboarding || accessOffer" class="app-shell entry-shell">
     <header class="titlebar" :class="{ 'desktop-titlebar': desktop }">
-      <div class="brand">LycanSync</div>
+      <div class="brand">lycanclaw</div>
       <div v-if="desktop" class="window-actions">
         <button aria-label="最小化窗口" @click="desktop.minimize()"><Minus :size="16" /></button>
         <button :aria-label="windowMaximized ? '还原窗口' : '最大化窗口'" @click="desktop.toggleMaximize()"><Square :size="13" /></button>
@@ -401,7 +401,7 @@ onMounted(async () => {
         @recovered="recoveryOpen = false; completeAccess($event, 'RECOVERY')" />
       <section v-else class="auth-card">
         <h1>一起开黑，一起看</h1>
-        <p>登录 LycanSync，继续和朋友一起玩。</p>
+        <p>登录 lycanclaw，继续和朋友一起玩。</p>
         <p v-if="!ready">正在连接服务器…</p>
         <template v-else-if="ready">
           <div v-if="entryUser" class="account-preview" data-identity="account">
@@ -411,8 +411,8 @@ onMounted(async () => {
           </div>
           <template v-if="entryUser">
             <label class="auto-login-option"><input type="checkbox" :checked="autoLogin"
-              :disabled="submitting || preferenceSaving || logoutBusy || removing" @change="changeAutoLogin" />自动登录</label>
-            <p class="account-entry-note">下次启动时自动进入；退出登录后仍在这里确认账号。</p>
+              :disabled="submitting || preferenceSaving || logoutBusy || removing" @change="changeAutoLogin" />记住账号</label>
+            <p class="account-entry-note">勾选后将在下次启动时自动登录</p>
             <div class="button-actions"><button class="confirm-button" :disabled="submitting || preferenceSaving || logoutBusy || removing"
               @click="enterAccount">{{ submitting ? '正在登录…' : '登录' }}</button></div>
           </template>
@@ -420,14 +420,14 @@ onMounted(async () => {
             <div v-if="qqAvailable" class="auth-qq-login">
               <button type="button" class="auth-qq-button" :disabled="qq.busy.value || submitting || removing" @click="qq.start()"><img src="/qq-login.png" width="170" height="32" alt="QQ 登录" /></button>
               <button v-if="qq.busy.value" type="button" :disabled="qq.finishing.value" @click="qq.cancel">{{ qq.finishing.value ? '正在确认账号…' : '取消授权等待' }}</button>
-              <InlineFeedback :message="qq.error.value" :status="qq.busy.value ? '请在系统浏览器确认 QQ 授权，然后返回应用' : ''" />
+              <InlineFeedback :message="qq.error.value" :status="qq.busy.value ? '请在系统浏览器确认 QQ 授权' : ''" />
             </div>
             <div class="auth-guest">
               <p v-if="initialized === false">当前群组尚未完成服主认证，请等待服主完成首次设置。</p>
-              <p v-else-if="initialized === true && qqAvailable">通过 QQ 登录；加入群聊仍需服主邀请。已有账号请先登录，再在账号设置中绑定 QQ。</p>
+              <p v-else-if="initialized === true && qqAvailable">通过 QQ 登录；已有账号请先登录，再在账号设置中绑定 QQ。</p>
               <p v-else-if="initialized === true">使用服主分享的邀请链接即可加入。更换设备或需要重新登录时，请向服主获取新的恢复链接。</p>
               <p v-else>暂时无法确认服主认证状态，请重新连接。</p>
-              <p>服主首次设置时，请设置恢复密码，以便在无法登录时恢复账号。</p>
+              <p>推荐设置备用登录方式，以便在服主账号无法登录时恢复权限。</p>
             </div>
             <p class="auth-guest-note">如果你是服主且无法登录，请尝试 <button type="button" class="auth-recovery-link" @click="recoveryOpen = true">群组恢复</button>。</p>
           </template>
@@ -453,7 +453,7 @@ onMounted(async () => {
               <button type="submit" class="confirm-button" :disabled="submitting || serverSaving || !!entryUser">检查链接</button>
             </div>
             <InlineFeedback id="manual-access-feedback" :message="manualAccessError"
-              :status="submitting ? '正在检查…' : '在当前窗口打开，不会立即使用邀请；检查后仍需确认。'" />
+              :status="submitting ? '正在检查…' : '检查链接不会自动加入，你可以在下一步确认或取消。'" />
           </form>
           <form v-if="serverEditable" @submit.prevent="saveServerAddress">
             <label for="auth-server-address">服务器地址</label>

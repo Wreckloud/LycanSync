@@ -37,7 +37,7 @@ export function useActivityMappings(userId: string, desktop?: ActivityBridge,
       }
       saved = stored;
     } catch {
-      error.value = '无法读取已记忆的动态名称，请重新选择程序。';
+      error.value = '无法读取已保存的动态名称，请重新选择程序。';
     }
     try {
       await desktop.configureActivityMappings(saved);
@@ -75,7 +75,7 @@ export function useActivityMappings(userId: string, desktop?: ActivityBridge,
       if (disposed) return false;
       entries.value = next;
       try { (storage ?? localStorage).setItem(key, JSON.stringify(next)); }
-      catch { error.value = '本次名称已生效，但无法保存到本机。'; }
+      catch { error.value = '本次名称修改已生效，但未能保存。'; }
       return true;
     } catch {
       if (!disposed) error.value = '动态名称未能应用，请重试。';

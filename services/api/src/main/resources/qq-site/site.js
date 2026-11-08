@@ -29,8 +29,8 @@ function account(user) {
   currentUser = user;
   identity(user.nickname, user.avatar);
   document.body.classList.add('account-page');
-  byId('account-title').textContent = '你的 LycanSync 账号';
-  byId('account-description').textContent = 'QQ 身份已验证。你可以调整昵称和签名；新账号不会自动加入群组。';
+  byId('account-title').textContent = '你的 lycanclaw 账号';
+  byId('account-description').textContent = 'QQ 身份已确认，你可以修改昵称和签名。新账号不会自动加入群组。';
   byId('qq-login').hidden = true;
   byId('result-actions').hidden = true;
   byId('profile-form').hidden = false;
@@ -75,12 +75,12 @@ async function resultPage() {
     byId('confirm-login').hidden = true;
     byId('return-app').hidden = false;
     byId('return-app').href = 'lycansync://qq?server=' + encodeURIComponent(location.origin) + '#request=' + request;
-    feedback('确认后返回原来发起授权的 LycanSync 窗口，继续登录或绑定。');
+    feedback('确认后返回 lycanclaw，继续登录或绑定。');
     return;
   }
   const verifier = sessionStorage.getItem('lycan-qq:' + request);
-  if (!verifier) throw new Error('请在原来发起登录的浏览器中继续，或重新登录');
-  feedback('确认后登录 LycanSync，不会自动加入群组。');
+  if (!verifier) throw new Error('请回到发起登录的浏览器继续，或重新登录。');
+  feedback('确认后登录 lycanclaw，不会自动加入群组。');
   byId('confirm-login').onclick = async () => {
     if (confirming) return;
     confirming = true;
@@ -97,14 +97,14 @@ async function resultPage() {
 }
 
 const privacy = [
-  ['我们收集什么', 'QQ 登录用于验证你的账号身份。经你授权，我们读取 QQ 的应用内身份标识（OpenID）、昵称和头像，用于建立或关联 LycanSync 账号。不会读取 QQ 密码、好友列表或聊天记录。'],
+  ['我们收集什么', 'QQ 登录用于验证你的账号身份。经你授权，我们读取 QQ 的应用内身份标识（OpenID）、昵称和头像，用于建立或关联 lycanclaw 账号。不会读取 QQ 密码、好友列表或聊天记录。'],
   ['账号与内容', '账号资料及 QQ 绑定保存在服务端。已有账号只有主动绑定后才关联，不能凭相同昵称合并。加入群组、聊天、语音和屏幕共享需另行操作；浏览官网或登录不会自动采集麦克风、屏幕或游戏活动。'],
   ['凭据与必要记录', 'QQ 授权令牌仅在服务端临时完成验证，不保存到客户端，也不写入业务日志。授权任务最多保留十分钟；网站只使用短期安全 Cookie 绑定授权浏览器，临时保存发起校验值。网页会话只保留在当前页面内存，刷新后需重新登录。服务会处理必要的 IP、请求及错误信息用于限流和故障排查。'],
   ['桌面数据', 'Windows 客户端的登录凭据、缓存、日志及默认录制文件保存在安装目录内；录制与导出由你主动操作。动态展示与上次在线展示可在客户端独立关闭；具体采集范围以操作时的来源选择和授权为准。'],
   ['资料与退出', '你可以修改昵称、头像和签名，并退出当前会话。QQ 绑定暂不提供自行覆盖或解绑；需要处理账号资料或删除申请时，请联系当前服务器维护者。测试数据不会用于广告画像或出售。'],
 ];
 const terms = [
-  ['服务范围', 'LycanSync 是面向熟人小队的语音、屏幕共享与协作工具，当前为测试版本。官网提供账号授权与资料确认，完整音视频和录制功能由 Windows 客户端提供；实际可用功能以当前服务器及客户端为准。'],
+  ['服务范围', 'lycanclaw 是面向熟人小队的语音、屏幕共享与协作工具，当前为测试版本。官网提供账号授权与资料确认，完整音视频和录制功能由 Windows 客户端提供；实际可用功能以当前服务器及客户端为准。'],
   ['账号与权限', '使用 QQ 登录仅验证身份，不自动授予管理员权限或加入群组。原账号关联 QQ 必须在已登录状态下主动发起，不能根据昵称、QQ 显示名或本机已登录 QQ 猜测账号。请妥善保管账号与设备。'],
   ['内容与授权', '请只分享和录制你有权处理的内容。语音、屏幕共享、录制和远程控制应取得相关人员同意，不得侵犯隐私、传播违法内容或实施未经授权的控制。'],
   ['测试与反馈', '测试版本可能存在兼容、网络、录制和更新问题。请保留重要文件的独立副本，遇到问题可向当前服务器维护者反馈。请勿在反馈或截图中公开登录凭据、QQ 应用密钥或他人的私密内容。'],
@@ -126,7 +126,7 @@ async function initialize() {
   if (location.pathname === '/qq/result') { await resultPage(); return; }
   const options = await api('auth/options');
   byId('qq-login').disabled = !options.qqAvailable;
-  feedback(options.qqAvailable ? '在 QQ 官方页面完成授权，LycanSync 不接收你的 QQ 密码。' : '服务器尚未开启 QQ 登录，请稍后再试。');
+  feedback(options.qqAvailable ? '在 QQ 官方页面完成授权，lycanclaw 不接收你的 QQ 密码。' : '服务器尚未开启 QQ 登录，请稍后再试。');
 }
 
 byId('qq-login').addEventListener('click', start);
@@ -150,4 +150,4 @@ byId('logout').addEventListener('click', async () => {
   catch (error) { feedback(error instanceof Error ? error.message : '无法退出登录', true); }
   finally { confirming = false; }
 });
-initialize().catch(error => { feedback(error instanceof Error ? error.message : '页面准备失败，请刷新重试', true); });
+initialize().catch(error => { feedback(error instanceof Error ? error.message : '页面加载失败，请刷新重试。', true); });

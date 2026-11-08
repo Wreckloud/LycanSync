@@ -17,7 +17,7 @@ export function usePresenceVisibility(userId: string,
   } catch {
     showActivity.value = false;
     showLastOnline.value = false;
-    error.value = '无法读取展示偏好，当前不公开动态和上次在线时间。';
+    error.value = '无法读取展示设置，暂时不向朋友展示动态和上次在线时间。';
   }
 
   function setShowActivity(enabled: boolean) {
@@ -26,7 +26,7 @@ export function usePresenceVisibility(userId: string,
     try {
       (storage ?? localStorage).setItem(key, String(enabled));
     } catch {
-      error.value = '本次修改已生效，但无法保存到本机。';
+      error.value = '本次修改已生效，但未能保存。';
     }
   }
 
@@ -34,7 +34,7 @@ export function usePresenceVisibility(userId: string,
     showLastOnline.value = enabled;
     error.value = '';
     try { (storage ?? localStorage).setItem(lastOnlineKey, String(enabled)); }
-    catch { error.value = '本次修改已生效，但无法保存到本机。'; }
+    catch { error.value = '本次修改已生效，但未能保存。'; }
   }
 
   return { showActivity, showLastOnline, error, setShowActivity, setShowLastOnline };

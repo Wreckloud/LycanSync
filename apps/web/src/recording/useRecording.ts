@@ -5,18 +5,18 @@ import { useNotice } from '../feedback/useNotice';
 
 const messages: Record<string, string> = {
   recordingShareUnavailable: '请先开启自己的画面共享。',
-  recordingHardwareEncoderUnavailable: '没有可用的硬件录像编码器，请检查显卡驱动。',
-  recordingEncoderStartFailed: '硬件编码器启动失败，请降低本地录制画质或检查显卡驱动。',
+  recordingHardwareEncoderUnavailable: '没有可用的硬件录制功能，请检查显卡驱动。',
+  recordingEncoderStartFailed: '无法启动硬件录制，请降低录制画质或检查显卡驱动。',
   recordingApplicationAudioUnavailable: '无法单独录入应用声音，请关闭应用声音选项后重试。',
   recordingDiskFull: '录像目录可用空间不足，请腾出空间或更换目录。',
-  recordingStopUnconfirmed: '本地录制的停止尚未确认，请先结束共享后重试。',
-  recordingHostExited: '录制来源已中断，已写入的文件保留在录像目录。',
-  recordingCaptureRateUnavailable: '未能恢复所选采集帧率，请重新共享后再录制。',
+  recordingStopUnconfirmed: '停止录制时发生问题，请先结束共享后重试。',
+  recordingHostExited: '录制画面已中断，已写入的文件仍保留在录像目录。',
+  recordingCaptureRateUnavailable: '无法恢复所选帧率，请重新共享后再录制。',
   recordingStartTimedOut: '录像启动超时，请结束共享后重试。',
   recordingWriteFailed: '录像写入失败，请检查保存目录和磁盘空间。',
   recordingVoiceUnavailable: '人声录制已中断，录像已停止，已写入的文件会保留。',
-  recordingLibraryUnavailable: '录像列表未能保存，请检查安装目录的读写权限；已写入的原片仍保留在录像目录。',
-  replaySaveUnconfirmed: '回放保存尚未确认，请停止回放后重试。已写入的文件会保留。',
+  recordingLibraryUnavailable: '录像列表未能保存，请检查安装目录的读写权限。已写入的录像仍在录像目录。',
+  replaySaveUnconfirmed: '回放保存结果尚未确认，请停止回放后重试。已写入的文件会保留。',
 };
 
 export function useRecording(options: { track: () => MediaStreamTrack | undefined; canStart: () => boolean;
@@ -76,7 +76,7 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
       }
       if (next.replay?.lastSavedId && next.replay.lastSavedId !== state.value.replay?.lastSavedId) {
         successNotice.value = { message: next.replay.lastSavedDuringWarmup
-          ? '回放已保存；缓存尚在积累，本次保存已有片段。' : '回放已保存到本地录像' };
+          ? '回放已保存。本次积累的时长不足，仅保存了已有片段。' : '回放已保存到本地录像' };
       }
     }
     const previousCode = state.value.error ?? state.value.replay?.error;

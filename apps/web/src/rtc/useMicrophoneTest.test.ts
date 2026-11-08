@@ -258,7 +258,7 @@ describe('独立麦克风测试', () => {
     const track = browserTrack();
     delayed.resolve(track);
     await starting;
-    await expect(stopping).rejects.toThrow('停止未确认');
+    await expect(stopping).rejects.toThrow('停止麦克风试听时发生问题');
     expect(track.stop).toHaveBeenCalledOnce();
     expect(mocks.playbackStart).not.toHaveBeenCalled();
     scope.stop();
@@ -295,11 +295,11 @@ describe('独立麦克风测试', () => {
     mocks.nativeStop.mockRejectedValueOnce(new Error('stop unconfirmed'));
     const { test, scope } = setup(true);
     await test.start();
-    await expect(test.stop()).rejects.toThrow('停止未确认');
+    await expect(test.stop()).rejects.toThrow('停止麦克风试听时发生问题');
     await test.start();
-    expect(test.notice.value).toContain('停止未确认');
+    expect(test.notice.value).toContain('停止麦克风试听时发生问题');
     expect(mocks.nativeStart).toHaveBeenCalledOnce();
-    await expect(test.stop()).rejects.toThrow('停止未确认');
+    await expect(test.stop()).rejects.toThrow('停止麦克风试听时发生问题');
     scope.stop();
     log.mockRestore();
   });

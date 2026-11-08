@@ -25,9 +25,9 @@ type MediaSource = Track.Source.Microphone | Track.Source.ScreenShare;
 const SCREEN_SHARE_PRESET = screenShareVideoPreset('standard');
 const SPEAKER_REFRESH_INTERVAL_MS = 120;
 const ENTRANCE_SOUND_RECEIVE_TIMEOUT_MS = 8_000;
-const PROCESSING_RESTART_NOTICE = '部分音频处理设置需要重新开麦后生效。';
-const PROCESSING_UNSUPPORTED_NOTICE = '当前麦克风设备不支持动态切换这项音频处理，请重新开麦后生效。';
-const MICROPHONE_STOP_NOTICE = '麦克风停止未确认，已禁止发送，请重启客户端后再开麦。';
+const PROCESSING_RESTART_NOTICE = '重新开启麦克风后，部分声音处理设置才会生效。';
+const PROCESSING_UNSUPPORTED_NOTICE = '这项声音处理设置需要重新开启麦克风后生效。';
+const MICROPHONE_STOP_NOTICE = '停止麦克风时发生问题，已禁止发送声音。请重启应用后再开麦。';
 
 interface RtcRoomEvents {
   beforeMicrophoneChange?(): Promise<void>;
@@ -85,42 +85,42 @@ interface RtcRoomOptions {
 function captureErrorMessage(error: unknown, source: MediaSource): string {
   const label = source === Track.Source.Microphone ? '麦克风' : '屏幕共享';
   if (error instanceof Error) {
-    if (error.message === 'pushToTalkUnsupported') return '全局按键说话需要 Windows 桌面客户端；请选择自由发言后重新开启麦克风。';
+    if (error.message === 'pushToTalkUnsupported') return '按键说话需要 Windows 客户端。请切换为自由发言，再开启麦克风。';
     if (error.name === 'NotAllowedError') return `${label}未获授权或已取消，请允许后重试。`;
     if (error.name === 'NotFoundError') return `未找到可用的${label}设备。`;
-    if (error.name === 'NotReadableError') return `${label}无法采集，请检查系统权限或设备占用。`;
+    if (error.name === 'NotReadableError') return `无法使用${label}，请检查系统权限或是否被其他程序占用。`;
     if (source === Track.Source.Microphone && window.lycanDesktop) {
       if (error.message === 'microphoneDeviceUnavailable') return '所选麦克风不可用，请检查设备连接或 Windows 录音权限。';
       if (error.message === 'microphoneProcessingFailed') return '麦克风声音处理失败，请重新开启麦克风。';
-      if (error.message === 'platformUnsupported') return '当前桌面系统不支持原生麦克风采集。';
-      return '原生麦克风采集失败，请检查所选输入设备和 Windows 录音权限。';
+      if (error.message === 'platformUnsupported') return '当前系统不支持此麦克风采集方式。';
+      return '无法使用麦克风，请检查所选设备和 Windows 录音权限。';
     }
     if (source === Track.Source.ScreenShare) {
       const code = error.message.match(/(?:^|: )([a-z][A-Za-z0-9]{0,63})$/)?.[1];
-      if (code === 'nativeVideoStopNotConfirmed') return '原生屏幕共享停止未确认，请重启客户端后再试。';
-      if (code === 'nativeVideoFirstFrameTimeout') return '共享画面未能及时送达，已结束本次共享，请重新选择后重试。';
+      if (code === 'nativeVideoStopNotConfirmed') return '停止屏幕共享时发生问题，请重启应用后再试。';
+      if (code === 'nativeVideoFirstFrameTimeout') return '未能及时收到共享画面，本次共享已停止。';
       if (code === 'dxgiMonitorUnavailable') return '所选显示器暂不支持无边框共享，请确认显示器连接后重试。';
-      if (code === 'dxgiAdapterMismatch') return '显示器与采集显卡未能匹配，已停止本次共享，请重新选择显示器后重试。';
-      if (code === 'captureBorderUnsupported') return '系统窗口采集设置不可用，请重新选择窗口后重试。';
+      if (code === 'dxgiAdapterMismatch') return '无法共享所选屏幕，本次共享已停止。请重新选择屏幕后重试。';
+      if (code === 'captureBorderUnsupported') return '当前窗口共享设置不可用，请重新选择窗口后重试。';
       if (code === 'captureSettingsUnsupported') return '当前系统不支持所选采集方式或光标设置，请在高级选项中调整后重试。';
-      if (code === 'captureBorderAccessDenied') return '系统窗口采集授权失败，请检查 Windows 采集权限后重试。';
-      if (code === 'sharedTextureTransferTimedOut') return '共享画面未能及时交付到客户端页面，本次共享已停止。请重新选择来源后重试。';
+      if (code === 'captureBorderAccessDenied') return '未获得窗口共享权限，请检查 Windows 权限后重试。';
+      if (code === 'sharedTextureTransferTimedOut') return '未能收到共享画面，本次共享已停止。';
       if (code === 'obsWindowBindingUnavailable' || code === 'obsWindowTargetMismatch') {
-        return '所选窗口身份未能确认，共享已停止。请重新选择窗口后重试。';
+        return '无法确认所选窗口，已停止共享。请重新选择后重试。';
       }
       if (code && ['sharedTextureGpuWaitFailed', 'sharedTextureGpuStalled', 'sharedTextureReleaseFailed', 'sharedTextureAcquireFailed'].includes(code)) {
-        return '显卡处理共享画面失败，本次共享已停止。请重新选择来源后重试。';
+        return '显卡处理画面时发生问题，本次共享已停止。';
       }
       if (code && ['obsWindowCaptureStartFailed', 'obsWindowRuntimeUnavailable', 'obsWindowSourceUnavailable'].includes(code)) {
-        return '窗口采集未能启动，请在高级选项中更换采集方式后重试；所选方式可能不兼容此应用。';
+        return '当前方式无法共享这个窗口，请在高级选项中更换共享方式后重试。';
       }
       if (code === 'obsCaptureGameDetectionFailed') return '无法确认所选程序的共享方式，请重新选择窗口后重试。';
-      if (code === 'obsGameBindingUnavailable') return '游戏采集组件版本不匹配，请重新构建或更新客户端。';
-      if (code === 'obsGameTargetMismatch') return '游戏绘制窗口与所选窗口不符，已停止共享，请重新选择。';
+      if (code === 'obsGameBindingUnavailable') return '游戏采集组件版本不匹配，请更新客户端后重试。';
+      if (code === 'obsGameTargetMismatch') return '未能匹配所选游戏窗口，共享已停止。请重新选择。';
       if (code) return `屏幕共享操作失败（${code}）。`;
     }
   }
-  return `${label}操作失败，请检查设备、浏览器权限和 LiveKit 连接。`;
+  return `${label}失败，请检查设备权限和语音连接。`;
 }
 
 function reportNativeAudioCleanupFailure(error: unknown) {
@@ -346,7 +346,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         catch {
           if (request.signal.aborted) return false;
           status.value = 'idle';
-          notice.value = '麦克风试听停止未确认，请重启客户端后再连接语音。';
+          notice.value = '停止麦克风试听时发生问题，请重启应用后再加入语音。';
           return false;
         }
       }
@@ -546,7 +546,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         } else if (reason === DisconnectReason.PARTICIPANT_REMOVED) {
           notice.value = '你已离开或被移出群聊，语音、共享和远控已结束。';
         } else {
-          notice.value = '已与房间断开连接，请确认 LiveKit 正常运行后重新加入。';
+          notice.value = '语音连接已断开。';
         }
       });
 
@@ -583,7 +583,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       if (activeRoom.value === joiningRoom) leave();
       status.value = 'idle';
       notice.value = error instanceof TokenRequestError ? error.message
-        : '连接失败，请确认后端和 LiveKit 已启动，并检查本机端口及网络。';
+        : '无法连接语音。';
       return false;
     } finally {
       if (unassignedPlaybackContext) {
@@ -661,14 +661,14 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       onError: (code) => {
         if (nativeScreenAudioSession !== session || activeRoom.value !== currentRoom) return;
         nativeScreenAudioSession = null;
-        let reason = '声音采集连接已中断';
+        let reason = '声音连接已中断';
         if (code === 'screenShareAudioTargetUnavailable') {
           reason = resource.audioMode === 'systemMix' ? '默认播放设备已断开或切换'
-            : resource.kind === 'window' ? '所选应用已关闭或声音目标不可用' : '共享声音目标不可用';
+            : resource.kind === 'window' ? '共享声音的应用已关闭，或当前无法取得声音' : '共享声音目标不可用';
         } else if (code === 'screenShareAudioFormatUnsupported') {
           reason = '当前系统音频格式暂不支持';
         } else if (resource.audioMode === 'systemMix') {
-          reason = '默认播放设备已断开或声音采集失败';
+          reason = '默认播放设备已断开，或无法取得设备声音';
         }
         if (!(resource.captureSettings?.followGame === 'league' && code === 'screenShareAudioTargetUnavailable')) {
           notice.value = `共享声音已停止，画面仍在共享（${reason}）。`;
@@ -760,7 +760,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   function setMediaEnabled(source: MediaSource, enabled: boolean, selectedSource?: NativeScreenSourceSelection): Promise<void> {
     if (source !== Track.Source.Microphone) {
       if (enabled && (remoteControl.granting.value || remoteControl.cleanupPending.value || remoteControl.restoring.value)) {
-        notice.value = '远程控制正在准备或清理，请先结束当前操作。';
+        notice.value = '正在开始或结束远程控制，请等待当前操作完成。';
         return Promise.resolve();
       }
       if (enabled && pendingMedia.value.has(Track.Source.ScreenShare)) return Promise.resolve();
@@ -834,7 +834,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       if (source === Track.Source.Microphone && options?.events?.beforeMicrophoneChange) {
         try { await options.events.beforeMicrophoneChange(); }
         catch {
-          if (isCurrentTask()) notice.value = '麦克风试听停止未确认，请重启客户端后再操作麦克风。';
+          if (isCurrentTask()) notice.value = '停止麦克风试听时发生问题，请重启应用后再使用麦克风。';
           // 可选试听的清理失败不能阻止用户关麦；只拦住新采集。
           if (enabled || !isCurrentTask()) return;
         }
@@ -947,8 +947,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
               const reason = code === 'microphoneDeviceUnavailable'
                 ? '所选麦克风已断开或不可用'
                 : code === 'microphoneProcessingFailed'
-                  ? '麦克风声音处理无法继续'
-                  : '原生麦克风采集连接已中断';
+                  ? '麦克风声音处理已中断'
+                  : '麦克风连接已中断';
               notice.value = `麦克风已停止：${reason}。`;
               revision.value++;
             },
@@ -1051,7 +1051,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             },
             onFrameRateAdjustmentFailure: (frameRate) => {
               if (activeRoom.value === currentRoom && screenShareResource === shareResource && !shareResource?.stopping) {
-                notice.value = `共享帧率自动调整失败，采集目标仍为 ${frameRate} FPS。请重新选择画质后重试。`;
+                notice.value = `共享帧率调整失败，仍以 ${frameRate} FPS 为目标。`;
               }
             },
             onError: (code) => {
@@ -1062,7 +1062,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
               failedShareResource.stopping = true;
               void remoteControl.endShare(currentRoom, failedShareResource.remoteShare);
               if (code !== 'captureTargetClosed') notice.value = code === 'nativeGameFollowFailed'
-                ? '游戏窗口切换未能完成，共享已停止，请重新选择游戏窗口。' : `原生屏幕共享已停止（${code}）。`;
+                ? '游戏窗口切换未能完成，共享已停止，请重新选择游戏窗口。' : `屏幕共享已停止（${code}）。`;
               retireRoomTrack(currentRoom, failedShareResource.videoTrack);
               void currentRoom.localParticipant.unpublishTrack(failedShareResource.videoTrack, true).catch(() => {});
               const screenAudioTrack = currentRoom.localParticipant
@@ -1082,7 +1082,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
               }).catch((error) => {
                 reportNativeAudioCleanupFailure(error);
                 if (activeRoom.value === currentRoom && screenShareResource === failedShareResource) {
-                  notice.value = '原生屏幕共享停止未确认，请重启客户端后再试。';
+                  notice.value = '停止屏幕共享时发生问题，请重启应用后再试。';
                 }
               });
               revision.value++;
@@ -1198,9 +1198,9 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         && !(source === Track.Source.ScreenShare && screenShareSelectionCancelled.value)) {
         notice.value = enabled ? captureErrorMessage(error, source)
           : nativeVideoStopFailed
-            ? '原生屏幕共享停止未确认，请重启客户端后再试。'
+            ? '停止屏幕共享时发生问题，请重启应用后再试。'
             : source === Track.Source.Microphone ? MICROPHONE_STOP_NOTICE
-              : '屏幕共享停止未确认，请重新连接语音。';
+              : '停止屏幕共享时发生问题，请重新连接语音。';
       }
     } finally {
       captureSignal?.removeEventListener('abort', cancelCapture);
@@ -1245,7 +1245,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           reportNativeAudioCleanupFailure(error);
           if (activeRoom.value === currentRoom && shareResource && screenShareResource === shareResource) {
             shareResource.stopping = true;
-            notice.value = '原生屏幕共享停止未确认，请重启客户端后再试。';
+            notice.value = '停止屏幕共享时发生问题，请重启应用后再试。';
           }
         }
       }
@@ -1321,7 +1321,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           await currentRoom.localParticipant.setAttributes({ 'lycansync.listening': String(applied) });
         } catch {
           if (activeRoom.value === currentRoom && !microphoneCleanupFailed) {
-            notice.value = '收听状态未能同步给其他成员，请稍后重试。';
+            notice.value = '未能通知其他成员你的收听状态。';
           }
         }
       } while (activeRoom.value === currentRoom && applied !== listening.value);
@@ -1474,7 +1474,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       resource.customQuality = snapshot;
       currentScreenShareQuality.value = quality;
       currentCustomScreenShareQuality.value = snapshot;
-      if (notice.value.startsWith('共享帧率自动调整失败')) notice.value = '';
+      if (notice.value.startsWith('共享帧率调整失败')) notice.value = '';
       return true;
     } catch (error) {
       if (activeRoom.value === currentRoom && screenShareResource === resource) {
@@ -1525,7 +1525,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
 
   function setScreenShareAudioEnabled(enabled: boolean): Promise<boolean> {
     if (screenShareResource?.controlTemporary) {
-      notice.value = '临时远控画面不共享电脑声音，频道语音保持不变。';
+      notice.value = '远控画面不包含电脑声音，语音通话不受影响。';
       return Promise.resolve(false);
     }
     // 选择新来源期间保留原声音；新画面发布后的自动接入不受该选择器锁阻挡。
@@ -1601,12 +1601,12 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       if (isCurrentTask()) {
         const code = error instanceof Error ? error.message : '';
         if (!enabled || code === 'nativeAudioStopNotConfirmed') {
-          notice.value = '共享声音停止未确认，请停止共享后重试。';
+          notice.value = '停止共享声音时发生问题，请停止共享后重试。';
         } else {
           let reason = '共享声音未能开启，请检查声音来源后重试';
-          if (code === 'screenShareAudioUnsupported') reason = '当前 Windows 版本不支持屏幕共享声音捕获';
+          if (code === 'screenShareAudioUnsupported') reason = '当前 Windows 版本不支持共享电脑声音';
           else if (code === 'screenShareAudioTargetUnavailable') {
-            reason = resource.kind === 'window' ? '无法确认所选应用的声音来源或应用已关闭'
+            reason = resource.kind === 'window' ? '无法取得所选应用的声音，请确认应用仍在运行'
               : resource.audioMode === 'systemMix' ? '默认播放设备不可用或已切换' : '共享声音目标不可用';
           } else if (code === 'screenShareAudioFormatUnsupported') reason = '当前系统音频格式暂不支持';
           notice.value = `仅共享画面：${reason}。`;
@@ -1636,7 +1636,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           if (nativeScreenAudioSession === session) nativeScreenAudioSession = null;
         } catch (error) {
           reportNativeAudioCleanupFailure(error);
-          if (isCurrentTask()) notice.value = '共享声音停止未确认，请停止共享后重试。';
+          if (isCurrentTask()) notice.value = '停止共享声音时发生问题，请停止共享后重试。';
         }
       }
       resource.audioChanging = false;

@@ -29,6 +29,6 @@ export async function sendPresenceHeartbeat(
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
   });
   if (!response.ok) {
-    throw new Error(`心跳上报失败（HTTP ${response.status}）`);
+    throw new Error('在线状态更新失败。');
   }
 }

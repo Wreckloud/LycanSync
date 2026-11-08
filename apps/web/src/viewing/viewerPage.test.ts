@@ -67,7 +67,7 @@ it('原生就绪失败显示失败，不向主页面伪报可以挂载', async (
   const f = page();
   f.view.lycanViewerWindow.ready = () => Promise.reject(new Error('window closed'));
   await f.initialize();
-  expect(f.root.textContent).toContain('初始化失败');
+  expect(f.root.textContent).toContain('观看窗口未能打开');
   f.view.dispatchEvent(new Event('pagehide'));
   expect(f.stopState).toHaveBeenCalledOnce(); expect(f.stopDisarm).toHaveBeenCalledOnce();
   f.state({ ...visible, visible: false });

@@ -18,7 +18,7 @@ onMounted(() => { if (props.modal) panel.value?.focus(); });
   <main class="startup-update-screen" :class="{ 'is-modal': modal }">
     <section ref="panel" class="startup-update-card" aria-labelledby="startup-update-title"
       :role="modal ? 'dialog' : undefined" :aria-modal="modal || undefined" :tabindex="modal ? -1 : undefined" @keydown="keydown">
-      <h1 id="startup-update-title">{{ modal ? '更新 LycanSync' : '准备进入 LycanSync' }}</h1>
+      <h1 id="startup-update-title">{{ modal ? '更新 lycanclaw' : '准备进入 lycanclaw' }}</h1>
       <p role="status">{{ state?.message || '正在准备…' }}</p>
       <template v-if="state?.phase === 'downloading'">
         <div class="startup-update-progress-label">

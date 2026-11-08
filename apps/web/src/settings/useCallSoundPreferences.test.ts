@@ -21,5 +21,5 @@ it('错误设置和写入失败明确反馈，当前操作仍可使用', () => {
   expect(preferences.error.value).toContain('无法读取');
   preferences.setCustomEntrances(false);
   expect(preferences.customEntrances.value).toBe(false);
-  expect(preferences.error.value).toContain('无法保存');
+  expect(preferences.error.value).toContain('未能保存');
 });

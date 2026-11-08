@@ -142,7 +142,7 @@ export class NativeMicrophoneAudioSession {
       try {
         await this.stop();
       } catch (cleanupError) {
-        throw new AggregateError([error, cleanupError], '原生麦克风启动失败，清理未完成。');
+        throw new AggregateError([error, cleanupError], '麦克风启动失败，请重启应用后再试。');
       }
       throw error;
     }

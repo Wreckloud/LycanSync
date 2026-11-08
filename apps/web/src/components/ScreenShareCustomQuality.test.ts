@@ -33,8 +33,8 @@ it('码率默认折叠，显示推荐与非固定流量说明，移除未实现�
   expect(html.match(/<button[^>]*class="disclosure-trigger"[^>]*>/)?.[0]).toContain('aria-expanded="false"');
   expect(html).toContain('display:none');
   expect(html).toContain('主画面码率上限');
-  expect(html).toContain('推荐 12 Mbps');
-  expect(html).toContain('不是固定流量');
+  expect(html).toContain('推荐上限 12 Mbps');
+  expect(html).toContain('实际用量会变化');
   expect(html).not.toContain('根据网络状况自动调整');
   expect(html).not.toContain('value="360"');
 });

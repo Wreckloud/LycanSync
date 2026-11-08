@@ -30,18 +30,18 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
 
 <template>
   <div class="settings-section shortcut-settings">
-    <p class="settings-intro">全局快捷键在游戏或其他窗口前台时也生效。语音操作只用于已连接的通话；保存回放需要提前开启缓存，不会自动采集或入房。默认不绑定。</p>
+    <p class="settings-intro">游戏中也可使用快捷键。语音操作需先加入通话，保存回放需先开启回放；默认不设置快捷键。</p>
     <p v-if="!shortcuts.supported">全局快捷键仅在 Windows 桌面客户端提供。</p>
     <section class="settings-block">
-      <h2>发言模式</h2>
-      <label class="voice-mode"><input type="radio" name="voice-mode" :checked="shortcuts.voiceMode === 'voice'"
-        :disabled="shortcuts.busy" @change="shortcuts.setVoiceMode('voice')" />自由发言</label>
-      <label class="voice-mode"><input type="radio" name="voice-mode" :checked="shortcuts.voiceMode === 'pushToTalk'"
-        :disabled="!shortcuts.supported || !shortcuts.ready || shortcuts.busy"
-        @change="shortcuts.setVoiceMode('pushToTalk')" />按键说话</label>
-      <small>按键说话需要先在通话中开启麦克风；手动静音、停止收听和离房始终优先。松开按键即停止发声。</small>
-      <small v-if="shortcuts.voiceMode === 'pushToTalk'">{{ !shortcuts.bindings.pushToTalk
-        ? '请设置下方的按键说话快捷键；设置前保持静音。' : shortcuts.held ? '按键已按住' : '等待按住快捷键' }}</small>
+      <div class="voice-mode-row">
+        <h2>发言模式</h2>
+        <select aria-label="发言模式" :value="shortcuts.voiceMode" :disabled="shortcuts.busy"
+          @change="shortcuts.setVoiceMode(($event.target as HTMLSelectElement).value as 'voice' | 'pushToTalk')">
+          <option value="voice">自由发言</option>
+          <option value="pushToTalk" :disabled="!shortcuts.supported || !shortcuts.ready">按键说话</option>
+        </select>
+      </div>
+      <small>先设置快捷键，并在通话中开启麦克风。按住时说话，松开后静音；手动静音、停止收听或离开语音后不会发声。</small>
     </section>
     <section class="settings-block">
       <h2>语音快捷键</h2>
@@ -59,7 +59,7 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
             :aria-label="`清除${action.label}快捷键`" @click="shortcuts.setBinding(action.id, '')">清除</button>
         </div>
       </div>
-      <small>支持 Ctrl／Alt 加字母或数字，以及 F1–F11；不使用 Windows 保留键。松开按键后保存，长按不反复切换。</small>
+      <small>支持 Ctrl／Alt 加字母或数字，以及 F1–F11，不支持 Windows 保留键。松开后保存，长按不会重复触发。</small>
       <InlineFeedback :message="keyError || shortcuts.error" />
       <button v-if="shortcuts.error && shortcuts.supported" type="button" :disabled="shortcuts.busy" @click="shortcuts.retry()">重新启用</button>
     </section>
@@ -70,6 +70,6 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
 .shortcut-setting-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; min-height: 44px; }
 .shortcut-setting-row .settings-actions { margin: 0; }
 .shortcut-binding { width: 208px; flex: 0 0 208px; white-space: nowrap; }
-.voice-mode { display: flex; align-items: center; gap: 8px; }
-.voice-mode input { margin: 0; accent-color: var(--accent); }
+.voice-mode-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.voice-mode-row select { width: 128px; }
 </style>

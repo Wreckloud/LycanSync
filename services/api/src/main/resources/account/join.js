@@ -12,7 +12,7 @@ const kinds = {
   INVITE: { label: '邀请加入', subtitle: '和朋友一起开黑，一起看' },
   RECOVERY: { label: '恢复登录', subtitle: '回到你的朋友身边' },
 };
-const labels = { PENDING: '链接有效，请在应用中确认。', COMPLETED: '此链接已使用，可下载应用；恢复登录请联系服主。', EXPIRED: '此链接已过期，请联系服主重新生成。', REVOKED: '此链接已撤销，请联系服主。' };
+const labels = { PENDING: '链接有效，请在应用中确认。', COMPLETED: '此链接已使用。如需恢复登录，请联系服主。', EXPIRED: '此链接已过期，请联系服主重新生成。', REVOKED: '此链接已撤销，请联系服主。' };
 document.getElementById('server').textContent = location.host;
 
 open.addEventListener('click', () => {
@@ -61,7 +61,7 @@ async function checkLink() {
     document.getElementById('title').textContent = result.serverName;
     document.getElementById('kind').textContent = `· ${kinds[result.kind].label}`;
     document.getElementById('subtitle').textContent = kinds[result.kind].subtitle;
-    document.title = `LycanSync · ${kinds[result.kind].label}`;
+    document.title = `lycanclaw · ${kinds[result.kind].label}`;
     status.textContent = labels[result.status];
     open.disabled = result.status !== 'PENDING';
     retry.hidden = true;

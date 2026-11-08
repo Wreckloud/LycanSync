@@ -53,17 +53,17 @@ defineExpose({ editingName });
     </aside>
     <div class="activity-settings-controls">
     <label class="settings-toggle activity-toggle">
-      <span><strong>显示动态</strong><small>展示当前游戏或音乐及最近一次公开游戏；关闭后隐藏并保留记录，重新开启可恢复展示。</small></span>
+      <span><strong>显示动态</strong><small>向朋友展示正在玩的游戏、音乐和最近玩过的游戏。关闭后隐藏，重新开启可恢复展示。</small></span>
       <input type="checkbox" :checked="showActivity" aria-label="显示动态"
         @change="emit('visibility', ($event.target as HTMLInputElement).checked)" />
     </label>
     <label class="settings-toggle activity-toggle">
-      <span><strong>显示上次在线时间</strong><small>离线时向同群成员展示上次公开在线时间，隐身期间不刷新。</small></span>
+      <span><strong>显示上次在线时间</strong><small>离线后显示上次在线时间；隐身期间不更新。</small></span>
       <input type="checkbox" :checked="showLastOnline" aria-label="显示上次在线时间"
         @change="emit('lastOnlineVisibility', ($event.target as HTMLInputElement).checked)" />
     </label>
     <div class="settings-toggle activity-toggle activity-presence">
-      <span><strong>在线状态</strong></span>
+      <span><strong>在线状态</strong><small id="activity-presence-description">向朋友显示离线，暂停更新动态和上次在线时间。聊天、语音和共享仍可使用。</small></span>
       <PresenceSettingsMenu :mode="presenceMode" :ready="presenceReady" :syncing="presenceSyncing" :error="presenceError"
         :active="active" @select="emit('presenceMode', $event)" />
     </div>
@@ -83,7 +83,7 @@ defineExpose({ editingName });
           <option v-if="executable && !mappings.windows.value.some((entry) => entry.executable === executable)" :value="executable">{{ selectedName }}（未运行）</option>
         </select>
         <div class="activity-window-actions">
-          <button type="button" :disabled="!executable || mappings.busy.value" title="清除当前选择，保留已保存的修正" @click="resetSelection">重置</button>
+          <button type="button" :disabled="!executable || mappings.busy.value" title="清除当前选择，已保存的名称修正会保留" @click="resetSelection">重置</button>
           <button type="button" :disabled="!executable || mappings.busy.value || !mappings.ready.value" @click="openEditor">修改名称</button>
         </div>
       </div>
@@ -97,7 +97,7 @@ defineExpose({ editingName });
           <button type="button" :disabled="mappings.busy.value" :aria-label="`移除动态名称 ${entry.name}`" @click="mappings.remove(entry.executable)">移除</button>
         </div>
       </div>
-      <small>名称按程序记忆，仍优先展示最新启动的游戏；音乐暂停后可能继续显示动态。</small>
+      <small>修改的名称会用于这个程序，仍优先展示最新启动的游戏。音乐暂停后，动态可能仍会显示。</small>
     </div>
   </section>
   <DialogTransition>
@@ -116,7 +116,7 @@ defineExpose({ editingName });
 .activity-mappings-heading h2 { flex-shrink: 0; }
 .activity-current { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .activity-toggle { padding: 0; border-top: 0; }
-.activity-presence { flex-wrap: wrap; }
+.activity-presence > span { flex: 1; }
 .activity-mappings { grid-column: 1 / -1; display: grid; gap: 8px; min-width: 0; padding-top: 24px; border-top: 1px solid var(--border-soft); }
 .activity-window-choice { display: grid; grid-template-columns: 100px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-width: 0; }
 .activity-window-actions { display: flex; gap: 8px; }

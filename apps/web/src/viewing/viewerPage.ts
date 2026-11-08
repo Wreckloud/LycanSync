@@ -36,7 +36,7 @@ export async function initializeViewerPage(view: Window) {
   } catch {
     if (!disposed) {
       dispose();
-      root.textContent = '观看窗口初始化失败，请关闭后重新打开。';
+      root.textContent = '观看窗口未能打开，请关闭后重试。';
     }
   }
 }

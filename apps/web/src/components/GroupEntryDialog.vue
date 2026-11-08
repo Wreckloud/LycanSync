@@ -166,7 +166,7 @@ onMounted(() => {
       </div>
       <div v-else class="entry-body entry-join-body">
         <label class="entry-field">群组邀请码<input v-model="code" aria-label="群组邀请码" maxlength="16" autocomplete="off" :readonly="busy" placeholder="输入群主提供的邀请码" /></label>
-        <p>邀请码仅用于加入当前服务器的群组，不会连接语音。</p>
+        <p>邀请码只能加入当前服务器的群组，入群后不会自动连接语音。</p>
       </div>
       </div>
       </Transition>

@@ -163,7 +163,7 @@ onScopeDispose(() => {
       <section v-if="menu === 'output'" class="call-control-menu" aria-label="收听选项">
         <header>收听</header>
         <label class="call-control-range"><span>输出音量 <b>{{ Math.round(outputVolume * 100) }}%</b></span>
-          <input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="outputVolume" aria-label="LycanSync 总输出音量"
+          <input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="outputVolume" aria-label="lycanclaw 总输出音量"
             @input="emit('outputVolume', Number(($event.target as HTMLInputElement).value))" /></label>
         <button type="button" class="call-settings-entry" @click="openAudioSettings"><Settings :size="15" />语音设置<ChevronRight :size="14" /></button>
       </section>
@@ -189,7 +189,7 @@ onScopeDispose(() => {
               共享画质<span>{{ SCREEN_SHARE_QUALITIES.find(preset => preset.id === quality)?.label }}</span><ChevronRight class="call-menu-chevron" :size="14" /></button>
             <label v-if="sharing" class="call-share-audio"><span>共享音频</span><input type="checkbox" :checked="shareAudio" :disabled="shareBusy || shareAudioRestricted || audioMode === 'unavailable'"
               @change="toggleShareAudio" /></label>
-            <small v-if="sharing && shareAudioRestricted" class="call-audio-warning">临时远控画面不共享电脑声音，频道语音不变。</small>
+            <small v-if="sharing && shareAudioRestricted" class="call-audio-warning">远控画面不包含电脑声音，语音通话不受影响。</small>
             <small v-else-if="sharing && audioMode === 'systemMix'" class="call-audio-warning">包含所有系统声音，可能产生回声。</small>
             <small v-else-if="sharing && audioMode === 'unavailable'" class="call-audio-warning">当前系统不支持共享音频。</small>
           </template>

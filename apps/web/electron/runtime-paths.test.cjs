@@ -18,7 +18,7 @@ test('运行目录不可写时展示可操作说明并退出，不再抛出主�
   assert.throws(() => runInNewContext(main.slice(main.indexOf('const runtimeLayout ='), main.indexOf('const backend =')), sandbox), error => error === exited);
   assert.equal(messages.length, 1);
   assert.match(messages[0][1], /EPERM/);
-  assert.match(messages[0][1], /保留该文件夹/);
+  assert.match(messages[0][1], /请保留/);
 });
 
 function layoutInput(overrides = {}) {
@@ -156,9 +156,9 @@ test('旧加密状态缺失或解析失败时保留原文件，不迁入无法�
   try {
     mkdirSync(legacy); mkdirSync(destination);
     writeFileSync(join(legacy, 'session.bin'), 'original-ciphertext');
-    assert.throws(() => migrateOwnedData(legacy, destination), /缺少配套的加密状态/);
+    assert.throws(() => migrateOwnedData(legacy, destination), /缺少解密所需的数据/);
     writeFileSync(join(legacy, 'Local State'), 'invalid-private-state');
-    assert.throws(() => migrateOwnedData(legacy, destination), /加密状态无法解析/);
+    assert.throws(() => migrateOwnedData(legacy, destination), /无法读取登录信息的加密数据/);
     assert.equal(existsSync(join(destination, '.legacy-migration-complete')), false);
     assert.equal(existsSync(join(destination, 'session.bin')), false);
     assert.equal(readFileSync(join(legacy, 'session.bin'), 'utf8'), 'original-ciphertext');
@@ -224,7 +224,7 @@ test('启动时创建运行目录并切换 Electron 路径，目录不可写时�
     const untouched = { ...app, setPath: () => { throw new Error('不应切换路径'); }, setAppLogsPath: () => { throw new Error('不应切换日志'); } };
     assert.throws(() => applyRuntimePaths({
       app: untouched, packaged: true, execPath: join(blocked, 'LycanSync.exe'), projectDirectory: root,
-    }), /无法在运行目录保存数据/);
+    }), /无法在此目录保存数据/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

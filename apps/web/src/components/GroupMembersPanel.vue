@@ -74,7 +74,7 @@ async function loadProfile() {
     if (controller.signal.aborted || profileRequest !== controller || props.groupId !== groupId) return;
     const seconds = profile.sharedVoiceSeconds;
     if (profile.userId !== member.userId || typeof profile.signature !== 'string'
-      || typeof seconds !== 'number' || !Number.isSafeInteger(seconds) || seconds < 0) throw new Error('成员资料响应无效');
+      || typeof seconds !== 'number' || !Number.isSafeInteger(seconds) || seconds < 0) throw new Error('暂时无法读取成员资料。');
     profileSignature.value = profile.signature;
     sharedVoiceSeconds.value = seconds;
     if (profiles.size >= 8) profiles.delete(profiles.keys().next().value!);
@@ -150,7 +150,7 @@ async function toggleSearch() {
       </Transition>
     </header>
     <div class="members-list" :class="{ 'group-content-ready': members.length > 0 }">
-      <p v-if="connectionLost" class="group-hint" role="status">成员状态同步中断，当前显示可能已过期。</p>
+      <p v-if="connectionLost" class="group-hint" role="status">成员状态更新中断，当前显示可能不是最新状态。</p>
       <p v-if="error" role="alert" class="group-error">{{ error }}</p>
       <p v-else-if="loadingHint" class="group-hint" role="status">正在读取成员…</p>
       <p v-if="search.trim() && !loading && !error && !filtered.length" class="group-hint" role="status">没有找到匹配的成员</p>

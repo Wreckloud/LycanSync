@@ -70,7 +70,7 @@ class SystemInitializationControllerTests {
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
                 .andExpect(jsonPath("$.code").value("DATABASE_ACCESS_ERROR"))
-                .andExpect(jsonPath("$.detail").value("数据库暂时不可用"))
+                .andExpect(jsonPath("$.detail").value("服务器暂时无法读取或保存数据。"))
                 .andExpect(content().string(not(containsString("connection details"))));
     }
 }

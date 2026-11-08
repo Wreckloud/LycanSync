@@ -194,7 +194,7 @@ test('并发新配置胜出，旧确认不能改变新配置；重复活动不�
   try {
     const old = monitor.configure([{ executable: 'c:\\old.exe', name: '旧' }]);
     const oldCommand = children[0].commands.at(-1);
-    const rejected = assert.rejects(old, /新的操作替换/);
+    const rejected = assert.rejects(old, /已有更新的名称设置/);
     const current = monitor.configure([{ executable: 'c:\\new.exe', name: '新' }]);
     reply(0, oldCommand);
     reply(0, children[0].commands.at(-1));

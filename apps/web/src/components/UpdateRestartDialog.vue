@@ -31,7 +31,7 @@ onMounted(() => dialog.value?.focus());
       <section ref="dialog" class="update-restart-dialog" role="dialog" aria-modal="true"
         aria-labelledby="update-restart-title" aria-describedby="update-restart-description" tabindex="-1" @keydown="keepFocus">
         <header><h2 id="update-restart-title">发现新版本 {{ version }}</h2><p>重启软件并更新？</p></header>
-        <p id="update-restart-description">先下载并校验新版，随后保存录制并结束当前通话、屏幕共享和远控。安装完成后自动重新打开；下载失败仍可使用当前版本。</p>
+        <p id="update-restart-description">下载并检查新版后，将保存录制并结束通话、共享和远控，再重启安装。完成后自动打开，下载失败仍可使用当前版本。</p>
         <footer class="card-actions">
           <button type="button" :disabled="busy" @click="cancel">取消</button>
           <InlineFeedback class="card-feedback" :message="error" :pending="busy ? '正在准备更新…' : ''" />

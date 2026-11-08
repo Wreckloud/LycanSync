@@ -34,14 +34,14 @@ describe('语音设置的本机试听入口', () => {
     expect([...desktop.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map(match => match[1]))
       .toEqual(['输入', '麦克风试听', '声音处理', '输出']);
     const browser = await renderAudioSettings('idle', false, false);
-    expect(browser).toContain('开启后同时请求浏览器进行回声消除');
+    expect(browser).toContain('同时使用浏览器的回声消除');
     expect(browser).not.toContain('桌面版暂不支持');
   });
 
   it('旧的混合选择明确显示部分开启，不因打开设置覆盖用户偏好', async () => {
     const partial = await renderAudioSettings('idle', false, true, { noiseSuppression: false });
     expect(partial).toContain('aria-checked="mixed"');
-    expect(partial).toContain('已保留之前的部分处理设置');
+    expect(partial).toContain('仍在使用你之前的处理设置');
     const desktop = await renderAudioSettings('idle', false, true, { echoCancellation: false });
     expect(desktop).not.toContain('aria-checked="mixed"');
     const browser = await renderAudioSettings('idle', false, false, { echoCancellation: false });
@@ -56,7 +56,7 @@ describe('语音设置的本机试听入口', () => {
     expect(html).toContain('class="inline-feedback"');
     expect(html).toContain('测试错误');
     expect(html).toContain('平衡成员语音音量');
-    expect(html).toContain('不处理共享声音');
+    expect(html).toContain('不影响共享声音');
   });
 
   it('没有房间时显示测试输入等级，停止期间不能重复启动', async () => {

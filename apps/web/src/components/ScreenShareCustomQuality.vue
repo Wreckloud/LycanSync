@@ -74,7 +74,7 @@ watch(() => [props.modelValue.resolution, props.modelValue.fps, props.modelValue
         <button type="button" class="settings-button" :disabled="disabled || (modelValue.bitrateMbps === undefined && Number(bitrateDraft) === recommendedMbps)"
           @click="resetBitrate">恢复推荐</button>
       </div>
-      <InlineFeedback :message="bitrateError" :status="`推荐 ${recommendedMbps} Mbps；这是上限，不是固定流量。缩略层与声音另计。`" />
+      <InlineFeedback :message="bitrateError" :status="`推荐上限 ${recommendedMbps} Mbps，实际用量会变化；预览画面和声音另计。`" />
       </ExpandSection>
     </div>
   </div>

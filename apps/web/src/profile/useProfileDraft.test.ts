@@ -165,7 +165,7 @@ describe('个人资料草稿与保存', () => {
     const { scope, draft } = setup(saveProfile);
     draft.signature.value = '保留草稿';
     expect(await draft.save()).toBe(false);
-    expect(draft.error.value).toBe('服务端未返回签名，无法确认保存结果。');
+    expect(draft.error.value).toBe('无法确认签名是否保存成功，请重新打开资料查看。');
     expect(draft.signature.value).toBe('保留草稿');
     scope.stop();
   });

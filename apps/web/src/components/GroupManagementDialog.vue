@@ -59,7 +59,7 @@ async function action(operation: () => Promise<void>) {
   busy.value = true;
   error.value = ''; status.value = '';
   try { await operation(); }
-  catch (exception) { if (!disposed) error.value = exception instanceof Error ? exception.message : '操作失败，请重试。'; }
+  catch (exception) { if (!disposed) error.value = exception instanceof Error ? exception.message : '操作失败。'; }
   finally { if (!disposed) busy.value = false; }
 }
 
@@ -165,7 +165,7 @@ onScopeDispose(() => {
               autocomplete="off" :spellcheck="false" placeholder="输入完整群聊名称" />
           </form>
         </template>
-        <template v-else-if="mode === 'leave'"><strong>退出“{{ group.name }}”？</strong><p>退出后无法访问本群，你的语音、共享和远控会结束。需要群主重新添加，或使用当前邀请码加入。</p></template>
+        <template v-else-if="mode === 'leave'"><strong>退出“{{ group.name }}”？</strong><p>退出后将结束你在本群的语音、共享和远控。再次加入需要群主添加，或使用当前邀请码。</p></template>
         <template v-else-if="mode === 'transfer'"><strong>将群主转让给 {{ confirmation?.nickname }}？</strong><p>对方将拥有资料、成员和邀请码的管理权限，你将成为普通成员。当前邀请码会更换。</p></template>
         <template v-else><strong>移出 {{ confirmation?.nickname }}？</strong><p>对方将失去群访问权限，并断开语音、共享和远控；邀请码会更换，其他成员不受影响。</p></template>
       </div>

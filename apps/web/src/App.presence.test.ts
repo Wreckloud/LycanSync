@@ -142,7 +142,7 @@ it('离房失败保留明确提示，销毁后迟到成功不再查询', async (
     first.app.leaveVoice();
     first.leaving.reject(new Error('disconnect failed'));
     await settle();
-    expect(first.state.viewerNotice.value).toContain('离开语音未能确认');
+    expect(first.state.viewerNotice.value).toContain('退出语音时发生问题');
   } finally { first.stop(); }
   const second = setup();
   second.app.leaveVoice();
@@ -329,7 +329,7 @@ it('同步失败保留隐身意愿并显示未确认，下次成功清除提示'
   try {
     await app.changePresenceMode('invisible');
     expect(state.presenceMode.value).toBe('invisible');
-    expect(state.presenceSyncError.value).toContain('尚未确认');
+    expect(state.presenceSyncError.value).toContain('尚未同步');
     await app.sendHeartbeat();
     expect(state.presenceSyncError.value).toBe('');
     expect(state.rtc.leave).not.toHaveBeenCalled();

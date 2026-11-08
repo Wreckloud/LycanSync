@@ -88,7 +88,7 @@ it('配置失败保留旧名称且不保存；存储失败只保留本次已生�
     storage.setItem.mockImplementation(() => { throw new Error('disk denied'); });
     expect(await model.save(mapping.executable, '本次名称')).toBe(true);
     expect(model.entries.value[0].name).toBe('本次名称');
-    expect(model.error.value).toContain('本次名称已生效');
+    expect(model.error.value).toContain('本次名称修改已生效');
   } finally { scope.stop(); }
 });
 

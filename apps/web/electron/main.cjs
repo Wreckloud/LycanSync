@@ -103,7 +103,7 @@ const runtimeLayout = (() => {
         ? app.commandLine.getSwitchValue('user-data-dir') : undefined,
     });
   } catch (error) {
-    dialog.showErrorBox('无法准备 LycanSync 运行目录', `${error.message}\n\n请将 LycanSync 安装到当前用户可写的目录，例如 D:\\Programs\\LycanSync，避免 Program Files 或 Windows 目录。\n已有账号与设置保存在原安装目录的 data 中，请保留该文件夹，不要卸载或删除后再尝试。`);
+    dialog.showErrorBox('无法准备 lycanclaw 的运行目录。', `${error.message}\n\n请安装到你有写入权限的目录，例如 D:\\Programs\\LycanSync，避免 Program Files 或 Windows 目录。\n原目录的 data 文件夹保存着账号和设置，请保留，不要先卸载或删除。`);
     process.exit(1);
   }
 })();
@@ -191,7 +191,7 @@ const startupUpdate = createStartupUpdate({
   beforeInstall: async (intent) => {
     if (closing || (startupReady && intent !== 'manual')) throw new Error('当前不能安装更新');
     if (pendingAccessLink) {
-      if (!safeStorage.isEncryptionAvailable()) throw new Error('无法保存待确认邀请');
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('无法保存待确认的邀请链接。');
       const link = `lycansync://access?server=${encodeURIComponent(pendingAccessLink.server)}#token=${pendingAccessLink.token}`;
       await mkdir(app.getPath('userData'), { recursive: true });
       await writeFile(accessLinkFile, safeStorage.encryptString(link));
@@ -769,7 +769,7 @@ async function startNativeScreenAudio(sourceId, sessionId, publishing = true) {
       finishNativeScreenAudioPipe(audio, { destroy: true });
       try { if (nativeScreenAudioSession === audio) await stopScreenAudioCapture(audio); }
       catch (cleanupError) {
-        throw new AggregateError([error, cleanupError], '共享声音启动失败，清理未确认。');
+        throw new AggregateError([error, cleanupError], '共享声音启动失败，请重启应用后再试。');
       }
       if (nativeScreenAudioSession === audio) nativeScreenAudioSession = undefined;
       throw error;
@@ -1227,14 +1227,14 @@ async function loadSession() {
     // 会话绑定服务地址，不能向另一个部署实例发送旧凭据。
     if (saved.server === backend.origin && /^[A-Za-z0-9_-]{43}$/.test(saved.token)) sessionToken = saved.token;
   } catch (error) {
-    if (error.code !== 'ENOENT') throw new Error('无法读取本机登录凭据，请清理登录状态后重试。');
+    if (error.code !== 'ENOENT') throw new Error('无法读取本机登录信息，请清除本机登录信息后重新登录。');
   }
   sessionLoaded = true;
   return sessionToken;
 }
 
 async function saveSession(token, accountId) {
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('系统加密不可用，不能保存自动登录凭据。');
+  if (!safeStorage.isEncryptionAvailable()) throw new Error('系统加密功能不可用，无法安全保存自动登录信息。');
   // 新凭据持久化前记录首次手动确认，避免关窗重开绕过账号确认。
   await loginPreferences.set(accountId, true, true);
   const encrypted = safeStorage.encryptString(JSON.stringify({ server: backend.origin, token }));
@@ -1335,14 +1335,14 @@ async function serveApplication(request) {
       const body = streamingUpload ? request.body
         : ['POST', 'PUT'].includes(request.method) ? Buffer.from(await request.arrayBuffer()) : undefined;
       if (body instanceof Buffer && body.byteLength > (routePolicy.maxBodyBytes ?? 4096)) {
-        return Response.json({ code: 'REQUEST_TOO_LARGE', detail: '提交内容过大，请缩小图片或减少内容后重试。' }, { status: 413 });
+        return Response.json({ code: 'REQUEST_TOO_LARGE', detail: '提交的内容过大，请缩小图片或减少内容后重试。' }, { status: 413 });
       }
-      failureMessage = '无法读取本机登录凭据，请清理本机登录凭据后重试。';
+      failureMessage = '无法读取本机登录信息，请清除后重新登录。';
       const token = await loadSession();
       if (['/api/auth/access/redeem', '/api/auth/account/recover'].includes(url.pathname) && token) {
-        return Response.json({ detail: '请先从此设备移除当前账号，再恢复账号或使用邀请链接。' }, { status: 409 });
+        return Response.json({ detail: '请先清除当前设备的登录信息，再恢复账号或使用邀请链接。' }, { status: 409 });
       }
-      failureMessage = '无法连接业务服务，请检查网络和服务器状态。';
+      failureMessage = '无法连接服务器，请检查网络和服务器状态。';
       const response = await net.fetch(new URL(url.pathname + url.search, backend).href, {
         method: request.method,
         headers: { ...(body ? { 'Content-Type': request.headers.get('Content-Type') || 'application/json' } : {}),
@@ -1365,7 +1365,7 @@ async function serveApplication(request) {
         try { await clearSession(); }
         catch {
           // 服务端已结束会话，文件清理失败也不能继续展示为已登录。
-          return Response.json({ code: 'LOCAL_SESSION_CLEAR_FAILED', message: '登录已结束，但无法清理本机凭据，请检查数据目录权限。' }, {
+          return Response.json({ code: 'LOCAL_SESSION_CLEAR_FAILED', message: '已退出登录，但本机登录信息未能清除。请检查数据目录的读写权限。' }, {
             status: currentSessionUnauthorized ? 401 : 502,
             headers: { 'Cache-Control': 'no-store',
               ...(currentSessionUnauthorized ? { 'X-Lycan-Session-Expired': 'true' } : {}) },
@@ -1373,13 +1373,13 @@ async function serveApplication(request) {
         }
       }
       if (routePolicy.savesSession && response.ok) {
-        failureMessage = '登录响应无法确认，请重试或联系服主。';
+        failureMessage = '无法确认登录结果。';
         const result = await response.json();
         if (!/^[A-Za-z0-9_-]{43}$/.test(result?.sessionToken ?? '')
             || typeof result.user?.id !== 'string' || !result.user.id
             || typeof result.user.nickname !== 'string' || typeof result.user.avatar !== 'string'
             || typeof result.user.administrator !== 'boolean') throw new Error('登录响应无效');
-        failureMessage = '无法保存本机登录凭据，请检查数据目录权限和系统加密后重试。';
+        failureMessage = '无法保存本机登录信息，请检查数据目录的读写权限和系统加密功能后重试。';
         await saveSession(result.sessionToken, result.user.id);
         // 会话原文只进入主进程的系统加密存储，不暴露给渲染页面。
         delete result.sessionToken;
@@ -1494,7 +1494,7 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow = new BrowserWindow({
       ...initialWindowBounds(workArea), resizable: true, maximizable: true,
       minWidth: Math.min(920, workArea.width - 32), minHeight: Math.min(640, workArea.height - 32),
-      title: 'LycanSync', icon: resolve(__dirname, 'app.ico'), frame: false, show: false, backgroundColor: '#10151a',
+      title: 'lycanclaw', icon: resolve(__dirname, 'app.ico'), frame: false, show: false, backgroundColor: '#10151a',
       webPreferences: { preload: resolve(__dirname, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false },
     });
     mainWindow.setMenu(null);
@@ -2237,7 +2237,7 @@ async function returnToAccountEntry() {
     try { await stop(); }
     catch { failed = true; }
   }
-  if (failed) throw new Error('通话资源尚未完全停止，请重试；登录凭据已保留。');
+  if (failed) throw new Error('退出时发生问题，请关闭并重新打开应用。');
 }
 
 ipcMain.handle('auth:return', async (event) => {
@@ -2269,7 +2269,7 @@ ipcMain.handle('settings:server:get', (event) => {
 });
 ipcMain.handle('auth:access:get', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
-  if (pendingAccessError) throw new Error('无法读取待确认邀请，请从网页重新打开。');
+  if (pendingAccessError) throw new Error('无法读取邀请链接，请从网页重新打开。');
   const offer = pendingAccessLink;
   pendingAccessLink = null;
   return offer;
@@ -2296,7 +2296,7 @@ ipcMain.handle('auth:access:prepare', async (event, offer) => {
 });
 ipcMain.handle('settings:server:set', async (event, value) => {
   if (!trustedSender(event) || closing) throw new Error('当前不能修改服务器地址。');
-  if (await loadSession()) throw new Error('请先清除本机登录凭据，再修改服务器地址。');
+  if (await loadSession()) throw new Error('请先清除本机登录信息，再修改服务器地址。');
   if (!trustedSender(event) || closing) throw new Error('当前不能修改服务器地址。');
   await saveServerSettings(app.getPath('userData'), value);
   // 配置可能已经落盘；用户已关窗时留待下次启动，不再因迟到结果重新打开应用。

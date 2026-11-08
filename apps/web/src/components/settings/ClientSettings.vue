@@ -33,15 +33,15 @@ const confirmingUpdate = computed(() => Boolean(confirmationVersion.value));
 const updateLoadingHint = useLoadingHint(() => props.active && (updateBusy.value || updateState.value?.phase === 'checking'), 1000);
 const autoStartLoadingHint = useLoadingHint(() => props.active && autoStartSupported.value === undefined && !autoStartError.value, 1000);
 const updateDescription = computed(() => {
-  if (updateBusy.value || updateState.value?.phase === 'checking') return updateLoadingHint.value ? '正在检查更新…' : '进入本页时检查一次更新；更新需确认后重启。';
+  if (updateBusy.value || updateState.value?.phase === 'checking') return updateLoadingHint.value ? '正在检查更新…' : '发现新版后，可确认重启更新。';
   if (!updateError.value && !updateState.value?.error && updateState.value?.message) return updateState.value.message;
-  return '进入本页时检查一次更新；更新需确认后重启。';
+  return '发现新版后，可确认重启更新。';
 });
 const autoStartDescription = computed(() => {
   if (autoStartSupported.value === undefined) return autoStartError.value ? '尚未确认开机自启支持情况。' : autoStartLoadingHint.value ? '正在读取开机自启设置…' : '随 Windows 登录自动启动客户端。';
   return autoStartSupported.value
-    ? '使用 Windows 登录项启动，不增加额外常驻进程。'
-    : '仅 Windows 安装版支持，开发模式不会修改系统启动项。';
+    ? ''
+    : '开机启动仅支持 Windows 安装版。';
 });
 
 // 弹窗通过 Teleport 展示；由设置页隔离背景，避免确认期间切栏或返回。
@@ -56,12 +56,12 @@ watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
     screenError.value = '无法读取屏幕共享设置，请重新保存。';
   }
   if (!desktopBridge?.getScreenShareSupport) {
-    screenError.value = '请重新启动客户端以读取屏幕共享设置支持情况。';
+    screenError.value = '暂时无法读取屏幕共享支持情况。';
     return;
   }
   void desktopBridge.getScreenShareSupport().then((support) => {
     screenSupport.value = support;
-  }).catch(() => { screenError.value = '无法确认屏幕共享设置支持情况，请重新打开客户端。'; });
+  }).catch(() => { screenError.value = '暂时无法确认屏幕共享支持情况。'; });
 }, { immediate: true });
 
 function updateScreenPreference(key: 'hideCursor', event: Event) {
@@ -84,7 +84,7 @@ watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
   if (!active || !desktop || loaded) return;
   loaded = true;
   if (!desktopBridge?.getAutoStart) {
-    autoStartError.value = '请重新启动客户端以读取开机自启设置。';
+    autoStartError.value = '暂时无法读取开机启动设置。';
     return;
   }
   void desktopBridge.getAutoStart().then((settings) => {
@@ -97,7 +97,7 @@ watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
   if (!active || !desktop || trayLoaded) return;
   trayLoaded = true;
   if (!desktopBridge?.getTraySettings) {
-    trayError.value = '请重新启动客户端以读取托盘设置。';
+    trayError.value = '暂时无法读取托盘设置。';
     return;
   }
   void desktopBridge.getTraySettings().then((settings) => {
@@ -150,7 +150,6 @@ async function updateAutoStart(event: Event) {
 
 <template>
   <div class="settings-section client-settings">
-    <p class="settings-intro">客户端选项只影响当前设备。</p>
     <CacheSettings v-if="userId" ref="cacheSettings" :user-id="userId" :active="active" />
     <section v-if="desktop" class="settings-block">
       <h2>应用更新</h2>
@@ -170,11 +169,11 @@ async function updateAutoStart(event: Event) {
       <p v-if="!desktop">浏览器版由浏览器管理光标和共享边框，以下选项仅适用于桌面版。</p>
       <template v-else>
         <label class="settings-toggle" :class="{ 'is-disabled': !screenSupport?.hideCursor }">
-          <span><strong>隐藏共享画面中的光标</strong><small>只隐藏发送给其他成员的光标，不影响本机鼠标。需要 Windows 10 build 19041 或以上。</small></span>
+          <span><strong>隐藏共享画面中的光标</strong><small>不向观看者显示光标，你仍能看到自己的鼠标。需要 Windows 10 build 19041 或以上。</small></span>
           <input type="checkbox" :checked="screenPreferences.hideCursor" :disabled="!screenSupport?.hideCursor"
             aria-label="隐藏共享画面中的光标" @change="updateScreenPreference('hideCursor', $event)" />
         </label>
-        <p>默认优先使用无系统边框的采集方式。窗口采集方式和是否允许系统边框，在选择共享来源时的高级选项中设置，仅本次生效。</p>
+        <p>共享窗口时会尽量隐藏系统边框；受系统或权限限制时仍可能显示。</p>
         <InlineFeedback :message="screenError" />
       </template>
     </section>
@@ -183,7 +182,7 @@ async function updateAutoStart(event: Event) {
       <p v-if="!desktop">托盘和开机自启仅在 Windows 桌面版提供。</p>
       <template v-else>
         <label class="settings-toggle" :class="{ 'is-disabled': !autoStartSupported || autoStartBusy }">
-          <span><strong>开机自动启动</strong><small>{{ autoStartDescription }}</small></span>
+          <span><strong>开机自动启动</strong><small v-if="autoStartDescription">{{ autoStartDescription }}</small></span>
           <input type="checkbox" :checked="autoStartEnabled" :disabled="!autoStartSupported || autoStartBusy"
             aria-label="开机自动启动" @change="updateAutoStart" />
         </label>

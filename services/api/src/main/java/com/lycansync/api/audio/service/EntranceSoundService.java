@@ -72,7 +72,7 @@ public class EntranceSoundService {
             decoder = builder.start();
             if (!decoder.waitFor(8, TimeUnit.SECONDS)) {
                 throw new AudioProcessingException(HttpStatus.UNPROCESSABLE_ENTITY, ApiErrorCode.INVALID_REQUEST,
-                        "音效解码超时，请换用另一段音频");
+                        "音效处理超时。");
             }
             if (decoder.exitValue() != 0 || !Files.exists(decoded)) throw invalidAudio();
             long size = Files.size(decoded);
@@ -143,7 +143,7 @@ public class EntranceSoundService {
 
     private AudioProcessingException invalidAudio() {
         return new AudioProcessingException(HttpStatus.BAD_REQUEST, ApiErrorCode.INVALID_REQUEST,
-                "无法解码这段音效，请使用 MP3、OGG、WAV 或 WebM 音频");
+                "无法读取这段音效，请使用 MP3、OGG、WAV 或 WebM 音频。");
     }
 
     private AudioProcessingException unavailable() {

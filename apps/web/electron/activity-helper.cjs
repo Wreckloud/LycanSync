@@ -153,7 +153,7 @@ function createActivityHelper({ enabled, executablePath, onActivity, spawnProces
     const revision = configurationId;
     try {
       await configuring;
-      if (revision !== configurationId) throw new Error('动态名称设置已被新的操作替换。');
+      if (revision !== configurationId) throw new Error('已有更新的名称设置，本次修改未应用。');
     } catch (error) {
       if (revision === configurationId) {
         mappings = previous;

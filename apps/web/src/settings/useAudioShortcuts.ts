@@ -62,7 +62,7 @@ export function useAudioShortcuts(userId: string, options: {
       bindings.value = { microphone: parsed.microphone, listening: parsed.listening, pushToTalk, replay };
       voiceMode.value = mode;
     }
-  } catch { voiceMode.value = 'pushToTalk'; error.value = '无法读取发言偏好，本次停止发声，请重新选择发言模式。'; }
+  } catch { voiceMode.value = 'pushToTalk'; error.value = '无法读取发言模式，暂时停止发声。请重新选择发言模式。'; }
   options.modeChanged(voiceMode.value);
 
   function stopHold() {
@@ -74,7 +74,7 @@ export function useAudioShortcuts(userId: string, options: {
   }
   function save() {
     try { storage.setItem(storageKey, JSON.stringify({ ...bindings.value, voiceMode: voiceMode.value })); }
-    catch { error.value = '本次设置已生效，但无法保存到本机。'; }
+    catch { error.value = '本次设置已生效，但未能保存。'; }
   }
   async function pollHold(sequence: number, version: number) {
     if (!bridge || !owner || disposed || version !== holdVersion) return;

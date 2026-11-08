@@ -42,7 +42,7 @@ export function useMicrophoneDevices(options: MicrophoneDeviceOptions) {
             if (!disposed) notice.value = '所选麦克风不可用，已停止发声。请重新连接设备或选择其他麦克风。';
           } else if (!changing.value) notice.value = '';
         } catch {
-          if (!disposed) notice.value = '无法读取麦克风列表，请检查设备和系统权限后刷新。';
+          if (!disposed) notice.value = '无法读取麦克风列表。';
         }
       } while (!disposed && refreshAgain);
     })().finally(() => { refreshTask = undefined; loading.value = false; });
@@ -52,7 +52,7 @@ export function useMicrophoneDevices(options: MicrophoneDeviceOptions) {
   async function select(deviceId: string) {
     if (disposed || changing.value || deviceId === options.preferences.inputDeviceId.value) return;
     if (deviceId !== 'default' && !devices.value.some((device) => device.id === deviceId)) {
-      notice.value = '该麦克风已不可用，请刷新设备列表。';
+      notice.value = '该麦克风已不可用，请重新打开设备列表选择。';
       return;
     }
     changing.value = true;

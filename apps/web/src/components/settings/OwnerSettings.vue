@@ -50,7 +50,7 @@ onScopeDispose(() => request?.abort());
         <dt>QQ 登录</dt><dd>{{ status.qqEnabled ? '已开启' : '未开启' }}</dd>
         <dt>媒体服务</dt><dd>{{ status.mediaConfigured ? '已配置' : '未配置' }}</dd>
       </dl>
-      <p>这里显示当前服务读取的配置，不代表网络连接或 QQ 授权已验证。部署值在服务器私有配置中修改，重启服务后生效；密钥不会返回客户端。</p>
+      <p>这里显示服务器的配置情况，不代表 QQ 登录或语音连接已测试成功。修改部署配置后需重启服务器；此处不显示密钥。</p>
       <InlineFeedback :message="error" :pending="loading && !status ? '正在读取配置状态…' : ''" />
     </section>
     <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="true" />

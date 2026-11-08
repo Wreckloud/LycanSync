@@ -66,8 +66,8 @@ createApp({ render: () => h('main', { style: 'padding:32px;max-width:1000px;marg
   await page.mouse.move(triggerBounds.x + 30, triggerBounds.y + 16);
   await page.mouse.down();
   const presenceMenu = page.getByRole('menu', { name: '在线状态', exact: true });
-  await expect(presenceMenu).toContainText('向朋友显示在线或闲置');
-  await expect(presenceMenu).toContainText('仍可聊天、语音和共享');
+  await expect(page.locator('.activity-presence > span small')).toContainText('聊天、语音和共享仍可使用');
+  await expect(presenceMenu.locator('small')).toHaveCount(0);
   const invisibleBounds = (await presenceMenu.getByRole('menuitemradio', { name: '隐身', exact: true }).boundingBox())!;
   await page.mouse.move(triggerBounds.x + 30, invisibleBounds.y + 16);
   await expect(presence).toContainText('在线');

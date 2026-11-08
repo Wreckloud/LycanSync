@@ -26,13 +26,13 @@ export function useCallSoundPreferences(userId: string, storage: Pick<Storage, '
       customEntrances.value = parsed.customEntrances;
       CALL_SOUND_EVENTS.forEach(event => { enabled[event.id] = parsed.enabled[event.id]; });
     }
-  } catch { error.value = '无法读取提示音设置，暂用默认音效；请重新设置。'; }
+  } catch { error.value = '无法读取提示音设置，暂用默认音效，请重新设置。'; }
 
   function save() {
     try {
       storage.setItem(key, JSON.stringify({ volume: volume.value, customEntrances: customEntrances.value, enabled }));
       error.value = '';
-    } catch { error.value = '提示音本次已调整，但无法保存到本机。'; }
+    } catch { error.value = '本次提示音设置已生效，但未能保存。'; }
   }
   function setVolume(value: number) {
     if (!Number.isFinite(value)) return;

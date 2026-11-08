@@ -175,13 +175,13 @@ test('凭据读取失败与网络连接失败有不同反馈，不透传路径�
   const loadFailure = proxyFixture({ loadSession: async () => { throw new Error('private/session.bin'); } });
   const unreadable = await loadFailure.serve(new Request('lycan://app/api/auth/me'));
   assert.equal(unreadable.status, 502);
-  assert.deepEqual(await unreadable.json(), { message: '无法读取本机登录凭据，请清理本机登录凭据后重试。' });
+  assert.deepEqual(await unreadable.json(), { message: '无法读取本机登录信息，请清除后重新登录。' });
   assert.equal(loadFailure.forwarded.length, 0);
 
   const networkFailure = proxyFixture({ net: { fetch: async () => { throw new Error('private-transport-detail'); } } });
   const disconnected = await networkFailure.serve(new Request('lycan://app/api/auth/me'));
   assert.equal(disconnected.status, 502);
-  assert.deepEqual(await disconnected.json(), { message: '无法连接业务服务，请检查网络和服务器状态。' });
+  assert.deepEqual(await disconnected.json(), { message: '无法连接服务器，请检查网络和服务器状态。' });
 });
 
 test('兑换响应完整且本机保存成功后才返回资料，会话原文不进入页面', async () => {
@@ -207,7 +207,7 @@ test('凭据保存失败明确提示本机问题，重试仍可沿原兑换流�
   const request = () => new Request('lycan://app/api/auth/access/redeem', { method: 'POST', body: '{}' });
   const first = await serve(request());
   assert.equal(first.status, 502);
-  assert.deepEqual(await first.json(), { message: '无法保存本机登录凭据，请检查数据目录权限和系统加密后重试。' });
+  assert.deepEqual(await first.json(), { message: '无法保存本机登录信息，请检查数据目录的读写权限和系统加密功能后重试。' });
   assert.equal((await serve(request())).status, 200);
   assert.equal(writes, 2);
 });
@@ -220,7 +220,7 @@ test('无效兑换响应不写入凭据，也不伪报网络失败', async () =>
       net: { fetch: async () => Response.json(result) }, saveSession: async () => { saved = true; } });
     const response = await serve(new Request('lycan://app/api/auth/access/redeem', { method: 'POST', body: '{}' }));
     assert.equal(response.status, 502);
-    assert.deepEqual(await response.json(), { message: '登录响应无法确认，请重试或联系服主。' });
+    assert.deepEqual(await response.json(), { message: '无法确认登录结果。' });
     assert.equal(saved, false);
   }
 });
@@ -256,14 +256,14 @@ test('服务端退出成功但本机文件清理失败明确报告已结束会�
   const response = await serve(new Request('lycan://app/api/auth/logout', { method: 'POST' }));
   assert.equal(response.status, 502);
   assert.deepEqual(await response.json(), { code: 'LOCAL_SESSION_CLEAR_FAILED',
-    message: '登录已结束，但无法清理本机凭据，请检查数据目录权限。' });
+    message: '已退出登录，但本机登录信息未能清除。请检查数据目录的读写权限。' });
 });
 
 test('群组超过 3 MiB 接口预算时本地返回明确 413，不转发到后端', async () => {
   const { serve, forwarded } = proxyFixture();
   const response = await serve(new Request('lycan://app/api/groups', { method: 'POST', body: 'x'.repeat(3 * 1024 * 1024 + 1) }));
   assert.equal(response.status, 413);
-  assert.deepEqual(await response.json(), { code: 'REQUEST_TOO_LARGE', detail: '提交内容过大，请缩小图片或减少内容后重试。' });
+  assert.deepEqual(await response.json(), { code: 'REQUEST_TOO_LARGE', detail: '提交的内容过大，请缩小图片或减少内容后重试。' });
   assert.equal(forwarded.length, 0);
 });
 

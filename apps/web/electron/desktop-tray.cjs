@@ -49,7 +49,7 @@ function createDesktopTray({ Tray, Menu, iconPath, settingsPath, getWindow, onQu
       }
       try {
         tray = new Tray(iconPath);
-        tray.setToolTip('LycanSync');
+        tray.setToolTip('lycanclaw');
         tray.setContextMenu(Menu.buildFromTemplate([
           { label: '显示主界面', click: show },
           { label: '退出', click: quit },
@@ -59,7 +59,7 @@ function createDesktopTray({ Tray, Menu, iconPath, settingsPath, getWindow, onQu
       } catch {
         tray?.destroy();
         tray = undefined;
-        error = '无法创建托盘，本次关闭窗口将退出应用。';
+        error = '托盘启动失败，本次关闭窗口将退出应用。';
         console.error('无法创建托盘，关闭窗口将退出应用');
       }
     },
@@ -87,7 +87,7 @@ function createDesktopTray({ Tray, Menu, iconPath, settingsPath, getWindow, onQu
       if (!notified) {
         notified = true;
         try {
-          tray.displayBalloon({ title: 'LycanSync 仍在后台运行',
+          tray.displayBalloon({ title: 'lycanclaw 仍在后台运行',
             content: '通话、共享和录制会继续。点击托盘图标显示主界面，右键选择“退出”结束应用。',
             iconType: 'info', noSound: true, respectQuietTime: true });
         } catch { console.error('无法显示托盘提示'); }

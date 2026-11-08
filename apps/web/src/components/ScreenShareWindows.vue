@@ -101,7 +101,7 @@ function closeAll() {
 
 watch(entries, (current) => {
   const entry = current.find(entry => entry.kind === 'watching');
-  if (entry?.target) entry.window.document.title = `${props.groupName} · 观看 · LycanSync`;
+  if (entry?.target) entry.window.document.title = `${props.groupName} · 观看 · lycanclaw`;
 }, { flush: 'sync' });
 watch(() => view.mode, mode => { if (mode === 'collapsed') windows.closeWatching(); }, { flush: 'sync' });
 watch(() => [props.rtc.remoteControlActive, props.rtc.revision] as const, ([active]) => {

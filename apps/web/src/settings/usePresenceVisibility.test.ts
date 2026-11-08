@@ -38,7 +38,7 @@ describe('动态与上次在线展示偏好', () => {
       expect(preference.showActivity.value).toBe(false);
       expect(preference.error.value).toContain('无法读取');
       preference.setShowActivity(true);
-      expect(preference.error.value).toContain('无法保存');
+      expect(preference.error.value).toContain('未能保存');
     } finally {
       if (descriptor) Object.defineProperty(globalThis, 'localStorage', descriptor);
       else Reflect.deleteProperty(globalThis, 'localStorage');

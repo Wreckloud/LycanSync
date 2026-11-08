@@ -100,11 +100,11 @@ public final class AvatarImageProcessor {
         // 从新像素图编码，不保留原文件元数据；PNG 无损压缩不按字节预算降低头像清晰度。
         try (var output = new ByteArrayOutputStream()) {
             if (!ImageIO.write(outputImage, "png", output)) {
-                throw new IllegalStateException("服务器 PNG 编码器不可用");
+                throw new IllegalStateException("服务器暂时无法处理头像图片。");
             }
             return PNG_PREFIX + Base64.getEncoder().encodeToString(output.toByteArray());
         } catch (IOException exception) {
-            throw new UncheckedIOException("头像编码失败", exception);
+            throw new UncheckedIOException("头像处理失败。", exception);
         }
     }
 

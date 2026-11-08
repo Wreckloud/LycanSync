@@ -278,7 +278,7 @@ public class GroupService {
     private String normalizeName(String value) {
         String name = value.strip();
         if (name.isBlank() || name.codePoints().anyMatch(Character::isISOControl)) {
-            throw invalid("群组名称不能为空或包含控制字符");
+            throw invalid("请填写有效的群组名称，不要使用控制字符。");
         }
         return name;
     }

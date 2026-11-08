@@ -28,7 +28,7 @@ describe('authRequest', () => {
   test.each([null, '<html>Payload Too Large</html>', '{}'])('413 正文为 %s 时仍明确说明提交内容过大', async (body) => {
     const error = await readApiError(new Response(body, { status: 413 }));
     expect(error).toBeInstanceOf(ApiRequestError);
-    expect(error).toMatchObject({ status: 413, code: 'REQUEST_TOO_LARGE', message: '提交内容过大，请缩小图片或减少内容后重试。' });
+    expect(error).toMatchObject({ status: 413, code: 'REQUEST_TOO_LARGE', message: '提交的内容过大，请缩小图片或减少内容后重试。' });
   });
 
   test('空错误说明不遮蔽状态文案，有效的后端说明保留', async () => {

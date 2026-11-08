@@ -26,7 +26,7 @@ export class MicrophoneAudioProcessor implements TrackProcessor<Track.Kind.Audio
 
   async restart(options: AudioProcessorOptions) {
     const audioContext = options.audioContext ?? this.audioContext;
-    if (!audioContext) throw new Error('麦克风处理器缺少 AudioContext');
+    if (!audioContext) throw new Error('无法启动麦克风声音处理。');
     this.releaseNodes();
     this.processedTrack?.stop();
     this.build(options.track, audioContext);

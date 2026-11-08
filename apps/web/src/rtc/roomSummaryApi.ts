@@ -36,14 +36,14 @@ export async function requestRoomSummary(groupId: string, signal: AbortSignal): 
     signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]),
   });
   if (!response.ok) {
-    throw new RoomSummaryRequestError(`查询语音成员失败（HTTP ${response.status}）`);
+    throw new RoomSummaryRequestError('暂时无法读取语音成员。');
   }
 
   let summary: unknown;
   try {
     summary = await response.json();
   } catch {
-    throw new RoomSummaryRequestError('语音成员摘要不是有效 JSON');
+    throw new RoomSummaryRequestError('暂时无法读取语音成员。');
   }
   if (!isRoomSummary(summary)) {
     throw new RoomSummaryRequestError('语音成员摘要缺少必要字段');
@@ -57,12 +57,12 @@ export async function requestRoomOccupancies(signal: AbortSignal): Promise<RtcRo
     method: 'GET', headers: { Accept: 'application/json' }, cache: 'no-store', credentials: 'omit',
     signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]),
   });
-  if (!response.ok) throw new RoomSummaryRequestError(`查询群组语音人数失败（HTTP ${response.status}）`);
+  if (!response.ok) throw new RoomSummaryRequestError('暂时无法读取群组的语音人数。');
   const result: unknown = await response.json().catch(() => null);
   if (!Array.isArray(result) || !result.every((item) => item && typeof item === 'object'
     && typeof item.groupId === 'string' && item.groupId.length > 0
     && Number.isInteger(item.participantCount) && Number(item.participantCount) >= 0)) {
-    throw new RoomSummaryRequestError('群组语音人数不是有效 JSON');
+    throw new RoomSummaryRequestError('暂时无法读取群组的语音人数。');
   }
   return result as RtcRoomOccupancy[];
 }

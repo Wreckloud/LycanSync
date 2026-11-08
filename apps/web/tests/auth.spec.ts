@@ -525,7 +525,7 @@ test('浏览器账号设置明确标出未接入功能与桌面动态限制', as
   await expect(page.getByRole('navigation', { name: '设置栏目' }).getByRole('button', { name: '当前动态', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '修改头像', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '修改密码', exact: true })).toHaveCount(0);
-  await expect(page.getByText('退出登录会保留本机凭据。已绑定 QQ 的账号可通过 QQ 重新登录；未绑定时，服主使用恢复密码，成员向服主获取恢复链接。')).toBeVisible();
+  await expect(page.getByText('退出后仍会记住此账号。需要重新登录时，可使用已绑定的 QQ；服主也可使用恢复密码，成员可向服主获取恢复链接。')).toBeVisible();
   await expect(page.getByRole('button', { name: '查看 QQ 绑定说明', exact: true })).toBeVisible();
   await expect(page.locator('.activity-settings')).toContainText('动态检测仅在 Windows 桌面版提供');
   const toggle = page.getByRole('checkbox', { name: '显示动态', exact: true });

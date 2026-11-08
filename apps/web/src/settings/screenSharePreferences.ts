@@ -16,7 +16,7 @@ export function readScreenSharePreferences(storage?: Pick<Storage, 'getItem'>): 
   const value = JSON.parse(saved) as Partial<ScreenSharePreferences>;
   if (!value || typeof value.hideCursor !== 'boolean'
       || (value.hideBorder !== undefined && typeof value.hideBorder !== 'boolean')) {
-    throw new Error('屏幕共享设置格式无效，请重新保存设置。');
+    throw new Error('无法使用已保存的共享设置，请重新保存设置。');
   }
   // 只恢复光标偏好；边框规则由每次来源选择说明并确认，不读取旧的强制无框设置。
   return { hideCursor: value.hideCursor, hideBorder: false };

@@ -47,7 +47,7 @@ test('托盘仅有显示与退出，默认关窗驻留；初始化不抢焦点',
   f.manager.initialize(); f.manager.initialize();
   assert.equal(f.icons.length, 1);
   assert.deepEqual(f.icons[0].menu.map(item => item.label), ['显示主界面', '退出']);
-  assert.equal(f.icons[0].tooltip, 'LycanSync');
+  assert.equal(f.icons[0].tooltip, 'lycanclaw');
   assert.deepEqual(f.manager.settings(), { supported: true, enabled: true, error: '' });
   assert.deepEqual(f.calls, []);
   assert.deepEqual(f.close(), { hidden: true, prevented: true });
@@ -143,7 +143,7 @@ test('托盘创建失败或平台不支持时绝不隐藏窗口', async context 
   const f = fixture(context, '{"closeToTray":true}');
   const broken = createDesktopTray({ ...f.options, Tray: class { constructor() { throw new Error('missingIcon'); } } });
   broken.initialize();
-  assert.match(broken.settings().error, /无法创建托盘/);
+  assert.match(broken.settings().error, /托盘启动失败/);
   assert.equal(broken.handleClose({ preventDefault() { assert.fail(); } }), false);
   await assert.rejects(broken.setEnabled(true), /当前无法使用托盘/);
   const unsupported = createDesktopTray({ ...f.options, platform: 'linux' });

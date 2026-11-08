@@ -9,7 +9,7 @@ function serverUrl(value) {
   if (url.username || url.password || url.pathname !== '/' || url.search || url.hash
       || !['http:', 'https:'].includes(url.protocol)
       || (url.protocol === 'http:' && !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname))) {
-    throw new Error('服务器地址必须使用 HTTPS，不能包含路径或凭据；本机开发可使用 HTTP。');
+    throw new Error('请输入 HTTPS 服务器地址，不要附带路径、用户名或密码。本机开发地址可使用 HTTP。');
   }
   return url.origin;
 }

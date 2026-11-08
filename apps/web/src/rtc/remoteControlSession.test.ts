@@ -104,7 +104,7 @@ describe('远控协商与资源归属', () => {
       expect(await f.b.session.allow('monitor:primary', true)).toBe(true);
       await vi.waitFor(() => expect(f.a.session.active.value).not.toBeNull());
       await f.a.session.exitControl();
-      expect(f.a.notice).toHaveBeenCalledWith(expect.stringContaining('原共享恢复失败'));
+      expect(f.a.notice).toHaveBeenCalledWith(expect.stringContaining('画面状态仍有异常'));
       expect(f.a.session.restoring.value).toBe(false);
       expect(f.a.session.active.value).toBeNull();
     } finally { f.stop(); }

@@ -37,6 +37,32 @@ function fixture(id = 'default') {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('统一声音输出', () => {
+  it('读取列表失败后可重新枚举恢复，不改变输出设备或清除切换错误', async () => {
+    const f = fixture('speaker-a');
+    try {
+      await f.output.refresh();
+      f.media.enumerateDevices.mockRejectedValueOnce(new Error('denied'));
+      await f.output.refresh();
+      expect(f.output.notice.value).toContain('无法读取');
+      expect(f.output.available.value).toBe(true);
+      await f.output.refresh();
+      expect(f.output.notice.value).toBe('');
+      expect(f.preferences.outputDeviceId.value).toBe('speaker-a');
+      await f.output.select('missing');
+      const error = f.output.notice.value;
+      await f.output.refresh();
+      expect(f.output.notice.value).toBe(error);
+      f.devices.length = 0;
+      await f.output.refresh();
+      f.media.enumerateDevices.mockRejectedValueOnce(new Error('denied'));
+      await f.output.refresh();
+      f.devices.push({ kind: 'audiooutput', deviceId: 'speaker-a', label: '重新接入' });
+      await f.output.refresh();
+      expect(f.output.available.value).toBe(false);
+      expect(f.output.notice.value).toContain('尚未恢复');
+    } finally { f.scope.stop(); }
+  });
+
   it('同一选择同时应用混音上下文和播放元素，释放后不再改动原资源', async () => {
     const f = fixture();
     await f.output.refresh();

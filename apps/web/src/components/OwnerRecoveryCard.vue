@@ -28,8 +28,7 @@ async function recover() {
 <template>
   <section class="auth-card owner-recovery-card">
     <h1>群组恢复</h1>
-    <p>使用恢复密码，重新登录本服务器的服主账号。</p>
-    <p>昵称、群组、消息和原有权限将保留，旧登录凭据会失效。</p>
+    <p>使用恢复密码，重新恢复服主权限。</p>
     <form @submit.prevent="recover">
       <PasswordField id="owner-recovery-password" v-model="password" label="恢复密码" :disabled="busy" required />
       <footer class="card-actions">

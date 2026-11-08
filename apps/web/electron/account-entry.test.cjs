@@ -30,6 +30,6 @@ test('返回账号页回收每项媒体，不接触已保存凭据', async () =>
 
 test('一路停止失败仍继续清理声音与麦克风，并报告失败', async () => {
   const f = fixture(true);
-  await assert.rejects(f.leave(), /凭据已保留/);
+  await assert.rejects(f.leave(), /退出时发生问题/);
   assert.deepEqual(f.calls.slice(-3), ['video', 'audio', 'microphone']);
 });

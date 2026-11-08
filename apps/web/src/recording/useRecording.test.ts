@@ -64,7 +64,7 @@ it('回放操作错误归回放，手动重试同一错误重新通知', async (
     await f.recording.startReplay();
     expect(f.recording.noticeTarget.value).toBe('replay');
     const first = f.recording.noticeEvent.value;
-    expect(first?.message).toContain('回放保存尚未确认');
+    expect(first?.message).toContain('回放保存结果尚未确认');
     await f.recording.startReplay();
     expect(f.recording.noticeEvent.value).not.toBe(first);
     expect(f.recording.noticeEvent.value?.message).toBe(first?.message);
@@ -166,7 +166,7 @@ it('回放保存失败不假报成功，已有录像和回放状态保持，错�
     f.desktop.saveReplay.mockRejectedValueOnce(new Error('replaySaveUnconfirmed'));
     await f.recording.saveReplay();
     expect(f.recording.successNotice.value).toBeNull();
-    expect(f.recording.notice.value).toContain('保存尚未确认');
+    expect(f.recording.notice.value).toContain('保存结果尚未确认');
     expect(f.recording.active.value).toBe(true);
     expect(f.recording.replayActive.value).toBe(true);
   } finally { f.scope.stop(); }
@@ -198,7 +198,7 @@ it('更换轨道后恢复采集失败同时停止录像和回放，停止回复�
     f.track.value = { id: 'replacement' } as MediaStreamTrack;
     await vi.waitFor(() => expect(f.desktop.stopReplay).toHaveBeenCalledOnce());
     expect(f.desktop.stopRecording).toHaveBeenCalledOnce();
-    expect(f.recording.notice.value).toContain('采集帧率');
+    expect(f.recording.notice.value).toContain('所选帧率');
     expect(f.recording.localActive.value).toBe(false);
   } finally { f.scope.stop(); }
 });

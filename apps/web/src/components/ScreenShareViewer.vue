@@ -39,7 +39,7 @@ async function togglePinned() {
   try {
     const state = await bridge.setPinned(!pinned.value);
     if (!disposed) pinned.value = state.pinned;
-  } catch { if (!disposed) error.value = '未能确认窗口置顶，请检查窗口状态后重试。'; }
+  } catch { if (!disposed) error.value = '未能确认窗口置顶状态。'; }
   finally { if (!disposed) pinBusy.value = false; }
 }
 
@@ -49,7 +49,7 @@ function escape() {
 }
 
 watch([name, () => props.groupName], () => {
-  props.entry.window.document.title = `远程控制 · ${name.value} · LycanSync`;
+  props.entry.window.document.title = `远程控制 · ${name.value} · lycanclaw`;
 }, { immediate: true });
 onMounted(() => { stopState = bridge?.onState((state) => { pinned.value = state.pinned; }); });
 onScopeDispose(() => { disposed = true; stopState?.(); });

@@ -31,15 +31,15 @@ onScopeDispose(() => props.report.setViewing(false));
 <template>
   <div class="settings-section about-settings">
     <section class="settings-block">
-      <h2>LycanSync</h2>
+      <h2>lycanclaw</h2>
       <dl><div><dt>版本</dt><dd>{{ packageInfo.version }}</dd></div>
         <div><dt>媒体状态</dt><dd>{{ room ? rtc.status === 'connected' ? '已加入语音' : rtc.status : '未加入语音' }}</dd></div>
         <div><dt>活动媒体</dt><dd>{{ hasActiveMedia ? '存在' : '无' }}</dd></div></dl>
     </section>
     <section class="settings-block">
       <h2>媒体诊断</h2>
-      <p>查看当前媒体统计，不启动采集或订阅。自动记录开关与报告导出见下方。</p>
-      <p v-if="!room">当前未加入语音，没有活动房间可供诊断。</p>
+      <p>查看当前通话和共享的统计。自动记录与报告导出在下方设置。</p>
+      <p v-if="!room">加入语音后才能查看房间诊断。</p>
       <button v-else type="button" class="settings-button" @click="diagnosticsOpen = !diagnosticsOpen">
         <Activity :size="15" />{{ diagnosticsOpen ? '关闭媒体诊断' : '查看媒体诊断' }}
       </button>

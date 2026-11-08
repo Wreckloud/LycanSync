@@ -14,7 +14,7 @@ function parseAccessLink(value) {
   if (fragment.getAll('token').length !== 1 || [...fragment.keys()].some((key) => key !== 'token')
       || !/^[A-Za-z0-9_-]{43}$/.test(token ?? '')) throw new Error('邀请凭据无效');
   const server = serverUrl(link.searchParams.get('server'));
-  if (!server.startsWith('https://')) throw new Error('邀请服务器必须使用 HTTPS');
+  if (!server.startsWith('https://')) throw new Error('邀请中的服务器地址必须使用 HTTPS。');
   return { server, token };
 }
 
@@ -35,7 +35,7 @@ function parseManualAccessLink(value) {
     // 网页链接只转换为现有邀请结构；预览、确认兑换和换服务器仍走原流程。
     return parseAccessLink(`lycansync://access?server=${encodeURIComponent(link.origin)}${link.hash}`);
   } catch {
-    throw new Error('链接无效，请粘贴完整的 HTTPS 邀请链接或 LycanSync 打开链接。');
+    throw new Error('链接无效，请粘贴完整的邀请或恢复登录链接。');
   }
 }
 

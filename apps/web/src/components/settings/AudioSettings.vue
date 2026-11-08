@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, useId, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, useId, watch } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
 import { Track } from 'livekit-client';
 import { ChevronRight } from '@lucide/vue';
@@ -37,7 +37,21 @@ const levelSegments = Array.from({ length: 16 }, (_, index) => index + 1);
 const displayedInputLevel = computed(() => props.microphoneTest.state === 'idle'
   ? props.inputLevelPercent : props.microphoneTest.inputLevelPercent);
 
-watch(() => props.active, (isActive) => { if (!isActive) void props.microphoneTest.stop(); });
+function refreshDevices() {
+  if (!props.active) return;
+  void props.microphoneDevices.refresh();
+  void props.audioOutput.refresh();
+}
+
+watch(() => props.active, (isActive) => {
+  if (isActive) refreshDevices();
+  else void props.microphoneTest.stop();
+});
+onMounted(() => {
+  refreshDevices();
+  window.addEventListener('focus', refreshDevices);
+});
+onUnmounted(() => window.removeEventListener('focus', refreshDevices));
 
 function toggleTest() {
   if (props.microphoneTest.state === 'idle') void props.microphoneTest.start();
@@ -66,6 +80,8 @@ function updateInputGain(event: Event) {
       <h2>输入</h2>
       <label class="settings-range-row"><span>麦克风</span>
         <select aria-label="麦克风设备" :value="preferences.inputDeviceId.value" :disabled="microphoneDevices.changing"
+          @focus="microphoneDevices.refresh()"
+          @pointerdown="($event.currentTarget as HTMLElement).matches(':focus') && microphoneDevices.refresh()"
           @change="microphoneDevices.select(($event.target as HTMLSelectElement).value)">
           <option value="default">{{ desktop ? '系统默认通讯设备' : '系统默认麦克风' }}</option>
           <option v-if="preferences.inputDeviceId.value !== 'default'
@@ -74,8 +90,6 @@ function updateInputGain(event: Event) {
           <option v-for="device in microphoneDevices.devices" :key="device.id" :value="device.id">{{ device.label }}</option>
         </select>
       </label>
-      <button type="button" class="settings-button device-refresh" :disabled="microphoneDevices.loading || microphoneDevices.changing"
-        @click="microphoneDevices.refresh(); audioOutput.refresh()">刷新设备</button>
       <p>指定麦克风断开后停止发声，不自动换用其他设备。</p>
       <InlineFeedback :message="microphoneDevices.notice" />
       <div class="settings-range-row">
@@ -92,7 +106,7 @@ function updateInputGain(event: Event) {
     </section>
     <section class="settings-block">
       <h2>麦克风试听</h2>
-      <p>无需加入语音，试听只在本机播放。建议使用耳机。</p>
+      <p>无需加入语音，只有你能听到试听声音。建议使用耳机。</p>
       <button type="button" class="settings-button" :disabled="microphoneTest.state === 'stopping'
         || (microphoneTest.state === 'idle' && (rtc.status === 'joining' || rtc.status === 'reconnecting'
           || rtc.busySources.includes(Track.Source.Microphone)))"
@@ -109,13 +123,15 @@ function updateInputGain(event: Event) {
         <input type="checkbox" aria-label="智能声音处理" :checked="processingEnabled" :indeterminate="processingPartial"
           :aria-checked="processingPartial ? 'mixed' : processingEnabled" @change="updateProcessing" />
       </label>
-      <p v-if="processingPartial">已保留之前的部分处理设置，开启后统一启用。</p>
-      <p v-if="!desktop">开启后同时请求浏览器进行回声消除。</p>
+      <p v-if="processingPartial">仍在使用你之前的处理设置，开启后将统一启用声音处理。</p>
+      <p v-if="!desktop">同时使用浏览器的回声消除。</p>
     </section>
     <section class="settings-block">
       <h2>输出</h2>
       <label class="settings-range-row"><span>输出设备</span>
         <select aria-label="声音输出设备" :value="preferences.outputDeviceId.value" :disabled="audioOutput.changing.value"
+          @focus="audioOutput.refresh()"
+          @pointerdown="($event.currentTarget as HTMLElement).matches(':focus') && audioOutput.refresh()"
           @change="audioOutput.select(($event.target as HTMLSelectElement).value)">
           <option value="default">系统默认输出设备</option>
           <option v-if="preferences.outputDeviceId.value !== 'default'
@@ -125,14 +141,14 @@ function updateInputGain(event: Event) {
             :disabled="!audioOutput.supported">{{ device.label }}</option>
         </select>
       </label>
-      <p>{{ audioOutput.supported ? '通话、共享声音、提示音和试听统一使用此设备。' : '当前浏览器仅支持系统默认输出。' }}</p>
+      <p>{{ audioOutput.supported ? '通话、共享声音、提示音和试听均使用此设备。' : '当前浏览器只能使用系统默认输出。' }}</p>
       <InlineFeedback :message="audioOutput.notice.value" />
-      <label class="settings-range-row"><span>LycanSync 总输出音量 <strong>{{ Math.round(outputVolume * 100) }}%</strong></span>
+      <label class="settings-range-row"><span>lycanclaw 总输出音量 <strong>{{ Math.round(outputVolume * 100) }}%</strong></span>
         <input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="outputVolume"
-          aria-label="LycanSync 总输出音量" @input="preferences.setOutputVolume(Number(($event.target as HTMLInputElement).value))" /></label>
+          aria-label="lycanclaw 总输出音量" @input="preferences.setOutputVolume(Number(($event.target as HTMLInputElement).value))" /></label>
       <p>只调整本应用的声音，不改变系统或游戏音量。</p>
       <label class="settings-toggle"><span><strong>平衡成员语音音量</strong>
-        <small>在本机拉近不同成员的人声响度，不处理共享声音。成员音量、总音量和静音仍由你控制。</small></span>
+        <small>平衡不同成员的人声音量，不影响共享声音。你仍可单独调节音量或静音。</small></span>
         <input type="checkbox" :checked="preferences.voiceVolumeBalance.value"
           @change="preferences.setVoiceVolumeBalance(($event.target as HTMLInputElement).checked)" /></label>
       <div>
@@ -145,7 +161,7 @@ function updateInputGain(event: Event) {
           <label class="settings-range-row"><span>播放音量 <strong>{{ Math.round(screenShareVolume * 100) }}%</strong></span>
             <input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="screenShareVolume"
               aria-label="共享播放音量" @input="preferences.setScreenShareVolume(Number(($event.target as HTMLInputElement).value))" /></label>
-          <p>只调整你听到的共享画面声音，不影响成员说话或你发送的共享声音，仍受总输出音量影响。</p>
+          <p>调整你听到的共享声音，不影响朋友说话或你分享出去的声音；仍受总音量控制。</p>
         </ExpandSection>
       </div>
     </section>
@@ -162,5 +178,4 @@ function updateInputGain(event: Event) {
 .settings-meter > div { display: flex; gap: 3px; height: 12px; }
 .settings-meter i { flex: 1; border-radius: 2px; background: var(--panel-raised); }
 .settings-meter i.is-active { background: var(--accent); }
-.device-refresh { justify-self: end; padding: 6px 14px; }
 </style>

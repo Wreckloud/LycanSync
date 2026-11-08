@@ -41,7 +41,7 @@ function createAudioShortcuts({ getWindow, bridge, getReplayId = () => null, onR
   const registered = new Map();
   let hookedWindow;
 
-  function requireOwner(token) { if (!owner || owner !== token) throw new Error('快捷键会话已失效'); }
+  function requireOwner(token) { if (!owner || owner !== token) throw new Error('快捷键已失效，请重新启用。'); }
   function updateActivity() { onActivityChanged(Boolean(owner && roomId && pushToTalk && bindings.pushToTalk && !suspended && !blockers.size)); }
   function releaseHold() {
     const wasHeld = held;
@@ -68,7 +68,7 @@ function createAudioShortcuts({ getWindow, bridge, getReplayId = () => null, onR
         registered.delete(id);
       } catch (error) { failure ??= error; }
     }
-    if (failure) throw new Error('快捷键释放失败，请重新打开客户端');
+    if (failure) throw new Error('停止快捷键时发生问题，请重启应用。');
   }
   function register(next, retain) {
     const window = getWindow();
@@ -85,7 +85,7 @@ function createAudioShortcuts({ getWindow, bridge, getReplayId = () => null, onR
       });
     } catch {
       unregister();
-      throw new Error('快捷键已被占用或系统拒绝，请更换组合后重试');
+      throw new Error('快捷键已被占用或无法使用，请更换组合后重试。');
     }
     if (!retain) unregister();
   }
@@ -108,7 +108,7 @@ function createAudioShortcuts({ getWindow, bridge, getReplayId = () => null, onR
         }
         if (action === 'pushToTalk') {
           try { if (needsRelease || !pressed()) return; }
-          catch { releaseHold(); notifyError(new Error('按键状态无法读取，请重新启用快捷键')); return; }
+          catch { releaseHold(); notifyError(new Error('无法读取按键状态，请重新启用快捷键。')); return; }
           held = true;
           hookedWindow.webContents.send('audio-shortcuts:hold', { owner, roomId, sequence: ++holdSequence, held: true });
         } else hookedWindow.webContents.send('audio-shortcuts:action', { owner, roomId, action });
@@ -174,7 +174,7 @@ function createAudioShortcuts({ getWindow, bridge, getReplayId = () => null, onR
   function transmissionAllowed() {
     if (!owner || !roomId || !pushToTalk || !held || suspended || blockers.size) return false;
     try { if (pressed()) return true; }
-    catch { notifyError(new Error('按键状态无法读取，请重新启用快捷键')); }
+    catch { notifyError(new Error('无法读取按键状态，请重新启用快捷键。')); }
     releaseHold();
     return false;
   }
@@ -183,12 +183,12 @@ function createAudioShortcuts({ getWindow, bridge, getReplayId = () => null, onR
     clearInterval(releaseTimer); releaseTimer = undefined;
     if (!blockers.size && !suspended && owner && roomId && pushToTalk && bindings.pushToTalk) {
       try { needsRelease ||= pressed(); }
-      catch { needsRelease = true; notifyError(new Error('按键状态无法读取，请重新启用快捷键')); return; }
+      catch { needsRelease = true; notifyError(new Error('无法读取按键状态，请重新启用快捷键。')); return; }
       if (!needsRelease) return;
       // 锁屏／休眠后必须先见到组合松开，旧的排队消息不能重新开口。
       releaseTimer = setInterval(() => {
         try { if (pressed()) return; needsRelease = false; }
-        catch { notifyError(new Error('按键状态无法读取，请重新启用快捷键')); }
+        catch { notifyError(new Error('无法读取按键状态，请重新启用快捷键。')); }
         clearInterval(releaseTimer); releaseTimer = undefined;
       }, 50);
       releaseTimer.unref?.();

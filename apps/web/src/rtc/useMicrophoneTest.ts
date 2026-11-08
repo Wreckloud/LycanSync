@@ -31,8 +31,8 @@ interface TestSession {
   outputBinding?: AudioOutputBinding;
 }
 
-const SETTINGS_NOTICE = '部分音频处理设置需要停止并重新试听后生效。';
-const CLEANUP_NOTICE = '麦克风试听停止未确认，请重启客户端后再试。';
+const SETTINGS_NOTICE = '停止并重新试听后，部分声音处理设置才会生效。';
+const CLEANUP_NOTICE = '停止麦克风试听时发生问题，请重启应用后再试。';
 
 function captureMessage(error: unknown, desktop: boolean) {
   if (error instanceof Error) {
@@ -40,12 +40,12 @@ function captureMessage(error: unknown, desktop: boolean) {
     if (error.name === 'NotFoundError' || error.message === 'microphoneDeviceUnavailable') {
       return '所选麦克风不可用，请检查设备连接和录音权限。';
     }
-    if (error.name === 'NotReadableError') return '麦克风无法采集，请检查录音权限或设备占用。';
+    if (error.name === 'NotReadableError') return '无法使用麦克风，请检查录音权限或是否被其他程序占用。';
     if (error.message === 'microphoneProcessingFailed') return '麦克风声音处理失败，请重新试听。';
-    if (error.message === 'platformUnsupported') return '当前桌面系统不支持原生麦克风采集。';
+    if (error.message === 'platformUnsupported') return '当前系统不支持此麦克风采集方式。';
   }
-  return desktop ? '麦克风试听采集失败，请检查所选输入设备和 Windows 录音权限。'
-    : '麦克风试听采集失败，请检查输入设备和浏览器权限。';
+  return desktop ? '无法开始试听，请检查所选麦克风和 Windows 录音权限。'
+    : '无法开始试听，请检查麦克风和浏览器权限。';
 }
 
 /** 本机试听独立于房间；借用已发布音轨，否则持有只供本机使用的临时采集。 */
@@ -121,7 +121,7 @@ export function useMicrophoneTest(options: MicrophoneTestOptions) {
         }),
       };
     } catch {
-      notice.value = '麦克风试听无法初始化声音输出，请检查播放设备。';
+      notice.value = '无法播放试听声音，请检查播放设备。';
       return;
     }
     session = current;

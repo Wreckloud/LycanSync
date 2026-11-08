@@ -14,7 +14,7 @@ describe('远控确认与私密展示', () => {
     const html = await renderToString(createSSRApp(RemoteControlRequest, { name: '好友', busy: false }));
     expect(html).toContain('role="dialog"');
     expect(html.match(/<input[^>]*type="checkbox"[^>]*>/)?.[0]).toContain('checked');
-    expect(html).toContain('频道成员可以观看，但只有申请者能够控制');
+    expect(html).toContain('频道成员都能观看，只有申请者能控制');
     expect(html.match(/<button[^>]*class="confirm-button"[^>]*>/)?.[0]).toContain('disabled');
     expect(html.indexOf('>拒绝</button>')).toBeLessThan(html.indexOf('>接受并共享</button>'));
     const busy = await renderToString(createSSRApp(RemoteControlRequest, { name: '好友', busy: true }));

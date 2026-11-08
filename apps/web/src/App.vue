@@ -119,7 +119,7 @@ function restoreCapturePreferences() {
     lastCaptureSourceType = sourceType;
   } catch {
     // 偏好不可读不能阻止主界面启动；未读完之前不覆盖默认选择。
-    viewerNotice.value = '无法读取本机共享偏好，当前使用标准画质和窗口来源。';
+    viewerNotice.value = '无法读取上次的共享设置，暂用标准画质和窗口共享。';
   }
 }
 
@@ -304,7 +304,7 @@ function selectCaptureSource(sourceId: string | null, captureSettings?: ScreenSh
     saveCapturePreferences(captureQuality.value, lastCaptureSourceType);
     if (captureAudioMode.value !== 'unavailable') {
       try { saveScreenShareAudioPreference(captureAudioMode.value, selection.shareAudio); }
-      catch { viewerNotice.value = '已确认本次共享选择，但无法保存本机音频偏好。'; }
+      catch { viewerNotice.value = '已确认本次共享选择，但声音设置未能保存。'; }
     }
   }
 }
@@ -313,7 +313,7 @@ function saveCapturePreferences(quality: ScreenShareQualityId, sourceType?: 'win
     saveScreenShareQuality(quality, captureCustomQuality.value);
     if (sourceType) localStorage.setItem('lycansync.capture-source-type', sourceType);
   } catch {
-    viewerNotice.value = '无法保存本机共享偏好，下次启动可能恢复原设置。';
+    viewerNotice.value = '共享设置未能保存，下次启动可能恢复原设置。';
   }
 }
 function updateCaptureShareAudio(enabled: boolean) {
@@ -349,7 +349,7 @@ function requestNativeScreenSource(
     try { captureShareAudio.value = readScreenShareAudioPreference(captureAudioMode.value); }
     catch {
       captureShareAudio.value = captureAudioMode.value === 'process';
-      captureSourceNotice.value = '无法读取本机音频偏好，已使用默认设置。';
+      captureSourceNotice.value = '无法读取声音设置，暂用默认设置。';
     }
     captureAudioCapabilityFailed.value = state.failed;
     captureAudioCapabilityReady.value = true;
@@ -384,7 +384,7 @@ async function changeScreenShareAudio(enabled: boolean) {
   const mode = rtc.currentScreenShareAudioMode;
   if (!await rtc.setScreenShareAudioEnabled(enabled)) return;
   try { saveScreenShareAudioPreference(mode, enabled); }
-  catch { viewerNotice.value = '本次音频设置已生效，但无法保存到本机。'; }
+  catch { viewerNotice.value = '本次声音设置已生效，但未能保存。'; }
 }
 const rtc = reactive(useRtcRoom({
   inputDeviceId: audioPreferences.inputDeviceId.value,
@@ -548,7 +548,7 @@ async function flushPresenceHeartbeats() {
         await sendPresenceHeartbeat(status, activity, controller.signal, { showActivity: showActivity.value, showLastOnline: showLastOnline.value });
         if (!presenceStopped && !controller.signal.aborted && status === publicPresenceStatus.value) presenceSyncError.value = '';
       } catch {
-        if (!presenceStopped && !controller.signal.aborted) presenceSyncError.value = '状态与展示设置尚未确认同步，将自动重试。';
+        if (!presenceStopped && !controller.signal.aborted) presenceSyncError.value = '状态设置尚未同步，将自动重试。';
       } finally {
         if (presenceAbort === controller) presenceAbort = null;
       }
@@ -675,7 +675,7 @@ function startGroupPresenceSync(groupId: string | null, refreshImmediately = fal
           groupPresenceRequest = snapshotController;
           const loaded = await refreshGroupPresences(groupId, generation, snapshotController.signal);
           if (controller.signal.aborted || generation !== groupPresenceWatchGeneration) return;
-          if (!loaded) throw new Error('成员状态快照暂时不可用');
+          if (!loaded) throw new Error('暂时无法更新成员状态。');
           refreshSnapshot = false;
         }
 
@@ -1048,7 +1048,7 @@ async function closeSettings() {
   await nextTick();
   settingsReturnFocus.value?.focus();
   try { await stopped; }
-  catch { if (!appDisposed) viewerNotice.value = '麦克风试听停止未确认，请重启客户端后再试。'; }
+  catch { if (!appDisposed) viewerNotice.value = '停止麦克风试听时发生问题，请重启应用后再试。'; }
 }
 
 async function finishSettingsLeave() {
@@ -1310,7 +1310,7 @@ function leaveVoice() {
     void refreshRoomOccupancies(true);
   }).catch(() => {
     if (!presenceStopped && attempt === joinAttempt && joinedGroupId.value === null && joiningGroupId.value === null) {
-      viewerNotice.value = '离开语音未能确认，请重启客户端后再试。';
+      viewerNotice.value = '退出语音时发生问题，请重启应用后再试。';
     }
   });
   joinedGroupId.value = null;
@@ -1432,7 +1432,7 @@ function participantListening(participant: Participant) {
 <template>
   <div class="app-shell">
     <header class="titlebar" :class="{ 'desktop-titlebar': desktop }">
-      <div class="brand">LycanSync</div>
+      <div class="brand">lycanclaw</div>
       <div v-if="desktop" class="window-actions">
         <button aria-label="最小化窗口" @click="desktop.minimize()"><Minus :size="14" /></button>
         <button :aria-label="windowMaximized ? '还原窗口' : '最大化窗口'" @click="desktop.toggleMaximize()">
@@ -1511,7 +1511,7 @@ function participantListening(participant: Participant) {
           </div>
         </div>
         <div v-if="pendingSwitchGroup && joinedGroup" class="switch-confirm" role="alert">
-          <span>从“{{ joinedGroup.name }}”切换到“{{ pendingSwitchGroup.name }}”？当前共享会停止，加入后默认开麦。</span>
+          <span>切换到“{{ pendingSwitchGroup.name }}”？当前共享将停止，进入新语音后麦克风默认开启。</span>
           <button type="button" @click="pendingSwitchGroupId = null">取消</button>
           <button type="button" class="confirm-button" @click="joinGroup(pendingSwitchGroup.id)">切换</button>
         </div>

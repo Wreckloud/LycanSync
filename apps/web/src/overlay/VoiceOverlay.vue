@@ -15,7 +15,7 @@ const members = computed(() => state.value?.members.filter((member) => state.val
 const scaleStyle = computed(() => ({ '--scale': (state.value?.settings.scale ?? 100) / 100,
   '--column-width': `${state.value?.columnWidth ?? 100}px`,
   '--row-height': `${Math.ceil(34 * (state.value?.settings.scale ?? 100) / 100)}px` }));
-if (bridge) void bridge.ready().catch(() => { failure.value = '覆盖状态连接失败'; });
+if (bridge) void bridge.ready().catch(() => { failure.value = '无法取得屏幕覆盖的当前状态。'; });
 onScopeDispose(() => removeListener?.());
 </script>
 

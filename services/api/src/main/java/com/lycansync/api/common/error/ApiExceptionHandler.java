@@ -49,7 +49,7 @@ public class ApiExceptionHandler {
                 HttpStatus.BAD_REQUEST,
                 ApiErrorCode.INVALID_REQUEST,
                 "请求参数无效",
-                "请求参数不符合接口要求，请检查必填项和长度限制"
+                "提交的内容不符合要求，请检查必填项和长度限制。"
         );
     }
 
@@ -59,7 +59,7 @@ public class ApiExceptionHandler {
                 HttpStatus.BAD_REQUEST,
                 ApiErrorCode.INVALID_REQUEST,
                 "请求参数无效",
-                "请求体缺失或 JSON 格式不正确"
+                "提交的内容缺失或格式不正确。"
         );
     }
 
@@ -86,8 +86,8 @@ public class ApiExceptionHandler {
         return createProblemDetail(
                 HttpStatus.SERVICE_UNAVAILABLE,
                 ApiErrorCode.DATABASE_ACCESS_ERROR,
-                "数据库访问失败",
-                "数据库暂时不可用"
+                "服务器暂时无法读取或保存数据。",
+                "服务器暂时无法读取或保存数据。"
         );
     }
 
@@ -97,7 +97,7 @@ public class ApiExceptionHandler {
                 HttpStatus.BAD_REQUEST,
                 ApiErrorCode.INVALID_REQUEST,
                 "请求参数无效",
-                "请求参数不符合接口要求，请检查必填项和格式"
+                "提交的内容不符合要求，请检查必填项和格式。"
         );
     }
 

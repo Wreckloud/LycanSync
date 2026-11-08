@@ -56,7 +56,7 @@ describe('共享选择器的声音范围说明', () => {
   it('边框说明在开始前可见，不再先失败后要求重新授权，也不提供重复方式', async () => {
     const html = await renderPicker('process');
     expect(html).toContain('系统边框');
-    expect(html).toContain('自动选择系统窗口采集时');
+    expect(html).toContain('共享此窗口时');
     expect(html).toContain('开始共享');
     expect(html).not.toContain('允许边框并共享');
     expect(html).not.toContain('允许显示系统共享边框');
@@ -72,15 +72,15 @@ describe('共享选择器的声音范围说明', () => {
     const compiled = ts.transpile(statement.getText(source), { target: ts.ScriptTarget.ES2022 });
     const props = { sourceType: 'window' }, captureSettings = ref({ windowMethod: 'auto' }), borderSupport = ref<boolean>();
     const notice = runInNewContext(compiled + '; borderNotice', { computed, props, captureSettings, borderSupport }) as { value: string };
-    expect(notice.value).toContain('可能显示边框');
+    expect(notice.value).toContain('仍可能显示');
     borderSupport.value = false; expect(notice.value).toContain('会显示系统边框');
-    borderSupport.value = true; expect(notice.value).toContain('可能显示边框');
+    borderSupport.value = true; expect(notice.value).toContain('仍可能显示');
     captureSettings.value.windowMethod = 'game'; expect(notice.value).toBe('');
     props.sourceType = 'screen'; expect(notice.value).toBe('');
   });
   it.each([false, true])('系统混音勾选 %s 时都说明全部声音范围', async (checked) => {
     const html = await renderPicker('systemMix', true, checked);
-    expect(html).toContain('共享音频包含全部电脑声音，包括 LycanSync，可能产生回声。');
+    expect(html).toContain('将共享全部电脑声音，包括 lycanclaw 的声音，可能产生回声。');
     expect(html).not.toContain('当前系统仅支持共享画面。');
   });
 
