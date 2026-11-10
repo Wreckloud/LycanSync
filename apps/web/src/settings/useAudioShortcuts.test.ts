@@ -4,7 +4,7 @@ import { shortcutFromKey, useAudioShortcuts } from './useAudioShortcuts';
 
 async function settle() { for (let index = 0; index < 8; index++) await nextTick(); }
 afterEach(() => vi.useRealTimers());
-function fixture(begin: () => Promise<string> = async () => 'owner') {
+function fixture(begin: () => Promise<string> = async () => 'owner', stored: string | null = null) {
   const scope = effectScope();
   const room = ref<string | null>(null);
   let action!: Parameters<NonNullable<Window['lycanAudioShortcuts']>['onAction']>[0];
@@ -18,7 +18,7 @@ function fixture(begin: () => Promise<string> = async () => 'owner') {
     onAction: (callback: typeof action) => { action = callback; return vi.fn(); }, onError: () => vi.fn() };
   const microphone = vi.fn(async () => {}), listening = vi.fn(async () => {}), replay = vi.fn(async () => {});
   const replayId = ref<string | null>(null);
-  const storage = { getItem: vi.fn(() => null), setItem: vi.fn() };
+  const storage = { getItem: vi.fn(() => stored), setItem: vi.fn() };
   const modeChanged = vi.fn(), transmissionChanged = vi.fn();
   const shortcuts = scope.run(() => useAudioShortcuts('self', { roomId: () => room.value,
     microphone, listening, replay, replayId: () => replayId.value, modeChanged, transmissionChanged }, bridge, storage))!;
@@ -47,12 +47,34 @@ it('保存回放绑定当前缓存身份，不依赖通话，慢保存不阻挡�
   } finally { f.scope.stop(); }
 });
 
-it('录入组合不接受普通字母、系统保留键或 F12', () => {
+it('录入字母、数字、符号单键及组合键，仍拒绝系统保留键', () => {
   const event = { code: 'KeyM', ctrlKey: true, altKey: false, shiftKey: true, metaKey: false };
   expect(shortcutFromKey(event)).toBe('Ctrl+Shift+M');
-  expect(() => shortcutFromKey({ ...event, code: 'KeyF', ctrlKey: false })).toThrow();
+  expect(shortcutFromKey({ ...event, code: 'KeyF', ctrlKey: false })).toBe('Shift+F');
+  expect(shortcutFromKey({ ...event, code: 'Digit9', ctrlKey: false, shiftKey: false })).toBe('9');
+  for (const [code, key] of Object.entries({ Semicolon: ';', Equal: '=', Comma: ',', Minus: '-', Period: '.',
+    Slash: '/', Backquote: '`', BracketLeft: '[', Backslash: '\\', BracketRight: ']', Quote: "'" })) {
+    expect(shortcutFromKey({ ...event, code, ctrlKey: false, shiftKey: false })).toBe(key);
+    expect(shortcutFromKey({ ...event, code, shiftKey: false })).toBe(`Ctrl+${key}`);
+  }
   expect(() => shortcutFromKey({ ...event, code: 'F12' })).toThrow();
   expect(() => shortcutFromKey({ ...event, metaKey: true })).toThrow();
+});
+
+it('单键和符号保存后可重新载入，与原组合键兼容', async () => {
+  for (const key of ['M', '9', ';', '=', ',', '-', '.', '/', '`', '[', '\\', ']', "'", 'Shift+;', 'Ctrl+Alt+Shift+/']) {
+    const bindings = { microphone: 'Ctrl+M', listening: 'Alt+L', pushToTalk: key, replay: 'F2' };
+    const f = fixture(undefined, JSON.stringify({ ...bindings, voiceMode: 'pushToTalk' }));
+    try {
+      await settle();
+      expect(f.shortcuts.error.value).toBe('');
+      expect(f.shortcuts.voiceMode.value).toBe('pushToTalk');
+      expect(f.shortcuts.bindings.value).toEqual(bindings);
+      expect(f.bridge.configure).toHaveBeenLastCalledWith('owner', bindings, true);
+      await f.shortcuts.setBinding('pushToTalk', key);
+      expect(JSON.parse(f.storage.setItem.mock.calls.at(-1)![1]).pushToTalk).toBe(key);
+    } finally { f.scope.stop(); }
+  }
 });
 
 it('初始化、切换发言模式及重试均传递可克隆配置并激活当前房间', async () => {

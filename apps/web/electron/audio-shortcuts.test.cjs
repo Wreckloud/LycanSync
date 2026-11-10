@@ -27,14 +27,41 @@ function fixture() {
     press: id => { const param = Buffer.alloc(8); param.writeUInt32LE(id); hooks.get(0x0312)?.(param); } };
 }
 
-test('只接受固定组合和两个不同的音频动作', () => {
+test('接受单键与组合键，拒绝保留键、非法顺序和重复动作', () => {
   assert.deepEqual(parseBinding('Ctrl+Alt+Shift+M'), { modifiers: 7, key: 77 });
   assert.deepEqual(parseBinding('F11'), { modifiers: 0, key: 122 });
-  for (const value of ['M', 'Shift+F', 'F12', 'Win+M', 'Alt+F4', 'Ctrl+Ctrl+M', 'Alt+Ctrl+M', null]) {
+  assert.deepEqual(parseBinding('M'), { modifiers: 0, key: 77 });
+  assert.deepEqual(parseBinding('Shift+F'), { modifiers: 4, key: 70 });
+  assert.deepEqual(parseBinding(';'), { modifiers: 0, key: 0xba });
+  assert.deepEqual(parseBinding('Ctrl+;'), { modifiers: 2, key: 0xba });
+  for (const [key, virtualKey] of Object.entries({ ';': 0xba, '=': 0xbb, ',': 0xbc, '-': 0xbd, '.': 0xbe,
+    '/': 0xbf, '`': 0xc0, '[': 0xdb, '\\': 0xdc, ']': 0xdd, "'": 0xde })) {
+    assert.deepEqual(parseBinding(key), { modifiers: 0, key: virtualKey });
+    assert.deepEqual(parseBinding(`Ctrl+Alt+Shift+${key}`), { modifiers: 7, key: virtualKey });
+  }
+  for (const value of ['F12', 'Win+M', 'Alt+F4', 'Ctrl+Ctrl+M', 'Alt+Ctrl+M', 'Enter', 'Ctrl', '中文', 'constructor', null]) {
     assert.throws(() => parseBinding(value));
   }
   assert.throws(() => validateBindings({ microphone: 'Ctrl+M', listening: 'Ctrl+M', pushToTalk: '', replay: '' }));
   assert.throws(() => validateBindings({ microphone: '', listening: '', other: '' }));
+});
+
+test('单键按键发言在确认松开后停止，录入期间注销且结束录入恢复', () => {
+  const f = fixture();
+  try {
+    f.shortcuts.configure(f.owner, { microphone: 'M', listening: 'L', pushToTalk: ';', replay: "'" }, true);
+    f.shortcuts.activate(f.owner, 'room');
+    assert.deepEqual(f.registered.get(0x4c03), { modifiers: 0, key: 0xba });
+    f.setHeld(true); f.press(0x4c03);
+    const sequence = f.sent.at(-1)[1].sequence;
+    assert.equal(f.shortcuts.readHold(f.owner, 'room', sequence), true);
+    f.setHeld(false);
+    assert.equal(f.shortcuts.readHold(f.owner, 'room', sequence), false);
+    f.shortcuts.capture(f.owner, true);
+    assert.equal(f.registered.size, 0);
+    f.shortcuts.capture(f.owner, false);
+    assert.equal(f.registered.size, 4);
+  } finally { f.shortcuts.end(f.owner); }
 });
 
 test('离房只保留回放键，尚未开启缓存时不发动作，不会启用麦克风', () => {

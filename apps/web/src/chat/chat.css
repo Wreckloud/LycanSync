@@ -146,6 +146,7 @@
 
 .composer-content { min-width: 0; }
 .composer textarea {
+  transition: height var(--motion-layout-duration) var(--motion-ease), color var(--motion-feedback-duration) ease;
   display: block;
   min-width: 0;
   width: 100%;

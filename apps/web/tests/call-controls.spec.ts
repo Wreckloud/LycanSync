@@ -49,12 +49,36 @@ test('麦克风快捷切换更新勾选，声音处理是一个开关且切换�
   await expect(opener).toBeFocused();
 });
 
+test('发言模式滑块双向过渡，减少动画时立即切换', async ({ page }) => {
+  await page.getByRole('button', { name: '麦克风选项', exact: true }).click();
+  const mode = page.getByRole('group', { name: '发言模式' });
+  for (const label of ['按键说话 F2', '自由发言']) {
+    const positions = await mode.getByRole('button', { name: label, exact: true }).evaluate(async element => {
+      const slider = element.parentElement!.querySelector('.voice-mode-slider')!;
+      const positions = [slider.getBoundingClientRect().x];
+      (element as HTMLButtonElement).click();
+      for (let frame = 0; frame < 18; frame++) {
+        await new Promise(requestAnimationFrame);
+        positions.push(slider.getBoundingClientRect().x);
+      }
+      return positions;
+    });
+    const first = positions[0]!, last = positions.at(-1)!;
+    expect(Math.abs(last - first)).toBeGreaterThan(40);
+    expect(positions.some(position => position > Math.min(first, last) + 1 && position < Math.max(first, last) - 1)).toBe(true);
+  }
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(mode.locator('.voice-mode-slider')).toHaveCSS('transition-duration', '0s');
+  await mode.getByRole('button', { name: '按键说话 F2' }).click();
+  await expect(mode.getByRole('button', { name: '按键说话 F2' })).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('共享菜单按操作顺序直接展示，画质保留二级调整，未共享时不重复开始共享', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 420, height: 720 });
   const opener = page.getByRole('button', { name: '共享选项', exact: true });
   await opener.click();
   const menu = page.getByRole('region', { name: '共享选项', exact: true });
-  await expect(menu.getByRole('button')).toHaveText(['关闭共享', '停止录制 · 03:24', '共享画质标准', '保存即时回放', '录制设置']);
+  await expect(menu.getByRole('button')).toHaveText(['关闭共享', '停止录制 · 03:24', '共享画质标准', '保存即时回放', '共享与录制']);
   await expect(menu.getByRole('checkbox')).toHaveCount(0);
   await menu.getByRole('button', { name: '共享画质' }).click();
   const quality = page.getByRole('region', { name: '共享画质', exact: true });
@@ -67,7 +91,7 @@ test('共享菜单按操作顺序直接展示，画质保留二级调整，未�
   await page.screenshot({ path: testInfo.outputPath('share-menu.png') });
   await menu.getByRole('button', { name: '关闭共享', exact: true }).click();
   await opener.click();
-  await expect(menu.getByRole('button')).toHaveText(['快速共享 饥荒联机版', '开始共享并录制', '录制设置']);
+  await expect(menu.getByRole('button')).toHaveText(['快速共享 饥荒联机版', '开始共享并录制', '共享与录制']);
 });
 
 test('未绑定显示括号标记，收听音量平衡可直接切换', async ({ page }) => {
@@ -76,6 +100,17 @@ test('未绑定显示括号标记，收听音量平衡可直接切换', async ({
   });
   await page.getByRole('button', { name: '麦克风选项', exact: true }).click();
   await expect(page.getByRole('button', { name: '按键说话 (未设置)' })).toBeVisible();
+  const hint = page.getByRole('button', { name: '请先为按键发言设置快捷键', exact: true });
+  await expect(hint).toBeHidden();
+  await page.getByRole('button', { name: '按键说话 (未设置)' }).click();
+  await expect(hint).toBeVisible();
+  const mode = (await page.getByRole('group', { name: '发言模式' }).boundingBox())!;
+  const hintBounds = (await hint.boundingBox())!;
+  expect(hintBounds.y).toBeGreaterThanOrEqual(mode.y + mode.height);
+  expect(hintBounds.y).toBeLessThan((await page.getByText('智能声音处理', { exact: true }).boundingBox())!.y);
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '麦克风选项', exact: true }).click();
+  await expect(hint).toBeHidden();
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: '收听选项', exact: true }).click();
   const balance = page.getByRole('checkbox', { name: '平衡成员语音音量' });

@@ -81,6 +81,42 @@ function setup(mode: NativeScreenAudioMode = 'process') {
 
 afterEach(() => vi.unstubAllGlobals());
 
+describe('来源预览请求隔离', () => {
+  it('窗口预览等待时屏幕分类可独立出图，旧选择器结果不会进入新选择器', async () => {
+    const declaration = sourceFile.statements.find(statement => ts.isFunctionDeclaration(statement)
+      && statement.name?.text === 'loadNativeSourceThumbnails')!;
+    const compiledLoad = ts.transpile(declaration.getText(sourceFile), { target: ts.ScriptTarget.ES2022 });
+    let finishWindow!: (value: { sourceId: string; thumbnail: string }[]) => void;
+    const source = (id: string, kind: 'window' | 'monitor') => ({ sourceId: id, kind, title: id, width: 640, height: 480, primary: false });
+    const chooser = createNativeVideoSourceSelection([source('window:1:0', 'window'), source('monitor:1:0', 'monitor')]);
+    const sourceType = ref('window');
+    const update = vi.fn();
+    const desktop = { getNativeVideoSourceThumbnails: vi.fn(async (requested: { sourceId: string }[]) => {
+      if (requested[0]?.sourceId === 'window:1:0') return new Promise<{ sourceId: string; thumbnail: string }[]>(resolve => { finishWindow = resolve; });
+      return [{ sourceId: 'monitor:1:0', thumbnail: 'screen-preview' }];
+    }) };
+    const realm = { desktop, document: { hidden: false }, captureSourceType: sourceType,
+      nativeThumbnailRefresh: new Map(), nativeSourceChooserGeneration: 1, nativeSourceChooser: chooser,
+      currentNativeDiscoveryId: 'helper', selectedCaptureSourceId: ref(''), nativeSourcePreviewReported: true,
+      captureSourcesElement: ref({ getBoundingClientRect: () => ({ top: 0, bottom: 500 }),
+        querySelectorAll: () => [{ dataset: { sourceId: sourceType.value === 'window' ? 'window:1:0' : 'monitor:1:0' },
+          getBoundingClientRect: () => ({ top: 10, bottom: 100 }) }] }),
+      updateNativeSourceOptions: update, console, nextTick };
+    const load = runInNewContext(compiledLoad + '; loadNativeSourceThumbnails', realm) as
+      (generation: number, chooser: ReturnType<typeof createNativeVideoSourceSelection>) => Promise<void>;
+    const windowPending = load(1, chooser);
+    sourceType.value = 'screen';
+    await load(1, chooser);
+    expect(chooser.options.find(entry => entry.id === 'monitor:1:0')?.thumbnail).toBe('screen-preview');
+    expect(chooser.options.find(entry => entry.id === 'window:1:0')?.thumbnail).toBeUndefined();
+    realm.nativeSourceChooserGeneration = 2;
+    finishWindow([{ sourceId: 'window:1:0', thumbnail: 'old-preview' }]);
+    await windowPending;
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(realm.nativeThumbnailRefresh.size).toBe(0);
+  });
+});
+
 describe('选窗准备', () => {
   it('取消后立即重开会等旧枚举释放后直接读取新名单，旧结果不进入新选择', async () => {
     const declaration = sourceFile.statements.find(statement => ts.isFunctionDeclaration(statement)

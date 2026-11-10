@@ -9,6 +9,7 @@ const { promisify } = require('node:util');
 const { cpus } = require('node:os');
 const { ObsCaptureHostManager } = require('../obs-capture-host.cjs');
 const { MediaHelperManager } = require('../media-helper.cjs');
+const { createMediaBackgroundPolicy } = require('../media-background.cjs');
 
 if (process.env.LYCANSYNC_RUN_OBS_CAPTURE_TEST !== '1') throw new Error('captureDeviceTestNotEnabled');
 
@@ -20,7 +21,11 @@ const resourceCheck = process.env.LYCANSYNC_CAPTURE_RESOURCE_CHECK === '1';
 const qualityCheck = process.env.LYCANSYNC_CAPTURE_QUALITY_CHECK === '1';
 const windowCheck = process.env.LYCANSYNC_CAPTURE_WINDOW_CHECK === '1';
 const gameCheck = process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1';
+const repeatCheck = process.env.LYCANSYNC_CAPTURE_REPEAT_CHECK === '1';
+if (repeatCheck && !windowCheck && !gameCheck) throw new Error('repeatCheckRequiresTestWindow');
 const applicationCheck = process.env.LYCANSYNC_CAPTURE_APPLICATION_CHECK === '1';
+const applicationRepeats = Number(process.env.LYCANSYNC_CAPTURE_APPLICATION_REPEATS ?? 1);
+if (![1, 2, 3].includes(applicationRepeats)) throw new Error('invalidApplicationTestRepeats');
 const startupCheck = process.env.LYCANSYNC_CAPTURE_STARTUP_CHECK === '1';
 if ([resourceCheck, qualityCheck, windowCheck, applicationCheck, gameCheck, startupCheck].filter(Boolean).length > 1) throw new Error('captureTestModesConflict');
 const rustPath = resolve(projectRoot, 'native/media-helper/target/release/lycansync-media.exe');
@@ -114,7 +119,11 @@ async function finish(result) {
   catch (error) { result.cleanupError = String(error.message).slice(0, 180); }
   try { if (targetHelper) await targetHelper.shutdown(); }
   catch (error) { result.cleanupError = String(error.message).slice(0, 180); }
-  if (gameCheck) production?.activityMonitor?.stop();
+  if (production?.activityMonitor?.stop) {
+    production.activityMonitor.stop();
+    try { await until(() => production.activityMonitor.diagnosticProcesses().length === 0, 5000); }
+    catch { result.cleanupError = 'testActivityHelperExitUnconfirmed'; }
+  }
   if (targetFixture && targetFixture.exitCode === null && targetFixture.signalCode === null) {
     targetFixture.stdin.end('quit\n');
     try { await until(() => targetFixture.exitCode !== null || targetFixture.signalCode !== null, 5000); }
@@ -148,9 +157,11 @@ app.whenReady().then(async () => {
     if (event.level === 'error') diagnostics.push(String(event.message).slice(0, 250));
   });
   production = { closing: false, process, performance, writeMediaDiagnostic: async () => {},
+    setMediaBackgroundActive: createMediaBackgroundPolicy(),
     nativeVideoPreparation: undefined,
     // 此用例不启动录像；保留生产入口对空闲录像状态的查询和变更包裹。
-    recording: { active: undefined, snapshot: () => ({ phase: 'idle', holdingResources: false }),
+    recording: { active: undefined, snapshot: () => ({ phase: 'idle', holdingResources: false,
+      replay: { phase: 'idle', holdingResources: false, saving: false } }),
       withVideoChange: operation => operation() },
     console: { error: (...args) => diagnostics.push(args.map(String).join(' ').slice(0, 250)) },
     setTimeout, clearTimeout, randomUUID, sharedTexture, ipcMain, mainWindow: window,
@@ -209,7 +220,7 @@ app.whenReady().then(async () => {
     sourceId = monitor.sourceId;
     production.nativeVideoSourcesById = new Map(snapshot.sources.map((source) => [source.sourceId, source]));
   }
-  // 普通窗口验证不启动活动扫描；游戏模式会以本次自建程序的映射走真实分类命令。
+  // 不启动活动扫描；自建 D3D 测试程序并非已知游戏，游戏验证显式选择游戏采集。
   production.activityMonitor = { isCaptureGame: async () => false };
   await window.loadFile(resolve(projectRoot, 'release/build-cache/obs-32.2.2/smoke-page/renderer.html'));
   process.stdout.write('{"phase":"pageLoaded"}\n');
@@ -312,15 +323,23 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
     return;
   }
   if (applicationCheck) {
-    const snapshot = await targetHelper.listVideoSources();
     const existingWindowId = process.env.LYCANSYNC_CAPTURE_APPLICATION_WINDOW_ID;
     if (existingWindowId && !/^[1-9]\d{0,19}$/.test(existingWindowId)) throw new Error('invalidApplicationTestWindow');
+    const snapshot = await targetHelper.listVideoSources();
     // 浏览器只匹配专用测试标题；已有应用只接受本次明确给出的窗口句柄，不打印其标题。
     const sources = snapshot.sources.filter((source) => source.kind === 'window'
       && (existingWindowId ? source.windowId === existingWindowId : source.title.startsWith('LycanSync OBS Browser Fixture')));
     assert(sources.length === (existingWindowId ? 1 : 2), 'applicationTestSourcesMissing');
     production.nativeVideoSourcesById = new Map(snapshot.sources.map((source) => [source.sourceId, source]));
-    for (const source of sources) {
+    if (existingWindowId) {
+      const { createActivityHelper } = require('../activity-helper.cjs');
+      const target = await targetHelper.inspectVideoSource(sources[0].sourceId);
+      production.activityMonitor = createActivityHelper({ enabled: true,
+        executablePath: () => resolve(projectRoot, 'native/activity-helper/target/release/lycansync-activity.exe'), onActivity: () => {} });
+      await production.activityMonitor.configure([{ executable: target.executable, name: '本机采集验证' }]);
+      assert(!await production.activityMonitor.isCaptureGame(target.executable), 'applicationMisclassifiedAsGame');
+    }
+    for (const source of Array.from({ length: existingWindowId ? applicationRepeats : 1 }, () => sources).flat()) {
       testPhase = 'application-start';
       const started = await renderer(`start(${JSON.stringify(source.sourceId)})`);
       testPhase = 'application-playback';
@@ -348,7 +367,7 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
       assert(existingWindowId || (browserKind && palette.size === 2), 'browserWindowPixelsMismatch');
       assert(after.input.submittedFrames > before.input.submittedFrames + 10
         && after.presented > before.presented + 10, 'applicationFramesStalled');
-      if (existingWindowId) {
+      if (existingWindowId && applicationRepeats === 1) {
         // 只移动测试接收窗，让色块覆盖已授权来源中心；不激活或操作被采集应用。
         const readCenter = async () => {
           const { stdout } = await promisify(execFile)('powershell.exe', ['-NoProfile', '-Command', `
@@ -414,7 +433,7 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
       cases.push({ mode: browserKind ?? 'existing-application', actualMethod: state.captureMethod, firstFrameMs: started.firstFrameMs,
         submittedFps: Math.round((after.input.submittedFrames - before.input.submittedFrames) * 1000 / intervalMs),
         presentedFps: Math.round((after.presented - before.presented) * 1000 / intervalMs),
-        freshPixelsChecked: Boolean(browserKind), occlusionChecked: Boolean(existingWindowId),
+        freshPixelsChecked: Boolean(browserKind), occlusionChecked: Boolean(existingWindowId) && applicationRepeats === 1,
         hostRetained: manager.state === state && !state.closed });
     }
     if (!existingWindowId) assert(new Set(cases.map((entry) => entry.mode)).size === 2, 'browserWindowsNotDistinct');
@@ -424,7 +443,7 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
   }
   if (windowCheck || gameCheck) {
     // 正式选择器读取来源时会预热图形；冷启动场景仍可显式单独运行。
-    if (windowCheck && process.env.LYCANSYNC_CAPTURE_WINDOW_COLD !== '1') {
+    if (windowCheck && !repeatCheck && process.env.LYCANSYNC_CAPTURE_WINDOW_COLD !== '1') {
       testPhase = 'window-prewarm';
       await manager.prepare(true);
     }
@@ -461,15 +480,41 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
     production.nativeVideoSourcesById = new Map(snapshot.sources.map((source) => [source.sourceId, source]));
     const statuses = [];
     manager.onSuspended = (state, event) => { statuses.push(event.suspended); production.handleVideoCaptureSuspended(state, event); };
-    if (gameCheck) {
-      const { createActivityHelper } = require('../activity-helper.cjs');
-      production.activityMonitor = createActivityHelper({ enabled: true,
-        executablePath: () => resolve(projectRoot, 'native/activity-helper/target/release/lycansync-activity.exe'),
-        onActivity: () => {} });
-      await production.activityMonitor.configure([{ executable: fixturePath, name: 'Controlled D3D fixture' }]);
+    if (repeatCheck) {
+      let cyan = false;
+      for (const mode of ['cold', 'prewarmed', 'restart']) {
+        testPhase = `repeat-${mode}`;
+        if (mode === 'prewarmed') await manager.prepare(true);
+        const settings = { hideCursor: false, hideBorder: false, windowMethod: gameCheck ? 'game' : 'auto' };
+        const started = await renderer(`start(${JSON.stringify(selected.sourceId)}, undefined, 60, ${JSON.stringify(settings)})`);
+        const state = manager.state;
+        const before = await renderer('probe(960,540)');
+        for (let index = 0; index < 10; index++) {
+          if (index === 4) { targetFixture.stdin.write('toggle-color\n'); cyan = !cyan; }
+          await sleep(400);
+          const sample = await renderer('probe(960,540)');
+          assert(sample.readyState === 'live' && sample.errors.length === 0 && sample.input.writeFailures === 0,
+            'repeatPlaybackFailed');
+          if (index === 3 || index === 9) assert(sample.pixel && sample.pixel[0] < 100
+            && sample.pixel[1] > 120 && (cyan ? sample.pixel[2] > 160 : sample.pixel[2] < 120), 'repeatPixelsMismatch');
+        }
+        const after = await renderer('probe(960,540)');
+        assert(after.presented > before.presented + 10, 'repeatFramesStalled');
+        assert(state.captureMethod === (gameCheck ? 'game' : ordinaryMethod), 'repeatMethodMismatch');
+        const stopped = await renderer('stop()');
+        await until(() => !state.videoSessionId && !production.nativeVideoSession && !targetHelper.videoCapture);
+        assert(stopped.readyState === 'ended' && manager.state === state && !state.closed, 'repeatStopUnconfirmed');
+        cases.push({ mode, actualMethod: state.captureMethod, firstFrameMs: started.firstFrameMs,
+          freshPixelsChecked: true, hostRetained: true });
+        if (mode === 'cold') await manager.shutdown(false, 'idle');
+      }
+      assert(failures.length === 0, 'repeatCaptureFailure');
+      await finish({ ok: true });
+      return;
     }
     testPhase = 'window-start';
-    const started = await renderer(`start(${JSON.stringify(selected.sourceId)})`);
+    const settings = { hideCursor: false, hideBorder: false, windowMethod: gameCheck ? 'game' : 'auto' };
+    const started = await renderer(`start(${JSON.stringify(selected.sourceId)}, undefined, 60, ${JSON.stringify(settings)})`);
     testPhase = 'window-initial-color';
     const state = manager.state;
     let cyan = false;

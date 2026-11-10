@@ -110,29 +110,33 @@ fn music_player(executable: &str) -> Option<&'static str> {
     }
 }
 
-pub fn is_capture_game(
-    executable: &str,
-    games: &[GameInstall],
-    mappings: &[ActivityMapping],
-) -> bool {
+pub fn is_capture_game(executable: &str, games: &[GameInstall]) -> bool {
     let known = known_games::find(executable, &[]);
-    // 动态中的客户端/启动器不因此变成游戏注入目标；播放器也不当作游戏采集。
+    // Steam 也安装绘图等软件；目录或显示名称修正不代表适合注入，未知应用走窗口采集。
     !ignored_executable(executable)
         && music_player(executable).is_none()
         && known
             .as_ref()
             .is_none_or(|matched| matched.role == ExecutableRole::Game)
         && (known.is_some()
-            || games
-                .iter()
-                .any(|game| game.key != "steam:431960" && executable.starts_with(&game.directory))
-            || mappings
-                .iter()
-                .any(|mapping| mapping.executable == executable))
+            || games.iter().any(|game| {
+                executable.starts_with(&game.directory)
+                    && known_games::bundled()
+                        .installed_game(&game.key)
+                        .is_some_and(|known| known.has_game_executable())
+            }))
 }
 
-pub fn needs_window(process: &ProcessSnapshot, mappings: &[ActivityMapping]) -> bool {
+pub fn needs_window(
+    process: &ProcessSnapshot,
+    games: &[GameInstall],
+    mappings: &[ActivityMapping],
+) -> bool {
     music_player(&process.executable).is_some()
+        || known_games::find(&process.executable, &process.arguments).is_some()
+        || games.iter().any(|game| {
+            game.key != "steam:431960" && process.executable.starts_with(&game.directory)
+        })
         || mappings
             .iter()
             .any(|mapping| mapping.executable == process.executable)
@@ -503,14 +507,16 @@ mod tests {
     #[test]
     fn capture_game_uses_selected_executable_not_latest_activity_or_title() {
         let games = games();
-        let mappings = vec![ActivityMapping {
-            executable: "c:\\custom\\game.exe".to_owned(),
-            name: "自选游戏".to_owned(),
+        assert!(!is_capture_game("d:\\games\\a\\game.exe", &games));
+        assert!(!is_capture_game("d:\\games\\b\\game.exe", &games));
+        let known_install = [GameInstall {
+            key: "steam:570".into(),
+            name: "Dota 2".into(),
+            directory: "d:\\games\\dota\\".into(),
         }];
-        assert!(is_capture_game("d:\\games\\a\\game.exe", &games, &[]));
-        assert!(is_capture_game("d:\\games\\b\\game.exe", &games, &[]));
-        assert!(is_capture_game("c:\\custom\\game.exe", &[], &mappings));
-        assert!(is_capture_game("c:\\riot\\league of legends.exe", &[], &[]));
+        assert!(is_capture_game("d:\\games\\dota\\game.exe", &known_install));
+        assert!(!is_capture_game("c:\\custom\\game.exe", &[]));
+        assert!(is_capture_game("c:\\riot\\league of legends.exe", &[]));
         for executable in [
             "c:\\riot\\leagueclient.exe",
             "c:\\riot\\leagueclientux.exe",
@@ -522,21 +528,14 @@ mod tests {
             "c:\\apps\\browser.exe",
             "d:\\games\\ab\\game.exe",
         ] {
-            assert!(
-                !is_capture_game(executable, &games, &mappings),
-                "{executable}"
-            );
+            assert!(!is_capture_game(executable, &games), "{executable}");
         }
         let wallpaper = vec![GameInstall {
             key: "steam:431960".to_owned(),
             name: "壁纸".to_owned(),
             directory: "c:\\wallpaper\\".to_owned(),
         }];
-        assert!(!is_capture_game(
-            "c:\\wallpaper\\wallpaper.exe",
-            &wallpaper,
-            &[]
-        ));
+        assert!(!is_capture_game("c:\\wallpaper\\wallpaper.exe", &wallpaper));
     }
 
     #[test]
@@ -983,19 +982,67 @@ mod tests {
     fn passive_detection_does_not_request_browser_or_unselected_window_titles() {
         assert!(!needs_window(
             &process(1, "c:/browser/msedge.exe", 100),
+            &games(),
             &[]
         ));
         assert!(needs_window(
             &process(1, "c:/music/cloudmusic.exe", 100),
+            &games(),
             &[]
         ));
         let mappings = [ActivityMapping {
             executable: "c:\\custom.exe".into(),
             name: "游戏".into(),
         }];
-        assert!(needs_window(&process(1, "c:/custom.exe", 100), &mappings));
+        assert!(needs_window(
+            &process(1, "c:/custom.exe", 100),
+            &games(),
+            &mappings
+        ));
+        assert!(needs_window(
+            &process(1, "d:/games/a/game.exe", 100),
+            &games(),
+            &[]
+        ));
+        assert!(needs_window(
+            &process(1, "c:/riot/league of legends.exe", 100),
+            &[],
+            &[]
+        ));
         let name = display_name(&"🎮".repeat(50));
         assert_eq!(name.encode_utf16().count(), 80);
+    }
+
+    #[test]
+    fn custom_activity_name_does_not_enable_game_injection() {
+        let app = process(9, "c:/apps/krita.exe", 100);
+        let mappings = [ActivityMapping {
+            executable: app.executable.clone(),
+            name: "画画".into(),
+        }];
+        assert!(needs_window(&app, &[], &mappings));
+        let activity = ActivityDetector::default()
+            .detect(
+                &[app],
+                &[WindowSnapshot {
+                    pid: 9,
+                    window_id: "99".into(),
+                    title: "Krita".into(),
+                    visible: true,
+                    selectable: true,
+                }],
+                &[],
+                &mappings,
+            )
+            .unwrap();
+        assert_eq!(activity.window_ids, vec!["99"]);
+        assert!(!is_capture_game("c:\\apps\\krita.exe", &[]));
+        let installed = [GameInstall {
+            key: "steam:280680".into(),
+            name: "Krita".into(),
+            directory: "c:\\apps\\".into(),
+        }];
+        assert!(!is_capture_game("c:\\apps\\krita.exe", &installed));
     }
 
     #[test]
@@ -1212,7 +1259,7 @@ mod tests {
             "d:\\games\\boot\\ffxivboot.exe",
             "d:\\games\\rust.exe",
         ] {
-            assert!(!is_capture_game(executable, &installed, &[]));
+            assert!(!is_capture_game(executable, &installed));
         }
         assert!(
             select_activity(
@@ -1223,11 +1270,7 @@ mod tests {
             )
             .is_none()
         );
-        assert!(is_capture_game(
-            "d:\\standalone\\genshinimpact.exe",
-            &[],
-            &[]
-        ));
+        assert!(is_capture_game("d:\\standalone\\genshinimpact.exe", &[]));
         let lobby =
             select_activity(&[process(1, "d:/leagueclientux.exe", 100)], &[], &[], &[]).unwrap();
         assert_eq!(lobby.name, "英雄联盟");

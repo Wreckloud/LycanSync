@@ -101,12 +101,12 @@ it.each(['success', 'cancel', 'leave', 'switch', 'disposed'])('共享并录制�
   expect(f.state.recording.start).toHaveBeenCalledTimes(outcome === 'success' ? 1 : 0);
 });
 
-it('未绑定按键先进入设置并显示明确提示，不提前开启按键发言', () => {
+it('未绑定入口进入设置但不再注入重复提示，不提前开启按键发言', () => {
   const f = setup();
   const opener = {};
   f.app.updateVoiceMode('pushToTalk', opener);
   expect(f.state.openSettings).toHaveBeenCalledWith('shortcuts', opener);
-  expect(f.state.audioShortcuts.error).toBe('请先为按键发言设置快捷键');
+  expect(f.state.audioShortcuts.error).toBe('');
   expect(f.state.audioShortcuts.setVoiceMode).not.toHaveBeenCalled();
   f.state.audioShortcuts.bindings.pushToTalk = 'F2';
   f.app.updateVoiceMode('pushToTalk', opener);

@@ -487,20 +487,65 @@ test('快捷键录入松开后保存，冲突保持原设置，取消不会丢�
   await page.getByRole('button', { name: '清除麦克风静音／恢复快捷键', exact: true }).click();
   await expect(recorder).toHaveText('未设置');
   const beforeMode = await recorder.boundingBox();
-  await page.getByRole('combobox', { name: '发言模式', exact: true }).selectOption('pushToTalk');
+  await page.getByRole('group', { name: '发言模式', exact: true }).getByRole('button', { name: /^按键说话/ }).click();
   expect((await recorder.boundingBox())!.y).toBe(beforeMode!.y);
   await expect(page.locator('.shortcut-settings')).not.toContainText('等待按住快捷键');
   const talk = page.getByRole('button', { name: '设置按键说话快捷键', exact: true });
+  await expect(page.getByText('单键是全局快捷键，打字或游戏中按下也会触发，可能与其他按键操作冲突。')).toBeVisible();
   await talk.click();
-  await talk.press('F2');
-  await expect(talk).toHaveText('F2');
+  await page.keyboard.down(';');
+  await expect(talk).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.evaluate(id => JSON.parse(localStorage.getItem(`lycansync.audio-shortcuts.v1.${id}`)!).pushToTalk, user.id)).toBe('');
+  await page.keyboard.up(';');
+  await expect(talk).toHaveText(';');
+  await expect(talk).toHaveAttribute('aria-pressed', 'false');
   await page.reload();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '快捷键', exact: true }).click();
-  await expect(page.getByRole('combobox', { name: '发言模式', exact: true })).toHaveValue('pushToTalk');
-  await expect(page.getByRole('button', { name: '设置按键说话快捷键', exact: true })).toHaveText('F2');
+  await expect(page.getByRole('group', { name: '发言模式', exact: true }).getByRole('button', { name: /^按键说话/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: '设置按键说话快捷键', exact: true })).toHaveText(';');
   await page.screenshot({ path: test.info().outputPath('push-to-talk-settings.png') });
-  await page.getByRole('combobox', { name: '发言模式', exact: true }).selectOption('voice');
+  await page.getByRole('group', { name: '发言模式', exact: true }).getByRole('button', { name: '自由发言', exact: true }).click();
+});
+
+test('共享与录制入口合并设置，默认画质与共享偏好重开后保持', async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'lycanDesktop', { value: {
+      getAutoLogin: async () => ({ enabled: true, manualEntryRequired: false }),
+      getAccessLink: async () => null, onAccessLink: () => () => {},
+      getUpdateState: async () => ({ phase: 'ready', supported: false, version: 'test', message: '' }),
+      runStartupUpdate: async () => ({ phase: 'ready', supported: false, version: 'test', message: '' }),
+      onUpdateState: () => () => {}, getWindowVisibility: async () => true, onWindowVisibility: () => () => {},
+      isMaximized: async () => false, onMaximizedChange: () => () => {}, onViewerClosed: () => () => {}, onClose: () => () => {},
+      getSystemIdleState: async () => ({ state: 'active', idleSeconds: 0 }),
+      prepareCapture: async () => {}, getProcessMetrics: async () => ({ cpuPercent: 0, memoryMb: 0 }),
+      getCurrentActivity: async () => null, onActivityChange: () => () => {},
+      getNativeMediaCapabilities: async () => ({ screenShareAudioCapture: { available: true, reason: 'windowsApplicationLoopbackProcessTree' } }),
+      getRecordingSettings: async () => ({ directory: 'test-recordings', applicationAudio: true, microphone: false, friends: false,
+        quality: 'standard', replaySeconds: 60 }),
+      getRecordingStatus: async () => ({ holdingResources: false, phase: 'idle', recordingId: null, startedAt: null,
+        bytes: 0, error: null, saved: false, continuing: false, applicationAudio: true }),
+      listRecordings: async () => [], onRecordingState: () => () => {},
+    } });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '共享与录制', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '共享与录制', exact: true })).toBeVisible();
+  const presets = page.getByRole('group', { name: '共享画质' });
+  await presets.getByRole('button', { name: '高帧率', exact: true }).click();
+  await page.getByRole('checkbox', { name: '共享声音', exact: true }).uncheck();
+  await page.getByRole('checkbox', { name: /隐藏共享画面中的光标/ }).check();
+  await page.getByRole('button', { name: '返回应用', exact: true }).click();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '共享与录制', exact: true }).click();
+  await expect(presets.getByRole('button', { name: '高帧率', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('checkbox', { name: '共享声音', exact: true })).not.toBeChecked();
+  await expect(page.getByRole('checkbox', { name: /隐藏共享画面中的光标/ })).toBeChecked();
+  await expect(page.getByRole('heading', { name: '录制内容', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('lycansync.screen-share-quality')!).quality)).toBe('highFrameRate');
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.screenshot({ path: testInfo.outputPath('sharing-and-recording.png') });
 });
 
 test('本机提示音只提供统一音量和逐项开关，重开后恢复，保留入场音效操作', async ({ page }) => {

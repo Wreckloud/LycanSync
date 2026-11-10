@@ -139,7 +139,7 @@ let nativeSourceChooserOpenedAt = 0;
 let nativeSourcePreviewReported = false;
 let nativeSourceRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 let nativeSourceRefresh: { promise: Promise<void> } | undefined;
-let nativeThumbnailRefresh: { generation: number; promise: Promise<void> } | undefined;
+const nativeThumbnailRefresh = new Map<'window' | 'screen', { generation: number; promise: Promise<void> }>();
 const nativeSourceLoading = ref(false);
 const nativeSourceError = ref('');
 const captureSources = computed(() => captureRequest.value?.sources
@@ -161,8 +161,8 @@ async function loadNativeSourceThumbnails(
   generation: number,
   chooser: ReturnType<typeof createNativeVideoSourceSelection>,
 ) {
-  if (nativeThumbnailRefresh && nativeThumbnailRefresh.generation !== generation) await nativeThumbnailRefresh.promise;
-  if (!desktop || nativeThumbnailRefresh || document.hidden
+  const sourceType = captureSourceType.value;
+  if (!desktop || nativeThumbnailRefresh.get(sourceType)?.generation === generation || document.hidden
       || generation !== nativeSourceChooserGeneration || nativeSourceChooser !== chooser) return;
   const container = captureSourcesElement.value;
   if (!container) return;
@@ -190,9 +190,10 @@ async function loadNativeSourceThumbnails(
   }).catch((error) => {
     console.error('共享来源缩略图更新失败', error);
   });
-  nativeThumbnailRefresh = { generation, promise };
+  // 两个分类独立等待；旧选择器的结果仍由代次和来源身份隔离。
+  nativeThumbnailRefresh.set(sourceType, { generation, promise });
   try { await promise; }
-  finally { if (nativeThumbnailRefresh?.promise === promise) nativeThumbnailRefresh = undefined; }
+  finally { if (nativeThumbnailRefresh.get(sourceType)?.promise === promise) nativeThumbnailRefresh.delete(sourceType); }
 }
 
 async function refreshNativeSources(
@@ -381,12 +382,14 @@ async function changeScreenShareQuality(quality: ScreenShareQualityId,
     captureCustomQuality.value = snapshot;
     saveCapturePreferences(quality);
   }
+  return applied;
 }
 async function changeScreenShareAudio(enabled: boolean) {
   const mode = rtc.currentScreenShareAudioMode;
-  if (!await rtc.setScreenShareAudioEnabled(enabled)) return;
+  if (!await rtc.setScreenShareAudioEnabled(enabled)) return false;
   try { saveScreenShareAudioPreference(mode, enabled); }
   catch { viewerNotice.value = '本次声音设置已生效，但未能保存。'; }
+  return true;
 }
 const rtc = reactive(useRtcRoom({
   inputDeviceId: audioPreferences.inputDeviceId.value,
@@ -1188,9 +1191,11 @@ async function preloadCaptureSources() {
   captureIntentPending = (async () => {
     const snapshot = await desktop.listNativeVideoSources();
     if (appDisposed || document.hidden || !connected.value || rtc.room !== room || captureRequest.value || rtc.screenShareActive) return;
-    const sources = snapshot.sources.filter(source => source.kind === (sourceType === 'window' ? 'window' : 'monitor'));
+    const gameWindows = new Set(currentActivity.value?.type === 'GAME' ? currentActivity.value.windowIds : []);
+    const sources = snapshot.sources.filter(source => source.kind === (sourceType === 'window' ? 'window' : 'monitor'))
+      .sort((left, right) => Number(gameWindows.has(right.windowId ?? '')) - Number(gameWindows.has(left.windowId ?? '')));
     // 仅预取本机静态预览；正式选择器仍重新枚举身份并复用主进程的同一批请求。
-    await desktop.getNativeVideoSourceThumbnails(sources.slice(0, 128));
+    await desktop.getNativeVideoSourceThumbnails(sources.slice(0, 6));
   })().catch(error => console.warn('共享预览预加载失败', error));
   try { await captureIntentPending; }
   finally { captureIntentPending = undefined; }
@@ -1474,7 +1479,6 @@ function updateMicrophoneProcessing(enabled: boolean) {
 }
 function updateVoiceMode(mode: VoiceMode, opener: HTMLElement) {
   if (mode === 'pushToTalk' && !audioShortcuts.bindings.pushToTalk) {
-    audioShortcuts.error = '请先为按键发言设置快捷键';
     void openSettings('shortcuts', opener);
     return;
   }
@@ -1723,6 +1727,9 @@ function participantListening(participant: Participant) {
     <SettingsView v-if="settingsOpen" ref="settingsView" :blocked="Boolean(props.interactionBlocked || rtc.remoteControlRequest || !mainWindowVisible)" v-model:section="settingsSection" :user="user" :desktop="Boolean(desktop)"
       :audio-shortcuts="audioShortcuts" :call-sound-preferences="callSoundPreferences" :call-sounds="callSounds"
       :overlay="desktop ? voiceOverlay : undefined"
+      :share-quality="rtc.screenShareActive ? rtc.currentScreenShareQuality : captureQuality"
+      :custom-share-quality="rtc.screenShareActive ? rtc.currentCustomScreenShareQuality : captureCustomQuality"
+      :change-share-quality="changeScreenShareQuality" :change-share-audio="changeScreenShareAudio" :shared-audio="sharingAudio"
       :recording="recording" :preferences="audioPreferences" :audio-output="audioOutput" :rtc="rtc" :microphone-test="microphoneTest" :microphone-devices="microphoneDevices" :diagnostic-report="diagnosticReport" :input-level-percent="localInputLevelPercent"
       :activity="currentActivity" :presence-status="publicPresenceStatus" :show-activity="showActivity" :show-last-online="showLastOnline" :activity-error="activityVisibilityError || presenceSyncError"
       :presence-mode="presenceMode" :presence-ready="presenceReady" :presence-syncing="presenceSyncing"

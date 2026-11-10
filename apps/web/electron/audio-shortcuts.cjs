@@ -2,6 +2,8 @@ const { randomUUID } = require('node:crypto');
 
 const ACTIONS = ['microphone', 'listening', 'pushToTalk', 'replay'];
 const WM_HOTKEY = 0x0312;
+const SYMBOL_KEYS = { ';': 0xba, '=': 0xbb, ',': 0xbc, '-': 0xbd, '.': 0xbe, '/': 0xbf,
+  '`': 0xc0, '[': 0xdb, '\\': 0xdc, ']': 0xdd, "'": 0xde };
 
 function parseBinding(value) {
   if (value === '') return null;
@@ -12,10 +14,10 @@ function parseBinding(value) {
   if (modifiers.length !== parts.length || [...modifiers, key].join('+') !== value) throw new Error('快捷键格式无效');
   const functionKey = /^F(?:[1-9]|10|11)$/.test(key);
   if (value === 'Alt+F4') throw new Error('Alt+F4 用于关闭窗口，请使用其他组合');
-  if (!functionKey && (!/^[A-Z0-9]$/.test(key) || !modifiers.some(modifier => modifier === 'Ctrl' || modifier === 'Alt'))) {
-    throw new Error('请使用 Ctrl／Alt 加字母或数字，或 F1–F11');
+  if (!functionKey && !/^[A-Z0-9]$/.test(key) && !Object.hasOwn(SYMBOL_KEYS, key)) {
+    throw new Error('请选择字母、数字、常用符号或 F1–F11，也可搭配 Ctrl、Alt、Shift');
   }
-  return { key: functionKey ? 0x6f + Number(key.slice(1)) : key.charCodeAt(0),
+  return { key: functionKey ? 0x6f + Number(key.slice(1)) : SYMBOL_KEYS[key] ?? key.charCodeAt(0),
     modifiers: (parts.includes('Ctrl') ? 2 : 0) | (parts.includes('Alt') ? 1 : 0) | (parts.includes('Shift') ? 4 : 0) };
 }
 

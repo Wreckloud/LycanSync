@@ -7017,7 +7017,7 @@
 {"id":"1124353627511861259","name":"God Eater Resurrection","install_keys":["steam:460870"],"executables":[{"path":"god eater resurrection\\ger.exe","role":"game"}]},
 {"id":"1124353629382525039","name":"Tiny Tina's Assault on Dragon Keep: A Wonderlands One-shot Adventure","install_keys":[],"executables":[{"path":"redist\\dotnetfx40_client_x86_x64.exe","role":"game"}]},
 {"id":"1124353631152517270","name":"Octarina","install_keys":["steam:1503280"],"executables":[{"path":"win64\\octarina-win64-shipping.exe","role":"game"}]},
-{"id":"1124353632758939688","name":"Krita","install_keys":["steam:280680"],"executables":[{"path":"bin\\krita.exe","role":"game"}]},
+{"id":"1124353632758939688","name":"Krita","install_keys":["steam:280680"],"executables":[{"path":"bin\\krita.exe","role":"application"},{"path":"krita.exe","role":"application"}]},
 {"id":"1124353634415693905","name":"Idling to Rule the Gods","install_keys":["steam:466170"],"executables":[{"path":"idling to rule the gods\\idling to rule the gods.exe","role":"game"}]},
 {"id":"1124353636068241428","name":"Draw & Guess","install_keys":["steam:1483870"],"executables":[{"path":"draw & guess\\draw&guess.exe","role":"game"}],"name_zh_cn":"Draw & Guess - 你画我猜","display_name":"你画我猜"},
 {"id":"1124353637674664018","name":"Tainted Grail: Conquest","install_keys":["steam:1199030"],"executables":[{"path":"tainted grail\\tainted grail.exe","role":"game"}],"name_zh_cn":"Tainted Grail: Conquest (污痕圣杯)","display_name":"(污痕圣杯)"},

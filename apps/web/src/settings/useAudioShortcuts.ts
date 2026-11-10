@@ -4,12 +4,15 @@ export type AudioShortcutAction = 'microphone' | 'listening' | 'pushToTalk' | 'r
 export type VoiceMode = 'voice' | 'pushToTalk';
 export type AudioShortcutBindings = Record<AudioShortcutAction, string>;
 
+const SYMBOL_KEYS: Record<string, string> = { Semicolon: ';', Equal: '=', Comma: ',', Minus: '-', Period: '.',
+  Slash: '/', Backquote: '`', BracketLeft: '[', Backslash: '\\', BracketRight: ']', Quote: "'" };
+
 export function shortcutFromKey(event: Pick<KeyboardEvent, 'code' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey'>): string {
   if (event.metaKey) throw new Error('Windows 键组合由系统保留，请使用其他组合');
   const key = /^Key[A-Z]$/.test(event.code) ? event.code.slice(3)
     : /^Digit[0-9]$/.test(event.code) ? event.code.slice(5)
-    : /^F(?:[1-9]|10|11)$/.test(event.code) ? event.code : '';
-  if (!key || (!/^F(?:[1-9]|10|11)$/.test(key) && !event.ctrlKey && !event.altKey)) throw new Error('请使用 Ctrl／Alt 加字母或数字，或 F1–F11');
+    : /^F(?:[1-9]|10|11)$/.test(event.code) ? event.code : Object.hasOwn(SYMBOL_KEYS, event.code) ? SYMBOL_KEYS[event.code] : '';
+  if (!key) throw new Error('请选择字母、数字、常用符号或 F1–F11，也可搭配 Ctrl、Alt、Shift');
   if (key === 'F4' && event.altKey && !event.ctrlKey && !event.shiftKey) throw new Error('Alt+F4 用于关闭窗口，请使用其他组合');
   return [...(event.ctrlKey ? ['Ctrl'] : []), ...(event.altKey ? ['Alt'] : []), ...(event.shiftKey ? ['Shift'] : []), key].join('+');
 }
@@ -47,7 +50,7 @@ export function useAudioShortcuts(userId: string, options: {
     const stored = storage.getItem(storageKey);
     if (stored !== null) {
       const parsed = JSON.parse(stored);
-      const pattern = /^(?:(?:Ctrl\+)?(?:Alt\+)?(?:Shift\+)?(?:F[1-9]|F10|F11)|(?:(?:Ctrl\+)(?:Alt\+)?(?:Shift\+)?|Alt\+(?:Shift\+)?)[A-Z0-9])$/;
+      const pattern = /^(?:Ctrl\+)?(?:Alt\+)?(?:Shift\+)?(?:F[1-9]|F10|F11|[A-Z0-9;'",./\\\[\]\x60=-])$/;
       if (!parsed || ['microphone', 'listening'].some(action => typeof parsed[action] !== 'string'
           || (parsed[action] !== '' && !pattern.test(parsed[action])))
           || (parsed.microphone && parsed.microphone === parsed.listening)) throw new Error('invalid shortcut preferences');

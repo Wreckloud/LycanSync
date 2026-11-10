@@ -18,6 +18,7 @@ function fixture() {
   ] })), getNativeVideoSourceThumbnails: vi.fn(async (_sources: unknown[]) => []) };
   const realm = { desktop, appDisposed: false, document: { hidden: false }, connected: { value: true },
     captureRequest: { value: null as object | null }, rtc: { room: {}, screenShareActive: false },
+    currentActivity: { value: null as { type: string; windowIds: string[] } | null },
     lastCaptureSourceType: 'screen', console: { warn: vi.fn() }, Date };
   const preload = runInNewContext(`${code}\npreloadCaptureSources`, realm) as () => Promise<void>;
   return { realm, desktop, preload };
@@ -53,4 +54,17 @@ it('枚举期间离开原房间，迟到结果不继续抓取画面', async () =
   });
   await f.preload();
   expect(f.desktop.getNativeVideoSourceThumbnails).not.toHaveBeenCalled();
+});
+
+it('预取优先正在玩的窗口且只请求首屏数量，不让后台窗口先占预览预算', async () => {
+  const f = fixture();
+  f.realm.lastCaptureSourceType = 'window';
+  f.realm.currentActivity.value = { type: 'GAME', windowIds: ['19'] };
+  f.desktop.listNativeVideoSources.mockResolvedValue({ sources: Array.from({ length: 20 }, (_, index) => ({
+    sourceId: `window:${index}:1`, kind: 'window', windowId: String(index),
+  })) });
+  await f.preload();
+  const requested = f.desktop.getNativeVideoSourceThumbnails.mock.calls[0]![0] as { sourceId: string }[];
+  expect(requested).toHaveLength(6);
+  expect(requested[0]!.sourceId).toBe('window:19:1');
 });

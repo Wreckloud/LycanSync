@@ -128,8 +128,9 @@ test('OBS 真实来源纹理经生产入口到页面轨道，重复停止及故�
     assert.equal(code, 0, details);
     assert.equal(result.ok, true, details);
     assert.equal(result.helperClosed, true, details);
-    const expectedCases = process.env.LYCANSYNC_CAPTURE_APPLICATION_CHECK === '1'
-      ? (process.env.LYCANSYNC_CAPTURE_APPLICATION_WINDOW_ID ? 1 : 2)
+    const repeatModes = ['cold', 'prewarmed', 'restart'];
+    const expectedCases = process.env.LYCANSYNC_CAPTURE_REPEAT_CHECK === '1' ? repeatModes.length : process.env.LYCANSYNC_CAPTURE_APPLICATION_CHECK === '1'
+      ? (process.env.LYCANSYNC_CAPTURE_APPLICATION_WINDOW_ID ? Number(process.env.LYCANSYNC_CAPTURE_APPLICATION_REPEATS ?? 1) : 2)
       : process.env.LYCANSYNC_CAPTURE_RESOURCE_CHECK === '1' || process.env.LYCANSYNC_CAPTURE_QUALITY_CHECK === '1'
         || process.env.LYCANSYNC_CAPTURE_WINDOW_CHECK === '1' || process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1' ? 1 : 6;
     assert.equal(result.cases.length, expectedCases, details);
@@ -145,9 +146,13 @@ test('OBS 真实来源纹理经生产入口到页面轨道，重复停止及故�
       assert.ok(result.cases.every((entry) => entry.freshPixelsChecked && entry.hostRetained), details);
     }
     if (process.env.LYCANSYNC_CAPTURE_APPLICATION_CHECK === '1' && process.env.LYCANSYNC_CAPTURE_APPLICATION_WINDOW_ID) {
-      assert.equal(result.cases[0].occlusionChecked, true, details);
+      assert.ok(result.cases.every(entry => entry.occlusionChecked === (Number(process.env.LYCANSYNC_CAPTURE_APPLICATION_REPEATS ?? 1) === 1)
+        && entry.hostRetained), details);
     }
-    if (process.env.LYCANSYNC_CAPTURE_WINDOW_CHECK === '1' || process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1') {
+    if (process.env.LYCANSYNC_CAPTURE_REPEAT_CHECK === '1') {
+      assert.deepEqual(result.cases.map(entry => entry.mode), repeatModes, details);
+      assert.ok(result.cases.every(entry => entry.freshPixelsChecked && entry.hostRetained), details);
+    } else if (process.env.LYCANSYNC_CAPTURE_WINDOW_CHECK === '1' || process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1') {
       assert.equal(result.cases[0].mode, process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1' ? 'controlled-d3d-game' : 'window', details);
       assert.equal(result.cases[0].actualMethod, process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1' ? 'game'
         : process.env.LYCANSYNC_CAPTURE_WINDOW_WGC === '1' ? 'wgc-window' : 'bitblt-window', details);

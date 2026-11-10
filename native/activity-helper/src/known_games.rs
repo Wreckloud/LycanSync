@@ -8,6 +8,7 @@ use crate::detection::normalize_path;
 #[serde(rename_all = "snake_case")]
 pub enum ExecutableRole {
     Game,
+    Application,
     Client,
     Launcher,
 }
@@ -30,6 +31,12 @@ pub struct KnownGame {
 }
 
 impl KnownGame {
+    pub fn has_game_executable(&self) -> bool {
+        self.executables
+            .iter()
+            .any(|rule| rule.role == ExecutableRole::Game)
+    }
+
     pub fn display_name<'a>(&'a self, installed_name: Option<&'a str>) -> &'a str {
         self.display_name
             .as_deref()

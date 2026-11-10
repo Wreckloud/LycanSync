@@ -39,6 +39,49 @@ async function mockChatShell(page: Page) {
   await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 0, participants: [] } }));
 }
 
+test('长文本输入和清空平滑伸缩，发送后随输入框收起完整抵达最新消息', async ({ page }) => {
+  await mockChatShell(page);
+  await page.setViewportSize({ width: 1000, height: 720 });
+  const initial = Array.from({ length: 65 }, (_, index) => chatMessage(index + 1));
+  let outgoing = '';
+  let sent = 65;
+  await page.route('**/api/groups**', route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
+    if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (url.pathname.endsWith('/messages')) {
+      if (route.request().method() === 'POST') return route.fulfill({ json: { ...chatMessage(++sent), content: outgoing } });
+      return route.fulfill({ json: { messages: url.searchParams.has('after') ? [] : initial, hasMore: false } });
+    }
+    return route.fulfill({ status: 404 });
+  });
+  await page.goto('/');
+  const list = page.locator('.message-list');
+  const input = page.getByRole('textbox', { name: '消息内容', exact: true });
+  await expect.poll(() => list.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(1);
+  for (const content of ['长文本内容测试。'.repeat(180), Array.from({ length: 35 }, (_, index) => `第 ${index + 1} 行：发送完成后显示到最后一行。`).join('\n'), '短消息']) {
+    outgoing = content;
+    const heights = await input.evaluate(async (element, text) => {
+      const textarea = element as HTMLTextAreaElement;
+      textarea.value = text;
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      const heights: number[] = [];
+      for (let frame = 0; frame < 18; frame++) {
+        await new Promise(requestAnimationFrame);
+        heights.push(textarea.getBoundingClientRect().height);
+      }
+      return heights;
+    }, content);
+    if (content.length > 100) expect(heights.some(height => height > 42 && height < 122)).toBe(true);
+    await page.getByRole('button', { name: '发送消息', exact: true }).click();
+    await expect(input).toHaveValue('');
+    await expect(input).toHaveCSS('height', '42px');
+    await expect(list.locator('.chat-message-content').last()).toHaveText(content);
+    await expect.poll(() => list.evaluate(element => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(1);
+    await expect(page.locator('.chat-jump')).toHaveCount(0);
+  }
+});
+
 test('首次加载、读取失败和空会话分开反馈，重试共用当前读取流程', async ({ page }) => {
   await mockChatShell(page);
   let release!: () => void;

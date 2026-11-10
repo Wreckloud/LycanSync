@@ -3,7 +3,7 @@ export const SETTINGS_SECTIONS = [
   { id: 'audio', title: '语音与音频' },
   { id: 'sound', title: '音效' },
   { id: 'shortcuts', title: '快捷键' },
-  { id: 'recording', title: '录制' },
+  { id: 'recording', title: '共享与录制' },
   { id: 'overlay', title: '屏幕覆盖' },
   { id: 'client', title: '客户端' },
   { id: 'about', title: '关于与诊断' },

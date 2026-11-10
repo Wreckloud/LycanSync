@@ -657,6 +657,23 @@ test('failed source refresh invalidates the previous snapshot', async () => {
   await manager.shutdown();
 });
 
+test('menu preload and picker share one pending enumeration, then allow a fresh snapshot', async () => {
+  const { manager, children } = createManager({ holdVideoSources: true });
+  try {
+    const first = manager.listVideoSources();
+    const second = manager.listVideoSources();
+    assert.equal(first, second);
+    await waitUntil(() => children[0]?.requests.some(request => request.command === 'listVideoSources'));
+    const child = children[0];
+    const request = child.requests.find(request => request.command === 'listVideoSources');
+    child.writeResponse({ event: 'videoSources', protocolVersion: 1, requestId: request.requestId, revision: 1, sources: [] });
+    assert.equal(await first, await second);
+    child.mode.holdVideoSources = false;
+    await manager.listVideoSources();
+    assert.equal(child.commands.filter(command => command === 'listVideoSources').length, 2);
+  } finally { await manager.shutdown(); }
+});
+
 test('source ids expire when the lazy helper is reclaimed and do not start a replacement', async () => {
   const { manager, children } = createManager({}, { idleTimeoutMs: 15 });
   const sources = await manager.listVideoSources();

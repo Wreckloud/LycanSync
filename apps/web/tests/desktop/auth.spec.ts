@@ -95,7 +95,7 @@ test('快捷键真实桌面桥接：初始化、模式切换和重启恢复不�
     await binding.click();
     await binding.press('Control+Alt+Shift+F10');
     await expect(binding).toHaveText('Ctrl+Alt+Shift+F10');
-    await page.getByRole('combobox', { name: '发言模式', exact: true }).selectOption('pushToTalk');
+    await page.getByRole('group', { name: '发言模式', exact: true }).getByRole('button', { name: /^按键说话/ }).click();
     await expect(page.locator('.shortcut-settings [role="alert"]')).toHaveCount(0);
     await expect.poll(() => application!.evaluate(({ globalShortcut }) => {
       // 同进程另一注册入口也应被已生效的原生绑定拒绝，不能仅检查界面文本。
@@ -111,9 +111,9 @@ test('快捷键真实桌面桥接：初始化、模式切换和重启恢复不�
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('window:visibility', true));
     await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible();
     await openShortcuts();
-    await expect(page.getByRole('combobox', { name: '发言模式', exact: true })).toHaveValue('pushToTalk');
+    await expect(page.getByRole('group', { name: '发言模式', exact: true }).getByRole('button', { name: /^按键说话/ })).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByRole('button', { name: '设置保存即时回放快捷键', exact: true })).toHaveText('Ctrl+Alt+Shift+F10');
-    await page.getByRole('combobox', { name: '发言模式', exact: true }).selectOption('voice');
+    await page.getByRole('group', { name: '发言模式', exact: true }).getByRole('button', { name: '自由发言', exact: true }).click();
     await expect(page.locator('.shortcut-settings [role="alert"]')).toHaveCount(0);
     expect(errors).toEqual([]);
   } finally { await application?.close(); await api.close(); }

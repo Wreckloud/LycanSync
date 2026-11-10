@@ -20,7 +20,7 @@ function executableRule(entry, role) {
       || path.split('\\').some((part) => !part || part === '.' || part === '..')) {
     throw new Error(`无效的程序路径规则：${path}`);
   }
-  if (!['game', 'client', 'launcher'].includes(role)) throw new Error('无效的程序角色');
+  if (!['game', 'application', 'client', 'launcher'].includes(role)) throw new Error('无效的程序角色');
   return { path, role, ...(entry.arguments == null ? {}
     : { arguments: checkedText(entry.arguments, '参数条件', 1024) }) };
 }

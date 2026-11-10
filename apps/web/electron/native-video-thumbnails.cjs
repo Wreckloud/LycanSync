@@ -47,34 +47,47 @@ function monitorDisplayId(source, screen) {
   return String(display.id);
 }
 
-// 一次 Electron 抓取已包含同类所有窗口；短暂复用，避免滚动或重开重复整批等待。
+// 一次 Electron 抓取包含同类所有窗口。按请求中的窗口校验，未变化的短期预览先显示、后台刷新。
 function createNativeThumbnailCache(now = Date.now) {
   let owner;
   const batches = new Map();
-  return async (state, kind, sources, capture) => {
+  const sameSource = (before, source) => before && before.title === source.title && before.windowId === source.windowId
+    && before.displayId === source.displayId && before.width === source.width && before.height === source.height;
+  return async (state, kind, sources, capture, requestedIds = new Set(sources.map(source => source.sourceId))) => {
     if (owner !== state) { owner = state; batches.clear(); }
     let batch = batches.get(kind);
-    if (!batch || now() - batch.createdAt >= 10_000 || sources.some(source => {
-      const previous = batch.sources.get(source.sourceId);
-      return !previous || previous.title !== source.title || previous.windowId !== source.windowId
-        || previous.displayId !== source.displayId || previous.width !== source.width || previous.height !== source.height;
-    })) {
-      batch = { createdAt: now(), sources: new Map(sources.map(source => [source.sourceId, source])) };
-      batch.promise = Promise.resolve().then(capture).then(desktopSources => {
-        batch.createdAt = now();
-        return matchNativeVideoSourceThumbnails([...batch.sources.values()], desktopSources);
-      });
-      batches.set(kind, batch);
-      batch.promise.catch(() => { if (batches.get(kind) === batch) batches.delete(kind); });
-    }
-    const thumbnails = await batch.promise;
-    if (owner !== state) return [];
-    const current = new Map(sources.map(source => [source.sourceId, source]));
-    return thumbnails.filter(({ sourceId }) => {
-      const previous = batch.sources.get(sourceId), source = current.get(sourceId);
-      return source && previous.title === source.title && previous.windowId === source.windowId
-        && previous.displayId === source.displayId && previous.width === source.width && previous.height === source.height;
+    if (!batch) { batch = {}; batches.set(kind, batch); }
+    const byId = new Map(sources.map(source => [source.sourceId, source]));
+    const requested = [...requestedIds].flatMap(id => byId.has(id) ? [byId.get(id)] : []);
+    const current = new Map(requested.map(source => [source.sourceId, source]));
+    const matching = snapshot => snapshot.thumbnails.filter(({ sourceId }) => {
+      const source = current.get(sourceId);
+      return source && sameSource(snapshot.sources.get(sourceId), source);
     });
+    const previous = batch.snapshot;
+    if (previous && now() - previous.createdAt < 10_000
+        && requested.every(source => sameSource(previous.sources.get(source.sourceId), source)
+          && (previous.requestedIds.has(source.sourceId)
+            || previous.thumbnails.some(thumbnail => thumbnail.sourceId === source.sourceId)))) return matching(previous);
+    if (!batch.pending) {
+      const snapshotSources = new Map(sources.map(source => [source.sourceId, source]));
+      const pending = Promise.resolve().then(capture).then(desktopSources => {
+        const snapshot = { sources: snapshotSources, requestedIds: new Set(requestedIds), createdAt: now(),
+          // 编码与缓存有总量上限，先保留用户正在查看的来源，避免被后台窗口占满。
+          thumbnails: matchNativeVideoSourceThumbnails([...requested,
+            ...sources.filter(source => !requestedIds.has(source.sourceId))], desktopSources) };
+        if (owner === state && batches.get(kind) === batch) batch.snapshot = snapshot;
+        return snapshot;
+      }).finally(() => { if (batch.pending === pending) batch.pending = undefined; });
+      batch.pending = pending;
+      // 返回缓存时仍保留失败处理；缺少预览的调用方会等待并收到原始异常。
+      void pending.catch(error => console.warn('共享缩略图刷新失败', error.message));
+    }
+    const cached = previous && now() - previous.createdAt < 60_000 ? matching(previous) : [];
+    // 一个新窗口缺图不应拖住其他窗口；缺图由选择器现有的有界刷新继续补齐。
+    if (cached.length) return cached;
+    const snapshot = await batch.pending;
+    return owner === state ? matching(snapshot) : [];
   };
 }
 

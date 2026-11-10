@@ -48,6 +48,7 @@ class MediaHelperManager {
     this.closing = false;
     this.lastError = undefined;
     this.videoSourceSnapshot = undefined;
+    this.videoSourceRequest = undefined;
     // 此处只持有来源身份；实际画面和共享声音均由 OBS 宿主持有。
     this.videoCapture = undefined;
     this.videoCaptureStart = undefined;
@@ -84,7 +85,18 @@ class MediaHelperManager {
     }
   }
 
-  async listVideoSources() {
+  listVideoSources() {
+    if (this.closing) return Promise.reject(new Error('mediaHelperShuttingDown'));
+    // 菜单预加载与选择器打开可同时到达，共用一次枚举，避免阻塞后续来源确认。
+    if (this.videoSourceRequest) return this.videoSourceRequest;
+    const request = this.queryVideoSources().finally(() => {
+      if (this.videoSourceRequest === request) this.videoSourceRequest = undefined;
+    });
+    this.videoSourceRequest = request;
+    return request;
+  }
+
+  async queryVideoSources() {
     const state = await this.ensureStarted();
     this.clearIdleTimer();
     try {

@@ -171,6 +171,11 @@ function syncChatLayout() {
   previousTopPadding = padding;
   if (previousHeight === undefined) { lastScrollTop = element.scrollTop; return false; }
   if (height === previousHeight && Math.abs(paddingDelta) < 0.01) return false;
+  // 输入框收起与新消息滚动可同时进行，不能用位置补偿打断正在跟随最新消息的滚动。
+  if (followingScroll.value) {
+    void scrollToBottom('smooth', true);
+    return true;
+  }
   // 顶部留白只增加可滚动范围；底部控制栏改变高度时，消息与输入框一起移动。
   const target = atBottom.value ? element.scrollHeight - height : Math.max(0,
     Math.min(element.scrollHeight - height, lastScrollTop + layoutScrollRemainder + paddingDelta + previousHeight - height));
@@ -512,10 +517,18 @@ function handleKeydown(event: KeyboardEvent) {
   }
 }
 
-function resizeMessageInput(event: Event) {
-  const element = event.target as HTMLTextAreaElement;
+function resizeMessageInput() {
+  const element = messageInput.value;
+  if (!element) return;
+  const height = element.getBoundingClientRect().height;
+  // 测量自然高度时暂时关闭过渡，再从当前显示高度平滑到新高度，支持中途继续输入。
+  element.style.transition = 'none';
   element.style.height = '42px';
-  element.style.height = `${Math.min(element.scrollHeight, 122)}px`;
+  const target = Math.min(element.scrollHeight, 122);
+  element.style.height = `${height}px`;
+  void element.offsetHeight;
+  element.style.transition = '';
+  element.style.height = `${target}px`;
 }
 
 async function submit() {
@@ -568,7 +581,8 @@ async function submit() {
         clearPendingAttachments();
       }
     }
-    if (messageInput.value) messageInput.value.style.height = '42px';
+    await nextTick();
+    if (!disposed) resizeMessageInput();
     consecutiveEmptyPolls = 0;
     scheduleRefresh();
   } catch (reason) {
@@ -670,6 +684,11 @@ function onScroll() {
 
 function onScrollEnd() {
   syncChatLayout();
+  const element = list.value;
+  if (followingScroll.value && element && element.scrollHeight - element.clientHeight - element.scrollTop > 1) {
+    void scrollToBottom('smooth', true);
+    return;
+  }
   followingScroll.value = false;
   jumpingToUnread = false;
   atBottom.value = isAtBottom();
@@ -741,7 +760,8 @@ onScopeDispose(() => {
     </div>
     <div class="chat-timeline" :class="{ 'has-composer-feedback': Boolean(error) }">
       <div ref="list" class="message-list" :class="{ 'group-content-ready': initialLoaded }"
-        @scroll="onScroll" @scrollend="onScrollEnd" @wheel="onWheel" @pointerdown="cancelScrollFollow">
+        @scroll="onScroll" @scrollend="onScrollEnd" @wheel="onWheel" @pointerdown="cancelScrollFollow"
+        @keydown="['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes($event.key) && cancelScrollFollow()">
         <div v-if="!initialLoaded && (pollError || initialLoadingHint)" class="chat-initial-state" :class="{ 'is-empty': !messages.length }">
           <template v-if="pollError">
             <p class="chat-read-error" role="alert">{{ pollError }}</p>

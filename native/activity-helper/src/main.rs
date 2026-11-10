@@ -84,9 +84,9 @@ fn main() {
                 write_message(json!({ "requestId": request_id, "error": "采集程序身份无效。" }));
             } else {
                 write_message(json!({ "requestId": request_id,
-                    "game": detection::is_capture_game(&executable, &games, &mappings) }));
+                    "game": detection::is_capture_game(&executable, &games) }));
             }
-            // 只查询已有清单与映射，不扫描窗口、不改变当前动态或采集资源。
+            // 只查询已知游戏规则与安装清单，显示名称映射不决定采集方式。
             continue;
         }
         if let Some(Command::Configure {
@@ -104,10 +104,10 @@ fn main() {
         }
         let processes = process_snapshot(&mut system);
         let list_windows = matches!(command, Some(Command::Windows { .. }));
-        // 自动检测只读指定播放器/用户所选程序的标题；完整清单只在设置中主动请求。
+        // 只枚举候选游戏、播放器及用户指定程序的窗口；自动游戏也需窗口身份用于快速共享。
         let wanted_pids = processes
             .iter()
-            .filter(|process| list_windows || detection::needs_window(process, &mappings))
+            .filter(|process| list_windows || detection::needs_window(process, &games, &mappings))
             .map(|process| process.pid)
             .collect();
         let windows = match windows::snapshot(&wanted_pids) {

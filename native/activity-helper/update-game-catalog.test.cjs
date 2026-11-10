@@ -26,6 +26,12 @@ test('仅导入 Windows，保留参数条件并由数据修正客户端角色与
   ]);
 });
 
+test('普通应用修正保留动态规则，后续更新不重新标为游戏程序', () => {
+  const source = application([{ os: 'win32', name: 'bin/krita.exe' }]);
+  const [game] = buildCatalog([source], { 123: { executables: [{ name: 'bin/krita.exe', role: 'application' }] } });
+  assert.deepEqual(game.executables, [{ path: 'bin\\krita.exe', role: 'application' }]);
+});
+
 test('拒绝无效路径、重复 ID 和已失去上游身份的修正', () => {
   for (const name of ['../game.exe', 'C:/game.exe', 'folder//game.exe', '*.exe']) {
     assert.throws(() => buildCatalog([application([{ os: 'win32', name }])], {}), /无效/);

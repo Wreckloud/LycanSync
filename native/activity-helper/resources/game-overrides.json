@@ -1,4 +1,11 @@
 {
+  "1124353632758939688": {
+    "note": "Krita 是绘图软件，保留动态识别但使用普通窗口采集，避免游戏 Hook 首帧超时。",
+    "executables": [
+      { "name": "bin/krita.exe", "role": "application" },
+      { "name": "krita.exe", "role": "application" }
+    ]
+  },
   "1402418696126992445": {
     "nameZhCn": "英雄联盟",
     "note": "沿用原有大厅动态；大厅不是游戏捕获目标。",

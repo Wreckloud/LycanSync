@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onScopeDispose, ref, watch, type UnwrapNestedRefs } from 'vue';
 import InlineFeedback from '../InlineFeedback.vue';
+import VoiceModeSwitch from '../VoiceModeSwitch.vue';
 import { shortcutFromKey, type AudioShortcutAction, type useAudioShortcuts } from '../../settings/useAudioShortcuts';
 
 const props = defineProps<{ active: boolean; shortcuts: UnwrapNestedRefs<ReturnType<typeof useAudioShortcuts>> }>();
@@ -35,11 +36,8 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
     <section class="settings-block">
       <div class="voice-mode-row">
         <h2>发言模式</h2>
-        <select aria-label="发言模式" :value="shortcuts.voiceMode" :disabled="shortcuts.busy"
-          @change="shortcuts.setVoiceMode(($event.target as HTMLSelectElement).value as 'voice' | 'pushToTalk')">
-          <option value="voice">自由发言</option>
-          <option value="pushToTalk" :disabled="!shortcuts.supported || !shortcuts.ready">按键说话</option>
-        </select>
+        <VoiceModeSwitch :model-value="shortcuts.voiceMode" :binding="shortcuts.bindings.pushToTalk" :disabled="shortcuts.busy"
+          :push-to-talk-disabled="!shortcuts.supported || !shortcuts.ready" @update:model-value="shortcuts.setVoiceMode" />
       </div>
       <small>先设置快捷键，并在通话中开启麦克风。按住时说话，松开后静音；手动静音、停止收听或离开语音后不会发声。</small>
     </section>
@@ -53,13 +51,14 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
             @click="shortcuts.startCapture(action.id)" @blur="shortcuts.cancelCapture()"
             @keydown="shortcuts.capturing === action.id && (keyDown($event), $event.preventDefault(), $event.stopPropagation())"
             @keyup="shortcuts.capturing === action.id && (keyUp(action.id, $event), $event.preventDefault(), $event.stopPropagation())">
-            {{ shortcuts.capturing === action.id ? draft || '按下组合键，Esc 取消' : shortcuts.bindings[action.id] || '未设置' }}
+            {{ shortcuts.capturing === action.id ? draft || '按下按键，Esc 取消' : shortcuts.bindings[action.id] || '未设置' }}
           </button>
           <button type="button" :disabled="!shortcuts.supported || shortcuts.busy || !shortcuts.bindings[action.id]"
             :aria-label="`清除${action.label}快捷键`" @click="shortcuts.setBinding(action.id, '')">清除</button>
         </div>
       </div>
-      <small>支持 Ctrl／Alt 加字母或数字，以及 F1–F11，不支持 Windows 保留键。松开后保存，长按不会重复触发。</small>
+      <small>支持字母、数字、常用符号和 F1–F11，也可搭配 Ctrl、Alt、Shift。松开后保存，长按不会重复触发。</small>
+      <small>单键是全局快捷键，打字或游戏中按下也会触发，可能与其他按键操作冲突。</small>
       <InlineFeedback :message="keyError || shortcuts.error" />
       <button v-if="shortcuts.error && shortcuts.supported" type="button" :disabled="shortcuts.busy" @click="shortcuts.retry()">重新启用</button>
     </section>
@@ -71,5 +70,5 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
 .shortcut-setting-row .settings-actions { margin: 0; }
 .shortcut-binding { width: 208px; flex: 0 0 208px; white-space: nowrap; }
 .voice-mode-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.voice-mode-row select { width: 128px; }
+.voice-mode-row .voice-mode-switch { width: 280px; max-width: 70%; }
 </style>

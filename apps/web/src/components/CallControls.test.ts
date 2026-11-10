@@ -29,12 +29,13 @@ function setup(width = 1280, right = 1000) {
   const scope = effectScope();
   // 执行正式菜单回调，仅替换 DOM 边界；不连接房间、采集或启动客户端。
   const controls = scope.run(() => runInNewContext(`${compiled}\n({ root, menu, qualityOpen, qualityPlacement,
-    changeVoiceMode, toggleMenu, toggleQuality, chooseQuality, escape, dismiss, dismissAfterFocus, prepareShare, scheduleShareIntent, cancelShareIntent })`, {
+    changeVoiceMode, missingTalkBinding, openShortcutSettings, toggleMenu, toggleQuality, chooseQuality, escape, dismiss, dismissAfterFocus, prepareShare, scheduleShareIntent, cancelShareIntent })`, {
     setTimeout, clearTimeout,
     ref, watch, nextTick, onScopeDispose, document, window, onMounted: () => {}, defineProps: () => props,
     withDefaults: (value: unknown) => value, defineEmits: () => emit, DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY,
   })) as { root: Ref<unknown>; menu: Ref<string | null>; qualityOpen: Ref<boolean>; qualityPlacement: Ref<string>;
     changeVoiceMode(mode: string): void;
+    missingTalkBinding: Ref<boolean>; openShortcutSettings(): void;
     toggleMenu(kind: string, event: unknown): Promise<void>; toggleQuality(): Promise<void>; chooseQuality(id: string): void;
     escape(event: unknown): void; dismiss(event: unknown): void; dismissAfterFocus(event: unknown): void;
     prepareShare(): void; scheduleShareIntent(): void; cancelShareIntent(): void };
@@ -171,12 +172,17 @@ it('共享菜单仅在回放已开启时提供保存，正在录像不限制保�
   }
 });
 
-it('未绑定按键时收起菜单再交给设置入口，已绑定时留在菜单，忙碌或不支持时不切换', async () => {
+it('未绑定时仅展开就近提示，点击提示才进入设置，关闭后清除提示', async () => {
   const f = setup();
   try {
     await f.controls.toggleMenu('microphone', { currentTarget: f.opener });
     f.controls.changeVoiceMode('pushToTalk');
+    expect(f.controls.menu.value).toBe('microphone');
+    expect(f.controls.missingTalkBinding.value).toBe(true);
+    expect(f.emit).not.toHaveBeenCalled();
+    f.controls.openShortcutSettings();
     expect(f.controls.menu.value).toBeNull();
+    expect(f.controls.missingTalkBinding.value).toBe(false);
     expect(f.emit).toHaveBeenLastCalledWith('voiceMode', 'pushToTalk', f.opener);
     f.props.pushToTalkBinding = 'F2';
     await f.controls.toggleMenu('microphone', { currentTarget: f.opener });

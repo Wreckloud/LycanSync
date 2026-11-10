@@ -1827,7 +1827,7 @@ ipcMain.handle('media:video-source-thumbnails', async (event, sources) => {
           thumbnail: { isEmpty: () => source.thumbnail.isEmpty(),
             toDataURL: () => 'data:image/jpeg;base64,' + source.thumbnail.toJPEG(80).toString('base64') },
         }));
-      });
+      }, new Set(sources.filter(source => source.kind === kind).map(source => source.sourceId)));
     }));
     if (mediaHelper.videoSourceSnapshot?.state !== state || !state.alive || state.closed) return [];
     const requested = new Set(sources.filter(source => {

@@ -25,6 +25,8 @@ import type { useAudioShortcuts } from '../settings/useAudioShortcuts';
 import type { useCallSoundPreferences } from '../settings/useCallSoundPreferences';
 import type { useCallSounds } from '../rtc/useCallSounds';
 import RecordingSettings from './settings/RecordingSettings.vue';
+import ScreenShareSettings from './settings/ScreenShareSettings.vue';
+import type { CustomScreenShareQuality, ScreenShareQualityId } from '../rtc/screenShareQuality';
 import type { useRecording } from '../recording/useRecording';
 import { SETTINGS_SECTIONS, settingsSectionTitle, type SettingsSectionId } from '../settings/settingsSections';
 import type { UserActivity, UserPresenceStatus } from '../presence/presenceApi';
@@ -39,6 +41,11 @@ const props = defineProps<{
   callSoundPreferences: ReturnType<typeof useCallSoundPreferences>;
   callSounds: ReturnType<typeof useCallSounds>;
   recording?: ReturnType<typeof useRecording>;
+  shareQuality: ScreenShareQualityId;
+  customShareQuality: CustomScreenShareQuality;
+  sharedAudio: boolean;
+  changeShareQuality: (quality: ScreenShareQualityId, custom?: CustomScreenShareQuality) => Promise<boolean>;
+  changeShareAudio: (enabled: boolean) => Promise<boolean>;
   overlay?: ReturnType<typeof useVoiceOverlay>;
   preferences: ReturnType<typeof useAudioPreferences>;
   rtc: UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>;
@@ -150,7 +157,11 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
           :preferences="callSoundPreferences" :sounds="callSounds" />
         <ShortcutSettings v-show="activeSection === 'shortcuts'" :active="activeSection === 'shortcuts'" :shortcuts="audioShortcuts" />
         <OverlaySettings v-if="desktop && overlay" v-show="activeSection === 'overlay'" :overlay="overlay" :active="activeSection === 'overlay'" />
-        <RecordingSettings v-if="recording" v-show="activeSection === 'recording'" :recording="recording" :desktop="desktop" :sharing="rtc.screenShareActive" />
+        <div v-if="recording" v-show="activeSection === 'recording'" class="settings-recording-page">
+          <ScreenShareSettings v-if="desktop" :active="activeSection === 'recording'" :rtc="rtc" :shared-audio="sharedAudio" :quality="shareQuality" :custom-quality="customShareQuality"
+            :change-quality="changeShareQuality" :change-audio="changeShareAudio" />
+          <RecordingSettings :recording="recording" :desktop="desktop" :sharing="rtc.screenShareActive" />
+        </div>
         <ClientSettings ref="clientSettings" v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'" :user-id="user.id" />
         <AboutSettings v-show="activeSection === 'about'" :active="activeSection === 'about'" :rtc="rtc" :report="diagnosticReport" />
       </div>
@@ -159,6 +170,7 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
 </template>
 
 <style scoped>
+.settings-recording-page { display: grid; gap: 24px; }
 .settings-view {
   position: fixed;
   z-index: 3;
