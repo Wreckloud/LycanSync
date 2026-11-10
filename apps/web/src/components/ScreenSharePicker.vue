@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref, useId, watch } from 'vue';
 import { ChevronRight, Monitor } from '@lucide/vue';
 import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, SCREEN_SHARE_QUALITIES, screenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from '../rtc/screenShareQuality';
+import SegmentedControl from './SegmentedControl.vue';
 import ScreenShareCustomQuality from './ScreenShareCustomQuality.vue';
 import ExpandSection from './ExpandSection.vue';
 import type { NativeScreenAudioMode } from '../rtc/nativeScreenAudioMode';
@@ -49,10 +50,6 @@ const feedbackStatus = computed(() => {
   if (props.audioMode === 'systemMix') return '将共享全部电脑声音，包括 lycanclaw 的声音，可能产生回声。';
   return props.audioMode === 'unavailable' ? '当前系统仅支持共享画面。' : '';
 });
-const descriptions: Record<ScreenShareQualityId, string> = {
-  economy: '减少带宽占用，适合网络受限时观看。', standard: '平衡清晰度与流畅度，适合日常游戏分享。',
-  highFrameRate: '优先展示快速运动画面，对设备和网络要求较高。', custom: '按来源比例输出，尽量保持所选帧率。',
-};
 const backdropEvents = useBackdropDismiss(() => emit('close'));
 const advancedOpen = ref(false);
 const advancedId = useId();
@@ -75,22 +72,9 @@ function keydown(event: KeyboardEvent) {
   if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.value)) { event.preventDefault(); last?.focus(); }
   else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
 }
-function qualityKeydown(event: KeyboardEvent) {
-  const index = SCREEN_SHARE_QUALITIES.findIndex((preset) => preset.id === props.quality);
-  let next = index;
-  if (event.key === 'ArrowRight') next = (index + 1) % SCREEN_SHARE_QUALITIES.length;
-  else if (event.key === 'ArrowLeft') next = (index + SCREEN_SHARE_QUALITIES.length - 1) % SCREEN_SHARE_QUALITIES.length;
-  else if (event.key === 'Home') next = 0;
-  else if (event.key === 'End') next = SCREEN_SHARE_QUALITIES.length - 1;
-  else return;
-  event.preventDefault();
-  const preset = SCREEN_SHARE_QUALITIES[next];
-  emit('update:quality', preset.id);
-  panel.value?.querySelector<HTMLButtonElement>(`#capture-quality-${preset.id}`)?.focus();
-}
 onMounted(async () => {
   try { captureSettings.value.hideCursor = readScreenSharePreferences().hideCursor; }
-  catch { settingsError.value = '无法读取光标设置，请在客户端设置中重新保存后再试。'; }
+  catch { settingsError.value = '无法读取光标设置，请在共享与录制设置中重新保存后再试。'; }
   const desktop = window.lycanDesktop;
   if (desktop?.getScreenShareSupport) {
     void desktop.getScreenShareSupport().then(support => {
@@ -130,12 +114,10 @@ defineExpose({ sourcesElement });
         </div>
         <div class="capture-quality">
           <div id="capture-quality-description" class="capture-quality-description" role="tabpanel"
-            :aria-labelledby="`capture-quality-${quality.id}`"><strong>{{ quality.description }}</strong><span>{{ descriptions[quality.id] }}</span></div>
-          <div class="capture-quality-tabs" role="tablist" aria-label="共享画质">
-            <button v-for="preset in SCREEN_SHARE_QUALITIES" :key="preset.id" type="button" role="tab"
-              :id="`capture-quality-${preset.id}`" aria-controls="capture-quality-description" @keydown="qualityKeydown"
-              :aria-selected="quality.id === preset.id" @click="emit('update:quality', preset.id)">{{ preset.label }}</button>
-          </div>
+            :aria-labelledby="`capture-quality-${quality.id}`"><strong>{{ quality.description }}</strong><span>{{ quality.guidance }}</span></div>
+          <SegmentedControl class="capture-quality-tabs" :model-value="quality.id" :options="SCREEN_SHARE_QUALITIES"
+            label="共享画质" tabs id-prefix="capture-quality" controls="capture-quality-description"
+            @update:model-value="emit('update:quality', $event)" />
         </div>
         <ExpandSection :open="quality.id === 'custom'">
           <ScreenShareCustomQuality :model-value="customQuality"
@@ -187,10 +169,10 @@ defineExpose({ sourcesElement });
 .capture-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .capture-header h2 { margin: 0; font-size: 22px; line-height: 32px; }
 .capture-header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
-.capture-tabs, .capture-quality-tabs { display: flex; gap: 4px; padding: 4px; border-radius: 6px; background: var(--background); }
+.capture-tabs { display: flex; gap: 4px; padding: 4px; border-radius: 6px; background: var(--background); }
 .capture-tabs { margin: 20px 0 12px; }
-.capture-tabs button, .capture-quality-tabs button { flex: 1; min-height: 32px; padding: 5px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); white-space: nowrap; }
-.capture-tabs button[aria-selected='true'], .capture-quality-tabs button[aria-selected='true'] { background: var(--panel-raised); color: var(--text); }
+.capture-tabs button { flex: 1; min-height: 32px; padding: 5px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); white-space: nowrap; }
+.capture-tabs button[aria-selected='true'] { background: var(--panel-raised); color: var(--text); }
 .capture-sources { display: grid; flex: 1; grid-auto-rows: min-content; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; min-height: 120px; max-height: 45vh; overflow-y: auto; }
 .capture-sources button { display: flex; flex-direction: column; gap: 6px; align-items: stretch; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-soft); min-width: 0; text-align: left; }
 .capture-sources button:hover, .capture-sources button[aria-pressed='true'] { border-color: var(--accent); }
@@ -207,12 +189,11 @@ defineExpose({ sourcesElement });
 .capture-dialog > .expand-section { flex-shrink: 0; }
 .capture-advanced p { color: var(--muted); font-size: 12px; }
 .capture-method { display: flex; align-items: center; gap: 12px; }
-.capture-quality { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 8px 0 12px; }
-.capture-quality-tabs { flex-shrink: 0; }
-.capture-quality-description { display: grid; gap: 2px; min-width: 0; line-height: 20px; }
+.capture-quality { display: flex; flex-direction: column; align-items: stretch; gap: 8px; margin: 8px 0 12px; }
+.capture-quality-tabs { order: -1; flex-shrink: 0; }
+.capture-quality-description { min-height: 60px; display: grid; gap: 2px; min-width: 0; line-height: 20px; }
 .capture-quality-description strong { font-size: 14px; }
 .capture-quality-description span { font-size: 12px; color: var(--muted); }
 .capture-confirm { display: flex; align-items: center; gap: 12px; }
 @media (max-width: 620px) { .capture-dialog { padding: 20px; } .capture-sources { grid-template-columns: repeat(2, minmax(0, 1fr)); } .capture-quality { align-items: stretch; flex-direction: column; gap: 8px; } }
-@media (max-width: 360px) { .capture-quality-tabs { flex-wrap: wrap; } .capture-quality-tabs button { flex-basis: 40%; } }
 </style>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
-import PresenceSettingsMenu from './PresenceSettingsMenu.vue';
+import PresenceModeSwitch from '../PresenceModeSwitch.vue';
 import ActivityNameDialog from '../ActivityNameDialog.vue';
 import DialogTransition from '../DialogTransition.vue';
 import InlineFeedback from '../InlineFeedback.vue';
@@ -64,8 +64,8 @@ defineExpose({ editingName });
     </label>
     <div class="settings-toggle activity-toggle activity-presence">
       <span><strong>在线状态</strong><small id="activity-presence-description">向朋友显示离线，暂停更新动态和上次在线时间。聊天、语音和共享仍可使用。</small></span>
-      <PresenceSettingsMenu :mode="presenceMode" :ready="presenceReady" :syncing="presenceSyncing" :error="presenceError"
-        :active="active" @select="emit('presenceMode', $event)" />
+      <PresenceModeSwitch :mode="presenceMode" :ready="presenceReady" :syncing="presenceSyncing" :error="presenceError"
+        :active="active" aria-describedby="activity-presence-description activity-visibility-feedback" @select="emit('presenceMode', $event)" />
     </div>
     <InlineFeedback id="activity-visibility-feedback" :message="error || presenceError" />
     <p v-if="!desktop">动态检测仅在 Windows 桌面版提供</p>

@@ -21,10 +21,9 @@ function deferred<T>() {
 }
 
 function setup(active = true) {
-  const support = deferred<{ hideCursor: boolean; hideBorder: boolean }>();
   const autoStart = deferred<{ supported: boolean; enabled: boolean }>();
   const updateState: StartupUpdateState = { phase: 'ready', version: '0.0.10', supported: true, message: '' };
-  const bridge = { getScreenShareSupport: vi.fn(() => support.promise), getAutoStart: vi.fn(() => autoStart.promise),
+  const bridge = { getAutoStart: vi.fn(() => autoStart.promise),
     getTraySettings: vi.fn(async () => ({ supported: true, enabled: false, error: '' })),
     setCloseToTray: vi.fn(async (enabled: boolean) => ({ supported: true, enabled, error: '' })),
     setAutoStart: vi.fn(async (enabled: boolean) => ({ supported: true, enabled })),
@@ -32,28 +31,24 @@ function setup(active = true) {
     restartForUpdate: vi.fn(async () => {}), onUpdateState: vi.fn(() => () => {}) };
   const scope = effectScope();
   const props = reactive({ active, desktop: true });
-  const savePreferences = vi.fn();
   const exposed = vi.fn();
   // 执行真实组件监听和更新流程，IPC 只返回受控数据，不修改系统设置。
   const settings = scope.run(() => runInNewContext(`${compiled}\n({ autoStartDescription,
-    autoStartEnabled, autoStartBusy, autoStartError, screenPreferences, screenError,
+    autoStartEnabled, autoStartBusy, autoStartError,
     closeToTray, traySupported, trayBusy, trayError, updateCloseToTray,
-    updateAutoStart, updateScreenPreference, checkUpdates, cancelUpdate, confirmingUpdate, updateDescription })`, {
+    updateAutoStart, checkUpdates, cancelUpdate, confirmingUpdate, updateDescription })`, {
     computed, reactive, ref, watch, useClientUpdate, useLoadingHint, Error, window: { lycanDesktop: bridge },
     defineProps: () => props, defineEmits: () => vi.fn(), defineExpose: exposed,
-    readScreenSharePreferences: () => ({ hideCursor: false, hideBorder: false }), saveScreenSharePreferences: savePreferences,
   })) as {
     autoStartDescription: { value: string };
     closeToTray: { value: boolean }; traySupported: { value: boolean }; trayBusy: { value: boolean }; trayError: { value: string };
     updateCloseToTray: (event: Event) => Promise<void>;
     autoStartEnabled: { value: boolean }; autoStartBusy: { value: boolean }; autoStartError: { value: string };
-    screenPreferences: { hideCursor: boolean; hideBorder: boolean }; screenError: { value: string };
     updateAutoStart: (event: Event) => Promise<void>;
-    updateScreenPreference: (key: 'hideCursor', event: Event) => void;
     checkUpdates: () => Promise<void>; cancelUpdate: () => void; confirmingUpdate: { value: boolean };
     updateDescription: { value: string };
   };
-  return { scope, props, settings, support, autoStart, bridge, savePreferences, exposed };
+  return { scope, props, settings, autoStart, bridge, exposed };
 }
 
 const checked = { target: { checked: true } } as unknown as Event;
@@ -126,12 +121,11 @@ it('其他设置栏目不查更新，进入客户端栏目只查一次并更新�
 });
 
 it('查询完成前保持说明，仅确定不支持后显示限制', async () => {
-  const { scope, settings, support, autoStart, bridge } = setup();
+  const { scope, settings, autoStart, bridge } = setup();
   try {
     expect(settings.autoStartDescription.value).toBe('随 Windows 登录自动启动客户端。');
     await settings.updateAutoStart(checked);
     expect(bridge.setAutoStart).not.toHaveBeenCalled();
-    support.resolve({ hideCursor: true, hideBorder: false });
     autoStart.resolve({ supported: false, enabled: false });
     await nextTick();
     expect(settings.autoStartDescription.value).toContain('开机启动仅支持 Windows 安装版');
@@ -139,31 +133,13 @@ it('查询完成前保持说明，仅确定不支持后显示限制', async () =
 });
 
 it('查询失败明确报错，不将未确认的支持情况显示为不支持', async () => {
-  const { scope, settings, support, autoStart } = setup();
+  const { scope, settings, autoStart } = setup();
   try {
-    support.reject(new Error('support unavailable'));
     autoStart.reject(new Error('login settings unavailable'));
     await nextTick();
     await nextTick();
-    expect(settings.screenError.value).toContain('无法确认');
     expect(settings.autoStartError.value).toContain('无法读取');
     expect(settings.autoStartDescription.value).toContain('尚未确认');
-  } finally { scope.stop(); }
-});
-
-it('共享偏好只保存已支持的设置，保存失败回退并提示', async () => {
-  const { scope, settings, support, savePreferences } = setup();
-  try {
-    support.resolve({ hideCursor: true, hideBorder: false });
-    await nextTick();
-    settings.updateScreenPreference('hideCursor', checked);
-    expect(settings.screenPreferences.hideCursor).toBe(true);
-    savePreferences.mockImplementationOnce(() => { throw new Error('storage denied'); });
-    const input = { checked: false };
-    settings.updateScreenPreference('hideCursor', { target: input } as unknown as Event);
-    expect(settings.screenPreferences.hideCursor).toBe(true);
-    expect(input.checked).toBe(true);
-    expect(settings.screenError.value).toContain('无法保存');
   } finally { scope.stop(); }
 });
 

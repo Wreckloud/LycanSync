@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
-import { readScreenSharePreferences, saveScreenSharePreferences } from '../../settings/screenSharePreferences';
+import { computed, ref, watch } from 'vue';
 import InlineFeedback from '../InlineFeedback.vue';
 import { useLoadingHint } from '../useLoadingHint';
 import UpdateRestartDialog from '../UpdateRestartDialog.vue';
@@ -22,13 +21,9 @@ const trayError = ref('');
 const desktopBridge = window.lycanDesktop;
 let loaded = false;
 let trayLoaded = false;
-const screenPreferences = reactive({ hideCursor: false, hideBorder: true });
-const screenSupport = ref<{ hideCursor: boolean; hideBorder: boolean }>();
-const screenError = ref('');
 const { state: updateState, error: updateError, busy: updateBusy, confirmationVersion,
   check: checkUpdates, cancel: cancelUpdate, restart: restartUpdate } = useClientUpdate(desktopBridge,
   () => props.active && props.desktop);
-let screenLoaded = false;
 const confirmingUpdate = computed(() => Boolean(confirmationVersion.value));
 const updateLoadingHint = useLoadingHint(() => props.active && (updateBusy.value || updateState.value?.phase === 'checking'), 1000);
 const autoStartLoadingHint = useLoadingHint(() => props.active && autoStartSupported.value === undefined && !autoStartError.value, 1000);
@@ -46,39 +41,6 @@ const autoStartDescription = computed(() => {
 
 // 弹窗通过 Teleport 展示；由设置页隔离背景，避免确认期间切栏或返回。
 defineExpose({ confirmingUpdate, confirmingCache });
-
-watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
-  if (!active || !desktop || screenLoaded) return;
-  screenLoaded = true;
-  try {
-    Object.assign(screenPreferences, readScreenSharePreferences());
-  } catch {
-    screenError.value = '无法读取屏幕共享设置，请重新保存。';
-  }
-  if (!desktopBridge?.getScreenShareSupport) {
-    screenError.value = '暂时无法读取屏幕共享支持情况。';
-    return;
-  }
-  void desktopBridge.getScreenShareSupport().then((support) => {
-    screenSupport.value = support;
-  }).catch(() => { screenError.value = '暂时无法确认屏幕共享支持情况。'; });
-}, { immediate: true });
-
-function updateScreenPreference(key: 'hideCursor', event: Event) {
-  if (!screenSupport.value?.[key]) return;
-  const input = event.target as HTMLInputElement;
-  const previous = screenPreferences[key];
-  screenPreferences[key] = input.checked;
-  try {
-    saveScreenSharePreferences(screenPreferences);
-    screenError.value = '';
-  } catch {
-    screenPreferences[key] = previous;
-    // 同步回退可能与上次渲染值相同，仍须恢复用户刚改变的原生勾选状态。
-    input.checked = previous;
-    screenError.value = '无法保存屏幕共享设置。';
-  }
-}
 
 watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
   if (!active || !desktop || loaded) return;
@@ -150,7 +112,6 @@ async function updateAutoStart(event: Event) {
 
 <template>
   <div class="settings-section client-settings">
-    <CacheSettings v-if="userId" ref="cacheSettings" :user-id="userId" :active="active" />
     <section v-if="desktop" class="settings-block">
       <h2>应用更新</h2>
       <div class="settings-toggle update-summary">
@@ -162,20 +123,6 @@ async function updateAutoStart(event: Event) {
       <UpdateRestartDialog v-if="confirmationVersion" :version="confirmationVersion" :busy="updateBusy" :error="updateError"
         @cancel="cancelUpdate" @confirm="restartUpdate" />
       </DialogTransition>
-    </section>
-    <section class="settings-block">
-      <h2>屏幕共享</h2>
-      <p>以下设置在下一次屏幕共享时生效。</p>
-      <p v-if="!desktop">浏览器版由浏览器管理光标和共享边框，以下选项仅适用于桌面版。</p>
-      <template v-else>
-        <label class="settings-toggle" :class="{ 'is-disabled': !screenSupport?.hideCursor }">
-          <span><strong>隐藏共享画面中的光标</strong><small>不向观看者显示光标，你仍能看到自己的鼠标。需要 Windows 10 build 19041 或以上。</small></span>
-          <input type="checkbox" :checked="screenPreferences.hideCursor" :disabled="!screenSupport?.hideCursor"
-            aria-label="隐藏共享画面中的光标" @change="updateScreenPreference('hideCursor', $event)" />
-        </label>
-        <p>共享窗口时会尽量隐藏系统边框；受系统或权限限制时仍可能显示。</p>
-        <InlineFeedback :message="screenError" />
-      </template>
     </section>
     <section class="settings-block">
       <h2>系统</h2>
@@ -195,6 +142,7 @@ async function updateAutoStart(event: Event) {
         <InlineFeedback :message="trayError" />
       </template>
     </section>
+    <CacheSettings v-if="userId" ref="cacheSettings" :user-id="userId" :active="active" />
   </div>
 </template>
 

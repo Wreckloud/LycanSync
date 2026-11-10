@@ -54,7 +54,7 @@ test('发言模式滑块双向过渡，减少动画时立即切换', async ({ pa
   const mode = page.getByRole('group', { name: '发言模式' });
   for (const label of ['按键说话 F2', '自由发言']) {
     const positions = await mode.getByRole('button', { name: label, exact: true }).evaluate(async element => {
-      const slider = element.parentElement!.querySelector('.voice-mode-slider')!;
+      const slider = element.parentElement!.querySelector('.segmented-slider')!;
       const positions = [slider.getBoundingClientRect().x];
       (element as HTMLButtonElement).click();
       for (let frame = 0; frame < 18; frame++) {
@@ -68,7 +68,7 @@ test('发言模式滑块双向过渡，减少动画时立即切换', async ({ pa
     expect(positions.some(position => position > Math.min(first, last) + 1 && position < Math.max(first, last) - 1)).toBe(true);
   }
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await expect(mode.locator('.voice-mode-slider')).toHaveCSS('transition-duration', '0s');
+  await expect(mode.locator('.segmented-slider')).toHaveCSS('transition-duration', '0s');
   await mode.getByRole('button', { name: '按键说话 F2' }).click();
   await expect(mode.getByRole('button', { name: '按键说话 F2' })).toHaveAttribute('aria-pressed', 'true');
 });

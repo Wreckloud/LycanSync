@@ -1,8 +1,7 @@
 import { expect, test, type Locator } from '@playwright/test';
 
 async function selectPersonalPresence(menu: Locator, label: string) {
-  await menu.getByRole('button', { name: '切换在线状态', exact: true }).click();
-  await menu.getByRole('menuitemradio', { name: label, exact: true }).click();
+  await menu.getByRole('group', { name: '在线状态', exact: true }).getByRole('button', { name: label, exact: true }).click();
 }
 
 const groupId = '01b08c29-d1e5-4bca-987f-64946541e93b';
@@ -54,7 +53,7 @@ test('底部整块资料打开菜单，编辑沿用设置且返回原入口，�
   await expect(menu).toBeVisible();
   await expect(menu).toContainText(user.signature);
   await expect(menu.getByRole('button', { name: '退出登录', exact: true })).toHaveCount(1);
-  await expect(menu.getByRole('button', { name: '切换在线状态', exact: true })).toHaveCount(1);
+  await expect(menu.getByRole('group', { name: '在线状态', exact: true })).toHaveCount(1);
   expect(await footer.boundingBox()).toEqual(bounds);
   await page.screenshot({ path: test.info().outputPath('personal-menu.png') });
   await menu.getByRole('button', { name: '编辑个人资料', exact: true }).click();
@@ -207,23 +206,15 @@ test('个人面板固定在个人栏上方，切换状态不移动，窄窗可�
   const footer = (await page.locator('.group-conversation > .personal-card').boundingBox())!;
   expect(original.y + original.height).toBeCloseTo(footer.y - 8, 0);
   expect(original.x + original.width).toBeCloseTo(Math.min(footer.x + footer.width, page.viewportSize()!.width - 8), 0);
-  const statusTrigger = menu.getByRole('button', { name: '切换在线状态', exact: true });
+  const statusTrigger = menu.getByRole('group', { name: '在线状态', exact: true });
   const nameBefore = await trigger.locator('[data-identity-name]').boundingBox();
-  const statusBounds = (await statusTrigger.boundingBox())!;
-  await page.mouse.move(statusBounds.x + 30, statusBounds.y + 16);
-  await page.mouse.down();
-  await expect(menu.getByRole('menu', { name: '在线状态' })).toBeVisible();
-  await page.mouse.move(statusBounds.x + 30, statusBounds.y + 48);
-  await expect(statusTrigger).toContainText('在线');
-  await page.mouse.up();
-  await expect(statusTrigger).toContainText('隐身');
+  await selectPersonalPresence(menu, '隐身');
+  await expect(statusTrigger.getByRole('button', { name: '隐身', exact: true })).toHaveAttribute('aria-pressed', 'true');
   expect(await trigger.locator('[data-identity-name]').boundingBox()).toEqual(nameBefore);
   expect(await menu.boundingBox()).toEqual(original);
-  await statusTrigger.focus();
-  await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('Enter');
-  await expect(statusTrigger).toContainText('在线');
+  await statusTrigger.getByRole('button', { name: '隐身', exact: true }).focus();
+  await page.keyboard.press('ArrowLeft');
+  await expect(statusTrigger.getByRole('button', { name: '在线', exact: true })).toHaveAttribute('aria-pressed', 'true');
   expect(await menu.boundingBox()).toEqual(original);
   await page.setViewportSize({ width: 440, height: 320 });
   await expect.poll(async () => {
@@ -421,11 +412,11 @@ test('设置身份菜单选择隐身与主界面同步，首个心跳不短暂�
   const trigger = page.getByRole('button', { name: '个人菜单', exact: true });
   await trigger.click();
   const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
-  const statusTrigger = menu.getByRole('button', { name: '切换在线状态', exact: true });
+  const statusTrigger = menu.getByRole('group', { name: '在线状态', exact: true });
   await selectPersonalPresence(menu, '隐身');
   await expect.poll(() => heartbeats.at(-1)?.status).toBe('OFFLINE');
   await expect(menu.locator('.profile-popover-identity .personal-avatar')).toHaveAttribute('aria-label', '隐身');
-  await expect(statusTrigger).toContainText('隐身');
+  await expect(statusTrigger.getByRole('button', { name: '隐身', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await page.screenshot({ path: test.info().outputPath('invisible-menu.png') });
   heartbeats.length = 0;
   await page.reload();
@@ -443,11 +434,11 @@ test('状态同步失败在菜单内提示，重试不退出账号或清除选�
   await page.goto('/');
   await page.getByRole('button', { name: '个人菜单', exact: true }).click();
   const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
-  const statusTrigger = menu.getByRole('button', { name: '切换在线状态', exact: true });
+  const statusTrigger = menu.getByRole('group', { name: '在线状态', exact: true });
   fail = true;
   await selectPersonalPresence(menu, '隐身');
   await expect(menu.getByRole('alert')).toContainText('尚未同步');
-  await expect(statusTrigger).toContainText('隐身');
+  await expect(statusTrigger.getByRole('button', { name: '隐身', exact: true })).toHaveAttribute('aria-pressed', 'true');
   fail = false;
   await selectPersonalPresence(menu, '隐身');
   await expect(menu.getByRole('alert')).toHaveCount(0);
@@ -739,15 +730,14 @@ test('自己语音记录在卡片底部，资料预览仅在保存成功后更�
   const preview = page.getByRole('region', { name: '资料卡预览', exact: true });
   await expect(preview).toBeVisible();
   await expect(preview.locator('.profile-voice-time')).toHaveText('累计已与朋友开黑了 128 小时');
-  const statusSelect = page.getByRole('button', { name: '切换在线状态', exact: true });
-  await expect(statusSelect).toContainText('在线');
+  const statusSelect = page.getByRole('group', { name: '在线状态', exact: true });
+  await expect(statusSelect.getByRole('button', { name: '在线', exact: true })).toHaveAttribute('aria-pressed', 'true');
   for (const mode of ['invisible', 'online']) {
     const heartbeat = page.waitForRequest(request => request.url().endsWith('/api/presence/heartbeat')
       && request.postDataJSON().status === (mode === 'invisible' ? 'OFFLINE' : 'ONLINE'));
-    await statusSelect.click();
-    await page.getByRole('menuitemradio', { name: mode === 'invisible' ? '隐身' : '在线', exact: true }).click();
+    await statusSelect.getByRole('button', { name: mode === 'invisible' ? '隐身' : '在线', exact: true }).click();
     await heartbeat;
-    await expect(statusSelect).toContainText(mode === 'invisible' ? '隐身' : '在线');
+    await expect(statusSelect.getByRole('button', { name: mode === 'invisible' ? '隐身' : '在线', exact: true })).toHaveAttribute('aria-pressed', 'true');
   }
   const card = await preview.boundingBox();
   const controls = await page.locator('.activity-settings-controls').boundingBox();

@@ -5,6 +5,7 @@ import type { useRtcRoom } from '../../rtc/useRtcRoom';
 import { SCREEN_SHARE_QUALITIES, screenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from '../../rtc/screenShareQuality';
 import { readScreenShareAudioPreference, resolveNativeScreenAudioCapability, saveScreenShareAudioPreference, type NativeScreenAudioMode } from '../../rtc/nativeScreenAudioMode';
 import { readScreenSharePreferences, saveScreenSharePreferences } from '../../settings/screenSharePreferences';
+import SegmentedControl from '../SegmentedControl.vue';
 import ScreenShareCustomQuality from '../ScreenShareCustomQuality.vue';
 import ExpandSection from '../ExpandSection.vue';
 import InlineFeedback from '../InlineFeedback.vue';
@@ -91,11 +92,9 @@ watch(() => [props.active, props.rtc.screenShareActive], async ([active, sharing
     <section class="settings-block">
       <h2>共享画面</h2>
       <p>共享中调整画质会立即生效，也会用于下次共享；录像画质单独设置。</p>
-      <div class="share-quality-presets" role="group" aria-label="共享画质">
-        <button v-for="preset in SCREEN_SHARE_QUALITIES" :key="preset.id" type="button" :aria-pressed="quality === preset.id"
-          :disabled="shareBusy" @click="selectQuality(preset.id)">{{ preset.label }}</button>
-      </div>
-      <small>{{ screenShareQuality(quality, customQuality).description }}</small>
+      <SegmentedControl :model-value="quality" :options="SCREEN_SHARE_QUALITIES" label="共享画质"
+        :disabled="shareBusy" @update:model-value="selectQuality" />
+      <p class="share-quality-description">{{ screenShareQuality(quality, customQuality).guidance }}</p>
       <ExpandSection :open="quality === 'custom'">
         <ScreenShareCustomQuality :model-value="customQuality" :disabled="shareBusy" @update:model-value="selectQuality('custom', $event)" />
       </ExpandSection>
@@ -117,7 +116,5 @@ watch(() => [props.active, props.rtc.screenShareActive], async ([active, sharing
 </template>
 
 <style scoped>
-.share-quality-presets { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: 6px; background: var(--background); }
-.share-quality-presets button { flex: 1; min-height: 32px; padding: 5px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); white-space: nowrap; }
-.share-quality-presets button[aria-pressed='true'] { background: var(--panel-raised); color: var(--text); }
+.share-quality-description { min-height: 3em; }
 </style>

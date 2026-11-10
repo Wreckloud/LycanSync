@@ -8,10 +8,10 @@ const RECOMMENDED_BITRATES = {
 } as const;
 
 export const SCREEN_SHARE_QUALITIES = [
-  { id: 'highFrameRate', label: '高帧率', description: '1080p · 120 FPS', width: 1920, height: 1080, fps: 120, bitrate: RECOMMENDED_BITRATES[1080][120] },
-  { id: 'standard', label: '标准', description: '1080p · 60 FPS', width: 1920, height: 1080, fps: 60, bitrate: RECOMMENDED_BITRATES[1080][60] },
-  { id: 'economy', label: '节省流量', description: '720p · 30 FPS', width: 1280, height: 720, fps: 30, bitrate: RECOMMENDED_BITRATES[720][30] },
-  { id: 'custom', label: '自定义', description: '自行选择分辨率和帧率', width: 1920, height: 1080, fps: 60, bitrate: RECOMMENDED_BITRATES[1080][60] },
+  { id: 'highFrameRate', guidance: '最高 1080p，每秒最多 120 帧，快速移动的画面更连贯。适合网络稳定、设备性能充足时分享竞速、射击等快节奏游戏。', label: '高帧率', description: '1080p · 120 FPS', width: 1920, height: 1080, fps: 120, bitrate: RECOMMENDED_BITRATES[1080][120] },
+  { id: 'standard', guidance: '最高 1080p，每秒最多 60 帧，兼顾画面清晰度与流畅度。适合日常游戏、视频和应用演示。', label: '标准', description: '1080p · 60 FPS', width: 1920, height: 1080, fps: 60, bitrate: RECOMMENDED_BITRATES[1080][60] },
+  { id: 'economy', guidance: '最高 720p，每秒最多 30 帧，降低网络占用，细节和运动流畅度有所减少。适合网络有限时分享文档、聊天或变化较少的画面。', label: '节省流量', description: '720p · 30 FPS', width: 1280, height: 720, fps: 30, bitrate: RECOMMENDED_BITRATES[720][30] },
+  { id: 'custom', guidance: '适合进阶用户自行调整分辨率、帧率和码率，按画面内容、设备性能和网络情况选择。', label: '自定义', description: '自行选择分辨率和帧率', width: 1920, height: 1080, fps: 60, bitrate: RECOMMENDED_BITRATES[1080][60] },
 ] as const;
 
 export type ScreenShareQualityId = typeof SCREEN_SHARE_QUALITIES[number]['id'];

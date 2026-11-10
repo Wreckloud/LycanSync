@@ -40,6 +40,41 @@ createApp({ components: { ScreenSharePicker }, setup() {
   });
   await page.goto('/');
   await page.getByRole('button', { name: '打开选择器' }).click();
+  await expect(page.locator('.dialog-backdrop')).toHaveCSS('opacity', '1');
+});
+
+test('画质滑块支持跨项动画和键盘切换，缩放后仍对齐当前选项', async ({ page }) => {
+  const presets = page.getByRole('tablist', { name: '共享画质' });
+  const standard = presets.getByRole('tab', { name: '标准', exact: true });
+  await standard.focus();
+  await page.keyboard.press('Home');
+  await expect(presets.getByRole('tab', { name: '高帧率', exact: true })).toBeFocused();
+  await expect(page.locator('.capture-quality-description')).toContainText('每秒最多 120 帧');
+  await expect.poll(() => presets.locator('.segmented-slider').evaluate(element => element.getAnimations().length)).toBe(0);
+  const positions = await presets.getByRole('tab', { name: '节省流量', exact: true }).evaluate(async element => {
+    const slider = element.parentElement!.querySelector('.segmented-slider')!;
+    const positions = [slider.getBoundingClientRect().x];
+    (element as HTMLButtonElement).click();
+    for (let frame = 0; frame < 18; frame++) {
+      await new Promise(requestAnimationFrame);
+      positions.push(slider.getBoundingClientRect().x);
+    }
+    return positions;
+  });
+  const first = positions[0]!, last = positions.at(-1)!;
+  expect(last - first).toBeGreaterThan(40);
+  expect(positions.some(position => position > first + 1 && position < last - 1)).toBe(true);
+  await expect(page.locator('.capture-quality-description')).toContainText('最高 720p，每秒最多 30 帧');
+  await page.setViewportSize({ width: 420, height: 720 });
+  const selected = presets.getByRole('tab', { selected: true });
+  const slider = presets.locator('.segmented-slider');
+  await expect.poll(async () => Math.abs((await slider.boundingBox())!.x - (await selected.boundingBox())!.x)).toBeLessThan(1);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(slider).toHaveCSS('transition-duration', '0s');
+  await selected.focus();
+  await page.keyboard.press('End');
+  await expect(presets.getByRole('tab', { name: '自定义', exact: true })).toBeFocused();
+  await expect(page.locator('.capture-quality-description')).toContainText('适合进阶用户');
 });
 
 test('普通窗口说明可能出现系统边框，一次确认后共享，窄窗口按钮可见', async ({ page }, testInfo) => {
