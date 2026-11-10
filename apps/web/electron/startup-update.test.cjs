@@ -232,7 +232,7 @@ test('手动更新复用下载链路，重复确认共用任务，准备期间�
   assert.equal(f.installs.length, 0);
   prepared.resolve();
   await flush();
-  assert.deepEqual(f.installs, [[false, true]]);
+  assert.deepEqual(f.installs, [[true, true]]);
   assert.deepEqual(timings, ['updateCheck', 'updateDownloadAndVerify', 'updatePrepare']);
 });
 
@@ -282,7 +282,7 @@ test('登录计时仅接受可信页面的两个固定阶段，每次启动每�
   ]);
 });
 
-test('下载完成并通过 SDK 校验后才准备退出，安装显示进度并重新打开', async () => {
+test('下载完成并通过 SDK 校验后才准备退出，静默安装并重新打开', async () => {
   const f = fixture();
   void f.startup.start();
   f.available();
@@ -296,7 +296,7 @@ test('下载完成并通过 SDK 校验后才准备退出，安装显示进度并
   await flush();
   assert.equal(f.startup.getState().phase, 'installing');
   assert.equal(f.counts().prepared, 1);
-  assert.deepEqual(f.installs, [[false, true]]);
+  assert.deepEqual(f.installs, [[true, true]]);
   assert.equal(f.updater.autoRunAppAfterInstall, true);
 });
 
@@ -436,7 +436,7 @@ test('真实主进程安装前加密保留邀请并允许直接退出，不传�
     },
   };
   const startup = runInNewContext(`${main.slice(start, end)}; startupUpdate`, context);
-  f.updater.quitAndInstall = (...args) => { assert.deepEqual(args, [false, true]); order.push('install'); };
+  f.updater.quitAndInstall = (...args) => { assert.deepEqual(args, [true, true]); order.push('install'); };
   void startup.start();
   f.available();
   await flush();

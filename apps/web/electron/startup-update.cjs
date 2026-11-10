@@ -108,7 +108,8 @@ function createStartupUpdate({ enabled, version, createUpdater, onChange, before
       if (!active()) return;
       publish({ phase: 'installing', message: '即将开始安装，完成后自动打开应用…' });
       updater.autoRunAppAfterInstall = true;
-      updater.quitAndInstall(false, true);
+      // 应用内升级沿用安装位置与设置，静默替换后重开；首次手动安装仍显示向导。
+      updater.quitAndInstall(true, true);
     } catch (error) { if (active()) fail(error); }
   }
 

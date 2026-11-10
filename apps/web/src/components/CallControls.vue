@@ -22,18 +22,19 @@ const props = withDefaults(defineProps<{
   customQuality?: CustomScreenShareQuality;
   voiceMode?: VoiceMode; pushToTalkBinding?: string; shortcutsReady?: boolean; shortcutsBusy?: boolean; shortcutsSupported?: boolean;
   processingEnabled?: boolean; processingPartial?: boolean; microphoneError?: string;
+  gameName?: string; voiceVolumeBalance?: boolean;
 }>(), { customQuality: () => ({ ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY }) });
 const emit = defineEmits<{
-  microphone: []; listening: []; share: []; prepareShare: []; changeSource: []; shareAudio: [enabled: boolean];
+  microphone: []; listening: []; share: []; prepareShare: []; shareAudio: [enabled: boolean];
   quality: [quality: ScreenShareQualityId, customQuality?: CustomScreenShareQuality]; inputGain: [volume: number]; outputVolume: [volume: number];
   settings: [opener: HTMLElement]; recording: []; recordingSettings: [opener: HTMLElement]; saveReplay: [];
   voiceMode: [mode: VoiceMode, opener: HTMLElement]; processing: [enabled: boolean];
+  shareGame: []; shareAndRecord: []; voiceVolumeBalance: [enabled: boolean];
 }>();
 type ControlMenu = 'microphone' | 'output' | 'share';
 const root = ref<HTMLElement | null>(null);
 const menu = ref<ControlMenu | null>(null);
 const qualityOpen = ref(false);
-const recordingOpen = ref(false);
 const qualityPlacement = ref<'right' | 'compact'>('compact');
 const menuMaxHeight = ref(520);
 let opener: HTMLButtonElement | null = null;
@@ -55,7 +56,6 @@ function scheduleShareIntent() {
 function closeMenu(restoreFocus = false) {
   menu.value = null;
   qualityOpen.value = false;
-  recordingOpen.value = false;
   if (restoreFocus) opener?.focus();
 }
 
@@ -73,7 +73,6 @@ async function toggleMenu(kind: ControlMenu, event: Event) {
   if (menu.value === kind) { closeMenu(true); return; }
   opener = event.currentTarget as HTMLButtonElement;
   qualityOpen.value = false;
-  recordingOpen.value = false;
   menu.value = kind;
   resizeMenu();
   await nextTick();
@@ -108,19 +107,8 @@ function toggleProcessing(event: Event) {
   emit('processing', enabled);
 }
 
-async function toggleRecordingMenu() {
-  const opening = !recordingOpen.value;
-  recordingOpen.value = opening;
-  qualityOpen.value = false;
-  await nextTick();
-  if (menu.value === 'share' && recordingOpen.value === opening) root.value?.querySelector<HTMLElement>(opening
-    ? '.call-recording-menu button' : '.call-recording-trigger')?.focus();
-}
-
-function chooseSource() { closeMenu(true); emit('changeSource'); }
 function toggleShare() { closeMenu(true); emit('share'); }
 async function toggleQuality() {
-  recordingOpen.value = false;
   const opening = !qualityOpen.value;
   qualityOpen.value = opening;
   await nextTick();
@@ -146,7 +134,6 @@ function escape(event: KeyboardEvent) {
   if (!menu.value) return;
   event.stopPropagation();
   if (qualityOpen.value) void toggleQuality();
-  else if (recordingOpen.value) void toggleRecordingMenu();
   else closeMenu(true);
 }
 
@@ -189,7 +176,7 @@ onScopeDispose(() => {
             @click="changeVoiceMode('voice')">自由发言</button>
           <button type="button" :aria-pressed="voiceMode === 'pushToTalk'" :disabled="shortcutsBusy || !shortcutsReady || !shortcutsSupported"
             :title="shortcutsSupported ? pushToTalkBinding || '设置按键说话快捷键' : '仅支持 Windows 桌面客户端'"
-            @click="changeVoiceMode('pushToTalk')">按键说话<small v-if="pushToTalkBinding">{{ pushToTalkBinding }}</small></button>
+            @click="changeVoiceMode('pushToTalk')">按键说话<small>{{ pushToTalkBinding || '(未设置)' }}</small></button>
         </div>
         <label class="call-share-audio"><span>智能声音处理</span><input type="checkbox" :checked="processingEnabled"
           :indeterminate="processingPartial" :aria-checked="processingPartial ? 'mixed' : !!processingEnabled" :disabled="microphoneBusy" @change="toggleProcessing" /></label>
@@ -209,6 +196,8 @@ onScopeDispose(() => {
         <label class="call-control-range"><span>输出音量 <b>{{ Math.round(outputVolume * 100) }}%</b></span>
           <input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="outputVolume" aria-label="lycanclaw 总输出音量"
             @input="emit('outputVolume', Number(($event.target as HTMLInputElement).value))" /></label>
+        <label class="call-share-audio"><span>平衡成员语音音量</span><input type="checkbox" :checked="voiceVolumeBalance"
+          @change="emit('voiceVolumeBalance', ($event.target as HTMLInputElement).checked)" /></label>
         <button type="button" class="call-settings-entry" @click="openAudioSettings"><Settings :size="15" />语音设置<ChevronRight :size="14" /></button>
       </section>
       </Transition>
@@ -223,34 +212,23 @@ onScopeDispose(() => {
         :disabled="!connected || choosingSource" @click="toggleMenu('share', $event)"><ChevronDown :size="13" :class="{ 'is-open': menu === 'share' }" /></button>
       <Transition name="surface-panel">
       <div v-if="menu === 'share'" class="call-share-menu" :class="{ 'is-compact': qualityPlacement === 'compact' }">
-        <section v-show="(!qualityOpen && !recordingOpen) || qualityPlacement !== 'compact'" class="call-control-menu call-share-actions" aria-label="共享选项">
+        <section v-show="!qualityOpen || qualityPlacement !== 'compact'" class="call-control-menu call-share-actions" aria-label="共享选项">
           <header>屏幕共享</header>
-          <button type="button" class="call-menu-action" :class="{ 'is-danger': sharing }" :disabled="shareBusy || shareLimitReached" @click="toggleShare">
-            <MonitorX v-if="sharing" :size="15" /><MonitorUp v-else :size="15" />{{ sharing ? '停止共享' : '开始共享' }}</button>
-          <button v-if="sharing && desktop" type="button" class="call-menu-action" :disabled="shareBusy" @click="chooseSource">更改共享<ChevronRight class="call-menu-chevron" :size="14" /></button>
+          <button v-if="sharing" type="button" class="call-menu-action is-danger" :disabled="shareBusy" @click="toggleShare">
+            <MonitorX :size="15" />关闭共享</button>
+          <button v-else-if="desktop && gameName" type="button" class="call-menu-action" :disabled="shareBusy || shareLimitReached"
+            @click="closeMenu(true); emit('shareGame')"><MonitorUp :size="15" />快速共享 {{ gameName }}</button>
+          <button v-if="desktop" type="button" class="call-menu-action" :disabled="recordingBusy || shareBusy || shareAudioRestricted || (!sharing && shareLimitReached)"
+            @click="closeMenu(true); sharing ? emit('recording') : emit('shareAndRecord')">{{ recordingActive ? `停止录制 · ${recordingElapsed}` : sharing ? '开始录制' : '开始共享并录制' }}</button>
           <template v-if="desktop && sharing">
             <button type="button" class="call-menu-action call-quality-trigger" :aria-expanded="qualityOpen" :disabled="shareBusy" @click="toggleQuality">
               共享画质<span>{{ SCREEN_SHARE_QUALITIES.find(preset => preset.id === quality)?.label }}</span><ChevronRight class="call-menu-chevron" :size="14" /></button>
-            <label v-if="sharing" class="call-share-audio"><span>共享音频</span><input type="checkbox" :checked="shareAudio" :disabled="shareBusy || shareAudioRestricted || audioMode === 'unavailable'"
-              @change="toggleShareAudio" /></label>
-            <small v-if="sharing && shareAudioRestricted" class="call-audio-warning">远控画面不包含电脑声音，语音通话不受影响。</small>
-            <small v-else-if="sharing && audioMode === 'systemMix'" class="call-audio-warning">包含所有系统声音，可能产生回声。</small>
-            <small v-else-if="sharing && audioMode === 'unavailable'" class="call-audio-warning">当前系统不支持共享音频。</small>
           </template>
-          <button v-if="desktop && sharing" type="button" class="call-menu-action" :disabled="recordingBusy || shareAudioRestricted"
-            @click="closeMenu(true); emit('recording')">{{ recordingActive ? `停止录制 · ${recordingElapsed}` : '开始录制' }}</button>
-          <button v-if="desktop" type="button" class="call-menu-action call-recording-trigger" :aria-expanded="recordingOpen" @click="toggleRecordingMenu">录制与回放<ChevronRight class="call-menu-chevron" :size="14" /></button>
-        </section>
-        <Transition :name="qualityPlacement === 'right' ? 'surface-side' : 'surface-panel'">
-        <section v-if="recordingOpen" class="call-control-menu call-quality-menu call-recording-menu" aria-label="录制与回放">
-          <button v-if="qualityPlacement === 'compact'" type="button" class="call-menu-action call-quality-back" aria-label="返回共享选项" @click="toggleRecordingMenu"><ChevronLeft :size="14" /></button>
-          <header>录制与回放</header>
-          <button v-if="sharing && replayActive" type="button" class="call-menu-action"
+          <button v-if="desktop && sharing && replayActive" type="button" class="call-menu-action"
             :disabled="recordingBusy || replaySaving || replayError || shareAudioRestricted"
-            @click="closeMenu(true); emit('saveReplay')">{{ replaySaving ? '正在保存回放…' : '保存回放' }}</button>
-          <button type="button" class="call-menu-action" @click="emit('recordingSettings', opener!); closeMenu()">录制设置<ChevronRight class="call-menu-chevron" :size="14" /></button>
+            @click="closeMenu(true); emit('saveReplay')">保存即时回放</button>
+          <button v-if="desktop" type="button" class="call-settings-entry" @click="emit('recordingSettings', opener!); closeMenu()">录制设置<ChevronRight class="call-menu-chevron" :size="14" /></button>
         </section>
-        </Transition>
         <Transition :name="qualityPlacement === 'right' ? 'surface-side' : 'surface-panel'">
         <section v-if="qualityOpen" class="call-control-menu call-quality-menu" aria-label="共享画质">
           <button v-if="qualityPlacement === 'compact'" type="button" class="call-menu-action call-quality-back" aria-label="返回共享选项" @click="toggleQuality"><ChevronLeft :size="14" /></button>
@@ -264,7 +242,12 @@ onScopeDispose(() => {
           <ExpandSection :open="quality === 'custom'">
           <ScreenShareCustomQuality :model-value="customQuality" :disabled="shareBusy"
             @update:model-value="emit('quality', 'custom', $event)" />
-        </ExpandSection>
+          </ExpandSection>
+          <label v-if="sharing" class="call-share-audio"><span>共享音频</span><input type="checkbox" :checked="shareAudio" :disabled="shareBusy || shareAudioRestricted || audioMode === 'unavailable'"
+            @change="toggleShareAudio" /></label>
+          <small v-if="sharing && shareAudioRestricted" class="call-audio-warning">远控画面不包含电脑声音，语音通话不受影响。</small>
+          <small v-else-if="sharing && audioMode === 'systemMix'" class="call-audio-warning">包含所有系统声音，可能产生回声。</small>
+          <small v-else-if="sharing && audioMode === 'unavailable'" class="call-audio-warning">当前系统不支持共享音频。</small>
         </section>
         </Transition>
       </div>

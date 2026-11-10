@@ -235,8 +235,7 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
 <style>
 .profile-deleted-account { color: var(--muted); font-size: 11px; }
 .profile-popover { position: fixed; z-index: 60; width: min(292px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); text-align: left; }
-.profile-popover { box-sizing: border-box; transition: height var(--motion-layout-duration) var(--motion-ease), opacity var(--motion-surface-duration) var(--motion-ease); }
-.profile-popover.is-personal.surface-panel-enter-from, .profile-popover.is-personal.surface-panel-leave-to { transform: none; }
+.profile-popover { box-sizing: border-box; transition: height var(--motion-layout-duration) var(--motion-ease), opacity var(--motion-surface-duration) var(--motion-ease), transform var(--motion-surface-duration) var(--motion-ease); }
 .profile-popover.is-personal:not(.is-scrollable) .profile-popover-content { position: absolute; right: 0; bottom: 0; left: 0; }
 .profile-popover.is-inline:not(.is-scrollable) .profile-popover-content { position: absolute; top: 50%; right: 0; left: 0; transform: translateY(-50%); }
 .profile-popover:is(.is-personal, .is-inline):not(.is-scrollable) { overflow: clip; }

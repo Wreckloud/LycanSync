@@ -42,7 +42,6 @@ export function createNativeVideoSourceSelection(sources: NativeVideoSourceOptio
   function buildOptions() {
     return currentSources.map((source) => ({
       id: source.sourceId,
-      windowId: source.windowId,
       name: source.kind === 'monitor'
         ? `屏幕 ${currentSources.filter((item) => item.kind === 'monitor').indexOf(source) + 1}` : source.title,
       thumbnail: thumbnails.get(source.sourceId)?.title === source.title

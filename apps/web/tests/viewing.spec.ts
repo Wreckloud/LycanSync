@@ -566,7 +566,7 @@ test('成员搜索和设置页退场时立即禁用交互，完成后移除', as
     ['not-allowed', 'no-drop'].includes(getComputedStyle(element).cursor)))).toBe(false);
 });
 
-test('聚焦网格和成员折叠只覆盖聊天，保留历史阅读位置与草稿', async ({ page }) => {
+test('聚焦网格和成员折叠只覆盖聊天，保留历史阅读位置与草稿', async ({ page }, testInfo) => {
   await page.route('**/api/groups/viewing-group-0/messages**', route => route.fulfill({ json: {
     messages: Array.from({ length: 80 }, (_, index) => ({ id: 'history-' + index, senderUserId: user.id,
       senderNickname: user.nickname, type: 'TEXT', content: `历史消息 ${index}，保持阅读位置。`,
@@ -630,6 +630,23 @@ test('聚焦网格和成员折叠只覆盖聊天，保留历史阅读位置与�
       return first!.y >= overlay!.y + overlay!.height;
     }).toBe(true);
     await expect(firstMessage).toBeInViewport();
+    await expect.poll(() => list.evaluate(element => {
+      const top = element.getBoundingClientRect().top;
+      const overlayBottom = document.querySelector('.voice-panel')!.getBoundingClientRect().bottom;
+      const trackStart = top + Number.parseFloat(getComputedStyle(element, '::-webkit-scrollbar-track').marginTop);
+      return Math.abs(trackStart - Math.max(top, overlayBottom) - 8);
+    })).toBeLessThan(1);
+    if (!focused) {
+      const bounds = (await list.boundingBox())!;
+      const overlay = (await page.locator('.voice-panel').boundingBox())!;
+      const thumbTop = overlay.y + overlay.height + 16;
+      await page.mouse.move(bounds.x + bounds.width - 3, thumbTop);
+      await page.screenshot({ path: testInfo.outputPath('chat-scrollbar.png') });
+      await page.mouse.down();
+      await page.mouse.move(bounds.x + bounds.width - 3, thumbTop + 80, { steps: 8 });
+      await page.mouse.up();
+      await expect.poll(() => list.evaluate(element => element.scrollTop)).toBeGreaterThan(80);
+    }
   }
 });
 

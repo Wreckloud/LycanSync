@@ -127,6 +127,7 @@ test('创建群组时可选择头像，群组栏显示裁剪后的图片', async
   await page.getByRole('dialog', { name: '创建群组' }).getByRole('button', { name: '创建群组', exact: true }).click();
   expect(createdAvatar).toMatch(/^data:image\/png;base64,/);
   await expect(page.locator('.group-rail-avatar')).toHaveAttribute('src', createdAvatar);
+  await expect(page.locator('.group-button.is-selected')).toHaveCSS('border-width', '3px');
   const railButtons = page.locator('.group-rail button');
   await expect(page.locator('.group-rail > button')).toHaveAttribute('aria-label', '创建群组');
   await expect(railButtons).toHaveCount(2);
@@ -342,7 +343,7 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   expect(proportions.personal).toBeCloseTo(proportions.member, 3);
   await expect(page.locator('.group-call-badge')).toBeVisible();
   await expect(page.locator('.group-call-badge')).toHaveCSS('width', '20px');
-  await expect(page.locator('.group-call-badge')).toHaveCSS('bottom', '-5px');
+  await expect(page.locator('.group-button.is-selected .group-call-badge')).toHaveCSS('bottom', '-7px');
   for (const width of [1440, 640, 420]) {
     await page.setViewportSize({ width, height: 900 });
     const badge = await page.locator('.group-call-badge').boundingBox();

@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onScopeDispose, provide, reactive, ref, 
 import { ACCOUNT_CACHE, clearOtherAccountContentCaches, createAccountCache } from './cache/localCache';
 import { useNotice } from './feedback/useNotice';
 import { useInitialLoading } from './profile/useInitialLoading';
-import { ArrowLeft, AudioLines, Copy, CornerUpLeft, Gamepad2, Headphones, MonitorUp,
+import { ArrowLeft, AudioLines, Copy, CornerUpLeft, Headphones,
   LoaderCircle, LogOut, Minus, Plus, RadioTower,
   Settings, Square, UserRound, Volume2, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
@@ -33,7 +33,7 @@ import { canSelectNativeSource, readScreenShareAudioPreference, saveScreenShareA
   resolveNativeScreenAudioCapability, shouldShareAudioInNativeSelection,
   type NativeScreenAudioMode } from './rtc/nativeScreenAudioMode';
 import { createNativeVideoSourceSelection } from './components/nativeVideoSourceSelection';
-import type { ScreenSharePreferences } from './settings/screenSharePreferences';
+import { readScreenSharePreferences, type ScreenSharePreferences } from './settings/screenSharePreferences';
 import { useRoomSummary } from './rtc/useRoomSummary';
 import { requestRoomOccupancies } from './rtc/roomSummaryApi';
 import { AUDIO_VOLUME_MAX } from './rtc/audioPreferences';
@@ -105,8 +105,7 @@ const captureCustomQuality = ref<CustomScreenShareQuality>({ ...DEFAULT_CUSTOM_S
 const selectedCaptureSourceId = ref('');
 const captureFollowGameAvailable = ref(false);
 const captureSourceNotice = ref('');
-const captureGameWindowIds = ref<string[] | null>(null);
-let requestedGameWindowIds: string[] | null = null;
+let requestedGame: DetectedActivity | null = null;
 const capturePicker = ref<InstanceType<typeof ScreenSharePicker> | null>(null);
 const captureSourcesElement = computed(() => capturePicker.value?.sourcesElement);
 let lastCaptureSourceType: 'window' | 'screen' = 'window';
@@ -144,9 +143,7 @@ let nativeThumbnailRefresh: { generation: number; promise: Promise<void> } | und
 const nativeSourceLoading = ref(false);
 const nativeSourceError = ref('');
 const captureSources = computed(() => captureRequest.value?.sources
-  .filter((source) => source.type === captureSourceType.value)
-  .sort((left, right) => Number(!!right.windowId && !!captureGameWindowIds.value?.includes(right.windowId))
-    - Number(!!left.windowId && !!captureGameWindowIds.value?.includes(left.windowId))) ?? []);
+  .filter((source) => source.type === captureSourceType.value) ?? []);
 function stopNativeSourceRefresh() {
   // IPC 无法在页面侧取消；使本次选择失效，迟到结果不能改写下次打开的选择器。
   nativeSourceChooserGeneration++;
@@ -218,14 +215,7 @@ async function refreshNativeSources(
         captureSourceNotice.value = '共享来源已重新连接，请重新选择。';
       }
       currentNativeDiscoveryId = snapshot.discoveryId;
-      if (firstSnapshot && captureGameWindowIds.value !== null) {
-        const candidates = options.filter((source) => source.type === 'window' && source.windowId
-          && captureGameWindowIds.value?.includes(source.windowId)
-          && currentActivity.value?.type === 'GAME' && currentActivity.value.windowIds?.includes(source.windowId));
-        selectedCaptureSourceId.value = candidates.length === 1 ? candidates[0]!.id : '';
-        captureSourceNotice.value = candidates.length === 1 ? '' : candidates.length > 1
-          ? '找到了多个游戏窗口，请选择要共享的画面。' : '未找到可共享的游戏窗口，请恢复游戏窗口或手动选择。';
-      } else if (firstSnapshot && lastNativeSelection?.discoveryId === snapshot.discoveryId
+      if (firstSnapshot && lastNativeSelection?.discoveryId === snapshot.discoveryId
           && options.some((source) => source.id === lastNativeSelection?.sourceId && source.type === captureSourceType.value)) {
         selectedCaptureSourceId.value = lastNativeSelection.sourceId;
       }
@@ -293,7 +283,6 @@ function selectCaptureSource(sourceId: string | null, captureSettings?: ScreenSh
     lastNativeSelection = { discoveryId: currentNativeDiscoveryId, sourceId };
   }
   captureRequest.value = null;
-  captureGameWindowIds.value = null;
   const chooser = nativeSourceChooser;
   nativeSourceChooser = undefined;
   stopNativeSourceRefresh();
@@ -334,6 +323,7 @@ function updateCaptureShareAudio(enabled: boolean) {
 function requestNativeScreenSource(
   capabilities: Promise<Record<string, { available: boolean; reason: string }>>,
 ): Promise<NativeScreenSourceSelection | null> {
+  if (requestedGame) return resolveGameScreenSource(requestedGame, capabilities);
   selectCaptureSource(null);
   const chooser = createNativeVideoSourceSelection([]);
   const generation = ++nativeSourceChooserGeneration;
@@ -346,8 +336,7 @@ function requestNativeScreenSource(
   captureAudioCapabilityFailed.value = false;
   captureAudioMode.value = 'unavailable';
   captureShareAudio.value = false;
-  captureGameWindowIds.value = requestedGameWindowIds;
-  captureSourceType.value = captureGameWindowIds.value !== null ? 'window' : lastCaptureSourceType;
+  captureSourceType.value = lastCaptureSourceType;
   selectedCaptureSourceId.value = '';
   captureSourceNotice.value = '';
   currentNativeDiscoveryId = '';
@@ -524,13 +513,44 @@ const currentActivity = ref<DetectedActivity | null>(null);
 const currentGame = computed(() => desktop && currentActivity.value?.type === 'GAME' ? currentActivity.value : null);
 const gameShareBusy = computed(() => !connected.value || !!captureRequest.value || screenShareLimitReached.value
   || rtc.busySources.includes(Track.Source.ScreenShare) || rtc.screenShareQualityBusy || rtc.screenShareSourceBusy);
-async function shareCurrentGame() {
-  if (!currentGame.value || gameShareBusy.value) return;
-  requestedGameWindowIds = [...(currentGame.value.windowIds ?? [])];
+async function resolveGameScreenSource(game: DetectedActivity,
+  capabilities: Promise<Record<string, { available: boolean; reason: string }>>): Promise<NativeScreenSourceSelection | null> {
+  const room = rtc.room;
   try {
-    if (rtc.screenShareActive) await recording.withSourceChange(before => rtc.changeScreenShareSource(before));
-    else await rtc.toggleMedia(Track.Source.ScreenShare);
-  } finally { requestedGameWindowIds = null; }
+    const [snapshot, activity, audio] = await Promise.all([
+      desktop!.listNativeVideoSources(), desktop!.getCurrentActivity(), resolveNativeScreenAudioCapability(capabilities),
+    ]);
+    if (appDisposed || !connected.value || rtc.room !== room) return null;
+    const candidates = snapshot.sources.filter(source => source.kind === 'window' && source.windowId
+      && game.windowIds?.includes(source.windowId) && activity?.type === 'GAME'
+      && activity.startedAt === game.startedAt && activity.windowIds?.includes(source.windowId));
+    if (candidates.length !== 1) {
+      viewerNotice.value = candidates.length ? '找到了多个游戏窗口，请使用共享按钮选择画面。'
+        : '未找到可共享的游戏窗口，请恢复游戏窗口或使用共享按钮选择画面。';
+      return null;
+    }
+    if (audio.failed) { viewerNotice.value = '无法确认共享声音设置，请重试。'; return null; }
+    return { sourceId: candidates[0]!.sourceId, quality: captureQuality.value,
+      customQuality: { ...captureCustomQuality.value }, captureSettings: { ...readScreenSharePreferences(), windowMethod: 'auto' },
+      shareAudio: shouldShareAudioInNativeSelection(true, audio.mode, readScreenShareAudioPreference(audio.mode)) };
+  } catch {
+    if (!appDisposed && connected.value && rtc.room === room) viewerNotice.value = '无法准备游戏共享，请使用共享按钮重新选择。';
+    return null;
+  }
+}
+async function shareCurrentGame() {
+  if (!currentGame.value || gameShareBusy.value || rtc.screenShareActive) return;
+  requestedGame = { ...currentGame.value, windowIds: [...(currentGame.value.windowIds ?? [])] };
+  try {
+    await rtc.toggleMedia(Track.Source.ScreenShare);
+  } finally { requestedGame = null; }
+}
+async function shareAndRecord() {
+  if (!desktop || gameShareBusy.value || rtc.screenShareActive || recording.busy.value) return;
+  const room = rtc.room;
+  await rtc.toggleMedia(Track.Source.ScreenShare);
+  // 取消、启动失败或切房后不录制；录制模块还会核对当前轨道与采集资格。
+  if (!appDisposed && rtc.room === room && connected.value && rtc.screenShareActive) await recording.start();
 }
 const { showActivity, showLastOnline, error: activityVisibilityError, setShowActivity, setShowLastOnline } = usePresenceVisibility(props.user.id);
 const activityMappings = useActivityMappings(props.user.id, desktop);
@@ -1454,6 +1474,7 @@ function updateMicrophoneProcessing(enabled: boolean) {
 }
 function updateVoiceMode(mode: VoiceMode, opener: HTMLElement) {
   if (mode === 'pushToTalk' && !audioShortcuts.bindings.pushToTalk) {
+    audioShortcuts.error = '请先为按键发言设置快捷键';
     void openSettings('shortcuts', opener);
     return;
   }
@@ -1634,6 +1655,8 @@ function participantListening(participant: Participant) {
                       :microphone-enabled="rtc.microphoneEnabled" :microphone-intent="rtc.microphoneIntent" :microphone-busy="rtc.busySources.includes(Track.Source.Microphone)"
                       :microphone-level="localMicrophoneLevel" :input-level-percent="localInputLevelPercent"
                       :listening="listening" :input-gain="inputGain" :output-volume="outputVolume"
+                      :voice-volume-balance="voiceVolumeBalance" @voice-volume-balance="audioPreferences.setVoiceVolumeBalance"
+                      :game-name="currentGame?.name" @share-game="shareCurrentGame" @share-and-record="shareAndRecord"
                       :voice-mode="audioShortcuts.voiceMode" :push-to-talk-binding="audioShortcuts.bindings.pushToTalk"
                       :shortcuts-ready="audioShortcuts.ready" :shortcuts-busy="audioShortcuts.busy" :shortcuts-supported="audioShortcuts.supported"
                       :processing-enabled="microphoneProcessingEnabled" :processing-partial="microphoneProcessingPartial" :microphone-error="audioShortcuts.error"
@@ -1652,7 +1675,7 @@ function participantListening(participant: Participant) {
                       @microphone="toggleMicrophone" @listening="toggleListening"
                       @prepare-share="preloadCaptureSources"
                       @share="captureRequest ? selectCaptureSource(null) : rtc.toggleMedia(Track.Source.ScreenShare)"
-                      @change-source="recording.withSourceChange(before => rtc.changeScreenShareSource(before))" @quality="changeScreenShareQuality" @share-audio="changeScreenShareAudio"
+                      @quality="changeScreenShareQuality" @share-audio="changeScreenShareAudio"
                       @input-gain="updateInputGain" @output-volume="updateOutputVolume" @settings="openSettings('audio', $event)" />
                     <IconButton :label="joiningGroupId ? '取消连接' : '离开语音'" class="is-danger"
                       :disabled="callbarLeaving || (!joinedGroup && joiningGroupId === null)" @click="leaveVoice"><LogOut :size="17" /></IconButton>
@@ -1667,14 +1690,6 @@ function participantListening(participant: Participant) {
             :error="groupError" :connection-lost="presenceConnectionLost" :status="memberOnlineStatus"
             :status-label="memberStatusLabel" :activity="memberActivity" :presences="groupPresences" />
         <aside v-else class="members-directory members-directory-empty" aria-label="群组成员" />
-        <div class="personal-footer">
-        <div v-if="currentGame" class="current-game-share" aria-label="当前游戏">
-          <Gamepad2 :size="22" aria-hidden="true" />
-          <span :title="currentGame.name">{{ currentGame.name }}</span>
-          <IconButton :label="connected ? `共享 ${currentGame.name}` : '加入语音后共享游戏'" :disabled="gameShareBusy"
-            :title="connected ? `共享 ${currentGame.name}` : '加入语音后共享游戏'"
-            @click="shareCurrentGame"><MonitorUp :size="18" /></IconButton>
-        </div>
         <div v-if="settingsPresented" class="personal-card-space" aria-hidden="true" />
         <Teleport to="body" :disabled="!settingsPresented">
         <PersonalStatusCard :user="user" :status="publicPresenceStatus" :status-label="personalPresenceLabel"
@@ -1690,7 +1705,6 @@ function participantListening(participant: Participant) {
           </IconButton>
         </PersonalStatusCard>
         </Teleport>
-        </div>
         </div>
       </main>
     </div>

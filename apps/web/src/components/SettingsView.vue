@@ -136,7 +136,7 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
         <OwnerSettings v-if="user.administrator && activeSection === 'members'" :active="true" :leaving="leaving" />
         <div v-show="activeSection === 'account'" class="settings-account-page">
           <ProfileSettings ref="profileSettings" :user="user" :save-profile="saveProfile" />
-          <ActivitySettings ref="activitySettings" :user="profileSettings?.preview ?? user" :status="presenceStatus" :desktop="desktop" :activity="activity" :show-activity="showActivity" :show-last-online="showLastOnline"
+          <ActivitySettings ref="activitySettings" :user="user" :status="presenceStatus" :desktop="desktop" :activity="activity" :show-activity="showActivity" :show-last-online="showLastOnline"
             :presence-mode="presenceMode" :presence-ready="presenceReady" :presence-syncing="presenceSyncing" :presence-error="presenceError"
             @presence-mode="emit('presenceMode', $event)"
             :mappings="activityMappings" :active="activeSection === 'account'"

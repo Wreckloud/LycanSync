@@ -11,15 +11,17 @@ import { createApp, h, reactive } from ${JSON.stringify(vuePath)};
 import CallControls from '/src/components/CallControls.vue';
 import '/src/styles.css';
 createApp({ setup() {
-  const state = reactive({ voiceMode:'voice', pushToTalkBinding:'F2', processingEnabled:true, sharing:true });
+  const state = reactive({ voiceMode:'voice', pushToTalkBinding:'F2', processingEnabled:true, sharing:true, recordingActive:true, voiceVolumeBalance:true, gameName:'饥荒联机版' });
+  window.quickControlsTest = state;
   return () => h('div', { class:'callbar', style:'position:fixed;bottom:20px;right:20px' }, [h(CallControls, {
     connected:true, desktop:true, microphoneEnabled:true, microphoneIntent:true, microphoneBusy:false,
     microphoneLevel:0.3, inputLevelPercent:30, listening:true, inputGain:1, outputVolume:1,
     shareBusy:false, choosingSource:false, shareLimitReached:false, quality:'standard', shareAudio:true, audioMode:'process',
-    recordingActive:true, recordingElapsed:'03:24', replayActive:true,
+    recordingElapsed:'03:24', replayActive:true,
     shortcutsSupported:true, shortcutsReady:true, ...state,
     onVoiceMode:mode => {state.voiceMode=mode;}, onProcessing:enabled => {state.processingEnabled=enabled;},
-    onShare:() => {state.sharing=!state.sharing;}
+    onVoiceVolumeBalance:enabled => {state.voiceVolumeBalance=enabled;},
+    onShare:() => {state.sharing=!state.sharing;state.recordingActive=false;}
   })]);
 }}).mount('#root');` });
   });
@@ -47,25 +49,37 @@ test('麦克风快捷切换更新勾选，声音处理是一个开关且切换�
   await expect(opener).toBeFocused();
 });
 
-test('共享菜单收起低频入口，窄窗口子菜单返回并恢复焦点，停止共享后隐藏画质', async ({ page }, testInfo) => {
+test('共享菜单按操作顺序直接展示，画质保留二级调整，未共享时不重复开始共享', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 420, height: 720 });
   const opener = page.getByRole('button', { name: '共享选项', exact: true });
   await opener.click();
   const menu = page.getByRole('region', { name: '共享选项', exact: true });
-  await expect(menu.getByRole('button', { name: '停止录制 · 03:24' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '录制设置', exact: true })).toHaveCount(0);
-  await expect(menu.getByRole('button', { name: '语音设置' })).toHaveCount(0);
-  await menu.getByRole('button', { name: '录制与回放' }).click();
-  const submenu = page.getByRole('region', { name: '录制与回放' });
-  await expect(submenu.getByRole('button', { name: '保存回放' })).toBeVisible();
-  await expect(menu).toBeHidden();
-  await expect(submenu).toBeInViewport();
-  await expect(submenu).toHaveCSS('opacity', '1');
-  await page.screenshot({ path: testInfo.outputPath('recording-submenu.png') });
+  await expect(menu.getByRole('button')).toHaveText(['关闭共享', '停止录制 · 03:24', '共享画质标准', '保存即时回放', '录制设置']);
+  await expect(menu.getByRole('checkbox')).toHaveCount(0);
+  await menu.getByRole('button', { name: '共享画质' }).click();
+  const quality = page.getByRole('region', { name: '共享画质', exact: true });
+  await expect(quality.getByRole('group', { name: '画质预设' }).getByRole('radio')).toHaveCount(4);
+  await expect(quality.getByRole('checkbox', { name: '共享音频' })).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(menu.getByRole('button', { name: '录制与回放' })).toBeFocused();
-  await menu.getByRole('button', { name: '停止共享', exact: true }).click();
+  await expect(quality).toBeHidden();
+  await expect(menu.getByRole('button', { name: '共享画质' })).toBeFocused();
+  await expect(menu).toHaveCSS('opacity', '1');
+  await page.screenshot({ path: testInfo.outputPath('share-menu.png') });
+  await menu.getByRole('button', { name: '关闭共享', exact: true }).click();
   await opener.click();
-  await expect(menu.getByRole('button', { name: '开始共享', exact: true })).toBeVisible();
-  await expect(menu.getByRole('button', { name: '共享画质' })).toHaveCount(0);
+  await expect(menu.getByRole('button')).toHaveText(['快速共享 饥荒联机版', '开始共享并录制', '录制设置']);
+});
+
+test('未绑定显示括号标记，收听音量平衡可直接切换', async ({ page }) => {
+  await page.evaluate(() => {
+    (window as unknown as { quickControlsTest: { pushToTalkBinding: string } }).quickControlsTest.pushToTalkBinding = '';
+  });
+  await page.getByRole('button', { name: '麦克风选项', exact: true }).click();
+  await expect(page.getByRole('button', { name: '按键说话 (未设置)' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '收听选项', exact: true }).click();
+  const balance = page.getByRole('checkbox', { name: '平衡成员语音音量' });
+  await expect(balance).toBeChecked();
+  await balance.uncheck();
+  await expect(balance).not.toBeChecked();
 });

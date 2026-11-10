@@ -45,57 +45,9 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test('游戏快捷栏随本机游戏显示，未入房不能共享，出现与消失不移动聊天输入框', async ({ page }, testInfo) => {
-  await page.route('**/src/main.ts*', async route => {
-    const original = await (await route.fetch()).text();
-    const vuePath = original.match(/from ["']([^"']*\/vue\.js[^"']*)["']/)?.[1];
-    if (!vuePath) throw new Error('未找到 Vite Vue 模块');
-    await route.fulfill({ contentType: 'text/javascript', body: `
-import { createApp } from ${JSON.stringify(vuePath)};
-import App from '/src/App.vue';
-import '/src/styles.css';
-window.lycanDesktop = {
-  getWindowVisibility:async () => true, onWindowVisibility:() => () => {},
-  onClose:() => () => {}, onViewerClosed:() => () => {},
-  getCurrentActivity:async () => null,
-  onActivityChange:listener => {
-    const callback = event => listener(event.detail);
-    window.addEventListener('test-activity', callback);
-    return () => window.removeEventListener('test-activity', callback);
-  },
-  configureActivityMappings:async () => {}, prepareCapture:async () => {},
-  getSystemIdleState:async () => ({state:'active',idleSeconds:0}),
-  getRecordingSettings:async () => ({directory:'test',applicationAudio:true,microphone:false,friends:false}),
-  getRecordingStatus:async () => ({holdingResources:false,phase:'idle',recordingId:null,startedAt:null,bytes:0,error:null,saved:false,continuing:false,applicationAudio:true}),
-  onRecordingState:() => () => {}
-};
-createApp(App, {user:${JSON.stringify(user)},windowMaximized:false,saveProfile:async profile => profile}).mount('#root');` });
-  });
-  const errors: string[] = [];
-  page.on('pageerror', error => errors.push(error.message));
-  await page.goto('/');
-  const input = page.getByRole('textbox', { name: '消息内容', exact: true });
-  await expect(input).toBeVisible();
-  const before = (await input.boundingBox())!;
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent('test-activity', {
-    detail: { type: 'GAME', name: '饥荒联机版', startedAt: new Date().toISOString(), windowIds: ['22'] },
-  })));
-  const game = page.getByLabel('当前游戏', { exact: true });
-  await expect(game).toContainText('饥荒联机版');
-  await expect(game.getByRole('button', { name: '加入语音后共享游戏' })).toBeDisabled();
-  expect((await input.boundingBox())!.y).toBe(before.y);
-  await page.screenshot({ path: testInfo.outputPath('current-game-bar.png') });
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent('test-activity', {
-    detail: { type: 'MUSIC', name: '歌曲', startedAt: new Date().toISOString() },
-  })));
-  await expect(game).toHaveCount(0);
-  expect((await input.boundingBox())!.y).toBe(before.y);
-  expect(errors).toEqual([]);
-});
-
 test('底部整块资料打开菜单，编辑沿用设置且返回原入口，不改底部布局', async ({ page }) => {
   await page.goto('/');
-  const footer = page.locator('.personal-footer > .personal-card');
+  const footer = page.locator('.group-conversation > .personal-card');
   const bounds = await footer.boundingBox();
   await page.getByRole('button', { name: '个人菜单', exact: true }).click();
   const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
@@ -109,7 +61,7 @@ test('底部整块资料打开菜单，编辑沿用设置且返回原入口，�
   await expect(page.getByRole('heading', { name: '账号设置', exact: true })).toBeVisible();
   await expect(menu).toHaveCount(0);
   await page.getByRole('button', { name: '返回应用', exact: true }).click();
-  await expect(page.locator('.personal-footer > .personal-card').getByRole('button', { name: '个人菜单', exact: true })).toBeFocused();
+  await expect(page.locator('.group-conversation > .personal-card').getByRole('button', { name: '个人菜单', exact: true })).toBeFocused();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await expect(page.getByRole('heading', { name: '账号设置', exact: true })).toBeVisible();
   await expect(menu).toHaveCount(0);
@@ -252,7 +204,7 @@ test('个人面板固定在个人栏上方，切换状态不移动，窄窗可�
   const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
   await expect(menu).toHaveCSS('opacity', '1');
   const original = (await menu.boundingBox())!;
-  const footer = (await page.locator('.personal-footer > .personal-card').boundingBox())!;
+  const footer = (await page.locator('.group-conversation > .personal-card').boundingBox())!;
   expect(original.y + original.height).toBeCloseTo(footer.y - 8, 0);
   expect(original.x + original.width).toBeCloseTo(Math.min(footer.x + footer.width, page.viewportSize()!.width - 8), 0);
   const statusTrigger = menu.getByRole('button', { name: '切换在线状态', exact: true });
@@ -398,6 +350,43 @@ test('清除凭据有独立确认，取消保留账号，确认后才撤销', as
   await expect(confirmation).toHaveCount(0);
   expect(logoutRequests).toBe(1);
   await expect(page.getByRole('button', { name: '登录', exact: true })).toHaveCount(0);
+});
+
+test('个人菜单沿语音菜单方向展开收起，减少动态效果时跳过位移', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: '个人菜单', exact: true })).toBeVisible();
+  for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+    await page.emulateMedia({ reducedMotion });
+    const enter = await page.evaluate(async () => {
+      document.querySelector<HTMLButtonElement>('[aria-label="个人菜单"]')!.click();
+      await new Promise(requestAnimationFrame);
+      await new Promise(requestAnimationFrame);
+      await new Promise(requestAnimationFrame);
+      const menu = document.querySelector<HTMLElement>('.profile-popover.is-personal')!;
+      getComputedStyle(menu).transform;
+      return menu.getAnimations().flatMap(animation => (animation.effect as KeyframeEffect).getKeyframes())
+        .filter(frame => frame.transform).map(frame => new DOMMatrixReadOnly(String(frame.transform)).m42);
+    });
+    expect(enter.includes(4), JSON.stringify(enter)).toBe(reducedMotion === 'no-preference');
+    const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
+    await expect(menu).toHaveCSS('opacity', '1');
+    await expect(menu).toHaveCSS('transform', 'none');
+    const leave = await page.evaluate(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await new Promise(requestAnimationFrame);
+      await new Promise(requestAnimationFrame);
+      await new Promise(requestAnimationFrame);
+      const menu = document.querySelector<HTMLElement>('.profile-popover.is-personal');
+      if (menu) getComputedStyle(menu).transform;
+      return { inert: menu?.inert ?? true, transforms: menu?.getAnimations()
+        .flatMap(animation => (animation.effect as KeyframeEffect).getKeyframes())
+        .filter(frame => frame.transform).map(frame => new DOMMatrixReadOnly(String(frame.transform)).m42) ?? [] };
+    });
+    expect(leave.inert).toBe(true);
+    expect(leave.transforms.includes(4), JSON.stringify(leave.transforms)).toBe(reducedMotion === 'no-preference');
+    await expect(page.locator('.profile-popover.is-personal')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '个人菜单', exact: true })).toBeFocused();
+  }
 });
 
 test('头像只给卡片头部提供暗色调，快速开关后菜单仍可操作', async ({ page }) => {
@@ -682,10 +671,20 @@ test('关闭动态的心跳尚未返回就退出时，离线请求仍带上最�
   } finally { release!(); }
 });
 
-test('自己语音记录在卡片底部，动态设置左侧复用预览并跟随签名编辑', async ({ page }) => {
+test('自己语音记录在卡片底部，资料预览仅在保存成功后更新，清空成功才显示默认签名', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.route('**/api/rtc/voice-time', route => route.fulfill({ json: { seconds: 460800 } }));
-  await page.route('**/api/auth/me', route => route.fulfill({ json: { ...user, signature: '' } }));
+  let savedSignature = '';
+  let failSave = false;
+  let releaseSave: (() => void) | undefined;
+  await page.route('**/api/auth/me', async route => {
+    if (route.request().method() === 'PUT') {
+      await new Promise<void>(resolve => { releaseSave = resolve; });
+      if (failSave) return route.fulfill({ status: 503, json: { detail: '签名保存失败' } });
+      savedSignature = route.request().postDataJSON().signature;
+    }
+    await route.fulfill({ json: { ...user, signature: savedSignature } });
+  });
   await page.goto('/');
   await page.getByRole('button', { name: '个人菜单', exact: true }).click();
   const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
@@ -708,8 +707,32 @@ test('自己语音记录在卡片底部，动态设置左侧复用预览并跟�
   const card = await preview.boundingBox();
   const controls = await page.locator('.activity-settings-controls').boundingBox();
   expect(card!.x + card!.width).toBeLessThan(controls!.x);
-  await page.getByRole('textbox', { name: '个性签名', exact: true }).fill('新的签名预览');
+  const signature = page.getByRole('textbox', { name: '个性签名', exact: true });
+  await signature.fill('新的签名预览');
+  await expect(preview).toContainText('这只狼暂时没留下什么话。');
+  await signature.blur();
+  await expect.poll(() => !!releaseSave).toBe(true);
+  await expect(preview).not.toContainText('新的签名预览');
+  releaseSave!(); releaseSave = undefined;
   await expect(preview).toContainText('新的签名预览');
+  for (const failed of [true, false]) {
+    failSave = failed;
+    await signature.fill('');
+    await expect(preview).toContainText('新的签名预览');
+    await signature.blur();
+    await expect.poll(() => !!releaseSave).toBe(true);
+    await expect(preview).toContainText('新的签名预览');
+    releaseSave!(); releaseSave = undefined;
+    if (failed) {
+      await expect(signature).toHaveValue('新的签名预览');
+      await expect(preview).toContainText('新的签名预览');
+      await expect(page.locator('#profile-signature-feedback')).toContainText('签名保存失败');
+    } else {
+      await expect(preview).toContainText('这只狼暂时没留下什么话。');
+      expect(savedSignature).toBe('');
+      await expect(signature).toHaveValue('');
+    }
+  }
   await page.screenshot({ path: test.info().outputPath('activity-profile-preview.png') });
   await page.setViewportSize({ width: 800, height: 760 });
   const narrowCard = await preview.boundingBox();

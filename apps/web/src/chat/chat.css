@@ -37,6 +37,7 @@
 @media (max-width: 600px) { .chat-heading:has(.chat-sync-status) .chat-title { display: none; } }
 
 .message-list {
+  --chat-covered-height: max(0px, var(--voice-overlay-height, 0px) - var(--chat-list-offset, 0px));
   flex: 1;
   font-size: var(--chat-font-size);
   min-height: 0;
@@ -45,10 +46,13 @@
   flex-direction: column;
   gap: 14px;
   padding: 24px 2px 18px;
-  padding-top: calc(24px + max(0px, var(--voice-overlay-height, 0px) - var(--chat-list-offset, 0px)));
+  padding-top: calc(24px + var(--chat-covered-height));
   /* 阅读位置由布局补偿和历史消息锚点维护，避免浏览器再次补偿同一次高度变化。 */
   overflow-anchor: none;
 }
+
+/* 轨道从语音覆盖区下方开始，保留消息容器的尺寸与阅读位置。 */
+.message-list::-webkit-scrollbar-track { margin-top: calc(8px + var(--chat-covered-height)); }
 
 /* 短对话贴底，长对话从顶部正常滚动，避免 flex-end 把早期消息推到不可达区域。 */
 .message-list > :first-child { margin-top: auto; }
