@@ -21,8 +21,8 @@ import GroupManagementDialog from './components/GroupManagementDialog.vue';
 import GroupChat from './components/GroupChat.vue';
 import ScreenSharePicker from './components/ScreenSharePicker.vue';
 import { useInlineViewingMotion } from './viewing/useInlineViewingMotion';
-import { createGroup, updateGroup, findGroup, findGroupPresences, findGroups, nextPresenceWaitRequest, waitForGroupPresenceChanges,
-  type GroupDetail, type GroupMember, type GroupPresence, type GroupPresenceChangeCursor, type GroupSummary } from './group/groupApi';
+import { createGroup, updateGroup, findGroup, findGroups,
+  type GroupDetail, type GroupMember, type GroupSummary } from './group/groupApi';
 import { useRtcRoom } from './rtc/useRtcRoom';
 import { useMicrophoneTest } from './rtc/useMicrophoneTest';
 import { useMicrophoneDevices } from './rtc/useMicrophoneDevices';
@@ -38,8 +38,9 @@ import { useAudioPreferences, type AudioVolumeChange } from './rtc/useAudioPrefe
 import { entranceSoundToFile, loadEntranceSound } from './rtc/entranceSound';
 import { useCallSounds } from './rtc/useCallSounds';
 import { normalizeVoiceLevel } from './rtc/voiceLevel';
-import { PRESENCE_STATUS_LABELS, sendPresenceHeartbeat, type UserPresenceStatus } from './presence/presenceApi';
-import { usePresencePreference, type PresenceMode } from './presence/usePresencePreference';
+import { useGroupPresences } from './group/useGroupPresences';
+import { useOwnPresence } from './presence/useOwnPresence';
+import { PRESENCE_STATUS_LABELS } from './presence/presenceApi';
 import { ApiRequestError, type AuthUser, type ProfileUpdate } from './auth/authApi';
 import type { SettingsSectionId } from './settings/settingsSections';
 import { usePresenceVisibility } from './settings/usePresenceVisibility';
@@ -72,9 +73,6 @@ const STATUS_LABELS = { idle: '未加入语音', joining: '正在连接语音', 
 const CALLBAR_EXIT_DURATION_MS = 180;
 const GROUP_LIST_REFRESH_INTERVAL_MS = 30_000;
 const ROOM_OCCUPANCY_REFRESH_INTERVAL_MS = 5_000;
-const PRESENCE_HEARTBEAT_INTERVAL_MS = 20_000;
-const PRESENCE_IDLE_TIMEOUT_MS = 5 * 60_000;
-const PRESENCE_IDLE_CHECK_INTERVAL_MS = 2_000;
 const audioPreferences = useAudioPreferences(props.user.id);
 const { inputGain, outputVolume, screenShareVolume, voiceVolumeBalance } = audioPreferences;
 const audioProcessing = audioPreferences.processing;
@@ -205,7 +203,6 @@ const groups = ref<GroupSummary[]>([]);
 const selectedGroupId = ref<string | null>(null);
 const selectedGroupDetail = ref<GroupDetail | null>(null);
 const joinedGroupDetail = ref<GroupDetail | null>(null);
-const groupPresences = ref<Record<string, GroupPresence>>({});
 const groupError = ref('');
 const summaryError = ref<string | null>(null);
 const groupLoading = ref(false);
@@ -222,33 +219,16 @@ let detailRequest: AbortController | null = null;
 let listRequest: AbortController | null = null;
 let groupActionRequest: AbortController | null = null;
 let groupEditorGeneration = 0;
-let groupPresenceRequest: AbortController | null = null;
-let groupPresenceWaitRequest: AbortController | null = null;
-let groupPresenceWatchGeneration = 0;
-let groupPresenceRetryTimer: ReturnType<typeof setTimeout> | null = null;
-let cancelGroupPresenceRetry: (() => void) | null = null;
-const presenceCursors = new Map<string, Pick<GroupPresenceChangeCursor, 'serverInstanceId' | 'version' | 'detailVersion'>>();
-const presenceConnectionLost = ref(false);
+const { groupPresences, presenceConnectionLost, refreshGroupPresence } = useGroupPresences(selectedGroupId,
+  () => selectedGroupDetail.value, loadGroup);
 let roomOccupancyRequest: AbortController | null = null;
 let joinAttempt = 0;
-let presenceHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
-let presenceIdleTimer: ReturnType<typeof setInterval> | null = null;
-let presenceIdleRequest = 0;
-let presenceRecovery: { startedAt: number; lastInputAt: number; samples: number } | null = null;
-let presenceAbort: AbortController | null = null;
-let presenceStopped = false;
-const currentPresenceStatus = ref<UserPresenceStatus>('ONLINE');
-const presencePreference = usePresencePreference(props.user.id, desktop);
-const { mode: presenceMode, ready: presenceReady, error: presencePreferenceError } = presencePreference;
-const publicPresenceStatus = computed<UserPresenceStatus>(() => presenceMode.value === 'invisible' ? 'OFFLINE' : currentPresenceStatus.value);
-const personalPresenceLabel = computed(() => !presenceReady.value ? '正在读取状态…'
-  : presenceMode.value === 'invisible' ? '隐身' : PRESENCE_STATUS_LABELS[currentPresenceStatus.value]);
-const presenceSyncing = ref(false);
-const presenceSyncError = ref('');
-let presenceSending: Promise<void> | null = null;
-let presenceHeartbeatPending = false;
-let presenceModeChange = 0;
-const currentActivity = ref<DetectedActivity | null>(null);
+const { showActivity, showLastOnline, error: activityVisibilityError, setShowActivity, setShowLastOnline } = usePresenceVisibility(props.user.id);
+const ownPresence = useOwnPresence(props.user.id, { showActivity, showLastOnline }, desktop);
+const { currentActivity, sharedActivity, publicPresenceStatus, personalPresenceLabel,
+  presenceMode, presenceReady, presencePreferenceError, presenceSyncing, presenceSyncError,
+  sendHeartbeat, changePresenceMode, startPresenceHeartbeat, updateOwnPresenceStatus, prepareLogout, reportOfflineBeforeClose } = ownPresence;
+defineExpose({ prepareLogout });
 const currentGame = computed(() => desktop && currentActivity.value?.type === 'GAME' ? currentActivity.value : null);
 const gameShareBusy = computed(() => !connected.value || !!captureRequest.value || screenShareLimitReached.value
   || rtc.busySources.includes(Track.Source.ScreenShare) || rtc.screenShareQualityBusy || rtc.screenShareSourceBusy);
@@ -266,233 +246,7 @@ async function shareAndRecord() {
   // 取消、启动失败或切房后不录制；录制模块还会核对当前轨道与采集资格。
   if (!appDisposed && rtc.room === room && connected.value && rtc.screenShareActive) await recording.start();
 }
-const { showActivity, showLastOnline, error: activityVisibilityError, setShowActivity, setShowLastOnline } = usePresenceVisibility(props.user.id);
 const activityMappings = useActivityMappings(props.user.id, desktop);
-const sharedActivity = computed(() => showActivity.value && presenceMode.value === 'online' ? currentActivity.value : null);
-let activityRevision = 0;
-const activitySnapshotRevision = activityRevision;
-watch([showActivity, showLastOnline], () => { void sendHeartbeat(); });
-
-function applyDetectedActivity(activity: DetectedActivity | null) {
-  if (presenceStopped) return;
-  activityRevision++;
-  if (JSON.stringify(activity) === JSON.stringify(currentActivity.value)) return;
-  currentActivity.value = activity;
-  void sendHeartbeat();
-}
-const removeActivityListener = desktop?.onActivityChange(applyDetectedActivity);
-void desktop?.getCurrentActivity().then((activity) => {
-  if (activityRevision === activitySnapshotRevision) applyDetectedActivity(activity);
-}).catch(() => undefined);
-onScopeDispose(() => removeActivityListener?.());
-
-function sendHeartbeat(): Promise<void> {
-  if (presenceStopped) return Promise.resolve();
-  presenceHeartbeatPending = true;
-  // 同一会话串行发送并合并待发状态，旧在线请求结束后再提交最新隐身选择。
-  if (!presenceSending) presenceSending = flushPresenceHeartbeats();
-  return presenceSending;
-}
-
-async function flushPresenceHeartbeats() {
-  try {
-    await presencePreference.loaded;
-    while (presenceHeartbeatPending && !presenceStopped) {
-      presenceHeartbeatPending = false;
-      const controller = new AbortController();
-      presenceAbort = controller;
-      const status = publicPresenceStatus.value;
-      const activity = sharedActivity.value ? { type: sharedActivity.value.type, name: sharedActivity.value.name } : null;
-      presenceSyncing.value = true;
-      try {
-        await sendPresenceHeartbeat(status, activity, controller.signal, { showActivity: showActivity.value, showLastOnline: showLastOnline.value });
-        if (!presenceStopped && !controller.signal.aborted && status === publicPresenceStatus.value) presenceSyncError.value = '';
-      } catch {
-        if (!presenceStopped && !controller.signal.aborted) presenceSyncError.value = '状态设置尚未同步，将自动重试。';
-      } finally {
-        if (presenceAbort === controller) presenceAbort = null;
-      }
-    }
-  } finally {
-    presenceSending = null;
-    presenceSyncing.value = false;
-  }
-}
-
-async function changePresenceMode(mode: PresenceMode) {
-  if (!presenceReady.value) return;
-  const change = ++presenceModeChange;
-  if (mode === 'online') await updateOwnPresenceStatus();
-  if (presenceStopped || change !== presenceModeChange) return;
-  presencePreference.setMode(mode);
-  await sendHeartbeat();
-}
-
-function startPresenceHeartbeat() {
-  if (presenceHeartbeatTimer) return;
-  presenceStopped = false;
-  void sendHeartbeat();
-  presenceHeartbeatTimer = setInterval(() => void sendHeartbeat(), PRESENCE_HEARTBEAT_INTERVAL_MS);
-}
-
-function stopPresenceHeartbeat() {
-  presenceStopped = true;
-  presenceHeartbeatPending = false;
-  presenceAbort?.abort();
-  presenceAbort = null;
-  if (presenceHeartbeatTimer) clearInterval(presenceHeartbeatTimer);
-  presenceHeartbeatTimer = null;
-}
-
-function prepareLogout() {
-  stopPresenceHeartbeat();
-  return { showActivity: showActivity.value, showLastOnline: showLastOnline.value };
-}
-
-async function reportOfflineBeforeClose() {
-  await sendPresenceHeartbeat('OFFLINE', null, AbortSignal.timeout(1_200), prepareLogout()).catch(() => undefined);
-}
-
-defineExpose({ prepareLogout });
-
-async function updateOwnPresenceStatus() {
-  const request = ++presenceIdleRequest;
-  const sampledAt = performance.now();
-  const systemIdle = await desktop?.getSystemIdleState().catch(() => null);
-  // 系统查询失败时保留上次状态，下一轮重试，不能据此判定用户已经恢复操作。
-  if (presenceStopped || request !== presenceIdleRequest) return;
-  if (desktop && (!systemIdle || systemIdle.state === 'unknown')) { presenceRecovery = null; return; }
-  const nextStatus = systemIdle && (systemIdle.state === 'idle' || systemIdle.state === 'locked'
-    || systemIdle.idleSeconds >= PRESENCE_IDLE_TIMEOUT_MS / 1000) ? 'AWAY' : 'ONLINE';
-  if (nextStatus === 'AWAY' || currentPresenceStatus.value !== 'AWAY') presenceRecovery = null;
-  else if (systemIdle) {
-    // 闲置秒数会取整；只有新的输入时间明显前进，才算另一轮操作。
-    const lastInputAt = sampledAt - systemIdle.idleSeconds * 1000;
-    if (systemIdle.idleSeconds > 2) { presenceRecovery = null; return; }
-    if (!presenceRecovery || lastInputAt - presenceRecovery.lastInputAt > 4000) {
-      presenceRecovery = { startedAt: sampledAt, lastInputAt, samples: 1 };
-      return;
-    }
-    if (lastInputAt - presenceRecovery.lastInputAt <= 1000) return;
-    presenceRecovery.lastInputAt = lastInputAt;
-    presenceRecovery.samples++;
-    if (sampledAt - presenceRecovery.startedAt < 6000 || presenceRecovery.samples < 3) return;
-    presenceRecovery = null;
-  }
-  if (nextStatus === currentPresenceStatus.value) return;
-  currentPresenceStatus.value = nextStatus;
-  void sendHeartbeat();
-}
-
-function confirmPresenceInteraction(event: Event) {
-  if (!event.isTrusted || presenceStopped || document.visibilityState === 'hidden'
-      || currentPresenceStatus.value !== 'AWAY') return;
-  if (event instanceof KeyboardEvent && (event.repeat || ['Shift', 'Control', 'Alt', 'Meta'].includes(event.key))) return;
-  if (!(event.target instanceof Element) || !event.target.closest('button, a[href], input, textarea, [contenteditable="true"], [role="button"]')) return;
-  presenceIdleRequest++;
-  presenceRecovery = null;
-  currentPresenceStatus.value = 'ONLINE';
-  void sendHeartbeat();
-}
-
-async function refreshGroupPresences(groupId: string, generation: number, signal: AbortSignal) {
-  try {
-    const result = await findGroupPresences(groupId, signal);
-    if (!signal.aborted && generation === groupPresenceWatchGeneration && selectedGroupId.value === groupId) {
-      groupPresences.value = Object.fromEntries(result.map((presence) => [presence.userId, presence]));
-      const detail = selectedGroupDetail.value;
-      const memberIds = new Set(result.map((presence) => presence.userId));
-      if (detail?.id === groupId && (detail.members.length !== memberIds.size
-          || detail.members.some((member) => !memberIds.has(member.userId)))) {
-        // 状态快照也确认当前成员资格；名单变化时立即复核资料，不等待群列表周期刷新。
-        void loadGroup(groupId, true);
-      }
-      presenceConnectionLost.value = false;
-      return true;
-    }
-    return false;
-  } catch {
-    if (!signal.aborted && generation === groupPresenceWatchGeneration) presenceConnectionLost.value = true;
-    return false;
-  }
-}
-
-function waitForPresenceRetry(delayMs: number, signal: AbortSignal) {
-  if (signal.aborted) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    const finish = () => {
-      if (groupPresenceRetryTimer) clearTimeout(groupPresenceRetryTimer);
-      groupPresenceRetryTimer = null;
-      cancelGroupPresenceRetry = null;
-      signal.removeEventListener('abort', finish);
-      resolve();
-    };
-    cancelGroupPresenceRetry = finish;
-    groupPresenceRetryTimer = setTimeout(finish, delayMs);
-    signal.addEventListener('abort', finish, { once: true });
-  });
-}
-
-function stopGroupPresenceSync() {
-  groupPresenceWatchGeneration++;
-  groupPresenceWaitRequest?.abort();
-  groupPresenceWaitRequest = null;
-  groupPresenceRequest?.abort();
-  groupPresenceRequest = null;
-  cancelGroupPresenceRetry?.();
-}
-
-function startGroupPresenceSync(groupId: string | null, refreshImmediately = false) {
-  stopGroupPresenceSync();
-  const generation = groupPresenceWatchGeneration;
-  if (!groupId) {
-    groupPresences.value = {};
-    presenceConnectionLost.value = false;
-    return;
-  }
-
-  const controller = new AbortController();
-  groupPresenceWaitRequest = controller;
-  void (async () => {
-    let retryDelayMs = 1_000;
-    let refreshSnapshot = refreshImmediately;
-    while (!controller.signal.aborted && generation === groupPresenceWatchGeneration
-        && selectedGroupId.value === groupId) {
-      try {
-        if (refreshSnapshot) {
-          const snapshotController = new AbortController();
-          groupPresenceRequest = snapshotController;
-          const loaded = await refreshGroupPresences(groupId, generation, snapshotController.signal);
-          if (controller.signal.aborted || generation !== groupPresenceWatchGeneration) return;
-          if (!loaded) throw new Error('暂时无法更新成员状态。');
-          refreshSnapshot = false;
-        }
-
-        const waiter = nextPresenceWaitRequest();
-        const response = await waitForGroupPresenceChanges(groupId, waiter.clientId, waiter.requestId,
-          presenceCursors.get(groupId) ?? null, controller.signal);
-        if (controller.signal.aborted || generation !== groupPresenceWatchGeneration
-            || selectedGroupId.value !== groupId) return;
-        const previous = presenceCursors.get(groupId);
-        // 首次建立游标后也复核资料，覆盖初始读取与订阅之间恰好提交的修改。
-        if (!previous || previous.serverInstanceId !== response.serverInstanceId || previous.detailVersion !== response.detailVersion) {
-          void loadGroup(groupId, selectedGroupDetail.value?.id === groupId);
-        }
-        presenceCursors.set(groupId, { serverInstanceId: response.serverInstanceId, version: response.version, detailVersion: response.detailVersion });
-        presenceConnectionLost.value = false;
-        retryDelayMs = 1_000;
-        if (response.changed) refreshSnapshot = true;
-      } catch {
-        if (controller.signal.aborted || generation !== groupPresenceWatchGeneration) return;
-        presenceConnectionLost.value = true;
-        refreshSnapshot = true;
-        await waitForPresenceRetry(retryDelayMs, controller.signal);
-        retryDelayMs = Math.min(retryDelayMs * 2, 15_000);
-      }
-    }
-  })();
-}
-
 const roomOccupancies = ref<Record<string, number>>({});
 async function refreshRoomOccupancies(force = false) {
   // 周期刷新复用在途请求；明确的离房/网络恢复才取消旧请求，避免慢网络下反复中止。
@@ -606,23 +360,19 @@ function refreshOnActivation() {
   void sendHeartbeat();
   roomSummaryRefreshVersion.value++;
   if (!listRequest) void refreshGroups(false);
-  if (selectedGroupId.value) startGroupPresenceSync(selectedGroupId.value, true);
+  if (selectedGroupId.value) refreshGroupPresence();
 }
 function handleVisibilityChange() {
   refreshOnActivation();
 }
 onMounted(() => {
   void desktop?.prepareCapture().catch(() => { if (!appDisposed) console.warn('capture preparation request failed'); });
-  void updateOwnPresenceStatus();
-  refreshOnActivation();
   startPresenceHeartbeat();
+  refreshOnActivation();
   window.addEventListener('focus', refreshOnActivation);
   window.addEventListener('online', handlePresenceNetworkRestored);
   window.addEventListener('offline', handlePresenceNetworkLost);
   document.addEventListener('visibilitychange', handleVisibilityChange);
-  document.addEventListener('click', confirmPresenceInteraction, true);
-  document.addEventListener('keydown', confirmPresenceInteraction, true);
-  presenceIdleTimer = setInterval(() => void updateOwnPresenceStatus(), PRESENCE_IDLE_CHECK_INTERVAL_MS);
   groupListRefreshTimer = setInterval(() => {
     if (document.visibilityState !== 'hidden') void refreshGroups(false, false);
   }, GROUP_LIST_REFRESH_INTERVAL_MS);
@@ -632,19 +382,14 @@ onMounted(() => {
     }
   }, ROOM_OCCUPANCY_REFRESH_INTERVAL_MS);
 });
-watch(selectedGroupId, (groupId) => {
-  groupActionRequest?.abort();
-  groupPresences.value = {};
-  presenceConnectionLost.value = false;
-  startGroupPresenceSync(groupId, Boolean(groupId));
-});
+watch(selectedGroupId, () => { groupActionRequest?.abort(); });
 function handlePresenceNetworkRestored() {
   void updateOwnPresenceStatus();
   void sendHeartbeat();
   roomSummaryRefreshVersion.value++;
   void refreshRoomOccupancies(true);
   if (selectedGroupId.value && document.visibilityState !== 'hidden') {
-    startGroupPresenceSync(selectedGroupId.value, true);
+    refreshGroupPresence();
   }
 }
 function handlePresenceNetworkLost() {
@@ -655,12 +400,7 @@ onScopeDispose(() => {
   window.removeEventListener('online', handlePresenceNetworkRestored);
   window.removeEventListener('offline', handlePresenceNetworkLost);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
-  document.removeEventListener('click', confirmPresenceInteraction, true);
-  document.removeEventListener('keydown', confirmPresenceInteraction, true);
-  stopGroupPresenceSync();
   roomOccupancyRequest?.abort();
-  stopPresenceHeartbeat();
-  if (presenceIdleTimer) clearInterval(presenceIdleTimer);
   if (groupListRefreshTimer) clearInterval(groupListRefreshTimer);
   if (roomOccupancyRefreshTimer) clearInterval(roomOccupancyRefreshTimer);
 });
@@ -1080,11 +820,11 @@ function leaveVoice() {
   }
   if (rtc.status === 'connected' || rtc.status === 'reconnecting') void callSounds.left();
   void rtc.leave().then(() => {
-    if (presenceStopped || attempt !== joinAttempt) return;
+    if (ownPresence.stopped || attempt !== joinAttempt) return;
     roomSummaryRefreshVersion.value++;
     void refreshRoomOccupancies(true);
   }).catch(() => {
-    if (!presenceStopped && attempt === joinAttempt && joinedGroupId.value === null && joiningGroupId.value === null) {
+    if (!ownPresence.stopped && attempt === joinAttempt && joinedGroupId.value === null && joiningGroupId.value === null) {
       viewerNotice.value = '退出语音时发生问题，请重启应用后再试。';
     }
   });

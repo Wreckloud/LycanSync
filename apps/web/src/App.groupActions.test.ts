@@ -43,7 +43,7 @@ function setup() {
     findGroup: vi.fn((_id: string, _signal: AbortSignal): Promise<GroupDetail> => Promise.resolve(detail('one'))),
     createGroup: vi.fn(async () => detail('created')), updateGroup: vi.fn(async () => detail('one')),
     refreshGroups: vi.fn(async () => {}), groupPresences: ref({}), presenceConnectionLost: ref(false),
-    startGroupPresenceSync: vi.fn(), joinAttempt: 0, selectCaptureSource: vi.fn(), removeCloseListener: null,
+    joinAttempt: 0, selectCaptureSource: vi.fn(), removeCloseListener: null,
     detailRequest: null, listRequest: null, rtc: { leave: vi.fn(async () => {}) },
   };
   // 执行 App 正式弹窗回调、切群监听及销毁清理；只替代 HTTP 和 RTC 边界。
