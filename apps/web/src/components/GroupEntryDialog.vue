@@ -7,6 +7,7 @@ import InlineFeedback from './InlineFeedback.vue';
 import { joinGroupByCode, type GroupDetail } from '../group/groupApi';
 import { useAvatarCrop } from '../profile/useAvatarCrop';
 import { useBackdropDismiss } from './useBackdropDismiss';
+import { keepDialogFocus } from './dialogFocus';
 import { motionDurationMs } from '../styles/motion';
 
 const props = defineProps<{ createGroup: (name: string, description: string, avatar: string) => Promise<void>; group?: GroupDetail }>();
@@ -51,19 +52,6 @@ async function submit() {
   }
 }
 
-function keepFocus(event: KeyboardEvent) {
-  if (event.key !== 'Tab' || !dialog.value) return;
-  const controls = [...dialog.value.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled):not([hidden]), textarea:not(:disabled)')].filter((control) => control.getClientRects().length > 0 && !control.closest('[inert]'));
-  const first = controls[0];
-  const last = controls[controls.length - 1];
-  if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.value)) {
-    event.preventDefault();
-    last?.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first?.focus();
-  }
-}
 
 function retireMode(element: Element) {
   const page = element as HTMLElement;
@@ -127,7 +115,7 @@ onMounted(() => {
   <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="close">
     <form ref="dialog" class="group-entry" role="dialog" aria-modal="true" tabindex="-1"
       :aria-label="group ? '编辑群组资料' : mode === 'join' ? '加入群组' : '创建群组'"
-      :inert="!!cropSource" @submit.prevent="submit" @keydown="keepFocus">
+      :inert="!!cropSource" @submit.prevent="submit" @keydown="keepDialogFocus">
       <div ref="viewport" class="entry-viewport">
       <header class="entry-header">
         <div><h2>{{ group ? '编辑群组资料' : mode === 'join' ? '加入群组' : '创建群组' }}</h2><p>{{ mode === 'join' ? '和熟悉的人相聚' : '让朋友们有个相聚的地方' }}</p></div>

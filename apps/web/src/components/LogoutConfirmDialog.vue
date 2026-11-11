@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import InlineFeedback from './InlineFeedback.vue';
 import { useBackdropDismiss } from './useBackdropDismiss';
+import { keepDialogFocus } from './dialogFocus';
 
 const props = defineProps<{ administrator: boolean; busy: boolean; error: string; mode?: 'logout' | 'remove' }>();
 const removing = computed(() => props.mode === 'remove');
@@ -12,18 +13,6 @@ const backdropEvents = useBackdropDismiss(cancel);
 
 function cancel() { if (!props.busy) emit('cancel'); }
 function confirm() { if (!props.busy) emit('confirm'); }
-function keepFocus(event: KeyboardEvent) {
-  if (event.key !== 'Tab' || !dialog.value) return;
-  const controls = [...dialog.value.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
-  const first = controls[0];
-  const last = controls[controls.length - 1];
-  if (!first) { event.preventDefault(); return; }
-  if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.value)) {
-    event.preventDefault(); last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault(); first.focus();
-  }
-}
 
 onMounted(() => dialog.value?.focus());
 </script>
@@ -31,7 +20,7 @@ onMounted(() => dialog.value?.focus());
 <template>
   <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="cancel">
     <section ref="dialog" class="logout-confirm-dialog" role="dialog" aria-modal="true"
-      aria-labelledby="logout-confirm-title" aria-describedby="logout-confirm-description" tabindex="-1" @keydown="keepFocus">
+      aria-labelledby="logout-confirm-title" aria-describedby="logout-confirm-description" tabindex="-1" @keydown="keepDialogFocus">
       <header><h2 id="logout-confirm-title">{{ removing ? '从此设备移除账号？' : '退出当前账号？' }}</h2><p>{{ removing ? (administrator ? '再次登录需要已设置的服主恢复密码。' : '再次登录需要新的恢复登录链接。') : '回到登录页，保留本机凭据。' }}</p></header>
       <p id="logout-confirm-description">退出后将结束通话、共享、远控、录制和回放。已保存的录像与诊断报告会保留，未保存的回放将丢弃。</p>
       <p v-if="removing">将清除本机登录信息，并尝试退出服务器会话。不会注销账号或清理聊天缓存。</p>

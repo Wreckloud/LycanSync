@@ -9,6 +9,7 @@ import type { NativeScreenAudioMode } from '../rtc/nativeScreenAudioMode';
 import InlineFeedback from './InlineFeedback.vue';
 import { readScreenSharePreferences, type ScreenSharePreferences } from '../settings/screenSharePreferences';
 import { useBackdropDismiss } from './useBackdropDismiss';
+import { keepDialogFocus } from './dialogFocus';
 
 const props = withDefaults(defineProps<{
   sources: { id: string; name: string; thumbnail?: string; type: 'window' | 'screen' }[];
@@ -66,11 +67,7 @@ function confirm() {
 
 function keydown(event: KeyboardEvent) {
   if (event.key === 'Escape') { event.preventDefault(); emit('close'); return; }
-  if (event.key !== 'Tab') return;
-  const buttons = [...(panel.value?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)') ?? [])].filter((control) => control.getClientRects().length > 0 && !control.closest('[inert]'));
-  const first = buttons[0], last = buttons.at(-1);
-  if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.value)) { event.preventDefault(); last?.focus(); }
-  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+  keepDialogFocus(event);
 }
 onMounted(async () => {
   try { captureSettings.value.hideCursor = readScreenSharePreferences().hideCursor; }

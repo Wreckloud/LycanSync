@@ -32,8 +32,15 @@ createApp({setup(){const settings=ref(null);return()=>h('main',{style:'padding:3
   await clearButton.click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
+  await expect(page.locator('#root')).toHaveJSProperty('inert', true);
+  await page.keyboard.press('Shift+Tab');
+  await expect(dialog.getByRole('button', { name: '清理缓存', exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(dialog.getByRole('button', { name: '取消', exact: true })).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();
+  await expect(clearButton).toBeFocused();
+  await expect(page.locator('#root')).toHaveJSProperty('inert', false);
   expect((await usage()).entries).toBe(2);
   await clearButton.click();
   await dialog.getByRole('button', { name: '取消', exact: true }).click();

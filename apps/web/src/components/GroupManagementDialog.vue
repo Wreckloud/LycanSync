@@ -5,6 +5,7 @@ import InlineFeedback from './InlineFeedback.vue';
 import { addGroupMember, dissolveGroup, findGroup, findGroupCandidates, getGroupInviteCode,
   removeGroupMember, transferGroupOwner, type GroupCandidate, type GroupDetail } from '../group/groupApi';
 import { useBackdropDismiss } from './useBackdropDismiss';
+import { keepDialogFocus } from './dialogFocus';
 
 const props = defineProps<{ group: GroupDetail; userId: string; mode: 'invite' | 'members' | 'transfer' | 'leave' | 'dissolve' }>();
 const emit = defineEmits<{ close: []; updated: [group: GroupDetail]; removed: [groupId: string] }>();
@@ -131,13 +132,6 @@ function page(change: number) {
 }
 watch(() => props.group.role, (role) => { if (role !== 'OWNER' && props.mode !== 'leave') emit('close'); });
 
-function keepFocus(event: KeyboardEvent) {
-  if (event.key !== 'Tab' || !dialog.value) return;
-  const controls = [...dialog.value.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)')].filter((control) => control.getClientRects().length > 0 && !control.closest('[inert]'));
-  const first = controls[0]; const last = controls[controls.length - 1];
-  if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.value)) { event.preventDefault(); last?.focus(); }
-  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-}
 
 onMounted(() => {
   dialog.value?.focus();
@@ -154,7 +148,7 @@ onScopeDispose(() => {
 
 <template>
   <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="close">
-    <section ref="dialog" class="group-management" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1" @keydown="keepFocus">
+    <section ref="dialog" class="group-management" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1" @keydown="keepDialogFocus">
       <header><h2>{{ title }}</h2><p>{{ group.name }}</p></header>
       <div v-if="confirming" class="management-confirm">
         <template v-if="mode === 'dissolve'">

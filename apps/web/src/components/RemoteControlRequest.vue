@@ -2,6 +2,7 @@
 import { onMounted, onScopeDispose, ref } from 'vue';
 import InlineFeedback from './InlineFeedback.vue';
 import { useBackdropDismiss } from './useBackdropDismiss';
+import { keepDialogFocus } from './dialogFocus';
 
 defineProps<{ name: string; busy: boolean }>();
 const emit = defineEmits<{ reject: []; allow: [sourceId: string, publicVideo: boolean] }>();
@@ -14,17 +15,6 @@ const dialog = ref<HTMLElement | null>(null);
 const backdropEvents = useBackdropDismiss(() => emit('reject'));
 let disposed = false;
 
-function keepFocus(event: KeyboardEvent) {
-  if (event.key !== 'Tab' || !dialog.value) return;
-  const controls = [...dialog.value.querySelectorAll<HTMLElement>('button:not(:disabled), select:not(:disabled), input:not(:disabled)')];
-  const first = controls[0], last = controls[controls.length - 1];
-  if (!first) { event.preventDefault(); return; }
-  if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.value)) {
-    event.preventDefault(); last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault(); first.focus();
-  }
-}
 
 async function loadMonitors() {
   loading.value = true;
@@ -52,7 +42,7 @@ onScopeDispose(() => {
 <template>
   <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop.prevent="emit('reject')">
     <section ref="dialog" class="remote-request-card" role="dialog" aria-modal="true" aria-labelledby="remote-request-title"
-      tabindex="-1" @keydown="keepFocus">
+      tabindex="-1" @keydown="keepDialogFocus">
       <header><h2 id="remote-request-title">{{ name }}申请远程控制</h2>
         <p>接受后将共享所选屏幕，并允许对方使用鼠标和常用按键。你可以随时停止。</p></header>
       <label for="remote-control-monitor">共享显示器</label>

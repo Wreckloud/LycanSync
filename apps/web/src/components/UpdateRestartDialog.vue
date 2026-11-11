@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue';
 import InlineFeedback from './InlineFeedback.vue';
 import { useBackdropDismiss } from './useBackdropDismiss';
+import { keepDialogFocus } from './dialogFocus';
 
 const props = defineProps<{ version: string; busy: boolean; error: string }>();
 const emit = defineEmits<{ cancel: []; confirm: [] }>();
@@ -10,18 +11,6 @@ const backdropEvents = useBackdropDismiss(cancel);
 
 function cancel() { if (!props.busy) emit('cancel'); }
 function confirm() { if (!props.busy) emit('confirm'); }
-function keepFocus(event: KeyboardEvent) {
-  if (event.key !== 'Tab' || !dialog.value) return;
-  const controls = [...dialog.value.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
-  const first = controls[0];
-  const last = controls[controls.length - 1];
-  if (!first) { event.preventDefault(); return; }
-  if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.value)) {
-    event.preventDefault(); last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault(); first.focus();
-  }
-}
 
 onMounted(() => dialog.value?.focus());
 </script>
@@ -29,7 +18,7 @@ onMounted(() => dialog.value?.focus());
 <template>
     <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="cancel">
       <section ref="dialog" class="update-restart-dialog" role="dialog" aria-modal="true"
-        aria-labelledby="update-restart-title" aria-describedby="update-restart-description" tabindex="-1" @keydown="keepFocus">
+        aria-labelledby="update-restart-title" aria-describedby="update-restart-description" tabindex="-1" @keydown="keepDialogFocus">
         <header><h2 id="update-restart-title">发现新版本 {{ version }}</h2><p>重启软件并更新？</p></header>
         <p id="update-restart-description">下载并检查新版后，将保存录制并结束通话、共享和远控，再重启安装。完成后自动打开，下载失败仍可使用当前版本。</p>
         <footer class="card-actions">

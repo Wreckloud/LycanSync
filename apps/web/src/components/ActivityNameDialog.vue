@@ -2,36 +2,24 @@
 import { onMounted, ref } from 'vue';
 import InlineFeedback from './InlineFeedback.vue';
 import { useBackdropDismiss } from './useBackdropDismiss';
+import { keepDialogFocus } from './dialogFocus';
 
 const props = defineProps<{ initialName: string; busy: boolean; error: string }>();
 const emit = defineEmits<{ cancel: []; save: [name: string] }>();
 const name = ref(props.initialName);
-const dialog = ref<HTMLFormElement | null>(null);
 const input = ref<HTMLInputElement | null>(null);
 const backdropEvents = useBackdropDismiss(cancel);
 
 function cancel() { if (!props.busy) emit('cancel'); }
 function save() { if (!props.busy && name.value.trim()) emit('save', name.value.trim()); }
-function keepFocus(event: KeyboardEvent) {
-  if (event.key !== 'Tab' || !dialog.value) return;
-  const controls = [...dialog.value.querySelectorAll<HTMLElement>('input:not(:disabled), button:not(:disabled)')];
-  const first = controls[0];
-  const last = controls[controls.length - 1];
-  if (!first) { event.preventDefault(); return; }
-  if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.value)) {
-    event.preventDefault(); last?.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault(); first.focus();
-  }
-}
 
 onMounted(() => { input.value?.focus(); input.value?.select(); });
 </script>
 
 <template>
   <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="cancel">
-    <form ref="dialog" class="activity-name-dialog" role="dialog" aria-modal="true" aria-labelledby="activity-name-title"
-      tabindex="-1" @submit.prevent="save" @keydown="keepFocus">
+    <form class="activity-name-dialog" role="dialog" aria-modal="true" aria-labelledby="activity-name-title"
+      tabindex="-1" @submit.prevent="save" @keydown="keepDialogFocus">
       <h2 id="activity-name-title">修改动态名称</h2>
       <label for="activity-display-name">显示名称</label>
       <input id="activity-display-name" ref="input" v-model="name" aria-label="动态显示名称" maxlength="80"
