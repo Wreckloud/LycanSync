@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { Track, type Participant, type Room } from 'livekit-client';
+import { Track, VideoQuality, type Participant, type RemoteTrackPublication, type Room } from 'livekit-client';
 import { createMediaDiagnosticsSampler } from './mediaDiagnostics';
+import { observeScreenShareView } from '../rtc/screenShareViewing';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -14,6 +15,50 @@ it('未入房的自动诊断只读取进程统计，不访问旧成员轨道或�
   expect(bridge.getProcessMetrics).toHaveBeenCalledOnce();
   expect(bridge.getNativeMediaDiagnostics).not.toHaveBeenCalled();
   expect(track.getRTCStatsReport).not.toHaveBeenCalled();
+});
+
+it('播放统计读取独立窗口的视频，不误用后台主窗口的大画面', async () => {
+  const { room, local, track } = setup();
+  let now = 1000, frames = 20;
+  vi.stubGlobal('performance', { now: () => now });
+  // 不同窗口的 video 不是主窗口 HTMLVideoElement 的实例。
+  vi.stubGlobal('HTMLVideoElement', class MainWindowVideo {});
+  const visible = { tagName: 'VIDEO', isConnected: true, ownerDocument: { hidden: false }, clientWidth: 640,
+    getBoundingClientRect: () => ({ width: 640, height: 360 }),
+    getVideoPlaybackQuality: () => ({ totalVideoFrames: frames, droppedVideoFrames: 0 }) };
+  const hidden = { ...visible, ownerDocument: { hidden: true }, clientWidth: 1920,
+    getVideoPlaybackQuality: () => ({ totalVideoFrames: 999, droppedVideoFrames: 0 }) };
+  Object.assign(track, { attachedElements: [hidden, visible] });
+  const sampler = createMediaDiagnosticsSampler();
+  const first = await sampler.collect(room, [local] as unknown as Participant[]);
+  expect(first.streams[0]).toMatchObject({ playbackFrames: 20, playbackFps: null });
+  now = 3000; frames = 140;
+  expect((await sampler.collect(room, [local] as unknown as Participant[])).streams[0]).toMatchObject({ playbackFrames: 140, playbackFps: 60 });
+  visible.ownerDocument.hidden = true;
+  expect((await sampler.collect(room, [local] as unknown as Participant[])).streams[0].playbackFps).toBeNull();
+});
+
+it('主窗口留在设置页时不采样其隐藏大画面，只读取仍可见的独立窗', async () => {
+  const { room, track } = setup();
+  const viewWindow = Object.assign(new EventTarget(), { IntersectionObserver: class { observe() {} disconnect() {} } });
+  const page = Object.assign(new EventTarget(), { hidden: false, visibilityState: 'visible', defaultView: viewWindow });
+  const video = (width: number, frames: number) => ({ tagName: 'VIDEO', isConnected: true, ownerDocument: page,
+    clientWidth: width, getBoundingClientRect: () => ({ width, height: 360 }), getClientRects: () => [{}],
+    getVideoPlaybackQuality: () => ({ totalVideoFrames: frames, droppedVideoFrames: 0 }) }) as unknown as HTMLVideoElement;
+  const main = video(1920, 999), popup = video(640, 25);
+  Object.assign(track, { attachedElements: [main, popup] });
+  const publication = { track, isEnabled: true, setEnabled() {}, setVideoQuality() {} } as unknown as RemoteTrackPublication;
+  const remote = { identity: 'remote', name: '朋友', getTrackPublication: (source: Track.Source) =>
+    source === Track.Source.ScreenShare ? publication : undefined } as unknown as Participant;
+  const mainView = observeScreenShareView(publication, main, VideoQuality.HIGH, false);
+  const popupView = observeScreenShareView(publication, popup, VideoQuality.HIGH);
+  try {
+    const sampler = createMediaDiagnosticsSampler();
+    expect((await sampler.collect(room, [remote])).streams[0]).toMatchObject({ playbackFrames: 25,
+      viewing: { visibleViews: 1, inactiveViews: 1 } });
+    popupView.setActive(false);
+    expect((await sampler.collect(room, [remote])).streams[0].playbackFrames).toBeNull();
+  } finally { mainView.stop(); popupView.stop(); }
 });
 
 it('OBS 延误时隙不算成功渲染，使用宿主实际区间，预热均值不进入统计', async () => {

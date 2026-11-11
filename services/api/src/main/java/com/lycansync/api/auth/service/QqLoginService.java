@@ -151,7 +151,16 @@ public class QqLoginService {
                 AuthUser user;
                 if (userId == null) {
                     String nickname = flow.identity.nickname();
-                    if (nickname.length() > 32) nickname = nickname.substring(0, Character.isHighSurrogate(nickname.charAt(31)) ? 31 : 32);
+                    int end = 0;
+                    int width = 0;
+                    // 只裁短新账号的应用昵称；QQ 绑定资料仍保留完整原名。
+                    while (end < nickname.length()) {
+                        int codePoint = nickname.codePointAt(end);
+                        width += codePoint <= 0x7f ? 1 : 2;
+                        if (width > 16) break;
+                        end += Character.charCount(codePoint);
+                    }
+                    nickname = nickname.substring(0, end).stripTrailing();
                     user = new AuthUser(UUID.randomUUID(), nickname, flow.identity.avatar(), false, "", now());
                     users.insertUser(user, now());
                     if (identities.insert(settings.getAppId(), flow.identity.openId(), user.id(), flow.identity.nickname(), now()) != 1) {

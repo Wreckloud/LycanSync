@@ -12,6 +12,11 @@ export interface VideoLayerStats {
   encoder: string | null;
   powerEfficientEncoder: boolean | null;
   averageEncodeMs: number | null;
+  decoder: string | null;
+  powerEfficientDecoder: boolean | null;
+  averageDecodeMs: number | null;
+  freezeCount: number | null;
+  totalFreezeDurationMs: number | null;
   droppedFrames: number | null;
   roundTripMs: number | null;
   transportRoundTripMs: number | null;
@@ -22,6 +27,7 @@ export interface VideoLayerStats {
 }
 
 type PreviousSample = { bytes: number | null; frames: number | null; timestamp: number; encodeTime: number | null;
+  decodeTime: number | null;
   packetsReceived: number | null; packetsLost: number | null; jitterBufferDelay: number | null;
   jitterBufferEmittedCount: number | null; feedbackTimestamp: number | null;
   candidatePairId: string | null; candidatePairResponses: number | null };
@@ -94,6 +100,7 @@ export function readVideoLayers(
     const frames = direction === 'outbound-rtp' ? stat.framesEncoded : stat.framesDecoded;
     const encodeTime = direction === 'outbound-rtp' && typeof stat.totalEncodeTime === 'number'
       ? stat.totalEncodeTime : null;
+    const decodeTime = direction === 'inbound-rtp' ? finite(stat.totalDecodeTime) : null;
     const sampleKey = `${trackId}:${stat.id}`;
     const last = previous.get(sampleKey);
     let remote: { timestamp?: number; roundTripTime?: number; fractionLost?: number } | undefined;
@@ -127,7 +134,7 @@ export function readVideoLayers(
     const jitterBufferEmittedCount = direction === 'inbound-rtp' ? finite(stat.jitterBufferEmittedCount) : null;
     previous.set(sampleKey, {
       bytes: finite(bytes),
-      frames: typeof frames === 'number' ? frames : null, timestamp: stat.timestamp, encodeTime,
+      frames: typeof frames === 'number' ? frames : null, timestamp: stat.timestamp, encodeTime, decodeTime,
       packetsReceived, packetsLost, jitterBufferDelay, jitterBufferEmittedCount, feedbackTimestamp,
       candidatePairId, candidatePairResponses,
     });
@@ -143,7 +150,7 @@ export function readVideoLayers(
     const fps = hasComparableFrames && last && last.frames !== null && typeof frames === 'number'
       ? Math.round((frames - last.frames) / elapsedSeconds) : null;
     const codec = report.get(stat.codecId)?.mimeType;
-    const encodedFrames = last && last.frames !== null && typeof frames === 'number'
+    const frameDelta = last && last.frames !== null && typeof frames === 'number'
       ? frames - last.frames : 0;
     const encoding = direction === 'outbound-rtp' ? encodings?.find((encoding) =>
       typeof stat.rid === 'string' ? encoding.rid === stat.rid : encodings.length === 1) : undefined;
@@ -170,8 +177,16 @@ export function readVideoLayers(
       powerEfficientEncoder: direction === 'outbound-rtp' && typeof stat.powerEfficientEncoder === 'boolean'
         ? stat.powerEfficientEncoder : null,
       averageEncodeMs: encodeTime !== null && last?.encodeTime !== null && last?.encodeTime !== undefined
-        && encodedFrames > 0 && encodeTime >= last.encodeTime
-        ? Math.round((encodeTime - last.encodeTime) / encodedFrames * 1000 * 10) / 10 : null,
+        && frameDelta > 0 && encodeTime >= last.encodeTime
+        ? Math.round((encodeTime - last.encodeTime) / frameDelta * 1000 * 10) / 10 : null,
+      decoder: direction === 'inbound-rtp' && typeof stat.decoderImplementation === 'string' ? stat.decoderImplementation : null,
+      powerEfficientDecoder: direction === 'inbound-rtp' && typeof stat.powerEfficientDecoder === 'boolean' ? stat.powerEfficientDecoder : null,
+      averageDecodeMs: decodeTime !== null && last?.decodeTime !== null && last?.decodeTime !== undefined
+        && hasComparableFrames && frameDelta > 0 && decodeTime >= last.decodeTime
+        ? Math.round((decodeTime - last.decodeTime) / frameDelta * 1000 * 10) / 10 : null,
+      freezeCount: direction === 'inbound-rtp' && finite(stat.freezeCount) !== null && stat.freezeCount >= 0 ? stat.freezeCount : null,
+      totalFreezeDurationMs: direction === 'inbound-rtp' && finite(stat.totalFreezesDuration) !== null && stat.totalFreezesDuration >= 0
+        ? Math.round(stat.totalFreezesDuration * 1000) : null,
       droppedFrames: direction === 'inbound-rtp' && typeof stat.framesDropped === 'number'
         ? stat.framesDropped : null,
       // RTT/报告丢包仅代表本机到 SFU；旧 RTCP 报告不重复冒充本区间的新反馈。

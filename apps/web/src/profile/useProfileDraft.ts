@@ -14,9 +14,20 @@ export function useProfileDraft(
   const busy = ref(false);
   const error = ref('');
   const errorField = ref<'avatar' | 'nickname' | 'signature' | null>(null);
+  // 半角占一格，其余字符占两格；与服务端共用同一计数规则，不依赖设备字体。
+  const nicknameError = computed(() => nickname.value.trim() !== savedNickname.value
+    && [...nickname.value.trim()].reduce((width, character) => width + (character.codePointAt(0)! <= 0x7f ? 1 : 2), 0) > 16
+    ? '昵称太长，请缩短一些（最多 8 个汉字或 16 个英文、数字）。' : '');
   const dirty = computed(() => nickname.value.trim() !== savedNickname.value || avatar.value !== savedAvatar.value
     || signature.value.trim() !== savedSignature.value);
   let pendingSave: Promise<boolean> | null = null;
+
+  watch(nicknameError, (message, previous) => {
+    if (!message && previous && errorField.value === 'nickname' && error.value === previous) {
+      error.value = '';
+      errorField.value = null;
+    }
+  });
 
   watch(user, (updated) => {
     if (nickname.value.trim() === savedNickname.value) nickname.value = updated.nickname;
@@ -39,6 +50,11 @@ export function useProfileDraft(
     if (!profile.nickname) {
       errorField.value = 'nickname';
       error.value = '昵称不能为空。';
+      return Promise.resolve(false);
+    }
+    if (nicknameError.value) {
+      errorField.value = 'nickname';
+      error.value = nicknameError.value;
       return Promise.resolve(false);
     }
     const keepStoredSignature = profile.signature === savedSignature.value && profile.signature.length > 40;
@@ -81,5 +97,5 @@ export function useProfileDraft(
     return pendingSave;
   }
 
-  return { nickname, avatar, signature, busy, error, errorField, dirty, save, resetDraft };
+  return { nickname, nicknameError, avatar, signature, busy, error, errorField, dirty, save, resetDraft };
 }

@@ -1,0 +1,17 @@
+--- a/rollup.config.js
++++ b/rollup.config.js
+@@ -1,4 +1,5 @@
+ // @ts-check
++import { isAbsolute } from 'node:path';
+ import { babel } from '@rollup/plugin-babel';
+ import commonjs from '@rollup/plugin-commonjs';
+ import json from '@rollup/plugin-json';
+@@ -68,7 +69,7 @@
+     // augmentations of the full entry) is not in it and tsc cannot write `import("../..")`.
+     input: 'src/core.ts',
+     // bare specifiers (dependencies) stay external; the entry itself has no importer
+-    external: (id, importer) => importer !== undefined && !/^[./\0]/.test(id),
++    external: (id, importer) => importer !== undefined && !isAbsolute(id) && !/^[./\0]/.test(id),
+     output: [
+       {
+         dir: 'dist/core',

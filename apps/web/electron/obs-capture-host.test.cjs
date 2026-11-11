@@ -1140,6 +1140,7 @@ test('完整客户端分发记录绑定同版安装包、源码、差量和版�
     ['THIRD-PARTY-NOTICES.txt', Buffer.from('notices')], ['latest.yml', Buffer.from('manifest')],
   ]);
   const sandbox = { version: '0.2.99', outputDirectory: 'output', obsManifest: { obsVersion: '32.2.2' },
+    livekit: { sdkCommit: 'tested-sdk', serverCommit: 'tested-server', protocol: 19 },
     obsSource: { path: 'LycanSync-0.2.99-obs-source.tar.gz', runtimeSha256: 'a'.repeat(64) },
     createHash: require('node:crypto').createHash, join: (...paths) => paths.at(-1),
     readFileSync: name => { assert.ok(files.has(name), `missing ${name}`); return files.get(name); },
@@ -1148,6 +1149,7 @@ test('完整客户端分发记录绑定同版安装包、源码、差量和版�
   runInNewContext(source.slice(start), { ...sandbox });
   const record = JSON.parse(files.get('LycanSync-0.2.99-release.json'));
   assert.equal(record.version, '0.2.99');
+  assert.deepEqual(record.livekit, sandbox.livekit);
   assert.equal(record.runtimeSha256, sandbox.obsSource.runtimeSha256);
   assert.equal(record.files.length, 5);
   for (const file of record.files) {

@@ -53,7 +53,20 @@ foreach ($name in $downloadFiles) {
         throw "分发材料与构建校验记录不一致：$name"
     }
 }
-$bundleFiles = @('Dockerfile', 'compose.yaml', 'compose.lan.yaml', 'Caddyfile', 'Caddyfile.lan', '.env.example', '.dockerignore', 'DEPLOY.md', 'maintenance/maintain-releases.py')
+$livekitBinary = Join-Path $projectRoot 'release/livekit/livekit-server'
+$livekitProvenance = Join-Path $projectRoot 'vendor/livekit/provenance.json'
+$livekitRecord = Get-Content -LiteralPath $livekitProvenance -Raw | ConvertFrom-Json
+if ($record.livekit.sdkCommit -cne $livekitRecord.sdkCommit `
+    -or $record.livekit.serverCommit -cne $livekitRecord.serverCommit `
+    -or $record.livekit.protocol -ne 19 -or $livekitRecord.protocol -ne 19) {
+    throw '客户端与 LiveKit 服务端不是同一批配套版本。'
+}
+if ($livekitRecord.serverBinarySha256 -cnotmatch '^[0-9a-f]{64}$' `
+    -or -not (Test-Path -LiteralPath $livekitBinary -PathType Leaf) `
+    -or $livekitRecord.serverBinarySha256 -cne (Get-FileHash -Algorithm SHA256 -LiteralPath $livekitBinary).Hash.ToLowerInvariant()) {
+    throw 'LiveKit 服务端缺失或校验失败，请按 vendor/livekit/README.md 准备配套版本。'
+}
+$bundleFiles = @('Dockerfile', 'compose.yaml', 'compose.lan.yaml', 'Caddyfile', 'Caddyfile.lan', '.env.example', '.dockerignore', 'DEPLOY.md', 'maintenance/maintain-releases.py', 'livekit/Dockerfile', 'livekit/LICENSE')
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $outputRoot = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $temporaryName = '.lycansync-server-' + [guid]::NewGuid().ToString('N')
@@ -82,6 +95,11 @@ try {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot "server/$bundleFile") -Destination $destination
     }
     Copy-Item -LiteralPath $serverJar -Destination (Join-Path $bundleDirectory 'api.jar')
+    Copy-Item -LiteralPath $livekitBinary -Destination (Join-Path $bundleDirectory 'livekit/livekit-server')
+    Copy-Item -LiteralPath $livekitProvenance -Destination (Join-Path $bundleDirectory 'livekit/provenance.json')
+    if ($livekitRecord.serverBinarySha256 -cne (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $bundleDirectory 'livekit/livekit-server')).Hash.ToLowerInvariant()) {
+        throw 'LiveKit 暂存文件与校验记录不一致。'
+    }
     # 只压入明确材料；新包完整生成前不覆盖原部署包，也不读取旧输出目录。
     $downloadEntries = @($downloadFiles + $recordName + 'LycanSync-setup.exe' + 'LycanSync-setup.exe.blockmap') `
         | ForEach-Object { "downloads/$_" }
@@ -89,7 +107,7 @@ try {
     $archive = [IO.Compression.ZipFile]::Open($temporaryArchive, [IO.Compression.ZipArchiveMode]::Create)
     try {
         # Windows PowerShell 5.1 默认归档可能使用反斜杠；Linux 部署统一写入 ZIP 标准路径。
-        foreach ($name in @($bundleFiles + 'api.jar' + $downloadEntries)) {
+        foreach ($name in @($bundleFiles + 'api.jar' + 'livekit/livekit-server' + 'livekit/provenance.json' + $downloadEntries)) {
             [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive,
                 (Join-Path $bundleDirectory $name), $name, [IO.Compression.CompressionLevel]::Optimal) | Out-Null
         }

@@ -176,4 +176,31 @@ class ProfileServiceTests {
         ImageIO.write(image, "png", output);
         return "data:image/png;base64," + Base64.getEncoder().encodeToString(output.toByteArray());
     }
+
+    @Test
+    void shouldAcceptEightFullWidthOrSixteenAsciiPositions() {
+        for (String nickname : List.of("字".repeat(8), "a".repeat(16), "Wreckloud", "中文昵称abcdefgh", "😀".repeat(8))) {
+            when(mapper.updateProfile(USER_ID, nickname, "", null)).thenReturn(1);
+            when(mapper.findUserProfile(USER_ID)).thenReturn(new AuthUser(USER_ID, nickname, "", false, "", CREATED_AT));
+            assertThat(profileService.update(USER, new ProfileUpdateRequest(nickname, "", null)).nickname()).isEqualTo(nickname);
+        }
+    }
+
+    @Test
+    void shouldRejectChangedNicknameBeyondDisplayBudget() {
+        when(mapper.findUserProfile(USER_ID)).thenReturn(new AuthUser(USER_ID, "小狼", "", false, "", CREATED_AT));
+        for (String nickname : List.of("字".repeat(9), "a".repeat(17), "中文昵称abcdefghi", "😀".repeat(9))) {
+            assertThatThrownBy(() -> profileService.update(USER, new ProfileUpdateRequest(nickname, "", null)))
+                    .isInstanceOf(AuthException.class).hasMessageContaining("昵称太长");
+        }
+        verifyNoInteractions(groupMapper, events);
+    }
+
+    @Test
+    void shouldKeepStoredLongNicknameWhenUpdatingSignature() {
+        String nickname = "旧".repeat(20);
+        when(mapper.findUserProfile(USER_ID)).thenReturn(new AuthUser(USER_ID, nickname, "", false, "签名", CREATED_AT));
+        when(mapper.updateProfile(USER_ID, nickname, "", "签名")).thenReturn(1);
+        assertThat(profileService.update(USER, new ProfileUpdateRequest(nickname, "", "签名")).nickname()).isEqualTo(nickname);
+    }
 }

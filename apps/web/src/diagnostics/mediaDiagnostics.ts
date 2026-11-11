@@ -2,6 +2,7 @@ import { Track, type LocalVideoTrack, type Participant, type Room } from 'liveki
 import { readTrackTarget, readVideoLayers, readVideoSourceSample, type TrackTarget, type VideoLayerStats } from '../rtc/mediaStats';
 import { readNativeVideoInput } from '../rtc/nativeScreenVideo';
 import { audioCounters, readAudioQuality } from './audioQuality';
+import { isScreenShareViewVisible, readScreenShareViewing } from '../rtc/screenShareViewing';
 
 export interface StreamStats {
   identity: string;
@@ -22,6 +23,7 @@ export interface StreamStats {
   /** 仅供本次报告识别轨道重建；不得导出。 */
   sessionKey: string | null;
   subscription: { subscribed: boolean | null; enabled: boolean | null; muted: boolean | null };
+  viewing: ReturnType<typeof readScreenShareViewing>;
 }
 
 export interface MediaDiagnosticsSnapshot {
@@ -50,7 +52,7 @@ export function createMediaDiagnosticsSampler() {
   const previousAudio = new Map<string, ReturnType<typeof audioCounters>>();
   const previous: Parameters<typeof readVideoLayers>[2] = new Map();
   const previousSource: Parameters<typeof readVideoSourceSample>[2] = new Map();
-  const previousPlayback = new WeakMap<HTMLVideoElement, { trackId: string; frames: number; timestamp: number }>();
+  const previousPlayback = new WeakMap<HTMLVideoElement, { trackId: string; viewingRevision: number | null; frames: number; timestamp: number }>();
   const previousNativeInput = new Map<string, { receivedFrames: number; submittedFrames: number;
     backpressureDroppedFrames: number; timestamp: number }>();
   let previousNative: { signature: string; framesReceived: number; framesProcessed: number; timestamp: number } | null = null;
@@ -96,9 +98,13 @@ export function createMediaDiagnosticsSampler() {
       processedFps: Math.round((native.framesProcessed - last.framesProcessed) * 1000 / elapsedMs) };
   }
 
-  function readPlayback(track: Track) {
+  function readPlayback(track: Track, viewing: StreamStats['viewing'], publication: object | null) {
+    if (viewing?.visibleViews === 0) return { frames: null, fps: null, intervalMs: null, dropped: null };
     const video = track.attachedElements.filter((element): element is HTMLVideoElement =>
-      element instanceof HTMLVideoElement && element.isConnected && element.getBoundingClientRect().width > 0)
+      // 独立观看窗有自己的构造器，不能用主窗口的 instanceof 排除其视频。
+      element.tagName === 'VIDEO' && element.isConnected && !element.ownerDocument.hidden
+      && (!publication || isScreenShareViewVisible(publication, element as HTMLVideoElement) !== false)
+      && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0)
       .sort((left, right) => right.clientWidth - left.clientWidth)[0];
     if (!video) return { frames: null, fps: null, intervalMs: null, dropped: null };
     const quality = video.getVideoPlaybackQuality();
@@ -106,8 +112,9 @@ export function createMediaDiagnosticsSampler() {
     const displayedFrames = quality.totalVideoFrames - quality.droppedVideoFrames;
     const trackId = track.mediaStreamTrack.id;
     const previous = previousPlayback.get(video);
-    const last = previous?.trackId === trackId ? previous : undefined;
-    previousPlayback.set(video, { trackId, frames: displayedFrames, timestamp });
+    const viewingRevision = viewing?.revision ?? null;
+    const last = previous?.trackId === trackId && previous.viewingRevision === viewingRevision ? previous : undefined;
+    previousPlayback.set(video, { trackId, viewingRevision, frames: displayedFrames, timestamp });
     const elapsedSeconds = last ? (timestamp - last.timestamp) / 1000 : 0;
     const comparable = last && elapsedSeconds > 0 && displayedFrames >= last.frames;
     return { frames: displayedFrames, fps: comparable ? Math.round((displayedFrames - last.frames) / elapsedSeconds) : null,
@@ -131,6 +138,7 @@ export function createMediaDiagnosticsSampler() {
         const remote = !local && publication && 'isEnabled' in publication ? publication : null;
         const subscription = { subscribed: local ? null : publication?.isSubscribed ?? null,
           enabled: remote ? remote.isEnabled : null, muted: publication?.isMuted ?? null };
+        const viewing = source === Track.Source.ScreenShare && remote ? readScreenShareViewing(remote) : null;
         if (!track) {
           // 未订阅的共享也保留状态，避免把“尚未接收”误看成房间里没有共享。
           if (source === Track.Source.ScreenShare && publication) {
@@ -138,7 +146,7 @@ export function createMediaDiagnosticsSampler() {
               direction, target: null, sourceFrames: null, sourceFps: null, playbackFrames: null, playbackFps: null,
               playbackDrops: null,
               sourceIntervalMs: null, playbackIntervalMs: null, nativeInput: null, nativeInputInterval: null,
-              sessionKey: null, subscription, layers: [] });
+              sessionKey: null, subscription, viewing, layers: [] });
           }
           return;
         }
@@ -147,7 +155,7 @@ export function createMediaDiagnosticsSampler() {
         try {
           const report = await track.getRTCStatsReport();
           if (source === Track.Source.ScreenShare) {
-            const playback = readPlayback(track);
+            const playback = readPlayback(track, viewing, remote);
             const encodings = local ? (track as LocalVideoTrack).sender?.getParameters().encodings : undefined;
             const sourceSample = local && report ? readVideoSourceSample(report, trackId, previousSource)
               : { frames: null, fps: null, intervalMs: null };
@@ -183,7 +191,7 @@ export function createMediaDiagnosticsSampler() {
               playbackDrops: playback.dropped,
               nativeInput, nativeInputInterval,
               sessionKey: local ? `${trackId}:${nativeInput?.sessionId ?? ''}` : trackId,
-              subscription,
+              subscription, viewing,
               layers: report ? readVideoLayers(report, local ? 'outbound-rtp' : 'inbound-rtp', previous, trackId, encodings) : [] });
           } else {
             const settings = track.mediaStreamTrack.getSettings();

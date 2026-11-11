@@ -18,9 +18,10 @@ function snapshot(): MediaDiagnosticsSnapshot {
       playbackFps: null, playbackIntervalMs: null, playbackDrops: null,
       nativeInputInterval: { elapsedMs: 2000, receivedFrames: 200, submittedFrames: 150,
         backpressureDroppedFrames: 50, receivedFps: 100, submittedFps: 75, backpressureDropRate: 25 },
-      sessionKey: null, layers: [{ id: 'private-track-id', active: true, size: '1920×1080', frameCount: 180,
+      sessionKey: null, viewing: null, layers: [{ id: 'private-track-id', active: true, size: '1920×1080', frameCount: 180,
         fps: 58, intervalMs: 2000, bitrateKbps: 8000, codec: 'H264', limitation: null, lostPackets: null, encoder: 'testEncoder',
         averageEncodeMs: 2, droppedFrames: null, powerEfficientEncoder: true,
+        decoder: null, powerEfficientDecoder: null, averageDecodeMs: null, freezeCount: null, totalFreezeDurationMs: null,
         roundTripMs: 25, transportRoundTripMs: 5, receiverReportedLossPercent: 1.5, feedbackAgeMs: 20,
         receiveLossPercent: null, jitterBufferMs: null }] }],
     audio: [], process: null, native: null, failures: [] };
@@ -498,7 +499,7 @@ it('导出按记录时参数保存，匿名化身份/轨道ID，不使用导出�
   expect(text).not.toContain('private-user-id'); expect(text).not.toContain('private-track-id');
   expect(text).not.toContain('私人昵称');
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(13);
+  expect(result.schemaVersion).toBe(14);
   expect(result.measurements.process).toMatchObject({ scope: 'electron-and-owned-native-processes', memoryUnit: 'MiB',
     memoryMb: 'electron-only-sum-working-set', nativeMemory: 'GetProcessMemoryInfo; private-commit-not-resident',
     sharedPagesMayBeCountedMoreThanOnce: true, includesGpuMemory: false, includesNativeCpu: true });
@@ -707,6 +708,36 @@ it('新增诊断只导出版本、后端和计数，不导出会话、帧对象�
   expect(JSON.stringify(exported)).not.toMatch(/private|secret|sessionId/);
 });
 
+it('观看需求变化会分段，短暂暂停再恢复不混入平均帧率，导出不包含内部标识', async () => {
+  const sample = snapshot();
+  sample.streams[0].direction = '接收';
+  Object.assign(sample.streams[0].layers[0], { decoder: 'D3D11VideoDecoder', powerEfficientDecoder: false,
+    averageDecodeMs: 0.5, freezeCount: 2, totalFreezeDurationMs: 500 });
+  sample.streams[0].viewing = { revision: 1, registeredViews: 1, visibleViews: 1, inactiveViews: 0,
+    hiddenWindowViews: 0, offscreenViews: 0, requestedQuality: 'high' };
+  collect.mockImplementation(async () => structuredClone(sample));
+  const { report, exportDiagnosticReport } = setup();
+  report.start(); await vi.advanceTimersByTimeAsync(2000);
+  sample.streams[0].viewing.revision = 3;
+  await vi.advanceTimersByTimeAsync(2000);
+  sample.streams[0].viewing = { ...sample.streams[0].viewing, revision: 4, visibleViews: 0,
+    hiddenWindowViews: 1, requestedQuality: null };
+  await vi.advanceTimersByTimeAsync(2000);
+  report.stop(); await report.save('');
+  const result = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
+  const resumed = result.samples[2].streams[0];
+  expect(result.samples[1].streams[0].layers[0]).toMatchObject({ decoder: 'D3D11VideoDecoder',
+    powerEfficientDecoder: false, averageDecodeMs: 0.5, freezeCount: 2, totalFreezeDurationMs: 500 });
+  expect(result.summary.segments[0].typicalFps.encodingLayers[0]).toMatchObject({ typicalDecodeMs: 0.5,
+    decoderImplementations: ['D3D11VideoDecoder'], powerEfficientDecoderValues: [false] });
+  expect(resumed.segmentReason).toBe('viewing-change');
+  expect(resumed.layers[0].fps).toBeNull();
+  expect(resumed.layers[0].averageDecodeMs).toBeNull();
+  expect(resumed.viewing).toMatchObject({ visibleViews: 1, requestedQuality: 'high' });
+  expect(resumed.viewing).not.toHaveProperty('revision');
+  expect(result.summary.segments.at(-1).warnings).toContain('本机没有可见观看位置，主动暂停接收，不作为卡顿。');
+});
+
 it('自动恢复失败保留最后确认帧率并在摘要提示，不把用户目标当作已应用', async () => {
   const next = snapshot();
   next.streams[0].nativeInput = { sessionId: 'session', receivedFrames: 10, submittedFrames: 7, completedWrites: 6,
@@ -716,7 +747,7 @@ it('自动恢复失败保留最后确认帧率并在摘要提示，不把用户�
   const { report, exportDiagnosticReport } = setup();
   report.start(); await vi.advanceTimersByTimeAsync(2000); report.stop(); await report.save('');
   const result = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
-  expect(result.schemaVersion).toBe(13);
+  expect(result.schemaVersion).toBe(14);
   expect(result.samples[1].streams[0].nativeInput).toMatchObject({ requestedFrameRate: 120, captureFrameRate: 30, frameRateAdjustmentFailed: true });
   expect(result.summary.segments[0].warnings).toContain('采集帧率自动调整失败，保留最后确认的运行目标；不代表已恢复用户帧率。');
 });
@@ -752,7 +783,7 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，纹理桥丢帧只取
   report.stop(); await report.save('');
   const text = exportDiagnosticReport.mock.calls[0][0];
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(13);
+  expect(result.schemaVersion).toBe(14);
   expect(result.summary.segments).toHaveLength(1);
   expect(result.samples[0].native).toMatchObject({ helperVersion: '32.2.2', captureBackend: 'obsLibobs' });
   expect(result.samples[0].native.microphoneCapture).toEqual({ sourceState: 1, sourceFrames: 48000, framesReceived: 47040, pushToTalk: true, transmissionAllowed: false, processingMetrics: null });

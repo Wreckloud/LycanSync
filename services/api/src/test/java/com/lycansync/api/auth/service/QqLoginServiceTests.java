@@ -119,6 +119,20 @@ class QqLoginServiceTests {
     }
 
     @Test
+    void importedNicknameFitsCardWithoutSplittingUnicodeOrChangingQqIdentity() {
+        for (String original : new String[] { "一二三四五六七八九", "abcdefghijklmnopq", "中文昵称abcdefg😀", "😀".repeat(9) }) {
+            when(client.exchange("test-code")).thenReturn(new QqIdentityClient.Identity(OPEN_ID, original, ""));
+            var start = start(false, null); ready(start);
+            var response = service.exchange(start.request(), VERIFIER);
+            String nickname = response.user().nickname();
+            assertThat(nickname.codePoints().map(value -> value <= 0x7f ? 1 : 2).sum()).isBetween(15, 16);
+            assertThat(original).startsWith(nickname);
+            assertThat(Character.isHighSurrogate(nickname.charAt(nickname.length() - 1))).isFalse();
+            verify(identities).insert(eq("1234567"), eq(OPEN_ID), eq(response.user().id()), eq(original), eq(NOW));
+        }
+    }
+
+    @Test
     void bindingRequiresSameOriginalAccountAndSessionAndNeverOverwritesAnotherIdentity() {
         var owner = new AuthenticatedUser(UUID.randomUUID(), "服主", true, "original-hash");
         var start = start(true, owner); ready(start);

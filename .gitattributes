@@ -1,2 +1,3 @@
 # 补丁上下文的空格/制表符属于 diff 格式；实际新增源码由 git apply --whitespace=error-all 检查。
 native/obs-capture-host/patches/*.patch text eol=lf -whitespace
+vendor/livekit/*.patch text eol=lf -whitespace

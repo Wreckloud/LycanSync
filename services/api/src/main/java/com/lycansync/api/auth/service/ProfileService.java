@@ -46,6 +46,11 @@ public class ProfileService {
         if (nickname.isBlank() || nickname.codePoints().anyMatch(Character::isISOControl)) {
             throw invalid("昵称不能为空或包含控制字符");
         }
+        // 旧昵称不截断；仅更新头像或签名时仍允许原值通过。
+        if (nickname.codePoints().map(value -> value <= 0x7f ? 1 : 2).sum() > 16
+                && !nickname.equals(findProfile(user).nickname())) {
+            throw invalid("昵称太长，请缩短一些（最多 8 个汉字或 16 个英文、数字）。");
+        }
         String signature = request.signature() == null ? null : request.signature().strip();
         if (signature != null && (signature.length() > 40
                 || signature.codePoints().anyMatch(value -> Character.isISOControl(value)

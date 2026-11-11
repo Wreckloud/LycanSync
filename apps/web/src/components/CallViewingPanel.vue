@@ -177,6 +177,7 @@ onScopeDispose(() => {
           <div v-for="share in view.displayed" :key="share.key" class="viewing-tile" :style="tileStyle(share)">
             <div class="viewing-surface" role="button" tabindex="0"
               :aria-label="focus ? '查看全部共享画面' : '聚焦' + share.participant.name"
+              :title="focus ? '点击查看全部共享画面' : '点击聚焦共享画面'"
               @click="select(share)" @keydown.enter.self.prevent="select(share)" @keydown.space.self.prevent="select(share)">
               <ParticipantCard :participant="share.participant" :revision="revision" variant="viewer"
                 :view-active="videoActive"

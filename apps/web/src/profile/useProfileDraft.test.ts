@@ -16,6 +16,41 @@ function setup(saveProfile = vi.fn(async (profile: ProfileUpdate) => ({ ...initi
 }
 
 describe('个人资料草稿与保存', () => {
+  it.each(['字'.repeat(8), 'Wreckloud', 'a'.repeat(16), '中文昵称abcdefgh', '😀'.repeat(8)])('允许八个汉字等宽昵称：%s', async (value) => {
+    const { scope, draft, saveProfile } = setup();
+    try {
+      draft.nickname.value = value;
+      expect(draft.nicknameError.value).toBe('');
+      expect(await draft.save('nickname')).toBe(true);
+      expect(saveProfile).toHaveBeenCalledOnce();
+    } finally { scope.stop(); }
+  });
+
+  it.each(['字'.repeat(9), 'a'.repeat(17), '中文昵称abcdefghi', '😀'.repeat(9)])('超长昵称就近报错且不提交：%s', async (value) => {
+    const { scope, draft, saveProfile } = setup();
+    try {
+      draft.nickname.value = value;
+      expect(draft.nicknameError.value).toContain('昵称太长');
+      expect(await draft.save('nickname')).toBe(false);
+      expect(draft.nickname.value).toBe(value);
+      expect(draft.errorField.value).toBe('nickname');
+      expect(saveProfile).not.toHaveBeenCalled();
+    } finally { scope.stop(); }
+  });
+
+  it('保留旧长昵称，修改签名不被拦截，改成其他长昵称则校验', async () => {
+    const { scope, user, draft, saveProfile } = setup();
+    try {
+      const legacy = '旧'.repeat(20);
+      user.value = { ...initialUser, nickname: legacy };
+      await nextTick();
+      draft.signature.value = '新的签名';
+      expect(await draft.save('signature')).toBe(true);
+      expect(saveProfile).toHaveBeenCalledWith({ nickname: legacy, avatar: '', signature: '新的签名' });
+      draft.nickname.value = '新'.repeat(9);
+      expect(await draft.save('nickname')).toBe(false);
+    } finally { scope.stop(); }
+  });
   it('仅编辑草稿不会提交，首次资料页可以直接跳过', async () => {
     const { scope, draft, saveProfile } = setup();
     draft.nickname.value = '草稿昵称';

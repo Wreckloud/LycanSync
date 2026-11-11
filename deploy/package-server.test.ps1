@@ -17,17 +17,23 @@ $sourceName = "LycanSync-$version-obs-source.tar.gz"
 $noticeName = "LycanSync-$version-THIRD-PARTY-NOTICES.txt"
 $files = @($installerName, "$installerName.blockmap", $sourceName, $noticeName, 'latest.yml')
 $original = @{}
+$livekitBinary = Join-Path $fixtureRoot 'release/livekit/livekit-server'
+$livekitProvenance = Join-Path $fixtureRoot 'vendor/livekit/provenance.json'
+New-Item -ItemType Directory -Force -Path (Split-Path $livekitBinary -Parent), (Split-Path $livekitProvenance -Parent) | Out-Null
 foreach ($name in $files) { $original[$name] = [Text.Encoding]::UTF8.GetBytes("synthetic $name") }
 $installerSha = [Convert]::ToBase64String([Security.Cryptography.SHA512]::Create().ComputeHash($original[$installerName]))
 $original['latest.yml'] = [Text.Encoding]::UTF8.GetBytes("version: $version`npath: $installerName`nsha512: $installerSha`n")
 function Reset-Fixture {
+    [IO.File]::WriteAllText($livekitBinary, 'synthetic LiveKit; not executed')
+    @{ sdkCommit = 'tested-sdk'; serverCommit = 'tested-server'; protocol = 19; serverBinarySha256 = (Get-FileHash -LiteralPath $livekitBinary -Algorithm SHA256).Hash.ToLowerInvariant() } `
+        | ConvertTo-Json | Set-Content -LiteralPath $livekitProvenance -Encoding utf8
     foreach ($name in $files) { [IO.File]::WriteAllBytes((Join-Path $client $name), $original[$name]) }
     $entries = foreach ($name in $files) {
         $bytes = $original[$name]
         $hash = [Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
         @{ name = $name; bytes = $bytes.Length; sha256 = ([BitConverter]::ToString($hash)).Replace('-', '').ToLowerInvariant() }
     }
-    @{ schemaVersion = 1; version = $version; obsVersion = '32.2.2'; runtimeSha256 = ('a' * 64); files = @($entries) } `
+    @{ schemaVersion = 1; version = $version; obsVersion = '32.2.2'; runtimeSha256 = ('a' * 64); files = @($entries); livekit = @{ sdkCommit = 'tested-sdk'; serverCommit = 'tested-server'; protocol = 19 } } `
         | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $client $recordName) -Encoding utf8
 }
 function Package-Fixture {
@@ -67,7 +73,7 @@ try {
             if ($hash -cne $expected) { throw "ZIP 文件字节不符：$name" }
         }
     }
-    foreach ($name in @('.env.example', '.dockerignore', 'api.jar', 'compose.yaml')) {
+    foreach ($name in @('.env.example', '.dockerignore', 'api.jar', 'compose.yaml', 'livekit/Dockerfile', 'livekit/LICENSE', 'livekit/livekit-server', 'livekit/provenance.json')) {
         if ($names -cnotcontains $name) { throw "ZIP 缺少部署文件：$name" }
     }
 } finally { $zip.Dispose() }
@@ -94,6 +100,14 @@ Require-Rejected {
 } '分发材料缺失'
 Require-Rejected { [IO.File]::WriteAllText($installer, 'wrong installer') } 'SHA-512 不一致'
 Require-Rejected { Remove-Item -LiteralPath (Join-Path $client $recordName) } '缺少同版本分发校验记录'
+Require-Rejected { [IO.File]::WriteAllText($livekitBinary, 'wrong binary') } 'LiveKit 服务端缺失或校验失败'
+Require-Rejected { Remove-Item -LiteralPath $livekitBinary } 'LiveKit 服务端缺失或校验失败'
+Require-Rejected {
+    $path = Join-Path $client $recordName
+    $record = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    $record.livekit.serverCommit = 'wrong-server'
+    $record | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $path -Encoding utf8
+} '不是同一批配套版本'
 Reset-Fixture
 # 旧的解包目录不进入新 ZIP；生成中失败只清理自己创建的随机目录。
 New-Item -ItemType Directory -Force -Path (Join-Path $output 'lycansync-server-0.0.1/downloads') | Out-Null
@@ -104,4 +118,4 @@ try { if ($zip.Entries | Where-Object { $_.FullName -like '*old-private-file*' }
 finally { $zip.Dispose() }
 $script:publishedHash = (Get-FileHash -LiteralPath $archive).Hash
 Require-Rejected { Remove-Item -LiteralPath (Join-Path $fixtureDeploy 'server/Caddyfile') } 'Caddyfile'
-Write-Output '通过：材料完整与 ZIP 字节、点文件、8 组缺失／损坏／版本／路径拒绝、旧包保留、旧输出隔离及失败清理。未启动应用、设备或容器。'
+Write-Output '通过：材料完整与 ZIP 字节、点文件、缺失／损坏／版本／路径拒绝、配套 LiveKit 校验、旧包保留、旧输出隔离及失败清理。未启动应用、设备或容器。'

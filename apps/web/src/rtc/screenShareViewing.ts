@@ -1,10 +1,12 @@
 import { VideoQuality, type RemoteTrackPublication } from 'livekit-client';
 
-interface ViewDemand { visible: boolean; quality: VideoQuality }
-const viewingDemands = new WeakMap<RemoteTrackPublication, Set<ViewDemand>>();
+interface ViewDemand { element: HTMLVideoElement; reason: 'visible' | 'inactive' | 'window-hidden' | 'offscreen' | null; quality: VideoQuality }
+interface ViewingState { demands: Set<ViewDemand>; revision: number }
+const viewingDemands = new WeakMap<RemoteTrackPublication, ViewingState>();
 
-function updateViewing(publication: RemoteTrackPublication, demands: Set<ViewDemand>) {
-  const visible = [...demands].filter((demand) => demand.visible);
+function updateViewing(publication: RemoteTrackPublication, state: ViewingState) {
+  state.revision++;
+  const visible = [...state.demands].filter((demand) => demand.reason === 'visible');
   if (visible.length) {
     publication.setVideoQuality(visible.some((demand) => demand.quality === VideoQuality.HIGH)
       ? VideoQuality.HIGH : VideoQuality.LOW);
@@ -14,7 +16,28 @@ function updateViewing(publication: RemoteTrackPublication, demands: Set<ViewDem
 }
 
 export function syncScreenShareViewing(publication: RemoteTrackPublication) {
-  updateViewing(publication, viewingDemands.get(publication) ?? new Set());
+  let state = viewingDemands.get(publication);
+  if (!state) { state = { demands: new Set(), revision: 0 }; viewingDemands.set(publication, state); }
+  updateViewing(publication, state);
+}
+
+/** 读取已有观看需求，不创建订阅；计数不包含窗口标题、账号或来源标识。 */
+export function readScreenShareViewing(publication: object) {
+  const state = viewingDemands.get(publication as RemoteTrackPublication);
+  if (!state) return null;
+  const demands = [...state.demands];
+  const visible = demands.filter(demand => demand.reason === 'visible');
+  return { revision: state.revision, registeredViews: demands.length, visibleViews: visible.length,
+    inactiveViews: demands.filter(demand => demand.reason === 'inactive').length,
+    hiddenWindowViews: demands.filter(demand => demand.reason === 'window-hidden').length,
+    offscreenViews: demands.filter(demand => demand.reason === 'offscreen').length,
+    requestedQuality: visible.length ? visible.some(demand => demand.quality === VideoQuality.HIGH) ? 'high' as const : 'low' as const : null };
+}
+
+export function isScreenShareViewVisible(publication: object, element: HTMLVideoElement) {
+  const state = viewingDemands.get(publication as RemoteTrackPublication);
+  if (!state) return null;
+  return [...state.demands].some(demand => demand.element === element && demand.reason === 'visible');
 }
 
 export function observeScreenShareView(publication: RemoteTrackPublication, element: HTMLVideoElement,
@@ -25,15 +48,17 @@ export function observeScreenShareView(publication: RemoteTrackPublication, elem
   let disposed = false;
   let active = initiallyActive;
   let intersecting = element.getClientRects().length > 0;
-  const demand: ViewDemand = { visible: false, quality };
-  let demands = viewingDemands.get(publication);
-  if (!demands) { demands = new Set(); viewingDemands.set(publication, demands); }
-  const currentDemands = demands;
-  currentDemands.add(demand);
+  const demand: ViewDemand = { element, reason: null, quality };
+  let state = viewingDemands.get(publication);
+  if (!state) { state = { demands: new Set(), revision: 0 }; viewingDemands.set(publication, state); }
+  const currentState = state;
+  currentState.demands.add(demand);
   function updateVisibility() {
     if (disposed) return;
-    demand.visible = active && intersecting && page.visibilityState !== 'hidden';
-    updateViewing(publication, currentDemands);
+    const reason = !active ? 'inactive' : page.visibilityState === 'hidden' ? 'window-hidden' : !intersecting ? 'offscreen' : 'visible';
+    if (demand.reason === reason) return;
+    demand.reason = reason;
+    updateViewing(publication, currentState);
   }
   // 每个观看位置使用所属窗口，主窗口隐藏不能暂停仍可见的独立窗。
   const observer = new viewWindow.IntersectionObserver((entries) => {
@@ -52,9 +77,9 @@ export function observeScreenShareView(publication: RemoteTrackPublication, elem
     observer.disconnect();
     page.removeEventListener('visibilitychange', updateVisibility);
     viewWindow!.removeEventListener('pagehide', stop);
-    currentDemands.delete(demand);
-    updateViewing(publication, currentDemands);
-    if (!currentDemands.size) viewingDemands.delete(publication);
+    currentState.demands.delete(demand);
+    // 空需求仍保留暂停原因与变化序号；发布对象释放时由 WeakMap 一并回收。
+    updateViewing(publication, currentState);
   }
   return {
     setActive(enabled: boolean) {
@@ -65,7 +90,7 @@ export function observeScreenShareView(publication: RemoteTrackPublication, elem
     setQuality(next: VideoQuality) {
       if (disposed || demand.quality === next) return;
       demand.quality = next;
-      updateVisibility();
+      updateViewing(publication, currentState);
     },
     stop,
   };

@@ -48,6 +48,7 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
     const first = entries[0]; const last = entries[entries.length - 1];
     const paused = entries.map(({ sample, stream }) => stream.subscription.subscribed === false
       || stream.subscription.enabled === false || stream.subscription.muted === true
+      || stream.viewing?.visibleViews === 0
       || (stream.direction === '发送' && sample.nativeVideoSessionMatched && sample.native?.captureSuspended === true));
     // 恢复后的首区间仍跨越暂停边界；仅排除明确暂停，不掩盖正常运行时的零帧。
     const comparableEntries = entries.filter((_, index) => !paused[index] && !paused[index - 1]);
@@ -80,11 +81,14 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
       const values = comparableEntries.flatMap(({ stream }) => stream.layers.filter((item) => item.layer === layer && item.active !== false)
         .map((item) => item.fps).filter((value): value is number => value !== null));
       const measured = comparableEntries.flatMap(({ stream }) => stream.layers.filter((item) => item.layer === layer && item.active !== false));
-      const numbers = (field: 'bitrateKbps' | 'averageEncodeMs' | 'roundTripMs' | 'transportRoundTripMs' | 'receiverReportedLossPercent' | 'receiveLossPercent' | 'jitterBufferMs') =>
+      const numbers = (field: 'bitrateKbps' | 'averageEncodeMs' | 'averageDecodeMs' | 'roundTripMs' | 'transportRoundTripMs' | 'receiverReportedLossPercent' | 'receiveLossPercent' | 'jitterBufferMs') =>
         measured.map((item) => item[field]).filter((value): value is number => value !== null);
       return { layer, active, size: matching.find((item) => item.size !== '未知')?.size ?? null,
         typicalFps: median(values), validSamples: values.length,
         typicalBitrateKbps: median(numbers('bitrateKbps')), typicalEncodeMs: median(numbers('averageEncodeMs'), 1),
+        typicalDecodeMs: median(numbers('averageDecodeMs'), 1),
+        decoderImplementations: [...new Set(matching.map(item => item.decoder).filter(value => value !== null))],
+        powerEfficientDecoderValues: [...new Set(matching.map(item => item.powerEfficientDecoder).filter(value => value !== null))],
         encoderImplementations: [...new Set(matching.map((item) => item.encoder).filter((value) => value !== null))],
         powerEfficientEncoderValues: [...new Set(matching.map((item) => item.powerEfficientEncoder).filter((value) => value !== null))],
         network: { typicalRoundTripMs: median(numbers('roundTripMs')),
@@ -107,6 +111,10 @@ function summarizeSegments(samples: DiagnosticSample[], clientVersion: string, d
       if (sample.failures.length) warnings.add('部分统计读取失败或缺失。');
       if (stream.nativeInput?.frameRateAdjustmentFailed) warnings.add('采集帧率自动调整失败，保留最后确认的运行目标；不代表已恢复用户帧率。');
       if (stream.subscription.subscribed === false) warnings.add('接收端未订阅此路视频。');
+      if (stream.viewing?.visibleViews === 0) warnings.add('本机没有可见观看位置，主动暂停接收，不作为卡顿。');
+      if (stream.viewing?.hiddenWindowViews) warnings.add('存在隐藏窗口中的观看位置。');
+      if (stream.viewing?.offscreenViews) warnings.add('存在滚出可视区域的观看位置。');
+      if (stream.segmentReason === 'viewing-change') warnings.add('观看需求变化后重新建立统计基线。');
       if (paused[index]) {
         warnings.add('记录期间存在暂停或静音状态。');
         warnings.add('明确暂停及恢复边界区间不计入摘要帧率和页面背压比例；原始样本仍保留。');
@@ -256,6 +264,12 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
       playbackDrops: numeric(stream.playbackDrops),
       subscription: { subscribed: stream.subscription.subscribed, enabled: stream.subscription.enabled,
         muted: stream.subscription.muted },
+      viewing: stream.viewing && {
+        registeredViews: numeric(stream.viewing.registeredViews), visibleViews: numeric(stream.viewing.visibleViews),
+        inactiveViews: numeric(stream.viewing.inactiveViews), hiddenWindowViews: numeric(stream.viewing.hiddenWindowViews),
+        offscreenViews: numeric(stream.viewing.offscreenViews),
+        requestedQuality: stream.viewing.requestedQuality === 'high' ? 'high' : stream.viewing.requestedQuality === 'low' ? 'low' : null,
+      },
       nativeInput: stream.nativeInput && {
         receivedFrames: numeric(stream.nativeInput.receivedFrames), submittedFrames: numeric(stream.nativeInput.submittedFrames),
         backpressureDroppedFrames: numeric(stream.nativeInput.backpressureDroppedFrames),
@@ -281,6 +295,9 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
         active: layer.active,
         frameCount: numeric(layer.frameCount), fps: numeric(layer.fps), intervalMs: numeric(layer.intervalMs),
         bitrateKbps: numeric(layer.bitrateKbps), encoder: label(layer.encoder),
+        decoder: label(layer.decoder), averageDecodeMs: numeric(layer.averageDecodeMs),
+        powerEfficientDecoder: typeof layer.powerEfficientDecoder === 'boolean' ? layer.powerEfficientDecoder : null,
+        freezeCount: numeric(layer.freezeCount), totalFreezeDurationMs: numeric(layer.totalFreezeDurationMs),
         powerEfficientEncoder: typeof layer.powerEfficientEncoder === 'boolean' ? layer.powerEfficientEncoder : null,
         roundTripMs: numeric(layer.roundTripMs), transportRoundTripMs: numeric(layer.transportRoundTripMs),
         receiverReportedLossPercent: numeric(layer.receiverReportedLossPercent),
@@ -387,7 +404,7 @@ export function useDiagnosticReport(options: {
   let savedReportRefreshedAfterCheckpoint = false;
   let savedReportGeneration = 0;
   const streamSegments = new Map<string, { sessionKey: string | null; quality: string; dimensions: string; renderConfiguration: number | null;
-    segmentId: string; lastSampleIndex: number }>();
+    viewingRevision: number | null; segmentId: string; lastSampleIndex: number }>();
   const aliases = new Map<string, string>();
 
   function readSettings(): ReportSettings {
@@ -478,6 +495,7 @@ export function useDiagnosticReport(options: {
           if (previousSegment) {
             if (currentSampleIndex - previousSegment.lastSampleIndex > 1) segmentReason = 'sampling-gap';
             else if (previousSegment.sessionKey !== observed.sessionKey) segmentReason = 'source-change';
+            else if (previousSegment.viewingRevision !== (observed.viewing?.revision ?? null)) segmentReason = 'viewing-change';
             else if (previousSegment.quality !== quality) segmentReason = 'quality-change';
             else if (previousSegment.dimensions !== dimensions) segmentReason = 'dimensions-change';
             else if (previousSegment.renderConfiguration !== null && renderConfiguration !== null
@@ -486,7 +504,7 @@ export function useDiagnosticReport(options: {
           }
           const startsNewSegment = !previousSegment || segmentReason !== 'continuation';
           const segment = startsNewSegment
-            ? { sessionKey: observed.sessionKey, quality, dimensions, renderConfiguration,
+            ? { sessionKey: observed.sessionKey, quality, dimensions, renderConfiguration, viewingRevision: observed.viewing?.revision ?? null,
               segmentId: `segment-${nextSegmentNumber++}`, lastSampleIndex: currentSampleIndex }
             : previousSegment;
           // 初次缺失的配置可在后续补齐；短暂未知不能抹掉已确认的分段基线。
@@ -499,7 +517,7 @@ export function useDiagnosticReport(options: {
             stream.playbackFps = null; stream.playbackIntervalMs = null;
             stream.nativeInputInterval = null;
             stream.layers = stream.layers.map((layer) => ({ ...layer, fps: null, intervalMs: null,
-              bitrateKbps: null, averageEncodeMs: null, receiveLossPercent: null, jitterBufferMs: null }));
+              bitrateKbps: null, averageEncodeMs: null, averageDecodeMs: null, receiveLossPercent: null, jitterBufferMs: null }));
             if (stream.direction === '发送') { exported.nativeInterval = null; exported.obsRenderInterval = null; }
           }
           return { ...stream, segmentId: segment.segmentId, segmentReason };
@@ -580,12 +598,12 @@ export function useDiagnosticReport(options: {
         streams: first.streams.map((stream) => ({ ...stream, segmentReason: 'retained-window',
           sourceFps: null, sourceIntervalMs: null, playbackFps: null, playbackIntervalMs: null, nativeInputInterval: null,
           layers: stream.layers.map((layer) => ({ ...layer, fps: null, intervalMs: null, bitrateKbps: null,
-            averageEncodeMs: null, receiveLossPercent: null, jitterBufferMs: null })) })) };
+            averageEncodeMs: null, averageDecodeMs: null, receiveLossPercent: null, jitterBufferMs: null })) })) };
       for (let index = 0; index < exportedSamples.length; index++) {
         exportedSamples[index] = { ...exportedSamples[index], elapsedMs: exportedSamples[index].elapsedMs - first.elapsedMs };
       }
     }
-    const report = { kind: 'lycansync-diagnostics', schemaVersion: 13,
+    const report = { kind: 'lycansync-diagnostics', schemaVersion: 14,
       startedAt: discardedSamples.value && exportedSamples.length ? exportedSamples[0].time : startedAt ?? new Date().toISOString(),
       endedAt: endedAt ?? new Date().toISOString(),
       stopReason: recording.value && automaticRecording ? 'automaticSnapshot' : reason.value || 'automaticEvents',

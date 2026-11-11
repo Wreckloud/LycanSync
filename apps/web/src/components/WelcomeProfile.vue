@@ -11,12 +11,13 @@ import { formatRegistrationDate } from '../profile/registrationDate';
 
 const props = defineProps<{ user: AuthUser; saveProfile: (profile: ProfileUpdate) => Promise<AuthUser> }>();
 const emit = defineEmits<{ finish: [] }>();
-const { nickname, avatar, signature, busy, error, save: saveDraft } = useProfileDraft(toRef(props, 'user'), props.saveProfile);
+const { nickname, nicknameError, avatar, signature, busy, error, errorField, save: saveDraft } = useProfileDraft(toRef(props, 'user'), props.saveProfile);
 const avatarInput = ref<HTMLInputElement | null>(null);
 const nicknameInput = ref<HTMLInputElement | null>(null);
 const nicknameButton = ref<HTMLButtonElement | null>(null);
 const editingNickname = ref(false);
-const { cropSource, picking, pickAvatar, editAvatar, clearCrop } = useAvatarCrop(error);
+const avatarError = ref('');
+const { cropSource, picking, pickAvatar, editAvatar, clearCrop } = useAvatarCrop(avatarError);
 const registrationDate = computed(() => formatRegistrationDate(props.user.createdAt));
 
 function applyAvatar(value: string) {
@@ -32,7 +33,7 @@ async function editNickname() {
 }
 
 function finishNicknameEdit() {
-  if (nickname.value.trim()) editingNickname.value = false;
+  if (nickname.value.trim() && !nicknameError.value) editingNickname.value = false;
 }
 
 async function submitNickname(event: KeyboardEvent) {
@@ -74,11 +75,12 @@ async function save() {
           <input ref="avatarInput" type="file" hidden aria-label="上传头像" accept="image/png,image/jpeg" @change="pickAvatar" />
           <div class="welcome-nickname">
             <input v-if="editingNickname" ref="nicknameInput" v-model="nickname" aria-label="昵称" maxlength="32"
-              :readonly="busy" :aria-invalid="!nickname.trim()" @blur="finishNicknameEdit" @keydown.enter="submitNickname" />
+              :readonly="busy" :aria-invalid="!nickname.trim() || !!nicknameError" aria-describedby="welcome-nickname-feedback" @blur="finishNicknameEdit" @keydown.enter="submitNickname" />
             <button v-else ref="nicknameButton" type="button" :aria-label="`修改昵称，${nickname}`" :disabled="busy" @click="editNickname">
               <span data-identity-name>{{ nickname }}</span><Pencil :size="15" aria-hidden="true" />
             </button>
             <span class="welcome-registration">注册于 <time v-if="registrationDate" :datetime="user.createdAt">{{ registrationDate }}</time><span v-else>暂不可用</span></span>
+            <InlineFeedback id="welcome-nickname-feedback" :message="nicknameError || (errorField === 'nickname' ? error : '')" />
           </div>
         </div>
         <div class="welcome-signature">
@@ -91,7 +93,7 @@ async function save() {
         </div>
       </div>
       <footer class="card-actions card-actions-no-cancel">
-        <InlineFeedback class="card-feedback" :message="error"
+        <InlineFeedback class="card-feedback" :message="avatarError || (errorField === 'nickname' ? '' : error)"
           :pending="busy ? '正在保存…' : picking ? '正在读取图片…' : ''" />
         <button type="submit" class="confirm-button card-actions-end" :disabled="busy || picking || !!cropSource">保存并继续</button>
       </footer>

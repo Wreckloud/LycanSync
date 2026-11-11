@@ -20,6 +20,8 @@ const props = withDefaults(defineProps<{
   variant?: 'card' | 'viewer';
   inputBlocked?: boolean;
   viewActive?: boolean;
+  focused?: boolean;
+  watchingElsewhere?: boolean;
   shareAudio?: boolean;
   shareMuted?: boolean;
   shareAudioListening?: boolean;
@@ -112,6 +114,8 @@ const remoteAudioLabel = computed(() => {
   return `${media.value.name}${microphoneState}，接收音量${playbackPercent.value}%，滚轮或按住上下拖动，点击取消收听`;
 });
 const selectable = computed(() => props.variant !== 'viewer' && media.value.sharing && !props.privateControl);
+const focusedPreview = computed(() => selectable.value && props.focused);
+const selectHint = computed(() => props.watchingElsewhere ? '打开观看窗口' : focusedPreview.value ? '收起聚焦画面' : '聚焦共享画面');
 const fullscreenAvailable = computed(() => Boolean(ownerDocument.value?.fullscreenEnabled || ownerDocument.value?.defaultView?.lycanViewerWindow));
 const viewingQuality = computed(() => props.viewQuality ?? (props.variant === 'viewer' ? VideoQuality.HIGH : VideoQuality.LOW));
 
@@ -348,10 +352,10 @@ onBeforeUnmount(() => {
 <template>
   <article ref="cardElement" class="participant-card" :class="[`is-${variant}`, { 'is-speaking': variant === 'card' && media.speaking }]"
     :data-testid="variant === 'viewer' ? 'viewer-screen' : 'participant-card'">
-    <div class="participant-media" :class="{ 'is-selectable': selectable, 'is-remote-control': remoteInputAllowed }"
+    <div class="participant-media" :class="{ 'is-selectable': selectable, 'is-remote-control': remoteInputAllowed, 'is-focused-preview': focusedPreview }"
       :role="selectable ? 'button' : undefined" :tabindex="remoteInputAllowed || selectable ? 0 : undefined"
-      :aria-label="selectable ? '观看' + media.name + '的共享画面' : undefined"
-      :data-select-hint="selectable ? '聚焦共享画面' : undefined"
+      :aria-label="selectable ? watchingElsewhere ? '打开观看窗口' : focusedPreview ? '收起' + media.name + '的聚焦画面' : '观看' + media.name + '的共享画面' : undefined"
+      :data-select-hint="selectable ? selectHint : undefined"
       @click="handleRemoteClick"
       @keydown="remoteKey($event, true)" @keyup="remoteKey($event, false)"
       @blur="releaseHeldRemoteInputs"
@@ -359,6 +363,7 @@ onBeforeUnmount(() => {
       @pointercancel="releaseHeldRemoteInputs" @wheel="remoteWheel"
       @contextmenu="remoteControlActive && $event.preventDefault()">
       <span v-if="privateControl" class="video-placeholder private-control-placeholder" role="status">{{ privateControl }}<small>画面未公开</small></span>
+      <span v-else-if="focusedPreview" class="video-placeholder focused-preview-placeholder" role="status">{{ watchingElsewhere ? '已在观看窗口聚焦' : '已聚焦' }}</span>
       <template v-else-if="media.sharing">
         <video ref="videoElement" :class="{ 'is-video-ready': videoReady }" autoplay muted playsinline :aria-label="media.name + '的共享画面'" />
         <span v-if="!videoReady || !media.track || media.muted" class="video-placeholder">等待共享画面…</span>
@@ -441,4 +446,5 @@ onBeforeUnmount(() => {
 .recording-indicator svg { color: var(--danger); flex-shrink: 0; }
 .private-control-placeholder { display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 12px; text-align: center; }
 .private-control-placeholder small { font-size: 12px; }
+.is-focused-preview:hover .focused-preview-placeholder, .is-focused-preview:focus-visible .focused-preview-placeholder { visibility: hidden; }
 </style>

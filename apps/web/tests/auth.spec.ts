@@ -231,6 +231,14 @@ test('个人资料修改沿用当前账号', async ({ page }) => {
   await expect(page.getByLabel('账号标识')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '保存资料' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '取消修改' })).toHaveCount(0);
+  await editNickname(page, '一二三四五六七八九');
+  await page.getByLabel('昵称', { exact: true }).press('Enter');
+  await expect(page.getByLabel('昵称', { exact: true })).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.getByText('昵称太长，请缩短一些（最多 8 个汉字或 16 个英文、数字）。', { exact: true })).toBeVisible();
+  expect(user.nickname).toBe('初始昵称');
+  await page.getByLabel('昵称', { exact: true }).fill('Wreckloud');
+  await page.getByLabel('昵称', { exact: true }).press('Enter');
+  await expect.poll(() => user.nickname).toBe('Wreckloud');
   await editNickname(page, '自定义昵称');
   await page.getByLabel('昵称', { exact: true }).press('Enter');
   await expect.poll(() => user.nickname).toBe('自定义昵称');

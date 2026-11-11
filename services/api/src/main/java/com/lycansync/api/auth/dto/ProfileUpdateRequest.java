@@ -15,7 +15,7 @@ import jakarta.validation.constraints.Size;
 public record ProfileUpdateRequest(
         @NotBlank
         @Size(max = 32)
-        @Schema(description = "显示昵称，最多 32 个字符", example = "Wreckloud")
+        @Schema(description = "显示昵称，修改时最多 16 个半角位置：ASCII 字符占 1，其余 Unicode 码点占 2；未修改的旧昵称保留", example = "Wreckloud")
         String nickname,
         @NotNull
         @Schema(description = "裁剪后的 PNG/JPEG data URL，最多 1024 × 1024、2 MiB；服务器统一为 256 × 256 PNG；空串移除头像")

@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { RemoteTrackPublication, Room, Track, TrackEvent, VideoQuality } from 'livekit-client';
-import { observeScreenShareView, syncScreenShareViewing } from './screenShareViewing';
+import { isScreenShareViewVisible, observeScreenShareView, readScreenShareViewing, syncScreenShareViewing } from './screenShareViewing';
 
 function viewing() {
   const callbacks = new Map<Element, IntersectionObserverCallback>();
@@ -137,4 +137,33 @@ it('SDK 恢复连接会重发暂停及层选择，不恢复默认高清需求', 
   resume.call(room);
   expect(state.updates.at(-1)).toMatchObject({ disabled: true });
   view.stop();
+});
+
+it('诊断区分隐藏、未展示和滚出视区，读状态不发更新，暂停再恢复仍可识别边界', () => {
+  const main = viewing(), auxiliary = viewing();
+  expect(readScreenShareViewing(main.publication)).toBeNull();
+  syncScreenShareViewing(main.publication);
+  expect(readScreenShareViewing(main.publication)).toMatchObject({ registeredViews: 0, visibleViews: 0, requestedQuality: null });
+  const small = main.element();
+  expect(isScreenShareViewVisible(main.publication, small)).toBe(false);
+  const low = observeScreenShareView(main.publication, small, VideoQuality.LOW);
+  expect(isScreenShareViewVisible(main.publication, small)).toBe(true);
+  const high = observeScreenShareView(main.publication, auxiliary.element(), VideoQuality.HIGH);
+  main.visible(small, false);
+  expect(isScreenShareViewVisible(main.publication, small)).toBe(false);
+  expect(readScreenShareViewing(main.publication)).toMatchObject({ registeredViews: 2, visibleViews: 1,
+    offscreenViews: 1, requestedQuality: 'high' });
+  auxiliary.background(true);
+  expect(readScreenShareViewing(main.publication)).toMatchObject({ visibleViews: 0, hiddenWindowViews: 1, offscreenViews: 1 });
+  low.setActive(false);
+  expect(readScreenShareViewing(main.publication)).toMatchObject({ inactiveViews: 1, offscreenViews: 0 });
+  auxiliary.background(false);
+  const before = readScreenShareViewing(main.publication)!;
+  auxiliary.background(true); auxiliary.background(false);
+  expect(readScreenShareViewing(main.publication)!.revision).toBeGreaterThan(before.revision);
+  const count = main.updates.length;
+  readScreenShareViewing(main.publication);
+  expect(main.updates).toHaveLength(count);
+  high.stop(); low.stop();
+  expect(readScreenShareViewing(main.publication)).toMatchObject({ registeredViews: 0, visibleViews: 0 });
 });

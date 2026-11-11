@@ -13,7 +13,7 @@ const props = defineProps<{
   user: AuthUser;
   saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
 }>();
-const { nickname, avatar, signature, busy, error, errorField, dirty, save: saveDraft, resetDraft } = useProfileDraft(toRef(props, 'user'), props.saveProfile);
+const { nickname, nicknameError, avatar, signature, busy, error, errorField, dirty, save: saveDraft, resetDraft } = useProfileDraft(toRef(props, 'user'), props.saveProfile);
 const avatarInput = ref<HTMLInputElement | null>(null);
 const nicknameInput = ref<HTMLInputElement | null>(null);
 const nicknameButton = ref<HTMLButtonElement | null>(null);
@@ -26,6 +26,7 @@ const cropping = computed(() => !!cropSource.value);
 
 async function finishEditing(field: 'avatar' | 'nickname' | 'signature' | null = null) {
   if (picking.value || cropSource.value) return false;
+  if (field === 'nickname' && nicknameError.value) return false;
   // 返回值只表示可以结束编辑；保存失败回退资料，保留错误，不阻断离开设置。
   if (busy.value || dirty.value) {
     if (!await saveDraft(field)) resetDraft();
@@ -76,12 +77,12 @@ defineExpose({ finishEditing, cropping });
         <input ref="avatarInput" type="file" hidden aria-label="上传头像" accept="image/png,image/jpeg" @change="pickAvatar" />
         <div class="profile-nickname">
           <input v-if="editingNickname" ref="nicknameInput" v-model="nickname" aria-label="昵称" maxlength="32"
-            :readonly="busy" :aria-invalid="!nickname.trim()" aria-describedby="profile-nickname-feedback" @blur="finishEditing('nickname')" @keydown.enter="submitNickname" />
+            :readonly="busy" :aria-invalid="!nickname.trim() || !!nicknameError" aria-describedby="profile-nickname-feedback" @blur="finishEditing('nickname')" @keydown.enter="submitNickname" />
           <button v-else ref="nicknameButton" type="button" :aria-label="`修改昵称，${nickname}`" :disabled="busy" @click="editNickname">
             <span>{{ nickname }}</span><Pencil :size="15" aria-hidden="true" />
           </button>
           <span class="profile-registration">注册于 <time v-if="registrationDate" :datetime="user.createdAt">{{ registrationDate }}</time><span v-else>暂不可用</span></span>
-          <InlineFeedback id="profile-nickname-feedback" :message="errorField === 'nickname' ? error : ''" />
+          <InlineFeedback id="profile-nickname-feedback" :message="nicknameError || (errorField === 'nickname' ? error : '')" />
         </div>
         <InlineFeedback class="profile-avatar-feedback" :message="avatarError || (errorField === 'avatar' ? error : '')"
           :pending="picking ? '正在读取图片…' : ''" />

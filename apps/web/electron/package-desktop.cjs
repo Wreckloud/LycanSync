@@ -11,6 +11,15 @@ const appDirectory = resolve(__dirname, '..');
 const projectRoot = resolve(appDirectory, '../..');
 const outputDirectory = join(projectRoot, 'release/desktop');
 const version = require('../package.json').version;
+const livekit = JSON.parse(readFileSync(join(projectRoot, 'vendor/livekit/provenance.json'), 'utf8'));
+for (const [file, expected] of [
+  [join(projectRoot, 'vendor/livekit/livekit-client-1ca3298.tgz'), livekit.sdkPackageSha256],
+  [join(appDirectory, 'node_modules/livekit-client/dist/livekit-client.esm.mjs'), livekit.sdkSha256],
+]) {
+  if (!/^[0-9a-f]{64}$/.test(expected) || createHash('sha256').update(readFileSync(file)).digest('hex') !== expected) {
+    throw new Error('LiveKit 客户端与已验收的配套版本不一致，拒绝打包。');
+  }
+}
 const obsDirectory = join(projectRoot, 'release/build-cache/obs-32.2.2/prepared');
 const obsManifest = JSON.parse(readFileSync(join(obsDirectory, 'build-manifest.json'), 'utf8').replace(/^\uFEFF/, ''));
 if (obsManifest.obsVersion !== '32.2.2' || obsManifest.architecture !== 'x64'
@@ -108,7 +117,7 @@ const noticesName = `LycanSync-${version}-THIRD-PARTY-NOTICES.txt`;
 copyFileSync(join(outputDirectory, 'THIRD-PARTY-NOTICES.txt'), join(outputDirectory, noticesName));
 const releaseFiles = [`LycanSync-${version}-windows-x64-setup.exe`,
   `LycanSync-${version}-windows-x64-setup.exe.blockmap`, obsSource.path, noticesName, 'latest.yml'];
-const releaseRecord = { schemaVersion: 1, version, obsVersion: obsManifest.obsVersion,
+const releaseRecord = { schemaVersion: 1, version, obsVersion: obsManifest.obsVersion, livekit,
   runtimeSha256: obsSource.runtimeSha256, files: releaseFiles.map(name => {
     const contents = readFileSync(join(outputDirectory, name));
     return { name, bytes: contents.length, sha256: createHash('sha256').update(contents).digest('hex') };

@@ -60,6 +60,7 @@ const windows = useScreenShareWindows({
 const entries = windows.entries;
 const watching = computed(() => entries.value.find(entry => entry.kind === 'watching'));
 const inlineExpanded = computed(() => view.mode !== 'collapsed' && !watching.value);
+const focusedIdentity = computed(() => view.mode === 'focus' ? view.focusedShare?.participant.identity : undefined);
 const controls = computed(() => entries.value.filter((entry): entry is ControlWindow => entry.kind === 'control'));
 const count = computed(() => entries.value.length);
 const controlAvailable = (identity: string) => props.rtc.remoteControlAvailable[identity] === true;
@@ -120,7 +121,7 @@ defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded });
       :avatar="avatar" :listening="rtc.listening" :recording-elapsed="recordingElapsed"
       :private-control="controlPlaceholder" :reconnecting="rtc.status === 'reconnecting'"
       @detach="detachWatching" @notice="emit('notice', $event)">
-      <HorizontalScroll label="语音成员"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" appear @before-leave="($event as HTMLElement).inert = true"><slot :select="select" :visible="inlineVisible" /></TransitionGroup></HorizontalScroll>
+      <HorizontalScroll label="语音成员" :center-key="watching ? undefined : focusedIdentity"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" appear @before-leave="($event as HTMLElement).inert = true"><slot :select="select" :visible="inlineVisible" :focused-identity="focusedIdentity" :watching-elsewhere="!!watching" /></TransitionGroup></HorizontalScroll>
     </CallViewingPanel>
   </Teleport>
   <Teleport v-if="watching?.target" :to="watching.target">
@@ -129,7 +130,7 @@ defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded });
         :private-control="controlPlaceholder" :recording-elapsed="recordingElapsed"
         :reconnecting="rtc.status === 'reconnecting'" detached
         @return="returnWatching" @notice="emit('notice', $event)">
-        <HorizontalScroll label="语音成员"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" appear @before-leave="($event as HTMLElement).inert = true"><slot :select="view.select" :visible="true" /></TransitionGroup></HorizontalScroll>
+        <HorizontalScroll label="语音成员" :center-key="focusedIdentity"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" appear @before-leave="($event as HTMLElement).inert = true"><slot :select="view.select" :visible="true" :focused-identity="focusedIdentity" :watching-elsewhere="false" /></TransitionGroup></HorizontalScroll>
       </CallViewingPanel>
     </section>
   </Teleport>

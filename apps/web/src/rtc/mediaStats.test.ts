@@ -6,6 +6,22 @@ function report(stats: Record<string, unknown>[]): RTCStatsReport {
 }
 
 describe('屏幕共享媒体统计', () => {
+  it('接收端记录实际解码实现与区间耗时，缺失、停帧、重置和新轨道不伪造统计', () => {
+    const previous = new Map();
+    const sample = (timestamp: number, framesDecoded: number, totalDecodeTime: number) => report([
+      { id: 'in', type: 'inbound-rtp', kind: 'video', timestamp, framesDecoded, totalDecodeTime,
+        decoderImplementation: 'D3D11VideoDecoder', powerEfficientDecoder: false, freezeCount: 2, totalFreezesDuration: 0.5 },
+    ]);
+    expect(readVideoLayers(sample(1000, 30, 0.3), 'inbound-rtp', previous, 'track')[0]).toMatchObject({
+      averageDecodeMs: null, decoder: 'D3D11VideoDecoder', powerEfficientDecoder: false, freezeCount: 2, totalFreezeDurationMs: 500 });
+    expect(readVideoLayers(sample(3000, 90, 0.6), 'inbound-rtp', previous, 'track')[0].averageDecodeMs).toBe(5);
+    expect(readVideoLayers(sample(5000, 90, 0.6), 'inbound-rtp', previous, 'track')[0].averageDecodeMs).toBeNull();
+    expect(readVideoLayers(sample(7000, 1, 0), 'inbound-rtp', previous, 'track')[0].averageDecodeMs).toBeNull();
+    expect(readVideoLayers(sample(9000, 90, 0.6), 'inbound-rtp', previous, 'new-track')[0].averageDecodeMs).toBeNull();
+    expect(readVideoLayers(report([{ id: 'in', type: 'inbound-rtp', kind: 'video', timestamp: 1000,
+      totalDecodeTime: Infinity, freezeCount: -1, totalFreezesDuration: NaN }]), 'inbound-rtp', previous, 'missing')[0])
+      .toMatchObject({ decoder: null, powerEfficientDecoder: null, averageDecodeMs: null, freezeCount: null, totalFreezeDurationMs: null });
+  });
   it('分开记录当前传输连接 RTT 与异常 RTCP 值，旧 ICE 响应不重复统计，切换候选不串源', () => {
     const previous = new Map();
     const sample = (pairId: string, responses: number, rtt = 0.006) => report([

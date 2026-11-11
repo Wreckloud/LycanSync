@@ -14,6 +14,8 @@ Ubuntu 24.04 或 CentOS Stream 9/10 可按各自的 [Docker 官方安装说明](
 
 ## 2. 配置并启动
 
+0.4.13 配套固定 LiveKit 客户端提交 `1ca3298` 与服务端提交 `0d762b4`（协议 19），用于修复重复共享停止后的资源累积。部署包的 `livekit/` 已包含经 SHA-256 校验的 Linux amd64 二进制、Dockerfile、来源记录与许可证；Compose 会构建此镜像，不依赖服务器安装 Go。升级先确认无人通话，备份原配置与 API，再运行 `docker compose build livekit api` 和 `docker compose up -d --no-deps livekit api`；健康及共享检查通过后再发布客户端。旧本机覆盖文件若固定了 1.13.6 镜像，必须同步移除该覆盖或更新为 `lycansync-livekit:1.13.11-0d762b4`。完整源码及重建方法见仓库 `vendor/livekit/README.md`；不能仅按 2.23.0 / 1.13.11 的版本号替换为同名普通发行版。
+
 解压后进入包目录：
 
 ```bash

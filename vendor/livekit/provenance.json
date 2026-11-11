@@ -1,0 +1,11 @@
+{
+  "sdkCommit": "1ca329862a0ca62db82147ad11bf751c570b406b",
+  "serverCommit": "0d762b4e5062c4407712fef74f473dbc5a16cfac",
+  "sdkArchiveSha256": "ffd62efa07005a692a8c44155f8600cac46dd73b9c95d3be0e8cc756dfd80a21",
+  "serverArchiveSha256": "44e8ef892478d48d1e614db81b66627b69d76a194cd5630b950c83a1b5240340",
+  "sdkSha256": "7d936a85e321c477012e96a2c06d994708023e08f99e291a2cf5416a45ca73ee",
+  "sdkPackageSha256": "c477ceba0b4abae36063080d2b9f2ac38a40ed0c86e5f355070f52dc3ed57f9d",
+  "serverBinarySha256": "6786561cd569c399bf2849e05251e19a30e9eee41bcf1180e527d1b810f07c78",
+  "goVersion": "go1.27.3",
+  "protocol": 19
+}

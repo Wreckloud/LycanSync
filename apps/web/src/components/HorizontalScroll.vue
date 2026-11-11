@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, onScopeDispose, onUpdated, ref } from 'vue';
+import { nextTick, onMounted, onScopeDispose, onUpdated, ref, watch } from 'vue';
+import { motionDurationMs } from '../styles/motion';
 
-defineProps<{ label: string }>();
+const props = defineProps<{ label: string; centerKey?: string }>();
 const viewport = ref<HTMLElement | null>(null);
 const previous = ref(false);
 const next = ref(false);
@@ -12,6 +13,47 @@ let drag: { pointer: number; x: number; left: number; moved: boolean } | undefin
 let suppressClick = false;
 let scrollPreference: MediaQueryList | undefined;
 let content: Element | null = null;
+let scrollFrame: number | undefined;
+let scrollTarget: number | undefined;
+
+function cancelScroll() {
+  if (scrollFrame !== undefined) owner?.cancelAnimationFrame(scrollFrame);
+  scrollFrame = undefined;
+  scrollTarget = undefined;
+}
+
+function scrollTo(left: number) {
+  const element = viewport.value;
+  if (!element || !owner) return;
+  cancelScroll();
+  const target = Math.max(0, Math.min(element.scrollWidth - element.clientWidth, left));
+  const from = element.scrollLeft;
+  const duration = scrollPreference?.matches ? 0
+    : motionDurationMs(owner.getComputedStyle(element).getPropertyValue('--motion-surface-duration'));
+  if (!duration || Math.abs(target - from) < 1) { element.scrollLeft = target; return; }
+  scrollTarget = target;
+  const started = owner.performance.now();
+  const step = (now: number) => {
+    const progress = Math.min(1, (now - started) / duration);
+    element.scrollLeft = from + (target - from) * (1 - (1 - progress) ** 3);
+    if (progress < 1) scrollFrame = owner!.requestAnimationFrame(step);
+    else { scrollFrame = undefined; scrollTarget = undefined; }
+  };
+  scrollFrame = owner.requestAnimationFrame(step);
+}
+
+watch(() => props.centerKey, async (key) => {
+  cancelScroll();
+  if (!key) return;
+  await nextTick();
+  const element = viewport.value;
+  if (props.centerKey !== key || !element || !element.clientWidth || element.scrollWidth <= element.clientWidth) return;
+  const selected = [...element.querySelectorAll<HTMLElement>('[data-scroll-key]')].find(item => item.dataset.scrollKey === key);
+  if (!selected) return;
+  const card = selected.getBoundingClientRect();
+  const bounds = element.getBoundingClientRect();
+  scrollTo(element.scrollLeft + card.left + card.width / 2 - bounds.left - element.clientLeft - element.clientWidth / 2);
+}, { immediate: true });
 
 function observeContent() {
   const current = viewport.value?.firstElementChild ?? null;
@@ -33,22 +75,22 @@ function update() {
 function scroll(direction: number) {
   const element = viewport.value;
   if (!element) return;
-  const reduce = scrollPreference?.matches;
-  element.scrollBy({ left: direction * element.clientWidth * 0.75, behavior: reduce ? 'auto' : 'smooth' });
+  scrollTo((scrollTarget ?? element.scrollLeft) + direction * element.clientWidth * 0.75);
 }
 
 function stopAnimatedScroll() {
   const element = viewport.value;
-  if (scrollPreference?.matches && element) element.scrollTo({ left: element.scrollLeft, behavior: 'auto' });
+  if (scrollPreference?.matches && element) cancelScroll();
 }
 
 function wheel(event: WheelEvent) {
   const element = viewport.value;
-  if (!element || event.ctrlKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+  if (!element || event.ctrlKey) return;
+  if (Math.abs(event.deltaX) >= Math.abs(event.deltaY)) { cancelScroll(); return; }
   const delta = event.deltaY * (event.deltaMode === 1 ? 20 : event.deltaMode === 2 ? element.clientWidth : 1);
-  if (delta < 0 ? !previous.value : !next.value) return;
+  if (scrollTarget === undefined && (delta < 0 ? !previous.value : !next.value)) return;
   event.preventDefault();
-  element.scrollLeft += delta;
+  scrollTo((scrollTarget ?? element.scrollLeft) + delta);
 }
 
 function startDrag(event: PointerEvent) {
@@ -56,6 +98,7 @@ function startDrag(event: PointerEvent) {
   if (event.pointerType !== 'mouse' || event.button !== 0 || !viewport.value
       || !(previous.value || next.value)
       || (event.target as Element).closest('input, select, textarea, [role="slider"], .participant-volume-control')) return;
+  cancelScroll();
   drag = { pointer: event.pointerId, x: event.clientX, left: viewport.value.scrollLeft, moved: false };
 }
 
@@ -98,6 +141,7 @@ onMounted(() => {
 onUpdated(observeContent);
 onScopeDispose(() => {
   scrollPreference?.removeEventListener('change', stopAnimatedScroll);
+  cancelScroll();
   observer?.disconnect();
   if (frame !== undefined) owner?.cancelAnimationFrame(frame);
   drag = undefined;

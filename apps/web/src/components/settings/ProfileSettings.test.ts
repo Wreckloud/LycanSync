@@ -26,6 +26,19 @@ function setup() {
   return { scope, user, draft, state, saveProfile, finish };
 }
 
+it('超长昵称失焦保留输入供修正，离开设置仍可撤回草稿', async () => {
+  const { scope, draft, state, saveProfile, finish } = setup();
+  try {
+    draft.nickname.value = '字'.repeat(9);
+    expect(await finish('nickname')).toBe(false);
+    expect(state.editingNickname.value).toBe(true);
+    expect(draft.nickname.value).toBe('字'.repeat(9));
+    expect(saveProfile).not.toHaveBeenCalled();
+    expect(await finish()).toBe(true);
+    expect(draft.nickname.value).toBe(initial.nickname);
+  } finally { scope.stop(); }
+});
+
 it('保存失败自动回退，仍允许结束编辑，下一次有修改时可正常保存', async () => {
   const { scope, draft, state, saveProfile, finish } = setup();
   try {

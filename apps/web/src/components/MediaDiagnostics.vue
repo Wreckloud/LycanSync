@@ -67,7 +67,9 @@ function formatFpsInterval(intervalMs: number | null) {
       </small>
       <small v-else-if="stream.nativeInput">页面帧率与背压比例等待下一份可比较样本。</small>
       <small v-if="stream.subscription.subscribed === false">本机尚未订阅此路共享。</small>
+      <small v-else-if="stream.viewing?.visibleViews === 0">没有可见的观看画面，已主动暂停接收。</small>
       <small v-else-if="stream.subscription.enabled === false">本机已暂停接收此路共享。</small>
+      <small v-if="stream.viewing && stream.viewing.visibleViews > 0">可见观看位置 {{ stream.viewing.visibleViews }} 个 · 请求{{ stream.viewing.requestedQuality === 'high' ? '高清' : '预览' }}层（实际结果见解码统计）</small>
       <small v-if="stream.playbackFps !== null">累计显示 {{ stream.playbackFrames ?? '—' }} 帧 ·
         画面显示 {{ stream.playbackFps }} fps ·
         {{ formatFpsInterval(stream.playbackIntervalMs) }} · 累计显示丢帧 {{ stream.playbackDrops }}</small>
@@ -81,6 +83,9 @@ function formatFpsInterval(intervalMs: number | null) {
         <template v-else-if="layer.limitation"> · 受限 {{ layer.limitation }}（不能单独作为故障结论）</template>
         <template v-if="layer.lostPackets !== null"> · 累计丢包 {{ layer.lostPackets }}</template>
         <template v-if="layer.droppedFrames !== null"> · 累计接收丢帧 {{ layer.droppedFrames }}</template>
+        <template v-if="layer.decoder"> · 解码 {{ layer.decoder }}</template>
+        <template v-if="layer.averageDecodeMs !== null"> · 解码耗时 {{ layer.averageDecodeMs }} ms/帧</template>
+        <template v-if="layer.freezeCount !== null"> · 累计冻结 {{ layer.freezeCount }} 次（需结合观看状态）</template>
         <template v-if="layer.averageEncodeMs !== null"> · 编码 {{ layer.averageEncodeMs }} ms/帧</template>
         <template v-if="layer.encoder"> · 编码器 {{ layer.encoder }}</template>
         <template v-if="stream.direction === '发送'"> · 节能编码标志 {{ layer.powerEfficientEncoder === null ? '未知' : layer.powerEfficientEncoder ? '是' : '否' }}（非硬件编码结论）</template>
