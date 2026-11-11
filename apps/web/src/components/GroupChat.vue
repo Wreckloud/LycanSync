@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import '../chat/chat.css';
 import { computed, inject, nextTick, onMounted, onScopeDispose, ref } from 'vue';
+import { useChatScroll } from '../chat/useChatScroll';
+import { useGroupMessages } from '../chat/useGroupMessages';
 import { ACCOUNT_CACHE } from '../cache/localCache';
 import { useLoadingHint } from './useLoadingHint';
-import { ApiRequestError } from '../auth/authApi';
 import { ArrowDown, MessageSquareText, Plus, Send, X } from '@lucide/vue';
 import type { AuthUser } from '../auth/authApi';
-import { findMessages, sendFile, sendMessage, type ChatMessage } from '../chat/chatApi';
-import { messagePollDelay } from '../chat/messagePolling';
+import { sendFile, sendMessage, type ChatMessage } from '../chat/chatApi';
 import { compressChatImage } from '../chat/messageImage';
 import { formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey } from '../chat/messageTime';
 import type { GroupMember, GroupSummary } from '../group/groupApi';
@@ -51,395 +51,32 @@ async function showHistoricalProfile(message: ChatMessage, anchor: HTMLElement) 
     if (!request.signal.aborted) historicalError.value = reason instanceof Error ? reason.message : '无法读取历史资料';
   } finally { if (!request.signal.aborted) historicalLoading.value = false; }
 }
-let cacheLoaded = false;
-let initialLoadNotified = false;
-let cacheWriteTimer: ReturnType<typeof setTimeout> | null = null;
-let cacheWriteRevision = cache?.revision;
-const messages = ref<ChatMessage[]>([]);
 const text = ref('');
 const pendingAttachments = ref<PendingAttachment[]>([]);
 const busy = ref(false);
 const preparing = ref(false);
 const error = ref('');
-const pollError = ref('');
-const historyError = ref('');
-const initialLoaded = ref(false);
-const refreshing = ref(false);
-const loadingOlder = ref(false);
-const initialLoadingHint = useLoadingHint(() => !initialLoaded.value && !messages.value.length && !pollError.value);
-const historyLoadingHint = useLoadingHint(() => loadingOlder.value);
-const hasMore = ref(false);
-const atBottom = ref(true);
-const followingScroll = ref(false);
-const unreadMessageIds = ref<string[]>([]);
-const unseenMessages = computed(() => unreadMessageIds.value.length);
-const returningToLatest = ref(false);
-const moreThanScreenAway = ref(false);
 const calendarNow = ref(new Date());
-const list = ref<HTMLElement | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 const messageInput = ref<HTMLTextAreaElement | null>(null);
 const MESSAGE_GROUP_MAX_GAP_MS = 5 * 60_000;
-const HISTORY_TOP_THRESHOLD = 80;
-const RETURN_SCROLL_THRESHOLD = 48;
-let pollRequest: AbortController | null = null;
-let historyRequest: AbortController | null = null;
-let timer: ReturnType<typeof setTimeout> | null = null;
 let calendarTimer: ReturnType<typeof setTimeout> | null = null;
 let disposed = false;
-let latestFetchedMessageId: string | undefined;
-let consecutiveEmptyPolls = 0;
-let lastActivationRefreshAt = 0;
-let lastScrollTop = 0;
-let downwardScrollDistance = 0;
-let jumpingToUnread = false;
-let scrollPreference: MediaQueryList | undefined;
-let layoutObserver: ResizeObserver | undefined;
-let previousListHeight: number | undefined;
-let previousTopPadding = 0;
-let layoutScrollRemainder = 0;
 
 const members = computed(() => new Map(props.members.map((member) => [member.userId, member])));
-const showMessageJump = computed(() => !followingScroll.value && (unseenMessages.value > 0
-  || (!atBottom.value && returningToLatest.value && moreThanScreenAway.value)));
-const messageJumpLabel = computed(() => unseenMessages.value
-  ? `${unseenMessages.value} 条新消息 · 跳转到未读` : '回到最新');
+const scroll = useChatScroll(() => { void loadOlder(); });
+const { showMessageJump, messageJumpLabel, jumpToMessages, onScroll, onScrollEnd, onWheel, cancelScrollFollow } = scroll;
+const synchronization = useGroupMessages({ getGroupId: () => props.group.id, getUserId: () => props.user.id, cache, scroll,
+  onInitialLoad: groupId => emit('initialLoad', groupId) });
+const { messages, initialLoaded, pollError, historyError, refreshing, loadingOlder, hasMore,
+  appendMessages, loadOlder, retryRefresh } = synchronization;
+const initialLoadingHint = useLoadingHint(() => !initialLoaded.value && !messages.value.length && !pollError.value);
+const historyLoadingHint = useLoadingHint(() => loadingOlder.value);
 const canSend = computed(() => !busy.value && !preparing.value
   && (text.value.trim().length > 0 || pendingAttachments.value.some((item) => item.state !== 'sent')));
 let activeUpload: AbortController | null = null;
 let preparationGeneration = 0;
 let sendGeneration = 0;
-
-function isAtBottom() {
-  const element = list.value;
-  return !element || element.scrollHeight - element.scrollTop - element.clientHeight < 40;
-}
-
-async function scrollToBottom(behavior: ScrollBehavior = 'smooth', force = false) {
-  await nextTick();
-  if (disposed || (!force && !atBottom.value && !followingScroll.value)) return;
-  const element = list.value;
-  if (!element) return;
-  const reduce = scrollPreference?.matches;
-  jumpingToUnread = false;
-  downwardScrollDistance = 0;
-  returningToLatest.value = false;
-  followingScroll.value = !reduce && behavior === 'smooth'
-    && element.scrollHeight - element.clientHeight - element.scrollTop > 1;
-  element.scrollTo({ top: element.scrollHeight, behavior: reduce ? 'auto' : behavior });
-  // 发起滚动不代表已读到最新；中途停止时必须保留尚未看到的计数。
-  atBottom.value = isAtBottom();
-  if (atBottom.value) unreadMessageIds.value = [];
-  lastScrollTop = element.scrollTop;
-}
-
-function updateReadMessages() {
-  const element = list.value;
-  if (!element || followingScroll.value || jumpingToUnread || document.visibilityState === 'hidden'
-      || !unreadMessageIds.value.length) return;
-  if (isAtBottom()) { unreadMessageIds.value = []; return; }
-  const bounds = visibleMessageBounds(element);
-  const unread = new Set(unreadMessageIds.value);
-  for (const message of element.querySelectorAll<HTMLElement>('[data-message-id]')) {
-    const id = message.dataset.messageId!;
-    if (!unread.has(id)) continue;
-    const rect = message.getBoundingClientRect();
-    if (rect.top < bounds.bottom && rect.bottom > bounds.top) unread.delete(id);
-  }
-  unreadMessageIds.value = unreadMessageIds.value.filter(id => unread.has(id));
-}
-
-function visibleMessageBounds(element: HTMLElement) {
-  const bounds = element.getBoundingClientRect();
-  const overlay = element.parentElement?.closest('.group-main')?.querySelector<HTMLElement>('.voice-panel');
-  const top = Math.max(bounds.top, overlay?.getBoundingClientRect().bottom ?? bounds.top);
-  return { top: Math.min(top, bounds.bottom), bottom: bounds.bottom };
-}
-
-function syncChatLayout() {
-  const element = list.value;
-  if (disposed || !element || !layoutObserver) return false;
-  const conversation = element.closest('.group-conversation');
-  const owner = element.ownerDocument.defaultView!;
-  const offset = conversation ? element.getBoundingClientRect().top - conversation.getBoundingClientRect().top : 0;
-  element.style.setProperty('--chat-list-offset', `${offset}px`);
-  const padding = Number.parseFloat(owner.getComputedStyle(element).paddingTop);
-  const height = element.clientHeight;
-  const previousHeight = previousListHeight;
-  const paddingDelta = padding - previousTopPadding;
-  previousListHeight = height;
-  previousTopPadding = padding;
-  if (previousHeight === undefined) { lastScrollTop = element.scrollTop; return false; }
-  if (height === previousHeight && Math.abs(paddingDelta) < 0.01) return false;
-  // 输入框收起与新消息滚动可同时进行，不能用位置补偿打断正在跟随最新消息的滚动。
-  if (followingScroll.value) {
-    void scrollToBottom('smooth', true);
-    return true;
-  }
-  // 顶部留白只增加可滚动范围；底部控制栏改变高度时，消息与输入框一起移动。
-  const target = atBottom.value ? element.scrollHeight - height : Math.max(0,
-    Math.min(element.scrollHeight - height, lastScrollTop + layoutScrollRemainder + paddingDelta + previousHeight - height));
-  element.scrollTop = target;
-  // 滚动位置可能按整像素取整，保留余量，避免连续动画逐帧累积偏移。
-  layoutScrollRemainder = target - element.scrollTop;
-  lastScrollTop = element.scrollTop;
-  atBottom.value = isAtBottom();
-  const bounds = visibleMessageBounds(element);
-  moreThanScreenAway.value = element.scrollHeight - element.scrollTop - height > bounds.bottom - bounds.top;
-  updateReadMessages();
-  return true;
-}
-
-async function jumpToMessages() {
-  const firstUnread = unreadMessageIds.value[0];
-  if (!firstUnread) { await scrollToBottom('smooth', true); return; }
-  await nextTick();
-  const element = list.value;
-  if (disposed || !element) return;
-  const target = [...element.querySelectorAll<HTMLElement>('[data-message-id]')]
-    .find(message => message.dataset.messageId === firstUnread);
-  if (!target) return;
-  // 仅滚动消息容器，不能让整个页面或语音覆盖区一起移动。
-  const top = Math.max(0, Math.min(element.scrollHeight - element.clientHeight,
-    element.scrollTop + target.getBoundingClientRect().top - visibleMessageBounds(element).top));
-  followingScroll.value = false;
-  downwardScrollDistance = 0;
-  returningToLatest.value = false;
-  jumpingToUnread = !scrollPreference?.matches && Math.abs(top - element.scrollTop) > 1;
-  element.scrollTo({ top, behavior: scrollPreference?.matches ? 'auto' : 'smooth' });
-  atBottom.value = isAtBottom();
-  lastScrollTop = element.scrollTop;
-  if (!jumpingToUnread) updateReadMessages();
-}
-
-function appendMessages(incoming: ChatMessage[], forceScroll = false, behavior: ScrollBehavior = 'smooth') {
-  const known = new Set(messages.value.map((message) => message.id));
-  const added = incoming.filter((message) => {
-    if (known.has(message.id)) return false;
-    known.add(message.id);
-    return true;
-  });
-  if (!added.length) return 0;
-  messages.value = [...messages.value, ...added];
-  if (forceScroll || atBottom.value || followingScroll.value) void scrollToBottom(behavior, forceScroll);
-  return added.length;
-}
-
-function writeMessageCache() {
-  if (cache?.revision !== cacheWriteRevision) return;
-  const confirmedEnd = latestFetchedMessageId ? messages.value.findIndex(message => message.id === latestFetchedMessageId) + 1 : 0;
-  if (!confirmedEnd && (!initialLoaded.value || messages.value.length)) return;
-  const confirmed = messages.value.slice(0, confirmedEnd);
-  void cache?.write('messages', props.group.id, {
-    messages: confirmed.slice(-500), hasMore: hasMore.value || confirmed.length > 500,
-  });
-}
-
-function saveMessageCache() {
-  if (!cache || cacheWriteTimer) return;
-  cacheWriteRevision = cache.revision;
-  // 连续消息合并落盘，切群时再补最后一份快照。
-  cacheWriteTimer = setTimeout(() => { cacheWriteTimer = null; writeMessageCache(); }, 1_000);
-}
-
-async function refresh(wait = false) {
-  const cacheRevision = cache?.revision;
-  pollRequest?.abort();
-  const controller = new AbortController();
-  pollRequest = controller;
-  refreshing.value = true;
-  const groupId = props.group.id;
-  const initial = !initialLoaded.value;
-  try {
-    let restoredIds: Set<string> | null = null;
-    if (!cacheLoaded) {
-      cacheLoaded = true;
-      const cached = cache ? await cache.read<{ messages: ChatMessage[]; hasMore: boolean }>('messages', groupId) : null;
-      if (controller.signal.aborted || disposed || pollRequest !== controller) return null;
-      if (cached && Array.isArray(cached.messages) && cached.messages.length <= 500
-          && cached.messages.every(message => message && typeof message.id === 'string' && typeof message.content === 'string'
-            && typeof message.senderUserId === 'string' && typeof message.senderNickname === 'string'
-            && typeof message.createdAt === 'string' && Number.isFinite(Date.parse(message.createdAt)))) {
-        const cachedIds = new Set(cached.messages.map(message => message.id));
-        restoredIds = cachedIds.size ? cachedIds : null;
-        messages.value = [...cached.messages, ...messages.value.filter(message => !cachedIds.has(message.id))];
-        hasMore.value = Boolean(cached.hasMore);
-        latestFetchedMessageId = cached.messages.at(-1)?.id;
-        initialLoaded.value = true;
-        void scrollToBottom('auto', true);
-      } else if (cached) { void cache?.discard('messages', groupId); }
-    }
-    // 只有查询结果能推进轮询游标；本机发送成功不代表游标之前的其他消息已经读完。
-    let latestId = latestFetchedMessageId;
-    let page = await findMessages(groupId, latestId ? { afterMessageId: latestId } : undefined, controller.signal, wait);
-    if (controller.signal.aborted || disposed || pollRequest !== controller || props.group.id !== groupId) return null;
-    if (restoredIds && page.messages.length >= 30) {
-      // 缓存落后较多时回到最近一页，避免启动后连续追赶大量旧消息，也不拼出缺口历史。
-      page = await findMessages(groupId, undefined, controller.signal);
-      if (controller.signal.aborted || disposed || pollRequest !== controller) return null;
-      messages.value = messages.value.filter(message => !restoredIds.has(message.id));
-      latestId = undefined;
-    }
-    pollError.value = '';
-    if (!latestId) {
-      hasMore.value = page.hasMore;
-      initialLoaded.value = true;
-    }
-    // 历史或轮询可能晚于本机发送返回；游标之后先按服务端顺序合并，再补上快照之后发出的消息。
-    const currentIds = new Set(messages.value.map((message) => message.id));
-    const snapshotIds = new Set(page.messages.map((message) => message.id));
-    const prefixEnd = latestId ? messages.value.findIndex((message) => message.id === latestId) + 1 : 0;
-    const prefix = messages.value.slice(0, prefixEnd);
-    const known = new Set(prefix.map((message) => message.id));
-    // 游标之前的重复响应不能再次插入，游标之后仍按快照顺序纠正本机消息的位置。
-    const orderedPage = page.messages.filter((message) => {
-      if (known.has(message.id)) return false;
-      known.add(message.id);
-      return true;
-    });
-    const newMessages = orderedPage.filter((message) => !currentIds.has(message.id));
-    const added = newMessages.length;
-    messages.value = [...prefix, ...orderedPage,
-      ...messages.value.slice(prefixEnd).filter((message) => !snapshotIds.has(message.id))];
-    latestFetchedMessageId = page.messages.at(-1)?.id ?? latestId;
-    if ((added || initial) && cache?.revision === cacheRevision) saveMessageCache();
-    if (!initial) {
-      unreadMessageIds.value.push(...newMessages.filter(message => message.senderUserId !== props.user.id)
-        .map(message => message.id));
-    }
-    if (added && (initial || atBottom.value || followingScroll.value)) void scrollToBottom(initial ? 'auto' : 'smooth', initial);
-    else if (added) {
-      await nextTick();
-      if (!disposed) updateReadMessages();
-    }
-    return added;
-  } catch (reason) {
-    if (controller.signal.aborted || disposed || pollRequest !== controller) return null;
-    pollError.value = reason instanceof Error ? reason.message : '无法读取群聊消息';
-    if (reason instanceof ApiRequestError && [400, 403, 404].includes(reason.status)) {
-      messages.value = [];
-      latestFetchedMessageId = undefined;
-      initialLoaded.value = false;
-      if (reason.status !== 400) await cache?.revokeGroup(groupId);
-    }
-    return 0;
-  } finally {
-    if (pollRequest === controller) {
-      pollRequest = null;
-      refreshing.value = false;
-      if (!initialLoadNotified && !disposed && !controller.signal.aborted) {
-        initialLoadNotified = true;
-        emit('initialLoad', groupId);
-      }
-    }
-  }
-}
-
-async function loadOlder() {
-  const cacheRevision = cache?.revision;
-  const element = list.value;
-  const cursor = messages.value[0]?.id;
-  if (!element || !cursor || !initialLoaded.value || !hasMore.value || loadingOlder.value || disposed) return;
-  const controller = new AbortController();
-  historyRequest = controller;
-  loadingOlder.value = true;
-  historyError.value = '';
-  atBottom.value = false;
-  const groupId = props.group.id;
-  try {
-    const page = await findMessages(groupId, { beforeMessageId: cursor }, controller.signal);
-    if (controller.signal.aborted || disposed || historyRequest !== controller || props.group.id !== groupId) return;
-    const known = new Set(messages.value.map((message) => message.id));
-    const older = page.messages.filter((message) => {
-      if (known.has(message.id)) return false;
-      known.add(message.id);
-      return true;
-    });
-    hasMore.value = page.hasMore && older.length > 0;
-    if (!older.length) return;
-    // 日期分割线可能因插入旧消息而变化，锚定当前可见消息比只计算列表高度更稳定。
-    const listBounds = element.getBoundingClientRect();
-    const anchor = [...element.querySelectorAll<HTMLElement>('[data-message-id]')]
-      .find((message) => message.getBoundingClientRect().bottom > listBounds.top);
-    const anchorTop = anchor?.getBoundingClientRect().top;
-    const previousHeight = element.scrollHeight;
-    const previousTop = element.scrollTop;
-    messages.value = [...older, ...messages.value];
-    if (cache?.revision === cacheRevision) saveMessageCache();
-    await nextTick();
-    if (controller.signal.aborted || disposed || list.value !== element) return;
-    if (anchor && anchorTop !== undefined) {
-      element.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
-    } else {
-      element.scrollTop = previousTop + element.scrollHeight - previousHeight;
-    }
-    lastScrollTop = element.scrollTop;
-  } catch (reason) {
-    if (!controller.signal.aborted && !disposed && historyRequest === controller) {
-      historyError.value = reason instanceof Error ? reason.message : '无法读取更早消息';
-    }
-  } finally {
-    if (historyRequest === controller) {
-      historyRequest = null;
-      loadingOlder.value = false;
-      atBottom.value = isAtBottom();
-    }
-  }
-}
-
-function clearRefreshTimer() {
-  if (timer) clearTimeout(timer);
-  timer = null;
-}
-
-function scheduleRefresh() {
-  clearRefreshTimer();
-  if (disposed || document.visibilityState === 'hidden') return;
-  timer = setTimeout(() => void pollMessages(), messagePollDelay(consecutiveEmptyPolls));
-}
-
-async function pollMessages() {
-  clearRefreshTimer();
-  const initial = !initialLoadNotified;
-  const startedAt = Date.now();
-  const added = await refresh(!initial);
-  if (added === null || disposed || document.visibilityState === 'hidden') return;
-  consecutiveEmptyPolls = pollError.value ? consecutiveEmptyPolls + 1 : 0;
-  // 正常空响应已在服务器等待；异常提前返回时限速，避免代理或旧服务造成空转。
-  if (pollError.value || (!initial && added === 0 && Date.now() - startedAt < 1_000)) scheduleRefresh();
-  else timer = setTimeout(() => void pollMessages(), 0);
-}
-
-function retryRefresh() {
-  if (refreshing.value || disposed) return;
-  consecutiveEmptyPolls = 0;
-  return pollMessages();
-}
-
-function refreshOnActivation() {
-  if (document.visibilityState === 'hidden') return;
-  refreshCalendar();
-  if (pollRequest && !pollRequest.signal.aborted) return;
-  if (Date.now() - lastActivationRefreshAt < 500) return;
-  lastActivationRefreshAt = Date.now();
-  consecutiveEmptyPolls = 0;
-  void pollMessages();
-}
-
-function handleVisibilityChange() {
-  if (document.visibilityState === 'hidden') {
-    clearRefreshTimer();
-    if (calendarTimer) clearTimeout(calendarTimer);
-    calendarTimer = null;
-    pollRequest?.abort();
-    historyRequest?.abort();
-    historyRequest = null;
-    loadingOlder.value = false;
-    atBottom.value = isAtBottom();
-    return;
-  }
-  refreshOnActivation();
-}
 
 function revokePreview(item: PendingAttachment) {
   if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
@@ -583,8 +220,7 @@ async function submit() {
     }
     await nextTick();
     if (!disposed) resizeMessageInput();
-    consecutiveEmptyPolls = 0;
-    scheduleRefresh();
+    synchronization.refreshAfterSend();
   } catch (reason) {
     if (!disposed && generation === sendGeneration) error.value = reason instanceof Error ? reason.message : '消息发送失败';
   } finally {
@@ -661,86 +297,32 @@ function openLink(url: string) {
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
-function onScroll() {
-  const element = list.value;
-  if (!element) return;
-  if (syncChatLayout()) return;
-  const scrollDelta = element.scrollTop - lastScrollTop;
-  if (scrollDelta !== 0) layoutScrollRemainder = 0;
-  const movingUp = scrollDelta < -1;
-  lastScrollTop = element.scrollTop;
-  // 自动跟随期间不把中途的位置当作主动翻历史，避免“回到最新”短暂闪现。
-  if (followingScroll.value || jumpingToUnread) return;
-  // 同方向累计一小段距离再展示，忽略触控板细小回弹；未读入口不受此门槛影响。
-  if (movingUp) downwardScrollDistance = 0;
-  else if (scrollDelta > 0) downwardScrollDistance += scrollDelta;
-  returningToLatest.value = downwardScrollDistance >= RETURN_SCROLL_THRESHOLD;
-  const bounds = visibleMessageBounds(element);
-  moreThanScreenAway.value = element.scrollHeight - element.scrollTop - element.clientHeight > bounds.bottom - bounds.top;
-  atBottom.value = isAtBottom();
-  updateReadMessages();
-  if (movingUp && element.scrollTop <= HISTORY_TOP_THRESHOLD) void loadOlder();
+function refreshOnActivation() {
+  if (document.visibilityState === 'hidden') return;
+  refreshCalendar();
+  synchronization.refreshOnActivation();
 }
 
-function onScrollEnd() {
-  syncChatLayout();
-  const element = list.value;
-  if (followingScroll.value && element && element.scrollHeight - element.clientHeight - element.scrollTop > 1) {
-    void scrollToBottom('smooth', true);
-    return;
-  }
-  followingScroll.value = false;
-  jumpingToUnread = false;
-  atBottom.value = isAtBottom();
-  updateReadMessages();
-}
-
-function stopAnimatedScroll() {
-  const element = list.value;
-  if (!scrollPreference?.matches || !element) return;
-  followingScroll.value = false;
-  jumpingToUnread = false;
-  element.scrollTo({ top: element.scrollTop, behavior: 'auto' });
-  onScrollEnd();
-}
-
-function onWheel(event: WheelEvent) {
-  if (jumpingToUnread || event.deltaY < 0) cancelScrollFollow();
-  if (event.deltaY < 0 && list.value && list.value.scrollTop <= HISTORY_TOP_THRESHOLD) void loadOlder();
-}
-
-function cancelScrollFollow() {
-  followingScroll.value = false;
-  jumpingToUnread = false;
+function handleVisibilityChange() {
+  if (document.visibilityState === 'hidden') {
+    if (calendarTimer) clearTimeout(calendarTimer);
+    calendarTimer = null;
+  } else refreshCalendar();
+  synchronization.handleVisibilityChange();
 }
 
 onMounted(() => {
-  layoutObserver = new list.value!.ownerDocument.defaultView!.ResizeObserver(syncChatLayout);
-  syncChatLayout();
-  layoutObserver.observe(list.value!);
-  scrollPreference = list.value!.ownerDocument.defaultView!.matchMedia('(prefers-reduced-motion: reduce)');
-  scrollPreference.addEventListener('change', stopAnimatedScroll);
+  scroll.start();
   refreshCalendar();
-  void pollMessages();
+  void synchronization.pollMessages();
   window.addEventListener('focus', refreshOnActivation);
   document.addEventListener('visibilitychange', handleVisibilityChange);
 });
 onScopeDispose(() => {
   // App 按群 ID 创建独立实例；切群统一在销毁处取消，观看布局不重建群聊。
   disposed = true;
-  layoutObserver?.disconnect();
   closeHistoricalProfile();
-  if (cacheWriteTimer) {
-    clearTimeout(cacheWriteTimer);
-    cacheWriteTimer = null;
-    writeMessageCache();
-  }
-  pollRequest?.abort();
-  historyRequest?.abort();
-  historyRequest = null;
-  clearRefreshTimer();
   if (calendarTimer) clearTimeout(calendarTimer);
-  scrollPreference?.removeEventListener('change', stopAnimatedScroll);
   window.removeEventListener('focus', refreshOnActivation);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   activeUpload?.abort();
@@ -759,7 +341,7 @@ onScopeDispose(() => {
       </div>
     </div>
     <div class="chat-timeline" :class="{ 'has-composer-feedback': Boolean(error) }">
-      <div ref="list" class="message-list" :class="{ 'group-content-ready': initialLoaded }"
+      <div :ref="scroll.list" class="message-list" :class="{ 'group-content-ready': initialLoaded }"
         @scroll="onScroll" @scrollend="onScrollEnd" @wheel="onWheel" @pointerdown="cancelScrollFollow"
         @keydown="['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes($event.key) && cancelScrollFollow()">
         <div v-if="!initialLoaded && (pollError || initialLoadingHint)" class="chat-initial-state" :class="{ 'is-empty': !messages.length }">

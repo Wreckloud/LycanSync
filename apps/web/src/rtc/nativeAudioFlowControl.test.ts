@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { createRequire } from 'node:module';
+import { EventEmitter } from 'node:events';
 
 interface Processor {
   queue: unknown[];
@@ -76,47 +78,56 @@ describe.each([1, 2])('native audio %i-channel playback flow control', (channels
   });
 });
 
-interface MainAudioState {
-  sessionId: string;
-  buffer: Buffer;
-  queue: { frames: number; pcm: Uint8Array }[];
-  sequence: number;
-  inFlight?: number;
-  stopping: boolean;
-  publishing: boolean;
+interface AudioCapture {
+  start(...args: unknown[]): Promise<unknown>;
+  stop(sessionId: string): Promise<unknown>;
+  acknowledge(sessionId: string, sequence: number, dropped: number): void;
+  diagnostics(): Promise<{ microphoneCaptureDroppedChunks: number }>;
   droppedChunks: number;
-  rendererDroppedChunks: number;
-  sampleRate: number;
-  format?: { sampleRate: number; channels: number; bitsPerSample: number; nominalChunkMs: number };
 }
-// Run the production parser and sender without launching Electron or accessing devices.
-function mainAudio(channels: number) {
-  const source = readFileSync(new URL('../../electron/main.cjs', import.meta.url), 'utf8');
-  const kind = channels === 1 ? 'Microphone' : 'ScreenAudio';
-  const extract = (name: string) => {
-    const start = source.indexOf(`function ${name}(`);
-    if (start < 0) throw new Error(`Missing production function ${name}`);
-    return source.slice(start, source.indexOf('\nfunction ', start + 1));
-  };
-  const audio: MainAudioState = { sessionId: 'session-b', buffer: Buffer.alloc(0), queue: [], sequence: 0,
-    stopping: false, publishing: true, droppedChunks: 0, rendererDroppedChunks: 0, sampleRate: 48000 };
-  if (channels === 2) audio.format = { sampleRate: 48_000, channels: 2, bitsPerSample: 32, nominalChunkMs: 10 };
+const require = createRequire(import.meta.url);
+const { createNativeMicrophone } = require('../../electron/native-microphone.cjs') as {
+  createNativeMicrophone(options: Record<string, unknown>): AudioCapture;
+};
+const { createNativeScreenAudio } = require('../../electron/native-screen-audio.cjs') as {
+  createNativeScreenAudio(options: Record<string, unknown>): AudioCapture;
+};
+const captures: AudioCapture[] = [];
+afterEach(async () => { await Promise.all(captures.splice(0).map(capture => capture.stop('session-b'))); });
+
+// 直接连接生产管道入口与 Worklet；宿主和管道均为受控对象，不访问真实设备。
+async function mainAudio(channels: number) {
+  const server = new class extends EventEmitter {
+    listening = false;
+    listen() { this.listening = true; queueMicrotask(() => this.emit('listening')); }
+    close() { this.listening = false; }
+  }();
   const sent: { sessionId: string; sequence: number; pcm: Uint8Array }[] = [];
-  const mainWindow = { isDestroyed: () => false, webContents: {
-    isDestroyed: () => false,
-    send: (_channel: string, packet: { sessionId: string; sequence: number; pcm: Uint8Array }) => sent.push(packet),
-  } };
-  const receive = runInNewContext(
-    `${extract(`handleNative${kind}PipeData`)}\n${extract(`sendNextNative${kind}Chunk`)}\nhandleNative${kind}PipeData`, {
-      Buffer, Uint8Array, [`native${kind}Session`]: audio,
-      [`notifyNative${kind}Error`]: (_audio: unknown, code: string) => { throw new Error(code); },
-      mainWindow,
-    },
-  ) as (state: MainAudioState, incoming: Buffer) => void;
-  const acknowledgeChunk = runInNewContext(
-    `${extract('validNativeAudioSessionId')}\n${extract(`sendNextNative${kind}Chunk`)}\n${extract(`acknowledgeNative${kind}Chunk`)}\nacknowledgeNative${kind}Chunk`,
-    { Buffer, Number, [`native${kind}Session`]: audio, mainWindow },
-  ) as (sessionId: string, sequence: number, droppedChunks: number) => void;
+  const format = { sampleRate: 48000, channels, bitsPerSample: 32, nominalChunkMs: 10 };
+  const window = { isDestroyed: () => false, webContents: { isDestroyed: () => false,
+    send: (_channel: string, packet: typeof sent[number]) => sent.push(packet) } };
+  const video = { sessionId: 'session-b', sourceId: 'monitor:7:0' };
+  const capture = (channels === 1 ? createNativeMicrophone : createNativeScreenAudio)({
+    host: { start: async () => format, startScreenAudio: async () => format,
+      stop: async () => ({ changed: true }), stopScreenAudio: async () => ({ changed: true }),
+      getDiagnostics: async () => ({ droppedChunks: 0 }) },
+    getWindow: () => window, getVideo: () => video,
+    getRecording: () => ({}), isClosing: () => false, platform: 'win32',
+    capability: () => ({ available: true, reason: 'windowsApplicationLoopbackProcessTree' }),
+    createPipeServer: () => server, writeDiagnostic: async () => {},
+  });
+  captures.push(capture);
+  // 共享来源身份必须保持同一对象，不能在每次查询时伪造新的会话。
+  const startArgs = channels === 1
+    ? ['session-b', { noiseSuppression: true, autoGainControl: true, voiceEnhancement: true, inputGain: 1 }, 'default', false]
+    : ['monitor:7:0', 'session-b'];
+  await capture.start(...startArgs);
+  const socket = new class extends EventEmitter {
+    destroyed = false;
+    setNoDelay() {}
+    destroy() { this.destroyed = true; this.emit('close'); }
+  }();
+  server.emit('connection', socket);
   const packet = (value: number) => {
     const header = channels === 1 ? 8 : 4;
     const bytes = Buffer.alloc(header + 480 * channels * 4);
@@ -124,23 +135,27 @@ function mainAudio(channels: number) {
     for (let index = 0; index < 480 * channels; index++) bytes.writeFloatLE(value, header + index * 4);
     return bytes;
   };
-  const acknowledge = (sessionId = audio.sessionId, sequence = audio.inFlight!, droppedChunks = 0) =>
-    acknowledgeChunk(sessionId, sequence, droppedChunks);
-  return { audio, sent, receive, packet, acknowledge };
+  const acknowledge = (sessionId = 'session-b', sequence = sent.at(-1)!.sequence, droppedChunks = 0) =>
+    capture.acknowledge(sessionId, sequence, droppedChunks);
+  return { sent, receive: (bytes: Buffer) => socket.emit('data', bytes), packet, acknowledge,
+    stop: () => capture.stop('session-b'),
+    drops: async () => channels === 1 ? (await capture.diagnostics()).microphoneCaptureDroppedChunks : capture.droppedChunks };
 }
 describe.each([1, 2])('native audio %i-channel pipe buffering', (channels) => {
-  it('retains ten combined packets and sends one at a time until acknowledged', () => {
-    const { audio, sent, receive, packet, acknowledge } = mainAudio(channels);
-    receive(audio, Buffer.concat(Array.from({ length: 10 }, (_, index) => packet(index + 1))));
+  it('retains ten combined packets and sends one at a time until acknowledged', async () => {
+    const main = await mainAudio(channels);
+    const { sent, receive, packet, acknowledge } = main;
+    receive(Buffer.concat(Array.from({ length: 10 }, (_, index) => packet(index + 1))));
     expect(sent).toHaveLength(1);
     expect(sent[0].sessionId).toBe('session-b');
-    expect(audio.droppedChunks).toBe(0);
+    expect(await main.drops()).toBe(0);
     for (let index = 1; index < 10; index++) acknowledge();
     expect(sent.map((message) => Buffer.from(message.pcm).readFloatLE())).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    expect(audio.queue).toHaveLength(0);
+    acknowledge();
+    expect(sent).toHaveLength(10);
   });
-  it('connects pipe acknowledgements to playback without gaps or an unbounded renderer backlog', () => {
-    const main = mainAudio(channels);
+  it('connects pipe acknowledgements to playback without gaps or an unbounded renderer backlog', async () => {
+    const main = await mainAudio(channels);
     const playback = worklet(channels);
     let sentIndex = 0;
     let acknowledgementIndex = 0;
@@ -151,11 +166,11 @@ describe.each([1, 2])('native audio %i-channel pipe buffering', (channels) => {
           pcm: packet.pcm.buffer.slice(packet.pcm.byteOffset, packet.pcm.byteOffset + packet.pcm.byteLength) } });
         while (acknowledgementIndex < playback.acknowledgements.length) {
           const acknowledgement = playback.acknowledgements[acknowledgementIndex++];
-          if (main.audio.inFlight === acknowledgement.sequence) main.acknowledge();
+          main.acknowledge('session-b', acknowledgement.sequence, acknowledgement.droppedChunks);
         }
       }
     };
-    main.receive(main.audio, Buffer.concat(Array.from({ length: 10 }, (_, index) => main.packet(index + 1))));
+    main.receive(Buffer.concat(Array.from({ length: 10 }, (_, index) => main.packet(index + 1))));
     deliver();
     expect(playback.processor.queue).toHaveLength(4);
     const samples: number[] = [];
@@ -163,53 +178,54 @@ describe.each([1, 2])('native audio %i-channel pipe buffering', (channels) => {
       samples.push(...playback.render(128)[0]);
       while (acknowledgementIndex < playback.acknowledgements.length) {
         const acknowledgement = playback.acknowledgements[acknowledgementIndex++];
-        if (main.audio.inFlight === acknowledgement.sequence) main.acknowledge();
+        main.acknowledge('session-b', acknowledgement.sequence, acknowledgement.droppedChunks);
       }
       deliver();
       expect(playback.processor.queue.length).toBeLessThanOrEqual(4);
     }
     expect(samples.slice(0, 4800)).toEqual(Array.from({ length: 10 }, (_, index) => Array(480).fill(index + 1)).flat());
-    expect(main.audio.droppedChunks).toBe(0);
+    expect(await main.drops()).toBe(0);
     expect(playback.processor.dropped).toBe(0);
-    expect(main.audio.queue).toHaveLength(0);
+    main.acknowledge();
+    expect(main.sent).toHaveLength(10);
     expect(playback.processor.pendingAcknowledgements).toHaveLength(0);
   });
-  it('drops oldest queued packets on overload and ignores packets after stopping', () => {
-    const { audio, sent, receive, packet, acknowledge } = mainAudio(channels);
-    receive(audio, packet(1));
-    receive(audio, Buffer.concat(Array.from({ length: 20 }, (_, index) => packet(index + 2))));
-    expect(audio.queue).toHaveLength(12);
-    expect(audio.droppedChunks).toBe(8);
+  it('drops oldest queued packets on overload and ignores packets after stopping', async () => {
+    const main = await mainAudio(channels);
+    const { sent, receive, packet, acknowledge } = main;
+    receive(packet(1));
+    receive(Buffer.concat(Array.from({ length: 20 }, (_, index) => packet(index + 2))));
+    expect(await main.drops()).toBe(8);
     for (let index = 0; index < 12; index++) acknowledge();
     expect(sent.map((message) => Buffer.from(message.pcm).readFloatLE())).toEqual([1, ...Array.from({ length: 12 }, (_, index) => index + 10)]);
-    audio.stopping = true;
-    receive(audio, packet(22));
-    expect(audio.queue).toHaveLength(0);
+    await main.stop();
+    receive(packet(22));
     expect(sent).toHaveLength(13);
   });
-  it('rejects a late acknowledgement from another session with the same sequence', () => {
-    const { audio, sent, receive, packet, acknowledge } = mainAudio(channels);
-    receive(audio, Buffer.concat([packet(1), packet(2)]));
-    expect(audio.inFlight).toBe(1);
-    expect(audio.queue).toHaveLength(1);
+  it('rejects a late acknowledgement from another session with the same sequence', async () => {
+    const main = await mainAudio(channels);
+    const { sent, receive, packet, acknowledge } = main;
+    receive(Buffer.concat([packet(1), packet(2)]));
+    expect(sent.at(-1)?.sequence).toBe(1);
 
     acknowledge('session-a', 1, 7);
-    expect(audio.inFlight).toBe(1);
-    expect(audio.rendererDroppedChunks).toBe(0);
+    expect(sent.at(-1)?.sequence).toBe(1);
+    expect(await main.drops()).toBe(0);
     expect(sent).toHaveLength(1);
 
     acknowledge('session-b', 1, 2);
-    expect(audio.inFlight).toBe(2);
-    expect(audio.rendererDroppedChunks).toBe(2);
+    expect(sent.at(-1)?.sequence).toBe(2);
+    expect(await main.drops()).toBe(2);
     expect(sent).toHaveLength(2);
     expect(sent[1].sessionId).toBe('session-b');
   });
-  it('rejects missing or invalid acknowledgement session identifiers', () => {
-    const { audio, sent, receive, packet, acknowledge } = mainAudio(channels);
-    receive(audio, Buffer.concat([packet(1), packet(2)]));
+  it('rejects missing or invalid acknowledgement session identifiers', async () => {
+    const main = await mainAudio(channels);
+    const { sent, receive, packet, acknowledge } = main;
+    receive(Buffer.concat([packet(1), packet(2)]));
     acknowledge('', 1, 5);
-    expect(audio.inFlight).toBe(1);
-    expect(audio.rendererDroppedChunks).toBe(0);
+    expect(sent.at(-1)?.sequence).toBe(1);
+    expect(await main.drops()).toBe(0);
     expect(sent).toHaveLength(1);
   });
 });

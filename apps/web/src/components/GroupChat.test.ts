@@ -3,17 +3,23 @@ import { runInNewContext } from 'node:vm';
 import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
 import { computed, effectScope, nextTick, onScopeDispose, reactive, ref } from 'vue';
-import { expect, it, vi } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
+import { useChatScroll } from '../chat/useChatScroll';
+import { useGroupMessages } from '../chat/useGroupMessages';
+import { findMessages as requestMessages } from '../chat/chatApi';
 import type { ChatMessage, ChatMessagePage } from '../chat/chatApi';
 import type { AccountCache } from '../cache/localCache';
 import { formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey } from '../chat/messageTime';
 import { useLoadingHint } from './useLoadingHint';
+
+vi.mock('../chat/chatApi', () => ({ findMessages: vi.fn() }));
 
 const script = parse(readFileSync(new URL('./GroupChat.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('GroupChat.ts', script, ts.ScriptTarget.Latest, true);
 const callbacks = sourceFile.statements.filter((statement) => !ts.isImportDeclaration(statement))
   .map((statement) => statement.getText(sourceFile)).join('\n');
 const compiled = ts.transpile(callbacks, { target: ts.ScriptTarget.ES2022 });
+afterEach(() => vi.unstubAllGlobals());
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -32,24 +38,25 @@ function setup(cache: AccountCache | null = null) {
   const props = reactive({ group: { id: 'first', name: '群聊' }, members: [], user: { id: 'self', nickname: '自己' } });
   const findMessages = vi.fn(async (_groupId: string, _cursor?: unknown, _signal?: AbortSignal): Promise<ChatMessagePage> =>
     ({ messages: [], hasMore: false }));
+  vi.mocked(requestMessages).mockImplementation(findMessages);
   const sendMessage = vi.fn(async (_groupId: string, _text: string, _image?: File, _signal?: AbortSignal, _id?: string) => message('sent'));
   const sendFile = vi.fn(async (_groupId: string, _file: File, _text: string, id: string, _signal: AbortSignal) => message(id));
   const document = { visibilityState: 'visible', removeEventListener: vi.fn() };
+  const scrollPreference = { matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() };
+  const window = { removeEventListener: vi.fn(), matchMedia: () => scrollPreference };
+  vi.stubGlobal('document', document);
+  vi.stubGlobal('window', window);
   const emit = vi.fn();
   // 真实组件的任务、监听和销毁；只替换网络、DOM 与图片边界，不启动浏览器或传输文件。
-  const chat = scope.run(() => runInNewContext(`${compiled}\n({ refresh, loadOlder, handleVisibilityChange, submit, cancelUpload,
-    list, messages, text, busy, error, historyError, pendingAttachments,
-    initialLoaded, initialLoadingHint, historyLoadingHint, refreshing, pollError, atBottom, unseenMessages, retryRefresh,
-    unreadMessageIds, showMessageJump, messageJumpLabel, jumpToMessages, updateReadMessages,
-    scrollToBottom, onScroll, onScrollEnd, onWheel, stopAnimatedScroll, refreshCalendar, calendarNow,
-    setScrollPreference: value => { scrollPreference = value; } })`, {
+  const chat = scope.run(() => runInNewContext(`${compiled}\n({ ...synchronization, ...scroll, handleVisibilityChange, submit, cancelUpload,
+    text, busy, error, pendingAttachments, initialLoadingHint, historyLoadingHint, refreshCalendar, calendarNow,
+    setScrollPreference: value => { Object.assign(scrollPreference, value); } })`, {
     computed, ref, nextTick, onScopeDispose, useLoadingHint, onMounted: () => {}, defineProps: () => props, defineEmits: () => emit,
-    inject: () => cache, ACCOUNT_CACHE: Symbol(), ApiRequestError: class extends Error {},
-    findMessages, sendMessage, sendFile, compressChatImage: vi.fn(), messagePollDelay: () => 8000,
+    inject: () => cache, ACCOUNT_CACHE: Symbol(),
+    sendMessage, sendFile, compressChatImage: vi.fn(),
     formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey,
     AbortController, setTimeout, clearTimeout, Error, Date,
-    document,
-    window: { removeEventListener: vi.fn() }, URL: { revokeObjectURL: vi.fn() },
+    document, window, scrollPreference, useChatScroll, useGroupMessages, URL: { revokeObjectURL: vi.fn() },
   })) as {
     refresh: () => Promise<number | null>; submit: () => Promise<void>; cancelUpload: () => void;
     loadOlder: () => Promise<void>; handleVisibilityChange: () => void; list: { value: HTMLElement | null };
@@ -552,7 +559,7 @@ it('增量轮询迟于本机发送，旧游标之后按服务端顺序合并', a
 
 it('切群销毁旧聊天并创建新实例，取消旧请求且不带入旧草稿或迟到结果', async () => {
   const { scope, chat, findMessages, sendMessage } = setup();
-  const current = setup();
+  let current: ReturnType<typeof setup> | undefined;
   try {
     const oldPage = deferred<ChatMessagePage>();
     const oldSend = deferred<ChatMessage>();
@@ -566,6 +573,7 @@ it('切群销毁旧聊天并创建新实例，取消旧请求且不带入旧草�
     scope.stop();
     expect(pollSignal.aborted).toBe(true);
     expect(sendSignal.aborted).toBe(true);
+    current = setup();
     oldPage.resolve({ messages: [message('old')], hasMore: false });
     oldSend.resolve(message('old-sent'));
     await Promise.all([refreshing, sending]);
@@ -574,7 +582,7 @@ it('切群销毁旧聊天并创建新实例，取消旧请求且不带入旧草�
     expect(current.chat.messages.value).toHaveLength(0);
     expect(current.chat.text.value).toBe('');
     expect(current.chat.error.value).toBe('');
-  } finally { scope.stop(); current.scope.stop(); }
+  } finally { scope.stop(); current?.scope.stop(); }
 });
 
 it('批量文件失败后仅重试未成功项，并沿用原请求ID', async () => {
@@ -621,7 +629,7 @@ it('历史失败保持原消息，重试按原游标去重并保持可见锚点�
     await nextTick();
     const anchor = { getBoundingClientRect: () => ({ top: chat.messages.value.length === 2 ? 100 : 180, bottom: 200 }) };
     const list = { scrollTop: 120, scrollHeight: 1000, clientHeight: 200,
-      getBoundingClientRect: () => ({ top: 0 }), querySelectorAll: () => [anchor] };
+      getBoundingClientRect: () => ({ top: 0, bottom: 200 }), querySelectorAll: () => [anchor] };
     chat.list.value = list as unknown as HTMLElement;
     findMessages.mockRejectedValueOnce(new Error('历史读取失败'));
     await chat.loadOlder();
