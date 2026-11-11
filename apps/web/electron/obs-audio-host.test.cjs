@@ -3,7 +3,9 @@ const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
 const { test } = require('node:test');
 const { ObsAudioHostManager } = require('./obs-audio-host.cjs');
-const { createNativeMicrophone, validNativeAudioSessionId, validMicrophoneSettings } = require('./native-microphone.cjs');
+const { createNativeMicrophone, validMicrophoneSettings } = require('./native-microphone.cjs');
+
+const { validNativeAudioSessionId } = require('./native-audio-session.cjs');
 
 const pipeId = '12345678-1234-1234-1234-123456789abc';
 const settings = { inputGain: 1, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true };
@@ -351,6 +353,18 @@ test('音频分包重组保留发言代次，有界队列丢弃最旧块，仅�
   f.stopped(); await stopping;
   assert.equal(socket.destroyed, true);
   assert.equal((await f.capture.diagnostics()).microphoneCaptureDroppedChunks, 10);
+});
+
+test('麦克风停止等待期间不接收迟到的管道连接', async () => {
+  const f = microphoneBridge(); await startMicrophoneBridge(f);
+  const stopping = f.capture.stop('voice-session');
+  const socket = connectMicrophonePipe(f);
+  try {
+    assert.equal(socket.destroyed, true);
+    assert.equal(f.capture.sessionId, 'voice-session');
+  } finally {
+    f.stopped(); await stopping;
+  }
 });
 
 test('非法音频包只报告一次错误并停止宿主，旧会话通知不能影响新会话', async () => {

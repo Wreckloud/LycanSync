@@ -1,10 +1,7 @@
 const { createServer } = require('node:net');
 const { randomUUID } = require('node:crypto');
 
-function validNativeAudioSessionId(sessionId) {
-  return typeof sessionId === 'string' && sessionId.length > 0 && Buffer.byteLength(sessionId, 'utf8') <= 128
-    && !/[\u0000-\u001f\u007f-\u009f]/u.test(sessionId);
-}
+const { validNativeAudioSessionId } = require('./native-audio-session.cjs');
 
 function validMicrophoneSettings(settings) {
   return settings && typeof settings === 'object' && !Array.isArray(settings)
@@ -117,7 +114,7 @@ function createNativeMicrophone({ host: obsAudioHost, getWindow, isClosing, writ
     };
     nativeMicrophoneSession = audio;
     server.on('connection', (socket) => {
-      if (nativeMicrophoneSession !== audio || audio.socket) { socket.destroy(); return; }
+      if (nativeMicrophoneSession !== audio || audio.stopping || audio.socket) { socket.destroy(); return; }
       audio.socket = socket;
       socket.setNoDelay(true);
       socket.on('data', (chunk) => handleNativeMicrophonePipeData(audio, chunk));
@@ -231,4 +228,4 @@ function createNativeMicrophone({ host: obsAudioHost, getWindow, isClosing, writ
     get sessionId() { return nativeMicrophoneSession?.sessionId; } };
 }
 
-module.exports = { createNativeMicrophone, validNativeAudioSessionId, validMicrophoneSettings };
+module.exports = { createNativeMicrophone, validMicrophoneSettings };

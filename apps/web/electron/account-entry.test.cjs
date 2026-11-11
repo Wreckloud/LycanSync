@@ -11,9 +11,9 @@ function fixture(failVideo = false) {
     audioShortcuts: { clear: stop('shortcuts') }, screenShareWindows: { closeAll: stop('viewers') },
     activityMonitor: { clearMappings: stop('activity') }, voiceOverlay: { clear: stop('overlay') },
     recording: { stopAll: stop('recording') }, nativeVideoSession: { sessionId: 'video' },
-    nativeScreenAudioSession: { sessionId: 'audio' }, nativeMicrophone: { sessionId: 'microphone', stop: stop('microphone') },
+    nativeScreenAudio: { sessionId: 'audio', stop: stop('audio') }, nativeMicrophone: { sessionId: 'microphone', stop: stop('microphone') },
     stopNativeVideo: async () => { calls.push('video'); if (failVideo) throw new Error('failed'); },
-    stopNativeScreenAudio: stop('audio'), Error,
+    Error,
   };
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = main.indexOf('async function returnToAccountEntry()');

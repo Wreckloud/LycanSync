@@ -166,8 +166,8 @@ app.whenReady().then(async () => {
     console: { error: (...args) => diagnostics.push(args.map(String).join(' ').slice(0, 250)) },
     setTimeout, clearTimeout, randomUUID, sharedTexture, ipcMain, mainWindow: window,
     nativeMediaBridge: bridge, nativeVideoSession: undefined, lastStoppedNativeVideoSession: undefined,
-    nativeScreenAudioSession: undefined, helperProcessBridges: new Map(),
-    nativeMicrophone: { diagnostics: async () => ({ microphoneCapture: null, microphoneCaptureDroppedChunks: 0 }) }, lastScreenAudioDroppedChunks: 0,
+    nativeScreenAudio: { sessionId: undefined, droppedChunks: 0 }, helperProcessBridges: new Map(),
+    nativeMicrophone: { diagnostics: async () => ({ microphoneCapture: null, microphoneCaptureDroppedChunks: 0 }) },
     nativeVideoSourcesById: new Map([['monitor:1:0', { kind: 'monitor', title: monitorName }]]),
     loadNativeMediaBridge: () => bridge, mediaHelperPath: () => rustPath,
     trustedSender: (event) => event.sender === window.webContents,
@@ -181,7 +181,7 @@ app.whenReady().then(async () => {
   // 运行生产入口本身，不复制另一套纹理交付和清理逻辑；不执行应用启动代码。
   runInNewContext([
     sourceRange(main, 'function releaseHelperProcessBridge(', 'function handleVideoCaptureSuspended('),
-    sourceRange(main, 'function handleVideoCaptureSuspended(', 'function finishNativeScreenAudioPipe('),
+    sourceRange(main, 'function handleVideoCaptureSuspended(', 'function handleMediaHelperFailure('),
     sourceRange(main, 'function handleMediaHelperFailure(', 'function handleNativeSharedTextureFrame('),
     sourceRange(main, 'function handleNativeSharedTextureFrame(', 'const activityMonitor ='),
     sourceRange(main, "ipcMain.handle('media:native-video:start',", "ipcMain.handle('media:remote-control:authorize',"),
