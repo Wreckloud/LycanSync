@@ -2,13 +2,13 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
-import { computed, reactive, ref } from 'vue';
-import { expect, it, vi } from 'vitest';
-import { resolveNativeScreenAudioCapability, shouldShareAudioInNativeSelection } from './rtc/nativeScreenAudioMode';
+import { computed, effectScope, reactive, ref } from 'vue';
+import { afterEach, expect, it, vi } from 'vitest';
+import { useScreenShareSelection } from './rtc/useScreenShareSelection';
 
 const script = parse(readFileSync(new URL('./App.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const source = ts.createSourceFile('App.ts', script, ts.ScriptTarget.Latest, true);
-const functions = ['requestNativeScreenSource', 'resolveGameScreenSource', 'shareCurrentGame', 'shareAndRecord', 'updateVoiceMode'];
+const functions = ['requestNativeScreenSource', 'shareCurrentGame', 'shareAndRecord', 'updateVoiceMode'];
 const variables = ['currentGame', 'gameShareBusy'];
 const compiled = ts.transpile(source.statements.filter(statement => ts.isFunctionDeclaration(statement)
   ? functions.includes(statement.name?.text ?? '') : ts.isVariableStatement(statement)
@@ -16,20 +16,23 @@ const compiled = ts.transpile(source.statements.filter(statement => ts.isFunctio
   .map(statement => statement.getText(source)).join('\n'), { target: ts.ScriptTarget.ES2022 });
 const capabilities = () => Promise.resolve({ screenShareAudioCapture: { available: true, reason: 'windowsApplicationLoopbackProcessTree' } });
 
+const scopes: ReturnType<typeof effectScope>[] = [];
+afterEach(() => { scopes.splice(0).forEach(scope => scope.stop()); vi.unstubAllGlobals(); });
+
 function setup() {
+  vi.stubGlobal('localStorage', { getItem: (key: string) => key === 'lycansync.screen-share' ? JSON.stringify({ hideCursor: true }) : null, setItem: vi.fn() });
   const game: DetectedActivity = { type: 'GAME', name: '自定义游戏名', startedAt: '2026-11-10T00:00:00Z', windowIds: ['22'] };
-  const sources = [
+  const sources: NativeVideoSource[] = [
     { sourceId: 'screen', kind: 'monitor', title: '屏幕' },
     { sourceId: 'other', kind: 'window', windowId: '11', title: '自定义游戏名' },
     { sourceId: 'game', kind: 'window', windowId: '22', title: '原始窗口标题' },
-  ];
+  ].map(item => ({ ...item, kind: item.kind as 'window' | 'monitor', width: 640, height: 480, primary: false }));
   const state = {
-    computed, desktop: { listNativeVideoSources: vi.fn(async () => ({ discoveryId: 'discovery', sources })),
-      getCurrentActivity: vi.fn(async (): Promise<DetectedActivity | null> => game) },
-    captureRequest: ref(null), currentActivity: ref<DetectedActivity | null>(game),
+    computed, desktop: { listNativeVideoSources: vi.fn(async () => ({ revision: 1, discoveryId: 'discovery', sources })),
+      getCurrentActivity: vi.fn(async (): Promise<DetectedActivity | null> => game),
+      getNativeVideoSourceThumbnails: vi.fn(async () => []), prepareNativeVideoSource: vi.fn(async () => ({ prepared: true })), reportCapturePickerTiming: vi.fn() },
+    captureRequest: ref<ReturnType<typeof useScreenShareSelection>['captureRequest']['value']>(null), currentActivity: ref<DetectedActivity | null>(game),
     captureQuality: ref('custom'), captureCustomQuality: ref({ resolution: 1440, fps: 60 }),
-    readScreenSharePreferences: vi.fn(() => ({ hideCursor: true, hideBorder: false })),
-    readScreenShareAudioPreference: vi.fn(() => true), resolveNativeScreenAudioCapability, shouldShareAudioInNativeSelection,
     viewerNotice: ref(''), appDisposed: false, connected: ref(true), screenShareLimitReached: ref(false), requestedGame: null as DetectedActivity | null,
     Track: { Source: { ScreenShare: 'screen_share' } },
     rtc: reactive({ room: {}, screenShareActive: false, busySources: [] as string[], screenShareQualityBusy: false, screenShareSourceBusy: false,
@@ -37,7 +40,15 @@ function setup() {
     recording: { busy: ref(false), start: vi.fn(async () => {}) },
     audioShortcuts: { error: '', bindings: { pushToTalk: '' }, setVoiceMode: vi.fn() }, openSettings: vi.fn(),
   };
-  const app = runInNewContext(`${compiled}\n({ ${functions.join(', ')}, currentGame })`, state) as {
+  const scope = effectScope(); scopes.push(scope);
+  const captureSelection = scope.run(() => useScreenShareSelection({ desktop: state.desktop, notice: state.viewerNotice,
+    sourcesElement: () => undefined, room: () => state.connected.value ? state.rtc.room : null,
+    sharing: () => state.rtc.screenShareActive, activity: () => state.currentActivity.value }))!;
+  captureSelection.captureQuality.value = 'custom';
+  captureSelection.captureCustomQuality.value = { resolution: 1440, fps: 60 };
+  state.captureRequest = captureSelection.captureRequest;
+  const resolveGameScreenSource = (target: DetectedActivity, pending: ReturnType<typeof capabilities>) => captureSelection.requestNativeScreenSource(pending, target);
+  const app = runInNewContext(`${compiled}\n({ ${functions.join(', ')}, currentGame, resolveGameScreenSource })`, Object.assign(state, { captureSelection, resolveGameScreenSource })) as {
     resolveGameScreenSource: (game: DetectedActivity, pendingCapabilities: ReturnType<typeof capabilities>) => Promise<unknown>;
     requestNativeScreenSource: (pendingCapabilities: ReturnType<typeof capabilities>) => Promise<unknown>;
     shareCurrentGame: () => Promise<void>; shareAndRecord: () => Promise<void>;
@@ -71,7 +82,7 @@ it('声音能力请求失败不共享，迟到结果不进入新房间', async (
   f.state.viewerNotice.value = '';
   f.state.desktop.listNativeVideoSources.mockImplementation(async () => {
     f.state.rtc.room = {};
-    return { discoveryId: 'new', sources: f.sources };
+    return { revision: 1, discoveryId: 'new', sources: f.sources };
   });
   expect(await f.resolve()).toBeNull();
   expect(f.state.viewerNotice.value).toBe('');

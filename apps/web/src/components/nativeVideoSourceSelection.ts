@@ -17,7 +17,7 @@ interface NativeVideoSourceThumbnail {
   thumbnail: string;
 }
 
-interface NativeScreenSourceSelection {
+export interface NativeScreenSourceSelection {
   sourceId: string;
   shareAudio: boolean;
   quality?: ScreenShareQualityId;
