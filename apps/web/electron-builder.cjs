@@ -37,6 +37,7 @@ module.exports = {
     'electron/media-helper.cjs',
     'electron/obs-capture-host.cjs',
     'electron/obs-audio-host.cjs',
+    'electron/native-microphone.cjs',
     'electron/recording.cjs',
     'electron/recording-library.cjs',
     'electron/recording-voice.cjs',

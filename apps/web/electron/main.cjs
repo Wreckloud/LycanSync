@@ -10,6 +10,7 @@ const { randomUUID } = require('node:crypto');
 const { MediaHelperManager } = require('./media-helper.cjs');
 const { ObsCaptureHostManager } = require('./obs-capture-host.cjs');
 const { ObsAudioHostManager } = require('./obs-audio-host.cjs');
+const { createNativeMicrophone, validNativeAudioSessionId, validMicrophoneSettings } = require('./native-microphone.cjs');
 const { createRecording } = require('./recording.cjs');
 const { createAudioShortcuts } = require('./audio-shortcuts.cjs');
 const { createMediaBackgroundPolicy } = require('./media-background.cjs');
@@ -150,7 +151,7 @@ const audioShortcuts = createAudioShortcuts({ getWindow: () => mainWindow,
   bridge: () => nativeMediaBridge ??= loadNativeMediaBridge(),
   getReplayId: () => recording.replay?.phase === 'buffering' && !recording.replay.error && !recording.replay.saving ? recording.replay.id : null,
   onActivityChanged: active => setMediaBackgroundActive(mainWindow?.webContents, 'pushToTalk', active),
-  onRelease: () => { if (nativeMicrophoneSession) obsAudioHost.cancelTransmission(nativeMicrophoneSession.sessionId); } });
+  onRelease: () => nativeMicrophone.cancelTransmission() });
 let nativeVideoSession;
 let nativeVideoPreparation;
 let nativeVideoSourcesById = new Map();
@@ -158,8 +159,6 @@ const loadNativeThumbnailBatch = createNativeThumbnailCache();
 let lastStoppedNativeVideoSession;
 let nativeScreenAudioSession;
 let lastScreenAudioDroppedChunks = 0;
-let nativeMicrophoneSession;
-let lastMicrophoneDroppedChunks = 0;
 const helperProcessBridges = new WeakMap();
 const writeMediaDiagnostic = createMediaDiagnostics(resolve(app.getPath('userData'), 'screen-share-error.log'));
 const savedDiagnosticReports = createDiagnosticReportStore(resolve(app.getPath('userData'), 'diagnostics'));
@@ -313,11 +312,12 @@ const obsAudioSettings = {
 const obsAudioHost = new ObsAudioHostManager({
   ...obsAudioSettings,
   configPath: resolve(app.getPath('userData'), 'obs-audio', '32.2.2'),
-  onFailure: (sessionId, code) => {
-    if (nativeMicrophoneSession?.sessionId === sessionId) notifyNativeMicrophoneError(nativeMicrophoneSession, code);
-  },
+  onFailure: (sessionId, code) => nativeMicrophone.notifyFailure(sessionId, code),
   onDiagnostic: (entry) => { void writeMediaDiagnostic(entry); },
 });
+
+const nativeMicrophone = createNativeMicrophone({ host: obsAudioHost, getWindow: () => mainWindow,
+  isClosing: () => closing, writeDiagnostic: writeMediaDiagnostic });
 
 const recordingVoice = createRecordingVoice();
 const recording = createRecording({
@@ -470,169 +470,6 @@ function handleObsScreenAudioStopped(state, event) {
   finishNativeScreenAudioPipe(audio, { destroy: true });
   lastScreenAudioDroppedChunks = audio.droppedChunks + audio.rendererDroppedChunks;
   if (nativeScreenAudioSession === audio) nativeScreenAudioSession = undefined;
-}
-
-function finishNativeMicrophonePipe(audio, { destroy = false } = {}) {
-  if (!audio) return;
-  audio.stopping = true;
-  audio.queue.length = 0;
-  audio.inFlight = undefined;
-  audio.buffer = Buffer.alloc(0);
-  if (audio.socket && !audio.socket.destroyed) {
-    if (destroy) audio.socket.destroy(); else audio.socket.end();
-  }
-  if (audio.server.listening) audio.server.close();
-}
-
-function validNativeAudioSessionId(sessionId) {
-  return typeof sessionId === 'string' && sessionId.length > 0 && Buffer.byteLength(sessionId, 'utf8') <= 128
-    && !/[\u0000-\u001f\u007f-\u009f]/u.test(sessionId);
-}
-
-function handleNativeMicrophonePipeData(audio, incoming) {
-  if (nativeMicrophoneSession !== audio || audio.stopping) return;
-  audio.buffer = audio.buffer.length ? Buffer.concat([audio.buffer, incoming]) : incoming;
-  while (audio.buffer.length >= 8) {
-    const frames = audio.buffer.readUInt32LE(0);
-    const transmissionEpoch = audio.buffer.readUInt32LE(4);
-    if (frames !== 480) {
-      notifyNativeMicrophoneError(audio, 'microphoneCaptureInvalidPacket');
-      return;
-    }
-    const packetBytes = 8 + frames * 4;
-    if (audio.buffer.length < packetBytes) break;
-    const pcm = Uint8Array.from(audio.buffer.subarray(8, packetBytes));
-    audio.buffer = audio.buffer.subarray(packetBytes);
-    if (audio.queue.length === 12) {
-      audio.queue.shift();
-      audio.droppedChunks++;
-    }
-    audio.queue.push({ frames, pcm, transmissionEpoch });
-  }
-  if (audio.buffer.length > 65_536) {
-    notifyNativeMicrophoneError(audio, 'microphoneCaptureBufferOverflow');
-    return;
-  }
-  sendNextNativeMicrophoneChunk(audio);
-}
-
-function sendNextNativeMicrophoneChunk(audio) {
-  if (nativeMicrophoneSession !== audio || audio.stopping || audio.inFlight || !audio.queue.length
-      || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
-  const sequence = ++audio.sequence;
-  const packet = audio.queue.shift();
-  audio.inFlight = sequence;
-  mainWindow.webContents.send('media:native-microphone-frame', {
-    sessionId: audio.sessionId, sequence, frames: packet.frames, sampleRate: 48_000, channels: 1, pcm: packet.pcm, transmissionEpoch: packet.transmissionEpoch,
-  });
-}
-
-function acknowledgeNativeMicrophoneChunk(sessionId, sequence, droppedChunks) {
-  if (!validNativeAudioSessionId(sessionId) || !Number.isSafeInteger(sequence)
-      || !Number.isSafeInteger(droppedChunks) || droppedChunks < 0) return;
-  const audio = nativeMicrophoneSession;
-  if (!audio || audio.sessionId !== sessionId || audio.inFlight !== sequence) return;
-  audio.rendererDroppedChunks = Math.max(audio.rendererDroppedChunks, droppedChunks);
-  audio.inFlight = undefined;
-  sendNextNativeMicrophoneChunk(audio);
-}
-
-function notifyNativeMicrophoneError(audio, code) {
-  if (!audio || audio.failureNotified || audio.stopping) return;
-  audio.failureNotified = true;
-  const safeCode = /^[a-z][A-Za-z0-9]{0,63}$/.test(code) ? code : 'microphoneCaptureFailed';
-  void writeMediaDiagnostic({ stage: 'microphoneCaptureFailed', code: safeCode });
-  finishNativeMicrophonePipe(audio, { destroy: true });
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('media:native-microphone-error', { sessionId: audio.sessionId, code: safeCode });
-  }
-  // 宿主管理器统一记录停止失败；这里仅清理页面管道与会话。
-  void obsAudioHost.stop(audio.sessionId).catch(() => {}).finally(() => {
-    lastMicrophoneDroppedChunks = audio.hostDroppedChunks === null ? null
-      : audio.hostDroppedChunks + audio.droppedChunks + audio.rendererDroppedChunks;
-    if (nativeMicrophoneSession === audio) nativeMicrophoneSession = undefined;
-  });
-}
-
-async function startNativeMicrophoneCapture(sessionId, settings, deviceId, pushToTalk) {
-  if (closing || process.platform !== 'win32') throw new Error('platformUnsupported');
-  if (!validNativeAudioSessionId(sessionId) || !validMicrophoneSettings(settings)) {
-    throw new Error('invalidMicrophoneCaptureStart');
-  }
-  if (nativeMicrophoneSession) {
-    if (nativeMicrophoneSession.sessionId === sessionId && !nativeMicrophoneSession.stopping) {
-      return nativeMicrophoneSession.startPromise;
-    }
-    throw new Error('microphoneCaptureAlreadyRunning');
-  }
-  lastMicrophoneDroppedChunks = 0;
-  const pipeId = randomUUID();
-  const server = createServer();
-  const audio = {
-    sessionId, pipeId, server, socket: undefined, buffer: Buffer.alloc(0), queue: [],
-    inFlight: undefined, sequence: 0, droppedChunks: 0, rendererDroppedChunks: 0,
-    stopping: false, failureNotified: false, hostDroppedChunks: null, hostStarted: false,
-  };
-  nativeMicrophoneSession = audio;
-  server.on('connection', (socket) => {
-    if (nativeMicrophoneSession !== audio || audio.socket) { socket.destroy(); return; }
-    audio.socket = socket;
-    socket.setNoDelay(true);
-    socket.on('data', (chunk) => handleNativeMicrophonePipeData(audio, chunk));
-    socket.once('error', () => notifyNativeMicrophoneError(audio, 'microphoneCapturePipeFailed'));
-    socket.once('close', () => {
-      if (nativeMicrophoneSession === audio && !audio.stopping) {
-        notifyNativeMicrophoneError(audio, 'microphoneCapturePipeClosed');
-      }
-    });
-  });
-  server.on('error', () => notifyNativeMicrophoneError(audio, 'microphoneCapturePipeFailed'));
-  audio.startPromise = (async () => {
-    try {
-      await new Promise((resolveListen, rejectListen) => {
-        const onError = (error) => { server.removeListener('listening', onListening); rejectListen(error); };
-        const onListening = () => { server.removeListener('error', onError); resolveListen(); };
-        server.once('error', onError);
-        server.once('listening', onListening);
-        server.listen(`\\\\.\\pipe\\lycansync-microphone-audio-${pipeId}`);
-      });
-      if (nativeMicrophoneSession !== audio || audio.stopping) throw new Error('microphoneCaptureSessionStopped');
-      audio.hostStarted = true;
-      const format = await obsAudioHost.start(pipeId, sessionId, settings, deviceId, pushToTalk);
-      if (nativeMicrophoneSession !== audio || audio.stopping) throw new Error('microphoneCaptureSessionStopped');
-      return format;
-    } catch (error) {
-      finishNativeMicrophonePipe(audio, { destroy: true });
-      if (audio.hostStarted) await obsAudioHost.stop(sessionId).catch(() => {});
-      if (nativeMicrophoneSession === audio) nativeMicrophoneSession = undefined;
-      if (error.message !== 'microphoneCaptureSessionStopped') {
-        const code = /^[a-z][A-Za-z0-9]{0,63}$/.test(error.message) ? error.message : 'microphoneCaptureStartFailed';
-        void writeMediaDiagnostic({ stage: 'microphoneStartFailed', code });
-      }
-      throw error;
-    }
-  })();
-  return audio.startPromise;
-}
-
-async function stopNativeMicrophoneCapture(sessionId) {
-  const audio = nativeMicrophoneSession;
-  if (!audio) return { changed: false };
-  if (audio.sessionId !== sessionId) throw new Error('microphoneCaptureSessionMismatch');
-  if (audio.stopPromise) return audio.stopPromise;
-  audio.stopPromise = (async () => {
-    // 立即撤销页面交付，但保持管道排空至宿主停止，避免正常停止被误报为写管道故障。
-    audio.stopping = true;
-    audio.queue.length = 0;
-    try { return audio.hostStarted ? await obsAudioHost.stop(sessionId) : { changed: false }; }
-    finally {
-      finishNativeMicrophonePipe(audio, { destroy: true });
-      lastMicrophoneDroppedChunks = audio.hostDroppedChunks === null ? null
-        : audio.hostDroppedChunks + audio.droppedChunks + audio.rendererDroppedChunks;
-      if (nativeMicrophoneSession === audio) nativeMicrophoneSession = undefined;
-    }
-  })();
-  return audio.stopPromise;
 }
 
 function handleNativeScreenAudioPipeData(audio, incoming) {
@@ -1154,16 +991,6 @@ async function stopNativeVideo(sessionId, preserveGameFollow = false) {
     throw error;
   });
   return video.stopPromise;
-}
-
-function validMicrophoneSettings(settings) {
-  return settings && typeof settings === 'object' && !Array.isArray(settings)
-    && Object.keys(settings).length === 4
-    && typeof settings.inputGain === 'number' && Number.isFinite(settings.inputGain)
-    && settings.inputGain >= 0 && settings.inputGain <= 2
-    && typeof settings.noiseSuppression === 'boolean'
-    && typeof settings.autoGainControl === 'boolean'
-    && typeof settings.voiceEnhancement === 'boolean';
 }
 
 const activityMonitor = createActivityHelper({ enabled: process.platform === 'win32', executablePath: activityHelperPath,
@@ -2045,27 +1872,27 @@ ipcMain.handle('media:native-microphone:start', (event, sessionId, settings, dev
       || typeof deviceId !== 'string' || !deviceId || deviceId.length > 1024 || /[\u0000-\u001f\u007f]/.test(deviceId)
       || typeof pushToTalk !== 'boolean'
       || !validMicrophoneSettings(settings)) throw new Error('请求参数无效');
-  return startNativeMicrophoneCapture(sessionId, settings, deviceId, pushToTalk);
+  return nativeMicrophone.start(sessionId, settings, deviceId, pushToTalk);
 });
 ipcMain.on('media:native-microphone:transmission', (event, sessionId, pushToTalk, held, epoch) => {
   if (!trustedSender(event) || closing || typeof pushToTalk !== 'boolean' || typeof held !== 'boolean'
-      || !Number.isSafeInteger(epoch) || epoch < 0 || epoch > 0xffffffff || nativeMicrophoneSession?.sessionId !== sessionId) return;
-  obsAudioHost.setTransmission(sessionId, pushToTalk, held && audioShortcuts.transmissionAllowed(), epoch);
+      || !Number.isSafeInteger(epoch) || epoch < 0 || epoch > 0xffffffff || nativeMicrophone.sessionId !== sessionId) return;
+  nativeMicrophone.setTransmission(sessionId, pushToTalk, held && audioShortcuts.transmissionAllowed(), epoch);
 });
 ipcMain.handle('media:native-microphone:configure', (event, sessionId, settings) => {
   if (!trustedSender(event) || closing || typeof sessionId !== 'string' || sessionId.length > 128
       || !validMicrophoneSettings(settings)) throw new Error('请求参数无效');
-  return obsAudioHost.configure(sessionId, settings);
+  return nativeMicrophone.configure(sessionId, settings);
 });
 ipcMain.handle('media:native-microphone:stop', (event, sessionId) => {
   if (!trustedSender(event) || typeof sessionId !== 'string' || sessionId.length > 128) {
     throw new Error('请求参数无效');
   }
-  return stopNativeMicrophoneCapture(sessionId);
+  return nativeMicrophone.stop(sessionId);
 });
 ipcMain.on('media:native-microphone:consumed', (event, sessionId, sequence, droppedChunks) => {
   if (!trustedSender(event)) return;
-  acknowledgeNativeMicrophoneChunk(sessionId, sequence, droppedChunks);
+  nativeMicrophone.acknowledge(sessionId, sequence, droppedChunks);
 });
 ipcMain.on('media:native-video:receiver-error', (event, failure) => {
   if (!trustedSender(event) || !nativeVideoSession || nativeVideoSession.stopping
@@ -2100,25 +1927,7 @@ ipcMain.handle('media:diagnostics', async (event) => {
       : lastScreenAudioDroppedChunks;
     diagnostics.screenShareAudio.droppedAudioChunks = (diagnostics.screenShareAudio.droppedAudioChunks ?? 0) + audioDrops;
   }
-  const microphone = nativeMicrophoneSession;
-  let microphoneDrops = null;
-  diagnostics.microphoneCapture = null;
-  if (microphone && !microphone.stopping) {
-    try {
-      const capture = await obsAudioHost.getDiagnostics(microphone.sessionId);
-      microphoneDrops = capture.droppedChunks;
-      if (nativeMicrophoneSession === microphone && !microphone.stopping) {
-        diagnostics.microphoneCapture = { sourceState: capture.sourceState, sourceFrames: capture.sourceFrames,
-          framesReceived: capture.framesReceived, pushToTalk: capture.pushToTalk, transmissionAllowed: capture.transmissionAllowed,
-          processingMetrics: capture.processingMetrics };
-      }
-      microphone.hostDroppedChunks = microphoneDrops;
-    } catch { /* 可选统计缺失不终止语音；报告保留未知值。 */ }
-    if (nativeMicrophoneSession !== microphone) microphoneDrops = null;
-  }
-  diagnostics.microphoneCaptureDroppedChunks = microphone
-    ? microphoneDrops === null ? null : microphoneDrops + microphone.droppedChunks + microphone.rendererDroppedChunks
-    : lastMicrophoneDroppedChunks;
+  Object.assign(diagnostics, await nativeMicrophone.diagnostics());
   const localRecording = recording.snapshot();
   diagnostics.recording = { phase: localRecording.phase, holdingResources: localRecording.holdingResources,
     applicationAudio: Boolean(recording.media?.options.applicationAudio),
@@ -2154,8 +1963,8 @@ function shutdownMediaResources() {
       console.error(`native screen audio shutdown failed: ${error.message}`);
     })
     : Promise.resolve()))
-    .then(() => nativeMicrophoneSession
-      ? stopNativeMicrophoneCapture(nativeMicrophoneSession.sessionId).catch((error) => {
+    .then(() => nativeMicrophone.sessionId
+      ? nativeMicrophone.stop(nativeMicrophone.sessionId).catch((error) => {
         console.error(`native microphone shutdown failed: ${error.message}`);
       })
       : Promise.resolve())
@@ -2235,7 +2044,7 @@ async function returnToAccountEntry() {
     () => recording.stopAll(),
     () => nativeVideoSession && stopNativeVideo(nativeVideoSession.sessionId),
     () => nativeScreenAudioSession && stopNativeScreenAudio(nativeScreenAudioSession.sessionId, true),
-    () => nativeMicrophoneSession && stopNativeMicrophoneCapture(nativeMicrophoneSession.sessionId),
+    () => nativeMicrophone.sessionId && nativeMicrophone.stop(nativeMicrophone.sessionId),
   ]) {
     try { await stop(); }
     catch { failed = true; }

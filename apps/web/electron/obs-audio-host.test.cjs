@@ -2,10 +2,8 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
 const { test } = require('node:test');
-const { readFileSync } = require('node:fs');
-const { join } = require('node:path');
-const { runInNewContext } = require('node:vm');
 const { ObsAudioHostManager } = require('./obs-audio-host.cjs');
+const { createNativeMicrophone, validNativeAudioSessionId, validMicrophoneSettings } = require('./native-microphone.cjs');
 
 const pipeId = '12345678-1234-1234-1234-123456789abc';
 const settings = { inputGain: 1, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true };
@@ -261,44 +259,153 @@ test('不合法配置及错误会话不能启动或更改设备', async context 
   await manager.stop('voice-session');
 });
 
-function microphoneBridge() {
-  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
-  const start = main.indexOf('function finishNativeMicrophonePipe(');
-  const end = main.indexOf('function handleNativeScreenAudioPipeData(', start);
-  const servers = [], requests = [];
+function microphoneBridge({ host, writeDiagnostic = async () => {}, window, platform = 'win32', isClosing = () => false } = {}) {
+  const servers = [], requests = [], messages = [];
+  window ??= { isDestroyed: () => false, webContents: { isDestroyed: () => false, send: (...args) => messages.push(args) } };
   let resolveStart, resolveStop, stopPromise;
-  const scope = {
-    closing: false, process: { platform: 'win32' }, Buffer, nativeMicrophoneSession: undefined,
-    lastMicrophoneDroppedChunks: 0, randomUUID: () => pipeId, validMicrophoneSettings: () => true,
-    writeMediaDiagnostic: async () => {}, mainWindow: undefined,
-    createServer: () => {
+  host ??= {
+    start: (_pipe, session) => { requests.push(['start', session]); return new Promise(resolve => { resolveStart = resolve; }); },
+    stop: session => {
+      if (!stopPromise) {
+        requests.push(['stop', session]); stopPromise = new Promise(resolve => { resolveStop = resolve; });
+      }
+      return stopPromise;
+    },
+    getDiagnostics: async () => ({ droppedChunks: 0 }),
+  };
+  const capture = createNativeMicrophone({ host, writeDiagnostic, getWindow: () => window, isClosing, platform,
+    createPipeServer: () => {
       const server = new EventEmitter();
       server.listen = () => {};
       server.close = () => { server.listening = false; server.closed = true; };
       servers.push(server); return server;
-    },
-    obsAudioHost: {
-      start: (_pipe, session) => { requests.push(['start', session]); return new Promise(resolve => { resolveStart = resolve; }); },
-      stop: session => {
-        if (!stopPromise) {
-          requests.push(['stop', session]); stopPromise = new Promise(resolve => { resolveStop = resolve; });
-        }
-        return stopPromise;
-      },
-    },
-  };
-  runInNewContext(main.slice(start, end), scope);
+    } });
   const listen = () => { servers.at(-1).listening = true; servers.at(-1).emit('listening'); };
-  return { scope, servers, requests, listen,
+  return { capture, host, servers, requests, messages, window, listen,
     ready: () => resolveStart({ sampleRate: 48000, channels: 1, bitsPerSample: 32, nominalChunkMs: 10 }),
     stopped: () => resolveStop({ changed: true }) };
 }
 
+async function startMicrophoneBridge(f, id = 'voice-session') {
+  const starting = f.capture.start(id, settings, 'default', false);
+  f.listen(); await delay(0); f.ready(); await starting;
+}
+
+function connectMicrophonePipe(f) {
+  const socket = new EventEmitter();
+  socket.destroyed = false;
+  socket.setNoDelay = () => {};
+  socket.destroy = () => { socket.destroyed = true; socket.emit('close'); };
+  socket.end = socket.destroy;
+  f.servers.at(-1).emit('connection', socket);
+  return socket;
+}
+
+function microphonePacket(epoch = 1) {
+  const packet = Buffer.alloc(8 + 480 * 4);
+  packet.writeUInt32LE(480, 0); packet.writeUInt32LE(epoch, 4); packet.writeFloatLE(0.25, 8);
+  return packet;
+}
+
+test('麦克风输入校验沿用字节长度及控制字符限制，不启动非法参数或关闭中的采集', async () => {
+  for (const id of ['', null, '\u0000', '\u0085', '语'.repeat(43)]) assert.equal(validNativeAudioSessionId(id), false);
+  assert.equal(validNativeAudioSessionId('voice-session'), true);
+  assert.equal(validMicrophoneSettings(settings), true);
+  for (const invalid of [null, [], { ...settings, extra: true }, { ...settings, inputGain: NaN },
+    { ...settings, inputGain: -1 }, { ...settings, inputGain: 2.1 }, { ...settings, voiceEnhancement: 1 }]) {
+    assert.equal(Boolean(validMicrophoneSettings(invalid)), false);
+  }
+  const f = microphoneBridge();
+  await assert.rejects(f.capture.start('', settings), /invalidMicrophoneCaptureStart/);
+  await assert.rejects(f.capture.start('session', {}), /invalidMicrophoneCaptureStart/);
+  assert.equal(f.servers.length, 0);
+  await assert.rejects(microphoneBridge({ platform: 'linux' }).capture.start('session', settings), /platformUnsupported/);
+  await assert.rejects(microphoneBridge({ isClosing: () => true }).capture.start('session', settings), /platformUnsupported/);
+});
+
+test('音频分包重组保留发言代次，有界队列丢弃最旧块，仅正确确认继续交付', async () => {
+  const f = microphoneBridge(); await startMicrophoneBridge(f);
+  const socket = connectMicrophonePipe(f), first = microphonePacket(0xffffffff);
+  socket.emit('data', first.subarray(0, 4)); assert.equal(f.messages.length, 0);
+  socket.emit('data', first.subarray(4));
+  assert.equal(f.messages[0][0], 'media:native-microphone-frame');
+  assert.equal(f.messages[0][1].transmissionEpoch, 0xffffffff);
+  assert.equal(f.messages[0][1].frames, 480);
+  assert.equal(Buffer.from(f.messages[0][1].pcm).readFloatLE(0), 0.25);
+  socket.emit('data', Buffer.concat(Array.from({ length: 14 }, (_, i) => microphonePacket(i + 1))));
+  assert.equal(f.messages.length, 1);
+  f.capture.acknowledge('other', 1, 0); f.capture.acknowledge('voice-session', 99, 0);
+  f.capture.acknowledge('voice-session', 1, -1); assert.equal(f.messages.length, 1);
+  f.capture.acknowledge('voice-session', 1, 5);
+  assert.equal(f.messages[1][1].transmissionEpoch, 3);
+  f.capture.acknowledge('voice-session', 2, 2);
+  assert.equal(f.messages[2][1].transmissionEpoch, 4);
+  f.host.getDiagnostics = async () => ({ droppedChunks: 3, sourceState: 1, sourceFrames: 15, framesReceived: 15,
+    pushToTalk: true, transmissionAllowed: true, processingMetrics: { samples: 480 } });
+  const diagnostic = await f.capture.diagnostics();
+  assert.equal(diagnostic.microphoneCaptureDroppedChunks, 10);
+  assert.equal(diagnostic.microphoneCapture.processingMetrics.samples, 480);
+  const stopping = f.capture.stop('voice-session');
+  socket.emit('data', microphonePacket()); f.capture.acknowledge('voice-session', 3, 5);
+  assert.equal(f.messages.length, 3);
+  f.stopped(); await stopping;
+  assert.equal(socket.destroyed, true);
+  assert.equal((await f.capture.diagnostics()).microphoneCaptureDroppedChunks, 10);
+});
+
+test('非法音频包只报告一次错误并停止宿主，旧会话通知不能影响新会话', async () => {
+  const diagnostics = [];
+  const f = microphoneBridge({ writeDiagnostic: async value => diagnostics.push(value) }); await startMicrophoneBridge(f);
+  const socket = connectMicrophonePipe(f);
+  const invalid = microphonePacket(); invalid.writeUInt32LE(0, 0);
+  socket.emit('data', invalid);
+  f.capture.notifyFailure('voice-session', 'private/path');
+  assert.equal(socket.destroyed, true);
+  assert.deepEqual(f.messages, [['media:native-microphone-error', { sessionId: 'voice-session', code: 'microphoneCaptureInvalidPacket' }]]);
+  assert.equal(diagnostics.length, 1);
+  f.stopped(); await delay(0);
+  await startMicrophoneBridge(f, 'new-session');
+  f.capture.notifyFailure('voice-session', 'microphoneCaptureFailed');
+  assert.equal(f.capture.sessionId, 'new-session');
+  await f.capture.stop('new-session');
+});
+
+test('停止及换会话期间迟到的诊断不冒充当前采集，统计失败保留未知值', async () => {
+  const f = microphoneBridge(); await startMicrophoneBridge(f);
+  let finish;
+  f.host.getDiagnostics = () => new Promise(resolve => { finish = resolve; });
+  const diagnostic = f.capture.diagnostics();
+  const stopping = f.capture.stop('voice-session'); f.stopped(); await stopping;
+  await startMicrophoneBridge(f, 'new-session');
+  finish({ droppedChunks: 100 });
+  assert.deepEqual(await diagnostic, { microphoneCapture: null, microphoneCaptureDroppedChunks: null });
+  f.host.getDiagnostics = async () => { throw new Error('missing'); };
+  assert.deepEqual(await f.capture.diagnostics(), { microphoneCapture: null, microphoneCaptureDroppedChunks: null });
+  await f.capture.stop('new-session');
+});
+
+test('按键发言只路由当前会话，停止后不再传递新的允许发言命令', async () => {
+  const f = microphoneBridge(); await startMicrophoneBridge(f);
+  const calls = [];
+  f.host.setTransmission = (...args) => calls.push(args);
+  f.host.cancelTransmission = (...args) => calls.push(['cancel', ...args]);
+  f.host.configure = async (...args) => { calls.push(['configure', ...args]); return { changed: true }; };
+  f.capture.setTransmission('other', true, true, 1);
+  f.capture.setTransmission('voice-session', true, true, 2);
+  f.capture.cancelTransmission();
+  await f.capture.configure('voice-session', settings);
+  assert.deepEqual(calls, [['voice-session', true, true, 2], ['cancel', 'voice-session'], ['configure', 'voice-session', settings]]);
+  const stopping = f.capture.stop('voice-session');
+  f.capture.setTransmission('voice-session', true, true, 3);
+  assert.equal(calls.length, 3);
+  f.stopped(); await stopping;
+});
+
 test('主进程在管道尚未监听时撤销，迟到监听会自行关闭且不会创建音频宿主', async () => {
   const f = microphoneBridge();
-  const starting = f.scope.startNativeMicrophoneCapture('voice-session', settings);
+  const starting = f.capture.start('voice-session', settings);
   const rejected = assert.rejects(starting, /microphoneCaptureSessionStopped/);
-  await f.scope.stopNativeMicrophoneCapture('voice-session');
+  await f.capture.stop('voice-session');
   f.listen(); await rejected;
   assert.equal(f.requests.length, 0);
   assert.equal(f.servers[0].closed, true);
@@ -306,27 +413,95 @@ test('主进程在管道尚未监听时撤销，迟到监听会自行关闭且�
 
 test('主进程并发开始复用完整就绪结果，停止不会在宿主退出前关闭管道', async () => {
   const f = microphoneBridge();
-  const first = f.scope.startNativeMicrophoneCapture('voice-session', settings);
-  const second = f.scope.startNativeMicrophoneCapture('voice-session', settings);
+  const first = f.capture.start('voice-session', settings);
+  const second = f.capture.start('voice-session', settings);
   f.listen(); await delay(0); f.ready();
   assert.equal((await first).channels, 1); assert.equal((await second).channels, 1);
   assert.equal(f.requests.length, 1);
-  const stopped = f.scope.stopNativeMicrophoneCapture('voice-session');
+  const stopped = f.capture.stop('voice-session');
   assert.equal(f.servers[0].closed, undefined);
   f.stopped(); await stopped;
   assert.equal(f.servers[0].closed, true);
-  assert.equal(f.scope.nativeMicrophoneSession, undefined);
+  assert.equal(f.capture.sessionId, undefined);
 });
 
 test('主进程取消启动中的设备时立即向宿主停止，迟到就绪不能保留会话', async () => {
   const f = microphoneBridge();
-  const starting = f.scope.startNativeMicrophoneCapture('voice-session', settings);
+  const starting = f.capture.start('voice-session', settings);
   const rejected = assert.rejects(starting, /microphoneCaptureSessionStopped/);
   f.listen(); await delay(0);
-  const stopped = f.scope.stopNativeMicrophoneCapture('voice-session');
+  const stopped = f.capture.stop('voice-session');
   assert.deepEqual(f.requests.map(request => request[0]), ['start', 'stop']);
   f.ready(); f.stopped(); await stopped; await rejected;
-  assert.equal(f.scope.nativeMicrophoneSession, undefined);
+  assert.equal(f.capture.sessionId, undefined);
+});
+
+test('停止未确认时保留会话身份，重复停止不能返回虚假成功，确认后才允许重开', async () => {
+  const f = microphoneBridge();
+  const starting = f.capture.start('voice-session', settings);
+  f.listen(); await delay(0); f.ready(); await starting;
+  let confirmed = false;
+  f.host.stop = async () => {
+    if (!confirmed) throw new Error('microphoneCaptureStopFailed');
+    return { changed: false };
+  };
+  await assert.rejects(f.capture.stop('voice-session'), /microphoneCaptureStopFailed/);
+  assert.equal(f.capture.sessionId, 'voice-session');
+  await assert.rejects(f.capture.stop('voice-session'), /microphoneCaptureStopFailed/);
+  await assert.rejects(f.capture.start('new-session', settings), /microphoneCaptureAlreadyRunning/);
+  confirmed = true;
+  assert.deepEqual(await f.capture.stop('voice-session'), { changed: false });
+  assert.equal(f.capture.sessionId, undefined);
+});
+
+for (const reason of ['explicit', 'failure', 'startFailure']) test(`宿主退出未确认时 ${reason} 保留身份，迟到 close 后能完成停止`, async context => {
+  const f = fixture(context, { stopHang: true, killHang: true });
+  const bridge = microphoneBridge({ host: f.manager });
+  f.manager.onFailure = (sessionId, code) => bridge.capture.notifyFailure(sessionId, code);
+  const starting = bridge.capture.start('voice-session', settings);
+  const rejectedStart = reason === 'startFailure' ? assert.rejects(starting, /microphoneCaptureStartFailed/) : null;
+  bridge.listen(); await delay(0);
+  if (reason === 'startFailure') f.children[0].send({ event: 'failed', code: 'microphoneCaptureStartFailed' });
+  else { f.children[0].send(ready); await starting; }
+  let rejectedStop;
+  if (reason === 'explicit') rejectedStop = assert.rejects(bridge.capture.stop('voice-session'), /microphoneCaptureStopFailed/);
+  if (reason === 'failure') f.children[0].send({ event: 'failed', code: 'microphoneCapturePipeFailed' });
+  await delay(70); await rejectedStart; await rejectedStop;
+  assert.equal(bridge.capture.sessionId, 'voice-session');
+  assert.equal(f.manager.state.alive, true);
+  await assert.rejects(bridge.capture.stop('voice-session'), /microphoneCaptureStopFailed/);
+  await assert.rejects(bridge.capture.start('new-session', settings), /microphoneCaptureAlreadyRunning/);
+  f.children[0].emit('close', 1);
+  assert.deepEqual(await bridge.capture.stop('voice-session'), { changed: false });
+  assert.equal(bridge.capture.sessionId, undefined);
+});
+
+test('宿主启动前参数拒绝不遗留占用，已停止的旧启动结果不停止新会话', async () => {
+  const host = { start: async () => { throw new Error('invalidMicrophoneCaptureStart'); },
+    stop: async () => { throw new Error('microphoneCaptureSessionMismatch'); } };
+  const first = microphoneBridge({ host });
+  const invalid = assert.rejects(first.capture.start('voice-session', settings), /invalidMicrophoneCaptureStart/);
+  first.listen(); await invalid;
+  assert.equal(first.capture.sessionId, undefined);
+
+  const f = microphoneBridge();
+  const starting = f.capture.start('voice-session', settings);
+  const oldStart = assert.rejects(starting, /microphoneCaptureSessionStopped/);
+  f.listen(); await delay(0);
+  const oldReady = f.ready;
+  // 单独保存旧 resolve；新会话可以使用同一个页面会话 ID。
+  let finishNew;
+  f.host.start = () => new Promise(resolve => { finishNew = resolve; });
+  const stopping = f.capture.stop('voice-session'); f.stopped(); await stopping;
+  let newStopCalls = 0;
+  f.host.stop = async () => { newStopCalls++; return { changed: true }; };
+  const restarting = f.capture.start('voice-session', settings);
+  f.listen(); await delay(0);
+  oldReady(); await oldStart;
+  assert.equal(f.capture.sessionId, 'voice-session');
+  assert.equal(newStopCalls, 0);
+  finishNew({ sampleRate: 48000, channels: 1 }); await restarting;
+  await f.capture.stop('voice-session');
 });
 
 test('来源创建失败保留固定原因和 HRESULT，不输出设备或异常正文', async context => {
@@ -342,23 +517,21 @@ test('来源创建失败保留固定原因和 HRESULT，不输出设备或异常
 
 test('主进程和宿主同时收尾时强制退出仍确认停止，退出后可重新开麦', async context => {
   const f = fixture(context, { stopHang: true });
-  const bridge = microphoneBridge();
-  bridge.scope.obsAudioHost = f.manager;
-  bridge.scope.writeMediaDiagnostic = async entry => { f.diagnostics.push(entry); };
+  const bridge = microphoneBridge({ host: f.manager, writeDiagnostic: async entry => { f.diagnostics.push(entry); } });
   f.manager.onFailure = (_sessionId, code) => {
-    bridge.scope.notifyNativeMicrophoneError(bridge.scope.nativeMicrophoneSession, code);
+    bridge.capture.notifyFailure('voice-session', code);
   };
-  const starting = bridge.scope.startNativeMicrophoneCapture('voice-session', settings);
+  const starting = bridge.capture.start('voice-session', settings);
   bridge.listen(); await delay(0); f.children[0].send(ready); await starting;
   f.children[0].send({ event: 'failed', code: 'microphoneCapturePipeFailed' });
   await delay(70);
   assert.equal(f.diagnostics.filter(entry => entry.stage === 'microphoneStopFailed').length, 0);
   assert.equal(f.diagnostics.find(entry => entry.stage === 'microphoneHostExited').stopMode, 'forced');
   assert.equal(f.manager.state, undefined);
-  assert.equal(bridge.scope.nativeMicrophoneSession, undefined);
-  const restarting = bridge.scope.startNativeMicrophoneCapture('new-session', settings);
+  assert.equal(bridge.capture.sessionId, undefined);
+  const restarting = bridge.capture.start('new-session', settings);
   bridge.listen(); await delay(0); f.children[1].send(ready); await restarting;
-  const stopping = bridge.scope.stopNativeMicrophoneCapture('new-session');
+  const stopping = bridge.capture.stop('new-session');
   f.children[1].send({ event: 'stopped' }); f.children[1].emit('close', 0); await stopping;
   assert.equal(f.children.length, 2);
 });

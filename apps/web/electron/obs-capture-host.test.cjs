@@ -844,10 +844,10 @@ function mainScreenAudioFixture({ capability = 'windowsApplicationLoopbackProces
   const messages = [];
   const servers = [];
   let sequence = 0;
-  const sandbox = { recording: { active: undefined, withVideoChange: operation => operation() }, performance, writeMediaDiagnostic: async () => {}, closing: false, process: { platform: 'win32' }, Buffer, Uint8Array, AggregateError,
+  const sandbox = { validNativeAudioSessionId: require('./native-microphone.cjs').validNativeAudioSessionId, recording: { active: undefined, withVideoChange: operation => operation() }, performance, writeMediaDiagnostic: async () => {}, closing: false, process: { platform: 'win32' }, Buffer, Uint8Array, AggregateError,
     nativeVideoSession: { sessionId, sourceId: 'monitor:7:0', starting: false, stopping: false },
     nativeScreenAudioSession: undefined, lastScreenAudioDroppedChunks: 0,
-    nativeMicrophoneSession: { sessionId: 'separate-microphone' },
+    nativeMicrophone: { sessionId: 'separate-microphone', stop: () => assert.fail('共享操作不能关闭独立麦克风') },
     randomUUID: () => ++sequence === 1 ? audioId : nextAudioId,
     mainWindow: { isDestroyed: () => false, webContents: { isDestroyed: () => false,
       send: (...args) => messages.push(args) } },
@@ -869,8 +869,7 @@ function mainScreenAudioFixture({ capability = 'windowsApplicationLoopbackProces
       stopScreenAudio: (...args) => { calls.push(['stop', ...args]); return captureStop?.(...args) ?? Promise.resolve({ changed: true }); },
     } };
   runInNewContext(main.slice(main.indexOf('function finishNativeScreenAudioPipe('),
-    main.indexOf('function finishNativeMicrophonePipe(')) + '\n'
-    + main.slice(main.indexOf('function validNativeAudioSessionId('), main.indexOf('function handleNativeMicrophonePipeData(')) + '\n'
+    main.indexOf('function handleNativeScreenAudioPipeData(')) + '\n'
     + main.slice(main.indexOf('function handleNativeScreenAudioPipeData('), main.indexOf('function handleMediaHelperFailure(')), sandbox);
   const connect = () => {
     const socket = new EventEmitter();
@@ -906,7 +905,7 @@ test('正式声音入口按能力选择 OBS 模式，先建立管道，成功才
     assert.deepEqual(await repeated, audioFormat);
     await f.stop();
     assert.equal(f.sandbox.nativeScreenAudioSession, undefined);
-    assert.equal(f.sandbox.nativeMicrophoneSession.sessionId, 'separate-microphone');
+    assert.equal(f.sandbox.nativeMicrophone.sessionId, 'separate-microphone');
   }
 });
 
@@ -1031,7 +1030,7 @@ test('能力失败、画面停止和旧来源不启动声音；原生错误只�
   await flush();
   assert.equal(f.sandbox.nativeScreenAudioSession, undefined);
   assert.equal(f.sandbox.nativeVideoSession.stopping, false);
-  assert.equal(f.sandbox.nativeMicrophoneSession.sessionId, 'separate-microphone');
+  assert.equal(f.sandbox.nativeMicrophone.sessionId, 'separate-microphone');
 });
 
 
@@ -1480,7 +1479,7 @@ test('停止后迟到的窗口暂停事件不能恢复状态或将正常清理�
 test('生产入口先预留窗口身份再启动 OBS，停止先关闭 OBS 再释放身份', async () => {
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = main.indexOf('async function startNativeVideo(');
-  const end = main.indexOf('function validMicrophoneSettings(', start);
+  const end = main.indexOf('const activityMonitor =', start);
   const calls = [];
   const targetState = { alive: true };
   const target = { kind: 'window', windowId: '123', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.123', processCreationTime: '456', processId: 123, requiresWindowCapture: false };
@@ -1549,7 +1548,7 @@ function gameRoutingFixture(classify, startFailure, requiresWindowCapture = fals
       },
       startVideo: () => assert.fail('不能回退到 Rust') },
     recordVideoFailure: () => {}, releaseNativeVideoImports: () => {}, releaseHelperProcessBridge: () => {} };
-  runInNewContext(main.slice(main.indexOf('async function prepareNativeVideoSource('), main.indexOf('function validMicrophoneSettings(')), sandbox);
+  runInNewContext(main.slice(main.indexOf('async function prepareNativeVideoSource('), main.indexOf('const activityMonitor =')), sandbox);
   return { sandbox, calls, target, start: (settings = { hideCursor: true, hideBorder: true }) => sandbox.startNativeVideo('window:7:0', 120, settings) };
 }
 
@@ -1827,7 +1826,7 @@ test('停止先禁用远控并释放按键，再等待 OBS 退出后释放身份
         },
         stopVideo: async () => { calls.push('release'); sandbox.mediaHelper.videoCapture = undefined; return { changed: true }; } },
       recordVideoFailure: () => calls.push('report-revoke-failure'), releaseHelperProcessBridge: () => {} };
-    runInNewContext(main.slice(main.indexOf('function restoreNativeVideoBackgroundThrottling('), main.indexOf('function validMicrophoneSettings(')), sandbox);
+    runInNewContext(main.slice(main.indexOf('function restoreNativeVideoBackgroundThrottling('), main.indexOf('const activityMonitor =')), sandbox);
     const stopped = sandbox.stopNativeVideo(sessionId);
     const rejected = revokeFailure ? assert.rejects(stopped, /remoteControlInputFailed/) : undefined;
     assert.equal(sandbox.nativeVideoSession.stopping, true);
@@ -1862,7 +1861,7 @@ test('停止通知页面禁收后等待总纹理及槽位确认，再结束宿�
     mediaHelper: { videoCapture: { sessionId }, stopVideo: async () => { calls.push('identity-stop'); return { changed: true }; } },
   };
   runInNewContext(main.slice(main.indexOf('function releaseNativeVideoImports('), main.indexOf('function releaseNativeVideoSlot('))
-    + main.slice(main.indexOf('function restoreNativeVideoBackgroundThrottling('), main.indexOf('function validMicrophoneSettings(')), sandbox);
+    + main.slice(main.indexOf('function restoreNativeVideoBackgroundThrottling('), main.indexOf('const activityMonitor =')), sandbox);
   const stopping = sandbox.stopNativeVideo(sessionId);
   assert.deepEqual(calls, ['notify', 'release-reference']);
   assert.equal(video.imported.size, 1);
@@ -1902,7 +1901,7 @@ test('纹理释放超时只在宿主退出及身份释放确认后恢复重开�
         sandbox.mediaHelper.videoCapture = undefined; return { changed: true };
       } },
     };
-    runInNewContext(main.slice(main.indexOf('function restoreNativeVideoBackgroundThrottling('), main.indexOf('function validMicrophoneSettings(')), sandbox);
+    runInNewContext(main.slice(main.indexOf('function restoreNativeVideoBackgroundThrottling('), main.indexOf('const activityMonitor =')), sandbox);
     const stopping = sandbox.stopNativeVideo(sessionId);
     assert.equal(video.stopping, true);
     assert.equal(sandbox.nativeVideoSession, video);
@@ -2003,7 +2002,7 @@ test('正式诊断入口使用宿主响应的版本及计数，不读取缓存�
         screenShareAudio: { ...idleAudio }, obsRender: { ...obsRender } };
     } },
     nativeScreenAudioSession: undefined, lastScreenAudioDroppedChunks: 0,
-    nativeMicrophoneSession: undefined, lastMicrophoneDroppedChunks: 0 };
+    nativeMicrophone: { diagnostics: async () => ({ microphoneCapture: null, microphoneCaptureDroppedChunks: 0 }) } };
   runInNewContext(main.slice(start, end), sandbox);
   const diagnostics = await handler({});
   assert.deepEqual(requested, [sessionId]);

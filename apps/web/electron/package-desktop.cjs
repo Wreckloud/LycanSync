@@ -78,7 +78,7 @@ if (executable.name !== 'LycanSync' || executable.product !== 'LycanSync' || exe
 }
 // 页面依赖已进入 dist；主进程更新库必须实际进入 asar，不能只验证开发目录可用。
 const archive = join(outputDirectory, 'win-unpacked/resources/app.asar');
-for (const file of ['electron/login-preferences.cjs', 'electron/desktop-tray.cjs', 'electron/media-background.cjs', 'electron/audio-shortcuts.cjs', 'electron/recording-voice.cjs', 'electron/recording.cjs', 'electron/recording-library.cjs', 'electron/obs-audio-host.cjs', 'electron/runtime-paths.cjs', 'electron/startup-update.cjs', 'electron/diagnostic-reports.cjs', 'electron/activity-helper.cjs', 'electron/window-layout.cjs', 'electron/voice-overlay.cjs',
+for (const file of ['electron/login-preferences.cjs', 'electron/desktop-tray.cjs', 'electron/media-background.cjs', 'electron/audio-shortcuts.cjs', 'electron/recording-voice.cjs', 'electron/recording.cjs', 'electron/recording-library.cjs', 'electron/obs-audio-host.cjs', 'electron/native-microphone.cjs', 'electron/runtime-paths.cjs', 'electron/startup-update.cjs', 'electron/diagnostic-reports.cjs', 'electron/activity-helper.cjs', 'electron/window-layout.cjs', 'electron/voice-overlay.cjs',
   'electron/voice-overlay-preload.cjs', 'electron/screen-share-windows.cjs', 'electron/viewer-preload.cjs', 'electron/league-capture.cjs', 'electron/qq-login.cjs',
   'dist/overlay.html', 'dist/viewer.html', 'dist/qq-login.png', 'node_modules/electron-updater/package.json',
   'node_modules/builder-util-runtime/package.json']) require('@electron/asar').extractFile(archive, normalize(file));
