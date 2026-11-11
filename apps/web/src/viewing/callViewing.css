@@ -18,7 +18,7 @@
 .viewing-grid.is-focus { display: block; width: 100%; padding: 0; }
 .viewing-grid.is-focus .viewing-tile { width: 100%; }
 .viewing-grid.is-focus .participant-card { border: 0; border-radius: 0; }
-.viewing-tile { position: relative; min-width: 0; transition: width var(--motion-layout-duration) var(--motion-ease), height var(--motion-layout-duration) var(--motion-ease); }
+.viewing-tile { position: relative; min-width: 0; transition: height var(--motion-layout-duration) var(--motion-ease); }
 .viewing-surface { height: 100%; cursor: pointer; }
 .viewing-surface:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 /* 视频只跟随卡片的实际高度，切换模式时不再按尚未收拢的旧宽度重新撑高。 */
@@ -59,7 +59,7 @@
 .member-card-leave-active { position: absolute; pointer-events: none; }
 @media (max-width: 600px) { .call-viewing-panel.is-collapsed .viewing-members-panel, .viewing-members-panel { padding-left: 10px; padding-right: 10px; } }
 
-.view-tile-move { transition: transform var(--motion-layout-duration) var(--motion-ease), width var(--motion-layout-duration) var(--motion-ease), height var(--motion-layout-duration) var(--motion-ease); }
+.view-tile-move { transition: transform var(--motion-layout-duration) var(--motion-ease), height var(--motion-layout-duration) var(--motion-ease); }
 .view-tile-enter-active, .view-tile-leave-active { transition: opacity var(--motion-surface-duration) ease; }
 .view-tile-enter-from, .view-tile-leave-to { opacity: 0; }
 .view-tile-leave-active { position: absolute; pointer-events: none; }

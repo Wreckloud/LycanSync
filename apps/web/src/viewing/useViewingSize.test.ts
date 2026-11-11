@@ -15,6 +15,7 @@ function fixture() {
   let memberHeight = 200;
   let observe!: () => void;
   const frames = new Map<number, FrameRequestCallback>();
+  const documentEvents = new EventTarget();
   let nextFrame = 0;
   const detached = ref(false), expanded = ref(false), showMembers = ref(true);
   const preferred = ref<number | null>(null);
@@ -39,7 +40,9 @@ function fixture() {
     getBoundingClientRect: () => ({ top: 0 }),
     querySelector: (selector: string) => selector.includes('horizontal-viewport') ? viewport : memberPanel,
     closest: (selector: string) => selector === '.group-main' ? container : overlay,
-    ownerDocument: { documentElement: {}, defaultView: {
+    ownerDocument: { documentElement: {}, visibilityState: 'visible',
+      addEventListener: documentEvents.addEventListener.bind(documentEvents),
+      removeEventListener: vi.fn(documentEvents.removeEventListener.bind(documentEvents)), defaultView: {
       get innerHeight() { return containerHeight; },
       getComputedStyle: (target: unknown) => target === overlay ? { maxHeight: '70%' }
         : { paddingTop: '12px', paddingBottom: '12px' },
@@ -65,10 +68,40 @@ function fixture() {
     pending.forEach(callback => callback(0));
   }
   return { scope, size, detached, expanded, showMembers, preferred, setHeight, observed, frames, measure, queue: () => observe(),
+    setHidden(value: boolean) { element.ownerDocument.visibilityState = value ? 'hidden' : 'visible'; documentEvents.dispatchEvent(new Event('visibilitychange')); },
+    removeVisibilityListener: element.ownerDocument.removeEventListener,
+    setViewportWidth(value: number) { viewport.clientWidth = value; },
     setWindowHeight(value: number) { containerHeight = value; },
     setComposerTop(value: number) { composerTop = value; },
     setMemberHeight(value: number) { memberHeight = value; } };
 }
+
+it('窗口暂时没有可测量宽度时保留视频尺寸，恢复后不从零重新展开', () => {
+  const f = fixture();
+  try {
+    const before = { width: f.size.width.value, height: f.size.height.value, maximum: f.size.maximumHeight.value };
+    f.setViewportWidth(0); f.setWindowHeight(0); f.measure();
+    expect({ width: f.size.width.value, height: f.size.height.value, maximum: f.size.maximumHeight.value }).toEqual(before);
+    f.setViewportWidth(800); f.setWindowHeight(600); f.measure();
+    expect({ width: f.size.width.value, height: f.size.height.value, maximum: f.size.maximumHeight.value }).toEqual(before);
+    expect(f.setHeight).not.toHaveBeenCalled();
+  } finally { f.scope.stop(); }
+});
+
+it('后台尺寸变化暂不改视频布局，恢复可见时复核当前空间并在销毁后停止监听', () => {
+  const f = fixture();
+  f.setHidden(true);
+  f.setViewportWidth(1000); f.setWindowHeight(1000); f.measure();
+  expect(f.size.width.value).toBe(800);
+  expect(f.size.height.value).toBe(220);
+  f.setHidden(false);
+  expect(f.size.width.value).toBe(1000);
+  expect(f.size.height.value).toBe(480);
+  f.scope.stop();
+  expect(f.removeVisibilityListener).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
+  f.setHidden(true); f.setViewportWidth(1200); f.setHidden(false);
+  expect(f.size.width.value).toBe(1000);
+});
 
 it('按实际成员高度与布局边界计算，默认值与首次拖动使用同一上限', () => {
   const f = fixture();

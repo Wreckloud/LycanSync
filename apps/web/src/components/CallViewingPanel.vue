@@ -131,21 +131,26 @@ watch(() => props.active, (active) => {
   now.value = performance.now();
   if (active) clock = setInterval(() => { now.value = performance.now(); }, 1000);
 }, { immediate: true });
-watch(() => props.view.mode, async (mode, previous) => {
+watch(() => [props.active, props.view.mode, props.view.focused] as const, async ([active, mode]) => {
   finishSwitch();
   const element = panel.value;
-  if (!props.active || mode === 'collapsed' || previous === 'collapsed' || !element || motionPreference?.matches) return;
+  if (!active || mode === 'collapsed' || !element || motionPreference?.matches) return;
   ownsSwitch = true;
   props.view.switching = true;
   const generation = switchGeneration;
   const owner = element.ownerDocument.defaultView!;
-  await nextTick();
-  // Vue 在后续绘制帧启动进退场；等待真实动画收尾，连点不排队补执行。
-  await new Promise<void>(done => owner.requestAnimationFrame(() => owner.requestAnimationFrame(() => done())));
-  if (generation !== switchGeneration || !element.isConnected) return;
-  const animations = element.getAnimations({ subtree: true }).filter(animation =>
-    animation.playState !== 'paused' && Number.isFinite(animation.effect?.getComputedTiming().endTime));
-  await Promise.allSettled(animations.map(animation => animation.finished));
+  const settled = new Set<Animation>();
+  // 成员折叠和尺寸观察可能接续新的过渡；不能只等最初那一批动画就开放下一次切换。
+  while (generation === switchGeneration && element.isConnected) {
+    await nextTick();
+    await new Promise<void>(done => owner.requestAnimationFrame(() => owner.requestAnimationFrame(() => done())));
+    if (generation !== switchGeneration || !element.isConnected) return;
+    const animations = element.getAnimations({ subtree: true }).filter(animation => !settled.has(animation)
+      && animation.playState !== 'paused' && Number.isFinite(animation.effect?.getComputedTiming().endTime));
+    if (!animations.length) break;
+    await Promise.allSettled(animations.map(animation => animation.finished));
+    animations.forEach(animation => settled.add(animation));
+  }
   if (generation === switchGeneration) finishSwitch();
 }, { flush: 'sync' });
 watch(() => props.view.expanded, async () => {
@@ -195,6 +200,7 @@ onScopeDispose(() => {
           @before-leave="($event as HTMLElement).inert = true">
           <div v-for="share in view.displayed" :key="share.key" class="viewing-tile" :style="tileStyle(share)">
             <div class="viewing-surface" role="button" tabindex="0"
+              :aria-disabled="view.switching"
               :aria-label="focus ? '查看全部共享画面' : '聚焦' + share.participant.name"
               @click="select(share)" @keydown.enter.self.prevent="select(share)" @keydown.space.self.prevent="select(share)">
               <ParticipantCard :participant="share.participant" :revision="revision" variant="viewer"

@@ -58,8 +58,11 @@ export function useViewingSize(panel: Ref<HTMLElement | null>, options: ViewingS
     let observedMembers: HTMLElement | null = null;
     let frame: number | undefined;
     function resize() {
+      const measuredWidth = viewport.clientWidth;
+      // 遮挡、最小化或暂时隐藏时保留最后的有效尺寸，避免恢复后从零斜向撑开视频。
+      if (element.ownerDocument.visibilityState === 'hidden' || measuredWidth <= 0) return;
       // 读取成员内容的自然高度，不把折叠动画的中间高度写成用户偏好。
-      width.value = viewport.clientWidth;
+      width.value = measuredWidth;
       const memberPanel = options.showMembers() ? element.querySelector<HTMLElement>('.viewing-members-panel') : null;
       if (memberPanel !== observedMembers) {
         if (observedMembers) observer?.unobserve(observedMembers);
@@ -101,7 +104,12 @@ export function useViewingSize(panel: Ref<HTMLElement | null>, options: ViewingS
       frame = owner.requestAnimationFrame(() => { frame = undefined; resize(); });
     });
     const stopMembers = watch(() => [options.showMembers(), options.expanded()], resize, { flush: 'post' });
-    stopObservation = () => { stopMembers(); if (frame !== undefined) owner.cancelAnimationFrame(frame); };
+    element.ownerDocument.addEventListener('visibilitychange', resize);
+    stopObservation = () => {
+      stopMembers();
+      element.ownerDocument.removeEventListener('visibilitychange', resize);
+      if (frame !== undefined) owner.cancelAnimationFrame(frame);
+    };
     observer.observe(element);
     observer.observe(viewport);
     observer.observe(element.ownerDocument.documentElement);

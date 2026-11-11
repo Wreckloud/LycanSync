@@ -285,8 +285,9 @@ const obsCaptureHost = new ObsCaptureHostManager({
         'sharedTextureGpuWaitFailed', 'sharedTextureGpuStalled', 'sharedTextureReleaseFailed', 'sharedTextureAcquireFailed',
         'dxgiMonitorUnavailable', 'dxgiAdapterMismatch'].includes(error.message)
         ? error.message : 'obsCaptureHostFailed';
-      notifyNativeVideoError(video, code);
+      return notifyNativeVideoError(video, code);
     }
+    if (video?.sessionId === state.videoSessionId) return video.stopPromise;
   },
   onAudioFailure: (state, failure) => {
     const audio = nativeScreenAudioSession;
@@ -420,7 +421,7 @@ function screenShareAudioCapability() {
 }
 
 function notifyNativeVideoError(video, code) {
-  if (!video || video.failureNotified) return;
+  if (!video || video.failureNotified) return video?.stopPromise;
   video.failureNotified = true;
   video.stopping = true;
   video.lastError = /^[a-z][A-Za-z0-9]{0,63}$/.test(code) ? code : 'nativeVideoFailed';
@@ -431,7 +432,7 @@ function notifyNativeVideoError(video, code) {
     });
   }
   releaseNativeVideoImports(video);
-  void stopNativeVideo(video.sessionId, code === 'captureTargetClosed' && Boolean(video.gameFollowId)).catch((error) => {
+  return stopNativeVideo(video.sessionId, code === 'captureTargetClosed' && Boolean(video.gameFollowId)).catch((error) => {
     recordVideoFailure('stopAfterFailure', error);
     console.error(`native video stop after capture failure failed: ${error.message}`);
   });
@@ -688,6 +689,8 @@ function acknowledgeNativeScreenAudioChunk(sessionId, sequence, droppedChunks) {
 
 function notifyNativeScreenAudioError(audio, code) {
   if (!audio || audio.failureNotified || audio.stopping) return;
+  // 共享整体结束时声音随之结束；录制收尾是否成功由录制宿主确认。
+  if (nativeVideoSession?.sessionId === audio.sessionId && nativeVideoSession.stopping) return;
   audio.failureNotified = true;
   if (recording.media?.videoSessionId === audio.sessionId && recording.media.options.applicationAudio) {
     void recording.failMedia(recording.media.id, 'recordingApplicationAudioUnavailable').catch(() => {});
@@ -787,7 +790,7 @@ async function stopNativeScreenAudio(sessionId, force = false) {
   const audio = nativeScreenAudioSession;
   if (!audio) return { changed: false };
   if (audio.sessionId !== sessionId) throw new Error('screenShareAudioSessionMismatch');
-  if (!force && !nativeVideoSession?.stopping && recording.media?.videoSessionId === sessionId
+  if (!force && recording.media?.videoSessionId === sessionId
       && recording.media.options.applicationAudio) {
     audio.publishing = false; audio.queue.length = 0; audio.inFlight = undefined;
     return { changed: true };

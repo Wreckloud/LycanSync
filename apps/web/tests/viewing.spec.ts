@@ -149,6 +149,43 @@ async function sharing(page: Page, ids: string[]) {
   await page.evaluate((identities) => (window as unknown as { __viewingTest: { sharing(ids: string[]): void } }).__viewingTest.sharing(identities), ids);
 }
 
+test('后台暂时不可测量时保留观看尺寸，切回后原位显示且不重建视频', async ({ page }) => {
+  await sharing(page, ['A']);
+  await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+  const panel = page.locator('.call-viewing-panel');
+  const tile = page.locator('.viewing-tile');
+  const video = await tile.locator('video').elementHandle();
+  await expect.poll(() => panel.evaluate(element => element.getAnimations({ subtree: true }).length)).toBe(0);
+  const samples = await panel.evaluate(async element => {
+    const panel = element as HTMLElement;
+    const tile = panel.querySelector<HTMLElement>('.viewing-tile')!;
+    const before = { width: tile.style.width, height: tile.style.height };
+    const frame = () => new Promise(requestAnimationFrame);
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    panel.style.display = 'none';
+    for (let i = 0; i < 5; i++) await frame();
+    const hidden = { width: tile.style.width, height: tile.style.height };
+    panel.style.removeProperty('display');
+    Reflect.deleteProperty(document, 'visibilityState');
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.dispatchEvent(new Event('focus'));
+    const restored = [];
+    for (let i = 0; i < 18; i++) {
+      await frame();
+      restored.push({ width: tile.getBoundingClientRect().width, height: tile.getBoundingClientRect().height });
+    }
+    return { before, hidden, restored };
+  });
+  expect(samples.hidden).toEqual(samples.before);
+  for (const bounds of samples.restored) {
+    expect(bounds.width).toBeCloseTo(Number.parseFloat(samples.before.width), 0);
+    expect(bounds.height).toBeCloseTo(Number.parseFloat(samples.before.height), 0);
+  }
+  expect(await video!.evaluate(element => element === document.querySelector('.viewing-tile video'))).toBe(true);
+  await expect(tile).toHaveCSS('transition-property', 'height');
+});
+
 test('横向浏览渐变跟随滚动位置，键盘滚动遵循减少动态效果设置', async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 900 });
   const strip = page.getByRole('region', { name: '语音成员', exact: true });
@@ -193,12 +230,18 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
     const video = await page.locator('.viewing-tile video').elementHandle();
     for (let step = 0; step < 2; step++) {
+      await expect(page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').first()).toBeEnabled();
       const excess = await page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').first().evaluate(async (element) => {
         (element as HTMLElement).click();
+        await new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done())));
+        const target = element.getAttribute('aria-label');
         const started = performance.now();
         let maximum = 0;
         await new Promise<void>((resolve) => {
           function measure() {
+            // 连续点击不能在当前过渡未完成时反转布局；过渡完成后不额外等待固定冷却时间。
+            if (element.getAttribute('aria-disabled') === 'true') (element as HTMLElement).click();
+            if (element.getAttribute('aria-label') !== target) throw new Error('过渡期间连续点击反转了布局');
             for (const tile of document.querySelectorAll('.viewing-tile:not(.view-tile-leave-active)')) {
               const bounds = tile.getBoundingClientRect();
               const media = tile.querySelector('.participant-media')!.getBoundingClientRect();

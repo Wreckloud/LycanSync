@@ -285,6 +285,26 @@ test('录像提高渲染帧率但保留共享30帧，最后一路结束后恢复
   assert.equal(f.killCount(), 0);
 });
 
+test('目标关闭先等待主进程录制收尾，重复关闭事件不抢先停止宿主', async context => {
+  const { manager, ready, emit, commands, killCount } = fixture(context);
+  let finishRecording;
+  let notified = 0;
+  manager.onFailure = () => {
+    notified++;
+    return new Promise(resolve => { finishRecording = resolve; });
+  };
+  await ready();
+  emit({ event: 'captureTargetClosed' });
+  emit({ event: 'captureTargetClosed' });
+  await flush();
+  assert.equal(notified, 1);
+  assert.equal(commands.some(command => command.startsWith('stop:')), false);
+  finishRecording();
+  await flush();
+  assert.equal(commands.filter(command => command.startsWith('stop:')).length, 1);
+  assert.equal(killCount(), 0);
+});
+
 test('目标关闭时给录像留足原生收尾时间，四秒后仍等待正常确认', async context => {
   context.mock.timers.enable({ apis: ['setTimeout'] });
   const f = fixture(context, { closeOnShutdown: false });
@@ -957,6 +977,38 @@ test('声音启动失败不回退；停止失败保留禁发与阻挡，迟到�
   f.sandbox.handleObsScreenAudioStopped({ videoSessionId: sessionId }, { audioId });
   assert.equal(f.sandbox.nativeScreenAudioSession, undefined);
   assert.equal(f.sandbox.nativeVideoSession.stopping, false);
+});
+
+test('关闭共享来源时，渲染端停止声音不打断录制收尾，正常声音结束不标记录制失败', async () => {
+  const f = mainScreenAudioFixture();
+  await f.start();
+  const socket = f.connect();
+  f.sandbox.recording.media = { id: 'recording-media', videoSessionId: sessionId, options: { applicationAudio: true } };
+  f.sandbox.recording.failMedia = () => assert.fail('正常结束不能标记录制失败');
+  f.sandbox.nativeVideoSession.stopping = true;
+  await f.stop();
+  assert.equal(f.calls.some(call => call[0] === 'stop'), false);
+  assert.equal(socket.destroyed, false);
+  assert.equal(f.sandbox.nativeScreenAudioSession.publishing, false);
+  f.sandbox.handleObsScreenAudioStopped({ videoSessionId: sessionId }, { audioId });
+  assert.equal(socket.destroyed, true);
+  assert.equal(f.sandbox.nativeScreenAudioSession, undefined);
+  assert.equal(f.messages.some(message => message[0] === 'media:native-screen-audio-error'), false);
+});
+
+test('录制仍在运行时声音异常继续报告失败，其他共享的停止状态不能掩盖它', async () => {
+  for (const video of [{ sessionId, stopping: false }, { sessionId: 'other', stopping: true }]) {
+    const f = mainScreenAudioFixture();
+    await f.start();
+    const failures = [];
+    f.sandbox.recording.media = { id: 'recording-media', videoSessionId: sessionId, options: { applicationAudio: true } };
+    f.sandbox.recording.failMedia = async (...args) => { failures.push(args); };
+    f.sandbox.nativeVideoSession = video;
+    f.sandbox.handleObsScreenAudioStopped({ videoSessionId: sessionId }, { audioId });
+    assert.deepEqual(failures, [['recording-media', 'recordingApplicationAudioUnavailable']]);
+    assert.equal(f.messages.at(-1)[0], 'media:native-screen-audio-error');
+    await flush();
+  }
 });
 
 test('能力失败、画面停止和旧来源不启动声音；原生错误只通知并清理对应声音', async () => {

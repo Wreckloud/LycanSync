@@ -468,14 +468,14 @@ class ObsCaptureHostManager {
     if (event.event === 'captureTargetClosed' && state.helperVersion && !state.startReject) {
       if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
       if (event.sessionId !== state.videoSessionId) { failState(state, new Error('obsCaptureProtocolEventInvalid')); return; }
-      if (state.stopRequested) return;
+      if (state.stopRequested || state.failureNotified) return;
       const sessionId = state.videoSessionId;
-      // 目标退出仍走已确认的停止清理；不标记宿主故障或提前杀掉进程。
-      if (!state.failureNotified) {
-        state.failureNotified = true;
-        state.onFailure?.(state, new Error('captureTargetClosed'));
-      }
-      void this.stop(sessionId).catch(error => failState(state, error));
+      // 主进程先收尾录制、声音与纹理，再停止采集，避免两个清理入口互相抢占。
+      state.failureNotified = true;
+      const cleanup = state.onFailure?.(state, new Error('captureTargetClosed'));
+      void Promise.resolve(cleanup).then(() => {
+        if (state.videoSessionId === sessionId) return this.stop(sessionId);
+      }).catch(error => failState(state, error));
       return;
     }
     if (/^[a-z][A-Za-z0-9]{0,63}$/.test(event.event)) {

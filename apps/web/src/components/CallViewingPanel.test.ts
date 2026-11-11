@@ -18,7 +18,7 @@ function fixture(animations: Animation[] = []) {
     defaultView: { lycanViewerWindow: { toggleFullscreen: vi.fn() }, requestAnimationFrame: (callback: () => void) => callback() } };
   const element = { ownerDocument: page, isConnected: true, getAnimations: () => animations };
   const emit = vi.fn();
-  const view = reactive({ shares: [], mode: 'grid', expanded: false, switching: false, membersVisible: true, height: 240, collapse: vi.fn() });
+  const view = reactive({ shares: [], mode: 'grid', focused: 1, expanded: false, switching: false, membersVisible: true, height: 240, collapse: vi.fn() });
   const context = { withDefaults: (props: object, defaults: object) => ({ ...defaults, ...props }), defineProps: () => ({ view }), defineEmits: () => emit,
     useViewingSize: () => ({ width: ref(600), height: ref(300), maximumHeight: ref(420), resizing: ref(false) }),
     computed, ref, watch, nextTick, onScopeDispose, setInterval, clearInterval, onMounted: () => {}, VideoQuality, performance, motionDurationMs,
@@ -57,6 +57,37 @@ it('网格与聚焦等待真实动画结束，取消动画也释放切换，销�
   expect(interrupted.view.switching).toBe(true);
   interrupted.scope.stop();
   expect(interrupted.view.switching).toBe(false);
+});
+
+it('首轮动画结束后仍等待尺寸重算的新过渡，首次聚焦与更换聚焦目标也受保护', async () => {
+  const motion = () => {
+    let finish!: () => void;
+    const finished = new Promise<void>(resolve => { finish = resolve; });
+    return { finish, animation: { playState: 'running', effect: { getComputedTiming: () => ({ endTime: 210 }) }, finished } as unknown as Animation };
+  };
+  const first = motion(), replacement = motion();
+  const f = fixture([first.animation]);
+  try {
+    f.view.mode = 'collapsed';
+    f.view.mode = 'focus';
+    expect(f.view.switching).toBe(true);
+    await new Promise(done => setTimeout(done, 0));
+    f.element.getAnimations = () => [replacement.animation];
+    first.finish();
+    await new Promise(done => setTimeout(done, 0));
+    expect(f.view.switching).toBe(true);
+    replacement.finish();
+    await new Promise(done => setTimeout(done, 0));
+    expect(f.view.switching).toBe(false);
+    const changed = motion();
+    f.element.getAnimations = () => [changed.animation];
+    f.view.focused = 2;
+    expect(f.view.switching).toBe(true);
+    await new Promise(done => setTimeout(done, 0));
+    changed.finish();
+    await new Promise(done => setTimeout(done, 0));
+    expect(f.view.switching).toBe(false);
+  } finally { f.scope.stop(); }
 });
 
 it('占满窗口只切换布局，不调用系统全屏，不改变聚焦、折叠记忆或原高度', () => {
