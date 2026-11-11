@@ -11,6 +11,7 @@ const { ObsCaptureHostManager } = require('./obs-capture-host.cjs');
 const { ObsAudioHostManager } = require('./obs-audio-host.cjs');
 const { createNativeMicrophone, validMicrophoneSettings } = require('./native-microphone.cjs');
 const { createNativeScreenAudio } = require('./native-screen-audio.cjs');
+const { createNativeVideoTextures } = require('./native-video-textures.cjs');
 const { createRecording } = require('./recording.cjs');
 const { createAudioShortcuts } = require('./audio-shortcuts.cjs');
 const { createMediaBackgroundPolicy } = require('./media-background.cjs');
@@ -157,7 +158,6 @@ let nativeVideoPreparation;
 let nativeVideoSourcesById = new Map();
 const loadNativeThumbnailBatch = createNativeThumbnailCache();
 let lastStoppedNativeVideoSession;
-const helperProcessBridges = new WeakMap();
 const writeMediaDiagnostic = createMediaDiagnostics(resolve(app.getPath('userData'), 'screen-share-error.log'));
 const savedDiagnosticReports = createDiagnosticReportStore(resolve(app.getPath('userData'), 'diagnostics'));
 let diagnosticReportsGeneration = 0;
@@ -270,7 +270,7 @@ const obsCaptureHost = new ObsCaptureHostManager({
   onRecordingEvent: (state, event) => recording.hostEvent(state, event),
   onReplayEvent: (state, event) => recording.replayHostEvent(state, event),
   configPath: resolve(app.getPath('userData'), 'obs-capture', '32.2.2'),
-  onFrame: handleNativeSharedTextureFrame,
+  onFrame: (state, frame) => nativeVideoTextures.receiveFrame(state, frame),
   onFailure: (state, error) => {
     const video = nativeVideoSession;
     if (video && video.sessionId === state.videoSessionId && !video.stopping) {
@@ -290,7 +290,7 @@ const obsCaptureHost = new ObsCaptureHostManager({
   onAudioStopped: (state, event) => nativeScreenAudio.confirmStopped(state.videoSessionId, event?.audioId),
   onClosed: (state) => {
     nativeScreenAudio.confirmStopped(state.videoSessionId);
-    releaseHelperProcessBridge(state);
+    nativeVideoTextures.releaseHost(state);
   },
   onSuspended: handleVideoCaptureSuspended,
   onCaptureDiagnostic: (_state, entry) => { void writeMediaDiagnostic(entry); },
@@ -311,6 +311,10 @@ const obsAudioHost = new ObsAudioHostManager({
 
 const nativeMicrophone = createNativeMicrophone({ host: obsAudioHost, getWindow: () => mainWindow,
   isClosing: () => closing, writeDiagnostic: writeMediaDiagnostic });
+
+const nativeVideoTextures = createNativeVideoTextures({ getVideo: () => nativeVideoSession,
+  getBridge: () => nativeMediaBridge ??= loadNativeMediaBridge(), getWindow: () => mainWindow, sharedTexture,
+  writeDiagnostic: writeMediaDiagnostic, recordFailure: recordVideoFailure, notifyFailure: notifyNativeVideoError });
 
 const nativeScreenAudio = createNativeScreenAudio({ host: obsCaptureHost, getVideo: () => nativeVideoSession,
   getRecording: () => recording, getWindow: () => mainWindow, isClosing: () => closing,
@@ -391,24 +395,6 @@ function loadNativeMediaBridge() {
   return nativeModule.exports;
 }
 
-function releaseHelperProcessBridge(state) {
-  const bridge = helperProcessBridges.get(state);
-  if (!bridge) return;
-  bridge.release();
-  helperProcessBridges.delete(state);
-}
-
-function releaseNativeVideoImports(video) {
-  for (const imported of video.imported.values()) {
-    try { imported.release(); } catch { /* Electron may already have released this import. */ }
-  }
-  // 主进程引用释放不等于 GPU 已用完；保留槽位登记，直到 allReferencesReleased 删除。
-}
-
-function releaseNativeVideoSlot(state, sessionId, slotIndex) {
-  return state.releaseSharedTextureSlot(sessionId, slotIndex);
-}
-
 function screenShareAudioCapability() {
   const build = process.platform === 'win32' ? Number(osRelease().split('.')[2]) : 0;
   if (build >= 19041) return { available: true, reason: 'windowsApplicationLoopbackProcessTree' };
@@ -428,7 +414,7 @@ function notifyNativeVideoError(video, code) {
       code: video.lastError,
     });
   }
-  releaseNativeVideoImports(video);
+  nativeVideoTextures.releaseImports(video);
   return stopNativeVideo(video.sessionId, code === 'captureTargetClosed' && Boolean(video.gameFollowId)).catch((error) => {
     recordVideoFailure('stopAfterFailure', error);
     console.error(`native video stop after capture failure failed: ${error.message}`);
@@ -456,127 +442,6 @@ function handleMediaHelperFailure(state, code) {
   const audioSessionId = nativeScreenAudio.sessionId;
   if (audioSessionId && (state.videoSessionId === audioSessionId || state === video?.helperState)) {
     nativeScreenAudio.notifyFailure(audioSessionId, code);
-  }
-}
-
-function handleNativeSharedTextureFrame(state, frame) {
-  const video = nativeVideoSession;
-  if (!video || video.sessionId !== frame.sessionId || video.stopping || video.suspended) {
-    if (video && video.sessionId === frame.sessionId) {
-      void releaseNativeVideoSlot(state, frame.sessionId, frame.slotIndex).catch(() => {});
-    }
-    return;
-  }
-  video.helperState = state;
-  if (!video.sourceFrameReceived) {
-    video.sourceFrameReceived = true;
-    void writeMediaDiagnostic({ stage: 'obsSourceFirstFrame', durationMs: Math.round(performance.now() - video.startedAt) });
-  }
-  video.frameWidth = frame.contentSize.width;
-  video.frameHeight = frame.contentSize.height;
-  let helperBridge = helperProcessBridges.get(state);
-  let owned;
-  let imported;
-  let importStage = 'loadBridge';
-  let importRegistered = false;
-  let releaseBeforeRegistration = false;
-  let slotReleaseStarted = false;
-  let mainReferenceReleased = false;
-  let transferPending = false;
-  const releaseImport = () => {
-    // Electron 确认交付时才登记接收方引用，提前释放会让迟到确认找不到纹理。
-    if (!imported || mainReferenceReleased || transferPending) return;
-    // 正常交付和停止清理可能先后到达，同一主进程引用只能归还一次。
-    mainReferenceReleased = true;
-    imported.release();
-  };
-  const releaseSlot = () => {
-    if (slotReleaseStarted) return;
-    if (!importRegistered) {
-      releaseBeforeRegistration = true;
-      return;
-    }
-    slotReleaseStarted = true;
-    video.imported.delete(frame.slotIndex);
-    if (state.alive && !state.closed) {
-      video.pendingSlotReleases.add(frame.slotIndex);
-      void releaseNativeVideoSlot(state, video.sessionId, frame.slotIndex).catch((error) => {
-        if (!video.failureNotified) recordVideoFailure('releaseTextureSlot', error, frame);
-        notifyNativeVideoError(video, 'sharedTextureSlotReleaseFailed');
-      }).finally(() => video.pendingSlotReleases.delete(frame.slotIndex));
-    }
-  };
-  try {
-    if (!nativeMediaBridge) nativeMediaBridge = loadNativeMediaBridge();
-    if (!helperBridge) {
-      importStage = 'openHelper';
-      helperBridge = nativeMediaBridge.openSpawnedMediaHelper(state.child.pid, state.executablePath ?? mediaHelperPath());
-      helperProcessBridges.set(state, helperBridge);
-    }
-    importStage = 'validateTexturePool';
-    if (video.imported.has(frame.slotIndex) || video.imported.size >= 3) {
-      throw new Error('sharedTexturePoolInvariantFailed');
-    }
-    importStage = 'duplicateHandle';
-    owned = helperBridge.duplicateSharedTexture(frame.sourceHandleHex);
-    importStage = 'importTexture';
-    imported = owned.withImportHandle((ntHandle) => sharedTexture.importSharedTexture({
-      textureInfo: {
-        pixelFormat: frame.pixelFormat,
-        codedSize: frame.codedSize,
-        visibleRect: { x: 0, y: 0, width: frame.contentSize.width, height: frame.contentSize.height },
-        timestamp: frame.timestampMicros,
-        handle: { ntHandle },
-      },
-      allReferencesReleased: releaseSlot,
-    }));
-    owned.release();
-    if (releaseBeforeRegistration) {
-      importRegistered = true;
-      releaseSlot();
-      releaseImport();
-      return;
-    }
-    video.imported.set(frame.slotIndex, { release: releaseImport });
-    importRegistered = true;
-    importStage = 'sendTexture';
-    transferPending = true;
-    void sharedTexture.sendSharedTexture({
-      frame: video.renderer.mainFrame,
-      importedSharedTexture: imported,
-    }, 'native-screen-frame', video.sessionId).then(() => {
-      transferPending = false;
-      releaseImport();
-      if (!video.textureDelivered && !video.stopping && nativeVideoSession === video) {
-        video.textureDelivered = true;
-        void writeMediaDiagnostic({ stage: 'screenTextureDelivered', durationMs: Math.round(performance.now() - video.startedAt) });
-      }
-    }).catch((error) => {
-      transferPending = false;
-      const code = /^transfer shared texture timed out after 1000ms,/.test(String(error?.message))
-        ? 'sharedTextureTransferTimedOut' : 'sharedTextureTransferFailed';
-      if (!video.failureNotified && !video.stopping && nativeVideoSession === video) {
-        const rendererAlive = !video.renderer.isDestroyed();
-        recordVideoFailure('sendTexture', error, frame, { code,
-          rendererAlive,
-          ...(rendererAlive ? { rendererLoading: video.renderer.isLoadingMainFrame(),
-            backgroundThrottling: video.renderer.getBackgroundThrottling() } : {}),
-          ...(mainWindow && !mainWindow.isDestroyed() ? { windowMinimized: mainWindow.isMinimized(),
-            windowVisible: mainWindow.isVisible() } : {}),
-          importedCount: video.imported.size, pendingReleaseCount: video.pendingSlotReleases.size });
-      }
-      releaseImport();
-      // 超时后可能仍有迟到交付；由原有停止流程回收，不能直接重发或复用槽位。
-      if (!video.stopping && nativeVideoSession === video) notifyNativeVideoError(video, code);
-    });
-  } catch (error) {
-    transferPending = false;
-    // 每次采集只保存首次失败；不记录纹理句柄、窗口标题或账号凭据。
-    if (!video.failureNotified) recordVideoFailure(importStage, error, frame);
-    owned?.release();
-    if (imported) releaseImport();
-    else void releaseNativeVideoSlot(state, video.sessionId, frame.slotIndex).catch(() => {});
-    notifyNativeVideoError(video, 'sharedTextureImportFailed');
   }
 }
 
@@ -710,7 +575,7 @@ async function stopObsVideo(video) {
   const ownsCapture = !state || state.videoSessionId === video.sessionId;
   const stopped = ownsCapture
     ? await obsCaptureHost.stop(video.sessionId) : { changed: false };
-  if (video.helperState && (video.helperState !== state || ownsCapture)) releaseHelperProcessBridge(video.helperState);
+  if (video.helperState && (video.helperState !== state || ownsCapture)) nativeVideoTextures.releaseHost(video.helperState);
   if (video.targetState && mediaHelper.videoCapture?.sessionId === video.sessionId) {
     const released = await mediaHelper.stopVideo(video.sessionId);
     return { changed: stopped.changed || released.changed };
@@ -754,7 +619,7 @@ async function stopNativeVideo(sessionId, preserveGameFollow = false) {
     if (nativeScreenAudio.sessionId === sessionId) {
       await nativeScreenAudio.stop(sessionId).catch(() => {});
     }
-    releaseNativeVideoImports(video);
+    nativeVideoTextures.releaseImports(video);
     const deadline = Date.now() + 1_200;
     while ((video.imported.size || video.pendingSlotReleases.size) && Date.now() < deadline) {
       await new Promise((resolveWait) => setTimeout(resolveWait, 10));

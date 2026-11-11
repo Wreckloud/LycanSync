@@ -2,75 +2,8 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
 const { test } = require('node:test');
-const { readFileSync } = require('node:fs');
-const { join } = require('node:path');
-const { runInNewContext } = require('node:vm');
 const { MediaHelperManager } = require('./media-helper.cjs');
 const { matchNativeVideoSourceThumbnails, monitorDisplayId } = require('./native-video-thumbnails.cjs');
-
-test('纹理交付、停止和迟到结果共用一次主进程引用释放', async (context) => {
-  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
-  const cleanupStart = main.indexOf('function releaseNativeVideoImports(');
-  const cleanupEnd = main.indexOf('function notifyNativeVideoError(', cleanupStart);
-  const frameStart = main.indexOf('function handleNativeSharedTextureFrame(');
-  const frameEnd = main.indexOf('async function startNativeVideo(', frameStart);
-  assert.ok(cleanupStart >= 0 && cleanupEnd > cleanupStart && frameStart >= 0 && frameEnd > frameStart);
-  for (const mode of ['sent-then-stop', 'stop-then-sent', 'stop-then-rejected', 'rejected']) {
-    await context.test(mode, async () => {
-      let resolveSend, rejectSend, allReferencesReleased;
-      const sent = new Promise((resolve, reject) => { resolveSend = resolve; rejectSend = reject; });
-      const failures = [], notifications = [], slots = [];
-      let releases = 0;
-      const renderer = { mainFrame: {}, isDestroyed: () => false, isLoadingMainFrame: () => false,
-        getBackgroundThrottling: () => false };
-      const video = { sessionId: 'texture-session', startedAt: performance.now(), renderer,
-        imported: new Map(), pendingSlotReleases: new Set() };
-      const state = { alive: true, closed: false, child: { pid: 1234 }, executablePath: 'C:\\host.exe',
-        releaseSharedTextureSlot: async (...args) => slots.push(args) };
-      const sandbox = {
-        performance, writeMediaDiagnostic: async () => {},
-        nativeVideoSession: video, helperProcessBridges: new Map(),
-        mainWindow: { webContents: renderer, isDestroyed: () => false, isMinimized: () => false, isVisible: () => true },
-        nativeMediaBridge: { openSpawnedMediaHelper: () => ({ duplicateSharedTexture: () => ({
-          withImportHandle: (callback) => callback(Buffer.alloc(8)), release: () => {},
-        }) }) },
-        sharedTexture: {
-          importSharedTexture: (options) => {
-            allReferencesReleased = options.allReferencesReleased;
-            return { release: () => { releases++; assert.equal(releases, 1, '不能重复释放主进程引用'); } };
-          },
-          sendSharedTexture: () => sent,
-        },
-        recordVideoFailure: (stage) => failures.push(stage),
-        notifyNativeVideoError: (_video, code) => notifications.push(code),
-      };
-      runInNewContext(`${main.slice(cleanupStart, cleanupEnd)}\n${main.slice(frameStart, frameEnd)}`, sandbox);
-      sandbox.handleNativeSharedTextureFrame(state, { sessionId: video.sessionId, slotIndex: 0,
-        codedSize: { width: 1920, height: 1080 }, contentSize: { width: 1920, height: 1080 } });
-      if (mode.startsWith('stop-')) {
-        video.stopping = true;
-        sandbox.releaseNativeVideoImports(video);
-        assert.equal(releases, 0, '交付仍等待确认时，停止也不能提前释放主进程引用');
-      }
-      if (mode.includes('rejected')) rejectSend(new Error('controlledTransferFailure'));
-      else resolveSend();
-      await new Promise((resolve) => setImmediate(resolve));
-      sandbox.releaseNativeVideoImports(video);
-      assert.equal(releases, 1);
-      assert.equal(video.imported.size, 1, '总释放回调之前必须继续登记未归还纹理，停止不能提前越过等待');
-      assert.equal(notifications.length, mode === 'rejected' ? 1 : 0);
-      assert.equal(failures.length, notifications.length);
-      // 主进程引用释放不等于消费者已用完，只有 Electron 的总释放回调归还槽位。
-      assert.equal(slots.length, 0);
-      allReferencesReleased();
-      allReferencesReleased();
-      await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(slots.length, 1);
-      assert.equal(video.imported.size, 0);
-      assert.equal(video.pendingSlotReleases.size, 0);
-    });
-  }
-});
 
 const capabilities = {
   videoSourceDiscovery: { available: true, reason: 'windowsGraphicsCapture' },

@@ -166,7 +166,7 @@ app.whenReady().then(async () => {
     console: { error: (...args) => diagnostics.push(args.map(String).join(' ').slice(0, 250)) },
     setTimeout, clearTimeout, randomUUID, sharedTexture, ipcMain, mainWindow: window,
     nativeMediaBridge: bridge, nativeVideoSession: undefined, lastStoppedNativeVideoSession: undefined,
-    nativeScreenAudio: { sessionId: undefined, droppedChunks: 0 }, helperProcessBridges: new Map(),
+    nativeScreenAudio: { sessionId: undefined, droppedChunks: 0 },
     nativeMicrophone: { diagnostics: async () => ({ microphoneCapture: null, microphoneCaptureDroppedChunks: 0 }) },
     nativeVideoSourcesById: new Map([['monitor:1:0', { kind: 'monitor', title: monitorName }]]),
     loadNativeMediaBridge: () => bridge, mediaHelperPath: () => rustPath,
@@ -177,13 +177,25 @@ app.whenReady().then(async () => {
       process.stdout.write(`${JSON.stringify({ phase: 'captureFailure', ...failure })}\n`);
     },
   };
+  let openTextureHosts = 0;
+  const textureBridge = { openSpawnedMediaHelper: (...args) => {
+    const host = bridge.openSpawnedMediaHelper(...args);
+    openTextureHosts++;
+    return { duplicateSharedTexture: handle => host.duplicateSharedTexture(handle),
+      release: () => { host.release(); openTextureHosts--; } };
+  } };
+  production.nativeVideoTextures = require('../native-video-textures.cjs').createNativeVideoTextures({
+    getVideo: () => production.nativeVideoSession, getBridge: () => textureBridge, getWindow: () => window, sharedTexture,
+    writeDiagnostic: production.writeMediaDiagnostic, recordFailure: production.recordVideoFailure,
+    notifyFailure: (...args) => production.notifyNativeVideoError(...args),
+  });
   const main = readFileSync(resolve(__dirname, '../main.cjs'), 'utf8');
   // 运行生产入口本身，不复制另一套纹理交付和清理逻辑；不执行应用启动代码。
   runInNewContext([
-    sourceRange(main, 'function releaseHelperProcessBridge(', 'function handleVideoCaptureSuspended('),
+    sourceRange(main, 'function notifyNativeVideoError(', 'function handleVideoCaptureSuspended('),
     sourceRange(main, 'function handleVideoCaptureSuspended(', 'function handleMediaHelperFailure('),
-    sourceRange(main, 'function handleMediaHelperFailure(', 'function handleNativeSharedTextureFrame('),
-    sourceRange(main, 'function handleNativeSharedTextureFrame(', 'const activityMonitor ='),
+    sourceRange(main, 'function handleMediaHelperFailure(', 'async function prepareNativeVideoSource('),
+    sourceRange(main, 'async function prepareNativeVideoSource(', 'const activityMonitor ='),
     sourceRange(main, "ipcMain.handle('media:native-video:start',", "ipcMain.handle('media:remote-control:authorize',"),
     sourceRange(main, "ipcMain.on('media:native-video:receiver-error',", "ipcMain.handle('media:diagnostics',"),
     sourceRange(main, "ipcMain.handle('media:diagnostics',", "ipcMain.on('window:maximize',"),
@@ -192,7 +204,7 @@ app.whenReady().then(async () => {
     modulePath: resolve(prepared, 'obs-plugins/64bit/win-capture.dll'),
     dataPath: resolve(prepared, 'data/obs-plugins/win-capture'),
     configPath: resolve(app.getPath('userData'), 'obs-capture', '32.2.2'),
-    onFrame: production.handleNativeSharedTextureFrame,
+    onFrame: production.nativeVideoTextures.receiveFrame,
     onFailure: (state, error) => {
       diagnostics.push(`obsFailure:${error.message}`);
       const video = production.nativeVideoSession;
@@ -201,7 +213,7 @@ app.whenReady().then(async () => {
         production.notifyNativeVideoError(video, error.message === 'captureTargetClosed' ? error.message : 'obsCaptureHostFailed');
       }
     },
-    onClosed: production.releaseHelperProcessBridge,
+    onClosed: production.nativeVideoTextures.releaseHost,
     onSuspended: production.handleVideoCaptureSuspended,
     onCaptureDiagnostic: (_state, entry) => captureEvidence.push({ ...entry, atMs: Math.round(performance.now()) }),
     onDiagnostic: (message) => { if (diagnostics.length < 30) diagnostics.push(message.slice(0, 250)); },
@@ -747,7 +759,7 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
     assert(stopped.readyState === 'ended', 'generatedTrackNotEnded');
     if (mode === 'helper-exit') {
       assert(state.closed && (state.child.exitCode !== null || state.child.signalCode !== null)
-        && production.helperProcessBridges.size === 0, 'helperExitNotConfirmed');
+        && openTextureHosts === 0, 'helperExitNotConfirmed');
     } else if (mode === 'receiver-failure') {
       assert(state.closed || (manager.state === state && !state.videoSessionId), 'failedReceiverCaptureNotStopped');
     } else assert(manager.state === state && !state.closed, 'successfulStopDidNotRetainHost');
