@@ -69,6 +69,7 @@
 - 浏览器 Chromium 与桌面原生是明确的平台边界，不是桌面采集失败后的静默回退。
 - 不把内部错误码或采集术语直接堆进用户流程；必要错误仍明确报告，正常取消不当成故障。
 - 群聊入口为 `GroupChat.vue`（发送、附件和展示）；消息查询、分页游标及缓存写入由 `chat/useGroupMessages.ts` 持有，阅读位置、未读定位和布局补偿由 `chat/useChatScroll.ts` 持有。实例随群 ID 销毁，观看布局变化不重建群聊。
+- RTC 房间、发布权限和离房清理仍由 `rtc/useRtcRoom.ts` 统一持有；`applyMicrophoneEnabled` 管理麦克风采集与禁发，`applyScreenShareEnabled` 管理画面及关联共享声音，远控只调用共享流程。两者的并发与迟到结果回归入口为 `rtc/useRtcRoom.test.ts`；设置页按实际用途声明 RTC 字段，不依赖整个房间操作集合。
 
 ## Rust 原生代码
 

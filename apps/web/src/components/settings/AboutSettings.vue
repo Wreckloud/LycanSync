@@ -8,7 +8,7 @@ import DiagnosticReportSettings from './DiagnosticReportSettings.vue';
 import type { useDiagnosticReport } from '../../diagnostics/useDiagnosticReport';
 import packageInfo from '../../../package.json';
 
-const props = defineProps<{ rtc: UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>; active: boolean;
+const props = defineProps<{ rtc: Pick<UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>, 'room' | 'revision' | 'status'>; active: boolean;
   report: ReturnType<typeof useDiagnosticReport> }>();
 const diagnosticsOpen = ref(false);
 const room = computed(() => props.rtc.room);

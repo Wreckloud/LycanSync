@@ -11,7 +11,10 @@ import ExpandSection from '../ExpandSection.vue';
 import InlineFeedback from '../InlineFeedback.vue';
 
 const props = defineProps<{
-  active: boolean; rtc: UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>; sharedAudio: boolean;
+  active: boolean;
+  rtc: Pick<UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>, 'screenShareActive' | 'currentScreenShareAudioMode'
+    | 'screenShareQualityBusy' | 'screenShareSourceBusy' | 'busySources' | 'notice' | 'screenShareAudioRestricted'>;
+  sharedAudio: boolean;
   quality: ScreenShareQualityId; customQuality: CustomScreenShareQuality;
   changeQuality: (quality: ScreenShareQualityId, customQuality?: CustomScreenShareQuality) => Promise<boolean>;
   changeAudio: (enabled: boolean) => Promise<boolean>;

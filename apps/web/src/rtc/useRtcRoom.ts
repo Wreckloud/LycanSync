@@ -280,7 +280,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           notice.value = MICROPHONE_STOP_NOTICE;
           return;
         }
-        await applyMediaEnabled(Track.Source.Microphone, enabled);
+        await applyMicrophoneEnabled(enabled);
       } while (activeRoom.value === currentRoom && appliedVersion !== microphoneVersion);
     })().finally(() => { if (microphoneTask === task) microphoneTask = null; });
     return task.promise;
@@ -700,13 +700,13 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     if (!resource && currentRoom.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track) {
       throw new Error('screenShareCannotRestoreSource');
     }
-    if (resource) await applyMediaEnabled(Track.Source.ScreenShare, false);
+    if (resource) await applyScreenShareEnabled(false);
     if (screenShareResource || nativeScreenAudioSession) throw new Error('nativeVideoStopNotConfirmed');
     // 快照只属于本机本次操作；新意愿、离房和失效来源都不允许自动恢复。
     return async (replacement?: ScreenShareResource | null) => {
       if (activeRoom.value !== currentRoom) return;
       if (replacement && screenShareResource === replacement && !pendingMedia.value.has(Track.Source.ScreenShare)) {
-        await applyMediaEnabled(Track.Source.ScreenShare, false);
+        await applyScreenShareEnabled(false);
         if (screenShareResource === replacement) throw new Error('nativeVideoStopNotConfirmed');
       }
       if (!snapshot || version !== screenShareIntentVersion || status.value !== 'connected'
@@ -716,7 +716,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       if (activeRoom.value !== currentRoom || version !== screenShareIntentVersion || screenShareResource
           || status.value !== 'connected' || currentRoom.state !== ConnectionState.Connected) return;
       if (!sources.sources.some(source => source.sourceId === snapshot.sourceId)) throw new Error('videoSourceExpired');
-      await applyMediaEnabled(Track.Source.ScreenShare, true, snapshot);
+      await applyScreenShareEnabled(true, snapshot);
       if (activeRoom.value !== currentRoom) return;
       const restored = screenShareResource as ScreenShareResource | null;
       if (!restored && (version !== screenShareIntentVersion || status.value !== 'connected')) return;
@@ -747,7 +747,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     let replacement: ScreenShareResource | null = null;
     try {
       if (!current()) throw new Error('remoteControlCancelled');
-      await applyMediaEnabled(Track.Source.ScreenShare, true, { sourceId, shareAudio: false, quality: 'standard',
+      await applyScreenShareEnabled(true, { sourceId, shareAudio: false, quality: 'standard',
         controllerIdentity: publicVideo ? undefined : identity, controlTemporary: true }, signal);
       replacement = screenShareResource;
       if (!current() || !replacement?.remoteShare || replacement.kind !== 'monitor') throw new Error('remoteControlShareFailed');
@@ -773,11 +773,11 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         const finish = remoteControl.active.value ? remoteControl.exitControl() : remoteControl.cancelPending();
         return finish.then(() => {
           if (activeRoom.value === currentRoom && version === screenShareIntentVersion && status.value === 'connected') {
-            return applyMediaEnabled(source, true, selectedSource);
+            return applyScreenShareEnabled(true, selectedSource);
           }
         });
       }
-      return applyMediaEnabled(source, enabled, selectedSource);
+      return applyScreenShareEnabled(enabled, selectedSource);
     }
     if (!activeRoom.value || (enabled && status.value !== 'connected')) return Promise.resolve();
     if (enabled && microphoneEnabled.value && listening.value) return Promise.resolve();
@@ -791,49 +791,26 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     return synchronizeMicrophone();
   }
 
-  async function applyMediaEnabled(source: MediaSource, enabled: boolean, selectedSource?: NativeScreenSourceSelection,
-    captureSignal?: AbortSignal) {
+  async function applyMicrophoneEnabled(enabled: boolean) {
+    const source = Track.Source.Microphone;
     const currentRoom = activeRoom.value;
     if (!currentRoom || (currentRoom.state !== ConnectionState.Connected && enabled)
       || pendingMedia.value.has(source)) return;
     const operations = pendingMedia.value;
     operations.add(source);
     const version = microphoneVersion;
-    const shareVersion = screenShareIntentVersion;
     const isCurrentTask = () => activeRoom.value === currentRoom && pendingMedia.value === operations
-      && (source !== Track.Source.Microphone || !enabled || version === microphoneVersion)
-      && (source !== Track.Source.ScreenShare || !enabled || (!screenShareSelectionCancelled.value
-        && shareVersion === screenShareIntentVersion && !captureSignal?.aborted));
-    const microphoneProcessorAtStart = source === Track.Source.Microphone ? microphoneProcessor : null;
+      && (!enabled || version === microphoneVersion);
+    const microphoneProcessorAtStart = microphoneProcessor;
     busySources.value = [...operations];
     notice.value = '';
-    if (source === Track.Source.ScreenShare && enabled) screenShareSelectionCancelled.value = false;
     let capturedTracks: LocalTrack[] = [];
-    let selectedQuality = options?.screenShareQuality ?? 'standard';
-    let selectedCustomQuality = validateCustomScreenShareQuality(currentCustomScreenShareQuality.value);
-    let sharePreset = screenShareVideoPreset(selectedQuality, selectedCustomQuality);
     let microphoneProcessorForTask: MicrophoneAudioProcessor | null = null;
-    let nativeVideo: NativeScreenVideoSession | null = null;
-    let shareResource: ScreenShareResource | null = null;
-    let nativeAudio: NativeScreenAudioSession | null = null;
     let nativeMicrophone: NativeMicrophoneAudioSession | null = null;
-    let nativeSourceId: string | null = null;
-    let shareAudioRequested = false;
-    let videoStartupStartedAt = 0;
     let published = false;
-    let nativeVideoStopFailed = false;
     const roomTracks = tracksByRoom.get(currentRoom);
-    const cancelCapture = () => {
-      // 发布结果可能仍在等待 SDK，取消时先撤销本任务的视频资格，迟到 SID 不能得到权限。
-      if (activeRoom.value === currentRoom && pendingMedia.value === operations) screenShareStarting.value = false;
-      if (activeRoom.value === currentRoom && shareResource && screenShareResource === shareResource) {
-        shareResource.stopping = true;
-        retireRoomTrack(currentRoom, shareResource.videoTrack);
-      }
-    };
-    captureSignal?.addEventListener('abort', cancelCapture, { once: true });
     try {
-      if (source === Track.Source.Microphone && options?.events?.beforeMicrophoneChange) {
+      if (options?.events?.beforeMicrophoneChange) {
         try { await options.events.beforeMicrophoneChange(); }
         catch {
           if (isCurrentTask()) notice.value = '停止麦克风试听时发生问题，请重启应用后再使用麦克风。';
@@ -842,60 +819,10 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         }
         if (!isCurrentTask()) return;
       }
-      // 1. 关闭时取消发布并释放设备，而不是仅把采集中的音频静音。
       const participant = currentRoom.localParticipant;
       const existingTrack = participant.getTrackPublication(source)?.track;
       if (!enabled) {
-        if (source === Track.Source.ScreenShare) {
-          shareResource = screenShareResource;
-          nativeVideo = shareResource?.videoSession ?? null;
-          nativeAudio = nativeScreenAudioSession;
-          if (shareResource) shareResource.stopping = true;
-          const videoTrack = shareResource?.videoTrack ?? existingTrack;
-          const shareAudioTrack = participant.getTrackPublication(Track.Source.ScreenShareAudio)?.track;
-          if (videoTrack) retireRoomTrack(currentRoom, videoTrack);
-          if (shareAudioTrack) retireRoomTrack(currentRoom, shareAudioTrack);
-          // 声音可能已交给 SDK 但尚未返回发布结果，也必须先撤销其公开资格。
-          if (nativeAudio?.track && nativeAudio.track !== shareAudioTrack) retireRoomTrack(currentRoom, nativeAudio.track);
-          if (screenShareResource === shareResource) screenShareResource = null;
-          if (nativeScreenAudioSession === nativeAudio) nativeScreenAudioSession = null;
-          const nativeStop = nativeVideo?.stop();
-          await remoteControl.endShare(currentRoom, shareResource?.remoteShare ?? null);
-          let videoStopFailed = false;
-          let videoStopError: unknown;
-          let audioStopFailed = false;
-          let audioStopError: unknown;
-          try {
-            await Promise.all([
-              videoTrack ? participant.unpublishTrack(videoTrack, true) : Promise.resolve(),
-              shareAudioTrack ? participant.unpublishTrack(shareAudioTrack, true) : Promise.resolve(),
-            ]);
-          } finally {
-            try {
-              await nativeStop;
-            } catch (error) {
-              nativeVideoStopFailed = true;
-              videoStopFailed = true;
-              videoStopError = error;
-              if (isCurrentTask() && shareResource && !screenShareResource) screenShareResource = shareResource;
-            }
-            try {
-              await nativeAudio?.stop();
-            } catch (error) {
-              audioStopFailed = true;
-              audioStopError = error;
-              reportNativeAudioCleanupFailure(error);
-              if (isCurrentTask() && nativeAudio && !nativeScreenAudioSession) {
-                nativeScreenAudioSession = nativeAudio;
-              }
-            }
-            if (!videoStopFailed && shareResource?.captureSessionId) {
-              remoteControl.completeNativeCleanup(shareResource.captureSessionId);
-            }
-            if (videoStopFailed) throw videoStopError;
-            if (audioStopFailed) throw audioStopError;
-          }
-        } else if (existingTrack) {
+        if (existingTrack) {
           disableMicrophoneTrack(existingTrack);
           retireRoomTrack(currentRoom, existingTrack);
           nativeMicrophone = nativeMicrophoneSession;
@@ -913,219 +840,397 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           const failures = stops.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
           if (failures.length) throw new AggregateError(failures.map((result) => result.reason), '麦克风清理未完成');
         }
-        if (source === Track.Source.Microphone && microphoneProcessor === microphoneProcessorAtStart) {
-          microphoneProcessor = null;
+        if (microphoneProcessor === microphoneProcessorAtStart) microphoneProcessor = null;
+        return;
+      }
+      if (existingTrack) { published = true; return; }
+
+      const desktop = window.lycanDesktop;
+      if (microphonePushToTalk && !desktop) throw new Error('pushToTalkUnsupported');
+      if (desktop) {
+        const nativeSettings: NativeMicrophoneSettings = {
+          inputGain: microphoneInputGain,
+          noiseSuppression: microphoneProcessing.noiseSuppression,
+          autoGainControl: microphoneProcessing.autoGainControl,
+          voiceEnhancement: microphoneProcessing.voiceEnhancement,
+        };
+        nativeMicrophone = new NativeMicrophoneAudioSession(desktop, {
+          deviceId: microphoneInputDeviceId,
+          pushToTalk: microphonePushToTalk,
+          onError: (code) => {
+            if (nativeMicrophoneSession !== nativeMicrophone || activeRoom.value !== currentRoom) return;
+            microphoneVersion++;
+            forbidMicrophone();
+            // 原生中断同样走房间的关麦清理，不留下另一条吞错的取消发布路径。
+            void applyMicrophoneEnabled(false);
+            const reason = code === 'microphoneDeviceUnavailable'
+              ? '所选麦克风已断开或不可用'
+              : code === 'microphoneProcessingFailed'
+                ? '麦克风声音处理已中断'
+                : '麦克风连接已中断';
+            notice.value = `麦克风已停止：${reason}。`;
+            revision.value++;
+          },
+        });
+        nativeMicrophoneSession = nativeMicrophone;
+        capturedTracks = [await nativeMicrophone.start(crypto.randomUUID(), nativeSettings)];
+        capturedTracks.forEach((track) => {
+          microphoneTracks.set(track, track.mediaStreamTrack);
+          disableMicrophoneTrack(track);
+        });
+        if (!isCurrentTask()) return;
+      } else {
+        const processor = new MicrophoneAudioProcessor(microphoneInputGain, microphoneProcessing.voiceEnhancement);
+        capturedTracks = await participant.createTracks({
+          audio: {
+            deviceId: microphoneInputDeviceId === 'default' ? undefined : { exact: microphoneInputDeviceId },
+            echoCancellation: microphoneProcessing.echoCancellation,
+            noiseSuppression: microphoneProcessing.noiseSuppression,
+            autoGainControl: microphoneProcessing.autoGainControl,
+          },
+          video: false,
+        });
+        capturedTracks.forEach((track) => {
+          microphoneTracks.set(track, track.mediaStreamTrack);
+          disableMicrophoneTrack(track);
+        });
+        if (!isCurrentTask()) return;
+        const audioTrack = capturedTracks.find((track): track is LocalAudioTrack => track instanceof LocalAudioTrack);
+        if (!audioTrack) throw new Error('麦克风采集未返回音频轨道');
+        // LocalParticipant.createTracks 返回后才会给轨道注入房间的 AudioContext，此时接入处理器才可靠。
+        await audioTrack.setProcessor(processor);
+        disableMicrophoneTrack(audioTrack);
+        if (!isCurrentTask()) return;
+        processor.setInputGain(microphoneInputGain);
+        processor.setVoiceEnhancement(microphoneProcessing.voiceEnhancement);
+        microphoneProcessorForTask = processor;
+        microphoneProcessor = processor;
+      }
+      if (!isCurrentTask()) return;
+      capturedTracks.forEach((track) => {
+        unpublishedTracks.value.add(track);
+        roomTracks?.eligibleTracks.add(track);
+      });
+      const publishResults = await Promise.allSettled(capturedTracks.map((track) =>
+        nativeMicrophone && track === nativeMicrophone.track
+          ? participant.publishTrack(track, { source }) : participant.publishTrack(track)));
+      const failedPublish = publishResults.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failedPublish) throw failedPublish.reason;
+      published = true;
+      if (!isCurrentTask()) return;
+      // 发布成功且任务仍属于当前意愿，才开放原始输入、处理输出和 sender。
+      capturedTracks.forEach((track) => {
+        microphoneTracks.get(track)!.enabled = true;
+        track.mediaStreamTrack.enabled = true;
+        if (track.sender?.track) track.sender.track.enabled = true;
+      });
+      microphoneEnabled.value = true;
+      publishResults.forEach((result) => {
+        if (result.status === 'fulfilled' && result.value.track
+          && roomTracks?.eligibleTracks.has(result.value.track)
+          && typeof result.value.trackSid === 'string' && result.value.trackSid) {
+          roomTracks.publishedSids.set(result.value.track, result.value.trackSid);
+        }
+      });
+      updateTrackSubscriptionPermissions(currentRoom);
+    } catch (error) {
+      if (enabled) {
+        published = false;
+        if (isCurrentTask()) forbidMicrophone();
+      } else {
+        microphoneCleanupFailed = true;
+        reportNativeAudioCleanupFailure(error);
+        if (activeRoom.value === currentRoom) notice.value = MICROPHONE_STOP_NOTICE;
+      }
+      if (isCurrentTask()) notice.value = enabled ? captureErrorMessage(error, source) : MICROPHONE_STOP_NOTICE;
+    } finally {
+      // 禁发先于异步清理；旧房间的轨道只由本任务所属房间回收。
+      const releaseTracks = !published || !isCurrentTask();
+      if (releaseTracks) capturedTracks.forEach(disableMicrophoneTrack);
+      const releasedTracks = new Set<LocalTrack>();
+      if (releaseTracks && capturedTracks.length) {
+        capturedTracks.forEach((track) => retireRoomTrack(currentRoom, track));
+        const participant = currentRoom.localParticipant;
+        const publications = [...participant.trackPublications.values()]
+          .filter((publication) => publication.track && capturedTracks.includes(publication.track));
+        await Promise.all(publications.map(async (publication) => {
+          const track = publication.track;
+          if (!track) return;
+          try {
+            await participant.unpublishTrack(track, true);
+            releasedTracks.add(track);
+          } catch (error) {
+            reportNativeAudioCleanupFailure(error);
+            microphoneCleanupFailed = true;
+          }
+        }));
+      }
+      capturedTracks.forEach((track) => {
+        unpublishedTracks.value.delete(track);
+        if (releaseTracks && !releasedTracks.has(track)) {
+          try {
+            track.stop();
+          } catch (error) {
+            reportNativeAudioCleanupFailure(error);
+            microphoneCleanupFailed = true;
+          }
+        }
+        if (releaseTracks) microphoneTracks.delete(track);
+      });
+      if (releaseTracks) {
+        const muted = await Promise.allSettled(capturedTracks.map((track) => microphoneMutes.get(track)));
+        if (muted.some((result) => result.status === 'rejected')) microphoneCleanupFailed = true;
+        const processorToRelease = microphoneProcessorForTask ?? microphoneProcessorAtStart;
+        if (processorToRelease && microphoneProcessor === processorToRelease) microphoneProcessor = null;
+        if (nativeMicrophone) {
+          if (nativeMicrophoneSession === nativeMicrophone) nativeMicrophoneSession = null;
+          await nativeMicrophone.stop().catch((error) => {
+            microphoneCleanupFailed = true;
+            reportNativeAudioCleanupFailure(error);
+          });
+        }
+        if (microphoneCleanupFailed && activeRoom.value === currentRoom) {
+          notice.value = MICROPHONE_STOP_NOTICE;
+          forbidMicrophone();
+        }
+      }
+      if (releaseTracks) updateTrackSubscriptionPermissions(currentRoom);
+      operations.delete(source);
+      if (activeRoom.value === currentRoom && pendingMedia.value === operations) busySources.value = [...operations];
+      revision.value++;
+    }
+  }
+
+  async function applyScreenShareEnabled(enabled: boolean, selectedSource?: NativeScreenSourceSelection,
+    captureSignal?: AbortSignal) {
+    const source = Track.Source.ScreenShare;
+    const currentRoom = activeRoom.value;
+    if (!currentRoom || (currentRoom.state !== ConnectionState.Connected && enabled)
+      || pendingMedia.value.has(source)) return;
+    const operations = pendingMedia.value;
+    operations.add(source);
+    const shareVersion = screenShareIntentVersion;
+    const isCurrentTask = () => activeRoom.value === currentRoom && pendingMedia.value === operations
+      && (!enabled || (!screenShareSelectionCancelled.value
+        && shareVersion === screenShareIntentVersion && !captureSignal?.aborted));
+    busySources.value = [...operations];
+    notice.value = '';
+    if (enabled) screenShareSelectionCancelled.value = false;
+    let capturedTracks: LocalTrack[] = [];
+    let selectedQuality = options?.screenShareQuality ?? 'standard';
+    let selectedCustomQuality = validateCustomScreenShareQuality(currentCustomScreenShareQuality.value);
+    let sharePreset = screenShareVideoPreset(selectedQuality, selectedCustomQuality);
+    let nativeVideo: NativeScreenVideoSession | null = null;
+    let shareResource: ScreenShareResource | null = null;
+    let nativeAudio: NativeScreenAudioSession | null = null;
+    let nativeSourceId: string | null = null;
+    let shareAudioRequested = false;
+    let videoStartupStartedAt = 0;
+    let published = false;
+    let nativeVideoStopFailed = false;
+    const roomTracks = tracksByRoom.get(currentRoom);
+    const cancelCapture = () => {
+      // 发布结果可能仍在等待 SDK，取消时先撤销本任务的视频资格，迟到 SID 不能得到权限。
+      if (activeRoom.value === currentRoom && pendingMedia.value === operations) screenShareStarting.value = false;
+      if (activeRoom.value === currentRoom && shareResource && screenShareResource === shareResource) {
+        shareResource.stopping = true;
+        retireRoomTrack(currentRoom, shareResource.videoTrack);
+      }
+    };
+    captureSignal?.addEventListener('abort', cancelCapture, { once: true });
+    try {
+      // 1. 关闭时取消发布并释放设备，而不是仅把采集中的音频静音。
+      const participant = currentRoom.localParticipant;
+      const existingTrack = participant.getTrackPublication(source)?.track;
+      if (!enabled) {
+        shareResource = screenShareResource;
+        nativeVideo = shareResource?.videoSession ?? null;
+        nativeAudio = nativeScreenAudioSession;
+        if (shareResource) shareResource.stopping = true;
+        const videoTrack = shareResource?.videoTrack ?? existingTrack;
+        const shareAudioTrack = participant.getTrackPublication(Track.Source.ScreenShareAudio)?.track;
+        if (videoTrack) retireRoomTrack(currentRoom, videoTrack);
+        if (shareAudioTrack) retireRoomTrack(currentRoom, shareAudioTrack);
+        // 声音可能已交给 SDK 但尚未返回发布结果，也必须先撤销其公开资格。
+        if (nativeAudio?.track && nativeAudio.track !== shareAudioTrack) retireRoomTrack(currentRoom, nativeAudio.track);
+        if (screenShareResource === shareResource) screenShareResource = null;
+        if (nativeScreenAudioSession === nativeAudio) nativeScreenAudioSession = null;
+        const nativeStop = nativeVideo?.stop();
+        await remoteControl.endShare(currentRoom, shareResource?.remoteShare ?? null);
+        let videoStopFailed = false;
+        let videoStopError: unknown;
+        let audioStopFailed = false;
+        let audioStopError: unknown;
+        try {
+          await Promise.all([
+            videoTrack ? participant.unpublishTrack(videoTrack, true) : Promise.resolve(),
+            shareAudioTrack ? participant.unpublishTrack(shareAudioTrack, true) : Promise.resolve(),
+          ]);
+        } finally {
+          try {
+            await nativeStop;
+          } catch (error) {
+            nativeVideoStopFailed = true;
+            videoStopFailed = true;
+            videoStopError = error;
+            if (isCurrentTask() && shareResource && !screenShareResource) screenShareResource = shareResource;
+          }
+          try {
+            await nativeAudio?.stop();
+          } catch (error) {
+            audioStopFailed = true;
+            audioStopError = error;
+            reportNativeAudioCleanupFailure(error);
+            if (isCurrentTask() && nativeAudio && !nativeScreenAudioSession) {
+              nativeScreenAudioSession = nativeAudio;
+            }
+          }
+          if (!videoStopFailed && shareResource?.captureSessionId) {
+            remoteControl.completeNativeCleanup(shareResource.captureSessionId);
+          }
+          if (videoStopFailed) throw videoStopError;
+          if (audioStopFailed) throw audioStopError;
         }
         return;
       }
-      if (existingTrack) {
-        if (source === Track.Source.Microphone) published = true;
-        return;
-      }
-      if (source === Track.Source.ScreenShare && (screenShareResource || nativeScreenAudioSession)) {
+      if (existingTrack) return;
+      if (screenShareResource || nativeScreenAudioSession) {
         throw new Error('nativeVideoStopNotConfirmed');
       }
 
       // 2. 用户点击后才请求采集；浏览器路径保留原有无共享声音行为。
-      if (source === Track.Source.Microphone) {
-        const desktop = window.lycanDesktop;
-        if (microphonePushToTalk && !desktop) throw new Error('pushToTalkUnsupported');
-        if (desktop) {
-          const nativeSettings: NativeMicrophoneSettings = {
-            inputGain: microphoneInputGain,
-            noiseSuppression: microphoneProcessing.noiseSuppression,
-            autoGainControl: microphoneProcessing.autoGainControl,
-            voiceEnhancement: microphoneProcessing.voiceEnhancement,
-          };
-          nativeMicrophone = new NativeMicrophoneAudioSession(desktop, {
-            deviceId: microphoneInputDeviceId,
-            pushToTalk: microphonePushToTalk,
-            onError: (code) => {
-              if (nativeMicrophoneSession !== nativeMicrophone || activeRoom.value !== currentRoom) return;
-              microphoneVersion++;
-              forbidMicrophone();
-              // 原生中断同样走房间的关麦清理，不留下另一条吞错的取消发布路径。
-              void applyMediaEnabled(Track.Source.Microphone, false);
-              const reason = code === 'microphoneDeviceUnavailable'
-                ? '所选麦克风已断开或不可用'
-                : code === 'microphoneProcessingFailed'
-                  ? '麦克风声音处理已中断'
-                  : '麦克风连接已中断';
-              notice.value = `麦克风已停止：${reason}。`;
-              revision.value++;
-            },
-          });
-          nativeMicrophoneSession = nativeMicrophone;
-          capturedTracks = [await nativeMicrophone.start(crypto.randomUUID(), nativeSettings)];
-          capturedTracks.forEach((track) => {
-            microphoneTracks.set(track, track.mediaStreamTrack);
-            disableMicrophoneTrack(track);
-          });
-          if (!isCurrentTask()) return;
-        } else {
-          const processor = new MicrophoneAudioProcessor(microphoneInputGain, microphoneProcessing.voiceEnhancement);
-          capturedTracks = await participant.createTracks({
-            audio: {
-              deviceId: microphoneInputDeviceId === 'default' ? undefined : { exact: microphoneInputDeviceId },
-              echoCancellation: microphoneProcessing.echoCancellation,
-              noiseSuppression: microphoneProcessing.noiseSuppression,
-              autoGainControl: microphoneProcessing.autoGainControl,
-            },
-            video: false,
-          });
-          capturedTracks.forEach((track) => {
-            microphoneTracks.set(track, track.mediaStreamTrack);
-            disableMicrophoneTrack(track);
-          });
-          if (!isCurrentTask()) return;
-          const audioTrack = capturedTracks.find((track): track is LocalAudioTrack => track instanceof LocalAudioTrack);
-          if (!audioTrack) throw new Error('麦克风采集未返回音频轨道');
-          // LocalParticipant.createTracks 返回后才会给轨道注入房间的 AudioContext，此时接入处理器才可靠。
-          await audioTrack.setProcessor(processor);
-          disableMicrophoneTrack(audioTrack);
-          if (!isCurrentTask()) return;
-          processor.setInputGain(microphoneInputGain);
-          processor.setVoiceEnhancement(microphoneProcessing.voiceEnhancement);
-          microphoneProcessorForTask = processor;
-          microphoneProcessor = processor;
-        }
-      } else {
-        const desktop = window.lycanDesktop;
-        if (desktop) {
-          const selectSource = options?.events?.selectNativeScreenSource;
-          const capabilitiesPromise = desktop.getNativeMediaCapabilities();
-          if (!selectedSource && !selectSource) {
-            const capabilities = await capabilitiesPromise;
-            if (!isCurrentTask()) return;
-            if (!capabilities.videoCapture?.available) {
-              throw new Error(capabilities.videoCapture?.reason || 'nativeVideoUnavailable');
-            }
-            throw new Error('nativeSourceSelectionUnavailable');
-          }
-          const selection = selectedSource ?? await selectSource!(capabilitiesPromise);
-          if (!isCurrentTask() || screenShareSelectionCancelled.value || !selection) return;
-          screenShareStarting.value = true;
+      const desktop = window.lycanDesktop;
+      if (desktop) {
+        const selectSource = options?.events?.selectNativeScreenSource;
+        const capabilitiesPromise = desktop.getNativeMediaCapabilities();
+        if (!selectedSource && !selectSource) {
           const capabilities = await capabilitiesPromise;
-          if (!isCurrentTask() || screenShareSelectionCancelled.value) return;
+          if (!isCurrentTask()) return;
           if (!capabilities.videoCapture?.available) {
             throw new Error(capabilities.videoCapture?.reason || 'nativeVideoUnavailable');
           }
-          const { sourceId } = selection;
-          selectedQuality = selection.quality ?? selectedQuality;
-          selectedCustomQuality = validateCustomScreenShareQuality(selection.customQuality ?? selectedCustomQuality);
-          sharePreset = screenShareVideoPreset(selectedQuality, selectedCustomQuality);
-          const selectedProfile = screenShareQuality(selectedQuality, selectedCustomQuality);
-          nativeSourceId = sourceId;
-          const kind = sourceId.startsWith('monitor:') ? 'monitor' : 'window';
-          nativeVideo = new NativeScreenVideoSession(desktop, {
-            maxFps: selectedProfile.fps,
-            captureSettings: selection.captureSettings,
-            resolution: { width: selectedProfile.width, height: selectedProfile.height },
-            contentHint: 'motion',
-            isCurrentCapture: () => activeRoom.value === currentRoom && screenShareResource === shareResource
-              && shareResource != null && !shareResource.stopping,
-            canReduceFrameRate: () => status.value === 'connected'
-              && currentRoom.state === ConnectionState.Connected
-              && shareResource?.liveKitTrackId != null && !remoteControl.owner.value && !remoteControl.granting.value
-              && currentRoom.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track === nativeVideo?.track,
-            canChangeGameSource: () => activeRoom.value === currentRoom && screenShareResource === shareResource
-              && !shareResource?.stopping && !shareResource?.audioChanging && !screenShareQualityBusy.value
-              && !screenShareSourceBusy.value && !pendingMedia.value.has(Track.Source.ScreenShare)
-              && currentRoom.state === ConnectionState.Connected && shareResource?.liveKitTrackId != null,
-            onGameSourceChanging: async () => {
-              if (!shareResource || screenShareResource !== shareResource || shareResource.stopping) throw new Error('nativeVideoSessionStopped');
-              shareResource.sourceChanging = true;
-              if (!await applyScreenShareAudioEnabled(false, true)) throw new Error('nativeAudioStopNotConfirmed');
-              await remoteControl.endShare(currentRoom, shareResource.remoteShare);
-            },
-            onGameSourceChanged: async (nextSourceId, nextSessionId) => {
-              if (!shareResource || screenShareResource !== shareResource || shareResource.stopping
-                  || activeRoom.value !== currentRoom) throw new Error('nativeVideoSessionStopped');
-              shareResource.sourceId = nextSourceId;
-              shareResource.captureSessionId = nextSessionId;
-              shareResource.remoteShare = { shareId: nextSessionId, captureSessionId: nextSessionId,
-                sourceId: nextSourceId, kind: 'window', liveKitTrackId: shareResource.liveKitTrackId };
-              shareResource.sourceChanging = false;
-              remoteControl.beginShare(currentRoom);
-              revision.value++;
-              // 与首次共享一致，画面切换完成后异步接回声音，不占用画质操作。
-              if (shareResource.audioWanted) void applyScreenShareAudioEnabled(true, true);
-            },
-            onFrameRateAdjustmentFailure: (frameRate) => {
-              if (activeRoom.value === currentRoom && screenShareResource === shareResource && !shareResource?.stopping) {
-                notice.value = `共享帧率调整失败，仍以 ${frameRate} FPS 为目标。`;
-              }
-            },
-            onError: (code) => {
-              const failedShareResource = shareResource;
-              const failedVideoSession = nativeVideo;
-              if (!failedShareResource || !failedVideoSession || screenShareResource !== failedShareResource
-                  || activeRoom.value !== currentRoom) return;
-              failedShareResource.stopping = true;
-              void remoteControl.endShare(currentRoom, failedShareResource.remoteShare);
-              if (code !== 'captureTargetClosed') notice.value = code === 'nativeGameFollowFailed'
-                ? '游戏窗口切换未能完成，共享已停止，请重新选择游戏窗口。' : `屏幕共享已停止（${code}）。`;
-              retireRoomTrack(currentRoom, failedShareResource.videoTrack);
-              void currentRoom.localParticipant.unpublishTrack(failedShareResource.videoTrack, true).catch(() => {});
-              const screenAudioTrack = currentRoom.localParticipant
-                .getTrackPublication(Track.Source.ScreenShareAudio)?.track ?? nativeScreenAudioSession?.track;
-              if (screenAudioTrack) {
-                retireRoomTrack(currentRoom, screenAudioTrack);
-                void currentRoom.localParticipant.unpublishTrack(screenAudioTrack, true).catch(() => {});
-              }
-              nativeAudio = nativeScreenAudioSession;
-              nativeScreenAudioSession = null;
-              void nativeAudio?.stop().catch(reportNativeAudioCleanupFailure);
-              void failedVideoSession.stop().then(() => {
-                if (screenShareResource === failedShareResource) screenShareResource = null;
-                if (failedShareResource.captureSessionId) {
-                  remoteControl.completeNativeCleanup(failedShareResource.captureSessionId);
-                }
-              }).catch((error) => {
-                reportNativeAudioCleanupFailure(error);
-                if (activeRoom.value === currentRoom && screenShareResource === failedShareResource) {
-                  notice.value = '停止屏幕共享时发生问题，请重启应用后再试。';
-                }
-              });
-              revision.value++;
-            },
-          });
-          shareResource = { captureSessionId: null, sourceId, kind, videoSession: nativeVideo,
-            captureSettings: selection.captureSettings ? { ...selection.captureSettings } : undefined,
-            videoTrack: nativeVideo.track, liveKitTrackId: null, remoteShare: null, quality: selectedQuality, customQuality: selectedCustomQuality,
-            audioMode: nativeScreenAudioMode(capabilities.screenShareAudioCapture), audioChanging: false,
-            audioWanted: selection.shareAudio, stopping: false,
-            controllerIdentity: selection.controllerIdentity, controlTemporary: selection.controlTemporary };
-          screenShareResource = shareResource;
-          videoStartupStartedAt = performance.now();
-          capturedTracks = [await nativeVideo.start(sourceId)];
-          shareResource.captureSessionId = nativeVideo.captureSessionId ?? null;
-          if (!isCurrentTask()) return;
-          shareAudioRequested = selection.shareAudio;
-        } else {
-          // 仅浏览器使用 Chromium 采集；Electron 原生失败不会回退到此路径。
-          capturedTracks = await participant.createScreenTracks({
-            audio: false,
-            contentHint: 'motion',
-            resolution: sharePreset.resolution,
-          });
-          if (!isCurrentTask()) return;
+          throw new Error('nativeSourceSelectionUnavailable');
         }
+        const selection = selectedSource ?? await selectSource!(capabilitiesPromise);
+        if (!isCurrentTask() || screenShareSelectionCancelled.value || !selection) return;
+        screenShareStarting.value = true;
+        const capabilities = await capabilitiesPromise;
+        if (!isCurrentTask() || screenShareSelectionCancelled.value) return;
+        if (!capabilities.videoCapture?.available) {
+          throw new Error(capabilities.videoCapture?.reason || 'nativeVideoUnavailable');
+        }
+        const { sourceId } = selection;
+        selectedQuality = selection.quality ?? selectedQuality;
+        selectedCustomQuality = validateCustomScreenShareQuality(selection.customQuality ?? selectedCustomQuality);
+        sharePreset = screenShareVideoPreset(selectedQuality, selectedCustomQuality);
+        const selectedProfile = screenShareQuality(selectedQuality, selectedCustomQuality);
+        nativeSourceId = sourceId;
+        const kind = sourceId.startsWith('monitor:') ? 'monitor' : 'window';
+        nativeVideo = new NativeScreenVideoSession(desktop, {
+          maxFps: selectedProfile.fps,
+          captureSettings: selection.captureSettings,
+          resolution: { width: selectedProfile.width, height: selectedProfile.height },
+          contentHint: 'motion',
+          isCurrentCapture: () => activeRoom.value === currentRoom && screenShareResource === shareResource
+            && shareResource != null && !shareResource.stopping,
+          canReduceFrameRate: () => status.value === 'connected'
+            && currentRoom.state === ConnectionState.Connected
+            && shareResource?.liveKitTrackId != null && !remoteControl.owner.value && !remoteControl.granting.value
+            && currentRoom.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track === nativeVideo?.track,
+          canChangeGameSource: () => activeRoom.value === currentRoom && screenShareResource === shareResource
+            && !shareResource?.stopping && !shareResource?.audioChanging && !screenShareQualityBusy.value
+            && !screenShareSourceBusy.value && !pendingMedia.value.has(Track.Source.ScreenShare)
+            && currentRoom.state === ConnectionState.Connected && shareResource?.liveKitTrackId != null,
+          onGameSourceChanging: async () => {
+            if (!shareResource || screenShareResource !== shareResource || shareResource.stopping) throw new Error('nativeVideoSessionStopped');
+            shareResource.sourceChanging = true;
+            if (!await applyScreenShareAudioEnabled(false, true)) throw new Error('nativeAudioStopNotConfirmed');
+            await remoteControl.endShare(currentRoom, shareResource.remoteShare);
+          },
+          onGameSourceChanged: async (nextSourceId, nextSessionId) => {
+            if (!shareResource || screenShareResource !== shareResource || shareResource.stopping
+                || activeRoom.value !== currentRoom) throw new Error('nativeVideoSessionStopped');
+            shareResource.sourceId = nextSourceId;
+            shareResource.captureSessionId = nextSessionId;
+            shareResource.remoteShare = { shareId: nextSessionId, captureSessionId: nextSessionId,
+              sourceId: nextSourceId, kind: 'window', liveKitTrackId: shareResource.liveKitTrackId };
+            shareResource.sourceChanging = false;
+            remoteControl.beginShare(currentRoom);
+            revision.value++;
+            // 与首次共享一致，画面切换完成后异步接回声音，不占用画质操作。
+            if (shareResource.audioWanted) void applyScreenShareAudioEnabled(true, true);
+          },
+          onFrameRateAdjustmentFailure: (frameRate) => {
+            if (activeRoom.value === currentRoom && screenShareResource === shareResource && !shareResource?.stopping) {
+              notice.value = `共享帧率调整失败，仍以 ${frameRate} FPS 为目标。`;
+            }
+          },
+          onError: (code) => {
+            const failedShareResource = shareResource;
+            const failedVideoSession = nativeVideo;
+            if (!failedShareResource || !failedVideoSession || screenShareResource !== failedShareResource
+                || activeRoom.value !== currentRoom) return;
+            failedShareResource.stopping = true;
+            void remoteControl.endShare(currentRoom, failedShareResource.remoteShare);
+            if (code !== 'captureTargetClosed') notice.value = code === 'nativeGameFollowFailed'
+              ? '游戏窗口切换未能完成，共享已停止，请重新选择游戏窗口。' : `屏幕共享已停止（${code}）。`;
+            retireRoomTrack(currentRoom, failedShareResource.videoTrack);
+            void currentRoom.localParticipant.unpublishTrack(failedShareResource.videoTrack, true).catch(() => {});
+            const screenAudioTrack = currentRoom.localParticipant
+              .getTrackPublication(Track.Source.ScreenShareAudio)?.track ?? nativeScreenAudioSession?.track;
+            if (screenAudioTrack) {
+              retireRoomTrack(currentRoom, screenAudioTrack);
+              void currentRoom.localParticipant.unpublishTrack(screenAudioTrack, true).catch(() => {});
+            }
+            nativeAudio = nativeScreenAudioSession;
+            nativeScreenAudioSession = null;
+            void nativeAudio?.stop().catch(reportNativeAudioCleanupFailure);
+            void failedVideoSession.stop().then(() => {
+              if (screenShareResource === failedShareResource) screenShareResource = null;
+              if (failedShareResource.captureSessionId) {
+                remoteControl.completeNativeCleanup(failedShareResource.captureSessionId);
+              }
+            }).catch((error) => {
+              reportNativeAudioCleanupFailure(error);
+              if (activeRoom.value === currentRoom && screenShareResource === failedShareResource) {
+                notice.value = '停止屏幕共享时发生问题，请重启应用后再试。';
+              }
+            });
+            revision.value++;
+          },
+        });
+        shareResource = { captureSessionId: null, sourceId, kind, videoSession: nativeVideo,
+          captureSettings: selection.captureSettings ? { ...selection.captureSettings } : undefined,
+          videoTrack: nativeVideo.track, liveKitTrackId: null, remoteShare: null, quality: selectedQuality, customQuality: selectedCustomQuality,
+          audioMode: nativeScreenAudioMode(capabilities.screenShareAudioCapture), audioChanging: false,
+          audioWanted: selection.shareAudio, stopping: false,
+          controllerIdentity: selection.controllerIdentity, controlTemporary: selection.controlTemporary };
+        screenShareResource = shareResource;
+        videoStartupStartedAt = performance.now();
+        capturedTracks = [await nativeVideo.start(sourceId)];
+        shareResource.captureSessionId = nativeVideo.captureSessionId ?? null;
+        if (!isCurrentTask()) return;
+        shareAudioRequested = selection.shareAudio;
+      } else {
+        // 仅浏览器使用 Chromium 采集；Electron 原生失败不会回退到此路径。
+        capturedTracks = await participant.createScreenTracks({
+          audio: false,
+          contentHint: 'motion',
+          resolution: sharePreset.resolution,
+        });
+        if (!isCurrentTask()) return;
       }
       // 3. 采集期间可能已经离房或取消选择；失效任务不能再发布。
-      if (!isCurrentTask() || (source === Track.Source.ScreenShare && screenShareSelectionCancelled.value)) return;
+      if (!isCurrentTask() || screenShareSelectionCancelled.value) return;
       capturedTracks.forEach((track) => unpublishedTracks.value.add(track));
       // 发布前登记范围，新 SID 默认拒绝；私密画面不能短暂进入全房间白名单。
       capturedTracks.forEach((track) => {
-        if (source === Track.Source.ScreenShare && selectedSource?.controllerIdentity) {
+        if (selectedSource?.controllerIdentity) {
           roomTracks?.controllers.set(track, selectedSource.controllerIdentity);
         }
         roomTracks?.eligibleTracks.add(track);
       });
       const publishResults = await Promise.allSettled(capturedTracks.map((track) => {
-        if (nativeMicrophone && track === nativeMicrophone.track) {
-          return participant.publishTrack(track, { source: Track.Source.Microphone });
-        }
         if (track.source === Track.Source.ScreenShare || (nativeVideo && track === nativeVideo.track)) {
           return participant.publishTrack(track, {
             source: Track.Source.ScreenShare,
@@ -1142,19 +1247,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       if (failedPublish) throw failedPublish.reason;
       published = true;
       if (!isCurrentTask()) return;
-      if (source === Track.Source.Microphone) {
-        // 发布成功且任务仍属于当前意愿，才开放原始输入、处理输出和 sender。
-        capturedTracks.forEach((track) => {
-          microphoneTracks.get(track)!.enabled = true;
-          track.mediaStreamTrack.enabled = true;
-          if (track.sender?.track) track.sender.track.enabled = true;
-        });
-        microphoneEnabled.value = true;
-      }
-      if (source === Track.Source.ScreenShare) {
-        currentScreenShareQuality.value = selectedQuality;
-        currentCustomScreenShareQuality.value = selectedCustomQuality;
-      }
+      currentScreenShareQuality.value = selectedQuality;
+      currentCustomScreenShareQuality.value = selectedCustomQuality;
       publishResults.forEach((result) => {
         if (result.status === 'fulfilled' && result.value.track
           && roomTracks?.eligibleTracks.has(result.value.track)
@@ -1184,31 +1278,20 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         }
       }
     } catch (error) {
-      if (source === Track.Source.Microphone && enabled) {
-        published = false;
-        if (isCurrentTask()) forbidMicrophone();
-      }
-      if (source === Track.Source.Microphone && !enabled) {
-        microphoneCleanupFailed = true;
-        reportNativeAudioCleanupFailure(error);
-        if (activeRoom.value === currentRoom) notice.value = MICROPHONE_STOP_NOTICE;
-      }
       // 自定义选择器的取消会被 Chromium 以拒绝采集返回；这是正常结束，不能误报为权限或连接故障。
-      const targetClosed = source === Track.Source.ScreenShare && error instanceof Error
+      const targetClosed = error instanceof Error
         && /(?:^|: )captureTargetClosed$/.test(error.message);
       if (isCurrentTask() && !targetClosed
-        && !(source === Track.Source.ScreenShare && screenShareSelectionCancelled.value)) {
+        && !screenShareSelectionCancelled.value) {
         notice.value = enabled ? captureErrorMessage(error, source)
           : nativeVideoStopFailed
             ? '停止屏幕共享时发生问题，请重启应用后再试。'
-            : source === Track.Source.Microphone ? MICROPHONE_STOP_NOTICE
-              : '停止屏幕共享时发生问题，请重新连接语音。';
+            : '停止屏幕共享时发生问题，请重新连接语音。';
       }
     } finally {
       captureSignal?.removeEventListener('abort', cancelCapture);
       // 4. 失败或旧房间的轨道只由本任务所属房间清理，避免碰到新房间的发布。
       const releaseTracks = !published || !isCurrentTask();
-      if (source === Track.Source.Microphone && releaseTracks) capturedTracks.forEach(disableMicrophoneTrack);
       const releasedTracks = new Set<LocalTrack>();
       if (releaseTracks && capturedTracks.length) {
         capturedTracks.forEach((track) => retireRoomTrack(currentRoom, track));
@@ -1223,7 +1306,6 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             releasedTracks.add(track);
           } catch (error) {
             reportNativeAudioCleanupFailure(error);
-            if (source === Track.Source.Microphone) microphoneCleanupFailed = true;
           }
         }));
       }
@@ -1234,10 +1316,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             track.stop();
           } catch (error) {
             reportNativeAudioCleanupFailure(error);
-            if (source === Track.Source.Microphone) microphoneCleanupFailed = true;
           }
         }
-        if (source === Track.Source.Microphone && releaseTracks) microphoneTracks.delete(track);
       });
       if (nativeVideo && releaseTracks) {
         try {
@@ -1255,26 +1335,9 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         if (nativeScreenAudioSession === nativeAudio) nativeScreenAudioSession = null;
         await nativeAudio.stop().catch(reportNativeAudioCleanupFailure);
       }
-      if (source === Track.Source.Microphone && releaseTracks) {
-        const muted = await Promise.allSettled(capturedTracks.map((track) => microphoneMutes.get(track)));
-        if (muted.some((result) => result.status === 'rejected')) microphoneCleanupFailed = true;
-        const processorToRelease = microphoneProcessorForTask ?? microphoneProcessorAtStart;
-        if (processorToRelease && microphoneProcessor === processorToRelease) microphoneProcessor = null;
-        if (nativeMicrophone) {
-          if (nativeMicrophoneSession === nativeMicrophone) nativeMicrophoneSession = null;
-          await nativeMicrophone.stop().catch((error) => {
-            microphoneCleanupFailed = true;
-            reportNativeAudioCleanupFailure(error);
-          });
-        }
-        if (microphoneCleanupFailed && activeRoom.value === currentRoom) {
-          notice.value = MICROPHONE_STOP_NOTICE;
-          forbidMicrophone();
-        }
-      }
       if (releaseTracks) updateTrackSubscriptionPermissions(currentRoom);
       operations.delete(source);
-      if (source === Track.Source.ScreenShare && activeRoom.value === currentRoom && pendingMedia.value === operations) {
+      if (activeRoom.value === currentRoom && pendingMedia.value === operations) {
         screenShareStarting.value = false;
         screenShareSelectionCancelled.value = false;
       }
@@ -1352,7 +1415,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     try {
       // 先禁发并等旧任务回收，不能在切换时重叠打开两支麦克风。
       await synchronizeMicrophone();
-      if (requestRoom && activeRoom.value === requestRoom) await applyMediaEnabled(Track.Source.Microphone, false);
+      if (requestRoom && activeRoom.value === requestRoom) await applyMicrophoneEnabled(false);
     } finally {
       microphoneDeviceChanging = false;
     }

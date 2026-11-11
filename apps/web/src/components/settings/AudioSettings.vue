@@ -15,7 +15,8 @@ import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP } from '../../rtc/audioPreferences'
 const props = defineProps<{
   desktop: boolean;
   preferences: ReturnType<typeof useAudioPreferences>;
-  rtc: UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>;
+  rtc: Pick<UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>,
+    'status' | 'busySources' | 'setMicrophoneProcessing' | 'setMicrophoneInputGain'>;
   microphoneTest: UnwrapNestedRefs<ReturnType<typeof useMicrophoneTest>>;
   microphoneDevices: UnwrapNestedRefs<ReturnType<typeof useMicrophoneDevices>>;
   audioOutput: ReturnType<typeof useAudioOutput>;

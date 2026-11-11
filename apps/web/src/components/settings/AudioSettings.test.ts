@@ -5,8 +5,6 @@ import { Track } from 'livekit-client';
 import AudioSettings from './AudioSettings.vue';
 import { useAudioPreferences } from '../../rtc/useAudioPreferences';
 import type { AudioProcessingSettings } from '../../rtc/audioPreferences';
-import type { useRtcRoom } from '../../rtc/useRtcRoom';
-import type { UnwrapNestedRefs } from 'vue';
 
 async function renderAudioSettings(testState: 'idle' | 'listening' | 'stopping' = 'idle', busy = false,
   desktop = true, stored: Partial<AudioProcessingSettings> = {}) {
@@ -15,8 +13,8 @@ async function renderAudioSettings(testState: 'idle' | 'listening' | 'stopping' 
   try {
     return await renderToString(createSSRApp(AudioSettings, {
       desktop, preferences, active: true, inputLevelPercent: 0,
-      rtc: { status: 'idle', room: null, busySources: busy ? [Track.Source.Microphone] : [] } as unknown as
-        UnwrapNestedRefs<ReturnType<typeof useRtcRoom>>,
+      rtc: { status: 'idle', busySources: busy ? [Track.Source.Microphone] : [],
+        setMicrophoneProcessing: async () => {}, setMicrophoneInputGain: () => {} } satisfies InstanceType<typeof AudioSettings>['$props']['rtc'],
       audioOutput: { devices: { value: [] }, notice: { value: '' }, available: { value: true }, changing: { value: false }, supported: true, refresh: async () => {}, select: async () => {} },
       microphoneDevices: { devices: [], notice: '', changing: false, loading: false, refresh: async () => {}, select: async () => {} },
       microphoneTest: { state: testState, notice: '测试错误', inputLevelPercent: 45,

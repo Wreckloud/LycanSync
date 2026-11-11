@@ -384,7 +384,8 @@ test('故障日志串行写入并轮转，保留最近一份历史', async () =>
     assert.equal(JSON.parse(await readFile(path, 'utf8')).stage, 'third');
     assert.equal(JSON.parse(await readFile(`${path}.previous`, 'utf8')).stage, 'second');
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    // 写入已全部等待；Windows 删除临时目录仍可能短暂返回 ENOTEMPTY，有限重试后继续报错。
+    await rm(directory, { recursive: true, force: true, maxRetries: 3 });
   }
 });
 
