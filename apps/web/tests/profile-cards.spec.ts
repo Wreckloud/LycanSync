@@ -479,6 +479,8 @@ test('快捷键录入松开后保存，冲突保持原设置，取消不会丢�
   await expect(recorder).toHaveText('未设置');
   const beforeMode = await recorder.boundingBox();
   await page.getByRole('group', { name: '发言模式', exact: true }).getByRole('button', { name: /^按键说话/ }).click();
+  await expect(page.locator('.shortcut-settings [role="alert"]')).toHaveText('请先为按键发言设置快捷键');
+  await expect(page.getByRole('group', { name: '发言模式', exact: true }).getByRole('button', { name: '自由发言', exact: true })).toHaveAttribute('aria-pressed', 'true');
   expect((await recorder.boundingBox())!.y).toBe(beforeMode!.y);
   await expect(page.locator('.shortcut-settings')).not.toContainText('等待按住快捷键');
   const talk = page.getByRole('button', { name: '设置按键说话快捷键', exact: true });
@@ -490,6 +492,8 @@ test('快捷键录入松开后保存，冲突保持原设置，取消不会丢�
   await page.keyboard.up(';');
   await expect(talk).toHaveText(';');
   await expect(talk).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('.shortcut-settings [role="alert"]')).toHaveCount(0);
+  await page.getByRole('group', { name: '发言模式', exact: true }).getByRole('button', { name: /^按键说话/ }).click();
   await page.reload();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '快捷键', exact: true }).click();
@@ -536,6 +540,9 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
   await expect(page.getByRole('heading', { name: '录制内容', exact: true })).toBeVisible();
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('lycansync.screen-share-quality')!).quality)).toBe('highFrameRate');
   await page.setViewportSize({ width: 1280, height: 820 });
+  const shareTogglePositions = await page.locator('.settings-toggle input[type="checkbox"]:visible').evaluateAll(inputs => inputs.map(input => input.getBoundingClientRect().right));
+  expect(shareTogglePositions).toHaveLength(5);
+  expect(Math.max(...shareTogglePositions) - Math.min(...shareTogglePositions)).toBeLessThan(1);
   await page.screenshot({ path: testInfo.outputPath('sharing-and-recording.png') });
 });
 
@@ -549,6 +556,9 @@ test('本机提示音只提供统一音量和逐项开关，重开后恢复，�
   await page.getByRole('slider', { name: '提示音音量', exact: true }).fill('40');
   await expect(page.getByRole('checkbox', { name: '成员加入语音', exact: true })).toBeChecked();
   await expect(page.getByRole('button', { name: '选择音效', exact: true })).toBeVisible();
+  const soundTogglePositions = await page.locator('.call-sound-settings input[type="checkbox"]').evaluateAll(inputs => inputs.map(input => input.getBoundingClientRect().right));
+  expect(soundTogglePositions).toHaveLength(11);
+  expect(Math.max(...soundTogglePositions) - Math.min(...soundTogglePositions)).toBeLessThan(1);
   await page.screenshot({ path: test.info().outputPath('call-sound-settings.png') });
   await page.reload();
   await page.getByRole('button', { name: '设置', exact: true }).click();

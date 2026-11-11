@@ -95,6 +95,10 @@ test('快捷键真实桌面桥接：初始化、模式切换和重启恢复不�
     await binding.click();
     await binding.press('Control+Alt+Shift+F10');
     await expect(binding).toHaveText('Ctrl+Alt+Shift+F10');
+    const talkBinding = page.getByRole('button', { name: '设置按键说话快捷键', exact: true });
+    await talkBinding.click();
+    await talkBinding.press('Control+Alt+Shift+F9');
+    await expect(talkBinding).toHaveText('Ctrl+Alt+Shift+F9');
     await page.getByRole('group', { name: '发言模式', exact: true }).getByRole('button', { name: /^按键说话/ }).click();
     await expect(page.locator('.shortcut-settings [role="alert"]')).toHaveCount(0);
     await expect.poll(() => application!.evaluate(({ globalShortcut }) => {

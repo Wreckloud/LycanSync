@@ -52,17 +52,17 @@ defineExpose({ editingName });
         :activity="showActivity && status !== 'OFFLINE' && activity ? `${activity.type === 'MUSIC' ? '正在听' : '正在玩'} ${activity.name}` : undefined" />
     </aside>
     <div class="activity-settings-controls">
-    <label class="settings-toggle activity-toggle">
+    <label class="settings-toggle">
       <span><strong>显示动态</strong><small>向朋友展示正在玩的游戏、音乐和最近玩过的游戏。关闭后隐藏，重新开启可恢复展示。</small></span>
       <input type="checkbox" :checked="showActivity" aria-label="显示动态"
         @change="emit('visibility', ($event.target as HTMLInputElement).checked)" />
     </label>
-    <label class="settings-toggle activity-toggle">
+    <label class="settings-toggle">
       <span><strong>显示上次在线时间</strong><small>离线后显示上次在线时间；隐身期间不更新。</small></span>
       <input type="checkbox" :checked="showLastOnline" aria-label="显示上次在线时间"
         @change="emit('lastOnlineVisibility', ($event.target as HTMLInputElement).checked)" />
     </label>
-    <div class="settings-toggle activity-toggle activity-presence">
+    <div class="settings-toggle activity-presence">
       <span><strong>在线状态</strong><small id="activity-presence-description">向朋友显示离线，暂停更新动态和上次在线时间。聊天、语音和共享仍可使用。</small></span>
       <PresenceModeSwitch :mode="presenceMode" :ready="presenceReady" :syncing="presenceSyncing" :error="presenceError"
         :active="active" aria-describedby="activity-presence-description activity-visibility-feedback" @select="emit('presenceMode', $event)" />
@@ -115,7 +115,6 @@ defineExpose({ editingName });
 .activity-mappings-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; min-width: 0; }
 .activity-mappings-heading h2 { flex-shrink: 0; }
 .activity-current { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.activity-toggle { padding: 0; border-top: 0; }
 .activity-presence > span { flex: 1; }
 .activity-mappings { grid-column: 1 / -1; display: grid; gap: 8px; min-width: 0; padding-top: 24px; border-top: 1px solid var(--border-soft); }
 .activity-window-choice { display: grid; grid-template-columns: 100px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-width: 0; }

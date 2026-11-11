@@ -10,6 +10,7 @@ let rejectNext = false;
 const bridge: VoiceOverlayBridge = {
   begin: async () => 'test-owner',
   configure: async (_owner, settings) => {
+    await new Promise(resolve => setTimeout(resolve, 250));
     if (rejectNext) { rejectNext = false; throw new Error('synthetic failure'); }
     calls.push('configure'); return settings;
   },

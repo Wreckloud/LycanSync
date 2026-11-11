@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { onScopeDispose, ref, watch } from 'vue';
+import { onScopeDispose, ref, useId, watch } from 'vue';
 import InlineFeedback from '../InlineFeedback.vue';
 import { CALL_SOUND_EVENTS, type CallSoundEvent, type useCallSoundPreferences } from '../../settings/useCallSoundPreferences';
 import type { useCallSounds } from '../../rtc/useCallSounds';
 
 const props = defineProps<{ active: boolean; preferences: ReturnType<typeof useCallSoundPreferences>; sounds: ReturnType<typeof useCallSounds> }>();
 const previewError = ref('');
+const eventIdPrefix = useId();
 let previewVersion = 0;
 function stopPreview() { previewVersion++; props.sounds.stopPreview(); }
 async function preview(event: CallSoundEvent) {
@@ -25,19 +26,24 @@ onScopeDispose(stopPreview);
       <input type="range" min="0" max="100" step="1" aria-label="提示音音量" :value="Math.round(preferences.volume.value * 100)"
         @change="preferences.setVolume(Number(($event.target as HTMLInputElement).value) / 100)" />
     </label>
-    <div v-for="event in CALL_SOUND_EVENTS" :key="event.id" class="call-sound-row">
-      <label><input type="checkbox" :checked="preferences.enabled[event.id]"
-        @change="preferences.setEnabled(event.id, ($event.target as HTMLInputElement).checked)" />{{ event.label }}</label>
-      <button type="button" :aria-label="`试听${event.label}`" @click="preview(event.id)">试听</button>
+    <div class="settings-toggle-group">
+      <div v-for="event in CALL_SOUND_EVENTS" :key="event.id" class="settings-toggle call-sound-row">
+        <label :for="`${eventIdPrefix}-${event.id}`">{{ event.label }}</label>
+        <button type="button" :aria-label="`试听${event.label}`" @click="preview(event.id)">试听</button>
+        <input :id="`${eventIdPrefix}-${event.id}`" type="checkbox" :checked="preferences.enabled[event.id]"
+          @change="preferences.setEnabled(event.id, ($event.target as HTMLInputElement).checked)" />
+      </div>
+      <label class="settings-toggle">
+        <span><strong>播放成员自定义入场音效</strong><small>关闭自定义入场音效后使用默认提示音；关闭“成员加入语音”则都不播放。音量跟随提示音设置。</small></span>
+        <input type="checkbox" :checked="preferences.customEntrances.value"
+          @change="preferences.setCustomEntrances(($event.target as HTMLInputElement).checked)" />
+      </label>
     </div>
-    <label><input type="checkbox" :checked="preferences.customEntrances.value"
-      @change="preferences.setCustomEntrances(($event.target as HTMLInputElement).checked)" />播放成员自定义入场音效</label>
-    <small>关闭自定义入场音效后使用默认提示音；关闭“成员加入语音”则都不播放。音量跟随提示音设置。</small>
     <InlineFeedback :message="preferences.error.value || previewError" />
   </section>
 </template>
 
 <style scoped>
-.call-sound-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 36px; }
-.call-sound-row label, .call-sound-settings > label:not(.settings-range-row) { display: flex; align-items: center; gap: 8px; }
+.call-sound-row { min-height: 32px; cursor: default; }
+.call-sound-row label { flex: 1; min-width: 0; font-weight: 500; cursor: pointer; }
 </style>

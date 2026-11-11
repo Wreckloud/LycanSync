@@ -36,16 +36,16 @@ async function changeReplay(event: Event) {
     <InlineFeedback :message="recording.noticeTarget.value === 'settings' ? recording.notice.value : ''" />
     <section class="settings-block">
       <h2>录制内容</h2>
-      <template v-if="desktop && recording.settings.value">
+      <div v-if="desktop && recording.settings.value" class="settings-toggle-group">
         <label v-for="item in ([{ key: 'applicationAudio', title: '应用声音', detail: '窗口模式录入所选应用的声音；整屏模式录入其他应用的声音，不包含本软件播放的声音。与共享声音开关分开控制。' },
           { key: 'microphone', title: '自己的麦克风', detail: '使用当前麦克风声音，不会自动解除静音。' },
           { key: 'friends', title: '朋友的语音', detail: '只录入当前收听的语音，不包括对方的共享声音。' }] as const)"
-          :key="item.key" class="settings-toggle recording-audio-option">
+          :key="item.key" class="settings-toggle">
           <span><strong>{{ item.title }}</strong><small>{{ item.detail }}</small></span>
           <input type="checkbox" :checked="recording.settings.value[item.key]" :disabled="recording.localActive.value || recording.busy.value"
             @change="toggle(item.key, $event)" />
         </label>
-      </template>
+      </div>
       <p v-else-if="!desktop">录制需要使用 Windows 桌面客户端。</p>
       <InlineFeedback :pending="desktop && !recording.settings.value && !recording.notice.value ? '正在读取录制设置…' : ''" />
       <InlineFeedback :message="recording.noticeTarget.value === 'content' ? recording.notice.value : ''" />
@@ -109,7 +109,6 @@ async function changeReplay(event: Event) {
 </template>
 
 <style scoped>
-.recording-audio-option { border-top: 0; }
 .recording-directory { overflow-wrap: anywhere; color: var(--muted); }
 .recording-status { min-height: 20px; }
 .recording-actions { display: flex; flex-wrap: wrap; gap: 8px; }

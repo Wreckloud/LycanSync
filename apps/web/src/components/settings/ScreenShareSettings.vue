@@ -96,24 +96,26 @@ watch(() => [props.active, props.rtc.screenShareActive], async ([active, sharing
       <h2>共享画面</h2>
       <p>共享中调整画质会立即生效，也会用于下次共享；录像画质单独设置。</p>
       <SegmentedControl :model-value="quality" :options="SCREEN_SHARE_QUALITIES" label="共享画质"
-        :disabled="shareBusy" @update:model-value="selectQuality" />
+        :disabled="shareBusy" :aria-busy="shareBusy" @update:model-value="selectQuality" />
       <p class="share-quality-description">{{ screenShareQuality(quality, customQuality).guidance }}</p>
       <ExpandSection :open="quality === 'custom'">
         <ScreenShareCustomQuality :model-value="customQuality" :disabled="shareBusy" @update:model-value="selectQuality('custom', $event)" />
       </ExpandSection>
       <InlineFeedback :message="qualityError" />
-      <label class="settings-toggle">
-        <span><strong>共享声音</strong><small>{{ rtc.screenShareAudioRestricted ? '远控画面不包含电脑声音，语音通话不受影响。'
-          : audioMode === 'systemMix' ? '包含全部电脑声音，可能产生回声。'
-            : audioMode === 'process' ? '共享所选应用的声音，与录制声音分开控制。' : loadingAudio || audioError ? '' : '当前系统不支持共享声音。' }}</small></span>
-        <input type="checkbox" aria-label="共享声音" :checked="shareAudio" :disabled="shareBusy || loadingAudio || audioMode === 'unavailable' || rtc.screenShareAudioRestricted" @change="toggleAudio" />
-      </label>
-      <InlineFeedback :message="audioError" :pending="loadingAudio ? '正在读取声音设置…' : ''" />
-      <label class="settings-toggle">
-        <span><strong>隐藏共享画面中的光标</strong><small>下次开始共享时生效，也可在选择画面时调整。</small></span>
-        <input type="checkbox" :checked="hideCursor" @change="toggleCursor" />
-      </label>
-      <InlineFeedback :message="cursorError" />
+      <div class="settings-toggle-group">
+        <label class="settings-toggle">
+          <span><strong>共享声音</strong><small>{{ rtc.screenShareAudioRestricted ? '远控画面不包含电脑声音，语音通话不受影响。'
+            : audioMode === 'systemMix' ? '包含全部电脑声音，可能产生回声。'
+              : audioMode === 'process' ? '共享所选应用的声音，与录制声音分开控制。' : loadingAudio || audioError ? '' : '当前系统不支持共享声音。' }}</small></span>
+          <input type="checkbox" aria-label="共享声音" :checked="shareAudio" :disabled="shareBusy || loadingAudio || audioMode === 'unavailable' || rtc.screenShareAudioRestricted" @change="toggleAudio" />
+        </label>
+        <InlineFeedback :message="audioError" :pending="loadingAudio ? '正在读取声音设置…' : ''" />
+        <label class="settings-toggle">
+          <span><strong>隐藏共享画面中的光标</strong><small>下次开始共享时生效，也可在选择画面时调整。</small></span>
+          <input type="checkbox" :checked="hideCursor" @change="toggleCursor" />
+        </label>
+        <InlineFeedback :message="cursorError" />
+      </div>
     </section>
   </section>
 </template>

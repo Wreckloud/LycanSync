@@ -127,7 +127,7 @@ async function updateAutoStart(event: Event) {
     <section class="settings-block">
       <h2>系统</h2>
       <p v-if="!desktop">托盘和开机自启仅在 Windows 桌面版提供。</p>
-      <template v-else>
+      <div v-else class="settings-toggle-group">
         <label class="settings-toggle" :class="{ 'is-disabled': !autoStartSupported || autoStartBusy }">
           <span><strong>开机自动启动</strong><small v-if="autoStartDescription">{{ autoStartDescription }}</small></span>
           <input type="checkbox" :checked="autoStartEnabled" :disabled="!autoStartSupported || autoStartBusy"
@@ -140,7 +140,7 @@ async function updateAutoStart(event: Event) {
             aria-label="关闭时收起到托盘" @change="updateCloseToTray" />
         </label>
         <InlineFeedback :message="trayError" />
-      </template>
+      </div>
     </section>
     <CacheSettings v-if="userId" ref="cacheSettings" :user-id="userId" :active="active" />
   </div>

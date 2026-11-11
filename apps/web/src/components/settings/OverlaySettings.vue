@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { onScopeDispose, watch } from 'vue';
 import type { useVoiceOverlay } from '../../overlay/useVoiceOverlay';
-import type { VoiceOverlaySettings } from '../../overlay/types';
 import InlineFeedback from '../InlineFeedback.vue';
+import SegmentedControl from '../SegmentedControl.vue';
 
 const props = defineProps<{ overlay: ReturnType<typeof useVoiceOverlay>; active: boolean }>();
+const memberModes = [{ id: 'all', label: '显示全部通话成员' }, { id: 'speaking', label: '只显示正在说话的人' }] as const;
 
 async function toggleSetting(key: 'enabled', event: Event) {
   const input = event.target as HTMLInputElement;
@@ -13,13 +14,6 @@ async function toggleSetting(key: 'enabled', event: Event) {
   input.checked = props.overlay.settings.value[key];
 }
 
-async function selectMode(mode: VoiceOverlaySettings['mode'], event: Event) {
-  const fieldset = (event.target as HTMLInputElement).closest('fieldset');
-  await props.overlay.configure({ mode });
-  fieldset?.querySelectorAll<HTMLInputElement>('input[type="radio"]').forEach((input) => {
-    input.checked = input.value === props.overlay.settings.value.mode;
-  });
-}
 watch(() => props.active, (active) => {
   if (active) void props.overlay.refreshDisplays();
   else void props.overlay.edit(false);
@@ -37,11 +31,12 @@ onScopeDispose(() => { void props.overlay.edit(false); });
         <input type="checkbox" :checked="overlay.settings.value.enabled" :disabled="!overlay.ready.value || overlay.busy.value"
           @change="toggleSetting('enabled', $event)" />
       </label>
-      <fieldset :disabled="!overlay.ready.value || overlay.busy.value" class="overlay-options">
-        <legend>成员显示</legend>
-        <label><input type="radio" name="overlay-mode" value="all" :checked="overlay.settings.value.mode === 'all'" @change="selectMode('all', $event)" />显示全部通话成员</label>
-        <label><input type="radio" name="overlay-mode" value="speaking" :checked="overlay.settings.value.mode === 'speaking'" @change="selectMode('speaking', $event)" />只显示正在说话的人</label>
-      </fieldset>
+      <div class="overlay-options">
+        <span>成员显示</span>
+        <SegmentedControl :model-value="overlay.settings.value.mode" :options="memberModes" label="成员显示"
+          :disabled="!overlay.ready.value || overlay.busy.value" :aria-busy="overlay.ready.value && overlay.busy.value"
+          @update:model-value="overlay.configure({ mode: $event })" />
+      </div>
       <InlineFeedback :message="overlay.error.value" />
     </section>
     <section class="settings-block">
@@ -70,9 +65,9 @@ onScopeDispose(() => { void props.overlay.edit(false); });
 </template>
 
 <style scoped>
-.overlay-options { display: flex; flex-wrap: wrap; gap: 16px; padding: 14px 0; border: 0; }
-.overlay-options legend { padding: 0; font-weight: 600; }
-.overlay-options label { display: flex; gap: 8px; align-items: center; }
+.overlay-options { display: grid; gap: 8px; margin-top: 4px; }
+.overlay-options > span { font-weight: 500; }
+.overlay-options .segmented-control { max-width: 400px; }
 .overlay-field { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 16px; align-items: center; padding: 12px 0; }
 .overlay-field select { width: 100%; }
 @media (max-width: 760px) { .overlay-field { grid-template-columns: 1fr; gap: 8px; } }

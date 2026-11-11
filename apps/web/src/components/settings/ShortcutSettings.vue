@@ -2,14 +2,20 @@
 import { onScopeDispose, ref, watch, type UnwrapNestedRefs } from 'vue';
 import InlineFeedback from '../InlineFeedback.vue';
 import VoiceModeSwitch from '../VoiceModeSwitch.vue';
-import { shortcutFromKey, type AudioShortcutAction, type useAudioShortcuts } from '../../settings/useAudioShortcuts';
+import { shortcutFromKey, type AudioShortcutAction, type VoiceMode, type useAudioShortcuts } from '../../settings/useAudioShortcuts';
 
 const props = defineProps<{ active: boolean; shortcuts: UnwrapNestedRefs<ReturnType<typeof useAudioShortcuts>> }>();
 const draft = ref('');
 const draftCode = ref('');
 const keyError = ref('');
+const missingTalkBinding = ref(false);
 const actions = [{ id: 'microphone', label: '麦克风静音／恢复' }, { id: 'listening', label: '停止／恢复收听' },
   { id: 'pushToTalk', label: '按键说话' }, { id: 'replay', label: '保存即时回放' }] as const;
+
+function chooseVoiceMode(mode: VoiceMode) {
+  missingTalkBinding.value = mode === 'pushToTalk' && !props.shortcuts.bindings.pushToTalk;
+  if (!missingTalkBinding.value) void props.shortcuts.setVoiceMode(mode);
+}
 
 function keyDown(event: KeyboardEvent) {
   if (props.shortcuts.busy) return;
@@ -24,8 +30,14 @@ function keyUp(action: AudioShortcutAction, event: KeyboardEvent) {
   draft.value = ''; draftCode.value = '';
   void props.shortcuts.setBinding(action, binding);
 }
-watch(() => props.shortcuts.capturing, () => { draft.value = ''; draftCode.value = ''; keyError.value = ''; });
-watch(() => props.active, active => { if (!active) void props.shortcuts.cancelCapture(); });
+watch(() => props.shortcuts.capturing, capturing => {
+  draft.value = ''; draftCode.value = ''; keyError.value = '';
+  if (capturing) missingTalkBinding.value = false;
+});
+watch(() => props.shortcuts.bindings.pushToTalk, binding => { if (binding) missingTalkBinding.value = false; });
+watch(() => props.active, active => {
+  if (!active) { missingTalkBinding.value = false; void props.shortcuts.cancelCapture(); }
+});
 onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
 </script>
 
@@ -36,8 +48,8 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
     <section class="settings-block">
       <div class="voice-mode-row">
         <h2>发言模式</h2>
-        <VoiceModeSwitch :model-value="shortcuts.voiceMode" :binding="shortcuts.bindings.pushToTalk" :disabled="shortcuts.busy"
-          :push-to-talk-disabled="!shortcuts.supported || !shortcuts.ready" @update:model-value="shortcuts.setVoiceMode" />
+        <VoiceModeSwitch :model-value="shortcuts.voiceMode" :binding="shortcuts.bindings.pushToTalk" :disabled="shortcuts.busy" :aria-busy="shortcuts.busy"
+          :push-to-talk-disabled="!shortcuts.supported || !shortcuts.ready" @update:model-value="chooseVoiceMode" />
       </div>
       <small>先设置快捷键，并在通话中开启麦克风。按住时说话，松开后静音；手动静音、停止收听或离开语音后不会发声。</small>
     </section>
@@ -59,8 +71,8 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
       </div>
       <small>支持字母、数字、常用符号和 F1–F11，也可搭配 Ctrl、Alt、Shift。松开后保存，长按不会重复触发。</small>
       <small>单键是全局快捷键，打字或游戏中按下也会触发，可能与其他按键操作冲突。</small>
-      <InlineFeedback :message="keyError || shortcuts.error" />
-      <button v-if="shortcuts.error && shortcuts.supported" type="button" :disabled="shortcuts.busy" @click="shortcuts.retry()">重新启用</button>
+      <InlineFeedback :message="keyError || (missingTalkBinding ? '请先为按键发言设置快捷键' : shortcuts.error)" />
+      <button v-if="!missingTalkBinding && shortcuts.error && shortcuts.supported" type="button" :disabled="shortcuts.busy" @click="shortcuts.retry()">重新启用</button>
     </section>
   </div>
 </template>
