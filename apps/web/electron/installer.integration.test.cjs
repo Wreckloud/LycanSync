@@ -4,7 +4,7 @@ const { createHash } = require('node:crypto');
 const { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } = require('node:fs');
 const { join, resolve } = require('node:path');
 const { test } = require('node:test');
-const { applicationEntries, upgradeInstallerUtilities } = require('./build-nsis.cjs');
+const { applicationEntries, upgradeInstallerUtilities, upgradeInstallerScript, upgradeInstallerPayload } = require('./build-nsis.cjs');
 
 const root = resolve(__dirname, '../../..');
 mkdirSync(join(root, 'release/diagnostics'), { recursive: true });
@@ -62,6 +62,70 @@ SectionEnd
   assert.equal(modeBuild.status, 0, modeBuild.stdout + modeBuild.stderr);
   assert.equal(run(modeExecutable, []).status, 0);
   assert.equal(readFileSync(modeResults, 'utf8').replaceAll('\r\n', '\n'), '0,0\n1,0\n0,1\n0,0\n');
+
+  // 执行正式静默分支，仅把真正提权替换为记录；不触发 UAC 或写系统安装记录。
+  const patchedScript = upgradeInstallerScript(readFileSync(join(templates, 'installer.nsi'), 'utf8'));
+  const elevationBranch = patchedScript.slice(patchedScript.indexOf('    # If we\'re running a silent upgrade'),
+    patchedScript.indexOf('    !include "${BUILD_RESOURCES_DIR}\\installer-section.nsh"'))
+    .replaceAll('${UAC_IsAdmin}', '${Errors}');
+  assert.ok(elevationBranch.includes('!insertmacro UAC_RunElevated'));
+  const payload = upgradeInstallerPayload(readFileSync(join(templates, 'include/installer.nsh'), 'utf8'));
+  const cacheCopy = payload.match(/^\s*!insertmacro copyFile "\$EXEPATH"[^\r\n]*\r?\n\s*\$\{IfNot\} \$\{Errors\}[\s\S]*?\$\{EndIf\}/m)?.[0];
+  const copyMacro = utilities.match(/^!macro copyFile FROM TO\r?\n[\s\S]*?^!macroend/m)?.[0];
+  assert.ok(cacheCopy && copyMacro);
+  const resources = join(root, 'release/build-cache/nsis-resources-3.4.1');
+  const plugins = join(resources, readdirSync(resources).find(name => name.startsWith('nsis-resources-3.4.1-')), 'plugins/x86-unicode');
+  const scopeExecutable = join(directory, 'silent-scope.exe');
+  const scopeResults = join(directory, 'silent-scope.txt');
+  const scopeSource = join(directory, 'silent-scope.nsi');
+  writeFileSync(scopeSource, `Unicode true
+RequestExecutionLevel user
+SilentInstall silent
+OutFile "${scopeExecutable}"
+!include LogicLib.nsh
+!include FileFunc.nsh
+!addplugindir "${plugins}"
+!include "${join(templates, 'include/StdUtils.nsh')}"
+!define APP_INSTALLER_STORE_FILE "@lycan-syncweb-updater\\installer.exe"
+Var installMode
+Var hasPerMachineInstallation
+!macro UAC_RunElevated
+  FileWrite $9 "elevated"
+  FileClose $9
+  StrCpy $0 0
+  SetErrorLevel 0
+!macroend
+!macro setInstallModePerAllUsers
+  FileWrite $9 "all-users"
+!macroend
+${copyMacro}
+Section
+  StrCpy $INSTDIR "${directory}"
+  ${cacheCopy}
+  \${GetParameters} $R0
+  \${GetOptions} $R0 "/scope=" $installMode
+  \${GetOptions} $R0 "/machine=" $hasPerMachineInstallation
+  FileOpen $9 "${scopeResults}" w
+  ClearErrors
+${elevationBranch}
+  FileWrite $9 "current-user"
+  FileClose $9
+SectionEnd
+`);
+  const scopeBuild = run(compiler, ['/V2', '/INPUTCHARSET', 'UTF8', scopeSource]);
+  assert.equal(scopeBuild.status, 0, scopeBuild.stdout + scopeBuild.stderr);
+  for (const [scope, machine, expected] of [
+    ['CurrentUser', '0', 'current-user'], ['CurrentUser', '1', 'current-user'], ['all', '1', 'elevated'],
+  ]) {
+    const cacheDirectory = join(directory, 'data/updater/@lycan-syncweb-updater');
+    mkdirSync(cacheDirectory, { recursive: true });
+    writeFileSync(join(cacheDirectory, 'current.blockmap'), 'stale-blockmap');
+    assert.equal(run(scopeExecutable, [`/scope=${scope}`, `/machine=${machine}`]).status, 0);
+    assert.equal(readFileSync(scopeResults, 'utf8'), expected);
+    assert.deepEqual(readFileSync(join(directory, 'data/updater/@lycan-syncweb-updater/installer.exe')),
+      readFileSync(scopeExecutable), '已安装版本必须可作为更新器下一轮差量下载的基底');
+    assert.ok(!existsSync(join(cacheDirectory, 'current.blockmap')), '手动安装不能沿用其他版本的块表');
+  }
 
   function compile(mode) {
     const executable = join(directory, `${mode}.exe`);

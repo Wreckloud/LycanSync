@@ -25,20 +25,36 @@ function applicationEntries(appDirectory) {
 function upgradeInstallerScript(script) {
   const anchor = '  !include "installUtil.nsh"';
   const installSection = '!include "installSection.nsh"';
-  if (script.split(anchor).length !== 2 || script.split(installSection).length !== 2) {
+  const silentElevation = '${if} $hasPerMachineInstallation == "1" # set in onInit by initMultiUser';
+  if (script.split(anchor).length !== 2 || script.split(installSection).length !== 2
+      || script.split(silentElevation).length !== 2) {
     throw new Error('固定 NSIS 安装模板已变化，拒绝生成未经核验的升级流程。');
   }
-  // 只改安装侧的旧卸载调用，保留构建器的卸载器生成、归档校验和更新产物。
+  // 两种安装并存时按本次实际范围提权，不能仅凭历史全用户记录切回旧目录。
   return script.replace(anchor, '  !include "${BUILD_RESOURCES_DIR}\\installer-util.nsh"\n  !include "${BUILD_RESOURCES_DIR}\\installer-upgrade.nsh"')
-    .replace(installSection, '!include "${BUILD_RESOURCES_DIR}\\installer-section.nsh"');
+    .replace(installSection, '!include "${BUILD_RESOURCES_DIR}\\installer-section.nsh"')
+    .replace(silentElevation, '${if} $installMode == "all"');
 }
 
 function upgradeInstallerSection(script) {
   const desktopShortcut = '!insertmacro addDesktopLink $keepShortcuts';
-  if (script.split(desktopShortcut).length !== 2) throw new Error('固定 NSIS 快捷方式入口已变化，拒绝生成安装包。');
+  const payload = '!include installer.nsh';
+  if (script.split(desktopShortcut).length !== 2 || script.split(payload).length !== 2) {
+    throw new Error('固定 NSIS 安装内容或快捷方式入口已变化，拒绝生成安装包。');
+  }
   // 默认与静默升级仍由构建器处理，只在用户取消本次创建时跳过。
   return script.replace(desktopShortcut, '${If} $lycanDesktopShortcut != "0"\n  '
-    + desktopShortcut + '\n${EndIf}');
+    + desktopShortcut + '\n${EndIf}')
+    .replace(payload, '!include "${BUILD_RESOURCES_DIR}\\installer-payload.nsh"');
+}
+
+function upgradeInstallerPayload(script) {
+  const cacheCopy = '!insertmacro copyFile "$EXEPATH" "$LOCALAPPDATA\\${APP_INSTALLER_STORE_FILE}"';
+  if (script.split(cacheCopy).length !== 2) throw new Error('固定 NSIS 更新缓存入口已变化，拒绝生成安装包。');
+  // 与 startup-update 的 baseCachePath 对齐，否则每轮都缺少差量下载所需的旧安装包。
+  // 手动安装可能跨过已下载的版本；清掉旧块表，下轮从服务器取与当前版本匹配的块表。
+  return script.replace(cacheCopy, '!insertmacro copyFile "$EXEPATH" "$INSTDIR\\data\\updater\\${APP_INSTALLER_STORE_FILE}"\n'
+    + '      ${IfNot} ${Errors}\n        Delete "$R5\\current.blockmap"\n      ${EndIf}');
 }
 
 function upgradeInstallerUtilities(script) {
@@ -70,7 +86,10 @@ function prepareInstallerFiles(appDirectory, resourcesDirectory) {
     readFileSync(join(builderRoot, 'templates/nsis/include/installUtil.nsh'), 'utf8')));
   writeFileSync(join(resourcesDirectory, 'installer-section.nsh'), upgradeInstallerSection(
     readFileSync(join(builderRoot, 'templates/nsis/installSection.nsh'), 'utf8')));
+  writeFileSync(join(resourcesDirectory, 'installer-payload.nsh'), upgradeInstallerPayload(
+    readFileSync(join(builderRoot, 'templates/nsis/include/installer.nsh'), 'utf8')));
 }
 
-module.exports = { applicationEntries, upgradeInstallerScript, upgradeInstallerUtilities, upgradeInstallerSection, prepareInstallerFiles };
+module.exports = { applicationEntries, upgradeInstallerScript, upgradeInstallerUtilities, upgradeInstallerSection,
+  upgradeInstallerPayload, prepareInstallerFiles };
 if (require.main === module) buildInstaller().catch(error => { console.error(error); process.exitCode = 1; });

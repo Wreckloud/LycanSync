@@ -4,7 +4,8 @@ const { join, resolve, posix } = require('node:path');
 const { createRequire } = require('node:module');
 const { runInNewContext } = require('node:vm');
 const { test } = require('node:test');
-const { applicationEntries, upgradeInstallerScript, upgradeInstallerUtilities, upgradeInstallerSection } = require('./build-nsis.cjs');
+const { applicationEntries, upgradeInstallerScript, upgradeInstallerUtilities, upgradeInstallerSection,
+  upgradeInstallerPayload, prepareInstallerFiles } = require('./build-nsis.cjs');
 
 const root = resolve(__dirname, '../../..');
 mkdirSync(join(root, 'release/diagnostics'), { recursive: true });
@@ -34,12 +35,15 @@ test('只替换固定的旧卸载函数，保留标准安装器、签名生成�
   assert.ok(patched.includes('installer-upgrade.nsh'));
   assert.ok(patched.includes('WriteUninstaller'));
   assert.ok(patched.includes('installer-section.nsh'));
+  assert.ok(patched.includes('${if} $installMode == "all"'));
+  assert.ok(!patched.includes('${if} $hasPerMachineInstallation == "1"'));
   const replaced = upgradeInstallerUtilities(utilities);
   assert.ok(replaced.includes('Call PrepareApplicationReplacement'));
   assert.ok(!replaced.includes('old-uninstaller.exe'));
   assert.ok(!replaced.includes('ExecWait'));
   assert.ok(replaced.includes('Function handleUninstallResult'));
   assert.throws(() => upgradeInstallerScript('different script'), /模板已变化/);
+  assert.throws(() => upgradeInstallerScript(source.replace('$hasPerMachineInstallation == "1"', '$changed == "1"')), /模板已变化/);
   assert.throws(() => upgradeInstallerUtilities('different utility'), /入口已变化/);
 });
 
@@ -50,7 +54,22 @@ test('桌面勾选只约束现有快捷方式动作，保留构建器升级规�
   assert.ok(patched.includes('!insertmacro addDesktopLink $keepShortcuts'));
   assert.ok(patched.includes('!insertmacro addStartMenuLink $keepShortcuts'));
   assert.ok(patched.includes('!insertmacro registryAddInstallInfo'));
+  assert.ok(patched.includes('installer-payload.nsh'));
   assert.throws(() => upgradeInstallerSection('changed'), /入口已变化/);
+});
+
+test('安装器与更新器共用 data/updater 差量基底，并保留标准载荷提取和卸载信息', () => {
+  const source = readFileSync(join(templates, 'include/installer.nsh'), 'utf8');
+  const patched = upgradeInstallerPayload(source);
+  assert.ok(patched.includes('!insertmacro copyFile "$EXEPATH" "$INSTDIR\\data\\updater\\${APP_INSTALLER_STORE_FILE}"'));
+  assert.ok(!patched.includes('"$LOCALAPPDATA\\${APP_INSTALLER_STORE_FILE}"'));
+  assert.ok(patched.includes('!insertmacro extractEmbeddedAppPackage'));
+  assert.ok(patched.includes('!macro registryAddInstallInfo'));
+  assert.throws(() => upgradeInstallerPayload('changed'), /缓存入口已变化/);
+  const directory = mkdtempSync(join(root, 'release/diagnostics/installer-payload-'));
+  const empty = join(directory, 'empty'); mkdirSync(empty);
+  prepareInstallerFiles(empty, directory);
+  assert.equal(readFileSync(join(directory, 'installer-payload.nsh'), 'utf8'), patched);
 });
 
 test('程序清单明确排除 data、未知路径和链接，SDK 新增文件必须先声明', () => {
