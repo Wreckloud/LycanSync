@@ -6,7 +6,7 @@ const MAX_REPORT_BYTES = 8 * 1024 * 1024;
 function parseDiagnosticReport(text) {
   if (typeof text !== 'string' || Buffer.byteLength(text) > MAX_REPORT_BYTES) throw new Error('诊断报告过大或无效。');
   const report = JSON.parse(text);
-  if (!report || report.kind !== 'lycansync-diagnostics' || ![9, 10, 11, 12].includes(report.schemaVersion) || !Array.isArray(report.samples)
+  if (!report || report.kind !== 'lycansync-diagnostics' || ![9, 10, 11, 12, 13].includes(report.schemaVersion) || !Array.isArray(report.samples)
       || report.samples.length > 900 || !Number.isFinite(Date.parse(report.startedAt))
       || !Number.isFinite(Date.parse(report.endedAt)) || Date.parse(report.endedAt) < Date.parse(report.startedAt)) {
     throw new Error('诊断报告无效。');

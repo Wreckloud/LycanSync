@@ -27,6 +27,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
   let latestReplay;
   let continuing = false;
   let generation = 0;
+  let diagnosticSequence = 0;
   let saveSettings = Promise.resolve();
   const library = createRecordingLibrary({ dataDirectory, isActive: id => active?.id === id || replay?.saving?.id === id });
 
@@ -148,6 +149,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
     if (!video || video.starting || video.stopping) throw new Error('recordingShareUnavailable');
     generation++;
     const current = { id: createId(), videoSessionId: video.sessionId, options: { ...settings },
+      diagnosticId: ++diagnosticSequence, requestedAt: performance.now(),
       phase: 'starting', startedAt: null, bytes: 0, error: null, saved: false };
     current.librarySessionId = previousId ? latest.librarySessionId : current.id;
     active = current; publish();
@@ -171,7 +173,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
         if (current.hostEnded) throw new Error(current.error ?? 'recordingWriteFailed');
         current.phase = 'recording'; current.startedAt = Date.now();
         current.monotonicStart = performance.now(); current.width = started?.width; current.height = started?.height;
-        onDiagnostic({ stage: 'recordingStarted', applicationAudio: current.options.applicationAudio,
+        onDiagnostic({ operationId: current.diagnosticId, stage: 'recordingStarted', startupMs: Math.round(performance.now() - current.requestedAt), applicationAudio: current.options.applicationAudio,
           width: started?.width, height: started?.height, configuredFrameRate: started?.frameRate,
           encoder: started?.encoder, configuredRateControl: started?.configuredRateControl, configuredLookahead: started?.configuredLookahead,
           microphone: current.options.microphone, friends: current.options.friends }); publish(); return snapshot();
@@ -193,7 +195,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
           catch { current.error = 'recordingLibraryUnavailable'; }
         }
         if (active === current) { active = undefined; latest = current; publish(); }
-        if (!cancelled) onDiagnostic({ stage: 'recordingFailed', code: current.error });
+        if (!cancelled) onDiagnostic({ operationId: current.diagnosticId, stage: 'recordingFailed', code: current.error });
         throw new Error(cancelled ? 'recordingCancelled' : current.error);
       }
     })();
@@ -205,6 +207,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
     const current = active;
     if (!current) return snapshot();
     if (current.stop) return current.stop;
+    const stopRequestedAt = performance.now();
     current.phase = 'stopping'; publish();
     current.stop = (async () => {
       try {
@@ -221,15 +224,15 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
         current.durationMs = current.monotonicStart === undefined ? null : Math.max(0, Math.round(performance.now() - current.monotonicStart));
         if (current.registered) await library.finish(current);
         current.phase = current.error ? 'failed' : current.saved ? 'saved' : 'idle';
-        onDiagnostic({ stage: 'recordingStopped', ...(current.error ? { code: current.error } : {}), bytes: current.bytes, outputFrames: current.outputFrames ?? 0,
-          durationMs: current.startedAt === null ? 0 : Date.now() - current.startedAt, saved: current.saved });
+        onDiagnostic({ operationId: current.diagnosticId, stage: 'recordingStopped', ...(current.error ? { code: current.error } : {}), bytes: current.bytes, outputFrames: current.outputFrames ?? 0,
+          durationMs: current.durationMs ?? 0, stopMs: Math.round(performance.now() - stopRequestedAt), saved: current.saved });
       } catch (error) {
         current.phase = 'failed'; current.error = recordingError(error);
         // 只有输出停止未确认才继续阻挡；落盘或音频清理失败不能把已停止输出永久锁住。
         if (current.hostEnded || !current.hostStarted) {
           if (active === current) { active = undefined; latest = current; }
         }
-        onDiagnostic({ stage: 'recordingFailed', code: current.error });
+        onDiagnostic({ operationId: current.diagnosticId, stage: 'recordingFailed', code: current.error });
         publish(); throw new Error(current.error);
       }
       if (active === current) { active = undefined; latest = current; }
@@ -242,7 +245,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
     if (replay || continuing && !resuming || active && active.phase !== 'recording') throw new Error('recordingBusy');
     const video = getVideo();
     if (!video || video.starting || video.stopping) throw new Error('recordingShareUnavailable');
-    const current = { id: createId(), videoSessionId: video.sessionId, options: { ...settings }, phase: 'starting', error: null };
+    const current = { id: createId(), videoSessionId: video.sessionId, options: { ...settings }, diagnosticId: ++diagnosticSequence, requestedAt: performance.now(), phase: 'starting', error: null };
     replay = current; publish();
     current.start = (async () => {
       try {
@@ -255,7 +258,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
         if (current.hostEnded || replay !== current || current.phase !== 'starting') throw new Error('recordingShareUnavailable');
         current.width = started.width; current.height = started.height;
         current.phase = 'buffering'; current.monotonicStart = performance.now();
-        onDiagnostic({ stage: 'replayStarted', seconds: current.options.replaySeconds, width: current.width, height: current.height, configuredFrameRate: started.frameRate,
+        onDiagnostic({ operationId: current.diagnosticId, stage: 'replayStarted', startupMs: Math.round(performance.now() - current.requestedAt), seconds: current.options.replaySeconds, width: current.width, height: current.height, configuredFrameRate: started.frameRate,
           encoder: started.encoder, configuredRateControl: started.configuredRateControl, configuredLookahead: started.configuredLookahead,
           memoryBudgetMb: started.memoryBudgetMb });
         publish(); return snapshot();
@@ -271,7 +274,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
         }
         current.phase = cancelled && !current.error ? 'idle' : 'failed';
         if (!cancelled) current.error ??= recordingError(error);
-        if (current.error) onDiagnostic({ stage: 'replayFailed', code: current.error });
+        if (current.error) onDiagnostic({ operationId: current.diagnosticId, stage: 'replayFailed', code: current.error });
         publish(); throw new Error(cancelled && !current.error ? 'recordingCancelled' : current.error);
       }
     })();
@@ -289,7 +292,9 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
     const current = replay;
     if (!current || current.phase !== 'buffering' || current.error || current.saving) throw new Error('recordingBusy');
     const saved = { id: createId(), librarySessionId: current.id, width: current.width, height: current.height };
-    const duringWarmup = performance.now() - current.monotonicStart < current.options.replaySeconds * 1000;
+    const saveRequestedAt = performance.now();
+    const bufferedMs = Math.max(0, Math.round(saveRequestedAt - current.monotonicStart));
+    const duringWarmup = bufferedMs < current.options.replaySeconds * 1000;
     saved.path = join(current.options.directory, `LycanSync-Replay-${new Date().toISOString().replace(/[:.]/g, '-')}-${saved.id}.mkv`);
     current.saving = saved; publish();
     saved.promise = (async () => {
@@ -301,12 +306,13 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
         await keepReplayFile(saved, true);
         current.lastSavedId = saved.id;
         current.lastSavedDuringWarmup = duringWarmup;
-        onDiagnostic({ stage: 'replaySaved', bytes: saved.bytes, duringWarmup });
+        onDiagnostic({ operationId: current.diagnosticId, stage: 'replaySaved', bytes: saved.bytes, duringWarmup, bufferedMs,
+          seconds: current.options.replaySeconds, saveMs: Math.round(performance.now() - saveRequestedAt) });
       } catch (error) {
         current.error = recordingError(error);
         if (current.error === 'replaySaveUnconfirmed') current.unconfirmed = saved;
         else await keepReplayFile(saved, false).catch(() => { current.error = 'recordingLibraryUnavailable'; });
-        onDiagnostic({ stage: 'replayFailed', code: current.error });
+        onDiagnostic({ operationId: current.diagnosticId, stage: 'replayFailed', code: current.error });
         throw new Error(current.error);
       } finally { current.saving = undefined; publish(); }
     })();
@@ -321,7 +327,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
     if (current.stop) return current.stop;
     current.phase = 'stopping'; publish();
     const stopStartedAt = performance.now();
-    onDiagnostic({ stage: 'replayStopRequested', saving: Boolean(current.saving) });
+    onDiagnostic({ operationId: current.diagnosticId, stage: 'replayStopRequested', saving: Boolean(current.saving) });
     current.stop = (async () => {
       try {
         await cancelPreparing(current);
@@ -335,11 +341,11 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
       } catch (error) {
         current.phase = 'failed'; current.error = recordingError(error);
         if (current.hostEnded || !current.hostStarted) { if (replay === current) { replay = undefined; latestReplay = current; } }
-        onDiagnostic({ stage: 'replayFailed', code: current.error }); publish(); throw new Error(current.error);
+        onDiagnostic({ operationId: current.diagnosticId, stage: 'replayFailed', code: current.error }); publish(); throw new Error(current.error);
       }
       current.phase = current.error ? 'failed' : 'idle';
       if (replay === current) { replay = undefined; latestReplay = current; }
-      onDiagnostic({ stage: 'replayStopped', durationMs: Math.round(performance.now() - stopStartedAt),
+      onDiagnostic({ operationId: current.diagnosticId, stage: 'replayStopped', durationMs: Math.round(performance.now() - stopStartedAt),
         ...(current.error ? { code: current.error } : {}) }); publish(); return snapshot();
     })();
     return current.stop;

@@ -46,9 +46,14 @@ interface RecordingLibraryEntry {
 interface DesktopProcessMetrics {
   cpuPercent: number;
   memoryMb: number;
+  clientCpuCorePercent?: number | null;
+  clientCpuMachinePercent?: number | null;
+  logicalProcessors?: number;
   entries: { role: 'electron-Browser' | 'electron-Tab' | 'electron-GPU' | 'electron-Utility' | 'electron-other'
     | 'obs' | 'obs-audio' | 'media' | 'activity'; state: 'running' | 'stopped' | 'unavailable';
-    workingSetMiB: number | null; privateCommitMiB: number | null }[];
+    workingSetMiB: number | null; privateCommitMiB: number | null;
+    cpuCorePercent?: number | null; intervalMs?: number | null;
+    ioReadBytesPerSecond?: number | null; ioWriteBytesPerSecond?: number | null }[];
 }
 
 interface DetectedActivity {

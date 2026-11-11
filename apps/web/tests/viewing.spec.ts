@@ -380,7 +380,7 @@ test('主动诊断记录返回应用后继续，离房结束并导出匿名报�
   expect(result.stopReason).toBe('roomChanged');
   expect(result.samples.length).toBeGreaterThan(1);
   expect(result.notes).toBe('合成界面回归');
-  expect(result.schemaVersion).toBe(12);
+  expect(result.schemaVersion).toBe(13);
   expect(result.problemMarkers).toEqual([{ time: expect.any(String), category: 'video-stutter', recording: true }]);
   expect(text).not.toContain('user-viewing-user');
   expect(text).not.toContain('成员A');

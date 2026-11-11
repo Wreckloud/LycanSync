@@ -13,7 +13,9 @@ mod audio_devices;
 mod windows_bridge {
     use super::*;
     use std::path::Path;
-    use windows::Win32::Foundation::{CloseHandle, DUPLICATE_SAME_ACCESS, HANDLE, STILL_ACTIVE};
+    use windows::Win32::Foundation::{
+        CloseHandle, DUPLICATE_SAME_ACCESS, FILETIME, HANDLE, STILL_ACTIVE,
+    };
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
         TH32CS_SNAPPROCESS,
@@ -23,8 +25,9 @@ mod windows_bridge {
     };
     use windows::Win32::System::Threading::{
         GetCurrentProcess, GetCurrentProcessId, GetExitCodeProcess, GetProcessHandleCount,
-        OpenProcess, PROCESS_DUP_HANDLE, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
-        PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW,
+        GetProcessIoCounters, GetProcessTimes, IO_COUNTERS, OpenProcess, PROCESS_DUP_HANDLE,
+        PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+        QueryFullProcessImageNameW,
     };
     use windows::core::PWSTR;
 
@@ -61,15 +64,18 @@ mod windows_bridge {
     }
 
     #[napi_derive::napi(object)]
-    pub struct NativeProcessMemory {
+    pub struct NativeProcessMetrics {
         pub working_set_bytes: f64,
         pub private_commit_bytes: f64,
+        pub cpu_seconds: Option<f64>,
+        pub io_read_bytes: Option<f64>,
+        pub io_write_bytes: Option<f64>,
     }
 
     #[napi_derive::napi]
     impl SpawnedMediaHelper {
         #[napi_derive::napi]
-        pub fn read_memory(&self) -> Result<NativeProcessMemory> {
+        pub fn read_metrics(&self) -> Result<NativeProcessMetrics> {
             let process = self
                 .process
                 .as_ref()
@@ -89,9 +95,36 @@ mod windows_bridge {
                 )
             }
             .map_err(|_| error("processMemoryUnavailable"))?;
-            Ok(NativeProcessMemory {
+            let (mut created, mut exited, mut kernel, mut user) = (
+                FILETIME::default(),
+                FILETIME::default(),
+                FILETIME::default(),
+                FILETIME::default(),
+            );
+            let seconds = |time: FILETIME| {
+                ((u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime)) as f64
+                    / 10_000_000.0
+            };
+            // CPU 与 I/O 各自可用；读取失败不抹掉已取得的内存，也不伪报零。
+            let cpu_seconds = unsafe {
+                GetProcessTimes(
+                    process.raw(),
+                    &mut created,
+                    &mut exited,
+                    &mut kernel,
+                    &mut user,
+                )
+            }
+            .ok()
+            .map(|_| seconds(kernel) + seconds(user));
+            let mut io = IO_COUNTERS::default();
+            let io_available = unsafe { GetProcessIoCounters(process.raw(), &mut io) }.is_ok();
+            Ok(NativeProcessMetrics {
                 working_set_bytes: counters.WorkingSetSize as f64,
                 private_commit_bytes: counters.PrivateUsage as f64,
+                cpu_seconds,
+                io_read_bytes: io_available.then_some(io.ReadTransferCount as f64),
+                io_write_bytes: io_available.then_some(io.WriteTransferCount as f64),
             })
         }
 

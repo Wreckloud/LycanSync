@@ -386,13 +386,17 @@ it('分进程内存只导出角色、状态和数值，不泄露PID、路径或�
     { role: 'activity', state: 'unavailable', workingSetMiB: null, privateCommitMiB: null },
   ] };
   Object.assign(next.process.entries[0], { pid: 987654, path: 'private-process-path', commandLine: 'private-command' });
+  Object.assign(next.process, { clientCpuCorePercent: 80, clientCpuMachinePercent: 10, logicalProcessors: 8 });
+  Object.assign(next.process.entries[0], { cpuCorePercent: 40, intervalMs: 2000, ioReadBytesPerSecond: 200, ioWriteBytesPerSecond: 400 });
   const exported = diagnosticReportSample(next, new Map());
-  expect(exported.process).toEqual({ cpuPercent: 2, memoryMb: 100, entries: [
+  expect(exported.process).toMatchObject({ cpuPercent: 2, memoryMb: 100, entries: [
     { role: 'obs', state: 'running', workingSetMiB: 20, privateCommitMiB: 30 },
     { role: 'obs-audio', state: 'running', workingSetMiB: 12, privateCommitMiB: 22 },
     { role: 'activity', state: 'unavailable', workingSetMiB: null, privateCommitMiB: null },
   ] });
   expect(JSON.stringify(exported)).not.toMatch(/987654|private-process-path|private-command/);
+  expect(exported.process).toMatchObject({ clientCpuCorePercent: 80, clientCpuMachinePercent: 10, logicalProcessors: 8 });
+  expect(exported.process!.entries[0]).toMatchObject({ cpuCorePercent: 40, intervalMs: 2000, ioReadBytesPerSecond: 200, ioWriteBytesPerSecond: 400 });
 });
 
 it('暂停、停层与恢复边界不进入诊断摘要，缺失网络反馈不当作正常网络', async () => {
@@ -494,10 +498,10 @@ it('导出按记录时参数保存，匿名化身份/轨道ID，不使用导出�
   expect(text).not.toContain('private-user-id'); expect(text).not.toContain('private-track-id');
   expect(text).not.toContain('私人昵称');
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(12);
-  expect(result.measurements.process).toEqual({ scope: 'electron-and-owned-native-processes', memoryUnit: 'MiB',
+  expect(result.schemaVersion).toBe(13);
+  expect(result.measurements.process).toMatchObject({ scope: 'electron-and-owned-native-processes', memoryUnit: 'MiB',
     memoryMb: 'electron-only-sum-working-set', nativeMemory: 'GetProcessMemoryInfo; private-commit-not-resident',
-    sharedPagesMayBeCountedMoreThanOnce: true, includesGpuMemory: false, includesNativeCpu: false });
+    sharedPagesMayBeCountedMoreThanOnce: true, includesGpuMemory: false, includesNativeCpu: true });
   expect(result.samples[0]).toMatchObject({ remoteParticipantCount: 0, roomState: 'connected', dynacast: true });
   expect(result.startSettings.quality).toBe('standard'); expect(result.endSettings.quality).toBe('economy');
   expect(result.startSettings.voiceVolumeBalance).toBe(false);
@@ -712,7 +716,7 @@ it('自动恢复失败保留最后确认帧率并在摘要提示，不把用户�
   const { report, exportDiagnosticReport } = setup();
   report.start(); await vi.advanceTimersByTimeAsync(2000); report.stop(); await report.save('');
   const result = JSON.parse(exportDiagnosticReport.mock.calls[0][0]);
-  expect(result.schemaVersion).toBe(12);
+  expect(result.schemaVersion).toBe(13);
   expect(result.samples[1].streams[0].nativeInput).toMatchObject({ requestedFrameRate: 120, captureFrameRate: 30, frameRateAdjustmentFailed: true });
   expect(result.summary.segments[0].warnings).toContain('采集帧率自动调整失败，保留最后确认的运行目标；不代表已恢复用户帧率。');
 });
@@ -748,7 +752,7 @@ it('OBS 摘要分开记录宿主、页面和编码帧率，纹理桥丢帧只取
   report.stop(); await report.save('');
   const text = exportDiagnosticReport.mock.calls[0][0];
   const result = JSON.parse(text);
-  expect(result.schemaVersion).toBe(12);
+  expect(result.schemaVersion).toBe(13);
   expect(result.summary.segments).toHaveLength(1);
   expect(result.samples[0].native).toMatchObject({ helperVersion: '32.2.2', captureBackend: 'obsLibobs' });
   expect(result.samples[0].native.microphoneCapture).toEqual({ sourceState: 1, sourceFrames: 48000, framesReceived: 47040, pushToTalk: true, transmissionAllowed: false, processingMetrics: null });

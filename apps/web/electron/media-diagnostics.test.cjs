@@ -15,11 +15,12 @@ test('录制摘要保留真实输出数和固定故障，排除文件名及原�
   const path = join(directory, 'events.jsonl');
   const time = new Date().toISOString();
   await writeFile(path, JSON.stringify({ time, stage: 'recordingStopped', code: 'recordingDiskFull',
-    bytes: 4096, outputFrames: 60, durationMs: 1000, saved: false,
+    bytes: 4096, outputFrames: 60, durationMs: 1000, saved: false, operationId: 3, startupMs: 12, stopMs: 30,
     path: 'private-recording.mkv', recordingId: 'private-id', pcm: 'private-audio', message: 'private-error' }));
   const [event] = await readDiagnosticEvents(path, 0, Date.parse(time));
   assert.equal(event.outputFrames, 60); assert.equal(event.bytes, 4096);
   assert.equal(event.code, 'recordingDiskFull'); assert.equal(event.saved, false);
+  assert.equal(event.operationId, 3); assert.equal(event.startupMs, 12); assert.equal(event.stopMs, 30);
   assert.doesNotMatch(JSON.stringify(event), /private-/);
   await writeFile(path, JSON.stringify({ time, stage: 'recordingFailed', code: 'recordingLibraryUnavailable', path: 'private-path' }));
   const [failure] = await readDiagnosticEvents(path, 0, Date.parse(time));
@@ -172,13 +173,14 @@ test('分进程内存复用校验后的句柄，进程退出释放，不导出PI
   let opens = 0, releases = 0, reads = 0;
   const collect = createProcessMetricsReader((pid, path) => {
     assert.equal(pid, 123); assert.equal(path, 'owned.exe'); opens++;
-    return { readMemory: () => { reads++; return { workingSetBytes: 4 * 1024 ** 2, privateCommitBytes: 8 * 1024 ** 2 }; },
+    return { readMetrics: () => { reads++; return { workingSetBytes: 4 * 1024 ** 2, privateCommitBytes: 8 * 1024 ** 2 }; },
       release: () => { releases++; } };
   });
   const metrics = [{ type: 'GPU', pid: 999, memory: { workingSetSize: 2048, privateBytes: 1024 }, cpu: { percentCPUUsage: 2.1 } }];
   const helpers = [{ role: 'obs', children: [child], executablePath: 'owned.exe' }, { role: 'media', children: [] }];
   const first = collect(metrics, helpers, true);
-  assert.deepEqual(first, { cpuPercent: 2.1, memoryMb: 2, entries: [
+  const memoryOnly = value => ({ cpuPercent: value.cpuPercent, memoryMb: value.memoryMb, entries: value.entries.map(({ role, state, workingSetMiB, privateCommitMiB }) => ({ role, state, workingSetMiB, privateCommitMiB })) });
+  assert.deepEqual(memoryOnly(first), { cpuPercent: 2.1, memoryMb: 2, entries: [
     { role: 'electron-GPU', state: 'running', workingSetMiB: 2, privateCommitMiB: 1 },
     { role: 'obs', state: 'running', workingSetMiB: 4, privateCommitMiB: 8 },
     { role: 'media', state: 'stopped', workingSetMiB: null, privateCommitMiB: null },
@@ -198,11 +200,36 @@ test('原生读取失败和平台不支持均为不可用，不伪报未运行�
   const collect = createProcessMetricsReader(() => { opens++; throw new Error('identity mismatch'); });
   const helpers = [{ role: 'activity', children: [Object.assign(new EventEmitter(), { pid: 12 })], executablePath: 'activity.exe' }];
   const result = collect([], helpers, true);
-  assert.deepEqual(result.entries, [{ role: 'activity', state: 'unavailable', workingSetMiB: null, privateCommitMiB: null }]);
+  assert.equal(result.entries[0].state, 'unavailable');
+  assert.equal(result.entries[0].cpuCorePercent, null);
+  assert.equal(result.clientCpuMachinePercent, null);
   collect([], helpers, false);
   assert.equal(opens, 1);
-  const invalid = createProcessMetricsReader(() => ({ readMemory: () => ({ workingSetBytes: NaN, privateCommitBytes: -1 }), release() {} }));
+  const invalid = createProcessMetricsReader(() => ({ readMetrics: () => ({ workingSetBytes: NaN, privateCommitBytes: -1 }), release() {} }));
   assert.equal(invalid([], helpers, true).entries[0].state, 'unavailable');
+});
+
+test('单客户端CPU按统一计数归一，首样本、重启和缺失不伪报零，I/O只表示进程传输', () => {
+  let time = 0, cpuSeconds = 1, ioWriteBytes = 100;
+  const child = Object.assign(new EventEmitter(), { pid: 123, exitCode: null, signalCode: null });
+  const collect = createProcessMetricsReader(() => ({ readMetrics: () => ({ workingSetBytes: 1024, privateCommitBytes: 2048,
+    cpuSeconds, ioReadBytes: 50, ioWriteBytes }), release() {} }), { now: () => time, logicalProcessors: 8 });
+  const electron = { type: 'Tab', pid: 1, creationTime: 10, cpu: { cumulativeCPUUsage: 2 } };
+  const helpers = [{ role: 'obs', children: [child, child], executablePath: 'owned.exe' }];
+  assert.equal(collect([electron], helpers, true).clientCpuMachinePercent, null);
+  time = 2000; cpuSeconds = 2; ioWriteBytes = 1100; electron.cpu.cumulativeCPUUsage = 3;
+  const sample = collect([electron], helpers, true);
+  assert.equal(sample.entries.length, 2);
+  assert.equal(sample.clientCpuCorePercent, 100);
+  assert.equal(sample.clientCpuMachinePercent, 12.5);
+  assert.equal(sample.entries[1].ioWriteBytesPerSecond, 500);
+  time = 4000; cpuSeconds = 0;
+  assert.equal(collect([electron], helpers, true).clientCpuMachinePercent, null);
+  time = 6000; cpuSeconds = 1; electron.creationTime = 20;
+  assert.equal(collect([electron], helpers, true).entries[0].cpuCorePercent, null);
+  time = 8000; cpuSeconds = undefined;
+  assert.equal(collect([electron], helpers, true).clientCpuMachinePercent, null);
+  child.emit('close');
 });
 
 test('诊断IPC只读取现存的四类子进程，不接受页面指定PID和不可信来源', () => {

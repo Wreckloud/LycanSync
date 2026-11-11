@@ -231,15 +231,15 @@ test('自动保存失败明确拒绝并留下固定存储原因，不把磁盘�
 });
 
 
-test('手动导出与自动保存共用9至12版校验，非法报告不打开保存框', async () => {
+test('手动导出与自动保存共用9至13版校验，非法报告不打开保存框', async () => {
   const f = ipcFixture();
   const exportReport = f.handlers.get('diagnostics:export');
-  for (const schemaVersion of [9, 10, 11, 12]) {
+  for (const schemaVersion of [9, 10, 11, 12, 13]) {
     await exportReport({ trusted: true }, JSON.stringify({ ...JSON.parse(report('current')), schemaVersion }));
     assert.equal(f.writes.at(-1).report.schemaVersion, schemaVersion);
   }
   const opened = f.dialogOptions.length;
-  for (const schemaVersion of [8, 13]) {
+  for (const schemaVersion of [8, 14]) {
     await assert.rejects(exportReport({ trusted: true }, JSON.stringify({ ...JSON.parse(report('bad')), schemaVersion })), /无效/);
   }
   assert.equal(f.dialogOptions.length, opened);

@@ -130,7 +130,7 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           for (const key of ['applicationAudio', 'microphone', 'friends', 'saved', 'saving', 'duringWarmup']) {
             if (typeof entry[key] === 'boolean') details[key] = entry[key];
           }
-          for (const key of ['bytes', 'outputFrames']) {
+          for (const key of ['bytes', 'outputFrames', 'operationId', 'startupMs', 'stopMs', 'saveMs', 'bufferedMs']) {
             if (Number.isSafeInteger(entry[key]) && entry[key] >= 0) details[key] = entry[key];
           }
           if (['nvenc', 'qsv', 'amf', 'unknown'].includes(entry.encoder)) details.encoder = entry.encoder;
@@ -212,43 +212,74 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
   return events.sort((left, right) => left.time.localeCompare(right.time)).slice(-200);
 }
 
-function createProcessMetricsReader(openNativeProcess) {
+function createProcessMetricsReader(openNativeProcess, { now = () => performance.now(), logicalProcessors = require('node:os').cpus().length } = {}) {
   const nativeReaders = new WeakMap();
-  const memoryMiB = (value, unit) => Number.isFinite(value) && value >= 0 ? Math.round(value / unit * 10) / 10 : null;
+  let electronPrevious = new Map();
+  const numeric = value => Number.isFinite(value) && value >= 0 ? value : null;
+  const rounded = value => value === null ? null : Math.round(value * 10) / 10;
+  const memoryMiB = (value, unit) => numeric(value) === null ? null : rounded(value / unit);
+  const empty = { cpuCorePercent: null, intervalMs: null, ioReadBytesPerSecond: null, ioWriteBytesPerSecond: null };
+  function interval(current, previous) {
+    const elapsed = previous ? current.time - previous.time : 0;
+    const rate = key => elapsed > 0 && numeric(current[key]) !== null && numeric(previous?.[key]) !== null
+      && current[key] >= previous[key] ? (current[key] - previous[key]) * 1000 / elapsed : null;
+    const cpu = rate('cpuSeconds');
+    return { cpuCorePercent: rounded(cpu === null ? null : cpu * 100), intervalMs: elapsed > 0 ? elapsed : null,
+      ioReadBytesPerSecond: rounded(rate('ioReadBytes')), ioWriteBytesPerSecond: rounded(rate('ioWriteBytes')) };
+  }
   return (metrics, nativeProcesses, supported) => {
-    const entries = metrics.map((entry) => ({
-      role: ['Browser', 'Tab', 'GPU', 'Utility'].includes(entry.type) ? `electron-${entry.type}` : 'electron-other',
-      state: 'running', workingSetMiB: memoryMiB(entry.memory?.workingSetSize, 1024),
-      privateCommitMiB: memoryMiB(entry.memory?.privateBytes, 1024),
-    }));
+    const time = now();
+    const nextElectron = new Map();
+    const entries = metrics.map(entry => {
+      const key = `${entry.pid}:${entry.creationTime}`;
+      const current = { time, cpuSeconds: entry.cpu?.cumulativeCPUUsage };
+      nextElectron.set(key, current);
+      return { role: ['Browser', 'Tab', 'GPU', 'Utility'].includes(entry.type) ? `electron-${entry.type}` : 'electron-other',
+        state: 'running', workingSetMiB: memoryMiB(entry.memory?.workingSetSize, 1024),
+        privateCommitMiB: memoryMiB(entry.memory?.privateBytes, 1024), ...interval(current, electronPrevious.get(key)) };
+    });
+    electronPrevious = nextElectron;
+    const seen = new Set(metrics.map(entry => entry.pid));
     for (const { role, children, executablePath } of nativeProcesses) {
-      const running = children.filter((child) => child.exitCode == null && child.signalCode == null);
+      const running = children.filter(child => child.exitCode == null && child.signalCode == null);
       if (!supported || !running.length) {
-        entries.push({ role, state: supported ? 'stopped' : 'unavailable', workingSetMiB: null, privateCommitMiB: null });
+        entries.push({ role, state: supported ? 'stopped' : 'unavailable', workingSetMiB: null, privateCommitMiB: null, ...empty });
         continue;
       }
       for (const child of running) {
+        if (seen.has(child.pid)) continue;
+        seen.add(child.pid);
         try {
-          let reader = nativeReaders.get(child);
-          if (!reader) {
-            reader = openNativeProcess(child.pid, executablePath);
-            nativeReaders.set(child, reader);
-            // 固定进程句柄只随本次子进程存活，不因停止后 PID 重用而读取其他程序。
-            child.once('close', () => { reader.release(); nativeReaders.delete(child); });
+          let owned = nativeReaders.get(child);
+          if (!owned) {
+            owned = { reader: openNativeProcess(child.pid, executablePath), previous: undefined };
+            nativeReaders.set(child, owned);
+            // 固定句柄绑定本次子进程；重启或 PID 重用不能沿用旧计数基线。
+            child.once('close', () => { owned.reader.release(); nativeReaders.delete(child); });
           }
-          const memory = reader.readMemory();
-          const workingSetMiB = memoryMiB(memory.workingSetBytes, 1024 * 1024);
-          const privateCommitMiB = memoryMiB(memory.privateCommitBytes, 1024 * 1024);
+          const current = { ...owned.reader.readMetrics(), time };
+          const rates = interval(current, owned.previous);
+          owned.previous = current;
+          const workingSetMiB = memoryMiB(current.workingSetBytes, 1024 * 1024);
+          const privateCommitMiB = memoryMiB(current.privateCommitBytes, 1024 * 1024);
           entries.push({ role, state: workingSetMiB === null || privateCommitMiB === null ? 'unavailable' : 'running',
-            workingSetMiB, privateCommitMiB });
+            workingSetMiB, privateCommitMiB, ...rates });
         } catch {
-          entries.push({ role, state: 'unavailable', workingSetMiB: null, privateCommitMiB: null });
+          const owned = nativeReaders.get(child);
+          if (owned) owned.previous = undefined;
+          entries.push({ role, state: 'unavailable', workingSetMiB: null, privateCommitMiB: null, ...empty });
         }
       }
     }
+    const active = entries.filter(entry => entry.state !== 'stopped');
+    const completeCpu = active.length > 0 && active.every(entry => entry.cpuCorePercent !== null);
+    const clientCpuCorePercent = completeCpu ? rounded(active.reduce((sum, entry) => sum + entry.cpuCorePercent, 0)) : null;
     return {
-      cpuPercent: Math.round(metrics.reduce((sum, entry) => sum + (entry.cpu?.percentCPUUsage ?? 0), 0) * 10) / 10,
-      memoryMb: Math.round(metrics.reduce((sum, entry) => sum + (entry.memory?.workingSetSize ?? 0), 0) / 1024), entries,
+      cpuPercent: rounded(metrics.reduce((sum, entry) => sum + (entry.cpu?.percentCPUUsage ?? 0), 0)),
+      memoryMb: rounded(metrics.reduce((sum, entry) => sum + (entry.memory?.workingSetSize ?? 0), 0) / 1024),
+      clientCpuCorePercent, logicalProcessors,
+      clientCpuMachinePercent: clientCpuCorePercent !== null && logicalProcessors > 0 ? rounded(clientCpuCorePercent / logicalProcessors) : null,
+      entries,
     };
   };
 }

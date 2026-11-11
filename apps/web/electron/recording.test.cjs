@@ -49,6 +49,26 @@ test('默认只录应用声音，主进程生成独占文件，停止保存不�
   assert.doesNotMatch(JSON.stringify(f.diagnostics), /recordings[\\/]|\.mkv/);
 });
 
+test('录制及回放日志关联同次操作，耗时使用单调计时且不输出文件路径', async context => {
+  const f = await fixture(context);
+  await f.recording.startReplay();
+  await f.recording.start();
+  await f.recording.saveReplay();
+  await f.recording.stop();
+  await f.recording.stopReplay();
+  const event = stage => f.diagnostics.find(entry => entry.stage === stage);
+  assert.equal(event('recordingStarted').operationId, event('recordingStopped').operationId);
+  assert.equal(event('replayStarted').operationId, event('replaySaved').operationId);
+  assert.notEqual(event('recordingStarted').operationId, event('replayStarted').operationId);
+  for (const [stage, field] of [['recordingStarted', 'startupMs'], ['recordingStopped', 'stopMs'],
+    ['replayStarted', 'startupMs'], ['replaySaved', 'saveMs'], ['replaySaved', 'bufferedMs']]) {
+    assert.ok(Number.isFinite(event(stage)[field]) && event(stage)[field] >= 0);
+  }
+  assert.equal(event('replaySaved').duringWarmup, true);
+  assert.equal(event('replaySaved').seconds, 60);
+  assert.doesNotMatch(JSON.stringify(f.diagnostics), /recordings[\\/]|\.mkv|12345678/);
+});
+
 test('回放与录像共用同一音频和编码身份，停止一路不回收另一路所需资源', async context => {
   const f = await fixture(context);
   await f.recording.configure({ microphone: true });

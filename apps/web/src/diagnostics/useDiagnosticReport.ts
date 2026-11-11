@@ -236,11 +236,15 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
     },
     omittedParticipants: snapshot.omittedParticipants, process: snapshot.process && {
       cpuPercent: numeric(snapshot.process.cpuPercent), memoryMb: numeric(snapshot.process.memoryMb),
+      clientCpuCorePercent: numeric(snapshot.process.clientCpuCorePercent),
+      clientCpuMachinePercent: numeric(snapshot.process.clientCpuMachinePercent), logicalProcessors: numeric(snapshot.process.logicalProcessors),
       entries: snapshot.process.entries.map((entry) => ({
         role: ['electron-Browser', 'electron-Tab', 'electron-GPU', 'electron-Utility', 'electron-other', 'obs', 'obs-audio', 'media', 'activity']
           .includes(entry.role) ? entry.role : 'unknown',
         state: ['running', 'stopped', 'unavailable'].includes(entry.state) ? entry.state : 'unavailable',
         workingSetMiB: numeric(entry.workingSetMiB), privateCommitMiB: numeric(entry.privateCommitMiB),
+        cpuCorePercent: numeric(entry.cpuCorePercent), intervalMs: numeric(entry.intervalMs),
+        ioReadBytesPerSecond: numeric(entry.ioReadBytesPerSecond), ioWriteBytesPerSecond: numeric(entry.ioWriteBytesPerSecond),
       })),
     }, failures: snapshot.failures.map(errorCode).filter(Boolean),
     streams: snapshot.streams.map((stream) => ({ member: alias(stream.identity), direction: stream.direction,
@@ -581,7 +585,7 @@ export function useDiagnosticReport(options: {
         exportedSamples[index] = { ...exportedSamples[index], elapsedMs: exportedSamples[index].elapsedMs - first.elapsedMs };
       }
     }
-    const report = { kind: 'lycansync-diagnostics', schemaVersion: 12,
+    const report = { kind: 'lycansync-diagnostics', schemaVersion: 13,
       startedAt: discardedSamples.value && exportedSamples.length ? exportedSamples[0].time : startedAt ?? new Date().toISOString(),
       endedAt: endedAt ?? new Date().toISOString(),
       stopReason: recording.value && automaticRecording ? 'automaticSnapshot' : reason.value || 'automaticEvents',
@@ -608,7 +612,11 @@ export function useDiagnosticReport(options: {
         fps: 'counter-delta-divided-by-monotonic-elapsed-time; first-or-reset-sample-is-null',
         process: { scope: 'electron-and-owned-native-processes', memoryUnit: 'MiB',
           memoryMb: 'electron-only-sum-working-set', nativeMemory: 'GetProcessMemoryInfo; private-commit-not-resident',
-          sharedPagesMayBeCountedMoreThanOnce: true, includesGpuMemory: false, includesNativeCpu: false },
+          sharedPagesMayBeCountedMoreThanOnce: true, includesGpuMemory: false, includesNativeCpu: true,
+          cpuPercent: 'legacy-electron-only', clientCpuCorePercent: 'sum-cumulative-cpu-seconds-delta; one-logical-core=100%',
+          clientCpuMachinePercent: 'clientCpuCorePercent/logicalProcessors; null-if-any-active-process-unavailable',
+          io: 'owned-native-process-transfer-bytes; includes-files-network-and-pipes; not-physical-disk-throughput',
+          excludesOtherClientsAndServer: true },
         native: { scope: 'current-or-last-capture-snapshot', stateDeterminesWhetherCaptureIsRunning: true },
         nativeInterval: { scope: 'running-helper-samples', counters: ['framesReceived', 'framesProcessed'] },
         obsRender: { scope: 'running-configuration-only', warmupMs: 2000,
@@ -630,7 +638,8 @@ export function useDiagnosticReport(options: {
       limitations: ['null表示未取得；轨道目标不等于实测；统计不包含端到端延迟或GPU利用率',
         '网络统计只描述本机与SFU的一段；ICE连接RTT与RTCP报告RTT分别保留，不相互替代或截断大值；RTT不能除以二冒充端到端延迟；接收缓冲等待不含完整解码与显示耗时',
         '节能编码标志是浏览器提供的线索，不单独证明硬件编码；旧接收报告保留年龄，不重复计为新反馈',
-        '仅记录当前客户端；CPU与memoryMb汇总仅含Electron，entries分列Electron与已启动的原生进程内存；不含原生CPU和显存。工作集可能重复计算共享页，私有提交不等于驻留RAM，不代表整机物理内存占用',
+        '仅记录本客户端及其原生子进程，不含其他客户端、压测端和服务器；clientCpuMachinePercent是按逻辑处理器数归一的合计，缺少任一运行进程数据时为null。旧cpuPercent与memoryMb仍仅含Electron。工作集可能重复计算共享页，私有提交不等于驻留RAM；不含显存',
+        '原生I/O计数包含文件、网络和管道，不等于磁盘写入量；录制与回放事件耗时不等于文件内容时长，文件完整性和实际帧率仍需单独验证',
         '后台采样可能被系统节流；各采样窗口不同，不能直接相减计算丢帧率；自动记录滚动保留最近30分钟且不超过900份/6MiB，手动记录达到上限停止；最多32名成员',
         '远端人数不等于观看人数；编码层启用不等于实际发送，无观看者且无有效码率时不能只凭bandwidth标签判断网络故障',
         'helper版本与采集后端以各样本为准；停止后原生统计可保留最后快照，以state判断是否仍在采集',

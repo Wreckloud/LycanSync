@@ -22,10 +22,11 @@ function formatFpsInterval(intervalMs: number | null) {
     <strong>媒体诊断 <small>每 2 秒更新</small></strong>
     <p v-if="error" role="status">{{ error }}</p>
     <template v-if="processMetrics">
+      <p>本客户端 CPU {{ processMetrics.clientCpuMachinePercent ?? '—' }}%（含原生进程，按整机逻辑处理器数折算）</p>
       <p>Electron CPU {{ processMetrics.cpuPercent }}% · 工作集合计 {{ processMetrics.memoryMb }} MiB（不含下列原生进程）</p>
       <p v-for="(entry, index) in processMetrics.entries" :key="index">
         {{ processLabels[entry.role] }}：
-        <template v-if="entry.state === 'running'">工作集 {{ entry.workingSetMiB ?? '—' }} MiB · 私有提交 {{ entry.privateCommitMiB ?? '—' }} MiB</template>
+        <template v-if="entry.state === 'running'">CPU {{ entry.cpuCorePercent ?? '—' }}%（单核）· 工作集 {{ entry.workingSetMiB ?? '—' }} MiB · 私有提交 {{ entry.privateCommitMiB ?? '—' }} MiB</template>
         <template v-else>{{ entry.state === 'stopped' ? '未运行' : '统计不可用' }}</template>
       </p>
       <small>工作集含共享页，不能简单相加当作物理内存；私有提交不等于驻留 RAM。不包含显存，未运行与读取失败不计作零。</small>
