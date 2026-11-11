@@ -91,7 +91,9 @@ test('共享菜单按操作顺序直接展示，画质保留二级调整，未�
   await page.screenshot({ path: testInfo.outputPath('share-menu.png') });
   await menu.getByRole('button', { name: '关闭共享', exact: true }).click();
   await opener.click();
-  await expect(menu.getByRole('button')).toHaveText(['快速共享 饥荒联机版', '开始共享并录制', '共享与录制']);
+  await expect(menu.getByRole('button')).toHaveText(['快速共享 饥荒联机版', '开始共享并录制', '共享画质标准', '共享与录制']);
+  await menu.getByRole('button', { name: '共享画质' }).click();
+  await expect(quality.getByRole('radio').first()).toBeEnabled();
 });
 
 test('未绑定显示括号标记，收听音量平衡可直接切换', async ({ page }) => {

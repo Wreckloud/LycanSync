@@ -77,7 +77,8 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
     const style = owner.getComputedStyle(element);
     const duration = motionDurationMs(style.getPropertyValue('--motion-layout-duration'));
     const unchanged = offset === undefined ? Math.abs(from - to) < 1 : !Number.isFinite(offset) || Math.abs(offset) < 1;
-    if (preference?.matches || unchanged || typeof element.animate !== 'function'
+    if (preference?.matches || element.ownerDocument.documentElement?.classList.contains('is-restoring-layout')
+      || unchanged || typeof element.animate !== 'function'
       || !Number.isFinite(duration) || duration <= 0) {
       updateDirectory();
       finish?.();

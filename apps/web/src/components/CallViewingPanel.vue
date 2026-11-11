@@ -8,6 +8,7 @@ import type { useScreenShareLayout, ViewedShare } from '../viewing/useScreenShar
 import { useViewingSize } from '../viewing/useViewingSize';
 import ParticipantCard from './ParticipantCard.vue';
 import HorizontalScroll from './HorizontalScroll.vue';
+import { observeWindowLayoutRestore } from '../viewing/windowLayoutRestore';
 
 const props = withDefaults(defineProps<{
   view: UnwrapNestedRefs<ReturnType<typeof useScreenShareLayout>>;
@@ -29,20 +30,14 @@ const framing = ref(false);
 let panelAnimation: Animation | undefined;
 let panelGeneration = 0;
 let motionPreference: MediaQueryList | undefined;
-let switchGeneration = 0;
-let ownsSwitch = false;
-function finishSwitch() {
-  switchGeneration++;
-  if (ownsSwitch) props.view.switching = false;
-  ownsSwitch = false;
-}
+let stopWindowRestore: (() => void) | undefined;
 function stopPanelMotion() {
   panelAnimation?.cancel();
   panelAnimation = undefined;
   framing.value = false;
 }
 function reducePanelMotion() {
-  if (motionPreference?.matches) { stopPanelMotion(); finishSwitch(); }
+  if (motionPreference?.matches) stopPanelMotion();
 }
 let clock: ReturnType<typeof setInterval> | undefined;
 const now = ref(performance.now());
@@ -126,33 +121,10 @@ watch(() => props.view.shares.map(share => share.key).join(','), () => {
 });
 
 watch(() => props.active, (active) => {
-  if (!active) finishSwitch();
   if (clock) clearInterval(clock);
   now.value = performance.now();
   if (active) clock = setInterval(() => { now.value = performance.now(); }, 1000);
 }, { immediate: true });
-watch(() => [props.active, props.view.mode, props.view.focused] as const, async ([active, mode]) => {
-  finishSwitch();
-  const element = panel.value;
-  if (!active || mode === 'collapsed' || !element || motionPreference?.matches) return;
-  ownsSwitch = true;
-  props.view.switching = true;
-  const generation = switchGeneration;
-  const owner = element.ownerDocument.defaultView!;
-  const settled = new Set<Animation>();
-  // 成员折叠和尺寸观察可能接续新的过渡；不能只等最初那一批动画就开放下一次切换。
-  while (generation === switchGeneration && element.isConnected) {
-    await nextTick();
-    await new Promise<void>(done => owner.requestAnimationFrame(() => owner.requestAnimationFrame(() => done())));
-    if (generation !== switchGeneration || !element.isConnected) return;
-    const animations = element.getAnimations({ subtree: true }).filter(animation => !settled.has(animation)
-      && animation.playState !== 'paused' && Number.isFinite(animation.effect?.getComputedTiming().endTime));
-    if (!animations.length) break;
-    await Promise.allSettled(animations.map(animation => animation.finished));
-    animations.forEach(animation => settled.add(animation));
-  }
-  if (generation === switchGeneration) finishSwitch();
-}, { flush: 'sync' });
 watch(() => props.view.expanded, async () => {
   const element = panel.value;
   const before = element?.getBoundingClientRect();
@@ -165,24 +137,28 @@ watch(() => props.view.expanded, async () => {
   const owner = element.ownerDocument.defaultView!;
   const after = element.getBoundingClientRect();
   const style = owner.getComputedStyle(element);
-  if (motionPreference?.matches || typeof element.animate !== 'function') { framing.value = false; return; }
+  if (motionPreference?.matches || element.ownerDocument.documentElement.classList.contains('is-restoring-layout')
+    || typeof element.animate !== 'function' || Math.abs(before.top - after.top) < 1 && Math.abs(before.height - after.height) < 1) {
+    framing.value = false;
+    return;
+  }
   const top = Number.parseFloat(style.top) || 0;
-  const left = Number.parseFloat(style.left) || 0;
-  // 改变窗口边界而不缩放视频像素；尺寸观察仍按实际可用空间选择 contain 比例。
+  // 横向直接采用目标边界，主动展开只衔接顶边和高度，不从左上角斜向缩放。
   const active = element.animate([
-    { top: `${top + before.top - after.top}px`, left: `${left + before.left - after.left}px`, width: `${before.width}px`, height: `${before.height}px` },
-    { top: `${top}px`, left: `${left}px`, width: `${after.width}px`, height: `${after.height}px` },
+    { top: `${top + before.top - after.top}px`, height: `${before.height}px` },
+    { top: `${top}px`, height: `${after.height}px` },
   ], { duration: motionDurationMs(style.getPropertyValue('--motion-layout-duration')),
     easing: style.getPropertyValue('--motion-ease').trim() });
   panelAnimation = active;
   active.finished.then(() => { if (panelAnimation === active) stopPanelMotion(); }, () => {});
 }, { flush: 'pre' });
 onMounted(() => {
+  if (props.detached) stopWindowRestore = observeWindowLayoutRestore(panel.value!.ownerDocument.defaultView!).stop;
   motionPreference = panel.value!.ownerDocument.defaultView!.matchMedia('(prefers-reduced-motion: reduce)');
   motionPreference.addEventListener('change', reducePanelMotion);
 });
 onScopeDispose(() => {
-  finishSwitch();
+  stopWindowRestore?.();
   panelGeneration++;
   stopPanelMotion();
   if (clock) clearInterval(clock);
@@ -200,7 +176,6 @@ onScopeDispose(() => {
           @before-leave="($event as HTMLElement).inert = true">
           <div v-for="share in view.displayed" :key="share.key" class="viewing-tile" :style="tileStyle(share)">
             <div class="viewing-surface" role="button" tabindex="0"
-              :aria-disabled="view.switching"
               :aria-label="focus ? '查看全部共享画面' : '聚焦' + share.participant.name"
               @click="select(share)" @keydown.enter.self.prevent="select(share)" @keydown.space.self.prevent="select(share)">
               <ParticipantCard :participant="share.participant" :revision="revision" variant="viewer"

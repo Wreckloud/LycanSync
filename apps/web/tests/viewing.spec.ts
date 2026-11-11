@@ -183,8 +183,76 @@ test('后台暂时不可测量时保留观看尺寸，切回后原位显示且�
     expect(bounds.height).toBeCloseTo(Number.parseFloat(samples.before.height), 0);
   }
   expect(await video!.evaluate(element => element === document.querySelector('.viewing-tile video'))).toBe(true);
-  await expect(tile).toHaveCSS('transition-property', 'height');
+  await expect(tile).toHaveCSS('transition-property', 'width, height');
+  const resized = await panel.evaluate(async element => {
+    const panel = element as HTMLElement;
+    const tile = panel.querySelector<HTMLElement>('.viewing-tile')!;
+    const frame = () => new Promise(requestAnimationFrame);
+    window.dispatchEvent(new Event('blur'));
+    panel.style.display = 'none';
+    panel.style.width = `${panel.parentElement!.clientWidth - 120}px`;
+    await frame();
+    panel.style.removeProperty('display');
+    window.dispatchEvent(new Event('focus'));
+    const frames = [];
+    for (let i = 0; i < 18; i++) {
+      await frame();
+      frames.push({ width: tile.getBoundingClientRect().width,
+        moving: tile.getAnimations().some(animation => animation.playState === 'running') });
+    }
+    return { frames, target: Number.parseFloat(tile.style.width) };
+  });
+  expect(resized.target).toBeLessThan(Number.parseFloat(samples.before.width));
+  expect(resized.frames.every(frame => !frame.moving)).toBe(true);
+  for (const frame of resized.frames.slice(2)) expect(frame.width).toBeCloseTo(resized.target, 0);
 });
+
+for (const viewport of [{ width: 1440, height: 1000 }, { width: 960, height: 760 }]) {
+  test(`单画面聚焦与网格沿顶边连续伸缩，快速反向不补动：${viewport.width}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await sharing(page, ['A']);
+    await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+    const tile = page.locator('.viewing-tile');
+    const video = await tile.locator('video').elementHandle();
+    await expect.poll(() => page.locator('.voice-panel').evaluate(element => element.getAnimations({ subtree: true }).length)).toBe(0);
+    for (const reverse of [false, false, true]) {
+      const samples = await tile.evaluate(async (element, reverse) => {
+        const surface = element.querySelector<HTMLElement>('.viewing-surface')!;
+        const frame = () => new Promise(requestAnimationFrame);
+        const read = () => {
+          const rect = element.getBoundingClientRect();
+          const stage = element.closest('.viewing-stage')!.getBoundingClientRect();
+          return { width: rect.width, height: rect.height, top: rect.top - stage.top,
+            center: rect.left + rect.width / 2 - stage.left - stage.width / 2 };
+        };
+        const samples = [read()];
+        surface.click();
+        for (let i = 0; i < 30; i++) {
+          await frame();
+          samples.push(read());
+          if (reverse && i === 4) surface.click();
+        }
+        return samples;
+      }, reverse);
+      for (const sample of samples) {
+        expect(Math.abs(sample.center)).toBeLessThanOrEqual(1);
+        expect(Math.abs(sample.top)).toBeLessThanOrEqual(1);
+      }
+      if (reverse) {
+        expect(samples.at(-1)!.width).toBeCloseTo(samples[0]!.width, 0);
+        expect(samples.at(-1)!.height).toBeCloseTo(samples[0]!.height, 0);
+      } else {
+        for (const dimension of ['width', 'height'] as const) {
+          const direction = Math.sign(samples.at(-1)![dimension] - samples[0]![dimension]);
+          for (let i = 1; i < samples.length; i++) {
+            expect((samples[i]![dimension] - samples[i - 1]![dimension]) * direction).toBeGreaterThanOrEqual(-1);
+          }
+        }
+      }
+    }
+    expect(await video!.evaluate(element => element === document.querySelector('.viewing-tile video'))).toBe(true);
+  });
+}
 
 test('横向浏览渐变跟随滚动位置，键盘滚动遵循减少动态效果设置', async ({ page }) => {
   await page.setViewportSize({ width: 960, height: 900 });
@@ -234,14 +302,10 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       const excess = await page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').first().evaluate(async (element) => {
         (element as HTMLElement).click();
         await new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done())));
-        const target = element.getAttribute('aria-label');
         const started = performance.now();
         let maximum = 0;
         await new Promise<void>((resolve) => {
           function measure() {
-            // 连续点击不能在当前过渡未完成时反转布局；过渡完成后不额外等待固定冷却时间。
-            if (element.getAttribute('aria-disabled') === 'true') (element as HTMLElement).click();
-            if (element.getAttribute('aria-label') !== target) throw new Error('过渡期间连续点击反转了布局');
             for (const tile of document.querySelectorAll('.viewing-tile:not(.view-tile-leave-active)')) {
               const bounds = tile.getBoundingClientRect();
               const media = tile.querySelector('.participant-media')!.getBoundingClientRect();

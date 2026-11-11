@@ -81,6 +81,12 @@
 .member-search-enter-from, .member-search-leave-to { opacity: 0; clip-path: inset(0 0 0 calc(100% - 24px)); transform: translateX(4px); }
 .member-search-leave-active { pointer-events: none; }
 
+.is-restoring-layout :is(.voice-panel, .call-viewing-panel, .profile-popover),
+.is-restoring-layout :is(.voice-panel, .call-viewing-panel, .profile-popover) * {
+  transition: none !important;
+  animation: none !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   :root { --motion-layout-duration: 0ms; }
   *, *::before, *::after { transition: none !important; animation: none !important; }

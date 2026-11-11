@@ -12,13 +12,14 @@
 .call-viewing-panel.is-collapsed .viewing-members-panel { padding: 12px 16px 15px; border-bottom: 1px solid var(--border); }
 .viewing-stage { position: relative; width: 100%; overflow: hidden; background: #050608; transition: height var(--motion-layout-duration) var(--motion-ease); }
 .call-viewing-panel:is(.is-expanded, .is-resizing, .is-framing) .viewing-stage { transition: none; }
-.viewing-stage > .horizontal-scroll { height: 100%; }
+.viewing-stage > .horizontal-scroll { height: 100%; align-items: flex-start; }
 .viewing-stage .horizontal-viewport { max-height: 100%; }
 .is-focus-stage .horizontal-viewport, .viewing-grid.is-focus { height: 100%; }
 .viewing-grid.is-focus { display: block; width: 100%; padding: 0; }
-.viewing-grid.is-focus .viewing-tile { width: 100%; }
+.viewing-grid.is-focus .viewing-tile { margin-inline: auto; }
 .viewing-grid.is-focus .participant-card { border: 0; border-radius: 0; }
-.viewing-tile { position: relative; min-width: 0; transition: height var(--motion-layout-duration) var(--motion-ease); }
+/* 宽高共用一条过渡；不叠加网格 FLIP 位移，单画面始终沿水平中心伸缩。 */
+.viewing-tile { position: relative; min-width: 0; transition: width var(--motion-layout-duration) var(--motion-ease), height var(--motion-layout-duration) var(--motion-ease); }
 .viewing-surface { height: 100%; cursor: pointer; }
 .viewing-surface:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 /* 视频只跟随卡片的实际高度，切换模式时不再按尚未收拢的旧宽度重新撑高。 */
@@ -59,7 +60,6 @@
 .member-card-leave-active { position: absolute; pointer-events: none; }
 @media (max-width: 600px) { .call-viewing-panel.is-collapsed .viewing-members-panel, .viewing-members-panel { padding-left: 10px; padding-right: 10px; } }
 
-.view-tile-move { transition: transform var(--motion-layout-duration) var(--motion-ease), height var(--motion-layout-duration) var(--motion-ease); }
 .view-tile-enter-active, .view-tile-leave-active { transition: opacity var(--motion-surface-duration) ease; }
 .view-tile-enter-from, .view-tile-leave-to { opacity: 0; }
 .view-tile-leave-active { position: absolute; pointer-events: none; }

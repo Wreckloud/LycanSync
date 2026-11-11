@@ -230,14 +230,12 @@ onScopeDispose(() => {
             @click="closeMenu(true); emit('shareGame')"><MonitorUp :size="15" />快速共享 {{ gameName }}</button>
           <button v-if="desktop" type="button" class="call-menu-action" :disabled="recordingBusy || shareBusy || shareAudioRestricted || (!sharing && shareLimitReached)"
             @click="closeMenu(true); sharing ? emit('recording') : emit('shareAndRecord')">{{ recordingActive ? `停止录制 · ${recordingElapsed}` : sharing ? '开始录制' : '开始共享并录制' }}</button>
-          <template v-if="desktop && sharing">
-            <button type="button" class="call-menu-action call-quality-trigger" :aria-expanded="qualityOpen" :disabled="shareBusy" @click="toggleQuality">
-              共享画质<span>{{ SCREEN_SHARE_QUALITIES.find(preset => preset.id === quality)?.label }}</span><ChevronRight class="call-menu-chevron" :size="14" /></button>
-          </template>
+          <button v-if="desktop" type="button" class="call-menu-action call-quality-trigger" :aria-expanded="qualityOpen" :disabled="shareBusy" @click="toggleQuality">
+            共享画质<span>{{ SCREEN_SHARE_QUALITIES.find(preset => preset.id === quality)?.label }}</span><ChevronRight class="call-menu-chevron" :size="14" /></button>
           <button v-if="desktop && sharing && replayActive" type="button" class="call-menu-action"
             :disabled="recordingBusy || replaySaving || replayError || shareAudioRestricted"
             @click="closeMenu(true); emit('saveReplay')">保存即时回放</button>
-          <button v-if="desktop" type="button" class="call-settings-entry" @click="emit('recordingSettings', opener!); closeMenu()">共享与录制<ChevronRight class="call-menu-chevron" :size="14" /></button>
+          <button v-if="desktop" type="button" class="call-settings-entry" @click="emit('recordingSettings', opener!); closeMenu()"><Settings :size="15" />共享与录制<ChevronRight class="call-menu-chevron" :size="14" /></button>
         </section>
         <Transition :name="qualityPlacement === 'right' ? 'surface-side' : 'surface-panel'">
         <section v-if="qualityOpen" class="call-control-menu call-quality-menu" aria-label="共享画质">

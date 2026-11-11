@@ -25,7 +25,6 @@ export function useScreenShareLayout(options: LayoutOptions) {
   const membersVisible = ref(true);
   const height = ref<number | null>(null);
   const expanded = ref(false);
-  const switching = ref(false);
   let nextKey = 0;
   let reconnecting = false;
   const focusedShare = computed(() => shares.value.find(share => share.key === focused.value));
@@ -37,7 +36,7 @@ export function useScreenShareLayout(options: LayoutOptions) {
   }
 
   function select(identity: string) {
-    if (switching.value || options.status() !== 'connected') return false;
+    if (options.status() !== 'connected') return false;
     sync();
     const share = shares.value.find(share => share.participant.identity === identity);
     if (!share) return false;
@@ -48,21 +47,18 @@ export function useScreenShareLayout(options: LayoutOptions) {
   }
 
   function grid() {
-    if (switching.value) return;
     sync();
     if (!shares.value.length) return;
     mode.value = 'grid';
   }
 
   function collapse() {
-    switching.value = false;
     expanded.value = false;
     focused.value = null;
     mode.value = 'collapsed';
   }
 
   function reset() {
-    switching.value = false;
     shares.value = []; focused.value = null;
     expanded.value = false;
     mode.value = 'collapsed';
@@ -95,5 +91,5 @@ export function useScreenShareLayout(options: LayoutOptions) {
   watch(options.status, status => { if (status === 'reconnecting') reconnecting = true; }, { flush: 'sync' });
   watch(options.revision, sync, { flush: 'sync' });
   onScopeDispose(reset);
-  return { mode, shares, focused, focusedShare, displayed, membersVisible, height, expanded, switching, select, grid, collapse, reset };
+  return { mode, shares, focused, focusedShare, displayed, membersVisible, height, expanded, select, grid, collapse, reset };
 }

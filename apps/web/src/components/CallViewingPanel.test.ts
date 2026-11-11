@@ -11,83 +11,37 @@ const script = parse(readFileSync(new URL('./CallViewingPanel.vue', import.meta.
 const source = ts.createSourceFile('CallViewingPanel.ts', script, ts.ScriptTarget.Latest, true);
 const callbacks = source.statements.filter(statement => !ts.isImportDeclaration(statement))
   .map(statement => statement.getText(source)).join('\n');
-const compiled = ts.transpile(callbacks + '\nglobalThis.api = { panel, toggleExpanded, expandMembers, escape, elapsed, now };', { target: ts.ScriptTarget.ES2022 });
+const compiled = ts.transpile(callbacks + '\nglobalThis.api = { panel, toggleExpanded, expandMembers, escape, elapsed, now, select };', { target: ts.ScriptTarget.ES2022 });
 
-function fixture(animations: Animation[] = []) {
+function fixture() {
   const page = { exitFullscreen: vi.fn(), documentElement: { requestFullscreen: vi.fn() },
     defaultView: { lycanViewerWindow: { toggleFullscreen: vi.fn() }, requestAnimationFrame: (callback: () => void) => callback() } };
-  const element = { ownerDocument: page, isConnected: true, getAnimations: () => animations };
+  const element = { ownerDocument: page, isConnected: true };
   const emit = vi.fn();
-  const view = reactive({ shares: [], mode: 'grid', focused: 1, expanded: false, switching: false, membersVisible: true, height: 240, collapse: vi.fn() });
+  const view = reactive({ shares: [], mode: 'grid', focused: 1, expanded: false, membersVisible: true, height: 240, collapse: vi.fn(), grid: vi.fn(), select: vi.fn() });
   const context = { withDefaults: (props: object, defaults: object) => ({ ...defaults, ...props }), defineProps: () => ({ view }), defineEmits: () => emit,
     useViewingSize: () => ({ width: ref(600), height: ref(300), maximumHeight: ref(420), resizing: ref(false) }),
     computed, ref, watch, nextTick, onScopeDispose, setInterval, clearInterval, onMounted: () => {}, VideoQuality, performance, motionDurationMs,
     api: null as unknown as { panel: { value: unknown }; toggleExpanded(): void; expandMembers(): void;
-      escape(event: KeyboardEvent): void; elapsed(share: { observedAt: number }): string; now: { value: number } } };
+      select(share: { participant: { identity: string } }): void; escape(event: KeyboardEvent): void; elapsed(share: { observedAt: number }): string; now: { value: number } } };
   const scope = effectScope();
   scope.run(() => runInNewContext(compiled, context));
   context.api.panel.value = element;
   return { ...context.api, scope, view, page, element, emit };
 }
 
-it('网格与聚焦等待真实动画结束，取消动画也释放切换，销毁不留下锁', async () => {
-  let finish!: () => void;
-  const finished = new Promise<void>(resolve => { finish = resolve; });
-  const f = fixture([{ playState: 'running', effect: { getComputedTiming: () => ({ endTime: 210 }) }, finished } as unknown as Animation]);
+it('同一画面连续点击始终按当前模式切换，不等待动画锁', () => {
+  const f = fixture();
+  const share = { participant: { identity: 'A' } };
+  f.select(share);
+  expect(f.view.select).toHaveBeenCalledWith('A');
   f.view.mode = 'focus';
-  expect(f.view.switching).toBe(true);
-  await nextTick();
-  await Promise.resolve();
-  expect(f.view.switching).toBe(true);
-  finish();
-  await new Promise(done => setTimeout(done, 0));
-  expect(f.view.switching).toBe(false);
+  f.select(share);
+  expect(f.view.grid).toHaveBeenCalledOnce();
+  f.view.mode = 'grid';
+  f.select(share);
+  expect(f.view.select).toHaveBeenCalledTimes(2);
   f.scope.stop();
-
-  let cancel!: (reason: Error) => void;
-  const cancelled = new Promise<void>((_, reject) => { cancel = reject; });
-  const interrupted = fixture([{ playState: 'running', effect: { getComputedTiming: () => ({ endTime: 210 }) }, finished: cancelled } as unknown as Animation]);
-  interrupted.view.mode = 'focus';
-  await nextTick();
-  await Promise.resolve();
-  cancel(new Error('Animation cancelled'));
-  await new Promise(done => setTimeout(done, 0));
-  expect(interrupted.view.switching).toBe(false);
-  interrupted.view.mode = 'grid';
-  expect(interrupted.view.switching).toBe(true);
-  interrupted.scope.stop();
-  expect(interrupted.view.switching).toBe(false);
-});
-
-it('首轮动画结束后仍等待尺寸重算的新过渡，首次聚焦与更换聚焦目标也受保护', async () => {
-  const motion = () => {
-    let finish!: () => void;
-    const finished = new Promise<void>(resolve => { finish = resolve; });
-    return { finish, animation: { playState: 'running', effect: { getComputedTiming: () => ({ endTime: 210 }) }, finished } as unknown as Animation };
-  };
-  const first = motion(), replacement = motion();
-  const f = fixture([first.animation]);
-  try {
-    f.view.mode = 'collapsed';
-    f.view.mode = 'focus';
-    expect(f.view.switching).toBe(true);
-    await new Promise(done => setTimeout(done, 0));
-    f.element.getAnimations = () => [replacement.animation];
-    first.finish();
-    await new Promise(done => setTimeout(done, 0));
-    expect(f.view.switching).toBe(true);
-    replacement.finish();
-    await new Promise(done => setTimeout(done, 0));
-    expect(f.view.switching).toBe(false);
-    const changed = motion();
-    f.element.getAnimations = () => [changed.animation];
-    f.view.focused = 2;
-    expect(f.view.switching).toBe(true);
-    await new Promise(done => setTimeout(done, 0));
-    changed.finish();
-    await new Promise(done => setTimeout(done, 0));
-    expect(f.view.switching).toBe(false);
-  } finally { f.scope.stop(); }
 });
 
 it('占满窗口只切换布局，不调用系统全屏，不改变聚焦、折叠记忆或原高度', () => {

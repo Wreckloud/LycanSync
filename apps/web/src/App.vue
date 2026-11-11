@@ -21,6 +21,7 @@ import GroupManagementDialog from './components/GroupManagementDialog.vue';
 import GroupChat from './components/GroupChat.vue';
 import ScreenSharePicker from './components/ScreenSharePicker.vue';
 import { useInlineViewingMotion } from './viewing/useInlineViewingMotion';
+import { observeWindowLayoutRestore } from './viewing/windowLayoutRestore';
 import { createGroup, updateGroup, findGroup, findGroups,
   type GroupDetail, type GroupMember, type GroupSummary } from './group/groupApi';
 import { useRtcRoom } from './rtc/useRtcRoom';
@@ -82,6 +83,9 @@ const callSounds = useCallSounds(outputVolume, callSoundPreferences, audioOutput
 const desktop = window.lycanDesktop;
 const { notice: viewerNotice, noticeEvent: viewerNoticeEvent } = useNotice();
 const mainWindowVisible = ref(true);
+const windowLayout = observeWindowLayoutRestore(window);
+watch(mainWindowVisible, visible => visible ? windowLayout.restore() : windowLayout.suspend(), { flush: 'sync' });
+onScopeDispose(windowLayout.stop);
 let appDisposed = false;
 let nativeVisibilityReceived = false;
 const removeVisibilityListener = desktop?.onWindowVisibility((visible) => {

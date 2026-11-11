@@ -37,27 +37,20 @@ it('预览点击切换聚焦，再点同一共享收起；头像和私密画面�
   f.scope.stop();
 });
 
-it('切换动画期间忽略网格和成员点击，退出与来源失效仍立即收起', () => {
+it('连续选择立即采用最新布局，退出与来源失效仍立即收起', () => {
   const f = fixture();
   f.view.select('A');
   f.view.grid();
-  f.view.switching.value = true;
-  expect(f.view.select('B')).toBe(false);
-  expect(f.view.mode.value).toBe('grid');
-  f.view.switching.value = false;
   expect(f.view.select('B')).toBe(true);
-  f.view.switching.value = true;
-  f.view.grid();
   expect(f.view.mode.value).toBe('focus');
+  f.view.grid();
+  expect(f.view.mode.value).toBe('grid');
   f.view.collapse();
   expect(f.view.mode.value).toBe('collapsed');
-  expect(f.view.switching.value).toBe(false);
   f.view.select('A');
-  f.view.switching.value = true;
   f.participants.value = [];
   f.revision.value++;
   expect(f.view.mode.value).toBe('collapsed');
-  expect(f.view.switching.value).toBe(false);
   f.scope.stop();
 });
 
