@@ -10,9 +10,9 @@ function fixture(failVideo = false) {
   const context = {
     audioShortcuts: { clear: stop('shortcuts') }, screenShareWindows: { closeAll: stop('viewers') },
     activityMonitor: { clearMappings: stop('activity') }, voiceOverlay: { clear: stop('overlay') },
-    recording: { stopAll: stop('recording') }, nativeVideoSession: { sessionId: 'video' },
+    recording: { stopAll: stop('recording') }, nativeVideo: { current: { sessionId: 'video' },
+      stop: async () => { calls.push('video'); if (failVideo) throw new Error('failed'); } },
     nativeScreenAudio: { sessionId: 'audio', stop: stop('audio') }, nativeMicrophone: { sessionId: 'microphone', stop: stop('microphone') },
-    stopNativeVideo: async () => { calls.push('video'); if (failVideo) throw new Error('failed'); },
     Error,
   };
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');

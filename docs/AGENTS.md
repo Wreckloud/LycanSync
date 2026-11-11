@@ -80,7 +80,7 @@
 - 队列有明确容量和过载行为；停止标志、条件变量与等待锁的同步边界要可理解。说明丢弃、关闭唤醒及剩余块排空语义，不无限积压音视频。
 - 协议 stdout 只输出协议消息；诊断沿用 stderr，不泄露句柄、凭据或无必要的进程信息。
 - Windows 专属 API 留在条件编译边界内，协议、Electron 校验和 TypeScript 类型变更要同步检查。
-- 阅读顺序：麦克风从 Electron `main.cjs` → `native-microphone.cjs`（页面管道与会话）→ `obs-audio-host.cjs`（宿主进程） → `native/obs-capture-host/src/voice_main.cpp` / `voice_filter.cpp` → `audio-processing/src`；画面从 Electron `main.cjs` → `obs-capture-host.cjs` → `native/obs-capture-host/src`，Electron 纹理交付与引用回收见 `native-video-textures.cjs`；共享声音的管道、发布与录制复用由 `native-screen-audio.cjs` 持有，宿主进程仍由 `obs-capture-host.cjs` 管理。录制从 `main.cjs` → `recording.cjs` → `recording.cpp`，可选人声从 `useRecording.ts` → `recordingVoice.ts` / worklet → `recording-voice.cjs` → `recording_audio.cpp`；复用现有来源，不录入对方共享轨道。来源身份见 `sources*`，远控见 `remote_input.rs`，纹理导入见 `native/media-bridge/src/lib.rs`。
+- 阅读顺序：麦克风从 Electron `main.cjs` → `native-microphone.cjs`（页面管道与会话）→ `obs-audio-host.cjs`（宿主进程） → `native/obs-capture-host/src/voice_main.cpp` / `voice_filter.cpp` → `audio-processing/src`；画面从 Electron `main.cjs` → `native-video-session.cjs`（会话及停止编排）→ `obs-capture-host.cjs`（宿主进程）→ `native/obs-capture-host/src`，Electron 纹理交付与引用回收见 `native-video-textures.cjs`；共享声音的管道、发布与录制复用由 `native-screen-audio.cjs` 持有，宿主进程仍由 `obs-capture-host.cjs` 管理。录制从 `main.cjs` → `recording.cjs` → `recording.cpp`，可选人声从 `useRecording.ts` → `recordingVoice.ts` / worklet → `recording-voice.cjs` → `recording_audio.cpp`；复用现有来源，不录入对方共享轨道。来源身份见 `sources*`，远控见 `remote_input.rs`，纹理导入见 `native/media-bridge/src/lib.rs`。
 
 ## 文档和验证
 

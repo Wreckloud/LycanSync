@@ -40,6 +40,7 @@ module.exports = {
     'electron/native-microphone.cjs',
     'electron/native-screen-audio.cjs',
     'electron/native-video-textures.cjs',
+    'electron/native-video-session.cjs',
     'electron/native-audio-session.cjs',
     'electron/recording.cjs',
     'electron/recording-library.cjs',

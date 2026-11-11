@@ -2,7 +2,6 @@ const { app, BrowserWindow, ipcMain, sharedTexture, screen, session } = require(
 const { readFileSync, existsSync } = require('node:fs');
 const { Module } = require('node:module');
 const { resolve } = require('node:path');
-const { randomUUID } = require('node:crypto');
 const { runInNewContext } = require('node:vm');
 const { execFile, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
@@ -158,18 +157,15 @@ app.whenReady().then(async () => {
   });
   production = { closing: false, process, performance, writeMediaDiagnostic: async () => {},
     setMediaBackgroundActive: createMediaBackgroundPolicy(),
-    nativeVideoPreparation: undefined,
     // 此用例不启动录像；保留生产入口对空闲录像状态的查询和变更包裹。
     recording: { active: undefined, snapshot: () => ({ phase: 'idle', holdingResources: false,
       replay: { phase: 'idle', holdingResources: false, saving: false } }),
       withVideoChange: operation => operation() },
     console: { error: (...args) => diagnostics.push(args.map(String).join(' ').slice(0, 250)) },
-    setTimeout, clearTimeout, randomUUID, sharedTexture, ipcMain, mainWindow: window,
-    nativeMediaBridge: bridge, nativeVideoSession: undefined, lastStoppedNativeVideoSession: undefined,
+    ipcMain, mainWindow: window,
     nativeScreenAudio: { sessionId: undefined, droppedChunks: 0 },
     nativeMicrophone: { diagnostics: async () => ({ microphoneCapture: null, microphoneCaptureDroppedChunks: 0 }) },
     nativeVideoSourcesById: new Map([['monitor:1:0', { kind: 'monitor', title: monitorName }]]),
-    loadNativeMediaBridge: () => bridge, mediaHelperPath: () => rustPath,
     trustedSender: (event) => event.sender === window.webContents,
     recordVideoFailure: (stage, error, _frame, details = {}) => {
       const failure = { stage, code: String(error.message ?? error).slice(0, 160), ...details };
@@ -184,18 +180,10 @@ app.whenReady().then(async () => {
     return { duplicateSharedTexture: handle => host.duplicateSharedTexture(handle),
       release: () => { host.release(); openTextureHosts--; } };
   } };
-  production.nativeVideoTextures = require('../native-video-textures.cjs').createNativeVideoTextures({
-    getVideo: () => production.nativeVideoSession, getBridge: () => textureBridge, getWindow: () => window, sharedTexture,
-    writeDiagnostic: production.writeMediaDiagnostic, recordFailure: production.recordVideoFailure,
-    notifyFailure: (...args) => production.notifyNativeVideoError(...args),
-  });
   const main = readFileSync(resolve(__dirname, '../main.cjs'), 'utf8');
   // 运行生产入口本身，不复制另一套纹理交付和清理逻辑；不执行应用启动代码。
   runInNewContext([
-    sourceRange(main, 'function notifyNativeVideoError(', 'function handleVideoCaptureSuspended('),
-    sourceRange(main, 'function handleVideoCaptureSuspended(', 'function handleMediaHelperFailure('),
-    sourceRange(main, 'function handleMediaHelperFailure(', 'async function prepareNativeVideoSource('),
-    sourceRange(main, 'async function prepareNativeVideoSource(', 'const activityMonitor ='),
+    sourceRange(main, 'function handleMediaHelperFailure(', 'const activityMonitor ='),
     sourceRange(main, "ipcMain.handle('media:native-video:start',", "ipcMain.handle('media:remote-control:authorize',"),
     sourceRange(main, "ipcMain.on('media:native-video:receiver-error',", "ipcMain.handle('media:diagnostics',"),
     sourceRange(main, "ipcMain.handle('media:diagnostics',", "ipcMain.on('window:maximize',"),
@@ -204,17 +192,17 @@ app.whenReady().then(async () => {
     modulePath: resolve(prepared, 'obs-plugins/64bit/win-capture.dll'),
     dataPath: resolve(prepared, 'data/obs-plugins/win-capture'),
     configPath: resolve(app.getPath('userData'), 'obs-capture', '32.2.2'),
-    onFrame: production.nativeVideoTextures.receiveFrame,
+    onFrame: (state, frame) => production.nativeVideo.receiveFrame(state, frame),
     onFailure: (state, error) => {
       diagnostics.push(`obsFailure:${error.message}`);
-      const video = production.nativeVideoSession;
+      const video = production.nativeVideo.current;
       if (video && video.sessionId === state.videoSessionId && !video.stopping) {
         production.recordVideoFailure('obsCaptureHost', error);
-        production.notifyNativeVideoError(video, error.message === 'captureTargetClosed' ? error.message : 'obsCaptureHostFailed');
+        production.nativeVideo.notifyFailure(video, error.message === 'captureTargetClosed' ? error.message : 'obsCaptureHostFailed');
       }
     },
-    onClosed: production.nativeVideoTextures.releaseHost,
-    onSuspended: production.handleVideoCaptureSuspended,
+    onClosed: state => production.nativeVideo.releaseHost(state),
+    onSuspended: (state, event) => production.nativeVideo.suspend(state, event),
     onCaptureDiagnostic: (_state, entry) => captureEvidence.push({ ...entry, atMs: Math.round(performance.now()) }),
     onDiagnostic: (message) => { if (diagnostics.length < 30) diagnostics.push(message.slice(0, 250)); },
   });
@@ -226,6 +214,15 @@ app.whenReady().then(async () => {
       onDiagnostic: (message) => { if (diagnostics.length < 30) diagnostics.push(String(message).slice(0, 250)); },
     });
     production.mediaHelper = targetHelper;
+    production.nativeVideo = require('../native-video-session.cjs').createNativeVideoSession({
+      host: manager, mediaHelper: targetHelper, getSources: () => production.nativeVideoSourcesById,
+      isCaptureGame: executable => production.activityMonitor.isCaptureGame(executable),
+      getBridge: () => textureBridge, getWindow: () => window, sharedTexture,
+      getRecording: () => production.recording, screenAudio: production.nativeScreenAudio,
+      getGameFollow: () => production.leagueCaptureFollow, isClosing: () => production.closing,
+      setMediaBackgroundActive: production.setMediaBackgroundActive,
+      writeDiagnostic: production.writeMediaDiagnostic, recordFailure: production.recordVideoFailure,
+    });
     const snapshot = await targetHelper.listVideoSources();
     const monitor = snapshot.sources.find((source) => source.kind === 'monitor' && source.title === monitorName);
     assert(monitor, 'primaryMonitorMissing');
@@ -316,7 +313,7 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
         const stopAt = performance.now();
         await renderer('stop()');
         const evidence = captureEvidence.slice(evidenceStart);
-        assert(manager.state === state && !state.videoSessionId && !production.nativeVideoSession, 'startupStopNotConfirmed');
+        assert(manager.state === state && !state.videoSessionId && !production.nativeVideo.current, 'startupStopNotConfirmed');
         assert(mode !== 'restart' || state === previous, 'restartDidNotReuseHost');
         assert(evidence.some(entry => entry.stage === 'obsCaptureConfigured' && entry.captureMethod === 'dxgi'
           && entry.adapterMatched === true), 'dxgiAdapterMatchMissing');
@@ -440,7 +437,7 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
       assert(sourceDiagnostics.sourceKind === 'window' && sourceDiagnostics.captureBackend === 'obsLibobs', 'applicationDiagnosticsMismatch');
       assert(['bitblt-window', 'wgc-window'].includes(state.captureMethod), 'applicationAutomaticMethodMissing');
       const stopped = await renderer('stop()');
-      await until(() => !manager.state?.videoSessionId && !production.nativeVideoSession && !targetHelper.videoCapture);
+      await until(() => !manager.state?.videoSessionId && !production.nativeVideo.current && !targetHelper.videoCapture);
       assert(stopped.readyState === 'ended' && manager.state === state && !state.videoSessionId && !state.closed, 'applicationStopUnconfirmed');
       cases.push({ mode: browserKind ?? 'existing-application', actualMethod: state.captureMethod, firstFrameMs: started.firstFrameMs,
         submittedFps: Math.round((after.input.submittedFrames - before.input.submittedFrames) * 1000 / intervalMs),
@@ -491,7 +488,7 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
     assert(selected && other && selected.title === other.title && selected.sourceId !== other.sourceId, 'sameTitleTestWindowsMissing');
     production.nativeVideoSourcesById = new Map(snapshot.sources.map((source) => [source.sourceId, source]));
     const statuses = [];
-    manager.onSuspended = (state, event) => { statuses.push(event.suspended); production.handleVideoCaptureSuspended(state, event); };
+    manager.onSuspended = (state, event) => { statuses.push(event.suspended); production.nativeVideo.suspend(state, event); };
     if (repeatCheck) {
       let cyan = false;
       for (const mode of ['cold', 'prewarmed', 'restart']) {
@@ -514,7 +511,7 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
         assert(after.presented > before.presented + 10, 'repeatFramesStalled');
         assert(state.captureMethod === (gameCheck ? 'game' : ordinaryMethod), 'repeatMethodMismatch');
         const stopped = await renderer('stop()');
-        await until(() => !state.videoSessionId && !production.nativeVideoSession && !targetHelper.videoCapture);
+        await until(() => !state.videoSessionId && !production.nativeVideo.current && !targetHelper.videoCapture);
         assert(stopped.readyState === 'ended' && manager.state === state && !state.closed, 'repeatStopUnconfirmed');
         cases.push({ mode, actualMethod: state.captureMethod, firstFrameMs: started.firstFrameMs,
           freshPixelsChecked: true, hostRetained: true });
@@ -626,7 +623,7 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
       'windowRestoredDiagnosticsMismatch');
     testPhase = 'window-stop';
     await renderer('stop()');
-    await until(() => !manager.state?.videoSessionId && !production.nativeVideoSession && !targetHelper.videoCapture);
+    await until(() => !manager.state?.videoSessionId && !production.nativeVideo.current && !targetHelper.videoCapture);
     assert(manager.state === state && !state.videoSessionId && !state.closed, 'windowNormalStopWasForced');
     const reopenedSources = await targetHelper.listVideoSources();
     production.nativeVideoSourcesById = new Map(reopenedSources.sources.map((source) => [source.sourceId, source]));
@@ -637,7 +634,7 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
     if (mixedMethods) {
       methodSwitches.push(manager.state.captureMethod);
       await renderer('stop()');
-      await until(() => !state.videoSessionId && !production.nativeVideoSession && !targetHelper.videoCapture);
+      await until(() => !state.videoSessionId && !production.nativeVideo.current && !targetHelper.videoCapture);
       testPhase = 'window-switch-wgc';
       await renderer(`start(${JSON.stringify(other.sourceId)})`);
       await until(async () => {
@@ -647,7 +644,7 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
       assert(manager.state === state && state.captureMethod === 'wgc-window', 'retainedHostDidNotChooseWgc');
       methodSwitches.push(state.captureMethod);
       await renderer('stop()');
-      await until(() => !state.videoSessionId && !production.nativeVideoSession && !targetHelper.videoCapture);
+      await until(() => !state.videoSessionId && !production.nativeVideo.current && !targetHelper.videoCapture);
       testPhase = 'window-switch-bitblt';
       await renderer(`start(${JSON.stringify(selected.sourceId)})`);
       await until(selectedColorMatches);
@@ -656,7 +653,7 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
     }
     testPhase = 'window-close';
     await command('close', 'targetClosed');
-    await until(() => !manager.state?.videoSessionId && !production.nativeVideoSession && !targetHelper.videoCapture);
+    await until(() => !manager.state?.videoSessionId && !production.nativeVideo.current && !targetHelper.videoCapture);
     const ended = await renderer('probe(960,540)');
     assert(ended.readyState === 'ended' && ended.errors.includes('captureTargetClosed'), 'windowClosureNotEnded');
     const remaining = await targetHelper.listVideoSources();
@@ -755,7 +752,7 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
     }
     const stopStart = performance.now();
     const stopped = await renderer('stop()');
-    await until(() => !manager.state?.videoSessionId && !production.nativeVideoSession);
+    await until(() => !manager.state?.videoSessionId && !production.nativeVideo.current);
     assert(stopped.readyState === 'ended', 'generatedTrackNotEnded');
     if (mode === 'helper-exit') {
       assert(state.closed && (state.child.exitCode !== null || state.child.signalCode !== null)

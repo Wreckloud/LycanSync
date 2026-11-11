@@ -2,7 +2,6 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
-const { runInNewContext } = require('node:vm');
 const { leagueCaptureApplication, createLeagueCaptureFollow } = require('./league-capture.cjs');
 
 const target = (windowId, executable) => ({ kind: 'window', windowId, executable, processId: Number(windowId),
@@ -96,62 +95,4 @@ test('重复扫描只检查新实例；取消后的迟到枚举不返回目标',
   const pending = assert.rejects(f.follow.findSource(f.id), /Cancelled/);
   f.follow.end(f.id);
   await pending;
-});
-
-function switchingFixture() {
-  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
-  const calls = [];
-  const follow = {};
-  let active = true;
-  const sandbox = { performance, closing: false, nativeVideoSession: { sessionId: 'old', gameFollowId: 'league' },
-    leagueCaptureFollow: {
-      require: () => { if (!active) throw new Error('nativeGameFollowUnavailable'); return follow; },
-      findSource: async () => ({ sourceId: 'window:2:0' }),
-    },
-    stopNativeVideo: async (...args) => { calls.push(['stop', ...args]); sandbox.nativeVideoSession = undefined; },
-    startNativeVideo: async (...args) => { calls.push(['start', ...args]); return { sessionId: 'new', changed: true }; },
-    writeMediaDiagnostic: async entry => { calls.push(['diagnostic', entry]); },
-  };
-  runInNewContext(main.slice(main.indexOf('async function switchNativeGameVideo('), main.indexOf('function startActivityHelper(')), sandbox);
-  return { sandbox, calls, cancel: () => { active = false; },
-    start: () => sandbox.switchNativeGameVideo('league', 'window:2:0', 60,
-      { hideCursor: false, hideBorder: true }, { width: 1920, height: 1080 }) };
-}
-
-test('真实主进程切换先确认旧会话停止，再启动同一跟随授权的新窗口', async () => {
-  const f = switchingFixture();
-  await f.start();
-  assert.deepEqual(f.calls[0], ['stop', 'old', true]);
-  const start = f.calls.find(call => call[0] === 'start');
-  assert.equal(start[1], 'window:2:0');
-  assert.equal(start[3].followGame, 'league');
-  assert.equal(start.at(-1), 'league');
-  assert.ok(f.calls.some(call => call[0] === 'diagnostic' && call[1].stage === 'gameFollowSourceSwitched'));
-});
-
-test('旧来源清理未完成时取消或停止失败，不会启动新窗口', async () => {
-  for (const failure of [false, true]) {
-    const f = switchingFixture();
-    let finish;
-    f.sandbox.stopNativeVideo = () => new Promise((resolve, reject) => {
-      finish = () => failure ? reject(new Error('obsCaptureStopUnconfirmed')) : resolve();
-    });
-    const starting = assert.rejects(f.start(), failure ? /StopUnconfirmed/ : /nativeGameFollowUnavailable/);
-    await new Promise(resolve => setImmediate(resolve));
-    if (!failure) f.cancel();
-    finish();
-    await starting;
-    assert.equal(f.calls.some(call => call[0] === 'start'), false);
-  }
-});
-
-test('来源改变、其他共享占用和非法参数均在停止旧共享之前拒绝', async () => {
-  for (const invalid of ['source', 'owner', 'settings']) {
-    const f = switchingFixture();
-    if (invalid === 'source') f.sandbox.leagueCaptureFollow.findSource = async () => ({ sourceId: 'window:3:0' });
-    if (invalid === 'owner') f.sandbox.nativeVideoSession.gameFollowId = 'other';
-    await assert.rejects(invalid === 'settings'
-      ? f.sandbox.switchNativeGameVideo('league', 'window:2:0', 180, {}, {}) : f.start(), /nativeGameFollow/);
-    assert.equal(f.calls.some(call => ['stop', 'start'].includes(call[0])), false);
-  }
 });

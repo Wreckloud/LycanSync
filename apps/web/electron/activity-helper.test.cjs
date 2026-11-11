@@ -249,6 +249,7 @@ test('窗口/名称 IPC 仅接受启动完成后的可信页面，preload 不开
   const handlers = new Map();
   const calls = [];
   const state = { closing: false, startupReady: false, currentActivity: null,
+    nativeVideo: { prepare: async source => { assert.equal(source, null); calls.push('invalidate-preparation'); } },
     ipcMain: { handle: (channel, callback) => handlers.set(channel, callback) },
     trustedSender: (event) => event.trusted,
     activityMonitor: { listWindows: async () => { calls.push('windows'); return []; },
@@ -265,7 +266,7 @@ test('窗口/名称 IPC 仅接受启动完成后的可信页面，preload 不开
   state.startupReady = true;
   await handlers.get('activity:windows')({ trusted: true });
   await handlers.get('activity:configure')({ trusted: true }, []);
-  assert.deepEqual(calls, ['windows', []]);
+  assert.deepEqual(calls, ['windows', 'invalidate-preparation', []]);
   state.closing = true;
   assert.throws(() => handlers.get('activity:windows')({ trusted: true }), /请求来源无效/);
   const preload = readFileSync(join(__dirname, 'preload.cjs'), 'utf8');

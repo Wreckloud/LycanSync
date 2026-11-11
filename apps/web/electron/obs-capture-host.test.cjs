@@ -4,23 +4,12 @@ const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
 const { PassThrough, Writable } = require('node:stream');
 const { test } = require('node:test');
-const { runInNewContext: runVm } = require('node:vm');
-const { createMediaBackgroundPolicy } = require('./media-background.cjs');
-function runInNewContext(source, sandbox) {
-  sandbox.setMediaBackgroundActive ??= createMediaBackgroundPolicy();
-  return runVm(source, sandbox);
-}
+const { runInNewContext } = require('node:vm');
 const { ObsCaptureHostManager } = require('./obs-capture-host.cjs');
-const { leagueCaptureApplication } = require('./league-capture.cjs');
 
 const sessionId = '12345678-1234-1234-1234-123456789abc';
 const monitorName = '\\\\.\\DISPLAY2';
 const flush = () => new Promise((resolve) => setImmediate(resolve));
-function mainRendererFixture() {
-  let throttled = true;
-  return { webContents: { isDestroyed: () => false, send: () => {}, getBackgroundThrottling: () => throttled,
-    setBackgroundThrottling: (value) => { throttled = value; } } };
-}
 const idleAudio = { state: 'idle', sampleRate: null, channels: null, packetsReceived: 0, framesReceived: 0,
   silentPackets: 0, droppedAudioChunks: 0, lastError: null };
 const obsRender = { configuration: 1, elapsedMs: 4000, totalFrames: 240, laggedFrames: 2, activeFps: 59.5, averageRenderMs: 1.25 };
@@ -1192,7 +1181,7 @@ test('正式包和开发环境都使用固定 OBS 路径，不通过环境变量
 test('声音模式仅由 Windows 能力决定，旧系统混音与进程树范围不会互换', () => {
   const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = source.indexOf('function screenShareAudioCapability(');
-  const end = source.indexOf('function notifyNativeVideoError(', start);
+  const end = source.indexOf('function handleMediaHelperFailure(', start);
   assert.ok(start >= 0 && end > start);
   for (const [build, reason, available] of [[19041, 'windowsApplicationLoopbackProcessTree', true],
     [19040, 'windowsSystemMixLoopback', true], [15063, 'windowsSystemMixLoopback', true],
@@ -1380,31 +1369,12 @@ test('宿主退出使待确认切换明确失败，不保留虚假的目标帧�
   assert.equal(manager.state, undefined);
 });
 
-test('主进程的显示器各档启动及共享中切换均走 OBS，不接入旧采集', async () => {
+test('共享中画质调整仍走 OBS，停止状态拒绝调整', async () => {
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
-  const start = main.indexOf('async function startNativeVideo(');
-  const end = main.indexOf('async function stopNativeVideo(', start);
   const calls = [];
-  const timings = [];
-  const sandbox = { recording: { active: undefined, withVideoChange: operation => operation() }, nativeVideoPreparation: undefined, mainWindow: mainRendererFixture(), performance, writeMediaDiagnostic: async (entry) => timings.push(entry),
-    closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
-    nativeMediaBridge: {}, randomUUID: () => sessionId,
-    nativeVideoSourcesById: new Map([['monitor:7:0', { kind: 'monitor', title: monitorName }]]),
-    obsCaptureHost: { start: async (...args) => { calls.push(args); return { sessionId, changed: true }; },
-      configureVideo: async (...args) => { calls.push(args); return { changed: true }; } },
-    mediaHelper: { reserveVideo: async () => ({ kind: 'monitor', monitorName }),
-      startVideo: () => assert.fail('显示器不应按画质回到旧采集'),
-      configureVideo: () => assert.fail('OBS 会话不应修改旧采集') } };
-  runInNewContext(main.slice(start, end), sandbox);
-  for (const fps of [30, 60, 120]) {
-    sandbox.nativeVideoSession = undefined;
-    await sandbox.startNativeVideo('monitor:7:0', fps, { hideCursor: true, hideBorder: false });
-    assert.equal(calls.at(-1)[1], fps);
-  }
-  assert.equal(timings.filter(entry => entry.stage === 'screenVideoStartRequested').length, 3);
-  const readyTimings = timings.filter(entry => entry.stage === 'obsReady');
-  assert.equal(readyTimings.length, 3);
-  assert.ok(readyTimings.every(entry => Number.isFinite(entry.durationMs) && entry.durationMs >= 0));
+  const sandbox = { recording: { withVideoChange: operation => operation() }, closing: false,
+    nativeVideo: { current: { sessionId, stopping: false } },
+    obsCaptureHost: { configureVideo: async (...args) => { calls.push(args); return { changed: true }; } } };
   const configureStart = main.indexOf("ipcMain.handle('media:native-video:configure',");
   const configureEnd = main.indexOf("ipcMain.handle('recording:settings',", configureStart);
   let configure;
@@ -1415,7 +1385,7 @@ test('主进程的显示器各档启动及共享中切换均走 OBS，不接入�
   assert.deepEqual(calls.at(-1), [sessionId, 30, { width: 640, height: 360 }]);
   await configure({}, sessionId, 120, { width: 2560, height: 1440 });
   assert.deepEqual(calls.at(-1), [sessionId, 120, { width: 2560, height: 1440 }]);
-  sandbox.nativeVideoSession.stopping = true;
+  sandbox.nativeVideo.current.stopping = true;
   assert.throws(() => configure({}, sessionId, 120));
 });
 
@@ -1542,237 +1512,13 @@ test('停止后迟到的窗口暂停事件不能恢复状态或将正常清理�
   await stopped;
 });
 
-test('生产入口先预留窗口身份再启动 OBS，停止先关闭 OBS 再释放身份', async () => {
-  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
-  const start = main.indexOf('async function startNativeVideo(');
-  const end = main.indexOf('const activityMonitor =', start);
-  const calls = [];
-  const targetState = { alive: true };
-  const target = { kind: 'window', windowId: '123', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.123', processCreationTime: '456', processId: 123, requiresWindowCapture: false };
-  const sandbox = { recording: { active: undefined, withVideoChange: operation => operation() }, leagueCaptureApplication, nativeVideoPreparation: undefined, mainWindow: mainRendererFixture(), performance, writeMediaDiagnostic: async () => {}, closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
-    nativeMediaBridge: {}, randomUUID: () => sessionId, setTimeout, clearTimeout,
-    nativeScreenAudio: { sessionId: undefined, pausePublishing: () => {} }, lastStoppedNativeVideoSession: undefined,
-    nativeVideoSourcesById: new Map([['window:7:0', { kind: 'window', title: 'same title' }]]),
-    obsCaptureHost: { state: undefined,
-      start: async (_source, _fps, _id, received) => {
-        calls.push('obs-start'); assert.equal(received.windowId, target.windowId);
-        assert.equal(received.kind, 'window'); assert.equal(received.executable, undefined);
-        sandbox.obsCaptureHost.state = { videoSessionId: sessionId };
-        return { sessionId, changed: true };
-      },
-      stop: async () => { calls.push('obs-stop'); sandbox.obsCaptureHost.state = undefined; return { changed: true }; } },
-    mediaHelper: { videoCapture: undefined,
-      reserveVideo: async () => {
-        calls.push('reserve'); sandbox.mediaHelper.videoCapture = { state: targetState, sessionId };
-        return { ...target, executable: 'C:\\Apps\\app.exe' };
-      },
-      stopVideo: async () => { calls.push('release'); sandbox.mediaHelper.videoCapture = undefined; return { changed: true }; },
-      startVideo: () => assert.fail('不能启动另一条采集链路') },
-    activityMonitor: { isCaptureGame: async (executable) => {
-      calls.push('classify'); assert.equal(executable, 'C:\\Apps\\app.exe'); return false;
-    } },
-    recordVideoFailure: () => {}, nativeVideoTextures: { releaseImports: () => {}, releaseHost: () => {} } };
-  runInNewContext(main.slice(start, end), sandbox);
-  await sandbox.startNativeVideo('window:7:0', 60, { hideCursor: false, hideBorder: false });
-  assert.equal(sandbox.nativeVideoSession.targetState, targetState);
-  assert.equal(sandbox.nativeVideoSession.sourceKind, 'window');
-  assert.equal(sandbox.nativeVideoSession.sourceKind, 'window');
-  await sandbox.stopNativeVideo(sessionId);
-  assert.deepEqual(calls, ['reserve', 'classify', 'obs-start', 'obs-stop', 'release']);
-  assert.equal(sandbox.nativeVideoSession, undefined);
-});
-
-function gameRoutingFixture(classify, startFailure, requiresWindowCapture = false) {
-  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
-  const calls = [];
-  let sequence = 0;
-  const targetState = { alive: true, closed: false };
-  const target = { kind: 'window', windowId: '123', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.123',
-    processCreationTime: '456', processId: 123, requiresWindowCapture, executable: 'C:\\Games\\selected.exe' };
-  const sandbox = { recording: { active: undefined, withVideoChange: operation => operation() }, leagueCaptureApplication, nativeVideoPreparation: undefined, mainWindow: mainRendererFixture(), performance, writeMediaDiagnostic: async () => {}, closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
-    nativeMediaBridge: {}, randomUUID: () => `routing-${++sequence}`, setTimeout, clearTimeout,
-    nativeScreenAudio: { sessionId: undefined, pausePublishing: () => {} }, lastStoppedNativeVideoSession: undefined,
-    nativeVideoSourcesById: new Map([['window:7:0', { kind: 'window', title: 'same title' }]]),
-    activityMonitor: { isCaptureGame: classify },
-    obsCaptureHost: { state: undefined,
-      start: async (sourceId, fps, id, target) => {
-        calls.push({ action: 'start', sourceId, fps, id, target });
-        if (startFailure) throw new Error(startFailure);
-        sandbox.obsCaptureHost.state = { videoSessionId: id };
-        return { sessionId: id, changed: true };
-      },
-      stop: async (id) => { calls.push({ action: 'stop', id }); sandbox.obsCaptureHost.state = undefined; return { changed: true }; } },
-    mediaHelper: { videoCapture: undefined, videoSourceSnapshot: { state: targetState },
-      inspectVideoSource: async () => { calls.push({ action: 'inspect' }); return { ...target }; },
-      reserveVideo: async (id) => {
-        sandbox.mediaHelper.videoCapture = { state: targetState, sessionId: id };
-        calls.push({ action: 'reserve', id });
-        return { ...target };
-      },
-      stopVideo: async (id) => {
-        calls.push({ action: 'release', id }); sandbox.mediaHelper.videoCapture = undefined; return { changed: true };
-      },
-      startVideo: () => assert.fail('不能回退到 Rust') },
-    recordVideoFailure: () => {}, nativeVideoTextures: { releaseImports: () => {}, releaseHost: () => {} } };
-  runInNewContext(main.slice(main.indexOf('async function prepareNativeVideoSource('), main.indexOf('const activityMonitor =')), sandbox);
-  return { sandbox, calls, target, start: (settings = { hideCursor: true, hideBorder: true }) => sandbox.startNativeVideo('window:7:0', 120, settings) };
-}
-
-test('选窗准备仅检查身份与分类，同一选择合并请求，启动复用分类但重新预留身份', async () => {
-  let classified = 0;
-  const f = gameRoutingFixture(async () => { classified++; return true; });
-  const prepare = () => f.sandbox.prepareNativeVideoSource('window:7:0');
-  await Promise.all([prepare(), prepare()]);
-  assert.equal(classified, 1);
-  assert.deepEqual(f.calls.map(call => call.action), ['inspect']);
-  assert.equal(f.sandbox.nativeVideoSession, undefined);
-  assert.equal(f.sandbox.mediaHelper.videoCapture, undefined);
-  const started = await f.start();
-  assert.equal(classified, 1);
-  assert.deepEqual(f.calls.map(call => call.action), ['inspect', 'reserve', 'start']);
-  assert.equal(f.calls.at(-1).target.kind, 'game');
-  assert.equal(f.sandbox.nativeVideoPreparation, undefined);
-  await f.sandbox.stopNativeVideo(started.sessionId);
-});
-
-test('窗口实例或 helper 身份改变，旧准备结果不能替代启动时的权威身份', async () => {
-  for (const field of ['lifetimeName', 'processCreationTime', 'processId', 'requiresWindowCapture', 'executable', 'helper']) {
-    let classified = 0;
-    const f = gameRoutingFixture(async () => ++classified === 1);
-    await f.sandbox.prepareNativeVideoSource('window:7:0');
-    if (field === 'helper') f.sandbox.nativeVideoPreparation.state = {};
-    else if (field === 'requiresWindowCapture') f.target[field] = true;
-    else if (field === 'processId') f.target[field]++;
-    else f.target[field] += '-new';
-    const started = await f.start();
-    assert.equal(classified, field === 'requiresWindowCapture' ? 1 : 2);
-    assert.equal(f.calls.at(-1).target.kind, 'window');
-    await f.sandbox.stopNativeVideo(started.sessionId);
-  }
-});
-
-test('取消准备使迟到分类失效，不采集也不覆盖下一次选择', async () => {
-  let finish;
-  const f = gameRoutingFixture(() => new Promise(resolve => { finish = resolve; }));
-  const preparing = f.sandbox.prepareNativeVideoSource('window:7:0');
-  await flush();
-  await f.sandbox.prepareNativeVideoSource(null);
-  finish(true);
-  assert.equal((await preparing).prepared, false);
-  assert.equal(f.sandbox.nativeVideoPreparation, undefined);
-  assert.equal(f.sandbox.nativeVideoSession, undefined);
-  assert.deepEqual(f.calls.map(call => call.action), ['inspect']);
-});
-
-test('可选准备失败不停止正在工作的共享，也不保留失败的准备缓存', async () => {
-  const f = gameRoutingFixture(async () => false);
-  const started = await f.start();
-  const current = f.sandbox.nativeVideoSession;
-  f.sandbox.mediaHelper.inspectVideoSource = async () => { throw new Error('videoSourceExpired'); };
-  await assert.rejects(f.sandbox.prepareNativeVideoSource('window:7:0'), /videoSourceExpired/);
-  assert.equal(f.sandbox.nativeVideoPreparation, undefined);
-  assert.equal(f.sandbox.nativeVideoSession, current);
-  assert.equal(f.calls.filter(call => call.action === 'stop').length, 0);
-  await f.sandbox.stopNativeVideo(started.sessionId);
-});
-
-test('只在采集会话期间关闭后台节流，停止和启动失败清理后恢复原值', async () => {
-  for (const initial of [true, false]) {
-    const f = gameRoutingFixture(async () => false);
-    const contents = f.sandbox.mainWindow.webContents;
-    contents.setBackgroundThrottling(initial);
-    const started = await f.start();
-    assert.equal(contents.getBackgroundThrottling(), false);
-    await f.sandbox.stopNativeVideo(started.sessionId);
-    assert.equal(contents.getBackgroundThrottling(), initial);
-  }
-  const failed = gameRoutingFixture(async () => false, 'captureBorderUnsupported');
-  await assert.rejects(failed.start(), /captureBorderUnsupported/);
-  assert.equal(failed.sandbox.mainWindow.webContents.getBackgroundThrottling(), true);
-  assert.equal(failed.sandbox.nativeVideoSession, undefined);
-});
-
-test('手动窗口方式跳过游戏猜测，手动游戏仍只绑定原窗口', async () => {
-  for (const method of ['bitblt', 'wgc', 'game']) {
-    const { start, calls } = gameRoutingFixture(() => assert.fail('手动方式不能被分类器覆盖'));
-    await start({ hideCursor: false, hideBorder: true, windowMethod: method });
-    const target = calls.find(call => call.action === 'start').target;
-    assert.equal(target.kind, method === 'game' ? 'game' : 'window');
-    assert.equal(target.windowId, '123');
-    assert.equal(target.processCreationTime, '456');
-    assert.equal(target.executable, undefined);
-  }
-});
-
-test('高权限窗口自动走普通窗口源，不尝试注入；手动游戏仍明确执行', async () => {
-  for (const method of ['auto', 'game']) {
-    const { calls, start } = gameRoutingFixture(() => assert.fail('权限受限时不依赖游戏分类'), undefined, true);
-    await start({ hideCursor: false, hideBorder: true, windowMethod: method });
-    const target = calls.find(call => call.action === 'start').target;
-    assert.equal(target.kind, method === 'game' ? 'game' : 'window');
-    assert.equal(target.windowId, '123');
-    assert.equal(target.processId, 123);
-    assert.equal(target.requiresWindowCapture, undefined);
-  }
-});
-
-test('所选游戏走精确钩子并保留来源与偏好；启动失败清理身份，不降级窗口或整屏', async () => {
-  for (const failure of [undefined, 'obsGameBindingUnavailable', 'obsGameTargetMismatch']) {
-    const { sandbox, calls, start } = gameRoutingFixture(async (executable) => {
-      assert.equal(executable, 'C:\\Games\\selected.exe'); return true;
-    }, failure);
-    if (failure) await assert.rejects(start(), new RegExp(failure));
-    else {
-      const started = await start();
-      assert.equal(sandbox.nativeVideoSession.sourceKind, 'window');
-      await sandbox.stopNativeVideo(started.sessionId);
-    }
-    const capture = calls.find((entry) => entry.action === 'start');
-    assert.equal(capture.sourceId, 'window:7:0');
-    assert.equal(capture.target.kind, 'game');
-    assert.equal(capture.target.windowId, '123');
-    assert.equal(capture.target.executable, undefined);
-    assert.equal(calls.filter((entry) => entry.action === 'start').length, 1);
-    assert.equal(calls.at(-1).action, 'release');
-    assert.equal(sandbox.nativeVideoSession, undefined);
-  }
-});
-
-test('程序分类失败不启动采集，预留身份仍被释放', async () => {
-  const { sandbox, calls, start } = gameRoutingFixture(async () => { throw new Error('obsCaptureGameDetectionFailed'); });
-  await assert.rejects(start(), /obsCaptureGameDetectionFailed/);
-  assert.equal(calls.some((entry) => entry.action === 'start'), false);
-  assert.equal(calls.at(-1).action, 'release');
-  assert.equal(sandbox.nativeVideoSession, undefined);
-});
-
-test('分类等待中重复启动被拒绝；停止后迟到结果不能重开或关闭新会话', async () => {
-  let resolveOld;
-  let count = 0;
-  const { sandbox, calls, start } = gameRoutingFixture(() => ++count === 1
-    ? new Promise((resolve) => { resolveOld = resolve; }) : Promise.resolve(true));
-  const old = assert.rejects(start(), /nativeVideoSessionStopped/);
-  await flush();
-  await assert.rejects(start(), /videoCaptureAlreadyRunning/);
-  const oldId = sandbox.nativeVideoSession.sessionId;
-  await sandbox.stopNativeVideo(oldId);
-  const current = await start();
-  const state = sandbox.obsCaptureHost.state;
-  resolveOld(true);
-  await old;
-  assert.equal(sandbox.obsCaptureHost.state, state);
-  assert.equal(sandbox.nativeVideoSession.sessionId, current.sessionId);
-  assert.equal(calls.filter((entry) => entry.action === 'start').length, 1);
-  await sandbox.stopNativeVideo(current.sessionId);
-});
-
 test('OBS 远控 IPC 仅接受当前有效整屏；启动、停止、旧会话和窗口均拒绝输入', async () => {
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const handlers = new Map();
   const calls = [];
   const sandbox = { recording: { active: undefined, withVideoChange: operation => operation() }, closing: false, trustedSender: (event) => event.trusted,
     ipcMain: { handle: (name, callback) => handlers.set(name, callback) },
-    nativeVideoSession: { sessionId, sourceId: 'monitor:7:0', starting: false, stopping: false },
+    nativeVideo: { current: { sessionId, sourceId: 'monitor:7:0', starting: false, stopping: false } },
     mediaHelper: Object.fromEntries(['setRemoteControl', 'sendRemoteInput', 'clearRemoteControl'].map((name) =>
       [name, async (...args) => { calls.push([name, ...args]); return { changed: true }; }])) };
   runInNewContext(main.slice(main.indexOf("ipcMain.handle('media:remote-control:authorize',"),
@@ -1783,11 +1529,11 @@ test('OBS 远控 IPC 仅接受当前有效整屏；启动、停止、旧会话�
   await input();
   assert.deepEqual(calls.map((entry) => entry[0]), ['setRemoteControl', 'sendRemoteInput']);
   for (const change of [{ starting: true }, { stopping: true }, { sourceId: 'window:7:0' }, { sessionId: 'old' }]) {
-    const current = sandbox.nativeVideoSession;
-    sandbox.nativeVideoSession = { ...current, ...change };
+    const current = sandbox.nativeVideo.current;
+    sandbox.nativeVideo.current = { ...current, ...change };
     assert.throws(authorize, /InvalidSession/);
     assert.throws(input, /InvalidSession/);
-    sandbox.nativeVideoSession = current;
+    sandbox.nativeVideo.current = current;
   }
   assert.throws(() => handlers.get('media:remote-control:authorize')({ trusted: false }, sessionId, 'control', 'friend'), /InvalidSession/);
   sandbox.closing = true;
@@ -1795,121 +1541,6 @@ test('OBS 远控 IPC 仅接受当前有效整屏；启动、停止、旧会话�
   assert.throws(input, /InvalidSession/);
   await handlers.get('media:remote-control:revoke')({ trusted: true }, sessionId, 'control');
   assert.equal(calls.at(-1)[0], 'clearRemoteControl');
-});
-
-test('停止先禁用远控并释放按键，再等待 OBS 退出后释放身份；撤销失败仍清理画面且不报成功', async () => {
-  for (const revokeFailure of [false, true]) {
-    const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
-    const calls = [];
-    let releaseInput;
-    const sandbox = { recording: { active: undefined, withVideoChange: operation => operation() }, performance, writeMediaDiagnostic: async () => {}, nativeVideoSession: { sessionId, stopping: false,
-      targetState: {}, imported: new Map(), pendingSlotReleases: new Set() },
-      nativeScreenAudio: { sessionId: undefined, pausePublishing: () => {} }, setTimeout, Date, lastStoppedNativeVideoSession: undefined,
-      nativeVideoTextures: { releaseImports: () => {}, releaseHost: () => {} },
-      obsCaptureHost: { state: { videoSessionId: sessionId }, stop: async () => {
-        calls.push('obs-stop'); sandbox.obsCaptureHost.state = undefined; return { changed: true };
-      } },
-      mediaHelper: { videoCapture: { sessionId, remoteControl: { controlSessionId: 'control', accepting: true } },
-        clearRemoteControl: async () => {
-          calls.push('revoke'); sandbox.mediaHelper.videoCapture.remoteControl.accepting = false;
-          await new Promise((resolve) => { releaseInput = resolve; });
-          if (revokeFailure) throw new Error('remoteControlInputFailed');
-          sandbox.mediaHelper.videoCapture.remoteControl = undefined;
-          return { changed: true };
-        },
-        stopVideo: async () => { calls.push('release'); sandbox.mediaHelper.videoCapture = undefined; return { changed: true }; } },
-      recordVideoFailure: () => calls.push('report-revoke-failure') };
-    runInNewContext(main.slice(main.indexOf('function restoreNativeVideoBackgroundThrottling('), main.indexOf('const activityMonitor =')), sandbox);
-    const stopped = sandbox.stopNativeVideo(sessionId);
-    const rejected = revokeFailure ? assert.rejects(stopped, /remoteControlInputFailed/) : undefined;
-    assert.equal(sandbox.nativeVideoSession.stopping, true);
-    assert.equal(sandbox.mediaHelper.videoCapture.remoteControl.accepting, false);
-    assert.deepEqual(calls, ['revoke']);
-    releaseInput();
-    if (revokeFailure) {
-      await rejected;
-      assert.deepEqual(calls, ['revoke', 'report-revoke-failure', 'obs-stop', 'release']);
-      assert.equal(sandbox.nativeVideoSession.stopping, true);
-    } else {
-      await stopped;
-      assert.deepEqual(calls, ['revoke', 'obs-stop', 'release']);
-      assert.equal(sandbox.nativeVideoSession, undefined);
-    }
-  }
-});
-
-test('停止通知页面禁收后等待总纹理及槽位确认，再结束宿主来源，不提前清空登记', async () => {
-  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
-  const calls = [], ticks = [];
-  const video = { sessionId, targetState: {}, stopping: false,
-    renderer: { isDestroyed: () => false, send: (channel, status) => {
-      assert.equal(channel, 'media:native-video-stopping'); assert.equal(status.sessionId, sessionId);
-      calls.push('notify');
-    } }, imported: new Map([[0, { release: () => calls.push('release-reference') }]]), pendingSlotReleases: new Set() };
-  const sandbox = { performance, Date, setTimeout: callback => ticks.push(callback),
-    recording: {}, nativeVideoSession: video, nativeScreenAudio: { sessionId: undefined, pausePublishing: () => {} }, lastStoppedNativeVideoSession: undefined,
-    writeMediaDiagnostic: async event => { assert.notEqual(event.stage, 'screenTextureReleaseTimeout'); },
-    nativeVideoTextures: require('./native-video-textures.cjs').createNativeVideoTextures({}), obsCaptureHost: { state: { videoSessionId: sessionId },
-      stop: async () => { calls.push('obs-stop'); return { changed: true }; } },
-    mediaHelper: { videoCapture: { sessionId }, stopVideo: async () => { calls.push('identity-stop'); return { changed: true }; } },
-  };
-  runInNewContext(main.slice(main.indexOf('function restoreNativeVideoBackgroundThrottling('), main.indexOf('const activityMonitor =')), sandbox);
-  const stopping = sandbox.stopNativeVideo(sessionId);
-  assert.deepEqual(calls, ['notify', 'release-reference']);
-  assert.equal(video.imported.size, 1);
-  video.imported.delete(0);
-  video.pendingSlotReleases.add(0);
-  ticks.shift()();
-  await flush();
-  assert.deepEqual(calls, ['notify', 'release-reference']);
-  video.pendingSlotReleases.delete(0);
-  ticks.shift()();
-  await stopping;
-  assert.deepEqual(calls, ['notify', 'release-reference', 'obs-stop', 'identity-stop']);
-  assert.equal(sandbox.nativeVideoSession, undefined);
-});
-
-test('纹理释放超时只在宿主退出及身份释放确认后恢复重开；任一步失败仍阻挡', async () => {
-  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
-  for (const failure of [undefined, 'shutdown', 'identity']) {
-    const calls = [], events = [];
-    let now = 0;
-    const video = { sessionId, targetState: {}, stopping: false, imported: new Map([[0, {}]]), pendingSlotReleases: new Set() };
-    const sandbox = { recording: { active: undefined, withVideoChange: operation => operation() }, performance, Date: { now: () => now },
-      setTimeout: (callback) => { now += 400; queueMicrotask(callback); },
-      nativeVideoSession: video, nativeScreenAudio: { sessionId: undefined, pausePublishing: () => {} }, lastStoppedNativeVideoSession: undefined,
-      writeMediaDiagnostic: async entry => events.push(entry),
-      nativeVideoTextures: { releaseImports: () => { calls.push('release-imports'); }, releaseHost: () => {} },
-      obsCaptureHost: { state: { videoSessionId: sessionId },
-        shutdown: async force => {
-          calls.push('shutdown'); assert.equal(force, true);
-          if (failure === 'shutdown') throw new Error('obsCaptureStopUnconfirmed');
-          sandbox.obsCaptureHost.state = undefined;
-        }, stop: async () => { calls.push('confirm-stopped'); return { changed: false }; } },
-      mediaHelper: { videoCapture: { sessionId }, stopVideo: async () => {
-        calls.push('release-identity');
-        if (failure === 'identity') throw new Error('identityReleaseFailed');
-        sandbox.mediaHelper.videoCapture = undefined; return { changed: true };
-      } },
-    };
-    runInNewContext(main.slice(main.indexOf('function restoreNativeVideoBackgroundThrottling('), main.indexOf('const activityMonitor =')), sandbox);
-    const stopping = sandbox.stopNativeVideo(sessionId);
-    assert.equal(video.stopping, true);
-    assert.equal(sandbox.nativeVideoSession, video);
-    if (failure) {
-      await assert.rejects(stopping, failure === 'shutdown' ? /obsCaptureStopUnconfirmed/ : /identityReleaseFailed/);
-      assert.equal(sandbox.nativeVideoSession, video);
-      assert.equal(sandbox.lastStoppedNativeVideoSession, undefined);
-      assert.ok(!events.some(entry => entry.stage === 'screenVideoStopRecovered'));
-      if (failure === 'shutdown') assert.ok(!calls.includes('release-identity'));
-    } else {
-      await stopping;
-      assert.deepEqual(calls, ['release-imports', 'shutdown', 'confirm-stopped', 'release-identity']);
-      assert.equal(sandbox.nativeVideoSession, undefined);
-      await sandbox.stopNativeVideo(sessionId);
-      assert.ok(events.some(entry => entry.stage === 'screenVideoStopRecovered'));
-    }
-  }
 });
 
 test('资源对照单独记录 Rust 身份 helper，不把它漏算或并成物理内存', () => {
@@ -1926,34 +1557,6 @@ test('资源对照单独记录 Rust 身份 helper，不把它漏算或并成物�
   assert.equal(result.helperPrivateMiB[1], 70);
   assert.equal(summary({ ...before, identityHelper: null }, { ...after, identityHelper: null }).identityHelper, null);
   assert.throws(() => summary(before, { ...after, identityHelper: null }), /identityHelperChangedDuringSample/);
-});
-
-test('OBS 未确认停止时不能释放 Rust 持有的窗口身份', async () => {
-  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
-  const start = main.indexOf('async function stopObsVideo(');
-  const end = main.indexOf('async function stopNativeVideo(', start);
-  let released = false;
-  const targetState = {};
-  const sandbox = { recording: { active: undefined, withVideoChange: operation => operation() },
-    obsCaptureHost: { state: { videoSessionId: sessionId }, stop: async () => { throw new Error('obsCaptureStopUnconfirmed'); } },
-    mediaHelper: { videoCapture: { sessionId, state: targetState }, stopVideo: async () => { released = true; } },
-  };
-  const stop = runInNewContext(`${main.slice(start, end)}; stopObsVideo`, sandbox);
-  await assert.rejects(stop({ sessionId, targetState }), /obsCaptureStopUnconfirmed/);
-  assert.equal(released, false);
-  assert.equal(sandbox.mediaHelper.videoCapture.state, targetState);
-});
-
-test('旧采集迟到清理不释放已复用宿主的新桥接或新来源身份', async () => {
-  const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
-  const current = { videoSessionId: 'new-session' };
-  const sandbox = { recording: { active: undefined, withVideoChange: operation => operation() }, obsCaptureHost: { state: current, stop: () => assert.fail('不能停止新采集') },
-    nativeVideoTextures: { releaseHost: () => assert.fail('不能释放新桥接') },
-    mediaHelper: { videoCapture: { sessionId: 'new-session' }, stopVideo: () => assert.fail('不能释放新来源') } };
-  const stop = runInNewContext(source.slice(source.indexOf('async function stopObsVideo('),
-    source.indexOf('async function stopNativeVideo(')) + '; stopObsVideo', sandbox);
-  assert.equal((await stop({ sessionId, helperState: current, targetState: {} })).changed, false);
-  assert.equal(sandbox.obsCaptureHost.state, current);
 });
 
 test('没有新增成功帧时仍主动读取真实槽位丢帧；并发诊断共用一次请求', async (context) => {
@@ -1986,7 +1589,7 @@ test('正式诊断入口使用宿主响应的版本及计数，不读取缓存�
     replay: { phase: 'idle', holdingResources: false, saving: false } }), withVideoChange: operation => operation() }, ipcMain: { handle: (_name, callback) => { handler = callback; } },
     trustedSender: () => true, closing: false,
     mediaHelper: { getDiagnostics: async () => ({ helperVersion: 'rust', framesReceived: 999 }) },
-    nativeVideoSession: { sessionId, sourceKind: 'monitor', helperState: { alive: true } },
+    nativeVideo: { current: { sessionId, sourceKind: 'monitor', helperState: { alive: true } } },
     obsCaptureHost: { getDiagnostics: async (id) => {
       requested.push(id);
       return { helperVersion: 'observed-version', renderedFrames: 123, bridgeFrames: 3, bridgeDroppedFrames: 120,
@@ -2007,30 +1610,13 @@ test('正式诊断入口使用宿主响应的版本及计数，不读取缓存�
   assert.equal(diagnostics.recording.phase, 'idle');
   assert.equal(diagnostics.recording.holdingResources, false);
   assert.equal(diagnostics.recording.microphone, false);
-  sandbox.nativeVideoSession.sourceKind = 'window';
-  sandbox.nativeVideoSession.suspended = true;
+  sandbox.nativeVideo.current.sourceKind = 'window';
+  sandbox.nativeVideo.current.suspended = true;
   const pausedWindow = await handler({});
   assert.equal(pausedWindow.sourceKind, 'window');
   assert.equal(pausedWindow.captureSuspended, true);
-  sandbox.nativeVideoSession.suspended = false;
+  sandbox.nativeVideo.current.suspended = false;
   assert.equal((await handler({})).captureSuspended, false);
-});
-
-test('启动失败后的宿主停止未确认，主进程也保留身份阻止其他来源启动', async () => {
-  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
-  const start = main.indexOf('async function startNativeVideo(');
-  const end = main.indexOf('async function stopNativeVideo(', start);
-  const sandbox = { recording: { active: undefined, withVideoChange: operation => operation() }, nativeVideoPreparation: undefined, mainWindow: mainRendererFixture(), performance, writeMediaDiagnostic: async () => {}, closing: false, process: { platform: 'win32' }, nativeVideoSession: undefined,
-    nativeMediaBridge: {}, randomUUID: () => sessionId,
-    nativeVideoSourcesById: new Map([['monitor:7:0', { kind: 'monitor', title: monitorName }]]),
-    obsCaptureHost: { start: async () => { throw new Error('start failed'); },
-      stop: async () => { throw new Error('obsCaptureStopUnconfirmed'); } },
-    mediaHelper: { startVideo: () => assert.fail('未确认旧进程停止时不能开始其他采集') },
-    recordVideoFailure: () => {}, nativeVideoTextures: { releaseImports: () => {} } };
-  const invoke = runInNewContext(`${main.slice(start, end)}; startNativeVideo`, sandbox);
-  await assert.rejects(invoke('monitor:7:0', 60, {}), /obsCaptureStopUnconfirmed/);
-  assert.equal(sandbox.nativeVideoSession.stopping, true);
-  await assert.rejects(invoke('window:7:0', 120, {}), /videoCaptureAlreadyRunning/);
 });
 
 test('停止和强制结束均未确认时明确失败，保留状态阻止重开', async (context) => {

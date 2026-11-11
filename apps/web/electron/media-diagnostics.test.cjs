@@ -237,7 +237,7 @@ test('启动计时只接受当前可信采集会话和固定阶段，每阶段�
   assert.ok(start >= 0 && end > start);
   let handler;
   const entries = [];
-  const state = { closing: false, nativeVideoSession: { sessionId: 'current', starting: false, stopping: false },
+  const state = { closing: false, nativeVideo: { current: { sessionId: 'current', starting: false, stopping: false } },
     trustedSender: event => event.trusted, writeMediaDiagnostic: async entry => entries.push(entry),
     ipcMain: { on: (_name, callback) => { handler = callback; } } };
   runInNewContext(main.slice(start, end), state);
@@ -247,12 +247,12 @@ test('启动计时只接受当前可信采集会话和固定阶段，每阶段�
   send('current', 'arbitraryLog');
   send('current', 'screenVideoFirstFrame', 10, false);
   for (const duration of [-1, Infinity, NaN, 300001, '500', {}]) send('current', 'screenVideoFirstFrame', duration);
-  state.nativeVideoSession.starting = true;
+  state.nativeVideo.current.starting = true;
   send();
-  state.nativeVideoSession.starting = false;
-  state.nativeVideoSession.stopping = true;
+  state.nativeVideo.current.starting = false;
+  state.nativeVideo.current.stopping = true;
   send();
-  state.nativeVideoSession.stopping = false;
+  state.nativeVideo.current.stopping = false;
   state.closing = true;
   send();
   assert.equal(entries.length, 0);
@@ -276,7 +276,7 @@ test('启动计时只接受当前可信采集会话和固定阶段，每阶段�
     { stage: 'screenAudioStartup', durationMs: 500, outcome: 'published', phase: 'publish',
       pluginLoadMs: 12, captureReadyMs: 340, graphReadyMs: 20, publishMs: 50 },
   ]);
-  state.nativeVideoSession = { sessionId: 'next', starting: false, stopping: false };
+  state.nativeVideo.current = { sessionId: 'next', starting: false, stopping: false };
   send();
   send('next');
   assert.equal(entries.length, 4);
@@ -319,7 +319,7 @@ test('启动前桥接或来源失败也记录终止阶段，不泄露来源，�
   const entries = [];
   const failure = new Error('nativeVideoBridgeUnavailable');
   const sandbox = { performance, closing: false, trustedSender: event => event.trusted,
-    startNativeVideo: async () => { throw failure; }, writeMediaDiagnostic: async entry => entries.push(entry),
+    nativeVideo: { start: async () => { throw failure; } }, writeMediaDiagnostic: async entry => entries.push(entry),
     ipcMain: { handle: (_name, callback) => { handler = callback; } } };
   runInNewContext(main.slice(start, end), sandbox);
   assert.throws(() => handler({ trusted: false }, 'private-window'), /无效/);
