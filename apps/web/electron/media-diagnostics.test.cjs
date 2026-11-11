@@ -9,6 +9,21 @@ const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader
 const { EventEmitter } = require('node:events');
 const { parseDiagnosticReport } = require('./diagnostic-reports.cjs');
 
+test('缩略图诊断保留覆盖率与失败，不导出窗口身份或画面', async context => {
+  const directory = await mkdtemp(join(tmpdir(), 'lycan-thumbnail-diagnostics-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'events.jsonl'), time = new Date().toISOString();
+  await writeFile(path, [
+    { time, stage: 'screenPickerClosed', pickerId: 4, sourceCount: 5, readyCount: 3, confirmed: false, durationMs: 1200,
+      title: 'private-title', sourceId: 'private-source', thumbnail: 'private-image' },
+    { time, stage: 'sourceWindowThumbnail', outcome: 'timeout', sourceCount: 1, durationMs: 1200, windowId: 'private-handle' },
+  ].map(event => JSON.stringify(event)).join('\n'));
+  const events = await readDiagnosticEvents(path, 0, Date.parse(time));
+  assert.equal(events[0].sourceCount, 5); assert.equal(events[0].readyCount, 3); assert.equal(events[0].confirmed, false);
+  assert.equal(events[1].outcome, 'timeout');
+  assert.doesNotMatch(JSON.stringify(events), /private-/);
+});
+
 test('录制摘要保留真实输出数和固定故障，排除文件名及原始声音信息', async context => {
   const directory = await mkdtemp(join(tmpdir(), 'lycan-recording-diagnostics-'));
   context.after(() => rm(directory, { recursive: true, force: true }));

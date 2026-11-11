@@ -78,6 +78,13 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
         const hresults = [...new Set(message.match(/\b0x[0-9a-fA-F]{8}\b/g) ?? [])].slice(0, 8);
         const audioTiming = {};
         const details = {};
+        if (stage.startsWith('screenPicker') || stage === 'sourceWindowThumbnail') {
+          for (const key of ['pickerId', 'sourceCount', 'readyCount']) {
+            if (Number.isSafeInteger(entry[key]) && entry[key] >= 0) details[key] = entry[key];
+          }
+          if (typeof entry.confirmed === 'boolean') details.confirmed = entry.confirmed;
+          if (['ready', 'timeout', 'failed'].includes(entry.outcome)) details.outcome = entry.outcome;
+        }
         if (entry.stage === 'screenSourceReserved' && typeof entry.requiresWindowCapture === 'boolean') {
           details.requiresWindowCapture = entry.requiresWindowCapture;
         }

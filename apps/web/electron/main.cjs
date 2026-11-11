@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, Menu, net, powerMonitor, protocol, screen, session, safeStorage, shell, sharedTexture, Tray } = require('electron');
+const { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, protocol, screen, session, safeStorage, shell, sharedTexture, Tray } = require('electron');
 const { release: osRelease } = require('node:os');
 const { existsSync } = require('node:fs');
 const { Module } = require('node:module');
@@ -21,6 +21,7 @@ const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader
 const { createDiagnosticReportStore, parseDiagnosticReport } = require('./diagnostic-reports.cjs');
 const { loadServerSettings, saveServerSettings } = require('./server-settings.cjs');
 const { createNativeThumbnailCache, monitorDisplayId } = require('./native-video-thumbnails.cjs');
+const { createWindowThumbnailLoader } = require('./native-window-thumbnails.cjs');
 const { parseAccessLink, accessLinkFromArguments, parseManualAccessLink } = require('./access-links.cjs');
 const { qqLoginFromArguments, validateQqAuthorization } = require('./qq-login.cjs');
 const { createStartupUpdate, parseInstallTiming } = require('./startup-update.cjs');
@@ -86,7 +87,7 @@ const groupAttachmentPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}
 const groupFilePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/files(?:\/(?:requests\/)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/i;
 const groupFileDownloadPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/files\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 app.setName('LycanSync');
-// 来源缩略图仍由 Chromium 截取；避免部分 Win10 窗口的 WGC 缩略图采集拖慢系统壳层。
+// 整屏缩略图由 Chromium 截取；窗口预览按需在限时进程中生成，避免遍历无关窗口。
 // 正式视频流由 OBS 采集，此开关不改变其后端，也不关闭 GPU 合成或 WebRTC 编码。
 if (process.platform === 'win32') {
   app.commandLine.appendSwitch('disable-features', 'WebRtcAllowWgcDesktopCapturer,WebRtcAllowWgcScreenCapturer');
@@ -155,6 +156,12 @@ const audioShortcuts = createAudioShortcuts({ getWindow: () => mainWindow,
 let nativeVideoSourcesById = new Map();
 const loadNativeThumbnailBatch = createNativeThumbnailCache();
 const writeMediaDiagnostic = createMediaDiagnostics(resolve(app.getPath('userData'), 'screen-share-error.log'));
+const windowThumbnails = createWindowThumbnailLoader({ executablePath: mediaHelperPath,
+  inspectSource: sourceId => mediaHelper.inspectVideoSource(sourceId),
+  encode: ({ bitmap, width, height }) => 'data:image/jpeg;base64,'
+    + nativeImage.createFromBitmap(bitmap, { width, height }).toJPEG(80).toString('base64'),
+  onTiming: entry => { void writeMediaDiagnostic(entry); } });
+app.on('will-quit', () => windowThumbnails.dispose());
 const savedDiagnosticReports = createDiagnosticReportStore(resolve(app.getPath('userData'), 'diagnostics'));
 let diagnosticReportsGeneration = 0;
 const diagnosticStartedAt = Date.now();
@@ -1000,10 +1007,18 @@ ipcMain.handle('media:video-source:prepare', (event, sourceId) => {
       || !/^(?:monitor|window):[1-9]\d*:\d+$/.test(sourceId)))) throw new Error('请求来源无效');
   return nativeVideo.prepare(sourceId);
 });
-ipcMain.on('media:screen-picker-timing', (event, stage, durationMs) => {
-  if (!trustedSender(event) || closing || !['screenPickerSourcesReady', 'screenPickerPreviewReady'].includes(stage)
+ipcMain.on('media:screen-picker-timing', (event, stage, durationMs, details) => {
+  if (!trustedSender(event) || closing || !['screenPickerSourcesReady', 'screenPickerPreviewReady', 'screenPickerVisibleReady', 'screenPickerSelectionReady', 'screenPickerClosed'].includes(stage)
       || !Number.isFinite(durationMs) || durationMs < 0 || durationMs > 300_000) return;
-  recordSourceTiming(stage, performance.now() - durationMs);
+  const counts = {};
+  if (details !== undefined) {
+    if (!details || !Number.isSafeInteger(details.pickerId) || details.pickerId < 1
+        || !Number.isInteger(details.sourceCount) || details.sourceCount < 0 || details.sourceCount > 128
+        || !Number.isInteger(details.readyCount) || details.readyCount < 0 || details.readyCount > details.sourceCount) return;
+    Object.assign(counts, { pickerId: details.pickerId, sourceCount: details.sourceCount, readyCount: details.readyCount });
+    if (typeof details.confirmed === 'boolean') counts.confirmed = details.confirmed;
+  }
+  void writeMediaDiagnostic({ stage, durationMs: Math.round(durationMs), ...counts });
 });
 ipcMain.handle('media:video-source-thumbnails', async (event, sources) => {
   if (!trustedSender(event) || closing || !Array.isArray(sources) || sources.length > 128
@@ -1025,6 +1040,13 @@ ipcMain.handle('media:video-source-thumbnails', async (event, sources) => {
     const state = mediaHelper.videoSourceSnapshot?.state;
     if (!state?.alive || state.closed) return [];
     const batches = await Promise.all([...new Set(sources.map(source => source.kind))].map(kind => {
+      if (kind === 'window' && process.platform === 'win32') {
+        return Promise.all(sources.filter(source => source.kind === kind).map(source => {
+          const current = nativeVideoSourcesById.get(source.sourceId);
+          return current && current.title === source.title && current.windowId === source.windowId
+            ? windowThumbnails.load(state, current) : [];
+        })).then(results => results.flat());
+      }
       const currentSources = [...nativeVideoSourcesById.values()].filter(source => source.kind === kind)
         .map(source => ({ ...source, displayId: monitorDisplayId(source, screen) }));
       if (!currentSources.length) return [];

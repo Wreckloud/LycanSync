@@ -193,7 +193,8 @@ interface Window {
     reportStartupTiming(stage: 'loginDataReady' | 'loginReady', durationMs: number): void;
     reportVoiceJoinTiming(timing: { durationMs: number; preflightMs: number; tokenMs: number; connectMs: number;
       microphoneMs: number; listeningMs: number; microphoneEnabled: boolean }): void;
-    reportCapturePickerTiming(stage: 'screenPickerSourcesReady' | 'screenPickerPreviewReady', durationMs: number): void;
+    reportCapturePickerTiming(stage: 'screenPickerSourcesReady' | 'screenPickerPreviewReady' | 'screenPickerVisibleReady' | 'screenPickerSelectionReady' | 'screenPickerClosed', durationMs: number,
+      details?: { pickerId: number; sourceCount: number; readyCount: number; confirmed?: boolean }): void;
     onUpdateState(callback: (state: StartupUpdateState) => void): () => void;
     clearSession(): Promise<void>;
     returnToAccountEntry(): Promise<void>;

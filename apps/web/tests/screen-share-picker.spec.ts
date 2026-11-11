@@ -49,7 +49,7 @@ test('画质滑块支持跨项动画和键盘切换，缩放后仍对齐当前�
   await standard.focus();
   await page.keyboard.press('Home');
   await expect(presets.getByRole('tab', { name: '高帧率', exact: true })).toBeFocused();
-  await expect(page.locator('.capture-quality-description')).toContainText('每秒最多 120 帧');
+  await expect(page.locator('.capture-quality-description')).toContainText('1080p · 120 FPS');
   await expect.poll(() => presets.locator('.segmented-slider').evaluate(element => element.getAnimations().length)).toBe(0);
   const positions = await presets.getByRole('tab', { name: '节省流量', exact: true }).evaluate(async element => {
     const slider = element.parentElement!.querySelector('.segmented-slider')!;
@@ -64,7 +64,7 @@ test('画质滑块支持跨项动画和键盘切换，缩放后仍对齐当前�
   const first = positions[0]!, last = positions.at(-1)!;
   expect(last - first).toBeGreaterThan(40);
   expect(positions.some(position => position > first + 1 && position < last - 1)).toBe(true);
-  await expect(page.locator('.capture-quality-description')).toContainText('最高 720p，每秒最多 30 帧');
+  await expect(page.locator('.capture-quality-description')).toContainText('720p · 30 FPS');
   await page.setViewportSize({ width: 420, height: 720 });
   const selected = presets.getByRole('tab', { selected: true });
   const slider = presets.locator('.segmented-slider');

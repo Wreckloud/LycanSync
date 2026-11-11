@@ -5,17 +5,22 @@ const { test } = require('node:test');
 const { runInNewContext } = require('node:vm');
 const { matchNativeVideoSourceThumbnails, monitorDisplayId, createNativeThumbnailCache } = require('./native-video-thumbnails.cjs');
 
-test('缩略图 IPC 保留窗口句柄，同标题的分离窗口分别匹配并校验字段', async () => {
+for (const platform of ['win32', 'linux']) test(`${platform} 缩略图 IPC 保留窗口身份，同标题窗口分别匹配并校验字段`, async () => {
   const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = source.indexOf("ipcMain.handle('media:video-source-thumbnails'");
   const end = source.indexOf("ipcMain.handle('settings:screen-share:support'", start);
   let handler;
   let calls = 0;
+  let windowCalls = 0;
   const sources = ['10', '20'].map((windowId, index) => ({ sourceId: `window:1:${index}`,
     kind: 'window', title: 'Same browser title', windowId }));
   runInNewContext(source.slice(start, end), {
     ipcMain: { handle: (_name, callback) => { handler = callback; } },
-    trustedSender: () => true, closing: false, performance, Buffer, screen: {},
+    trustedSender: () => true, closing: false, performance, Buffer, screen: {}, process: { platform },
+    windowThumbnails: { load: async (_state, source) => { windowCalls++;
+      assert.ok(sources.includes(source));
+      return [{ sourceId: source.sourceId, thumbnail: 'data:image/jpeg;base64,' + Buffer.from(source.windowId).toString('base64') }];
+    } },
     recordSourceTiming() {}, writeMediaDiagnostic: async () => {},
     captureSourceType: source => source.id.startsWith('window:') ? 'window' : 'screen',
     matchNativeVideoSourceThumbnails, monitorDisplayId,
@@ -33,7 +38,8 @@ test('缩略图 IPC 保留窗口句柄，同标题的分离窗口分别匹配并
     { sourceId: 'window:1:1', thumbnail: 'data:image/jpeg;base64,MjA=' },
   ]);
   await assert.rejects(handler({}, [{ ...sources[0], windowId: '-1' }]), /请求参数无效/);
-  assert.equal(calls, 1);
+  assert.equal(calls, platform === 'win32' ? 0 : 1);
+  assert.equal(windowCalls, platform === 'win32' ? 2 : 0);
 });
 
 test('桌面误调用 Chromium 共享时明确拒绝，不枚举来源或启动采集', () => {

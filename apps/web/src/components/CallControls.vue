@@ -232,6 +232,11 @@ onScopeDispose(() => {
             @click="closeMenu(true); sharing ? emit('recording') : emit('shareAndRecord')">{{ recordingActive ? `停止录制 · ${recordingElapsed}` : sharing ? '开始录制' : '开始共享并录制' }}</button>
           <button v-if="desktop" type="button" class="call-menu-action call-quality-trigger" :aria-expanded="qualityOpen" :disabled="shareBusy" @click="toggleQuality">
             共享画质<span>{{ SCREEN_SHARE_QUALITIES.find(preset => preset.id === quality)?.label }}</span><ChevronRight class="call-menu-chevron" :size="14" /></button>
+          <label v-if="desktop && sharing" class="call-share-audio"><span>共享音频</span><input type="checkbox" :checked="shareAudio" :disabled="shareBusy || shareAudioRestricted || audioMode === 'unavailable'"
+            @change="toggleShareAudio" /></label>
+          <small v-if="desktop && sharing && shareAudioRestricted" class="call-audio-warning">远控画面不包含电脑声音，语音通话不受影响。</small>
+          <small v-else-if="desktop && sharing && audioMode === 'systemMix'" class="call-audio-warning">包含所有系统声音，可能产生回声。</small>
+          <small v-else-if="desktop && sharing && audioMode === 'unavailable'" class="call-audio-warning">当前系统不支持共享音频。</small>
           <button v-if="desktop && sharing && replayActive" type="button" class="call-menu-action"
             :disabled="recordingBusy || replaySaving || replayError || shareAudioRestricted"
             @click="closeMenu(true); emit('saveReplay')">保存即时回放</button>
@@ -251,11 +256,6 @@ onScopeDispose(() => {
           <ScreenShareCustomQuality :model-value="customQuality" :disabled="shareBusy"
             @update:model-value="emit('quality', 'custom', $event)" />
           </ExpandSection>
-          <label v-if="sharing" class="call-share-audio"><span>共享音频</span><input type="checkbox" :checked="shareAudio" :disabled="shareBusy || shareAudioRestricted || audioMode === 'unavailable'"
-            @change="toggleShareAudio" /></label>
-          <small v-if="sharing && shareAudioRestricted" class="call-audio-warning">远控画面不包含电脑声音，语音通话不受影响。</small>
-          <small v-else-if="sharing && audioMode === 'systemMix'" class="call-audio-warning">包含所有系统声音，可能产生回声。</small>
-          <small v-else-if="sharing && audioMode === 'unavailable'" class="call-audio-warning">当前系统不支持共享音频。</small>
         </section>
         </Transition>
       </div>

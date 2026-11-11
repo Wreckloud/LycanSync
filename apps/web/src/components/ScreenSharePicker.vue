@@ -20,7 +20,7 @@ const props = withDefaults(defineProps<{
   followGameAvailable?: boolean;
 }>(), { customQuality: () => ({ ...DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY }) });
 const emit = defineEmits<{
-  close: []; confirm: [settings: ScreenSharePreferences]; choose: [id: string]; refreshThumbnails: [];
+  close: []; confirm: [settings: ScreenSharePreferences]; choose: [id: string]; refreshThumbnails: []; previewLoaded: [sourceId: string];
   'update:sourceType': [type: 'window' | 'screen']; 'update:quality': [quality: ScreenShareQualityId];
   'update:shareAudio': [enabled: boolean];
   'update:customQuality': [quality: CustomScreenShareQuality];
@@ -127,7 +127,7 @@ defineExpose({ sourcesElement });
           :aria-labelledby="`capture-source-tab-${sourceType}`" @scroll.passive="emit('refreshThumbnails')">
           <button v-for="source in sources" :key="source.id" type="button" :aria-label="source.name"
             :data-source-id="source.id" :aria-pressed="selectedId === source.id" @click="emit('choose', source.id)">
-            <span class="capture-source-preview"><img v-if="source.thumbnail" :src="source.thumbnail" alt="" />
+            <span class="capture-source-preview"><img v-if="source.thumbnail" :src="source.thumbnail" alt="" @load="emit('previewLoaded', source.id)" />
               <span v-else class="capture-source-placeholder"><Monitor :size="32" /></span>
               <span v-if="selectedId === source.id" class="capture-source-selected" aria-hidden="true">✓</span></span>
             <span class="capture-source-name">{{ source.name }}</span>
@@ -135,7 +135,8 @@ defineExpose({ sourcesElement });
         </div>
         <div class="capture-quality">
           <div id="capture-quality-description" class="capture-quality-description" role="tabpanel"
-            :aria-labelledby="`capture-quality-${quality.id}`"><strong>{{ quality.description }}</strong><span>{{ quality.guidance }}</span></div>
+            :aria-labelledby="`capture-quality-${quality.id}`"><strong>{{ quality.description }}</strong><span>{{ quality.guidance }}</span>
+            <p v-if="borderNotice" class="capture-border-notice">{{ borderNotice }}</p></div>
           <SegmentedControl class="capture-quality-tabs" :model-value="quality.id" :options="SCREEN_SHARE_QUALITIES"
             label="共享画质" tabs id-prefix="capture-quality" controls="capture-quality-description"
             @update:model-value="emit('update:quality', $event)" />
@@ -166,7 +167,6 @@ defineExpose({ sourcesElement });
           class="capture-audio-option capture-game-follow">
           <input v-model="followGame" type="checkbox" />跟随英雄联盟大厅与对局（包括大厅聊天画面）
         </label>
-        <p v-if="borderNotice" class="capture-border-notice">{{ borderNotice }}</p>
         <footer class="card-actions">
           <button type="button" class="settings-button" @click="emit('close')">取消</button>
           <InlineFeedback class="card-feedback" :message="audioFailed ? '无法确认共享能力，请关闭后重试。' : error || settingsError"
@@ -188,7 +188,7 @@ defineExpose({ sourcesElement });
 .capture-content { display: flex; flex-direction: column; max-height: calc(100dvh - 34px); overflow-y: auto; padding: 24px; }
 .capture-header, .capture-tabs, .capture-quality, .card-actions { flex-shrink: 0; }
 .capture-dialog :deep(.inline-feedback) { flex-shrink: 0; }
-.capture-border-notice { flex-shrink: 0; margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 18px; }
+.capture-border-notice { margin: 0; color: var(--muted); font-size: 12px; line-height: 18px; }
 .capture-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .capture-header h2 { margin: 0; font-size: 22px; line-height: 32px; }
 .capture-header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
@@ -207,14 +207,14 @@ defineExpose({ sourcesElement });
 .capture-audio-option { display: flex; align-items: center; flex-shrink: 0; gap: 8px; font-size: 13px; line-height: 20px; }
 .capture-game-follow { margin: 12px 0; }
 .capture-audio-option input { margin: 0; }
-.capture-advanced { margin: 8px 0; font-size: 13px; line-height: 20px; }
+.capture-advanced { margin: 4px 0; font-size: 13px; line-height: 20px; }
 .capture-advanced-content { display: grid; gap: 8px; padding-top: 8px; }
 .capture-content > .expand-section { flex-shrink: 0; }
 .capture-advanced p { color: var(--muted); font-size: 12px; }
 .capture-method { display: flex; align-items: center; gap: 12px; }
-.capture-quality { display: flex; flex-direction: column; align-items: stretch; gap: 8px; margin: 8px 0 12px; }
+.capture-quality { display: flex; flex-direction: column; align-items: stretch; gap: 8px; margin: 8px 0 4px; }
 .capture-quality-tabs { order: -1; flex-shrink: 0; }
-.capture-quality-description { min-height: 60px; display: grid; gap: 2px; min-width: 0; line-height: 20px; }
+.capture-quality-description { display: grid; gap: 2px; min-width: 0; line-height: 20px; }
 .capture-quality-description strong { font-size: 14px; }
 .capture-quality-description span { font-size: 12px; color: var(--muted); }
 .capture-confirm { display: flex; align-items: center; gap: 12px; }

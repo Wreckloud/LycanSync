@@ -9,6 +9,31 @@ const flush = async () => { for (let step = 0; step < 8; step++) await nextTick(
 const source = (sourceId: string, kind: 'window' | 'monitor' = 'window'): NativeVideoSource =>
   ({ sourceId, kind, title: sourceId, width: 640, height: 480, primary: false });
 
+it('慢窗口不阻挡快窗口，图像加载后才统计首图和可见覆盖率，取消保留缺图数量', async () => {
+  const f = setup();
+  f.desktop.listNativeVideoSources.mockResolvedValue({ revision: 1, discoveryId: 'helper', sources: [source('slow'), source('fast')] });
+  let finish!: (value: { sourceId: string; thumbnail: string }[]) => void;
+  f.desktop.getNativeVideoSourceThumbnails.mockImplementation(async requested => requested[0]?.sourceId === 'slow'
+    ? new Promise(resolve => { finish = resolve; }) : [{ sourceId: 'fast', thumbnail: 'preview' }]);
+  f.container.value = { getBoundingClientRect: () => ({ top: 0, bottom: 500 }),
+    querySelectorAll: () => ['slow', 'fast'].map(id => ({ dataset: { sourceId: id },
+      getBoundingClientRect: () => ({ top: 10, bottom: 100 }) })) } as unknown as HTMLElement;
+  const pending = f.open(); await flush();
+  expect(f.state.captureRequest.value?.sources.find(source => source.id === 'fast')?.thumbnail).toBe('preview');
+  expect(f.desktop.reportCapturePickerTiming.mock.calls.some(call => call[0] === 'screenPickerPreviewReady')).toBe(false);
+  f.app.reportRenderedPreviews('fast');
+  expect(f.desktop.reportCapturePickerTiming).toHaveBeenCalledWith('screenPickerPreviewReady', expect.any(Number),
+    expect.objectContaining({ sourceCount: 2, readyCount: 1 }));
+  expect(f.desktop.reportCapturePickerTiming.mock.calls.some(call => call[0] === 'screenPickerVisibleReady')).toBe(false);
+  f.app.chooseCaptureSource('fast');
+  expect(f.desktop.reportCapturePickerTiming).toHaveBeenCalledWith('screenPickerSelectionReady', expect.any(Number), expect.any(Object));
+  f.app.selectCaptureSource(null); await pending;
+  expect(f.desktop.reportCapturePickerTiming).toHaveBeenCalledWith('screenPickerClosed', expect.any(Number),
+    expect.objectContaining({ sourceCount: 2, readyCount: 1, confirmed: false }));
+  finish([{ sourceId: 'slow', thumbnail: 'late' }]); await flush();
+  expect(f.state.captureRequest.value).toBeNull();
+});
+
 function setup(mode: NativeScreenAudioMode = 'process', configure?: (stored: Map<string, string>, getItem: ReturnType<typeof vi.fn<(key: string) => string | null>>) => void) {
   const stored = new Map([['lycansync.screen-share-quality', JSON.stringify({ quality: 'custom', customQuality: { resolution: 1440, fps: 120 } })]]);
   const setItem = vi.fn((key: string, value: string) => { stored.set(key, value); });

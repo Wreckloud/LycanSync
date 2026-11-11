@@ -48,6 +48,7 @@ module.exports = {
     'electron/media-diagnostics.cjs',
     'electron/diagnostic-reports.cjs',
     'electron/native-video-thumbnails.cjs',
+    'electron/native-window-thumbnails.cjs',
     'node_modules/**/*',
   ],
   extraResources: [

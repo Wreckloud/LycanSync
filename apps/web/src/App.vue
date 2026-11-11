@@ -106,7 +106,7 @@ const captureSelection = useScreenShareSelection({
 const { captureRequest, captureSourceType, captureQuality, captureCustomQuality, selectedCaptureSourceId,
   captureFollowGameAvailable, captureSourceNotice, captureAudioCapabilityReady, captureAudioCapabilityFailed,
   captureAudioMode, captureShareAudio, nativeSourceLoading, nativeSourceError, nativeSourceChooserGeneration,
-  selectCaptureSource, chooseCaptureSource, refreshVisibleSourceThumbnails, updateCaptureShareAudio,
+  selectCaptureSource, chooseCaptureSource, refreshVisibleSourceThumbnails, reportRenderedPreviews, updateCaptureShareAudio,
   saveCapturePreferences, preloadCaptureSources } = captureSelection;
 function requestNativeScreenSource(capabilities: Promise<Record<string, { available: boolean; reason: string }>>) {
   return captureSelection.requestNativeScreenSource(capabilities, requestedGame);
@@ -1180,7 +1180,7 @@ function participantListening(participant: Participant) {
       :selected-id="selectedCaptureSourceId" :audio-mode="captureAudioMode" :audio-ready="captureAudioCapabilityReady"
       :audio-failed="captureAudioCapabilityFailed" :loading="nativeSourceLoading" :error="nativeSourceError" :notice="captureSourceNotice"
       :follow-game-available="captureFollowGameAvailable"
-      @choose="chooseCaptureSource" @refresh-thumbnails="refreshVisibleSourceThumbnails"
+      @choose="chooseCaptureSource" @refresh-thumbnails="refreshVisibleSourceThumbnails" @preview-loaded="reportRenderedPreviews"
       @close="selectCaptureSource(null)" @confirm="selectCaptureSource(selectedCaptureSourceId, $event)" />
     </DialogTransition>
     <ScreenShareWindows ref="viewingWindows" :rtc="rtc" :group-name="joinedGroup?.name ?? ''"

@@ -79,11 +79,11 @@ test('共享菜单按操作顺序直接展示，画质保留二级调整，未�
   await opener.click();
   const menu = page.getByRole('region', { name: '共享选项', exact: true });
   await expect(menu.getByRole('button')).toHaveText(['关闭共享', '停止录制 · 03:24', '共享画质标准', '保存即时回放', '共享与录制']);
-  await expect(menu.getByRole('checkbox')).toHaveCount(0);
+  await expect(menu.getByRole('checkbox', { name: '共享音频' })).toBeVisible();
   await menu.getByRole('button', { name: '共享画质' }).click();
   const quality = page.getByRole('region', { name: '共享画质', exact: true });
   await expect(quality.getByRole('group', { name: '画质预设' }).getByRole('radio')).toHaveCount(4);
-  await expect(quality.getByRole('checkbox', { name: '共享音频' })).toBeVisible();
+  await expect(quality.getByRole('checkbox', { name: '共享音频' })).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(quality).toBeHidden();
   await expect(menu.getByRole('button', { name: '共享画质' })).toBeFocused();

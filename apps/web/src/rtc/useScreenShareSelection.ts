@@ -57,6 +57,10 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
   const nativeSourceChooserGeneration = ref(0);
   let nativeSourceChooserOpenedAt = 0;
   let nativeSourcePreviewReported = false;
+  let visiblePreviewReported = '';
+  let selectedPreviewReported = '';
+  let sourceSelectedAt = 0;
+  const renderedPreviews = new Set<string>();
   let nativeSourceRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   let nativeSourceRefresh: { promise: Promise<void> } | undefined;
   const nativeThumbnailRefresh = new Map<'window' | 'screen', { generation: number; promise: Promise<void> }>();
@@ -95,21 +99,16 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
     const requested = chooser.sourcesNeedingThumbnails(Date.now(), visibleIds, selectedCaptureSourceId.value);
     if (!requested.length) return;
     const discoveryId = currentNativeDiscoveryId;
-    const promise = desktop.getNativeVideoSourceThumbnails(requested).then(async (thumbnails) => {
+    // 窗口逐项交付，慢窗口不阻挡其他预览；主进程统一限制并发和子进程寿命。
+    const batches = sourceType === 'window' ? requested.map(source => [source]) : [requested];
+    const promise = Promise.all(batches.map(batch => desktop.getNativeVideoSourceThumbnails(batch).then((thumbnails) => {
       if (generation !== nativeSourceChooserGeneration.value || nativeSourceChooser !== chooser
           || currentNativeDiscoveryId !== discoveryId) return;
-      chooser.applyThumbnails(requested, thumbnails);
+      chooser.applyThumbnails(batch, thumbnails);
       updateNativeSourceOptions(generation, chooser);
-      if (!nativeSourcePreviewReported && captureSources.value.some((source) => visibleIds.has(source.id) && source.thumbnail)) {
-        nativeSourcePreviewReported = true;
-        await nextTick();
-        if (generation === nativeSourceChooserGeneration.value && nativeSourceChooser === chooser) {
-          desktop.reportCapturePickerTiming?.('screenPickerPreviewReady', performance.now() - nativeSourceChooserOpenedAt);
-        }
-      }
     }).catch((error) => {
       console.error('共享来源缩略图更新失败', error);
-    });
+    }))).then(() => {});
     // 两个分类独立等待；旧选择器的结果仍由代次和来源身份隔离。
     nativeThumbnailRefresh.set(sourceType, { generation, promise });
     try { await promise; }
@@ -145,11 +144,15 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
           captureSourceNotice.value = '所选窗口或屏幕已不可用，请重新选择。';
         }
         captureRequest.value = { ...captureRequest.value!, sources: options };
+        for (const id of renderedPreviews) {
+          if (!options.some(source => source.id === id && source.thumbnail)) renderedPreviews.delete(id);
+        }
         nativeSourceLoading.value = false;
         nativeSourceError.value = '';
         await nextTick();
         if (firstSnapshot && generation === nativeSourceChooserGeneration.value && nativeSourceChooser === chooser) {
-          desktop?.reportCapturePickerTiming?.('screenPickerSourcesReady', performance.now() - nativeSourceChooserOpenedAt);
+          desktop?.reportCapturePickerTiming?.('screenPickerSourcesReady', performance.now() - nativeSourceChooserOpenedAt,
+            { pickerId: generation, sourceCount: captureSources.value.length, readyCount: 0 });
         }
         void loadNativeSourceThumbnails(generation, chooser);
       } catch (error) {
@@ -176,12 +179,47 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
   }
 
   function refreshVisibleSourceThumbnails() {
+    reportRenderedPreviews();
     if (nativeSourceChooser) void loadNativeSourceThumbnails(nativeSourceChooserGeneration.value, nativeSourceChooser);
+  }
+
+  function visiblePreviewCounts() {
+    const container = options.sourcesElement();
+    if (!container) return { sourceCount: 0, readyCount: 0, ids: [] as string[] };
+    const bounds = container.getBoundingClientRect();
+    const ids = [...container.querySelectorAll<HTMLButtonElement>('[data-source-id]')].filter(element => {
+      const rect = element.getBoundingClientRect();
+      return rect.bottom > bounds.top && rect.top < bounds.bottom;
+    }).map(element => element.dataset.sourceId!);
+    return { sourceCount: ids.length, readyCount: ids.filter(id => renderedPreviews.has(id)).length, ids };
+  }
+
+  function reportRenderedPreviews(sourceId?: string) {
+    if (!captureRequest.value || document.hidden) return;
+    if (sourceId && captureSources.value.some(source => source.id === sourceId && source.thumbnail)) renderedPreviews.add(sourceId);
+    const { sourceCount, readyCount, ids } = visiblePreviewCounts();
+    const details = { pickerId: nativeSourceChooserGeneration.value, sourceCount, readyCount };
+    if (!nativeSourcePreviewReported && readyCount) {
+      nativeSourcePreviewReported = true;
+      desktop?.reportCapturePickerTiming?.('screenPickerPreviewReady', performance.now() - nativeSourceChooserOpenedAt, details);
+    }
+    const visibleKey = ids.join(',');
+    if (sourceCount && sourceCount === readyCount && visibleKey !== visiblePreviewReported) {
+      visiblePreviewReported = visibleKey;
+      desktop?.reportCapturePickerTiming?.('screenPickerVisibleReady', performance.now() - nativeSourceChooserOpenedAt, details);
+    }
+    const selected = selectedCaptureSourceId.value;
+    if (selected && renderedPreviews.has(selected) && selected !== selectedPreviewReported) {
+      selectedPreviewReported = selected;
+      desktop?.reportCapturePickerTiming?.('screenPickerSelectionReady', performance.now() - sourceSelectedAt, details);
+    }
   }
 
   function chooseCaptureSource(sourceId: string) {
     if (!captureSources.value.some((source) => source.id === sourceId)) return;
     selectedCaptureSourceId.value = sourceId;
+    sourceSelectedAt = performance.now();
+    selectedPreviewReported = '';
     captureSourceNotice.value = '';
     refreshVisibleSourceThumbnails();
   }
@@ -203,6 +241,9 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
       lastCaptureSourceType = captureSourceType.value;
       lastNativeSelection = { discoveryId: currentNativeDiscoveryId, sourceId };
     }
+    const { sourceCount, readyCount } = visiblePreviewCounts();
+    desktop?.reportCapturePickerTiming?.('screenPickerClosed', performance.now() - nativeSourceChooserOpenedAt,
+      { pickerId: nativeSourceChooserGeneration.value, sourceCount, readyCount, confirmed: sourceId !== null });
     captureRequest.value = null;
     const chooser = nativeSourceChooser;
     nativeSourceChooser = undefined;
@@ -251,6 +292,8 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
     const generation = ++nativeSourceChooserGeneration.value;
     nativeSourceChooserOpenedAt = performance.now();
     nativeSourcePreviewReported = false;
+    visiblePreviewReported = ''; selectedPreviewReported = ''; renderedPreviews.clear();
+    sourceSelectedAt = nativeSourceChooserOpenedAt;
     nativeSourceChooser = chooser;
     nativeSourceLoading.value = true;
     nativeSourceError.value = '';
@@ -349,6 +392,6 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
   return { captureRequest, captureSourceType, captureQuality, captureCustomQuality, selectedCaptureSourceId,
     captureFollowGameAvailable, captureSourceNotice, captureAudioCapabilityReady, captureAudioCapabilityFailed,
     captureAudioMode, captureShareAudio, nativeSourceLoading, nativeSourceError, nativeSourceChooserGeneration,
-    requestNativeScreenSource, selectCaptureSource, chooseCaptureSource, refreshVisibleSourceThumbnails,
+    requestNativeScreenSource, selectCaptureSource, chooseCaptureSource, refreshVisibleSourceThumbnails, reportRenderedPreviews,
     updateCaptureShareAudio, saveCapturePreferences, preloadCaptureSources };
 }
