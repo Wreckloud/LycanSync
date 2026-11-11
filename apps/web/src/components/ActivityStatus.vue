@@ -26,7 +26,7 @@ watch([viewport, content, () => props.active, () => props.text], (_, __, cleanup
 </script>
 
 <template>
-  <span class="member-activity" :title="text" :style="motion" :class="{ 'is-scrolling': active && distance > 1 }">
+  <span class="member-activity" :title="text" :style="motion" :class="{ 'is-active': active, 'is-scrolling': active && distance > 1 }">
     <span class="activity-prefix">{{ prefix }} </span>
     <span ref="viewport" class="activity-viewport"><span ref="content" class="activity-content">{{ name }}</span></span>
   </span>

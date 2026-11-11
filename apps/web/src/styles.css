@@ -444,7 +444,8 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .member-activity { display: flex; align-items: center; gap: 3px; min-width: 0; overflow: hidden; color: #43b6da; font-size: 12px; line-height: 14px; white-space: nowrap; }
 .activity-prefix { flex-shrink: 0; }
 .activity-viewport { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.activity-content { display: inline-block; white-space: nowrap; vertical-align: top; }
+.activity-content { display: inline; white-space: nowrap; vertical-align: top; }
+.member-activity.is-active .activity-content { display: inline-block; }
 .member-activity.is-scrolling .activity-viewport { text-overflow: clip; }
 .member-activity.is-scrolling .activity-content { animation: activity-marquee var(--activity-duration) ease-in-out infinite; }
 @keyframes activity-marquee {
@@ -453,6 +454,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 }
 @media (prefers-reduced-motion: reduce) {
   .member-activity.is-scrolling .activity-content { animation: none; }
+  .member-activity.is-active .activity-content { display: inline; }
   .member-activity.is-scrolling .activity-viewport { text-overflow: ellipsis; }
 }
 .group-member-row.is-offline { color: #6b727b; }

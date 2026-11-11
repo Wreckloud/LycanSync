@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, useId, watch } from 'vue';
+import { computed, nextTick, onMounted, onScopeDispose, ref, useId, watch } from 'vue';
 import { ChevronRight, Monitor } from '@lucide/vue';
 import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, SCREEN_SHARE_QUALITIES, screenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from '../rtc/screenShareQuality';
 import SegmentedControl from './SegmentedControl.vue';
@@ -54,6 +54,29 @@ const feedbackStatus = computed(() => {
 const backdropEvents = useBackdropDismiss(() => emit('close'));
 const advancedOpen = ref(false);
 const advancedId = useId();
+const content = ref<HTMLElement | null>(null);
+let heightObserver: ResizeObserver | undefined;
+let heightFrame = 0;
+let heightOwner: Window | undefined;
+
+onMounted(() => {
+  const surface = panel.value!;
+  const body = content.value!;
+  const owner = surface.ownerDocument.defaultView!;
+  heightOwner = owner;
+  // 内层按可用窗口高度排版，外框只跟随实测高度，避免动画反过来挤压来源列表。
+  const resize = () => { surface.style.height = `${body.getBoundingClientRect().height + 2}px`; };
+  resize();
+  heightObserver = new owner.ResizeObserver(() => {
+    owner.cancelAnimationFrame(heightFrame);
+    heightFrame = owner.requestAnimationFrame(resize);
+  });
+  heightObserver.observe(body);
+});
+onScopeDispose(() => {
+  heightObserver?.disconnect();
+  if (heightFrame) heightOwner?.cancelAnimationFrame(heightFrame);
+});
 
 function confirm() {
   if (!canConfirm.value) return;
@@ -89,6 +112,7 @@ defineExpose({ sourcesElement });
 <template>
     <div class="dialog-backdrop" v-on="backdropEvents" @keydown.stop="keydown">
       <section ref="panel" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-title" tabindex="-1">
+        <div ref="content" class="capture-content">
         <header class="capture-header">
           <div><h2 id="capture-title">选择共享的窗口或屏幕</h2></div>
         </header>
@@ -154,12 +178,14 @@ defineExpose({ sourcesElement });
             <button type="button" class="confirm-button" :disabled="!canConfirm" @click="confirm">开始共享</button>
           </div>
         </footer>
+        </div>
       </section>
     </div>
 </template>
 
 <style scoped>
-.capture-dialog { display: flex; flex-direction: column; width: min(860px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 24px; border: 1px solid var(--border); background: var(--panel); border-radius: 8px; }
+.capture-dialog { width: min(860px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: hidden; border: 1px solid var(--border); background: var(--panel); border-radius: 8px; transition: height var(--motion-layout-duration) var(--motion-ease), transform var(--motion-surface-duration) var(--motion-ease); }
+.capture-content { display: flex; flex-direction: column; max-height: calc(100dvh - 34px); overflow-y: auto; padding: 24px; }
 .capture-header, .capture-tabs, .capture-quality, .card-actions { flex-shrink: 0; }
 .capture-dialog :deep(.inline-feedback) { flex-shrink: 0; }
 .capture-border-notice { flex-shrink: 0; margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 18px; }
@@ -183,7 +209,7 @@ defineExpose({ sourcesElement });
 .capture-audio-option input { margin: 0; }
 .capture-advanced { margin: 8px 0; font-size: 13px; line-height: 20px; }
 .capture-advanced-content { display: grid; gap: 8px; padding-top: 8px; }
-.capture-dialog > .expand-section { flex-shrink: 0; }
+.capture-content > .expand-section { flex-shrink: 0; }
 .capture-advanced p { color: var(--muted); font-size: 12px; }
 .capture-method { display: flex; align-items: center; gap: 12px; }
 .capture-quality { display: flex; flex-direction: column; align-items: stretch; gap: 8px; margin: 8px 0 12px; }
@@ -192,5 +218,6 @@ defineExpose({ sourcesElement });
 .capture-quality-description strong { font-size: 14px; }
 .capture-quality-description span { font-size: 12px; color: var(--muted); }
 .capture-confirm { display: flex; align-items: center; gap: 12px; }
-@media (max-width: 620px) { .capture-dialog { padding: 20px; } .capture-sources { grid-template-columns: repeat(2, minmax(0, 1fr)); } .capture-quality { align-items: stretch; flex-direction: column; gap: 8px; } }
+@media (max-width: 620px) { .capture-content { padding: 20px; } .capture-sources { grid-template-columns: repeat(2, minmax(0, 1fr)); } .capture-quality { align-items: stretch; flex-direction: column; gap: 8px; } }
+@media (prefers-reduced-motion: reduce) { .capture-dialog { transition: none; } }
 </style>
