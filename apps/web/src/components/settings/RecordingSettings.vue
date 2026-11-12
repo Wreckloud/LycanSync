@@ -5,7 +5,7 @@ import type { useRecording } from '../../recording/useRecording';
 import InlineFeedback from '../InlineFeedback.vue';
 import RecordingLibrary from './RecordingLibrary.vue';
 
-const props = defineProps<{ recording: ReturnType<typeof useRecording>; desktop: boolean; sharing: boolean }>();
+const props = defineProps<{ recording: ReturnType<typeof useRecording>; desktop: boolean; sharing: boolean; active: boolean }>();
 const recordingProgress = computed(() => props.recording.state.value.phase === 'stopping' ? '正在保存…'
   : props.recording.state.value.phase === 'starting' ? '正在准备录制…' : '');
 const replayProgress = computed(() => props.recording.state.value.replay?.phase === 'stopping' ? '正在关闭回放，已开始保存的片段会继续保存…'
@@ -104,7 +104,7 @@ async function changeReplay(event: Event) {
       </div>
       <InlineFeedback :message="recording.noticeTarget.value === 'replay' ? recording.notice.value : ''" />
     </section>
-    <RecordingLibrary v-if="desktop" :status="recording.state.value" />
+    <RecordingLibrary v-if="desktop && active" :status="recording.state.value" />
   </div>
 </template>
 

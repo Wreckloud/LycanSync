@@ -1166,6 +1166,7 @@ function participantListening(participant: Participant) {
       @after-leave="finishSettingsLeave" @leave-cancelled="settingsPresented = true"
       @before-leave="settingsCovered = false; ($event as HTMLElement).inert = true">
     <SettingsView v-if="settingsOpen" ref="settingsView" :blocked="Boolean(props.interactionBlocked || rtc.remoteControlRequest || !mainWindowVisible)" v-model:section="settingsSection" :user="user" :desktop="Boolean(desktop)"
+      @group-updated="applyGroupDetail" @group-removed="removedFromGroup"
       :audio-shortcuts="audioShortcuts" :call-sound-preferences="callSoundPreferences" :call-sounds="callSounds"
       :overlay="desktop ? voiceOverlay : undefined"
       :share-quality="rtc.screenShareActive ? rtc.currentScreenShareQuality : captureQuality"

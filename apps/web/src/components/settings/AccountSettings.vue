@@ -4,9 +4,10 @@ import { authRequest } from '../../auth/authApi';
 import { useQqLogin } from '../../auth/useQqLogin';
 import InlineFeedback from '../InlineFeedback.vue';
 import AccountLifecycleSettings from './AccountLifecycleSettings.vue';
+import type { GroupDetail } from '../../group/groupApi';
 
-const props = defineProps<{ active: boolean; leaving: boolean; administrator?: boolean }>();
-const emit = defineEmits<{ logout: [] }>();
+const props = defineProps<{ active: boolean; leaving: boolean; administrator?: boolean; userId: string }>();
+const emit = defineEmits<{ logout: []; resolveOwner: []; groupUpdated: [group: GroupDetail]; groupRemoved: [id: string] }>();
 const expanded = ref<'qq' | null>(null);
 const qqAvailable = ref(false);
 const binding = ref<{ bound: boolean; nickname: string } | null>(null);
@@ -61,7 +62,8 @@ watch(() => props.active, (active) => {
       <div class="account-row"><div class="account-copy"><span>退出当前账号</span></div>
         <button type="button" :disabled="leaving" @click="emit('logout')">退出登录</button></div>
     </section>
-    <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="administrator" section="account" />
+    <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="administrator" :user-id="userId" section="account"
+      @resolve-owner="emit('resolveOwner')" @group-updated="emit('groupUpdated', $event)" @group-removed="emit('groupRemoved', $event)" />
   </section>
 </template>
 

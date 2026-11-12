@@ -12,10 +12,19 @@ watch(() => props.active, active => { if (!active) mode.value = null; });
 <template>
   <section class="settings-block">
     <h2>成员访问</h2>
-    <div class="button-actions">
-      <button type="button" @click="mode = 'invite'">邀请新朋友</button>
-      <button type="button" @click="mode = 'recovery'">恢复成员登录</button>
-      <button type="button" @click="mode = 'links'">链接管理</button>
+    <div class="settings-toggle-group">
+      <div class="settings-action-row">
+        <div><strong>邀请新朋友</strong><small>通过邀请链接加入服务器。</small></div>
+        <button type="button" @click="mode = 'invite'">邀请新朋友</button>
+      </div>
+      <div class="settings-action-row">
+        <div><strong>恢复成员登录</strong><small>帮助无法登录的朋友找回原账号。</small></div>
+        <button type="button" @click="mode = 'recovery'">恢复成员登录</button>
+      </div>
+      <div class="settings-action-row">
+        <div><strong>链接管理</strong><small>查看使用状态，重新生成或撤销链接。</small></div>
+        <button type="button" @click="mode = 'links'">链接管理</button>
+      </div>
     </div>
   </section>
   <DialogTransition>

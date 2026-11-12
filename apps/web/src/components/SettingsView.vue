@@ -31,6 +31,7 @@ import type { useRecording } from '../recording/useRecording';
 import { SETTINGS_SECTIONS, settingsSectionTitle, type SettingsSectionId } from '../settings/settingsSections';
 import type { UserActivity, UserPresenceStatus } from '../presence/presenceApi';
 import type { PresenceMode } from '../presence/usePresencePreference';
+import type { GroupDetail } from '../group/groupApi';
 
 const props = defineProps<{
   section: SettingsSectionId;
@@ -66,7 +67,16 @@ const props = defineProps<{
   activityMappings: ReturnType<typeof useActivityMappings>;
   saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
 }>();
-const emit = defineEmits<{ close: []; logout: []; 'update:section': [section: SettingsSectionId]; activityVisibility: [enabled: boolean]; lastOnlineVisibility: [enabled: boolean]; presenceMode: [mode: PresenceMode] }>();
+const emit = defineEmits<{ close: []; logout: []; groupUpdated: [group: GroupDetail]; groupRemoved: [id: string]; 'update:section': [section: SettingsSectionId]; activityVisibility: [enabled: boolean]; lastOnlineVisibility: [enabled: boolean]; presenceMode: [mode: PresenceMode] }>();
+const ownerSettings = ref<InstanceType<typeof OwnerSettings> | null>(null);
+const returningToClosure = ref(false);
+async function resolveOwner() {
+  await selectSection('members');
+  if (activeSection.value !== 'members') return;
+  returningToClosure.value = true;
+  await nextTick();
+  await ownerSettings.value?.beginTransfer();
+}
 const heading = ref<HTMLElement | null>(null);
 const profileSettings = ref<InstanceType<typeof ProfileSettings> | null>(null);
 const activitySettings = ref<InstanceType<typeof ActivitySettings> | null>(null);
@@ -140,7 +150,10 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
         </div>
       </header>
       <div class="settings-content">
-        <OwnerSettings v-if="user.administrator && activeSection === 'members'" :active="true" :leaving="leaving" />
+        <div v-if="user.administrator && activeSection === 'members'" class="owner-settings-page">
+          <button v-if="returningToClosure" type="button" class="settings-button" @click="selectSection('account')">返回注销流程</button>
+          <OwnerSettings ref="ownerSettings" :active="true" :leaving="leaving" />
+        </div>
         <div v-show="activeSection === 'account'" class="settings-account-page">
           <ProfileSettings ref="profileSettings" :user="user" :save-profile="saveProfile" />
           <ActivitySettings ref="activitySettings" :user="user" :status="presenceStatus" :desktop="desktop" :activity="activity" :show-activity="showActivity" :show-last-online="showLastOnline"
@@ -148,7 +161,8 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
             @presence-mode="emit('presenceMode', $event)"
             :mappings="activityMappings" :active="activeSection === 'account'"
             :error="activityError" @visibility="emit('activityVisibility', $event)" @last-online-visibility="emit('lastOnlineVisibility', $event)" />
-          <AccountSettings :active="activeSection === 'account'" :leaving="leaving" :administrator="user.administrator" @logout="requestLogout" />
+          <AccountSettings :active="activeSection === 'account'" :leaving="leaving" :administrator="user.administrator" :user-id="user.id" @logout="requestLogout"
+            @resolve-owner="resolveOwner" @group-updated="emit('groupUpdated', $event)" @group-removed="emit('groupRemoved', $event)" />
         </div>
         <AudioSettings v-show="activeSection === 'audio'" :active="activeSection === 'audio'"
           :desktop="desktop" :preferences="preferences" :audio-output="audioOutput" :rtc="rtc" :microphone-test="microphoneTest" :microphone-devices="microphoneDevices"
@@ -160,7 +174,7 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
         <div v-if="recording" v-show="activeSection === 'recording'" class="settings-recording-page">
           <ScreenShareSettings v-if="desktop" :active="activeSection === 'recording'" :rtc="rtc" :shared-audio="sharedAudio" :quality="shareQuality" :custom-quality="customShareQuality"
             :change-quality="changeShareQuality" :change-audio="changeShareAudio" />
-          <RecordingSettings :recording="recording" :desktop="desktop" :sharing="rtc.screenShareActive" />
+          <RecordingSettings :recording="recording" :desktop="desktop" :sharing="rtc.screenShareActive" :active="activeSection === 'recording'" />
         </div>
         <ClientSettings ref="clientSettings" v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'" :user-id="user.id" />
         <AboutSettings v-show="activeSection === 'about'" :active="activeSection === 'about'" :rtc="rtc" :report="diagnosticReport" />
@@ -170,6 +184,7 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
 </template>
 
 <style scoped>
+.owner-settings-page { display: grid; justify-items: start; gap: 16px; }
 .settings-recording-page { display: grid; gap: 24px; }
 .settings-view {
   position: fixed;

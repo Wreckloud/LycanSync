@@ -27,9 +27,14 @@ async function confirmRevoke() {
   if (await revoke(revokeId.value)) revokeId.value = '';
 }
 async function copy() {
-  if (!await copyLink() && linkError.value) {
+  const copied = await copyLink();
+  await nextTick();
+  if (!copied && linkError.value) {
     linkInput.value?.focus();
     linkInput.value?.select();
+  } else if (dialog.value && !dialog.value.contains(document.activeElement)) {
+    // 复制期间按钮会禁用，浏览器可能把焦点退回页面；完成后保留弹窗的键盘操作。
+    linkInput.value?.focus({ preventScroll: true });
   }
 }
 async function backToRecords() {
@@ -92,7 +97,6 @@ onMounted(() => { (searchInput.value ?? dialog.value)?.focus(); });
         <InlineFeedback :message="mode === 'invite' ? inviteError : recoveryError" :pending="busy ? '正在生成链接…' : ''" />
       </form>
       <div v-else class="access-body">
-        <div class="access-records-heading"><span>链接记录</span><button type="button" :disabled="locked" @click="refresh">刷新状态</button></div>
         <div class="access-records">
           <p v-if="!links.length && !refreshing && !recordsError">暂无记录</p>
           <article v-for="link in links" :key="link.id" class="access-record">
@@ -120,6 +124,7 @@ onMounted(() => { (searchInput.value ?? dialog.value)?.focus(); });
           </article>
         </div>
         <InlineFeedback :message="recordsError" :pending="busy ? '正在处理…' : refreshing && !links.length ? '正在读取记录…' : ''" />
+        <button v-if="recordsError" type="button" :disabled="locked" @click="refresh">重新读取</button>
         <div v-if="offset || links.length === 100" class="access-pagination">
           <button type="button" :disabled="locked || offset === 0" @click="page(-1)">上一页记录</button>
           <button type="button" :disabled="locked || links.length < 100" @click="page(1)">下一页记录</button>
@@ -154,7 +159,6 @@ small { font-size: 12px; }
 .access-member-details strong { font-weight: 500; }
 .access-member button { min-width: 64px; }
 .access-member button[aria-pressed="true"] { border-color: var(--accent); }
-.access-records-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .access-record { display: grid; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border-soft); }
 .access-record-details { display: grid; min-width: 0; gap: 4px; overflow-wrap: anywhere; }
 .access-revoke-confirm { padding-top: 8px; }

@@ -18,6 +18,11 @@
 .settings-range-row select { width: 100%; }
 .settings-view :is(.settings-field input, .settings-field select, .profile-nickname input, textarea):focus { border-color: var(--subtle); outline: none; }
 .settings-toggle-group { display: grid; gap: 12px; min-width: 0; }
+.settings-action-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; }
+.settings-action-row > div { display: grid; gap: 4px; min-width: 0; }
+.settings-action-row strong { font-size: 14px; font-weight: 500; }
+.settings-action-row small { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.settings-action-row > button { flex-shrink: 0; }
 .settings-toggle { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; padding: 0; cursor: pointer; }
 .settings-toggle > span { display: grid; justify-items: start; gap: 4px; min-width: 0; text-align: left; }
 .settings-toggle > button { flex-shrink: 0; }

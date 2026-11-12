@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from 'vue';
+import { computed, onMounted, onScopeDispose, watch } from 'vue';
 import { useRecordingLibrary } from '../../recording/useRecordingLibrary';
 import InlineFeedback from '../InlineFeedback.vue';
 
@@ -29,14 +29,19 @@ function state(entry: RecordingLibraryEntry) {
   return entry.state === 'saved' ? '已保存' : '保存未确认，请检查原片';
 }
 watch(() => [props.status.recordingId, props.status.phase, props.status.replay?.lastSavedId], () => { void library.load(); });
-onMounted(() => { void library.load(); });
+function refreshOnReturn() {
+  if (!loading.value && !pendingId.value) void library.load();
+}
+onMounted(() => { void library.load(); window.addEventListener('focus', refreshOnReturn); });
+onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
 </script>
 
 <template>
   <section class="settings-block recording-library">
-    <div class="library-heading"><h2>本地录像</h2><button type="button" :disabled="loading || !!pendingId" @click="library.load()">刷新</button></div>
+    <h2>本地录像</h2>
     <p>录像保存在本机，不会自动上传或清理，使用系统播放器打开。切换来源或画质时会分段保存。</p>
     <InlineFeedback :message="notice" :pending="loading ? '正在读取录像列表…' : ''" />
+    <button v-if="notice" type="button" :disabled="loading || !!pendingId" @click="library.load()">重新读取</button>
     <p v-if="!entries.length && !loading && !notice">暂无录像记录。旧版保存的录像仍可在录像目录中找到。</p>
     <details v-for="group in groups" :key="group.id" :open="group.items.length === 1" class="library-session">
       <summary>{{ new Date(group.createdAt).toLocaleString() }}<small v-if="group.items.length > 1"> · {{ group.items.length }} 个文件段</small></summary>
@@ -59,8 +64,6 @@ onMounted(() => { void library.load(); });
 </template>
 
 <style scoped>
-.library-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.library-heading h2 { margin: 0; }
 .library-session { border-top: 1px solid var(--border); padding: 12px 0; }
 .library-session summary { cursor: pointer; font-size: 13px; }
 .library-session small { color: var(--muted); }

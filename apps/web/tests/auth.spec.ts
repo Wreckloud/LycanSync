@@ -547,7 +547,7 @@ test('浏览器账号设置明确标出未接入功能与桌面动态限制', as
   await expect(page.getByRole('textbox', { name: '新密码' })).toHaveCount(0);
   await page.getByRole('button', { name: '查看 QQ 绑定说明', exact: true }).click();
   await expect(page.locator('#qq-entry')).toContainText('当前服务器尚未开启');
-  await expect(page.getByRole('button', { name: '注销账号', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '注销账号', exact: true })).toBeEnabled();
   await expect(page.getByRole('button', { name: '退出登录', exact: true })).toBeEnabled();
 });
 

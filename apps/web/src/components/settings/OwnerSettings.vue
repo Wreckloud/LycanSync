@@ -15,6 +15,8 @@ interface ServerSettingsStatus {
 const status = ref<ServerSettingsStatus | null>(null);
 const error = ref('');
 const loading = ref(false);
+const lifecycle = ref<InstanceType<typeof AccountLifecycleSettings> | null>(null);
+defineExpose({ beginTransfer: () => lifecycle.value?.beginTransfer() });
 let request: AbortController | undefined;
 
 async function refresh() {
@@ -42,27 +44,29 @@ onScopeDispose(() => request?.abort());
 
 <template>
   <section class="settings-section owner-settings">
+    <MemberAccessSettings :active="active" />
     <section class="settings-block">
-      <div class="owner-heading"><h2>服务器配置</h2><button type="button" :disabled="loading || leaving" @click="refresh">刷新状态</button></div>
+      <h2>服务器配置</h2>
       <dl v-if="status" class="owner-status">
         <dt>服务器名称</dt><dd>{{ status.serverName }}</dd>
         <dt>邀请入口地址</dt><dd>{{ status.publicUrlConfigured ? '已配置' : '未配置' }}</dd>
         <dt>QQ 登录</dt><dd>{{ status.qqEnabled ? '已开启' : '未开启' }}</dd>
         <dt>媒体服务</dt><dd>{{ status.mediaConfigured ? '已配置' : '未配置' }}</dd>
       </dl>
-      <p>这里显示服务器的配置情况，不代表 QQ 登录或语音连接已测试成功。修改部署配置后需重启服务器；此处不显示密钥。</p>
+      <details class="owner-explanation"><summary>配置说明</summary><p>这里显示服务器的配置情况，不代表 QQ 登录或语音连接已测试成功。修改部署配置后需重启服务器；此处不显示密钥。</p></details>
       <InlineFeedback :message="error" :pending="loading && !status ? '正在读取配置状态…' : ''" />
+      <button v-if="error" type="button" class="settings-button" :disabled="loading || leaving" @click="refresh">重试</button>
     </section>
-    <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="true" section="owner" />
-    <MemberAccessSettings :active="active" />
+    <AccountLifecycleSettings ref="lifecycle" :active="active" :leaving="leaving" :administrator="true" section="owner" />
   </section>
 </template>
 
 <style scoped>
-.owner-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.owner-heading h2 { margin: 0; }
 .owner-status { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr); gap: 10px 20px; margin: 12px 0; font-size: 14px; line-height: 20px; }
 .owner-status dt { color: var(--muted); }
 .owner-status dd { margin: 0; overflow-wrap: anywhere; }
-.owner-settings > .settings-block > p { margin: 0; color: var(--muted); font-size: 12px; line-height: 20px; }
+.owner-explanation { color: var(--muted); font-size: 12px; line-height: 20px; }
+.owner-explanation summary { cursor: pointer; }
+.owner-explanation p { margin-top: 6px; }
+.owner-settings > :last-child { border-bottom: 0; padding-bottom: 0; }
 </style>
