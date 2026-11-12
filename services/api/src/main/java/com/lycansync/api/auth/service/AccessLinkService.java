@@ -95,10 +95,10 @@ public class AccessLinkService {
         return links.list(offset);
     }
 
-    public List<AuthUser> members(AuthenticatedUser administrator, int offset) {
+    public List<AuthUser> members(AuthenticatedUser administrator, String search, int offset) {
         requireAdministrator(administrator);
-        if (offset < 0) throw invalid("分页位置无效");
-        return links.members(offset);
+        if (offset < 0 || search.length() > 100) throw invalid("搜索条件或分页位置无效");
+        return links.members(search.strip(), offset);
     }
 
     public LinkPreview preview(String token) {

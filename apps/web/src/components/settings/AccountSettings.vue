@@ -61,7 +61,7 @@ watch(() => props.active, (active) => {
       <div class="account-row"><div class="account-copy"><span>退出当前账号</span></div>
         <button type="button" :disabled="leaving" @click="emit('logout')">退出登录</button></div>
     </section>
-    <AccountLifecycleSettings v-if="!administrator" :active="active" :leaving="leaving" :administrator="false" />
+    <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="administrator" section="account" />
   </section>
 </template>
 

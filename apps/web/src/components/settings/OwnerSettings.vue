@@ -53,7 +53,7 @@ onScopeDispose(() => request?.abort());
       <p>这里显示服务器的配置情况，不代表 QQ 登录或语音连接已测试成功。修改部署配置后需重启服务器；此处不显示密钥。</p>
       <InlineFeedback :message="error" :pending="loading && !status ? '正在读取配置状态…' : ''" />
     </section>
-    <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="true" />
+    <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="true" section="owner" />
     <MemberAccessSettings :active="active" />
   </section>
 </template>

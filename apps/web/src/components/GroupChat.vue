@@ -27,8 +27,8 @@ type PendingAttachment = {
   error: string;
 };
 
-const props = defineProps<{ group: GroupSummary; members: GroupMember[]; user: AuthUser }>();
-const emit = defineEmits<{ initialLoad: [groupId: string] }>();
+const props = defineProps<{ group: GroupSummary; members: GroupMember[]; user: AuthUser; syncError?: string }>();
+const emit = defineEmits<{ initialLoad: [groupId: string]; retrySync: [] }>();
 const cache = inject(ACCOUNT_CACHE, null);
 const historicalSender = ref<ChatMessage | null>(null);
 const historicalAnchor = ref<HTMLElement | null>(null);
@@ -70,6 +70,12 @@ const synchronization = useGroupMessages({ getGroupId: () => props.group.id, get
   onInitialLoad: groupId => emit('initialLoad', groupId) });
 const { messages, initialLoaded, pollError, historyError, refreshing, loadingOlder, hasMore,
   appendMessages, loadOlder, retryRefresh } = synchronization;
+// 首次消息读取失败仍在原读取区域展示，已有消息时与成员同步共用顶部反馈。
+const syncError = computed(() => initialLoaded.value || !pollError.value ? pollError.value || props.syncError : '');
+function retrySync() {
+  if (props.syncError) emit('retrySync');
+  void retryRefresh();
+}
 const initialLoadingHint = useLoadingHint(() => !initialLoaded.value && !messages.value.length && !pollError.value);
 const historyLoadingHint = useLoadingHint(() => loadingOlder.value);
 const canSend = computed(() => !busy.value && !preparing.value
@@ -336,8 +342,8 @@ onScopeDispose(() => {
   <section class="chat-panel" :aria-label="`${group.name}群聊`" @dragover.prevent @drop="handleDrop">
     <div class="chat-heading">
       <span class="chat-title"><MessageSquareText :size="15" /><span>群聊</span></span>
-      <div v-if="initialLoaded && pollError" class="chat-sync-status" role="status" :aria-busy="refreshing">
-        <span>{{ pollError }}</span><button type="button" class="chat-retry" :disabled="refreshing" @click="retryRefresh">{{ refreshing ? '重试中…' : '重试' }}</button>
+      <div v-if="syncError" class="chat-sync-status" role="status" :aria-busy="refreshing">
+        <span>{{ syncError }}</span><button type="button" class="chat-retry" :disabled="refreshing" @click="retrySync">{{ refreshing ? '重试中…' : '重试' }}</button>
       </div>
     </div>
     <div class="chat-timeline" :class="{ 'has-composer-feedback': Boolean(error) }">
@@ -347,7 +353,7 @@ onScopeDispose(() => {
         <div v-if="!initialLoaded && (pollError || initialLoadingHint)" class="chat-initial-state" :class="{ 'is-empty': !messages.length }">
           <template v-if="pollError">
             <p class="chat-read-error" role="alert">{{ pollError }}</p>
-            <button type="button" class="chat-retry" :disabled="refreshing" @click="retryRefresh">{{ refreshing ? '正在重试…' : '重新读取消息' }}</button>
+            <button type="button" class="chat-retry" :disabled="refreshing" @click="retrySync">{{ refreshing ? '正在重试…' : '重新读取消息' }}</button>
           </template>
           <p v-else role="status">正在读取消息…</p>
         </div>

@@ -31,6 +31,7 @@ const audioMode = computed(() => props.rtc.screenShareActive ? props.rtc.current
 const shareAudio = computed(() => props.rtc.screenShareActive ? props.sharedAudio : defaultShareAudio.value);
 const shareBusy = computed(() => busy.value || props.rtc.screenShareQualityBusy || props.rtc.screenShareSourceBusy
   || props.rtc.busySources.includes(Track.Source.ScreenShare));
+const selectedQuality = computed(() => screenShareQuality(props.quality, props.customQuality));
 
 async function selectQuality(quality: ScreenShareQualityId, custom = props.customQuality) {
   if (shareBusy.value) return;
@@ -97,7 +98,7 @@ watch(() => [props.active, props.rtc.screenShareActive], async ([active, sharing
       <p>共享中调整画质会立即生效，也会用于下次共享；录像画质单独设置。</p>
       <SegmentedControl :model-value="quality" :options="SCREEN_SHARE_QUALITIES" label="共享画质"
         :disabled="shareBusy" :aria-busy="shareBusy" @update:model-value="selectQuality" />
-      <p class="share-quality-description">{{ screenShareQuality(quality, customQuality).guidance }}</p>
+      <p class="share-quality-description"><strong>{{ selectedQuality.description }}</strong><span>{{ selectedQuality.guidance }}</span></p>
       <ExpandSection :open="quality === 'custom'">
         <ScreenShareCustomQuality :model-value="customQuality" :disabled="shareBusy" @update:model-value="selectQuality('custom', $event)" />
       </ExpandSection>
@@ -121,5 +122,6 @@ watch(() => [props.active, props.rtc.screenShareActive], async ([active, sharing
 </template>
 
 <style scoped>
-.share-quality-description { min-height: 3em; }
+.share-quality-description { display: grid; gap: 2px; min-height: 3em; }
+.share-quality-description strong { color: var(--text); font-size: 14px; }
 </style>

@@ -314,6 +314,11 @@ async function loadGroup(groupId: string, keepExisting = false) {
   }
 }
 
+function retryGroupSync() {
+  if (groupError.value && selectedGroupId.value) void loadGroup(selectedGroupId.value, true);
+  if (presenceConnectionLost.value) refreshGroupPresence();
+}
+
 async function refreshGroups(refreshDetail = true, refreshOccupancy = true) {
   listRequest?.abort();
   const request = new AbortController();
@@ -1072,6 +1077,7 @@ function participantListening(participant: Participant) {
         <div class="group-conversation">
           <div class="conversation-main">
             <GroupChat v-if="selectedGroup" :key="selectedGroup.id" :group="selectedGroup"
+              :sync-error="groupError || (presenceConnectionLost ? '暂时无法更新成员状态。' : '')" @retry-sync="retryGroupSync"
               :members="selectedGroupDetail?.members ?? []" :user="user" @initial-load="initialChatGroupId = $event" />
             <div v-else class="group-empty">
               <p v-if="groupError" role="alert">{{ groupError }}</p>
@@ -1126,7 +1132,7 @@ function participantListening(participant: Participant) {
           <GroupMembersPanel v-if="selectedGroup" :key="selectedGroup.id" :members="orderedMembers" :user="user" :loading="groupLoading"
             :group-id="selectedGroup.id" :profile-blocked="profileCardsBlocked || personalMenuOpen"
             :member-count="selectedGroupDetail?.memberCount"
-            :error="groupError" :connection-lost="presenceConnectionLost" :status="memberOnlineStatus"
+            :failed="!!groupError" :status="memberOnlineStatus"
             :status-label="memberStatusLabel" :activity="memberActivity" :presences="groupPresences" />
         <aside v-else class="members-directory members-directory-empty" aria-label="群组成员" />
         <div v-if="settingsPresented" class="personal-card-space" aria-hidden="true" />

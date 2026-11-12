@@ -14,8 +14,7 @@ const props = defineProps<{
   memberCount?: number;
   user: AuthUser;
   loading: boolean;
-  error: string;
-  connectionLost: boolean;
+  failed: boolean;
   status: (member: GroupMember) => UserPresenceStatus;
   statusLabel: (member: GroupMember) => string;
   activity: (member: GroupMember) => { type: string; text: string; startedAt?: string } | null;
@@ -30,7 +29,7 @@ const button = ref<HTMLButtonElement | null>(null);
 const input = ref<HTMLInputElement | null>(null);
 const filtered = computed(() => props.members.filter((member) =>
   (member.userId === props.user.id ? props.user.nickname : member.nickname).toLowerCase().includes(search.value.trim().toLowerCase())));
-const loadingHint = useLoadingHint(() => props.loading && !props.members.length && !props.error);
+const loadingHint = useLoadingHint(() => props.loading && !props.members.length && !props.failed);
 const profileAnchor = ref<HTMLElement | null>(null);
 const profileUserId = ref('');
 const profileMember = computed(() => props.members.find(member => member.userId === profileUserId.value));
@@ -150,10 +149,8 @@ async function toggleSearch() {
       </Transition>
     </header>
     <div class="members-list" :class="{ 'group-content-ready': members.length > 0 }">
-      <p v-if="connectionLost" class="group-hint" role="status">成员状态更新中断，当前显示可能不是最新状态。</p>
-      <p v-if="error" role="alert" class="group-error">{{ error }}</p>
-      <p v-else-if="loadingHint" class="group-hint" role="status">正在读取成员…</p>
-      <p v-if="search.trim() && !loading && !error && !filtered.length" class="group-hint" role="status">没有找到匹配的成员</p>
+      <p v-if="loadingHint" class="group-hint" role="status">正在读取成员…</p>
+      <p v-if="search.trim() && !loading && !failed && !filtered.length" class="group-hint" role="status">没有找到匹配的成员</p>
       <div v-for="member in filtered" :key="member.userId" class="group-member-row" :class="{ 'is-offline': status(member) === 'OFFLINE' }"
         tabindex="0" role="button" :aria-label="`查看 ${member.userId === user.id ? user.nickname : member.nickname} 的资料`" aria-haspopup="dialog"
         @mouseenter="queueProfile(member, $event)" @mouseleave="leaveProfile"

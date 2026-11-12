@@ -35,6 +35,8 @@
     </select>
     <select id="members" resultType="com.lycansync.api.auth.model.AuthUser">
         SELECT id, nickname, avatar, administrator, signature, created_at AS createdAt, deleted_at AS deletedAt
-        FROM app_user WHERE administrator = FALSE AND deleted_at IS NULL ORDER BY created_at, id LIMIT 100 OFFSET #{offset}
+        FROM app_user WHERE administrator = FALSE AND deleted_at IS NULL
+        AND (position(lower(#{search}) in lower(nickname)) &gt; 0 OR position(lower(#{search}) in lower(CAST(id AS text))) &gt; 0)
+        ORDER BY created_at, id LIMIT 100 OFFSET #{offset}
     </select>
 </mapper>

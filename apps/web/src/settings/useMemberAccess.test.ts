@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { effectScope, ref, type EffectScope } from 'vue';
 import { authRequest } from '../auth/authApi';
 import { accessLinkStatus, type AccessLinkRecord } from '../auth/accountAccess';
-import { useMemberAccess } from './useMemberAccess';
+import { useMemberAccess, type MemberAccessMode } from './useMemberAccess';
 
 vi.mock('../auth/authApi', () => ({ authRequest: vi.fn() }));
 const request = vi.mocked(authRequest);
@@ -19,9 +19,9 @@ function link(overrides: Partial<AccessLinkRecord> = {}): AccessLinkRecord {
     resultUserId: null, lastFailure: null, ...overrides };
 }
 async function settle() { for (let count = 0; count < 8; count++) await Promise.resolve(); }
-async function open(active = ref(true)) {
+async function open(active = ref(true), mode: MemberAccessMode = 'links') {
   scope = effectScope();
-  const state = scope.run(() => useMemberAccess(active))!;
+  const state = scope.run(() => useMemberAccess(active, mode))!;
   await settle();
   return { state, active };
 }
@@ -37,7 +37,7 @@ beforeEach(() => {
   events = new EventTarget();
   vi.stubGlobal('document', { get visibilityState() { return visibility; },
     addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events) });
-  vi.stubGlobal('window', { confirm: vi.fn(() => true) });
+  vi.stubGlobal('window', {});
   vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
   serverLinks = [link()];
   request.mockImplementation(async (path, method) => {
@@ -86,13 +86,13 @@ describe('邀请页记录刷新与操作反馈', () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it('隐藏状态打开页面不请求，恢复可见后加载记录和成员', async () => {
+  it('隐藏状态打开恢复窗口不请求，恢复可见后只加载成员', async () => {
     visibility = 'hidden';
-    const { state } = await open();
+    const { state } = await open(ref(true), 'recovery');
     expect(request).not.toHaveBeenCalled();
     setVisibility('visible');
     await settle();
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(1);
     expect(state.members.value).toEqual([member]);
   });
 
@@ -204,5 +204,59 @@ describe('邀请页记录刷新与操作反馈', () => {
     setVisibility('visible');
     await vi.advanceTimersByTimeAsync(60_000);
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it('邀请窗口无需预读成员或链接记录，生成时保留选填备注', async () => {
+    const { state } = await open(ref(true), 'invite');
+    expect(request).not.toHaveBeenCalled();
+    state.note.value = '朋友甲';
+    await state.generate('INVITE');
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith('access/links', 'POST', { kind: 'INVITE', targetId: null, note: '朋友甲' }, expect.any(AbortSignal));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it('搜索立即撤销旧选择，防抖后查全服务器且拒绝迟到结果', async () => {
+    const { state } = await open(ref(true), 'recovery');
+    state.target.value = member.id;
+    let finish!: (value: typeof member[]) => void;
+    request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    state.search.value = '旧查询';
+    expect(state.target.value).toBe('');
+    expect(state.loadingMembers.value).toBe(true);
+    await state.generate('RECOVERY');
+    await vi.advanceTimersByTimeAsync(250);
+    const signal = request.mock.calls.at(-1)![3]!;
+    state.search.value = '朋友';
+    expect(signal.aborted).toBe(true);
+    finish([{ ...member, id: 'old-result' }]);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(request.mock.calls.at(-1)![0]).toBe('access/members?offset=0&search=%E6%9C%8B%E5%8F%8B');
+    expect(state.members.value).toEqual([member]);
+    expect(state.loadingMembers.value).toBe(false);
+    expect(request.mock.calls.some(call => call[1] === 'POST')).toBe(false);
+  });
+
+  it('成员搜索失败明确报错，重试成功后恢复选择', async () => {
+    request.mockRejectedValueOnce(new Error('成员读取失败'));
+    const { state } = await open(ref(true), 'recovery');
+    expect(state.membersError.value).toBe('成员读取失败');
+    expect(state.recordsError.value).toBe('');
+    await state.loadMembers();
+    expect(state.membersError.value).toBe('');
+    expect(state.members.value).toEqual([member]);
+  });
+
+  it('关闭恢复窗口撤销搜索请求，迟到结果不写回已销毁窗口', async () => {
+    let finish!: (value: typeof member[]) => void;
+    request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const { state } = await open(ref(true), 'recovery');
+    const signal = request.mock.calls[0][3]!;
+    scope.stop();
+    expect(signal.aborted).toBe(true);
+    finish([member]);
+    await settle();
+    expect(state.members.value).toEqual([]);
   });
 });

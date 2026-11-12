@@ -2,14 +2,20 @@ import { computed, onScopeDispose, ref, watch, type Ref } from 'vue';
 import { authRequest, type AuthUser } from '../auth/authApi';
 import { accessLinkStatus, type AccessLinkRecord } from '../auth/accountAccess';
 
-export function useMemberAccess(active: Readonly<Ref<boolean>>) {
+export type MemberAccessMode = 'invite' | 'recovery' | 'links';
+
+export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAccessMode) {
   const links = ref<AccessLinkRecord[]>([]);
   const members = ref<AuthUser[]>([]);
   const offset = ref(0);
   const memberOffset = ref(0);
+  const search = ref('');
+  const membersError = ref('');
+  const loadingMembers = ref(false);
   const note = ref('');
   const target = ref('');
   const generatedUrl = ref('');
+  const generatedRecord = ref<AccessLinkRecord | null>(null);
   const inviteError = ref('');
   const recoveryError = ref('');
   const linkError = ref('');
@@ -24,7 +30,8 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
   let generatedId = '';
-  let membersLoaded = false;
+  let memberRequest: AbortController | undefined;
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
   function visible() { return active.value && !controller.signal.aborted && document.visibilityState === 'visible'; }
   function current(request: AbortController) { return request === controller && !request.signal.aborted; }
@@ -33,34 +40,25 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>) {
 
   function scheduleRefresh() {
     clearTimeout(timer);
-    if (!visible()) return;
+    if (!visible() || mode !== 'links') return;
     // 只轮询当前页记录；待使用链接保持及时，其余状态和网络失败降低请求频率。
     const pending = links.value.some((link) => accessLinkStatus(link, Date.now()) === '待使用');
     timer = setTimeout(() => { void refresh(); }, pending && !recordsError.value ? 5_000 : 30_000);
   }
 
-  async function refresh(includeMembers = false) {
-    if (!visible() || locked.value) return;
+  async function refresh() {
+    if (!visible() || mode !== 'links' || locked.value) return;
     clearTimeout(timer);
     const request = controller;
     refreshing.value = true;
     // 过期由本地时间判断，读取失败也不能把已过期链接一直显示为待使用。
     currentTime.value = Date.now();
-    includeMembers ||= !membersLoaded;
     try {
-      const [records, memberPage] = await Promise.all([
-        authRequest<AccessLinkRecord[]>(`access/links?offset=${offset.value}`, 'GET', undefined, requestSignal(request)),
-        includeMembers ? authRequest<AuthUser[]>(`access/members?offset=${memberOffset.value}`, 'GET', undefined, requestSignal(request)) : undefined,
-      ]);
+      const records = await authRequest<AccessLinkRecord[]>(`access/links?offset=${offset.value}`, 'GET', undefined, requestSignal(request));
       if (!current(request)) return;
       links.value = records;
       currentTime.value = Date.now();
       recordsError.value = '';
-      if (memberPage) {
-        members.value = memberPage;
-        membersLoaded = true;
-        if (!memberPage.some((member) => member.id === target.value)) target.value = '';
-      }
     } catch (exception) {
       if (current(request)) recordsError.value = message(exception);
     } finally {
@@ -71,8 +69,28 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>) {
     }
   }
 
+  async function loadMembers() {
+    if (!visible() || mode !== 'recovery' || busy.value || generatedUrl.value) return;
+    memberRequest?.abort();
+    const request = new AbortController();
+    memberRequest = request;
+    loadingMembers.value = true;
+    membersError.value = '';
+    target.value = '';
+    try {
+      const query = new URLSearchParams({ offset: String(memberOffset.value), search: search.value.trim() });
+      const result = await authRequest<AuthUser[]>(`access/members?${query}`, 'GET', undefined,
+        AbortSignal.any([controller.signal, request.signal, AbortSignal.timeout(15_000)]));
+      if (!request.signal.aborted && active.value) members.value = result;
+    } catch (exception) {
+      if (!request.signal.aborted && active.value) membersError.value = message(exception);
+    } finally {
+      if (!request.signal.aborted && active.value) loadingMembers.value = false;
+    }
+  }
+
   async function generate(kind: 'INVITE' | 'RECOVERY', id?: string) {
-    if (!active.value || controller.signal.aborted || locked.value || (kind === 'RECOVERY' && !target.value && !id)) return;
+    if (!active.value || controller.signal.aborted || locked.value || (kind === 'RECOVERY' && !id && (!target.value || loadingMembers.value || membersError.value))) return;
     clearTimeout(timer);
     const request = controller;
     const feedback = id ? recordsError : kind === 'INVITE' ? inviteError : recoveryError;
@@ -85,6 +103,7 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>) {
         : await authRequest<{ record: AccessLinkRecord; url: string }>('access/links', 'POST', { kind, targetId: kind === 'RECOVERY' ? target.value : null, note: note.value }, requestSignal(request));
       if (!current(request)) return;
       generatedUrl.value = result.url;
+      generatedRecord.value = result.record;
       generatedId = result.record.id;
       clearTimeout(copyTimer);
       linkError.value = '';
@@ -102,7 +121,7 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>) {
   }
 
   async function revoke(id: string) {
-    if (!active.value || controller.signal.aborted || locked.value || !window.confirm('撤销后该链接立即失效，是否继续？')) return;
+    if (!active.value || controller.signal.aborted || locked.value) return false;
     clearTimeout(timer);
     const request = controller;
     busy.value = true;
@@ -113,6 +132,7 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>) {
       if (!current(request)) return;
       if (generatedId === id) {
         generatedUrl.value = '';
+        generatedRecord.value = null;
         generatedId = '';
         linkError.value = '';
         copyStatus.value = '';
@@ -127,6 +147,7 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>) {
         scheduleRefresh();
       }
     }
+    return revoked;
   }
 
   async function copyLink() {
@@ -153,37 +174,58 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>) {
   }
 
   function page(direction: number, memberPage = false) {
-    if (locked.value) return;
+    if (locked.value || memberPage && loadingMembers.value) return;
     if (memberPage) {
       memberOffset.value = Math.max(0, memberOffset.value + direction * 100);
       target.value = '';
-    } else offset.value = Math.max(0, offset.value + direction * 100);
-    void refresh(memberPage);
+      void loadMembers();
+    } else {
+      offset.value = Math.max(0, offset.value + direction * 100);
+      void refresh();
+    }
   }
+
+  watch(search, () => {
+    memberRequest?.abort();
+    clearTimeout(searchTimer);
+    memberOffset.value = 0;
+    target.value = '';
+    members.value = [];
+    membersError.value = '';
+    loadingMembers.value = true;
+    searchTimer = setTimeout(() => { void loadMembers(); }, 250);
+  }, { flush: 'sync' });
 
   function visibilityChanged() {
     clearTimeout(timer);
-    if (visible()) void refresh();
+    if (visible()) {
+      if (mode === 'recovery' && !generatedUrl.value) void loadMembers();
+      else void refresh();
+    }
   }
   watch(active, (enabled) => {
     controller.abort();
+    memberRequest?.abort();
+    clearTimeout(searchTimer);
     clearTimeout(timer);
     clearTimeout(copyTimer);
-    busy.value = refreshing.value = copying.value = false;
+    busy.value = refreshing.value = copying.value = loadingMembers.value = false;
     if (enabled) {
       controller = new AbortController();
-      membersLoaded = false;
-      void refresh(true);
+      if (mode === 'recovery') void loadMembers();
+      else void refresh();
     }
   }, { immediate: true, flush: 'sync' });
   document.addEventListener('visibilitychange', visibilityChanged);
   onScopeDispose(() => {
     controller.abort();
+    memberRequest?.abort();
+    clearTimeout(searchTimer);
     clearTimeout(timer);
     clearTimeout(copyTimer);
     document.removeEventListener('visibilitychange', visibilityChanged);
   });
 
-  return { links, members, offset, memberOffset, note, target, generatedUrl, inviteError, recoveryError, linkError,
-    recordsError, copyStatus, busy, refreshing, copying, locked, currentTime, refresh, generate, revoke, copyLink, page };
+  return { links, members, offset, memberOffset, search, membersError, loadingMembers, note, target, generatedUrl, generatedRecord, inviteError, recoveryError, linkError,
+    recordsError, copyStatus, busy, refreshing, copying, locked, currentTime, refresh, loadMembers, generate, revoke, copyLink, page };
 }

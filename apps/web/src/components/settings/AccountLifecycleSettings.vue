@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { onScopeDispose, ref, watch } from 'vue';
+import { nextTick, onScopeDispose, ref, watch } from 'vue';
 import { authRequest, setBrowserSession } from '../../auth/authApi';
 import InlineFeedback from '../InlineFeedback.vue';
 import PasswordField from '../PasswordField.vue';
 import ExpandSection from '../ExpandSection.vue';
+import DialogTransition from '../DialogTransition.vue';
+import { useBackdropDismiss } from '../useBackdropDismiss';
+import { keepDialogFocus } from '../dialogFocus';
 
-const props = defineProps<{ active: boolean; leaving: boolean; administrator?: boolean }>();
+const props = defineProps<{ active: boolean; leaving: boolean; administrator?: boolean; section: 'account' | 'owner' }>();
 interface LifecycleStatus {
   administrator: boolean;
   recoveryConfigured: boolean;
@@ -25,6 +28,8 @@ const closeConfirmation = ref('');
 const busy = ref(false);
 const error = ref('');
 const feedback = ref('');
+const passwordDialog = ref<HTMLFormElement | null>(null);
+const backdropEvents = useBackdropDismiss(() => toggle(null));
 let revision = 0;
 let disposed = false;
 let request: AbortController | undefined;
@@ -39,7 +44,7 @@ async function refresh() {
     const result = await authRequest<LifecycleStatus>('account', 'GET', undefined, request.signal);
     if (disposed || current !== revision) return;
     status.value = result;
-    if (result.administrator && !result.recoveryConfigured) {
+    if (props.section === 'owner' && result.administrator && !result.recoveryConfigured) {
       const binding = await authRequest<{ bound: boolean }>('qq/binding', 'GET', undefined, request.signal);
       if (!disposed && current === revision) qqBound.value = binding.bound;
     }
@@ -81,7 +86,12 @@ async function submit(operation: 'password' | 'offer' | 'accept' | 'cancel' | 'c
     if (!disposed && current === revision) error.value = reason instanceof Error ? reason.message : '操作未完成，请重试。';
   } finally { if (!disposed) busy.value = false; }
 }
-watch(() => [props.active, props.administrator] as const, ([active]) => {
+watch(expanded, async (section) => {
+  if (section !== 'password') return;
+  await nextTick();
+  passwordDialog.value?.querySelector('input')?.focus();
+});
+watch(() => [props.active, props.administrator, props.section] as const, ([active]) => {
   clearSecrets(); expanded.value = null;
   if (active) { error.value = ''; void refresh(); }
   else { revision++; request?.abort(); }
@@ -91,7 +101,7 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); clearSecre
 
 <template>
   <section class="settings-block lifecycle-settings">
-    <template v-if="status?.administrator">
+    <template v-if="section === 'owner' && status?.administrator">
       <h2>服主恢复与转让</h2>
       <p v-if="status.recoveryConfigured">已设置恢复密码，无法登录时可通过“群组恢复”找回账号。</p>
       <p v-else-if="qqBound === false" class="recovery-warning" role="status">安全建议：请设置服主恢复密码，避免本机登录信息丢失后无法找回账号。</p>
@@ -100,14 +110,6 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); clearSecre
         <button type="button" :disabled="busy || leaving || !status.recoveryConfigured" @click="toggle('transfer')">转让服主</button>
       </div>
       <p v-if="status.transferTargetId">正在等待接任者确认，完成前你仍是服主。<button type="button" :disabled="busy || leaving" @click="submit('cancel')">取消转让</button></p>
-      <ExpandSection :open="expanded === 'password'">
-        <form class="lifecycle-form" @submit.prevent="submit('password')">
-          <PasswordField v-if="status.recoveryConfigured" id="owner-old-password" v-model="previousPassword" label="原恢复密码" :disabled="busy || leaving" required />
-          <PasswordField id="owner-new-password" v-model="password" label="新恢复密码（15–128 个字符）" :disabled="busy || leaving" new-password required />
-          <PasswordField id="owner-confirm-password" v-model="confirmation" label="确认恢复密码" :disabled="busy || leaving" new-password required />
-          <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button class="confirm-button card-actions-end" :disabled="busy || leaving">保存</button></div>
-        </form>
-      </ExpandSection>
       <ExpandSection :open="expanded === 'transfer'">
         <form class="lifecycle-form" @submit.prevent="submit('offer')">
           <label class="settings-field" for="owner-transfer-target">接任成员
@@ -122,7 +124,7 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); clearSecre
         </form>
       </ExpandSection>
     </template>
-    <template v-if="status?.incomingTransfer">
+    <template v-if="section === 'account' && status?.incomingTransfer">
       <h2>接任服主</h2><p>{{ status.incomingTransfer.ownerNickname }} 希望将服主转让给你。确认前请设置自己的恢复密码。</p>
       <form class="lifecycle-form" @submit.prevent="submit('accept')">
         <PasswordField id="accept-owner-password" v-model="password" label="恢复密码（15–128 个字符）" :disabled="busy || leaving" new-password required />
@@ -130,22 +132,41 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); clearSecre
         <div class="card-actions"><button type="button" :disabled="busy || leaving" @click="submit('cancel')">拒绝</button><button class="confirm-button card-actions-end" :disabled="busy || leaving">确认接任</button></div>
       </form>
     </template>
-    <h2>注销账号</h2>
-    <p>注销后无法再登录。历史昵称、头像、签名、消息和共同语音记录仍会保留，并标记为“已注销”。</p>
-    <p v-if="status?.administrator">请先完成服主转让，再注销账号。</p>
-    <div v-if="status?.ownedGroups.length"><p>请先转让或解散以下群组：</p><ul><li v-for="group in status.ownedGroups" :key="group.id">{{ group.name }}</li></ul></div>
-    <button type="button" class="settings-button account-danger" :disabled="!status || busy || leaving || status.administrator || status.ownedGroups.length > 0" @click="toggle('close')">注销账号</button>
-    <ExpandSection :open="expanded === 'close'">
-      <form class="lifecycle-form" @submit.prevent="submit('close')">
-        <label class="settings-field" for="close-account-confirmation">请输入“注销账号”确认，此操作不能撤回
-          <input id="close-account-confirmation" v-model="closeConfirmation" required maxlength="4" :disabled="busy || leaving" autocomplete="off" />
-        </label>
-        <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button class="settings-button account-danger card-actions-end" :disabled="busy || leaving || closeConfirmation !== '注销账号'">确认注销</button></div>
-      </form>
-    </ExpandSection>
-    <InlineFeedback :message="error" :pending="busy ? '正在处理…' : ''" :status="feedback" />
-    <button v-if="error && (!status || qqBound === null && status.administrator && !status.recoveryConfigured)" type="button" :disabled="busy" @click="refresh">重新读取</button>
+    <template v-if="section === 'account'">
+      <h2>注销账号</h2>
+      <p>注销后无法再登录。历史昵称、头像、签名、消息和共同语音记录仍会保留，并标记为“已注销”。</p>
+      <p v-if="status?.administrator">请先完成服主转让，再注销账号。</p>
+      <div v-if="status?.ownedGroups.length"><p>请先转让或解散以下群组：</p><ul><li v-for="group in status.ownedGroups" :key="group.id">{{ group.name }}</li></ul></div>
+      <button type="button" class="settings-button account-danger" :disabled="!status || busy || leaving || status.administrator || status.ownedGroups.length > 0" @click="toggle('close')">注销账号</button>
+      <ExpandSection :open="expanded === 'close'">
+        <form class="lifecycle-form" @submit.prevent="submit('close')">
+          <label class="settings-field" for="close-account-confirmation">请输入“注销账号”确认，此操作不能撤回
+            <input id="close-account-confirmation" v-model="closeConfirmation" required maxlength="4" :disabled="busy || leaving" autocomplete="off" />
+          </label>
+          <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button class="settings-button account-danger card-actions-end" :disabled="busy || leaving || closeConfirmation !== '注销账号'">确认注销</button></div>
+        </form>
+      </ExpandSection>
+    </template>
+    <InlineFeedback v-if="expanded !== 'password'" :message="error" :pending="busy ? '正在处理…' : ''" :status="feedback" />
+    <button v-if="expanded !== 'password' && error && (!status || section === 'owner' && qqBound === null && status.administrator && !status.recoveryConfigured)" type="button" :disabled="busy" @click="refresh">重新读取</button>
   </section>
+  <DialogTransition>
+    <div v-if="expanded === 'password' && active && section === 'owner' && status?.administrator" class="dialog-backdrop"
+      v-on="backdropEvents" @keydown.esc.stop="toggle(null)">
+      <form ref="passwordDialog" class="recovery-password-dialog" role="dialog" aria-modal="true" aria-labelledby="recovery-password-title"
+        tabindex="-1" @submit.prevent="submit('password')" @keydown="keepDialogFocus">
+        <h2 id="recovery-password-title">{{ status.recoveryConfigured ? '修改恢复密码' : '设置恢复密码' }}</h2>
+        <PasswordField v-if="status.recoveryConfigured" id="owner-old-password" v-model="previousPassword" label="原恢复密码" :disabled="busy || leaving" required />
+        <PasswordField id="owner-new-password" v-model="password" label="新恢复密码（15–128 个字符）" :disabled="busy || leaving" new-password required />
+        <PasswordField id="owner-confirm-password" v-model="confirmation" label="确认恢复密码" :disabled="busy || leaving" new-password required />
+        <InlineFeedback :message="error" :pending="busy ? '正在保存…' : ''" />
+        <footer class="card-actions">
+          <button type="button" :disabled="busy" @click="toggle(null)">取消</button>
+          <button class="confirm-button card-actions-end" :disabled="busy || leaving">保存</button>
+        </footer>
+      </form>
+    </div>
+  </DialogTransition>
 </template>
 
 <style scoped>
@@ -155,4 +176,7 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); clearSecre
 .lifecycle-settings > button { justify-self: start; }
 .lifecycle-form { display: grid; gap: 12px; padding-top: 12px; max-width: 480px; }
 .account-danger { color: var(--danger); }
+.recovery-password-dialog { display: grid; gap: 12px; width: min(420px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; box-sizing: border-box; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 14px; line-height: 22px; }
+.recovery-password-dialog h2 { margin: 0 0 4px; font-size: 22px; line-height: 32px; }
+@media (max-width: 420px) { .recovery-password-dialog { padding: 20px; } }
 </style>

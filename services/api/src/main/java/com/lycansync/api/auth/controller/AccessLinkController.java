@@ -99,10 +99,11 @@ public class AccessLinkController {
     }
 
     @GetMapping("/access/members")
-    @Operation(summary = "服主查看可恢复成员", description = "每页最多 100 个成员")
+    @Operation(summary = "服主查看可恢复成员", description = "按昵称或成员 ID 搜索，每页最多 100 个成员")
     public ResponseEntity<List<AuthUser>> members(@AuthenticationPrincipal AuthenticatedUser user,
+                                                @RequestParam(defaultValue = "") String search,
                                                 @RequestParam(defaultValue = "0") int offset) {
-        return noStore(links.members(user, offset));
+        return noStore(links.members(user, search, offset));
     }
 
     private <T> ResponseEntity<T> noStore(T body) {

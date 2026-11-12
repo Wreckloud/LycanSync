@@ -35,7 +35,7 @@ function message(id: string): ChatMessage {
 
 function setup(cache: AccountCache | null = null) {
   const scope = effectScope();
-  const props = reactive({ group: { id: 'first', name: '群聊' }, members: [], user: { id: 'self', nickname: '自己' } });
+  const props = reactive({ group: { id: 'first', name: '群聊' }, members: [], user: { id: 'self', nickname: '自己' }, syncError: '' });
   const findMessages = vi.fn(async (_groupId: string, _cursor?: unknown, _signal?: AbortSignal): Promise<ChatMessagePage> =>
     ({ messages: [], hasMore: false }));
   vi.mocked(requestMessages).mockImplementation(findMessages);
@@ -49,7 +49,7 @@ function setup(cache: AccountCache | null = null) {
   const emit = vi.fn();
   // 真实组件的任务、监听和销毁；只替换网络、DOM 与图片边界，不启动浏览器或传输文件。
   const chat = scope.run(() => runInNewContext(`${compiled}\n({ ...synchronization, ...scroll, handleVisibilityChange, submit, cancelUpload,
-    text, busy, error, pendingAttachments, initialLoadingHint, historyLoadingHint, refreshCalendar, calendarNow,
+    text, busy, error, syncError, retrySync, pendingAttachments, initialLoadingHint, historyLoadingHint, refreshCalendar, calendarNow,
     setScrollPreference: value => { Object.assign(scrollPreference, value); } })`, {
     computed, ref, nextTick, onScopeDispose, useLoadingHint, onMounted: () => {}, defineProps: () => props, defineEmits: () => emit,
     inject: () => cache, ACCOUNT_CACHE: Symbol(),
@@ -63,6 +63,7 @@ function setup(cache: AccountCache | null = null) {
     historyError: { value: string };
     initialLoaded: { value: boolean }; initialLoadingHint: { value: boolean }; historyLoadingHint: { value: boolean };
     refreshing: { value: boolean }; pollError: { value: string };
+    syncError: { value: string | undefined }; retrySync(): void;
     atBottom: { value: boolean }; unseenMessages: { value: number }; retryRefresh(): Promise<void> | undefined;
     unreadMessageIds: { value: string[] }; showMessageJump: { value: boolean }; messageJumpLabel: { value: string };
     jumpToMessages(): Promise<void>; updateReadMessages(): void; onScroll(): void;
@@ -76,6 +77,41 @@ function setup(cache: AccountCache | null = null) {
   };
   return { scope, props, chat, findMessages, sendMessage, sendFile, document, emit };
 }
+
+it('消息与成员同步失败只选取一条顶部反馈，重试同时恢复两处同步且保留草稿', async () => {
+  const f = setup();
+  try {
+    await f.chat.refresh();
+    f.chat.text.value = '保留草稿';
+    f.props.syncError = '无法读取群组资料';
+    expect(f.chat.syncError.value).toBe('无法读取群组资料');
+    f.findMessages.mockRejectedValueOnce(new Error('消息同步失败'));
+    await f.chat.refresh();
+    expect(f.chat.syncError.value).toBe('消息同步失败');
+    f.chat.retrySync();
+    expect(f.emit).toHaveBeenCalledWith('retrySync');
+    await vi.waitFor(() => expect(f.chat.pollError.value).toBe(''));
+    expect(f.chat.syncError.value).toBe('无法读取群组资料');
+    f.props.syncError = '';
+    expect(f.chat.syncError.value).toBe('');
+    expect(f.chat.text.value).toBe('保留草稿');
+  } finally { f.scope.stop(); }
+});
+
+it('首次消息读取失败保留原读取区反馈，不在标题重复展示成员错误', async () => {
+  const f = setup();
+  try {
+    f.props.syncError = '暂时无法更新成员状态。';
+    f.findMessages.mockRejectedValueOnce(new Error('消息暂时无法读取'));
+    await f.chat.refresh();
+    expect(f.chat.initialLoaded.value).toBe(false);
+    expect(f.chat.pollError.value).toBe('消息暂时无法读取');
+    expect(f.chat.syncError.value).toBe('');
+    f.chat.retrySync();
+    expect(f.emit).toHaveBeenCalledWith('retrySync');
+    await vi.waitFor(() => expect(f.chat.initialLoaded.value).toBe(true));
+  } finally { f.scope.stop(); }
+});
 
 it('空聊天也保存确认快照，返回时沿用已知空状态并直接同步新消息', async () => {
   const cache = { read: vi.fn().mockResolvedValue(null), write: vi.fn(),

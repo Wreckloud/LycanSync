@@ -29,5 +29,5 @@ public interface AccessLinkMapper {
     int revokeRecovery(@Param("userId") UUID userId, @Param("now") Instant now);
     int recordFailure(@Param("hash") String hash, @Param("failure") String failure, @Param("now") Instant now);
     List<AccessLink> list(@Param("offset") int offset);
-    List<AuthUser> members(@Param("offset") int offset);
+    List<AuthUser> members(@Param("search") String search, @Param("offset") int offset);
 }

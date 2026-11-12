@@ -121,10 +121,16 @@ test('向下返回历史才显示回到最新；新消息定位未读且不丢�
   const initial = Array.from({ length: 80 }, (_, index) => chatMessage(index + 1));
   let newMessage = false;
   let readError = false;
-  await page.route('**/api/groups**', route => {
+  await page.route('**/api/groups**', async route => {
     const url = new URL(route.request().url());
     if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
     if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (url.pathname.endsWith('/presences') || url.pathname.endsWith('/presence-changes')) {
+      if (readError) return route.fulfill({ status: 503 });
+      if (url.pathname.endsWith('/presences')) return route.fulfill({ json: [{ userId: user.id, status: 'ONLINE' }] });
+      await new Promise(resolve => setTimeout(resolve, 500));
+      return route.fulfill({ json: { serverInstanceId: 'chat-test', version: 1, detailVersion: 1, changed: false } });
+    }
     if (url.pathname.endsWith('/messages')) {
       if (readError) return route.fulfill({ status: 503, json: { detail: '消息同步失败' } });
       return route.fulfill({ json: { messages: url.searchParams.has('afterMessageId')
@@ -156,6 +162,8 @@ test('向下返回历史才显示回到最新；新消息定位未读且不丢�
   readError = true;
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(page.locator('.chat-sync-status')).toContainText('消息同步失败');
+  await expect(page.locator('.chat-sync-status')).toHaveCount(1);
+  await expect(page.locator('.members-directory .group-error, .members-directory [role="status"]')).toHaveCount(0);
   expect(await page.locator('.composer').boundingBox()).toEqual(composerBounds);
   await expect(page.locator('.composer-shell .chat-error')).toHaveCount(0);
   for (const width of [640, 420]) {
@@ -598,7 +606,7 @@ test('历史请求失败可重试，到底后不再请求更早消息', async ({
   await list.evaluate((element) => { element.scrollTop = 0; });
   await expect(page.locator('.chat-history-error')).toHaveText('历史读取失败');
   expect(historyRequests).toBe(1);
-  await page.getByRole('button', { name: '重试', exact: true }).click();
+  await page.locator('.chat-history-state').getByRole('button', { name: '重试', exact: true }).click();
   await expect(page.locator('[data-message-id="A01"]')).toHaveCount(1);
   await expect(page.locator('.chat-history-error')).toHaveCount(0);
   await list.evaluate((element) => { element.scrollTop = 0; });

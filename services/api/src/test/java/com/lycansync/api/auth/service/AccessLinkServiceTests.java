@@ -61,6 +61,17 @@ class AccessLinkServiceTests {
     }
 
     @Test
+    void shouldSearchRecoverableMembersWithAdministratorPermission() {
+        service.members(owner, "  朋友%  ", 100);
+        verify(links).members("朋友%", 100);
+        assertThatThrownBy(() -> service.members(owner, "a".repeat(101), 0)).isInstanceOf(AuthException.class);
+        assertThatThrownBy(() -> service.members(owner, "", -1)).isInstanceOf(AuthException.class);
+        assertThatThrownBy(() -> service.members(new AuthenticatedUser(member.id(), "朋友", false), "", 0))
+                .isInstanceOf(AuthException.class);
+        verify(links, never()).members("", 0);
+    }
+
+    @Test
     void shouldUseThreeDaysForInvitationAndTwelveHoursForRecovery() {
         var invitation = service.create(owner, new AccessLinkRequest("INVITE", null, "朋友一"));
         assertThat(Duration.between(NOW, invitation.record().expiresAt())).isEqualTo(Duration.ofDays(3));
