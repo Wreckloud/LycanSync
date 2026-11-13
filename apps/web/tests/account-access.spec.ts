@@ -3,6 +3,9 @@ import { test, expect } from '@playwright/test';
 test.beforeEach(async ({ page }) => {
   // 未提供模拟的业务请求明确失败，不能落到 Vite 的真实服务器代理。
   await page.route('**/api/**', (route) => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
+  await page.route('**/api/auth/server-settings/qq', route => route.fulfill({ json: {
+    enabled: false, appId: '', callbackUrl: '', appKeyConfigured: false,
+  } }));
 });
 
 test('邀请模式不展示测试密码注册入口', async ({ page }) => {
@@ -43,8 +46,54 @@ test('仅服主显示邀请面板且生成链接只在成功后展示', async ({
   await page.getByRole('button', { name: '服主管理', exact: true }).click();
   await expect(page.getByText('测试服务器', { exact: true })).toBeVisible();
   expect(configurationReads).toBe(1);
+  const invite = await page.getByRole('button', { name: '邀请新朋友', exact: true }).boundingBox();
+  const recovery = await page.getByRole('button', { name: '恢复成员登录', exact: true }).boundingBox();
+  const links = await page.getByRole('button', { name: '链接管理', exact: true }).boundingBox();
+  expect(invite!.y).toBe(recovery!.y);
+  expect(Math.abs(invite!.width - recovery!.width)).toBeLessThan(1);
+  expect(links!.width).toBeGreaterThan(invite!.width * 2);
+  const passwordButton = await page.getByRole('button', { name: '设置恢复密码', exact: true }).boundingBox();
+  const transferButton = await page.getByRole('button', { name: '转让服主', exact: true }).boundingBox();
+  expect(passwordButton!.width).toBe(transferButton!.width);
   await expect(page.getByRole('button', { name: /刷新/ })).toHaveCount(0);
   await page.locator('.owner-settings').screenshot({ path: testInfo.outputPath('owner-settings.png') });
+  let qqConfiguration = { enabled: false, appId: '', callbackUrl: '', appKeyConfigured: false };
+  const qqWrites: unknown[] = [];
+  let rejectQqSave = true;
+  await page.route('**/api/auth/server-settings/qq', async route => {
+    if (route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON();
+      qqWrites.push(body);
+      if (rejectQqSave) return route.fulfill({ status: 503, json: { detail: '配置暂时无法保存' } });
+      qqConfiguration = { enabled: body.enabled, appId: body.appId, callbackUrl: body.callbackUrl, appKeyConfigured: true };
+    }
+    return route.fulfill({ json: qqConfiguration });
+  });
+  await page.getByRole('button', { name: '配置 QQ 登录', exact: true }).click();
+  await page.getByLabel('允许 QQ 登录', { exact: true }).check();
+  await page.getByLabel('App ID', { exact: true }).fill('1234567');
+  await page.getByLabel('App Key', { exact: true }).fill('test-private-key');
+  await page.getByLabel('回调地址', { exact: true }).fill('https://example.com/api/auth/qq/callback');
+  await page.locator('.qq-login-settings').screenshot({ path: testInfo.outputPath('qq-settings.png') });
+  await page.locator('.qq-login-settings').getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByText('配置暂时无法保存', { exact: true })).toBeVisible();
+  rejectQqSave = false;
+  await page.locator('.qq-login-settings').getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByText('QQ 登录 · 已开启', { exact: true })).toBeVisible();
+  expect(qqWrites).toHaveLength(2);
+  await page.getByRole('button', { name: '配置 QQ 登录', exact: true }).click();
+  await expect(page.getByLabel('App Key', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('App Key', { exact: true })).toHaveAttribute('placeholder', '已设置，留空保留原密钥');
+  await page.getByLabel('允许 QQ 登录', { exact: true }).uncheck();
+  await page.locator('.qq-login-settings').getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByText('QQ 登录 · 未开启', { exact: true })).toBeVisible();
+  expect(qqWrites[2]).toMatchObject({ enabled: false, appKey: '' });
+  await page.getByRole('button', { name: '配置 QQ 登录', exact: true }).click();
+  await page.getByLabel('App Key', { exact: true }).fill('discard-this-secret');
+  await page.locator('.qq-login-settings').getByRole('button', { name: '取消', exact: true }).click();
+  await page.getByRole('button', { name: '配置 QQ 登录', exact: true }).click();
+  await expect(page.getByLabel('App Key', { exact: true })).toHaveValue('');
+  await page.locator('.qq-login-settings').getByRole('button', { name: '取消', exact: true }).click();
   await expect(page.getByRole('button', { name: '设置恢复密码', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '注销账号', exact: true })).toHaveCount(0);
   await expect(page.getByLabel('新恢复密码（15–128 个字符）', { exact: true })).toHaveCount(0);

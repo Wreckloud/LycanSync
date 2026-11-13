@@ -6,14 +6,20 @@ import { useRecording } from './useRecording';
 vi.mock('../rtc/nativeScreenVideo', () => ({ setNativeScreenRecordingDemand: vi.fn(async () => {}) }));
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
-async function fixture(initial: Partial<DesktopRecordingStatus> = {}) {
+async function fixture(initial: Partial<DesktopRecordingStatus> = {}, replayEnabled = false) {
   let id = 0;
   let status: DesktopRecordingStatus = { holdingResources: false, phase: 'idle', recordingId: null, startedAt: null, bytes: 0,
     error: null, saved: false, continuing: false, applicationAudio: false, ...initial };
   let listener: (state: DesktopRecordingStatus) => void = () => {};
+  let settings: RecordingSettings = { directory: 'C:/app/data/recordings', applicationAudio: false, microphone: false, friends: false,
+    replaySeconds: 60, replayEnabled, videoHeight: 1080, videoFps: 60 };
   const desktop = {
-    getRecordingSettings: vi.fn(async () => ({ directory: 'C:/app/data/recordings', applicationAudio: false, microphone: false, friends: false,
-      replaySeconds: 60, videoHeight: 1080, videoFps: 60 })),
+    getRecordingSettings: vi.fn(async () => ({ ...settings })),
+    configureReplay: vi.fn(async (patch: { enabled?: boolean; seconds?: number }) => {
+      settings = { ...settings, ...(patch.enabled === undefined ? {} : { replayEnabled: patch.enabled }),
+        ...(patch.seconds === undefined ? {} : { replaySeconds: patch.seconds as RecordingSettings['replaySeconds'] }) };
+      return { ...settings };
+    }),
     getRecordingStatus: vi.fn(async () => status),
     onRecordingState: (callback: typeof listener) => { listener = callback; return () => {}; },
     startRecording: vi.fn(async () => {
@@ -33,14 +39,124 @@ async function fixture(initial: Partial<DesktopRecordingStatus> = {}) {
     }),
   };
   vi.stubGlobal('window', { lycanDesktop: desktop });
-  const track = shallowRef({ id: 'original' } as MediaStreamTrack);
+  const track = shallowRef<MediaStreamTrack | undefined>({ id: 'original' } as MediaStreamTrack);
+  const canStart = shallowRef(true);
   const scope = effectScope();
   const onStarted = vi.fn();
   const onSaved = vi.fn();
-  const recording = scope.run(() => useRecording({ track: () => track.value, canStart: () => true, voices: () => [], onStarted, onSaved }))!;
+  const recording = scope.run(() => useRecording({ track: () => track.value, canStart: () => canStart.value, voices: () => [], onStarted, onSaved }))!;
   await vi.waitFor(() => expect(recording.busy.value).toBe(false));
-  return { recording, desktop, scope, track, onStarted, onSaved, publish: (next: DesktopRecordingStatus) => { status = next; listener(next); } };
+  return { recording, desktop, scope, track, canStart, onStarted, onSaved, publish: (next: DesktopRecordingStatus) => { status = next; listener(next); } };
 }
+
+it('未共享时可保存回放开关，等待共享就绪再启动并提示，下次共享仍自动开启', async () => {
+  const f = await fixture();
+  try {
+    f.track.value = undefined;
+    await f.recording.setReplayEnabled(true);
+    expect(f.recording.settings.value?.replayEnabled).toBe(true);
+    expect(f.recording.replayActive.value).toBe(false);
+    expect(f.desktop.startReplay).not.toHaveBeenCalled();
+    expect(f.recording.successNotice.value).toBeNull();
+    f.canStart.value = false;
+    f.track.value = { id: 'sharing' } as MediaStreamTrack;
+    await nextTick();
+    expect(f.desktop.startReplay).not.toHaveBeenCalled();
+    f.canStart.value = true;
+    await vi.waitFor(() => expect(f.recording.replayActive.value).toBe(true));
+    expect(f.desktop.startReplay).toHaveBeenCalledOnce();
+    expect(f.recording.successNotice.value?.message).toBe('即时回放已开启');
+    const notice = f.recording.successNotice.value;
+    f.publish({ ...f.recording.state.value });
+    expect(f.recording.successNotice.value).toBe(notice);
+    f.track.value = undefined;
+    await f.desktop.stopReplay();
+    await nextTick();
+    expect(f.recording.settings.value?.replayEnabled).toBe(true);
+    f.track.value = { id: 'next-sharing' } as MediaStreamTrack;
+    await vi.waitFor(() => expect(f.desktop.startReplay).toHaveBeenCalledTimes(2));
+    expect(f.recording.successNotice.value).not.toBe(notice);
+  } finally { f.scope.stop(); }
+});
+
+it('恢复已保存的回放设置会等待初次状态读取，成功后只提示一次', async () => {
+  const f = await fixture({}, true);
+  try {
+    await vi.waitFor(() => expect(f.recording.replayActive.value).toBe(true));
+    expect(f.desktop.startReplay).toHaveBeenCalledOnce();
+    expect(f.recording.successNotice.value?.message).toBe('即时回放已开启');
+  } finally { f.scope.stop(); }
+});
+
+it('自动回放失败不循环重试，不报开启成功；重开开关可重试，关闭不停止普通录像', async () => {
+  const f = await fixture();
+  try {
+    f.desktop.startReplay.mockRejectedValueOnce(new Error('recordingHardwareEncoderUnavailable'));
+    await f.recording.setReplayEnabled(true);
+    await vi.waitFor(() => expect(f.recording.notice.value).toContain('没有可用的硬件录制'));
+    expect(f.recording.successNotice.value).toBeNull();
+    f.canStart.value = false; await nextTick();
+    f.canStart.value = true; await nextTick();
+    expect(f.desktop.startReplay).toHaveBeenCalledOnce();
+    await f.recording.setReplayEnabled(false);
+    await f.recording.setReplayEnabled(true);
+    await vi.waitFor(() => expect(f.recording.replayActive.value).toBe(true));
+    await f.recording.start();
+    await f.recording.setReplayEnabled(false);
+    expect(f.recording.settings.value?.replayEnabled).toBe(false);
+    expect(f.recording.replayActive.value).toBe(false);
+    expect(f.desktop.stopRecording).not.toHaveBeenCalled();
+    expect(f.recording.active.value).toBe(true);
+  } finally { f.scope.stop(); }
+});
+
+it('回放开关保存失败保留原选择，不启动采集', async () => {
+  const f = await fixture();
+  try {
+    f.desktop.configureReplay.mockRejectedValueOnce(new Error('disk unavailable'));
+    await f.recording.setReplayEnabled(true);
+    expect(f.recording.settings.value?.replayEnabled).toBe(false);
+    expect(f.desktop.startReplay).not.toHaveBeenCalled();
+    expect(f.recording.notice.value).toBe('即时回放设置未能保存，请重试。');
+  } finally { f.scope.stop(); }
+});
+
+it('自动回放准备期间收到共享并录制请求，等待后仍开始普通录像', async () => {
+  const f = await fixture();
+  try {
+    let complete!: () => void;
+    const original = f.desktop.startReplay.getMockImplementation()!;
+    f.desktop.startReplay.mockImplementationOnce(async () => {
+      await new Promise<void>(resolve => { complete = resolve; });
+      return original();
+    });
+    await f.recording.setReplayEnabled(true);
+    await vi.waitFor(() => expect(f.desktop.startReplay).toHaveBeenCalledOnce());
+    const starting = f.recording.start();
+    expect(f.desktop.startRecording).not.toHaveBeenCalled();
+    complete();
+    await starting;
+    expect(f.desktop.startRecording).toHaveBeenCalledOnce();
+    expect(f.recording.active.value).toBe(true);
+    expect(f.recording.replayActive.value).toBe(true);
+  } finally { f.scope.stop(); }
+});
+
+it('自动回放等待采集时换到新共享，不用旧轨道启动，准备完成后只启动新来源', async () => {
+  const f = await fixture();
+  try {
+    let complete!: () => void;
+    vi.mocked(setNativeScreenRecordingDemand).mockImplementationOnce(() => new Promise<void>(resolve => { complete = resolve; }));
+    await f.recording.setReplayEnabled(true);
+    await vi.waitFor(() => expect(complete).toBeDefined());
+    f.track.value = { id: 'replacement' } as MediaStreamTrack;
+    await nextTick();
+    complete();
+    await vi.waitFor(() => expect(f.recording.replayActive.value).toBe(true));
+    expect(f.desktop.startReplay).toHaveBeenCalledOnce();
+    expect(setNativeScreenRecordingDemand).toHaveBeenCalledWith(f.track.value, true);
+  } finally { f.scope.stop(); }
+});
 
 it('开始录制不弹提示，保存成功提示且周期快照不重复提示', async () => {
   const f = await fixture();

@@ -518,7 +518,12 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
       getNativeMediaCapabilities: async () => ({ screenShareAudioCapture: { available: true, reason: 'windowsApplicationLoopbackProcessTree' } }),
       setMicrophoneEchoOutput: async () => ({ changed: false }),
       getRecordingSettings: async () => ({ directory: 'test-recordings', applicationAudio: true, microphone: false, friends: false,
-        videoHeight: 1080, videoFps: 60, replaySeconds: 60 }),
+        videoHeight: 1080, videoFps: 60, replaySeconds: 60, replayEnabled: localStorage.getItem('test.replayEnabled') === 'true' }),
+      configureReplay: async (settings: { enabled?: boolean }) => {
+        localStorage.setItem('test.replayEnabled', String(settings.enabled));
+        return { directory: 'test-recordings', applicationAudio: true, microphone: false, friends: false,
+          videoHeight: 1080, videoFps: 60, replaySeconds: 60, replayEnabled: settings.enabled };
+      },
       getRecordingStatus: async () => ({ holdingResources: false, phase: 'idle', recordingId: null, startedAt: null,
         bytes: 0, error: null, saved: false, continuing: false, applicationAudio: true }),
       getRecordingLibrary: async () => {
@@ -538,6 +543,10 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
   await presets.getByRole('button', { name: '高帧率', exact: true }).click();
   await page.getByRole('checkbox', { name: '共享声音', exact: true }).uncheck();
   await page.getByRole('checkbox', { name: /隐藏共享画面中的光标/ }).check();
+  const replay = page.getByRole('checkbox', { name: /开启即时回放/ });
+  await expect(replay).toBeEnabled();
+  await replay.check();
+  await expect(page.getByText('已开启，等待共享画面', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '返回应用', exact: true }).click();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '共享与录制', exact: true }).click();
@@ -546,8 +555,9 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
   await expect(page.getByRole('checkbox', { name: /隐藏共享画面中的光标/ })).toBeChecked();
   await expect(page.getByRole('heading', { name: '录制内容', exact: true })).toBeVisible();
   await expect(page.locator('.settings-recording-page h2')).toHaveText(['共享画面', '共享录制', '文件与画质', '即时回放', '录像管理']);
-  await expect(page.getByRole('checkbox', { name: /开启即时回放/ })).toBeDisabled();
-  await expect(page.getByRole('checkbox', { name: /开启即时回放/ })).not.toBeChecked();
+  await expect(replay).toBeEnabled();
+  await expect(replay).toBeChecked();
+  expect(await page.evaluate(() => localStorage.getItem('test.replayEnabled'))).toBe('true');
   await expect(page.getByRole('heading', { name: '当前录像', exact: true })).toHaveCount(0);
   await expect(page.locator('.settings-recording-page').getByRole('button', { name: '开始录制', exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('lycansync.screen-share-quality')!).quality)).toBe('highFrameRate');

@@ -14,6 +14,7 @@ import java.util.UUID;
  */
 @Mapper
 public interface QqIdentityMapper {
+    boolean hasOtherApplication(@Param("appId") String appId);
     String findUserId(@Param("appId") String appId, @Param("openId") String openId);
     String findNickname(@Param("userId") UUID userId);
     int insert(@Param("appId") String appId, @Param("openId") String openId,

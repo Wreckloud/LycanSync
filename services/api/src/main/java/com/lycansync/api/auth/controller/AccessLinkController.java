@@ -1,7 +1,7 @@
 package com.lycansync.api.auth.controller;
 
 import com.lycansync.api.auth.config.AccountAccessProperties;
-import com.lycansync.api.auth.config.QqLoginProperties;
+import com.lycansync.api.auth.service.QqConfigurationService;
 import com.lycansync.api.auth.dto.AccessLinkRequest;
 import com.lycansync.api.auth.dto.AccessRedeemRequest;
 import com.lycansync.api.auth.dto.LoginResponse;
@@ -43,7 +43,7 @@ import java.util.UUID;
 public class AccessLinkController {
     private final AccessLinkService links;
     private final AccountAccessProperties settings;
-    private final QqLoginProperties qq;
+    private final QqConfigurationService qq;
     private final AccountLifecycleService lifecycle;
 
     public record LoginOptions(String mode, String serverName, boolean qqAvailable, boolean initialized) { }

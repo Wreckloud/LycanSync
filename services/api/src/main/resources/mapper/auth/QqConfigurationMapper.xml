@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lycansync.api.auth.mapper.QqConfigurationMapper">
+    <select id="find" resultType="com.lycansync.api.auth.model.QqConfiguration">
+        SELECT enabled, app_id, app_key, callback_url FROM auth_qq_configuration WHERE singleton = TRUE
+    </select>
+    <insert id="save">
+        INSERT INTO auth_qq_configuration(singleton, enabled, app_id, app_key, callback_url)
+        VALUES (TRUE, #{enabled}, #{appId}, #{appKey}, #{callbackUrl})
+        ON CONFLICT (singleton) DO UPDATE SET enabled = EXCLUDED.enabled, app_id = EXCLUDED.app_id,
+            app_key = EXCLUDED.app_key, callback_url = EXCLUDED.callback_url, updated_at = CURRENT_TIMESTAMP
+    </insert>
+</mapper>

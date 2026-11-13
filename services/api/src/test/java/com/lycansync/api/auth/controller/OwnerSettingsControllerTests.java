@@ -2,10 +2,14 @@ package com.lycansync.api.auth.controller;
 
 import com.lycansync.api.auth.config.AccountAccessProperties;
 import com.lycansync.api.auth.config.AuthConfiguration;
-import com.lycansync.api.auth.config.QqLoginProperties;
+import com.lycansync.api.auth.service.QqConfigurationService;
+import com.lycansync.api.auth.mapper.AccessLinkMapper;
+import com.lycansync.api.auth.mapper.QqConfigurationMapper;
+import com.lycansync.api.auth.mapper.QqIdentityMapper;
 import com.lycansync.api.auth.mapper.AuthMapper;
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.auth.model.AuthUser;
+import com.lycansync.api.auth.model.QqConfiguration;
 import com.lycansync.api.auth.service.AuthService;
 import com.lycansync.api.auth.service.OwnerSettingsService;
 import org.junit.jupiter.api.Test;
@@ -23,6 +27,7 @@ import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -34,11 +39,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * @since 2026-11-04
  */
 @WebMvcTest(OwnerSettingsController.class)
-@Import({AuthConfiguration.class, OwnerSettingsService.class, AccountAccessProperties.class, QqLoginProperties.class})
+@Import({AuthConfiguration.class, OwnerSettingsService.class, AccountAccessProperties.class})
 class OwnerSettingsControllerTests {
     @Autowired private MockMvc mvc;
     @MockitoBean private AuthService sessions;
     @MockitoBean private AuthMapper users;
+    @MockitoBean private QqConfigurationService qq;
+    @MockitoBean private QqConfigurationMapper configurations;
+    @MockitoBean private QqIdentityMapper identities;
+    @MockitoBean private AccessLinkMapper access;
 
     @Test
     void anonymousAndMemberCannotReadServerSettings() throws Exception {
@@ -69,5 +78,30 @@ class OwnerSettingsControllerTests {
                 .andExpect(jsonPath("$.serverName").value("LycanSync"))
                 .andExpect(jsonPath("$.qqEnabled").value(false))
                 .andExpect(jsonPath("$.mediaConfigured").value(false));
+    }
+
+    @Test
+    void memberCannotReadOrWriteQqSecrets() throws Exception {
+        when(sessions.authenticate("member-token")).thenReturn(new AuthenticatedUser(UUID.randomUUID(), "成员", false));
+        mvc.perform(get("/api/auth/server-settings/qq").header("Authorization", "Bearer member-token"))
+                .andExpect(status().isForbidden());
+        mvc.perform(put("/api/auth/server-settings/qq").header("Authorization", "Bearer member-token")
+                .contentType("application/json").content("""
+                        {"enabled":true,"appId":"1234567","appKey":"secret","callbackUrl":"https://example.com/api/auth/qq/callback"}
+                        """))
+                .andExpect(status().isForbidden());
+        verifyNoInteractions(qq, configurations);
+    }
+
+    @Test
+    void configurationResponseNeverIncludesSecretAndDisablesCaching() throws Exception {
+        var owner = new AuthenticatedUser(UUID.randomUUID(), "服主", true);
+        when(sessions.authenticate("owner-token")).thenReturn(owner);
+        when(users.findUserProfile(owner.id())).thenReturn(new AuthUser(owner.id(), "服主", "", true, "", Instant.now()));
+        when(qq.current()).thenReturn(new QqConfiguration(true, "1234567", "private-key", "https://example.com/api/auth/qq/callback"));
+        mvc.perform(get("/api/auth/server-settings/qq").header("Authorization", "Bearer owner-token"))
+                .andExpect(status().isOk()).andExpect(header().string("Cache-Control", containsString("no-store")))
+                .andExpect(jsonPath("$.*", hasSize(4))).andExpect(jsonPath("$.appKey").doesNotExist())
+                .andExpect(jsonPath("$.appKeyConfigured").value(true));
     }
 }

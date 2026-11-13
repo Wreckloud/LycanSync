@@ -161,7 +161,7 @@ defineExpose({ beginTransfer });
   <section class="settings-block lifecycle-settings" :class="{ 'account-operation': section === 'account' }">
     <template v-if="section === 'owner' && status?.administrator">
       <h2>服主账号</h2>
-      <div class="settings-toggle-group">
+      <div class="settings-toggle-group owner-account-actions">
         <div class="settings-action-row">
           <div><strong>恢复密码 · {{ status.recoveryConfigured ? '已设置' : '未设置' }}</strong>
             <small>无法登录时，可通过“群组恢复”找回账号。</small>
@@ -260,6 +260,8 @@ defineExpose({ beginTransfer });
 
 <style scoped>
 .lifecycle-settings { display: grid; gap: 12px; }
+.owner-account-actions { grid-template-columns: minmax(0, 1fr) max-content; }
+.owner-account-actions > .settings-action-row { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; }
 .lifecycle-settings p { margin: 0; color: var(--muted); line-height: 1.6; }
 .lifecycle-settings .recovery-warning { color: var(--danger); }
 .lifecycle-settings > button { justify-self: start; }

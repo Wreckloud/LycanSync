@@ -1,6 +1,11 @@
 package com.lycansync.api.auth;
 
 import com.lycansync.api.auth.exception.AuthException;
+import com.lycansync.api.auth.dto.QqConfigurationRequest;
+import com.lycansync.api.auth.config.QqLoginProperties;
+import com.lycansync.api.auth.mapper.QqConfigurationMapper;
+import com.lycansync.api.auth.service.OwnerSettingsService;
+import com.lycansync.api.auth.service.QqConfigurationService;
 import com.lycansync.api.auth.mapper.QqIdentityMapper;
 import com.lycansync.api.auth.service.AccessLinkService;
 import com.lycansync.api.auth.service.AuthSecrets;
@@ -51,6 +56,8 @@ class QqLoginApplicationIT {
     @Autowired private AuthService sessions;
     @Autowired private QqLoginService login;
     @Autowired private QqIdentityMapper identities;
+    @Autowired private OwnerSettingsService settings;
+    @Autowired private QqConfigurationMapper configurations;
     @MockitoBean private QqIdentityClient client;
     private String ownerToken;
     private static final String VERIFIER = "v".repeat(43);
@@ -61,7 +68,7 @@ class QqLoginApplicationIT {
         assertThat(jdbc.sql("SELECT current_database()").query(String.class).single()).isEqualTo("lycansync_qq_test");
         var activation = links.activation();
         ownerToken = links.redeem(activation.url().substring(activation.url().indexOf("#token=") + 7), AuthSecrets.generate(), null, "owner-recovery-test-password").sessionToken();
-        when(client.exchange("test-code")).thenReturn(new QqIdentityClient.Identity(OPEN_ID, "QQ 昵称", DefaultAvatar.value()));
+        when(client.exchange(org.mockito.ArgumentMatchers.eq("test-code"), org.mockito.ArgumentMatchers.any())).thenReturn(new QqIdentityClient.Identity(OPEN_ID, "QQ 昵称", DefaultAvatar.value()));
     }
 
     private QqLoginService.Start ready(boolean binding) {
@@ -92,5 +99,23 @@ class QqLoginApplicationIT {
         var result = login.exchange(ready(false).request(), VERIFIER);
         assertThat(result.user().id()).isEqualTo(owner.id());
         assertThat(result.user().administrator()).isTrue();
+    }
+
+    @Test
+    void savedQqConfigurationSurvivesServiceRecreationAndControlsLogin() {
+        var owner = sessions.authenticate(ownerToken);
+        settings.saveQqSettings(owner, new QqConfigurationRequest(false, "1234567", "", "https://example.com/api/auth/qq/callback"));
+        var restored = new QqConfigurationService(new QqLoginProperties(), configurations);
+        assertThat(restored.isEnabled()).isFalse();
+        assertThat(restored.current().appKey()).isEqualTo("test-only-key");
+        assertThatThrownBy(() -> login.start(AuthSecrets.hash(VERIFIER), false, false, null)).isInstanceOf(AuthException.class);
+        settings.saveQqSettings(owner, new QqConfigurationRequest(true, "1234567", "rotated-key", "https://example.com/api/auth/qq/callback"));
+        assertThat(restored.isEnabled()).isTrue();
+        assertThat(restored.current().appKey()).isEqualTo("rotated-key");
+        login.exchange(ready(false).request(), VERIFIER);
+        assertThatThrownBy(() -> settings.saveQqSettings(owner,
+                new QqConfigurationRequest(true, "7654321", "other-key", "https://example.com/api/auth/qq/callback")))
+                .isInstanceOf(AuthException.class).hasMessageContaining("已有成员绑定");
+        assertThat(restored.current().appId()).isEqualTo("1234567");
     }
 }

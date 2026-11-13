@@ -76,6 +76,22 @@ test('成员资料只开放明确的同源 GET 路径并保留认证', async () 
   assert.equal(forwarded.length, 1);
 });
 
+test('QQ 配置仅代理认证的读取与保存，拒绝额外路径和超长请求', async () => {
+  const { serve, forwarded } = proxyFixture();
+  const path = 'lycan://app/api/auth/server-settings/qq';
+  await serve(new Request(path));
+  await serve(new Request(path, { method: 'PUT', body: JSON.stringify({ enabled: false, appId: '', appKey: '', callbackUrl: '' }) }));
+  assert.equal(forwarded.length, 2);
+  for (const request of forwarded) {
+    assert.equal(request.options.headers.Authorization, 'Bearer test-session');
+    assert.equal(request.url, 'https://example.test/api/auth/server-settings/qq');
+  }
+  assert.equal((await serve(new Request(path, { method: 'POST' }))).status, 404);
+  assert.equal((await serve(new Request(path + '/secret'))).status, 404);
+  assert.equal((await serve(new Request(path, { method: 'PUT', body: 'x'.repeat(4097) }))).status, 413);
+  assert.equal(forwarded.length, 2);
+});
+
 test('音效处理只开放固定 POST，上传字节有界且返回原始音频响应', async () => {
   const { serve, forwarded } = proxyFixture({ net: { fetch: async (url, options) => {
     forwarded.push({ url, options });

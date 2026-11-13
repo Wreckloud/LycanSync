@@ -47,6 +47,8 @@ const apiRoutePolicies = new Map([
   ['POST /api/auth/access/redeem', { public: true, savesSession: true }],
   ['GET /api/auth/account', {}],
   ['GET /api/auth/server-settings', {}],
+  ['GET /api/auth/server-settings/qq', {}],
+  ['PUT /api/auth/server-settings/qq', { maxBodyBytes: 4096 }],
   ['POST /api/auth/account/recover', { public: true, savesSession: true }],
   ['PUT /api/auth/account/recovery-password', {}],
   ['POST /api/auth/account/transfer', {}],
@@ -1201,9 +1203,12 @@ ipcMain.handle('recording:replay-stop', (event) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
   return recording.stopReplay();
 });
-ipcMain.handle('recording:replay-settings', (event, seconds) => {
-  if (!trustedSender(event) || closing || ![30, 60, 120].includes(seconds)) throw new Error('请求参数无效');
-  return recording.configure({ replaySeconds: seconds });
+ipcMain.handle('recording:replay-settings', (event, settings) => {
+  if (!trustedSender(event) || closing || !settings || typeof settings !== 'object' || Array.isArray(settings)
+      || Object.keys(settings).length !== 1
+      || !((Object.hasOwn(settings, 'seconds') && [30, 60, 120].includes(settings.seconds))
+        || (Object.hasOwn(settings, 'enabled') && typeof settings.enabled === 'boolean'))) throw new Error('请求参数无效');
+  return recording.configure(Object.hasOwn(settings, 'enabled') ? { replayEnabled: settings.enabled } : { replaySeconds: settings.seconds });
 });
 ipcMain.handle('recording:reveal', async (event) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');

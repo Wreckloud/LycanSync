@@ -1,6 +1,7 @@
 package com.lycansync.api.auth.service;
 
 import com.lycansync.api.auth.config.QqLoginProperties;
+import com.lycansync.api.auth.mapper.QqConfigurationMapper;
 import com.lycansync.api.auth.exception.AuthException;
 import com.lycansync.api.auth.mapper.AccessLinkMapper;
 import com.lycansync.api.auth.mapper.AuthMapper;
@@ -56,14 +57,14 @@ class QqLoginServiceTests {
         settings.setEnabled(true); settings.setAppId("1234567"); settings.setAppKey("test-key");
         settings.setCallbackUrl("https://example.com/api/auth/qq/callback");
         when(access.lockInitialization()).thenReturn(true);
-        when(client.exchange("test-code")).thenReturn(new QqIdentityClient.Identity(OPEN_ID, "来自 QQ 的昵称", DefaultAvatar.value()));
+        when(client.exchange(eq("test-code"), any())).thenReturn(new QqIdentityClient.Identity(OPEN_ID, "来自 QQ 的昵称", DefaultAvatar.value()));
         when(identities.insert(anyString(), anyString(), any(), anyString(), any())).thenReturn(1);
         when(sessions.issueSession(any(), anyString())).thenAnswer(invocation -> invocation.getArgument(1));
         when(transactions.execute(any())).thenAnswer(invocation ->
                 ((TransactionCallback<?>) invocation.getArgument(0)).doInTransaction(new SimpleTransactionStatus()));
         doAnswer(invocation -> { ((Consumer<org.springframework.transaction.TransactionStatus>) invocation.getArgument(0))
                 .accept(new SimpleTransactionStatus()); return null; }).when(transactions).executeWithoutResult(any());
-        service = new QqLoginService(settings, client, identities, users, access, sessions, transactions, Clock.fixed(NOW, ZoneOffset.UTC));
+        service = new QqLoginService(new QqConfigurationService(settings, mock(QqConfigurationMapper.class)), client, identities, users, access, sessions, transactions, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     private QqLoginService.Start start(boolean binding, AuthenticatedUser user) {
@@ -84,7 +85,7 @@ class QqLoginServiceTests {
         verifyNoInteractions(client);
         service.callback(start.request(), authorization.browserProof(), "test-code", null);
         assertThatThrownBy(() -> service.callback(start.request(), authorization.browserProof(), "test-code", null)).isInstanceOf(AuthException.class);
-        verify(client, times(1)).exchange("test-code");
+        verify(client, times(1)).exchange(eq("test-code"), any());
         assertThat(service.result(start.request(), authorization.browserProof()).ready()).isTrue();
     }
 
@@ -121,7 +122,7 @@ class QqLoginServiceTests {
     @Test
     void importedNicknameFitsCardWithoutSplittingUnicodeOrChangingQqIdentity() {
         for (String original : new String[] { "一二三四五六七八九", "abcdefghijklmnopq", "中文昵称abcdefg😀", "😀".repeat(9) }) {
-            when(client.exchange("test-code")).thenReturn(new QqIdentityClient.Identity(OPEN_ID, original, ""));
+            when(client.exchange(eq("test-code"), any())).thenReturn(new QqIdentityClient.Identity(OPEN_ID, original, ""));
             var start = start(false, null); ready(start);
             var response = service.exchange(start.request(), VERIFIER);
             String nickname = response.user().nickname();
@@ -164,6 +165,26 @@ class QqLoginServiceTests {
         for (int i = 0; i < 128; i++) start(false, null);
         assertThatThrownBy(() -> start(false, null)).isInstanceOf(AuthException.class).hasMessageContaining("请求较多");
         settings.setCallbackUrl("https://user:password@example.com/api/auth/qq/callback");
-        assertThatThrownBy(settings::validate).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> start(false, null)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void configurationChangeInvalidatesPendingAuthorizationBeforeIssuingSession() {
+        var start = start(false, null);
+        ready(start);
+        settings.setAppKey("replacement-key");
+        assertThatThrownBy(() -> service.exchange(start.request(), VERIFIER)).isInstanceOf(AuthException.class)
+                .hasMessageContaining("配置已更新");
+        verifyNoInteractions(sessions);
+    }
+
+    @Test
+    void configurationIsRecheckedAfterTakingAccountMutationLock() {
+        var start = start(false, null);
+        ready(start);
+        when(access.lockInitialization()).thenAnswer(invocation -> { settings.setEnabled(false); return true; });
+        assertThatThrownBy(() -> service.exchange(start.request(), VERIFIER)).isInstanceOf(AuthException.class);
+        verifyNoInteractions(sessions);
+        verify(identities, never()).insert(anyString(), anyString(), any(), anyString(), any());
     }
 }

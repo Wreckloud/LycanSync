@@ -49,6 +49,36 @@ test('默认只录应用声音，主进程生成独占文件，停止保存不�
   assert.doesNotMatch(JSON.stringify(f.diagnostics), /recordings[\\/]|\.mkv/);
 });
 
+test('回放开关默认关闭并持久保存，录制运行时也能修改，不改编码规格或停止录像', async context => {
+  const f = await fixture(context);
+  assert.equal((await f.recording.load()).replayEnabled, false);
+  f.setVideo(null);
+  assert.equal((await f.recording.configure({ replayEnabled: true })).replayEnabled, true);
+  assert.equal(f.calls.length, 0);
+  assert.equal(JSON.parse(await readFile(join(f.root, 'recording-settings.json'), 'utf8')).replayEnabled, true);
+  f.setVideo({ sessionId: 'video-1' });
+  await f.recording.start();
+  await f.recording.startReplay();
+  assert.equal((await f.recording.configure({ replayEnabled: false })).replayEnabled, false);
+  assert.equal(f.recording.snapshot().phase, 'recording');
+  assert.equal(f.recording.snapshot().replay.phase, 'buffering');
+  await assert.rejects(f.recording.configure({ replayEnabled: true, videoFps: 120 }), /recordingBusy/);
+  await f.recording.stopReplay();
+  await f.recording.stop();
+  await assert.rejects(f.recording.configure({ replayEnabled: 'true' }), /recordingPathInvalid/);
+});
+
+test('旧录制偏好补为关闭自动回放，已有画质和回溯时长保留', async context => {
+  const f = await fixture(context);
+  await writeFile(join(f.root, 'recording-settings.json'), JSON.stringify({ directory: join(f.root, 'clips'),
+    applicationAudio: false, microphone: true, friends: false, replaySeconds: 120, videoHeight: 720, videoFps: 30 }));
+  const settings = await f.recording.load();
+  assert.equal(settings.replayEnabled, false);
+  assert.equal(settings.replaySeconds, 120);
+  assert.equal(settings.videoHeight, 720);
+  assert.equal(settings.microphone, true);
+});
+
 test('录制及回放日志关联同次操作，耗时使用单调计时且不输出文件路径', async context => {
   const f = await fixture(context);
   await f.recording.startReplay();

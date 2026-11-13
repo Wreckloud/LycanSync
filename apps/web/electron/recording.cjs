@@ -18,7 +18,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
   io = { mkdir, readFile, writeFile, rename, open, stat, statfs }, createId = randomUUID }) {
   const settingsPath = join(dataDirectory, 'recording-settings.json');
   let settings = { directory: join(dataDirectory, 'recordings'), applicationAudio: true, microphone: false, friends: false,
-    replaySeconds: 60, videoHeight: 1080, videoFps: 60 };
+    replaySeconds: 60, replayEnabled: false, videoHeight: 1080, videoFps: 60 };
   let loaded;
   let active;
   let latest;
@@ -56,10 +56,12 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
           throw new Error('recordingPathInvalid');
         }
         const replaySeconds = value.replaySeconds ?? 60;
+        // 旧版只支持当次手动开启，升级后不替用户打开自动回放。
+        const replayEnabled = value.replayEnabled ?? false;
         const videoHeight = value.videoHeight ?? 1080, videoFps = value.videoFps ?? 60;
-        if (![30, 60, 120].includes(replaySeconds) || ![720, 1080, 1440].includes(videoHeight) || ![30, 60, 120].includes(videoFps)) throw new Error('recordingPathInvalid');
+        if (typeof replayEnabled !== 'boolean' || ![30, 60, 120].includes(replaySeconds) || ![720, 1080, 1440].includes(videoHeight) || ![30, 60, 120].includes(videoFps)) throw new Error('recordingPathInvalid');
         settings = { directory: value.directory, applicationAudio: value.applicationAudio, microphone: value.microphone, friends: value.friends,
-          replaySeconds, videoHeight, videoFps };
+          replaySeconds, replayEnabled, videoHeight, videoFps };
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
     })();
     await loaded;
@@ -67,10 +69,12 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
   }
   async function configure(patch) {
     await load();
-    if (active || replay || continuing) throw new Error('recordingBusy');
+    const replayPreferenceOnly = Object.keys(patch).length === 1 && Object.hasOwn(patch, 'replayEnabled');
+    if ((active || replay || continuing) && !replayPreferenceOnly) throw new Error('recordingBusy');
     const next = { ...settings, ...patch };
     if (typeof next.directory !== 'string' || !isAbsolute(next.directory) || next.directory.includes('\0')
         || !['applicationAudio', 'microphone', 'friends'].every(key => typeof next[key] === 'boolean') || ![30, 60, 120].includes(next.replaySeconds)
+        || typeof next.replayEnabled !== 'boolean'
         || ![720, 1080, 1440].includes(next.videoHeight) || ![30, 60, 120].includes(next.videoFps)) throw new Error('recordingPathInvalid');
     const result = saveSettings.then(async () => {
       await io.mkdir(dataDirectory, { recursive: true });

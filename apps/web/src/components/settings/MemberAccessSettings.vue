@@ -12,22 +12,20 @@ watch(() => props.active, active => { if (!active) mode.value = null; });
 <template>
   <section class="settings-block">
     <h2>成员访问</h2>
-    <div class="settings-toggle-group">
-      <div class="settings-action-row">
-        <div><strong>邀请新朋友</strong><small>通过邀请链接加入服务器。</small></div>
-        <button type="button" @click="mode = 'invite'">邀请新朋友</button>
-      </div>
-      <div class="settings-action-row">
-        <div><strong>恢复成员登录</strong><small>帮助无法登录的朋友找回原账号。</small></div>
-        <button type="button" @click="mode = 'recovery'">恢复成员登录</button>
-      </div>
-      <div class="settings-action-row">
-        <div><strong>链接管理</strong><small>查看使用状态，重新生成或撤销链接。</small></div>
-        <button type="button" @click="mode = 'links'">链接管理</button>
-      </div>
+    <small>邀请新朋友加入，或帮助无法登录的成员找回原账号。</small>
+    <div class="member-access-actions">
+      <button type="button" @click="mode = 'invite'">邀请新朋友</button>
+      <button type="button" @click="mode = 'recovery'">恢复成员登录</button>
     </div>
+    <small class="member-links-description">查看邀请与恢复链接的使用状态，重新生成或撤销链接。</small>
+    <button type="button" @click="mode = 'links'">链接管理</button>
   </section>
   <DialogTransition>
     <MemberAccessDialog v-if="active && mode" :mode="mode" @close="mode = null" />
   </DialogTransition>
 </template>
+
+<style scoped>
+.member-access-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.member-links-description { margin-top: 8px; }
+</style>

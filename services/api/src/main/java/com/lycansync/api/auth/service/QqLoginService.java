@@ -1,6 +1,6 @@
 package com.lycansync.api.auth.service;
 
-import com.lycansync.api.auth.config.QqLoginProperties;
+import com.lycansync.api.auth.model.QqConfiguration;
 import com.lycansync.api.auth.dto.QqLoginResponse;
 import com.lycansync.api.auth.exception.AuthException;
 import com.lycansync.api.auth.mapper.AccessLinkMapper;
@@ -33,7 +33,7 @@ import java.util.concurrent.Semaphore;
 @Service
 @RequiredArgsConstructor
 public class QqLoginService {
-    private final QqLoginProperties settings;
+    private final QqConfigurationService settings;
     private final QqIdentityClient client;
     private final QqIdentityMapper identities;
     private final AuthMapper users;
@@ -50,6 +50,7 @@ public class QqLoginService {
     public record Binding(boolean bound, String nickname) { }
 
     private static final class Pending {
+        final QqConfiguration configuration;
         final String challenge;
         final boolean desktop;
         final AuthenticatedUser bindingUser;
@@ -62,7 +63,8 @@ public class QqLoginService {
         boolean newAccount;
         Instant completed;
 
-        Pending(String challenge, boolean desktop, AuthenticatedUser bindingUser, Instant expires) {
+        Pending(QqConfiguration configuration, String challenge, boolean desktop, AuthenticatedUser bindingUser, Instant expires) {
+            this.configuration = configuration;
             this.challenge = challenge;
             this.desktop = desktop;
             this.bindingUser = bindingUser;
@@ -71,7 +73,7 @@ public class QqLoginService {
     }
 
     public synchronized Start start(String challenge, boolean desktop, boolean binding, AuthenticatedUser user) {
-        requireEnabled();
+        QqConfiguration configuration = requireEnabled();
         if (challenge == null || !challenge.matches("[a-f0-9]{64}")) throw invalid("登录请求无效");
         if (binding && (user == null || user.sessionHash() == null)) throw invalid("请先登录原账号再绑定 QQ");
         if (!binding && user != null) throw invalid("请先返回账号选择页并清除本机凭据，再登录其他账号");
@@ -79,8 +81,8 @@ public class QqLoginService {
         if (pending.size() >= 128) throw new AuthException(HttpStatus.TOO_MANY_REQUESTS,
                 ApiErrorCode.AUTH_RATE_LIMITED, "登录请求较多，请稍后再试");
         String request = AuthSecrets.generate();
-        pending.put(AuthSecrets.hash(request), new Pending(challenge, desktop, binding ? user : null, now().plus(Duration.ofMinutes(10))));
-        return new Start(request, settings.publicUrl() + "/api/auth/qq/authorize?request=" + request);
+        pending.put(AuthSecrets.hash(request), new Pending(configuration, challenge, desktop, binding ? user : null, now().plus(Duration.ofMinutes(10))));
+        return new Start(request, configuration.publicUrl() + "/api/auth/qq/authorize?request=" + request);
     }
 
     public Authorization authorize(String request, String browserProof) {
@@ -92,8 +94,8 @@ public class QqLoginService {
                 flow.browserHash = AuthSecrets.hash(browserProof);
             } else if (!matches(browserProof, flow.browserHash)) throw invalid("请在发起授权的浏览器中继续");
             String url = "https://graph.qq.com/oauth2.0/authorize?response_type=code&scope=get_user_info&client_id="
-                    + QqIdentityClient.encode(settings.getAppId()) + "&redirect_uri="
-                    + QqIdentityClient.encode(settings.getCallbackUrl()) + "&state=" + request;
+                    + QqIdentityClient.encode(flow.configuration.appId()) + "&redirect_uri="
+                    + QqIdentityClient.encode(flow.configuration.callbackUrl()) + "&state=" + request;
             return new Authorization(url, browserProof);
         }
     }
@@ -115,7 +117,7 @@ public class QqLoginService {
             return;
         }
         try {
-            QqIdentityClient.Identity identity = client.exchange(code);
+            QqIdentityClient.Identity identity = client.exchange(code, flow.configuration);
             synchronized (flow) { flow.identity = identity; flow.status = "READY"; }
         } catch (AuthException exception) {
             synchronized (flow) { flow.status = "FAILED"; flow.error = exception.getMessage(); }
@@ -147,7 +149,8 @@ public class QqLoginService {
             requireReady(flow);
             QqLoginResponse response = transactions.execute(status -> {
                 requireInitialized();
-                String userId = identities.findUserId(settings.getAppId(), flow.identity.openId());
+                requireCurrentConfiguration(flow);
+                String userId = identities.findUserId(flow.configuration.appId(), flow.identity.openId());
                 AuthUser user;
                 if (userId == null) {
                     String nickname = flow.identity.nickname();
@@ -163,7 +166,7 @@ public class QqLoginService {
                     nickname = nickname.substring(0, end).stripTrailing();
                     user = new AuthUser(UUID.randomUUID(), nickname, flow.identity.avatar(), false, "", now());
                     users.insertUser(user, now());
-                    if (identities.insert(settings.getAppId(), flow.identity.openId(), user.id(), flow.identity.nickname(), now()) != 1) {
+                    if (identities.insert(flow.configuration.appId(), flow.identity.openId(), user.id(), flow.identity.nickname(), now()) != 1) {
                         throw invalid("QQ 已关联其他账号，请重新登录");
                     }
                 } else {
@@ -191,12 +194,13 @@ public class QqLoginService {
             requireReady(flow);
             transactions.executeWithoutResult(status -> {
                 requireInitialized();
+                requireCurrentConfiguration(flow);
                 var current = users.findSessionUser(user.sessionHash(), now());
                 if (current == null || !current.id().equals(user.id())) throw invalid("原账号会话已失效，请重新登录");
-                String linked = identities.findUserId(settings.getAppId(), flow.identity.openId());
+                String linked = identities.findUserId(flow.configuration.appId(), flow.identity.openId());
                 if (user.id().toString().equals(linked)) return;
                 if (linked != null || identities.findNickname(user.id()) != null) throw invalid("QQ 或当前账号已有关联，不能覆盖绑定");
-                if (identities.insert(settings.getAppId(), flow.identity.openId(), user.id(), flow.identity.nickname(), now()) != 1) {
+                if (identities.insert(flow.configuration.appId(), flow.identity.openId(), user.id(), flow.identity.nickname(), now()) != 1) {
                     throw invalid("QQ 或当前账号已有关联，请重新检查");
                 }
             });
@@ -217,10 +221,10 @@ public class QqLoginService {
     }
 
     private synchronized Pending find(String request) {
-        requireEnabled();
         cookieName(request);
         Pending flow = pending.get(AuthSecrets.hash(request));
         if (flow == null || !flow.expires.isAfter(now())) throw invalid("登录请求已过期，请重新发起授权");
+        requireCurrentConfiguration(flow);
         return flow;
     }
 
@@ -247,10 +251,15 @@ public class QqLoginService {
         if (!Boolean.TRUE.equals(access.lockInitialization())) throw invalid("服务器尚未完成首次激活，请联系服主");
     }
 
-    private void requireEnabled() {
-        if (!settings.isEnabled()) throw new AuthException(HttpStatus.SERVICE_UNAVAILABLE,
+    private QqConfiguration requireEnabled() {
+        QqConfiguration configuration = settings.current();
+        if (!configuration.enabled()) throw new AuthException(HttpStatus.SERVICE_UNAVAILABLE,
                 ApiErrorCode.AUTH_SERVICE_UNAVAILABLE, "此服务器尚未开启 QQ 登录");
-        settings.publicUrl();
+        return configuration;
+    }
+
+    private void requireCurrentConfiguration(Pending flow) {
+        if (!flow.configuration.equals(requireEnabled())) throw invalid("QQ 登录配置已更新，请重新发起授权");
     }
 
     private Instant now() { return Instant.now(systemClock); }

@@ -32,6 +32,8 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
     notice.value = message;
   }
   const pending = ref(false);
+  const statusLoaded = ref(false);
+  const replayStartCommand = shallowRef<Promise<void>>();
   let replaySavePending = false;
   const successNotice = shallowRef<{ message: string } | null>(null);
   const changingSource = ref(false);
@@ -53,10 +55,10 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
   let disposed = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let demandTrack: MediaStreamTrack | undefined;
+  let replayAttemptTrack: MediaStreamTrack | undefined;
   let voice: RecordingVoice | undefined;
   let stateRevision = 0;
   let refreshing = false;
-  let statusLoaded = false;
   const setState = (next: DesktopRecordingStatus) => {
     if (disposed) return;
     stateRevision++;
@@ -65,11 +67,11 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
       elapsedAnchor = { id: next.recordingId, at: now.value, seconds: Math.max(0, (Date.now() - next.startedAt) / 1000) };
     }
     const code = next.error ?? next.replay?.error;
-    const recordingSaved = statusLoaded && next.phase === 'saved' && next.saved && !next.error && next.recordingId
+    const recordingSaved = statusLoaded.value && next.phase === 'saved' && next.saved && !next.error && next.recordingId
       && (!state.value.saved || next.recordingId !== state.value.recordingId)
       && !changingSource.value && !next.continuing && !state.value.continuing;
     // 仅提示已确认的新状态，不把初次读取的历史录像当成本次操作成功。
-    if (statusLoaded && !code) {
+    if (statusLoaded.value && !code) {
       if (next.saved && (!state.value.saved || next.recordingId !== state.value.recordingId)) {
         successNotice.value = { message: '录像已保存到本地录像' };
       } else if (next.replay?.phase === 'buffering' && state.value.replay?.phase !== 'buffering') {
@@ -83,7 +85,7 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
     const previousCode = state.value.error ?? state.value.replay?.error;
     const errorChanged = code !== previousCode || next.recordingId !== state.value.recordingId
       || next.replay?.id !== state.value.replay?.id;
-    statusLoaded = true;
+    statusLoaded.value = true;
     state.value = next;
     if (recordingSaved) options.onSaved?.();
     if (code && (errorChanged || !notice.value)) reportNotice(messages[code] ?? '本地录制未完成，请检查录像目录和诊断记录。', next.error ? 'recording' : 'replay');
@@ -102,7 +104,7 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
     try { const next = await desktop.getRecordingSettings(); if (!disposed) settings.value = next; await refresh(); }
     catch { if (!disposed) reportNotice('无法读取录制设置，请检查安装目录的读写权限。', 'settings'); }
   }
-  async function configure(patch: Partial<Omit<RecordingSettings, 'directory' | 'replaySeconds'>>) {
+  async function configure(patch: Partial<Omit<RecordingSettings, 'directory' | 'replaySeconds' | 'replayEnabled'>>) {
     if (!desktop || !settings.value || localActive.value || busy.value) return;
     pending.value = true; notice.value = '';
     try {
@@ -120,7 +122,9 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
     finally { pending.value = false; }
   }
   async function startCurrent(previousId?: string) {
-    if (!desktop || busy.value || active.value || !options.canStart()) return;
+    // “共享并录制”可能与自动回放同时到达，等待回放准备完成，不丢弃显式录制请求。
+    if (replayStartCommand.value) await replayStartCommand.value;
+    if (disposed || !desktop || busy.value || active.value || !options.canStart()) return;
     const track = options.track();
     if (!track) { reportNotice(messages.recordingShareUnavailable, 'recording'); return; }
     pending.value = true; notice.value = '';
@@ -170,9 +174,13 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
       if (action === 'start') {
         const track = options.track();
         if (!track) throw new Error('recordingShareUnavailable');
+        replayAttemptTrack = track;
         demandTrack = track;
         await setNativeScreenRecordingDemand(track, true);
-        if (disposed || options.track() !== track || !options.canStart()) return;
+        if (disposed || options.track() !== track || !options.canStart()) {
+          if (replayAttemptTrack === track) replayAttemptTrack = undefined;
+          return;
+        }
         const next = await desktop.startReplay();
         if (disposed) { await desktop.stopReplay(); return; }
         if (revision === stateRevision) setState(next);
@@ -192,8 +200,25 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
   async function configureReplay(seconds: number) {
     if (!desktop || localActive.value || busy.value) return;
     pending.value = true; notice.value = '';
-    try { settings.value = await desktop.configureReplay(seconds); }
+    try { settings.value = await desktop.configureReplay({ seconds }); }
     catch { reportNotice('回放时长未能保存，请重试。', 'replay'); }
+    finally { pending.value = false; }
+  }
+  function startReplay() {
+    if (!replayStartCommand.value) {
+      replayStartCommand.value = replayAction('start').finally(() => { replayStartCommand.value = undefined; });
+    }
+    return replayStartCommand.value;
+  }
+  async function setReplayEnabled(enabled: boolean) {
+    if (!desktop || busy.value) return;
+    pending.value = true; notice.value = '';
+    try {
+      const next = await desktop.configureReplay({ enabled });
+      if (disposed) return;
+      settings.value = next;
+      if (!enabled && replayActive.value) await replayAction('stop');
+    } catch { if (!disposed) reportNotice('即时回放设置未能保存，请重试。', 'replay'); }
     finally { pending.value = false; }
   }
   async function withSourceChange(change: (beforeChange: () => Promise<void>) => Promise<boolean>) {
@@ -212,7 +237,7 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
       });
       changingSource.value = false;
       if (changed && version === sourceChangeVersion && !disposed) {
-        if (resumeReplay) await replayAction('start');
+        if (resumeReplay) await startReplay();
         if (resume) await startCurrent(previousId);
       }
       return changed;
@@ -223,6 +248,13 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
     try { await desktop?.revealRecording(); }
     catch { reportNotice('无法打开录像目录，请检查目录是否仍存在。', 'files'); }
   }
+  watch([() => settings.value?.replayEnabled, options.track, options.canStart, busy, replayActive, statusLoaded, replayStartCommand],
+    ([enabled, track, canStart, isBusy, buffering, loaded, starting]) => {
+      if (!enabled || !track) { replayAttemptTrack = undefined; return; }
+      if (disposed || !loaded || isBusy || starting || buffering || !canStart || replayAttemptTrack === track) return;
+      // 每次共享仅自动尝试一次；失败后由用户重开开关重试，不循环启动编码器。
+      void startReplay();
+    });
   watch(localActive, (value) => {
     if (timer) clearInterval(timer);
     let ticks = 0;
@@ -268,6 +300,6 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
     void Promise.allSettled(cleanups).finally(() => { if (track) void setNativeScreenRecordingDemand(track, false); });
   });
   return { settings, state, notice, noticeEvent, noticeTarget, active, localActive, replayActive, successNotice, busy, elapsed, load, configure, chooseDirectory,
-    start: () => startCurrent(), stop, reveal, withSourceChange, configureReplay,
-    startReplay: () => replayAction('start'), saveReplay: () => replayAction('save'), stopReplay: () => replayAction('stop') };
+    start: () => startCurrent(), stop, reveal, withSourceChange, configureReplay, setReplayEnabled,
+    startReplay, saveReplay: () => replayAction('save'), stopReplay: () => replayAction('stop') };
 }

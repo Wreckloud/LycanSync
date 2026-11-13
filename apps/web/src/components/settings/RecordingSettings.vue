@@ -30,9 +30,8 @@ async function changeReplay(event: Event) {
 }
 async function toggleReplay(event: Event) {
   const input = event.target as HTMLInputElement;
-  if (input.checked) await props.recording.startReplay();
-  else await props.recording.stopReplay();
-  input.checked = props.recording.replayActive.value;
+  await props.recording.setReplayEnabled(input.checked);
+  input.checked = props.recording.settings.value?.replayEnabled ?? false;
 }
 </script>
 
@@ -82,9 +81,9 @@ async function toggleReplay(event: Event) {
     <section v-if="desktop" class="settings-block">
       <h2>即时回放</h2>
       <label class="settings-toggle">
-        <span><strong>开启即时回放</strong><small>开启后积累最近的共享画面，随时保存精彩片段，录制期间也可使用。</small></span>
-        <input type="checkbox" :checked="recording.replayActive.value"
-          :disabled="recording.busy.value || (!recording.replayActive.value && !sharing)" @change="toggleReplay" />
+        <span><strong>开启即时回放</strong><small>共享画面时自动积累最近的片段，可随时保存精彩时刻。</small></span>
+        <input type="checkbox" :checked="recording.settings.value?.replayEnabled ?? false"
+          :disabled="recording.busy.value" @change="toggleReplay" />
       </label>
       <label class="settings-range-row"><span>回溯时长</span>
         <select aria-label="回放目标时长" :value="recording.settings.value?.replaySeconds ?? 60"
@@ -93,9 +92,10 @@ async function toggleReplay(event: Event) {
           <option :value="30">最近 30 秒</option><option :value="60">最近 60 秒</option><option :value="120">最近 120 秒</option>
         </select>
       </label>
-      <small>需先共享自己的画面。回放保留原有画质，30／60／120 秒分别最多使用 256／512／1024 MiB 缓存，保存时可能额外占用一份。实际时长取决于已积累内容和内存，可能多约两秒。切换来源或录制规格后，开始积累新画面；关闭后丢弃未保存内容。</small>
+      <small>停止共享后结束缓存，下次共享时自动开启。30／60／120 秒分别最多使用 256／512／1024 MiB 缓存，保存时可能额外占用一份。实际时长取决于已积累内容和内存，可能多约两秒。切换来源后重新积累；关闭回放会丢弃未保存内容。</small>
       <p class="recording-status" role="status">{{ replayProgress ? (replayProgressVisible ? replayProgress : '') : (recording.replayActive.value
-        ? recording.state.value.replay?.warming ? '正在积累回放，还未达到设定时长' : '回放已开启' : '回放未开启') }}</p>
+        ? recording.state.value.replay?.warming ? '正在积累回放，还未达到设定时长' : '回放已开启'
+        : recording.settings.value?.replayEnabled ? (sharing ? '回放尚未启动' : '已开启，等待共享画面') : '回放未开启') }}</p>
       <div v-if="recording.replayActive.value" class="recording-actions">
         <button type="button" class="confirm-button" :disabled="recording.busy.value || recording.state.value.replay?.saving || !!recording.state.value.replay?.error" @click="recording.saveReplay">保存回放</button>
       </div>

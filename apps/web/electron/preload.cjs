@@ -180,7 +180,7 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   startReplay: () => ipcRenderer.invoke('recording:replay-start'),
   saveReplay: () => ipcRenderer.invoke('recording:replay-save'),
   stopReplay: () => ipcRenderer.invoke('recording:replay-stop'),
-  configureReplay: (seconds) => ipcRenderer.invoke('recording:replay-settings', seconds),
+  configureReplay: (settings) => ipcRenderer.invoke('recording:replay-settings', settings),
   getRecordingStatus: () => ipcRenderer.invoke('recording:status'),
   revealRecording: () => ipcRenderer.invoke('recording:reveal'),
   getRecordingLibrary: (offset) => ipcRenderer.invoke('recording:library', offset),

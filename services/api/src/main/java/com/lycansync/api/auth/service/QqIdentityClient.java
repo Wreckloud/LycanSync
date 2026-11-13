@@ -2,7 +2,7 @@ package com.lycansync.api.auth.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.lycansync.api.auth.config.QqLoginProperties;
+import com.lycansync.api.auth.model.QqConfiguration;
 import com.lycansync.api.auth.exception.AuthException;
 import com.lycansync.api.common.error.ApiErrorCode;
 import com.lycansync.api.common.image.AvatarImageProcessor;
@@ -25,29 +25,27 @@ import java.util.Locale;
  */
 @Service
 public class QqIdentityClient {
-    private final QqLoginProperties settings;
     private final ObjectMapper json;
 
-    public QqIdentityClient(QqLoginProperties settings, ObjectMapper json) {
-        this.settings = settings;
+    public QqIdentityClient(ObjectMapper json) {
         this.json = json;
     }
 
     public record Identity(String openId, String nickname, String avatar) { }
 
-    public Identity exchange(String code) {
+    public Identity exchange(String code, QqConfiguration settings) {
         JsonNode token = read("https://graph.qq.com/oauth2.0/token?grant_type=authorization_code&fmt=json&client_id="
-                + encode(settings.getAppId()) + "&client_secret=" + encode(settings.getAppKey())
-                + "&redirect_uri=" + encode(settings.getCallbackUrl()) + "&code=" + encode(code));
+                + encode(settings.appId()) + "&client_secret=" + encode(settings.appKey())
+                + "&redirect_uri=" + encode(settings.callbackUrl()) + "&code=" + encode(code));
         String accessToken = token.path("access_token").asText();
         if (!accessToken.matches("[A-Za-z0-9_-]{16,512}")) throw unavailable();
         JsonNode identity = read("https://graph.qq.com/oauth2.0/me?fmt=json&access_token=" + encode(accessToken));
         String openId = identity.path("openid").asText();
-        if (!settings.getAppId().equals(identity.path("client_id").asText()) || !openId.matches("[A-Fa-f0-9]{32}")) {
+        if (!settings.appId().equals(identity.path("client_id").asText()) || !openId.matches("[A-Fa-f0-9]{32}")) {
             throw unavailable();
         }
         JsonNode profile = read("https://graph.qq.com/user/get_user_info?access_token=" + encode(accessToken)
-                + "&oauth_consumer_key=" + encode(settings.getAppId()) + "&openid=" + encode(openId));
+                + "&oauth_consumer_key=" + encode(settings.appId()) + "&openid=" + encode(openId));
         String nickname = profile.path("nickname").asText().strip();
         if (!profile.has("ret") || profile.path("ret").asInt(-1) != 0 || nickname.isBlank()
                 || nickname.length() > 100 || nickname.codePoints().anyMatch(Character::isISOControl)) throw unavailable();

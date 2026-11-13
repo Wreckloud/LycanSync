@@ -4,6 +4,7 @@ interface RecordingSettings {
   microphone: boolean;
   friends: boolean;
   replaySeconds: 30 | 60 | 120;
+  replayEnabled: boolean;
   videoHeight: 720 | 1080 | 1440;
   videoFps: 30 | 60 | 120;
 }
@@ -217,7 +218,7 @@ interface Window {
     isMaximized(): Promise<boolean>;
     prepareCapture(graphics?: boolean): Promise<void>;
     getRecordingSettings(): Promise<RecordingSettings>;
-    configureRecording(settings: Omit<RecordingSettings, 'directory' | 'replaySeconds'>): Promise<RecordingSettings>;
+    configureRecording(settings: Omit<RecordingSettings, 'directory' | 'replaySeconds' | 'replayEnabled'>): Promise<RecordingSettings>;
     chooseRecordingDirectory(): Promise<RecordingSettings>;
     failRecordingVoice(id: string): Promise<DesktopRecordingStatus>;
     sendRecordingVoice(id: string, position: number, pcm: Uint8Array): Promise<boolean>;
@@ -226,7 +227,7 @@ interface Window {
     startReplay(): Promise<DesktopRecordingStatus>;
     saveReplay(): Promise<DesktopRecordingStatus>;
     stopReplay(): Promise<DesktopRecordingStatus>;
-    configureReplay(seconds: number): Promise<RecordingSettings>;
+    configureReplay(settings: { seconds?: number; enabled?: boolean }): Promise<RecordingSettings>;
     getRecordingStatus(): Promise<DesktopRecordingStatus>;
     revealRecording(): Promise<void>;
     getRecordingLibrary(offset?: number): Promise<{ items: RecordingLibraryEntry[]; hasMore: boolean }>;
