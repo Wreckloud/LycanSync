@@ -67,10 +67,10 @@ onScopeDispose(() => { disposed = true; revision++; });
 <template>
   <section class="settings-block cache-settings">
     <h2>本地缓存</h2>
-    <p>缓存可加快聊天内容、成员资料和图片的加载。</p>
+    <p>在本机保存常用聊天内容、成员资料和图片，加快再次打开的速度。</p>
     <div class="cache-size"><span>本机缓存约 {{ totalSize }}</span>
       <button type="button" class="settings-button" :disabled="clearing" @click="askToClear">清理缓存</button></div>
-    <small>只清理内容副本，不影响登录、服务器上的聊天记录、下载文件和录像。显示大小为内容估算。</small>
+    <small>清理本机内容缓存，下次查看时重新加载。显示大小为内容估算。</small>
     <InlineFeedback :message="confirming ? '' : error" :status="status" :pending="loading ? '正在读取缓存大小…' : ''" />
     <DialogTransition>
       <div v-if="confirming" class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="cancel">

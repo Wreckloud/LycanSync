@@ -45,3 +45,7 @@
   .settings-range-row { grid-template-columns: minmax(0, 1fr); gap: 9px; }
   .settings-range-row input { max-width: 240px; }
 }
+
+.account-operation { gap: 12px; }
+.account-operation h3 { margin: 0; font-size: 16px; font-weight: 600; }
+.settings-section .account-operation > p { font-size: 12px; line-height: 1.6; }

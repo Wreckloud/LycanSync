@@ -2,6 +2,8 @@
 import { onScopeDispose, watch } from 'vue';
 import type { useVoiceOverlay } from '../../overlay/useVoiceOverlay';
 import InlineFeedback from '../InlineFeedback.vue';
+import RangeValue from '../RangeValue.vue';
+import { DEFAULT_OVERLAY_SETTINGS } from '../../overlay/useVoiceOverlay';
 import SegmentedControl from '../SegmentedControl.vue';
 
 const props = defineProps<{ overlay: ReturnType<typeof useVoiceOverlay>; active: boolean }>();
@@ -23,11 +25,11 @@ onScopeDispose(() => { void props.overlay.edit(false); });
 
 <template>
   <div class="settings-section overlay-settings">
-    <p class="settings-intro">在屏幕上显示语音成员，不影响鼠标操作。主窗口最小化后仍可显示。</p>
+    <p class="settings-intro">在游戏画面上查看通话成员和说话状态。</p>
     <section class="settings-block">
       <h2>屏幕覆盖</h2>
       <label class="settings-toggle">
-        <span><strong>开启屏幕覆盖</strong><small>离开语音后隐藏，下次加入语音继续使用。</small></span>
+        <span><strong>开启屏幕覆盖</strong><small>加入语音时显示，离开后隐藏。</small></span>
         <input type="checkbox" :checked="overlay.settings.value.enabled" :disabled="!overlay.ready.value || overlay.busy.value"
           @change="toggleSetting('enabled', $event)" />
       </label>
@@ -46,16 +48,16 @@ onScopeDispose(() => { void props.overlay.edit(false); });
         <option value="">主窗口所在屏幕（默认）</option><option v-for="display in overlay.displays.value" :key="display.id" :value="display.id">{{ display.label }}</option>
         <option v-if="overlay.settings.value.displayId !== null && !overlay.displays.value.some((display) => display.id === overlay.settings.value.displayId)" :value="overlay.settings.value.displayId">原显示器已断开（临时使用主屏）</option>
       </select></label>
-      <label class="settings-range-row"><span>整体大小 <strong>{{ overlay.settings.value.scale }}%</strong></span><input type="range" min="75" max="150" step="5"
+      <div class="settings-range-row"><span><label for="settings-overlay-scale">整体大小</label><RangeValue :value="overlay.settings.value.scale" :default-value="DEFAULT_OVERLAY_SETTINGS.scale" label="重置覆盖整体大小" :disabled="!overlay.ready.value || overlay.busy.value" @reset="overlay.configure({ scale: DEFAULT_OVERLAY_SETTINGS.scale })">{{ overlay.settings.value.scale }}%</RangeValue></span><input id="settings-overlay-scale" type="range" min="75" max="150" step="5"
         :value="overlay.settings.value.scale" :disabled="!overlay.ready.value || overlay.busy.value" aria-label="覆盖整体大小"
-        @change="overlay.configure({ scale: Number(($event.target as HTMLInputElement).value) })" /></label>
+        @change="overlay.configure({ scale: Number(($event.target as HTMLInputElement).value) })" /></div>
       <div class="settings-toggle">
-        <span><strong>编辑覆盖位置</strong><small>拖动头像或昵称调整位置，离开此栏目后结束编辑。</small></span>
+        <span><strong>编辑覆盖位置</strong><small>拖动头像或昵称，调整覆盖位置。</small></span>
         <button class="settings-button" type="button" :disabled="!overlay.ready.value || !overlay.settings.value.enabled || overlay.busy.value"
           @click="overlay.edit(!overlay.editing.value)">{{ overlay.editing.value ? '完成编辑' : '编辑位置' }}</button>
       </div>
       <label v-if="overlay.editing.value" class="settings-toggle">
-        <span><strong>显示测试成员</strong><small>用三个示例成员预览不同长度的昵称，仅在编辑时显示。</small></span>
+        <span><strong>显示测试成员</strong><small>编辑时显示三个示例成员，预览昵称和布局。</small></span>
         <input type="checkbox" :checked="overlay.preview.value" @change="overlay.edit(true, ($event.target as HTMLInputElement).checked)" />
       </label>
       <button class="settings-button" type="button" :disabled="!overlay.ready.value || overlay.busy.value" @click="overlay.configure({ displayId: null, x: 1, y: 0.5, scale: 100 })">恢复默认位置与大小</button>

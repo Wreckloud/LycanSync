@@ -20,7 +20,7 @@ it.each([true, false])('自动记录为 %s 时开关、导出和手动操作保�
   expect(exportButton).toBeDefined();
   expect(exportButton!.includes('disabled')).toBe(!automatic);
   expect(html.includes('结束记录</button>')).toBe(!automatic);
-  expect(html).toContain('不录制音视频，也不会自动上传');
+  expect(html).toContain('报告使用临时成员编号，导出后由你选择分享。');
   expect(html).toContain('导出上次使用');
   expect(html).toContain('清除详细报告');
   expect(html).toContain(automatic ? '文件大小 1.5 KiB' : '尚未保存');

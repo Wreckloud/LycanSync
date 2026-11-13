@@ -28,12 +28,12 @@ const confirmingUpdate = computed(() => Boolean(confirmationVersion.value));
 const updateLoadingHint = useLoadingHint(() => props.active && (updateBusy.value || updateState.value?.phase === 'checking'), 1000);
 const autoStartLoadingHint = useLoadingHint(() => props.active && autoStartSupported.value === undefined && !autoStartError.value, 1000);
 const updateDescription = computed(() => {
-  if (updateBusy.value || updateState.value?.phase === 'checking') return updateLoadingHint.value ? '正在检查更新…' : '发现新版后，可确认重启更新。';
+  if (updateBusy.value || updateState.value?.phase === 'checking') return updateLoadingHint.value ? '正在检查更新…' : '查看并安装新版本。';
   if (!updateError.value && !updateState.value?.error && updateState.value?.message) return updateState.value.message;
-  return '发现新版后，可确认重启更新。';
+  return '查看并安装新版本。';
 });
 const autoStartDescription = computed(() => {
-  if (autoStartSupported.value === undefined) return autoStartError.value ? '尚未确认开机自启支持情况。' : autoStartLoadingHint.value ? '正在读取开机自启设置…' : '随 Windows 登录自动启动客户端。';
+  if (autoStartSupported.value === undefined) return autoStartError.value ? '尚未确认开机自启支持情况。' : autoStartLoadingHint.value ? '正在读取开机自启设置…' : '登录 Windows 后自动启动。';
   return autoStartSupported.value
     ? ''
     : '开机启动仅支持 Windows 安装版。';
@@ -135,7 +135,7 @@ async function updateAutoStart(event: Event) {
         </label>
         <InlineFeedback :message="autoStartError" />
         <label class="settings-toggle" :class="{ 'is-disabled': !traySupported || trayBusy }">
-          <span><strong>关闭时收起到托盘</strong><small>关闭主窗口后继续通话、共享和录制；右键托盘选择“退出”结束应用。</small></span>
+          <span><strong>关闭时收起到托盘</strong><small>关闭窗口后继续通话、共享和录制；从托盘菜单退出应用。</small></span>
           <input type="checkbox" :checked="closeToTray" :disabled="!traySupported || trayBusy"
             aria-label="关闭时收起到托盘" @change="updateCloseToTray" />
         </label>

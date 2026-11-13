@@ -53,7 +53,7 @@ onScopeDispose(() => request?.abort());
         <dt>QQ 登录</dt><dd>{{ status.qqEnabled ? '已开启' : '未开启' }}</dd>
         <dt>媒体服务</dt><dd>{{ status.mediaConfigured ? '已配置' : '未配置' }}</dd>
       </dl>
-      <details class="owner-explanation"><summary>配置说明</summary><p>这里显示服务器的配置情况，不代表 QQ 登录或语音连接已测试成功。修改部署配置后需重启服务器；此处不显示密钥。</p></details>
+      <details class="owner-explanation"><summary>配置说明</summary><p>查看服务器的功能配置状态。修改部署配置后，重启服务生效。</p></details>
       <InlineFeedback :message="error" :pending="loading && !status ? '正在读取配置状态…' : ''" />
       <button v-if="error" type="button" class="settings-button" :disabled="loading || leaving" @click="refresh">重试</button>
     </section>

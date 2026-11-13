@@ -95,7 +95,7 @@ watch(() => [props.active, props.rtc.screenShareActive], async ([active, sharing
   <section class="settings-section">
     <section class="settings-block">
       <h2>共享画面</h2>
-      <p>共享中调整画质会立即生效，也会用于下次共享；录像画质单独设置。</p>
+      <p>调整当前及下次共享的画质。录像画质可单独设置。</p>
       <SegmentedControl :model-value="quality" :options="SCREEN_SHARE_QUALITIES" label="共享画质"
         :disabled="shareBusy" :aria-busy="shareBusy" @update:model-value="selectQuality" />
       <p class="share-quality-description"><strong>{{ selectedQuality.description }}</strong><span>{{ selectedQuality.guidance }}</span></p>
@@ -112,7 +112,7 @@ watch(() => [props.active, props.rtc.screenShareActive], async ([active, sharing
         </label>
         <InlineFeedback :message="audioError" :pending="loadingAudio ? '正在读取声音设置…' : ''" />
         <label class="settings-toggle">
-          <span><strong>隐藏共享画面中的光标</strong><small>下次开始共享时生效，也可在选择画面时调整。</small></span>
+          <span><strong>隐藏共享画面中的光标</strong><small>选择共享画面是否显示鼠标指针，下次共享生效。</small></span>
           <input type="checkbox" :checked="hideCursor" @change="toggleCursor" />
         </label>
         <InlineFeedback :message="cursorError" />

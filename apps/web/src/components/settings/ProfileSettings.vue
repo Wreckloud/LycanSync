@@ -84,8 +84,7 @@ defineExpose({ finishEditing, cropping });
           <span class="profile-registration">注册于 <time v-if="registrationDate" :datetime="user.createdAt">{{ registrationDate }}</time><span v-else>暂不可用</span></span>
           <InlineFeedback id="profile-nickname-feedback" :message="nicknameError || (errorField === 'nickname' ? error : '')" />
         </div>
-        <InlineFeedback class="profile-avatar-feedback" :message="avatarError || (errorField === 'avatar' ? error : '')"
-          :pending="picking ? '正在读取图片…' : ''" />
+        <InlineFeedback class="profile-avatar-feedback" :message="avatarError || (errorField === 'avatar' ? error : '')" />
       </div>
       <div class="profile-signature">
         <div class="profile-signature-heading"><label for="profile-signature">个性签名 <span>选填</span></label>
@@ -95,8 +94,8 @@ defineExpose({ finishEditing, cropping });
         <InlineFeedback id="profile-signature-feedback" :message="errorField === 'signature' ? error : ''" />
       </div>
     </div>
-    <InlineFeedback :message="errorField === null ? error : ''"
-      :pending="busy ? '正在保存…' : ''" />
+    <InlineFeedback class="profile-save-feedback" :class="{ 'is-pending': errorField !== null || !error }"
+      :message="errorField === null ? error : ''" :pending="picking ? '正在读取图片…' : busy ? '正在保存…' : ''" />
     <DialogTransition>
     <AvatarCropDialog v-if="cropSource" :key="cropSource.previewUrl" :source="cropSource" title="调整头像"
       @apply="applyAvatar" @replace="pickAvatar" @cancel="clearCrop" />
@@ -105,7 +104,9 @@ defineExpose({ finishEditing, cropping });
 </template>
 
 <style scoped>
-.profile-settings { max-width: 820px; gap: 4px; padding-bottom: 24px; border-bottom: 1px solid var(--border-soft); }
+.profile-settings { position: relative; max-width: 820px; gap: 4px; padding-bottom: 24px; border-bottom: 1px solid var(--border-soft); }
+/* 进度使用资料区已有的底部留白，不因慢请求增加一行。 */
+.profile-save-feedback.is-pending { position: absolute; left: 0; right: 0; bottom: 4px; }
 .profile-details { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: center; padding-top: 4px; }
 .profile-identity { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; min-width: 0; }
 .profile-avatar-feedback { flex-basis: 100%; }

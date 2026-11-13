@@ -32,14 +32,14 @@ async function changeReplay(event: Event) {
 
 <template>
   <div class="settings-section">
-    <p class="settings-intro">录制你正在共享的画面，不直接录入其他人的共享画面。录像保存在本机，不会自动上传。</p>
+    <p class="settings-intro">录制当前共享的窗口或屏幕，录像保存在本机。</p>
     <InlineFeedback :message="recording.noticeTarget.value === 'settings' ? recording.notice.value : ''" />
     <section class="settings-block">
       <h2>录制内容</h2>
       <div v-if="desktop && recording.settings.value" class="settings-toggle-group">
-        <label v-for="item in ([{ key: 'applicationAudio', title: '应用声音', detail: '窗口模式录入所选应用的声音；整屏模式录入其他应用的声音，不包含本软件播放的声音。与共享声音开关分开控制。' },
-          { key: 'microphone', title: '自己的麦克风', detail: '使用当前麦克风声音，不会自动解除静音。' },
-          { key: 'friends', title: '朋友的语音', detail: '只录入当前收听的语音，不包括对方的共享声音。' }] as const)"
+        <label v-for="item in ([{ key: 'applicationAudio', title: '应用声音', detail: '窗口共享时录入所选应用，整屏共享时录入其他应用的声音。' },
+          { key: 'microphone', title: '自己的麦克风', detail: '录入当前开启的麦克风声音。' },
+          { key: 'friends', title: '朋友的语音', detail: '录入当前正在收听的朋友语音。' }] as const)"
           :key="item.key" class="settings-toggle">
           <span><strong>{{ item.title }}</strong><small>{{ item.detail }}</small></span>
           <input type="checkbox" :checked="recording.settings.value[item.key]" :disabled="recording.localActive.value || recording.busy.value"
@@ -52,7 +52,7 @@ async function changeReplay(event: Event) {
     </section>
     <section v-if="desktop" class="settings-block">
       <h2>文件与画质</h2>
-      <p>录像和回放共用这些设置，与共享画质分开。画面保持原比例，小尺寸画面不会放大；共享降帧不改变录制目标。使用硬件 H.264 编码，保存为 MKV。</p>
+      <p>录像与即时回放共用画质设置，按原比例录制。</p>
       <div v-if="recording.settings.value" class="recording-actions">
         <label class="replay-duration">分辨率上限<select aria-label="本地录制分辨率上限" :value="recording.settings.value.videoHeight"
           :disabled="recording.localActive.value || recording.busy.value" @change="changeVideo('videoHeight', $event)">
@@ -84,7 +84,7 @@ async function changeReplay(event: Event) {
     </section>
     <section v-if="desktop" class="settings-block">
       <h2>即时回放</h2>
-      <p>提前开启后，随时保存最近一段共享画面。录制中也能使用，保存回放不会中断录像或自动上传。</p>
+      <p>开启后积累最近的共享画面，随时保存精彩片段，录制期间也可使用。</p>
       <label class="replay-duration">回溯时长
         <select aria-label="回放目标时长" :value="recording.settings.value?.replaySeconds ?? 60"
           :disabled="recording.localActive.value || recording.busy.value"
@@ -92,7 +92,7 @@ async function changeReplay(event: Event) {
           <option :value="30">最近 30 秒</option><option :value="60">最近 60 秒</option><option :value="120">最近 120 秒</option>
         </select>
       </label>
-      <small>需先共享自己的画面。回放保留原有画质，30／60／120 秒分别最多使用 256／512／1024 MiB 缓存，保存时可能额外占用一份。实际时长取决于已积累内容和内存，可能多约两秒。更换来源或规格后重新积累；关闭后丢弃未保存内容。</small>
+      <small>需先共享自己的画面。回放保留原有画质，30／60／120 秒分别最多使用 256／512／1024 MiB 缓存，保存时可能额外占用一份。实际时长取决于已积累内容和内存，可能多约两秒。切换来源或录制规格后，开始积累新画面；关闭后丢弃未保存内容。</small>
       <p class="recording-status" role="status">{{ replayProgress ? (replayProgressVisible ? replayProgress : '') : (recording.replayActive.value
         ? recording.state.value.replay?.warming ? '正在积累回放，还未达到设定时长' : '回放已开启' : '回放未开启') }}</p>
       <div class="recording-actions">

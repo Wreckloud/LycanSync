@@ -4,13 +4,14 @@ import type { UnwrapNestedRefs } from 'vue';
 import { Track } from 'livekit-client';
 import { ChevronRight } from '@lucide/vue';
 import InlineFeedback from '../InlineFeedback.vue';
+import RangeValue from '../RangeValue.vue';
 import ExpandSection from '../ExpandSection.vue';
 import type { useAudioPreferences } from '../../rtc/useAudioPreferences';
 import type { useRtcRoom } from '../../rtc/useRtcRoom';
 import type { useMicrophoneTest } from '../../rtc/useMicrophoneTest';
 import type { useMicrophoneDevices } from '../../rtc/useMicrophoneDevices';
 import type { useAudioOutput } from '../../rtc/useAudioOutput';
-import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP } from '../../rtc/audioPreferences';
+import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, DEFAULT_AUDIO_PREFERENCES } from '../../rtc/audioPreferences';
 
 const props = defineProps<{
   desktop: boolean;
@@ -67,8 +68,7 @@ function updateProcessing(event: Event) {
   }
 }
 
-function updateInputGain(event: Event) {
-  const gain = Number((event.target as HTMLInputElement).value);
+function updateInputGain(gain: number) {
   if (props.preferences.setInputGain(gain)) {
     void props.rtc.setMicrophoneInputGain(props.preferences.inputGain.value);
   }
@@ -91,12 +91,12 @@ function updateInputGain(event: Event) {
           <option v-for="device in microphoneDevices.devices" :key="device.id" :value="device.id">{{ device.label }}</option>
         </select>
       </label>
-      <p>指定麦克风断开后停止发声，不自动换用其他设备。</p>
+      <p>选择用于语音通话和麦克风试听的输入设备。</p>
       <InlineFeedback :message="microphoneDevices.notice" />
       <div class="settings-range-row">
-        <label for="settings-input-gain">麦克风输入音量 <strong>{{ Math.round(inputGain * 100) }}%</strong></label>
+        <span><label for="settings-input-gain">麦克风输入音量</label><RangeValue :value="inputGain" :default-value="DEFAULT_AUDIO_PREFERENCES.inputGain" label="重置麦克风输入音量" @reset="updateInputGain(DEFAULT_AUDIO_PREFERENCES.inputGain)">{{ Math.round(inputGain * 100) }}%</RangeValue></span>
         <input id="settings-input-gain" type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP"
-          :value="inputGain" @input="updateInputGain" />
+          :value="inputGain" @input="updateInputGain(Number(($event.target as HTMLInputElement).value))" />
       </div>
       <div class="settings-meter">
         <span>输入等级 <strong>{{ displayedInputLevel }}%</strong></span>
@@ -107,7 +107,7 @@ function updateInputGain(event: Event) {
     </section>
     <section class="settings-block">
       <h2>麦克风试听</h2>
-      <p>无需加入语音，只有你能听到试听声音。建议使用耳机。</p>
+      <p>听听自己的麦克风效果，建议戴上耳机试听。</p>
       <button type="button" class="settings-button" :disabled="microphoneTest.state === 'stopping'
         || (microphoneTest.state === 'idle' && (rtc.status === 'joining' || rtc.status === 'reconnecting'
           || rtc.busySources.includes(Track.Source.Microphone)))"
@@ -120,11 +120,12 @@ function updateInputGain(event: Event) {
     <section class="settings-block">
       <h2>声音处理</h2>
       <label class="settings-toggle">
-        <span><strong>智能声音处理</strong><small>减少外放回声和环境噪声，让说话音量更平稳。</small></span>
+        <span><strong>智能声音处理</strong><small>{{ desktop ? '本机使用 RNNoise 降噪，配合回声消除、低频过滤和自动音量调整，让人声更清楚、音量更平稳。' : '使用浏览器的降噪、回声消除和自动音量调整，配合低频过滤，让说话更清楚。' }}</small></span>
         <input type="checkbox" aria-label="智能声音处理" :checked="processingEnabled" :indeterminate="processingPartial"
           :aria-checked="processingPartial ? 'mixed' : processingEnabled" @change="updateProcessing" />
       </label>
-      <p v-if="processingPartial">仍在使用你之前的处理设置，开启后将统一启用声音处理。</p>
+      <p v-if="processingPartial">当前沿用之前的单项设置。开启后应用完整的声音处理。</p>
+      <small v-if="desktop">感谢 <a href="https://github.com/xiph/rnnoise" target="_blank" rel="noopener noreferrer">RNNoise 开源项目</a>提供降噪能力。</small>
       <p v-if="!desktop">同时使用浏览器的回声消除。</p>
     </section>
     <section class="settings-block">
@@ -142,14 +143,14 @@ function updateInputGain(event: Event) {
             :disabled="!audioOutput.supported">{{ device.label }}</option>
         </select>
       </label>
-      <p>{{ audioOutput.supported ? '通话、共享声音、提示音和试听均使用此设备。' : '当前浏览器只能使用系统默认输出。' }}</p>
+      <p>{{ audioOutput.supported ? '选择播放通话、共享声音、提示音和试听的设备。' : '当前浏览器只能使用系统默认输出。' }}</p>
       <InlineFeedback :message="audioOutput.notice.value" />
-      <label class="settings-range-row"><span>lycanclaw 总输出音量 <strong>{{ Math.round(outputVolume * 100) }}%</strong></span>
-        <input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="outputVolume"
-          aria-label="lycanclaw 总输出音量" @input="preferences.setOutputVolume(Number(($event.target as HTMLInputElement).value))" /></label>
-      <p>只调整本应用的声音，不改变系统或游戏音量。</p>
+      <div class="settings-range-row"><span><label for="settings-output-volume">lycanclaw 总输出音量</label><RangeValue :value="outputVolume" :default-value="DEFAULT_AUDIO_PREFERENCES.outputVolume" label="重置总输出音量" @reset="preferences.setOutputVolume(DEFAULT_AUDIO_PREFERENCES.outputVolume)">{{ Math.round(outputVolume * 100) }}%</RangeValue></span>
+        <input id="settings-output-volume" type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="outputVolume"
+          aria-label="lycanclaw 总输出音量" @input="preferences.setOutputVolume(Number(($event.target as HTMLInputElement).value))" /></div>
+      <p>调整本应用的整体播放音量。</p>
       <label class="settings-toggle"><span><strong>平衡成员语音音量</strong>
-        <small>平衡不同成员的人声音量，不影响共享声音。你仍可单独调节音量或静音。</small></span>
+        <small>让不同成员的说话音量更接近，也可继续单独调节。</small></span>
         <input type="checkbox" :checked="preferences.voiceVolumeBalance.value"
           @change="preferences.setVoiceVolumeBalance(($event.target as HTMLInputElement).checked)" /></label>
       <div>
@@ -159,10 +160,10 @@ function updateInputGain(event: Event) {
           共享播放音量<span class="disclosure-value">{{ Math.round(screenShareVolume * 100) }}%</span>
         </button>
         <ExpandSection :open="shareVolumeOpen" :id="shareVolumeId">
-          <label class="settings-range-row"><span>播放音量 <strong>{{ Math.round(screenShareVolume * 100) }}%</strong></span>
-            <input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="screenShareVolume"
-              aria-label="共享播放音量" @input="preferences.setScreenShareVolume(Number(($event.target as HTMLInputElement).value))" /></label>
-          <p>调整你听到的共享声音，不影响朋友说话或你分享出去的声音；仍受总音量控制。</p>
+          <div class="settings-range-row"><span><label for="settings-share-volume">播放音量</label><RangeValue :value="screenShareVolume" :default-value="DEFAULT_AUDIO_PREFERENCES.screenShareVolume" label="重置共享播放音量" @reset="preferences.setScreenShareVolume(DEFAULT_AUDIO_PREFERENCES.screenShareVolume)">{{ Math.round(screenShareVolume * 100) }}%</RangeValue></span>
+            <input id="settings-share-volume" type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="screenShareVolume"
+              aria-label="共享播放音量" @input="preferences.setScreenShareVolume(Number(($event.target as HTMLInputElement).value))" /></div>
+          <p>调整你听到的共享声音，同时受总输出音量控制。</p>
         </ExpandSection>
       </div>
     </section>

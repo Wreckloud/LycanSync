@@ -9,8 +9,10 @@ export const CALL_SOUND_EVENTS = [
 ] as const;
 export type CallSoundEvent = typeof CALL_SOUND_EVENTS[number]['id'];
 
+export const DEFAULT_CALL_SOUND_VOLUME = 1;
+
 export function useCallSoundPreferences(userId: string, storage: Pick<Storage, 'getItem' | 'setItem'> = localStorage) {
-  const volume = ref(1);
+  const volume = ref(DEFAULT_CALL_SOUND_VOLUME);
   const customEntrances = ref(true);
   const enabled = reactive(Object.fromEntries(CALL_SOUND_EVENTS.map(event => [event.id, true])) as Record<CallSoundEvent, boolean>);
   const error = ref('');

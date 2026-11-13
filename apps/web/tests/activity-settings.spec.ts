@@ -66,13 +66,16 @@ createApp({ render: () => h('main', { style: 'padding:32px;max-width:1000px;marg
     }
     return frames;
   });
-  await expect(page.locator('.activity-presence > span small')).toContainText('聊天、语音和共享仍可使用');
+  await expect(page.locator('#activity-presence-description')).toContainText('离开电脑后自动显示闲置');
+  await page.screenshot({ path: testInfo.outputPath('account-presence-online.png'), animations: 'disabled' });
   await expect(presence.locator('small')).toHaveCount(0);
   const framesPromise = sampleFrames();
   await presence.getByRole('button', { name: '隐身', exact: true }).click();
   await expect(presence.getByRole('button', { name: '隐身', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#activity-presence-description')).toContainText('向朋友显示离线');
   await expect(page.locator('.activity-profile-preview')).not.toContainText('正在玩');
   const frames = await framesPromise;
+  await page.screenshot({ path: testInfo.outputPath('account-presence-invisible.png'), animations: 'disabled' });
   const after = (await card.boundingBox())!;
   expect(after.height).toBeLessThan(before.height);
   const centerY = before.y + before.height / 2;

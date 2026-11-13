@@ -49,7 +49,7 @@ test('仅服主显示邀请面板且生成链接只在成功后展示', async ({
   await expect(page.getByRole('button', { name: '注销账号', exact: true })).toHaveCount(0);
   await expect(page.getByLabel('新恢复密码（15–128 个字符）', { exact: true })).toHaveCount(0);
   const recommendation = page.locator('.recovery-warning');
-  await expect(recommendation).toContainText('安全建议：请设置服主恢复密码');
+  await expect(recommendation).toContainText('设置恢复密码，方便在登录信息丢失时找回服主账号。');
   expect(await recommendation.evaluate(element => getComputedStyle(element).color)).toBe(
     await recommendation.evaluate(element => {
       const probe = document.createElement('span'); probe.style.color = 'var(--danger)'; element.append(probe);
@@ -97,6 +97,7 @@ test('仅服主显示邀请面板且生成链接只在成功后展示', async ({
   await page.getByRole('button', { name: '账号设置', exact: true }).click();
   await expect(page.getByRole('button', { name: '注销账号', exact: true })).toBeEnabled();
   await expect(page.getByText('请先完成服主转让，再注销账号。', { exact: true })).toBeVisible();
+  await page.locator('.settings-view').screenshot({ path: testInfo.outputPath('account-actions.png'), animations: 'disabled' });
   await expect(page.getByRole('button', { name: '修改恢复密码', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '服主管理', exact: true }).click();
   await expect.poll(() => configurationReads).toBe(2);
@@ -239,13 +240,15 @@ test('成员访问弹窗独立处理备注、全服搜索、复制与链接管�
   await expect(dialog.getByLabel('备注', { exact: false })).toHaveValue('');
 });
 
-test('注销始终可进入，服主和群组事项完成后才提交注销', async ({ page }) => {
+test('注销始终可进入，服主和群组事项完成后才提交注销', async ({ page }, testInfo) => {
   const user = { id: 'owner', nickname: '服主', avatar: '', signature: '', administrator: true };
   let administrator = true;
   let ownedGroups = [{ id: 'group-close', name: '待处理群组' }];
   let closed = 0;
   let dissolved = 0;
-  await page.route('**/api/auth/options', route => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
+  await page.route('**/api/auth/options', route => route.fulfill({ json: { mode: 'invite', qqAvailable: true } }));
+  await page.route('**/api/auth/qq/binding', route => route.fulfill({ json: { bound: false, nickname: '' } }));
+  await page.route('**/api/rtc/voice-time', route => route.fulfill({ json: { seconds: 7200 } }));
   await page.route('**/api/system/initialization', route => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', route => route.fulfill({ json: user }));
   await page.route('**/api/auth/session', route => route.fulfill({ json: user }));
@@ -274,6 +277,9 @@ test('注销始终可进入，服主和群组事项完成后才提交注销', as
   });
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.locator('.closure-requirements > span')).toHaveCount(2);
+  await page.locator('.account-settings').scrollIntoViewIfNeeded();
+  await page.locator('.settings-view').screenshot({ path: testInfo.outputPath('account-actions-conditions.png'), animations: 'disabled' });
   await page.getByRole('button', { name: '注销账号', exact: true }).click();
   await expect(page.getByRole('button', { name: '去转让服主', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '确认注销', exact: true })).toHaveCount(0);

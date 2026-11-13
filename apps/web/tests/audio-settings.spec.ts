@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 for (const desktop of [true, false]) {
-  test(`${desktop ? '桌面' : '浏览器'}声音处理保留旧选择，统一切换并记住偏好`, async ({ page }) => {
+  test(`${desktop ? '桌面' : '浏览器'}声音处理保留旧选择，统一切换并记住偏好`, async ({ page }, testInfo) => {
     // 独立挂载真实设置组件；不创建媒体轨道或连接语音服务器。
     await page.route('**/src/main.ts*', async route => {
       const original = await (await route.fetch()).text();
@@ -26,7 +26,7 @@ createApp({ setup() {
   const refreshes = ref({ input: 0, output: 0 });
   return () => h('main', { style: 'padding:24px' }, [shown.value && h(AudioSettings, {
     desktop: ${desktop}, preferences, active: active.value, inputLevelPercent: 0,
-    rtc: { status: 'idle', busySources: [], setMicrophoneProcessing: async settings => {
+    rtc: { status: 'idle', busySources: [], setMicrophoneInputGain: async () => {}, setMicrophoneProcessing: async settings => {
       applied.value.push({ ...settings });
     } },
     microphoneTest: { state: 'idle', notice: '', inputLevelPercent: 0, stop: async () => {} },
@@ -46,7 +46,7 @@ createApp({ setup() {
     await expect(toggle).toHaveJSProperty('indeterminate', true);
     await expect(toggle).toHaveAttribute('aria-checked', 'mixed');
     await expect(page.getByTestId('applied-processing')).toHaveText('[]');
-    await expect(page.getByText('仍在使用你之前的处理设置，开启后将统一启用声音处理。')).toBeVisible();
+    await expect(page.getByText('当前沿用之前的单项设置。开启后应用完整的声音处理。')).toBeVisible();
     await expect(page.getByRole('checkbox')).toHaveCount(2);
     await expect(page.getByText('桌面版暂不支持回声消除，建议使用耳机通话。')).toHaveCount(0);
     if (!desktop) await expect(page.getByText('同时使用浏览器的回声消除。')).toBeVisible();
@@ -67,7 +67,7 @@ createApp({ setup() {
     await expect(toggle).toHaveJSProperty('indeterminate', false);
     await expect(page.getByTestId('applied-processing')).toHaveText('[]');
     const sharedVolume = page.getByRole('slider', { name: '共享播放音量', exact: true });
-    const sharedVolumeToggle = page.getByRole('button', { name: /共享播放音量/ });
+    const sharedVolumeToggle = page.locator('.disclosure-trigger').filter({ hasText: '共享播放音量' });
     await expect(sharedVolume).toBeHidden();
     await expect(sharedVolumeToggle).toContainText('60%');
     await sharedVolumeToggle.click();
@@ -76,6 +76,24 @@ createApp({ setup() {
     await sharedVolumeToggle.click();
     await expect(sharedVolume).toBeHidden();
     await expect(sharedVolumeToggle).toContainText('40%');
+    await sharedVolumeToggle.click();
+    await expect.poll(() => page.locator('.audio-settings').evaluate(element => element.getAnimations({ subtree: true }).length)).toBe(0);
+    await page.screenshot({ path: testInfo.outputPath('audio-reset-buttons.png'), fullPage: true });
+    for (const [name, sliderName] of [['重置麦克风输入音量', '麦克风输入音量'], ['重置总输出音量', 'lycanclaw 总输出音量'], ['重置共享播放音量', '共享播放音量']]) {
+      const slider = page.getByRole('slider', { name: sliderName, exact: true });
+      const measure = () => slider.evaluate(element => {
+        const bounds = element.getBoundingClientRect();
+        return { x: bounds.x + scrollX, y: bounds.y + scrollY, width: bounds.width, height: bounds.height };
+      });
+      const position = await measure();
+      await page.getByRole('button', { name, exact: true }).click();
+      await expect(slider).toHaveValue('1');
+      await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
+      expect(await measure(), name).toEqual(position);
+    }
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem(
+      'lycansync.audio-preferences.v1.audio-settings-test')!))).toMatchObject({ inputGain: 1, outputVolume: 1, screenShareVolume: 1 });
+    if (desktop) await expect(page.getByRole('link', { name: 'RNNoise 开源项目' })).toHaveAttribute('href', 'https://github.com/xiph/rnnoise');
     await expect(page.getByRole('button', { name: '刷新设备', exact: true })).toHaveCount(0);
     const counts = () => page.getByTestId('device-refreshes').evaluate(element => JSON.parse(element.textContent!) as { input: number; output: number });
     const initial = await counts();
@@ -100,10 +118,10 @@ createApp({ setup() {
     expect(await counts()).toEqual(unmounted);
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem(
       'lycansync.audio-preferences.v1.audio-settings-test')!))).toMatchObject({
-      ...disabled, inputGain: 1.4, outputVolume: 0.8, screenShareVolume: 0.4,
+      ...disabled, inputGain: 1, outputVolume: 1, screenShareVolume: 1,
     });
     await page.reload();
     await expect(sharedVolume).toBeHidden();
-    await expect(sharedVolumeToggle).toContainText('40%');
+    await expect(sharedVolumeToggle).toContainText('100%');
   });
 }

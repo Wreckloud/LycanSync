@@ -21,6 +21,11 @@ const editingName = ref(false);
 const selectedName = computed(() => props.mappings.entries.value.find((entry) => entry.executable === executable.value)?.name
   ?? props.mappings.windows.value.find((window) => window.executable === executable.value)?.title ?? '');
 const voiceTime = useOwnVoiceTime(() => props.active);
+const presenceDescription = computed(() => {
+  if (props.presenceMode === 'invisible') return '向朋友显示离线，仍可正常聊天、通话和共享画面。';
+  if (props.status === 'AWAY') return '当前显示为闲置，回来后自动恢复在线。';
+  return '离开电脑后自动显示闲置，回来后恢复在线。';
+});
 
 function openEditor() {
   if (!executable.value || props.mappings.busy.value || !props.mappings.ready.value) return;
@@ -53,17 +58,17 @@ defineExpose({ editingName });
     </aside>
     <div class="activity-settings-controls">
     <label class="settings-toggle">
-      <span><strong>显示动态</strong><small>向朋友展示正在玩的游戏、音乐和最近玩过的游戏。关闭后隐藏，重新开启可恢复展示。</small></span>
+      <span><strong>显示动态</strong><small>向朋友展示正在玩的游戏、正在听的音乐和最近游玩记录。</small></span>
       <input type="checkbox" :checked="showActivity" aria-label="显示动态"
         @change="emit('visibility', ($event.target as HTMLInputElement).checked)" />
     </label>
     <label class="settings-toggle">
-      <span><strong>显示上次在线时间</strong><small>离线后显示上次在线时间；隐身期间不更新。</small></span>
+      <span><strong>显示上次在线时间</strong><small>让朋友看到你最后一次在线的时间。</small></span>
       <input type="checkbox" :checked="showLastOnline" aria-label="显示上次在线时间"
         @change="emit('lastOnlineVisibility', ($event.target as HTMLInputElement).checked)" />
     </label>
     <div class="settings-toggle activity-presence">
-      <span><strong>在线状态</strong><small id="activity-presence-description">向朋友显示离线，暂停更新动态和上次在线时间。聊天、语音和共享仍可使用。</small></span>
+      <span><strong>在线状态</strong><small id="activity-presence-description">{{ presenceDescription }}</small></span>
       <PresenceModeSwitch :mode="presenceMode" :ready="presenceReady" :syncing="presenceSyncing" :error="presenceError"
         :active="active" aria-describedby="activity-presence-description activity-visibility-feedback" @select="emit('presenceMode', $event)" />
     </div>
@@ -97,7 +102,7 @@ defineExpose({ editingName });
           <button type="button" :disabled="mappings.busy.value" :aria-label="`移除动态名称 ${entry.name}`" @click="mappings.remove(entry.executable)">移除</button>
         </div>
       </div>
-      <small>修改的名称会用于这个程序，仍优先展示最新启动的游戏。音乐暂停后，动态可能仍会显示。</small>
+      <small>为所选程序设置显示名称，优先展示最近启动的游戏。</small>
     </div>
   </section>
   <DialogTransition>

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { onScopeDispose, ref, useId, watch } from 'vue';
 import InlineFeedback from '../InlineFeedback.vue';
-import { CALL_SOUND_EVENTS, type CallSoundEvent, type useCallSoundPreferences } from '../../settings/useCallSoundPreferences';
+import RangeValue from '../RangeValue.vue';
+import { DEFAULT_CALL_SOUND_VOLUME, CALL_SOUND_EVENTS, type CallSoundEvent, type useCallSoundPreferences } from '../../settings/useCallSoundPreferences';
 import type { useCallSounds } from '../../rtc/useCallSounds';
 
 const props = defineProps<{ active: boolean; preferences: ReturnType<typeof useCallSoundPreferences>; sounds: ReturnType<typeof useCallSounds> }>();
@@ -21,11 +22,11 @@ onScopeDispose(stopPreview);
 <template>
   <section class="settings-block call-sound-settings">
     <h2>本机提示音</h2>
-    <p>调整你听到的提示音，不影响朋友的语音或你播放给朋友的入场音效。</p>
-    <label class="settings-range-row"><span>提示音音量 <strong>{{ Math.round(preferences.volume.value * 100) }}%</strong></span>
-      <input type="range" min="0" max="100" step="1" aria-label="提示音音量" :value="Math.round(preferences.volume.value * 100)"
+    <p>调整加入语音、麦克风切换等操作的提示音。</p>
+    <div class="settings-range-row"><span><label for="settings-call-sound-volume">提示音音量</label><RangeValue :value="preferences.volume.value" :default-value="DEFAULT_CALL_SOUND_VOLUME" label="重置提示音音量" @reset="preferences.setVolume(DEFAULT_CALL_SOUND_VOLUME)">{{ Math.round(preferences.volume.value * 100) }}%</RangeValue></span>
+      <input id="settings-call-sound-volume" type="range" min="0" max="100" step="1" aria-label="提示音音量" :value="Math.round(preferences.volume.value * 100)"
         @change="preferences.setVolume(Number(($event.target as HTMLInputElement).value) / 100)" />
-    </label>
+    </div>
     <div class="settings-toggle-group">
       <div v-for="event in CALL_SOUND_EVENTS" :key="event.id" class="settings-toggle call-sound-row">
         <label :for="`${eventIdPrefix}-${event.id}`">{{ event.label }}</label>
@@ -34,7 +35,7 @@ onScopeDispose(stopPreview);
           @change="preferences.setEnabled(event.id, ($event.target as HTMLInputElement).checked)" />
       </div>
       <label class="settings-toggle">
-        <span><strong>播放成员自定义入场音效</strong><small>关闭自定义入场音效后使用默认提示音；关闭“成员加入语音”则都不播放。音量跟随提示音设置。</small></span>
+        <span><strong>播放成员自定义入场音效</strong><small>成员加入语音时播放自定义音效，音量跟随提示音设置。</small></span>
         <input type="checkbox" :checked="preferences.customEntrances.value"
           @change="preferences.setCustomEntrances(($event.target as HTMLInputElement).checked)" />
       </label>

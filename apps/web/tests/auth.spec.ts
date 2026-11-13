@@ -467,18 +467,20 @@ test('更换头像在整页资料设置中裁剪并保存', async ({ page }) => 
   await expect(preview).toHaveJSProperty('naturalWidth', 512);
 });
 
-test('签名快速保存不移动布局，失败时就近展开反馈并支持重试', async ({ page }) => {
+test('签名快慢保存均不移动布局，失败时就近展开反馈并支持重试', async ({ page }, testInfo) => {
   const user = {
     id: 'signature-user', nickname: '签名测试', avatar: '', administrator: false,
     signature: '', createdAt: '2026-09-06T12:00:00Z',
   };
   let updates = 0;
   let failNext = false;
+  let saveGate: Promise<void> | undefined;
   await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', async (route) => {
     if (route.request().method() === 'PUT') {
       updates++;
+      if (saveGate) await saveGate;
       if (failNext) {
         failNext = false;
         return route.fulfill({ status: 503, json: { detail: '暂时无法保存' } });
@@ -518,6 +520,22 @@ test('签名快速保存不移动布局，失败时就近展开反馈并支持�
   await expect.poll(() => user.signature).toBe('');
   await expect(page.locator('.profile-settings [role="alert"]')).toHaveCount(0);
   expect(updates).toBe(3);
+  const stablePosition = await page.locator('.activity-settings').boundingBox();
+  const avatarPosition = await page.locator('.profile-avatar-preview').boundingBox();
+  const signaturePosition = await signature.boundingBox();
+  let releaseSave!: () => void;
+  saveGate = new Promise<void>(resolve => { releaseSave = resolve; });
+  await signature.fill('等待保存');
+  await page.getByRole('heading', { name: '账号设置', exact: true }).click();
+  await expect(page.locator('.profile-settings [role="status"]')).toHaveText('正在保存…');
+  expect(await page.locator('.activity-settings').boundingBox()).toEqual(stablePosition);
+  expect(await page.locator('.profile-avatar-preview').boundingBox()).toEqual(avatarPosition);
+  expect(await signature.boundingBox()).toEqual(signaturePosition);
+  await page.locator('.profile-settings').screenshot({ path: testInfo.outputPath('profile-save-pending.png') });
+  releaseSave();
+  await expect.poll(() => user.signature).toBe('等待保存');
+  await expect(page.locator('.profile-settings [role="status"]')).toHaveCount(0);
+  expect(await page.locator('.activity-settings').boundingBox()).toEqual(stablePosition);
 });
 
 test('浏览器账号设置明确标出未接入功能与桌面动态限制', async ({ page }) => {

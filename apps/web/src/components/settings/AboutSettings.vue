@@ -38,7 +38,7 @@ onScopeDispose(() => props.report.setViewing(false));
     </section>
     <section class="settings-block">
       <h2>媒体诊断</h2>
-      <p>查看当前通话和共享的统计。自动记录与报告导出在下方设置。</p>
+      <p>查看当前通话与画面共享的运行情况。</p>
       <p v-if="!room">加入语音后才能查看房间诊断。</p>
       <button v-else type="button" class="settings-button" @click="diagnosticsOpen = !diagnosticsOpen">
         <Activity :size="15" />{{ diagnosticsOpen ? '关闭媒体诊断' : '查看媒体诊断' }}

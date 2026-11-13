@@ -123,7 +123,7 @@ it('其他设置栏目不查更新，进入客户端栏目只查一次并更新�
 it('查询完成前保持说明，仅确定不支持后显示限制', async () => {
   const { scope, settings, autoStart, bridge } = setup();
   try {
-    expect(settings.autoStartDescription.value).toBe('随 Windows 登录自动启动客户端。');
+    expect(settings.autoStartDescription.value).toBe('登录 Windows 后自动启动。');
     await settings.updateAutoStart(checked);
     expect(bridge.setAutoStart).not.toHaveBeenCalled();
     autoStart.resolve({ supported: false, enabled: false });

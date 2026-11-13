@@ -43,7 +43,7 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
 
 <template>
   <div class="settings-section shortcut-settings">
-    <p class="settings-intro">游戏中也可使用快捷键。语音操作需先加入通话，保存回放需先开启回放；默认不设置快捷键。</p>
+    <p class="settings-intro">在游戏或其他应用中，也能快捷切换麦克风、收听和保存回放。</p>
     <p v-if="!shortcuts.supported">全局快捷键仅在 Windows 桌面客户端提供。</p>
     <section class="settings-block">
       <div class="voice-mode-row">
@@ -51,7 +51,7 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
         <VoiceModeSwitch :model-value="shortcuts.voiceMode" :binding="shortcuts.bindings.pushToTalk" :disabled="shortcuts.busy" :aria-busy="shortcuts.busy"
           :push-to-talk-disabled="!shortcuts.supported || !shortcuts.ready" @update:model-value="chooseVoiceMode" />
       </div>
-      <small>先设置快捷键，并在通话中开启麦克风。按住时说话，松开后静音；手动静音、停止收听或离开语音后不会发声。</small>
+      <small>设置快捷键并开启麦克风，按住说话，松开静音。</small>
     </section>
     <section class="settings-block">
       <h2>语音快捷键</h2>
@@ -69,8 +69,8 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
             :aria-label="`清除${action.label}快捷键`" @click="shortcuts.setBinding(action.id, '')">清除</button>
         </div>
       </div>
-      <small>支持字母、数字、常用符号和 F1–F11，也可搭配 Ctrl、Alt、Shift。松开后保存，长按不会重复触发。</small>
-      <small>单键是全局快捷键，打字或游戏中按下也会触发，可能与其他按键操作冲突。</small>
+      <small>点击后按下快捷键，松开保存，Esc 取消。支持字母、数字、常用符号、F1–F11 及 Ctrl、Alt、Shift 组合。</small>
+      <small>建议搭配 Ctrl、Alt 或 Shift，减少与打字、游戏按键冲突。</small>
       <InlineFeedback :message="keyError || (missingTalkBinding ? '请先为按键发言设置快捷键' : shortcuts.error)" />
       <button v-if="!missingTalkBinding && shortcuts.error && shortcuts.supported" type="button" :disabled="shortcuts.busy" @click="shortcuts.retry()">重新启用</button>
     </section>

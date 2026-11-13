@@ -2,9 +2,9 @@ import { createSSRApp, ref } from 'vue';
 import { renderToString } from '@vue/server-renderer';
 import { expect, it, vi } from 'vitest';
 import ActivitySettings from './ActivitySettings.vue';
-import type { UserActivity } from '../../presence/presenceApi';
+import type { UserActivity, UserPresenceStatus } from '../../presence/presenceApi';
 
-async function render(activity: UserActivity | null, desktop = true, loading = false) {
+async function render(activity: UserActivity | null, desktop = true, loading = false, presenceMode: 'online' | 'invisible' = 'online', status: UserPresenceStatus = 'ONLINE') {
   const mappings = { entries: ref([{ executable: 'c:\\game.exe', name: '固定游戏名' }]),
     windows: ref([{ executable: 'c:\\game.exe', title: '当前窗口' }]), busy: ref(false),
     loading: ref(loading), ready: ref(true), error: ref(''), windowError: ref(''),
@@ -13,7 +13,7 @@ async function render(activity: UserActivity | null, desktop = true, loading = f
   const html = await renderToString(createSSRApp(ActivitySettings, {
     user: { id: 'self', nickname: '测试成员', avatar: '', administrator: false },
     active: false, activity, desktop, showActivity: true, showLastOnline: true, error: '', mappings,
-    presenceMode: 'online', presenceReady: true,
+    presenceMode, presenceReady: true, status,
   }));
   return { html, mappings };
 }
@@ -51,7 +51,7 @@ it('识别结果放在修正标题旁，页面仅保留紧凑选择与操作，�
   expect(html).not.toContain('activity-display-name');
   expect(html).toMatch(/<button[^>]*disabled[^>]*>重置<\/button>/);
   expect(html).toMatch(/<button[^>]*disabled[^>]*>修改名称<\/button>/);
-  expect(html).toContain('关闭后隐藏，重新开启可恢复展示');
+  expect(html).toContain('向朋友展示正在玩的游戏、正在听的音乐和最近游玩记录。');
   expect(html).not.toContain('关闭后清除');
   expect(html).not.toContain('刷新运行窗口');
 });
@@ -63,4 +63,12 @@ it('刷新窗口时保留选择框文字，不立即闪现读取状态', async (
   expect(select).toContain('选择正在运行的窗口');
   expect(select).not.toContain('正在读取窗口');
   expect(html).not.toContain('正在读取窗口…');
+});
+
+it('在线说明随在线、闲置和隐身变化，隐身不沿用公开在线说明', async () => {
+  expect((await render(null)).html).toContain('离开电脑后自动显示闲置');
+  expect((await render(null, true, false, 'online', 'AWAY')).html).toContain('当前显示为闲置');
+  const invisible = (await render(null, true, false, 'invisible', 'OFFLINE')).html;
+  expect(invisible).toContain('向朋友显示离线');
+  expect(invisible).not.toContain('回来后恢复在线');
 });

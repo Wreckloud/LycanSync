@@ -484,7 +484,7 @@ test('快捷键录入松开后保存，冲突保持原设置，取消不会丢�
   expect((await recorder.boundingBox())!.y).toBe(beforeMode!.y);
   await expect(page.locator('.shortcut-settings')).not.toContainText('等待按住快捷键');
   const talk = page.getByRole('button', { name: '设置按键说话快捷键', exact: true });
-  await expect(page.getByText('单键是全局快捷键，打字或游戏中按下也会触发，可能与其他按键操作冲突。')).toBeVisible();
+  await expect(page.getByText('建议搭配 Ctrl、Alt 或 Shift，减少与打字、游戏按键冲突。')).toBeVisible();
   await talk.click();
   await page.keyboard.down(';');
   await expect(talk).toHaveAttribute('aria-pressed', 'true');

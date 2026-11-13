@@ -158,14 +158,14 @@ defineExpose({ beginTransfer });
 </script>
 
 <template>
-  <section class="settings-block lifecycle-settings">
+  <section class="settings-block lifecycle-settings" :class="{ 'account-operation': section === 'account' }">
     <template v-if="section === 'owner' && status?.administrator">
       <h2>服主账号</h2>
       <div class="settings-toggle-group">
         <div class="settings-action-row">
           <div><strong>恢复密码 · {{ status.recoveryConfigured ? '已设置' : '未设置' }}</strong>
             <small>无法登录时，可通过“群组恢复”找回账号。</small>
-            <small v-if="!status.recoveryConfigured && qqBound === false" class="recovery-warning" role="status">安全建议：请设置服主恢复密码，避免本机登录信息丢失后无法找回账号。</small>
+            <small v-if="!status.recoveryConfigured && qqBound === false" class="recovery-warning" role="status">设置恢复密码，方便在登录信息丢失时找回服主账号。</small>
           </div>
           <button type="button" :disabled="busy || leaving" @click="toggle('password')">{{ status.recoveryConfigured ? '修改恢复密码' : '设置恢复密码' }}</button>
         </div>
@@ -198,12 +198,14 @@ defineExpose({ beginTransfer });
       </form>
     </template>
     <template v-if="section === 'account'">
-      <div class="settings-action-row"><h2>注销账号</h2>
+      <div class="settings-action-row"><h3>注销账号</h3>
         <button type="button" class="settings-button account-danger" :disabled="busy || leaving" @click="beginClose">注销账号</button>
       </div>
-      <p>注销后无法再登录。历史昵称、头像、签名、消息和共同语音记录仍会保留，并标记为“已注销”。</p>
-      <p v-if="status?.administrator">请先完成服主转让，再注销账号。</p>
-      <p v-if="status?.ownedGroups.length">请先转让或解散名下的 {{ status.ownedGroups.length }} 个群组。</p>
+      <p>注销后无法再次登录；历史资料、消息和共同语音记录会保留，并标记为“已注销”。</p>
+      <p v-if="status?.administrator || status?.ownedGroups.length" class="closure-requirements">
+        <span v-if="status?.administrator">请先完成服主转让，再注销账号。</span>
+        <span v-if="status?.ownedGroups.length">请先转让或解散名下的 {{ status.ownedGroups.length }} 个群组。</span>
+      </p>
       <ExpandSection :open="expanded === 'close'">
         <div class="closure-steps">
           <div v-if="status?.administrator" class="settings-action-row">
@@ -263,6 +265,7 @@ defineExpose({ beginTransfer });
 .lifecycle-settings > button { justify-self: start; }
 .lifecycle-form { display: grid; gap: 12px; padding-top: 12px; max-width: 480px; }
 .account-danger { color: var(--danger); }
+.closure-requirements > span { display: block; }
 .closure-steps { display: grid; gap: 12px; padding-top: 12px; }
 .settings-action-row > .closure-group-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
 .recovery-password-dialog { display: grid; gap: 12px; width: min(420px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; box-sizing: border-box; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 14px; line-height: 22px; }

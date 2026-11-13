@@ -25,11 +25,11 @@ function updateAutomatic(event: Event) {
   <section class="settings-block diagnostic-report-settings">
     <h2>测试报告</h2>
     <label class="settings-toggle">
-      <span><strong>自动记录诊断</strong><small>进入应用后自动记录，是否开启会保存在这台设备。</small></span>
+      <span><strong>自动记录诊断</strong><small>在本机记录版本、设备和通话质量信息，方便遇到问题时排查。</small></span>
       <input type="checkbox" aria-label="自动记录诊断" :checked="automaticEnabled" :disabled="saving" @change="updateAutomatic" />
     </label>
-    <p>关闭开关保留已有记录，再次开启继续记录。</p>
-    <p>记录版本、设备与通话质量等排查信息，成员使用临时编号。不包含昵称、链接或原始日志，不录制音视频，也不会自动上传。</p>
+    <p>暂停记录后，已有报告继续保留。</p>
+    <p>报告使用临时成员编号，导出后由你选择分享。</p>
     <p v-if="desktop">关闭后停止详细记录，基础故障日志仍会保留。导出报告不会停止记录。</p>
     <p v-if="desktop">详细报告约每 15 秒自动保存至 data/diagnostics。共享结束后保留最近一次记录，退出账号或关闭应用后仍可导出。异常退出可能缺少最后一段记录；体验说明不会自动保存。</p>
     <p v-else>浏览器详细记录仅保存在页面内存，请在退出前导出。</p>
@@ -56,7 +56,7 @@ function updateAutomatic(event: Event) {
       <button type="button" :disabled="!recording || saving" @click="report.markProblem(problemCategory)">标记刚才的问题</button>
       <span v-if="report.problemMarkers?.value.length">最近标记：{{ new Date(report.problemMarkers.value.at(-1)!.time).toLocaleTimeString() }}</span>
     </div>
-    <p>遇到问题时尽快标记，并在体验说明中描述现象。标记会随报告导出，不会录音；未开启记录时无法补回此前数据。</p>
+    <p>遇到问题时点击标记，导出后更容易找到对应时段。也可在体验说明中补充现象。</p>
     <InlineFeedback :message="error" :pending="saving ? '正在导出报告…' : ''" />
     <InlineFeedback :message="persistenceError" />
   </section>
