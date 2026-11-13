@@ -6,7 +6,7 @@ import json
 import os
 import re
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 VERSION = r'(\d+\.\d+\.\d+)'
@@ -33,7 +33,7 @@ def maintain(root, apply=False):
     versions = sorted((v for v in installers if version_key(v) <= version_key(current)), key=version_key)
     if not versions or versions[-1] != current:
         raise ValueError('当前版本的安装程序缺失')
-    keep = versions[-2:]
+    keep = versions[-1:]
     hashes = {}
 
     def digest(file):
@@ -49,7 +49,7 @@ def maintain(root, apply=False):
             hashes[key] = checksum.hexdigest()
         return hashes[key]
 
-    # 删除前先确认当前与上一版的完整载荷，以及仍在服务的两个下载别名。
+    # 删除前先确认当前版完整载荷及两个下载别名，历史版本不作为回滚材料保留。
     for version in keep:
         record = json.loads((downloads / f'LycanSync-{version}-release.json').read_text())
         expected = {f'LycanSync-{version}-{suffix}' for suffix in [
@@ -96,6 +96,18 @@ def maintain(root, apply=False):
                             break
     for file in retired.values():
         actions[file] = 'retired-installer'
+    for file in downloads.iterdir():
+        match = ARTIFACT.fullmatch(file.name)
+        if file.is_file() and not file.is_symlink() and match and version_key(match[1]) < version_key(current):
+            actions[file] = 'retired-release-artifact'
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=3)).timestamp()
+    maintenance = root / 'maintenance'
+    if maintenance.is_dir():
+        for file in maintenance.iterdir():
+            # JSON/TXT 也可能是维护配置或说明，只自动清理日志和本工具生成的报告。
+            report = re.fullmatch(r'release-cleanup-\d{8}T\d{6}Z\.json', file.name)
+            if file.is_file() and not file.is_symlink() and (file.suffix == '.log' or report) and file.stat().st_mtime < cutoff:
+                actions[file] = 'expired-maintenance-report'
     plan = [{'path': str(p.relative_to(root)), 'reason': reason, 'bytes': p.stat().st_size,
              'inode': p.stat().st_ino, 'modifiedNs': p.stat().st_mtime_ns} for p, reason in sorted(actions.items())]
     result = {'current': current, 'keepInstallers': keep, 'removeFiles': len(plan),

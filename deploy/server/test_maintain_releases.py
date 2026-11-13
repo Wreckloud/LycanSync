@@ -5,6 +5,8 @@ import shutil
 import tempfile
 import unittest
 import sys
+import os
+import time
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -40,17 +42,34 @@ class ReleaseMaintenanceTest(unittest.TestCase):
         for file in self.downloads.glob('LycanSync-0.3.8-*'):
             shutil.copyfile(file, self.stage / file.name)
 
-    def test_preview_then_cleanup_preserves_sources_and_two_rollback_installers(self):
+    def test_preview_then_cleanup_keeps_only_current_release_and_recent_reports(self):
+        reports = self.root / 'maintenance'
+        reports.mkdir()
+        old = reports / 'old.log'
+        old.write_text('old test log')
+        os.utime(old, (time.time() - 4 * 86400, time.time() - 4 * 86400))
+        recent = reports / 'recent.json'
+        recent.write_text('{}')
+        for name in ['settings.json', 'notes.txt', 'release-cleanup-20260101T000000Z.json']:
+            file = reports / name
+            file.write_text('{}')
+            os.utime(file, (time.time() - 4 * 86400, time.time() - 4 * 86400))
         preview, plan = maintenance.maintain(self.root)
         self.assertFalse(preview['applied'])
         self.assertTrue((self.stage / 'LycanSync-0.3.8-obs-source.tar.gz').exists())
         self.assertTrue(plan)
         result, _ = maintenance.maintain(self.root, True)
-        self.assertEqual(result['keepInstallers'], ['0.3.9', '0.3.10'])
+        self.assertEqual(result['keepInstallers'], ['0.3.10'])
         self.assertFalse((self.downloads / 'LycanSync-0.3.8-windows-x64-setup.exe').exists())
-        for version in ['0.3.8', '0.3.9', '0.3.10']:
-            self.assertTrue((self.downloads / f'LycanSync-{version}-obs-source.tar.gz').exists())
-            self.assertTrue((self.downloads / f'LycanSync-{version}-THIRD-PARTY-NOTICES.txt').exists())
+        for version in ['0.3.8', '0.3.9']:
+            self.assertEqual(list(self.downloads.glob(f'LycanSync-{version}-*')), [])
+        for suffix in ['windows-x64-setup.exe', 'windows-x64-setup.exe.blockmap', 'obs-source.tar.gz', 'THIRD-PARTY-NOTICES.txt', 'release.json']:
+            self.assertTrue((self.downloads / f'LycanSync-0.3.10-{suffix}').exists())
+        self.assertFalse(old.exists())
+        self.assertTrue(recent.exists())
+        self.assertTrue((reports / 'settings.json').exists())
+        self.assertTrue((reports / 'notes.txt').exists())
+        self.assertFalse((reports / 'release-cleanup-20260101T000000Z.json').exists())
         self.assertEqual((self.root / '.env').read_text(), 'private configuration')
         self.assertTrue((self.root / 'incoming/legacy' / self.stage.name).is_dir())
         second, _ = maintenance.maintain(self.root, True)
