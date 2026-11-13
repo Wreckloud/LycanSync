@@ -112,7 +112,7 @@ test('麦克风运行文件缺少声音处理依赖记录时禁止发布', conte
 test('声音处理依赖源码和许可证随包交付，许可加入最终运行文件哈希', context => {
   const f = fixture(context);
   cpSync(join(__dirname, 'audio-processing'), join(f.root, f.native, 'audio-processing'), { recursive: true });
-  f.manifest.voiceProcessing = { name: 'sonora', version: '0.2.0' };
+  f.manifest.voiceProcessing = { name: 'aec3-rnnoise-sonora', version: 'obs32.2.2+0.2.0' };
   f.save();
   const manifest = prepareSourceBundle(f.root);
   assert.ok(manifest.files.some(file => file.path.startsWith('licenses/voice-processing/sonora-0.2.0/')));
@@ -121,4 +121,8 @@ test('声音处理依赖源码和许可证随包交付，许可加入最终运�
   assert.equal(result.status, 0);
   assert.match(result.stdout, /audio-processing\/vendor\/sonora-0\.2\.0\/Cargo.toml/);
   assert.match(result.stdout, /audio-processing\/Cargo.lock/);
+  assert.match(result.stdout, /audio-processing\/rnnoise\/src\/rnn_data.c/);
+  assert.match(result.stdout, /audio-processing\/build.rs/);
+  assert.ok(manifest.files.some(file => file.path === 'licenses/voice-processing/rnnoise-obs-32.2.2/COPYING'));
+  assert.ok(manifest.files.some(file => file.path === 'licenses/voice-processing/rnnoise-obs-32.2.2/NOTICES.txt'));
 });

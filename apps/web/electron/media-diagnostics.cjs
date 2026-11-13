@@ -154,7 +154,12 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
             details.win32Error = entry.win32Error;
           }
         }
-        if (stage === 'microphoneReady' && entry.backend === 'obsLibobs' && entry.processing === 'sonora-0.2.0') {
+        if (stage === 'microphoneEchoState' && ['disabled', 'pending', 'ready', 'unavailable'].includes(entry.status)) {
+          details.status = entry.status;
+        }
+        // 导出的时间范围可能跨越升级，旧处理器记录仍用于定位历史问题。
+        if (stage === 'microphoneReady' && entry.backend === 'obsLibobs'
+            && ['sonora-0.2.0', 'aec3+rnnoise-obs32.2.2+sonora-0.2.0'].includes(entry.processing)) {
           details.backend = entry.backend;
           details.processing = entry.processing;
           for (const key of ['coreReadyMs', 'pluginLoadMs', 'sourceSetupMs', 'firstBlockWaitMs']) {

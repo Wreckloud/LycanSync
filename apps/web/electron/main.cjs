@@ -309,6 +309,7 @@ const obsAudioHost = new ObsAudioHostManager({
   ...obsAudioSettings,
   configPath: resolve(app.getPath('userData'), 'obs-audio', '32.2.2'),
   onFailure: (sessionId, code) => nativeMicrophone.notifyFailure(sessionId, code),
+  onEchoState: (sessionId, status) => nativeMicrophone.notifyEchoState(sessionId, status),
   onDiagnostic: (entry) => { void writeMediaDiagnostic(entry); },
 });
 
@@ -1267,6 +1268,10 @@ ipcMain.handle('media:native-screen-audio:stop', (event, sessionId) => {
 ipcMain.on('media:native-screen-audio:consumed', (event, sessionId, sequence, droppedChunks) => {
   if (!trustedSender(event)) return;
   nativeScreenAudio.acknowledge(sessionId, sequence, droppedChunks);
+});
+ipcMain.handle('media:microphone-echo-output', (event, selector) => {
+  if (!trustedSender(event)) throw new Error('请求参数无效');
+  return obsAudioHost.setReference(selector);
 });
 ipcMain.handle('media:microphone-devices', (event) => {
   if (!trustedSender(event) || closing || process.platform !== 'win32') throw new Error('请求参数无效');

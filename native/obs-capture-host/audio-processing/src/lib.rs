@@ -1,5 +1,7 @@
-//! OBS 音频滤镜的窄 FFI：复用 Sonora，10 ms 分块，不持有设备或管道。
+//! OBS 音频滤镜的窄 FFI：RNNoise + Sonora，10 ms 分块，不持有设备或管道。
 
+mod denoise;
+mod echo;
 mod processor;
 pub use processor::VoiceMetrics;
 
@@ -34,8 +36,11 @@ pub extern "C" fn lycan_voice_create(
     let Some(settings) = settings(gain, noise, agc, high_pass) else {
         return std::ptr::null_mut();
     };
+    let Some(processor) = MicrophoneProcessor::try_new(settings) else {
+        return std::ptr::null_mut();
+    };
     Box::into_raw(Box::new(VoiceProcessor {
-        processor: MicrophoneProcessor::new(settings),
+        processor,
         input: [0.0; FRAMES_PER_CHUNK],
         output: [0.0; FRAMES_PER_CHUNK],
         cursor: 0,
@@ -60,6 +65,54 @@ pub unsafe extern "C" fn lycan_voice_configure(
     };
     state.processor.set_settings(settings);
     true
+}
+
+/// # Safety
+/// ptr 独占有效；只在参考设备启停时调用，重新启用会清除旧设备的回声状态。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lycan_voice_set_echo(ptr: *mut VoiceProcessor, enabled: u8) -> bool {
+    if enabled > 1 {
+        return false;
+    }
+    let Some(state) = (unsafe { ptr.as_mut() }) else {
+        return false;
+    };
+    state.processor.set_echo(enabled == 1);
+    true
+}
+
+/// # Safety
+/// ptr 独占有效，与参考及麦克风处理共享同一把锁。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lycan_voice_set_echo_delay(
+    ptr: *mut VoiceProcessor,
+    delay_ms: i32,
+) -> bool {
+    let Some(state) = (unsafe { ptr.as_mut() }) else {
+        return false;
+    };
+    state.processor.set_echo_delay(delay_ms)
+}
+
+/// # Safety
+/// samples 指向一个有效的 480 帧只读块；ptr 独占且与样本内存不重叠。
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lycan_voice_render(
+    ptr: *mut VoiceProcessor,
+    samples: *const f32,
+    frames: u32,
+) -> bool {
+    if samples.is_null() || frames != FRAMES_PER_CHUNK as u32 {
+        return false;
+    }
+    let Some(state) = (unsafe { ptr.as_mut() }) else {
+        return false;
+    };
+    let input = unsafe { &*samples.cast::<[f32; FRAMES_PER_CHUNK]>() };
+    if input.iter().any(|sample| !sample.is_finite()) {
+        return false;
+    }
+    state.processor.render_reference(input)
 }
 
 /// # Safety
@@ -122,9 +175,11 @@ mod tests {
         let state = lycan_voice_create(2.0, 0, 0, 0);
         let mut input = [0.8; 480];
         assert!(unsafe { lycan_voice_process(state, input.as_mut_ptr(), 480) });
+        let mut input = [0.8; 480];
+        assert!(unsafe { lycan_voice_process(state, input.as_mut_ptr(), 480) });
         let mut metrics = VoiceMetrics::default();
         assert!(unsafe { lycan_voice_take_metrics(state, &mut metrics) });
-        assert_eq!(metrics.samples, 480);
+        assert_eq!(metrics.samples, 960);
         assert!(metrics.limited_samples > 0);
         assert_eq!(metrics.full_scale_samples, 0);
         assert!((metrics.input_peak - 0.8).abs() < 0.001);
@@ -136,16 +191,16 @@ mod tests {
     }
 
     #[test]
-    fn variable_blocks_preserve_stream_and_user_gain_with_one_block_delay() {
+    fn variable_blocks_preserve_stream_and_user_gain_with_two_block_delay() {
         let state = lycan_voice_create(0.5, 0, 0, 0);
         assert!(!state.is_null());
         let mut values = vec![0.4; 2048];
         for block in values.chunks_mut(127) {
             assert!(unsafe { lycan_voice_process(state, block.as_mut_ptr(), block.len() as u32) });
         }
-        assert!(values[..480].iter().all(|&value| value == 0.0));
+        assert!(values[..960].iter().all(|&value| value == 0.0));
         assert!(
-            values[480..]
+            values[960..]
                 .iter()
                 .all(|&value| (value - 0.2).abs() < 1e-6)
         );

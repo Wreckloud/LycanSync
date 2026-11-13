@@ -62,7 +62,7 @@ function prepareSourceBundle(projectRoot) {
     throw new Error('OBS 构建版本或架构不符合固定发布范围。');
   }
   if (manifest.files.some(file => file.path === 'bin/64bit/lycansync-obs-audio-host.exe')
-      && (manifest.voiceProcessing?.name !== 'sonora' || manifest.voiceProcessing.version !== '0.2.0')) {
+      && (manifest.voiceProcessing?.name !== 'aec3-rnnoise-sonora' || manifest.voiceProcessing.version !== 'obs32.2.2+0.2.0')) {
     throw new Error('OBS 麦克风宿主缺少对应声音处理依赖记录，请重新构建。');
   }
   for (const file of manifest.files) verifyFile(prepared, file);
@@ -98,6 +98,12 @@ function prepareSourceBundle(projectRoot) {
         + 'FFmpeg uses its upstream GPL version3 build. See bundled license texts and source.\n'
         + 'This notice does not relicense the rest of LycanSync.\n',
     };
+    if (manifest.voiceProcessing) {
+      notices['licenses/voice-processing/rnnoise-obs-32.2.2/COPYING'] = readFileSync(
+        join(sourceRoot, 'audio-processing/rnnoise/COPYING'), 'utf8');
+      notices['licenses/voice-processing/rnnoise-obs-32.2.2/NOTICES.txt'] = readFileSync(
+        join(sourceRoot, 'audio-processing/rnnoise/NOTICES.txt'), 'utf8');
+    }
     for (const [file, contents] of Object.entries(notices)) {
       mkdirSync(dirname(join(prepared, file)), { recursive: true });
       writeFileSync(join(prepared, file), contents);

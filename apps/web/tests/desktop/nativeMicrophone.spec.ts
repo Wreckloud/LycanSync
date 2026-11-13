@@ -54,7 +54,7 @@ test('桌面真实麦克风连续三次启动、交付和停止，无残留错�
           });
           await context.resume();
           const format = await desktop.startNativeMicrophone(sessionId, {
-            inputGain: 1, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true,
+            inputGain: 1, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true, echoCancellation: false,
           }, 'default', false);
           started = true;
           await new Promise((resolveSample) => setTimeout(resolveSample, 3000));

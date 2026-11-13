@@ -3,7 +3,7 @@ import { AudioPresets, Track, TrackEvent, createLocalAudioTrack, type LocalAudio
 import { normalizeAudioVolume, unappliedCaptureProcessing } from './audioPreferences';
 import { MicrophoneAudioProcessor } from './microphoneAudioProcessor';
 import { MicrophoneLoopback } from './microphoneLoopback';
-import { NativeMicrophoneAudioSession, type NativeMicrophoneDesktopBridge } from './nativeMicrophoneAudio';
+import { MICROPHONE_ECHO_NOTICE, NativeMicrophoneAudioSession, type NativeMicrophoneDesktopBridge } from './nativeMicrophoneAudio';
 import type { useAudioPreferences } from './useAudioPreferences';
 import { normalizeVoiceLevel } from './voiceLevel';
 import type { AudioOutputBinding, AudioOutputRouting } from './useAudioOutput';
@@ -141,6 +141,9 @@ export function useMicrophoneTest(options: MicrophoneTestOptions) {
         if (options.desktop) {
           current.native = new NativeMicrophoneAudioSession(options.desktop, {
             deviceId: preferences.inputDeviceId.value,
+            onWarning: (message) => {
+              if (session === current && (message || notice.value === MICROPHONE_ECHO_NOTICE)) notice.value = message;
+            },
             onError: (code) => {
               if (session !== current) return;
               notice.value = captureMessage(new Error(code), true);
@@ -151,7 +154,7 @@ export function useMicrophoneTest(options: MicrophoneTestOptions) {
             inputGain: preferences.inputGain.value,
             noiseSuppression: preferences.processing.noiseSuppression,
             autoGainControl: preferences.processing.autoGainControl,
-            voiceEnhancement: preferences.processing.voiceEnhancement,
+            voiceEnhancement: preferences.processing.voiceEnhancement, echoCancellation: preferences.processing.echoCancellation,
           });
           current.sourceTrack = track.mediaStreamTrack;
         } else {
@@ -214,7 +217,7 @@ export function useMicrophoneTest(options: MicrophoneTestOptions) {
       if (current.native) {
         await current.native.configure({ inputGain: preferences.inputGain.value,
           noiseSuppression: settings.noiseSuppression, autoGainControl: settings.autoGainControl,
-          voiceEnhancement: settings.voiceEnhancement });
+          voiceEnhancement: settings.voiceEnhancement, echoCancellation: settings.echoCancellation });
       } else if (current.browserTrack) {
         current.processor?.setInputGain(preferences.inputGain.value);
         current.processor?.setVoiceEnhancement(settings.voiceEnhancement);

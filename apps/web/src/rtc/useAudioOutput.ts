@@ -19,7 +19,8 @@ type RoutedContext = AudioContext & { setSinkId?: (id: string | { type: 'none' }
 const DEVICE_LIST_ERROR = '无法读取播放设备列表。';
 
 /** 统一现有播放资源的去向，不创建音频图、不拥有采集或播放器。 */
-export function useAudioOutput(preferences: ReturnType<typeof useAudioPreferences>, media = navigator.mediaDevices) {
+export function useAudioOutput(preferences: ReturnType<typeof useAudioPreferences>, media = navigator.mediaDevices,
+  echoOutput?: { setMicrophoneEchoOutput: (selector: string) => Promise<{ changed: boolean }> }) {
   const devices = ref<{ id: string; label: string }[]>([]);
   const notice = ref('');
   const changing = ref(false);
@@ -30,6 +31,26 @@ export function useAudioOutput(preferences: ReturnType<typeof useAudioPreference
   const entries = new Set<OutputEntry>();
   let desiredId = preferences.outputDeviceId.value;
   let disposed = false;
+  let echoVersion = 0;
+
+  async function syncEchoOutput(unavailable = false) {
+    if (!echoOutput) return;
+    const version = ++echoVersion;
+    let selector = 'none';
+    if (!disposed && !unavailable && !blocked.value && !changing.value) {
+      if (desiredId === 'default') selector = 'default';
+      else {
+        const selected = devices.value.find(device => device.id === desiredId);
+        if (selected?.label && devices.value.filter(device => device.label === selected.label).length === 1) {
+          selector = `name:${selected.label}`;
+        }
+      }
+    }
+    try { await echoOutput.setMicrophoneEchoOutput(selector); }
+    catch {
+      if (!disposed && version === echoVersion) notice.value = '回声消除设置未能更新，请重新选择播放设备。';
+    }
+  }
   let refreshVersion = 0;
   let routeVersion = 0;
 
@@ -62,6 +83,7 @@ export function useAudioOutput(preferences: ReturnType<typeof useAudioPreference
   }
 
   function silence() {
+    void syncEchoOutput(true);
     routeVersion++;
     blocked.value = true;
     for (const entry of entries) {
@@ -115,6 +137,7 @@ export function useAudioOutput(preferences: ReturnType<typeof useAudioPreference
       } else if (notice.value === DEVICE_LIST_ERROR) {
         notice.value = blocked.value ? '声音输出尚未恢复，请重新选择设备。' : '';
       }
+      await syncEchoOutput();
     } catch {
       if (!disposed && version === refreshVersion) notice.value = DEVICE_LIST_ERROR;
     }
@@ -134,9 +157,12 @@ export function useAudioOutput(preferences: ReturnType<typeof useAudioPreference
     desiredId = id;
     notice.value = '';
     try {
+      await syncEchoOutput(true);
       await Promise.all([...entries].map(apply));
       if (blocked.value) throw new Error('audioOutputUnavailable');
-      if (!disposed) preferences.setOutputDeviceId(id);
+      if (!disposed) {
+        preferences.setOutputDeviceId(id);
+      }
     } catch {
       routeVersion++;
       desiredId = previousId;
@@ -144,7 +170,10 @@ export function useAudioOutput(preferences: ReturnType<typeof useAudioPreference
       const rollback = await Promise.allSettled([...entries].map(apply));
       if (rollback.some((result) => result.status === 'rejected')) silence();
       if (!disposed) notice.value = '播放设备切换失败，新选择未保存。';
-    } finally { changing.value = false; }
+    } finally {
+      changing.value = false;
+      await syncEchoOutput();
+    }
   }
 
   const changed = () => { void refresh(); };
@@ -152,6 +181,7 @@ export function useAudioOutput(preferences: ReturnType<typeof useAudioPreference
   void refresh();
   onScopeDispose(() => {
     disposed = true;
+    void syncEchoOutput(true);
     refreshVersion++;
     media?.removeEventListener('devicechange', changed);
     for (const entry of entries) { entry.released = true; entry.removeListener?.(); }

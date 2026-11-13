@@ -41,7 +41,7 @@ describe('语音设置的本机试听入口', () => {
     expect(partial).toContain('aria-checked="mixed"');
     expect(partial).toContain('仍在使用你之前的处理设置');
     const desktop = await renderAudioSettings('idle', false, true, { echoCancellation: false });
-    expect(desktop).not.toContain('aria-checked="mixed"');
+    expect(desktop).toContain('aria-checked="mixed"');
     const browser = await renderAudioSettings('idle', false, false, { echoCancellation: false });
     expect(browser).toContain('aria-checked="mixed"');
   });

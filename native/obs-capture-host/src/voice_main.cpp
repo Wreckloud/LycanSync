@@ -1,4 +1,5 @@
 #include "voice_filter.h"
+#include "voice_reference.h"
 #include "voice_transmission.h"
 
 #include <windows.h>
@@ -36,15 +37,16 @@ void audio_log(int, const char *format, va_list args, void *) {
     audio_hresult = static_cast<unsigned long>(va_arg(args, long));
   }
 }
-struct Settings { float gain = 1; bool noise = true; bool agc = true; bool high_pass = true; };
+struct Settings { float gain = 1; bool noise = true; bool agc = true; bool high_pass = true; bool echo = true; };
 bool parse_settings(std::string_view text, Settings &settings) {
   const auto split = text.find('|');
-  if (split == text.npos || text.size() - split != 4) return false;
+  if (split == text.npos || text.size() - split != 5) return false;
   const auto result = std::from_chars(text.data(), text.data() + split, settings.gain);
   if (result.ec != std::errc{} || result.ptr != text.data() + split || !std::isfinite(settings.gain)
       || settings.gain < 0 || settings.gain > 2) return false;
   for (size_t i = split + 1; i < text.size(); ++i) if (text[i] != '0' && text[i] != '1') return false;
   settings.noise = text[split + 1] == '1'; settings.agc = text[split + 2] == '1'; settings.high_pass = text[split + 3] == '1';
+  settings.echo = text[split + 4] == '1';
   return true;
 }
 std::string utf8(std::wstring_view value) {
@@ -195,9 +197,9 @@ struct Commands {
       pending.append(buffer.data(), count);
     }
     const auto end = pending.find('\n');
-    if (end != pending.npos && end >= 256) { invalid = true; return {}; }
+    if (end != pending.npos && end >= 4096) { invalid = true; return {}; }
     if (end == pending.npos) {
-      if (pending.size() >= 256) invalid = true;
+      if (pending.size() >= 4096) invalid = true;
       return {};
     }
     auto line = pending.substr(0, end);
@@ -228,7 +230,7 @@ struct CaptureCallback {
 };
 
 int capture(int argc, wchar_t **argv) {
-  if (argc != 8 || !pipe_id(argv[4]) || !argv[6][0] || wcslen(argv[6]) > 1024
+  if (argc != 9 || !pipe_id(argv[4]) || !argv[6][0] || wcslen(argv[6]) > 1024 || wcslen(argv[8]) > 1024
       || (std::wstring_view(argv[7]) != L"0" && std::wstring_view(argv[7]) != L"1")) return 2;
   Settings settings;
   if (!parse_settings(utf8(argv[5]), settings)) return 2;
@@ -269,6 +271,9 @@ int capture(int argc, wchar_t **argv) {
   auto *filter = filterOwner.get();
   if (!filter) { event("failed", ",\"code\":\"microphoneProcessingFailed\""); return 1; }
   configure(filter, settings);
+  std::string reference_selector = utf8(argv[8]);
+  VoiceReference reference(filter);
+  reference.configure(settings.echo, reference_selector);
   obs_source_filter_add(source, filter);
   obs_source_set_monitoring_type(source, OBS_MONITORING_TYPE_NONE);
   obs_source_set_audio_mixers(source, 0);
@@ -282,6 +287,7 @@ int capture(int argc, wchar_t **argv) {
   auto lastAudio = started;
   uint64_t previousFrames = 0;
   bool ready = false;
+  std::string last_echo_state;
   std::string failure;
   for (;;) {
     const auto command = commands.next();
@@ -307,13 +313,14 @@ int capture(int argc, wchar_t **argv) {
       pipe.transmission.renew(duration == "350");
     } else if (!command.empty()) {
       const bool statistics = command.starts_with("statistics|");
+      const bool reference_change = command.starts_with("reference|");
       const size_t prefix = statistics ? 11 : 10;
       const auto separator = statistics ? command.size() : command.find('|', prefix);
       uint32_t request = 0;
-      if ((!statistics && !command.starts_with("configure|")) || separator == command.npos) { failure = "invalidMicrophoneCommand"; break; }
+      if ((!statistics && !reference_change && !command.starts_with("configure|")) || separator == command.npos) { failure = "invalidMicrophoneCommand"; break; }
       const auto parsed = std::from_chars(command.data() + prefix, command.data() + separator, request);
       if (parsed.ec != std::errc{} || parsed.ptr != command.data() + separator || !request
-          || (!statistics && !parse_settings(std::string_view(command).substr(separator + 1), settings))) { failure = "invalidMicrophoneCommand"; break; }
+          || (!statistics && !reference_change && !parse_settings(std::string_view(command).substr(separator + 1), settings))) { failure = "invalidMicrophoneCommand"; break; }
       if (statistics) {
         uint64_t received, dropped;
         { const std::lock_guard<std::mutex> lock(pipe.mutex); received = pipe.received; dropped = pipe.dropped; }
@@ -328,15 +335,29 @@ int capture(int argc, wchar_t **argv) {
           + ",\"sourceFrames\":" + std::to_string(calldata_int(&status, "frames_received"))
           + ",\"pushToTalk\":" + (pipe.transmission.enabled() ? "true" : "false")
           + ",\"transmissionAllowed\":" + (pipe.transmission.allowed() ? "true" : "false")
-          + ",\"processingMetrics\":" + voice_filter_metrics(filter));
+          + ",\"processingMetrics\":" + voice_filter_metrics(filter)
+          + ",\"echoMetrics\":" + voice_filter_echo_metrics(filter));
         calldata_free(&status);
+      } else if (reference_change) {
+        reference_selector = command.substr(separator + 1);
+        if (reference_selector != "default" && reference_selector != "none" && !reference_selector.starts_with("name:")) {
+          failure = "invalidMicrophoneCommand"; break;
+        }
+        reference.configure(settings.echo, reference_selector);
+        event("referenceConfigured", ",\"requestId\":" + std::to_string(request));
       } else {
         configure(filter, settings);
+        reference.configure(settings.echo, reference_selector);
         event("configured", ",\"requestId\":" + std::to_string(request));
       }
     }
     if (voice_filter_failed()) { failure = "microphoneProcessingFailed"; break; }
     if (pipe.failed) { failure = "microphoneCapturePipeFailed"; break; }
+    const auto echo_state = reference.status();
+    if (echo_state != last_echo_state) {
+      last_echo_state = echo_state;
+      event("echo", ",\"status\":\"" + echo_state + "\"");
+    }
     {
       const std::lock_guard<std::mutex> lock(pipe.mutex);
       if (pipe.received != previousFrames) { previousFrames = pipe.received; lastAudio = Clock::now(); }
@@ -348,7 +369,7 @@ int capture(int argc, wchar_t **argv) {
       const auto milliseconds = [](Clock::duration elapsed) {
         return std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
       };
-      event("ready", ",\"obsVersion\":\"32.2.2\",\"processing\":\"sonora-0.2.0\",\"sampleRate\":48000,\"channels\":1,\"bitsPerSample\":32,\"nominalChunkMs\":10"
+      event("ready", ",\"obsVersion\":\"32.2.2\",\"processing\":\"aec3+rnnoise-obs32.2.2+sonora-0.2.0\",\"sampleRate\":48000,\"channels\":1,\"bitsPerSample\":32,\"nominalChunkMs\":10"
           ",\"coreReadyMs\":" + milliseconds(core_ready - initialization_started)
           + ",\"pluginLoadMs\":" + milliseconds(module_ready - core_ready)
           + ",\"sourceSetupMs\":" + milliseconds(started - module_ready)
@@ -358,6 +379,7 @@ int capture(int argc, wchar_t **argv) {
   }
   // 停止交付后才销毁来源；进程退出确认晚于 OBS 销毁队列回收。
   callback.detach();
+  reference.stop();
   obs_source_remove(source);
   filterOwner.reset();
   sourceOwner.reset();

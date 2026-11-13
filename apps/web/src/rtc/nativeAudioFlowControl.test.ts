@@ -119,7 +119,7 @@ async function mainAudio(channels: number) {
   captures.push(capture);
   // 共享来源身份必须保持同一对象，不能在每次查询时伪造新的会话。
   const startArgs = channels === 1
-    ? ['session-b', { noiseSuppression: true, autoGainControl: true, voiceEnhancement: true, inputGain: 1 }, 'default', false]
+    ? ['session-b', { noiseSuppression: true, autoGainControl: true, voiceEnhancement: true, echoCancellation: true, inputGain: 1 }, 'default', false]
     : ['monitor:7:0', 'session-b'];
   await capture.start(...startArgs);
   const socket = new class extends EventEmitter {

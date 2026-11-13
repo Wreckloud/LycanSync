@@ -136,6 +136,10 @@ foreach ($licenseFile in Get-ChildItem -LiteralPath $dependencyLicenses -File -R
     Copy-Item -LiteralPath $licenseFile.FullName -Destination $destination -Force
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'LICENSE.md') -Destination (Join-Path $licenseDirectory 'LycanSync-OBS-LICENSE.md') -Force
+$rnnoiseLicenseDirectory = Join-Path $licenseDirectory 'voice-processing/rnnoise-obs-32.2.2'
+New-Item -ItemType Directory -Force -Path $rnnoiseLicenseDirectory | Out-Null
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'audio-processing/rnnoise/COPYING') -Destination (Join-Path $rnnoiseLicenseDirectory 'COPYING') -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'audio-processing/rnnoise/NOTICES.txt') -Destination (Join-Path $rnnoiseLicenseDirectory 'NOTICES.txt') -Force
 
 $obsDll = Join-Path $binaryDirectory 'obs.dll'
 if ((Get-Item -LiteralPath $obsDll).VersionInfo.ProductVersion -cne '32.2.2') { throw '官方 obs.dll 文件版本不匹配。' }
@@ -160,6 +164,9 @@ Set-Content -LiteralPath (Join-Path $preparedDirectory 'sdk-version.txt') -Value
 $buildDirectory = Join-Path $cacheDirectory 'cmake-build'
 $voiceTarget = Join-Path $cacheDirectory 'voice-processing-target'
 $voiceManifest = Join-Path $PSScriptRoot 'audio-processing/Cargo.toml'
+# RNNoise 的 C 源码由 Cargo 编译，需要完整的 MSVC 头文件、库和工具环境。
+Import-Module (Join-Path $visualStudio.installationPath 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll')
+Enter-VsDevShell -VsInstallPath $visualStudio.installationPath -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64' | Out-Null
 $voiceArguments = @('build', '--release', '--locked', '--manifest-path', $voiceManifest, '--target-dir', $voiceTarget)
 $voiceVendor = Join-Path $PSScriptRoot 'audio-processing/vendor'
 if (Test-Path -LiteralPath $voiceVendor) {
@@ -168,7 +175,7 @@ if (Test-Path -LiteralPath $voiceVendor) {
 }
 if ($Offline) { $voiceArguments += '--offline' }
 & cargo @voiceArguments
-if ($LASTEXITCODE -ne 0) { throw 'Sonora 静态音频处理库构建失败。' }
+if ($LASTEXITCODE -ne 0) { throw 'RNNoise / Sonora 静态音频处理库构建失败。' }
 $voiceLibrary = Join-Path $voiceTarget 'release/lycansync_obs_audio_processing.lib'
 # vswhere 的 productLineVersion 是年份，生成器主版本来自 installationVersion。
 $generator = "Visual Studio $($visualStudio.installationVersion.Split('.')[0]) $($visualStudio.catalog.productLineVersion)"
@@ -234,7 +241,7 @@ $hostSources = @(Get-ChildItem -LiteralPath $PSScriptRoot -File -Recurse | Where
         sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
 })
 $manifest = [ordered]@{ obsVersion = '32.2.2'; architecture = 'x64'; sourceSha256 = $sourceHash; runtimeSha256 = $runtimeHash;
-    voiceProcessing = [ordered]@{ name = 'sonora'; version = '0.2.0'; sampleRate = 48000; channels = 1; chunkFrames = 480 };
+    voiceProcessing = [ordered]@{ name = 'aec3-rnnoise-sonora'; version = 'obs32.2.2+0.2.0'; sampleRate = 48000; channels = 1; chunkFrames = 480; baseDelayFrames = 960; processingDelayFrames = $null };
     sourceUrl = 'https://github.com/obsproject/obs-studio/releases/tag/32.2.2'; sourceArchive = (Split-Path $sourceArchive -Leaf);
     graphicsPatchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/dxgi-output-compat.patch') -Algorithm SHA256).Hash.ToLowerInvariant();
     windowPatchSha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'patches/bound-window-capture.patch') -Algorithm SHA256).Hash.ToLowerInvariant();

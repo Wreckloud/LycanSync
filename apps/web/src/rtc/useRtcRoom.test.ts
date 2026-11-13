@@ -2702,7 +2702,7 @@ describe('room media lifecycle', () => {
       expect(sending.setTransmission).toHaveBeenLastCalledWith(true, false);
       expect(rtcMocks.microphoneStarted).toHaveBeenCalledOnce();
       expect(rtcMocks.microphoneStarted.mock.calls[0][1]).toEqual({
-        inputGain: 0.8, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true,
+        inputGain: 0.8, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true, echoCancellation: true,
       });
       expect(rtcMocks.published).toHaveBeenCalledWith(expect.anything(), { source: Track.Source.Microphone });
       expect(rtcMocks.microphoneStarted.mock.calls[0][2]).toBe('mic-one');

@@ -9,25 +9,34 @@ function readProcessingMetrics(value) {
     inputRms: value.inputRms, outputRms: value.outputRms, inputPeak: value.inputPeak, outputPeak: value.outputPeak };
 }
 
+function readEchoMetrics(value) {
+  if (!value || typeof value.enabled !== 'boolean' || typeof value.active !== 'boolean'
+      || !['referenceFrames', 'resets', 'delayMs'].every(key => Number.isSafeInteger(value[key]) && value[key] >= 0)
+      || value.delayMs > 500) return null;
+  return { enabled: value.enabled, active: value.active, referenceFrames: value.referenceFrames,
+    resets: value.resets, delayMs: value.delayMs };
+}
+
 const ERROR_CODES = new Set(['obsAudioInitFailed', 'obsCaptureVersionUnsupported', 'microphoneModuleLoadFailed',
   'microphoneCaptureStartFailed', 'microphoneProcessingFailed', 'microphoneCapturePipeFailed',
   'microphoneCaptureStartTimedOut', 'microphoneCaptureFailed', 'microphoneDeviceUnavailable', 'invalidMicrophoneCommand']);
 function validSettings(settings) {
   return settings && Number.isFinite(settings.inputGain) && settings.inputGain >= 0 && settings.inputGain <= 2
-    && ['noiseSuppression', 'autoGainControl', 'voiceEnhancement'].every(key => typeof settings[key] === 'boolean');
+    && ['noiseSuppression', 'autoGainControl', 'voiceEnhancement', 'echoCancellation'].every(key => typeof settings[key] === 'boolean');
 }
 function settingsCommand(settings) {
-  return `${settings.inputGain}|${Number(settings.noiseSuppression)}${Number(settings.autoGainControl)}${Number(settings.voiceEnhancement)}`;
+  return `${settings.inputGain}|${Number(settings.noiseSuppression)}${Number(settings.autoGainControl)}${Number(settings.voiceEnhancement)}${Number(settings.echoCancellation)}`;
 }
 
 // 麦克风拥有独立 OBS 进程，视频预热、换显卡与共享故障不得撤销它。
 class ObsAudioHostManager {
   constructor({ executablePath, modulePath, dataPath, configPath, platform = process.platform, spawnProcess = spawn,
     startTimeoutMs = 12_000, stopTimeoutMs = 4000, killTimeoutMs = 1500, requestTimeoutMs = 3000,
-    onFailure = () => {}, onDiagnostic = () => {} }) {
+    onFailure = () => {}, onDiagnostic = () => {}, onEchoState = () => {} }) {
     Object.assign(this, { executablePath, modulePath, dataPath, configPath, platform, spawnProcess,
-      startTimeoutMs, stopTimeoutMs, killTimeoutMs, requestTimeoutMs, onFailure, onDiagnostic });
+      startTimeoutMs, stopTimeoutMs, killTimeoutMs, requestTimeoutMs, onFailure, onDiagnostic, onEchoState });
     this.state = undefined;
+    this.referenceSelector = 'none';
     this.disposed = false;
     this.lastStopped = undefined;
   }
@@ -47,11 +56,11 @@ class ObsAudioHostManager {
     let child;
     try {
       child = this.spawnProcess(this.executablePath, [this.modulePath, this.dataPath, this.configPath,
-        pipeId, settingsCommand(settings), deviceId, pushToTalk ? '1' : '0'], { cwd: win32.dirname(this.executablePath), windowsHide: true,
+        pipeId, settingsCommand(settings), deviceId, pushToTalk ? '1' : '0', this.referenceSelector], { cwd: win32.dirname(this.executablePath), windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'] });
     } catch { return Promise.reject(new Error('microphoneCaptureStartFailed')); }
     const state = { child, sessionId, alive: true, buffer: '', requests: new Map(), sequence: 0,
-      ready: false, stopped: false, pushToTalk, startedAt: performance.now() };
+      referenceSelector: this.referenceSelector, ready: false, stopped: false, pushToTalk, startedAt: performance.now() };
     this.state = state;
     state.start = new Promise((resolve, reject) => { state.resolveStart = resolve; state.rejectStart = reject; });
     void state.start.catch(() => {});
@@ -82,17 +91,28 @@ class ObsAudioHostManager {
       // 失败后只接收停止确认，迟到就绪不能恢复已撤销的采集。
       if (state.failed && event.event !== 'stopped') continue;
       if (event.event === 'ready' && !state.ready && !state.stopping
-          && event.obsVersion === '32.2.2' && event.processing === 'sonora-0.2.0'
+          && event.obsVersion === '32.2.2' && event.processing === 'aec3+rnnoise-obs32.2.2+sonora-0.2.0'
           && event.sampleRate === 48000 && event.channels === 1 && event.bitsPerSample === 32 && event.nominalChunkMs === 10) {
         state.ready = true;
+        if (state.referenceSelector !== this.referenceSelector) {
+          void this.setReference(this.referenceSelector).catch(() => {});
+        }
         clearTimeout(state.startTimer);
         state.resolveStart({ sampleRate: 48000, channels: 1, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
         const timing = {};
         for (const key of ['coreReadyMs', 'pluginLoadMs', 'sourceSetupMs', 'firstBlockWaitMs']) {
           if (Number.isInteger(event[key]) && event[key] >= 0 && event[key] <= this.startTimeoutMs) timing[key] = event[key];
         }
-        this.onDiagnostic({ stage: 'microphoneReady', backend: 'obsLibobs', processing: 'sonora-0.2.0',
+        this.onDiagnostic({ stage: 'microphoneReady', backend: 'obsLibobs', processing: 'aec3+rnnoise-obs32.2.2+sonora-0.2.0',
           durationMs: Math.round(performance.now() - state.startedAt), ...timing });
+      } else if (event.event === 'echo' && ['disabled', 'pending', 'ready', 'unavailable'].includes(event.status)) {
+        if (!state.stopping) {
+          this.onEchoState(state.sessionId, event.status);
+          this.onDiagnostic({ stage: 'microphoneEchoState', status: event.status });
+        }
+      } else if (event.event === 'referenceConfigured' && state.requests.get(event.requestId)?.kind === 'reference') {
+        const request = state.requests.get(event.requestId);
+        clearTimeout(request.timer); state.requests.delete(event.requestId); request.resolve({ changed: true });
       } else if (event.event === 'configured' && state.requests.get(event.requestId)?.kind === 'configure') {
         const request = state.requests.get(event.requestId);
         clearTimeout(request.timer); state.requests.delete(event.requestId); request.resolve({ changed: true });
@@ -104,7 +124,7 @@ class ObsAudioHostManager {
         request.resolve({ framesReceived: event.framesReceived, droppedChunks: event.droppedChunks,
           sourceState: event.sourceState, sourceFrames: event.sourceFrames,
           pushToTalk: event.pushToTalk, transmissionAllowed: event.transmissionAllowed,
-          processingMetrics: readProcessingMetrics(event.processingMetrics) });
+          processingMetrics: readProcessingMetrics(event.processingMetrics), echoMetrics: readEchoMetrics(event.echoMetrics) });
       } else if (event.event === 'statistics' && Number.isSafeInteger(event.requestId)
           && event.requestId > 0 && event.requestId <= state.sequence && !state.requests.has(event.requestId)) {
         // 诊断超时的迟到响应不改变采集状态。
@@ -135,7 +155,7 @@ class ObsAudioHostManager {
       const id = ++state.sequence;
       const timer = setTimeout(() => {
         state.requests.delete(id); reject(new Error('microphoneRequestTimedOut'));
-        if (kind === 'configure') this.fail(state, 'microphoneRequestTimedOut');
+        if (kind === 'configure' || kind === 'reference') this.fail(state, 'microphoneRequestTimedOut');
       }, this.requestTimeoutMs);
       timer.unref?.();
       state.requests.set(id, { resolve, reject, timer, kind });
@@ -146,6 +166,18 @@ class ObsAudioHostManager {
   configure(sessionId, settings) {
     if (!validSettings(settings)) return Promise.reject(new Error('invalidMicrophoneCaptureSettings'));
     return this.request(sessionId, 'configure', id => `configure|${id}|${settingsCommand(settings)}`);
+  }
+
+  setReference(selector) {
+    if (typeof selector !== 'string' || selector.length > 1024 || /[\u0000-\u001f\u007f]/.test(selector)
+        || !['default', 'none'].includes(selector) && !selector.startsWith('name:')) {
+      return Promise.reject(new Error('invalidMicrophoneEchoOutput'));
+    }
+    this.referenceSelector = selector;
+    const state = this.state;
+    if (!state?.ready || state.stopping || state.failed) return Promise.resolve({ changed: false });
+    state.referenceSelector = selector;
+    return this.request(state.sessionId, 'reference', id => `reference|${id}|${selector}`);
   }
 
   getDiagnostics(sessionId) { return this.request(sessionId, 'statistics', id => `statistics|${id}`); }

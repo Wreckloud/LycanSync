@@ -17,3 +17,6 @@ codegen-units = 1
 lto = "thin"
 opt-level = "s"
 panic = "abort"
+
+[build-dependencies]
+cc = "=1.2.46"

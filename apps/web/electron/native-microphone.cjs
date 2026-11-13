@@ -5,12 +5,13 @@ const { validNativeAudioSessionId } = require('./native-audio-session.cjs');
 
 function validMicrophoneSettings(settings) {
   return settings && typeof settings === 'object' && !Array.isArray(settings)
-    && Object.keys(settings).length === 4
+    && Object.keys(settings).length === 5
     && typeof settings.inputGain === 'number' && Number.isFinite(settings.inputGain)
     && settings.inputGain >= 0 && settings.inputGain <= 2
     && typeof settings.noiseSuppression === 'boolean'
     && typeof settings.autoGainControl === 'boolean'
-    && typeof settings.voiceEnhancement === 'boolean';
+    && typeof settings.voiceEnhancement === 'boolean'
+    && typeof settings.echoCancellation === 'boolean';
 }
 
 // OBS 宿主持有采集进程；本模块独占页面音频管道、交付队列和该会话的停止状态。
@@ -199,7 +200,7 @@ function createNativeMicrophone({ host: obsAudioHost, getWindow, isClosing, writ
         if (nativeMicrophoneSession === microphone && !microphone.stopping) {
           diagnostics.microphoneCapture = { sourceState: capture.sourceState, sourceFrames: capture.sourceFrames,
             framesReceived: capture.framesReceived, pushToTalk: capture.pushToTalk, transmissionAllowed: capture.transmissionAllowed,
-            processingMetrics: capture.processingMetrics };
+            processingMetrics: capture.processingMetrics, echoMetrics: capture.echoMetrics };
         }
         microphone.hostDroppedChunks = microphoneDrops;
       } catch { /* 可选统计缺失不终止语音；报告保留未知值。 */ }
@@ -215,6 +216,14 @@ function createNativeMicrophone({ host: obsAudioHost, getWindow, isClosing, writ
     if (nativeMicrophoneSession?.sessionId === sessionId) notifyNativeMicrophoneError(nativeMicrophoneSession, code);
   }
 
+  function notifyEchoState(sessionId, status) {
+    const audio = nativeMicrophoneSession;
+    const window = getWindow();
+    if (!audio || audio.sessionId !== sessionId || audio.stopping || !window
+        || window.isDestroyed() || window.webContents.isDestroyed()) return;
+    window.webContents.send('media:native-microphone-echo', { sessionId, status });
+  }
+
   function setTransmission(sessionId, pushToTalk, held, epoch) {
     if (nativeMicrophoneSession?.sessionId === sessionId && !nativeMicrophoneSession.stopping) {
       obsAudioHost.setTransmission(sessionId, pushToTalk, held, epoch);
@@ -222,7 +231,7 @@ function createNativeMicrophone({ host: obsAudioHost, getWindow, isClosing, writ
   }
 
   return { start: startNativeMicrophoneCapture, stop: stopNativeMicrophoneCapture,
-    acknowledge: acknowledgeNativeMicrophoneChunk, notifyFailure, diagnostics, setTransmission,
+    acknowledge: acknowledgeNativeMicrophoneChunk, notifyFailure, notifyEchoState, diagnostics, setTransmission,
     configure: (sessionId, settings) => obsAudioHost.configure(sessionId, settings),
     cancelTransmission: () => { if (nativeMicrophoneSession) obsAudioHost.cancelTransmission(nativeMicrophoneSession.sessionId); },
     get sessionId() { return nativeMicrophoneSession?.sessionId; } };

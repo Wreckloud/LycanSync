@@ -16,7 +16,7 @@ class OutputElement extends EventTarget {
   async setSinkId(id: string) { this.sinkId = id; }
 }
 
-function fixture(id = 'default') {
+function fixture(id = 'default', echoOutput?: { setMicrophoneEchoOutput: (selector: string) => Promise<{ changed: boolean }> }) {
   vi.stubGlobal('AudioContext', OutputContext);
   vi.stubGlobal('HTMLMediaElement', OutputElement);
   const scope = effectScope();
@@ -28,7 +28,7 @@ function fixture(id = 'default') {
   });
   const devices = [{ kind: 'audiooutput', deviceId: 'speaker-a', label: '设备一' },
     { kind: 'audiooutput', deviceId: 'speaker-b', label: '设备二' }];
-  const output = scope.run(() => useAudioOutput(preferences, media as unknown as MediaDevices))!;
+  const output = scope.run(() => useAudioOutput(preferences, media as unknown as MediaDevices, echoOutput))!;
   const context = new OutputContext();
   const element = new OutputElement();
   return { scope, preferences, media, devices, output, context, element };
@@ -157,4 +157,42 @@ describe('统一声音输出', () => {
     expect(f.context.sinkId).toBe('speaker-b');
     f.scope.stop();
   });
+});
+
+
+it('回声参考跟随最终播放设备；设备重名时停用参考，不改用系统默认', async () => {
+  const echo = { setMicrophoneEchoOutput: vi.fn(async (_selector: string) => ({ changed: true })) };
+  const f = fixture('speaker-a', echo);
+  try {
+    await f.output.refresh();
+    expect(echo.setMicrophoneEchoOutput).toHaveBeenLastCalledWith('name:设备一');
+    await f.output.bindContext(f.context as unknown as AudioContext).ready;
+    await f.output.select('speaker-b');
+    expect(f.context.sinkId).toBe('speaker-b');
+    expect(echo.setMicrophoneEchoOutput).toHaveBeenCalledWith('none');
+    expect(echo.setMicrophoneEchoOutput).toHaveBeenLastCalledWith('name:设备二');
+    f.devices.push({ kind: 'audiooutput', deviceId: 'speaker-c', label: '设备二' });
+    await f.output.refresh();
+    expect(echo.setMicrophoneEchoOutput).toHaveBeenLastCalledWith('none');
+    expect(f.preferences.outputDeviceId.value).toBe('speaker-b');
+  } finally { f.scope.stop(); }
+});
+
+it('切换未完成时设备刷新不得提前使用新参考，销毁后不会恢复参考', async () => {
+  const echo = { setMicrophoneEchoOutput: vi.fn(async (_selector: string) => ({ changed: true })) };
+  const f = fixture('speaker-a', echo);
+  try {
+    await f.output.refresh();
+    await f.output.bindContext(f.context as unknown as AudioContext).ready;
+    let complete!: () => void;
+    vi.spyOn(f.context, 'setSinkId').mockImplementationOnce(() => new Promise<void>(resolve => { complete = resolve; }));
+    const changing = f.output.select('speaker-b');
+    for (let i = 0; i < 8 && !complete; i++) await Promise.resolve();
+    await f.output.refresh();
+    expect(echo.setMicrophoneEchoOutput).toHaveBeenLastCalledWith('none');
+    f.scope.stop();
+    complete();
+    await changing;
+    expect(echo.setMicrophoneEchoOutput).toHaveBeenLastCalledWith('none');
+  } finally { f.scope.stop(); }
 });

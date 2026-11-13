@@ -1,8 +1,9 @@
-//! 麦克风 48 kHz 单声道 10 ms 块的 Sonora 处理及可变设置应用。
+//! 麦克风 48 kHz 单声道 10 ms 块的 RNNoise、Sonora 增益和输出保护。
 
+use crate::denoise::Denoiser;
+use crate::echo::EchoProcessor;
 use sonora::config::{
-    AdaptiveDigital, GainController2, HighPassFilter, MaxProcessingRate, NoiseSuppression,
-    NoiseSuppressionLevel, Pipeline,
+    AdaptiveDigital, GainController2, HighPassFilter, MaxProcessingRate, Pipeline,
 };
 use sonora::{AudioProcessing, Config, StreamConfig};
 use sonora_agc2::limiter::Limiter;
@@ -45,6 +46,8 @@ impl Default for ProcessingSettings {
 
 pub(super) struct MicrophoneProcessor {
     settings: ProcessingSettings,
+    denoiser: Denoiser,
+    echo: Option<EchoProcessor>,
     audio_processing: AudioProcessing,
     output_limiter: Limiter,
     current_gain: f32,
@@ -52,20 +55,28 @@ pub(super) struct MicrophoneProcessor {
 }
 
 impl MicrophoneProcessor {
+    #[cfg(test)]
     pub(super) fn new(settings: ProcessingSettings) -> Self {
+        Self::try_new(settings).expect("RNNoise allocation")
+    }
+
+    pub(super) fn try_new(settings: ProcessingSettings) -> Option<Self> {
+        let denoiser = Denoiser::new(settings.noise_suppression)?;
         let stream = StreamConfig::new(SAMPLE_RATE, 1);
         let audio_processing = AudioProcessing::builder()
             .config(processing_config(settings))
             .capture_config(stream)
             .render_config(stream)
             .build();
-        Self {
+        Some(Self {
             settings,
+            denoiser,
+            echo: None,
             audio_processing,
             output_limiter: Limiter::new(FRAMES_PER_CHUNK),
             current_gain: settings.input_gain,
             metrics: VoiceMetrics::default(),
-        }
+        })
     }
 
     #[cfg(test)]
@@ -77,8 +88,7 @@ impl MicrophoneProcessor {
         if self.settings == settings {
             return;
         }
-        if self.settings.noise_suppression != settings.noise_suppression
-            || self.settings.auto_gain_control != settings.auto_gain_control
+        if self.settings.auto_gain_control != settings.auto_gain_control
             || self.settings.voice_enhancement != settings.voice_enhancement
         {
             // Sonora 配置在处理线程的块边界应用；处理器实例和采集会话保持不变。
@@ -89,6 +99,24 @@ impl MicrophoneProcessor {
         self.settings = settings;
     }
 
+    pub(super) fn set_echo(&mut self, enabled: bool) {
+        self.echo = enabled.then(EchoProcessor::new);
+    }
+
+    pub(super) fn set_echo_delay(&mut self, delay_ms: i32) -> bool {
+        self.echo
+            .as_mut()
+            .is_some_and(|echo| echo.set_delay(delay_ms))
+    }
+
+    pub(super) fn render_reference(&mut self, input: &[f32; FRAMES_PER_CHUNK]) -> bool {
+        let Some(echo) = &mut self.echo else {
+            return false;
+        };
+        echo.render(input);
+        true
+    }
+
     pub(super) fn process(&mut self, input: &[f32; FRAMES_PER_CHUNK]) -> [f32; FRAMES_PER_CHUNK] {
         let mut clean_input = *input;
         for sample in &mut clean_input {
@@ -97,7 +125,15 @@ impl MicrophoneProcessor {
             }
         }
         let mut output = [0.0_f32; FRAMES_PER_CHUNK];
-        let source = [&clean_input[..]];
+        let echo_cancelled = if let Some(echo) = &mut self.echo {
+            echo.capture(&clean_input)
+        } else {
+            clean_input
+        };
+        let denoised = self
+            .denoiser
+            .process(&echo_cancelled, self.settings.noise_suppression);
+        let source = [&denoised[..]];
         let mut destination = [&mut output[..]];
         self.audio_processing
             .process_capture_f32(&source, &mut destination)
@@ -148,12 +184,13 @@ fn processing_config(settings: ProcessingSettings) -> Config {
             ..Pipeline::default()
         },
         high_pass_filter: settings.voice_enhancement.then(HighPassFilter::default),
-        noise_suppression: settings.noise_suppression.then(|| NoiseSuppression {
-            level: NoiseSuppressionLevel::Moderate,
-            ..NoiseSuppression::default()
-        }),
         gain_controller2: settings.auto_gain_control.then(|| GainController2 {
-            adaptive_digital: Some(AdaptiveDigital::default()),
+            adaptive_digital: Some(AdaptiveDigital {
+                initial_gain_db: 0.0,
+                max_gain_db: 6.0,
+                max_gain_change_db_per_second: 1.0,
+                ..AdaptiveDigital::default()
+            }),
             ..GainController2::default()
         }),
         ..Config::default()
@@ -196,6 +233,7 @@ mod tests {
                 .all(|sample| sample.is_finite() && *sample == 0.0)
         );
 
+        processor.process(&[0.2; FRAMES_PER_CHUNK]);
         let quiet = processor.process(&[0.2; FRAMES_PER_CHUNK]);
         assert!(quiet.iter().all(|sample| (*sample - 0.1).abs() < 1e-6));
         let mut processor = MicrophoneProcessor::new(ProcessingSettings {
@@ -204,6 +242,7 @@ mod tests {
             auto_gain_control: false,
             voice_enhancement: false,
         });
+        processor.process(&[0.8; FRAMES_PER_CHUNK]);
         let loud = processor.process(&[0.8; FRAMES_PER_CHUNK]);
         assert!(
             loud.iter()
@@ -220,6 +259,7 @@ mod tests {
             voice_enhancement: false,
         });
         let quiet = tone(0.05, 500.0, 0);
+        processor.process(&quiet);
         let output = processor.process(&quiet);
         assert!(
             output
@@ -235,7 +275,7 @@ mod tests {
                     .all(|value| value.is_finite() && value.abs() <= super::OUTPUT_CEILING)
             );
         }
-        let input = tone(0.8, 500.0, 99);
+        let input = tone(0.8, 500.0, 98);
         let scale = loud
             .iter()
             .zip(input)
@@ -287,7 +327,7 @@ mod tests {
         );
         processor.set_settings(settings);
         let restored = processor.process(&[0.2; FRAMES_PER_CHUNK]);
-        assert!(restored[0].abs() < 0.001);
+        assert!((restored[0] - 0.8 / FRAMES_PER_CHUNK as f32).abs() < 1e-6);
         assert!(
             restored
                 .iter()
@@ -409,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_gain_control_raises_quiet_voice_and_limits_sudden_loud_input() {
+    fn automatic_gain_control_starts_gently_and_limits_sudden_loud_input() {
         let mut automatic_gain = MicrophoneProcessor::new(ProcessingSettings {
             input_gain: 1.0,
             noise_suppression: false,
@@ -428,8 +468,12 @@ mod tests {
             let quiet = tone(0.003, 220.0, block);
             automatic_output = automatic_gain.process(&quiet);
             fixed_output = fixed_gain.process(&quiet);
+            if block == 1 {
+                assert!(rms(&automatic_output) <= rms(&fixed_output) * 1.01);
+            }
         }
-        assert!(rms(&automatic_output) > rms(&fixed_output) * 1.5);
+        let gain = rms(&automatic_output) / rms(&fixed_output);
+        assert!((1.0..=2.0).contains(&gain), "gentle AGC gain was {gain}");
 
         for block in 500..520 {
             automatic_output = automatic_gain.process(&tone(1.5, 220.0, block));
@@ -465,7 +509,8 @@ mod tests {
             auto_output = toggled.process(&input);
             fixed_output = fixed.process(&input);
         }
-        assert!(rms(&auto_output) > rms(&fixed_output) * 1.5);
+        let gain = rms(&auto_output) / rms(&fixed_output);
+        assert!((1.0..=2.0).contains(&gain), "gentle AGC gain was {gain}");
 
         toggled.set_settings(initial);
         let input = tone(0.003, 220.0, 500);

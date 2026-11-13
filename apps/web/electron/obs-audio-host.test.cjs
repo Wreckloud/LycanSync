@@ -8,17 +8,17 @@ const { createNativeMicrophone, validMicrophoneSettings } = require('./native-mi
 const { validNativeAudioSessionId } = require('./native-audio-session.cjs');
 
 const pipeId = '12345678-1234-1234-1234-123456789abc';
-const settings = { inputGain: 1, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true };
-const ready = { event: 'ready', obsVersion: '32.2.2', processing: 'sonora-0.2.0',
+const settings = { inputGain: 1, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true, echoCancellation: true };
+const ready = { event: 'ready', obsVersion: '32.2.2', processing: 'aec3+rnnoise-obs32.2.2+sonora-0.2.0',
   sampleRate: 48000, channels: 1, bitsPerSample: 32, nominalChunkMs: 10 };
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function fixture(context, mode = {}) {
-  const children = [], failures = [], diagnostics = [], spawns = [];
+  const children = [], failures = [], diagnostics = [], spawns = [], echoStates = [];
   const manager = new ObsAudioHostManager({ platform: 'win32', executablePath: 'C:\\obs\\audio.exe',
     modulePath: 'C:\\obs\\win-wasapi.dll', dataPath: 'C:\\obs\\data', configPath: 'C:\\app\\data\\obs-audio',
     startTimeoutMs: 60, stopTimeoutMs: 20, killTimeoutMs: 20, requestTimeoutMs: 20,
-    onFailure: (...args) => failures.push(args), onDiagnostic: entry => diagnostics.push(entry),
+    onFailure: (...args) => failures.push(args), onEchoState: (...args) => echoStates.push(args), onDiagnostic: entry => diagnostics.push(entry),
     spawnProcess: (...args) => {
       spawns.push(args);
       const child = new EventEmitter();
@@ -34,8 +34,11 @@ function fixture(context, mode = {}) {
         if (command.startsWith('configure|') && !mode.configureHang) queueMicrotask(() => {
           child.send({ event: 'configured', requestId: Number(command.split('|')[1]) });
         });
+        if (command.startsWith('reference|') && !mode.referenceHang) queueMicrotask(() => {
+          child.send({ event: 'referenceConfigured', requestId: Number(command.split('|')[1]) });
+        });
         if (command.startsWith('statistics|') && !mode.statisticsHang) queueMicrotask(() => {
-          child.send({ event: 'statistics', requestId: Number(command.split('|')[1]), framesReceived: 960, droppedChunks: 2, sourceState: 1, sourceFrames: 960, pushToTalk: false, transmissionAllowed: true, processingMetrics: mode.processingMetrics });
+          child.send({ event: 'statistics', requestId: Number(command.split('|')[1]), framesReceived: 960, droppedChunks: 2, sourceState: 1, sourceFrames: 960, pushToTalk: false, transmissionAllowed: true, processingMetrics: mode.processingMetrics, echoMetrics: mode.echoMetrics });
         });
       } });
       child.kill = () => { child.kills++; if (!mode.killHang) queueMicrotask(() => child.emit('close', 1)); return true; };
@@ -46,7 +49,7 @@ function fixture(context, mode = {}) {
   context.after(() => { for (const child of children) child.emit('close', 0); });
   const start = () => manager.start(pipeId, 'voice-session', settings);
   const started = async () => { const result = start(); children.at(-1).send(ready); return result; };
-  return { manager, children, failures, diagnostics, spawns, start, started };
+  return { manager, children, failures, diagnostics, spawns, echoStates, start, started };
 }
 
 test('麦克风按需启动，首块确认、配置和正常停止只持有一个音频宿主', async context => {
@@ -58,10 +61,10 @@ test('麦克风按需启动，首块确认、配置和正常停止只持有一�
   await delay(1); assert.equal(settled, false);
   children[0].send(ready);
   assert.equal((await pending).sampleRate, 48000);
-  assert.deepEqual(spawns[0][1], ['C:\\obs\\win-wasapi.dll', 'C:\\obs\\data', 'C:\\app\\data\\obs-audio', pipeId, '1|111', 'default', '0']);
+  assert.deepEqual(spawns[0][1], ['C:\\obs\\win-wasapi.dll', 'C:\\obs\\data', 'C:\\app\\data\\obs-audio', pipeId, '1|1111', 'default', '0', 'none']);
   assert.equal(spawns[0][2].windowsHide, true);
   assert.deepEqual(await manager.configure('voice-session', { ...settings, inputGain: 0.6 }), { changed: true });
-  assert.deepEqual(await manager.getDiagnostics('voice-session'), { framesReceived: 960, droppedChunks: 2, sourceState: 1, sourceFrames: 960, pushToTalk: false, transmissionAllowed: true, processingMetrics: null });
+  assert.deepEqual(await manager.getDiagnostics('voice-session'), { framesReceived: 960, droppedChunks: 2, sourceState: 1, sourceFrames: 960, pushToTalk: false, transmissionAllowed: true, processingMetrics: null, echoMetrics: null });
   assert.equal(diagnostics[0].stage, 'microphoneReady');
   assert.deepEqual(await manager.stop('voice-session'), { changed: true });
   assert.deepEqual(await manager.stop('voice-session'), { changed: false });
@@ -111,7 +114,7 @@ test('指定端点只传给本次采集，不写入诊断；无效端点参数�
   const pending = manager.start(pipeId, 'selected-session', settings, selected);
   children[0].send(ready);
   await pending;
-  assert.equal(spawns[0][1].at(-2), selected);
+  assert.equal(spawns[0][1].at(-3), selected);
   assert.ok(!JSON.stringify(diagnostics).includes(selected));
   await manager.stop('selected-session');
   await assert.rejects(manager.start(pipeId, 'invalid-session', settings, 'bad\nendpoint'), /invalidMicrophoneCaptureStart/);
@@ -143,11 +146,14 @@ test('正常停止后可重启，旧子进程关闭不能清理新会话', async
   await assert.rejects(manager.start(pipeId, 'new', settings), /obsAudioHostDisposed/);
 });
 
-test('停止未确认时拒绝下一次采集，不能叠加进程', async context => {
+test('停止未确认时拒绝下一次采集，不能叠加进程', { timeout: 2000 }, async context => {
+  // 宿主停止计时器不保活进程；受控假进程也须像真实子进程一样保持事件循环。
+  const keepAlive = setInterval(() => {}, 1000);
+  context.after(() => clearInterval(keepAlive));
   const { manager, children, started } = fixture(context, { stopHang: true, killHang: true });
   await started();
   const stopped = assert.rejects(manager.stop('voice-session'), /microphoneCaptureStopFailed/);
-  await delay(70); await stopped;
+  await stopped;
   assert.equal(children[0].kills, 1);
   await assert.rejects(manager.start(pipeId, 'new', settings), /microphoneCaptureAlreadyRunning/);
   assert.equal(children.length, 1);
@@ -564,4 +570,45 @@ test('管道故障保留固定阶段和 Win32 错误，不透传设备或任意�
   await delay(0);
   assert.deepEqual(second.diagnostics[1], { stage: 'microphoneSourceFailed', code: 'microphoneCapturePipeFailed' });
   assert.doesNotMatch(JSON.stringify([f.diagnostics, second.diagnostics]), /private-/);
+});
+
+
+test('回声参考失败只通知状态，不终止麦克风；停止后的状态不会串到新会话', async context => {
+  const f = fixture(context);
+  await f.started();
+  f.children[0].send({ event: 'echo', status: 'unavailable' });
+  assert.deepEqual(f.echoStates, [['voice-session', 'unavailable']]);
+  assert.equal(f.failures.length, 0);
+  assert.equal(f.children[0].commands.includes('stop'), false);
+  f.children[0].send({ event: 'echo', status: 'ready' });
+  assert.deepEqual(f.echoStates.at(-1), ['voice-session', 'ready']);
+  await f.manager.stop('voice-session');
+  f.children[0].send({ event: 'echo', status: 'unavailable' });
+  assert.equal(f.echoStates.length, 2);
+});
+
+test('启动期间改变输出设备，首块就绪后同步最新参考，不重启采集', async context => {
+  const f = fixture(context);
+  await f.manager.setReference('name:扬声器一');
+  const pending = f.start();
+  assert.equal(f.spawns[0][1].at(-1), 'name:扬声器一');
+  await f.manager.setReference('name:扬声器二');
+  f.children[0].send(ready);
+  await pending;
+  await delay(1);
+  assert.equal(f.children.length, 1);
+  assert.ok(f.children[0].commands.some(command => command.endsWith('|name:扬声器二')));
+  await assert.rejects(f.manager.setReference('name:bad\nstop'), /invalidMicrophoneEchoOutput/);
+});
+
+
+test('回声诊断只保留状态、帧数和延迟，不传出参考内容或设备标识', async context => {
+  const metrics = { enabled: true, active: true, referenceFrames: 960, resets: 1, delayMs: 20 };
+  const mode = { echoMetrics: { ...metrics, deviceId: 'private-device', pcm: 'private-audio' } };
+  const f = fixture(context, mode);
+  await f.started();
+  assert.deepEqual((await f.manager.getDiagnostics('voice-session')).echoMetrics, metrics);
+  mode.echoMetrics.delayMs = 501;
+  assert.equal((await f.manager.getDiagnostics('voice-session')).echoMetrics, null);
+  assert.equal(f.failures.length, 0);
 });

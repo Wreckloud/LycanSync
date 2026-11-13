@@ -255,6 +255,7 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
     ipcRenderer.on('media:native-screen-audio-error', listener);
     return () => ipcRenderer.removeListener('media:native-screen-audio-error', listener);
   },
+  setMicrophoneEchoOutput: selector => ipcRenderer.invoke('media:microphone-echo-output', selector),
   listMicrophoneDevices: () => ipcRenderer.invoke('media:microphone-devices'),
   startNativeMicrophone: (sessionId, settings, deviceId, pushToTalk) => ipcRenderer.invoke('media:native-microphone:start', sessionId, settings, deviceId, pushToTalk),
   setNativeMicrophoneTransmission: (sessionId, pushToTalk, held, epoch) => ipcRenderer.send('media:native-microphone:transmission', sessionId, pushToTalk, held, epoch),
@@ -267,6 +268,11 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   },
   acknowledgeNativeMicrophoneChunk: (sessionId, sequence, droppedChunks) =>
     ipcRenderer.send('media:native-microphone:consumed', sessionId, sequence, droppedChunks),
+  onNativeMicrophoneEcho: (callback) => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on('media:native-microphone-echo', listener);
+    return () => ipcRenderer.removeListener('media:native-microphone-echo', listener);
+  },
   onNativeMicrophoneError: (callback) => {
     const listener = (_event, failure) => callback(failure);
     ipcRenderer.on('media:native-microphone-error', listener);

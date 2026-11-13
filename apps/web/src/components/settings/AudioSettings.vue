@@ -26,7 +26,7 @@ const props = defineProps<{
 const processing = computed(() => props.preferences.processing);
 const supportedProcessing = computed(() => [processing.value.noiseSuppression,
   processing.value.autoGainControl, processing.value.voiceEnhancement,
-  ...(props.desktop ? [] : [processing.value.echoCancellation])]);
+  processing.value.echoCancellation]);
 const processingEnabled = computed(() => supportedProcessing.value.every(Boolean));
 const processingPartial = computed(() => !processingEnabled.value && supportedProcessing.value.some(Boolean));
 const inputGain = computed(() => props.preferences.inputGain.value);
@@ -120,7 +120,7 @@ function updateInputGain(event: Event) {
     <section class="settings-block">
       <h2>声音处理</h2>
       <label class="settings-toggle">
-        <span><strong>智能声音处理</strong><small>减少环境噪声、平衡麦克风音量并过滤低频杂音。</small></span>
+        <span><strong>智能声音处理</strong><small>减少外放回声和环境噪声，让说话音量更平稳。</small></span>
         <input type="checkbox" aria-label="智能声音处理" :checked="processingEnabled" :indeterminate="processingPartial"
           :aria-checked="processingPartial ? 'mixed' : processingEnabled" @change="updateProcessing" />
       </label>

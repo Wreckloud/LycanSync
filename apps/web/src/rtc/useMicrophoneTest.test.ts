@@ -153,13 +153,13 @@ describe('独立麦克风测试', () => {
     const { test, scope, preferences } = setup(true);
     preferences.setInputGain(0.5);
     await test.start();
-    expect(mocks.nativeStart).toHaveBeenCalledWith({ inputGain: 0.5, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true });
+    expect(mocks.nativeStart).toHaveBeenCalledWith({ inputGain: 0.5, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true, echoCancellation: true });
     expect(mocks.createTrack).not.toHaveBeenCalled();
     preferences.setInputGain(1.5);
     preferences.setProcessing({ ...preferences.processing, noiseSuppression: false });
     preferences.setOutputVolume(0.5);
     await nextTick();
-    expect(mocks.nativeConfigure).toHaveBeenLastCalledWith({ inputGain: 1.5, noiseSuppression: false, autoGainControl: true, voiceEnhancement: true });
+    expect(mocks.nativeConfigure).toHaveBeenLastCalledWith({ inputGain: 1.5, noiseSuppression: false, autoGainControl: true, voiceEnhancement: true, echoCancellation: true });
     expect(mocks.setVolume).toHaveBeenLastCalledWith(0.5);
     await test.stop();
     expect(mocks.nativeStop).toHaveBeenCalledOnce();

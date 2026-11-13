@@ -13,7 +13,7 @@ import { MicrophoneAudioProcessor } from './microphoneAudioProcessor';
 import { NativeScreenVideoSession } from './nativeScreenVideo';
 import type { ScreenSharePreferences } from '../settings/screenSharePreferences';
 import { NativeScreenAudioSession } from './nativeScreenAudio';
-import { NativeMicrophoneAudioSession, type NativeMicrophoneSettings } from './nativeMicrophoneAudio';
+import { MICROPHONE_ECHO_NOTICE, NativeMicrophoneAudioSession, type NativeMicrophoneSettings } from './nativeMicrophoneAudio';
 import { nativeScreenAudioMode, type NativeScreenAudioMode } from './nativeScreenAudioMode';
 import { REMOTE_CONTROL_TOPIC, type RemoteControlInput } from './remoteControl';
 import { RemoteControlSession, type RemoteControlShare } from './remoteControlSession';
@@ -852,11 +852,15 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           inputGain: microphoneInputGain,
           noiseSuppression: microphoneProcessing.noiseSuppression,
           autoGainControl: microphoneProcessing.autoGainControl,
-          voiceEnhancement: microphoneProcessing.voiceEnhancement,
+          voiceEnhancement: microphoneProcessing.voiceEnhancement, echoCancellation: microphoneProcessing.echoCancellation,
         };
         nativeMicrophone = new NativeMicrophoneAudioSession(desktop, {
           deviceId: microphoneInputDeviceId,
           pushToTalk: microphonePushToTalk,
+          onWarning: (message) => {
+            if (nativeMicrophoneSession !== nativeMicrophone || activeRoom.value !== currentRoom) return;
+            if (message || notice.value === MICROPHONE_ECHO_NOTICE) notice.value = message;
+          },
           onError: (code) => {
             if (nativeMicrophoneSession !== nativeMicrophone || activeRoom.value !== currentRoom) return;
             microphoneVersion++;
@@ -1432,7 +1436,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         inputGain: microphoneInputGain,
         noiseSuppression: microphoneProcessing.noiseSuppression,
         autoGainControl: microphoneProcessing.autoGainControl,
-        voiceEnhancement: microphoneProcessing.voiceEnhancement,
+        voiceEnhancement: microphoneProcessing.voiceEnhancement, echoCancellation: microphoneProcessing.echoCancellation,
       }).catch(() => {
         if (requestRoom && activeRoom.value === requestRoom && nativeMicrophoneSession === requestSession) {
           notice.value = '麦克风设置未能应用。';
@@ -1452,7 +1456,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           inputGain: microphoneInputGain,
           noiseSuppression: settings.noiseSuppression,
           autoGainControl: settings.autoGainControl,
-          voiceEnhancement: settings.voiceEnhancement,
+          voiceEnhancement: settings.voiceEnhancement, echoCancellation: settings.echoCancellation,
         });
       } catch {
         if (requestRoom && activeRoom.value === requestRoom && nativeMicrophoneSession === requestSession) {

@@ -78,9 +78,9 @@ const audioPreferences = useAudioPreferences(props.user.id);
 const { inputGain, outputVolume, screenShareVolume, voiceVolumeBalance } = audioPreferences;
 const audioProcessing = audioPreferences.processing;
 const callSoundPreferences = useCallSoundPreferences(props.user.id);
-const audioOutput = useAudioOutput(audioPreferences);
-const callSounds = useCallSounds(outputVolume, callSoundPreferences, audioOutput);
 const desktop = window.lycanDesktop;
+const audioOutput = useAudioOutput(audioPreferences, navigator.mediaDevices, desktop);
+const callSounds = useCallSounds(outputVolume, callSoundPreferences, audioOutput);
 const { notice: viewerNotice, noticeEvent: viewerNoticeEvent } = useNotice();
 const mainWindowVisible = ref(true);
 const windowLayout = observeWindowLayoutRestore(window);
@@ -910,7 +910,7 @@ function updateInputGain(volume: number) {
 
 const supportedMicrophoneProcessing = computed(() => [audioPreferences.processing.noiseSuppression,
   audioPreferences.processing.autoGainControl, audioPreferences.processing.voiceEnhancement,
-  ...(desktop ? [] : [audioPreferences.processing.echoCancellation])]);
+  audioPreferences.processing.echoCancellation]);
 const microphoneProcessingEnabled = computed(() => supportedMicrophoneProcessing.value.every(Boolean));
 const microphoneProcessingPartial = computed(() => !microphoneProcessingEnabled.value && supportedMicrophoneProcessing.value.some(Boolean));
 function updateMicrophoneProcessing(enabled: boolean) {
