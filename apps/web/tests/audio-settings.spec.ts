@@ -66,8 +66,8 @@ createApp({ setup() {
     await expect(toggle).not.toBeChecked();
     await expect(toggle).toHaveJSProperty('indeterminate', false);
     await expect(page.getByTestId('applied-processing')).toHaveText('[]');
-    const sharedVolume = page.getByRole('slider', { name: '共享播放音量', exact: true });
-    const sharedVolumeToggle = page.locator('.disclosure-trigger').filter({ hasText: '共享播放音量' });
+    const sharedVolume = page.getByRole('slider', { name: '共享画面音量', exact: true });
+    const sharedVolumeToggle = page.locator('.disclosure-trigger').filter({ hasText: '观看共享画面的音量' });
     await expect(sharedVolume).toBeHidden();
     await expect(sharedVolumeToggle).toContainText('60%');
     await sharedVolumeToggle.click();
@@ -79,13 +79,24 @@ createApp({ setup() {
     await sharedVolumeToggle.click();
     await expect.poll(() => page.locator('.audio-settings').evaluate(element => element.getAnimations({ subtree: true }).length)).toBe(0);
     await page.screenshot({ path: testInfo.outputPath('audio-reset-buttons.png'), fullPage: true });
-    for (const [name, sliderName] of [['重置麦克风输入音量', '麦克风输入音量'], ['重置总输出音量', 'lycanclaw 总输出音量'], ['重置共享播放音量', '共享播放音量']]) {
+    for (const [name, sliderName] of [['重置麦克风输入音量', '麦克风输入音量'], ['重置总输出音量', 'lycanclaw 总输出音量'], ['重置共享画面音量', '共享画面音量']]) {
       const slider = page.getByRole('slider', { name: sliderName, exact: true });
       const measure = () => slider.evaluate(element => {
         const bounds = element.getBoundingClientRect();
         return { x: bounds.x + scrollX, y: bounds.y + scrollY, width: bounds.width, height: bounds.height };
       });
       const position = await measure();
+      const reset = page.locator(`.range-reset[aria-label="${name}"]`);
+      const resetPosition = () => reset.evaluate(element => {
+        const bounds = element.getBoundingClientRect();
+        return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+      });
+      const fixedPosition = await resetPosition();
+      for (const value of ['0', '0.05', '0.55', '1', '2']) {
+        await slider.fill(value);
+        await expect(slider).toHaveValue(value);
+        expect(await resetPosition(), `${name}: ${value}`).toEqual(fixedPosition);
+      }
       await page.getByRole('button', { name, exact: true }).click();
       await expect(slider).toHaveValue('1');
       await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
@@ -93,7 +104,28 @@ createApp({ setup() {
     }
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem(
       'lycansync.audio-preferences.v1.audio-settings-test')!))).toMatchObject({ inputGain: 1, outputVolume: 1, screenShareVolume: 1 });
-    if (desktop) await expect(page.getByRole('link', { name: 'RNNoise 开源项目' })).toHaveAttribute('href', 'https://github.com/xiph/rnnoise');
+    if (desktop) {
+      const projectLink = page.getByRole('link', { name: 'RNNoise 开源项目' });
+      await expect(projectLink).toHaveAttribute('href', 'https://github.com/xiph/rnnoise');
+      await page.evaluate(() => {
+        Object.defineProperty(window, 'lycanDesktop', { configurable: true, value: {
+          openExternal: async (url: string) => { document.body.dataset.externalUrl = url; },
+        } });
+      });
+      await projectLink.click();
+      await expect(page.locator('body')).toHaveAttribute('data-external-url', 'https://github.com/xiph/rnnoise');
+      await page.evaluate(() => {
+        window.lycanDesktop!.openExternal = async () => { throw new Error('test failure'); };
+      });
+      await projectLink.click();
+      await expect(page.getByText('无法打开默认浏览器。', { exact: true })).toBeVisible();
+      await page.evaluate(() => {
+        window.lycanDesktop!.openExternal = async () => {};
+      });
+      await projectLink.click();
+      await expect(page.getByText('无法打开默认浏览器。', { exact: true })).toBeHidden();
+      await page.evaluate(() => { Reflect.deleteProperty(window, 'lycanDesktop'); });
+    }
     await expect(page.getByRole('button', { name: '刷新设备', exact: true })).toHaveCount(0);
     const counts = () => page.getByTestId('device-refreshes').evaluate(element => JSON.parse(element.textContent!) as { input: number; output: number });
     const initial = await counts();

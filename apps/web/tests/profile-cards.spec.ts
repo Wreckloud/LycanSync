@@ -306,7 +306,7 @@ test('账号设置退出也需确认，Esc 取消保留当前页面且不注销'
   await page.route('**/api/auth/logout', route => { logoutRequests++; return route.fulfill({ status: 204 }); });
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  const exit = page.locator('.account-session').getByRole('button', { name: '退出登录', exact: true });
+  const exit = page.locator('.account-settings').getByRole('button', { name: '退出登录', exact: true });
   await exit.click();
   const confirmation = page.getByRole('dialog', { name: '退出当前账号？', exact: true });
   await expect(page.locator('.dialog-backdrop')).toHaveCSS('opacity', '1');
@@ -516,11 +516,18 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
       prepareCapture: async () => {}, getProcessMetrics: async () => ({ cpuPercent: 0, memoryMb: 0 }),
       getCurrentActivity: async () => null, onActivityChange: () => () => {},
       getNativeMediaCapabilities: async () => ({ screenShareAudioCapture: { available: true, reason: 'windowsApplicationLoopbackProcessTree' } }),
+      setMicrophoneEchoOutput: async () => ({ changed: false }),
       getRecordingSettings: async () => ({ directory: 'test-recordings', applicationAudio: true, microphone: false, friends: false,
-        quality: 'standard', replaySeconds: 60 }),
+        videoHeight: 1080, videoFps: 60, replaySeconds: 60 }),
       getRecordingStatus: async () => ({ holdingResources: false, phase: 'idle', recordingId: null, startedAt: null,
         bytes: 0, error: null, saved: false, continuing: false, applicationAudio: true }),
-      listRecordings: async () => [], onRecordingState: () => () => {},
+      getRecordingLibrary: async () => {
+        const reads = Number(localStorage.getItem('test.libraryReads') ?? 0) + 1;
+        localStorage.setItem('test.libraryReads', String(reads));
+        if (reads === 1) throw new Error('test read failure');
+        return { items: [], hasMore: false };
+      },
+      onRecordingState: () => () => {},
     } });
   });
   await page.goto('/');
@@ -538,12 +545,33 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
   await expect(page.getByRole('checkbox', { name: '共享声音', exact: true })).not.toBeChecked();
   await expect(page.getByRole('checkbox', { name: /隐藏共享画面中的光标/ })).toBeChecked();
   await expect(page.getByRole('heading', { name: '录制内容', exact: true })).toBeVisible();
+  await expect(page.locator('.settings-recording-page h2')).toHaveText(['共享画面', '共享录制', '即时回放', '录像管理']);
+  await expect(page.getByRole('heading', { name: '当前录像', exact: true })).toHaveCount(0);
+  await expect(page.locator('.settings-recording-page').getByRole('button', { name: '开始录制', exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('lycansync.screen-share-quality')!).quality)).toBe('highFrameRate');
   await page.setViewportSize({ width: 1280, height: 820 });
   const shareTogglePositions = await page.locator('.settings-toggle input[type="checkbox"]:visible').evaluateAll(inputs => inputs.map(input => input.getBoundingClientRect().right));
   expect(shareTogglePositions).toHaveLength(5);
   expect(Math.max(...shareTogglePositions) - Math.min(...shareTogglePositions)).toBeLessThan(1);
   await page.screenshot({ path: testInfo.outputPath('sharing-and-recording.png') });
+  expect(await page.evaluate(() => localStorage.getItem('test.libraryReads'))).toBeNull();
+  const managerButton = page.getByRole('button', { name: '打开本地录像管理器', exact: true });
+  await managerButton.click();
+  const manager = page.getByRole('dialog', { name: '本地录像管理器', exact: true });
+  await expect(manager).toBeVisible();
+  await expect(manager.getByText('无法读取录像列表，请检查安装目录的读写权限后重试。')).toBeVisible();
+  await manager.getByRole('button', { name: '重新读取', exact: true }).click();
+  await expect(manager.getByText('暂无录像记录。旧版保存的录像仍可在录像目录中找到。')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('recording-library.png') });
+  await page.keyboard.press('Escape');
+  await expect(manager).toHaveCount(0);
+  await expect(managerButton).toBeFocused();
+  await managerButton.click();
+  await expect(manager.getByText('暂无录像记录。旧版保存的录像仍可在录像目录中找到。')).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('test.libraryReads'))).toBe('3');
+  await manager.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(manager).toHaveCount(0);
+  await expect(managerButton).toBeFocused();
 });
 
 test('本机提示音只提供统一音量和逐项开关，重开后恢复，保留入场音效操作', async ({ page }) => {
@@ -556,15 +584,32 @@ test('本机提示音只提供统一音量和逐项开关，重开后恢复，�
   await page.getByRole('slider', { name: '提示音音量', exact: true }).fill('40');
   await expect(page.getByRole('checkbox', { name: '成员加入语音', exact: true })).toBeChecked();
   await expect(page.getByRole('button', { name: '选择音效', exact: true })).toBeVisible();
-  const soundTogglePositions = await page.locator('.call-sound-settings input[type="checkbox"]').evaluateAll(inputs => inputs.map(input => input.getBoundingClientRect().right));
+  await expect(page.getByRole('heading', { name: '自定义音效', exact: true })).toBeVisible();
+  const moreSounds = page.getByRole('button', { name: '展开其他 6 项提示音', exact: true });
+  await expect(page.getByRole('checkbox', { name: '开始共享', exact: true })).toBeHidden();
+  await moreSounds.click();
+  const sharingSound = page.getByRole('checkbox', { name: '开始共享', exact: true });
+  await expect(sharingSound).toBeVisible();
+  await sharingSound.uncheck();
+  await expect.poll(() => page.locator('.sound-settings').evaluate(element => element.getAnimations({ subtree: true }).length)).toBe(0);
+  const soundTogglePositions = await page.locator('.sound-settings input[type="checkbox"]').evaluateAll(inputs => inputs.map(input => input.getBoundingClientRect().right));
   expect(soundTogglePositions).toHaveLength(11);
   expect(Math.max(...soundTogglePositions) - Math.min(...soundTogglePositions)).toBeLessThan(1);
   await page.screenshot({ path: test.info().outputPath('call-sound-settings.png') });
+  await page.getByRole('button', { name: '收起其他提示音', exact: true }).click();
+  await expect(sharingSound).toBeHidden();
+  await expect.poll(() => page.locator('.sound-settings').evaluate(element => element.getAnimations({ subtree: true }).length)).toBe(0);
+  await page.screenshot({ path: test.info().outputPath('call-sound-settings-collapsed.png') });
+  await moreSounds.click();
+  await expect(sharingSound).not.toBeChecked();
   await page.reload();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '音效', exact: true }).click();
   await expect(muted).not.toBeChecked();
   await expect(page.getByRole('slider', { name: '提示音音量', exact: true })).toHaveValue('40');
+  await expect(sharingSound).toBeHidden();
+  await moreSounds.click();
+  await expect(sharingSound).not.toBeChecked();
 });
 
 test('设备选择保存在本机，设备丢失明确提示且不换默认，不触发采集', async ({ page }) => {

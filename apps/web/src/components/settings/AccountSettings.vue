@@ -71,5 +71,7 @@ watch(() => props.active, (active) => {
 
 <style scoped>
 .account-settings { max-width: 820px; }
+.account-settings :deep(.account-operation > .settings-action-row > button),
+.account-settings :deep(.account-operation > .settings-action-row > .settings-actions > button) { min-width: 128px; white-space: nowrap; }
 @media (max-width: 520px) { .account-operation .settings-action-row { align-items: flex-start; } }
 </style>

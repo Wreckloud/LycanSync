@@ -100,13 +100,19 @@ watch(() => props.output?.available.value ?? true, (available) => { if (!availab
 <template>
   <div class="settings-section sound-settings">
     <CallSoundSettings :active="active" :preferences="preferences" :sounds="sounds" />
-    <p class="settings-intro">选择加入语音时播放给朋友的音效。上传后自动调整音量并转换格式，处理完成后保存在这台设备。</p>
     <section class="settings-block">
-      <h2>入场音效</h2>
+      <h2>自定义音效</h2>
+      <label class="settings-toggle">
+        <span><strong>播放成员自定义入场音效</strong><small>关闭后使用默认入场提示音；关闭“成员加入语音”后，两种音效都不播放。</small></span>
+        <input type="checkbox" :checked="preferences.customEntrances.value"
+          @change="preferences.setCustomEntrances(($event.target as HTMLInputElement).checked)" />
+      </label>
+      <h3>我的入场音效</h3>
+      <p>选择加入语音时播放给朋友的音效，保存在这台设备。</p>
       <p>{{ sound ? sound.name : '尚未选择入场音效' }}</p>
       <small v-if="sound">格式：{{ sound.mimeType }} · 文件大小：{{ soundSize }} 字节</small>
       <small>支持 MP3、OGG、WAV、WebM；最长 {{ ENTRANCE_SOUND_MAX_DURATION_SECONDS }} 秒，最大 {{ Math.round(ENTRANCE_SOUND_MAX_BYTES / 1024) }} KB。</small>
-      <small>音效处理为单声道 WAV，朋友可在提示音设置中调整播放。</small>
+      <small>上传后自动调整音量，朋友可选择是否播放。</small>
       <div class="settings-actions sound-actions">
         <input ref="input" type="file" hidden aria-label="选择入场音效"
           accept="audio/mpeg,audio/ogg,audio/wav,audio/webm,.mp3,.ogg,.wav,.webm" @change="chooseSound" />
@@ -121,5 +127,6 @@ watch(() => props.output?.available.value ?? true, (available) => { if (!availab
 
 <style scoped>
 .sound-settings { max-width: 760px; }
+.sound-settings h3 { margin: 8px 0 0; font-size: 14px; font-weight: 600; }
 .sound-actions { justify-content: flex-start; }
 </style>
