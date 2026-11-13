@@ -5,7 +5,7 @@ export const CALL_SOUND_EVENTS = [
   { id: 'participantJoined', label: '成员加入语音' }, { id: 'participantLeft', label: '成员离开语音' },
   { id: 'screenShareStarted', label: '开始共享' }, { id: 'screenShareStopped', label: '停止共享' },
   { id: 'microphoneOn', label: '麦克风恢复' }, { id: 'microphoneOff', label: '麦克风静音' },
-  { id: 'listeningOn', label: '恢复收听' }, { id: 'listeningOff', label: '停止收听' },
+  { id: 'recordingStarted', label: '开始录制' }, { id: 'recordingStopped', label: '结束录制' },
 ] as const;
 export type CallSoundEvent = typeof CALL_SOUND_EVENTS[number]['id'];
 
@@ -23,10 +23,12 @@ export function useCallSoundPreferences(userId: string, storage: Pick<Storage, '
       const parsed = JSON.parse(stored);
       if (!parsed || typeof parsed.volume !== 'number' || !Number.isFinite(parsed.volume) || parsed.volume < 0 || parsed.volume > 1
           || typeof parsed.customEntrances !== 'boolean' || !parsed.enabled
-          || CALL_SOUND_EVENTS.some(event => typeof parsed.enabled[event.id] !== 'boolean')) throw new Error('invalid sound preferences');
+          || CALL_SOUND_EVENTS.some(event => typeof parsed.enabled[event.id] !== 'boolean'
+            && !(event.id.startsWith('recording') && parsed.enabled[event.id] === undefined))) throw new Error('invalid sound preferences');
       volume.value = parsed.volume;
       customEntrances.value = parsed.customEntrances;
-      CALL_SOUND_EVENTS.forEach(event => { enabled[event.id] = parsed.enabled[event.id]; });
+      // 旧版没有录制提示，新增项按默认开启；其余开关和音量仍沿用用户设置。
+      CALL_SOUND_EVENTS.forEach(event => { if (typeof parsed.enabled[event.id] === 'boolean') enabled[event.id] = parsed.enabled[event.id]; });
     }
   } catch { error.value = '无法读取提示音设置，暂用默认音效，请重新设置。'; }
 

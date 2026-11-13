@@ -14,11 +14,11 @@ const ready = { event: 'ready', obsVersion: '32.2.2', processing: 'aec3+rnnoise-
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function fixture(context, mode = {}) {
-  const children = [], failures = [], diagnostics = [], spawns = [], echoStates = [];
+  const children = [], failures = [], diagnostics = [], spawns = [];
   const manager = new ObsAudioHostManager({ platform: 'win32', executablePath: 'C:\\obs\\audio.exe',
     modulePath: 'C:\\obs\\win-wasapi.dll', dataPath: 'C:\\obs\\data', configPath: 'C:\\app\\data\\obs-audio',
     startTimeoutMs: 60, stopTimeoutMs: 20, killTimeoutMs: 20, requestTimeoutMs: 20,
-    onFailure: (...args) => failures.push(args), onEchoState: (...args) => echoStates.push(args), onDiagnostic: entry => diagnostics.push(entry),
+    onFailure: (...args) => failures.push(args), onDiagnostic: entry => diagnostics.push(entry),
     spawnProcess: (...args) => {
       spawns.push(args);
       const child = new EventEmitter();
@@ -49,7 +49,7 @@ function fixture(context, mode = {}) {
   context.after(() => { for (const child of children) child.emit('close', 0); });
   const start = () => manager.start(pipeId, 'voice-session', settings);
   const started = async () => { const result = start(); children.at(-1).send(ready); return result; };
-  return { manager, children, failures, diagnostics, spawns, echoStates, start, started };
+  return { manager, children, failures, diagnostics, spawns, start, started };
 }
 
 test('麦克风按需启动，首块确认、配置和正常停止只持有一个音频宿主', async context => {
@@ -573,18 +573,18 @@ test('管道故障保留固定阶段和 Win32 错误，不透传设备或任意�
 });
 
 
-test('回声参考失败只通知状态，不终止麦克风；停止后的状态不会串到新会话', async context => {
+test('回声参考失败只记录诊断，不终止麦克风；停止后的状态不再记录', async context => {
   const f = fixture(context);
   await f.started();
   f.children[0].send({ event: 'echo', status: 'unavailable' });
-  assert.deepEqual(f.echoStates, [['voice-session', 'unavailable']]);
+  assert.deepEqual(f.diagnostics.at(-1), { stage: 'microphoneEchoState', status: 'unavailable' });
   assert.equal(f.failures.length, 0);
   assert.equal(f.children[0].commands.includes('stop'), false);
   f.children[0].send({ event: 'echo', status: 'ready' });
-  assert.deepEqual(f.echoStates.at(-1), ['voice-session', 'ready']);
+  assert.deepEqual(f.diagnostics.at(-1), { stage: 'microphoneEchoState', status: 'ready' });
   await f.manager.stop('voice-session');
   f.children[0].send({ event: 'echo', status: 'unavailable' });
-  assert.equal(f.echoStates.length, 2);
+  assert.equal(f.diagnostics.filter(entry => entry.stage === 'microphoneEchoState').length, 2);
 });
 
 test('启动期间改变输出设备，首块就绪后同步最新参考，不重启采集', async context => {

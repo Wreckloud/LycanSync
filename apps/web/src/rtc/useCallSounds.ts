@@ -4,44 +4,31 @@ import { ENTRANCE_SOUND_MAX_DURATION_SECONDS } from './entranceSound';
 import { normalizeAudioVolume } from './audioPreferences';
 import type { CallSoundEvent, useCallSoundPreferences } from '../settings/useCallSoundPreferences';
 
-type Tone = Readonly<{ frequency: number; offset: number; duration: number }>;
-
 const DEFAULT_ENTRANCE_DELAY_MS = 700;
-const JOIN_TONES: Tone[] = [
-  { frequency: 520, offset: 0, duration: 0.09 },
-  { frequency: 700, offset: 0.08, duration: 0.12 },
-];
-const LEAVE_TONES: Tone[] = [
-  { frequency: 650, offset: 0, duration: 0.09 },
-  { frequency: 430, offset: 0.08, duration: 0.14 },
-];
-const SCREEN_SHARE_TONES: Tone[] = [
-  { frequency: 440, offset: 0, duration: 0.07 },
-  { frequency: 660, offset: 0.06, duration: 0.08 },
-  { frequency: 880, offset: 0.13, duration: 0.12 },
-];
-const SCREEN_SHARE_STOP_TONES: Tone[] = [
-  { frequency: 880, offset: 0, duration: 0.07 },
-  { frequency: 620, offset: 0.06, duration: 0.08 },
-  { frequency: 440, offset: 0.13, duration: 0.12 },
-];
+const EVENT_SOUNDS: Record<CallSoundEvent, { file: string; channel: string }> = {
+  joined: { file: 'navigation_forward-selection', channel: 'connection' },
+  left: { file: 'navigation_backward-selection', channel: 'connection' },
+  participantJoined: { file: 'navigation_forward-selection', channel: 'participant' },
+  participantLeft: { file: 'navigation_backward-selection', channel: 'participant' },
+  microphoneOn: { file: 'navigation_forward-selection-minimal', channel: 'microphone' },
+  microphoneOff: { file: 'navigation_backward-selection-minimal', channel: 'microphone' },
+  screenShareStarted: { file: 'navigation_selection-complete-celebration', channel: 'sharing' },
+  screenShareStopped: { file: 'alert_error-02', channel: 'sharing' },
+  recordingStarted: { file: 'notification_simple-01', channel: 'recording' },
+  recordingStopped: { file: 'navigation-cancel', channel: 'recording' },
+};
 
-/** 播放通话状态提示；默认音效由振荡器生成，不增加静态资源和网络请求。 */
+/** 提示音随应用离线交付，按需解码并在当前会话复用，沿用所选的本机输出设备。 */
 export function useCallSounds(outputVolume: Ref<number>, preferences: ReturnType<typeof useCallSoundPreferences>, output?: AudioOutputRouting) {
   const pendingEntrances = new Map<string, ReturnType<typeof setTimeout>>();
   const activeSounds = new Map<AudioScheduledSourceNode, { gain: GainNode; preview: boolean }>();
+  const buffers = new Map<string, Promise<{ buffer: AudioBuffer; gain: number }>>();
+  const requests = new Map<string, symbol>();
+  const loading = new AbortController();
   let context: AudioContext | null = null;
   let outputBinding: AudioOutputBinding | undefined;
   let disposed = false;
   let previewVersion = 0;
-  const eventTones: Record<CallSoundEvent, Tone[]> = {
-    joined: JOIN_TONES, left: LEAVE_TONES, participantJoined: JOIN_TONES, participantLeft: LEAVE_TONES,
-    screenShareStarted: SCREEN_SHARE_TONES, screenShareStopped: SCREEN_SHARE_STOP_TONES,
-    microphoneOn: [{ frequency: 620, offset: 0, duration: 0.1 }],
-    microphoneOff: [{ frequency: 420, offset: 0, duration: 0.1 }],
-    listeningOn: [{ frequency: 760, offset: 0, duration: 0.1 }],
-    listeningOff: [{ frequency: 340, offset: 0, duration: 0.1 }],
-  };
 
   function volume() { return normalizeAudioVolume(outputVolume.value) * preferences.volume.value; }
   function canPlay(event: CallSoundEvent, preview = false) {
@@ -71,32 +58,62 @@ export function useCallSounds(outputVolume: Ref<number>, preferences: ReturnType
     return current;
   }
 
-  async function playEvent(event: CallSoundEvent, preview = false) {
-    if (!canPlay(event, preview)) return false;
+  function soundBuffer(file: string, currentContext: AudioContext) {
+    const cached = buffers.get(file);
+    if (cached) return cached;
+    const decoded = (async () => {
+      const response = await fetch(`${import.meta.env.BASE_URL}sounds/material/${file}.ogg`, { signal: loading.signal });
+      if (!response.ok) throw new Error(`soundAssetUnavailable:${response.status}`);
+      const bytes = await response.arrayBuffer();
+      if (disposed) throw new Error('soundPlaybackDisposed');
+      const buffer = await currentContext.decodeAudioData(bytes);
+      let peak = 0;
+      let energy = 0;
+      let samples = 0;
+      for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+        for (const value of buffer.getChannelData(channel)) peak = Math.max(peak, Math.abs(value));
+      }
+      if (peak < 0.000001) throw new Error('soundAssetSilent');
+      for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+        for (const value of buffer.getChannelData(channel)) {
+          if (Math.abs(value) <= peak * 0.01) continue;
+          energy += value * value; samples++;
+        }
+      }
+      // 与试听页相同的有效声音均方根增益；保留音色与尾音，并限制最大峰值。
+      const gain = Math.min(4, 10 ** (-24 / 20) / Math.sqrt(energy / samples), 0.5 / peak);
+      return { buffer, gain };
+    })().catch(error => { buffers.delete(file); throw error; });
+    buffers.set(file, decoded);
+    return decoded;
+  }
+
+  async function playEvent(event: CallSoundEvent, preview = false, identity = '') {
+    const clip = EVENT_SOUNDS[event];
+    const key = preview ? 'preview' : `${clip.channel}:${identity}`;
+    const request = Symbol();
+    requests.set(key, request);
     const version = previewVersion;
     try {
+      if (!canPlay(event, preview)) return false;
       const currentContext = await audioContext();
-      if (!canPlay(event, preview) || (preview && version !== previewVersion)) return false;
-      const start = currentContext.currentTime;
-      for (const tone of eventTones[event]) {
-        const oscillator = currentContext.createOscillator();
-        const gain = currentContext.createGain();
-        const beginsAt = start + tone.offset;
-        const endsAt = beginsAt + tone.duration;
-        oscillator.type = 'sine';
-        oscillator.frequency.setValueAtTime(tone.frequency, beginsAt);
-        gain.gain.setValueAtTime(0.0001, beginsAt);
-        gain.gain.exponentialRampToValueAtTime(0.12 * volume(), beginsAt + 0.012);
-        gain.gain.exponentialRampToValueAtTime(0.0001, endsAt);
-        oscillator.connect(gain).connect(currentContext.destination);
-        oscillator.start(beginsAt);
-        oscillator.stop(endsAt + 0.01);
-        track(oscillator, gain, preview);
-      }
+      if (!canPlay(event, preview) || requests.get(key) !== request || (preview && version !== previewVersion)) return false;
+      const prepared = await soundBuffer(clip.file, currentContext);
+      if (!canPlay(event, preview) || requests.get(key) !== request || (preview && version !== previewVersion)) return false;
+      const source = currentContext.createBufferSource();
+      const gain = currentContext.createGain();
+      source.buffer = prepared.buffer;
+      gain.gain.value = prepared.gain * volume();
+      source.connect(gain).connect(currentContext.destination);
+      track(source, gain, preview);
+      source.start();
       return true;
-    } catch {
-      // 浏览器禁止自动播放时保持静默；加入语音后的“允许播放声音”仍由 LiveKit 处理。
+    } catch (error) {
+      // 提示音失败不打断通话；设置页试听仍明确返回失败，资源问题留诊断线索。
+      if (!disposed) console.warn('[call-sounds] playback failed', event, error);
       return false;
+    } finally {
+      if (requests.get(key) === request) requests.delete(key);
     }
   }
 
@@ -131,7 +148,7 @@ export function useCallSounds(outputVolume: Ref<number>, preferences: ReturnType
     clearPendingEntrance(identity);
     pendingEntrances.set(identity, setTimeout(() => {
       pendingEntrances.delete(identity);
-      void playEvent('participantJoined');
+      void playEvent('participantJoined', false, identity);
     }, DEFAULT_ENTRANCE_DELAY_MS));
   }
 
@@ -145,23 +162,25 @@ export function useCallSounds(outputVolume: Ref<number>, preferences: ReturnType
 
   function participantLeft(identity: string) {
     clearPendingEntrance(identity);
-    void playEvent('participantLeft');
+    void playEvent('participantLeft', false, identity);
   }
 
   async function participantEntranceSound(identity: string, bytes: Uint8Array) {
     clearPendingEntrance(identity);
-    if (!await playCustomEntrance(bytes)) void playEvent('participantJoined');
+    if (!await playCustomEntrance(bytes)) await playEvent('participantJoined', false, identity);
   }
 
   watch(() => output?.available.value ?? true, (available) => {
     if (available) return;
     previewVersion++;
+    requests.clear();
     for (const [source, sound] of activeSounds) { source.stop(); source.disconnect(); sound.gain.disconnect(); }
     activeSounds.clear();
   }, { flush: 'sync' });
 
   onScopeDispose(() => {
     disposed = true;
+    loading.abort(); buffers.clear(); requests.clear();
     pendingEntrances.forEach(clearTimeout);
     pendingEntrances.clear();
     for (const [source, sound] of activeSounds) { source.stop(); source.disconnect(); sound.gain.disconnect(); }
@@ -177,7 +196,8 @@ export function useCallSounds(outputVolume: Ref<number>, preferences: ReturnType
     screenShareStarted: () => playEvent('screenShareStarted'),
     screenShareStopped: () => playEvent('screenShareStopped'),
     microphoneChanged: (enabled: boolean) => playEvent(enabled ? 'microphoneOn' : 'microphoneOff'),
-    listeningChanged: (enabled: boolean) => playEvent(enabled ? 'listeningOn' : 'listeningOff'),
+    recordingStarted: () => playEvent('recordingStarted'),
+    recordingStopped: () => playEvent('recordingStopped'),
     preview: (event: CallSoundEvent) => { stopPreview(); return playEvent(event, true); },
     stopPreview,
     participantJoined,

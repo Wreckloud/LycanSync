@@ -268,11 +268,6 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   },
   acknowledgeNativeMicrophoneChunk: (sessionId, sequence, droppedChunks) =>
     ipcRenderer.send('media:native-microphone:consumed', sessionId, sequence, droppedChunks),
-  onNativeMicrophoneEcho: (callback) => {
-    const listener = (_event, state) => callback(state);
-    ipcRenderer.on('media:native-microphone-echo', listener);
-    return () => ipcRenderer.removeListener('media:native-microphone-echo', listener);
-  },
   onNativeMicrophoneError: (callback) => {
     const listener = (_event, failure) => callback(failure);
     ipcRenderer.on('media:native-microphone-error', listener);

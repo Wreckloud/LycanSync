@@ -21,6 +21,14 @@ async function preview(event: CallSoundEvent) {
   previewError.value = '';
   if (!await props.sounds.preview(event) && props.active && version === previewVersion) previewError.value = '无法试听，请确认总输出和提示音未静音，且系统允许播放声音。';
 }
+function openSoundSource(event: MouseEvent) {
+  if (!window.lycanDesktop) return;
+  event.preventDefault();
+  previewError.value = '';
+  void window.lycanDesktop.openExternal((event.currentTarget as HTMLAnchorElement).href).catch(() => {
+    previewError.value = '无法打开默认浏览器。';
+  });
+}
 watch(() => props.active, active => { if (!active) { stopPreview(); moreSoundsOpen.value = false; } });
 onScopeDispose(stopPreview);
 </script>
@@ -28,11 +36,12 @@ onScopeDispose(stopPreview);
 <template>
   <section class="settings-block call-sound-settings">
     <h2>本机提示音</h2>
-    <p>调整加入语音、麦克风切换等操作的提示音。</p>
+    <p>调整加入语音、麦克风切换和录制等操作的提示音。</p>
     <div class="settings-range-row"><span><label for="settings-call-sound-volume">提示音音量</label><RangeValue :value="preferences.volume.value" :default-value="DEFAULT_CALL_SOUND_VOLUME" label="重置提示音音量" @reset="preferences.setVolume(DEFAULT_CALL_SOUND_VOLUME)">{{ Math.round(preferences.volume.value * 100) }}%</RangeValue></span>
       <input id="settings-call-sound-volume" type="range" min="0" max="100" step="1" aria-label="提示音音量" :value="Math.round(preferences.volume.value * 100)"
         @change="preferences.setVolume(Number(($event.target as HTMLInputElement).value) / 100)" />
     </div>
+    <small>提示音由 <a href="https://m2.material.io/design/sound/sound-resources.html" target="_blank" rel="noopener noreferrer" @click="openSoundSource">Google Material Design</a> 提供，采用 <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer" @click="openSoundSource">CC BY 4.0</a> 许可。</small>
   </section>
   <section class="settings-block call-sound-settings">
     <h2>提示音开关</h2>
@@ -43,10 +52,6 @@ onScopeDispose(stopPreview);
         <input :id="`${eventIdPrefix}-${event.id}`" type="checkbox" :checked="preferences.enabled[event.id]"
           @change="preferences.setEnabled(event.id, ($event.target as HTMLInputElement).checked)" />
       </div>
-      <button type="button" class="disclosure-trigger" :aria-expanded="moreSoundsOpen" :aria-controls="moreSoundsId" @click="moreSoundsOpen = !moreSoundsOpen">
-        <ChevronRight :size="12" aria-hidden="true" class="disclosure-arrow" :class="{ 'is-open': moreSoundsOpen }" />
-        {{ moreSoundsOpen ? '收起其他提示音' : `展开其他 ${moreSounds.length} 项提示音` }}
-      </button>
       <ExpandSection :open="moreSoundsOpen" :id="moreSoundsId">
         <div class="settings-toggle-group">
           <div v-for="event in moreSounds" :key="event.id" class="settings-toggle call-sound-row">
@@ -57,6 +62,10 @@ onScopeDispose(stopPreview);
           </div>
         </div>
       </ExpandSection>
+      <button type="button" class="disclosure-trigger" :aria-expanded="moreSoundsOpen" :aria-controls="moreSoundsId" @click="moreSoundsOpen = !moreSoundsOpen">
+        <ChevronRight :size="12" aria-hidden="true" class="disclosure-arrow" :class="{ 'is-open': moreSoundsOpen }" />
+        {{ moreSoundsOpen ? '收起其他提示音' : `展开其他 ${moreSounds.length} 项提示音` }}
+      </button>
     </div>
     <InlineFeedback :message="preferences.error.value || previewError" />
   </section>

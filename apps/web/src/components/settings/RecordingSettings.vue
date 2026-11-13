@@ -28,6 +28,12 @@ async function changeReplay(event: Event) {
   await props.recording.configureReplay(Number(input.value));
   input.value = String(props.recording.settings.value?.replaySeconds ?? 60);
 }
+async function toggleReplay(event: Event) {
+  const input = event.target as HTMLInputElement;
+  if (input.checked) await props.recording.startReplay();
+  else await props.recording.stopReplay();
+  input.checked = props.recording.replayActive.value;
+}
 </script>
 
 <template>
@@ -50,33 +56,37 @@ async function changeReplay(event: Event) {
       <p v-else-if="!desktop">录制需要使用 Windows 桌面客户端。</p>
       <InlineFeedback :pending="desktop && !recording.settings.value && !recording.notice.value ? '正在读取录制设置…' : ''" />
       <InlineFeedback :message="recording.noticeTarget.value === 'content' ? recording.notice.value : ''" />
-      <div v-if="desktop" class="recording-file-settings">
-        <h3>文件与画质</h3>
-        <p>录像与即时回放共用画质设置，按原比例录制。</p>
-        <div v-if="recording.settings.value" class="recording-actions">
-          <label class="replay-duration">分辨率上限<select aria-label="本地录制分辨率上限" :value="recording.settings.value.videoHeight"
-            :disabled="recording.localActive.value || recording.busy.value" @change="changeVideo('videoHeight', $event)">
-            <option :value="720">720p</option><option :value="1080">1080p</option><option :value="1440">1440p</option>
-          </select></label>
-          <label class="replay-duration">帧率上限<select aria-label="本地录制帧率上限" :value="recording.settings.value.videoFps"
-            :disabled="recording.localActive.value || recording.busy.value" @change="changeVideo('videoFps', $event)">
-            <option :value="30">30 FPS</option><option :value="60">60 FPS</option><option :value="120">120 FPS</option>
-          </select></label>
-        </div>
-        <p class="recording-directory">{{ recording.settings.value?.directory ?? '—' }}</p>
-        <div class="recording-actions">
-          <button type="button" class="settings-button" :disabled="recording.localActive.value || recording.busy.value" @click="recording.chooseDirectory">更换目录</button>
-          <button type="button" class="settings-button" @click="recording.reveal">打开目录</button>
-        </div>
-        <small>录制整屏时，可见的观看窗口也会入镜。只想录游戏，请选择游戏或应用窗口。系统若只能提供全部混音，请关闭“应用声音”后再录制。</small>
-        <InlineFeedback :message="recording.noticeTarget.value === 'files' ? recording.notice.value : ''" />
-      </div>
+      <small v-if="desktop">录制整屏时，可见的观看窗口也会入镜。只想录游戏，请选择游戏或应用窗口。系统若只能提供全部混音，请关闭“应用声音”后再录制。</small>
       <InlineFeedback :message="recording.noticeTarget.value === 'recording' ? recording.notice.value : ''" />
+    </section>
+    <section v-if="desktop" class="settings-block recording-file-settings">
+      <h2>文件与画质</h2>
+      <p>录像与即时回放共用以下画质和保存目录，不影响朋友观看共享画面的画质。</p>
+      <div v-if="recording.settings.value" class="recording-file-controls">
+        <label>分辨率上限<select aria-label="本地录制分辨率上限" :value="recording.settings.value.videoHeight"
+          :disabled="recording.localActive.value || recording.busy.value" @change="changeVideo('videoHeight', $event)">
+          <option :value="720">720p</option><option :value="1080">1080p</option><option :value="1440">1440p</option>
+        </select></label>
+        <label>帧率上限<select aria-label="本地录制帧率上限" :value="recording.settings.value.videoFps"
+          :disabled="recording.localActive.value || recording.busy.value" @change="changeVideo('videoFps', $event)">
+          <option :value="30">30 FPS</option><option :value="60">60 FPS</option><option :value="120">120 FPS</option>
+        </select></label>
+      </div>
+      <p class="recording-directory">{{ recording.settings.value?.directory ?? '—' }}</p>
+      <div class="recording-file-controls">
+        <button type="button" class="settings-button" :disabled="recording.localActive.value || recording.busy.value" @click="recording.chooseDirectory">更换目录</button>
+        <button type="button" class="settings-button" @click="recording.reveal">打开目录</button>
+      </div>
+      <InlineFeedback :message="recording.noticeTarget.value === 'files' ? recording.notice.value : ''" />
     </section>
     <section v-if="desktop" class="settings-block">
       <h2>即时回放</h2>
-      <p>开启后积累最近的共享画面，随时保存精彩片段，录制期间也可使用。</p>
-      <label class="replay-duration">回溯时长
+      <label class="settings-toggle">
+        <span><strong>开启即时回放</strong><small>开启后积累最近的共享画面，随时保存精彩片段，录制期间也可使用。</small></span>
+        <input type="checkbox" :checked="recording.replayActive.value"
+          :disabled="recording.busy.value || (!recording.replayActive.value && !sharing)" @change="toggleReplay" />
+      </label>
+      <label class="settings-range-row"><span>回溯时长</span>
         <select aria-label="回放目标时长" :value="recording.settings.value?.replaySeconds ?? 60"
           :disabled="recording.localActive.value || recording.busy.value"
           @change="changeReplay">
@@ -86,17 +96,14 @@ async function changeReplay(event: Event) {
       <small>需先共享自己的画面。回放保留原有画质，30／60／120 秒分别最多使用 256／512／1024 MiB 缓存，保存时可能额外占用一份。实际时长取决于已积累内容和内存，可能多约两秒。切换来源或录制规格后，开始积累新画面；关闭后丢弃未保存内容。</small>
       <p class="recording-status" role="status">{{ replayProgress ? (replayProgressVisible ? replayProgress : '') : (recording.replayActive.value
         ? recording.state.value.replay?.warming ? '正在积累回放，还未达到设定时长' : '回放已开启' : '回放未开启') }}</p>
-      <div class="recording-actions">
-        <button v-if="!recording.replayActive.value" type="button" class="confirm-button" :disabled="!sharing || recording.busy.value" @click="recording.startReplay">开启回放</button>
-        <template v-else>
-          <button type="button" class="confirm-button" :disabled="recording.busy.value || recording.state.value.replay?.saving || !!recording.state.value.replay?.error" @click="recording.saveReplay">保存回放</button>
-          <button type="button" class="settings-button" :disabled="recording.busy.value" @click="recording.stopReplay">关闭回放</button>
-        </template>
+      <div v-if="recording.replayActive.value" class="recording-actions">
+        <button type="button" class="confirm-button" :disabled="recording.busy.value || recording.state.value.replay?.saving || !!recording.state.value.replay?.error" @click="recording.saveReplay">保存回放</button>
       </div>
       <InlineFeedback :message="recording.noticeTarget.value === 'replay' ? recording.notice.value : ''" />
     </section>
     <section v-if="desktop" class="settings-block">
       <h2>录像管理</h2>
+      <p>查看保存在本机的录像和回放，打开文件或整理记录。</p>
       <button type="button" class="settings-button" @click="libraryOpen = true">打开本地录像管理器</button>
     </section>
   </div>
@@ -107,9 +114,11 @@ async function changeReplay(event: Event) {
 
 <style scoped>
 h3 { margin: 8px 0 0; font-size: 14px; font-weight: 600; }
-.recording-file-settings { display: grid; gap: 8px; margin-top: 8px; }
+.recording-file-controls { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.recording-file-controls > label, .recording-file-controls > button { flex: 1; min-width: 100px; }
+.recording-file-controls > label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.recording-file-controls select { width: 100%; }
 .recording-directory { overflow-wrap: anywhere; color: var(--muted); }
 .recording-status { min-height: 20px; }
 .recording-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.replay-duration { display: flex; align-items: center; gap: 12px; font-size: 13px; }
 </style>

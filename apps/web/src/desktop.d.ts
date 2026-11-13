@@ -278,7 +278,6 @@ interface Window {
     acknowledgeNativeScreenAudioChunk(sessionId: string, sequence: number, droppedChunks: number): void;
     onNativeScreenAudioError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
     setMicrophoneEchoOutput(selector: string): Promise<{ changed: boolean }>;
-    onNativeMicrophoneEcho(callback: (state: { sessionId: string; status: 'disabled' | 'pending' | 'ready' | 'unavailable' }) => void): () => void;
     listMicrophoneDevices(): Promise<{ id: string; label: string }[]>;
     startNativeMicrophone(sessionId: string, settings: import('./rtc/nativeMicrophoneAudio').NativeMicrophoneSettings, deviceId: string, pushToTalk: boolean): Promise<{
       sampleRate: 48000; channels: 1; bitsPerSample: 32; nominalChunkMs: 10;

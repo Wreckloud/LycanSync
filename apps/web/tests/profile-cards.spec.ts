@@ -545,15 +545,20 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
   await expect(page.getByRole('checkbox', { name: '共享声音', exact: true })).not.toBeChecked();
   await expect(page.getByRole('checkbox', { name: /隐藏共享画面中的光标/ })).toBeChecked();
   await expect(page.getByRole('heading', { name: '录制内容', exact: true })).toBeVisible();
-  await expect(page.locator('.settings-recording-page h2')).toHaveText(['共享画面', '共享录制', '即时回放', '录像管理']);
+  await expect(page.locator('.settings-recording-page h2')).toHaveText(['共享画面', '共享录制', '文件与画质', '即时回放', '录像管理']);
+  await expect(page.getByRole('checkbox', { name: /开启即时回放/ })).toBeDisabled();
+  await expect(page.getByRole('checkbox', { name: /开启即时回放/ })).not.toBeChecked();
   await expect(page.getByRole('heading', { name: '当前录像', exact: true })).toHaveCount(0);
   await expect(page.locator('.settings-recording-page').getByRole('button', { name: '开始录制', exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('lycansync.screen-share-quality')!).quality)).toBe('highFrameRate');
   await page.setViewportSize({ width: 1280, height: 820 });
   const shareTogglePositions = await page.locator('.settings-toggle input[type="checkbox"]:visible').evaluateAll(inputs => inputs.map(input => input.getBoundingClientRect().right));
-  expect(shareTogglePositions).toHaveLength(5);
+  expect(shareTogglePositions).toHaveLength(6);
   expect(Math.max(...shareTogglePositions) - Math.min(...shareTogglePositions)).toBeLessThan(1);
   await page.screenshot({ path: testInfo.outputPath('sharing-and-recording.png') });
+  await page.locator('.recording-file-settings').screenshot({ path: testInfo.outputPath('recording-file-settings.png') });
+  await page.locator('.settings-block').filter({ has: page.getByRole('heading', { name: '即时回放', exact: true }) })
+    .screenshot({ path: testInfo.outputPath('instant-replay-settings.png') });
   expect(await page.evaluate(() => localStorage.getItem('test.libraryReads'))).toBeNull();
   const managerButton = page.getByRole('button', { name: '打开本地录像管理器', exact: true });
   await managerButton.click();
@@ -590,6 +595,11 @@ test('本机提示音只提供统一音量和逐项开关，重开后恢复，�
   await moreSounds.click();
   const sharingSound = page.getByRole('checkbox', { name: '开始共享', exact: true });
   await expect(sharingSound).toBeVisible();
+  await expect(page.getByRole('checkbox', { name: '开始录制', exact: true })).toBeChecked();
+  await expect(page.getByRole('checkbox', { name: '结束录制', exact: true })).toBeChecked();
+  await expect(page.getByRole('checkbox', { name: '恢复收听', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('checkbox', { name: '停止收听', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Google Material Design', exact: true })).toBeVisible();
   await sharingSound.uncheck();
   await expect.poll(() => page.locator('.sound-settings').evaluate(element => element.getAnimations({ subtree: true }).length)).toBe(0);
   const soundTogglePositions = await page.locator('.sound-settings input[type="checkbox"]').evaluateAll(inputs => inputs.map(input => input.getBoundingClientRect().right));
@@ -610,6 +620,46 @@ test('本机提示音只提供统一音量和逐项开关，重开后恢复，�
   await expect(sharingSound).toBeHidden();
   await moreSounds.click();
   await expect(sharingSound).not.toBeChecked();
+});
+
+test('Material 提示音从本地资源解码，设置试听采用确认后的八种配对', async ({ page }) => {
+  // 真正解码资源和运行播放节点，但将输出定向到无声设备，不采集任何声音。
+  await page.addInitScript(() => {
+    const prototype = AudioContext.prototype as AudioContext & { setSinkId: (id: { type: string }) => Promise<void> };
+    const setSinkId = prototype.setSinkId;
+    prototype.setSinkId = function () { return setSinkId.call(this, { type: 'none' }); };
+    const probe = window as unknown as { materialSoundStarts: number };
+    probe.materialSoundStarts = 0;
+    const createBufferSource = prototype.createBufferSource;
+    prototype.createBufferSource = function () {
+      const source = createBufferSource.call(this);
+      const start = source.start.bind(source);
+      source.start = (...args) => { start(...args); probe.materialSoundStarts++; };
+      return source;
+    };
+  });
+  const resources: string[] = [];
+  page.on('response', response => {
+    if (response.url().includes('/sounds/material/') && response.status() === 200) resources.push(response.url().split('/').pop()!);
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '音效', exact: true }).click();
+  await page.getByRole('button', { name: '展开其他 6 项提示音', exact: true }).click();
+  const events = [
+    ['成员加入语音', 'navigation_forward-selection.ogg'], ['成员离开语音', 'navigation_backward-selection.ogg'],
+    ['麦克风恢复', 'navigation_forward-selection-minimal.ogg'], ['麦克风静音', 'navigation_backward-selection-minimal.ogg'],
+    ['开始共享', 'navigation_selection-complete-celebration.ogg'], ['停止共享', 'alert_error-02.ogg'],
+    ['开始录制', 'notification_simple-01.ogg'], ['结束录制', 'navigation-cancel.ogg'],
+  ];
+  for (const [label, file] of events) {
+    const before = await page.evaluate(() => (window as unknown as { materialSoundStarts: number }).materialSoundStarts);
+    await page.getByRole('button', { name: `试听${label}`, exact: true }).click();
+    await expect.poll(() => resources.includes(file)).toBe(true);
+    await expect.poll(() => page.evaluate(() => (window as unknown as { materialSoundStarts: number }).materialSoundStarts)).toBe(before + 1);
+    await expect(page.locator('.call-sound-settings [role="alert"]')).toHaveCount(0);
+  }
+  await page.getByRole('button', { name: '返回应用' }).click();
 });
 
 test('设备选择保存在本机，设备丢失明确提示且不换默认，不触发采集', async ({ page }) => {
@@ -754,7 +804,7 @@ test('关闭动态的心跳尚未返回就退出时，离线请求仍带上最�
     await page.getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('checkbox', { name: '显示动态', exact: true }).uncheck();
     await expect.poll(() => heartbeats.at(-1)).toMatchObject({ status: 'ONLINE', showActivity: false });
-    await page.locator('.account-session').getByRole('button', { name: '退出登录', exact: true }).click();
+    await page.getByRole('button', { name: '退出登录', exact: true }).click();
     await page.getByRole('dialog', { name: '退出当前账号？', exact: true })
       .getByRole('button', { name: '退出登录', exact: true }).click();
     await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();

@@ -20,7 +20,7 @@ const messages: Record<string, string> = {
 };
 
 export function useRecording(options: { track: () => MediaStreamTrack | undefined; canStart: () => boolean;
-  voices: (settings: RecordingSettings) => RecordingVoiceTrack[] }) {
+  voices: (settings: RecordingSettings) => RecordingVoiceTrack[]; onStarted?: () => void; onSaved?: () => void }) {
   const desktop = window.lycanDesktop;
   const settings = shallowRef<RecordingSettings | null>(null);
   const state = shallowRef<DesktopRecordingStatus>({ holdingResources: false, phase: 'idle', recordingId: null, startedAt: null, bytes: 0,
@@ -65,6 +65,9 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
       elapsedAnchor = { id: next.recordingId, at: now.value, seconds: Math.max(0, (Date.now() - next.startedAt) / 1000) };
     }
     const code = next.error ?? next.replay?.error;
+    const recordingSaved = statusLoaded && next.phase === 'saved' && next.saved && !next.error && next.recordingId
+      && (!state.value.saved || next.recordingId !== state.value.recordingId)
+      && !changingSource.value && !next.continuing && !state.value.continuing;
     // 仅提示已确认的新状态，不把初次读取的历史录像当成本次操作成功。
     if (statusLoaded && !code) {
       if (next.saved && (!state.value.saved || next.recordingId !== state.value.recordingId)) {
@@ -82,6 +85,7 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
       || next.replay?.id !== state.value.replay?.id;
     statusLoaded = true;
     state.value = next;
+    if (recordingSaved) options.onSaved?.();
     if (code && (errorChanged || !notice.value)) reportNotice(messages[code] ?? '本地录制未完成，请检查录像目录和诊断记录。', next.error ? 'recording' : 'replay');
   };
   const removeListener = desktop?.onRecordingState(setState);
@@ -128,6 +132,8 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
       const next = await desktop.startRecording(previousId);
       if (disposed) { await desktop.stopRecording(next.recordingId); return; }
       if (revision === stateRevision) setState(next);
+      // 换源续录不提示重新开始；迟到回复也不能给已停止的录像补播开始音。
+      if (!previousId && next.recordingId === state.value.recordingId && state.value.phase === 'recording' && !state.value.error) options.onStarted?.();
     } catch (error) {
       const code = error instanceof Error ? error.message.match(/(?:^|: )([a-zA-Z]+)$/)?.[1] : undefined;
       if (!disposed && code !== 'recordingCancelled') reportNotice(messages[code ?? ''] ?? '录制未能开始，请查看诊断记录。', 'recording');

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MICROPHONE_ECHO_NOTICE, NativeMicrophoneAudioSession, type NativeMicrophoneDesktopBridge } from './nativeMicrophoneAudio';
+import { NativeMicrophoneAudioSession, type NativeMicrophoneDesktopBridge } from './nativeMicrophoneAudio';
 
 class FakePort {
   onmessage: ((event: MessageEvent) => void) | null = null;
@@ -37,7 +37,7 @@ describe('NativeMicrophoneAudioSession', () => {
       configureNativeMicrophone: vi.fn(async () => ({ changed: true })),
       stopNativeMicrophone: vi.fn(async () => ({ changed: true })),
       onNativeMicrophoneChunk: callback => { receive = callback; return vi.fn(); },
-      acknowledgeNativeMicrophoneChunk: acknowledge, onNativeMicrophoneEcho: () => () => {}, onNativeMicrophoneError: () => vi.fn(),
+      acknowledgeNativeMicrophoneChunk: acknowledge, onNativeMicrophoneError: () => vi.fn(),
     }, { pushToTalk: true, createContext: () => f.context, createWorkletNode: () => f.node,
       createLocalTrack: () => ({ stop: vi.fn() }) as never });
     await session.start('ptt-session', { inputGain: 1, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true, echoCancellation: true });
@@ -69,8 +69,6 @@ describe('NativeMicrophoneAudioSession', () => {
     const configured = vi.fn(async () => ({ changed: true }));
     const acknowledge = vi.fn();
     let receiveChunk: Parameters<NativeMicrophoneDesktopBridge['onNativeMicrophoneChunk']>[0] | undefined;
-    let receiveEcho!: Parameters<NativeMicrophoneDesktopBridge['onNativeMicrophoneEcho']>[0];
-    const warning = vi.fn(), removeEcho = vi.fn();
     const desktop: NativeMicrophoneDesktopBridge = {
       startNativeMicrophone: started,
       setNativeMicrophoneTransmission: vi.fn(),
@@ -78,26 +76,17 @@ describe('NativeMicrophoneAudioSession', () => {
       stopNativeMicrophone: stopped,
       onNativeMicrophoneChunk: (callback) => { receiveChunk = callback; return () => { receiveChunk = undefined; }; },
       acknowledgeNativeMicrophoneChunk: acknowledge,
-      onNativeMicrophoneEcho: callback => { receiveEcho = callback; return removeEcho; },
       onNativeMicrophoneError: () => () => {},
     };
     const track = { stop: vi.fn() };
     const session = new NativeMicrophoneAudioSession(desktop, {
-      onWarning: warning,
       createContext: () => fakes.context,
       createWorkletNode: () => fakes.node,
       createLocalTrack: () => track as never,
     });
 
     expect(await session.start('microphone-session', settings)).toBe(track);
-    receiveEcho({ sessionId: 'old-session', status: 'unavailable' });
-    receiveEcho({ sessionId: 'microphone-session', status: 'pending' });
-    expect(warning).not.toHaveBeenCalled();
-    receiveEcho({ sessionId: 'microphone-session', status: 'unavailable' });
-    expect(warning).toHaveBeenLastCalledWith(MICROPHONE_ECHO_NOTICE);
     expect(stopped).not.toHaveBeenCalled();
-    receiveEcho({ sessionId: 'microphone-session', status: 'ready' });
-    expect(warning).toHaveBeenLastCalledWith('');
     expect(fakes.addModule).toHaveBeenCalledWith(expect.stringContaining('nativeMicrophoneAudio.worklet.js'));
     expect(fakes.addModule.mock.calls[0][0]).not.toMatch(/^(blob:|data:)/);
     await session.configure({ ...settings, inputGain: 0.75 });
@@ -122,10 +111,6 @@ describe('NativeMicrophoneAudioSession', () => {
     expect(fakes.close).toHaveBeenCalledOnce();
     expect(fakes.disconnect).toHaveBeenCalledOnce();
     expect(receiveChunk).toBeUndefined();
-    expect(removeEcho).toHaveBeenCalledOnce();
-    warning.mockClear();
-    receiveEcho({ sessionId: 'microphone-session', status: 'unavailable' });
-    expect(warning).not.toHaveBeenCalled();
   });
 
   it('does not send malformed audio chunks to the renderer track', async () => {
@@ -140,7 +125,7 @@ describe('NativeMicrophoneAudioSession', () => {
       stopNativeMicrophone: vi.fn(async () => ({ changed: true })),
       onNativeMicrophoneChunk: (callback) => { receiveChunk = callback; return () => { receiveChunk = undefined; }; },
       acknowledgeNativeMicrophoneChunk: acknowledge,
-      onNativeMicrophoneEcho: () => () => {}, onNativeMicrophoneError: () => () => {},
+      onNativeMicrophoneError: () => () => {},
     };
     const session = new NativeMicrophoneAudioSession(desktop, {
       createContext: () => fakes.context,
@@ -167,7 +152,7 @@ describe('NativeMicrophoneAudioSession', () => {
       stopNativeMicrophone: vi.fn(async () => ({ changed: true })),
       onNativeMicrophoneChunk: (callback) => { receiveChunk = callback; return () => { receiveChunk = undefined; }; },
       acknowledgeNativeMicrophoneChunk: acknowledge,
-      onNativeMicrophoneEcho: () => () => {}, onNativeMicrophoneError: () => () => {},
+      onNativeMicrophoneError: () => () => {},
     };
     const session = new NativeMicrophoneAudioSession(desktop, {
       createContext: () => fakes.context,
@@ -208,7 +193,7 @@ function cleanupHarness() {
     configureNativeMicrophone: vi.fn(async () => ({ changed: true })),
     onNativeMicrophoneChunk: () => removeChunks,
     acknowledgeNativeMicrophoneChunk: vi.fn(),
-    onNativeMicrophoneEcho: () => () => {}, onNativeMicrophoneError: (callback) => { reportError = () => callback({ sessionId: 'session', code: 'microphoneDeviceUnavailable' }); return removeErrors; },
+    onNativeMicrophoneError: (callback) => { reportError = () => callback({ sessionId: 'session', code: 'microphoneDeviceUnavailable' }); return removeErrors; },
   };
   const session = new NativeMicrophoneAudioSession(desktop, { onError,
     createContext: () => fakes.context, createWorkletNode: () => fakes.node,

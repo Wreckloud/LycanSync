@@ -309,7 +309,6 @@ const obsAudioHost = new ObsAudioHostManager({
   ...obsAudioSettings,
   configPath: resolve(app.getPath('userData'), 'obs-audio', '32.2.2'),
   onFailure: (sessionId, code) => nativeMicrophone.notifyFailure(sessionId, code),
-  onEchoState: (sessionId, status) => nativeMicrophone.notifyEchoState(sessionId, status),
   onDiagnostic: (entry) => { void writeMediaDiagnostic(entry); },
 });
 

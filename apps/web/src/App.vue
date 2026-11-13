@@ -509,6 +509,8 @@ const personalCardActive = computed(() => settingsOpen.value
   : !profileCardsBlocked.value);
 watch(profileCardsBlocked, blocked => { if (blocked) personalMenuOpen.value = false; });
 const recording = useRecording({
+  onStarted: () => { void callSounds.recordingStarted(); },
+  onSaved: () => { void callSounds.recordingStopped(); },
   track: () => rtc.room?.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track?.mediaStreamTrack,
   canStart: () => rtc.screenShareActive && !rtc.screenShareAudioRestricted && !rtc.screenShareQualityBusy
     && !rtc.screenShareSourceBusy && !rtc.busySources.includes(Track.Source.ScreenShare),
@@ -859,17 +861,13 @@ async function toggleMicrophone() {
 
 async function toggleListening() {
   if (!connected.value) return;
-  const version = ++audioToggleVersion;
-  const room = rtc.room;
+  ++audioToggleVersion;
   const enabled = !listening.value;
   const changing = rtc.updateListeningState(enabled);
   if (rtc.needsAudioPlayback && enabled) {
     await rtc.enableAudioPlayback();
   }
   await changing;
-  if (version === audioToggleVersion && room === rtc.room && connected.value && rtc.listening === enabled) {
-    void callSounds.listeningChanged(enabled);
-  }
 }
 
 const audioShortcutRoomId = ref<string | null>(null);

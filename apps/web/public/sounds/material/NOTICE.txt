@@ -1,0 +1,17 @@
+Google Material Design product sounds
+
+Audio author: Google
+Original source: https://m2.material.io/design/sound/sound-resources.html
+License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+https://creativecommons.org/licenses/by/4.0/
+Full license: https://creativecommons.org/licenses/by/4.0/legalcode
+
+Retrieved from the Materia Sound Theme archive:
+https://github.com/nana-4/materia-sound-theme/tree/10d30e9a01af4dec6a9cf94317c9536fec5a24f4/material_product_sounds
+The repository README attributes the original audio to Google under CC BY 4.0.
+The mirror's GPLv3 project code is not included in lycanclaw.
+
+The eight Ogg files listed in provenance.json are unmodified originals.
+lycanclaw maps these sounds to its own actions and adjusts playback gain for
+consistent volume. No trimming, pitch shifting or speed changes are applied.
+Google does not endorse lycanclaw.

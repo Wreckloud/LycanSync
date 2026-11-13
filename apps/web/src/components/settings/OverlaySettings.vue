@@ -33,9 +33,10 @@ onScopeDispose(() => { void props.overlay.edit(false); });
         <input type="checkbox" :checked="overlay.settings.value.enabled" :disabled="!overlay.ready.value || overlay.busy.value"
           @change="toggleSetting('enabled', $event)" />
       </label>
-      <div class="overlay-options">
-        <span>成员显示</span>
+      <div class="settings-range-row overlay-options">
+        <span class="overlay-setting-copy">成员显示<small id="overlay-member-description">选择显示全部通话成员，或只在成员说话时显示。</small></span>
         <SegmentedControl :model-value="overlay.settings.value.mode" :options="memberModes" label="成员显示"
+          aria-describedby="overlay-member-description"
           :disabled="!overlay.ready.value || overlay.busy.value" :aria-busy="overlay.ready.value && overlay.busy.value"
           @update:model-value="overlay.configure({ mode: $event })" />
       </div>
@@ -43,7 +44,8 @@ onScopeDispose(() => { void props.overlay.edit(false); });
     </section>
     <section class="settings-block">
       <h2>位置与大小</h2>
-      <label class="overlay-field"><span>显示器</span><select :value="overlay.settings.value.displayId ?? ''" :disabled="!overlay.ready.value || overlay.busy.value"
+      <label class="settings-range-row"><span class="overlay-setting-copy">显示器<small id="overlay-display-description">多屏使用时，可将通话成员放到指定屏幕上。</small></span><select aria-label="覆盖显示器" aria-describedby="overlay-display-description"
+        :value="overlay.settings.value.displayId ?? ''" :disabled="!overlay.ready.value || overlay.busy.value"
         @change="overlay.configure({ displayId: ($event.target as HTMLSelectElement).value === '' ? null : Number(($event.target as HTMLSelectElement).value) })">
         <option value="">主窗口所在屏幕（默认）</option><option v-for="display in overlay.displays.value" :key="display.id" :value="display.id">{{ display.label }}</option>
         <option v-if="overlay.settings.value.displayId !== null && !overlay.displays.value.some((display) => display.id === overlay.settings.value.displayId)" :value="overlay.settings.value.displayId">原显示器已断开（临时使用主屏）</option>
@@ -62,15 +64,13 @@ onScopeDispose(() => { void props.overlay.edit(false); });
       </label>
       <button class="settings-button" type="button" :disabled="!overlay.ready.value || overlay.busy.value" @click="overlay.configure({ displayId: null, x: 1, y: 0.5, scale: 100 })">恢复默认位置与大小</button>
     </section>
-    <p class="settings-intro">通常不会录入共享画面。独占全屏、锁屏等场景可能无法显示，是否入镜仍取决于系统和录屏方式。</p>
+    <p class="settings-intro">游戏中看不到屏幕覆盖时，可尝试将游戏切换为无边框窗口模式。</p>
   </div>
 </template>
 
 <style scoped>
-.overlay-options { display: grid; gap: 8px; margin-top: 4px; }
-.overlay-options > span { font-weight: 500; }
-.overlay-options .segmented-control { max-width: 400px; }
-.overlay-field { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 16px; align-items: center; padding: 12px 0; }
-.overlay-field select { width: 100%; }
-@media (max-width: 760px) { .overlay-field { grid-template-columns: 1fr; gap: 8px; } }
+.overlay-options { grid-template-columns: minmax(0, 1fr) minmax(0, 400px); }
+.settings-range-row > .overlay-setting-copy { display: grid; gap: 4px; }
+.overlay-setting-copy small { line-height: 1.5; }
+@media (max-width: 760px) { .overlay-options { grid-template-columns: minmax(0, 1fr); } }
 </style>

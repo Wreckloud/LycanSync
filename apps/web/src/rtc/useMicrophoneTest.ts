@@ -3,7 +3,7 @@ import { AudioPresets, Track, TrackEvent, createLocalAudioTrack, type LocalAudio
 import { normalizeAudioVolume, unappliedCaptureProcessing } from './audioPreferences';
 import { MicrophoneAudioProcessor } from './microphoneAudioProcessor';
 import { MicrophoneLoopback } from './microphoneLoopback';
-import { MICROPHONE_ECHO_NOTICE, NativeMicrophoneAudioSession, type NativeMicrophoneDesktopBridge } from './nativeMicrophoneAudio';
+import { NativeMicrophoneAudioSession, type NativeMicrophoneDesktopBridge } from './nativeMicrophoneAudio';
 import type { useAudioPreferences } from './useAudioPreferences';
 import { normalizeVoiceLevel } from './voiceLevel';
 import type { AudioOutputBinding, AudioOutputRouting } from './useAudioOutput';
@@ -141,9 +141,6 @@ export function useMicrophoneTest(options: MicrophoneTestOptions) {
         if (options.desktop) {
           current.native = new NativeMicrophoneAudioSession(options.desktop, {
             deviceId: preferences.inputDeviceId.value,
-            onWarning: (message) => {
-              if (session === current && (message || notice.value === MICROPHONE_ECHO_NOTICE)) notice.value = message;
-            },
             onError: (code) => {
               if (session !== current) return;
               notice.value = captureMessage(new Error(code), true);

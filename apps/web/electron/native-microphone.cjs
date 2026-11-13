@@ -216,14 +216,6 @@ function createNativeMicrophone({ host: obsAudioHost, getWindow, isClosing, writ
     if (nativeMicrophoneSession?.sessionId === sessionId) notifyNativeMicrophoneError(nativeMicrophoneSession, code);
   }
 
-  function notifyEchoState(sessionId, status) {
-    const audio = nativeMicrophoneSession;
-    const window = getWindow();
-    if (!audio || audio.sessionId !== sessionId || audio.stopping || !window
-        || window.isDestroyed() || window.webContents.isDestroyed()) return;
-    window.webContents.send('media:native-microphone-echo', { sessionId, status });
-  }
-
   function setTransmission(sessionId, pushToTalk, held, epoch) {
     if (nativeMicrophoneSession?.sessionId === sessionId && !nativeMicrophoneSession.stopping) {
       obsAudioHost.setTransmission(sessionId, pushToTalk, held, epoch);
@@ -231,7 +223,7 @@ function createNativeMicrophone({ host: obsAudioHost, getWindow, isClosing, writ
   }
 
   return { start: startNativeMicrophoneCapture, stop: stopNativeMicrophoneCapture,
-    acknowledge: acknowledgeNativeMicrophoneChunk, notifyFailure, notifyEchoState, diagnostics, setTransmission,
+    acknowledge: acknowledgeNativeMicrophoneChunk, notifyFailure, diagnostics, setTransmission,
     configure: (sessionId, settings) => obsAudioHost.configure(sessionId, settings),
     cancelTransmission: () => { if (nativeMicrophoneSession) obsAudioHost.cancelTransmission(nativeMicrophoneSession.sessionId); },
     get sessionId() { return nativeMicrophoneSession?.sessionId; } };

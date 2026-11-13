@@ -26,11 +26,12 @@ test('覆盖设置：默认关闭、模式与缩放保存，切栏及卸载结�
   await expect(modes.getByRole('button', { name: '显示全部通话成员' })).toHaveAttribute('aria-pressed', 'true');
   await modes.getByRole('button', { name: '显示全部通话成员' }).press('ArrowRight');
   await expect(speaking).toHaveAttribute('aria-pressed', 'true');
-  await page.getByLabel('覆盖整体大小').focus();
-  await page.getByLabel('覆盖整体大小').press('End');
+  await page.getByRole('slider', { name: '覆盖整体大小', exact: true }).focus();
+  await page.getByRole('slider', { name: '覆盖整体大小', exact: true }).press('End');
   await expect.poll(() => page.evaluate(() => window.overlaySettingsTest.saved())).toMatchObject({ enabled: true, mode: 'speaking', scale: 150 });
   await page.getByRole('button', { name: '编辑位置', exact: true }).click();
   await expect(page.getByRole('button', { name: '完成编辑', exact: true })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('overlay-settings-wide.png') });
   await page.setViewportSize({ width: 600, height: 820 });
   const bounds = await modes.boundingBox();
   expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(600);

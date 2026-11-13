@@ -16,8 +16,6 @@ export interface NativeMicrophoneChunk {
   transmissionEpoch: number;
 }
 
-export const MICROPHONE_ECHO_NOTICE = '回声消除暂不可用，外放时朋友可能听到回声。';
-
 export interface NativeMicrophoneDesktopBridge {
   startNativeMicrophone(sessionId: string, settings: NativeMicrophoneSettings, deviceId: string, pushToTalk: boolean): Promise<{
     sampleRate: 48000; channels: 1; bitsPerSample: 32; nominalChunkMs: 10;
@@ -28,14 +26,12 @@ export interface NativeMicrophoneDesktopBridge {
   onNativeMicrophoneChunk(callback: (chunk: NativeMicrophoneChunk) => void): () => void;
   acknowledgeNativeMicrophoneChunk(sessionId: string, sequence: number, droppedChunks: number): void;
   onNativeMicrophoneError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
-  onNativeMicrophoneEcho(callback: (state: { sessionId: string; status: 'disabled' | 'pending' | 'ready' | 'unavailable' }) => void): () => void;
 }
 
 interface NativeMicrophoneOptions {
   deviceId?: string;
   pushToTalk?: boolean;
   onError?: (code: string) => void;
-  onWarning?: (message: string) => void;
   createContext?: (sampleRate: number) => AudioContext;
   createWorkletNode?: (context: AudioContext) => AudioWorkletNode;
   createLocalTrack?: (track: MediaStreamTrack, context: AudioContext) => LocalAudioTrack;
@@ -51,14 +47,12 @@ export class NativeMicrophoneAudioSession {
   private startCommand?: Promise<void>;
   private removeChunkListener?: () => void;
   private removeErrorListener?: () => void;
-  private removeEchoListener?: () => void;
   private stopPromise?: Promise<void>;
   private nativeStartCommand?: ReturnType<NativeMicrophoneDesktopBridge['startNativeMicrophone']>;
   private stopped = false;
   private started = false;
   private droppedChunks = 0;
   private readonly onError?: (code: string) => void;
-  private readonly onWarning?: (message: string) => void;
   private readonly inputDeviceId: string;
   private pushToTalk: boolean;
   private transmissionHeld = false;
@@ -71,7 +65,6 @@ export class NativeMicrophoneAudioSession {
     this.inputDeviceId = options.deviceId ?? 'default';
     this.pushToTalk = options.pushToTalk ?? false;
     this.onError = options.onError;
-    this.onWarning = options.onWarning;
     this.createContext = options.createContext ?? ((sampleRate) => new AudioContext({ sampleRate }));
     this.createWorkletNode = options.createWorkletNode ?? ((context) => new AudioWorkletNode(context,
       'lycan-native-microphone', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] }));
@@ -119,10 +112,6 @@ export class NativeMicrophoneAudioSession {
     this.removeErrorListener = this.desktop.onNativeMicrophoneError((failure) => {
       if (failure?.sessionId === this.sessionId) this.fail(failure.code);
     });
-    this.removeEchoListener = this.desktop.onNativeMicrophoneEcho((state) => {
-      if (this.stopped || state?.sessionId !== this.sessionId || state.status === 'pending') return;
-      this.onWarning?.(state.status === 'unavailable' ? MICROPHONE_ECHO_NOTICE : '');
-    });
     try {
       this.context = this.createContext(48_000);
       await this.context.audioWorklet.addModule(processorUrl);
@@ -167,17 +156,14 @@ export class NativeMicrophoneAudioSession {
       const node = this.node;
       const removeChunks = this.removeChunkListener;
       const removeErrors = this.removeErrorListener;
-      const removeEcho = this.removeEchoListener;
       this.context = undefined;
       this.node = undefined;
       this.removeChunkListener = undefined;
       this.removeErrorListener = undefined;
-      this.removeEchoListener = undefined;
       // 分别尝试每项清理，单个资源失败不能阻断其余释放。
       const cleanups = [
         Promise.resolve().then(() => removeChunks?.()),
         Promise.resolve().then(() => removeErrors?.()),
-        Promise.resolve().then(() => removeEcho?.()),
         Promise.resolve().then(() => node?.port.close()),
         Promise.resolve().then(() => node?.disconnect()),
         Promise.resolve().then(() => this.track?.stop()),

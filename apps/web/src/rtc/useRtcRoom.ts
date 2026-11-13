@@ -13,7 +13,7 @@ import { MicrophoneAudioProcessor } from './microphoneAudioProcessor';
 import { NativeScreenVideoSession } from './nativeScreenVideo';
 import type { ScreenSharePreferences } from '../settings/screenSharePreferences';
 import { NativeScreenAudioSession } from './nativeScreenAudio';
-import { MICROPHONE_ECHO_NOTICE, NativeMicrophoneAudioSession, type NativeMicrophoneSettings } from './nativeMicrophoneAudio';
+import { NativeMicrophoneAudioSession, type NativeMicrophoneSettings } from './nativeMicrophoneAudio';
 import { nativeScreenAudioMode, type NativeScreenAudioMode } from './nativeScreenAudioMode';
 import { REMOTE_CONTROL_TOPIC, type RemoteControlInput } from './remoteControl';
 import { RemoteControlSession, type RemoteControlShare } from './remoteControlSession';
@@ -857,10 +857,6 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         nativeMicrophone = new NativeMicrophoneAudioSession(desktop, {
           deviceId: microphoneInputDeviceId,
           pushToTalk: microphonePushToTalk,
-          onWarning: (message) => {
-            if (nativeMicrophoneSession !== nativeMicrophone || activeRoom.value !== currentRoom) return;
-            if (message || notice.value === MICROPHONE_ECHO_NOTICE) notice.value = message;
-          },
           onError: (code) => {
             if (nativeMicrophoneSession !== nativeMicrophone || activeRoom.value !== currentRoom) return;
             microphoneVersion++;

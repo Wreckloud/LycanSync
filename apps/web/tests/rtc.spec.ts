@@ -20,7 +20,7 @@ declare global {
       releaseScreen?: () => void;
     };
     __customEntrancePlayCount: number;
-    __tonePlayCount: number;
+    __defaultSoundPlayCount: number;
   }
 }
 
@@ -46,26 +46,27 @@ function silentWav(durationMs = 100) {
 async function installCallSoundProbe(context: BrowserContext) {
   await context.addInitScript(() => {
     window.__customEntrancePlayCount = 0;
-    window.__tonePlayCount = 0;
+    window.__defaultSoundPlayCount = 0;
+    const defaultBuffers = new WeakSet<AudioBuffer>();
+    const decodeAudioData = AudioContext.prototype.decodeAudioData;
+    AudioContext.prototype.decodeAudioData = function (bytes, success, failure) {
+      const header = new Uint8Array(bytes, 0, Math.min(4, bytes.byteLength));
+      const isDefault = String.fromCharCode(...header) === 'OggS';
+      return decodeAudioData.call(this, bytes, success, failure).then(buffer => {
+        if (isDefault) defaultBuffers.add(buffer);
+        return buffer;
+      });
+    };
     const createBufferSource = AudioContext.prototype.createBufferSource;
     AudioContext.prototype.createBufferSource = function createTrackedBufferSource() {
       const source = createBufferSource.call(this);
       const start = source.start.bind(source);
       source.start = (...args) => {
-        window.__customEntrancePlayCount++;
+        if (source.buffer && defaultBuffers.has(source.buffer)) window.__defaultSoundPlayCount++;
+        else window.__customEntrancePlayCount++;
         start(...args);
       };
       return source;
-    };
-    const createOscillator = AudioContext.prototype.createOscillator;
-    AudioContext.prototype.createOscillator = function createTrackedOscillator() {
-      const oscillator = createOscillator.call(this);
-      const start = oscillator.start.bind(oscillator);
-      oscillator.start = (...args) => {
-        window.__tonePlayCount++;
-        start(...args);
-      };
-      return oscillator;
     };
   });
 }
@@ -561,12 +562,12 @@ test('停止共享后释放 WebRTC 轨道与远端订阅', async ({ browser, con
     await expect(otherPage.getByTestId('participant-card').locator('video')).toHaveCount(1);
     await expect.poll(() => inboundBytes(otherPage, 'video')).toBeGreaterThan(0);
     await page.waitForTimeout(900);
-    const localTonesBeforeStop = await page.evaluate(() => window.__tonePlayCount);
-    const remoteTonesBeforeStop = await otherPage.evaluate(() => window.__tonePlayCount);
+    const localSoundsBeforeStop = await page.evaluate(() => window.__defaultSoundPlayCount);
+    const remoteSoundsBeforeStop = await otherPage.evaluate(() => window.__defaultSoundPlayCount);
 
     await page.getByRole('button', { name: '停止屏幕共享', exact: true }).click();
-    await expect.poll(() => page.evaluate(() => window.__tonePlayCount)).toBeGreaterThanOrEqual(localTonesBeforeStop + 3);
-    await expect.poll(() => otherPage.evaluate(() => window.__tonePlayCount)).toBeGreaterThanOrEqual(remoteTonesBeforeStop + 3);
+    await expect.poll(() => page.evaluate(() => window.__defaultSoundPlayCount)).toBeGreaterThanOrEqual(localSoundsBeforeStop + 1);
+    await expect.poll(() => otherPage.evaluate(() => window.__defaultSoundPlayCount)).toBeGreaterThanOrEqual(remoteSoundsBeforeStop + 1);
     // 停止共享只解除这一路画面：按钮立即回到“开始”，采集轨道必须结束，麦克风保持 live。
     await expect(page.getByRole('button', { name: '开始屏幕共享', exact: true })).toBeEnabled();
     await expect.poll(() => page.evaluate(() => {

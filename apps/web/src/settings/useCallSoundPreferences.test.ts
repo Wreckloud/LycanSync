@@ -23,3 +23,21 @@ it('错误设置和写入失败明确反馈，当前操作仍可使用', () => {
   expect(preferences.customEntrances.value).toBe(false);
   expect(preferences.error.value).toContain('未能保存');
 });
+
+it('升级保留原音量和事件开关，只默认开启新录制提示，移除收听事件', () => {
+  const oldEvents = Object.fromEntries(CALL_SOUND_EVENTS.filter(event => !event.id.startsWith('recording')).map(event => [event.id, false]));
+  const saved = { volume: 0.3, customEntrances: false, enabled: { ...oldEvents, listeningOn: true, listeningOff: true } };
+  const storage = { getItem: () => JSON.stringify(saved), setItem: vi.fn() };
+  const preferences = useCallSoundPreferences('self', storage);
+  expect(preferences.error.value).toBe('');
+  expect(preferences.volume.value).toBe(0.3);
+  expect(preferences.customEntrances.value).toBe(false);
+  expect(preferences.enabled.joined).toBe(false);
+  expect(preferences.enabled.recordingStarted).toBe(true);
+  expect(preferences.enabled.recordingStopped).toBe(true);
+  expect(preferences.enabled).not.toHaveProperty('listeningOn');
+  preferences.setEnabled('recordingStarted', false);
+  const next = JSON.parse(storage.setItem.mock.calls[0][1]);
+  expect(next.enabled).not.toHaveProperty('listeningOff');
+  expect(next.enabled.recordingStarted).toBe(false);
+});

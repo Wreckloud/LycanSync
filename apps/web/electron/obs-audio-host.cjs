@@ -32,9 +32,9 @@ function settingsCommand(settings) {
 class ObsAudioHostManager {
   constructor({ executablePath, modulePath, dataPath, configPath, platform = process.platform, spawnProcess = spawn,
     startTimeoutMs = 12_000, stopTimeoutMs = 4000, killTimeoutMs = 1500, requestTimeoutMs = 3000,
-    onFailure = () => {}, onDiagnostic = () => {}, onEchoState = () => {} }) {
+    onFailure = () => {}, onDiagnostic = () => {} }) {
     Object.assign(this, { executablePath, modulePath, dataPath, configPath, platform, spawnProcess,
-      startTimeoutMs, stopTimeoutMs, killTimeoutMs, requestTimeoutMs, onFailure, onDiagnostic, onEchoState });
+      startTimeoutMs, stopTimeoutMs, killTimeoutMs, requestTimeoutMs, onFailure, onDiagnostic });
     this.state = undefined;
     this.referenceSelector = 'none';
     this.disposed = false;
@@ -107,7 +107,6 @@ class ObsAudioHostManager {
           durationMs: Math.round(performance.now() - state.startedAt), ...timing });
       } else if (event.event === 'echo' && ['disabled', 'pending', 'ready', 'unavailable'].includes(event.status)) {
         if (!state.stopping) {
-          this.onEchoState(state.sessionId, event.status);
           this.onDiagnostic({ stage: 'microphoneEchoState', status: event.status });
         }
       } else if (event.event === 'referenceConfigured' && state.requests.get(event.requestId)?.kind === 'reference') {

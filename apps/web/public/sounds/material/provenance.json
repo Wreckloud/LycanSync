@@ -1,0 +1,50 @@
+{
+  "author": "Google",
+  "source": "https://m2.material.io/design/sound/sound-resources.html",
+  "mirror": "https://github.com/nana-4/materia-sound-theme",
+  "revision": "10d30e9a01af4dec6a9cf94317c9536fec5a24f4",
+  "license": "CC-BY-4.0",
+  "modified": false,
+  "files": [
+    {
+      "file": "navigation_forward-selection.ogg",
+      "sha256": "cb9251d69f120961c9d3b6511fb6b8ebe24de4c605d78aa952e08d35d0aea7d4",
+      "bytes": 12262
+    },
+    {
+      "file": "navigation_backward-selection.ogg",
+      "sha256": "5af17d72d9a2eb9838019ebdc7f617da0ed3d3710023c0ce2e1c49770637ac52",
+      "bytes": 9808
+    },
+    {
+      "file": "navigation_forward-selection-minimal.ogg",
+      "sha256": "4d1cb90b60bade593a08b41d0430b07b10004db0f85f035811ffbbc0ba5bf06c",
+      "bytes": 6568
+    },
+    {
+      "file": "navigation_backward-selection-minimal.ogg",
+      "sha256": "5c6fba098a6364849ef2dbbf1fe96234ecd90fb62961f618f2e5e885a94efd83",
+      "bytes": 7128
+    },
+    {
+      "file": "navigation_selection-complete-celebration.ogg",
+      "sha256": "3309d4991d6a721d6b1e69246f7ca208d0f23322a6c6f2656182998bd6db243e",
+      "bytes": 17052
+    },
+    {
+      "file": "alert_error-02.ogg",
+      "sha256": "1d3b3c6097b087ec58b69950a7dc97f571ed094d640fedd5dfea802c8b75cf40",
+      "bytes": 9132
+    },
+    {
+      "file": "notification_simple-01.ogg",
+      "sha256": "3d932661931e306fa09cb285adf1c51c09adc614b63e5b89d4380a4fa7a33d77",
+      "bytes": 11295
+    },
+    {
+      "file": "navigation-cancel.ogg",
+      "sha256": "92012997d35d209051bad2fad722f4a92d7293b1fa5980ed59e621990b11924b",
+      "bytes": 7561
+    }
+  ]
+}
