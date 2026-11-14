@@ -42,6 +42,7 @@ createApp({ setup() {
 ` });
     });
     await page.goto('/');
+    await expect(page.getByRole('button', { name: /^重置.*音量$/ })).toHaveCount(0);
     const toggle = page.getByRole('checkbox', { name: '智能声音处理', exact: true });
     await expect(toggle).toHaveJSProperty('indeterminate', true);
     await expect(toggle).toHaveAttribute('aria-checked', 'mixed');
@@ -79,7 +80,7 @@ createApp({ setup() {
     await sharedVolumeToggle.click();
     await expect.poll(() => page.locator('.audio-settings').evaluate(element => element.getAnimations({ subtree: true }).length)).toBe(0);
     await page.screenshot({ path: testInfo.outputPath('audio-reset-buttons.png'), fullPage: true });
-    for (const [name, sliderName] of [['重置麦克风输入音量', '麦克风输入音量'], ['重置总输出音量', 'lycanclaw 总输出音量'], ['重置共享画面音量', '共享画面音量']]) {
+    for (const [name, sliderName, initialValue] of [['重置麦克风输入音量', '麦克风输入音量', '1.4'], ['重置总输出音量', 'lycanclaw 总输出音量', '0.8'], ['重置共享画面音量', '共享画面音量', '0.6']]) {
       const slider = page.getByRole('slider', { name: sliderName, exact: true });
       const measure = () => slider.evaluate(element => {
         const bounds = element.getBoundingClientRect();
@@ -98,12 +99,12 @@ createApp({ setup() {
         expect(await resetPosition(), `${name}: ${value}`).toEqual(fixedPosition);
       }
       await page.getByRole('button', { name, exact: true }).click();
-      await expect(slider).toHaveValue('1');
+      await expect(slider).toHaveValue(initialValue);
       await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
       expect(await measure(), name).toEqual(position);
     }
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem(
-      'lycansync.audio-preferences.v1.audio-settings-test')!))).toMatchObject({ inputGain: 1, outputVolume: 1, screenShareVolume: 1 });
+      'lycansync.audio-preferences.v1.audio-settings-test')!))).toMatchObject({ inputGain: 1.4, outputVolume: 0.8, screenShareVolume: 0.6 });
     if (desktop) {
       const projectLink = page.getByRole('link', { name: 'RNNoise 开源项目' });
       await expect(projectLink).toHaveAttribute('href', 'https://github.com/xiph/rnnoise');
@@ -144,16 +145,28 @@ createApp({ setup() {
     expect(await counts()).toEqual(inactive);
     await page.getByRole('button', { name: '切换测试页' }).click();
     await expect.poll(counts).toEqual({ input: inactive.input + 1, output: inactive.output + 1 });
+    const inputGain = page.getByRole('slider', { name: '麦克风输入音量', exact: true });
+    await inputGain.fill('1.2');
+    await expect(page.getByRole('button', { name: '重置麦克风输入音量', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '切换测试页' }).click();
+    await page.getByRole('button', { name: '切换测试页' }).click();
+    await expect(inputGain).toHaveValue('1.2');
+    await expect(page.getByRole('button', { name: '重置麦克风输入音量', exact: true })).toHaveCount(0);
+    await inputGain.fill('1.6');
+    await page.getByRole('button', { name: '重置麦克风输入音量', exact: true }).click();
+    await expect(inputGain).toHaveValue('1.2');
     await page.getByRole('button', { name: '卸载测试页' }).click();
     const unmounted = await counts();
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));
     expect(await counts()).toEqual(unmounted);
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem(
       'lycansync.audio-preferences.v1.audio-settings-test')!))).toMatchObject({
-      ...disabled, inputGain: 1, outputVolume: 1, screenShareVolume: 1,
+      ...disabled, inputGain: 1.2, outputVolume: 0.8, screenShareVolume: 0.6,
     });
     await page.reload();
+    await expect(page.getByRole('slider', { name: '麦克风输入音量', exact: true })).toHaveValue('1.2');
+    await expect(page.getByRole('button', { name: /^重置.*音量$/ })).toHaveCount(0);
     await expect(sharedVolume).toBeHidden();
-    await expect(sharedVolumeToggle).toContainText('100%');
+    await expect(sharedVolumeToggle).toContainText('60%');
   });
 }

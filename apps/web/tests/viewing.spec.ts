@@ -416,8 +416,9 @@ test('主动诊断记录返回应用后继续，离房结束并导出匿名报�
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await sharing(page, ['A', 'B']);
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('button', { name: '关于与诊断', exact: true }).click();
+  await page.getByRole('button', { name: '客户端', exact: true }).click();
   const report = page.locator('.diagnostic-report-settings');
+  await report.getByRole('button', { name: '更多诊断选项', exact: true }).click();
   await report.getByRole('textbox', { name: '体验说明（选填）' }).fill('合成界面回归');
   await report.getByRole('button', { name: '开始记录', exact: true }).click();
   await expect(report.getByRole('status')).toContainText('记录中');
@@ -429,8 +430,9 @@ test('主动诊断记录返回应用后继续，离房结束并导出匿名报�
   await page.waitForTimeout(2200);
   await page.getByRole('button', { name: '离开语音', exact: true }).click();
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await page.getByRole('button', { name: '关于与诊断', exact: true }).click();
+  await page.getByRole('button', { name: '客户端', exact: true }).click();
   await expect(report.getByRole('status')).toContainText('记录已结束');
+  await report.getByRole('button', { name: '更多诊断选项', exact: true }).click();
   await expect(report.getByRole('textbox', { name: '体验说明（选填）' })).toHaveValue('合成界面回归');
   const downloading = page.waitForEvent('download');
   await report.getByRole('button', { name: '导出报告', exact: true }).click();

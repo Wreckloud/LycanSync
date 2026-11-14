@@ -64,6 +64,17 @@ class OwnerSettingsServiceTests {
     }
 
     @Test
+    void incompleteDeploymentHidesQqButAllowsOwnerToReadAndRepairConfiguration() {
+        defaults.setEnabled(true);
+        assertThat(qq.isEnabled()).isFalse();
+        assertThat(service.status(owner).qqEnabled()).isFalse();
+        assertThat(service.qqSettings(owner).configurationError()).contains("请检查 App ID");
+        var repaired = service.saveQqSettings(owner, new QqConfigurationRequest(true, "1234567", "new-key", CALLBACK));
+        assertThat(repaired.configurationError()).isEmpty();
+        verify(configurations).save(new QqConfiguration(true, "1234567", "new-key", CALLBACK));
+    }
+
+    @Test
     void saveEnablesLoginWithoutReturningKeyAndBlankKeyRetainsExistingSecret() {
         when(configurations.find()).thenReturn(new QqConfiguration(true, "1234567", "private-key", CALLBACK));
         var result = service.saveQqSettings(owner, new QqConfigurationRequest(true, "1234567", "", CALLBACK));

@@ -101,7 +101,8 @@ class OwnerSettingsControllerTests {
         when(qq.current()).thenReturn(new QqConfiguration(true, "1234567", "private-key", "https://example.com/api/auth/qq/callback"));
         mvc.perform(get("/api/auth/server-settings/qq").header("Authorization", "Bearer owner-token"))
                 .andExpect(status().isOk()).andExpect(header().string("Cache-Control", containsString("no-store")))
-                .andExpect(jsonPath("$.*", hasSize(4))).andExpect(jsonPath("$.appKey").doesNotExist())
+                .andExpect(jsonPath("$.*", hasSize(5))).andExpect(jsonPath("$.appKey").doesNotExist())
+                .andExpect(jsonPath("$.configurationError").value(""))
                 .andExpect(jsonPath("$.appKeyConfigured").value(true));
     }
 }

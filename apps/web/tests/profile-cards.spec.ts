@@ -44,6 +44,27 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test('各设置页说明共用同一位置和样式，诊断入口归入客户端', async ({ page }, testInfo) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const intro = page.locator('.settings-page-intro');
+  await expect(page.getByRole('button', { name: '关于与诊断', exact: true })).toHaveCount(0);
+  let baseline: { x: number; y: number; width: number } | undefined;
+  for (const name of ['账号设置', '语音与音频', '音效', '快捷键', '客户端', '服主管理']) {
+    await page.getByRole('button', { name, exact: true }).click();
+    await expect(intro).toBeVisible();
+    const bounds = await intro.boundingBox();
+    const position = { x: bounds!.x, y: bounds!.y, width: bounds!.width };
+    if (!baseline) baseline = position;
+    expect(position, name).toEqual(baseline);
+    await expect(intro).toHaveCSS('font-size', '14px');
+    await expect(intro).toHaveCSS('margin-bottom', '24px');
+    if (name === '账号设置' || name === '语音与音频') {
+      await page.locator('.settings-view').screenshot({ path: testInfo.outputPath(`${name}.png`), animations: 'disabled' });
+    }
+  }
+});
+
 test('底部整块资料打开菜单，编辑沿用设置且返回原入口，不改底部布局', async ({ page }) => {
   await page.goto('/');
   const footer = page.locator('.group-conversation > .personal-card');
@@ -597,6 +618,7 @@ test('本机提示音只提供统一音量和逐项开关，重开后恢复，�
   const muted = page.getByRole('checkbox', { name: '麦克风静音', exact: true });
   await muted.uncheck();
   await page.getByRole('slider', { name: '提示音音量', exact: true }).fill('40');
+  await expect(page.getByRole('button', { name: '重置提示音音量', exact: true })).toBeVisible();
   await expect(page.getByRole('checkbox', { name: '成员加入语音', exact: true })).toBeChecked();
   await expect(page.getByRole('button', { name: '选择音效', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '自定义音效', exact: true })).toBeVisible();
@@ -626,6 +648,10 @@ test('本机提示音只提供统一音量和逐项开关，重开后恢复，�
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '音效', exact: true }).click();
   await expect(muted).not.toBeChecked();
+  await expect(page.getByRole('slider', { name: '提示音音量', exact: true })).toHaveValue('40');
+  await expect(page.getByRole('button', { name: '重置提示音音量', exact: true })).toHaveCount(0);
+  await page.getByRole('slider', { name: '提示音音量', exact: true }).fill('60');
+  await page.getByRole('button', { name: '重置提示音音量', exact: true }).click();
   await expect(page.getByRole('slider', { name: '提示音音量', exact: true })).toHaveValue('40');
   await expect(sharingSound).toBeHidden();
   await moreSounds.click();

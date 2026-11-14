@@ -123,7 +123,7 @@ it('闲置五分钟或锁屏判离开，持续输入确认后判在线，查询�
     expect(state.currentPresenceStatus.value).toBe('AWAY');
     await app.updateOwnPresenceStatus();
     expect(state.currentPresenceStatus.value).toBe('AWAY');
-    for (let i = 0; i < 3; i++) { advanceClock(2000); await app.updateOwnPresenceStatus(); }
+    advanceClock(2000); await app.updateOwnPresenceStatus();
     expect(state.currentPresenceStatus.value).toBe('ONLINE');
     desktop.getSystemIdleState.mockResolvedValueOnce({ state: 'locked', idleSeconds: 0 });
     await app.updateOwnPresenceStatus();
@@ -272,6 +272,62 @@ it('单次误触后等待不会恢复在线，连续采样同一次输入也不�
     }
     expect(f.state.currentPresenceStatus.value).toBe('AWAY');
     expect(f.state.sendPresenceHeartbeat).not.toHaveBeenCalled();
+  } finally { f.stop(); }
+});
+
+it('两次正常轮询确认持续输入后立即上报在线，不再等待六秒', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+  const f = setup();
+  try {
+    f.desktop.getSystemIdleState.mockResolvedValueOnce({ state: 'locked', idleSeconds: 600 });
+    f.app.startPresenceHeartbeat(); await settle();
+    expect(f.state.currentPresenceStatus.value).toBe('AWAY');
+    f.state.sendPresenceHeartbeat.mockClear();
+    f.advanceClock(2000); await vi.advanceTimersByTimeAsync(2000);
+    expect(f.state.currentPresenceStatus.value).toBe('AWAY');
+    f.advanceClock(2000); await vi.advanceTimersByTimeAsync(2000);
+    expect(f.state.currentPresenceStatus.value).toBe('ONLINE');
+    expect(f.state.sendPresenceHeartbeat).toHaveBeenCalledOnce();
+    expect(f.state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('ONLINE', null, expect.any(AbortSignal), expect.any(Object));
+  } finally { f.stop(); }
+});
+
+it('恢复期间额外查询不会延长确认时间，隐身也不会被持续输入解除', async () => {
+  const f = setup();
+  try {
+    f.state.currentPresenceStatus.value = 'AWAY';
+    f.state.presenceMode.value = 'invisible';
+    await f.app.updateOwnPresenceStatus();
+    f.advanceClock(1100); await f.app.updateOwnPresenceStatus();
+    expect(f.state.currentPresenceStatus.value).toBe('AWAY');
+    f.advanceClock(900); await f.app.updateOwnPresenceStatus(); await settle();
+    expect(f.state.currentPresenceStatus.value).toBe('ONLINE');
+    expect(f.state.publicPresenceStatus.value).toBe('OFFLINE');
+    expect(f.state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('OFFLINE', null, expect.any(AbortSignal), expect.any(Object));
+  } finally { f.stop(); }
+});
+
+it('取整误差、停顿和系统查询失败不能凑出持续操作', async () => {
+  const f = setup();
+  try {
+    f.state.currentPresenceStatus.value = 'AWAY';
+    await f.app.updateOwnPresenceStatus();
+    f.advanceClock(2400);
+    f.desktop.getSystemIdleState.mockResolvedValueOnce({ state: 'active', idleSeconds: 2 });
+    await f.app.updateOwnPresenceStatus();
+    expect(f.state.currentPresenceStatus.value).toBe('AWAY');
+    f.advanceClock(2000);
+    f.desktop.getSystemIdleState.mockResolvedValueOnce({ state: 'active', idleSeconds: 4 });
+    await f.app.updateOwnPresenceStatus();
+    await f.app.updateOwnPresenceStatus();
+    expect(f.state.currentPresenceStatus.value).toBe('AWAY');
+    f.advanceClock(2000);
+    f.desktop.getSystemIdleState.mockRejectedValueOnce(new Error('temporarily unavailable'));
+    await f.app.updateOwnPresenceStatus();
+    await f.app.updateOwnPresenceStatus();
+    expect(f.state.currentPresenceStatus.value).toBe('AWAY');
+    f.advanceClock(2000); await f.app.updateOwnPresenceStatus();
+    expect(f.state.currentPresenceStatus.value).toBe('ONLINE');
   } finally { f.stop(); }
 });
 

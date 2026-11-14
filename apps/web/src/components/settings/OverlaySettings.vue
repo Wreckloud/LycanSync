@@ -3,7 +3,6 @@ import { onScopeDispose, watch } from 'vue';
 import type { useVoiceOverlay } from '../../overlay/useVoiceOverlay';
 import InlineFeedback from '../InlineFeedback.vue';
 import RangeValue from '../RangeValue.vue';
-import { DEFAULT_OVERLAY_SETTINGS } from '../../overlay/useVoiceOverlay';
 import SegmentedControl from '../SegmentedControl.vue';
 
 const props = defineProps<{ overlay: ReturnType<typeof useVoiceOverlay>; active: boolean }>();
@@ -25,7 +24,6 @@ onScopeDispose(() => { void props.overlay.edit(false); });
 
 <template>
   <div class="settings-section overlay-settings">
-    <p class="settings-intro">在游戏画面上查看通话成员和说话状态。</p>
     <section class="settings-block">
       <h2>屏幕覆盖</h2>
       <label class="settings-toggle">
@@ -50,7 +48,7 @@ onScopeDispose(() => { void props.overlay.edit(false); });
         <option value="">主窗口所在屏幕（默认）</option><option v-for="display in overlay.displays.value" :key="display.id" :value="display.id">{{ display.label }}</option>
         <option v-if="overlay.settings.value.displayId !== null && !overlay.displays.value.some((display) => display.id === overlay.settings.value.displayId)" :value="overlay.settings.value.displayId">原显示器已断开（临时使用主屏）</option>
       </select></label>
-      <div class="settings-range-row"><span><label for="settings-overlay-scale">整体大小</label><RangeValue :value="overlay.settings.value.scale" :default-value="DEFAULT_OVERLAY_SETTINGS.scale" label="重置覆盖整体大小" :disabled="!overlay.ready.value || overlay.busy.value" @reset="overlay.configure({ scale: DEFAULT_OVERLAY_SETTINGS.scale })">{{ overlay.settings.value.scale }}%</RangeValue></span><input id="settings-overlay-scale" type="range" min="75" max="150" step="5"
+      <div class="settings-range-row"><span><label for="settings-overlay-scale">整体大小</label><RangeValue :value="overlay.settings.value.scale" :active="active" :ready="overlay.ready.value" label="重置覆盖整体大小" :disabled="!overlay.ready.value || overlay.busy.value" @reset="overlay.configure({ scale: $event })">{{ overlay.settings.value.scale }}%</RangeValue></span><input id="settings-overlay-scale" type="range" min="75" max="150" step="5"
         :value="overlay.settings.value.scale" :disabled="!overlay.ready.value || overlay.busy.value" aria-label="覆盖整体大小"
         @change="overlay.configure({ scale: Number(($event.target as HTMLInputElement).value) })" /></div>
       <div class="settings-toggle">

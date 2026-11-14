@@ -8,16 +8,18 @@ import type { GroupDetail } from '../../group/groupApi';
 
 const props = defineProps<{ active: boolean; leaving: boolean; administrator?: boolean; userId: string }>();
 const emit = defineEmits<{ logout: []; resolveOwner: []; groupUpdated: [group: GroupDetail]; groupRemoved: [id: string] }>();
-const expanded = ref<'qq' | null>(null);
 const qqAvailable = ref(false);
 const binding = ref<{ bound: boolean; nickname: string } | null>(null);
 const qqError = ref('');
 let request: AbortController | undefined;
 async function refreshBinding() {
+  if (!props.active) return;
   request?.abort();
   const current = new AbortController();
   request = current;
   qqError.value = '';
+  qq.error.value = '';
+  binding.value = null;
   try {
     const options = await authRequest<{ qqAvailable: boolean }>('options', 'GET', undefined, current.signal);
     if (current.signal.aborted) return;
@@ -33,11 +35,8 @@ async function refreshBinding() {
 const qq = useQqLogin(() => {}, refreshBinding);
 onScopeDispose(() => request?.abort());
 
-function toggleEntry(entry: 'qq') {
-  expanded.value = expanded.value === entry ? null : entry;
-}
 watch(() => props.active, (active) => {
-  if (!active) { expanded.value = null; request?.abort(); qq.cancel(); return; }
+  if (!active) { request?.abort(); qq.cancel(); qqAvailable.value = false; return; }
   void refreshBinding();
 }, { immediate: true });
 </script>
@@ -45,20 +44,19 @@ watch(() => props.active, (active) => {
 <template>
   <section class="settings-section account-settings">
     <h2>账号操作</h2>
-    <section class="settings-block account-operation">
+    <section v-if="qqAvailable" class="settings-block account-operation">
       <div class="settings-action-row"><h3>绑定第三方账号</h3>
         <span class="settings-actions">
-          <button v-if="qqAvailable && !binding?.bound" type="button" :disabled="!binding || leaving || qq.busy.value" @click="qq.start(true)">绑定 QQ</button>
+          <button v-if="!binding?.bound" type="button" :disabled="!binding || leaving || qq.busy.value" @click="qq.start(true)">绑定 QQ</button>
           <button v-if="qq.busy.value" type="button" :disabled="qq.finishing.value" @click="qq.cancel">取消等待</button>
-          <button v-if="!qqAvailable" type="button" :aria-expanded="expanded === 'qq'" aria-controls="qq-entry" @click="toggleEntry('qq')">{{ expanded === 'qq' ? '收起说明' : '查看 QQ 绑定说明' }}</button>
         </span>
       </div>
       <p>{{ binding?.bound ? `已绑定 QQ · ${binding.nickname}` : '绑定 QQ，方便下次登录当前账号。' }}</p>
-      <small v-if="!qqAvailable && expanded !== 'qq'">当前服务器未开启 QQ 登录。</small>
-      <p v-if="!qqAvailable && expanded === 'qq'" id="qq-entry">当前服务器尚未开启 QQ 登录。</p>
       <InlineFeedback :message="qq.error.value || qqError" :status="qq.busy.value && !qq.finishing.value ? '请在浏览器确认 QQ 绑定' : ''"
         :pending="qq.finishing.value ? '正在确认绑定…' : qqAvailable && !binding && !qqError ? '正在读取绑定状态…' : ''" />
     </section>
+    <InlineFeedback v-if="!qqAvailable" :message="qqError" />
+    <button v-if="qqError" type="button" :disabled="leaving || qq.busy.value" @click="refreshBinding">重试</button>
     <section class="settings-block account-operation">
       <div class="settings-action-row"><h3>退出当前账号</h3>
         <button type="button" :disabled="leaving" @click="emit('logout')">退出登录</button></div>

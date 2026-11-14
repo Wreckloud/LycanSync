@@ -6,8 +6,13 @@ import UpdateRestartDialog from '../UpdateRestartDialog.vue';
 import DialogTransition from '../DialogTransition.vue';
 import { useClientUpdate } from '../../settings/useClientUpdate';
 import CacheSettings from './CacheSettings.vue';
+import DiagnosticReportSettings from './DiagnosticReportSettings.vue';
+import ProjectAttribution from '../ProjectAttribution.vue';
+import type { Room } from 'livekit-client';
+import type { useDiagnosticReport } from '../../diagnostics/useDiagnosticReport';
+import packageInfo from '../../../package.json';
 
-const props = defineProps<{ desktop: boolean; active: boolean; userId?: string }>();
+const props = defineProps<{ desktop: boolean; active: boolean; userId?: string; room: Room | null; report: ReturnType<typeof useDiagnosticReport> }>();
 const cacheSettings = ref<InstanceType<typeof CacheSettings> | null>(null);
 const confirmingCache = computed(() => Boolean(cacheSettings.value?.confirming));
 const autoStartSupported = ref<boolean>();
@@ -35,7 +40,7 @@ const updateDescription = computed(() => {
 const autoStartDescription = computed(() => {
   if (autoStartSupported.value === undefined) return autoStartError.value ? '尚未确认开机自启支持情况。' : autoStartLoadingHint.value ? '正在读取开机自启设置…' : '登录 Windows 后自动启动。';
   return autoStartSupported.value
-    ? ''
+    ? '登录 Windows 后自动启动。'
     : '开机启动仅支持 Windows 安装版。';
 });
 
@@ -112,12 +117,16 @@ async function updateAutoStart(event: Event) {
 
 <template>
   <div class="settings-section client-settings">
-    <section v-if="desktop" class="settings-block">
-      <h2>应用更新</h2>
+    <section class="settings-block">
+      <h2>应用信息</h2>
       <div class="settings-toggle update-summary">
-        <span><strong>{{ updateState?.version ? `版本 ${updateState.version}` : '客户端版本' }}</strong><small role="status">{{ updateDescription }}</small></span>
-        <button type="button" class="settings-button" :disabled="updateBusy || !updateState?.supported || updateState.phase === 'checking'" @click="checkUpdates()">检查更新</button>
+        <span><strong>lycanclaw · {{ updateState?.version || packageInfo.version }}</strong><small role="status">{{ desktop ? updateDescription : '浏览器版随服务器更新。' }}</small></span>
+        <button v-if="desktop" type="button" class="settings-button" :disabled="updateBusy || !updateState?.supported || updateState.phase === 'checking'" @click="checkUpdates()">检查更新</button>
       </div>
+      <ProjectAttribution>
+        <template v-if="desktop">桌面客户端基于 <a href="https://github.com/electron/electron" target="_blank" rel="noopener noreferrer">Electron</a>，</template>
+        界面由 <a href="https://github.com/vuejs/core" target="_blank" rel="noopener noreferrer">Vue</a> 构建，图标来自 <a href="https://github.com/lucide-icons/lucide" target="_blank" rel="noopener noreferrer">Lucide</a>。
+      </ProjectAttribution>
       <InlineFeedback :message="confirmationVersion ? '' : updateError || (updateState?.error ? updateState.message : '')" />
       <DialogTransition>
       <UpdateRestartDialog v-if="confirmationVersion" :version="confirmationVersion" :busy="updateBusy" :error="updateError"
@@ -125,7 +134,7 @@ async function updateAutoStart(event: Event) {
       </DialogTransition>
     </section>
     <section class="settings-block">
-      <h2>系统</h2>
+      <h2>系统设置</h2>
       <p v-if="!desktop">托盘和开机自启仅在 Windows 桌面版提供。</p>
       <div v-else class="settings-toggle-group">
         <label class="settings-toggle" :class="{ 'is-disabled': !autoStartSupported || autoStartBusy }">
@@ -142,6 +151,7 @@ async function updateAutoStart(event: Event) {
         <InlineFeedback :message="trayError" />
       </div>
     </section>
+    <DiagnosticReportSettings :report="report" :room="room" :active="active" />
     <CacheSettings v-if="userId" ref="cacheSettings" :user-id="userId" :active="active" />
   </div>
 </template>

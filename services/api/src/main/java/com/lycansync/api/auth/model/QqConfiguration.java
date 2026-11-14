@@ -25,4 +25,12 @@ public record QqConfiguration(boolean enabled, String appId, String appKey, Stri
 
     @Override
     public String toString() { return "QqConfiguration[enabled=" + enabled + "]"; }
+
+    public String validationError() {
+        try { publicUrl(); }
+        catch (IllegalArgumentException exception) {
+            return "请检查 App ID、App Key 和回调地址；回调地址需使用 HTTPS，路径为 /api/auth/qq/callback";
+        }
+        return "";
+    }
 }

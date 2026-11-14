@@ -2,9 +2,10 @@
 import { onScopeDispose, ref, useId, watch } from 'vue';
 import { ChevronRight } from '@lucide/vue';
 import InlineFeedback from '../InlineFeedback.vue';
+import ProjectAttribution from '../ProjectAttribution.vue';
 import RangeValue from '../RangeValue.vue';
 import ExpandSection from '../ExpandSection.vue';
-import { DEFAULT_CALL_SOUND_VOLUME, CALL_SOUND_EVENTS, type CallSoundEvent, type useCallSoundPreferences } from '../../settings/useCallSoundPreferences';
+import { CALL_SOUND_EVENTS, type CallSoundEvent, type useCallSoundPreferences } from '../../settings/useCallSoundPreferences';
 import type { useCallSounds } from '../../rtc/useCallSounds';
 
 const props = defineProps<{ active: boolean; preferences: ReturnType<typeof useCallSoundPreferences>; sounds: ReturnType<typeof useCallSounds> }>();
@@ -21,14 +22,6 @@ async function preview(event: CallSoundEvent) {
   previewError.value = '';
   if (!await props.sounds.preview(event) && props.active && version === previewVersion) previewError.value = '无法试听，请确认总输出和提示音未静音，且系统允许播放声音。';
 }
-function openSoundSource(event: MouseEvent) {
-  if (!window.lycanDesktop) return;
-  event.preventDefault();
-  previewError.value = '';
-  void window.lycanDesktop.openExternal((event.currentTarget as HTMLAnchorElement).href).catch(() => {
-    previewError.value = '无法打开默认浏览器。';
-  });
-}
 watch(() => props.active, active => { if (!active) { stopPreview(); moreSoundsOpen.value = false; } });
 onScopeDispose(stopPreview);
 </script>
@@ -37,11 +30,11 @@ onScopeDispose(stopPreview);
   <section class="settings-block call-sound-settings">
     <h2>本机提示音</h2>
     <p>调整加入语音、麦克风切换和录制等操作的提示音。</p>
-    <div class="settings-range-row"><span><label for="settings-call-sound-volume">提示音音量</label><RangeValue :value="preferences.volume.value" :default-value="DEFAULT_CALL_SOUND_VOLUME" label="重置提示音音量" @reset="preferences.setVolume(DEFAULT_CALL_SOUND_VOLUME)">{{ Math.round(preferences.volume.value * 100) }}%</RangeValue></span>
+    <div class="settings-range-row"><span><label for="settings-call-sound-volume">提示音音量</label><RangeValue :value="preferences.volume.value" :active="active" label="重置提示音音量" @reset="preferences.setVolume($event)">{{ Math.round(preferences.volume.value * 100) }}%</RangeValue></span>
       <input id="settings-call-sound-volume" type="range" min="0" max="100" step="1" aria-label="提示音音量" :value="Math.round(preferences.volume.value * 100)"
         @change="preferences.setVolume(Number(($event.target as HTMLInputElement).value) / 100)" />
     </div>
-    <small>提示音由 <a href="https://m2.material.io/design/sound/sound-resources.html" target="_blank" rel="noopener noreferrer" @click="openSoundSource">Google Material Design</a> 提供，采用 <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer" @click="openSoundSource">CC BY 4.0</a> 许可。</small>
+    <ProjectAttribution>提示音由 <a href="https://github.com/nana-4/materia-sound-theme" title="查看音效存档（GitHub）" target="_blank" rel="noopener noreferrer">Google Material Design</a> 提供，采用 <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a> 许可。</ProjectAttribution>
   </section>
   <section class="settings-block call-sound-settings">
     <h2>提示音开关</h2>

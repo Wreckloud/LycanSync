@@ -4,7 +4,7 @@ test.beforeEach(async ({ page }) => {
   // 未提供模拟的业务请求明确失败，不能落到 Vite 的真实服务器代理。
   await page.route('**/api/**', (route) => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
   await page.route('**/api/auth/server-settings/qq', route => route.fulfill({ json: {
-    enabled: false, appId: '', callbackUrl: '', appKeyConfigured: false,
+    enabled: false, appId: '', callbackUrl: '', appKeyConfigured: false, configurationError: '',
   } }));
 });
 
@@ -17,12 +17,78 @@ test('邀请模式不展示测试密码注册入口', async ({ page }) => {
   await expect(page.getByLabel('密码', { exact: true })).toHaveCount(0);
 });
 
+test('账号绑定只在 QQ 可用时展示，读取失败可重试且不保留旧绑定状态', async ({ page }) => {
+  const user = { id: 'member', nickname: '成员', avatar: '', signature: '', administrator: false };
+  let available = false;
+  let bound = false;
+  let bindingFailed = false;
+  let optionsFailed = false;
+  let bindingReads = 0;
+  await page.route('**/api/auth/options', route => route.fulfill(optionsFailed
+    ? { status: 503, json: { detail: '无法读取登录方式' } }
+    : { json: { mode: 'invite', qqAvailable: available, initialized: true } }));
+  await page.route('**/api/auth/me', route => route.fulfill({ json: user }));
+  await page.route('**/api/auth/session', route => route.fulfill({ json: user }));
+  await page.route('**/api/groups', route => route.fulfill({ json: [] }));
+  await page.route('**/api/presence/heartbeat', route => route.fulfill({ status: 204 }));
+  await page.route('**/api/auth/account', route => route.fulfill({ json: {
+    administrator: false, recoveryConfigured: false, ownedGroups: [], candidates: [], incomingTransfer: null, transferTargetId: null,
+  } }));
+  await page.route('**/api/auth/qq/binding', route => {
+    bindingReads++;
+    return route.fulfill(bindingFailed ? { status: 503, json: { detail: '无法读取 QQ 绑定状态' } }
+      : { json: { bound, nickname: bound ? '朋友' : '' } });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const account = page.locator('.account-settings');
+  await expect(account.getByText('绑定第三方账号', { exact: true })).toHaveCount(0);
+  await expect(account.getByText(/未开启 QQ|查看 QQ 绑定说明/)).toHaveCount(0);
+  expect(bindingReads).toBe(0);
+
+  async function reopen() {
+    await page.getByRole('button', { name: '快捷键', exact: true }).click();
+    await page.getByRole('button', { name: '账号设置', exact: true }).click();
+  }
+  available = true;
+  await reopen();
+  await expect(account.getByRole('button', { name: '绑定 QQ', exact: true })).toBeEnabled();
+  bound = true;
+  await reopen();
+  await expect(account.getByText('已绑定 QQ · 朋友', { exact: true })).toBeVisible();
+  await expect(account.getByRole('button', { name: '绑定 QQ', exact: true })).toHaveCount(0);
+
+  bindingFailed = true;
+  await reopen();
+  await expect(account.getByText('无法读取 QQ 绑定状态', { exact: true })).toBeVisible();
+  await expect(account.getByText('已绑定 QQ · 朋友', { exact: true })).toHaveCount(0);
+  await expect(account.getByRole('button', { name: '绑定 QQ', exact: true })).toBeDisabled();
+  bindingFailed = false;
+  await account.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(account.getByText('已绑定 QQ · 朋友', { exact: true })).toBeVisible();
+
+  optionsFailed = true;
+  await reopen();
+  await expect(account.getByText('无法读取登录方式', { exact: true })).toBeVisible();
+  await expect(account.getByText('绑定第三方账号', { exact: true })).toHaveCount(0);
+  optionsFailed = false;
+  available = false;
+  const readsBeforeRetry = bindingReads;
+  await account.getByRole('button', { name: '重试', exact: true }).click();
+  await expect(account.getByText('无法读取登录方式', { exact: true })).toHaveCount(0);
+  await expect(account.getByText('绑定第三方账号', { exact: true })).toHaveCount(0);
+  expect(bindingReads).toBe(readsBeforeRetry);
+});
+
 test('仅服主显示邀请面板且生成链接只在成功后展示', async ({ page }, testInfo) => {
   let configurationReads = 0;
   let recoveryConfigured = false;
   let qqBound = false;
   let bindingFailed = false;
   const user = { id: 'admin', nickname: '服主', avatar: '', signature: '', administrator: true };
+  await page.route('**/api/auth/server-settings/qq', route => route.fulfill({ json: {
+    enabled: true, appId: '', callbackUrl: '', appKeyConfigured: false, configurationError: '请检查 App ID、App Key 和回调地址',
+  } }));
   await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
@@ -57,6 +123,8 @@ test('仅服主显示邀请面板且生成链接只在成功后展示', async ({
   expect(passwordButton!.width).toBe(transferButton!.width);
   await expect(page.getByRole('button', { name: /刷新/ })).toHaveCount(0);
   await page.locator('.owner-settings').screenshot({ path: testInfo.outputPath('owner-settings.png') });
+  await expect(page.getByText('QQ 登录 · 配置未完成', { exact: true })).toBeVisible();
+  await expect(page.getByText('请检查 App ID、App Key 和回调地址', { exact: true })).toBeVisible();
   let qqConfiguration = { enabled: false, appId: '', callbackUrl: '', appKeyConfigured: false };
   const qqWrites: unknown[] = [];
   let rejectQqSave = true;

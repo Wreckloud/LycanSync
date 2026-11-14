@@ -11,7 +11,6 @@ import type { useAudioOutput } from '../rtc/useAudioOutput';
 import type { useDiagnosticReport } from '../diagnostics/useDiagnosticReport';
 import type { useActivityMappings } from '../settings/useActivityMappings';
 import type { useVoiceOverlay } from '../overlay/useVoiceOverlay';
-import AboutSettings from './settings/AboutSettings.vue';
 import AccountSettings from './settings/AccountSettings.vue';
 import OwnerSettings from './settings/OwnerSettings.vue';
 import ActivitySettings from './settings/ActivitySettings.vue';
@@ -84,6 +83,7 @@ const clientSettings = ref<InstanceType<typeof ClientSettings> | null>(null);
 const activeSection = ref<SettingsSectionId>(props.section);
 const leaving = ref(false);
 const sectionTitle = computed(() => settingsSectionTitle(activeSection.value));
+const sectionDescription = computed(() => SETTINGS_SECTIONS.find(item => item.id === activeSection.value)!.description);
 const visibleSections = computed(() => SETTINGS_SECTIONS.filter((item) => (item.id !== 'members' || props.user.administrator)
   && (item.id !== 'recording' || (props.desktop && props.recording))
   && (item.id !== 'overlay' || (props.desktop && props.overlay))));
@@ -150,6 +150,7 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
         </div>
       </header>
       <div class="settings-content">
+        <p class="settings-intro settings-page-intro">{{ sectionDescription }}</p>
         <div v-if="user.administrator && activeSection === 'members'" class="owner-settings-page">
           <button v-if="returningToClosure" type="button" class="settings-button" @click="selectSection('account')">返回注销流程</button>
           <OwnerSettings ref="ownerSettings" :active="true" :leaving="leaving" />
@@ -176,8 +177,8 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
             :change-quality="changeShareQuality" :change-audio="changeShareAudio" />
           <RecordingSettings :recording="recording" :desktop="desktop" :sharing="rtc.screenShareActive" :active="activeSection === 'recording'" />
         </div>
-        <ClientSettings ref="clientSettings" v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'" :user-id="user.id" />
-        <AboutSettings v-show="activeSection === 'about'" :active="activeSection === 'about'" :rtc="rtc" :report="diagnosticReport" />
+        <ClientSettings ref="clientSettings" v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'" :user-id="user.id"
+          :room="rtc.room" :report="diagnosticReport" />
       </div>
     </section>
   </main>
@@ -219,8 +220,9 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
 .settings-header-content { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; max-width: 820px; margin-inline: auto; }
 .settings-header h1 { margin: 0; font-size: 19px; font-weight: 600; }
 .settings-header h1:focus { outline: none; }
-.settings-content { min-width: 0; min-height: 0; overflow: auto; padding: 20px 24px 24px; }
+.settings-content { min-width: 0; min-height: 0; overflow: auto; scrollbar-gutter: stable both-edges; padding: 20px 24px 24px; }
 .settings-content > * { width: 100%; max-width: 820px; margin-inline: auto; }
+.settings-page-intro { color: var(--muted); font-size: 14px; line-height: 1.6; margin-bottom: 24px; }
 .settings-account-page { display: grid; gap: 24px; width: 100%; max-width: 820px; }
 @media (max-width: 760px) {
   .settings-view { grid-template-columns: minmax(0, 1fr) 176px; }

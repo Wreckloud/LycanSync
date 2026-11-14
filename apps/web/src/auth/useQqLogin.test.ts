@@ -59,3 +59,13 @@ it('绑定只调用原账号绑定接口，失败明确反馈并允许重试', a
   expect(f.flow.busy.value).toBe(false);
   expect(f.login).not.toHaveBeenCalled();
 });
+
+it('绑定确认后刷新原账号状态，不进入新账号登录流程', async () => {
+  const f = setup(); await f.flow.start(true);
+  vi.mocked(authRequest).mockResolvedValueOnce({ bound: true, nickname: '朋友' });
+  await f.complete(request);
+  expect(f.bound).toHaveBeenCalledOnce();
+  expect(f.login).not.toHaveBeenCalled();
+  expect(f.flow.busy.value).toBe(false);
+  expect(f.flow.error.value).toBe('');
+});

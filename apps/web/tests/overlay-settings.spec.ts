@@ -39,6 +39,12 @@ test('覆盖设置：默认关闭、模式与缩放保存，切栏及卸载结�
   await page.evaluate(() => window.overlaySettingsTest.setActive(false));
   await expect(page.getByRole('button', { name: '编辑位置', exact: true })).toBeVisible();
   await page.evaluate(() => window.overlaySettingsTest.setActive(true));
+  await expect(page.getByRole('button', { name: '重置覆盖整体大小', exact: true })).toHaveCount(0);
+  const scale = page.getByRole('slider', { name: '覆盖整体大小', exact: true });
+  await scale.fill('125');
+  await scale.dispatchEvent('change');
+  await page.getByRole('button', { name: '重置覆盖整体大小', exact: true }).click();
+  await expect(scale).toHaveValue('150');
   await page.getByRole('button', { name: '编辑位置', exact: true }).click();
   await page.evaluate(() => window.overlaySettingsTest.unmount());
   await expect.poll(() => page.evaluate(() => window.overlaySettingsTest.calls.at(-1))).toBe('edit:false');

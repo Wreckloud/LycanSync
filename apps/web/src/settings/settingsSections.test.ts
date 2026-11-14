@@ -8,6 +8,6 @@ describe('设置栏目', () => {
   });
 
   it('资料和活动归入账号栏目，不新增重复导航', () => {
-    expect(SETTINGS_SECTIONS.map(({ id }) => id)).toEqual(['account', 'audio', 'sound', 'shortcuts', 'recording', 'overlay', 'client', 'about', 'members']);
+    expect(SETTINGS_SECTIONS.map(({ id }) => id)).toEqual(['account', 'audio', 'sound', 'shortcuts', 'recording', 'overlay', 'client', 'members']);
   });
 });

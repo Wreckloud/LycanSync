@@ -11,7 +11,7 @@ import { createApp, h, reactive } from ${JSON.stringify(vuePath)};
 import CallControls from '/src/components/CallControls.vue';
 import '/src/styles.css';
 createApp({ setup() {
-  const state = reactive({ voiceMode:'voice', pushToTalkBinding:'F2', processingEnabled:true, sharing:true, recordingActive:true, voiceVolumeBalance:true, gameName:'饥荒联机版' });
+  const state = reactive({ voiceMode:'voice', pushToTalkBinding:'F2', processingEnabled:true, sharing:true, recordingActive:true, voiceVolumeBalance:true, gameName:'饥荒联机版', inputGain:1.4, outputVolume:0.8 });
   window.quickControlsTest = state;
   return () => h('div', { class:'callbar', style:'position:fixed;bottom:20px;right:20px' }, [h(CallControls, {
     connected:true, desktop:true, microphoneEnabled:true, microphoneIntent:true, microphoneBusy:false,
@@ -20,12 +20,33 @@ createApp({ setup() {
     recordingElapsed:'03:24', replayActive:true,
     shortcutsSupported:true, shortcutsReady:true, ...state,
     onVoiceMode:mode => {state.voiceMode=mode;}, onProcessing:enabled => {state.processingEnabled=enabled;},
+    onInputGain:value => {state.inputGain=value;}, onOutputVolume:value => {state.outputVolume=value;},
     onVoiceVolumeBalance:enabled => {state.voiceVolumeBalance=enabled;},
     onShare:() => {state.sharing=!state.sharing;state.recordingActive=false;}
   })]);
 }}).mount('#root');` });
   });
   await page.goto('/');
+});
+
+test('快捷菜单重置只撤回本次调整，收起后以保留的音量为基准', async ({ page }) => {
+  const opener = page.getByRole('button', { name: '麦克风选项', exact: true });
+  await opener.click();
+  const slider = page.getByRole('slider', { name: '麦克风输入音量', exact: true });
+  const reset = page.getByRole('button', { name: '重置麦克风输入音量', exact: true });
+  await expect(reset).toHaveCount(0);
+  await slider.fill('1.6');
+  await reset.click();
+  await expect(slider).toHaveValue('1.4');
+  await slider.fill('1.2');
+  await opener.click();
+  await expect(slider).toHaveCount(0);
+  await opener.click();
+  await expect(slider).toHaveValue('1.2');
+  await expect(reset).toHaveCount(0);
+  await slider.fill('1.8');
+  await reset.click();
+  await expect(slider).toHaveValue('1.2');
 });
 
 test('麦克风快捷切换更新勾选，声音处理是一个开关且切换不改变菜单高度', async ({ page }, testInfo) => {

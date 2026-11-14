@@ -43,7 +43,6 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
 
 <template>
   <div class="settings-section shortcut-settings">
-    <p class="settings-intro">在游戏或其他应用中，也能快捷切换麦克风、收听和保存回放。</p>
     <p v-if="!shortcuts.supported">全局快捷键仅在 Windows 桌面客户端提供。</p>
     <section class="settings-block">
       <div class="voice-mode-row">

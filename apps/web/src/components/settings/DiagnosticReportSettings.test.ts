@@ -13,7 +13,7 @@ it.each([true, false])('自动记录为 %s 时开关、导出和手动操作保�
     savedReport: ref(automatic ? { endedAt: '2026-10-25T00:01:00Z', clientVersion: '0.1.18', bytes: 1024 * 1024 } : null),
     savedSizeBytes: ref(automatic ? 1536 : null), persistenceError: ref(''),
     setAutomatic: vi.fn(), start: vi.fn(), stop: vi.fn(), save: vi.fn() } as unknown as ReturnType<typeof useDiagnosticReport>;
-  const html = await renderToString(createSSRApp(DiagnosticReportSettings, { report, canStart: false }));
+  const html = await renderToString(createSSRApp(DiagnosticReportSettings, { report, room: null, active: true }));
   expect(html).toContain('aria-label="自动记录诊断"');
   expect(html).toMatch(automatic ? /aria-label="自动记录诊断" checked/ : /aria-label="自动记录诊断"(?! checked)/);
   const exportButton = html.match(/<button[^>]*>导出报告<\/button>/)?.[0];
@@ -34,8 +34,8 @@ it('最近画面报告使用明确入口，不展示保存份数或轮转细节'
     saving: ref(false), notes: ref(''), savedSizeBytes: ref(2048), persistenceError: ref(''),
     savedReport: ref({ kind: 'screen-media', endedAt: '2026-10-29T00:01:00Z', bytes: 4096, clientVersion: '0.2.8' }),
   } as unknown as ReturnType<typeof useDiagnosticReport>;
-  const html = await renderToString(createSSRApp(DiagnosticReportSettings, { report, canStart: true }));
-  expect(html).toContain('导出最近画面使用');
+  const html = await renderToString(createSSRApp(DiagnosticReportSettings, { report, room: null, active: true }));
+  expect(html).toContain('导出最近共享与观看报告');
   expect(html).not.toContain('导出上次使用');
   expect(html).not.toMatch(/份统计|旧统计|滚动|900 份|两份/);
 });

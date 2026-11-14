@@ -165,7 +165,7 @@ class QqLoginServiceTests {
         for (int i = 0; i < 128; i++) start(false, null);
         assertThatThrownBy(() -> start(false, null)).isInstanceOf(AuthException.class).hasMessageContaining("请求较多");
         settings.setCallbackUrl("https://user:password@example.com/api/auth/qq/callback");
-        assertThatThrownBy(() -> start(false, null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> start(false, null)).isInstanceOf(AuthException.class).hasMessageContaining("配置尚未完成");
     }
 
     @Test

@@ -76,7 +76,7 @@ public class QqLoginService {
         QqConfiguration configuration = requireEnabled();
         if (challenge == null || !challenge.matches("[a-f0-9]{64}")) throw invalid("登录请求无效");
         if (binding && (user == null || user.sessionHash() == null)) throw invalid("请先登录原账号再绑定 QQ");
-        if (!binding && user != null) throw invalid("请先返回账号选择页并清除本机凭据，再登录其他账号");
+        if (!binding && user != null) throw invalid("请先退出当前账号，再登录其他账号");
         pending.entrySet().removeIf(entry -> !entry.getValue().expires.isAfter(now()));
         if (pending.size() >= 128) throw new AuthException(HttpStatus.TOO_MANY_REQUESTS,
                 ApiErrorCode.AUTH_RATE_LIMITED, "登录请求较多，请稍后再试");
@@ -255,6 +255,8 @@ public class QqLoginService {
         QqConfiguration configuration = settings.current();
         if (!configuration.enabled()) throw new AuthException(HttpStatus.SERVICE_UNAVAILABLE,
                 ApiErrorCode.AUTH_SERVICE_UNAVAILABLE, "此服务器尚未开启 QQ 登录");
+        if (!configuration.validationError().isEmpty()) throw new AuthException(HttpStatus.SERVICE_UNAVAILABLE,
+                ApiErrorCode.AUTH_SERVICE_UNAVAILABLE, "此服务器的 QQ 登录配置尚未完成，请联系服主");
         return configuration;
     }
 

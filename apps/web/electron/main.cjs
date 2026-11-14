@@ -894,7 +894,7 @@ ipcMain.handle('diagnostics:export-saved', async (event, notes) => {
     await mkdir(exportDirectory, { recursive: true });
     if (!trustedSender(event) || closing) return { saved: false };
     const result = await dialog.showSaveDialog(mainWindow, {
-      title: report.persistence?.retainedScreenUsage ? '导出最近画面使用报告' : '导出上次使用报告', defaultPath: resolve(exportDirectory, `LycanSync-diagnostics-${Date.parse(report.endedAt)}.json`),
+      title: report.persistence?.retainedScreenUsage ? '导出最近共享与观看报告' : '导出上次使用报告', defaultPath: resolve(exportDirectory, `LycanSync-diagnostics-${Date.parse(report.endedAt)}.json`),
       filters: [{ name: 'JSON 诊断报告', extensions: ['json'] }],
     });
     if (result.canceled || !result.filePath || !trustedSender(event) || closing) return { saved: false };

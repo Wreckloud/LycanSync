@@ -1,14 +1,23 @@
 <script setup lang="ts">
 import { RotateCcw } from '@lucide/vue';
+import { ref, watch } from 'vue';
 
-defineProps<{ value: number; defaultValue: number; label: string; disabled?: boolean }>();
-defineEmits<{ reset: [] }>();
+const props = withDefaults(defineProps<{ value: number; label: string; disabled?: boolean; active?: boolean; ready?: boolean }>(), {
+  active: true, ready: true,
+});
+defineEmits<{ reset: [value: number] }>();
+const initialValue = ref(props.value);
+// 按页面进入记录撤回基准；异步设置加载完成前的占位值不算用户修改。
+watch([() => props.active, () => props.ready, () => props.value], ([active, ready, value], [wasActive, wasReady]) => {
+  if (!active || !ready || !wasActive || !wasReady) initialValue.value = value;
+});
 </script>
 
 <template>
   <span class="range-value">
-    <button type="button" class="range-reset" :class="{ 'is-hidden': value === defaultValue }" :aria-label="label"
-      :disabled="disabled || value === defaultValue" @click.stop.prevent="$emit('reset')"><RotateCcw :size="14" aria-hidden="true" /></button>
+    <button type="button" class="range-reset" :class="{ 'is-hidden': !active || !ready || value === initialValue }" :aria-label="label"
+      title="恢复本次调整前的值" :disabled="disabled || !active || !ready || value === initialValue"
+      @click.stop.prevent="$emit('reset', initialValue)"><RotateCcw :size="14" aria-hidden="true" /></button>
     <strong><slot /></strong>
   </span>
 </template>

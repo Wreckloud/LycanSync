@@ -14,7 +14,7 @@ export function useOwnPresence(userId: string, visibility: { showActivity: Ref<b
   let presenceHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let presenceIdleTimer: ReturnType<typeof setInterval> | null = null;
   let presenceIdleRequest = 0;
-  let presenceRecovery: { startedAt: number; lastInputAt: number; samples: number } | null = null;
+  let presenceRecovery: { startedAt: number; lastInputAt: number } | null = null;
   let presenceAbort: AbortController | null = null;
   let presenceStopped = false;
   const currentPresenceStatus = ref<UserPresenceStatus>('ONLINE');
@@ -136,13 +136,11 @@ export function useOwnPresence(userId: string, visibility: { showActivity: Ref<b
       const lastInputAt = sampledAt - systemIdle.idleSeconds * 1000;
       if (systemIdle.idleSeconds > 2) { presenceRecovery = null; return; }
       if (!presenceRecovery || lastInputAt - presenceRecovery.lastInputAt > 4000) {
-        presenceRecovery = { startedAt: sampledAt, lastInputAt, samples: 1 };
+        presenceRecovery = { startedAt: sampledAt, lastInputAt };
         return;
       }
-      if (lastInputAt - presenceRecovery.lastInputAt <= 1000) return;
-      presenceRecovery.lastInputAt = lastInputAt;
-      presenceRecovery.samples++;
-      if (sampledAt - presenceRecovery.startedAt < 6000 || presenceRecovery.samples < 3) return;
+      // 两秒后确认还有新输入即可恢复；额外查询不推进基准，避免反复延长等待。
+      if (lastInputAt - presenceRecovery.lastInputAt <= 1000 || sampledAt - presenceRecovery.startedAt < 2000) return;
       presenceRecovery = null;
     }
     if (nextStatus === currentPresenceStatus.value) return;

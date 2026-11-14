@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { useLoadingHint } from '../useLoadingHint';
 import type { useRecording } from '../../recording/useRecording';
 import InlineFeedback from '../InlineFeedback.vue';
+import ProjectAttribution from '../ProjectAttribution.vue';
 import DialogTransition from '../DialogTransition.vue';
 import RecordingLibrary from './RecordingLibrary.vue';
 
@@ -57,6 +58,7 @@ async function toggleReplay(event: Event) {
       <InlineFeedback :message="recording.noticeTarget.value === 'content' ? recording.notice.value : ''" />
       <small v-if="desktop">录制整屏时，可见的观看窗口也会入镜。只想录游戏，请选择游戏或应用窗口。系统若只能提供全部混音，请关闭“应用声音”后再录制。</small>
       <InlineFeedback :message="recording.noticeTarget.value === 'recording' ? recording.notice.value : ''" />
+      <ProjectAttribution v-if="desktop">录像与即时回放基于 <a href="https://github.com/obsproject/obs-studio" target="_blank" rel="noopener noreferrer">OBS Studio</a>，音视频编码与封装使用 <a href="https://github.com/FFmpeg/FFmpeg" target="_blank" rel="noopener noreferrer">FFmpeg</a>。</ProjectAttribution>
     </section>
     <section v-if="desktop" class="settings-block recording-file-settings">
       <h2>文件与画质</h2>

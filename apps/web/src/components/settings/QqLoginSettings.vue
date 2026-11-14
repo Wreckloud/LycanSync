@@ -5,7 +5,7 @@ import ExpandSection from '../ExpandSection.vue';
 import InlineFeedback from '../InlineFeedback.vue';
 
 const props = defineProps<{ active: boolean; leaving: boolean }>();
-interface QqSettings { enabled: boolean; appId: string; callbackUrl: string; appKeyConfigured: boolean }
+interface QqSettings { enabled: boolean; appId: string; callbackUrl: string; appKeyConfigured: boolean; configurationError: string }
 const saved = ref<QqSettings | null>(null);
 const draft = reactive({ enabled: false, appId: '', appKey: '', callbackUrl: '' });
 const expanded = ref(false);
@@ -73,7 +73,7 @@ onScopeDispose(() => { request?.abort(); draft.appKey = ''; });
 <template>
   <div class="qq-login-settings">
     <div class="settings-action-row">
-      <div><strong>QQ 登录{{ saved ? (saved.enabled ? ' · 已开启' : ' · 未开启') : '' }}</strong>
+      <div><strong>QQ 登录{{ saved ? (saved.configurationError ? ' · 配置未完成' : saved.enabled ? ' · 已开启' : ' · 未开启') : '' }}</strong>
         <small>配置你的 QQ 互联应用，让成员使用 QQ 登录或绑定现有账号。</small></div>
       <button type="button" :disabled="busy || leaving || !saved || expanded" @click="edit">配置 QQ 登录</button>
     </div>
@@ -101,7 +101,7 @@ onScopeDispose(() => { request?.abort(); draft.appKey = ''; });
         </footer>
       </form>
     </ExpandSection>
-    <InlineFeedback v-if="!expanded" :message="error" :pending="busy ? '正在读取 QQ 登录配置…' : ''" />
+    <InlineFeedback v-if="!expanded" :message="error || saved?.configurationError" :pending="busy ? '正在读取 QQ 登录配置…' : ''" />
     <button v-if="error && !expanded" type="button" :disabled="busy || leaving" @click="load">重试</button>
   </div>
 </template>

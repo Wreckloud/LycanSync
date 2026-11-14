@@ -20,11 +20,13 @@ public class QqConfigurationService {
 
     public QqConfiguration current() {
         QqConfiguration saved = configurations.find();
-        QqConfiguration current = saved == null ? new QqConfiguration(defaults.isEnabled(), defaults.getAppId(),
+        return saved == null ? new QqConfiguration(defaults.isEnabled(), defaults.getAppId(),
                 defaults.getAppKey(), defaults.getCallbackUrl()) : saved;
-        if (current.enabled()) current.publicUrl();
-        return current;
     }
 
-    public boolean isEnabled() { return current().enabled(); }
+    public boolean isEnabled() {
+        QqConfiguration configuration = current();
+        // QQ 配置不完整只关闭可选入口，服主仍可登录并修正配置。
+        return configuration.enabled() && configuration.validationError().isEmpty();
+    }
 }

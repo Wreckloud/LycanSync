@@ -3,7 +3,7 @@ import { nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { ChevronDown, ChevronLeft, ChevronRight, HeadphoneOff, Headphones, MicOff, MonitorUp, MonitorX, Settings } from '@lucide/vue';
 import VoiceLevelMic from './VoiceLevelMic.vue';
 import RangeValue from './RangeValue.vue';
-import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, DEFAULT_AUDIO_PREFERENCES } from '../rtc/audioPreferences';
+import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP } from '../rtc/audioPreferences';
 import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, SCREEN_SHARE_QUALITIES, screenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from '../rtc/screenShareQuality';
 import ScreenShareCustomQuality from './ScreenShareCustomQuality.vue';
 import ExpandSection from './ExpandSection.vue';
@@ -175,7 +175,7 @@ onScopeDispose(() => {
       <Transition name="surface-panel">
       <section v-if="menu === 'microphone'" class="call-control-menu" aria-label="麦克风选项">
         <header>麦克风</header>
-        <div class="call-control-range"><span>输入音量<RangeValue :value="inputGain" :default-value="DEFAULT_AUDIO_PREFERENCES.inputGain" label="重置麦克风输入音量" @reset="emit('inputGain', DEFAULT_AUDIO_PREFERENCES.inputGain)">{{ Math.round(inputGain * 100) }}%</RangeValue></span>
+        <div class="call-control-range"><span>输入音量<RangeValue :value="inputGain" label="重置麦克风输入音量" @reset="emit('inputGain', $event)">{{ Math.round(inputGain * 100) }}%</RangeValue></span>
           <input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="inputGain" aria-label="麦克风输入音量"
             @input="emit('inputGain', Number(($event.target as HTMLInputElement).value))" /></div>
         <div class="call-input-level"><span>输入等级 <b>{{ inputLevelPercent }}%</b></span>
@@ -203,7 +203,7 @@ onScopeDispose(() => {
       <Transition name="surface-panel">
       <section v-if="menu === 'output'" class="call-control-menu" aria-label="收听选项">
         <header>收听</header>
-        <div class="call-control-range"><span>输出音量<RangeValue :value="outputVolume" :default-value="DEFAULT_AUDIO_PREFERENCES.outputVolume" label="重置总输出音量" @reset="emit('outputVolume', DEFAULT_AUDIO_PREFERENCES.outputVolume)">{{ Math.round(outputVolume * 100) }}%</RangeValue></span>
+        <div class="call-control-range"><span>输出音量<RangeValue :value="outputVolume" label="重置总输出音量" @reset="emit('outputVolume', $event)">{{ Math.round(outputVolume * 100) }}%</RangeValue></span>
           <input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="outputVolume" aria-label="lycanclaw 总输出音量"
             @input="emit('outputVolume', Number(($event.target as HTMLInputElement).value))" /></div>
         <label class="call-share-audio"><span>平衡成员语音音量</span><input type="checkbox" :checked="voiceVolumeBalance"

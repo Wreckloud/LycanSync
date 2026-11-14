@@ -45,7 +45,8 @@ public class OwnerSettingsService {
     }
 
     @Schema(description = "QQ 应用配置，密钥只返回是否已设置")
-    public record QqSettings(boolean enabled, String appId, String callbackUrl, boolean appKeyConfigured) { }
+    public record QqSettings(boolean enabled, String appId, String callbackUrl, boolean appKeyConfigured,
+                             @Schema(description = "启用配置的本地校验错误；空字符串不代表腾讯实际授权已验证") String configurationError) { }
 
     public QqSettings qqSettings(AuthenticatedUser user) {
         requireOwner(user);
@@ -64,17 +65,16 @@ public class OwnerSettingsService {
         String appKey = request.appKey().isEmpty() && appId.equals(previous.appId()) ? previous.appKey() : request.appKey();
         QqConfiguration next = new QqConfiguration(request.enabled(), appId, appKey, request.callbackUrl().strip());
         if (next.enabled() || !appId.isEmpty() || !appKey.isEmpty() || !next.callbackUrl().isEmpty()) {
-            try { next.publicUrl(); }
-            catch (IllegalArgumentException exception) {
-                throw invalid("请检查 App ID、App Key 和回调地址；回调地址需使用 HTTPS，路径为 /api/auth/qq/callback");
-            }
+            String error = next.validationError();
+            if (!error.isEmpty()) throw invalid(error);
         }
         if (configurations.save(next) != 1) throw new IllegalStateException("QQ 登录配置未保存");
         return summary(next);
     }
 
     private QqSettings summary(QqConfiguration configuration) {
-        return new QqSettings(configuration.enabled(), configuration.appId(), configuration.callbackUrl(), !configuration.appKey().isEmpty());
+        return new QqSettings(configuration.enabled(), configuration.appId(), configuration.callbackUrl(), !configuration.appKey().isEmpty(),
+                configuration.enabled() ? configuration.validationError() : "");
     }
 
     private void requireOwner(AuthenticatedUser user) {
