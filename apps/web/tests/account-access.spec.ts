@@ -221,7 +221,7 @@ test('仅服主显示邀请面板且生成链接只在成功后展示', async ({
   await page.getByRole('button', { name: '服主管理', exact: true }).click();
   await expect.poll(() => configurationReads).toBe(2);
   await page.getByRole('button', { name: '邀请新朋友', exact: true }).click();
-  await page.getByRole('dialog').getByRole('button', { name: '继续生成', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '复制链接', exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: '邀请链接已复制。' })).toBeVisible();
   await expect(page.getByRole('dialog').getByLabel('生成的链接')).toBeVisible();
   await page.getByRole('dialog').getByRole('button', { name: '关闭', exact: true }).click();
@@ -336,9 +336,10 @@ test('成员访问弹窗独立处理备注、全服搜索、复制与链接管�
   await dialog.screenshot({ path: testInfo.outputPath('invite-link.png') });
   await dialog.getByRole('button', { name: '关闭', exact: true }).click();
   await page.getByRole('button', { name: '邀请新朋友', exact: true }).click();
-  await expect(dialog.getByText(/已有未使用的邀请链接/)).toBeVisible();
+  await expect(dialog.getByLabel('生成的链接')).toHaveValue('https://example.com/join#token=link-1');
+  await expect(dialog.getByLabel('备注', { exact: false })).toHaveValue('一起开黑');
   expect(generationCount).toBe(1);
-  await dialog.getByRole('button', { name: '继续生成', exact: true }).click();
+  await dialog.getByRole('button', { name: '生成新链接', exact: true }).click();
   await expect(dialog.getByLabel('生成的链接')).toHaveValue('https://example.com/join#token=link-2');
   expect(generationCount).toBe(2);
   copied = '';
@@ -355,12 +356,16 @@ test('成员访问弹窗独立处理备注、全服搜索、复制与链接管�
   await search.fill('member-b');
   await recovery.getByRole('button', { name: '选择', exact: true }).click();
   const confirmation = page.getByRole('dialog', { name: '确认恢复成员登录', exact: true });
-  await expect(confirmation.locator('.member-identity')).toHaveText('朋友乙');
+  await expect(confirmation.locator('.member-identity')).toContainText('朋友乙');
+  await expect(confirmation.locator('.member-identity')).toContainText('尚未生成恢复链接');
   await expect(confirmation.getByLabel('备注', { exact: false })).toHaveValue('朋友乙 的恢复链接');
   expect(generationCount).toBe(2);
-  await confirmation.getByRole('button', { name: '取消', exact: true }).click();
+  await confirmation.getByLabel('备注', { exact: false }).fill('恢复备注草稿');
+  await confirmation.getByRole('button', { name: '返回', exact: true }).click();
   await expect(search).toHaveValue('member-b');
   await recovery.getByRole('button', { name: '选择', exact: true }).click();
+  await expect(confirmation.getByLabel('备注', { exact: false })).toHaveValue('恢复备注草稿');
+  await confirmation.getByLabel('备注', { exact: false }).fill('朋友乙 的恢复链接');
   await confirmation.screenshot({ path: testInfo.outputPath('recover-member.png') });
   rejectCopy = true;
   await confirmation.getByRole('button', { name: '生成恢复链接', exact: true }).click();
@@ -380,6 +385,7 @@ test('成员访问弹窗独立处理备注、全服搜索、复制与链接管�
   await expect(retry).toHaveCount(0);
   expect(generationCount).toBe(4);
   await recovery.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(recovery).toHaveCount(0);
   records.find(record => record.id === 'link-1')!.consumedAt = new Date().toISOString();
   failList = true;
   await page.getByRole('button', { name: '链接管理', exact: true }).click();
@@ -396,7 +402,7 @@ test('成员访问弹窗独立处理备注、全服搜索、复制与链接管�
   await noteDialog.getByRole('button', { name: '保存备注', exact: true }).click();
   await expect(noteDialog).toHaveCount(0);
   await expect(management.getByText('管理页备注', { exact: true })).toBeVisible();
-  expect((await management.boundingBox())!.height).toBe(initialBox!.height);
+  await expect.poll(async () => (await management.boundingBox())!.height).toBe(initialBox!.height);
   await management.locator('[data-link-id="link-4"]').getByRole('button', { name: '撤销', exact: true }).click();
   await page.getByRole('dialog', { name: '撤销链接', exact: true }).getByRole('button', { name: '确认撤销', exact: true }).click();
   await expect(management.locator('.access-record')).toHaveCount(1);
@@ -417,12 +423,25 @@ test('成员访问弹窗独立处理备注、全服搜索、复制与链接管�
   await management.screenshot({ path: testInfo.outputPath('link-management-narrow.png') });
   expect(await management.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
   await management.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(management).toHaveCount(0);
   await expect(page.getByRole('button', { name: '链接管理', exact: true })).toBeFocused();
   await page.getByRole('button', { name: '邀请新朋友', exact: true }).click();
-  await page.getByRole('dialog', { name: '邀请新朋友', exact: true }).getByRole('button', { name: '链接管理', exact: true }).click();
+  const draftInvite = page.getByRole('dialog', { name: '邀请新朋友', exact: true });
+  await expect(draftInvite.getByLabel('备注', { exact: false })).toHaveValue('管理页备注');
+  await draftInvite.getByLabel('备注', { exact: false }).fill('尚未保存的备注');
+  await draftInvite.getByRole('button', { name: '链接管理', exact: true }).click();
   await expect(management).toBeVisible();
   await expect(management).not.toHaveAttribute('inert', '');
-  await management.getByRole('button', { name: '关闭', exact: true }).click();
+  await management.getByRole('button', { name: '返回邀请', exact: true }).click();
+  const inviteAgain = page.getByRole('dialog', { name: '邀请新朋友', exact: true });
+  await expect(inviteAgain.getByLabel('生成的链接')).toHaveValue('https://example.com/join#token=link-2');
+  await expect(inviteAgain.getByLabel('备注', { exact: false })).toHaveValue('尚未保存的备注');
+  await inviteAgain.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.getByRole('button', { name: '恢复成员登录', exact: true }).click();
+  await recovery.getByRole('searchbox').fill('朋友');
+  await recovery.getByRole('button', { name: '链接管理', exact: true }).click();
+  await management.getByRole('button', { name: '返回恢复登录', exact: true }).click();
+  await expect(recovery.getByRole('searchbox')).toHaveValue('朋友');
   expect(generationCount).toBe(4);
 });
 
@@ -431,6 +450,7 @@ for (const configured of [true, false]) test(`注销保留账号页，密码配�
   let administrator = true;
   let recoveryConfigured = configured;
   let transferTargetId: string | null = null;
+  let transferExpiry = new Date(Date.now() + 86_400_000).toISOString();
   let ownedGroups = [{ id: 'group-close', name: '待处理群组' }];
   let closed = 0;
   let dissolved = 0;
@@ -446,9 +466,13 @@ for (const configured of [true, false]) test(`注销保留账号页，密码配�
     serverName: '测试服务器', publicUrlConfigured: true, qqEnabled: false, mediaConfigured: true,
   } }));
   await page.route('**/api/auth/account', route => route.fulfill({ json: {
-    administrator, recoveryConfigured, ownedGroups, candidates: [{ id: 'friend', nickname: '朋友' }], incomingTransfer: null, transferTargetId,
+    administrator, recoveryConfigured, ownedGroups, candidates: [{ id: 'friend', nickname: '朋友' }], incomingTransfer: null, transferTargetId: Date.parse(transferExpiry) > Date.now() ? transferTargetId : null,
+    outgoingTransfer: transferTargetId ? { userId: transferTargetId, nickname: '朋友', avatar: '', expiresAt: transferExpiry } : null,
   } }));
+  await page.route('**/api/auth/account/transfer/verify', route => route.fulfill(route.request().postDataJSON().password === 'test12'
+    ? { status: 204 } : { status: 409, json: { detail: '恢复密码不正确' } }));
   await page.route('**/api/auth/account/transfer', route => {
+    if (route.request().method() === 'DELETE') { transferTargetId = null; return route.fulfill({ status: 204 }); }
     expect(route.request().postDataJSON()).toEqual({ targetId: 'friend', password: 'test12' });
     transferTargetId = 'friend';
     return route.fulfill({ status: 204 });
@@ -505,10 +529,19 @@ for (const configured of [true, false]) test(`注销保留账号页，密码配�
     await passwordDialog.getByRole('button', { name: '保存', exact: true }).click();
     await expect(page.locator('.app-notice')).toContainText('恢复密码已保存。');
   }
+  const verification = page.getByRole('dialog', { name: '验证服主恢复密码', exact: true });
+  await expect(verification).toBeVisible();
+  expect(memberQueries).toHaveLength(0);
+  await verification.getByLabel('服主恢复密码', { exact: true }).fill('wrong');
+  await verification.getByRole('button', { name: '下一步', exact: true }).click();
+  await expect(verification.getByText('恢复密码不正确', { exact: true })).toBeVisible();
+  expect(memberQueries).toHaveLength(0);
+  await verification.getByLabel('服主恢复密码', { exact: true }).fill('test12');
+  await verification.getByRole('button', { name: '下一步', exact: true }).click();
   await expect(page.getByRole('searchbox', { name: '搜索服务器成员', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '返回注销流程', exact: true })).toHaveCount(0);
   await expect(page.locator('.settings-header h1')).toHaveText('账号设置');
-  const ownerTransfer = page.getByRole('dialog', { name: '转让服主', exact: true });
+  const ownerTransfer = page.getByRole('dialog', { name: '选择接任成员', exact: true });
   if (configured) {
     await expect(ownerTransfer.locator('.member-picker-row')).toHaveCount(100);
     await ownerTransfer.locator('.member-picker-list').evaluate(element => { element.scrollTop = element.scrollHeight; });
@@ -520,14 +553,39 @@ for (const configured of [true, false]) test(`注销保留账号页，密码配�
     await ownerTransfer.screenshot({ path: testInfo.outputPath('owner-transfer-picker.png'), animations: 'disabled' });
   }
   await ownerTransfer.getByRole('button', { name: '选择', exact: true }).click();
-  await page.getByLabel('当前服主恢复密码', { exact: true }).fill('test12');
-  await expect(page.getByRole('dialog', { name: '转让服主', exact: true }).locator('.member-identity')).toContainText('朋友');
-  await page.getByRole('button', { name: '发起转让', exact: true }).click();
+  const transferConfirmation = page.getByRole('dialog', { name: '确认转让服主', exact: true });
+  await expect(transferConfirmation.locator('.member-identity')).toContainText('朋友');
+  await expect(transferConfirmation.getByText(/对方接受后，权限交接即完成/)).toBeVisible();
+  await transferConfirmation.getByRole('button', { name: '返回', exact: true }).click();
+  await ownerTransfer.getByRole('button', { name: '已选择', exact: true }).click();
+  await transferConfirmation.screenshot({ path: testInfo.outputPath('owner-transfer-confirm.png'), animations: 'disabled' });
+  await transferConfirmation.getByRole('button', { name: '发起转让', exact: true }).click();
+  const pendingTransfer = page.getByRole('dialog', { name: '服主转让', exact: true });
+  await expect(pendingTransfer.getByText('正在等待对方接受，完成前你仍是服主。', { exact: true })).toBeVisible();
+  await pendingTransfer.getByRole('button', { name: '返回', exact: true }).click();
   await page.getByRole('dialog', { name: '注销账号', exact: true }).getByRole('button', { name: '查看转让', exact: true }).click();
-  await expect(page.getByRole('dialog', { name: '转让服主', exact: true }).getByText('正在等待接任者确认，完成前你仍是服主。', { exact: true })).toBeVisible();
+  await expect(pendingTransfer.locator('.member-identity')).toContainText('朋友');
+  if (!configured) {
+    // 对方拒绝后，当前窗口自动读取权威状态；无需关闭或点击刷新。
+    transferTargetId = null;
+    await expect(pendingTransfer.getByText('当前没有待接受的转让。', { exact: true })).toBeVisible({ timeout: 8000 });
+    await expect(pendingTransfer.getByRole('button', { name: '撤回转让', exact: true })).toHaveCount(0);
+    await expect(pendingTransfer.getByRole('button', { name: '重新发起转让', exact: true })).toBeVisible();
+  }
+  if (configured) {
+    await pendingTransfer.getByRole('button', { name: '撤回转让', exact: true }).click();
+    await expect(pendingTransfer.getByText('转让已撤回，你仍是服主。', { exact: true })).toBeVisible();
+    expect(transferTargetId).toBeNull();
+    await pendingTransfer.getByRole('button', { name: '返回', exact: true }).click();
+    transferTargetId = 'friend'; transferExpiry = new Date(Date.now() - 1000).toISOString();
+    await page.getByRole('button', { name: '去转让服主', exact: true }).click();
+    await expect(pendingTransfer.getByText('转让已过期，你仍是服主。', { exact: true })).toBeVisible();
+    await expect(pendingTransfer.getByRole('button', { name: '撤回转让', exact: true })).toHaveCount(0);
+    await expect(pendingTransfer.getByRole('button', { name: '重新发起转让', exact: true })).toBeVisible();
+  }
   // 模拟接任者在另一设备确认，返回注销时必须重新获取服务器状态。
   administrator = false;
-  await page.getByRole('dialog', { name: '转让服主', exact: true }).getByRole('button', { name: '关闭', exact: true }).click();
+  await pendingTransfer.getByRole('button', { name: '返回', exact: true }).click();
 
   await expect(page.getByRole('button', { name: '去转让服主', exact: true })).toHaveCount(0);
   await expect(page.getByRole('dialog', { name: '注销账号', exact: true })).toBeVisible();

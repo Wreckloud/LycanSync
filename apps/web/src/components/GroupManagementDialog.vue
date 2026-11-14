@@ -21,10 +21,11 @@ const error = ref('');
 const busy = ref(false);
 const backdropEvents = useBackdropDismiss(close);
 const confirmation = ref<MemberOption | null>(null);
+const showingConfirmation = ref(false);
 const dissolveName = ref('');
 const dissolveNameMatches = computed(() => dissolveName.value === props.group.name);
 const title = computed(() => ({ invite: '邀请成员', members: '管理成员', transfer: '转让群主', leave: '退出群聊', dissolve: '解散群聊', resolve: '处理群组' })[mode.value]);
-const confirming = computed(() => mode.value !== 'resolve' && (!!confirmation.value || mode.value === 'leave' || mode.value === 'dissolve'));
+const confirming = computed(() => mode.value !== 'resolve' && (showingConfirmation.value && !!confirmation.value || mode.value === 'leave' || mode.value === 'dissolve'));
 const transferName = ref('');
 const transferNameMatches = computed(() => !!confirmation.value && transferName.value === confirmation.value.nickname);
 const stage = ref<HTMLElement | null>(null);
@@ -43,7 +44,7 @@ async function chooseDisposition(next: 'transfer' | 'dissolve') {
 
 function close() {
   if (busy.value || props.pending) return;
-  if (confirmation.value && mode.value !== 'dissolve') { confirmation.value = null; transferName.value = ''; error.value = ''; }
+  if (showingConfirmation.value && confirmation.value && mode.value !== 'dissolve') { showingConfirmation.value = false; error.value = ''; }
   else emit('close');
 }
 
@@ -52,7 +53,7 @@ function loadCandidates(search: string, offset: number, signal: AbortSignal) {
 }
 function selectMember(member: MemberOption) {
   if (confirmation.value?.userId !== member.userId) transferName.value = '';
-  confirmation.value = member; error.value = '';
+  confirmation.value = member; showingConfirmation.value = true; error.value = '';
 }
 
 async function action(operation: () => Promise<void>) {
@@ -191,7 +192,7 @@ onScopeDispose(() => {
       <div v-else class="management-body">
         <MemberPicker v-if="mode === 'invite'" v-model:search="search" :load="loadCandidates" :disabled="busy" action="添加" label="搜索服务器成员"
           :joined-ids="group.members.map(member => member.userId)" @select="addMember" />
-        <MemberPicker v-else v-model:search="search" :members="group.members" :disabled="busy" :action="mode === 'transfer' ? '选择' : '移出'" @select="selectMember" />
+        <MemberPicker v-else v-model:search="search" :members="group.members" :selected="confirmation?.userId" :disabled="busy" :action="mode === 'transfer' ? '选择' : '移出'" @select="selectMember" />
         <div v-if="mode === 'invite'" class="management-code"><label for="group-invite-code">群组邀请码</label>
           <div><input id="group-invite-code" :value="code" readonly /><button type="button" :disabled="busy || !code" @click="copyCode">复制</button></div>
           <small>服务器成员持有此码即可入群。<button type="button" :disabled="busy" @click="refreshCode">更换邀请码</button></small>
@@ -201,7 +202,7 @@ onScopeDispose(() => {
       </Transition>
       </div>
       <footer class="card-actions" :class="{ 'card-actions-no-primary': !confirming }">
-        <button type="button" class="settings-button" :disabled="busy" @click="close">取消</button>
+        <button type="button" class="settings-button" :disabled="busy" @click="close">{{ props.mode === 'resolve' || showingConfirmation ? '返回' : '关闭' }}</button>
         <InlineFeedback class="card-feedback" :message="error" :pending="busy ? '正在处理…' : ''" />
         <button v-if="mode === 'dissolve'" type="submit" form="group-dissolve-form" class="confirm-button is-danger card-actions-end" :disabled="busy || !dissolveNameMatches">确认解散</button>
         <button v-else-if="mode === 'transfer' && confirming" type="submit" form="group-transfer-form" class="confirm-button card-actions-end" :disabled="busy || !transferNameMatches">确认转让</button>

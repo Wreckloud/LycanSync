@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { ArrowRight } from '@lucide/vue';
 import InlineFeedback from './InlineFeedback.vue';
-import DialogTransition from './DialogTransition.vue';
+import { motionDurationMs } from '../styles/motion';
 import MemberPicker, { type MemberOption } from './MemberPicker.vue';
 import MemberIdentity from './MemberIdentity.vue';
 import SegmentedControl from './SegmentedControl.vue';
@@ -12,10 +12,15 @@ import { useMemberAccess, type MemberAccessMode, type AccessLinkFilter } from '.
 import { useBackdropDismiss } from './useBackdropDismiss';
 import { keepDialogFocus } from './dialogFocus';
 
-const props = defineProps<{ mode: MemberAccessMode }>();
-const emit = defineEmits<{ close: []; manage: []; notice: [message: string] }>();
+const props = defineProps<{ mode: MemberAccessMode; active: boolean; returnTo?: 'invite' | 'recovery' | null }>();
+const emit = defineEmits<{ close: []; manage: []; back: []; notice: [message: string] }>();
+const invitationDraft = defineModel<{ id: string; note: string; savedNote: string } | null>('invitationDraft', { default: null });
+const memberScroll = defineModel<number>('memberScroll', { default: 0 });
+const memberSearch = defineModel<string>('memberSearch', { default: '' });
 const dialog = ref<HTMLElement | null>(null);
-const confirmationDialog = ref<HTMLElement | null>(null);
+const stage = ref<HTMLElement | null>(null);
+let animation: Animation | undefined;
+let motion = 0;
 const linkInput = ref<HTMLInputElement | null>(null);
 const selectedMember = ref<MemberOption | null>(null);
 const operation = ref<'recovery' | 'note' | 'revoke' | 'renew' | null>(null);
@@ -23,8 +28,8 @@ const selectedLink = ref<AccessLinkRecord | null>(null);
 const editingNote = ref('');
 const generatedForConfirmation = ref(false);
 const { links, offset, filter, note, target, generatedUrl, generatedRecord, error, recordsError,
-  invitationConfirmation, recordsLoaded, busy, refreshing, locked, currentTime, refresh, prepareInvitation,
-  generate, revoke, copyLink, saveNote, page } = useMemberAccess(ref(true), props.mode, message => emit('notice', message));
+  recordsLoaded, busy, refreshing, locked, currentTime, refresh, prepareInvitation,
+  generate, revoke, copyLink, saveNote, page } = useMemberAccess(computed(() => props.active), props.mode, message => emit('notice', message));
 const title = computed(() => ({ invite: '邀请新朋友', recovery: '恢复成员登录', links: '链接管理' })[props.mode]);
 const pending = (link: AccessLinkRecord) => accessLinkStatus(link, currentTime.value) === '待使用';
 const recoveryTargets = computed(() => new Set(links.value.filter(pending).map(link => link.targetId)));
@@ -43,16 +48,17 @@ const filters: { id: AccessLinkFilter; label: string }[] = [
   { id: 'PENDING', label: '待使用' }, { id: 'USED', label: '已使用' }, { id: 'REVOKED', label: '已撤销' }, { id: 'ALL', label: '全部' },
 ];
 const backdropEvents = useBackdropDismiss(close);
-const confirmationBackdrop = useBackdropDismiss(cancelOperation);
-function close() { if (!locked.value) emit('close'); }
+
+function close() { if (!locked.value) { if (operation.value) cancelOperation(); else emit('close'); } }
 async function loadMembers(search: string, offset: number, signal: AbortSignal) {
   const query = new URLSearchParams({ search, offset: String(offset) });
   const members = await authRequest<AuthUser[]>(`access/members?${query}`, 'GET', undefined, signal);
   return { members: members.map(member => ({ userId: member.id, nickname: member.nickname, avatar: member.avatar })), hasMore: members.length === 100 };
 }
-async function focusConfirmation() { await nextTick(); confirmationDialog.value?.focus(); }
+async function focusConfirmation() { await nextTick(); dialog.value?.focus({ preventScroll: true }); }
 function selectMember(member: MemberOption) {
-  selectedMember.value = member; target.value = member.userId; note.value = `${member.nickname} 的恢复链接`;
+  if (selectedMember.value?.userId !== member.userId) note.value = `${member.nickname} 的恢复链接`;
+  selectedMember.value = member; target.value = member.userId;
   error.value = ''; generatedForConfirmation.value = false; operation.value = 'recovery';
   void focusConfirmation();
 }
@@ -89,20 +95,54 @@ async function saveInvitationNote() {
   if (generatedRecord.value && await saveNote(generatedRecord.value.id, note.value)) emit('notice', '备注已保存。');
 }
 function changeFilter(value: AccessLinkFilter) { error.value = ''; filter.value = value; }
+watch(generatedRecord, (record, previous) => {
+  if (props.mode !== 'invite' || !record) return;
+  const draft = invitationDraft.value;
+  if (!previous && draft?.id === record.id && draft.note !== draft.savedNote) note.value = draft.note;
+  else if (record.id !== previous?.id || note.value === previous?.note) note.value = record.note;
+});
+watch([note, generatedRecord], () => {
+  if (props.mode === 'invite' && generatedRecord.value) invitationDraft.value = { id: generatedRecord.value.id, note: note.value, savedNote: generatedRecord.value.note };
+});
+watch(operation, async () => {
+  const element = stage.value;
+  if (!element) return;
+  const from = parseFloat(getComputedStyle(element).height);
+  animation?.cancel(); element.style.height = `${from}px`;
+  const revision = ++motion;
+  await nextTick();
+  if (revision !== motion || !stage.value) return;
+  const content = element.querySelector<HTMLElement>(operation.value ? '.access-confirm' : '.access-main');
+  if (!content) { element.style.removeProperty('height'); return; }
+  const to = content.offsetHeight;
+  element.style.height = `${to}px`;
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const style = getComputedStyle(element);
+    const running = element.animate([{ height: `${from}px` }, { height: `${to}px` }], {
+      duration: motionDurationMs(style.getPropertyValue('--motion-layout-duration')), easing: style.getPropertyValue('--motion-ease').trim(),
+    });
+    animation = running;
+    running.finished.then(() => { if (animation === running) element.style.removeProperty('height'); }, () => {});
+  } else element.style.removeProperty('height');
+  void focusConfirmation();
+});
+onScopeDispose(() => { motion++; animation?.cancel(); });
 onMounted(() => dialog.value?.focus());
 </script>
 
 <template>
   <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="close">
-    <section ref="dialog" class="member-access-dialog" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1" @keydown="keepDialogFocus">
+    <section ref="dialog" class="member-access-dialog" role="dialog" aria-modal="true" :aria-label="operation ? confirmationTitle : title" tabindex="-1" @keydown="keepDialogFocus">
+      <div ref="stage" class="access-stage">
+      <div v-show="!operation" class="access-main">
       <header>
-        <div class="access-heading"><h2>{{ title }}</h2><button v-if="mode === 'invite'" type="button" class="access-manage" :disabled="locked" @click="emit('manage')">链接管理<ArrowRight :size="16" /></button></div>
+        <div class="access-heading"><h2>{{ title }}</h2><button v-if="mode !== 'links'" type="button" class="access-manage" :disabled="locked" @click="emit('manage')">链接管理<ArrowRight :size="16" /></button><button v-else-if="returnTo" type="button" class="access-manage" :disabled="locked" @click="emit('back')">{{ returnTo === 'invite' ? '返回邀请' : '返回恢复登录' }}<ArrowRight :size="16" /></button></div>
         <p v-if="mode === 'invite'">复制链接发给朋友，每条链接可邀请一人。</p>
         <p v-else-if="mode === 'recovery'">找到需要恢复登录的成员，核对后生成链接。</p>
         <p v-else>查看邀请与恢复链接，修改备注或撤销不再需要的链接。</p>
       </header>
       <div v-if="mode === 'recovery'" class="access-body">
-        <MemberPicker :load="loadMembers" :disabled="locked || !recordsLoaded" label="搜索可恢复成员" @select="selectMember">
+        <MemberPicker v-model:search="memberSearch" v-model:scroll-position="memberScroll" :load="loadMembers" :disabled="locked || !recordsLoaded" label="搜索可恢复成员" @select="selectMember">
           <template #action-label="{ member }">{{ recoveryTargets.has(member.userId) ? '已生成' : '选择' }}</template>
         </MemberPicker>
         <InlineFeedback :message="recordsError" :pending="!recordsLoaded && refreshing ? '正在读取链接…' : ''" />
@@ -117,7 +157,6 @@ onMounted(() => dialog.value?.focus());
             <button :disabled="locked || note.trim() === generatedRecord.note">保存备注</button>
           </form>
         </template>
-        <p v-else-if="invitationConfirmation">已有未使用的邀请链接，是否继续生成新的链接？已有链接仍可使用，也可以前往链接管理查看。</p>
         <InlineFeedback :message="error || recordsError" :pending="busy ? '正在生成链接…' : refreshing && !recordsLoaded ? '正在读取链接…' : ''" />
         <button v-if="recordsError || error && !generatedRecord" type="button" :disabled="locked || refreshing" @click="prepareInvitation">重试</button>
       </div>
@@ -150,17 +189,17 @@ onMounted(() => dialog.value?.focus());
       </div>
       <footer class="card-actions">
         <button type="button" :disabled="locked" @click="close">关闭</button>
-        <button v-if="mode === 'invite' && generatedRecord" type="button" class="confirm-button card-actions-end" :disabled="locked" @click="copy()">复制链接</button>
-        <button v-else-if="mode === 'invite' && invitationConfirmation" type="button" class="confirm-button card-actions-end" :disabled="locked" @click="generate('INVITE')">继续生成</button>
+        <div v-if="mode === 'invite' && generatedRecord" class="button-actions card-actions-end">
+          <button type="button" :disabled="locked" @click="generate('INVITE')">生成新链接</button>
+          <button type="button" class="confirm-button" :disabled="locked" @click="copy()">复制链接</button>
+        </div>
       </footer>
-    </section>
-    <DialogTransition>
-      <div v-if="operation" class="dialog-backdrop" v-on="confirmationBackdrop" @keydown.esc.stop="cancelOperation">
-        <form ref="confirmationDialog" class="member-access-dialog access-confirm" role="dialog" aria-modal="true" :aria-label="confirmationTitle" tabindex="-1" @keydown="keepDialogFocus" @submit.prevent="confirmOperation">
-          <header><h2>{{ confirmationTitle }}</h2></header>
+      </div>
+        <form v-if="operation" class="access-confirm" @submit.prevent="confirmOperation">
+          <header><h2>{{ confirmationTitle }}</h2><p v-if="operation === 'recovery'">请核对成员信息，仅将恢复链接发给本人。</p></header>
           <div class="access-body">
             <template v-if="operation === 'recovery'">
-              <MemberIdentity v-if="selectedMember" :member="selectedMember" />
+              <MemberIdentity v-if="selectedMember" :member="selectedMember" :description="existingRecovery ? '已有待使用的恢复链接' : '尚未生成恢复链接'" />
               <p>{{ existingRecovery ? '重新生成后，之前的恢复链接将失效。' : '恢复链接 12 小时有效，请仅发给这位成员。' }}对方使用后，旧设备将退出登录。</p>
               <label class="settings-field" for="recovery-note"><span>备注 <small>选填，仅服主可见</small></span><input id="recovery-note" v-model="note" maxlength="100" :disabled="locked || generatedForConfirmation" /></label>
             </template>
@@ -174,16 +213,20 @@ onMounted(() => dialog.value?.focus());
             <InlineFeedback :message="error" :pending="busy ? '正在处理…' : ''" />
             <label v-if="generatedForConfirmation && error && generatedUrl" class="settings-field">链接<input ref="linkInput" :value="generatedUrl" readonly aria-label="手动复制链接" /></label>
           </div>
-          <div class="card-actions"><button type="button" :disabled="locked" @click="cancelOperation">取消</button><button class="confirm-button card-actions-end" :class="{ 'is-danger': operation === 'revoke' }" :disabled="locked">{{ confirmationAction }}</button></div>
+          <div class="card-actions"><button type="button" :disabled="locked" @click="cancelOperation">返回</button><button class="confirm-button card-actions-end" :class="{ 'is-danger': operation === 'revoke' }" :disabled="locked">{{ confirmationAction }}</button></div>
         </form>
       </div>
-    </DialogTransition>
+    </section>
   </div>
 </template>
 
 <style scoped>
 .member-access-dialog { width: min(540px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 14px; line-height: 20px; }
-.access-confirm { width: min(460px, calc(100vw - 32px)); }
+.access-stage { overflow: hidden; }
+.access-main, .access-confirm { display: flow-root; }
+.access-confirm { animation: access-step-in var(--motion-layout-duration) var(--motion-ease); }
+@keyframes access-step-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .access-confirm { animation: none; } }
 h2 { margin: 0; font-size: 22px; line-height: 32px; }
 header p { margin: 4px 0 0; }
 p, small { color: var(--muted); }

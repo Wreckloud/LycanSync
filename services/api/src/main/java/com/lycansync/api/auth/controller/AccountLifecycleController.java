@@ -44,6 +44,7 @@ public class AccountLifecycleController {
                                   @NotNull @Pattern(regexp = "[A-Za-z0-9_-]{43}") String recoveryKey) { }
     public record PasswordRequest(@Schema(description = "首次设置时省略，否则提供原恢复密码") @Size(max = 128) String previousPassword,
                                   @Schema(description = "新的恢复密码，6–128 个字符") @NotNull @Size(min = 6, max = 128, message = "恢复密码长度不符合要求") String password) { }
+    public record VerifyTransferRequest(@Schema(description = "当前服主恢复密码") @NotNull @Size(max = 128) String password) { }
     public record TransferRequest(@Schema(description = "接任成员 ID") @NotNull UUID targetId,
                                   @Schema(description = "当前服主恢复密码") @NotNull @Size(max = 128) String password) { }
     public record CloseRequest(@Schema(description = "固定填写“注销账号”") @NotNull @Pattern(regexp = "注销账号") String confirmation) { }
@@ -65,6 +66,13 @@ public class AccountLifecycleController {
     @Operation(summary = "服主设置或修改恢复密码", description = "修改已有密码时必须验证原密码，并取消待确认的转让")
     public ResponseEntity<Void> password(@AuthenticationPrincipal AuthenticatedUser user, @Valid @RequestBody PasswordRequest request) {
         accounts.saveRecovery(user, request.previousPassword(), request.password());
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/transfer/verify")
+    @Operation(summary = "验证服主转让所需的恢复密码", description = "不修改账号、登录会话或转让状态；正式发起转让时仍需校验密码")
+    public ResponseEntity<Void> verifyTransfer(@AuthenticationPrincipal AuthenticatedUser user, @Valid @RequestBody VerifyTransferRequest request) {
+        accounts.verifyTransferPassword(user, request.password());
         return ResponseEntity.noContent().build();
     }
 

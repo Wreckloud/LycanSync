@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onScopeDispose, ref, watch } from 'vue';
-import { authRequest, setBrowserSession, type AuthUser } from '../../auth/authApi';
+import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
+import { authRequest, setBrowserSession } from '../../auth/authApi';
 import InlineFeedback from '../InlineFeedback.vue';
 import PasswordField from '../PasswordField.vue';
 import RecoveryPasswordDialog from '../RecoveryPasswordDialog.vue';
@@ -8,8 +8,7 @@ import DialogTransition from '../DialogTransition.vue';
 import { useBackdropDismiss } from '../useBackdropDismiss';
 import { keepDialogFocus } from '../dialogFocus';
 import GroupManagementDialog from '../GroupManagementDialog.vue';
-import MemberPicker, { type MemberOption } from '../MemberPicker.vue';
-import MemberIdentity from '../MemberIdentity.vue';
+import OwnerTransferDialog, { type PendingOwnerTransfer } from '../OwnerTransferDialog.vue';
 import { findGroup, type GroupDetail } from '../../group/groupApi';
 
 const props = defineProps<{ active: boolean; leaving: boolean; administrator?: boolean; section: 'account' | 'owner'; userId?: string }>();
@@ -20,6 +19,7 @@ interface LifecycleStatus {
   ownedGroups: { id: string; name: string }[];
   incomingTransfer: { ownerNickname: string; expiresAt: string } | null;
   transferTargetId: string | null;
+  outgoingTransfer: PendingOwnerTransfer | null;
 }
 const status = ref<LifecycleStatus | null>(null);
 const qqBound = ref<boolean | null>(null);
@@ -29,8 +29,6 @@ const transferAfterPassword = ref(false);
 const password = ref('');
 const confirmation = ref('');
 const previousPassword = ref('');
-const successor = ref<MemberOption | null>(null);
-const targetId = computed(() => successor.value?.userId ?? '');
 const closeConfirmation = ref('');
 const busy = ref(false);
 const loading = ref(false);
@@ -40,8 +38,6 @@ const groupProcessing = ref(false);
 const groupNames = computed(() => status.value?.ownedGroups.map(group => group.name).join('、') ?? '');
 const canClose = computed(() => !!status.value && !loading.value && !status.value.administrator && !status.value.ownedGroups.length);
 const error = ref('');
-const feedback = ref('');
-const transferForm = ref<HTMLFormElement | null>(null);
 const closeDialog = ref<HTMLElement | null>(null);
 const acceptDialog = ref<HTMLFormElement | null>(null);
 const backdropEvents = useBackdropDismiss(() => toggle(null));
@@ -49,10 +45,12 @@ let revision = 0;
 let disposed = false;
 let request: AbortController | undefined;
 let groupRequest: AbortController | undefined;
-async function loadSuccessors(search: string, offset: number, signal: AbortSignal) {
-  const query = new URLSearchParams({ search, offset: String(offset) });
-  const members = await authRequest<AuthUser[]>(`access/members?${query}`, 'GET', undefined, signal);
-  return { members: members.map(member => ({ userId: member.id, nickname: member.nickname, avatar: member.avatar })), hasMore: members.length === 100 };
+let closeTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleClosureCheck() {
+  clearTimeout(closeTimer);
+  if (!disposed && props.active && expanded.value === 'close' && status.value?.transferTargetId && document.visibilityState === 'visible') {
+    closeTimer = setTimeout(() => { if (busy.value || loading.value) scheduleClosureCheck(); else void refresh(); }, 5_000);
+  }
 }
 function clearSecrets() { password.value = ''; confirmation.value = ''; previousPassword.value = ''; closeConfirmation.value = ''; }
 async function refresh() {
@@ -76,7 +74,7 @@ async function refresh() {
       error.value = reason instanceof Error ? reason.message : '无法读取账号状态';
     }
   } finally {
-    if (!disposed && current === revision) loading.value = false;
+    if (!disposed && current === revision) { loading.value = false; scheduleClosureCheck(); }
   }
 }
 async function beginClose() {
@@ -145,20 +143,19 @@ function toggle(section: typeof expanded.value) {
   expanded.value = returning ? 'close' : expanded.value === section ? null : section;
   if (!expanded.value) closingAccount.value = false;
   transferAfterPassword.value = false;
-  clearSecrets(); error.value = ''; feedback.value = '';
+  clearSecrets(); error.value = '';
   if (returning) void refresh();
 }
-async function submit(operation: 'password' | 'offer' | 'accept' | 'cancel' | 'close') {
+async function submit(operation: 'password' | 'accept' | 'cancel' | 'close') {
   if (busy.value || props.leaving || !status.value) return;
   if (operation === 'close' && (!canClose.value || closeConfirmation.value !== '注销账号')) return;
   if ((operation === 'password' || operation === 'accept') && password.value !== confirmation.value) {
     error.value = '两次输入的恢复密码不一致。'; return;
   }
-  busy.value = true; error.value = ''; feedback.value = '';
+  busy.value = true; error.value = '';
   const current = revision;
   try {
     if (operation === 'password') await authRequest('account/recovery-password', 'PUT', { previousPassword: previousPassword.value, password: password.value });
-    if (operation === 'offer') await authRequest('account/transfer', 'POST', { targetId: targetId.value, password: previousPassword.value });
     if (operation === 'accept') await authRequest('account/transfer/accept', 'POST', { password: password.value });
     if (operation === 'cancel') await authRequest('account/transfer', 'DELETE');
     if (operation === 'close') await authRequest('account/close', 'POST', { confirmation: closeConfirmation.value });
@@ -172,9 +169,8 @@ async function submit(operation: 'password' | 'offer' | 'accept' | 'cancel' | 'c
       window.dispatchEvent(new Event('lycan:unauthorized'));
       return;
     }
-    feedback.value = operation === 'offer' ? '转让已发起，请让接任者在账号设置中确认。'
-      : operation === 'accept' ? '已接任服主，原服主已成为普通成员。'
-        : operation === 'cancel' ? '转让已取消。' : '';
+    if (operation === 'accept') emit('notice', '已接任服主。');
+    if (operation === 'cancel') emit('notice', '已拒绝转让。');
     await refresh();
     if (operation === 'accept') window.dispatchEvent(new Event('lycan:account-updated'));
   } catch (reason) {
@@ -186,10 +182,10 @@ async function submit(operation: 'password' | 'offer' | 'accept' | 'cancel' | 'c
   } finally { if (!disposed) busy.value = false; }
 }
 watch(() => [expanded.value, props.active] as const, async ([section, active]) => {
+  scheduleClosureCheck();
   if (!section || !active) return;
   await nextTick();
-  if (section === 'transfer') transferForm.value?.focus();
-  else if (section === 'close') closeDialog.value?.focus();
+  if (section === 'close') closeDialog.value?.focus();
   else if (section === 'accept') acceptDialog.value?.focus();
 });
 watch(() => [props.active, props.administrator, props.section] as const, ([active]) => {
@@ -198,7 +194,12 @@ watch(() => [props.active, props.administrator, props.section] as const, ([activ
   if (active) { error.value = ''; void refresh(); }
   else { revision++; request?.abort(); groupRequest?.abort(); management.value = null; loading.value = false; }
 }, { immediate: true });
-onScopeDispose(() => { disposed = true; revision++; request?.abort(); groupRequest?.abort(); clearSecrets(); });
+function closureVisibilityChanged() {
+  if (document.visibilityState === 'visible' && props.active && expanded.value === 'close' && !busy.value && !loading.value) void refresh();
+  else clearTimeout(closeTimer);
+}
+onMounted(() => document.addEventListener('visibilitychange', closureVisibilityChanged));
+onScopeDispose(() => { document.removeEventListener('visibilitychange', closureVisibilityChanged); clearTimeout(closeTimer); disposed = true; revision++; request?.abort(); groupRequest?.abort(); clearSecrets(); });
 </script>
 
 <template>
@@ -215,10 +216,9 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); groupReque
         </div>
         <div class="settings-action-row">
           <div><strong>转让服主</strong><small>{{ status.recoveryConfigured ? '将服务器交给另一位成员管理。' : '设置恢复密码后，可将服务器交给另一位成员管理。' }}</small></div>
-          <button type="button" :disabled="busy || leaving || !status.recoveryConfigured" @click="toggle('transfer')">转让服主</button>
+          <button type="button" :disabled="busy || loading || leaving" @click="beginTransfer">转让服主</button>
         </div>
       </div>
-      <p v-if="status.transferTargetId">正在等待接任者确认，完成前你仍是服主。<button type="button" :disabled="busy || leaving" @click="submit('cancel')">取消转让</button></p>
     </template>
     <template v-if="section === 'account' && status?.incomingTransfer">
       <h2>接任服主</h2><p>{{ status.incomingTransfer.ownerNickname }} 希望将服主转让给你。确认前请设置自己的恢复密码。</p>
@@ -234,38 +234,24 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); groupReque
         <span v-if="status?.ownedGroups.length">请先转让或解散名下的 {{ status.ownedGroups.length }} 个群组。</span>
       </p>
     </template>
-    <InlineFeedback v-if="!expanded" :message="error" :pending="busy ? '正在处理…' : ''" :status="feedback" />
+    <InlineFeedback v-if="!expanded" :message="error" :pending="busy ? '正在处理…' : ''" />
     <button v-if="!expanded && error && (!status || section === 'owner' && qqBound === null && status.administrator && !status.recoveryConfigured)" type="button" :disabled="busy" @click="refresh">重新读取</button>
   </section>
   <DialogTransition>
-    <div v-if="expanded === 'transfer' && active && status?.administrator" class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="toggle(null)">
-        <form ref="transferForm" class="recovery-password-dialog" role="dialog" aria-modal="true" aria-label="转让服主" tabindex="-1" @keydown="keepDialogFocus" @submit.prevent="submit('offer')">
-          <h2>转让服主</h2>
-          <template v-if="status.transferTargetId">
-            <p>正在等待接任者确认，完成前你仍是服主。</p>
-            <InlineFeedback :message="error" :pending="busy ? '正在处理…' : ''" />
-            <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">关闭</button><button type="button" class="settings-button card-actions-end" :disabled="busy || leaving" @click="submit('cancel')">取消转让</button></div>
-          </template>
-          <template v-else>
-          <strong>接任成员</strong>
-          <MemberPicker :load="loadSuccessors" :selected="targetId" :disabled="busy || leaving" label="搜索服务器成员" @select="successor = $event" />
-          <MemberIdentity v-if="successor" :member="successor" />
-          <PasswordField id="owner-transfer-password" v-model="previousPassword" label="当前服主恢复密码" :disabled="busy || leaving" required />
-          <p>对方需在 24 小时内确认并设置恢复密码。转让后你将成为普通成员，原服主恢复密码及未使用的账号邀请、恢复链接将失效。</p>
-          <InlineFeedback :message="error" :pending="busy ? '正在处理…' : ''" />
-          <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button class="confirm-button card-actions-end" :disabled="busy || leaving || !targetId">发起转让</button></div>
-          </template>
-        </form>
-    </div>
+    <OwnerTransferDialog v-if="expanded === 'transfer' && active && status?.administrator" :initial-offer="status.outgoingTransfer" :disabled="busy || leaving" :returning="closingAccount"
+      @close="toggle(null)" @changed="refresh" @notice="emit('notice', $event)" />
   </DialogTransition>
   <DialogTransition>
     <div v-if="expanded === 'accept' && active && status?.incomingTransfer" class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="toggle(null)">
       <form ref="acceptDialog" class="recovery-password-dialog" role="dialog" aria-modal="true" aria-label="接任服主" tabindex="-1" @keydown="keepDialogFocus" @submit.prevent="submit('accept')">
         <h2>接任服主</h2>
+        <p>{{ status.incomingTransfer.ownerNickname }} 邀请你接任服主，管理这个服务器。</p>
+        <p>请在 {{ new Date(status.incomingTransfer.expiresAt).toLocaleString() }} 前接受。确认后立即交接权限，原服主将成为普通成员。</p>
+        <p>为自己设置恢复密码，以便在无法使用其他登录方式时找回账号。</p>
         <PasswordField id="accept-owner-password" v-model="password" label="恢复密码（至少 6 位）" :disabled="busy || leaving" new-password required />
         <PasswordField id="accept-owner-confirm" v-model="confirmation" label="确认恢复密码" :disabled="busy || leaving" new-password required />
         <InlineFeedback :message="error" :pending="busy ? '正在处理…' : ''" />
-        <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button type="button" :disabled="busy || leaving" @click="submit('cancel')">拒绝</button><button class="confirm-button card-actions-end" :disabled="busy || leaving">确认接任</button></div>
+        <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">关闭</button><button type="button" :disabled="busy || leaving" @click="submit('cancel')">拒绝</button><button class="confirm-button card-actions-end" :disabled="busy || leaving">确认接任</button></div>
       </form>
     </div>
   </DialogTransition>
@@ -291,8 +277,8 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); groupReque
           <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button class="settings-button account-danger card-actions-end" :disabled="busy || leaving || closeConfirmation !== '注销账号'">确认注销</button></div>
         </form>
         <div v-else class="card-actions">
-          <button type="button" :disabled="busy" @click="toggle(null)">取消注销</button>
-          <button type="button" class="settings-button card-actions-end" :disabled="busy || loading || leaving" @click="refresh">继续注销</button>
+          <button type="button" :disabled="busy" @click="toggle(null)">关闭</button>
+
         </div>
       </section>
     </div>

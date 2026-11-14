@@ -53,9 +53,10 @@ public class AccountLifecycleService {
 
     public record OwnedGroup(UUID id, String name) { }
     public record TransferOffer(String ownerNickname, Instant expiresAt) { }
+    public record OutgoingTransfer(UUID userId, String nickname, String avatar, Instant expiresAt) { }
     public record Status(boolean administrator, boolean recoveryConfigured, List<OwnedGroup> ownedGroups,
                          List<AccountLifecycleMapper.Candidate> candidates, TransferOffer incomingTransfer,
-                         UUID transferTargetId) { }
+                         UUID transferTargetId, OutgoingTransfer outgoingTransfer) { }
 
     public AccountLifecycleMapper.State state() {
         var state = accounts.state();
@@ -73,9 +74,15 @@ public class AccountLifecycleService {
         boolean pending = state.transferExpiresAt() != null && state.transferExpiresAt().isAfter(now());
         TransferOffer incoming = pending && user.id().equals(state.transferTargetId())
                 ? new TransferOffer(users.findUserProfile(state.ownerId()).nickname(), state.transferExpiresAt()) : null;
+        OutgoingTransfer outgoing = null;
+        if (current.administrator() && state.transferTargetId() != null && state.transferExpiresAt() != null) {
+            var recipient = users.findUserProfile(state.transferTargetId());
+            if (recipient == null) throw new IllegalStateException("服主转让的接任成员不存在");
+            outgoing = new OutgoingTransfer(recipient.id(), recipient.nickname(), recipient.avatar(), state.transferExpiresAt());
+        }
         return new Status(current.administrator(), configured(state), owned,
                 current.administrator() ? accounts.candidates() : List.of(), incoming,
-                current.administrator() && pending ? state.transferTargetId() : null);
+                current.administrator() && pending ? state.transferTargetId() : null, outgoing);
     }
 
     public void initializeRecovery(UUID userId, String password) {
@@ -121,12 +128,16 @@ public class AccountLifecycleService {
         }
     }
 
+    public void verifyTransferPassword(AuthenticatedUser user, String password) {
+        requireOwner(user);
+        var current = state();
+        if (!configured(current) || !matches(password, current.recoveryHash())) throw invalid("请先设置并输入正确的服主恢复密码");
+    }
+
     public void offerTransfer(AuthenticatedUser user, UUID targetId, String password) {
         transactions.executeWithoutResult(transaction -> {
             lockState();
-            requireOwner(user);
-            var current = state();
-            if (!configured(current) || !matches(password, current.recoveryHash())) throw invalid("请先设置并输入正确的服主恢复密码");
+            verifyTransferPassword(user, password);
             AuthUser target = users.findUserProfile(targetId);
             if (target == null || target.deletedAt() != null || target.administrator() || target.id().equals(user.id())) {
                 throw invalid("请选择本服务器仍有效的普通成员");

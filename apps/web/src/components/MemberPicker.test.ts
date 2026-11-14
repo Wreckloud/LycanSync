@@ -21,7 +21,7 @@ function setup() {
   const scope = effectScope(); scopes.push(scope);
   const load = vi.fn((_query: string, _offset: number, _signal: AbortSignal): Promise<{ members: MemberOption[]; hasMore: boolean }> =>
     Promise.resolve({ members: [{ userId: 'friend', nickname: '朋友', avatar: '' }], hasMore: false }));
-  const state = { props: { load, disabled: false }, loading: ref(false), error: ref(''), search: ref(''),
+  const state = { props: { load, disabled: false }, loading: ref(false), error: ref(''), search: ref(''), scrollPosition: ref(0),
     results: ref<MemberOption[]>([]), hasMore: ref(false), list: ref<{ scrollHeight: number; scrollTop: number; clientHeight: number } | null>(null) };
   const actions = scope.run(() => runInNewContext(`${compiled}; ({ loadMore, checkScroll })`,
     { ...state, nextTick, watch, onScopeDispose, AbortController, Error, setTimeout, clearTimeout })) as { loadMore(): Promise<void>; checkScroll(): void };
@@ -60,4 +60,15 @@ it('滚动接近底部追加下一页，失败保留已有成员并从同一偏�
   f.checkScroll(); expect(f.state.props.load).toHaveBeenCalledTimes(3);
   f.state.list.value.scrollTop = 340; f.checkScroll();
   expect(f.state.props.load).toHaveBeenCalledTimes(4);
+});
+
+it('返回列表恢复阅读位置，修改搜索时回到顶部', async () => {
+  const f = setup();
+  f.state.scrollPosition.value = 104;
+  f.state.list.value = { scrollHeight: 1000, scrollTop: 0, clientHeight: 260 };
+  await f.loadMore();
+  expect(f.state.list.value.scrollTop).toBe(104);
+  f.state.search.value = '朋友'; await nextTick();
+  expect(f.state.scrollPosition.value).toBe(0);
+  expect(f.state.list.value.scrollTop).toBe(0);
 });

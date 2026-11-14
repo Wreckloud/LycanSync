@@ -117,6 +117,37 @@ class AccountLifecycleServiceTests {
     }
 
     @Test
+    void shouldVerifyPasswordWithoutChangingAccountOrTransfer() {
+        assertThatThrownBy(() -> service.verifyTransferPassword(principal(owner), PASSWORD)).isInstanceOf(AuthException.class);
+        service.initializeRecovery(owner.id(), PASSWORD);
+        assertThatThrownBy(() -> service.verifyTransferPassword(principal(member), PASSWORD)).isInstanceOf(AuthException.class);
+        assertThatThrownBy(() -> service.verifyTransferPassword(principal(owner), "wrong")).isInstanceOf(AuthException.class);
+        var before = state.get();
+        service.verifyTransferPassword(principal(owner), PASSWORD);
+        assertThat(state.get()).isEqualTo(before);
+        verify(accounts, never()).offerTransfer(any(), any());
+        verify(accounts, never()).clearTransfer();
+        verifyNoInteractions(sessions);
+        service.saveRecovery(principal(owner), PASSWORD, "new-password");
+        assertThatThrownBy(() -> service.offerTransfer(principal(owner), member.id(), PASSWORD)).isInstanceOf(AuthException.class);
+        verify(accounts, never()).offerTransfer(any(), any());
+    }
+
+    @Test
+    void shouldShowOutgoingIdentityAndExpiryOnlyToOwner() {
+        state.set(new AccountLifecycleMapper.State(true, owner.id(), null, null, member.id(), NOW.plusSeconds(3600)));
+        var pending = service.status(principal(owner));
+        assertThat(pending.transferTargetId()).isEqualTo(member.id());
+        assertThat(pending.outgoingTransfer()).isEqualTo(new AccountLifecycleService.OutgoingTransfer(member.id(), member.nickname(), member.avatar(), NOW.plusSeconds(3600)));
+        assertThat(service.status(principal(member)).outgoingTransfer()).isNull();
+        state.set(new AccountLifecycleMapper.State(true, owner.id(), null, null, member.id(), NOW.minusSeconds(1)));
+        var expired = service.status(principal(owner));
+        assertThat(expired.transferTargetId()).isNull();
+        assertThat(expired.outgoingTransfer().expiresAt()).isEqualTo(NOW.minusSeconds(1));
+        assertThat(service.status(principal(member)).incomingTransfer()).isNull();
+    }
+
+    @Test
     void shouldOnlyTransferAfterTargetAcceptsAndReplaceOldCredentials() {
         service.initializeRecovery(owner.id(), PASSWORD);
         service.offerTransfer(principal(owner), member.id(), PASSWORD);

@@ -16,7 +16,6 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAcce
   const generatedRecord = ref<AccessLinkRecord | null>(null);
   const error = ref('');
   const recordsError = ref('');
-  const invitationConfirmation = ref(false);
   const recordsLoaded = ref(false);
   const busy = ref(false);
   const refreshing = ref(false);
@@ -70,16 +69,21 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAcce
     try { return await readAndCopyLink(id, request); }
     finally { if (current(request)) copying.value = false; }
   }
+  async function readLink(id: string, request: AbortController) {
+    generatedUrl.value = '';
+    const result = await authRequest<GeneratedLink>(`access/links/${id}/url`, 'GET', undefined, requestSignal(request));
+    if (!current(request)) return null;
+    generatedRecord.value = result.record; generatedUrl.value = result.url ?? '';
+    if (!result.url) throw new Error('这个旧链接无法再次复制，请在链接管理中重新生成。');
+    return result;
+  }
   async function readAndCopyLink(id: string, request: AbortController) {
     error.value = '';
-    generatedUrl.value = '';
     let received = false;
     try {
       // 每次读取都核对当前使用状态，不能把缓存中已撤销的链接重新发给朋友。
-      const result = await authRequest<GeneratedLink>(`access/links/${id}/url`, 'GET', undefined, requestSignal(request));
-      if (!current(request)) return false;
-      generatedRecord.value = result.record; generatedUrl.value = result.url ?? '';
-      if (!result.url) throw new Error('这个旧链接无法再次复制，请在链接管理中重新生成。');
+      const result = await readLink(id, request);
+      if (!result?.url) return false;
       received = true;
       if (window.lycanDesktop) await window.lycanDesktop.copyText(result.url);
       else await navigator.clipboard.writeText(result.url);
@@ -103,7 +107,6 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAcce
         : await authRequest<GeneratedLink>('access/links', 'POST', { kind, targetId: kind === 'RECOVERY' ? target.value : null, note: kind === 'INVITE' ? '' : note.value }, requestSignal(request));
       if (!current(request)) return false;
       created = true; generatedRecord.value = result.record; generatedUrl.value = result.url ?? '';
-      invitationConfirmation.value = false;
       if (mode === 'recovery') links.value = [...links.value.filter(link => link.targetId !== result.record.targetId), result.record];
       offset.value = 0;
       if (mode === 'links') filter.value = 'PENDING';
@@ -146,8 +149,13 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAcce
     if (locked.value || refreshing.value) return;
     error.value = '';
     if (!await refresh()) return;
-    invitationConfirmation.value = links.value.some(link => accessLinkStatus(link, Date.now()) === '待使用');
-    if (!invitationConfirmation.value) await generate('INVITE');
+    const latest = links.value.find(link => accessLinkStatus(link, Date.now()) === '待使用');
+    if (!latest) { await generate('INVITE'); return; }
+    const request = controller;
+    busy.value = true;
+    try { await readLink(latest.id, request); }
+    catch (exception) { if (current(request)) error.value = message(exception); }
+    finally { if (current(request)) busy.value = false; }
   }
   function page(direction: number) {
     if (locked.value || refreshing.value) return;
@@ -170,6 +178,6 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAcce
     controller.abort(); listRequest?.abort(); clearTimeout(timer);
     document.removeEventListener('visibilitychange', visibilityChanged);
   });
-  return { links, offset, filter, note, target, generatedUrl, generatedRecord, error, recordsError, invitationConfirmation, recordsLoaded,
+  return { links, offset, filter, note, target, generatedUrl, generatedRecord, error, recordsError, recordsLoaded,
     busy, refreshing, copying, locked, currentTime, refresh, prepareInvitation, generate, revoke, copyLink, saveNote, page };
 }

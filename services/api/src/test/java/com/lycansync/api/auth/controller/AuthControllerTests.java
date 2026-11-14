@@ -41,7 +41,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * @author Wreckloud
  * @since 2026-09-10
  */
-@WebMvcTest({AuthController.class, AccessLinkController.class})
+@WebMvcTest({AuthController.class, AccessLinkController.class, AccountLifecycleController.class})
 @Import(AuthConfiguration.class)
 class AuthControllerTests {
     @MockitoBean
@@ -69,6 +69,22 @@ class AuthControllerTests {
 
     @MockitoBean
     private com.lycansync.api.auth.service.AccountLifecycleService lifecycle;
+
+    @Test
+    void shouldRequireSessionAndValidBodyBeforeVerifyingTransferPassword() throws Exception {
+        mvc.perform(post("/api/auth/account/transfer/verify").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"password\":\"test12\"}"))
+                .andExpect(status().isUnauthorized());
+        when(authService.authenticate(SESSION_TOKEN)).thenReturn(AUTHENTICATED_USER);
+        mvc.perform(post("/api/auth/account/transfer/verify").header(HttpHeaders.AUTHORIZATION, "Bearer " + SESSION_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(lifecycle);
+        mvc.perform(post("/api/auth/account/transfer/verify").header(HttpHeaders.AUTHORIZATION, "Bearer " + SESSION_TOKEN)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"password\":\"test12\"}"))
+                .andExpect(status().isNoContent());
+        verify(lifecycle).verifyTransferPassword(AUTHENTICATED_USER, "test12");
+    }
 
     @Test
     void shouldDistinguishInvalidLinkFromRateLimit() throws Exception {

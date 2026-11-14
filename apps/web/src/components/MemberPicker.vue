@@ -10,6 +10,7 @@ const props = defineProps<{
   disabled?: boolean; selected?: string; action?: string; label?: string; joinedIds?: string[];
 }>();
 const emit = defineEmits<{ select: [member: MemberOption] }>();
+const scrollPosition = defineModel<number>('scrollPosition', { default: 0 });
 const search = defineModel<string>('search', { default: '' });
 const results = ref<MemberOption[]>([]);
 const loading = ref(false);
@@ -35,7 +36,7 @@ async function loadMore() {
   } catch (reason) {
     if (!current.signal.aborted) error.value = reason instanceof Error ? reason.message : '无法读取成员，请重试。';
   } finally {
-    if (!current.signal.aborted) { loading.value = false; await nextTick(); checkScroll(); }
+    if (!current.signal.aborted) { loading.value = false; await nextTick(); if (list.value) list.value.scrollTop = scrollPosition.value; checkScroll(); }
   }
 }
 function checkScroll() {
@@ -47,6 +48,7 @@ function unavailable(member: MemberOption) {
 }
 watch(search, () => {
   request?.abort(); clearTimeout(timer); results.value = []; offset = 0; hasMore.value = false; error.value = '';
+  scrollPosition.value = 0;
   if (list.value) list.value.scrollTop = 0;
   loading.value = !!props.load;
   timer = setTimeout(() => { loading.value = false; void loadMore(); }, 250);
@@ -58,7 +60,7 @@ onScopeDispose(() => { request?.abort(); clearTimeout(timer); });
 <template>
   <div class="member-picker">
     <input v-model="search" type="search" :disabled="disabled" maxlength="100" :aria-label="label ?? '搜索群成员'" placeholder="搜索成员" />
-    <div ref="list" class="member-picker-list" :aria-label="label ?? '群成员'" :aria-busy="loading" @scroll.passive="checkScroll">
+    <div ref="list" class="member-picker-list" :aria-label="label ?? '群成员'" :aria-busy="loading" @scroll.passive="scrollPosition = ($event.target as HTMLElement).scrollTop; checkScroll()">
       <div v-for="member in visibleMembers" :key="member.userId" class="member-picker-row">
         <img v-if="member.avatar" :src="member.avatar" alt="" /><UserRound v-else :size="36" aria-hidden="true" />
         <strong><span>{{ member.nickname }}</span><Crown v-if="member.role === 'OWNER'" :size="13" aria-label="群主" /></strong>

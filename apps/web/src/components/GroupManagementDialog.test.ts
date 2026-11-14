@@ -15,7 +15,7 @@ function setup() {
   const confirmation = ref<{ userId: string; nickname: string } | null>(null);
   const transferName = ref('');
   const state = { props: { group: { id: 'group', name: '群组' }, userId: 'owner', mode: 'resolve', pending: false },
-    disposition, mode: computed(() => disposition.value), confirmation, transferName, dissolveName: ref('群'),
+    showingConfirmation: ref(false), disposition, mode: computed(() => disposition.value), confirmation, transferName, dissolveName: ref('群'),
     dissolveNameMatches: ref(false), transferNameMatches: computed(() => !!confirmation.value && transferName.value === confirmation.value.nickname),
     busy: ref(false), disposed: false, error: ref(''), status: ref(''), dialog: ref(null), emit: vi.fn(),
     transferGroupOwner: vi.fn(async () => ({ id: 'group', role: 'MEMBER' })), dissolveGroup: vi.fn(async () => {}),
@@ -30,6 +30,11 @@ it('切换转让和解散保留所选成员及两侧输入，必须准确输入�
   const f = setup();
   f.selectMember({ userId: 'friend', nickname: '朋友' });
   f.state.transferName.value = '朋';
+  f.close();
+  expect(f.state.showingConfirmation.value).toBe(false);
+  expect(f.state.transferName.value).toBe('朋');
+  f.selectMember({ userId: 'friend', nickname: '朋友' });
+  expect(f.state.transferName.value).toBe('朋');
   await f.chooseDisposition('dissolve');
   await f.chooseDisposition('transfer');
   expect(f.state.confirmation.value?.userId).toBe('friend');

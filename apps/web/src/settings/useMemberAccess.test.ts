@@ -54,14 +54,13 @@ afterEach(() => {
 });
 
 describe('成员访问链接', () => {
-  it('已有邀请时先确认，继续生成才创建额外链接', async () => {
+  it('已有邀请时展示最新链接，只在点击生成时创建额外链接', async () => {
     const { state } = await open(ref(true), 'invite');
-    expect(state.invitationConfirmation.value).toBe(true);
+    expect(state.generatedUrl.value).toBe(url);
     expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(0);
     expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
     await state.generate('INVITE');
     expect(request).toHaveBeenCalledWith('access/links', 'POST', { kind: 'INVITE', targetId: null, note: '' }, expect.any(AbortSignal));
-    expect(state.invitationConfirmation.value).toBe(false);
     expect(notice).toHaveBeenCalledWith('邀请链接已复制。');
   });
 
@@ -169,8 +168,9 @@ describe('成员访问链接', () => {
     let finish!: (result: unknown) => void;
     request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
     const generation = state.generate('INVITE');
-    active.value = false; finish({ record: link(), url }); await generation;
-    expect(state.generatedUrl.value).toBe('');
+    active.value = false; finish({ record: link({ id: 'late-link' }), url: 'https://example.com/access#token=late' }); await generation;
+    expect(state.generatedRecord.value?.id).toBe('link-a');
+    expect(state.generatedUrl.value).toBe(url);
     expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
   });
 
@@ -210,13 +210,13 @@ describe('成员访问链接', () => {
     expect(state.recordsLoaded.value).toBe(true);
   });
 
-  it('未能核对已有邀请时不自动生成，重试后仍先确认', async () => {
+  it('未能核对已有邀请时不自动生成，重试后读取已有链接', async () => {
     request.mockRejectedValueOnce(new Error('读取失败'));
     const { state } = await open(ref(true), 'invite');
     expect(state.recordsLoaded.value).toBe(false);
     expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(0);
     await state.prepareInvitation();
-    expect(state.invitationConfirmation.value).toBe(true);
+    expect(state.generatedUrl.value).toBe(url);
     expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(0);
   });
 
