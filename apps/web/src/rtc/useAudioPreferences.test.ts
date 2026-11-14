@@ -14,6 +14,26 @@ function memoryStorage() {
 afterEach(() => vi.useRealTimers());
 
 describe('useAudioPreferences', () => {
+  it('保存失败保留当前音量并显示错误，重试保存最新状态后清除错误且不再重复写入', () => {
+    vi.useFakeTimers();
+    const storage = memoryStorage();
+    const scope = effectScope();
+    const preferences = scope.run(() => useAudioPreferences('local-user', storage))!;
+    storage.setItem.mockImplementationOnce(() => { throw new Error('disk unavailable'); });
+    preferences.setInputGain(1.4);
+    vi.advanceTimersByTime(150);
+    expect(preferences.inputGain.value).toBe(1.4);
+    expect(preferences.persistenceError.value).toBe('声音设置已生效，但未能保存。');
+    expect(storage.values.size).toBe(0);
+    preferences.setOutputVolume(0.6);
+    preferences.retrySave();
+    expect(preferences.persistenceError.value).toBe('');
+    expect(JSON.parse([...storage.values.values()][0])).toMatchObject({ inputGain: 1.4, outputVolume: 0.6 });
+    vi.advanceTimersByTime(1000);
+    scope.stop();
+    expect(storage.setItem).toHaveBeenCalledTimes(2);
+  });
+
   it('统一切换处理设置并保存，保留输入音量、成员平衡和原有存储字段', () => {
     vi.useFakeTimers();
     const storage = memoryStorage();

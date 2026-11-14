@@ -405,16 +405,14 @@ test('只在采集会话期间关闭后台节流，停止和启动失败清理�
   assert.equal(failed.sandbox.nativeVideo.current, undefined);
 });
 
-test('手动窗口方式跳过游戏猜测，手动游戏仍只绑定原窗口', async () => {
-  for (const method of ['bitblt', 'wgc', 'game']) {
-    const { start, calls } = gameRoutingFixture(() => assert.fail('手动方式不能被分类器覆盖'));
-    await start({ hideCursor: false, hideBorder: true, windowMethod: method });
-    const target = calls.find(call => call.action === 'start').target;
-    assert.equal(target.kind, method === 'game' ? 'game' : 'window');
-    assert.equal(target.windowId, '123');
-    assert.equal(target.processCreationTime, '456');
-    assert.equal(target.executable, undefined);
-  }
+test('手动游戏跳过分类器，仍只绑定原窗口', async () => {
+  const { start, calls } = gameRoutingFixture(() => assert.fail('手动方式不能被分类器覆盖'));
+  await start({ hideCursor: false, hideBorder: true, windowMethod: 'game' });
+  const target = calls.find(call => call.action === 'start').target;
+  assert.equal(target.kind, 'game');
+  assert.equal(target.windowId, '123');
+  assert.equal(target.processCreationTime, '456');
+  assert.equal(target.executable, undefined);
 });
 
 test('高权限窗口自动走普通窗口源，不尝试注入；手动游戏仍明确执行', async () => {

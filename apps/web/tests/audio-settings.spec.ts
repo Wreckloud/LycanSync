@@ -155,6 +155,25 @@ createApp({ setup() {
     await inputGain.fill('1.6');
     await page.getByRole('button', { name: '重置麦克风输入音量', exact: true }).click();
     await expect(inputGain).toHaveValue('1.2');
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem(
+      'lycansync.audio-preferences.v1.audio-settings-test')!).inputGain)).toBe(1.2);
+    await page.evaluate(() => {
+      const original = Storage.prototype.setItem;
+      Storage.prototype.setItem = function () {
+        Storage.prototype.setItem = original;
+        throw new DOMException('test storage full', 'QuotaExceededError');
+      };
+    });
+    await inputGain.fill('1.5');
+    await expect(page.getByRole('alert')).toHaveText('声音设置已生效，但未能保存。');
+    await expect(inputGain).toHaveValue('1.5');
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem(
+      'lycansync.audio-preferences.v1.audio-settings-test')!).inputGain)).toBe(1.2);
+    await page.getByRole('button', { name: '重试保存', exact: true }).click();
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem(
+      'lycansync.audio-preferences.v1.audio-settings-test')!).inputGain)).toBe(1.5);
+    await inputGain.fill('1.2');
     await page.getByRole('button', { name: '卸载测试页' }).click();
     const unmounted = await counts();
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));

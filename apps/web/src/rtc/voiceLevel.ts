@@ -1,8 +1,12 @@
-const VOICE_LEVEL_FLOOR = 0.02;
+const VOICE_LEVEL_FLOOR_DB = -50;
+const VOICE_LEVEL_FULL_DB = -12;
 
 export function normalizeVoiceLevel(level: number) {
-  if (!Number.isFinite(level) || level <= VOICE_LEVEL_FLOOR) return 0;
-  return Math.min(1, Math.sqrt((level - VOICE_LEVEL_FLOOR) / (1 - VOICE_LEVEL_FLOOR)));
+  if (!Number.isFinite(level) || level <= 0) return 0;
+  // 人声按对数刻度展示；满格表示较强输入，不要求声音达到削波边界。
+  const decibels = 20 * Math.log10(level);
+  return Math.max(0, Math.min(1,
+    (decibels - VOICE_LEVEL_FLOOR_DB) / (VOICE_LEVEL_FULL_DB - VOICE_LEVEL_FLOOR_DB)));
 }
 
 export function quantizeVoiceLevel(level: number, steps: number) {

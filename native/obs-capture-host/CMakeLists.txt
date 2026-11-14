@@ -73,8 +73,7 @@ add_subdirectory(game-plugin)
 
 # 显式实测仅创建自己的色块窗，验证实际窗口源的遮挡隔离；不进入运行包。
 add_executable(lycansync-window-isolation-test EXCLUDE_FROM_ALL tests/window_isolation.cpp src/window_capture.cpp
-  src/bound_game_target.c "${LYCANSYNC_OBS_SOURCE}/plugins/win-capture/dc-capture.c")
-target_include_directories(lycansync-window-isolation-test PRIVATE "${LYCANSYNC_OBS_SOURCE}/plugins/win-capture")
+  src/bound_game_target.c)
 target_compile_features(lycansync-window-isolation-test PRIVATE cxx_std_20)
 target_compile_definitions(lycansync-window-isolation-test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN= NOMINMAX)
 target_compile_options(lycansync-window-isolation-test PRIVATE /utf-8)

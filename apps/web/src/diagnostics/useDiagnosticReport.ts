@@ -3,6 +3,7 @@ import type { Participant, Room } from 'livekit-client';
 import { createMediaDiagnosticsSampler, type MediaDiagnosticsSnapshot } from './mediaDiagnostics';
 import packageInfo from '../../package.json';
 import { SCREEN_SHARE_QUALITIES, screenShareQuality, type CustomScreenShareQuality } from '../rtc/screenShareQuality';
+import { serializeDiagnosticReport } from './serializeDiagnosticReport';
 
 const SAMPLE_INTERVAL_MS = 2_000;
 const CHECKPOINT_INTERVAL_MS = 15_000;
@@ -698,8 +699,8 @@ export function useDiagnosticReport(options: {
     }
     if (!force && performance.now() - lastCheckpointAt < CHECKPOINT_INTERVAL_MS) return;
     lastCheckpointAt = performance.now();
-    const text = JSON.stringify(createReport(''));
-    checkpointPromise = bridge.saveDiagnosticSnapshot(text)
+    checkpointPromise = serializeDiagnosticReport(createReport(''))
+      .then(text => bridge.saveDiagnosticSnapshot(text))
       .then(async (bytes) => {
         if (disposed || bytes === null) return;
         savedSizeBytes.value = bytes;
@@ -755,7 +756,7 @@ export function useDiagnosticReport(options: {
     if (disposed || saving.value || (recording.value && !automaticRecording) || (!startedAt && !window.lycanDesktop)) return;
     saving.value = true; error.value = '';
     try {
-      const text = JSON.stringify(createReport(notes));
+      const text = await serializeDiagnosticReport(createReport(notes));
       if (window.lycanDesktop) await window.lycanDesktop.exportDiagnosticReport(text);
       else {
         const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));

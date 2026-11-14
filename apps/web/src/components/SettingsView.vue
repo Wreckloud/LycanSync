@@ -150,7 +150,7 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
         </div>
       </header>
       <div class="settings-content">
-        <p class="settings-intro settings-page-intro">{{ sectionDescription }}</p>
+        <p v-if="sectionDescription" class="settings-intro settings-page-intro">{{ sectionDescription }}</p>
         <div v-if="user.administrator && activeSection === 'members'" class="owner-settings-page">
           <button v-if="returningToClosure" type="button" class="settings-button" @click="selectSection('account')">返回注销流程</button>
           <OwnerSettings ref="ownerSettings" :active="true" :leaving="leaving" />

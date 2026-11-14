@@ -17,12 +17,13 @@ it('关闭只移除展示，旧错误不挡成功，同文案的新操作重新�
   const { notice: viewerNotice, noticeEvent: viewerNoticeEvent } = useNotice();
   const recording = { ...useNotice(), successNotice: ref<{ message: string } | null>(null) };
   const audioOutput = { notice: ref('') };
+  const audioPreferences = { persistenceError: ref('') };
   const settingsOpen = ref(false);
   const settingsSection = ref('account');
   const props = reactive({ startupUpdateWarning: '' });
   const emit = vi.fn();
   const state = scope.run(() => runInNewContext(`${source}\n({ appNotice, dismissAppNotice })`, {
-    ref, watch, rtc, viewerNoticeEvent, recording, audioOutput, settingsOpen, settingsSection, props, emit,
+    ref, watch, rtc, viewerNoticeEvent, recording, audioOutput, audioPreferences, settingsOpen, settingsSection, props, emit,
   })) as { appNotice: { value: { id: number; message: string; kind?: string } | null }; dismissAppNotice(): void };
   try {
     expect(state.appNotice.value?.message).toBe('连接失败');
@@ -71,6 +72,26 @@ it('关闭只移除展示，旧错误不挡成功，同文案的新操作重新�
     await nextTick();
     expect(state.appNotice.value).toBeNull();
     expect(audioOutput.notice.value).toBe('切换失败');
+    audioPreferences.persistenceError.value = '声音设置已生效，但未能保存。';
+    await nextTick();
+    expect(state.appNotice.value).toBeNull();
+    audioPreferences.persistenceError.value = '';
+    settingsOpen.value = false;
+    await nextTick();
+    audioPreferences.persistenceError.value = '声音设置已生效，但未能保存。';
+    await nextTick();
+    expect(state.appNotice.value?.message).toBe('声音设置已生效，但未能保存。');
+    settingsOpen.value = true;
+    await nextTick();
+    expect(state.appNotice.value).toBeNull();
+    settingsOpen.value = false;
+    audioPreferences.persistenceError.value = '';
+    await nextTick();
+    audioPreferences.persistenceError.value = '声音设置已生效，但未能保存。';
+    await nextTick();
+    audioPreferences.persistenceError.value = '';
+    await nextTick();
+    expect(state.appNotice.value).toBeNull();
     props.startupUpdateWarning = '更新失败';
     await nextTick();
     state.dismissAppNotice();

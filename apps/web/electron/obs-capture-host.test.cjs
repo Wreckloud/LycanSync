@@ -1464,28 +1464,26 @@ test('普通窗口记录实际方式，不能中途换方式或伪造边框授�
   }
 });
 
-test('普通窗口自动接受 OBS 选定的 BitBlt 或 WGC，中途换方法后丢弃迟到帧', async context => {
-  for (const captureMethod of ['bitblt-window', 'wgc-window']) {
-    const f = fixture(context);
-    const target = { kind: 'window', windowId: '34567', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.34567',
-      processCreationTime: '56789', processId: 123, requiresWindowCapture: false };
-    const starting = f.manager.start('window:7:0', 60, sessionId, target,
-      { hideCursor: false, hideBorder: false, windowMethod: 'auto' });
-    f.emit({ event: 'captureStarted', helperVersion: '32.2.2' }); await starting;
-    const evidence = { event: 'captureEvidence', stage: 'configured', captureMethod, requestedMethod: 'auto',
-      borderAllowed: true, clientArea: true, adapterIndex: 0, sourceWidth: 320, sourceHeight: 180 };
-    f.emit(evidence);
-    const frame = { event: 'sharedTextureFrame', sessionId, slotIndex: 0, sourceHandleHex: '0000000000000001', pixelFormat: 'bgra',
-      timestampMicros: 1, codedSize: { width: 320, height: 180 }, contentSize: { width: 320, height: 180 },
-      renderedFrames: 1, bridgeFrames: 1, bridgeDroppedFrames: 0 };
-    f.emit(frame);
-    assert.equal(f.frames.length, 1);
-    assert.deepEqual(f.failures, []);
-    f.emit({ ...evidence, stage: 'sourceReady', captureMethod: captureMethod === 'bitblt-window' ? 'wgc-window' : 'bitblt-window' });
-    f.emit({ ...frame, slotIndex: 1, renderedFrames: 2, bridgeFrames: 2 });
-    assert.equal(f.frames.length, 1);
-    assert.deepEqual(f.failures, ['obsCaptureProtocolEventInvalid']);
-  }
+test('普通窗口只接受 WGC，收到其他方法后丢弃迟到帧', async context => {
+  const f = fixture(context);
+  const target = { kind: 'window', windowId: '34567', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.34567',
+    processCreationTime: '56789', processId: 123, requiresWindowCapture: false };
+  const starting = f.manager.start('window:7:0', 60, sessionId, target,
+    { hideCursor: false, hideBorder: false, windowMethod: 'auto' });
+  f.emit({ event: 'captureStarted', helperVersion: '32.2.2' }); await starting;
+  const evidence = { event: 'captureEvidence', stage: 'configured', captureMethod: 'wgc-window', requestedMethod: 'auto',
+    borderAllowed: true, clientArea: true, adapterIndex: 0, sourceWidth: 320, sourceHeight: 180 };
+  f.emit(evidence);
+  const frame = { event: 'sharedTextureFrame', sessionId, slotIndex: 0, sourceHandleHex: '0000000000000001', pixelFormat: 'bgra',
+    timestampMicros: 1, codedSize: { width: 320, height: 180 }, contentSize: { width: 320, height: 180 },
+    renderedFrames: 1, bridgeFrames: 1, bridgeDroppedFrames: 0 };
+  f.emit(frame);
+  assert.equal(f.frames.length, 1);
+  assert.deepEqual(f.failures, []);
+  f.emit({ ...evidence, stage: 'sourceReady', captureMethod: 'bitblt-window' });
+  f.emit({ ...frame, slotIndex: 1, renderedFrames: 2, bridgeFrames: 2 });
+  assert.equal(f.frames.length, 1);
+  assert.deepEqual(f.failures, ['obsCaptureProtocolEventInvalid']);
 });
 
 test('OBS 窗口暂停和恢复沿原会话同步，旧会话事件不能变更状态', async (context) => {

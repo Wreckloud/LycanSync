@@ -76,6 +76,12 @@ export function useRtcRoom() {
   const local = makeParticipant('user-viewing-user', '自己', true);
   const friends = ['A','B','C','D','E','F','G','H'].map((id) => makeParticipant(id, '成员' + id));
   window.__viewingTest = {
+    paint(width, height, color) {
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d').fillStyle = color;
+      canvas.getContext('2d').fillRect(0, 0, width, height);
+      stream.getVideoTracks()[0].requestFrame();
+    },
     async diagnostics() {
       const { createMediaDiagnosticsSampler } = await import('/src/diagnostics/mediaDiagnostics.ts');
       return createMediaDiagnosticsSampler().collect(room.value, participants.value);
@@ -466,6 +472,54 @@ async function openWatching(page: Page) {
   await expect(viewer.getByRole('region', { name: '多人观看窗口' })).toBeVisible();
   return viewer;
 }
+
+test('单画面占满观看窗，宽窄画面网格不越界，本地弹出预览持续更新', async ({ page }) => {
+  const paint = (width: number, height: number, color: string) => page.evaluate(({ width, height, color }) =>
+    (window as unknown as { __viewingTest: { paint(width: number, height: number, color: string): void } }).__viewingTest
+      .paint(width, height, color), { width, height, color });
+  await sharing(page, ['A']);
+  const viewer = await openWatching(page);
+  for (const [width, height] of [[640, 180], [160, 240], [320, 180]]) {
+    await paint(width, height, '#20d060');
+    await expect.poll(() => viewer.locator('.viewing-tile video').evaluate((element: HTMLVideoElement) =>
+      [element.videoWidth, element.videoHeight])).toEqual([width, height]);
+    await expect.poll(() => viewer.locator('.viewing-stage').evaluate(stage => {
+      const outer = stage.getBoundingClientRect(), tile = stage.querySelector('.viewing-tile')!.getBoundingClientRect();
+      return Math.max(Math.abs(outer.width - tile.width), Math.abs(outer.height - tile.height),
+        Math.abs(outer.top - tile.top), Math.abs(outer.left - tile.left));
+    })).toBeLessThan(1);
+    await sharing(page, ['A', 'B', 'C', 'D', 'E']);
+    await expect(viewer.locator('.viewing-tile')).toHaveCount(5);
+    await expect.poll(() => viewer.locator('.viewing-stage').evaluate(stage => {
+      const outer = stage.getBoundingClientRect();
+      return Math.max(...Array.from(stage.querySelectorAll('.viewing-tile'), tile => {
+        const bounds = tile.getBoundingClientRect();
+        return Math.max(outer.left - bounds.left, bounds.right - outer.right, outer.top - bounds.top, bounds.bottom - outer.bottom);
+      }));
+    })).toBeLessThan(2);
+    await sharing(page, ['A']);
+    await expect(viewer.locator('.viewing-tile')).toHaveCount(1);
+  }
+  await sharing(page, ['user-viewing-user']);
+  await expect(viewer.locator('.viewing-tile')).toHaveCount(1);
+  for (const [color, expected] of [['#e02040', [224, 32, 64]], ['#20d060', [32, 208, 96]]] as const) {
+    await paint(320, 180, color);
+    await expect.poll(() => viewer.locator('.viewing-tile video').evaluate((element: HTMLVideoElement) => {
+      if (element.readyState < 2) return [];
+      const canvas = element.ownerDocument.createElement('canvas'); canvas.width = canvas.height = 1;
+      const context = canvas.getContext('2d')!; context.drawImage(element, 0, 0, 1, 1);
+      return [...context.getImageData(0, 0, 1, 1).data].slice(0, 3);
+    })).toEqual([...expected]);
+  }
+  await viewer.locator('.viewing-tile').hover();
+  await viewer.getByRole('button', { name: '返回主界面', exact: true }).click();
+  await page.locator('.viewing-tile').hover();
+  await page.getByRole('button', { name: '占满窗口', exact: true }).click();
+  await expect.poll(() => page.locator('.viewing-stage').evaluate(stage => {
+    const outer = stage.getBoundingClientRect(), tile = stage.querySelector('.viewing-tile')!.getBoundingClientRect();
+    return Math.max(Math.abs(outer.width - tile.width), Math.abs(outer.height - tile.height));
+  })).toBeLessThan(1);
+});
 
 test('默认仅小预览，网格和聚焦使用原比例，整体弹出后返回保留群聊草稿', async ({ page, context }) => {
   const errors: string[] = [];

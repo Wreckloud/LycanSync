@@ -13,6 +13,7 @@ export type AudioVolumeChange = Readonly<{
 export function useAudioPreferences(userId: string,
   storage: Pick<Storage, 'getItem' | 'setItem'> = localStorage) {
   const stored = loadAudioPreferences(userId, storage);
+  const persistenceError = ref('');
   const inputDeviceId = ref(stored.inputDeviceId);
   const outputDeviceId = ref(stored.outputDeviceId);
   const inputGain = ref(stored.inputGain);
@@ -48,7 +49,10 @@ export function useAudioPreferences(userId: string,
     if (saveTimer !== null) clearTimeout(saveTimer);
     saveTimer = null;
     if (!dirty) return;
-    if (saveAudioPreferences(userId, snapshot(), storage)) dirty = false;
+    if (saveAudioPreferences(userId, snapshot(), storage)) {
+      dirty = false;
+      persistenceError.value = '';
+    } else persistenceError.value = '声音设置已生效，但未能保存。';
   }
 
   function scheduleSave() {
@@ -140,6 +144,8 @@ export function useAudioPreferences(userId: string,
   onScopeDispose(saveNow);
 
   return {
+    persistenceError,
+    retrySave: saveNow,
     inputDeviceId,
     setInputDeviceId,
     outputDeviceId,

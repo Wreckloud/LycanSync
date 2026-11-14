@@ -128,7 +128,8 @@ test('OBS 真实来源纹理经生产入口到页面轨道，重复停止及故�
     assert.equal(code, 0, details);
     assert.equal(result.ok, true, details);
     assert.equal(result.helperClosed, true, details);
-    const repeatModes = ['cold', 'prewarmed', 'restart'];
+    const repeatModes = [process.env.LYCANSYNC_CAPTURE_REPEAT_PREWARM === '1' ? 'prewarmed' : 'cold',
+      ...Array(Number(process.env.LYCANSYNC_CAPTURE_REPEAT_COUNT ?? 3) - 1).fill('restart')];
     const expectedCases = process.env.LYCANSYNC_CAPTURE_REPEAT_CHECK === '1' ? repeatModes.length : process.env.LYCANSYNC_CAPTURE_APPLICATION_CHECK === '1'
       ? (process.env.LYCANSYNC_CAPTURE_APPLICATION_WINDOW_ID ? Number(process.env.LYCANSYNC_CAPTURE_APPLICATION_REPEATS ?? 1) : 2)
       : process.env.LYCANSYNC_CAPTURE_RESOURCE_CHECK === '1' || process.env.LYCANSYNC_CAPTURE_QUALITY_CHECK === '1'
@@ -152,17 +153,16 @@ test('OBS 真实来源纹理经生产入口到页面轨道，重复停止及故�
     if (process.env.LYCANSYNC_CAPTURE_REPEAT_CHECK === '1') {
       assert.deepEqual(result.cases.map(entry => entry.mode), repeatModes, details);
       assert.ok(result.cases.every(entry => entry.freshPixelsChecked && entry.hostRetained), details);
+      assert.ok(result.cases.every(entry => Number.isFinite(entry.firstPresentedMs)
+        && entry.firstPresentedMs >= entry.firstFrameMs && entry.resources.intervalMs >= 4000), details);
     } else if (process.env.LYCANSYNC_CAPTURE_WINDOW_CHECK === '1' || process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1') {
       assert.equal(result.cases[0].mode, process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1' ? 'controlled-d3d-game' : 'window', details);
       assert.equal(result.cases[0].actualMethod, process.env.LYCANSYNC_CAPTURE_GAME_CHECK === '1' ? 'game'
-        : process.env.LYCANSYNC_CAPTURE_WINDOW_WGC === '1' ? 'wgc-window' : 'bitblt-window', details);
+        : 'wgc-window', details);
       assert.deepEqual(result.cases[0].windowActions,
         ['same-title', 'rename-and-refresh', 'minimize', 'restore', 'stop-and-reopen', 'close-without-takeover'], details);
       assert.equal(result.cases[0].pixelsChecked, true, details);
       assert.equal(result.cases[0].diagnosticsChecked, true, details);
-      if (process.env.LYCANSYNC_CAPTURE_WINDOW_MIXED === '1') {
-        assert.deepEqual(result.cases[0].methodSwitches, ['bitblt-window', 'wgc-window', 'bitblt-window'], details);
-      }
       assert.deepEqual(result.cases[0].frameRateChanges.map((entry) => entry.targetFps), [120, 30, 60, 30, 60], details);
       assert.ok(result.cases[0].frameRateChanges.every((entry) => entry.freshPixelsChecked), details);
     }

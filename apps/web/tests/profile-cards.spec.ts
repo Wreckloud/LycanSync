@@ -48,9 +48,10 @@ test('各设置页说明共用同一位置和样式，诊断入口归入客户�
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const intro = page.locator('.settings-page-intro');
+  await expect(intro).toHaveCount(0);
   await expect(page.getByRole('button', { name: '关于与诊断', exact: true })).toHaveCount(0);
   let baseline: { x: number; y: number; width: number } | undefined;
-  for (const name of ['账号设置', '语音与音频', '音效', '快捷键', '客户端', '服主管理']) {
+  for (const name of ['语音与音频', '音效', '快捷键', '客户端', '服主管理']) {
     await page.getByRole('button', { name, exact: true }).click();
     await expect(intro).toBeVisible();
     const bounds = await intro.boundingBox();
@@ -59,7 +60,7 @@ test('各设置页说明共用同一位置和样式，诊断入口归入客户�
     expect(position, name).toEqual(baseline);
     await expect(intro).toHaveCSS('font-size', '14px');
     await expect(intro).toHaveCSS('margin-bottom', '24px');
-    if (name === '账号设置' || name === '语音与音频') {
+    if (name === '语音与音频') {
       await page.locator('.settings-view').screenshot({ path: testInfo.outputPath(`${name}.png`), animations: 'disabled' });
     }
   }

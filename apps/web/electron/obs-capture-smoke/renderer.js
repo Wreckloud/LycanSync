@@ -12,11 +12,12 @@ let errors = [];
 let presented = 0;
 let callback;
 let senderConnection;
-function countPresented() {
-  callback = video.requestVideoFrameCallback(() => { presented++; countPresented(); });
+function countPresented(onFirst) {
+  callback = video.requestVideoFrameCallback(() => { presented++; onFirst?.(); countPresented(); });
 }
 window.obsCaptureTest = {
   async start(sourceId = 'monitor:1:0', resolution = { width: 1920, height: 1080 }, maxFps = 60, captureSettings) {
+    const startedAt = performance.now();
     errors = []; presented = 0;
     marker.style.background = '#f010c0';
     session = new NativeScreenVideoSession(window.lycanDesktop, { resolution, maxFps, captureSettings, onError: (code) => errors.push(code) });
@@ -27,8 +28,9 @@ window.obsCaptureTest = {
     await senderConnection.setLocalDescription(await senderConnection.createOffer());
     video.srcObject = new MediaStream([track.mediaStreamTrack]);
     await video.play();
-    countPresented();
-    return { readyState: track.mediaStreamTrack.readyState, ...session.readDiagnostics() };
+    await new Promise(resolve => countPresented(resolve));
+    return { readyState: track.mediaStreamTrack.readyState, firstPresentedMs: performance.now() - startedAt,
+      ...session.readDiagnostics() };
   },
   probe(x, y) {
     let pixel = null;

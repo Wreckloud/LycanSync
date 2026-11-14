@@ -9,9 +9,6 @@
 #include <cstdio>
 #include <filesystem>
 #include <string>
-extern "C" {
-#include <dc-capture.h>
-}
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -249,35 +246,6 @@ bool verify(Target &selected, Target &other, std::string_view expected_method, b
   return true;
 }
 
-bool verify_dc_copy_failures(HWND selected) {
-  // 调用补丁中的真实复制实现，只用自建窗口和明确无效的 DC，不采集桌面。
-  dc_capture capture{};
-  obs_enter_graphics();
-  dc_capture_init(&capture, 0, 0, 16, 16, false, true);
-  bool passed = capture.valid;
-  if (passed) {
-    dc_capture_capture(&capture, selected);
-    passed = capture.texture_written;
-    const auto invalid = reinterpret_cast<HWND>(static_cast<intptr_t>(-1));
-    if (IsWindow(invalid)) passed = false;
-    else {
-      dc_capture_capture(&capture, invalid);
-      passed = passed && !capture.texture_written;
-    }
-    const HDC valid_dc = capture.hdc;
-    capture.hdc = reinterpret_cast<HDC>(static_cast<intptr_t>(-1));
-    dc_capture_capture(&capture, selected);
-    passed = passed && !capture.texture_written;
-    capture.hdc = valid_dc;
-    dc_capture_capture(&capture, selected);
-    passed = passed && capture.texture_written;
-  }
-  dc_capture_free(&capture);
-  obs_leave_graphics();
-  std::printf("bitblt-invalid-dc-rejected: %d\n", passed);
-  return passed;
-}
-
 bool verify_external(Target &selected) {
   if (window_video_suspended(selected.identity)) { std::puts("external-window-not-visible"); return false; }
   Probe probe;
@@ -370,7 +338,7 @@ int wmain(int argc, wchar_t **argv) {
     if (opened == MODULE_SUCCESS && obs_init_module(module)) {
       obs_post_load_modules();
       passed = external ? (foreign_fixture ? verify_foreign_fixture(selected) : verify_external(selected))
-          : verify_dc_copy_failures(selected.identity.window) && verify(selected, other, "bitblt-window", gpu_cover);
+          : verify(selected, other, "wgc-window", gpu_cover);
       if (passed && !external) {
         selected.reset(); other.reset();
         passed = selected.create(80, kSelectedColor, 3, L"Chrome_WidgetWin_LycanSyncIsolationTest")

@@ -53,6 +53,34 @@ function setup(active = true) {
 
 const checked = { target: { checked: true } } as unknown as Event;
 
+it('系统选项读取失败后重进栏目可恢复，读取期间不重复请求，成功后不重复读取', async () => {
+  const f = setup(false);
+  try {
+    f.bridge.getTraySettings.mockRejectedValueOnce(new Error('temporarily unavailable'));
+    f.props.active = true;
+    await nextTick(); await nextTick();
+    f.props.active = false;
+    await nextTick();
+    f.props.active = true;
+    await nextTick(); await nextTick();
+    expect(f.bridge.getAutoStart).toHaveBeenCalledOnce();
+    expect(f.bridge.getTraySettings).toHaveBeenCalledTimes(2);
+    expect(f.settings.trayError.value).toBe('');
+    f.autoStart.reject(new Error('temporarily unavailable'));
+    await nextTick(); await nextTick();
+    expect(f.settings.autoStartError.value).toContain('重新进入');
+    f.bridge.getAutoStart.mockResolvedValueOnce({ supported: true, enabled: true });
+    f.props.active = false;
+    await nextTick();
+    f.props.active = true;
+    await nextTick(); await nextTick();
+    expect(f.settings.autoStartError.value).toBe('');
+    expect(f.settings.autoStartEnabled.value).toBe(true);
+    expect(f.bridge.getAutoStart).toHaveBeenCalledTimes(2);
+    expect(f.bridge.getTraySettings).toHaveBeenCalledTimes(2);
+  } finally { f.scope.stop(); }
+});
+
 it('进入客户端设置才读取托盘偏好，沿用已关闭选择且不修改开机自启', async () => {
   const f = setup(false);
   try {

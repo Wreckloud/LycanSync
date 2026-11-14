@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, sharedTexture, screen, session } = require(
 const { readFileSync, existsSync } = require('node:fs');
 const { Module } = require('node:module');
 const { resolve } = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { runInNewContext } = require('node:vm');
 const { execFile, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
@@ -37,6 +38,7 @@ let production;
 let manager;
 let targetHelper;
 let targetFixture;
+let browserFixture;
 let finishing = false;
 let testPhase = 'initialization';
 let windowSample;
@@ -129,6 +131,8 @@ async function finish(result) {
     catch { targetFixture.kill(); result.cleanupError = 'testWindowExitUnconfirmed'; }
   }
   result.helperClosed = !manager?.state;
+  try { if (browserFixture) await browserFixture.close(); }
+  catch { result.cleanupError = 'testBrowserExitUnconfirmed'; }
   process.stdout.write(`${JSON.stringify({ type: 'obsCaptureSmokeResult', testPhase, windowSample, gpuDiagnostics, ...result, cases, failures, diagnostics, captureEvidence })}\n`);
   window?.destroy();
   app.exit(result.ok && result.helperClosed && !result.cleanupError ? 0 : 1);
@@ -229,8 +233,8 @@ app.whenReady().then(async () => {
     sourceId = monitor.sourceId;
     production.nativeVideoSourcesById = new Map(snapshot.sources.map((source) => [source.sourceId, source]));
   }
-  // 不启动活动扫描；自建 D3D 测试程序并非已知游戏，游戏验证显式选择游戏采集。
-  production.activityMonitor = { isCaptureGame: async () => false };
+  // 合成 D3D 程序不在真实游戏目录中；只在游戏夹具用例提供分类结果，仍走正式自动分流。
+  production.activityMonitor = { isCaptureGame: async () => gameCheck };
   await window.loadFile(resolve(projectRoot, 'release/build-cache/obs-32.2.2/smoke-page/renderer.html'));
   process.stdout.write('{"phase":"pageLoaded"}\n');
   window.showInactive();
@@ -334,6 +338,18 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
   if (applicationCheck) {
     const existingWindowId = process.env.LYCANSYNC_CAPTURE_APPLICATION_WINDOW_ID;
     if (existingWindowId && !/^[1-9]\d{0,19}$/.test(existingWindowId)) throw new Error('invalidApplicationTestWindow');
+    if (!existingWindowId) {
+      // 自建 Chromium/WebGL 来源，避免依赖手动打开的浏览器或用户账号。
+      const { chromium } = require('playwright');
+      browserFixture = await chromium.launch({ channel: 'chrome', headless: false,
+        args: ['--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'] });
+      const page = await browserFixture.newPage({ viewport: { width: 560, height: 430 } });
+      await page.goto(pathToFileURL(resolve(__dirname, 'browser-source.html')).href);
+      const [popup] = await Promise.all([page.waitForEvent('popup'), page.getByRole('button').click()]);
+      for (const fixture of [page, popup]) {
+        await fixture.waitForFunction(() => window.fixtureInfo?.webgl && window.fixtureInfo.frames > 1);
+      }
+    }
     const snapshot = await targetHelper.listVideoSources();
     // 浏览器只匹配专用测试标题；已有应用只接受本次明确给出的窗口句柄，不打印其标题。
     const sources = snapshot.sources.filter((source) => source.kind === 'window'
@@ -435,7 +451,7 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
       }
       const sourceDiagnostics = await renderer('diagnostics()');
       assert(sourceDiagnostics.sourceKind === 'window' && sourceDiagnostics.captureBackend === 'obsLibobs', 'applicationDiagnosticsMismatch');
-      assert(['bitblt-window', 'wgc-window'].includes(state.captureMethod), 'applicationAutomaticMethodMissing');
+      assert(state.captureMethod === 'wgc-window', 'applicationAutomaticMethodMissing');
       const stopped = await renderer('stop()');
       await until(() => !manager.state?.videoSessionId && !production.nativeVideo.current && !targetHelper.videoCapture);
       assert(stopped.readyState === 'ended' && manager.state === state && !state.videoSessionId && !state.closed, 'applicationStopUnconfirmed');
@@ -462,10 +478,8 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
     assert(existsSync(fixturePath), 'buildWithBuildTestWindowsFirst');
     const events = [];
     let buffer = '';
-    const ordinaryMethod = process.env.LYCANSYNC_CAPTURE_WINDOW_WGC === '1' ? 'wgc-window' : 'bitblt-window';
-    const mixedMethods = windowCheck && process.env.LYCANSYNC_CAPTURE_WINDOW_MIXED === '1';
-    assert(!mixedMethods || ordinaryMethod === 'bitblt-window', 'mixedWindowTestMustStartWithBitblt');
-    targetFixture = spawn(fixturePath, mixedMethods ? ['--mixed'] : windowCheck && ordinaryMethod === 'wgc-window' ? ['--wgc'] : [],
+    const ordinaryMethod = 'wgc-window';
+    targetFixture = spawn(fixturePath, [],
       { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     targetFixture.stdout.on('data', (chunk) => {
       buffer += String(chunk);
@@ -491,12 +505,24 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
     manager.onSuspended = (state, event) => { statuses.push(event.suspended); production.nativeVideo.suspend(state, event); };
     if (repeatCheck) {
       let cyan = false;
-      for (const mode of ['cold', 'prewarmed', 'restart']) {
+      // 首次预热必须面对未注入的测试进程，不能用已共享过的游戏作为对照。
+      const firstMode = process.env.LYCANSYNC_CAPTURE_REPEAT_PREWARM === '1' ? 'prewarmed' : 'cold';
+      const repeatCount = Number(process.env.LYCANSYNC_CAPTURE_REPEAT_COUNT ?? 3);
+      const prepareLeadMs = Number(process.env.LYCANSYNC_CAPTURE_PREPARE_LEAD_MS ?? 0);
+      assert([3, 10].includes(repeatCount) && [0, 1500].includes(prepareLeadMs), 'invalidRepeatTestOptions');
+      for (const mode of [firstMode, ...Array(repeatCount - 1).fill('restart')]) {
         testPhase = `repeat-${mode}`;
-        if (mode === 'prewarmed') await manager.prepare(true);
-        const settings = { hideCursor: false, hideBorder: false, windowMethod: gameCheck ? 'game' : 'auto' };
+        let prepareDurationMs = 0;
+        if (mode === 'prewarmed') {
+          const preparationAt = performance.now();
+          await manager.prepare(true);
+          prepareDurationMs = Math.round(performance.now() - preparationAt);
+          if (prepareLeadMs) await sleep(prepareLeadMs);
+        }
+        const settings = { hideCursor: false, hideBorder: false, windowMethod: 'auto' };
         const started = await renderer(`start(${JSON.stringify(selected.sourceId)}, undefined, 60, ${JSON.stringify(settings)})`);
         const state = manager.state;
+        const resourcesBefore = await readResources(state);
         const before = await renderer('probe(960,540)');
         for (let index = 0; index < 10; index++) {
           if (index === 4) { targetFixture.stdin.write('toggle-color\n'); cyan = !cyan; }
@@ -510,19 +536,23 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
         const after = await renderer('probe(960,540)');
         assert(after.presented > before.presented + 10, 'repeatFramesStalled');
         assert(state.captureMethod === (gameCheck ? 'game' : ordinaryMethod), 'repeatMethodMismatch');
+        const resourcesAfter = await readResources(state);
         const stopped = await renderer('stop()');
         await until(() => !state.videoSessionId && !production.nativeVideo.current && !targetHelper.videoCapture);
         assert(stopped.readyState === 'ended' && manager.state === state && !state.closed, 'repeatStopUnconfirmed');
+        const idle = await readResources(state);
         cases.push({ mode, actualMethod: state.captureMethod, firstFrameMs: started.firstFrameMs,
+          prepareDurationMs, prepareLeadMs: mode === 'prewarmed' ? prepareLeadMs : 0,
+          firstPresentedMs: started.firstPresentedMs, resources: resourceSummary(resourcesBefore, resourcesAfter),
+          idleHostPrivateMiB: Math.round(idle.helper.privateMiB), handleCount: bridge.currentProcessHandleCount(),
           freshPixelsChecked: true, hostRetained: true });
-        if (mode === 'cold') await manager.shutdown(false, 'idle');
       }
       assert(failures.length === 0, 'repeatCaptureFailure');
       await finish({ ok: true });
       return;
     }
     testPhase = 'window-start';
-    const settings = { hideCursor: false, hideBorder: false, windowMethod: gameCheck ? 'game' : 'auto' };
+    const settings = { hideCursor: false, hideBorder: false, windowMethod: 'auto' };
     const started = await renderer(`start(${JSON.stringify(selected.sourceId)}, undefined, 60, ${JSON.stringify(settings)})`);
     testPhase = 'window-initial-color';
     const state = manager.state;
@@ -630,27 +660,6 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
     testPhase = 'window-restart';
     await renderer(`start(${JSON.stringify(selected.sourceId)})`);
     await until(selectedColorMatches);
-    const methodSwitches = [];
-    if (mixedMethods) {
-      methodSwitches.push(manager.state.captureMethod);
-      await renderer('stop()');
-      await until(() => !state.videoSessionId && !production.nativeVideo.current && !targetHelper.videoCapture);
-      testPhase = 'window-switch-wgc';
-      await renderer(`start(${JSON.stringify(other.sourceId)})`);
-      await until(async () => {
-        const sample = await renderer('probe(960,540)');
-        return sample.pixel && sample.pixel[0] > 150 && sample.pixel[1] < 70 && sample.pixel[2] > 150;
-      });
-      assert(manager.state === state && state.captureMethod === 'wgc-window', 'retainedHostDidNotChooseWgc');
-      methodSwitches.push(state.captureMethod);
-      await renderer('stop()');
-      await until(() => !state.videoSessionId && !production.nativeVideo.current && !targetHelper.videoCapture);
-      testPhase = 'window-switch-bitblt';
-      await renderer(`start(${JSON.stringify(selected.sourceId)})`);
-      await until(selectedColorMatches);
-      assert(manager.state === state && state.captureMethod === 'bitblt-window', 'retainedHostDidNotChooseBitblt');
-      methodSwitches.push(state.captureMethod);
-    }
     testPhase = 'window-close';
     await command('close', 'targetClosed');
     await until(() => !manager.state?.videoSessionId && !production.nativeVideo.current && !targetHelper.videoCapture);
@@ -662,7 +671,6 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
     assert(failures.length === 1 && failures[0].code === 'captureTargetClosed', 'unexpectedWindowFailure');
     cases.push({ mode: gameCheck ? 'controlled-d3d-game' : 'window', actualMethod: gameCheck ? 'game' : ordinaryMethod,
       pixelsChecked: true, diagnosticsChecked: true, firstFrameMs: started.firstFrameMs, frameRateChanges,
-      methodSwitches,
       windowActions: ['same-title', 'rename-and-refresh', 'minimize', 'restore', 'stop-and-reopen', 'close-without-takeover'],
       helperExitCode: state.child.exitCode, helperSignal: state.child.signalCode,
       handleCount: bridge.currentProcessHandleCount() });

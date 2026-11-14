@@ -5,8 +5,13 @@ import type { MediaDiagnosticsSnapshot } from './mediaDiagnostics';
 import { diagnosticReportSample, useDiagnosticReport } from './useDiagnosticReport';
 import type { CustomScreenShareQuality } from '../rtc/screenShareQuality';
 
-const { collect } = vi.hoisted(() => ({ collect: vi.fn() }));
+const { collect, yieldSerialization } = vi.hoisted(() => ({ collect: vi.fn(), yieldSerialization: vi.fn<() => Promise<void>>() }));
 vi.mock('./mediaDiagnostics', () => ({ createMediaDiagnosticsSampler: () => ({ collect }) }));
+vi.mock('./serializeDiagnosticReport', async importOriginal => {
+  const actual = await importOriginal<typeof import('./serializeDiagnosticReport')>();
+  return { serializeDiagnosticReport: (report: Parameters<typeof actual.serializeDiagnosticReport>[0]) =>
+    actual.serializeDiagnosticReport(report, yieldSerialization) };
+});
 const scopes: ReturnType<typeof effectScope>[] = [];
 function snapshot(): MediaDiagnosticsSnapshot {
   return { time: new Date().toISOString(), pageVisible: true, participantCount: 1, omittedParticipants: 0,
@@ -47,6 +52,7 @@ beforeEach(() => {
   vi.stubGlobal('localStorage', { getItem: (key: string) => preferences.get(key) ?? null,
     setItem: (key: string, value: string) => { preferences.set(key, value); } });
   collect.mockReset().mockImplementation(async () => snapshot());
+  yieldSerialization.mockReset().mockResolvedValue(undefined);
 });
 afterEach(() => { scopes.splice(0).forEach((scope) => scope.stop()); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -159,6 +165,32 @@ it('复用现有采样低频保存脱敏报告，正常关闭补存，体验说�
   expect(report.recording.value).toBe(false);
 });
 
+it('关闭补存等待分批序列化，随后清除不会被迟到的报告回写', async () => {
+  const { report, scope } = setup(true);
+  const bridge = persistenceBridge();
+  await vi.advanceTimersByTimeAsync(130000);
+  expect(report.sampleCount.value).toBeGreaterThan(64);
+  let resume!: () => void;
+  yieldSerialization.mockImplementationOnce(() => new Promise(resolve => { resume = resolve; }));
+  const writes = vi.mocked(bridge.saveDiagnosticSnapshot).mock.calls.length;
+  const closing = report.flush();
+  expect(report.recording.value).toBe(false);
+  expect(bridge.saveDiagnosticSnapshot).toHaveBeenCalledTimes(writes);
+  const clearing = report.clearSaved();
+  expect(bridge.clearSavedDiagnosticReports).not.toHaveBeenCalled();
+  resume();
+  await Promise.all([closing, clearing]);
+  expect(bridge.saveDiagnosticSnapshot).toHaveBeenCalledTimes(writes + 1);
+  expect(JSON.parse(vi.mocked(bridge.saveDiagnosticSnapshot).mock.calls.at(-1)![0]).stopReason).toBe('closed');
+  expect(bridge.clearSavedDiagnosticReports).toHaveBeenCalledOnce();
+  expect(report.sampleCount.value).toBe(0);
+  scope.stop();
+  const collected = collect.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(20000);
+  expect(bridge.saveDiagnosticSnapshot).toHaveBeenCalledTimes(writes + 1);
+  expect(collect).toHaveBeenCalledTimes(collected);
+});
+
 it('无媒体使用只读取进程的启动不覆盖上次报告，恢复入口仍可导出', async () => {
   const { report, room } = setup(true);
   const bridge = persistenceBridge();
@@ -241,6 +273,7 @@ it('自动记录中导出快照不停止、不重置样本；保存等待期间�
   let complete!: (result: { saved: boolean }) => void;
   exportDiagnosticReport.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
   const saving = report.save('自动记录');
+  await Promise.resolve();
   const frozen = exportDiagnosticReport.mock.calls[0][0];
   const exported = JSON.parse(frozen);
   expect(exported.stopReason).toBe('automaticSnapshot');

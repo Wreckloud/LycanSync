@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Participant } from 'livekit-client';
 import CallControls from './CallControls.vue';
 import ParticipantCard from './ParticipantCard.vue';
+import VoiceLevelMic from './VoiceLevelMic.vue';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -26,6 +27,17 @@ async function renderControls(enabled: boolean, listening: boolean, busy = false
 }
 
 describe('本机麦克风按钮的权威状态', () => {
+  it('麦克风图标沿用人声刻度，成员卡单级发言状态保持不变', async () => {
+    for (const [level, fill] of [[0, 0], [0.005, 0.25], [0.02, 0.5], [0.05, 0.75], [0.26, 1]]) {
+      const html = await renderToString(createSSRApp(VoiceLevelMic, { level, size: 17 }));
+      expect(html).toContain(`--voice-level:${fill}`);
+    }
+    for (const level of [0, 1]) {
+      const html = await renderToString(createSSRApp(VoiceLevelMic, { level, steps: 1, size: 14 }));
+      expect(html).toContain(`--voice-level:${level}`);
+    }
+  });
+
   it('SDK 仍报告开麦时，底栏和成员卡仍一致显示禁发和停止收听', async () => {
     const { controls, cards } = await renderControls(false, false, true);
     expect(controls).toContain('lucide-mic-off');

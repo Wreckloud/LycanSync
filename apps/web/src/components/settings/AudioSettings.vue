@@ -78,6 +78,8 @@ function updateInputGain(gain: number) {
 
 <template>
   <div class="settings-section audio-settings">
+    <InlineFeedback :message="preferences.persistenceError.value" />
+    <button v-if="preferences.persistenceError.value" type="button" @click="preferences.retrySave">重试保存</button>
     <section class="settings-block">
       <h2>输入</h2>
       <label class="settings-range-row"><span>麦克风</span>

@@ -13,11 +13,12 @@
 .viewing-stage { position: relative; width: 100%; overflow: hidden; background: #050608; transition: height var(--motion-layout-duration) var(--motion-ease); }
 .call-viewing-panel:is(.is-expanded, .is-resizing, .is-framing) .viewing-stage { transition: none; }
 .viewing-stage > .horizontal-scroll { height: 100%; align-items: flex-start; }
+.call-viewing-panel:is(.is-expanded, .is-detached) .viewing-stage > .horizontal-scroll { align-items: center; }
 .viewing-stage .horizontal-viewport { max-height: 100%; }
-.is-focus-stage .horizontal-viewport, .viewing-grid.is-focus { height: 100%; }
-.viewing-grid.is-focus { display: block; width: 100%; padding: 0; }
-.viewing-grid.is-focus .viewing-tile { margin-inline: auto; }
-.viewing-grid.is-focus .participant-card { border: 0; border-radius: 0; }
+:is(.is-focus-stage, .is-single-stage) .horizontal-viewport, .viewing-grid:is(.is-focus, .is-single) { height: 100%; }
+.viewing-grid:is(.is-focus, .is-single) { display: block; width: 100%; padding: 0; }
+.viewing-grid:is(.is-focus, .is-single) .viewing-tile { margin-inline: auto; }
+.viewing-grid:is(.is-focus, .is-single) .participant-card { border: 0; border-radius: 0; }
 /* 宽高共用一条过渡；不叠加网格 FLIP 位移，单画面始终沿水平中心伸缩。 */
 .viewing-tile { position: relative; min-width: 0; transition: width var(--motion-layout-duration) var(--motion-ease), height var(--motion-layout-duration) var(--motion-ease); }
 .viewing-surface { height: 100%; cursor: pointer; }

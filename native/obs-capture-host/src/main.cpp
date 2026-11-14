@@ -762,7 +762,7 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
   if (capture_cursor_argument.size() != 1
       || (capture_cursor_argument[0] != '0' && capture_cursor_argument[0] != '1')
       || (hide_border_argument != "0" && hide_border_argument != "1")
-      || (window_method != "auto" && window_method != "game" && window_method != "bitblt" && window_method != "wgc")
+      || (window_method != "auto" && window_method != "game")
       || (source_kind == "monitor" && window_method != "auto")
       || (source_kind == "window" && window_method == "game")
       || (source_kind == "game" && window_method != "auto" && window_method != "game")

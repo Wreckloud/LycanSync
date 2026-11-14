@@ -554,8 +554,12 @@ watch(recording.noticeEvent, event => {
 watch(audioOutput.notice, message => {
   if (message && (!settingsOpen.value || settingsSection.value !== 'audio')) showAppNotice(message, 'audioOutput');
 }, { flush: 'sync' });
+watch(audioPreferences.persistenceError, message => {
+  if (message && (!settingsOpen.value || settingsSection.value !== 'audio')) showAppNotice(message, 'audioPreferences');
+  else if (!message && appNotice.value?.source === 'audioPreferences') dismissAppNotice();
+});
 watch([settingsOpen, settingsSection], () => {
-  if (settingsOpen.value && ((settingsSection.value === 'audio' && appNotice.value?.source === 'audioOutput')
+  if (settingsOpen.value && ((settingsSection.value === 'audio' && ['audioOutput', 'audioPreferences'].includes(appNotice.value?.source ?? ''))
       || (settingsSection.value === 'recording' && appNotice.value?.source === 'recording' && !appNotice.value.kind))) {
     dismissAppNotice();
   }
@@ -625,13 +629,9 @@ const sharingAudio = computed(() => {
 const localMicrophoneLevel = computed(() => {
   void rtc.revision;
   const participant = localParticipant.value;
-  return rtc.microphoneEnabled && participant?.isSpeaking ? participant.audioLevel : 0;
+  return rtc.microphoneEnabled && participant ? participant.audioLevel : 0;
 });
-const localInputLevel = computed(() => {
-  void rtc.revision;
-  const participant = localParticipant.value;
-  return rtc.microphoneEnabled && participant ? normalizeVoiceLevel(participant.audioLevel) : 0;
-});
+const localInputLevel = computed(() => normalizeVoiceLevel(localMicrophoneLevel.value));
 const localInputLevelPercent = computed(() => Math.round(localInputLevel.value * 100));
 const connected = computed(() => rtc.status === 'connected');
 watch(() => connected.value ? rtc.room : null, (room, _, onCleanup) => {

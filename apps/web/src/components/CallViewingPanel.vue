@@ -42,6 +42,7 @@ function reducePanelMotion() {
 let clock: ReturnType<typeof setInterval> | undefined;
 const now = ref(performance.now());
 const focus = computed(() => props.view.mode === 'focus');
+const singleStage = computed(() => props.view.displayed.length === 1 && (props.detached || props.view.expanded));
 const showMembers = computed(() => !props.active || focus.value && props.view.membersVisible && !props.view.expanded);
 const { width, height, minimumHeight, maximumHeight, resizing, changeHeight, beginResize, moveResize, endResize } = useViewingSize(panel, {
   detached: () => Boolean(props.detached), expanded: () => props.view.expanded,
@@ -53,10 +54,13 @@ const sizing = computed(() => {
   const count = props.view.displayed.length;
   if (focus.value) return { width: width.value, ratio: 16 / 9, rows: 1 };
   let fitted: { width: number; ratio: number; rows: number } | undefined;
-  for (let rows = 1; rows <= Math.min(count, props.detached ? 3 : 2); rows++) {
+  for (let rows = 1; rows <= Math.min(count, props.detached || props.view.expanded ? 3 : 2); rows++) {
     const columns = Math.ceil(count / rows);
-    const tileWidth = Math.min((width.value - 8 * (columns - 1)) / columns,
-      (maxHeight - 8 * (rows - 1)) / rows * 16 / 9);
+    // CSS 按列排列，同列宽度由最宽画面决定；按真实比例计算，避免超宽画面溢出或窄画面留下多余空隙。
+    const columnRatios = Array.from({ length: columns }, (_, column) => Math.max(...props.view.displayed
+      .slice(column * rows, (column + 1) * rows).map(ratio)));
+    const tileWidth = Math.min((width.value - 8 * (columns - 1)) / columnRatios.reduce((sum, aspect) => sum + aspect, 0),
+      (maxHeight - 8 * (rows - 1)) / rows) * 16 / 9;
     if (tileWidth >= 210 && (!fitted || tileWidth > fitted.width)) fitted = { width: tileWidth, ratio: 16 / 9, rows };
   }
   if (fitted) return fitted;
@@ -69,8 +73,9 @@ function ratio(share: ViewedShare) { return ratios.value[share.key] ?? 16 / 9; }
 
 function tileStyle(share: ViewedShare) {
   const aspect = ratio(share);
-  const tileWidth = focus.value ? width.value : sizing.value.width / (16 / 9) * aspect;
-  return { width: tileWidth + 'px', height: (focus.value ? height.value : tileWidth / aspect) + 'px' };
+  const fillStage = focus.value || singleStage.value;
+  const tileWidth = fillStage ? width.value : sizing.value.width / (16 / 9) * aspect;
+  return { width: tileWidth + 'px', height: (fillStage ? height.value : tileWidth / aspect) + 'px' };
 }
 
 function elapsed(share: ViewedShare) {
@@ -169,10 +174,10 @@ onScopeDispose(() => {
 <template>
   <section ref="panel" class="call-viewing-panel" :class="{ 'is-detached': detached, 'is-expanded': active && view.expanded, 'is-resizing': resizing, 'is-collapsed': !active, 'is-framing': framing }"
     :aria-label="active ? '共享观看区' : undefined" @keydown.esc="escape" @keydown.tab="trapFocus">
-    <div class="viewing-stage" :class="{ 'is-focus-stage': focus }" :style="{ height: (active ? height : 0) + 'px' }" :inert="!active">
+    <div class="viewing-stage" :class="{ 'is-focus-stage': focus, 'is-single-stage': singleStage }" :style="{ height: (active ? height : 0) + 'px' }" :inert="!active">
       <span v-if="reconnecting" class="viewing-reconnecting" role="status">正在重连…</span>
       <HorizontalScroll label="共享画面网格">
-        <TransitionGroup v-if="active" name="view-tile" tag="div" class="viewing-grid" :class="{ 'is-focus': focus }" :style="{ '--view-rows': sizing.rows }"
+        <TransitionGroup v-if="active" name="view-tile" tag="div" class="viewing-grid" :class="{ 'is-focus': focus, 'is-single': singleStage }" :style="{ '--view-rows': sizing.rows }"
           @before-leave="($event as HTMLElement).inert = true">
           <div v-for="share in view.displayed" :key="share.key" class="viewing-tile" :style="tileStyle(share)">
             <div class="viewing-surface" role="button" tabindex="0"

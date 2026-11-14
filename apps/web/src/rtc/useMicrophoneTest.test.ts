@@ -6,6 +6,7 @@ import { useMicrophoneTest } from './useMicrophoneTest';
 import type { NativeMicrophoneDesktopBridge } from './nativeMicrophoneAudio';
 
 const mocks = vi.hoisted(() => ({
+  inputRms: 0.25,
   createTrack: vi.fn(), nativeStart: vi.fn(), nativeStop: vi.fn(), nativeConfigure: vi.fn(),
   playbackStart: vi.fn(), playbackStop: vi.fn(), setVolume: vi.fn(),
   nativeError: undefined as ((code: string) => void) | undefined,
@@ -112,6 +113,7 @@ function setup(desktop = false) {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
+  mocks.inputRms = 0.25;
   mocks.processors.length = 0;
   mocks.nativeStart.mockResolvedValue(undefined);
   mocks.nativeStop.mockResolvedValue(undefined);
@@ -123,12 +125,32 @@ beforeEach(() => {
     resume = vi.fn(async () => {});
     close = vi.fn(async () => { this.state = 'closed'; });
     createMediaStreamSource = () => ({ connect: vi.fn(), disconnect: vi.fn() });
-    createAnalyser = () => ({ fftSize: 512, getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0.25) });
+    createAnalyser = () => ({ fftSize: 512, getFloatTimeDomainData: (samples: Float32Array) => {
+      for (let index = 0; index < samples.length; index++) {
+        samples[index] = Math.SQRT2 * mocks.inputRms * Math.sin(2 * Math.PI * index / 32);
+      }
+    } });
   });
 });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('独立麦克风测试', () => {
+  it('合成的轻声、正常和较强信号按统一刻度展示，停止后立即归零', async () => {
+    mocks.createTrack.mockResolvedValue(browserTrack());
+    const { test, scope } = setup();
+    try {
+      await test.start();
+      for (const [rms, percent] of [[0.001, 0], [0.01, 26], [0.1, 79], [0.26, 100], [0, 0]]) {
+        mocks.inputRms = rms!;
+        vi.advanceTimersByTime(120);
+        expect(test.inputLevelPercent.value).toBe(percent);
+      }
+      await test.stop();
+      expect(test.inputLevelPercent.value).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { scope.stop(); }
+  });
+
   it('未入房时只采集浏览器麦克风，使用同一处理器并显示本机输入等级', async () => {
     const track = browserTrack();
     mocks.createTrack.mockResolvedValue(track);

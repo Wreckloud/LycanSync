@@ -1,16 +1,29 @@
 const { app, BrowserWindow, desktopCapturer, ipcMain, nativeImage } = require('electron');
 const { resolve } = require('node:path');
+const { spawn } = require('node:child_process');
 const { MediaHelperManager } = require('../../../electron/media-helper.cjs');
-const { createWindowThumbnailLoader } = require('../../../electron/native-window-thumbnails.cjs');
+const { captureWindowThumbnail, createWindowThumbnailLoader } = require('../../../electron/native-window-thumbnails.cjs');
 
 process.on('uncaughtException', error => { console.error(error.message); app.exit(1); });
 app.setPath('userData', resolve(process.argv[2]));
 const helper = new MediaHelperManager({ executablePath: resolve('../../native/media-helper/target/release/lycansync-media.exe') });
 let loader, snapshot;
 const measurements = [], timings = [];
+const previewChildren = new Set();
+function resources() {
+  return { previewChildren: previewChildren.size, helperChildren: helper.children.size };
+}
 function reset() {
   loader?.dispose();
   loader = createWindowThumbnailLoader({ executablePath: () => helper.executablePath,
+    capture: (executablePath, target) => captureWindowThumbnail(executablePath, target, {
+      spawnProcess: (...args) => {
+        const child = spawn(...args);
+        previewChildren.add(child);
+        child.once('close', () => previewChildren.delete(child));
+        return child;
+      },
+    }),
     inspectSource: sourceId => helper.inspectVideoSource(sourceId),
     encode: ({ bitmap, width, height }) => {
       // 只保存内容统计，不将截图、窗口标题或句柄写入测试产物。
@@ -22,7 +35,8 @@ function reset() {
       return 'data:image/jpeg;base64,' + nativeImage.createFromBitmap(bitmap, { width, height }).toJPEG(80).toString('base64');
     }, onTiming: event => timings.push(event) });
 }
-global.thumbnailTest = { reset, timings, measurements,
+global.thumbnailTest = { reset, timings, measurements, resources,
+  async finish() { loader.dispose(); await helper.shutdown(); },
   async baseline() {
     const started = performance.now();
     const sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 256, height: 144 } });

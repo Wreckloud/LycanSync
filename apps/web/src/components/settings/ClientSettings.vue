@@ -7,7 +7,6 @@ import DialogTransition from '../DialogTransition.vue';
 import { useClientUpdate } from '../../settings/useClientUpdate';
 import CacheSettings from './CacheSettings.vue';
 import DiagnosticReportSettings from './DiagnosticReportSettings.vue';
-import ProjectAttribution from '../ProjectAttribution.vue';
 import type { Room } from 'livekit-client';
 import type { useDiagnosticReport } from '../../diagnostics/useDiagnosticReport';
 import packageInfo from '../../../package.json';
@@ -50,20 +49,24 @@ defineExpose({ confirmingUpdate, confirmingCache });
 watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
   if (!active || !desktop || loaded) return;
   loaded = true;
+  autoStartError.value = '';
   if (!desktopBridge?.getAutoStart) {
+    loaded = false;
     autoStartError.value = '暂时无法读取开机启动设置。';
     return;
   }
   void desktopBridge.getAutoStart().then((settings) => {
     autoStartSupported.value = settings.supported;
     autoStartEnabled.value = settings.enabled;
-  }).catch(() => { autoStartError.value = '无法读取开机自启设置'; });
+  }).catch(() => { loaded = false; autoStartError.value = '无法读取开机自启设置，请重新进入此页面重试。'; });
 }, { immediate: true });
 
 watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
   if (!active || !desktop || trayLoaded) return;
   trayLoaded = true;
+  trayError.value = '';
   if (!desktopBridge?.getTraySettings) {
+    trayLoaded = false;
     trayError.value = '暂时无法读取托盘设置。';
     return;
   }
@@ -71,7 +74,8 @@ watch(() => [props.active, props.desktop] as const, ([active, desktop]) => {
     traySupported.value = settings.supported;
     closeToTray.value = settings.enabled;
     trayError.value = settings.error;
-  }).catch(() => { trayError.value = '无法读取托盘设置，请重新打开客户端。'; });
+    trayLoaded = !settings.error;
+  }).catch(() => { trayLoaded = false; trayError.value = '无法读取托盘设置，请重新进入此页面重试。'; });
 }, { immediate: true });
 
 async function updateCloseToTray(event: Event) {
@@ -123,10 +127,6 @@ async function updateAutoStart(event: Event) {
         <span><strong>lycanclaw · {{ updateState?.version || packageInfo.version }}</strong><small role="status">{{ desktop ? updateDescription : '浏览器版随服务器更新。' }}</small></span>
         <button v-if="desktop" type="button" class="settings-button" :disabled="updateBusy || !updateState?.supported || updateState.phase === 'checking'" @click="checkUpdates()">检查更新</button>
       </div>
-      <ProjectAttribution>
-        <template v-if="desktop">桌面客户端基于 <a href="https://github.com/electron/electron" target="_blank" rel="noopener noreferrer">Electron</a>，</template>
-        界面由 <a href="https://github.com/vuejs/core" target="_blank" rel="noopener noreferrer">Vue</a> 构建，图标来自 <a href="https://github.com/lucide-icons/lucide" target="_blank" rel="noopener noreferrer">Lucide</a>。
-      </ProjectAttribution>
       <InlineFeedback :message="confirmationVersion ? '' : updateError || (updateState?.error ? updateState.message : '')" />
       <DialogTransition>
       <UpdateRestartDialog v-if="confirmationVersion" :version="confirmationVersion" :busy="updateBusy" :error="updateError"

@@ -63,22 +63,15 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM word, LPARAM para
 }
 }  // namespace
 
-int wmain(int argc, wchar_t **argv) {
-  const bool wgc = argc == 2 && std::wstring_view(argv[1]) == L"--wgc";
-  const bool mixed = argc == 2 && std::wstring_view(argv[1]) == L"--mixed";
-  if (argc != 1 && !wgc && !mixed) return 2;
+int wmain() {
   const auto instance = GetModuleHandleW(nullptr);
   WNDCLASSW window_class{};
   window_class.hInstance = instance;
   window_class.lpfnWndProc = window_proc;
-  window_class.lpszClassName = wgc ? L"Chrome_WidgetWin_LycanSyncObsCaptureTest" : L"LycanSyncObsCaptureTest";
+  window_class.lpszClassName = L"LycanSyncObsCaptureTest";
   if (!RegisterClassW(&window_class)) { std::cerr << "testWindowClassFailed:" << GetLastError() << '\n'; return 1; }
-  if (mixed) {
-    window_class.lpszClassName = L"Chrome_WidgetWin_LycanSyncObsCaptureTest";
-    if (!RegisterClassW(&window_class)) { std::cerr << "testWindowClassFailed:" << GetLastError() << '\n'; return 1; }
-  }
   // 两个同名窗口分属同一进程；只绘制受控色块，不接入真实应用或媒体设备。
-  g_target = CreateWindowExW(0, wgc ? L"Chrome_WidgetWin_LycanSyncObsCaptureTest" : L"LycanSyncObsCaptureTest",
+  g_target = CreateWindowExW(0, L"LycanSyncObsCaptureTest",
                             L"LycanSync selected window test", WS_OVERLAPPEDWINDOW,
                             80, 120, 420, 310, nullptr, nullptr, instance, nullptr);
   g_other = CreateWindowExW(0, window_class.lpszClassName, L"LycanSync selected window test", WS_OVERLAPPEDWINDOW,

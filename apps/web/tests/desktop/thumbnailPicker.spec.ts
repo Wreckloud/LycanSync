@@ -40,6 +40,8 @@ createApp({ setup() {
     await page.goto(`http://127.0.0.1:${process.env.WEB_PORT ?? 4173}`);
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.showInactive());
     const rounds: unknown[] = [];
+    const readResources = () => application.evaluate(() =>
+      (global as unknown as { thumbnailTest: { resources(): { previewChildren: number; helperChildren: number } } }).thumbnailTest.resources());
     for (let iteration = 0; iteration < 5; iteration++) {
       for (const cold of [true, false]) {
         if (cold) await application.evaluate(() => (global as unknown as { thumbnailTest: { reset(): void } }).thumbnailTest.reset());
@@ -51,7 +53,10 @@ createApp({ setup() {
         await page.getByRole('button', { name: '取消', exact: true }).click();
         const events = await page.evaluate(() => (window as unknown as { thumbnailEvents: { stage: string; durationMs: number; sourceCount: number; readyCount: number }[] }).thumbnailEvents);
         const complete = events.find(event => event.stage === 'screenPickerVisibleReady')!;
-        rounds.push({ iteration, cold, events });
+        await expect.poll(async () => (await readResources()).previewChildren).toBe(0);
+        const resources = await readResources();
+        expect(resources.helperChildren).toBeLessThanOrEqual(1);
+        rounds.push({ iteration, cold, events, resources });
         expect(complete.readyCount).toBeGreaterThan(0);
         expect(complete.readyCount).toBe(complete.sourceCount);
         expect(complete.durationMs).toBeLessThan(cold ? 1000 : 200);
@@ -65,6 +70,8 @@ createApp({ setup() {
       return { timings: state.timings, measurements: state.measurements };
     });
     expect(native.measurements.every(image => image.variedPixels > 0)).toBe(true);
-    writeFileSync(testInfo.outputPath('thumbnail-acceptance.json'), JSON.stringify({ rounds, baseline, native }, null, 2));
+    await application.evaluate(async () => (global as unknown as { thumbnailTest: { finish(): Promise<void> } }).thumbnailTest.finish());
+    await expect.poll(readResources).toEqual({ previewChildren: 0, helperChildren: 0 });
+    writeFileSync(testInfo.outputPath('thumbnail-acceptance.json'), JSON.stringify({ rounds, baseline, native, cleanup: await readResources() }, null, 2));
   } finally { await application.close(); }
 });

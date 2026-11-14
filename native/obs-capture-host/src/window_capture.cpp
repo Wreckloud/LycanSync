@@ -101,7 +101,7 @@ const char *window_video_failure(obs_source_t *source, const WindowVideoTarget &
   WindowStatus status;
   const bool queried = read_window_status(source, status);
   if (!window_video_target_valid(target)) return "captureTargetClosed";
-  if (!queried) return "obsWindowBindingUnavailable";
+  if (!queried || status.method != 2) return "obsWindowBindingUnavailable";
   if (!status.valid || status.selected != target.window || (status.captured && status.captured != target.window)) {
     return "obsWindowTargetMismatch";
   }
@@ -112,22 +112,21 @@ const char *window_video_failure(obs_source_t *source, const WindowVideoTarget &
 const char *window_video_method(obs_source_t *source) {
   WindowStatus status;
   if (!read_window_status(source, status)) return nullptr;
-  return status.method == 1 ? "bitblt-window" : "wgc-window";
+  return status.method == 2 ? "wgc-window" : nullptr;
 }
 
 obs_source_t *create_window_video_source(const WindowVideoTarget &target, bool hide_cursor,
     bool hide_border, std::string_view method, const char *&error) {
   if (!window_video_target_valid(target)) { error = "captureTargetClosed"; return nullptr; }
   if (!obs_get_latest_input_type_id("lycansync_window_capture")) { error = "obsWindowBindingUnavailable"; return nullptr; }
-  // 自动分流沿用固定版本 OBS；这里只约束窗口实例，不自行维护采集方式分类。
-  const int requested = method == "auto" ? 0 : method == "bitblt" ? 1 : method == "wgc" ? 2 : -1;
-  if (requested < 0) { error = "invalidCaptureArguments"; return nullptr; }
+  // 游戏已在上游分流；普通窗口统一使用 WGC，避免 GDI 成功返回旧帧或被遮挡的内容。
+  if (method != "auto") { error = "invalidCaptureArguments"; return nullptr; }
   obs_data_t *settings = obs_data_create();
   obs_data_set_int(settings, "lycansync_window_id", static_cast<long long>(reinterpret_cast<uintptr_t>(target.window)));
   obs_data_set_string(settings, "lycansync_window_lifetime", target.lifetime_name.c_str());
   obs_data_set_int(settings, "lycansync_process_id", target.process_id);
   obs_data_set_string(settings, "lycansync_process_creation", target.process_creation.c_str());
-  obs_data_set_int(settings, "method", requested);
+  obs_data_set_int(settings, "method", 2);
   obs_data_set_bool(settings, "cursor", !hide_cursor);
   obs_data_set_bool(settings, "capture_audio", false);
   obs_data_set_bool(settings, "client_area", true);
@@ -137,7 +136,7 @@ obs_source_t *create_window_video_source(const WindowVideoTarget &target, bool h
   if (source) {
     WindowStatus status;
     if (!read_window_status(source, status)) error = "obsWindowBindingUnavailable";
-    else if (requested != 0 && status.method != requested) error = "captureSettingsUnsupported";
+    else if (status.method != 2) error = "captureSettingsUnsupported";
     else if (status.method == 2) {
       WindowPreparation preparation{hide_cursor, hide_border};
       // 来源尚未加入场景，不会先启动 WGC 再补问边框授权。
