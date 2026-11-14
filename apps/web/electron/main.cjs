@@ -51,6 +51,7 @@ const apiRoutePolicies = new Map([
   ['PUT /api/auth/server-settings/qq', { maxBodyBytes: 4096 }],
   ['POST /api/auth/account/recover', { public: true, savesSession: true }],
   ['PUT /api/auth/account/recovery-password', {}],
+  ['POST /api/auth/account/transfer/verify', {}],
   ['POST /api/auth/account/transfer', {}],
   ['DELETE /api/auth/account/transfer', {}],
   ['POST /api/auth/account/transfer/accept', {}],

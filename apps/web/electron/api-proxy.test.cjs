@@ -30,6 +30,43 @@ function proxyFixture(overrides = {}) {
   return { serve, forwarded };
 }
 
+test('转让前验证恢复密码经桌面代理转发并保留会话，不触发转让或更换登录', async () => {
+  let forwardedRequest;
+  let saved = 0;
+  let cleared = 0;
+  const { serve } = proxyFixture({
+    saveSession: async () => { saved++; },
+    clearSession: async () => { cleared++; },
+    net: { fetch: async (url, options) => {
+      forwardedRequest = { url, options };
+      return new Response(null, { status: 204 });
+    } },
+  });
+  const path = '/api/auth/account/transfer/verify';
+  const body = JSON.stringify({ password: 'test12' });
+  const response = await serve(new Request('lycan://app' + path, { method: 'POST', body }));
+  assert.equal(response.status, 204);
+  assert.equal(forwardedRequest.url, 'https://example.test' + path);
+  assert.equal(forwardedRequest.options.method, 'POST');
+  assert.equal(forwardedRequest.options.headers.Authorization, 'Bearer test-session');
+  assert.equal(Buffer.from(forwardedRequest.options.body).toString(), body);
+  assert.equal(saved, 0);
+  assert.equal(cleared, 0);
+  for (const method of ['GET', 'PUT', 'DELETE']) {
+    assert.equal((await serve(new Request('lycan://app' + path, { method }))).status, 404);
+  }
+  assert.equal((await serve(new Request('lycan://app' + path + '/extra', { method: 'POST', body }))).status, 404);
+});
+
+test('恢复密码验证失败返回服务器的明确错误，不当作验证成功', async () => {
+  const { serve } = proxyFixture({ net: { fetch: async () => Response.json({
+    code: 'INVALID_REQUEST', detail: '请先设置并输入正确的服主恢复密码',
+  }, { status: 400 }) } });
+  const response = await serve(new Request('lycan://app/api/auth/account/transfer/verify', { method: 'POST', body: '{}' }));
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).detail, '请先设置并输入正确的服主恢复密码');
+});
+
 test('服主配置状态仅转发固定 GET 路径并附带会话，权限由后端复核', async () => {
   const { serve, forwarded } = proxyFixture();
   const path = '/api/auth/server-settings';
