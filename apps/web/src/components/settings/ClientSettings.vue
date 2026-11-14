@@ -125,7 +125,7 @@ async function updateAutoStart(event: Event) {
       <h2>应用信息</h2>
       <div class="settings-toggle update-summary">
         <span><strong>lycanclaw · {{ updateState?.version || packageInfo.version }}</strong><small role="status">{{ desktop ? updateDescription : '浏览器版随服务器更新。' }}</small></span>
-        <button v-if="desktop" type="button" class="settings-button" :disabled="updateBusy || !updateState?.supported || updateState.phase === 'checking'" @click="checkUpdates()">检查更新</button>
+        <button v-if="desktop" type="button" class="settings-button settings-control" :disabled="updateBusy || !updateState?.supported || updateState.phase === 'checking'" @click="checkUpdates()">检查更新</button>
       </div>
       <InlineFeedback :message="confirmationVersion ? '' : updateError || (updateState?.error ? updateState.message : '')" />
       <DialogTransition>
@@ -137,17 +137,17 @@ async function updateAutoStart(event: Event) {
       <h2>系统设置</h2>
       <p v-if="!desktop">托盘和开机自启仅在 Windows 桌面版提供。</p>
       <div v-else class="settings-toggle-group">
-        <label class="settings-toggle" :class="{ 'is-disabled': !autoStartSupported || autoStartBusy }">
+        <div class="settings-toggle" :class="{ 'is-disabled': !autoStartSupported || autoStartBusy }">
           <span><strong>开机自动启动</strong><small v-if="autoStartDescription">{{ autoStartDescription }}</small></span>
           <input type="checkbox" :checked="autoStartEnabled" :disabled="!autoStartSupported || autoStartBusy"
             aria-label="开机自动启动" @change="updateAutoStart" />
-        </label>
+        </div>
         <InlineFeedback :message="autoStartError" />
-        <label class="settings-toggle" :class="{ 'is-disabled': !traySupported || trayBusy }">
+        <div class="settings-toggle" :class="{ 'is-disabled': !traySupported || trayBusy }">
           <span><strong>关闭时收起到托盘</strong><small>关闭窗口后继续通话、共享和录制；从托盘菜单退出应用。</small></span>
           <input type="checkbox" :checked="closeToTray" :disabled="!traySupported || trayBusy"
             aria-label="关闭时收起到托盘" @change="updateCloseToTray" />
-        </label>
+        </div>
         <InlineFeedback :message="trayError" />
       </div>
     </section>

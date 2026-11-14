@@ -26,11 +26,11 @@ onScopeDispose(() => { void props.overlay.edit(false); });
   <div class="settings-section overlay-settings">
     <section class="settings-block">
       <h2>屏幕覆盖</h2>
-      <label class="settings-toggle">
+      <div class="settings-toggle">
         <span><strong>开启屏幕覆盖</strong><small>加入语音时显示，离开后隐藏。</small></span>
-        <input type="checkbox" :checked="overlay.settings.value.enabled" :disabled="!overlay.ready.value || overlay.busy.value"
+        <input type="checkbox" aria-label="开启屏幕覆盖" :checked="overlay.settings.value.enabled" :disabled="!overlay.ready.value || overlay.busy.value"
           @change="toggleSetting('enabled', $event)" />
-      </label>
+      </div>
       <div class="settings-range-row overlay-options">
         <span class="overlay-setting-copy">成员显示<small id="overlay-member-description">选择显示全部通话成员，或只在成员说话时显示。</small></span>
         <SegmentedControl :model-value="overlay.settings.value.mode" :options="memberModes" label="成员显示"
@@ -53,13 +53,13 @@ onScopeDispose(() => { void props.overlay.edit(false); });
         @change="overlay.configure({ scale: Number(($event.target as HTMLInputElement).value) })" /></div>
       <div class="settings-toggle">
         <span><strong>编辑覆盖位置</strong><small>拖动头像或昵称，调整覆盖位置。</small></span>
-        <button class="settings-button" type="button" :disabled="!overlay.ready.value || !overlay.settings.value.enabled || overlay.busy.value"
+        <button class="settings-button settings-control" type="button" :disabled="!overlay.ready.value || !overlay.settings.value.enabled || overlay.busy.value"
           @click="overlay.edit(!overlay.editing.value)">{{ overlay.editing.value ? '完成编辑' : '编辑位置' }}</button>
       </div>
-      <label v-if="overlay.editing.value" class="settings-toggle">
+      <div v-if="overlay.editing.value" class="settings-toggle">
         <span><strong>显示测试成员</strong><small>编辑时显示三个示例成员，预览昵称和布局。</small></span>
-        <input type="checkbox" :checked="overlay.preview.value" @change="overlay.edit(true, ($event.target as HTMLInputElement).checked)" />
-      </label>
+        <input type="checkbox" aria-label="显示测试成员" :checked="overlay.preview.value" @change="overlay.edit(true, ($event.target as HTMLInputElement).checked)" />
+      </div>
       <button class="settings-button" type="button" :disabled="!overlay.ready.value || overlay.busy.value" @click="overlay.configure({ displayId: null, x: 1, y: 0.5, scale: 100 })">恢复默认位置与大小</button>
     </section>
     <p class="settings-intro">游戏中看不到屏幕覆盖时，可尝试将游戏切换为无边框窗口模式。</p>
@@ -67,8 +67,8 @@ onScopeDispose(() => { void props.overlay.edit(false); });
 </template>
 
 <style scoped>
-.overlay-options { grid-template-columns: minmax(0, 1fr) minmax(0, 400px); }
+.overlay-options :deep(.segmented-control > button) { white-space: normal; }
 .settings-range-row > .overlay-setting-copy { display: grid; gap: 4px; }
 .overlay-setting-copy small { line-height: 1.5; }
-@media (max-width: 760px) { .overlay-options { grid-template-columns: minmax(0, 1fr); } }
+
 </style>

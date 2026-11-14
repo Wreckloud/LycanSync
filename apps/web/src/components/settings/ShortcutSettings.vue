@@ -56,7 +56,7 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
       <h2>语音快捷键</h2>
       <div v-for="action in actions" :key="action.id" class="shortcut-setting-row">
         <span>{{ action.label }}</span>
-        <div class="settings-actions">
+        <div class="settings-actions settings-control shortcut-controls">
           <button type="button" class="settings-button shortcut-binding" :aria-label="`设置${action.label}快捷键`" :aria-pressed="shortcuts.capturing === action.id"
             :disabled="!shortcuts.supported || !shortcuts.ready || (shortcuts.busy && shortcuts.capturing !== action.id)"
             @click="shortcuts.startCapture(action.id)" @blur="shortcuts.cancelCapture()"
@@ -79,7 +79,8 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
 <style scoped>
 .shortcut-setting-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; min-height: 44px; }
 .shortcut-setting-row .settings-actions { margin: 0; }
-.shortcut-binding { width: 208px; flex: 0 0 208px; white-space: nowrap; }
-.voice-mode-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.voice-mode-row .voice-mode-switch { width: 280px; max-width: 70%; }
+.shortcut-controls { flex-wrap: nowrap; }
+.shortcut-binding { flex: 1; min-width: 0; white-space: nowrap; }
+.voice-mode-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.voice-mode-row .voice-mode-switch { width: var(--settings-control-width); max-width: 100%; }
 </style>

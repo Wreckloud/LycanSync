@@ -105,17 +105,17 @@ watch(() => [props.active, props.rtc.screenShareActive], async ([active, sharing
       </ExpandSection>
       <InlineFeedback :message="qualityError" />
       <div class="settings-toggle-group">
-        <label class="settings-toggle">
+        <div class="settings-toggle">
           <span><strong>共享声音</strong><small>{{ rtc.screenShareAudioRestricted ? '远控画面不包含电脑声音，语音通话不受影响。'
             : audioMode === 'systemMix' ? '包含全部电脑声音，可能产生回声。'
               : audioMode === 'process' ? '共享所选应用的声音，与录制声音分开控制。' : loadingAudio || audioError ? '' : '当前系统不支持共享声音。' }}</small></span>
           <input type="checkbox" aria-label="共享声音" :checked="shareAudio" :disabled="shareBusy || loadingAudio || audioMode === 'unavailable' || rtc.screenShareAudioRestricted" @change="toggleAudio" />
-        </label>
+        </div>
         <InlineFeedback :message="audioError" :pending="loadingAudio ? '正在读取声音设置…' : ''" />
-        <label class="settings-toggle">
+        <div class="settings-toggle">
           <span><strong>隐藏共享画面中的光标</strong><small>选择共享画面是否显示鼠标指针，下次共享生效。</small></span>
-          <input type="checkbox" :checked="hideCursor" @change="toggleCursor" />
-        </label>
+          <input type="checkbox" aria-label="隐藏共享画面中的光标" :checked="hideCursor" @change="toggleCursor" />
+        </div>
         <InlineFeedback :message="cursorError" />
       </div>
       <ProjectAttribution>画面与应用声音采集基于 <a href="https://github.com/obsproject/obs-studio" target="_blank" rel="noopener noreferrer">OBS Studio</a>。</ProjectAttribution>

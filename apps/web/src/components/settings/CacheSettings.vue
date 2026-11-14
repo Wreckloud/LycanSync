@@ -69,7 +69,7 @@ onScopeDispose(() => { disposed = true; revision++; });
     <h2>本地缓存</h2>
     <p>在本机保存常用聊天内容、成员资料和图片，加快再次打开的速度。</p>
     <div class="cache-size"><span>本机缓存约 {{ totalSize }}</span>
-      <button type="button" class="settings-button" :disabled="clearing" @click="askToClear">清理缓存</button></div>
+      <button type="button" class="settings-button settings-control" :disabled="clearing" @click="askToClear">清理缓存</button></div>
     <small>清理本机内容缓存，下次查看时重新加载。显示大小为内容估算。</small>
     <InlineFeedback :message="confirming ? '' : error" :status="status" :pending="loading ? '正在读取缓存大小…' : ''" />
     <DialogTransition>

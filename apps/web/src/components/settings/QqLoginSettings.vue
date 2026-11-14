@@ -75,13 +75,13 @@ onScopeDispose(() => { request?.abort(); draft.appKey = ''; });
     <div class="settings-action-row">
       <div><strong>QQ 登录{{ saved ? (saved.configurationError ? ' · 配置未完成' : saved.enabled ? ' · 已开启' : ' · 未开启') : '' }}</strong>
         <small>配置你的 QQ 互联应用，让成员使用 QQ 登录或绑定现有账号。</small></div>
-      <button type="button" :disabled="busy || leaving || !saved || expanded" @click="edit">配置 QQ 登录</button>
+      <button type="button" class="settings-button settings-control" :disabled="busy || leaving || !saved || expanded" @click="edit">配置 QQ 登录</button>
     </div>
     <ExpandSection :open="expanded">
       <form class="qq-configuration-form" @submit.prevent="save">
-        <label class="settings-toggle"><span><strong>允许 QQ 登录</strong></span>
-          <input v-model="draft.enabled" type="checkbox" :disabled="busy || leaving" />
-        </label>
+        <div class="settings-toggle"><span><strong>允许 QQ 登录</strong></span>
+          <input v-model="draft.enabled" type="checkbox" aria-label="允许 QQ 登录" :disabled="busy || leaving" />
+        </div>
         <label class="settings-field" for="qq-app-id">App ID
           <input id="qq-app-id" v-model="draft.appId" maxlength="20" inputmode="numeric" autocomplete="off" :disabled="busy || leaving" :required="draft.enabled" />
         </label>

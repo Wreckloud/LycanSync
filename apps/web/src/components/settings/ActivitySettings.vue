@@ -57,16 +57,16 @@ defineExpose({ editingName });
         :activity="showActivity && status !== 'OFFLINE' && activity ? `${activity.type === 'MUSIC' ? '正在听' : '正在玩'} ${activity.name}` : undefined" />
     </aside>
     <div class="activity-settings-controls">
-    <label class="settings-toggle">
+    <div class="settings-toggle">
       <span><strong>显示动态</strong><small>向朋友展示正在玩的游戏、正在听的音乐和最近游玩记录。</small></span>
       <input type="checkbox" :checked="showActivity" aria-label="显示动态"
         @change="emit('visibility', ($event.target as HTMLInputElement).checked)" />
-    </label>
-    <label class="settings-toggle">
+    </div>
+    <div class="settings-toggle">
       <span><strong>显示上次在线时间</strong><small>让朋友看到你最后一次在线的时间。</small></span>
       <input type="checkbox" :checked="showLastOnline" aria-label="显示上次在线时间"
         @change="emit('lastOnlineVisibility', ($event.target as HTMLInputElement).checked)" />
-    </label>
+    </div>
     <div class="settings-toggle activity-presence">
       <span><strong>在线状态</strong><small id="activity-presence-description">{{ presenceDescription }}</small></span>
       <PresenceModeSwitch :mode="presenceMode" :ready="presenceReady" :syncing="presenceSyncing" :error="presenceError"
@@ -87,7 +87,7 @@ defineExpose({ editingName });
           <option v-for="entry in mappings.windows.value" :key="entry.executable" :value="entry.executable">{{ entry.title }}</option>
           <option v-if="executable && !mappings.windows.value.some((entry) => entry.executable === executable)" :value="executable">{{ selectedName }}（未运行）</option>
         </select>
-        <div class="activity-window-actions">
+        <div class="activity-window-actions settings-control settings-control-buttons">
           <button type="button" :disabled="!executable || mappings.busy.value" title="清除当前选择，已保存的名称修正会保留" @click="resetSelection">重置</button>
           <button type="button" :disabled="!executable || mappings.busy.value || !mappings.ready.value" @click="openEditor">修改名称</button>
         </div>
@@ -121,8 +121,10 @@ defineExpose({ editingName });
 .activity-mappings-heading h2 { flex-shrink: 0; }
 .activity-current { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .activity-presence > span { flex: 1; }
+.activity-presence { flex-wrap: wrap; }
+.activity-presence :deep(.presence-mode-switch) { width: var(--settings-control-width); max-width: 100%; margin-left: auto; }
 .activity-mappings { grid-column: 1 / -1; display: grid; gap: 8px; min-width: 0; padding-top: 24px; border-top: 1px solid var(--border-soft); }
-.activity-window-choice { display: grid; grid-template-columns: 100px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-width: 0; }
+.activity-window-choice { display: grid; grid-template-columns: 100px minmax(0, 1fr) minmax(0, var(--settings-control-width)); align-items: center; gap: 12px; min-width: 0; }
 .activity-window-actions { display: flex; gap: 8px; }
 .activity-window-actions button { white-space: nowrap; }
 .activity-window-choice select { min-width: 0; width: 100%; box-sizing: border-box; }
@@ -135,8 +137,9 @@ defineExpose({ editingName });
 .activity-saved-names > div { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .activity-saved-names span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 640px) {
-  .activity-window-choice { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .activity-window-choice { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .activity-window-choice label { grid-column: 1 / -1; }
+  .activity-window-actions { justify-self: end; }
   .activity-mappings-heading { display: grid; gap: 4px; }
 }
 </style>

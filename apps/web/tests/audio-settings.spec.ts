@@ -54,10 +54,20 @@ createApp({ setup() {
 
     const enabled = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true };
     const disabled = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, voiceEnhancement: false };
-    await toggle.check();
+    const processingRow = page.locator('.settings-toggle').filter({ has: toggle });
+    await processingRow.locator('strong').click();
+    await expect(page.getByTestId('applied-processing')).toHaveText('[]');
+    const hitArea = (await toggle.boundingBox())!;
+    expect(hitArea.width).toBe(44);
+    expect(hitArea.height).toBe(28);
+    await page.mouse.click(hitArea.x - 12, hitArea.y + 14);
+    await expect(page.getByTestId('applied-processing')).toHaveText('[]');
+    // 可见开关外侧的 4px 留白仍可操作，更远处的说明与空白不能切换。
+    await page.mouse.click(hitArea.x + 2, hitArea.y + 14);
     await expect(toggle).toHaveJSProperty('indeterminate', false);
     await expect(page.getByTestId('applied-processing')).toHaveText(JSON.stringify([enabled]));
-    await toggle.uncheck();
+    await toggle.focus();
+    await page.keyboard.press('Space');
     await expect(page.getByTestId('applied-processing')).toHaveText(JSON.stringify([enabled, disabled]));
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem(
       'lycansync.audio-preferences.v1.audio-settings-test')!))).toMatchObject({

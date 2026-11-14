@@ -44,14 +44,14 @@ async function toggleReplay(event: Event) {
       <p>录制当前共享的窗口或屏幕，录像保存在本机。</p>
       <h3>录制内容</h3>
       <div v-if="desktop && recording.settings.value" class="settings-toggle-group">
-        <label v-for="item in ([{ key: 'applicationAudio', title: '应用声音', detail: '窗口共享时录入所选应用，整屏共享时录入其他应用的声音。' },
+        <div v-for="item in ([{ key: 'applicationAudio', title: '应用声音', detail: '窗口共享时录入所选应用，整屏共享时录入其他应用的声音。' },
           { key: 'microphone', title: '自己的麦克风', detail: '录入当前开启的麦克风声音。' },
           { key: 'friends', title: '朋友的语音', detail: '录入当前正在收听的朋友语音。' }] as const)"
           :key="item.key" class="settings-toggle">
           <span><strong>{{ item.title }}</strong><small>{{ item.detail }}</small></span>
-          <input type="checkbox" :checked="recording.settings.value[item.key]" :disabled="recording.localActive.value || recording.busy.value"
+          <input type="checkbox" :aria-label="item.title" :checked="recording.settings.value[item.key]" :disabled="recording.localActive.value || recording.busy.value"
             @change="toggle(item.key, $event)" />
-        </label>
+        </div>
       </div>
       <p v-else-if="!desktop">录制需要使用 Windows 桌面客户端。</p>
       <InlineFeedback :pending="desktop && !recording.settings.value && !recording.notice.value ? '正在读取录制设置…' : ''" />
@@ -82,11 +82,11 @@ async function toggleReplay(event: Event) {
     </section>
     <section v-if="desktop" class="settings-block">
       <h2>即时回放</h2>
-      <label class="settings-toggle">
+      <div class="settings-toggle">
         <span><strong>开启即时回放</strong><small>共享画面时自动积累最近的片段，可随时保存精彩时刻。</small></span>
-        <input type="checkbox" :checked="recording.settings.value?.replayEnabled ?? false"
+        <input type="checkbox" aria-label="开启即时回放" :checked="recording.settings.value?.replayEnabled ?? false"
           :disabled="recording.busy.value" @change="toggleReplay" />
-      </label>
+      </div>
       <label class="settings-range-row"><span>回溯时长</span>
         <select aria-label="回放目标时长" :value="recording.settings.value?.replaySeconds ?? 60"
           :disabled="recording.localActive.value || recording.busy.value"

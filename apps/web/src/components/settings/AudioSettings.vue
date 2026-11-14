@@ -123,11 +123,11 @@ function updateInputGain(gain: number) {
     </section>
     <section class="settings-block">
       <h2>声音处理</h2>
-      <label class="settings-toggle">
+      <div class="settings-toggle">
         <span><strong>智能声音处理</strong><small>{{ desktop ? '程序使用 RNNoise 降噪，配合回声消除、低频过滤和自动音量调整，让人声更清楚、音量更平稳。' : '使用浏览器的降噪、回声消除和自动音量调整，配合低频过滤，让说话更清楚。' }}</small></span>
         <input type="checkbox" aria-label="智能声音处理" :checked="processingEnabled" :indeterminate="processingPartial"
           :aria-checked="processingPartial ? 'mixed' : processingEnabled" @change="updateProcessing" />
-      </label>
+      </div>
       <p v-if="processingPartial">当前沿用之前的单项设置。开启后应用完整的声音处理。</p>
       <ProjectAttribution v-if="desktop">降噪由 <a href="https://github.com/xiph/rnnoise" target="_blank" rel="noopener noreferrer">RNNoise 开源项目</a> 提供支持；回声消除、低频过滤与音量处理基于 <a href="https://github.com/dignifiedquire/sonora" target="_blank" rel="noopener noreferrer">Sonora</a>。</ProjectAttribution>
       <p v-if="!desktop">同时使用浏览器的回声消除。</p>
@@ -153,10 +153,10 @@ function updateInputGain(gain: number) {
         <input id="settings-output-volume" type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="outputVolume"
           aria-label="lycanclaw 总输出音量" @input="preferences.setOutputVolume(Number(($event.target as HTMLInputElement).value))" /></div>
       <p>调整本应用的整体播放音量。</p>
-      <label class="settings-toggle"><span><strong>平衡成员语音音量</strong>
+      <div class="settings-toggle"><span><strong>平衡成员语音音量</strong>
         <small>让不同成员的说话音量更接近，也可继续单独调节。</small></span>
-        <input type="checkbox" :checked="preferences.voiceVolumeBalance.value"
-          @change="preferences.setVoiceVolumeBalance(($event.target as HTMLInputElement).checked)" /></label>
+        <input type="checkbox" aria-label="平衡成员语音音量" :checked="preferences.voiceVolumeBalance.value"
+          @change="preferences.setVoiceVolumeBalance(($event.target as HTMLInputElement).checked)" /></div>
       <div>
         <button type="button" class="disclosure-trigger" :aria-expanded="shareVolumeOpen" :aria-controls="shareVolumeId"
           @click="shareVolumeOpen = !shareVolumeOpen">
@@ -176,7 +176,7 @@ function updateInputGain(gain: number) {
 
 <style scoped>
 .audio-settings { max-width: 820px; }
-.settings-toggle input:indeterminate { border-color: var(--accent); }
+.settings-toggle input:indeterminate::before { border-color: var(--accent); }
 .settings-toggle input:indeterminate::after { transform: translateX(8px); background: var(--accent); }
 .settings-meter { display: grid; gap: 7px; margin-top: 18px; color: var(--muted); font-size: 13px; }
 .settings-meter > span { display: flex; justify-content: space-between; }

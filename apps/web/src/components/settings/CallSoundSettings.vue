@@ -40,17 +40,17 @@ onScopeDispose(stopPreview);
     <h2>提示音开关</h2>
     <div class="settings-toggle-group">
       <div v-for="event in commonSounds" :key="event.id" class="settings-toggle call-sound-row">
-        <label :for="`${eventIdPrefix}-${event.id}`">{{ event.label }}</label>
+        <span class="call-sound-label">{{ event.label }}</span>
         <button type="button" :aria-label="`试听${event.label}`" @click="preview(event.id)">试听</button>
-        <input :id="`${eventIdPrefix}-${event.id}`" type="checkbox" :checked="preferences.enabled[event.id]"
+        <input :id="`${eventIdPrefix}-${event.id}`" type="checkbox" :aria-label="event.label" :checked="preferences.enabled[event.id]"
           @change="preferences.setEnabled(event.id, ($event.target as HTMLInputElement).checked)" />
       </div>
       <ExpandSection :open="moreSoundsOpen" :id="moreSoundsId">
         <div class="settings-toggle-group">
           <div v-for="event in moreSounds" :key="event.id" class="settings-toggle call-sound-row">
-            <label :for="`${eventIdPrefix}-${event.id}`">{{ event.label }}</label>
+            <span class="call-sound-label">{{ event.label }}</span>
             <button type="button" :aria-label="`试听${event.label}`" @click="preview(event.id)">试听</button>
-            <input :id="`${eventIdPrefix}-${event.id}`" type="checkbox" :checked="preferences.enabled[event.id]"
+            <input :id="`${eventIdPrefix}-${event.id}`" type="checkbox" :aria-label="event.label" :checked="preferences.enabled[event.id]"
               @change="preferences.setEnabled(event.id, ($event.target as HTMLInputElement).checked)" />
           </div>
         </div>
@@ -66,5 +66,5 @@ onScopeDispose(stopPreview);
 
 <style scoped>
 .call-sound-row { min-height: 32px; cursor: default; }
-.call-sound-row label { flex: 1; min-width: 0; font-weight: 500; cursor: pointer; }
+.call-sound-row .call-sound-label { flex: 1; min-width: 0; font-weight: 500; }
 </style>

@@ -46,7 +46,7 @@ watch(() => props.active, (active) => {
     <h2>账号操作</h2>
     <section v-if="qqAvailable" class="settings-block account-operation">
       <div class="settings-action-row"><h3>绑定第三方账号</h3>
-        <span class="settings-actions">
+        <span class="settings-actions settings-control settings-control-buttons">
           <button v-if="!binding?.bound" type="button" :disabled="!binding || leaving || qq.busy.value" @click="qq.start(true)">绑定 QQ</button>
           <button v-if="qq.busy.value" type="button" :disabled="qq.finishing.value" @click="qq.cancel">取消等待</button>
         </span>
@@ -59,7 +59,7 @@ watch(() => props.active, (active) => {
     <button v-if="qqError" type="button" :disabled="leaving || qq.busy.value" @click="refreshBinding">重试</button>
     <section class="settings-block account-operation">
       <div class="settings-action-row"><h3>退出当前账号</h3>
-        <button type="button" :disabled="leaving" @click="emit('logout')">退出登录</button></div>
+        <button type="button" class="settings-button settings-control" :disabled="leaving" @click="emit('logout')">退出登录</button></div>
       <p>返回登录页，并记住此账号，方便下次登录。</p>
     </section>
     <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="administrator" :user-id="userId" section="account"
@@ -69,7 +69,5 @@ watch(() => props.active, (active) => {
 
 <style scoped>
 .account-settings { max-width: 820px; }
-.account-settings :deep(.account-operation > .settings-action-row > button),
-.account-settings :deep(.account-operation > .settings-action-row > .settings-actions > button) { min-width: 128px; white-space: nowrap; }
 @media (max-width: 520px) { .account-operation .settings-action-row { align-items: flex-start; } }
 </style>

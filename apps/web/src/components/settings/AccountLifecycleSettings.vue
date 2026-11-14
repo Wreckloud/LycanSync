@@ -199,7 +199,7 @@ defineExpose({ beginTransfer });
     </template>
     <template v-if="section === 'account'">
       <div class="settings-action-row"><h3>注销账号</h3>
-        <button type="button" class="settings-button account-danger" :disabled="busy || leaving" @click="beginClose">注销账号</button>
+        <button type="button" class="settings-button account-danger settings-control" :disabled="busy || leaving" @click="beginClose">注销账号</button>
       </div>
       <p>注销后无法再次登录；历史资料、消息和共同语音记录会保留，并标记为“已注销”。</p>
       <p v-if="status?.administrator || status?.ownedGroups.length" class="closure-requirements">
@@ -260,7 +260,7 @@ defineExpose({ beginTransfer });
 
 <style scoped>
 .lifecycle-settings { display: grid; gap: 12px; }
-.owner-account-actions { grid-template-columns: minmax(0, 1fr) max-content; }
+.owner-account-actions { grid-template-columns: minmax(0, 1fr) minmax(0, var(--settings-control-width)); }
 .owner-account-actions > .settings-action-row { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; }
 .lifecycle-settings p { margin: 0; color: var(--muted); line-height: 1.6; }
 .lifecycle-settings .recovery-warning { color: var(--danger); }

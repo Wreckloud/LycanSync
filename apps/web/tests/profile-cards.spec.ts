@@ -60,9 +60,35 @@ test('各设置页说明共用同一位置和样式，诊断入口归入客户�
     expect(position, name).toEqual(baseline);
     await expect(intro).toHaveCSS('font-size', '14px');
     await expect(intro).toHaveCSS('margin-bottom', '24px');
-    if (name === '语音与音频') {
-      await page.locator('.settings-view').screenshot({ path: testInfo.outputPath(`${name}.png`), animations: 'disabled' });
-    }
+    await page.locator('.settings-view').screenshot({ path: testInfo.outputPath(`${name}.png`), animations: 'disabled' });
+  }
+});
+
+test('设置操作区同宽，自定义音效占整行，窄窗不溢出', async ({ page }, testInfo) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const account = page.locator('.account-settings');
+  await expect(account.getByRole('button', { name: '退出登录', exact: true })).toHaveCSS('width', '280px');
+  await expect(page.locator('.activity-presence .presence-mode-switch')).toHaveCSS('width', '280px');
+  await page.getByRole('button', { name: '快捷键', exact: true }).click();
+  const mode = page.locator('.shortcut-settings .voice-mode-switch');
+  await expect(mode).toHaveCSS('width', '280px');
+  const baseline = (await mode.boundingBox())!;
+  for (const controls of await page.locator('.shortcut-controls').all()) {
+    const bounds = (await controls.boundingBox())!;
+    expect(bounds.width).toBe(280);
+    expect(bounds.x).toBeCloseTo(baseline.x, 0);
+  }
+  await page.getByRole('button', { name: '音效', exact: true }).click();
+  const chooser = page.getByRole('button', { name: '选择音效', exact: true });
+  const section = page.locator('.sound-settings');
+  expect((await chooser.boundingBox())!.width).toBe((await section.boundingBox())!.width);
+  await page.setViewportSize({ width: 640, height: 820 });
+  for (const name of ['账号设置', '语音与音频', '音效', '快捷键', '客户端', '服主管理']) {
+    await page.getByRole('button', { name, exact: true }).click();
+    const content = page.locator('.settings-view');
+    await expect.poll(() => content.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+    await content.screenshot({ path: testInfo.outputPath(`${name}-narrow.png`), animations: 'disabled' });
   }
 });
 

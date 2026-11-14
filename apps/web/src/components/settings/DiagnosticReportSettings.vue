@@ -35,10 +35,10 @@ function updateAutomatic(event: Event) {
 <template>
   <section class="settings-block diagnostic-report-settings">
     <h2>应用日志</h2>
-    <label class="settings-toggle">
+    <div class="settings-toggle">
       <span><strong>自动记录诊断</strong><small>在本机记录版本、设备和通话质量信息，方便遇到问题时排查。</small></span>
       <input type="checkbox" aria-label="自动记录诊断" :checked="automaticEnabled" :disabled="saving" @change="updateAutomatic" />
-    </label>
+    </div>
     <p>仅记录运行信息，不录入声音或画面；报告由你选择导出和分享。</p>
     <div class="settings-actions">
       <button type="button" :disabled="(recording && !automaticEnabled) || (!reason && !desktop && !automaticEnabled) || saving" @click="report.save(notes)">导出报告</button>
@@ -88,6 +88,7 @@ function updateAutomatic(event: Event) {
 
 <style scoped>
 .diagnostic-details { display: grid; gap: 8px; padding-top: 8px; }
+.diagnostic-report-settings .settings-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); }
 .report-notes { display: grid; gap: 8px; margin-top: 16px; }
 .report-notes textarea { resize: vertical; min-height: 64px; }
 </style>
