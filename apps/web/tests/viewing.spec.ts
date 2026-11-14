@@ -989,3 +989,17 @@ test('群菜单不被标题裁切，控制栏退出时聊天连续复位且保�
   await expect(page.getByTestId('callbar')).toHaveCount(0);
   await expect(input).toHaveValue('动画不清空草稿');
 });
+
+
+test('聚焦共享后浏览其他群组仍显示标题，返回通话群组保留聚焦', async ({ page }) => {
+  await sharing(page, ['A']);
+  await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+  await expect(page.locator('.group-header-region')).toHaveCSS('visibility', 'hidden');
+  await page.getByRole('button', { name: /^另一群组，/ }).click();
+  await expect(page.locator('.group-header-region')).toHaveCSS('visibility', 'visible');
+  await expect(page.locator('.group-header-region')).toContainText('另一群组');
+  await expect(page.locator('.group-header-region')).not.toHaveAttribute('inert');
+  await page.getByRole('button', { name: '返回当前通话群组', exact: true }).click();
+  await expect(page.locator('.group-header-region')).toHaveCSS('visibility', 'hidden');
+  await expect(page.locator('.viewing-tile')).toHaveCount(1);
+});

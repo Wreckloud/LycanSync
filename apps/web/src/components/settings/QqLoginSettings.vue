@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { onScopeDispose, reactive, ref, watch } from 'vue';
+import { nextTick, onScopeDispose, reactive, ref, watch } from 'vue';
 import { authRequest } from '../../auth/authApi';
-import ExpandSection from '../ExpandSection.vue';
+import DialogTransition from '../DialogTransition.vue';
+import { useBackdropDismiss } from '../useBackdropDismiss';
+import { keepDialogFocus } from '../dialogFocus';
 import InlineFeedback from '../InlineFeedback.vue';
 
 const props = defineProps<{ active: boolean; leaving: boolean }>();
@@ -9,6 +11,9 @@ interface QqSettings { enabled: boolean; appId: string; callbackUrl: string; app
 const saved = ref<QqSettings | null>(null);
 const draft = reactive({ enabled: false, appId: '', appKey: '', callbackUrl: '' });
 const expanded = ref(false);
+const dialog = ref<HTMLFormElement | null>(null);
+const backdropEvents = useBackdropDismiss(() => { if (!busy.value) close(); });
+watch(expanded, async (open) => { if (open) { await nextTick(); dialog.value?.focus(); } });
 const busy = ref(false);
 const error = ref('');
 let request: AbortController | undefined;
@@ -77,8 +82,14 @@ onScopeDispose(() => { request?.abort(); draft.appKey = ''; });
         <small>配置你的 QQ 互联应用，让成员使用 QQ 登录或绑定现有账号。</small></div>
       <button type="button" class="settings-button settings-control" :disabled="busy || leaving || !saved || expanded" @click="edit">配置 QQ 登录</button>
     </div>
-    <ExpandSection :open="expanded">
-      <form class="qq-configuration-form" @submit.prevent="save">
+
+    <InlineFeedback v-if="!expanded" :message="error || saved?.configurationError" :pending="busy ? '正在读取 QQ 登录配置…' : ''" />
+    <button v-if="error && !expanded" type="button" :disabled="busy || leaving" @click="load">重试</button>
+  </div>
+  <DialogTransition>
+    <div v-if="expanded && active" class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="!busy && close()">
+      <form ref="dialog" class="qq-configuration-form" role="dialog" aria-modal="true" aria-label="配置 QQ 登录" tabindex="-1" @keydown="keepDialogFocus" @submit.prevent="save">
+        <h2>配置 QQ 登录</h2>
         <div class="settings-toggle"><span><strong>允许 QQ 登录</strong></span>
           <input v-model="draft.enabled" type="checkbox" aria-label="允许 QQ 登录" :disabled="busy || leaving" />
         </div>
@@ -100,15 +111,14 @@ onScopeDispose(() => { request?.abort(); draft.appKey = ''; });
           <button type="submit" class="confirm-button card-actions-end" :disabled="busy || leaving">保存</button>
         </footer>
       </form>
-    </ExpandSection>
-    <InlineFeedback v-if="!expanded" :message="error || saved?.configurationError" :pending="busy ? '正在读取 QQ 登录配置…' : ''" />
-    <button v-if="error && !expanded" type="button" :disabled="busy || leaving" @click="load">重试</button>
-  </div>
+    </div>
+  </DialogTransition>
 </template>
 
 <style scoped>
 .qq-login-settings { display: grid; gap: 8px; }
 .qq-login-settings > button { justify-self: start; }
-.qq-configuration-form { display: grid; gap: 12px; padding-top: 12px; }
-.qq-configuration-form small { line-height: 1.6; }
+.qq-configuration-form { display: grid; gap: 12px; width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 14px; }
+.qq-configuration-form h2 { margin: 0; font-size: 22px; line-height: 32px; }
+.qq-configuration-form small { color: var(--muted); font-size: 12px; line-height: 1.6; }
 </style>

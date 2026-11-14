@@ -1036,7 +1036,7 @@ function participantListening(participant: Participant) {
       </nav>
       <main class="group-main">
         <div v-if="selectedGroup" class="group-heading-content">
-        <div class="group-header-region" :aria-hidden="viewingWindows?.inlineExpanded || undefined" :inert="viewingWindows?.inlineExpanded">
+        <div class="group-header-region" :aria-hidden="showingJoinedGroup && viewingWindows?.inlineExpanded || undefined" :inert="showingJoinedGroup && viewingWindows?.inlineExpanded">
           <div class="group-header-clip">
             <header class="group-header">
               <div :key="selectedGroup.id" class="group-copy group-content-ready">

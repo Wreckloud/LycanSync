@@ -142,26 +142,26 @@ test('仅服主显示邀请面板且生成链接只在成功后展示', async ({
   await page.getByLabel('App ID', { exact: true }).fill('1234567');
   await page.getByLabel('App Key', { exact: true }).fill('test-private-key');
   await page.getByLabel('回调地址', { exact: true }).fill('https://example.com/api/auth/qq/callback');
-  await page.locator('.qq-login-settings').screenshot({ path: testInfo.outputPath('qq-settings.png') });
-  await page.locator('.qq-login-settings').getByRole('button', { name: '保存', exact: true }).click();
+  await page.getByRole('dialog', { name: '配置 QQ 登录', exact: true }).screenshot({ path: testInfo.outputPath('qq-settings.png') });
+  await page.getByRole('dialog', { name: '配置 QQ 登录', exact: true }).getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.getByText('配置暂时无法保存', { exact: true })).toBeVisible();
   rejectQqSave = false;
-  await page.locator('.qq-login-settings').getByRole('button', { name: '保存', exact: true }).click();
+  await page.getByRole('dialog', { name: '配置 QQ 登录', exact: true }).getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.getByText('QQ 登录 · 已开启', { exact: true })).toBeVisible();
   expect(qqWrites).toHaveLength(2);
   await page.getByRole('button', { name: '配置 QQ 登录', exact: true }).click();
   await expect(page.getByLabel('App Key', { exact: true })).toHaveValue('');
   await expect(page.getByLabel('App Key', { exact: true })).toHaveAttribute('placeholder', '已设置，留空保留原密钥');
   await page.getByLabel('允许 QQ 登录', { exact: true }).uncheck();
-  await page.locator('.qq-login-settings').getByRole('button', { name: '保存', exact: true }).click();
+  await page.getByRole('dialog', { name: '配置 QQ 登录', exact: true }).getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.getByText('QQ 登录 · 未开启', { exact: true })).toBeVisible();
   expect(qqWrites[2]).toMatchObject({ enabled: false, appKey: '' });
   await page.getByRole('button', { name: '配置 QQ 登录', exact: true }).click();
   await page.getByLabel('App Key', { exact: true }).fill('discard-this-secret');
-  await page.locator('.qq-login-settings').getByRole('button', { name: '取消', exact: true }).click();
+  await page.getByRole('dialog', { name: '配置 QQ 登录', exact: true }).getByRole('button', { name: '取消', exact: true }).click();
   await page.getByRole('button', { name: '配置 QQ 登录', exact: true }).click();
   await expect(page.getByLabel('App Key', { exact: true })).toHaveValue('');
-  await page.locator('.qq-login-settings').getByRole('button', { name: '取消', exact: true }).click();
+  await page.getByRole('dialog', { name: '配置 QQ 登录', exact: true }).getByRole('button', { name: '取消', exact: true }).click();
   await expect(page.getByRole('button', { name: '设置恢复密码', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '注销账号', exact: true })).toHaveCount(0);
   await expect(page.getByLabel('新恢复密码（15–128 个字符）', { exact: true })).toHaveCount(0);
@@ -406,12 +406,16 @@ test('注销始终可进入，服主和群组事项完成后才提交注销', as
   await expect(page.getByRole('button', { name: '返回注销流程', exact: true })).toBeVisible();
   // 模拟接任者在另一设备确认，返回注销时必须重新获取服务器状态。
   administrator = false;
+  await page.getByRole('dialog', { name: '转让服主', exact: true }).getByRole('button', { name: '取消', exact: true }).click();
   await page.getByRole('button', { name: '返回注销流程', exact: true }).click();
   await expect(page.getByRole('button', { name: '去转让服主', exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: '转让群组', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '注销账号', exact: true })).toBeVisible();
+  await page.getByRole('dialog', { name: '注销账号', exact: true }).screenshot({ path: testInfo.outputPath('close-account-dialog.png') });
+  await page.getByRole('button', { name: '处理群组', exact: true }).click();
+  await page.getByRole('dialog', { name: '处理群组', exact: true }).screenshot({ path: testInfo.outputPath('group-disposition-dialog.png') });
+  await page.getByRole('dialog', { name: '处理群组', exact: true }).getByRole('button', { name: '转让群主', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '转让群主', exact: true })).toBeVisible();
-  await page.getByRole('dialog').getByRole('button', { name: '取消', exact: true }).click();
-  await page.getByRole('button', { name: '解散群组', exact: true }).click();
+  await page.getByRole('dialog', { name: '转让群主', exact: true }).getByRole('button', { name: '解散群聊', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '解散群聊', exact: true });
   await expect(dialog.getByRole('button', { name: '确认解散', exact: true })).toBeDisabled();
   expect(dissolved).toBe(0);
@@ -425,4 +429,40 @@ test('注销始终可进入，服主和群组事项完成后才提交注销', as
   await page.getByRole('button', { name: '确认注销', exact: true }).click();
   await expect(page.getByText('测试注销失败，请重试', { exact: true })).toBeVisible();
   expect(closed).toBe(1);
+});
+
+
+test('接任服主在弹窗填写，取消清空密码，失败保留表单', async ({ page }) => {
+  const user = { id: 'successor', nickname: '接任成员', avatar: '', signature: '', administrator: false };
+  await page.route('**/api/auth/options', route => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
+  await page.route('**/api/auth/me', route => route.fulfill({ json: user }));
+  await page.route('**/api/auth/session', route => route.fulfill({ json: user }));
+  await page.route('**/api/groups', route => route.fulfill({ json: [] }));
+  await page.route('**/api/presence/heartbeat', route => route.fulfill({ status: 204 }));
+  await page.route('**/api/auth/account', route => route.fulfill({ json: {
+    administrator: false, recoveryConfigured: false, ownedGroups: [], candidates: [], transferTargetId: null,
+    incomingTransfer: { ownerNickname: '原服主', expiresAt: '2099-01-01T00:00:00Z' },
+  } }));
+  let writes = 0;
+  await page.route('**/api/auth/account/transfer/accept', route => {
+    writes++;
+    expect(route.request().postDataJSON()).toEqual({ password: 'example-password-123' });
+    return route.fulfill({ status: 503, json: { detail: '暂时无法接任' } });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.getByLabel('恢复密码（15–128 个字符）', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '查看转让', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '接任服主', exact: true });
+  await dialog.getByLabel('恢复密码（15–128 个字符）', { exact: true }).fill('discard-this-password');
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  expect(writes).toBe(0);
+  await page.getByRole('button', { name: '查看转让', exact: true }).click();
+  await expect(dialog.getByLabel('恢复密码（15–128 个字符）', { exact: true })).toHaveValue('');
+  await dialog.getByLabel('恢复密码（15–128 个字符）', { exact: true }).fill('example-password-123');
+  await dialog.getByLabel('确认恢复密码', { exact: true }).fill('example-password-123');
+  await dialog.getByRole('button', { name: '确认接任', exact: true }).click();
+  await expect(dialog.getByText('暂时无法接任', { exact: true })).toBeVisible();
+  expect(writes).toBe(1);
 });

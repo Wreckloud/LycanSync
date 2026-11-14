@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
-import { Crown, UserRound } from '@lucide/vue';
+import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
+import { ArrowRight, Crown, UserRound } from '@lucide/vue';
 import InlineFeedback from './InlineFeedback.vue';
 import { addGroupMember, dissolveGroup, findGroup, findGroupCandidates, getGroupInviteCode,
   removeGroupMember, transferGroupOwner, type GroupCandidate, type GroupDetail } from '../group/groupApi';
 import { useBackdropDismiss } from './useBackdropDismiss';
 import { keepDialogFocus } from './dialogFocus';
 
-const props = defineProps<{ group: GroupDetail; userId: string; mode: 'invite' | 'members' | 'transfer' | 'leave' | 'dissolve' }>();
+const props = defineProps<{ group: GroupDetail; userId: string; mode: 'invite' | 'members' | 'transfer' | 'leave' | 'dissolve' | 'resolve' }>();
+const disposition = ref<'transfer' | 'dissolve' | null>(null);
+const mode = computed(() => props.mode === 'resolve' ? disposition.value ?? 'resolve' : props.mode);
 const emit = defineEmits<{ close: []; updated: [group: GroupDetail]; removed: [groupId: string] }>();
 const dialog = ref<HTMLElement | null>(null);
 const search = ref('');
@@ -24,16 +26,25 @@ const loading = ref(false);
 const confirmation = ref<{ userId: string; nickname: string } | null>(null);
 const dissolveName = ref('');
 const dissolveNameMatches = computed(() => dissolveName.value === props.group.name);
-const title = computed(() => ({ invite: '邀请成员', members: '管理成员', transfer: '转让群主', leave: '退出群聊', dissolve: '解散群聊' })[props.mode]);
+const title = computed(() => ({ invite: '邀请成员', members: '管理成员', transfer: '转让群主', leave: '退出群聊', dissolve: '解散群聊', resolve: '处理群组' })[mode.value]);
 const allMembers = computed(() => props.group.members.filter((member) => member.nickname.toLowerCase().includes(search.value.toLowerCase())));
 const members = computed(() => allMembers.value.slice(offset.value, offset.value + 20));
 const moreMembers = computed(() => offset.value + 20 < allMembers.value.length);
-const confirming = computed(() => !!confirmation.value || props.mode === 'leave' || props.mode === 'dissolve');
+const confirming = computed(() => !!confirmation.value || mode.value === 'leave' || mode.value === 'dissolve');
 let request: AbortController | null = null;
 let disposed = false;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 let refreshTimer: ReturnType<typeof setInterval> | undefined;
 let statusTimer: ReturnType<typeof setTimeout> | undefined;
+
+async function chooseDisposition(next: 'transfer' | 'dissolve') {
+  if (busy.value) return;
+  disposition.value = next;
+  confirmation.value = null;
+  dissolveName.value = ''; search.value = ''; offset.value = 0; error.value = '';
+  await nextTick();
+  dialog.value?.focus();
+}
 
 function close() {
   if (busy.value) return;
@@ -93,23 +104,23 @@ async function copyCode() {
 }
 
 async function confirm() {
-  if (props.mode === 'dissolve' && !dissolveNameMatches.value) return;
+  if (mode.value === 'dissolve' && !dissolveNameMatches.value) return;
   await action(async () => {
-    if (props.mode === 'dissolve') {
+    if (mode.value === 'dissolve') {
       await dissolveGroup(props.group.id);
       if (!disposed) emit('removed', props.group.id);
-    } else if (props.mode === 'leave') {
+    } else if (mode.value === 'leave') {
       await removeGroupMember(props.group.id, props.userId);
       if (!disposed) emit('removed', props.group.id);
     } else if (confirmation.value) {
       const target = confirmation.value;
-      const result = props.mode === 'transfer'
+      const result = mode.value === 'transfer'
         ? await transferGroupOwner(props.group.id, target.userId)
         : await removeGroupMember(props.group.id, target.userId).then(() => findGroup(props.group.id));
       if (disposed) return;
       emit('updated', result);
       confirmation.value = null;
-      if (props.mode === 'transfer') emit('close');
+      if (mode.value === 'transfer') emit('close');
     }
   });
 }
@@ -117,7 +128,7 @@ async function confirm() {
 watch(search, () => {
   offset.value = 0;
   clearTimeout(searchTimer);
-  if (props.mode === 'invite') {
+  if (mode.value === 'invite') {
     // 输入变化即撤销旧查询，防抖期间也不允许按旧搜索结果添加成员。
     request?.abort();
     loading.value = true;
@@ -128,14 +139,14 @@ watch(search, () => {
 function page(change: number) {
   clearTimeout(searchTimer);
   offset.value = Math.max(0, offset.value + change * 20);
-  if (props.mode === 'invite') void loadCandidates();
+  if (mode.value === 'invite') void loadCandidates();
 }
-watch(() => props.group.role, (role) => { if (role !== 'OWNER' && props.mode !== 'leave') emit('close'); });
+watch(() => props.group.role, (role) => { if (role !== 'OWNER' && mode.value !== 'leave') emit('close'); });
 
 
 onMounted(() => {
   dialog.value?.focus();
-  if (props.mode === 'invite') {
+  if (mode.value === 'invite') {
     void loadCandidates();
     void action(async () => { const result = await getGroupInviteCode(props.group.id); if (!disposed) code.value = result.code; });
     refreshTimer = setInterval(() => { if (!busy.value && !loading.value && document.visibilityState !== 'hidden') void loadCandidates(); }, 15000);
@@ -149,8 +160,16 @@ onScopeDispose(() => {
 <template>
   <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="close">
     <section ref="dialog" class="group-management" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1" @keydown="keepDialogFocus">
-      <header><h2>{{ title }}</h2><p>{{ group.name }}</p></header>
-      <div v-if="confirming" class="management-confirm">
+      <header class="management-header"><div><h2>{{ title }}</h2><p>{{ group.name }}</p></div>
+        <button v-if="props.mode === 'resolve' && mode !== 'resolve'" type="button" class="card-header-action" :disabled="busy"
+          @click="chooseDisposition(mode === 'transfer' ? 'dissolve' : 'transfer')">{{ mode === 'transfer' ? '解散群聊' : '转让群主' }}<ArrowRight :size="16" aria-hidden="true" /></button>
+      </header>
+      <div v-if="mode === 'resolve'" class="management-body">
+        <p>将群组交给另一位成员，或解散群组。</p>
+        <button type="button" @click="chooseDisposition('transfer')">转让群主</button>
+        <button type="button" @click="chooseDisposition('dissolve')">解散群聊</button>
+      </div>
+      <div v-else-if="confirming" class="management-confirm">
         <template v-if="mode === 'dissolve'">
           <strong>解散“{{ group.name }}”？</strong><p>群组、聊天记录和附件将被删除，当前语音、共享和远控会结束。此操作无法撤销。</p>
           <form id="group-dissolve-form" class="management-dissolve" @submit.prevent="confirm">
@@ -200,9 +219,11 @@ onScopeDispose(() => {
 
 <style scoped>
 .group-management { width: min(480px, 100%); max-height: calc(100dvh - 36px); overflow-y: auto; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); font-size: 14px; line-height: 20px; }
+.management-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 h2 { margin: 0; font-size: 22px; line-height: 32px; }
 header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
 .management-body { display: grid; gap: 12px; margin: 20px 0; }
+.management-body > p { margin: 0; color: var(--muted); }
 .management-body > input { width: 100%; }
 .management-body input, .management-dissolve input { height: 40px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; }
 .management-body input:focus, .management-dissolve input:focus { border-color: var(--subtle); }

@@ -3,7 +3,6 @@ import { computed, nextTick, onScopeDispose, ref, watch } from 'vue';
 import { authRequest, setBrowserSession } from '../../auth/authApi';
 import InlineFeedback from '../InlineFeedback.vue';
 import PasswordField from '../PasswordField.vue';
-import ExpandSection from '../ExpandSection.vue';
 import DialogTransition from '../DialogTransition.vue';
 import { useBackdropDismiss } from '../useBackdropDismiss';
 import { keepDialogFocus } from '../dialogFocus';
@@ -22,7 +21,7 @@ interface LifecycleStatus {
 }
 const status = ref<LifecycleStatus | null>(null);
 const qqBound = ref<boolean | null>(null);
-const expanded = ref<'password' | 'transfer' | 'close' | null>(null);
+const expanded = ref<'password' | 'transfer' | 'close' | 'accept' | null>(null);
 const password = ref('');
 const confirmation = ref('');
 const previousPassword = ref('');
@@ -30,12 +29,14 @@ const targetId = ref('');
 const closeConfirmation = ref('');
 const busy = ref(false);
 const loading = ref(false);
-const management = ref<{ group: GroupDetail; mode: 'transfer' | 'dissolve' } | null>(null);
+const management = ref<{ group: GroupDetail; mode: 'transfer' | 'dissolve' | 'resolve' } | null>(null);
 const canClose = computed(() => !!status.value && !loading.value && !status.value.administrator && !status.value.ownedGroups.length);
 const error = ref('');
 const feedback = ref('');
 const passwordDialog = ref<HTMLFormElement | null>(null);
 const transferForm = ref<HTMLFormElement | null>(null);
+const closeDialog = ref<HTMLElement | null>(null);
+const acceptDialog = ref<HTMLFormElement | null>(null);
 const backdropEvents = useBackdropDismiss(() => toggle(null));
 let revision = 0;
 let disposed = false;
@@ -77,7 +78,7 @@ async function beginTransfer() {
   if (disposed || !props.active || !status.value?.administrator) return;
   toggle(status.value.recoveryConfigured ? 'transfer' : 'password');
 }
-async function manageGroup(id: string, mode: 'transfer' | 'dissolve') {
+async function manageGroup(id: string, mode: 'transfer' | 'dissolve' | 'resolve') {
   if (busy.value || props.leaving || !props.userId) return;
   groupRequest?.abort();
   const current = new AbortController();
@@ -141,11 +142,13 @@ async function submit(operation: 'password' | 'offer' | 'accept' | 'cancel' | 'c
     }
   } finally { if (!disposed) busy.value = false; }
 }
-watch(expanded, async (section) => {
-  if (section !== 'password' && section !== 'transfer') return;
+watch(() => [expanded.value, props.active] as const, async ([section, active]) => {
+  if (!section || !active) return;
   await nextTick();
   if (section === 'password') passwordDialog.value?.querySelector('input')?.focus();
-  else transferForm.value?.focus();
+  else if (section === 'transfer') transferForm.value?.focus();
+  else if (section === 'close') closeDialog.value?.focus();
+  else acceptDialog.value?.focus();
 });
 watch(() => [props.active, props.administrator, props.section] as const, ([active]) => {
   clearSecrets();
@@ -175,27 +178,10 @@ defineExpose({ beginTransfer });
         </div>
       </div>
       <p v-if="status.transferTargetId">正在等待接任者确认，完成前你仍是服主。<button type="button" :disabled="busy || leaving" @click="submit('cancel')">取消转让</button></p>
-      <ExpandSection :open="expanded === 'transfer'">
-        <form ref="transferForm" class="lifecycle-form" tabindex="-1" @submit.prevent="submit('offer')">
-          <label class="settings-field" for="owner-transfer-target">接任成员
-            <select id="owner-transfer-target" v-model="targetId" :disabled="busy || leaving" required>
-              <option value="" disabled>选择本服务器的成员</option>
-              <option v-for="candidate in status.candidates" :key="candidate.id" :value="candidate.id">{{ candidate.nickname }}</option>
-            </select>
-          </label>
-          <PasswordField id="owner-transfer-password" v-model="previousPassword" label="当前服主恢复密码" :disabled="busy || leaving" required />
-          <p>对方需在 24 小时内确认并设置恢复密码。转让后你将成为普通成员，原服主恢复密码及未使用的账号邀请、恢复链接将失效。</p>
-          <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button class="confirm-button card-actions-end" :disabled="busy || leaving">发起转让</button></div>
-        </form>
-      </ExpandSection>
     </template>
     <template v-if="section === 'account' && status?.incomingTransfer">
       <h2>接任服主</h2><p>{{ status.incomingTransfer.ownerNickname }} 希望将服主转让给你。确认前请设置自己的恢复密码。</p>
-      <form class="lifecycle-form" @submit.prevent="submit('accept')">
-        <PasswordField id="accept-owner-password" v-model="password" label="恢复密码（15–128 个字符）" :disabled="busy || leaving" new-password required />
-        <PasswordField id="accept-owner-confirm" v-model="confirmation" label="确认恢复密码" :disabled="busy || leaving" new-password required />
-        <div class="card-actions"><button type="button" :disabled="busy || leaving" @click="submit('cancel')">拒绝</button><button class="confirm-button card-actions-end" :disabled="busy || leaving">确认接任</button></div>
-      </form>
+      <button type="button" class="settings-button settings-control" :disabled="busy || leaving" @click="toggle('accept')">查看转让</button>
     </template>
     <template v-if="section === 'account'">
       <div class="settings-action-row"><h3>注销账号</h3>
@@ -206,19 +192,52 @@ defineExpose({ beginTransfer });
         <span v-if="status?.administrator">请先完成服主转让，再注销账号。</span>
         <span v-if="status?.ownedGroups.length">请先转让或解散名下的 {{ status.ownedGroups.length }} 个群组。</span>
       </p>
-      <ExpandSection :open="expanded === 'close'">
-        <div class="closure-steps">
+    </template>
+    <InlineFeedback v-if="!expanded" :message="error" :pending="busy ? '正在处理…' : ''" :status="feedback" />
+    <button v-if="!expanded && error && (!status || section === 'owner' && qqBound === null && status.administrator && !status.recoveryConfigured)" type="button" :disabled="busy" @click="refresh">重新读取</button>
+  </section>
+  <DialogTransition>
+    <div v-if="expanded === 'transfer' && active && status?.administrator" class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="toggle(null)">
+        <form ref="transferForm" class="recovery-password-dialog" role="dialog" aria-modal="true" aria-label="转让服主" tabindex="-1" @keydown="keepDialogFocus" @submit.prevent="submit('offer')">
+          <h2>转让服主</h2>
+          <label class="settings-field" for="owner-transfer-target">接任成员
+            <select id="owner-transfer-target" v-model="targetId" :disabled="busy || leaving" required>
+              <option value="" disabled>选择本服务器的成员</option>
+              <option v-for="candidate in status.candidates" :key="candidate.id" :value="candidate.id">{{ candidate.nickname }}</option>
+            </select>
+          </label>
+          <PasswordField id="owner-transfer-password" v-model="previousPassword" label="当前服主恢复密码" :disabled="busy || leaving" required />
+          <p>对方需在 24 小时内确认并设置恢复密码。转让后你将成为普通成员，原服主恢复密码及未使用的账号邀请、恢复链接将失效。</p>
+          <InlineFeedback :message="error" :pending="busy ? '正在处理…' : ''" />
+          <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button class="confirm-button card-actions-end" :disabled="busy || leaving">发起转让</button></div>
+        </form>
+    </div>
+  </DialogTransition>
+  <DialogTransition>
+    <div v-if="expanded === 'accept' && active && status?.incomingTransfer" class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="toggle(null)">
+      <form ref="acceptDialog" class="recovery-password-dialog" role="dialog" aria-modal="true" aria-label="接任服主" tabindex="-1" @keydown="keepDialogFocus" @submit.prevent="submit('accept')">
+        <h2>接任服主</h2>
+        <PasswordField id="accept-owner-password" v-model="password" label="恢复密码（15–128 个字符）" :disabled="busy || leaving" new-password required />
+        <PasswordField id="accept-owner-confirm" v-model="confirmation" label="确认恢复密码" :disabled="busy || leaving" new-password required />
+        <InlineFeedback :message="error" :pending="busy ? '正在处理…' : ''" />
+        <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button type="button" :disabled="busy || leaving" @click="submit('cancel')">拒绝</button><button class="confirm-button card-actions-end" :disabled="busy || leaving">确认接任</button></div>
+      </form>
+    </div>
+  </DialogTransition>
+  <DialogTransition>
+    <div v-if="expanded === 'close' && active" class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="toggle(null)">
+      <section ref="closeDialog" class="recovery-password-dialog" role="dialog" aria-modal="true" aria-label="注销账号" tabindex="-1" @keydown="keepDialogFocus">
+        <h2>注销账号</h2>
+        <p>{{ canClose ? '注销后无法再次登录，此操作不能撤回。' : '完成下面的事项后，即可继续注销。' }}</p>
           <div v-if="status?.administrator" class="settings-action-row">
             <div><strong>服主转让</strong><small>{{ status.transferTargetId ? '等待接任者确认后，才能继续注销。' : '由另一位成员接任服主后，再继续注销。' }}</small></div>
             <button type="button" :disabled="busy || loading || leaving" @click="emit('resolveOwner')">{{ status.transferTargetId ? '查看转让' : '去转让服主' }}</button>
           </div>
           <div v-for="group in status?.ownedGroups" :key="group.id" class="settings-action-row">
             <div><strong>{{ group.name }}</strong><small>可转交给群成员，或解散群组。</small></div>
-            <div class="closure-group-actions">
-              <button type="button" :disabled="busy || loading || leaving" @click="manageGroup(group.id, 'transfer')">转让群组</button>
-              <button type="button" class="account-danger" :disabled="busy || loading || leaving" @click="manageGroup(group.id, 'dissolve')">解散群组</button>
-            </div>
+            <button type="button" :disabled="busy || loading || leaving" @click="manageGroup(group.id, 'resolve')">处理群组</button>
           </div>
+        <InlineFeedback :message="error" :pending="busy ? '正在处理…' : loading ? '正在检查注销条件…' : ''" />
         <form v-if="canClose" class="lifecycle-form" @submit.prevent="submit('close')">
           <label class="settings-field" for="close-account-confirmation">请输入“注销账号”确认，此操作不能撤回
             <input id="close-account-confirmation" v-model="closeConfirmation" required maxlength="4" :disabled="busy || leaving" autocomplete="off" />
@@ -227,14 +246,11 @@ defineExpose({ beginTransfer });
         </form>
         <div v-else class="card-actions">
           <button type="button" :disabled="busy" @click="toggle(null)">取消注销</button>
-          <button type="button" class="card-actions-end" :disabled="busy || loading || leaving" @click="refresh">继续注销</button>
+          <button type="button" class="settings-button card-actions-end" :disabled="busy || loading || leaving" @click="refresh">继续注销</button>
         </div>
-        </div>
-      </ExpandSection>
-    </template>
-    <InlineFeedback v-if="expanded !== 'password'" :message="error" :pending="busy ? '正在处理…' : loading && expanded === 'close' ? '正在检查注销条件…' : ''" :status="feedback" />
-    <button v-if="expanded !== 'password' && error && (!status || section === 'owner' && qqBound === null && status.administrator && !status.recoveryConfigured)" type="button" :disabled="busy" @click="refresh">重新读取</button>
-  </section>
+      </section>
+    </div>
+  </DialogTransition>
   <DialogTransition>
     <div v-if="expanded === 'password' && active && section === 'owner' && status?.administrator" class="dialog-backdrop"
       v-on="backdropEvents" @keydown.esc.stop="toggle(null)">
@@ -268,9 +284,8 @@ defineExpose({ beginTransfer });
 .lifecycle-form { display: grid; gap: 12px; padding-top: 12px; max-width: 480px; }
 .account-danger { color: var(--danger); }
 .closure-requirements > span { display: block; }
-.closure-steps { display: grid; gap: 12px; padding-top: 12px; }
-.settings-action-row > .closure-group-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; flex-shrink: 0; }
 .recovery-password-dialog { display: grid; gap: 12px; width: min(420px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; box-sizing: border-box; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 14px; line-height: 22px; }
+.recovery-password-dialog p { margin: 0; color: var(--muted); }
 .recovery-password-dialog h2 { margin: 0 0 4px; font-size: 22px; line-height: 32px; }
 @media (max-width: 420px) { .recovery-password-dialog { padding: 20px; } }
 </style>
