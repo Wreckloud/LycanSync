@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { ArrowRight } from '@lucide/vue';
+import MemberIdentity from './MemberIdentity.vue';
 import InlineFeedback from './InlineFeedback.vue';
 import MemberPicker, { type MemberOption } from './MemberPicker.vue';
 import { motionDurationMs } from '../styles/motion';
@@ -12,15 +13,14 @@ import { keepDialogFocus } from './dialogFocus';
 const props = defineProps<{ group: GroupDetail; userId: string; mode: 'invite' | 'members' | 'transfer' | 'leave' | 'dissolve' | 'resolve'; remaining?: number; pending?: boolean }>();
 const disposition = ref<'transfer' | 'dissolve' | null>(null);
 const mode = computed(() => props.mode === 'resolve' ? disposition.value ?? 'resolve' : props.mode);
-const emit = defineEmits<{ close: []; updated: [group: GroupDetail]; removed: [groupId: string] }>();
+const emit = defineEmits<{ close: []; updated: [group: GroupDetail]; removed: [groupId: string]; notice: [message: string] }>();
 const dialog = ref<HTMLElement | null>(null);
 const search = ref('');
 const code = ref('');
 const error = ref('');
-const status = ref('');
 const busy = ref(false);
 const backdropEvents = useBackdropDismiss(close);
-const confirmation = ref<{ userId: string; nickname: string } | null>(null);
+const confirmation = ref<MemberOption | null>(null);
 const dissolveName = ref('');
 const dissolveNameMatches = computed(() => dissolveName.value === props.group.name);
 const title = computed(() => ({ invite: '邀请成员', members: '管理成员', transfer: '转让群主', leave: '退出群聊', dissolve: '解散群聊', resolve: '处理群组' })[mode.value]);
@@ -32,7 +32,6 @@ const pageKey = computed(() => `${mode.value}-${confirming.value}`);
 let animation: Animation | undefined;
 let motionGeneration = 0;
 let disposed = false;
-let statusTimer: ReturnType<typeof setTimeout> | undefined;
 
 async function chooseDisposition(next: 'transfer' | 'dissolve') {
   if (busy.value) return;
@@ -59,7 +58,7 @@ function selectMember(member: MemberOption) {
 async function action(operation: () => Promise<void>) {
   if (busy.value || disposed) return;
   busy.value = true;
-  error.value = ''; status.value = '';
+  error.value = '';
   try { await operation(); }
   catch (exception) { if (!disposed) error.value = exception instanceof Error ? exception.message : '操作失败。'; }
   finally { if (!disposed) busy.value = false; }
@@ -81,11 +80,7 @@ async function copyCode() {
   await action(async () => {
     if (window.lycanDesktop) await window.lycanDesktop.copyText(code.value);
     else await navigator.clipboard.writeText(code.value);
-    if (!disposed) {
-      status.value = '已复制邀请码';
-      clearTimeout(statusTimer);
-      statusTimer = setTimeout(() => { status.value = ''; }, 3000);
-    }
+    if (!disposed) emit('notice', '邀请码已复制。');
   });
 }
 
@@ -95,7 +90,10 @@ async function confirm() {
   await action(async () => {
     if (mode.value === 'dissolve') {
       await dissolveGroup(props.group.id);
-      if (!disposed) emit('removed', props.group.id);
+      if (!disposed) {
+        emit('notice', `群聊“${props.group.name}”已解散。`);
+        emit('removed', props.group.id);
+      }
     } else if (mode.value === 'leave') {
       await removeGroupMember(props.group.id, props.userId);
       if (!disposed) emit('removed', props.group.id);
@@ -151,7 +149,7 @@ onMounted(() => {
   }
 });
 onScopeDispose(() => {
-  disposed = true; motionGeneration++; animation?.cancel(); clearTimeout(statusTimer);
+  disposed = true; motionGeneration++; animation?.cancel();
 });
 </script>
 
@@ -181,6 +179,7 @@ onScopeDispose(() => {
         </template>
         <template v-else-if="mode === 'leave'"><strong>退出“{{ group.name }}”？</strong><p>退出后将结束你在本群的语音、共享和远控。再次加入需要群主添加，或使用当前邀请码。</p></template>
         <template v-else-if="mode === 'transfer'">
+          <MemberIdentity v-if="confirmation" :member="confirmation" />
           <strong class="confirmation-copy">将群主转让给 <span>{{ confirmation?.nickname }}</span>？</strong><p>对方将拥有资料、成员和邀请码的管理权限，你将成为普通成员。当前邀请码会更换。</p>
           <form id="group-transfer-form" class="management-dissolve" @submit.prevent="confirm">
             <label for="group-transfer-name">输入对方昵称以确认</label>
@@ -203,7 +202,7 @@ onScopeDispose(() => {
       </div>
       <footer class="card-actions" :class="{ 'card-actions-no-primary': !confirming }">
         <button type="button" class="settings-button" :disabled="busy" @click="close">取消</button>
-        <InlineFeedback class="card-feedback" :message="error" :pending="busy ? '正在处理…' : ''" :status="busy ? '' : status" />
+        <InlineFeedback class="card-feedback" :message="error" :pending="busy ? '正在处理…' : ''" />
         <button v-if="mode === 'dissolve'" type="submit" form="group-dissolve-form" class="confirm-button is-danger card-actions-end" :disabled="busy || !dissolveNameMatches">确认解散</button>
         <button v-else-if="mode === 'transfer' && confirming" type="submit" form="group-transfer-form" class="confirm-button card-actions-end" :disabled="busy || !transferNameMatches">确认转让</button>
         <button v-else-if="confirming" type="button" class="confirm-button is-danger card-actions-end" :disabled="busy" @click="confirm">{{ mode === 'leave' ? '退出群聊' : '移出成员' }}</button>

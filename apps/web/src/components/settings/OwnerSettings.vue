@@ -43,7 +43,7 @@ onScopeDispose(() => request?.abort());
 
 <template>
   <section class="settings-section owner-settings">
-    <MemberAccessSettings :active="active" />
+    <MemberAccessSettings :active="active" @notice="emit('notice', $event)" />
     <section class="settings-block">
       <h2>服务器配置</h2>
       <dl v-if="status" class="owner-status">

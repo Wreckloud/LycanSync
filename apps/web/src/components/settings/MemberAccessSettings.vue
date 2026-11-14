@@ -5,6 +5,7 @@ import MemberAccessDialog from '../MemberAccessDialog.vue';
 import type { MemberAccessMode } from '../../settings/useMemberAccess';
 
 const props = defineProps<{ active: boolean }>();
+const emit = defineEmits<{ notice: [message: string] }>();
 const mode = ref<MemberAccessMode | null>(null);
 watch(() => props.active, active => { if (!active) mode.value = null; });
 </script>
@@ -21,7 +22,7 @@ watch(() => props.active, active => { if (!active) mode.value = null; });
     <button type="button" @click="mode = 'links'">链接管理</button>
   </section>
   <DialogTransition>
-    <MemberAccessDialog v-if="active && mode" :mode="mode" @close="mode = null" />
+    <MemberAccessDialog v-if="active && mode" :key="mode" :mode="mode" @notice="emit('notice', $event)" @manage="mode = 'links'" @close="mode = null" />
   </DialogTransition>
 </template>
 

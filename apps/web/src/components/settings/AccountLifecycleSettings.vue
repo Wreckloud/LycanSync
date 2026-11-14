@@ -8,7 +8,8 @@ import DialogTransition from '../DialogTransition.vue';
 import { useBackdropDismiss } from '../useBackdropDismiss';
 import { keepDialogFocus } from '../dialogFocus';
 import GroupManagementDialog from '../GroupManagementDialog.vue';
-import MemberPicker from '../MemberPicker.vue';
+import MemberPicker, { type MemberOption } from '../MemberPicker.vue';
+import MemberIdentity from '../MemberIdentity.vue';
 import { findGroup, type GroupDetail } from '../../group/groupApi';
 
 const props = defineProps<{ active: boolean; leaving: boolean; administrator?: boolean; section: 'account' | 'owner'; userId?: string }>();
@@ -28,7 +29,8 @@ const transferAfterPassword = ref(false);
 const password = ref('');
 const confirmation = ref('');
 const previousPassword = ref('');
-const targetId = ref('');
+const successor = ref<MemberOption | null>(null);
+const targetId = computed(() => successor.value?.userId ?? '');
 const closeConfirmation = ref('');
 const busy = ref(false);
 const loading = ref(false);
@@ -246,7 +248,8 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); groupReque
           </template>
           <template v-else>
           <strong>接任成员</strong>
-          <MemberPicker :load="loadSuccessors" :selected="targetId" :disabled="busy || leaving" label="搜索服务器成员" @select="targetId = $event.userId" />
+          <MemberPicker :load="loadSuccessors" :selected="targetId" :disabled="busy || leaving" label="搜索服务器成员" @select="successor = $event" />
+          <MemberIdentity v-if="successor" :member="successor" />
           <PasswordField id="owner-transfer-password" v-model="previousPassword" label="当前服主恢复密码" :disabled="busy || leaving" required />
           <p>对方需在 24 小时内确认并设置恢复密码。转让后你将成为普通成员，原服主恢复密码及未使用的账号邀请、恢复链接将失效。</p>
           <InlineFeedback :message="error" :pending="busy ? '正在处理…' : ''" />
@@ -302,7 +305,7 @@ onScopeDispose(() => { disposed = true; revision++; request?.abort(); groupReque
   </DialogTransition>
   <DialogTransition>
     <GroupManagementDialog v-if="management && userId" :key="management.group.id" :group="management.group" :mode="management.mode" :user-id="userId"
-      :remaining="status?.ownedGroups.length" :pending="groupProcessing" @updated="groupUpdated" @removed="groupRemoved" @close="closeManagement" />
+      :remaining="status?.ownedGroups.length" :pending="groupProcessing" @notice="emit('notice', $event)" @updated="groupUpdated" @removed="groupRemoved" @close="closeManagement" />
   </DialogTransition>
 </template>
 

@@ -6,7 +6,7 @@ export type MemberAccessMode = 'invite' | 'recovery' | 'links';
 export type AccessLinkFilter = 'PENDING' | 'USED' | 'REVOKED' | 'ALL';
 interface GeneratedLink { record: AccessLinkRecord; url: string | null }
 
-export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAccessMode) {
+export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAccessMode, notice: (message: string) => void) {
   const links = ref<AccessLinkRecord[]>([]);
   const offset = ref(0);
   const filter = ref<AccessLinkFilter>('PENDING');
@@ -16,7 +16,8 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAcce
   const generatedRecord = ref<AccessLinkRecord | null>(null);
   const error = ref('');
   const recordsError = ref('');
-  const copyStatus = ref('');
+  const invitationConfirmation = ref(false);
+  const recordsLoaded = ref(false);
   const busy = ref(false);
   const refreshing = ref(false);
   const copying = ref(false);
@@ -25,7 +26,6 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAcce
   let controller = new AbortController();
   let listRequest: AbortController | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
   function current(request: AbortController) { return request === controller && !request.signal.aborted && active.value; }
   function visible() { return current(controller) && document.visibilityState === 'visible'; }
@@ -33,21 +33,30 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAcce
   function message(exception: unknown) { return exception instanceof Error ? exception.message : '操作失败，请重试。'; }
   function scheduleRefresh() {
     clearTimeout(timer);
-    if (!visible() || mode === 'recovery') return;
+    if (!visible()) return;
     const pending = links.value.some(link => accessLinkStatus(link, Date.now()) === '待使用');
     timer = setTimeout(() => { void refresh(); }, pending && !recordsError.value ? 5_000 : 30_000);
   }
   async function refresh() {
-    if (!visible() || mode === 'recovery') return;
+    if (!visible()) return;
     clearTimeout(timer); listRequest?.abort();
     const request = new AbortController(); listRequest = request;
     refreshing.value = true; currentTime.value = Date.now();
     try {
-      const query = new URLSearchParams({ offset: String(offset.value), status: mode === 'invite' ? 'PENDING' : filter.value });
-      if (mode === 'invite') query.set('kind', 'INVITE');
-      const records = await authRequest<AccessLinkRecord[]>(`access/links?${query}`, 'GET', undefined,
-        AbortSignal.any([controller.signal, request.signal, AbortSignal.timeout(15_000)]));
-      if (!request.signal.aborted && current(controller)) { links.value = records; recordsError.value = ''; currentTime.value = Date.now(); }
+      const records: AccessLinkRecord[] = [];
+      let start = mode === 'recovery' ? 0 : offset.value;
+      while (true) {
+        const query = new URLSearchParams({ offset: String(start), status: mode === 'links' ? filter.value : 'PENDING' });
+        if (mode !== 'links') query.set('kind', mode === 'invite' ? 'INVITE' : 'RECOVERY');
+        const page = await authRequest<AccessLinkRecord[]>(`access/links?${query}`, 'GET', undefined,
+          AbortSignal.any([controller.signal, request.signal, AbortSignal.timeout(15_000)]));
+        if (request.signal.aborted || !current(controller)) return false;
+        records.push(...page);
+        if (mode !== 'recovery' || page.length < 100) break;
+        start += page.length;
+      }
+      links.value = records; recordsError.value = ''; recordsLoaded.value = true; currentTime.value = Date.now();
+      return true;
     } catch (exception) {
       if (!request.signal.aborted && current(controller)) recordsError.value = message(exception);
     } finally {
@@ -57,7 +66,12 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAcce
   async function copyLink(id = generatedRecord.value?.id) {
     if (!id || !current(controller) || locked.value) return false;
     const request = controller;
-    copying.value = true; error.value = ''; copyStatus.value = ''; clearTimeout(copyTimer);
+    copying.value = true;
+    try { return await readAndCopyLink(id, request); }
+    finally { if (current(request)) copying.value = false; }
+  }
+  async function readAndCopyLink(id: string, request: AbortController) {
+    error.value = '';
     generatedUrl.value = '';
     let received = false;
     try {
@@ -70,38 +84,35 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAcce
       if (window.lycanDesktop) await window.lycanDesktop.copyText(result.url);
       else await navigator.clipboard.writeText(result.url);
       if (!current(request)) return false;
-      copyStatus.value = '已复制链接';
-      copyTimer = setTimeout(() => { copyStatus.value = ''; }, 4_000);
+      notice(result.record.kind === 'RECOVERY' ? '恢复链接已复制。' : '邀请链接已复制。');
       return true;
     } catch (exception) {
       if (current(request)) error.value = received
         ? '复制失败，请选择链接手动复制。' : message(exception);
       return false;
-    } finally { if (current(request)) copying.value = false; }
+    }
   }
-  async function generate(kind: 'INVITE' | 'RECOVERY', id?: string, reuse = false) {
+  async function generate(kind: 'INVITE' | 'RECOVERY', id?: string) {
     if (!current(controller) || locked.value || kind === 'RECOVERY' && !id && !target.value) return false;
     clearTimeout(timer); listRequest?.abort(); refreshing.value = false;
-    const request = controller; busy.value = true; error.value = ''; copyStatus.value = '';
-    let result: GeneratedLink | undefined;
+    const request = controller; busy.value = true; error.value = '';
+    let created = false;
     try {
-      result = id
+      const result = id
         ? await authRequest<GeneratedLink>(`access/links/${id}/renew`, 'POST', undefined, requestSignal(request))
-        : reuse ? await authRequest<GeneratedLink>('access/links/invite', 'POST', undefined, requestSignal(request))
-          : await authRequest<GeneratedLink>('access/links', 'POST', { kind, targetId: kind === 'RECOVERY' ? target.value : null, note: kind === 'INVITE' ? '' : note.value }, requestSignal(request));
+        : await authRequest<GeneratedLink>('access/links', 'POST', { kind, targetId: kind === 'RECOVERY' ? target.value : null, note: kind === 'INVITE' ? '' : note.value }, requestSignal(request));
       if (!current(request)) return false;
-      generatedRecord.value = result.record; generatedUrl.value = result.url ?? '';
+      created = true; generatedRecord.value = result.record; generatedUrl.value = result.url ?? '';
+      invitationConfirmation.value = false;
+      if (mode === 'recovery') links.value = [...links.value.filter(link => link.targetId !== result.record.targetId), result.record];
       offset.value = 0;
       if (mode === 'links') filter.value = 'PENDING';
-    } catch (exception) { if (current(request)) error.value = message(exception); }
-    finally { if (current(request)) busy.value = false; }
-    if (!current(request)) return false;
-    if (result) {
-      if (result.url) await copyLink(result.record.id);
+      if (result.url) await readAndCopyLink(result.record.id, request);
       else error.value = '这个旧链接无法再次复制，请在链接管理中重新生成。';
       await refresh();
-    } else scheduleRefresh();
-    return !!result;
+    } catch (exception) { if (current(request)) error.value = message(exception); }
+    finally { if (current(request)) { busy.value = false; scheduleRefresh(); } }
+    return current(request) && created;
   }
   async function revoke(id: string) {
     if (!current(controller) || locked.value) return false;
@@ -111,12 +122,11 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAcce
     try {
       await authRequest(`access/links/${id}`, 'DELETE', undefined, requestSignal(request));
       if (!current(request)) return false;
-      if (generatedRecord.value?.id === id) { generatedRecord.value = null; generatedUrl.value = ''; copyStatus.value = ''; }
+      if (generatedRecord.value?.id === id) { generatedRecord.value = null; generatedUrl.value = ''; }
       done = true;
+      await refresh();
     } catch (exception) { if (current(request)) error.value = message(exception); }
-    finally { if (current(request)) busy.value = false; }
-    if (done) await refresh();
-    else scheduleRefresh();
+    finally { if (current(request)) { busy.value = false; scheduleRefresh(); } }
     return done;
   }
   async function saveNote(id: string, value: string) {
@@ -132,6 +142,13 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAcce
     } catch (exception) { if (current(request)) error.value = message(exception); return false; }
     finally { if (current(request)) { busy.value = false; scheduleRefresh(); } }
   }
+  async function prepareInvitation() {
+    if (locked.value || refreshing.value) return;
+    error.value = '';
+    if (!await refresh()) return;
+    invitationConfirmation.value = links.value.some(link => accessLinkStatus(link, Date.now()) === '待使用');
+    if (!invitationConfirmation.value) await generate('INVITE');
+  }
   function page(direction: number) {
     if (locked.value || refreshing.value) return;
     offset.value = Math.max(0, offset.value + direction * 100); void refresh();
@@ -139,19 +156,20 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAcce
   watch(filter, () => { offset.value = 0; links.value = []; void refresh(); }, { flush: 'sync' });
   function visibilityChanged() { if (visible()) void refresh(); else clearTimeout(timer); }
   watch(active, enabled => {
-    controller.abort(); listRequest?.abort(); clearTimeout(timer); clearTimeout(copyTimer);
+    controller.abort(); listRequest?.abort(); clearTimeout(timer);
     busy.value = refreshing.value = copying.value = false;
     if (enabled) {
       controller = new AbortController();
-      if (mode === 'invite') void generate('INVITE', undefined, true);
+      recordsLoaded.value = false;
+      if (mode === 'invite') void prepareInvitation();
       else void refresh();
     }
   }, { immediate: true, flush: 'sync' });
   document.addEventListener('visibilitychange', visibilityChanged);
   onScopeDispose(() => {
-    controller.abort(); listRequest?.abort(); clearTimeout(timer); clearTimeout(copyTimer);
+    controller.abort(); listRequest?.abort(); clearTimeout(timer);
     document.removeEventListener('visibilitychange', visibilityChanged);
   });
-  return { links, offset, filter, note, target, generatedUrl, generatedRecord, error, recordsError, copyStatus,
-    busy, refreshing, copying, locked, currentTime, refresh, generate, revoke, copyLink, saveNote, page };
+  return { links, offset, filter, note, target, generatedUrl, generatedRecord, error, recordsError, invitationConfirmation, recordsLoaded,
+    busy, refreshing, copying, locked, currentTime, refresh, prepareInvitation, generate, revoke, copyLink, saveNote, page };
 }

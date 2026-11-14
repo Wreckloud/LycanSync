@@ -62,7 +62,7 @@ onScopeDispose(() => { request?.abort(); clearTimeout(timer); });
       <div v-for="member in visibleMembers" :key="member.userId" class="member-picker-row">
         <img v-if="member.avatar" :src="member.avatar" alt="" /><UserRound v-else :size="36" aria-hidden="true" />
         <strong><span>{{ member.nickname }}</span><Crown v-if="member.role === 'OWNER'" :size="13" aria-label="群主" /></strong>
-        <button type="button" :disabled="unavailable(member)" :aria-pressed="selected === member.userId" @click="emit('select', member)">{{ member.joined || joinedIds?.includes(member.userId) ? '已加入' : selected === member.userId ? '已选择' : action ?? '选择' }}</button>
+        <button type="button" :disabled="unavailable(member)" :aria-pressed="selected === member.userId" @click="emit('select', member)"><slot name="action-label" :member="member">{{ member.joined || joinedIds?.includes(member.userId) ? '已加入' : selected === member.userId ? '已选择' : action ?? '选择' }}</slot></button>
       </div>
       <p v-if="!loading && !error && !visibleMembers.length">没有匹配的成员</p>
       <InlineFeedback :message="error" :pending="loading ? '正在查找成员…' : ''" />

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue';
+import { ArrowRight } from '@lucide/vue';
 import InlineFeedback from './InlineFeedback.vue';
-import ExpandSection from './ExpandSection.vue';
 import DialogTransition from './DialogTransition.vue';
 import MemberPicker, { type MemberOption } from './MemberPicker.vue';
+import MemberIdentity from './MemberIdentity.vue';
 import SegmentedControl from './SegmentedControl.vue';
 import { authRequest, type AuthUser } from '../auth/authApi';
 import { accessLinkStatus, type AccessLinkRecord } from '../auth/accountAccess';
@@ -12,42 +13,66 @@ import { useBackdropDismiss } from './useBackdropDismiss';
 import { keepDialogFocus } from './dialogFocus';
 
 const props = defineProps<{ mode: MemberAccessMode }>();
-const emit = defineEmits<{ close: [] }>();
+const emit = defineEmits<{ close: []; manage: []; notice: [message: string] }>();
 const dialog = ref<HTMLElement | null>(null);
 const confirmationDialog = ref<HTMLElement | null>(null);
 const linkInput = ref<HTMLInputElement | null>(null);
-const showResult = ref(false);
 const selectedMember = ref<MemberOption | null>(null);
-const confirmingRecovery = ref(false);
-const editingId = ref('');
+const operation = ref<'recovery' | 'note' | 'revoke' | 'renew' | null>(null);
+const selectedLink = ref<AccessLinkRecord | null>(null);
 const editingNote = ref('');
-const revokeId = ref('');
-const { links, offset, filter, note, target, generatedUrl, generatedRecord, error, recordsError, copyStatus,
-  busy, refreshing, locked, currentTime, refresh, generate, revoke, copyLink, saveNote, page } = useMemberAccess(ref(true), props.mode);
-const title = computed(() => showResult.value ? '恢复链接' : { invite: '邀请新朋友', recovery: '恢复成员登录', links: '链接管理' }[props.mode]);
+const generatedForConfirmation = ref(false);
+const { links, offset, filter, note, target, generatedUrl, generatedRecord, error, recordsError,
+  invitationConfirmation, recordsLoaded, busy, refreshing, locked, currentTime, refresh, prepareInvitation,
+  generate, revoke, copyLink, saveNote, page } = useMemberAccess(ref(true), props.mode, message => emit('notice', message));
+const title = computed(() => ({ invite: '邀请新朋友', recovery: '恢复成员登录', links: '链接管理' })[props.mode]);
+const pending = (link: AccessLinkRecord) => accessLinkStatus(link, currentTime.value) === '待使用';
+const recoveryTargets = computed(() => new Set(links.value.filter(pending).map(link => link.targetId)));
+const existingRecovery = computed(() => !!selectedMember.value && recoveryTargets.value.has(selectedMember.value.userId));
+const confirmationTitle = computed(() => operation.value === 'recovery'
+  ? existingRecovery.value ? '重新生成恢复链接' : '确认恢复成员登录'
+  : operation.value === 'note' ? '修改备注' : operation.value === 'revoke' ? '撤销链接' : '重新生成链接');
+const confirmationAction = computed(() => {
+  if (generatedForConfirmation.value) return '重试复制';
+  if (operation.value === 'note') return '保存备注';
+  if (operation.value === 'revoke') return '确认撤销';
+  if (operation.value === 'renew') return '重新生成';
+  return existingRecovery.value ? '重新生成恢复链接' : '生成恢复链接';
+});
 const filters: { id: AccessLinkFilter; label: string }[] = [
   { id: 'PENDING', label: '待使用' }, { id: 'USED', label: '已使用' }, { id: 'REVOKED', label: '已撤销' }, { id: 'ALL', label: '全部' },
 ];
 const backdropEvents = useBackdropDismiss(close);
-const confirmationBackdrop = useBackdropDismiss(cancelRecovery);
-const pending = (link: AccessLinkRecord) => accessLinkStatus(link, currentTime.value) === '待使用';
+const confirmationBackdrop = useBackdropDismiss(cancelOperation);
 function close() { if (!locked.value) emit('close'); }
 async function loadMembers(search: string, offset: number, signal: AbortSignal) {
   const query = new URLSearchParams({ search, offset: String(offset) });
   const members = await authRequest<AuthUser[]>(`access/members?${query}`, 'GET', undefined, signal);
   return { members: members.map(member => ({ userId: member.id, nickname: member.nickname, avatar: member.avatar })), hasMore: members.length === 100 };
 }
-async function selectMember(member: MemberOption) {
+async function focusConfirmation() { await nextTick(); confirmationDialog.value?.focus(); }
+function selectMember(member: MemberOption) {
   selectedMember.value = member; target.value = member.userId; note.value = `${member.nickname} 的恢复链接`;
-  error.value = ''; confirmingRecovery.value = true;
-  await nextTick(); confirmationDialog.value?.focus();
+  error.value = ''; generatedForConfirmation.value = false; operation.value = 'recovery';
+  void focusConfirmation();
 }
-function cancelRecovery() { if (!locked.value) { confirmingRecovery.value = false; error.value = ''; } }
-async function confirmRecovery() {
-  if (await generate('RECOVERY')) {
-    confirmingRecovery.value = false; showResult.value = true;
-    await nextTick(); linkInput.value?.focus();
+function cancelOperation() { if (!locked.value) { operation.value = null; error.value = ''; } }
+async function confirmOperation() {
+  let done = false;
+  if (operation.value === 'note' && selectedLink.value) done = await saveNote(selectedLink.value.id, editingNote.value);
+  else if (operation.value === 'revoke' && selectedLink.value) done = await revoke(selectedLink.value.id);
+  else {
+    // 生成已成功但复制失败时，只重试复制，避免让刚发出的恢复链接失效。
+    if (generatedForConfirmation.value) done = await copyLink();
+    else {
+      const created = operation.value === 'recovery' ? await generate('RECOVERY')
+        : selectedLink.value && await generate(selectedLink.value.kind === 'RECOVERY' ? 'RECOVERY' : 'INVITE', selectedLink.value.id);
+      generatedForConfirmation.value = !!created;
+      done = !!created && !error.value;
+    }
   }
+  if (done) operation.value = null;
+  else if (generatedForConfirmation.value && generatedUrl.value) { await nextTick(); linkInput.value?.select(); }
 }
 async function copy(id?: string) {
   const trigger = document.activeElement;
@@ -56,12 +81,14 @@ async function copy(id?: string) {
   if (!copied && generatedUrl.value) { linkInput.value?.focus(); linkInput.value?.select(); }
   else if (trigger instanceof HTMLElement && trigger.isConnected) trigger.focus({ preventScroll: true });
 }
-function edit(link: AccessLinkRecord) {
-  editingId.value = link.id; editingNote.value = link.note; revokeId.value = ''; error.value = '';
+function edit(link: AccessLinkRecord, action: 'note' | 'revoke' | 'renew') {
+  selectedLink.value = link; editingNote.value = link.note; generatedForConfirmation.value = false;
+  error.value = ''; operation.value = action; void focusConfirmation();
 }
-async function save() { if (await saveNote(editingId.value, editingNote.value)) editingId.value = ''; }
-async function confirmRevoke() { if (await revoke(revokeId.value)) revokeId.value = ''; }
-function changeFilter(value: AccessLinkFilter) { editingId.value = ''; revokeId.value = ''; error.value = ''; filter.value = value; }
+async function saveInvitationNote() {
+  if (generatedRecord.value && await saveNote(generatedRecord.value.id, note.value)) emit('notice', '备注已保存。');
+}
+function changeFilter(value: AccessLinkFilter) { error.value = ''; filter.value = value; }
 onMounted(() => dialog.value?.focus());
 </script>
 
@@ -69,59 +96,53 @@ onMounted(() => dialog.value?.focus());
   <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="close">
     <section ref="dialog" class="member-access-dialog" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1" @keydown="keepDialogFocus">
       <header>
-        <h2>{{ title }}</h2>
-        <p v-if="showResult">恢复链接 12 小时有效，仅发给需要恢复登录的成员。</p>
-        <p v-else-if="mode === 'invite'">复制链接发给朋友，每条链接可邀请一人。</p>
+        <div class="access-heading"><h2>{{ title }}</h2><button v-if="mode === 'invite'" type="button" class="access-manage" :disabled="locked" @click="emit('manage')">链接管理<ArrowRight :size="16" /></button></div>
+        <p v-if="mode === 'invite'">复制链接发给朋友，每条链接可邀请一人。</p>
         <p v-else-if="mode === 'recovery'">找到需要恢复登录的成员，核对后生成链接。</p>
         <p v-else>查看邀请与恢复链接，修改备注或撤销不再需要的链接。</p>
       </header>
-      <div v-if="showResult" class="access-body">
-        <strong>{{ selectedMember?.nickname }}</strong>
-        <p v-if="generatedRecord?.note">{{ generatedRecord.note }}</p>
-        <label class="settings-field">恢复链接<input ref="linkInput" :value="generatedUrl" readonly aria-label="生成的链接" /></label>
-        <InlineFeedback :message="error" :status="copyStatus" />
+      <div v-if="mode === 'recovery'" class="access-body">
+        <MemberPicker :load="loadMembers" :disabled="locked || !recordsLoaded" label="搜索可恢复成员" @select="selectMember">
+          <template #action-label="{ member }">{{ recoveryTargets.has(member.userId) ? '已生成' : '选择' }}</template>
+        </MemberPicker>
+        <InlineFeedback :message="recordsError" :pending="!recordsLoaded && refreshing ? '正在读取链接…' : ''" />
+        <button v-if="recordsError" type="button" :disabled="locked || refreshing" @click="refresh">重试</button>
       </div>
-      <div v-else-if="mode === 'recovery'" class="access-body">
-        <MemberPicker :load="loadMembers" :disabled="locked" label="搜索可恢复成员" @select="selectMember" />
+      <div v-else-if="mode === 'invite'" class="access-body invite-body">
+        <template v-if="generatedRecord">
+          <label class="settings-field">邀请链接<input ref="linkInput" :value="generatedUrl" readonly aria-label="生成的链接" /></label>
+          <small>{{ accessLinkStatus(generatedRecord, currentTime) }} · 到期：{{ new Date(generatedRecord.expiresAt).toLocaleString() }}</small>
+          <form class="invitation-note" @submit.prevent="saveInvitationNote">
+            <label class="settings-field" for="invitation-note"><span>备注 <small>选填，仅服主可见</small></span><input id="invitation-note" v-model="note" maxlength="100" :disabled="locked" placeholder="朋友的名字或用途" /></label>
+            <button :disabled="locked || note.trim() === generatedRecord.note">保存备注</button>
+          </form>
+        </template>
+        <p v-else-if="invitationConfirmation">已有未使用的邀请链接，是否继续生成新的链接？已有链接仍可使用，也可以前往链接管理查看。</p>
+        <InlineFeedback :message="error || recordsError" :pending="busy ? '正在生成链接…' : refreshing && !recordsLoaded ? '正在读取链接…' : ''" />
+        <button v-if="recordsError || error && !generatedRecord" type="button" :disabled="locked || refreshing" @click="prepareInvitation">重试</button>
       </div>
       <div v-else class="access-body">
-        <SegmentedControl v-if="mode === 'links'" :model-value="filter" :options="filters" :disabled="locked" tabs label="链接分类" id-prefix="access-filter" controls="access-records" @update:model-value="changeFilter" />
-        <div id="access-records" class="access-records" :role="mode === 'links' ? 'tabpanel' : undefined" :aria-labelledby="mode === 'links' ? `access-filter-${filter}` : undefined">
-          <p v-if="!links.length && !refreshing && !busy && !recordsError">暂无{{ mode === 'invite' || filter === 'PENDING' ? '待使用的链接' : '记录' }}</p>
+        <SegmentedControl :model-value="filter" :options="filters" :disabled="locked" tabs label="链接分类" id-prefix="access-filter" controls="access-records" @update:model-value="changeFilter" />
+        <div id="access-records" class="access-records" role="tabpanel" :aria-labelledby="`access-filter-${filter}`" :aria-busy="refreshing">
+          <p v-if="!links.length && !refreshing && !recordsError">暂无{{ filter === 'PENDING' ? '待使用的链接' : '记录' }}</p>
           <article v-for="link in links" :key="link.id" class="access-record" :data-link-id="link.id">
-            <div class="access-record-details">
-              <strong>{{ link.kind === 'RECOVERY' ? '恢复链接' : '邀请链接' }}<span v-if="mode === 'links'"> · {{ accessLinkStatus(link, currentTime) === '已完成' ? '已使用' : accessLinkStatus(link, currentTime) }}</span></strong>
-              <span v-if="link.note">{{ link.note }}</span>
-              <small>{{ pending(link) ? '到期' : '创建' }}：{{ new Date(pending(link) ? link.expiresAt : link.createdAt).toLocaleString() }}</small>
-              <small v-if="link.lastFailure" class="error">{{ link.lastFailure }}</small>
-            </div>
-            <div class="button-actions">
+            <div class="access-record-heading"><strong>{{ link.note || (link.kind === 'RECOVERY' ? '恢复链接' : '邀请链接') }}</strong><small>{{ accessLinkStatus(link, currentTime) === '已完成' ? '已使用' : accessLinkStatus(link, currentTime) }}</small></div>
+            <small>{{ link.kind === 'RECOVERY' ? '恢复登录' : '邀请加入' }} · {{ pending(link) ? '到期' : '创建' }}：{{ new Date(pending(link) ? link.expiresAt : link.createdAt).toLocaleString() }}</small>
+            <small v-if="link.lastFailure" class="error">{{ link.lastFailure }}</small>
+            <div v-if="!link.consumedAt" class="button-actions">
               <template v-if="pending(link)">
-                <button type="button" :disabled="locked" @click="copy(link.id)">复制链接</button>
-                <button type="button" :disabled="locked" @click="edit(link)">修改备注</button>
+                <button type="button" :disabled="locked || refreshing" @click="copy(link.id)">复制链接</button>
+                <button type="button" :disabled="locked || refreshing" @click="edit(link, 'note')">修改备注</button>
               </template>
-              <template v-if="mode === 'links' && !link.consumedAt">
-                <button type="button" :disabled="locked" @click="generate(link.kind === 'RECOVERY' ? 'RECOVERY' : 'INVITE', link.id)">重新生成</button>
-                <button v-if="!link.revokedAt" type="button" :disabled="locked" @click="revokeId = link.id; editingId = ''; error = ''">撤销</button>
-              </template>
+              <button type="button" :disabled="locked || refreshing" @click="edit(link, 'renew')">重新生成</button>
+              <button v-if="!link.revokedAt" type="button" :disabled="locked || refreshing" @click="edit(link, 'revoke')">撤销</button>
             </div>
-            <ExpandSection :open="editingId === link.id && pending(link)">
-              <form class="access-note-form" @submit.prevent="save">
-                <label class="settings-field" :for="`access-note-${link.id}`"><span>备注 <small>选填，仅服主可见</small></span>
-                  <input :id="`access-note-${link.id}`" v-model="editingNote" maxlength="100" :disabled="locked" placeholder="朋友的名字或用途" />
-                </label>
-                <div class="card-actions"><button type="button" :disabled="locked" @click="editingId = ''">取消</button><button class="confirm-button card-actions-end" :disabled="locked">保存备注</button></div>
-              </form>
-            </ExpandSection>
-            <ExpandSection :open="revokeId === link.id && !link.revokedAt && !link.consumedAt">
-              <p>撤销后，这条链接将立即失效。</p>
-              <div class="card-actions"><button type="button" :disabled="locked" @click="revokeId = ''">取消</button><button type="button" class="confirm-button is-danger card-actions-end" :disabled="locked" @click="confirmRevoke">确认撤销</button></div>
-            </ExpandSection>
           </article>
+          <InlineFeedback :message="recordsError" :pending="refreshing && !links.length ? '正在读取链接…' : ''" />
+          <button v-if="recordsError" type="button" :disabled="locked || refreshing" @click="refresh">重试</button>
         </div>
-        <InlineFeedback :message="error || recordsError" :status="copyStatus" :pending="busy ? '正在处理…' : refreshing && !links.length ? '正在读取链接…' : ''" />
-        <label v-if="error && generatedUrl" class="settings-field">链接<input ref="linkInput" :value="generatedUrl" readonly aria-label="手动复制链接" /></label>
-        <button v-if="recordsError || error && mode === 'invite' && !generatedRecord" type="button" :disabled="locked" @click="mode === 'invite' && !generatedRecord ? generate('INVITE', undefined, true) : refresh()">重试</button>
+        <InlineFeedback :message="operation ? '' : error" />
+        <label v-if="!operation && error && generatedUrl" class="settings-field">链接<input ref="linkInput" :value="generatedUrl" readonly aria-label="手动复制链接" /></label>
         <div v-if="offset || links.length === 100" class="access-pagination">
           <button type="button" :disabled="locked || refreshing || offset === 0" @click="page(-1)">上一页记录</button>
           <button type="button" :disabled="locked || refreshing || links.length < 100" @click="page(1)">下一页记录</button>
@@ -129,41 +150,59 @@ onMounted(() => dialog.value?.focus());
       </div>
       <footer class="card-actions">
         <button type="button" :disabled="locked" @click="close">关闭</button>
-        <button v-if="showResult" type="button" class="confirm-button card-actions-end" :disabled="locked" @click="copy()">复制链接</button>
-        <button v-else-if="mode === 'invite'" type="button" class="confirm-button card-actions-end" :disabled="locked" @click="generate('INVITE')">生成新的邀请链接</button>
+        <button v-if="mode === 'invite' && generatedRecord" type="button" class="confirm-button card-actions-end" :disabled="locked" @click="copy()">复制链接</button>
+        <button v-else-if="mode === 'invite' && invitationConfirmation" type="button" class="confirm-button card-actions-end" :disabled="locked" @click="generate('INVITE')">继续生成</button>
       </footer>
     </section>
-  <DialogTransition>
-    <div v-if="confirmingRecovery" class="dialog-backdrop" v-on="confirmationBackdrop" @keydown.esc.stop="cancelRecovery">
-      <form ref="confirmationDialog" class="member-access-dialog recovery-confirm" role="dialog" aria-modal="true" aria-label="确认恢复成员登录" tabindex="-1" @keydown="keepDialogFocus" @submit.prevent="confirmRecovery">
-        <header><h2>确认恢复成员登录</h2><p>为 {{ selectedMember?.nickname }} 生成恢复链接。对方使用后，旧设备将退出登录。</p></header>
-        <div class="access-body">
-          <label class="settings-field" for="recovery-note"><span>备注 <small>选填，仅服主可见</small></span><input id="recovery-note" v-model="note" maxlength="100" :disabled="locked" /></label>
-          <InlineFeedback :message="error" :pending="busy ? '正在生成链接…' : ''" />
-        </div>
-        <div class="card-actions"><button type="button" :disabled="locked" @click="cancelRecovery">取消</button><button class="confirm-button card-actions-end" :disabled="locked">生成恢复链接</button></div>
-      </form>
-    </div>
-  </DialogTransition>
+    <DialogTransition>
+      <div v-if="operation" class="dialog-backdrop" v-on="confirmationBackdrop" @keydown.esc.stop="cancelOperation">
+        <form ref="confirmationDialog" class="member-access-dialog access-confirm" role="dialog" aria-modal="true" :aria-label="confirmationTitle" tabindex="-1" @keydown="keepDialogFocus" @submit.prevent="confirmOperation">
+          <header><h2>{{ confirmationTitle }}</h2></header>
+          <div class="access-body">
+            <template v-if="operation === 'recovery'">
+              <MemberIdentity v-if="selectedMember" :member="selectedMember" />
+              <p>{{ existingRecovery ? '重新生成后，之前的恢复链接将失效。' : '恢复链接 12 小时有效，请仅发给这位成员。' }}对方使用后，旧设备将退出登录。</p>
+              <label class="settings-field" for="recovery-note"><span>备注 <small>选填，仅服主可见</small></span><input id="recovery-note" v-model="note" maxlength="100" :disabled="locked || generatedForConfirmation" /></label>
+            </template>
+            <template v-else-if="operation === 'note'">
+              <label class="settings-field" for="access-note"><span>备注 <small>选填，仅服主可见</small></span><input id="access-note" v-model="editingNote" maxlength="100" :disabled="locked" placeholder="朋友的名字或用途" /></label>
+            </template>
+            <template v-else>
+              <strong v-if="selectedLink?.note">{{ selectedLink.note }}</strong>
+              <p>{{ operation === 'revoke' ? '撤销后，这条链接将立即失效。' : '重新生成后，旧链接将立即失效，新链接会复制到剪贴板。' }}</p>
+            </template>
+            <InlineFeedback :message="error" :pending="busy ? '正在处理…' : ''" />
+            <label v-if="generatedForConfirmation && error && generatedUrl" class="settings-field">链接<input ref="linkInput" :value="generatedUrl" readonly aria-label="手动复制链接" /></label>
+          </div>
+          <div class="card-actions"><button type="button" :disabled="locked" @click="cancelOperation">取消</button><button class="confirm-button card-actions-end" :class="{ 'is-danger': operation === 'revoke' }" :disabled="locked">{{ confirmationAction }}</button></div>
+        </form>
+      </div>
+    </DialogTransition>
   </div>
 </template>
 
 <style scoped>
 .member-access-dialog { width: min(540px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 14px; line-height: 20px; }
-.recovery-confirm { width: min(460px, calc(100vw - 32px)); }
+.access-confirm { width: min(460px, calc(100vw - 32px)); }
 h2 { margin: 0; font-size: 22px; line-height: 32px; }
 header p { margin: 4px 0 0; }
 p, small { color: var(--muted); }
 small { font-size: 12px; }
+.access-heading, .access-record-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.access-manage { display: inline-flex; align-items: center; gap: 6px; padding: 4px 0; border: 0; background: transparent; color: var(--muted); }
+.access-manage:hover:not(:disabled) { background: transparent; color: var(--text); }
 .access-body { display: grid; gap: 12px; margin: 20px 0; }
 .access-body p { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
 .access-body input { width: 100%; min-width: 0; height: 40px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--background); color: var(--text); font: inherit; }
 .access-body input:focus { border-color: var(--subtle); }
-.access-records { max-height: 360px; overflow-y: auto; scrollbar-gutter: stable; }
-.access-record { display: grid; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border-soft); }
+.invite-body { min-height: 172px; align-content: start; }
+.invitation-note { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; }
+.invitation-note button { min-height: 40px; }
+.access-records { height: min(360px, 45dvh); overflow-y: auto; scrollbar-gutter: stable; }
+.access-record { display: grid; gap: 8px; padding: 16px 0; border-bottom: 1px solid var(--border-soft); }
 .access-record:first-child { padding-top: 0; }
-.access-record-details { display: grid; min-width: 0; gap: 4px; overflow-wrap: anywhere; }
-.access-note-form { padding-top: 8px; }
+.access-record-heading strong { min-width: 0; overflow-wrap: anywhere; }
+.access-record-heading small { flex-shrink: 0; }
 .access-record .button-actions, .access-pagination { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-@media (max-width: 420px) { .member-access-dialog { padding: 20px; } }
+@media (max-width: 420px) { .member-access-dialog { padding: 20px; } .invitation-note { grid-template-columns: minmax(0, 1fr); } }
 </style>

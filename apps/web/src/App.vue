@@ -1164,7 +1164,7 @@ function participantListening(participant: Participant) {
     </DialogTransition>
     <DialogTransition>
     <GroupManagementDialog v-if="management" :group="management.group" :mode="management.mode" :user-id="user.id"
-      @updated="applyGroupDetail" @removed="removedFromGroup" @close="management = null" />
+      @notice="showAppNotice($event, 'group', 'success')" @updated="applyGroupDetail" @removed="removedFromGroup" @close="management = null" />
     </DialogTransition>
     </div>
     <Transition name="settings-page" @after-enter="settingsCovered = settingsOpen" @enter-cancelled="settingsCovered = false"
