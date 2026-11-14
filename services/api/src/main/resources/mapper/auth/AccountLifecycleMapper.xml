@@ -32,10 +32,10 @@
     </update>
     <delete id="revokeSessions">DELETE FROM auth_session WHERE user_id = #{userId}</delete>
     <update id="revokeLinks">
-        UPDATE auth_access_link SET revoked_at = #{now}
+        UPDATE auth_access_link SET revoked_at = #{now}, pending_token = NULL
         WHERE (creator_id = #{userId} OR target_id = #{userId}) AND consumed_at IS NULL AND revoked_at IS NULL
     </update>
     <update id="revokePendingLinks">
-        UPDATE auth_access_link SET revoked_at = #{now} WHERE consumed_at IS NULL AND revoked_at IS NULL
+        UPDATE auth_access_link SET revoked_at = #{now}, pending_token = NULL WHERE consumed_at IS NULL AND revoked_at IS NULL
     </update>
 </mapper>

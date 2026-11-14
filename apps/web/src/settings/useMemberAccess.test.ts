@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { effectScope, ref, type EffectScope } from 'vue';
 import { authRequest } from '../auth/authApi';
-import { accessLinkStatus, type AccessLinkRecord } from '../auth/accountAccess';
+import { type AccessLinkRecord } from '../auth/accountAccess';
 import { useMemberAccess, type MemberAccessMode } from './useMemberAccess';
 
 vi.mock('../auth/authApi', () => ({ authRequest: vi.fn() }));
@@ -41,8 +41,8 @@ beforeEach(() => {
   vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
   serverLinks = [link()];
   request.mockImplementation(async (path, method) => {
-    if (method === 'POST') return { url, record: link() };
-    if (method === 'DELETE') return undefined;
+    if (method === 'POST' || path.endsWith('/url')) return { url, record: link() };
+    if (method === 'DELETE' || method === 'PUT') return undefined;
     return path.startsWith('access/members') ? [member] : serverLinks;
   });
 });
@@ -52,211 +52,135 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('邀请页记录刷新与操作反馈', () => {
-  it('有待使用链接时每五秒只刷新记录，不重载成员或清空选择和链接', async () => {
-    const { state } = await open();
-    state.target.value = member.id;
-    state.note.value = '备注';
-    await state.generate('INVITE');
-    request.mockClear();
-    serverLinks = [link({ consumedAt: new Date().toISOString(), resultUserId: member.id })];
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request.mock.calls[0][0]).toBe('access/links?offset=0');
-    expect(state.links.value[0].consumedAt).not.toBeNull();
-    expect(state.target.value).toBe(member.id);
-    expect(state.note.value).toBe('备注');
-    expect(state.generatedUrl.value).toBe(url);
-  });
-
-  it('没有待使用记录时降到三十秒，隐藏时停止，返回时立即刷新', async () => {
-    serverLinks = [];
-    await open();
-    request.mockClear();
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(request).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(request).toHaveBeenCalledTimes(1);
-    setVisibility('hidden');
-    request.mockClear();
-    await vi.advanceTimersByTimeAsync(90_000);
-    expect(request).not.toHaveBeenCalled();
-    setVisibility('visible');
-    await settle();
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-
-  it('隐藏状态打开恢复窗口不请求，恢复可见后只加载成员', async () => {
-    visibility = 'hidden';
-    const { state } = await open(ref(true), 'recovery');
-    expect(request).not.toHaveBeenCalled();
-    setVisibility('visible');
-    await settle();
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(state.members.value).toEqual([member]);
-  });
-
-  it('请求未完成时不积压刷新，退出页后取消请求并拒绝迟到响应', async () => {
-    const { state, active } = await open();
-    let finish!: (value: AccessLinkRecord[]) => void;
-    request.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
-    request.mockClear();
-    await vi.advanceTimersByTimeAsync(5_000);
-    const signal = request.mock.calls[0][3]!;
-    await vi.advanceTimersByTimeAsync(20_000);
-    await state.refresh();
-    expect(request).toHaveBeenCalledTimes(1);
-    active.value = false;
-    expect(signal.aborted).toBe(true);
-    finish([]);
-    await settle();
-    expect(state.links.value).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-
-  it('读取失败保留旧记录，并降低失败重试频率', async () => {
-    const { state } = await open();
-    request.mockRejectedValueOnce(new Error('服务暂不可用'));
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(state.recordsError.value).toBe('服务暂不可用');
-    expect(state.links.value).toHaveLength(1);
-    request.mockClear();
-    await vi.advanceTimersByTimeAsync(29_999);
-    expect(request).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(state.recordsError.value).toBe('');
-  });
-
-  it('读取失败时已到期链接仍显示过期，不把最近失败当作终态', async () => {
-    serverLinks = [link({ expiresAt: new Date(Date.now() + 4_000).toISOString(), lastFailure: '上次兑换失败' })];
-    const { state } = await open();
-    expect(accessLinkStatus(state.links.value[0], state.currentTime.value)).toBe('待使用');
-    request.mockRejectedValueOnce(new Error('服务暂不可用'));
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(state.recordsError.value).toBe('服务暂不可用');
-    expect(accessLinkStatus(state.links.value[0], state.currentTime.value)).toBe('已过期');
-    expect(state.links.value[0].lastFailure).toBe('上次兑换失败');
-  });
-
-  it('生成失败保留已有原链接，并只显示对应表单错误', async () => {
-    const { state } = await open();
-    await state.generate('INVITE');
-    request.mockRejectedValueOnce(new Error('没有权限'));
-    state.target.value = member.id;
-    await state.generate('RECOVERY');
-    expect(state.recoveryError.value).toBe('没有权限');
-    expect(state.inviteError.value).toBe('');
-    expect(state.generatedUrl.value).toBe(url);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(state.recoveryError.value).toBe('没有权限');
-  });
-
-  it('桌面使用固定复制接口，并在四秒后收起成功反馈', async () => {
-    const copyText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal('window', { lycanDesktop: { copyText } });
-    const { state } = await open();
-    await state.generate('INVITE');
-    expect(await state.copyLink()).toBe(true);
-    expect(copyText).toHaveBeenCalledWith(url);
-    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+describe('成员访问链接', () => {
+  it('打开邀请窗口复用并自动复制，只有主动生成才创建额外邀请', async () => {
+    const { state, active } = await open(ref(true), 'invite');
+    expect(request).toHaveBeenCalledWith('access/links/invite', 'POST', undefined, expect.any(AbortSignal));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(url);
     expect(state.copyStatus.value).toBe('已复制链接');
-    await vi.advanceTimersByTimeAsync(4_000);
+    expect(request).toHaveBeenCalledWith('access/links?offset=0&status=PENDING&kind=INVITE', 'GET', undefined, expect.any(AbortSignal));
+    active.value = false; active.value = true; await settle();
+    expect(request.mock.calls.filter(([path]) => path === 'access/links')).toHaveLength(0);
+    await state.generate('INVITE');
+    expect(request).toHaveBeenCalledWith('access/links', 'POST', { kind: 'INVITE', targetId: null, note: '' }, expect.any(AbortSignal));
+  });
+
+  it('旧链接不能还原时保留记录，不自动重新生成', async () => {
+    request.mockImplementation(async (path) => path === 'access/links/invite' ? { record: link(), url: null } : serverLinks);
+    const { state } = await open(ref(true), 'invite');
+    expect(state.links.value).toHaveLength(1);
+    expect(state.error.value).toContain('旧链接');
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(1);
+  });
+
+  it('修改备注只写备注，保留链接与有效期', async () => {
+    const { state } = await open(ref(true), 'invite');
+    const expiry = state.links.value[0].expiresAt;
+    request.mockClear();
+    expect(await state.saveNote('link-a', '  给朋友  ')).toBe(true);
+    expect(request).toHaveBeenCalledExactlyOnceWith('access/links/link-a/note', 'PUT', { note: '  给朋友  ' }, expect.any(AbortSignal));
+    expect(state.links.value[0]).toMatchObject({ note: '给朋友', expiresAt: expiry });
+    expect(state.generatedUrl.value).toBe(url);
+  });
+
+  it('复制失败保留手动复制入口，不谎报成功', async () => {
+    vi.mocked(navigator.clipboard.writeText).mockRejectedValue(new Error('denied'));
+    const { state } = await open(ref(true), 'invite');
+    expect(state.generatedUrl.value).toBe(url);
+    expect(state.error.value).toBe('复制失败，请选择链接手动复制。');
     expect(state.copyStatus.value).toBe('');
   });
 
-  it('浏览器复制失败就近提示，不因记录刷新而清掉错误', async () => {
-    vi.mocked(navigator.clipboard.writeText).mockRejectedValue(new Error('denied'));
-    const { state } = await open();
-    await state.generate('INVITE');
-    expect(await state.copyLink()).toBe(false);
-    expect(state.linkError.value).toContain('复制失败');
-    expect(state.recordsError.value).toBe('');
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(state.linkError.value).toContain('复制失败');
+  it('桌面复制失败不走浏览器替代路径', async () => {
+    vi.stubGlobal('window', { lycanDesktop: { copyText: vi.fn().mockRejectedValue(new Error('denied')) } });
+    const { state } = await open(ref(true), 'invite');
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+    expect(state.error.value).toContain('复制失败');
   });
 
-  it('浏览器仍可复制，桌面失败不静默回退网页接口', async () => {
-    const { state } = await open();
-    await state.generate('INVITE');
-    expect(await state.copyLink()).toBe(true);
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(url);
+  it('链接失效后不再展示或复制缓存地址', async () => {
+    const { state } = await open(ref(true), 'invite');
+    request.mockRejectedValue(new Error('链接已使用'));
     vi.mocked(navigator.clipboard.writeText).mockClear();
-    vi.stubGlobal('window', { lycanDesktop: { copyText: vi.fn().mockRejectedValue(new Error('denied')) } });
     expect(await state.copyLink()).toBe(false);
+    expect(state.generatedUrl.value).toBe('');
+    expect(state.error.value).toBe('链接已使用');
     expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
   });
 
-  it('撤销别的记录不丢失新链接，撤销当前新链接才清空', async () => {
+  it('分类查询由服务器过滤，切换分类重置分页', async () => {
     const { state } = await open();
-    await state.generate('INVITE');
-    await state.revoke('other');
-    expect(state.generatedUrl.value).toBe(url);
+    state.offset.value = 100;
+    state.filter.value = 'USED'; await settle();
+    expect(state.offset.value).toBe(0);
+    expect(request).toHaveBeenLastCalledWith('access/links?offset=0&status=USED', 'GET', undefined, expect.any(AbortSignal));
+  });
+
+  it('分类切换后忽略旧查询的迟到结果', async () => {
+    const { state } = await open();
+    let finish!: (records: AccessLinkRecord[]) => void;
+    request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const previous = state.refresh();
+    serverLinks = [];
+    state.filter.value = 'REVOKED'; await settle();
+    finish([link()]); await previous;
+    expect(state.links.value).toEqual([]);
+  });
+
+  it('待使用记录每五秒刷新，隐藏后停止，恢复可见立即查询', async () => {
+    const { state } = await open();
+    state.note.value = '正在编辑'; request.mockClear();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(state.note.value).toBe('正在编辑');
+    setVisibility('hidden'); request.mockClear();
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(request).not.toHaveBeenCalled();
+    setVisibility('visible'); await settle();
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it('空列表每三十秒刷新，列表失败不覆盖操作错误', async () => {
+    serverLinks = [];
+    const { state } = await open(); request.mockClear();
+    await vi.advanceTimersByTimeAsync(29_999); expect(request).not.toHaveBeenCalled();
+    request.mockRejectedValue(new Error('读取失败')); state.error.value = '复制失败';
+    await vi.advanceTimersByTimeAsync(1);
+    expect(state.recordsError.value).toBe('读取失败');
+    expect(state.error.value).toBe('复制失败');
+  });
+
+  it('关闭窗口后迟到的生成结果不写剪贴板', async () => {
+    let finish!: (result: unknown) => void;
+    request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const { state, active } = await open(ref(true), 'invite');
+    active.value = false; finish({ record: link(), url }); await settle();
+    expect(state.generatedUrl.value).toBe('');
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+  });
+
+  it('恢复链接由确认操作生成，备注原样提交', async () => {
+    const { state } = await open(ref(true), 'recovery');
+    expect(request).not.toHaveBeenCalled();
+    expect(await state.generate('RECOVERY')).toBe(false);
+    state.target.value = member.id; state.note.value = '朋友 的恢复链接';
+    await state.generate('RECOVERY');
+    expect(request).toHaveBeenCalledWith('access/links', 'POST', { kind: 'RECOVERY', targetId: member.id, note: '朋友 的恢复链接' }, expect.any(AbortSignal));
+  });
+
+  it('撤销当前链接后清理复制结果', async () => {
+    const { state } = await open(ref(true), 'invite');
     await state.revoke('link-a');
     expect(state.generatedUrl.value).toBe('');
+    expect(state.generatedRecord.value).toBeNull();
+    expect(state.copyStatus.value).toBe('');
   });
 
-  it('离开页时释放监听和计时器，不在重新可见后继续请求', async () => {
-    await open();
-    scope.stop();
-    request.mockClear();
-    setVisibility('visible');
+  it('销毁后停止刷新', async () => {
+    await open(); scope.stop(); request.mockClear();
     await vi.advanceTimersByTimeAsync(60_000);
+    setVisibility('visible'); await settle();
     expect(request).not.toHaveBeenCalled();
-  });
-
-  it('邀请窗口无需预读成员或链接记录，生成时保留选填备注', async () => {
-    const { state } = await open(ref(true), 'invite');
-    expect(request).not.toHaveBeenCalled();
-    state.note.value = '朋友甲';
-    await state.generate('INVITE');
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith('access/links', 'POST', { kind: 'INVITE', targetId: null, note: '朋友甲' }, expect.any(AbortSignal));
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-
-  it('搜索立即撤销旧选择，防抖后查全服务器且拒绝迟到结果', async () => {
-    const { state } = await open(ref(true), 'recovery');
-    state.target.value = member.id;
-    let finish!: (value: typeof member[]) => void;
-    request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-    state.search.value = '旧查询';
-    expect(state.target.value).toBe('');
-    expect(state.loadingMembers.value).toBe(true);
-    await state.generate('RECOVERY');
-    await vi.advanceTimersByTimeAsync(250);
-    const signal = request.mock.calls.at(-1)![3]!;
-    state.search.value = '朋友';
-    expect(signal.aborted).toBe(true);
-    finish([{ ...member, id: 'old-result' }]);
-    await vi.advanceTimersByTimeAsync(250);
-    expect(request.mock.calls.at(-1)![0]).toBe('access/members?offset=0&search=%E6%9C%8B%E5%8F%8B');
-    expect(state.members.value).toEqual([member]);
-    expect(state.loadingMembers.value).toBe(false);
-    expect(request.mock.calls.some(call => call[1] === 'POST')).toBe(false);
-  });
-
-  it('成员搜索失败明确报错，重试成功后恢复选择', async () => {
-    request.mockRejectedValueOnce(new Error('成员读取失败'));
-    const { state } = await open(ref(true), 'recovery');
-    expect(state.membersError.value).toBe('成员读取失败');
-    expect(state.recordsError.value).toBe('');
-    await state.loadMembers();
-    expect(state.membersError.value).toBe('');
-    expect(state.members.value).toEqual([member]);
-  });
-
-  it('关闭恢复窗口撤销搜索请求，迟到结果不写回已销毁窗口', async () => {
-    let finish!: (value: typeof member[]) => void;
-    request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-    const { state } = await open(ref(true), 'recovery');
-    const signal = request.mock.calls[0][3]!;
-    scope.stop();
-    expect(signal.aborted).toBe(true);
-    finish([member]);
-    await settle();
-    expect(state.members.value).toEqual([]);
   });
 });

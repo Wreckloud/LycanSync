@@ -24,6 +24,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -54,10 +55,67 @@ class AccessLinkServiceTests {
         settings.setPublicUrl("https://example.com");
         when(transactions.execute(any())).thenAnswer(invocation ->
                 ((TransactionCallback<?>) invocation.getArgument(0)).doInTransaction(new SimpleTransactionStatus()));
+        doCallRealMethod().when(transactions).executeWithoutResult(any());
         when(links.lockInitialization()).thenReturn(true);
         when(links.consume(any(), any(), anyString(), any())).thenReturn(1);
         when(sessions.issueSession(any(), anyString())).thenAnswer(invocation -> invocation.getArgument(1));
         service = new AccessLinkService(links, users, sessions, settings, transactions, Clock.fixed(NOW, ZoneOffset.UTC), mock(AccountLifecycleService.class));
+    }
+
+    @Test
+    void shouldReusePendingInvitationAndKeepLegacyLinkValid() {
+        AccessLink pending = link("INVITE", null, NOW.plusSeconds(60));
+        when(links.pendingInvitation(NOW)).thenReturn(pending);
+        when(links.pendingToken(pending.id())).thenReturn(TOKEN);
+        assertThat(service.invitation(owner).url()).contains(TOKEN);
+        assertThat(service.invitation(owner).record().id()).isEqualTo(pending.id());
+        when(links.pendingToken(pending.id())).thenReturn(null);
+        assertThat(service.invitation(owner).url()).isNull();
+        verify(links, never()).insert(any(), anyString(), any());
+        verify(links, never()).revoke(any(), any());
+    }
+
+    @Test
+    void shouldCreateInvitationOnlyWhenNoPendingInvitationExists() {
+        var generated = service.invitation(owner);
+        assertThat(generated.record().kind()).isEqualTo("INVITE");
+        assertThat(generated.record().note()).isEmpty();
+        verify(links).insert(eq(generated.record()), anyString(), anyString());
+    }
+
+    @Test
+    void shouldReadAndRenameOnlyPendingLinksWithoutReplacingToken() {
+        AccessLink pending = link("INVITE", null, NOW.plusSeconds(60));
+        when(links.lockById(pending.id())).thenReturn(pending);
+        when(links.pendingToken(pending.id())).thenReturn(TOKEN);
+        when(links.updateNote(pending.id(), "新备注")).thenReturn(1);
+        service.updateNote(owner, pending.id(), "  新备注  ");
+        assertThat(service.read(owner, pending.id()).url()).contains(TOKEN);
+        verify(links).updateNote(pending.id(), "新备注");
+        verify(links, never()).insert(any(), anyString(), any());
+        verify(links, never()).revoke(any(), any());
+        when(links.lockById(pending.id())).thenReturn(link("INVITE", null, NOW.minusSeconds(1)));
+        assertThatThrownBy(() -> service.read(owner, pending.id())).isInstanceOf(AuthException.class);
+        assertThatThrownBy(() -> service.updateNote(owner, pending.id(), "失效备注")).isInstanceOf(AuthException.class);
+        verify(links, never()).updateNote(pending.id(), "失效备注");
+    }
+
+    @Test
+    void shouldRequireCurrentOwnerForReadingAndEditingLinks() {
+        var ordinary = new AuthenticatedUser(member.id(), "朋友", false);
+        assertThatThrownBy(() -> service.read(ordinary, UUID.randomUUID())).isInstanceOf(AuthException.class);
+        assertThatThrownBy(() -> service.updateNote(ordinary, UUID.randomUUID(), "备注")).isInstanceOf(AuthException.class);
+        assertThatThrownBy(() -> service.invitation(ordinary)).isInstanceOf(AuthException.class);
+        verifyNoInteractions(links);
+    }
+
+    @Test
+    void shouldValidateFiltersAndApplyThemBeforePagination() {
+        service.list(owner, 100, "PENDING", "INVITE");
+        verify(links).list(100, "PENDING", "INVITE", NOW);
+        assertThatThrownBy(() -> service.list(owner, 0, "OTHER", "")).isInstanceOf(AuthException.class);
+        assertThatThrownBy(() -> service.list(owner, 0, "ALL", "ACTIVATE")).isInstanceOf(AuthException.class);
+        assertThatThrownBy(() -> service.updateNote(owner, UUID.randomUUID(), "x".repeat(101))).isInstanceOf(AuthException.class);
     }
 
     @Test
@@ -88,7 +146,7 @@ class AccessLinkServiceTests {
         when(users.findUserProfile(owner.id())).thenReturn(new AuthUser(owner.id(), "服主", "", true, "", NOW));
         assertThatThrownBy(() -> service.create(owner, new AccessLinkRequest("RECOVERY", owner.id(), "")))
                 .isInstanceOf(AuthException.class);
-        verify(links, never()).insert(any(), anyString());
+        verify(links, never()).insert(any(), anyString(), any());
     }
 
     @Test

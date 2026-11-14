@@ -7,6 +7,7 @@ import MemberAccessSettings from './MemberAccessSettings.vue';
 import QqLoginSettings from './QqLoginSettings.vue';
 
 const props = defineProps<{ active: boolean; leaving: boolean }>();
+const emit = defineEmits<{ notice: [message: string] }>();
 interface ServerSettingsStatus {
   serverName: string;
   publicUrlConfigured: boolean;
@@ -54,7 +55,7 @@ onScopeDispose(() => request?.abort());
       <InlineFeedback :message="error" :pending="loading && !status ? '正在读取配置状态…' : ''" />
       <button v-if="error" type="button" class="settings-button" :disabled="loading || leaving" @click="refresh">重试</button>
     </section>
-    <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="true" section="owner" />
+    <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="true" section="owner" @notice="emit('notice', $event)" />
   </section>
 </template>
 

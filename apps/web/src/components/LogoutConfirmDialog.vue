@@ -21,10 +21,11 @@ onMounted(() => dialog.value?.focus());
   <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="cancel">
     <section ref="dialog" class="logout-confirm-dialog" role="dialog" aria-modal="true"
       aria-labelledby="logout-confirm-title" aria-describedby="logout-confirm-description" tabindex="-1" @keydown="keepDialogFocus">
-      <header><h2 id="logout-confirm-title">{{ removing ? '从此设备移除账号？' : '退出当前账号？' }}</h2><p>{{ removing ? (administrator ? '再次登录需要已设置的服主恢复密码。' : '再次登录需要新的恢复登录链接。') : '回到登录页，保留本机凭据。' }}</p></header>
-      <p id="logout-confirm-description">退出后将结束通话、共享、远控、录制和回放。已保存的录像与诊断报告会保留，未保存的回放将丢弃。</p>
-      <p v-if="removing">将清除本机登录信息，并尝试退出服务器会话。不会注销账号或清理聊天缓存。</p>
-      <p v-if="removing">{{ administrator ? '你是服主，请先确认已在服主管理中设置恢复密码。移除后可从欢迎页“群组恢复”找回账号，旧激活链接不能再次登录。' : '请先确认能联系服主获取新的恢复登录链接，旧邀请链接不能重复使用。' }}</p>
+      <header><h2 id="logout-confirm-title">{{ removing ? '从此设备移除账号？' : '退出当前账号？' }}</h2><p v-if="!removing">回到登录页，保留本机凭据。</p></header>
+      <p v-if="removing" id="logout-confirm-description">{{ administrator
+        ? '清除后，再次登录需要已设置的恢复密码或已绑定的登录方式。'
+        : '清除后，再次登录需要服主提供的恢复链接或已绑定的登录方式。' }}</p>
+      <p v-else id="logout-confirm-description">退出后将结束通话、共享和远控，保存正在录制的录像与诊断记录。未保存的即时回放将丢弃。</p>
       <footer class="card-actions">
         <button type="button" :disabled="busy" @click="cancel">取消</button>
         <InlineFeedback class="card-feedback" :message="error" :pending="busy ? '正在处理…' : ''" />

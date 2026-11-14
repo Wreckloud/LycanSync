@@ -374,6 +374,7 @@ test('账号设置退出也需确认，Esc 取消保留当前页面且不注销'
 });
 
 test('清除凭据有独立确认，取消保留账号，确认后才撤销', async ({ page }) => {
+  await page.route('**/api/auth/account', route => route.fulfill({ json: { administrator: true, recoveryConfigured: true } }));
   let logoutRequests = 0;
   await page.route('**/api/auth/logout', route => { logoutRequests++; return route.fulfill({ status: 204 }); });
   await page.goto('/');
@@ -384,7 +385,7 @@ test('清除凭据有独立确认，取消保留账号，确认后才撤销', as
   const clear = page.getByRole('button', { name: '清除本机登录凭据', exact: true });
   await clear.click();
   const confirmation = page.getByRole('dialog', { name: '从此设备移除账号？', exact: true });
-  await expect(confirmation).toContainText('再次登录需要已设置的服主恢复密码');
+  await expect(confirmation).toContainText('再次登录需要已设置的恢复密码或已绑定的登录方式');
   expect(logoutRequests).toBe(0);
   await page.keyboard.press('Escape');
   await expect(confirmation).toHaveCount(0);

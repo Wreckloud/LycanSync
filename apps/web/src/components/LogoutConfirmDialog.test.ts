@@ -11,16 +11,15 @@ async function renderDialog(administrator: boolean, busy = false, error = '', mo
   return renderToString(createSSRApp(LogoutConfirmDialog, { administrator, busy, error, mode }));
 }
 
-it('退出前说明媒体与凭据影响，区分服主和成员的恢复方式', async () => {
+it('清除确认只说明重新登录方式，区分服主和成员', async () => {
   const owner = await renderDialog(true, false, '', 'remove');
   expect(owner).toContain('aria-modal="true"');
-  expect(owner).toContain('将清除本机登录信息');
-  expect(owner).toContain('不会注销账号或清理聊天缓存');
-  expect(owner).toContain('已保存的录像与诊断报告会保留');
-  expect(owner).toContain('请先确认已在服主管理中设置恢复密码');
+  expect(owner).toContain('清除后，再次登录需要已设置的恢复密码或已绑定的登录方式');
+  expect(owner).not.toContain('结束通话');
+  expect(owner).not.toContain('你是服主');
   expect(owner.indexOf('>取消</button>')).toBeLessThan(owner.indexOf('>清除登录信息</button>'));
   const member = await renderDialog(false, false, '', 'remove');
-  expect(member).toContain('联系服主获取新的恢复登录链接');
+  expect(member).toContain('服主提供的恢复链接或已绑定的登录方式');
   expect(member).not.toContain('你是服主');
 });
 
@@ -37,6 +36,8 @@ it('退出中禁用两个操作，失败在卡片内展示', async () => {
 it('普通退出保留凭据，不要求再次恢复账号', async () => {
   const html = await renderDialog(true);
   expect(html).toContain('保留本机凭据');
+  expect(html).toContain('保存正在录制的录像与诊断记录');
+  expect(html).toContain('未保存的即时回放将丢弃');
   expect(html).not.toContain('需要服务器维护者');
   expect(html).not.toContain('将清除本机');
 });

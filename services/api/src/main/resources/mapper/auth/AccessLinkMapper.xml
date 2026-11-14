@@ -9,8 +9,8 @@
     </select>
     <select id="nextGuestNumber" resultType="long">SELECT nextval('account_guest_number')</select>
     <insert id="insert">
-        INSERT INTO auth_access_link(id, token_hash, kind, creator_id, target_id, note, created_at, expires_at)
-        VALUES (#{link.id}, #{hash}, #{link.kind}, #{link.creatorId}, #{link.targetId}, #{link.note}, #{link.createdAt}, #{link.expiresAt})
+        INSERT INTO auth_access_link(id, token_hash, pending_token, kind, creator_id, target_id, note, created_at, expires_at)
+        VALUES (#{link.id}, #{hash}, #{token}, #{link.kind}, #{link.creatorId}, #{link.targetId}, #{link.note}, #{link.createdAt}, #{link.expiresAt})
     </insert>
     <select id="lockByHash" resultType="com.lycansync.api.auth.model.AccessLink">
         SELECT <include refid="columns"/> FROM auth_access_link WHERE token_hash = #{hash} FOR UPDATE
@@ -18,20 +18,34 @@
     <select id="lockById" resultType="com.lycansync.api.auth.model.AccessLink">
         SELECT <include refid="columns"/> FROM auth_access_link WHERE id = #{id} FOR UPDATE
     </select>
-    <update id="consume">UPDATE auth_access_link SET consumed_at = #{now}, result_user_id = #{userId}, redemption_key_hash = #{keyHash}
+    <select id="pendingToken" resultType="java.lang.String">SELECT pending_token FROM auth_access_link WHERE id = #{id}</select>
+    <select id="pendingInvitation" resultType="com.lycansync.api.auth.model.AccessLink">
+        SELECT <include refid="columns"/> FROM auth_access_link
+        WHERE kind = 'INVITE' AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > #{now}
+        ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE
+    </select>
+    <update id="updateNote">UPDATE auth_access_link SET note = #{note} WHERE id = #{id}</update>
+    <update id="consume">UPDATE auth_access_link SET consumed_at = #{now}, pending_token = NULL, result_user_id = #{userId}, redemption_key_hash = #{keyHash}
         WHERE id = #{id} AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > #{now}</update>
     <select id="redemptionKeyHash" resultType="java.lang.String">SELECT redemption_key_hash FROM auth_access_link WHERE id = #{id}</select>
-    <update id="revoke">UPDATE auth_access_link SET revoked_at = #{now}
+    <update id="revoke">UPDATE auth_access_link SET revoked_at = #{now}, pending_token = NULL
         WHERE id = #{id} AND consumed_at IS NULL AND revoked_at IS NULL</update>
-    <update id="revokeActivation">UPDATE auth_access_link SET revoked_at = #{now}
+    <update id="revokeActivation">UPDATE auth_access_link SET revoked_at = #{now}, pending_token = NULL
         WHERE kind = 'ACTIVATE' AND consumed_at IS NULL AND revoked_at IS NULL</update>
-    <update id="revokeRecovery">UPDATE auth_access_link SET revoked_at = #{now}
+    <update id="revokeRecovery">UPDATE auth_access_link SET revoked_at = #{now}, pending_token = NULL
         WHERE kind = 'RECOVERY' AND target_id = #{userId} AND consumed_at IS NULL AND revoked_at IS NULL</update>
     <update id="recordFailure">UPDATE auth_access_link SET last_failure = #{failure}, last_failure_at = #{now}
         WHERE token_hash = #{hash} AND consumed_at IS NULL</update>
     <select id="list" resultType="com.lycansync.api.auth.model.AccessLink">
         SELECT <include refid="columns"/> FROM auth_access_link
-        WHERE kind != 'ACTIVATE' ORDER BY created_at DESC, id DESC LIMIT 100 OFFSET #{offset}
+        WHERE kind != 'ACTIVATE'
+        <if test="kind != ''">AND kind = #{kind}</if>
+        <choose>
+            <when test="status == 'PENDING'">AND consumed_at IS NULL AND revoked_at IS NULL AND expires_at > #{now}</when>
+            <when test="status == 'USED'">AND consumed_at IS NOT NULL</when>
+            <when test="status == 'REVOKED'">AND consumed_at IS NULL AND revoked_at IS NOT NULL</when>
+        </choose>
+        ORDER BY created_at DESC, id DESC LIMIT 100 OFFSET #{offset}
     </select>
     <select id="members" resultType="com.lycansync.api.auth.model.AuthUser">
         SELECT id, nickname, avatar, administrator, signature, created_at AS createdAt, deleted_at AS deletedAt

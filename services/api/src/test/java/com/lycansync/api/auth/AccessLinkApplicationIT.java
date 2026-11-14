@@ -84,7 +84,7 @@ class AccessLinkApplicationIT {
             Future<Boolean> second = executor.submit(() -> redeemOnce(token(invitation)));
             assertThat(first.get(10, TimeUnit.SECONDS) != second.get(10, TimeUnit.SECONDS)).isTrue();
             assertThat(jdbc.sql("SELECT count(*) FROM app_user").query(Long.class).single()).isEqualTo(2);
-            assertThat(links.list(owner, 0).get(0).consumedAt()).isNotNull();
+            assertThat(links.list(owner, 0, "ALL", "").get(0).consumedAt()).isNotNull();
         } finally { executor.shutdownNow(); }
     }
 
@@ -96,7 +96,7 @@ class AccessLinkApplicationIT {
             assertThatThrownBy(() -> links.redeem(token(invitation), AuthSecrets.generate(), null))
                     .isInstanceOf(org.springframework.dao.DataAccessException.class);
             assertThat(jdbc.sql("SELECT count(*) FROM app_user").query(Long.class).single()).isEqualTo(1);
-            assertThat(links.list(owner, 0).get(0).consumedAt()).isNull();
+            assertThat(links.list(owner, 0, "ALL", "").get(0).consumedAt()).isNull();
         } finally { jdbc.sql("ALTER TABLE auth_session DROP CONSTRAINT reject_member_session").update(); }
     }
 
@@ -110,6 +110,38 @@ class AccessLinkApplicationIT {
         var second = links.create(owner, new AccessLinkRequest("RECOVERY", member.id(), ""));
         assertThat(links.preview(token(first)).status()).isEqualTo("REVOKED");
         assertThat(links.preview(token(second)).status()).isEqualTo("PENDING");
+    }
+
+    @Test
+    void shouldKeepPendingInvitationCopyableAcrossReadsAndNoteEdits() {
+        var invitation = links.invitation(owner);
+        assertThat(links.invitation(owner).url()).isEqualTo(invitation.url());
+        links.updateNote(owner, invitation.record().id(), "一起开黑");
+        var renamed = links.read(owner, invitation.record().id());
+        assertThat(renamed.url()).isEqualTo(invitation.url());
+        assertThat(renamed.record().note()).isEqualTo("一起开黑");
+        assertThat(links.list(owner, 0, "PENDING", "INVITE")).hasSize(1);
+        links.redeem(token(invitation), AuthSecrets.generate(), null);
+        assertThat(links.list(owner, 0, "PENDING", "")).isEmpty();
+        assertThat(links.list(owner, 0, "USED", "")).hasSize(1);
+        assertThat(jdbc.sql("SELECT count(*) FROM auth_access_link WHERE pending_token IS NOT NULL").query(Long.class).single()).isZero();
+        assertThatThrownBy(() -> links.read(owner, invitation.record().id())).isInstanceOf(AuthException.class);
+        assertThatThrownBy(() -> links.updateNote(owner, invitation.record().id(), "已使用")).isInstanceOf(AuthException.class);
+    }
+
+    @Test
+    void shouldKeepLegacyInvitationWithoutSecretUntilExplicitRenewal() {
+        var invitation = links.invitation(owner);
+        jdbc.sql("UPDATE auth_access_link SET pending_token = NULL WHERE id = :id").param("id", invitation.record().id()).update();
+        assertThat(links.invitation(owner).record().id()).isEqualTo(invitation.record().id());
+        assertThat(links.invitation(owner).url()).isNull();
+        assertThat(links.preview(token(invitation)).status()).isEqualTo("PENDING");
+        var renewed = links.renew(owner, invitation.record().id());
+        assertThat(links.read(owner, renewed.record().id()).url()).isEqualTo(renewed.url());
+        assertThat(links.list(owner, 0, "REVOKED", "")).hasSize(1);
+        links.revoke(owner, renewed.record().id());
+        assertThat(links.list(owner, 0, "PENDING", "")).isEmpty();
+        assertThat(jdbc.sql("SELECT count(*) FROM auth_access_link WHERE pending_token IS NOT NULL").query(Long.class).single()).isZero();
     }
 
     private boolean redeemOnce(String token) {

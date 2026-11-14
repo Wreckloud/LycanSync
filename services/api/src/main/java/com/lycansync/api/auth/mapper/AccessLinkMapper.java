@@ -19,7 +19,10 @@ import java.util.UUID;
 public interface AccessLinkMapper {
     Boolean lockInitialization();
     long nextGuestNumber();
-    void insert(@Param("link") AccessLink link, @Param("hash") String hash);
+    void insert(@Param("link") AccessLink link, @Param("hash") String hash, @Param("token") String token);
+    String pendingToken(@Param("id") UUID id);
+    AccessLink pendingInvitation(@Param("now") Instant now);
+    int updateNote(@Param("id") UUID id, @Param("note") String note);
     AccessLink lockByHash(@Param("hash") String hash);
     AccessLink lockById(@Param("id") UUID id);
     int consume(@Param("id") UUID id, @Param("userId") UUID userId, @Param("keyHash") String keyHash, @Param("now") Instant now);
@@ -28,6 +31,7 @@ public interface AccessLinkMapper {
     int revokeActivation(@Param("now") Instant now);
     int revokeRecovery(@Param("userId") UUID userId, @Param("now") Instant now);
     int recordFailure(@Param("hash") String hash, @Param("failure") String failure, @Param("now") Instant now);
-    List<AccessLink> list(@Param("offset") int offset);
+    List<AccessLink> list(@Param("offset") int offset, @Param("status") String status,
+                          @Param("kind") String kind, @Param("now") Instant now);
     List<AuthUser> members(@Param("search") String search, @Param("offset") int offset);
 }

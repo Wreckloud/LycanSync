@@ -8,6 +8,7 @@ import StartupUpdate from './components/StartupUpdate.vue';
 import AppNotice from './components/AppNotice.vue';
 import InlineFeedback from './components/InlineFeedback.vue';
 import LogoutConfirmDialog from './components/LogoutConfirmDialog.vue';
+import RecoveryPasswordDialog from './components/RecoveryPasswordDialog.vue';
 import DialogTransition from './components/DialogTransition.vue';
 import ExpandSection from './components/ExpandSection.vue';
 import OwnerRecoveryCard from './components/OwnerRecoveryCard.vue';
@@ -35,6 +36,10 @@ const manualEntryRequired = ref(false);
 const preferenceSaving = ref(false);
 const removeConfirm = ref(false);
 const removing = ref(false);
+const clearPasswordOpen = ref(false);
+const clearPassword = ref('');
+const clearPasswordConfirmation = ref('');
+let clearRequest: AbortController | null = null;
 const logoutTarget = ref<AuthUser | null>(null);
 const logoutBusy = ref(false);
 const ready = ref(false);
@@ -104,6 +109,7 @@ onScopeDispose(() => {
   disposed = true;
   initializationRequest?.abort();
   if (sessionHeartbeat !== null) window.clearInterval(sessionHeartbeat);
+  clearRequest?.abort();
   removeMaximizedChange?.();
   removeClose?.();
   removeAccessLink?.();
@@ -277,15 +283,18 @@ async function logout() {
   const previousUser = user.value;
   const visibility = application.value?.prepareLogout();
   logoutInProgress = true;
-  user.value = null;
-  entryUser.value = previousUser;
-  onboarding.value = false;
   try {
-    // 先卸载房间，再确认原生资源停止；保留加密凭据，不调用撤销会话接口。
+    // 先保存录像和诊断，再卸载房间；保留加密凭据，不撤销服务器会话。
     await sendPresenceHeartbeat('OFFLINE', null, AbortSignal.timeout(1_200), visibility).catch(() => undefined);
-    if (desktop) await desktop.returnToAccountEntry();
+    try { await application.value?.releaseSession(); }
+    finally { if (desktop) await desktop.returnToAccountEntry(); }
   } catch { error.value = '退出时发生问题，请关闭并重新打开应用。'; }
-  finally { logoutInProgress = false; }
+  finally {
+    user.value = null;
+    entryUser.value = previousUser;
+    onboarding.value = false;
+    logoutInProgress = false;
+  }
 }
 
 function requestClearSession() {
@@ -294,15 +303,75 @@ function requestClearSession() {
   removeConfirm.value = true;
 }
 
-async function clearLocalSession() {
+function cancelClearPassword() {
+  if (removing.value) return;
+  clearPasswordOpen.value = false;
+  clearPassword.value = ''; clearPasswordConfirmation.value = ''; error.value = '';
+}
+function cancelClearSession() {
+  if (removing.value) return;
+  cancelClearPassword();
+  removeConfirm.value = false;
+}
+watch(() => entryUser.value?.id, () => {
+  clearRequest?.abort();
+  removeConfirm.value = false; clearPasswordOpen.value = false;
+  clearPassword.value = ''; clearPasswordConfirmation.value = '';
+});
+async function confirmClearSession() {
   if (user.value || !removeConfirm.value || removing.value) return;
+  const account = entryUser.value;
+  const request = new AbortController();
+  clearRequest = request;
+  removing.value = true; error.value = '';
+  try {
+    if (account?.administrator) {
+      const status = await authRequest<{ administrator: boolean; recoveryConfigured: boolean }>('account', 'GET', undefined, request.signal);
+      if (disposed || request.signal.aborted || entryUser.value?.id !== account.id) return;
+      entryUser.value = { ...account, administrator: status.administrator };
+      if (status.administrator && !status.recoveryConfigured) {
+        const [binding, options] = await Promise.all([
+          authRequest<{ bound: boolean }>('qq/binding', 'GET', undefined, request.signal),
+          authRequest<{ qqAvailable: boolean }>('options', 'GET', undefined, request.signal),
+        ]);
+        if (disposed || request.signal.aborted || entryUser.value?.id !== account.id) return;
+        if (!binding.bound || !options.qqAvailable) {
+          clearPasswordOpen.value = true;
+          error.value = '请先设置恢复密码，以便清除后重新登录。';
+          return;
+        }
+      }
+    }
+    await clearLocalSession();
+  } catch (reason) {
+    if (!disposed && !request.signal.aborted) error.value = reason instanceof Error ? reason.message : '无法检查登录方式，请重试。';
+  } finally { removing.value = false; if (clearRequest === request) clearRequest = null; }
+}
+async function saveRecoveryAndClear() {
+  if (user.value || !removeConfirm.value || !clearPasswordOpen.value || removing.value || !entryUser.value) return;
+  if (clearPassword.value !== clearPasswordConfirmation.value) { error.value = '两次输入的恢复密码不一致。'; return; }
+  const accountId = entryUser.value.id;
+  const request = new AbortController();
+  clearRequest = request;
+  removing.value = true; error.value = '';
+  try {
+    await authRequest('account/recovery-password', 'PUT', { password: clearPassword.value }, request.signal);
+    if (disposed || request.signal.aborted || entryUser.value?.id !== accountId) return;
+    clearPassword.value = ''; clearPasswordConfirmation.value = '';
+    await clearLocalSession();
+    if (!disposed) clearPasswordOpen.value = false;
+  } catch (reason) {
+    if (!disposed && !request.signal.aborted) error.value = reason instanceof Error ? reason.message : '无法保存恢复密码，请重试。';
+  } finally { removing.value = false; if (clearRequest === request) clearRequest = null; }
+}
+async function clearLocalSession() {
+  if (user.value || !removeConfirm.value || !removing.value) return;
   initializationRequest?.abort();
-  removing.value = true;
-  error.value = '';
   let revoked = false;
   try {
     try { await authRequest<void>('logout', 'POST'); revoked = true; }
     catch { /* 离线或损坏的凭据仍允许从本机移除。 */ }
+    if (disposed) return;
     if (desktop) await desktop.clearSession();
     setBrowserSession(null);
     expired();
@@ -310,7 +379,6 @@ async function clearLocalSession() {
     removeConfirm.value = false;
     if (!revoked) error.value = '本机登录信息已清除，但未能完成服务器端退出。';
   } catch { error.value = '无法清除本机登录信息，请检查数据目录的读写权限后重试。'; }
-  finally { removing.value = false; }
 }
 async function saveServerAddress() {
   if (!desktop || submitting.value || serverSaving.value || entryUser.value || removing.value || logoutBusy.value) return;
@@ -376,8 +444,14 @@ onMounted(async () => {
       @cancel="logoutTarget = null" @confirm="confirmLogout" />
   </DialogTransition>
   <DialogTransition>
-    <LogoutConfirmDialog v-if="removeConfirm" mode="remove" :administrator="entryUser?.administrator ?? false"
-      :busy="removing" :error="error" @cancel="removeConfirm = false" @confirm="clearLocalSession" />
+    <LogoutConfirmDialog v-if="removeConfirm && !clearPasswordOpen" mode="remove" :administrator="entryUser?.administrator ?? false"
+      :busy="removing" :error="error" @cancel="cancelClearSession" @confirm="confirmClearSession" />
+  </DialogTransition>
+  <DialogTransition>
+    <RecoveryPasswordDialog v-if="removeConfirm && clearPasswordOpen"
+      v-model:password="clearPassword" v-model:confirmation="clearPasswordConfirmation"
+      :configured="false" :busy="removing" :error="error" confirm-label="保存并清除登录信息"
+      @cancel="cancelClearPassword" @save="saveRecoveryAndClear" />
   </DialogTransition>
   <Transition name="entry-shell" @before-enter="($event as HTMLElement).inert = false" @before-leave="($event as HTMLElement).inert = true">
   <div v-if="!user || onboarding || accessOffer" class="app-shell entry-shell">
@@ -409,19 +483,7 @@ onMounted(async () => {
             <span v-else class="account-avatar-placeholder" data-identity-avatar><UserRound :size="26" aria-hidden="true" /></span>
             <div><strong data-identity-name>{{ entryUser.nickname }}</strong><small>{{ entryUser.administrator ? '服主' : '成员' }} · {{ serverAddress || pageOrigin }}</small></div>
           </div>
-          <template v-if="entryUser">
-            <label class="auto-login-option"><input type="checkbox" :checked="autoLogin"
-              :disabled="submitting || preferenceSaving || logoutBusy || removing" @change="changeAutoLogin" />记住账号</label>
-            <p class="account-entry-note">勾选后将在下次启动时自动登录</p>
-            <div class="button-actions"><button class="confirm-button" :disabled="submitting || preferenceSaving || logoutBusy || removing"
-              @click="enterAccount">{{ submitting ? '正在登录…' : '登录' }}</button></div>
-          </template>
-          <template v-else>
-            <div v-if="qqAvailable" class="auth-qq-login">
-              <button type="button" class="auth-qq-button" :disabled="qq.busy.value || submitting || removing" @click="qq.start()"><img src="/qq-login.png" width="170" height="32" alt="QQ 登录" /></button>
-              <button v-if="qq.busy.value" type="button" :disabled="qq.finishing.value" @click="qq.cancel">{{ qq.finishing.value ? '正在确认账号…' : '取消授权等待' }}</button>
-              <InlineFeedback :message="qq.error.value" :status="qq.busy.value ? '请在系统浏览器确认 QQ 授权' : ''" />
-            </div>
+          <template v-if="!entryUser">
             <div class="auth-guest">
               <p v-if="initialized === false">当前群组尚未完成服主认证，请等待服主完成首次设置。</p>
               <p v-else-if="initialized === true && qqAvailable">通过 QQ 登录；已有账号请先登录，再在账号设置中绑定 QQ。</p>
@@ -429,22 +491,34 @@ onMounted(async () => {
               <p v-else>暂时无法确认服主认证状态，请重新连接。</p>
               <p>推荐设置备用登录方式，以便在服主账号无法登录时恢复权限。</p>
             </div>
-            <p class="auth-guest-note">如果你是服主且无法登录，请尝试 <button type="button" class="auth-recovery-link" @click="recoveryOpen = true">群组恢复</button>。</p>
           </template>
           <div v-if="error && !removeConfirm" class="button-actions">
             <button :disabled="submitting || logoutBusy || removing" @click="initialize()">重新连接</button>
           </div>
         </template>
         <p v-if="error && !removeConfirm && !logoutTarget" role="alert" class="auth-error">{{ error }}</p>
-        <section v-if="desktop || serverEditable || entryUser" class="auth-server-settings">
-          <button type="button" class="auth-more-toggle" :aria-expanded="moreOpen" aria-controls="account-more-options" @click="moreOpen = !moreOpen">
-            更多<ChevronDown :size="14" :class="{ 'is-open': moreOpen }" />
-          </button>
+        <section v-if="ready" class="auth-server-settings">
+          <template v-if="!entryUser">
+            <div v-if="qqAvailable" class="auth-qq-login">
+              <button type="button" class="auth-qq-button" :disabled="qq.busy.value || submitting || removing" @click="qq.start()"><img src="/qq-login.png" width="170" height="32" alt="QQ 登录" /></button>
+              <button v-if="qq.busy.value" type="button" :disabled="qq.finishing.value" @click="qq.cancel">{{ qq.finishing.value ? '正在确认账号…' : '取消授权等待' }}</button>
+              <InlineFeedback :message="qq.error.value" :status="qq.busy.value ? '请在系统浏览器确认 QQ 授权' : ''" />
+            </div>
+            <p class="auth-guest-note">如果你是服主且无法登录，请尝试 <button type="button" class="auth-recovery-link" @click="recoveryOpen = true">群组恢复</button>。</p>
+          </template>
+          <div class="account-entry-actions">
+            <button v-if="desktop || serverEditable || entryUser" type="button" class="auth-more-toggle" :aria-expanded="moreOpen" aria-controls="account-more-options" @click="moreOpen = !moreOpen">
+              更多<ChevronDown :size="14" :class="{ 'is-open': moreOpen }" />
+            </button>
+            <div v-if="entryUser" class="account-login-actions">
+              <label class="auto-login-option"><input type="checkbox" :checked="autoLogin"
+                :disabled="submitting || preferenceSaving || logoutBusy || removing" @change="changeAutoLogin" />记住账号</label>
+              <button class="confirm-button" :disabled="submitting || preferenceSaving || logoutBusy || removing"
+                @click="enterAccount">{{ submitting ? '正在登录…' : '登录' }}</button>
+            </div>
+          </div>
           <ExpandSection :open="moreOpen" id="account-more-options">
           <div class="auth-more-content">
-          <button v-if="desktop || entryUser" type="button" :disabled="!ready || submitting || logoutBusy || removing || preferenceSaving"
-            @click="requestClearSession">清除本机登录凭据</button>
-          <p v-if="entryUser" class="account-entry-note">使用其他账号或服务器前，请先清除本机凭据。</p>
           <form v-if="desktop" @submit.prevent="openManualAccessLink">
             <label for="manual-access-link">邀请或恢复登录链接</label>
             <div class="auth-input-row">
@@ -465,6 +539,8 @@ onMounted(async () => {
             <InlineFeedback id="server-address-feedback" :message="serverError"
               :status="serverSaving ? '正在重启…' : '保存后重启应用，使用该服务器的账号登录。'" />
           </form>
+          <button v-if="desktop || entryUser" type="button" class="settings-button account-clear-session" :disabled="!ready || submitting || logoutBusy || removing || preferenceSaving"
+            @click="requestClearSession">清除本机登录凭据</button>
           </div>
           </ExpandSection>
         </section>
@@ -487,12 +563,17 @@ onMounted(async () => {
 .account-preview > div { min-width: 0; }
 .account-preview strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .account-preview small { display: block; color: var(--muted); overflow-wrap: anywhere; }
-.auto-login-option { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
-.auto-login-option input { flex-shrink: 0; width: 16px; height: 16px; margin: 0; padding: 0; }
-.account-entry-note { color: var(--muted); font-size: 12px; line-height: 18px; }
+.auth-card .auto-login-option { display: flex; align-items: center; gap: 8px; margin: 0; }
+.account-entry-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.account-login-actions { display: flex; align-items: center; gap: 16px; margin-left: auto; }
+.auth-card .auto-login-option input { flex-shrink: 0; width: 16px; height: 16px; margin: 0; padding: 0; }
+.account-clear-session { width: 100%; margin-top: 20px; }
+@media (max-width: 420px) {
+  .account-entry-actions, .account-login-actions { gap: 8px; }
+}
 .auth-guest { display: grid; gap: 16px; }
 .auth-guest p { margin: 4px 0 0; }
-.auth-guest-note { margin: 20px 0 0; padding-top: 14px; border-top: 1px solid var(--border); }
+.auth-guest-note { margin: 0 0 16px; }
 
 .entry-shell { display: flex; flex-direction: column; }
 .entry-shell > .titlebar { flex: 0 0 var(--titlebar-height); }

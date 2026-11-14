@@ -10,7 +10,7 @@ import { ApiRequestError } from './auth/authApi';
 const script = parse(readFileSync(new URL('./AuthRoot.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('AuthRoot.ts', script, ts.ScriptTarget.Latest, true);
 const callbackNames = ['verifyCurrentSession', 'expired', 'requestLogout', 'confirmLogout', 'logout',
-  'requestClearSession', 'clearLocalSession', 'initialize', 'acceptSession', 'completeAccess', 'enterAccount', 'changeAutoLogin'];
+  'requestClearSession', 'clearLocalSession', 'confirmClearSession', 'initialize', 'acceptSession', 'completeAccess', 'enterAccount', 'changeAutoLogin'];
 const callbacks = callbackNames.map((name) => {
   const declaration = sourceFile.statements.find((statement) => ts.isFunctionDeclaration(statement)
     && statement.name?.text === name);
@@ -26,9 +26,9 @@ function setup() {
   const authRequest = vi.fn((path: string) => path === 'session' ? pending : Promise.resolve({ mode: 'invite' }));
   const context = { user, authRequest, disposed: false, sessionHeartbeatInFlight: false,
     clearLocalContentCache: vi.fn(async () => {}),
-    application: ref({ prepareLogout: vi.fn(() => ({ showActivity: false, showLastOnline: true })) }),
+    application: ref({ prepareLogout: vi.fn(() => ({ showActivity: false, showLastOnline: true })), releaseSession: vi.fn(async () => {}) }),
     entryUser: ref<AuthUser | null>(null), qqAvailable: ref(false), initialized: ref<boolean | null>(null), accountUpdated: vi.fn(), autoLogin: ref(true), manualEntryRequired: ref(false), preferenceSaving: ref(false),
-    removeConfirm: ref(false), removing: ref(false), submitting: ref(false), ready: ref(true), accessOffer: ref(null),
+    clearRequest: null, clearPasswordOpen: ref(false), removeConfirm: ref(false), removing: ref(false), submitting: ref(false), ready: ref(true), accessOffer: ref(null),
     onboarding: ref(false), error: ref(''), logoutTarget: ref<AuthUser | null>(null), logoutBusy: ref(false),
     logoutInProgress: false, initializationRequest: null, ApiRequestError, Error, AbortSignal, AbortController,
     desktop: { returnToAccountEntry: vi.fn(async () => {}), clearSession: vi.fn(async () => {}),
@@ -37,7 +37,7 @@ function setup() {
     sendPresenceHeartbeat: vi.fn(async (): Promise<void> => undefined), setBrowserSession: vi.fn() };
   const functions = runInNewContext(`${compiled}\n({ ${callbackNames.join(', ')} })`, context) as {
     verifyCurrentSession: () => Promise<void>; logout: () => Promise<void>; requestLogout: () => void; confirmLogout: () => Promise<void>;
-    requestClearSession: () => void; clearLocalSession: () => Promise<void>; initialize: (automatic?: boolean) => Promise<void>;
+    requestClearSession: () => void; confirmClearSession: () => Promise<void>; clearLocalSession: () => Promise<void>; initialize: (automatic?: boolean) => Promise<void>;
     completeAccess: (result: { user: AuthUser }, kind: string) => Promise<void>; enterAccount: () => Promise<void>;
     changeAutoLogin: (event: unknown) => Promise<void>;
   };
@@ -72,7 +72,7 @@ it('移除登录信息不清理内容缓存，也不受缓存存储失败影响'
   f.context.entryUser.value = { id: 'member', nickname: '成员', avatar: '', administrator: false };
   f.context.clearLocalContentCache.mockRejectedValueOnce(new Error('storage unavailable'));
   f.requestClearSession();
-  await f.clearLocalSession();
+  await f.confirmClearSession();
   expect(f.context.desktop.clearSession).toHaveBeenCalledOnce();
   expect(f.context.entryUser.value).toBeNull();
   expect(f.context.clearLocalContentCache).not.toHaveBeenCalled();
@@ -91,18 +91,38 @@ it('资源停止失败仍保留账号与凭据，并明确提示；重新进入�
   expect(f.context.user.value?.nickname).toBe('服务端昵称');
 });
 
+it('退出等待录像与诊断收尾后才卸载界面，失败仍执行主进程清理', async () => {
+  const f = setup();
+  let finish!: () => void;
+  f.context.application.value.releaseSession.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+  const leaving = f.logout();
+  await vi.waitFor(() => expect(f.context.application.value.releaseSession).toHaveBeenCalledOnce());
+  expect(f.context.user.value?.id).toBe('member');
+  expect(f.context.desktop.returnToAccountEntry).not.toHaveBeenCalled();
+  finish();
+  await leaving;
+  expect(f.context.desktop.returnToAccountEntry).toHaveBeenCalledOnce();
+  expect(f.context.user.value).toBeNull();
+
+  const failed = setup();
+  failed.context.application.value.releaseSession.mockRejectedValueOnce(new Error('cleanup failed'));
+  await failed.logout();
+  expect(failed.context.desktop.returnToAccountEntry).toHaveBeenCalledOnce();
+  expect(failed.context.error.value).toContain('退出时发生问题');
+});
+
 it('清除必须单独确认，取消不发送撤销请求或删除文件；双击只执行一次', async () => {
   const f = setup();
   await f.logout();
-  await f.clearLocalSession();
+  await f.confirmClearSession();
   expect(f.context.authRequest).not.toHaveBeenCalled();
   f.requestClearSession();
   f.context.removeConfirm.value = false;
-  await f.clearLocalSession();
+  await f.confirmClearSession();
   expect(f.context.desktop.clearSession).not.toHaveBeenCalled();
   f.requestClearSession();
-  const pending = f.clearLocalSession();
-  await f.clearLocalSession();
+  const pending = f.confirmClearSession();
+  await f.confirmClearSession();
   await pending;
   expect(f.context.authRequest).toHaveBeenCalledExactlyOnceWith('logout', 'POST');
   expect(f.context.desktop.clearSession).toHaveBeenCalledOnce();
@@ -115,7 +135,7 @@ it('离线仍能移除本机凭据，但不声称已撤销服务器会话', asyn
   await f.logout();
   f.context.authRequest.mockRejectedValueOnce(new Error('offline'));
   f.requestClearSession();
-  await f.clearLocalSession();
+  await f.confirmClearSession();
   expect(f.context.entryUser.value).toBeNull();
   expect(f.context.error.value).toContain('未能完成服务器端退出');
 });
@@ -125,7 +145,7 @@ it('文件删除失败保持确认框并允许重试', async () => {
   await f.logout();
   f.context.desktop.clearSession.mockRejectedValueOnce(new Error('permission denied'));
   f.requestClearSession();
-  await f.clearLocalSession();
+  await f.confirmClearSession();
   expect(f.context.removeConfirm.value).toBe(true);
   expect(f.context.error.value).toContain('读写权限');
   expect(f.context.removing.value).toBe(false);

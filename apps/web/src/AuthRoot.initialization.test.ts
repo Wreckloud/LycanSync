@@ -26,7 +26,7 @@ function setup() {
   const state = {
     entryUser: ref<AuthUser | null>(null), qqAvailable: ref(false), initialized: ref<boolean | null>(null), accountUpdated: vi.fn(), autoLogin: ref(true), manualEntryRequired: ref(false), accessOffer: ref(null),
     user: ref<AuthUser | null>(null), error: ref(''), ready: ref(false), onboarding: ref(false), disposed: false,
-    initializationRequest: null as AbortController | null, desktop: undefined, sessionHeartbeat: null,
+    initializationRequest: null as AbortController | null, clearRequest: null, desktop: undefined, sessionHeartbeat: null,
     authRequest: vi.fn(async (_path: string, _method?: string, _body?: unknown, _signal?: AbortSignal): Promise<unknown> => ({ mode: 'invite' })),
     authenticatedFetch: vi.fn(async (_path: string, _options: RequestInit): Promise<Pick<Response, 'ok' | 'status' | 'json'>> => ({
       ok: false, status: 401, json: async () => null,

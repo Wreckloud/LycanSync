@@ -61,6 +61,7 @@ const apiRoutePolicies = new Map([
   ['GET /api/auth/qq/binding', {}],
   ['GET /api/auth/access/links', {}],
   ['POST /api/auth/access/links', {}],
+  ['POST /api/auth/access/links/invite', {}],
   ['GET /api/auth/access/members', {}],
   ['GET /api/system/initialization', { public: true }],
   ['GET /api/auth/me', {}],
@@ -521,12 +522,17 @@ function denyCapture(callback) {
   }
 }
 
-function finishClose() {
-  canClose = true;
+async function finishClose() {
   clearTimeout(closeTimer);
-  screenShareWindows.closeAll();
-  voiceOverlay.clear();
-  mainWindow?.destroy();
+  // 渲染端超时或崩溃时仍由主进程收尾录像，不能先销毁仍在提供录制人声的页面。
+  try { await shutdownMediaResources(); }
+  catch (error) { console.error(`media shutdown failed: ${error.message}`); }
+  finally {
+    canClose = true;
+    screenShareWindows.closeAll();
+    voiceOverlay.clear();
+    mainWindow?.destroy();
+  }
 }
 
 // 打包页面与业务接口同源；媒体连接仍由 LiveKit SDK 直接建立，不经此代理。
@@ -535,9 +541,11 @@ async function serveApplication(request) {
   if (!trustedUrl(request.url)) return new Response(null, { status: 403 });
   if (url.pathname.startsWith('/api/')) {
     const routePolicy = apiRoutePolicies.get(`${request.method} ${url.pathname}`)
-      ?? (/^\/api\/auth\/access\/links\/[0-9a-f-]{36}(?:\/renew)?$/i.test(url.pathname)
+      ?? (/^\/api\/auth\/access\/links\/[0-9a-f-]{36}(?:\/renew|\/url|\/note)?$/i.test(url.pathname)
         && ((request.method === 'POST' && url.pathname.endsWith('/renew'))
-          || (request.method === 'DELETE' && !url.pathname.endsWith('/renew'))) ? {} : undefined)
+          || (request.method === 'GET' && url.pathname.endsWith('/url'))
+          || (request.method === 'PUT' && url.pathname.endsWith('/note'))
+          || (request.method === 'DELETE' && !/\/(renew|url|note)$/.test(url.pathname))) ? {} : undefined)
       ?? (request.method === 'GET' && groupMessagePath.test(url.pathname) && url.searchParams.get('wait') === 'true'
         ? { longPolling: true } : undefined)
       ?? (request.method === 'GET' && (groupPath.test(url.pathname) || groupMemberProfilePath.test(url.pathname) || groupPresencePath.test(url.pathname) || groupMessagePath.test(url.pathname)
@@ -1183,7 +1191,7 @@ ipcMain.handle('recording:voice-failed', (event, id) => {
   return recording.failMedia(id, 'recordingVoiceUnavailable');
 });
 ipcMain.handle('recording:voice', (event, id, position, pcm) => {
-  if (!trustedSender(event) || closing || recording.media?.id !== id || recording.media.stopping
+  if (!trustedSender(event) || recording.media?.id !== id || recording.media.stopping
       || !(recording.media.options.microphone || recording.media.options.friends)) return false;
   return recordingVoice.write(id, position, pcm);
 });
@@ -1200,7 +1208,7 @@ ipcMain.handle('recording:replay-save', (event) => {
   return recording.saveReplay();
 });
 ipcMain.handle('recording:replay-stop', (event) => {
-  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  if (!trustedSender(event)) throw new Error('请求来源无效');
   return recording.stopReplay();
 });
 ipcMain.handle('recording:replay-settings', (event, settings) => {
@@ -1458,9 +1466,14 @@ async function returnToAccountEntry() {
     () => nativeVideo.current && nativeVideo.stop(nativeVideo.current.sessionId),
     () => nativeScreenAudio.sessionId && nativeScreenAudio.stop(nativeScreenAudio.sessionId, true),
     () => nativeMicrophone.sessionId && nativeMicrophone.stop(nativeMicrophone.sessionId),
+    () => savedDiagnosticReports.flush(),
+    () => writeMediaDiagnostic.flush(),
   ]) {
     try { await stop(); }
-    catch { failed = true; }
+    catch {
+      failed = true;
+      void writeMediaDiagnostic({ stage: 'accountExitCleanupFailed' });
+    }
   }
   if (failed) throw new Error('退出时发生问题，请关闭并重新打开应用。');
 }

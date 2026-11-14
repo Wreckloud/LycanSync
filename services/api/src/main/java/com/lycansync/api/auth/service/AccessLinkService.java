@@ -89,10 +89,55 @@ public class AccessLinkService {
         });
     }
 
-    public List<AccessLink> list(AuthenticatedUser administrator, int offset) {
+    public List<AccessLink> list(AuthenticatedUser administrator, int offset, String status, String kind) {
         requireAdministrator(administrator);
-        if (offset < 0) throw invalid("分页位置无效");
-        return links.list(offset);
+        if (offset < 0 || !List.of("ALL", "PENDING", "USED", "REVOKED").contains(status)
+                || !List.of("", "INVITE", "RECOVERY").contains(kind)) throw invalid("链接筛选条件无效");
+        return links.list(offset, status, kind, now());
+    }
+
+    public GeneratedLink invitation(AuthenticatedUser administrator) {
+        requireAdministrator(administrator);
+        return transactions.execute(status -> {
+            // 与生成、兑换共用初始化行锁，重复打开邀请窗口不能产生多条新链接。
+            requireInitialized();
+            requireAdministrator(administrator);
+            AccessLink existing = links.pendingInvitation(now());
+            if (existing == null) return generate("INVITE", administrator.id(), null, "");
+            String token = links.pendingToken(existing.id());
+            return new GeneratedLink(existing, token == null ? null : linkUrl(token));
+        });
+    }
+
+    public GeneratedLink read(AuthenticatedUser administrator, UUID id) {
+        requireAdministrator(administrator);
+        return transactions.execute(status -> {
+            requireInitialized();
+            requireAdministrator(administrator);
+            AccessLink link = requirePending(id);
+            String token = links.pendingToken(id);
+            if (token == null) throw invalid("这个旧链接无法再次复制，请在链接管理中重新生成。");
+            return new GeneratedLink(link, linkUrl(token));
+        });
+    }
+
+    public void updateNote(AuthenticatedUser administrator, UUID id, String note) {
+        requireAdministrator(administrator);
+        if (note == null) throw invalid("邀请备注无效");
+        validateNote(note);
+        transactions.executeWithoutResult(status -> {
+            requireInitialized();
+            requireAdministrator(administrator);
+            requirePending(id);
+            if (links.updateNote(id, note.strip()) != 1) throw notFound();
+        });
+    }
+
+    private AccessLink requirePending(UUID id) {
+        AccessLink link = links.lockById(id);
+        if (link == null || "ACTIVATE".equals(link.kind())) throw notFound();
+        if (!"PENDING".equals(linkStatus(link, now()))) throw invalid("链接已使用、过期或撤销，请重新查看记录。");
+        return link;
     }
 
     public List<AuthUser> members(AuthenticatedUser administrator, String search, int offset) {
@@ -177,14 +222,22 @@ public class AccessLinkService {
 
     private GeneratedLink generate(String kind, UUID creator, UUID target, String note) {
         if (settings.getPublicUrl().isBlank()) throw invalid("服务器尚未配置公开入口地址");
-        if (note != null && (note.length() > 100 || note.codePoints().anyMatch(Character::isISOControl))) throw invalid("邀请备注无效");
+        validateNote(note);
         Instant now = now();
         Duration lifetime = "INVITE".equals(kind) ? Duration.ofDays(3) : Duration.ofHours(12);
         AccessLink link = new AccessLink(UUID.randomUUID(), kind, creator, target, note == null ? "" : note.strip(), now,
                 now.plus(lifetime), null, null, null, null, null);
         String token = AuthSecrets.generate();
-        links.insert(link, AuthSecrets.hash(token));
-        return new GeneratedLink(link, settings.getPublicUrl() + "/join#token=" + token);
+        links.insert(link, AuthSecrets.hash(token), "ACTIVATE".equals(kind) ? null : token);
+        return new GeneratedLink(link, linkUrl(token));
+    }
+
+    private void validateNote(String note) {
+        if (note != null && (note.length() > 100 || note.codePoints().anyMatch(Character::isISOControl))) throw invalid("邀请备注无效");
+    }
+    private String linkUrl(String token) {
+        if (settings.getPublicUrl().isBlank()) throw invalid("服务器尚未配置公开入口地址");
+        return settings.getPublicUrl() + "/join#token=" + token;
     }
 
     public static String linkStatus(AccessLink link, Instant now) {

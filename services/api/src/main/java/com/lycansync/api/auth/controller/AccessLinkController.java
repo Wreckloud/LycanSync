@@ -3,6 +3,7 @@ package com.lycansync.api.auth.controller;
 import com.lycansync.api.auth.config.AccountAccessProperties;
 import com.lycansync.api.auth.service.QqConfigurationService;
 import com.lycansync.api.auth.dto.AccessLinkRequest;
+import com.lycansync.api.auth.dto.AccessLinkNoteRequest;
 import com.lycansync.api.auth.dto.AccessRedeemRequest;
 import com.lycansync.api.auth.dto.LoginResponse;
 import com.lycansync.api.auth.model.AccessLink;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -73,15 +75,37 @@ public class AccessLinkController {
     @GetMapping("/access/links")
     @Operation(summary = "服主查看链接状态", description = "每页最多 100 条")
     public ResponseEntity<List<AccessLink>> list(@AuthenticationPrincipal AuthenticatedUser user,
-                                               @RequestParam(defaultValue = "0") int offset) {
-        return noStore(links.list(user, offset));
+                                               @RequestParam(defaultValue = "0") int offset,
+                                               @RequestParam(defaultValue = "ALL") String status,
+                                               @RequestParam(defaultValue = "") String kind) {
+        return noStore(links.list(user, offset, status, kind));
     }
 
     @PostMapping("/access/links")
-    @Operation(summary = "服主邀请新朋友或恢复成员登录", description = "原始链接仅在生成响应返回；邀请 3 天，恢复 12 小时")
+    @Operation(summary = "服主邀请新朋友或恢复成员登录", description = "待使用链接可由服主再次读取；邀请 3 天，恢复 12 小时")
     public ResponseEntity<AccessLinkService.GeneratedLink> create(@AuthenticationPrincipal AuthenticatedUser user,
                                                                @Valid @RequestBody AccessLinkRequest request) {
         return noStore(links.create(user, request));
+    }
+
+    @PostMapping("/access/links/invite")
+    @Operation(summary = "打开邀请窗口", description = "复用最近的待使用邀请；没有可用邀请时才生成新链接")
+    public ResponseEntity<AccessLinkService.GeneratedLink> invitation(@AuthenticationPrincipal AuthenticatedUser user) {
+        return noStore(links.invitation(user));
+    }
+
+    @GetMapping("/access/links/{id}/url")
+    @Operation(summary = "服主读取待使用链接", description = "已使用、撤销或过期链接不可读取，旧版本生成的链接可能无法还原")
+    public ResponseEntity<AccessLinkService.GeneratedLink> read(@AuthenticationPrincipal AuthenticatedUser user, @PathVariable UUID id) {
+        return noStore(links.read(user, id));
+    }
+
+    @PutMapping("/access/links/{id}/note")
+    @Operation(summary = "修改待使用链接备注", description = "仅服主可见，不更换链接或延长有效期")
+    public ResponseEntity<Void> updateNote(@AuthenticationPrincipal AuthenticatedUser user, @PathVariable UUID id,
+                                          @Valid @RequestBody AccessLinkNoteRequest request) {
+        links.updateNote(user, id, request.note());
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/access/links/{id}/renew")

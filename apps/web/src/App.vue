@@ -185,16 +185,23 @@ watch(() => rtc.playbackContext, (context, _, onCleanup) => {
 audioPreferences.mutedParticipantIdentities()
   .forEach((identity) => rtc.setRemoteAudioSubscribed(identity, false));
 const removeCloseListener = desktop?.onClose(async () => {
-  const diagnosticFlush = diagnosticReport.flush();
   selectCaptureSource(null);
   viewingWindows.value?.closeAll();
-  await reportOfflineBeforeClose();
-  try { await microphoneTest.stop(); }
+  try { await reportOfflineBeforeClose(); }
   finally {
-    try { await rtc.leave(); }
-    finally { await diagnosticFlush; desktop.finishClose(); }
+    try { await releaseSession(); }
+    finally { desktop.finishClose(); }
   }
 });
+async function releaseSession() {
+  // 录像封装完成前保留采集与人声管道；最后等待诊断落盘，再允许卸载界面。
+  const failures: unknown[] = [];
+  for (const stop of [recording.stop, recording.stopReplay, microphoneTest.stop, rtc.leave, diagnosticReport.flush]) {
+    try { await stop(); }
+    catch (error) { failures.push(error); }
+  }
+  if (failures.length) throw failures[0];
+}
 onScopeDispose(() => {
   joinAttempt++;
   viewingWindows.value?.closeAll();
@@ -232,7 +239,7 @@ const ownPresence = useOwnPresence(props.user.id, { showActivity, showLastOnline
 const { currentActivity, sharedActivity, publicPresenceStatus, personalPresenceLabel,
   presenceMode, presenceReady, presencePreferenceError, presenceSyncing, presenceSyncError,
   sendHeartbeat, changePresenceMode, startPresenceHeartbeat, updateOwnPresenceStatus, prepareLogout, reportOfflineBeforeClose } = ownPresence;
-defineExpose({ prepareLogout });
+defineExpose({ prepareLogout, releaseSession });
 const currentGame = computed(() => desktop && currentActivity.value?.type === 'GAME' ? currentActivity.value : null);
 const gameShareBusy = computed(() => !connected.value || !!captureRequest.value || screenShareLimitReached.value
   || rtc.busySources.includes(Track.Source.ScreenShare) || rtc.screenShareQualityBusy || rtc.screenShareSourceBusy);
@@ -1163,7 +1170,7 @@ function participantListening(participant: Participant) {
     <Transition name="settings-page" @after-enter="settingsCovered = settingsOpen" @enter-cancelled="settingsCovered = false"
       @after-leave="finishSettingsLeave" @leave-cancelled="settingsPresented = true"
       @before-leave="settingsCovered = false; ($event as HTMLElement).inert = true">
-    <SettingsView v-if="settingsOpen" ref="settingsView" :blocked="Boolean(props.interactionBlocked || rtc.remoteControlRequest || !mainWindowVisible)" v-model:section="settingsSection" :user="user" :desktop="Boolean(desktop)"
+    <SettingsView @notice="showAppNotice($event, 'account', 'success')" v-if="settingsOpen" ref="settingsView" :blocked="Boolean(props.interactionBlocked || rtc.remoteControlRequest || !mainWindowVisible)" v-model:section="settingsSection" :user="user" :desktop="Boolean(desktop)"
       @group-updated="applyGroupDetail" @group-removed="removedFromGroup"
       :audio-shortcuts="audioShortcuts" :call-sound-preferences="callSoundPreferences" :call-sounds="callSounds"
       :overlay="desktop ? voiceOverlay : undefined"

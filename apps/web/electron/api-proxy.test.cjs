@@ -356,3 +356,19 @@ test('注销成功清除当前会话，服主恢复不能覆盖已有登录', as
   await f.serve(new Request('lycan://app/api/auth/account/close', { method: 'POST', body: '{}' }));
   assert.equal(cleared, true);
 });
+
+
+test('待使用链接的复用、复制与备注走明确的认证路由', async () => {
+  const { serve, forwarded } = proxyFixture();
+  const base = 'lycan://app/api/auth/access/links';
+  const id = '/11111111-1111-4111-8111-111111111111';
+  for (const [path, method] of [[base + '/invite', 'POST'], [base + id + '/url', 'GET'], [base + id + '/note', 'PUT']]) {
+    assert.equal((await serve(new Request(path, { method }))).status, 201);
+  }
+  assert.equal(forwarded.length, 3);
+  for (const request of forwarded) assert.equal(request.options.headers.Authorization, 'Bearer test-session');
+  for (const suffix of ['/url', '/note', '/renew']) {
+    assert.equal((await serve(new Request(base + id + suffix, { method: 'DELETE' }))).status, 404);
+  }
+  assert.equal(forwarded.length, 3);
+});
