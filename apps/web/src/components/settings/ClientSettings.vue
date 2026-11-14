@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import InlineFeedback from '../InlineFeedback.vue';
+import ProjectAttribution from '../ProjectAttribution.vue';
 import { useLoadingHint } from '../useLoadingHint';
 import UpdateRestartDialog from '../UpdateRestartDialog.vue';
 import DialogTransition from '../DialogTransition.vue';
@@ -127,6 +128,7 @@ async function updateAutoStart(event: Event) {
         <span><strong>lycanclaw · {{ updateState?.version || packageInfo.version }}</strong><small role="status">{{ desktop ? updateDescription : '浏览器版随服务器更新。' }}</small></span>
         <button v-if="desktop" type="button" class="settings-button settings-control" :disabled="updateBusy || !updateState?.supported || updateState.phase === 'checking'" @click="checkUpdates()">检查更新</button>
       </div>
+      <ProjectAttribution>由 Wreckloud 设计与维护，GPT / OpenAI Codex 协助开发、测试与代码审查。<br />图标由 <a href="https://space.bilibili.com/303103435" target="_blank" rel="noopener noreferrer">@Airthead</a> 设计。</ProjectAttribution>
       <InlineFeedback :message="confirmationVersion ? '' : updateError || (updateState?.error ? updateState.message : '')" />
       <DialogTransition>
       <UpdateRestartDialog v-if="confirmationVersion" :version="confirmationVersion" :busy="updateBusy" :error="updateError"
