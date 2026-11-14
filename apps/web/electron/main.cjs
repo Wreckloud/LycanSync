@@ -942,10 +942,10 @@ ipcMain.handle('diagnostics:export', async (event, text) => {
 });
 ipcMain.handle('presence:system-idle-state', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
-  return {
+  return activityMonitor.systemIdleState({
     state: powerMonitor.getSystemIdleState(300),
     idleSeconds: powerMonitor.getSystemIdleTime(),
-  };
+  });
 });
 ipcMain.handle('settings:auto-start:get', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');

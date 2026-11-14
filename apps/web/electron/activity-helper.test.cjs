@@ -12,6 +12,7 @@ function fixture(enabled = true) {
   const activities = [];
   const timers = new Map();
   let timerId = 0;
+  let clock = 0;
   const monitor = createActivityHelper({ enabled, executablePath: () => 'test-helper',
     onActivity: (activity) => activities.push(activity), fileExists: () => true,
     spawnProcess: () => {
@@ -32,6 +33,7 @@ function fixture(enabled = true) {
     },
     schedule: (callback, delay) => { timers.set(++timerId, { callback, delay }); return timerId; },
     cancel: (id) => timers.delete(id),
+    now: () => clock,
   });
   monitor.start();
   const reply = (index, command, result = {}) => readers[index].emit('line', JSON.stringify({ requestId: command.requestId, ...result }));
@@ -40,8 +42,77 @@ function fixture(enabled = true) {
       activityName: name, startedAtEpochSeconds: Math.floor(Date.now() / 1000) }));
   };
   if (enabled) reply(0, children[0].commands[0]);
-  return { monitor, children, readers, activities, timers, reply, activity };
+  return { monitor, children, readers, activities, timers, reply, activity,
+    advanceClock: (milliseconds) => { clock += milliseconds; } };
 }
+
+test('补充输入合并系统闲置时间，保留锁屏与未知状态，不发布坐标或按键', () => {
+  const f = fixture();
+  const idle = { state: 'idle', idleSeconds: 600 };
+  try {
+    assert.deepEqual(f.monitor.systemIdleState(idle), idle);
+    f.readers[0].emit('line', JSON.stringify({ inputIdleSeconds: 0 }));
+    assert.deepEqual(f.monitor.systemIdleState(idle), { state: 'active', idleSeconds: 0 });
+    f.advanceClock(1500);
+    assert.deepEqual(f.monitor.systemIdleState(idle), { state: 'active', idleSeconds: 1.5 });
+    assert.deepEqual(f.monitor.systemIdleState({ state: 'active', idleSeconds: 0 }), { state: 'active', idleSeconds: 0 });
+    for (const state of ['locked', 'unknown']) {
+      assert.deepEqual(f.monitor.systemIdleState({ state, idleSeconds: 600 }), { state, idleSeconds: 600 });
+    }
+    assert.deepEqual(f.activities, []);
+    f.advanceClock(1501);
+    assert.deepEqual(f.monitor.systemIdleState(idle), idle);
+    f.readers[0].emit('line', JSON.stringify({ inputIdleSeconds: 301 }));
+    assert.deepEqual(f.monitor.systemIdleState(idle), { state: 'idle', idleSeconds: 301 });
+  } finally { f.monitor.stop(); }
+});
+
+test('无输入、无效快照、停止或旧进程迟到消息不能维持在线', () => {
+  const f = fixture();
+  const idle = { state: 'idle', idleSeconds: 600 };
+  try {
+    for (const value of [null, -1, '0']) {
+      f.readers[0].emit('line', JSON.stringify({ inputIdleSeconds: 0 }));
+      f.readers[0].emit('line', JSON.stringify({ inputIdleSeconds: value }));
+      assert.deepEqual(f.monitor.systemIdleState(idle), idle);
+    }
+    f.readers[0].emit('line', JSON.stringify({ inputIdleSeconds: 0 }));
+    f.children[0].emit('exit');
+    assert.deepEqual(f.monitor.systemIdleState(idle), idle);
+    f.readers[0].emit('line', JSON.stringify({ inputIdleSeconds: 0 }));
+    assert.deepEqual(f.monitor.systemIdleState(idle), idle);
+    [...f.timers.values()].find(timer => timer.delay === 5000).callback();
+    f.readers[1].emit('line', JSON.stringify({ inputIdleSeconds: 0 }));
+    f.monitor.stop();
+    assert.deepEqual(f.monitor.systemIdleState(idle), idle);
+  } finally { f.monitor.stop(); }
+});
+
+test('闲置 IPC 实际合并输入快照，来源校验仍在系统读取之前', () => {
+  const f = fixture();
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const start = main.indexOf("ipcMain.handle('presence:system-idle-state'");
+  const end = main.indexOf("ipcMain.handle('settings:auto-start:get'", start);
+  assert.ok(start >= 0 && end > start);
+  let handler;
+  let reads = 0;
+  runInNewContext(main.slice(start, end), {
+    ipcMain: { handle: (_, callback) => { handler = callback; } },
+    trustedSender: event => event.trusted,
+    activityMonitor: f.monitor,
+    powerMonitor: {
+      getSystemIdleState: threshold => { reads++; assert.equal(threshold, 300); return 'idle'; },
+      getSystemIdleTime: () => 600,
+    },
+  });
+  try {
+    assert.throws(() => handler({ trusted: false }), /请求来源无效/);
+    assert.equal(reads, 0);
+    f.readers[0].emit('line', JSON.stringify({ inputIdleSeconds: 0.25 }));
+    assert.deepEqual(handler({ trusted: true }), { state: 'active', idleSeconds: 0.25 });
+    assert.equal(reads, 1);
+  } finally { f.monitor.stop(); }
+});
 
 test('游戏窗口身份只接受有界数字句柄，音乐不附带窗口信息', () => {
   const { monitor, children, readers, activities } = fixture();

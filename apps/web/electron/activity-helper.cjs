@@ -38,7 +38,8 @@ function normalizeMappings(value) {
 }
 
 function createActivityHelper({ enabled, executablePath, onActivity, spawnProcess = spawn,
-  openLines = createInterface, fileExists = existsSync, schedule = setTimeout, cancel = clearTimeout }) {
+  openLines = createInterface, fileExists = existsSync, schedule = setTimeout, cancel = clearTimeout,
+  now = () => performance.now() }) {
   let child;
   const children = new Set();
   let stopped = true;
@@ -47,6 +48,7 @@ function createActivityHelper({ enabled, executablePath, onActivity, spawnProces
   let configurationId = 0;
   let mappings = [];
   let current = null;
+  let inputSample = null;
   const pending = new Map();
 
   function publish(activity) {
@@ -98,6 +100,7 @@ function createActivityHelper({ enabled, executablePath, onActivity, spawnProces
       if (finished || child !== target) return;
       finished = true;
       child = undefined;
+      inputSample = null;
       reader.close();
       publish(null);
       for (const entry of pending.values()) {
@@ -111,6 +114,11 @@ function createActivityHelper({ enabled, executablePath, onActivity, spawnProces
       if (finished || stopped || child !== target || line.length > 1024 * 1024) return;
       let message;
       try { message = JSON.parse(line); } catch { return; }
+      if (Object.hasOwn(message ?? {}, 'inputIdleSeconds')) {
+        const seconds = message.inputIdleSeconds;
+        inputSample = Number.isFinite(seconds) && seconds >= 0 ? { seconds, receivedAt: now() } : null;
+        return;
+      }
       if (Number.isSafeInteger(message?.requestId)) {
         const entry = pending.get(message.requestId);
         if (!entry) return;
@@ -137,6 +145,7 @@ function createActivityHelper({ enabled, executablePath, onActivity, spawnProces
     restarting = undefined;
     const target = child;
     child = undefined;
+    inputSample = null;
     target?.kill();
     for (const entry of pending.values()) {
       cancel(entry.timeout);
@@ -208,7 +217,16 @@ function createActivityHelper({ enabled, executablePath, onActivity, spawnProces
     }
   }
 
-  return { start, stop, configure, listWindows, clearMappings, isCaptureGame,
+  function systemIdleState(system) {
+    if (!inputSample || system.state === 'locked' || system.state === 'unknown') return system;
+    const age = now() - inputSample.receivedAt;
+    // 补充信号只有在 helper 持续送来快照时有效；崩溃或卡住不能永久维持在线。
+    if (age < 0 || age > 3000) return system;
+    const idleSeconds = Math.min(system.idleSeconds, inputSample.seconds + age / 1000);
+    return { state: idleSeconds >= 300 ? 'idle' : 'active', idleSeconds };
+  }
+
+  return { start, stop, configure, listWindows, clearMappings, isCaptureGame, systemIdleState,
     diagnosticProcesses: () => [...children] };
 }
 

@@ -2,6 +2,7 @@
 
 mod catalog;
 mod detection;
+mod input_activity;
 mod known_games;
 mod windows;
 
@@ -59,13 +60,28 @@ fn main() {
     let mut configuration_id = 0;
     let mut last_activity: Option<DetectedActivity> = None;
     let mut detector = ActivityDetector::default();
+    let mut input_activity = input_activity::InputActivity::default();
+    let mut next_input_sample = Instant::now();
     loop {
-        let command =
-            match receiver.recv_timeout(next_scan.saturating_duration_since(Instant::now())) {
-                Ok(command) => Some(command),
-                Err(RecvTimeoutError::Timeout) => None,
-                Err(RecvTimeoutError::Disconnected) => break,
-            };
+        let command = match receiver.recv_timeout(
+            next_scan
+                .min(next_input_sample)
+                .saturating_duration_since(Instant::now()),
+        ) {
+            Ok(command) => Some(command),
+            Err(RecvTimeoutError::Timeout) => None,
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
+        let now = Instant::now();
+        if now >= next_input_sample {
+            if let Some(idle_seconds) = input_activity.sample(now) {
+                write_message(json!({ "inputIdleSeconds": idle_seconds }));
+            }
+            next_input_sample = now + input_activity::SAMPLE_INTERVAL;
+        }
+        if command.is_none() && now < next_scan {
+            continue;
+        }
         if catalog_refreshed.elapsed() >= Duration::from_secs(300) {
             games = catalog::discover_games();
             catalog_refreshed = Instant::now();
