@@ -833,7 +833,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .disclosure-trigger { display: flex; align-items: center; gap: 4px; width: 100%; min-height: 24px; padding: 0; border: 0; background: transparent; color: var(--muted); font: inherit; text-align: left; cursor: pointer; }
 .disclosure-value { margin-left: auto; color: var(--text); }
 .disclosure-arrow { flex-shrink: 0; transition: transform var(--motion-expand-duration) var(--motion-ease); }
-.disclosure-arrow.is-open { transform: rotate(90deg); }
+.disclosure-arrow.is-open { transform: rotate(-90deg); }
 
 .presence-option-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--subtle); }
 .presence-option-dot.online { background: var(--good); }

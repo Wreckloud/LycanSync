@@ -83,6 +83,9 @@ createApp({ setup() {
     await expect(sharedVolumeToggle).toContainText('60%');
     await sharedVolumeToggle.click();
     await expect(sharedVolumeToggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(sharedVolumeToggle.locator('.disclosure-arrow')).toHaveCSS('transform', 'matrix(0, -1, 1, 0, 0, 0)');
+    expect(await sharedVolumeToggle.evaluate(el => Boolean(el.previousElementSibling?.contains(document.getElementById('settings-share-volume'))))).toBe(true);
+    await expect(sharedVolumeToggle).toHaveAttribute('aria-expanded', 'true');
     await sharedVolume.fill('0.4');
     await sharedVolumeToggle.click();
     await expect(sharedVolume).toBeHidden();

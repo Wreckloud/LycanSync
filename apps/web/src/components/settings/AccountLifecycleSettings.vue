@@ -10,7 +10,7 @@ import GroupManagementDialog from '../GroupManagementDialog.vue';
 import { findGroup, type GroupDetail } from '../../group/groupApi';
 
 const props = defineProps<{ active: boolean; leaving: boolean; administrator?: boolean; section: 'account' | 'owner'; userId?: string }>();
-const emit = defineEmits<{ resolveOwner: []; groupUpdated: [group: GroupDetail]; groupRemoved: [id: string] }>();
+const emit = defineEmits<{ groupUpdated: [group: GroupDetail]; groupRemoved: [id: string] }>();
 interface LifecycleStatus {
   administrator: boolean;
   recoveryConfigured: boolean;
@@ -22,6 +22,8 @@ interface LifecycleStatus {
 const status = ref<LifecycleStatus | null>(null);
 const qqBound = ref<boolean | null>(null);
 const expanded = ref<'password' | 'transfer' | 'close' | 'accept' | null>(null);
+const closingAccount = ref(false);
+const transferAfterPassword = ref(false);
 const password = ref('');
 const confirmation = ref('');
 const previousPassword = ref('');
@@ -70,13 +72,24 @@ async function refresh() {
 async function beginClose() {
   if (busy.value || props.leaving) return;
   toggle('close');
-  if (expanded.value === 'close') await refresh();
+  closingAccount.value = expanded.value === 'close';
+  if (!closingAccount.value) return;
+  await refresh();
+  if (props.active && expanded.value === 'close' && status.value?.administrator && !status.value.recoveryConfigured) openTransfer();
 }
 async function beginTransfer() {
   if (busy.value || props.leaving) return;
+  const origin = expanded.value;
   await refresh();
-  if (disposed || !props.active || !status.value?.administrator) return;
-  toggle(status.value.recoveryConfigured ? 'transfer' : 'password');
+  if (disposed || !props.active || expanded.value !== origin || !status.value?.administrator) return;
+  openTransfer();
+}
+function openTransfer() {
+  if (!status.value?.administrator) return;
+  const needsPassword = !status.value.recoveryConfigured;
+  toggle(needsPassword ? 'password' : 'transfer');
+  transferAfterPassword.value = needsPassword;
+  if (needsPassword) error.value = '请先设置恢复密码，再转让服主。';
 }
 async function manageGroup(id: string, mode: 'transfer' | 'dissolve' | 'resolve') {
   if (busy.value || props.leaving || !props.userId) return;
@@ -105,8 +118,12 @@ function toggle(section: typeof expanded.value) {
   if (busy.value) return;
   groupRequest?.abort();
   management.value = null;
-  expanded.value = expanded.value === section ? null : section;
+  const returning = section === null && closingAccount.value && expanded.value !== 'close';
+  expanded.value = returning ? 'close' : expanded.value === section ? null : section;
+  if (!expanded.value) closingAccount.value = false;
+  transferAfterPassword.value = false;
   clearSecrets(); error.value = ''; feedback.value = '';
+  if (returning) void refresh();
 }
 async function submit(operation: 'password' | 'offer' | 'accept' | 'cancel' | 'close') {
   if (busy.value || props.leaving || !status.value) return;
@@ -123,7 +140,9 @@ async function submit(operation: 'password' | 'offer' | 'accept' | 'cancel' | 'c
     if (operation === 'cancel') await authRequest('account/transfer', 'DELETE');
     if (operation === 'close') await authRequest('account/close', 'POST', { confirmation: closeConfirmation.value });
     if (disposed || current !== revision) return;
-    clearSecrets(); expanded.value = null;
+    const next = operation === 'password' && transferAfterPassword.value ? 'transfer' : closingAccount.value ? 'close' : null;
+    transferAfterPassword.value = false;
+    clearSecrets(); expanded.value = next;
     if (operation === 'close') {
       setBrowserSession(null);
       window.dispatchEvent(new Event('lycan:unauthorized'));
@@ -152,12 +171,11 @@ watch(() => [expanded.value, props.active] as const, async ([section, active]) =
 });
 watch(() => [props.active, props.administrator, props.section] as const, ([active]) => {
   clearSecrets();
-  if (expanded.value !== 'close') expanded.value = null;
+  expanded.value = null; closingAccount.value = false; transferAfterPassword.value = false;
   if (active) { error.value = ''; void refresh(); }
   else { revision++; request?.abort(); groupRequest?.abort(); management.value = null; loading.value = false; }
 }, { immediate: true });
 onScopeDispose(() => { disposed = true; revision++; request?.abort(); groupRequest?.abort(); clearSecrets(); });
-defineExpose({ beginTransfer });
 </script>
 
 <template>
@@ -200,6 +218,12 @@ defineExpose({ beginTransfer });
     <div v-if="expanded === 'transfer' && active && status?.administrator" class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="toggle(null)">
         <form ref="transferForm" class="recovery-password-dialog" role="dialog" aria-modal="true" aria-label="转让服主" tabindex="-1" @keydown="keepDialogFocus" @submit.prevent="submit('offer')">
           <h2>转让服主</h2>
+          <template v-if="status.transferTargetId">
+            <p>正在等待接任者确认，完成前你仍是服主。</p>
+            <InlineFeedback :message="error" :pending="busy ? '正在处理…' : ''" />
+            <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">关闭</button><button type="button" class="settings-button card-actions-end" :disabled="busy || leaving" @click="submit('cancel')">取消转让</button></div>
+          </template>
+          <template v-else>
           <label class="settings-field" for="owner-transfer-target">接任成员
             <select id="owner-transfer-target" v-model="targetId" :disabled="busy || leaving" required>
               <option value="" disabled>选择本服务器的成员</option>
@@ -210,6 +234,7 @@ defineExpose({ beginTransfer });
           <p>对方需在 24 小时内确认并设置恢复密码。转让后你将成为普通成员，原服主恢复密码及未使用的账号邀请、恢复链接将失效。</p>
           <InlineFeedback :message="error" :pending="busy ? '正在处理…' : ''" />
           <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button class="confirm-button card-actions-end" :disabled="busy || leaving">发起转让</button></div>
+          </template>
         </form>
     </div>
   </DialogTransition>
@@ -217,7 +242,7 @@ defineExpose({ beginTransfer });
     <div v-if="expanded === 'accept' && active && status?.incomingTransfer" class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="toggle(null)">
       <form ref="acceptDialog" class="recovery-password-dialog" role="dialog" aria-modal="true" aria-label="接任服主" tabindex="-1" @keydown="keepDialogFocus" @submit.prevent="submit('accept')">
         <h2>接任服主</h2>
-        <PasswordField id="accept-owner-password" v-model="password" label="恢复密码（15–128 个字符）" :disabled="busy || leaving" new-password required />
+        <PasswordField id="accept-owner-password" v-model="password" label="恢复密码（至少 6 位）" :disabled="busy || leaving" new-password required />
         <PasswordField id="accept-owner-confirm" v-model="confirmation" label="确认恢复密码" :disabled="busy || leaving" new-password required />
         <InlineFeedback :message="error" :pending="busy ? '正在处理…' : ''" />
         <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button type="button" :disabled="busy || leaving" @click="submit('cancel')">拒绝</button><button class="confirm-button card-actions-end" :disabled="busy || leaving">确认接任</button></div>
@@ -231,7 +256,7 @@ defineExpose({ beginTransfer });
         <p>{{ canClose ? '注销后无法再次登录，此操作不能撤回。' : '完成下面的事项后，即可继续注销。' }}</p>
           <div v-if="status?.administrator" class="settings-action-row">
             <div><strong>服主转让</strong><small>{{ status.transferTargetId ? '等待接任者确认后，才能继续注销。' : '由另一位成员接任服主后，再继续注销。' }}</small></div>
-            <button type="button" :disabled="busy || loading || leaving" @click="emit('resolveOwner')">{{ status.transferTargetId ? '查看转让' : '去转让服主' }}</button>
+            <button type="button" :disabled="busy || loading || leaving" @click="beginTransfer">{{ status.transferTargetId ? '查看转让' : '去转让服主' }}</button>
           </div>
           <div v-for="group in status?.ownedGroups" :key="group.id" class="settings-action-row">
             <div><strong>{{ group.name }}</strong><small>可转交给群成员，或解散群组。</small></div>
@@ -252,13 +277,13 @@ defineExpose({ beginTransfer });
     </div>
   </DialogTransition>
   <DialogTransition>
-    <div v-if="expanded === 'password' && active && section === 'owner' && status?.administrator" class="dialog-backdrop"
+    <div v-if="expanded === 'password' && active && status?.administrator" class="dialog-backdrop"
       v-on="backdropEvents" @keydown.esc.stop="toggle(null)">
       <form ref="passwordDialog" class="recovery-password-dialog" role="dialog" aria-modal="true" aria-labelledby="recovery-password-title"
         tabindex="-1" @submit.prevent="submit('password')" @keydown="keepDialogFocus">
         <h2 id="recovery-password-title">{{ status.recoveryConfigured ? '修改恢复密码' : '设置恢复密码' }}</h2>
         <PasswordField v-if="status.recoveryConfigured" id="owner-old-password" v-model="previousPassword" label="原恢复密码" :disabled="busy || leaving" required />
-        <PasswordField id="owner-new-password" v-model="password" label="新恢复密码（15–128 个字符）" :disabled="busy || leaving" new-password required />
+        <PasswordField id="owner-new-password" v-model="password" label="新恢复密码（至少 6 位）" :disabled="busy || leaving" new-password required />
         <PasswordField id="owner-confirm-password" v-model="confirmation" label="确认恢复密码" :disabled="busy || leaving" new-password required />
         <InlineFeedback :message="error" :pending="busy ? '正在保存…' : ''" />
         <footer class="card-actions">
@@ -276,7 +301,7 @@ defineExpose({ beginTransfer });
 
 <style scoped>
 .lifecycle-settings { display: grid; gap: 12px; }
-.owner-account-actions { grid-template-columns: minmax(0, 1fr) minmax(0, var(--settings-control-width)); }
+.owner-account-actions { grid-template-columns: minmax(0, 1fr) max-content; }
 .owner-account-actions > .settings-action-row { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; }
 .lifecycle-settings p { margin: 0; color: var(--muted); line-height: 1.6; }
 .lifecycle-settings .recovery-warning { color: var(--danger); }

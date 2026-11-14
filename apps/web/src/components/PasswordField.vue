@@ -11,7 +11,7 @@ const visible = ref(false);
     <label :for="id">{{ label }}</label>
     <div class="password-field-input">
       <input :id="id" v-model="password" :type="visible ? 'text' : 'password'" :disabled="disabled"
-        :required="required" :minlength="newPassword ? 15 : undefined" maxlength="128"
+        :required="required" :minlength="newPassword ? 6 : undefined" maxlength="128"
         :autocomplete="newPassword ? 'new-password' : 'current-password'" />
       <button type="button" class="settings-button" :disabled="disabled" :aria-label="visible ? '隐藏密码' : '显示密码'"
         :aria-pressed="visible" @click="visible = !visible"><EyeOff v-if="visible" :size="16" /><Eye v-else :size="16" /></button>

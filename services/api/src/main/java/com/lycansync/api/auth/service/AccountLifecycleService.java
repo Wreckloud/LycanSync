@@ -205,9 +205,10 @@ public class AccountLifecycleService {
         return state.ownerId() != null && state.ownerId().equals(state.recoveryUserId()) && state.recoveryHash() != null;
     }
     private String encode(String password) {
-        if (password == null || password.length() < 15 || password.length() > 128 || password.isBlank()) {
-            throw invalid("恢复密码需要 15–128 个字符");
+        if (password == null || password.length() < 6 || password.isBlank()) {
+            throw invalid("恢复密码至少需要 6 位，且不能全为空白");
         }
+        if (password.length() > 128) throw invalid("恢复密码过长，请缩短后重试");
         return passwords.encode(password);
     }
     private boolean matches(String password, String hash) {

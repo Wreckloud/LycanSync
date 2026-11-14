@@ -43,7 +43,7 @@ public class AccountLifecycleController {
                                   @Schema(description = "客户端本次恢复的独立重试凭据")
                                   @NotNull @Pattern(regexp = "[A-Za-z0-9_-]{43}") String recoveryKey) { }
     public record PasswordRequest(@Schema(description = "首次设置时省略，否则提供原恢复密码") @Size(max = 128) String previousPassword,
-                                  @Schema(description = "新的恢复密码，15–128 个字符") @NotNull @Size(min = 15, max = 128) String password) { }
+                                  @Schema(description = "新的恢复密码，6–128 个字符") @NotNull @Size(min = 6, max = 128, message = "恢复密码长度不符合要求") String password) { }
     public record TransferRequest(@Schema(description = "接任成员 ID") @NotNull UUID targetId,
                                   @Schema(description = "当前服主恢复密码") @NotNull @Size(max = 128) String password) { }
     public record CloseRequest(@Schema(description = "固定填写“注销账号”") @NotNull @Pattern(regexp = "注销账号") String confirmation) { }

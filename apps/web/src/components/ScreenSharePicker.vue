@@ -146,9 +146,6 @@ defineExpose({ sourcesElement });
           @update:model-value="emit('update:customQuality', $event)" />
         </ExpandSection>
         <div class="capture-advanced">
-          <button type="button" class="disclosure-trigger" :aria-expanded="advancedOpen" :aria-controls="advancedId" @click="advancedOpen = !advancedOpen">
-            <ChevronRight :size="12" aria-hidden="true" class="disclosure-arrow" :class="{ 'is-open': advancedOpen }" />高级选项
-          </button>
           <ExpandSection :open="advancedOpen" :id="advancedId">
           <div class="capture-advanced-content">
           <label v-if="sourceType === 'window'" class="capture-method">窗口采集方式
@@ -162,6 +159,9 @@ defineExpose({ sourcesElement });
           <p v-else>整屏共享不显示系统黄框。高级选项仅对本次共享生效。</p>
           </div>
           </ExpandSection>
+          <button type="button" class="disclosure-trigger" :aria-expanded="advancedOpen" :aria-controls="advancedId" @click="advancedOpen = !advancedOpen">
+            <ChevronRight :size="12" aria-hidden="true" class="disclosure-arrow" :class="{ 'is-open': advancedOpen }" />高级选项
+          </button>
         </div>
         <label v-if="followGameAvailable && sourceType === 'window' && (captureSettings.windowMethod ?? 'auto') === 'auto'"
           class="capture-audio-option capture-game-follow">

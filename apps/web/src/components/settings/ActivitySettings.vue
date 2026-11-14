@@ -87,7 +87,7 @@ defineExpose({ editingName });
           <option v-for="entry in mappings.windows.value" :key="entry.executable" :value="entry.executable">{{ entry.title }}</option>
           <option v-if="executable && !mappings.windows.value.some((entry) => entry.executable === executable)" :value="executable">{{ selectedName }}（未运行）</option>
         </select>
-        <div class="activity-window-actions settings-control settings-control-buttons">
+        <div class="activity-window-actions">
           <button type="button" :disabled="!executable || mappings.busy.value" title="清除当前选择，已保存的名称修正会保留" @click="resetSelection">重置</button>
           <button type="button" :disabled="!executable || mappings.busy.value || !mappings.ready.value" @click="openEditor">修改名称</button>
         </div>
@@ -120,11 +120,10 @@ defineExpose({ editingName });
 .activity-mappings-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; min-width: 0; }
 .activity-mappings-heading h2 { flex-shrink: 0; }
 .activity-current { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-.activity-presence > span { flex: 1; }
-.activity-presence { flex-wrap: wrap; }
-.activity-presence :deep(.presence-mode-switch) { width: var(--settings-control-width); max-width: 100%; margin-left: auto; }
+.activity-presence { display: grid; grid-template-columns: minmax(0, 1fr) 152px; align-items: start; }
+.activity-presence :deep(.presence-mode-switch) { width: 152px; max-width: 100%; margin-left: auto; }
 .activity-mappings { grid-column: 1 / -1; display: grid; gap: 8px; min-width: 0; padding-top: 24px; border-top: 1px solid var(--border-soft); }
-.activity-window-choice { display: grid; grid-template-columns: 100px minmax(0, 1fr) minmax(0, var(--settings-control-width)); align-items: center; gap: 12px; min-width: 0; }
+.activity-window-choice { display: grid; grid-template-columns: 100px minmax(0, 1fr) auto; align-items: center; gap: 12px; min-width: 0; }
 .activity-window-actions { display: flex; gap: 8px; }
 .activity-window-actions button { white-space: nowrap; }
 .activity-window-choice select { min-width: 0; width: 100%; box-sizing: border-box; }

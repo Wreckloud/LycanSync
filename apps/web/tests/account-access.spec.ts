@@ -164,7 +164,7 @@ test('仅服主显示邀请面板且生成链接只在成功后展示', async ({
   await page.getByRole('dialog', { name: '配置 QQ 登录', exact: true }).getByRole('button', { name: '取消', exact: true }).click();
   await expect(page.getByRole('button', { name: '设置恢复密码', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '注销账号', exact: true })).toHaveCount(0);
-  await expect(page.getByLabel('新恢复密码（15–128 个字符）', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('新恢复密码（至少 6 位）', { exact: true })).toHaveCount(0);
   const recommendation = page.locator('.recovery-warning');
   await expect(recommendation).toContainText('设置恢复密码，方便在登录信息丢失时找回服主账号。');
   expect(await recommendation.evaluate(element => getComputedStyle(element).color)).toBe(
@@ -184,7 +184,7 @@ test('仅服主显示邀请面板且生成链接只在成功后展示', async ({
   const openPassword = page.getByRole('button', { name: '设置恢复密码', exact: true });
   await openPassword.click();
   const dialog = page.getByRole('dialog');
-  const newPassword = dialog.getByLabel('新恢复密码（15–128 个字符）', { exact: true });
+  const newPassword = dialog.getByLabel('新恢复密码（至少 6 位）', { exact: true });
   await expect(newPassword).toBeFocused();
   await newPassword.fill('test-recovery-password');
   await page.keyboard.press('Escape');
@@ -357,9 +357,11 @@ test('成员访问弹窗独立处理备注、全服搜索、复制与链接管�
   await expect(dialog.getByLabel('备注', { exact: false })).toHaveValue('');
 });
 
-test('注销始终可进入，服主和群组事项完成后才提交注销', async ({ page }, testInfo) => {
+for (const configured of [true, false]) test(`注销保留账号页，密码配置为 ${configured} 时通过弹窗完成交接`, async ({ page }, testInfo) => {
   const user = { id: 'owner', nickname: '服主', avatar: '', signature: '', administrator: true };
   let administrator = true;
+  let recoveryConfigured = configured;
+  let transferTargetId: string | null = null;
   let ownedGroups = [{ id: 'group-close', name: '待处理群组' }];
   let closed = 0;
   let dissolved = 0;
@@ -375,8 +377,18 @@ test('注销始终可进入，服主和群组事项完成后才提交注销', as
     serverName: '测试服务器', publicUrlConfigured: true, qqEnabled: false, mediaConfigured: true,
   } }));
   await page.route('**/api/auth/account', route => route.fulfill({ json: {
-    administrator, recoveryConfigured: true, ownedGroups, candidates: [{ id: 'friend', nickname: '朋友' }], incomingTransfer: null, transferTargetId: null,
+    administrator, recoveryConfigured, ownedGroups, candidates: [{ id: 'friend', nickname: '朋友' }], incomingTransfer: null, transferTargetId,
   } }));
+  await page.route('**/api/auth/account/transfer', route => {
+    expect(route.request().postDataJSON()).toEqual({ targetId: 'friend', password: 'test12' });
+    transferTargetId = 'friend';
+    return route.fulfill({ status: 204 });
+  });
+  await page.route('**/api/auth/account/recovery-password', route => {
+    expect(route.request().postDataJSON().password).toBe('test12');
+    recoveryConfigured = true;
+    return route.fulfill({ status: 204 });
+  });
   await page.route('**/api/auth/account/close', route => {
     closed++;
     expect(administrator).toBe(false);
@@ -398,16 +410,29 @@ test('注销始终可进入，服主和群组事项完成后才提交注销', as
   await page.locator('.account-settings').scrollIntoViewIfNeeded();
   await page.locator('.settings-view').screenshot({ path: testInfo.outputPath('account-actions-conditions.png'), animations: 'disabled' });
   await page.getByRole('button', { name: '注销账号', exact: true }).click();
-  await expect(page.getByRole('button', { name: '去转让服主', exact: true })).toBeVisible();
+  if (configured) await expect(page.getByRole('button', { name: '去转让服主', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '确认注销', exact: true })).toHaveCount(0);
   expect(closed).toBe(0);
-  await page.getByRole('button', { name: '去转让服主', exact: true }).click();
+  if (configured) await page.getByRole('button', { name: '去转让服主', exact: true }).click();
+  else {
+    const passwordDialog = page.getByRole('dialog', { name: '设置恢复密码', exact: true });
+    await expect(passwordDialog.getByText('请先设置恢复密码，再转让服主。', { exact: true })).toBeVisible();
+    await passwordDialog.getByLabel('新恢复密码（至少 6 位）', { exact: true }).fill('test12');
+    await passwordDialog.getByLabel('确认恢复密码', { exact: true }).fill('test12');
+    await passwordDialog.getByRole('button', { name: '保存', exact: true }).click();
+  }
   await expect(page.getByRole('combobox', { name: '接任成员', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '返回注销流程', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '返回注销流程', exact: true })).toHaveCount(0);
+  await expect(page.locator('.settings-header h1')).toHaveText('账号设置');
+  await page.getByRole('combobox', { name: '接任成员', exact: true }).selectOption('friend');
+  await page.getByLabel('当前服主恢复密码', { exact: true }).fill('test12');
+  await page.getByRole('button', { name: '发起转让', exact: true }).click();
+  await page.getByRole('dialog', { name: '注销账号', exact: true }).getByRole('button', { name: '查看转让', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '转让服主', exact: true }).getByText('正在等待接任者确认，完成前你仍是服主。', { exact: true })).toBeVisible();
   // 模拟接任者在另一设备确认，返回注销时必须重新获取服务器状态。
   administrator = false;
-  await page.getByRole('dialog', { name: '转让服主', exact: true }).getByRole('button', { name: '取消', exact: true }).click();
-  await page.getByRole('button', { name: '返回注销流程', exact: true }).click();
+  await page.getByRole('dialog', { name: '转让服主', exact: true }).getByRole('button', { name: '关闭', exact: true }).click();
+
   await expect(page.getByRole('button', { name: '去转让服主', exact: true })).toHaveCount(0);
   await expect(page.getByRole('dialog', { name: '注销账号', exact: true })).toBeVisible();
   await page.getByRole('dialog', { name: '注销账号', exact: true }).screenshot({ path: testInfo.outputPath('close-account-dialog.png') });
@@ -451,16 +476,16 @@ test('接任服主在弹窗填写，取消清空密码，失败保留表单', as
   });
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await expect(page.getByLabel('恢复密码（15–128 个字符）', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('恢复密码（至少 6 位）', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '查看转让', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '接任服主', exact: true });
-  await dialog.getByLabel('恢复密码（15–128 个字符）', { exact: true }).fill('discard-this-password');
+  await dialog.getByLabel('恢复密码（至少 6 位）', { exact: true }).fill('discard-this-password');
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
   expect(writes).toBe(0);
   await page.getByRole('button', { name: '查看转让', exact: true }).click();
-  await expect(dialog.getByLabel('恢复密码（15–128 个字符）', { exact: true })).toHaveValue('');
-  await dialog.getByLabel('恢复密码（15–128 个字符）', { exact: true }).fill('example-password-123');
+  await expect(dialog.getByLabel('恢复密码（至少 6 位）', { exact: true })).toHaveValue('');
+  await dialog.getByLabel('恢复密码（至少 6 位）', { exact: true }).fill('example-password-123');
   await dialog.getByLabel('确认恢复密码', { exact: true }).fill('example-password-123');
   await dialog.getByRole('button', { name: '确认接任', exact: true }).click();
   await expect(dialog.getByText('暂时无法接任', { exact: true })).toBeVisible();

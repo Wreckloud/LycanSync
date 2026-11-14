@@ -64,12 +64,18 @@ test('各设置页说明共用同一位置和样式，诊断入口归入客户�
   }
 });
 
-test('设置操作区同宽，自定义音效占整行，窄窗不溢出', async ({ page }, testInfo) => {
+test('短按钮紧凑，滑条和快捷键操作区同宽，窄窗不溢出', async ({ page }, testInfo) => {
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const account = page.locator('.account-settings');
-  await expect(account.getByRole('button', { name: '退出登录', exact: true })).toHaveCSS('width', '280px');
-  await expect(page.locator('.activity-presence .presence-mode-switch')).toHaveCSS('width', '280px');
+  await expect(account.getByRole('button', { name: '退出登录', exact: true })).toHaveCSS('width', '74px');
+  await expect(page.locator('.activity-presence .presence-mode-switch')).toHaveCSS('width', '152px');
+  const presence = page.locator('.activity-presence .presence-mode-switch');
+  const original = (await presence.boundingBox())!;
+  await presence.getByRole('button', { name: '隐身', exact: true }).click();
+  const switched = (await presence.boundingBox())!;
+  expect(switched.x).toBeCloseTo(original.x, 0);
+  expect(switched.y).toBeCloseTo(original.y, 0);
   await page.getByRole('button', { name: '快捷键', exact: true }).click();
   const mode = page.locator('.shortcut-settings .voice-mode-switch');
   await expect(mode).toHaveCSS('width', '280px');

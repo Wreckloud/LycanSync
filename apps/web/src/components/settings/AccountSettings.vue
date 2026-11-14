@@ -7,7 +7,7 @@ import AccountLifecycleSettings from './AccountLifecycleSettings.vue';
 import type { GroupDetail } from '../../group/groupApi';
 
 const props = defineProps<{ active: boolean; leaving: boolean; administrator?: boolean; userId: string }>();
-const emit = defineEmits<{ logout: []; resolveOwner: []; groupUpdated: [group: GroupDetail]; groupRemoved: [id: string] }>();
+const emit = defineEmits<{ logout: []; groupUpdated: [group: GroupDetail]; groupRemoved: [id: string] }>();
 const qqAvailable = ref(false);
 const binding = ref<{ bound: boolean; nickname: string } | null>(null);
 const qqError = ref('');
@@ -63,7 +63,7 @@ watch(() => props.active, (active) => {
       <p>返回登录页，并记住此账号，方便下次登录。</p>
     </section>
     <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="administrator" :user-id="userId" section="account"
-      @resolve-owner="emit('resolveOwner')" @group-updated="emit('groupUpdated', $event)" @group-removed="emit('groupRemoved', $event)" />
+      @group-updated="emit('groupUpdated', $event)" @group-removed="emit('groupRemoved', $event)" />
   </section>
 </template>
 

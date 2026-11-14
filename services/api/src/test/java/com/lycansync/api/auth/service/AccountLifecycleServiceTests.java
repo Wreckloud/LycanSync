@@ -84,6 +84,15 @@ class AccountLifecycleServiceTests {
     }
 
     @Test
+    void shouldAcceptSixCharacterRecoveryPasswordAndRejectInvalidLengths() {
+        for (String invalid : List.of("short", " ".repeat(6), "a".repeat(129))) {
+            assertThatThrownBy(() -> service.initializeRecovery(owner.id(), invalid)).isInstanceOf(AuthException.class);
+        }
+        service.initializeRecovery(owner.id(), "test12");
+        assertThat(service.recover("test12", "a".repeat(43)).user().id()).isEqualTo(owner.id());
+    }
+
+    @Test
     void shouldRecoverSameOwnerWithStableRetryAndRejectWrongPassword() {
         service.initializeRecovery(owner.id(), PASSWORD);
         assertThat(state.get().recoveryHash()).doesNotContain(PASSWORD);

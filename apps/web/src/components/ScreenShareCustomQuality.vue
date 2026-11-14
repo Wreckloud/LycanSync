@@ -61,9 +61,6 @@ watch(() => [props.modelValue.resolution, props.modelValue.fps, props.modelValue
       </select></label>
     </div>
     <div class="custom-share-bitrate">
-      <button type="button" class="disclosure-trigger" :aria-expanded="bitrateOpen" :aria-controls="bitrateId" @click="bitrateOpen = !bitrateOpen">
-        <ChevronRight :size="12" aria-hidden="true" class="disclosure-arrow" :class="{ 'is-open': bitrateOpen }" />码率设置<span class="disclosure-value">{{ modelValue.bitrateMbps === undefined ? '推荐' : `手动 · ${modelValue.bitrateMbps} Mbps` }}</span>
-      </button>
       <ExpandSection :open="bitrateOpen" :id="bitrateId">
       <div class="custom-share-bitrate-controls">
         <label>主画面码率上限<span class="custom-share-bitrate-input">
@@ -76,6 +73,9 @@ watch(() => [props.modelValue.resolution, props.modelValue.fps, props.modelValue
       </div>
       <InlineFeedback :message="bitrateError" :status="`推荐上限 ${recommendedMbps} Mbps，实际用量会变化；预览画面和声音另计。`" />
       </ExpandSection>
+      <button type="button" class="disclosure-trigger" :aria-expanded="bitrateOpen" :aria-controls="bitrateId" @click="bitrateOpen = !bitrateOpen">
+        <ChevronRight :size="12" aria-hidden="true" class="disclosure-arrow" :class="{ 'is-open': bitrateOpen }" />码率设置<span class="disclosure-value">{{ modelValue.bitrateMbps === undefined ? '推荐' : `手动 · ${modelValue.bitrateMbps} Mbps` }}</span>
+      </button>
     </div>
   </div>
 </template>

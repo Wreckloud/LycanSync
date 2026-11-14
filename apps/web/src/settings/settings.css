@@ -39,8 +39,9 @@
 .settings-error { color: var(--danger) !important; }
 .settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--button-gap); }
 .settings-control { width: var(--settings-control-width); max-width: 100%; flex: 0 0 auto; box-sizing: border-box; margin-left: auto; }
-.settings-control-buttons { display: flex; gap: 8px; }
-.settings-control-buttons > button { flex: 1; min-width: 0; }
+.settings-control-buttons { display: flex; gap: 8px; width: auto; }
+.settings-control-buttons > button { min-width: 74px; }
+button.settings-control { width: auto; min-width: 74px; }
 .settings-full-action { width: 100%; }
 .settings-section button { font-size: 13px; }
 .settings-section button:not(:disabled):hover { background: var(--panel); border-color: var(--muted); }

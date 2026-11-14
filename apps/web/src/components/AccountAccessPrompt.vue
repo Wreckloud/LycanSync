@@ -56,8 +56,8 @@ async function join() {
   const token = props.offer.token;
   const task = generation;
   const kind = preview.value.kind;
-  if (kind === 'ACTIVATE' && (recoveryPassword.value.length < 15 || recoveryPassword.value !== recoveryConfirmation.value)) {
-    error.value = '请设置至少 15 个字符的恢复密码，并确保两次输入一致。'; busy.value = false; return;
+  if (kind === 'ACTIVATE' && (recoveryPassword.value.length < 6 || recoveryPassword.value !== recoveryConfirmation.value)) {
+    error.value = '请设置至少 6 位的恢复密码，并确保两次输入一致。'; busy.value = false; return;
   }
   try {
     const result = await authRequest<{ sessionToken?: string; user: AuthUser }>('access/redeem', 'POST', {
@@ -97,7 +97,7 @@ async function switchServer() {
         <p v-if="!canRedeem">链接已使用、过期或撤销，请联系服主获取新链接。</p>
         <p v-else>{{ preview.kind === 'ACTIVATE' ? '即将确认并成为本服务器的服主，即可邀请并管理成员。' : preview.kind === 'RECOVERY' ? '即将确认并恢复账号资料，旧设备将退出登录。' : '这是你的专属邀请，使用并加入 lycanclaw 吧！' }}</p>
         <div v-if="preview.kind === 'ACTIVATE' && canRedeem" class="activation-passwords">
-          <PasswordField id="activation-password" v-model="recoveryPassword" label="恢复密码（15–128 个字符）" :disabled="busy" new-password required />
+          <PasswordField id="activation-password" v-model="recoveryPassword" label="恢复密码（至少 6 位）" :disabled="busy" new-password required />
           <PasswordField id="activation-password-confirm" v-model="recoveryConfirmation" label="确认恢复密码" :disabled="busy" new-password required />
           <p>请妥善保管恢复密码，无法登录时可用此恢复权限。</p>
         </div>

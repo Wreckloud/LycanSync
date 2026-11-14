@@ -48,9 +48,6 @@ function updateAutomatic(event: Event) {
     <ExpandSection :open="diagnosticsOpen">
       <MediaDiagnostics v-if="diagnosticsOpen && room" :room="room" :statistics="report.latest.value" />
     </ExpandSection>
-    <button type="button" class="disclosure-trigger" :aria-expanded="moreOpen" :aria-controls="moreId" @click="moreOpen = !moreOpen">
-      <ChevronRight :size="12" class="disclosure-arrow" :class="{ 'is-open': moreOpen }" aria-hidden="true" />{{ moreOpen ? '收起诊断选项' : '更多诊断选项' }}
-    </button>
     <ExpandSection :open="moreOpen" :id="moreId">
       <div class="diagnostic-details">
         <p>报告使用临时成员编号，导出后由你选择分享。</p>
@@ -81,6 +78,9 @@ function updateAutomatic(event: Event) {
         <p>遇到问题时点击标记，导出后更容易找到对应时段。也可在体验说明中补充现象。</p>
       </div>
     </ExpandSection>
+    <button type="button" class="disclosure-trigger" :aria-expanded="moreOpen" :aria-controls="moreId" @click="moreOpen = !moreOpen">
+      <ChevronRight :size="12" class="disclosure-arrow" :class="{ 'is-open': moreOpen }" aria-hidden="true" />{{ moreOpen ? '收起诊断选项' : '更多诊断选项' }}
+    </button>
     <InlineFeedback :message="error" :pending="saving ? '正在导出报告…' : ''" />
     <InlineFeedback :message="persistenceError" />
   </section>

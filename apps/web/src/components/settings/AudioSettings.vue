@@ -158,17 +158,17 @@ function updateInputGain(gain: number) {
         <input type="checkbox" aria-label="平衡成员语音音量" :checked="preferences.voiceVolumeBalance.value"
           @change="preferences.setVoiceVolumeBalance(($event.target as HTMLInputElement).checked)" /></div>
       <div>
-        <button type="button" class="disclosure-trigger" :aria-expanded="shareVolumeOpen" :aria-controls="shareVolumeId"
-          @click="shareVolumeOpen = !shareVolumeOpen">
-          <ChevronRight :size="12" aria-hidden="true" class="disclosure-arrow" :class="{ 'is-open': shareVolumeOpen }" />
-          观看共享画面的音量<span class="disclosure-value">{{ Math.round(screenShareVolume * 100) }}%</span>
-        </button>
         <ExpandSection :open="shareVolumeOpen" :id="shareVolumeId">
           <div class="settings-range-row"><span><label for="settings-share-volume">共享画面音量</label><RangeValue :value="screenShareVolume" :active="active" label="重置共享画面音量" @reset="preferences.setScreenShareVolume($event)">{{ Math.round(screenShareVolume * 100) }}%</RangeValue></span>
             <input id="settings-share-volume" type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="screenShareVolume"
               aria-label="共享画面音量" @input="preferences.setScreenShareVolume(Number(($event.target as HTMLInputElement).value))" /></div>
           <p>调整其他成员共享画面中的游戏、视频等声音，仅影响你听到的音量，同时受总输出音量控制。</p>
         </ExpandSection>
+        <button type="button" class="disclosure-trigger" :aria-expanded="shareVolumeOpen" :aria-controls="shareVolumeId"
+          @click="shareVolumeOpen = !shareVolumeOpen">
+          <ChevronRight :size="12" aria-hidden="true" class="disclosure-arrow" :class="{ 'is-open': shareVolumeOpen }" />
+          观看共享画面的音量<span class="disclosure-value">{{ Math.round(screenShareVolume * 100) }}%</span>
+        </button>
       </div>
     </section>
   </div>

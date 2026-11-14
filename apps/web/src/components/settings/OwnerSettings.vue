@@ -15,8 +15,6 @@ interface ServerSettingsStatus {
 const status = ref<ServerSettingsStatus | null>(null);
 const error = ref('');
 const loading = ref(false);
-const lifecycle = ref<InstanceType<typeof AccountLifecycleSettings> | null>(null);
-defineExpose({ beginTransfer: () => lifecycle.value?.beginTransfer() });
 let request: AbortController | undefined;
 
 async function refresh() {
@@ -56,7 +54,7 @@ onScopeDispose(() => request?.abort());
       <InlineFeedback :message="error" :pending="loading && !status ? '正在读取配置状态…' : ''" />
       <button v-if="error" type="button" class="settings-button" :disabled="loading || leaving" @click="refresh">重试</button>
     </section>
-    <AccountLifecycleSettings ref="lifecycle" :active="active" :leaving="leaving" :administrator="true" section="owner" />
+    <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="true" section="owner" />
   </section>
 </template>
 
