@@ -1,11 +1,12 @@
 <script lang="ts">
 const backgrounds = new Map<HTMLElement, { count: number; inert: boolean }>();
+const layers = new Map<HTMLElement, number>();
 </script>
 
 <script setup lang="ts">
 import { onScopeDispose } from 'vue';
 
-const sessions = new Map<HTMLElement, { background: Set<HTMLElement>; focus: HTMLElement | null }>();
+const sessions = new Map<HTMLElement, { background: Set<HTMLElement>; focus: HTMLElement | null; zIndex: string }>();
 
 function isolate(element: Element) {
   const surface = element as HTMLElement;
@@ -16,6 +17,11 @@ function isolate(element: Element) {
   }
   const background = new Set<HTMLElement>();
   const focus = surface.ownerDocument.activeElement;
+  // Teleport 的挂载顺序不等于打开顺序；新弹窗必须盖过仍在后台的查看器。
+  const zIndex = surface.style.zIndex;
+  const layer = Math.max(100, ...layers.values()) + 1;
+  layers.set(surface, layer);
+  surface.style.zIndex = String(layer);
   for (const sibling of surface.ownerDocument.body.children) {
     if (!(sibling instanceof HTMLElement) || sibling === surface) continue;
     const current = backgrounds.get(sibling);
@@ -24,7 +30,7 @@ function isolate(element: Element) {
     background.add(sibling);
     sibling.inert = true;
   }
-  sessions.set(surface, { background, focus: focus instanceof HTMLElement ? focus : null });
+  sessions.set(surface, { background, focus: focus instanceof HTMLElement ? focus : null, zIndex });
 }
 
 function retire(element: Element) {
@@ -37,6 +43,8 @@ function restore(element: Element) {
   const session = sessions.get(element as HTMLElement);
   if (!session) return;
   sessions.delete(element as HTMLElement);
+  layers.delete(element as HTMLElement);
+  (element as HTMLElement).style.zIndex = session.zIndex;
   for (const sibling of session.background) {
     const current = backgrounds.get(sibling)!;
     current.count--;

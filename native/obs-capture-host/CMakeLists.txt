@@ -97,7 +97,10 @@ add_executable(lycansync-recording-framing-test EXCLUDE_FROM_ALL tests/recording
 target_compile_features(lycansync-recording-framing-test PRIVATE cxx_std_20)
 target_compile_definitions(lycansync-recording-framing-test PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(lycansync-recording-framing-test PRIVATE /utf-8)
-target_link_libraries(lycansync-recording-framing-test PRIVATE lycansync_libobs d3d11 dxgi)
+target_link_libraries(lycansync-recording-framing-test PRIVATE lycansync_libobs d3d11 dxgi psapi)
+target_include_directories(lycansync-recording-framing-test PRIVATE "${LYCANSYNC_OBS_DEPS}/include")
+target_link_libraries(lycansync-recording-framing-test PRIVATE
+  "${LYCANSYNC_OBS_DEPS}/lib/avformat.lib" "${LYCANSYNC_OBS_DEPS}/lib/avcodec.lib" "${LYCANSYNC_OBS_DEPS}/lib/avutil.lib")
 set_target_properties(lycansync-recording-framing-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")
 
 # 只替换查询边界验证结束判定，不初始化 OBS、创建窗口或加载捕获插件。

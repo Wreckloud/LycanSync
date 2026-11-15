@@ -9,7 +9,12 @@
 #include <filesystem>
 #include <thread>
 #include <cstdlib>
+#include <cmath>
 #include <windows.h>
+#include <psapi.h>
+extern "C" {
+#include <libavformat/avformat.h>
+}
 
 namespace {
 struct Pattern { std::atomic<uint32_t> width = 1222, height = 787; } pattern;
@@ -26,6 +31,29 @@ void draw_pattern(void *, gs_effect_t *) {
 }
 std::string utf8(const std::filesystem::path &path) {
   const auto value = path.u8string(); return {value.begin(), value.end()};
+}
+bool check_timeline(const std::filesystem::path &path, unsigned duration, unsigned fps, double tolerance = 1.0) {
+  AVFormatContext *format = nullptr;
+  if (avformat_open_input(&format, utf8(path).c_str(), nullptr, nullptr) < 0) return false;
+  if (avformat_find_stream_info(format, nullptr) < 0) { avformat_close_input(&format); return false; }
+  const int video = av_find_best_stream(format, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+  const int audio = av_find_best_stream(format, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+  auto *packet = av_packet_alloc();
+  double video_end = 0, audio_end = 0;
+  unsigned frames = 0;
+  while (packet && av_read_frame(format, packet) >= 0) {
+    if (packet->pts != AV_NOPTS_VALUE) {
+      const auto end = (packet->pts + packet->duration) * av_q2d(format->streams[packet->stream_index]->time_base);
+      if (packet->stream_index == video) { video_end = std::max(video_end, end); ++frames; }
+      if (packet->stream_index == audio) audio_end = std::max(audio_end, end);
+    }
+    av_packet_unref(packet);
+  }
+  av_packet_free(&packet); avformat_close_input(&format);
+  std::printf("timeline video=%.3f audio=%.3f frames=%u expectedSeconds=%u expectedFps=%u\n", video_end, audio_end, frames, duration, fps);
+  // 输出声明帧率不足以证明正确：同时检查墙钟时长、实际包数和音画结束时间。
+  return video >= 0 && audio >= 0 && std::abs(video_end - duration) < tolerance
+      && std::abs(video_end - audio_end) < 0.5 && std::abs(static_cast<double>(frames) - duration * fps) < fps * tolerance;
 }
 }
 
@@ -84,17 +112,34 @@ int wmain(int argc, wchar_t **argv) {
           failed |= !code.empty();
         });
     for (unsigned segment = 0; segment < 2 && !result; ++segment) {
-      started = stopped = failed = replay_saved = false; pattern.width = 1222; pattern.height = 787;
+      started = stopped = failed = replay_saved = false;
+      pattern.width = segment == 0 ? 1222 : 1920;
+      pattern.height = segment == 0 ? 787 : 1080;
       if (!recording.start_replay("framing-replay", false, source, "framing-test", 30, 1080, recording_fps)) { result = 10; break; }
       if (!recording.start("framing-test", utf8(directory / ("framing-" + std::to_string(segment) + ".mkv")), false,
           source, "framing-test", 1080, recording_fps)) { result = 6; break; }
-      if (recording.width() != 1220 || recording.height() != 786) { result = 7; break; }
+      if (recording.width() != (pattern.width.load() & ~3u) || recording.height() != (pattern.height.load() & ~1u)) { result = 7; break; }
       const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(duration);
+      auto next_memory_sample = std::chrono::steady_clock::now();
       while (std::chrono::steady_clock::now() < deadline && !failed) {
         recording.poll();
+        if (std::chrono::steady_clock::now() >= next_memory_sample) {
+          PROCESS_MEMORY_COUNTERS_EX memory{};
+          if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&memory), sizeof(memory))) {
+            std::printf("memory segment=%u privateMiB=%.1f workingSetMiB=%.1f\n", segment,
+                memory.PrivateUsage / 1048576.0, memory.WorkingSetSize / 1048576.0);
+            std::fflush(stdout);
+          }
+          next_memory_sample += std::chrono::seconds(10);
+        }
         if (std::chrono::steady_clock::now() > deadline - std::chrono::seconds(1)) { pattern.width = 800; pattern.height = 800; }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
+      auto *encoder = obs_get_encoder_by_name("LycanSync recording video");
+      const auto encoded = encoder ? obs_encoder_get_encoded_frames(encoder) : 0;
+      if (encoder) obs_encoder_release(encoder);
+      const bool correct_rate = std::abs(static_cast<double>(encoded) - duration * recording_fps) < recording_fps;
+      std::printf("encoderFrames=%u expected=%u rateMatches=%d\n", encoded, duration * recording_fps, correct_rate);
       if (!recording.save_replay("framing-save", utf8(directory / ("replay-" + std::to_string(segment) + ".mkv")), "framing-replay")) { result = 11; break; }
       const auto save_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
       while (!replay_saved && !failed && std::chrono::steady_clock::now() < save_deadline) {
@@ -107,6 +152,9 @@ int wmain(int argc, wchar_t **argv) {
       std::printf("shutdown segment=%u\n", segment); std::fflush(stdout);
       if (!recording.shutdown() || !started || !stopped || failed) result = 8;
       std::printf("shutdown complete segment=%u result=%d\n", segment, result); std::fflush(stdout);
+      if (!result && !check_timeline(directory / ("framing-" + std::to_string(segment) + ".mkv"), duration, recording_fps)) result = 14;
+      if (!result && !check_timeline(directory / ("replay-" + std::to_string(segment) + ".mkv"), std::min(duration, 30u), recording_fps, 3.0)) result = 16;
+      if (!result && !correct_rate) result = 15;
     }
   }
   obs_remove_main_rendered_callback(count_frames, nullptr);

@@ -9,6 +9,7 @@
 #include <vector>
 
 namespace {
+constexpr unsigned kIdleFrameRate = 5;
 std::vector<std::string> events;
 void check(bool valid, const char *message) { if (!valid) throw std::runtime_error(message); }
 size_t position(const char *name) {

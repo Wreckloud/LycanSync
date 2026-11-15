@@ -47,16 +47,21 @@ function previewRange() {
 function timeChanged(seconds: number) {
   if (previewingRange.value && seconds >= end.value) { surface.value?.player?.pause(); previewingRange.value = false; }
 }
+function shareRecording(entry: RecordingLibraryEntry) {
+  surface.value?.player?.pause();
+  previewingRange.value = false;
+  share?.select(entry);
+}
 async function save(andShare = false) {
   if (!desktop || busy.value) return;
-  if (saved.value) { if (andShare) share?.select(saved.value); return; }
+  if (saved.value) { if (andShare) shareRecording(saved.value); return; }
   surface.value?.player?.pause();
   requestId = crypto.randomUUID(); busy.value = true; error.value = ''; progress.value = 0;
   try {
     const clip = await desktop.exportRecordingClip(requestId, props.entry.id, Math.round(start.value * 1000), Math.round(end.value * 1000));
     if (disposed) return;
     saved.value = clip; emit('saved');
-    if (andShare) share?.select(clip);
+    if (andShare) shareRecording(clip);
   } catch (reason) {
     if (!disposed) error.value = reason instanceof Error ? reason.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : '片段保存失败，请重试。';
   } finally { if (!disposed) { busy.value = false; requestId = ''; } }
@@ -97,7 +102,7 @@ const backdropEvents = useBackdropDismiss(() => emit('close'));
               </template>
               <template v-else>
                 <button :disabled="failed || duration < 0.1" @click="editing = true">剪辑</button>
-                <button @click="share?.select(entry)">分享到群聊</button>
+                <button @click="shareRecording(entry)">分享到群聊</button>
               </template>
             </div>
           </div>

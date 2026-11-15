@@ -95,7 +95,10 @@ bool RecordingOutput::prepare_pipeline(const std::string &id, bool voices, obs_s
   obs_view_set_source(view_, 0, obs_scene_get_source(scene_));
   video_info.base_width = video_info.output_width = width_;
   video_info.base_height = video_info.output_height = height_;
-  video_info.fps_num = frame_rate_ = std::min(video_info.fps_num, fps);
+  // 辅助视图仍由主画布时钟驱动；只改视图帧率会让编码时间戳超前，音视频交织队列持续积压。
+  // 保留主时钟，在编码器上按整数倍降帧（当前支持 30 / 60 / 120 FPS）。
+  frame_rate_ = std::min(video_info.fps_num, fps);
+  const auto frame_rate_divisor = video_info.fps_num / frame_rate_;
   video_info.output_format = VIDEO_FORMAT_NV12;
   video_info.gpu_conversion = true;
   video_info.colorspace = VIDEO_CS_709;
@@ -122,6 +125,7 @@ bool RecordingOutput::prepare_pipeline(const std::string &id, bool voices, obs_s
   obs_data_release(settings);
   if (!video_) return fail("recordingEncoderStartFailed");
   obs_encoder_set_video(video_, recording_video);
+  if (!obs_encoder_set_frame_rate_divisor(video_, frame_rate_divisor)) return fail("recordingEncoderStartFailed");
   {
     settings = obs_encoder_defaults("ffmpeg_aac");
     obs_data_set_int(settings, "bitrate", 192);
