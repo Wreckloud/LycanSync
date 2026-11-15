@@ -8,7 +8,7 @@ import type { MemberOption } from './MemberPicker.vue';
 
 const script = parse(readFileSync(new URL('./MemberPicker.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const source = ts.createSourceFile('MemberPicker.ts', script, ts.ScriptTarget.Latest, true);
-const names = ['loadMore', 'checkScroll'];
+const names = ['loadMore', 'checkScroll', 'unavailable'];
 const compiled = ts.transpile(source.statements.filter(statement => {
   if (ts.isFunctionDeclaration(statement)) return names.includes(statement.name?.text ?? '');
   const text = statement.getText(source);
@@ -23,8 +23,8 @@ function setup() {
     Promise.resolve({ members: [{ userId: 'friend', nickname: '朋友', avatar: '' }], hasMore: false }));
   const state = { props: { load, disabled: false }, loading: ref(false), error: ref(''), search: ref(''), scrollPosition: ref(0),
     results: ref<MemberOption[]>([]), hasMore: ref(false), list: ref<{ scrollHeight: number; scrollTop: number; clientHeight: number } | null>(null) };
-  const actions = scope.run(() => runInNewContext(`${compiled}; ({ loadMore, checkScroll })`,
-    { ...state, nextTick, watch, onScopeDispose, AbortController, Error, setTimeout, clearTimeout })) as { loadMore(): Promise<void>; checkScroll(): void };
+  const actions = scope.run(() => runInNewContext(`${compiled}; ({ loadMore, checkScroll, unavailable })`,
+    { ...state, nextTick, watch, onScopeDispose, AbortController, Error, setTimeout, clearTimeout })) as { loadMore(): Promise<void>; checkScroll(): void; unavailable(member: MemberOption): boolean };
   return { state, scope, ...actions };
 }
 it('搜索立即撤销旧请求，迟到结果不能覆盖新搜索，卸载取消后续读取', async () => {
@@ -71,4 +71,17 @@ it('返回列表恢复阅读位置，修改搜索时回到顶部', async () => {
   f.state.search.value = '朋友'; await nextTick();
   expect(f.state.scrollPosition.value).toBe(0);
   expect(f.state.list.value.scrollTop).toBe(0);
+});
+
+it('确认页隐藏列表时不继续翻页，加载下一页不禁用已有成员', async () => {
+  const f = setup();
+  f.state.hasMore.value = true;
+  f.state.list.value = { scrollHeight: 0, scrollTop: 0, clientHeight: 0 };
+  f.checkScroll();
+  expect(f.state.props.load).not.toHaveBeenCalled();
+  f.state.loading.value = true;
+  const member = { userId: 'friend', nickname: '朋友', avatar: '' };
+  expect(f.unavailable(member)).toBeFalsy();
+  f.state.props.disabled = true;
+  expect(f.unavailable(member)).toBe(true);
 });

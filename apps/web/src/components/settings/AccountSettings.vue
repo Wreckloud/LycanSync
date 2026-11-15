@@ -6,7 +6,7 @@ import InlineFeedback from '../InlineFeedback.vue';
 import AccountLifecycleSettings from './AccountLifecycleSettings.vue';
 import type { GroupDetail } from '../../group/groupApi';
 
-const props = defineProps<{ active: boolean; leaving: boolean; administrator?: boolean; userId: string }>();
+const props = defineProps<{ active: boolean; leaving: boolean; administrator?: boolean; userId: string; nickname: string }>();
 const emit = defineEmits<{ logout: []; notice: [message: string]; groupUpdated: [group: GroupDetail]; groupRemoved: [id: string] }>();
 const qqAvailable = ref(false);
 const binding = ref<{ bound: boolean; nickname: string } | null>(null);
@@ -62,7 +62,7 @@ watch(() => props.active, (active) => {
         <button type="button" class="settings-button settings-control" :disabled="leaving" @click="emit('logout')">退出登录</button></div>
       <p>返回登录页，并记住此账号，方便下次登录。</p>
     </section>
-    <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="administrator" :user-id="userId" section="account"
+    <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="administrator" :user-id="userId" :nickname="nickname" section="account"
       @notice="emit('notice', $event)" @group-updated="emit('groupUpdated', $event)" @group-removed="emit('groupRemoved', $event)" />
   </section>
 </template>

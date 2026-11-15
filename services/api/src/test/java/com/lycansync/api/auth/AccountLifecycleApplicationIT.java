@@ -47,7 +47,7 @@ class AccountLifecycleApplicationIT {
     @Autowired private ChatService chat;
 
     @Test
-    void shouldRecoverTransferAndCloseWhilePreservingHistoricalIdentity() {
+    void shouldRecoverTransferAndCloseWhileClearingProfileAndPreservingMessages() {
         assertThat(jdbc.sql("SELECT current_database()").query(String.class).single()).isEqualTo("lycansync_lifecycle_test");
         var activation = links.activation();
         String password = "owner-recovery-test-password";
@@ -68,15 +68,19 @@ class AccountLifecycleApplicationIT {
         assertThat(sessions.authenticate(recovered.sessionToken()).administrator()).isFalse();
         assertThat(sessions.authenticate(joined.sessionToken()).administrator()).isTrue();
         assertThatThrownBy(() -> accounts.recover(password, AuthSecrets.generate())).isInstanceOf(AuthException.class);
-        accounts.closeAccount(owner, "注销账号");
+        jdbc.sql("UPDATE app_user SET avatar = 'old-avatar', signature = 'old-signature' WHERE id = :userId")
+                .param("userId", owner.id()).update();
+        accounts.closeAccount(owner, first.user().nickname());
         assertThatThrownBy(() -> sessions.authenticate(recovered.sessionToken())).isInstanceOf(AuthException.class);
         assertThat(groups.findGroup(group.id(), member).members()).hasSize(1);
         var historical = chat.findMessages(group.id(), member, null, null).messages().get(0);
         assertThat(historical.id()).isEqualTo(message.id());
-        assertThat(historical.senderNickname()).isEqualTo(first.user().nickname());
-        assertThat(historical.senderAvatar()).isEqualTo(first.user().avatar());
+        assertThat(historical.senderNickname()).isEqualTo("账号已注销");
+        assertThat(historical.senderAvatar()).isEmpty();
         assertThat(historical.senderDeletedAt()).isNotNull();
-        assertThat(groups.findMemberProfile(group.id(), owner.id(), member).deletedAt()).isNotNull();
+        var profile = groups.findMemberProfile(group.id(), owner.id(), member);
+        assertThat(profile.deletedAt()).isNotNull();
+        assertThat(profile.signature()).isEmpty();
     }
     private String token(AccessLinkService.GeneratedLink generated) {
         return generated.url().substring(generated.url().indexOf("#token=") + 7);

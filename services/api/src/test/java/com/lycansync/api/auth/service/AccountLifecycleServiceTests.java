@@ -186,10 +186,10 @@ class AccountLifecycleServiceTests {
 
     @Test
     void shouldRequireServerAndGroupOwnershipToBeTransferredBeforeClosure() {
-        assertThatThrownBy(() -> service.closeAccount(principal(owner), "注销账号")).isInstanceOf(AuthException.class);
+        assertThatThrownBy(() -> service.closeAccount(principal(owner), owner.nickname())).isInstanceOf(AuthException.class);
         UUID groupId = UUID.randomUUID();
         when(groups.findGroups(member.id())).thenReturn(List.of(new GroupView(groupId, "群组", "", "", GroupRole.OWNER, 1, NOW, NOW)));
-        assertThatThrownBy(() -> service.closeAccount(principal(member), "注销账号")).isInstanceOf(AuthException.class);
+        assertThatThrownBy(() -> service.closeAccount(principal(member), member.nickname())).isInstanceOf(AuthException.class);
         verify(accounts, never()).closeAccount(any(), any());
         verifyNoInteractions(rtc);
     }
@@ -201,7 +201,7 @@ class AccountLifecycleServiceTests {
         when(groups.findGroups(member.id())).thenReturn(List.of(new GroupView(groupId, "群组", "", "", GroupRole.MEMBER, 2, NOW, NOW)));
         when(groups.findRtcRoomKey(groupId)).thenReturn(room.toString());
         when(accounts.closeAccount(member.id(), NOW)).thenReturn(1);
-        service.closeAccount(principal(member), "注销账号");
+        service.closeAccount(principal(member), member.nickname());
         var order = inOrder(rtc, accounts);
         order.verify(rtc).removeParticipant(room, member.id());
         order.verify(accounts).closeAccount(member.id(), NOW);
@@ -210,6 +210,26 @@ class AccountLifecycleServiceTests {
         verify(groups, never()).removeMember(any(), any());
         verify(users, never()).updateProfile(any(), anyString(), anyString(), anyString());
         verify(events).publishEvent(any(Object.class));
+    }
+
+    @Test
+    void shouldRejectWrongOrOutdatedNicknameBeforeClosingAccount() {
+        when(users.findUserProfile(member.id())).thenReturn(new AuthUser(member.id(), "新的昵称", "头像", false, "签名", NOW));
+        for (String confirmation : List.of("注销账号", member.nickname(), owner.nickname(), "", " 新的昵称 ")) {
+            assertThatThrownBy(() -> service.closeAccount(principal(member), confirmation))
+                    .isInstanceOf(AuthException.class).hasMessage("请输入当前账号的完整昵称确认注销");
+        }
+        verify(accounts, never()).closeAccount(any(), any());
+        verify(accounts, never()).revokeSessions(any());
+        verifyNoInteractions(rtc);
+    }
+
+    @Test
+    void shouldUseCurrentProfileNicknameRatherThanSessionNickname() {
+        when(users.findUserProfile(member.id())).thenReturn(new AuthUser(member.id(), "新的昵称", "头像", false, "签名", NOW));
+        when(accounts.closeAccount(member.id(), NOW)).thenReturn(1);
+        service.closeAccount(principal(member), "新的昵称");
+        verify(accounts).closeAccount(member.id(), NOW);
     }
 
     private AuthenticatedUser principal(AuthUser user) {

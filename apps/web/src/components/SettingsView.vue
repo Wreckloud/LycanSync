@@ -152,7 +152,7 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
             @presence-mode="emit('presenceMode', $event)"
             :mappings="activityMappings" :active="activeSection === 'account'"
             :error="activityError" @visibility="emit('activityVisibility', $event)" @last-online-visibility="emit('lastOnlineVisibility', $event)" />
-          <AccountSettings @notice="emit('notice', $event)" :active="activeSection === 'account'" :leaving="leaving" :administrator="user.administrator" :user-id="user.id" @logout="requestLogout"
+          <AccountSettings @notice="emit('notice', $event)" :active="activeSection === 'account'" :leaving="leaving" :administrator="user.administrator" :user-id="user.id" :nickname="user.nickname" @logout="requestLogout"
             @group-updated="emit('groupUpdated', $event)" @group-removed="emit('groupRemoved', $event)" />
         </div>
         <AudioSettings v-show="activeSection === 'audio'" :active="activeSection === 'audio'"

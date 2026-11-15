@@ -28,7 +28,8 @@
         SELECT id, nickname FROM app_user WHERE administrator = FALSE AND deleted_at IS NULL ORDER BY created_at, id
     </select>
     <update id="closeAccount">
-        UPDATE app_user SET deleted_at = #{now} WHERE id = #{userId} AND administrator = FALSE AND deleted_at IS NULL
+        UPDATE app_user SET deleted_at = #{now}, nickname = '账号已注销', avatar = '', signature = ''
+        WHERE id = #{userId} AND administrator = FALSE AND deleted_at IS NULL
     </update>
     <delete id="revokeSessions">DELETE FROM auth_session WHERE user_id = #{userId}</delete>
     <update id="revokeLinks">

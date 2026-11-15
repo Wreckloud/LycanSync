@@ -176,3 +176,12 @@ export async function fetchAttachment(groupId: string, attachmentId: string, sig
   if (!response.ok) throw await readApiError(response);
   return response.blob();
 }
+
+export async function fetchFilePreview(groupId: string, attachmentId: string, signal: AbortSignal): Promise<Blob> {
+  const response = await authenticatedFetch(
+    '/api/groups/' + encodeURIComponent(groupId) + '/files/' + encodeURIComponent(attachmentId),
+    { headers: { Accept: 'application/octet-stream' }, signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]) },
+  );
+  if (!response.ok) throw await readApiError(response);
+  return response.blob();
+}

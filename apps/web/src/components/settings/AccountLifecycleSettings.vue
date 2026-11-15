@@ -11,7 +11,7 @@ import GroupManagementDialog from '../GroupManagementDialog.vue';
 import OwnerTransferDialog, { type PendingOwnerTransfer } from '../OwnerTransferDialog.vue';
 import { findGroup, type GroupDetail } from '../../group/groupApi';
 
-const props = defineProps<{ active: boolean; leaving: boolean; administrator?: boolean; section: 'account' | 'owner'; userId?: string }>();
+const props = defineProps<{ active: boolean; leaving: boolean; administrator?: boolean; section: 'account' | 'owner'; userId?: string; nickname?: string }>();
 const emit = defineEmits<{ groupUpdated: [group: GroupDetail]; groupRemoved: [id: string]; notice: [message: string] }>();
 interface LifecycleStatus {
   administrator: boolean;
@@ -30,6 +30,7 @@ const password = ref('');
 const confirmation = ref('');
 const previousPassword = ref('');
 const closeConfirmation = ref('');
+const closeNameMatches = computed(() => !!props.nickname && closeConfirmation.value === props.nickname);
 const busy = ref(false);
 const loading = ref(false);
 const management = ref<{ group: GroupDetail; mode: 'transfer' | 'dissolve' | 'resolve' } | null>(null);
@@ -148,7 +149,7 @@ function toggle(section: typeof expanded.value) {
 }
 async function submit(operation: 'password' | 'accept' | 'cancel' | 'close') {
   if (busy.value || props.leaving || !status.value) return;
-  if (operation === 'close' && (!canClose.value || closeConfirmation.value !== '注销账号')) return;
+  if (operation === 'close' && (!canClose.value || !closeNameMatches.value)) return;
   if ((operation === 'password' || operation === 'accept') && password.value !== confirmation.value) {
     error.value = '两次输入的恢复密码不一致。'; return;
   }
@@ -228,7 +229,7 @@ onScopeDispose(() => { document.removeEventListener('visibilitychange', closureV
       <div class="settings-action-row"><h3>注销账号</h3>
         <button type="button" class="settings-button account-danger settings-control" :disabled="busy || leaving" @click="beginClose">注销账号</button>
       </div>
-      <p>注销后无法再次登录；历史资料、消息和共同语音记录会保留，并标记为“已注销”。</p>
+      <p>注销后无法再次登录，头像和签名会清除，昵称改为“账号已注销”。消息和共同语音记录会保留。</p>
       <p v-if="status?.administrator || status?.ownedGroups.length" class="closure-requirements">
         <span v-if="status?.administrator">请先完成服主转让，再注销账号。</span>
         <span v-if="status?.ownedGroups.length">请先转让或解散名下的 {{ status.ownedGroups.length }} 个群组。</span>
@@ -271,10 +272,10 @@ onScopeDispose(() => { document.removeEventListener('visibilitychange', closureV
           </div>
         <InlineFeedback :message="error" :pending="busy ? '正在处理…' : loading ? '正在检查注销条件…' : ''" />
         <form v-if="canClose" class="lifecycle-form" @submit.prevent="submit('close')">
-          <label class="settings-field" for="close-account-confirmation">请输入“注销账号”确认，此操作不能撤回
-            <input id="close-account-confirmation" v-model="closeConfirmation" required maxlength="4" :disabled="busy || leaving" autocomplete="off" />
+          <label class="settings-field" for="close-account-confirmation">请输入你的昵称“{{ nickname }}”确认，此操作不能撤回
+            <input id="close-account-confirmation" v-model="closeConfirmation" required maxlength="32" :disabled="busy || leaving" autocomplete="off" />
           </label>
-          <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button class="settings-button account-danger card-actions-end" :disabled="busy || leaving || closeConfirmation !== '注销账号'">确认注销</button></div>
+          <div class="card-actions"><button type="button" :disabled="busy" @click="toggle(null)">取消</button><button class="settings-button account-danger card-actions-end" :disabled="busy || leaving || !closeNameMatches">确认注销</button></div>
         </form>
         <div v-else class="card-actions">
           <button type="button" :disabled="busy" @click="toggle(null)">关闭</button>

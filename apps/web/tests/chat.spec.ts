@@ -68,7 +68,7 @@ test('长文本输入和清空平滑伸缩，发送后随输入框收起完整�
       const heights: number[] = [];
       for (let frame = 0; frame < 18; frame++) {
         await new Promise(requestAnimationFrame);
-        heights.push(textarea.getBoundingClientRect().height);
+        heights.push(textarea.closest('.composer-content')!.getBoundingClientRect().height);
       }
       return heights;
     }, content);
@@ -300,7 +300,7 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
   const composerBoundsBeforeError = await page.locator('.composer').boundingBox();
   await composer.fill('触发错误');
   await composer.press('Enter');
-  const chatError = page.getByRole('alert');
+  const chatError = page.locator('.composer-shell').getByRole('alert');
   await expect(chatError).toHaveText('消息发送失败');
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(chatError).toHaveText('消息发送失败');

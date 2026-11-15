@@ -4,6 +4,7 @@ import { ACCOUNT_CACHE } from '../cache/localCache';
 import { fetchAttachment } from '../chat/chatApi';
 
 const props = defineProps<{ groupId: string; attachmentId: string; width: number; height: number; alt: string }>();
+const emit = defineEmits<{ preview: [] }>();
 const cache = inject(ACCOUNT_CACHE, null);
 const frame = ref<HTMLElement | null>(null);
 const source = ref('');
@@ -123,7 +124,7 @@ onScopeDispose(() => {
 
 <template>
   <div ref="frame" class="chat-image-frame" :style="frameStyle">
-    <img v-if="source" class="chat-image" :src="source" :alt="alt" @error="imageFailed" />
+    <button v-if="source" type="button" class="chat-image-open" aria-label="查看图片" @click="emit('preview')"><img class="chat-image" :src="source" :alt="alt" @error="imageFailed" /></button>
     <button v-else-if="error" class="chat-image-error" type="button" @click="load(true)">图片加载失败，点击重试</button>
   </div>
 </template>

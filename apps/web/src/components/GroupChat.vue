@@ -2,10 +2,11 @@
 import '../chat/chat.css';
 import { computed, inject, nextTick, onMounted, onScopeDispose, ref } from 'vue';
 import { useChatScroll } from '../chat/useChatScroll';
+import { useComposerHeight } from '../chat/useComposerHeight';
 import { useGroupMessages } from '../chat/useGroupMessages';
 import { ACCOUNT_CACHE } from '../cache/localCache';
 import { useLoadingHint } from './useLoadingHint';
-import { ArrowDown, MessageSquareText, Plus, Send, X } from '@lucide/vue';
+import { ArrowDown, MessageSquareText, Plus, Send, UserRound, X } from '@lucide/vue';
 import type { AuthUser } from '../auth/authApi';
 import { sendFile, sendMessage, type ChatMessage } from '../chat/chatApi';
 import { compressChatImage } from '../chat/messageImage';
@@ -15,6 +16,8 @@ import ChatImage from './ChatImage.vue';
 import ProfilePopover from './ProfilePopover.vue';
 import { findGroupMemberProfile, type GroupMemberProfile } from '../group/groupApi';
 import ChatFileCard from './ChatFileCard.vue';
+import ChatMediaViewer from './ChatMediaViewer.vue';
+import DialogTransition from './DialogTransition.vue';
 
 type MessageSegment = { text: string; href?: string };
 type PendingAttachment = {
@@ -30,6 +33,7 @@ type PendingAttachment = {
 const props = defineProps<{ group: GroupSummary; members: GroupMember[]; user: AuthUser; syncError?: string }>();
 const emit = defineEmits<{ initialLoad: [groupId: string]; retrySync: [] }>();
 const cache = inject(ACCOUNT_CACHE, null);
+const viewedMedia = ref<ChatMessage | null>(null);
 const historicalSender = ref<ChatMessage | null>(null);
 const historicalAnchor = ref<HTMLElement | null>(null);
 const historicalProfile = ref<GroupMemberProfile | null>(null);
@@ -59,6 +63,9 @@ const error = ref('');
 const calendarNow = ref(new Date());
 const fileInput = ref<HTMLInputElement | null>(null);
 const messageInput = ref<HTMLTextAreaElement | null>(null);
+const composerViewport = ref<HTMLElement | null>(null);
+const composerContent = ref<HTMLElement | null>(null);
+const resizeMessageInput = useComposerHeight(messageInput, composerViewport, composerContent);
 const MESSAGE_GROUP_MAX_GAP_MS = 5 * 60_000;
 let calendarTimer: ReturnType<typeof setTimeout> | null = null;
 let disposed = false;
@@ -160,20 +167,6 @@ function handleKeydown(event: KeyboardEvent) {
   }
 }
 
-function resizeMessageInput() {
-  const element = messageInput.value;
-  if (!element) return;
-  const height = element.getBoundingClientRect().height;
-  // 测量自然高度时暂时关闭过渡，再从当前显示高度平滑到新高度，支持中途继续输入。
-  element.style.transition = 'none';
-  element.style.height = '42px';
-  const target = Math.min(element.scrollHeight, 122);
-  element.style.height = `${height}px`;
-  void element.offsetHeight;
-  element.style.transition = '';
-  element.style.height = `${target}px`;
-}
-
 async function submit() {
   if (!canSend.value) return;
   const generation = ++sendGeneration;
@@ -242,10 +235,12 @@ function cancelUpload() {
 }
 
 function senderName(message: ChatMessage) {
+  if (message.senderDeletedAt) return '账号已注销';
   return message.senderUserId === props.user.id ? props.user.nickname : message.senderNickname;
 }
 
 function senderAvatar(message: ChatMessage) {
+  if (message.senderDeletedAt) return '';
   return message.senderUserId === props.user.id ? props.user.avatar : members.value.get(message.senderUserId)?.avatar ?? message.senderAvatar ?? '';
 }
 
@@ -371,15 +366,15 @@ onScopeDispose(() => {
           <article class="chat-message" :data-message-id="message.id" :class="{ 'is-own': message.senderUserId === user.id, 'is-grouped': !startsNewMessageGroup(message, index) }">
             <template v-if="startsNewMessageGroup(message, index)">
               <img v-if="senderAvatar(message)" class="chat-message-avatar" :src="senderAvatar(message)" alt="" />
-              <span v-else class="chat-message-avatar chat-message-initial">{{ senderName(message).slice(0, 1) }}</span>
+              <span v-else class="chat-message-avatar chat-message-initial"><UserRound v-if="message.senderDeletedAt" :size="24" /><template v-else>{{ senderName(message).slice(0, 1) }}</template></span>
             </template>
             <span v-else class="chat-message-avatar-placeholder" aria-hidden="true" />
             <div class="chat-message-body">
-              <div v-if="startsNewMessageGroup(message, index)" class="chat-message-meta"><button v-if="message.senderDeletedAt" type="button" class="chat-historical-sender" @click="showHistoricalProfile(message, $event.currentTarget as HTMLElement)">{{ senderName(message) }}</button><strong v-else>{{ senderName(message) }}</strong><span v-if="message.senderDeletedAt" class="chat-deleted-account">已注销</span><time :datetime="message.createdAt" :title="formatFullMessageTime(message.createdAt)">{{ formatMessageTime(message.createdAt, calendarNow) }}</time></div>
+              <div v-if="startsNewMessageGroup(message, index)" class="chat-message-meta"><button v-if="message.senderDeletedAt" type="button" class="chat-historical-sender" @click="showHistoricalProfile(message, $event.currentTarget as HTMLElement)">{{ senderName(message) }}</button><strong v-else>{{ senderName(message) }}</strong><time :datetime="message.createdAt" :title="formatFullMessageTime(message.createdAt)">{{ formatMessageTime(message.createdAt, calendarNow) }}</time></div>
               <p v-if="message.content" class="chat-message-content"><template v-for="(segment, segmentIndex) in messageSegments(message.content)" :key="segmentIndex"><a v-if="segment.href" class="chat-message-link" :href="segment.href" @click.prevent="openLink(segment.href)">{{ segment.text }}</a><template v-else>{{ segment.text }}</template></template></p>
               <ChatImage v-if="message.type === 'IMAGE' && message.attachment" :group-id="group.id" :attachment-id="message.attachment.id"
-                :width="message.attachment.width ?? 1" :height="message.attachment.height ?? 1" :alt="`${senderName(message)} 发送的图片`" />
-              <ChatFileCard v-if="message.type === 'FILE' && message.attachment" :group-id="group.id" :attachment="message.attachment" />
+                :width="message.attachment.width ?? 1" :height="message.attachment.height ?? 1" :alt="`${senderName(message)} 发送的图片`" @preview="viewedMedia = message" />
+              <ChatFileCard v-if="message.type === 'FILE' && message.attachment" :group-id="group.id" :attachment="message.attachment" @preview="viewedMedia = message" />
             </div>
           </article>
         </template>
@@ -395,21 +390,23 @@ onScopeDispose(() => {
       <form class="composer" @submit.prevent="submit">
         <input ref="fileInput" type="file" hidden multiple @change="chooseFiles" />
         <button type="button" aria-label="添加文件" :disabled="busy || preparing" @click="fileInput?.click()"><Plus :size="16" /></button>
-        <div class="composer-content">
-          <div v-if="preparing" class="chat-transfer-state" role="status">正在压缩图片…</div>
-          <div v-if="pendingAttachments.length" class="composer-attachments">
-            <div v-for="item in pendingAttachments" :key="item.id" class="composer-attachment">
-              <img v-if="item.previewUrl" :src="item.previewUrl" alt="待发送图片" />
-              <span class="composer-attachment-name">{{ item.file.name }}</span>
-              <small>{{ item.kind === 'IMAGE' ? '已压缩' : (item.file.size / 1024 / 1024).toFixed(2) + ' MB' }}</small>
-              <progress v-if="item.state === 'uploading' && item.kind === 'FILE'" :value="item.progress" :max="item.file.size" aria-label="文件上传进度" />
-              <small v-if="item.error" class="chat-file-error" :role="item.state === 'failed' ? 'alert' : 'status'">{{ item.error }}</small>
-              <button v-if="item.state === 'uploading'" type="button" aria-label="取消文件上传" @click="cancelUpload"><X :size="13" /></button>
-              <button v-else-if="item.state !== 'sent'" type="button" :aria-label="`移除 ${item.file.name}`" @click="removePendingAttachment(item.id)"><X :size="13" /></button>
-              <small v-else>已发送</small>
+        <div ref="composerViewport" class="composer-content">
+          <div ref="composerContent">
+            <div v-if="preparing" class="chat-transfer-state" role="status">正在压缩图片…</div>
+            <div v-if="pendingAttachments.length" class="composer-attachments">
+              <div v-for="item in pendingAttachments" :key="item.id" class="composer-attachment">
+                <img v-if="item.previewUrl" :src="item.previewUrl" alt="待发送图片" />
+                <span class="composer-attachment-name">{{ item.file.name }}</span>
+                <small>{{ item.kind === 'IMAGE' ? '已压缩' : (item.file.size / 1024 / 1024).toFixed(2) + ' MB' }}</small>
+                <progress v-if="item.state === 'uploading' && item.kind === 'FILE'" :value="item.progress" :max="item.file.size" aria-label="文件上传进度" />
+                <small v-if="item.error" class="chat-file-error" :role="item.state === 'failed' ? 'alert' : 'status'">{{ item.error }}</small>
+                <button v-if="item.state === 'uploading'" type="button" aria-label="取消文件上传" @click="cancelUpload"><X :size="13" /></button>
+                <button v-else-if="item.state !== 'sent'" type="button" :aria-label="`移除 ${item.file.name}`" @click="removePendingAttachment(item.id)"><X :size="13" /></button>
+                <small v-else>已发送</small>
+              </div>
             </div>
+            <textarea ref="messageInput" v-model="text" aria-label="消息内容" maxlength="2000" rows="1" :disabled="busy || preparing" placeholder="发送消息" @input="resizeMessageInput" @keydown="handleKeydown" @paste="handlePaste" />
           </div>
-          <textarea ref="messageInput" v-model="text" aria-label="消息内容" maxlength="2000" rows="1" :disabled="busy || preparing" placeholder="发送消息" @input="resizeMessageInput" @keydown="handleKeydown" @paste="handlePaste" />
         </div>
         <button type="submit" aria-label="发送消息" :disabled="!canSend"><Send :size="15" /></button>
       </form>
@@ -419,5 +416,9 @@ onScopeDispose(() => {
       :deleted-at="historicalSender?.senderDeletedAt" :signature="historicalProfile?.signature" status="OFFLINE" status-label="已注销"
       :loading="historicalLoading" :error="historicalError" :voice-seconds="historicalProfile?.sharedVoiceSeconds"
       @close="closeHistoricalProfile" @retry="historicalSender && historicalAnchor && showHistoricalProfile(historicalSender, historicalAnchor)" />
+    <DialogTransition>
+      <ChatMediaViewer v-if="viewedMedia?.attachment" :key="viewedMedia.id" :group-id="group.id" :attachment="viewedMedia.attachment"
+        :image-message="viewedMedia.type === 'IMAGE'" @close="viewedMedia = null" />
+    </DialogTransition>
   </section>
 </template>

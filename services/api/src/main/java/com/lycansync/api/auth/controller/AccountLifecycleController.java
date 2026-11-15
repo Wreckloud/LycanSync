@@ -47,7 +47,7 @@ public class AccountLifecycleController {
     public record VerifyTransferRequest(@Schema(description = "当前服主恢复密码") @NotNull @Size(max = 128) String password) { }
     public record TransferRequest(@Schema(description = "接任成员 ID") @NotNull UUID targetId,
                                   @Schema(description = "当前服主恢复密码") @NotNull @Size(max = 128) String password) { }
-    public record CloseRequest(@Schema(description = "固定填写“注销账号”") @NotNull @Pattern(regexp = "注销账号") String confirmation) { }
+    public record CloseRequest(@Schema(description = "填写当前账号的完整昵称以确认注销") @NotNull @Size(min = 1, max = 32) String confirmation) { }
 
     @GetMapping
     @Operation(summary = "获取当前账号恢复、交接与注销条件")
@@ -97,7 +97,7 @@ public class AccountLifecycleController {
     }
 
     @PostMapping("/close")
-    @Operation(summary = "永久停用当前账号并标记已注销", description = "保留昵称、头像、签名、消息与共同语音历史；服主和群主必须先交接，撤销登录及语音资格")
+    @Operation(summary = "永久停用当前账号并标记已注销", description = "昵称替换为账号已注销，清空头像和签名，保留消息与共同语音历史；服主和群主必须先交接，撤销登录及语音资格")
     public ResponseEntity<Void> close(@AuthenticationPrincipal AuthenticatedUser user, @Valid @RequestBody CloseRequest request) {
         accounts.closeAccount(user, request.confirmation());
         return ResponseEntity.noContent().build();

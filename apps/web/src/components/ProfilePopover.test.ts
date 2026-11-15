@@ -2,9 +2,11 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
-import { computed, effectScope, markRaw, nextTick, onScopeDispose, reactive, ref, watch } from 'vue';
+import { computed, createSSRApp, effectScope, markRaw, nextTick, onScopeDispose, reactive, ref, watch } from 'vue';
+import { renderToString } from '@vue/server-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 import { formatPresenceAgo, formatRecentGame } from '../profile/presenceHistory';
+import ProfilePopover from './ProfilePopover.vue';
 
 const script = parse(readFileSync(new URL('./ProfilePopover.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const parsed = ts.createSourceFile('ProfilePopover.ts', script, ts.ScriptTarget.Latest, true);
@@ -17,6 +19,23 @@ const positioning = parsed.statements.filter(statement => statement.getText(pars
   || statement.getText(parsed).startsWith('onScopeDispose('))
   .map(statement => statement.getText(parsed)).join('\n');
 afterEach(() => { vi.useRealTimers(); });
+
+it('已注销资料即使带有旧缓存，也仅显示统一昵称与默认头像，不追加注销后缀', async () => {
+  const props = { anchor: null, inline: true, placement: 'left' as const, label: '资料',
+    nickname: '原来的昵称', avatar: 'https://example.com/old-avatar.png', signature: '原来的签名',
+    status: 'OFFLINE' as const, statusLabel: '离线' };
+  const active = await renderToString(createSSRApp(ProfilePopover, props));
+  expect(active).toContain(props.nickname);
+  expect(active).toContain(props.avatar);
+  expect(active).toContain(props.signature);
+  const closed = await renderToString(createSSRApp(ProfilePopover, { ...props, deletedAt: '2026-11-15T00:00:00Z' }));
+  expect(closed).toContain('<strong>账号已注销</strong>');
+  expect(closed).toContain('profile-avatar-placeholder');
+  expect(closed).not.toContain(props.nickname);
+  expect(closed).not.toContain(props.avatar);
+  expect(closed).not.toContain(props.signature);
+  expect(closed).not.toContain('profile-deleted-account');
+});
 
 it('设置预览无浮层入口也持续测量高度，溢出时恢复滚动，销毁清理待执行帧', () => {
   const resizeSource = parsed.statements.find(statement => statement.getText(parsed)

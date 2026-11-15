@@ -21,7 +21,7 @@ public record ChatMessageResponse(
         @Schema(description = "发送时间") Instant createdAt,
         @Schema(description = "图片或文件附件；纯文本时为空") ChatAttachmentResponse attachment,
         @Schema(description = "发送者保留的头像") String senderAvatar,
-        @Schema(description = "发送者注销时间；历史身份与消息仍保留") Instant senderDeletedAt) {
+        @Schema(description = "发送者注销时间；昵称统一为账号已注销、头像清空，历史消息保留") Instant senderDeletedAt) {
     public ChatMessageResponse(UUID id, UUID senderUserId, String senderNickname, ChatMessageType type,
                                String content, Instant createdAt, ChatAttachmentResponse attachment) {
         this(id, senderUserId, senderNickname, type, content, createdAt, attachment, "", null);

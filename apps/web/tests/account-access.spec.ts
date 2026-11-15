@@ -486,7 +486,7 @@ for (const configured of [true, false]) test(`注销保留账号页，密码配�
     closed++;
     expect(administrator).toBe(false);
     expect(ownedGroups).toHaveLength(0);
-    expect(route.request().postDataJSON()).toEqual({ confirmation: '注销账号' });
+    expect(route.request().postDataJSON()).toEqual({ confirmation: user.nickname });
     return route.fulfill({ status: 503, json: { detail: '测试注销失败，请重试' } });
   });
   await page.route('**/api/groups/group-close', route => {
@@ -601,10 +601,12 @@ for (const configured of [true, false]) test(`注销保留账号页，密码配�
   await dialog.getByLabel('输入群聊名称以确认').fill('待处理群组');
   await dialog.getByRole('button', { name: '确认解散', exact: true }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByLabel('请输入“注销账号”确认，此操作不能撤回')).toBeVisible();
+  await expect(page.getByLabel(`请输入你的昵称“${user.nickname}”确认，此操作不能撤回`)).toBeVisible();
   expect(dissolved).toBe(1);
   expect(closed).toBe(0);
-  await page.getByLabel('请输入“注销账号”确认，此操作不能撤回').fill('注销账号');
+  await page.getByLabel(`请输入你的昵称“${user.nickname}”确认，此操作不能撤回`).fill('注销账号');
+  await expect(page.getByRole('button', { name: '确认注销', exact: true })).toBeDisabled();
+  await page.getByLabel(`请输入你的昵称“${user.nickname}”确认，此操作不能撤回`).fill(user.nickname);
   await page.getByRole('button', { name: '确认注销', exact: true }).click();
   await expect(page.getByText('测试注销失败，请重试', { exact: true })).toBeVisible();
   expect(closed).toBe(1);
@@ -708,6 +710,6 @@ test('注销逐个处理群组，切换方式保留草稿并要求确认接任�
   await dissolve.getByLabel('输入群聊名称以确认').fill('第二群');
   await dissolve.getByRole('button', { name: '确认解散', exact: true }).click();
   await expect(page.getByRole('status').filter({ hasText: '群聊“第二群”已解散。' })).toBeVisible();
-  await expect(page.getByLabel('请输入“注销账号”确认，此操作不能撤回')).toBeVisible();
+  await expect(page.getByLabel(`请输入你的昵称“${user.nickname}”确认，此操作不能撤回`)).toBeVisible();
   expect(ownedGroups).toHaveLength(0);
 });

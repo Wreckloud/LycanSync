@@ -37,7 +37,7 @@ function setup(cache: AccountCache | null = null) {
   const revokeObjectURL = vi.fn();
   // 回调可以在断开观察之后人工送达，验证正式监听/销毁边界，不读取图片或运行浏览器。
   const image = scope.run(() => runInNewContext(`${compiled}\n({ frame, source, error, observeFrame, load, imageFailed })`, {
-    computed, ref, watch, onScopeDispose, onMounted: () => {}, defineProps: () => props,
+    computed, ref, watch, onScopeDispose, onMounted: () => {}, defineProps: () => props, defineEmits: () => vi.fn(),
     inject: () => cache, ACCOUNT_CACHE: Symbol(), Blob,
     fetchAttachment, AbortController, Error, IntersectionObserver: FakeObserver,
     URL: { createObjectURL, revokeObjectURL },

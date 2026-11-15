@@ -17,6 +17,7 @@ const step = ref<'password' | 'members' | 'confirm' | 'status'>(offer.value ? 's
 const password = ref('');
 const selected = ref<MemberOption | null>(null);
 const search = ref('');
+const memberScroll = ref(0);
 const error = ref('');
 const ended = ref('');
 const administrator = ref(true);
@@ -31,6 +32,7 @@ const title = computed(() => ({ password: '验证服主恢复密码', members: '
 const controller = new AbortController();
 const backdropEvents = useBackdropDismiss(close);
 let timer: ReturnType<typeof setTimeout> | undefined;
+let statusRequest: AbortController | undefined;
 let animation: Animation | undefined;
 let motion = 0;
 function close() {
@@ -46,7 +48,7 @@ async function verifyPassword() {
   busy.value = true; error.value = '';
   try {
     await authRequest('account/transfer/verify', 'POST', { password: password.value }, signal());
-    if (current()) step.value = 'members';
+    if (current()) { memberScroll.value = 0; step.value = 'members'; }
   } catch (reason) { if (current()) error.value = reason instanceof Error ? reason.message : '无法验证恢复密码，请重试。'; }
   finally { if (current()) busy.value = false; }
 }
@@ -56,7 +58,7 @@ async function loadMembers(search: string, offset: number, signal: AbortSignal) 
   return { members: members.map(member => ({ userId: member.id, nickname: member.nickname, avatar: member.avatar })), hasMore: members.length === 100 };
 }
 function select(member: MemberOption) { selected.value = member; step.value = 'confirm'; error.value = ''; }
-function restart() { password.value = ''; selected.value = null; error.value = ''; ended.value = ''; step.value = 'password'; }
+function restart() { stopStatusRead(); password.value = ''; selected.value = null; error.value = ''; ended.value = ''; step.value = 'password'; }
 async function submit() {
   if (locked.value || !selected.value) return;
   busy.value = true; error.value = '';
@@ -71,6 +73,7 @@ async function submit() {
 }
 async function cancelTransfer() {
   if (locked.value) return;
+  stopStatusRead();
   busy.value = true; error.value = '';
   try {
     await authRequest('account/transfer', 'DELETE', undefined, signal());
@@ -78,7 +81,13 @@ async function cancelTransfer() {
     offer.value = null; ended.value = '转让已撤回，你仍是服主。';
     emit('notice', '转让已撤回。'); emit('changed'); clearTimeout(timer);
   } catch (reason) { if (current()) error.value = reason instanceof Error ? reason.message : '无法撤回转让，请重试。'; }
-  finally { if (current()) busy.value = false; }
+  finally { if (current()) { busy.value = false; schedule(); } }
+}
+function stopStatusRead() {
+  clearTimeout(timer);
+  statusRequest?.abort();
+  statusRequest = undefined;
+  reading.value = false;
 }
 function schedule() {
   clearTimeout(timer);
@@ -87,11 +96,14 @@ function schedule() {
   }
 }
 async function refreshStatus() {
-  if (!current() || reading.value) return;
+  if (!current() || reading.value || step.value !== 'status') return;
+  const request = new AbortController();
+  statusRequest = request;
   reading.value = true;
   try {
-    const status = await authRequest<{ administrator: boolean; outgoingTransfer: PendingOwnerTransfer | null }>('account', 'GET', undefined, signal());
-    if (!current()) return;
+    const status = await authRequest<{ administrator: boolean; outgoingTransfer: PendingOwnerTransfer | null }>('account', 'GET', undefined, AbortSignal.any([signal(), request.signal]));
+    // 后台刷新不锁住操作；撤回或重新发起后，旧查询不能覆盖当前状态。
+    if (!current() || statusRequest !== request) return;
     now.value = Date.now();
     error.value = '';
     administrator.value = status.administrator;
@@ -102,11 +114,12 @@ async function refreshStatus() {
       offer.value = status.outgoingTransfer;
       if (!offer.value) ended.value = '当前没有待接受的转让。';
     }
-  } catch (reason) { if (current()) error.value = reason instanceof Error ? reason.message : '无法读取转让状态，请重试。'; }
-  finally { if (current()) { reading.value = false; schedule(); } }
+  } catch (reason) { if (current() && statusRequest === request) error.value = reason instanceof Error ? reason.message : '无法读取转让状态，请重试。'; }
+  finally { if (current() && statusRequest === request) { statusRequest = undefined; reading.value = false; schedule(); } }
 }
 function visibilityChanged() { if (document.visibilityState === 'visible' && step.value === 'status' && !locked.value) void refreshStatus(); else clearTimeout(timer); }
 function retire(element: Element) { (element as HTMLElement).inert = true; element.setAttribute('aria-hidden', 'true'); }
+function activate(element: Element) { (element as HTMLElement).inert = false; element.removeAttribute('aria-hidden'); }
 watch(step, async () => {
   clearTimeout(timer);
   const element = stage.value;
@@ -116,7 +129,7 @@ watch(step, async () => {
   const revision = ++motion;
   await nextTick();
   if (!current() || revision !== motion) return;
-  const page = element.querySelector<HTMLElement>('.owner-transfer-page:not([inert])');
+  const page = element.querySelector<HTMLElement>('.owner-transfer-page[data-active="true"]:not([inert])');
   if (!page) { element.style.removeProperty('height'); return; }
   const to = page.getBoundingClientRect().height;
   element.style.height = `${to}px`;
@@ -132,7 +145,7 @@ watch(step, async () => {
   schedule();
 });
 onMounted(() => { dialog.value?.focus(); schedule(); document.addEventListener('visibilitychange', visibilityChanged); });
-onScopeDispose(() => { controller.abort(); clearTimeout(timer); animation?.cancel(); password.value = ''; document.removeEventListener('visibilitychange', visibilityChanged); });
+onScopeDispose(() => { controller.abort(); stopStatusRead(); animation?.cancel(); password.value = ''; document.removeEventListener('visibilitychange', visibilityChanged); });
 </script>
 
 <template>
@@ -140,19 +153,21 @@ onScopeDispose(() => { controller.abort(); clearTimeout(timer); animation?.cance
     <section ref="dialog" class="owner-transfer-dialog" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1" @keydown="keepDialogFocus">
       <header class="access-heading"><h2>{{ title }}</h2></header>
       <div ref="stage" class="owner-transfer-stage">
+        <Transition name="entry-page" @before-enter="activate" @before-leave="retire">
+          <div v-if="step === 'members' || step === 'confirm'" v-show="step === 'members'" class="owner-transfer-page" :data-active="step === 'members'">
+            <p>选择一位成员接任服主，下一步核对交接信息。</p>
+            <MemberPicker v-model:search="search" v-model:scroll-position="memberScroll" :load="loadMembers" :selected="selected?.userId" :disabled="locked" label="搜索服务器成员" @select="select" />
+            <div class="card-actions"><button type="button" :disabled="locked" @click="close">返回</button></div>
+          </div>
+        </Transition>
         <Transition name="entry-page" @before-leave="retire">
-          <div :key="step" class="owner-transfer-page">
+          <div v-if="step !== 'members'" :key="step" class="owner-transfer-page" data-active="true">
             <form v-if="step === 'password'" @submit.prevent="verifyPassword">
               <p>请输入当前服主恢复密码，再选择接任成员。</p>
               <PasswordField id="owner-transfer-password" v-model="password" label="服主恢复密码" :disabled="locked" required />
               <InlineFeedback :message="error" :pending="busy ? '正在验证…' : ''" />
               <div class="card-actions"><button type="button" :disabled="locked" @click="close">{{ returning ? '返回' : '关闭' }}</button><button class="confirm-button card-actions-end" :disabled="locked">下一步</button></div>
             </form>
-            <template v-else-if="step === 'members'">
-              <p>选择一位成员接任服主，下一步核对交接信息。</p>
-              <MemberPicker v-model:search="search" :load="loadMembers" :selected="selected?.userId" :disabled="locked" label="搜索服务器成员" @select="select" />
-              <div class="card-actions"><button type="button" :disabled="locked" @click="close">返回</button></div>
-            </template>
             <form v-else-if="step === 'confirm'" @submit.prevent="submit">
               <p>确认将服务器的管理权限转让给这位成员？</p>
               <MemberIdentity v-if="selected" :member="selected" description="接受转让后成为服主" />
@@ -169,7 +184,7 @@ onScopeDispose(() => { controller.abort(); clearTimeout(timer); animation?.cance
               <p v-if="offer">{{ expired ? '已于' : '有效期至' }} {{ new Date(offer.expiresAt).toLocaleString() }}{{ expired ? '过期。' : '。对方接受前可撤回；对方也可以拒绝。' }}</p>
               <InlineFeedback :message="error" :pending="reading && !offer && !ended ? '正在读取转让状态…' : ''" />
               <button v-if="error" type="button" :disabled="locked || reading" @click="error = ''; refreshStatus()">重试</button>
-              <div class="card-actions"><button type="button" :disabled="locked" @click="close">{{ returning ? '返回' : '关闭' }}</button><button v-if="offer && !expired" type="button" class="card-actions-end" :disabled="locked || reading" @click="cancelTransfer">撤回转让</button><button v-else-if="administrator && (expired || ended)" type="button" class="card-actions-end" :disabled="locked || reading" @click="restart">重新发起转让</button></div>
+              <div class="card-actions"><button type="button" :disabled="locked" @click="close">{{ returning ? '返回' : '关闭' }}</button><button v-if="offer && !expired" type="button" class="confirm-button is-danger card-actions-end" :disabled="locked" @click="cancelTransfer">撤回转让</button><button v-else-if="administrator && (expired || ended)" type="button" class="settings-button card-actions-end" :disabled="locked" @click="restart">重新发起转让</button></div>
             </template>
           </div>
         </Transition>

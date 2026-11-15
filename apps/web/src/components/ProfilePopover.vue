@@ -206,16 +206,16 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
           <div class="profile-popover-body">
             <div class="profile-popover-identity">
               <span class="personal-avatar" role="img" :aria-label="statusLabel">
-                <img v-if="avatar" ref="avatarImage" :src="avatar" class="profile-avatar" alt="" @load="tintAvatar" />
+                <img v-if="avatar && !deletedAt" ref="avatarImage" :src="avatar" class="profile-avatar" alt="" @load="tintAvatar" />
                 <span v-else class="profile-avatar-placeholder"><UserRound :size="28" /></span>
                 <span class="status-dot" :class="status" aria-hidden="true" />
               </span>
-              <strong>{{ nickname }}</strong><small v-if="deletedAt" class="profile-deleted-account">已注销</small>
+              <strong>{{ deletedAt ? '账号已注销' : nickname }}</strong>
             </div>
             <div class="profile-popover-signature" :aria-busy="loading">
               <template v-if="loading"><span v-if="loadingHint" role="status">正在读取签名…</span></template>
               <template v-else-if="error"><span role="alert">{{ error }}</span><button type="button" @click="emit('retry')">重试</button></template>
-              <p v-else :title="signature">{{ signature || '这只狼暂时没留下什么话。' }}</p>
+              <p v-else :title="deletedAt ? '' : signature">{{ (!deletedAt && signature) || '这只狼暂时没留下什么话。' }}</p>
             </div>
             <div v-if="activity" class="profile-popover-activity">{{ activity }}<span v-if="activityDuration"> · {{ activityDuration }}</span></div>
             <div v-if="lastOnline || recentGameDescription" class="profile-popover-history">
@@ -233,7 +233,6 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
 </template>
 
 <style>
-.profile-deleted-account { color: var(--muted); font-size: 11px; }
 .profile-popover { position: fixed; z-index: 60; width: min(292px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); text-align: left; }
 .profile-popover { box-sizing: border-box; transition: height var(--motion-layout-duration) var(--motion-ease), opacity var(--motion-surface-duration) var(--motion-ease), transform var(--motion-surface-duration) var(--motion-ease); }
 .profile-popover.is-personal:not(.is-scrollable) .profile-popover-content { position: absolute; right: 0; bottom: 0; left: 0; }

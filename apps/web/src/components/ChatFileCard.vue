@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { onScopeDispose, ref } from 'vue';
-import { Download, X } from '@lucide/vue';
+import { computed, onScopeDispose, ref } from 'vue';
+import { Download, Eye, X } from '@lucide/vue';
 import { downloadFile, type ChatAttachment } from '../chat/chatApi';
+import { chatMediaFormat } from '../chat/chatMedia';
 
 const props = defineProps<{ groupId: string; attachment: ChatAttachment }>();
+const emit = defineEmits<{ preview: [] }>();
+const previewable = computed(() => Boolean(chatMediaFormat(props.attachment)));
 const controller = ref<AbortController | null>(null);
 const loadedBytes = ref(0);
 const error = ref('');
@@ -44,6 +47,7 @@ onScopeDispose(cancel);
       <progress v-if="downloading" :value="progress()" max="100" aria-label="文件下载进度" />
       <small v-if="error" class="chat-file-error" role="alert">{{ error }}</small>
     </div>
+    <button v-if="previewable" type="button" aria-label="预览文件" title="预览文件" @click="emit('preview')"><Eye :size="16" /></button>
     <button v-if="downloading" type="button" aria-label="取消文件下载" @click="cancel"><X :size="15" /></button>
     <button v-else type="button" :aria-label="error ? '重试文件下载' : '下载文件'" @click="download"><Download :size="15" /></button>
   </div>

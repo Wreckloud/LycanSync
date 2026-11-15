@@ -41,10 +41,10 @@ async function loadMore() {
 }
 function checkScroll() {
   const element = list.value;
-  if (element && hasMore.value && !error.value && element.scrollHeight - element.scrollTop - element.clientHeight < 48) void loadMore();
+  if (element && element.clientHeight > 0 && hasMore.value && !error.value && element.scrollHeight - element.scrollTop - element.clientHeight < 48) void loadMore();
 }
 function unavailable(member: MemberOption) {
-  return props.disabled || loading.value || member.role === 'OWNER' || member.joined || props.joinedIds?.includes(member.userId);
+  return props.disabled || member.role === 'OWNER' || member.joined || props.joinedIds?.includes(member.userId);
 }
 watch(search, () => {
   request?.abort(); clearTimeout(timer); results.value = []; offset = 0; hasMore.value = false; error.value = '';

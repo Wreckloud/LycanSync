@@ -179,10 +179,11 @@ public class AccountLifecycleService {
     }
 
     public void closeAccount(AuthenticatedUser user, String confirmation) {
-        if (!"注销账号".equals(confirmation)) throw invalid("请输入“注销账号”确认");
         transactions.executeWithoutResult(transaction -> {
             lockState();
-            if (active(user).administrator()) throw invalid("服主需要先完成服主转让，再注销账号");
+            AuthUser current = active(user);
+            if (!current.nickname().equals(confirmation)) throw invalid("请输入当前账号的完整昵称确认注销");
+            if (current.administrator()) throw invalid("服主需要先完成服主转让，再注销账号");
             var memberships = groups.findGroups(user.id()).stream().sorted((left, right) -> left.id().compareTo(right.id())).toList();
             for (var group : memberships) {
                 groups.lockOwner(group.id());
@@ -193,7 +194,7 @@ public class AccountLifecycleService {
             accounts.revokeSessions(user.id());
             accounts.revokeLinks(user.id(), now());
             if (user.id().equals(state().transferTargetId())) accounts.clearTransfer();
-            // 历史资料、消息及成员关系保留；当前成员资格统一排除已注销账号。
+            // 清除基础资料但保留消息及成员关系；当前成员资格统一排除已注销账号。
             for (var group : memberships) {
                 groups.touchGroup(group.id(), now());
                 events.publishEvent(new GroupChangedEvent(group.id(), false));

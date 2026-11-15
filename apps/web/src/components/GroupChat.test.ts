@@ -51,7 +51,7 @@ function setup(cache: AccountCache | null = null) {
   const chat = scope.run(() => runInNewContext(`${compiled}\n({ ...synchronization, ...scroll, handleVisibilityChange, submit, cancelUpload,
     text, busy, error, syncError, retrySync, pendingAttachments, initialLoadingHint, historyLoadingHint, refreshCalendar, calendarNow,
     setScrollPreference: value => { Object.assign(scrollPreference, value); } })`, {
-    computed, ref, nextTick, onScopeDispose, useLoadingHint, onMounted: () => {}, defineProps: () => props, defineEmits: () => emit,
+    computed, ref, nextTick, onScopeDispose, useLoadingHint, useComposerHeight: () => () => {}, onMounted: () => {}, defineProps: () => props, defineEmits: () => emit,
     inject: () => cache, ACCOUNT_CACHE: Symbol(),
     sendMessage, sendFile, compressChatImage: vi.fn(),
     formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey,
