@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { authenticatedFetch } from '../auth/authApi';
-import { downloadFile, findMessages } from './chatApi';
+import { desktopMediaUrl, videoPreviewStatus, fetchCompatibleVideo, downloadFile, fetchVideoThumbnail, findMessages } from './chatApi';
 
 vi.mock('../auth/authApi', () => ({ authenticatedFetch: vi.fn(), readApiError: vi.fn() }));
 
@@ -18,6 +18,27 @@ it('等待新消息沿用增量游标与固定路径，历史读取不进入长�
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 const attachment = { id: 'file', byteSize: 3, contentType: 'application/octet-stream', fileName: 'sample.bin' };
+
+it('封面只请求封面接口，204 表示无封面，不回退下载原视频', async () => {
+  vi.mocked(authenticatedFetch).mockResolvedValue(new Response(null, { status: 204 }));
+  expect(await fetchVideoThumbnail('group', 'file', new AbortController().signal)).toBeNull();
+  expect(authenticatedFetch).toHaveBeenCalledExactlyOnceWith('/api/groups/group/files/file/thumbnail', expect.any(Object));
+});
+
+it('只有桌面使用媒体地址，不向 URL 拼入登录凭据', () => {
+  vi.stubGlobal('window', {});
+  expect(desktopMediaUrl('group', 'file')).toBeNull();
+  vi.stubGlobal('window', { lycanDesktop: {} });
+  expect(desktopMediaUrl('group', 'file')).toBe('/api/groups/group/files/file/media');
+});
+
+it('下载内容不完整时中止写入，不把截断文件保存为成功', async () => {
+  const { writer, controller, progress } = setup();
+  vi.mocked(authenticatedFetch).mockResolvedValue(new Response(new Uint8Array([1, 2])));
+  await expect(downloadFile('group', attachment, controller.signal, progress)).rejects.toThrow('文件未能完整下载');
+  expect(writer.abort).toHaveBeenCalledOnce();
+  expect(writer.close).not.toHaveBeenCalled();
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -99,4 +120,18 @@ it('写入错误中止网络读取和写入，保留原错误', async () => {
   expect(reader.cancel).toHaveBeenCalledWith(diskError);
   expect(writer.abort).toHaveBeenCalledOnce();
   expect(writer.close).not.toHaveBeenCalled();
+});
+
+
+it('兼容预览查询不启动转换，只有显式启动才用 POST，播放仍附带会话', async () => {
+  vi.mocked(authenticatedFetch).mockImplementation(async () => Response.json({ status: 'processing', message: null }));
+  const signal = new AbortController().signal;
+  await videoPreviewStatus('group', 'file', false, signal);
+  expect(authenticatedFetch).toHaveBeenLastCalledWith('/api/groups/group/files/file/preview', expect.objectContaining({ method: 'GET' }));
+  await videoPreviewStatus('group', 'file', true, signal);
+  expect(authenticatedFetch).toHaveBeenLastCalledWith('/api/groups/group/files/file/preview', expect.objectContaining({ method: 'POST' }));
+  vi.mocked(authenticatedFetch).mockResolvedValue(new Response(new Blob(['mp4'], { type: 'video/mp4' })));
+  expect((await fetchCompatibleVideo('group', 'file', signal)).type).toBe('video/mp4');
+  vi.stubGlobal('window', { lycanDesktop: {} });
+  expect(desktopMediaUrl('group', 'file', true)).toBe('/api/groups/group/files/file/preview/media');
 });

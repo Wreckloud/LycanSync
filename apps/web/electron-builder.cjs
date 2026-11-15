@@ -45,6 +45,7 @@ module.exports = {
     'electron/recording.cjs',
     'electron/recording-library.cjs',
     'electron/recording-media.cjs',
+    'electron/recording-editor.cjs',
     'electron/recording-voice.cjs',
     'electron/media-diagnostics.cjs',
     'electron/diagnostic-reports.cjs',

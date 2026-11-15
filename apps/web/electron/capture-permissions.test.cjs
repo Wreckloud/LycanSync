@@ -44,7 +44,7 @@ for (const platform of ['win32', 'linux']) test(`${platform} 缩略图 IPC 保�
 
 test('桌面误调用 Chromium 共享时明确拒绝，不枚举来源或启动采集', () => {
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
-  const deny = main.slice(main.indexOf('function denyCapture('), main.indexOf('function finishClose('));
+  const deny = main.slice(main.indexOf('function denyCapture('), main.indexOf('async function finishClose('));
   const configure = main.slice(main.indexOf('function configurePermissions('), main.indexOf('if (!app.requestSingleInstanceLock('));
   let handler;
   const callbacks = [];

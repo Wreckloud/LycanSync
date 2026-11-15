@@ -83,6 +83,15 @@ add_subdirectory(audio-plugin)
 add_subdirectory(graphics-module)
 add_subdirectory(recording-plugin)
 
+add_executable(lycansync-recording-clip src/recording_clip.cpp)
+target_compile_features(lycansync-recording-clip PRIVATE cxx_std_20)
+target_compile_definitions(lycansync-recording-clip PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(lycansync-recording-clip PRIVATE /utf-8)
+target_include_directories(lycansync-recording-clip PRIVATE "${LYCANSYNC_OBS_DEPS}/include")
+target_link_libraries(lycansync-recording-clip PRIVATE
+  "${LYCANSYNC_OBS_DEPS}/lib/avcodec.lib" "${LYCANSYNC_OBS_DEPS}/lib/avformat.lib"
+  "${LYCANSYNC_OBS_DEPS}/lib/avutil.lib" "${LYCANSYNC_OBS_DEPS}/lib/swscale.lib")
+
 # 显式录像验证只编码合成画面，不接触真实采集来源，不进入安装包。
 add_executable(lycansync-recording-framing-test EXCLUDE_FROM_ALL tests/recording_framing.cpp src/recording.cpp src/recording_audio.cpp)
 target_compile_features(lycansync-recording-framing-test PRIVATE cxx_std_20)

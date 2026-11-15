@@ -430,3 +430,53 @@ test('本地录像路由不读取会话或访问服务器，关闭期间拒绝�
   assert.equal((await f.serve(new Request('lycan://other/recordings/test'))).status, 403);
   assert.equal(calls, 1);
 });
+
+
+test('媒体分段请求保留 Range、认证、取消与 206 响应，不先缓冲完整文件', async () => {
+  let forwarded;
+  const chunk = new Uint8Array([2, 3, 4]);
+  const { serve } = proxyFixture({ net: { fetch: async (url, options) => {
+    forwarded = { url, options };
+    return new Response(chunk, { status: 206, headers: { 'Content-Type': 'video/mp4', 'Content-Length': '3',
+      'Content-Range': 'bytes 2-4/1000', 'Accept-Ranges': 'bytes' } });
+  } } });
+  const path = '/api/groups/11111111-1111-4111-8111-111111111111/files/22222222-2222-4222-8222-222222222222/media';
+  const controller = new AbortController();
+  const response = await serve(new Request('lycan://app' + path, { headers: { Range: 'bytes=2-4' }, signal: controller.signal }));
+  assert.equal(forwarded.options.headers.Range, 'bytes=2-4');
+  assert.equal(forwarded.options.headers.Authorization, 'Bearer test-session');
+  assert.equal(response.status, 206);
+  assert.equal(response.headers.get('Content-Range'), 'bytes 2-4/1000');
+  assert.equal(response.headers.get('Accept-Ranges'), 'bytes');
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), chunk);
+  controller.abort(); assert.equal(forwarded.options.signal.aborted, true);
+  assert.equal((await serve(new Request('lycan://app' + path + '/extra'))).status, 404);
+  assert.equal((await serve(new Request('lycan://app' + path, { method: 'DELETE' }))).status, 404);
+});
+
+test('封面接口只开放读取，完整透传无封面的 204 与范围失败 416', async () => {
+  let status = 204;
+  const { serve } = proxyFixture({ net: { fetch: async () => new Response(null, { status,
+    headers: status === 416 ? { 'Content-Range': 'bytes */10' } : {} }) } });
+  const path = '/api/groups/11111111-1111-4111-8111-111111111111/files/22222222-2222-4222-8222-222222222222/thumbnail';
+  assert.equal((await serve(new Request('lycan://app' + path))).status, 204);
+  status = 416;
+  const response = await serve(new Request('lycan://app' + path.replace('thumbnail', 'media')));
+  assert.equal(response.status, 416);
+  assert.equal(response.headers.get('Content-Range'), 'bytes */10');
+});
+
+
+test('兼容视频仅主动 POST 转换，状态查询与分段播放使用固定认证路由', async () => {
+  const { serve, forwarded } = proxyFixture();
+  const path = '/api/groups/11111111-1111-4111-8111-111111111111/files/22222222-2222-4222-8222-222222222222/preview';
+  for (const method of ['POST', 'GET']) {
+    assert.equal((await serve(new Request('lycan://app' + path, { method }))).status, 201);
+  }
+  await serve(new Request('lycan://app' + path + '/media', { headers: { Range: 'bytes=12-34' } }));
+  assert.equal(forwarded[2].options.headers.Range, 'bytes=12-34');
+  assert.equal(forwarded[2].options.headers.Authorization, 'Bearer test-session');
+  for (const [method, suffix] of [['DELETE', ''], ['POST', '/media'], ['GET', '/unexpected']]) {
+    assert.equal((await serve(new Request('lycan://app' + path + suffix, { method }))).status, 404);
+  }
+});

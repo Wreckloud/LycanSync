@@ -109,6 +109,7 @@ function createNativeVideoSession({ host: obsCaptureHost, mediaHelper, getSource
       const reservation = mediaHelper.reserveVideo(sessionId, sourceId);
       video.targetState = mediaHelper.videoCapture?.state;
       let target = await reservation;
+      video.executable = target.executable;
       if (isClosing() || video.stopping || nativeVideoSession !== video) throw new Error('nativeVideoSessionStopped');
       if (settings?.followGame !== undefined && settings.followGame !== 'league') throw new Error('nativeGameFollowTargetInvalid');
       if (settings?.followGame === 'league') {

@@ -7,6 +7,7 @@ export function useRecordingLibrary() {
   const loading = ref(false);
   const pendingId = ref('');
   const notice = ref('');
+  const kind = ref<'all' | 'recording' | 'replay' | 'clip'>('all');
   let disposed = false;
   let revision = 0;
 
@@ -16,7 +17,7 @@ export function useRecordingLibrary() {
     loading.value = true;
     notice.value = '';
     try {
-      const result = await desktop.getRecordingLibrary(append ? entries.value.length : 0);
+      const result = await desktop.getRecordingLibrary(append ? entries.value.length : 0, kind.value);
       if (disposed || version !== revision) return;
       entries.value = append ? [...entries.value, ...result.items.filter(item => !entries.value.some(entry => entry.id === item.id))] : result.items;
       hasMore.value = result.hasMore;
@@ -24,17 +25,19 @@ export function useRecordingLibrary() {
       if (!disposed && version === revision) notice.value = '无法读取录像列表，请检查安装目录的读写权限后重试。';
     } finally { if (!disposed && version === revision) loading.value = false; }
   }
-  async function file(entry: RecordingLibraryEntry, action: 'play' | 'reveal' | 'delete') {
+  async function file(entry: RecordingLibraryEntry, action: 'play' | 'reveal' | 'delete' | 'relink' | 'clearUnavailable') {
     if (!desktop || pendingId.value || entry.state === 'recording') return;
     pendingId.value = entry.id; notice.value = '';
     try {
       const changed = await desktop.recordingFile(entry.id, action);
-      if (!disposed && action === 'delete' && changed) await load();
+      if (!disposed && ['delete', 'relink', 'clearUnavailable'].includes(action) && changed) await load();
     } catch {
       if (!disposed) notice.value = action === 'play' ? '无法打开录像，请确认原片仍存在，并安装支持 MKV 的播放器。'
-        : action === 'delete' ? '录像未能删除，请关闭正在使用该文件的程序后重试。' : '无法定位录像，请确认原片仍在原位置。';
+        : action === 'delete' ? '录像未能删除，请关闭正在使用该文件的程序后重试。'
+          : action === 'relink' ? '无法重新关联，请确认原位置的录像文件仍然可用。'
+            : action === 'clearUnavailable' ? '记录未能清理，请稍后重试。' : '无法定位录像，请确认原片仍在原位置。';
     } finally { if (!disposed) pendingId.value = ''; }
   }
   onScopeDispose(() => { disposed = true; revision++; });
-  return { entries, hasMore, loading, pendingId, notice, load, file };
+  return { kind, entries, hasMore, loading, pendingId, notice, load, file };
 }

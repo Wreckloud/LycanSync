@@ -6,7 +6,7 @@ import org.springframework.stereotype.Component;
 import java.nio.file.Path;
 
 /**
- * 入场音效解码工具与短期处理目录。
+ * 入场音效、视频封面与兼容预览共用的媒体工具和缓存目录，沿用既有配置前缀。
  *
  * @author Wreckloud
  * @since 2026-10-30

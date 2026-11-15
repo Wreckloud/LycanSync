@@ -226,7 +226,13 @@ function createActivityHelper({ enabled, executablePath, onActivity, spawnProces
     return { state: idleSeconds >= 300 ? 'idle' : 'active', idleSeconds };
   }
 
-  return { start, stop, configure, listWindows, clearMappings, isCaptureGame, systemIdleState,
+  function recordingName(executable) {
+    if (typeof executable !== 'string' || !executable) return '窗口';
+    const key = executable.replaceAll('/', '\\').toLowerCase();
+    return mappings.find(item => item.executable === key)?.name || win32.basename(executable).replace(/\.exe$/i, '');
+  }
+
+  return { start, stop, configure, listWindows, clearMappings, isCaptureGame, systemIdleState, recordingName,
     diagnosticProcesses: () => [...children] };
 }
 

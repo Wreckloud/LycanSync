@@ -6,7 +6,8 @@ import { useComposerHeight } from '../chat/useComposerHeight';
 import { useGroupMessages } from '../chat/useGroupMessages';
 import { ACCOUNT_CACHE } from '../cache/localCache';
 import { useLoadingHint } from './useLoadingHint';
-import { ArrowDown, MessageSquareText, Plus, Send, UserRound, X } from '@lucide/vue';
+import { ArrowDown, MessageSquareText, Plus, Send, X } from '@lucide/vue';
+import defaultAvatar from '../../../../services/api/src/main/resources/account/default.png';
 import type { AuthUser } from '../auth/authApi';
 import { sendFile, sendMessage, type ChatMessage } from '../chat/chatApi';
 import { compressChatImage } from '../chat/messageImage';
@@ -241,7 +242,7 @@ function senderName(message: ChatMessage) {
 }
 
 function senderAvatar(message: ChatMessage) {
-  if (message.senderDeletedAt) return '';
+  if (message.senderDeletedAt) return defaultAvatar;
   return message.senderUserId === props.user.id ? props.user.avatar : members.value.get(message.senderUserId)?.avatar ?? message.senderAvatar ?? '';
 }
 
@@ -367,7 +368,7 @@ onScopeDispose(() => {
           <article class="chat-message" :data-message-id="message.id" :class="{ 'is-own': message.senderUserId === user.id, 'is-grouped': !startsNewMessageGroup(message, index) }">
             <template v-if="startsNewMessageGroup(message, index)">
               <img v-if="senderAvatar(message)" class="chat-message-avatar" :src="senderAvatar(message)" alt="" />
-              <span v-else class="chat-message-avatar chat-message-initial"><UserRound v-if="message.senderDeletedAt" :size="24" /><template v-else>{{ senderName(message).slice(0, 1) }}</template></span>
+              <span v-else class="chat-message-avatar chat-message-initial">{{ senderName(message).slice(0, 1) }}</span>
             </template>
             <span v-else class="chat-message-avatar-placeholder" aria-hidden="true" />
             <div class="chat-message-body">

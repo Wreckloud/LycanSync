@@ -28,6 +28,8 @@ import { useRtcRoom } from './rtc/useRtcRoom';
 import { useMicrophoneTest } from './rtc/useMicrophoneTest';
 import { useMicrophoneDevices } from './rtc/useMicrophoneDevices';
 import { useAudioOutput } from './rtc/useAudioOutput';
+import RecordingShareDialog from './components/settings/RecordingShareDialog.vue';
+import { useRecordingShare, RECORDING_SHARE } from './recording/useRecordingShare';
 import { useRecording } from './recording/useRecording';
 import type { ScreenShareQualityId } from './rtc/screenShareQuality';
 import { saveScreenShareAudioPreference } from './rtc/nativeScreenAudioMode';
@@ -212,6 +214,8 @@ onScopeDispose(() => {
 watch(() => rtc.status, (status) => { if (status === 'idle') selectCaptureSource(null); });
 const groups = ref<GroupSummary[]>([]);
 const selectedGroupId = ref<string | null>(null);
+const recordingShare = useRecordingShare(message => showAppNotice(message, 'recordingShare', 'success'), () => selectedGroupId.value ?? '');
+provide(RECORDING_SHARE, recordingShare);
 const selectedGroupDetail = ref<GroupDetail | null>(null);
 const joinedGroupDetail = ref<GroupDetail | null>(null);
 const groupError = ref('');
@@ -1185,6 +1189,9 @@ function participantListening(participant: Participant) {
       @activity-visibility="setShowActivity" @last-online-visibility="setShowLastOnline"
       :save-profile="saveProfile" @close="closeSettings" @logout="emit('logout')" />
     </Transition>
+    <DialogTransition>
+    <RecordingShareDialog v-if="recordingShare.visible.value" :share="recordingShare" :groups="groups" />
+    </DialogTransition>
     <DialogTransition>
     <ScreenSharePicker v-if="captureRequest" :key="nativeSourceChooserGeneration" ref="capturePicker" :sources="captureRequest.sources"
       v-model:source-type="captureSourceType" v-model:quality="captureQuality" v-model:custom-quality="captureCustomQuality" :share-audio="captureShareAudio"

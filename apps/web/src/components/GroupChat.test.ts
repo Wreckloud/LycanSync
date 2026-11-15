@@ -11,6 +11,7 @@ import type { ChatMessage, ChatMessagePage } from '../chat/chatApi';
 import type { AccountCache } from '../cache/localCache';
 import { formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey } from '../chat/messageTime';
 import { useLoadingHint } from './useLoadingHint';
+import defaultAvatar from '../../../../services/api/src/main/resources/account/default.png';
 
 vi.mock('../chat/chatApi', () => ({ findMessages: vi.fn() }));
 
@@ -49,15 +50,16 @@ function setup(cache: AccountCache | null = null) {
   const emit = vi.fn();
   // 真实组件的任务、监听和销毁；只替换网络、DOM 与图片边界，不启动浏览器或传输文件。
   const chat = scope.run(() => runInNewContext(`${compiled}\n({ ...synchronization, ...scroll, handleVisibilityChange, submit, cancelUpload,
-    text, busy, error, syncError, retrySync, pendingAttachments, initialLoadingHint, historyLoadingHint, refreshCalendar, calendarNow,
+    text, busy, error, syncError, retrySync, pendingAttachments, initialLoadingHint, historyLoadingHint, refreshCalendar, calendarNow, senderName, senderAvatar,
     setScrollPreference: value => { Object.assign(scrollPreference, value); } })`, {
     computed, ref, nextTick, onScopeDispose, useLoadingHint, useComposerHeight: () => () => {}, onMounted: () => {}, defineProps: () => props, defineEmits: () => emit,
     inject: () => cache, ACCOUNT_CACHE: Symbol(),
-    sendMessage, sendFile, compressChatImage: vi.fn(),
+    sendMessage, sendFile, compressChatImage: vi.fn(), defaultAvatar,
     formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey,
     AbortController, setTimeout, clearTimeout, Error, Date,
     document, window, scrollPreference, useChatScroll, useGroupMessages, URL: { revokeObjectURL: vi.fn() },
   })) as {
+    senderName(message: ChatMessage): string; senderAvatar(message: ChatMessage): string;
     refresh: () => Promise<number | null>; submit: () => Promise<void>; cancelUpload: () => void;
     loadOlder: () => Promise<void>; handleVisibilityChange: () => void; list: { value: HTMLElement | null };
     historyError: { value: string };
@@ -77,6 +79,16 @@ function setup(cache: AccountCache | null = null) {
   };
   return { scope, props, chat, findMessages, sendMessage, sendFile, document, emit };
 }
+
+it('注销消息忽略旧头像与昵称缓存，显示注册使用的默认头像', () => {
+  const f = setup();
+  try {
+    const closed = { ...message('closed'), senderNickname: '旧昵称', senderAvatar: 'https://example.com/old.png', senderDeletedAt: '2026-11-15T00:00:00Z' };
+    expect(f.chat.senderName(closed)).toBe('账号已注销');
+    expect(f.chat.senderAvatar(closed)).toBe(defaultAvatar);
+    expect(f.chat.senderName(message('active'))).toBe('自己');
+  } finally { f.scope.stop(); }
+});
 
 it('消息与成员同步失败只选取一条顶部反馈，重试同时恢复两处同步且保留草稿', async () => {
   const f = setup();

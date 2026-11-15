@@ -8,9 +8,10 @@ async function serveRecordingMedia(request, library) {
   if (!['GET', 'HEAD'].includes(request.method)) return new Response(null, { status: 405 });
   let file;
   try {
-    file = await open(await library.filePath(match[1]), 'r');
+    const path = await library.filePath(match[1]);
+    file = await open(path, 'r');
     const { size } = await file.stat();
-    const headers = { 'Content-Type': 'video/x-matroska', 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store' };
+    const headers = { 'Content-Type': path.endsWith('.mp4') ? 'video/mp4' : 'video/x-matroska', 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store' };
     let start = 0;
     let end = size - 1;
     const range = request.headers.get('Range');

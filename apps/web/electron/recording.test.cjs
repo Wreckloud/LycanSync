@@ -49,6 +49,25 @@ test('默认只录应用声音，主进程生成独占文件，停止保存不�
   assert.doesNotMatch(JSON.stringify(f.diagnostics), /recordings[\\/]|\.mkv/);
 });
 
+test('录像和回放使用启动时的应用名称，切换前台应用不会改名', async context => {
+  let applicationName = 'Krita';
+  const f = await fixture(context, { getApplicationName: () => applicationName });
+  await f.recording.start();
+  await f.recording.startReplay();
+  applicationName = '其他应用';
+  await f.recording.saveReplay();
+  await f.recording.stop();
+  await f.recording.stopReplay();
+  const entries = (await f.recording.library.list()).items;
+  assert.equal(entries.length, 2);
+  assert.deepEqual(entries.map(entry => entry.kind).sort(), ['recording', 'replay']);
+  for (const entry of entries) {
+    assert.equal(entry.applicationName, 'Krita');
+    assert.match(entry.fileName, /^Krita · (录制|回放) · /);
+    assert.equal(entry.availability, 'available');
+  }
+});
+
 test('回放开关默认关闭并持久保存，录制运行时也能修改，不改编码规格或停止录像', async context => {
   const f = await fixture(context);
   assert.equal((await f.recording.load()).replayEnabled, false);
@@ -450,7 +469,7 @@ test('录像索引在重启后保留原片信息，读取列表不暴露路径�
   assert.equal(result.items[0].bytes, 8);
   assert.equal(result.items[0].width, 1920); assert.equal(result.items[0].height, 1080);
   assert.ok(result.items[0].durationMs >= 0);
-  assert.doesNotMatch(JSON.stringify(result), /\.mkv|recordings[\\/]|fileIdentity/);
+  assert.doesNotMatch(JSON.stringify(result), /recordings[\\/]|fileIdentity/);
   assert.equal(await readFile(await reopened.filePath(result.items[0].id), 'utf8'), 'recorded');
 });
 

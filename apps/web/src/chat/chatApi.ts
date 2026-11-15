@@ -73,7 +73,7 @@ export async function findFileUpload(groupId: string, uploadId: string, signal?:
   return response.json() as Promise<ChatMessage>;
 }
 
-export async function sendFile(groupId: string, file: File, content: string, uploadId: string, signal: AbortSignal,
+export async function sendFile(groupId: string, file: Pick<File, 'name' | 'size' | 'stream'>, content: string, uploadId: string, signal: AbortSignal,
   onProgress: (loadedBytes: number) => void): Promise<ChatMessage> {
   const previous = await findFileUpload(groupId, uploadId, signal);
   if (previous) return previous;
@@ -159,6 +159,7 @@ export async function downloadFile(groupId: string, attachment: ChatAttachment, 
       onProgress(loadedBytes);
     }
     signal.throwIfAborted();
+    if (loadedBytes !== attachment.byteSize) throw new Error('文件未能完整下载，请重试。');
     await writer.close();
   } catch (reason) {
     await reader?.cancel(reason).catch(() => undefined);
@@ -181,6 +182,42 @@ export async function fetchFilePreview(groupId: string, attachmentId: string, si
   const response = await authenticatedFetch(
     '/api/groups/' + encodeURIComponent(groupId) + '/files/' + encodeURIComponent(attachmentId),
     { headers: { Accept: 'application/octet-stream' }, signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]) },
+  );
+  if (!response.ok) throw await readApiError(response);
+  return response.blob();
+}
+
+export async function fetchVideoThumbnail(groupId: string, attachmentId: string, signal: AbortSignal): Promise<Blob | null> {
+  const response = await authenticatedFetch(
+    '/api/groups/' + encodeURIComponent(groupId) + '/files/' + encodeURIComponent(attachmentId) + '/thumbnail',
+    { headers: { Accept: 'image/jpeg' }, signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) },
+  );
+  if (!response.ok) throw await readApiError(response);
+  return response.status === 204 ? null : response.blob();
+}
+
+export function desktopMediaUrl(groupId: string, attachmentId: string, compatible = false): string | null {
+  // 桌面协议代理为每次 Range 请求附加会话；浏览器不能在 video.src 上附加 Bearer。
+  return window.lycanDesktop
+    ? '/api/groups/' + encodeURIComponent(groupId) + '/files/' + encodeURIComponent(attachmentId) + (compatible ? '/preview/media' : '/media')
+    : null;
+}
+
+export interface VideoPreviewStatus { status: 'absent' | 'processing' | 'ready' | 'failed'; message: string | null }
+
+export async function videoPreviewStatus(groupId: string, attachmentId: string, start: boolean, signal: AbortSignal): Promise<VideoPreviewStatus> {
+  const response = await authenticatedFetch(
+    '/api/groups/' + encodeURIComponent(groupId) + '/files/' + encodeURIComponent(attachmentId) + '/preview',
+    { method: start ? 'POST' : 'GET', signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) },
+  );
+  if (!response.ok) throw await readApiError(response);
+  return response.json() as Promise<VideoPreviewStatus>;
+}
+
+export async function fetchCompatibleVideo(groupId: string, attachmentId: string, signal: AbortSignal): Promise<Blob> {
+  const response = await authenticatedFetch(
+    '/api/groups/' + encodeURIComponent(groupId) + '/files/' + encodeURIComponent(attachmentId) + '/preview/media',
+    { signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]) },
   );
   if (!response.ok) throw await readApiError(response);
   return response.blob();

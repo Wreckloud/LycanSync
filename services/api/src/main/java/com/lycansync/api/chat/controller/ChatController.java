@@ -6,6 +6,9 @@ import com.lycansync.api.chat.dto.ChatMessageResponse;
 import com.lycansync.api.chat.model.ChatAttachmentContent;
 import com.lycansync.api.chat.model.ChatFileMetadata;
 import com.lycansync.api.chat.service.ChatFileService;
+import com.lycansync.api.chat.service.ChatFileMediaService;
+import com.lycansync.api.chat.service.ChatVideoPreviewService;
+import com.lycansync.api.chat.dto.ChatVideoPreviewResponse;
 import com.lycansync.api.chat.service.ChatService;
 import com.lycansync.api.chat.service.ChatMessageWaitService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -54,6 +57,8 @@ public class ChatController {
 
     private final ChatService chatService;
     private final ChatFileService chatFileService;
+    private final ChatFileMediaService videoThumbnails;
+    private final ChatVideoPreviewService videoPreviews;
     private final ChatMessageWaitService chatMessageWaitService;
 
     @GetMapping(value = "/messages", params = "wait=true")
@@ -146,6 +151,64 @@ public class ChatController {
                 .header("X-Content-Type-Options", "nosniff")
                 .contentType(MediaType.parseMediaType(attachment.contentType()))
                 .contentLength(attachment.data().length).body(attachment.data());
+    }
+
+    @GetMapping("/files/{attachmentId}/thumbnail")
+    @Operation(summary = "读取视频封面", description = "按需生成小尺寸 JPEG，无可用视频画面时返回 204；不传输原视频")
+    public ResponseEntity<byte[]> findVideoThumbnail(
+            @PathVariable @Parameter(description = "群组 ID") UUID groupId,
+            @PathVariable @Parameter(description = "文件附件 ID") UUID attachmentId,
+            @AuthenticationPrincipal AuthenticatedUser user
+    ) {
+        byte[] thumbnail = videoThumbnails.findThumbnail(groupId, attachmentId, user);
+        if (thumbnail == null) return ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build();
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(MediaType.IMAGE_JPEG)
+                .header("X-Content-Type-Options", "nosniff").contentLength(thumbnail.length).body(thumbnail);
+    }
+
+    @PostMapping("/files/{attachmentId}/preview")
+    @Operation(summary = "转换兼容视频预览", description = "仅用户主动请求时转换，重复请求复用同一任务；返回状态，不修改原文件")
+    public ResponseEntity<ChatVideoPreviewResponse> prepareVideoPreview(
+            @PathVariable @Parameter(description = "群组 ID") UUID groupId,
+            @PathVariable @Parameter(description = "文件附件 ID") UUID attachmentId,
+            @AuthenticationPrincipal AuthenticatedUser user
+    ) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(videoPreviews.prepare(groupId, attachmentId, user));
+    }
+
+    @GetMapping("/files/{attachmentId}/preview")
+    @Operation(summary = "查询兼容视频预览状态", description = "只查询，不启动转换")
+    public ResponseEntity<ChatVideoPreviewResponse> findVideoPreviewStatus(
+            @PathVariable @Parameter(description = "群组 ID") UUID groupId,
+            @PathVariable @Parameter(description = "文件附件 ID") UUID attachmentId,
+            @AuthenticationPrincipal AuthenticatedUser user
+    ) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(videoPreviews.status(groupId, attachmentId, user));
+    }
+
+    @GetMapping("/files/{attachmentId}/preview/media")
+    @Operation(summary = "播放兼容视频预览", description = "支持 Range 分段读取；缓存不存在时返回 404，不自动转换")
+    public ResponseEntity<Resource> findVideoPreview(
+            @PathVariable @Parameter(description = "群组 ID") UUID groupId,
+            @PathVariable @Parameter(description = "文件附件 ID") UUID attachmentId,
+            @AuthenticationPrincipal AuthenticatedUser user
+    ) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).header("X-Content-Type-Options", "nosniff")
+                .contentType(MediaType.parseMediaType("video/mp4")).body(videoPreviews.find(groupId, attachmentId, user));
+    }
+
+    @GetMapping("/files/{attachmentId}/media")
+    @Operation(summary = "播放消息音视频", description = "校验群成员资格后读取原文件，支持 HTTP Range 分段请求；编码须受播放器支持")
+    public ResponseEntity<Resource> findMedia(
+            @PathVariable @Parameter(description = "群组 ID") UUID groupId,
+            @PathVariable @Parameter(description = "文件附件 ID") UUID attachmentId,
+            @AuthenticationPrincipal AuthenticatedUser user
+    ) {
+        ChatFileMetadata metadata = chatFileService.findMetadata(groupId, attachmentId, user);
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .header("X-Content-Type-Options", "nosniff")
+                .contentType(MediaType.parseMediaType(ChatFileMediaService.mediaType(metadata.fileName())))
+                .body(chatFileService.findFile(attachmentId));
     }
 
     @GetMapping("/files/{attachmentId}")

@@ -7,6 +7,7 @@ import { renderToString } from '@vue/server-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 import { formatPresenceAgo, formatRecentGame } from '../profile/presenceHistory';
 import ProfilePopover from './ProfilePopover.vue';
+import defaultAvatar from '../../../../services/api/src/main/resources/account/default.png';
 
 const script = parse(readFileSync(new URL('./ProfilePopover.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const parsed = ts.createSourceFile('ProfilePopover.ts', script, ts.ScriptTarget.Latest, true);
@@ -30,7 +31,8 @@ it('已注销资料即使带有旧缓存，也仅显示统一昵称与默认头�
   expect(active).toContain(props.signature);
   const closed = await renderToString(createSSRApp(ProfilePopover, { ...props, deletedAt: '2026-11-15T00:00:00Z' }));
   expect(closed).toContain('<strong>账号已注销</strong>');
-  expect(closed).toContain('profile-avatar-placeholder');
+  expect(closed).toContain(`src="${defaultAvatar}"`);
+  expect(closed).not.toContain('profile-avatar-placeholder');
   expect(closed).not.toContain(props.nickname);
   expect(closed).not.toContain(props.avatar);
   expect(closed).not.toContain(props.signature);

@@ -10,6 +10,7 @@ function fixture(failVideo = false) {
   const context = {
     audioShortcuts: { clear: stop('shortcuts') }, screenShareWindows: { closeAll: stop('viewers') },
     activityMonitor: { clearMappings: stop('activity') }, voiceOverlay: { clear: stop('overlay') },
+    recordingEditor: { cancel: stop('clip') },
     recording: { stopAll: stop('recording') }, nativeVideo: { current: { sessionId: 'video' },
       stop: async () => { calls.push('video'); if (failVideo) throw new Error('failed'); } },
     nativeScreenAudio: { sessionId: 'audio', stop: stop('audio') }, nativeMicrophone: { sessionId: 'microphone', stop: stop('microphone') },
@@ -27,7 +28,7 @@ function fixture(failVideo = false) {
 test('返回账号页回收每项媒体，不接触已保存凭据', async () => {
   const f = fixture();
   await f.leave();
-  assert.deepEqual(f.calls, ['shortcuts', 'viewers', 'activity', 'overlay', 'recording', 'video', 'audio', 'microphone', 'report', 'log']);
+  assert.deepEqual(f.calls, ['shortcuts', 'viewers', 'activity', 'overlay', 'clip', 'recording', 'video', 'audio', 'microphone', 'report', 'log']);
 });
 
 test('一路停止失败仍继续清理声音与麦克风，并报告失败', async () => {

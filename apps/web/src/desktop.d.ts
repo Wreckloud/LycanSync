@@ -33,13 +33,16 @@ interface DesktopRecordingStatus {
   };
 }
 interface RecordingLibraryEntry {
+  kind?: 'recording' | 'replay' | 'clip';
+  applicationName?: string;
+  fileName?: string;
   id: string;
   sessionId: string;
   createdAt: number;
   durationMs: number | null;
   width: number | null;
   height: number | null;
-  bytes: number;
+  bytes: number | null;
   state: 'recording' | 'saved' | 'interrupted';
   availability: 'available' | 'missing' | 'changed' | 'unavailable';
 }
@@ -230,8 +233,11 @@ interface Window {
     configureReplay(settings: { seconds?: number; enabled?: boolean }): Promise<RecordingSettings>;
     getRecordingStatus(): Promise<DesktopRecordingStatus>;
     revealRecording(): Promise<void>;
-    getRecordingLibrary(offset?: number): Promise<{ items: RecordingLibraryEntry[]; hasMore: boolean }>;
-    recordingFile(id: string, action: 'play' | 'reveal' | 'delete'): Promise<boolean>;
+    exportRecordingClip(requestId: string, id: string, startMs: number, endMs: number): Promise<RecordingLibraryEntry>;
+    cancelRecordingClip(requestId: string): Promise<void>;
+    onRecordingClipProgress(callback: (progress: { requestId: string; percent: number }) => void): () => void;
+    getRecordingLibrary(offset?: number, kind?: 'all' | 'recording' | 'replay' | 'clip'): Promise<{ items: RecordingLibraryEntry[]; hasMore: boolean }>;
+    recordingFile(id: string, action: 'play' | 'reveal' | 'delete' | 'relink' | 'clearUnavailable'): Promise<boolean>;
     onRecordingState(callback: (state: DesktopRecordingStatus) => void): () => void;
     getProcessMetrics(): Promise<DesktopProcessMetrics>;
     exportDiagnosticReport(report: string): Promise<{ saved: boolean }>;

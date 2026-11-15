@@ -17,6 +17,7 @@ const { createAudioShortcuts } = require('./audio-shortcuts.cjs');
 const { createMediaBackgroundPolicy } = require('./media-background.cjs');
 const { createDesktopTray } = require('./desktop-tray.cjs');
 const { createLoginPreferences } = require('./login-preferences.cjs');
+const { createRecordingEditor } = require('./recording-editor.cjs');
 const { createRecordingVoice } = require('./recording-voice.cjs');
 const { createMediaDiagnostics, readDiagnosticEvents, createProcessMetricsReader } = require('./media-diagnostics.cjs');
 const { createDiagnosticReportStore, parseDiagnosticReport } = require('./diagnostic-reports.cjs');
@@ -91,6 +92,8 @@ const groupMessagePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 const groupAttachmentPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/attachments\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const groupFilePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/files(?:\/(?:requests\/)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/i;
 const groupFileDownloadPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/files\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const groupFileMediaPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/files\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\/(?:media|thumbnail|preview\/media))$/i;
+const groupFilePreviewPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/files\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/preview$/i;
 app.setName('LycanSync');
 // 整屏缩略图由 Chromium 截取；窗口预览按需在限时进程中生成，避免遍历无关窗口。
 // 正式视频流由 OBS 采集，此开关不改变其后端，也不关闭 GPU 合成或 WebRTC 编码。
@@ -333,6 +336,7 @@ const nativeVideo = createNativeVideoSession({ host: obsCaptureHost, mediaHelper
 const recordingVoice = createRecordingVoice();
 const recording = createRecording({
   dataDirectory: app.getPath('userData'), host: obsCaptureHost, getVideo: () => nativeVideo.current,
+  getApplicationName: video => video.sourceKind === 'monitor' ? '屏幕' : activityMonitor.recordingName(video.executable),
   ensureVoice: id => recordingVoice.open(id),
   releaseVoice: id => recordingVoice.close(id),
   ensureAudio: async (sessionId) => {
@@ -556,6 +560,8 @@ async function serveApplication(request) {
         ? { longPolling: true } : undefined)
       ?? (request.method === 'GET' && (groupPath.test(url.pathname) || groupMemberProfilePath.test(url.pathname) || groupPresencePath.test(url.pathname) || groupMessagePath.test(url.pathname)
         || groupAttachmentPath.test(url.pathname) || groupFilePath.test(url.pathname)) ? {} : undefined)
+      ?? (['GET', 'HEAD'].includes(request.method) && groupFileMediaPath.test(url.pathname) ? {} : undefined)
+      ?? (['GET', 'POST'].includes(request.method) && groupFilePreviewPath.test(url.pathname) ? {} : undefined)
       ?? (request.method === 'GET' && groupPresenceChangesPath.test(url.pathname) ? { longPolling: true } : undefined)
       ?? (request.method === 'PUT' && groupPath.test(url.pathname) ? { maxBodyBytes: 3 * 1024 * 1024 } : undefined)
       ?? (request.method === 'DELETE' && (groupPath.test(url.pathname) || groupMemberPath.test(url.pathname)) ? {} : undefined)
@@ -583,6 +589,7 @@ async function serveApplication(request) {
       const response = await net.fetch(new URL(url.pathname + url.search, backend).href, {
         method: request.method,
         headers: { ...(body ? { 'Content-Type': request.headers.get('Content-Type') || 'application/json' } : {}),
+          ...(groupFileMediaPath.test(url.pathname) && request.headers.has('Range') ? { Range: request.headers.get('Range') } : {}),
           ...(streamingUpload ? {
             'X-File-Name': request.headers.get('X-File-Name') || '',
             'X-File-Size': request.headers.get('X-File-Size') || '',
@@ -592,7 +599,7 @@ async function serveApplication(request) {
           ...(!routePolicy.public && token ? { Authorization: 'Bearer ' + token } : {}) },
         body, ...(streamingUpload ? { duplex: 'half' } : {}), redirect: 'error', credentials: 'omit',
         signal: AbortSignal.any([request.signal,
-          AbortSignal.timeout(streamingUpload || groupFileDownloadPath.test(url.pathname) ? 30 * 60_000
+          AbortSignal.timeout(streamingUpload || groupFileDownloadPath.test(url.pathname) || groupFileMediaPath.test(url.pathname) ? 30 * 60_000
             : routePolicy.longPolling ? 52_000 : 15000)]),
       });
       const currentSessionUnauthorized = !routePolicy.public && Boolean(token)
@@ -625,6 +632,8 @@ async function serveApplication(request) {
       return new Response(response.body, { status: response.status, headers: {
         'Content-Type': response.headers.get('Content-Type') || 'application/json',
         ...(response.headers.has('Content-Length') ? { 'Content-Length': response.headers.get('Content-Length') } : {}),
+        ...(response.headers.has('Content-Range') ? { 'Content-Range': response.headers.get('Content-Range') } : {}),
+        ...(response.headers.has('Accept-Ranges') ? { 'Accept-Ranges': response.headers.get('Accept-Ranges') } : {}),
         ...(response.headers.has('Content-Disposition') ? { 'Content-Disposition': response.headers.get('Content-Disposition') } : {}),
         ...(response.headers.has('X-Content-Type-Options') ? { 'X-Content-Type-Options': response.headers.get('X-Content-Type-Options') } : {}),
         ...(response.status === 401 && !routePolicy.public
@@ -1230,12 +1239,34 @@ ipcMain.handle('recording:reveal', async (event) => {
   if (path.endsWith('.mkv')) shell.showItemInFolder(path);
   else { const error = await shell.openPath(path); if (error) throw new Error('无法打开录像目录'); }
 });
-ipcMain.handle('recording:library', (event, offset) => {
+const recordingEditor = createRecordingEditor({ library: recording.library,
+  executablePath: resolve(dirname(obsHostSettings.executablePath), 'lycansync-recording-clip.exe'),
+  onProgress: progress => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('recording:clip-progress', progress); },
+  onDiagnostic: message => { void writeMediaDiagnostic(message); },
+});
+ipcMain.handle('recording:clip', (event, requestId, id, startMs, endMs) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
-  return recording.library.list(offset);
+  return recordingEditor.exportClip(requestId, id, startMs, endMs);
+});
+ipcMain.handle('recording:clip-cancel', (event, requestId) => {
+  if (!trustedSender(event) || typeof requestId !== 'string') throw new Error('请求来源无效');
+  return recordingEditor.cancel(requestId);
+});
+ipcMain.handle('recording:library', (event, offset, kind) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return recording.library.list(offset, kind);
 });
 ipcMain.handle('recording:file', async (event, id, action) => {
-  if (!trustedSender(event) || closing || !['play', 'reveal', 'delete'].includes(action)) throw new Error('请求来源无效');
+  if (!trustedSender(event) || closing || !['play', 'reveal', 'delete', 'relink', 'clearUnavailable'].includes(action)) throw new Error('请求来源无效');
+  if (action === 'relink' || action === 'clearUnavailable') {
+    const result = await dialog.showMessageBox(mainWindow, { type: 'question', title: '整理录像记录',
+      message: action === 'relink' ? '将原位置的文件重新关联到这条录像记录？' : '移除找不到原片或文件身份已变化的记录？',
+      detail: action === 'relink' ? '旧版录制可能误判文件已被替换。确认后可重新预览，请核对录像内容。' : '只清理列表记录，不删除任何录像文件。',
+      buttons: ['取消', '确认'], defaultId: 0, cancelId: 0, noLink: true });
+    if (result.response !== 1 || closing) return false;
+    if (action === 'relink') await recording.library.relink(id); else await recording.library.clearUnavailable();
+    return true;
+  }
   if (action === 'delete') {
     const result = await dialog.showMessageBox(mainWindow, { type: 'warning', title: '删除本地录像',
       message: '永久删除这个录像文件？', detail: '此操作不能撤销。已发送到群聊的副本不受影响；文件已丢失或被替换时，只移除列表记录。',
@@ -1383,7 +1414,7 @@ function shutdownMediaResources() {
   try { audioShortcuts.clear(); } catch { console.error('audio shortcut cleanup failed'); }
   voiceOverlay.clear();
   stopActivityHelper();
-  mediaHelperShutdownPromise = recording.stopAll().catch(error => {
+  mediaHelperShutdownPromise = recordingEditor.cancel().then(() => recording.stopAll()).catch(error => {
     console.error(`recording shutdown failed: ${error.message}`);
   }).then(() => (nativeScreenAudio.sessionId
     ? nativeScreenAudio.stop(nativeScreenAudio.sessionId).catch((error) => {
@@ -1468,6 +1499,7 @@ async function returnToAccountEntry() {
     () => screenShareWindows.closeAll(),
     () => activityMonitor.clearMappings(),
     () => voiceOverlay.clear(),
+    () => recordingEditor.cancel(),
     () => recording.stopAll(),
     () => nativeVideo.current && nativeVideo.stop(nativeVideo.current.sessionId),
     () => nativeScreenAudio.sessionId && nativeScreenAudio.stop(nativeScreenAudio.sessionId, true),

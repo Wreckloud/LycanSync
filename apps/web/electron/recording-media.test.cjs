@@ -9,7 +9,7 @@ const { serveRecordingMedia } = require('./recording-media.cjs');
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'lycan-recording-preview-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(root, { recursive: true, force: true, maxRetries: 3 }));
   const id = randomUUID();
   const path = join(root, `LycanSync-${id}.mkv`);
   await writeFile(path, '0123456789');

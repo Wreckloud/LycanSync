@@ -17,7 +17,7 @@ function createRecordingLibrary({ dataDirectory, isActive, io = fs }) {
         if (stored?.schemaVersion !== 1 || !Array.isArray(stored.entries)
             || !stored.entries.every(entry => entry && ID.test(entry.id) && ID.test(entry.sessionId)
               && typeof entry.path === 'string' && isAbsolute(entry.path) && !entry.path.includes('\0')
-              && basename(entry.path).endsWith(`-${entry.id}.mkv`) && basename(entry.path).startsWith('LycanSync-')
+              && (basename(entry.path).endsWith(`-${entry.id}.mkv`) || basename(entry.path).endsWith(`-${entry.id}.mp4`))
               && Number.isSafeInteger(entry.createdAt) && entry.createdAt > 0
               && ['pending', 'saved', 'interrupted'].includes(entry.state)
               && (entry.durationMs === null || Number.isSafeInteger(entry.durationMs) && entry.durationMs >= 0)
@@ -60,9 +60,9 @@ function createRecordingLibrary({ dataDirectory, isActive, io = fs }) {
       const file = await io.lstat(entry.path);
       // 文件被替换或改成链接后，不再播放或删除它；保留记录让用户自行检查。
       const unchanged = file.isFile() && `${file.dev}:${file.ino}` === entry.fileIdentity;
-      return { availability: unchanged ? 'available' : 'changed', bytes: unchanged ? file.size : 0 };
+      return { availability: unchanged ? 'available' : 'changed', bytes: unchanged ? file.size : null };
     } catch (error) {
-      return { availability: error.code === 'ENOENT' ? 'missing' : 'unavailable', bytes: 0 };
+      return { availability: error.code === 'ENOENT' ? 'missing' : 'unavailable', bytes: null };
     }
   }
   async function filePath(id) {
@@ -78,20 +78,28 @@ function createRecordingLibrary({ dataDirectory, isActive, io = fs }) {
     async register(current) {
       const file = await io.lstat(current.path);
       await change(items => [...items, { id: current.id, sessionId: current.librarySessionId,
-        path: current.path, fileIdentity: `${file.dev}:${file.ino}`, createdAt: Date.now(),
+        path: current.path, kind: current.kind || 'recording', applicationName: current.applicationName || '', fileIdentity: `${file.dev}:${file.ino}`, createdAt: Date.now(),
         durationMs: null, width: null, height: null, state: 'pending' }]);
     },
     finish(current) {
-      return change(items => items.map(entry => entry.id === current.id ? { ...entry,
-        state: current.saved ? 'saved' : 'interrupted', durationMs: current.durationMs ?? null,
-        width: current.width ?? null, height: current.height ?? null } : entry));
+      return change(async items => {
+        const existing = await find(current.id);
+        // OBS 会重建预留文件，保存完成后才记录最终输出的文件身份。
+        const file = current.saved ? await io.lstat(existing.path) : null;
+        if (file && !file.isFile()) throw new Error('recordingFileUnavailable');
+        return items.map(entry => entry.id === current.id ? { ...entry,
+          fileIdentity: file ? `${file.dev}:${file.ino}` : entry.fileIdentity,
+          state: current.saved ? 'saved' : 'interrupted', durationMs: current.durationMs ?? null,
+          width: current.width ?? null, height: current.height ?? null } : entry);
+      });
     },
-    async list(offset = 0) {
+    async list(offset = 0, kind = 'all') {
+      if (!['all', 'recording', 'replay', 'clip'].includes(kind)) throw new Error('recordingEntryMissing');
       if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('recordingEntryMissing');
       await saving; await load();
-      const sorted = [...entries].sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
+      const sorted = entries.filter(entry => kind === 'all' || entryKind(entry) === kind).sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
       const items = await Promise.all(sorted.slice(offset, offset + 50).map(async entry => ({
-        id: entry.id, sessionId: entry.sessionId, createdAt: entry.createdAt,
+        id: entry.id, sessionId: entry.sessionId, kind: entryKind(entry), applicationName: entry.applicationName || '', fileName: basename(entry.path), createdAt: entry.createdAt,
         durationMs: entry.durationMs, width: entry.width, height: entry.height,
         state: isActive(entry.id) ? 'recording' : entry.state === 'pending' ? 'interrupted' : entry.state,
         ...await inspect(entry),
@@ -99,6 +107,22 @@ function createRecordingLibrary({ dataDirectory, isActive, io = fs }) {
       return { items, hasMore: offset + items.length < sorted.length };
     },
     filePath,
+    async entry(id) { await saving; return { ...await find(id) }; },
+    relink(id) {
+      return change(async items => {
+        const entry = await find(id);
+        if (isActive(id)) throw new Error('recordingBusy');
+        const file = await io.lstat(entry.path);
+        if (!file.isFile() || file.size === 0) throw new Error('recordingFileUnavailable');
+        return items.map(item => item.id === id ? { ...item, fileIdentity: `${file.dev}:${file.ino}` } : item);
+      });
+    },
+    clearUnavailable() {
+      return change(async items => {
+        const keep = await Promise.all(items.map(async item => isActive(item.id) || !['missing', 'changed'].includes((await inspect(item)).availability)));
+        return items.filter((_item, index) => keep[index]);
+      });
+    },
     remove(id) {
       return change(async items => {
         const entry = await find(id);
@@ -112,4 +136,14 @@ function createRecordingLibrary({ dataDirectory, isActive, io = fs }) {
   };
 }
 
-module.exports = { createRecordingLibrary };
+function entryKind(entry) {
+  return entry.kind || (basename(entry.path).startsWith('LycanSync-Replay-') ? 'replay' : 'recording');
+}
+function recordingFileName(applicationName, kind, id, createdAt = Date.now()) {
+  const application = String(applicationName || '窗口').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/g, '').slice(0, 60) || '窗口';
+  const date = new Date(createdAt);
+  const pad = value => String(value).padStart(2, '0');
+  const stamp = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`;
+  return `${application} · ${{ recording: '录制', replay: '回放', clip: '剪辑' }[kind]} · ${stamp}-${id}.${kind === 'clip' ? 'mp4' : 'mkv'}`;
+}
+module.exports = { createRecordingLibrary, recordingFileName };

@@ -3,6 +3,7 @@ import { computed, onScopeDispose, ref, watch } from 'vue';
 import type { CSSProperties } from 'vue';
 import { autoUpdate, computePosition, flip, offset, shift } from '@floating-ui/dom';
 import { Headphones, UserRound } from '@lucide/vue';
+import defaultAvatar from '../../../../services/api/src/main/resources/account/default.png';
 import { formatSharedVoiceTime } from '../profile/sharedVoiceTime';
 import type { UserPresenceStatus } from '../presence/presenceApi';
 import { useLoadingHint } from './useLoadingHint';
@@ -206,7 +207,7 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
           <div class="profile-popover-body">
             <div class="profile-popover-identity">
               <span class="personal-avatar" role="img" :aria-label="statusLabel">
-                <img v-if="avatar && !deletedAt" ref="avatarImage" :src="avatar" class="profile-avatar" alt="" @load="tintAvatar" />
+                <img v-if="deletedAt || avatar" ref="avatarImage" :src="deletedAt ? defaultAvatar : avatar" class="profile-avatar" alt="" @load="tintAvatar" />
                 <span v-else class="profile-avatar-placeholder"><UserRound :size="28" /></span>
                 <span class="status-dot" :class="status" aria-hidden="true" />
               </span>

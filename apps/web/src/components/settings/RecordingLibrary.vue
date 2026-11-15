@@ -1,6 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
+import { computed, inject, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { useRecordingLibrary } from '../../recording/useRecordingLibrary';
+import { RECORDING_SHARE } from '../../recording/useRecordingShare';
+import ExpandSection from '../ExpandSection.vue';
+import { ChevronUp, ChevronDown } from '@lucide/vue';
+import SegmentedControl from '../SegmentedControl.vue';
 import DialogTransition from '../DialogTransition.vue';
 import RecordingPreview from './RecordingPreview.vue';
 import RecordingThumbnail from './RecordingThumbnail.vue';
@@ -10,22 +14,29 @@ import { keepDialogFocus } from '../dialogFocus';
 
 const props = defineProps<{ status: DesktopRecordingStatus }>();
 const emit = defineEmits<{ close: [] }>();
+const share = inject(RECORDING_SHARE);
+const expandedUnavailable = ref(false);
+const filters = [{ id: 'all', label: '全部' }, { id: 'recording', label: '录制' }, { id: 'replay', label: '回放' }, { id: 'clip', label: '剪辑' }] as const;
+const kindLabel = (entry: RecordingLibraryEntry) => ({ recording: '录制', replay: '回放', clip: '剪辑' }[entry.kind ?? 'recording']);
+const title = (entry: RecordingLibraryEntry) => `${entry.applicationName || '未命名'} · ${kindLabel(entry)}`;
 const preview = ref<RecordingLibraryEntry | null>(null);
 const recordingSource = (id: string) => `lycan://app/recordings/${encodeURIComponent(id)}`;
-const canPreview = (entry: RecordingLibraryEntry) => entry.state !== 'recording' && entry.availability === 'available' && entry.bytes > 0;
+const canPreview = (entry: RecordingLibraryEntry) => entry.state !== 'recording' && entry.availability === 'available' && (entry.bytes ?? 0) > 0;
 const dialog = ref<HTMLElement | null>(null);
 const backdropEvents = useBackdropDismiss(() => emit('close'));
 const library = useRecordingLibrary();
 const { entries, hasMore, loading, pendingId, notice } = library;
+const unavailable = computed(() => entries.value.filter(entry => entry.state !== 'recording' && entry.availability !== 'available'));
 const groups = computed(() => {
-  const result: { id: string; createdAt: number; items: RecordingLibraryEntry[] }[] = [];
-  for (const entry of entries.value) {
-    const group = result.find(item => item.id === entry.sessionId);
-    if (group) group.items.push(entry);
-    else result.push({ id: entry.sessionId, createdAt: entry.createdAt, items: [entry] });
+  const result: { date: string; items: RecordingLibraryEntry[] }[] = [];
+  for (const entry of entries.value.filter(item => !unavailable.value.includes(item))) {
+    const date = new Date(entry.createdAt).toLocaleDateString();
+    const group = result.find(item => item.date === date);
+    if (group) group.items.push(entry); else result.push({ date, items: [entry] });
   }
   return result;
 });
+watch(library.kind, () => { void library.load(); });
 function openExternalPreview() {
   const entry = preview.value;
   if (!entry) return;
@@ -59,55 +70,73 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
 
 <template>
   <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="emit('close')">
-    <section ref="dialog" class="recording-library-dialog" role="dialog" aria-modal="true" aria-labelledby="recording-library-title"
-      tabindex="-1" @keydown="keepDialogFocus">
+    <section ref="dialog" class="recording-library-dialog" role="dialog" aria-modal="true" aria-labelledby="recording-library-title" tabindex="-1" @keydown="keepDialogFocus">
       <h2 id="recording-library-title">本地录像管理器</h2>
-      <div class="settings-section recording-library-content">
-        <p>点击缩略图预览录像，也可使用系统播放器打开。录像保存在本机，不会自动上传或清理。切换来源或画质时会分段保存。</p>
+      <p class="library-intro">查看录制和回放，截取精彩片段，分享给群里的朋友。</p>
+      <SegmentedControl v-model="library.kind.value" :options="filters" label="录像类型" />
+      <div class="recording-library-content">
         <InlineFeedback :message="notice" :pending="loading ? '正在读取录像列表…' : ''" />
-        <button v-if="notice" type="button" :disabled="loading || !!pendingId" @click="library.load()">重新读取</button>
-        <p v-if="!entries.length && !loading && !notice">暂无录像记录。旧版保存的录像仍可在录像目录中找到。</p>
-        <details v-for="group in groups" :key="group.id" :open="group.items.length === 1" class="library-session">
-          <summary>{{ new Date(group.createdAt).toLocaleString() }}<small v-if="group.items.length > 1"> · {{ group.items.length }} 个文件段</small></summary>
-          <ul>
-            <li v-for="entry in group.items" :key="entry.id">
-              <RecordingThumbnail :key="`${entry.id}:${entry.state}:${entry.availability}`" :source="recordingSource(entry.id)" :disabled="!canPreview(entry)" @preview="preview = entry" />
-              <div class="library-description">
-                <strong>{{ state(entry) }}</strong>
-                <small>{{ new Date(entry.createdAt).toLocaleTimeString() }} · {{ duration(entry.durationMs) }} · {{ (entry.bytes / 1024 / 1024).toFixed(1) }} MiB<template v-if="entry.width && entry.height"> · {{ entry.width }} × {{ entry.height }}</template></small>
+        <button v-if="notice" :disabled="loading" @click="library.load()">重新读取</button>
+        <p v-if="!entries.length && !loading && !notice">暂无录像。</p>
+        <section v-for="group in groups" :key="group.date" class="library-day">
+          <h3>{{ group.date }}</h3>
+          <article v-for="entry in group.items" :key="entry.id" class="library-row">
+            <RecordingThumbnail :key="`${entry.id}:${entry.state}:${entry.availability}`" :source="recordingSource(entry.id)" :disabled="!canPreview(entry)" @preview="preview = entry" />
+            <div class="library-description">
+              <strong>{{ title(entry) }}</strong>
+              <small>{{ new Date(entry.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }} · {{ duration(entry.durationMs) }}<template v-if="entry.bytes !== null"> · {{ (entry.bytes / 1024 / 1024).toFixed(1) }} MiB</template></small>
+              <small v-if="entry.state !== 'saved'">{{ state(entry) }}</small>
+            </div>
+            <button :disabled="!canPreview(entry)" @click="share?.select(entry)">分享</button>
+            <details class="library-more">
+              <summary aria-label="更多操作">···</summary>
+              <div class="library-menu">
+                <button :disabled="!!pendingId || !canPreview(entry)" @click="library.file(entry, 'play')">系统播放</button>
+                <button :disabled="!!pendingId || !canPreview(entry)" @click="library.file(entry, 'reveal')">打开位置</button>
+                <button class="danger-text" :disabled="!!pendingId || entry.state === 'recording'" @click="library.file(entry, 'delete')">删除录像</button>
               </div>
-              <div class="library-actions">
-                <button type="button" :disabled="!!pendingId || entry.state === 'recording' || entry.availability !== 'available' || !entry.bytes" @click="library.file(entry, 'play')">系统播放</button>
-                <button type="button" :disabled="!!pendingId || entry.state === 'recording' || entry.availability !== 'available' || !entry.bytes" @click="library.file(entry, 'reveal')">打开位置</button>
-                <button type="button" class="settings-button" :disabled="!!pendingId || entry.state === 'recording'" @click="library.file(entry, 'delete')">{{ entry.availability === 'missing' || entry.availability === 'changed' ? '移除记录' : '删除' }}</button>
-              </div>
-            </li>
-          </ul>
-        </details>
-        <button v-if="hasMore" type="button" :disabled="loading || !!pendingId" @click="library.load(true)">加载更多</button>
+            </details>
+          </article>
+        </section>
+        <section v-if="unavailable.length" class="library-unavailable">
+          <ExpandSection :open="expandedUnavailable">
+            <article v-for="entry in unavailable" :key="entry.id" class="library-row">
+              <div class="library-description"><strong>{{ title(entry) }}</strong><small>{{ new Date(entry.createdAt).toLocaleString() }} · {{ state(entry) }}</small></div>
+              <button v-if="entry.availability === 'changed'" :disabled="!!pendingId" @click="library.file(entry, 'relink')">重新关联</button>
+              <button :disabled="!!pendingId" @click="library.file(entry, 'delete')">移除记录</button>
+            </article>
+            <button v-if="unavailable.some(entry => ['missing', 'changed'].includes(entry.availability))" :disabled="!!pendingId" @click="library.file(unavailable[0]!, 'clearUnavailable')">清理失效记录</button>
+          </ExpandSection>
+          <button class="library-disclosure" :aria-expanded="expandedUnavailable" @click="expandedUnavailable = !expandedUnavailable"><component :is="expandedUnavailable ? ChevronUp : ChevronDown" :size="12" />{{ expandedUnavailable ? '收起' : '查看' }}无法读取的记录（{{ unavailable.length }}）</button>
+        </section>
+        <button v-if="hasMore" :disabled="loading || !!pendingId" @click="library.load(true)">加载更多</button>
       </div>
       <footer class="card-actions">
-        <button type="button" @click="emit('close')">关闭</button>
+        <button @click="emit('close')">关闭</button>
+        <button v-if="share?.entry.value" @click="share.visible.value = true">{{ share.busy.value ? `发送中 ${share.progress.value}%` : '继续分享' }}</button>
       </footer>
     </section>
     <DialogTransition>
-      <RecordingPreview v-if="preview" :key="preview.id" :source="recordingSource(preview.id)" @close="preview = null" @external="openExternalPreview" />
+      <RecordingPreview v-if="preview" :key="preview.id" :entry="preview" :source="recordingSource(preview.id)" @close="preview = null" @external="openExternalPreview" @saved="library.load()" />
     </DialogTransition>
   </div>
 </template>
 
 <style scoped>
-.recording-library-dialog { display: flex; flex-direction: column; gap: 16px; width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 32px); box-sizing: border-box; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
-.recording-library-dialog h2 { margin: 0; font-size: 22px; line-height: 32px; }
-.recording-library-content { min-height: 0; overflow-y: auto; gap: 12px; }
-.recording-library-dialog .card-actions { flex-shrink: 0; }
-.library-session { border-top: 1px solid var(--border); padding: 12px 0; }
-.library-session summary { cursor: pointer; font-size: 13px; }
-.library-session small { color: var(--muted); }
-.library-session ul { list-style: none; padding: 0; margin: 12px 0 0; }
-.library-session li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; padding: 8px 0; }
-.library-description { flex: 1; min-width: 0; display: grid; gap: 4px; }
-.library-description strong { font-size: 13px; font-weight: 500; }
-.library-description small { font-size: 12px; overflow-wrap: anywhere; }
-.library-actions { display: flex; flex-wrap: wrap; gap: var(--button-gap); }
+.recording-library-dialog { display: flex; flex-direction: column; gap: 16px; width: min(760px, calc(100vw - 32px)); height: min(700px, calc(100vh - 48px)); box-sizing: border-box; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+h2 { margin: 0; font-size: 22px; line-height: 32px; }
+.library-intro { margin: 0; color: var(--muted); font-size: 13px; }
+.recording-library-content { flex: 1; min-height: 0; overflow-y: auto; padding-right: 8px; }
+.card-actions { flex-shrink: 0; }
+.library-day h3 { margin: 16px 0 4px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.library-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; }
+.library-description { flex: 1; min-width: 0; display: grid; gap: 6px; }
+.library-description strong { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-description small { color: var(--muted); font-size: 12px; }
+.library-more { position: relative; }
+.library-more summary { cursor: pointer; list-style: none; padding: 8px; }
+.library-menu { position: absolute; right: 0; bottom: 100%; z-index: 2; display: grid; width: 128px; padding: 6px; background: var(--panel-soft); border: 1px solid var(--border); border-radius: 6px; }
+.library-menu button { border: 0; background: transparent; text-align: left; }
+.library-unavailable { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 8px; }
+.library-disclosure { display: flex; align-items: center; gap: 4px; border: 0; padding-left: 0; color: var(--muted); background: transparent; }
 </style>

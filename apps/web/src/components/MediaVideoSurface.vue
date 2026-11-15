@@ -3,12 +3,26 @@ import { onMounted, onScopeDispose, ref } from 'vue';
 import { Download, X } from '@lucide/vue';
 
 defineProps<{ source: string; downloadable?: boolean; downloading?: boolean }>();
-const emit = defineEmits<{ close: []; download: []; error: [] }>();
+const emit = defineEmits<{ close: []; download: []; error: []; metadata: [duration: number]; time: [seconds: number] }>();
 const player = ref<HTMLVideoElement | null>(null);
 const aspectRatio = ref(16 / 9);
-function measureVideo() {
-  if (player.value?.videoWidth && player.value.videoHeight) aspectRatio.value = player.value.videoWidth / player.value.videoHeight;
+const failed = ref(false);
+function playbackFailed() {
+  if (failed.value) return;
+  failed.value = true;
+  player.value?.pause();
+  player.value?.removeAttribute('src');
+  player.value?.load();
+  emit('error');
 }
+function measureVideo() {
+  const video = player.value;
+  if (!video) return;
+  if (!video.videoWidth || !video.videoHeight) { playbackFailed(); return; }
+  aspectRatio.value = video.videoWidth / video.videoHeight;
+  emit('metadata', video.duration);
+}
+defineExpose({ player });
 const closeButton = ref<HTMLButtonElement | null>(null);
 onMounted(() => closeButton.value?.focus({ preventScroll: true }));
 onScopeDispose(() => {
@@ -22,8 +36,9 @@ onScopeDispose(() => {
   <div class="media-video-surface">
     <button ref="closeButton" type="button" class="media-viewer-close" aria-label="关闭查看器" title="关闭" @click="emit('close')"><X :size="24" /></button>
     <div class="media-video-stage">
-      <video ref="player" :src="source" :style="{ '--video-ratio': aspectRatio }" controls playsinline preload="metadata" tabindex="0" @loadedmetadata="measureVideo" @error="emit('error')" />
+      <video v-if="!failed" ref="player" :src="source" :style="{ '--video-ratio': aspectRatio }" controls playsinline preload="metadata" tabindex="0" @timeupdate="emit('time', player?.currentTime ?? 0)" @loadedmetadata="measureVideo" @error="playbackFailed" />
     </div>
+    <slot name="controls" />
     <div v-if="downloadable" class="media-viewer-tools">
       <button type="button" aria-label="下载文件" title="下载文件" :disabled="downloading" @click="emit('download')"><Download :size="20" /></button>
     </div>

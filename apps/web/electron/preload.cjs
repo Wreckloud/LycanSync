@@ -183,7 +183,14 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   configureReplay: (settings) => ipcRenderer.invoke('recording:replay-settings', settings),
   getRecordingStatus: () => ipcRenderer.invoke('recording:status'),
   revealRecording: () => ipcRenderer.invoke('recording:reveal'),
-  getRecordingLibrary: (offset) => ipcRenderer.invoke('recording:library', offset),
+  exportRecordingClip: (requestId, id, startMs, endMs) => ipcRenderer.invoke('recording:clip', requestId, id, startMs, endMs),
+  cancelRecordingClip: requestId => ipcRenderer.invoke('recording:clip-cancel', requestId),
+  onRecordingClipProgress: callback => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on('recording:clip-progress', listener);
+    return () => ipcRenderer.removeListener('recording:clip-progress', listener);
+  },
+  getRecordingLibrary: (offset, kind) => ipcRenderer.invoke('recording:library', offset, kind),
   recordingFile: (id, action) => ipcRenderer.invoke('recording:file', id, action),
   onRecordingState: (callback) => {
     const listener = (_event, state) => callback(state);

@@ -44,6 +44,7 @@ onScopeDispose(cancel);
     <div class="chat-file-details">
       <strong>{{ attachment.fileName }}</strong>
       <small>{{ (attachment.byteSize / 1024 / 1024).toFixed(2) }} MB</small>
+      <small v-if="previewDisabled">无法预览，可下载后打开</small>
       <progress v-if="downloading" :value="progress()" max="100" aria-label="文件下载进度" />
       <small v-if="error" class="chat-file-error" role="alert">{{ error }}</small>
     </div>

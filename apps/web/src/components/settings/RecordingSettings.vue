@@ -39,6 +39,11 @@ async function toggleReplay(event: Event) {
 <template>
   <div class="settings-section">
     <InlineFeedback :message="recording.noticeTarget.value === 'settings' ? recording.notice.value : ''" />
+    <section v-if="desktop" class="settings-block">
+      <h2>录像管理</h2>
+      <p>查看保存在本机的录像和回放，打开文件或整理记录。</p>
+      <button type="button" class="settings-button" @click="libraryOpen = true">打开本地录像管理器</button>
+    </section>
     <section class="settings-block">
       <h2>共享录制</h2>
       <p>录制当前共享的窗口或屏幕，录像保存在本机。</p>
@@ -103,11 +108,7 @@ async function toggleReplay(event: Event) {
       </div>
       <InlineFeedback :message="recording.noticeTarget.value === 'replay' ? recording.notice.value : ''" />
     </section>
-    <section v-if="desktop" class="settings-block">
-      <h2>录像管理</h2>
-      <p>查看保存在本机的录像和回放，打开文件或整理记录。</p>
-      <button type="button" class="settings-button" @click="libraryOpen = true">打开本地录像管理器</button>
-    </section>
+
   </div>
   <DialogTransition>
     <RecordingLibrary v-if="desktop && active && libraryOpen" :status="recording.state.value" @close="libraryOpen = false" />

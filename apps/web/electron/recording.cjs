@@ -1,7 +1,7 @@
 const { mkdir, readFile, writeFile, rename, open, stat, statfs } = require('node:fs/promises');
 const { join, isAbsolute } = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { createRecordingLibrary } = require('./recording-library.cjs');
+const { createRecordingLibrary, recordingFileName } = require('./recording-library.cjs');
 
 const RECORDING_CODES = new Set(['recordingShareUnavailable', 'recordingBusy', 'recordingPathInvalid',
   'recordingHardwareEncoderUnavailable', 'recordingEncoderStartFailed', 'recordingAudioEncoderUnavailable',
@@ -14,7 +14,7 @@ function recordingError(error) {
 }
 
 // 主进程唯一持有录像路径、文件段和输出状态；页面只能修改偏好及请求开始／停止。
-function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAudio, ensureVoice, releaseVoice, onChange, onDiagnostic,
+function createRecording({ dataDirectory, host, getVideo, getApplicationName = () => '窗口', ensureAudio, releaseAudio, ensureVoice, releaseVoice, onChange, onDiagnostic,
   io = { mkdir, readFile, writeFile, rename, open, stat, statfs }, createId = randomUUID }) {
   const settingsPath = join(dataDirectory, 'recording-settings.json');
   let settings = { directory: join(dataDirectory, 'recordings'), applicationAudio: true, microphone: false, friends: false,
@@ -152,7 +152,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
     const video = getVideo();
     if (!video || video.starting || video.stopping) throw new Error('recordingShareUnavailable');
     generation++;
-    const current = { id: createId(), videoSessionId: video.sessionId, options: { ...settings },
+    const current = { id: createId(), videoSessionId: video.sessionId, applicationName: getApplicationName(video), kind: 'recording', options: { ...settings },
       diagnosticId: ++diagnosticSequence, requestedAt: performance.now(),
       phase: 'starting', startedAt: null, bytes: 0, error: null, saved: false };
     current.librarySessionId = previousId ? latest.librarySessionId : current.id;
@@ -163,7 +163,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
         await io.mkdir(current.options.directory, { recursive: true });
         const space = await io.statfs(current.options.directory);
         if (space.bavail * space.bsize < 256 * 1024 * 1024) throw new Error('recordingDiskFull');
-        current.path = join(current.options.directory, `LycanSync-${new Date().toISOString().replace(/[:.]/g, '-')}-${current.id}.mkv`);
+        current.path = join(current.options.directory, recordingFileName(current.applicationName, 'recording', current.id));
         // 独占预留，绝不覆盖已有文件；失败时保留部分录像供用户检查。
         const file = await io.open(current.path, 'wx'); await file.close();
         await library.register(current); current.registered = true;
@@ -249,7 +249,7 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
     if (replay || continuing && !resuming || active && active.phase !== 'recording') throw new Error('recordingBusy');
     const video = getVideo();
     if (!video || video.starting || video.stopping) throw new Error('recordingShareUnavailable');
-    const current = { id: createId(), videoSessionId: video.sessionId, options: { ...settings }, diagnosticId: ++diagnosticSequence, requestedAt: performance.now(), phase: 'starting', error: null };
+    const current = { id: createId(), videoSessionId: video.sessionId, applicationName: getApplicationName(video), kind: 'recording', options: { ...settings }, diagnosticId: ++diagnosticSequence, requestedAt: performance.now(), phase: 'starting', error: null };
     replay = current; publish();
     current.start = (async () => {
       try {
@@ -295,11 +295,11 @@ function createRecording({ dataDirectory, host, getVideo, ensureAudio, releaseAu
   async function saveReplay() {
     const current = replay;
     if (!current || current.phase !== 'buffering' || current.error || current.saving) throw new Error('recordingBusy');
-    const saved = { id: createId(), librarySessionId: current.id, width: current.width, height: current.height };
+    const saved = { id: createId(), librarySessionId: current.id, applicationName: current.applicationName, kind: 'replay', width: current.width, height: current.height };
     const saveRequestedAt = performance.now();
     const bufferedMs = Math.max(0, Math.round(saveRequestedAt - current.monotonicStart));
     const duringWarmup = bufferedMs < current.options.replaySeconds * 1000;
-    saved.path = join(current.options.directory, `LycanSync-Replay-${new Date().toISOString().replace(/[:.]/g, '-')}-${saved.id}.mkv`);
+    saved.path = join(current.options.directory, recordingFileName(saved.applicationName, 'replay', saved.id));
     current.saving = saved; publish();
     saved.promise = (async () => {
       try {
