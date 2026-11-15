@@ -1,21 +1,22 @@
 <script setup lang="ts">
 import { computed, onMounted, onScopeDispose, ref } from 'vue';
-import { Download, Music2, X, ZoomIn, ZoomOut } from '@lucide/vue';
+import { Download, Music2, X } from '@lucide/vue';
 import { downloadFile, fetchAttachment, fetchFilePreview, type ChatAttachment } from '../chat/chatApi';
 import { chatMediaFormat } from '../chat/chatMedia';
 import { useLoadingHint } from './useLoadingHint';
 import { useBackdropDismiss } from './useBackdropDismiss';
 import { keepDialogFocus } from './dialogFocus';
+import ChatImageSurface from './ChatImageSurface.vue';
 
-const props = defineProps<{ groupId: string; attachment: ChatAttachment; imageMessage: boolean }>();
+const props = defineProps<{ groupId: string; attachment: ChatAttachment; imageMessage: boolean; previewBlob?: Blob }>();
 const emit = defineEmits<{ close: [] }>();
 const format = computed(() => chatMediaFormat(props.attachment));
 const title = computed(() => props.attachment.fileName || '图片');
 const source = ref('');
 const error = ref('');
+const previewFailed = ref(false);
 const loading = ref(false);
 const downloading = ref(false);
-const originalSize = ref(false);
 const closeButton = ref<HTMLButtonElement | null>(null);
 const player = ref<HTMLMediaElement | null>(null);
 const loadingHint = useLoadingHint(() => loading.value);
@@ -46,11 +47,12 @@ async function load() {
   const current = request = new AbortController();
   release();
   error.value = '';
+  previewFailed.value = false;
   loading.value = true;
   try {
-    const blob = props.imageMessage
+    const blob = props.previewBlob ?? (props.imageMessage
       ? await fetchAttachment(props.groupId, props.attachment.id, current.signal)
-      : await fetchFilePreview(props.groupId, props.attachment.id, current.signal);
+      : await fetchFilePreview(props.groupId, props.attachment.id, current.signal));
     if (disposed || current.signal.aborted || request !== current) return;
     source.value = URL.createObjectURL(blob.slice(0, blob.size, format.value?.contentType || blob.type));
   } catch (reason) {
@@ -81,7 +83,9 @@ async function download() {
   } finally { if (!disposed) downloading.value = false; }
 }
 
-function playbackFailed() { if (!disposed) error.value = '这个文件暂时无法预览，可以下载后打开。'; }
+function playbackFailed() {
+  if (!disposed) { previewFailed.value = true; error.value = '这个文件暂时无法预览，可以下载后打开。'; }
+}
 onMounted(() => { closeButton.value?.focus(); void load(); });
 onScopeDispose(() => {
   disposed = true;
@@ -93,17 +97,14 @@ onScopeDispose(() => {
 
 <template>
   <div class="dialog-backdrop chat-media-backdrop" v-on="backdropEvents" @keydown.esc.stop="close">
-    <section class="chat-media-viewer" role="dialog" aria-modal="true" aria-labelledby="chat-media-title" tabindex="-1" @keydown="keepDialogFocus">
-      <header>
+    <section class="chat-media-viewer" :class="{ 'is-image': format?.kind === 'image' }" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1" @keydown="keepDialogFocus">
+      <header v-if="format?.kind !== 'image' || !source || previewFailed">
         <strong id="chat-media-title" :title="title">{{ title }}</strong>
-        <button v-if="format?.kind === 'image' && source" type="button" :aria-label="originalSize ? '适应窗口' : '查看原始尺寸'" :title="originalSize ? '适应窗口' : '查看原始尺寸'" @click="originalSize = !originalSize">
-          <ZoomOut v-if="originalSize" :size="18" /><ZoomIn v-else :size="18" />
-        </button>
         <button type="button" aria-label="下载文件" title="下载文件" :disabled="downloading || (imageMessage && !source)" @click="download"><Download :size="18" /></button>
         <button ref="closeButton" type="button" aria-label="关闭查看器" title="关闭" @click="close"><X :size="18" /></button>
       </header>
-      <div class="chat-media-stage" :class="{ 'is-original': originalSize }" :aria-busy="loading">
-        <img v-if="source && format?.kind === 'image'" :src="source" :alt="title" @error="playbackFailed" />
+      <div class="chat-media-stage" :aria-busy="loading">
+        <ChatImageSurface v-if="source && format?.kind === 'image' && !previewFailed" :source="source" :title="title" @close="close" @download="download" @error="playbackFailed" />
         <video v-else-if="source && format?.kind === 'video'" ref="player" :src="source" controls playsinline preload="metadata" tabindex="0" @error="playbackFailed" />
         <div v-else-if="source && format?.kind === 'audio'" class="chat-media-audio">
           <Music2 :size="64" aria-hidden="true" />
@@ -125,8 +126,9 @@ onScopeDispose(() => {
 .chat-media-stage { display: flex; align-items: center; justify-content: center; flex: 1; min-height: 0; overflow: auto; background: var(--background); color: var(--muted); }
 .chat-media-stage > img, .chat-media-stage > video { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
 .chat-media-stage > video { width: 100%; height: 100%; }
-.chat-media-stage.is-original { display: block; }
-.chat-media-stage.is-original > img { max-width: none; max-height: none; margin: auto; }
+.chat-media-viewer.is-image { width: 100vw; height: 100dvh; border: 0; border-radius: 0; background: transparent; }
+.chat-media-viewer.is-image .chat-media-stage { background: transparent; }
+.chat-media-viewer.is-image .chat-media-feedback { position: absolute; z-index: 2; bottom: 80px; align-self: center; max-width: calc(100vw - 48px); border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
 .chat-media-audio { display: grid; justify-items: center; gap: 28px; width: min(440px, 90%); }
 .chat-media-audio audio { width: 100%; }
 .chat-media-feedback { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border); color: var(--danger); font-size: 13px; }

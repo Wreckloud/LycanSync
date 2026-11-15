@@ -292,6 +292,32 @@ it('两次正常轮询确认持续输入后立即上报在线，不再等待六�
   } finally { f.stop(); }
 });
 
+it.each([1999, 4500, 60_000])('轮询间隔为 %i 毫秒时，新输入不会反复重置恢复确认', async (interval) => {
+  const f = setup();
+  try {
+    f.state.currentPresenceStatus.value = 'AWAY';
+    await f.app.updateOwnPresenceStatus();
+    f.advanceClock(interval);
+    await f.app.updateOwnPresenceStatus();
+    await settle();
+    expect(f.state.currentPresenceStatus.value).toBe('ONLINE');
+    expect(f.state.sendPresenceHeartbeat).toHaveBeenLastCalledWith('ONLINE', null, expect.any(AbortSignal), expect.any(Object));
+  } finally { f.stop(); }
+});
+
+it('后台延迟后仍是同一次输入时不能恢复在线', async () => {
+  const f = setup();
+  try {
+    f.state.currentPresenceStatus.value = 'AWAY';
+    await f.app.updateOwnPresenceStatus();
+    f.advanceClock(60_000);
+    f.desktop.getSystemIdleState.mockResolvedValueOnce({ state: 'active', idleSeconds: 60 });
+    await f.app.updateOwnPresenceStatus();
+    expect(f.state.currentPresenceStatus.value).toBe('AWAY');
+    expect(f.state.sendPresenceHeartbeat).not.toHaveBeenCalled();
+  } finally { f.stop(); }
+});
+
 it('恢复期间额外查询不会延长确认时间，隐身也不会被持续输入解除', async () => {
   const f = setup();
   try {

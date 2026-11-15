@@ -1,6 +1,6 @@
 {
   "name": "@lycan-sync/web",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "private": true,
   "description": "LycanSync 语音、屏幕共享与群聊客户端",
   "author": "Wreckloud",
@@ -49,6 +49,7 @@
     "fake-indexeddb": "6.2.7",
     "idb": "8.0.4",
     "livekit-client": "file:../../vendor/livekit/livekit-client-1ca3298.tgz",
+    "photoswipe": "5.4.4",
     "typescript": "5.9.3",
     "vite": "8.2.2",
     "vitest": "4.1.11",

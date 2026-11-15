@@ -135,12 +135,13 @@ export function useOwnPresence(userId: string, visibility: { showActivity: Ref<b
       // 闲置秒数会取整；只有新的输入时间明显前进，才算另一轮操作。
       const lastInputAt = sampledAt - systemIdle.idleSeconds * 1000;
       if (systemIdle.idleSeconds > 2) { presenceRecovery = null; return; }
-      if (!presenceRecovery || lastInputAt - presenceRecovery.lastInputAt > 4000) {
+      if (!presenceRecovery) {
         presenceRecovery = { startedAt: sampledAt, lastInputAt };
         return;
       }
-      // 两秒后确认还有新输入即可恢复；额外查询不推进基准，避免反复延长等待。
-      if (lastInputAt - presenceRecovery.lastInputAt <= 1000 || sampledAt - presenceRecovery.startedAt < 2000) return;
+      // 轮询可能抖动或在后台延迟；用新的近期输入确认恢复，不因两次查询相隔太久重新计时。
+      // 为两秒轮询留出调度余量；同一次输入的秒数取整误差仍不能算作新操作。
+      if (lastInputAt - presenceRecovery.lastInputAt <= 1000 || sampledAt - presenceRecovery.startedAt < 1500) return;
       presenceRecovery = null;
     }
     if (nextStatus === currentPresenceStatus.value) return;

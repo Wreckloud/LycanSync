@@ -4,9 +4,9 @@ import { Download, Eye, X } from '@lucide/vue';
 import { downloadFile, type ChatAttachment } from '../chat/chatApi';
 import { chatMediaFormat } from '../chat/chatMedia';
 
-const props = defineProps<{ groupId: string; attachment: ChatAttachment }>();
+const props = defineProps<{ groupId: string; attachment: ChatAttachment; previewDisabled?: boolean }>();
 const emit = defineEmits<{ preview: [] }>();
-const previewable = computed(() => Boolean(chatMediaFormat(props.attachment)));
+const previewable = computed(() => !props.previewDisabled && Boolean(chatMediaFormat(props.attachment)));
 const controller = ref<AbortController | null>(null);
 const loadedBytes = ref(0);
 const error = ref('');

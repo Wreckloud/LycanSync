@@ -15,7 +15,7 @@ import type { GroupMember, GroupSummary } from '../group/groupApi';
 import ChatImage from './ChatImage.vue';
 import ProfilePopover from './ProfilePopover.vue';
 import { findGroupMemberProfile, type GroupMemberProfile } from '../group/groupApi';
-import ChatFileCard from './ChatFileCard.vue';
+import ChatFileMedia from './ChatFileMedia.vue';
 import ChatMediaViewer from './ChatMediaViewer.vue';
 import DialogTransition from './DialogTransition.vue';
 
@@ -34,6 +34,7 @@ const props = defineProps<{ group: GroupSummary; members: GroupMember[]; user: A
 const emit = defineEmits<{ initialLoad: [groupId: string]; retrySync: [] }>();
 const cache = inject(ACCOUNT_CACHE, null);
 const viewedMedia = ref<ChatMessage | null>(null);
+const viewedMediaBlob = ref<Blob>();
 const historicalSender = ref<ChatMessage | null>(null);
 const historicalAnchor = ref<HTMLElement | null>(null);
 const historicalProfile = ref<GroupMemberProfile | null>(null);
@@ -373,8 +374,8 @@ onScopeDispose(() => {
               <div v-if="startsNewMessageGroup(message, index)" class="chat-message-meta"><button v-if="message.senderDeletedAt" type="button" class="chat-historical-sender" @click="showHistoricalProfile(message, $event.currentTarget as HTMLElement)">{{ senderName(message) }}</button><strong v-else>{{ senderName(message) }}</strong><time :datetime="message.createdAt" :title="formatFullMessageTime(message.createdAt)">{{ formatMessageTime(message.createdAt, calendarNow) }}</time></div>
               <p v-if="message.content" class="chat-message-content"><template v-for="(segment, segmentIndex) in messageSegments(message.content)" :key="segmentIndex"><a v-if="segment.href" class="chat-message-link" :href="segment.href" @click.prevent="openLink(segment.href)">{{ segment.text }}</a><template v-else>{{ segment.text }}</template></template></p>
               <ChatImage v-if="message.type === 'IMAGE' && message.attachment" :group-id="group.id" :attachment-id="message.attachment.id"
-                :width="message.attachment.width ?? 1" :height="message.attachment.height ?? 1" :alt="`${senderName(message)} 发送的图片`" @preview="viewedMedia = message" />
-              <ChatFileCard v-if="message.type === 'FILE' && message.attachment" :group-id="group.id" :attachment="message.attachment" @preview="viewedMedia = message" />
+                :width="message.attachment.width ?? 1" :height="message.attachment.height ?? 1" :alt="`${senderName(message)} 发送的图片`" @preview="viewedMediaBlob = undefined; viewedMedia = message" />
+              <ChatFileMedia v-if="message.type === 'FILE' && message.attachment" :group-id="group.id" :attachment="message.attachment" @preview="blob => { viewedMediaBlob = blob; viewedMedia = message; }" />
             </div>
           </article>
         </template>
@@ -418,7 +419,7 @@ onScopeDispose(() => {
       @close="closeHistoricalProfile" @retry="historicalSender && historicalAnchor && showHistoricalProfile(historicalSender, historicalAnchor)" />
     <DialogTransition>
       <ChatMediaViewer v-if="viewedMedia?.attachment" :key="viewedMedia.id" :group-id="group.id" :attachment="viewedMedia.attachment"
-        :image-message="viewedMedia.type === 'IMAGE'" @close="viewedMedia = null" />
+        :image-message="viewedMedia.type === 'IMAGE'" :preview-blob="viewedMediaBlob" @close="viewedMedia = null; viewedMediaBlob = undefined" />
     </DialogTransition>
   </section>
 </template>
