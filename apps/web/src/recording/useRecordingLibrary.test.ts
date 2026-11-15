@@ -59,3 +59,37 @@ it('播放器失败留在当前页并显示操作附近的反馈，不输出异�
     expect(f.library.pendingId.value).toBe('');
   } finally { f.scope.stop(); }
 });
+
+it('后台刷新保留已展开页，新增录像后一次更新完整范围；切换类型只取首页', async () => {
+  const f = fixture();
+  let stored = Array.from({ length: 130 }, (_, index) => ({ ...entry, id: String(index) }));
+  f.desktop.getRecordingLibrary.mockImplementation(async (offset = 0) => ({ items: stored.slice(offset, offset + 50), hasMore: offset + 50 < stored.length }));
+  try {
+    await f.library.load(); await f.library.load(true);
+    stored = [{ ...entry, id: 'new' }, ...stored];
+    await f.library.load();
+    expect(f.library.entries.value).toHaveLength(100);
+    expect(f.library.entries.value[0]!.id).toBe('new');
+    expect(f.library.entries.value[99]!.id).toBe('98');
+    f.library.kind.value = 'replay'; await f.library.load();
+    expect(f.library.entries.value).toHaveLength(50);
+    expect(f.desktop.getRecordingLibrary).toHaveBeenLastCalledWith(0, 'replay');
+  } finally { f.scope.stop(); }
+});
+
+it('后续页刷新失败保留原列表；删除后不足一页时正常收尾', async () => {
+  const f = fixture();
+  const first = Array.from({ length: 50 }, (_, index) => ({ ...entry, id: String(index) }));
+  try {
+    f.desktop.getRecordingLibrary.mockResolvedValueOnce({ items: first, hasMore: true });
+    await f.library.load(); await f.library.load(true);
+    const previous = f.library.entries.value;
+    f.desktop.getRecordingLibrary.mockResolvedValueOnce({ items: first, hasMore: true }).mockRejectedValueOnce(new Error('unavailable'));
+    await f.library.load();
+    expect(f.library.entries.value).toBe(previous);
+    expect(f.library.notice.value).not.toBe('');
+    await f.library.load();
+    expect(f.library.entries.value).toEqual([entry]);
+    expect(f.library.hasMore.value).toBe(false);
+  } finally { f.scope.stop(); }
+});

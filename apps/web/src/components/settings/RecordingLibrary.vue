@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, onScopeDispose, ref, watch } from 'vue';
+import { computed, inject, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { useRecordingLibrary } from '../../recording/useRecordingLibrary';
 import { RECORDING_SHARE } from '../../recording/useRecordingShare';
 import ExpandSection from '../ExpandSection.vue';
@@ -23,6 +23,7 @@ const preview = ref<RecordingLibraryEntry | null>(null);
 const recordingSource = (id: string) => `lycan://app/recordings/${encodeURIComponent(id)}`;
 const canPreview = (entry: RecordingLibraryEntry) => entry.state !== 'recording' && entry.availability === 'available' && (entry.bytes ?? 0) > 0;
 const dialog = ref<HTMLElement | null>(null);
+const content = ref<HTMLElement | null>(null);
 const backdropEvents = useBackdropDismiss(() => emit('close'));
 const library = useRecordingLibrary();
 const { entries, hasMore, loading, pendingId, notice } = library;
@@ -35,6 +36,25 @@ const groups = computed(() => {
     if (group) group.items.push(entry); else result.push({ date, items: [entry] });
   }
   return result;
+});
+let displayedKind = library.kind.value;
+watch(entries, async () => {
+  const viewport = content.value;
+  if (!viewport) return;
+  const switched = displayedKind !== library.kind.value;
+  displayedKind = library.kind.value;
+  const top = viewport.getBoundingClientRect().top;
+  const rows = [...viewport.querySelectorAll<HTMLElement>('[data-recording-id]')];
+  const anchor = rows.find(row => row.getBoundingClientRect().bottom > top);
+  const id = anchor?.dataset.recordingId;
+  const offset = anchor ? anchor.getBoundingClientRect().top - top : 0;
+  const previousTop = viewport.scrollTop;
+  await nextTick();
+  if (content.value !== viewport) return;
+  if (switched) { viewport.scrollTop = 0; return; }
+  const current = [...viewport.querySelectorAll<HTMLElement>('[data-recording-id]')].find(row => row.dataset.recordingId === id);
+  if (current) viewport.scrollTop += current.getBoundingClientRect().top - viewport.getBoundingClientRect().top - offset;
+  else viewport.scrollTop = previousTop;
 });
 watch(library.kind, () => { void library.load(); });
 function openExternalPreview() {
@@ -74,13 +94,13 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
       <h2 id="recording-library-title">本地录像管理器</h2>
       <p class="library-intro">查看录制和回放，截取精彩片段，分享给群里的朋友。</p>
       <SegmentedControl v-model="library.kind.value" :options="filters" label="录像类型" />
-      <div class="recording-library-content">
+      <div ref="content" class="recording-library-content">
         <InlineFeedback :message="notice" :pending="loading ? '正在读取录像列表…' : ''" />
         <button v-if="notice" :disabled="loading" @click="library.load()">重新读取</button>
         <p v-if="!entries.length && !loading && !notice">暂无录像。</p>
         <section v-for="group in groups" :key="group.date" class="library-day">
           <h3>{{ group.date }}</h3>
-          <article v-for="entry in group.items" :key="entry.id" class="library-row">
+          <article v-for="entry in group.items" :key="entry.id" :data-recording-id="entry.id" class="library-row">
             <RecordingThumbnail :key="`${entry.id}:${entry.state}:${entry.availability}`" :source="recordingSource(entry.id)" :disabled="!canPreview(entry)" @preview="preview = entry" />
             <div class="library-description">
               <strong>{{ title(entry) }}</strong>
@@ -100,7 +120,7 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
         </section>
         <section v-if="unavailable.length" class="library-unavailable">
           <ExpandSection :open="expandedUnavailable">
-            <article v-for="entry in unavailable" :key="entry.id" class="library-row">
+            <article v-for="entry in unavailable" :key="entry.id" :data-recording-id="entry.id" class="library-row">
               <div class="library-description"><strong>{{ title(entry) }}</strong><small>{{ new Date(entry.createdAt).toLocaleString() }} · {{ state(entry) }}</small></div>
               <button v-if="entry.availability === 'changed'" :disabled="!!pendingId" @click="library.file(entry, 'relink')">重新关联</button>
               <button :disabled="!!pendingId" @click="library.file(entry, 'delete')">移除记录</button>

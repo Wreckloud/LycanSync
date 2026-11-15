@@ -10,17 +10,29 @@ export function useRecordingLibrary() {
   const kind = ref<'all' | 'recording' | 'replay' | 'clip'>('all');
   let disposed = false;
   let revision = 0;
+  let loadedKind = kind.value;
 
   async function load(append = false) {
     if (!desktop || append && loading.value) return;
     const version = ++revision;
+    const requestedKind = kind.value;
+    const targetCount = requestedKind === loadedKind ? entries.value.length : 0;
     loading.value = true;
     notice.value = '';
     try {
-      const result = await desktop.getRecordingLibrary(append ? entries.value.length : 0, kind.value);
-      if (disposed || version !== revision) return;
-      entries.value = append ? [...entries.value, ...result.items.filter(item => !entries.value.some(entry => entry.id === item.id))] : result.items;
-      hasMore.value = result.hasMore;
+      const refreshed: RecordingLibraryEntry[] = [];
+      let more = false;
+      do {
+        const result = await desktop.getRecordingLibrary(append ? entries.value.length : refreshed.length, requestedKind);
+        if (disposed || version !== revision) return;
+        refreshed.push(...result.items);
+        more = result.hasMore;
+        if (!result.items.length) break;
+      } while (!append && more && refreshed.length < targetCount);
+      // 后台刷新完整读取已展开的范围，再一次替换，避免中间页闪空或回到第一页。
+      entries.value = append ? [...entries.value, ...refreshed.filter(item => !entries.value.some(entry => entry.id === item.id))] : refreshed;
+      loadedKind = requestedKind;
+      hasMore.value = more;
     } catch {
       if (!disposed && version === revision) notice.value = '无法读取录像列表，请检查安装目录的读写权限后重试。';
     } finally { if (!disposed && version === revision) loading.value = false; }
