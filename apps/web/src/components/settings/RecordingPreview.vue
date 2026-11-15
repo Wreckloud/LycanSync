@@ -23,13 +23,36 @@ const previewingRange = ref(false);
 const desktop = window.lycanDesktop;
 let requestId = '';
 let disposed = false;
+let seekTimer: ReturnType<typeof setTimeout> | undefined;
+let seekTarget: number | null = null;
+let seekingVideo: HTMLVideoElement | undefined;
+function cancelSeek() {
+  clearTimeout(seekTimer); seekTimer = undefined; seekTarget = null;
+  seekingVideo?.removeEventListener('seeked', flushSeek); seekingVideo = undefined;
+}
+function flushSeek() {
+  clearTimeout(seekTimer); seekTimer = undefined;
+  const video = surface.value?.player;
+  if (!video || seekTarget === null) { cancelSeek(); return; }
+  // 未完成的寻帧不反复打断，只保留最新目标；松手后的最终位置仍精确应用。
+  if (video.seeking) {
+    if (seekingVideo !== video) {
+      seekingVideo?.removeEventListener('seeked', flushSeek);
+      seekingVideo = video; video.addEventListener('seeked', flushSeek, { once: true });
+    }
+    return;
+  }
+  const target = seekTarget;
+  cancelSeek();
+  video.currentTime = target;
+}
 const rangeStyle = computed(() => ({ '--start': `${start.value / duration.value * 100}%`, '--end': `${end.value / duration.value * 100}%` }));
 const unsubscribe = desktop?.onRecordingClipProgress?.(event => { if (event.requestId === requestId) progress.value = event.percent; });
 function metadata(seconds: number) {
   if (!Number.isFinite(seconds) || seconds <= 0) return;
   duration.value = seconds; end.value = seconds;
 }
-function seekRange(edge: 'start' | 'end') {
+function seekRange(edge: 'start' | 'end', precise = false) {
   saved.value = null;
   previewingRange.value = false;
   if (!Number.isFinite(start.value)) start.value = 0;
@@ -37,10 +60,15 @@ function seekRange(edge: 'start' | 'end') {
   if (edge === 'start') start.value = Math.max(0, Math.min(start.value, end.value - 0.1));
   else end.value = Math.min(duration.value, Math.max(end.value, start.value + 0.1));
   const video = surface.value?.player;
-  if (video) { video.pause(); video.currentTime = edge === 'start' ? start.value : end.value; }
+  if (video) {
+    video.pause(); seekTarget = edge === 'start' ? start.value : end.value;
+    if (precise) flushSeek();
+    else if (seekTimer === undefined && !seekingVideo) seekTimer = setTimeout(flushSeek, 80);
+  }
 }
-function reset() { start.value = 0; end.value = duration.value; saved.value = null; seekRange('start'); }
+function reset() { cancelSeek(); start.value = 0; end.value = duration.value; saved.value = null; seekRange('start', true); }
 function previewRange() {
+  cancelSeek();
   const video = surface.value?.player;
   if (video) { video.currentTime = start.value; previewingRange.value = true; void video.play().catch(() => { error.value = '暂时无法播放，请重试。'; }); }
 }
@@ -48,12 +76,14 @@ function timeChanged(seconds: number) {
   if (previewingRange.value && seconds >= end.value) { surface.value?.player?.pause(); previewingRange.value = false; }
 }
 function shareRecording(entry: RecordingLibraryEntry) {
+  cancelSeek();
   surface.value?.player?.pause();
   previewingRange.value = false;
   share?.select(entry);
 }
 async function save(andShare = false) {
   if (!desktop || busy.value) return;
+  cancelSeek();
   if (saved.value) { if (andShare) shareRecording(saved.value); return; }
   surface.value?.player?.pause();
   requestId = crypto.randomUUID(); busy.value = true; error.value = ''; progress.value = 0;
@@ -66,7 +96,7 @@ async function save(andShare = false) {
     if (!disposed) error.value = reason instanceof Error ? reason.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : '片段保存失败，请重试。';
   } finally { if (!disposed) { busy.value = false; requestId = ''; } }
 }
-onScopeDispose(() => { disposed = true; unsubscribe?.(); if (requestId) void desktop?.cancelRecordingClip(requestId).catch(() => {}); });
+onScopeDispose(() => { disposed = true; cancelSeek(); unsubscribe?.(); if (requestId) void desktop?.cancelRecordingClip(requestId).catch(() => {}); });
 const backdropEvents = useBackdropDismiss(() => emit('close'));
 </script>
 
@@ -79,12 +109,12 @@ const backdropEvents = useBackdropDismiss(() => emit('close'));
             <template v-if="editing">
               <div class="clip-range" :style="rangeStyle">
                 <span />
-                <input v-model.number="start" aria-label="片段起点" type="range" min="0" :max="duration" step="0.01" :disabled="busy" @input="seekRange('start')" />
-                <input v-model.number="end" aria-label="片段终点" type="range" min="0" :max="duration" step="0.01" :disabled="busy" @input="seekRange('end')" />
+                <input v-model.number="start" aria-label="片段起点" type="range" min="0" :max="duration" step="0.01" :disabled="busy" @input="seekRange('start')" @change="seekRange('start', true)" />
+                <input v-model.number="end" aria-label="片段终点" type="range" min="0" :max="duration" step="0.01" :disabled="busy" @input="seekRange('end')" @change="seekRange('end', true)" />
               </div>
               <div class="clip-time-fields">
-                <label>起点 <input v-model.number="start" type="number" min="0" :max="end - 0.1" step="0.1" :disabled="busy" @change="seekRange('start')" /> 秒</label>
-                <label>终点 <input v-model.number="end" type="number" :min="start + 0.1" :max="duration" step="0.1" :disabled="busy" @change="seekRange('end')" /> 秒</label>
+                <label>起点 <input v-model.number="start" type="number" min="0" :max="end - 0.1" step="0.1" :disabled="busy" @change="seekRange('start', true)" /> 秒</label>
+                <label>终点 <input v-model.number="end" type="number" :min="start + 0.1" :max="duration" step="0.1" :disabled="busy" @change="seekRange('end', true)" /> 秒</label>
                 <span>{{ (end - start).toFixed(1) }} 秒</span>
               </div>
               <InlineFeedback :message="error" :pending="busy ? `正在保存片段 ${progress}%…` : ''" />
@@ -93,7 +123,7 @@ const backdropEvents = useBackdropDismiss(() => emit('close'));
             <div class="clip-actions">
               <template v-if="editing">
                 <button v-if="busy" @click="desktop?.cancelRecordingClip(requestId)">取消保存</button>
-                <button v-else @click="editing = false; error = ''; previewingRange = false">返回</button>
+                <button v-else @click="cancelSeek(); editing = false; error = ''; previewingRange = false">返回</button>
                 <button :disabled="busy" @click="reset">重置</button>
                 <button :disabled="busy" @click="previewRange">预览片段</button>
                 <span class="clip-action-spacer" />

@@ -1,0 +1,55 @@
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import { parse } from '@vue/compiler-sfc';
+import ts from 'typescript';
+import { computed, effectScope, onScopeDispose, ref } from 'vue';
+import { afterEach, expect, it, vi } from 'vitest';
+
+const script = parse(readFileSync(new URL('./RecordingPreview.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
+const parsed = ts.createSourceFile('preview.ts', script, ts.ScriptTarget.Latest, true);
+const compiled = ts.transpile(parsed.statements.filter(statement => !ts.isImportDeclaration(statement))
+  .map(statement => statement.getText(parsed)).join('\n'), { target: ts.ScriptTarget.ES2022 });
+afterEach(() => vi.useRealTimers());
+function fixture() {
+  vi.useFakeTimers();
+  const scope = effectScope();
+  const target = new EventTarget();
+  const positions: number[] = [];
+  const video = { seeking: false, pause: vi.fn(), play: vi.fn(async () => {}),
+    addEventListener: target.addEventListener.bind(target), removeEventListener: target.removeEventListener.bind(target),
+    get currentTime() { return positions.at(-1) ?? 0; },
+    set currentTime(value: number) { positions.push(value); video.seeking = true; } };
+  const preview = scope.run(() => runInNewContext(`${compiled}\n({surface,start,end,metadata,seekRange,previewRange,shareRecording})`, {
+    ref, computed, onScopeDispose, setTimeout, clearTimeout, crypto,
+    defineProps: () => ({ entry: { id: 'test' }, source: 'test' }), defineEmits: () => vi.fn(),
+    inject: () => ({ select: vi.fn() }), RECORDING_SHARE: Symbol(), window: {}, useBackdropDismiss: () => ({}),
+  })) as { surface: { value: unknown }; start: { value: number }; end: { value: number }; metadata(seconds: number): void;
+    seekRange(edge: 'start' | 'end', precise?: boolean): void; previewRange(): void; shareRecording(entry: unknown): void };
+  preview.surface.value = { player: video }; preview.metadata(10);
+  return { scope, preview, video, positions, seeked: () => { video.seeking = false; target.dispatchEvent(new Event('seeked')); } };
+}
+it('拖动合并中间目标，尚未完成的寻帧不被打断，松手后定位最新位置', () => {
+  const f = fixture();
+  for (let index = 0; index < 20; index++) { f.preview.start.value = index / 10; f.preview.seekRange('start'); }
+  expect(f.positions).toEqual([]); vi.advanceTimersByTime(80);
+  expect(f.positions).toEqual([1.9]);
+  f.preview.start.value = 3; f.preview.seekRange('start'); vi.advanceTimersByTime(80);
+  f.preview.start.value = 4; f.preview.seekRange('start', true);
+  expect(f.positions).toEqual([1.9]); f.seeked();
+  expect(f.positions).toEqual([1.9, 4]); f.scope.stop();
+});
+it('松手或数值输入直接定位，预览片段不会被旧定时任务覆盖', async () => {
+  const f = fixture(); f.preview.start.value = 2; f.preview.seekRange('start', true);
+  expect(f.positions).toEqual([2]); f.seeked();
+  f.preview.end.value = 7; f.preview.seekRange('end');
+  f.preview.previewRange(); await vi.runAllTimersAsync();
+  expect(f.positions).toEqual([2, 2]); expect(f.video.play).toHaveBeenCalledOnce(); f.scope.stop();
+});
+it('分享或卸载取消延迟寻帧与等待监听', () => {
+  for (const dispose of [false, true]) {
+    const f = fixture(); f.preview.start.value = 1; f.preview.seekRange('start', true);
+    f.preview.start.value = 4; f.preview.seekRange('start', true);
+    if (dispose) f.scope.stop(); else f.preview.shareRecording({});
+    f.seeked(); vi.runAllTimers(); expect(f.positions).toEqual([1]); f.scope.stop();
+  }
+});
