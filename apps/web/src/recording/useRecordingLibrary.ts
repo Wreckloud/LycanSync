@@ -1,4 +1,5 @@
 import { onScopeDispose, ref, shallowRef } from 'vue';
+import { forgetRecordingThumbnail } from './recordingThumbnails';
 
 export function useRecordingLibrary() {
   const desktop = window.lycanDesktop;
@@ -30,6 +31,7 @@ export function useRecordingLibrary() {
         if (!result.items.length) break;
       } while (!append && more && refreshed.length < targetCount);
       // 后台刷新完整读取已展开的范围，再一次替换，避免中间页闪空或回到第一页。
+      for (const entry of refreshed) if (entry.availability !== 'available') forgetRecordingThumbnail(entry.id);
       entries.value = append ? [...entries.value, ...refreshed.filter(item => !entries.value.some(entry => entry.id === item.id))] : refreshed;
       loadedKind = requestedKind;
       hasMore.value = more;
@@ -42,7 +44,10 @@ export function useRecordingLibrary() {
     pendingId.value = entry.id; notice.value = '';
     try {
       const changed = await desktop.recordingFile(entry.id, action);
-      if (!disposed && ['delete', 'relink', 'clearUnavailable'].includes(action) && changed) await load();
+      if (!disposed && ['delete', 'relink', 'clearUnavailable'].includes(action) && changed) {
+        forgetRecordingThumbnail(entry.id);
+        await load();
+      }
     } catch {
       if (!disposed) notice.value = action === 'play' ? '无法打开录像，请确认原片仍存在，并安装支持 MKV 的播放器。'
         : action === 'delete' ? '录像未能删除，请关闭正在使用该文件的程序后重试。'

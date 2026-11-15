@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onScopeDispose, ref } from 'vue';
 import { Play } from '@lucide/vue';
+import { loadRecordingThumbnail } from '../../recording/recordingThumbnails';
 
 const props = defineProps<{ source: string; disabled: boolean; passive?: boolean }>();
 const emit = defineEmits<{ preview: [] }>();
@@ -10,54 +11,22 @@ const ready = ref(false);
 const failed = ref(false);
 let disposed = false;
 let observer: IntersectionObserver | undefined;
-let video: HTMLVideoElement | undefined;
-let timeout: ReturnType<typeof setTimeout> | undefined;
-function release() {
-  clearTimeout(timeout);
-  if (!video) return;
-  video.onloadedmetadata = null; video.onseeked = null; video.onerror = null;
-  video.pause(); video.removeAttribute('src'); video.load(); video = undefined;
-}
-function load() {
-  if (disposed || video || ready.value || failed.value || props.disabled) return;
-  const current = video = document.createElement('video');
-  current.muted = true; current.preload = 'auto';
-  current.onloadedmetadata = () => {
-    if (video !== current) return;
-    current.currentTime = Number.isFinite(current.duration) ? Math.min(0.1, current.duration / 2) : 0;
-  };
-  const capture = async () => {
-    if (video !== current || !canvas.value) return;
-    current.pause();
-    let bitmap: ImageBitmap | undefined;
-    try {
-      const scale = Math.min(240 / current.videoWidth, 136 / current.videoHeight);
-      bitmap = await createImageBitmap(current, { resizeWidth: Math.max(1, Math.round(current.videoWidth * scale)),
-        resizeHeight: Math.max(1, Math.round(current.videoHeight * scale)) });
-      if (video !== current || !canvas.value) return;
-      const context = canvas.value.getContext('2d');
-      if (!context) throw new Error('thumbnailCanvasUnavailable');
-      canvas.value.width = bitmap.width; canvas.value.height = bitmap.height;
-      context.drawImage(bitmap, 0, 0);
-      // 保留小尺寸像素副本，再释放视频解码器，避免空白纹理留在封面上。
-      context.putImageData(context.getImageData(0, 0, bitmap.width, bitmap.height), 0, 0);
-      ready.value = true;
-    } catch {
-      if (video === current) failed.value = true;
-    } finally {
-      bitmap?.close();
-      if (video === current) release();
-    }
-  };
-  const fail = () => { if (video === current) { failed.value = true; release(); } };
-  current.onseeked = () => {
-    if (video !== current) return;
-    current.requestVideoFrameCallback(() => { void capture(); });
-    void current.play().catch(fail);
-  };
-  timeout = setTimeout(fail, 8000);
-  current.onerror = fail;
-  current.src = props.source;
+let request: AbortController | undefined;
+function release() { request?.abort(); request = undefined; }
+async function load() {
+  if (disposed || request || ready.value || failed.value || props.disabled) return;
+  const current = request = new AbortController();
+  try {
+    const cover = await loadRecordingThumbnail(props.source, current.signal);
+    if (current.signal.aborted || request !== current || !canvas.value) return;
+    const context = canvas.value.getContext('2d');
+    if (!context) throw new Error('thumbnailCanvasUnavailable');
+    canvas.value.width = cover.width; canvas.value.height = cover.height;
+    context.putImageData(cover, 0, 0);
+    ready.value = true;
+  } catch {
+    if (!current.signal.aborted && request === current) failed.value = true;
+  } finally { if (request === current) request = undefined; }
 }
 onMounted(() => {
   observer = new IntersectionObserver(entries => {
