@@ -73,7 +73,7 @@ onScopeDispose(() => { disposed = true; observer?.disconnect(); release(); });
 
 <template>
   <div ref="frame" class="chat-file-media">
-    <ChatFileCard v-if="!format || format.kind === 'audio' || failed || (format.kind === 'video' && loadingFailed)"
+    <ChatFileCard v-if="!format || format.kind === 'audio' || failed"
       :group-id="groupId" :attachment="attachment" :preview-disabled="failed && format?.kind === 'image'" @preview="emit('preview')" />
     <div v-else class="chat-inline-media" :style="frameStyle">
       <button v-if="format.kind === 'video'" class="chat-inline-image" type="button" aria-label="播放视频" @click="emit('preview')">
@@ -84,6 +84,7 @@ onScopeDispose(() => { disposed = true; observer?.disconnect(); release(); });
         <img :src="source" :alt="attachment.fileName" @load="imageLoaded" @error="decodeFailed" />
       </button>
       <button v-else-if="loadingFailed" class="chat-media-retry" type="button" @click="load">预览加载失败，点击重试</button>
+      <button v-if="format.kind === 'video' && loadingFailed" class="chat-cover-retry" type="button" @click="load">封面加载失败，点击重试</button>
     </div>
   </div>
 </template>
@@ -96,4 +97,5 @@ onScopeDispose(() => { disposed = true; observer?.disconnect(); release(); });
 .chat-media-play { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: grid; place-items: center; width: 48px; height: 48px; padding-left: 3px; background: #10161dcc; color: #fff; border-radius: 50%; }
 .chat-inline-image:hover .chat-media-play { background: #252e39ee; }
 .chat-media-retry { display: block; width: 100%; min-height: 100px; border: 0; background: transparent; color: var(--muted); }
+.chat-cover-retry { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: 12px; color: var(--muted); }
 </style>
