@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onScopeDispose, ref, watch } from 'vue';
+import { chatMediaFrameStyle } from '../chat/chatMedia';
 import { ACCOUNT_CACHE } from '../cache/localCache';
 import { fetchAttachment } from '../chat/chatApi';
 
@@ -9,10 +10,7 @@ const cache = inject(ACCOUNT_CACHE, null);
 const frame = ref<HTMLElement | null>(null);
 const source = ref('');
 const error = ref('');
-const frameStyle = computed(() => ({
-  width: `min(100%, 420px, ${Math.min(props.width, 340 * props.width / props.height)}px)`,
-  aspectRatio: `${props.width} / ${props.height}`,
-}));
+const frameStyle = computed(() => chatMediaFrameStyle(props.width, props.height));
 let activeUrl = '';
 let controller: AbortController | null = null;
 let observer: IntersectionObserver | null = null;

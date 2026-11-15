@@ -6,6 +6,7 @@ import { chatMediaFormat } from '../chat/chatMedia';
 import { useLoadingHint } from './useLoadingHint';
 import { useBackdropDismiss } from './useBackdropDismiss';
 import { keepDialogFocus } from './dialogFocus';
+import MediaVideoSurface from './MediaVideoSurface.vue';
 import ChatImageSurface from './ChatImageSurface.vue';
 
 const props = defineProps<{ groupId: string; attachment: ChatAttachment; imageMessage: boolean; previewBlob?: Blob }>();
@@ -97,15 +98,15 @@ onScopeDispose(() => {
 
 <template>
   <div class="dialog-backdrop chat-media-backdrop" v-on="backdropEvents" @keydown.esc.stop="close">
-    <section class="chat-media-viewer" :class="{ 'is-image': format?.kind === 'image' }" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1" @keydown="keepDialogFocus">
-      <header v-if="format?.kind !== 'image' || !source || previewFailed">
+    <section class="chat-media-viewer" :class="{ 'media-viewer-shell': format?.kind === 'image' || format?.kind === 'video' }" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1" @keydown="keepDialogFocus">
+      <header v-if="format?.kind === 'audio' || !source || (previewFailed && format?.kind === 'image')">
         <strong id="chat-media-title" :title="title">{{ title }}</strong>
         <button type="button" aria-label="下载文件" title="下载文件" :disabled="downloading || (imageMessage && !source)" @click="download"><Download :size="18" /></button>
         <button ref="closeButton" type="button" aria-label="关闭查看器" title="关闭" @click="close"><X :size="18" /></button>
       </header>
       <div class="chat-media-stage" :aria-busy="loading">
         <ChatImageSurface v-if="source && format?.kind === 'image' && !previewFailed" :source="source" :title="title" @close="close" @download="download" @error="playbackFailed" />
-        <video v-else-if="source && format?.kind === 'video'" ref="player" :src="source" controls playsinline preload="metadata" tabindex="0" @error="playbackFailed" />
+        <MediaVideoSurface v-else-if="source && format?.kind === 'video'" :source="source" downloadable :downloading="downloading" @close="close" @download="download" @error="playbackFailed" />
         <div v-else-if="source && format?.kind === 'audio'" class="chat-media-audio">
           <Music2 :size="64" aria-hidden="true" />
           <audio ref="player" :src="source" controls preload="metadata" tabindex="0" @error="playbackFailed" />
@@ -124,11 +125,9 @@ onScopeDispose(() => {
 .chat-media-viewer header button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--muted); }
 .chat-media-viewer header button:hover { background: var(--panel-raised); color: var(--text); }
 .chat-media-stage { display: flex; align-items: center; justify-content: center; flex: 1; min-height: 0; overflow: auto; background: var(--background); color: var(--muted); }
-.chat-media-stage > img, .chat-media-stage > video { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
-.chat-media-stage > video { width: 100%; height: 100%; }
-.chat-media-viewer.is-image { width: 100vw; height: 100dvh; border: 0; border-radius: 0; background: transparent; }
-.chat-media-viewer.is-image .chat-media-stage { background: transparent; }
-.chat-media-viewer.is-image .chat-media-feedback { position: absolute; z-index: 2; bottom: 80px; align-self: center; max-width: calc(100vw - 48px); border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
+.chat-media-viewer.media-viewer-shell { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; border-radius: 0; background: transparent; }
+.chat-media-viewer.media-viewer-shell .chat-media-stage { background: transparent; }
+.chat-media-viewer.media-viewer-shell .chat-media-feedback { position: absolute; z-index: 2; bottom: 76px; align-self: center; max-width: calc(100vw - 48px); border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
 .chat-media-audio { display: grid; justify-items: center; gap: 28px; width: min(440px, 90%); }
 .chat-media-audio audio { width: 100%; }
 .chat-media-feedback { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border); color: var(--danger); font-size: 13px; }

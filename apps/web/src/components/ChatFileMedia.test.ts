@@ -4,7 +4,7 @@ import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
 import { computed, effectScope, onScopeDispose, ref } from 'vue';
 import { expect, it, vi } from 'vitest';
-import { chatMediaFormat } from '../chat/chatMedia';
+import { chatMediaFormat, chatMediaFrameStyle } from '../chat/chatMedia';
 
 const script = parse(readFileSync(new URL('./ChatFileMedia.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const parsed = ts.createSourceFile('media.ts', script, ts.ScriptTarget.Latest, true);
@@ -22,7 +22,7 @@ function setup(name = 'test.gif') {
   const media = scope.run(() => runInNewContext(`${compiled}\n({frame,player,source,failed,load,release,decodeFailed})`, {
     ref, computed, onScopeDispose, onMounted: (callback: () => void) => { mount = callback; },
     defineProps: () => ({ groupId: 'group', attachment: { id: 'file', fileName: name, contentType: 'application/octet-stream', byteSize: 4 } }),
-    defineEmits: () => vi.fn(), chatMediaFormat, fetchFilePreview, AbortController,
+    defineEmits: () => vi.fn(), chatMediaFormat, chatMediaFrameStyle, fetchFilePreview, AbortController,
     URL: { createObjectURL, revokeObjectURL },
     IntersectionObserver: class { constructor(callback: typeof callbacks[number]) { callbacks.push(callback); } observe() {} disconnect = disconnect; },
   })) as { frame: {value: unknown}; player: {value: unknown}; source: {value: string}; failed: {value: boolean}; load(): Promise<void>; release(): void; decodeFailed(): void };

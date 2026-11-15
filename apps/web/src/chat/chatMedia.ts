@@ -28,3 +28,11 @@ export function chatMediaFormat(attachment: ChatAttachment) {
   if (extension) return formats[extension] ?? null;
   return Object.values(formats).find(format => format.contentType === attachment.contentType) ?? null;
 }
+
+// 图片、动图和视频采用相同的原始比例与聊天区域尺寸上限。
+export function chatMediaFrameStyle(width: number, height: number) {
+  return {
+    width: `min(100%, 420px, ${Math.min(width, 340 * width / height)}px)`,
+    aspectRatio: `${width} / ${height}`,
+  };
+}

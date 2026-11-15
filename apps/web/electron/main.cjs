@@ -12,6 +12,7 @@ const { createNativeMicrophone, validMicrophoneSettings } = require('./native-mi
 const { createNativeScreenAudio } = require('./native-screen-audio.cjs');
 const { createNativeVideoSession } = require('./native-video-session.cjs');
 const { createRecording } = require('./recording.cjs');
+const { serveRecordingMedia } = require('./recording-media.cjs');
 const { createAudioShortcuts } = require('./audio-shortcuts.cjs');
 const { createMediaBackgroundPolicy } = require('./media-background.cjs');
 const { createDesktopTray } = require('./desktop-tray.cjs');
@@ -540,6 +541,10 @@ async function finishClose() {
 async function serveApplication(request) {
   const url = new URL(request.url);
   if (!trustedUrl(request.url)) return new Response(null, { status: 403 });
+  if (url.pathname.startsWith('/recordings/')) {
+    if (closing) return new Response(null, { status: 503 });
+    return serveRecordingMedia(request, recording.library);
+  }
   if (url.pathname.startsWith('/api/')) {
     const routePolicy = apiRoutePolicies.get(`${request.method} ${url.pathname}`)
       ?? (/^\/api\/auth\/access\/links\/[0-9a-f-]{36}(?:\/renew|\/url|\/note)?$/i.test(url.pathname)

@@ -4,6 +4,7 @@ import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
 import { computed, effectScope, nextTick, onScopeDispose, reactive, ref, watch } from 'vue';
 import { expect, it, vi } from 'vitest';
+import { chatMediaFrameStyle } from '../chat/chatMedia';
 import type { AccountCache } from '../cache/localCache';
 
 const script = parse(readFileSync(new URL('./ChatImage.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
@@ -38,7 +39,7 @@ function setup(cache: AccountCache | null = null) {
   // 回调可以在断开观察之后人工送达，验证正式监听/销毁边界，不读取图片或运行浏览器。
   const image = scope.run(() => runInNewContext(`${compiled}\n({ frame, source, error, observeFrame, load, imageFailed })`, {
     computed, ref, watch, onScopeDispose, onMounted: () => {}, defineProps: () => props, defineEmits: () => vi.fn(),
-    inject: () => cache, ACCOUNT_CACHE: Symbol(), Blob,
+    chatMediaFrameStyle, inject: () => cache, ACCOUNT_CACHE: Symbol(), Blob,
     fetchAttachment, AbortController, Error, IntersectionObserver: FakeObserver,
     URL: { createObjectURL, revokeObjectURL },
   })) as { frame: { value: HTMLElement | null }; source: { value: string }; error: { value: string };

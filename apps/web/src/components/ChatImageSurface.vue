@@ -20,15 +20,16 @@ onMounted(async () => {
       dataSource: [{ src: props.source, width: image.naturalWidth, height: image.naturalHeight, alt: props.title }],
       appendToEl: host.value, mainClass: 'chat-photo-viewer',
       wheelToZoom: true, maxZoomLevel: 5, secondaryZoomLevel: 1,
-      padding: { top: 28, right: 28, bottom: 28, left: 28 },
+      paddingFn: viewport => ({ top: 64, bottom: 76, left: Math.min(72, viewport.x * 0.06), right: Math.min(72, viewport.x * 0.06) }),
+      allowPanToNext: false,
       counter: false, arrowPrev: false, arrowNext: false, zoom: false,
-      closeTitle: '关闭图片', bgOpacity: 0.9, showHideAnimationType: 'fade',
+      closeTitle: '关闭图片', bgOpacity: 0.9, showHideAnimationType: 'none',
       showAnimationDuration: duration, hideAnimationDuration: duration,
       trapFocus: false, returnFocus: false, escKey: false,
       imageClickAction: false, doubleTapAction: 'zoom',
     });
     viewer.on('uiRegister', () => {
-      viewer!.ui!.registerElement({ name: 'download', title: '下载图片', isButton: true, order: 10,
+      viewer!.ui!.registerElement({ name: 'download', title: '下载图片', isButton: true, order: 10, appendTo: 'root',
         html: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5"/></svg>',
         onClick: () => emit('download') });
       for (const [name, title, factor, path] of [
@@ -52,11 +53,15 @@ onScopeDispose(() => { disposed = true; viewer?.destroy(); image.removeAttribute
 <template><div ref="host" class="chat-image-surface" /></template>
 
 <style>
-.chat-photo-viewer { z-index: 1; --pswp-bg: #080a0c; --pswp-icon-color: #e1e6eb; }
+.chat-photo-viewer { position: absolute; inset: 0; z-index: 1; --pswp-bg: #080a0c; --pswp-icon-color: #e1e6eb; }
+.chat-photo-viewer .pswp__item { clip-path: inset(64px min(72px, 6vw) 76px round 8px); }
+.chat-photo-viewer .pswp__img { cursor: pointer !important; }
 .chat-photo-viewer .pswp__top-bar { padding: 18px; gap: 6px; }
 .chat-photo-viewer .pswp__button { display: grid; place-items: center; width: 42px; height: 42px; margin: 0; border-radius: 50%; background: #171c22cc; color: #e1e6eb; }
 .chat-photo-viewer .pswp__button--close .pswp__icn { width: 28px; height: 28px; top: 7px; left: 7px; }
-.chat-photo-viewer .pswp__button--zoom-in, .chat-photo-viewer .pswp__button--zoom-out { position: absolute; bottom: 24px; border-radius: 0 6px 6px 0; left: 50%; }
-.chat-photo-viewer .pswp__button--zoom-out { margin-left: -42px; border-radius: 6px 0 0 6px; }
+.chat-photo-viewer .pswp__button--zoom-in, .chat-photo-viewer .pswp__button--zoom-out, .chat-photo-viewer .pswp__button--download { position: absolute; bottom: 20px; left: 50%; border-radius: 0; }
+.chat-photo-viewer .pswp__button--zoom-out { margin-left: -63px; border-radius: 6px 0 0 6px; }
+.chat-photo-viewer .pswp__button--zoom-in { margin-left: -21px; }
+.chat-photo-viewer .pswp__button--download { margin-left: 21px; border-radius: 0 6px 6px 0; }
 .chat-photo-viewer .pswp__button:hover { background: #252e39ee; }
 </style>

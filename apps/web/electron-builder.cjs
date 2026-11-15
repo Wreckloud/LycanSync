@@ -44,6 +44,7 @@ module.exports = {
     'electron/native-audio-session.cjs',
     'electron/recording.cjs',
     'electron/recording-library.cjs',
+    'electron/recording-media.cjs',
     'electron/recording-voice.cjs',
     'electron/media-diagnostics.cjs',
     'electron/diagnostic-reports.cjs',

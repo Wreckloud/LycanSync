@@ -1,12 +1,18 @@
 <script setup lang="ts">
 import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { useRecordingLibrary } from '../../recording/useRecordingLibrary';
+import DialogTransition from '../DialogTransition.vue';
+import RecordingPreview from './RecordingPreview.vue';
+import RecordingThumbnail from './RecordingThumbnail.vue';
 import InlineFeedback from '../InlineFeedback.vue';
 import { useBackdropDismiss } from '../useBackdropDismiss';
 import { keepDialogFocus } from '../dialogFocus';
 
 const props = defineProps<{ status: DesktopRecordingStatus }>();
 const emit = defineEmits<{ close: [] }>();
+const preview = ref<RecordingLibraryEntry | null>(null);
+const recordingSource = (id: string) => `lycan://app/recordings/${encodeURIComponent(id)}`;
+const canPreview = (entry: RecordingLibraryEntry) => entry.state !== 'recording' && entry.availability === 'available' && entry.bytes > 0;
 const dialog = ref<HTMLElement | null>(null);
 const backdropEvents = useBackdropDismiss(() => emit('close'));
 const library = useRecordingLibrary();
@@ -20,6 +26,12 @@ const groups = computed(() => {
   }
   return result;
 });
+function openExternalPreview() {
+  const entry = preview.value;
+  if (!entry) return;
+  preview.value = null;
+  void library.file(entry, 'play');
+}
 function duration(milliseconds: number | null) {
   if (milliseconds === null) return '时长未知';
   const seconds = Math.floor(milliseconds / 1000);
@@ -51,7 +63,7 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
       tabindex="-1" @keydown="keepDialogFocus">
       <h2 id="recording-library-title">本地录像管理器</h2>
       <div class="settings-section recording-library-content">
-        <p>录像保存在本机，不会自动上传或清理，使用系统播放器打开。切换来源或画质时会分段保存。</p>
+        <p>点击缩略图预览录像，也可使用系统播放器打开。录像保存在本机，不会自动上传或清理。切换来源或画质时会分段保存。</p>
         <InlineFeedback :message="notice" :pending="loading ? '正在读取录像列表…' : ''" />
         <button v-if="notice" type="button" :disabled="loading || !!pendingId" @click="library.load()">重新读取</button>
         <p v-if="!entries.length && !loading && !notice">暂无录像记录。旧版保存的录像仍可在录像目录中找到。</p>
@@ -59,12 +71,13 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
           <summary>{{ new Date(group.createdAt).toLocaleString() }}<small v-if="group.items.length > 1"> · {{ group.items.length }} 个文件段</small></summary>
           <ul>
             <li v-for="entry in group.items" :key="entry.id">
+              <RecordingThumbnail :key="`${entry.id}:${entry.state}:${entry.availability}`" :source="recordingSource(entry.id)" :disabled="!canPreview(entry)" @preview="preview = entry" />
               <div class="library-description">
                 <strong>{{ state(entry) }}</strong>
                 <small>{{ new Date(entry.createdAt).toLocaleTimeString() }} · {{ duration(entry.durationMs) }} · {{ (entry.bytes / 1024 / 1024).toFixed(1) }} MiB<template v-if="entry.width && entry.height"> · {{ entry.width }} × {{ entry.height }}</template></small>
               </div>
               <div class="library-actions">
-                <button type="button" :disabled="!!pendingId || entry.state === 'recording' || entry.availability !== 'available' || !entry.bytes" @click="library.file(entry, 'play')">播放</button>
+                <button type="button" :disabled="!!pendingId || entry.state === 'recording' || entry.availability !== 'available' || !entry.bytes" @click="library.file(entry, 'play')">系统播放</button>
                 <button type="button" :disabled="!!pendingId || entry.state === 'recording' || entry.availability !== 'available' || !entry.bytes" @click="library.file(entry, 'reveal')">打开位置</button>
                 <button type="button" class="settings-button" :disabled="!!pendingId || entry.state === 'recording'" @click="library.file(entry, 'delete')">{{ entry.availability === 'missing' || entry.availability === 'changed' ? '移除记录' : '删除' }}</button>
               </div>
@@ -77,6 +90,9 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
         <button type="button" @click="emit('close')">关闭</button>
       </footer>
     </section>
+    <DialogTransition>
+      <RecordingPreview v-if="preview" :key="preview.id" :source="recordingSource(preview.id)" @close="preview = null" @external="openExternalPreview" />
+    </DialogTransition>
   </div>
 </template>
 
@@ -90,7 +106,7 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
 .library-session small { color: var(--muted); }
 .library-session ul { list-style: none; padding: 0; margin: 12px 0 0; }
 .library-session li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; padding: 8px 0; }
-.library-description { min-width: 0; display: grid; gap: 4px; }
+.library-description { flex: 1; min-width: 0; display: grid; gap: 4px; }
 .library-description strong { font-size: 13px; font-weight: 500; }
 .library-description small { font-size: 12px; overflow-wrap: anywhere; }
 .library-actions { display: flex; flex-wrap: wrap; gap: var(--button-gap); }

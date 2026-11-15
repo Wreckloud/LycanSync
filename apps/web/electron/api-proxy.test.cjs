@@ -409,3 +409,24 @@ test('待使用链接的复用、复制与备注走明确的认证路由', async
   }
   assert.equal(forwarded.length, 3);
 });
+
+
+test('本地录像路由不读取会话或访问服务器，关闭期间拒绝新预览', async () => {
+  const library = {};
+  let calls = 0;
+  const serveRecordingMedia = async (request, currentLibrary) => {
+    assert.equal(currentLibrary, library);
+    assert.equal(request.headers.get('Range'), 'bytes=20-');
+    calls++;
+    return new Response('preview', { status: 206 });
+  };
+  const dependencies = { closing: false, recording: { library }, serveRecordingMedia,
+    loadSession: () => { throw new Error('must not read credentials'); } };
+  const f = proxyFixture(dependencies);
+  const request = new Request('lycan://app/recordings/11111111-1111-4111-8111-111111111111', { headers: { Range: 'bytes=20-' } });
+  assert.equal((await f.serve(request)).status, 206);
+  assert.equal(f.forwarded.length, 0);
+  assert.equal((await proxyFixture({ ...dependencies, closing: true }).serve(request)).status, 503);
+  assert.equal((await f.serve(new Request('lycan://other/recordings/test'))).status, 403);
+  assert.equal(calls, 1);
+});
