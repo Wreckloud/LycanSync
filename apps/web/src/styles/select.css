@@ -1,6 +1,6 @@
 select {
   min-width: 0; min-height: var(--button-height); padding: var(--button-padding);
-  border: 1px solid var(--border); border-radius: 6px; background: var(--background); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--control-radius); background: var(--background); color: var(--text);
   font: inherit; font-size: 13px; line-height: 20px; cursor: pointer;
 }
 select:hover:not(:disabled), select:focus-visible { border-color: var(--subtle); }

@@ -44,7 +44,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   min-height: var(--button-height);
   padding: var(--button-padding);
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--control-radius);
   background: var(--panel-raised);
   color: var(--text);
   font-size: 14px;
@@ -55,6 +55,10 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 :where(button):disabled { opacity: .5; }
 .button-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--button-gap); }
 :is(button, input, textarea, select, [tabindex]):focus { outline: none; }
+button:where(:not([class]), .confirm-button, .settings-button, .account-row button, .sound-actions button):focus-visible:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--panel-soft);
+}
 
 .app-shell {
   height: 100dvh;
