@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onScopeDispose, ref, watch } from 'vue';
-import { Crown, UserRound } from '@lucide/vue';
+import { Crown } from '@lucide/vue';
+import Avatar from './Avatar.vue';
 import InlineFeedback from './InlineFeedback.vue';
 
 export interface MemberOption { userId: string; nickname: string; avatar: string; role?: string; joined?: boolean }
@@ -62,7 +63,7 @@ onScopeDispose(() => { request?.abort(); clearTimeout(timer); });
     <input v-model="search" type="search" :disabled="disabled" maxlength="100" :aria-label="label ?? '搜索群成员'" placeholder="搜索成员" />
     <div ref="list" class="member-picker-list" :aria-label="label ?? '群成员'" :aria-busy="loading" @scroll.passive="scrollPosition = ($event.target as HTMLElement).scrollTop; checkScroll()">
       <div v-for="member in visibleMembers" :key="member.userId" class="member-picker-row">
-        <img v-if="member.avatar" :src="member.avatar" alt="" /><UserRound v-else :size="36" aria-hidden="true" />
+        <Avatar :src="member.avatar" :icon-size="36" />
         <strong><span>{{ member.nickname }}</span><Crown v-if="member.role === 'OWNER'" :size="13" aria-label="群主" /></strong>
         <button type="button" :disabled="unavailable(member)" :aria-pressed="selected === member.userId" @click="emit('select', member)"><slot name="action-label" :member="member">{{ member.joined || joinedIds?.includes(member.userId) ? '已加入' : selected === member.userId ? '已选择' : action ?? '选择' }}</slot></button>
       </div>

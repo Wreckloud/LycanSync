@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onScopeDispose, ref, shallowRef } from 'vue';
-import { UserRound } from '@lucide/vue';
+import Avatar from '../components/Avatar.vue';
 import type { VoiceOverlayView } from './types';
 
 const state = shallowRef<VoiceOverlayView | null>(null);
@@ -26,7 +26,7 @@ onScopeDispose(() => removeListener?.());
       <div v-for="member in members" :key="member.identity" class="member"
         :class="{ speaking: member.speaking, 'is-muted': !member.microphone || !member.listening }"
         :aria-label="`${member.name}${!member.listening ? '，已停止收听' : !member.microphone ? '，麦克风已关闭' : ''}`">
-        <span class="avatar"><img v-if="portraits.get(member.identity)" :src="portraits.get(member.identity)" alt="" /><UserRound v-else :size="20" aria-hidden="true" /></span>
+        <span class="avatar"><Avatar :src="portraits.get(member.identity)" :icon-size="20" /></span>
         <span class="name">{{ member.name }}</span>
       </div>
     </div>

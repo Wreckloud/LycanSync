@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { UserRound } from '@lucide/vue';
+import Avatar from './Avatar.vue';
 defineProps<{ member: { nickname: string; avatar: string }; description?: string }>();
 </script>
 
 <template>
   <div class="member-identity">
-    <img v-if="member.avatar" :src="member.avatar" alt="" /><span v-else class="member-avatar-placeholder"><UserRound :size="26" aria-hidden="true" /></span>
+    <Avatar :src="member.avatar" :icon-size="26" placeholder-class="member-avatar-placeholder" />
     <div><strong>{{ member.nickname }}</strong><small v-if="description">{{ description }}</small></div>
   </div>
 </template>

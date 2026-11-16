@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { CircleUserRound, Keyboard, LogOut, Pencil, SlidersHorizontal, UserRound } from '@lucide/vue';
+import { CircleUserRound, Keyboard, LogOut, Pencil, SlidersHorizontal } from '@lucide/vue';
+import Avatar from './Avatar.vue';
 import PresenceModeSwitch from './PresenceModeSwitch.vue';
 import ActivityStatus from './ActivityStatus.vue';
 import { useOwnVoiceTime } from '../profile/useOwnVoiceTime';
@@ -42,8 +43,8 @@ function logout() {
       :aria-expanded="menuEnabled ? menuOpen : undefined" :aria-haspopup="menuEnabled ? 'dialog' : undefined"
       @click="menuEnabled && active !== false && (menuOpen = !menuOpen)">
     <span class="personal-avatar">
-      <img v-if="user.avatar" :src="user.avatar" class="profile-avatar" alt="" referrerpolicy="no-referrer" data-identity-avatar />
-      <span v-else class="profile-avatar-placeholder" data-identity-avatar><UserRound :size="22" /></span>
+      <Avatar :src="user.avatar" :class="user.avatar ? 'profile-avatar' : undefined" placeholder-class="profile-avatar-placeholder"
+        referrerpolicy="no-referrer" data-identity-avatar />
       <span class="status-dot" :class="status" aria-hidden="true" />
     </span>
     <span class="personal-copy"><strong data-identity-name>{{ user.nickname }}</strong>
