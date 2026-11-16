@@ -19,7 +19,7 @@ onMounted(() => dialog.value?.querySelector('input')?.focus());
 
 <template>
   <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="cancel">
-    <form ref="dialog" class="recovery-password-dialog" role="dialog" aria-modal="true" aria-labelledby="recovery-password-title"
+    <form ref="dialog" class="dialog-panel recovery-password-dialog" role="dialog" aria-modal="true" aria-labelledby="recovery-password-title"
       tabindex="-1" @submit.prevent="save" @keydown="keepDialogFocus">
       <h2 id="recovery-password-title">{{ configured ? '修改恢复密码' : '设置恢复密码' }}</h2>
       <PasswordField v-if="configured" id="owner-old-password" v-model="previousPassword" label="原恢复密码" :disabled="busy || disabled" required />
@@ -35,7 +35,5 @@ onMounted(() => dialog.value?.querySelector('input')?.focus());
 </template>
 
 <style scoped>
-.recovery-password-dialog { display: grid; gap: 12px; width: min(420px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; box-sizing: border-box; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 14px; line-height: 22px; }
-.recovery-password-dialog h2 { margin: 0 0 4px; font-size: 22px; line-height: 32px; }
-@media (max-width: 420px) { .recovery-password-dialog { padding: 20px; } }
+.recovery-password-dialog { --dialog-width: 420px; display: grid; gap: 12px; }
 </style>

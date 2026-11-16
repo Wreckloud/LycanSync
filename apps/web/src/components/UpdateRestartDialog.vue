@@ -17,7 +17,7 @@ onMounted(() => dialog.value?.focus());
 
 <template>
     <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="cancel">
-      <section ref="dialog" class="update-restart-dialog" role="dialog" aria-modal="true"
+      <section ref="dialog" class="dialog-panel update-restart-dialog" role="dialog" aria-modal="true"
         aria-labelledby="update-restart-title" aria-describedby="update-restart-description" tabindex="-1" @keydown="keepDialogFocus">
         <header><h2 id="update-restart-title">发现新版本 {{ version }}</h2><p>重启软件并更新？</p></header>
         <p id="update-restart-description">下载并检查新版后，将保存录制并结束通话、共享和远控，再重启安装。完成后自动打开，下载失败仍可使用当前版本。</p>
@@ -31,9 +31,5 @@ onMounted(() => dialog.value?.focus());
 </template>
 
 <style scoped>
-.update-restart-dialog { width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 14px; line-height: 22px; }
-.update-restart-dialog header h2 { margin: 0; font-size: 22px; line-height: 32px; }
-.update-restart-dialog header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 20px; }
 .update-restart-dialog > p { margin: 20px 0; color: var(--muted); }
-@media (max-width: 420px) { .update-restart-dialog { padding: 20px; } }
 </style>

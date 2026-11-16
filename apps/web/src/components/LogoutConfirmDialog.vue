@@ -19,7 +19,7 @@ onMounted(() => dialog.value?.focus());
 
 <template>
   <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="cancel">
-    <section ref="dialog" class="logout-confirm-dialog" role="dialog" aria-modal="true"
+    <section ref="dialog" class="dialog-panel logout-confirm-dialog" role="dialog" aria-modal="true"
       aria-labelledby="logout-confirm-title" aria-describedby="logout-confirm-description" tabindex="-1" @keydown="keepDialogFocus">
       <header><h2 id="logout-confirm-title">{{ removing ? '从此设备移除账号？' : '退出当前账号？' }}</h2><p v-if="!removing">回到登录页，保留本机凭据。</p></header>
       <p v-if="removing" id="logout-confirm-description">{{ administrator
@@ -36,9 +36,5 @@ onMounted(() => dialog.value?.focus());
 </template>
 
 <style scoped>
-.logout-confirm-dialog { width: min(460px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; padding: 24px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); font-size: 14px; line-height: 22px; }
-.logout-confirm-dialog header h2 { margin: 0; font-size: 22px; line-height: 32px; }
-.logout-confirm-dialog header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 20px; }
 .logout-confirm-dialog > p { margin: 16px 0; color: var(--muted); }
-@media (max-width: 420px) { .logout-confirm-dialog { padding: 20px; } }
 </style>
