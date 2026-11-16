@@ -8,7 +8,7 @@ declare global {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.route('**/api/**', (route) => route.abort());
+  await page.route(url => url.pathname.startsWith('/api/'), (route) => route.abort());
   await page.goto('/tests/fixtures/overlaySettings.html');
 });
 

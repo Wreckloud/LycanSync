@@ -27,9 +27,11 @@ test('桌面入房、取消选择、窗口共享及离房释放', async () => {
     await expect(page.getByRole('dialog', { name: '选择共享的窗口或屏幕' })).toBeVisible();
     await expect(page.getByRole('tab', { name: '应用窗口', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('tab', { name: '整个屏幕', exact: true })).toHaveCount(1);
-    // 主窗口必须被排除，否则整屏共享会在双开时递归捕获自己的共享画面。
+    const mainWindowId = await application.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].getNativeWindowHandle().readBigUInt64LE().toString());
+    // 按当前窗口身份核对排除，不让已更名的产品标题导致断言空通过。
     await expect(page.getByRole('dialog', { name: '选择共享的窗口或屏幕' })
-      .getByRole('button', { name: 'LycanSync', exact: true })).toHaveCount(0);
+      .locator(`[data-source-id^="window:${mainWindowId}:"]`)).toHaveCount(0);
     // 只统计真实来源卡片，不能把来源类型或画质按钮误当成可共享窗口。
     await expect.poll(() => page.getByRole('dialog', { name: '选择共享的窗口或屏幕' })
       .locator('.capture-sources button').count()).toBeGreaterThan(0);
@@ -60,6 +62,14 @@ test('桌面入房、取消选择、窗口共享及离房释放', async () => {
     });
     await page.getByRole('button', { name: '加入当前群组语音', exact: true }).click();
     await expect(page.getByTestId('callbar').getByRole('status')).toContainText('语音已连接');
+    await page.getByRole('button', { name: '设置', exact: true }).click();
+    await page.getByRole('button', { name: '客户端', exact: true }).click();
+    const tray = await page.evaluate(() => window.lycanDesktop!.getTraySettings());
+    if (tray.supported) {
+      await page.getByRole('checkbox', { name: '关闭时收起到托盘', exact: true }).uncheck();
+      await expect.poll(() => page.evaluate(() => window.lycanDesktop!.getTraySettings())).toMatchObject({ enabled: false });
+    }
+    await page.getByRole('button', { name: '返回应用', exact: true }).click();
     const closed = application.waitForEvent('close');
     await page.getByRole('button', { name: '关闭窗口', exact: true }).click();
     await closed;

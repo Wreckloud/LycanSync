@@ -16,6 +16,7 @@ import com.lycansync.api.group.mapper.GroupMapper;
 import com.lycansync.api.group.model.ChatGroup;
 import com.lycansync.api.group.model.GroupMember;
 import com.lycansync.api.group.model.GroupRole;
+import com.lycansync.api.group.model.GroupRtcRoom;
 import com.lycansync.api.group.model.GroupView;
 import com.lycansync.api.rtc.service.GroupRtcAccessService;
 import org.springframework.context.ApplicationEventPublisher;
@@ -57,6 +58,10 @@ public class GroupService {
         return mapper.findGroups(user.id()).stream()
                 .map(this::toSummary)
                 .toList();
+    }
+
+    public List<GroupRtcRoom> findMemberRtcRooms(AuthenticatedUser user) {
+        return mapper.findMemberRtcRooms(user.id());
     }
 
     @Transactional

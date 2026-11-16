@@ -4,6 +4,7 @@ import com.lycansync.api.group.dto.GroupCandidateResponse;
 import com.lycansync.api.group.dto.GroupMemberProfileResponse;
 import com.lycansync.api.group.model.ChatGroup;
 import com.lycansync.api.group.model.GroupMember;
+import com.lycansync.api.group.model.GroupRtcRoom;
 import com.lycansync.api.group.model.GroupView;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -26,6 +27,8 @@ public interface GroupMapper {
     int insertGroup(@Param("group") ChatGroup group);
 
     List<GroupView> findGroups(@Param("userId") UUID userId);
+
+    List<GroupRtcRoom> findMemberRtcRooms(@Param("userId") UUID userId);
 
     List<String> findGroupIdsByMember(@Param("userId") UUID userId);
 

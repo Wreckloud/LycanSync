@@ -14,6 +14,8 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
   try {
     const page = await application.firstWindow();
     await api.presencePollStarted;
+    await expect(page.locator('.entry-shell')).toHaveCount(0);
+    await expect(page.locator('.app-content')).toBeVisible();
     if (process.platform === 'win32') {
       // 应用窗口始终允许系统截图；共享时也不能再开启内容保护。
       expect(await application.evaluate(({ BrowserWindow }) =>
@@ -62,9 +64,13 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
       external: typeof window.lycanDesktop?.openExternal,
       secure: window.isSecureContext,
     }))).toEqual({ node: 'undefined', bridge: 'function', external: 'function', secure: true });
-    expect(await page.evaluate(async () => window.lycanDesktop?.getProcessMetrics())).toEqual({
+    const metrics = await page.evaluate(async () => window.lycanDesktop!.getProcessMetrics());
+    expect(metrics).toMatchObject({
       cpuPercent: expect.any(Number), memoryMb: expect.any(Number),
+      logicalProcessors: expect.any(Number), entries: expect.any(Array),
     });
+    expect(metrics.entries.length).toBeGreaterThan(0);
+    expect(metrics.entries).toContainEqual(expect.objectContaining({ role: 'electron-Browser', state: 'running' }));
     expect(await page.evaluate(async () => window.lycanDesktop?.getSystemIdleState())).toEqual({
       state: expect.stringMatching(/^(active|idle|locked|unknown)$/), idleSeconds: expect.any(Number),
     });
@@ -81,9 +87,19 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
     await page.getByRole('button', { name: '客户端', exact: true }).click();
     await expect(page.getByLabel('开机自动启动')).toBeDisabled();
     await expect(page.getByText('开机启动仅支持 Windows 安装版。')).toBeVisible();
+    const tray = await page.evaluate(() => window.lycanDesktop!.getTraySettings());
+    if (tray.supported) {
+      expect(tray.enabled).toBe(true);
+      await page.getByRole('button', { name: '关闭窗口', exact: true }).click();
+      await expect.poll(() => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(false);
+      expect(api.presenceHeartbeats.some((heartbeat) => heartbeat.status === 'OFFLINE')).toBe(false);
+      await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].show());
+      await page.getByRole('checkbox', { name: '关闭时收起到托盘', exact: true }).uncheck();
+      await expect.poll(() => page.evaluate(() => window.lycanDesktop!.getTraySettings())).toMatchObject({ enabled: false });
+    }
     await page.getByRole('button', { name: '语音与音频', exact: true }).click();
     await expect(page.locator('.audio-settings').getByRole('checkbox', { name: '智能声音处理' })).toBeEnabled();
-    await expect(page.locator('.audio-settings').getByText('桌面版暂不支持回声消除，建议使用耳机通话。')).toBeVisible();
+    await expect(page.locator('.audio-settings').getByText('程序使用 RNNoise 降噪，配合回声消除、低频过滤和自动音量调整，让人声更清楚、音量更平稳。', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: '返回应用' }).click();
     expect(await page.evaluate(async () => window.lycanDesktop?.getCurrentActivity())).toBeNull();
     expect(await page.evaluate(async () => (await fetch('/api/not-allowed')).status)).toBe(404);
@@ -114,7 +130,7 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
     const closed = application.waitForEvent('close');
     await page.getByRole('button', { name: '关闭窗口', exact: true }).click();
     await closed;
-    expect(api.presenceHeartbeats).toContainEqual({ status: 'OFFLINE', activity: null });
+    expect(api.presenceHeartbeats).toContainEqual(expect.objectContaining({ status: 'OFFLINE', activity: null }));
     await expect.poll(api.cancelledPresencePollCount).toBeGreaterThan(0);
   } finally { await application.close(); await api.close(); }
 });

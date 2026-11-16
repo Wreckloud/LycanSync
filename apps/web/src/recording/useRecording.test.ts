@@ -454,3 +454,103 @@ it('慢磁盘读取未返回时不叠加查询，结束后停止轮询', async (
     expect(f.recording.state.value.phase).toBe('saved');
   } finally { f.scope.stop(); }
 });
+
+it.each(['recording', 'replay'] as const)('%s 准备期间主动停止，迟到准备结果不能重新启动输出', async kind => {
+  const f = await fixture();
+  try {
+    let complete!: () => void;
+    vi.mocked(setNativeScreenRecordingDemand).mockImplementationOnce(() => new Promise<void>(resolve => { complete = resolve; }));
+    const starting = kind === 'recording' ? f.recording.start() : f.recording.startReplay();
+    await vi.waitFor(() => expect(complete).toBeDefined());
+    if (kind === 'recording') await f.recording.stop(); else await f.recording.stopReplay();
+    complete(); await starting;
+    expect(f.desktop.startRecording).not.toHaveBeenCalled();
+    expect(f.desktop.startReplay).not.toHaveBeenCalled();
+    expect(f.recording.localActive.value).toBe(false);
+    expect(setNativeScreenRecordingDemand).toHaveBeenLastCalledWith(f.track.value, false);
+  } finally { f.scope.stop(); }
+});
+
+it('等待自动回放的显式录像请求也能被停止，回放准备本身继续完成', async () => {
+  const f = await fixture();
+  try {
+    let complete!: () => void;
+    vi.mocked(setNativeScreenRecordingDemand).mockImplementationOnce(() => new Promise<void>(resolve => { complete = resolve; }));
+    await f.recording.setReplayEnabled(true);
+    await vi.waitFor(() => expect(complete).toBeDefined());
+    const starting = f.recording.start();
+    await f.recording.stop();
+    complete(); await starting;
+    expect(f.desktop.startRecording).not.toHaveBeenCalled();
+    expect(f.desktop.startReplay).toHaveBeenCalledOnce();
+    expect(f.recording.replayActive.value).toBe(true);
+    expect(f.desktop.stopReplay).not.toHaveBeenCalled();
+  } finally { f.scope.stop(); }
+});
+
+it('停止准备中的自动回放不立即重试，偏好保留并允许下次共享正常启动', async () => {
+  const f = await fixture();
+  try {
+    let complete!: () => void;
+    vi.mocked(setNativeScreenRecordingDemand).mockImplementationOnce(() => new Promise<void>(resolve => { complete = resolve; }));
+    await f.recording.setReplayEnabled(true);
+    await vi.waitFor(() => expect(complete).toBeDefined());
+    const starting = f.recording.startReplay();
+    await f.recording.stopReplay();
+    complete(); await starting; await nextTick();
+    expect(f.desktop.startReplay).not.toHaveBeenCalled();
+    expect(f.recording.settings.value?.replayEnabled).toBe(true);
+    f.track.value = { id: 'next-sharing' } as MediaStreamTrack;
+    await vi.waitFor(() => expect(f.desktop.startReplay).toHaveBeenCalledOnce());
+    expect(f.recording.replayActive.value).toBe(true);
+  } finally { f.scope.stop(); }
+});
+
+it.each(['recording', 'replay'] as const)('停止另一路不取消正在准备的 %s', async kind => {
+  const f = await fixture();
+  try {
+    let complete!: () => void;
+    vi.mocked(setNativeScreenRecordingDemand).mockImplementationOnce(() => new Promise<void>(resolve => { complete = resolve; }));
+    const starting = kind === 'recording' ? f.recording.start() : f.recording.startReplay();
+    await vi.waitFor(() => expect(complete).toBeDefined());
+    if (kind === 'recording') await f.recording.stopReplay(); else await f.recording.stop();
+    complete(); await starting;
+    expect(kind === 'recording' ? f.desktop.startRecording : f.desktop.startReplay).toHaveBeenCalledOnce();
+    expect(f.recording.localActive.value).toBe(true);
+  } finally { f.scope.stop(); }
+});
+
+it('录像启动确认迟于停止请求，收尾迟到的输出且不恢复旧状态', async () => {
+  const f = await fixture();
+  try {
+    const initial = f.recording.state.value;
+    let complete!: (value: DesktopRecordingStatus) => void;
+    f.desktop.startRecording.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    f.desktop.stopRecording.mockResolvedValueOnce(initial);
+    const starting = f.recording.start();
+    await vi.waitFor(() => expect(complete).toBeDefined());
+    await f.recording.stop();
+    complete({ ...initial, recordingId: 'late', holdingResources: true, phase: 'recording' });
+    await starting;
+    expect(f.desktop.stopRecording).toHaveBeenCalledExactlyOnceWith('late');
+    expect(f.recording.localActive.value).toBe(false);
+    expect(f.onStarted).not.toHaveBeenCalled();
+  } finally { f.scope.stop(); }
+});
+
+it('回放启动确认迟于停止请求，再次收尾确认的输出且不恢复缓存状态', async () => {
+  const f = await fixture();
+  try {
+    let complete!: (value: DesktopRecordingStatus) => void;
+    f.desktop.startReplay.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    const starting = f.recording.startReplay();
+    await vi.waitFor(() => expect(complete).toBeDefined());
+    await f.recording.stopReplay();
+    complete({ ...f.recording.state.value, replay: { id: 'late', holdingResources: true, phase: 'buffering',
+      seconds: 60, saving: false, error: null, lastSavedId: null } });
+    await starting;
+    expect(f.desktop.stopReplay).toHaveBeenCalledTimes(2);
+    expect(f.recording.replayActive.value).toBe(false);
+    expect(f.recording.successNotice.value).toBeNull();
+  } finally { f.scope.stop(); }
+});

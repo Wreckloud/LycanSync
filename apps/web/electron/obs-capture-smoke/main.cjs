@@ -188,7 +188,7 @@ app.whenReady().then(async () => {
   // 运行生产入口本身，不复制另一套纹理交付和清理逻辑；不执行应用启动代码。
   runInNewContext([
     sourceRange(main, 'function handleMediaHelperFailure(', 'const activityMonitor ='),
-    sourceRange(main, "ipcMain.handle('media:native-video:start',", "ipcMain.handle('media:remote-control:authorize',"),
+    sourceRange(main, "ipcMain.handle('media:native-video:start',", "ipcMain.handle('recording:settings',"),
     sourceRange(main, "ipcMain.on('media:native-video:receiver-error',", "ipcMain.handle('media:diagnostics',"),
     sourceRange(main, "ipcMain.handle('media:diagnostics',", "ipcMain.on('window:maximize',"),
   ].join('\n'), production);

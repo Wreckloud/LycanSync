@@ -73,6 +73,38 @@ test('拒绝越界和并发剪辑，取消停止进程并清理半成品，原�
   assert.equal((await fs.readdir(f.root)).filter(name => name.endsWith('.partial')).length, 0);
   assert.equal((await f.library.list()).items.length, 1);
 });
+
+test('独占预留失败不删除已有半成品或目标文件，也不启动剪辑进程', async context => {
+  const f = await fixture(context);
+  const originalOpen = fs.open;
+  let temporary, destination;
+  context.mock.method(fs, 'open', async (path, flags) => {
+    temporary = path; destination = path.slice(0, -'.partial'.length);
+    await fs.writeFile(temporary, 'existing partial');
+    await fs.writeFile(destination, 'existing destination');
+    return originalOpen(path, flags);
+  });
+  let spawned = false;
+  const editor = createRecordingEditor({ library: f.library, executablePath: 'isolated.exe', onProgress() {},
+    spawnProcess() { spawned = true; throw new Error('must not spawn'); } });
+  await assert.rejects(editor.exportClip(randomUUID(), f.id, 100, 2000), { code: 'EEXIST' });
+  assert.equal(spawned, false);
+  assert.equal(await fs.readFile(temporary, 'utf8'), 'existing partial');
+  assert.equal(await fs.readFile(destination, 'utf8'), 'existing destination');
+  assert.equal(await fs.readFile(f.path, 'utf8'), 'source');
+});
+
+test('自有输出登记失败仍清理半成品和目标，不保留未登记文件', async context => {
+  const f = await fixture(context);
+  const editor = createRecordingEditor({ library: { ...f.library, register: async () => { throw new Error('recordingLibraryUnavailable'); } },
+    executablePath: 'isolated.exe', onProgress() {}, spawnProcess() {
+      const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+      setImmediate(() => child.emit('close', 0)); return child;
+    } });
+  await assert.rejects(editor.exportClip(randomUUID(), f.id, 100, 2000), /录像列表未能保存/);
+  assert.deepEqual((await fs.readdir(f.root)).filter(name => name.endsWith('.partial') || name.endsWith('.mp4')), []);
+  assert.equal(await fs.readFile(f.path, 'utf8'), 'source');
+});
 test('原生 FFmpeg 截取合成画面和 AAC，保存新 MP4 并可再次剪辑', { skip: !process.env.LYCANSYNC_TEST_CLIP }, async context => {
   const f = await fixture(context);
   const ffmpeg = process.env.LYCANSYNC_TEST_FFMPEG;

@@ -5,13 +5,14 @@ import { ACCOUNT_CACHE } from '../cache/localCache';
 import { fetchAttachment } from '../chat/chatApi';
 
 const props = defineProps<{ groupId: string; attachmentId: string; width: number; height: number; alt: string }>();
-const emit = defineEmits<{ preview: [] }>();
+const emit = defineEmits<{ preview: [blob?: Blob] }>();
 const cache = inject(ACCOUNT_CACHE, null);
 const frame = ref<HTMLElement | null>(null);
 const source = ref('');
 const error = ref('');
 const frameStyle = computed(() => chatMediaFrameStyle(props.width, props.height));
 let activeUrl = '';
+let activeBlob: Blob | undefined;
 let controller: AbortController | null = null;
 let observer: IntersectionObserver | null = null;
 let retentionObserver: IntersectionObserver | null = null;
@@ -23,6 +24,7 @@ let cachedSource = false;
 function clearSource() {
   if (activeUrl) URL.revokeObjectURL(activeUrl);
   activeUrl = '';
+  activeBlob = undefined;
   source.value = '';
 }
 
@@ -45,6 +47,7 @@ async function load(skipCache = false) {
     cachedSource = cached instanceof Blob;
     if (!cachedSource && cache?.revision === cacheRevision) void cache?.write('image', groupId, blob, attachmentId);
     activeUrl = URL.createObjectURL(blob);
+    activeBlob = blob;
     source.value = activeUrl;
   } catch (reason) {
     if (!currentController.signal.aborted && controller === currentController) {
@@ -122,7 +125,7 @@ onScopeDispose(() => {
 
 <template>
   <div ref="frame" class="chat-image-frame" :style="frameStyle">
-    <button v-if="source" type="button" class="chat-image-open" aria-label="查看图片" @click="emit('preview')"><img class="chat-image" :src="source" :alt="alt" @error="imageFailed" /></button>
+    <button v-if="source" type="button" class="chat-image-open" aria-label="查看图片" @click="emit('preview', activeBlob)"><img class="chat-image" :src="source" :alt="alt" @error="imageFailed" /></button>
     <button v-else-if="error" class="chat-image-error" type="button" @click="load(true)">图片加载失败，点击重试</button>
   </div>
 </template>

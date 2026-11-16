@@ -66,6 +66,8 @@ const moreOpen = ref(false);
 const applicationReady = ref(false);
 watch(() => user.value?.id, () => { applicationReady.value = false; }, { flush: 'sync' });
 let disposed = false;
+// 同一账号重新认证也会更换响应资格，不能只比较账号 ID。
+let sessionRevision = 0;
 let sessionHeartbeat: number | null = null;
 let sessionHeartbeatInFlight = false;
 let logoutInProgress = false;
@@ -89,6 +91,7 @@ useIdentityTransition(() => ({
 }));
 
 function expired() {
+  sessionRevision++;
   initializationRequest?.abort();
   user.value = null;
   entryUser.value = null;
@@ -138,6 +141,7 @@ async function initialize(automatic = false) {
     if (response.ok) {
       const restoredUser: AuthUser = await response.json();
       if (request.signal.aborted) return;
+      qq.cancel();
       entryUser.value = restoredUser;
       const previousPreference = autoLogin.value;
       autoLogin.value = false;
@@ -168,6 +172,8 @@ function acceptSession(result: { sessionToken?: string; user: AuthUser }) {
     if (!result.sessionToken) throw new Error('登录未完成，请重试。');
     setBrowserSession(result.sessionToken);
   }
+  sessionRevision++;
+  qq.cancel();
   initializationRequest?.abort();
   entryUser.value = result.user;
   user.value = null;
@@ -242,9 +248,12 @@ async function verifyCurrentSession() {
 
 async function saveProfile(profile: ProfileUpdate) {
   const currentUserId = (user.value ?? entryUser.value)?.id;
-  if (!currentUserId) throw new Error('当前未登录，请登录后再保存。');
+  const revision = sessionRevision;
+  if (disposed || !currentUserId) throw new Error('当前未登录，请登录后再保存。');
   const updated = await authRequest<AuthUser>('me', 'PUT', profile);
-  if ((user.value ?? entryUser.value)?.id !== currentUserId) throw new Error('登录状态已变化，请重新登录原账号查看保存结果。');
+  if (disposed || revision !== sessionRevision || (user.value ?? entryUser.value)?.id !== currentUserId) {
+    throw new Error('登录状态已变化，请重新登录原账号查看保存结果。');
+  }
   if (user.value) user.value = updated;
   else entryUser.value = updated;
   return updated;
@@ -278,6 +287,7 @@ async function confirmLogout() {
 }
 
 async function logout() {
+  sessionRevision++;
   initializationRequest?.abort();
   error.value = '';
   const previousUser = user.value;
@@ -298,7 +308,7 @@ async function logout() {
 }
 
 function requestClearSession() {
-  if (!ready.value || user.value || submitting.value || logoutBusy.value || removing.value || preferenceSaving.value) return;
+  if (!ready.value || user.value || submitting.value || logoutBusy.value || removing.value || preferenceSaving.value || qq.finishing.value) return;
   error.value = '';
   removeConfirm.value = true;
 }
@@ -366,19 +376,25 @@ async function saveRecoveryAndClear() {
 }
 async function clearLocalSession() {
   if (user.value || !removeConfirm.value || !removing.value) return;
+  const account = entryUser.value;
+  // 旧凭据失效可继续清除；新账号接入后，旧清除结果不再有资格生效。
+  const canFinishClearing = () => !disposed && !user.value && (!entryUser.value || entryUser.value === account);
   initializationRequest?.abort();
   let revoked = false;
   try {
     try { await authRequest<void>('logout', 'POST'); revoked = true; }
     catch { /* 离线或损坏的凭据仍允许从本机移除。 */ }
-    if (disposed) return;
+    if (!canFinishClearing()) return;
     if (desktop) await desktop.clearSession();
+    if (!canFinishClearing()) return;
     setBrowserSession(null);
     expired();
     autoLogin.value = true;
     removeConfirm.value = false;
     if (!revoked) error.value = '本机登录信息已清除，但未能完成服务器端退出。';
-  } catch { error.value = '无法清除本机登录信息，请检查数据目录的读写权限后重试。'; }
+  } catch {
+    if (canFinishClearing()) error.value = '无法清除本机登录信息，请检查数据目录的读写权限后重试。';
+  }
 }
 async function saveServerAddress() {
   if (!desktop || submitting.value || serverSaving.value || entryUser.value || removing.value || logoutBusy.value) return;
@@ -539,7 +555,7 @@ onMounted(async () => {
             <InlineFeedback id="server-address-feedback" :message="serverError"
               :status="serverSaving ? '正在重启…' : '保存后重启应用，使用该服务器的账号登录。'" />
           </form>
-          <button v-if="desktop || entryUser" type="button" class="settings-button account-clear-session" :disabled="!ready || submitting || logoutBusy || removing || preferenceSaving"
+          <button v-if="desktop || entryUser" type="button" class="settings-button account-clear-session" :disabled="!ready || submitting || logoutBusy || removing || preferenceSaving || qq.finishing.value"
             @click="requestClearSession">清除本机登录凭据</button>
           </div>
           </ExpandSection>

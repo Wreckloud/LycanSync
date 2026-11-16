@@ -2,9 +2,8 @@ package com.lycansync.api.rtc.service;
 
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.common.error.ApiErrorCode;
-import com.lycansync.api.group.dto.GroupSummaryResponse;
+import com.lycansync.api.group.model.GroupRtcRoom;
 import com.lycansync.api.group.exception.GroupException;
-import com.lycansync.api.group.model.GroupRole;
 import com.lycansync.api.group.service.GroupService;
 import com.lycansync.api.rtc.dto.RtcRoomSummaryResponse;
 import com.lycansync.api.rtc.exception.RtcServiceUnavailableException;
@@ -18,7 +17,6 @@ import retrofit2.Call;
 import retrofit2.Response;
 
 import java.io.IOException;
-import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -107,9 +105,7 @@ class LocalRtcRoomSummaryServiceTests {
 
     @Test
     void shouldReturnOccupancyForEveryAccessibleGroup() throws IOException {
-        Instant createdAt = Instant.parse("2026-09-20T00:00:00Z");
-        when(groupService.findGroups(USER)).thenReturn(List.of(new GroupSummaryResponse(
-                GROUP_ID, "周末开黑", "", "", GroupRole.OWNER, 2, createdAt, createdAt)));
+        when(groupService.findMemberRtcRooms(USER)).thenReturn(List.of(new GroupRtcRoom(GROUP_ID, GROUP_ID)));
         when(roomCall.execute()).thenReturn(Response.success(List.of(Room.newBuilder()
                 .setName("lycan-sync-group-" + GROUP_ID)
                 .setNumParticipants(2)

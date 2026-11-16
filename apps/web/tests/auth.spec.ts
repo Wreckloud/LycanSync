@@ -39,7 +39,7 @@ function silentWav(durationMs = 100) {
 
 test.beforeEach(async ({ page }) => {
   // 未提供模拟的业务请求明确失败，不能落到 Vite 的真实服务器代理。
-  await page.route('**/api/**', (route) => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
+  await page.route(url => url.pathname.startsWith('/api/'), (route) => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
   await page.route('**/api/groups', (route) => route.fulfill({ json: [] }));
   await page.route('**/api/presence/heartbeat', (route) => route.fulfill({ status: 204 }));
 });
@@ -538,7 +538,7 @@ test('签名快慢保存均不移动布局，失败时就近展开反馈并支�
   expect(await page.locator('.activity-settings').boundingBox()).toEqual(stablePosition);
 });
 
-test('浏览器账号设置明确标出未接入功能与桌面动态限制', async ({ page }) => {
+test('浏览器账号设置隐藏不可用 QQ 入口并说明桌面动态限制', async ({ page }) => {
   const user = { id: 'settings-account-user', nickname: '设置测试', avatar: '', administrator: false };
   await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
@@ -551,8 +551,8 @@ test('浏览器账号设置明确标出未接入功能与桌面动态限制', as
   await expect(page.getByRole('navigation', { name: '设置栏目' }).getByRole('button', { name: '当前动态', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '修改头像', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '修改密码', exact: true })).toHaveCount(0);
-  await expect(page.getByText('退出后仍会记住此账号。需要重新登录时，可使用已绑定的 QQ；服主也可使用恢复密码，成员可向服主获取恢复链接。')).toBeVisible();
-  await expect(page.getByRole('button', { name: '查看 QQ 绑定说明', exact: true })).toBeVisible();
+  await expect(page.getByText('返回登录页，并记住此账号，方便下次登录。')).toBeVisible();
+  await expect(page.getByRole('button', { name: '查看 QQ 绑定说明', exact: true })).toHaveCount(0);
   await expect(page.locator('.activity-settings')).toContainText('动态检测仅在 Windows 桌面版提供');
   const toggle = page.getByRole('checkbox', { name: '显示动态', exact: true });
   await expect(toggle).toBeChecked();
@@ -563,8 +563,7 @@ test('浏览器账号设置明确标出未接入功能与桌面动态限制', as
   await expect(toggle).toBeEnabled();
 
   await expect(page.getByRole('textbox', { name: '新密码' })).toHaveCount(0);
-  await page.getByRole('button', { name: '查看 QQ 绑定说明', exact: true }).click();
-  await expect(page.locator('#qq-entry')).toContainText('当前服务器尚未开启');
+  await expect(page.locator('#qq-entry')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '注销账号', exact: true })).toBeEnabled();
   await expect(page.getByRole('button', { name: '退出登录', exact: true })).toBeEnabled();
 });

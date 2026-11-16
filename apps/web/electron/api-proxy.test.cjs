@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
-const { join } = require('node:path');
+const { join, resolve } = require('node:path');
 const { test } = require('node:test');
 const { runInNewContext } = require('node:vm');
 
@@ -13,10 +13,11 @@ function proxyFixture(overrides = {}) {
   assert.ok(policyStart >= 0 && policyEnd > policyStart && serveStart >= 0 && serveEnd > serveStart);
   const forwarded = [];
   // 沿用主进程入口隔离测试：执行正式策略与代理函数，不启动客户端、读取真实会话或连接服务器。
-  const serve = runInNewContext(`${main.slice(policyStart, policyEnd)}\n${main.slice(serveStart, serveEnd)}; serveApplication`, {
+  const context = {
     URL, Headers, Request, Response, Buffer, AbortSignal,
     backend: new URL('https://example.test'),
     sessionToken: 'test-session',
+    sessionRevision: 0, sessionLoginInProgress: false, sessionClearTask: undefined,
     trustedUrl: (url) => url.startsWith('lycan://app/'),
     loadSession: async () => 'test-session',
     saveSession: async () => {},
@@ -26,9 +27,104 @@ function proxyFixture(overrides = {}) {
       return Response.json({ id: 'test-group' }, { status: 201 });
     } },
     ...overrides,
-  });
-  return { serve, forwarded };
+  };
+  const serve = runInNewContext(`${main.slice(policyStart, policyEnd)}\n${main.slice(serveStart, serveEnd)}; serveApplication`, context);
+  return { serve, forwarded, context };
 }
+
+function sessionFixture(readEncrypted, overrides = {}) {
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const start = main.indexOf('async function loadSession(');
+  const end = main.indexOf('function trustedUrl(', start);
+  const clearStart = main.indexOf("ipcMain.handle('auth:clear',");
+  const clearEnd = main.indexOf('\nipcMain.handle(', clearStart + 1);
+  assert.ok(start > 0 && end > start);
+  const counts = { reads: 0, decryptions: 0 };
+  const context = {
+    sessionToken: undefined, sessionLoaded: false, sessionLoadPromise: undefined,
+    sessionRevision: 0, sessionMutationPromise: Promise.resolve(), sessionClearTask: undefined,
+    backend: new URL('https://example.test'), resolve,
+    app: { getPath: () => 'isolated-profile' },
+    readFile: async () => { counts.reads++; return readEncrypted(); },
+    safeStorage: { isEncryptionAvailable: () => true,
+      decryptString: value => { counts.decryptions++; return value.toString(); }, encryptString: value => Buffer.from(value) },
+    loginPreferences: { set: async () => {}, clear: async () => {} }, mkdir: async () => {}, writeFile: async () => {}, unlink: async () => {},
+    returnToAccountEntry: async () => {}, trustedSender: () => true,
+    audioShortcuts: { clear() {} }, screenShareWindows: { closeAll() {} },
+    activityMonitor: { clearMappings() {} }, voiceOverlay: { clear() {} },
+    ...overrides,
+  };
+  let clearAccount;
+  context.ipcMain = { handle: (_name, callback) => { clearAccount = () => callback({}); } };
+  const methods = runInNewContext(`${main.slice(start, end)}\n${main.slice(clearStart, clearEnd)}\n({ loadSession, saveSession, clearSession })`, context);
+  return { ...methods, clearAccount, context, counts };
+}
+
+function encryptedTestSession(token = 'a'.repeat(43)) {
+  return Buffer.from(JSON.stringify({ server: 'https://example.test', token }));
+}
+
+test('并发读取会话只读盘和解密一次，后续读取复用已加载状态', async () => {
+  let complete;
+  const ready = new Promise(resolve => { complete = resolve; });
+  const f = sessionFixture(() => ready);
+  const pending = Array.from({ length: 6 }, () => f.loadSession());
+  complete(encryptedTestSession());
+  assert.deepEqual(await Promise.all(pending), Array(6).fill('a'.repeat(43)));
+  assert.equal(f.counts.reads, 1);
+  assert.equal(f.counts.decryptions, 1);
+  assert.equal(await f.loadSession(), 'a'.repeat(43));
+  assert.equal(f.counts.reads, 1);
+});
+
+test('清除凭据后迟到的旧读取不能恢复会话，也不继续解密旧文件', async () => {
+  let complete;
+  const ready = new Promise(resolve => { complete = resolve; });
+  const f = sessionFixture(() => ready);
+  const pending = f.loadSession();
+  await f.clearSession();
+  complete(encryptedTestSession());
+  assert.equal(await pending, undefined);
+  assert.equal(await f.loadSession(), undefined);
+  assert.equal(f.counts.decryptions, 0);
+});
+
+test('保存新会话后迟到的旧读取不能覆盖新凭据', async () => {
+  let complete;
+  const ready = new Promise(resolve => { complete = resolve; });
+  const f = sessionFixture(() => ready);
+  const pending = f.loadSession();
+  const token = 'b'.repeat(43);
+  await f.saveSession(token, 'new-account');
+  complete(encryptedTestSession());
+  assert.equal(await pending, token);
+  assert.equal(await f.loadSession(), token);
+  assert.equal(f.counts.decryptions, 0);
+});
+
+test('共享的读取失败明确返回错误，修复后可重新读取而不永久缓存失败', async () => {
+  let fail;
+  const broken = new Promise((_resolve, reject) => { fail = reject; });
+  const f = sessionFixture(() => broken);
+  const pending = Array.from({ length: 6 }, () => f.loadSession());
+  fail(Object.assign(new Error('synthetic read failure'), { code: 'EIO' }));
+  const results = await Promise.allSettled(pending);
+  assert.equal(results.every(result => result.status === 'rejected' && /无法读取本机登录信息/.test(result.reason.message)), true);
+  f.context.readFile = async () => { f.counts.reads++; return encryptedTestSession(); };
+  assert.equal(await f.loadSession(), 'a'.repeat(43));
+  assert.equal(f.counts.reads, 2);
+});
+
+test('清除已确认后，旧读取的迟到错误不覆盖当前未登录状态', async () => {
+  let fail;
+  const broken = new Promise((_resolve, reject) => { fail = reject; });
+  const f = sessionFixture(() => broken);
+  const pending = f.loadSession();
+  await f.clearSession();
+  fail(Object.assign(new Error('obsolete synthetic read failure'), { code: 'EIO' }));
+  assert.equal(await pending, undefined);
+  assert.equal(await f.loadSession(), undefined);
+});
 
 test('转让前验证恢复密码经桌面代理转发并保留会话，不触发转让或更换登录', async () => {
   let forwardedRequest;
@@ -279,12 +375,160 @@ test('无效兑换响应不写入凭据，也不伪报网络失败', async () =>
 });
 
 test('已登录时拒绝兑换，不转发也不保存新凭据', async () => {
-  let saved = false;
-  const { serve, forwarded } = proxyFixture({ saveSession: async () => { saved = true; } });
-  const response = await serve(new Request('lycan://app/api/auth/access/redeem', { method: 'POST', body: '{}' }));
-  assert.equal(response.status, 409);
-  assert.equal(forwarded.length, 0);
-  assert.equal(saved, false);
+  for (const path of ['access/redeem', 'account/recover', 'qq/exchange']) {
+    let saved = false;
+    const { serve, forwarded } = proxyFixture({ saveSession: async () => { saved = true; } });
+    const response = await serve(new Request('lycan://app/api/auth/' + path, { method: 'POST', body: '{}' }));
+    assert.equal(response.status, 409, path);
+    assert.equal(forwarded.length, 0);
+    assert.equal(saved, false);
+  }
+});
+
+function loginResult(token = 'l'.repeat(43)) {
+  return Response.json({ sessionToken: token, user: { id: 'member', nickname: '合成账号', avatar: '', administrator: false } });
+}
+function loginRequest(path = 'access/redeem') {
+  return new Request('lycan://app/api/auth/' + path, { method: 'POST', body: '{}' });
+}
+
+test('认证等待网络期间其他入口不能并发兑换或保存', async () => {
+  let release, started;
+  const gate = new Promise(resolve => { release = resolve; });
+  const networkStarted = new Promise(resolve => { started = resolve; });
+  let requests = 0, writes = 0;
+  const f = proxyFixture({ loadSession: async () => undefined,
+    net: { fetch: async () => { if (++requests === 1) { started(); await gate; } return loginResult(); } },
+    saveSession: async () => { writes++; } });
+  const first = f.serve(loginRequest());
+  await networkStarted;
+  try {
+    const second = await f.serve(loginRequest('qq/exchange'));
+    assert.equal(second.status, 409);
+    assert.equal(requests, 1);
+  } finally { release(); await first; }
+  assert.equal(writes, 1);
+});
+
+test('认证等待本机写盘时仍保留唯一兑换资格', async () => {
+  let release, started;
+  const gate = new Promise(resolve => { release = resolve; });
+  const writing = new Promise(resolve => { started = resolve; });
+  let writes = 0;
+  const f = proxyFixture({ loadSession: async () => undefined, net: { fetch: async () => loginResult() },
+    saveSession: async () => { if (++writes === 1) { started(); await gate; } } });
+  const first = f.serve(loginRequest());
+  await writing;
+  try { assert.equal((await f.serve(loginRequest('qq/exchange'))).status, 409); }
+  finally { release(); await first; }
+  assert.equal(writes, 1);
+});
+
+test('清除后迟到的认证响应不再发起本机保存', async () => {
+  let release, started;
+  const gate = new Promise(resolve => { release = resolve; });
+  const networkStarted = new Promise(resolve => { started = resolve; });
+  let writes = 0;
+  const f = proxyFixture({ loadSession: async () => undefined,
+    net: { fetch: async () => { started(); await gate; return loginResult(); } },
+    saveSession: async () => { writes++; } });
+  const pending = f.serve(loginRequest());
+  await networkStarted;
+  f.context.sessionRevision++;
+  release();
+  assert.equal((await pending).status, 409);
+  assert.equal(writes, 0);
+});
+
+test('认证失败后释放资格，下一次可重新兑换', async () => {
+  let requests = 0;
+  const f = proxyFixture({ loadSession: async () => undefined,
+    net: { fetch: async () => { if (++requests === 1) throw new Error('synthetic failure'); return loginResult(); } } });
+  assert.equal((await f.serve(loginRequest())).status, 502);
+  assert.equal((await f.serve(loginRequest('qq/exchange'))).status, 200);
+});
+
+test('本机保存完成时会话已清除，不再向页面确认旧登录', async () => {
+  const f = proxyFixture({ loadSession: async () => undefined, net: { fetch: async () => loginResult() },
+    saveSession: async () => { f.context.sessionRevision++; } });
+  assert.equal((await f.serve(loginRequest())).status, 409);
+});
+
+test('显式清除的媒体收尾与偏好清理期间不开始新的认证', async () => {
+  const f = proxyFixture({ loadSession: async () => undefined, sessionClearTask: Promise.resolve(),
+    net: { fetch: async () => loginResult() } });
+  assert.equal((await f.serve(loginRequest('qq/exchange'))).status, 409);
+});
+
+test('显式清除进入媒体收尾就失效旧认证，重复IPC共用一次完整清理', async () => {
+  let release, calls = 0, preferencesCleared = 0;
+  const gate = new Promise(resolve => { release = resolve; });
+  const f = sessionFixture(async () => undefined, {
+    returnToAccountEntry: async () => { calls++; await gate; },
+    loginPreferences: { set: async () => {}, clear: async () => { preferencesCleared++; } },
+  });
+  const first = f.clearAccount();
+  const second = f.clearAccount();
+  try {
+    assert.ok(f.context.sessionRevision > 0);
+    assert.equal(calls, 1);
+    assert.ok(f.context.sessionClearTask);
+  } finally { release(); await Promise.all([first, second]); }
+  assert.equal(preferencesCleared, 1);
+  assert.equal(f.context.sessionClearTask, undefined);
+});
+
+for (const phase of ['preferences', 'mkdir', 'write']) {
+  test(`在${phase}等待期间清除，旧保存不再恢复内存或磁盘凭据`, async () => {
+    let release, started, disk;
+    const gate = new Promise(resolve => { release = resolve; });
+    const writing = new Promise(resolve => { started = resolve; });
+    const wait = async step => { if (phase === step) { started(); await gate; } };
+    const f = sessionFixture(async () => undefined, {
+      loginPreferences: { set: () => wait('preferences') }, mkdir: () => wait('mkdir'),
+      writeFile: async (_path, bytes) => { await wait('write'); disk = bytes; },
+      unlink: async () => { disk = undefined; },
+    });
+    const saving = f.saveSession('o'.repeat(43), 'old').then(() => null, error => error);
+    await writing;
+    const clearing = f.clearSession();
+    assert.equal(f.context.sessionToken, undefined);
+    release();
+    const error = await saving;
+    await clearing;
+    assert.ok(error, '旧保存必须明确取消');
+    assert.equal(f.context.sessionToken, undefined);
+    assert.equal(disk, undefined);
+  });
+}
+
+test('旧写入等待、清除与新保存按序完成，最终只保留新凭据', async () => {
+  let release, started, disk, writes = 0;
+  const gate = new Promise(resolve => { release = resolve; });
+  const writing = new Promise(resolve => { started = resolve; });
+  const f = sessionFixture(async () => undefined, {
+    writeFile: async (_path, bytes) => { if (++writes === 1) { started(); await gate; } disk = bytes; },
+    unlink: async () => { disk = undefined; },
+  });
+  const old = f.saveSession('o'.repeat(43), 'old').then(() => null, error => error);
+  await writing;
+  const clearing = f.clearSession();
+  const renewed = f.saveSession('n'.repeat(43), 'new');
+  release();
+  assert.ok(await old);
+  await clearing;
+  await renewed;
+  assert.equal(f.context.sessionToken, 'n'.repeat(43));
+  assert.equal(JSON.parse(disk.toString()).token, 'n'.repeat(43));
+});
+
+test('写入失败不阻塞后续清除与新的保存', async () => {
+  let writes = 0;
+  const f = sessionFixture(async () => undefined, { writeFile: async () => { if (++writes === 1) throw new Error('synthetic disk failure'); } });
+  await assert.rejects(f.saveSession('o'.repeat(43), 'old'));
+  await f.clearSession();
+  await f.saveSession('n'.repeat(43), 'new');
+  assert.equal(f.context.sessionToken, 'n'.repeat(43));
 });
 
 test('当前会话401即使本机清理失败仍通知退出，旧会话401不清理新凭据', async () => {

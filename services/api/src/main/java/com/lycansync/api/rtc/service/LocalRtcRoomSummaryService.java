@@ -1,7 +1,7 @@
 package com.lycansync.api.rtc.service;
 
 import com.lycansync.api.auth.model.AuthenticatedUser;
-import com.lycansync.api.group.dto.GroupSummaryResponse;
+import com.lycansync.api.group.model.GroupRtcRoom;
 import com.lycansync.api.group.service.GroupService;
 import com.lycansync.api.rtc.dto.RtcParticipantSummaryResponse;
 import com.lycansync.api.rtc.dto.RtcRoomOccupancyResponse;
@@ -66,12 +66,12 @@ public class LocalRtcRoomSummaryService {
     }
 
     public List<RtcRoomOccupancyResponse> getOccupancies(AuthenticatedUser user) {
-        List<GroupSummaryResponse> groups = groupService.findGroups(user);
+        List<GroupRtcRoom> groups = groupService.findMemberRtcRooms(user);
         if (groups.isEmpty()) {
             return List.of();
         }
         Map<String, UUID> groupIdsByRoomName = groups.stream()
-                .collect(Collectors.toMap(group -> GroupRtcRooms.roomName(groupService.memberRoomKey(group.id(), user)), GroupSummaryResponse::id));
+                .collect(Collectors.toMap(group -> GroupRtcRooms.roomName(group.roomKey()), GroupRtcRoom::id));
         try {
             Response<List<Room>> response = roomServiceClient.listRooms(List.copyOf(groupIdsByRoomName.keySet())).execute();
             if (!response.isSuccessful() || response.body() == null) {

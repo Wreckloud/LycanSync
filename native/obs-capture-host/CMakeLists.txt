@@ -137,6 +137,14 @@ target_compile_features(lycansync-voice-transmission-tests PRIVATE cxx_std_20)
 target_compile_options(lycansync-voice-transmission-tests PRIVATE /utf-8)
 set_target_properties(lycansync-voice-transmission-tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")
 
+# 加载固定插件核对真实注册表；合成端点与来源替换不打开任何采集设备。
+add_executable(lycansync-voice-reference-tests EXCLUDE_FROM_ALL tests/voice_reference.cpp)
+target_compile_features(lycansync-voice-reference-tests PRIVATE cxx_std_20)
+target_compile_definitions(lycansync-voice-reference-tests PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_compile_options(lycansync-voice-reference-tests PRIVATE /utf-8)
+target_link_libraries(lycansync-voice-reference-tests PRIVATE lycansync_libobs ole32)
+set_target_properties(lycansync-voice-reference-tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/test-tools")
+
 # 编译正式清理代码，替换 OBS 调用和等待结果，不初始化设备或真的等待八秒。
 function(extract_cleanup_code output file begin end)
   file(READ "${CMAKE_CURRENT_SOURCE_DIR}/${file}" source)

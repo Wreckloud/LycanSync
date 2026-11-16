@@ -105,7 +105,7 @@ def maintain(root, apply=False):
     if maintenance.is_dir():
         for file in maintenance.iterdir():
             # JSON/TXT 也可能是维护配置或说明，只自动清理日志和本工具生成的报告。
-            report = re.fullmatch(r'release-cleanup-\d{8}T\d{6}Z\.json', file.name)
+            report = re.fullmatch(r'release-cleanup-\d{8}T\d{6}(?:\d{6})?Z\.json', file.name)
             if file.is_file() and not file.is_symlink() and (file.suffix == '.log' or report) and file.stat().st_mtime < cutoff:
                 actions[file] = 'expired-maintenance-report'
     plan = [{'path': str(p.relative_to(root)), 'reason': reason, 'bytes': p.stat().st_size,
@@ -118,9 +118,11 @@ def maintain(root, apply=False):
         raise ValueError('更新入口已变化，停止清理')
     maintenance = root / 'maintenance'
     maintenance.mkdir(mode=0o700, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     report = maintenance / f'release-cleanup-{stamp}.json'
-    report.write_text(json.dumps({'summary': result, 'files': plan}, indent=2) + '\n')
+    # 同秒重试保留每次删除清单；已有同名文件或链接时，在删除前明确停止。
+    with report.open('x') as stream:
+        stream.write(json.dumps({'summary': result, 'files': plan}, indent=2) + '\n')
     report.chmod(0o600)
     free_before = shutil.disk_usage(root).free
     for row in plan:

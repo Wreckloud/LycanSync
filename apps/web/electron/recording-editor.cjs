@@ -12,15 +12,16 @@ function createRecordingEditor({ library, executablePath, onProgress, onDiagnost
         || startMs < 0 || endMs - startMs < 100) throw new Error('请选择至少 0.1 秒的片段。');
     const task = active = { requestId, child: null, cancelled: false, done: null };
     task.done = (async () => {
-      let temporary; let destination; let registered = false;
+      let temporary; let destination; let renamed = false; let registered = false;
       try {
         const source = await library.entry(sourceId);
         const sourcePath = await library.filePath(sourceId);
         if (source.durationMs !== null && endMs > source.durationMs + 100) throw new Error('片段超出了录像时长。');
         const id = randomUUID();
         destination = join(dirname(sourcePath), recordingFileName(source.applicationName, 'clip', id));
-        temporary = destination + '.partial';
-        const reservation = await fs.open(temporary, 'wx'); await reservation.close();
+        const pendingPath = destination + '.partial';
+        const reservation = await fs.open(pendingPath, 'wx'); temporary = pendingPath;
+        await reservation.close();
         if (task.cancelled) throw new Error('已取消保存片段。');
         await new Promise((resolve, reject) => {
           const child = task.child = spawnProcess(executablePath, [sourcePath, temporary, String(startMs), String(endMs)],
@@ -41,7 +42,7 @@ function createRecordingEditor({ library, executablePath, onProgress, onDiagnost
           });
         });
         if (task.cancelled) throw new Error('已取消保存片段。');
-        await fs.rename(temporary, destination); temporary = null;
+        await fs.rename(temporary, destination); renamed = true; temporary = null;
         const clip = { id, librarySessionId: source.sessionId, path: destination, kind: 'clip',
           applicationName: source.applicationName, saved: true, durationMs: endMs - startMs,
           width: source.width ? source.width & ~1 : null, height: source.height ? source.height & ~1 : null };
@@ -59,7 +60,7 @@ function createRecordingEditor({ library, executablePath, onProgress, onDiagnost
         throw error;
       } finally {
         // 只删除本任务独占创建、尚未登记的半成品；原片始终只读。
-        for (const file of [temporary, !registered && destination].filter(Boolean)) {
+        for (const file of [temporary, renamed && !registered && destination].filter(Boolean)) {
           try { await fs.unlink(file); }
           catch (error) { if (error.code !== 'ENOENT') onDiagnostic?.({ stage: 'recordingClipCleanupFailed', message: error.code }); }
         }

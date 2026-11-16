@@ -24,7 +24,7 @@ function createNativeVideoTextures({ getVideo, getBridge, getWindow, sharedTextu
   function handleNativeSharedTextureFrame(state, frame) {
     const video = getVideo();
     if (!video || video.sessionId !== frame.sessionId || video.stopping || video.suspended) {
-      if (video && video.sessionId === frame.sessionId) {
+      if (video && video.sessionId === frame.sessionId && !video.imported.has(frame.slotIndex)) {
         void releaseNativeVideoSlot(state, frame.sessionId, frame.slotIndex).catch(() => {});
       }
       return;
@@ -139,7 +139,10 @@ function createNativeVideoTextures({ getVideo, getBridge, getWindow, sharedTextu
       if (!video.failureNotified) recordVideoFailure(importStage, error, frame);
       owned?.release();
       if (imported) releaseImport();
-      else void releaseNativeVideoSlot(state, video.sessionId, frame.slotIndex).catch(() => {});
+      // 重复槽位仍属于先前的消费者，只能由它的总释放回调归还。
+      else if (!video.imported.has(frame.slotIndex)) {
+        void releaseNativeVideoSlot(state, video.sessionId, frame.slotIndex).catch(() => {});
+      }
       notifyNativeVideoError(video, 'sharedTextureImportFailed');
     }
   }

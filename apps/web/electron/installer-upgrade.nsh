@@ -122,6 +122,8 @@ Function PrepareApplicationReplacement
   Call EnsureVisualCppRuntime
   !insertmacro LycanApplicationEntries LycanCheckEntry
   StrCpy $lycanBackupRoot "$INSTDIR\.lycan-update-backup"
+  ; 备份也必须是本安装的普通目录，不能沿链接读取或清理其他位置。
+  !insertmacro LycanCheckEntry ".lycan-update-backup" directory
   ${If} ${FileExists} "$lycanBackupRoot"
     ClearErrors
     FileOpen $1 "$lycanBackupRoot\state" r

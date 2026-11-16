@@ -121,7 +121,7 @@ class ChatApplicationIT {
 
     @BeforeEach
     void resetDatabase() throws IOException {
-        jdbc.sql("TRUNCATE system_state, auth_qq_identity, auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_file_upload_reservation, "
+        jdbc.sql("TRUNCATE rtc_voice_time, system_state, auth_qq_identity, auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_file_upload_reservation, "
                 + "chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
         jdbc.sql("UPDATE chat_file_storage_quota SET used_bytes = 0, reserved_bytes = 0 WHERE id = 1").update();
         jdbc.sql("INSERT INTO system_state(id) VALUES (1)").update();
@@ -214,6 +214,54 @@ class ChatApplicationIT {
                 .param("messageId", messageId).query(Long.class).single()).isEqualTo(1L);
         assertThat(jdbc.sql("SELECT next_message_sequence FROM chat_group WHERE id = :groupId")
                 .param("groupId", UUID.fromString(groupId)).query(Long.class).single()).isEqualTo(2L);
+    }
+
+    @Test
+    void shouldRejectAnImageRetryWhenMembershipWasRevokedDuringImageRead() throws Exception {
+        String ownerToken = localAuth.register(new LocalRegistrationRequest("RetryOwner", PASSWORD)).sessionToken();
+        var sender = localAuth.register(new LocalRegistrationRequest("RetrySender", PASSWORD));
+        String groupId = createGroup(ownerToken);
+        addFriend(groupId, ownerToken, sender.sessionToken());
+        UUID messageId = UUID.randomUUID();
+        mvc.perform(multipart("/api/groups/{groupId}/messages", groupId)
+                        .file(new MockMultipartFile("image", "screen.png", "image/png", PNG))
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + sender.sessionToken())
+                        .param("messageId", messageId.toString())).andExpect(status().isCreated());
+        CountDownLatch readingImage = new CountDownLatch(1);
+        CountDownLatch finishReading = new CountDownLatch(1);
+        MockMultipartFile delayedImage = new MockMultipartFile("image", "screen.png", "image/png", PNG) {
+            @Override
+            public byte[] getBytes() throws IOException {
+                readingImage.countDown();
+                try { await(finishReading); }
+                catch (InterruptedException exception) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted synthetic image read", exception);
+                }
+                return super.getBytes();
+            }
+        };
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<Integer> retry = executor.submit(() -> mvc.perform(multipart("/api/groups/{groupId}/messages", groupId)
+                            .file(delayedImage).header(HttpHeaders.AUTHORIZATION, "Bearer " + sender.sessionToken())
+                            .param("messageId", messageId.toString()))
+                    .andReturn().getResponse().getStatus());
+            assertThat(readingImage.await(10, TimeUnit.SECONDS)).isTrue();
+            mvc.perform(delete("/api/groups/{groupId}/members/{userId}", groupId, sender.user().id())
+                            .header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken))
+                    .andExpect(status().isNoContent());
+            finishReading.countDown();
+            assertThat(retry.get(10, TimeUnit.SECONDS)).isEqualTo(404);
+            assertThat(jdbc.sql("SELECT count(*) FROM chat_message WHERE id = :id")
+                    .param("id", messageId).query(Long.class).single()).isOne();
+            assertThat(jdbc.sql("SELECT count(*) FROM chat_attachment WHERE message_id = :id")
+                    .param("id", messageId).query(Long.class).single()).isOne();
+        } finally {
+            finishReading.countDown();
+            executor.shutdownNow();
+            assertThat(executor.awaitTermination(10, TimeUnit.SECONDS)).isTrue();
+        }
     }
 
     @Test
@@ -549,6 +597,10 @@ class ChatApplicationIT {
         Files.write(temporaryFile, new byte[] { 1, 2 });
         Files.write(orphanFile, new byte[] { 3, 4 });
         Files.write(unrelatedFile, new byte[] { 4, 5 });
+        List<Path> additionalOrphans = new ArrayList<>();
+        for (int index = 0; index < 299; index++) {
+            additionalOrphans.add(Files.write(FILE_STORAGE.resolve(UUID.randomUUID() + ".bin"), new byte[]{6}));
+        }
         Instant crashedAt = Instant.now().minus(Duration.ofMinutes(5));
         Files.setLastModifiedTime(temporaryFile, FileTime.from(crashedAt));
         Files.setLastModifiedTime(orphanFile, FileTime.from(crashedAt));
@@ -563,6 +615,7 @@ class ChatApplicationIT {
 
         assertThat(Files.exists(temporaryFile)).isFalse();
         assertThat(Files.exists(orphanFile)).isFalse();
+        assertThat(additionalOrphans).allSatisfy(path -> assertThat(path).doesNotExist());
         assertThat(Files.exists(committedFile)).isTrue();
         assertThat(Files.exists(unrelatedFile)).isTrue();
         assertThat(jdbc.sql("SELECT count(*) FROM chat_file_upload_reservation")

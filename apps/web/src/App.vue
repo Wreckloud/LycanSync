@@ -773,7 +773,13 @@ async function joinGroup(groupId: string) {
 
   if (joinedGroupId.value !== null) {
     void callSounds.left();
-    await rtc.leave();
+    try { await rtc.leave(); }
+    catch {
+      if (attempt !== joinAttempt) return;
+      joiningGroupId.value = null;
+      viewerNotice.value = '退出当前语音时发生问题，未切换群组。请重试或重启应用。';
+      return;
+    }
     if (attempt !== joinAttempt) return;
     joinedGroupId.value = null;
   }

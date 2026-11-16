@@ -19,7 +19,7 @@ const group = { id: groupId, name: '周末开黑', description: '资料卡布局
 
 test.beforeEach(async ({ page }) => {
   // 所有业务请求都停在本地模拟，不连接真实服务器或设备。
-  await page.route('**/api/**', route => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
+  await page.route(url => url.pathname.startsWith('/api/'), route => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
   await page.route('**/api/auth/options', route => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', route => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', route => route.fulfill({ json: user }));
@@ -609,7 +609,7 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
   await expect(page.getByRole('checkbox', { name: '共享声音', exact: true })).not.toBeChecked();
   await expect(page.getByRole('checkbox', { name: /隐藏共享画面中的光标/ })).toBeChecked();
   await expect(page.getByRole('heading', { name: '录制内容', exact: true })).toBeVisible();
-  await expect(page.locator('.settings-recording-page h2')).toHaveText(['共享画面', '共享录制', '文件与画质', '即时回放', '录像管理']);
+  await expect(page.locator('.settings-recording-page h2')).toHaveText(['共享画面', '录像管理', '共享录制', '文件与画质', '即时回放']);
   await expect(replay).toBeEnabled();
   await expect(replay).toBeChecked();
   expect(await page.evaluate(() => localStorage.getItem('test.replayEnabled'))).toBe('true');
@@ -631,13 +631,13 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
   await expect(manager).toBeVisible();
   await expect(manager.getByText('无法读取录像列表，请检查安装目录的读写权限后重试。')).toBeVisible();
   await manager.getByRole('button', { name: '重新读取', exact: true }).click();
-  await expect(manager.getByText('暂无录像记录。旧版保存的录像仍可在录像目录中找到。')).toBeVisible();
+  await expect(manager.getByText('暂无录像。', { exact: true })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('recording-library.png') });
   await page.keyboard.press('Escape');
   await expect(manager).toHaveCount(0);
   await expect(managerButton).toBeFocused();
   await managerButton.click();
-  await expect(manager.getByText('暂无录像记录。旧版保存的录像仍可在录像目录中找到。')).toBeVisible();
+  await expect(manager.getByText('暂无录像。', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('test.libraryReads'))).toBe('3');
   await manager.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(manager).toHaveCount(0);

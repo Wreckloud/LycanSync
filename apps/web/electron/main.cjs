@@ -138,6 +138,11 @@ let canClose = false;
 let closeTimer;
 let sessionToken;
 let sessionLoaded = false;
+let sessionLoadPromise;
+let sessionRevision = 0;
+let sessionMutationPromise = Promise.resolve();
+let sessionLoginInProgress = false;
+let sessionClearTask;
 let currentActivity = null;
 let startupReady = false;
 let allowQuitAfterMediaHelper = false;
@@ -450,39 +455,74 @@ function stopActivityHelper() { activityMonitor.stop(); }
 
 async function loadSession() {
   if (sessionLoaded) return sessionToken;
-  try {
-    const encrypted = await readFile(resolve(app.getPath('userData'), 'session.bin'));
-    if (!safeStorage.isEncryptionAvailable()) throw new Error('系统加密不可用。');
-    const saved = JSON.parse(safeStorage.decryptString(encrypted));
-    // 会话绑定服务地址，不能向另一个部署实例发送旧凭据。
-    if (saved.server === backend.origin && /^[A-Za-z0-9_-]{43}$/.test(saved.token)) sessionToken = saved.token;
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw new Error('无法读取本机登录信息，请清除本机登录信息后重新登录。');
-  }
-  sessionLoaded = true;
-  return sessionToken;
+  sessionLoadPromise ??= (async () => {
+    try {
+      const encrypted = await readFile(resolve(app.getPath('userData'), 'session.bin'));
+      // 清除或新保存已确认后，旧磁盘读取不能恢复或覆盖当前会话。
+      if (sessionLoaded) return sessionToken;
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('系统加密不可用。');
+      const saved = JSON.parse(safeStorage.decryptString(encrypted));
+      // 会话绑定服务地址，不能向另一个部署实例发送旧凭据。
+      if (saved.server === backend.origin && /^[A-Za-z0-9_-]{43}$/.test(saved.token)) sessionToken = saved.token;
+    } catch (error) {
+      if (!sessionLoaded && error.code !== 'ENOENT') throw new Error('无法读取本机登录信息，请清除本机登录信息后重新登录。');
+    }
+    sessionLoaded = true;
+    return sessionToken;
+  })().finally(() => { sessionLoadPromise = undefined; });
+  return sessionLoadPromise;
+}
+
+function queueSessionMutation(operation) {
+  const task = sessionMutationPromise.then(operation);
+  // 调用方仍收到原错误，后续清除或重试不能被前一次失败阻断。
+  sessionMutationPromise = task.catch(() => undefined);
+  return task;
 }
 
 async function saveSession(token, accountId) {
-  if (!safeStorage.isEncryptionAvailable()) throw new Error('系统加密功能不可用，无法安全保存自动登录信息。');
-  // 新凭据持久化前记录首次手动确认，避免关窗重开绕过账号确认。
-  await loginPreferences.set(accountId, true, true);
-  const encrypted = safeStorage.encryptString(JSON.stringify({ server: backend.origin, token }));
-  await mkdir(app.getPath('userData'), { recursive: true });
-  await writeFile(resolve(app.getPath('userData'), 'session.bin'), encrypted);
-  sessionToken = token;
-  sessionLoaded = true;
+  const revision = sessionRevision;
+  const ensureCurrent = () => { if (revision !== sessionRevision) throw new Error('登录流程已取消。'); };
+  return queueSessionMutation(async () => {
+    ensureCurrent();
+    if (!safeStorage.isEncryptionAvailable()) throw new Error('系统加密功能不可用，无法安全保存自动登录信息。');
+    // 新凭据持久化前记录首次手动确认，避免关窗重开绕过账号确认。
+    await loginPreferences.set(accountId, true, true);
+    ensureCurrent();
+    const encrypted = safeStorage.encryptString(JSON.stringify({ server: backend.origin, token }));
+    await mkdir(app.getPath('userData'), { recursive: true });
+    ensureCurrent();
+    await writeFile(resolve(app.getPath('userData'), 'session.bin'), encrypted);
+    ensureCurrent();
+    sessionToken = token;
+    sessionLoaded = true;
+  });
 }
 
 async function clearSession() {
-  try { audioShortcuts.clear(); } catch { console.error('audio shortcut cleanup failed'); }
-  screenShareWindows.closeAll();
+  sessionRevision++;
   sessionToken = undefined;
   sessionLoaded = true;
+  try { audioShortcuts.clear(); } catch { console.error('audio shortcut cleanup failed'); }
+  screenShareWindows.closeAll();
   activityMonitor.clearMappings();
   voiceOverlay.clear();
-  try { await unlink(resolve(app.getPath('userData'), 'session.bin')); }
-  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  // 写入已开始时先等它结束再移除，不能让迟到的旧写入重新生成凭据文件。
+  return queueSessionMutation(async () => {
+    try { await unlink(resolve(app.getPath('userData'), 'session.bin')); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  });
+}
+
+function clearAccountSession() {
+  if (sessionClearTask) return sessionClearTask;
+  sessionRevision++;
+  sessionClearTask = (async () => {
+    await returnToAccountEntry();
+    await clearSession();
+    await loginPreferences.clear();
+  })().finally(() => { sessionClearTask = undefined; });
+  return sessionClearTask;
 }
 
 function trustedUrl(value) {
@@ -573,6 +613,8 @@ async function serveApplication(request) {
         ? { streamBody: true } : undefined);
     if (!routePolicy) return new Response(null, { status: 404 });
     let failureMessage = '无法读取请求内容，请重试。';
+    let ownsLogin = false;
+    let loginRevision;
     try {
       const streamingUpload = routePolicy.streamBody === true;
       const body = streamingUpload ? request.body
@@ -582,8 +624,12 @@ async function serveApplication(request) {
       }
       failureMessage = '无法读取本机登录信息，请清除后重新登录。';
       const token = await loadSession();
-      if (['/api/auth/access/redeem', '/api/auth/account/recover'].includes(url.pathname) && token) {
-        return Response.json({ detail: '请先清除当前设备的登录信息，再恢复账号或使用邀请链接。' }, { status: 409 });
+      if (routePolicy.savesSession) {
+        if (token) return Response.json({ detail: '请先清除当前设备的登录信息，再使用其他登录方式。' }, { status: 409 });
+        if (sessionLoginInProgress || sessionClearTask) return Response.json({ detail: '当前登录或清理尚未完成，请稍后重试。' }, { status: 409 });
+        sessionLoginInProgress = true;
+        ownsLogin = true;
+        loginRevision = sessionRevision;
       }
       failureMessage = '无法连接服务器，请检查网络和服务器状态。';
       const response = await net.fetch(new URL(url.pathname + url.search, backend).href, {
@@ -619,12 +665,14 @@ async function serveApplication(request) {
       if (routePolicy.savesSession && response.ok) {
         failureMessage = '无法确认登录结果。';
         const result = await response.json();
+        if (loginRevision !== sessionRevision) return Response.json({ detail: '登录流程已变化，请重新确认。' }, { status: 409 });
         if (!/^[A-Za-z0-9_-]{43}$/.test(result?.sessionToken ?? '')
             || typeof result.user?.id !== 'string' || !result.user.id
             || typeof result.user.nickname !== 'string' || typeof result.user.avatar !== 'string'
             || typeof result.user.administrator !== 'boolean') throw new Error('登录响应无效');
         failureMessage = '无法保存本机登录信息，请检查数据目录的读写权限和系统加密功能后重试。';
         await saveSession(result.sessionToken, result.user.id);
+        if (loginRevision !== sessionRevision) return Response.json({ detail: '登录流程已变化，请重新确认。' }, { status: 409 });
         // 会话原文只进入主进程的系统加密存储，不暴露给渲染页面。
         delete result.sessionToken;
         return Response.json(result, { headers: { 'Cache-Control': 'no-store' } });
@@ -641,8 +689,9 @@ async function serveApplication(request) {
         'Cache-Control': 'no-store',
       } });
     } catch {
+      if (ownsLogin && loginRevision !== sessionRevision) return Response.json({ detail: '登录流程已变化，请重新确认。' }, { status: 409 });
       return Response.json({ message: failureMessage }, { status: 502, headers: { 'Cache-Control': 'no-store' } });
-    }
+    } finally { if (ownsLogin) sessionLoginInProgress = false; }
   }
   if (request.method !== 'GET') return new Response(null, { status: 405 });
   // 保留桌面同源 API 和权限边界，仅把开发资源交给 Vite；热更新 WebSocket 直连本机。
@@ -1532,11 +1581,9 @@ ipcMain.handle('auth:auto-login:set', (event, accountId, enabled, manualEntryReq
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
   return loginPreferences.set(accountId, enabled, manualEntryRequired);
 });
-ipcMain.handle('auth:clear', async (event) => {
+ipcMain.handle('auth:clear', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
-  await returnToAccountEntry();
-  await clearSession();
-  await loginPreferences.clear();
+  return clearAccountSession();
 });
 
 ipcMain.handle('settings:server:get', (event) => {

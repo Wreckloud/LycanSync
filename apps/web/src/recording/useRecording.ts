@@ -38,6 +38,9 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
   const successNotice = shallowRef<{ message: string } | null>(null);
   const changingSource = ref(false);
   let sourceChangeVersion = 0;
+  // 停止只撤销对应输出的准备请求，另一输出仍可继续启动。
+  let recordingStartVersion = 0;
+  let replayStartVersion = 0;
   const now = ref(performance.now());
   let elapsedAnchor: { id: string; at: number; seconds: number } | undefined;
   const active = computed(() => changingSource.value || state.value.holdingResources || state.value.continuing || ['starting', 'recording', 'stopping'].includes(state.value.phase));
@@ -122,19 +125,20 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
     finally { pending.value = false; }
   }
   async function startCurrent(previousId?: string) {
+    const version = recordingStartVersion;
     // “共享并录制”可能与自动回放同时到达，等待回放准备完成，不丢弃显式录制请求。
     if (replayStartCommand.value) await replayStartCommand.value;
-    if (disposed || !desktop || busy.value || active.value || !options.canStart()) return;
+    if (disposed || version !== recordingStartVersion || !desktop || busy.value || active.value || !options.canStart()) return;
     const track = options.track();
     if (!track) { reportNotice(messages.recordingShareUnavailable, 'recording'); return; }
     pending.value = true; notice.value = '';
     try {
       demandTrack = track;
       await setNativeScreenRecordingDemand(track, true);
-      if (disposed || options.track() !== track || !options.canStart()) return;
+      if (disposed || version !== recordingStartVersion || options.track() !== track || !options.canStart()) return;
       const revision = stateRevision;
       const next = await desktop.startRecording(previousId);
-      if (disposed) { await desktop.stopRecording(next.recordingId); return; }
+      if (disposed || version !== recordingStartVersion) { await desktop.stopRecording(next.recordingId); return; }
       if (revision === stateRevision) setState(next);
       // 换源续录不提示重新开始；迟到回复也不能给已停止的录像补播开始音。
       if (!previousId && next.recordingId === state.value.recordingId && state.value.phase === 'recording' && !state.value.error) options.onStarted?.();
@@ -160,12 +164,14 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
   }
   async function stop() {
     sourceChangeVersion++;
+    recordingStartVersion++;
     await stopCurrent();
   }
   async function replayAction(action: 'start' | 'save' | 'stop') {
     if (!desktop || (action !== 'stop' && pending.value) || (action === 'start' && (busy.value || replayActive.value || !options.canStart()))) return;
     if (action === 'save' && (replaySavePending || state.value.replay?.phase !== 'buffering' || state.value.replay.saving || state.value.replay.error)) return;
-    if (action === 'stop') sourceChangeVersion++;
+    if (action === 'stop') { sourceChangeVersion++; replayStartVersion++; }
+    const version = replayStartVersion;
     if (action === 'save') replaySavePending = true;
     else pending.value = true;
     notice.value = '';
@@ -177,12 +183,12 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
         replayAttemptTrack = track;
         demandTrack = track;
         await setNativeScreenRecordingDemand(track, true);
-        if (disposed || options.track() !== track || !options.canStart()) {
-          if (replayAttemptTrack === track) replayAttemptTrack = undefined;
+        if (disposed || version !== replayStartVersion || options.track() !== track || !options.canStart()) {
+          if (version === replayStartVersion && replayAttemptTrack === track) replayAttemptTrack = undefined;
           return;
         }
         const next = await desktop.startReplay();
-        if (disposed) { await desktop.stopReplay(); return; }
+        if (disposed || version !== replayStartVersion) { await desktop.stopReplay(); return; }
         if (revision === stateRevision) setState(next);
       } else {
         const next = await (action === 'save' ? desktop.saveReplay() : desktop.stopReplay());

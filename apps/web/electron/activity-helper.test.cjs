@@ -222,6 +222,21 @@ test('停止后旧消息不能重新发布，待处理窗口请求明确失败�
   assert.equal(timers.size, 0);
 });
 
+test('故障等待重启时手动重试，随后停止不能被遗留计时器重新启动', async () => {
+  const f = fixture();
+  try {
+    f.children[0].emit('exit');
+    const configuring = f.monitor.configure([]);
+    for (const command of f.children[1].commands) f.reply(1, command);
+    await configuring;
+    f.children[1].emit('exit');
+    f.monitor.stop();
+    for (const timer of [...f.timers.values()]) if (timer.delay === 5000) timer.callback();
+    assert.equal(f.children.length, 2);
+    assert.equal(f.timers.size, 0);
+  } finally { f.monitor.stop(); }
+});
+
 test('清除账号名称先清空动态，旧配置无权恢复；下一进程只恢复空配置', async () => {
   const { monitor, children, activities, timers, reply, activity } = fixture();
   try {

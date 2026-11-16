@@ -1,33 +1,28 @@
-import { execFileSync } from 'node:child_process';
 import { createHmac, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { createServer } from 'node:http';
-import { request } from 'node:https';
+import { createServer, request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { resolve } from 'node:path';
 import { ModuleKind, ScriptTarget, transpileModule } from 'typescript';
 
 export async function startEncodingBenchmarkServer() {
-  const host = process.env.LYCANSYNC_BENCHMARK_SSH_HOST;
   const livekitUrl = process.env.LYCANSYNC_BENCHMARK_LIVEKIT_URL;
-  if (!host || !livekitUrl) throw new Error('请指定 LYCANSYNC_BENCHMARK_SSH_HOST 和 LYCANSYNC_BENCHMARK_LIVEKIT_URL');
-  // 服务密钥只用于签发本次房间的短时令牌，不写测试产物或输出日志。
-  const settings = Object.fromEntries(execFileSync('ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=6', host,
-    'cat /opt/lycansync-invite/.env'], { encoding: 'utf8', timeout: 10_000 }).split(/\r?\n/)
-    .filter((line) => line && !line.startsWith('#') && line.includes('=')).map((line) => {
-      const index = line.indexOf('=');
-      return [line.slice(0, index), line.slice(index + 1)];
-    }));
-  const key = settings.LIVEKIT_API_KEY;
-  const secret = settings.LIVEKIT_API_SECRET;
-  if (!key || !secret) throw new Error('测试服务器缺少 LiveKit 配置');
-  const ca = readFileSync(resolve(process.env.LYCANSYNC_BENCHMARK_CA_FILE ?? '../../release/server/lycansync-current-local-ca.crt'));
+  const key = process.env.LYCANSYNC_BENCHMARK_API_KEY;
+  const secret = process.env.LYCANSYNC_BENCHMARK_API_SECRET;
+  if (!livekitUrl || !key || !secret) throw new Error('请指定独立测试 LiveKit 地址、API key 与 API secret');
+  const signingSecret = Buffer.from(secret);
+  const addressUrl = new URL(livekitUrl);
+  if (!['ws:', 'wss:'].includes(addressUrl.protocol)) throw new Error('测试 LiveKit 地址必须使用 ws 或 wss');
+  // 仅使用独立媒体测试实例的凭据，不读取业务服务器的部署密钥或绕过成员鉴权。
+  const ca = process.env.LYCANSYNC_BENCHMARK_CA_FILE
+    ? readFileSync(resolve(process.env.LYCANSYNC_BENCHMARK_CA_FILE)) : undefined;
   const room = 'lycansync-encoding-benchmark-' + randomUUID();
   function token(video: object, identity: string) {
     const now = Math.floor(Date.now() / 1000);
     const body = [{ alg: 'HS256', typ: 'JWT' },
       { iss: key, sub: identity, nbf: now - 5, exp: now + 180, video }]
       .map((value) => Buffer.from(JSON.stringify(value)).toString('base64url')).join('.');
-    return body + '.' + createHmac('sha256', secret).update(body).digest('base64url');
+    return body + '.' + createHmac('sha256', signingSecret).update(body).digest('base64url');
   }
   const sdk = readFileSync(resolve('node_modules/livekit-client/dist/livekit-client.esm.mjs'));
   // 测试直接加载生产需求合并及编码更新函数，不复制另一套实现。
@@ -66,7 +61,8 @@ export async function startEncodingBenchmarkServer() {
     async close() {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
       // 仅删除本次随机房间；未创建成功时的 404 表示无需清理，其他错误必须报告。
-      const url = new URL('/twirp/livekit.RoomService/DeleteRoom', livekitUrl.replace(/^wss:/, 'https:'));
+      const url = new URL('/twirp/livekit.RoomService/DeleteRoom', livekitUrl.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:'));
+      const request = url.protocol === 'https:' ? httpsRequest : httpRequest;
       await new Promise<void>((resolve, reject) => {
         const req = request(url, { method: 'POST', ca, headers: {
           'Content-Type': 'application/json', Authorization: 'Bearer ' + token({ roomCreate: true }, 'encoding-cleanup'),

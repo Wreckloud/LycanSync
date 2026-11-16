@@ -52,6 +52,7 @@ export function useAudioOutput(preferences: ReturnType<typeof useAudioPreference
     }
   }
   let refreshVersion = 0;
+  let refreshTask: Promise<void> | undefined;
   let routeVersion = 0;
 
   function apply(entry: OutputEntry): Promise<void> {
@@ -123,24 +124,34 @@ export function useAudioOutput(preferences: ReturnType<typeof useAudioPreference
     } };
   }
 
-  async function refresh() {
-    const version = ++refreshVersion;
-    try {
-      const current = await media.enumerateDevices();
-      if (disposed || version !== refreshVersion) return;
-      devices.value = current.filter((device) => device.kind === 'audiooutput' && device.deviceId
-        && device.deviceId !== 'default' && device.deviceId !== 'communications')
-        .map((device, index) => ({ id: device.deviceId, label: device.label || `扬声器 ${index + 1}` }));
-      if (desiredId !== 'default' && !devices.value.some((device) => device.id === desiredId)) {
-        notice.value = '所选扬声器不可用，已暂停声音输出。请重新连接设备或手动选择系统默认。';
-        silence();
-      } else if (notice.value === DEVICE_LIST_ERROR) {
-        notice.value = blocked.value ? '声音输出尚未恢复，请重新选择设备。' : '';
-      }
-      await syncEchoOutput();
-    } catch {
-      if (!disposed && version === refreshVersion) notice.value = DEVICE_LIST_ERROR;
-    }
+  function refresh(): Promise<void> {
+    if (disposed) return Promise.resolve();
+    refreshVersion++;
+    if (refreshTask) return refreshTask;
+    // 焦点与设备变化共用在途枚举；期间再次刷新，只补读最新列表。
+    refreshTask = (async () => {
+      let version: number;
+      do {
+        version = refreshVersion;
+        try {
+          const current = await media.enumerateDevices();
+          if (disposed || version !== refreshVersion) continue;
+          devices.value = current.filter((device) => device.kind === 'audiooutput' && device.deviceId
+            && device.deviceId !== 'default' && device.deviceId !== 'communications')
+            .map((device, index) => ({ id: device.deviceId, label: device.label || `扬声器 ${index + 1}` }));
+          if (desiredId !== 'default' && !devices.value.some((device) => device.id === desiredId)) {
+            notice.value = '所选扬声器不可用，已暂停声音输出。请重新连接设备或手动选择系统默认。';
+            silence();
+          } else if (notice.value === DEVICE_LIST_ERROR) {
+            notice.value = blocked.value ? '声音输出尚未恢复，请重新选择设备。' : '';
+          }
+          await syncEchoOutput();
+        } catch {
+          if (!disposed && version === refreshVersion) notice.value = DEVICE_LIST_ERROR;
+        }
+      } while (!disposed && version !== refreshVersion);
+    })().finally(() => { refreshTask = undefined; });
+    return refreshTask;
   }
 
   async function select(id: string) {

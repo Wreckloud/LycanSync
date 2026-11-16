@@ -65,3 +65,37 @@ it('旧离房等待完成不清空后来已加入的群组', async () => {
   expect(context.joinedGroupDetail.value).toEqual({ id: 'current' });
   expect(context.rtc.join).toHaveBeenCalledTimes(1);
 });
+
+it('切群离房失败结束本次加入并明确提示，不进入新房间且允许重试', async () => {
+  const context = joining();
+  context.joinedGroupId.value = 'initial';
+  context.rtc.leave.mockRejectedValueOnce(new Error('disconnect failed'));
+  await expect(context.joinGroup('next')).resolves.toBeUndefined();
+  expect(context.joiningGroupId.value).toBeNull();
+  expect(context.viewerNotice.value).toContain('退出当前语音时发生问题');
+  expect(context.rtc.join).not.toHaveBeenCalled();
+  expect(context.findGroup).not.toHaveBeenCalled();
+  await context.joinGroup('next');
+  expect(context.joinedGroupId.value).toBe('next');
+  expect(context.joiningGroupId.value).toBeNull();
+  expect(context.viewerNotice.value).toBe('');
+  expect(context.rtc.join).toHaveBeenCalledOnce();
+});
+
+it('旧切群离房迟到失败不能覆盖新群提示或清除新加入状态', async () => {
+  const context = joining();
+  const leaving = deferred<void>();
+  context.joinedGroupId.value = 'initial';
+  context.rtc.leave.mockReturnValueOnce(leaving.promise);
+  const oldJoin = context.joinGroup('old');
+  context.joinAttempt++;
+  context.joinedGroupId.value = null;
+  await context.joinGroup('current');
+  context.viewerNotice.value = '新房间提示';
+  leaving.reject(new Error('old disconnect failed'));
+  await expect(oldJoin).resolves.toBeUndefined();
+  expect(context.joinedGroupId.value).toBe('current');
+  expect(context.joiningGroupId.value).toBeNull();
+  expect(context.viewerNotice.value).toBe('新房间提示');
+  expect(context.rtc.join).toHaveBeenCalledOnce();
+});

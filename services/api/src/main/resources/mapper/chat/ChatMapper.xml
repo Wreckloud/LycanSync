@@ -2,7 +2,7 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.lycansync.api.chat.mapper.ChatMapper">
-    <select id="lockGroupForImageSend" resultType="long" useCache="false">
+    <select id="lockGroupForImageSend" resultType="long" useCache="false" flushCache="true">
         SELECT 1 FROM chat_group WHERE id = #{groupId} FOR UPDATE
     </select>
     <select id="allocateMessageSequence" resultType="long" affectData="true" flushCache="true" useCache="false">
@@ -133,7 +133,10 @@
         SELECT id, byte_size, created_at, process_instance_id FROM chat_file_upload_reservation
         ORDER BY created_at, id
     </select>
-    <select id="fileAttachmentExists" resultType="boolean">
-        SELECT EXISTS (SELECT 1 FROM chat_file_attachment WHERE id = #{attachmentId})
+    <select id="findExistingFileAttachmentIds" resultType="string">
+        SELECT id::text FROM chat_file_attachment WHERE id IN
+        <foreach collection="attachmentIds" item="attachmentId" open="(" separator="," close=")">
+            CAST(#{attachmentId} AS UUID)
+        </foreach>
     </select>
 </mapper>

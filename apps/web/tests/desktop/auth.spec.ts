@@ -42,6 +42,7 @@ async function createAccountServer(administrator = true) {
       return reply(401, { detail: '旧会话已失效' });
     }
     if (request.url === '/api/auth/me' || request.url === '/api/auth/session') return reply(authenticated ? 200 : 401, authenticated ? user : { detail: '会话已失效' });
+    if (request.url === '/api/auth/account') return reply(200, { administrator, recoveryConfigured: true });
     if (request.url === '/api/presence/heartbeat') return reply(204);
     if (request.url === '/api/groups' || request.url?.startsWith('/api/rtc/room-occupancies')) return reply(200, []);
     return reply(404);
@@ -66,7 +67,13 @@ async function redeem(application: ElectronApplication, origin: string, recovery
   await application.evaluate(({ BrowserWindow }, offer) => {
     BrowserWindow.getAllWindows()[0].webContents.send('auth:access:offer', offer);
   }, { server: origin, token: (recovery ? 'e' : 'a').repeat(43) });
-  await page.getByRole('button', { name: /^(确认激活|确认加入|恢复登录)$/ }).click();
+  const confirmation = page.getByRole('button', { name: /^(确认激活|确认加入|恢复登录)$/ });
+  await expect(confirmation).toBeVisible();
+  if (await confirmation.textContent() === '确认激活') {
+    await page.getByLabel('恢复密码（至少 6 位）', { exact: true }).fill('synthetic-recovery-password');
+    await page.getByLabel('确认恢复密码', { exact: true }).fill('synthetic-recovery-password');
+  }
+  await confirmation.click();
   if (!recovery) await page.getByRole('button', { name: '跳过', exact: true }).click();
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page.locator('.app-content')).toBeAttached();
@@ -124,7 +131,8 @@ test('快捷键真实桌面桥接：初始化、模式切换和重启恢复不�
 });
 
 for (const administrator of [true, false]) {
-  test(`${administrator ? '服主激活' : '成员邀请'}兑换后加密保存、重启恢复并退出`, async () => {
+  test(`${administrator ? '服主激活' : '成员邀请'}兑换后加密保存、重启恢复、退出保留并清除`, async () => {
+    test.setTimeout(60_000);
     const api = await createAccountServer(administrator);
     const directory = test.info().outputPath('account');
     const sessionFile = resolve(directory, 'profile/session.bin');
@@ -138,6 +146,11 @@ for (const administrator of [true, false]) {
       const unusedLink = `lycansync://access?server=https%3A%2F%2Fexample.com#token=${'b'.repeat(43)}`;
       ({ application } = await launchIsolatedDesktop(directory, api.origin, unusedLink));
       const restored = await application.firstWindow();
+      await expect(restored.getByText('本机已保存 行者1001 的账号。', { exact: false })).toBeVisible();
+      await restored.getByRole('button', { name: '返回', exact: true }).click();
+      await restored.getByRole('button', { name: '登录', exact: true }).click();
+      await expect(restored.locator('.app-content')).toBeAttached();
+      await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('window:visibility', true));
       await expect(restored.getByRole('button', { name: '设置', exact: true })).toBeVisible();
       await expect(restored.locator('.access-prompt')).toHaveCount(0);
       // 冷启动携带链接和运行中收到链接都不覆盖已有账号，也不触发兑换。
@@ -150,7 +163,22 @@ for (const administrator of [true, false]) {
       await restored.getByRole('button', { name: '设置', exact: true }).click();
       await restored.getByRole('button', { name: '账号设置', exact: true }).click();
       await restored.getByRole('button', { name: '退出登录', exact: true }).click();
-      await expect(restored.getByText('请打开服主发来的邀请或恢复登录链接', { exact: false })).toBeVisible();
+      await restored.getByRole('dialog', { name: '退出当前账号？' }).getByRole('button', { name: '退出登录', exact: true }).click();
+      await expect(restored.getByRole('button', { name: '登录', exact: true })).toBeVisible();
+      expect(existsSync(sessionFile)).toBe(true);
+      expect(api.logoutCount).toBe(0);
+      const rememberAccount = restored.getByRole('checkbox', { name: '记住账号', exact: true });
+      await rememberAccount.uncheck();
+      await expect(rememberAccount).toBeEnabled();
+      await application.close();
+      ({ application } = await launchIsolatedDesktop(directory, api.origin));
+      const entry = await application.firstWindow();
+      await expect(entry.getByRole('button', { name: '登录', exact: true })).toBeVisible();
+      await expect(entry.locator('.app-content')).toHaveCount(0);
+      await entry.getByText('更多', { exact: true }).click();
+      await entry.getByRole('button', { name: '清除本机登录凭据', exact: true }).click();
+      await entry.getByRole('dialog', { name: '从此设备移除账号？' }).getByRole('button', { name: '清除登录信息', exact: true }).click();
+      await expect(entry.getByText('使用服主分享的邀请链接即可加入。', { exact: false })).toBeVisible();
       await expect.poll(() => api.logoutCount).toBe(1);
       await expect.poll(() => existsSync(sessionFile)).toBe(false);
       expect(await page.isClosed()).toBe(true);
@@ -159,30 +187,40 @@ for (const administrator of [true, false]) {
 }
 
 test('旧桌面会话的延迟 401 不退出新会话，当前会话 401 仍会退出', async () => {
+  test.setTimeout(60_000);
   const api = await createAccountServer(false);
   const directory = test.info().outputPath('race');
   const { application } = await launchIsolatedDesktop(directory, api.origin);
   try {
     const page = await application.firstWindow();
+    await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.clock.install();
     await redeem(application, api.origin);
-    api.delaySession();
-    await page.clock.fastForward(20_100);
-    await api.started;
     await page.getByRole('button', { name: '设置', exact: true }).click();
     await page.getByRole('button', { name: '账号设置', exact: true }).click();
     await page.getByRole('button', { name: '退出登录', exact: true }).click();
+    await page.getByRole('dialog', { name: '退出当前账号？' }).getByRole('button', { name: '退出登录', exact: true }).click();
+    await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
+    await page.getByText('更多', { exact: true }).click();
+    await page.getByRole('button', { name: '清除本机登录凭据', exact: true }).click();
+    // 旧请求从清除确认前挂起，保留十五秒期限，不混入打开设置与退出的动效耗时。
+    api.delaySession();
+    const delayed = page.waitForResponse((response) => response.url().endsWith('/api/auth/session'));
+    await page.evaluate(() => { void fetch('/api/auth/session'); });
+    await api.started;
+    await page.getByRole('dialog', { name: '从此设备移除账号？' }).getByRole('button', { name: '清除登录信息', exact: true }).click();
     await redeem(application, api.origin, true);
-    const delayed = page.waitForResponse((r) => r.url().endsWith('/api/auth/session') && r.status() === 401);
     api.release();
-    expect(await (await delayed).headerValue('X-Lycan-Session-Expired')).toBe('false');
+    const oldResponse = await delayed;
+    expect(oldResponse.status()).toBe(401);
+    expect(await oldResponse.headerValue('X-Lycan-Session-Expired')).toBe('false');
     await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible();
     expect(existsSync(resolve(directory, 'profile/session.bin'))).toBe(true);
     api.revoke();
     const current = page.waitForResponse((r) => r.url().endsWith('/api/auth/session') && r.status() === 401);
     await page.clock.fastForward(20_100);
     expect(await (await current).headerValue('X-Lycan-Session-Expired')).toBe('true');
-    await expect(page.getByText('请打开服主发来的邀请或恢复登录链接', { exact: false })).toBeVisible();
+    await expect(page.getByText('使用服主分享的邀请链接即可加入。', { exact: false })).toBeVisible();
     expect(existsSync(resolve(directory, 'profile/session.bin'))).toBe(false);
   } finally { api.release(); await application.close(); await api.close(); }
 });

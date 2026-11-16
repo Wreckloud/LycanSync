@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test('识别修正紧凑排列，弹窗编辑不移动背景，支持取消、失败重试与窄窗操作', async ({ page }, testInfo) => {
-  await page.route('**/api/**', route => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
+  await page.route(url => url.pathname.startsWith('/api/'), route => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
   await page.route('**/api/rtc/voice-time', route => route.fulfill({ json: { seconds: 7200 } }));
   await page.route('**/src/main.ts*', async route => {
     const original = await (await route.fetch()).text();

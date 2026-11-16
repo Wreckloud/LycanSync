@@ -13,6 +13,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -33,6 +34,7 @@ import java.util.regex.Pattern;
 @Component
 public class ChatFileStorageCleanup {
 
+    private static final int STORED_FILE_CHECK_BATCH_SIZE = 256;
     private static final Pattern TEMPORARY_FILE = Pattern.compile(
             "([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\\.part");
     private static final Pattern STORED_FILE = Pattern.compile(
@@ -143,14 +145,34 @@ public class ChatFileStorageCleanup {
 
     private boolean removeOrphanedStoredFiles(Path root) throws IOException {
         boolean allRemoved = true;
+        List<Path> batch = new ArrayList<>(STORED_FILE_CHECK_BATCH_SIZE);
         try (var paths = Files.list(root)) {
-            for (Path path : paths.filter(Files::isRegularFile).toList()) {
-                Matcher matcher = STORED_FILE.matcher(path.getFileName().toString());
-                if (!matcher.matches()) continue;
-                UUID attachmentId = UUID.fromString(matcher.group(1));
-                if (mapper.fileAttachmentExists(attachmentId)) continue;
-                if (!deleteForRecovery(path)) allRemoved = false;
+            var iterator = paths.filter(Files::isRegularFile).iterator();
+            while (iterator.hasNext()) {
+                Path path = iterator.next();
+                if (!STORED_FILE.matcher(path.getFileName().toString()).matches()) continue;
+                batch.add(path);
+                if (batch.size() == STORED_FILE_CHECK_BATCH_SIZE) {
+                    if (!removeOrphanedBatch(batch)) allRemoved = false;
+                    batch.clear();
+                }
             }
+            if (!removeOrphanedBatch(batch)) allRemoved = false;
+        }
+        return allRemoved;
+    }
+
+    private boolean removeOrphanedBatch(List<Path> files) {
+        if (files.isEmpty()) return true;
+        // 清理会扫描整个存储目录；固定小批量查询避免逐文件往返，也不累积整个目录的路径。
+        List<String> attachmentIds = files.stream().map(path -> {
+            String name = path.getFileName().toString();
+            return UUID.fromString(name.substring(0, name.lastIndexOf('.'))).toString();
+        }).toList();
+        Set<String> referenced = new HashSet<>(mapper.findExistingFileAttachmentIds(attachmentIds));
+        boolean allRemoved = true;
+        for (int index = 0; index < files.size(); index++) {
+            if (!referenced.contains(attachmentIds.get(index)) && !deleteForRecovery(files.get(index))) allRemoved = false;
         }
         return allRemoved;
     }

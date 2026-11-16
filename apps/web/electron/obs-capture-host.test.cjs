@@ -155,6 +155,35 @@ test('宿主退出拒绝进行中的回放保存并解除输出资源，不假�
   f.child.emit('close', 1); await rejected;
 });
 
+test('原生来源暂不可录制只拒绝对应输出，不杀共享宿主且允许重试', async context => {
+  for (const kind of ['recording', 'replay']) {
+    await context.test(kind, async childContext => {
+      const f = fixture(childContext); await f.ready();
+      const state = f.manager.state;
+      const events = [];
+      f.manager[kind === 'recording' ? 'onRecordingEvent' : 'onReplayEvent'] = (_state, event) => events.push(event);
+      const start = () => kind === 'recording'
+        ? f.manager.startRecording(sessionId, sessionId, 'C:\\recordings\\test.mkv', false)
+        : f.manager.startReplay(sessionId, sessionId, 60, false, false, sessionId, { videoHeight: 1080, videoFps: 60 });
+      const rejected = assert.rejects(start(), /recordingShareUnavailable/);
+      f.emit({ event: `${kind}Failed`, [`${kind}Id`]: sessionId, code: 'recordingShareUnavailable' });
+      await rejected;
+      assert.equal(f.manager.state, state);
+      assert.equal(state.videoSessionId, sessionId);
+      assert.equal(state[kind], undefined);
+      assert.notEqual(state.failed, true);
+      assert.equal(f.killCount(), 0);
+      assert.deepEqual(f.failures, []);
+      assert.equal(events[0].code, 'recordingShareUnavailable');
+      const retried = start();
+      f.emit({ event: `${kind}Started`, [`${kind}Id`]: sessionId, width: 1920, height: 1080 });
+      await retried;
+      assert.ok(state[kind]);
+      assert.equal(f.spawns.length, 1);
+    });
+  }
+});
+
 test('窗口测试模式即使运行整个设备测试文件也不会注册可执行的整屏用例', () => {
   const source = readFileSync(join(__dirname, 'obs-capture.test.cjs'), 'utf8');
   for (const mode of ['LYCANSYNC_CAPTURE_WINDOW_CHECK', 'LYCANSYNC_CAPTURE_GAME_CHECK', 'LYCANSYNC_CAPTURE_APPLICATION_CHECK', undefined]) {

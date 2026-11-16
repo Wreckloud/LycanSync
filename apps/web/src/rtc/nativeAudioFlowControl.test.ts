@@ -96,7 +96,7 @@ const captures: AudioCapture[] = [];
 afterEach(async () => { await Promise.all(captures.splice(0).map(capture => capture.stop('session-b'))); });
 
 // 直接连接生产管道入口与 Worklet；宿主和管道均为受控对象，不访问真实设备。
-async function mainAudio(channels: number) {
+async function mainAudio(channels: number, publishing = true) {
   const server = new class extends EventEmitter {
     listening = false;
     listen() { this.listening = true; queueMicrotask(() => this.emit('listening')); }
@@ -120,7 +120,7 @@ async function mainAudio(channels: number) {
   // 共享来源身份必须保持同一对象，不能在每次查询时伪造新的会话。
   const startArgs = channels === 1
     ? ['session-b', { noiseSuppression: true, autoGainControl: true, voiceEnhancement: true, echoCancellation: true, inputGain: 1 }, 'default', false]
-    : ['monitor:7:0', 'session-b'];
+    : ['monitor:7:0', 'session-b', publishing];
   await capture.start(...startArgs);
   const socket = new class extends EventEmitter {
     destroyed = false;
@@ -138,6 +138,7 @@ async function mainAudio(channels: number) {
   const acknowledge = (sessionId = 'session-b', sequence = sent.at(-1)!.sequence, droppedChunks = 0) =>
     capture.acknowledge(sessionId, sequence, droppedChunks);
   return { sent, receive: (bytes: Buffer) => socket.emit('data', bytes), packet, acknowledge,
+    resumePublishing: () => capture.start('monitor:7:0', 'session-b'),
     stop: () => capture.stop('session-b'),
     drops: async () => channels === 1 ? (await capture.diagnostics()).microphoneCaptureDroppedChunks : capture.droppedChunks };
 }
@@ -228,4 +229,19 @@ describe.each([1, 2])('native audio %i-channel pipe buffering', (channels) => {
     expect(await main.drops()).toBe(0);
     expect(sent).toHaveLength(1);
   });
+});
+
+it('仅录制时排空声音管道，恢复共享后只发送新收到的声音', async () => {
+  const main = await mainAudio(2, false);
+  main.receive(Buffer.concat(Array.from({ length: 20 }, (_, index) => main.packet(index + 1))));
+  expect(main.sent).toHaveLength(0);
+  expect(await main.drops()).toBe(0);
+
+  await main.resumePublishing();
+  expect(main.sent).toHaveLength(0);
+  main.receive(Buffer.concat([main.packet(21), main.packet(22)]));
+  expect(main.sent.map(message => Buffer.from(message.pcm).readFloatLE())).toEqual([21]);
+  main.acknowledge();
+  expect(main.sent.map(message => Buffer.from(message.pcm).readFloatLE())).toEqual([21, 22]);
+  expect(await main.drops()).toBe(0);
 });

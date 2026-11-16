@@ -24,7 +24,9 @@ async function download() {
   try {
     await downloadFile(props.groupId, props.attachment, current.signal, (loaded) => { loadedBytes.value = loaded; });
   } catch (reason) {
-    if (!current.signal.aborted) error.value = reason instanceof Error ? reason.message : '文件下载失败';
+    if (!current.signal.aborted && !(reason instanceof DOMException && reason.name === 'AbortError')) {
+      error.value = reason instanceof Error ? reason.message : '文件下载失败';
+    }
   } finally {
     if (controller.value === current) controller.value = null;
     downloading.value = false;

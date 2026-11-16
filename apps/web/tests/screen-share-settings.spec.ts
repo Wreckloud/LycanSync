@@ -9,7 +9,7 @@ declare global {
 
 test.beforeEach(async ({ page }) => {
   // 仅挂载设置组件与模拟的共享状态，不创建采集、音频或网络会话。
-  await page.route('**/api/**', route => route.abort());
+  await page.route(url => url.pathname.startsWith('/api/'), route => route.abort());
   await page.route('**/src/main.ts*', async route => {
     const original = await (await route.fetch()).text();
     const vuePath = original.match(/from ["']([^"']*\/vue\.js[^"']*)["']/)?.[1];

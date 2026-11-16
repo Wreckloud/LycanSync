@@ -189,3 +189,35 @@ test('当前会话槽位释放失败明确停止并记录原因', async () => {
   assert.deepEqual(f.failures, ['sharedTextureSlotReleaseFailed']);
 });
 
+test('重复槽位触发安全停止，但消费者未释放前不能归还旧纹理槽位', async () => {
+  const f = textureTransferFixture();
+  f.textures.receiveFrame(f.state, f.frame);
+  assert.deepEqual(f.failures, ['sharedTextureImportFailed']);
+  assert.equal(f.video.stopping, true);
+  f.textures.receiveFrame(f.state, f.frame);
+  assert.equal(f.mainReleases(), 0);
+  assert.deepEqual(f.releases, []);
+  assert.equal(f.video.imported.size, 1);
+
+  f.complete(); await flush();
+  assert.equal(f.mainReleases(), 1);
+  assert.deepEqual(f.releases, [[sessionId, 0]]);
+  assert.equal(f.video.imported.size, 0);
+  f.textures.releaseImports(f.video);
+  assert.deepEqual(f.releases, [[sessionId, 0]]);
+  f.textures.releaseHost(f.state);
+});
+
+test('未交付的新纹理导入失败仍归还自己的槽位，不等待不存在的消费者', async () => {
+  const f = textureTransferFixture();
+  f.complete(); await flush();
+  f.sandbox.sharedTexture.importSharedTexture = () => { throw new Error('controlledImportFailure'); };
+  f.textures.receiveFrame(f.state, f.frame);
+  await flush();
+  assert.deepEqual(f.failures, ['sharedTextureImportFailed']);
+  assert.deepEqual(f.releases, [[sessionId, 0], [sessionId, 0]]);
+  assert.equal(f.mainReleases(), 1);
+  assert.equal(f.video.imported.size, 0);
+  f.textures.releaseHost(f.state);
+});
+

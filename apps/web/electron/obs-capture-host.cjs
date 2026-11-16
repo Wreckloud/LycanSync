@@ -232,7 +232,7 @@ class ObsCaptureHostManager {
     if (['replayStarted', 'replayFailed', 'replayStopped', 'replaySaved', 'replaySaveFailed'].includes(event.event)) {
       const replay = state.replay;
       if (!replay || event.sessionId !== state.videoSessionId || event.replayId !== replay.id) return;
-      const codes = ['recordingBusy', 'recordingPathInvalid', 'recordingModuleUnavailable', 'recordingHardwareEncoderUnavailable',
+      const codes = ['recordingShareUnavailable', 'recordingBusy', 'recordingPathInvalid', 'recordingModuleUnavailable', 'recordingHardwareEncoderUnavailable',
         'recordingEncoderStartFailed', 'recordingAudioEncoderUnavailable', 'recordingOutputUnavailable',
         'recordingApplicationAudioUnavailable', 'recordingVoiceUnavailable', 'recordingWriteFailed'];
       if (event.code !== undefined && !codes.includes(event.code)
@@ -267,7 +267,7 @@ class ObsCaptureHostManager {
     if (['recordingStarted', 'recordingFailed', 'recordingStopped'].includes(event.event)) {
       const recording = state.recording;
       if (!recording || event.sessionId !== state.videoSessionId || event.recordingId !== recording.id) return;
-      const codes = ['recordingAlreadyRunning', 'recordingBusy', 'recordingPathInvalid', 'recordingModuleUnavailable',
+      const codes = ['recordingShareUnavailable', 'recordingAlreadyRunning', 'recordingBusy', 'recordingPathInvalid', 'recordingModuleUnavailable',
         'recordingHardwareEncoderUnavailable', 'recordingEncoderStartFailed', 'recordingAudioEncoderUnavailable',
         'recordingOutputUnavailable', 'recordingApplicationAudioUnavailable', 'recordingVoiceUnavailable', 'recordingDiskFull', 'recordingWriteFailed'];
       if ((event.code !== undefined && !codes.includes(event.code))

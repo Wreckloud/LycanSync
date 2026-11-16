@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test('公共弹窗焦点跳过隐藏、禁用和退场控件，字段移除及忙碌时不离开弹窗', async ({ page }) => {
-  await page.route('**/api/**', route => route.abort());
+  await page.route(url => url.pathname.startsWith('/api/'), route => route.abort());
   await page.route('**/src/main.ts*', route => route.fulfill({ contentType: 'text/javascript', body: `
 import { keepDialogFocus } from '/src/components/dialogFocus.ts';
 document.querySelector('#root').innerHTML = '<button id="outside">背景</button><section id="dialog" role="dialog" tabindex="-1">'

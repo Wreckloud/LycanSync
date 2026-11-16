@@ -6,10 +6,10 @@ import { desktopTestEnvironment } from './fixtures/desktopTestEnvironment';
 
 declare global { var releaseEntryWindowUpdate: () => void; }
 
-test('入口窗口随更新、登录、更多与邀请内容收缩，不登录、不启动媒体', async () => {
+test('入口窗口尺寸稳定，更新、登录、更多与邀请卡片均可见，不登录、不启动媒体', async () => {
   const server = createServer((request, response) => {
     response.setHeader('Content-Type', 'application/json');
-    if (request.url === '/api/auth/options') response.end(JSON.stringify({ mode: 'invite', qqAvailable: false }));
+    if (request.url === '/api/auth/options') response.end(JSON.stringify({ mode: 'invite', initialized: true, qqAvailable: false }));
     else if (request.url === '/api/auth/me') { response.writeHead(401); response.end('{}'); }
     else if (request.url === '/api/auth/access/preview') response.end(JSON.stringify({ kind: 'INVITE', status: 'PENDING', serverName: '模拟服务器' }));
     else { response.writeHead(503); response.end('{}'); }
@@ -40,40 +40,43 @@ require(${JSON.stringify(resolve('electron/main.cjs'))});
     const page = await application.firstWindow();
     await expect(page.getByRole('heading', { name: '准备进入 lycanclaw' })).toBeVisible();
     const bounds = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds());
-    await expect.poll(async () => (await bounds()).width).toBeLessThanOrEqual(428);
+    const initialBounds = await bounds();
     const fitsCard = () => page.evaluate(() => {
       const card = document.querySelector<HTMLElement>('.startup-update-card, .auth-card')!;
       const rect = card.getBoundingClientRect();
-      return Math.abs(rect.x) <= 1 && Math.abs(rect.width - innerWidth) <= 1 && Math.abs(rect.bottom - innerHeight) <= 2;
+      return rect.width > 0 && rect.height > 0 && rect.x >= 0 && rect.y >= 0
+        && rect.right <= innerWidth + 1 && rect.bottom <= innerHeight + 1
+        && document.documentElement.scrollWidth <= innerWidth;
     });
     await expect.poll(fitsCard).toBe(true);
-    const checkingHeight = (await bounds()).height;
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('update:state', {
       phase: 'downloading', version: '0.1.1', nextVersion: '0.1.2', percent: 25, supported: true, message: '正在下载新版…',
     }));
     await expect(page.getByRole('progressbar')).toBeVisible();
-    await expect.poll(async () => (await bounds()).height).toBeGreaterThan(checkingHeight);
+    expect(await bounds()).toEqual(initialBounds);
     await expect.poll(fitsCard).toBe(true);
     await application.evaluate(() => global.releaseEntryWindowUpdate());
-    await expect(page.getByText('请打开服主发来的邀请或恢复登录链接', { exact: false })).toBeVisible();
-    await expect.poll(async () => (await bounds()).width).toBeLessThanOrEqual(448);
+    await expect(page.getByText('使用服主分享的邀请链接即可加入。', { exact: false })).toBeVisible();
+    expect(await bounds()).toEqual(initialBounds);
     await expect.poll(fitsCard).toBe(true);
-    await expect(page.getByRole('button', { name: '最大化窗口', exact: true })).toHaveCount(0);
-    const accountHeight = (await bounds()).height;
+    await expect(page.getByRole('button', { name: '最大化窗口', exact: true })).toBeVisible();
     await page.getByText('更多', { exact: true }).click();
     await expect(page.getByRole('textbox', { name: '邀请或恢复登录链接', exact: true })).toBeVisible();
-    await expect.poll(async () => (await bounds()).height).toBeGreaterThan(accountHeight);
+    await expect.poll(fitsCard).toBe(true);
+    expect(await bounds()).toEqual(initialBounds);
     await page.getByText('更多', { exact: true }).click();
-    await expect.poll(async () => (await bounds()).height).toBeLessThanOrEqual(accountHeight + 2);
+    await expect(page.locator('#account-more-options')).toBeHidden();
+    expect(await bounds()).toEqual(initialBounds);
     await page.screenshot({ path: test.info().outputPath('entry-account.png') });
     await application.evaluate(({ BrowserWindow }, server) => BrowserWindow.getAllWindows()[0].webContents.send('auth:access:offer', {
       server, token: 'a'.repeat(43),
     }), origin);
     await expect(page.getByRole('button', { name: '确认加入', exact: true })).toBeVisible();
-    await expect.poll(async () => (await bounds()).width).toBeGreaterThan(448);
+    expect(await bounds()).toEqual(initialBounds);
     await expect.poll(fitsCard).toBe(true);
     await page.getByRole('button', { name: '取消', exact: true }).click();
-    await expect.poll(async () => (await bounds()).width).toBeLessThanOrEqual(448);
+    await expect(page.locator('.access-prompt')).toHaveCount(0);
+    expect(await bounds()).toEqual(initialBounds);
   } finally {
     await application.close();
     await new Promise<void>((done, reject) => server.close((error) => error ? reject(error) : done()));

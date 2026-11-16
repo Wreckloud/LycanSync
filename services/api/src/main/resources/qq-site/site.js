@@ -136,8 +136,11 @@ byId('profile-form').addEventListener('submit', async event => {
   confirming = true;
   const buttons = byId('profile-form').querySelectorAll('button'); buttons.forEach(button => { button.disabled = true; });
   try {
+    const signature = byId('profile-signature').value.trim();
+    // 旧长签名未修改时省略字段，沿用接口保留原值的语义。
+    const keepStoredSignature = signature === currentUser.signature && signature.length > 40;
     const user = await api('auth/me', 'PUT', { nickname: byId('profile-nickname').value.trim(), avatar: currentUser.avatar,
-      signature: byId('profile-signature').value.trim() });
+      ...(keepStoredSignature ? {} : { signature }) });
     account(user); feedback('资料已保存。');
   } catch (error) { feedback(error instanceof Error ? error.message : '无法保存资料', true); }
   finally { confirming = false; buttons.forEach(button => { button.disabled = false; }); }

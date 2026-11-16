@@ -280,6 +280,20 @@ test('只接受有界设置与纯头像数据，不接收可执行图片URL或�
     members: [{ ...member, microphone: false }] }).members[0].speaking, false);
 });
 
+test('开发覆盖页可加载共用头像组件，仍拒绝其他业务组件；正式模式只提供构建资源', async () => {
+  const fetched = [];
+  const options = { rendererRoot: resolve('dist'), fetch: async (url) => {
+    fetched.push(url); return new Response('static');
+  } };
+  const serve = createOverlayPage({ ...options, devRendererUrl: new URL('http://127.0.0.1:4173') });
+  const avatar = new URL('../components/Avatar.vue', 'lycan://overlay/src/overlay/VoiceOverlay.vue');
+  assert.equal((await serve(new Request(avatar))).status, 200);
+  assert.deepEqual(fetched, ['http://127.0.0.1:4173/src/components/Avatar.vue']);
+  assert.equal((await serve(new Request('lycan://overlay/src/components/GroupChat.vue'))).status, 404);
+  assert.equal((await createOverlayPage(options)(new Request(avatar))).status, 404);
+  assert.equal(fetched.length, 1);
+});
+
 test('正式IPC隔离主页面与覆盖页面，结束旧owner不会清除新会话', () => {
   const source = readFileSync(resolve(__dirname, 'main.cjs'), 'utf8');
   const handlers = new Map();

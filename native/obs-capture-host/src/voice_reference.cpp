@@ -47,7 +47,7 @@ void VoiceReference::configure(bool enabled, const std::string &selector) {
     last_device_check_ = std::chrono::steady_clock::now();
   }
   else if (selector.starts_with("name:")) {
-    auto *properties = obs_get_source_properties("wasapi_output_capture");
+    auto *properties = obs_get_source_properties("lycansync_system_output_capture");
     if (!properties) return;
     auto *devices = obs_properties_get(properties, "device_id");
     unsigned matches = 0;
@@ -67,7 +67,7 @@ void VoiceReference::configure(bool enabled, const std::string &selector) {
   auto *settings = obs_data_create();
   obs_data_set_string(settings, "device_id", device.c_str());
   obs_data_set_bool(settings, "use_device_timing", true);
-  source_ = obs_source_create_private("wasapi_output_capture", "LycanSync echo reference", settings);
+  source_ = obs_source_create_private("lycansync_system_output_capture", "LycanSync echo reference", settings);
   obs_data_release(settings);
   if (!source_) return;
   obs_source_set_monitoring_type(source_, OBS_MONITORING_TYPE_NONE);

@@ -5,12 +5,15 @@ import com.lycansync.api.group.exception.GroupException;
 import com.lycansync.api.group.service.GroupService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.annotation.DirtiesContext;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Instant;
 import java.util.List;
@@ -20,14 +23,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 在显式指定的隔离数据库中验证真实区间累计、恢复及成员访问边界。
+ * 在隔离 PostgreSQL 中验证真实区间累计、恢复及成员访问边界。
  *
  * @author Wreckloud
  * @since 2026-11-02
  */
 @SpringBootTest
-@EnabledIfEnvironmentVariable(named = "SHARED_VOICE_TEST_URL", matches = "jdbc:postgresql://(?:127\\.0\\.0\\.1|localhost):[0-9]+/voice_test")
+@Testcontainers
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class SharedVoiceTimeApplicationIT {
+    @Container
+    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:18.6-bookworm")
+            .withDatabaseName("voice_test");
     private static final Instant START = Instant.parse("2026-11-02T00:00:00Z");
     private final UUID own = UUID.randomUUID();
     private final UUID peer = UUID.randomUUID();
@@ -39,11 +46,12 @@ class SharedVoiceTimeApplicationIT {
 
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", () -> System.getenv("SHARED_VOICE_TEST_URL"));
-        registry.add("spring.datasource.username", () -> "voice_test");
-        registry.add("spring.datasource.password", () -> System.getenv("SHARED_VOICE_TEST_PASSWORD"));
-        registry.add("spring.flyway.user", () -> "voice_test");
-        registry.add("spring.flyway.password", () -> System.getenv("SHARED_VOICE_TEST_PASSWORD"));
+        registry.add("spring.datasource.url", POSTGRES::getJdbcUrl);
+        registry.add("spring.datasource.username", POSTGRES::getUsername);
+        registry.add("spring.datasource.password", POSTGRES::getPassword);
+        registry.add("spring.flyway.url", POSTGRES::getJdbcUrl);
+        registry.add("spring.flyway.user", POSTGRES::getUsername);
+        registry.add("spring.flyway.password", POSTGRES::getPassword);
     }
 
     @BeforeEach

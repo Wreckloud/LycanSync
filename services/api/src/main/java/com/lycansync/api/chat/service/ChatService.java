@@ -83,7 +83,11 @@ public class ChatService {
                 throw new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.GROUP_NOT_FOUND, "群组不存在");
             }
             ChatMessageView existing = mapper.findImageMessage(groupId, imageMessageId, user.id());
-            if (existing != null) return toResponse(existing);
+            if (existing != null) {
+                // 重试虽不写入新消息，也不能绕过锁后的成员资格检查。
+                groupService.requireMember(groupId, user);
+                return toResponse(existing);
+            }
             if (mapper.messageIdExists(imageMessageId)) throw invalid("消息 ID 已被占用");
         }
 

@@ -640,8 +640,8 @@ mod tests {
         runtime.stop_video("external-monitor").unwrap();
     }
 
-    use super::{Runtime, cleanup_result, handle_command, run};
-    use crate::protocol::{ErrorCode, PROTOCOL_VERSION};
+    use super::{cleanup_result, run};
+    use crate::protocol::ErrorCode;
     use serde_json::Value;
     use std::io::Cursor;
 

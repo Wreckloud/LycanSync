@@ -191,6 +191,41 @@ it('关闭补存等待分批序列化，随后清除不会被迟到的报告回�
   expect(collect).toHaveBeenCalledTimes(collected);
 });
 
+it.each(['desktop', 'browser'])('%s 页面销毁后不执行仍在分批序列化的手动导出', async (platform) => {
+  const { report, scope, exportDiagnosticReport } = setup(true);
+  await vi.advanceTimersByTimeAsync(130000);
+  const click = vi.fn();
+  if (platform === 'browser') {
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('document', { hidden: false, createElement: () => ({ click }) });
+  }
+  let resume!: () => void;
+  yieldSerialization.mockImplementationOnce(() => new Promise(resolve => { resume = resolve; }));
+  const saving = report.save('关闭前请求的导出');
+  expect(resume).toBeTypeOf('function');
+  scope.stop();
+  resume();
+  await saving;
+  expect(exportDiagnosticReport).not.toHaveBeenCalled();
+  expect(click).not.toHaveBeenCalled();
+});
+
+it('清除等待补存期间页面销毁，不再发起迟到的文件清理', async () => {
+  const { report, scope } = setup(true);
+  const bridge = persistenceBridge();
+  await vi.advanceTimersByTimeAsync(130000);
+  let resume!: () => void;
+  yieldSerialization.mockImplementationOnce(() => new Promise(resolve => { resume = resolve; }));
+  report.setAutomatic(false);
+  const clearing = report.clearSaved();
+  expect(resume).toBeTypeOf('function');
+  expect(bridge.clearSavedDiagnosticReports).not.toHaveBeenCalled();
+  scope.stop();
+  resume();
+  await clearing;
+  expect(bridge.clearSavedDiagnosticReports).not.toHaveBeenCalled();
+});
+
 it('无媒体使用只读取进程的启动不覆盖上次报告，恢复入口仍可导出', async () => {
   const { report, room } = setup(true);
   const bridge = persistenceBridge();

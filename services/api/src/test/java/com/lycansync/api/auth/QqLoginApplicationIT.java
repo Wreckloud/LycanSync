@@ -15,7 +15,6 @@ import com.lycansync.api.auth.service.QqIdentityClient;
 import com.lycansync.api.auth.service.QqLoginService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -24,6 +23,9 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Transactional;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -35,20 +37,24 @@ import static org.mockito.Mockito.when;
  * @author Wreckloud
  * @since 2026-11-03
  */
-@EnabledIfEnvironmentVariable(named = "QQ_TEST_DB_URL", matches = ".+/lycansync_qq_test")
+@Testcontainers
 @ActiveProfiles("test-fixtures")
 @SpringBootTest(properties = {"lycansync.qq.enabled=true", "lycansync.qq.app-id=1234567",
         "lycansync.qq.app-key=test-only-key", "lycansync.qq.callback-url=https://example.com/api/auth/qq/callback",
         "lycansync.account.public-url=https://example.com"})
 @Transactional
 class QqLoginApplicationIT {
+    @Container
+    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:18.6-bookworm")
+            .withDatabaseName("lycansync_qq_test");
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry properties) {
-        properties.add("spring.datasource.url", () -> System.getenv("QQ_TEST_DB_URL"));
-        properties.add("spring.datasource.username", () -> System.getenv("QQ_TEST_DB_USER"));
-        properties.add("spring.datasource.password", () -> System.getenv("QQ_TEST_DB_PASSWORD"));
-        properties.add("spring.flyway.user", () -> System.getenv("QQ_TEST_DB_USER"));
-        properties.add("spring.flyway.password", () -> System.getenv("QQ_TEST_DB_PASSWORD"));
+        properties.add("spring.datasource.url", POSTGRES::getJdbcUrl);
+        properties.add("spring.datasource.username", POSTGRES::getUsername);
+        properties.add("spring.datasource.password", POSTGRES::getPassword);
+        properties.add("spring.flyway.url", POSTGRES::getJdbcUrl);
+        properties.add("spring.flyway.user", POSTGRES::getUsername);
+        properties.add("spring.flyway.password", POSTGRES::getPassword);
     }
 
     @Autowired private JdbcClient jdbc;

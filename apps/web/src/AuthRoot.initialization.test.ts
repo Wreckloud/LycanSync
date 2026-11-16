@@ -25,7 +25,8 @@ function setup() {
   let dispose!: () => void;
   const state = {
     entryUser: ref<AuthUser | null>(null), qqAvailable: ref(false), initialized: ref<boolean | null>(null), accountUpdated: vi.fn(), autoLogin: ref(true), manualEntryRequired: ref(false), accessOffer: ref(null),
-    user: ref<AuthUser | null>(null), error: ref(''), ready: ref(false), onboarding: ref(false), disposed: false,
+    user: ref<AuthUser | null>(null), error: ref(''), ready: ref(false), onboarding: ref(false), disposed: false, sessionRevision: 0,
+    qq: { cancel: vi.fn() },
     initializationRequest: null as AbortController | null, clearRequest: null, desktop: undefined, sessionHeartbeat: null,
     authRequest: vi.fn(async (_path: string, _method?: string, _body?: unknown, _signal?: AbortSignal): Promise<unknown> => ({ mode: 'invite' })),
     authenticatedFetch: vi.fn(async (_path: string, _options: RequestInit): Promise<Pick<Response, 'ok' | 'status' | 'json'>> => ({
@@ -50,10 +51,12 @@ it('正常恢复账号，并保留未登录时的普通 401 语义', async () =>
   expect(state.ready.value).toBe(true);
   expect(state.error.value).toBe('');
   expect(state.user.value).toBeNull();
+  expect(state.qq.cancel).not.toHaveBeenCalled();
   state.authenticatedFetch.mockResolvedValue({ ok: true, status: 200, json: async () => member });
   await app.initialize();
   expect(state.entryUser.value).toEqual(member);
   expect(state.user.value).toBeNull();
+  expect(state.qq.cancel).toHaveBeenCalledOnce();
 });
 
 it('新的重连取消旧登录方式检查，旧响应不继续读取账号', async () => {

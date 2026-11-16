@@ -513,9 +513,7 @@ mod tests {
         ).is_err());
     }
 
-    use super::{
-        CommandEnvelope, ErrorCode, OutboundEvent, PROTOCOL_VERSION, VideoSource, VideoSourceKind,
-    };
+    use super::{CommandEnvelope, OutboundEvent, PROTOCOL_VERSION, VideoSource, VideoSourceKind};
 
     #[test]
     fn deserializes_list_video_sources_request() {

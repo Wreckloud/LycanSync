@@ -26,6 +26,12 @@
     <select id="findGroupIdsByMember" resultType="string">
         SELECT group_id::text FROM group_member WHERE user_id = #{userId}
     </select>
+    <select id="findMemberRtcRooms" resultType="com.lycansync.api.group.model.GroupRtcRoom">
+        SELECT g.id, g.rtc_room_key AS room_key FROM chat_group g
+        JOIN group_member membership ON membership.group_id = g.id AND membership.user_id = #{userId}
+        JOIN app_user users ON users.id = membership.user_id AND users.deleted_at IS NULL
+        ORDER BY g.created_at, g.id
+    </select>
     <select id="findGroup" resultType="com.lycansync.api.group.model.GroupView">
         SELECT <include refid="groupFields"/> FROM chat_group g
         JOIN group_member membership ON membership.group_id = g.id AND membership.user_id = #{userId}

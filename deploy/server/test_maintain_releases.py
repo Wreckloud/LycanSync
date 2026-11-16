@@ -7,7 +7,9 @@ import unittest
 import sys
 import os
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location('maintain_releases', Path(__file__).parent / 'maintenance/maintain-releases.py')
@@ -50,7 +52,8 @@ class ReleaseMaintenanceTest(unittest.TestCase):
         os.utime(old, (time.time() - 4 * 86400, time.time() - 4 * 86400))
         recent = reports / 'recent.json'
         recent.write_text('{}')
-        for name in ['settings.json', 'notes.txt', 'release-cleanup-20260101T000000Z.json']:
+        for name in ['settings.json', 'notes.txt', 'release-cleanup-20260101T000000Z.json',
+                     'release-cleanup-20260101T000000000123Z.json']:
             file = reports / name
             file.write_text('{}')
             os.utime(file, (time.time() - 4 * 86400, time.time() - 4 * 86400))
@@ -70,6 +73,7 @@ class ReleaseMaintenanceTest(unittest.TestCase):
         self.assertTrue((reports / 'settings.json').exists())
         self.assertTrue((reports / 'notes.txt').exists())
         self.assertFalse((reports / 'release-cleanup-20260101T000000Z.json').exists())
+        self.assertFalse((reports / 'release-cleanup-20260101T000000000123Z.json').exists())
         self.assertEqual((self.root / '.env').read_text(), 'private configuration')
         self.assertTrue((self.root / 'incoming/legacy' / self.stage.name).is_dir())
         second, _ = maintenance.maintain(self.root, True)
@@ -88,6 +92,37 @@ class ReleaseMaintenanceTest(unittest.TestCase):
             maintenance.maintain(self.root, True)
         self.assertTrue((self.downloads / 'LycanSync-0.3.8-windows-x64-setup.exe').exists())
         self.assertTrue(self.stage.exists())
+
+    def test_repeated_cleanup_in_same_second_preserves_first_report(self):
+        class Clock:
+            calls = 0
+
+            @classmethod
+            def now(cls, tz):
+                cls.calls += 1
+                return datetime(2026, 11, 16, tzinfo=timezone.utc) + timedelta(microseconds=cls.calls)
+
+        with patch.object(maintenance, 'datetime', Clock):
+            first, _ = maintenance.maintain(self.root, True)
+            first_report = self.root / first['report']
+            original = first_report.read_bytes()
+            second, _ = maintenance.maintain(self.root, True)
+        self.assertEqual(second['removeFiles'], 0)
+        self.assertEqual(first_report.read_bytes(), original)
+        self.assertNotEqual(first['report'], second['report'])
+
+    def test_existing_report_stops_cleanup_before_deleting_files(self):
+        with patch.object(maintenance, 'datetime') as clock:
+            clock.now.return_value = datetime(2026, 11, 16, tzinfo=timezone.utc)
+            first, _ = maintenance.maintain(self.root, True)
+            first_report = self.root / first['report']
+            original = first_report.read_bytes()
+            retired = self.downloads / 'LycanSync-0.3.9-windows-x64-setup.exe'
+            retired.write_bytes(b'reintroduced old installer')
+            with self.assertRaises(FileExistsError):
+                maintenance.maintain(self.root, True)
+        self.assertEqual(first_report.read_bytes(), original)
+        self.assertEqual(retired.read_bytes(), b'reintroduced old installer')
 
 
 if __name__ == '__main__':

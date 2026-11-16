@@ -7,12 +7,16 @@ import com.lycansync.api.auth.service.AuthService;
 import com.lycansync.api.auth.service.LocalAuthService;
 import com.lycansync.api.common.image.AvatarImageProcessor;
 import com.lycansync.api.group.dto.CreateGroupRequest;
+import com.lycansync.api.group.mapper.GroupMapper;
 import com.lycansync.api.group.service.GroupService;
 import com.lycansync.api.presence.dto.PresenceHeartbeatRequest;
 import com.lycansync.api.presence.mapper.PresenceMapper;
 import com.lycansync.api.presence.model.UserActivityType;
 import com.lycansync.api.presence.model.UserPresenceStatus;
 import com.lycansync.api.presence.service.PresenceService;
+import com.lycansync.api.rtc.service.LocalRtcRoomSummaryService;
+import io.livekit.server.RoomServiceClient;
+import livekit.LivekitModels.Room;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,6 +31,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -34,10 +40,20 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockingDetails;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -57,6 +73,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @Testcontainers
 @SpringBootTest
 @AutoConfigureMockMvc
+// 容器随测试类关闭，上下文也应结束，避免旧定时任务继续访问已销毁的数据库。
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class GroupApplicationIT {
 
     private static final String PASSWORD = "group-test-password";
@@ -82,6 +100,9 @@ class GroupApplicationIT {
     @Autowired
     private GroupService groupService;
 
+    @MockitoSpyBean
+    private GroupMapper groupMapper;
+
     @Autowired
     private PresenceService presenceService;
 
@@ -102,8 +123,69 @@ class GroupApplicationIT {
 
     @BeforeEach
     void resetDatabase() {
-        jdbc.sql("TRUNCATE system_state, auth_qq_identity, auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
+        jdbc.sql("TRUNCATE rtc_voice_time, system_state, auth_qq_identity, auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_file_upload_reservation, chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
         jdbc.sql("INSERT INTO system_state(id) VALUES (1)").update();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldReadRoomOccupanciesWithOneQueryWithoutLoadingGroupProfiles() throws Exception {
+        UUID own = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        UUID empty = UUID.randomUUID();
+        for (UUID id : List.of(own, other, empty)) {
+            jdbc.sql("INSERT INTO app_user(id,nickname,avatar,administrator,created_at) VALUES (?,'语音查询测试','',false,now())")
+                    .param(id).update();
+        }
+        var groupIds = new ArrayList<UUID>();
+        var roomNames = new ArrayList<String>();
+        Instant createdAt = Instant.parse("2026-11-16T00:00:00Z");
+        for (int index = 0; index < 17; index++) {
+            UUID groupId = UUID.randomUUID();
+            UUID roomKey = UUID.randomUUID();
+            UUID owner = index < 16 && index % 2 == 0 ? own : other;
+            jdbc.sql("INSERT INTO chat_group(id,name,description,avatar,owner_user_id,created_at,updated_at,rtc_room_key) VALUES (?,'查询测试','',?,?,?,?,?)")
+                    .params(groupId, "x".repeat(64 * 1024), owner,
+                            java.sql.Timestamp.from(createdAt.plusSeconds(index)),
+                            java.sql.Timestamp.from(createdAt.plusSeconds(index)), roomKey).update();
+            jdbc.sql("INSERT INTO group_member(group_id,user_id,joined_at) VALUES (?,?,now())")
+                    .params(groupId, owner).update();
+            if (index < 16 && !owner.equals(own)) {
+                jdbc.sql("INSERT INTO group_member(group_id,user_id,joined_at) VALUES (?,?,now())")
+                        .params(groupId, own).update();
+            }
+            if (index < 16) {
+                groupIds.add(groupId);
+                roomNames.add("lycan-sync-group-" + roomKey);
+            }
+        }
+        RoomServiceClient rooms = mock(RoomServiceClient.class);
+        retrofit2.Call<List<Room>> call = mock(retrofit2.Call.class);
+        when(rooms.listRooms(anyList())).thenReturn(call);
+        when(call.execute()).thenReturn(retrofit2.Response.success(List.of(
+                Room.newBuilder().setName(roomNames.get(0)).setNumParticipants(3).build(),
+                Room.newBuilder().setName(roomNames.get(0)).setNumParticipants(2).build(),
+                Room.newBuilder().setName("lycan-sync-group-" + UUID.randomUUID()).setNumParticipants(99).build())));
+        var summaries = new LocalRtcRoomSummaryService(rooms, groupService);
+        var user = new AuthenticatedUser(own, "语音查询测试", false);
+
+        clearInvocations(groupMapper);
+        var occupancies = summaries.getOccupancies(user);
+        int queries = mockingDetails(groupMapper).getInvocations().size();
+        System.out.println("Room occupancy GroupMapper calls for 16 groups: " + queries);
+        assertThat(occupancies).extracting("groupId").containsExactlyElementsOf(groupIds);
+        assertThat(occupancies.get(0).participantCount()).isEqualTo(3);
+        assertThat(occupancies.subList(1, occupancies.size())).allMatch(item -> item.participantCount() == 0);
+        verify(rooms).listRooms(org.mockito.ArgumentMatchers.argThat(names -> names.size() == 16
+                && names.containsAll(roomNames)));
+        assertThat(queries).isLessThanOrEqualTo(1);
+
+        jdbc.sql("DELETE FROM group_member WHERE group_id = ? AND user_id = ?").params(groupIds.get(0), own).update();
+        assertThat(summaries.getOccupancies(user)).extracting("groupId")
+                .containsExactlyElementsOf(groupIds.subList(1, groupIds.size()));
+        clearInvocations(rooms);
+        assertThat(summaries.getOccupancies(new AuthenticatedUser(empty, "无群成员", false))).isEmpty();
+        verifyNoInteractions(rooms);
     }
 
     @Test
@@ -129,8 +211,11 @@ class GroupApplicationIT {
         var profile = mvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, "Bearer " + ownerToken))
                 .andExpect(status().isOk()).andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
                 .andExpect(jsonPath("$.userId").value(friendId.toString()))
-                .andExpect(jsonPath("$.signature").value("今晚开黑")).andReturn();
-        assertThat(objectMapper.readTree(profile.getResponse().getContentAsString()).size()).isEqualTo(2);
+                .andExpect(jsonPath("$.signature").value("今晚开黑"))
+                .andExpect(jsonPath("$.sharedVoiceSeconds").value(0))
+                .andExpect(jsonPath("$.deletedAt").isEmpty()).andReturn();
+        var memberProfile = objectMapper.readTree(profile.getResponse().getContentAsString());
+        assertThat(memberProfile.size()).isEqualTo(4);
         mvc.perform(get(path)).andExpect(status().isUnauthorized());
         mvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, "Bearer " + outsiderSession.sessionToken()))
                 .andExpect(status().isNotFound());
@@ -248,6 +333,56 @@ class GroupApplicationIT {
     }
 
     @Test
+    void shouldAuthorizePresenceWaitWithoutLoadingGroupDetails() throws Exception {
+        var owner = localAuth.register(new LocalRegistrationRequest("WaitGroupOwner", PASSWORD));
+        var session = localAuth.register(new LocalRegistrationRequest("LightweightWaiter", PASSWORD));
+        var outsider = localAuth.register(new LocalRegistrationRequest("WaitOutsider", PASSWORD));
+        var user = authService.authenticate(session.sessionToken());
+        var groupOwner = authService.authenticate(owner.sessionToken());
+        UUID groupId = groupService.createGroup(groupOwner, new CreateGroupRequest("轻量等待", "", "")).id();
+        groupService.addMember(groupId, groupOwner, user.id());
+        jdbc.sql("""
+                INSERT INTO app_user(id, nickname, avatar, administrator, created_at)
+                SELECT gen_random_uuid(), 'SyntheticMember', repeat('x', 65536), FALSE, now()
+                FROM generate_series(1, 64)
+                """).update();
+        jdbc.sql("""
+                INSERT INTO group_member(group_id, user_id, joined_at)
+                SELECT :groupId, id, now() FROM app_user WHERE nickname = 'SyntheticMember'
+                """).param("groupId", groupId).update();
+        clearInvocations(groupMapper);
+
+        var waiting = mvc.perform(get("/api/groups/{groupId}/presence-changes", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + session.sessionToken())
+                        .param("clientId", UUID.randomUUID().toString()).param("requestId", "1"))
+                .andExpect(request().asyncStarted()).andReturn();
+        mvc.perform(asyncDispatch(waiting)).andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
+                .andExpect(jsonPath("$.length()").value(4)).andExpect(jsonPath("$.changed").value(true));
+        System.out.println("Presence wait GroupMapper calls: " + mockingDetails(groupMapper).getInvocations().stream()
+                .map(invocation -> invocation.getMethod().getName()).toList());
+        verify(groupMapper, never()).findGroup(groupId, user.id());
+        verify(groupMapper, never()).findMembers(groupId);
+        verify(groupMapper).memberExists(groupId, user.id());
+
+        mvc.perform(get("/api/groups/{groupId}/presence-changes", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + outsider.sessionToken())
+                        .param("clientId", UUID.randomUUID().toString()).param("requestId", "1"))
+                .andExpect(status().isNotFound());
+        mvc.perform(get("/api/groups/{groupId}/presence-changes", UUID.randomUUID())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + session.sessionToken())
+                        .param("clientId", UUID.randomUUID().toString()).param("requestId", "1"))
+                .andExpect(status().isNotFound());
+        mvc.perform(delete("/api/groups/{groupId}/members/{userId}", groupId, user.id())
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + owner.sessionToken()))
+                .andExpect(status().isNoContent());
+        mvc.perform(get("/api/groups/{groupId}/presence-changes", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + session.sessionToken())
+                        .param("clientId", UUID.randomUUID().toString()).param("requestId", "2"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
     void shouldWakeGroupPresenceWaitersOnlyAfterACommittedStatusChange() throws Exception {
         String token = localAuth.register(new LocalRegistrationRequest("PresenceWaiter", PASSWORD)).sessionToken();
         String groupBody = mvc.perform(post("/api/groups")
@@ -265,7 +400,8 @@ class GroupApplicationIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.changed").value(true))
                 .andExpect(jsonPath("$.version").value(0))
-                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$.detailVersion").value(0))
+                .andExpect(jsonPath("$.length()").value(4))
                 .andReturn().getResponse().getContentAsString();
         String serverInstanceId = objectMapper.readTree(initialBody).get("serverInstanceId").asText();
         String secondClientId = UUID.randomUUID().toString();
@@ -420,7 +556,8 @@ class GroupApplicationIT {
         UUID groupId = groupService.createGroup(user, new CreateGroupRequest("最近游戏", null, null)).id();
         var game = new PresenceHeartbeatRequest.Activity(UserActivityType.GAME, "最终幻想14");
         presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE, game, true, true));
-        jdbc.sql("UPDATE user_presence SET activity_started_at = now() - interval '30 minutes'").update();
+        jdbc.sql("UPDATE user_presence SET activity_started_at = ?")
+                .param(java.sql.Timestamp.from(Instant.now().minusSeconds(1800))).update();
         presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE, null, null, null));
         mvc.perform(get("/api/groups/{groupId}/presences", groupId)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
@@ -551,7 +688,7 @@ class GroupApplicationIT {
     void shouldNotSaveGroupWithUnknownOwner() {
         AuthenticatedUser missingUser = new AuthenticatedUser(UUID.randomUUID(), "不存在", false);
         assertThatThrownBy(() -> groupService.createGroup(missingUser, new CreateGroupRequest("回滚测试", null, null)))
-                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+                .isInstanceOf(com.lycansync.api.group.exception.GroupException.class);
         assertThat(jdbc.sql("SELECT count(*) FROM chat_group").query(Long.class).single()).isZero();
     }
 
@@ -631,7 +768,7 @@ class GroupApplicationIT {
                 .param(userId).update()).isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
 
         var migration = Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
-                .schemas(schema).load().migrate();
+                .schemas(schema).target("16").load().migrate();
         assertThat(migration.migrationsExecuted).isEqualTo(2);
         assertThat(isolated.sql("SELECT * FROM user_presence WHERE user_id = ?").param(userId).query().singleRow())
                 .containsAllEntriesOf(previous);

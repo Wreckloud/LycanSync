@@ -18,6 +18,7 @@ function setup(width: number, height: number, shape: 'circle' | 'square' = 'circ
   const scope = effectScope();
   const source = { bitmap: { width, height }, previewUrl: 'blob:avatar', savedAvatar };
   const encodeAvatarCrop = vi.fn(async () => new Blob(['png']));
+  const blobToDataUrl = vi.fn(async () => 'data:image/png;base64,cG5n');
   const emit = vi.fn();
   // 使用正式组件的计算属性和监听器，避免只验证独立公式而遗漏旋转时的状态更新。
   const cropper = scope.run(() => runInNewContext(`${compiled}\n({ zoom, rotation, viewportSize,
@@ -26,14 +27,14 @@ function setup(width: number, height: number, shape: 'circle' | 'square' = 'circ
     defineProps: () => ({ source, shape }), defineEmits: () => emit,
     document: { activeElement: null }, HTMLElement: class {},
     AvatarImageError, calculateAvatarCrop, zoomAvatarWithWheel, encodeAvatarCrop,
-    blobToDataUrl: vi.fn(async () => 'data:image/png;base64,cG5n'),
+    blobToDataUrl,
   })) as {
     zoom: Ref<number>; rotation: Ref<number>; viewportSize: Ref<number>;
     offsetX: Ref<number>; offsetY: Ref<number>; crop: ComputedRef<AvatarCrop>;
     imageStyle: ComputedRef<{ width: string; height: string; transform: string }>;
     clampOffset(): void; applyCrop(): Promise<void>;
   };
-  return { scope, cropper, source, encodeAvatarCrop, emit };
+  return { scope, cropper, source, encodeAvatarCrop, blobToDataUrl, emit };
 }
 
 it.each([[1200, 800], [800, 1200], [800, 800]])('放大并拖动后旋转保持原图中心和倍率：%s×%s', async (width, height) => {
@@ -123,4 +124,42 @@ it('已有头像未调整时复用原始内容，实际微调后仍重新生成'
     expect(encodeAvatarCrop).toHaveBeenCalledOnce();
     expect(emit).toHaveBeenLastCalledWith('apply', 'data:image/png;base64,cG5n');
   } finally { scope.stop(); }
+});
+
+it('裁剪编码期间销毁，不再把迟到图片转换为 Base64 或提交', async () => {
+  const f = setup(512, 512);
+  let resolve!: (blob: Blob) => void;
+  f.encodeAvatarCrop.mockImplementationOnce(() => new Promise<Blob>(done => { resolve = done; }));
+  const applying = f.cropper.applyCrop();
+  f.scope.stop();
+  resolve(new Blob([new Uint8Array(512 * 1024)]));
+  await applying;
+  expect(f.blobToDataUrl).not.toHaveBeenCalled();
+  expect(f.emit).not.toHaveBeenCalled();
+});
+
+it('Base64 读取期间销毁，迟到结果不能提交', async () => {
+  const f = setup(512, 512);
+  let resolve!: (value: string) => void;
+  let started!: () => void;
+  const reading = new Promise<void>(done => { started = done; });
+  f.blobToDataUrl.mockImplementationOnce(() => new Promise<string>(done => { resolve = done; started(); }));
+  const applying = f.cropper.applyCrop();
+  await reading;
+  expect(f.blobToDataUrl).toHaveBeenCalledOnce();
+  f.scope.stop();
+  resolve('data:image/png;base64,bGF0ZQ==');
+  await applying;
+  expect(f.emit).not.toHaveBeenCalled();
+});
+
+it('销毁后到达的应用回调不再启动编码或提交保存的头像', async () => {
+  for (const saved of [undefined, 'data:image/png;base64,c2F2ZWQ=']) {
+    const f = setup(256, 256, 'circle', saved);
+    f.scope.stop();
+    await f.cropper.applyCrop();
+    expect(f.encodeAvatarCrop).not.toHaveBeenCalled();
+    expect(f.blobToDataUrl).not.toHaveBeenCalled();
+    expect(f.emit).not.toHaveBeenCalled();
+  }
 });

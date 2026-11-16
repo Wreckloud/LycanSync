@@ -158,7 +158,7 @@ public class GroupController {
             @RequestParam(required = false) @Parameter(description = "上次响应的版本") Long version,
             HttpServletResponse response
     ) {
-        groupService.findGroup(groupId, user);
+        groupService.requireMember(groupId, user);
         response.setHeader(HttpHeaders.CACHE_CONTROL, CacheControl.noStore().getHeaderValue());
         return groupPresenceChangeService.await(user.id(), groupId, clientId, requestId, serverInstanceId, version);
     }

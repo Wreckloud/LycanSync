@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test('本机内容缓存统一清理，取消与 Esc 不删除，清理后继续缓存且全部清理不退出登录', async ({ page }) => {
-  await page.route('**/api/**', route => route.abort());
+  await page.route(url => url.pathname.startsWith('/api/'), route => route.abort());
   await page.route('**/src/main.ts*', async route => {
     const original = await (await route.fetch()).text();
     const vuePath = original.match(/from ["']([^"']*\/vue\.js[^"']*)["']/)?.[1];

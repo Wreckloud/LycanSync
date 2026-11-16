@@ -152,6 +152,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
   let microphonePushToTalk = false;
   let microphoneTask: { room: Room; promise: Promise<void> } | null = null;
   let listeningTask: { room: Room; promise: Promise<void> } | null = null;
+  let leaveTask: { room: Room; promise: Promise<void> } | null = null;
   let microphoneCleanupFailed = false;
   const screenShareActive = ref(false);
   const screenShareStarting = ref(false);
@@ -595,7 +596,19 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     }
   }
 
-  async function leave(): Promise<void> {
+  function leave(): Promise<void> {
+    const currentRoom = activeRoom.value;
+    if (!currentRoom) return leaveCurrentRoom();
+    if (leaveTask?.room === currentRoom) return leaveTask.promise;
+    // 同一房间只清理一次；重复离房不能越过仍在等待的远控撤权，提前放行下一次入房。
+    const task = { room: currentRoom, promise: Promise.resolve() };
+    leaveTask = task;
+    task.promise = leaveCurrentRoom().finally(() => { if (leaveTask === task) leaveTask = null; });
+    return task.promise;
+  }
+
+  async function leaveCurrentRoom(): Promise<void> {
+    const previousNotice = noticeEvent.value;
     microphoneVersion++;
     microphoneIntent.value = false;
     forbidMicrophone();
@@ -647,7 +660,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     participants.value = [];
     status.value = 'idle';
     needsAudioPlayback.value = false;
-    notice.value = '';
+    // 只清理离房前的旧提示，等待期间产生的断开原因或清理错误应保留。
+    if (noticeEvent.value === previousNotice) notice.value = '';
     // 桌面关窗需等待离房信令发送完毕；本地状态和采集已在上方立即清理。
     try {
       await nativeStop;

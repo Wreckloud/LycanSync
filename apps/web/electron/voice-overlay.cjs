@@ -57,7 +57,8 @@ function createOverlayPage({ rendererRoot, devRendererUrl, fetch }) {
     catch { return new Response(null, { status: 400 }); }
     if (path.split(/[\\/]/).includes('..')) return new Response(null, { status: 403 });
     const allowed = path === '/overlay.html' || /^\/assets\/[\w.-]+$/.test(path)
-      || (devRendererUrl && (path.startsWith('/src/overlay/') || path.startsWith('/node_modules/.vite/')
+      || (devRendererUrl && (path.startsWith('/src/overlay/') || path === '/src/components/Avatar.vue'
+        || path.startsWith('/node_modules/.vite/')
         || path === '/@vite/client' || path === '/@id/__x00__plugin-vue:export-helper'
         || path === '/node_modules/vite/dist/client/env.mjs'));
     if (!allowed) return new Response(null, { status: 404 });

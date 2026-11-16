@@ -3,7 +3,7 @@ import type { ChatMessage } from '../src/chat/chatApi';
 
 test.beforeEach(async ({ page }) => {
   // 未提供模拟的业务请求明确失败，不能落到 Vite 的真实服务器代理。
-  await page.route('**/api/**', (route) => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
+  await page.route(url => url.pathname.startsWith('/api/'), (route) => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
   await page.route('**/api/presence/heartbeat', (route) => route.fulfill({ status: 204 }));
   await page.route('**/api/rtc/room-occupancies', (route) => route.fulfill({ json: [] }));
 });
@@ -51,7 +51,7 @@ test('长文本输入和清空平滑伸缩，发送后随输入框收起完整�
     if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
     if (url.pathname.endsWith('/messages')) {
       if (route.request().method() === 'POST') return route.fulfill({ json: { ...chatMessage(++sent), content: outgoing } });
-      return route.fulfill({ json: { messages: url.searchParams.has('after') ? [] : initial, hasMore: false } });
+      return route.fulfill({ json: { messages: url.searchParams.has('afterMessageId') ? [] : initial, hasMore: false } });
     }
     return route.fulfill({ status: 404 });
   });
@@ -578,6 +578,47 @@ test('图片加载失败只在用户重试时再次请求', async ({ page }) => 
   expect(imageRequests).toBe(2);
 });
 
+test('反复放大已加载图片复用原始内容，关闭后仅保留列表预览 URL', async ({ page }) => {
+  await mockChatShell(page);
+  await page.addInitScript(() => {
+    const live = new Set<string>();
+    const create = URL.createObjectURL.bind(URL);
+    const revoke = URL.revokeObjectURL.bind(URL);
+    URL.createObjectURL = blob => { const url = create(blob); live.add(url); return url; };
+    URL.revokeObjectURL = url => { live.delete(url); revoke(url); };
+    Object.defineProperty(window, '__liveImageUrls', { value: live });
+  });
+  const image = imageMessage(1, 'reused-image');
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+  let imageRequests = 0;
+  await page.route('**/api/groups**', route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
+    if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (url.pathname === `/api/groups/${groupId}/messages`) {
+      return route.fulfill({ json: { messages: url.searchParams.has('afterMessageId') ? [] : [image], hasMore: false } });
+    }
+    if (url.pathname === `/api/groups/${groupId}/attachments/reused-image`) {
+      imageRequests++;
+      return route.fulfill({ contentType: 'image/png', body: png });
+    }
+    return route.fulfill({ status: 404 });
+  });
+  await page.goto('/');
+  await expect(page.getByAltText('群主 发送的图片')).toHaveJSProperty('naturalWidth', 1);
+  const liveUrls = () => page.evaluate(() =>
+    (window as unknown as { __liveImageUrls: Set<string> }).__liveImageUrls.size);
+  for (let cycle = 0; cycle < 12; cycle++) {
+    await page.getByRole('button', { name: '查看图片', exact: true }).click();
+    await expect(page.locator('.pswp__img').last()).toHaveJSProperty('naturalWidth', 1);
+    await page.locator('.pswp__button--close').click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect.poll(liveUrls).toBe(1);
+  }
+  console.log(JSON.stringify({ imagePreviewCycles: 12, imageRequests, liveUrlsAfterClose: await liveUrls() }));
+  expect(imageRequests).toBe(1);
+});
+
 test('历史请求失败可重试，到底后不再请求更早消息', async ({ page }) => {
   await mockChatShell(page);
   const initial = Array.from({ length: 30 }, (_, index) => chatMessage(index + 31));
@@ -695,7 +736,7 @@ test('加号多选按原始字节和顺序发送，图片作为文件并只在�
     };
   });
   const originalPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
-  const uploaded: { name: string; bytes: Buffer; content: string }[] = [];
+  const uploaded: { id: string; name: string; bytes: Buffer; content: string }[] = [];
   await page.route('**/api/groups**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -711,11 +752,13 @@ test('加号多选按原始字节和顺序发送，图片作为文件并只在�
       const content = Buffer.from(headers['x-message-content'] ?? '', 'base64url').toString('utf8');
       const bytes = Buffer.from(await page.evaluate((id) =>
         (window as unknown as { __chatUploadBodies: Record<string, number[]> }).__chatUploadBodies[id]!, String(headers['x-upload-id'])));
-      uploaded.push({ name, bytes, content });
+      uploaded.push({ id: String(headers['x-upload-id']), name, bytes, content });
       const message = fileMessage(`F${uploaded.length}`, String(headers['x-upload-id']), name, content);
       message.attachment!.byteSize = bytes.length;
       return route.fulfill({ status: 201, json: message });
     }
+    const preview = uploaded.find(item => url.pathname === `/api/groups/${groupId}/files/${item.id}`);
+    if (preview && request.method() === 'GET') return route.fulfill({ body: preview.bytes });
     return route.fulfill({ status: 404 });
   });
 
@@ -733,7 +776,8 @@ test('加号多选按原始字节和顺序发送，图片作为文件并只在�
   expect(uploaded.map((item) => item.name)).toEqual(['原图.png', '资料.dat']);
   expect(uploaded.map((item) => [...item.bytes])).toEqual([[...originalPng], [9, 8, 7]]);
   expect(uploaded.map((item) => item.content)).toEqual(['附在第一条', '']);
-  await expect(page.locator('.chat-file-card')).toHaveCount(2);
+  await expect(page.locator('.chat-file-media')).toHaveCount(2);
+  await expect(page.getByRole('button', { name: '查看图片', exact: true })).toBeVisible();
 });
 
 test('批量文件失败后重试只再次发送失败项', async ({ page }) => {
@@ -999,7 +1043,9 @@ test('文件下载分块写入保存目标，不创建整文件 Blob', async ({ 
     if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
     if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
     if (url.pathname === `/api/groups/${groupId}/messages`) {
-      return route.fulfill({ json: { messages: [fileMessage('F-download', 'download-id', '保存文件.dat')], hasMore: false } });
+      const message = fileMessage('F-download', 'download-id', '保存文件.dat');
+      message.attachment!.byteSize = downloadBytes.length;
+      return route.fulfill({ json: { messages: [message], hasMore: false } });
     }
     if (url.pathname === `/api/groups/${groupId}/files/download-id`) {
       return route.fulfill({ status: 200, contentType: 'application/octet-stream', body: Buffer.from(downloadBytes) });

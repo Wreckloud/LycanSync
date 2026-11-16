@@ -118,13 +118,16 @@ app.whenReady().then(() => {
     await page.evaluate(() => (window as unknown as ScenarioWindow).viewing.show());
     await expect.poll(async () => (await sample()).encodings[1]?.active).toBe(true);
     await expect.poll(async () => (await sample()).decoded).toBeGreaterThan(hidden.decoded);
+    // 主层重新启用不等于远端已经恢复主层画面。
+    await expect.poll(sample, { timeout: 30_000 }).toMatchObject({ width: 1920, height: 1080, enabled: true });
+    const resumed = await sample();
     await page.evaluate(() => (window as unknown as ScenarioWindow).viewing.configure());
     const changed = await sample();
     expect(changed.encodings.map(({ maxFramerate, maxBitrate }) => ({ maxFramerate, maxBitrate }))).toEqual([
       { maxFramerate: 30, maxBitrate: 1_000_000 }, { maxFramerate: 30, maxBitrate: 8_000_000 },
     ]);
     const reportPath = testInfo.outputPath('viewing-flow.json');
-    writeFileSync(reportPath, JSON.stringify({ room: server.room, low, high, hidden, changed }, null, 2));
+    writeFileSync(reportPath, JSON.stringify({ room: server.room, low, high, hidden, resumed, changed }, null, 2));
     await testInfo.attach('viewing-flow.json', { path: reportPath, contentType: 'application/json' });
   } finally {
     try {

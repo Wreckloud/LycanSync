@@ -18,6 +18,9 @@ declare global {
       denyScreen: boolean;
       delayScreen: boolean;
       releaseScreen?: () => void;
+      releaseToken?: () => void;
+      tokenResponseStatus?: number;
+      tokenResponseReturned?: boolean;
     };
     __customEntrancePlayCount: number;
     __defaultSoundPlayCount: number;
@@ -210,7 +213,8 @@ test('未共享时显示群成员头像，停止共享后恢复头像', async ({
   const quickVolumeSettings = page.getByRole('region', { name: '麦克风选项', exact: true });
   await expect(quickVolumeSettings.getByRole('slider')).toHaveCount(1);
   await expect(quickVolumeSettings.getByRole('meter')).toHaveCount(1);
-  await expect(quickVolumeSettings.getByRole('checkbox')).toHaveCount(0);
+  await expect(quickVolumeSettings.getByRole('checkbox')).toHaveCount(1);
+  await expect(quickVolumeSettings.getByRole('checkbox', { name: '智能声音处理', exact: true })).toBeChecked();
   await expect(page.getByRole('button', { name: '媒体诊断' })).toHaveCount(0);
   const peerCountBeforeSettings = await page.evaluate(() => window.__rtcTest.peers.length);
   await quickVolumeSettings.getByRole('button', { name: '语音设置', exact: true }).click();
@@ -288,19 +292,35 @@ test('单击只预览；入房接口未启用时明确提示', async ({ page }) 
   await page.screenshot({ path: 'test-results/lobby.png', fullPage: true });
 });
 
-test('取消尚未完成的凭证请求后，不允许迟到的响应自动入房', async ({ page }) => {
-  let releaseResponse: (() => void) | undefined;
-  await page.route('**/api/rtc/token', async (route) => {
-    await new Promise<void>((resolve) => { releaseResponse = resolve; });
-    await route.fulfill({ status: 503 });
+test('取消尚未完成的凭证请求后，不允许迟到的有效凭证自动入房', async ({ context, page }) => {
+  await installSyntheticMedia(context);
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (new URL(url, location.href).pathname !== '/api/rtc/token') return originalFetch(input, init);
+      // 故意忽略取消并延迟交付有效凭证，验证入房资格，而非只验证 fetch 能被中止。
+      const response = await originalFetch(input, { ...init, signal: undefined });
+      const body = await response.text();
+      window.__rtcTest.tokenResponseStatus = response.status;
+      await new Promise<void>(resolve => { window.__rtcTest.releaseToken = resolve; });
+      window.__rtcTest.tokenResponseReturned = true;
+      return new Response(body, { status: response.status, headers: response.headers });
+    };
   });
   await page.goto('/');
   await page.getByRole('button', { name: /开黑小队，单击预览，双击加入语音/ }).dblclick();
-  await expect.poll(() => Boolean(releaseResponse)).toBe(true);
+  await expect.poll(() => page.evaluate(() => Boolean(window.__rtcTest.releaseToken))).toBe(true);
+  expect(await page.evaluate(() => window.__rtcTest.tokenResponseStatus)).toBe(200);
   await page.getByRole('button', { name: '取消连接' }).click();
-  releaseResponse!();
+  await page.evaluate(() => window.__rtcTest.releaseToken!());
+  await expect.poll(() => page.evaluate(() => window.__rtcTest.tokenResponseReturned)).toBe(true);
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
   await expect(page.getByRole('button', { name: '加入当前群组语音' })).toBeEnabled();
+  await expect(page.getByTestId('callbar')).toHaveCount(0);
   await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(await page.evaluate(() => [window.__rtcTest.peers.length,
+    window.__rtcTest.microphoneCalls, window.__rtcTest.screenCalls])).toEqual([0, 0, 0]);
 });
 
 test('通话中单击其他群只预览，双击时要求确认切换', async ({ context, page }) => {

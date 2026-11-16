@@ -301,12 +301,25 @@ mod windows {
     use super::*;
     use crate::protocol::{RemoteKey, RemoteMouseButton};
     use crate::sources::windows::monitor_and_virtual_bounds;
+    #[cfg(not(test))]
+    use ::windows::Win32::UI::Input::KeyboardAndMouse::SendInput;
     use ::windows::Win32::UI::Input::KeyboardAndMouse::{
-        INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP,
-        MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE,
-        MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL,
-        MOUSEINPUT, SendInput, VIRTUAL_KEY,
+        INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
+        KEYEVENTF_KEYUP, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+        MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK,
+        MOUSEEVENTF_WHEEL, MOUSEINPUT, VIRTUAL_KEY,
     };
+
+    #[cfg(test)]
+    thread_local! {
+        // 只替换最终系统调用，断言失败时的 Drop 也不能向真实桌面发送抬起事件。
+        static TEST_INPUTS: std::cell::RefCell<Vec<INPUT>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    #[cfg(test)]
+    pub(super) fn take_test_inputs() -> Vec<INPUT> {
+        TEST_INPUTS.with(|inputs| std::mem::take(&mut *inputs.borrow_mut()))
+    }
 
     pub(super) fn inject(monitor: usize, input: Injection) -> Result<(), ErrorCode> {
         let mut events = Vec::with_capacity(2);
@@ -387,11 +400,26 @@ mod windows {
                 }
                 RemoteInputEvent::KeyDown { key } | RemoteInputEvent::KeyUp { key } => {
                     let vk = virtual_key(key).ok_or(ErrorCode::RemoteControlInputFailed)?;
-                    let flags = if matches!(input, RemoteInputEvent::KeyUp { .. }) {
+                    let mut flags = if matches!(input, RemoteInputEvent::KeyUp { .. }) {
                         KEYEVENTF_KEYUP
                     } else {
                         Default::default()
                     };
+                    // 导航区键需保留扩展标记，避免被目标应用识别为数字键盘按键。
+                    if matches!(
+                        key,
+                        RemoteKey::Delete
+                            | RemoteKey::Home
+                            | RemoteKey::End
+                            | RemoteKey::PageUp
+                            | RemoteKey::PageDown
+                            | RemoteKey::Left
+                            | RemoteKey::Right
+                            | RemoteKey::Up
+                            | RemoteKey::Down
+                    ) {
+                        flags |= KEYEVENTF_EXTENDEDKEY;
+                    }
                     events.push(INPUT {
                         r#type: INPUT_KEYBOARD,
                         Anonymous: INPUT_0 {
@@ -405,7 +433,13 @@ mod windows {
                 }
             },
         }
+        #[cfg(not(test))]
         let sent = unsafe { SendInput(&events, std::mem::size_of::<INPUT>() as i32) };
+        #[cfg(test)]
+        let sent = TEST_INPUTS.with(|inputs| {
+            inputs.borrow_mut().extend_from_slice(&events);
+            events.len() as u32
+        });
         if sent as usize != events.len() {
             return Err(ErrorCode::RemoteControlInputFailed);
         }
@@ -496,6 +530,109 @@ mod windows {
 mod tests {
     use super::*;
     use crate::protocol::{RemoteKey, RemoteMouseButton};
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_navigation_keys_preserve_extended_flags_on_press_and_release() {
+        use ::windows::Win32::UI::Input::KeyboardAndMouse::{
+            INPUT_KEYBOARD, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
+        };
+
+        windows::take_test_inputs();
+        for (key, extended) in [
+            (RemoteKey::Delete, true),
+            (RemoteKey::Home, true),
+            (RemoteKey::End, true),
+            (RemoteKey::PageUp, true),
+            (RemoteKey::PageDown, true),
+            (RemoteKey::Left, true),
+            (RemoteKey::Right, true),
+            (RemoteKey::Up, true),
+            (RemoteKey::Down, true),
+            (RemoteKey::Enter, false),
+            (RemoteKey::LetterA, false),
+            (RemoteKey::Digit0, false),
+            (RemoteKey::Shift, false),
+            (RemoteKey::Control, false),
+            (RemoteKey::Alt, false),
+        ] {
+            windows::inject(
+                usize::MAX,
+                Injection::Event(RemoteInputEvent::KeyDown { key }),
+            )
+            .unwrap();
+            windows::inject(
+                usize::MAX,
+                Injection::Event(RemoteInputEvent::KeyUp { key }),
+            )
+            .unwrap();
+            let inputs = windows::take_test_inputs();
+            assert_eq!(inputs.len(), 2);
+            for (index, input) in inputs.iter().enumerate() {
+                assert_eq!(input.r#type, INPUT_KEYBOARD);
+                // 先检查类型，再读取对应的 Windows 联合体成员。
+                let keyboard = unsafe { input.Anonymous.ki };
+                assert_eq!(keyboard.dwFlags.contains(KEYEVENTF_EXTENDEDKEY), extended);
+                assert_eq!(keyboard.dwFlags.contains(KEYEVENTF_KEYUP), index == 1);
+            }
+            assert_eq!(unsafe { inputs[0].Anonymous.ki.wVk }, unsafe {
+                inputs[1].Anonymous.ki.wVk
+            });
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn drop_releases_held_inputs_during_unwind_without_real_system_input() {
+        use ::windows::Win32::UI::Input::KeyboardAndMouse::{
+            INPUT_KEYBOARD, INPUT_MOUSE, KEYEVENTF_KEYUP, MOUSEEVENTF_LEFTUP, VK_A,
+        };
+
+        windows::take_test_inputs();
+        let result = std::panic::catch_unwind(|| {
+            let mut manager = RemoteInputManager::default();
+            manager
+                .grant("video", "monitor:1:0", "control", "friend", usize::MAX)
+                .unwrap();
+            for (index, input) in [
+                RemoteInputEvent::KeyDown {
+                    key: RemoteKey::LetterA,
+                },
+                RemoteInputEvent::ButtonDown {
+                    button: RemoteMouseButton::Left,
+                    x: 0,
+                    y: 0,
+                },
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                manager
+                    .apply(
+                        "video",
+                        "control",
+                        "friend",
+                        index as u64 + 1,
+                        input,
+                        |_, _| Ok(()),
+                    )
+                    .unwrap();
+            }
+            panic!("synthetic test unwind");
+        });
+        assert!(result.is_err());
+        let inputs = windows::take_test_inputs();
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].r#type, INPUT_MOUSE);
+        assert_eq!(
+            unsafe { inputs[0].Anonymous.mi.dwFlags },
+            MOUSEEVENTF_LEFTUP
+        );
+        assert_eq!(inputs[1].r#type, INPUT_KEYBOARD);
+        let keyboard = unsafe { inputs[1].Anonymous.ki };
+        assert_eq!(keyboard.wVk, VK_A);
+        assert_eq!(keyboard.dwFlags, KEYEVENTF_KEYUP);
+    }
 
     #[test]
     fn maps_monitor_local_coordinates_into_negative_offset_virtual_desktop() {

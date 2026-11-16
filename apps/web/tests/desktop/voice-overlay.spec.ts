@@ -81,7 +81,7 @@ test('隔离覆盖页：真实协议与preload、说话展示、权限隔离、�
       manager.edit(owner, true);
     }, { ...settings, scale: 125 });
     await expect(overlay.locator('.voice-overlay')).toHaveClass(/editing/);
-    expect(await overlay.locator('.avatar').evaluate((element) => getComputedStyle(element).width)).toBe('40px');
+    expect(await overlay.locator('.avatar').evaluate((element) => getComputedStyle(element).width)).toBe('35px');
     await overlay.screenshot({ path: test.info().outputPath('overlay-preview.png'), omitBackground: true });
     const previous = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
       .find(window => window.id !== global.voiceOverlayTest.mainId)!.getBounds());
@@ -99,7 +99,7 @@ test('隔离覆盖页：真实协议与preload、说话展示、权限隔离、�
         rowHeight: element.getBoundingClientRect().height, defaultAvatar: !!element.querySelector('.avatar svg'),
         frame: getComputedStyle(element.closest('.voice-overlay')!).borderWidth };
     });
-    expect(geometry).toEqual({ avatarHeight: 40, nameHeight: 40, border: '0px', font: '40px', rowHeight: 45, defaultAvatar: true, frame: '0px' });
+    expect(geometry).toEqual({ avatarHeight: 35, nameHeight: 35, border: '0px', font: '18.75px', rowHeight: 43, defaultAvatar: true, frame: '0px' });
     await overlay.screenshot({ path: test.info().outputPath('overlay-test-members.png'), omitBackground: true });
     await application.evaluate(() => {
       const { manager, owner } = global.voiceOverlayTest;

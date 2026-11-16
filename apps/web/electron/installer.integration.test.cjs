@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
-const { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } = require('node:fs');
+const { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } = require('node:fs');
 const { join, resolve } = require('node:path');
 const { test } = require('node:test');
 const { applicationEntries, upgradeInstallerUtilities, upgradeInstallerScript, upgradeInstallerPayload } = require('./build-nsis.cjs');
@@ -236,4 +236,17 @@ SectionEnd
   assert.equal(readFileSync(join(locked, 'ffmpeg.dll'), 'utf8'), 'old-library');
   assert.deepEqual(dataHashes(locked), lockedData);
   assert.ok(!existsSync(join(locked, '.lycan-update-backup')));
+
+  for (const backupState of ['committed', 'staged']) {
+    const linked = fixture(`linked-backup-${backupState}`, upgrade); const linkedData = dataHashes(linked);
+    const foreign = join(directory, `foreign-backup-${backupState}`); mkdirSync(foreign);
+    writeFileSync(join(foreign, 'state'), backupState);
+    writeFileSync(join(foreign, 'unowned.txt'), 'must-not-delete');
+    symlinkSync(foreign, join(linked, '.lycan-update-backup'), 'junction');
+    assert.notEqual(run(upgrade, [`/D=${linked}`]).status, 0, '备份目录链接必须在读取状态或递归清理前拒绝');
+    assert.equal(readFileSync(join(foreign, 'state'), 'utf8'), backupState);
+    assert.equal(readFileSync(join(foreign, 'unowned.txt'), 'utf8'), 'must-not-delete');
+    assert.equal(readFileSync(join(linked, 'LycanSync.exe'), 'utf8'), 'old-application');
+    assert.deepEqual(dataHashes(linked), linkedData);
+  }
 });

@@ -143,7 +143,7 @@ function endRotation(event: PointerEvent) {
 }
 
 async function applyCrop() {
-  if (processing.value) return;
+  if (processing.value || disposed) return;
   processing.value = true;
   error.value = '';
   try {
@@ -151,7 +151,10 @@ async function applyCrop() {
     // 仅复用已保存的头像；新上传的文件仍重绘去掉元数据。
     const unchanged = savedAvatar && bitmap.width === bitmap.height && zoom.value === 1
       && rotation.value === 0 && offsetX.value === 0 && offsetY.value === 0;
-    const avatar = unchanged ? savedAvatar : await blobToDataUrl(await encodeAvatarCrop(bitmap, crop.value));
+    if (unchanged) { emit('apply', savedAvatar); return; }
+    const blob = await encodeAvatarCrop(bitmap, crop.value);
+    if (disposed) return;
+    const avatar = await blobToDataUrl(blob);
     if (!disposed) emit('apply', avatar);
   } catch (exception) {
     if (!disposed) error.value = exception instanceof AvatarImageError ? exception.message : '无法处理头像图片。';

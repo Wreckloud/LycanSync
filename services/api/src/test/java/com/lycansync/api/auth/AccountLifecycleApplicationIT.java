@@ -10,7 +10,6 @@ import com.lycansync.api.chat.service.ChatService;
 import com.lycansync.api.group.dto.CreateGroupRequest;
 import com.lycansync.api.group.service.GroupService;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -18,6 +17,9 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.annotation.Transactional;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -26,18 +28,23 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * @author Wreckloud
  * @since 2026-11-03
  */
-@EnabledIfEnvironmentVariable(named = "ACCOUNT_TEST_DB_URL", matches = ".+/lycansync_lifecycle_test")
+@Testcontainers
 @ActiveProfiles("test-fixtures")
 @SpringBootTest(properties = "lycansync.account.public-url=https://example.com")
 @Transactional
 class AccountLifecycleApplicationIT {
+    @Container
+    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:18.6-bookworm")
+            .withDatabaseName("lycansync_lifecycle_test");
+
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry properties) {
-        properties.add("spring.datasource.url", () -> System.getenv("ACCOUNT_TEST_DB_URL"));
-        properties.add("spring.datasource.username", () -> "postgres");
-        properties.add("spring.datasource.password", () -> System.getenv("ACCOUNT_TEST_DB_PASSWORD"));
-        properties.add("spring.flyway.user", () -> "postgres");
-        properties.add("spring.flyway.password", () -> System.getenv("ACCOUNT_TEST_DB_PASSWORD"));
+        properties.add("spring.datasource.url", POSTGRES::getJdbcUrl);
+        properties.add("spring.datasource.username", POSTGRES::getUsername);
+        properties.add("spring.datasource.password", POSTGRES::getPassword);
+        properties.add("spring.flyway.url", POSTGRES::getJdbcUrl);
+        properties.add("spring.flyway.user", POSTGRES::getUsername);
+        properties.add("spring.flyway.password", POSTGRES::getPassword);
     }
     @Autowired private JdbcClient jdbc;
     @Autowired private AccessLinkService links;

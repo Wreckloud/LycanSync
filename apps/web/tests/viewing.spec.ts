@@ -10,7 +10,7 @@ const groups = ['观看测试', '另一群组'].map((name, index) => ({
 
 // 只替换网络和 RTC 边界；App、窗口登记、设置和成员组件使用生产实现。
 test.beforeEach(async ({ page }) => {
-  await page.route('**/api/**', async (route) => {
+  await page.route(url => url.pathname.startsWith('/api/'), async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path === '/api/auth/options') return route.fulfill({ json: { mode: 'invite' } });
     if (path === '/api/auth/me' || path === '/api/auth/session') return route.fulfill({ json: user });

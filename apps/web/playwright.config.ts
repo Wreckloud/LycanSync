@@ -20,7 +20,8 @@ export default defineConfig({
     // 使用合成麦克风，不访问开发者的真实录音设备。
     // 显示真实滚动条，布局截图和拖动验证不能使用隐藏轨道的无头默认参数。
     launchOptions: { ignoreDefaultArgs: ['--hide-scrollbars'], args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] },
-    trace: 'off',
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
   },
   webServer: {
     command: 'npm run dev',

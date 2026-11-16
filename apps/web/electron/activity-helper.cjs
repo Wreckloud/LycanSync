@@ -88,6 +88,9 @@ function createActivityHelper({ enabled, executablePath, onActivity, spawnProces
 
   function start() {
     if (!enabled || child) return;
+    // 主动请求提前重启后，旧计时器不能越过后续 stop 再启动进程。
+    cancel(restarting);
+    restarting = undefined;
     stopped = false;
     if (!fileExists(executablePath())) return;
     const target = spawnProcess(executablePath(), [], { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });

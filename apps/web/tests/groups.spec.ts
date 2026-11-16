@@ -17,7 +17,7 @@ function holdPresencePoll(route: Route) {
 
 test.beforeEach(async ({ page }) => {
   // 未提供模拟的业务请求明确失败，不能落到 Vite 的真实服务器代理。
-  await page.route('**/api/**', (route) => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
+  await page.route(url => url.pathname.startsWith('/api/'), (route) => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
   await page.route('**/api/presence/heartbeat', (route) => route.fulfill({ status: 204 }));
   await page.route('**/api/rtc/room-occupancies', (route) => route.fulfill({ json: [] }));
 });

@@ -109,6 +109,8 @@ export function useGroupMessages({ getGroupId, getUserId, cache, scroll, onIniti
         hasMore.value = page.hasMore;
         initialLoaded.value = true;
       }
+      // 空长轮询只确认游标仍有效，不重建列表触发整段消息渲染。
+      if (!initial && latestId && !page.messages.length) return 0;
       // 历史或轮询可能晚于本机发送返回；游标之后先按服务端顺序合并，再补上快照之后发出的消息。
       const currentIds = new Set(messages.value.map((message) => message.id));
       const snapshotIds = new Set(page.messages.map((message) => message.id));

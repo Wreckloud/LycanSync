@@ -2,15 +2,20 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
-import { ref } from 'vue';
+import { effectScope, ref } from 'vue';
 import { expect, it, vi } from 'vitest';
-import type { AuthSessionStatus, AuthUser } from './auth/authApi';
-import { ApiRequestError } from './auth/authApi';
+import type { AuthSessionStatus, AuthUser, ProfileUpdate } from './auth/authApi';
+import { ApiRequestError, authRequest as qqAuthRequest } from './auth/authApi';
+import { useQqLogin } from './auth/useQqLogin';
+
+vi.mock('./auth/authApi', async importOriginal => ({
+  ...await importOriginal<typeof import('./auth/authApi')>(), authRequest: vi.fn(),
+}));
 
 const script = parse(readFileSync(new URL('./AuthRoot.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('AuthRoot.ts', script, ts.ScriptTarget.Latest, true);
 const callbackNames = ['verifyCurrentSession', 'expired', 'requestLogout', 'confirmLogout', 'logout',
-  'requestClearSession', 'clearLocalSession', 'confirmClearSession', 'initialize', 'acceptSession', 'completeAccess', 'enterAccount', 'changeAutoLogin'];
+  'requestClearSession', 'clearLocalSession', 'confirmClearSession', 'initialize', 'acceptSession', 'completeAccess', 'enterAccount', 'changeAutoLogin', 'saveProfile'];
 const callbacks = callbackNames.map((name) => {
   const declaration = sourceFile.statements.find((statement) => ts.isFunctionDeclaration(statement)
     && statement.name?.text === name);
@@ -23,8 +28,9 @@ function setup() {
   let resolve!: (status: AuthSessionStatus) => void;
   const pending = new Promise<AuthSessionStatus>((done) => { resolve = done; });
   const user = ref<AuthUser | null>({ id: 'member', nickname: '旧昵称', avatar: '', administrator: false });
-  const authRequest = vi.fn((path: string) => path === 'session' ? pending : Promise.resolve({ mode: 'invite' }));
-  const context = { user, authRequest, disposed: false, sessionHeartbeatInFlight: false,
+  const authRequest = vi.fn((path: string): Promise<unknown> => path === 'session' ? pending : Promise.resolve({ mode: 'invite' }));
+  const context = { user, authRequest, disposed: false, sessionHeartbeatInFlight: false, sessionRevision: 0,
+    qq: { cancel: vi.fn(), finishing: ref(false) },
     clearLocalContentCache: vi.fn(async () => {}),
     application: ref({ prepareLogout: vi.fn(() => ({ showActivity: false, showLastOnline: true })), releaseSession: vi.fn(async () => {}) }),
     entryUser: ref<AuthUser | null>(null), qqAvailable: ref(false), initialized: ref<boolean | null>(null), accountUpdated: vi.fn(), autoLogin: ref(true), manualEntryRequired: ref(false), preferenceSaving: ref(false),
@@ -40,6 +46,7 @@ function setup() {
     requestClearSession: () => void; confirmClearSession: () => Promise<void>; clearLocalSession: () => Promise<void>; initialize: (automatic?: boolean) => Promise<void>;
     completeAccess: (result: { user: AuthUser }, kind: string) => Promise<void>; enterAccount: () => Promise<void>;
     changeAutoLogin: (event: unknown) => Promise<void>;
+    expired: () => void; saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
   };
   return { context, verify: functions.verifyCurrentSession, ...functions, resolve };
 }
@@ -282,4 +289,137 @@ it('首次登录确认无法落盘时停在账号页，明确提示目录权限�
   await f.enterAccount();
   expect(f.context.user.value).toBeNull();
   expect(f.context.error.value).toContain('安装目录权限');
+});
+
+it.each(['expired', 'recovery', 'logout', 'dispose'] as const)('%s 后旧资料响应不能覆盖当前账号展示', async ending => {
+  const f = setup();
+  let resolve!: (user: AuthUser) => void;
+  f.context.authRequest.mockReturnValueOnce(new Promise<AuthUser>(done => { resolve = done; }));
+  const saving = f.saveProfile({ nickname: '旧保存结果', avatar: '旧头像' });
+  if (ending === 'dispose') f.context.disposed = true;
+  else if (ending === 'logout') await f.logout();
+  else {
+    f.expired();
+    if (ending === 'recovery') await f.completeAccess({ user: {
+      id: 'member', nickname: '重新认证的资料', avatar: '新会话头像', administrator: false,
+    } }, 'RECOVERY');
+  }
+  const currentUser = f.context.user.value;
+  const currentEntry = f.context.entryUser.value;
+  resolve({ id: 'member', nickname: '旧保存结果', avatar: '旧头像', administrator: false });
+  await expect(saving).rejects.toThrow('登录状态已变化');
+  expect(f.context.user.value).toBe(currentUser);
+  expect(f.context.entryUser.value).toBe(currentEntry);
+});
+
+it('当前会话的正常资料保存仍成功，期间心跳刷新角色不误判为更换会话', async () => {
+  const f = setup();
+  let resolve!: (user: AuthUser) => void;
+  f.context.authRequest.mockReturnValueOnce(new Promise<AuthUser>(done => { resolve = done; }));
+  const saving = f.saveProfile({ nickname: '有效保存', avatar: '有效头像' });
+  f.context.user.value = { ...f.context.user.value!, administrator: true };
+  const updated = { id: 'member', nickname: '有效保存', avatar: '有效头像', administrator: true };
+  resolve(updated);
+  expect(await saving).toEqual(updated);
+  expect(f.context.user.value).toEqual(updated);
+  expect(f.context.entryUser.value).toBeNull();
+});
+
+it('销毁后不再发起资料保存请求', async () => {
+  const f = setup();
+  f.context.disposed = true;
+  await expect(f.saveProfile({ nickname: '迟到操作', avatar: '' })).rejects.toThrow();
+  expect(f.context.authRequest).not.toHaveBeenCalled();
+});
+
+it.each(['server-member', 'server-guest', 'desktop-member', 'desktop-guest'])('清除等待 %s 时接入新账号，不再删除新凭据或清空新展示', async stage => {
+  const f = setup();
+  f.context.user.value = null;
+  f.context.entryUser.value = stage.endsWith('member') ? { id: 'member', nickname: '待移除账号', avatar: '', administrator: false } : null;
+  f.context.removeConfirm.value = true;
+  f.context.removing.value = true;
+  let finish!: () => void;
+  const pending = new Promise<void>(resolve => { finish = resolve; });
+  if (stage.startsWith('server')) f.context.authRequest.mockReturnValueOnce(pending);
+  else f.context.desktop.clearSession.mockReturnValueOnce(pending);
+  const clearing = f.clearLocalSession();
+  if (stage.startsWith('desktop')) await vi.waitFor(() => expect(f.context.desktop.clearSession).toHaveBeenCalledOnce());
+  const renewed = { id: 'member', nickname: '新的会话资料', avatar: '', administrator: false };
+  await f.completeAccess({ user: renewed }, 'RECOVERY');
+  const current = f.context.entryUser.value;
+  finish();
+  await clearing;
+  expect(f.context.entryUser.value).toBe(current);
+  expect(f.context.setBrowserSession).not.toHaveBeenCalled();
+  if (stage.startsWith('server')) expect(f.context.desktop.clearSession).not.toHaveBeenCalled();
+});
+
+it('服务器退出发现旧凭据失效，仍允许清除本机旧凭据', async () => {
+  const f = setup();
+  f.context.user.value = null;
+  f.context.entryUser.value = { id: 'member', nickname: '旧账号', avatar: '', administrator: false };
+  f.context.removeConfirm.value = true;
+  f.context.removing.value = true;
+  let fail!: (reason: Error) => void;
+  f.context.authRequest.mockReturnValueOnce(new Promise<void>((_resolve, reject) => { fail = reject; }));
+  const clearing = f.clearLocalSession();
+  f.expired();
+  fail(new ApiRequestError(401, 'SESSION_EXPIRED', '旧凭据失效'));
+  await clearing;
+  expect(f.context.desktop.clearSession).toHaveBeenCalledOnce();
+  expect(f.context.entryUser.value).toBeNull();
+  expect(f.context.error.value).toContain('未能完成服务器端退出');
+});
+
+it('旧本机清除失败不把错误写进新账号界面', async () => {
+  const f = setup();
+  f.context.user.value = null;
+  f.context.removeConfirm.value = true;
+  f.context.removing.value = true;
+  let fail!: (reason: Error) => void;
+  f.context.desktop.clearSession.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { fail = reject; }));
+  const clearing = f.clearLocalSession();
+  await vi.waitFor(() => expect(f.context.desktop.clearSession).toHaveBeenCalledOnce());
+  await f.completeAccess({ user: { id: 'member', nickname: '新账号', avatar: '', administrator: false } }, 'RECOVERY');
+  const current = f.context.entryUser.value;
+  fail(new Error('旧操作的磁盘错误'));
+  await clearing;
+  expect(f.context.entryUser.value).toBe(current);
+  expect(f.context.error.value).toBe('');
+});
+
+it.each(['other-entry', 'own-qq'] as const)('QQ 并发资格 %s：新接入终止旧等待，QQ 自身成功仍能完成', async source => {
+  const f = setup();
+  f.context.user.value = null;
+  let callback!: (request: string) => Promise<void>;
+  const request = 'q'.repeat(43);
+  const desktop = { openQqLogin: vi.fn(async () => {}), onQqLogin: (next: typeof callback) => { callback = next; return () => {}; } };
+  vi.stubGlobal('window', { lycanDesktop: desktop });
+  const scope = effectScope();
+  const flow = scope.run(() => useQqLogin(account => f.completeAccess({ user: account }, 'RECOVERY')))!;
+  f.context.qq.cancel.mockImplementation(() => flow.cancel());
+  const recovered = { id: 'recovered', nickname: '恢复账号', avatar: '', administrator: false };
+  const qqUser = { id: 'qq-user', nickname: 'QQ账号', avatar: '', administrator: false };
+  try {
+    vi.mocked(qqAuthRequest).mockResolvedValueOnce({ request, authorizationUrl: 'https://example.test/api/auth/qq/authorize?request=' + request });
+    await flow.start();
+    expect(flow.busy.value).toBe(true);
+    if (source === 'other-entry') await f.completeAccess({ user: recovered }, 'RECOVERY');
+    vi.mocked(qqAuthRequest).mockResolvedValueOnce({ user: qqUser, newAccount: false });
+    await callback(request);
+    expect(f.context.entryUser.value).toEqual(source === 'other-entry' ? recovered : qqUser);
+    expect(qqAuthRequest).toHaveBeenCalledTimes(source === 'other-entry' ? 1 : 2);
+    expect(flow.busy.value).toBe(false);
+  } finally { scope.stop(); vi.unstubAllGlobals(); vi.mocked(qqAuthRequest).mockReset(); }
+});
+
+it('QQ 确认期间不开始清除，结束后仍可显式确认清除', () => {
+  const f = setup();
+  f.context.user.value = null;
+  f.context.qq.finishing.value = true;
+  f.requestClearSession();
+  expect(f.context.removeConfirm.value).toBe(false);
+  f.context.qq.finishing.value = false;
+  f.requestClearSession();
+  expect(f.context.removeConfirm.value).toBe(true);
 });

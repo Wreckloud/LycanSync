@@ -52,5 +52,5 @@ public interface ChatMapper {
 
     List<ChatFileUploadReservation> findFileStorageReservations();
 
-    boolean fileAttachmentExists(@Param("attachmentId") UUID attachmentId);
+    List<String> findExistingFileAttachmentIds(@Param("attachmentIds") List<String> attachmentIds);
 }

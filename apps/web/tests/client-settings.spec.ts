@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test('客户端按应用、系统、日志、缓存排列，诊断选项可收起且不改变系统偏好', async ({ page }, testInfo) => {
-  await page.route('**/api/**', route => route.abort());
+  await page.route(url => url.pathname.startsWith('/api/'), route => route.abort());
   await page.route('**/src/main.ts*', async route => {
     const original = await (await route.fetch()).text();
     const vuePath = original.match(/from ["']([^"']*\/vue\.js[^"']*)["']/)?.[1];

@@ -161,7 +161,11 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAcce
     if (locked.value || refreshing.value) return;
     offset.value = Math.max(0, offset.value + direction * 100); void refresh();
   }
-  watch(filter, () => { offset.value = 0; links.value = []; void refresh(); }, { flush: 'sync' });
+  watch(filter, () => {
+    offset.value = 0; links.value = [];
+    // 生成流程会在复制后统一刷新，避免切回待使用分类时重复读取列表。
+    if (!busy.value) void refresh();
+  }, { flush: 'sync' });
   function visibilityChanged() { if (visible()) void refresh(); else clearTimeout(timer); }
   watch(active, enabled => {
     controller.abort(); listRequest?.abort(); clearTimeout(timer);

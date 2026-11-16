@@ -736,6 +736,7 @@ export function useDiagnosticReport(options: {
     savedReportGeneration++;
     try {
       await checkpointPromise;
+      if (disposed) return;
       await bridge.clearSavedDiagnosticReports();
       if (disposed) return;
       aliases.clear(); streamSegments.clear(); samples = []; sampleSizes = []; sampleBytes = 0;
@@ -757,6 +758,7 @@ export function useDiagnosticReport(options: {
     saving.value = true; error.value = '';
     try {
       const text = await serializeDiagnosticReport(createReport(notes));
+      if (disposed) return;
       if (window.lycanDesktop) await window.lycanDesktop.exportDiagnosticReport(text);
       else {
         const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));

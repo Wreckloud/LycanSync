@@ -140,6 +140,30 @@ describe('成员访问链接', () => {
     expect(state.links.value).toEqual([]);
   });
 
+  it('从已撤销分类重新生成后只刷新一次待使用列表', async () => {
+    const { state } = await open();
+    serverLinks = [link({ revokedAt: new Date().toISOString() })];
+    state.filter.value = 'REVOKED'; await settle();
+    request.mockImplementation(async (path, method) => {
+      if (method === 'POST') {
+        serverLinks = [link({ id: 'renewed-link' })];
+        return { record: serverLinks[0], url };
+      }
+      if (path.endsWith('/url')) return { record: serverLinks[0], url };
+      return serverLinks;
+    });
+    request.mockClear();
+
+    expect(await state.generate('INVITE', 'link-a')).toBe(true);
+
+    const listReads = request.mock.calls.filter(([path, method]) => path.startsWith('access/links?') && method === 'GET');
+    expect(state.filter.value).toBe('PENDING');
+    expect(state.links.value[0].id).toBe('renewed-link');
+    expect(request.mock.calls.filter(([, method]) => method === 'POST')).toHaveLength(1);
+    expect(navigator.clipboard.writeText).toHaveBeenCalledExactlyOnceWith(url);
+    expect(listReads).toHaveLength(1);
+  });
+
   it('待使用记录每五秒刷新，隐藏后停止，恢复可见立即查询', async () => {
     const { state } = await open();
     state.note.value = '正在编辑'; request.mockClear();

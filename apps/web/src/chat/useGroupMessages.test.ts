@@ -1,4 +1,4 @@
-import { effectScope, ref } from 'vue';
+import { effectScope, ref, watch } from 'vue';
 import { afterEach, expect, it, vi } from 'vitest';
 import { ApiRequestError } from '../auth/authApi';
 import type { AccountCache } from '../cache/localCache';
@@ -72,4 +72,38 @@ it('临时网络故障保留消息和正在读取的历史，重试继续使用�
   expect(vi.mocked(findMessages).mock.calls.at(-1)![1]).toEqual({ afterMessageId: 'base' });
   expect(f.messages.messages.value.map(item => item.id)).toEqual(['older', 'base', 'new']);
   expect(f.cache.revokeGroup).not.toHaveBeenCalled();
+});
+
+it('已有游标的空响应不更新消息列表，保留本机回执且不推进查询游标', async () => {
+  const f = setup();
+  vi.mocked(findMessages).mockResolvedValueOnce({ messages: [message('base')], hasMore: true });
+  await f.messages.refresh();
+  f.messages.appendMessages([{ ...message('local-sent'), senderUserId: 'self' }]);
+  const current = f.messages.messages.value;
+  const changed = vi.fn();
+  const stopWatching = watch(f.messages.messages, changed, { flush: 'sync' });
+  try {
+    vi.mocked(findMessages).mockResolvedValue({ messages: [], hasMore: false });
+    for (let index = 0; index < 10; index++) await f.messages.refresh(true);
+    expect(changed).toHaveBeenCalledTimes(0);
+    expect(f.messages.messages.value).toBe(current);
+    expect(current.map(item => item.id)).toEqual(['base', 'local-sent']);
+    expect(f.messages.hasMore.value).toBe(true);
+    expect(vi.mocked(findMessages).mock.calls.at(-1)![1]).toEqual({ afterMessageId: 'base' });
+  } finally { stopWatching(); }
+});
+
+it('非空快照仍按服务端顺序补齐本机回执之前的消息，并去重游标前消息', async () => {
+  const f = setup();
+  vi.mocked(findMessages).mockResolvedValueOnce({ messages: [message('base')], hasMore: false });
+  await f.messages.refresh();
+  const sent = { ...message('local-sent'), senderUserId: 'self' };
+  f.messages.appendMessages([sent]);
+  vi.mocked(findMessages).mockResolvedValueOnce({ messages: [message('base'), message('between'), sent], hasMore: false });
+  await f.messages.refresh();
+  expect(f.messages.messages.value.map(item => item.id)).toEqual(['base', 'between', 'local-sent']);
+  expect(f.scroll.unreadMessageIds.value).toEqual(['between']);
+  vi.mocked(findMessages).mockResolvedValueOnce({ messages: [], hasMore: false });
+  await f.messages.refresh();
+  expect(vi.mocked(findMessages).mock.calls.at(-1)![1]).toEqual({ afterMessageId: 'local-sent' });
 });

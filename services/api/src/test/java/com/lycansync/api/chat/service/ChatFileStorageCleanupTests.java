@@ -17,10 +17,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.anyList;
 
 /**
  * 群聊文件启动恢复失败时保留可重试状态的单元测试。
@@ -29,6 +31,26 @@ import static org.mockito.Mockito.when;
  * @since 2026-09-29
  */
 class ChatFileStorageCleanupTests {
+
+    @Test
+    void shouldCheckStoredFilesInBatchesWithoutDeletingUnrelatedFiles(@TempDir Path storage) throws Exception {
+        for (int index = 0; index < 300; index++) {
+            Files.write(storage.resolve(UUID.randomUUID() + ".bin"), new byte[]{1});
+        }
+        Path unrelated = Files.write(storage.resolve("keep.txt"), new byte[]{2});
+        ChatMapper mapper = mock(ChatMapper.class);
+        ChatFileQuotaService quota = mock(ChatFileQuotaService.class);
+        ChatFileStorageCleanup cleanup = new ChatFileStorageCleanup(properties(storage), quota, mapper,
+                new ChatFileStorageCoordinator());
+
+        cleanup.groupDissolved(new GroupChangedEvent(UUID.randomUUID(), true));
+
+        int checks = mockingDetails(mapper).getInvocations().size();
+        System.out.println("Stored-file cleanup database checks for 300 files: " + checks);
+        assertThat(checks).isLessThanOrEqualTo(2);
+        try (var files = Files.list(storage)) { assertThat(files.toList()).containsExactly(unrelated); }
+        verifyNoInteractions(quota);
+    }
 
     @Test
     void shouldKeepQuotaReservationWhenTemporaryFileCannotBeDeleted(@TempDir Path temporaryDirectory)
@@ -83,10 +105,10 @@ class ChatFileStorageCleanupTests {
         UUID orphanId = UUID.randomUUID();
         UUID referencedId = UUID.randomUUID();
         Path orphan = Files.write(storage.resolve(orphanId + ".bin"), new byte[]{1});
-        Path referenced = Files.write(storage.resolve(referencedId + ".bin"), new byte[]{2});
+        Path referenced = Files.write(storage.resolve(referencedId.toString().toUpperCase(java.util.Locale.ROOT) + ".bin"), new byte[]{2});
         ChatFileQuotaService quota = mock(ChatFileQuotaService.class);
         ChatMapper mapper = mock(ChatMapper.class);
-        when(mapper.fileAttachmentExists(referencedId)).thenReturn(true);
+        when(mapper.findExistingFileAttachmentIds(anyList())).thenReturn(List.of(referencedId.toString()));
         ChatFileStorageCleanup cleanup = new ChatFileStorageCleanup(properties(storage), quota, mapper,
                 new ChatFileStorageCoordinator());
 

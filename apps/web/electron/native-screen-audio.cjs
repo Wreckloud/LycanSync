@@ -42,13 +42,16 @@ function createNativeScreenAudio({ host: obsCaptureHost, getVideo, getRecording,
       }
       const packetBytes = 4 + frames * 2 * 4;
       if (audio.buffer.length < packetBytes) break;
-      const pcm = Uint8Array.from(audio.buffer.subarray(4, packetBytes));
-      audio.buffer = audio.buffer.subarray(packetBytes);
-      if (audio.queue.length === 12) {
-        audio.queue.shift();
-        audio.droppedChunks++;
+      // 仅录制时宿主持有声音；页面管道仍排空，但不复制无人消费的 PCM。
+      if (audio.publishing) {
+        const pcm = Uint8Array.from(audio.buffer.subarray(4, packetBytes));
+        if (audio.queue.length === 12) {
+          audio.queue.shift();
+          audio.droppedChunks++;
+        }
+        audio.queue.push({ frames, pcm });
       }
-      if (audio.publishing) audio.queue.push({ frames, pcm });
+      audio.buffer = audio.buffer.subarray(packetBytes);
     }
     if (audio.buffer.length > 65_536) {
       notifyNativeScreenAudioError(audio, 'screenShareAudioBufferOverflow');

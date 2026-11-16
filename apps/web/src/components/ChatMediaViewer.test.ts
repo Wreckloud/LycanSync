@@ -11,7 +11,7 @@ const parsed = ts.createSourceFile('viewer.ts', script, ts.ScriptTarget.Latest, 
 const compiled = ts.transpile(parsed.statements.filter(statement => !ts.isImportDeclaration(statement))
   .map(statement => statement.getText(parsed)).join('\n'), { target: ts.ScriptTarget.ES2022 });
 
-function setup(imageMessage = false, desktop = false) {
+function setup(imageMessage = false, desktop = false, previewBlob?: Blob) {
   const scope = effectScope();
   const pending: Array<{ resolve(blob: Blob): void; signal: AbortSignal }> = [];
   const fetchFilePreview = vi.fn((_group: string, _id: string, signal: AbortSignal) =>
@@ -24,7 +24,7 @@ function setup(imageMessage = false, desktop = false) {
   const fetchCompatibleVideo = vi.fn().mockResolvedValue(new Blob(['converted'], { type: 'video/mp4' }));
   const viewer = scope.run(() => runInNewContext(`${compiled}\n({load,close,source,error,player,convertVideo,playbackFailed,compatible,converting})`, {
     ref, computed, onScopeDispose, onMounted: () => {}, defineEmits: () => emit,
-    defineProps: () => ({ groupId: 'group', imageMessage,
+    defineProps: () => ({ groupId: 'group', imageMessage, previewBlob,
       attachment: { id: 'file', fileName: imageMessage ? 'test.png' : 'test.mp4', byteSize: 3, contentType: 'application/octet-stream' } }),
     desktopMediaUrl: (_group: string, _id: string, compatible: boolean) => desktop ? '/api/groups/group/files/file/' + (compatible ? 'preview/media' : 'media') : null, chatMediaFormat, useLoadingHint: () => ref(false), useBackdropDismiss: () => ({}),
     videoPreviewStatus, fetchCompatibleVideo, setTimeout, clearTimeout, Date,
@@ -71,6 +71,22 @@ it('原聊天图片继续使用图片接口，不请求普通文件接口', asyn
     expect(f.fetchAttachment).toHaveBeenCalledWith('group', 'file', expect.any(AbortSignal));
     f.pending[0].resolve(new Blob(['image'])); await loading;
     expect(f.createObjectURL.mock.calls[0][0].type).toBe('image/png');
+  } finally { f.scope.stop(); }
+});
+
+it('已加载的聊天原图直接复用 Blob，查看器独立释放自己的 URL', async () => {
+  const original = new Blob(['original image bytes'], { type: 'image/png' });
+  const f = setup(true, false, original);
+  try {
+    await f.viewer.load();
+    expect(f.fetchAttachment).not.toHaveBeenCalled();
+    expect(f.fetchFilePreview).not.toHaveBeenCalled();
+    const viewed = f.createObjectURL.mock.calls[0][0];
+    expect(viewed.type).toBe('image/png');
+    expect(await viewed.text()).toBe(await original.text());
+    f.viewer.close();
+    expect(f.revokeObjectURL).toHaveBeenCalledExactlyOnceWith('blob:preview');
+    expect(f.viewer.source.value).toBe('');
   } finally { f.scope.stop(); }
 });
 

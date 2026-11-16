@@ -37,6 +37,40 @@ function fixture(id = 'default', echoOutput?: { setMicrophoneEchoOutput: (select
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('统一声音输出', () => {
+  it('连续刷新只保留一个枚举任务，再读取最新列表，不应用旧的设备缺失结果', async () => {
+    const f = fixture('speaker-a');
+    let finish!: (devices: typeof f.devices) => void;
+    try {
+      await f.output.refresh();
+      f.media.enumerateDevices.mockClear();
+      f.media.enumerateDevices.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      const refreshing = Array.from({ length: 20 }, () => f.output.refresh());
+      finish([]);
+      await Promise.all(refreshing);
+      expect(f.media.enumerateDevices).toHaveBeenCalledTimes(2);
+      expect(f.output.devices.value).toEqual(f.devices.map(device => ({ id: device.deviceId, label: device.label })));
+      expect(f.output.available.value).toBe(true);
+      expect(f.output.notice.value).toBe('');
+      expect(f.preferences.outputDeviceId.value).toBe('speaker-a');
+    } finally { f.scope.stop(); }
+  });
+
+  it('销毁后不继续排队枚举，也不接受旧列表或再次刷新', async () => {
+    const f = fixture();
+    let finish!: (devices: typeof f.devices) => void;
+    await f.output.refresh();
+    f.media.enumerateDevices.mockClear();
+    f.media.enumerateDevices.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const refreshing = f.output.refresh();
+    const queued = f.output.refresh();
+    f.scope.stop();
+    finish([]);
+    await Promise.all([refreshing, queued]);
+    await f.output.refresh();
+    expect(f.media.enumerateDevices).toHaveBeenCalledOnce();
+    expect(f.output.devices.value).toEqual(f.devices.map(device => ({ id: device.deviceId, label: device.label })));
+  });
+
   it('读取列表失败后可重新枚举恢复，不改变输出设备或清除切换错误', async () => {
     const f = fixture('speaker-a');
     try {

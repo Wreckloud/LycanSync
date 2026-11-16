@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 async function entry(page: Page, administrator = true, recoveryConfigured = false, bound = false, qqAvailable = false) {
   const calls: string[] = [];
-  await page.route('**/api/**', route => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
+  await page.route(url => url.pathname.startsWith('/api/'), route => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
   await page.route('**/api/auth/options', route => route.fulfill({ json: { mode: 'invite', initialized: true, qqAvailable } }));
   await page.route('**/api/auth/me', route => route.fulfill({ json: { id: 'entry-owner', nickname: '测试账号', avatar: '', administrator } }));
   await page.route('**/api/auth/account', route => route.fulfill({ json: { administrator, recoveryConfigured } }));
