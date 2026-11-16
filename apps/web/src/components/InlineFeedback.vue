@@ -2,7 +2,7 @@
 import { useLoadingHint } from './useLoadingHint';
 
 const props = defineProps<{ message?: string; status?: string; pending?: string }>();
-const pendingVisible = useLoadingHint(() => !props.message && !props.status ? props.pending || '' : '', 1000);
+const pendingVisible = useLoadingHint(() => !props.message && !props.status ? props.pending || '' : '');
 </script>
 
 <template>

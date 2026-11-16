@@ -10,13 +10,13 @@ it('短请求结束后不闪加载文字，持续等待才显示，完成后立�
   const pending = ref(true);
   const hint = scope.run(() => useLoadingHint(() => pending.value))!;
   try {
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(600);
     expect(hint.value).toBe(false);
     pending.value = false;
     await vi.advanceTimersByTimeAsync(1_000);
     expect(hint.value).toBe(false);
     pending.value = true;
-    await vi.advanceTimersByTimeAsync(399);
+    await vi.advanceTimersByTimeAsync(999);
     expect(hint.value).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     expect(hint.value).toBe(true);

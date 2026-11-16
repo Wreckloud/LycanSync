@@ -21,7 +21,7 @@ const downloading = ref(false);
 const converting = ref(false);
 const compatible = ref(false);
 const conversionStatus = ref('');
-const conversionHint = useLoadingHint(() => converting.value, 1000);
+const conversionHint = useLoadingHint(() => converting.value);
 const closeButton = ref<HTMLButtonElement | null>(null);
 const player = ref<HTMLMediaElement | null>(null);
 const loadingHint = useLoadingHint(() => loading.value);

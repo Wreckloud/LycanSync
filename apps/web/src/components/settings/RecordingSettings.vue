@@ -12,7 +12,7 @@ const libraryOpen = ref(false);
 const replayProgress = computed(() => props.recording.state.value.replay?.phase === 'stopping' ? '正在关闭回放，已开始保存的片段会继续保存…'
   : props.recording.state.value.replay?.saving ? '正在保存回放…'
     : props.recording.state.value.replay?.phase === 'starting' ? '正在准备回放…' : '');
-const replayProgressVisible = useLoadingHint(() => replayProgress.value, 1000);
+const replayProgressVisible = useLoadingHint(() => replayProgress.value);
 watch(() => props.active, active => { if (!active) libraryOpen.value = false; });
 async function toggle(key: 'applicationAudio' | 'microphone' | 'friends', event: Event) {
   const input = event.target as HTMLInputElement;

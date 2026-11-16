@@ -36,7 +36,7 @@ const props = defineProps<{
   voiceError?: string;
 }>();
 const emit = defineEmits<{ close: []; enter: []; leave: []; retry: [] }>();
-const loadingHint = useLoadingHint(() => Boolean(props.loading), 1000);
+const loadingHint = useLoadingHint(() => Boolean(props.loading));
 const surface = ref<HTMLElement | null>(null);
 const content = ref<HTMLElement | null>(null);
 const avatarImage = ref<HTMLImageElement | null>(null);
