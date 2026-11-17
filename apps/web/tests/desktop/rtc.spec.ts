@@ -16,6 +16,13 @@ test('桌面入房、取消选择、窗口共享及离房释放', async () => {
     args: [resolve('electron/main.cjs'), `--user-data-dir=${userDataDir}`] });
   try {
     const page = await application.firstWindow();
+    await expect(page.getByText('使用服主分享的邀请链接即可加入。', { exact: false })).toBeVisible();
+    await application.evaluate(({ BrowserWindow }, offer) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('auth:access:offer', offer);
+    }, api.accessOffer);
+    await page.getByRole('button', { name: '确认加入', exact: true }).click();
+    await page.getByRole('button', { name: '跳过', exact: true }).click();
+    await page.getByRole('button', { name: '登录', exact: true }).click();
     await page.getByRole('button', { name: /开黑小队，单击预览，双击加入语音/ }).dblclick();
     await expect(page.getByTestId('callbar').getByRole('status')).toContainText('语音已连接');
     expect(await page.getByTestId('callbar').evaluate((panel) => {

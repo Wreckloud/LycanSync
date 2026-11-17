@@ -165,6 +165,10 @@ test('OBS 真实来源纹理经生产入口到页面轨道，重复停止及故�
       assert.equal(result.cases[0].diagnosticsChecked, true, details);
       assert.deepEqual(result.cases[0].frameRateChanges.map((entry) => entry.targetFps), [120, 30, 60, 30, 60], details);
       assert.ok(result.cases[0].frameRateChanges.every((entry) => entry.freshPixelsChecked), details);
+      if (process.env.LYCANSYNC_CAPTURE_WINDOW_CHECK === '1') {
+        assert.deepEqual(result.cases[0].windowCoverage.map(entry => entry.phase), ['before-minimize', 'after-restore'], details);
+        assert.ok(result.cases[0].windowCoverage.every(entry => entry.receiverCoversTarget), details);
+      }
     }
     if (process.env.LYCANSYNC_CAPTURE_QUALITY_CHECK === '1') {
       assert.deepEqual(result.cases[0].qualityChanges.map((entry) => entry.targetFps), [60, 60, 120, 30, 60], details);

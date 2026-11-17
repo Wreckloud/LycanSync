@@ -450,7 +450,6 @@ const leagueCaptureFollow = createLeagueCaptureFollow({
   },
 });
 
-function startActivityHelper() { if (!closing) activityMonitor.start(); }
 function stopActivityHelper() { activityMonitor.stop(); }
 
 async function loadSession() {
@@ -505,6 +504,7 @@ async function clearSession() {
   sessionLoaded = true;
   try { audioShortcuts.clear(); } catch { console.error('audio shortcut cleanup failed'); }
   screenShareWindows.closeAll();
+  activityMonitor.stop();
   activityMonitor.clearMappings();
   voiceOverlay.clear();
   // 写入已开始时先等它结束再移除，不能让迟到的旧写入重新生成凭据文件。
@@ -838,10 +838,8 @@ ipcMain.handle('clipboard:write-text', async (event, text) => {
 ipcMain.handle('update:startup', async (event) => {
   if (!trustedSender(event) || closing) throw new Error('当前不能检查更新');
   const state = await startupUpdate.start();
-  if (!closing && !startupReady) {
-    startupReady = true;
-    startActivityHelper();
-  }
+  // 更新完成只开放入口；活动检测由账号内的动态配置按需启动。
+  if (!closing && !startupReady) startupReady = true;
   return state;
 });
 ipcMain.handle('update:state:get', (event) => {
@@ -1546,6 +1544,7 @@ async function returnToAccountEntry() {
   for (const stop of [
     () => audioShortcuts.clear(),
     () => screenShareWindows.closeAll(),
+    () => activityMonitor.stop(),
     () => activityMonitor.clearMappings(),
     () => voiceOverlay.clear(),
     () => recordingEditor.cancel(),

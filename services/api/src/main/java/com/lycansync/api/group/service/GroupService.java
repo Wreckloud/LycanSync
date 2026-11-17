@@ -263,7 +263,7 @@ public class GroupService {
     }
 
     private void lockAccountState(AuthenticatedUser user) {
-        // 账号注销和群组成员变更遵循同一锁顺序，避免注销期间又成为群主或重新入群。
+        // 共享账号屏障阻止并发注销；群内变更再取群行锁，不串行其他群的操作。
         if (mapper.lockAccountState() == null) throw new IllegalStateException("服务器状态记录缺失");
         if (!mapper.activeUser(user.id())) throw denied();
     }

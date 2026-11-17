@@ -13,6 +13,13 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
   const application = await electron.launch({ args, env: desktopTestEnvironment(userDataDir, api.url) });
   try {
     const page = await application.firstWindow();
+    await expect(page.getByText('使用服主分享的邀请链接即可加入。', { exact: false })).toBeVisible();
+    await application.evaluate(({ BrowserWindow }, offer) => {
+      BrowserWindow.getAllWindows()[0].webContents.send('auth:access:offer', offer);
+    }, api.accessOffer);
+    await page.getByRole('button', { name: '确认加入', exact: true }).click();
+    await page.getByRole('button', { name: '跳过', exact: true }).click();
+    await page.getByRole('button', { name: '登录', exact: true }).click();
     await api.presencePollStarted;
     await expect(page.locator('.entry-shell')).toHaveCount(0);
     await expect(page.locator('.app-content')).toBeVisible();

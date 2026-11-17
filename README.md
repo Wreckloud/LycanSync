@@ -453,6 +453,8 @@ node node_modules/@playwright/test/cli.js test auth.spec.ts account-access.spec.
 
 这两组用例覆盖邀请界面、资料编辑、协议参数传递、兑换后的加密保存与重启恢复、退出和迟到 401；不替代真实服务器兑换、数据库事务或 Windows 安装验收。
 
+RTC 媒体用例在访问媒体接口时才读取本机 LiveKit 配置。隔离执行时可成对设置进程环境变量 `LIVEKIT_API_KEY` 和 `LIVEKIT_API_SECRET`，并用 `LIVEKIT_PORT` 指定独立本机测试实例；未显式提供凭据时沿用根 `.env`。只提供其中一项会明确失败，不与项目凭据混用。
+
 `node node_modules/@playwright/test/cli.js test viewing.spec.ts groups.spec.ts chat.spec.ts --config=playwright.config.ts` 验证主布局、成员查询、网格／聚焦、整体弹出和返回、内容区占满窗口、横向滚动、结束／离房清理、草稿保留，以及控制窗授权后的输入激活／释放。使用真实组件、受控 RTC 对象和合成画面，不连接 LiveKit 或真实设备，不能作为媒体性能验收。
 
 先运行 `npm run build`，再运行 `node node_modules/@playwright/test/cli.js test screenShareWindows.spec.ts --config=playwright.desktop.config.ts` 验证独立观看的跨窗口基础：短暂显示两路 320×180 色块视频，直接使用正式窗口管理器、观看 preload 和构建出的观看页，在 `lycan://app`、sandbox、上下文隔离和正式 CSP 下复用 SDK 轨道，检查主窗和独立窗隐藏／最小化、全屏进退、置顶确认或明确失败、需求合并、原轨道解绑与取消清理。使用独立用户目录，不加载业务客户端、不连接房间或网络、不采集屏幕／麦克风、不播放声音；键盘释放使用页面内受控事件，不代表真实系统输入验收。同源观看窗与 opener 属于同一可信脚本及渲染进程边界。置顶若被系统拒绝，本用例只验证失败明确返回，不写成实际置顶成功。此用例通过不表示真实声音、完整系统输入或多人性能已验收。

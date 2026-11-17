@@ -51,8 +51,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM word, LPARAM para
         center.x = client.right / 2; center.y = client.bottom / 2;
         if (!ClientToScreen(g_target, &center)) return 0;
         const auto cover = GetAncestor(WindowFromPoint(center), GA_ROOT);
+        RECT receiver{};
+        GetWindowRect(reinterpret_cast<HWND>(parameter), &receiver);
         std::cout << "{\"event\":\"coverChecked\",\"receiverCoversTarget\":"
-                  << (cover == reinterpret_cast<HWND>(parameter) ? "true" : "false") << "}\n" << std::flush;
+                  << (cover == reinterpret_cast<HWND>(parameter) ? "true" : "false")
+                  << ",\"targetCenter\":{\"x\":" << center.x << ",\"y\":" << center.y
+                  << "},\"receiverBounds\":{\"left\":" << receiver.left << ",\"top\":" << receiver.top
+                  << ",\"right\":" << receiver.right << ",\"bottom\":" << receiver.bottom << "}}\n" << std::flush;
         return 0;
       }
     }
@@ -64,6 +69,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM word, LPARAM para
 }  // namespace
 
 int wmain() {
+  SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   const auto instance = GetModuleHandleW(nullptr);
   WNDCLASSW window_class{};
   window_class.hInstance = instance;

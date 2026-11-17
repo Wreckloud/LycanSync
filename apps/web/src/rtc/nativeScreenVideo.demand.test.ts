@@ -10,7 +10,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-async function fixture(maxFps = 120) {
+async function fixture(maxFps = 120, lowLayerActive = true) {
   const target = new EventTarget();
   vi.stubGlobal('window', target);
   let time = 0;
@@ -52,7 +52,7 @@ async function fixture(maxFps = 120) {
   };
   const ready = session.start('monitor:1:0');
   await Promise.resolve(); await frame(0); await ready;
-  const low = () => { parameters.encodings[0].active = true; parameters.encodings[1].active = false; };
+  const low = () => { parameters.encodings[0].active = lowLayerActive; parameters.encodings[1].active = false; };
   const high = () => { parameters.encodings[1].active = true; };
   const settleLow = async () => { low(); for (let index = 0; index < 7; index++) await frame(); };
   return { session, sender, desktop, track, generator, warning, onError, frame, low, high, settleLow,
@@ -60,8 +60,8 @@ async function fixture(maxFps = 120) {
     retire: () => { current = false; } };
 }
 
-it('低层需求稳定三秒才降低 OBS 帧率，高清需求恢复；用户设置、编码预算、轨道和会话不变', async () => {
-  const f = await fixture();
+it.each([true, false])('高清层暂停稳定三秒才降低 OBS 帧率，恢复时用户设置、编码预算、轨道和会话不变；低层开启=%s', async (lowLayerActive) => {
+  const f = await fixture(120, lowLayerActive);
   try {
     const originalParameters = f.parameters();
     f.low();
@@ -81,8 +81,8 @@ it('低层需求稳定三秒才降低 OBS 帧率，高清需求恢复；用户�
   } finally { await f.session.stop(); }
 });
 
-it('录制开始前恢复目标帧率，持续录制不降到缩略图帧率，结束后恢复原需求策略', async () => {
-  const f = await fixture();
+it.each([true, false])('录制开始前恢复目标帧率，持续录制保留目标，结束后恢复需求策略；低层开启=%s', async (lowLayerActive) => {
+  const f = await fixture(120, lowLayerActive);
   try {
     await f.settleLow();
     expect(f.session.readDiagnostics().captureFrameRate).toBe(30);
@@ -127,21 +127,21 @@ it('来源帧高频到达只触发半秒一次的本地参数读取，不创建�
   } finally { await f.session.stop(); interval.mockRestore(); }
 });
 
-it.each(['single', 'unknown', 'both-off', 'reordered'] as const)('%s 发送状态不能冒充仅缩略图需求', async (mode) => {
+it.each(['single', 'unknown-high', 'unknown-low', 'reordered'] as const)('%s 发送状态不能冒充仅缩略图需求', async (mode) => {
   const f = await fixture();
   try {
     f.low();
     if (mode === 'single') f.parameters().encodings.pop();
-    if (mode === 'unknown') delete f.parameters().encodings[1].active;
-    if (mode === 'both-off') f.parameters().encodings[0].active = false;
+    if (mode === 'unknown-high') delete f.parameters().encodings[1].active;
+    if (mode === 'unknown-low') delete f.parameters().encodings[0].active;
     if (mode === 'reordered') f.parameters().encodings.reverse();
     for (let index = 0; index < 12; index++) await f.frame();
     expect(f.desktop.configureNativeVideo).not.toHaveBeenCalled();
   } finally { await f.session.stop(); }
 });
 
-it('重连、远控或失去当前发布资格时恢复用户目标，重新满足条件需重新等待', async () => {
-  const f = await fixture();
+it.each([true, false])('重连、远控或失去发布资格时恢复用户目标，重新满足条件需重新等待；低层开启=%s', async (lowLayerActive) => {
+  const f = await fixture(120, lowLayerActive);
   try {
     f.setEligible(false); await f.settleLow();
     expect(f.desktop.configureNativeVideo).not.toHaveBeenCalled();
@@ -154,8 +154,8 @@ it('重连、远控或失去当前发布资格时恢复用户目标，重新满�
   } finally { await f.session.stop(); }
 });
 
-it('本机多个大预览保留高清需求，最后一个关闭后重新计时，停止后旧预览不能操作新资源', async () => {
-  const f = await fixture();
+it.each([true, false])('多个大预览保留高清需求，最后一个关闭后重新计时，旧预览不能操作新资源；低层开启=%s', async (lowLayerActive) => {
+  const f = await fixture(120, lowLayerActive);
   const one = {} as HTMLVideoElement, two = {} as HTMLVideoElement;
   const demand = (preview: HTMLVideoElement, required: boolean) =>
     setNativeScreenPreviewDemand(f.generator as never, preview, required);

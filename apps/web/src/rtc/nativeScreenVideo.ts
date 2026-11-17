@@ -212,9 +212,9 @@ export class NativeScreenVideoSession {
       if (sender !== this.lastDemandSender) this.thumbnailDemandSince = undefined;
       this.lastDemandSender = sender;
       const encodings = sender?.getParameters().encodings;
-      // 仅信任 SDK 已应用的明确双层状态；未知、单层和重连不能推断成低清需求。
+      // 高清层明确暂停时只保留小预览预算；低层也已暂停无需继续满帧，未知、单层和重连仍保留用户目标。
       thumbnailOnly = this.canReduceFrameRate() && this.highQualityPreviews.size === 0
-        && encodings?.length === 2 && encodings[0].rid === 'q' && encodings[0].active === true
+        && encodings?.length === 2 && encodings[0].rid === 'q' && typeof encodings[0].active === 'boolean'
         && encodings[1].rid === 'h' && encodings[1].active === false;
     } catch { /* sender 不可读视为未知，按用户目标恢复，不降低采集规格。 */ }
     if (!thumbnailOnly) this.thumbnailDemandSince = undefined;

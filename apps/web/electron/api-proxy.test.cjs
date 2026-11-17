@@ -51,7 +51,7 @@ function sessionFixture(readEncrypted, overrides = {}) {
     loginPreferences: { set: async () => {}, clear: async () => {} }, mkdir: async () => {}, writeFile: async () => {}, unlink: async () => {},
     returnToAccountEntry: async () => {}, trustedSender: () => true,
     audioShortcuts: { clear() {} }, screenShareWindows: { closeAll() {} },
-    activityMonitor: { clearMappings() {} }, voiceOverlay: { clear() {} },
+    activityMonitor: { stop() {}, clearMappings() {} }, voiceOverlay: { clear() {} },
     ...overrides,
   };
   let clearAccount;
@@ -63,6 +63,18 @@ function sessionFixture(readEncrypted, overrides = {}) {
 function encryptedTestSession(token = 'a'.repeat(43)) {
   return Buffer.from(JSON.stringify({ server: 'https://example.test', token }));
 }
+
+test('清除当前会话同步停止活动检测并清空账号映射，文件清理仍按序完成', async () => {
+  const calls = [];
+  const f = sessionFixture(async () => undefined, {
+    activityMonitor: { stop: () => calls.push('stop'), clearMappings: () => calls.push('clear') },
+    unlink: async () => { calls.push('unlink'); },
+  });
+  const clearing = f.clearSession();
+  assert.deepEqual(calls, ['stop', 'clear']);
+  await clearing;
+  assert.deepEqual(calls, ['stop', 'clear', 'unlink']);
+});
 
 test('并发读取会话只读盘和解密一次，后续读取复用已加载状态', async () => {
   let complete;

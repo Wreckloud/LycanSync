@@ -6,7 +6,7 @@ const { join } = require('node:path');
 const { runInNewContext } = require('node:vm');
 const { createActivityHelper, normalizeActivity, normalizeMappings } = require('./activity-helper.cjs');
 
-function fixture(enabled = true) {
+function fixture(enabled = true, autoStart = true) {
   const children = [];
   const readers = [];
   const activities = [];
@@ -35,16 +35,88 @@ function fixture(enabled = true) {
     cancel: (id) => timers.delete(id),
     now: () => clock,
   });
-  monitor.start();
+  if (autoStart) monitor.start();
   const reply = (index, command, result = {}) => readers[index].emit('line', JSON.stringify({ requestId: command.requestId, ...result }));
   const activity = (index, name, type = 'GAME', configurationId = children[index].commands.findLast((command) => command.method === 'configure').requestId) => {
     readers[index].emit('line', JSON.stringify({ configurationId, activityType: name ? type : null,
       activityName: name, startedAtEpochSeconds: Math.floor(Date.now() / 1000) }));
   };
-  if (enabled) reply(0, children[0].commands[0]);
+  if (enabled && autoStart) reply(0, children[0].commands[0]);
   return { monitor, children, readers, activities, timers, reply, activity,
     advanceClock: (milliseconds) => { clock += milliseconds; } };
 }
+
+test('更新准备完成不提前枚举活动，进入账号后的真实配置按需启动一次', async () => {
+  const f = fixture(true, false);
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const handlers = new Map();
+  const state = { closing: false, startupReady: false, currentActivity: null,
+    trustedSender: event => event.trusted,
+    startupUpdate: { start: async () => ({ phase: 'ready' }) },
+    activityMonitor: f.monitor,
+    nativeVideo: { prepare: async () => {} },
+    ipcMain: { handle: (name, callback) => handlers.set(name, callback) } };
+  state.startActivityHelper = () => { if (!state.closing) f.monitor.start(); };
+  for (const [from, to] of [["ipcMain.handle('update:startup'", "ipcMain.handle('update:state:get'"],
+    ["ipcMain.handle('activity:current'", "ipcMain.handle('media:capabilities'"]]) {
+    const start = main.indexOf(from), end = main.indexOf(to, start);
+    assert.ok(start >= 0 && end > start);
+    runInNewContext(main.slice(start, end), state);
+  }
+  try {
+    await assert.rejects(handlers.get('update:startup')({ trusted: false }), /当前不能检查更新/);
+    await handlers.get('update:startup')({ trusted: true });
+    await handlers.get('update:startup')({ trusted: true });
+    assert.equal(state.startupReady, true);
+    assert.equal(f.children.length, 0);
+    const configuration = handlers.get('activity:configure')({ trusted: true }, []);
+    assert.equal(f.children.length, 1);
+    for (const command of f.children[0].commands) f.reply(0, command);
+    await configuration;
+    const updated = handlers.get('activity:configure')({ trusted: true }, [{ executable: 'c:\\test.exe', name: '合成程序' }]);
+    f.reply(0, f.children[0].commands.at(-1));
+    await updated;
+    assert.equal(f.children.length, 1);
+    assert.equal(f.children[0].commands.at(-1).mappings[0].name, '合成程序');
+  } finally { f.monitor.stop(); }
+});
+
+test('返回账号页停止待确认配置，旧进程迟到与失败不能影响新账号', async () => {
+  const f = fixture();
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const start = main.indexOf('async function returnToAccountEntry()');
+  const end = main.indexOf("ipcMain.handle('auth:return'", start);
+  const noop = () => {};
+  const leave = runInNewContext(`${main.slice(start, end)}; returnToAccountEntry`, {
+    audioShortcuts: { clear: noop }, screenShareWindows: { closeAll: noop }, activityMonitor: f.monitor,
+    voiceOverlay: { clear: noop }, recordingEditor: { cancel: noop }, recording: { stopAll: noop },
+    nativeVideo: {}, nativeScreenAudio: {}, nativeMicrophone: {}, savedDiagnosticReports: { flush: noop },
+    writeMediaDiagnostic: Object.assign(noop, { flush: noop }),
+  });
+  try {
+    f.activity(0, '账号 A');
+    const previous = f.monitor.configure([{ executable: 'c:\\old.exe', name: '账号 A' }])
+      .then(() => null, error => error);
+    const oldCommand = f.children[0].commands.at(-1);
+    await leave();
+    assert.equal((await previous).message, '动态检测已停止。');
+    assert.equal(f.timers.size, 0);
+    assert.equal(f.activities.at(-1), null);
+    const next = f.monitor.configure([{ executable: 'c:\\new.exe', name: '账号 B' }]);
+    assert.equal(f.children.length, 2);
+    assert.deepEqual(f.children[1].commands[0].mappings, []);
+    f.reply(0, oldCommand, { error: '旧账号迟到失败' });
+    f.activity(0, '账号 A', 'GAME', oldCommand.requestId);
+    f.children[0].emit('exit');
+    assert.equal(f.activities.at(-1), null);
+    for (const command of f.children[1].commands) f.reply(1, command);
+    await next;
+    f.activity(1, '账号 B');
+    assert.equal(f.activities.at(-1).name, '账号 B');
+    assert.equal(f.children.length, 2);
+    assert.equal(f.timers.size, 0);
+  } finally { f.monitor.stop(); }
+});
 
 test('补充输入合并系统闲置时间，保留锁屏与未知状态，不发布坐标或按键', () => {
   const f = fixture();

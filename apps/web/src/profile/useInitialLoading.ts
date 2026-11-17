@@ -1,6 +1,6 @@
 import { onScopeDispose, ref, watch } from 'vue';
 
-/** 首批请求照常执行，准备画面只补足一次短过渡；后续刷新不重新遮盖。 */
+/** 首批请求与至少一秒的准备动画并行，慢请求就绪后不再补时；后续刷新不重新遮盖。 */
 export function useInitialLoading(ready: () => boolean,
   report: (stage: 'loginDataReady' | 'loginReady', durationMs: number) => void) {
   const loading = ref(true);

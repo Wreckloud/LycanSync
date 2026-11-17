@@ -150,7 +150,7 @@ app.whenReady().then(async () => {
   testSession.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*', 'ws://*/*', 'wss://*/*'] }, (_details, callback) => callback({ cancel: true }));
   const display = screen.getPrimaryDisplay();
   window = new BrowserWindow({ show: false, width: 470, height: 290,
-    x: display.workArea.x + 32, y: display.workArea.y + 32,
+    x: display.workArea.x + (windowCheck ? Math.max(32, display.workArea.width - 502) : 32), y: display.workArea.y + 32,
     alwaysOnTop: true,
     webPreferences: { session: testSession, preload: resolve(__dirname, '../preload.cjs'),
       sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
@@ -612,8 +612,18 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
     assert(refreshed.sources.some((source) => source.windowId === ready.windowId && source.sourceId === selected.sourceId), 'renamedWindowIdentityChanged');
     await until(selectedColorMatches);
     testPhase = 'window-minimize';
+    const windowCoverage = [];
     if (windowCheck) {
+      const target = await command(`check-cover:${window.getNativeWindowHandle().readBigUInt64LE()}`, 'coverChecked');
+      assert(Number.isFinite(target.targetCenter?.x) && Number.isFinite(target.targetCenter?.y), 'testTargetCenterUnavailable');
+      // 原生夹具返回物理坐标；接收窗显式覆盖目标中心，不依赖默认位置或主屏布局。
+      const center = screen.screenToDipPoint(target.targetCenter);
+      const bounds = window.getContentBounds();
+      window.setContentBounds({ ...bounds, x: Math.round(center.x - bounds.width / 2), y: Math.round(center.y - bounds.height / 2) });
+      window.moveTop();
       const covered = await command(`check-cover:${window.getNativeWindowHandle().readBigUInt64LE()}`, 'coverChecked');
+      windowCoverage.push({ phase: 'before-minimize', ...covered });
+      process.stdout.write(`${JSON.stringify({ phase: 'windowCoverBeforeMinimize', ...covered })}\n`);
       assert(covered.receiverCoversTarget, 'receiverDidNotCoverBeforeMinimize');
     }
     await command('minimize', 'minimized');
@@ -631,6 +641,7 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
     await until(() => statuses.at(-1) === false);
     if (windowCheck) {
       const covered = await command(`check-cover:${window.getNativeWindowHandle().readBigUInt64LE()}`, 'coverChecked');
+      windowCoverage.push({ phase: 'after-restore', ...covered });
       assert(covered.receiverCoversTarget, 'receiverDidNotCoverAfterRestore');
     }
     try { await until(selectedColorMatches); }
@@ -670,7 +681,7 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
       && !remaining.sources.some((source) => source.windowId === ready.windowId), 'otherWindowWasTakenOver');
     assert(failures.length === 1 && failures[0].code === 'captureTargetClosed', 'unexpectedWindowFailure');
     cases.push({ mode: gameCheck ? 'controlled-d3d-game' : 'window', actualMethod: gameCheck ? 'game' : ordinaryMethod,
-      pixelsChecked: true, diagnosticsChecked: true, firstFrameMs: started.firstFrameMs, frameRateChanges,
+      pixelsChecked: true, diagnosticsChecked: true, firstFrameMs: started.firstFrameMs, frameRateChanges, windowCoverage,
       windowActions: ['same-title', 'rename-and-refresh', 'minimize', 'restore', 'stop-and-reopen', 'close-without-takeover'],
       helperExitCode: state.child.exitCode, helperSignal: state.child.signalCode,
       handleCount: bridge.currentProcessHandleCount() });

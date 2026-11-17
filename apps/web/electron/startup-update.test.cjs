@@ -381,7 +381,7 @@ test('邀请保存或安装调用失败，报告失败并恢复普通退出流�
   }
 });
 
-test('真实主进程更新入口等检查结束再启动活动 helper，重复调用不再启动', async () => {
+test('真实主进程更新入口等检查结束才开放账号页，不提前启动活动检测', async () => {
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = main.indexOf("ipcMain.handle('update:startup'");
   const end = main.indexOf("ipcMain.on('window:minimize'", start);
@@ -402,9 +402,11 @@ test('真实主进程更新入口等检查结束再启动活动 helper，重复�
   const first = handler({ trusted: true });
   const second = handler({ trusted: true });
   assert.equal(activityStarts, 0);
+  assert.equal(context.startupReady, false);
   completion.resolve({ phase: 'ready' });
   await Promise.all([first, second]);
-  assert.equal(activityStarts, 1);
+  assert.equal(context.startupReady, true);
+  assert.equal(activityStarts, 0);
   context.closing = true;
   await assert.rejects(handler({ trusted: true }), /当前不能检查/);
 });

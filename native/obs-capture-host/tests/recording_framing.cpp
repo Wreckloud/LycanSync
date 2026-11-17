@@ -17,7 +17,11 @@ extern "C" {
 }
 
 namespace {
-struct Pattern { std::atomic<uint32_t> width = 1222, height = 787; } pattern;
+struct Pattern {
+  std::atomic<uint32_t> width = 1222, height = 787;
+  bool motion = false;
+  uint64_t motion_started = 0;
+} pattern;
 unsigned main_frames = 0, auxiliary_frames = 0;
 void count_frames(void *) {
   if (gs_get_render_target() == obs_get_main_texture()) ++main_frames;
@@ -28,6 +32,20 @@ void draw_pattern(void *, gs_effect_t *) {
   vec4 green{0.05f, 0.8f, 0.15f, 1.0f};
   gs_effect_set_vec4(gs_effect_get_param_by_name(effect, "color"), &green);
   while (gs_effect_loop(effect, "Solid")) gs_draw_sprite(nullptr, 0, pattern.width, pattern.height);
+  if (!pattern.motion) return;
+  const auto timestamp = obs_get_video_frame_time();
+  if (!pattern.motion_started) pattern.motion_started = timestamp;
+  // 同一主视频时刻的辅助渲染使用相同图案，避免编码管线调用次数改变输入运动速度。
+  const auto elapsed_ms = (timestamp - pattern.motion_started) / 1000000;
+  for (unsigned index = 0; index < 32; ++index) {
+    vec4 color{0.2f + (index % 3) * 0.3f, 0.2f + (index % 5) * 0.15f, 0.8f, 1.0f};
+    gs_effect_set_vec4(gs_effect_get_param_by_name(effect, "color"), &color);
+    gs_matrix_push();
+    gs_matrix_translate3f(static_cast<float>((elapsed_ms * 9 / 16 + index * 61) % (pattern.width.load() - 96)),
+        static_cast<float>((index * 31) % (pattern.height.load() - 32)), 0);
+    while (gs_effect_loop(effect, "Solid")) gs_draw_sprite(nullptr, 0, 96, 24);
+    gs_matrix_pop();
+  }
 }
 std::string utf8(const std::filesystem::path &path) {
   const auto value = path.u8string(); return {value.begin(), value.end()};
@@ -59,11 +77,14 @@ bool check_timeline(const std::filesystem::path &path, unsigned duration, unsign
 
 // 仅编码合成色块，不加载捕获插件、创建窗口、读取设备或连接房间。
 int wmain(int argc, wchar_t **argv) {
-  if (argc != 3 && argc != 4 && argc != 6) return 2;
+  if (argc != 3 && argc != 4 && argc != 6 && argc != 7) return 2;
+  if (argc == 7 && std::wstring_view(argv[6]) != L"--motion") return 2;
+  pattern.motion = argc == 7;
   const unsigned duration = argc >= 4 ? static_cast<unsigned>(std::wcstoul(argv[3], nullptr, 10)) : 3;
-  const unsigned shared_fps = argc == 6 ? static_cast<unsigned>(std::wcstoul(argv[4], nullptr, 10)) : 30;
-  const unsigned recording_fps = argc == 6 ? static_cast<unsigned>(std::wcstoul(argv[5], nullptr, 10)) : 30;
-  if ((shared_fps != 30 && shared_fps != 60 && shared_fps != 120)
+  // 这里只模拟主视频时钟，不启动共享或把时钟目标当实际共享帧率。
+  const unsigned render_fps = argc >= 6 ? static_cast<unsigned>(std::wcstoul(argv[4], nullptr, 10)) : 30;
+  const unsigned recording_fps = argc >= 6 ? static_cast<unsigned>(std::wcstoul(argv[5], nullptr, 10)) : 30;
+  if ((render_fps != 30 && render_fps != 60 && render_fps != 120)
       || (recording_fps != 30 && recording_fps != 60 && recording_fps != 120)) return 2;
   if (duration < 3 || duration > 3600) return 2;
   const auto sdk = std::filesystem::absolute(argv[1]);
@@ -81,7 +102,7 @@ int wmain(int argc, wchar_t **argv) {
   const auto graphics = utf8(sdk / "bin/64bit/libobs-d3d11.dll");
   video.graphics_module = graphics.c_str();
   video.base_width = video.output_width = 1920; video.base_height = video.output_height = 1080;
-  video.fps_num = std::max(shared_fps, recording_fps); video.fps_den = 1; video.output_format = VIDEO_FORMAT_BGRA;
+  video.fps_num = std::max(render_fps, recording_fps); video.fps_den = 1; video.output_format = VIDEO_FORMAT_BGRA;
   video.gpu_conversion = true; video.colorspace = VIDEO_CS_SRGB; video.range = VIDEO_RANGE_PARTIAL;
   obs_audio_info audio{}; audio.samples_per_sec = 48000; audio.speakers = SPEAKERS_STEREO;
   if (obs_reset_video(&video) != OBS_VIDEO_SUCCESS || !obs_reset_audio(&audio)) { obs_shutdown(); return 4; }
@@ -119,6 +140,10 @@ int wmain(int argc, wchar_t **argv) {
       if (!recording.start("framing-test", utf8(directory / ("framing-" + std::to_string(segment) + ".mkv")), false,
           source, "framing-test", 1080, recording_fps)) { result = 6; break; }
       if (recording.width() != (pattern.width.load() & ~3u) || recording.height() != (pattern.height.load() & ~1u)) { result = 7; break; }
+      std::printf("{\"type\":\"recordingFramingSegment\",\"segment\":%u,\"width\":%u,\"height\":%u,\"configuredFps\":%u,\"motion\":%s%s}\n",
+          segment, recording.width(), recording.height(), recording.frame_rate(), pattern.motion ? "true" : "false",
+          recording.encoding_diagnostics().c_str());
+      std::fflush(stdout);
       const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(duration);
       auto next_memory_sample = std::chrono::steady_clock::now();
       while (std::chrono::steady_clock::now() < deadline && !failed) {

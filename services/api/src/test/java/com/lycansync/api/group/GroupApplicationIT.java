@@ -2,11 +2,14 @@ package com.lycansync.api.group;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lycansync.api.auth.dto.LocalRegistrationRequest;
+import com.lycansync.api.auth.mapper.AccessLinkMapper;
 import com.lycansync.api.auth.model.AuthenticatedUser;
+import com.lycansync.api.auth.service.AccountLifecycleService;
 import com.lycansync.api.auth.service.AuthService;
 import com.lycansync.api.auth.service.LocalAuthService;
 import com.lycansync.api.common.image.AvatarImageProcessor;
 import com.lycansync.api.group.dto.CreateGroupRequest;
+import com.lycansync.api.group.exception.GroupException;
 import com.lycansync.api.group.mapper.GroupMapper;
 import com.lycansync.api.group.service.GroupService;
 import com.lycansync.api.presence.dto.PresenceHeartbeatRequest;
@@ -35,14 +38,20 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -121,10 +130,112 @@ class GroupApplicationIT {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private TransactionTemplate transactions;
+
+    @Autowired
+    private AccessLinkMapper accessLinks;
+
+    @Autowired
+    private AccountLifecycleService accounts;
+
     @BeforeEach
     void resetDatabase() {
         jdbc.sql("TRUNCATE rtc_voice_time, system_state, auth_qq_identity, auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_file_upload_reservation, chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
         jdbc.sql("INSERT INTO system_state(id) VALUES (1)").update();
+    }
+
+    @Test
+    void shouldAllowOtherGroupWritesWhileKeepingAccountChangesExclusive() throws Exception {
+        var first = authService.authenticate(localAuth.register(new LocalRegistrationRequest("FirstGroupOwner", PASSWORD)).sessionToken());
+        var second = authService.authenticate(localAuth.register(new LocalRegistrationRequest("OtherGroupOwner", PASSWORD)).sessionToken());
+        UUID firstGroup = groupService.createGroup(first, new CreateGroupRequest("第一个群", "", "")).id();
+        UUID secondGroup = groupService.createGroup(second, new CreateGroupRequest("另一个群", "", "")).id();
+        var held = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var accountAttempted = new CountDownLatch(1);
+        var accountPid = new AtomicInteger();
+        var workers = Executors.newFixedThreadPool(2);
+        try {
+            var holding = workers.submit(() -> transactions.executeWithoutResult(transaction -> {
+                groupMapper.lockAccountState();
+                groupMapper.lockOwner(firstGroup);
+                held.countDown();
+                awaitRelease(release);
+            }));
+            assertThat(held.await(5, TimeUnit.SECONDS)).isTrue();
+            // 别群应能完成；注销/服主变更的排他屏障仍须等待正在进行的群操作。
+            var otherGroup = workers.submit(() -> groupService.inviteCode(secondGroup, second, true));
+            assertThat(otherGroup.get(5, TimeUnit.SECONDS)).isNotBlank();
+            var accountChange = workers.submit(() -> transactions.executeWithoutResult(transaction -> {
+                accountPid.set(jdbc.sql("SELECT pg_backend_pid()").query(Integer.class).single());
+                accountAttempted.countDown();
+                accessLinks.lockInitialization();
+            }));
+            assertThat(accountAttempted.await(5, TimeUnit.SECONDS)).isTrue();
+            awaitDatabaseLock(accountPid.get());
+            assertThat(accountChange.isDone()).isFalse();
+            release.countDown();
+            holding.get(5, TimeUnit.SECONDS);
+            accountChange.get(5, TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+            workers.shutdownNow();
+            assertThat(workers.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    @Test
+    void shouldRejectGroupCreationAfterAConcurrentAccountClosureCommits() throws Exception {
+        localAuth.register(new LocalRegistrationRequest("ServerOwner", PASSWORD));
+        var user = authService.authenticate(localAuth.register(new LocalRegistrationRequest("ClosingMember", PASSWORD)).sessionToken());
+        var closed = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var createAttempted = new CountDownLatch(1);
+        var createPid = new AtomicInteger();
+        var workers = Executors.newFixedThreadPool(2);
+        try {
+            var closing = workers.submit(() -> transactions.executeWithoutResult(transaction -> {
+                accounts.closeAccount(user, user.nickname());
+                closed.countDown();
+                awaitRelease(release);
+            }));
+            assertThat(closed.await(5, TimeUnit.SECONDS)).isTrue();
+            var creating = workers.submit(() -> transactions.execute(transaction -> {
+                createPid.set(jdbc.sql("SELECT pg_backend_pid()").query(Integer.class).single());
+                createAttempted.countDown();
+                return groupService.createGroup(user, new CreateGroupRequest("不能创建", "", ""));
+            }));
+            assertThat(createAttempted.await(5, TimeUnit.SECONDS)).isTrue();
+            awaitDatabaseLock(createPid.get());
+            release.countDown();
+            closing.get(5, TimeUnit.SECONDS);
+            assertThatThrownBy(() -> creating.get(5, TimeUnit.SECONDS)).hasCauseInstanceOf(GroupException.class);
+            assertThat(jdbc.sql("SELECT count(*) FROM chat_group WHERE owner_user_id = ?").param(user.id()).query(Long.class).single()).isZero();
+        } finally {
+            release.countDown();
+            workers.shutdownNow();
+            assertThat(workers.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+        }
+    }
+
+    private void awaitRelease(CountDownLatch release) {
+        try {
+            if (!release.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("并发验证未及时释放事务");
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("并发验证被中断", exception);
+        }
+    }
+
+    private void awaitDatabaseLock(int pid) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            if (jdbc.sql("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid = ? AND wait_event_type = 'Lock')")
+                    .param(pid).query(Boolean.class).single()) return;
+            Thread.sleep(20);
+        }
+        throw new AssertionError("未观察到预期的数据库锁等待，pid=" + pid);
     }
 
     @Test
@@ -556,8 +667,9 @@ class GroupApplicationIT {
         UUID groupId = groupService.createGroup(user, new CreateGroupRequest("最近游戏", null, null)).id();
         var game = new PresenceHeartbeatRequest.Activity(UserActivityType.GAME, "最终幻想14");
         presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE, game, true, true));
+        // 按数据库微秒精度截断起点，避免向上舍入跨过1800秒断言的边界。
         jdbc.sql("UPDATE user_presence SET activity_started_at = ?")
-                .param(java.sql.Timestamp.from(Instant.now().minusSeconds(1800))).update();
+                .param(java.sql.Timestamp.from(Instant.now().minusSeconds(1800).truncatedTo(ChronoUnit.MICROS))).update();
         presenceService.heartbeat(user, new PresenceHeartbeatRequest(UserPresenceStatus.ONLINE, null, null, null));
         mvc.perform(get("/api/groups/{groupId}/presences", groupId)
                         .header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
