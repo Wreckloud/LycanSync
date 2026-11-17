@@ -119,6 +119,35 @@ it('默认音效加载失败返回失败，后续试听能够重新加载', asyn
   } finally { warning.mockRestore(); f.scope.stop(); }
 });
 
+it('收听按确认后的素材播放，关闭事件后不加载，试听仍可播放', async () => {
+  const f = fixture();
+  try {
+    f.preferences.setEnabled('listeningOff', false);
+    expect(await f.sounds.listeningChanged(false)).toBe(false);
+    expect(f.fetchAudio).not.toHaveBeenCalled();
+    expect(await f.sounds.preview('listeningOff')).toBe(true);
+    expect(await f.sounds.listeningChanged(true)).toBe(true);
+    expect(f.fetchAudio.mock.calls.map(([url]) => url)).toEqual([
+      '/sounds/material/navigation_forward-selection-minimal-short.wav',
+      '/sounds/material/navigation_hover-tap.ogg',
+    ]);
+  } finally { f.scope.stop(); }
+});
+
+it('收听切换取消还在加载的麦克风提示，避免联动时补播旧声音', async () => {
+  const f = fixture();
+  let complete!: (value: Awaited<ReturnType<typeof f.fetchAudio>>) => void;
+  f.fetchAudio.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+  try {
+    const starting = f.sounds.microphoneChanged(true);
+    await vi.waitFor(() => expect(f.fetchAudio).toHaveBeenCalledOnce());
+    expect(await f.sounds.listeningChanged(false)).toBe(true);
+    complete({ ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(8) });
+    expect(await starting).toBe(false);
+    expect(f.nodes).toHaveLength(1);
+  } finally { f.scope.stop(); }
+});
+
 it('销毁会话取消素材读取，迟到数据不能创建播放节点', async () => {
   const f = fixture();
   let complete!: (value: Awaited<ReturnType<typeof f.fetchAudio>>) => void;

@@ -878,13 +878,18 @@ async function toggleMicrophone() {
 
 async function toggleListening() {
   if (!connected.value) return;
-  ++audioToggleVersion;
+  const version = ++audioToggleVersion;
+  const room = rtc.room;
   const enabled = !listening.value;
   const changing = rtc.updateListeningState(enabled);
   if (rtc.needsAudioPlayback && enabled) {
     await rtc.enableAudioPlayback();
   }
   await changing;
+  if (version === audioToggleVersion && room === rtc.room && connected.value && listening.value === enabled) {
+    // 收听切换包含联动禁麦或恢复，只播放一次收听提示。
+    void callSounds.listeningChanged(enabled);
+  }
 }
 
 const audioShortcutRoomId = ref<string | null>(null);

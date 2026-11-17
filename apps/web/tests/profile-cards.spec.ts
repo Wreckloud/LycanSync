@@ -663,13 +663,13 @@ test('本机提示音只提供统一音量和逐项开关，重开后恢复，�
   await expect(sharingSound).toBeVisible();
   await expect(page.getByRole('checkbox', { name: '开始录制', exact: true })).toBeChecked();
   await expect(page.getByRole('checkbox', { name: '结束录制', exact: true })).toBeChecked();
-  await expect(page.getByRole('checkbox', { name: '恢复收听', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('checkbox', { name: '停止收听', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('checkbox', { name: '恢复收听', exact: true })).toBeChecked();
+  await expect(page.getByRole('checkbox', { name: '停止收听', exact: true })).toBeChecked();
   await expect(page.getByRole('link', { name: 'Google Material Design', exact: true })).toBeVisible();
   await sharingSound.uncheck();
   await expect.poll(() => page.locator('.sound-settings').evaluate(element => element.getAnimations({ subtree: true }).length)).toBe(0);
   const soundTogglePositions = await page.locator('.sound-settings input[type="checkbox"]').evaluateAll(inputs => inputs.map(input => input.getBoundingClientRect().right));
-  expect(soundTogglePositions).toHaveLength(11);
+  expect(soundTogglePositions).toHaveLength(13);
   expect(Math.max(...soundTogglePositions) - Math.min(...soundTogglePositions)).toBeLessThan(1);
   await page.screenshot({ path: test.info().outputPath('call-sound-settings.png') });
   await page.getByRole('button', { name: '收起其他提示音', exact: true }).click();
@@ -692,7 +692,7 @@ test('本机提示音只提供统一音量和逐项开关，重开后恢复，�
   await expect(sharingSound).not.toBeChecked();
 });
 
-test('Material 提示音从本地资源解码，设置试听采用确认后的八种配对', async ({ page }) => {
+test('Material 提示音从本地资源解码，设置试听采用确认后的十种素材', async ({ page }) => {
   // 真正解码资源和运行播放节点，但将输出定向到无声设备，不采集任何声音。
   await page.addInitScript(() => {
     const prototype = AudioContext.prototype as AudioContext & { setSinkId: (id: { type: string }) => Promise<void> };
@@ -720,6 +720,7 @@ test('Material 提示音从本地资源解码，设置试听采用确认后的�
     ['成员加入语音', 'navigation_forward-selection.ogg'], ['成员离开语音', 'navigation_backward-selection.ogg'],
     ['麦克风恢复', 'navigation_forward-selection-minimal.ogg'], ['麦克风静音', 'navigation_backward-selection-minimal.ogg'],
     ['开始共享', 'navigation_selection-complete-celebration.ogg'], ['停止共享', 'alert_error-02.ogg'],
+    ['恢复收听', 'navigation_hover-tap.ogg'], ['停止收听', 'navigation_forward-selection-minimal-short.wav'],
     ['开始录制', 'notification_simple-01.ogg'], ['结束录制', 'navigation-cancel.ogg'],
   ];
   for (const [label, file] of events) {

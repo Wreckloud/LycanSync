@@ -6,16 +6,18 @@ import type { CallSoundEvent, useCallSoundPreferences } from '../settings/useCal
 
 const DEFAULT_ENTRANCE_DELAY_MS = 700;
 const EVENT_SOUNDS: Record<CallSoundEvent, { file: string; channel: string }> = {
-  joined: { file: 'navigation_forward-selection', channel: 'connection' },
-  left: { file: 'navigation_backward-selection', channel: 'connection' },
-  participantJoined: { file: 'navigation_forward-selection', channel: 'participant' },
-  participantLeft: { file: 'navigation_backward-selection', channel: 'participant' },
-  microphoneOn: { file: 'navigation_forward-selection-minimal', channel: 'microphone' },
-  microphoneOff: { file: 'navigation_backward-selection-minimal', channel: 'microphone' },
-  screenShareStarted: { file: 'navigation_selection-complete-celebration', channel: 'sharing' },
-  screenShareStopped: { file: 'alert_error-02', channel: 'sharing' },
-  recordingStarted: { file: 'notification_simple-01', channel: 'recording' },
-  recordingStopped: { file: 'navigation-cancel', channel: 'recording' },
+  joined: { file: 'navigation_forward-selection.ogg', channel: 'connection' },
+  left: { file: 'navigation_backward-selection.ogg', channel: 'connection' },
+  participantJoined: { file: 'navigation_forward-selection.ogg', channel: 'participant' },
+  participantLeft: { file: 'navigation_backward-selection.ogg', channel: 'participant' },
+  microphoneOn: { file: 'navigation_forward-selection-minimal.ogg', channel: 'voice' },
+  microphoneOff: { file: 'navigation_backward-selection-minimal.ogg', channel: 'voice' },
+  screenShareStarted: { file: 'navigation_selection-complete-celebration.ogg', channel: 'sharing' },
+  screenShareStopped: { file: 'alert_error-02.ogg', channel: 'sharing' },
+  listeningOn: { file: 'navigation_hover-tap.ogg', channel: 'voice' },
+  listeningOff: { file: 'navigation_forward-selection-minimal-short.wav', channel: 'voice' },
+  recordingStarted: { file: 'notification_simple-01.ogg', channel: 'recording' },
+  recordingStopped: { file: 'navigation-cancel.ogg', channel: 'recording' },
 };
 
 /** 提示音随应用离线交付，按需解码并在当前会话复用，沿用所选的本机输出设备。 */
@@ -62,7 +64,7 @@ export function useCallSounds(outputVolume: Ref<number>, preferences: ReturnType
     const cached = buffers.get(file);
     if (cached) return cached;
     const decoded = (async () => {
-      const response = await fetch(`${import.meta.env.BASE_URL}sounds/material/${file}.ogg`, { signal: loading.signal });
+      const response = await fetch(`${import.meta.env.BASE_URL}sounds/material/${file}`, { signal: loading.signal });
       if (!response.ok) throw new Error(`soundAssetUnavailable:${response.status}`);
       const bytes = await response.arrayBuffer();
       if (disposed) throw new Error('soundPlaybackDisposed');
@@ -196,6 +198,7 @@ export function useCallSounds(outputVolume: Ref<number>, preferences: ReturnType
     screenShareStarted: () => playEvent('screenShareStarted'),
     screenShareStopped: () => playEvent('screenShareStopped'),
     microphoneChanged: (enabled: boolean) => playEvent(enabled ? 'microphoneOn' : 'microphoneOff'),
+    listeningChanged: (enabled: boolean) => playEvent(enabled ? 'listeningOn' : 'listeningOff'),
     recordingStarted: () => playEvent('recordingStarted'),
     recordingStopped: () => playEvent('recordingStopped'),
     preview: (event: CallSoundEvent) => { stopPreview(); return playEvent(event, true); },

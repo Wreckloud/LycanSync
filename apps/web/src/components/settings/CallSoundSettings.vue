@@ -13,7 +13,7 @@ const previewError = ref('');
 const eventIdPrefix = useId();
 const moreSoundsOpen = ref(false);
 const moreSoundsId = useId();
-const commonSounds = CALL_SOUND_EVENTS.filter(event => ['participantJoined', 'participantLeft', 'microphoneOn', 'microphoneOff'].includes(event.id));
+const commonSounds = CALL_SOUND_EVENTS.filter(event => ['participantJoined', 'participantLeft', 'microphoneOn', 'microphoneOff', 'listeningOn', 'listeningOff'].includes(event.id));
 const moreSounds = CALL_SOUND_EVENTS.filter(event => !commonSounds.includes(event));
 let previewVersion = 0;
 function stopPreview() { previewVersion++; props.sounds.stopPreview(); }
