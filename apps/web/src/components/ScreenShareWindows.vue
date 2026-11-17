@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import '../viewing/callViewing.css';
-import { computed, reactive, watch } from 'vue';
+import { computed, onScopeDispose, reactive, ref, watch } from 'vue';
+import { motionDurationMs } from '../styles/motion';
 import type { UnwrapNestedRefs } from 'vue';
 import { Track } from 'livekit-client';
 import type { useRtcRoom } from '../rtc/useRtcRoom';
@@ -59,7 +60,10 @@ const windows = useScreenShareWindows({
 });
 const entries = windows.entries;
 const watching = computed(() => entries.value.find(entry => entry.kind === 'watching'));
-const inlineExpanded = computed(() => view.mode !== 'collapsed' && !watching.value);
+const detached = computed(() => entries.value.some(entry => entry.kind === 'watching' && entry.target));
+const inlineExpanded = computed(() => view.mode !== 'collapsed' && !detached.value);
+const returning = ref(false);
+let returnTimer: ReturnType<typeof setTimeout> | undefined;
 const focusedIdentity = computed(() => view.mode === 'focus' ? view.focusedShare?.participant.identity : undefined);
 const controls = computed(() => entries.value.filter((entry): entry is ControlWindow => entry.kind === 'control'));
 const count = computed(() => entries.value.length);
@@ -90,10 +94,16 @@ function detachWatching() {
 }
 
 function returnWatching() {
+  if (!watching.value || returning.value) return;
+  returning.value = true;
+  const duration = props.inlineTarget ? motionDurationMs(getComputedStyle(props.inlineTarget).getPropertyValue('--motion-layout-duration')) : 0;
+  clearTimeout(returnTimer);
+  returnTimer = setTimeout(() => { returning.value = false; }, duration);
   // 主动返回沿用观看窗当前布局，直接关窗恢复弹出前的主界面布局。
   beforeDetach = undefined;
   windows.closeWatching();
 }
+onScopeDispose(() => clearTimeout(returnTimer));
 
 function closeAll() {
   beforeDetach = undefined;
@@ -112,16 +122,18 @@ watch(() => [props.rtc.remoteControlActive, props.rtc.revision] as const, ([acti
     if (!windows.openControl(active.identity)) void props.rtc.exitRemoteControl();
   }
 }, { flush: 'post' });
-defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded });
+defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded, detached, returning, returnWatching });
 </script>
 
 <template>
   <Teleport v-if="inlineTarget" :to="inlineTarget">
-    <CallViewingPanel :active="inlineExpanded" :video-active="inlineVisible" :view="view" :room="rtc.room" :revision="rtc.revision"
+    <CallViewingPanel :active="inlineExpanded" :hidden="detached" :video-active="inlineVisible" :view="view" :room="rtc.room" :revision="rtc.revision"
       :avatar="avatar" :listening="rtc.listening" :recording-elapsed="recordingElapsed"
       :private-control="controlPlaceholder" :reconnecting="rtc.status === 'reconnecting'"
       @detach="detachWatching" @notice="emit('notice', $event)">
-      <HorizontalScroll label="语音成员" :center-key="watching ? undefined : focusedIdentity"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" appear @before-leave="($event as HTMLElement).inert = true"><slot :select="select" :visible="inlineVisible" :focused-identity="focusedIdentity" :watching-elsewhere="!!watching" /></TransitionGroup></HorizontalScroll>
+      <template #default="{ previewsMounted }">
+        <HorizontalScroll label="语音成员" :center-key="watching ? undefined : focusedIdentity"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" appear @before-leave="($event as HTMLElement).inert = true"><slot :select="select" :visible="inlineVisible" :previews-mounted="previewsMounted" :focused-identity="focusedIdentity" :watching-elsewhere="!!watching" /></TransitionGroup></HorizontalScroll>
+      </template>
     </CallViewingPanel>
   </Teleport>
   <Teleport v-if="watching?.target" :to="watching.target">
@@ -130,7 +142,9 @@ defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded });
         :private-control="controlPlaceholder" :recording-elapsed="recordingElapsed"
         :reconnecting="rtc.status === 'reconnecting'" detached
         @return="returnWatching" @notice="emit('notice', $event)">
-        <HorizontalScroll label="语音成员" :center-key="focusedIdentity"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" appear @before-leave="($event as HTMLElement).inert = true"><slot :select="view.select" :visible="true" :focused-identity="focusedIdentity" :watching-elsewhere="false" /></TransitionGroup></HorizontalScroll>
+        <template #default="{ previewsMounted }">
+          <HorizontalScroll label="语音成员" :center-key="focusedIdentity"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" @before-leave="($event as HTMLElement).inert = true"><slot :select="view.select" :visible="true" :previews-mounted="previewsMounted" :focused-identity="focusedIdentity" :watching-elsewhere="false" /></TransitionGroup></HorizontalScroll>
+        </template>
       </CallViewingPanel>
     </section>
   </Teleport>

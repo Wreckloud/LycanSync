@@ -5,6 +5,8 @@
 .horizontal-viewport::-webkit-scrollbar { display: none; }
 
 .call-viewing-panel { position: relative; min-width: 0; }
+.voice-panel:has(.is-framing) { overflow: visible; }
+.call-viewing-panel.is-framing { overflow: hidden; }
 .call-viewing-panel.is-expanded { position: fixed; z-index: 10; inset: var(--titlebar-height) 0 0; background: var(--panel-soft); }
 .call-viewing-panel.is-detached.is-expanded { top: 0; }
 .viewing-reconnecting { position: absolute; z-index: 2; top: 8px; left: 10px; color: var(--muted); font-size: 12px; }

@@ -20,6 +20,7 @@ const props = withDefaults(defineProps<{
   variant?: 'card' | 'viewer';
   inputBlocked?: boolean;
   viewActive?: boolean;
+  previewMounted?: boolean;
   focused?: boolean;
   watchingElsewhere?: boolean;
   shareAudio?: boolean;
@@ -35,7 +36,7 @@ const props = withDefaults(defineProps<{
   privateControl?: string;
   showFullscreen?: boolean;
   viewQuality?: VideoQuality;
-}>(), { variant: 'card', playbackVolume: 1, inputGain: 1, outputVolume: 1, showFullscreen: true, viewActive: true });
+}>(), { variant: 'card', playbackVolume: 1, inputGain: 1, outputVolume: 1, showFullscreen: true, viewActive: true, previewMounted: true });
 const emit = defineEmits<{
   select: [];
   toggleShareAudio: [];
@@ -365,8 +366,8 @@ onBeforeUnmount(() => {
       <span v-if="privateControl" class="video-placeholder private-control-placeholder" role="status">{{ privateControl }}<small>画面未公开</small></span>
       <span v-else-if="focusedPreview" class="video-placeholder focused-preview-placeholder" role="status">{{ watchingElsewhere ? '已在观看窗口聚焦' : '已聚焦' }}</span>
       <template v-else-if="media.sharing">
-        <video ref="videoElement" :class="{ 'is-video-ready': videoReady }" autoplay muted playsinline :aria-label="media.name + '的共享画面'" />
-        <span v-if="!videoReady || !media.track || media.muted" class="video-placeholder">等待共享画面…</span>
+        <video v-if="previewMounted" ref="videoElement" :class="{ 'is-video-ready': videoReady }" autoplay muted playsinline :aria-label="media.name + '的共享画面'" />
+        <span v-if="previewMounted && (!videoReady || !media.track || media.muted)" class="video-placeholder">等待共享画面…</span>
       </template>
       <div v-else class="large-avatar" aria-hidden="true">
         <img v-if="avatar" :src="avatar" alt="" />

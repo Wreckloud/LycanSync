@@ -21,6 +21,7 @@ const props = withDefaults(defineProps<{
   active?: boolean;
   videoActive?: boolean;
   detached?: boolean;
+  hidden?: boolean;
   reconnecting: boolean;
 }>(), { active: true, videoActive: true });
 const emit = defineEmits<{ detach: []; return: []; notice: [message: string] }>();
@@ -28,12 +29,15 @@ const panel = ref<HTMLElement | null>(null);
 const ratios = ref<Record<number, number>>({});
 const framing = ref(false);
 let panelAnimation: Animation | undefined;
+let contentAnimations: Animation[] = [];
 let panelGeneration = 0;
 let motionPreference: MediaQueryList | undefined;
 let stopWindowRestore: (() => void) | undefined;
 function stopPanelMotion() {
   panelAnimation?.cancel();
   panelAnimation = undefined;
+  for (const animation of contentAnimations) animation.cancel();
+  contentAnimations = [];
   framing.value = false;
 }
 function reducePanelMotion() {
@@ -43,7 +47,7 @@ let clock: ReturnType<typeof setInterval> | undefined;
 const now = ref(performance.now());
 const focus = computed(() => props.view.mode === 'focus');
 const singleStage = computed(() => props.view.displayed.length === 1 && (props.detached || props.view.expanded));
-const showMembers = computed(() => !props.active || focus.value && props.view.membersVisible && !props.view.expanded);
+const showMembers = computed(() => !props.hidden && (!props.active || focus.value && props.view.membersVisible && !props.view.expanded));
 const { width, height, minimumHeight, maximumHeight, resizing, changeHeight, beginResize, moveResize, endResize } = useViewingSize(panel, {
   detached: () => Boolean(props.detached), expanded: () => props.view.expanded,
   showMembers: () => showMembers.value, preferredHeight: () => props.view.height,
@@ -133,6 +137,8 @@ watch(() => props.active, (active) => {
 watch(() => props.view.expanded, async () => {
   const element = panel.value;
   const before = element?.getBoundingClientRect();
+  const surfaces = element ? [...element.querySelectorAll<HTMLElement>('.viewing-stage, .viewing-tile')]
+    .map(surface => ({ surface, height: surface.getBoundingClientRect().height })) : [];
   stopPanelMotion();
   const generation = ++panelGeneration;
   if (!element || !before || !props.active) return;
@@ -155,6 +161,11 @@ watch(() => props.view.expanded, async () => {
   ], { duration: motionDurationMs(style.getPropertyValue('--motion-layout-duration')),
     easing: style.getPropertyValue('--motion-ease').trim() });
   panelAnimation = active;
+  // 内部画面与外框一起纵向恢复，不能先跳到目标高度，只留下空壳动画。
+  contentAnimations = surfaces.filter(item => item.surface.isConnected).map(item => item.surface.animate([
+    { height: `${item.height}px` }, { height: `${item.surface.getBoundingClientRect().height}px` },
+  ], { duration: motionDurationMs(style.getPropertyValue('--motion-layout-duration')),
+    easing: style.getPropertyValue('--motion-ease').trim() }));
   active.finished.then(() => { if (panelAnimation === active) stopPanelMotion(); }, () => {});
 }, { flush: 'pre' });
 onMounted(() => {
@@ -221,7 +232,7 @@ onScopeDispose(() => {
             <div v-if="active" class="viewing-members-toggle">
               <button type="button" aria-label="收起成员" title="收起成员" :aria-expanded="true" @click="view.membersVisible = false"><ChevronUp :size="16" /></button>
             </div>
-            <slot />
+            <slot :previews-mounted="showMembers" />
           </div>
         </div>
       </div>

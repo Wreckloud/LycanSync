@@ -45,7 +45,7 @@ it('设置覆盖只撤销主界面的观看需求，独立窗继续观看；返�
   expect(main.updates).toHaveLength(count);
 });
 
-it('不同窗口合并需求，主窗口隐藏不暂停辅助窗，关窗与迟到回调不影响其他位置', () => {
+it('不同窗口合并需求，主窗口隐藏不暂停辅助窗，关窗与迟到回调不影响其他位置', async () => {
   const main = viewing(), auxiliary = viewing();
   const small = main.element(), large = auxiliary.element();
   const low = observeScreenShareView(main.publication, small, VideoQuality.LOW);
@@ -67,7 +67,23 @@ it('不同窗口合并需求，主窗口隐藏不暂停辅助窗，关窗与迟�
   high.setQuality(VideoQuality.HIGH); high.stop();
   expect(main.updates).toHaveLength(count);
   low.stop();
+  await Promise.resolve();
   expect(main.publication.isEnabled).toBe(false);
+});
+
+it('同轮解绑并恢复到另一个观看位置不暂停轨道，真正关闭后仍暂停', async () => {
+  const state = viewing();
+  const first = observeScreenShareView(state.publication, state.element(), VideoQuality.HIGH);
+  state.updates.length = 0;
+  first.stop();
+  const next = observeScreenShareView(state.publication, state.element(), VideoQuality.HIGH);
+  await Promise.resolve();
+  expect(state.publication.isEnabled).toBe(true);
+  expect(state.updates.some(update => (update as { disabled: boolean }).disabled)).toBe(false);
+  next.stop();
+  await Promise.resolve();
+  expect(state.publication.isEnabled).toBe(false);
+  expect(state.callbacks.size).toBe(0);
 });
 
 it('同一轨道的小预览和独立观看合并为最高可见需求，隐藏不取消订阅', () => {

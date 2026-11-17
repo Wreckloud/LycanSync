@@ -1060,10 +1060,12 @@ function participantListening(participant: Participant) {
                 <div class="group-title-row"><GroupMenu :key="selectedGroup.id" :group="selectedGroup" @select="openGroupAction" /></div>
                 <p :title="selectedGroup.description || undefined">{{ selectedGroup.description }}</p>
               </div>
-              <IconButton :label="joinedGroupId === selectedGroup.id ? '离开当前群组语音' : '加入当前群组语音'"
-                :class="{ 'is-danger': joinedGroupId === selectedGroup.id }" :disabled="joiningGroupId !== null"
-                @click="joinedGroupId === selectedGroup.id ? leaveVoice() : requestJoin(selectedGroup.id)">
-                <LogOut v-if="joinedGroupId === selectedGroup.id" :size="18" /><Headphones v-else :size="18" />
+              <IconButton :label="showingJoinedGroup && viewingWindows?.detached ? '收回画面' : joinedGroupId === selectedGroup.id ? '离开当前群组语音' : '加入当前群组语音'"
+                :class="{ 'is-danger': joinedGroupId === selectedGroup.id && !viewingWindows?.detached }"
+                :disabled="joiningGroupId !== null || showingJoinedGroup && viewingWindows?.returning"
+                @click="showingJoinedGroup && viewingWindows?.detached ? viewingWindows.returnWatching() : joinedGroupId === selectedGroup.id ? leaveVoice() : requestJoin(selectedGroup.id)">
+                <CornerUpLeft v-if="showingJoinedGroup && viewingWindows?.detached" :size="18" />
+                <LogOut v-else-if="joinedGroupId === selectedGroup.id" :size="18" /><Headphones v-else :size="18" />
               </IconButton>
             </header>
           </div>
@@ -1215,11 +1217,12 @@ function participantListening(participant: Participant) {
       :control-placeholder="remoteControlPlaceholder"
       :input-blocked="viewerInputBlocked"
       @notice="viewerNotice = $event" @toggle-share-audio="toggleSharedAudio" @request-control="requestParticipantControl">
-      <template #default="{ select, visible, focusedIdentity, watchingElsewhere }">
+      <template #default="{ select, visible, previewsMounted, focusedIdentity, watchingElsewhere }">
         <div v-for="participant in rtc.participants" :key="participant.identity" class="member-card" :data-scroll-key="participant.identity">
         <ParticipantCard :participant="participant"
           :focused="focusedIdentity === participant.identity" :watching-elsewhere="watchingElsewhere"
           :view-active="visible"
+          :preview-mounted="previewsMounted"
           :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant"
           :recording-elapsed="recording.state.value.phase === 'recording' ? recording.elapsed.value : undefined"
           :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"

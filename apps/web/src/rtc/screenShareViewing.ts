@@ -79,7 +79,11 @@ export function observeScreenShareView(publication: RemoteTrackPublication, elem
     viewWindow!.removeEventListener('pagehide', stop);
     currentState.demands.delete(demand);
     // 空需求仍保留暂停原因与变化序号；发布对象释放时由 WeakMap 一并回收。
-    updateViewing(publication, currentState);
+    // 布局交接在同一次 Vue 更新中先解绑再挂载；等本轮结束，避免无意义地暂停再恢复远端。
+    if (!currentState.demands.size) queueMicrotask(() => {
+      if (!currentState.demands.size) updateViewing(publication, currentState);
+    });
+    else updateViewing(publication, currentState);
   }
   return {
     setActive(enabled: boolean) {

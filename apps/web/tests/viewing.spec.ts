@@ -473,6 +473,62 @@ async function openWatching(page: Page) {
   return viewer;
 }
 
+test('网格与弹出卸载重复视频，顶部收回保留卡片实例和语音连接', async ({ page }) => {
+  await sharing(page, ['A', 'B']);
+  const card = await page.locator('[data-scroll-key="A"]').elementHandle();
+  const restoreTimes: number[] = [];
+  for (let round = 0; round < 3; round++) {
+    const viewer = await openWatching(page);
+    await expect(page.locator('.voice-panel video')).toHaveCount(0);
+    await expect(page.locator('.viewing-members-panel')).toBeHidden();
+    await expect.poll(() => page.locator('.voice-panel').evaluate(element => element.getBoundingClientRect().height)).toBe(0);
+    await expect(viewer.locator('video')).toHaveCount(2);
+    const elapsed = await page.getByRole('button', { name: '收回画面', exact: true }).evaluate(async element => {
+      const start = performance.now();
+      (element as HTMLButtonElement).click();
+      while (performance.now() - start < 2000) {
+        await new Promise(requestAnimationFrame);
+        const videos = [...document.querySelectorAll<HTMLVideoElement>('.viewing-tile video')];
+        if (videos.length === 2 && videos.every(video => video.readyState >= 2 && !video.paused)) return performance.now() - start;
+      }
+      throw new Error('恢复观看未及时出现可播放画面');
+    });
+    restoreTimes.push(elapsed);
+    await expect.poll(() => viewer.isClosed()).toBe(true);
+    await expect(page.locator('.viewing-tile video')).toHaveCount(2);
+    await expect(page.locator('.viewing-member-strip video')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '离开语音', exact: true })).toBeVisible();
+    await page.locator('.viewing-tile').first().hover();
+    await page.getByRole('button', { name: '退出观看', exact: true }).first().click();
+    await expect(page.locator('.viewing-member-strip video')).toHaveCount(2);
+    expect(await card!.evaluate(element => element.isConnected)).toBe(true);
+  }
+  console.log('合成双画面连续收回首帧耗时(ms):', restoreTimes.map(value => Math.round(value)));
+});
+
+test('占满窗口与恢复均有纵向画面过渡，不替换视频元素', async ({ page }) => {
+  await sharing(page, ['A']);
+  await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+  const video = await page.locator('.viewing-tile video').elementHandle();
+  await expect.poll(() => page.locator('.voice-panel').evaluate(element => element.getAnimations({ subtree: true }).length)).toBe(0);
+  for (const label of ['占满窗口', '恢复观看布局']) {
+    const samples = await page.locator('.call-viewing-panel').evaluate(async (panel, label) => {
+      const stage = panel.querySelector('.viewing-stage')!;
+      const read = () => stage.getBoundingClientRect().height;
+      const heights = [read()];
+      (panel.querySelector(`[aria-label="${label}"]`) as HTMLButtonElement).click();
+      for (let i = 0; i < 24; i++) { await new Promise(requestAnimationFrame); heights.push(read()); }
+      return heights;
+    }, label);
+    const first = samples[0]!, last = samples.at(-1)!;
+    expect(Math.abs(last - first)).toBeGreaterThan(40);
+    expect(samples.some(height => height > Math.min(first, last) + 5 && height < Math.max(first, last) - 5)).toBe(true);
+    const direction = Math.sign(last - first);
+    for (let i = 1; i < samples.length; i++) expect((samples[i]! - samples[i - 1]!) * direction).toBeGreaterThanOrEqual(-2);
+    expect(await video!.evaluate(element => element.isConnected)).toBe(true);
+  }
+});
+
 test('单画面占满观看窗，宽窄画面网格不越界，本地弹出预览持续更新', async ({ page }) => {
   const paint = (width: number, height: number, color: string) => page.evaluate(({ width, height, color }) =>
     (window as unknown as { __viewingTest: { paint(width: number, height: number, color: string): void } }).__viewingTest
@@ -581,7 +637,9 @@ test('默认仅小预览，网格和聚焦使用原比例，整体弹出后返�
   await expect(viewer.getByRole('region', { name: '语音成员', exact: true })).toHaveCount(0);
   await expect(page.locator('.viewing-tile')).toHaveCount(0);
   await expect(page.locator('.group-header')).toBeVisible();
-  await page.locator('[data-scroll-key="B"]').getByRole('button', { name: '打开观看窗口', exact: true }).click();
+  await expect(page.locator('.viewing-members-panel')).toBeHidden();
+  await expect(page.locator('.voice-panel video')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '收回画面', exact: true })).toBeVisible();
   expect(context.pages()).toHaveLength(2);
   await expect(viewer.locator('.viewing-tile')).toHaveCount(8);
   await viewer.getByRole('button', { name: '聚焦成员B', exact: true }).click();
@@ -630,7 +688,7 @@ test('观看窗在设置和预览别群时保留；网格跟随当前共享，�
       streams: { identity: string; playbackFrames: number | null; viewing: { visibleViews: number; inactiveViews: number } | null }[];
     }> } }).__viewingTest.diagnostics();
     return sample.streams.filter(stream => ['A', 'B'].includes(stream.identity)).every(stream =>
-      stream.playbackFrames !== null && stream.viewing?.visibleViews === 1 && stream.viewing.inactiveViews === 1);
+      stream.playbackFrames !== null && stream.viewing?.visibleViews === 1 && stream.viewing.inactiveViews === 0);
   })).toBe(true);
   await page.getByRole('button', { name: '返回应用', exact: true }).click();
   await page.getByRole('button', { name: /^另一群组，/ }).click();
@@ -754,8 +812,9 @@ test('远控授权和画面匹配后才打开专用控制窗，普通观看关�
   await sharing(page, ['A']);
   await page.evaluate(() => (window as unknown as { __viewingTest: { control(id: string): void } }).__viewingTest.control('A'));
   const viewer = await openWatching(page);
-  await page.getByTestId('participant-card').nth(1).hover();
-  await page.getByRole('button', { name: '申请远程控制', exact: true }).click();
+  await viewer.getByRole('button', { name: '聚焦成员A', exact: true }).click();
+  await viewer.getByTestId('participant-card').nth(1).hover();
+  await viewer.getByRole('button', { name: '申请远程控制', exact: true }).click();
   expect(context.pages()).toHaveLength(2);
   const popup = page.waitForEvent('popup');
   await page.evaluate(() => (window as unknown as { __viewingTest: { grant(id: string): void } }).__viewingTest.grant('A'));
