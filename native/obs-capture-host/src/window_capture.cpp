@@ -120,7 +120,7 @@ obs_source_t *create_window_video_source(const WindowVideoTarget &target, bool h
   if (!window_video_target_valid(target)) { error = "captureTargetClosed"; return nullptr; }
   if (!obs_get_latest_input_type_id("lycansync_window_capture")) { error = "obsWindowBindingUnavailable"; return nullptr; }
   // 游戏已在上游分流；普通窗口统一使用 WGC，避免 GDI 成功返回旧帧或被遮挡的内容。
-  if (method != "auto") { error = "invalidCaptureArguments"; return nullptr; }
+  if (method != "auto" && method != "window") { error = "invalidCaptureArguments"; return nullptr; }
   obs_data_t *settings = obs_data_create();
   obs_data_set_int(settings, "lycansync_window_id", static_cast<long long>(reinterpret_cast<uintptr_t>(target.window)));
   obs_data_set_string(settings, "lycansync_window_lifetime", target.lifetime_name.c_str());

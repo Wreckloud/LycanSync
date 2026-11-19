@@ -23,6 +23,7 @@ pub struct WindowSnapshot {
     pub title: String,
     pub visible: bool,
     pub selectable: bool,
+    pub minimized: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -382,7 +383,7 @@ impl ActivityDetector {
                     .iter()
                     .filter(|window| {
                         window.visible
-                            && window.selectable
+                            && (window.selectable || window.minimized)
                             && !window.title.trim().is_empty()
                             && candidate
                                 .processes
@@ -459,11 +460,12 @@ mod tests {
             title: title.to_owned(),
             visible: true,
             selectable: true,
+            minimized: false,
         }
     }
 
     #[test]
-    fn game_windows_follow_process_identity_and_exclude_minimized_windows() {
+    fn game_windows_follow_process_identity_and_keep_minimized_windows() {
         let processes = [
             process(1, "c:/custom.exe", 100),
             process(2, "c:/other.exe", 200),
@@ -482,6 +484,14 @@ mod tests {
         let multiple = select_activity(&processes, &windows, &[], &mappings).unwrap();
         assert_eq!(multiple.window_ids, vec!["1", "3"]);
         windows[0].selectable = false;
+        windows[0].minimized = true;
+        assert_eq!(
+            select_activity(&processes, &windows, &[], &mappings)
+                .unwrap()
+                .window_ids,
+            vec!["1", "3"]
+        );
+        windows[0].minimized = false;
         assert_eq!(
             select_activity(&processes, &windows, &[], &mappings)
                 .unwrap()
@@ -1030,6 +1040,7 @@ mod tests {
                     title: "Krita".into(),
                     visible: true,
                     selectable: true,
+                    minimized: false,
                 }],
                 &[],
                 &mappings,

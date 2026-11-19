@@ -7,6 +7,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.util.Assert;
 
+import java.time.Duration;
+
 /**
  * 独立服务器的 RTC 连接与签名配置。
  *
@@ -28,7 +30,9 @@ public class RtcServerConfiguration {
     @Bean
     public RoomServiceClient serverRoomServiceClient(LiveKitProperties properties) {
         // 内部 API 地址与客户端的 WSS 地址分离，签名密钥只留在服务端。
-        return RoomServiceClient.createClient(properties.getApiUrl(),
-                properties.getApiKey(), properties.getApiSecret());
+        // 读取间隔超时不能约束持续慢回包；总时限避免撤权事务长期占住连接与群锁。
+        return RoomServiceClient.create(properties.getApiUrl(),
+                properties.getApiKey(), properties.getApiSecret(), false,
+                builder -> builder.callTimeout(Duration.ofSeconds(10)));
     }
 }

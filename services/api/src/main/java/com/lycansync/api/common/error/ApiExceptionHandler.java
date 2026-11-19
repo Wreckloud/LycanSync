@@ -11,6 +11,7 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -80,8 +81,8 @@ public class ApiExceptionHandler {
         );
     }
 
-    @ExceptionHandler(DataAccessException.class)
-    public ProblemDetail handleDataAccess(DataAccessException exception) {
+    @ExceptionHandler({DataAccessException.class, CannotCreateTransactionException.class})
+    public ProblemDetail handleDataAccess(RuntimeException exception) {
         log.error("数据库访问失败", exception);
         return createProblemDetail(
                 HttpStatus.SERVICE_UNAVAILABLE,

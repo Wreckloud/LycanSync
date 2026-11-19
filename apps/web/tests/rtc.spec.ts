@@ -248,11 +248,11 @@ test('未共享时显示群成员头像，停止共享后恢复头像', async ({
   await page.getByRole('button', { name: '返回应用' }).click();
   expect(await page.evaluate(() => window.__rtcTest.peers.length)).toBe(peerCountBeforeSettings);
   await expect(page.getByTestId('participant-card')).toHaveCount(1);
-  await localCard.getByRole('button', { name: /输入音量200%/ }).hover();
-  await expect(localCard.locator('.participant-volume-popover').filter({ hasText: '输入 200%' })).toBeVisible();
+  await localCard.getByRole('button', { name: '关闭自己的麦克风', exact: true }).hover();
+  await expect(localCard.locator('.participant-volume-popover')).toHaveCount(0);
   await expect(page.locator('.callbar').getByRole('button', { name: '停止接收声音', exact: true })).toBeEnabled();
-  await localCard.getByRole('button', { name: /lycanclaw 总输出200%/ }).hover();
-  await expect(localCard.locator('.participant-volume-popover').filter({ hasText: '输出 200%' })).toBeVisible();
+  await localCard.getByRole('button', { name: '停止接收所有成员声音', exact: true }).hover();
+  await expect(localCard.locator('.participant-volume-popover')).toHaveCount(0);
   await localCard.getByRole('button', { name: '关闭自己的麦克风' }).click();
   await expect(localCard.locator('.participant-volume-popover').filter({ hasText: /^输入/ })).toHaveCount(0);
   await expect(page.locator('.callbar').getByRole('button', { name: '开启麦克风', exact: true })).toBeEnabled();
@@ -339,9 +339,22 @@ test('通话中单击其他群只预览，双击时要求确认切换', async ({
   await page.getByRole('button', { name: '取消', exact: true }).click();
   await page.getByRole('button', { name: '返回当前通话群组' }).click();
   await expect(page.getByRole('heading', { name: '开黑小队' })).toBeVisible();
-  await page.getByRole('button', { name: '离开语音' }).click();
-  await expect(page.getByTestId('callbar')).toHaveClass(/is-leaving/);
-  await expect(page.getByTestId('callbar')).toHaveCount(0);
+  // 点击返回时短退场可能已结束，提前记录实际状态，仍要求随后移除底栏。
+  const departure = await page.getByTestId('callbar').evaluateHandle(element => {
+    const state = { observed: false, observer: new MutationObserver(() => {
+      state.observed ||= element.classList.contains('is-leaving');
+    }) };
+    state.observer.observe(element, { attributes: true, attributeFilter: ['class'] });
+    return state;
+  });
+  try {
+    await page.getByRole('button', { name: '离开语音' }).click();
+    expect(await departure.evaluate(state => state.observed)).toBe(true);
+    await expect(page.getByTestId('callbar')).toHaveCount(0);
+  } finally {
+    await departure.evaluate(state => state.observer.disconnect());
+    await departure.dispose();
+  }
 });
 
 test('房间外只能看到语音人数和昵称，不连接媒体房间', async ({ browser, context, page }) => {
@@ -502,27 +515,14 @@ test('双人同时语音和共享：实际收包、多画面观看、静音、�
     const remoteMic = remoteCard.getByRole('button', { name: /福州小狼(?:麦克风已开启|正在说话).*点击取消收听/ });
     await remoteMic.hover();
     await expect(remoteCard.getByRole('slider')).toHaveCount(0);
-    await expect(remoteCard.locator('.participant-volume-popover')).toHaveText('接收 100%');
-    const remoteMicBounds = await remoteMic.boundingBox();
-    if (!remoteMicBounds) throw new Error('远端麦克风按钮不可见');
-    await page.mouse.move(remoteMicBounds.x + remoteMicBounds.width / 2, remoteMicBounds.y + remoteMicBounds.height / 2);
-    await page.mouse.down();
-    const volumeDragger = page.getByRole('slider', { name: '福州小狼接收音量' });
-    await expect(volumeDragger).toBeVisible();
-    await page.mouse.move(remoteMicBounds.x + remoteMicBounds.width / 2, remoteMicBounds.y - 40, { steps: 4 });
-    await expect.poll(async () => Number(await volumeDragger.getAttribute('aria-valuenow'))).toBeGreaterThan(100);
-    await page.mouse.up();
-    await expect(volumeDragger).toHaveCount(0);
-    for (let step = 0; step < 40; step++) await remoteMic.dispatchEvent('wheel', { deltaY: 100 });
-    const mutedRemoteMic = remoteCard.getByRole('button', { name: /福州小狼已取消收听，点击恢复收听/ });
-    await expect(mutedRemoteMic).toBeVisible();
     await expect(remoteCard.locator('.participant-volume-popover')).toHaveCount(0);
-    await mutedRemoteMic.dispatchEvent('wheel', { deltaY: -100 });
-    await expect(remoteCard.locator('.participant-volume-popover')).toHaveText('接收 5%');
-    for (let step = 0; step < 20; step++) await remoteMic.dispatchEvent('wheel', { deltaY: -100 });
-    await expect(remoteCard.locator('.participant-volume-popover')).toHaveText('接收 105%');
-    for (let step = 0; step < 20; step++) await remoteMic.dispatchEvent('wheel', { deltaY: -100 });
-    await expect(remoteCard.locator('.participant-volume-popover')).toHaveText('接收 200%');
+    await remoteMic.dispatchEvent('wheel', { deltaY: -100 });
+    await page.getByRole('button', { name: '收听选项', exact: true }).click();
+    await page.getByRole('button', { name: '调整成员音量', exact: true }).click();
+    const volume = page.getByRole('slider', { name: '福州小狼接收音量', exact: true });
+    await expect(volume).toHaveValue('1');
+    await volume.fill('2');
+    await page.getByRole('button', { name: '收听选项', exact: true }).click();
     await remoteMic.click();
     await expect(remoteCard.getByRole('button', { name: /福州小狼已取消收听，点击恢复收听/ })).toBeVisible();
     await expect(remoteCard.locator('.participant-volume-popover')).toHaveCount(0);
@@ -530,7 +530,7 @@ test('双人同时语音和共享：实际收包、多画面观看、静音、�
     await expect(otherPage.getByTestId('participant-card').filter({ hasText: '苏州小狼' })
       .getByRole('button', { name: /苏州小狼(?:麦克风已开启|正在说话).*点击取消收听/ })).toBeVisible();
     await remoteCard.getByRole('button', { name: /福州小狼已取消收听，点击恢复收听/ }).click();
-    await expect(remoteCard.locator('.participant-volume-popover')).toHaveText('接收 200%');
+    await expect(remoteCard.locator('.participant-volume-popover')).toHaveCount(0);
     await expect(page.locator('audio')).toHaveCount(1);
     await expect.poll(() => page.evaluate(() => {
       const key = Object.keys(localStorage).find((item) => item.startsWith('lycansync.audio-preferences.v1.'));
@@ -656,6 +656,8 @@ test('浏览器结束采集后恢复共享按钮，重新入房仍默认开麦�
 });
 
 test('四人同时发布，每位成员均收到其他三人的音视频', async ({ browser }, testInfo) => {
+  // 四个独立页面依次启动并发布，整例预算不能等同于单人连接预算。
+  test.setTimeout(120_000);
   const contexts: BrowserContext[] = [];
   const pages: Page[] = [];
   try {
@@ -698,11 +700,62 @@ test('四人同时发布，每位成员均收到其他三人的音视频', async
     )).toBe(true);
     await pages[0].setViewportSize({ width: 1280, height: 720 });
     await expectViewingLayoutFits(pages[0]);
-    await expect(pages[0].locator('video')).toHaveCount(4);
+    await expect(pages[0].locator('video')).toHaveCount(0);
     await viewer.close();
+    await expect(pages[0].locator('video')).toHaveCount(4);
     await pages[0].locator('.viewing-tile').hover();
     await pages[0].getByRole('button', { name: '退出观看', exact: true }).click();
     await pages[0].screenshot({ path: testInfo.outputPath('four-screens.png'), fullPage: true });
+  } catch (error) {
+    // 只在断言失败后采样，避免诊断调用改变入房与观看的正常时序。
+    try {
+      const snapshots = await Promise.all(pages.map(async (page, index) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const captureRtcSnapshot = async () => {
+            // 直接读统计，避免失败采样再触发 Playwright 的页面快照。
+            const session = await page.context().newCDPSession(page);
+            try {
+              const readRtcSnapshot = async () => {
+                const peers = [];
+                const fields = ['type', 'kind', 'mid', 'bytesSent', 'bytesReceived', 'framesEncoded', 'framesDecoded',
+                  'frameWidth', 'frameHeight', 'framesPerSecond', 'totalDecodeTime', 'totalEncodeTime', 'jitter',
+                  'packetsLost', 'packetsReceived', 'packetsSent', 'qualityLimitationReason', 'encoderImplementation',
+                  'decoderImplementation', 'powerEfficientEncoder', 'powerEfficientDecoder', 'currentRoundTripTime'];
+                for (const peer of window.__rtcTest.peers) {
+                  const reports: object[] = [];
+                  const stats = await peer.getStats();
+                  stats.forEach(entry => {
+                    if (entry.type === 'inbound-rtp' || entry.type === 'outbound-rtp' || entry.type === 'candidate-pair' && entry.nominated) {
+                      reports.push({ ...Object.fromEntries(fields.filter(field => entry[field] !== undefined).map(field => [field, entry[field]])),
+                        codec: stats.get(entry.codecId)?.mimeType });
+                    }
+                  });
+                  peers.push({ connection: peer.connectionState, ice: peer.iceConnectionState, signaling: peer.signalingState,
+                    senders: peer.getSenders().map(sender => ({ kind: sender.track?.kind, state: sender.track?.readyState, encodings: sender.getParameters().encodings })), reports });
+                }
+                return { sampledAtMs: performance.timeOrigin + performance.now(), visible: document.visibilityState, focused: document.hasFocus(), peers,
+                  tracks: window.__rtcTest.tracks.map(track => ({ kind: track.kind, state: track.readyState,
+                    ...(track.kind === 'video' ? { width: track.getSettings().width, height: track.getSettings().height, frameRate: track.getSettings().frameRate } : {}) })) };
+              };
+              const result = await session.send('Runtime.evaluate', { expression: '(' + readRtcSnapshot.toString() + ')()', awaitPromise: true, returnByValue: true });
+              if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+              if (result.result.value === undefined) throw new Error('RTC diagnostic returned no state');
+              return result.result.value;
+            } finally { await session.detach(); }
+          };
+          const snapshot = await Promise.race([captureRtcSnapshot(),
+            new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('RTC diagnostic timed out')), 2000); })]);
+          return { index, snapshot };
+        } catch (diagnosticError) {
+          return { index, error: diagnosticError instanceof Error ? diagnosticError.message : 'RTC diagnostic unavailable' };
+        } finally { clearTimeout(timer); }
+      }));
+      await testInfo.attach('four-party-rtc-failure', { body: Buffer.from(JSON.stringify(snapshots, null, 2)), contentType: 'application/json' });
+    } catch (diagnosticError) {
+      console.error('四人RTC失败统计未能保存', diagnosticError instanceof Error ? diagnosticError.message : diagnosticError);
+    }
+    throw error;
   } finally {
     await Promise.all(contexts.map((context) => context.close()));
   }

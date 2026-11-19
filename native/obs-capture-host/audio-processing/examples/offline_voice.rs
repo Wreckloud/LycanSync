@@ -8,7 +8,7 @@ use std::{
     env,
     error::Error,
     fs,
-    io::{Read, Write},
+    io::{BufWriter, Read, Write},
     time::Instant,
 };
 
@@ -126,18 +126,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         .filter(|pair| pair[0].abs() > 0.9 && (pair[0] - pair[1]).abs() < 1e-7)
         .count();
     let total_ms: f64 = timings.iter().sum();
+    // 排序前保留时序，才能将慢块与素材中的静音、恢复边界对齐。
+    let block_timings_ms = format!("{timings:?}");
     timings.sort_by(f64::total_cmp);
-    let mut output = fs::File::options()
+    let output = fs::File::options()
         .write(true)
         .create_new(true)
         .open(&arguments[1])?;
+    let mut output = BufWriter::new(output);
     for sample in aligned {
         output.write_all(&sample.to_le_bytes())?;
     }
+    output.flush()?;
     let echo_enabled = reference.is_some();
     let processing_delay = if echo_enabled { "null" } else { "960" };
     println!(
-        "{{\"frames\":{count},\"peak\":{peak},\"rms\":{rms},\"fullScaleSamples\":{full_scale},\"flatTopAdjacentSamples\":{flat_top},\"processingMs\":{total_ms},\"p95BlockMs\":{},\"maxBlockMs\":{},\"adapterDelayFrames\":480,\"noiseDelayFrames\":480,\"processingDelayFrames\":{processing_delay},\"alignmentTrimFrames\":960,\"echoCancellation\":{echo_enabled}}}",
+        "{{\"frames\":{count},\"peak\":{peak},\"rms\":{rms},\"fullScaleSamples\":{full_scale},\"flatTopAdjacentSamples\":{flat_top},\"processingMs\":{total_ms},\"p95BlockMs\":{},\"maxBlockMs\":{},\"blockFrames\":480,\"blockTimingsMs\":{block_timings_ms},\"adapterDelayFrames\":480,\"noiseDelayFrames\":480,\"processingDelayFrames\":{processing_delay},\"alignmentTrimFrames\":960,\"echoCancellation\":{echo_enabled}}}",
         timings[(timings.len() - 1) * 95 / 100],
         timings.last().unwrap()
     );

@@ -21,9 +21,9 @@ use windows::Win32::UI::HiDpi::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GCW_ATOM, GWL_EXSTYLE, GWL_STYLE, GetClassLongPtrW, GetClassNameW,
-    GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
-    IsWindowVisible, MONITORINFOF_PRIMARY, WNDENUMPROC, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_MAXIMIZE, WS_MINIMIZE,
+    GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+    IsIconic, IsWindow, IsWindowVisible, MONITORINFOF_PRIMARY, WINDOWPLACEMENT, WNDENUMPROC,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZE, WS_MINIMIZE,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
@@ -203,6 +203,7 @@ unsafe extern "system" fn enumerate_monitor(
             width: width as u32,
             height: height as u32,
             primary: info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
+            minimized: false,
             window_id: None,
             monitor_origin: Some(crate::protocol::MonitorOrigin {
                 x: info.monitorInfo.rcMonitor.left,
@@ -219,7 +220,7 @@ unsafe extern "system" fn enumerate_window(window: HWND, parameter: LPARAM) -> B
     if context.sources.len() >= MAX_CALLBACK_SOURCES {
         return BOOL(1);
     }
-    if !unsafe { IsWindowVisible(window) }.as_bool() || unsafe { IsIconic(window) }.as_bool() {
+    if !unsafe { IsWindowVisible(window) }.as_bool() {
         return BOOL(1);
     }
     let mut process_id = 0;
@@ -259,8 +260,19 @@ unsafe extern "system" fn enumerate_window(window: HWND, parameter: LPARAM) -> B
     let Some(identity) = window_identity(window, context.observer) else {
         return BOOL(1);
     };
+    let minimized = unsafe { IsIconic(window) }.as_bool();
     let mut rect = RECT::default();
-    if unsafe { GetWindowRect(window, &mut rect) }.is_err() {
+    if minimized {
+        // 最小化时当前矩形可能为空；选择器使用还原尺寸，真实共享仍以首帧为准。
+        let mut placement = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            ..Default::default()
+        };
+        if unsafe { GetWindowPlacement(window, &mut placement) }.is_err() {
+            return BOOL(1);
+        }
+        rect = placement.rcNormalPosition;
+    } else if unsafe { GetWindowRect(window, &mut rect) }.is_err() {
         return BOOL(1);
     }
     let width = rect.right.saturating_sub(rect.left);
@@ -276,6 +288,7 @@ unsafe extern "system" fn enumerate_window(window: HWND, parameter: LPARAM) -> B
             width: width as u32,
             height: height as u32,
             primary: false,
+            minimized,
             window_id: Some((window.0 as usize).to_string()),
             monitor_origin: None,
         },
@@ -392,6 +405,8 @@ pub(super) fn window_video_target(
         lifetime_name: identity.lifetime.name.clone(),
         process_id: identity.process_id,
         process_creation_time: identity.process_creation_time.to_string(),
+        minimized: unsafe { IsIconic(window) }.as_bool()
+            || !unsafe { IsWindowVisible(window) }.as_bool(),
         requires_window_capture: requires_window_capture(identity.process_id)?
             || uses_separate_game_surface(&executable, &identity.class_name),
         executable,

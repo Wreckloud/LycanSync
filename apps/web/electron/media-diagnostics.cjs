@@ -175,7 +175,7 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           if (Number.isSafeInteger(entry[key]) && entry[key] >= 0 && entry[key] <= 1_000_000) details[key] = entry[key];
         }
         if (['dxgi', 'wgc-window', 'bitblt-window', 'game'].includes(entry.captureMethod)) details.captureMethod = entry.captureMethod;
-        if (['auto', 'game', 'bitblt', 'wgc'].includes(entry.requestedMethod)) details.requestedMethod = entry.requestedMethod;
+        if (['auto', 'game', 'window', 'bitblt', 'wgc'].includes(entry.requestedMethod)) details.requestedMethod = entry.requestedMethod;
         if (typeof entry.borderAllowed === 'boolean') details.borderAllowed = entry.borderAllowed;
         if (typeof entry.clientArea === 'boolean') details.clientArea = entry.clientArea;
         if (stage === 'sendTexture') {
@@ -199,6 +199,10 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           }
           if (['win32', 'darwin', 'linux'].includes(entry.platform)) details.platform = entry.platform;
           if (['x64', 'arm64', 'ia32'].includes(entry.arch)) details.arch = entry.arch;
+        }
+        if (['applicationReady', 'rendererReady', 'loginDataReady', 'loginReady'].includes(stage)
+            && Number.isSafeInteger(entry.processUptimeMs) && entry.processUptimeMs >= 0) {
+          details.processUptimeMs = entry.processUptimeMs;
         }
         if (stage === 'screenAudioStartup') {
           if (['published', 'failed'].includes(entry.outcome)) audioTiming.outcome = entry.outcome;

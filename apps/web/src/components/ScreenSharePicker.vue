@@ -12,7 +12,7 @@ import { useBackdropDismiss } from './useBackdropDismiss';
 import { keepDialogFocus } from './dialogFocus';
 
 const props = withDefaults(defineProps<{
-  sources: { id: string; name: string; thumbnail?: string; type: 'window' | 'screen' }[];
+  sources: { id: string; name: string; thumbnail?: string; minimized?: boolean; type: 'window' | 'screen' }[];
   sourceType: 'window' | 'screen'; selectedId: string; quality: ScreenShareQualityId;
   audioMode: NativeScreenAudioMode; audioReady: boolean; audioFailed: boolean; shareAudio: boolean;
   loading: boolean; error: string; notice: string;
@@ -128,7 +128,7 @@ defineExpose({ sourcesElement });
           <button v-for="source in sources" :key="source.id" type="button" :aria-label="source.name"
             :data-source-id="source.id" :aria-pressed="selectedId === source.id" @click="emit('choose', source.id)">
             <span class="capture-source-preview"><img v-if="source.thumbnail" :src="source.thumbnail" alt="" @load="emit('previewLoaded', source.id)" />
-              <span v-else class="capture-source-placeholder"><Monitor :size="32" /></span>
+              <span v-else class="capture-source-placeholder"><span v-if="source.minimized">切回游戏后开始</span><Monitor v-else :size="32" /></span>
               <span v-if="selectedId === source.id" class="capture-source-selected" aria-hidden="true">✓</span></span>
             <span class="capture-source-name">{{ source.name }}</span>
           </button>
@@ -152,10 +152,11 @@ defineExpose({ sourcesElement });
             <select v-model="captureSettings.windowMethod" aria-label="窗口采集方式">
               <option value="auto">自动</option>
               <option value="game">游戏采集</option>
+              <option value="window">窗口采集</option>
             </select>
           </label>
           <label class="capture-audio-option"><input v-model="captureSettings.hideCursor" type="checkbox" />隐藏共享画面中的光标</label>
-          <p v-if="sourceType === 'window'">自动选择适合此窗口的共享方式，仅分享应用内容。也可手动选择游戏采集。</p>
+          <p v-if="sourceType === 'window'">游戏共享没有画面时，可选择窗口采集后重试。</p>
           <p v-else>整屏共享不显示系统黄框。高级选项仅对本次共享生效。</p>
           </div>
           </ExpandSection>

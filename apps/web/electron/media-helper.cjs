@@ -120,6 +120,7 @@ class MediaHelperManager {
     const active = () => current && this.videoCapture === current && !current.stopping
       && current.sourceId === sourceId && current.state === snapshot?.state;
     if (!snapshot || (!snapshot.ids.has(sourceId) && !active()) || !snapshot.state.alive) throw new Error('videoSourceExpired');
+    if (this.canCloseWhenIdle(snapshot.state)) this.scheduleIdleShutdown(snapshot.state);
     const response = await this.sendRequest(snapshot.state, 'inspectVideoSource', 'videoSourceInspected',
       this.requestTimeoutMs, { sourceId });
     if (this.videoSourceSnapshot?.state !== snapshot.state || (!this.videoSourceSnapshot.ids.has(sourceId) && !active())) {
@@ -615,6 +616,9 @@ function validateVideoSources(message) {
         || (source.kind === 'window' && source.monitorOrigin !== undefined)) {
       throw new Error('mediaHelperInvalidVideoSources');
     }
+    if (source.minimized !== undefined && (typeof source.minimized !== 'boolean' || (source.minimized && source.kind !== 'window'))) {
+      throw new Error('mediaHelperInvalidVideoSources');
+    }
     if (source.windowId !== undefined && (source.kind !== 'window'
         || typeof source.windowId !== 'string' || !/^[1-9]\d{0,19}$/.test(source.windowId))) {
       throw new Error('mediaHelperInvalidVideoSources');
@@ -626,6 +630,7 @@ function validateVideoSources(message) {
       width: source.width,
       height: source.height,
       primary: source.primary,
+      ...(source.minimized === true ? { minimized: true } : {}),
       ...(source.windowId ? { windowId: source.windowId } : {}),
       ...(source.monitorOrigin ? { monitorOrigin: { x: source.monitorOrigin.x, y: source.monitorOrigin.y } } : {}),
     };
@@ -718,6 +723,7 @@ function readVideoTarget(target, sourceId) {
     return { kind: 'monitor', monitorName: target.monitorName };
   }
   if (target?.kind !== 'window' || !sourceId.startsWith('window:')
+      || (target.minimized !== undefined && typeof target.minimized !== 'boolean')
       || typeof target.windowId !== 'string' || !/^[1-9]\d{0,19}$/.test(target.windowId)
       || BigInt(target.windowId) > 0xffffffffffffffffn
       || typeof target.lifetimeName !== 'string' || target.lifetimeName.length > 128
@@ -731,6 +737,7 @@ function readVideoTarget(target, sourceId) {
       || /[\u0000-\u001f\u007f]/.test(target.executable)) throw new Error('mediaHelperInvalidVideoTarget');
   return { kind: 'window', windowId: target.windowId, lifetimeName: target.lifetimeName,
     processId: target.processId, processCreationTime: target.processCreationTime,
+    ...(target.minimized === true ? { minimized: true } : {}),
     requiresWindowCapture: target.requiresWindowCapture, executable: target.executable };
 }
 

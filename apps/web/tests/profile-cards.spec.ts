@@ -44,6 +44,48 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+for (const changeDuringLoading of [false, true]) {
+  test(`减少动态效果时加载层不等待动画帧：${changeDuringLoading ? '加载中切换' : '启动偏好'}`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: changeDuringLoading ? 'no-preference' : 'reduce' });
+    await page.addInitScript(() => {
+      const original = window.requestAnimationFrame.bind(window);
+      const held: FrameRequestCallback[] = [];
+      const scope = window as typeof window & { releaseLoadingFrames: () => void };
+      scope.releaseLoadingFrames = () => {
+        window.requestAnimationFrame = original;
+        for (const callback of held.splice(0)) callback(performance.now());
+      };
+      // 只延迟加载层退场帧，避免其他布局任务掩盖是否仍依赖过渡回调。
+      window.requestAnimationFrame = callback => original(time => {
+        if (document.querySelector('.app-loading-leave-active')) held.push(callback);
+        else callback(time);
+      });
+    });
+    let releaseGroups: (() => Promise<void>) | undefined;
+    if (changeDuringLoading) await page.route('**/api/groups', route => new Promise<void>(resolve => {
+      releaseGroups = async () => { await route.fulfill({ json: [group] }); resolve(); };
+    }));
+    try {
+      await page.goto('/');
+      if (changeDuringLoading) {
+        await expect(page.locator('.app-loading')).toBeVisible();
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        await expect.poll(() => !!releaseGroups).toBe(true);
+        await releaseGroups!(); releaseGroups = undefined;
+      }
+      await expect(page.locator('.app-content')).not.toHaveAttribute('inert');
+      await expect(page.locator('.app-loading')).toHaveCount(0, { timeout: 1000 });
+      const input = page.getByRole('textbox', { name: '消息内容', exact: true });
+      await input.click();
+      await input.pressSequentially('退场验证');
+      await expect(input).toHaveValue('退场验证');
+    } finally {
+      await releaseGroups?.();
+      await page.evaluate(() => (window as typeof window & { releaseLoadingFrames?: () => void }).releaseLoadingFrames?.());
+    }
+  });
+}
+
 test('各设置页说明共用同一位置和样式，诊断入口归入客户端', async ({ page }, testInfo) => {
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
@@ -559,9 +601,14 @@ test('快捷键录入松开后保存，冲突保持原设置，取消不会丢�
 });
 
 test('共享与录制入口合并设置，默认画质与共享偏好重开后保持', async ({ page }, testInfo) => {
+  const cacheErrors: string[] = [];
+  page.on('console', message => {
+    if (['local content cache unavailable', 'previous account content cache cleanup failed'].includes(message.text())) cacheErrors.push(message.text());
+  });
   await page.addInitScript(() => {
     Object.defineProperty(window, 'lycanDesktop', { value: {
       getAutoLogin: async () => ({ enabled: true, manualEntryRequired: false }),
+      getServerSettings: async () => ({ apiUrl: window.location.origin, editable: true }),
       getAccessLink: async () => null, onAccessLink: () => () => {},
       getUpdateState: async () => ({ phase: 'ready', supported: false, version: 'test', message: '' }),
       runStartupUpdate: async () => ({ phase: 'ready', supported: false, version: 'test', message: '' }),
@@ -642,6 +689,7 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
   await manager.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(manager).toHaveCount(0);
   await expect(managerButton).toBeFocused();
+  expect(cacheErrors).toEqual([]);
 });
 
 test('本机提示音只提供统一音量和逐项开关，重开后恢复，保留入场音效操作', async ({ page }) => {

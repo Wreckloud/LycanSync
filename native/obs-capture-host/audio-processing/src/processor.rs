@@ -2,6 +2,7 @@
 
 use crate::denoise::Denoiser;
 use crate::echo::EchoProcessor;
+use crate::float_mode::FloatMode;
 use sonora::config::{
     AdaptiveDigital, GainController2, HighPassFilter, MaxProcessingRate, Pipeline,
 };
@@ -135,9 +136,12 @@ impl MicrophoneProcessor {
             .process(&echo_cancelled, self.settings.noise_suppression);
         let source = [&denoised[..]];
         let mut destination = [&mut output[..]];
-        self.audio_processing
-            .process_capture_f32(&source, &mut destination)
-            .expect("fixed 48 kHz mono audio processing format");
+        {
+            let _float_mode = self.settings.voice_enhancement.then(FloatMode::new);
+            self.audio_processing
+                .process_capture_f32(&source, &mut destination)
+                .expect("fixed 48 kHz mono audio processing format");
+        }
         // 用户增益仍在 AGC 后应用；一个现有音频块内渐变，避免滑块调整造成阶跃。
         let target_gain = self.settings.input_gain;
         if target_gain == 0.0 {
@@ -212,6 +216,22 @@ mod tests {
             amplitude
                 * (2.0 * std::f32::consts::PI * frequency * frame as f32 / SAMPLE_RATE as f32).sin()
         })
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    #[allow(deprecated)]
+    fn processing_preserves_the_callers_floating_point_control_mode() {
+        for voice_enhancement in [false, true] {
+            let mut processor = MicrophoneProcessor::new(ProcessingSettings {
+                voice_enhancement,
+                ..ProcessingSettings::default()
+            });
+            let before = unsafe { std::arch::x86_64::_mm_getcsr() };
+            processor.process(&[0.1; FRAMES_PER_CHUNK]);
+            let after = unsafe { std::arch::x86_64::_mm_getcsr() };
+            assert_eq!(before & 0xffc0, after & 0xffc0);
+        }
     }
 
     #[test]

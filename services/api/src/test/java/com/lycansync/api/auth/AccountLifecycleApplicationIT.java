@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -32,6 +33,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @ActiveProfiles("test-fixtures")
 @SpringBootTest(properties = "lycansync.account.public-url=https://example.com")
 @Transactional
+// 数据库容器按测试类关闭，避免缓存上下文的定时任务继续访问已销毁的数据库。
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class AccountLifecycleApplicationIT {
     @Container
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:18.6-bookworm")

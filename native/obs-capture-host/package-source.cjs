@@ -80,7 +80,8 @@ function prepareSourceBundle(projectRoot) {
   const version = JSON.parse(readFileSync(join(projectRoot, 'apps/web/package.json'), 'utf8')).version;
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('OBS 源码包需要明确的应用发布版本。');
   const name = `LycanSync-${version}-obs-source.tar.gz`;
-  const output = join(projectRoot, 'release/desktop');
+  const output = process.env.LYCANSYNC_DESKTOP_OUTPUT_DIR
+    ? resolve(process.env.LYCANSYNC_DESKTOP_OUTPUT_DIR) : join(projectRoot, 'release/desktop');
   mkdirSync(output, { recursive: true });
   const staging = mkdtempSync(join(cache, 'source-package-'));
   try {

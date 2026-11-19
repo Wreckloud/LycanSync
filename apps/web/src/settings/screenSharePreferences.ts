@@ -1,4 +1,4 @@
-export type WindowCaptureMethod = 'auto' | 'game';
+export type WindowCaptureMethod = 'auto' | 'game' | 'window';
 
 export interface ScreenSharePreferences {
   hideCursor: boolean;

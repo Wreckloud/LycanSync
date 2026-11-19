@@ -304,7 +304,7 @@ impl Runtime {
             return Err(ErrorCode::InvalidRequest);
         }
         // 选择阶段只读取身份，不占用视频会话，也不改变正在共享的来源。
-        // 最小化窗口不在可选列表中，已授权会话仍可只读核验原实例。
+        // 活动会话保留原实例，即使其窗口在后续枚举中消失。
         if self.active_source_id.as_deref() == Some(source_id) {
             return self
                 .video_target
@@ -599,6 +599,7 @@ mod tests {
                     width: 1920,
                     height: 1080,
                     primary: true,
+                    minimized: false,
                     window_id: None,
                     monitor_origin: None,
                 },

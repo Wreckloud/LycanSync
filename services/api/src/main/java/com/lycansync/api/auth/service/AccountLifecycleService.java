@@ -14,9 +14,13 @@ import com.lycansync.api.group.model.GroupRole;
 import com.lycansync.api.rtc.service.GroupRtcAccessService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.datasource.ConnectionHolder;
 import org.springframework.security.crypto.password.Pbkdf2PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.TransactionTimedOutException;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
@@ -28,6 +32,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import javax.sql.DataSource;
 
 /**
  * 服主独立恢复、双方确认交接及保留历史的账号注销。
@@ -38,6 +44,7 @@ import java.util.concurrent.Semaphore;
 @Service
 @RequiredArgsConstructor
 public class AccountLifecycleService {
+    private static final Duration CLOSURE_TIMEOUT = Duration.ofSeconds(10);
     private final AccountLifecycleMapper accounts;
     private final AccessLinkMapper links;
     private final AuthMapper users;
@@ -47,6 +54,7 @@ public class AccountLifecycleService {
     private final ApplicationEventPublisher events;
     private final TransactionTemplate transactions;
     private final Clock systemClock;
+    private final DataSource dataSource;
     private final Semaphore recovering = new Semaphore(2);
     private final Pbkdf2PasswordEncoder passwords = new Pbkdf2PasswordEncoder("", 16, 600_000,
             Pbkdf2PasswordEncoder.SecretKeyFactoryAlgorithm.PBKDF2WithHmacSHA256);
@@ -179,27 +187,60 @@ public class AccountLifecycleService {
     }
 
     public void closeAccount(AuthenticatedUser user, String confirmation) {
-        transactions.executeWithoutResult(transaction -> {
-            lockState();
-            AuthUser current = active(user);
-            if (!current.nickname().equals(confirmation)) throw invalid("请输入当前账号的完整昵称确认注销");
-            if (current.administrator()) throw invalid("服主需要先完成服主转让，再注销账号");
-            var memberships = groups.findGroups(user.id()).stream().sorted((left, right) -> left.id().compareTo(right.id())).toList();
-            for (var group : memberships) {
-                groups.lockOwner(group.id());
-                if (group.role() == GroupRole.OWNER) throw invalid("请先转让或解散自己拥有的群组");
-            }
-            for (var group : memberships) rtc.removeParticipant(UUID.fromString(groups.findRtcRoomKey(group.id())), user.id());
-            if (accounts.closeAccount(user.id(), now()) != 1) throw invalid("账号状态已经变化");
-            accounts.revokeSessions(user.id());
-            accounts.revokeLinks(user.id(), now());
-            if (user.id().equals(state().transferTargetId())) accounts.clearTransfer();
-            // 清除基础资料但保留消息及成员关系；当前成员资格统一排除已注销账号。
-            for (var group : memberships) {
-                groups.touchGroup(group.id(), now());
-                events.publishEvent(new GroupChangedEvent(group.id(), false));
-            }
-        });
+        long deadline = System.nanoTime() + CLOSURE_TIMEOUT.toNanos();
+        try {
+            transactions.executeWithoutResult(transaction -> {
+                ConnectionHolder connection = closureConnection(deadline);
+                lockState();
+                AuthUser current = active(user);
+                if (!current.nickname().equals(confirmation)) throw invalid("请输入当前账号的完整昵称确认注销");
+                if (current.administrator()) throw invalid("服主需要先完成服主转让，再注销账号");
+                var memberships = groups.findGroups(user.id()).stream().sorted((left, right) -> left.id().compareTo(right.id())).toList();
+                for (var group : memberships) {
+                    groups.lockOwner(group.id());
+                    if (group.role() == GroupRole.OWNER) throw invalid("请先转让或解散自己拥有的群组");
+                }
+                var roomKeys = memberships.stream().map(group -> UUID.fromString(groups.findRtcRoomKey(group.id()))).toList();
+                rtc.removeParticipantFromRooms(roomKeys, user.id(), closureBudget(connection, deadline));
+                if (accounts.closeAccount(user.id(), now()) != 1) throw invalid("账号状态已经变化");
+                accounts.revokeSessions(user.id());
+                accounts.revokeLinks(user.id(), now());
+                if (user.id().equals(state().transferTargetId())) accounts.clearTransfer();
+                // 清除基础资料但保留消息及成员关系；当前成员资格统一排除已注销账号。
+                for (var group : memberships) {
+                    groups.touchGroup(group.id(), now());
+                    events.publishEvent(new GroupChangedEvent(group.id(), false));
+                }
+                closureBudget(connection, deadline);
+            });
+        } catch (QueryTimeoutException | TransactionTimedOutException exception) {
+            var failure = closureTimedOut();
+            failure.initCause(exception);
+            throw failure;
+        }
+    }
+
+    private ConnectionHolder closureConnection(long deadline) {
+        if (!(TransactionSynchronizationManager.getResource(dataSource) instanceof ConnectionHolder connection)) {
+            throw new IllegalStateException("账号注销事务未绑定数据库连接");
+        }
+        long remaining = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+        if (remaining <= 0) throw closureTimedOut();
+        // 只收紧当前事务的期限，连接仍由 Spring 管理；MyBatis 将剩余期限应用到 SQL 等待。
+        if (!connection.hasTimeout() || remaining < connection.getTimeToLiveInMillis()) {
+            connection.setTimeoutInMillis(remaining);
+        }
+        return connection;
+    }
+
+    private Duration closureBudget(ConnectionHolder connection, long deadline) {
+        long remaining = Math.min(deadline - System.nanoTime(), TimeUnit.MILLISECONDS.toNanos(connection.getTimeToLiveInMillis()));
+        if (remaining <= 0) throw closureTimedOut();
+        return Duration.ofNanos(remaining);
+    }
+
+    private AuthException closureTimedOut() {
+        return new AuthException(HttpStatus.SERVICE_UNAVAILABLE, ApiErrorCode.AUTH_SERVICE_UNAVAILABLE, "账号状态处理超时，请稍后重试");
     }
 
     private void lockState() {

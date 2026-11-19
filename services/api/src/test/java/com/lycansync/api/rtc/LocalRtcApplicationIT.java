@@ -78,7 +78,8 @@ class LocalRtcApplicationIT {
 
     @Container
     private static final GenericContainer<?> LIVEKIT =
-            new GenericContainer<>("livekit/livekit-server:v1.13.6")
+            // 隔离验收可显式复用已构建的部署镜像，不把不同版本重打成同一标签。
+            new GenericContainer<>(System.getProperty("lycansync.test.livekit-image", "livekit/livekit-server:v1.13.6"))
                     .withExposedPorts(7880)
                     .withEnv("LIVEKIT_CONFIG", """
                             port: 7880

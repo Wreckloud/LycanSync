@@ -8,6 +8,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.util.Assert;
 
+import java.time.Duration;
+
 /**
  * 本地 RTC 调试配置。
  *
@@ -33,9 +35,11 @@ public class LocalRtcConfiguration {
 
     @Bean
     public RoomServiceClient localRoomServiceClient(LiveKitProperties liveKitProperties) {
-        return RoomServiceClient.createClient(
+        // 与服务器模式保持同一请求上限，慢回包不能无限延长事务。
+        return RoomServiceClient.create(
                 liveKitProperties.getApiUrl(),
                 liveKitProperties.getApiKey(),
-                liveKitProperties.getApiSecret());
+                liveKitProperties.getApiSecret(), false,
+                builder -> builder.callTimeout(Duration.ofSeconds(10)));
     }
 }

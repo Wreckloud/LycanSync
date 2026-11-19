@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <iostream>
 #include <mutex>
@@ -7,6 +8,17 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+struct ID3D11Texture2D {};
+struct IDXGIKeyedMutex {};
+struct ID3D11Query {};
+using HANDLE = void *;
+namespace Microsoft::WRL {
+template<typename T> struct ComPtr {
+  bool present = false;
+  void Reset() { present = false; }
+};
+}
 
 namespace {
 constexpr unsigned kIdleFrameRate = 5;
@@ -67,7 +79,13 @@ public:
 @RECORDING_SHUTDOWN@
 
 struct WindowVideoTarget { bool bound = false; };
-struct Host { WindowVideoTarget window_target; std::string session_id = "test-session"; } g_host;
+@TEXTURE_SLOT_TYPE@
+struct Host {
+  WindowVideoTarget window_target;
+  std::string session_id = "test-session";
+  std::array<TextureSlot, 3> slots;
+  bool textures_initialized = false;
+} g_host;
 struct Video { unsigned base_width, output_width, base_height, output_height, fps_num; } video{};
 struct Audio {
   void recording(bool enabled) { check(!enabled, "audio recording remains enabled"); events.emplace_back("audio-recording-off"); }
@@ -83,7 +101,11 @@ void *obs_scene_get_source(void *value) { return value; }
 void obs_source_remove(void *) { events.emplace_back("remove-source"); }
 void obs_scene_release(void *) { events.emplace_back("release-scene"); }
 void obs_source_release(void *) { events.emplace_back("release-source"); }
-void destroy_textures() { events.emplace_back("textures"); }
+unsigned closed_handles = 0;
+void CloseHandle(HANDLE handle) { check(handle != nullptr, "empty texture handle closed"); ++closed_handles; }
+void obs_enter_graphics() { events.emplace_back("textures"); }
+void obs_leave_graphics() {}
+@TEXTURE_DESTRUCTION@
 void obs_wait_for_destroy_queue() { events.emplace_back("drain"); }
 constexpr int OBS_VIDEO_SUCCESS = 0;
 int obs_reset_video(Video *) { events.emplace_back("idle"); return OBS_VIDEO_SUCCESS; }
@@ -91,6 +113,27 @@ void write_event(std::string_view event) { events.emplace_back(event); }
 
 int capture_cleanup(RecordingOutput &recording, bool keep_host) {
 @CAPTURE_CLEANUP@
+
+void verify_texture_reset() {
+  for (auto &slot : g_host.slots) {
+    slot.shared_handle = &slot;
+    slot.d3d_texture.present = slot.keyed_mutex.present = slot.gpu_ready.present = true;
+    slot.gpu_pending = true;
+    slot.gpu_pending_since = std::chrono::steady_clock::now();
+  }
+  g_host.textures_initialized = true;
+  destroy_textures();
+  check(closed_handles == g_host.slots.size(), "shared texture handles retained");
+  check(!g_host.textures_initialized, "texture initialization retained");
+  for (const auto &slot : g_host.slots) {
+    check(!slot.shared_handle && !slot.d3d_texture.present && !slot.keyed_mutex.present && !slot.gpu_ready.present,
+        "texture resources retained");
+    check(!slot.busy && !slot.gpu_pending, "stale GPU completion state retained after texture destruction");
+    check(slot.gpu_pending_since == std::chrono::steady_clock::time_point{}, "stale GPU wait time retained");
+  }
+  destroy_textures();
+  check(closed_handles == g_host.slots.size(), "shared texture handle closed twice");
+}
 
 void verify_cleanup(bool recording_active, bool replay_active, bool confirm, bool keep_host) {
   events.clear();
@@ -137,12 +180,13 @@ void verify_cleanup(bool recording_active, bool replay_active, bool confirm, boo
 
 int main() {
   try {
+    verify_texture_reset();
     verify_cleanup(true, false, false, true);
     verify_cleanup(false, true, false, true);
     verify_cleanup(true, true, false, false);
     verify_cleanup(true, true, true, true);
     verify_cleanup(true, false, true, false);
-    std::cout << "recording shutdown: 5 scenarios passed\n";
+    std::cout << "texture reset and recording shutdown: 5 scenarios passed\n";
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n'; return 1;
   }

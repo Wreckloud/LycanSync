@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
-import { ChevronDown, ChevronLeft, ChevronRight, HeadphoneOff, Headphones, MicOff, MonitorUp, MonitorX, Settings } from '@lucide/vue';
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, HeadphoneOff, Headphones, MicOff, MonitorUp, MonitorX, Settings } from '@lucide/vue';
 import VoiceLevelMic from './VoiceLevelMic.vue';
 import RangeValue from './RangeValue.vue';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP } from '../rtc/audioPreferences';
@@ -16,6 +16,7 @@ const props = withDefaults(defineProps<{
   connected: boolean; desktop: boolean;
   microphoneEnabled: boolean; microphoneIntent: boolean; microphoneBusy: boolean; microphoneLevel: number; inputLevelPercent: number;
   listening: boolean; inputGain: number; outputVolume: number;
+  memberVolumes?: { identity: string; name: string; volume: number }[];
   sharing: boolean; shareBusy: boolean; choosingSource: boolean; shareLimitReached: boolean;
   quality: ScreenShareQualityId; shareAudio: boolean; audioMode: NativeScreenAudioMode;
   shareAudioRestricted?: boolean;
@@ -32,11 +33,13 @@ const emit = defineEmits<{
   settings: [opener: HTMLElement]; recording: []; recordingSettings: [opener: HTMLElement]; saveReplay: [];
   voiceMode: [mode: VoiceMode, opener: HTMLElement]; processing: [enabled: boolean];
   shareGame: []; shareAndRecord: []; voiceVolumeBalance: [enabled: boolean];
+  memberVolume: [identity: string, volume: number];
 }>();
 type ControlMenu = 'microphone' | 'output' | 'share';
 const root = ref<HTMLElement | null>(null);
 const menu = ref<ControlMenu | null>(null);
 const qualityOpen = ref(false);
+const memberVolumesOpen = ref(false);
 const missingTalkBinding = ref(false);
 const qualityPlacement = ref<'right' | 'compact'>('compact');
 const menuMaxHeight = ref(520);
@@ -58,6 +61,7 @@ function scheduleShareIntent() {
 
 function closeMenu(restoreFocus = false) {
   menu.value = null;
+  memberVolumesOpen.value = false;
   missingTalkBinding.value = false;
   qualityOpen.value = false;
   if (restoreFocus) opener?.focus();
@@ -208,6 +212,18 @@ onScopeDispose(() => {
             @input="emit('outputVolume', Number(($event.target as HTMLInputElement).value))" /></div>
         <label class="call-share-audio"><span>平衡成员语音音量</span><input type="checkbox" :checked="voiceVolumeBalance"
           @change="emit('voiceVolumeBalance', ($event.target as HTMLInputElement).checked)" /></label>
+        <template v-if="memberVolumes?.length">
+          <ExpandSection :open="memberVolumesOpen">
+            <div v-for="member in memberVolumes" :key="member.identity" class="call-control-range call-member-volume">
+              <span>{{ member.name }}<RangeValue :value="member.volume" :label="`重置${member.name}接收音量`" @reset="emit('memberVolume', member.identity, $event)">{{ Math.round(member.volume * 100) }}%</RangeValue></span>
+              <input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="member.volume" :aria-label="`${member.name}接收音量`"
+                @input="emit('memberVolume', member.identity, Number(($event.target as HTMLInputElement).value))" />
+            </div>
+          </ExpandSection>
+          <button type="button" class="call-settings-entry" :aria-expanded="memberVolumesOpen" @click="memberVolumesOpen = !memberVolumesOpen">
+            {{ memberVolumesOpen ? '收起成员音量' : '调整成员音量' }}<ChevronUp v-if="memberVolumesOpen" :size="14" /><ChevronDown v-else :size="14" />
+          </button>
+        </template>
         <button type="button" class="call-settings-entry" @click="openAudioSettings"><Settings :size="15" />语音设置<ChevronRight :size="14" /></button>
       </section>
       </Transition>
@@ -276,6 +292,7 @@ onScopeDispose(() => {
 .call-control-menu { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 8px); display: grid; gap: 12px; width: min(260px, calc(100vw - 32px)); max-height: var(--call-menu-max-height); overflow-y: auto; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-raised); color: var(--text); font-size: 13px; line-height: 20px; }
 .call-control-menu header { color: var(--muted); font-size: 12px; }
 .call-control-range, .call-input-level { display: grid; gap: 6px; }
+.call-member-volume + .call-member-volume { margin-top: 12px; }
 .call-control-range > span, .call-input-level > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .call-control-range input { width: 100%; margin: 0; accent-color: var(--accent); }
 .call-control-menu b { color: var(--accent); font-weight: 500; font-variant-numeric: tabular-nums; }

@@ -430,8 +430,15 @@ export function useDiagnosticReport(options: {
       samples.shift(); sampleBytes -= sampleSizes.shift()!; discardedSamples.value++;
     }
     if (!discardedSamples.value) return;
-    const members = new Set(samples.flatMap((sample) => [...sample.streams, ...sample.audio].map((item) => item.member)));
-    const streamKeys = new Set(samples.flatMap((sample) => sample.streams.map((stream) => `${stream.member}:${stream.direction}`)));
+    const members = new Set<string>();
+    const streamKeys = new Set<string>();
+    for (const sample of samples) {
+      for (const stream of sample.streams) {
+        members.add(stream.member);
+        streamKeys.add(`${stream.member}:${stream.direction}`);
+      }
+      for (const audio of sample.audio) members.add(audio.member);
+    }
     for (const [identity, member] of aliases) if (!members.has(member)) aliases.delete(identity);
     for (const key of streamSegments.keys()) if (!streamKeys.has(key)) streamSegments.delete(key);
   }

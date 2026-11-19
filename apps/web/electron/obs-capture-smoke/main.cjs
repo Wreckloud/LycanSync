@@ -599,6 +599,19 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
       const intervalMs = performance.now() - beforeAt;
       const pageAfter = await renderer('probe(960,540)');
       const hostFps = Math.round((after.bridgeFrames - before.bridgeFrames) * 1000 / intervalMs);
+      // 失败也保留本档计数，不能只在整轮成功后看到帧率，或把槽背压误判成渲染变慢。
+      captureEvidence.push({ stage: 'testWindowFrameRateSample', atMs: Math.round(performance.now()),
+        targetFps: fps, intervalMs: Math.round(intervalMs), hostFps,
+        renderConfiguration: [before.obsRender.configuration, after.obsRender.configuration],
+        renderedFrames: after.renderedFrames - before.renderedFrames,
+        obsFrames: after.obsRender.totalFrames - before.obsRender.totalFrames,
+        laggedFrames: after.obsRender.laggedFrames - before.obsRender.laggedFrames,
+        bridgeFrames: after.bridgeFrames - before.bridgeFrames,
+        bridgeDrops: after.bridgeDroppedFrames - before.bridgeDroppedFrames,
+        receivedFrames: pageAfter.input.receivedFrames - pageBefore.input.receivedFrames,
+        rendererDrops: pageAfter.input.backpressureDroppedFrames - pageBefore.input.backpressureDroppedFrames,
+        completedWrites: pageAfter.input.completedWrites - pageBefore.input.completedWrites,
+        presentedFrames: pageAfter.presented - pageBefore.presented });
       assert(hostFps >= fps * 0.75 && hostFps <= fps * 1.25, `windowFrameRateMismatch:${fps}:${hostFps}`);
       assert(pageAfter.presented > pageBefore.presented + 5 && pageAfter.input.submittedFrames > pageBefore.input.submittedFrames + 5
         && pageAfter.input.writeFailures === 0 && pageAfter.errors.length === 0, 'windowConfigurationStoppedPlayback');

@@ -6,32 +6,43 @@ import com.lycansync.api.auth.mapper.AccountLifecycleMapper;
 import com.lycansync.api.auth.mapper.AuthMapper;
 import com.lycansync.api.auth.model.AuthUser;
 import com.lycansync.api.auth.model.AuthenticatedUser;
+import com.lycansync.api.common.error.ApiErrorCode;
 import com.lycansync.api.group.mapper.GroupMapper;
 import com.lycansync.api.group.model.GroupRole;
 import com.lycansync.api.group.model.GroupView;
 import com.lycansync.api.rtc.service.GroupRtcAccessService;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.QueryTimeoutException;
+import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.datasource.ConnectionHolder;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.sql.Connection;
+import javax.sql.DataSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -56,6 +67,7 @@ class AccountLifecycleServiceTests {
     private final GroupRtcAccessService rtc = mock(GroupRtcAccessService.class);
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
     private final TransactionTemplate transactions = mock(TransactionTemplate.class);
+    private final DataSource dataSource = mock(DataSource.class);
     private final AuthUser owner = new AuthUser(UUID.randomUUID(), "服主", "头像", true, "签名", NOW);
     private final AuthUser member = new AuthUser(UUID.randomUUID(), "朋友", "头像", false, "签名", NOW);
     private final AtomicReference<AccountLifecycleMapper.State> state = new AtomicReference<>();
@@ -80,7 +92,13 @@ class AccountLifecycleServiceTests {
                 ((TransactionCallback<?>) invocation.getArgument(0)).doInTransaction(new SimpleTransactionStatus()));
         when(sessions.issueSession(any(), anyString())).thenAnswer(invocation -> invocation.getArgument(1));
         service = new AccountLifecycleService(accounts, links, users, sessions, groups, rtc, events,
-                transactions, Clock.fixed(NOW, ZoneOffset.UTC));
+                transactions, Clock.fixed(NOW, ZoneOffset.UTC), dataSource);
+        TransactionSynchronizationManager.bindResource(dataSource, new ConnectionHolder(mock(Connection.class)));
+    }
+
+    @AfterEach
+    void releaseTransactionResource() {
+        TransactionSynchronizationManager.unbindResourceIfPossible(dataSource);
     }
 
     @Test
@@ -195,6 +213,34 @@ class AccountLifecycleServiceTests {
     }
 
     @Test
+    void shouldPreserveAnEarlierCallerTransactionDeadline() {
+        var connection = (ConnectionHolder) TransactionSynchronizationManager.getResource(dataSource);
+        connection.setTimeoutInMillis(2_000);
+        var deadline = connection.getDeadline();
+        when(accounts.closeAccount(member.id(), NOW)).thenReturn(1);
+        service.closeAccount(principal(member), member.nickname());
+        verify(rtc).removeParticipantFromRooms(eq(List.of()), eq(member.id()),
+                argThat(timeout -> timeout.compareTo(Duration.ZERO) > 0 && timeout.compareTo(Duration.ofSeconds(2)) <= 0));
+        assertThat(connection.getTimeToLiveInMillis()).isBetween(1L, 2_000L);
+        assertThat(connection.getDeadline()).isEqualTo(deadline);
+    }
+
+    @Test
+    void shouldReportClosureLockTimeoutWithoutRevokingAccountAccess() {
+        var timeout = new QueryTimeoutException("synthetic row lock timeout");
+        doThrow(timeout).when(links).lockInitialization();
+        assertThatThrownBy(() -> service.closeAccount(principal(member), member.nickname()))
+                .isInstanceOfSatisfying(AuthException.class, failure -> {
+                    assertThat(failure.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                    assertThat(failure.getCode()).isEqualTo(ApiErrorCode.AUTH_SERVICE_UNAVAILABLE);
+                    assertThat(failure.getCause()).isSameAs(timeout);
+                });
+        verify(accounts, never()).closeAccount(any(), any());
+        verify(accounts, never()).revokeSessions(any());
+        verifyNoInteractions(rtc);
+    }
+
+    @Test
     void shouldRevokeAccessButKeepMembershipAndIdentityHistory() {
         UUID groupId = UUID.randomUUID();
         UUID room = UUID.randomUUID();
@@ -203,7 +249,8 @@ class AccountLifecycleServiceTests {
         when(accounts.closeAccount(member.id(), NOW)).thenReturn(1);
         service.closeAccount(principal(member), member.nickname());
         var order = inOrder(rtc, accounts);
-        order.verify(rtc).removeParticipant(room, member.id());
+        order.verify(rtc).removeParticipantFromRooms(eq(List.of(room)), eq(member.id()),
+                argThat(timeout -> !timeout.isNegative() && !timeout.isZero() && timeout.compareTo(Duration.ofSeconds(10)) <= 0));
         order.verify(accounts).closeAccount(member.id(), NOW);
         order.verify(accounts).revokeSessions(member.id());
         order.verify(accounts).revokeLinks(member.id(), NOW);

@@ -12,6 +12,7 @@ import CallControls from './components/CallControls.vue';
 import PersonalStatusCard from './components/PersonalStatusCard.vue';
 import RemoteAudio from './components/RemoteAudio.vue';
 import IconButton from './components/IconButton.vue';
+import HoverHint from './components/HoverHint.vue';
 import SettingsView from './components/SettingsView.vue';
 import AppNotice from './components/AppNotice.vue';
 import GroupEntryDialog from './components/GroupEntryDialog.vue';
@@ -105,7 +106,7 @@ const captureSelection = useScreenShareSelection({
   room: () => rtc.status === 'connected' ? rtc.room : null,
   sharing: () => rtc.screenShareActive, activity: () => currentActivity.value,
 });
-const { captureRequest, captureSourceType, captureQuality, captureCustomQuality, selectedCaptureSourceId,
+const { waitingGame, captureRequest, captureSourceType, captureQuality, captureCustomQuality, selectedCaptureSourceId,
   captureFollowGameAvailable, captureSourceNotice, captureAudioCapabilityReady, captureAudioCapabilityFailed,
   captureAudioMode, captureShareAudio, nativeSourceLoading, nativeSourceError, nativeSourceChooserGeneration,
   selectCaptureSource, chooseCaptureSource, refreshVisibleSourceThumbnails, reportRenderedPreviews, updateCaptureShareAudio,
@@ -223,6 +224,7 @@ const summaryError = ref<string | null>(null);
 const groupLoading = ref(false);
 const initialGroupsLoaded = ref(false);
 const initialChatGroupId = ref<string | null>(null);
+const reducedMotionPreference = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 const initialLoading = useInitialLoading(() => initialGroupsLoaded.value && !groupLoading.value
   && (!selectedGroupId.value || initialChatGroupId.value === selectedGroupId.value),
   (stage, durationMs) => desktop?.reportStartupTiming?.(stage, durationMs));
@@ -633,6 +635,12 @@ const callbarStatus = computed(() => callbarLeaving.value ? '正在退出'
   : STATUS_LABELS[joiningGroupId.value && rtc.status === 'idle' ? 'joining' : rtc.status]);
 const pendingSwitchGroup = computed(() => groups.value.find((group) => group.id === pendingSwitchGroupId.value) ?? null);
 const localParticipant = computed(() => rtc.room?.localParticipant);
+const memberVolumes = computed(() => {
+  void rtc.revision;
+  return rtc.participants.filter(participant => participant !== localParticipant.value)
+    .map(participant => ({ identity: participant.identity, name: participant.name || participant.identity,
+      volume: participantVolume(participant.identity) }));
+});
 const sharingAudio = computed(() => {
   void rtc.revision;
   return Boolean(localParticipant.value?.getTrackPublication(Track.Source.ScreenShareAudio)?.track);
@@ -1027,7 +1035,8 @@ function participantListening(participant: Participant) {
       <button type="button" @click="rtc.cancelPendingRemoteControl()">取消申请</button>
     </div>
     <div v-else-if="rtc.remoteControlRestoring" class="remote-control-owner-status" role="status">正在恢复原共享…</div>
-    <Transition name="app-loading">
+    <!-- 减少动态效果时不再等待 Vue 的 CSS 退场帧，数据就绪便移除加载层。 -->
+    <Transition name="app-loading" :css="!reducedMotionPreference?.matches">
       <div v-if="initialLoading" class="app-loading" role="status" aria-live="polite">
         <div class="app-loading-identity" data-identity="loading">
           <img v-if="user.avatar" :src="user.avatar" alt="" referrerpolicy="no-referrer" data-identity-avatar />
@@ -1044,15 +1053,20 @@ function participantListening(participant: Participant) {
         <div class="group-list">
           <span v-if="selectedGroupIndex >= 0" class="group-selection-marker" aria-hidden="true"
             :style="{ '--selected-group-index': selectedGroupIndex }" />
-          <button v-for="group in groups" :key="group.id" type="button" class="group-button"
+          <HoverHint v-for="group in groups" :key="group.id" :text="group.name" :detail="joinedGroupId === group.id ? '语音中' : undefined"
+            :disabled="settingsOpen || editorOpen || !!management || !mainWindowVisible || initialLoading || !!rtc.remoteControlRequest">
+          <template #default="{ descriptionId }">
+          <button type="button" class="group-button"
             :class="{ 'is-selected': selectedGroupId === group.id, 'is-in-call': joinedGroupId === group.id }"
             :aria-label="`${group.name}${groupHasVoiceActivity(group.id) ? '，当前有语音成员' : ''}，单击预览，双击加入语音`" :aria-pressed="selectedGroupId === group.id"
-            :title="group.name"
+            :aria-describedby="descriptionId"
             @click="previewGroup(group.id)" @dblclick="requestJoin(group.id)" @keydown.enter.prevent="requestJoin(group.id)">
             <img v-if="group.avatar" :src="group.avatar" class="group-rail-avatar" alt="" />
             <span v-else>{{ group.name.slice(0, 1) }}</span>
             <span v-if="groupHasVoiceActivity(group.id)" class="group-call-badge" aria-hidden="true"><Volume2 :size="12" :stroke-width="2.6" /></span>
           </button>
+          </template>
+          </HoverHint>
         </div>
         <button class="group-button add-group" type="button" aria-label="创建群组" @click="openEditor"><Plus :size="17" /></button>
       </nav>
@@ -1113,7 +1127,8 @@ function participantListening(participant: Participant) {
                     <div class="call-state" role="status">
                       <RadioTower v-if="connected || rtc.status === 'reconnecting'" :size="17" /><Headphones v-else :size="17" />
                       <span><strong>{{ callbarStatus }}</strong>
-                        <small v-if="!callbarLeaving && connected && rtc.screenShareStarting">正在启动屏幕共享…</small>
+                        <small v-if="waitingGame">等待切回 {{ waitingGame }}</small>
+                        <small v-else-if="!callbarLeaving && connected && rtc.screenShareStarting">正在启动屏幕共享…</small>
                         <small v-else>{{ callbarGroup?.name }}{{ joinedGroup && selectedGroupId !== joinedGroup.id && selectedGroup ? ' · 正在浏览 ' + selectedGroup.name : '' }}</small>
                       </span>
                     </div>
@@ -1122,13 +1137,14 @@ function participantListening(participant: Participant) {
                       :microphone-enabled="rtc.microphoneEnabled" :microphone-intent="rtc.microphoneIntent" :microphone-busy="rtc.busySources.includes(Track.Source.Microphone)"
                       :microphone-level="localMicrophoneLevel" :input-level-percent="localInputLevelPercent"
                       :listening="listening" :input-gain="inputGain" :output-volume="outputVolume"
+                      :member-volumes="memberVolumes" @member-volume="updateParticipantVolume"
                       :voice-volume-balance="voiceVolumeBalance" @voice-volume-balance="audioPreferences.setVoiceVolumeBalance"
                       :game-name="currentGame?.name" @share-game="shareCurrentGame" @share-and-record="shareAndRecord"
                       :voice-mode="audioShortcuts.voiceMode" :push-to-talk-binding="audioShortcuts.bindings.pushToTalk"
                       :shortcuts-ready="audioShortcuts.ready" :shortcuts-busy="audioShortcuts.busy" :shortcuts-supported="audioShortcuts.supported"
                       :processing-enabled="microphoneProcessingEnabled" :processing-partial="microphoneProcessingPartial" :microphone-error="audioShortcuts.error"
                       @voice-mode="updateVoiceMode" @processing="updateMicrophoneProcessing"
-                      :sharing="rtc.screenShareActive" :share-limit-reached="screenShareLimitReached" :choosing-source="Boolean(captureRequest)"
+                      :sharing="rtc.screenShareActive" :share-limit-reached="screenShareLimitReached" :choosing-source="Boolean(captureRequest || waitingGame)"
                       :share-busy="rtc.busySources.includes(Track.Source.ScreenShare) || rtc.screenShareQualityBusy || rtc.screenShareSourceBusy"
                       :quality="rtc.screenShareActive ? rtc.currentScreenShareQuality : captureQuality"
                       :custom-quality="rtc.screenShareActive ? rtc.currentCustomScreenShareQuality : captureCustomQuality"
@@ -1141,7 +1157,7 @@ function participantListening(participant: Participant) {
                       @recording-settings="openSettings('recording', $event)"
                       @microphone="toggleMicrophone" @listening="toggleListening"
                       @prepare-share="preloadCaptureSources"
-                      @share="captureRequest ? selectCaptureSource(null) : rtc.toggleMedia(Track.Source.ScreenShare)"
+                      @share="captureRequest || waitingGame ? selectCaptureSource(null) : rtc.toggleMedia(Track.Source.ScreenShare)"
                       @quality="changeScreenShareQuality" @share-audio="changeScreenShareAudio"
                       @input-gain="updateInputGain" @output-volume="updateOutputVolume" @settings="openSettings('audio', $event)" />
                     <IconButton :label="joiningGroupId ? '取消连接' : '离开语音'" class="is-danger"
@@ -1236,13 +1252,12 @@ function participantListening(participant: Participant) {
           :remote-control-pending="remoteControlIsPending(participant.identity)"
           :remote-control-active="remoteControlIsActive(participant.identity)"
           :remote-control-name="previewParticipantName(participant.identity, participant.name || participant.identity)"
-          :playback-volume="participantVolume(participant.identity)" :input-gain="inputGain" :output-volume="outputVolume"
+          :playback-volume="participantVolume(participant.identity)"
           :share-audio="Boolean(participant.getTrackPublication(Track.Source.ScreenShareAudio)?.track)"
           :share-muted="mutedShares.includes(participant.identity)" :share-audio-listening="listening"
           @toggle-share-audio="toggleSharedAudio(participant.identity)" @select="viewerNotice = ''; select(participant.identity)"
           @request-control="requestParticipantControl(participant.identity)" @cancel-control="rtc.cancelPendingRemoteControl(participant.identity)" @stop-control="rtc.exitRemoteControl"
-          @toggle-audio="toggleParticipantAudio(participant.identity)" @volume-change="updateParticipantVolume(participant.identity, $event)"
-          @input-gain-change="updateInputGain" @output-volume-change="updateOutputVolume"
+          @toggle-audio="toggleParticipantAudio(participant.identity)"
           @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />
         </div>
       </template>

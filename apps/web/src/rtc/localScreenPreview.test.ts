@@ -24,8 +24,8 @@ function preview(onVisibilityChange?: (visible: boolean) => void) {
   });
   const error = vi.fn();
   const observation = observeLocalScreenPreview(element as unknown as HTMLVideoElement, error, onVisibilityChange);
-  function visible(value: boolean) {
-    intersection([{ target: element, isIntersecting: value } as unknown as IntersectionObserverEntry], {} as IntersectionObserver);
+  function visible(...states: boolean[]) {
+    intersection(states.map(isIntersecting => ({ target: element, isIntersecting }) as unknown as IntersectionObserverEntry), {} as IntersectionObserver);
   }
   function background(value: boolean) {
     page.visibilityState = value ? 'hidden' : 'visible';
@@ -33,6 +33,15 @@ function preview(onVisibilityChange?: (visible: boolean) => void) {
   }
   return { element, page, observerWindow, stop: observation.stop, setActive: observation.setActive, visible, background, disconnect, error };
 }
+
+it('同一批的最后一个可见性变化决定本地预览是否播放', () => {
+  const main = preview();
+  main.visible(false, true);
+  expect(main.element.paused).toBe(false);
+  main.visible(true, false);
+  expect(main.element.paused).toBe(true);
+  main.stop();
+});
 
 it('设置覆盖只暂停本位置的预览，SDK 的自动播放不能绕过；返回沿用同一流', async () => {
   const visibility = vi.fn();

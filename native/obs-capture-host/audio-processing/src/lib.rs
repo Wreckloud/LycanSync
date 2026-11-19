@@ -2,6 +2,7 @@
 
 mod denoise;
 mod echo;
+mod float_mode;
 mod processor;
 pub use processor::VoiceMetrics;
 

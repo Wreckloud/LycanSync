@@ -489,7 +489,10 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       });
       currentRoom.registerByteStreamHandler(ENTRANCE_SOUND_TOPIC, async (reader, participantInfo) => {
         const identity = participantInfo.identity;
-        if (!remoteEventsEnabled || receivedEntranceSounds.has(identity)
+        const participant = currentRoom.remoteParticipants.get(identity);
+        const isCurrentParticipant = () => activeRoom.value === currentRoom
+          && currentRoom.remoteParticipants.get(identity) === participant;
+        if (!participant || !isCurrentParticipant() || !remoteEventsEnabled || receivedEntranceSounds.has(identity)
           || !isSupportedEntranceSoundType(reader.info.mimeType)
           || typeof reader.info.size !== 'number' || reader.info.size <= 0
           || reader.info.size > ENTRANCE_SOUND_MAX_BYTES) return;
@@ -504,7 +507,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             chunks.push(chunk);
           }
           if (receivedBytes <= 0) {
-            options?.events?.participantEntranceFailed?.(identity);
+            if (isCurrentParticipant()) options?.events?.participantEntranceFailed?.(identity);
             return;
           }
           const bytes = new Uint8Array(receivedBytes);
@@ -513,11 +516,11 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             bytes.set(chunk, offset);
             offset += chunk.byteLength;
           });
-          if (activeRoom.value === currentRoom && currentRoom.remoteParticipants.has(identity)) {
+          if (isCurrentParticipant()) {
             options?.events?.participantEntranceSound?.(identity, bytes);
           }
         } catch {
-          options?.events?.participantEntranceFailed?.(identity);
+          if (isCurrentParticipant()) options?.events?.participantEntranceFailed?.(identity);
         }
       });
       // 发言状态变化可能很频繁，节流只影响 UI 指示，不影响音频传输。

@@ -9,6 +9,13 @@
         file_server
     }
     handle {
+        @messagePages {
+            method GET
+            path /api/groups/*/messages
+        }
+        encode @messagePages zstd {
+            match header Content-Type application/json*
+        }
         reverse_proxy api:18080 {
             header_up X-Lycan-Client-IP {remote_host}
         }

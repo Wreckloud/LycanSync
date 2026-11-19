@@ -30,7 +30,8 @@ createApp({ render: () => h('main', { style: 'padding:24px;max-width:650px;margi
   const cancel = page.getByRole('button', { name: '取消', exact: true });
   const save = page.getByRole('button', { name: '保存', exact: true });
   await expect(save).toBeVisible();
-  await page.clock.install();
+  await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
+  await page.clock.pauseAt(new Date('2026-01-01T00:01:00Z'));
   const before = await save.boundingBox();
   expect((await cancel.boundingBox())!.y).toBe(before!.y);
   await expect(page.locator('.inline-feedback')).toHaveCount(0);

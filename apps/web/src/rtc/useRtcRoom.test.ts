@@ -233,7 +233,7 @@ vi.mock('livekit-client', () => {
       return this;
     }
     emit(event: string, ...args: unknown[]) { this.handlers.get(event)?.forEach((callback) => callback(...args)); }
-    registerByteStreamHandler() {}
+    registerByteStreamHandler = vi.fn();
     async connect() {
       rtcMocks.subscriptionLifecycle.push({ room: this, event: 'connect' });
       this.state = 'connected';
@@ -414,6 +414,41 @@ function configureNativeScreenDesktop(options: {
 }
 
 describe('room media lifecycle', () => {
+  it.each(['empty', 'failed', 'complete'] as const)('入场流%s 结束时仅当前房间的同一成员可触发提示', async outcome => {
+    for (const lifecycle of ['current', 'participantLeft', 'roomLeft', 'replaced']) {
+      configureNativeMicrophoneDesktop();
+      const pending = vi.fn(), failed = vi.fn(), ready = vi.fn();
+      const scope = effectScope();
+      const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+        processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true },
+        events: { participantEntrancePending: pending, participantEntranceFailed: failed, participantEntranceSound: ready } }))!;
+      const completion = deferred<void>();
+      try {
+        await rtc.join('entrance-lifecycle');
+        addRemoteParticipant('friend');
+        const room = mockRoom() as ReturnType<typeof mockRoom> & { registerByteStreamHandler: ReturnType<typeof vi.fn> };
+        const receive = room.registerByteStreamHandler.mock.calls[0]![1] as (reader: {
+          info: { mimeType: string; size: number }; withAbortSignal: () => AsyncGenerator<Uint8Array>;
+        }, participant: { identity: string }) => Promise<void>;
+        const receiving = receive({ info: { mimeType: 'audio/wav', size: 1 },
+          async *withAbortSignal() {
+            await completion.promise;
+            if (outcome === 'failed') throw new Error('synthetic stream failure');
+            if (outcome === 'complete') yield new Uint8Array([1]);
+          },
+        }, { identity: 'friend' });
+        expect(pending).toHaveBeenCalledExactlyOnceWith('friend');
+        if (lifecycle === 'roomLeft') await rtc.leave();
+        if (lifecycle === 'participantLeft') room.remoteParticipants.delete('friend');
+        if (lifecycle === 'replaced') addRemoteParticipant('friend');
+        completion.resolve();
+        await receiving;
+        expect(failed).toHaveBeenCalledTimes(lifecycle === 'current' && outcome !== 'complete' ? 1 : 0);
+        expect(ready).toHaveBeenCalledTimes(lifecycle === 'current' && outcome === 'complete' ? 1 : 0);
+      } finally { completion.resolve(); await rtc.leave(); scope.stop(); }
+    }
+  });
+
   it('等待共享来源选择时仍可关麦，完成选择不恢复麦克风', async () => {
     configureNativeScreenDesktop();
     const selection = deferred<{ sourceId: string; shareAudio: boolean }>();

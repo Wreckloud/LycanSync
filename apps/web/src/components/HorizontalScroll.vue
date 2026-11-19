@@ -97,7 +97,7 @@ function startDrag(event: PointerEvent) {
   suppressClick = false;
   if (event.pointerType !== 'mouse' || event.button !== 0 || !viewport.value
       || !(previous.value || next.value)
-      || (event.target as Element).closest('input, select, textarea, [role="slider"], .participant-volume-control')) return;
+      || (event.target as Element).closest('input, select, textarea, [role="slider"], .participant-state-button')) return;
   cancelScroll();
   drag = { pointer: event.pointerId, x: event.clientX, left: viewport.value.scrollLeft, moved: false };
 }

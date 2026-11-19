@@ -12,9 +12,13 @@ Ubuntu 24.04 或 CentOS Stream 9/10 可按各自的 [Docker 官方安装说明](
 - Caddy 默认自动申请可信证书，需要域名 DNS 指向服务器，且互联网能访问服务器的 80/443。仅有内网虚拟机 IP 时，不能直接按本配置申请公网证书。请先确定测试网络方案，不要禁用客户端证书校验。
 - 当前未提供 TURN；严格 NAT、防火墙或运营商网络下可能无法传输媒体。先在同一局域网验证，再验证公网。
 
+群消息 GET 的 JSON 响应由 Caddy 按客户端 `Accept-Encoding` 协商 zstd 压缩；不支持 zstd 时保持未压缩响应。登录凭据、下载及 RTC 信令沿用原处理，不需要修改 API 或客户端。已有部署需更新所用的 `Caddyfile` 或 `Caddyfile.lan` 并重新加载 Caddy 后生效。
+
 ## 2. 配置并启动
 
 0.4.13 配套固定 LiveKit 客户端提交 `1ca3298` 与服务端提交 `0d762b4`（协议 19），用于修复重复共享停止后的资源累积。部署包的 `livekit/` 已包含经 SHA-256 校验的 Linux amd64 二进制、Dockerfile、来源记录与许可证；Compose 会构建此镜像，不依赖服务器安装 Go。升级先确认无人通话，备份原配置与 API，再运行 `docker compose build livekit api` 和 `docker compose up -d --no-deps livekit api`；健康及共享检查通过后再发布客户端。旧本机覆盖文件若固定了 1.13.6 镜像，必须同步移除该覆盖或更新为 `lycansync-livekit:1.13.11-0d762b4`。完整源码及重建方法见仓库 `vendor/livekit/README.md`；不能仅按 2.23.0 / 1.13.11 的版本号替换为同名普通发行版。
+
+房间编码配置保留原默认格式，并显式注册 H.264 Baseline `42001f`（packetization-mode=1），供双方能力协商。仅启用 H.264 MIME 不会注册固定服务端中需要精确格式的这一条目。该配置不保证所有设备都使用硬件编码，实际实现与输出画质仍需运行验证；原 Constrained Baseline 等格式继续保留。已有部署需在无人通话时更新并重启 LiveKit，重新建立连接后才会重新协商，单独替换 YAML 不会改变现有轨道。
 
 解压后进入包目录：
 
@@ -56,7 +60,7 @@ docker compose exec -T api cat /var/bootstrap/admin-activation.txt
 
 `downloads/LycanSync-setup.exe` 是网页使用的安装程序别名；版本化的安装包、同名 `.blockmap` 和 `latest.yml` 供自动更新使用，由 Caddy 提供，API、PostgreSQL 仍不直接暴露。`package-server.ps1` 检查清单版本、名称及 SHA-512 与安装包一致，再按同批 `LycanSync-版本-release.json` 核对全部分发文件的大小与 SHA-256；复制后复核，拒绝缺失、损坏或版本不符的材料。首次接入自动更新需手动安装 0.0.4 或以后版本。
 
-发布新客户端时先递增 `apps/web/package.json` 与锁文件的版本，再按 README 构建。先上传版本化安装包、`.blockmap`、同版本 `LycanSync-版本-obs-source.tar.gz` 及第三方许可，确认下载文件哈希与构建记录匹配，再更新 `LycanSync-setup.exe` 及其 `.blockmap` 别名，最后原子替换同批 `latest.yml`；不得先发布清单，也不要覆盖旧的版本化文件。保留旧 `.blockmap` 供差量下载；缺失时更新库会尝试完整下载。只发布静态文件不需要重启 API 或清理数据库。
+发布新客户端时先递增 `apps/web/package.json` 与锁文件的版本，再按 README 构建。先上传版本化安装包、`.blockmap`、同版本 `LycanSync-版本-obs-source.tar.gz` 及第三方许可，确认下载文件哈希与构建记录匹配，再更新 `LycanSync-setup.exe` 及其 `.blockmap` 别名，最后原子替换同批 `latest.yml`；不得先发布清单，也不要覆盖旧的版本化文件。旧 `.blockmap` 按下述当前版保留规则清理；缺失时更新库会尝试完整下载。只发布静态文件不需要重启 API 或清理数据库。
 
 完整客户端构建会生成分发校验记录与 `LycanSync-版本-THIRD-PARTY-NOTICES.txt`。部署 ZIP 自动收集同版本安装包、`.blockmap`、OBS 源码归档、版本化许可、分发记录及 `latest.yml`，并包含 `LycanSync-setup.exe` 和 `.blockmap` 别名；不再需要人工补齐。脚本从独立暂存目录生成新 ZIP，失败保留旧包并清理本次暂存，不收集旧输出目录、数据库、运行时密钥或本机用户文件。
 
@@ -112,7 +116,7 @@ python3 maintenance/maintain-releases.py /opt/lycansync-invite --apply
 
 更新目录默认是打包 API 地址的 `/downloads/`，可用 `LYCANSYNC_PACKAGED_UPDATE_URL` 在构建时指定独立站点。用户切换业务服务器不改变更新目录；不要从用户填写的服务器获取并执行安装包。内网更新同样要求信任自己的测试 CA，不禁用 TLS 校验。SHA-512 检查用于发现文件损坏，不代替发布者签名；当前安装包未签名，正式对外发布前需评估签名并完成 Windows 安装升级验收。
 
-`latest.yml`、`LycanSync-setup.exe` 和对应别名 `.blockmap` 使用 `Cache-Control: no-store`，避免更新入口保留旧内容；保留期内的版本化文件不覆盖，并继续支持范围下载；源码、许可证和旧 blockmap 按前述规则保留。若前面另有 CDN 或代理，须遵循该响应头；曾配置强制缓存时需先清除已有缓存。
+`latest.yml`、`LycanSync-setup.exe` 和对应别名 `.blockmap` 使用 `Cache-Control: no-store`，避免更新入口保留旧内容；当前版的版本化文件不覆盖，并继续支持范围下载；源码、许可证和 blockmap 与同批发行件一起按前述规则保留或清理。若前面另有 CDN 或代理，须遵循该响应头；曾配置强制缓存时需先清除已有缓存。
 
 请勿公开密钥、`.env`、激活文件或恢复链接。
 

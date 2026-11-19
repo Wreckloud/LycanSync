@@ -122,6 +122,21 @@ test('权限导致的采集选择只导出布尔原因，不导出生命周期�
   ]);
 });
 
+test('采集方式导出保留用户选择和历史值，不泄露窗口身份', async context => {
+  const directory = await mkdtemp(join(tmpdir(), 'lycan-capture-method-diagnostics-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'events.jsonl'), time = new Date().toISOString();
+  const methods = ['auto', 'game', 'window', 'bitblt', 'wgc'];
+  await writeFile(path, [...methods, 'private-method'].map(requestedMethod => JSON.stringify({
+    time, stage: 'screenVideoStartRequested', sourceKind: 'window', requestedMethod,
+    executable: 'private.exe', windowId: 'private-handle', message: 'private-title',
+  })).join('\n'));
+  const events = await readDiagnosticEvents(path, 0, Date.parse(time));
+  assert.deepEqual(events.slice(0, methods.length).map(event => event.requestedMethod), methods);
+  assert.equal(events.at(-1).requestedMethod, undefined);
+  assert.doesNotMatch(JSON.stringify(events), /private/);
+});
+
 test('选窗准备与设置拒绝只导出阶段耗时和固定原因', async (context) => {
   const directory = await mkdtemp(join(tmpdir(), 'lycan-source-preparation-'));
   context.after(() => rm(directory, { recursive: true, force: true }));
@@ -462,15 +477,24 @@ test('自动启动与共享事件导出保留有效字段，附加正文和未�
     const path = join(directory, 'error.log');
     const write = createMediaDiagnostics(path);
     await write({ stage: 'applicationReady', appVersion: '0.1.10', electronVersion: '44.2.0', osVersion: '10.0.19045',
-      platform: 'win32', arch: 'x64', account: 'private-account' });
+      platform: 'win32', arch: 'x64', account: 'private-account', durationMs: 88, processUptimeMs: 4212 });
     await write({ stage: 'screenVideoStartRequested', sourceKind: 'window', width: 1920, height: 1080, maxFps: 60,
-      title: 'private-window', sessionId: 'private-session' });
+      title: 'private-window', sessionId: 'private-session', processUptimeMs: 9999 });
     await write({ stage: 'screenVideoStopFailed', code: 'private-secret', message: 'private-message' });
+    for (const stage of ['rendererReady', 'loginDataReady', 'loginReady']) await write({ stage, processUptimeMs: 5000 });
+    for (const processUptimeMs of [-1, 1.5, 'private-uptime', null, Number.MAX_SAFE_INTEGER + 1]) {
+      await write({ stage: 'loginReady', processUptimeMs });
+    }
     const events = await readDiagnosticEvents(path, 0, Date.now());
     assert.equal(events[0].appVersion, '0.1.10');
+    assert.equal(events[0].durationMs, 88);
+    assert.equal(events[0].processUptimeMs, 4212);
     assert.equal(events[1].width, 1920);
     assert.equal(events[1].sourceKind, 'window');
+    assert.equal(events[1].processUptimeMs, undefined);
     assert.equal(events[2].code, undefined);
+    assert.ok(events.slice(3, 6).every(event => event.processUptimeMs === 5000));
+    assert.ok(events.slice(6).every(event => event.processUptimeMs === undefined));
     assert.doesNotMatch(JSON.stringify(events), /private/);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

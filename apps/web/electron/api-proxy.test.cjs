@@ -332,6 +332,21 @@ test('下载保持响应流与文件头，消费端取消会传给源流', async
   assert.equal(cancelled, true);
 });
 
+test('已解压的响应不沿用压缩字节长度，仍按流交付完整内容', async () => {
+  const contents = JSON.stringify({ messages: [{ content: '合成消息'.repeat(100) }] });
+  for (const encoding of ['gzip', 'br', 'zstd']) {
+    const source = new Response(contents, { headers: {
+      'Content-Type': 'application/json', 'Content-Encoding': encoding, 'Content-Length': '80',
+    } });
+    const { serve } = proxyFixture({ net: { fetch: async () => source } });
+    const response = await serve(new Request('lycan://app/api/groups/11111111-1111-4111-8111-111111111111/messages'));
+    assert.equal(response.body, source.body);
+    assert.equal(response.headers.get('Content-Length'), null);
+    assert.equal(response.headers.get('Content-Encoding'), null);
+    assert.equal(await response.text(), contents);
+  }
+});
+
 test('凭据读取失败与网络连接失败有不同反馈，不透传路径或凭据', async () => {
   const loadFailure = proxyFixture({ loadSession: async () => { throw new Error('private/session.bin'); } });
   const unreadable = await loadFailure.serve(new Request('lycan://app/api/auth/me'));

@@ -90,6 +90,10 @@ export function useRtcRoom() {
       for (const member of [local, ...friends]) member.isScreenShareEnabled = ids.includes(member.identity);
       revision.value++;
     },
+    microphones(ids) {
+      for (const member of friends) member.isMicrophoneEnabled = ids.includes(member.identity);
+      revision.value++;
+    },
     control(identity) { remoteControlShares.value = { ...remoteControlShares.value, [identity]: { kind: 'monitor', shareSessionId: identity + '-share' } }; remoteControlAvailable.value = { ...remoteControlAvailable.value, [identity]: true }; revision.value++; },
     grant(identity) { remoteControlPending.value = null; remoteControlActive.value = { identity, shareSessionId: identity + '-share', controlSessionId: identity + '-control', trackSid: 'share-' + identity }; },
     inputEvents() { return inputs.slice(); },
@@ -158,6 +162,84 @@ export function useRtcRoom() {
 async function sharing(page: Page, ids: string[]) {
   await page.evaluate((identities) => (window as unknown as { __viewingTest: { sharing(ids: string[]): void } }).__viewingTest.sharing(identities), ids);
 }
+
+test('群头像提示在右侧进退，显示通话状态且不重复系统提示', async ({ page }) => {
+  const joined = page.getByRole('button', { name: /^观看测试，/ });
+  const other = page.getByRole('button', { name: /^另一群组，/ });
+  await expect(joined).not.toHaveAttribute('title');
+  await page.mouse.move(500, 400);
+  await joined.hover();
+  const hint = page.getByRole('tooltip');
+  await expect(hint).toHaveText('观看测试 · 语音中');
+  await expect.poll(() => hint.evaluate(element => getComputedStyle(element).opacity)).toBe('1');
+  const anchor = (await joined.boundingBox())!, bounds = (await hint.boundingBox())!;
+  expect(bounds.x - anchor.x - anchor.width).toBeCloseTo(10, 0);
+  expect(Math.abs(bounds.y + bounds.height / 2 - anchor.y - anchor.height / 2)).toBeLessThan(1);
+  expect(await joined.getAttribute('aria-describedby')).toBe(await hint.getAttribute('id'));
+  await page.screenshot({ path: test.info().outputPath('group-hover-hint.png') });
+  const leaveFrames = await joined.evaluate(async element => {
+    element.parentElement!.dispatchEvent(new PointerEvent('pointerleave'));
+    const samples: { opacity: number; x: number }[] = [];
+    for (let i = 0; i < 15; i++) {
+      await new Promise(requestAnimationFrame);
+      const hint = document.querySelector('[role="tooltip"]');
+      if (!hint) break;
+      const style = getComputedStyle(hint);
+      samples.push({ opacity: Number(style.opacity), x: style.transform === 'none' ? 0 : new DOMMatrix(style.transform).m41 });
+    }
+    return samples;
+  });
+  expect(leaveFrames.some(frame => frame.opacity > 0 && frame.opacity < 1 && frame.x < 0)).toBe(true);
+  await other.hover();
+  await expect(hint).toHaveText('另一群组');
+  await other.click();
+  await expect(hint).toHaveCount(0);
+  await expect(page.locator('.group-header')).toContainText('另一群组');
+  await page.mouse.move(500, 400);
+  await page.keyboard.press('Tab');
+  await joined.focus();
+  await expect(hint).toHaveText('观看测试 · 语音中');
+  await page.keyboard.press('Escape');
+  await expect(hint).toHaveCount(0);
+  await joined.hover();
+  await expect(hint).toBeVisible();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(hint).toHaveCount(0);
+});
+
+test('成员卡片只点击切换，音量调节统一在底部收听面板', async ({ page }) => {
+  await page.evaluate(() => (window as unknown as { __viewingTest: { microphones(ids: string[]): void } }).__viewingTest.microphones(['A']));
+  const local = page.getByTestId('participant-card').first();
+  const microphone = local.getByRole('button', { name: '关闭自己的麦克风', exact: true });
+  const previous = await page.evaluate(() => JSON.stringify(localStorage));
+  await microphone.hover();
+  await microphone.dispatchEvent('wheel', { deltaY: -100 });
+  await microphone.dispatchEvent('pointerdown', { button: 0, pointerId: 1, clientY: 200 });
+  await microphone.dispatchEvent('pointermove', { pointerId: 1, clientY: 100 });
+  await microphone.dispatchEvent('pointerup', { pointerId: 1, clientY: 100 });
+  expect(await page.evaluate(() => JSON.stringify(localStorage))).toBe(previous);
+  await expect(page.locator('.participant-volume-popover, .participant-volume-dragger')).toHaveCount(0);
+  await microphone.click();
+  await expect(local.getByRole('button', { name: '开启自己的麦克风', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '收听选项', exact: true }).click();
+  await page.getByRole('button', { name: '调整成员音量', exact: true }).click();
+  const volume = page.getByRole('slider', { name: '成员A接收音量', exact: true });
+  await volume.fill('2');
+  await expect(volume).toHaveValue('2');
+  const collapse = page.getByRole('button', { name: '收起成员音量', exact: true });
+  expect((await collapse.boundingBox())!.y).toBeGreaterThan((await volume.boundingBox())!.y);
+  await collapse.click();
+  await expect(volume).toBeHidden();
+  await page.getByRole('button', { name: '收听选项', exact: true }).click();
+  const remote = page.getByTestId('participant-card').filter({ hasText: '成员A' });
+  await remote.getByRole('button', { name: /点击取消收听/ }).click();
+  await remote.getByRole('button', { name: /点击恢复收听/ }).click();
+  await page.getByRole('button', { name: '收听选项', exact: true }).click();
+  await page.getByRole('button', { name: '调整成员音量', exact: true }).click();
+  await expect(volume).toHaveValue('2');
+  await expect.poll(() => page.locator('.call-control-menu').evaluate(element => element.getAnimations({ subtree: true }).length)).toBe(0);
+  await page.screenshot({ path: test.info().outputPath('member-volume-panel.png') });
+});
 
 test('后台暂时不可测量时保留观看尺寸，切回后原位显示且不重建视频', async ({ page }) => {
   await sharing(page, ['A']);

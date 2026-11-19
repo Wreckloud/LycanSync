@@ -9,7 +9,8 @@ const { prepareVisualCppRuntime } = require('./visual-cpp-runtime.cjs');
 
 const appDirectory = resolve(__dirname, '..');
 const projectRoot = resolve(appDirectory, '../..');
-const outputDirectory = join(projectRoot, 'release/desktop');
+const outputDirectory = process.env.LYCANSYNC_DESKTOP_OUTPUT_DIR
+  ? resolve(process.env.LYCANSYNC_DESKTOP_OUTPUT_DIR) : join(projectRoot, 'release/desktop');
 const version = require('../package.json').version;
 const livekit = JSON.parse(readFileSync(join(projectRoot, 'vendor/livekit/provenance.json'), 'utf8'));
 for (const [file, expected] of [
@@ -51,7 +52,8 @@ if (!existsSync(runtimeInstaller)) {
   throw new Error('未找到 VC++ x64 运行库安装程序，请用 LYCANSYNC_VC_REDIST_PATH 指定微软原版 vc_redist.x64.exe。');
 }
 mkdirSync(outputDirectory, { recursive: true });
-const buildResources = join(projectRoot, 'release/build-resources');
+const buildResources = process.env.LYCANSYNC_DESKTOP_OUTPUT_DIR
+  ? join(outputDirectory, '.build-resources') : join(projectRoot, 'release/build-resources');
 mkdirSync(buildResources, { recursive: true });
 prepareVisualCppRuntime(runtimeInstaller, buildResources);
 if (!process.env.LYCANSYNC_PACKAGED_API_URL) throw new Error('请用 LYCANSYNC_PACKAGED_API_URL 指定本包的 HTTPS 服务器地址。');

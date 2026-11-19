@@ -415,6 +415,14 @@ test('手动游戏跳过分类器，仍只绑定原窗口', async () => {
   assert.equal(target.executable, undefined);
 });
 
+test('手动窗口采集允许同一个游戏窗口避开游戏采集通道', async () => {
+  const { calls, start } = gameRoutingFixture(() => assert.fail('显式选择窗口采集不应再按游戏分类'));
+  await start({ hideCursor: false, hideBorder: false, windowMethod: 'window' });
+  const target = calls.find(call => call.action === 'start').target;
+  assert.equal(target.kind, 'window');
+  assert.equal(target.windowId, '123');
+});
+
 test('高权限窗口自动走普通窗口源，不尝试注入；手动游戏仍明确执行', async () => {
   for (const method of ['auto', 'game']) {
     const { calls, start } = gameRoutingFixture(() => assert.fail('权限受限时不依赖游戏分类'), undefined, true);

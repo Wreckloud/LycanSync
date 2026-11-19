@@ -1,26 +1,7 @@
 use sonora::{AudioProcessing, Config, StreamConfig, config::EchoCanceller};
 
+use crate::float_mode::FloatMode;
 use crate::processor::{FRAMES_PER_CHUNK, SAMPLE_RATE};
-
-unsafe extern "C" {
-    fn lycan_voice_float_mode_begin() -> u32;
-    fn lycan_voice_float_mode_end(previous: u32);
-}
-
-// AEC 的滤波历史同样会产生极小残值；只改变当前调用，不能污染 OBS 音频线程。
-struct FloatMode(u32);
-
-impl FloatMode {
-    fn new() -> Self {
-        Self(unsafe { lycan_voice_float_mode_begin() })
-    }
-}
-
-impl Drop for FloatMode {
-    fn drop(&mut self) {
-        unsafe { lycan_voice_float_mode_end(self.0) };
-    }
-}
 
 // 回声状态只属于当前播放设备；换设备或参考断流后由调用方销毁重建。
 pub(super) struct EchoProcessor {

@@ -520,6 +520,9 @@ export class NativeScreenVideoSession {
       this.desktop.recordScreenShareStartupTiming(this.sessionId!, 'screenVideoFirstFrame', this.firstFrameMs);
     }
     this.writeFrame(frame);
+    // 首帧已交给轨道；write 要等 LiveKit 开始读取才可能完成，不能以它作为发布前提。
+    this.firstFrameResolve?.();
+    this.firstFrameResolve = undefined;
   }
 
   private setSuspended(suspended: boolean): void {
@@ -535,7 +538,8 @@ export class NativeScreenVideoSession {
   }
 
   private writeSuspendedFrame(): void {
-    if (this.stopped || !this.suspended || this.writing) return;
+    // 发布前写入占位帧会占住轨道背压，使恢复后的首张游戏画面无法送达。
+    if (this.stopped || !this.suspended || this.writing || this.firstFrameResolve) return;
     const scale = Math.min(1, this.resolution.width / this.frameWidth, this.resolution.height / this.frameHeight);
     const width = Math.max(1, Math.round(this.frameWidth * scale));
     const height = Math.max(1, Math.round(this.frameHeight * scale));
@@ -565,9 +569,6 @@ export class NativeScreenVideoSession {
       frame.close();
       if (this.writingFrame === frame) this.writingFrame = undefined;
     });
-    // 首帧已交给轨道；write 要等 LiveKit 开始读取才可能完成，不能以它作为发布前提。
-    this.firstFrameResolve?.();
-    this.firstFrameResolve = undefined;
   }
 
   private clearSuspensionTimer(): void {

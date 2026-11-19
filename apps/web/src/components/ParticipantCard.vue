@@ -2,7 +2,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Circle, Fullscreen, HeadphoneOff, Headphones, MicOff, MousePointer2 } from '@lucide/vue';
 import { Track, VideoQuality, type Participant, type RemoteTrackPublication } from 'livekit-client';
-import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, normalizeAudioVolume } from '../rtc/audioPreferences';
 import VoiceLevelMic from './VoiceLevelMic.vue';
 import { observeLocalScreenPreview } from '../rtc/localScreenPreview';
 import { setNativeScreenPreviewDemand } from '../rtc/nativeScreenVideo';
@@ -27,8 +26,6 @@ const props = withDefaults(defineProps<{
   shareMuted?: boolean;
   shareAudioListening?: boolean;
   playbackVolume?: number;
-  inputGain?: number;
-  outputVolume?: number;
   remoteControlAvailable?: boolean;
   remoteControlPending?: boolean;
   remoteControlActive?: boolean;
@@ -36,15 +33,12 @@ const props = withDefaults(defineProps<{
   privateControl?: string;
   showFullscreen?: boolean;
   viewQuality?: VideoQuality;
-}>(), { variant: 'card', playbackVolume: 1, inputGain: 1, outputVolume: 1, showFullscreen: true, viewActive: true, previewMounted: true });
+}>(), { variant: 'card', playbackVolume: 1, showFullscreen: true, viewActive: true, previewMounted: true });
 const emit = defineEmits<{
   select: [];
   toggleShareAudio: [];
   notice: [message: string];
   toggleAudio: [];
-  volumeChange: [volume: number];
-  inputGainChange: [volume: number];
-  outputVolumeChange: [volume: number];
   toggleMicrophone: [];
   toggleListening: [];
   requestControl: [];
@@ -61,22 +55,6 @@ const ownerDocument = computed(() => cardElement.value?.ownerDocument);
 const remoteInputAllowed = computed(() => props.variant === 'viewer' && props.remoteControlActive
   && !props.inputBlocked && !props.privateControl && videoReady.value);
 let ownerWindow: Window | null = null;
-const VOLUME_DRAGGER_WIDTH = 28;
-const VOLUME_DRAGGER_HEIGHT = 104;
-const VOLUME_DRAGGER_GAP = 6;
-type VolumeDragKind = 'input' | 'remote';
-type VolumeDragState = {
-  kind: VolumeDragKind;
-  pointerId: number;
-  startY: number;
-  startVolume: number;
-  currentVolume: number;
-  moved: boolean;
-  left: number;
-  top: number;
-};
-const volumeDrag = ref<VolumeDragState | null>(null);
-let suppressVolumeClick = false;
 const heldRemoteInputs = new RemoteInputPresses();
 
 // SDK 实例不作深层代理；事件版本变化时重新读取轨道和展示字段。
@@ -95,24 +73,11 @@ const media = computed(() => {
     name: props.participant.name || props.participant.identity,
   };
 });
-const playbackPercent = computed(() => Math.round(props.playbackVolume * 100));
-const inputGainPercent = computed(() => Math.round(props.inputGain * 100));
-const outputVolumePercent = computed(() => Math.round(props.outputVolume * 100));
-const volumeDragPercent = computed(() => Math.round((volumeDrag.value?.currentVolume ?? 0) * 100));
-const volumeDragFill = computed(() => {
-  const drag = volumeDrag.value;
-  return drag ? `${drag.currentVolume / AUDIO_VOLUME_MAX * 100}%` : '0%';
-});
-const volumeDragStyle = computed(() => ({
-  left: `${volumeDrag.value?.left ?? 0}px`,
-  top: `${volumeDrag.value?.top ?? 0}px`,
-}));
-const volumeDragLabel = computed(() => volumeDrag.value?.kind === 'input' ? '麦克风输入音量' : `${media.value.name}接收音量`);
 const remoteAudioLabel = computed(() => {
   if (!media.value.microphone) return `${media.value.name}麦克风已关闭`;
   if (props.playbackVolume === 0) return `${media.value.name}已取消收听，点击恢复收听`;
   const microphoneState = media.value.speaking ? '正在说话' : '麦克风已开启';
-  return `${media.value.name}${microphoneState}，接收音量${playbackPercent.value}%，滚轮或按住上下拖动，点击取消收听`;
+  return `${media.value.name}${microphoneState}，点击取消收听`;
 });
 const selectable = computed(() => props.variant !== 'viewer' && media.value.sharing && !props.privateControl);
 const focusedPreview = computed(() => selectable.value && props.focused);
@@ -180,81 +145,6 @@ function selectFromKeyboard(event: KeyboardEvent) {
   if (!selectable.value || (event.key !== 'Enter' && event.key !== ' ')) return;
   event.preventDefault();
   emit('select');
-}
-
-function wheelVolume(event: WheelEvent, current: number) {
-  if (event.deltaY === 0) return current;
-  return current + (event.deltaY < 0 ? AUDIO_VOLUME_STEP : -AUDIO_VOLUME_STEP);
-}
-
-function adjustRemoteVolume(event: WheelEvent) {
-  if (!media.value.microphone) return;
-  emit('volumeChange', wheelVolume(event, props.playbackVolume));
-}
-
-function adjustInputGain(event: WheelEvent) {
-  if (!media.value.microphone) return;
-  emit('inputGainChange', wheelVolume(event, props.inputGain));
-}
-
-function adjustOutputVolume(event: WheelEvent) {
-  if (props.isListening !== true) return;
-  emit('outputVolumeChange', wheelVolume(event, props.outputVolume));
-}
-
-function beginVolumeDrag(event: PointerEvent, kind: VolumeDragKind, volume: number) {
-  if (event.button !== 0 || !media.value.microphone) return;
-  const view = (event.currentTarget as HTMLElement).ownerDocument.defaultView;
-  if (!view) return;
-  const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
-  volumeDrag.value = {
-    kind,
-    pointerId: event.pointerId,
-    startY: event.clientY,
-    startVolume: volume,
-    currentVolume: volume,
-    moved: false,
-    left: Math.min(view.innerWidth - VOLUME_DRAGGER_WIDTH - 8,
-      Math.max(8, bounds.left + bounds.width / 2 - VOLUME_DRAGGER_WIDTH / 2)),
-    top: Math.max(8, bounds.top - VOLUME_DRAGGER_HEIGHT - VOLUME_DRAGGER_GAP),
-  };
-  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-}
-
-function moveVolumeDrag(event: PointerEvent) {
-  const drag = volumeDrag.value;
-  if (!drag || drag.pointerId !== event.pointerId) return;
-  const distance = drag.startY - event.clientY;
-  if (Math.abs(distance) >= 3) drag.moved = true;
-  if (!drag.moved) return;
-  const rawVolume = drag.startVolume + distance / 88 * AUDIO_VOLUME_MAX;
-  const nextVolume = normalizeAudioVolume(rawVolume);
-  if (nextVolume === drag.currentVolume) return;
-  drag.currentVolume = nextVolume;
-  if (drag.kind === 'input') emit('inputGainChange', nextVolume);
-  else emit('volumeChange', nextVolume);
-}
-
-function endVolumeDrag(event: PointerEvent) {
-  const drag = volumeDrag.value;
-  if (!drag || drag.pointerId !== event.pointerId) return;
-  if ((event.currentTarget as HTMLElement).hasPointerCapture(event.pointerId)) {
-    (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
-  }
-  volumeDrag.value = null;
-  if (!drag.moved) return;
-  suppressVolumeClick = true;
-  setTimeout(() => { suppressVolumeClick = false; });
-}
-
-function toggleInputFromCard() {
-  if (suppressVolumeClick) return;
-  emit('toggleMicrophone');
-}
-
-function toggleRemoteAudioFromCard() {
-  if (suppressVolumeClick) return;
-  emit('toggleAudio');
 }
 
 function handleRemoteClick(event: MouseEvent) {
@@ -396,50 +286,28 @@ onBeforeUnmount(() => {
         <span>{{ remoteControlActive ? '退出控制' : remoteControlPending ? '取消申请' : '申请控制' }}</span>
       </button>
       <small v-if="variant === 'viewer' && remoteControlActive" class="remote-control-status">正在控制 {{ remoteControlName || media.name }} · {{ inputBlocked ? '操作已暂停' : !videoReady ? '等待画面就绪' : inputArmed ? 'Esc 退出' : '点击画面开始操作' }}</small>
-      <span v-if="variant === 'card' && isLocal" class="participant-volume-control" @wheel.stop.prevent="adjustInputGain">
-        <button type="button" class="participant-state participant-state-button"
-          :class="{ 'is-off': !media.microphone }"
-          :aria-label="media.microphone ? `关闭自己的麦克风，输入音量${inputGainPercent}%，滚轮或按住上下拖动` : '开启自己的麦克风'"
-          @pointerdown="beginVolumeDrag($event, 'input', inputGain)" @pointermove="moveVolumeDrag"
-          @pointerup="endVolumeDrag" @pointercancel="endVolumeDrag" @click="toggleInputFromCard">
-          <VoiceLevelMic v-if="media.microphone" :size="14" :level="media.speaking ? 1 : 0" :steps="1" /><MicOff v-else :size="14" />
-        </button>
-        <span v-if="media.microphone && volumeDrag?.kind !== 'input'" class="participant-volume-popover" aria-hidden="true">输入 {{ inputGainPercent }}%</span>
-      </span>
-      <span v-else-if="variant === 'card'" class="participant-volume-control" @wheel.stop.prevent="adjustRemoteVolume">
-        <button type="button" class="participant-state participant-state-button"
-          :class="{ 'is-off': !media.microphone || playbackVolume === 0 }" :aria-label="remoteAudioLabel"
-          :disabled="!media.microphone" @pointerdown="beginVolumeDrag($event, 'remote', playbackVolume)"
-          @pointermove="moveVolumeDrag" @pointerup="endVolumeDrag" @pointercancel="endVolumeDrag" @click="toggleRemoteAudioFromCard">
-          <VoiceLevelMic v-if="media.microphone && playbackVolume > 0" :size="14" :level="media.speaking ? 1 : 0" :steps="1" />
-          <MicOff v-else :size="14" />
-        </button>
-        <span v-if="media.microphone && playbackVolume > 0 && volumeDrag?.kind !== 'remote'" class="participant-volume-popover" aria-hidden="true">接收 {{ playbackPercent }}%</span>
-      </span>
-      <span v-if="variant === 'card' && isLocal" class="participant-volume-control" @wheel.stop.prevent="adjustOutputVolume">
-        <button type="button" class="participant-state participant-state-button"
-          :class="{ 'is-off': isListening === false }"
-          :aria-label="isListening ? `停止接收所有成员声音，lycanclaw 总输出${outputVolumePercent}%，滚轮调整` : '恢复接收所有成员声音'"
-          @click="emit('toggleListening')">
-          <HeadphoneOff v-if="isListening === false" :size="14" /><Headphones v-else :size="14" />
-        </button>
-        <span v-if="isListening" class="participant-volume-popover" aria-hidden="true">输出 {{ outputVolumePercent }}%</span>
-      </span>
+      <button v-if="variant === 'card' && isLocal" type="button" class="participant-state participant-state-button"
+        :class="{ 'is-off': !media.microphone }"
+        :aria-label="media.microphone ? '关闭自己的麦克风' : '开启自己的麦克风'" @click="emit('toggleMicrophone')">
+        <VoiceLevelMic v-if="media.microphone" :size="14" :level="media.speaking ? 1 : 0" :steps="1" /><MicOff v-else :size="14" />
+      </button>
+      <button v-else-if="variant === 'card'" type="button" class="participant-state participant-state-button"
+        :class="{ 'is-off': !media.microphone || playbackVolume === 0 }" :aria-label="remoteAudioLabel"
+        :disabled="!media.microphone" @click="emit('toggleAudio')">
+        <VoiceLevelMic v-if="media.microphone && playbackVolume > 0" :size="14" :level="media.speaking ? 1 : 0" :steps="1" />
+        <MicOff v-else :size="14" />
+      </button>
+      <button v-if="variant === 'card' && isLocal" type="button" class="participant-state participant-state-button"
+        :class="{ 'is-off': isListening === false }"
+        :aria-label="isListening ? '停止接收所有成员声音' : '恢复接收所有成员声音'" @click="emit('toggleListening')">
+        <HeadphoneOff v-if="isListening === false" :size="14" /><Headphones v-else :size="14" />
+      </button>
       <span v-else-if="variant === 'card'" class="participant-state" :class="{ 'is-off': isListening === false }"
         :aria-label="isListening === null ? '收听状态尚未同步' : isListening ? '正在接收声音' : '已停止接收声音'">
         <HeadphoneOff v-if="isListening === false" :size="14" /><Headphones v-else :size="14" />
       </span>
     </div>
   </article>
-  <Teleport v-if="ownerDocument" :to="ownerDocument.body">
-    <Transition name="volume-dragger">
-      <span v-if="volumeDrag" class="participant-volume-dragger" role="slider" :style="volumeDragStyle"
-        :aria-label="volumeDragLabel" aria-orientation="vertical" aria-valuemin="0"
-        :aria-valuemax="AUDIO_VOLUME_MAX * 100" :aria-valuenow="volumeDragPercent">
-        <i class="participant-volume-track"><i :style="{ height: volumeDragFill }" /><em :style="{ bottom: volumeDragFill }" /></i>
-      </span>
-    </Transition>
-  </Teleport>
 </template>
 
 <style scoped>

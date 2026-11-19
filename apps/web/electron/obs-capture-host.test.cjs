@@ -1122,7 +1122,7 @@ test('正式安装包交付唯一 OBS 采集宿主及插件资源', () => {
   const source = readFileSync(join(__dirname, '../electron-builder.cjs'), 'utf8');
   const module = { exports: {} };
   runInNewContext(source, { module, process: { env: {} },
-    require: () => ({ updateFeedUrl: () => 'https://example.invalid/downloads/' }) });
+    require: name => name === 'node:path' ? require('node:path') : { updateFeedUrl: () => 'https://example.invalid/downloads/' } });
   assert.ok(module.exports.files.includes('electron/obs-capture-host.cjs'));
   assert.ok(module.exports.extraResources.some((entry) => entry.to === 'obs-capture'));
 });

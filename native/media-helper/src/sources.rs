@@ -270,6 +270,7 @@ mod tests {
                 width: 640,
                 height: 480,
                 primary: false,
+                minimized: false,
                 window_id: None,
                 monitor_origin: None,
             },

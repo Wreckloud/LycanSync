@@ -148,6 +148,8 @@ std::atomic<bool> g_dxgi_failure_reported{false};
 std::atomic<int> g_dxgi_api{0};
 std::atomic<unsigned> g_game_hook_attempts{0};
 std::atomic<bool> g_game_hook_signalled{false};
+std::atomic<bool> g_game_hook_reconnect{false};
+std::atomic<bool> g_game_hook_pipe_failed{false};
 
 void write_capture_preparation(std::string_view stage, std::string_view session_id,
     std::optional<int64_t> duration_ms = std::nullopt) {
@@ -167,6 +169,14 @@ void obs_log_handler(int level, const char *format, va_list args, void *) {
     if (g_game_hook_attempts < 2) {
       write_capture_preparation(g_game_hook_attempts++ == 0 ? "gameHookAttempt" : "gameHookRetry", g_host.session_id);
     }
+    return;
+  }
+  if (log_format == "[game-capture: '%s'] existing hook found, signaling process: %s") {
+    if (!g_game_hook_reconnect.exchange(true)) write_capture_preparation("gameHookReconnect", g_host.session_id);
+    return;
+  }
+  if (log_format == "[game-capture: '%s'] init_pipe: failed to start pipe") {
+    if (!g_game_hook_pipe_failed.exchange(true)) write_capture_preparation("gameHookPipeFailed", g_host.session_id);
     return;
   }
   if (log_format == "[game-capture: '%s'] capture initializing!") {
@@ -726,13 +736,9 @@ bool configure_video(obs_video_info &video, obs_sceneitem_t *item, std::string_v
 void destroy_textures() {
   obs_enter_graphics();
   for (auto &slot : g_host.slots) {
-    if (slot.shared_handle) {
-      CloseHandle(slot.shared_handle);
-      slot.shared_handle = nullptr;
-    }
-    slot.gpu_ready.Reset();
-    slot.keyed_mutex.Reset();
-    slot.d3d_texture.Reset();
+    if (slot.shared_handle) CloseHandle(slot.shared_handle);
+    // 新纹理不能继承旧查询的等待状态或超时起点。
+    slot = TextureSlot{};
   }
   obs_leave_graphics();
   g_host.textures_initialized = false;
@@ -762,7 +768,7 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
   if (capture_cursor_argument.size() != 1
       || (capture_cursor_argument[0] != '0' && capture_cursor_argument[0] != '1')
       || (hide_border_argument != "0" && hide_border_argument != "1")
-      || (window_method != "auto" && window_method != "game")
+      || (window_method != "auto" && window_method != "game" && window_method != "window")
       || (source_kind == "monitor" && window_method != "auto")
       || (source_kind == "window" && window_method == "game")
       || (source_kind == "game" && window_method != "auto" && window_method != "game")
@@ -1171,6 +1177,8 @@ int wmain(int argc, wchar_t **argv) {
     g_dxgi_api = 0;
     g_game_hook_attempts = 0;
     g_game_hook_signalled = false;
+    g_game_hook_reconnect = false;
+    g_game_hook_pipe_failed = false;
     if (!valid_session_id(arguments[4])) { write_event("invalidCaptureArguments"); result = 1; break; }
     write_capture_preparation("graphicsStarting", arguments[4]);
     if (arguments[0] == "monitor") {

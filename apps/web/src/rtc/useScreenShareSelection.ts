@@ -7,7 +7,7 @@ import { canSelectNativeSource, readScreenShareAudioPreference, saveScreenShareA
 import { readScreenSharePreferences, type ScreenSharePreferences } from '../settings/screenSharePreferences';
 
 type SelectionDesktop = Pick<NonNullable<Window['lycanDesktop']>, 'listNativeVideoSources' | 'getNativeVideoSourceThumbnails'
-  | 'prepareNativeVideoSource' | 'reportCapturePickerTiming' | 'getCurrentActivity'>;
+  | 'prepareNativeVideoSource' | 'reportCapturePickerTiming' | 'getCurrentActivity' | 'isNativeWindowMinimized'>;
 
 interface ScreenShareSelectionOptions {
   desktop?: SelectionDesktop;
@@ -22,6 +22,41 @@ interface ScreenShareSelectionOptions {
 export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
   const { desktop, notice } = options;
   let disposed = false;
+  const waitingGame = ref('');
+  let pendingRestore: AbortController | undefined;
+
+  async function waitForGameWindow(selection: NativeScreenSourceSelection, name: string, discoveryId: string) {
+    const room = options.room();
+    const restore = new AbortController();
+    pendingRestore?.abort();
+    pendingRestore = restore;
+    waitingGame.value = '';
+    try {
+      while (room && options.room() === room && !restore.signal.aborted) {
+        const minimized = await desktop!.isNativeWindowMinimized(selection.sourceId, discoveryId);
+        if (restore.signal.aborted || options.room() !== room) break;
+        if (!minimized) return selection;
+        waitingGame.value = name;
+        await new Promise<void>(resolve => {
+          const finish = () => {
+            clearTimeout(timer);
+            restore.signal.removeEventListener('abort', finish);
+            resolve();
+          };
+          const timer = setTimeout(finish, 500);
+          restore.signal.addEventListener('abort', finish, { once: true });
+        });
+      }
+    } catch {
+      if (!restore.signal.aborted && options.room() === room) notice.value = '游戏窗口已不可用，请重新选择。';
+    } finally {
+      if (pendingRestore === restore) {
+        pendingRestore = undefined;
+        waitingGame.value = '';
+      }
+    }
+    return null;
+  }
   const captureRequest = ref<{ sources: ReturnType<typeof createNativeVideoSourceSelection>['options'];
     quality: ScreenShareQualityId; customQuality: CustomScreenShareQuality } | null>(null);
   const captureSourceType = ref<'window' | 'screen'>('window');
@@ -225,6 +260,7 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
   }
 
   function selectCaptureSource(sourceId: string | null, captureSettings?: ScreenSharePreferences) {
+    if (sourceId === null) pendingRestore?.abort();
     const request = captureRequest.value;
     if (!request) return;
     if (sourceId !== null
@@ -262,7 +298,11 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
     captureAudioCapabilityReady.value = false;
     captureAudioCapabilityFailed.value = false;
     // 取消及清理不依赖偏好存储；写入失败也必须结束本次选择等待。
-    chooser?.finish(selection);
+    const selected = request.sources.find(source => source.id === sourceId);
+    const game = options.activity();
+    if (selection && selected && (selected.minimized || (selected.windowId && game?.type === 'GAME' && game.windowIds?.includes(selected.windowId)))) {
+      void waitForGameWindow(selection, selected.name, currentNativeDiscoveryId).then(result => chooser?.finish(result));
+    } else chooser?.finish(selection);
     if (selection) {
       saveCapturePreferences(captureQuality.value, lastCaptureSourceType);
       if (captureAudioMode.value !== 'unavailable') {
@@ -357,9 +397,11 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
         return null;
       }
       if (audio.failed) { notice.value = '无法确认共享声音设置，请重试。'; return null; }
-      return { sourceId: candidates[0]!.sourceId, quality: captureQuality.value,
-        customQuality: { ...captureCustomQuality.value }, captureSettings: { ...readScreenSharePreferences(), windowMethod: 'auto' },
+      const source = candidates[0]!;
+      const selection = { sourceId: source.sourceId, quality: captureQuality.value,
+        customQuality: { ...captureCustomQuality.value }, captureSettings: { ...readScreenSharePreferences(), windowMethod: 'auto' as const },
         shareAudio: shouldShareAudioInNativeSelection(true, audio.mode, readScreenShareAudioPreference(audio.mode)) };
+      return await waitForGameWindow(selection, game.name, snapshot.discoveryId);
     } catch {
       if (!disposed && Boolean(options.room()) && options.room() === room) notice.value = '无法准备游戏共享，请使用共享按钮重新选择。';
       return null;
@@ -379,7 +421,7 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
       if (disposed || document.hidden || !options.room() || options.room() !== room || captureRequest.value || options.sharing()) return;
       const activity = options.activity();
       const gameWindows = new Set(activity?.type === 'GAME' ? activity.windowIds : []);
-      const sources = snapshot.sources.filter(source => source.kind === (sourceType === 'window' ? 'window' : 'monitor'))
+      const sources = snapshot.sources.filter(source => !source.minimized && source.kind === (sourceType === 'window' ? 'window' : 'monitor'))
         .sort((left, right) => Number(gameWindows.has(right.windowId ?? '')) - Number(gameWindows.has(left.windowId ?? '')));
       // 仅预取本机静态预览；正式选择器仍重新枚举身份并复用主进程的同一批请求。
       await desktop.getNativeVideoSourceThumbnails(sources.slice(0, 6));
@@ -389,7 +431,7 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
   }
 
   onScopeDispose(() => { disposed = true; selectCaptureSource(null); });
-  return { captureRequest, captureSourceType, captureQuality, captureCustomQuality, selectedCaptureSourceId,
+  return { waitingGame, captureRequest, captureSourceType, captureQuality, captureCustomQuality, selectedCaptureSourceId,
     captureFollowGameAvailable, captureSourceNotice, captureAudioCapabilityReady, captureAudioCapabilityFailed,
     captureAudioMode, captureShareAudio, nativeSourceLoading, nativeSourceError, nativeSourceChooserGeneration,
     requestNativeScreenSource, selectCaptureSource, chooseCaptureSource, refreshVisibleSourceThumbnails, reportRenderedPreviews,

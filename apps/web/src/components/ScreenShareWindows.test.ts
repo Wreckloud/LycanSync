@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
-import { computed, effectScope, nextTick, reactive, shallowReactive, shallowRef, watch } from 'vue';
+import { computed, effectScope, nextTick, onScopeDispose, reactive, ref, shallowReactive, shallowRef, watch } from 'vue';
 import type { ScreenShareWindow } from '../viewing/useScreenShareWindows';
 import { Track } from 'livekit-client';
 import { EventEmitter } from 'node:events';
@@ -29,7 +29,7 @@ it('实际授权视频到达才打开控制窗；旧窗关闭和旧界面版本�
   const scope = effectScope();
   scope.run(() => runInNewContext(compiled, {
     defineProps: () => ({ rtc }), defineEmits: () => vi.fn(), defineExpose: () => {},
-    computed, watch, Track, reactive,
+    computed, watch, Track, reactive, ref, onScopeDispose, setTimeout, clearTimeout,
     useScreenShareLayout: () => ({ mode: 'collapsed', collapse: vi.fn() }),
     useScreenShareWindows: (options: { closed: typeof closed }) => {
       closed = options.closed;
@@ -83,7 +83,7 @@ function watchingFixture() {
   const scope = effectScope();
   const api = scope.run(() => runInNewContext(`${compiled}\n({ view, select, detachWatching, returnWatching, closeAll })`, {
     defineProps: () => ({ rtc, controlPlaceholder: () => '' }), defineEmits: () => vi.fn(), defineExpose: () => {},
-    computed, watch, Track, reactive, useScreenShareLayout,
+    computed, watch, Track, reactive, ref, onScopeDispose, setTimeout, clearTimeout, useScreenShareLayout,
     useScreenShareWindows: (options: { closed: typeof closed }) => {
       closed = options.closed;
       return { entries, openWatching, closeWatching, openControl: vi.fn(), closeControl: vi.fn(),

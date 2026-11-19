@@ -92,7 +92,8 @@ def main():
         output_path = args.output / f'{name}-output.f32'
         write_pcm(input_path, samples)
         completed = subprocess.run([str(args.processor.resolve()), str(input_path), str(output_path),
-                                    *(str(value) for value in settings)], check=True, capture_output=True, text=True)
+                                    *(str(value) for value in settings)], check=True, capture_output=True,
+                                   text=True, encoding='utf-8')
         result = json.loads(completed.stdout)
         processed = read_pcm(output_path)
         if len(processed) != len(samples):

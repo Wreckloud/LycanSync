@@ -212,6 +212,7 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   listActivityWindows: () => ipcRenderer.invoke('activity:windows'),
   configureActivityMappings: (mappings) => ipcRenderer.invoke('activity:configure', mappings),
   getNativeMediaCapabilities: () => ipcRenderer.invoke('media:capabilities'),
+  isNativeWindowMinimized: (sourceId, discoveryId) => ipcRenderer.invoke('media:video-source:minimized', sourceId, discoveryId),
   listNativeVideoSources: () => ipcRenderer.invoke('media:video-sources'),
   prepareNativeVideoSource: (sourceId) => ipcRenderer.invoke('media:video-source:prepare', sourceId),
   getNativeVideoSourceThumbnails: (sources) => ipcRenderer.invoke('media:video-source-thumbnails', sources),

@@ -78,6 +78,7 @@ interface ActivityWindow {
 }
 
 interface NativeVideoSource {
+  minimized?: boolean;
   sourceId: string;
   kind: 'monitor' | 'window';
   title: string;
@@ -254,12 +255,13 @@ interface Window {
     listActivityWindows(): Promise<ActivityWindow[]>;
     configureActivityMappings(mappings: ActivityMapping[]): Promise<void>;
     getNativeMediaCapabilities(): Promise<Record<string, { available: boolean; reason: string }>>;
+    isNativeWindowMinimized(sourceId: string, discoveryId: string): Promise<boolean>;
     listNativeVideoSources(): Promise<{ revision: number; discoveryId: string; sources: NativeVideoSource[] }>;
     prepareNativeVideoSource(sourceId: string | null): Promise<{ prepared: boolean; followGame?: 'league' }>;
     getNativeVideoSourceThumbnails(sources: NativeVideoSource[]): Promise<{ sourceId: string; thumbnail: string }[]>;
     getScreenShareSupport(): Promise<{ hideCursor: boolean; hideBorder: boolean }>;
     startNativeVideo(sourceId: string, maxFps: number, settings: { hideCursor: boolean; hideBorder: boolean;
-      windowMethod?: 'auto' | 'game'; followGame?: 'league' }, resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean; gameFollowId?: string }>;
+      windowMethod?: 'auto' | 'game' | 'window'; followGame?: 'league' }, resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean; gameFollowId?: string }>;
     findNativeGameSource(id: string): Promise<{ sourceId: string | null }>;
     switchNativeGameVideo(id: string, sourceId: string, maxFps: number, settings: import('./settings/screenSharePreferences').ScreenSharePreferences,
       resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean; gameFollowId?: string }>;

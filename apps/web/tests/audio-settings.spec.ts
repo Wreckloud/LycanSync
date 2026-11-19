@@ -172,7 +172,11 @@ createApp({ setup() {
       'lycansync.audio-preferences.v1.audio-settings-test')!).inputGain)).toBe(1.2);
     await page.evaluate(() => {
       const original = Storage.prototype.setItem;
-      Storage.prototype.setItem = function () {
+      Storage.prototype.setItem = function (key, value) {
+        // 上一次重置仍可能在等待合并写入；只让本次调节的保存失败。
+        if (key !== 'lycansync.audio-preferences.v1.audio-settings-test' || JSON.parse(value).inputGain !== 1.5) {
+          return original.call(this, key, value);
+        }
         Storage.prototype.setItem = original;
         throw new DOMException('test storage full', 'QuotaExceededError');
       };

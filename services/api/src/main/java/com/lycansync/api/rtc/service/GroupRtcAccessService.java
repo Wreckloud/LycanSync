@@ -9,7 +9,9 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.HashSet;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -20,6 +22,7 @@ import java.util.UUID;
  */
 @Service
 public class GroupRtcAccessService {
+    private static final Duration REVOCATION_TIMEOUT = Duration.ofSeconds(10);
     private final ObjectProvider<RoomServiceClient> clients;
     private final GroupMapper groups;
 
@@ -52,13 +55,23 @@ public class GroupRtcAccessService {
     }
 
     public void removeParticipant(UUID roomKey, UUID userId) {
+        removeParticipantFromRooms(List.of(roomKey), userId, REVOCATION_TIMEOUT);
+    }
+
+    public void removeParticipantFromRooms(List<UUID> roomKeys, UUID userId, Duration timeout) {
         RoomServiceClient client = clients.getIfAvailable();
         if (client == null) return;
+        // 调用方传入剩余预算，数据库等待不能使多群撤权重新获得完整十秒。
+        long deadline = System.nanoTime() + timeout.toNanos();
         try {
-            var response = client.removeParticipant(GroupRtcRooms.roomName(roomKey), "user-" + userId).execute();
-            // 尚未入房或已经离房属于正常状态，不需要断开其他成员。
-            if (!response.isSuccessful() && response.code() != 404) {
-                throw new RtcServiceUnavailableException("未能断开该成员的语音，请稍后重试");
+            for (UUID roomKey : roomKeys) {
+                var request = client.removeParticipant(GroupRtcRooms.roomName(roomKey), "user-" + userId);
+                request.timeout().deadlineNanoTime(deadline);
+                var response = request.execute();
+                // 尚未入房或已经离房属于正常状态，不需要断开其他成员。
+                if (!response.isSuccessful() && response.code() != 404) {
+                    throw new RtcServiceUnavailableException("未能断开该成员的语音，请稍后重试");
+                }
             }
         } catch (IOException exception) {
             throw new RtcServiceUnavailableException("无法断开该成员的语音，请稍后重试", exception);

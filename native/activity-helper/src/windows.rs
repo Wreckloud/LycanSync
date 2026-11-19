@@ -40,11 +40,10 @@ pub fn snapshot(wanted_pids: &HashSet<u32>) -> Result<Vec<WindowSnapshot>, Strin
                     &String::from_utf16_lossy(&class_name[..class_length as usize]),
                 );
             let mut bounds = RECT::default();
-            // 与共享选择器采用相同的有效窗口原则；已登记游戏最小化后仍保留 visible。
-            let selectable = visible
-                && cloak_known
-                && cloaked == 0
-                && !IsIconic(window).as_bool()
+            let eligible = visible && cloak_known && cloaked == 0;
+            let minimized = eligible && IsIconic(window).as_bool();
+            let selectable = eligible
+                && !minimized
                 && GetWindowRect(window, &mut bounds).is_ok()
                 && bounds.right - bounds.left > 1
                 && bounds.bottom - bounds.top > 1;
@@ -56,6 +55,7 @@ pub fn snapshot(wanted_pids: &HashSet<u32>) -> Result<Vec<WindowSnapshot>, Strin
                     title: String::from_utf16_lossy(&title[..length as usize]),
                     visible,
                     selectable,
+                    minimized,
                 });
             }
         }

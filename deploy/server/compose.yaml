@@ -33,6 +33,21 @@ services:
           udp_port: 7992
           use_external_ip: false
           node_ip: ${MEDIA_ADVERTISE_IP:?请填写客户端能访问的服务器 IP}
+        room:
+          # 普通 Baseline 需要显式格式；保留默认格式供其他客户端协商。
+          enabled_codecs:
+            - mime: audio/PCMU
+            - mime: audio/PCMA
+            - mime: audio/opus
+            - mime: audio/red
+            - mime: video/VP8
+            - mime: video/H264
+            - mime: video/VP9
+            - mime: video/AV1
+            - mime: video/H265
+            - mime: video/rtx
+            - mime: video/H264
+              fmtp_line: level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f
         keys:
           "${LIVEKIT_API_KEY:?请先填写 .env}": "${LIVEKIT_API_SECRET:?请先填写 .env}"
         webhook:

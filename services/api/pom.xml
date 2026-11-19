@@ -103,6 +103,12 @@
             <version>${livekit-server.version}</version>
         </dependency>
 
+        <!-- RTC 总时限直接使用 SDK 已携带的 JVM 客户端，版本仍由同一 BOM 管理。 -->
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp-jvm</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>com.auth0</groupId>
             <artifactId>java-jwt</artifactId>

@@ -475,18 +475,23 @@ test('停止未确认时保留会话身份，重复停止不能返回虚假成�
 });
 
 for (const reason of ['explicit', 'failure', 'startFailure']) test(`宿主退出未确认时 ${reason} 保留身份，迟到 close 后能完成停止`, async context => {
+  // 显式推进两段停止计时，避免假进程无系统句柄时依赖墙钟等待保活。
+  context.mock.timers.enable({ apis: ['setTimeout'] });
   const f = fixture(context, { stopHang: true, killHang: true });
   const bridge = microphoneBridge({ host: f.manager });
   f.manager.onFailure = (sessionId, code) => bridge.capture.notifyFailure(sessionId, code);
   const starting = bridge.capture.start('voice-session', settings);
   const rejectedStart = reason === 'startFailure' ? assert.rejects(starting, /microphoneCaptureStartFailed/) : null;
-  bridge.listen(); await delay(0);
+  bridge.listen(); await Promise.resolve();
   if (reason === 'startFailure') f.children[0].send({ event: 'failed', code: 'microphoneCaptureStartFailed' });
   else { f.children[0].send(ready); await starting; }
   let rejectedStop;
   if (reason === 'explicit') rejectedStop = assert.rejects(bridge.capture.stop('voice-session'), /microphoneCaptureStopFailed/);
   if (reason === 'failure') f.children[0].send({ event: 'failed', code: 'microphoneCapturePipeFailed' });
-  await delay(70); await rejectedStart; await rejectedStop;
+  context.mock.timers.tick(20);
+  assert.equal(f.children[0].kills, 1);
+  context.mock.timers.tick(20);
+  await rejectedStart; await rejectedStop;
   assert.equal(bridge.capture.sessionId, 'voice-session');
   assert.equal(f.manager.state.alive, true);
   await assert.rejects(bridge.capture.stop('voice-session'), /microphoneCaptureStopFailed/);

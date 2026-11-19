@@ -1,15 +1,20 @@
+const { join, resolve } = require('node:path');
 const { updateFeedUrl } = require('./electron/startup-update.cjs');
 const { prepareInstallerFiles } = require('./electron/build-nsis.cjs');
 
 const updateUrl = updateFeedUrl(process.env.LYCANSYNC_PACKAGED_UPDATE_URL
   || (process.env.LYCANSYNC_PACKAGED_API_URL ? new URL('/downloads/', process.env.LYCANSYNC_PACKAGED_API_URL).href : ''));
+const outputDirectory = process.env.LYCANSYNC_DESKTOP_OUTPUT_DIR
+  ? resolve(process.env.LYCANSYNC_DESKTOP_OUTPUT_DIR) : '../../release/desktop';
+const buildResources = process.env.LYCANSYNC_DESKTOP_OUTPUT_DIR
+  ? join(outputDirectory, '.build-resources') : '../../release/build-resources';
 
 module.exports = {
   appId: 'com.lycansync.desktop',
   productName: 'LycanSync',
   protocols: [{ name: 'LycanSync 邀请', schemes: ['lycansync'] }],
   electronDist: 'node_modules/electron/dist',
-  directories: { output: '../../release/desktop', buildResources: '../../release/build-resources' },
+  directories: { output: outputDirectory, buildResources },
   extraMetadata: { main: 'electron/main.cjs' },
   afterPack: context => prepareInstallerFiles(context.appOutDir, context.packager.info.buildResourcesDir),
   publish: { provider: 'generic', url: updateUrl },
@@ -56,8 +61,8 @@ module.exports = {
   extraResources: [
     { from: '../../release/build-cache/obs-32.2.2/prepared', to: 'obs-capture',
       filter: ['bin/64bit/**/*', 'obs-plugins/64bit/**/*', 'data/**/*', 'licenses/**/*', 'build-manifest.json'] },
-    { from: '../../release/desktop/THIRD-PARTY-NOTICES.txt', to: 'THIRD-PARTY-NOTICES.txt' },
-    { from: '../../release/build-resources/server-config.json', to: 'server-config.json' },
+    { from: join(outputDirectory, 'THIRD-PARTY-NOTICES.txt'), to: 'THIRD-PARTY-NOTICES.txt' },
+    { from: join(buildResources, 'server-config.json'), to: 'server-config.json' },
     { from: '../../native/media-helper/target/release/lycansync-media.exe', to: 'media-helper/lycansync-media.exe' },
     { from: '../../native/media-bridge/target/x86_64-pc-windows-msvc/release/lycansync_shared_texture_bridge.dll', to: 'media-bridge/lycansync_shared_texture_bridge.dll' },
     { from: '../../native/activity-helper/target/release/lycansync-activity.exe', to: 'activity-helper/lycansync-activity.exe' },

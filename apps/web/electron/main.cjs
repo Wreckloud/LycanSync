@@ -178,6 +178,7 @@ app.on('will-quit', () => windowThumbnails.dispose());
 const savedDiagnosticReports = createDiagnosticReportStore(resolve(app.getPath('userData'), 'diagnostics'));
 let diagnosticReportsGeneration = 0;
 const diagnosticStartedAt = Date.now();
+// 保留阶段计时；另记 Node 初始化后的运行时间，补齐更早的模块加载，不代替外部启动计时。
 const diagnosticStartedMonotonicAt = performance.now();
 const sourceTimingRecordedAt = new Map();
 let diagnosticExportPending = false;
@@ -679,7 +680,9 @@ async function serveApplication(request) {
       }
       return new Response(response.body, { status: response.status, headers: {
         'Content-Type': response.headers.get('Content-Type') || 'application/json',
-        ...(response.headers.has('Content-Length') ? { 'Content-Length': response.headers.get('Content-Length') } : {}),
+        // net.fetch 已解压响应体，压缩后的长度不能用于页面收到的内容。
+        ...((!response.headers.has('Content-Encoding') || response.headers.get('Content-Encoding') === 'identity')
+          && response.headers.has('Content-Length') ? { 'Content-Length': response.headers.get('Content-Length') } : {}),
         ...(response.headers.has('Content-Range') ? { 'Content-Range': response.headers.get('Content-Range') } : {}),
         ...(response.headers.has('Accept-Ranges') ? { 'Accept-Ranges': response.headers.get('Accept-Ranges') } : {}),
         ...(response.headers.has('Content-Disposition') ? { 'Content-Disposition': response.headers.get('Content-Disposition') } : {}),
@@ -756,7 +759,8 @@ if (!app.requestSingleInstanceLock()) {
     if (process.platform === 'win32') app.setAppUserModelId('com.lycansync.desktop');
     void writeMediaDiagnostic({ stage: 'applicationReady', appVersion: app.getVersion(),
       electronVersion: process.versions.electron, platform: process.platform, arch: process.arch,
-      osVersion: osRelease(), durationMs: Math.round(performance.now() - diagnosticStartedMonotonicAt) });
+      osVersion: osRelease(), durationMs: Math.round(performance.now() - diagnosticStartedMonotonicAt),
+      processUptimeMs: Math.round(process.uptime() * 1000) });
     const installTimingFile = resolve(runtimeLayout.updaterCachePath, 'last-install.ini');
     void readFile(installTimingFile, 'utf8').then(async text => {
       const timing = parseInstallTiming(text, app.getVersion());
@@ -798,7 +802,8 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
     mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
     mainWindow.webContents.once('did-finish-load', () => {
-      void writeMediaDiagnostic({ stage: 'rendererReady', durationMs: Math.round(performance.now() - diagnosticStartedMonotonicAt) });
+      void writeMediaDiagnostic({ stage: 'rendererReady', durationMs: Math.round(performance.now() - diagnosticStartedMonotonicAt),
+        processUptimeMs: Math.round(process.uptime() * 1000) });
     });
     mainWindow.webContents.on('render-process-gone', (_event, details) => {
       try { audioShortcuts.clear(); } catch { console.error('audio shortcut cleanup failed'); }
@@ -863,7 +868,7 @@ ipcMain.on('app:startup-timing', (event, stage, durationMs) => {
   if (!trustedSender(event) || !['loginDataReady', 'loginReady'].includes(stage) || startupUiTimings.has(stage)
       || typeof durationMs !== 'number' || !Number.isFinite(durationMs) || durationMs < 0 || durationMs > 300_000) return;
   startupUiTimings.add(stage);
-  void writeMediaDiagnostic({ stage, durationMs: Math.round(durationMs) });
+  void writeMediaDiagnostic({ stage, durationMs: Math.round(durationMs), processUptimeMs: Math.round(process.uptime() * 1000) });
 });
 ipcMain.handle('update:skip', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
@@ -1072,7 +1077,14 @@ ipcMain.handle('media:video-sources', async (event) => {
   const snapshot = await mediaHelper.listVideoSources();
   nativeVideoSourcesById = new Map(snapshot.sources.map((source) => [source.sourceId, source]));
   recordSourceTiming('enumerateSources', startedAt, snapshot.sources.length);
-  return snapshot;
+  const gameWindows = currentActivity?.type === 'GAME' ? currentActivity.windowIds : undefined;
+  return { ...snapshot, sources: snapshot.sources.filter(source => !source.minimized || gameWindows?.includes(source.windowId)) };
+});
+ipcMain.handle('media:video-source:minimized', async (event, sourceId, discoveryId) => {
+  if (!trustedSender(event) || closing || typeof sourceId !== 'string' || !/^window:[1-9]\d*:\d+$/.test(sourceId)
+      || !discoveryId || mediaHelper.videoSourceSnapshot?.state.discoveryId !== discoveryId) throw new Error('videoSourceExpired');
+  const target = await mediaHelper.inspectVideoSource(sourceId);
+  return target.minimized === true;
 });
 ipcMain.handle('media:video-source:prepare', (event, sourceId) => {
   if (!trustedSender(event) || closing || (sourceId !== null && (typeof sourceId !== 'string'

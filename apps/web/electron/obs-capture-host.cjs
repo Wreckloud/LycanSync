@@ -116,7 +116,7 @@ class ObsCaptureHostManager {
     if (typeof sourceId !== 'string' || !/^(monitor|window):[1-9]\d*:\d+$/.test(sourceId)
         || ![30, 60, 120].includes(maxFps) || !validTarget(target, sourceId) || !isSessionId(sessionId)
         || !validResolution(resolution) || !settings || typeof settings.hideCursor !== 'boolean' || typeof settings.hideBorder !== 'boolean'
-        || !['auto', 'game'].includes(windowMethod)
+        || !['auto', 'game', 'window'].includes(windowMethod)
         || (target.kind === 'monitor' && windowMethod !== 'auto')
         || (target.kind === 'game' && !['auto', 'game'].includes(windowMethod))
         || (target.kind === 'window' && windowMethod === 'game')) {
@@ -317,7 +317,8 @@ class ObsCaptureHostManager {
       if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
       const stages = { graphicsStarting: 'obsGraphicsStarting', graphicsReady: 'obsGraphicsReady',
         sourceStarting: 'obsSourceStarting', gameHookAttempt: 'obsGameHookAttempt',
-        gameHookRetry: 'obsGameHookRetry', gameHookSignalled: 'obsGameHookSignalled' };
+        gameHookRetry: 'obsGameHookRetry', gameHookReconnect: 'obsGameHookReconnect', gameHookPipeFailed: 'obsGameHookPipeFailed',
+        gameHookSignalled: 'obsGameHookSignalled' };
       if (this.state !== state || event.sessionId !== state.videoSessionId
           || !Object.hasOwn(stages, event.stage)
           || (stages[event.stage].startsWith('obsGameHook') && state.captureKind !== 'game')

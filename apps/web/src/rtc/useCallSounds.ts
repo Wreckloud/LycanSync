@@ -119,13 +119,13 @@ export function useCallSounds(outputVolume: Ref<number>, preferences: ReturnType
     }
   }
 
-  async function playCustomEntrance(bytes: Uint8Array) {
+  async function playCustomEntrance(bytes: Uint8Array, key: string, request: symbol) {
     if (!canPlay('participantJoined') || !preferences.customEntrances.value) return false;
     try {
       const currentContext = await audioContext();
-      if (!canPlay('participantJoined') || !preferences.customEntrances.value) return false;
+      if (!canPlay('participantJoined') || !preferences.customEntrances.value || requests.get(key) !== request) return false;
       const audioBuffer = await currentContext.decodeAudioData(bytes.slice().buffer);
-      if (!canPlay('participantJoined') || !preferences.customEntrances.value) return false;
+      if (!canPlay('participantJoined') || !preferences.customEntrances.value || requests.get(key) !== request) return false;
       if (audioBuffer.duration > ENTRANCE_SOUND_MAX_DURATION_SECONDS + 0.05) return false;
       const source = currentContext.createBufferSource();
       const gain = currentContext.createGain();
@@ -169,7 +169,22 @@ export function useCallSounds(outputVolume: Ref<number>, preferences: ReturnType
 
   async function participantEntranceSound(identity: string, bytes: Uint8Array) {
     clearPendingEntrance(identity);
-    if (!await playCustomEntrance(bytes)) await playEvent('participantJoined', false, identity);
+    const key = `participant:${identity}`;
+    const request = Symbol();
+    requests.set(key, request);
+    try {
+      if (!await playCustomEntrance(bytes, key, request) && requests.get(key) === request) {
+        await playEvent('participantJoined', false, identity);
+      }
+    } finally { if (requests.get(key) === request) requests.delete(key); }
+  }
+
+  function left() {
+    pendingEntrances.forEach(clearTimeout);
+    pendingEntrances.clear();
+    // 离房使旧成员的计时、加载和解码失效，不取消设置页试听。
+    for (const key of requests.keys()) if (key.startsWith('participant:')) requests.delete(key);
+    return playEvent('left');
   }
 
   watch(() => output?.available.value ?? true, (available) => {
@@ -194,7 +209,7 @@ export function useCallSounds(outputVolume: Ref<number>, preferences: ReturnType
 
   return {
     joined: () => playEvent('joined'),
-    left: () => playEvent('left'),
+    left,
     screenShareStarted: () => playEvent('screenShareStarted'),
     screenShareStopped: () => playEvent('screenShareStopped'),
     microphoneChanged: (enabled: boolean) => playEvent(enabled ? 'microphoneOn' : 'microphoneOff'),

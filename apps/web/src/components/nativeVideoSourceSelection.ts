@@ -8,6 +8,7 @@ export interface NativeVideoSourceOptionInput {
   width: number;
   height: number;
   primary: boolean;
+  minimized?: boolean;
   windowId?: string;
   monitorOrigin?: { x: number; y: number };
 }
@@ -44,7 +45,9 @@ export function createNativeVideoSourceSelection(sources: NativeVideoSourceOptio
       id: source.sourceId,
       name: source.kind === 'monitor'
         ? `屏幕 ${currentSources.filter((item) => item.kind === 'monitor').indexOf(source) + 1}` : source.title,
-      thumbnail: thumbnails.get(source.sourceId)?.title === source.title
+      windowId: source.windowId,
+      minimized: source.minimized,
+      thumbnail: !source.minimized && thumbnails.get(source.sourceId)?.title === source.title
         ? thumbnails.get(source.sourceId)?.thumbnail : undefined,
       type: source.kind === 'window' ? 'window' as const : 'screen' as const,
     }));
@@ -83,6 +86,7 @@ export function createNativeVideoSourceSelection(sources: NativeVideoSourceOptio
         if (thumbnail) { thumbnails.delete(id); thumbnails.set(id, thumbnail); }
       }
       return currentSources.filter((source) => {
+        if (source.minimized) return false;
         if (visibleIds && !visibleIds.has(source.sourceId) && source.sourceId !== selectedId) return false;
         // 已取得的静态预览可用于本次选择；重复截图会扫描同类的所有窗口。
         if (thumbnails.has(source.sourceId)) return false;

@@ -269,6 +269,7 @@ test('登录计时仅接受可信页面的两个固定阶段，每次启动每�
   runInNewContext(main.slice(start, end), {
     ipcMain: { on: (_, callback) => { timing = callback; } }, trustedSender: event => event.trusted,
     startupUiTimings: new Set(), writeMediaDiagnostic: entry => entries.push(JSON.stringify(entry)),
+    process: { uptime: () => 1.2345 },
   });
   timing({ trusted: false }, 'loginReady', 1000);
   for (const duration of [-1, Infinity, NaN, 300001, '1000']) timing({ trusted: true }, 'loginReady', duration);
@@ -278,7 +279,8 @@ test('登录计时仅接受可信页面的两个固定阶段，每次启动每�
   timing({ trusted: true }, 'loginReady', 1000);
   timing({ trusted: true }, 'loginReady', 1001);
   assert.deepEqual(entries.map(entry => JSON.parse(entry)), [
-    { stage: 'loginDataReady', durationMs: 150 }, { stage: 'loginReady', durationMs: 1000 },
+    { stage: 'loginDataReady', durationMs: 150, processUptimeMs: 1235 },
+    { stage: 'loginReady', durationMs: 1000, processUptimeMs: 1235 },
   ]);
 });
 

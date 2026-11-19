@@ -92,11 +92,11 @@ test('普通窗口说明可能出现系统边框，一次确认后共享，窄�
     .toMatchObject({ hideBorder: false, windowMethod: 'auto' });
 });
 
-test('高级选项只提供自动和游戏采集，重开后恢复自动且不继承手动游戏选择', async ({ page }) => {
+test('高级选项提供自动、游戏和窗口采集，重开后恢复自动且不继承手动游戏选择', async ({ page }) => {
   await page.getByRole('button', { name: '游戏窗口', exact: true }).click();
   await page.getByText('高级选项', { exact: true }).click();
   const method = page.getByLabel('窗口采集方式', { exact: true });
-  await expect(method.locator('option')).toHaveText(['自动', '游戏采集']);
+  await expect(method.locator('option')).toHaveText(['自动', '游戏采集', '窗口采集']);
   await method.selectOption('game');
   await page.getByRole('button', { name: '开始共享', exact: true }).click();
   expect(await page.evaluate(() => (window as unknown as { pickerTest: { settings(): unknown } }).pickerTest.settings()))

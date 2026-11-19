@@ -879,8 +879,8 @@ describe('NativeScreenVideoSession', () => {
     expect(desktop.stopNativeVideo).toHaveBeenCalledWith('busy-session');
   });
 
-  it('can publish a pause frame when minimization precedes the first captured frame', async () => {
-    installWindowMessageTarget();
+  it('首次最小化不提交占位，恢复后的真实画面才完成启动', async () => {
+    const target = installWindowMessageTarget();
     let finishStart!: (value: { sessionId: string; changed: boolean }) => void;
     let reportSuspension!: (status: { sessionId: string; suspended: boolean }) => void;
     const pauseFrame = Object.assign(createFrame(), { timestamp: 1 });
@@ -909,6 +909,12 @@ describe('NativeScreenVideoSession', () => {
     const ready = session.start('window:1:0');
     reportSuspension({ sessionId: 'early-session', suspended: true });
     finishStart({ sessionId: 'early-session', changed: true });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(pauseFrame.close).not.toHaveBeenCalled();
+    expect(desktop.recordScreenShareStartupTiming).not.toHaveBeenCalled();
+    reportSuspension({ sessionId: 'early-session', suspended: false });
+    dispatchFrame(target, createFrame(), 'early-session');
     expect(await ready).toBe(track);
     await session.stop();
   });

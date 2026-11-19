@@ -17,8 +17,8 @@ function viewing() {
   const updates: unknown[] = [];
   publication.on(TrackEvent.UpdateSettings, (settings) => updates.push(settings));
   const element = () => ({ ownerDocument: page, getClientRects: () => [{}] }) as unknown as HTMLVideoElement;
-  function visible(element: HTMLVideoElement, visible: boolean) {
-    callbacks.get(element)?.([{ target: element, isIntersecting: visible } as unknown as IntersectionObserverEntry], {} as IntersectionObserver);
+  function visible(element: HTMLVideoElement, ...states: boolean[]) {
+    callbacks.get(element)?.(states.map(isIntersecting => ({ target: element, isIntersecting }) as unknown as IntersectionObserverEntry), {} as IntersectionObserver);
   }
   function background(hidden: boolean) {
     page.visibilityState = hidden ? 'hidden' : 'visible';
@@ -26,6 +26,16 @@ function viewing() {
   }
   return { page, observerWindow, publication, updates, element, visible, background, callbacks };
 }
+
+it('同一批中卡片先离屏又返回时，保留最新的可见需求', () => {
+  const main = viewing(), video = main.element();
+  const view = observeScreenShareView(main.publication, video, VideoQuality.LOW);
+  main.visible(video, false, true);
+  expect(main.publication.isEnabled).toBe(true);
+  main.visible(video, true, false);
+  expect(main.publication.isEnabled).toBe(false);
+  view.stop();
+});
 
 it('设置覆盖只撤销主界面的观看需求，独立窗继续观看；返回保留订阅和画质', () => {
   const main = viewing(), auxiliary = viewing();

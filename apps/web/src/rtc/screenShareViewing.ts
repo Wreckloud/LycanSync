@@ -62,8 +62,9 @@ export function observeScreenShareView(publication: RemoteTrackPublication, elem
   }
   // 每个观看位置使用所属窗口，主窗口隐藏不能暂停仍可见的独立窗。
   const observer = new viewWindow.IntersectionObserver((entries) => {
-    const entry = entries.find((entry) => entry.target === element);
-    if (!entry || disposed) return;
+    // 此观察器只跟踪一个元素，同批通知以最后一次位置变化为准。
+    const entry = entries.at(-1);
+    if (disposed || entry?.target !== element) return;
     intersecting = entry.isIntersecting;
     updateVisibility();
   });

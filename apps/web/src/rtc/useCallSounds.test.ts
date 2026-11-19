@@ -162,3 +162,32 @@ it('销毁会话取消素材读取，迟到数据不能创建播放节点', asyn
   expect(f.context.decodeAudioData).not.toHaveBeenCalled();
   expect(f.nodes).toHaveLength(0);
 });
+
+it('离房撤销尚未触发的成员加入提示，不在退出后加载旧提示音', async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  try {
+    f.sounds.participantJoined('friend');
+    expect(await f.sounds.left()).toBe(true);
+    await vi.advanceTimersByTimeAsync(700);
+    expect(f.fetchAudio.mock.calls.map(([url]) => url)).toEqual(['/sounds/material/navigation_backward-selection.ogg']);
+    expect(f.nodes).toHaveLength(1);
+  } finally { f.scope.stop(); vi.useRealTimers(); }
+});
+
+it.each(['participantLeft', 'left'] as const)('%s 取消仍在解码的自定义入场，不补播旧声音或默认加入提示', async event => {
+  const f = fixture();
+  let decoded!: (value: Awaited<ReturnType<typeof f.context.decodeAudioData>>) => void;
+  f.context.decodeAudioData.mockImplementationOnce(() => new Promise(resolve => { decoded = resolve; }));
+  try {
+    const entrance = f.sounds.participantEntranceSound('friend', new Uint8Array([1]));
+    await vi.waitFor(() => expect(decoded).toBeDefined());
+    if (event === 'left') await f.sounds.left();
+    else f.sounds.participantLeft('friend');
+    await vi.waitFor(() => expect(f.nodes).toHaveLength(1));
+    decoded({ duration: 1, numberOfChannels: 1, getChannelData: () => new Float32Array([0.2]) });
+    await entrance;
+    expect(f.nodes).toHaveLength(1);
+    expect(f.fetchAudio).toHaveBeenCalledOnce();
+  } finally { f.scope.stop(); }
+});

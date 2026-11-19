@@ -61,7 +61,7 @@ function createLeagueCaptureFollow({ listSources, inspectSource, discoveryState,
         catch { /* 来源结束由原启停流程确认；可选列表缺失本身不能证明结束。 */ }
         const snapshot = await listSources();
         if (requireFollow(id) !== follow) throw new Error('nativeGameFollowUnavailable');
-        const windows = snapshot.sources.filter(source => source.kind === 'window');
+        const windows = snapshot.sources.filter(source => source.kind === 'window' && !source.minimized);
         const ids = new Set(windows.map(source => source.sourceId));
         for (const key of follow.cache.keys()) if (!ids.has(key)) follow.cache.delete(key);
         await Promise.all(windows.filter(source => !follow.cache.has(source.sourceId)).map(async source => {
