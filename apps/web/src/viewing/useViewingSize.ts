@@ -13,7 +13,7 @@ export function useViewingSize(panel: Ref<HTMLElement | null>, options: ViewingS
   const width = ref(600);
   const height = ref(300);
   const maximumHeight = ref(420);
-  const minimumHeight = computed(() => Math.min(140, maximumHeight.value));
+  const minimumHeight = computed(() => Math.min(64, maximumHeight.value));
   let observer: ResizeObserver | undefined;
   let stopObservation: (() => void) | undefined;
 

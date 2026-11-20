@@ -2,8 +2,8 @@
 import { onMounted, onScopeDispose, ref } from 'vue';
 import { Download, X } from '@lucide/vue';
 
-defineProps<{ source: string; downloadable?: boolean; downloading?: boolean }>();
-const emit = defineEmits<{ close: []; download: []; error: []; metadata: [duration: number]; time: [seconds: number] }>();
+defineProps<{ source: string; downloadable?: boolean; downloading?: boolean; bufferForPreview?: boolean }>();
+const emit = defineEmits<{ close: []; download: []; error: []; metadata: [duration: number]; time: [seconds: number]; buffered: [percent: number]; playable: [] }>();
 const player = ref<HTMLVideoElement | null>(null);
 const aspectRatio = ref(16 / 9);
 const failed = ref(false);
@@ -22,6 +22,14 @@ function measureVideo() {
   aspectRatio.value = video.videoWidth / video.videoHeight;
   emit('metadata', video.duration);
 }
+function reportBuffer() {
+  const video = player.value;
+  if (video?.buffered.length && Number.isFinite(video.duration) && video.duration > 0) {
+    let seconds = 0;
+    for (let i = 0; i < video.buffered.length; i++) seconds += video.buffered.end(i) - video.buffered.start(i);
+    emit('buffered', Math.min(100, Math.floor(seconds * 100 / video.duration)));
+  }
+}
 defineExpose({ player });
 const closeButton = ref<HTMLButtonElement | null>(null);
 onMounted(() => closeButton.value?.focus({ preventScroll: true }));
@@ -36,7 +44,8 @@ onScopeDispose(() => {
   <div class="media-video-surface">
     <button ref="closeButton" type="button" class="media-viewer-close" aria-label="关闭查看器" title="关闭查看器" @click="emit('close')"><X :size="24" /></button>
     <div class="media-video-stage">
-      <video v-if="!failed" ref="player" :src="source" :style="{ '--video-ratio': aspectRatio }" controls playsinline preload="metadata" tabindex="0" @timeupdate="emit('time', player?.currentTime ?? 0)" @loadedmetadata="measureVideo" @error="playbackFailed" />
+      <video v-if="!failed" ref="player" :src="source" :style="{ '--video-ratio': aspectRatio }" controls playsinline :preload="bufferForPreview ? 'auto' : 'metadata'" tabindex="0"
+        @progress="bufferForPreview && reportBuffer()" @canplay="emit('playable')" @timeupdate="emit('time', player?.currentTime ?? 0)" @loadedmetadata="measureVideo" @error="playbackFailed" />
     </div>
     <slot name="controls" />
     <div v-if="downloadable" class="media-viewer-tools">

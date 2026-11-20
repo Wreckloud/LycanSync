@@ -191,6 +191,7 @@ watch(() => rtc.playbackContext, (context, _, onCleanup) => {
 audioPreferences.mutedParticipantIdentities()
   .forEach((identity) => rtc.setRemoteAudioSubscribed(identity, false));
 const removeCloseListener = desktop?.onClose(async () => {
+  diagnosticReport.beginClose();
   selectCaptureSource(null);
   viewingWindows.value?.closeAll();
   try { await reportOfflineBeforeClose(); }
@@ -624,7 +625,8 @@ watch(() => props.startupUpdateWarning, message => { if (message) showAppNotice(
 const settingsReturnFocus = ref<HTMLElement | null>(null);
 const viewingWindows = ref<InstanceType<typeof ScreenShareWindows> | null>(null);
 const viewingTarget = ref<HTMLElement | null>(null);
-const voicePanelMotion = useInlineViewingMotion(viewingTarget, () => viewingWindows.value?.inlineExpanded ?? false);
+const voicePanelMotion = useInlineViewingMotion(viewingTarget, () => viewingWindows.value?.inlineExpanded ?? false,
+  () => viewingWindows.value?.resizing ?? false);
 const viewerInputBlocked = computed(() => Boolean(props.interactionBlocked || settingsOpen.value || editorOpen.value
   || management.value || captureRequest.value || pendingSwitchGroupId.value || rtc.remoteControlRequest || rtc.status !== 'connected'));
 watch(viewerInputBlocked, (blocked) => { if (blocked) viewingWindows.value?.disarmAll(); }, { flush: 'sync' });

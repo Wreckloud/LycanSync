@@ -22,6 +22,7 @@
 .voice-panel:has(.viewing-fold) .viewing-members-panel { padding-bottom: 6px; border-bottom: 0; }
 .viewing-stage { position: relative; width: 100%; overflow: hidden; background: #050608; transition: height var(--motion-layout-duration) var(--motion-ease); }
 .call-viewing-panel:is(.is-expanded, .is-resizing, .is-framing) .viewing-stage { transition: none; }
+.call-viewing-panel.is-resizing .layout-reveal { transition: none; }
 .viewing-stage > .horizontal-scroll { height: 100%; align-items: flex-start; }
 .call-viewing-panel:is(.is-expanded, .is-detached) .viewing-stage > .horizontal-scroll { align-items: center; }
 .viewing-stage .horizontal-viewport { max-height: 100%; }

@@ -31,6 +31,18 @@ const pendingPreview = ref<PendingAttachment | null>(null);
 const cache = inject(ACCOUNT_CACHE, null);
 const viewedMedia = ref<ChatMessage | null>(null);
 const viewedMediaBlob = ref<Blob>();
+const videoPercent = ref<number | null>(null);
+function closeMedia() {
+  viewedMedia.value = null;
+  viewedMediaBlob.value = undefined;
+  videoPercent.value = null;
+}
+function previewMedia(message: ChatMessage, blob?: Blob) {
+  if (videoPercent.value !== null && viewedMedia.value?.id === message.id) { closeMedia(); return; }
+  viewedMediaBlob.value = blob;
+  viewedMedia.value = message;
+  videoPercent.value = message.attachment && chatMediaFormat(message.attachment)?.kind === 'video' ? 0 : null;
+}
 const historicalSender = ref<ChatMessage | null>(null);
 const historicalAnchor = ref<HTMLElement | null>(null);
 const historicalProfile = ref<GroupMemberProfile | null>(null);
@@ -83,6 +95,12 @@ const messages = computed(() => {
 });
 function receiveSent(groupId: string, message: ChatMessage) {
   if (groupId !== props.group.id) return;
+  const item = transfers.outgoing.get(message.id)?.item;
+  if (item && 'type' in item.file && message.attachment && !message.attachment.transferStatus
+      && (message.type === 'IMAGE' || chatMediaFormat(message.attachment)?.kind === 'image') && item.file.size <= 8 * 1024 * 1024) {
+    const key = message.type === 'IMAGE' ? message.attachment.id : 'file:' + message.attachment.id;
+    void cache?.write('image', groupId, item.file, key);
+  }
   const index = confirmed.value.findIndex(previous => previous.id === message.id);
   if (index >= 0) confirmed.value[index] = message;
   else appendMessages([message], true);
@@ -366,10 +384,11 @@ onScopeDispose(() => {
               <div v-if="startsNewMessageGroup(message, index)" class="chat-message-meta"><button v-if="message.senderDeletedAt" type="button" class="chat-historical-sender" @click="showHistoricalProfile(message, $event.currentTarget as HTMLElement)">{{ senderName(message) }}</button><strong v-else>{{ senderName(message) }}</strong><time :datetime="message.createdAt" :title="formatFullMessageTime(message.createdAt)">{{ formatMessageTime(message.createdAt, calendarNow) }}</time></div>
               <p v-if="message.content" class="chat-message-content"><template v-for="(segment, segmentIndex) in messageSegments(message.content)" :key="segmentIndex"><a v-if="segment.href" class="chat-message-link" :href="segment.href" @click.prevent="openLink(segment.href)">{{ segment.text }}</a><template v-else>{{ segment.text }}</template></template></p>
               <ChatTransferStatus v-if="transfers.outgoing.has(message.id) || message.attachment?.transferStatus"
-                :message="message" :job="transfers.outgoing.get(message.id)" @retry="transfers.retry" @dismiss="transfers.forget" />
+                :group-id="group.id" :message="message" :job="transfers.outgoing.get(message.id)" @retry="transfers.retry" @dismiss="transfers.forget" />
               <ChatImage v-else-if="message.type === 'IMAGE' && message.attachment" :group-id="group.id" :attachment-id="message.attachment.id"
-                :width="message.attachment.width ?? 1" :height="message.attachment.height ?? 1" :alt="`${senderName(message)} 发送的图片`" @preview="blob => { viewedMediaBlob = blob; viewedMedia = message; }" />
-              <ChatFileMedia v-else-if="message.type === 'FILE' && message.attachment" :group-id="group.id" :attachment="message.attachment" @preview="blob => { viewedMediaBlob = blob; viewedMedia = message; }" />
+                :width="message.attachment.width ?? 420" :height="message.attachment.height ?? 236" :byte-size="message.attachment.byteSize" :alt="`${senderName(message)} 发送的图片`" @preview="blob => previewMedia(message, blob)" />
+              <ChatFileMedia v-else-if="message.type === 'FILE' && message.attachment" :group-id="group.id" :attachment="message.attachment"
+                :video-loading="viewedMedia?.id === message.id && videoPercent !== null" :video-percent="videoPercent ?? undefined" @preview="blob => previewMedia(message, blob)" />
             </div>
           </article>
         </template>
@@ -416,9 +435,10 @@ onScopeDispose(() => {
       <ChatMediaViewer v-if="pendingPreview" :key="pendingPreview.id" :group-id="group.id" :attachment="attachmentInfo(pendingPreview)"
         :image-message="false" :local-source="pendingPreview.previewUrl" @close="pendingPreview = null" />
     </DialogTransition>
-    <DialogTransition>
+    <DialogTransition :defer-open="videoPercent !== null">
       <ChatMediaViewer v-if="viewedMedia?.attachment" :key="viewedMedia.id" :group-id="group.id" :attachment="viewedMedia.attachment"
-        :image-message="viewedMedia.type === 'IMAGE'" :preview-blob="viewedMediaBlob" @close="viewedMedia = null; viewedMediaBlob = undefined" />
+        :image-message="viewedMedia.type === 'IMAGE'" :preview-blob="viewedMediaBlob" :inline-loading="videoPercent !== null"
+        @progress="percent => { if (videoPercent !== null) videoPercent = percent; }" @ready="videoPercent = null" @close="closeMedia" />
     </DialogTransition>
   </section>
 </template>

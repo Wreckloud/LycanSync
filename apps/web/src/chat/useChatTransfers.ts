@@ -1,5 +1,6 @@
 import { shallowReactive, type InjectionKey } from 'vue';
 import { declareFile, downloadFile, sendFile, sendMessage, stopFile, type ChatAttachment, type ChatMessage } from './chatApi';
+import { cachedRecordingJpeg } from '../recording/recordingThumbnails';
 import type { AuthUser } from '../auth/authApi';
 
 export type DraftAttachment = { id: string; previewUrl: string } & (
@@ -108,10 +109,13 @@ export function createChatTransfers(user: AuthUser, onSent: (groupId: string) =>
       try {
         job.controller.signal.throwIfAborted();
         if (item?.kind !== 'FILE') {
-          complete(job, await sendMessage(groupId, message.content, item?.file, job.controller.signal, message.id));
+          job.state = 'sending';
+          complete(job, await sendMessage(groupId, message.content, item?.file, job.controller.signal, message.id,
+            bytes => { job.progress = bytes; }));
           return;
         }
-        const registered = await declareFile(groupId, message.id, job.attemptId, item.file, message.content, session.signal);
+        const registered = await declareFile(groupId, message.id, job.attemptId, item.file, message.content, session.signal,
+          cachedRecordingJpeg(item.previewUrl));
         if (!registered.attachment?.transferStatus) { complete(job, registered); return; }
         if (session.signal.aborted) return;
         notify(groupId, registered);

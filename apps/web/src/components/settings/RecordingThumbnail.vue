@@ -52,7 +52,7 @@ onScopeDispose(() => { disposed = true; observer?.disconnect(); release(); });
   <span ref="frame" class="recording-thumbnail" aria-hidden="true">
     <canvas ref="canvas" v-show="ready" aria-hidden="true" />
     <Play v-if="playBadge" class="play-badge" :size="24" aria-hidden="true" />
-    <Film v-else-if="!ready" :size="18" aria-hidden="true" />
+    <slot v-else-if="!ready"><Film :size="18" aria-hidden="true" /></slot>
   </span>
 </template>
 

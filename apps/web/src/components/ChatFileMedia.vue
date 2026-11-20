@@ -1,21 +1,25 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onScopeDispose, ref } from 'vue';
-import { Play } from '@lucide/vue';
+import RecordingThumbnail from './settings/RecordingThumbnail.vue';
+import ChatMediaProgress from './ChatMediaProgress.vue';
+import { Download, Play } from '@lucide/vue';
 import { fetchFilePreview, fetchVideoThumbnail, type ChatAttachment } from '../chat/chatApi';
 import { chatMediaFormat, chatMediaFrameStyle } from '../chat/chatMedia';
 import { ACCOUNT_CACHE } from '../cache/localCache';
 import ChatFileCard from './ChatFileCard.vue';
 
-const props = defineProps<{ groupId: string; attachment: ChatAttachment }>();
+const props = defineProps<{ groupId: string; attachment: ChatAttachment; pending?: boolean; localPreview?: string; videoLoading?: boolean; videoPercent?: number }>();
 const emit = defineEmits<{ preview: [blob?: Blob] }>();
 const cache = inject(ACCOUNT_CACHE, null);
 const format = computed(() => chatMediaFormat(props.attachment));
 const frame = ref<HTMLElement | null>(null);
 const source = ref('');
-const dimensions = ref({ width: 420, height: 236.25 });
-const frameStyle = computed(() => chatMediaFrameStyle(dimensions.value.width, dimensions.value.height));
+const frameStyle = computed(() => chatMediaFrameStyle(props.attachment.width ?? 420, props.attachment.height ?? 236.25));
 const failed = ref(false);
 const loadingFailed = ref(false);
+const loaded = ref<number | null>(null);
+const imagePercent = computed(() => loaded.value !== null && props.attachment.byteSize
+  ? Math.min(99, Math.floor(100 * loaded.value / props.attachment.byteSize)) : undefined);
 const cacheId = computed(() => `${format.value?.kind === 'video' ? 'cover' : 'file'}:${props.attachment.id}`);
 let blob: Blob | undefined;
 let controller: AbortController | undefined;
@@ -25,48 +29,51 @@ let disposed = false;
 function release() {
   controller?.abort(); controller = undefined;
   if (source.value) URL.revokeObjectURL(source.value);
-  source.value = ''; blob = undefined;
+  source.value = ''; blob = undefined; loaded.value = null;
 }
-async function load() {
+async function load(cacheOnly = false) {
+  if (props.pending && (props.localPreview || format.value?.kind !== 'video')) return;
   if (disposed || source.value || controller || failed.value || !format.value || format.value.kind === 'audio') return;
   const request = controller = new AbortController();
   loadingFailed.value = false;
   const revision = cache?.revision;
   try {
-    const cached = cache ? await cache.read<Blob>('image', props.groupId, cacheId.value) : null;
+    const cached = cache && !props.pending ? await cache.read<Blob>('image', props.groupId, cacheId.value) : null;
     if (disposed || request.signal.aborted || controller !== request) return;
+    if (cacheOnly && !(cached instanceof Blob)) return;
+    if (!(cached instanceof Blob) && format.value.kind === 'image') loaded.value = 0;
     const fetched = cached instanceof Blob ? cached : format.value.kind === 'video'
-      ? await fetchVideoThumbnail(props.groupId, props.attachment.id, request.signal)
-      : await fetchFilePreview(props.groupId, props.attachment.id, request.signal);
+      ? await fetchVideoThumbnail(props.groupId, props.attachment.id, request.signal, props.pending)
+      : await fetchFilePreview(props.groupId, props.attachment.id, request.signal, bytes => { if (controller === request) loaded.value = bytes; });
     if (disposed || request.signal.aborted || controller !== request) return;
     if (!fetched) { failed.value = true; return; }
     blob = fetched.slice(0, fetched.size, format.value.kind === 'video' ? 'image/jpeg' : format.value.contentType);
     source.value = URL.createObjectURL(blob);
     // 封面与小动图共用现有账号缓存，整段音视频不写入聊天缓存。
-    if (!(cached instanceof Blob) && fetched.size <= 8 * 1024 * 1024 && cache?.revision === revision) {
+    if (!props.pending && !(cached instanceof Blob) && fetched.size <= 8 * 1024 * 1024 && cache?.revision === revision) {
       void cache?.write('image', props.groupId, blob, cacheId.value);
     }
   } catch {
     if (!disposed && !request.signal.aborted && controller === request) loadingFailed.value = true;
-  } finally { if (controller === request) controller = undefined; }
+  } finally { if (controller === request) { controller = undefined; loaded.value = null; } }
 }
 function decodeFailed() {
   failed.value = true;
   release();
   void cache?.discard('image', props.groupId, cacheId.value);
 }
-function imageLoaded(event: Event) {
-  const image = event.target as HTMLImageElement;
-  dimensions.value = { width: image.naturalWidth, height: image.naturalHeight };
-}
 function openPreview() {
+  if (format.value?.kind === 'image' && !blob) {
+    if (loaded.value === null) { release(); void load(); }
+    return;
+  }
   emit('preview', format.value?.kind === 'image' ? blob : undefined);
 }
 onMounted(() => {
   if (!frame.value || !format.value || format.value.kind === 'audio') return;
   observer = new IntersectionObserver(entries => {
     if (disposed) return;
-    if (entries.some(entry => entry.isIntersecting)) { if (!loadingFailed.value) void load(); }
+    if (entries.some(entry => entry.isIntersecting)) { if (!loadingFailed.value) void load(format.value?.kind === 'image'); }
     else release();
   }, { root: frame.value.closest('.message-list'), rootMargin: '240px 0px' });
   observer.observe(frame.value);
@@ -76,26 +83,24 @@ onScopeDispose(() => { disposed = true; observer?.disconnect(); release(); });
 
 <template>
   <div ref="frame" class="chat-file-media">
-    <ChatFileCard v-if="!format || format.kind === 'audio' || failed"
+    <div v-if="pending" class="chat-inline-media" :style="frameStyle" :aria-label="attachment.fileName">
+      <RecordingThumbnail v-if="localPreview && format?.kind === 'video'" :source="localPreview" :disabled="false">
+        <span class="chat-media-placeholder" aria-hidden="true" />
+      </RecordingThumbnail>
+      <img v-else-if="localPreview || source" :src="localPreview || source" alt="" />
+      <span v-else class="chat-media-placeholder" aria-hidden="true" />
+      <slot />
+    </div>
+    <ChatFileCard v-else-if="!format || format.kind === 'audio' || (failed && format.kind === 'image')"
       :group-id="groupId" :attachment="attachment" :preview-disabled="failed && format?.kind === 'image'" @preview="openPreview" />
     <div v-else class="chat-inline-media" :style="frameStyle">
-      <button v-if="format.kind === 'video' || source" class="chat-inline-image" type="button" :aria-label="format.kind === 'video' ? '播放视频' : '查看图片'" @click="openPreview">
-        <img v-if="source" :src="source" :alt="format.kind === 'image' ? attachment.fileName : ''" @load="imageLoaded" @error="decodeFailed" />
-        <span v-if="format.kind === 'video'" class="chat-media-play"><Play :size="24" fill="currentColor" /></span>
+      <button class="chat-inline-image" type="button" :aria-label="videoLoading ? '取消加载视频' : format.kind === 'video' ? '播放视频' : source ? '查看图片' : '加载图片'" @click="openPreview">
+        <img v-if="source" :src="source" :alt="format.kind === 'image' ? attachment.fileName : ''" @error="decodeFailed" />
+        <span v-else class="chat-media-placeholder" aria-hidden="true" />
+        <ChatMediaProgress v-if="videoLoading || loaded !== null" :percent="videoLoading ? videoPercent : imagePercent" label="媒体加载进度"><Download :size="20" /></ChatMediaProgress>
+        <span v-else-if="format.kind === 'video' || !source" class="chat-media-play"><component :is="format.kind === 'video' ? Play : Download" :size="24" /></span>
       </button>
-      <button v-else-if="loadingFailed" class="chat-media-retry" type="button" @click="load">预览加载失败，点击重试</button>
-      <button v-if="format.kind === 'video' && loadingFailed" class="chat-cover-retry" type="button" @click="load">封面加载失败，点击重试</button>
+      <button v-if="loadingFailed && !videoLoading" class="chat-cover-retry" type="button" @click="load()">{{ format.kind === 'video' ? '封面' : '图片' }}加载失败，点击重试</button>
     </div>
   </div>
 </template>
-
-<style scoped>
-.chat-file-media { width: min(420px, 100%); }
-.chat-inline-media { position: relative; width: 100%; margin-top: 6px; overflow: hidden; border-radius: 8px; background: var(--panel-soft); }
-.chat-inline-image { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; cursor: pointer; }
-.chat-inline-image img { display: block; width: 100%; height: 100%; object-fit: contain; }
-.chat-media-play { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: grid; place-items: center; width: 48px; height: 48px; padding-left: 3px; background: #10161dcc; color: #fff; border-radius: 50%; }
-.chat-inline-image:hover .chat-media-play { background: #252e39ee; }
-.chat-media-retry { display: block; width: 100%; min-height: 100px; border: 0; background: transparent; color: var(--muted); }
-.chat-cover-retry { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: 12px; color: var(--muted); }
-</style>

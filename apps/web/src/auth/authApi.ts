@@ -70,12 +70,36 @@ export function setBrowserSession(token: string | null) {
   browserSession = token;
 }
 
+// multipart 交给浏览器编码；XHR 提供上传字节进度，并沿用下方同一套会话过期处理。
+function uploadForm(path: string, form: FormData, headers: Headers, signal: AbortSignal | null | undefined,
+  progress: (fraction: number) => void): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
+    const xhr = new XMLHttpRequest();
+    const abort = () => xhr.abort();
+    xhr.open('POST', path);
+    headers.forEach((value, name) => xhr.setRequestHeader(name, value));
+    xhr.upload.onprogress = event => { if (event.lengthComputable && event.total) progress(event.loaded / event.total); };
+    xhr.onload = () => resolve(new Response(xhr.responseText, { status: xhr.status, headers: {
+      'Content-Type': xhr.getResponseHeader('Content-Type') ?? '',
+      'X-Lycan-Session-Expired': xhr.getResponseHeader('X-Lycan-Session-Expired') ?? '',
+    } }));
+    xhr.onerror = () => reject(new Error('图片上传失败，请检查连接后重试。'));
+    xhr.onabort = () => reject(signal?.reason ?? new DOMException('已取消', 'AbortError'));
+    xhr.onloadend = () => signal?.removeEventListener('abort', abort);
+    signal?.addEventListener('abort', abort, { once: true });
+    xhr.send(form);
+  });
+}
+
 // 浏览器开发仅在内存保留会话；桌面凭据由主进程保存并只附加到允许转发的接口。
-export async function authenticatedFetch(input: string, init: RequestInit = {}) {
+export async function authenticatedFetch(input: string, init: RequestInit = {}, uploadProgress?: (fraction: number) => void) {
   const headers = new Headers(init.headers);
   const requestSession = browserSession;
   if (requestSession) headers.set('Authorization', 'Bearer ' + requestSession);
-  const response = await fetch(input, { ...init, headers, credentials: 'omit', cache: 'no-store' });
+  const response = uploadProgress && init.method === 'POST' && init.body instanceof FormData
+    ? await uploadForm(input, init.body, headers, init.signal, uploadProgress)
+    : await fetch(input, { ...init, headers, credentials: 'omit', cache: 'no-store' });
   const path = new URL(input, 'http://localhost').pathname;
   if (response.status === 401 && !publicApiPaths.has(path)) {
     if (window.lycanDesktop) {

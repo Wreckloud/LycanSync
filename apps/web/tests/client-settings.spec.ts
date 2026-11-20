@@ -12,14 +12,21 @@ import ClientSettings from '/src/components/settings/ClientSettings.vue';
 import '/src/styles.css';
 import '/src/settings/settings.css';
 const calls = [];
+let updateListener;
+let offerUpdate = false;
 window.lycanDesktop = {
   getAutoStart: async () => ({ supported:true, enabled:false }),
   getTraySettings: async () => ({ supported:true, enabled:true, error:'' }),
   setAutoStart: async () => { throw new Error('不应修改开机启动'); },
   setCloseToTray: async () => { throw new Error('不应修改托盘'); },
   getUpdateState: async () => ({ phase:'ready', version:'0.4.19', supported:true, message:'' }),
-  onUpdateState: () => () => {},
-  checkUpdates: async () => { calls.push('check'); return { phase:'ready', version:'0.4.19', supported:true, message:'当前已是最新版本。' }; },
+  onUpdateState: callback => { updateListener = callback; return () => { updateListener = undefined; }; },
+  checkUpdates: async () => { calls.push('check'); return { phase:'ready', version:'0.4.19', supported:true,
+    nextVersion:offerUpdate ? '0.4.20' : undefined, message:'当前已是最新版本。' }; },
+  restartForUpdate: () => {
+    updateListener({ phase:'installing', version:'0.4.19', supported:true, message:'即将开始安装，完成后自动打开应用…' });
+    return new Promise(() => {});
+  },
   openExternal: async url => { calls.push(url); },
 };
 createApp({ setup() {
@@ -34,6 +41,7 @@ createApp({ setup() {
   return () => h('main', { style:'padding:24px;max-width:868px;margin:auto' }, [
     h(ClientSettings,{ desktop:true,active:active.value,userId:'client-layout-test',room:null,report }),
     h('button',{onClick:()=>{active.value=!active.value;}},'切换测试页'),
+    h('button',{onClick:()=>{offerUpdate=true;}},'模拟发现新版'),
     h('output',{'data-testid':'calls'},calls.join('|')),
   ]);
 } }).mount('#root');` });
@@ -58,4 +66,8 @@ createApp({ setup() {
   await expect(page.locator('main')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(600);
   await page.screenshot({ path: testInfo.outputPath('client-settings-narrow.png'), fullPage: true });
+  await page.getByRole('button', { name: '模拟发现新版' }).click();
+  await page.getByRole('button', { name: '检查更新', exact: true }).click();
+  await page.getByRole('button', { name: '重启更新', exact: true }).click();
+  await expect(page.getByText('即将开始安装，完成后自动打开应用…', { exact: true })).toBeVisible();
 });

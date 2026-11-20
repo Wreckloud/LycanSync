@@ -6,6 +6,19 @@ const covers = new Map<string, ImageData>();
 const pending = new Set<{ source: string; signal: AbortSignal; resolve: (cover: ImageData) => void; reject: (error: unknown) => void; abort: () => void }>();
 let decoding = 0;
 
+// 只附带已解码的缩略图，立即发送时不因读取原片而阻塞群消息登记。
+export function cachedRecordingJpeg(source: string): string | undefined {
+  const pixels = covers.get(source);
+  if (!pixels) return;
+  const canvas = document.createElement('canvas');
+  canvas.width = pixels.width; canvas.height = pixels.height;
+  const context = canvas.getContext('2d');
+  if (!context) return;
+  context.putImageData(pixels, 0, 0);
+  const jpeg = canvas.toDataURL('image/jpeg', 0.65).split(',')[1];
+  return jpeg && jpeg.length <= Math.floor(16384 / 3) * 4 ? jpeg : undefined;
+}
+
 export function forgetRecordingThumbnail(id: string) {
   covers.delete(`lycan://app/recordings/${encodeURIComponent(id)}`);
 }

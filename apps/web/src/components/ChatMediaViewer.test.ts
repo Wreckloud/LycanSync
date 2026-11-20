@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
-import { computed, effectScope, onScopeDispose, ref } from 'vue';
+import { computed, watch, effectScope, onScopeDispose, ref } from 'vue';
 import { expect, it, vi } from 'vitest';
 import { chatMediaFormat } from '../chat/chatMedia';
 
@@ -23,7 +23,7 @@ function setup(imageMessage = false, desktop = false, previewBlob?: Blob, localS
   const videoPreviewStatus = vi.fn().mockResolvedValue({ status: 'ready', message: null });
   const fetchCompatibleVideo = vi.fn().mockResolvedValue(new Blob(['converted'], { type: 'video/mp4' }));
   const viewer = scope.run(() => runInNewContext(`${compiled}\n({load,close,source,error,player,convertVideo,playbackFailed,compatible,converting})`, {
-    ref, computed, CHAT_TRANSFERS: Symbol(), inject: () => ({ downloads: new Map() }), onScopeDispose, onMounted: () => {}, defineEmits: () => emit,
+    ref, computed, watch, CHAT_TRANSFERS: Symbol(), inject: () => ({ downloads: new Map() }), onScopeDispose, onMounted: () => {}, defineEmits: () => emit,
     defineProps: () => ({ groupId: 'group', imageMessage, previewBlob, localSource,
       attachment: { id: 'file', fileName: imageMessage ? 'test.png' : 'test.mp4', byteSize: 3, contentType: 'application/octet-stream' } }),
     desktopMediaUrl: (_group: string, _id: string, compatible: boolean) => desktop ? '/api/groups/group/files/file/' + (compatible ? 'preview/media' : 'media') : null, chatMediaFormat, useLoadingHint: () => ref(false), useBackdropDismiss: () => ({}),

@@ -603,7 +603,7 @@ async function serveApplication(request) {
           || (request.method === 'PUT' && url.pathname.endsWith('/note'))
           || (request.method === 'DELETE' && !/\/(renew|url|note)$/.test(url.pathname))) ? {} : undefined)
       ?? (request.method === 'GET' && transferPath.test(url.pathname) ? {} : undefined)
-      ?? (request.method === 'POST' && declareFilePath.test(url.pathname) ? { maxBodyBytes: 16 * 1024 } : undefined)
+      ?? (request.method === 'POST' && declareFilePath.test(url.pathname) ? { maxBodyBytes: 48 * 1024 } : undefined)
       ?? (request.method === 'DELETE' && stopFilePath.test(url.pathname) ? {} : undefined)
       ?? (request.method === 'GET' && groupMessagePath.test(url.pathname) && url.searchParams.get('wait') === 'true'
         ? { longPolling: true } : undefined)

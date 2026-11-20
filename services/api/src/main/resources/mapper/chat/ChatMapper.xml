@@ -98,7 +98,9 @@
                page.attachment_height, page.attachment_byte_size, page.attachment_file_name, page.sender_avatar, page.sender_deleted_at, page.transfer_status
         FROM (<include refid="messageProjection"/>
             WHERE m.group_id = #{groupId} AND m.type = 'FILE' AND m.id IN
-            <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+            <foreach collection="ids" item="id" open="(" separator="," close=")">
+                #{id,typeHandler=org.apache.ibatis.type.ObjectTypeHandler}
+            </foreach>
         ) page ORDER BY page.sequence_number
     </select>
     <select id="findMessages" resultType="com.lycansync.api.chat.model.ChatMessageView">

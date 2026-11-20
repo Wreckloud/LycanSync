@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onScopeDispose, ref } from 'vue';
-import { ArrowLeftToLine, ArrowRightToLine, Forward, Pause, Play, RotateCcw, ScissorsLineDashed, X } from '@lucide/vue';
+import { ArrowLeftToLine, ArrowRightToLine, Forward, Pause, Play, ScissorsLineDashed, SkipBack, X } from '@lucide/vue';
 import { RECORDING_SHARE } from '../../recording/useRecordingShare';
 import { recordingTime } from '../../recording/recordingTime';
 import { keepDialogFocus } from '../dialogFocus';
@@ -64,19 +64,23 @@ function metadata(seconds: number) {
   if (!editing.value) end.value = seconds;
 }
 function endFrame() {
-  return Math.max(start.value, end.value - (rate.value ? 1 / rate.value : 0));
+  return rate.value ? Math.max(start.value, (Math.ceil(end.value * rate.value - 1e-7) - 1) / rate.value) : end.value;
 }
-function snap(seconds: number) {
-  return rate.value ? Math.round(seconds * rate.value) / rate.value : seconds;
+function snap(seconds: number, direction: 'nearest' | 'before' | 'after' = 'nearest') {
+  if (!rate.value) return seconds;
+  const frame = seconds * rate.value;
+  if (direction === 'before') return Math.floor(frame + 1e-7) / rate.value;
+  if (direction === 'after') return Math.ceil(frame - 1e-7) / rate.value;
+  return Math.round(frame) / rate.value;
 }
 function position(marker: 'cursor' | 'start' | 'end', seconds: number, precise: boolean) {
   if (busy.value) return;
-  const time = Math.max(0, Math.min(duration.value, snap(seconds)));
+  const time = seconds >= duration.value ? duration.value : Math.max(0, Math.min(duration.value, snap(seconds)));
   if (marker === 'start') {
-    start.value = Math.min(time, Math.max(0, end.value - minLength));
+    start.value = Math.min(time, Math.max(0, snap(end.value - minLength, 'before')));
     seek(start.value, precise);
   } else if (marker === 'end') {
-    end.value = Math.min(duration.value, Math.max(time, start.value + minLength));
+    end.value = Math.min(duration.value, Math.max(time, snap(start.value + minLength, 'after')));
     seek(endFrame(), precise);
   } else seek(time, precise);
 }
@@ -89,9 +93,8 @@ function stopAtCursor() {
 }
 function edit() {
   stopAtCursor();
-  const frame = rate.value ? Math.floor(cursor.value * rate.value + 1e-6) / rate.value : cursor.value;
-  start.value = Math.max(0, Math.min(frame, duration.value - minLength));
-  end.value = Math.min(duration.value, start.value + 12);
+  start.value = Math.max(0, snap(Math.min(cursor.value, duration.value - minLength), 'before'));
+  end.value = Math.min(duration.value, snap(start.value + 12));
   editing.value = true;
   seek(start.value, true);
   workspace.value?.focus();
@@ -100,7 +103,7 @@ function mark(edge: 'start' | 'end') {
   stopAtCursor();
   const time = Math.min(duration.value, snap(cursor.value));
   if (edge === 'start' && end.value - time >= minLength) start.value = time;
-  if (edge === 'end' && lastTime.value - start.value >= minLength) end.value = Math.min(duration.value, snap(lastTime.value));
+  if (edge === 'end' && lastTime.value - start.value >= minLength) end.value = lastTime.value >= duration.value ? duration.value : Math.min(duration.value, snap(lastTime.value));
 }
 function step(marker: 'cursor' | 'start' | 'end', direction: number) {
   if (busy.value || !duration.value) return;
@@ -206,12 +209,14 @@ onScopeDispose(() => {
     </div>
     <div class="dock">
       <InlineFeedback :message="error" :pending="busy ? `正在保存片段 ${progress}%…` : ''" />
-      <div class="info"><strong>{{ title }}</strong><span>{{ new Date(entry.createdAt).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}</span>
-        <span v-if="editing" class="length">成片 {{ recordingTime(end - start, true) }}</span><span class="clock">{{ recordingTime(cursor, editing) }} / {{ recordingTime(duration) }}</span></div>
-      <RecordingTimeline ref="timeline" :duration="duration" :cursor="cursor" :start="start" :end="end" :editing="editing" :disabled="busy || failed" @position="position" @step="step" />
+      <div class="info"><strong>{{ title }}</strong>
+        <span v-if="editing" class="selection">选区 {{ recordingTime(start, true) }} – {{ recordingTime(end, true) }}<span class="length">时长 {{ recordingTime(end - start, true) }}</span></span>
+        <span class="clock">{{ recordingTime(cursor, editing) }} / {{ recordingTime(duration) }}</span></div>
+      <RecordingTimeline ref="timeline" :source="source" :duration="duration" :cursor="cursor" :start="start" :end="end"
+        :editing="editing" :playing="playing" :disabled="busy || failed" @position="position" @step="step" />
       <div class="tools">
         <div class="center">
-          <RecordingTool v-if="editing" label="从选区开头播放" class="restart" :disabled="busy" @click="play(true)"><RotateCcw :size="18" /></RecordingTool>
+          <RecordingTool v-if="editing" label="从选区开头播放" class="restart" :disabled="busy" @click="play(true)"><SkipBack :size="17" /></RecordingTool>
           <RecordingTool v-if="editing" label="设为起点" :disabled="busy || end - cursor < minLength" @click="mark('start')"><ArrowLeftToLine :size="18" /></RecordingTool>
           <RecordingTool v-else label="剪辑" :disabled="failed || duration < minLength" @click="edit"><ScissorsLineDashed :size="19" /></RecordingTool>
           <RecordingTool :label="playing ? '暂停' : editing ? '播放选段' : '播放'" :disabled="busy || failed || !duration" @click="play()"><component :is="playing ? Pause : Play" :size="16" fill="currentColor" /></RecordingTool>
@@ -237,12 +242,14 @@ video { display: block; width: min(100cqw, calc(100cqh * var(--ratio))); height:
 .close :deep(.tool-tag) { left: auto; right: 0; transform: none; }
 .dock { min-width: 0; }.info { display: flex; align-items: baseline; gap: 12px; min-height: 20px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .info strong { font-size: 14px; font-weight: 550; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.info span { white-space: nowrap; }.length,.clock { margin-left: auto; }.length + .clock { margin-left: 0; }
+.info span { white-space: nowrap; }.clock { margin-left: auto; }.length { margin-left: 12px; }
+.dock:has(.selection) .tools { margin-top: 5px; }
 .tools { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); align-items: center; }
 .center,.actions { display: flex; align-items: center; }.center { grid-column: 2; position: relative; border-radius: 6px; background: #171c22; }
 .restart { position: absolute; right: calc(100% + 5px); background: #171c22; }
 .actions { justify-self: end; gap: 6px; }.actions button { padding: 5px 10px; }
 .actions .confirm-button:enabled { background: var(--accent); color: white; border-color: var(--accent); }
 .discard { padding: 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); }.discard::backdrop { background: #080a0cc9; }.discard h3 { margin: 0; }.discard footer { display: flex; justify-content: flex-end; gap: 8px; }
-@media(max-width:600px) { .recording-workspace { padding: 52px 14px 26px; }.info strong + span { display: none; }.tools { grid-template-rows: 42px 34px; }.center { grid-row: 1; }.actions { grid-column: 2/-1; grid-row: 2; } }
+@media(max-width:600px) { .recording-workspace { padding: 52px 14px 26px; }.info { flex-wrap: wrap; gap: 4px 10px; }.selection { order: 1; flex-basis: 100%; }.info strong { flex: 1; }.tools { display: flex; justify-content: center; }.tools:has(.actions) { justify-content: space-between; padding-left: 44px; } }
+@media(max-width:350px) { .tools:has(.actions) { flex-wrap: wrap; gap: 6px; }.actions { margin-left: auto; } }
 </style>

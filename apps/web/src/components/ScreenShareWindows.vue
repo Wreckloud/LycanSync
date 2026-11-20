@@ -64,6 +64,8 @@ const detached = computed(() => entries.value.some(entry => entry.kind === 'watc
 const inlineWatching = computed(() => view.mode !== 'collapsed' && !detached.value);
 const folded = ref(false);
 const stageHidden = ref(false);
+const inlinePanel = ref<InstanceType<typeof CallViewingPanel> | null>(null);
+const resizing = computed(() => inlinePanel.value?.resizing ?? false);
 const inlineExpanded = computed(() => inlineWatching.value && !folded.value && !stageHidden.value);
 watch([() => props.inlineTarget, () => props.rtc.room, detached], () => { folded.value = false; stageHidden.value = false; });
 watch(() => view.mode, mode => { if (mode === 'collapsed') stageHidden.value = false; });
@@ -134,12 +136,12 @@ watch(() => [props.rtc.remoteControlActive, props.rtc.revision] as const, ([acti
     if (!windows.openControl(active.identity)) void props.rtc.exitRemoteControl();
   }
 }, { flush: 'post' });
-defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded, detached, returning, returnWatching });
+defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded, resizing, detached, returning, returnWatching });
 </script>
 
 <template>
   <Teleport v-if="inlineTarget" :to="inlineTarget">
-    <CallViewingPanel :active="inlineWatching && !stageHidden" v-model:folded="folded" v-model:stage-hidden="stageHidden" :hidden="detached" :video-active="inlineVisible && !folded && !stageHidden" :view="view" :room="rtc.room" :revision="rtc.revision"
+    <CallViewingPanel ref="inlinePanel" :active="inlineWatching && !stageHidden" v-model:folded="folded" v-model:stage-hidden="stageHidden" :hidden="detached" :video-active="inlineVisible && !folded && !stageHidden" :view="view" :room="rtc.room" :revision="rtc.revision"
       :avatar="avatar" :listening="rtc.listening" :recording-elapsed="recordingElapsed"
       :private-control="controlPlaceholder" :reconnecting="rtc.status === 'reconnecting'"
       @detach="detachWatching" @notice="emit('notice', $event)">

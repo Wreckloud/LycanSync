@@ -125,7 +125,7 @@ it('缩窗只限制显示，恢复空间后使用原拖动偏好，极矮区域�
     expect(f.size.height.value).toBe(350);
     f.setWindowHeight(500); f.measure();
     expect(f.size.maximumHeight.value).toBe(132);
-    expect(f.size.minimumHeight.value).toBe(132);
+    expect(f.size.minimumHeight.value).toBe(64);
     expect(f.size.height.value).toBe(132);
     expect(f.preferred.value).toBe(350);
     expect(f.setHeight).not.toHaveBeenCalled();

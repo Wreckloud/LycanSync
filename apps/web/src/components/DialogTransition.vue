@@ -4,9 +4,21 @@ const layers = new Map<HTMLElement, number>();
 </script>
 
 <script setup lang="ts">
-import { onScopeDispose } from 'vue';
+import { onScopeDispose, watch } from 'vue';
 
+const props = defineProps<{ deferOpen?: boolean }>();
 const sessions = new Map<HTMLElement, { background: Set<HTMLElement>; focus: HTMLElement | null; zIndex: string }>();
+let waiting: Element | null = null;
+
+function enter(element: Element) {
+  if (props.deferOpen) waiting = element;
+  else isolate(element);
+}
+
+// 媒体在后台缓冲时仍允许操作聊天，真正打开查看器时才隔离背景。
+watch(() => props.deferOpen, deferred => {
+  if (!deferred && waiting) { isolate(waiting); waiting = null; }
+}, { flush: 'post' });
 
 function isolate(element: Element) {
   const surface = element as HTMLElement;
@@ -34,6 +46,7 @@ function isolate(element: Element) {
 }
 
 function retire(element: Element) {
+  if (waiting === element) waiting = null;
   // 遮罩保留到退场结束，面板立即停止接受提交和键盘操作。
   const panel = element.firstElementChild;
   if (panel instanceof HTMLElement) panel.inert = true;
@@ -61,7 +74,7 @@ onScopeDispose(() => { for (const surface of sessions.keys()) restore(surface); 
 
 <template>
   <Teleport to="body">
-    <Transition name="dialog" appear @before-enter="isolate" @before-leave="retire" @after-leave="restore">
+    <Transition name="dialog" appear @before-enter="enter" @before-leave="retire" @after-leave="restore">
       <slot />
     </Transition>
   </Teleport>

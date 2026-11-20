@@ -462,6 +462,40 @@ class ChatApplicationIT {
     }
 
     @Test
+    void shouldUploadDeclaredFileAndResolveDeliveryByMessageId() throws Exception {
+        String token = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
+        String groupId = createGroup(token);
+        UUID messageId = UUID.randomUUID();
+        UUID attemptId = UUID.randomUUID();
+        byte[] bytes = { 0, 1, 2, -1 };
+        var cover = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(new java.awt.image.BufferedImage(8, 4, java.awt.image.BufferedImage.TYPE_INT_RGB), "jpeg", cover);
+        String authorization = "Bearer " + token;
+        String name = encodeFileName("屏幕录制.mkv");
+        mvc.perform(post("/api/groups/{groupId}/files/transfers/{messageId}", groupId, messageId)
+                        .header(HttpHeaders.AUTHORIZATION, authorization).contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsBytes(java.util.Map.of("attemptId", attemptId,
+                                "encodedName", name, "byteSize", bytes.length, "content", "", "thumbnail", cover.toByteArray()))))
+                .andExpect(status().is2xxSuccessful()).andExpect(jsonPath("$.attachment.transferStatus").value("PENDING"));
+        mvc.perform(get("/api/groups/{groupId}/files/{id}/thumbnail", groupId, messageId)
+                        .header(HttpHeaders.AUTHORIZATION, authorization).param("pending", "true"))
+                .andExpect(status().isOk()).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().bytes(cover.toByteArray()));
+        String uploaded = mvc.perform(post("/api/groups/{groupId}/files", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, authorization).header("X-Upload-Id", attemptId)
+                        .header("X-File-Message", messageId).header("X-File-Name", name)
+                        .header("X-File-Size", bytes.length).contentType(MediaType.APPLICATION_OCTET_STREAM).content(bytes))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.id").value(messageId.toString()))
+                .andReturn().getResponse().getContentAsString();
+        String attachmentId = objectMapper.readTree(uploaded).path("attachment").path("id").asText();
+        mvc.perform(get("/api/groups/{groupId}/files/transfers", groupId)
+                        .header(HttpHeaders.AUTHORIZATION, authorization).param("ids", messageId + "," + UUID.randomUUID()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].attachment.id").value(attachmentId));
+        mvc.perform(get("/api/groups/{groupId}/files/{id}", groupId, attachmentId)
+                        .header(HttpHeaders.AUTHORIZATION, authorization))
+                .andExpect(status().isOk()).andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().bytes(bytes));
+    }
+
+    @Test
     void shouldPersistOriginalFileBytesAndReturnExistingMessageWhenRetried() throws Exception {
         String token = localAuth.register(new LocalRegistrationRequest("Owner", PASSWORD)).sessionToken();
         String groupId = createGroup(token);

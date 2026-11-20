@@ -113,7 +113,7 @@ it('销毁后旧可见回调不重开请求，不创建新的预览URL', async (
   expect(image.source.value).toBe('');
 });
 
-it('更换附件后旧观察器回调失效，当前观察器只触发一次加载', async () => {
+it('更换附件后旧观察器回调失效，进入视口只查缓存，点击才下载', async () => {
   const { scope, props, image, observers, pending, fetchAttachment } = setup();
   try {
     props.attachmentId = 'new-image';
@@ -122,7 +122,9 @@ it('更换附件后旧观察器回调失效，当前观察器只触发一次加�
     expect(fetchAttachment).not.toHaveBeenCalled();
     observers[2].intersect();
     observers[2].intersect();
-    expect(fetchAttachment).toHaveBeenCalledExactlyOnceWith('first', 'new-image', expect.any(AbortSignal));
+    expect(fetchAttachment).not.toHaveBeenCalled();
+    void image.load();
+    expect(fetchAttachment).toHaveBeenCalledExactlyOnceWith('first', 'new-image', expect.any(AbortSignal), expect.any(Function));
     pending[0].resolve(new Blob(['image']));
     await settleRequests();
     expect(image.source.value).toBe('blob:preview-1');
@@ -133,6 +135,7 @@ it('旧请求迟到不创建URL，当前失败只在明确重试时重新加载'
   const { scope, props, image, observers, pending, createObjectURL, fetchAttachment } = setup();
   try {
     observers[0].intersect();
+    void image.load();
     props.attachmentId = 'new-image';
     await nextTick();
     expect(pending[0].signal.aborted).toBe(true);
@@ -140,6 +143,7 @@ it('旧请求迟到不创建URL，当前失败只在明确重试时重新加载'
     await settleRequests();
     expect(createObjectURL).not.toHaveBeenCalled();
     observers[2].intersect();
+    void image.load();
     pending[1].reject(new Error('读取失败'));
     await settleRequests();
     expect(image.error.value).toBe('读取失败');
@@ -155,12 +159,14 @@ it('旧请求迟到不创建URL，当前失败只在明确重试时重新加载'
 it('成功预览的URL在更换附件和销毁时各自释放', async () => {
   const { scope, props, image, observers, pending, revokeObjectURL } = setup();
   observers[0].intersect();
+  void image.load();
   pending[0].resolve(new Blob(['first']));
   await settleRequests();
   props.attachmentId = 'second';
   await nextTick();
   expect(revokeObjectURL).toHaveBeenCalledWith('blob:preview-1');
   observers[2].intersect();
+  void image.load();
   pending[1].resolve(new Blob(['second']));
   await settleRequests();
   scope.stop();
@@ -175,6 +181,7 @@ it('邻近区域保留图片，远离后释放URL，回到附近只重新加载�
     expect(observers[1].options.rootMargin).toBe('1200px 0px');
     observers[1].intersect();
     observers[0].intersect();
+    void image.load();
     pending[0].resolve(new Blob(['first']));
     await settleRequests();
     observers[0].leave();
@@ -187,6 +194,8 @@ it('邻近区域保留图片，远离后释放URL，回到附近只重新加载�
     expect(fetchAttachment).toHaveBeenCalledTimes(1);
     observers[1].intersect();
     observers[0].intersect();
+    expect(fetchAttachment).toHaveBeenCalledTimes(1);
+    void image.load();
     expect(fetchAttachment).toHaveBeenCalledTimes(2);
     pending[1].resolve(new Blob(['second']));
     await settleRequests();
@@ -198,6 +207,7 @@ it('远离时取消在途图片，迟到结果不占用URL，旧保留观察器�
   const { scope, props, image, observers, pending, createObjectURL } = setup();
   try {
     observers[0].intersect();
+    void image.load();
     observers[1].leave();
     expect(pending[0].signal.aborted).toBe(true);
     pending[0].resolve(new Blob(['late']));
@@ -205,6 +215,7 @@ it('远离时取消在途图片，迟到结果不占用URL，旧保留观察器�
     expect(createObjectURL).not.toHaveBeenCalled();
     props.attachmentId = 'new-image'; await nextTick();
     observers[2].intersect();
+    void image.load();
     pending[1].resolve(new Blob(['new']));
     await settleRequests();
     observers[1].leave();

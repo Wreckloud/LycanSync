@@ -3,7 +3,7 @@ import type { Ref } from 'vue';
 import { motionDurationMs } from '../styles/motion';
 
 // 覆盖层与右栏共用实际展开高度，聊天尺寸和消息滚动位置保持稳定。
-export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded: () => boolean) {
+export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded: () => boolean, resizing: () => boolean = () => false) {
   let animation: Animation | undefined;
   let generation = 0;
   let preference: MediaQueryList | undefined;
@@ -77,7 +77,7 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
     const style = owner.getComputedStyle(element);
     const duration = motionDurationMs(style.getPropertyValue('--motion-layout-duration'));
     const unchanged = offset === undefined ? Math.abs(from - to) < 1 : !Number.isFinite(offset) || Math.abs(offset) < 1;
-    if (preference?.matches || element.ownerDocument.documentElement?.classList.contains('is-restoring-layout')
+    if (resizing() || preference?.matches || element.ownerDocument.documentElement?.classList.contains('is-restoring-layout')
       || unchanged || typeof element.animate !== 'function'
       || !Number.isFinite(duration) || duration <= 0) {
       updateDirectory();
@@ -109,6 +109,9 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
     }, () => {});
   }
 
+  watch(resizing, active => {
+    if (active && !finishLeave) { cancel(); updateDirectory(); }
+  });
   watch([target, expanded], async ([element], [previous]) => {
     if (!element) { if (!finishLeave) clearDirectory(); return; }
     const bounds = element.getBoundingClientRect();

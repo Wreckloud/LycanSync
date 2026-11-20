@@ -154,8 +154,11 @@ it('复用现有采样低频保存脱敏报告，正常关闭补存，体验说�
   expect(bridge.saveDiagnosticSnapshot).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(2000);
   expect(bridge.saveDiagnosticSnapshot).toHaveBeenCalledTimes(2);
+  const reads = vi.mocked(bridge.getSavedDiagnosticReport).mock.calls.length;
+  report.beginClose();
   await report.flush();
   expect(bridge.saveDiagnosticSnapshot).toHaveBeenCalledTimes(3);
+  expect(bridge.getSavedDiagnosticReport).toHaveBeenCalledTimes(reads);
   const text = vi.mocked(bridge.saveDiagnosticSnapshot).mock.calls.at(-1)![0];
   const stored = JSON.parse(text);
   expect(stored.stopReason).toBe('closed');

@@ -33,6 +33,7 @@ const confirmingUpdate = computed(() => Boolean(confirmationVersion.value));
 const updateLoadingHint = useLoadingHint(() => props.active && (updateBusy.value || updateState.value?.phase === 'checking'));
 const autoStartLoadingHint = useLoadingHint(() => props.active && autoStartSupported.value === undefined && !autoStartError.value);
 const updateDescription = computed(() => {
+  if (updateState.value && ['downloading', 'preparing', 'installing'].includes(updateState.value.phase)) return updateState.value.message;
   if (updateBusy.value || updateState.value?.phase === 'checking') return updateLoadingHint.value ? '正在检查更新…' : '查看并安装新版本。';
   if (!updateError.value && !updateState.value?.error && updateState.value?.message) return updateState.value.message;
   return '查看并安装新版本。';

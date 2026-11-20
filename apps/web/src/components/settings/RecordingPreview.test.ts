@@ -63,3 +63,17 @@ it('长录像从当前帧预选 12 秒，片尾按剩余时间截取', () => {
   expect([f.preview.start.value, f.preview.end.value]).toEqual([1237, 1240]);
   f.scope.stop();
 });
+
+it('两个边界靠拢时保留整帧，片尾不足一帧时仍可选到文件末尾', () => {
+  const f = fixture();
+  f.preview.metadata(10.01); f.preview.rate.value = 24;
+  f.preview.position('end', 2, true);
+  f.preview.position('start', 3, true);
+  expect(f.preview.start.value).toBe(45 / 24);
+  f.preview.position('end', 1, true);
+  expect(f.preview.end.value).toBe(2);
+  f.preview.position('end', 10.01, true);
+  expect(f.preview.end.value).toBe(10.01);
+  expect(f.preview.cursor.value).toBe(10);
+  f.scope.stop();
+});

@@ -85,13 +85,16 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
           ? '回放已保存。本次积累的时长不足，仅保存了已有片段。' : '回放已保存到本地录像', saved: true };
       }
     }
-    const previousCode = state.value.error ?? state.value.replay?.error;
-    const errorChanged = code !== previousCode || next.recordingId !== state.value.recordingId
-      || next.replay?.id !== state.value.replay?.id;
+    const previous = state.value;
+    const recordingError = next.error !== previous.error ? next.error : null;
+    const replayError = next.replay?.error !== previous.replay?.error ? next.replay?.error : null;
+    const newError = recordingError ?? replayError;
+    if (statusLoaded.value && newError) {
+      reportNotice(messages[newError] ?? '本地录制未完成，请检查录像目录和诊断记录。', recordingError ? 'recording' : 'replay');
+    }
     statusLoaded.value = true;
     state.value = next;
     if (recordingSaved) options.onSaved?.();
-    if (code && (errorChanged || !notice.value)) reportNotice(messages[code] ?? '本地录制未完成，请检查录像目录和诊断记录。', next.error ? 'recording' : 'replay');
   };
   const removeListener = desktop?.onRecordingState(setState);
   async function refresh() {

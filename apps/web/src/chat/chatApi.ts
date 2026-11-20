@@ -49,8 +49,19 @@ export async function findMessages(groupId: string,
   return response.json() as Promise<ChatMessagePage>;
 }
 
+function trackBytes(stream: ReadableStream<Uint8Array<ArrayBuffer>>, progress: (bytes: number) => void) {
+  let loaded = 0;
+  return stream.pipeThrough(new TransformStream<Uint8Array<ArrayBuffer>, Uint8Array<ArrayBuffer>>({
+    transform(chunk, controller) {
+      loaded += chunk.byteLength;
+      progress(loaded);
+      controller.enqueue(chunk);
+    },
+  }));
+}
+
 export async function sendMessage(groupId: string, content: string, image?: File, signal?: AbortSignal,
-  messageId?: string): Promise<ChatMessage> {
+  messageId?: string, progress?: (bytes: number) => void): Promise<ChatMessage> {
   const body = new FormData();
   if (content) body.append('content', content);
   if (image) body.append('image', image, image.name);
@@ -58,7 +69,7 @@ export async function sendMessage(groupId: string, content: string, image?: File
   const response = await authenticatedFetch(messagePath(groupId), {
     method: 'POST', headers: { Accept: 'application/json' }, body,
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
-  });
+  }, image && progress ? fraction => progress(Math.floor(fraction * image.size)) : undefined);
   if (!response.ok) throw await readApiError(response);
   return response.json() as Promise<ChatMessage>;
 }
@@ -90,10 +101,10 @@ function headerText(value: string) {
 }
 
 export async function declareFile(groupId: string, id: string, attemptId: string, file: Pick<File, 'name' | 'size'>,
-  content: string, signal: AbortSignal): Promise<ChatMessage> {
+  content: string, signal: AbortSignal, thumbnail?: string): Promise<ChatMessage> {
   const response = await authenticatedFetch(transferPath(groupId) + '/' + id, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: timedRequest(signal),
-    body: JSON.stringify({ attemptId, encodedName: headerText(file.name), byteSize: file.size, content }),
+    body: JSON.stringify({ attemptId, encodedName: headerText(file.name), byteSize: file.size, content, thumbnail }),
   });
   if (!response.ok) throw await readApiError(response);
   return response.json();
@@ -114,27 +125,7 @@ export async function fileStates(groupId: string, ids: string[], signal: AbortSi
 
 export async function sendFile(groupId: string, file: Pick<File, 'name' | 'size' | 'stream'>, content: string, uploadId: string, signal: AbortSignal,
   onProgress: (loadedBytes: number) => void, messageId: string): Promise<ChatMessage> {
-  const reader = file.stream().getReader();
-  let loadedBytes = 0;
-  const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const { done, value } = await reader.read();
-        if (done) {
-          controller.close();
-          return;
-        }
-        loadedBytes += value.byteLength;
-        onProgress(loadedBytes);
-        controller.enqueue(value);
-      } catch (reason) {
-        controller.error(reason);
-      }
-    },
-    cancel(reason) {
-      return reader.cancel(reason);
-    },
-  });
+  const body = trackBytes(file.stream(), onProgress);
   const response = await authenticatedFetch('/api/groups/' + encodeURIComponent(groupId) + '/files', {
     method: 'POST',
     headers: {
@@ -202,28 +193,32 @@ export async function downloadFile(groupId: string, attachment: ChatAttachment, 
   }
 }
 
-export async function fetchAttachment(groupId: string, attachmentId: string, signal?: AbortSignal): Promise<Blob> {
+async function previewBlob(response: Response, progress?: (bytes: number) => void) {
+  if (!response.ok) throw await readApiError(response);
+  if (!progress || !response.body) return response.blob();
+  return new Response(trackBytes(response.body, progress), { headers: response.headers }).blob();
+}
+
+export async function fetchAttachment(groupId: string, attachmentId: string, signal?: AbortSignal, progress?: (bytes: number) => void): Promise<Blob> {
   const response = await authenticatedFetch(
     '/api/groups/' + encodeURIComponent(groupId) + '/attachments/' + encodeURIComponent(attachmentId),
     { headers: { Accept: 'image/png,image/jpeg' },
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000) },
   );
-  if (!response.ok) throw await readApiError(response);
-  return response.blob();
+  return previewBlob(response, progress);
 }
 
-export async function fetchFilePreview(groupId: string, attachmentId: string, signal: AbortSignal): Promise<Blob> {
+export async function fetchFilePreview(groupId: string, attachmentId: string, signal: AbortSignal, progress?: (bytes: number) => void): Promise<Blob> {
   const response = await authenticatedFetch(
     '/api/groups/' + encodeURIComponent(groupId) + '/files/' + encodeURIComponent(attachmentId),
     { headers: { Accept: 'application/octet-stream' }, signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]) },
   );
-  if (!response.ok) throw await readApiError(response);
-  return response.blob();
+  return previewBlob(response, progress);
 }
 
-export async function fetchVideoThumbnail(groupId: string, attachmentId: string, signal: AbortSignal): Promise<Blob | null> {
+export async function fetchVideoThumbnail(groupId: string, attachmentId: string, signal: AbortSignal, pending = false): Promise<Blob | null> {
   const response = await authenticatedFetch(
-    '/api/groups/' + encodeURIComponent(groupId) + '/files/' + encodeURIComponent(attachmentId) + '/thumbnail',
+    '/api/groups/' + encodeURIComponent(groupId) + '/files/' + encodeURIComponent(attachmentId) + '/thumbnail' + (pending ? '?pending=true' : ''),
     { headers: { Accept: 'image/jpeg' }, signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) },
   );
   if (!response.ok) throw await readApiError(response);

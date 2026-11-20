@@ -2,14 +2,17 @@
 import { computed, inject, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { chatMediaFrameStyle } from '../chat/chatMedia';
 import { ACCOUNT_CACHE } from '../cache/localCache';
+import { Download } from '@lucide/vue';
+import ChatMediaProgress from './ChatMediaProgress.vue';
 import { fetchAttachment } from '../chat/chatApi';
 
-const props = defineProps<{ groupId: string; attachmentId: string; width: number; height: number; alt: string }>();
+const props = defineProps<{ groupId: string; attachmentId: string; width: number; height: number; byteSize: number; alt: string }>();
 const emit = defineEmits<{ preview: [blob?: Blob] }>();
 const cache = inject(ACCOUNT_CACHE, null);
 const frame = ref<HTMLElement | null>(null);
 const source = ref('');
 const error = ref('');
+const loaded = ref<number | null>(null);
 const frameStyle = computed(() => chatMediaFrameStyle(props.width, props.height));
 let activeUrl = '';
 let activeBlob: Blob | undefined;
@@ -28,7 +31,7 @@ function clearSource() {
   source.value = '';
 }
 
-async function load(skipCache = false) {
+async function load(skipCache = false, cacheOnly = false) {
   if (disposed) return;
   controller?.abort();
   const currentController = new AbortController();
@@ -36,13 +39,16 @@ async function load(skipCache = false) {
   clearSource();
   error.value = '';
   cachedSource = false;
+  loaded.value = cacheOnly ? null : 0;
   const cacheRevision = cache?.revision;
   try {
     const groupId = props.groupId;
     const attachmentId = props.attachmentId;
     const cached = cache && !skipCache ? await cache.read<Blob>('image', groupId, attachmentId) : null;
     if (currentController.signal.aborted || controller !== currentController) return;
-    const blob = cached instanceof Blob ? cached : await fetchAttachment(groupId, attachmentId, currentController.signal);
+    if (!(cached instanceof Blob) && cacheOnly) return;
+    const blob = cached instanceof Blob ? cached : await fetchAttachment(groupId, attachmentId, currentController.signal,
+      bytes => { if (controller === currentController) loaded.value = bytes; });
     if (currentController.signal.aborted || controller !== currentController) return;
     cachedSource = cached instanceof Blob;
     if (!cachedSource && cache?.revision === cacheRevision) void cache?.write('image', groupId, blob, attachmentId);
@@ -54,7 +60,7 @@ async function load(skipCache = false) {
       error.value = reason instanceof Error ? reason.message : '图片加载失败';
     }
   } finally {
-    if (controller === currentController) controller = null;
+    if (controller === currentController) { controller = null; loaded.value = null; }
   }
 }
 
@@ -88,6 +94,7 @@ function observeFrame() {
     // 保留邻近图片避免滚动抖动；远离视口后解除 Blob 和图片引用，不改变消息尺寸。
     controller?.abort();
     controller = null;
+    loaded.value = null;
     clearSource();
   }, { root: frame.value.closest('.message-list'), rootMargin: '1200px 0px' });
   observer = currentObserver;
@@ -97,7 +104,7 @@ function observeFrame() {
 }
 
 function loadIfNeeded() {
-  if (nearby && prefetchVisible && !source.value && !controller && !error.value) void load();
+  if (nearby && prefetchVisible && !source.value && !controller && !error.value && cache) void load(false, true);
 }
 
 watch(() => [props.groupId, props.attachmentId], () => {
@@ -109,6 +116,7 @@ watch(() => [props.groupId, props.attachmentId], () => {
   controller = null;
   clearSource();
   error.value = '';
+  loaded.value = null;
   observeFrame();
 });
 onMounted(observeFrame);
@@ -125,7 +133,10 @@ onScopeDispose(() => {
 
 <template>
   <div ref="frame" class="chat-image-frame" :style="frameStyle">
+    <span v-if="!source" class="chat-media-placeholder" aria-hidden="true" />
     <button v-if="source" type="button" class="chat-image-open" aria-label="查看图片" @click="emit('preview', activeBlob)"><img class="chat-image" :src="source" :alt="alt" @error="imageFailed" /></button>
+    <ChatMediaProgress v-else-if="loaded !== null" :percent="byteSize ? Math.min(99, Math.floor(100 * loaded / byteSize)) : undefined" label="图片加载进度"><Download :size="20" /></ChatMediaProgress>
     <button v-else-if="error" class="chat-image-error" type="button" @click="load(true)">图片加载失败，点击重试</button>
+    <button v-else type="button" class="chat-image-open" aria-label="加载图片" @click="load()"><span class="chat-media-play"><Download :size="20" /></span></button>
   </div>
 </template>

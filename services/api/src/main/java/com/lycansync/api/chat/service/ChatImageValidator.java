@@ -35,6 +35,10 @@ final class ChatImageValidator {
         } catch (IOException exception) {
             throw new InvalidImageException("图片读取失败");
         }
+        return validate(data, contentType, MAX_PIXELS);
+    }
+
+    static ValidatedImage validate(byte[] data, String contentType, long maxPixels) {
         try (var input = ImageIO.createImageInputStream(new ByteArrayInputStream(data))) {
             Iterator<ImageReader> readers = ImageIO.getImageReaders(input);
             if (!readers.hasNext()) throw new InvalidImageException("图片文件无效");
@@ -46,8 +50,8 @@ final class ChatImageValidator {
                 if (!expected) throw new InvalidImageException("图片文件格式与声明不一致");
                 int width = reader.getWidth(0);
                 int height = reader.getHeight(0);
-                if (width <= 0 || height <= 0 || (long) width * height > MAX_PIXELS) {
-                    throw new InvalidImageException("图片尺寸不能超过 829 万像素");
+                if (width <= 0 || height <= 0 || (long) width * height > maxPixels) {
+                    throw new InvalidImageException(maxPixels == MAX_PIXELS ? "图片尺寸不能超过 829 万像素" : "视频封面尺寸过大");
                 }
                 if (reader.read(0) == null) throw new InvalidImageException("图片文件无效");
                 return new ValidatedImage(contentType, width, height, data);

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, onScopeDispose, ref } from 'vue';
+import { computed, inject, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { Download, Music2, X } from '@lucide/vue';
 import { desktopMediaUrl, fetchAttachment, fetchFilePreview, fetchCompatibleVideo, videoPreviewStatus, type ChatAttachment } from '../chat/chatApi';
 import { CHAT_TRANSFERS } from '../chat/useChatTransfers';
@@ -10,8 +10,8 @@ import { keepDialogFocus } from './dialogFocus';
 import MediaVideoSurface from './MediaVideoSurface.vue';
 import ChatImageSurface from './ChatImageSurface.vue';
 
-const props = defineProps<{ groupId: string; attachment: ChatAttachment; imageMessage: boolean; previewBlob?: Blob; localSource?: string }>();
-const emit = defineEmits<{ close: [] }>();
+const props = defineProps<{ groupId: string; attachment: ChatAttachment; imageMessage: boolean; previewBlob?: Blob; localSource?: string; inlineLoading?: boolean }>();
+const emit = defineEmits<{ close: []; progress: [percent: number]; ready: [] }>();
 const format = computed(() => chatMediaFormat(props.attachment));
 const title = computed(() => props.attachment.fileName || '图片');
 const source = ref('');
@@ -25,6 +25,7 @@ const converting = ref(false);
 const compatible = ref(false);
 const conversionStatus = ref('');
 const conversionHint = useLoadingHint(() => converting.value);
+const dialog = ref<HTMLElement | null>(null);
 const closeButton = ref<HTMLButtonElement | null>(null);
 const player = ref<HTMLMediaElement | null>(null);
 const loadingHint = useLoadingHint(() => loading.value);
@@ -66,11 +67,16 @@ async function load() {
     if (streamUrl) { source.value = streamUrl; return; }
     const blob = props.previewBlob ?? (props.imageMessage
       ? await fetchAttachment(props.groupId, props.attachment.id, current.signal)
-      : await fetchFilePreview(props.groupId, props.attachment.id, current.signal));
+      : await fetchFilePreview(props.groupId, props.attachment.id, current.signal, props.inlineLoading
+        ? bytes => { if (!current.signal.aborted) emit('progress', Math.min(99, Math.floor(bytes * 100 / (props.attachment.byteSize || 1)))); }
+        : undefined));
     if (disposed || current.signal.aborted || request !== current) return;
     source.value = URL.createObjectURL(blob.slice(0, blob.size, format.value?.contentType || blob.type));
   } catch (reason) {
-    if (!current.signal.aborted && !disposed) error.value = reason instanceof Error ? reason.message : '无法加载文件，请重试。';
+    if (!current.signal.aborted && !disposed) {
+      error.value = reason instanceof Error ? reason.message : '无法加载文件，请重试。';
+      emit('ready');
+    }
   } finally {
     if (request === current) loading.value = false;
   }
@@ -131,6 +137,7 @@ async function download() {
 
 function playbackFailed() {
   if (!disposed) {
+    emit('ready');
     previewFailed.value = true;
     if (props.localSource) { error.value = '此文件暂时无法在应用中预览，仍可作为附件发送。'; return; }
     error.value = format.value?.kind === 'video' && !compatible.value
@@ -140,6 +147,9 @@ function playbackFailed() {
     if (format.value?.kind === 'video' && !compatible.value) void convertVideo(false);
   }
 }
+watch(() => props.inlineLoading, async (waiting, previous) => {
+  if (!waiting && previous) { await nextTick(); dialog.value?.focus({ preventScroll: true }); }
+});
 onMounted(() => { closeButton.value?.focus(); void load(); });
 onScopeDispose(() => {
   disposed = true;
@@ -150,15 +160,16 @@ onScopeDispose(() => {
 </script>
 
 <template>
-  <div class="dialog-backdrop chat-media-backdrop" v-on="backdropEvents" @keydown.esc.stop="close">
-    <section class="chat-media-viewer" :class="{ 'media-viewer-shell': format?.kind === 'image' || format?.kind === 'video' }" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1" @keydown="keepDialogFocus">
+  <div v-show="!inlineLoading" class="dialog-backdrop chat-media-backdrop" v-on="backdropEvents" @keydown.esc.stop="close">
+    <section ref="dialog" class="chat-media-viewer" :class="{ 'media-viewer-shell': format?.kind === 'image' || format?.kind === 'video' }" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1" @keydown="keepDialogFocus">
       <header v-if="format?.kind === 'audio' || !source || (previewFailed && format?.kind === 'image')">
         <strong id="chat-media-title" :title="title">{{ title }}</strong>
         <button ref="closeButton" type="button" aria-label="关闭查看器" title="关闭查看器" @click="close"><X :size="18" /></button>
       </header>
       <div class="chat-media-stage" :aria-busy="loading">
         <ChatImageSurface v-if="source && format?.kind === 'image' && !previewFailed" :source="source" :title="title" :downloadable="!localSource" @close="close" @download="download" @error="playbackFailed" />
-        <MediaVideoSurface v-else-if="source && format?.kind === 'video'" :key="source" :source="source" :downloadable="!localSource" :downloading="downloading" @close="close" @download="download" @error="playbackFailed" />
+        <MediaVideoSurface v-else-if="source && format?.kind === 'video'" :key="source" :source="source" :downloadable="!localSource" :downloading="downloading"
+          :buffer-for-preview="inlineLoading" @buffered="percent => { if (!source.startsWith('blob:')) emit('progress', percent); }" @playable="emit('ready')" @close="close" @download="download" @error="playbackFailed" />
         <div v-else-if="source && format?.kind === 'audio'" class="chat-media-audio">
           <Music2 :size="64" aria-hidden="true" />
           <audio ref="player" :src="source" controls preload="metadata" tabindex="0" @error="playbackFailed" />

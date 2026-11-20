@@ -2,6 +2,7 @@ package com.lycansync.api.chat.service;
 
 import com.lycansync.api.audio.config.AudioProcessingProperties;
 import com.lycansync.api.auth.model.AuthenticatedUser;
+import com.lycansync.api.chat.dto.ChatMessageResponse;
 import com.lycansync.api.common.error.ApiErrorCode;
 import com.lycansync.api.group.exception.GroupException;
 import lombok.extern.slf4j.Slf4j;
@@ -34,12 +35,34 @@ public class ChatFileMediaService {
     private final ChatFileService files;
     private final AudioProcessingProperties properties;
     private final Semaphore processing = new Semaphore(1, true);
-    private final Map<UUID, byte[]> thumbnails = new LinkedHashMap<>(16, 0.75f, true);
+    private final Map<String, byte[]> thumbnails = new LinkedHashMap<>(16, 0.75f, true);
     private int cachedBytes;
 
     public ChatFileMediaService(ChatFileService files, AudioProcessingProperties properties) {
         this.files = files;
         this.properties = properties;
+    }
+
+    public ChatMessageResponse declare(UUID groupId, AuthenticatedUser user, UUID messageId, UUID attemptId,
+                                       String encodedName, long size, String content, byte[] cover) {
+        if (cover != null) {
+            try {
+                ChatImageValidator.validate(cover, "image/jpeg", 240L * 136);
+            } catch (ChatImageValidator.InvalidImageException exception) {
+                throw new GroupException(HttpStatus.BAD_REQUEST, ApiErrorCode.INVALID_REQUEST, exception.getMessage());
+            }
+        }
+        ChatMessageResponse message = files.declare(groupId, user, messageId, attemptId, encodedName, size, content);
+        if (cover != null && message.attachment().transferStatus() != null && videoFormat(message.attachment().fileName()) != null) {
+            remember("pending:" + messageId, cover);
+        }
+        return message;
+    }
+
+    public byte[] pendingThumbnail(UUID groupId, UUID messageId, AuthenticatedUser user) {
+        // 上传登记也属于群消息；先验证群成员和消息归属，再读取临时封面。
+        var messages = files.deliveries(groupId, user, List.of(messageId));
+        return messages.isEmpty() ? null : cached("pending:" + messageId);
     }
 
     public byte[] findThumbnail(UUID groupId, UUID attachmentId, AuthenticatedUser user) {
@@ -49,17 +72,17 @@ public class ChatFileMediaService {
         if (format == null) return null;
         try {
             Path source = files.findFile(attachmentId).getFile().toPath();
-            byte[] cached = cached(attachmentId);
+            byte[] cached = cached(attachmentId.toString());
             if (cached != null) return cached.length == 0 ? null : cached;
             if (!processing.tryAcquire(8, TimeUnit.SECONDS)) {
                 throw new GroupException(HttpStatus.TOO_MANY_REQUESTS, ApiErrorCode.INVALID_REQUEST,
                         "视频封面正在处理中，请稍后重试。");
             }
             try {
-                cached = cached(attachmentId);
+                cached = cached(attachmentId.toString());
                 if (cached != null) return cached.length == 0 ? null : cached;
                 byte[] thumbnail = extract(source, format);
-                remember(attachmentId, thumbnail == null ? new byte[0] : thumbnail);
+                remember(attachmentId.toString(), thumbnail == null ? new byte[0] : thumbnail);
                 return thumbnail;
             } finally { processing.release(); }
         } catch (InterruptedException exception) {
@@ -111,9 +134,9 @@ public class ChatFileMediaService {
         }
     }
 
-    private synchronized byte[] cached(UUID id) { return thumbnails.get(id); }
+    private synchronized byte[] cached(String id) { return thumbnails.get(id); }
 
-    private synchronized void remember(UUID id, byte[] thumbnail) {
+    private synchronized void remember(String id, byte[] thumbnail) {
         byte[] previous = thumbnails.put(id, thumbnail);
         cachedBytes += thumbnail.length - (previous == null ? 0 : previous.length);
         var iterator = thumbnails.entrySet().iterator();

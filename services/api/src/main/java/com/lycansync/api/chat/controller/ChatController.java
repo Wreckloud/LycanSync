@@ -136,16 +136,17 @@ public class ChatController {
                         byteSize, request.getInputStream(), messageId));
     }
 
-    @Schema(description = "文件消息登记，仅发送元数据")
+    @Schema(description = "文件消息登记，可附带已生成的视频封面")
     public record Declaration(@NotNull UUID attemptId, @NotNull @Size(max = 2048) String encodedName,
-                              @PositiveOrZero long byteSize, @Size(max = 4000) String content) { }
+                              @PositiveOrZero long byteSize, @Size(max = 4000) String content,
+                              @Schema(description = "可选 JPEG 封面，最多 16 KiB 和 32640 像素") @Size(max = 16384) byte[] thumbnail) { }
 
     @PostMapping("/files/transfers/{messageId}")
     @Operation(summary = "登记文件消息并确定群内顺序")
     public ChatMessageResponse declare(@PathVariable UUID groupId, @PathVariable UUID messageId,
                                        @Valid @RequestBody Declaration request, @AuthenticationPrincipal AuthenticatedUser user) {
-        return chatFileService.declare(groupId, user, messageId, request.attemptId(), request.encodedName(),
-                request.byteSize(), request.content());
+        return videoThumbnails.declare(groupId, user, messageId, request.attemptId(), request.encodedName(),
+                request.byteSize(), request.content(), request.thumbnail());
     }
 
     @GetMapping("/files/transfers")
@@ -193,10 +194,11 @@ public class ChatController {
     @Operation(summary = "读取视频封面", description = "按需生成小尺寸 JPEG，无可用视频画面时返回 204；不传输原视频")
     public ResponseEntity<byte[]> findVideoThumbnail(
             @PathVariable @Parameter(description = "群组 ID") UUID groupId,
-            @PathVariable @Parameter(description = "文件附件 ID") UUID attachmentId,
+            @PathVariable @Parameter(description = "文件附件 ID，读取临时封面时传文件消息 ID") UUID attachmentId,
+            @RequestParam(defaultValue = "false") @Parameter(description = "读取发送中的临时封面") boolean pending,
             @AuthenticationPrincipal AuthenticatedUser user
     ) {
-        byte[] thumbnail = videoThumbnails.findThumbnail(groupId, attachmentId, user);
+        byte[] thumbnail = pending ? videoThumbnails.pendingThumbnail(groupId, attachmentId, user) : videoThumbnails.findThumbnail(groupId, attachmentId, user);
         if (thumbnail == null) return ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build();
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).contentType(MediaType.IMAGE_JPEG)
                 .header("X-Content-Type-Options", "nosniff").contentLength(thumbnail.length).body(thumbnail);

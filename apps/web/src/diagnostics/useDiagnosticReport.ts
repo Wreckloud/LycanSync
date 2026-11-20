@@ -403,6 +403,7 @@ export function useDiagnosticReport(options: {
   let lastCheckpointAt = -Infinity;
   let checkpointPromise: Promise<void> | null = null;
   let savedReportRefreshedAfterCheckpoint = false;
+  let closing = false;
   let savedReportGeneration = 0;
   const streamSegments = new Map<string, { sessionKey: string | null; quality: string; dimensions: string; renderConfiguration: number | null;
     viewingRevision: number | null; segmentId: string; lastSampleIndex: number }>();
@@ -686,7 +687,7 @@ export function useDiagnosticReport(options: {
 
   async function refreshSavedReport() {
     const bridge = window.lycanDesktop;
-    if (!bridge?.getSavedDiagnosticReport) return;
+    if (closing || !bridge?.getSavedDiagnosticReport) return;
     const attempt = savedReportGeneration;
     try {
       const value = await bridge.getSavedDiagnosticReport();
@@ -721,6 +722,11 @@ export function useDiagnosticReport(options: {
     await checkpointPromise;
   }
 
+  // 退出仍要写完诊断快照，此时主进程已停止提供报告列表。
+  function beginClose() {
+    closing = true;
+    savedReportGeneration++;
+  }
   async function flush() {
     if (recording.value) await stop('closed');
     else await checkpoint(true);
@@ -790,5 +796,5 @@ export function useDiagnosticReport(options: {
   void refreshSavedReport();
   onScopeDispose(() => { stop('closed'); disposed = true; generation++; if (timer) clearInterval(timer); });
   return { latest, recording, automaticEnabled, discardedSamples, sampleCount, reason, error, saving, notes, problemMarkers, markProblem,
-    savedReport, savedSizeBytes, persistenceError, setViewing, setAutomatic, start, stop, save, savePrevious, clearSaved, flush };
+    savedReport, savedSizeBytes, persistenceError, setViewing, setAutomatic, start, stop, save, savePrevious, clearSaved, beginClose, flush };
 }

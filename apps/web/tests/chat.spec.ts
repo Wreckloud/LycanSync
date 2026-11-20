@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { expect, test, type Page, type Route } from '@playwright/test';
 import type { ChatMessage } from '../src/chat/chatApi';
 
@@ -440,7 +441,7 @@ test('空频道恢复后更新历史分页状态，带游标轮询不清除它',
   expect(beforeCursors).toEqual(['A31']);
 });
 
-test('历史图片接近列表可视区才加载，窄窗口保留比例且来回滚动不重复请求', async ({ page }) => {
+test('历史图片在点击时加载，窄窗口保留比例且来回滚动不重复请求', async ({ page }) => {
   await mockChatShell(page);
   await page.setViewportSize({ width: 360, height: 760 });
   const initial = [imageMessage(31, 'offscreen-wide', 1600, 400),
@@ -472,6 +473,7 @@ test('历史图片接近列表可视区才加载，窄窗口保留比例且来�
   expect(imageRequests).toBe(0);
 
   await list.evaluate((element) => { element.scrollTop = 0; });
+  await article.getByRole('button', { name: '加载图片' }).click();
   await expect.poll(() => imageRequests).toBe(1);
   await expect(article.getByAltText('群主 发送的图片')).toHaveJSProperty('naturalWidth', 1);
   const imageBounds = await frame.boundingBox();
@@ -542,7 +544,9 @@ test('切换群组会取消未完成的图片请求并释放已创建的 Blob UR
   });
 
   await page.goto('/');
-  await expect(page.locator('.chat-image-frame')).toHaveCount(2);
+  const frames = page.locator('.chat-image-frame');
+  await expect(frames).toHaveCount(2);
+  for (const frame of await frames.all()) await frame.getByRole('button', { name: '加载图片' }).click();
   await expect(page.getByAltText('群主 发送的图片')).toHaveCount(1);
   await expect(page.getByAltText('群主 发送的图片')).toHaveJSProperty('naturalWidth', 1);
   await expect.poll(() => pendingStarted).toBe(true);
@@ -581,6 +585,7 @@ test('图片加载失败只在用户重试时再次请求', async ({ page }) => 
   });
 
   await page.goto('/');
+  await page.getByRole('button', { name: '加载图片' }).click();
   const retry = page.getByRole('button', { name: '图片加载失败，点击重试' });
   await expect(retry).toBeVisible();
   await page.waitForTimeout(2200);
@@ -618,6 +623,7 @@ test('反复放大已加载图片复用原始内容，关闭后仅保留列表�
     return route.fulfill({ status: 404 });
   });
   await page.goto('/');
+  await page.getByRole('button', { name: '加载图片' }).click();
   await expect(page.getByAltText('群主 发送的图片')).toHaveJSProperty('naturalWidth', 1);
   const liveUrls = () => page.evaluate(() =>
     (window as unknown as { __liveImageUrls: Set<string> }).__liveImageUrls.size);
@@ -643,9 +649,16 @@ test('群聊音视频可从名称、封面或文件卡图标打开同一查看�
     if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
     if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
     if (url.pathname.endsWith('/messages')) return route.fulfill({ json: { messages: url.searchParams.has('afterMessageId') ? [] : items, hasMore: false } });
+    if (url.pathname.endsWith('/thumbnail')) return route.fulfill({ status: 204 });
     return route.fulfill({ status: 503 });
   });
   await page.goto('/');
+  const emptyCover = page.locator('[data-message-id="A01"] .chat-inline-media');
+  const placeholder = emptyCover.locator('.chat-media-placeholder');
+  await expect(placeholder).toHaveCSS('background-image', 'none');
+  await expect(placeholder).toHaveCSS('background-color', await emptyCover.evaluate(el => getComputedStyle(el).backgroundColor));
+  await emptyCover.getByRole('button', { name: '播放视频' }).click({ trial: true });
+  await emptyCover.screenshot({ animations: 'disabled', path: test.info().outputPath('media-placeholder.png') });
   for (const [name, target] of [
     ['片段.mp4', page.getByRole('button', { name: '播放视频' })],
     ['录音.ogg', page.getByText('录音.ogg', { exact: true })],
@@ -912,9 +925,12 @@ test('批量文件失败后重试只再次发送失败项', async ({ page }) => 
   expect(requests.get('second.bin')).toBe(2);
 });
 
-test('慢速附件先占位，两个客户端都按原顺序看到随后文字与完成的文件', async ({ page, context }) => {
+test('慢速录像先展示封面，两个客户端都按原顺序看到随后文字与完成的文件', async ({ page, context }) => {
   const peer = await context.newPage();
   const messages: ChatMessage[] = [];
+  const video = readFileSync(new URL('./fixtures/chat-clip.webm', import.meta.url));
+  let thumbnail: string | undefined;
+  let previewRequests = 0;
   let finish!: () => void;
   const gate = new Promise<void>(resolve => { finish = resolve; });
   for (const tab of [page, peer]) {
@@ -936,13 +952,21 @@ test('慢速附件先占位，两个客户端都按原顺序看到随后文字�
       }
       if (url.pathname.includes('/files/transfers/')) {
         const id = url.pathname.split('/').at(-1)!;
-        const message = fileMessage(id, id, 'slow.bin');
+        thumbnail = request.postDataJSON().thumbnail;
+        const message = fileMessage(id, id, '录像.webm');
+        message.attachment!.byteSize = video.length;
         message.createdAt = new Date().toISOString();
         message.attachment!.transferStatus = 'PENDING';
         messages.push(message);
         return route.fulfill({ json: message });
       }
       if (url.pathname.endsWith('/files/transfers')) return route.fulfill({ json: messages.slice(0, 1) });
+      if (url.pathname.endsWith('/thumbnail')) return thumbnail
+        ? route.fulfill({ contentType: 'image/jpeg', body: Buffer.from(thumbnail, 'base64') }) : route.fulfill({ status: 204 });
+      if (request.method() === 'GET' && url.pathname.endsWith('/files/' + messages[0]?.id)) {
+        previewRequests++;
+        return route.fulfill({ contentType: 'video/webm', body: video });
+      }
       if (url.pathname.endsWith('/files') && request.method() === 'POST') {
         await gate;
         delete messages[0].attachment!.transferStatus;
@@ -958,21 +982,56 @@ test('慢速附件先占位，两个客户端都按原顺序看到随后文字�
     await tab.goto('/');
   }
   try {
-    await page.locator('input[type=file]').setInputFiles({ name: 'slow.bin', mimeType: 'application/octet-stream', buffer: Buffer.from('abc') });
+    await page.locator('input[type=file]').setInputFiles({ name: '录像.webm', mimeType: 'video/webm', buffer: video });
+    await expect(page.locator('.composer-attachment canvas')).toBeVisible();
     await page.getByRole('button', { name: '发送消息' }).click();
     await expect(peer.getByText('文件上传中…')).toBeVisible();
+    await expect(peer.locator('.chat-inline-media img')).toBeVisible();
+    await expect(page.getByRole('progressbar', { name: '文件上传进度' })).toHaveAttribute('value', /\d+/);
     for (const content of ['后发文字 1', '后发文字 2']) {
       await page.getByLabel('消息内容').fill(content);
       await page.getByLabel('消息内容').press('Enter');
     }
     await expect(peer.locator('.chat-message').last()).toContainText('后发文字 2');
-    for (const tab of [page, peer]) await expect(tab.locator('.chat-message').first()).toContainText('slow.bin');
+    for (const tab of [page, peer]) await expect(tab.locator('.chat-message').first().locator('.chat-inline-media')).toHaveAttribute('aria-label', '录像.webm');
+    const card = page.locator('.chat-inline-media').first();
+    await expect.poll(() => card.evaluate(frame => {
+      const canvas = frame.querySelector('canvas');
+      return canvas ? Math.abs(frame.clientWidth - canvas.clientWidth) : Infinity;
+    })).toBeLessThan(2);
+    await card.screenshot({ path: test.info().outputPath('video-card.png') });
     await page.locator('.chat-panel').screenshot({ path: test.info().outputPath('background-upload.png') });
     finish();
     for (const tab of [page, peer]) {
-      await expect(tab.locator('.chat-message').first().getByRole('button', { name: '下载文件' })).toBeVisible();
+      await expect(tab.locator('.chat-message').first().getByRole('button', { name: '播放视频' })).toBeVisible();
       await expect(tab.locator('.chat-message')).toHaveCount(3);
     }
+    expect(previewRequests).toBe(0);
+    // 第一遍只交付一半原片，检查真实字节进度，并让第二遍正常播放。
+    await peer.evaluate(id => {
+      const original = window.fetch;
+      window.fetch = async (input, init) => {
+        const result = await original(input, init);
+        if (!String(input).endsWith('/files/' + id)) return result;
+        window.fetch = original;
+        const bytes = new Uint8Array(await result.arrayBuffer());
+        return new Response(new ReadableStream({ start(controller) {
+          controller.enqueue(bytes.subarray(0, Math.ceil(bytes.length / 2)));
+          init?.signal?.addEventListener('abort', () => controller.error(init.signal?.reason), { once: true });
+        } }), { headers: result.headers });
+      };
+    }, messages[0].id);
+    await peer.getByRole('button', { name: '播放视频' }).click();
+    await expect.poll(() => previewRequests).toBe(1);
+    await expect(peer.getByRole('progressbar', { name: '媒体加载进度' })).toHaveAttribute('value', '50');
+    await peer.locator('.chat-inline-media').screenshot({ path: test.info().outputPath('video-loading.png') });
+    await peer.getByLabel('消息内容').fill('视频加载时继续输入');
+    await peer.getByRole('button', { name: '取消加载视频' }).click();
+    await expect(peer.getByRole('button', { name: '播放视频' })).toBeVisible();
+    await peer.getByRole('button', { name: '播放视频' }).click();
+    await expect(peer.getByRole('dialog', { name: '录像.webm' })).toBeVisible();
+    await peer.keyboard.press('Escape');
+    await expect(peer.getByRole('dialog', { name: '录像.webm' })).toHaveCount(0);
   } finally { finish(); await peer.close(); }
 });
 
@@ -1056,7 +1115,7 @@ test('图片响应丢失后重试沿用消息 ID，界面只显示一条', async
   await expect(page.locator('.composer-attachment')).toHaveCount(1);
   await page.getByRole('button', { name: '发送消息' }).click();
   await expect(page.getByRole('alert')).toHaveText('响应丢失');
-  await page.locator('.chat-message').getByRole('button', { name: '重试', exact: true }).click();
+  await page.locator('.chat-message').getByRole('button', { name: '重试上传', exact: true }).click();
   await expect.poll(() => requestIds).toHaveLength(2);
   expect(requestIds[1]).toBe(requestIds[0]);
   await expect(page.locator(`[data-message-id="${requestIds[0]}"]`)).toHaveCount(1);

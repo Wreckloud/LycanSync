@@ -19,7 +19,7 @@ function fixture() {
     firstElementChild: Surface | null = null;
     focus = vi.fn();
   }
-  const create = runInNewContext(`${compiled}\ncreateDialog`, { HTMLElement: Surface, onScopeDispose: (callback: () => void) => cleanup.push(callback) }) as () => {
+  const create = runInNewContext(`${compiled}\ncreateDialog`, { HTMLElement: Surface, defineProps: () => ({}), watch: vi.fn(), onScopeDispose: (callback: () => void) => cleanup.push(callback) }) as () => {
     isolate(element: Surface): void; retire(element: Surface): void; restore(element: Surface): void;
   };
   const background = new Surface(), share = new Surface(), library = new Surface(), preview = new Surface();

@@ -1117,14 +1117,18 @@ test('入退语音在历史顶部、中部和底部都保持消息与输入框�
 
 for (const layout of ['聚焦', '网格']) {
   test(`短手柄在${layout}中跟手调高、即时吸附并保留成员卡片`, async ({ page }, testInfo) => {
-    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
     await page.setViewportSize({ width: 1280, height: 900 });
     await sharing(page, ['A', 'B']);
+    const memberEdge = await page.locator('.viewing-members-panel').evaluate(el =>
+      el.closest('.group-main')!.querySelector('.group-conversation')!.getBoundingClientRect().top + el.getBoundingClientRect().height);
     await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
     if (layout === '网格') await page.getByRole('button', { name: '查看全部共享画面' }).click();
     const handle = page.locator('.viewing-fold');
     const cards = page.locator('.viewing-members-panel');
     const height = () => page.locator('.viewing-stage').evaluate(el => el.getBoundingClientRect().height);
+    const settled = () => page.waitForFunction(() => !document.querySelector('.voice-panel')?.getAnimations({ subtree: true })
+      .some(a => a.playState === 'running' && a.effect?.getTiming().iterations !== Infinity));
     async function grab() {
       const bounds = (await handle.boundingBox())!;
       const x = bounds.x + bounds.width / 2, y = bounds.y + bounds.height / 2;
@@ -1147,13 +1151,14 @@ for (const layout of ['聚焦', '网格']) {
         && [rect.left - 4, rect.right + 4].every(x => !document.elementFromPoint(x, y)?.closest('.voice-panel'));
     })).toBe(true);
     expect(await handle.evaluate(el => getComputedStyle(el, '::before').height)).toBe('2px');
+    await settled();
     const initial = await height();
     let pull = await grab();
     await pull(-70);
     await expect.poll(height).toBeCloseTo(initial - 70, 0);
     await page.mouse.up();
     pull = await grab();
-    await pull(160);
+    await pull(310);
     const maximum = await height();
     await page.mouse.up();
     pull = await grab();
@@ -1161,19 +1166,35 @@ for (const layout of ['聚焦', '网格']) {
     await page.mouse.up();
     await expect.poll(height).toBeCloseTo(maximum - 120, 0);
     pull = await grab();
-    await pull(81);
+    await pull(100);
     await expect.poll(height).toBe(maximum);
-    await pull(60);
-    await pull(40);
-    await expect.poll(height).toBeLessThan(maximum);
+    const anchor = (await handle.boundingBox())!.y - 120;
+    for (const dy of [170, 55, 104, 165, 45, 106, 40]) {
+      await pull(dy);
+      if (dy < 80) {
+        expect(Math.abs((await handle.boundingBox())!.y - (anchor + dy))).toBeLessThanOrEqual(1);
+        expect(await height()).toBeCloseTo(maximum - 120 + dy, 0);
+      } else {
+        expect(await height()).toBeCloseTo(maximum, 0);
+      }
+    }
     await page.mouse.up();
+    const released = (await handle.boundingBox())!.y;
+    await settled();
+    expect((await handle.boundingBox())!.y).toBeCloseTo(released, 0);
 
-    const beforeMin = await height();
+    const beforeMin = (await handle.boundingBox())!.y;
     pull = await grab();
-    await pull(140 - beforeMin);
-    await expect.poll(height).toBe(140);
-    await pull(114 - beforeMin);
-    await expect.poll(height).toBe(0);
+    for (const dy of [0, -30, 36, 0, -35, 42, 0]) {
+      await pull(memberEdge + dy - beforeMin);
+      if (dy <= 0) {
+        expect(await height()).toBe(0);
+        expect(Math.abs((await handle.boundingBox())!.y - memberEdge)).toBeLessThanOrEqual(1);
+      } else {
+        expect(await height()).toBeGreaterThan(0);
+        expect(Math.abs((await handle.boundingBox())!.y - memberEdge - dy)).toBeLessThanOrEqual(1);
+      }
+    }
     await expect(cards).toBeVisible();
     await page.mouse.up();
     await expect(handle).toHaveAttribute('aria-expanded', 'true');
@@ -1192,6 +1213,7 @@ for (const layout of ['聚焦', '网格']) {
     await handle.click();
     await expect(cards).toBeVisible();
     await expect.poll(height).toBe(0);
+    await settled();
     pull = await grab();
     await pull(36);
     await expect.poll(height).toBeGreaterThan(0);
@@ -1200,7 +1222,7 @@ for (const layout of ['聚焦', '网格']) {
     await expect(page.getByTestId('callbar')).toBeVisible();
     if (layout === '聚焦') {
       pull = await grab();
-      await pull(110 - await height());
+      await pull(38 - await height());
       await page.mouse.up();
       await expect.poll(height).toBe(0);
       await sharing(page, ['B']);

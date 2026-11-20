@@ -58,62 +58,91 @@ const { width, height, minimumHeight, maximumHeight, changeHeight } = useViewing
 const dragHeight = ref<number | null>(null);
 const stageHeight = computed(() => dragHeight.value ?? height.value);
 const foldLabel = computed(() => props.folded ? '展开语音成员和画面' : '收起语音成员和画面');
-// 吸附后记录指针位置，反向拖动即可脱离，无需追上已经跳到端点的手柄。
-let drag: { id: number; y: number; height: number; snap: 'min' | 'max' | null; folded: boolean; stageHidden: boolean } | undefined;
+const resizing = ref(false);
+defineExpose({ resizing });
+// 一次手势始终使用同一个屏幕坐标系，吸附和越界都不重设指针原点。
+let drag: { id: number; startY: number; pointerY: number; offset: number; baseY: number | null; membersY: number | null; snap: 'min' | 'max' | null;
+  folded: boolean; stageHidden: boolean } | undefined;
 let moved = false;
+let membersOnlyHeight = 0;
+watch(() => props.active, active => {
+  if (!active) return;
+  // 画面展开前记住纯成员条的自然高度。网格隐藏后手柄会停在这里。
+  const members = panel.value?.querySelector<HTMLElement>('.viewing-members-panel');
+  if (members?.offsetHeight) membersOnlyHeight = members.offsetHeight;
+}, { flush: 'pre' });
 
 function startPull(event: PointerEvent) {
   if (!event.isPrimary || event.button !== 0 || drag) return;
-  drag = { id: event.pointerId, y: event.clientY, height: height.value, snap: props.stageHidden ? 'min' : null,
-    folded: !!props.folded, stageHidden: !!props.stageHidden };
+  const handle = event.currentTarget as HTMLElement;
+  const offset = event.clientY - handle.getBoundingClientRect().top;
+  drag = { id: event.pointerId, startY: event.clientY, pointerY: event.clientY, offset, baseY: null, membersY: null,
+    snap: null, folded: !!props.folded, stageHidden: !!props.stageHidden };
   moved = false;
-  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  handle.setPointerCapture(event.pointerId);
 }
 function movePull(event: PointerEvent) {
   if (!drag || drag.id !== event.pointerId) return;
-  const y = event.clientY;
-  let dy = y - drag.y;
-  if (!moved && Math.abs(dy) < 5) return;
+  drag.pointerY = event.clientY;
+  if (resizing.value) {
+    resizeToPointer(drag.pointerY);
+    return;
+  }
+  const distance = event.clientY - drag.startY;
+  if (Math.abs(distance) < 5) return;
   moved = true;
-  if (props.folded) {
-    if (dy < 16) return;
-    emit('update:folded', false);
-    drag.y += 16;
-    dy = y - drag.y;
-  }
+  if ((drag.folded || drag.stageHidden) && distance < 16) return;
+  panelGeneration++;
+  stopPanelMotion();
+  resizing.value = true;
+  if (props.folded) emit('update:folded', false);
   if (props.view.mode === 'collapsed') return;
+  if (props.stageHidden) emit('update:stageHidden', false);
+  const current = drag;
+  const handle = event.currentTarget as HTMLElement;
+  // 先取消过渡并展开正在拖动的布局，再按实际顶边校准一次抓点。
+  void nextTick(() => {
+    if (drag !== current) return;
+    const stage = panel.value!.querySelector<HTMLElement>('.viewing-stage')!;
+    const conversation = handle.closest('.group-main')?.querySelector('.group-conversation');
+    current.baseY = handle.getBoundingClientRect().top + current.offset - stage.getBoundingClientRect().height;
+    if (conversation && membersOnlyHeight) {
+      current.membersY = conversation.getBoundingClientRect().top + membersOnlyHeight + current.offset;
+    }
+    resizeToPointer(current.pointerY);
+  });
+}
+function resizeToPointer(y: number) {
+  if (!drag || drag.baseY === null) return;
+  const desired = y - drag.baseY;
   const min = minimumHeight.value, max = maximumHeight.value;
-  if (drag.snap) {
-    const atMin = drag.snap === 'min';
-    drag.y = atMin ? Math.min(drag.y, y) : Math.max(drag.y, y);
-    if (atMin ? dy < 16 : dy > -16) return;
-    if (atMin) emit('update:stageHidden', false);
-    drag.height = atMin ? min : max;
-    drag.y += atMin ? 16 : -16;
-    drag.snap = null;
-    dy = y - drag.y;
-  }
-  const desired = drag.height + dy;
-  if (dy < 0 && desired <= min - 24) {
+  const maxBand = Math.min(24, (max - min) / 4);
+  const hideAt = drag.membersY === null ? min - 24 : Math.min(max - maxBand - 32, drag.membersY - drag.baseY + 4);
+  if (desired <= hideAt || drag.snap === 'min' && desired < hideAt + 16) {
     drag.snap = 'min';
-    drag.y = y;
-    dragHeight.value = null;
-    emit('update:stageHidden', true);
-  } else if (dy >= 12 && (dy >= (max - drag.height) * 2 / 3 || desired >= max - 32)) {
+    dragHeight.value = 0;
+    if (!props.stageHidden) emit('update:stageHidden', true);
+    return;
+  }
+  if (props.stageHidden) emit('update:stageHidden', false);
+  if (desired >= max - maxBand || drag.snap === 'max' && desired >= max - maxBand - 12) {
     drag.snap = 'max';
-    drag.y = y;
     dragHeight.value = max;
   } else {
+    drag.snap = null;
     dragHeight.value = Math.max(min, Math.min(max, desired));
   }
 }
 function finishPull(event: PointerEvent) {
   if (!drag || drag.id !== event.pointerId) return;
-  movePull(event);
-  if (drag.snap === 'max') props.view.height = 'max';
-  else if (dragHeight.value !== null) changeHeight(dragHeight.value);
+  if (moved) movePull(event);
+  if (drag.snap === 'max') {
+    changeHeight(maximumHeight.value);
+    props.view.height = 'max';
+  } else if (drag.snap !== 'min' && dragHeight.value !== null) changeHeight(dragHeight.value);
   drag = undefined;
   dragHeight.value = null;
+  resizing.value = false;
 }
 function cancelPull(restore = false) {
   if (drag) {
@@ -125,6 +154,7 @@ function cancelPull(restore = false) {
   }
   drag = undefined;
   dragHeight.value = null;
+  resizing.value = false;
 }
 function clickHandle(event: MouseEvent) {
   if (!moved || event.detail === 0) emit('update:folded', !props.folded);
@@ -267,7 +297,7 @@ onScopeDispose(() => {
 </script>
 
 <template>
-  <section ref="panel" :id="detached ? undefined : 'inline-call-view'" class="call-viewing-panel" :class="{ 'is-detached': detached, 'is-expanded': active && view.expanded, 'is-resizing': dragHeight !== null && dragHeight !== maximumHeight, 'is-collapsed': !active, 'is-framing': framing }"
+  <section ref="panel" :id="detached ? undefined : 'inline-call-view'" class="call-viewing-panel" :class="{ 'is-detached': detached, 'is-expanded': active && view.expanded, 'is-resizing': resizing, 'is-collapsed': !active, 'is-framing': framing }"
     :aria-label="active ? '共享观看区' : undefined" @keydown.esc="escape" @keydown.tab="trapFocus">
     <div class="viewing-stage" :class="{ 'is-focus-stage': focus, 'is-single-stage': singleStage }" :style="{ height: (active && !folded ? stageHeight : 0) + 'px' }" :inert="!active || folded">
       <span v-if="reconnecting" class="viewing-reconnecting" role="status">正在重连…</span>
@@ -305,7 +335,7 @@ onScopeDispose(() => {
         </TransitionGroup>
       </HorizontalScroll>
     </div>
-    <Transition name="layout-reveal" @before-enter="($event as HTMLElement).inert = false" @before-leave="($event as HTMLElement).inert = true">
+    <Transition name="layout-reveal" :css="!resizing" @before-enter="($event as HTMLElement).inert = false" @before-leave="($event as HTMLElement).inert = true">
       <div v-show="showMembers" class="layout-reveal">
         <div class="layout-reveal-inner">
           <div class="viewing-members-panel">

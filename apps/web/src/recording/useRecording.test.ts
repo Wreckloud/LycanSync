@@ -197,6 +197,19 @@ it('回放操作错误归回放，手动重试同一错误重新通知', async (
   } finally { f.scope.stop(); }
 });
 
+it('退出时停止已经结束的回放，不再次提示旧的应用声音错误', async () => {
+  const replay = { id: null, holdingResources: false, phase: 'failed' as const, seconds: 60, saving: false,
+    error: 'recordingApplicationAudioUnavailable', lastSavedId: null };
+  const f = await fixture({ replay });
+  try {
+    await f.recording.stopReplay();
+    expect(f.recording.noticeEvent.value).toBeNull();
+    f.publish({ ...f.recording.state.value, replay: { ...replay, error: null } });
+    f.publish({ ...f.recording.state.value, replay });
+    expect(f.recording.notice.value).toContain('无法单独录入应用声音');
+  } finally { f.scope.stop(); }
+});
+
 it('周期快照保留故障状态但不重复弹通知，新的故障才重新提示', async () => {
   const f = await fixture();
   try {
@@ -208,7 +221,7 @@ it('周期快照保留故障状态但不重复弹通知，新的故障才重新�
     expect(f.recording.noticeEvent.value).toBe(event);
     f.recording.notice.value = '';
     f.publish({ ...failed });
-    expect(f.recording.notice.value).toContain('录像目录可用空间不足');
+    expect(f.recording.notice.value).toBe('');
     f.publish({ ...failed, error: null });
     f.publish(failed);
     expect(f.recording.noticeEvent.value).not.toBe(event);

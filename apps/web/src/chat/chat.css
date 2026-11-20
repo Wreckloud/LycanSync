@@ -85,7 +85,7 @@
 .chat-image-frame { position: relative; max-width: 100%; margin-top: 6px; overflow: hidden; border-radius: 8px; background: var(--panel-soft); }
 .chat-image { display: block; width: 100%; height: 100%; object-fit: contain; }
 .chat-image-open { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; cursor: pointer; }
-.chat-image-error { position: absolute; inset: 0; width: 100%; border: 0; padding: 8px; background: var(--panel-soft); color: var(--danger); font-size: 13px; cursor: pointer; }
+.chat-image-error { position: absolute; inset: 0; display: grid; align-items: end; width: 100%; border: 0; padding: 8px; background: transparent; color: var(--danger); font-size: 13px; cursor: pointer; }
 .chat-file-card {
   display: flex;
   align-items: center;
@@ -105,7 +105,7 @@ button.chat-file-summary { cursor: pointer; }
 .chat-file-details strong, .composer-attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-file-details strong { font-size: 13px; }
 .chat-file-details small, .composer-attachment small { color: var(--subtle); font-size: 11px; }
-.chat-file-details progress, .chat-transfer-state progress { width: 100%; height: 5px; accent-color: var(--accent); }
+.chat-file-details progress, .chat-transfer-state progress, .chat-media-progress { width: 100%; height: 5px; accent-color: var(--accent); }
 .chat-file-card > button:not(.chat-file-summary), .composer-attachment > button { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
 .chat-file-card > button:not(.chat-file-summary):hover, .composer-attachment > button:not(.composer-attachment-preview):enabled:hover { background: var(--panel); color: var(--text); }
 .chat-file-error { color: var(--danger) !important; }
@@ -184,3 +184,19 @@ button.chat-file-summary { cursor: pointer; }
 .chat-transfer-state { padding: 6px 0; color: var(--subtle); font-size: 12px; }
 
 .composer-attachment-preview img, .composer-attachment .composer-video-cover.recording-thumbnail { flex: 0 0 32px; width: 32px; height: 24px; border-radius: 4px; object-fit: cover; }
+
+.chat-file-media { width: min(420px, 100%); }
+.chat-inline-media { position: relative; width: 100%; margin-top: 6px; overflow: hidden; border-radius: 8px; background: var(--panel-soft); }
+.chat-inline-image { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; cursor: pointer; }
+.chat-inline-image img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.chat-media-play { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: grid; place-items: center; width: 48px; height: 48px; font-size: 13px; font-variant-numeric: tabular-nums; pointer-events: none; background: #10161dcc; color: #fff; border-radius: 50%; }
+.chat-inline-image:hover .chat-media-play { background: #252e39ee; }
+.chat-media-placeholder { position: absolute; inset: 0; background: var(--panel-soft); pointer-events: none; }
+:is(.chat-image-frame, .chat-inline-media):has(.chat-media-placeholder) .chat-media-play { inset: auto 10px 10px auto; transform: none; width: 36px; height: 36px; }
+.chat-cover-retry { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: 12px; color: var(--muted); }
+
+.chat-media-progress { position: absolute; inset: auto 0 0; display: block; pointer-events: none; }
+.chat-file-media .chat-inline-media > .recording-thumbnail { width: 100%; height: 100%; border: 0; }
+.chat-inline-media > .recording-thumbnail canvas { width: 100%; height: 100%; object-fit: contain; }
+.chat-inline-media > img { width: 100%; height: 100%; object-fit: contain; }
+.chat-media-retry-overlay { position: absolute; inset: 0; }
