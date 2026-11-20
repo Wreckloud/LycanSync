@@ -30,7 +30,7 @@ const view = reactive(useScreenShareLayout({
   privateControl: identity => props.controlPlaceholder(identity),
 }));
 let beforeDetach: { id: string; room: typeof props.rtc.room; mode: typeof view.mode; focused: number | null;
-  membersVisible: boolean; height: number | null; expanded: boolean } | undefined;
+  membersVisible: boolean; height: typeof view.height; expanded: boolean } | undefined;
 const windows = useScreenShareWindows({
   room: () => props.rtc.room, participants: () => props.rtc.participants,
   status: () => props.rtc.status, revision: () => props.rtc.revision,
@@ -61,7 +61,10 @@ const windows = useScreenShareWindows({
 const entries = windows.entries;
 const watching = computed(() => entries.value.find(entry => entry.kind === 'watching'));
 const detached = computed(() => entries.value.some(entry => entry.kind === 'watching' && entry.target));
-const inlineExpanded = computed(() => view.mode !== 'collapsed' && !detached.value);
+const inlineWatching = computed(() => view.mode !== 'collapsed' && !detached.value);
+const folded = ref(false);
+const inlineExpanded = computed(() => inlineWatching.value && !folded.value);
+watch([() => props.inlineTarget, () => props.rtc.room, detached], () => { folded.value = false; });
 const returning = ref(false);
 let returnTimer: ReturnType<typeof setTimeout> | undefined;
 const focusedIdentity = computed(() => view.mode === 'focus' ? view.focusedShare?.participant.identity : undefined);
@@ -127,12 +130,12 @@ defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded, de
 
 <template>
   <Teleport v-if="inlineTarget" :to="inlineTarget">
-    <CallViewingPanel :active="inlineExpanded" :hidden="detached" :video-active="inlineVisible" :view="view" :room="rtc.room" :revision="rtc.revision"
+    <CallViewingPanel :active="inlineWatching" v-model:folded="folded" :hidden="detached" :video-active="inlineVisible && !folded" :view="view" :room="rtc.room" :revision="rtc.revision"
       :avatar="avatar" :listening="rtc.listening" :recording-elapsed="recordingElapsed"
       :private-control="controlPlaceholder" :reconnecting="rtc.status === 'reconnecting'"
       @detach="detachWatching" @notice="emit('notice', $event)">
       <template #default="{ previewsMounted }">
-        <HorizontalScroll label="语音成员" :center-key="watching ? undefined : focusedIdentity"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" appear @before-leave="($event as HTMLElement).inert = true"><slot :select="select" :visible="inlineVisible" :previews-mounted="previewsMounted" :focused-identity="focusedIdentity" :watching-elsewhere="!!watching" /></TransitionGroup></HorizontalScroll>
+        <HorizontalScroll label="语音成员" :center-key="watching ? undefined : focusedIdentity"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" appear @before-leave="($event as HTMLElement).inert = true"><slot :select="select" :visible="inlineVisible && !folded" :previews-mounted="previewsMounted" :focused-identity="focusedIdentity" :watching-elsewhere="!!watching" /></TransitionGroup></HorizontalScroll>
       </template>
     </CallViewingPanel>
   </Teleport>

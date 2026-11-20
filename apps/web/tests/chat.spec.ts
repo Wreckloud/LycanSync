@@ -589,6 +589,7 @@ test('反复放大已加载图片复用原始内容，关闭后仅保留列表�
     Object.defineProperty(window, '__liveImageUrls', { value: live });
   });
   const image = imageMessage(1, 'reused-image');
+  image.attachment!.fileName = '合影.png';
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
   let imageRequests = 0;
   await page.route('**/api/groups**', route => {
@@ -609,7 +610,9 @@ test('反复放大已加载图片复用原始内容，关闭后仅保留列表�
   const liveUrls = () => page.evaluate(() =>
     (window as unknown as { __liveImageUrls: Set<string> }).__liveImageUrls.size);
   for (let cycle = 0; cycle < 12; cycle++) {
-    await page.getByRole('button', { name: '查看图片', exact: true }).click();
+    const target = page.getByRole('button', { name: cycle % 2 ? '查看图片' : '预览 合影.png', exact: true });
+    await expect(target).toHaveCSS('cursor', 'pointer');
+    await target.click();
     await expect(page.locator('.pswp__img').last()).toHaveJSProperty('naturalWidth', 1);
     await page.locator('.pswp__button--close').click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
@@ -617,6 +620,31 @@ test('反复放大已加载图片复用原始内容，关闭后仅保留列表�
   }
   console.log(JSON.stringify({ imagePreviewCycles: 12, imageRequests, liveUrlsAfterClose: await liveUrls() }));
   expect(imageRequests).toBe(1);
+});
+
+test('群聊音视频可从名称、封面或文件卡图标打开同一查看器', async ({ page }) => {
+  await mockChatShell(page);
+  const items = [fileMessage('A01', 'clip', '片段.mp4'), fileMessage('A02', 'sound', '录音.ogg')];
+  await page.route('**/api/groups**', route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
+    if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
+    if (url.pathname.endsWith('/messages')) return route.fulfill({ json: { messages: url.searchParams.has('afterMessageId') ? [] : items, hasMore: false } });
+    return route.fulfill({ status: 503 });
+  });
+  await page.goto('/');
+  for (const [name, target] of [
+    ['片段.mp4', page.getByRole('button', { name: '播放视频' })],
+    ['片段.mp4', page.getByText('片段.mp4', { exact: true })],
+    ['录音.ogg', page.getByText('录音.ogg', { exact: true })],
+    ['录音.ogg', page.locator('[data-message-id="A02"] .chat-file-icon')],
+  ] as const) {
+    await expect(target).toHaveCSS('cursor', 'pointer');
+    await target.click();
+    await expect(page.getByRole('dialog', { name, exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+  }
 });
 
 test('历史请求失败可重试，到底后不再请求更早消息', async ({ page }) => {
@@ -771,6 +799,15 @@ test('加号多选按原始字节和顺序发送，图片作为文件并只在�
     { name: '资料.dat', mimeType: 'application/x-custom', buffer: Buffer.from([9, 8, 7]) },
   ]);
   await expect(page.locator('.composer-attachment')).toHaveCount(2);
+  const preview = page.getByRole('button', { name: '预览 原图.png', exact: true });
+  await expect(page.locator('.composer-attachment').first()).toHaveCSS('height', '28px');
+  for (const target of [preview.locator('img'), preview.getByText('原图.png')]) {
+    await target.click();
+    await expect(page.locator('.chat-photo-viewer')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.chat-photo-viewer')).toHaveCount(0);
+  }
+  await page.locator('.composer').screenshot({ path: test.info().outputPath('compact-attachments.png') });
   await page.getByRole('button', { name: '发送消息' }).click();
   await expect(page.locator('[data-message-id="F2"]')).toHaveCount(1);
   expect(uploaded.map((item) => item.name)).toEqual(['原图.png', '资料.dat']);
@@ -778,6 +815,12 @@ test('加号多选按原始字节和顺序发送，图片作为文件并只在�
   expect(uploaded.map((item) => item.content)).toEqual(['附在第一条', '']);
   await expect(page.locator('.chat-file-media')).toHaveCount(2);
   await expect(page.getByRole('button', { name: '查看图片', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '预览 原图.png', exact: true }).click();
+  await expect(page.locator('.chat-photo-viewer')).toBeVisible();
+  await page.keyboard.press('Escape');
+  const ordinaryFile = page.locator('[data-message-id="F2"]');
+  await expect(ordinaryFile.getByRole('button', { name: /预览/ })).toHaveCount(0);
+  await expect(ordinaryFile.getByRole('button', { name: '下载文件' })).toBeVisible();
 });
 
 test('批量文件失败后重试只再次发送失败项', async ({ page }) => {

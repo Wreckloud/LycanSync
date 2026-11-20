@@ -11,7 +11,8 @@ export function useRecordingShare(openGroup: (groupId: string) => void) {
     entry.value = value;
     visible.value = true;
   }
-  function choose(groupId: string, value = entry.value) {
+  function choose(groupId: string) {
+    const value = entry.value;
     if (!groupId || !value || value.availability !== 'available' || value.state === 'recording' || !value.bytes) return;
     pending.value = { groupId, entry: value };
     visible.value = false;

@@ -23,7 +23,7 @@ export function useScreenShareLayout(options: LayoutOptions) {
   const shares = shallowRef<ViewedShare[]>([]);
   const focused = ref<number | null>(null);
   const membersVisible = ref(true);
-  const height = ref<number | null>(null);
+  const height = ref<number | 'max' | null>(null);
   const expanded = ref(false);
   let nextKey = 0;
   let reconnecting = false;

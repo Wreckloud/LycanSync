@@ -5,6 +5,12 @@
 .horizontal-viewport::-webkit-scrollbar { display: none; }
 
 .call-viewing-panel { position: relative; min-width: 0; }
+.voice-panel:has(.viewing-fold) { display: flex; flex-direction: column; background: transparent; pointer-events: none; }
+.voice-panel:has(.viewing-fold):not([inert]) { overflow: visible; }
+.voice-panel:has(.viewing-fold) > .call-viewing-panel { min-height: 0; overflow: clip; background: var(--panel-soft); pointer-events: auto; }
+.viewing-fold { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); display: grid; place-items: center; width: 60px; height: 16px; min-height: 0; padding: 0; border: 0; border-radius: 0 0 4px 4px; color: var(--muted); background: var(--panel-soft); pointer-events: auto; touch-action: none; cursor: ns-resize; }
+.viewing-fold::before { content: ''; width: 22px; height: 3px; border-radius: 1px; background: currentColor; }
+.viewing-fold:hover, .viewing-fold:focus-visible { color: var(--text); background: var(--panel-raised); }
 .voice-panel:has(.is-framing) { overflow: visible; }
 .call-viewing-panel.is-framing { overflow: hidden; }
 .call-viewing-panel.is-expanded { position: fixed; z-index: 10; inset: var(--titlebar-height) 0 0; background: var(--panel-soft); }
@@ -41,7 +47,6 @@
 .viewing-members-panel { padding: 0 16px 15px; }
 .viewing-members-toggle { display: flex; justify-content: center; height: 24px; margin: 12px 0 2px; border-top: 1px solid var(--border-soft); }
 .viewing-members-toggle button { display: grid; place-items: center; width: 30px; height: 24px; min-height: 24px; padding: 0; border: 0; background: var(--panel-soft); color: var(--muted); transform: translateY(-50%); }
-.viewing-resize { position: absolute; z-index: 1; bottom: 0; left: 0; right: 0; height: 5px; cursor: ns-resize; touch-action: none; }
 
 .viewing-member-strip { position: relative; display: flex; gap: 8px; width: max-content; min-width: 100%; padding: 2px 0; }
 .viewing-member-strip > .member-card { width: 220px; flex: 0 0 220px; }

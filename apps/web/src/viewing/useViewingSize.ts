@@ -5,7 +5,7 @@ interface ViewingSizeOptions {
   detached(): boolean;
   expanded(): boolean;
   showMembers(): boolean;
-  preferredHeight(): number | null;
+  preferredHeight(): number | 'max' | null;
   setHeight(height: number): void;
 }
 
@@ -14,33 +14,12 @@ export function useViewingSize(panel: Ref<HTMLElement | null>, options: ViewingS
   const height = ref(300);
   const maximumHeight = ref(420);
   const minimumHeight = computed(() => Math.min(140, maximumHeight.value));
-  const resizing = ref(false);
-  let drag: { pointer: number; y: number; height: number } | undefined;
   let observer: ResizeObserver | undefined;
   let stopObservation: (() => void) | undefined;
 
   function changeHeight(value: number) {
     height.value = Math.max(minimumHeight.value, Math.min(maximumHeight.value, value));
     options.setHeight(height.value);
-  }
-
-  function beginResize(event: PointerEvent) {
-    drag = { pointer: event.pointerId, y: event.clientY, height: height.value };
-    resizing.value = true;
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-    event.preventDefault();
-  }
-
-  function moveResize(event: PointerEvent) {
-    if (drag?.pointer === event.pointerId) changeHeight(drag.height + event.clientY - drag.y);
-  }
-
-  function endResize(event: PointerEvent) {
-    if (drag?.pointer !== event.pointerId) return;
-    const element = event.currentTarget as HTMLElement;
-    if (element.hasPointerCapture(event.pointerId)) element.releasePointerCapture(event.pointerId);
-    drag = undefined;
-    resizing.value = false;
   }
 
   onMounted(() => {
@@ -92,18 +71,19 @@ export function useViewingSize(panel: Ref<HTMLElement | null>, options: ViewingS
             + (Number.parseFloat(listStyle?.paddingTop ?? '0') || 0) + (Number.parseFloat(listStyle?.paddingBottom ?? '0') || 0);
           availableHeight = Math.min(availableHeight, personal.getBoundingClientRect().top - top - memberSpace);
         }
+        availableHeight -= overlay?.querySelector<HTMLElement>('.viewing-fold')?.offsetHeight ?? 0;
       }
       const memberHeight = memberPanel?.parentElement?.scrollHeight ?? memberPanel?.offsetHeight ?? 0;
       maximumHeight.value = Math.max(0, Math.floor(availableHeight - memberHeight));
       const preferredHeight = options.preferredHeight();
-      const requestedHeight = options.expanded() || options.detached() ? maximumHeight.value : preferredHeight ?? 480;
+      const requestedHeight = options.expanded() || options.detached() || preferredHeight === 'max' ? maximumHeight.value : preferredHeight ?? 480;
       height.value = Math.max(minimumHeight.value, Math.min(maximumHeight.value, requestedHeight));
     }
     observer = new owner.ResizeObserver(() => {
       if (frame !== undefined) return;
       frame = owner.requestAnimationFrame(() => { frame = undefined; resize(); });
     });
-    const stopMembers = watch(() => [options.showMembers(), options.expanded()], resize, { flush: 'post' });
+    const stopMembers = watch(() => [options.showMembers(), options.expanded(), options.preferredHeight()], resize, { flush: 'post' });
     element.ownerDocument.addEventListener('visibilitychange', resize);
     stopObservation = () => {
       stopMembers();
@@ -120,5 +100,5 @@ export function useViewingSize(panel: Ref<HTMLElement | null>, options: ViewingS
   });
   onScopeDispose(() => { observer?.disconnect(); stopObservation?.(); });
 
-  return { width, height, minimumHeight, maximumHeight, resizing, changeHeight, beginResize, moveResize, endResize };
+  return { width, height, minimumHeight, maximumHeight, changeHeight };
 }

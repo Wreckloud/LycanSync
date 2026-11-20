@@ -27,7 +27,7 @@ function fixture() {
   const memberHeader = { offsetHeight: 44 };
   const memberList = { querySelector: () => ({ offsetHeight: 40 }) };
   const members = { querySelector: (selector: string) => selector === '.members-header' ? memberHeader : memberList };
-  const overlay = {};
+  const overlay = { querySelector: () => null };
   const viewport = { clientWidth: 800 };
   const memberPanel = { get offsetHeight() { return memberHeight - 12; },
     parentElement: { get scrollHeight() { return memberHeight; } } };

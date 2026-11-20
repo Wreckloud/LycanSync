@@ -6,7 +6,7 @@ import { useComposerHeight } from '../chat/useComposerHeight';
 import { useGroupMessages } from '../chat/useGroupMessages';
 import { ACCOUNT_CACHE } from '../cache/localCache';
 import { useLoadingHint } from './useLoadingHint';
-import { ArrowDown, MessageSquareText, Plus, Send, X, Film, File, Music2 } from '@lucide/vue';
+import { ArrowDown, MessageSquareText, Plus, Send, X, File, Music2 } from '@lucide/vue';
 import defaultAvatar from '../../../../services/api/src/main/resources/account/default.png';
 import type { AuthUser } from '../auth/authApi';
 import { sendFile, sendMessage, type ChatMessage } from '../chat/chatApi';
@@ -19,7 +19,6 @@ import { findGroupMemberProfile, type GroupMemberProfile } from '../group/groupA
 import ChatFileMedia from './ChatFileMedia.vue';
 import ChatMediaViewer from './ChatMediaViewer.vue';
 import RecordingThumbnail from './settings/RecordingThumbnail.vue';
-import HoverHint from './HoverHint.vue';
 import { chatMediaFormat } from '../chat/chatMedia';
 import DialogTransition from './DialogTransition.vue';
 
@@ -36,8 +35,7 @@ type PendingAttachment = {
 );
 
 const props = defineProps<{ group: GroupSummary; members: GroupMember[]; user: AuthUser; syncError?: string; recordingAttachment?: RecordingLibraryEntry }>();
-const emit = defineEmits<{ initialLoad: [groupId: string]; retrySync: []; chooseRecording: []; recordingConsumed: []; messageSent: [groupId: string] }>();
-const desktop = Boolean(window.lycanDesktop);
+const emit = defineEmits<{ initialLoad: [groupId: string]; retrySync: []; recordingConsumed: []; messageSent: [groupId: string] }>();
 const pendingPreview = ref<PendingAttachment | null>(null);
 const cache = inject(ACCOUNT_CACHE, null);
 const viewedMedia = ref<ChatMessage | null>(null);
@@ -426,7 +424,7 @@ onScopeDispose(() => {
             <div class="chat-message-body">
               <div v-if="startsNewMessageGroup(message, index)" class="chat-message-meta"><button v-if="message.senderDeletedAt" type="button" class="chat-historical-sender" @click="showHistoricalProfile(message, $event.currentTarget as HTMLElement)">{{ senderName(message) }}</button><strong v-else>{{ senderName(message) }}</strong><time :datetime="message.createdAt" :title="formatFullMessageTime(message.createdAt)">{{ formatMessageTime(message.createdAt, calendarNow) }}</time></div>
               <p v-if="message.content" class="chat-message-content"><template v-for="(segment, segmentIndex) in messageSegments(message.content)" :key="segmentIndex"><a v-if="segment.href" class="chat-message-link" :href="segment.href" @click.prevent="openLink(segment.href)">{{ segment.text }}</a><template v-else>{{ segment.text }}</template></template></p>
-              <ChatImage v-if="message.type === 'IMAGE' && message.attachment" :group-id="group.id" :attachment-id="message.attachment.id"
+              <ChatImage v-if="message.type === 'IMAGE' && message.attachment" :group-id="group.id" :attachment-id="message.attachment.id" :file-name="message.attachment.fileName"
                 :width="message.attachment.width ?? 1" :height="message.attachment.height ?? 1" :alt="`${senderName(message)} 发送的图片`" @preview="blob => { viewedMediaBlob = blob; viewedMedia = message; }" />
               <ChatFileMedia v-if="message.type === 'FILE' && message.attachment" :group-id="group.id" :attachment="message.attachment" @preview="blob => { viewedMediaBlob = blob; viewedMedia = message; }" />
             </div>
@@ -441,24 +439,21 @@ onScopeDispose(() => {
     </div>
     <div class="composer-shell">
       <p v-if="error" class="chat-error" role="alert">{{ error }}</p>
-      <form class="composer" :class="{ 'has-recording-picker': desktop }" @submit.prevent="submit()">
+      <form class="composer" @submit.prevent="submit()">
         <input ref="fileInput" type="file" hidden multiple @change="chooseFiles" />
         <button type="button" aria-label="添加文件" :disabled="busy || preparing" @click="fileInput?.click()"><Plus :size="16" /></button>
-        <HoverHint v-if="desktop" text="分享录像" placement="top">
-          <button type="button" aria-label="分享录像" :disabled="busy || preparing" @click="emit('chooseRecording')"><Film :size="16" /></button>
-        </HoverHint>
         <div ref="composerViewport" class="composer-content">
           <div ref="composerContent">
             <div v-if="preparing" class="chat-transfer-state" role="status">正在压缩图片…</div>
             <div v-if="pendingAttachments.length" class="composer-attachments">
               <div v-for="item in pendingAttachments" :key="item.id" class="composer-attachment">
-                <RecordingThumbnail v-if="attachmentKind(item) === 'video'" class="composer-video-cover" :source="item.previewUrl" :disabled="!item.previewUrl" @preview="pendingPreview = item" />
-                <button v-else type="button" class="composer-attachment-preview" :aria-label="`预览 ${item.file.name}`" :disabled="!attachmentKind(item) || !item.previewUrl" @click="pendingPreview = item">
-                  <img v-if="attachmentKind(item) === 'image' && item.previewUrl" :src="item.previewUrl" alt="待发送图片" />
+                <button type="button" class="composer-attachment-preview" :aria-label="`预览 ${item.file.name}`" :disabled="!attachmentKind(item) || !item.previewUrl" @click="pendingPreview = item">
+                  <RecordingThumbnail v-if="attachmentKind(item) === 'video'" class="composer-video-cover" :source="item.previewUrl" :disabled="!item.previewUrl" />
+                  <img v-else-if="attachmentKind(item) === 'image' && item.previewUrl" :src="item.previewUrl" alt="" />
                   <Music2 v-else-if="attachmentKind(item) === 'audio'" :size="20" />
                   <File v-else :size="20" />
+                  <span class="composer-attachment-name">{{ item.file.name }}</span>
                 </button>
-                <span class="composer-attachment-name">{{ item.file.name }}</span>
                 <small>{{ item.kind === 'IMAGE' ? '已压缩' : (item.file.size / 1024 / 1024).toFixed(2) + ' MB' }}</small>
                 <progress v-if="item.state === 'uploading' && item.kind === 'FILE'" :value="item.progress" :max="item.file.size" aria-label="文件上传进度" />
                 <small v-if="item.error" class="chat-file-error" :role="item.state === 'failed' ? 'alert' : 'status'">{{ item.error }}</small>

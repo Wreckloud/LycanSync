@@ -163,6 +163,33 @@ async function sharing(page: Page, ids: string[]) {
   await page.evaluate((identities) => (window as unknown as { __viewingTest: { sharing(ids: string[]): void } }).__viewingTest.sharing(identities), ids);
 }
 
+test('整体收起和展开保留成员、聚焦或网格布局以及聊天草稿', async ({ page }, testInfo) => {
+  await sharing(page, ['A', 'B']);
+  const input = page.getByRole('textbox', { name: '消息内容' });
+  await input.fill('继续聊天');
+  const members = page.getByRole('region', { name: '语音成员', exact: true });
+  const fold = page.getByRole('button', { name: '收起语音成员和画面' });
+  const unfold = page.getByRole('button', { name: '展开语音成员和画面' });
+  for (const mode of ['成员', '聚焦', '网格']) {
+    if (mode === '聚焦') await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+    if (mode === '网格') await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
+    await fold.click();
+    await expect(members).toHaveCount(0);
+    await expect(page.locator('.viewing-stage')).toHaveCSS('height', '0px');
+    await expect(page.getByTestId('callbar')).toBeVisible();
+    await expect(input).toHaveValue('继续聊天');
+    if (mode === '聚焦') await page.screenshot({ path: testInfo.outputPath('view-folded.png') });
+    await unfold.click();
+    if (mode === '网格') await expect(page.getByRole('button', { name: '聚焦成员B', exact: true })).toBeVisible();
+    else await expect(members).toBeVisible();
+    if (mode === '聚焦') {
+      await expect(page.getByRole('button', { name: '查看全部共享画面', exact: true })).toBeVisible();
+      await expect.poll(() => page.locator('.voice-panel').evaluate(element => element.getAnimations({ subtree: true }).length)).toBe(0);
+      await page.screenshot({ path: testInfo.outputPath('view-expanded.png') });
+    }
+  }
+});
+
 test('群头像短暂停留不弹标签，停满 300 毫秒才显示', async ({ page }) => {
   const avatar = page.getByRole('button', { name: /^观看测试，/ });
   const hint = page.getByRole('tooltip');
@@ -849,8 +876,8 @@ test('统一卡片尺寸，点击切换与成员折叠记忆，横向拖动不�
   await page.getByRole('button', { name: '展开成员', exact: true }).click();
   await expect(strip).toBeVisible();
   await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
-  const separator = page.getByRole('separator', { name: '调整观看区域高度' });
-  await separator.focus(); await separator.press('ArrowUp');
+  const handle = page.getByRole('button', { name: '收起语音成员和画面' });
+  await expect(handle).toBeVisible();
   for (const width of [960, 640, 420]) {
     await page.setViewportSize({ width, height: 900 });
     await expect(page.getByRole('textbox', { name: '消息内容' })).toBeInViewport();
@@ -993,8 +1020,8 @@ test('聚焦网格和成员折叠只覆盖聊天，保留历史阅读位置与�
   await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
   await expect(page.locator('.voice-panel')).toHaveClass(/is-viewing/);
   await unchanged();
-  const separator = page.getByRole('separator', { name: '调整观看区域高度' });
-  const viewingHeight = await separator.getAttribute('aria-valuenow');
+  const stage = page.locator('.viewing-stage');
+  const viewingHeight = await stage.evaluate(el => (el as HTMLElement).style.height);
   for (let attempt = 0; attempt < 2; attempt++) {
     await page.getByRole('button', { name: '设置', exact: true }).click();
     const settings = page.getByRole('main', { name: '设置', exact: true });
@@ -1004,7 +1031,7 @@ test('聚焦网格和成员折叠只覆盖聊天，保留历史阅读位置与�
     expect((await readingAnchor.boundingBox())!.y).toBeCloseTo(anchorBefore!.y, 0);
     await page.getByRole('button', { name: '返回应用', exact: true }).click();
     await unchanged();
-    await expect(separator).toHaveAttribute('aria-valuenow', viewingHeight!);
+    await expect(stage).toHaveCSS('height', viewingHeight);
   }
   await page.getByRole('button', { name: '收起成员', exact: true }).click();
   await unchanged();
@@ -1088,21 +1115,64 @@ test('入退语音在历史顶部、中部和底部都保持消息与输入框�
   }
 });
 
+test('短手柄折叠后两侧可点击，聚焦拖动只改画面并吸附两端', async ({ page }, testInfo) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await sharing(page, ['A']);
+  await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+  const handle = page.locator('.viewing-fold');
+  const height = () => page.locator('.viewing-stage').evaluate(el => el.getBoundingClientRect().height);
+  const cards = page.locator('.viewing-members-panel');
+  const cardHeight = (await cards.boundingBox())!.height;
+  async function pull(dy: number) {
+    const bounds = (await handle.boundingBox())!;
+    const x = bounds.x + bounds.width / 2, y = bounds.y + bounds.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x, y + dy, { steps: 8 });
+    await page.mouse.up();
+  }
+  const initial = await height();
+  await pull(-70);
+  await expect.poll(height).toBeCloseTo(initial - 70, 0);
+  expect((await cards.boundingBox())!.height).toBe(cardHeight);
+  await pull(-initial + 210);
+  await expect(handle).toHaveAttribute('aria-expanded', 'false');
+  await expect.poll(height).toBe(0);
+  expect(await handle.evaluate(el => {
+    const rect = el.getBoundingClientRect();
+    const y = rect.top + rect.height / 2;
+    return rect.width < 100 && [-12, rect.width + 12].every(dx =>
+      !document.elementFromPoint(rect.left + dx, y)?.closest('.voice-panel'));
+  })).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('short-handle.png') });
+  await handle.click();
+  await expect.poll(height).toBeCloseTo(initial - 70, 0);
+  await handle.click();
+  await pull(36);
+  await expect(handle).toHaveAttribute('aria-expanded', 'true');
+  const maximum = await height();
+  await pull(-80);
+  await expect.poll(height).toBeCloseTo(maximum - 80, 0);
+  await pull(62);
+  await expect.poll(height).toBeCloseTo(maximum, 0);
+  await expect(page.getByTestId('callbar')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('focus-handle.png') });
+});
+
 test('观看默认高度和拖动上限一致，缩窗保留偏好且不遮住必要操作', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize({ width: 1280, height: 900 });
   await sharing(page, ['A']);
   await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
-  const separator = page.getByRole('separator', { name: '调整观看区域高度' });
-  await expect(separator).toBeVisible();
-  const initial = Number(await separator.getAttribute('aria-valuenow'));
-  const maximum = Number(await separator.getAttribute('aria-valuemax'));
-  expect(initial).toBeLessThanOrEqual(maximum);
-  await separator.press('ArrowDown');
-  const increased = Number(await separator.getAttribute('aria-valuenow'));
-  expect(increased).toBeGreaterThanOrEqual(initial);
-  await separator.press('ArrowUp');
-  const preferred = Number(await separator.getAttribute('aria-valuenow'));
+  const handle = page.getByRole('button', { name: '收起语音成员和画面' });
+  const stageHeight = () => page.locator('.viewing-stage').evaluate(el => el.getBoundingClientRect().height);
+  await expect(handle).toBeVisible();
+  const initial = await stageHeight();
+  await handle.press('ArrowDown');
+  expect(await stageHeight()).toBeGreaterThanOrEqual(initial);
+  await handle.press('ArrowUp');
+  const preferred = await stageHeight();
   for (const height of [560, 900]) {
     await page.setViewportSize({ width: 1280, height });
     await expect(page.getByRole('textbox', { name: '消息内容' })).toBeInViewport();
@@ -1117,7 +1187,7 @@ test('观看默认高度和拖动上限一致，缩窗保留偏好且不遮住�
     const voice = await page.getByRole('region', { name: '当前语音成员', exact: true }).boundingBox();
     expect(panel!.y + panel!.height).toBeLessThanOrEqual(voice!.y + voice!.height + 1);
   }
-  await expect.poll(async () => Number(await separator.getAttribute('aria-valuenow'))).toBe(preferred);
+  await expect.poll(stageHeight).toBe(preferred);
 });
 
 test('群菜单不被标题裁切，控制栏退出时聊天连续复位且保留草稿', async ({ page }) => {

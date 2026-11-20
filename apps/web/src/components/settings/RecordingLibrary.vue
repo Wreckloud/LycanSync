@@ -3,7 +3,7 @@ import { computed, inject, nextTick, onMounted, onScopeDispose, ref, watch } fro
 import { useRecordingLibrary } from '../../recording/useRecordingLibrary';
 import { RECORDING_SHARE } from '../../recording/useRecordingShare';
 import ExpandSection from '../ExpandSection.vue';
-import { ChevronUp, ChevronDown } from '@lucide/vue';
+import { ChevronUp, ChevronDown, FolderOpen, Forward, Trash2 } from '@lucide/vue';
 import SegmentedControl from '../SegmentedControl.vue';
 import DialogTransition from '../DialogTransition.vue';
 import RecordingPreview from './RecordingPreview.vue';
@@ -12,8 +12,8 @@ import InlineFeedback from '../InlineFeedback.vue';
 import { useBackdropDismiss } from '../useBackdropDismiss';
 import { keepDialogFocus } from '../dialogFocus';
 
-const props = defineProps<{ status: DesktopRecordingStatus; picking?: boolean }>();
-const emit = defineEmits<{ close: []; choose: [entry: RecordingLibraryEntry] }>();
+const props = defineProps<{ status: DesktopRecordingStatus }>();
+const emit = defineEmits<{ close: [] }>();
 const share = inject(RECORDING_SHARE);
 const expandedUnavailable = ref(false);
 const filters = [{ id: 'all', label: '全部' }, { id: 'recording', label: '录制' }, { id: 'replay', label: '回放' }, { id: 'clip', label: '剪辑' }] as const;
@@ -61,6 +61,13 @@ function previewSavedClip(clip: RecordingLibraryEntry) {
   preview.value = clip;
   void library.load();
 }
+async function returnToList() {
+  const id = preview.value?.id;
+  preview.value = null;
+  await nextTick();
+  const opener = id && dialog.value?.querySelector<HTMLButtonElement>(`[data-recording-id="${CSS.escape(id)}"] .library-preview:enabled`);
+  (opener || dialog.value)?.focus({ preventScroll: true });
+}
 function openExternalPreview() {
   const entry = preview.value;
   if (!entry) return;
@@ -95,8 +102,8 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
 <template>
   <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="emit('close')">
     <section ref="dialog" class="recording-library-dialog" role="dialog" aria-modal="true" aria-labelledby="recording-library-title" tabindex="-1" @keydown="keepDialogFocus">
-      <h2 id="recording-library-title">{{ picking ? '选择录像' : '本地录像管理器' }}</h2>
-      <p class="library-intro">{{ picking ? '选择录像添加到当前群聊，点击封面可先预览。' : '查看录制和回放，截取精彩片段，分享给群里的朋友。' }}</p>
+      <h2 id="recording-library-title">本地录像管理器</h2>
+      <p class="library-intro">查看录制和回放，截取精彩片段，分享给群里的朋友。</p>
       <SegmentedControl v-model="library.kind.value" :options="filters" label="录像类型" />
       <div ref="content" class="recording-library-content">
         <InlineFeedback :message="notice" :pending="loading ? '正在读取录像列表…' : ''" />
@@ -105,26 +112,25 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
         <section v-for="group in groups" :key="group.date" class="library-day">
           <h3>{{ group.date }}</h3>
           <article v-for="entry in group.items" :key="entry.id" :data-recording-id="entry.id" class="library-row">
-            <RecordingThumbnail :key="`${entry.id}:${entry.state}:${entry.availability}`" :source="recordingSource(entry.id)" :disabled="!canPreview(entry)" @preview="preview = entry" @duration="library.updateDuration(entry, $event)" />
-            <div class="library-description">
-              <strong>{{ title(entry) }}</strong>
-              <small>{{ new Date(entry.createdAt).toLocaleString([], { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }} · {{ duration(entry.durationMs) }}<template v-if="entry.bytes !== null"> · {{ (entry.bytes / 1024 / 1024).toFixed(1) }} MiB</template></small>
-              <small v-if="entry.state !== 'saved'">{{ state(entry) }}</small>
+            <button type="button" class="library-preview" :aria-label="`预览 ${title(entry)}`" :disabled="!canPreview(entry)" @click="preview = entry">
+              <RecordingThumbnail play-badge :source="recordingSource(entry.id)" :disabled="!canPreview(entry)" @duration="library.updateDuration(entry, $event)" />
+              <span class="library-description">
+                <strong>{{ title(entry) }}</strong>
+                <small>{{ duration(entry.durationMs) }}<template v-if="entry.bytes !== null"> · {{ (entry.bytes / 1024 / 1024).toFixed(1) }} MiB</template></small>
+                <small v-if="entry.state !== 'saved'">{{ state(entry) }}</small>
+              </span>
+            </button>
+            <div class="library-actions">
+              <button type="button" aria-label="分享" title="分享" :disabled="!canPreview(entry)" @click="share?.select(entry)"><Forward :size="16" /><span>分享</span></button>
+              <button type="button" class="settings-button library-icon" aria-label="在文件夹中显示" title="在文件夹中显示" :disabled="!!pendingId || !canPreview(entry)" @click="library.file(entry, 'reveal')"><FolderOpen :size="16" /></button>
+              <button type="button" class="settings-button library-icon library-delete" aria-label="删除录像" title="删除录像" :disabled="!!pendingId || entry.state === 'recording'" @click="library.file(entry, 'delete')"><Trash2 :size="16" /></button>
             </div>
-            <button :disabled="!canPreview(entry)" @click="picking ? emit('choose', entry) : share?.select(entry)">{{ picking ? '添加' : '分享' }}</button>
-            <details v-if="!picking" class="library-more">
-              <summary aria-label="更多操作">···</summary>
-              <div class="library-menu">
-                <button :disabled="!!pendingId || !canPreview(entry)" @click="library.file(entry, 'reveal')">在文件夹中显示</button>
-                <button class="danger-text" :disabled="!!pendingId || entry.state === 'recording'" @click="library.file(entry, 'delete')">删除录像</button>
-              </div>
-            </details>
           </article>
         </section>
         <section v-if="unavailable.length" class="library-unavailable">
           <ExpandSection :open="expandedUnavailable">
             <article v-for="entry in unavailable" :key="entry.id" :data-recording-id="entry.id" class="library-row">
-              <div class="library-description"><strong>{{ title(entry) }}</strong><small>{{ new Date(entry.createdAt).toLocaleString() }} · {{ state(entry) }}</small></div>
+              <div class="library-description"><strong>{{ title(entry) }}</strong><small>{{ new Date(entry.createdAt).toLocaleDateString() }} · {{ state(entry) }}</small></div>
               <button v-if="entry.availability === 'changed'" :disabled="!!pendingId" @click="library.file(entry, 'relink')">重新关联</button>
               <button :disabled="!!pendingId" @click="library.file(entry, 'delete')">移除记录</button>
             </article>
@@ -140,7 +146,7 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
     </section>
     <DialogTransition>
       <div v-if="preview" class="dialog-backdrop">
-        <RecordingPreview :key="preview.id" :entry="preview" :source="recordingSource(preview.id)" @back="preview = null" @close="emit('close')" @external="openExternalPreview" @saved="previewSavedClip" />
+        <RecordingPreview :key="preview.id" :entry="preview" :source="recordingSource(preview.id)" @back="returnToList" @external="openExternalPreview" @saved="previewSavedClip" />
       </div>
     </DialogTransition>
   </div>
@@ -154,13 +160,23 @@ h2 { margin: 0; font-size: 22px; line-height: 32px; }
 .card-actions { flex-shrink: 0; }
 .library-day h3 { margin: 16px 0 4px; color: var(--muted); font-size: 12px; font-weight: 400; }
 .library-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; }
+.library-preview { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; padding: 0; border: 0; border-radius: 6px; text-align: left; background: transparent; cursor: pointer; }
+.library-preview:is(:hover, :focus-visible):enabled { background: var(--panel-soft); }
+.library-preview:disabled { cursor: default; }
+.library-preview:focus-visible:enabled .recording-thumbnail { border-color: var(--accent); }
 .library-description { flex: 1; min-width: 0; display: grid; gap: 6px; }
 .library-description strong { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .library-description small { color: var(--muted); font-size: 12px; }
-.library-more { position: relative; }
-.library-more summary { cursor: pointer; list-style: none; padding: 8px; }
-.library-menu { position: absolute; right: 0; bottom: 100%; z-index: 2; display: grid; width: 128px; padding: 6px; background: var(--panel-soft); border: 1px solid var(--border); border-radius: 6px; }
-.library-menu button { border: 0; background: transparent; text-align: left; }
+.library-actions { display: flex; flex-shrink: 0; gap: 6px; }
+.library-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 32px; height: 32px; }
+.library-actions .library-icon { width: 32px; padding: 0; }
+.library-actions .library-delete { color: var(--danger); }
+@media (max-width: 640px) {
+  .library-actions span { display: none; }
+  .library-actions button { padding: 0; }
+  .library-preview { gap: 8px; }
+  .library-preview .recording-thumbnail { width: 72px; height: 42px; flex-basis: 72px; }
+}
 .library-unavailable { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 8px; }
 .library-disclosure { display: flex; align-items: center; gap: 4px; border: 0; padding-left: 0; color: var(--muted); background: transparent; }
 </style>

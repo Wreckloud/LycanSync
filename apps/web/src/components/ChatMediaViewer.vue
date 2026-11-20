@@ -6,7 +6,6 @@ import { chatMediaFormat } from '../chat/chatMedia';
 import { useLoadingHint } from './useLoadingHint';
 import { useBackdropDismiss } from './useBackdropDismiss';
 import { keepDialogFocus } from './dialogFocus';
-import HoverHint from './HoverHint.vue';
 import MediaVideoSurface from './MediaVideoSurface.vue';
 import ChatImageSurface from './ChatImageSurface.vue';
 
@@ -163,7 +162,7 @@ onScopeDispose(() => {
     <section class="chat-media-viewer" :class="{ 'media-viewer-shell': format?.kind === 'image' || format?.kind === 'video' }" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1" @keydown="keepDialogFocus">
       <header v-if="format?.kind === 'audio' || !source || (previewFailed && format?.kind === 'image')">
         <strong id="chat-media-title" :title="title">{{ title }}</strong>
-        <HoverHint text="关闭" placement="top"><button ref="closeButton" type="button" aria-label="关闭查看器" @click="close"><X :size="18" /></button></HoverHint>
+        <button ref="closeButton" type="button" aria-label="关闭查看器" title="关闭查看器" @click="close"><X :size="18" /></button>
       </header>
       <div class="chat-media-stage" :aria-busy="loading">
         <ChatImageSurface v-if="source && format?.kind === 'image' && !previewFailed" :source="source" :title="title" :downloadable="!localSource" @close="close" @download="download" @error="playbackFailed" />
@@ -175,7 +174,7 @@ onScopeDispose(() => {
         <span v-else-if="loadingHint" role="status">正在加载…</span>
       </div>
       <div v-if="!localSource && (format?.kind === 'audio' || !source || (previewFailed && format?.kind === 'image'))" class="media-fallback-tools">
-        <HoverHint text="下载文件" placement="top"><button type="button" aria-label="下载文件" :disabled="downloading || (imageMessage && !source)" @click="download"><Download :size="20" /></button></HoverHint>
+        <button type="button" aria-label="下载文件" title="下载文件" :disabled="downloading || (imageMessage && !source)" @click="download"><Download :size="20" /></button>
       </div>
       <footer v-if="error || conversionHint || (previewFailed && format?.kind === 'video' && !compatible)" class="chat-media-feedback">
         <span v-if="error" role="alert">{{ error }}</span>

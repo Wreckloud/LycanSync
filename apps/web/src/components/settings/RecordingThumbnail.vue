@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { onMounted, onScopeDispose, ref, watch } from 'vue';
-import { Play } from '@lucide/vue';
+import { Film, Play } from '@lucide/vue';
 import { loadRecordingThumbnail, recordingThumbnailDuration } from '../../recording/recordingThumbnails';
 
-const props = defineProps<{ source: string; disabled: boolean; passive?: boolean }>();
-const emit = defineEmits<{ preview: []; duration: [milliseconds: number] }>();
+const props = defineProps<{ source: string; disabled: boolean; playBadge?: boolean }>();
+const emit = defineEmits<{ duration: [milliseconds: number] }>();
 const frame = ref<HTMLElement | null>(null);
 const canvas = ref<HTMLCanvasElement | null>(null);
 const ready = ref(false);
@@ -49,14 +49,15 @@ onScopeDispose(() => { disposed = true; observer?.disconnect(); release(); });
 </script>
 
 <template>
-  <component :is="passive ? 'div' : 'button'" ref="frame" :type="passive ? undefined : 'button'" class="recording-thumbnail" :disabled="passive ? undefined : disabled" :aria-label="passive ? '录像封面' : '预览录像'" :title="passive ? undefined : '预览录像'" @click="!passive && emit('preview')">
+  <span ref="frame" class="recording-thumbnail" aria-hidden="true">
     <canvas ref="canvas" v-show="ready" aria-hidden="true" />
-    <Play :size="24" aria-hidden="true" />
-  </component>
+    <Play v-if="playBadge" class="play-badge" :size="24" aria-hidden="true" />
+    <Film v-else-if="!ready" :size="18" aria-hidden="true" />
+  </span>
 </template>
 
 <style scoped>
 .recording-thumbnail { position: relative; display: grid; place-items: center; flex: 0 0 120px; width: 120px; height: 68px; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; background: var(--background); }
 .recording-thumbnail canvas { max-width: 100%; max-height: 100%; }
-.recording-thumbnail svg { position: absolute; padding: 6px; box-sizing: content-box; border-radius: 50%; background: #171c22cc; color: #e1e6eb; }
+.play-badge { position: absolute; padding: 6px; box-sizing: content-box; border-radius: 50%; background: #171c22cc; color: #e1e6eb; }
 </style>

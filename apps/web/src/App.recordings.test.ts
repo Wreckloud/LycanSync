@@ -13,7 +13,7 @@ const compiled = ts.transpile(callbacks.map(statement => statement.getText(sourc
 function fixture() {
   const state = { desktop: { getRecordingLibrary: vi.fn() }, hasRecordings: ref<boolean | null>(null), recordingLibraryRevision: 0,
     appDisposed: false, appNotice: ref({ id: 1 }), console: { warn: vi.fn() }, settingsOpen: ref(false), settingsSection: ref('account'),
-    settingsView: ref({ interactionBlocked: false, leaving: false }), recordingLibraryMode: ref<string | null>(null),
+    settingsView: ref({ interactionBlocked: false, leaving: false }), recordingLibraryOpen: ref(false),
     openSettings: vi.fn(async () => { state.settingsOpen.value = true; state.settingsSection.value = 'recording'; }), dismissAppNotice: vi.fn() };
   const actions = runInNewContext(`${compiled}\n({refreshRecordingAvailability,openSavedRecordings})`, state) as {
     refreshRecordingAvailability(): Promise<void>; openSavedRecordings(event: unknown): Promise<void>;
@@ -41,7 +41,7 @@ it('打开设置期间出现的新通知不会被旧录像通知的跳转清掉'
     f.state.appNotice.value = { id: 2 };
   });
   await f.openSavedRecordings({});
-  expect(f.state.recordingLibraryMode.value).toBe('manage');
+  expect(f.state.recordingLibraryOpen.value).toBe(true);
   expect(f.state.dismissAppNotice).not.toHaveBeenCalled();
 });
 it('旧列表响应不能覆盖新保存结果，读取失败不假报有录像', async () => {
@@ -64,11 +64,11 @@ it('成功通知先进入录制设置再打开管理器，被设置编辑阻止�
   const event = {};
   await f.openSavedRecordings(event);
   expect(f.state.openSettings).toHaveBeenCalledWith('recording', event);
-  expect(f.state.recordingLibraryMode.value).toBe('manage');
+  expect(f.state.recordingLibraryOpen.value).toBe(true);
   expect(f.state.settingsOpen.value).toBe(true);
-  f.state.recordingLibraryMode.value = null;
+  f.state.recordingLibraryOpen.value = false;
   f.state.settingsView.value.interactionBlocked = true;
   await f.openSavedRecordings(event);
-  expect(f.state.recordingLibraryMode.value).toBeNull();
+  expect(f.state.recordingLibraryOpen.value).toBe(false);
   expect(f.state.dismissAppNotice).toHaveBeenCalledTimes(1);
 });

@@ -23,8 +23,10 @@ it('关闭选择浮层不添加附件；缺失或录制中的原片不交接', (
   share.select(entry);
   share.visible.value = false;
   expect(share.pending.value).toBeNull();
-  share.choose('', entry);
-  share.choose('target', { ...entry, availability: 'missing' });
-  share.choose('target', { ...entry, state: 'recording' });
+  share.choose('');
+  share.select({ ...entry, availability: 'missing' });
+  share.choose('target');
+  share.select({ ...entry, state: 'recording' });
+  share.choose('target');
   expect(navigate).not.toHaveBeenCalled();
 });

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, onScopeDispose, ref } from 'vue';
-import { ArrowLeft, ArrowLeftToLine, ArrowRightToLine, Forward, Pause, Play, RotateCcw, ScissorsLineDashed, X } from '@lucide/vue';
+import { ArrowLeftToLine, ArrowRightToLine, Forward, Pause, Play, RotateCcw, ScissorsLineDashed, X } from '@lucide/vue';
 import { RECORDING_SHARE } from '../../recording/useRecordingShare';
 import { recordingTime } from '../../recording/recordingTime';
 import { keepDialogFocus } from '../dialogFocus';
@@ -9,14 +9,13 @@ import RecordingTimeline from './RecordingTimeline.vue';
 import RecordingTool from './RecordingTool.vue';
 
 const props = defineProps<{ source: string; entry: RecordingLibraryEntry }>();
-const emit = defineEmits<{ back: []; close: []; external: []; saved: [clip: RecordingLibraryEntry] }>();
+const emit = defineEmits<{ back: []; external: []; saved: [clip: RecordingLibraryEntry] }>();
 const share = inject(RECORDING_SHARE);
 const desktop = window.lycanDesktop;
 const player = ref<HTMLVideoElement | null>(null);
 const timeline = ref<InstanceType<typeof RecordingTimeline> | null>(null);
 const workspace = ref<HTMLElement | null>(null);
 const confirmation = ref<HTMLDialogElement | null>(null);
-const destination = ref<'back' | 'close'>('back');
 const failed = ref(false);
 const editing = ref(false);
 const playing = ref(false);
@@ -148,18 +147,15 @@ function cancelEdit() {
   stopAtCursor(); cancelSeek(); editing.value = false; start.value = 0; end.value = duration.value; error.value = '';
   workspace.value?.focus();
 }
-function leave(to: 'back' | 'close') {
+function leave() {
   if (busy.value) return;
-  stopAtCursor(); destination.value = to;
+  stopAtCursor();
   if (editing.value && (start.value > 0 || end.value < duration.value)) confirmation.value?.showModal();
-  else finishLeave();
-}
-function finishLeave() {
-  if (destination.value === 'back') emit('back'); else emit('close');
+  else emit('back');
 }
 function keys(event: KeyboardEvent) {
   if (confirmation.value?.open || event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return;
-  if (event.key === 'Escape') { event.stopPropagation(); leave('back'); }
+  if (event.key === 'Escape') { event.stopPropagation(); leave(); }
   else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
     event.preventDefault(); step('cursor', event.key === 'ArrowLeft' ? -1 : 1);
   } else if (event.code === 'Space' && !(event.target as HTMLElement).closest('button')) {
@@ -201,7 +197,7 @@ onScopeDispose(() => {
 
 <template>
   <section ref="workspace" class="recording-workspace" role="dialog" aria-modal="true" aria-label="录像预览" tabindex="-1" @keydown="keepDialogFocus($event); keys($event)">
-    <RecordingTool label="关闭录像管理" class="close" :disabled="busy" @click="leave('close')"><X :size="24" /></RecordingTool>
+    <RecordingTool label="返回录像列表" class="close" :disabled="busy" @click="leave()"><X :size="24" /></RecordingTool>
     <div class="stage">
       <video v-if="!failed" ref="player" :src="source" :style="{ '--ratio': aspectRatio }" preload="metadata" playsinline @click="play()" @play="playbackChanged"
         @pause="playbackChanged" @timeupdate="syncClock" @ended="playbackChanged" @error="playbackFailed"
@@ -214,7 +210,6 @@ onScopeDispose(() => {
         <span v-if="editing" class="length">成片 {{ recordingTime(end - start, true) }}</span><span class="clock">{{ recordingTime(cursor, editing) }} / {{ recordingTime(duration) }}</span></div>
       <RecordingTimeline ref="timeline" :duration="duration" :cursor="cursor" :start="start" :end="end" :editing="editing" :disabled="busy || failed" @position="position" @step="step" />
       <div class="tools">
-        <RecordingTool label="返回录像列表" class="back" :disabled="busy" @click="leave('back')"><ArrowLeft :size="18" /></RecordingTool>
         <div class="center">
           <RecordingTool v-if="editing" label="从选区开头播放" class="restart" :disabled="busy" @click="play(true)"><RotateCcw :size="18" /></RecordingTool>
           <RecordingTool v-if="editing" label="设为起点" :disabled="busy || end - cursor < minLength" @click="mark('start')"><ArrowLeftToLine :size="18" /></RecordingTool>
@@ -228,8 +223,8 @@ onScopeDispose(() => {
       </div>
     </div>
     <dialog ref="confirmation" class="discard" @keydown.esc.stop>
-      <h3>选区尚未保存</h3><p>放弃这次选区并{{ destination === 'back' ? '返回录像列表' : '关闭录像管理' }}？</p>
-      <footer><button autofocus @click="confirmation?.close()">继续编辑</button><button @click="finishLeave">放弃并{{ destination === 'back' ? '返回' : '关闭' }}</button></footer>
+      <h3>选区尚未保存</h3><p>放弃这次选区并返回录像列表？</p>
+      <footer><button autofocus @click="confirmation?.close()">继续编辑</button><button @click="emit('back')">放弃并返回</button></footer>
     </dialog>
   </section>
 </template>
@@ -244,11 +239,10 @@ video { display: block; width: min(100cqw, calc(100cqh * var(--ratio))); height:
 .info strong { font-size: 14px; font-weight: 550; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .info span { white-space: nowrap; }.length,.clock { margin-left: auto; }.length + .clock { margin-left: 0; }
 .tools { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); align-items: center; }
-.back { justify-self: start; }.back :deep(.tool-tag) { left: 0; transform: none; }
 .center,.actions { display: flex; align-items: center; }.center { grid-column: 2; position: relative; border-radius: 6px; background: #171c22; }
 .restart { position: absolute; right: calc(100% + 5px); background: #171c22; }
 .actions { justify-self: end; gap: 6px; }.actions button { padding: 5px 10px; }
 .actions .confirm-button:enabled { background: var(--accent); color: white; border-color: var(--accent); }
 .discard { padding: 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); }.discard::backdrop { background: #080a0cc9; }.discard h3 { margin: 0; }.discard footer { display: flex; justify-content: flex-end; gap: 8px; }
-@media(max-width:600px) { .recording-workspace { padding: 52px 14px 26px; }.info strong + span { display: none; }.tools { grid-template-rows: 42px 34px; }.center { grid-row: 1; }.back { grid-row: 2; }.actions { grid-column: 2/-1; grid-row: 2; } }
+@media(max-width:600px) { .recording-workspace { padding: 52px 14px 26px; }.info strong + span { display: none; }.tools { grid-template-rows: 42px 34px; }.center { grid-row: 1; }.actions { grid-column: 2/-1; grid-row: 2; } }
 </style>

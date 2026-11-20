@@ -98,13 +98,17 @@
   background: var(--panel-soft);
 }
 .chat-file-icon { display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 34px; border-radius: 6px; background: var(--panel); color: var(--accent); }
+.chat-file-summary { display: flex; min-width: 0; flex: 1; gap: 10px; align-items: center; text-align: left; padding: 0; border: 0; background: transparent; }
+button.chat-file-summary { cursor: pointer; }
+.chat-media-name { display: block; max-width: min(420px, 100%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 3px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; }
+.chat-media-name:is(:hover, :focus-visible), button.chat-file-summary:is(:hover, :focus-visible) strong { color: var(--text); text-decoration: underline; }
 .chat-file-details { display: grid; min-width: 0; flex: 1; gap: 3px; }
 .chat-file-details strong, .composer-attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-file-details strong { font-size: 13px; }
 .chat-file-details small, .composer-attachment small { color: var(--subtle); font-size: 11px; }
 .chat-file-details progress, .composer-attachment progress { width: 100%; height: 5px; accent-color: var(--accent); }
-.chat-file-card > button, .composer-attachment > button { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
-.chat-file-card > button:hover, .composer-attachment > button:hover { background: var(--panel); color: var(--text); }
+.chat-file-card > button:not(.chat-file-summary), .composer-attachment > button { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
+.chat-file-card > button:not(.chat-file-summary):hover, .composer-attachment > button:enabled:hover { background: var(--panel); color: var(--text); }
 .chat-file-error { color: var(--danger) !important; }
 
 .composer-shell { position: relative; min-width: 0; }
@@ -134,7 +138,7 @@
   background: var(--panel-soft);
 }
 
-.composer button {
+.composer > button {
   width: 36px;
   height: 40px;
   display: grid;
@@ -143,8 +147,6 @@
   background: transparent;
   color: var(--subtle);
 }
-
-.composer.has-recording-picker { grid-template-columns: 36px 36px minmax(0, 1fr) 36px; }
 
 .composer-content { min-width: 0; overflow: hidden; transition: height var(--motion-layout-duration) var(--motion-ease); }
 .composer textarea {
@@ -172,11 +174,12 @@
 .composer textarea::placeholder { color: var(--subtle); }
 .composer-attachments { display: grid; gap: 4px; max-height: 180px; overflow-y: auto; padding-top: 6px; }
 .composer-attachment { display: flex; min-width: 0; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
-.composer-attachment img { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 4px; object-fit: cover; }
+.composer-attachment > button { min-height: 28px; }
+.composer-attachment .composer-attachment-preview { display: flex; flex: 1; gap: 7px; align-items: center; min-width: 0; width: auto; height: 28px; padding: 0; font: inherit; text-align: left; color: inherit; }
+.composer-attachment-preview:disabled { opacity: 1; cursor: default; }
+.composer-attachment-preview > svg { flex-shrink: 0; }
 .composer-attachment-name { min-width: 0; flex: 1; }
 .composer-attachment progress { max-width: 90px; }
 .chat-transfer-state { padding: 6px 0; color: var(--subtle); font-size: 12px; }
 
-.composer-attachment .composer-attachment-preview, .composer-attachment .composer-video-cover { width: 40px; height: 32px; flex: 0 0 40px; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 4px; background: var(--background); }
-.composer-attachment .composer-attachment-preview img { width: 100%; height: 100%; }
-.composer-video-cover svg { width: 14px; height: 14px; padding: 3px; }
+.composer-attachment-preview img, .composer-attachment .composer-video-cover.recording-thumbnail { flex: 0 0 32px; width: 32px; height: 24px; border-radius: 4px; object-fit: cover; }

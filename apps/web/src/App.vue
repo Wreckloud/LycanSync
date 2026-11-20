@@ -218,9 +218,9 @@ watch(() => rtc.status, (status) => { if (status === 'idle') selectCaptureSource
 const groups = ref<GroupSummary[]>([]);
 const recentGroups = useRecentGroups(groups, accountCache, props.user.id);
 const selectedGroupId = ref<string | null>(null);
-const recordingLibraryMode = ref<'manage' | 'pick' | null>(null);
+const recordingLibraryOpen = ref(false);
 const recordingShare = useRecordingShare(groupId => {
-  recordingLibraryMode.value = null;
+  recordingLibraryOpen.value = false;
   previewGroup(groupId);
   if (settingsOpen.value) void closeSettings();
 });
@@ -645,7 +645,7 @@ async function openSavedRecordings(event: MouseEvent) {
   await openSettings('recording', event);
   if (appDisposed || !settingsOpen.value || settingsSection.value !== 'recording'
       || settingsView.value?.interactionBlocked || settingsView.value?.leaving) return;
-  recordingLibraryMode.value = 'manage';
+  recordingLibraryOpen.value = true;
   if (appNotice.value?.id === noticeId) dismissAppNotice();
 }
 
@@ -1103,7 +1103,7 @@ function participantListening(participant: Participant) {
         <div class="group-list">
           <span v-if="selectedGroupIndex >= 0" class="group-selection-marker" aria-hidden="true"
             :style="{ '--selected-group-index': selectedGroupIndex }" />
-          <HoverHint :delay-ms="300" boundary=".group-rail" v-for="group in groups" :key="group.id" :text="group.name" :detail="joinedGroupId === group.id ? '语音中' : undefined"
+          <HoverHint boundary=".group-rail" v-for="group in groups" :key="group.id" :text="group.name" :detail="joinedGroupId === group.id ? '语音中' : undefined"
             :disabled="settingsOpen || editorOpen || !!management || !mainWindowVisible || initialLoading || !!rtc.remoteControlRequest">
           <template #default="{ descriptionId }">
           <button type="button" class="group-button"
@@ -1164,7 +1164,7 @@ function participantListening(participant: Participant) {
           <div class="conversation-main">
             <GroupChat v-if="selectedGroup" :key="selectedGroup.id" :group="selectedGroup"
               :recording-attachment="recordingShare.pending.value?.groupId === selectedGroup.id ? recordingShare.pending.value.entry : undefined"
-              @recording-consumed="recordingShare.pending.value = null" @choose-recording="recordingLibraryMode = 'pick'"
+              @recording-consumed="recordingShare.pending.value = null"
               @message-sent="recentGroups.mark"
               :sync-error="groupError || (presenceConnectionLost ? '暂时无法更新成员状态。' : '')" @retry-sync="retryGroupSync"
               :members="selectedGroupDetail?.members ?? []" :user="user" @initial-load="initialChatGroupId = $event" />
@@ -1234,7 +1234,7 @@ function participantListening(participant: Participant) {
           v-model:menu-open="personalMenuOpen" menu-enabled :active="personalCardActive"
           :presence-mode="presenceMode" :presence-ready="presenceReady" :presence-syncing="presenceSyncing"
           :presence-error="presencePreferenceError || presenceSyncError" @presence-mode="changePresenceMode"
-          :has-recordings="hasRecordings === true" @recordings="recordingLibraryMode = 'manage'"
+          :has-recordings="hasRecordings === true" @recordings="recordingLibraryOpen = true"
           :activity-status="personalActivityStatus" @settings="openSettings" @logout="settingsOpen ? settingsView?.requestLogout() : emit('logout')">
           <IconButton :label="settingsOpen ? '返回应用' : '设置'" :disabled="settingsOpen && !personalCardActive"
             @click="settingsOpen ? settingsView?.closeSettings() : openSettings('account', $event)">
@@ -1257,7 +1257,7 @@ function participantListening(participant: Participant) {
     <Transition name="settings-page" @after-enter="settingsCovered = settingsOpen" @enter-cancelled="settingsCovered = false"
       @after-leave="finishSettingsLeave" @leave-cancelled="settingsPresented = true"
       @before-leave="settingsCovered = false; ($event as HTMLElement).inert = true">
-    <SettingsView @recording-library="recordingLibraryMode = 'manage'" @notice="showAppNotice($event, 'account', 'success')" v-if="settingsOpen" ref="settingsView" :blocked="Boolean(props.interactionBlocked || rtc.remoteControlRequest || !mainWindowVisible)" v-model:section="settingsSection" :user="user" :desktop="Boolean(desktop)"
+    <SettingsView @recording-library="recordingLibraryOpen = true" @notice="showAppNotice($event, 'account', 'success')" v-if="settingsOpen" ref="settingsView" :blocked="Boolean(props.interactionBlocked || rtc.remoteControlRequest || !mainWindowVisible)" v-model:section="settingsSection" :user="user" :desktop="Boolean(desktop)"
       @group-updated="applyGroupDetail" @group-removed="removedFromGroup"
       :audio-shortcuts="audioShortcuts" :call-sound-preferences="callSoundPreferences" :call-sounds="callSounds"
       :overlay="desktop ? voiceOverlay : undefined"
@@ -1273,8 +1273,7 @@ function participantListening(participant: Participant) {
       :save-profile="saveProfile" @close="closeSettings" @logout="emit('logout')" />
     </Transition>
     <DialogTransition>
-    <RecordingLibrary v-if="recordingLibraryMode" :status="recording.state.value" :picking="recordingLibraryMode === 'pick'" @close="recordingLibraryMode = null"
-      @choose="selectedGroupId && recordingShare.choose(selectedGroupId, $event)" />
+    <RecordingLibrary v-if="recordingLibraryOpen" :status="recording.state.value" @close="recordingLibraryOpen = false" />
     </DialogTransition>
     <DialogTransition>
     <RecordingShareDialog v-if="recordingShare.visible.value" :key="recordingShare.entry.value?.id" :share="recordingShare" :groups="recentGroups.sorted.value" />

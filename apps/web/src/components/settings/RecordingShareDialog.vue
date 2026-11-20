@@ -12,6 +12,7 @@ import { useBackdropDismiss } from '../useBackdropDismiss';
 
 const props = defineProps<{ share: ReturnType<typeof useRecordingShare>; groups: GroupSummary[] }>();
 const dialog = ref<HTMLElement | null>(null);
+const previewButton = ref<HTMLButtonElement | null>(null);
 const search = ref<HTMLInputElement | null>(null);
 const query = ref('');
 const expanded = ref(false);
@@ -28,7 +29,7 @@ async function toggleMore() {
   query.value = '';
   if (expanded.value) { await nextTick(); search.value?.focus(); }
 }
-watch(preview, async visible => { if (!visible) { await nextTick(); dialog.value?.focus(); } });
+watch(preview, async visible => { if (!visible) { await nextTick(); previewButton.value?.focus({ preventScroll: true }); } });
 onMounted(() => dialog.value?.focus());
 </script>
 
@@ -36,10 +37,10 @@ onMounted(() => dialog.value?.focus());
   <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="preview ? preview = false : close()">
     <section ref="dialog" class="recording-share-dialog" role="dialog" aria-modal="true" aria-label="分享到群聊" tabindex="-1" :inert="preview" @keydown="keepDialogFocus">
       <h2>分享到群聊</h2>
-      <div v-if="share.entry.value" class="share-recording">
-        <RecordingThumbnail :disabled="false" :source="`lycan://app/recordings/${share.entry.value.id}`" @preview="previewError = false; preview = true" />
+      <button v-if="share.entry.value" ref="previewButton" type="button" class="share-recording" :aria-label="`预览 ${share.entry.value.applicationName || '录像'}`" @click="previewError = false; preview = true">
+        <RecordingThumbnail play-badge :disabled="false" :source="`lycan://app/recordings/${share.entry.value.id}`" />
         <span>{{ share.entry.value.applicationName || '录像' }}<small>选择群聊后添加到待发送附件</small></span>
-      </div>
+      </button>
       <div class="share-destinations">
         <div class="share-list-heading">
           <span>选择群聊</span>
@@ -69,7 +70,8 @@ onMounted(() => dialog.value?.focus());
 <style scoped>
 .recording-share-dialog { width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); box-sizing: border-box; padding: 24px; display: flex; flex-direction: column; gap: 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 h2 { margin: 0; font-size: 22px; line-height: 32px; }
-.share-recording { display: flex; gap: 14px; align-items: center; min-width: 0; }
+.share-recording { display: flex; gap: 14px; align-items: center; min-width: 0; padding: 0; border: 0; border-radius: 6px; background: transparent; text-align: left; cursor: pointer; }
+.share-recording:is(:hover, :focus-visible) { background: var(--panel-soft); }
 .share-recording :deep(.recording-thumbnail) { width: 96px; height: 54px; flex-basis: 96px; }
 .share-recording > span { min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
 small { display: block; color: var(--muted); font-size: 12px; margin-top: 6px; }
