@@ -86,6 +86,7 @@ function openRecordings() {
 
 <style scoped>
 .personal-identity { display: contents; }
+.personal-identity:enabled { cursor: pointer; }
 .personal-identity.is-interactive { display: grid; grid-column: 1 / span 2; grid-template-columns: 32px minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; padding: 0; border: 0; border-radius: 5px; background: transparent; color: inherit; text-align: left; }
 .personal-identity.is-interactive:hover, .personal-identity.is-interactive[aria-expanded='true'] { background: var(--panel-raised); }
 .personal-menu-actions { display: grid; padding-top: 4px; border-top: 1px solid var(--border-soft); }

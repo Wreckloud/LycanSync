@@ -1115,50 +1115,103 @@ test('入退语音在历史顶部、中部和底部都保持消息与输入框�
   }
 });
 
-test('短手柄折叠后两侧可点击，聚焦拖动只改画面并吸附两端', async ({ page }, testInfo) => {
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await sharing(page, ['A']);
-  await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
-  const handle = page.locator('.viewing-fold');
-  const height = () => page.locator('.viewing-stage').evaluate(el => el.getBoundingClientRect().height);
-  const cards = page.locator('.viewing-members-panel');
-  const cardHeight = (await cards.boundingBox())!.height;
-  async function pull(dy: number) {
-    const bounds = (await handle.boundingBox())!;
-    const x = bounds.x + bounds.width / 2, y = bounds.y + bounds.height / 2;
-    await page.mouse.move(x, y);
-    await page.mouse.down();
-    await page.mouse.move(x, y + dy, { steps: 8 });
+for (const layout of ['聚焦', '网格']) {
+  test(`短手柄在${layout}中跟手调高、即时吸附并保留成员卡片`, async ({ page }, testInfo) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await sharing(page, ['A', 'B']);
+    await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+    if (layout === '网格') await page.getByRole('button', { name: '查看全部共享画面' }).click();
+    const handle = page.locator('.viewing-fold');
+    const cards = page.locator('.viewing-members-panel');
+    const height = () => page.locator('.viewing-stage').evaluate(el => el.getBoundingClientRect().height);
+    async function grab() {
+      const bounds = (await handle.boundingBox())!;
+      const x = bounds.x + bounds.width / 2, y = bounds.y + bounds.height / 2;
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      return (dy: number) => page.mouse.move(x, y + dy);
+    }
+    const memberBackground = await page.locator('.voice-panel > .call-viewing-panel').evaluate(el => getComputedStyle(el).backgroundColor);
+    await expect(handle).toHaveCSS('background-color', memberBackground);
+    await handle.hover();
+    await expect(handle).toHaveCSS('position', 'absolute');
+    await expect(handle).toHaveCSS('width', '60px');
+    await expect(handle).toHaveCSS('cursor', 'pointer');
+    await expect(handle).toHaveCSS('background-color', memberBackground);
+    expect(await handle.evaluate(el => {
+      const rect = el.getBoundingClientRect();
+      const y = rect.top + rect.height / 2;
+      return Math.abs(rect.top - el.parentElement!.getBoundingClientRect().bottom) < 1
+        && document.elementFromPoint(rect.left + rect.width / 2, y) === el
+        && [rect.left - 4, rect.right + 4].every(x => !document.elementFromPoint(x, y)?.closest('.voice-panel'));
+    })).toBe(true);
+    expect(await handle.evaluate(el => getComputedStyle(el, '::before').height)).toBe('2px');
+    const initial = await height();
+    let pull = await grab();
+    await pull(-70);
+    await expect.poll(height).toBeCloseTo(initial - 70, 0);
     await page.mouse.up();
-  }
-  const initial = await height();
-  await pull(-70);
-  await expect.poll(height).toBeCloseTo(initial - 70, 0);
-  expect((await cards.boundingBox())!.height).toBe(cardHeight);
-  await pull(-initial + 210);
-  await expect(handle).toHaveAttribute('aria-expanded', 'false');
-  await expect.poll(height).toBe(0);
-  expect(await handle.evaluate(el => {
-    const rect = el.getBoundingClientRect();
-    const y = rect.top + rect.height / 2;
-    return rect.width < 100 && [-12, rect.width + 12].every(dx =>
-      !document.elementFromPoint(rect.left + dx, y)?.closest('.voice-panel'));
-  })).toBe(true);
-  await page.screenshot({ path: testInfo.outputPath('short-handle.png') });
-  await handle.click();
-  await expect.poll(height).toBeCloseTo(initial - 70, 0);
-  await handle.click();
-  await pull(36);
-  await expect(handle).toHaveAttribute('aria-expanded', 'true');
-  const maximum = await height();
-  await pull(-80);
-  await expect.poll(height).toBeCloseTo(maximum - 80, 0);
-  await pull(62);
-  await expect.poll(height).toBeCloseTo(maximum, 0);
-  await expect(page.getByTestId('callbar')).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath('focus-handle.png') });
-});
+    pull = await grab();
+    await pull(160);
+    const maximum = await height();
+    await page.mouse.up();
+    pull = await grab();
+    await pull(-120);
+    await page.mouse.up();
+    await expect.poll(height).toBeCloseTo(maximum - 120, 0);
+    pull = await grab();
+    await pull(81);
+    await expect.poll(height).toBe(maximum);
+    await pull(60);
+    await pull(40);
+    await expect.poll(height).toBeLessThan(maximum);
+    await page.mouse.up();
+
+    const beforeMin = await height();
+    pull = await grab();
+    await pull(140 - beforeMin);
+    await expect.poll(height).toBe(140);
+    await pull(114 - beforeMin);
+    await expect.poll(height).toBe(0);
+    await expect(cards).toBeVisible();
+    await page.mouse.up();
+    await expect(handle).toHaveAttribute('aria-expanded', 'true');
+    if (layout === '聚焦') {
+      const bounds = (await handle.boundingBox())!;
+      await page.screenshot({ path: testInfo.outputPath('member-handle.png'),
+        clip: { x: Math.floor(bounds.x - 90), y: Math.floor(bounds.y - 28), width: 240, height: 64 } });
+    }
+    await handle.click();
+    await expect(cards).toBeHidden();
+    expect(await handle.evaluate(el => {
+      const rect = el.getBoundingClientRect();
+      return [-12, rect.width + 12].every(dx =>
+        !document.elementFromPoint(rect.left + dx, rect.top + rect.height / 2)?.closest('.voice-panel'));
+    })).toBe(true);
+    await handle.click();
+    await expect(cards).toBeVisible();
+    await expect.poll(height).toBe(0);
+    pull = await grab();
+    await pull(36);
+    await expect.poll(height).toBeGreaterThan(0);
+    await page.mouse.up();
+    await expect(page.getByRole('button', { name: layout === '网格' ? '聚焦成员B' : '查看全部共享画面' })).toBeVisible();
+    await expect(page.getByTestId('callbar')).toBeVisible();
+    if (layout === '聚焦') {
+      pull = await grab();
+      await pull(110 - await height());
+      await page.mouse.up();
+      await expect.poll(height).toBe(0);
+      await sharing(page, ['B']);
+      pull = await grab();
+      await pull(180);
+      await page.mouse.up();
+      await expect.poll(height).toBe(0);
+      await expect(cards).toBeVisible();
+    }
+  });
+}
 
 test('观看默认高度和拖动上限一致，缩窗保留偏好且不遮住必要操作', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });

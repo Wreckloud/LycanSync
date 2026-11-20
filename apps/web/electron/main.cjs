@@ -48,6 +48,8 @@ const apiRoutePolicies = new Map([
   ['POST /api/auth/access/preview', { public: true }],
   ['POST /api/auth/access/redeem', { public: true, savesSession: true }],
   ['GET /api/auth/account', {}],
+  ['GET /api/chat/upload-limits', {}],
+  ['PUT /api/chat/upload-limits', {}],
   ['GET /api/auth/server-settings', {}],
   ['GET /api/auth/server-settings/qq', {}],
   ['PUT /api/auth/server-settings/qq', { maxBodyBytes: 4096 }],
@@ -90,6 +92,9 @@ const groupPresencePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[
 const groupPresenceChangesPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/presence-changes$/i;
 const groupMessagePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/messages$/i;
 const groupAttachmentPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/attachments\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const transferPath = /^\/api\/groups\/[0-9a-f-]{36}\/files\/transfers$/i;
+const declareFilePath = /^\/api\/groups\/[0-9a-f-]{36}\/files\/transfers\/[0-9a-f-]{36}$/i;
+const stopFilePath = /^\/api\/groups\/[0-9a-f-]{36}\/files\/transfers\/[0-9a-f-]{36}\/[0-9a-f-]{36}$/i;
 const groupFilePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/files(?:\/(?:requests\/)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$/i;
 const groupFileDownloadPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/files\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const groupFileMediaPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/files\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\/(?:media|thumbnail|preview\/media))$/i;
@@ -597,6 +602,9 @@ async function serveApplication(request) {
           || (request.method === 'GET' && url.pathname.endsWith('/url'))
           || (request.method === 'PUT' && url.pathname.endsWith('/note'))
           || (request.method === 'DELETE' && !/\/(renew|url|note)$/.test(url.pathname))) ? {} : undefined)
+      ?? (request.method === 'GET' && transferPath.test(url.pathname) ? {} : undefined)
+      ?? (request.method === 'POST' && declareFilePath.test(url.pathname) ? { maxBodyBytes: 16 * 1024 } : undefined)
+      ?? (request.method === 'DELETE' && stopFilePath.test(url.pathname) ? {} : undefined)
       ?? (request.method === 'GET' && groupMessagePath.test(url.pathname) && url.searchParams.get('wait') === 'true'
         ? { longPolling: true } : undefined)
       ?? (request.method === 'GET' && (groupPath.test(url.pathname) || groupMemberProfilePath.test(url.pathname) || groupPresencePath.test(url.pathname) || groupMessagePath.test(url.pathname)
@@ -638,6 +646,7 @@ async function serveApplication(request) {
         headers: { ...(body ? { 'Content-Type': request.headers.get('Content-Type') || 'application/json' } : {}),
           ...(groupFileMediaPath.test(url.pathname) && request.headers.has('Range') ? { Range: request.headers.get('Range') } : {}),
           ...(streamingUpload ? {
+            ...(request.headers.has('X-File-Message') ? { 'X-File-Message': request.headers.get('X-File-Message') } : {}),
             'X-File-Name': request.headers.get('X-File-Name') || '',
             'X-File-Size': request.headers.get('X-File-Size') || '',
             'X-Upload-Id': request.headers.get('X-Upload-Id') || '',

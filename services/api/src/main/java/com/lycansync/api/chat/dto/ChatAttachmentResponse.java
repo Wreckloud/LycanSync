@@ -18,5 +18,9 @@ public record ChatAttachmentResponse(
         @Schema(description = "图片宽度") Integer width,
         @Schema(description = "图片高度") Integer height,
         @Schema(description = "附件字节大小", example = "3145728") Long byteSize,
-        @Schema(description = "普通文件原始文件名") String fileName) {
+        @Schema(description = "普通文件原始文件名") String fileName,
+        @Schema(description = "尚未就绪的文件传输状态：PENDING 或 FAILED") String transferStatus) {
+    public ChatAttachmentResponse(UUID id, String contentType, Integer width, Integer height, Long byteSize, String fileName) {
+        this(id, contentType, width, height, byteSize, fileName, null);
+    }
 }

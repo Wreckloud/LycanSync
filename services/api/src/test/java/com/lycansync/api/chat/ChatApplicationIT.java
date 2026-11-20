@@ -59,6 +59,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -124,15 +125,56 @@ class ChatApplicationIT {
 
     @BeforeEach
     void resetDatabase() throws IOException {
-        jdbc.sql("TRUNCATE rtc_voice_time, system_state, auth_qq_identity, auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_file_upload_reservation, "
+        jdbc.sql("TRUNCATE rtc_voice_time, system_state, auth_qq_identity, auth_access_link, user_presence, chat_attachment, chat_file_delivery, chat_file_attachment, chat_file_upload_reservation, "
                 + "chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
-        jdbc.sql("UPDATE chat_file_storage_quota SET used_bytes = 0, reserved_bytes = 0 WHERE id = 1").update();
+        jdbc.sql("UPDATE chat_file_storage_quota SET used_bytes = 0, reserved_bytes = 0, max_file_bytes = NULL, max_storage_bytes = NULL WHERE id = 1").update();
         jdbc.sql("INSERT INTO system_state(id) VALUES (1)").update();
         if (Files.exists(FILE_STORAGE)) {
             try (var paths = Files.walk(FILE_STORAGE)) {
                 for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
             }
         }
+    }
+
+    @Test
+    void shouldKeepFilePositionAndEnforceCurrentLimitsBeforeUpload() throws Exception {
+        String sender = localAuth.register(new LocalRegistrationRequest("Sender", PASSWORD)).sessionToken();
+        String member = localAuth.register(new LocalRegistrationRequest("Member", PASSWORD)).sessionToken();
+        String group = createGroup(sender);
+        addFriend(group, sender, member);
+        UUID id = UUID.randomUUID();
+        UUID attempt = UUID.randomUUID();
+        String transfers = "/api/groups/" + group + "/files/transfers";
+        String name = encodeFileName("sample.bin");
+        String declaration = objectMapper.writeValueAsString(java.util.Map.of("encodedName", name, "byteSize", 3,
+                "attemptId", attempt, "content", ""));
+        mvc.perform(post(transfers + "/" + id).header(HttpHeaders.AUTHORIZATION, "Bearer " + sender)
+                .contentType(MediaType.APPLICATION_JSON).content(declaration))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.attachment.transferStatus").value("PENDING"));
+        mvc.perform(multipart("/api/groups/{group}/messages", group).header(HttpHeaders.AUTHORIZATION, "Bearer " + sender)
+                .param("content", "稍后发言")).andExpect(status().isCreated());
+        mvc.perform(get("/api/groups/{group}/messages", group).header(HttpHeaders.AUTHORIZATION, "Bearer " + member))
+                .andExpect(jsonPath("$.messages[0].id").value(id.toString()))
+                .andExpect(jsonPath("$.messages[1].content").value("稍后发言"));
+        mvc.perform(post("/api/groups/{group}/files", group).header(HttpHeaders.AUTHORIZATION, "Bearer " + sender)
+                .header("X-File-Message", id).header("X-Upload-Id", attempt).header("X-File-Name", name)
+                .header("X-File-Size", 3).contentType(MediaType.APPLICATION_OCTET_STREAM).content(new byte[] { 1, 2, 3 }))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.id").value(id.toString()));
+        mvc.perform(get(transfers).param("ids", id.toString()).header(HttpHeaders.AUTHORIZATION, "Bearer " + member))
+                .andExpect(jsonPath("$[0].attachment.transferStatus").doesNotExist())
+                .andExpect(jsonPath("$[0].attachment.fileName").value("sample.bin"));
+        String limitsUrl = "/api/chat/upload-limits";
+        String limits = "{\"maxFileBytes\":2,\"maxStorageBytes\":100}";
+        mvc.perform(put(limitsUrl).header(HttpHeaders.AUTHORIZATION, "Bearer " + member)
+                .contentType(MediaType.APPLICATION_JSON).content(limits)).andExpect(status().isForbidden());
+        mvc.perform(put(limitsUrl).header(HttpHeaders.AUTHORIZATION, "Bearer " + sender)
+                .contentType(MediaType.APPLICATION_JSON).content(limits)).andExpect(status().isOk());
+        mvc.perform(get(limitsUrl).header(HttpHeaders.AUTHORIZATION, "Bearer " + member))
+                .andExpect(jsonPath("$.maxFileBytes").value(2));
+        mvc.perform(post(transfers + "/" + UUID.randomUUID()).header(HttpHeaders.AUTHORIZATION, "Bearer " + sender)
+                .contentType(MediaType.APPLICATION_JSON).content(declaration))
+                .andExpect(status().isPayloadTooLarge());
+        assertThat(jdbc.sql("SELECT count(*) FROM chat_message").query(Long.class).single()).isEqualTo(2);
     }
 
     @Test

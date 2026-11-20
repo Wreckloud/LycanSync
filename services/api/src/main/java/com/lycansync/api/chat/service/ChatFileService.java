@@ -5,7 +5,6 @@ import com.lycansync.api.chat.config.ChatFileProperties;
 import com.lycansync.api.chat.dto.ChatAttachmentResponse;
 import com.lycansync.api.chat.dto.ChatMessageResponse;
 import com.lycansync.api.chat.event.ChatMessageCreatedEvent;
-import org.springframework.context.ApplicationEventPublisher;
 import com.lycansync.api.chat.mapper.ChatMapper;
 import com.lycansync.api.chat.model.ChatFileAttachment;
 import com.lycansync.api.chat.model.ChatFileMetadata;
@@ -16,11 +15,13 @@ import com.lycansync.api.common.error.ApiErrorCode;
 import com.lycansync.api.group.exception.GroupException;
 import com.lycansync.api.group.service.GroupService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
@@ -38,6 +39,7 @@ import java.nio.file.StandardOpenOption;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.locks.Lock;
 
@@ -56,6 +58,7 @@ public class ChatFileService {
     private final ChatFileQuotaService quotaService;
     private final GroupService groupService;
     private final ChatFileProperties properties;
+    private final ChatUploadSettingsService settings;
     private final Clock systemClock;
     private final TransactionTemplate transactions;
     private final ChatFileStorageCoordinator coordinator;
@@ -63,7 +66,7 @@ public class ChatFileService {
 
     public ChatFileService(ChatMapper mapper, ChatFileQuotaService quotaService, GroupService groupService,
                           ChatFileProperties properties, Clock systemClock, TransactionTemplate transactions,
-                          ChatFileStorageCoordinator coordinator, ApplicationEventPublisher events) {
+                          ChatFileStorageCoordinator coordinator, ApplicationEventPublisher events, ChatUploadSettingsService settings) {
         this.mapper = mapper;
         this.quotaService = quotaService;
         this.groupService = groupService;
@@ -72,17 +75,30 @@ public class ChatFileService {
         this.transactions = transactions;
         this.coordinator = coordinator;
         this.events = events;
+        this.settings = settings;
     }
 
     public ChatMessageResponse upload(UUID groupId, AuthenticatedUser user, UUID uploadId,
                                       String encodedFileName, String content, long expectedSize, InputStream input) {
+        return upload(groupId, user, uploadId, encodedFileName, content, expectedSize, input, null);
+    }
+
+    public ChatMessageResponse upload(UUID groupId, AuthenticatedUser user, UUID uploadId,
+                                      String encodedFileName, String content, long expectedSize, InputStream input,
+                                      UUID declaredMessageId) {
         groupService.requireMember(groupId, user);
         ChatMessageView previousUpload = mapper.findFileMessage(groupId, uploadId, user.id());
-        if (previousUpload != null) return toResponse(previousUpload);
+        if (previousUpload != null) {
+            if (declaredMessageId != null && !declaredMessageId.equals(previousUpload.id())) throw deliveryConflict();
+            return toResponse(previousUpload);
+        }
         String fileName = decodeFileName(encodedFileName);
-        if (expectedSize < 0 || expectedSize > properties.getMaxFileSize()) {
-            throw new GroupException(HttpStatus.PAYLOAD_TOO_LARGE, ApiErrorCode.INVALID_REQUEST,
-                    "单个文件不能超过 " + properties.getMaxFileSize() + " 字节");
+        if (declaredMessageId == null) settings.checkFileSize(expectedSize);
+        if (declaredMessageId != null) {
+            ChatMessageView declaration = declaration(groupId, declaredMessageId);
+            if (!matches(declaration, user, fileName, expectedSize, normalizeContent(decodeHeaderText(content)))
+                    || !"PENDING".equals(declaration.transferStatus())
+                    || !mapper.isCurrentAttempt(declaredMessageId, uploadId)) throw deliveryConflict();
         }
 
         UUID attachmentId = UUID.randomUUID();
@@ -108,7 +124,7 @@ public class ChatFileService {
                 writeTemporaryFile(input, temporaryFile, expectedSize);
                 moveToStorage(temporaryFile, storedFile);
                 ChatMessageResponse response = transactions.execute(status -> persistMessageInTransaction(groupId,
-                        user, attachmentId, uploadId, fileName, content, expectedSize, uploadId));
+                        user, attachmentId, uploadId, fileName, content, expectedSize, declaredMessageId));
                 completed = true;
                 return response;
             } catch (IncompleteUploadException exception) {
@@ -126,6 +142,7 @@ public class ChatFileService {
                     if (temporaryRemoved && storedRemoved) {
                         try {
                             quotaService.release(uploadId);
+                            if (declaredMessageId != null) mapper.stopDelivery(groupId, user.id(), declaredMessageId, uploadId);
                         } catch (RuntimeException exception) {
                             log.error("群聊上传失败后额度预留释放失败，保留记录等待恢复: {}", uploadId, exception);
                             throw exception;
@@ -138,6 +155,60 @@ public class ChatFileService {
         } finally {
             uploadLock.unlock();
         }
+    }
+
+    @Transactional
+    public ChatMessageResponse declare(UUID groupId, AuthenticatedUser user, UUID id, UUID attempt,
+                                       String encodedFileName, long byteSize, String content) {
+        groupService.requireMember(groupId, user);
+        String fileName = decodeFileName(encodedFileName);
+        String text = normalizeContent(content);
+        if (mapper.lockGroupForMessageSend(groupId) == null) throw deliveryConflict();
+        groupService.requireMember(groupId, user);
+        ChatMessageView existing = declaration(groupId, id);
+        if (existing != null) {
+            if (!matches(existing, user, fileName, byteSize, text)) throw deliveryConflict();
+            if (existing.transferStatus() == null) return toResponse(existing);
+        }
+        settings.checkFileSize(byteSize);
+        if (!mapper.hasFileCapacity(byteSize, properties.getMaxStorageSize())) {
+            throw new GroupException(HttpStatus.INSUFFICIENT_STORAGE, ApiErrorCode.CHAT_FILE_STORAGE_FULL,
+                    "服务器文件存储空间不足");
+        }
+        if (existing == null) {
+            if (mapper.messageIdExists(id)) throw deliveryConflict();
+            long sequence = mapper.allocateMessageSequence(groupId);
+            mapper.insertMessage(new ChatMessage(id, groupId, user.id(), ChatMessageType.FILE,
+                    text, Instant.now(systemClock), sequence));
+            mapper.insertDelivery(id, attempt, fileName, byteSize);
+        } else if (mapper.retryDelivery(id, attempt) != 1) {
+            throw deliveryConflict();
+        }
+        events.publishEvent(new ChatMessageCreatedEvent(groupId));
+        return toResponse(declaration(groupId, id));
+    }
+
+    public List<ChatMessageResponse> deliveries(UUID groupId, AuthenticatedUser user, List<UUID> ids) {
+        groupService.requireMember(groupId, user);
+        return mapper.findDeliveries(groupId, ids).stream().map(this::toResponse).toList();
+    }
+
+    public void stop(UUID groupId, AuthenticatedUser user, UUID id, UUID attempt) {
+        groupService.requireMember(groupId, user);
+        mapper.stopDelivery(groupId, user.id(), id, attempt);
+    }
+
+    private ChatMessageView declaration(UUID groupId, UUID id) {
+        return mapper.findDeliveries(groupId, List.of(id)).stream().findFirst().orElse(null);
+    }
+
+    private boolean matches(ChatMessageView message, AuthenticatedUser user, String name, long size, String content) {
+        return message != null && message.senderUserId().equals(user.id()) && name.equals(message.attachmentFileName())
+                && message.attachmentByteSize() == size && message.content().equals(content);
+    }
+
+    private GroupException deliveryConflict() {
+        return new GroupException(HttpStatus.CONFLICT, ApiErrorCode.INVALID_REQUEST, "文件发送状态已改变，请重试。");
     }
 
     public ChatFileMetadata findMetadata(UUID groupId, UUID attachmentId, AuthenticatedUser user) {
@@ -166,20 +237,29 @@ public class ChatFileService {
 
     private ChatMessageResponse persistMessageInTransaction(UUID groupId, AuthenticatedUser user, UUID attachmentId,
                                                             UUID uploadId, String fileName, String content,
-                                                            long byteSize, UUID reservationId) {
-        Long sequenceNumber = mapper.allocateMessageSequence(groupId);
-        if (sequenceNumber == null) {
-            throw new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.GROUP_NOT_FOUND, "群组不存在");
-        }
-        Instant createdAt = Instant.now(systemClock);
-        // 文件接收不持有群锁；落库时必须确认上传期间没有被移出或退出。
-        groupService.requireMember(groupId, user);
-        UUID messageId = UUID.randomUUID();
+                                                            long byteSize, UUID declaredMessageId) {
+        Instant createdAt;
+        UUID messageId;
         String normalizedContent = normalizeContent(decodeHeaderText(content));
-        mapper.insertMessage(new ChatMessage(messageId, groupId, user.id(), ChatMessageType.FILE, normalizedContent,
-                createdAt, sequenceNumber));
+        if (declaredMessageId != null) {
+            if (mapper.lockGroupForMessageSend(groupId) == null) throw deliveryConflict();
+            groupService.requireMember(groupId, user);
+            if (mapper.finishDelivery(declaredMessageId, uploadId) != 1) throw deliveryConflict();
+            createdAt = mapper.findMessageCreatedAt(declaredMessageId);
+            messageId = declaredMessageId;
+        } else {
+            Long sequenceNumber = mapper.allocateMessageSequence(groupId);
+            if (sequenceNumber == null) {
+                throw new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.GROUP_NOT_FOUND, "群组不存在");
+            }
+            groupService.requireMember(groupId, user);
+            messageId = UUID.randomUUID();
+            createdAt = Instant.now(systemClock);
+            mapper.insertMessage(new ChatMessage(messageId, groupId, user.id(), ChatMessageType.FILE,
+                    normalizedContent, createdAt, sequenceNumber));
+        }
         mapper.insertFileAttachment(new ChatFileAttachment(attachmentId, messageId, uploadId, fileName, byteSize));
-        quotaService.complete(reservationId, byteSize);
+        quotaService.complete(uploadId, byteSize);
         events.publishEvent(new ChatMessageCreatedEvent(groupId));
         ChatAttachmentResponse attachment = new ChatAttachmentResponse(attachmentId,
                 "application/octet-stream", null, null, byteSize, fileName);
@@ -202,7 +282,7 @@ public class ChatFileService {
                 }
                 if (read == -1) break;
                 total += read;
-                if (total > expectedSize || total > properties.getMaxFileSize()) {
+                if (total > expectedSize) {
                     throw new IncompleteUploadException();
                 }
                 ByteBuffer bytes = ByteBuffer.wrap(buffer, 0, read);
@@ -274,7 +354,7 @@ public class ChatFileService {
     private ChatMessageResponse toResponse(ChatMessageView message) {
         ChatAttachmentResponse attachment = new ChatAttachmentResponse(message.attachmentId(),
                 message.attachmentContentType(), message.attachmentWidth(), message.attachmentHeight(),
-                message.attachmentByteSize(), message.attachmentFileName());
+                message.attachmentByteSize(), message.attachmentFileName(), message.transferStatus());
         return new ChatMessageResponse(message.id(), message.senderUserId(), message.senderNickname(), message.type(),
                 message.content(), message.createdAt(), attachment, message.senderAvatar(), message.senderDeletedAt());
     }

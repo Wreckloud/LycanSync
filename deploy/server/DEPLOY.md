@@ -173,7 +173,7 @@ curl --fail --cacert ./lycansync-local-ca.crt \
 
 ## 5. 数据和维护
 
-- PostgreSQL 数据位于 `postgres-data` 卷；原始文件位于 `chat-files` 卷。单文件 100 MiB，总文件容量 10 GiB。
+- PostgreSQL 数据位于 `postgres-data` 卷；原始文件位于 `chat-files` 卷。默认单文件 512 MiB，总文件容量 10 GiB；服主可在客户端的「服主管理 → 文件上传」调整，保存后对新上传生效。
 - Caddy 证书位于 `caddy-data` 卷；不要丢弃，否则需要重新申请证书。
 - `docker compose stop` 保留数据；`docker compose down` 也保留命名卷。**不要用 `down -v`，它会删除数据。**
 - 备份时先停止写入，备份 PostgreSQL 和聊天文件同一时间点的数据；恢复时一起恢复。不要只备份数据库。

@@ -4,7 +4,7 @@ import { chatMediaFrameStyle } from '../chat/chatMedia';
 import { ACCOUNT_CACHE } from '../cache/localCache';
 import { fetchAttachment } from '../chat/chatApi';
 
-const props = defineProps<{ groupId: string; attachmentId: string; width: number; height: number; alt: string; fileName?: string }>();
+const props = defineProps<{ groupId: string; attachmentId: string; width: number; height: number; alt: string }>();
 const emit = defineEmits<{ preview: [blob?: Blob] }>();
 const cache = inject(ACCOUNT_CACHE, null);
 const frame = ref<HTMLElement | null>(null);
@@ -128,5 +128,4 @@ onScopeDispose(() => {
     <button v-if="source" type="button" class="chat-image-open" aria-label="查看图片" @click="emit('preview', activeBlob)"><img class="chat-image" :src="source" :alt="alt" @error="imageFailed" /></button>
     <button v-else-if="error" class="chat-image-error" type="button" @click="load(true)">图片加载失败，点击重试</button>
   </div>
-  <button v-if="fileName" type="button" class="chat-media-name" :aria-label="`预览 ${fileName}`" @click="emit('preview', activeBlob)">{{ fileName }}</button>
 </template>

@@ -1,7 +1,7 @@
 import { nextTick, onScopeDispose, ref } from 'vue';
 import { ApiRequestError } from '../auth/authApi';
 import type { AccountCache } from '../cache/localCache';
-import { findMessages, type ChatMessage } from './chatApi';
+import { fileStates, findMessages, type ChatMessage } from './chatApi';
 import { messagePollDelay } from './messagePolling';
 import type { useChatScroll } from './useChatScroll';
 
@@ -35,6 +35,42 @@ export function useGroupMessages({ getGroupId, getUserId, cache, scroll, onIniti
   let consecutiveEmptyPolls = 0;
   let lastActivationRefreshAt = 0;
   let disposed = false;
+
+  let stateTimer: ReturnType<typeof setTimeout> | undefined;
+  let stateRequest: AbortController | undefined;
+  let nextStateCheck = 0;
+  async function refreshFileStates() {
+    if (disposed || document.visibilityState === 'hidden' || stateRequest || Date.now() < nextStateCheck) return;
+    const pending = messages.value.filter(message => message.attachment?.transferStatus);
+    if (!pending.length) return;
+    nextStateCheck = Date.now() + (pending.some(message => message.attachment?.transferStatus === 'PENDING') ? 2500 : 30_000);
+    const controller = stateRequest = new AbortController();
+    try {
+      for (let offset = 0; offset < pending.length; offset += 50) {
+        const groupId = getGroupId();
+        const updates = await fileStates(groupId, pending.slice(offset, offset + 50).map(message => message.id), controller.signal);
+        if (disposed || controller.signal.aborted || groupId !== getGroupId()) return;
+        const byId = new Map(updates.map(message => [message.id, message]));
+        let changed = false;
+        const refreshed = messages.value.map(message => {
+          const updated = byId.get(message.id);
+          if (!message.attachment?.transferStatus || !updated || updated.attachment?.transferStatus === message.attachment.transferStatus) return message;
+          changed = true;
+          return updated;
+        });
+        if (changed) {
+          messages.value = refreshed;
+          saveMessageCache();
+        }
+      }
+    } catch (reason) {
+      if (!controller.signal.aborted && !disposed) pollError.value = reason instanceof Error ? reason.message : '无法更新文件状态';
+    } finally {
+      stateRequest = undefined;
+      clearTimeout(stateTimer);
+      if (!disposed) stateTimer = setTimeout(() => void refreshFileStates(), Math.max(0, nextStateCheck - Date.now()) + 1);
+    }
+  }
 
   function appendMessages(incoming: ChatMessage[], forceScroll = false, behavior: ScrollBehavior = 'smooth') {
     const known = new Set(messages.value.map((message) => message.id));
@@ -223,6 +259,7 @@ export function useGroupMessages({ getGroupId, getUserId, cache, scroll, onIniti
     clearRefreshTimer();
     const initial = !initialLoadNotified;
     const startedAt = Date.now();
+    void refreshFileStates();
     const added = await refresh(!initial);
     if (added === null || disposed || document.visibilityState === 'hidden') return;
     consecutiveEmptyPolls = pollError.value ? consecutiveEmptyPolls + 1 : 0;
@@ -266,6 +303,8 @@ export function useGroupMessages({ getGroupId, getUserId, cache, scroll, onIniti
 
   onScopeDispose(() => {
     disposed = true;
+    stateRequest?.abort();
+    clearTimeout(stateTimer);
     if (cacheWriteTimer) {
       clearTimeout(cacheWriteTimer);
       cacheWriteTimer = null;

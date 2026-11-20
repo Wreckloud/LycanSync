@@ -144,6 +144,8 @@ test('底部整块资料打开菜单，编辑沿用设置且返回原入口，�
   await page.goto('/');
   const footer = page.locator('.group-conversation > .personal-card');
   const bounds = await footer.boundingBox();
+  await expect(footer.locator('.personal-avatar')).toHaveCSS('cursor', 'pointer');
+  await expect(footer.locator('[data-identity-name]')).toHaveCSS('cursor', 'pointer');
   await page.getByRole('button', { name: '个人菜单', exact: true }).click();
   const menu = page.getByRole('dialog', { name: '个人菜单', exact: true });
   await expect(menu).toBeVisible();
@@ -161,6 +163,7 @@ test('底部整块资料打开菜单，编辑沿用设置且返回原入口，�
   await expect(page.getByRole('heading', { name: '账号设置', exact: true })).toBeVisible();
   await expect(menu).toHaveCount(0);
   const settingsIdentity = page.getByLabel('个人状态与返回应用', { exact: true });
+  await expect(settingsIdentity.locator('[data-identity-name]')).toHaveCSS('cursor', 'pointer');
   await settingsIdentity.getByRole('button', { name: '个人菜单', exact: true }).click();
   await expect(menu).toBeVisible();
   await expect(menu.getByRole('button', { name: '语音与音频', exact: true })).toHaveCount(0);
@@ -691,6 +694,18 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
   await manager.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(manager).toHaveCount(0);
   await expect(managerButton).toBeFocused();
+  await page.evaluate(() => {
+    window.lycanDesktop!.getRecordingLibrary = async () => ({ items: [{ id: 'settings-clip', sessionId: 'session',
+      createdAt: 1, durationMs: 1000, width: 640, height: 360, bytes: 100, state: 'saved', availability: 'available' }], hasMore: false });
+  });
+  await page.getByLabel('个人状态与返回应用', { exact: true }).getByRole('button', { name: '个人菜单' }).click();
+  await page.getByRole('dialog', { name: '个人菜单' }).getByRole('button', { name: '录像管理' }).click();
+  await manager.getByRole('button', { name: '分享', exact: true }).click();
+  const destinations = page.getByRole('dialog', { name: '分享到群聊' });
+  await expect(destinations.getByRole('button', { name: group.name })).toBeVisible();
+  await destinations.getByRole('button', { name: '取消' }).click();
+  await expect(manager).toBeVisible();
+  await expect(page.locator('.composer-attachment')).toHaveCount(0);
   expect(cacheErrors).toEqual([]);
 });
 

@@ -39,7 +39,7 @@ onMounted(() => dialog.value?.focus());
       <h2>分享到群聊</h2>
       <button v-if="share.entry.value" ref="previewButton" type="button" class="share-recording" :aria-label="`预览 ${share.entry.value.applicationName || '录像'}`" @click="previewError = false; preview = true">
         <RecordingThumbnail play-badge :disabled="false" :source="`lycan://app/recordings/${share.entry.value.id}`" />
-        <span>{{ share.entry.value.applicationName || '录像' }}<small>选择群聊后添加到待发送附件</small></span>
+        <span><span class="share-recording-name">{{ share.entry.value.applicationName || '录像' }}</span><small>选择群聊后添加到待发送附件</small></span>
       </button>
       <div class="share-destinations">
         <div class="share-list-heading">
@@ -71,7 +71,7 @@ onMounted(() => dialog.value?.focus());
 .recording-share-dialog { width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); box-sizing: border-box; padding: 24px; display: flex; flex-direction: column; gap: 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 h2 { margin: 0; font-size: 22px; line-height: 32px; }
 .share-recording { display: flex; gap: 14px; align-items: center; min-width: 0; padding: 0; border: 0; border-radius: 6px; background: transparent; text-align: left; cursor: pointer; }
-.share-recording:is(:hover, :focus-visible) { background: var(--panel-soft); }
+.share-recording:is(:hover, :focus-visible) .share-recording-name { text-decoration: underline; }
 .share-recording :deep(.recording-thumbnail) { width: 96px; height: 54px; flex-basis: 96px; }
 .share-recording > span { min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
 small { display: block; color: var(--muted); font-size: 12px; margin-top: 6px; }

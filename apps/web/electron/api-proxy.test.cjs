@@ -280,6 +280,7 @@ test('文件上传按流构造真实请求，保留认证和元数据，不先�
     method: 'POST', body: stream, duplex: 'half', headers: {
       'Content-Type': 'application/octet-stream', 'X-File-Name': 'ZmlsZS5iaW4', 'X-File-Size': '3',
       'X-Upload-Id': '22222222-2222-4222-8222-222222222222', 'X-Message-Content': 'aGk',
+      'X-File-Message': '33333333-3333-4333-8333-333333333333',
     },
   });
   const response = await serve(request);
@@ -288,6 +289,7 @@ test('文件上传按流构造真实请求，保留认证和元数据，不先�
   assert.equal(request.bodyUsed, false);
   assert.equal(outgoing.headers.get('Authorization'), 'Bearer test-session');
   assert.equal(outgoing.headers.get('X-File-Size'), '3');
+  assert.equal(outgoing.headers.get('X-File-Message'), '33333333-3333-4333-8333-333333333333');
   assert.equal(outgoing.headers.get('X-Upload-Id'), '22222222-2222-4222-8222-222222222222');
   assert.equal(outgoing.headers.get('X-Message-Content'), 'aGk');
   assert.deepEqual([...new Uint8Array(await outgoing.arrayBuffer())], [1, 2, 3]);

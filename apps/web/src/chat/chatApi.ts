@@ -10,6 +10,7 @@ export interface ChatAttachment {
   height?: number;
   byteSize: number;
   fileName?: string;
+  transferStatus?: 'PENDING' | 'FAILED';
 }
 
 export interface ChatMessage {
@@ -62,21 +63,57 @@ export async function sendMessage(groupId: string, content: string, image?: File
   return response.json() as Promise<ChatMessage>;
 }
 
-export async function findFileUpload(groupId: string, uploadId: string, signal?: AbortSignal): Promise<ChatMessage | null> {
-  const response = await authenticatedFetch('/api/groups/' + encodeURIComponent(groupId) + '/files/requests/'
-    + encodeURIComponent(uploadId), {
-    headers: { Accept: 'application/json' },
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
+export interface UploadLimits { maxFileBytes: number; maxStorageBytes: number }
+
+export async function uploadLimits(signal?: AbortSignal, limits?: UploadLimits): Promise<UploadLimits> {
+  const response = await authenticatedFetch('/api/chat/upload-limits', {
+    method: limits ? 'PUT' : 'GET', headers: limits ? { 'Content-Type': 'application/json' } : {},
+    body: limits ? JSON.stringify(limits) : undefined, cache: 'no-store',
+    signal: timedRequest(signal),
   });
-  if (response.status === 204) return null;
   if (!response.ok) throw await readApiError(response);
-  return response.json() as Promise<ChatMessage>;
+  return response.json();
+}
+
+function timedRequest(signal?: AbortSignal) {
+  const timeout = AbortSignal.timeout(15_000);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+function transferPath(groupId: string) {
+  return '/api/groups/' + encodeURIComponent(groupId) + '/files/transfers';
+}
+
+function headerText(value: string) {
+  return btoa(String.fromCharCode(...new TextEncoder().encode(value)))
+    .replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
+}
+
+export async function declareFile(groupId: string, id: string, attemptId: string, file: Pick<File, 'name' | 'size'>,
+  content: string, signal: AbortSignal): Promise<ChatMessage> {
+  const response = await authenticatedFetch(transferPath(groupId) + '/' + id, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: timedRequest(signal),
+    body: JSON.stringify({ attemptId, encodedName: headerText(file.name), byteSize: file.size, content }),
+  });
+  if (!response.ok) throw await readApiError(response);
+  return response.json();
+}
+
+export async function stopFile(groupId: string, id: string, attemptId: string, signal: AbortSignal) {
+  const response = await authenticatedFetch(transferPath(groupId) + '/' + id + '/' + attemptId, {
+    method: 'DELETE', signal: timedRequest(signal),
+  });
+  if (!response.ok) throw await readApiError(response);
+}
+
+export async function fileStates(groupId: string, ids: string[], signal: AbortSignal): Promise<ChatMessage[]> {
+  const response = await authenticatedFetch(transferPath(groupId) + '?ids=' + ids.join(','), { signal: timedRequest(signal), cache: 'no-store' });
+  if (!response.ok) throw await readApiError(response);
+  return response.json();
 }
 
 export async function sendFile(groupId: string, file: Pick<File, 'name' | 'size' | 'stream'>, content: string, uploadId: string, signal: AbortSignal,
-  onProgress: (loadedBytes: number) => void): Promise<ChatMessage> {
-  const previous = await findFileUpload(groupId, uploadId, signal);
-  if (previous) return previous;
+  onProgress: (loadedBytes: number) => void, messageId: string): Promise<ChatMessage> {
   const reader = file.stream().getReader();
   let loadedBytes = 0;
   const body = new ReadableStream<Uint8Array>({
@@ -98,19 +135,16 @@ export async function sendFile(groupId: string, file: Pick<File, 'name' | 'size'
       return reader.cancel(reason);
     },
   });
-  const encodedName = btoa(String.fromCharCode(...new TextEncoder().encode(file.name)))
-    .replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
-  const encodedContent = btoa(String.fromCharCode(...new TextEncoder().encode(content)))
-    .replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
   const response = await authenticatedFetch('/api/groups/' + encodeURIComponent(groupId) + '/files', {
     method: 'POST',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/octet-stream',
-      'X-File-Name': encodedName,
+      'X-File-Message': messageId,
+      'X-File-Name': headerText(file.name),
       'X-File-Size': String(file.size),
       'X-Upload-Id': uploadId,
-      'X-Message-Content': encodedContent,
+      'X-Message-Content': headerText(content),
     },
     body,
     duplex: 'half',

@@ -63,8 +63,10 @@ const watching = computed(() => entries.value.find(entry => entry.kind === 'watc
 const detached = computed(() => entries.value.some(entry => entry.kind === 'watching' && entry.target));
 const inlineWatching = computed(() => view.mode !== 'collapsed' && !detached.value);
 const folded = ref(false);
-const inlineExpanded = computed(() => inlineWatching.value && !folded.value);
-watch([() => props.inlineTarget, () => props.rtc.room, detached], () => { folded.value = false; });
+const stageHidden = ref(false);
+const inlineExpanded = computed(() => inlineWatching.value && !folded.value && !stageHidden.value);
+watch([() => props.inlineTarget, () => props.rtc.room, detached], () => { folded.value = false; stageHidden.value = false; });
+watch(() => view.mode, mode => { if (mode === 'collapsed') stageHidden.value = false; });
 const returning = ref(false);
 let returnTimer: ReturnType<typeof setTimeout> | undefined;
 const focusedIdentity = computed(() => view.mode === 'focus' ? view.focusedShare?.participant.identity : undefined);
@@ -81,7 +83,14 @@ function controlVideoReady(identity: string) {
 }
 
 function select(identity: string) {
-  return watching.value ? windows.openWatching() : view.select(identity);
+  if (watching.value) return windows.openWatching();
+  if (stageHidden.value && view.mode === 'focus' && view.focusedShare?.participant.identity === identity) {
+    stageHidden.value = false;
+    return true;
+  }
+  const selected = view.select(identity);
+  if (selected) stageHidden.value = false;
+  return selected;
 }
 
 function detachWatching() {
@@ -130,12 +139,12 @@ defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded, de
 
 <template>
   <Teleport v-if="inlineTarget" :to="inlineTarget">
-    <CallViewingPanel :active="inlineWatching" v-model:folded="folded" :hidden="detached" :video-active="inlineVisible && !folded" :view="view" :room="rtc.room" :revision="rtc.revision"
+    <CallViewingPanel :active="inlineWatching && !stageHidden" v-model:folded="folded" v-model:stage-hidden="stageHidden" :hidden="detached" :video-active="inlineVisible && !folded && !stageHidden" :view="view" :room="rtc.room" :revision="rtc.revision"
       :avatar="avatar" :listening="rtc.listening" :recording-elapsed="recordingElapsed"
       :private-control="controlPlaceholder" :reconnecting="rtc.status === 'reconnecting'"
       @detach="detachWatching" @notice="emit('notice', $event)">
       <template #default="{ previewsMounted }">
-        <HorizontalScroll label="语音成员" :center-key="watching ? undefined : focusedIdentity"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" appear @before-leave="($event as HTMLElement).inert = true"><slot :select="select" :visible="inlineVisible && !folded" :previews-mounted="previewsMounted" :focused-identity="focusedIdentity" :watching-elsewhere="!!watching" /></TransitionGroup></HorizontalScroll>
+        <HorizontalScroll label="语音成员" :center-key="watching ? undefined : focusedIdentity"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" appear @before-leave="($event as HTMLElement).inert = true"><slot :select="select" :visible="inlineVisible && !folded" :previews-mounted="previewsMounted" :focused-identity="stageHidden ? undefined : focusedIdentity" :watching-elsewhere="!!watching" /></TransitionGroup></HorizontalScroll>
       </template>
     </CallViewingPanel>
   </Teleport>

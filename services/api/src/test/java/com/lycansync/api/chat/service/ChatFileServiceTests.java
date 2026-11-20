@@ -2,6 +2,9 @@ package com.lycansync.api.chat.service;
 
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.chat.config.ChatFileProperties;
+import com.lycansync.api.chat.dto.ChatUploadLimits;
+import com.lycansync.api.auth.mapper.AccessLinkMapper;
+import com.lycansync.api.auth.service.OwnerSettingsService;
 import com.lycansync.api.chat.mapper.ChatMapper;
 import com.lycansync.api.chat.model.ChatMessageType;
 import com.lycansync.api.chat.model.ChatMessageView;
@@ -62,8 +65,28 @@ class ChatFileServiceTests {
     @BeforeEach
     void setUp(@TempDir Path temporaryDirectory) {
         properties.setStorageDirectory(temporaryDirectory.resolve("chat-files"));
+        when(mapper.findUploadLimits(properties.getMaxFileSize(), properties.getMaxStorageSize()))
+                .thenReturn(new ChatUploadLimits(properties.getMaxFileSize(), properties.getMaxStorageSize()));
+        ChatUploadSettingsService settings = new ChatUploadSettingsService(mapper, properties,
+                mock(OwnerSettingsService.class), mock(AccessLinkMapper.class));
         service = new ChatFileService(mapper, quotaService, groupService, properties,
-                Clock.systemUTC(), transactions, coordinator, mock(ApplicationEventPublisher.class));
+                Clock.systemUTC(), transactions, coordinator, mock(ApplicationEventPublisher.class), settings);
+    }
+
+    @Test
+    void shouldRejectOversizedDeclarationWithoutAllocatingMessageOrReceivingBytes() {
+        when(mapper.findUploadLimits(properties.getMaxFileSize(), properties.getMaxStorageSize()))
+                .thenReturn(new ChatUploadLimits(100L * 1024 * 1024, properties.getMaxStorageSize()));
+        String name = Base64.getUrlEncoder().encodeToString(new byte[]{'a'});
+        UUID id = UUID.randomUUID();
+        when(mapper.lockGroupForMessageSend(GROUP_ID)).thenReturn(1L);
+        assertThatThrownBy(() -> service.declare(GROUP_ID, USER, id, UUID.randomUUID(), name,
+                300L * 1024 * 1024, "")).isInstanceOfSatisfying(GroupException.class, failure -> {
+                    assertThat(failure.getStatus()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
+                    assertThat(failure.getMessage()).contains("100 MiB");
+                });
+        verify(mapper, never()).allocateMessageSequence(any());
+        verify(mapper, never()).insertMessage(any());
     }
 
     @Test

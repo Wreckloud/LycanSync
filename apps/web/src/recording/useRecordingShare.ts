@@ -3,13 +3,15 @@ import { ref, shallowRef, type InjectionKey } from 'vue';
 export const RECORDING_SHARE: InjectionKey<ReturnType<typeof useRecordingShare>> = Symbol('recording-share');
 
 // 分享只交接到目标群的待发送附件；上传由聊天发送入口统一负责。
-export function useRecordingShare(openGroup: (groupId: string) => void) {
+export function useRecordingShare(openGroup: (groupId: string) => void, currentShareGroup?: () => string | undefined) {
   const entry = shallowRef<RecordingLibraryEntry | null>(null);
   const visible = ref(false);
   const pending = shallowRef<{ groupId: string; entry: RecordingLibraryEntry } | null>(null);
   function select(value: RecordingLibraryEntry) {
     entry.value = value;
-    visible.value = true;
+    const groupId = currentShareGroup?.();
+    if (groupId) choose(groupId);
+    else visible.value = true;
   }
   function choose(groupId: string) {
     const value = entry.value;

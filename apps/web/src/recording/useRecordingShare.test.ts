@@ -30,3 +30,17 @@ it('关闭选择浮层不添加附件；缺失或录制中的原片不交接', (
   share.choose('target');
   expect(navigate).not.toHaveBeenCalled();
 });
+
+it('个人卡片分享交给当前群草稿，群聊失效时仍可选群', () => {
+  let groupId: string | undefined = 'current';
+  const navigate = vi.fn();
+  const share = useRecordingShare(navigate, () => groupId);
+  share.select(entry);
+  expect(share.visible.value).toBe(false);
+  expect(share.pending.value).toEqual({ groupId, entry });
+  expect(navigate).toHaveBeenCalledExactlyOnceWith(groupId);
+  groupId = undefined;
+  share.select(entry);
+  expect(share.visible.value).toBe(true);
+  expect(navigate).toHaveBeenCalledTimes(1);
+});

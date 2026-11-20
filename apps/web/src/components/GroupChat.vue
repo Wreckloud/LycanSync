@@ -9,10 +9,12 @@ import { useLoadingHint } from './useLoadingHint';
 import { ArrowDown, MessageSquareText, Plus, Send, X, File, Music2 } from '@lucide/vue';
 import defaultAvatar from '../../../../services/api/src/main/resources/account/default.png';
 import type { AuthUser } from '../auth/authApi';
-import { sendFile, sendMessage, type ChatMessage } from '../chat/chatApi';
+import { uploadLimits, type ChatMessage } from '../chat/chatApi';
+import { CHAT_TRANSFERS, type DraftAttachment as PendingAttachment } from '../chat/useChatTransfers';
 import { compressChatImage } from '../chat/messageImage';
 import { formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey } from '../chat/messageTime';
 import type { GroupMember, GroupSummary } from '../group/groupApi';
+import ChatTransferStatus from './ChatTransferStatus.vue';
 import ChatImage from './ChatImage.vue';
 import ProfilePopover from './ProfilePopover.vue';
 import { findGroupMemberProfile, type GroupMemberProfile } from '../group/groupApi';
@@ -23,19 +25,8 @@ import { chatMediaFormat } from '../chat/chatMedia';
 import DialogTransition from './DialogTransition.vue';
 
 type MessageSegment = { text: string; href?: string };
-type PendingAttachment = {
-  id: string;
-  previewUrl: string;
-  state: 'pending' | 'uploading' | 'failed' | 'sent';
-  progress: number;
-  error: string;
-} & (
-  | { kind: 'IMAGE' | 'FILE'; file: File; recordingId?: never }
-  | { kind: 'FILE'; file: Pick<File, 'name' | 'size'>; recordingId: string }
-);
-
 const props = defineProps<{ group: GroupSummary; members: GroupMember[]; user: AuthUser; syncError?: string; recordingAttachment?: RecordingLibraryEntry }>();
-const emit = defineEmits<{ initialLoad: [groupId: string]; retrySync: []; recordingConsumed: []; messageSent: [groupId: string] }>();
+const emit = defineEmits<{ initialLoad: [groupId: string]; retrySync: []; recordingConsumed: [] }>();
 const pendingPreview = ref<PendingAttachment | null>(null);
 const cache = inject(ACCOUNT_CACHE, null);
 const viewedMedia = ref<ChatMessage | null>(null);
@@ -63,7 +54,8 @@ async function showHistoricalProfile(message: ChatMessage, anchor: HTMLElement) 
 }
 const text = ref('');
 const pendingAttachments = ref<PendingAttachment[]>([]);
-const busy = ref(false);
+const transfers = inject(CHAT_TRANSFERS)!;
+const selection = new AbortController();
 const preparing = ref(false);
 const error = ref('');
 const calendarNow = ref(new Date());
@@ -81,8 +73,28 @@ const scroll = useChatScroll(() => { void loadOlder(); });
 const { showMessageJump, messageJumpLabel, jumpToMessages, onScroll, onScrollEnd, onWheel, cancelScrollFollow } = scroll;
 const synchronization = useGroupMessages({ getGroupId: () => props.group.id, getUserId: () => props.user.id, cache, scroll,
   onInitialLoad: groupId => emit('initialLoad', groupId) });
-const { messages, initialLoaded, pollError, historyError, refreshing, loadingOlder, hasMore,
+const { messages: confirmed, initialLoaded, pollError, historyError, refreshing, loadingOlder, hasMore,
   appendMessages, loadOlder, retryRefresh } = synchronization;
+const messages = computed(() => {
+  if (!transfers.outgoing.size) return confirmed.value;
+  const ids = new Set(confirmed.value.map(message => message.id));
+  return [...confirmed.value, ...Array.from(transfers.outgoing.values())
+    .filter(job => job.groupId === props.group.id && !ids.has(job.message.id)).map(job => job.message)];
+});
+function receiveSent(groupId: string, message: ChatMessage) {
+  if (groupId !== props.group.id) return;
+  const index = confirmed.value.findIndex(previous => previous.id === message.id);
+  if (index >= 0) confirmed.value[index] = message;
+  else appendMessages([message], true);
+}
+transfers.listeners.add(receiveSent);
+watch(confirmed, snapshot => {
+  if (!transfers.outgoing.size) return;
+  for (const message of snapshot) {
+    const job = transfers.outgoing.get(message.id);
+    if (job && !message.attachment?.transferStatus && message.senderUserId === props.user.id) transfers.acknowledge(job);
+  }
+});
 // 首次消息读取失败仍在原读取区域展示，已有消息时与成员同步共用顶部反馈。
 const syncError = computed(() => initialLoaded.value || !pollError.value ? pollError.value || props.syncError : '');
 function retrySync() {
@@ -91,11 +103,14 @@ function retrySync() {
 }
 const initialLoadingHint = useLoadingHint(() => !initialLoaded.value && !messages.value.length && !pollError.value);
 const historyLoadingHint = useLoadingHint(() => loadingOlder.value);
-const canSend = computed(() => !busy.value && !preparing.value
-  && (text.value.trim().length > 0 || pendingAttachments.value.some((item) => item.state !== 'sent')));
-let activeUpload: AbortController | null = null;
-let preparationGeneration = 0;
-let sendGeneration = 0;
+const canSend = computed(() => !preparing.value && (text.value.trim().length > 0 || pendingAttachments.value.length > 0));
+
+function allowedSize(file: Pick<File, 'name' | 'size'>, limit: number) {
+  if (file.size <= limit) return true;
+  const size = (bytes: number) => (bytes / 1024 ** 2).toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' MiB';
+  error.value = file.name + '（' + size(file.size) + '）超过单文件上限 ' + size(limit);
+  return false;
+}
 
 function revokePreview(item: PendingAttachment) {
   if (pendingPreview.value?.id === item.id) pendingPreview.value = null;
@@ -110,29 +125,26 @@ function clearPendingAttachments() {
 function removePendingAttachment(id: string) {
   const item = pendingAttachments.value.find((attachment) => attachment.id === id);
   if (!item) return;
-  if (item.state === 'uploading') activeUpload?.abort();
   revokePreview(item);
   pendingAttachments.value = pendingAttachments.value.filter((attachment) => attachment.id !== id);
 }
 
 async function enqueueFiles(files: File[], compressSupportedImages: boolean) {
-  if (busy.value || preparing.value || !files.length) return;
-  error.value = '';
-  if (!compressSupportedImages) {
-    pendingAttachments.value.push(...files.map((file) => ({ id: crypto.randomUUID(), kind: 'FILE' as const,
-      file, previewUrl: chatMediaFormat({ id: '', byteSize: file.size, fileName: file.name, contentType: file.type }) ? URL.createObjectURL(file) : '', state: 'pending' as const, progress: 0, error: '' })));
-    return;
-  }
-  const generation = ++preparationGeneration;
+  if (preparing.value || !files.length) return;
   preparing.value = true;
+  error.value = '';
   const preparedItems: PendingAttachment[] = [];
   try {
+    const { maxFileBytes } = await uploadLimits(selection.signal);
+    if (disposed) return;
     for (const file of files) {
-      const imageType = file.type === 'image/png' || file.type === 'image/jpeg';
+      const imageType = compressSupportedImages && (file.type === 'image/png' || file.type === 'image/jpeg');
+      if (!imageType && !allowedSize(file, maxFileBytes)) continue;
       const prepared = imageType ? await compressChatImage(file) : file;
+      if (imageType && !allowedSize(prepared, maxFileBytes)) continue;
       preparedItems.push({ id: crypto.randomUUID(), kind: imageType ? 'IMAGE' : 'FILE', file: prepared,
-        previewUrl: chatMediaFormat({ id: '', byteSize: prepared.size, fileName: prepared.name, contentType: prepared.type }) ? URL.createObjectURL(prepared) : '', state: 'pending', progress: 0, error: '' });
-      if (generation !== preparationGeneration || disposed) {
+        previewUrl: chatMediaFormat({ id: '', byteSize: prepared.size, fileName: prepared.name, contentType: prepared.type }) ? URL.createObjectURL(prepared) : '' });
+      if (disposed) {
         for (const item of preparedItems) revokePreview(item);
         return;
       }
@@ -140,9 +152,9 @@ async function enqueueFiles(files: File[], compressSupportedImages: boolean) {
     pendingAttachments.value.push(...preparedItems);
   } catch (reason) {
     for (const item of preparedItems) revokePreview(item);
-    error.value = reason instanceof Error ? reason.message : '图片处理失败';
+    if (!disposed) error.value = reason instanceof Error ? reason.message : '添加附件失败';
   } finally {
-    if (generation === preparationGeneration) preparing.value = false;
+    preparing.value = false;
   }
 }
 
@@ -151,31 +163,20 @@ function attachmentInfo(item: PendingAttachment) {
     contentType: 'type' in item.file ? item.file.type : 'video/x-matroska' };
 }
 function attachmentKind(item: PendingAttachment) { return chatMediaFormat(attachmentInfo(item))?.kind; }
-function recordingFile(item: PendingAttachment, signal: AbortSignal): Pick<File, 'name' | 'size' | 'stream'> {
-  return { name: item.file.name, size: item.file.size, stream: () => {
-    let reader: ReadableStreamDefaultReader<Uint8Array<ArrayBuffer>> | undefined;
-    return new ReadableStream<Uint8Array<ArrayBuffer>>({
-      async start() {
-        const response = await fetch(item.previewUrl, { signal });
-        if (!response.ok || !response.body) throw new Error('无法读取录像，原片可能已移动或删除。');
-        reader = response.body.getReader();
-      },
-      async pull(controller) {
-        const chunk = await reader!.read();
-        if (chunk.done) { reader!.releaseLock(); controller.close(); }
-        else controller.enqueue(chunk.value);
-      },
-      cancel: reason => reader?.cancel(reason),
-    });
-  } };
-}
-watch(() => props.recordingAttachment, entry => {
+watch(() => props.recordingAttachment, async entry => {
   if (!entry) return;
+  emit('recordingConsumed');
+  try {
+    const { maxFileBytes } = await uploadLimits(selection.signal);
+    if (disposed || !allowedSize({ name: entry.fileName || '录像', size: entry.bytes! }, maxFileBytes)) return;
+  } catch (reason) {
+    if (!disposed) error.value = reason instanceof Error ? reason.message : '无法检查录像大小';
+    return;
+  }
   const source = `lycan://app/recordings/${encodeURIComponent(entry.id)}`;
   pendingAttachments.value.push({ id: crypto.randomUUID(), kind: 'FILE', recordingId: entry.id,
     file: { name: entry.fileName || `${entry.applicationName || '录像'}.mkv`, size: entry.bytes! },
-    previewUrl: source, state: 'pending', progress: 0, error: '' });
-  emit('recordingConsumed');
+    previewUrl: source });
   void nextTick(() => { resizeMessageInput(); messageInput.value?.focus(); });
 }, { immediate: true });
 
@@ -209,81 +210,22 @@ function handleKeydown(event: KeyboardEvent) {
 
 async function submit(restoreFocus = false) {
   if (!canSend.value) return;
-  const generation = ++sendGeneration;
-  busy.value = true;
+  const queued = pendingAttachments.value;
+  const content = text.value;
+  const groupId = props.group.id;
+  pendingAttachments.value = [];
+  pendingPreview.value = null;
+  text.value = '';
   error.value = '';
-  try {
-    const groupId = props.group.id;
-    const queued = pendingAttachments.value.filter((item) => item.state !== 'sent');
-    if (!queued.length) {
-      const controller = new AbortController();
-      activeUpload = controller;
-      const message = await sendMessage(groupId, text.value, undefined, controller.signal);
-      if (disposed || generation !== sendGeneration || props.group.id !== groupId) return;
-      activeUpload = null;
-      text.value = '';
-      appendMessages([message], true);
-      emit('messageSent', groupId);
-    } else {
-      let content = text.value;
-      for (const item of queued) {
-        if (!pendingAttachments.value.some((attachment) => attachment.id === item.id)) continue;
-        const controller = new AbortController();
-        activeUpload = controller;
-        item.state = 'uploading';
-        item.error = '';
-        item.progress = 0;
-        try {
-          const message = item.kind === 'IMAGE'
-            ? await sendMessage(groupId, content, item.file, controller.signal, item.id)
-            : await sendFile(groupId, item.recordingId !== undefined ? recordingFile(item, controller.signal) : item.file, content, item.id, controller.signal,
-              (loaded) => { item.progress = loaded; });
-          if (disposed || generation !== sendGeneration || props.group.id !== groupId || controller.signal.aborted) return;
-          item.state = 'sent';
-          revokePreview(item);
-          item.previewUrl = '';
-          appendMessages([message], true);
-          emit('messageSent', groupId);
-          content = '';
-          text.value = '';
-        } catch (reason) {
-          if (disposed || generation !== sendGeneration || props.group.id !== groupId) return;
-          item.state = controller.signal.aborted ? 'pending' : 'failed';
-          item.error = controller.signal.aborted ? '已取消，可继续发送' : reason instanceof Error ? reason.message : '文件发送失败';
-          break;
-        } finally {
-          if (item.recordingId) controller.abort();
-          if (activeUpload === controller) activeUpload = null;
-        }
-      }
-      if (pendingAttachments.value.length && pendingAttachments.value.every((item) => item.state === 'sent')) {
-        clearPendingAttachments();
-      }
-    }
-    await nextTick();
-    if (!disposed) resizeMessageInput();
-    synchronization.refreshAfterSend();
-  } catch (reason) {
-    if (!disposed && generation === sendGeneration) error.value = reason instanceof Error ? reason.message : '消息发送失败';
-  } finally {
-    if (generation === sendGeneration) {
-      activeUpload = null;
-      busy.value = false;
-      if (restoreFocus) {
-        await nextTick();
-        const input = messageInput.value;
-        if (!disposed && generation === sendGeneration && input?.isConnected
-            && !input.closest('[inert]') && document.visibilityState !== 'hidden'
-            && (document.activeElement === document.body || document.activeElement === input)) {
-          input.focus({ preventScroll: true });
-        }
-      }
-    }
-  }
-}
-
-function cancelUpload() {
-  activeUpload?.abort();
+  if (queued.length) queued.forEach((item, index) => transfers.enqueue(groupId, index === 0 ? content : '', item));
+  else transfers.enqueue(groupId, content);
+  await nextTick();
+  if (disposed) return;
+  resizeMessageInput();
+  const input = messageInput.value;
+  if (restoreFocus && input?.isConnected && !input.closest('[inert]') && document.visibilityState !== 'hidden'
+      && (document.activeElement === document.body || document.activeElement === input)) input.focus({ preventScroll: true });
+  void scroll.scrollToBottom('smooth', true);
 }
 
 function senderName(message: ChatMessage) {
@@ -372,15 +314,14 @@ onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange);
 });
 onScopeDispose(() => {
-  // App 按群 ID 创建独立实例；切群统一在销毁处取消，观看布局不重建群聊。
+  // 切群清理草稿和本群订阅；已提交的任务由账号持有。
   disposed = true;
   closeHistoricalProfile();
   if (calendarTimer) clearTimeout(calendarTimer);
   window.removeEventListener('focus', refreshOnActivation);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
-  activeUpload?.abort();
-  sendGeneration++;
-  preparationGeneration++;
+  selection.abort();
+  transfers.listeners.delete(receiveSent);
   clearPendingAttachments();
 });
 </script>
@@ -424,9 +365,11 @@ onScopeDispose(() => {
             <div class="chat-message-body">
               <div v-if="startsNewMessageGroup(message, index)" class="chat-message-meta"><button v-if="message.senderDeletedAt" type="button" class="chat-historical-sender" @click="showHistoricalProfile(message, $event.currentTarget as HTMLElement)">{{ senderName(message) }}</button><strong v-else>{{ senderName(message) }}</strong><time :datetime="message.createdAt" :title="formatFullMessageTime(message.createdAt)">{{ formatMessageTime(message.createdAt, calendarNow) }}</time></div>
               <p v-if="message.content" class="chat-message-content"><template v-for="(segment, segmentIndex) in messageSegments(message.content)" :key="segmentIndex"><a v-if="segment.href" class="chat-message-link" :href="segment.href" @click.prevent="openLink(segment.href)">{{ segment.text }}</a><template v-else>{{ segment.text }}</template></template></p>
-              <ChatImage v-if="message.type === 'IMAGE' && message.attachment" :group-id="group.id" :attachment-id="message.attachment.id" :file-name="message.attachment.fileName"
+              <ChatTransferStatus v-if="transfers.outgoing.has(message.id) || message.attachment?.transferStatus"
+                :message="message" :job="transfers.outgoing.get(message.id)" @retry="transfers.retry" @dismiss="transfers.forget" />
+              <ChatImage v-else-if="message.type === 'IMAGE' && message.attachment" :group-id="group.id" :attachment-id="message.attachment.id"
                 :width="message.attachment.width ?? 1" :height="message.attachment.height ?? 1" :alt="`${senderName(message)} 发送的图片`" @preview="blob => { viewedMediaBlob = blob; viewedMedia = message; }" />
-              <ChatFileMedia v-if="message.type === 'FILE' && message.attachment" :group-id="group.id" :attachment="message.attachment" @preview="blob => { viewedMediaBlob = blob; viewedMedia = message; }" />
+              <ChatFileMedia v-else-if="message.type === 'FILE' && message.attachment" :group-id="group.id" :attachment="message.attachment" @preview="blob => { viewedMediaBlob = blob; viewedMedia = message; }" />
             </div>
           </article>
         </template>
@@ -441,10 +384,10 @@ onScopeDispose(() => {
       <p v-if="error" class="chat-error" role="alert">{{ error }}</p>
       <form class="composer" @submit.prevent="submit()">
         <input ref="fileInput" type="file" hidden multiple @change="chooseFiles" />
-        <button type="button" aria-label="添加文件" :disabled="busy || preparing" @click="fileInput?.click()"><Plus :size="16" /></button>
+        <button type="button" aria-label="添加文件" :disabled="preparing" @click="fileInput?.click()"><Plus :size="16" /></button>
         <div ref="composerViewport" class="composer-content">
           <div ref="composerContent">
-            <div v-if="preparing" class="chat-transfer-state" role="status">正在压缩图片…</div>
+            <div v-if="preparing" class="chat-transfer-state" role="status">正在准备附件…</div>
             <div v-if="pendingAttachments.length" class="composer-attachments">
               <div v-for="item in pendingAttachments" :key="item.id" class="composer-attachment">
                 <button type="button" class="composer-attachment-preview" :aria-label="`预览 ${item.file.name}`" :disabled="!attachmentKind(item) || !item.previewUrl" @click="pendingPreview = item">
@@ -454,15 +397,11 @@ onScopeDispose(() => {
                   <File v-else :size="20" />
                   <span class="composer-attachment-name">{{ item.file.name }}</span>
                 </button>
-                <small>{{ item.kind === 'IMAGE' ? '已压缩' : (item.file.size / 1024 / 1024).toFixed(2) + ' MB' }}</small>
-                <progress v-if="item.state === 'uploading' && item.kind === 'FILE'" :value="item.progress" :max="item.file.size" aria-label="文件上传进度" />
-                <small v-if="item.error" class="chat-file-error" :role="item.state === 'failed' ? 'alert' : 'status'">{{ item.error }}</small>
-                <button v-if="item.state === 'uploading'" type="button" aria-label="取消文件上传" @click="cancelUpload"><X :size="13" /></button>
-                <button v-else-if="item.state !== 'sent'" type="button" :aria-label="`移除 ${item.file.name}`" @click="removePendingAttachment(item.id)"><X :size="13" /></button>
-                <small v-else>已发送</small>
+                <small>{{ item.kind === 'IMAGE' ? '已压缩' : (item.file.size / 1024 / 1024).toFixed(2) + ' MiB' }}</small>
+                <button type="button" :aria-label="`移除 ${item.file.name}`" @click="removePendingAttachment(item.id)"><X :size="13" /></button>
               </div>
             </div>
-            <textarea ref="messageInput" v-model="text" aria-label="消息内容" maxlength="2000" rows="1" :disabled="busy || preparing" placeholder="发送消息" @input="resizeMessageInput" @keydown="handleKeydown" @paste="handlePaste" />
+            <textarea ref="messageInput" v-model="text" aria-label="消息内容" maxlength="2000" rows="1" placeholder="发送消息" @input="resizeMessageInput" @keydown="handleKeydown" @paste="handlePaste" />
           </div>
         </div>
         <button type="submit" aria-label="发送消息" :disabled="!canSend"><Send :size="15" /></button>

@@ -1,43 +1,22 @@
 <script setup lang="ts">
-import { computed, onScopeDispose, ref } from 'vue';
+import { computed, inject } from 'vue';
 import { Download, Eye, X } from '@lucide/vue';
-import { downloadFile, type ChatAttachment } from '../chat/chatApi';
+import { CHAT_TRANSFERS } from '../chat/useChatTransfers';
+import type { ChatAttachment } from '../chat/chatApi';
 import { chatMediaFormat } from '../chat/chatMedia';
 
 const props = defineProps<{ groupId: string; attachment: ChatAttachment; previewDisabled?: boolean }>();
 const emit = defineEmits<{ preview: [] }>();
 const previewable = computed(() => !props.previewDisabled && Boolean(chatMediaFormat(props.attachment)));
-const controller = ref<AbortController | null>(null);
-const loadedBytes = ref(0);
-const error = ref('');
-const downloading = ref(false);
-const progress = () => props.attachment.byteSize > 0
-  ? Math.min(100, Math.floor(loadedBytes.value / props.attachment.byteSize * 100)) : 0;
-
-async function download() {
-  if (downloading.value) return;
-  const current = new AbortController();
-  controller.value = current;
-  downloading.value = true;
-  loadedBytes.value = 0;
-  error.value = '';
-  try {
-    await downloadFile(props.groupId, props.attachment, current.signal, (loaded) => { loadedBytes.value = loaded; });
-  } catch (reason) {
-    if (!current.signal.aborted && !(reason instanceof DOMException && reason.name === 'AbortError')) {
-      error.value = reason instanceof Error ? reason.message : '文件下载失败';
-    }
-  } finally {
-    if (controller.value === current) controller.value = null;
-    downloading.value = false;
-  }
+const transfers = inject(CHAT_TRANSFERS)!;
+const task = computed(() => transfers.downloads.get(props.attachment.id));
+const downloading = computed(() => Boolean(task.value?.controller));
+const error = computed(() => task.value?.error ?? '');
+function progress() {
+  return props.attachment.byteSize ? Math.floor((task.value?.loaded ?? 0) * 100 / props.attachment.byteSize) : 0;
 }
-
-function cancel() {
-  controller.value?.abort();
-}
-
-onScopeDispose(cancel);
+function download() { return transfers.download(props.groupId, props.attachment); }
+function cancel() { task.value?.controller?.abort(); }
 </script>
 
 <template>

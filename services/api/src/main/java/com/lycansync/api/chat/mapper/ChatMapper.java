@@ -1,5 +1,6 @@
 package com.lycansync.api.chat.mapper;
 
+import com.lycansync.api.chat.dto.ChatUploadLimits;
 import com.lycansync.api.chat.model.ChatAttachment;
 import com.lycansync.api.chat.model.ChatAttachmentContent;
 import com.lycansync.api.chat.model.ChatFileAttachment;
@@ -22,13 +23,26 @@ import java.util.UUID;
  */
 @Mapper
 public interface ChatMapper {
-    Long lockGroupForImageSend(@Param("groupId") UUID groupId);
+    Instant findMessageCreatedAt(@Param("messageId") UUID messageId);
+    boolean isCurrentAttempt(@Param("messageId") UUID messageId, @Param("attemptId") UUID attemptId);
+    boolean hasFileCapacity(@Param("byteSize") long byteSize, @Param("maxStorageSize") long maxStorageSize);
+    ChatUploadLimits findUploadLimits(@Param("defaultFileBytes") long defaultFileBytes, @Param("defaultStorageBytes") long defaultStorageBytes);
+    int saveLimits(@Param("maxFileBytes") long maxFileBytes, @Param("maxStorageBytes") long maxStorageBytes);
+    int insertDelivery(@Param("messageId") UUID messageId, @Param("attemptId") UUID attemptId,
+                       @Param("fileName") String fileName, @Param("byteSize") long byteSize);
+    int retryDelivery(@Param("messageId") UUID messageId, @Param("attemptId") UUID attemptId);
+    int stopDelivery(@Param("groupId") UUID groupId, @Param("senderId") UUID senderId,
+                     @Param("messageId") UUID messageId, @Param("attemptId") UUID attemptId);
+    int finishDelivery(@Param("messageId") UUID messageId, @Param("attemptId") UUID attemptId);
+    List<ChatMessageView> findDeliveries(@Param("groupId") UUID groupId, @Param("ids") List<UUID> ids);
+
+    Long lockGroupForMessageSend(@Param("groupId") UUID groupId);
     Long allocateMessageSequence(@Param("groupId") UUID groupId);
     int insertMessage(@Param("message") ChatMessage message);
     int insertAttachment(@Param("attachment") ChatAttachment attachment);
     boolean messageExists(@Param("groupId") UUID groupId, @Param("messageId") UUID messageId);
     boolean messageIdExists(@Param("messageId") UUID messageId);
-    ChatMessageView findImageMessage(@Param("groupId") UUID groupId, @Param("messageId") UUID messageId,
+    ChatMessageView findSubmittedMessage(@Param("groupId") UUID groupId, @Param("messageId") UUID messageId,
                                      @Param("senderUserId") UUID senderUserId);
     List<ChatMessageView> findMessages(@Param("groupId") UUID groupId, @Param("beforeMessageId") UUID beforeMessageId,
                                        @Param("afterMessageId") UUID afterMessageId, @Param("limit") int limit);

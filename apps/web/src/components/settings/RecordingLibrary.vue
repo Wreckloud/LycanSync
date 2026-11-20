@@ -161,9 +161,8 @@ h2 { margin: 0; font-size: 22px; line-height: 32px; }
 .library-day h3 { margin: 16px 0 4px; color: var(--muted); font-size: 12px; font-weight: 400; }
 .library-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; }
 .library-preview { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; padding: 0; border: 0; border-radius: 6px; text-align: left; background: transparent; cursor: pointer; }
-.library-preview:is(:hover, :focus-visible):enabled { background: var(--panel-soft); }
+.library-preview:is(:hover, :focus-visible):enabled strong { text-decoration: underline; }
 .library-preview:disabled { cursor: default; }
-.library-preview:focus-visible:enabled .recording-thumbnail { border-color: var(--accent); }
 .library-description { flex: 1; min-width: 0; display: grid; gap: 6px; }
 .library-description strong { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .library-description small { color: var(--muted); font-size: 12px; }

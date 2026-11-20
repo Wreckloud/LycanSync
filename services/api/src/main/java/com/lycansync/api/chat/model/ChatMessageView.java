@@ -13,13 +13,13 @@ import org.apache.ibatis.annotations.AutomapConstructor;
 public record ChatMessageView(UUID id, UUID senderUserId, String senderNickname, ChatMessageType type,
                               String content, Instant createdAt, UUID attachmentId, String attachmentContentType,
                               Integer attachmentWidth, Integer attachmentHeight, Long attachmentByteSize,
-                              String attachmentFileName, String senderAvatar, Instant senderDeletedAt) {
+                              String attachmentFileName, String senderAvatar, Instant senderDeletedAt, String transferStatus) {
     @AutomapConstructor
     public ChatMessageView { }
     public ChatMessageView(UUID id, UUID senderUserId, String senderNickname, ChatMessageType type,
                            String content, Instant createdAt, UUID attachmentId, String attachmentContentType,
                            Integer attachmentWidth, Integer attachmentHeight, Long attachmentByteSize, String attachmentFileName) {
         this(id, senderUserId, senderNickname, type, content, createdAt, attachmentId, attachmentContentType,
-                attachmentWidth, attachmentHeight, attachmentByteSize, attachmentFileName, "", null);
+                attachmentWidth, attachmentHeight, attachmentByteSize, attachmentFileName, "", null, null);
     }
 }

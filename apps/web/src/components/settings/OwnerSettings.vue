@@ -4,6 +4,7 @@ import { authRequest } from '../../auth/authApi';
 import InlineFeedback from '../InlineFeedback.vue';
 import AccountLifecycleSettings from './AccountLifecycleSettings.vue';
 import MemberAccessSettings from './MemberAccessSettings.vue';
+import UploadSettings from './UploadSettings.vue';
 import QqLoginSettings from './QqLoginSettings.vue';
 
 const props = defineProps<{ active: boolean; leaving: boolean }>();
@@ -55,6 +56,7 @@ onScopeDispose(() => request?.abort());
       <InlineFeedback :message="error" :pending="loading && !status ? '正在读取配置状态…' : ''" />
       <button v-if="error" type="button" class="settings-button" :disabled="loading || leaving" @click="refresh">重试</button>
     </section>
+    <UploadSettings :active="active" :leaving="leaving" @notice="emit('notice', $event)" />
     <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="true" section="owner" @notice="emit('notice', $event)" />
   </section>
 </template>

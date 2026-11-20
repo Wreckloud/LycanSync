@@ -3,14 +3,14 @@ package com.lycansync.api.chat.controller;
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.chat.dto.ChatMessagePageResponse;
 import com.lycansync.api.chat.dto.ChatMessageResponse;
+import com.lycansync.api.chat.dto.ChatVideoPreviewResponse;
 import com.lycansync.api.chat.model.ChatAttachmentContent;
 import com.lycansync.api.chat.model.ChatFileMetadata;
-import com.lycansync.api.chat.service.ChatFileService;
 import com.lycansync.api.chat.service.ChatFileMediaService;
-import com.lycansync.api.chat.service.ChatVideoPreviewService;
-import com.lycansync.api.chat.dto.ChatVideoPreviewResponse;
-import com.lycansync.api.chat.service.ChatService;
+import com.lycansync.api.chat.service.ChatFileService;
 import com.lycansync.api.chat.service.ChatMessageWaitService;
+import com.lycansync.api.chat.service.ChatService;
+import com.lycansync.api.chat.service.ChatVideoPreviewService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -18,6 +18,12 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.io.Resource;
 import org.springframework.http.CacheControl;
@@ -26,21 +32,22 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.context.request.async.DeferredResult;
+import org.springframework.web.multipart.MultipartFile;
 
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.validation.constraints.Positive;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -97,7 +104,7 @@ public class ChatController {
             @RequestParam(value = "content", required = false) @Parameter(description = "消息文字") String content,
             @RequestPart(value = "image", required = false) @Parameter(description = "PNG 或 JPEG 图片") MultipartFile image,
             @RequestParam(value = "messageId", required = false)
-            @Parameter(description = "图片消息重试时保持不变的消息 ID") UUID messageId,
+            @Parameter(description = "消息重试时保持不变的 ID") UUID messageId,
             @AuthenticationPrincipal AuthenticatedUser user
     ) {
         return ResponseEntity.status(201).cacheControl(CacheControl.noStore())
@@ -119,12 +126,41 @@ public class ChatController {
             @RequestHeader("X-File-Size") @Parameter(description = "预期文件字节数") long byteSize,
             @RequestHeader(value = "X-Message-Content", required = false)
             @Parameter(description = "UTF-8 消息文字的 Base64 URL 编码") String content,
+            @RequestHeader(value = "X-File-Message", required = false) UUID messageId,
             HttpServletRequest request,
             @AuthenticationPrincipal AuthenticatedUser user
     ) throws IOException {
         return ResponseEntity.status(201).cacheControl(CacheControl.noStore())
-                .body(chatFileService.upload(groupId, user, uploadId, encodedFileName, content, byteSize,
-                        request.getInputStream()));
+                .body(messageId == null ? chatFileService.upload(groupId, user, uploadId, encodedFileName, content, byteSize,
+                        request.getInputStream()) : chatFileService.upload(groupId, user, uploadId, encodedFileName, content,
+                        byteSize, request.getInputStream(), messageId));
+    }
+
+    @Schema(description = "文件消息登记，仅发送元数据")
+    public record Declaration(@NotNull UUID attemptId, @NotNull @Size(max = 2048) String encodedName,
+                              @PositiveOrZero long byteSize, @Size(max = 4000) String content) { }
+
+    @PostMapping("/files/transfers/{messageId}")
+    @Operation(summary = "登记文件消息并确定群内顺序")
+    public ChatMessageResponse declare(@PathVariable UUID groupId, @PathVariable UUID messageId,
+                                       @Valid @RequestBody Declaration request, @AuthenticationPrincipal AuthenticatedUser user) {
+        return chatFileService.declare(groupId, user, messageId, request.attemptId(), request.encodedName(),
+                request.byteSize(), request.content());
+    }
+
+    @GetMapping("/files/transfers")
+    @Operation(summary = "更新已有文件消息的传输状态")
+    public List<ChatMessageResponse> deliveries(@PathVariable UUID groupId, @RequestParam @Size(min = 1, max = 50) List<UUID> ids,
+                                                @AuthenticationPrincipal AuthenticatedUser user) {
+        return chatFileService.deliveries(groupId, user, ids);
+    }
+
+    @DeleteMapping("/files/transfers/{messageId}/{attemptId}")
+    @Operation(summary = "停止本次文件发送")
+    public ResponseEntity<Void> stop(@PathVariable UUID groupId, @PathVariable UUID messageId, @PathVariable UUID attemptId,
+                                     @AuthenticationPrincipal AuthenticatedUser user) {
+        chatFileService.stop(groupId, user, messageId, attemptId);
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/files/requests/{uploadId}")

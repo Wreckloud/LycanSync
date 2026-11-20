@@ -2,7 +2,44 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="com.lycansync.api.chat.mapper.ChatMapper">
-    <select id="lockGroupForImageSend" resultType="long" useCache="false" flushCache="true">
+    <select id="findMessageCreatedAt" resultType="java.time.Instant">
+        SELECT created_at FROM chat_message WHERE id = #{messageId}
+    </select>
+    <select id="isCurrentAttempt" resultType="boolean">
+        SELECT EXISTS (SELECT 1 FROM chat_file_delivery WHERE message_id = #{messageId}
+                         AND attempt_id = #{attemptId} AND pending_until > now())
+    </select>
+    <select id="hasFileCapacity" resultType="boolean">
+        SELECT used_bytes + reserved_bytes + #{byteSize} &lt;= COALESCE(max_storage_bytes, #{maxStorageSize})
+        FROM chat_file_storage_quota WHERE id = 1
+    </select>
+    <select id="findUploadLimits" resultType="com.lycansync.api.chat.dto.ChatUploadLimits">
+        SELECT COALESCE(max_file_bytes, #{defaultFileBytes}) AS max_file_bytes,
+               COALESCE(max_storage_bytes, #{defaultStorageBytes}) AS max_storage_bytes
+        FROM chat_file_storage_quota WHERE id = 1
+    </select>
+    <update id="saveLimits">
+        UPDATE chat_file_storage_quota SET max_file_bytes = #{maxFileBytes}, max_storage_bytes = #{maxStorageBytes}
+        WHERE id = 1 AND used_bytes + reserved_bytes &lt;= #{maxStorageBytes}
+    </update>
+    <insert id="insertDelivery">
+        INSERT INTO chat_file_delivery (message_id, attempt_id, file_name, byte_size, pending_until)
+        VALUES (#{messageId}, #{attemptId}, #{fileName}, #{byteSize}, now() + interval '35 minutes')
+    </insert>
+    <update id="retryDelivery">
+        UPDATE chat_file_delivery SET attempt_id = #{attemptId}, pending_until = now() + interval '35 minutes'
+        WHERE message_id = #{messageId} AND (attempt_id = #{attemptId} OR pending_until &lt;= now())
+    </update>
+    <update id="stopDelivery">
+        UPDATE chat_file_delivery d SET pending_until = now() FROM chat_message m
+        WHERE d.message_id = m.id AND m.group_id = #{groupId} AND m.sender_user_id = #{senderId}
+          AND m.id = #{messageId} AND d.attempt_id = #{attemptId}
+    </update>
+    <delete id="finishDelivery">
+        DELETE FROM chat_file_delivery WHERE message_id = #{messageId} AND attempt_id = #{attemptId}
+          AND pending_until > now()
+    </delete>
+    <select id="lockGroupForMessageSend" resultType="long" useCache="false" flushCache="true">
         SELECT 1 FROM chat_group WHERE id = #{groupId} FOR UPDATE
     </select>
     <select id="allocateMessageSequence" resultType="long" affectData="true" flushCache="true" useCache="false">
@@ -27,34 +64,49 @@
     <select id="messageIdExists" resultType="boolean">
         SELECT EXISTS (SELECT 1 FROM chat_message WHERE id = #{messageId})
     </select>
-    <select id="findImageMessage" resultType="com.lycansync.api.chat.model.ChatMessageView">
+    <select id="findSubmittedMessage" resultType="com.lycansync.api.chat.model.ChatMessageView">
         SELECT message.id, message.sender_user_id, users.nickname AS sender_nickname, message.type,
                message.content, message.created_at, attachment.id AS attachment_id,
                attachment.content_type AS attachment_content_type, attachment.width AS attachment_width,
                attachment.height AS attachment_height, attachment.byte_size AS attachment_byte_size,
-               NULL AS attachment_file_name, users.avatar AS sender_avatar, users.deleted_at AS sender_deleted_at
+               NULL AS attachment_file_name, users.avatar AS sender_avatar, users.deleted_at AS sender_deleted_at, NULL AS transfer_status
         FROM chat_message message
         JOIN app_user users ON users.id = message.sender_user_id
-        JOIN chat_attachment attachment ON attachment.message_id = message.id
+        LEFT JOIN chat_attachment attachment ON attachment.message_id = message.id
         WHERE message.group_id = #{groupId} AND message.id = #{messageId}
-          AND message.sender_user_id = #{senderUserId} AND message.type = 'IMAGE'
+          AND message.sender_user_id = #{senderUserId} AND message.type IN ('IMAGE', 'TEXT')
     </select>
-    <select id="findMessages" resultType="com.lycansync.api.chat.model.ChatMessageView">
-        SELECT page.id, page.sender_user_id, page.sender_nickname, page.type, page.content, page.created_at,
-               page.attachment_id, page.attachment_content_type, page.attachment_width,
-               page.attachment_height, page.attachment_byte_size, page.attachment_file_name, page.sender_avatar, page.sender_deleted_at
-        FROM (
-            SELECT m.id, m.sequence_number, m.sender_user_id, users.nickname AS sender_nickname,
+    <sql id="messageProjection">
+        SELECT m.id, m.sequence_number, m.sender_user_id, users.nickname AS sender_nickname,
                    m.type, m.content, m.created_at,
-                   COALESCE(attachment.id, file_attachment.id) AS attachment_id,
+                   COALESCE(attachment.id, file_attachment.id, delivery.message_id) AS attachment_id,
                    COALESCE(attachment.content_type, 'application/octet-stream') AS attachment_content_type,
                    attachment.width AS attachment_width, attachment.height AS attachment_height,
-                   COALESCE(attachment.byte_size, file_attachment.byte_size) AS attachment_byte_size,
-                   file_attachment.file_name AS attachment_file_name, users.avatar AS sender_avatar, users.deleted_at AS sender_deleted_at
+                   COALESCE(attachment.byte_size, file_attachment.byte_size, delivery.byte_size) AS attachment_byte_size,
+                   COALESCE(file_attachment.file_name, delivery.file_name) AS attachment_file_name, users.avatar AS sender_avatar, users.deleted_at AS sender_deleted_at,
+                   CASE WHEN delivery.pending_until > now() THEN 'PENDING'
+                        WHEN delivery.message_id IS NOT NULL THEN 'FAILED' END AS transfer_status
             FROM chat_message m
             JOIN app_user users ON users.id = m.sender_user_id
             LEFT JOIN chat_attachment attachment ON attachment.message_id = m.id
             LEFT JOIN chat_file_attachment file_attachment ON file_attachment.message_id = m.id
+            LEFT JOIN chat_file_delivery delivery ON delivery.message_id = m.id
+    </sql>
+    <select id="findDeliveries" resultType="com.lycansync.api.chat.model.ChatMessageView">
+        SELECT page.id, page.sender_user_id, page.sender_nickname, page.type, page.content, page.created_at,
+               page.attachment_id, page.attachment_content_type, page.attachment_width,
+               page.attachment_height, page.attachment_byte_size, page.attachment_file_name, page.sender_avatar, page.sender_deleted_at, page.transfer_status
+        FROM (<include refid="messageProjection"/>
+            WHERE m.group_id = #{groupId} AND m.type = 'FILE' AND m.id IN
+            <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ) page ORDER BY page.sequence_number
+    </select>
+    <select id="findMessages" resultType="com.lycansync.api.chat.model.ChatMessageView">
+        SELECT page.id, page.sender_user_id, page.sender_nickname, page.type, page.content, page.created_at,
+               page.attachment_id, page.attachment_content_type, page.attachment_width,
+               page.attachment_height, page.attachment_byte_size, page.attachment_file_name, page.sender_avatar, page.sender_deleted_at, page.transfer_status
+        FROM (
+            <include refid="messageProjection"/>
             WHERE m.group_id = #{groupId}
             <if test="beforeMessageId != null">
                 AND m.sequence_number &lt; (SELECT cursor.sequence_number FROM chat_message cursor
@@ -85,7 +137,7 @@
                message.content, message.created_at, attachment.id AS attachment_id,
                'application/octet-stream' AS attachment_content_type, NULL AS attachment_width,
                NULL AS attachment_height, attachment.byte_size AS attachment_byte_size,
-               attachment.file_name AS attachment_file_name, users.avatar AS sender_avatar, users.deleted_at AS sender_deleted_at
+               attachment.file_name AS attachment_file_name, users.avatar AS sender_avatar, users.deleted_at AS sender_deleted_at, NULL AS transfer_status
         FROM chat_file_attachment attachment
         JOIN chat_message message ON message.id = attachment.message_id
         JOIN app_user users ON users.id = message.sender_user_id
@@ -101,7 +153,7 @@
         WITH reserved AS (
             UPDATE chat_file_storage_quota
             SET reserved_bytes = reserved_bytes + #{byteSize}
-            WHERE id = 1 AND used_bytes + reserved_bytes + #{byteSize} &lt;= #{maxStorageSize}
+            WHERE id = 1 AND used_bytes + reserved_bytes + #{byteSize} &lt;= COALESCE(max_storage_bytes, #{maxStorageSize})
             RETURNING id
         )
         INSERT INTO chat_file_upload_reservation (id, group_id, byte_size, created_at, process_instance_id)

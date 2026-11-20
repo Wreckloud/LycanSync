@@ -78,18 +78,14 @@ onScopeDispose(() => { disposed = true; observer?.disconnect(); release(); });
   <div ref="frame" class="chat-file-media">
     <ChatFileCard v-if="!format || format.kind === 'audio' || failed"
       :group-id="groupId" :attachment="attachment" :preview-disabled="failed && format?.kind === 'image'" @preview="openPreview" />
-    <template v-else>
-      <div class="chat-inline-media" :style="frameStyle">
-        <button v-if="format.kind === 'video' || source" class="chat-inline-image" type="button" :aria-label="format.kind === 'video' ? '播放视频' : '查看图片'" @click="openPreview">
-          <img v-if="source" :src="source" :alt="format.kind === 'image' ? attachment.fileName : ''" @load="imageLoaded" @error="decodeFailed" />
-          <span v-if="format.kind === 'video'" class="chat-media-play"><Play :size="24" fill="currentColor" /></span>
-        </button>
-        <button v-else-if="loadingFailed" class="chat-media-retry" type="button" @click="load">预览加载失败，点击重试</button>
-        <button v-if="format.kind === 'video' && loadingFailed" class="chat-cover-retry" type="button" @click="load">封面加载失败，点击重试</button>
-      </div>
-      <button v-if="attachment.fileName" type="button" class="chat-media-name" :aria-label="`预览 ${attachment.fileName}`"
-        @click="openPreview">{{ attachment.fileName }}</button>
-    </template>
+    <div v-else class="chat-inline-media" :style="frameStyle">
+      <button v-if="format.kind === 'video' || source" class="chat-inline-image" type="button" :aria-label="format.kind === 'video' ? '播放视频' : '查看图片'" @click="openPreview">
+        <img v-if="source" :src="source" :alt="format.kind === 'image' ? attachment.fileName : ''" @load="imageLoaded" @error="decodeFailed" />
+        <span v-if="format.kind === 'video'" class="chat-media-play"><Play :size="24" fill="currentColor" /></span>
+      </button>
+      <button v-else-if="loadingFailed" class="chat-media-retry" type="button" @click="load">预览加载失败，点击重试</button>
+      <button v-if="format.kind === 'video' && loadingFailed" class="chat-cover-retry" type="button" @click="load">封面加载失败，点击重试</button>
+    </div>
   </div>
 </template>
 

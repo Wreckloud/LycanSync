@@ -56,7 +56,7 @@ lycansync:
   chat:
     files:
       storage-directory: ${CHAT_FILE_STORAGE_DIR:./var/chat-files}
-      max-file-size: ${CHAT_FILE_MAX_BYTES:104857600}
+      max-file-size: ${CHAT_FILE_MAX_BYTES:536870912}
       max-storage-size: ${CHAT_FILE_STORAGE_MAX_BYTES:10737418240}
 
 management:

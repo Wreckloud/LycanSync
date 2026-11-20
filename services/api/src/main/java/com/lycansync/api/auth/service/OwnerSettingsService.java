@@ -77,7 +77,7 @@ public class OwnerSettingsService {
                 configuration.enabled() ? configuration.validationError() : "");
     }
 
-    private void requireOwner(AuthenticatedUser user) {
+    public void requireOwner(AuthenticatedUser user) {
         if (user == null || !user.administrator()) throw denied();
         AuthUser current = users.findUserProfile(user.id());
         if (current == null || current.deletedAt() != null || !current.administrator()) throw denied();

@@ -141,7 +141,7 @@ class GroupApplicationIT {
 
     @BeforeEach
     void resetDatabase() {
-        jdbc.sql("TRUNCATE rtc_voice_time, system_state, auth_qq_identity, auth_access_link, user_presence, chat_attachment, chat_file_attachment, chat_file_upload_reservation, chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
+        jdbc.sql("TRUNCATE rtc_voice_time, system_state, auth_qq_identity, auth_access_link, user_presence, chat_attachment, chat_file_delivery, chat_file_attachment, chat_file_upload_reservation, chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
         jdbc.sql("INSERT INTO system_state(id) VALUES (1)").update();
     }
 

@@ -71,7 +71,6 @@ export function useViewingSize(panel: Ref<HTMLElement | null>, options: ViewingS
             + (Number.parseFloat(listStyle?.paddingTop ?? '0') || 0) + (Number.parseFloat(listStyle?.paddingBottom ?? '0') || 0);
           availableHeight = Math.min(availableHeight, personal.getBoundingClientRect().top - top - memberSpace);
         }
-        availableHeight -= overlay?.querySelector<HTMLElement>('.viewing-fold')?.offsetHeight ?? 0;
       }
       const memberHeight = memberPanel?.parentElement?.scrollHeight ?? memberPanel?.offsetHeight ?? 0;
       maximumHeight.value = Math.max(0, Math.floor(availableHeight - memberHeight));

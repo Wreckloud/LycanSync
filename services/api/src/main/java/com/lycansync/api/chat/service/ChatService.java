@@ -5,7 +5,6 @@ import com.lycansync.api.chat.dto.ChatAttachmentResponse;
 import com.lycansync.api.chat.dto.ChatMessagePageResponse;
 import com.lycansync.api.chat.dto.ChatMessageResponse;
 import com.lycansync.api.chat.event.ChatMessageCreatedEvent;
-import org.springframework.context.ApplicationEventPublisher;
 import com.lycansync.api.chat.mapper.ChatMapper;
 import com.lycansync.api.chat.model.ChatAttachment;
 import com.lycansync.api.chat.model.ChatAttachmentContent;
@@ -15,6 +14,7 @@ import com.lycansync.api.chat.model.ChatMessageView;
 import com.lycansync.api.common.error.ApiErrorCode;
 import com.lycansync.api.group.exception.GroupException;
 import com.lycansync.api.group.service.GroupService;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,14 +37,17 @@ public class ChatService {
     private static final int PAGE_SIZE = 30;
     private final ChatMapper mapper;
     private final GroupService groupService;
+    private final ChatUploadSettingsService settings;
     private final Clock systemClock;
     private final ApplicationEventPublisher events;
 
-    public ChatService(ChatMapper mapper, GroupService groupService, Clock systemClock, ApplicationEventPublisher events) {
+    public ChatService(ChatMapper mapper, GroupService groupService, Clock systemClock, ApplicationEventPublisher events,
+                       ChatUploadSettingsService settings) {
         this.mapper = mapper;
         this.groupService = groupService;
         this.systemClock = systemClock;
         this.events = events;
+        this.settings = settings;
     }
 
     public ChatMessagePageResponse findMessages(
@@ -64,9 +67,8 @@ public class ChatService {
 
     @Transactional
     public ChatMessageResponse sendMessage(UUID groupId, AuthenticatedUser user, String content, MultipartFile image,
-                                           UUID imageMessageId) {
+                                           UUID requestedId) {
         groupService.requireMember(groupId, user);
-        if (imageMessageId != null && image == null) throw invalid("消息 ID 只能用于图片消息");
         String text = normalizeContent(content);
         ChatImageValidator.ValidatedImage validatedImage = null;
         if (image != null) {
@@ -78,25 +80,29 @@ public class ChatService {
         }
         if (text.isEmpty() && validatedImage == null) throw invalid("请输入消息内容或选择一张图片");
 
-        if (imageMessageId != null) {
-            if (mapper.lockGroupForImageSend(groupId) == null) {
+        if (requestedId != null) {
+            if (mapper.lockGroupForMessageSend(groupId) == null) {
                 throw new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.GROUP_NOT_FOUND, "群组不存在");
             }
-            ChatMessageView existing = mapper.findImageMessage(groupId, imageMessageId, user.id());
+            ChatMessageView existing = mapper.findSubmittedMessage(groupId, requestedId, user.id());
             if (existing != null) {
                 // 重试虽不写入新消息，也不能绕过锁后的成员资格检查。
                 groupService.requireMember(groupId, user);
+                if ((image == null) != (existing.type() == ChatMessageType.TEXT) || !text.equals(existing.content())) {
+                    throw invalid("消息 ID 已被占用");
+                }
                 return toResponse(existing);
             }
-            if (mapper.messageIdExists(imageMessageId)) throw invalid("消息 ID 已被占用");
+            if (mapper.messageIdExists(requestedId)) throw invalid("消息 ID 已被占用");
         }
 
+        if (validatedImage != null) settings.checkFileSize(validatedImage.data().length);
         Long sequenceNumber = mapper.allocateMessageSequence(groupId);
         if (sequenceNumber == null) throw new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.GROUP_NOT_FOUND, "群组不存在");
         // 分配序号已锁定群组行，重新确认资格，避免退群与发送交错后仍写入。
         groupService.requireMember(groupId, user);
         Instant now = Instant.now(systemClock);
-        UUID messageId = imageMessageId == null ? UUID.randomUUID() : imageMessageId;
+        UUID messageId = requestedId == null ? UUID.randomUUID() : requestedId;
         mapper.insertMessage(new ChatMessage(messageId, groupId, user.id(),
                 validatedImage == null ? ChatMessageType.TEXT : ChatMessageType.IMAGE, text, now, sequenceNumber));
 
@@ -135,7 +141,7 @@ public class ChatService {
     private ChatMessageResponse toResponse(ChatMessageView message) {
         ChatAttachmentResponse attachment = message.attachmentId() == null ? null : new ChatAttachmentResponse(
                 message.attachmentId(), message.attachmentContentType(), message.attachmentWidth(),
-                message.attachmentHeight(), message.attachmentByteSize(), message.attachmentFileName());
+                message.attachmentHeight(), message.attachmentByteSize(), message.attachmentFileName(), message.transferStatus());
         return new ChatMessageResponse(message.id(), message.senderUserId(), message.senderNickname(), message.type(),
                 message.content(), message.createdAt(), attachment, message.senderAvatar(), message.senderDeletedAt());
     }

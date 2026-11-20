@@ -6,7 +6,8 @@ import { computed, effectScope, nextTick, onScopeDispose, reactive, ref, watch }
 import { afterEach, expect, it, vi } from 'vitest';
 import { useChatScroll } from '../chat/useChatScroll';
 import { useGroupMessages } from '../chat/useGroupMessages';
-import { findMessages as requestMessages } from '../chat/chatApi';
+import { createChatTransfers, CHAT_TRANSFERS } from '../chat/useChatTransfers';
+import { declareFile, sendFile as requestFile, sendMessage as requestMessage, findMessages as requestMessages } from '../chat/chatApi';
 import type { ChatMessage, ChatMessagePage } from '../chat/chatApi';
 import type { AccountCache } from '../cache/localCache';
 import { formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey } from '../chat/messageTime';
@@ -14,7 +15,7 @@ import { useLoadingHint } from './useLoadingHint';
 import { chatMediaFormat } from '../chat/chatMedia';
 import defaultAvatar from '../../../../services/api/src/main/resources/account/default.png';
 
-vi.mock('../chat/chatApi', () => ({ findMessages: vi.fn() }));
+vi.mock('../chat/chatApi', () => ({ findMessages: vi.fn(), declareFile: vi.fn(), sendFile: vi.fn(), sendMessage: vi.fn(), stopFile: vi.fn() }));
 
 const script = parse(readFileSync(new URL('./GroupChat.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('GroupChat.ts', script, ts.ScriptTarget.Latest, true);
@@ -43,6 +44,11 @@ function setup(cache: AccountCache | null = null) {
   vi.mocked(requestMessages).mockImplementation(findMessages);
   const sendMessage = vi.fn(async (_groupId: string, _text: string, _image?: File, _signal?: AbortSignal, _id?: string) => message('sent'));
   const sendFile = vi.fn(async (_groupId: string, _file: File, _text: string, id: string, _signal: AbortSignal) => message(id));
+  vi.mocked(requestMessage).mockImplementation(sendMessage);
+  vi.mocked(requestFile).mockImplementation((groupId, file, content, _attempt, signal, _progress, id) =>
+    sendFile(groupId, file as File, content, id!, signal));
+  vi.mocked(declareFile).mockImplementation(async (_group, id, _attempt, file) => ({ ...message(id), type: 'FILE',
+    attachment: { id, fileName: file.name, byteSize: file.size, contentType: '', transferStatus: 'PENDING' } }));
   const body = {};
   const document = { visibilityState: 'visible', removeEventListener: vi.fn(), body, activeElement: body as unknown };
   const scrollPreference = { matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() };
@@ -51,12 +57,15 @@ function setup(cache: AccountCache | null = null) {
   vi.stubGlobal('window', window);
   const emit = vi.fn();
   const fetchRecording = vi.fn(async (_source: string, _options: RequestInit) => new Response(new Uint8Array([1, 2, 3])));
+  vi.stubGlobal('fetch', fetchRecording);
+  const transfers = createChatTransfers({ ...props.user, avatar: '', administrator: false }, id => emit('messageSent', id));
+  const uploadLimits = vi.fn(async () => ({ maxFileBytes: 512 * 1024 ** 2 }));
   // 真实组件的任务、监听和销毁；只替换网络、DOM 与图片边界，不启动浏览器或传输文件。
-  const chat = scope.run(() => runInNewContext(`${compiled}\n({ ...synchronization, ...scroll, handleVisibilityChange, submit, cancelUpload, enqueueFiles, attachmentKind, pendingPreview,
-    text, busy, error, syncError, retrySync, pendingAttachments, initialLoadingHint, historyLoadingHint, refreshCalendar, calendarNow, senderName, senderAvatar, messageInput,
+  const chat = scope.run(() => runInNewContext(`${compiled}\n({ ...synchronization, ...scroll, handleVisibilityChange, submit, enqueueFiles, attachmentKind, pendingPreview,
+    text, error, syncError, retrySync, pendingAttachments, initialLoadingHint, historyLoadingHint, refreshCalendar, calendarNow, senderName, senderAvatar, messageInput,
     setScrollPreference: value => { Object.assign(scrollPreference, value); } })`, {
     computed, ref, watch, nextTick, onScopeDispose, useLoadingHint, useComposerHeight: () => () => {}, onMounted: () => {}, defineProps: () => props, defineEmits: () => emit,
-    inject: () => cache, ACCOUNT_CACHE: Symbol(),
+    inject: (key: symbol) => key === CHAT_TRANSFERS ? transfers : cache, CHAT_TRANSFERS, ACCOUNT_CACHE: Symbol(), uploadLimits,
     sendMessage, sendFile, compressChatImage: vi.fn(), defaultAvatar,
     formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey,
     AbortController, ReadableStream, crypto, fetch: fetchRecording, setTimeout, clearTimeout, Error, Date, chatMediaFormat,
@@ -67,7 +76,7 @@ function setup(cache: AccountCache | null = null) {
     pendingPreview: { value: unknown };
     senderName(message: ChatMessage): string; senderAvatar(message: ChatMessage): string;
     messageInput: { value: unknown };
-    refresh: () => Promise<number | null>; submit: (restoreFocus?: boolean) => Promise<void>; cancelUpload: () => void;
+    refresh: () => Promise<number | null>; submit: (restoreFocus?: boolean) => Promise<void>;
     loadOlder: () => Promise<void>; handleVisibilityChange: () => void; list: { value: HTMLElement | null };
     historyError: { value: string };
     initialLoaded: { value: boolean }; initialLoadingHint: { value: boolean }; historyLoadingHint: { value: boolean };
@@ -80,11 +89,11 @@ function setup(cache: AccountCache | null = null) {
     scrollToBottom(behavior?: ScrollBehavior, force?: boolean): Promise<void>; onScrollEnd(): void;
     onWheel(event: WheelEvent): void; stopAnimatedScroll(): void;
     setScrollPreference(value: { matches: boolean; removeEventListener: ReturnType<typeof vi.fn> }): void;
-    messages: { value: ChatMessage[] }; text: { value: string }; busy: { value: boolean }; error: { value: string };
+    messages: { value: ChatMessage[] }; text: { value: string }; error: { value: string };
     pendingAttachments: { value: Array<{ id: string; kind: 'FILE'; file: File; previewUrl: string;
       state: 'pending' | 'uploading' | 'failed' | 'sent'; progress: number; error: string }> };
   };
-  return { scope, props, chat, findMessages, sendMessage, sendFile, fetchRecording, document, emit };
+  return { scope, props, chat, findMessages, sendMessage, sendFile, fetchRecording, document, emit, transfers, uploadLimits };
 }
 
 it('注销消息忽略旧头像与昵称缓存，显示注册使用的默认头像', () => {
@@ -531,32 +540,34 @@ it('午夜更新日历基准，后台取消日历任务，销毁后不残留计�
   } finally { scope.stop(); vi.useRealTimers(); }
 });
 
-it('附件失败由附件保留错误，不再重复写入输入区错误', async () => {
-  const { scope, chat, sendFile } = setup();
+it('超限文件在读取文件流前提示 MiB，其他合法附件仍可添加', async () => {
+  const f = setup();
   try {
-    chat.pendingAttachments.value = [{ id: 'upload', kind: 'FILE', file: new File(['data'], 'file.bin'),
-      previewUrl: '', state: 'pending', progress: 0, error: '' }];
-    sendFile.mockRejectedValueOnce(new Error('文件发送失败'));
-    await chat.submit();
-    expect(chat.pendingAttachments.value[0].state).toBe('failed');
-    expect(chat.pendingAttachments.value[0].error).toBe('文件发送失败');
-    expect(chat.error.value).toBe('');
-  } finally { scope.stop(); }
+    f.uploadLimits.mockResolvedValue({ maxFileBytes: 1024 ** 2 });
+    await f.chat.enqueueFiles([new File([new Uint8Array(1024 ** 2 + 1)], 'large.bin'), new File(['ok'], 'ok.txt')], false);
+    expect(f.chat.error.value).toContain('上限 1 MiB');
+    expect(f.chat.pendingAttachments.value.map(item => item.file.name)).toEqual(['ok.txt']);
+    expect(f.sendFile).not.toHaveBeenCalled();
+  } finally { f.scope.stop(); }
 });
 
-it('文字发送失败保留草稿与错误，允许明确重试', async () => {
-  const { scope, chat, sendMessage } = setup();
+it('文件上传时可连续发文字，上传完成更新原消息', async () => {
+  const f = setup();
   try {
-    chat.text.value = '未发送内容';
-    sendMessage.mockRejectedValueOnce(new Error('服务器暂时不可用'));
-    await chat.submit();
-    expect(chat.text.value).toBe('未发送内容');
-    expect(chat.error.value).toBe('服务器暂时不可用');
-    expect(chat.busy.value).toBe(false);
-    await chat.submit();
-    expect(chat.text.value).toBe('');
-    expect(chat.messages.value).toHaveLength(1);
-  } finally { scope.stop(); }
+    const upload = deferred<ChatMessage>();
+    f.sendFile.mockReturnValueOnce(upload.promise);
+    await f.chat.enqueueFiles([new File(['video'], 'clip.bin')], false);
+    const id = f.chat.pendingAttachments.value[0].id;
+    await f.chat.submit();
+    expect(f.chat.pendingAttachments.value).toHaveLength(0);
+    f.chat.text.value = '下一条';
+    await f.chat.submit();
+    await vi.waitFor(() => expect(f.chat.messages.value.map(entry => entry.id)).toEqual([id, 'sent']));
+    expect(f.transfers.outgoing.has(id)).toBe(true);
+    upload.resolve(message(id));
+    await vi.waitFor(() => expect(f.transfers.outgoing.has(id)).toBe(false));
+    expect(f.chat.messages.value.map(entry => entry.id)).toEqual([id, 'sent']);
+  } finally { f.scope.stop(); }
 });
 
 it('增量响应重复带回游标或同批消息时不重复插入，仍保留本机未被快照覆盖的消息', async () => {
@@ -612,68 +623,45 @@ it('增量轮询迟于本机发送，旧游标之后按服务端顺序合并', a
   } finally { scope.stop(); }
 });
 
-it('切群销毁旧聊天并创建新实例，取消旧请求且不带入旧草稿或迟到结果', async () => {
-  const { scope, chat, findMessages, sendMessage } = setup();
-  let current: ReturnType<typeof setup> | undefined;
-  try {
-    const oldPage = deferred<ChatMessagePage>();
-    const oldSend = deferred<ChatMessage>();
-    findMessages.mockReturnValueOnce(oldPage.promise);
-    sendMessage.mockReturnValueOnce(oldSend.promise);
-    const refreshing = chat.refresh();
-    chat.text.value = '旧群内容';
-    const sending = chat.submit();
-    const pollSignal = findMessages.mock.calls[0][2]!;
-    const sendSignal = sendMessage.mock.calls[0][3]!;
-    scope.stop();
-    expect(pollSignal.aborted).toBe(true);
-    expect(sendSignal.aborted).toBe(true);
-    current = setup();
-    oldPage.resolve({ messages: [message('old')], hasMore: false });
-    oldSend.resolve(message('old-sent'));
-    await Promise.all([refreshing, sending]);
-    expect(chat.messages.value).toHaveLength(0);
-    expect(chat.error.value).toBe('');
-    expect(current.chat.messages.value).toHaveLength(0);
-    expect(current.chat.text.value).toBe('');
-    expect(current.chat.error.value).toBe('');
-  } finally { scope.stop(); current?.scope.stop(); }
+it('切群后旧查询中止，已发送的附件继续上传', async () => {
+  const f = setup();
+  const page = deferred<ChatMessagePage>();
+  const upload = deferred<ChatMessage>();
+  f.findMessages.mockReturnValueOnce(page.promise);
+  f.sendFile.mockReturnValueOnce(upload.promise);
+  const refresh = f.chat.refresh();
+  await f.chat.enqueueFiles([new File(['a'], 'a.dat')], false);
+  await f.chat.submit();
+  await vi.waitFor(() => expect(f.sendFile).toHaveBeenCalledOnce());
+  const signal = f.sendFile.mock.calls[0][4];
+  f.scope.stop();
+  expect(f.findMessages.mock.calls[0][2]?.aborted).toBe(true);
+  expect(signal.aborted).toBe(false);
+  page.resolve({ messages: [], hasMore: false });
+  upload.resolve(message('done'));
+  await refresh;
+  await vi.waitFor(() => expect(f.transfers.outgoing.size).toBe(0));
 });
 
-it('批量文件失败后仅重试未成功项，并沿用原请求ID', async () => {
-  const { scope, chat, sendFile } = setup();
+it('取消上传后可在原消息重试，重复提交输入框不会再次上传', async () => {
+  const f = setup();
   try {
-    chat.pendingAttachments.value = ['one', 'two'].map((id) => ({ id, kind: 'FILE', file: new File([id], `${id}.bin`),
-      previewUrl: '', state: 'pending', progress: 0, error: '' }));
-    sendFile.mockResolvedValueOnce(message('one')).mockRejectedValueOnce(new Error('上传失败'));
-    await chat.submit();
-    expect(chat.pendingAttachments.value.map((entry) => entry.state)).toEqual(['sent', 'failed']);
-    await chat.submit();
-    expect(sendFile.mock.calls.map((entry) => entry[3])).toEqual(['one', 'two', 'two']);
-    expect(chat.messages.value.map((entry) => entry.id)).toEqual(['one', 'two']);
-    expect(chat.pendingAttachments.value).toHaveLength(0);
-  } finally { scope.stop(); }
-});
-
-it('主动取消上传保留同一请求ID待重试，不显示服务器失败', async () => {
-  const { scope, chat, sendFile } = setup();
-  try {
-    chat.pendingAttachments.value = [{ id: 'upload', kind: 'FILE', file: new File(['data'], 'file.bin'),
-      previewUrl: '', state: 'pending', progress: 0, error: '' }];
-    const pending = deferred<ChatMessage>();
-    sendFile.mockReturnValueOnce(pending.promise);
-    const sending = chat.submit();
-    chat.cancelUpload();
-    expect(sendFile.mock.calls[0][4].aborted).toBe(true);
-    pending.reject(new Error('request aborted'));
-    await sending;
-    expect(chat.error.value).toBe('');
-    expect(chat.pendingAttachments.value[0].state).toBe('pending');
-    expect(chat.pendingAttachments.value[0].error).toBe('已取消，可继续发送');
-    await chat.submit();
-    expect(sendFile.mock.calls.map((entry) => entry[3])).toEqual(['upload', 'upload']);
-    expect(chat.messages.value).toHaveLength(1);
-  } finally { scope.stop(); }
+    const upload = deferred<ChatMessage>();
+    f.sendFile.mockReturnValueOnce(upload.promise);
+    await f.chat.enqueueFiles([new File(['file'], 'retry.bin')], false);
+    const id = f.chat.pendingAttachments.value[0].id;
+    await f.chat.submit();
+    await vi.waitFor(() => expect(f.sendFile).toHaveBeenCalledOnce());
+    const job = f.transfers.outgoing.get(id)!;
+    job.controller.abort();
+    upload.reject(new Error('aborted'));
+    await vi.waitFor(() => expect(job.error).toBe('已取消上传'));
+    await f.chat.submit();
+    expect(f.sendFile).toHaveBeenCalledTimes(1);
+    await f.transfers.retry(job);
+    await vi.waitFor(() => expect(f.sendFile).toHaveBeenCalledTimes(2));
+    expect(f.sendFile.mock.calls.map(call => call[3])).toEqual([id, id]);
+  } finally { f.scope.stop(); }
 });
 
 it('历史失败保持原消息，重试按原游标去重并保持可见锚点，到底后不再请求', async () => {
@@ -736,7 +724,7 @@ it('群聊接收录像只加入附件并保留文字，点击发送才读取上�
     f.props.recordingAttachment = { id: 'recording-id', sessionId: 'session', createdAt: 1,
       durationMs: 2000, width: 100, height: 100, bytes: 42, state: 'saved', availability: 'available', fileName: '饥荒联机版.mkv' };
     await nextTick();
-    expect(f.chat.pendingAttachments.value).toHaveLength(1);
+    await vi.waitFor(() => expect(f.chat.pendingAttachments.value).toHaveLength(1));
     expect(f.chat.pendingAttachments.value[0]!.file.name).toBe('饥荒联机版.mkv');
     expect(f.chat.text.value).toBe('原有草稿');
     expect(f.sendFile).not.toHaveBeenCalled();
@@ -749,10 +737,10 @@ it('群聊接收录像只加入附件并保留文字，点击发送才读取上�
       return message(id);
     });
     await f.chat.submit();
-    expect(f.sendFile).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(f.sendFile).toHaveBeenCalledOnce());
     expect(f.sendFile.mock.calls[0]![0]).toBe('first');
     expect(f.fetchRecording.mock.calls[0]![0]).toBe('lycan://app/recordings/recording-id');
-    expect(f.fetchRecording.mock.calls[0]![1].signal!.aborted).toBe(true);
+    await vi.waitFor(() => expect(f.fetchRecording.mock.calls[0]![1].signal!.aborted).toBe(true));
   } finally { f.scope.stop(); }
 });
 
@@ -775,7 +763,7 @@ it('回车发送结束等输入框恢复可用后聚焦，发送失败仍可继�
       f.chat.text.value = '连续发送';
       if (failed) f.sendMessage.mockRejectedValueOnce(new Error('发送失败'));
       await f.chat.submit(true);
-      expect(f.chat.busy.value).toBe(false);
+      expect(f.chat.text.value).toBe('');
       expect(focus).toHaveBeenCalledExactlyOnceWith({ preventScroll: true });
       if (!failed) expect(f.emit).toHaveBeenCalledWith('messageSent', 'first');
       else expect(f.emit).not.toHaveBeenCalledWith('messageSent', 'first');

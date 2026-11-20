@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref } from 'vue';
+import { computed, inject, onMounted, onScopeDispose, ref } from 'vue';
 import { Download, Music2, X } from '@lucide/vue';
-import { desktopMediaUrl, downloadFile, fetchAttachment, fetchFilePreview, fetchCompatibleVideo, videoPreviewStatus, type ChatAttachment } from '../chat/chatApi';
+import { desktopMediaUrl, fetchAttachment, fetchFilePreview, fetchCompatibleVideo, videoPreviewStatus, type ChatAttachment } from '../chat/chatApi';
+import { CHAT_TRANSFERS } from '../chat/useChatTransfers';
 import { chatMediaFormat } from '../chat/chatMedia';
 import { useLoadingHint } from './useLoadingHint';
 import { useBackdropDismiss } from './useBackdropDismiss';
@@ -17,7 +18,9 @@ const source = ref('');
 const error = ref('');
 const previewFailed = ref(false);
 const loading = ref(false);
-const downloading = ref(false);
+const transfers = inject(CHAT_TRANSFERS)!;
+const downloadTask = computed(() => transfers.downloads.get(props.attachment.id));
+const downloading = computed(() => Boolean(downloadTask.value?.controller));
 const converting = ref(false);
 const compatible = ref(false);
 const conversionStatus = ref('');
@@ -27,7 +30,6 @@ const player = ref<HTMLMediaElement | null>(null);
 const loadingHint = useLoadingHint(() => loading.value);
 const backdropEvents = useBackdropDismiss(close);
 let request: AbortController | undefined;
-let downloadRequest: AbortController | undefined;
 let conversionRequest: AbortController | undefined;
 let disposed = false;
 
@@ -43,7 +45,6 @@ function close() {
   disposed = true;
   request?.abort();
   conversionRequest?.abort();
-  downloadRequest?.abort();
   release();
   emit('close');
 }
@@ -125,15 +126,7 @@ async function download() {
     link.click();
     return;
   }
-  const current = downloadRequest = new AbortController();
-  downloading.value = true;
-  try {
-    await downloadFile(props.groupId, props.attachment, current.signal, () => {});
-  } catch (reason) {
-    if (!current.signal.aborted && !(reason instanceof DOMException && reason.name === 'AbortError')) {
-      error.value = reason instanceof Error ? reason.message : '文件下载失败';
-    }
-  } finally { if (!disposed) downloading.value = false; }
+  await transfers.download(props.groupId, props.attachment);
 }
 
 function playbackFailed() {
@@ -151,7 +144,6 @@ onMounted(() => { closeButton.value?.focus(); void load(); });
 onScopeDispose(() => {
   disposed = true;
   request?.abort();
-  downloadRequest?.abort();
   conversionRequest?.abort();
   release();
 });
@@ -176,8 +168,8 @@ onScopeDispose(() => {
       <div v-if="!localSource && (format?.kind === 'audio' || !source || (previewFailed && format?.kind === 'image'))" class="media-fallback-tools">
         <button type="button" aria-label="下载文件" title="下载文件" :disabled="downloading || (imageMessage && !source)" @click="download"><Download :size="20" /></button>
       </div>
-      <footer v-if="error || conversionHint || (previewFailed && format?.kind === 'video' && !compatible)" class="chat-media-feedback">
-        <span v-if="error" role="alert">{{ error }}</span>
+      <footer v-if="error || downloadTask?.error || conversionHint || (previewFailed && format?.kind === 'video' && !compatible)" class="chat-media-feedback">
+        <span v-if="error || downloadTask?.error" role="alert">{{ error || downloadTask?.error }}</span>
         <span v-else-if="conversionHint" class="conversion-status" role="status">{{ conversionStatus }}</span>
         <button v-if="!localSource && previewFailed && format?.kind === 'video' && !compatible" type="button" :disabled="converting" @click="convertVideo()">转换后播放</button>
         <button v-else-if="!source" type="button" @click="load">重试</button>

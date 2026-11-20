@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type Route } from '@playwright/test';
 import type { ChatMessage } from '../src/chat/chatApi';
 
 test.beforeEach(async ({ page }) => {
@@ -32,7 +32,18 @@ function fileMessage(id: string, attachmentId: string, fileName: string, content
     } };
 }
 
+async function mockFileDeclaration(route: Route) {
+  if (route.request().method() === 'DELETE') return route.fulfill({ status: 204 });
+  if (route.request().method() === 'GET') return route.fulfill({ json: [] });
+  const id = new URL(route.request().url()).pathname.split('/').at(-1)!;
+  const body = route.request().postDataJSON();
+  const pending = fileMessage(id, id, Buffer.from(body.encodedName, 'base64url').toString('utf8'), body.content);
+  pending.attachment!.transferStatus = 'PENDING';
+  return route.fulfill({ json: pending });
+}
+
 async function mockChatShell(page: Page) {
+  await page.route('**/api/chat/upload-limits', route => route.fulfill({ json: { maxFileBytes: 512 * 1024 ** 2, maxStorageBytes: 10 * 1024 ** 3 } }));
   await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
@@ -244,6 +255,7 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
       onRecordingState: () => () => undefined,
     } });
   });
+  await page.route('**/api/chat/upload-limits', route => route.fulfill({ json: { maxFileBytes: 512 * 1024 ** 2, maxStorageBytes: 10 * 1024 ** 3 } }));
   await page.route('**/api/auth/options', (route) => route.fulfill({ json: { mode: 'invite', qqAvailable: false } }));
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
@@ -300,7 +312,7 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
   const composerBoundsBeforeError = await page.locator('.composer').boundingBox();
   await composer.fill('触发错误');
   await composer.press('Enter');
-  const chatError = page.locator('.composer-shell').getByRole('alert');
+  const chatError = page.locator('.chat-message').getByRole('alert');
   await expect(chatError).toHaveText('消息发送失败');
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(chatError).toHaveText('消息发送失败');
@@ -609,8 +621,9 @@ test('反复放大已加载图片复用原始内容，关闭后仅保留列表�
   await expect(page.getByAltText('群主 发送的图片')).toHaveJSProperty('naturalWidth', 1);
   const liveUrls = () => page.evaluate(() =>
     (window as unknown as { __liveImageUrls: Set<string> }).__liveImageUrls.size);
+  await expect(page.getByText('合影.png', { exact: true })).toHaveCount(0);
   for (let cycle = 0; cycle < 12; cycle++) {
-    const target = page.getByRole('button', { name: cycle % 2 ? '查看图片' : '预览 合影.png', exact: true });
+    const target = page.getByRole('button', { name: '查看图片', exact: true });
     await expect(target).toHaveCSS('cursor', 'pointer');
     await target.click();
     await expect(page.locator('.pswp__img').last()).toHaveJSProperty('naturalWidth', 1);
@@ -635,7 +648,6 @@ test('群聊音视频可从名称、封面或文件卡图标打开同一查看�
   await page.goto('/');
   for (const [name, target] of [
     ['片段.mp4', page.getByRole('button', { name: '播放视频' })],
-    ['片段.mp4', page.getByText('片段.mp4', { exact: true })],
     ['录音.ogg', page.getByText('录音.ogg', { exact: true })],
     ['录音.ogg', page.locator('[data-message-id="A02"] .chat-file-icon')],
   ] as const) {
@@ -745,6 +757,38 @@ test('切换群组时取消旧群组的历史与轮询请求，迟到响应不�
   await expect(page.locator('[data-message-id^="A"]')).toHaveCount(0);
 });
 
+test('服主修改单文件上限后，选中文件立即按新限额提示', async ({ page }) => {
+  await mockChatShell(page);
+  let limits = { maxFileBytes: 512 * 1024 ** 2, maxStorageBytes: 10 * 1024 ** 3 };
+  let uploads = 0;
+  await page.route('**/api/chat/upload-limits', route => {
+    if (route.request().method() === 'PUT') limits = route.request().postDataJSON();
+    return route.fulfill({ json: limits });
+  });
+  await page.route('**/api/groups**', route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
+    if (url.pathname.endsWith(groupId)) return route.fulfill({ json: group });
+    if (url.pathname.endsWith('/messages')) return route.fulfill({ json: { messages: [], hasMore: false } });
+    if (url.pathname.includes('/files')) uploads++;
+    return route.fulfill({ status: 404 });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '服主管理', exact: true }).click();
+  const fileLimit = page.getByLabel('单个文件上限（MiB）');
+  await expect(fileLimit).toHaveValue('512');
+  await fileLimit.fill('1');
+  await page.getByRole('button', { name: '保存限额' }).click();
+  await expect.poll(() => limits.maxFileBytes).toBe(1024 ** 2);
+  await page.locator('form.settings-block').filter({ has: fileLimit }).screenshot({ path: test.info().outputPath('file-upload-settings.png') });
+  await page.reload();
+  await page.locator('input[type=file]').setInputFiles({ name: 'oversize.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(2 * 1024 ** 2) });
+  await expect(page.locator('.composer-shell').getByRole('alert')).toContainText('超过单文件上限 1 MiB');
+  await expect(page.locator('.composer-attachment')).toHaveCount(0);
+  expect(uploads).toBe(0);
+});
+
 test('加号多选按原始字节和顺序发送，图片作为文件并只在第一条附带文字', async ({ page }) => {
   await mockChatShell(page);
   // 流式 fetch 在路由拦截器中没有 postData；仅旁读本用例两个小文件的流副本。
@@ -773,7 +817,7 @@ test('加号多选按原始字节和顺序发送，图片作为文件并只在�
     if (url.pathname === `/api/groups/${groupId}/messages` && request.method() === 'GET') {
       return route.fulfill({ json: { messages: [], hasMore: false } });
     }
-    if (url.pathname.startsWith(`/api/groups/${groupId}/files/requests/`)) return route.fulfill({ status: 204 });
+    if (url.pathname.includes('/files/transfers')) return mockFileDeclaration(route);
     if (url.pathname === `/api/groups/${groupId}/files` && request.method() === 'POST') {
       const headers = await request.allHeaders();
       const name = Buffer.from(headers['x-file-name'], 'base64url').toString('utf8');
@@ -781,7 +825,7 @@ test('加号多选按原始字节和顺序发送，图片作为文件并只在�
       const bytes = Buffer.from(await page.evaluate((id) =>
         (window as unknown as { __chatUploadBodies: Record<string, number[]> }).__chatUploadBodies[id]!, String(headers['x-upload-id'])));
       uploaded.push({ id: String(headers['x-upload-id']), name, bytes, content });
-      const message = fileMessage(`F${uploaded.length}`, String(headers['x-upload-id']), name, content);
+      const message = fileMessage(headers['x-file-message'], String(headers['x-upload-id']), name, content);
       message.attachment!.byteSize = bytes.length;
       return route.fulfill({ status: 201, json: message });
     }
@@ -800,6 +844,9 @@ test('加号多选按原始字节和顺序发送，图片作为文件并只在�
   ]);
   await expect(page.locator('.composer-attachment')).toHaveCount(2);
   const preview = page.getByRole('button', { name: '预览 原图.png', exact: true });
+  await preview.hover();
+  await expect(preview).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(preview.getByText('原图.png')).toHaveCSS('text-decoration-line', 'underline');
   await expect(page.locator('.composer-attachment').first()).toHaveCSS('height', '28px');
   for (const target of [preview.locator('img'), preview.getByText('原图.png')]) {
     await target.click();
@@ -809,16 +856,17 @@ test('加号多选按原始字节和顺序发送，图片作为文件并只在�
   }
   await page.locator('.composer').screenshot({ path: test.info().outputPath('compact-attachments.png') });
   await page.getByRole('button', { name: '发送消息' }).click();
-  await expect(page.locator('[data-message-id="F2"]')).toHaveCount(1);
+  await expect(page.locator('.chat-file-media')).toHaveCount(2);
   expect(uploaded.map((item) => item.name)).toEqual(['原图.png', '资料.dat']);
   expect(uploaded.map((item) => [...item.bytes])).toEqual([[...originalPng], [9, 8, 7]]);
   expect(uploaded.map((item) => item.content)).toEqual(['附在第一条', '']);
   await expect(page.locator('.chat-file-media')).toHaveCount(2);
   await expect(page.getByRole('button', { name: '查看图片', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '预览 原图.png', exact: true }).click();
+  await expect(page.locator('.chat-message').first().getByText('原图.png', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '查看图片', exact: true }).click();
   await expect(page.locator('.chat-photo-viewer')).toBeVisible();
   await page.keyboard.press('Escape');
-  const ordinaryFile = page.locator('[data-message-id="F2"]');
+  const ordinaryFile = page.locator('.chat-message').last();
   await expect(ordinaryFile.getByRole('button', { name: /预览/ })).toHaveCount(0);
   await expect(ordinaryFile.getByRole('button', { name: '下载文件' })).toBeVisible();
 });
@@ -834,7 +882,7 @@ test('批量文件失败后重试只再次发送失败项', async ({ page }) => 
     if (url.pathname === `/api/groups/${groupId}/messages` && request.method() === 'GET') {
       return route.fulfill({ json: { messages: [], hasMore: false } });
     }
-    if (url.pathname.startsWith(`/api/groups/${groupId}/files/requests/`)) return route.fulfill({ status: 204 });
+    if (url.pathname.includes('/files/transfers')) return mockFileDeclaration(route);
     if (url.pathname === `/api/groups/${groupId}/files` && request.method() === 'POST') {
       const headers = await request.allHeaders();
       const name = Buffer.from(headers['x-file-name'], 'base64url').toString('utf8');
@@ -843,7 +891,7 @@ test('批量文件失败后重试只再次发送失败项', async ({ page }) => 
       if (name === 'second.bin' && count === 1) {
         return route.fulfill({ status: 503, json: { code: 'TEMPORARY', detail: '上传失败' } });
       }
-      const message = fileMessage(`F-${name}`, String(headers['x-upload-id']), name);
+      const message = fileMessage(headers['x-file-message'], String(headers['x-upload-id']), name);
       return route.fulfill({ status: 201, json: message });
     }
     return route.fulfill({ status: 404 });
@@ -858,78 +906,74 @@ test('批量文件失败后重试只再次发送失败项', async ({ page }) => 
   await expect(page.getByRole('alert').filter({ hasText: '上传失败' })).toBeVisible();
   expect(requests.get('first.bin')).toBe(1);
   expect(requests.get('second.bin')).toBe(1);
-  await page.getByRole('button', { name: '发送消息' }).click();
-  await expect(page.locator('[data-message-id="F-second.bin"]')).toHaveCount(1);
+  await page.locator('.chat-message').getByRole('button', { name: '重试', exact: true }).click();
+  await expect(page.locator('.chat-file-card').filter({ hasText: 'second.bin' })).toHaveCount(1);
   expect(requests.get('first.bin')).toBe(1);
   expect(requests.get('second.bin')).toBe(2);
 });
 
-test('首个文件发送期间移除后续文件后不会再上传该文件', async ({ page }) => {
-  await mockChatShell(page);
-  const uploaded: string[] = [];
-  let firstUploadStarted = false;
-  let secondUploadStarted = false;
-  let releaseFirstUpload!: () => void;
-  let releaseSecondUpload!: () => void;
-  let finishFirstUpload!: () => void;
-  let finishSecondUpload!: () => void;
-  const firstUploadGate = new Promise<void>((resolve) => { releaseFirstUpload = resolve; });
-  const secondUploadGate = new Promise<void>((resolve) => { releaseSecondUpload = resolve; });
-  const firstUploadFinished = new Promise<void>((resolve) => { finishFirstUpload = resolve; });
-  const secondUploadFinished = new Promise<void>((resolve) => { finishSecondUpload = resolve; });
-
-  await page.route('**/api/groups**', async (route) => {
-    const request = route.request();
-    const url = new URL(request.url());
-    if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
-    if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
-    if (url.pathname === `/api/groups/${groupId}/messages` && request.method() === 'GET') {
-      return route.fulfill({ json: { messages: [], hasMore: false } });
-    }
-    if (url.pathname.startsWith(`/api/groups/${groupId}/files/requests/`)) return route.fulfill({ status: 204 });
-    if (url.pathname === `/api/groups/${groupId}/files` && request.method() === 'POST') {
-      const headers = await request.allHeaders();
-      const name = Buffer.from(headers['x-file-name'], 'base64url').toString('utf8');
-      uploaded.push(name);
-      if (name === 'first.bin') {
-        firstUploadStarted = true;
-        await firstUploadGate;
-        try { await route.fulfill({ status: 201, json: fileMessage('F-first', 'first-attachment', name) }); }
-        catch { /* The page may close while the request is being completed. */ }
-        finally { finishFirstUpload(); }
-        return;
+test('慢速附件先占位，两个客户端都按原顺序看到随后文字与完成的文件', async ({ page, context }) => {
+  const peer = await context.newPage();
+  const messages: ChatMessage[] = [];
+  let finish!: () => void;
+  const gate = new Promise<void>(resolve => { finish = resolve; });
+  for (const tab of [page, peer]) {
+    await tab.route(url => url.pathname.startsWith('/api/'), route => route.fulfill({ status: 503, json: { detail: '未模拟接口' } }));
+    await tab.route('**/api/presence/heartbeat', route => route.fulfill({ status: 204 }));
+    await tab.route('**/api/rtc/room-occupancies', route => route.fulfill({ json: [] }));
+    await mockChatShell(tab);
+    if (tab === peer) await tab.route('**/api/auth/me', route => route.fulfill({ json: { ...user, id: 'peer', nickname: '成员' } }));
+    await tab.route('**/api/groups**', async route => {
+      const request = route.request();
+      const url = new URL(request.url());
+      if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
+      if (url.pathname.endsWith('/presences')) return route.fulfill({ json: [] });
+      if (url.pathname.endsWith('/presence-changes')) return new Promise<void>(() => {});
+      if (url.pathname.endsWith(groupId)) return route.fulfill({ json: group });
+      if (url.pathname.endsWith('/messages') && request.method() === 'GET') {
+        const cursor = messages.findIndex(message => message.id === url.searchParams.get('afterMessageId'));
+        return route.fulfill({ json: { messages: messages.slice(cursor + 1), hasMore: false } });
       }
-      secondUploadStarted = true;
-      await secondUploadGate;
-      try { await route.fulfill({ status: 201, json: fileMessage('F-second', 'second-attachment', name) }); }
-      catch { /* The page may close while the request is being completed. */ }
-      finally { finishSecondUpload(); }
-      return;
-    }
-    return route.fulfill({ status: 404 });
-  });
-
-  try {
-    await page.goto('/');
-    await page.locator('input[type="file"]').setInputFiles([
-      { name: 'first.bin', mimeType: 'application/octet-stream', buffer: Buffer.from([1]) },
-      { name: 'second.bin', mimeType: 'application/octet-stream', buffer: Buffer.from([2]) },
-    ]);
-    await page.getByRole('button', { name: '发送消息' }).click();
-    await expect.poll(() => uploaded).toEqual(['first.bin']);
-    await page.getByRole('button', { name: '移除 second.bin' }).click();
-
-    releaseFirstUpload();
-    await expect(page.locator('[data-message-id="F-first"]')).toHaveCount(1);
-    await expect(page.locator('.composer-attachments')).toHaveCount(0);
-    expect(uploaded).toEqual(['first.bin']);
-    await firstUploadFinished;
-  } finally {
-    releaseFirstUpload();
-    releaseSecondUpload();
-    if (firstUploadStarted) await firstUploadFinished;
-    if (secondUploadStarted) await secondUploadFinished;
+      if (url.pathname.includes('/files/transfers/')) {
+        const id = url.pathname.split('/').at(-1)!;
+        const message = fileMessage(id, id, 'slow.bin');
+        message.createdAt = new Date().toISOString();
+        message.attachment!.transferStatus = 'PENDING';
+        messages.push(message);
+        return route.fulfill({ json: message });
+      }
+      if (url.pathname.endsWith('/files/transfers')) return route.fulfill({ json: messages.slice(0, 1) });
+      if (url.pathname.endsWith('/files') && request.method() === 'POST') {
+        await gate;
+        delete messages[0].attachment!.transferStatus;
+        return route.fulfill({ json: messages[0] });
+      }
+      if (url.pathname.endsWith('/messages') && request.method() === 'POST') {
+        const message = { ...chatMessage(messages.length), createdAt: new Date().toISOString(), content: '后发文字 ' + messages.length };
+        messages.push(message);
+        return route.fulfill({ json: message });
+      }
+      return route.fulfill({ status: 404 });
+    });
+    await tab.goto('/');
   }
+  try {
+    await page.locator('input[type=file]').setInputFiles({ name: 'slow.bin', mimeType: 'application/octet-stream', buffer: Buffer.from('abc') });
+    await page.getByRole('button', { name: '发送消息' }).click();
+    await expect(peer.getByText('文件上传中…')).toBeVisible();
+    for (const content of ['后发文字 1', '后发文字 2']) {
+      await page.getByLabel('消息内容').fill(content);
+      await page.getByLabel('消息内容').press('Enter');
+    }
+    await expect(peer.locator('.chat-message').last()).toContainText('后发文字 2');
+    for (const tab of [page, peer]) await expect(tab.locator('.chat-message').first()).toContainText('slow.bin');
+    await page.locator('.chat-panel').screenshot({ path: test.info().outputPath('background-upload.png') });
+    finish();
+    for (const tab of [page, peer]) {
+      await expect(tab.locator('.chat-message').first().getByRole('button', { name: '下载文件' })).toBeVisible();
+      await expect(tab.locator('.chat-message')).toHaveCount(3);
+    }
+  } finally { finish(); await peer.close(); }
 });
 
 test('混合拖入按原顺序逐项压缩图片并原样发送其他文件', async ({ page }) => {
@@ -944,7 +988,7 @@ test('混合拖入按原顺序逐项压缩图片并原样发送其他文件', as
     if (url.pathname === `/api/groups/${groupId}/messages` && request.method() === 'GET') {
       return route.fulfill({ json: { messages: [], hasMore: false } });
     }
-    if (url.pathname.startsWith(`/api/groups/${groupId}/files/requests/`)) return route.fulfill({ status: 204 });
+    if (url.pathname.includes('/files/transfers')) return mockFileDeclaration(route);
     if (url.pathname === `/api/groups/${groupId}/messages` && request.method() === 'POST') {
       order.push('image');
       const message: ChatMessage = { ...chatMessage(1), type: 'IMAGE', content: '说明',
@@ -955,7 +999,7 @@ test('混合拖入按原顺序逐项压缩图片并原样发送其他文件', as
       const headers = await request.allHeaders();
       order.push(Buffer.from(headers['x-file-name'], 'base64url').toString('utf8'));
       const name = Buffer.from(headers['x-file-name'], 'base64url').toString('utf8');
-      return route.fulfill({ status: 201, json: fileMessage('F-mixed', 'file-attachment', name) });
+      return route.fulfill({ status: 201, json: fileMessage(headers['x-file-message'], 'file-attachment', name) });
     }
     return route.fulfill({ status: 404 });
   });
@@ -971,7 +1015,7 @@ test('混合拖入按原顺序逐项压缩图片并原样发送其他文件', as
   }, png.toString('base64'));
   await expect(page.locator('.composer-attachment')).toHaveCount(2);
   await page.getByRole('button', { name: '发送消息' }).click();
-  await expect(page.locator('[data-message-id="F-mixed"]')).toHaveCount(1);
+  await expect(page.locator('.chat-file-card').filter({ hasText: 'second.bin' })).toHaveCount(1);
   expect(order).toEqual(['image', 'second.bin']);
   await expect(page.locator('.chat-message-content').last()).toHaveText('说明');
 });
@@ -1012,7 +1056,7 @@ test('图片响应丢失后重试沿用消息 ID，界面只显示一条', async
   await expect(page.locator('.composer-attachment')).toHaveCount(1);
   await page.getByRole('button', { name: '发送消息' }).click();
   await expect(page.getByRole('alert')).toHaveText('响应丢失');
-  await page.getByRole('button', { name: '发送消息' }).click();
+  await page.locator('.chat-message').getByRole('button', { name: '重试', exact: true }).click();
   await expect.poll(() => requestIds).toHaveLength(2);
   expect(requestIds[1]).toBe(requestIds[0]);
   await expect(page.locator(`[data-message-id="${requestIds[0]}"]`)).toHaveCount(1);
@@ -1034,7 +1078,7 @@ test('取消文件上传后可重新发送且不会重复创建成功消息', as
     if (url.pathname === `/api/groups/${groupId}/messages` && request.method() === 'GET') {
       return route.fulfill({ json: { messages: [], hasMore: false } });
     }
-    if (url.pathname.startsWith(`/api/groups/${groupId}/files/requests/`)) return route.fulfill({ status: 204 });
+    if (url.pathname.includes('/files/transfers')) return mockFileDeclaration(route);
     if (url.pathname === `/api/groups/${groupId}/files` && request.method() === 'POST') {
       uploadRequests++;
       if (uploadRequests === 1) {
@@ -1044,7 +1088,7 @@ test('取消文件上传后可重新发送且不会重复创建成功消息', as
         finally { finishUpload(); }
         return;
       }
-      return route.fulfill({ status: 201, json: fileMessage('F-retried', 'attachment', 'cancel.bin') });
+      return route.fulfill({ status: 201, json: fileMessage(request.headers()['x-file-message'], 'attachment', 'cancel.bin') });
     }
     return route.fulfill({ status: 404 });
   });
@@ -1056,18 +1100,21 @@ test('取消文件上传后可重新发送且不会重复创建成功消息', as
   });
   await page.getByRole('button', { name: '发送消息' }).click();
   await expect.poll(() => uploadRequests).toBe(1);
-  await page.getByRole('button', { name: '取消文件上传' }).click();
-  await expect(page.getByText('已取消，可继续发送')).toBeVisible();
+  await page.getByRole('button', { name: '取消上传' }).click();
+  await expect(page.getByText('已取消上传')).toBeVisible();
   releaseUpload();
   await uploadFinished;
-  await page.getByRole('button', { name: '发送消息' }).click();
-  await expect(page.locator('[data-message-id="F-retried"]')).toHaveCount(1);
+  await page.locator('.chat-message').getByRole('button', { name: '重试', exact: true }).click();
+  await expect(page.locator('.chat-file-card').filter({ hasText: 'cancel.bin' })).toHaveCount(1);
   expect(uploadRequests).toBe(2);
   await expect(page.locator('[data-message-id="F-canceled"]')).toHaveCount(0);
 });
 
 test('文件下载分块写入保存目标，不创建整文件 Blob', async ({ page }) => {
   await mockChatShell(page);
+  let startCount = 0;
+  let finish!: () => void;
+  const gate = new Promise<void>(resolve => { finish = resolve; });
   const downloadBytes = [0, 4, 8, 255];
   await page.addInitScript(() => {
     const saved = { name: '', chunks: [] as number[][] };
@@ -1086,18 +1133,30 @@ test('文件下载分块写入保存目标，不创建整文件 Blob', async ({ 
     if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
     if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
     if (url.pathname === `/api/groups/${groupId}/messages`) {
+      if (route.request().method() === 'POST') return route.fulfill({ json: { ...chatMessage(2), content: '下载时发言' } });
       const message = fileMessage('F-download', 'download-id', '保存文件.dat');
       message.attachment!.byteSize = downloadBytes.length;
       return route.fulfill({ json: { messages: [message], hasMore: false } });
     }
     if (url.pathname === `/api/groups/${groupId}/files/download-id`) {
+      startCount++;
+      await gate;
       return route.fulfill({ status: 200, contentType: 'application/octet-stream', body: Buffer.from(downloadBytes) });
     }
     return route.fulfill({ status: 404 });
   });
 
   await page.goto('/');
-  await page.getByRole('button', { name: '下载文件' }).click();
+  const save = page.getByRole('button', { name: '下载文件' });
+  await expect(save).toBeVisible();
+  expect(startCount).toBe(0);
+  await save.click();
+  try {
+    await expect.poll(() => startCount).toBe(1);
+    await page.getByLabel('消息内容').fill('下载时发言');
+    await page.getByLabel('消息内容').press('Enter');
+    await expect(page.locator('.chat-message-content').filter({ hasText: '下载时发言' })).toBeVisible();
+  } finally { finish(); }
   await expect(page.getByRole('button', { name: '下载文件' })).toBeVisible();
   const saved = await page.evaluate(() => (window as unknown as Window & {
     __savedChatFile: { name: string; chunks: number[][] };
@@ -1106,7 +1165,7 @@ test('文件下载分块写入保存目标，不创建整文件 Blob', async ({ 
   expect(saved.chunks.flat()).toEqual(downloadBytes);
 });
 
-test('切换群组会取消未完成的文件上传并清空旧群组队列', async ({ page }) => {
+test('切换群组后旧群上传继续，新群输入框可使用', async ({ page }) => {
   await mockChatShell(page);
   const otherGroup = { ...group, id: 'f45d69f7-ea7d-4a4f-b0bb-b17d91b78dc2', name: '第二群组' };
   let releaseUpload!: () => void;
@@ -1127,7 +1186,7 @@ test('切换群组会取消未完成的文件上传并清空旧群组队列', as
     if (url.pathname === `/api/groups/${groupId}/messages` || url.pathname === `/api/groups/${otherGroup.id}/messages`) {
       return route.fulfill({ json: { messages: url.pathname.includes(otherGroup.id) ? [chatMessage(1, 'B')] : [], hasMore: false } });
     }
-    if (url.pathname.startsWith(`/api/groups/${groupId}/files/requests/`)) return route.fulfill({ status: 204 });
+    if (url.pathname.includes('/files/transfers')) return mockFileDeclaration(route);
     if (url.pathname === `/api/groups/${groupId}/files`) {
       uploadRequests++;
       await uploadGate;
@@ -1147,9 +1206,10 @@ test('切换群组会取消未完成的文件上传并清空旧群组队列', as
   await expect.poll(() => uploadRequests).toBe(1);
   await page.getByRole('button', { name: /第二群组，单击预览/ }).click();
   await expect(page.locator('[data-message-id="B01"]')).toHaveCount(1);
-  await expect.poll(() => uploadAborted).toBe(true);
+  await expect(page.getByLabel('消息内容')).toBeEnabled();
   releaseUpload();
   await uploadFinished;
+  expect(uploadAborted).toBe(false);
   await expect(page.locator('.composer-attachment')).toHaveCount(0);
   await expect(page.locator('[data-message-id="F-old"]')).toHaveCount(0);
 });
