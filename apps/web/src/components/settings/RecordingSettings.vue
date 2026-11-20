@@ -1,19 +1,16 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed } from 'vue';
 import { useLoadingHint } from '../useLoadingHint';
 import type { useRecording } from '../../recording/useRecording';
 import InlineFeedback from '../InlineFeedback.vue';
 import ProjectAttribution from '../ProjectAttribution.vue';
-import DialogTransition from '../DialogTransition.vue';
-import RecordingLibrary from './RecordingLibrary.vue';
 
-const props = defineProps<{ recording: ReturnType<typeof useRecording>; desktop: boolean; sharing: boolean; active: boolean }>();
-const libraryOpen = ref(false);
+const props = defineProps<{ recording: ReturnType<typeof useRecording>; desktop: boolean; sharing: boolean }>();
+const emit = defineEmits<{ openLibrary: [] }>();
 const replayProgress = computed(() => props.recording.state.value.replay?.phase === 'stopping' ? '正在关闭回放，已开始保存的片段会继续保存…'
   : props.recording.state.value.replay?.saving ? '正在保存回放…'
     : props.recording.state.value.replay?.phase === 'starting' ? '正在准备回放…' : '');
 const replayProgressVisible = useLoadingHint(() => replayProgress.value);
-watch(() => props.active, active => { if (!active) libraryOpen.value = false; });
 async function toggle(key: 'applicationAudio' | 'microphone' | 'friends', event: Event) {
   const input = event.target as HTMLInputElement;
   await props.recording.configure({ [key]: input.checked });
@@ -42,7 +39,7 @@ async function toggleReplay(event: Event) {
     <section v-if="desktop" class="settings-block">
       <h2>录像管理</h2>
       <p>查看保存在本机的录像和回放，打开文件或整理记录。</p>
-      <button type="button" class="settings-button" @click="libraryOpen = true">打开本地录像管理器</button>
+      <button type="button" class="settings-button" @click="emit('openLibrary')">打开本地录像管理器</button>
     </section>
     <section class="settings-block">
       <h2>共享录制</h2>
@@ -110,9 +107,6 @@ async function toggleReplay(event: Event) {
     </section>
 
   </div>
-  <DialogTransition>
-    <RecordingLibrary v-if="desktop && active && libraryOpen" :status="recording.state.value" @close="libraryOpen = false" />
-  </DialogTransition>
 </template>
 
 <style scoped>

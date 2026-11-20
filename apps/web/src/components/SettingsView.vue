@@ -66,7 +66,7 @@ const props = defineProps<{
   activityMappings: ReturnType<typeof useActivityMappings>;
   saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
 }>();
-const emit = defineEmits<{ notice: [message: string]; close: []; logout: []; groupUpdated: [group: GroupDetail]; groupRemoved: [id: string]; 'update:section': [section: SettingsSectionId]; activityVisibility: [enabled: boolean]; lastOnlineVisibility: [enabled: boolean]; presenceMode: [mode: PresenceMode] }>();
+const emit = defineEmits<{ notice: [message: string]; recordingLibrary: []; close: []; logout: []; groupUpdated: [group: GroupDetail]; groupRemoved: [id: string]; 'update:section': [section: SettingsSectionId]; activityVisibility: [enabled: boolean]; lastOnlineVisibility: [enabled: boolean]; presenceMode: [mode: PresenceMode] }>();
 const heading = ref<HTMLElement | null>(null);
 const profileSettings = ref<InstanceType<typeof ProfileSettings> | null>(null);
 const activitySettings = ref<InstanceType<typeof ActivitySettings> | null>(null);
@@ -165,7 +165,7 @@ defineExpose({ selectSection, closeSettings, requestLogout, interactionBlocked, 
         <div v-if="recording" v-show="activeSection === 'recording'" class="settings-recording-page">
           <ScreenShareSettings v-if="desktop" :active="activeSection === 'recording'" :rtc="rtc" :shared-audio="sharedAudio" :quality="shareQuality" :custom-quality="customShareQuality"
             :change-quality="changeShareQuality" :change-audio="changeShareAudio" />
-          <RecordingSettings :recording="recording" :desktop="desktop" :sharing="rtc.screenShareActive" :active="activeSection === 'recording'" />
+          <RecordingSettings :recording="recording" :desktop="desktop" :sharing="rtc.screenShareActive" @open-library="emit('recordingLibrary')" />
         </div>
         <ClientSettings ref="clientSettings" v-show="activeSection === 'client'" :desktop="desktop" :active="activeSection === 'client'" :user-id="user.id"
           :room="rtc.room" :report="diagnosticReport" />

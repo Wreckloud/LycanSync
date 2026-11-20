@@ -8,6 +8,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 function fixture() {
   const desktop = { getRecordingLibrary: vi.fn(async (_offset = 0) => ({ items: [entry], hasMore: false })),
+    updateRecordingDuration: vi.fn(async (_id: string, _duration: number) => {}),
     recordingFile: vi.fn(async (_id: string, _action: string) => true) };
   vi.stubGlobal('window', { lycanDesktop: desktop });
   const scope = effectScope();
@@ -91,5 +92,45 @@ it('后续页刷新失败保留原列表；删除后不足一页时正常收尾'
     await f.library.load();
     expect(f.library.entries.value).toEqual([entry]);
     expect(f.library.hasMore.value).toBe(false);
+  } finally { f.scope.stop(); }
+});
+
+it('旧录像读取到实际时长后补齐并持久化，保存失败明确反馈', async () => {
+  const f = fixture();
+  try {
+    const unknown = { ...entry, durationMs: null };
+    f.library.entries.value = [unknown];
+    await f.library.updateDuration(unknown, 2317);
+    expect(f.library.entries.value[0]!.durationMs).toBe(2317);
+    expect(f.desktop.updateRecordingDuration).toHaveBeenCalledWith(entry.id, 2317);
+    await f.library.updateDuration(unknown, 2400);
+    expect(f.desktop.updateRecordingDuration).toHaveBeenCalledTimes(1);
+    expect(f.library.entries.value[0]!.durationMs).toBe(2317);
+    f.library.entries.value = [unknown];
+    f.desktop.updateRecordingDuration.mockRejectedValueOnce(new Error('unavailable'));
+    await f.library.updateDuration(unknown, 2400);
+    expect(f.library.notice.value).toContain('未能保存');
+  } finally { f.scope.stop(); }
+});
+
+it('刷新后的列表不接收旧时长写入错误，已移除或销毁的条目不回填', async () => {
+  const f = fixture();
+  try {
+    const unknown = { ...entry, durationMs: null };
+    f.library.entries.value = [unknown];
+    let reject!: (error: Error) => void;
+    f.desktop.updateRecordingDuration.mockImplementationOnce(() => new Promise((_done, fail) => { reject = fail; }));
+    const updating = f.library.updateDuration(unknown, 2317);
+    await f.library.load();
+    reject(new Error('unavailable'));
+    await updating;
+    expect(f.library.notice.value).toBe('');
+    expect(f.library.entries.value).toEqual([entry]);
+    f.library.entries.value = [];
+    await f.library.updateDuration(unknown, 2317);
+    f.library.entries.value = [unknown];
+    f.scope.stop();
+    await f.library.updateDuration(unknown, 2317);
+    expect(f.desktop.updateRecordingDuration).toHaveBeenCalledTimes(1);
   } finally { f.scope.stop(); }
 });

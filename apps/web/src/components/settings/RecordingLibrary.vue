@@ -12,8 +12,8 @@ import InlineFeedback from '../InlineFeedback.vue';
 import { useBackdropDismiss } from '../useBackdropDismiss';
 import { keepDialogFocus } from '../dialogFocus';
 
-const props = defineProps<{ status: DesktopRecordingStatus }>();
-const emit = defineEmits<{ close: [] }>();
+const props = defineProps<{ status: DesktopRecordingStatus; picking?: boolean }>();
+const emit = defineEmits<{ close: []; choose: [entry: RecordingLibraryEntry] }>();
 const share = inject(RECORDING_SHARE);
 const expandedUnavailable = ref(false);
 const filters = [{ id: 'all', label: '全部' }, { id: 'recording', label: '录制' }, { id: 'replay', label: '回放' }, { id: 'clip', label: '剪辑' }] as const;
@@ -57,6 +57,10 @@ watch(entries, async () => {
   else viewport.scrollTop = previousTop;
 });
 watch(library.kind, () => { void library.load(); });
+function previewSavedClip(clip: RecordingLibraryEntry) {
+  preview.value = clip;
+  void library.load();
+}
 function openExternalPreview() {
   const entry = preview.value;
   if (!entry) return;
@@ -91,8 +95,8 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
 <template>
   <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="emit('close')">
     <section ref="dialog" class="recording-library-dialog" role="dialog" aria-modal="true" aria-labelledby="recording-library-title" tabindex="-1" @keydown="keepDialogFocus">
-      <h2 id="recording-library-title">本地录像管理器</h2>
-      <p class="library-intro">查看录制和回放，截取精彩片段，分享给群里的朋友。</p>
+      <h2 id="recording-library-title">{{ picking ? '选择录像' : '本地录像管理器' }}</h2>
+      <p class="library-intro">{{ picking ? '选择录像添加到当前群聊，点击封面可先预览。' : '查看录制和回放，截取精彩片段，分享给群里的朋友。' }}</p>
       <SegmentedControl v-model="library.kind.value" :options="filters" label="录像类型" />
       <div ref="content" class="recording-library-content">
         <InlineFeedback :message="notice" :pending="loading ? '正在读取录像列表…' : ''" />
@@ -101,18 +105,17 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
         <section v-for="group in groups" :key="group.date" class="library-day">
           <h3>{{ group.date }}</h3>
           <article v-for="entry in group.items" :key="entry.id" :data-recording-id="entry.id" class="library-row">
-            <RecordingThumbnail :key="`${entry.id}:${entry.state}:${entry.availability}`" :source="recordingSource(entry.id)" :disabled="!canPreview(entry)" @preview="preview = entry" />
+            <RecordingThumbnail :key="`${entry.id}:${entry.state}:${entry.availability}`" :source="recordingSource(entry.id)" :disabled="!canPreview(entry)" @preview="preview = entry" @duration="library.updateDuration(entry, $event)" />
             <div class="library-description">
               <strong>{{ title(entry) }}</strong>
-              <small>{{ new Date(entry.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }} · {{ duration(entry.durationMs) }}<template v-if="entry.bytes !== null"> · {{ (entry.bytes / 1024 / 1024).toFixed(1) }} MiB</template></small>
+              <small>{{ new Date(entry.createdAt).toLocaleString([], { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }} · {{ duration(entry.durationMs) }}<template v-if="entry.bytes !== null"> · {{ (entry.bytes / 1024 / 1024).toFixed(1) }} MiB</template></small>
               <small v-if="entry.state !== 'saved'">{{ state(entry) }}</small>
             </div>
-            <button :disabled="!canPreview(entry)" @click="share?.select(entry)">分享</button>
-            <details class="library-more">
+            <button :disabled="!canPreview(entry)" @click="picking ? emit('choose', entry) : share?.select(entry)">{{ picking ? '添加' : '分享' }}</button>
+            <details v-if="!picking" class="library-more">
               <summary aria-label="更多操作">···</summary>
               <div class="library-menu">
-                <button :disabled="!!pendingId || !canPreview(entry)" @click="library.file(entry, 'play')">系统播放</button>
-                <button :disabled="!!pendingId || !canPreview(entry)" @click="library.file(entry, 'reveal')">打开位置</button>
+                <button :disabled="!!pendingId || !canPreview(entry)" @click="library.file(entry, 'reveal')">在文件夹中显示</button>
                 <button class="danger-text" :disabled="!!pendingId || entry.state === 'recording'" @click="library.file(entry, 'delete')">删除录像</button>
               </div>
             </details>
@@ -133,11 +136,12 @@ onScopeDispose(() => window.removeEventListener('focus', refreshOnReturn));
       </div>
       <footer class="card-actions">
         <button @click="emit('close')">关闭</button>
-        <button v-if="share?.entry.value" @click="share.visible.value = true">{{ share.busy.value ? `发送中 ${share.progress.value}%` : '继续分享' }}</button>
       </footer>
     </section>
     <DialogTransition>
-      <RecordingPreview v-if="preview" :key="preview.id" :entry="preview" :source="recordingSource(preview.id)" @close="preview = null" @external="openExternalPreview" @saved="library.load()" />
+      <div v-if="preview" class="dialog-backdrop">
+        <RecordingPreview :key="preview.id" :entry="preview" :source="recordingSource(preview.id)" @back="preview = null" @close="emit('close')" @external="openExternalPreview" @saved="previewSavedClip" />
+      </div>
     </DialogTransition>
   </div>
 </template>

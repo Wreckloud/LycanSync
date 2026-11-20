@@ -1,7 +1,7 @@
 import { openDB, type DBSchema } from 'idb';
 import type { InjectionKey } from 'vue';
 
-type CacheKind = 'messages' | 'members' | 'image';
+type CacheKind = 'messages' | 'members' | 'image' | 'groupActivity';
 interface CacheEntry {
   key: string;
   account: string;

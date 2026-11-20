@@ -144,6 +144,8 @@
   color: var(--subtle);
 }
 
+.composer.has-recording-picker { grid-template-columns: 36px 36px minmax(0, 1fr) 36px; }
+
 .composer-content { min-width: 0; overflow: hidden; transition: height var(--motion-layout-duration) var(--motion-ease); }
 .composer textarea {
   transition: color var(--motion-feedback-duration) ease;
@@ -174,3 +176,7 @@
 .composer-attachment-name { min-width: 0; flex: 1; }
 .composer-attachment progress { max-width: 90px; }
 .chat-transfer-state { padding: 6px 0; color: var(--subtle); font-size: 12px; }
+
+.composer-attachment .composer-attachment-preview, .composer-attachment .composer-video-cover { width: 40px; height: 32px; flex: 0 0 40px; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 4px; background: var(--background); }
+.composer-attachment .composer-attachment-preview img { width: 100%; height: 100%; }
+.composer-video-cover svg { width: 14px; height: 14px; padding: 3px; }

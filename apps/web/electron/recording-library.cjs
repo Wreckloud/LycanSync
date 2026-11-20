@@ -106,6 +106,17 @@ function createRecordingLibrary({ dataDirectory, isActive, io = fs }) {
       })));
       return { items, hasMore: offset + items.length < sorted.length };
     },
+    updateDuration(id, durationMs) {
+      if (!Number.isSafeInteger(durationMs) || durationMs <= 0) throw new Error('recordingMetadataInvalid');
+      return change(async items => {
+        const entry = await find(id);
+        if (isActive(id)) throw new Error('recordingBusy');
+        const file = await inspect(entry);
+        if (file.availability !== 'available' || !file.bytes) throw new Error('recordingFileUnavailable');
+        // 播放器只补齐缺失时长，不能覆盖录制宿主已经确认的结果。
+        return items.map(item => item.id === entry.id && item.durationMs === null ? { ...item, durationMs } : item);
+      });
+    },
     filePath,
     async entry(id) { await saving; return { ...await find(id) }; },
     relink(id) {

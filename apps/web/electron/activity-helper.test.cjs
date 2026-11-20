@@ -194,6 +194,8 @@ test('游戏窗口身份只接受有界数字句柄，音乐不附带窗口信�
   try {
     send(['12', '12', '34']);
     assert.deepEqual(activities.at(-1).windowIds, ['12', '34']);
+    assert.equal(monitor.recordingName('C:\\Games\\game.exe', 'window:12:0'), '游戏');
+    assert.equal(monitor.recordingName('C:\\Games\\other.exe', 'window:99:0'), 'other');
     const count = activities.length;
     for (const invalid of [['0'], ['-1'], ['window:123'], [123], Array(33).fill('12')]) send(invalid);
     assert.equal(activities.length, count);

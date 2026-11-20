@@ -163,8 +163,9 @@ test('底部整块资料打开菜单，编辑沿用设置且返回原入口，�
   const settingsIdentity = page.getByLabel('个人状态与返回应用', { exact: true });
   await settingsIdentity.getByRole('button', { name: '个人菜单', exact: true }).click();
   await expect(menu).toBeVisible();
-  await menu.getByRole('button', { name: '语音与音频', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '语音与音频', exact: true })).toBeVisible();
+  await expect(menu.getByRole('button', { name: '语音与音频', exact: true })).toHaveCount(0);
+  await menu.getByRole('button', { name: '快捷键', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '快捷键', exact: true })).toBeVisible();
   await expect(menu).toHaveCount(0);
   await settingsIdentity.getByRole('button', { name: '个人菜单', exact: true }).click();
   await menu.getByRole('button', { name: '编辑个人资料', exact: true }).click();
@@ -494,8 +495,9 @@ test('头像只给卡片头部提供暗色调，快速开关后菜单仍可操�
   await expect(menu.locator('.profile-popover-banner')).toHaveCSS('background-color', 'rgb(73, 38, 41)');
   await page.keyboard.press('Escape');
   await trigger.click();
-  await menu.getByRole('button', { name: '语音与音频', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '语音与音频', exact: true })).toBeVisible();
+  await expect(menu.getByRole('button', { name: '语音与音频', exact: true })).toHaveCount(0);
+  await menu.getByRole('button', { name: '快捷键', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '快捷键', exact: true })).toBeVisible();
 });
 
 test('设置身份菜单选择隐身与主界面同步，首个心跳不短暂在线，切回在线可继续使用', async ({ page }) => {

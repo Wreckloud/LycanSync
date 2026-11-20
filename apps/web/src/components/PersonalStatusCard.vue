@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { CircleUserRound, Keyboard, LogOut, Pencil, SlidersHorizontal } from '@lucide/vue';
+import { CircleUserRound, Film, Keyboard, LogOut, Pencil } from '@lucide/vue';
 import Avatar from './Avatar.vue';
 import PresenceModeSwitch from './PresenceModeSwitch.vue';
 import ActivityStatus from './ActivityStatus.vue';
@@ -13,8 +13,8 @@ import type { UserActivity, UserPresenceStatus } from '../presence/presenceApi';
 
 const props = defineProps<{ user: AuthUser; status: UserPresenceStatus; statusLabel: string;
   activityStatus?: { type: UserActivity['type']; text: string; startedAt?: string } | null; menuEnabled?: boolean; active?: boolean;
-  presenceMode?: PresenceMode; presenceReady?: boolean; presenceSyncing?: boolean; presenceError?: string }>();
-const emit = defineEmits<{ settings: [section: 'account' | 'audio' | 'shortcuts', trigger: HTMLElement]; logout: [];
+  presenceMode?: PresenceMode; presenceReady?: boolean; presenceSyncing?: boolean; presenceError?: string; hasRecordings?: boolean }>();
+const emit = defineEmits<{ settings: [section: 'account' | 'shortcuts', trigger: HTMLElement]; logout: []; recordings: [];
   presenceMode: [mode: PresenceMode] }>();
 const menuOpen = defineModel<boolean>('menuOpen', { default: false });
 const voiceTime = useOwnVoiceTime(() => menuOpen.value && props.active !== false);
@@ -23,7 +23,7 @@ const trigger = ref<HTMLElement | null>(null);
 const card = ref<HTMLElement | null>(null);
 watch(() => props.active, active => { if (active === false) menuOpen.value = false; });
 
-function selectSettings(section: 'account' | 'audio' | 'shortcuts') {
+function selectSettings(section: 'account' | 'shortcuts') {
   menuOpen.value = false;
   if (trigger.value) emit('settings', section, trigger.value);
 }
@@ -32,6 +32,12 @@ function logout() {
   menuOpen.value = false;
   trigger.value?.focus();
   emit('logout');
+}
+
+function openRecordings() {
+  menuOpen.value = false;
+  trigger.value?.focus();
+  emit('recordings');
 }
 </script>
 
@@ -68,7 +74,7 @@ function logout() {
           <InlineFeedback :message="presenceError" />
         </div>
         <button type="button" @click="selectSettings('account')"><Pencil :size="15" />编辑个人资料</button>
-        <button type="button" @click="selectSettings('audio')"><SlidersHorizontal :size="15" />语音与音频</button>
+        <button v-if="hasRecordings" type="button" @click="openRecordings"><Film :size="15" />录像管理</button>
         <button type="button" @click="selectSettings('shortcuts')"><Keyboard :size="15" />快捷键</button>
         <div class="personal-menu-session">
           <button type="button" @click="logout"><LogOut :size="15" />退出登录</button>

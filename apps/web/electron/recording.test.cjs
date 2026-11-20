@@ -205,6 +205,11 @@ test('回放保存后登记真实文件，不把配置时长当成片段实测�
   const entry = (await f.recording.library.list()).items[0];
   assert.equal(entry.id, result.replay.lastSavedId);
   assert.equal(entry.state, 'saved'); assert.equal(entry.durationMs, null);
+  await f.recording.library.updateDuration(entry.id, 2317);
+  assert.equal((await f.recording.library.list()).items[0].durationMs, 2317);
+  await f.recording.library.updateDuration(entry.id, 2500);
+  assert.equal((await f.recording.library.list()).items[0].durationMs, 2317);
+  assert.throws(() => f.recording.library.updateDuration(entry.id, -1), /recordingMetadataInvalid/);
   assert.equal(await readFile(await f.recording.library.filePath(entry.id), 'utf8'), 'controlled-replay-content');
   assert.doesNotMatch(JSON.stringify(f.diagnostics), /\.mkv|recordings[\\/]|12345678/);
   await f.recording.stopReplay();

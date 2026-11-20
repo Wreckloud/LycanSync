@@ -229,8 +229,10 @@ function createActivityHelper({ enabled, executablePath, onActivity, spawnProces
     return { state: idleSeconds >= 300 ? 'idle' : 'active', idleSeconds };
   }
 
-  function recordingName(executable) {
+  function recordingName(executable, sourceId) {
     if (typeof executable !== 'string' || !executable) return '窗口';
+    const windowId = /^window:(\d+)/.exec(sourceId || '')?.[1];
+    if (current?.type === 'GAME' && windowId && current.windowIds?.includes(windowId)) return current.name;
     const key = executable.replaceAll('/', '\\').toLowerCase();
     return mappings.find(item => item.executable === key)?.name || win32.basename(executable).replace(/\.exe$/i, '');
   }

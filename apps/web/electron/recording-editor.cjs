@@ -1,4 +1,6 @@
-const { spawn } = require('node:child_process');
+const { spawn, execFile } = require('node:child_process');
+const { promisify } = require('node:util');
+const runFile = promisify(execFile);
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs/promises');
 const { dirname, join, basename } = require('node:path');
@@ -74,6 +76,13 @@ function createRecordingEditor({ library, executablePath, onProgress, onDiagnost
     task.cancelled = true; task.child?.kill();
     await task.done.catch(() => {});
   }
-  return { exportClip, cancel };
+  async function frameRate(id) {
+    const path = await library.filePath(id);
+    const { stdout } = await runFile(executablePath, ['--frame-rate', path], { windowsHide: true, timeout: 10000, maxBuffer: 4096 });
+    const match = /^(\d+) (\d+)$/.exec(stdout.trim());
+    if (!match || !Number(match[1]) || !Number(match[2])) throw new Error('无法读取录像帧率。');
+    return Number(match[1]) / Number(match[2]);
+  }
+  return { exportClip, cancel, frameRate };
 }
 module.exports = { createRecordingEditor };

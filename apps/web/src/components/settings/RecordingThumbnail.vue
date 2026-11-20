@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { onMounted, onScopeDispose, ref } from 'vue';
+import { onMounted, onScopeDispose, ref, watch } from 'vue';
 import { Play } from '@lucide/vue';
-import { loadRecordingThumbnail } from '../../recording/recordingThumbnails';
+import { loadRecordingThumbnail, recordingThumbnailDuration } from '../../recording/recordingThumbnails';
 
 const props = defineProps<{ source: string; disabled: boolean; passive?: boolean }>();
-const emit = defineEmits<{ preview: [] }>();
+const emit = defineEmits<{ preview: []; duration: [milliseconds: number] }>();
 const frame = ref<HTMLElement | null>(null);
 const canvas = ref<HTMLCanvasElement | null>(null);
 const ready = ref(false);
@@ -12,6 +12,7 @@ const failed = ref(false);
 let disposed = false;
 let observer: IntersectionObserver | undefined;
 let request: AbortController | undefined;
+let visible = false;
 function release() { request?.abort(); request = undefined; }
 async function load() {
   if (disposed || request || ready.value || failed.value || props.disabled) return;
@@ -24,13 +25,22 @@ async function load() {
     canvas.value.width = cover.width; canvas.value.height = cover.height;
     context.putImageData(cover, 0, 0);
     ready.value = true;
+    const duration = recordingThumbnailDuration(cover);
+    if (duration !== undefined) emit('duration', duration);
   } catch {
     if (!current.signal.aborted && request === current) failed.value = true;
   } finally { if (request === current) request = undefined; }
 }
+watch(() => [props.source, props.disabled], () => {
+  release();
+  ready.value = false;
+  failed.value = false;
+  if (visible) void load();
+});
 onMounted(() => {
   observer = new IntersectionObserver(entries => {
-    if (entries.some(entry => entry.isIntersecting)) load();
+    visible = entries.some(entry => entry.isIntersecting);
+    if (visible) void load();
     else release();
   });
   if (frame.value) observer.observe(frame.value);
@@ -39,7 +49,7 @@ onScopeDispose(() => { disposed = true; observer?.disconnect(); release(); });
 </script>
 
 <template>
-  <component :is="passive ? 'div' : 'button'" ref="frame" type="button" class="recording-thumbnail" :disabled="passive ? undefined : disabled" :aria-label="passive ? '录像封面' : '预览录像'" :title="passive ? undefined : '预览录像'" @click="!passive && emit('preview')">
+  <component :is="passive ? 'div' : 'button'" ref="frame" :type="passive ? undefined : 'button'" class="recording-thumbnail" :disabled="passive ? undefined : disabled" :aria-label="passive ? '录像封面' : '预览录像'" :title="passive ? undefined : '预览录像'" @click="!passive && emit('preview')">
     <canvas ref="canvas" v-show="ready" aria-hidden="true" />
     <Play :size="24" aria-hidden="true" />
   </component>

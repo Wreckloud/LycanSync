@@ -6,10 +6,11 @@ import { chatMediaFormat } from '../chat/chatMedia';
 import { useLoadingHint } from './useLoadingHint';
 import { useBackdropDismiss } from './useBackdropDismiss';
 import { keepDialogFocus } from './dialogFocus';
+import HoverHint from './HoverHint.vue';
 import MediaVideoSurface from './MediaVideoSurface.vue';
 import ChatImageSurface from './ChatImageSurface.vue';
 
-const props = defineProps<{ groupId: string; attachment: ChatAttachment; imageMessage: boolean; previewBlob?: Blob }>();
+const props = defineProps<{ groupId: string; attachment: ChatAttachment; imageMessage: boolean; previewBlob?: Blob; localSource?: string }>();
 const emit = defineEmits<{ close: [] }>();
 const format = computed(() => chatMediaFormat(props.attachment));
 const title = computed(() => props.attachment.fileName || '图片');
@@ -35,7 +36,7 @@ function release() {
   player.value?.pause();
   player.value?.removeAttribute('src');
   player.value?.load();
-  if (source.value.startsWith('blob:')) URL.revokeObjectURL(source.value);
+  if (source.value.startsWith('blob:') && source.value !== props.localSource) URL.revokeObjectURL(source.value);
   source.value = '';
 }
 
@@ -59,6 +60,7 @@ async function load() {
   previewFailed.value = false;
   loading.value = true;
   try {
+    if (props.localSource) { source.value = props.localSource; return; }
     const streamUrl = format.value?.kind === 'video' || format.value?.kind === 'audio'
       ? desktopMediaUrl(props.groupId, props.attachment.id) : null;
     if (streamUrl) { source.value = streamUrl; return; }
@@ -138,6 +140,7 @@ async function download() {
 function playbackFailed() {
   if (!disposed) {
     previewFailed.value = true;
+    if (props.localSource) { error.value = '此文件暂时无法在应用中预览，仍可作为附件发送。'; return; }
     error.value = format.value?.kind === 'video' && !compatible.value
       ? '这个视频无法直接播放，可以转换后播放或下载原文件。'
       : '这个文件暂时无法预览，可以下载后打开。';
@@ -160,22 +163,24 @@ onScopeDispose(() => {
     <section class="chat-media-viewer" :class="{ 'media-viewer-shell': format?.kind === 'image' || format?.kind === 'video' }" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1" @keydown="keepDialogFocus">
       <header v-if="format?.kind === 'audio' || !source || (previewFailed && format?.kind === 'image')">
         <strong id="chat-media-title" :title="title">{{ title }}</strong>
-        <button type="button" aria-label="下载文件" title="下载文件" :disabled="downloading || (imageMessage && !source)" @click="download"><Download :size="18" /></button>
-        <button ref="closeButton" type="button" aria-label="关闭查看器" title="关闭" @click="close"><X :size="18" /></button>
+        <HoverHint text="关闭" placement="top"><button ref="closeButton" type="button" aria-label="关闭查看器" @click="close"><X :size="18" /></button></HoverHint>
       </header>
       <div class="chat-media-stage" :aria-busy="loading">
-        <ChatImageSurface v-if="source && format?.kind === 'image' && !previewFailed" :source="source" :title="title" @close="close" @download="download" @error="playbackFailed" />
-        <MediaVideoSurface v-else-if="source && format?.kind === 'video'" :key="source" :source="source" downloadable :downloading="downloading" @close="close" @download="download" @error="playbackFailed" />
+        <ChatImageSurface v-if="source && format?.kind === 'image' && !previewFailed" :source="source" :title="title" :downloadable="!localSource" @close="close" @download="download" @error="playbackFailed" />
+        <MediaVideoSurface v-else-if="source && format?.kind === 'video'" :key="source" :source="source" :downloadable="!localSource" :downloading="downloading" @close="close" @download="download" @error="playbackFailed" />
         <div v-else-if="source && format?.kind === 'audio'" class="chat-media-audio">
           <Music2 :size="64" aria-hidden="true" />
           <audio ref="player" :src="source" controls preload="metadata" tabindex="0" @error="playbackFailed" />
         </div>
         <span v-else-if="loadingHint" role="status">正在加载…</span>
       </div>
+      <div v-if="!localSource && (format?.kind === 'audio' || !source || (previewFailed && format?.kind === 'image'))" class="media-fallback-tools">
+        <HoverHint text="下载文件" placement="top"><button type="button" aria-label="下载文件" :disabled="downloading || (imageMessage && !source)" @click="download"><Download :size="20" /></button></HoverHint>
+      </div>
       <footer v-if="error || conversionHint || (previewFailed && format?.kind === 'video' && !compatible)" class="chat-media-feedback">
         <span v-if="error" role="alert">{{ error }}</span>
         <span v-else-if="conversionHint" class="conversion-status" role="status">{{ conversionStatus }}</span>
-        <button v-if="previewFailed && format?.kind === 'video' && !compatible" type="button" :disabled="converting" @click="convertVideo()">转换后播放</button>
+        <button v-if="!localSource && previewFailed && format?.kind === 'video' && !compatible" type="button" :disabled="converting" @click="convertVideo()">转换后播放</button>
         <button v-else-if="!source" type="button" @click="load">重试</button>
       </footer>
     </section>
@@ -194,6 +199,8 @@ onScopeDispose(() => {
 .chat-media-viewer.media-viewer-shell .chat-media-feedback { position: absolute; z-index: 2; bottom: 76px; align-self: center; max-width: calc(100vw - 48px); border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
 .chat-media-audio { display: grid; justify-items: center; gap: 28px; width: min(440px, 90%); }
 .chat-media-audio audio { width: 100%; }
+.media-fallback-tools { display: flex; justify-content: center; padding: 12px; }
+.media-fallback-tools button { display: grid; place-items: center; width: 42px; height: 42px; padding: 0; }
 .chat-media-feedback { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--border); color: var(--danger); font-size: 13px; }
 .conversion-status { color: var(--muted); }
 .chat-media-feedback button { flex-shrink: 0; }

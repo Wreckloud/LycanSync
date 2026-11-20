@@ -183,6 +183,7 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   configureReplay: (settings) => ipcRenderer.invoke('recording:replay-settings', settings),
   getRecordingStatus: () => ipcRenderer.invoke('recording:status'),
   revealRecording: () => ipcRenderer.invoke('recording:reveal'),
+  getRecordingFrameRate: id => ipcRenderer.invoke('recording:frame-rate', id),
   exportRecordingClip: (requestId, id, startMs, endMs) => ipcRenderer.invoke('recording:clip', requestId, id, startMs, endMs),
   cancelRecordingClip: requestId => ipcRenderer.invoke('recording:clip-cancel', requestId),
   onRecordingClipProgress: callback => {
@@ -190,6 +191,7 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
     ipcRenderer.on('recording:clip-progress', listener);
     return () => ipcRenderer.removeListener('recording:clip-progress', listener);
   },
+  updateRecordingDuration: (id, durationMs) => ipcRenderer.invoke('recording:duration', id, durationMs),
   getRecordingLibrary: (offset, kind) => ipcRenderer.invoke('recording:library', offset, kind),
   recordingFile: (id, action) => ipcRenderer.invoke('recording:file', id, action),
   onRecordingState: (callback) => {

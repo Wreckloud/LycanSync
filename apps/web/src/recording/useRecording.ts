@@ -35,7 +35,7 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
   const statusLoaded = ref(false);
   const replayStartCommand = shallowRef<Promise<void>>();
   let replaySavePending = false;
-  const successNotice = shallowRef<{ message: string } | null>(null);
+  const successNotice = shallowRef<{ message: string; saved: boolean } | null>(null);
   const changingSource = ref(false);
   let sourceChangeVersion = 0;
   // 停止只撤销对应输出的准备请求，另一输出仍可继续启动。
@@ -76,13 +76,13 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
     // 仅提示已确认的新状态，不把初次读取的历史录像当成本次操作成功。
     if (statusLoaded.value && !code) {
       if (next.saved && (!state.value.saved || next.recordingId !== state.value.recordingId)) {
-        successNotice.value = { message: '录像已保存到本地录像' };
+        successNotice.value = { message: '录像已保存到本地录像', saved: true };
       } else if (next.replay?.phase === 'buffering' && state.value.replay?.phase !== 'buffering') {
-        successNotice.value = { message: '即时回放已开启' };
+        successNotice.value = { message: '即时回放已开启', saved: false };
       }
       if (next.replay?.lastSavedId && next.replay.lastSavedId !== state.value.replay?.lastSavedId) {
         successNotice.value = { message: next.replay.lastSavedDuringWarmup
-          ? '回放已保存。本次积累的时长不足，仅保存了已有片段。' : '回放已保存到本地录像' };
+          ? '回放已保存。本次积累的时长不足，仅保存了已有片段。' : '回放已保存到本地录像', saved: true };
       }
     }
     const previousCode = state.value.error ?? state.value.replay?.error;

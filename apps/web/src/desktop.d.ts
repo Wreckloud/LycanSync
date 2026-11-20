@@ -234,9 +234,11 @@ interface Window {
     configureReplay(settings: { seconds?: number; enabled?: boolean }): Promise<RecordingSettings>;
     getRecordingStatus(): Promise<DesktopRecordingStatus>;
     revealRecording(): Promise<void>;
+    getRecordingFrameRate(id: string): Promise<number>;
     exportRecordingClip(requestId: string, id: string, startMs: number, endMs: number): Promise<RecordingLibraryEntry>;
     cancelRecordingClip(requestId: string): Promise<void>;
     onRecordingClipProgress(callback: (progress: { requestId: string; percent: number }) => void): () => void;
+    updateRecordingDuration(id: string, durationMs: number): Promise<void>;
     getRecordingLibrary(offset?: number, kind?: 'all' | 'recording' | 'replay' | 'clip'): Promise<{ items: RecordingLibraryEntry[]; hasMore: boolean }>;
     recordingFile(id: string, action: 'play' | 'reveal' | 'delete' | 'relink' | 'clearUnavailable'): Promise<boolean>;
     onRecordingState(callback: (state: DesktopRecordingStatus) => void): () => void;

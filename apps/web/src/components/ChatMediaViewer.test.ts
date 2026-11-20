@@ -11,7 +11,7 @@ const parsed = ts.createSourceFile('viewer.ts', script, ts.ScriptTarget.Latest, 
 const compiled = ts.transpile(parsed.statements.filter(statement => !ts.isImportDeclaration(statement))
   .map(statement => statement.getText(parsed)).join('\n'), { target: ts.ScriptTarget.ES2022 });
 
-function setup(imageMessage = false, desktop = false, previewBlob?: Blob) {
+function setup(imageMessage = false, desktop = false, previewBlob?: Blob, localSource?: string) {
   const scope = effectScope();
   const pending: Array<{ resolve(blob: Blob): void; signal: AbortSignal }> = [];
   const fetchFilePreview = vi.fn((_group: string, _id: string, signal: AbortSignal) =>
@@ -24,7 +24,7 @@ function setup(imageMessage = false, desktop = false, previewBlob?: Blob) {
   const fetchCompatibleVideo = vi.fn().mockResolvedValue(new Blob(['converted'], { type: 'video/mp4' }));
   const viewer = scope.run(() => runInNewContext(`${compiled}\n({load,close,source,error,player,convertVideo,playbackFailed,compatible,converting})`, {
     ref, computed, onScopeDispose, onMounted: () => {}, defineEmits: () => emit,
-    defineProps: () => ({ groupId: 'group', imageMessage, previewBlob,
+    defineProps: () => ({ groupId: 'group', imageMessage, previewBlob, localSource,
       attachment: { id: 'file', fileName: imageMessage ? 'test.png' : 'test.mp4', byteSize: 3, contentType: 'application/octet-stream' } }),
     desktopMediaUrl: (_group: string, _id: string, compatible: boolean) => desktop ? '/api/groups/group/files/file/' + (compatible ? 'preview/media' : 'media') : null, chatMediaFormat, useLoadingHint: () => ref(false), useBackdropDismiss: () => ({}),
     videoPreviewStatus, fetchCompatibleVideo, setTimeout, clearTimeout, Date,
@@ -99,6 +99,22 @@ it('桌面播放使用受认证的媒体地址，不下载整段 Blob，关闭�
   f.viewer.close();
   expect(f.revokeObjectURL).not.toHaveBeenCalled();
   f.scope.stop();
+});
+
+it('待发送预览复用附件来源，失败不请求服务器，关闭不撤销聊天持有的 URL', async () => {
+  for (const source of ['blob:pending', 'lycan://app/recordings/local-id']) {
+    const f = setup(false, true, undefined, source);
+    try {
+      await f.viewer.load();
+      expect(f.viewer.source.value).toBe(source);
+      f.viewer.playbackFailed();
+      expect(f.viewer.error.value).toContain('仍可作为附件发送');
+      expect(f.fetchFilePreview).not.toHaveBeenCalled();
+      expect(f.videoPreviewStatus).not.toHaveBeenCalled();
+      f.viewer.close();
+      expect(f.revokeObjectURL).not.toHaveBeenCalled();
+    } finally { f.scope.stop(); }
+  }
 });
 
 it('正常加载和播放失败都不自动启动转码，点击后复用兼容文件', async () => {

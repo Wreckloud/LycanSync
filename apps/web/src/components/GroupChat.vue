@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import '../chat/chat.css';
-import { computed, inject, nextTick, onMounted, onScopeDispose, ref } from 'vue';
+import { computed, inject, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { useChatScroll } from '../chat/useChatScroll';
 import { useComposerHeight } from '../chat/useComposerHeight';
 import { useGroupMessages } from '../chat/useGroupMessages';
 import { ACCOUNT_CACHE } from '../cache/localCache';
 import { useLoadingHint } from './useLoadingHint';
-import { ArrowDown, MessageSquareText, Plus, Send, X } from '@lucide/vue';
+import { ArrowDown, MessageSquareText, Plus, Send, X, Film, File, Music2 } from '@lucide/vue';
 import defaultAvatar from '../../../../services/api/src/main/resources/account/default.png';
 import type { AuthUser } from '../auth/authApi';
 import { sendFile, sendMessage, type ChatMessage } from '../chat/chatApi';
@@ -18,21 +18,27 @@ import ProfilePopover from './ProfilePopover.vue';
 import { findGroupMemberProfile, type GroupMemberProfile } from '../group/groupApi';
 import ChatFileMedia from './ChatFileMedia.vue';
 import ChatMediaViewer from './ChatMediaViewer.vue';
+import RecordingThumbnail from './settings/RecordingThumbnail.vue';
+import HoverHint from './HoverHint.vue';
+import { chatMediaFormat } from '../chat/chatMedia';
 import DialogTransition from './DialogTransition.vue';
 
 type MessageSegment = { text: string; href?: string };
 type PendingAttachment = {
   id: string;
-  kind: 'IMAGE' | 'FILE';
-  file: File;
   previewUrl: string;
   state: 'pending' | 'uploading' | 'failed' | 'sent';
   progress: number;
   error: string;
-};
+} & (
+  | { kind: 'IMAGE' | 'FILE'; file: File; recordingId?: never }
+  | { kind: 'FILE'; file: Pick<File, 'name' | 'size'>; recordingId: string }
+);
 
-const props = defineProps<{ group: GroupSummary; members: GroupMember[]; user: AuthUser; syncError?: string }>();
-const emit = defineEmits<{ initialLoad: [groupId: string]; retrySync: [] }>();
+const props = defineProps<{ group: GroupSummary; members: GroupMember[]; user: AuthUser; syncError?: string; recordingAttachment?: RecordingLibraryEntry }>();
+const emit = defineEmits<{ initialLoad: [groupId: string]; retrySync: []; chooseRecording: []; recordingConsumed: []; messageSent: [groupId: string] }>();
+const desktop = Boolean(window.lycanDesktop);
+const pendingPreview = ref<PendingAttachment | null>(null);
 const cache = inject(ACCOUNT_CACHE, null);
 const viewedMedia = ref<ChatMessage | null>(null);
 const viewedMediaBlob = ref<Blob>();
@@ -94,7 +100,8 @@ let preparationGeneration = 0;
 let sendGeneration = 0;
 
 function revokePreview(item: PendingAttachment) {
-  if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+  if (pendingPreview.value?.id === item.id) pendingPreview.value = null;
+  if (item.previewUrl.startsWith('blob:')) URL.revokeObjectURL(item.previewUrl);
 }
 
 function clearPendingAttachments() {
@@ -115,7 +122,7 @@ async function enqueueFiles(files: File[], compressSupportedImages: boolean) {
   error.value = '';
   if (!compressSupportedImages) {
     pendingAttachments.value.push(...files.map((file) => ({ id: crypto.randomUUID(), kind: 'FILE' as const,
-      file, previewUrl: '', state: 'pending' as const, progress: 0, error: '' })));
+      file, previewUrl: chatMediaFormat({ id: '', byteSize: file.size, fileName: file.name, contentType: file.type }) ? URL.createObjectURL(file) : '', state: 'pending' as const, progress: 0, error: '' })));
     return;
   }
   const generation = ++preparationGeneration;
@@ -126,7 +133,7 @@ async function enqueueFiles(files: File[], compressSupportedImages: boolean) {
       const imageType = file.type === 'image/png' || file.type === 'image/jpeg';
       const prepared = imageType ? await compressChatImage(file) : file;
       preparedItems.push({ id: crypto.randomUUID(), kind: imageType ? 'IMAGE' : 'FILE', file: prepared,
-        previewUrl: imageType ? URL.createObjectURL(prepared) : '', state: 'pending', progress: 0, error: '' });
+        previewUrl: chatMediaFormat({ id: '', byteSize: prepared.size, fileName: prepared.name, contentType: prepared.type }) ? URL.createObjectURL(prepared) : '', state: 'pending', progress: 0, error: '' });
       if (generation !== preparationGeneration || disposed) {
         for (const item of preparedItems) revokePreview(item);
         return;
@@ -140,6 +147,39 @@ async function enqueueFiles(files: File[], compressSupportedImages: boolean) {
     if (generation === preparationGeneration) preparing.value = false;
   }
 }
+
+function attachmentInfo(item: PendingAttachment) {
+  return { id: item.id, fileName: item.file.name, byteSize: item.file.size,
+    contentType: 'type' in item.file ? item.file.type : 'video/x-matroska' };
+}
+function attachmentKind(item: PendingAttachment) { return chatMediaFormat(attachmentInfo(item))?.kind; }
+function recordingFile(item: PendingAttachment, signal: AbortSignal): Pick<File, 'name' | 'size' | 'stream'> {
+  return { name: item.file.name, size: item.file.size, stream: () => {
+    let reader: ReadableStreamDefaultReader<Uint8Array<ArrayBuffer>> | undefined;
+    return new ReadableStream<Uint8Array<ArrayBuffer>>({
+      async start() {
+        const response = await fetch(item.previewUrl, { signal });
+        if (!response.ok || !response.body) throw new Error('无法读取录像，原片可能已移动或删除。');
+        reader = response.body.getReader();
+      },
+      async pull(controller) {
+        const chunk = await reader!.read();
+        if (chunk.done) { reader!.releaseLock(); controller.close(); }
+        else controller.enqueue(chunk.value);
+      },
+      cancel: reason => reader?.cancel(reason),
+    });
+  } };
+}
+watch(() => props.recordingAttachment, entry => {
+  if (!entry) return;
+  const source = `lycan://app/recordings/${encodeURIComponent(entry.id)}`;
+  pendingAttachments.value.push({ id: crypto.randomUUID(), kind: 'FILE', recordingId: entry.id,
+    file: { name: entry.fileName || `${entry.applicationName || '录像'}.mkv`, size: entry.bytes! },
+    previewUrl: source, state: 'pending', progress: 0, error: '' });
+  emit('recordingConsumed');
+  void nextTick(() => { resizeMessageInput(); messageInput.value?.focus(); });
+}, { immediate: true });
 
 function chooseFiles(event: Event) {
   const input = event.target as HTMLInputElement;
@@ -165,11 +205,11 @@ function handleDrop(event: DragEvent) {
 function handleKeydown(event: KeyboardEvent) {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
-    void submit();
+    void submit(true);
   }
 }
 
-async function submit() {
+async function submit(restoreFocus = false) {
   if (!canSend.value) return;
   const generation = ++sendGeneration;
   busy.value = true;
@@ -185,6 +225,7 @@ async function submit() {
       activeUpload = null;
       text.value = '';
       appendMessages([message], true);
+      emit('messageSent', groupId);
     } else {
       let content = text.value;
       for (const item of queued) {
@@ -197,13 +238,14 @@ async function submit() {
         try {
           const message = item.kind === 'IMAGE'
             ? await sendMessage(groupId, content, item.file, controller.signal, item.id)
-            : await sendFile(groupId, item.file, content, item.id, controller.signal,
+            : await sendFile(groupId, item.recordingId !== undefined ? recordingFile(item, controller.signal) : item.file, content, item.id, controller.signal,
               (loaded) => { item.progress = loaded; });
           if (disposed || generation !== sendGeneration || props.group.id !== groupId || controller.signal.aborted) return;
           item.state = 'sent';
           revokePreview(item);
           item.previewUrl = '';
           appendMessages([message], true);
+          emit('messageSent', groupId);
           content = '';
           text.value = '';
         } catch (reason) {
@@ -212,6 +254,7 @@ async function submit() {
           item.error = controller.signal.aborted ? '已取消，可继续发送' : reason instanceof Error ? reason.message : '文件发送失败';
           break;
         } finally {
+          if (item.recordingId) controller.abort();
           if (activeUpload === controller) activeUpload = null;
         }
       }
@@ -228,6 +271,15 @@ async function submit() {
     if (generation === sendGeneration) {
       activeUpload = null;
       busy.value = false;
+      if (restoreFocus) {
+        await nextTick();
+        const input = messageInput.value;
+        if (!disposed && generation === sendGeneration && input?.isConnected
+            && !input.closest('[inert]') && document.visibilityState !== 'hidden'
+            && (document.activeElement === document.body || document.activeElement === input)) {
+          input.focus({ preventScroll: true });
+        }
+      }
     }
   }
 }
@@ -389,15 +441,23 @@ onScopeDispose(() => {
     </div>
     <div class="composer-shell">
       <p v-if="error" class="chat-error" role="alert">{{ error }}</p>
-      <form class="composer" @submit.prevent="submit">
+      <form class="composer" :class="{ 'has-recording-picker': desktop }" @submit.prevent="submit()">
         <input ref="fileInput" type="file" hidden multiple @change="chooseFiles" />
         <button type="button" aria-label="添加文件" :disabled="busy || preparing" @click="fileInput?.click()"><Plus :size="16" /></button>
+        <HoverHint v-if="desktop" text="分享录像" placement="top">
+          <button type="button" aria-label="分享录像" :disabled="busy || preparing" @click="emit('chooseRecording')"><Film :size="16" /></button>
+        </HoverHint>
         <div ref="composerViewport" class="composer-content">
           <div ref="composerContent">
             <div v-if="preparing" class="chat-transfer-state" role="status">正在压缩图片…</div>
             <div v-if="pendingAttachments.length" class="composer-attachments">
               <div v-for="item in pendingAttachments" :key="item.id" class="composer-attachment">
-                <img v-if="item.previewUrl" :src="item.previewUrl" alt="待发送图片" />
+                <RecordingThumbnail v-if="attachmentKind(item) === 'video'" class="composer-video-cover" :source="item.previewUrl" :disabled="!item.previewUrl" @preview="pendingPreview = item" />
+                <button v-else type="button" class="composer-attachment-preview" :aria-label="`预览 ${item.file.name}`" :disabled="!attachmentKind(item) || !item.previewUrl" @click="pendingPreview = item">
+                  <img v-if="attachmentKind(item) === 'image' && item.previewUrl" :src="item.previewUrl" alt="待发送图片" />
+                  <Music2 v-else-if="attachmentKind(item) === 'audio'" :size="20" />
+                  <File v-else :size="20" />
+                </button>
                 <span class="composer-attachment-name">{{ item.file.name }}</span>
                 <small>{{ item.kind === 'IMAGE' ? '已压缩' : (item.file.size / 1024 / 1024).toFixed(2) + ' MB' }}</small>
                 <progress v-if="item.state === 'uploading' && item.kind === 'FILE'" :value="item.progress" :max="item.file.size" aria-label="文件上传进度" />
@@ -418,6 +478,10 @@ onScopeDispose(() => {
       :deleted-at="historicalSender?.senderDeletedAt" :signature="historicalProfile?.signature" status="OFFLINE" status-label="已注销"
       :loading="historicalLoading" :error="historicalError" :voice-seconds="historicalProfile?.sharedVoiceSeconds"
       @close="closeHistoricalProfile" @retry="historicalSender && historicalAnchor && showHistoricalProfile(historicalSender, historicalAnchor)" />
+    <DialogTransition>
+      <ChatMediaViewer v-if="pendingPreview" :key="pendingPreview.id" :group-id="group.id" :attachment="attachmentInfo(pendingPreview)"
+        :image-message="false" :local-source="pendingPreview.previewUrl" @close="pendingPreview = null" />
+    </DialogTransition>
     <DialogTransition>
       <ChatMediaViewer v-if="viewedMedia?.attachment" :key="viewedMedia.id" :group-id="group.id" :attachment="viewedMedia.attachment"
         :image-message="viewedMedia.type === 'IMAGE'" :preview-blob="viewedMediaBlob" @close="viewedMedia = null; viewedMediaBlob = undefined" />

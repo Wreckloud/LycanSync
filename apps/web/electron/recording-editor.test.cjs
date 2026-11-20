@@ -139,6 +139,7 @@ test('无声音的竖屏高帧率录像可从非关键帧截取，保持比例�
   assert.equal(generated.status, 0, generated.stderr?.toString());
   await f.library.finish({ id: f.id, saved: true, durationMs: 4000, width: 360, height: 640 });
   const editor = createRecordingEditor({ library: f.library, executablePath: process.env.LYCANSYNC_TEST_CLIP, onProgress() {} });
+  assert.equal(await editor.frameRate(f.id), 60);
   const clip = await editor.exportClip(randomUUID(), f.id, 500, 2000);
   const decode = spawnSync(ffmpeg, ['-hide_banner', '-i', await f.library.filePath(clip.id), '-map', '0', '-f', 'null', '-'], { windowsHide: true, encoding: 'utf8' });
   assert.equal(decode.status, 0, decode.stderr);

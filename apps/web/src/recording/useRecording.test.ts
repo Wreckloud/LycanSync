@@ -66,6 +66,7 @@ it('未共享时可保存回放开关，等待共享就绪再启动并提示，�
     await vi.waitFor(() => expect(f.recording.replayActive.value).toBe(true));
     expect(f.desktop.startReplay).toHaveBeenCalledOnce();
     expect(f.recording.successNotice.value?.message).toBe('即时回放已开启');
+    expect(f.recording.successNotice.value?.saved).toBe(false);
     const notice = f.recording.successNotice.value;
     f.publish({ ...f.recording.state.value });
     expect(f.recording.successNotice.value).toBe(notice);
@@ -85,6 +86,7 @@ it('恢复已保存的回放设置会等待初次状态读取，成功后只提�
     await vi.waitFor(() => expect(f.recording.replayActive.value).toBe(true));
     expect(f.desktop.startReplay).toHaveBeenCalledOnce();
     expect(f.recording.successNotice.value?.message).toBe('即时回放已开启');
+    expect(f.recording.successNotice.value?.saved).toBe(false);
   } finally { f.scope.stop(); }
 });
 
@@ -173,6 +175,7 @@ it('开始录制不弹提示，保存成功提示且周期快照不重复提示'
     await f.recording.stop();
     expect(f.onSaved).toHaveBeenCalledOnce();
     expect(f.recording.successNotice.value?.message).toBe('录像已保存到本地录像');
+    expect(f.recording.successNotice.value?.saved).toBe(true);
     const saved = f.recording.successNotice.value;
     f.publish({ ...f.recording.state.value });
     expect(f.onSaved).toHaveBeenCalledOnce();

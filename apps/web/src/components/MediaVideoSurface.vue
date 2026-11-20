@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onScopeDispose, ref } from 'vue';
+import HoverHint from './HoverHint.vue';
 import { Download, X } from '@lucide/vue';
 
 defineProps<{ source: string; downloadable?: boolean; downloading?: boolean }>();
@@ -34,13 +35,13 @@ onScopeDispose(() => {
 
 <template>
   <div class="media-video-surface">
-    <button ref="closeButton" type="button" class="media-viewer-close" aria-label="关闭查看器" title="关闭" @click="emit('close')"><X :size="24" /></button>
+    <HoverHint text="关闭" placement="top" class="media-close-hint"><button ref="closeButton" type="button" class="media-viewer-close" aria-label="关闭查看器" @click="emit('close')"><X :size="24" /></button></HoverHint>
     <div class="media-video-stage">
       <video v-if="!failed" ref="player" :src="source" :style="{ '--video-ratio': aspectRatio }" controls playsinline preload="metadata" tabindex="0" @timeupdate="emit('time', player?.currentTime ?? 0)" @loadedmetadata="measureVideo" @error="playbackFailed" />
     </div>
     <slot name="controls" />
     <div v-if="downloadable" class="media-viewer-tools">
-      <button type="button" aria-label="下载文件" title="下载文件" :disabled="downloading" @click="emit('download')"><Download :size="20" /></button>
+      <HoverHint text="下载文件" placement="top"><button type="button" aria-label="下载文件" :disabled="downloading" @click="emit('download')"><Download :size="20" /></button></HoverHint>
     </div>
   </div>
 </template>
@@ -51,7 +52,8 @@ onScopeDispose(() => {
 .media-video-stage { position: absolute; inset: 64px min(72px, 6vw) 76px; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 8px; }
 .media-video-stage video { display: block; width: min(100%, calc((100dvh - 140px) * var(--video-ratio))); max-height: 100%; border-radius: 8px; }
 .media-viewer-close, .media-viewer-tools button { display: grid; place-items: center; width: 42px; height: 42px; padding: 0; border: 0; background: #171c22cc; color: #e1e6eb; }
-.media-viewer-close { position: absolute; top: 18px; right: 18px; z-index: 1; border-radius: 50%; }
+.media-close-hint { position: absolute; top: 18px; right: 18px; z-index: 1; }
+.media-viewer-close { border-radius: 50%; }
 .media-viewer-tools { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; overflow: hidden; border-radius: 6px; }
 .media-viewer-close:hover, .media-viewer-tools button:hover { background: #252e39ee; }
 .media-viewer-feedback { position: absolute; bottom: 76px; left: 50%; transform: translateX(-50%); z-index: 2; max-width: calc(100% - 48px); padding: 12px 16px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--danger); font-size: 13px; }

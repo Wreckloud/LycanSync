@@ -2,7 +2,8 @@
 import { onScopeDispose, ref, useId, watch } from 'vue';
 import { autoUpdate, computePosition, offset, shift } from '@floating-ui/dom';
 
-const props = defineProps<{ text: string; detail?: string; disabled?: boolean }>();
+defineOptions({ inheritAttrs: false });
+const props = defineProps<{ text: string; detail?: string; disabled?: boolean; placement?: 'right' | 'top'; boundary?: string; delayMs?: number }>();
 const anchor = ref<HTMLElement | null>(null);
 const surface = ref<HTMLElement | null>(null);
 const open = ref(false);
@@ -22,7 +23,7 @@ function show(event: PointerEvent | FocusEvent) {
   timer = setTimeout(() => {
     position.value.visibility = 'hidden';
     open.value = true;
-  }, 150);
+  }, props.delayMs ?? 150);
 }
 function escape(event: KeyboardEvent) { if (event.key === 'Escape') close(); }
 watch(() => props.disabled, disabled => { if (disabled) close(); });
@@ -36,7 +37,10 @@ watch([open, surface], ([visible, element], _, onCleanup) => {
     if (!trigger.getClientRects().length) { close(); return; }
     const revision = ++request;
     void computePosition(trigger, element, {
-      strategy: 'fixed', placement: 'right', middleware: [offset(10), shift({ padding: 8, crossAxis: true })],
+      strategy: 'fixed', placement: props.placement ?? 'right', middleware: [offset(() => {
+        const boundary = props.boundary ? trigger.closest(props.boundary) : null;
+        return 10 + (boundary && props.placement !== 'top' ? boundary.getBoundingClientRect().right - trigger.getBoundingClientRect().right : 0);
+      }), shift({ padding: 8, crossAxis: true })],
     }).then(({ x, y }) => {
       if (active && revision === request) position.value = { left: `${x}px`, top: `${y}px`, visibility: 'visible' };
     }).catch(error => { if (active) { console.warn('[hover-hint] positioning failed', error); close(); } });
@@ -54,12 +58,12 @@ onScopeDispose(close);
 </script>
 
 <template>
-  <span ref="anchor" class="hover-hint-anchor" @pointerenter="show" @pointerleave="close" @focusin="show" @focusout="close" @click="close" @keydown.esc="close">
+  <span ref="anchor" v-bind="$attrs" class="hover-hint-anchor" @pointerenter="show" @pointerleave="close" @focusin="show" @focusout="close" @click="close" @keydown.esc="close">
     <slot :description-id="open ? id : undefined" />
   </span>
   <Teleport v-if="anchor" :to="anchor.ownerDocument.body">
     <Transition name="hover-hint">
-      <span v-if="open" :id="id" ref="surface" role="tooltip" class="hover-hint" :style="position">
+      <span v-if="open" :id="id" ref="surface" role="tooltip" class="hover-hint" :class="{ 'is-above': placement === 'top' }" :style="position">
         {{ text }}<span v-if="detail" class="hover-hint-detail"> · {{ detail }}</span>
       </span>
     </Transition>
@@ -68,8 +72,10 @@ onScopeDispose(close);
 
 <style scoped>
 .hover-hint-anchor { display: inline-flex; flex: 0 0 auto; }
-.hover-hint { position: fixed; z-index: 30; width: max-content; max-width: min(260px, calc(100vw - 24px)); padding: 7px 9px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel-raised); box-shadow: 0 12px 28px #0009; color: var(--text); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; pointer-events: none; }
+.hover-hint { position: fixed; z-index: 1000; width: max-content; max-width: min(260px, calc(100vw - 24px)); padding: 7px 9px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel-raised); box-shadow: 0 12px 28px #0009; color: var(--text); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; pointer-events: none; }
 .hover-hint-detail { color: var(--muted); white-space: nowrap; }
 .hover-hint-enter-active, .hover-hint-leave-active { transition: opacity var(--motion-surface-duration) var(--motion-ease), transform var(--motion-surface-duration) var(--motion-ease); }
 .hover-hint-enter-from, .hover-hint-leave-to { opacity: 0; transform: translateX(-4px); }
+.hover-hint.is-above.hover-hint-enter-from, .hover-hint.is-above.hover-hint-leave-to { transform: translateY(4px); }
+@media (prefers-reduced-motion: reduce) { .hover-hint-enter-active, .hover-hint-leave-active { transition: none; } }
 </style>

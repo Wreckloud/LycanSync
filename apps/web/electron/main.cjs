@@ -342,7 +342,7 @@ const nativeVideo = createNativeVideoSession({ host: obsCaptureHost, mediaHelper
 const recordingVoice = createRecordingVoice();
 const recording = createRecording({
   dataDirectory: app.getPath('userData'), host: obsCaptureHost, getVideo: () => nativeVideo.current,
-  getApplicationName: video => video.sourceKind === 'monitor' ? '屏幕' : activityMonitor.recordingName(video.executable),
+  getApplicationName: video => video.sourceKind === 'monitor' ? '屏幕' : activityMonitor.recordingName(video.executable, video.sourceId),
   ensureVoice: id => recordingVoice.open(id),
   releaseVoice: id => recordingVoice.close(id),
   ensureAudio: async (sessionId) => {
@@ -1303,6 +1303,10 @@ const recordingEditor = createRecordingEditor({ library: recording.library,
   onProgress: progress => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('recording:clip-progress', progress); },
   onDiagnostic: message => { void writeMediaDiagnostic(message); },
 });
+ipcMain.handle('recording:frame-rate', (event, id) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return recordingEditor.frameRate(id);
+});
 ipcMain.handle('recording:clip', (event, requestId, id, startMs, endMs) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
   return recordingEditor.exportClip(requestId, id, startMs, endMs);
@@ -1314,6 +1318,10 @@ ipcMain.handle('recording:clip-cancel', (event, requestId) => {
 ipcMain.handle('recording:library', (event, offset, kind) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
   return recording.library.list(offset, kind);
+});
+ipcMain.handle('recording:duration', (event, id, durationMs) => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  return recording.library.updateDuration(id, durationMs);
 });
 ipcMain.handle('recording:file', async (event, id, action) => {
   if (!trustedSender(event) || closing || !['play', 'reveal', 'delete', 'relink', 'clearUnavailable'].includes(action)) throw new Error('请求来源无效');

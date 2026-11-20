@@ -1,4 +1,7 @@
 // 仅缓存 240×136 以内的像素，32 张最多约 4 MiB；不持有视频、GPU 纹理或原片。
+const durations = new WeakMap<ImageData, number>();
+export function recordingThumbnailDuration(cover: ImageData) { return durations.get(cover); }
+
 const covers = new Map<string, ImageData>();
 const pending = new Set<{ source: string; signal: AbortSignal; resolve: (cover: ImageData) => void; reject: (error: unknown) => void; abort: () => void }>();
 let decoding = 0;
@@ -83,6 +86,7 @@ function decode(source: string, signal: AbortSignal): Promise<ImageData> {
         if (!context) throw new Error('thumbnailCanvasUnavailable');
         context.drawImage(bitmap, 0, 0);
         const cover = context.getImageData(0, 0, bitmap.width, bitmap.height);
+        if (Number.isFinite(video.duration) && video.duration > 0) durations.set(cover, Math.round(video.duration * 1000));
         settled = true; cleanup(); resolve(cover);
       } catch (error) { fail(error); }
       finally { bitmap?.close(); }

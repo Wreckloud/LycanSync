@@ -1,158 +1,254 @@
 <script setup lang="ts">
-import { computed, inject, onScopeDispose, ref } from 'vue';
+import { computed, inject, onMounted, onScopeDispose, ref } from 'vue';
+import { ArrowLeft, ArrowLeftToLine, ArrowRightToLine, Forward, Pause, Play, RotateCcw, ScissorsLineDashed, X } from '@lucide/vue';
 import { RECORDING_SHARE } from '../../recording/useRecordingShare';
-import MediaVideoSurface from '../MediaVideoSurface.vue';
-import InlineFeedback from '../InlineFeedback.vue';
-import { useBackdropDismiss } from '../useBackdropDismiss';
+import { recordingTime } from '../../recording/recordingTime';
 import { keepDialogFocus } from '../dialogFocus';
+import InlineFeedback from '../InlineFeedback.vue';
+import RecordingTimeline from './RecordingTimeline.vue';
+import RecordingTool from './RecordingTool.vue';
 
 const props = defineProps<{ source: string; entry: RecordingLibraryEntry }>();
-const emit = defineEmits<{ close: []; external: []; saved: [] }>();
+const emit = defineEmits<{ back: []; close: []; external: []; saved: [clip: RecordingLibraryEntry] }>();
 const share = inject(RECORDING_SHARE);
-const surface = ref<InstanceType<typeof MediaVideoSurface> | null>(null);
+const desktop = window.lycanDesktop;
+const player = ref<HTMLVideoElement | null>(null);
+const timeline = ref<InstanceType<typeof RecordingTimeline> | null>(null);
+const workspace = ref<HTMLElement | null>(null);
+const confirmation = ref<HTMLDialogElement | null>(null);
+const destination = ref<'back' | 'close'>('back');
 const failed = ref(false);
 const editing = ref(false);
+const playing = ref(false);
 const duration = ref(0);
+const aspectRatio = ref(16 / 9);
+const cursor = ref(0);
 const start = ref(0);
 const end = ref(0);
+const rate = ref(0);
 const busy = ref(false);
 const progress = ref(0);
 const error = ref('');
-const saved = ref<RecordingLibraryEntry | null>(null);
-const previewingRange = ref(false);
-const desktop = window.lycanDesktop;
+const title = computed(() => (props.entry.applicationName || '未命名') + ' · ' + ({ recording: '录制', replay: '回放', clip: '剪辑' }[props.entry.kind ?? 'recording']));
+const lastTime = computed(() => Math.min(duration.value, cursor.value + (rate.value ? 1 / rate.value : 0)));
+const minLength = 0.1; // 桌面导出器的最短片段为 100 ms。
+const validRange = computed(() => Math.round(end.value * 1000) - Math.round(start.value * 1000) >= 100);
 let requestId = '';
 let disposed = false;
+let animation = 0;
 let seekTimer: ReturnType<typeof setTimeout> | undefined;
 let seekTarget: number | null = null;
-let seekingVideo: HTMLVideoElement | undefined;
 function cancelSeek() {
   clearTimeout(seekTimer); seekTimer = undefined; seekTarget = null;
-  seekingVideo?.removeEventListener('seeked', flushSeek); seekingVideo = undefined;
+  player.value?.removeEventListener('seeked', flushSeek);
 }
 function flushSeek() {
   clearTimeout(seekTimer); seekTimer = undefined;
-  const video = surface.value?.player;
-  if (!video || seekTarget === null) { cancelSeek(); return; }
-  // 未完成的寻帧不反复打断，只保留最新目标；松手后的最终位置仍精确应用。
-  if (video.seeking) {
-    if (seekingVideo !== video) {
-      seekingVideo?.removeEventListener('seeked', flushSeek);
-      seekingVideo = video; video.addEventListener('seeked', flushSeek, { once: true });
-    }
-    return;
-  }
-  const target = seekTarget;
+  const video = player.value;
+  if (!video || seekTarget === null) return;
+  if (video.seeking) { video.addEventListener('seeked', flushSeek, { once: true }); return; }
+  const seconds = seekTarget;
   cancelSeek();
-  video.currentTime = target;
+  video.currentTime = seconds;
 }
-const rangeStyle = computed(() => ({ '--start': `${start.value / duration.value * 100}%`, '--end': `${end.value / duration.value * 100}%` }));
-const unsubscribe = desktop?.onRecordingClipProgress?.(event => { if (event.requestId === requestId) progress.value = event.percent; });
+function seek(seconds: number, precise: boolean) {
+  player.value?.pause();
+  cursor.value = seconds;
+  seekTarget = seconds;
+  if (precise) flushSeek();
+  else if (seekTimer === undefined) seekTimer = setTimeout(flushSeek, 80);
+}
 function metadata(seconds: number) {
   if (!Number.isFinite(seconds) || seconds <= 0) return;
-  duration.value = seconds; end.value = seconds;
+  if (player.value?.videoHeight) aspectRatio.value = player.value.videoWidth / player.value.videoHeight;
+  duration.value = seconds;
+  if (!editing.value) end.value = seconds;
 }
-function seekRange(edge: 'start' | 'end', precise = false) {
-  saved.value = null;
-  previewingRange.value = false;
-  if (!Number.isFinite(start.value)) start.value = 0;
-  if (!Number.isFinite(end.value)) end.value = duration.value;
-  if (edge === 'start') start.value = Math.max(0, Math.min(start.value, end.value - 0.1));
-  else end.value = Math.min(duration.value, Math.max(end.value, start.value + 0.1));
-  const video = surface.value?.player;
-  if (video) {
-    video.pause(); seekTarget = edge === 'start' ? start.value : end.value;
-    if (precise) flushSeek();
-    else if (seekTimer === undefined && !seekingVideo) seekTimer = setTimeout(flushSeek, 80);
+function endFrame() {
+  return Math.max(start.value, end.value - (rate.value ? 1 / rate.value : 0));
+}
+function snap(seconds: number) {
+  return rate.value ? Math.round(seconds * rate.value) / rate.value : seconds;
+}
+function position(marker: 'cursor' | 'start' | 'end', seconds: number, precise: boolean) {
+  if (busy.value) return;
+  const time = Math.max(0, Math.min(duration.value, snap(seconds)));
+  if (marker === 'start') {
+    start.value = Math.min(time, Math.max(0, end.value - minLength));
+    seek(start.value, precise);
+  } else if (marker === 'end') {
+    end.value = Math.min(duration.value, Math.max(time, start.value + minLength));
+    seek(endFrame(), precise);
+  } else seek(time, precise);
+}
+function stopAtCursor() {
+  const video = player.value;
+  if (video && !video.paused) {
+    cursor.value = video.currentTime;
+    video.pause();
   }
 }
-function reset() { cancelSeek(); start.value = 0; end.value = duration.value; saved.value = null; seekRange('start', true); }
-function previewRange() {
-  cancelSeek();
-  const video = surface.value?.player;
-  if (video) { video.currentTime = start.value; previewingRange.value = true; void video.play().catch(() => { error.value = '暂时无法播放，请重试。'; }); }
+function edit() {
+  stopAtCursor();
+  const frame = rate.value ? Math.floor(cursor.value * rate.value + 1e-6) / rate.value : cursor.value;
+  start.value = Math.max(0, Math.min(frame, duration.value - minLength));
+  end.value = Math.min(duration.value, start.value + 12);
+  editing.value = true;
+  seek(start.value, true);
+  workspace.value?.focus();
 }
-function timeChanged(seconds: number) {
-  if (previewingRange.value && seconds >= end.value) { surface.value?.player?.pause(); previewingRange.value = false; }
+function mark(edge: 'start' | 'end') {
+  stopAtCursor();
+  const time = Math.min(duration.value, snap(cursor.value));
+  if (edge === 'start' && end.value - time >= minLength) start.value = time;
+  if (edge === 'end' && lastTime.value - start.value >= minLength) end.value = Math.min(duration.value, snap(lastTime.value));
 }
-function shareRecording(entry: RecordingLibraryEntry) {
-  cancelSeek();
-  surface.value?.player?.pause();
-  previewingRange.value = false;
-  share?.select(entry);
+function step(marker: 'cursor' | 'start' | 'end', direction: number) {
+  if (busy.value || !duration.value) return;
+  if (player.value && !player.value.paused) {
+    stopAtCursor();
+    if (rate.value) seek(Math.floor(cursor.value * rate.value + 1e-6) / rate.value, true);
+    return;
+  }
+  if (!rate.value) { error.value = '未能读取录像帧率，暂时无法逐帧定位。'; return; }
+  const current = marker === 'start' ? start.value : marker === 'end' ? end.value : cursor.value;
+  const next = Math.max(0, Math.min(duration.value, (Math.round(current * rate.value) + direction) / rate.value));
+  timeline.value?.reveal(next);
+  position(marker, next, true);
 }
-async function save(andShare = false) {
-  if (!desktop || busy.value) return;
+function play(fromStart = false) {
+  const video = player.value;
+  if (!video || busy.value || failed.value) return;
+  if (!fromStart && !video.paused) { stopAtCursor(); return; }
+  const target = editing.value && (fromStart || cursor.value < start.value || cursor.value >= endFrame())
+    ? start.value : cursor.value >= duration.value ? 0 : cursor.value;
   cancelSeek();
-  if (saved.value) { if (andShare) shareRecording(saved.value); return; }
-  surface.value?.player?.pause();
-  requestId = crypto.randomUUID(); busy.value = true; error.value = ''; progress.value = 0;
+  timeline.value?.reveal(target);
+  video.currentTime = target;
+  void video.play().catch(reason => {
+    if (!disposed && reason.name !== 'AbortError') error.value = '暂时无法播放，请重试。';
+  });
+}
+function syncClock() {
+  const video = player.value;
+  if (!video || video.seeking || seekTarget !== null) return;
+  if (editing.value && !video.paused && video.currentTime >= end.value) seek(endFrame(), true);
+  else cursor.value = video.currentTime;
+}
+function animate() {
+  syncClock();
+  if (player.value && !player.value.paused) animation = requestAnimationFrame(animate);
+}
+function playbackChanged() {
+  cancelAnimationFrame(animation);
+  playing.value = !!player.value && !player.value.paused;
+  if (playing.value) animate();
+}
+function cancelEdit() {
+  stopAtCursor(); cancelSeek(); editing.value = false; start.value = 0; end.value = duration.value; error.value = '';
+  workspace.value?.focus();
+}
+function leave(to: 'back' | 'close') {
+  if (busy.value) return;
+  stopAtCursor(); destination.value = to;
+  if (editing.value && (start.value > 0 || end.value < duration.value)) confirmation.value?.showModal();
+  else finishLeave();
+}
+function finishLeave() {
+  if (destination.value === 'back') emit('back'); else emit('close');
+}
+function keys(event: KeyboardEvent) {
+  if (confirmation.value?.open || event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return;
+  if (event.key === 'Escape') { event.stopPropagation(); leave('back'); }
+  else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    event.preventDefault(); step('cursor', event.key === 'ArrowLeft' ? -1 : 1);
+  } else if (event.code === 'Space' && !(event.target as HTMLElement).closest('button')) {
+    event.preventDefault(); if (!event.repeat) play();
+  }
+}
+function shareRecording() { stopAtCursor(); cancelSeek(); share?.select(props.entry); }
+const unsubscribe = desktop?.onRecordingClipProgress?.(event => { if (event.requestId === requestId) progress.value = event.percent; });
+async function save() {
+  if (!desktop || busy.value || !validRange.value) return;
+  stopAtCursor(); cancelSeek(); busy.value = true; error.value = ''; progress.value = 0;
+  requestId = crypto.randomUUID();
   try {
     const clip = await desktop.exportRecordingClip(requestId, props.entry.id, Math.round(start.value * 1000), Math.round(end.value * 1000));
-    if (disposed) return;
-    saved.value = clip; emit('saved');
-    if (andShare) shareRecording(clip);
+    if (!disposed) emit('saved', clip);
   } catch (reason) {
     if (!disposed) error.value = reason instanceof Error ? reason.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : '片段保存失败，请重试。';
-  } finally { if (!disposed) { busy.value = false; requestId = ''; } }
+  } finally { requestId = ''; if (!disposed) busy.value = false; }
 }
-onScopeDispose(() => { disposed = true; cancelSeek(); unsubscribe?.(); if (requestId) void desktop?.cancelRecordingClip(requestId).catch(() => {}); });
-const backdropEvents = useBackdropDismiss(() => emit('close'));
+async function cancelSave() {
+  try { await desktop?.cancelRecordingClip(requestId); }
+  catch { if (!disposed) error.value = '未能取消保存，请重试。'; }
+}
+function playbackFailed() { failed.value = true; player.value?.pause(); }
+onMounted(async () => {
+  workspace.value?.focus();
+  try {
+    const fps = await desktop?.getRecordingFrameRate(props.entry.id);
+    if (!disposed && fps && Number.isFinite(fps) && fps > 0) rate.value = fps;
+  } catch { /* 仍可按时间拖动和导出；逐帧操作会提示缺少帧率。 */ }
+});
+onScopeDispose(() => {
+  disposed = true; cancelSeek(); unsubscribe?.(); cancelAnimationFrame(animation);
+  const video = player.value;
+  if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
+  if (requestId) void cancelSave();
+});
 </script>
 
 <template>
-  <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="emit('close')">
-    <section class="media-viewer-shell" role="dialog" aria-modal="true" aria-label="录像预览" tabindex="-1" @keydown="keepDialogFocus">
-      <MediaVideoSurface ref="surface" :source="source" :class="{ 'is-editing': editing }" @metadata="metadata" @time="timeChanged" @close="emit('close')" @error="failed = true">
-        <template #controls>
-          <div class="recording-preview-controls">
-            <template v-if="editing">
-              <div class="clip-range" :style="rangeStyle">
-                <span />
-                <input v-model.number="start" aria-label="片段起点" type="range" min="0" :max="duration" step="0.01" :disabled="busy" @input="seekRange('start')" @change="seekRange('start', true)" />
-                <input v-model.number="end" aria-label="片段终点" type="range" min="0" :max="duration" step="0.01" :disabled="busy" @input="seekRange('end')" @change="seekRange('end', true)" />
-              </div>
-              <div class="clip-time-fields">
-                <label>起点 <input v-model.number="start" type="number" min="0" :max="end - 0.1" step="0.1" :disabled="busy" @change="seekRange('start', true)" /> 秒</label>
-                <label>终点 <input v-model.number="end" type="number" :min="start + 0.1" :max="duration" step="0.1" :disabled="busy" @change="seekRange('end', true)" /> 秒</label>
-                <span>{{ (end - start).toFixed(1) }} 秒</span>
-              </div>
-              <InlineFeedback :message="error" :pending="busy ? `正在保存片段 ${progress}%…` : ''" />
-              <p v-if="saved" class="clip-saved">片段已保存到本地录像管理器。</p>
-            </template>
-            <div class="clip-actions">
-              <template v-if="editing">
-                <button v-if="busy" @click="desktop?.cancelRecordingClip(requestId)">取消保存</button>
-                <button v-else @click="cancelSeek(); editing = false; error = ''; previewingRange = false">返回</button>
-                <button :disabled="busy" @click="reset">重置</button>
-                <button :disabled="busy" @click="previewRange">预览片段</button>
-                <span class="clip-action-spacer" />
-                <button :disabled="busy || !!saved" @click="save()">保存片段</button>
-                <button class="confirm-button" :disabled="busy" @click="save(true)">{{ saved ? '分享片段' : '保存并分享' }}</button>
-              </template>
-              <template v-else>
-                <button :disabled="failed || duration < 0.1" @click="editing = true">剪辑</button>
-                <button @click="shareRecording(entry)">分享到群聊</button>
-              </template>
-            </div>
-          </div>
-        </template>
-      </MediaVideoSurface>
-      <div v-if="failed" class="media-viewer-feedback" role="alert">暂时无法预览这个录像。<button type="button" @click="emit('external')">使用系统播放器</button></div>
-    </section>
-  </div>
+  <section ref="workspace" class="recording-workspace" role="dialog" aria-modal="true" aria-label="录像预览" tabindex="-1" @keydown="keepDialogFocus($event); keys($event)">
+    <RecordingTool label="关闭录像管理" class="close" :disabled="busy" @click="leave('close')"><X :size="24" /></RecordingTool>
+    <div class="stage">
+      <video v-if="!failed" ref="player" :src="source" :style="{ '--ratio': aspectRatio }" preload="metadata" playsinline @click="play()" @play="playbackChanged"
+        @pause="playbackChanged" @timeupdate="syncClock" @ended="playbackChanged" @error="playbackFailed"
+        @loadedmetadata="player?.videoWidth ? metadata(player.duration) : playbackFailed()" />
+      <div v-else>暂时无法预览这个录像。<button @click="emit('external')">使用系统播放器</button></div>
+    </div>
+    <div class="dock">
+      <InlineFeedback :message="error" :pending="busy ? `正在保存片段 ${progress}%…` : ''" />
+      <div class="info"><strong>{{ title }}</strong><span>{{ new Date(entry.createdAt).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}</span>
+        <span v-if="editing" class="length">成片 {{ recordingTime(end - start, true) }}</span><span class="clock">{{ recordingTime(cursor, editing) }} / {{ recordingTime(duration) }}</span></div>
+      <RecordingTimeline ref="timeline" :duration="duration" :cursor="cursor" :start="start" :end="end" :editing="editing" :disabled="busy || failed" @position="position" @step="step" />
+      <div class="tools">
+        <RecordingTool label="返回录像列表" class="back" :disabled="busy" @click="leave('back')"><ArrowLeft :size="18" /></RecordingTool>
+        <div class="center">
+          <RecordingTool v-if="editing" label="从选区开头播放" class="restart" :disabled="busy" @click="play(true)"><RotateCcw :size="18" /></RecordingTool>
+          <RecordingTool v-if="editing" label="设为起点" :disabled="busy || end - cursor < minLength" @click="mark('start')"><ArrowLeftToLine :size="18" /></RecordingTool>
+          <RecordingTool v-else label="剪辑" :disabled="failed || duration < minLength" @click="edit"><ScissorsLineDashed :size="19" /></RecordingTool>
+          <RecordingTool :label="playing ? '暂停' : editing ? '播放选段' : '播放'" :disabled="busy || failed || !duration" @click="play()"><component :is="playing ? Pause : Play" :size="16" fill="currentColor" /></RecordingTool>
+          <RecordingTool v-if="editing" label="设为终点" :disabled="busy || lastTime - start < minLength" @click="mark('end')"><ArrowRightToLine :size="18" /></RecordingTool>
+          <RecordingTool v-else label="分享到群聊" @click="shareRecording"><Forward :size="19" /></RecordingTool>
+        </div>
+        <div v-if="editing" class="actions"><button @click="busy ? cancelSave() : cancelEdit()">{{ busy ? '取消保存' : '取消' }}</button>
+          <button class="confirm-button" :disabled="busy || !validRange" @click="save">保存片段</button></div>
+      </div>
+    </div>
+    <dialog ref="confirmation" class="discard" @keydown.esc.stop>
+      <h3>选区尚未保存</h3><p>放弃这次选区并{{ destination === 'back' ? '返回录像列表' : '关闭录像管理' }}？</p>
+      <footer><button autofocus @click="confirmation?.close()">继续编辑</button><button @click="finishLeave">放弃并{{ destination === 'back' ? '返回' : '关闭' }}</button></footer>
+    </dialog>
+  </section>
 </template>
 
 <style scoped>
-.recording-preview-controls { position: absolute; bottom: 20px; left: min(72px, 6vw); right: min(72px, 6vw); display: grid; gap: 10px; }
-.clip-actions { display: flex; gap: 8px; justify-content: center; align-items: center; }
-.clip-action-spacer { flex: 1; }
-.is-editing :deep(.media-video-stage) { bottom: 230px; }
-.clip-range { position: relative; height: 26px; }
-.clip-range > span { position: absolute; inset: 10px 0; border-radius: 4px; background: linear-gradient(to right, var(--border) var(--start), var(--accent) var(--start), var(--accent) var(--end), var(--border) var(--end)); }
-.clip-range input { position: absolute; inset: 0; width: 100%; margin: 0; appearance: none; background: transparent; pointer-events: none; }
-.clip-range input::-webkit-slider-thumb { pointer-events: auto; appearance: none; width: 12px; height: 26px; border-radius: 3px; background: var(--text); cursor: ew-resize; }
-.clip-time-fields { display: flex; gap: 20px; align-items: center; color: var(--muted); font-size: 13px; }
-.clip-time-fields input { width: 86px; height: 32px; box-sizing: border-box; border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; background: var(--background); color: var(--text); }
-.clip-saved { margin: 0; font-size: 13px; color: var(--muted); }
+.recording-workspace { position: fixed; inset: 0; z-index: 1; box-sizing: border-box; display: grid; grid-template-rows: minmax(0,1fr) auto; gap: 12px; padding: 60px min(72px,6vw) 27px; background: #080a0c; color: var(--text); outline: none; }
+.stage { min-height: 0; display: grid; place-items: center; container-type: size; }
+video { display: block; width: min(100cqw, calc(100cqh * var(--ratio))); height: auto; max-width: 100cqw; max-height: 100cqh; border-radius: 8px; object-fit: contain; cursor: pointer; }
+.close { position: absolute; top: 18px; right: 18px; border-radius: 50%; background: #171c22; }
+.close :deep(.tool-tag) { left: auto; right: 0; transform: none; }
+.dock { min-width: 0; }.info { display: flex; align-items: baseline; gap: 12px; min-height: 20px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.info strong { font-size: 14px; font-weight: 550; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.info span { white-space: nowrap; }.length,.clock { margin-left: auto; }.length + .clock { margin-left: 0; }
+.tools { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); align-items: center; }
+.back { justify-self: start; }.back :deep(.tool-tag) { left: 0; transform: none; }
+.center,.actions { display: flex; align-items: center; }.center { grid-column: 2; position: relative; border-radius: 6px; background: #171c22; }
+.restart { position: absolute; right: calc(100% + 5px); background: #171c22; }
+.actions { justify-self: end; gap: 6px; }.actions button { padding: 5px 10px; }
+.actions .confirm-button:enabled { background: var(--accent); color: white; border-color: var(--accent); }
+.discard { padding: 20px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); }.discard::backdrop { background: #080a0cc9; }.discard h3 { margin: 0; }.discard footer { display: flex; justify-content: flex-end; gap: 8px; }
+@media(max-width:600px) { .recording-workspace { padding: 52px 14px 26px; }.info strong + span { display: none; }.tools { grid-template-rows: 42px 34px; }.center { grid-row: 1; }.back { grid-row: 2; }.actions { grid-column: 2/-1; grid-row: 2; } }
 </style>

@@ -87,10 +87,16 @@ struct Clip {
     }
     if (result != AVERROR(EAGAIN) && result != AVERROR_EOF) check(result);
   }
-  void run(const std::string &source, const std::string &destination) {
+  AVRational open_video(const std::string &source) {
     check(avformat_open_input(&input, source.c_str(), nullptr, nullptr));
     check(avformat_find_stream_info(input, nullptr));
     video_index = av_find_best_stream(input, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0); check(video_index);
+    const auto rate = av_guess_frame_rate(input, input->streams[video_index], nullptr);
+    if (rate.num <= 0 || rate.den <= 0) throw std::runtime_error("Recording frame rate unavailable");
+    return rate;
+  }
+  void run(const std::string &source, const std::string &destination) {
+    const auto rate = open_video(source);
     audio_index = av_find_best_stream(input, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
     auto *source_video = input->streams[video_index];
     origin = input->start_time != AV_NOPTS_VALUE ? input->start_time / double(AV_TIME_BASE)
@@ -109,8 +115,7 @@ struct Clip {
     if (!video) throw std::bad_alloc();
     encoder->width = decoder->width & ~1; encoder->height = decoder->height & ~1;
     encoder->pix_fmt = AV_PIX_FMT_YUV420P; encoder->time_base = AVRational{1, 90000};
-    encoder->framerate = av_guess_frame_rate(input, source_video, nullptr);
-    if (encoder->framerate.num <= 0 || encoder->framerate.den <= 0) throw std::runtime_error("Recording frame rate unavailable");
+    encoder->framerate = rate;
     encoder->sample_aspect_ratio = decoder->sample_aspect_ratio;
     encoder->thread_count = 2;
     encoder->color_range = AVCOL_RANGE_MPEG;
@@ -171,8 +176,13 @@ struct Clip {
 int wmain(int argc, wchar_t **argv) {
   av_log_set_level(AV_LOG_ERROR);
   try {
-    if (argc != 5) throw std::runtime_error("Expected input output startMs endMs");
     Clip clip;
+    if (argc == 3 && std::wstring(argv[1]) == L"--frame-rate") {
+      const auto rate = clip.open_video(utf8(argv[2]));
+      std::cout << rate.num << ' ' << rate.den << std::endl;
+      return 0;
+    }
+    if (argc != 5) throw std::runtime_error("Expected input output startMs endMs");
     clip.begin = std::stod(argv[3]) / 1000; clip.end = std::stod(argv[4]) / 1000;
     if (!std::isfinite(clip.begin) || !std::isfinite(clip.end) || clip.begin < 0 || clip.end <= clip.begin)
       throw std::runtime_error("Invalid clip range");

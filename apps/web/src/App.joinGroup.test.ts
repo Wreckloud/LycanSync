@@ -25,6 +25,7 @@ function joining() {
     locallyLeftVoiceGroupId: { value: null as string | null },
     selectedGroupDetail: { value: null as { id: string } | null }, listening: { value: true },
     callSounds: { left: vi.fn(), joined: vi.fn() },
+    recentGroups: { mark: vi.fn() },
     rtc: { leave: vi.fn(async () => {}), join: vi.fn(async () => true) },
     findGroup: vi.fn(async (id: string) => ({ id })), props: { user: { id: 'user' } },
     loadEntranceSound: vi.fn(() => null), refreshGroups: vi.fn(),

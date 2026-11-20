@@ -39,6 +39,15 @@ export function useRecordingLibrary() {
       if (!disposed && version === revision) notice.value = '无法读取录像列表，请检查安装目录的读写权限后重试。';
     } finally { if (!disposed && version === revision) loading.value = false; }
   }
+  async function updateDuration(entry: RecordingLibraryEntry, durationMs: number) {
+    const current = entries.value.find(item => item.id === entry.id);
+    if (!desktop || disposed || !current || current.durationMs !== null || current.state === 'recording'
+        || current.availability !== 'available' || !Number.isSafeInteger(durationMs) || durationMs <= 0) return;
+    const version = revision;
+    entries.value = entries.value.map(item => item.id === entry.id ? { ...item, durationMs } : item);
+    try { await desktop.updateRecordingDuration(entry.id, durationMs); }
+    catch { if (!disposed && version === revision) notice.value = '视频时长已读取，但未能保存到录像索引。'; }
+  }
   async function file(entry: RecordingLibraryEntry, action: 'play' | 'reveal' | 'delete' | 'relink' | 'clearUnavailable') {
     if (!desktop || pendingId.value || entry.state === 'recording') return;
     pendingId.value = entry.id; notice.value = '';
@@ -56,5 +65,5 @@ export function useRecordingLibrary() {
     } finally { if (!disposed) pendingId.value = ''; }
   }
   onScopeDispose(() => { disposed = true; revision++; });
-  return { kind, entries, hasMore, loading, pendingId, notice, load, file };
+  return { kind, entries, hasMore, loading, pendingId, notice, load, file, updateDuration };
 }

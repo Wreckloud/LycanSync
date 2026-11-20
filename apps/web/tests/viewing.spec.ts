@@ -163,6 +163,23 @@ async function sharing(page: Page, ids: string[]) {
   await page.evaluate((identities) => (window as unknown as { __viewingTest: { sharing(ids: string[]): void } }).__viewingTest.sharing(identities), ids);
 }
 
+test('群头像短暂停留不弹标签，停满 300 毫秒才显示', async ({ page }) => {
+  const avatar = page.getByRole('button', { name: /^观看测试，/ });
+  const hint = page.getByRole('tooltip');
+  await page.clock.install({ time: new Date('2026-11-20T12:00:00Z') });
+  await page.clock.pauseAt(new Date('2026-11-20T12:00:01Z'));
+  const anchor = avatar.locator('..');
+  await anchor.dispatchEvent('pointerenter', { pointerType: 'mouse' });
+  await page.clock.runFor(250);
+  expect(await hint.count()).toBe(0);
+  await anchor.dispatchEvent('pointerleave');
+  await page.clock.runFor(100);
+  expect(await hint.count()).toBe(0);
+  await anchor.dispatchEvent('pointerenter', { pointerType: 'mouse' });
+  await page.clock.runFor(300);
+  await expect(hint).toHaveCount(1);
+});
+
 test('群头像提示在右侧进退，显示通话状态且不重复系统提示', async ({ page }) => {
   const joined = page.getByRole('button', { name: /^观看测试，/ });
   const other = page.getByRole('button', { name: /^另一群组，/ });
@@ -173,7 +190,8 @@ test('群头像提示在右侧进退，显示通话状态且不重复系统提�
   await expect(hint).toHaveText('观看测试 · 语音中');
   await expect.poll(() => hint.evaluate(element => getComputedStyle(element).opacity)).toBe('1');
   const anchor = (await joined.boundingBox())!, bounds = (await hint.boundingBox())!;
-  expect(bounds.x - anchor.x - anchor.width).toBeCloseTo(10, 0);
+  const rail = (await page.locator('.group-rail').boundingBox())!;
+  expect(bounds.x - rail.x - rail.width).toBeCloseTo(10, 0);
   expect(Math.abs(bounds.y + bounds.height / 2 - anchor.y - anchor.height / 2)).toBeLessThan(1);
   expect(await joined.getAttribute('aria-describedby')).toBe(await hint.getAttribute('id'));
   await page.screenshot({ path: test.info().outputPath('group-hover-hint.png') });
