@@ -45,7 +45,7 @@ export function useAudioShortcuts(userId: string, options: {
   let holdSequence = 0;
   let holdTimer: ReturnType<typeof setTimeout> | undefined;
   let holdResponseTimer: ReturnType<typeof setTimeout> | undefined;
-  const failure = '快捷键无法生效，可能已被其他程序占用。请修改或重新启用。';
+  const failure = '快捷键无法生效，可能已被其他程序占用，请重新设置快捷键。';
   try {
     const stored = storage.getItem(storageKey);
     if (stored !== null) {
@@ -105,14 +105,20 @@ export function useAudioShortcuts(userId: string, options: {
     }
   }
 
+  async function beginSession() {
+    if (!bridge) return;
+    const token = await bridge.begin();
+    if (disposed) { await bridge.end(token); return; }
+    owner = token;
+    holdSequence = 0;
+    await bridge.activate(token, options.roomId());
+  }
+
   const initialized = (async () => {
     if (!bridge) return;
     try {
-      const token = await bridge.begin();
-      if (disposed) { await bridge.end(token); return; }
-      owner = token;
-      await bridge.configure(token, bindings.value, voiceMode.value === 'pushToTalk');
-      if (!disposed) await bridge.activate(token, options.roomId());
+      await beginSession();
+      if (!disposed && owner) await bridge.configure(owner, bindings.value, voiceMode.value === 'pushToTalk');
     } catch { if (!disposed) error.value = failure; }
     finally { if (!disposed) ready.value = true; }
   })();
@@ -152,12 +158,14 @@ export function useAudioShortcuts(userId: string, options: {
   watch(options.roomId, () => { stopHold(); void activate(); }, { flush: 'sync' });
 
   async function startCapture(action: AudioShortcutAction) {
-    if (!bridge || !owner || !ready.value || busy.value) return;
+    if (!bridge || !ready.value || busy.value || disposed) return;
     const version = ++captureVersion;
     stopHold();
     capturing.value = action;
     busy.value = true;
     try {
+      if (!owner) await beginSession();
+      if (!owner || disposed || version !== captureVersion) return;
       await bridge.capture(owner, true);
       if (!disposed && version === captureVersion) { capturing.value = action; error.value = ''; }
       else await bridge.capture(owner, false);
@@ -206,24 +214,6 @@ export function useAudioShortcuts(userId: string, options: {
     finally { busy.value = false; }
   }
 
-  async function retry() {
-    if (!bridge || busy.value || disposed) return;
-    busy.value = true;
-    try {
-      if (!owner) {
-        const token = await bridge.begin();
-        if (disposed) { await bridge.end(token); return; }
-        owner = token;
-        holdSequence = 0;
-      }
-      stopHold();
-      await bridge.configure(owner, bindings.value, voiceMode.value === 'pushToTalk');
-      if (!disposed) { await bridge.activate(owner, options.roomId()); error.value = ''; }
-    }
-    catch { error.value = failure; }
-    finally { busy.value = false; }
-  }
-
   onScopeDispose(() => {
     disposed = true;
     stopHold();
@@ -231,5 +221,5 @@ export function useAudioShortcuts(userId: string, options: {
     if (owner) void bridge?.end(owner).catch(() => console.warn('audio shortcut cleanup failed'));
   });
   return { supported: Boolean(bridge), bindings, voiceMode, held, error, ready, busy, capturing,
-    startCapture, cancelCapture, setBinding, setVoiceMode, retry };
+    startCapture, cancelCapture, setBinding, setVoiceMode };
 }

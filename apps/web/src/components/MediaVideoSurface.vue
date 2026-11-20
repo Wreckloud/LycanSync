@@ -3,17 +3,18 @@ import { onMounted, onScopeDispose, ref } from 'vue';
 import { Download, X } from '@lucide/vue';
 
 defineProps<{ source: string; downloadable?: boolean; downloading?: boolean; bufferForPreview?: boolean }>();
-const emit = defineEmits<{ close: []; download: []; error: []; metadata: [duration: number]; time: [seconds: number]; buffered: [percent: number]; playable: [] }>();
+const emit = defineEmits<{ close: []; download: []; error: [code?: number]; metadata: [duration: number]; time: [seconds: number]; buffered: [percent: number]; playable: [] }>();
 const player = ref<HTMLVideoElement | null>(null);
 const aspectRatio = ref(16 / 9);
 const failed = ref(false);
 function playbackFailed() {
   if (failed.value) return;
   failed.value = true;
+  const code = player.value?.error?.code;
   player.value?.pause();
   player.value?.removeAttribute('src');
   player.value?.load();
-  emit('error');
+  emit('error', code);
 }
 function measureVideo() {
   const video = player.value;

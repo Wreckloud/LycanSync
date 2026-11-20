@@ -147,10 +147,12 @@ public class ChatFileMediaService {
     }
 
     static String videoFormat(String fileName) {
+        if (fileName.lastIndexOf('.') < 0) return null;
         String extension = fileName.substring(fileName.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
         return switch (extension) {
             case "mp4", "m4v", "mov", "3gp" -> "mov";
             case "mkv", "webm" -> "matroska";
+            case "avi" -> "avi";
             default -> null;
         };
     }
@@ -160,6 +162,7 @@ public class ChatFileMediaService {
         return switch (extension) {
             case "mp4", "m4v" -> "video/mp4";
             case "mov" -> "video/quicktime";
+            case "avi" -> "video/x-msvideo";
             case "3gp" -> "video/3gpp";
             case "mkv" -> "video/x-matroska";
             case "webm" -> "video/webm";

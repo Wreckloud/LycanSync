@@ -115,7 +115,20 @@ function createDiagnosticReportStore(directory) {
         return Buffer.byteLength(text);
       });
     },
-    previous: () => serialize(async () => (await previousReport())?.report ?? null),
+    all: () => serialize(async () => {
+      const reports = {};
+      const unavailable = [];
+      for (const [source, path] of Object.entries({ current, previous, lastScreenUsage: screenUsage })) {
+        try {
+          const saved = await read(path);
+          if (saved) reports[source] = saved.report;
+        } catch {
+          // 单份历史快照损坏时，仍导出其余报告，并在结果中注明缺失项。
+          unavailable.push(source);
+        }
+      }
+      return { reports, unavailable };
+    }),
     info: () => serialize(async () => {
       const saved = await previousReport();
       if (!saved) return null;

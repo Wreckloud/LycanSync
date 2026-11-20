@@ -83,7 +83,6 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
   let ready = false;
   let failed = false;
   let editing = false;
-  let preview = false;
   let settings = { ...DEFAULT_SETTINGS };
   let snapshot = { sequence: -1, roomId: null, status: 'hidden', members: [] };
   let portraits = new Map();
@@ -114,12 +113,12 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
 
   function view() {
     const connected = snapshot.status === 'connected';
-    const members = snapshot.members.map((member) => ({
+    const members = (snapshot.status === 'hidden' ? [] : snapshot.members).map((member) => ({
       ...member, speaking: connected && member.speaking,
       visible: settings.mode === 'all' || (connected && (member.speaking || (speakingUntil.get(member.identity) ?? 0) > Date.now())),
       avatar: portraits.get(member.identity) ?? '',
     }));
-    if (editing && preview) ['狼', 'wolf', '非常个性的昵称用户'].forEach((name, index) => members.push({
+    if (editing && snapshot.status === 'hidden') ['狼', 'wolf', '非常个性的昵称用户'].forEach((name, index) => members.push({
       identity: `overlay-preview-${index}`, name, microphone: true, listening: true, speaking: false, visible: true, avatar: '',
     }));
     // 按完整名单估算最长昵称宽度，说话状态切换不反复改变窗口宽度。
@@ -267,7 +266,6 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
   function clear() {
     owner = null;
     editing = false;
-    preview = false;
     failed = false;
     snapshot = { sequence: -1, roomId: null, status: 'hidden', members: [] };
     portraits.clear();
@@ -315,7 +313,6 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
       if (!settings.enabled || (next.displayId === null && settings.displayId !== null)) initialDisplay = defaultDisplay();
       if (!next.enabled) {
         editing = false;
-        preview = false;
         failed = false;
         snapshot = { ...snapshot, roomId: null, status: 'hidden', members: [] };
         portraits.clear();
@@ -352,12 +349,11 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
       scheduleSpeakingExpiry();
       refresh();
     },
-    edit(token, enabled, showPreview = false) {
+    edit(token, enabled) {
       requireOwner(token);
-      if (typeof enabled !== 'boolean' || typeof showPreview !== 'boolean') throw new Error('编辑状态无效');
+      if (typeof enabled !== 'boolean') throw new Error('编辑状态无效');
       if (failed && enabled) throw new Error('请先关闭覆盖再重新开启');
       editing = settings.enabled && enabled;
-      preview = editing && showPreview;
       editDisplay = settings.displayId;
       // 去掉编辑或测试名单后保留内容顶部和所靠边缘，不按新窗口高度重新居中。
       refresh(true);

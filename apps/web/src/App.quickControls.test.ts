@@ -28,7 +28,7 @@ function setup() {
     { sourceId: 'game', kind: 'window', windowId: '22', title: '原始窗口标题' },
   ].map(item => ({ ...item, kind: item.kind as 'window' | 'monitor', width: 640, height: 480, primary: false }));
   const state = {
-    computed, desktop: { isNativeWindowMinimized: vi.fn(async () => false), listNativeVideoSources: vi.fn(async () => ({ revision: 1, discoveryId: 'discovery', sources })),
+    computed, desktop: { listNativeVideoSources: vi.fn(async () => ({ revision: 1, discoveryId: 'discovery', sources })),
       getCurrentActivity: vi.fn(async (): Promise<DetectedActivity | null> => game),
       getNativeVideoSourceThumbnails: vi.fn(async () => []), prepareNativeVideoSource: vi.fn(async () => ({ prepared: true })), reportCapturePickerTiming: vi.fn() },
     captureRequest: ref<ReturnType<typeof useScreenShareSelection>['captureRequest']['value']>(null), currentActivity: ref<DetectedActivity | null>(game),
@@ -60,7 +60,7 @@ function setup() {
 it('直分享按窗口身份匹配，忽略名称并继承画质、光标和声音偏好', async () => {
   const f = setup();
   f.state.requestedGame = f.game;
-  expect(await f.app.requestNativeScreenSource(capabilities())).toEqual({ sourceId: 'game', quality: 'custom', customQuality: { resolution: 1440, fps: 60 },
+  expect(await f.app.requestNativeScreenSource(capabilities())).toEqual({ sourceId: 'game', discoveryId: 'discovery', quality: 'custom', customQuality: { resolution: 1440, fps: 60 },
     captureSettings: { hideCursor: true, hideBorder: false, windowMethod: 'auto' }, shareAudio: true });
   expect(f.state.captureRequest.value).toBeNull();
 });
@@ -124,14 +124,8 @@ it('未绑定入口进入设置但不再注入重复提示，不提前开启按�
   expect(f.state.audioShortcuts.setVoiceMode).toHaveBeenCalledWith('pushToTalk');
 });
 
-it('快速共享最小化游戏期间离开房间，恢复结果迟到不会开始共享', async () => {
+it('快速共享接受仍在本次游戏活动中的最小化窗口', async () => {
   const f = setup();
   f.sources[2]!.minimized = true;
-  let finish!: (minimized: boolean) => void;
-  f.state.desktop.isNativeWindowMinimized.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
-  const ready = f.resolve();
-  await vi.waitFor(() => expect(finish).toBeDefined());
-  f.state.connected.value = false;
-  finish(false);
-  expect(await ready).toBeNull();
+  expect(await f.resolve()).toMatchObject({ sourceId: 'game', discoveryId: 'discovery' });
 });

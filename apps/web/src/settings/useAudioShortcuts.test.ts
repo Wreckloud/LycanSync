@@ -77,7 +77,7 @@ it('单键和符号保存后可重新载入，与原组合键兼容', async () =
   }
 });
 
-it('初始化、切换发言模式及重试均传递可克隆配置并激活当前房间', async () => {
+it('初始化和切换发言模式传递可克隆配置，进房后激活当前房间', async () => {
   const f = fixture();
   try {
     await settle();
@@ -87,7 +87,6 @@ it('初始化、切换发言模式及重试均传递可克隆配置并激活当�
     await f.shortcuts.setVoiceMode('pushToTalk');
     expect(f.shortcuts.error.value).toBe('');
     f.room.value = 'room'; await settle();
-    await f.shortcuts.retry();
     expect(f.shortcuts.error.value).toBe('');
     expect(f.bridge.configure).toHaveBeenLastCalledWith('owner', {
       microphone: '', listening: '', pushToTalk: 'F2', replay: '',
@@ -167,6 +166,20 @@ it('全局事件只操作当前房间，录入期间不触发，释放后恢复�
   expect(f.shortcuts.error.value).toContain('占用');
   f.scope.stop(); await settle();
   expect(f.bridge.end).toHaveBeenCalledWith('owner');
+});
+
+it('初始化失败后直接录入新快捷键即可恢复', async () => {
+  const begin = vi.fn(async () => 'owner').mockRejectedValueOnce(new Error('unavailable'));
+  const f = fixture(begin);
+  try {
+    await settle();
+    expect(f.shortcuts.error.value).not.toBe('');
+    await f.shortcuts.startCapture('microphone');
+    await f.shortcuts.setBinding('microphone', 'Ctrl+M');
+    expect(f.bridge.capture).toHaveBeenCalledWith('owner', true);
+    expect(f.shortcuts.error.value).toBe('');
+    expect(f.shortcuts.bindings.value.microphone).toBe('Ctrl+M');
+  } finally { f.scope.stop(); }
 });
 
 it('录入未准备完成就离开时恢复原绑定', async () => {

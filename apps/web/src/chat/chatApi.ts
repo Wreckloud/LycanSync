@@ -124,7 +124,7 @@ export async function fileStates(groupId: string, ids: string[], signal: AbortSi
 }
 
 export async function sendFile(groupId: string, file: Pick<File, 'name' | 'size' | 'stream'>, content: string, uploadId: string, signal: AbortSignal,
-  onProgress: (loadedBytes: number) => void, messageId: string): Promise<ChatMessage> {
+  onProgress: (loadedBytes: number) => void, messageId: string, optimizeVideo = false): Promise<ChatMessage> {
   const body = trackBytes(file.stream(), onProgress);
   const response = await authenticatedFetch('/api/groups/' + encodeURIComponent(groupId) + '/files', {
     method: 'POST',
@@ -132,6 +132,7 @@ export async function sendFile(groupId: string, file: Pick<File, 'name' | 'size'
       Accept: 'application/json',
       'Content-Type': 'application/octet-stream',
       'X-File-Message': messageId,
+      ...(optimizeVideo ? { 'X-Optimize-Video': 'true' } : {}),
       'X-File-Name': headerText(file.name),
       'X-File-Size': String(file.size),
       'X-Upload-Id': uploadId,

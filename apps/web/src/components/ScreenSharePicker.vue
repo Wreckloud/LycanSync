@@ -36,7 +36,9 @@ const sources = computed(() => props.sources.filter((source) => source.type === 
 const quality = computed(() => screenShareQuality(props.quality, props.customQuality));
 const borderNotice = computed(() => {
   if (props.sourceType !== 'window' || captureSettings.value.windowMethod === 'game') return '';
-  if (borderSupport.value === false) return '共享此窗口时，Windows 会显示系统边框。';
+  if (borderSupport.value === false) return captureSettings.value.windowMethod === 'window'
+    ? '共享此窗口时，Windows 会显示系统边框。'
+    : '自动模式下，部分窗口支持无框采集，其他窗口可能会显示系统边框。';
   return '共享此窗口时会尽量隐藏系统边框；受系统或权限限制时仍可能显示。';
 });
 const canConfirm = computed(() => props.audioReady && !props.audioFailed && !props.error && !settingsError.value
@@ -128,7 +130,7 @@ defineExpose({ sourcesElement });
           <button v-for="source in sources" :key="source.id" type="button" :aria-label="source.name"
             :data-source-id="source.id" :aria-pressed="selectedId === source.id" @click="emit('choose', source.id)">
             <span class="capture-source-preview"><img v-if="source.thumbnail" :src="source.thumbnail" alt="" @load="emit('previewLoaded', source.id)" />
-              <span v-else class="capture-source-placeholder"><span v-if="source.minimized">切回游戏后开始</span><Monitor v-else :size="32" /></span>
+              <span v-else class="capture-source-placeholder"><span v-if="source.minimized">窗口已最小化</span><Monitor v-else :size="32" /></span>
               <span v-if="selectedId === source.id" class="capture-source-selected" aria-hidden="true">✓</span></span>
             <span class="capture-source-name">{{ source.name }}</span>
           </button>

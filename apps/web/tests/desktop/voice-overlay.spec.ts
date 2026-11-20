@@ -11,7 +11,7 @@ declare global {
     manager: {
       configure(owner: string, settings: VoiceOverlaySettings): void;
       update(owner: string, snapshot: VoiceOverlaySnapshot): void;
-      edit(owner: string, enabled: boolean, preview?: boolean): void;
+      edit(owner: string, enabled: boolean): void;
       clear(): void;
     };
   };
@@ -87,9 +87,9 @@ test('隔离覆盖页：真实协议与preload、说话展示、权限隔离、�
       .find(window => window.id !== global.voiceOverlayTest.mainId)!.getBounds());
     await application.evaluate(() => {
       const { manager, owner } = global.voiceOverlayTest;
-      manager.edit(owner, true, true);
+      manager.update(owner, { sequence: 2, roomId: null, status: 'hidden', members: [] });
     });
-    await expect(overlay.locator('.member')).toHaveCount(4);
+    await expect(overlay.locator('.member')).toHaveCount(3);
     for (const name of ['狼', 'wolf', '非常个性的昵称用户']) await expect(overlay.getByText(name, { exact: true })).toBeVisible();
     const geometry = await overlay.locator('.member').first().evaluate(element => {
       const avatar = element.querySelector('.avatar')!;
@@ -101,10 +101,11 @@ test('隔离覆盖页：真实协议与preload、说话展示、权限隔离、�
     });
     expect(geometry).toEqual({ avatarHeight: 35, nameHeight: 35, border: '0px', font: '18.75px', rowHeight: 43, defaultAvatar: true, frame: '0px' });
     await overlay.screenshot({ path: test.info().outputPath('overlay-test-members.png'), omitBackground: true });
-    await application.evaluate(() => {
+    await application.evaluate((_electron, next) => {
       const { manager, owner } = global.voiceOverlayTest;
+      manager.update(owner, { ...next, sequence: 3 });
       manager.edit(owner, false);
-    });
+    }, snapshot);
     await expect(overlay.locator('.member')).toHaveCount(1);
     expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
       .find(window => window.id !== global.voiceOverlayTest.mainId)!.getBounds())).toEqual(previous);
@@ -113,7 +114,7 @@ test('隔离覆盖页：真实协议与preload、说话展示、权限隔离、�
       const { manager, owner } = global.voiceOverlayTest;
       manager.edit(owner, false);
       manager.configure(owner, next);
-      manager.update(owner, { sequence: 2, roomId: 'synthetic-room', status: 'connected', members: [
+      manager.update(owner, { sequence: 4, roomId: 'synthetic-room', status: 'connected', members: [
         { identity: 'one', name: '测试成员', microphone: false, listening: true, speaking: false },
       ] });
     }, { ...settings, mode: 'speaking' as const });

@@ -1470,7 +1470,7 @@ test('游戏来源仍绑定已登记窗口，不接受整屏或丢失的实例�
 });
 
 test('普通窗口记录实际方式，不能中途换方式或伪造边框授权', async (context) => {
-  for (const borderChanged of [false, true]) {
+  for (const [captureMethod, borderChanged] of [['wgc-window', false], ['print-window', true]]) {
     const request = 'auto';
     const { manager, emit, captureDiagnostics, failures, captureCommands } = fixture(context);
     const target = { kind: 'window', windowId: '34567', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.34567', processCreationTime: '56789', processId: 123, requiresWindowCapture: false };
@@ -1478,7 +1478,6 @@ test('普通窗口记录实际方式，不能中途换方式或伪造边框授�
       { hideCursor: false, hideBorder: true, windowMethod: request });
     emit({ event: 'captureStarted', helperVersion: '32.2.2' });
     await started;
-    const captureMethod = 'wgc-window';
     const evidence = { event: 'captureEvidence', stage: 'configured', captureMethod,
       requestedMethod: request, borderAllowed: false, clientArea: true,
       adapterIndex: 0, sourceWidth: 0, sourceHeight: 0 };
@@ -1493,14 +1492,14 @@ test('普通窗口记录实际方式，不能中途换方式或伪造边框授�
   }
 });
 
-test('普通窗口只接受 WGC，收到其他方法后丢弃迟到帧', async context => {
+test('自动窗口可交付 PrintWindow 帧，采集中换成 WGC 后丢弃迟到帧', async context => {
   const f = fixture(context);
   const target = { kind: 'window', windowId: '34567', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.34567',
     processCreationTime: '56789', processId: 123, requiresWindowCapture: false };
   const starting = f.manager.start('window:7:0', 60, sessionId, target,
     { hideCursor: false, hideBorder: false, windowMethod: 'auto' });
   f.emit({ event: 'captureStarted', helperVersion: '32.2.2' }); await starting;
-  const evidence = { event: 'captureEvidence', stage: 'configured', captureMethod: 'wgc-window', requestedMethod: 'auto',
+  const evidence = { event: 'captureEvidence', stage: 'configured', captureMethod: 'print-window', requestedMethod: 'auto',
     borderAllowed: true, clientArea: true, adapterIndex: 0, sourceWidth: 320, sourceHeight: 180 };
   f.emit(evidence);
   const frame = { event: 'sharedTextureFrame', sessionId, slotIndex: 0, sourceHandleHex: '0000000000000001', pixelFormat: 'bgra',
@@ -1509,9 +1508,22 @@ test('普通窗口只接受 WGC，收到其他方法后丢弃迟到帧', async c
   f.emit(frame);
   assert.equal(f.frames.length, 1);
   assert.deepEqual(f.failures, []);
-  f.emit({ ...evidence, stage: 'sourceReady', captureMethod: 'bitblt-window' });
+  f.emit({ ...evidence, stage: 'sourceReady', captureMethod: 'wgc-window' });
   f.emit({ ...frame, slotIndex: 1, renderedFrames: 2, bridgeFrames: 2 });
   assert.equal(f.frames.length, 1);
+  assert.deepEqual(f.failures, ['obsCaptureProtocolEventInvalid']);
+});
+
+test('手动窗口采集拒绝 PrintWindow', async context => {
+  const f = fixture(context);
+  const target = { kind: 'window', windowId: '34567', lifetimeName: 'Local\\LycanSync.WindowLifetime.1.2.3.34567',
+    processCreationTime: '56789', processId: 123, requiresWindowCapture: false };
+  const starting = f.manager.start('window:7:0', 60, sessionId, target,
+    { hideCursor: false, hideBorder: false, windowMethod: 'window' });
+  f.emit({ event: 'captureStarted', helperVersion: '32.2.2' });
+  await starting;
+  f.emit({ event: 'captureEvidence', stage: 'configured', captureMethod: 'print-window', requestedMethod: 'window',
+    borderAllowed: true, clientArea: true, adapterIndex: 0, sourceWidth: 320, sourceHeight: 180 });
   assert.deepEqual(f.failures, ['obsCaptureProtocolEventInvalid']);
 });
 

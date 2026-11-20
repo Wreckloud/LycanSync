@@ -641,7 +641,7 @@ test('反复放大已加载图片复用原始内容，关闭后仅保留列表�
   expect(imageRequests).toBe(1);
 });
 
-test('群聊音视频可从名称、封面或文件卡图标打开同一查看器', async ({ page }) => {
+test('没有封面的群聊音视频使用紧凑文件行，名称可打开查看器', async ({ page }) => {
   await mockChatShell(page);
   const items = [fileMessage('A01', 'clip', '片段.mp4'), fileMessage('A02', 'sound', '录音.ogg')];
   await page.route('**/api/groups**', route => {
@@ -653,16 +653,12 @@ test('群聊音视频可从名称、封面或文件卡图标打开同一查看�
     return route.fulfill({ status: 503 });
   });
   await page.goto('/');
-  const emptyCover = page.locator('[data-message-id="A01"] .chat-inline-media');
-  const placeholder = emptyCover.locator('.chat-media-placeholder');
-  await expect(placeholder).toHaveCSS('background-image', 'none');
-  await expect(placeholder).toHaveCSS('background-color', await emptyCover.evaluate(el => getComputedStyle(el).backgroundColor));
-  await emptyCover.getByRole('button', { name: '播放视频' }).click({ trial: true });
-  await emptyCover.screenshot({ animations: 'disabled', path: test.info().outputPath('media-placeholder.png') });
+  const row = page.locator('[data-message-id="A01"] .chat-file-card');
+  await expect(row).toBeVisible();
+  await expect(row.locator('.chat-file-icon')).toHaveCount(0);
   for (const [name, target] of [
-    ['片段.mp4', page.getByRole('button', { name: '播放视频' })],
+    ['片段.mp4', page.getByRole('button', { name: '预览 片段.mp4' })],
     ['录音.ogg', page.getByText('录音.ogg', { exact: true })],
-    ['录音.ogg', page.locator('[data-message-id="A02"] .chat-file-icon')],
   ] as const) {
     await expect(target).toHaveCSS('cursor', 'pointer');
     await target.click();
@@ -789,12 +785,13 @@ test('服主修改单文件上限后，选中文件立即按新限额提示', as
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '服主管理', exact: true }).click();
+  await page.getByRole('button', { name: '高级配置', exact: true }).click();
   const fileLimit = page.getByLabel('单个文件上限（MiB）');
   await expect(fileLimit).toHaveValue('512');
   await fileLimit.fill('1');
   await page.getByRole('button', { name: '保存限额' }).click();
   await expect.poll(() => limits.maxFileBytes).toBe(1024 ** 2);
-  await page.locator('form.settings-block').filter({ has: fileLimit }).screenshot({ path: test.info().outputPath('file-upload-settings.png') });
+  await page.locator('form').filter({ has: fileLimit }).screenshot({ path: test.info().outputPath('file-upload-settings.png') });
   await page.reload();
   await page.locator('input[type=file]').setInputFiles({ name: 'oversize.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(2 * 1024 ** 2) });
   await expect(page.locator('.composer-shell').getByRole('alert')).toContainText('超过单文件上限 1 MiB');
@@ -802,7 +799,7 @@ test('服主修改单文件上限后，选中文件立即按新限额提示', as
   expect(uploads).toBe(0);
 });
 
-test('加号多选按原始字节和顺序发送，图片作为文件并只在第一条附带文字', async ({ page }) => {
+test('加号多选可勾选原件并按顺序发送，图片作为文件并只在第一条附带文字', async ({ page }) => {
   await mockChatShell(page);
   // 流式 fetch 在路由拦截器中没有 postData；仅旁读本用例两个小文件的流副本。
   await page.addInitScript(() => {
@@ -867,6 +864,7 @@ test('加号多选按原始字节和顺序发送，图片作为文件并只在�
     await page.keyboard.press('Escape');
     await expect(page.locator('.chat-photo-viewer')).toHaveCount(0);
   }
+  await page.locator('.composer-attachment').first().getByLabel('发送原文件').check();
   await page.locator('.composer').screenshot({ path: test.info().outputPath('compact-attachments.png') });
   await page.getByRole('button', { name: '发送消息' }).click();
   await expect(page.locator('.chat-file-media')).toHaveCount(2);
@@ -968,6 +966,7 @@ test('慢速录像先展示封面，两个客户端都按原顺序看到随后�
         return route.fulfill({ contentType: 'video/webm', body: video });
       }
       if (url.pathname.endsWith('/files') && request.method() === 'POST') {
+        expect(request.headers()['x-optimize-video']).toBe('true');
         await gate;
         delete messages[0].attachment!.transferStatus;
         return route.fulfill({ json: messages[0] });

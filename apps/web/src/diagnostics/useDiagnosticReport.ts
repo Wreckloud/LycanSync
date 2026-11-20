@@ -375,6 +375,7 @@ export function useDiagnosticReport(options: {
   const reason = ref('');
   const error = ref('');
   const saving = ref(false);
+  const exportStatus = ref('');
   const notes = ref('');
   const problemMarkers = ref<{ time: string; category: string; recording: boolean }[]>([]);
   const automaticEnabled = ref(false);
@@ -615,7 +616,7 @@ export function useDiagnosticReport(options: {
     const report = { kind: 'lycansync-diagnostics', schemaVersion: 14,
       startedAt: discardedSamples.value && exportedSamples.length ? exportedSamples[0].time : startedAt ?? new Date().toISOString(),
       endedAt: endedAt ?? new Date().toISOString(),
-      stopReason: recording.value && automaticRecording ? 'automaticSnapshot' : reason.value || 'automaticEvents',
+      stopReason: recording.value ? (automaticRecording ? 'automaticSnapshot' : 'manualSnapshot') : reason.value || 'automaticEvents',
       recordingMode: automaticRecording ? 'automatic' : 'manual',
       retention: { maxSamples: MAX_SAMPLES, maxDurationMs: MAX_DURATION_MS, maxSampleBytes: MAX_SAMPLE_BYTES,
         discardedSamples: discardedSamples.value },
@@ -732,15 +733,6 @@ export function useDiagnosticReport(options: {
     else await checkpoint(true);
   }
 
-  async function savePrevious() {
-    const bridge = window.lycanDesktop;
-    if (!bridge || disposed || saving.value) return;
-    saving.value = true; error.value = '';
-    try { await bridge.exportSavedDiagnosticReport(notes.value.slice(0, 2000)); }
-    catch { if (!disposed) error.value = '无法导出上次使用报告，请检查保存位置后重试。'; }
-    finally { saving.value = false; }
-  }
-
   async function clearSaved() {
     const bridge = window.lycanDesktop;
     if (!bridge || disposed || saving.value || recording.value) return;
@@ -766,17 +758,25 @@ export function useDiagnosticReport(options: {
     finally { saving.value = false; }
   }
 
-  async function save(notes: string) {
-    if (disposed || saving.value || (recording.value && !automaticRecording) || (!startedAt && !window.lycanDesktop)) return;
+  async function save(notes: string, chooseLocation = false) {
+    if (disposed || saving.value || (!startedAt && !window.lycanDesktop)) return;
     saving.value = true; error.value = '';
+    exportStatus.value = '';
     try {
       const text = await serializeDiagnosticReport(createReport(notes));
       if (disposed) return;
-      if (window.lycanDesktop) await window.lycanDesktop.exportDiagnosticReport(text);
-      else {
+      if (window.lycanDesktop) {
+        const result = await window.lycanDesktop.exportDiagnosticReport(text, chooseLocation);
+        if (result.saved && !disposed) {
+          const skipped = result.unavailableCount ? `（${result.unavailableCount} 份历史报告无法读取）` : '';
+          exportStatus.value = `已导出至 ${result.filePath}${skipped}`;
+        }
+      } else {
         const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
         const link = document.createElement('a'); link.href = url; link.download = 'LycanSync-diagnostics.json';
-        link.click(); setTimeout(() => URL.revokeObjectURL(url), 0);
+        link.click();
+        exportStatus.value = '报告已交给浏览器下载。';
+        setTimeout(() => URL.revokeObjectURL(url), 0);
       }
     } catch { if (!disposed) error.value = '无法导出诊断报告，请检查保存位置后重试。'; }
     finally { saving.value = false; }
@@ -796,5 +796,5 @@ export function useDiagnosticReport(options: {
   void refreshSavedReport();
   onScopeDispose(() => { stop('closed'); disposed = true; generation++; if (timer) clearInterval(timer); });
   return { latest, recording, automaticEnabled, discardedSamples, sampleCount, reason, error, saving, notes, problemMarkers, markProblem,
-    savedReport, savedSizeBytes, persistenceError, setViewing, setAutomatic, start, stop, save, savePrevious, clearSaved, beginClose, flush };
+    savedReport, savedSizeBytes, persistenceError, setViewing, setAutomatic, start, stop, save, exportStatus, clearSaved, beginClose, flush };
 }

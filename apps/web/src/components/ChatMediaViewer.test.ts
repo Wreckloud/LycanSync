@@ -23,14 +23,14 @@ function setup(imageMessage = false, desktop = false, previewBlob?: Blob, localS
   const videoPreviewStatus = vi.fn().mockResolvedValue({ status: 'ready', message: null });
   const fetchCompatibleVideo = vi.fn().mockResolvedValue(new Blob(['converted'], { type: 'video/mp4' }));
   const viewer = scope.run(() => runInNewContext(`${compiled}\n({load,close,source,error,player,convertVideo,playbackFailed,compatible,converting})`, {
-    ref, computed, watch, CHAT_TRANSFERS: Symbol(), inject: () => ({ downloads: new Map() }), onScopeDispose, onMounted: () => {}, defineEmits: () => emit,
+    ref, computed, watch, nextTick: async () => {}, CHAT_TRANSFERS: Symbol(), inject: () => ({ downloads: new Map() }), onScopeDispose, onMounted: () => {}, defineEmits: () => emit,
     defineProps: () => ({ groupId: 'group', imageMessage, previewBlob, localSource,
       attachment: { id: 'file', fileName: imageMessage ? 'test.png' : 'test.mp4', byteSize: 3, contentType: 'application/octet-stream' } }),
     desktopMediaUrl: (_group: string, _id: string, compatible: boolean) => desktop ? '/api/groups/group/files/file/' + (compatible ? 'preview/media' : 'media') : null, chatMediaFormat, useLoadingHint: () => ref(false), useBackdropDismiss: () => ({}),
     videoPreviewStatus, fetchCompatibleVideo, setTimeout, clearTimeout, Date,
     fetchAttachment, fetchFilePreview, downloadFile: vi.fn(), AbortController, Error, DOMException,
     URL: { createObjectURL, revokeObjectURL },
-  })) as { load(): Promise<void>; close(): void; convertVideo(): Promise<void>; playbackFailed(): void; compatible: { value: boolean }; converting: { value: boolean }; source: { value: string }; error: { value: string }; player: { value: unknown } };
+  })) as { load(): Promise<void>; close(): void; convertVideo(): Promise<void>; playbackFailed(code?: number): void; compatible: { value: boolean }; converting: { value: boolean }; source: { value: string }; error: { value: string }; player: { value: unknown } };
   return { scope, viewer, pending, createObjectURL, revokeObjectURL, fetchAttachment, fetchFilePreview, videoPreviewStatus, fetchCompatibleVideo, emit };
 }
 
@@ -55,6 +55,7 @@ it('关闭停止播放并释放 Blob，重新加载先释放上一份资源', as
     f.viewer.player.value = player;
     const retry = f.viewer.load();
     expect(f.revokeObjectURL).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(f.pending).toHaveLength(2));
     f.pending[1].resolve(new Blob(['second'])); await retry;
     f.viewer.close();
     expect(player.pause).toHaveBeenCalled();
@@ -117,15 +118,14 @@ it('待发送预览复用附件来源，失败不请求服务器，关闭不撤�
   }
 });
 
-it('正常加载和播放失败都不自动启动转码，点击后复用兼容文件', async () => {
+it('正常播放不转换，网络中断也不触发转码，解码失败自动准备兼容文件', async () => {
   const f = setup(false, true);
   await f.viewer.load();
   expect(f.videoPreviewStatus).not.toHaveBeenCalled();
-  f.videoPreviewStatus.mockResolvedValueOnce({ status: 'absent' });
+  f.viewer.playbackFailed(2);
+  expect(f.videoPreviewStatus).not.toHaveBeenCalled();
   f.viewer.playbackFailed();
   await new Promise(resolve => setTimeout(resolve, 0));
-  expect(f.videoPreviewStatus).toHaveBeenCalledWith('group', 'file', false, expect.any(AbortSignal));
-  await f.viewer.convertVideo();
   expect(f.videoPreviewStatus).toHaveBeenCalledWith('group', 'file', true, expect.any(AbortSignal));
   expect(f.viewer.source.value).toBe('/api/groups/group/files/file/preview/media');
   expect(f.viewer.compatible.value).toBe(true);
@@ -138,7 +138,7 @@ it('播放失败后自动复用已有兼容预览，不重新启动转换', asyn
   await f.viewer.load();
   f.viewer.playbackFailed();
   await new Promise(resolve => setTimeout(resolve, 0));
-  expect(f.videoPreviewStatus).toHaveBeenCalledExactlyOnceWith('group', 'file', false, expect.any(AbortSignal));
+  expect(f.videoPreviewStatus).toHaveBeenCalledExactlyOnceWith('group', 'file', true, expect.any(AbortSignal));
   expect(f.viewer.source.value).toBe('/api/groups/group/files/file/preview/media');
   f.scope.stop();
 });
@@ -164,7 +164,7 @@ it('转换未完成只轮询状态，失败可重试，不伪造成功', async (
     const conversion = f.viewer.convertVideo();
     await vi.advanceTimersByTimeAsync(1000); await conversion;
     expect(f.videoPreviewStatus.mock.calls.map(call => call[2])).toEqual([true, false]);
-    expect(f.viewer.error.value).toBe('无法转换');
+    expect(f.viewer.error.value).toBe('暂时无法播放，可重试或下载后打开。');
     expect(f.viewer.converting.value).toBe(false);
     expect(f.viewer.compatible.value).toBe(false);
     await f.viewer.convertVideo();

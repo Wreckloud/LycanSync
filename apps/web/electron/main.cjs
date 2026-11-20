@@ -647,6 +647,7 @@ async function serveApplication(request) {
           ...(groupFileMediaPath.test(url.pathname) && request.headers.has('Range') ? { Range: request.headers.get('Range') } : {}),
           ...(streamingUpload ? {
             ...(request.headers.has('X-File-Message') ? { 'X-File-Message': request.headers.get('X-File-Message') } : {}),
+            ...(request.headers.get('X-Optimize-Video') === 'true' ? { 'X-Optimize-Video': 'true' } : {}),
             'X-File-Name': request.headers.get('X-File-Name') || '',
             'X-File-Size': request.headers.get('X-File-Size') || '',
             'X-Upload-Id': request.headers.get('X-Upload-Id') || '',
@@ -966,29 +967,9 @@ ipcMain.handle('diagnostics:clear-saved', (event) => {
   diagnosticReportsGeneration++;
   return savedDiagnosticReports.clear();
 });
-ipcMain.handle('diagnostics:export-saved', async (event, notes) => {
+ipcMain.handle('diagnostics:export', async (event, text, chooseLocation = false) => {
   if (!trustedSender(event) || closing || diagnosticExportPending) throw new Error('当前不能导出诊断。');
-  if (typeof notes !== 'string' || notes.length > 2000) throw new Error('体验说明无效。');
-  diagnosticExportPending = true;
-  try {
-    const report = await savedDiagnosticReports.previous();
-    if (!report) throw new Error('尚无上次使用的诊断报告。');
-    if (!trustedSender(event) || closing) return { saved: false };
-    const exportDirectory = resolve(app.getPath('userData'), 'exports');
-    await mkdir(exportDirectory, { recursive: true });
-    if (!trustedSender(event) || closing) return { saved: false };
-    const result = await dialog.showSaveDialog(mainWindow, {
-      title: report.persistence?.retainedScreenUsage ? '导出最近共享与观看报告' : '导出上次使用报告', defaultPath: resolve(exportDirectory, `LycanSync-diagnostics-${Date.parse(report.endedAt)}.json`),
-      filters: [{ name: 'JSON 诊断报告', extensions: ['json'] }],
-    });
-    if (result.canceled || !result.filePath || !trustedSender(event) || closing) return { saved: false };
-    // 保留上次版本和事件时间，不把本次环境或启动事件混入历史报告。
-    await writeFile(result.filePath, JSON.stringify({ ...report, notes }), 'utf8');
-    return { saved: true };
-  } finally { diagnosticExportPending = false; }
-});
-ipcMain.handle('diagnostics:export', async (event, text) => {
-  if (!trustedSender(event) || closing || diagnosticExportPending) throw new Error('当前不能导出诊断。');
+  if (typeof chooseLocation !== 'boolean') throw new Error('导出选项无效。');
   const report = parseDiagnosticReport(text);
   diagnosticExportPending = true;
   try {
@@ -998,22 +979,28 @@ ipcMain.handle('diagnostics:export', async (event, text) => {
     const events = await readDiagnosticEvents(resolve(app.getPath('userData'), 'screen-share-error.log'),
       eventStartedAt, eventEndedAt);
     if (!trustedSender(event) || closing) return { saved: false };
+    const retained = await savedDiagnosticReports.all();
     const exportDirectory = resolve(app.getPath('userData'), 'exports');
-    await mkdir(exportDirectory, { recursive: true });
+    if (!chooseLocation) await mkdir(exportDirectory, { recursive: true });
     if (!trustedSender(event) || closing) return { saved: false };
-    const result = await dialog.showSaveDialog(mainWindow, {
-      title: '导出诊断报告', defaultPath: resolve(exportDirectory, `LycanSync-diagnostics-${Date.now()}.json`),
-      filters: [{ name: 'JSON 诊断报告', extensions: ['json'] }],
-    });
-    if (result.canceled || !result.filePath || !trustedSender(event) || closing) return { saved: false };
+    let filePath = resolve(exportDirectory, `LycanSync-diagnostics-${Date.now()}.json`);
+    if (chooseLocation) {
+      const result = await dialog.showSaveDialog(mainWindow, {
+        title: '导出全部报告', defaultPath: filePath, filters: [{ name: 'JSON 诊断报告', extensions: ['json'] }],
+      });
+      if (result.canceled || !result.filePath || !trustedSender(event) || closing) return { saved: false };
+      filePath = result.filePath;
+    }
     report.environment = { appVersion: app.getVersion(), electronVersion: process.versions.electron,
       platform: process.platform, arch: process.arch, osVersion: osRelease(), gpuFeatures: app.getGPUFeatureStatus(),
       gpuUtilization: null };
     report.events = events;
     report.eventWindow = { startedAt: new Date(eventStartedAt).toISOString(), endedAt: new Date(eventEndedAt).toISOString() };
     report.eventLimit = '最多读取当前及上一份日志各256KiB，保留本次启动至导出最近200项；不含异常正文';
-    await writeFile(result.filePath, JSON.stringify(report), 'utf8');
-    return { saved: true };
+    report.savedReports = retained.reports;
+    report.unavailableReports = retained.unavailable;
+    await writeFile(filePath, JSON.stringify(report), { encoding: 'utf8', flag: chooseLocation ? 'w' : 'wx' });
+    return { saved: true, filePath, unavailableCount: retained.unavailable.length };
   } finally { diagnosticExportPending = false; }
 });
 ipcMain.handle('presence:system-idle-state', (event) => {
@@ -1088,12 +1075,6 @@ ipcMain.handle('media:video-sources', async (event) => {
   recordSourceTiming('enumerateSources', startedAt, snapshot.sources.length);
   const gameWindows = currentActivity?.type === 'GAME' ? currentActivity.windowIds : undefined;
   return { ...snapshot, sources: snapshot.sources.filter(source => !source.minimized || gameWindows?.includes(source.windowId)) };
-});
-ipcMain.handle('media:video-source:minimized', async (event, sourceId, discoveryId) => {
-  if (!trustedSender(event) || closing || typeof sourceId !== 'string' || !/^window:[1-9]\d*:\d+$/.test(sourceId)
-      || !discoveryId || mediaHelper.videoSourceSnapshot?.state.discoveryId !== discoveryId) throw new Error('videoSourceExpired');
-  const target = await mediaHelper.inspectVideoSource(sourceId);
-  return target.minimized === true;
 });
 ipcMain.handle('media:video-source:prepare', (event, sourceId) => {
   if (!trustedSender(event) || closing || (sourceId !== null && (typeof sourceId !== 'string'
@@ -1175,9 +1156,10 @@ ipcMain.handle('settings:screen-share:support', (event) => {
   const build = process.platform === 'win32' ? Number(osRelease().split('.')[2]) : 0;
   return { hideCursor: build >= 19041, hideBorder: build >= 20348 };
 });
-ipcMain.handle('media:native-video:start', (event, sourceId, maxFps, settings, resolution) => {
+ipcMain.handle('media:native-video:start', (event, sourceId, maxFps, settings, resolution, discoveryId) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
   const startedAt = performance.now();
+  if (discoveryId !== undefined && discoveryId !== mediaHelper.videoSourceSnapshot?.state.discoveryId) throw new Error('videoSourceExpired');
   return nativeVideo.start(sourceId, maxFps, settings, resolution).catch(error => {
     void writeMediaDiagnostic({ stage: 'screenVideoStartFailed',
       code: String(error?.message ?? error).match(/(?:^|: )([a-z][A-Za-z0-9]{0,63})$/)?.[1],
@@ -1554,9 +1536,9 @@ ipcMain.handle('voice-overlay:update', (event, owner, snapshot) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
   voiceOverlay.update(owner, snapshot);
 });
-ipcMain.handle('voice-overlay:edit', (event, owner, enabled, preview = false) => {
+ipcMain.handle('voice-overlay:edit', (event, owner, enabled) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');
-  return voiceOverlay.edit(owner, enabled, preview);
+  return voiceOverlay.edit(owner, enabled);
 });
 ipcMain.handle('voice-overlay:end', (event, owner) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');

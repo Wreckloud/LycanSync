@@ -43,13 +43,17 @@ onScopeDispose(() => request?.abort());
 </script>
 
 <template>
-  <form class="settings-block" @submit.prevent="update(true)">
-    <h2>文件上传</h2>
+  <form class="upload-limits" @submit.prevent="update(true)">
+    <div class="settings-action-row">
+      <div><strong>群聊文件上传</strong>
+        <small>限制通过加号发送的文件和分享的录像。所有群聊共用这份容量，用满后将无法上传新文件。</small>
+      </div>
+    </div>
     <template v-if="saved">
       <label class="settings-action-row"><strong>单个文件上限（MiB）</strong>
         <span class="settings-field settings-control"><input v-model.number="fileMiB" type="number" min="0.000001" step="any" required :disabled="busy || leaving" /></span>
       </label>
-      <label class="settings-action-row"><strong>群聊文件总容量（GiB）</strong>
+      <label class="settings-action-row"><strong>所有群聊共用容量（GiB）</strong>
         <span class="settings-field settings-control"><input v-model.number="storageGiB" type="number" min="0.000001" step="any" required :disabled="busy || leaving" /></span>
       </label>
       <button type="submit" class="settings-button save-limits" :disabled="busy || leaving || !changed">保存限额</button>
@@ -60,5 +64,6 @@ onScopeDispose(() => request?.abort());
 </template>
 
 <style scoped>
+.upload-limits { display: grid; gap: 8px; }
 .save-limits { justify-self: end; }
 </style>

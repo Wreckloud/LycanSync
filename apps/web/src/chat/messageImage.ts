@@ -12,6 +12,15 @@ export class ChatImageError extends Error {
 export async function compressChatImage(file: File): Promise<File> {
   if (!ACCEPTED_TYPES.has(file.type)) throw new ChatImageError('目前仅支持 PNG 或 JPEG 图片。');
   if (file.size > MAX_COMPRESSED_SOURCE_BYTES) throw new ChatImageError('待压缩图片不能超过 10 MB。');
+  if (file.type === 'image/png') {
+    // APNG 的动画控制块位于首个图像块之前，Canvas 重绘会丢掉其余帧。
+    const chunks = new DataView(await file.arrayBuffer());
+    for (let offset = 8; offset + 12 <= chunks.byteLength; offset += 12 + chunks.getUint32(offset)) {
+      const type = chunks.getUint32(offset + 4);
+      if (type === 0x6163544c) throw new ChatImageError('请勾选“发送原文件”以保留动画。'); // acTL
+      if (type === 0x49444154) break; // IDAT
+    }
+  }
   let source: ImageBitmap;
   try {
     source = await createImageBitmap(file, { imageOrientation: 'from-image' });

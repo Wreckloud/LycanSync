@@ -371,7 +371,7 @@ describe('NativeScreenVideoSession', () => {
     });
     const ready = session.start('window:1:0');
     await Promise.resolve();
-    expect(desktop.startNativeVideo).toHaveBeenCalledWith('window:1:0', 30, captureSettings, { width: 1920, height: 1080 });
+    expect(desktop.startNativeVideo).toHaveBeenCalledWith('window:1:0', 30, captureSettings, { width: 1920, height: 1080 }, undefined);
     const sizes = [
       { width: 1920, height: 1080, displayWidth: 1920, displayHeight: 1088 },
       { width: 800, height: 1048, displayWidth: 1920, displayHeight: 1088 },
@@ -482,7 +482,7 @@ describe('NativeScreenVideoSession', () => {
     const frame = createFrame();
     dispatchFrame(target, frame, 'session-1');
     expect(await ready).toBe(track);
-    expect(started).toHaveBeenCalledWith('monitor:1:0', 30, { hideCursor: false, hideBorder: false }, { width: 1920, height: 1080 });
+    expect(started).toHaveBeenCalledWith('monitor:1:0', 30, { hideCursor: false, hideBorder: false }, { width: 1920, height: 1080 }, undefined);
     expect(frames).toEqual([frame]);
     expect(frame.close).toHaveBeenCalledOnce();
 
@@ -625,7 +625,7 @@ describe('NativeScreenVideoSession', () => {
     expect(writes).toEqual([first]);
 
     await ready;
-    expect(desktop.startNativeVideo).toHaveBeenCalledWith('window:1:0', maxFps, { hideCursor: false, hideBorder: false }, { width: 1920, height: 1080 });
+    expect(desktop.startNativeVideo).toHaveBeenCalledWith('window:1:0', maxFps, { hideCursor: false, hideBorder: false }, { width: 1920, height: 1080 }, undefined);
     expect(first.close).not.toHaveBeenCalled();
     finishWrite();
     await vi.waitFor(() => expect(first.close).toHaveBeenCalledOnce());
@@ -663,7 +663,7 @@ describe('NativeScreenVideoSession', () => {
     dispatchFrame(target, frame, 'quality-session');
     await ready;
     await vi.waitFor(() => expect(writes).toHaveLength(1));
-    expect(desktop.startNativeVideo).toHaveBeenCalledWith('window:1:0', maxFps, { hideCursor: false, hideBorder: false }, { width: 1280, height: 720 });
+    expect(desktop.startNativeVideo).toHaveBeenCalledWith('window:1:0', maxFps, { hideCursor: false, hideBorder: false }, { width: 1280, height: 720 }, undefined);
     expect(writes[0].displayWidth).toBe(1280);
     expect(writes[0].displayHeight).toBe(720);
     expect(frame.close).toHaveBeenCalledOnce();
@@ -879,7 +879,9 @@ describe('NativeScreenVideoSession', () => {
     expect(desktop.stopNativeVideo).toHaveBeenCalledWith('busy-session');
   });
 
-  it('首次最小化不提交占位，恢复后的真实画面才完成启动', async () => {
+  it.each([true, false])('最小化提示可启动，恢复后的真实首帧到达=%s', async receivesFrame => {
+    vi.useFakeTimers();
+    const onError = vi.fn();
     const target = installWindowMessageTarget();
     let finishStart!: (value: { sessionId: string; changed: boolean }) => void;
     let reportSuspension!: (status: { sessionId: string; suspended: boolean }) => void;
@@ -897,7 +899,7 @@ describe('NativeScreenVideoSession', () => {
     };
     const track = { stop: vi.fn() };
     const session = new NativeScreenVideoSession(desktop, {
-      maxFps: 30,
+      maxFps: 30, firstFrameTimeoutMs: 100, onError,
       createSuspendedFrame: () => pauseFrame,
       createGenerator: () => ({
         contentHint: '',
@@ -909,13 +911,21 @@ describe('NativeScreenVideoSession', () => {
     const ready = session.start('window:1:0');
     reportSuspension({ sessionId: 'early-session', suspended: true });
     finishStart({ sessionId: 'early-session', changed: true });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(pauseFrame.close).not.toHaveBeenCalled();
+    expect(await ready).toBe(track);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(onError).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(pauseFrame.close).toHaveBeenCalledOnce());
     expect(desktop.recordScreenShareStartupTiming).not.toHaveBeenCalled();
     reportSuspension({ sessionId: 'early-session', suspended: false });
-    dispatchFrame(target, createFrame(), 'early-session');
-    expect(await ready).toBe(track);
+    if (receivesFrame) dispatchFrame(target, createFrame(), 'early-session');
+    await vi.advanceTimersByTimeAsync(101);
+    if (receivesFrame) {
+      expect(desktop.recordScreenShareStartupTiming).toHaveBeenCalledWith('early-session', 'screenVideoFirstFrame', expect.any(Number));
+      expect(onError).not.toHaveBeenCalled();
+    } else {
+      expect(onError).toHaveBeenCalledWith('nativeVideoFirstFrameTimeout');
+      expect(desktop.recordScreenShareStartupTiming).not.toHaveBeenCalled();
+    }
     await session.stop();
   });
 

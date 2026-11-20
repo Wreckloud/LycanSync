@@ -127,13 +127,14 @@ public class ChatController {
             @RequestHeader(value = "X-Message-Content", required = false)
             @Parameter(description = "UTF-8 消息文字的 Base64 URL 编码") String content,
             @RequestHeader(value = "X-File-Message", required = false) UUID messageId,
+            @RequestHeader(value = "X-Optimize-Video", defaultValue = "false")
+            @Parameter(description = "生成可播放和下载的 MP4 文件") boolean optimizeVideo,
             HttpServletRequest request,
             @AuthenticationPrincipal AuthenticatedUser user
     ) throws IOException {
         return ResponseEntity.status(201).cacheControl(CacheControl.noStore())
-                .body(messageId == null ? chatFileService.upload(groupId, user, uploadId, encodedFileName, content, byteSize,
-                        request.getInputStream()) : chatFileService.upload(groupId, user, uploadId, encodedFileName, content,
-                        byteSize, request.getInputStream(), messageId));
+                .body(chatFileService.upload(groupId, user, uploadId, encodedFileName, content, byteSize,
+                        request.getInputStream(), messageId, optimizeVideo));
     }
 
     @Schema(description = "文件消息登记，可附带已生成的视频封面")

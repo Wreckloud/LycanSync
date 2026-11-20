@@ -525,6 +525,7 @@ function exportFixture() {
   const calls = { read: 0, dialog: 0, writes: [], ranges: [], flushed: 0, exportDirectory: null, dialogOptions: null };
   const state = { closing: false, diagnosticExportPending: false, trustedSender: () => true, parseDiagnosticReport,
     diagnosticStartedAt: Date.parse('2026-10-14T00:00:00Z'), writeMediaDiagnostic: { flush: async () => { calls.flushed++; } },
+    savedDiagnosticReports: { all: async () => ({ reports: {}, unavailable: [] }) },
     Buffer, JSON, Date, Error, resolve: join, mainWindow: {}, process: { versions: { electron: 'test' }, platform: 'win32', arch: 'x64' },
     osRelease: () => 'test-os', app: { getPath: () => '/private', getVersion: () => 'test-version', getGPUFeatureStatus: () => ({ video_encode: 'enabled' }) },
     readDiagnosticEvents: async (_path, start, end) => {
@@ -553,10 +554,10 @@ test('诊断导出仅允许可信页面，验证格式并通过用户选址写�
   await assert.rejects(exportReport({}, '{}'), /无效/);
   await assert.rejects(exportReport({}, text.replace('"schemaVersion":9', '"schemaVersion":8')), /无效/);
   await assert.rejects(exportReport({}, 'x'.repeat(8 * 1024 * 1024 + 1)), /过大/);
-  await exportReport({}, text);
+  await exportReport({}, text, true);
   assert.equal(calls.writes.length, 1);
   assert.equal(calls.writes[0][0], '/selected/report.json');
-  assert.equal(calls.exportDirectory, join('/private', 'exports'));
+  assert.equal(calls.exportDirectory, null);
   assert.ok(calls.dialogOptions.defaultPath.startsWith(join('/private', 'exports') + require('node:path').sep));
   const report = JSON.parse(calls.writes[0][1]);
   assert.equal(calls.ranges[0][0], state.diagnosticStartedAt);
@@ -571,10 +572,10 @@ test('诊断导出仅允许可信页面，验证格式并通过用户选址写�
 test('选址取消或关闭期间迟到结果不写入，保存失败后仍可重试', async () => {
   const { state, calls, text, exportReport } = exportFixture();
   state.dialog.showSaveDialog = async () => ({ canceled: true });
-  await exportReport({}, text);
+  await exportReport({}, text, true);
   assert.equal(calls.writes.length, 0);
   state.dialog.showSaveDialog = async () => { state.closing = true; return { canceled: false, filePath: '/selected/report.json' }; };
-  await exportReport({}, text);
+  await exportReport({}, text, true);
   assert.equal(calls.writes.length, 0);
   state.closing = false;
   state.dialog.showSaveDialog = async () => ({ canceled: false, filePath: '/selected/report.json' });
@@ -582,7 +583,7 @@ test('选址取消或关闭期间迟到结果不写入，保存失败后仍可�
   await assert.rejects(exportReport({}, text), /disk full/);
   assert.equal(state.diagnosticExportPending, false);
   state.writeFile = async (...args) => { calls.writes.push(args); };
-  await exportReport({}, text);
+  await exportReport({}, text, true);
   assert.equal(calls.writes.length, 1);
 });
 

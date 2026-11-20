@@ -30,6 +30,7 @@ function stopSampling() {
   // 媒体无法取帧时仍可用主播放器定位并保存选区。
   unavailable = true;
   releaseDecoder();
+  nextFrame();
 }
 
 function nextFrame() {
@@ -39,18 +40,16 @@ function nextFrame() {
   let missing: number | undefined;
   for (let i = 0; i < columns; i++) {
     const time = props.first + (i + 0.5) * interval;
-    // 缩放后仍落在本格中央附近的样片可以重用。
     let nearest: number | undefined;
-    let distance = interval / 4;
+    let distance = Infinity;
     for (const key of cache.keys()) {
       const diff = Math.abs(key - time);
       if (diff <= distance) { nearest = key; distance = diff; }
     }
-    if (nearest !== undefined) context.drawImage(cache.get(nearest)!, i * frameWidth, 0);
-    else {
-      context.clearRect(i * frameWidth, 0, frameWidth, frameHeight);
-      missing ??= time;
-    }
+    // 平移中先用相邻缓存；跳得太远时保留上一张，直到目标帧就绪再替换。
+    if (nearest !== undefined && distance <= interval) context.drawImage(cache.get(nearest)!, i * frameWidth, 0);
+    else if (unavailable) context.clearRect(i * frameWidth, 0, frameWidth, frameHeight);
+    if (distance > interval / 4) missing ??= time;
   }
   if (unavailable || settle !== undefined || pending !== null) return;
   if (missing === undefined || props.suspended) {

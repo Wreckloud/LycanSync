@@ -110,7 +110,7 @@ $dataDirectory = Join-Path $preparedDirectory 'data'
 New-Item -ItemType Directory -Force -Path $pluginDirectory, $dataDirectory | Out-Null
 Copy-Item -LiteralPath (Join-Path $upstreamDirectory 'data/libobs') -Destination $dataDirectory -Recurse -Force
 New-Item -ItemType Directory -Force -Path (Join-Path $dataDirectory 'obs-plugins') | Out-Null
-foreach ($module in @('obs-ffmpeg', 'obs-nvenc', 'obs-qsv11')) {
+foreach ($module in @('obs-ffmpeg', 'obs-nvenc', 'obs-qsv11', 'obs-text')) {
     Copy-Item -LiteralPath (Join-Path $upstreamDirectory "obs-plugins/64bit/$module.dll") -Destination $pluginDirectory -Force
     Copy-Item -LiteralPath (Join-Path $upstreamDirectory "data/obs-plugins/$module") -Destination (Join-Path $dataDirectory 'obs-plugins') -Recurse -Force
 }

@@ -55,7 +55,7 @@ class ChatVideoPreviewServiceTests {
         Files.write(original, new byte[]{1, 2, 3});
         when(files.findMetadata(group, attachment, user)).thenReturn(new ChatFileMetadata(attachment, "test.mp4", 3));
         when(files.findFile(attachment)).thenReturn(new FileSystemResource(original));
-        service = new ChatVideoPreviewService(files, properties);
+        service = new ChatVideoPreviewService(files, properties, new ChatVideoEncoder(properties));
     }
 
     @AfterEach

@@ -26,7 +26,7 @@ it('容器只有音轨可用时关闭空白播放器并报告一次失败，避�
   f.surface.measureVideo();
   f.surface.playbackFailed();
   expect(f.surface.failed.value).toBe(true);
-  expect(f.emit).toHaveBeenCalledExactlyOnceWith('error');
+  expect(f.emit).toHaveBeenCalledExactlyOnceWith('error', undefined);
   expect(f.video.pause).toHaveBeenCalledOnce();
   expect(f.video.removeAttribute).toHaveBeenCalledWith('src');
   expect(f.video.load).toHaveBeenCalledOnce();

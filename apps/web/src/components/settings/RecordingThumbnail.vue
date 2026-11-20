@@ -3,7 +3,7 @@ import { onMounted, onScopeDispose, ref, watch } from 'vue';
 import { Film, Play } from '@lucide/vue';
 import { loadRecordingThumbnail, recordingThumbnailDuration } from '../../recording/recordingThumbnails';
 
-const props = defineProps<{ source: string; disabled: boolean; playBadge?: boolean }>();
+const props = defineProps<{ source: string; disabled: boolean; playBadge?: boolean; hideUnavailable?: boolean }>();
 const emit = defineEmits<{ duration: [milliseconds: number] }>();
 const frame = ref<HTMLElement | null>(null);
 const canvas = ref<HTMLCanvasElement | null>(null);
@@ -49,15 +49,17 @@ onScopeDispose(() => { disposed = true; observer?.disconnect(); release(); });
 </script>
 
 <template>
-  <span ref="frame" class="recording-thumbnail" aria-hidden="true">
+  <span ref="frame" class="recording-thumbnail" :class="{ 'awaiting-cover': hideUnavailable && !ready }" aria-hidden="true">
     <canvas ref="canvas" v-show="ready" aria-hidden="true" />
     <Play v-if="playBadge" class="play-badge" :size="24" aria-hidden="true" />
-    <slot v-else-if="!ready"><Film :size="18" aria-hidden="true" /></slot>
+    <slot v-else-if="!ready && !hideUnavailable"><Film :size="18" aria-hidden="true" /></slot>
   </span>
 </template>
 
 <style scoped>
 .recording-thumbnail { position: relative; display: grid; place-items: center; flex: 0 0 120px; width: 120px; height: 68px; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; background: var(--background); }
+/* 保持可观察的节点，以便异步取到封面后恢复尺寸。 */
+.recording-thumbnail.awaiting-cover { position: absolute; width: 1px; height: 1px; border: 0; opacity: 0; pointer-events: none; }
 .recording-thumbnail canvas { max-width: 100%; max-height: 100%; }
 .play-badge { position: absolute; padding: 6px; box-sizing: content-box; border-radius: 50%; background: #171c22cc; color: #e1e6eb; }
 </style>

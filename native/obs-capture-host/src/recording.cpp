@@ -15,8 +15,10 @@
 #include <wrl/client.h>
 #include <graphics/graphics.h>
 
-RecordingOutput::RecordingOutput(std::string plugin_directory, std::string data_directory, Emit emit)
-    : plugin_directory_(std::move(plugin_directory)), data_directory_(std::move(data_directory)), emit_(std::move(emit)) {}
+RecordingOutput::RecordingOutput(std::string plugin_directory, std::string data_directory, Emit emit,
+    std::function<bool()> window_suspended)
+    : plugin_directory_(std::move(plugin_directory)), data_directory_(std::move(data_directory)), emit_(std::move(emit)),
+      window_suspended_(std::move(window_suspended)) {}
 
 RecordingOutput::~RecordingOutput() {
   shutdown();
@@ -37,6 +39,38 @@ bool RecordingOutput::load_modules() {
   }
   obs_post_load_modules();
   modules_loaded_ = true;
+  return true;
+}
+
+bool RecordingOutput::add_suspension_hint(bool visible) {
+  obs_module_t *module = obs_get_module("obs-text");
+  if (!module) {
+    const auto path = plugin_directory_ + "/obs-text.dll";
+    const auto data = data_directory_ + "/obs-text";
+    if (obs_open_module(&module, path.c_str(), data.c_str()) != MODULE_SUCCESS || !obs_init_module(module)) return false;
+  }
+  // 静态文字由 OBS 缓存为纹理，最小化期间不逐帧生成图片或回读窗口。
+  auto *settings = obs_data_create();
+  auto *font = obs_data_create();
+  obs_data_set_string(font, "face", "Microsoft YaHei UI");
+  obs_data_set_int(font, "size", std::max(18u, width_ / 40));
+  obs_data_set_obj(settings, "font", font);
+  obs_data_release(font);
+  obs_data_set_string(settings, "text", "共享窗口已最小化\n恢复窗口后继续共享");
+  obs_data_set_string(settings, "align", "center");
+  obs_data_set_string(settings, "valign", "center");
+  obs_data_set_bool(settings, "extents", true);
+  obs_data_set_int(settings, "extents_cx", width_);
+  obs_data_set_int(settings, "extents_cy", height_);
+  obs_data_set_int(settings, "bk_color", 0x201811);
+  obs_data_set_int(settings, "bk_opacity", 100);
+  auto *hint = obs_source_create_private("text_gdiplus_v3", "LycanSync minimized window", settings);
+  obs_data_release(settings);
+  if (!hint) return false;
+  suspension_hint_ = obs_scene_add(scene_, hint);
+  obs_source_release(hint);
+  if (!suspension_hint_) return false;
+  obs_sceneitem_set_visible(suspension_hint_, visible);
   return true;
 }
 
@@ -69,9 +103,17 @@ bool RecordingOutput::prepare_pipeline(const std::string &id, bool voices, obs_s
   }
   if (!encoder_id) return fail("recordingHardwareEncoderUnavailable");
   obs_video_info video_info{};
-  const auto source_width = source ? obs_source_get_width(source) : 0;
-  const auto source_height = source ? obs_source_get_height(source) : 0;
-  if (!source_width || !source_height || !obs_get_video_info(&video_info)) return fail("recordingShareUnavailable");
+  if (!source || !obs_get_video_info(&video_info)) return fail("recordingShareUnavailable");
+  const bool suspended = window_suspended_ && window_suspended_();
+  auto source_width = obs_source_get_width(source);
+  auto source_height = obs_source_get_height(source);
+  const bool awaiting_dimensions = !source_width || !source_height;
+  if (awaiting_dimensions) {
+    if (!suspended) return fail("recordingShareUnavailable");
+    // 游戏尚未给出尺寸，以录像配置建立固定画布；恢复后原窗口等比放入同一段。
+    source_width = height * 16 / 9;
+    source_height = height;
+  }
   const auto scale = std::min({1.0, static_cast<double>(height * 16 / 9) / source_width,
       static_cast<double>(height) / source_height});
   // libobs 输出宽度按四像素、高度按两像素对齐；固定本段尺寸，不录入共享画布的空白区域。
@@ -85,10 +127,11 @@ bool RecordingOutput::prepare_pipeline(const std::string &id, bool voices, obs_s
   transform.pos = {width_ / 2.0f, height_ / 2.0f};
   transform.scale = {1.0f, 1.0f};
   transform.alignment = OBS_ALIGN_CENTER;
-  transform.bounds_type = OBS_BOUNDS_MAX_ONLY;
+  transform.bounds_type = awaiting_dimensions ? OBS_BOUNDS_SCALE_INNER : OBS_BOUNDS_MAX_ONLY;
   transform.bounds_alignment = OBS_ALIGN_CENTER;
   transform.bounds = {static_cast<float>(width_), static_cast<float>(height_)};
   obs_sceneitem_set_info2(item, &transform);
+  if (window_suspended_ && !add_suspension_hint(suspended)) return fail("recordingModuleUnavailable");
   // 复用同一个已授权来源，仅录像期间增加合成输出；不启动第二路捕获或回读 CPU 像素。
   view_ = obs_view_create();
   if (!view_) return fail("recordingOutputUnavailable");
@@ -194,6 +237,10 @@ bool RecordingOutput::active() const { return running_.load() || replay_running_
 bool RecordingOutput::replay_active() const { return replay_running_.load(); }
 std::string_view RecordingOutput::saved_id() const { return save_id_; }
 void RecordingOutput::poll() {
+  if (suspension_hint_) {
+    const bool suspended = window_suspended_();
+    if (obs_sceneitem_visible(suspension_hint_) != suspended) obs_sceneitem_set_visible(suspension_hint_, suspended);
+  }
   if (voice_failed_) { stop(); stop_replay(); }
   if (started_.exchange(false)) emit_("recordingStarted", id_, "");
   if (replay_started_.exchange(false)) emit_("replayStarted", replay_id_, "");
@@ -281,6 +328,7 @@ void RecordingOutput::release_pipeline() {
   if (audio_) { obs_encoder_release(audio_); audio_ = nullptr; }
   // 编码器先脱离输出，再移除视图；共享来源仍由采集场景持有，不能随录像销毁。
   if (view_) { obs_view_remove(view_); obs_view_destroy(view_); view_ = nullptr; }
+  suspension_hint_ = nullptr;
   if (scene_) { obs_source_remove(obs_scene_get_source(scene_)); obs_scene_release(scene_); scene_ = nullptr; }
 }
 

@@ -174,7 +174,7 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
           'adapterIndex', 'sourceWidth', 'sourceHeight']) {
           if (Number.isSafeInteger(entry[key]) && entry[key] >= 0 && entry[key] <= 1_000_000) details[key] = entry[key];
         }
-        if (['dxgi', 'wgc-window', 'bitblt-window', 'game'].includes(entry.captureMethod)) details.captureMethod = entry.captureMethod;
+        if (['dxgi', 'wgc-window', 'print-window', 'bitblt-window', 'game'].includes(entry.captureMethod)) details.captureMethod = entry.captureMethod;
         if (['auto', 'game', 'window', 'bitblt', 'wgc'].includes(entry.requestedMethod)) details.requestedMethod = entry.requestedMethod;
         if (typeof entry.borderAllowed === 'boolean') details.borderAllowed = entry.borderAllowed;
         if (typeof entry.clientArea === 'boolean') details.clientArea = entry.clientArea;

@@ -11,7 +11,7 @@ import { createApp, h, ref } from ${JSON.stringify(vuePath)};
 import ClientSettings from '/src/components/settings/ClientSettings.vue';
 import '/src/styles.css';
 import '/src/settings/settings.css';
-const calls = [];
+const calls = ref([]);
 let updateListener;
 let offerUpdate = false;
 window.lycanDesktop = {
@@ -21,13 +21,13 @@ window.lycanDesktop = {
   setCloseToTray: async () => { throw new Error('不应修改托盘'); },
   getUpdateState: async () => ({ phase:'ready', version:'0.4.19', supported:true, message:'' }),
   onUpdateState: callback => { updateListener = callback; return () => { updateListener = undefined; }; },
-  checkUpdates: async () => { calls.push('check'); return { phase:'ready', version:'0.4.19', supported:true,
+  checkUpdates: async () => { calls.value.push('check'); return { phase:'ready', version:'0.4.19', supported:true,
     nextVersion:offerUpdate ? '0.4.20' : undefined, message:'当前已是最新版本。' }; },
   restartForUpdate: () => {
     updateListener({ phase:'installing', version:'0.4.19', supported:true, message:'即将开始安装，完成后自动打开应用…' });
     return new Promise(() => {});
   },
-  openExternal: async url => { calls.push(url); },
+  openExternal: async url => { calls.value.push(url); },
 };
 createApp({ setup() {
   const active = ref(true);
@@ -35,14 +35,14 @@ createApp({ setup() {
     recording:ref(true), automaticEnabled:ref(true), reason:ref(''), error:ref(''), saving:ref(false), notes:ref(''), latest:ref(null),
     savedReport:ref({ kind:'screen-media', endedAt:'2026-11-14T00:00:00Z', bytes:4096, clientVersion:'0.4.19' }),
     savedSizeBytes:ref(4096), persistenceError:ref(''), problemMarkers:ref([]),
-    setViewing:open => { calls.push('view:'+open); }, setAutomatic:enabled => { report.automaticEnabled.value=enabled;report.recording.value=enabled; },
-    save:async () => { calls.push('export'); }, savePrevious:async () => { calls.push('previous'); },
+    setViewing:open => { calls.value.push('view:'+open); }, setAutomatic:enabled => { report.automaticEnabled.value=enabled;report.recording.value=enabled; },
+    exportStatus:ref(''), save:async (notes, chooseLocation) => { calls.value.push('export:'+notes+':'+chooseLocation); },
   };
   return () => h('main', { style:'padding:24px;max-width:868px;margin:auto' }, [
     h(ClientSettings,{ desktop:true,active:active.value,userId:'client-layout-test',room:null,report }),
     h('button',{onClick:()=>{active.value=!active.value;}},'切换测试页'),
     h('button',{onClick:()=>{offerUpdate=true;}},'模拟发现新版'),
-    h('output',{'data-testid':'calls'},calls.join('|')),
+    h('output',{'data-testid':'calls'},calls.value.join('|')),
   ]);
 } }).mount('#root');` });
   });
@@ -50,18 +50,24 @@ createApp({ setup() {
   await expect(page.getByRole('heading', { level: 2 })).toHaveText(['应用信息', '系统设置', '应用日志', '本地缓存']);
   await expect(page.getByRole('checkbox', { name: '开机自动启动', exact: true })).not.toBeChecked();
   await expect(page.getByRole('checkbox', { name: '关闭时收起到托盘', exact: true })).toBeChecked();
-  await expect(page.getByRole('checkbox', { name: '自动记录诊断', exact: true })).toBeChecked();
-  await expect(page.getByRole('button', { name: '查看媒体诊断', exact: true })).toBeDisabled();
+  await expect(page.getByRole('checkbox', { name: '自动记录诊断', exact: true })).toBeHidden();
+  await page.getByRole('button', { name: '导出全部报告', exact: true }).click();
+  await expect(page.getByTestId('calls')).toContainText('export::false');
   await page.getByRole('button', { name: '检查更新', exact: true }).click();
   await expect(page.getByText('当前已是最新版本。', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '导出最近共享与观看报告', exact: true })).toBeHidden();
-  await page.screenshot({ path: testInfo.outputPath('client-settings.png'), fullPage: true });
+  await expect(page.getByLabel('导出时选择保存位置', { exact: false })).toBeHidden();
+  await page.locator('.diagnostic-report-settings').screenshot({ path: testInfo.outputPath('app-logs.png') });
   await page.getByRole('button', { name: '更多诊断选项', exact: true }).click();
-  await expect(page.getByText(/不是录像文件/)).toBeVisible();
-  await page.getByRole('button', { name: '导出最近共享与观看报告', exact: true }).click();
+  await expect(page.getByRole('checkbox', { name: '自动记录诊断', exact: true })).toBeChecked();
+  await expect(page.getByRole('button', { name: '查看媒体诊断', exact: true })).toBeDisabled();
+  await page.locator('.diagnostic-report-settings').screenshot({ path: testInfo.outputPath('app-logs-options.png') });
+  await page.getByLabel('体验说明（选填）').fill('共享卡顿');
+  await page.getByLabel('导出时选择保存位置', { exact: false }).check();
+  await page.getByRole('button', { name: '导出全部报告', exact: true }).click();
+  await expect(page.getByTestId('calls')).toContainText('export:共享卡顿:true');
   await page.getByRole('button', { name: '切换测试页', exact: true }).click();
   await page.getByRole('button', { name: '切换测试页', exact: true }).click();
-  await expect(page.getByRole('button', { name: '导出最近共享与观看报告', exact: true })).toBeHidden();
+  await expect(page.getByLabel('导出时选择保存位置', { exact: false })).toBeHidden();
   await page.setViewportSize({ width: 600, height: 820 });
   await expect(page.locator('main')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(600);

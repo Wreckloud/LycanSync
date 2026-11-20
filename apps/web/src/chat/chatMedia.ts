@@ -1,5 +1,12 @@
 import type { ChatAttachment } from './chatApi';
 
+export function formatAttachmentSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  const unit = bytes < 1024 ** 2 ? 'KiB' : 'MiB';
+  const value = bytes / (unit === 'KiB' ? 1024 : 1024 ** 2);
+  return value.toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' ' + unit;
+}
+
 export type ChatMediaKind = 'image' | 'video' | 'audio';
 
 const formats: Record<string, { kind: ChatMediaKind; contentType: string }> = {
@@ -9,6 +16,7 @@ const formats: Record<string, { kind: ChatMediaKind; contentType: string }> = {
   gif: { kind: 'image', contentType: 'image/gif' },
   webp: { kind: 'image', contentType: 'image/webp' },
   avif: { kind: 'image', contentType: 'image/avif' },
+  avi: { kind: 'video', contentType: 'video/x-msvideo' },
   mp4: { kind: 'video', contentType: 'video/mp4' },
   webm: { kind: 'video', contentType: 'video/webm' },
   mov: { kind: 'video', contentType: 'video/quicktime' },

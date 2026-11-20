@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { onScopeDispose, ref, watch } from 'vue';
+import { onScopeDispose, ref, useId, watch } from 'vue';
+import { ChevronRight } from '@lucide/vue';
+import ExpandSection from '../ExpandSection.vue';
 import { authRequest } from '../../auth/authApi';
 import InlineFeedback from '../InlineFeedback.vue';
 import AccountLifecycleSettings from './AccountLifecycleSettings.vue';
@@ -15,6 +17,8 @@ interface ServerSettingsStatus {
   mediaConfigured: boolean;
 }
 const status = ref<ServerSettingsStatus | null>(null);
+const advancedOpen = ref(false);
+const advancedId = useId();
 const error = ref('');
 const loading = ref(false);
 let request: AbortController | undefined;
@@ -37,7 +41,7 @@ async function refresh() {
 
 watch(() => props.active, (active) => {
   if (active) void refresh();
-  else { request?.abort(); loading.value = false; }
+  else { request?.abort(); loading.value = false; advancedOpen.value = false; }
 }, { immediate: true });
 onScopeDispose(() => request?.abort());
 </script>
@@ -52,16 +56,24 @@ onScopeDispose(() => request?.abort());
         <dt>邀请入口地址</dt><dd>{{ status.publicUrlConfigured ? '已配置' : '未配置' }}</dd>
         <dt>媒体服务</dt><dd>{{ status.mediaConfigured ? '已配置' : '未配置' }}</dd>
       </dl>
-      <QqLoginSettings :active="active" :leaving="leaving" />
       <InlineFeedback :message="error" :pending="loading && !status ? '正在读取配置状态…' : ''" />
       <button v-if="error" type="button" class="settings-button" :disabled="loading || leaving" @click="refresh">重试</button>
+      <button type="button" class="disclosure-trigger" :aria-expanded="advancedOpen" :aria-controls="advancedId" @click="advancedOpen = !advancedOpen">
+        <ChevronRight :size="12" class="disclosure-arrow" :class="{ 'is-open': advancedOpen }" aria-hidden="true" />高级配置
+      </button>
+      <ExpandSection :open="advancedOpen" :id="advancedId">
+        <div class="advanced-settings">
+          <QqLoginSettings :active="active && advancedOpen" :leaving="leaving" />
+          <UploadSettings :active="active && advancedOpen" :leaving="leaving" @notice="emit('notice', $event)" />
+        </div>
+      </ExpandSection>
     </section>
-    <UploadSettings :active="active" :leaving="leaving" @notice="emit('notice', $event)" />
     <AccountLifecycleSettings :active="active" :leaving="leaving" :administrator="true" section="owner" @notice="emit('notice', $event)" />
   </section>
 </template>
 
 <style scoped>
+.advanced-settings { display: grid; gap: 20px; padding-top: 12px; }
 .owner-status { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr); gap: 10px 20px; margin: 12px 0; font-size: 14px; line-height: 20px; }
 .owner-status dt { color: var(--muted); }
 .owner-status dd { margin: 0; overflow-wrap: anywhere; }

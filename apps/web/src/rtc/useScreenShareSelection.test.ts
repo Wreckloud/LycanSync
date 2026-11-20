@@ -47,7 +47,7 @@ function setup(mode: NativeScreenAudioMode = 'process', configure?: (stored: Map
   const sharing = ref(false);
   const container = ref<HTMLElement>();
   const desktop = {
-    isNativeWindowMinimized: vi.fn(async () => false), listNativeVideoSources: vi.fn(async () => ({ revision: 1, discoveryId: 'helper', sources: [source('window:test')] })),
+    listNativeVideoSources: vi.fn(async () => ({ revision: 1, discoveryId: 'helper', sources: [source('window:test')] })),
     getNativeVideoSourceThumbnails: vi.fn(async (_sources: NativeVideoSource[]): Promise<{ sourceId: string; thumbnail: string }[]> => []),
     prepareNativeVideoSource: vi.fn(async (_sourceId: string | null): Promise<{ prepared: boolean; followGame?: 'league' }> => ({ prepared: true })),
     reportCapturePickerTiming: vi.fn(), getCurrentActivity: vi.fn(async () => activity.value),
@@ -253,7 +253,7 @@ describe('选择草稿与偏好提交边界', () => {
       app.updateCaptureShareAudio(enabled);
       expect(setItem).not.toHaveBeenCalled();
       app.selectCaptureSource('window:test');
-      expect(await waiting).toEqual({ sourceId: 'window:test', shareAudio: enabled, quality: 'custom',
+      expect(await waiting).toEqual({ sourceId: 'window:test', discoveryId: 'helper', shareAudio: enabled, quality: 'custom',
         customQuality: { resolution: 1440, fps: 120 } });
       expect(stored.get(`lycansync.screen-share-audio.${mode}`)).toBe(String(enabled));
       expect(stored.has(`lycansync.screen-share-audio.${mode === 'process' ? 'systemMix' : 'process'}`)).toBe(false);
@@ -311,7 +311,7 @@ describe('选择草稿与偏好提交边界', () => {
     });
     app.updateCaptureShareAudio(true);
     expect(() => app.selectCaptureSource('window:test')).not.toThrow();
-    expect(await waiting).toEqual({ sourceId: 'window:test', shareAudio: true, quality: 'custom',
+    expect(await waiting).toEqual({ sourceId: 'window:test', discoveryId: 'helper', shareAudio: true, quality: 'custom',
       customQuality: { resolution: 1440, fps: 120 } });
     expect(state.captureRequest.value).toBeNull();
     expect(state.viewerNotice.value).toContain('未能保存');
@@ -319,21 +319,13 @@ describe('选择草稿与偏好提交边界', () => {
   });
 });
 
-it.each(['restore', 'cancel', 'leave'] as const)('最小化游戏等待恢复，处理 %s 后只交付仍有效的选择', async outcome => {
+it('确认最小化游戏后立即交付当前来源', async () => {
   const f = setup();
   f.desktop.listNativeVideoSources.mockResolvedValue({ revision: 1, discoveryId: 'helper',
     sources: [{ ...source('window:1:0'), minimized: true }] });
-  let resumed!: (minimized: boolean) => void;
-  f.desktop.isNativeWindowMinimized.mockResolvedValueOnce(true).mockImplementation(() => new Promise(resolve => { resumed = resolve; }));
   const pending = f.open();
   await flush();
   f.app.selectCaptureSource('window:1:0');
-  await vi.waitFor(() => expect(resumed).toBeDefined(), { timeout: 1500 });
-  expect(f.app.waitingGame.value).toBe('window:1:0');
-  if (outcome === 'cancel') f.app.selectCaptureSource(null);
-  if (outcome === 'leave') f.room.value = null;
-  resumed(false);
-  const selection = await pending;
-  expect(selection?.sourceId ?? null).toBe(outcome === 'restore' ? 'window:1:0' : null);
-  expect(f.app.waitingGame.value).toBe('');
+  expect(await pending).toMatchObject({ sourceId: 'window:1:0', discoveryId: 'helper' });
+  expect(f.app.captureRequest.value).toBeNull();
 });

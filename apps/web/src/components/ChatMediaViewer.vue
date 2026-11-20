@@ -56,11 +56,14 @@ async function load() {
   conversionRequest?.abort();
   compatible.value = false;
   const current = request = new AbortController();
+  const retrying = previewFailed.value && Boolean(source.value);
   release();
   error.value = '';
   previewFailed.value = false;
   loading.value = true;
   try {
+    if (retrying) await nextTick();
+    if (current.signal.aborted || disposed) return;
     if (props.localSource) { source.value = props.localSource; return; }
     const streamUrl = format.value?.kind === 'video' || format.value?.kind === 'audio'
       ? desktopMediaUrl(props.groupId, props.attachment.id) : null;
@@ -82,18 +85,15 @@ async function load() {
   }
 }
 
-async function convertVideo(start = true) {
+async function convertVideo() {
   if (converting.value || disposed) return;
   const current = conversionRequest = new AbortController();
   converting.value = true;
-  conversionStatus.value = start ? '正在转换视频，关闭查看器不会中断转换。' : '正在检查可用预览…';
-  if (start) error.value = '';
+  conversionStatus.value = '正在准备播放…';
+  error.value = '';
   try {
-    let status = await videoPreviewStatus(props.groupId, props.attachment.id, start, current.signal);
+    let status = await videoPreviewStatus(props.groupId, props.attachment.id, true, current.signal);
     if (disposed || current.signal.aborted || conversionRequest !== current) return;
-    if (!start && (status.status === 'absent' || status.status === 'failed')) return;
-    error.value = '';
-    conversionStatus.value = '正在转换视频，关闭查看器不会中断转换。';
     const deadline = Date.now() + 330_000;
     while (status.status === 'processing') {
       if (Date.now() > deadline) throw new Error('视频仍在转换，请稍后重新打开。');
@@ -115,8 +115,8 @@ async function convertVideo(start = true) {
     compatible.value = true;
     previewFailed.value = false;
     source.value = url || URL.createObjectURL(blob!);
-  } catch (reason) {
-    if (!disposed && !current.signal.aborted) error.value = reason instanceof Error ? reason.message : '视频转换失败，请重试。';
+  } catch {
+    if (!disposed && !current.signal.aborted) error.value = '暂时无法播放，可重试或下载后打开。';
   } finally {
     if (conversionRequest === current) converting.value = false;
   }
@@ -135,16 +135,14 @@ async function download() {
   await transfers.download(props.groupId, props.attachment);
 }
 
-function playbackFailed() {
+function playbackFailed(code?: number | Event) {
   if (!disposed) {
     emit('ready');
     previewFailed.value = true;
     if (props.localSource) { error.value = '此文件暂时无法在应用中预览，仍可作为附件发送。'; return; }
-    error.value = format.value?.kind === 'video' && !compatible.value
-      ? '这个视频无法直接播放，可以转换后播放或下载原文件。'
-      : '这个文件暂时无法预览，可以下载后打开。';
-    // 已有兼容版本直接复用；这个查询不会启动转换。
-    if (format.value?.kind === 'video' && !compatible.value) void convertVideo(false);
+    if (code === 2) { error.value = '视频加载中断，请重试。'; return; }
+    if (format.value?.kind === 'video' && !compatible.value) { void convertVideo(); return; }
+    error.value = '这个文件暂时无法预览，可以下载后打开。';
   }
 }
 watch(() => props.inlineLoading, async (waiting, previous) => {
@@ -179,11 +177,10 @@ onScopeDispose(() => {
       <div v-if="!localSource && (format?.kind === 'audio' || !source || (previewFailed && format?.kind === 'image'))" class="media-fallback-tools">
         <button type="button" aria-label="下载文件" title="下载文件" :disabled="downloading || (imageMessage && !source)" @click="download"><Download :size="20" /></button>
       </div>
-      <footer v-if="error || downloadTask?.error || conversionHint || (previewFailed && format?.kind === 'video' && !compatible)" class="chat-media-feedback">
+      <footer v-if="error || downloadTask?.error || conversionHint" class="chat-media-feedback">
         <span v-if="error || downloadTask?.error" role="alert">{{ error || downloadTask?.error }}</span>
         <span v-else-if="conversionHint" class="conversion-status" role="status">{{ conversionStatus }}</span>
-        <button v-if="!localSource && previewFailed && format?.kind === 'video' && !compatible" type="button" :disabled="converting" @click="convertVideo()">转换后播放</button>
-        <button v-else-if="!source" type="button" @click="load">重试</button>
+        <button v-if="error && !localSource && !converting" type="button" @click="load">重试</button>
       </footer>
     </section>
   </div>

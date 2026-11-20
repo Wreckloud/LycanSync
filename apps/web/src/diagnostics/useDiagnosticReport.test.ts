@@ -61,7 +61,6 @@ function persistenceBridge() {
   bridge.saveDiagnosticSnapshot = vi.fn(async () => 2048);
   bridge.getSavedDiagnosticReport = vi.fn(async () => ({ startedAt: '2026-10-25T00:00:00Z',
     endedAt: '2026-10-25T00:01:00Z', savedAt: '2026-10-25T00:01:00Z', clientVersion: '0.1.18', bytes: 4096 }));
-  bridge.exportSavedDiagnosticReport = vi.fn(async () => ({ saved: true }));
   bridge.clearSavedDiagnosticReports = vi.fn(async () => {});
   return bridge;
 }
@@ -240,8 +239,8 @@ it('无媒体使用只读取进程的启动不覆盖上次报告，恢复入口�
   await report.flush();
   expect(bridge.saveDiagnosticSnapshot).not.toHaveBeenCalled();
   report.notes.value = '上次使用卡顿';
-  await report.savePrevious();
-  expect(bridge.exportSavedDiagnosticReport).toHaveBeenCalledWith('上次使用卡顿');
+  await report.save(report.notes.value, true);
+  expect(bridge.exportDiagnosticReport).toHaveBeenCalledWith(expect.stringContaining('上次使用卡顿'), true);
 });
 
 it('持久化失败明确提示且保留内存导出；关闭开关后才可清除，旧样本不回写', async () => {
@@ -303,6 +302,17 @@ it('自动记录在进入页面时开始，未入房、离房、再次入房和�
   const count = collect.mock.calls.length;
   await vi.advanceTimersByTimeAsync(10000);
   expect(collect).toHaveBeenCalledTimes(count);
+});
+
+it('手动记录中也可导出，报告标明是进行中的快照', async () => {
+  const { report, exportDiagnosticReport } = setup();
+  report.start();
+  await vi.advanceTimersByTimeAsync(2000);
+  await report.save('刚才声音断续');
+  expect(report.recording.value).toBe(true);
+  expect(JSON.parse(exportDiagnosticReport.mock.calls[0][0])).toMatchObject({
+    stopReason: 'manualSnapshot', recordingMode: 'manual', notes: '刚才声音断续',
+  });
 });
 
 it('自动记录中导出快照不停止、不重置样本；保存等待期间继续记录，重复导出不并发', async () => {

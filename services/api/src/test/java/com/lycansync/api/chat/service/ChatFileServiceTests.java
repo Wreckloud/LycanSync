@@ -1,5 +1,6 @@
 package com.lycansync.api.chat.service;
 
+import com.lycansync.api.audio.config.AudioProcessingProperties;
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.chat.config.ChatFileProperties;
 import com.lycansync.api.chat.dto.ChatUploadLimits;
@@ -14,6 +15,8 @@ import com.lycansync.api.group.service.GroupService;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
+import org.springframework.transaction.support.TransactionCallback;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DuplicateKeyException;
@@ -60,6 +63,7 @@ class ChatFileServiceTests {
     private final TransactionTemplate transactions = mock(TransactionTemplate.class);
     private final ChatFileProperties properties = new ChatFileProperties();
     private final ChatFileStorageCoordinator coordinator = new ChatFileStorageCoordinator();
+    private final AudioProcessingProperties media = new AudioProcessingProperties();
     private ChatFileService service;
 
     @BeforeEach
@@ -70,7 +74,43 @@ class ChatFileServiceTests {
         ChatUploadSettingsService settings = new ChatUploadSettingsService(mapper, properties,
                 mock(OwnerSettingsService.class), mock(AccessLinkMapper.class));
         service = new ChatFileService(mapper, quotaService, groupService, properties,
-                Clock.systemUTC(), transactions, coordinator, mock(ApplicationEventPublisher.class), settings);
+                Clock.systemUTC(), transactions, coordinator, mock(ApplicationEventPublisher.class), settings, new ChatVideoEncoder(media));
+    }
+
+    @Test
+    @EnabledIfSystemProperty(named = "lycan.test.ffmpeg", matches = ".+")
+    void downloadsOptimizedVideoUnlessOriginalRequested(@TempDir Path directory) throws Exception {
+        String ffmpeg = System.getProperty("lycan.test.ffmpeg");
+        media.setFfmpegExecutable(ffmpeg);
+        Path input = directory.resolve("sample.mkv");
+        Process generator = new ProcessBuilder(ffmpeg, "-v", "error", "-f", "lavfi", "-i",
+                "testsrc2=size=320x180:rate=30:duration=2", "-c:v", "ffv1", input.toString()).start();
+        assertThat(generator.waitFor(15, TimeUnit.SECONDS)).isTrue();
+        assertThat(generator.exitValue()).isZero();
+        byte[] original = Files.readAllBytes(input);
+        when(mapper.allocateMessageSequence(GROUP_ID)).thenReturn(1L);
+        when(transactions.execute(any())).thenAnswer(call ->
+                call.<TransactionCallback<?>>getArgument(0).doInTransaction(null));
+        String name = Base64.getUrlEncoder().encodeToString("sample.mkv".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        for (boolean optimize : new boolean[]{true, false}) {
+            UUID attempt = UUID.randomUUID();
+            var message = service.upload(GROUP_ID, USER, attempt, name, "", original.length,
+                    new ByteArrayInputStream(original), null, optimize);
+            Path stored = service.findFile(message.attachment().id()).getFile().toPath();
+            assertThat(message.attachment().byteSize()).isEqualTo(Files.size(stored));
+            verify(quotaService).complete(attempt, Files.size(stored));
+            if (optimize) {
+                assertThat(message.attachment().fileName()).isEqualTo("sample.mp4");
+                assertThat(Files.size(stored)).isLessThan(original.length);
+                Process decoder = new ProcessBuilder(ffmpeg, "-v", "error", "-f", "mov", "-i", stored.toString(),
+                        "-c:v", "copy", "-bsf:v", "h264_mp4toannexb", "-f", "null", "-").start();
+                assertThat(decoder.waitFor(10, TimeUnit.SECONDS)).isTrue();
+                assertThat(decoder.exitValue()).isZero();
+            } else {
+                assertThat(message.attachment().fileName()).isEqualTo("sample.mkv");
+                assertThat(Files.readAllBytes(stored)).isEqualTo(original);
+            }
+        }
     }
 
     @Test

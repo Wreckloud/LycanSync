@@ -73,7 +73,8 @@ describe('共享选择器的声音范围说明', () => {
     const props = { sourceType: 'window' }, captureSettings = ref({ windowMethod: 'auto' }), borderSupport = ref<boolean>();
     const notice = runInNewContext(compiled + '; borderNotice', { computed, props, captureSettings, borderSupport }) as { value: string };
     expect(notice.value).toContain('仍可能显示');
-    borderSupport.value = false; expect(notice.value).toContain('会显示系统边框');
+    borderSupport.value = false; expect(notice.value).toContain('部分窗口支持无框采集');
+    captureSettings.value.windowMethod = 'window'; expect(notice.value).toContain('Windows 会显示系统边框');
     borderSupport.value = true; expect(notice.value).toContain('仍可能显示');
     captureSettings.value.windowMethod = 'game'; expect(notice.value).toBe('');
     props.sourceType = 'screen'; expect(notice.value).toBe('');

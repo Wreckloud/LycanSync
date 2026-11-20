@@ -362,7 +362,7 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
       production.activityMonitor = createActivityHelper({ enabled: true,
         executablePath: () => resolve(projectRoot, 'native/activity-helper/target/release/lycansync-activity.exe'), onActivity: () => {} });
       await production.activityMonitor.configure([{ executable: target.executable, name: '本机采集验证' }]);
-      assert(!await production.activityMonitor.isCaptureGame(target.executable), 'applicationMisclassifiedAsGame');
+      assert(target.requiresWindowCapture || !await production.activityMonitor.isCaptureGame(target.executable), 'applicationMisclassifiedAsGame');
     }
     for (const source of Array.from({ length: existingWindowId ? applicationRepeats : 1 }, () => sources).flat()) {
       testPhase = 'application-start';
@@ -451,14 +451,51 @@ $coverWindow = [ApplicationCaptureCenter]::GetAncestor([ApplicationCaptureCenter
       }
       const sourceDiagnostics = await renderer('diagnostics()');
       assert(sourceDiagnostics.sourceKind === 'window' && sourceDiagnostics.captureBackend === 'obsLibobs', 'applicationDiagnosticsMismatch');
-      assert(state.captureMethod === 'wgc-window', 'applicationAutomaticMethodMissing');
+      const build = Number(require('node:os').release().split('.')[2]);
+      const expectsPrint = existingWindowId ? process.env.LYCANSYNC_EXPECT_PRINT_WINDOW === '1' : build >= 19041 && build < 20348;
+      const expectedMethod = expectsPrint ? 'print-window' : 'wgc-window';
+      assert(state.captureMethod === expectedMethod, 'applicationAutomaticMethodMissing');
+      let contentCorrelation;
+      if (existingWindowId && expectsPrint) {
+        // 真实应用没有固定色卡；将输出与独立单次窗口预览的亮度分布比较，拒绝黑图及颠倒的纹理。
+        const target = await targetHelper.inspectVideoSource(source.sourceId);
+        const { captureWindowThumbnail } = require('../native-window-thumbnails.cjs');
+        const reference = await captureWindowThumbnail(rustPath, target).promise;
+        function luminanceGrid(pixels, width, height, red, blue) {
+          const sums = new Float64Array(32*24), counts = new Uint32Array(32*24);
+          for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+            const bin = Math.floor(y*24/height)*32 + Math.floor(x*32/width);
+            const i = (y*width+x)*4;
+            sums[bin] += (pixels[i+red]*3 + pixels[i+1]*6 + pixels[i+blue])/10;
+            counts[bin]++;
+          }
+          return Array.from(sums, (sum, i) => sum/counts[i]);
+        }
+        const input = luminanceGrid(reference.bitmap, reference.width, reference.height, 2, 0);
+        const output = await window.webContents.executeJavaScript(`(() => {
+          const v = document.querySelector('video'), c = document.createElement('canvas');
+          c.width = v.videoWidth; c.height = v.videoHeight;
+          const ctx = c.getContext('2d'); ctx.drawImage(v, 0, 0);
+          const rgba = ctx.getImageData(0, 0, c.width, c.height).data;
+          return (${luminanceGrid.toString()})(rgba, c.width, c.height, 0, 2);
+        })()`);
+        const mean = values => values.reduce((a, b) => a + b, 0) / values.length;
+        const a = mean(input), b = mean(output);
+        let xx = 0, yy = 0, xy = 0;
+        for (let i = 0; i < input.length; i++) {
+          const x = input[i] - a, y = output[i] - b;
+          xx += x*x; yy += y*y; xy += x*y;
+        }
+        contentCorrelation = xy / Math.sqrt(xx*yy);
+        assert(contentCorrelation > 0.65, 'applicationImageMismatch:' + contentCorrelation);
+      }
       const stopped = await renderer('stop()');
       await until(() => !manager.state?.videoSessionId && !production.nativeVideo.current && !targetHelper.videoCapture);
       assert(stopped.readyState === 'ended' && manager.state === state && !state.videoSessionId && !state.closed, 'applicationStopUnconfirmed');
       cases.push({ mode: browserKind ?? 'existing-application', actualMethod: state.captureMethod, firstFrameMs: started.firstFrameMs,
         submittedFps: Math.round((after.input.submittedFrames - before.input.submittedFrames) * 1000 / intervalMs),
         presentedFps: Math.round((after.presented - before.presented) * 1000 / intervalMs),
-        freshPixelsChecked: Boolean(browserKind), occlusionChecked: Boolean(existingWindowId) && applicationRepeats === 1,
+        freshPixelsChecked: Boolean(browserKind), contentCorrelation, occlusionChecked: Boolean(existingWindowId) && applicationRepeats === 1,
         hostRetained: manager.state === state && !state.closed });
     }
     if (!existingWindowId) assert(new Set(cases.map((entry) => entry.mode)).size === 2, 'browserWindowsNotDistinct');

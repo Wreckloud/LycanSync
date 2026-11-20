@@ -119,7 +119,7 @@ obs_source_t *create_window_video_source(const WindowVideoTarget &target, bool h
     bool hide_border, std::string_view method, const char *&error) {
   if (!window_video_target_valid(target)) { error = "captureTargetClosed"; return nullptr; }
   if (!obs_get_latest_input_type_id("lycansync_window_capture")) { error = "obsWindowBindingUnavailable"; return nullptr; }
-  // 游戏已在上游分流；普通窗口统一使用 WGC，避免 GDI 成功返回旧帧或被遮挡的内容。
+  // 此来源用于手动窗口采集，以及自动模式中未匹配无框规则的窗口。
   if (method != "auto" && method != "window") { error = "invalidCaptureArguments"; return nullptr; }
   obs_data_t *settings = obs_data_create();
   obs_data_set_int(settings, "lycansync_window_id", static_cast<long long>(reinterpret_cast<uintptr_t>(target.window)));

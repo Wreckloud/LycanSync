@@ -326,10 +326,12 @@ test('旧捕获开关和手动宽度被移除，覆盖始终排除采集；测�
   const normal = { ...window.bounds };
   f.manager.edit(f.owner, true);
   assert.deepEqual(window.bounds, normal);
-  f.manager.edit(f.owner, true, true);
-  assert.deepEqual(window.message.payload.members.slice(-3).map(member => member.name), ['狼', 'wolf', '非常个性的昵称用户']);
+  assert.equal(window.message.payload.members.length, 1);
+  f.update(1, { roomId: null, status: 'hidden', members: [] });
+  assert.deepEqual(window.message.payload.members.map(member => member.name), ['狼', 'wolf', '非常个性的昵称用户']);
   assert.ok(window.bounds.width > normal.width);
-  assert.equal(window.bounds.y, normal.y);
+  f.update(2);
+  assert.equal(window.message.payload.editing, true);
   f.manager.edit(f.owner, false);
   assert.equal(window.message.payload.members.length, 1);
   assert.deepEqual(window.bounds, normal);

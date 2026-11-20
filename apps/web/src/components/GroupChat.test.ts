@@ -12,7 +12,7 @@ import type { ChatMessage, ChatMessagePage } from '../chat/chatApi';
 import type { AccountCache } from '../cache/localCache';
 import { formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey } from '../chat/messageTime';
 import { useLoadingHint } from './useLoadingHint';
-import { chatMediaFormat } from '../chat/chatMedia';
+import { chatMediaFormat, formatAttachmentSize } from '../chat/chatMedia';
 import defaultAvatar from '../../../../services/api/src/main/resources/account/default.png';
 
 vi.mock('../chat/chatApi', () => ({ findMessages: vi.fn(), declareFile: vi.fn(), sendFile: vi.fn(), sendMessage: vi.fn(), stopFile: vi.fn() }));
@@ -68,7 +68,7 @@ function setup(cache: AccountCache | null = null) {
     inject: (key: symbol) => key === CHAT_TRANSFERS ? transfers : cache, CHAT_TRANSFERS, ACCOUNT_CACHE: Symbol(), uploadLimits,
     sendMessage, sendFile, compressChatImage: vi.fn(), defaultAvatar,
     formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey,
-    AbortController, ReadableStream, crypto, fetch: fetchRecording, setTimeout, clearTimeout, Error, Date, chatMediaFormat,
+    AbortController, ReadableStream, crypto, fetch: fetchRecording, setTimeout, clearTimeout, Error, Date, chatMediaFormat, formatAttachmentSize,
     document, window, scrollPreference, useChatScroll, useGroupMessages, URL: { revokeObjectURL: vi.fn(), createObjectURL: vi.fn(() => 'blob:preview') },
   })) as {
     enqueueFiles(files: File[], compress: boolean): Promise<void>;

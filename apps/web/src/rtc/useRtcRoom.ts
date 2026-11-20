@@ -44,7 +44,7 @@ interface RtcRoomEvents {
   ): Promise<NativeScreenSourceSelection | null>;
 }
 
-interface NativeScreenSourceSelection { sourceId: string; shareAudio: boolean; quality?: ScreenShareQualityId;
+interface NativeScreenSourceSelection { sourceId: string; discoveryId?: string; shareAudio: boolean; quality?: ScreenShareQualityId;
   customQuality?: CustomScreenShareQuality; captureSettings?: ScreenSharePreferences; controllerIdentity?: string; controlTemporary?: boolean }
 
 interface ScreenShareResource {
@@ -1190,7 +1190,9 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             failedShareResource.stopping = true;
             void remoteControl.endShare(currentRoom, failedShareResource.remoteShare);
             if (code !== 'captureTargetClosed') notice.value = code === 'nativeGameFollowFailed'
-              ? '游戏窗口切换未能完成，共享已停止，请重新选择游戏窗口。' : `屏幕共享已停止（${code}）。`;
+              ? '游戏窗口切换未能完成，共享已停止，请重新选择游戏窗口。'
+              : code === 'nativeVideoFirstFrameTimeout' ? captureErrorMessage(new Error(code), Track.Source.ScreenShare)
+              : `屏幕共享已停止（${code}）。`;
             retireRoomTrack(currentRoom, failedShareResource.videoTrack);
             void currentRoom.localParticipant.unpublishTrack(failedShareResource.videoTrack, true).catch(() => {});
             const screenAudioTrack = currentRoom.localParticipant
@@ -1224,7 +1226,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           controllerIdentity: selection.controllerIdentity, controlTemporary: selection.controlTemporary };
         screenShareResource = shareResource;
         videoStartupStartedAt = performance.now();
-        capturedTracks = [await nativeVideo.start(sourceId)];
+        capturedTracks = [await nativeVideo.start(sourceId, selection.discoveryId)];
         shareResource.captureSessionId = nativeVideo.captureSessionId ?? null;
         if (!isCurrentTask()) return;
         shareAudioRequested = selection.shareAudio;

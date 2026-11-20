@@ -82,6 +82,11 @@ test('账号绑定只在 QQ 可用时展示，读取失败可重试且不保留�
 
 test('仅服主显示邀请面板且生成链接只在成功后展示', async ({ page }, testInfo) => {
   let configurationReads = 0;
+  let uploadedLimits = { maxFileBytes: 512 * 1024 ** 2, maxStorageBytes: 10 * 1024 ** 3 };
+  await page.route('**/api/chat/upload-limits', route => {
+    if (route.request().method() === 'PUT') uploadedLimits = route.request().postDataJSON();
+    return route.fulfill({ json: uploadedLimits });
+  });
   let recoveryConfigured = false;
   let qqBound = false;
   let bindingFailed = false;
@@ -125,6 +130,14 @@ test('仅服主显示邀请面板且生成链接只在成功后展示', async ({
   expect(passwordButton!.width).toBe(transferButton!.width);
   await expect(page.getByRole('button', { name: /刷新/ })).toHaveCount(0);
   await page.locator('.owner-settings').screenshot({ path: testInfo.outputPath('owner-settings.png') });
+  await expect(page.getByRole('button', { name: '配置 QQ 登录', exact: true })).toBeHidden();
+  await page.getByRole('button', { name: '高级配置', exact: true }).click();
+  await expect(page.getByLabel('单个文件上限（MiB）')).toHaveValue('512');
+  await page.getByLabel('单个文件上限（MiB）').fill('1024');
+  await page.getByLabel('所有群聊共用容量（GiB）').fill('20');
+  await page.getByRole('button', { name: '保存限额' }).click();
+  await expect.poll(() => uploadedLimits).toEqual({ maxFileBytes: 1024 ** 3, maxStorageBytes: 20 * 1024 ** 3 });
+  await page.locator('.owner-settings').screenshot({ path: testInfo.outputPath('owner-advanced.png') });
   await expect(page.getByText('QQ 登录 · 配置未完成', { exact: true })).toBeVisible();
   await expect(page.getByText('请检查 App ID、App Key 和回调地址', { exact: true })).toBeVisible();
   let qqConfiguration = { enabled: false, appId: '', callbackUrl: '', appKeyConfigured: false };

@@ -243,6 +243,7 @@ test('未共享时显示群成员头像，停止共享后恢复头像', async ({
   await audioSettingsSection.getByRole('slider', { name: 'lycanclaw 总输出音量' }).fill('2');
   await page.getByRole('button', { name: '客户端', exact: true }).click();
   await expect(page.locator('.media-diagnostics')).toHaveCount(0);
+  await page.getByRole('button', { name: '更多诊断选项' }).click();
   await page.getByRole('button', { name: '查看媒体诊断' }).click();
   await expect(page.locator('.media-diagnostics')).toBeVisible();
   await page.getByRole('button', { name: '返回应用' }).click();

@@ -337,7 +337,7 @@ class ObsCaptureHostManager {
       if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
       const method = event.captureMethod;
       const expectedMethods = state.captureKind === 'monitor' ? ['dxgi'] : state.captureKind === 'game' ? ['game']
-        : ['wgc-window'];
+        : state.requestedMethod === 'auto' ? ['wgc-window', 'print-window'] : ['wgc-window'];
       if (this.state !== state || event.sessionId !== state.videoSessionId
           || !['configured', 'rendering', 'sourceReady', 'gpuDelayed'].includes(event.stage) || !expectedMethods.includes(method)
           || (state.captureMethod && state.captureMethod !== method)
@@ -404,7 +404,7 @@ class ObsCaptureHostManager {
     if (event.event === 'sharedTextureFrame') {
       if (event.sessionId === state.lastStoppedSessionId && event.sessionId !== state.videoSessionId) return;
       if (state.failed || state.closed) return;
-      if (state.captureKind === 'window' && state.captureMethod !== 'wgc-window') {
+      if (state.captureKind === 'window' && !state.captureMethod) {
         failState(state, new Error('obsCaptureProtocolEventInvalid')); return;
       }
       if (this.state !== state || state.closed || !validFrameEvent(event, state.videoSessionId)) {

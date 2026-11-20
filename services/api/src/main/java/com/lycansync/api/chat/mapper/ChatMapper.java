@@ -60,7 +60,8 @@ public interface ChatMapper {
                            @Param("createdAt") Instant createdAt,
                            @Param("processInstanceId") UUID processInstanceId);
 
-    int completeFileStorageReservation(@Param("uploadId") UUID uploadId, @Param("byteSize") long byteSize);
+    int completeFileStorageReservation(@Param("uploadId") UUID uploadId, @Param("byteSize") long byteSize,
+                                       @Param("maxStorageSize") long maxStorageSize);
 
     int releaseFileStorageReservation(@Param("uploadId") UUID uploadId);
 

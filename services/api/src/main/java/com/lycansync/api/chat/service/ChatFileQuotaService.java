@@ -45,8 +45,8 @@ public class ChatFileQuotaService {
 
     @Transactional
     public void complete(UUID uploadId, long byteSize) {
-        if (mapper.completeFileStorageReservation(uploadId, byteSize) != 1) {
-            throw new IllegalStateException("文件存储额度预留已失效");
+        if (mapper.completeFileStorageReservation(uploadId, byteSize, properties.getMaxStorageSize()) != 1) {
+            throw new GroupException(HttpStatus.INSUFFICIENT_STORAGE, ApiErrorCode.CHAT_FILE_STORAGE_FULL, "文件预留空间不足或已失效");
         }
     }
 

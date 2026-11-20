@@ -26,7 +26,7 @@ test('新回放报告使用 schema 10，已有 schema 9 报告仍能保留并导
   await writeFile(join(f.directory, 'current.json'), report('previous'));
   const current = report('current').replace('"schemaVersion":9', '"schemaVersion":10');
   await f.store.save(current);
-  const previous = await f.store.previous();
+  const { previous } = (await f.store.all()).reports;
   assert.equal(previous.schemaVersion, 9);
   assert.equal(previous.runtime.clientVersion, 'previous');
   assert.equal(parseDiagnosticReport(current).schemaVersion, 10);
@@ -38,14 +38,15 @@ function screenReport(version, lastActiveAt, ended = false) {
     samples: ended ? [sample, { time: '2026-10-26T00:10:00Z', streams: [] }] : [sample] });
 }
 
-test('重启后优先导出较新的问题标记，不能总被旧共享报告遮住', async context => {
+test('重启后优先显示带有较新问题标记的报告，不能总被旧共享报告遮住', async context => {
   const f = await fixture(context);
   await f.store.save(screenReport('old-screen', '2026-10-26T00:05:00Z', true));
   const marked = { ...JSON.parse(report('marked-voice')), schemaVersion: 12, endedAt: '2026-10-26T00:15:00Z',
     problemMarkers: [{ time: '2026-10-26T00:14:00Z', category: 'no-audio', recording: true }] };
   await f.store.save(JSON.stringify(marked));
   const restarted = createDiagnosticReportStore(f.directory);
-  const previous = await restarted.previous();
+  const { current: previous } = (await restarted.all()).reports;
+  assert.equal((await restarted.info()).clientVersion, 'marked-voice');
   assert.equal(previous.runtime.clientVersion, 'marked-voice');
   assert.deepEqual(previous.problemMarkers, marked.problemMarkers);
   assert.throws(() => parseDiagnosticReport(JSON.stringify({ ...marked, problemMarkers: 'invalid' })), /标记无效/);
@@ -63,8 +64,8 @@ test('共享结束固定完整窗口，随后闲置、裁剪窗口及重启不�
   await store.save(report('idle-no-screen'));
   assert.equal(await readFile(path, 'utf8'), retained);
   const reopened = createDiagnosticReportStore(directory);
-  assert.equal((await reopened.previous()).runtime.clientVersion, 'screen-session');
-  assert.equal((await reopened.previous()).samples[0].streams[0].sourceFps, 60);
+  assert.equal((await reopened.info()).clientVersion, 'screen-session');
+  assert.equal((await reopened.all()).reports.lastScreenUsage.samples[0].streams[0].sourceFps, 60);
   assert.equal((await reopened.info()).bytes, Buffer.byteLength(retained));
 });
 
@@ -72,12 +73,12 @@ test('后续画面使用结束替换固定窗口，清理不留下副本或删�
   const { directory, store } = await fixture(context);
   await store.save(screenReport('first', '2026-10-26T00:01:00Z', true));
   await store.save(screenReport('second', '2026-10-26T00:03:00Z'));
-  assert.equal((await store.previous()).runtime.clientVersion, 'first');
+  assert.equal((await store.info()).clientVersion, 'first');
   await store.save(screenReport('second', '2026-10-26T00:04:00Z', true));
-  assert.equal((await store.previous()).runtime.clientVersion, 'second');
+  assert.equal((await store.info()).clientVersion, 'second');
   await writeFile(join(directory, 'manual-export.json'), 'keep');
   await store.clear();
-  assert.equal(await createDiagnosticReportStore(directory).previous(), null);
+  assert.equal(await createDiagnosticReportStore(directory).info(), null);
   await assert.rejects(readFile(join(directory, 'last-screen-usage.json')), { code: 'ENOENT' });
   assert.equal(await readFile(join(directory, 'manual-export.json'), 'utf8'), 'keep');
 });
@@ -89,7 +90,7 @@ test('画面尚在运行时异常退出，下一启动的空闲快照先保留�
   await reopened.save(report('new-idle-run'));
   await reopened.save(report('new-idle-run-later'));
   const afterAnotherExit = createDiagnosticReportStore(directory);
-  assert.equal((await afterAnotherExit.previous()).runtime.clientVersion, 'interrupted');
+  assert.equal((await afterAnotherExit.info()).clientVersion, 'interrupted');
   assert.equal((await afterAnotherExit.info()).kind, 'screen-media');
 });
 
@@ -103,10 +104,10 @@ test('重新打开只读设置不覆盖上次使用，本次连续快照只轮�
   assert.equal((await createDiagnosticReportStore(directory).info()).clientVersion, 'first');
   await reopened.save(report('second'));
   await reopened.save(report('second-latest'));
-  assert.equal((await reopened.previous()).runtime.clientVersion, 'first');
+  assert.equal((await reopened.info()).clientVersion, 'first');
   const afterExit = createDiagnosticReportStore(directory);
-  assert.equal((await afterExit.previous()).runtime.clientVersion, 'second-latest');
-  assert.deepEqual((await afterExit.previous()).events, [{ stage: 'screenVideoPublished' }]);
+  assert.equal((await afterExit.info()).clientVersion, 'second-latest');
+  assert.deepEqual((await afterExit.all()).reports.current.events, [{ stage: 'screenVideoPublished' }]);
 });
 
 test('中断写入不读取半份文件，主文件缺失时仍保留上一份有效报告', async (context) => {
@@ -115,9 +116,9 @@ test('中断写入不读取半份文件，主文件缺失时仍保留上一份�
   await rename(join(directory, 'current.json'), join(directory, 'previous.json'));
   await writeFile(join(directory, 'current.pending'), '{incomplete');
   const reopened = createDiagnosticReportStore(directory);
-  assert.equal((await reopened.previous()).runtime.clientVersion, 'retained');
+  assert.equal((await reopened.info()).clientVersion, 'retained');
   await reopened.save(report('new'));
-  assert.equal((await reopened.previous()).runtime.clientVersion, 'retained');
+  assert.equal((await reopened.info()).clientVersion, 'retained');
 });
 
 test('无效或过大报告不覆盖文件，损坏旧文件明确失败而不覆盖有效历史', async (context) => {
@@ -130,7 +131,7 @@ test('无效或过大报告不覆盖文件，损坏旧文件明确失败而不�
   await reopened.save(report('current'));
   await writeFile(join(directory, 'current.json'), '{broken');
   const afterCorruption = createDiagnosticReportStore(directory);
-  await assert.rejects(afterCorruption.previous(), /无法读取/);
+  await assert.rejects(afterCorruption.info(), /无法读取/);
   await assert.rejects(afterCorruption.save(report('replacement')), /无法读取/);
   assert.equal(JSON.parse(await readFile(join(directory, 'previous.json'), 'utf8')).runtime.clientVersion, 'retained');
 });
@@ -144,8 +145,8 @@ test('清除排在在途保存之后，不会被旧写入恢复，清除后可�
   assert.equal(await createDiagnosticReportStore(directory).info(), null);
   assert.equal(await readFile(join(directory, 'user-export.json'), 'utf8'), 'manual report');
   await store.save(report('fresh'));
-  assert.equal(await store.previous(), null);
-  assert.equal((await createDiagnosticReportStore(directory).previous()).runtime.clientVersion, 'fresh');
+  assert.equal(await store.info(), null);
+  assert.equal((await createDiagnosticReportStore(directory).info()).clientVersion, 'fresh');
 });
 
 function ipcFixture() {
@@ -164,8 +165,8 @@ function ipcFixture() {
     app: { getPath: () => '/private', getVersion: () => 'current-version', getGPUFeatureStatus: () => ({}) },
     readDiagnosticEvents: async () => [{ stage: 'current-start' }],
     savedDiagnosticReports: { save: async text => { saved.push(JSON.parse(text)); return Buffer.byteLength(text); }, info: async () => null,
-      previous: async () => ({ ...JSON.parse(report('old-version')), environment: { appVersion: 'old-version' },
-        events: [{ stage: 'old-start' }] }), clear: async () => { cleared++; } },
+      all: async () => ({ reports: { previous: { ...JSON.parse(report('old-version')), environment: { appVersion: 'old-version' },
+        events: [{ stage: 'old-start' }] } }, unavailable: [] }), clear: async () => { cleared++; } },
     mkdir: async directory => exportDirectories.push(directory),
     dialog: { showSaveDialog: async (_window, options) => {
       dialogOptions.push(options); return { canceled: false, filePath: '/selected/report.json' };
@@ -187,12 +188,16 @@ test('保存只接受可信页面且不落盘体验说明，上次导出不混�
   assert.equal(bytes, Buffer.byteLength(JSON.stringify(saved[0])));
   assert.equal(saved[0].notes, '');
   assert.equal(saved[0].environment.appVersion, 'current-version');
-  await handlers.get('diagnostics:export-saved')({ trusted: true }, '补充体验');
-  assert.equal(writes[0].report.environment.appVersion, 'old-version');
-  assert.deepEqual(writes[0].report.events, [{ stage: 'old-start' }]);
-  assert.equal(writes[0].report.notes, '补充体验');
+  const result = await handlers.get('diagnostics:export')({ trusted: true }, text);
+  assert.equal(result.filePath, writes[0].path);
+  assert.equal(writes[0].report.environment.appVersion, 'current-version');
+  assert.deepEqual(writes[0].report.events, [{ stage: 'current-start' }]);
+  assert.equal(writes[0].report.notes, 'private feedback');
+  const prior = writes[0].report.savedReports.previous;
+  assert.equal(prior.environment.appVersion, 'old-version');
+  assert.deepEqual(prior.events, [{ stage: 'old-start' }]);
   assert.equal(exportDirectories[0], resolve('/private', 'exports'));
-  assert.equal(dialogOptions[0].defaultPath, resolve('/private', 'exports', `LycanSync-diagnostics-${Date.parse('2026-10-26T00:01:00Z')}.json`));
+  assert.equal(dialogOptions.length, 0);
 });
 
 test('清除使尚在补齐事件的旧快照失效，清除后不会被迟到结果写回', async () => {
@@ -210,17 +215,19 @@ test('清除使尚在补齐事件的旧快照失效，清除后不会被迟到�
   assert.equal(saved.length, 0);
 });
 
-test('上次报告选址前关闭时不打开迟到对话框，取消选址不改变保存文件', async () => {
-  const { state, handlers, writes } = ipcFixture();
-  let dialogs = 0;
-  state.dialog.showSaveDialog = async () => { dialogs++; return { canceled: true }; };
-  await handlers.get('diagnostics:export-saved')({ trusted: true }, '');
-  assert.equal(dialogs, 1);
-  assert.equal(writes.length, 0);
-  state.mkdir = async () => { state.closing = true; };
-  await handlers.get('diagnostics:export-saved')({ trusted: true }, '');
-  assert.equal(dialogs, 1);
-  assert.equal(writes.length, 0);
+test('合并导出读取三种已保存的快照，单份损坏时保留其余内容', async context => {
+  const { directory, store } = await fixture(context);
+  await store.save(screenReport('screen', '2026-10-26T00:05:00Z', true));
+  await createDiagnosticReportStore(directory).save(report('second'));
+  const { reports, unavailable } = await store.all();
+  assert.deepEqual(unavailable, []);
+  assert.equal(reports.current.runtime.clientVersion, 'second');
+  assert.equal(reports.previous.runtime.clientVersion, 'screen');
+  assert.equal(reports.lastScreenUsage.persistence.retainedScreenUsage, true);
+  await writeFile(join(directory, 'current.json'), '{broken');
+  const partial = await store.all();
+  assert.deepEqual(partial.unavailable, ['current']);
+  assert.deepEqual(Object.keys(partial.reports), ['previous', 'lastScreenUsage']);
 });
 
 test('自动保存失败明确拒绝并留下固定存储原因，不把磁盘错误伪报成功', async () => {

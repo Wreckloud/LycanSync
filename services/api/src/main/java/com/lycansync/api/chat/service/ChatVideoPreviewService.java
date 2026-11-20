@@ -21,7 +21,6 @@ import java.nio.file.attribute.FileTime;
 import java.time.Duration;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -43,6 +42,7 @@ public class ChatVideoPreviewService {
     private static final long RECENT_MILLIS = Duration.ofMinutes(15).toMillis();
     private final ChatFileService files;
     private final AudioProcessingProperties properties;
+    private final ChatVideoEncoder encoder;
     private final ExecutorService worker = Executors.newSingleThreadExecutor(task -> {
         Thread thread = new Thread(task, "chat-video-preview");
         thread.setDaemon(true);
@@ -51,7 +51,8 @@ public class ChatVideoPreviewService {
     private final Map<UUID, ChatVideoPreviewResponse> results = new LinkedHashMap<>();
     private UUID running;
 
-    public ChatVideoPreviewService(ChatFileService files, AudioProcessingProperties properties) {
+    public ChatVideoPreviewService(ChatFileService files, AudioProcessingProperties properties, ChatVideoEncoder encoder) {
+        this.encoder = encoder;
         this.files = files;
         this.properties = properties;
     }
@@ -104,32 +105,11 @@ public class ChatVideoPreviewService {
 
     private void convert(UUID attachment, Path source, String format) {
         Path partial = directory().resolve(attachment + ".part");
-        Process encoder = null;
         ChatVideoPreviewResponse result;
         long started = System.nanoTime();
         try {
             Files.deleteIfExists(partial);
-            ProcessBuilder builder = new ProcessBuilder(List.of(properties.getFfmpegExecutable(), "-nostdin",
-                    "-hide_banner", "-loglevel", "error", "-max_alloc", "67108864", "-threads", "1",
-                    "-filter_threads", "1", "-protocol_whitelist", "file", "-f", format, "-i", source.toString(),
-                    "-map", "0:v:0", "-map", "0:a:0?", "-sn", "-dn", "-map_metadata", "-1",
-                    "-vf", "scale=w='min(1280,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1",
-                    "-fpsmax", "30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "25", "-pix_fmt", "yuv420p",
-                    "-threads", "1", "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-movflags", "+faststart",
-                    "-f", "mp4", partial.toString()))
-                    .redirectOutput(ProcessBuilder.Redirect.DISCARD).redirectError(ProcessBuilder.Redirect.DISCARD);
-            builder.environment().clear();
-            if (System.getenv("SystemRoot") != null) builder.environment().put("SystemRoot", System.getenv("SystemRoot"));
-            encoder = builder.start();
-            while (!encoder.waitFor(1, TimeUnit.SECONDS)) {
-                if (System.nanoTime() - started > Duration.ofMinutes(5).toNanos()) {
-                    throw new IOException("timeout");
-                }
-                // 不使用 -fs 截断视频，避免把只转换了一半的内容当成成功。
-                if (Files.exists(partial) && Files.size(partial) > MAX_OUTPUT_BYTES) throw new IOException("size-limit");
-            }
-            if (encoder.exitValue() != 0 || !Files.isRegularFile(partial)
-                    || Files.size(partial) == 0 || Files.size(partial) > MAX_OUTPUT_BYTES) throw new IOException("encode-failed");
+            encoder.encode(source, format, partial, MAX_OUTPUT_BYTES, true);
             Files.move(partial, output(attachment), StandardCopyOption.ATOMIC_MOVE);
             result = response("ready", null);
             log.info("聊天视频兼容预览完成 attachmentId={} elapsedMs={}", attachment,
@@ -139,11 +119,6 @@ public class ChatVideoPreviewService {
             log.warn("聊天视频兼容预览失败 attachmentId={} reason={}", attachment, exception.getClass().getSimpleName());
             result = response("failed", "视频转换未能完成，可能超出处理限制或编码不受支持。可以重试或下载原文件。");
         } finally {
-            if (encoder != null && encoder.isAlive()) {
-                encoder.destroyForcibly();
-                try { encoder.waitFor(2, TimeUnit.SECONDS); }
-                catch (InterruptedException exception) { Thread.currentThread().interrupt(); }
-            }
             try { Files.deleteIfExists(partial); }
             catch (IOException exception) { log.warn("聊天视频转换临时文件清理失败 attachmentId={}", attachment); }
         }

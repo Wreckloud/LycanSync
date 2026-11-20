@@ -11,6 +11,8 @@ const props = defineProps<{ groupId: string; message: ChatMessage; job?: Outgoin
 defineEmits<{ retry: [job: Outgoing]; dismiss: [job: Outgoing] }>();
 const kind = computed(() => props.message.type === 'IMAGE' ? 'image' : props.message.attachment && chatMediaFormat(props.message.attachment)?.kind);
 const visual = computed(() => kind.value === 'video' || kind.value === 'image');
+const processing = computed(() => props.job?.state === 'sending' && props.job.item?.optimizeVideo
+  && props.job.progress >= props.job.item.file.size);
 const percent = computed(() => props.job?.state === 'sending' && props.job.item?.file.size
   ? Math.min(99, Math.floor(100 * props.job.progress / props.job.item.file.size)) : undefined);
 </script>
@@ -28,7 +30,7 @@ const percent = computed(() => props.job?.state === 'sending' && props.job.item?
     <strong v-if="!visual && message.attachment">{{ message.attachment.fileName }}</strong>
     <template v-if="job">
       <progress v-if="!visual && job.state === 'sending' && job.item" :value="job.progress" :max="job.item.file.size || 1" aria-label="文件上传进度" />
-      <small :role="job.error ? 'alert' : 'status'">{{ job.error || (job.state === 'sending' && job.item ? '正在上传' : '发送中…') }}</small>
+      <small :role="job.error ? 'alert' : 'status'">{{ job.error || (processing ? '正在处理视频…' : job.state === 'sending' && job.item ? '正在上传' : '发送中…') }}</small>
       <template v-if="job.state === 'failed'">
         <button v-if="!visual" type="button" class="chat-retry" @click="$emit('retry', job)">重试</button>
         <button type="button" class="chat-retry" @click="$emit('dismiss', job)">关闭</button>

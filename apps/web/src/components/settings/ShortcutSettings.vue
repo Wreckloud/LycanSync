@@ -71,7 +71,6 @@ onScopeDispose(() => { void props.shortcuts.cancelCapture(); });
       <small>点击后按下快捷键，松开保存，Esc 取消。支持字母、数字、常用符号、F1–F11 及 Ctrl、Alt、Shift 组合。</small>
       <small>建议搭配 Ctrl、Alt 或 Shift，减少与打字、游戏按键冲突。</small>
       <InlineFeedback :message="keyError || (missingTalkBinding ? '请先为按键发言设置快捷键' : shortcuts.error)" />
-      <button v-if="!missingTalkBinding && shortcuts.error && shortcuts.supported" type="button" :disabled="shortcuts.busy" @click="shortcuts.retry()">重新启用</button>
     </section>
   </div>
 </template>

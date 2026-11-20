@@ -91,8 +91,10 @@ onScopeDispose(() => { disposed = true; observer?.disconnect(); release(); });
       <span v-else class="chat-media-placeholder" aria-hidden="true" />
       <slot />
     </div>
-    <ChatFileCard v-else-if="!format || format.kind === 'audio' || (failed && format.kind === 'image')"
-      :group-id="groupId" :attachment="attachment" :preview-disabled="failed && format?.kind === 'image'" @preview="openPreview" />
+    <ChatFileCard v-else-if="!format || format.kind === 'audio' || failed || (format.kind === 'video' && loadingFailed)"
+      :group-id="groupId" :attachment="attachment" :preview-disabled="failed && format?.kind === 'image'" @preview="openPreview">
+      <progress v-if="videoLoading" max="100" :value="videoPercent" aria-label="视频加载进度" />
+    </ChatFileCard>
     <div v-else class="chat-inline-media" :style="frameStyle">
       <button class="chat-inline-image" type="button" :aria-label="videoLoading ? '取消加载视频' : format.kind === 'video' ? '播放视频' : source ? '查看图片' : '加载图片'" @click="openPreview">
         <img v-if="source" :src="source" :alt="format.kind === 'image' ? attachment.fileName : ''" @error="decodeFailed" />
@@ -100,7 +102,7 @@ onScopeDispose(() => { disposed = true; observer?.disconnect(); release(); });
         <ChatMediaProgress v-if="videoLoading || loaded !== null" :percent="videoLoading ? videoPercent : imagePercent" label="媒体加载进度"><Download :size="20" /></ChatMediaProgress>
         <span v-else-if="format.kind === 'video' || !source" class="chat-media-play"><component :is="format.kind === 'video' ? Play : Download" :size="24" /></span>
       </button>
-      <button v-if="loadingFailed && !videoLoading" class="chat-cover-retry" type="button" @click="load()">{{ format.kind === 'video' ? '封面' : '图片' }}加载失败，点击重试</button>
+      <button v-if="loadingFailed && !videoLoading" class="chat-cover-retry" type="button" @click="load()">图片加载失败，点击重试</button>
     </div>
   </div>
 </template>

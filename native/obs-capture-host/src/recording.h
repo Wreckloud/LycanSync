@@ -13,7 +13,8 @@ class RecordingAudioInput;
 class RecordingOutput {
 public:
   using Emit = std::function<void(std::string_view, std::string_view, std::string_view)>;
-  RecordingOutput(std::string plugin_directory, std::string data_directory, Emit emit);
+  RecordingOutput(std::string plugin_directory, std::string data_directory, Emit emit,
+      std::function<bool()> window_suspended = {});
   ~RecordingOutput();
   bool start(std::string id, std::string path, bool voices, obs_source_t *source, const std::string &pipeline_id, uint32_t height, uint32_t fps);
   bool start_replay(std::string id, bool voices, obs_source_t *source, const std::string &pipeline_id, uint32_t seconds, uint32_t height, uint32_t fps);
@@ -36,6 +37,8 @@ public:
 private:
   std::string plugin_directory_, data_directory_, id_;
   Emit emit_;
+  std::function<bool()> window_suspended_;
+  obs_sceneitem_t *suspension_hint_ = nullptr;
   obs_output_t *output_ = nullptr;
   obs_output_t *replay_ = nullptr;
   std::string pipeline_id_, replay_id_, save_id_, save_path_, pipeline_error_;
@@ -63,6 +66,7 @@ private:
   void release_output(obs_output_t *&output, bool replay);
   bool prepare_pipeline(const std::string &id, bool voices, obs_source_t *source, uint32_t height, uint32_t fps);
   bool load_modules();
+  bool add_suspension_hint(bool visible);
   static void started(void *, calldata_t *);
   static void stopped(void *, calldata_t *);
   static void replay_started(void *, calldata_t *);

@@ -59,6 +59,7 @@ public class ChatFileService {
     private final GroupService groupService;
     private final ChatFileProperties properties;
     private final ChatUploadSettingsService settings;
+    private final ChatVideoEncoder encoder;
     private final Clock systemClock;
     private final TransactionTemplate transactions;
     private final ChatFileStorageCoordinator coordinator;
@@ -66,7 +67,8 @@ public class ChatFileService {
 
     public ChatFileService(ChatMapper mapper, ChatFileQuotaService quotaService, GroupService groupService,
                           ChatFileProperties properties, Clock systemClock, TransactionTemplate transactions,
-                          ChatFileStorageCoordinator coordinator, ApplicationEventPublisher events, ChatUploadSettingsService settings) {
+                          ChatFileStorageCoordinator coordinator, ApplicationEventPublisher events, ChatUploadSettingsService settings,
+                          ChatVideoEncoder encoder) {
         this.mapper = mapper;
         this.quotaService = quotaService;
         this.groupService = groupService;
@@ -76,16 +78,17 @@ public class ChatFileService {
         this.coordinator = coordinator;
         this.events = events;
         this.settings = settings;
+        this.encoder = encoder;
     }
 
     public ChatMessageResponse upload(UUID groupId, AuthenticatedUser user, UUID uploadId,
                                       String encodedFileName, String content, long expectedSize, InputStream input) {
-        return upload(groupId, user, uploadId, encodedFileName, content, expectedSize, input, null);
+        return upload(groupId, user, uploadId, encodedFileName, content, expectedSize, input, null, false);
     }
 
     public ChatMessageResponse upload(UUID groupId, AuthenticatedUser user, UUID uploadId,
                                       String encodedFileName, String content, long expectedSize, InputStream input,
-                                      UUID declaredMessageId) {
+                                      UUID declaredMessageId, boolean optimizeVideo) {
         groupService.requireMember(groupId, user);
         ChatMessageView previousUpload = mapper.findFileMessage(groupId, uploadId, user.id());
         if (previousUpload != null) {
@@ -122,9 +125,9 @@ public class ChatFileService {
                 ChatMessageView completedUpload = mapper.findFileMessage(groupId, uploadId, user.id());
                 if (completedUpload != null) return toResponse(completedUpload);
                 writeTemporaryFile(input, temporaryFile, expectedSize);
-                moveToStorage(temporaryFile, storedFile);
+                var attachment = storeUpload(temporaryFile, storedFile, attachmentId, fileName, expectedSize, optimizeVideo);
                 ChatMessageResponse response = transactions.execute(status -> persistMessageInTransaction(groupId,
-                        user, attachmentId, uploadId, fileName, content, expectedSize, declaredMessageId));
+                        user, attachmentId, uploadId, attachment.fileName(), content, attachment.byteSize(), declaredMessageId));
                 completed = true;
                 return response;
             } catch (IncompleteUploadException exception) {
@@ -167,8 +170,9 @@ public class ChatFileService {
         groupService.requireMember(groupId, user);
         ChatMessageView existing = declaration(groupId, id);
         if (existing != null) {
+            if (existing.transferStatus() == null && existing.senderUserId().equals(user.id())
+                    && existing.content().equals(text) && existing.type() == ChatMessageType.FILE) return toResponse(existing);
             if (!matches(existing, user, fileName, byteSize, text)) throw deliveryConflict();
-            if (existing.transferStatus() == null) return toResponse(existing);
         }
         settings.checkFileSize(byteSize);
         if (!mapper.hasFileCapacity(byteSize, properties.getMaxStorageSize())) {
@@ -265,6 +269,30 @@ public class ChatFileService {
                 "application/octet-stream", null, null, byteSize, fileName);
         return new ChatMessageResponse(messageId, user.id(), user.nickname(), ChatMessageType.FILE,
                 normalizedContent, createdAt, attachment);
+    }
+
+    private ChatFileMetadata storeUpload(Path temporaryFile, Path storedFile, UUID attachmentId, String fileName,
+                                         long expectedSize, boolean optimizeVideo) throws IOException {
+        String format = optimizeVideo ? ChatFileMediaService.videoFormat(fileName) : null;
+        if (format == null) {
+            moveToStorage(temporaryFile, storedFile);
+            return new ChatFileMetadata(attachmentId, fileName, expectedSize);
+        }
+        long limit = settings.limits().maxFileBytes();
+        try {
+            encoder.encode(temporaryFile, format, storedFile, limit, false);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new GroupException(HttpStatus.SERVICE_UNAVAILABLE, ApiErrorCode.CHAT_FILE_STORAGE_FAILED, "视频处理已中断，请重试。");
+        } catch (IOException exception) {
+            log.warn("群聊视频优化失败 attachmentId={} reason={}", attachmentId, exception.getClass().getSimpleName());
+            throw new GroupException(HttpStatus.UNPROCESSABLE_ENTITY, ApiErrorCode.CHAT_FILE_STORAGE_FAILED,
+                    "视频未能处理，可重试或勾选“发送原文件”重新发送。");
+        }
+        String attachmentName = fileName.substring(0, fileName.lastIndexOf('.')) + ".mp4";
+        long attachmentBytes = Files.size(storedFile);
+        Files.delete(temporaryFile);
+        return new ChatFileMetadata(attachmentId, attachmentName, attachmentBytes);
     }
 
     private void writeTemporaryFile(InputStream input, Path path, long expectedSize) throws IOException {

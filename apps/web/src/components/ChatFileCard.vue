@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, inject } from 'vue';
-import { Download, Eye, X } from '@lucide/vue';
+import { Download, X } from '@lucide/vue';
 import { CHAT_TRANSFERS } from '../chat/useChatTransfers';
 import type { ChatAttachment } from '../chat/chatApi';
-import { chatMediaFormat } from '../chat/chatMedia';
+import { chatMediaFormat, formatAttachmentSize } from '../chat/chatMedia';
 
 const props = defineProps<{ groupId: string; attachment: ChatAttachment; previewDisabled?: boolean }>();
 const emit = defineEmits<{ preview: [] }>();
@@ -23,11 +23,10 @@ function cancel() { task.value?.controller?.abort(); }
   <div class="chat-file-card">
     <component :is="previewable ? 'button' : 'div'" class="chat-file-summary" :type="previewable ? 'button' : undefined"
       :aria-label="previewable ? `预览 ${attachment.fileName || '文件'}` : undefined" @click="previewable && emit('preview')">
-      <span class="chat-file-icon" aria-hidden="true"><component :is="previewable ? Eye : Download" :size="17" /></span>
       <span class="chat-file-details">
         <strong>{{ attachment.fileName }}</strong>
-        <small>{{ (attachment.byteSize / 1024 / 1024).toFixed(2) }} MB</small>
-        <small v-if="previewDisabled">无法预览，可下载后打开</small>
+        <small>{{ formatAttachmentSize(attachment.byteSize) }}</small>
+        <slot />
         <progress v-if="downloading" :value="progress()" max="100" aria-label="文件下载进度" />
         <small v-if="error" class="chat-file-error" role="alert">{{ error }}</small>
       </span>

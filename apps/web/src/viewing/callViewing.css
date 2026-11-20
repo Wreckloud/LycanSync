@@ -10,7 +10,8 @@
 .voice-panel:has(.viewing-fold) > .call-viewing-panel { min-height: 0; overflow: clip; background: var(--panel-soft); pointer-events: auto; }
 .voice-panel:has(> .viewing-fold[aria-expanded="true"])::before { content: ''; position: absolute; top: 100%; inset-inline: 0; height: 1px; background: var(--border); pointer-events: none; }
 .viewing-fold { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); display: grid; place-items: center; width: 60px; height: 16px; margin: 0; padding: 0; border: 0; border-radius: 0 0 4px 4px; color: var(--muted); background: var(--panel-soft); pointer-events: auto; touch-action: none; cursor: pointer; }
-.viewing-fold::before { content: ''; width: 24px; height: 2px; border-radius: 1px; background: currentColor; }
+.viewing-fold::before { content: ''; width: 24px; height: 2px; border-radius: 1px; background: currentColor; transform: scaleX(.75); transition: transform var(--motion-feedback-duration) var(--motion-ease); }
+.viewing-fold:is(:hover, :focus-visible, :active)::before { transform: scaleX(1); }
 .viewing-fold:is(:hover, :focus-visible, :active) { color: var(--text); }
 .voice-panel:has(.is-framing) { overflow: visible; }
 .call-viewing-panel.is-framing { overflow: hidden; }

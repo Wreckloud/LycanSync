@@ -6,11 +6,11 @@ import { useComposerHeight } from '../chat/useComposerHeight';
 import { useGroupMessages } from '../chat/useGroupMessages';
 import { ACCOUNT_CACHE } from '../cache/localCache';
 import { useLoadingHint } from './useLoadingHint';
-import { ArrowDown, MessageSquareText, Plus, Send, X, File, Music2 } from '@lucide/vue';
+import { ArrowDown, MessageSquareText, Plus, Send, X } from '@lucide/vue';
 import defaultAvatar from '../../../../services/api/src/main/resources/account/default.png';
 import type { AuthUser } from '../auth/authApi';
 import { uploadLimits, type ChatMessage } from '../chat/chatApi';
-import { CHAT_TRANSFERS, type DraftAttachment as PendingAttachment } from '../chat/useChatTransfers';
+import { CHAT_TRANSFERS, type DraftAttachment } from '../chat/useChatTransfers';
 import { compressChatImage } from '../chat/messageImage';
 import { formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey } from '../chat/messageTime';
 import type { GroupMember, GroupSummary } from '../group/groupApi';
@@ -21,9 +21,12 @@ import { findGroupMemberProfile, type GroupMemberProfile } from '../group/groupA
 import ChatFileMedia from './ChatFileMedia.vue';
 import ChatMediaViewer from './ChatMediaViewer.vue';
 import RecordingThumbnail from './settings/RecordingThumbnail.vue';
-import { chatMediaFormat } from '../chat/chatMedia';
+import { chatMediaFormat, formatAttachmentSize } from '../chat/chatMedia';
 import DialogTransition from './DialogTransition.vue';
 
+type PendingAttachment = DraftAttachment & {
+  originalFile?: File; optimizedImage?: File; sendOriginal?: boolean; originalLimit?: number; imageError?: boolean;
+};
 type MessageSegment = { text: string; href?: string };
 const props = defineProps<{ group: GroupSummary; members: GroupMember[]; user: AuthUser; syncError?: string; recordingAttachment?: RecordingLibraryEntry }>();
 const emit = defineEmits<{ initialLoad: [groupId: string]; retrySync: []; recordingConsumed: [] }>();
@@ -125,8 +128,7 @@ const canSend = computed(() => !preparing.value && (text.value.trim().length > 0
 
 function allowedSize(file: Pick<File, 'name' | 'size'>, limit: number) {
   if (file.size <= limit) return true;
-  const size = (bytes: number) => (bytes / 1024 ** 2).toLocaleString(undefined, { maximumFractionDigits: 2 }) + ' MiB';
-  error.value = file.name + '（' + size(file.size) + '）超过单文件上限 ' + size(limit);
+  error.value = file.name + '（' + formatAttachmentSize(file.size) + '）超过单文件上限 ' + formatAttachmentSize(limit);
   return false;
 }
 
@@ -147,7 +149,7 @@ function removePendingAttachment(id: string) {
   pendingAttachments.value = pendingAttachments.value.filter((attachment) => attachment.id !== id);
 }
 
-async function enqueueFiles(files: File[], compressSupportedImages: boolean) {
+async function enqueueFiles(files: File[], sendAsImageMessage: boolean) {
   if (preparing.value || !files.length) return;
   preparing.value = true;
   error.value = '';
@@ -156,12 +158,25 @@ async function enqueueFiles(files: File[], compressSupportedImages: boolean) {
     const { maxFileBytes } = await uploadLimits(selection.signal);
     if (disposed) return;
     for (const file of files) {
-      const imageType = compressSupportedImages && (file.type === 'image/png' || file.type === 'image/jpeg');
-      if (!imageType && !allowedSize(file, maxFileBytes)) continue;
-      const prepared = imageType ? await compressChatImage(file) : file;
-      if (imageType && !allowedSize(prepared, maxFileBytes)) continue;
-      preparedItems.push({ id: crypto.randomUUID(), kind: imageType ? 'IMAGE' : 'FILE', file: prepared,
-        previewUrl: chatMediaFormat({ id: '', byteSize: prepared.size, fileName: prepared.name, contentType: prepared.type }) ? URL.createObjectURL(prepared) : '' });
+      const imageType = file.type === 'image/png' || file.type === 'image/jpeg';
+      const format = chatMediaFormat({ id: '', byteSize: file.size, fileName: file.name, contentType: file.type });
+      let optimizedImage: File | undefined;
+      let imageError = false;
+      if (imageType) {
+        try {
+          const image = await compressChatImage(file);
+          optimizedImage = new File([image], file.name, { type: image.type });
+        } catch {
+          // 压缩失败仍允许用户选择原件。
+          imageError = true;
+        }
+      }
+      const prepared = optimizedImage ?? file;
+      if (!allowedSize(prepared, maxFileBytes)) continue;
+      preparedItems.push({ id: crypto.randomUUID(), kind: imageType && sendAsImageMessage ? 'IMAGE' : 'FILE',
+        file: prepared, originalFile: imageType ? file : undefined, optimizedImage, imageError, originalLimit: maxFileBytes,
+        sendOriginal: imageType || format?.kind === 'video' ? false : undefined,
+        previewUrl: format ? URL.createObjectURL(prepared) : '' });
       if (disposed) {
         for (const item of preparedItems) revokePreview(item);
         return;
@@ -174,6 +189,21 @@ async function enqueueFiles(files: File[], compressSupportedImages: boolean) {
   } finally {
     preparing.value = false;
   }
+}
+
+function selectOriginal(item: PendingAttachment, event: Event) {
+  const input = event.target as HTMLInputElement;
+  if (input.checked && item.originalFile && !allowedSize(item.originalFile, item.originalLimit!)) {
+    input.checked = false;
+    return;
+  }
+  error.value = '';
+  item.sendOriginal = input.checked;
+  if (!item.originalFile || !item.optimizedImage) return;
+  revokePreview(item);
+  const file = input.checked ? item.originalFile : item.optimizedImage;
+  item.file = file;
+  item.previewUrl = URL.createObjectURL(file);
 }
 
 function attachmentInfo(item: PendingAttachment) {
@@ -194,7 +224,7 @@ watch(() => props.recordingAttachment, async entry => {
   const source = `lycan://app/recordings/${encodeURIComponent(entry.id)}`;
   pendingAttachments.value.push({ id: crypto.randomUUID(), kind: 'FILE', recordingId: entry.id,
     file: { name: entry.fileName || `${entry.applicationName || '录像'}.mkv`, size: entry.bytes! },
-    previewUrl: source });
+    previewUrl: source, sendOriginal: false });
   void nextTick(() => { resizeMessageInput(); messageInput.value?.focus(); });
 }, { immediate: true });
 
@@ -228,6 +258,8 @@ function handleKeydown(event: KeyboardEvent) {
 
 async function submit(restoreFocus = false) {
   if (!canSend.value) return;
+  const invalid = pendingAttachments.value.find(item => item.imageError && !item.sendOriginal);
+  if (invalid) { error.value = invalid.file.name + ' 无法优化，勾选“发送原文件”后可发送。'; return; }
   const queued = pendingAttachments.value;
   const content = text.value;
   const groupId = props.group.id;
@@ -235,7 +267,13 @@ async function submit(restoreFocus = false) {
   pendingPreview.value = null;
   text.value = '';
   error.value = '';
-  if (queued.length) queued.forEach((item, index) => transfers.enqueue(groupId, index === 0 ? content : '', item));
+  if (queued.length) queued.forEach((draft, index) => {
+    const attachment: DraftAttachment = draft.recordingId !== undefined
+      ? { id: draft.id, recordingId: draft.recordingId, kind: 'FILE', file: draft.file, previewUrl: draft.previewUrl }
+      : { id: draft.id, kind: draft.sendOriginal ? 'FILE' : draft.kind, file: draft.file, previewUrl: draft.previewUrl };
+    attachment.optimizeVideo = attachmentKind(draft) === 'video' && !draft.sendOriginal;
+    transfers.enqueue(groupId, index === 0 ? content : '', attachment);
+  });
   else transfers.enqueue(groupId, content);
   await nextTick();
   if (disposed) return;
@@ -410,13 +448,14 @@ onScopeDispose(() => {
             <div v-if="pendingAttachments.length" class="composer-attachments">
               <div v-for="item in pendingAttachments" :key="item.id" class="composer-attachment">
                 <button type="button" class="composer-attachment-preview" :aria-label="`预览 ${item.file.name}`" :disabled="!attachmentKind(item) || !item.previewUrl" @click="pendingPreview = item">
-                  <RecordingThumbnail v-if="attachmentKind(item) === 'video'" class="composer-video-cover" :source="item.previewUrl" :disabled="!item.previewUrl" />
-                  <img v-else-if="attachmentKind(item) === 'image' && item.previewUrl" :src="item.previewUrl" alt="" />
-                  <Music2 v-else-if="attachmentKind(item) === 'audio'" :size="20" />
-                  <File v-else :size="20" />
+                  <RecordingThumbnail v-if="attachmentKind(item) === 'video'" class="composer-video-cover" :source="item.previewUrl" :disabled="!item.previewUrl" hide-unavailable />
+                  <img v-else-if="attachmentKind(item) === 'image' && item.previewUrl" :key="item.previewUrl" :src="item.previewUrl" alt="" @error="($event.target as HTMLImageElement).hidden = true" />
                   <span class="composer-attachment-name">{{ item.file.name }}</span>
                 </button>
-                <small>{{ item.kind === 'IMAGE' ? '已压缩' : (item.file.size / 1024 / 1024).toFixed(2) + ' MiB' }}</small>
+                <small>{{ formatAttachmentSize(item.file.size) }}</small>
+                <label v-if="item.sendOriginal !== undefined" class="composer-original">
+                  <input type="checkbox" :checked="item.sendOriginal" @change="selectOriginal(item, $event)" />发送原文件
+                </label>
                 <button type="button" :aria-label="`移除 ${item.file.name}`" @click="removePendingAttachment(item.id)"><X :size="13" /></button>
               </div>
             </div>

@@ -97,13 +97,13 @@
   border-radius: 8px;
   background: var(--panel-soft);
 }
-.chat-file-icon { display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 34px; border-radius: 6px; background: var(--panel); color: var(--accent); }
 .chat-file-summary { display: flex; min-width: 0; flex: 1; gap: 10px; align-items: center; text-align: left; padding: 0; border: 0; background: transparent; }
 button.chat-file-summary { cursor: pointer; }
 .composer-attachment-preview:enabled:is(:hover, :focus-visible) .composer-attachment-name, button.chat-file-summary:is(:hover, :focus-visible) strong { color: var(--text); text-decoration: underline; }
-.chat-file-details { display: grid; min-width: 0; flex: 1; gap: 3px; }
+.chat-file-details { display: flex; flex-wrap: wrap; align-items: center; min-width: 0; flex: 1; gap: 3px; }
 .chat-file-details strong, .composer-attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-file-details strong { font-size: 13px; }
+.chat-file-details strong { max-width: 100%; font-size: 13px; }
+.chat-file-details small { margin-left: 4px; }
 .chat-file-details small, .composer-attachment small { color: var(--subtle); font-size: 11px; }
 .chat-file-details progress, .chat-transfer-state progress, .chat-media-progress { width: 100%; height: 5px; accent-color: var(--accent); }
 .chat-file-card > button:not(.chat-file-summary), .composer-attachment > button { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; }
@@ -176,7 +176,8 @@ button.chat-file-summary { cursor: pointer; }
 .composer-attachment > button { min-height: 28px; }
 .composer-attachment .composer-attachment-preview { display: flex; flex: 1; gap: 7px; align-items: center; min-width: 0; width: auto; height: 28px; padding: 0; font: inherit; text-align: left; color: inherit; }
 .composer-attachment-preview:disabled { opacity: 1; cursor: default; }
-.composer-attachment-preview > svg { flex-shrink: 0; }
+.composer-original { display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; cursor: pointer; }
+.composer-original input { margin: 0; accent-color: var(--accent); }
 .composer-attachment-name { min-width: 0; flex: 1; }
 .chat-message-body > .chat-transfer-state { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .chat-transfer-state strong { overflow-wrap: anywhere; color: var(--text); }

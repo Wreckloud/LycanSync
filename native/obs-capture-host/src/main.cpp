@@ -3,6 +3,7 @@
 #include <graphics/graphics.h>
 #include <util/base.h>
 #include "window_capture.h"
+#include "print_window.h"
 #include "game_capture.h"
 #include "screen_audio.h"
 #include "recording.h"
@@ -123,6 +124,7 @@ struct HostState {
   std::optional<std::chrono::steady_clock::time_point> mutex_wait_started;
   WindowVideoTarget window_target;
   bool suspended = false;
+  bool recording_suspended = false;
   bool configuration_paused = false;
   bool rendering_reported = false;
   bool source_ready_reported = false;
@@ -372,7 +374,10 @@ void release_busy_slot(size_t slot_index) {
 bool window_delivery_allowed(obs_source_t *source) {
   if (!g_host.window_source) return true;
   const char *failure = g_host.game_source ? game_video_failure(source, g_host.window_target)
-      : window_video_failure(source, g_host.window_target);
+      : std::string_view(g_host.capture_method) == "print-window"
+          ? (!window_video_target_valid(g_host.window_target) ? "captureTargetClosed"
+             : print_window_failed(source) ? "obsWindowCaptureStartFailed" : nullptr)
+          : window_video_failure(source, g_host.window_target);
   if (failure) {
     g_host.texture_setup_failed = true;
     write_event(failure);
@@ -383,6 +388,7 @@ bool window_delivery_allowed(obs_source_t *source) {
       : window_video_suspended(g_host.window_target);
   if (suspended != g_host.suspended) {
     g_host.suspended = suspended;
+    if (suspended) g_host.recording_suspended = true;
     const std::lock_guard<std::mutex> lock(g_output_mutex);
     std::cout << "{\"event\":\"captureSuspended\",\"sessionId\":\"" << g_host.session_id
               << "\",\"suspended\":" << (suspended ? "true" : "false") << "}\n";
@@ -407,6 +413,7 @@ void render_shared_frame(void *parameter) {
     write_capture_evidence("rendering", source_width, source_height);
   }
   if (!source_width || !source_height) return;
+  g_host.recording_suspended = false;
   if (!g_host.source_ready_reported) {
     g_host.source_ready_reported = true;
     write_capture_evidence("sourceReady", source_width, source_height);
@@ -844,6 +851,10 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
   const char *source_error = "obsDisplaySourceUnavailable";
   if (game_source) {
     source = create_game_video_source(window_target, capture_cursor_argument == "0", source_error);
+  } else if (window_source && window_method == "auto" && prefers_print_window(window_target)) {
+    g_host.capture_method = "print-window";
+    source = create_print_window_source(window_target, capture_cursor_argument == "1");
+    source_error = "obsWindowCaptureStartFailed";
   } else if (window_source) {
     source = create_window_video_source(window_target, capture_cursor_argument == "0",
         hide_border_argument == "1", window_method, source_error);
@@ -916,6 +927,11 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
         std::cout.flush();
       });
 
+  std::function<bool()> window_suspended;
+  if (window_source) window_suspended = [&] {
+    const std::lock_guard<std::mutex> lock(g_render_mutex);
+    return g_host.recording_suspended;
+  };
   RecordingOutput recording(to_utf8(module_path.parent_path().wstring()), to_utf8(capture_data.parent_path().wstring()),
       [&](std::string_view event, std::string_view id, std::string_view code) {
         if (!recording.active()) screen_audio.recording(false);
@@ -929,7 +945,7 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
         if (event == "recordingStarted" || event == "replayStarted") std::cout << recording.encoding_diagnostics();
         if (event == "replayStarted") std::cout << ",\"memoryBudgetMb\":" << recording.replay_memory_mb();
         std::cout << "}\n" << std::flush;
-      });
+      }, std::move(window_suspended));
   std::string command;
   struct PendingConfiguration { std::string id; uint32_t fps; uint32_t width; uint32_t height; uint32_t render_fps; };
   std::optional<PendingConfiguration> pending_configuration;
@@ -1096,6 +1112,7 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
 }
 
 int wmain(int argc, wchar_t **argv) {
+  if (argc == 3 && std::wstring_view(argv[1]) == L"--print-window") return run_print_window_worker(argv[2]);
   if ((argc != 4 && argc != 5) || !std::filesystem::path(argv[3]).is_absolute()) return 2;
   if (argc == 5) {
     const auto requested = to_utf8(argv[4]);
@@ -1110,6 +1127,7 @@ int wmain(int argc, wchar_t **argv) {
   }
   base_set_log_handler(obs_log_handler, nullptr);
   if (!obs_startup("en-US", to_utf8(argv[3]).c_str(), nullptr)) { write_event("obsStartupFailed"); return 1; }
+  register_print_window_source();
   if (std::string_view(obs_get_version_string()) != "32.2.2") {
     write_event("obsCaptureVersionUnsupported");
     obs_shutdown();

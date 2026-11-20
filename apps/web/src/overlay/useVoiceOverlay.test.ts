@@ -83,6 +83,36 @@ it('停止收听或禁麦立即撤销自己的说话标记；重连时也不保�
   } finally { f.scope.stop(); }
 });
 
+it('入房时隐藏尚无身份的本地成员，连接成功后同步正式名单', async () => {
+  const f = setup();
+  try {
+    await settle();
+    f.status.value = 'joining';
+    const joining = roomFixture();
+    joining.localParticipant.identity = '';
+    f.room.value = joining;
+    expect(f.snapshots.at(-1)).toMatchObject({ roomId: null, status: 'hidden', members: [] });
+    joining.localParticipant.identity = 'self';
+    f.status.value = 'connected';
+    expect(f.snapshots.at(-1)?.members.map(member => member.identity)).toEqual(['self', 'remote']);
+  } finally { f.scope.stop(); }
+});
+
+it('同步失败后下一次可重发相同状态和头像，成功后清除旧提示', async () => {
+  const f = setup();
+  try {
+    await settle();
+    f.bridge.update.mockRejectedValueOnce(new Error('unavailable'));
+    f.microphone.value = false;
+    await settle();
+    expect(f.model.error.value).toContain('状态更新失败');
+    f.revision.value++;
+    await settle();
+    expect(f.snapshots.at(-1)?.portraits).toHaveLength(2);
+    expect(f.model.error.value).toBe('');
+  } finally { f.scope.stop(); }
+});
+
 it('离房立即发送隐藏并解绑旧事件；新房间重新登记头像，旧房间事件无权更新', async () => {
   const f = setup();
   await settle();
@@ -128,7 +158,7 @@ it('覆盖故障只显示独立错误；位置事件保存到本机，结束编�
     expect(f.model.error.value).toBe('覆盖不可用');
     expect(f.room.value).not.toBeNull();
     await f.model.edit(false);
-    expect(f.bridge.edit).toHaveBeenLastCalledWith('owner-1', false, false);
+    expect(f.bridge.edit).toHaveBeenLastCalledWith('owner-1', false);
   } finally { f.scope.stop(); }
 });
 

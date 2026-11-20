@@ -31,7 +31,7 @@ export function useVoiceOverlay(options: {
   const busy = ref(false);
   const ready = ref(false);
   const editing = ref(false);
-  const preview = ref(false);
+  const updateFailure = '屏幕覆盖状态更新失败，请关闭后重新开启；语音不受影响。';
   const key = `lycansync.voice-overlay.v1.${options.userId}`;
   let owner: string | undefined;
   let disposed = false;
@@ -49,13 +49,14 @@ export function useVoiceOverlay(options: {
 
   function publish() {
     if (!bridge || !owner || disposed || !settings.value.enabled) return;
-    const room = options.room();
-    const status = options.status();
+    const rtcStatus = options.status();
+    const status = rtcStatus === 'connected' || rtcStatus === 'reconnecting' ? rtcStatus : 'hidden';
+    // 入房过程中 SDK 已创建本地成员，但尚未分配身份。
+    const room = status === 'hidden' ? null : options.room();
     const connected = status === 'connected';
     const members: Participant[] = room ? [room.localParticipant, ...room.remoteParticipants.values()] : [];
     const snapshot: VoiceOverlaySnapshot = {
-      sequence: sequence++, roomId: room ? String(roomGeneration) : null,
-      status: room && (connected || status === 'reconnecting') ? status : 'hidden',
+      sequence: sequence + 1, roomId: room ? String(roomGeneration) : null, status: room ? status : 'hidden',
       members: members.map((member) => {
         const local = member === room?.localParticipant;
         const listening = local ? options.listening() : member.attributes['lycansync.listening'] !== 'false';
@@ -70,10 +71,17 @@ export function useVoiceOverlay(options: {
     const signature = JSON.stringify({ ...snapshot, sequence: 0 });
     if (lastSnapshot === signature && !portraitsChanged) return;
     if (portraitsChanged) snapshot.portraits = nextPortraits;
+    sequence = snapshot.sequence;
     lastSnapshot = signature;
     if (portraitsChanged) lastPortraits = new Map(nextPortraits.map((portrait) => [portrait.identity, portrait.avatar]));
-    void bridge.update(owner, snapshot).catch(() => {
-      if (!disposed) error.value = '屏幕覆盖状态更新失败，请关闭后重新开启；语音不受影响。';
+    const current = () => !disposed && settings.value.enabled && snapshot.sequence === sequence;
+    void bridge.update(owner, snapshot).then(() => {
+      if (current() && error.value === updateFailure) error.value = '';
+    }, () => {
+      if (!current()) return;
+      lastSnapshot = '';
+      lastPortraits.clear();
+      error.value = updateFailure;
     });
   }
 
@@ -97,9 +105,9 @@ export function useVoiceOverlay(options: {
     return room ? [room.localParticipant, ...room.remoteParticipants.values()].map((member) => options.avatar(member.identity)) : [];
   }, publish, { flush: 'sync' });
 
-  const removeErrorListener = bridge?.onError((message) => { error.value = message; editing.value = false; preview.value = false; });
+  const removeErrorListener = bridge?.onError((message) => { error.value = message; editing.value = false; });
   const removePlacementListener = bridge?.onPlacement((next) => { if (!disposed) saveSettings(next); });
-  const removeEditingListener = bridge?.onEditingChange((enabled) => { if (!disposed) { editing.value = enabled; if (!enabled) preview.value = false; } });
+  const removeEditingListener = bridge?.onEditingChange((enabled) => { if (!disposed) editing.value = enabled; });
 
   async function initialize() {
     if (!bridge) return;
@@ -131,7 +139,7 @@ export function useVoiceOverlay(options: {
     try {
       const next = await bridge.configure(owner, { ...settings.value, ...patch });
       if (disposed) return;
-      if (!next.enabled) { editing.value = false; preview.value = false; }
+      if (!next.enabled) editing.value = false;
       lastSnapshot = '';
       lastPortraits.clear();
       saveSettings(next);
@@ -140,11 +148,11 @@ export function useVoiceOverlay(options: {
     finally { busy.value = false; }
   }
 
-  async function edit(enabled: boolean, showPreview = false) {
+  async function edit(enabled: boolean) {
     if (!bridge || !owner || disposed) return;
     try {
-      const applied = await bridge.edit(owner, enabled, enabled && showPreview);
-      if (!disposed) { editing.value = applied; preview.value = applied && showPreview; }
+      const applied = await bridge.edit(owner, enabled);
+      if (!disposed) editing.value = applied;
     } catch { if (!disposed) error.value = '无法切换覆盖编辑模式，请重试。'; }
   }
 
@@ -163,5 +171,5 @@ export function useVoiceOverlay(options: {
     removeEditingListener?.();
     if (bridge && owner) void bridge.end(owner).catch(() => console.error('屏幕覆盖关闭未确认。'));
   });
-  return { settings, displays, error, busy, ready, editing, preview, configure, edit, refreshDisplays };
+  return { settings, displays, error, busy, ready, editing, configure, edit, refreshDisplays };
 }

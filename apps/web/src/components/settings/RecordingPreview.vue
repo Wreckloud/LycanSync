@@ -48,7 +48,7 @@ function flushSeek() {
   if (video.seeking) { video.addEventListener('seeked', flushSeek, { once: true }); return; }
   const seconds = seekTarget;
   cancelSeek();
-  video.currentTime = seconds;
+  if (video.currentTime !== seconds) video.currentTime = seconds;
 }
 function seek(seconds: number, precise: boolean) {
   player.value?.pause();

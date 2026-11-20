@@ -243,10 +243,9 @@ interface Window {
     recordingFile(id: string, action: 'play' | 'reveal' | 'delete' | 'relink' | 'clearUnavailable'): Promise<boolean>;
     onRecordingState(callback: (state: DesktopRecordingStatus) => void): () => void;
     getProcessMetrics(): Promise<DesktopProcessMetrics>;
-    exportDiagnosticReport(report: string): Promise<{ saved: boolean }>;
+    exportDiagnosticReport(report: string, chooseLocation: boolean): Promise<{ saved: false } | { saved: true; filePath: string; unavailableCount: number }>;
     saveDiagnosticSnapshot(report: string): Promise<number | null>;
     getSavedDiagnosticReport(): Promise<{ kind?: 'screen-media' | 'previous-run'; startedAt: string; endedAt: string; clientVersion: string | null; savedAt: string; bytes: number } | null>;
-    exportSavedDiagnosticReport(notes: string): Promise<{ saved: boolean }>;
     clearSavedDiagnosticReports(): Promise<void>;
     getSystemIdleState(): Promise<{ state: 'active' | 'idle' | 'locked' | 'unknown'; idleSeconds: number }>;
     getAutoStart(): Promise<{ supported: boolean; enabled: boolean }>;
@@ -257,13 +256,12 @@ interface Window {
     listActivityWindows(): Promise<ActivityWindow[]>;
     configureActivityMappings(mappings: ActivityMapping[]): Promise<void>;
     getNativeMediaCapabilities(): Promise<Record<string, { available: boolean; reason: string }>>;
-    isNativeWindowMinimized(sourceId: string, discoveryId: string): Promise<boolean>;
     listNativeVideoSources(): Promise<{ revision: number; discoveryId: string; sources: NativeVideoSource[] }>;
     prepareNativeVideoSource(sourceId: string | null): Promise<{ prepared: boolean; followGame?: 'league' }>;
     getNativeVideoSourceThumbnails(sources: NativeVideoSource[]): Promise<{ sourceId: string; thumbnail: string }[]>;
     getScreenShareSupport(): Promise<{ hideCursor: boolean; hideBorder: boolean }>;
     startNativeVideo(sourceId: string, maxFps: number, settings: { hideCursor: boolean; hideBorder: boolean;
-      windowMethod?: 'auto' | 'game' | 'window'; followGame?: 'league' }, resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean; gameFollowId?: string }>;
+      windowMethod?: 'auto' | 'game' | 'window'; followGame?: 'league' }, resolution: { width: number; height: number }, discoveryId?: string): Promise<{ sessionId: string; changed: boolean; gameFollowId?: string }>;
     findNativeGameSource(id: string): Promise<{ sourceId: string | null }>;
     switchNativeGameVideo(id: string, sourceId: string, maxFps: number, settings: import('./settings/screenSharePreferences').ScreenSharePreferences,
       resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean; gameFollowId?: string }>;

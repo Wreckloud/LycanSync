@@ -28,7 +28,7 @@ contextBridge.exposeInMainWorld('lycanVoiceOverlay', {
   begin: () => ipcRenderer.invoke('voice-overlay:begin'),
   configure: (owner, settings) => ipcRenderer.invoke('voice-overlay:configure', owner, settings),
   update: (owner, snapshot) => ipcRenderer.invoke('voice-overlay:update', owner, snapshot),
-  edit: (owner, enabled, preview = false) => ipcRenderer.invoke('voice-overlay:edit', owner, enabled, preview),
+  edit: (owner, enabled) => ipcRenderer.invoke('voice-overlay:edit', owner, enabled),
   end: (owner) => ipcRenderer.invoke('voice-overlay:end', owner),
   displays: () => ipcRenderer.invoke('voice-overlay:displays'),
   onError: (callback) => {
@@ -200,10 +200,9 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
     return () => ipcRenderer.removeListener('recording:state', listener);
   },
   getProcessMetrics: () => ipcRenderer.invoke('diagnostics:process-metrics'),
-  exportDiagnosticReport: (report) => ipcRenderer.invoke('diagnostics:export', report),
+  exportDiagnosticReport: (report, chooseLocation) => ipcRenderer.invoke('diagnostics:export', report, chooseLocation),
   saveDiagnosticSnapshot: (report) => ipcRenderer.invoke('diagnostics:checkpoint', report),
   getSavedDiagnosticReport: () => ipcRenderer.invoke('diagnostics:saved'),
-  exportSavedDiagnosticReport: (notes) => ipcRenderer.invoke('diagnostics:export-saved', notes),
   clearSavedDiagnosticReports: () => ipcRenderer.invoke('diagnostics:clear-saved'),
   getSystemIdleState: () => ipcRenderer.invoke('presence:system-idle-state'),
   getAutoStart: () => ipcRenderer.invoke('settings:auto-start:get'),
@@ -214,12 +213,11 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   listActivityWindows: () => ipcRenderer.invoke('activity:windows'),
   configureActivityMappings: (mappings) => ipcRenderer.invoke('activity:configure', mappings),
   getNativeMediaCapabilities: () => ipcRenderer.invoke('media:capabilities'),
-  isNativeWindowMinimized: (sourceId, discoveryId) => ipcRenderer.invoke('media:video-source:minimized', sourceId, discoveryId),
   listNativeVideoSources: () => ipcRenderer.invoke('media:video-sources'),
   prepareNativeVideoSource: (sourceId) => ipcRenderer.invoke('media:video-source:prepare', sourceId),
   getNativeVideoSourceThumbnails: (sources) => ipcRenderer.invoke('media:video-source-thumbnails', sources),
   getScreenShareSupport: () => ipcRenderer.invoke('settings:screen-share:support'),
-  startNativeVideo: (sourceId, maxFps, settings, resolution) => ipcRenderer.invoke('media:native-video:start', sourceId, maxFps, settings, resolution),
+  startNativeVideo: (sourceId, maxFps, settings, resolution, discoveryId) => ipcRenderer.invoke('media:native-video:start', sourceId, maxFps, settings, resolution, discoveryId),
   findNativeGameSource: (id) => ipcRenderer.invoke('media:game-follow:source', id),
   switchNativeGameVideo: (id, sourceId, maxFps, settings, resolution) => {
     stopReceivingNativeVideo(nativeVideoCanvasSessionId);

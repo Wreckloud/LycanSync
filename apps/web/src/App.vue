@@ -109,7 +109,7 @@ const captureSelection = useScreenShareSelection({
   room: () => rtc.status === 'connected' ? rtc.room : null,
   sharing: () => rtc.screenShareActive, activity: () => currentActivity.value,
 });
-const { waitingGame, captureRequest, captureSourceType, captureQuality, captureCustomQuality, selectedCaptureSourceId,
+const { captureRequest, captureSourceType, captureQuality, captureCustomQuality, selectedCaptureSourceId,
   captureFollowGameAvailable, captureSourceNotice, captureAudioCapabilityReady, captureAudioCapabilityFailed,
   captureAudioMode, captureShareAudio, nativeSourceLoading, nativeSourceError, nativeSourceChooserGeneration,
   selectCaptureSource, chooseCaptureSource, refreshVisibleSourceThumbnails, reportRenderedPreviews, updateCaptureShareAudio,
@@ -1185,8 +1185,7 @@ function participantListening(participant: Participant) {
                     <div class="call-state" role="status">
                       <RadioTower v-if="connected || rtc.status === 'reconnecting'" :size="17" /><Headphones v-else :size="17" />
                       <span><strong>{{ callbarStatus }}</strong>
-                        <small v-if="waitingGame">等待切回 {{ waitingGame }}</small>
-                        <small v-else-if="!callbarLeaving && connected && rtc.screenShareStarting">正在启动屏幕共享…</small>
+                        <small v-if="!callbarLeaving && connected && rtc.screenShareStarting">正在启动屏幕共享…</small>
                         <small v-else>{{ callbarGroup?.name }}{{ joinedGroup && selectedGroupId !== joinedGroup.id && selectedGroup ? ' · 正在浏览 ' + selectedGroup.name : '' }}</small>
                       </span>
                     </div>
@@ -1202,7 +1201,7 @@ function participantListening(participant: Participant) {
                       :shortcuts-ready="audioShortcuts.ready" :shortcuts-busy="audioShortcuts.busy" :shortcuts-supported="audioShortcuts.supported"
                       :processing-enabled="microphoneProcessingEnabled" :processing-partial="microphoneProcessingPartial" :microphone-error="audioShortcuts.error"
                       @voice-mode="updateVoiceMode" @processing="updateMicrophoneProcessing"
-                      :sharing="rtc.screenShareActive" :share-limit-reached="screenShareLimitReached" :choosing-source="Boolean(captureRequest || waitingGame)"
+                      :sharing="rtc.screenShareActive" :share-limit-reached="screenShareLimitReached" :choosing-source="Boolean(captureRequest)"
                       :share-busy="rtc.busySources.includes(Track.Source.ScreenShare) || rtc.screenShareQualityBusy || rtc.screenShareSourceBusy"
                       :quality="rtc.screenShareActive ? rtc.currentScreenShareQuality : captureQuality"
                       :custom-quality="rtc.screenShareActive ? rtc.currentCustomScreenShareQuality : captureCustomQuality"
@@ -1215,7 +1214,7 @@ function participantListening(participant: Participant) {
                       @recording-settings="openSettings('recording', $event)"
                       @microphone="toggleMicrophone" @listening="toggleListening"
                       @prepare-share="preloadCaptureSources"
-                      @share="captureRequest || waitingGame ? selectCaptureSource(null) : rtc.toggleMedia(Track.Source.ScreenShare)"
+                      @share="captureRequest ? selectCaptureSource(null) : rtc.toggleMedia(Track.Source.ScreenShare)"
                       @quality="changeScreenShareQuality" @share-audio="changeScreenShareAudio"
                       @input-gain="updateInputGain" @output-volume="updateOutputVolume" @settings="openSettings('audio', $event)" />
                     <IconButton :label="joiningGroupId ? '取消连接' : '离开语音'" class="is-danger"

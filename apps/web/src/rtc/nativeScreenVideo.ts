@@ -7,7 +7,7 @@ import { applyScreenShareEncoding, readScreenShareEncoding, screenShareEncodingL
 export interface NativeVideoDesktopBridge {
   recordScreenShareStartupTiming(sessionId: string, stage: 'screenVideoFirstFrame' | 'screenVideoStartupFailed',
     durationMs: number, failure?: { code: string }): void;
-  startNativeVideo(sourceId: string, maxFps: number, settings: ScreenSharePreferences, resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean; gameFollowId?: string }>;
+  startNativeVideo(sourceId: string, maxFps: number, settings: ScreenSharePreferences, resolution: { width: number; height: number }, discoveryId?: string): Promise<{ sessionId: string; changed: boolean; gameFollowId?: string }>;
   findNativeGameSource?(id: string): Promise<{ sourceId: string | null }>;
   switchNativeGameVideo?(id: string, sourceId: string, maxFps: number, settings: ScreenSharePreferences,
     resolution: { width: number; height: number }): Promise<{ sessionId: string; changed: boolean; gameFollowId?: string }>;
@@ -103,8 +103,8 @@ export class NativeScreenVideoSession {
   private startCommand?: ReturnType<NativeVideoDesktopBridge['startNativeVideo']>;
   private startPromise?: Promise<LocalVideoTrack>;
   private stopPromise?: Promise<void>;
-  private firstFrameResolve?: () => void;
-  private firstFrameReject?: (error: Error) => void;
+  private startupResolve?: () => void;
+  private startupReject?: (error: Error) => void;
   private suspensionTimer?: ReturnType<typeof setInterval>;
   private writePromise?: Promise<void>;
   private unconfirmedFrame?: VideoFrame;
@@ -115,6 +115,7 @@ export class NativeScreenVideoSession {
   private frameWidth = 1280;
   private frameHeight = 720;
   private suspended = false;
+  private restoreTimer?: ReturnType<typeof setTimeout>;
   private get writing() { return this.writingFrame !== undefined; }
   private stopped = false;
   private receivedFrames = 0;
@@ -245,24 +246,24 @@ export class NativeScreenVideoSession {
     });
   }
 
-  start(sourceId: string): Promise<LocalVideoTrack> {
+  start(sourceId: string, discoveryId?: string): Promise<LocalVideoTrack> {
     if (this.startPromise) return this.startPromise;
     if (this.stopped) return Promise.reject(new Error('nativeVideoSessionStopped'));
-    this.startPromise = this.startAndWaitForFrame(sourceId);
+    this.startPromise = this.startCapture(sourceId, discoveryId);
     return this.startPromise;
   }
 
-  private async startAndWaitForFrame(sourceId: string): Promise<LocalVideoTrack> {
+  private async startCapture(sourceId: string, discoveryId?: string): Promise<LocalVideoTrack> {
     this.startedAt = this.now();
     const settings = this.captureSettings ?? readScreenSharePreferences();
     if (settings.followGame && (!this.desktop.findNativeGameSource || !this.desktop.switchNativeGameVideo
         || !this.desktop.endNativeGameFollow)) throw new Error('nativeGameFollowUnavailable');
-    const firstFrame = new Promise<void>((resolve, reject) => {
-      this.firstFrameResolve = resolve;
-      this.firstFrameReject = reject;
+    const ready = new Promise<void>((resolve, reject) => {
+      this.startupResolve = resolve;
+      this.startupReject = reject;
     });
     // 启动命令可能先失败；提前观察首帧拒绝，实际错误仍由下面的启动流程上报。
-    void firstFrame.catch(() => {});
+    void ready.catch(() => {});
     window.addEventListener('message', this.onWindowMessage);
     this.removeHelperErrorListener = this.desktop.onNativeVideoError((failure) => {
       if (this.sessionId) {
@@ -284,7 +285,7 @@ export class NativeScreenVideoSession {
         this.pendingSuspension = status;
       }
     });
-    this.startCommand = this.desktop.startNativeVideo(sourceId, this.maxFps, settings, this.resolution);
+    this.startCommand = this.desktop.startNativeVideo(sourceId, this.maxFps, settings, this.resolution, discoveryId);
     try {
       const started = await this.startCommand;
       if (started.changed !== true || typeof started.sessionId !== 'string' || !started.sessionId) {
@@ -294,6 +295,13 @@ export class NativeScreenVideoSession {
       this.sourceId = sourceId;
       this.gameFollowId = started.gameFollowId;
       if (settings.followGame && !this.gameFollowId) throw new Error('nativeGameFollowUnavailable');
+      const pendingFailure = this.pendingHelperFailure;
+      this.pendingHelperFailure = undefined;
+      if (pendingFailure?.sessionId === this.sessionId) throw new Error(pendingFailure.code);
+      if (this.stopped) throw new Error('nativeVideoSessionStopped');
+      const pendingSuspension = this.pendingSuspension;
+      this.pendingSuspension = undefined;
+      if (pendingSuspension?.sessionId === this.sessionId) this.setSuspended(pendingSuspension.suspended);
       if (this.unconfirmedFrame) {
         const unconfirmedFrame = this.unconfirmedFrame;
         const pendingSessionId = this.unconfirmedFrameSessionId;
@@ -302,14 +310,7 @@ export class NativeScreenVideoSession {
         if (pendingSessionId === this.sessionId && !this.stopped) this.acceptFrame(unconfirmedFrame);
         else unconfirmedFrame.close();
       }
-      const pendingSuspension = this.pendingSuspension;
-      this.pendingSuspension = undefined;
-      if (pendingSuspension?.sessionId === this.sessionId) this.setSuspended(pendingSuspension.suspended);
-      const pendingFailure = this.pendingHelperFailure;
-      this.pendingHelperFailure = undefined;
-      if (pendingFailure?.sessionId === this.sessionId) throw new Error(pendingFailure.code);
-      if (this.stopped) throw new Error('nativeVideoSessionStopped');
-      await waitWithTimeout(firstFrame, this.firstFrameTimeoutMs, 'nativeVideoFirstFrameTimeout');
+      await waitWithTimeout(ready, this.firstFrameTimeoutMs, 'nativeVideoFirstFrameTimeout');
       if (this.gameFollowId) this.scheduleGameFollow();
       return this.track;
     } catch (error) {
@@ -408,7 +409,7 @@ export class NativeScreenVideoSession {
     this.removeSuspensionListener?.();
     this.removeSuspensionListener = undefined;
     this.clearSuspensionTimer();
-    this.firstFrameReject?.(new Error('nativeVideoSessionStopped'));
+    this.startupReject?.(new Error('nativeVideoSessionStopped'));
     this.gameFirstFrameReject?.(new Error('nativeVideoSessionStopped'));
     this.gameFirstFrameReject = undefined;
     this.generator.stop();
@@ -516,13 +517,14 @@ export class NativeScreenVideoSession {
     if (Number.isInteger(frame.displayHeight) && frame.displayHeight > 0) this.frameHeight = frame.displayHeight;
     this.submittedFrames++;
     if (this.firstFrameMs === null && this.startedAt !== undefined) {
+      clearTimeout(this.restoreTimer);
       this.firstFrameMs = Math.max(0, this.now() - this.startedAt);
       this.desktop.recordScreenShareStartupTiming(this.sessionId!, 'screenVideoFirstFrame', this.firstFrameMs);
     }
     this.writeFrame(frame);
     // 首帧已交给轨道；write 要等 LiveKit 开始读取才可能完成，不能以它作为发布前提。
-    this.firstFrameResolve?.();
-    this.firstFrameResolve = undefined;
+    this.startupResolve?.();
+    this.startupResolve = undefined;
   }
 
   private setSuspended(suspended: boolean): void {
@@ -533,13 +535,16 @@ export class NativeScreenVideoSession {
     this.clearSuspensionTimer();
     if (suspended) {
       this.writeSuspendedFrame();
+      if (this.stopped) return;
       this.suspensionTimer = setInterval(() => this.writeSuspendedFrame(), SUSPENDED_HINT_INTERVAL_MS);
+    } else if (this.placeholderFrames && this.firstFrameMs === null) {
+      // 从最小化启动的会话在恢复后才开始计算真实首帧超时。
+      this.restoreTimer = setTimeout(() => this.fail('nativeVideoFirstFrameTimeout'), this.firstFrameTimeoutMs);
     }
   }
 
   private writeSuspendedFrame(): void {
-    // 发布前写入占位帧会占住轨道背压，使恢复后的首张游戏画面无法送达。
-    if (this.stopped || !this.suspended || this.writing || this.firstFrameResolve) return;
+    if (this.stopped || !this.suspended || this.writing) return;
     const scale = Math.min(1, this.resolution.width / this.frameWidth, this.resolution.height / this.frameHeight);
     const width = Math.max(1, Math.round(this.frameWidth * scale));
     const height = Math.max(1, Math.round(this.frameHeight * scale));
@@ -552,6 +557,8 @@ export class NativeScreenVideoSession {
       this.writeFrame(this.createSuspendedFrame(width, height, timestamp,
         Boolean(this.gameFollowId && (this.gameTargetClosed || this.gameSourceChanging))));
       this.placeholderFrames++;
+      this.startupResolve?.();
+      this.startupResolve = undefined;
     } catch {
       this.fail('nativeVideoPauseFrameFailed');
     }
@@ -572,6 +579,8 @@ export class NativeScreenVideoSession {
   }
 
   private clearSuspensionTimer(): void {
+    clearTimeout(this.restoreTimer);
+    this.restoreTimer = undefined;
     if (this.suspensionTimer !== undefined) clearInterval(this.suspensionTimer);
     this.suspensionTimer = undefined;
   }
@@ -654,8 +663,8 @@ export class NativeScreenVideoSession {
   private fail(code: string): void {
     if (this.stopped) return;
     const safeCode = /^[a-z][A-Za-z0-9]{0,63}$/.test(code) ? code : 'nativeVideoFailed';
-    this.firstFrameReject?.(new Error(safeCode));
-    this.firstFrameReject = undefined;
+    this.startupReject?.(new Error(safeCode));
+    this.startupReject = undefined;
     this.onError?.(safeCode);
     void this.stop().catch((error) => {
       console.error('原生屏幕共享停止未完成', error);

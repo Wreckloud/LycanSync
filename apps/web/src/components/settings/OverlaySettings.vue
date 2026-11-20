@@ -52,15 +52,10 @@ onScopeDispose(() => { void props.overlay.edit(false); });
         :value="overlay.settings.value.scale" :disabled="!overlay.ready.value || overlay.busy.value" aria-label="覆盖整体大小"
         @change="overlay.configure({ scale: Number(($event.target as HTMLInputElement).value) })" /></div>
       <div class="settings-toggle">
-        <span><strong>编辑覆盖位置</strong><small>拖动头像或昵称，调整覆盖位置。</small></span>
+        <span><strong>编辑覆盖位置</strong><small>拖动头像或昵称调整位置。未加入语音时显示测试成员。</small></span>
         <button class="settings-button settings-control" type="button" :disabled="!overlay.ready.value || !overlay.settings.value.enabled || overlay.busy.value"
           @click="overlay.edit(!overlay.editing.value)">{{ overlay.editing.value ? '完成编辑' : '编辑位置' }}</button>
       </div>
-      <div v-if="overlay.editing.value" class="settings-toggle">
-        <span><strong>显示测试成员</strong><small>编辑时显示三个示例成员，预览昵称和布局。</small></span>
-        <input type="checkbox" aria-label="显示测试成员" :checked="overlay.preview.value" @change="overlay.edit(true, ($event.target as HTMLInputElement).checked)" />
-      </div>
-      <button class="settings-button" type="button" :disabled="!overlay.ready.value || overlay.busy.value" @click="overlay.configure({ displayId: null, x: 1, y: 0.5, scale: 100 })">恢复默认位置与大小</button>
     </section>
     <p class="settings-intro">游戏中看不到屏幕覆盖时，可尝试将游戏切换为无边框窗口模式。</p>
   </div>

@@ -125,11 +125,15 @@ async function updateAutoStart(event: Event) {
   <div class="settings-section client-settings">
     <section class="settings-block">
       <h2>应用信息</h2>
-      <div class="settings-toggle update-summary">
-        <span><strong>lycanclaw · {{ updateState?.version || packageInfo.version }}</strong><small role="status">{{ desktop ? updateDescription : '浏览器版随服务器更新。' }}</small></span>
+      <div class="update-summary">
+        <span class="app-icon-placeholder" aria-hidden="true"></span>
+        <div class="app-details">
+          <strong>lycanclaw · {{ updateState?.version || packageInfo.version }}</strong>
+          <small role="status">{{ desktop ? updateDescription : '浏览器版随服务器更新。' }}</small>
+          <ProjectAttribution>由 Wreckloud 设计与维护，GPT / OpenAI Codex 协助开发。图标由 <a href="https://space.bilibili.com/303103435" target="_blank" rel="noopener noreferrer">@Airthead</a> 设计。</ProjectAttribution>
+        </div>
         <button v-if="desktop" type="button" class="settings-button settings-control" :disabled="updateBusy || !updateState?.supported || updateState.phase === 'checking'" @click="checkUpdates()">检查更新</button>
       </div>
-      <ProjectAttribution>由 Wreckloud 设计与维护，GPT / OpenAI Codex 协助开发。图标由 <a href="https://space.bilibili.com/303103435" target="_blank" rel="noopener noreferrer">@Airthead</a> 设计。</ProjectAttribution>
       <InlineFeedback :message="confirmationVersion ? '' : updateError || (updateState?.error ? updateState.message : '')" />
       <DialogTransition>
       <UpdateRestartDialog v-if="confirmationVersion" :version="confirmationVersion" :busy="updateBusy" :error="updateError"
@@ -160,6 +164,8 @@ async function updateAutoStart(event: Event) {
 </template>
 
 <style scoped>
-.update-summary { cursor: default; }
-.update-summary > button { flex-shrink: 0; }
+.update-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; }
+.app-icon-placeholder { width: 72px; aspect-ratio: 1; flex: none; border-radius: 8px; background: var(--panel-raised); }
+.app-details { flex: 1 1 180px; min-width: 0; display: grid; gap: 4px; }
+.app-details strong { font-size: 14px; font-weight: 500; }
 </style>
