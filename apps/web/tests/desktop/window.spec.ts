@@ -106,7 +106,7 @@ test('桌面窗口安全边界、真实控件与退出', async () => {
     }
     await page.getByRole('button', { name: '语音与音频', exact: true }).click();
     await expect(page.locator('.audio-settings').getByRole('checkbox', { name: '智能声音处理' })).toBeEnabled();
-    await expect(page.locator('.audio-settings').getByText('程序使用 RNNoise 降噪，配合回声消除、低频过滤和自动音量调整，让人声更清楚、音量更平稳。', { exact: true })).toBeVisible();
+    await expect(page.locator('.audio-settings').getByText('减少噪声和回声，让说话的音量更平稳。', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: '返回应用' }).click();
     expect(await page.evaluate(async () => window.lycanDesktop?.getCurrentActivity())).toBeNull();
     expect(await page.evaluate(async () => (await fetch('/api/not-allowed')).status)).toBe(404);

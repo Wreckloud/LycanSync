@@ -6,7 +6,7 @@ import type { MediaDiagnosticsSnapshot } from '../diagnostics/mediaDiagnostics';
 
 const props = defineProps<{ room: Room; statistics: MediaDiagnosticsSnapshot | null }>();
 const streams = computed(() => props.statistics?.streams ?? []);
-const error = computed(() => props.statistics?.failures.length ? '部分统计暂时无法读取，缺失值不代表零。' : '');
+const error = computed(() => props.statistics?.failures.length ? '暂时无法读取部分数据。' : '');
 const processMetrics = computed(() => props.statistics?.process ?? null);
 const processLabels = { 'electron-Browser': 'Electron 主进程', 'electron-Tab': '界面进程', 'electron-GPU': 'GPU 进程',
   'electron-Utility': '工具进程', 'electron-other': '其他 Electron 进程', obs: 'OBS 画面宿主', 'obs-audio': 'OBS 麦克风宿主', media: '媒体辅助进程', activity: '动态检测进程' };
@@ -29,20 +29,20 @@ function formatFpsInterval(intervalMs: number | null) {
         <template v-if="entry.state === 'running'">CPU {{ entry.cpuCorePercent ?? '—' }}%（单核）· 工作集 {{ entry.workingSetMiB ?? '—' }} MiB · 私有提交 {{ entry.privateCommitMiB ?? '—' }} MiB</template>
         <template v-else>{{ entry.state === 'stopped' ? '未运行' : '统计不可用' }}</template>
       </p>
-      <small>工作集含共享页，不能简单相加当作物理内存；私有提交不等于驻留 RAM。不包含显存，未运行与读取失败不计作零。</small>
+      <small>工作集包含进程间共享的内存。</small>
     </template>
     <p v-if="statistics?.native?.state === 'running'">{{ statistics.native.captureBackend === 'obsLibobs' ? 'OBS 计数区间 FPS' : '原生采集计数区间 FPS' }}：
       <template v-if="statistics.nativeInterval">{{ statistics.native?.captureBackend === 'obsLibobs' ? 'OBS 渲染回调' : '收到' }} {{ statistics.nativeInterval.receivedFps }} ·
         {{ statistics.native?.captureBackend === 'obsLibobs' ? '宿主发帧' : '处理' }} {{ statistics.nativeInterval.processedFps }} · {{ formatFpsInterval(statistics.nativeInterval.elapsedMs) }}</template>
       <template v-else>等待统计</template>
     </p>
-    <small v-if="statistics?.native?.captureBackend === 'obsLibobs'">本次 OBS 纹理桥累计丢帧 {{ statistics.native.obsBridgeDroppedFrames ?? '—' }}（槽位忙或 GPU 等待跳过）；发帧计数截至宿主事件，不代表 Electron 导入或编码成功。</small>
+    <small v-if="statistics?.native?.captureBackend === 'obsLibobs'">OBS 画面交付累计丢帧 {{ statistics.native.obsBridgeDroppedFrames ?? '—' }} 帧</small>
     <template v-if="statistics?.native?.state === 'running' && statistics.native.captureBackend === 'obsLibobs'">
       <p>OBS 渲染循环：
         <template v-if="statistics.obsRenderInterval">{{ statistics.obsRenderInterval.renderedFps }} FPS · 区间延误 {{ statistics.obsRenderInterval.laggedFrames }} / {{ statistics.obsRenderInterval.totalFrames }} 个时隙 · {{ formatFpsInterval(statistics.obsRenderInterval.elapsedMs) }}</template>
         <template v-else>等待统计</template>
       </p>
-      <small>OBS 最近约一秒均值：{{ statistics.native.obsRender?.activeFps?.toFixed(1) ?? '—' }} FPS · 渲染 {{ statistics.native.obsRender?.averageRenderMs?.toFixed(2) ?? '—' }} ms。仅反映渲染循环，不代表不同来源帧、编码或端到端延迟。</small>
+      <small>OBS 最近一秒平均渲染帧率：{{ statistics.native.obsRender?.activeFps?.toFixed(1) ?? '—' }} FPS · 渲染 {{ statistics.native.obsRender?.averageRenderMs?.toFixed(2) ?? '—' }} ms/帧</small>
     </template>
     <div v-for="stream in streams" :key="stream.identity" class="media-diagnostic-stream">
       <b>{{ stream.name }} · {{ stream.direction }}</b>
@@ -80,15 +80,15 @@ function formatFpsInterval(intervalMs: number | null) {
         {{ layer.size }} · {{ stream.direction === '发送' ? '编码' : '解码' }} {{ layer.fps ?? '等待统计' }} fps · {{ formatFpsInterval(layer.intervalMs) }} ·
         累计 {{ layer.frameCount ?? '—' }} 帧 · {{ layer.bitrateKbps ?? '—' }} kbps · {{ layer.codec }}
         <template v-if="layer.active === false"> · 编码层已停用</template>
-        <template v-else-if="layer.limitation"> · 受限 {{ layer.limitation }}（不能单独作为故障结论）</template>
+        <template v-else-if="layer.limitation"> · 受限 {{ layer.limitation }}</template>
         <template v-if="layer.lostPackets !== null"> · 累计丢包 {{ layer.lostPackets }}</template>
         <template v-if="layer.droppedFrames !== null"> · 累计接收丢帧 {{ layer.droppedFrames }}</template>
         <template v-if="layer.decoder"> · 解码 {{ layer.decoder }}</template>
         <template v-if="layer.averageDecodeMs !== null"> · 解码耗时 {{ layer.averageDecodeMs }} ms/帧</template>
-        <template v-if="layer.freezeCount !== null"> · 累计冻结 {{ layer.freezeCount }} 次（需结合观看状态）</template>
+        <template v-if="layer.freezeCount !== null"> · 累计冻结 {{ layer.freezeCount }} 次</template>
         <template v-if="layer.averageEncodeMs !== null"> · 编码 {{ layer.averageEncodeMs }} ms/帧</template>
         <template v-if="layer.encoder"> · 编码器 {{ layer.encoder }}</template>
-        <template v-if="stream.direction === '发送'"> · 节能编码标志 {{ layer.powerEfficientEncoder === null ? '未知' : layer.powerEfficientEncoder ? '是' : '否' }}（非硬件编码结论）</template>
+        <template v-if="stream.direction === '发送'"> · 节能编码标志 {{ layer.powerEfficientEncoder === null ? '未知' : layer.powerEfficientEncoder ? '是' : '否' }}</template>
         <template v-if="layer.transportRoundTripMs !== null"> · 到 SFU 连接 RTT {{ layer.transportRoundTripMs }} ms</template>
         <template v-if="layer.roundTripMs !== null"> · RTCP 报告 RTT {{ layer.roundTripMs }} ms</template>
         <template v-if="layer.receiverReportedLossPercent !== null"> · SFU 报告丢包 {{ layer.receiverReportedLossPercent }}%</template>
@@ -96,19 +96,18 @@ function formatFpsInterval(intervalMs: number | null) {
         <template v-if="layer.receiveLossPercent !== null"> · 接收区间丢包 {{ layer.receiveLossPercent }}%</template>
         <template v-if="layer.jitterBufferMs !== null"> · 接收缓冲 {{ layer.jitterBufferMs }} ms/帧</template>
       </small>
-      <small v-if="stream.direction === '发送' && stream.layers.length && stream.layers.every(layer => layer.roundTripMs === null && layer.receiverReportedLossPercent === null)">本次采样没有新的接收报告，不代表网络正常或异常。</small>
+      <small v-if="stream.direction === '发送' && stream.layers.length && stream.layers.every(layer => layer.roundTripMs === null && layer.receiverReportedLossPercent === null)">本次采样没有新的接收报告。</small>
     </div>
     <p v-if="statistics?.native?.microphoneCapture?.processingMetrics">
       本机麦克风处理：输入峰值 {{ statistics.native.microphoneCapture.processingMetrics.inputPeak.toFixed(3) }} ·
       输出峰值 {{ statistics.native.microphoneCapture.processingMetrics.outputPeak.toFixed(3) }} ·
       最终限幅涉及 {{ statistics.native.microphoneCapture.processingMetrics.limitedSamples }} / {{ statistics.native.microphoneCapture.processingMetrics.samples }} 个采样。
-      此统计不证明硬件是否失真。
     </p>
     <div v-for="(audio, index) in (statistics?.audio ?? []).filter(audio => audio.direction === '接收')" :key="index" class="media-diagnostic-stream">
       <b>{{ audio.source === 'microphone' ? '成员语音' : '共享声音' }} · {{ audio.direction }}</b>
       <small>区间丢包 {{ audio.quality?.lossPercent?.toFixed(2) ?? '—' }}% · 抖动 {{ audio.jitterMs ?? '—' }} ms · 缓冲等待 {{ audio.quality?.jitterBufferMs?.toFixed(1) ?? '—' }} ms</small>
-      <small>补偿样本 {{ audio.quality?.concealmentPercent?.toFixed(2) ?? '—' }}% · 补偿事件 {{ audio.quality?.concealmentEvents ?? '—' }}。首个区间或未提供的统计显示 —，不代表零。</small>
+      <small>补偿样本 {{ audio.quality?.concealmentPercent?.toFixed(2) ?? '—' }}% · 补偿事件 {{ audio.quality?.concealmentEvents ?? '—' }}</small>
     </div>
-    <small>网络数据仅描述本机与 SFU 之间的一段；RTT 和接收缓冲等待都不是端到端延迟；补偿数据不能直接判断主观听感。</small>
+    <small>网络往返时间（RTT）指本机到媒体服务器再返回的用时。</small>
   </aside>
 </template>

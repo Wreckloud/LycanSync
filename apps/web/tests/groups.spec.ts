@@ -293,8 +293,9 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   await page.route('**/api/system/initialization', (route) => route.fulfill({ json: { initialized: true } }));
   await page.route('**/api/auth/me', (route) => route.fulfill({ json: user }));
   await page.route('**/api/auth/session', (route) => route.fulfill({ json: user }));
-  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: 1,
-    participants: [{ participantIdentity: `user-${friendId}`, displayName: '语音朋友' }] } }));
+  let friendInVoice = true;
+  await page.route('**/api/rtc/room-summary*', (route) => route.fulfill({ json: { participantCount: friendInVoice ? 1 : 0,
+    participants: friendInVoice ? [{ participantIdentity: `user-${friendId}`, displayName: '语音朋友' }] : [] } }));
   await page.route('**/api/rtc/room-occupancies', (route) => route.fulfill({
     json: [{ groupId, participantCount: 1 }],
   }));
@@ -316,6 +317,7 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
 
   await page.goto('/');
   await expect(page.locator('.group-member-name')).toHaveText(['群主', '游戏中', '语音朋友', '离线朋友']);
+  await expect(page.locator('.group-title-row').getByText('双击加入语音')).toBeVisible();
   await expect(page.locator('.group-member-name').first().getByRole('img', { name: '群主' })).toBeVisible();
   await expect(page.locator('.group-member-row').filter({ hasText: '语音朋友' }).locator('img')).toHaveAttribute('src', avatar);
   await expect(page.getByLabel('群组成员').getByText('语音中', { exact: true })).toHaveCount(0);
@@ -357,6 +359,8 @@ test('离线成员稳定后置，语音状态不混入活动展示', async ({ pa
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.locator('.members-directory').screenshot({ path: test.info().outputPath('members-panel.png') });
+  friendInVoice = false;
+  await expect(page.locator('.group-title-row').getByText('双击加入语音')).toHaveCount(0);
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await expect(page.locator('.settings-footer .personal-avatar')).toHaveCSS('width', '32px');
 });

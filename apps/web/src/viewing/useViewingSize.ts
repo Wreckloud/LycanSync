@@ -2,6 +2,7 @@ import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
 import type { Ref } from 'vue';
 
 interface ViewingSizeOptions {
+  active(): boolean;
   detached(): boolean;
   expanded(): boolean;
   showMembers(): boolean;
@@ -82,7 +83,7 @@ export function useViewingSize(panel: Ref<HTMLElement | null>, options: ViewingS
       if (frame !== undefined) return;
       frame = owner.requestAnimationFrame(() => { frame = undefined; resize(); });
     });
-    const stopMembers = watch(() => [options.showMembers(), options.expanded(), options.preferredHeight()], resize, { flush: 'post' });
+    const stopMembers = watch(() => [options.active(), options.showMembers(), options.expanded(), options.preferredHeight()], resize, { flush: 'post' });
     element.ownerDocument.addEventListener('visibilitychange', resize);
     stopObservation = () => {
       stopMembers();

@@ -408,6 +408,20 @@ test('成员访问弹窗独立处理备注、全服搜索、复制与链接管�
   await management.getByRole('button', { name: '重试', exact: true }).click();
   await expect(management.locator('.access-record')).toHaveCount(2);
   await expect(management.getByRole('tab', { name: '待使用', exact: true })).toHaveAttribute('aria-selected', 'true');
+  const copyButton = management.locator('[data-link-id="link-2"]').getByRole('button', { name: '复制链接', exact: true });
+  await copyButton.focus();
+  let resumeRefresh!: () => void;
+  const refreshGate = new Promise<void>(resolve => { resumeRefresh = resolve; });
+  const pendingLinks = '**/api/auth/access/links?offset=0&status=PENDING';
+  await page.route(pendingLinks, async route => { await refreshGate; await route.fallback(); }, { times: 1 });
+  const backgroundRequest = page.waitForRequest(pendingLinks);
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await backgroundRequest;
+  try {
+    await expect(copyButton).toBeFocused();
+    await expect(copyButton).toBeEnabled();
+    await expect(management.getByRole('tabpanel')).toHaveAttribute('aria-busy', 'false');
+  } finally { resumeRefresh(); }
   const initialBox = await management.boundingBox();
   await management.locator('[data-link-id="link-2"]').getByRole('button', { name: '修改备注', exact: true }).click();
   const noteDialog = page.getByRole('dialog', { name: '修改备注', exact: true });
@@ -648,6 +662,9 @@ test('接任服主在弹窗填写，取消清空密码，失败保留表单', as
   await expect(page.getByLabel('恢复密码（至少 6 位）', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '查看转让', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '接任服主', exact: true });
+  await expect(dialog.locator('input[autocomplete=username]')).toHaveValue(user.nickname);
+  await expect(dialog.locator('input[autocomplete=new-password][name]')).toHaveCount(2);
+  await expect(dialog.getByText(/原服主的恢复密码随即失效/)).toBeVisible();
   await dialog.getByLabel('恢复密码（至少 6 位）', { exact: true }).fill('discard-this-password');
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);

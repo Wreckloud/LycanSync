@@ -28,15 +28,15 @@ describe('语音设置的本机试听入口', () => {
     const desktop = await renderAudioSettings();
     expect(desktop).toMatch(/aria-label="智能声音处理"[^>]*checked[^>]*aria-checked="true"/);
     expect(desktop).not.toContain('桌面版暂不支持回声消除');
-    expect(desktop).toContain('RNNoise 降噪');
+    expect(desktop).toContain('减少噪声和回声');
     expect(desktop).toContain('https://github.com/xiph/rnnoise');
     expect(desktop).not.toMatch(/<strong[^>]*>自动增益<\/strong>/);
     expect([...desktop.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map(match => match[1]))
       .toEqual(['输入', '麦克风试听', '声音处理', '输出']);
     const browser = await renderAudioSettings('idle', false, false);
-    expect(browser).toContain('同时使用浏览器的回声消除');
+    expect(browser).toContain('声音处理由浏览器提供');
     expect(browser).not.toContain('桌面版暂不支持');
-    expect(browser).not.toContain('RNNoise 降噪');
+    expect(browser).not.toContain('https://github.com/xiph/rnnoise');
   });
 
   it('旧的混合选择明确显示部分开启，不因打开设置覆盖用户偏好', async () => {

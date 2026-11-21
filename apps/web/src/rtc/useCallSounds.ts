@@ -13,11 +13,9 @@ const EVENT_SOUNDS: Record<CallSoundEvent, { file: string; channel: string }> = 
   microphoneOn: { file: 'navigation_forward-selection-minimal.ogg', channel: 'voice' },
   microphoneOff: { file: 'navigation_backward-selection-minimal.ogg', channel: 'voice' },
   screenShareStarted: { file: 'navigation_selection-complete-celebration.ogg', channel: 'sharing' },
-  screenShareStopped: { file: 'alert_error-02.ogg', channel: 'sharing' },
-  listeningOn: { file: 'navigation_hover-tap.ogg', channel: 'voice' },
-  listeningOff: { file: 'navigation_forward-selection-minimal-short.wav', channel: 'voice' },
-  recordingStarted: { file: 'notification_simple-01.ogg', channel: 'recording' },
-  recordingStopped: { file: 'navigation-cancel.ogg', channel: 'recording' },
+  screenShareStopped: { file: 'navigation-cancel.ogg', channel: 'sharing' },
+  listeningOn: { file: 'navigation_forward-selection-minimal-short.wav', channel: 'voice' },
+  listeningOff: { file: 'navigation_hover-tap.ogg', channel: 'voice' },
 };
 
 /** 提示音随应用离线交付，按需解码并在当前会话复用，沿用所选的本机输出设备。 */
@@ -214,8 +212,6 @@ export function useCallSounds(outputVolume: Ref<number>, preferences: ReturnType
     screenShareStopped: () => playEvent('screenShareStopped'),
     microphoneChanged: (enabled: boolean) => playEvent(enabled ? 'microphoneOn' : 'microphoneOff'),
     listeningChanged: (enabled: boolean) => playEvent(enabled ? 'listeningOn' : 'listeningOff'),
-    recordingStarted: () => playEvent('recordingStarted'),
-    recordingStopped: () => playEvent('recordingStopped'),
     preview: (event: CallSoundEvent) => { stopPreview(); return playEvent(event, true); },
     stopPreview,
     participantJoined,

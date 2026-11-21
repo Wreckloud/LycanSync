@@ -24,5 +24,9 @@ const fillStyle = computed(() => ({ '--voice-level': quantizeVoiceLevel(props.le
   transform: scaleY(var(--voice-level));
   transform-box: fill-box;
   transform-origin: center bottom;
+  transition: transform 70ms var(--motion-ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-level-fill { transition: none; }
 }
 </style>

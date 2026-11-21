@@ -69,7 +69,7 @@ function updateAutomatic(event: Event) {
           <span><strong>自动记录诊断</strong><small>在本机记录版本、设备和通话质量信息，方便遇到问题时排查。</small></span>
           <input type="checkbox" aria-label="自动记录诊断" :checked="automaticEnabled" :disabled="saving" @change="updateAutomatic" />
         </div>
-        <small v-if="desktop">自动记录约每 15 秒保存一次。关闭后保留已有报告，可在记录结束后清除。体验说明仅随导出文件保存。</small>
+        <small v-if="desktop">关闭自动记录后，已有报告仍可导出或清除。</small>
         <small v-else>浏览器仅保留当前页面的记录，请在退出前导出。</small>
         <div class="settings-actions">
           <button v-if="!automaticEnabled && !recording" type="button" :disabled="!room || saving" @click="report.start()">{{ reason ? '开始新记录（替换本次）' : '开始记录' }}</button>

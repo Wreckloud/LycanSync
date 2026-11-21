@@ -285,9 +285,16 @@ public class ChatFileService {
             Thread.currentThread().interrupt();
             throw new GroupException(HttpStatus.SERVICE_UNAVAILABLE, ApiErrorCode.CHAT_FILE_STORAGE_FAILED, "视频处理已中断，请重试。");
         } catch (IOException exception) {
-            log.warn("群聊视频优化失败 attachmentId={} reason={}", attachmentId, exception.getClass().getSimpleName());
+            String reason = switch (String.valueOf(exception.getMessage())) {
+                case "encoder-busy" -> "视频处理队列繁忙";
+                case "timeout" -> "视频处理超时";
+                case "size-limit" -> "转换后的文件超过大小限制";
+                case "encode-failed" -> "服务器未能将视频编码为 MP4";
+                default -> "服务器未能读写或启动视频处理任务";
+            };
+            log.warn("群聊视频优化失败 attachmentId={} reason={}", attachmentId, reason);
             throw new GroupException(HttpStatus.UNPROCESSABLE_ENTITY, ApiErrorCode.CHAT_FILE_STORAGE_FAILED,
-                    "视频未能处理，可重试或勾选“发送原文件”重新发送。");
+                    reason + "，可重试或勾选“发送原文件”重新发送。");
         }
         String attachmentName = fileName.substring(0, fileName.lastIndexOf('.')) + ".mp4";
         long attachmentBytes = Files.size(storedFile);

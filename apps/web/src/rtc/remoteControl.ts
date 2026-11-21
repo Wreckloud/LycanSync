@@ -86,6 +86,7 @@ export class RemoteInputPresses {
 export type RemoteControlMessage =
   | { type: 'queryState' }
   | { type: 'state'; available: boolean; share: { shareSessionId: string; kind: 'monitor' | 'window' } | null;
+      timing?: { trackSid: string; elapsedMs: number };
       control: { identity: string; public: boolean } | null }
   | { type: 'request' | 'accept' | 'controllerReady' | 'reject' | 'cancel'; requestId: string }
   | { type: 'allow'; shareSessionId: string; requestId: string; controlSessionId: string; trackSid: string }
@@ -226,6 +227,8 @@ export function decodeRemoteControlMessage(payload: Uint8Array): RemoteControlMe
     if (!value || typeof value !== 'object') return null;
     if (value.type === 'queryState') return value as RemoteControlMessage;
     if (value.type === 'state') {
+      if (value.timing !== undefined && (!value.timing || !validId(value.timing.trackSid)
+          || !Number.isSafeInteger(value.timing.elapsedMs) || value.timing.elapsedMs < 0)) return null;
       if (typeof value.available !== 'boolean' || (value.share !== null && (!value.share
           || !validId(value.share.shareSessionId) || !['monitor', 'window'].includes(value.share.kind)))
           || (value.control !== null && (!value.control || !validId(value.control.identity)

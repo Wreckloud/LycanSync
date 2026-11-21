@@ -38,7 +38,7 @@ async function toggleReplay(event: Event) {
     <InlineFeedback :message="recording.noticeTarget.value === 'settings' ? recording.notice.value : ''" />
     <section v-if="desktop" class="settings-block">
       <h2>录像管理</h2>
-      <p>查看保存在本机的录像和回放，打开文件或整理记录。</p>
+      <p>查看本机录像和回放，剪辑或分享到群聊。</p>
       <button type="button" class="settings-button" @click="emit('openLibrary')">打开本地录像管理器</button>
     </section>
     <section class="settings-block">
@@ -58,9 +58,9 @@ async function toggleReplay(event: Event) {
       <p v-else-if="!desktop">录制需要使用 Windows 桌面客户端。</p>
       <InlineFeedback :pending="desktop && !recording.settings.value && !recording.notice.value ? '正在读取录制设置…' : ''" />
       <InlineFeedback :message="recording.noticeTarget.value === 'content' ? recording.notice.value : ''" />
-      <small v-if="desktop">录制整屏时，可见的观看窗口也会入镜。只想录游戏，请选择游戏或应用窗口。系统若只能提供全部混音，请关闭“应用声音”后再录制。</small>
+      <small v-if="desktop">只想录游戏，请共享游戏窗口。</small>
       <InlineFeedback :message="recording.noticeTarget.value === 'recording' ? recording.notice.value : ''" />
-      <ProjectAttribution v-if="desktop">录像与即时回放基于 <a href="https://github.com/obsproject/obs-studio" target="_blank" rel="noopener noreferrer">OBS Studio</a>，音视频编码与封装使用 <a href="https://github.com/FFmpeg/FFmpeg" target="_blank" rel="noopener noreferrer">FFmpeg</a>。</ProjectAttribution>
+      <ProjectAttribution v-if="desktop">共享与录制使用 <a href="https://github.com/obsproject/obs-studio" target="_blank" rel="noopener noreferrer">OBS Studio</a>，编码使用 <a href="https://github.com/FFmpeg/FFmpeg" target="_blank" rel="noopener noreferrer">FFmpeg</a>。</ProjectAttribution>
     </section>
     <section v-if="desktop" class="settings-block recording-file-settings">
       <h2>文件与画质</h2>
@@ -96,7 +96,7 @@ async function toggleReplay(event: Event) {
           <option :value="30">最近 30 秒</option><option :value="60">最近 60 秒</option><option :value="120">最近 120 秒</option>
         </select>
       </label>
-      <small>停止共享后结束缓存，下次共享时自动开启。30／60／120 秒分别最多使用 256／512／1024 MiB 缓存，保存时可能额外占用一份。实际时长取决于已积累内容和内存，可能多约两秒。切换来源后重新积累；关闭回放会丢弃未保存内容。</small>
+      <small>回溯越久，占用内存越多。切换画面会重新积累回放，关闭回放或停止共享会丢弃未保存的片段。</small>
       <p class="recording-status" role="status">{{ replayProgress ? (replayProgressVisible ? replayProgress : '') : (recording.replayActive.value
         ? recording.state.value.replay?.warming ? '正在积累回放，还未达到设定时长' : '回放已开启'
         : recording.settings.value?.replayEnabled ? (sharing ? '回放尚未启动' : '已开启，等待共享画面') : '回放未开启') }}</p>

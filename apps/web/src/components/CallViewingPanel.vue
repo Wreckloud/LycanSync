@@ -2,11 +2,13 @@
 import { motionDurationMs } from '../styles/motion';
 import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
-import { ArrowLeft, ChevronDown, ChevronUp, Fullscreen, Maximize2, X } from '@lucide/vue';
+import type { MediaDiagnosticsSnapshot } from '../diagnostics/mediaDiagnostics';
+import { ArrowLeft, ChevronDown, ChevronUp, Fullscreen, Grid2X2, Focus, Maximize2, X } from '@lucide/vue';
 import { VideoQuality, type Room } from 'livekit-client';
 import type { useScreenShareLayout, ViewedShare } from '../viewing/useScreenShareLayout';
 import { useViewingSize } from '../viewing/useViewingSize';
 import ParticipantCard from './ParticipantCard.vue';
+import ViewingConnectionStatus from './ViewingConnectionStatus.vue';
 import HorizontalScroll from './HorizontalScroll.vue';
 import { observeWindowLayoutRestore } from '../viewing/windowLayoutRestore';
 
@@ -15,6 +17,7 @@ const props = withDefaults(defineProps<{
   room: Room | null;
   revision: number;
   recordingElapsed?: string;
+  snapshot?: MediaDiagnosticsSnapshot | null;
   avatar: (identity: string) => string;
   listening: boolean;
   privateControl: (identity: string) => string;
@@ -51,11 +54,13 @@ const focus = computed(() => props.view.mode === 'focus');
 const singleStage = computed(() => props.view.displayed.length === 1 && (props.detached || props.view.expanded));
 const showMembers = computed(() => !props.folded && !props.hidden && (!props.active || focus.value && props.view.membersVisible && !props.view.expanded));
 const { width, height, minimumHeight, maximumHeight, changeHeight } = useViewingSize(panel, {
+  active: () => props.active,
   detached: () => Boolean(props.detached), expanded: () => props.view.expanded,
   showMembers: () => showMembers.value, preferredHeight: () => props.view.height,
   setHeight: value => { props.view.height = value; },
 });
 const dragHeight = ref<number | null>(null);
+const memberBlend = ref(0);
 const stageHeight = computed(() => dragHeight.value ?? height.value);
 const foldLabel = computed(() => props.folded ? '展开语音成员和画面' : '收起语音成员和画面');
 const resizing = ref(false);
@@ -97,7 +102,13 @@ function movePull(event: PointerEvent) {
   resizing.value = true;
   if (props.folded) emit('update:folded', false);
   if (props.view.mode === 'collapsed') return;
-  if (props.stageHidden) emit('update:stageHidden', false);
+  if (props.stageHidden) {
+    if ((!focus.value || !props.view.membersVisible) && membersOnlyHeight) {
+      dragHeight.value = membersOnlyHeight;
+      memberBlend.value = 1;
+    }
+    emit('update:stageHidden', false);
+  }
   const current = drag;
   const handle = event.currentTarget as HTMLElement;
   // 先取消过渡并展开正在拖动的布局，再按实际顶边校准一次抓点。
@@ -118,6 +129,15 @@ function resizeToPointer(y: number) {
   const min = minimumHeight.value, max = maximumHeight.value;
   const maxBand = Math.min(24, (max - min) / 4);
   const hideAt = drag.membersY === null ? min - 24 : Math.min(max - maxBand - 32, drag.membersY - drag.baseY + 4);
+  if (membersOnlyHeight && (!focus.value || !props.view.membersVisible) && desired < hideAt + 48) {
+    // 在同一块空间交接舞台与成员条，松手前保留原视频节点。
+    memberBlend.value = Math.min(1, (hideAt + 48 - desired) / 48);
+    drag.snap = desired <= hideAt ? 'min' : null;
+    const memberEdge = drag.membersY === null ? membersOnlyHeight : drag.membersY - drag.baseY;
+    dragHeight.value = drag.snap === 'min' ? memberEdge : Math.max(memberEdge, desired);
+    return;
+  }
+  memberBlend.value = 0;
   if (desired <= hideAt || drag.snap === 'min' && desired < hideAt + 16) {
     drag.snap = 'min';
     dragHeight.value = 0;
@@ -136,11 +156,14 @@ function resizeToPointer(y: number) {
 function finishPull(event: PointerEvent) {
   if (!drag || drag.id !== event.pointerId) return;
   if (moved) movePull(event);
+  if (drag.snap === 'min') emit('update:stageHidden', true);
   if (drag.snap === 'max') {
     changeHeight(maximumHeight.value);
     props.view.height = 'max';
+    if (drag.baseY !== null && event.clientY - drag.baseY >= maximumHeight.value + 96) props.view.expanded = true;
   } else if (drag.snap !== 'min' && dragHeight.value !== null) changeHeight(dragHeight.value);
   drag = undefined;
+  memberBlend.value = 0;
   dragHeight.value = null;
   resizing.value = false;
 }
@@ -153,6 +176,7 @@ function cancelPull(restore = false) {
     }
   }
   drag = undefined;
+  memberBlend.value = 0;
   dragHeight.value = null;
   resizing.value = false;
 }
@@ -218,8 +242,22 @@ function expandMembers() {
 }
 
 function select(share: ViewedShare) {
-  if (props.view.mode === 'focus') props.view.grid();
-  else props.view.select(share.participant.identity);
+  if (props.view.mode !== 'focus' && !props.view.select(share.participant.identity)) return;
+  props.view.membersVisible = false;
+  props.view.height = 'max';
+}
+
+let lastLayoutWheelAt = -Infinity;
+function layoutWheel(event: WheelEvent) {
+  if (event.ctrlKey || event.metaKey || event.deltaY <= 0 || Math.abs(event.deltaX) >= event.deltaY) return;
+  const now = performance.now();
+  if (now - lastLayoutWheelAt >= 160) {
+    if (!focus.value || props.view.shares.length < 2) return;
+    props.view.grid();
+  }
+  lastLayoutWheelAt = now;
+  event.preventDefault();
+  event.stopPropagation();
 }
 
 function escape(event: KeyboardEvent) {
@@ -299,15 +337,15 @@ onScopeDispose(() => {
 <template>
   <section ref="panel" :id="detached ? undefined : 'inline-call-view'" class="call-viewing-panel" :class="{ 'is-detached': detached, 'is-expanded': active && view.expanded, 'is-resizing': resizing, 'is-collapsed': !active, 'is-framing': framing }"
     :aria-label="active ? '共享观看区' : undefined" @keydown.esc="escape" @keydown.tab="trapFocus">
-    <div class="viewing-stage" :class="{ 'is-focus-stage': focus, 'is-single-stage': singleStage }" :style="{ height: (active && !folded ? stageHeight : 0) + 'px' }" :inert="!active || folded">
+    <div class="viewing-stage" @wheel.capture="layoutWheel" :class="{ 'is-focus-stage': focus, 'is-single-stage': singleStage }" :style="{ height: (active && !folded ? stageHeight : 0) + 'px', opacity: memberBlend ? 1 - memberBlend : undefined }" :inert="!active || folded">
       <span v-if="reconnecting" class="viewing-reconnecting" role="status">正在重连…</span>
       <HorizontalScroll label="共享画面网格">
         <TransitionGroup v-if="active" name="view-tile" tag="div" class="viewing-grid" :class="{ 'is-focus': focus, 'is-single': singleStage }" :style="{ '--view-rows': sizing.rows }"
           @before-leave="($event as HTMLElement).inert = true">
           <div v-for="share in view.displayed" :key="share.key" class="viewing-tile" :style="tileStyle(share)">
             <div class="viewing-surface" role="button" tabindex="0"
-              :aria-label="focus ? '查看全部共享画面' : '聚焦' + share.participant.name"
-              :title="focus ? '点击查看全部共享画面' : '点击聚焦共享画面'"
+              :aria-label="focus ? '放大聚焦画面' : '聚焦' + share.participant.name"
+              :title="focus ? '隐藏成员并放大画面' : '点击聚焦共享画面'"
               @click="select(share)" @keydown.enter.self.prevent="select(share)" @keydown.space.self.prevent="select(share)">
               <ParticipantCard :participant="share.participant" :revision="revision" variant="viewer"
                 :view-active="videoActive"
@@ -317,13 +355,21 @@ onScopeDispose(() => {
                 :private-control="privateControl(share.participant.identity)" :view-quality="quality"
                 @video-size="videoSize(share.key, $event)" @notice="emit('notice', $event)" />
             </div>
+            <slot v-if="focus" name="control" :identity="share.participant.identity" />
             <div class="viewing-actions">
               <span class="viewing-caption" :title="share.participant.name"><span>{{ share.participant.name || share.participant.identity }}</span>
                 <time title="本次共享时长（以这台设备收到的状态为准）">{{ elapsed(share) }}</time>
+                <ViewingConnectionStatus :participant="share.participant" :local="share.participant === room?.localParticipant"
+                  :revision="revision" :snapshot="snapshot" :active="videoActive && !folded && !reconnecting" />
               </span>
-              <button v-if="focus && (!view.membersVisible || view.expanded)" type="button" class="viewing-expand-members"
+              <button v-if="focus && !view.membersVisible && !view.expanded" type="button" class="viewing-expand-members"
                 aria-label="展开成员" title="展开成员" @click="expandMembers"><ChevronDown :size="16" /></button>
               <div class="viewing-action-buttons">
+                <button type="button" :aria-label="focus ? '查看全部共享画面' : '返回聚焦画面'"
+                  :title="focus ? '点击查看全部共享画面' : '返回聚焦画面'" :disabled="!focus && !view.focusedShare"
+                  @click="focus ? view.grid() : view.focusedShare && view.select(view.focusedShare.participant.identity)">
+                  <Grid2X2 v-if="focus" :size="15" /><Focus v-else :size="15" />
+                </button>
                 <button type="button" :aria-label="view.expanded ? '恢复观看布局' : '占满窗口'"
                   :title="view.expanded ? '恢复观看布局' : '占满窗口'" :aria-pressed="view.expanded" @click="toggleExpanded"><Fullscreen :size="15" /></button>
                 <button type="button" :aria-label="detached ? '返回主界面' : '弹出观看区'" :title="detached ? '返回主界面' : '弹出观看区'"
@@ -336,10 +382,11 @@ onScopeDispose(() => {
       </HorizontalScroll>
     </div>
     <Transition name="layout-reveal" :css="!resizing" @before-enter="($event as HTMLElement).inert = false" @before-leave="($event as HTMLElement).inert = true">
-      <div v-show="showMembers" class="layout-reveal">
+      <div v-show="showMembers || memberBlend > 0" class="layout-reveal" :class="{ 'is-blending-members': memberBlend > 0 }"
+        :style="memberBlend ? { opacity: memberBlend } : undefined" :inert="memberBlend > 0">
         <div class="layout-reveal-inner">
           <div class="viewing-members-panel">
-            <div v-if="active" class="viewing-members-toggle">
+            <div v-if="active && !memberBlend" class="viewing-members-toggle">
               <button type="button" aria-label="收起成员" title="收起成员" :aria-expanded="true" @click="view.membersVisible = false"><ChevronUp :size="16" /></button>
             </div>
             <slot :previews-mounted="showMembers" />

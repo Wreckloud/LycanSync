@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -104,7 +105,7 @@ public class ChatFileMediaService {
             // 只接受已入库本地文件和固定容器，避免按文件内容跟随播放列表或网络地址。
             ProcessBuilder builder = new ProcessBuilder(List.of(properties.getFfmpegExecutable(), "-nostdin",
                     "-hide_banner", "-loglevel", "error", "-max_alloc", "67108864", "-threads", "1",
-                    "-filter_threads", "1", "-protocol_whitelist", "file", "-f", format, "-i", source.toString(),
+                    "-filter_threads", "1", "-protocol_whitelist", "file", "-f", inputFormat(source, format), "-i", source.toString(),
                     "-map", "0:v:0", "-an", "-sn", "-dn", "-frames:v", "1",
                     "-vf", "scale=w='min(420,iw)':h='min(340,ih)':force_original_aspect_ratio=decrease", "-c:v", "mjpeg", "-q:v", "5",
                     "-threads", "1", "-f", "image2", "-fs", String.valueOf(MAX_THUMBNAIL_BYTES), output.toString()))
@@ -143,6 +144,21 @@ public class ChatFileMediaService {
         while ((cachedBytes > CACHE_BYTES || thumbnails.size() > 128) && iterator.hasNext()) {
             cachedBytes -= iterator.next().getValue().length;
             iterator.remove();
+        }
+    }
+
+    static String inputFormat(Path source, String extensionFormat) throws IOException {
+        // 已登记为支持的视频才进入此处，只允许切换到已支持的本地容器。
+        try (var stream = Files.newInputStream(source)) {
+            byte[] header = stream.readNBytes(12);
+            if (header.length < 12) return extensionFormat;
+            if (header[0] == 0x1a && header[1] == 0x45 && header[2] == (byte) 0xdf && header[3] == (byte) 0xa3) {
+                return "matroska";
+            }
+            String signature = new String(header, StandardCharsets.ISO_8859_1);
+            if (signature.startsWith("ftyp", 4)) return "mov";
+            if (signature.startsWith("RIFF") && signature.startsWith("AVI ", 8)) return "avi";
+            return extensionFormat;
         }
     }
 

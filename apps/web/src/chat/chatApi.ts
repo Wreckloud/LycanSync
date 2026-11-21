@@ -179,6 +179,7 @@ export async function downloadFile(groupId: string, attachment: ChatAttachment, 
       const { done, value } = await reader.read();
       signal.throwIfAborted();
       if (done) break;
+      if (value.byteLength > attachment.byteSize - loadedBytes) throw new Error('文件未能完整下载，请重试。');
       await writer.write(value);
       signal.throwIfAborted();
       loadedBytes += value.byteLength;
@@ -191,6 +192,8 @@ export async function downloadFile(groupId: string, attachment: ChatAttachment, 
     await reader?.cancel(reason).catch(() => undefined);
     await writer.abort().catch(() => undefined);
     throw reason;
+  } finally {
+    reader?.releaseLock();
   }
 }
 

@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync } = require('node:fs');
-const { join, resolve } = require('node:path');
+const { join, parse, resolve } = require('node:path');
 const { test } = require('node:test');
 const { applicationEntries, upgradeInstallerUtilities, upgradeInstallerScript, upgradeInstallerPayload } = require('./build-nsis.cjs');
 
@@ -75,6 +75,54 @@ SectionEnd
   assert.ok(cacheCopy && copyMacro);
   const resources = join(root, 'release/build-cache/nsis-resources-3.4.1');
   const plugins = join(resources, readdirSync(resources).find(name => name.startsWith('nsis-resources-3.4.1-')), 'plugins/x86-unicode');
+  const testDrive = join(directory, 'default-drive');
+  const programFiles = join(testDrive, 'Program Files');
+  const preferredPath = join(programFiles, 'LycanSync');
+  const systemDefault = join(directory, 'windows-default');
+  const directoryExecutable = join(directory, 'install-directory.exe');
+  const directoryResults = join(directory, 'install-directory.txt');
+  const directoryScript = join(directory, 'install-directory.nsi');
+  const directoryCheck = installerSource.match(/^    Function LycanDirectoryPagePre\r?\n[\s\S]*?^    FunctionEnd/m)?.[0];
+  const getDParameter = readFileSync(join(templates, 'multiUser.nsh'), 'utf8')
+    .match(/^!macro GetDParameter outVar\r?\n[\s\S]*?^!macroend/m)?.[0];
+  assert.ok(directoryCheck && getDParameter, '固定 NSIS 安装目录接入点已变化');
+  const scopedDirectoryCheck = directoryCheck.replace('${isUpdated}', '$9 == "1"')
+    .replaceAll('"D:\\Program Files"', `"${programFiles}"`)
+    .replaceAll('"D:\\"', `"${testDrive}"`)
+    .replace(/GetDriveTypeW\(w "[^"]+"\)/, () => `GetDriveTypeW(w "${parse(directory).root}")`);
+  writeFileSync(directoryScript, [
+    'Unicode true', 'RequestExecutionLevel user', 'SilentInstall silent', `OutFile "${directoryExecutable}"`,
+    '!include LogicLib.nsh', '!include FileFunc.nsh', `!addplugindir "${plugins}"`,
+    `!include "${join(templates, 'include/StdUtils.nsh')}"`, '!define APP_FILENAME "LycanSync"',
+    'Var perUserInstallationFolder', 'Var perMachineInstallationFolder', getDParameter, scopedDirectoryCheck,
+    'Section', `  StrCpy $INSTDIR "${systemDefault}"`, '  !insertmacro GetDParameter $R0',
+    '  ${If} $R0 != ""', '    StrCpy $INSTDIR $R0', '  ${EndIf}',
+    '  ${GetParameters} $R0', '  ${GetOptions} $R0 "/user=" $perUserInstallationFolder',
+    '  ${GetOptions} $R0 "/machine=" $perMachineInstallationFolder',
+    '  Call LycanDirectoryPagePre', `  FileOpen $0 "${directoryResults}" w`,
+    '  FileWrite $0 "$INSTDIR"', '  FileClose $0', 'SectionEnd',
+  ].join('\r\n'));
+  const directoryBuild = run(compiler, ['/V2', '/INPUTCHARSET', 'UTF8', directoryScript]);
+  assert.equal(directoryBuild.status, 0, directoryBuild.stdout + directoryBuild.stderr);
+  function assertInstallDir(expected, args = []) {
+    const result = run(directoryExecutable, args);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(readFileSync(directoryResults, 'utf8'), expected);
+  }
+  assertInstallDir(systemDefault);
+  mkdirSync(testDrive);
+  assertInstallDir(preferredPath);
+  assert.ok(!existsSync(programFiles), '预填路径时不能创建目录');
+  mkdirSync(programFiles);
+  assertInstallDir(preferredPath);
+  assertInstallDir(systemDefault, ['/user=existing']);
+  assertInstallDir(systemDefault, ['/machine=existing']);
+  const override = join(directory, 'custom-path');
+  assertInstallDir(override, [`/D=${override}`]);
+  mkdirSync(systemDefault);
+  symlinkSync(systemDefault, preferredPath, 'junction');
+  assertInstallDir(systemDefault);
+
   const scopeExecutable = join(directory, 'silent-scope.exe');
   const scopeResults = join(directory, 'silent-scope.txt');
   const scopeSource = join(directory, 'silent-scope.nsi');
@@ -127,6 +175,7 @@ SectionEnd
     assert.ok(!existsSync(join(cacheDirectory, 'current.blockmap')), '手动安装不能沿用其他版本的块表');
   }
 
+  const protectedDirectoryReached = join(directory, 'protected-directory-reached.txt');
   function compile(mode) {
     const executable = join(directory, `${mode}.exe`);
     const script = `Unicode true
@@ -144,7 +193,11 @@ OutFile "${executable}"
 Function EnsureVisualCppRuntime
 FunctionEnd
 Section
-${mode === 'protected' ? '  StrCpy $INSTDIR "$PROGRAMFILES64\\LycanSync"\n  Call EnsureUserInstallLocation\n  Return' : ''}
+${mode === 'protected' ? `  StrCpy $INSTDIR "$PROGRAMFILES64\\LycanSync"
+  Call EnsureUserInstallLocation
+  FileOpen $0 "${protectedDirectoryReached}" w
+  FileClose $0
+  Return` : ''}
   SetOutPath $INSTDIR
 ${mode === 'uninstall' ? '  !insertmacro customRemoveFiles' : `  !insertmacro uninstallOldVersion SHELL_CONTEXT
   !insertmacro handleUninstallResult SHELL_CONTEXT
@@ -166,7 +219,8 @@ SectionEnd
     assert.equal(result.status, 0, result.stdout + result.stderr);
     return executable;
   }
-  assert.notEqual(run(compile('protected'), []).status, 0, '系统目录必须在文件操作前拒绝');
+  run(compile('protected'), []);
+  assert.ok(!existsSync(protectedDirectoryReached), '系统目录必须在文件操作前拒绝');
   const upgrade = compile('upgrade'); const abort = compile('abort'); const quit = compile('quit'); const uninstall = compile('uninstall');
   function fixture(name, installer) {
     const path = join(directory, name); mkdirSync(join(path, 'resources'), { recursive: true });

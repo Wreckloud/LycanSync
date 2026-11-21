@@ -21,11 +21,15 @@ const list = ref<HTMLElement | null>(null);
 const visibleMembers = computed(() => props.load ? results.value : (props.members ?? [])
   .filter(member => member.nickname.toLowerCase().includes(search.value.trim().toLowerCase())));
 let request: AbortController | undefined;
+let refresh: AbortController | undefined;
+let refreshFailed = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let offset = 0;
 
 async function loadMore() {
   if (!props.load || loading.value || props.disabled) return;
+  refresh?.abort();
+  refreshFailed = false;
   const current = new AbortController(); request = current;
   loading.value = true; error.value = '';
   try {
@@ -40,6 +44,36 @@ async function loadMore() {
     if (!current.signal.aborted) { loading.value = false; await nextTick(); if (list.value) list.value.scrollTop = scrollPosition.value; checkScroll(); }
   }
 }
+async function refreshVisiblePages() {
+  if (!props.load || props.disabled || loading.value || refresh || !list.value?.clientHeight || document.hidden) return;
+  const current = refresh = new AbortController();
+  const members = new Map<string, MemberOption>();
+  let count = 0;
+  let more = false;
+  try {
+    do {
+      const page = await props.load(search.value.trim(), count, current.signal);
+      if (current.signal.aborted || props.disabled) return;
+      page.members.forEach(member => members.set(member.userId, member));
+      count += page.members.length;
+      more = page.hasMore && page.members.length > 0;
+    } while (more && count < offset);
+    results.value = [...members.values()];
+    offset = count;
+    hasMore.value = more;
+    refreshFailed = false;
+    error.value = '';
+    await nextTick();
+    checkScroll();
+  } catch (reason) {
+    if (!current.signal.aborted) {
+      refreshFailed = true;
+      error.value = reason instanceof Error ? reason.message : '无法刷新成员，请重试。';
+    }
+  } finally {
+    refresh = undefined;
+  }
+}
 function checkScroll() {
   const element = list.value;
   if (element && element.clientHeight > 0 && hasMore.value && !error.value && element.scrollHeight - element.scrollTop - element.clientHeight < 48) void loadMore();
@@ -48,6 +82,7 @@ function unavailable(member: MemberOption) {
   return props.disabled || member.role === 'OWNER' || member.joined || props.joinedIds?.includes(member.userId);
 }
 watch(search, () => {
+  refresh?.abort();
   request?.abort(); clearTimeout(timer); results.value = []; offset = 0; hasMore.value = false; error.value = '';
   scrollPosition.value = 0;
   if (list.value) list.value.scrollTop = 0;
@@ -55,7 +90,8 @@ watch(search, () => {
   timer = setTimeout(() => { loading.value = false; void loadMore(); }, 250);
 });
 watch(() => [props.load, props.disabled], () => { if (props.load && !props.disabled && offset === 0) void loadMore(); }, { immediate: true });
-onScopeDispose(() => { request?.abort(); clearTimeout(timer); });
+const refreshTimer = props.load ? setInterval(refreshVisiblePages, 15000) : undefined;
+onScopeDispose(() => { refresh?.abort(); request?.abort(); clearTimeout(timer); clearInterval(refreshTimer); });
 </script>
 
 <template>
@@ -69,7 +105,7 @@ onScopeDispose(() => { request?.abort(); clearTimeout(timer); });
       </div>
       <p v-if="!loading && !error && !visibleMembers.length">没有匹配的成员</p>
       <InlineFeedback :message="error" :pending="loading ? '正在查找成员…' : ''" />
-      <button v-if="error" type="button" :disabled="disabled || loading" @click="loadMore">重新读取</button>
+      <button v-if="error" type="button" :disabled="disabled || loading" @click="refreshFailed ? refreshVisiblePages() : loadMore()">重新读取</button>
     </div>
   </div>
 </template>

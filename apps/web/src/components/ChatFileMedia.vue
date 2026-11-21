@@ -49,7 +49,7 @@ async function load(cacheOnly = false) {
     if (!fetched) { failed.value = true; return; }
     blob = fetched.slice(0, fetched.size, format.value.kind === 'video' ? 'image/jpeg' : format.value.contentType);
     source.value = URL.createObjectURL(blob);
-    // 封面与小动图共用现有账号缓存，整段音视频不写入聊天缓存。
+    // 列表只缓存封面与小图，正片在用户打开后读取。
     if (!props.pending && !(cached instanceof Blob) && fetched.size <= 8 * 1024 * 1024 && cache?.revision === revision) {
       void cache?.write('image', props.groupId, blob, cacheId.value);
     }

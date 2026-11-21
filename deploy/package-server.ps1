@@ -66,7 +66,7 @@ if ($livekitRecord.serverBinarySha256 -cnotmatch '^[0-9a-f]{64}$' `
     -or $livekitRecord.serverBinarySha256 -cne (Get-FileHash -Algorithm SHA256 -LiteralPath $livekitBinary).Hash.ToLowerInvariant()) {
     throw 'LiveKit 服务端缺失或校验失败，请按 vendor/livekit/README.md 准备配套版本。'
 }
-$bundleFiles = @('Dockerfile', 'compose.yaml', 'compose.lan.yaml', 'Caddyfile', 'Caddyfile.lan', '.env.example', '.dockerignore', 'DEPLOY.md', 'maintenance/maintain-releases.py', 'livekit/Dockerfile', 'livekit/LICENSE')
+$bundleFiles = @('Dockerfile', 'compose.yaml', 'compose.lan.yaml', 'Caddyfile', 'Caddyfile.lan', '.env.example', '.dockerignore', 'DEPLOY.md', 'QUICKSTART.md', 'install.py', 'maintenance/maintain-releases.py', 'livekit/Dockerfile', 'livekit/LICENSE')
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $outputRoot = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $temporaryName = '.lycansync-server-' + [guid]::NewGuid().ToString('N')

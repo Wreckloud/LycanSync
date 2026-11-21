@@ -82,6 +82,35 @@ async function redeem(application: ElectronApplication, origin: string, recovery
   return page;
 }
 
+test('跨服务器邀请保存新地址与加密链接，再请求重启', async () => {
+  const api = await createAccountServer();
+  const directory = test.info().outputPath('server-switch');
+  let application: ElectronApplication | undefined;
+  try {
+    ({ application } = await launchIsolatedDesktop(directory, api.origin));
+    const page = await application.firstWindow();
+    await expect(page.getByText('使用服主分享的邀请链接即可加入。', { exact: false })).toBeVisible();
+    const offer = { server: 'https://new-server.invalid', token: 'a'.repeat(43) };
+    await application.evaluate(({ app, BrowserWindow }, offer) => {
+      // 保留真实的 IPC、加密和退出流程，只阻止重新启动测试进程。
+      app.relaunch = () => {};
+      BrowserWindow.getAllWindows()[0].webContents.send('auth:access:offer', offer);
+    }, offer);
+    const button = page.getByRole('button', { name: '连接并重启', exact: true });
+    await expect(button).toBeVisible();
+    const closed = application.waitForEvent('close', { timeout: 8000 });
+    await Promise.all([closed, button.click()]);
+    const profile = resolve(directory, 'profile');
+    expect(JSON.parse(readFileSync(resolve(profile, 'server-config.json'), 'utf8'))).toEqual({ apiUrl: offer.server });
+    const pendingLink = readFileSync(resolve(profile, 'pending-access.bin'));
+    expect(pendingLink.length).toBeGreaterThan(0);
+    expect(pendingLink.includes(offer.token)).toBe(false);
+  } finally {
+    await application?.close();
+    await api.close();
+  }
+});
+
 test('快捷键真实桌面桥接：初始化、模式切换和重启恢复不因响应式对象失效', async () => {
   test.setTimeout(60_000);
   const api = await createAccountServer(false);

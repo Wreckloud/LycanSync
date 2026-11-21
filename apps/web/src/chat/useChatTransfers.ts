@@ -58,6 +58,7 @@ export function createChatTransfers(user: AuthUser, onSent: (groupId: string) =>
   }
 
   function acknowledge(job: Outgoing) {
+    if (outgoing.get(job.message.id) !== job) return;
     onSent(job.groupId);
     forget(job);
   }
@@ -80,6 +81,7 @@ export function createChatTransfers(user: AuthUser, onSent: (groupId: string) =>
 
   async function transfer(job: Outgoing, registeredAt: number) {
     const item = job.item!;
+    const controller = job.controller;
     try {
       job.controller.signal.throwIfAborted();
       // 排队时间计入登记租期，长队列开始读取原文件前重新核验。
@@ -96,7 +98,7 @@ export function createChatTransfers(user: AuthUser, onSent: (groupId: string) =>
     } catch (reason) {
       await failed(job, reason);
     } finally {
-      job.controller.abort();
+      controller.abort();
       uploading--;
       waiting.shift()?.();
     }
@@ -155,17 +157,23 @@ export function createChatTransfers(user: AuthUser, onSent: (groupId: string) =>
   }
 
   async function retry(job: Outgoing) {
-    if (job.state !== 'failed') return;
+    if (job.state !== 'failed' || outgoing.get(job.message.id) !== job) return;
+    const controller = job.controller = new AbortController();
     job.state = 'queued';
-    if (job.item?.kind === 'FILE') {
-      try { await stopFile(job.groupId, job.message.id, job.attemptId, session.signal); }
-      catch (reason) { job.state = 'failed'; job.error = reason instanceof Error ? reason.message : '无法重试'; return; }
-    }
-    if (session.signal.aborted) return;
-    job.controller = new AbortController();
-    job.attemptId = crypto.randomUUID();
     job.error = '';
     job.progress = 0;
+    try {
+      // 先确认旧登记已停止，期间取消只放弃这次重试。
+      if (job.item?.kind === 'FILE') await stopFile(job.groupId, job.message.id, job.attemptId, session.signal);
+      controller.signal.throwIfAborted();
+    } catch (reason) {
+      if (outgoing.get(job.message.id) !== job) return;
+      job.state = 'failed';
+      job.error = controller.signal.aborted ? '已取消上传' : reason instanceof Error ? reason.message : '无法重试';
+      return;
+    }
+    if (outgoing.get(job.message.id) !== job) return;
+    job.attemptId = crypto.randomUUID();
     schedule(job);
   }
 

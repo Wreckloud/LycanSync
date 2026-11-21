@@ -4,7 +4,7 @@ const { join, resolve, posix } = require('node:path');
 const { createRequire } = require('node:module');
 const { runInNewContext } = require('node:vm');
 const { test } = require('node:test');
-const { applicationEntries, upgradeInstallerScript, upgradeInstallerUtilities, upgradeInstallerSection,
+const { applicationEntries, upgradeInstallerScript, upgradeAssistedInstaller, upgradeInstallerUtilities, upgradeInstallerSection,
   upgradeInstallerPayload, prepareInstallerFiles } = require('./build-nsis.cjs');
 
 const root = resolve(__dirname, '../../..');
@@ -33,6 +33,7 @@ test('只替换固定的旧卸载函数，保留标准安装器、签名生成�
   const patched = upgradeInstallerScript(source);
   assert.ok(patched.includes('installer-util.nsh'));
   assert.ok(patched.includes('installer-upgrade.nsh'));
+  assert.ok(patched.includes('installer-assisted.nsh'));
   assert.ok(patched.includes('WriteUninstaller'));
   assert.ok(patched.includes('installer-section.nsh'));
   assert.ok(patched.includes('${if} $installMode == "all"'));
@@ -45,6 +46,15 @@ test('只替换固定的旧卸载函数，保留标准安装器、签名生成�
   assert.throws(() => upgradeInstallerScript('different script'), /模板已变化/);
   assert.throws(() => upgradeInstallerScript(source.replace('$hasPerMachineInstallation == "1"', '$changed == "1"')), /模板已变化/);
   assert.throws(() => upgradeInstallerUtilities('different utility'), /入口已变化/);
+});
+
+test('只在向导目录页接入默认路径规则，保留手动编辑后的目录处理', () => {
+  const source = readFileSync(join(templates, 'assistedInstaller.nsh'), 'utf8');
+  const patched = upgradeAssistedInstaller(source);
+  assert.ok(patched.includes('!insertmacro LycanDirectoryPage'));
+  assert.ok(patched.includes('Function instFilesPre'));
+  assert.ok(patched.includes('!insertmacro PAGE_INSTALL_MODE'));
+  assert.throws(() => upgradeAssistedInstaller('changed'), /目录页入口已变化/);
 });
 
 test('桌面勾选只约束现有快捷方式动作，保留构建器升级规则及其他安装步骤', () => {

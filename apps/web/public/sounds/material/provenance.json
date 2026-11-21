@@ -36,18 +36,6 @@
       "modified": false
     },
     {
-      "file": "alert_error-02.ogg",
-      "sha256": "1d3b3c6097b087ec58b69950a7dc97f571ed094d640fedd5dfea802c8b75cf40",
-      "bytes": 9132,
-      "modified": false
-    },
-    {
-      "file": "notification_simple-01.ogg",
-      "sha256": "3d932661931e306fa09cb285adf1c51c09adc614b63e5b89d4380a4fa7a33d77",
-      "bytes": 11295,
-      "modified": false
-    },
-    {
       "file": "navigation-cancel.ogg",
       "sha256": "92012997d35d209051bad2fad722f4a92d7293b1fa5980ed59e621990b11924b",
       "bytes": 7561,

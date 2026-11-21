@@ -5,7 +5,7 @@ import { useNotice } from './feedback/useNotice';
 import { useInitialLoading } from './profile/useInitialLoading';
 import { ArrowLeft, AudioLines, Copy, CornerUpLeft, Headphones,
   LoaderCircle, LogOut, Minus, Plus, RadioTower,
-  Settings, Square, UserRound, Volume2, X } from '@lucide/vue';
+  MousePointer2, Settings, Square, UserRound, Volume2, X } from '@lucide/vue';
 import { RemoteAudioTrack, Track, type Participant } from 'livekit-client';
 import ParticipantCard from './components/ParticipantCard.vue';
 import CallControls from './components/CallControls.vue';
@@ -535,8 +535,6 @@ const personalCardActive = computed(() => settingsOpen.value
   : !profileCardsBlocked.value);
 watch(profileCardsBlocked, blocked => { if (blocked) personalMenuOpen.value = false; });
 const recording = useRecording({
-  onStarted: () => { void callSounds.recordingStarted(); },
-  onSaved: () => { void callSounds.recordingStopped(); },
   track: () => rtc.room?.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track?.mediaStreamTrack,
   canStart: () => rtc.screenShareActive && !rtc.screenShareAudioRestricted && !rtc.screenShareQualityBusy
     && !rtc.screenShareSourceBusy && !rtc.busySources.includes(Track.Source.ScreenShare),
@@ -699,7 +697,7 @@ const sharingAudio = computed(() => {
   return Boolean(localParticipant.value?.getTrackPublication(Track.Source.ScreenShareAudio)?.track);
 });
 const localMicrophoneLevel = computed(() => {
-  void rtc.revision;
+  void rtc.speakerRevision;
   const participant = localParticipant.value;
   return rtc.microphoneEnabled && participant ? participant.audioLevel : 0;
 });
@@ -1132,7 +1130,11 @@ function participantListening(participant: Participant) {
           <div class="group-header-clip">
             <header class="group-header">
               <div :key="selectedGroup.id" class="group-copy group-content-ready">
-                <div class="group-title-row"><GroupMenu :key="selectedGroup.id" :group="selectedGroup" @select="openGroupAction" /></div>
+                <div class="group-title-row">
+                  <GroupMenu :key="selectedGroup.id" :group="selectedGroup" @select="openGroupAction" />
+                  <small v-if="!showingJoinedGroup && groupHasVoiceActivity(selectedGroup.id)" class="group-voice-hint"
+                    title="双击左侧群图标加入语音">双击加入语音</small>
+                </div>
                 <p :title="selectedGroup.description || undefined">{{ selectedGroup.description }}</p>
               </div>
               <IconButton :label="showingJoinedGroup && viewingWindows?.detached ? '收回画面' : joinedGroupId === selectedGroup.id ? '离开当前群组语音' : '加入当前群组语音'"
@@ -1292,32 +1294,34 @@ function participantListening(participant: Participant) {
       @choose="chooseCaptureSource" @refresh-thumbnails="refreshVisibleSourceThumbnails" @preview-loaded="reportRenderedPreviews"
       @close="selectCaptureSource(null)" @confirm="selectCaptureSource(selectedCaptureSourceId, $event)" />
     </DialogTransition>
-    <ScreenShareWindows ref="viewingWindows" :rtc="rtc" :group-name="joinedGroup?.name ?? ''"
+    <ScreenShareWindows ref="viewingWindows" :snapshot="diagnosticReport.latest.value" :rtc="rtc" :group-name="joinedGroup?.name ?? ''"
       :recording-elapsed="recording.state.value.phase === 'recording' ? recording.elapsed.value : undefined"
       :inline-target="viewingTarget" :inline-visible="mainWindowVisible && !settingsPresented"
       :avatar="participantAvatar" :muted-shares="mutedShares"
       :control-placeholder="remoteControlPlaceholder"
       :input-blocked="viewerInputBlocked"
       @notice="viewerNotice = $event" @toggle-share-audio="toggleSharedAudio" @request-control="requestParticipantControl">
+      <template #control="{ identity }">
+        <button v-if="identity !== localParticipant?.identity && remoteControlCanRequest(identity)" type="button"
+          class="viewing-control-action" :aria-label="remoteControlIsActive(identity) ? '退出远程控制' : remoteControlIsPending(identity) ? '取消远程控制申请' : '申请远程控制'"
+          @click.stop="remoteControlIsActive(identity) ? rtc.exitRemoteControl() : remoteControlIsPending(identity) ? rtc.cancelPendingRemoteControl(identity) : requestParticipantControl(identity)">
+          <MousePointer2 :size="14" />{{ remoteControlIsActive(identity) ? '退出控制' : remoteControlIsPending(identity) ? '取消申请' : '申请控制' }}
+        </button>
+      </template>
       <template #default="{ select, visible, previewsMounted, focusedIdentity, watchingElsewhere }">
         <div v-for="participant in rtc.participants" :key="participant.identity" class="member-card" :data-scroll-key="participant.identity">
         <ParticipantCard :participant="participant"
           :focused="focusedIdentity === participant.identity" :watching-elsewhere="watchingElsewhere"
           :view-active="visible"
           :preview-mounted="previewsMounted"
-          :revision="rtc.revision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant"
+          :revision="rtc.revision" :speaker-revision="rtc.speakerRevision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant"
           :recording-elapsed="recording.state.value.phase === 'recording' ? recording.elapsed.value : undefined"
           :is-listening="participantListening(participant)" :local-microphone-enabled="rtc.microphoneEnabled"
-          :remote-control-available="remoteControlCanRequest(participant.identity)"
           :private-control="remoteControlPlaceholder(participant.identity)"
-          :remote-control-pending="remoteControlIsPending(participant.identity)"
-          :remote-control-active="remoteControlIsActive(participant.identity)"
-          :remote-control-name="previewParticipantName(participant.identity, participant.name || participant.identity)"
           :playback-volume="participantVolume(participant.identity)"
           :share-audio="Boolean(participant.getTrackPublication(Track.Source.ScreenShareAudio)?.track)"
           :share-muted="mutedShares.includes(participant.identity)" :share-audio-listening="listening"
           @toggle-share-audio="toggleSharedAudio(participant.identity)" @select="viewerNotice = ''; select(participant.identity)"
-          @request-control="requestParticipantControl(participant.identity)" @cancel-control="rtc.cancelPendingRemoteControl(participant.identity)" @stop-control="rtc.exitRemoteControl"
           @toggle-audio="toggleParticipantAudio(participant.identity)"
           @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />
         </div>

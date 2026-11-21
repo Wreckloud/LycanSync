@@ -43,3 +43,19 @@ it('缓存出现即取消提示，切换等待重新计时，销毁释放计时�
     expect(hint.value).toBe(false);
   } finally { scope.stop(); }
 });
+
+it('进度文案更新时按同一次等待计时，显示后也不会闪退', async () => {
+  const scope = effectScope();
+  const progress = ref('正在保存片段 0%…');
+  const hint = scope.run(() => useLoadingHint(() => progress.value))!;
+  try {
+    await vi.advanceTimersByTimeAsync(600);
+    progress.value = '正在保存片段 20%…';
+    await vi.advanceTimersByTimeAsync(400);
+    expect(hint.value).toBe(true);
+    progress.value = '正在保存片段 50%…';
+    expect(hint.value).toBe(true);
+    progress.value = '';
+    expect(hint.value).toBe(false);
+  } finally { scope.stop(); }
+});

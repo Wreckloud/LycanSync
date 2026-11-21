@@ -17,7 +17,7 @@ function fixture() {
   const frames = new Map<number, FrameRequestCallback>();
   const documentEvents = new EventTarget();
   let nextFrame = 0;
-  const detached = ref(false), expanded = ref(false), showMembers = ref(true);
+  const active = ref(false), detached = ref(false), expanded = ref(false), showMembers = ref(true);
   const preferred = ref<number | null>(null);
   const setHeight = vi.fn((value: number) => { preferred.value = value; });
   const boundary = (top: () => number) => ({ getClientRects: () => [{}], getBoundingClientRect: () => ({ top: top() }) });
@@ -58,7 +58,7 @@ function fixture() {
   };
   const scope = effectScope();
   const size = scope.run(() => useViewingSize(shallowRef(element as unknown as HTMLElement), {
-    detached: () => detached.value, expanded: () => expanded.value, showMembers: () => showMembers.value,
+    active: () => active.value, detached: () => detached.value, expanded: () => expanded.value, showMembers: () => showMembers.value,
     preferredHeight: () => preferred.value, setHeight,
   }))!;
   mounted.forEach(callback => callback());
@@ -67,7 +67,7 @@ function fixture() {
     const pending = [...frames.values()]; frames.clear();
     pending.forEach(callback => callback(0));
   }
-  return { scope, size, detached, expanded, showMembers, preferred, setHeight, observed, frames, measure, queue: () => observe(),
+  return { scope, size, active, detached, expanded, showMembers, preferred, setHeight, observed, frames, measure, queue: () => observe(),
     setHidden(value: boolean) { element.ownerDocument.visibilityState = value ? 'hidden' : 'visible'; documentEvents.dispatchEvent(new Event('visibilitychange')); },
     removeVisibilityListener: element.ownerDocument.removeEventListener,
     setViewportWidth(value: number) { viewport.clientWidth = value; },
@@ -75,6 +75,18 @@ function fixture() {
     setComposerTop(value: number) { composerTop = value; },
     setMemberHeight(value: number) { memberHeight = value; } };
 }
+
+it('从成员条进入观看时按新增的操作栏立即重算上限', async () => {
+  const f = fixture();
+  try {
+    const previousHeight = f.size.height.value;
+    f.setMemberHeight(226);
+    f.active.value = true;
+    await nextTick();
+    expect(f.size.height.value).toBe(previousHeight - 26);
+    expect(f.setHeight).not.toHaveBeenCalled();
+  } finally { f.scope.stop(); }
+});
 
 it('窗口暂时没有可测量宽度时保留视频尺寸，恢复后不从零重新展开', () => {
   const f = fixture();

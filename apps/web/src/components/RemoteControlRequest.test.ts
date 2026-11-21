@@ -22,12 +22,12 @@ describe('远控确认与私密展示', () => {
     expect(busy).not.toContain('正在准备远程控制');
   });
 
-  it('未共享成员也有申请入口；私密状态不渲染视频或沿用上一帧背景', async () => {
+  it('成员卡仅展示成员；私密状态不渲染视频或沿用上一帧背景', async () => {
     const participant = { identity: 'target', name: '好友', isMicrophoneEnabled: false,
       isScreenShareEnabled: false, getTrackPublication: () => undefined } as unknown as Participant;
-    const props = { participant, revision: 0, isLocal: false, isListening: true, remoteControlAvailable: true };
+    const props = { participant, revision: 0, isLocal: false, isListening: true };
     const idle = await renderToString(createSSRApp(ParticipantCard, props));
-    expect(idle).toContain('申请远程控制');
+    expect(idle).not.toContain('申请远程控制');
     expect(idle).not.toContain('<video');
     const privateView = await renderToString(createSSRApp(ParticipantCard, {
       ...props, participant: { ...participant, isScreenShareEnabled: true }, privateControl: '正在被另一位好友控制中',

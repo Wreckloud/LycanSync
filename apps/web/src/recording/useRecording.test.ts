@@ -42,11 +42,9 @@ async function fixture(initial: Partial<DesktopRecordingStatus> = {}, replayEnab
   const track = shallowRef<MediaStreamTrack | undefined>({ id: 'original' } as MediaStreamTrack);
   const canStart = shallowRef(true);
   const scope = effectScope();
-  const onStarted = vi.fn();
-  const onSaved = vi.fn();
-  const recording = scope.run(() => useRecording({ track: () => track.value, canStart: () => canStart.value, voices: () => [], onStarted, onSaved }))!;
+  const recording = scope.run(() => useRecording({ track: () => track.value, canStart: () => canStart.value, voices: () => [] }))!;
   await vi.waitFor(() => expect(recording.busy.value).toBe(false));
-  return { recording, desktop, scope, track, canStart, onStarted, onSaved, publish: (next: DesktopRecordingStatus) => { status = next; listener(next); } };
+  return { recording, desktop, scope, track, canStart, publish: (next: DesktopRecordingStatus) => { status = next; listener(next); } };
 }
 
 it('未共享时可保存回放开关，等待共享就绪再启动并提示，下次共享仍自动开启', async () => {
@@ -165,20 +163,15 @@ it('开始录制不弹提示，保存成功提示且周期快照不重复提示'
   try {
     expect(f.recording.successNotice.value).toBeNull();
     await f.recording.start();
-    expect(f.onStarted).toHaveBeenCalledOnce();
     expect(f.recording.successNotice.value).toBeNull();
     const started = f.recording.successNotice.value;
     f.publish({ ...f.recording.state.value, bytes: 1024 });
-    expect(f.onStarted).toHaveBeenCalledOnce();
-    expect(f.onSaved).not.toHaveBeenCalled();
     expect(f.recording.successNotice.value).toBe(started);
     await f.recording.stop();
-    expect(f.onSaved).toHaveBeenCalledOnce();
     expect(f.recording.successNotice.value?.message).toBe('录像已保存到本地录像');
     expect(f.recording.successNotice.value?.saved).toBe(true);
     const saved = f.recording.successNotice.value;
     f.publish({ ...f.recording.state.value });
-    expect(f.onSaved).toHaveBeenCalledOnce();
     expect(f.recording.successNotice.value).toBe(saved);
   } finally { f.scope.stop(); }
 });
@@ -243,8 +236,6 @@ it('来源选择取消不影响当前录像；确认后先保存再换源，换�
     });
     expect(f.desktop.startRecording).toHaveBeenCalledTimes(2);
     expect(f.desktop.startRecording).toHaveBeenLastCalledWith('file-1');
-    expect(f.onStarted).toHaveBeenCalledOnce();
-    expect(f.onSaved).not.toHaveBeenCalled();
     expect(setNativeScreenRecordingDemand).toHaveBeenCalledWith(f.track.value, true);
   } finally { f.scope.stop(); }
 });
@@ -282,31 +273,10 @@ it('仅开回放也能保存片段，不要求普通录像或偷偷开始录像'
     expect(f.desktop.saveReplay).toHaveBeenCalledOnce();
     expect(f.recording.successNotice.value?.message).toBe('回放已保存到本地录像');
     expect(f.recording.active.value).toBe(false);
-    expect(f.onStarted).not.toHaveBeenCalled();
-    expect(f.onSaved).not.toHaveBeenCalled();
   } finally { f.scope.stop(); }
 });
 
-it('首次读取历史录像、失败与原生自动分段不播放录制音效', async () => {
-  const f = await fixture({ phase: 'saved', recordingId: 'historical', saved: true });
-  try {
-    expect(f.onStarted).not.toHaveBeenCalled();
-    expect(f.onSaved).not.toHaveBeenCalled();
-    f.desktop.startRecording.mockRejectedValueOnce(new Error('recordingEncoderStartFailed'));
-    await f.recording.start();
-    expect(f.onStarted).not.toHaveBeenCalled();
-    await f.recording.start();
-    f.publish({ ...f.recording.state.value, phase: 'saved', saved: true, continuing: true });
-    f.publish({ ...f.recording.state.value, phase: 'recording', saved: false, recordingId: 'continued', continuing: true });
-    f.publish({ ...f.recording.state.value, continuing: false });
-    expect(f.onStarted).toHaveBeenCalledOnce();
-    expect(f.onSaved).not.toHaveBeenCalled();
-    f.publish({ ...f.recording.state.value, phase: 'failed', saved: false, holdingResources: false, error: 'recordingWriteFailed' });
-    expect(f.onSaved).not.toHaveBeenCalled();
-  } finally { f.scope.stop(); }
-});
-
-it('录制开始回复迟于保存事件时，不补播开始音或重复结束音', async () => {
+it('录制开始回复迟于保存事件时保留已保存状态', async () => {
   const f = await fixture();
   let complete!: (value: DesktopRecordingStatus) => void;
   f.desktop.startRecording.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
@@ -317,8 +287,8 @@ it('录制开始回复迟于保存事件时，不补播开始音或重复结束�
     f.publish(started);
     f.publish({ ...started, phase: 'saved', holdingResources: false, saved: true });
     complete(started); await starting;
-    expect(f.onStarted).not.toHaveBeenCalled();
-    expect(f.onSaved).toHaveBeenCalledOnce();
+    expect(f.recording.state.value.phase).toBe('saved');
+    expect(f.recording.active.value).toBe(false);
   } finally { f.scope.stop(); }
 });
 
@@ -550,7 +520,6 @@ it('录像启动确认迟于停止请求，收尾迟到的输出且不恢复旧�
     await starting;
     expect(f.desktop.stopRecording).toHaveBeenCalledExactlyOnceWith('late');
     expect(f.recording.localActive.value).toBe(false);
-    expect(f.onStarted).not.toHaveBeenCalled();
   } finally { f.scope.stop(); }
 });
 

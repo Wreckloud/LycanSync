@@ -50,7 +50,7 @@ createApp({ setup() {
     await expect(page.getByText('当前沿用之前的单项设置。开启后应用完整的声音处理。')).toBeVisible();
     await expect(page.getByRole('checkbox')).toHaveCount(2);
     await expect(page.getByText('桌面版暂不支持回声消除，建议使用耳机通话。')).toHaveCount(0);
-    if (!desktop) await expect(page.getByText('同时使用浏览器的回声消除。')).toBeVisible();
+    if (!desktop) await expect(page.getByText('声音处理由浏览器提供。')).toBeVisible();
 
     const enabled = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true };
     const disabled = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, voiceEnhancement: false };
@@ -119,7 +119,7 @@ createApp({ setup() {
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem(
       'lycansync.audio-preferences.v1.audio-settings-test')!))).toMatchObject({ inputGain: 1.4, outputVolume: 0.8, screenShareVolume: 0.6 });
     if (desktop) {
-      const projectLink = page.getByRole('link', { name: 'RNNoise 开源项目' });
+      const projectLink = page.getByRole('link', { name: 'RNNoise', exact: true });
       await expect(projectLink).toHaveAttribute('href', 'https://github.com/xiph/rnnoise');
       await page.evaluate(() => {
         Object.defineProperty(window, 'lycanDesktop', { configurable: true, value: {

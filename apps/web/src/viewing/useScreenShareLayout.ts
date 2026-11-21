@@ -15,6 +15,7 @@ interface LayoutOptions {
   revision(): number;
   status(): string;
   session(identity: string): string | undefined;
+  timings?(): Record<string, { trackSid: string; startedAt: number }>;
   privateControl(identity: string): string;
 }
 
@@ -40,7 +41,6 @@ export function useScreenShareLayout(options: LayoutOptions) {
     sync();
     const share = shares.value.find(share => share.participant.identity === identity);
     if (!share) return false;
-    if (mode.value === 'focus' && focused.value === share.key) { collapse(); return true; }
     focused.value = share.key;
     mode.value = 'focus';
     return true;
@@ -71,10 +71,12 @@ export function useScreenShareLayout(options: LayoutOptions) {
       const session = options.session(participant.identity);
       const trackSid = participant.getTrackPublication(Track.Source.ScreenShare)?.trackSid;
       const previous = shares.value.find(share => share.participant.identity === participant.identity);
+      const timing = options.timings?.()?.[participant.identity];
       const changed = previous && (previous.session && session ? previous.session !== session
         : previous.trackSid && trackSid && previous.trackSid !== trackSid);
       return { key: previous && !changed ? previous.key : ++nextKey, participant, session, trackSid,
-        observedAt: previous && !changed ? previous.observedAt : performance.now() };
+        observedAt: timing && timing.trackSid === trackSid ? timing.startedAt
+          : previous && !changed ? previous.observedAt : performance.now() };
     });
     // 网格随有效共享更新；聚焦目标结束或换源只能收起，不能自动接管新画面。
     if (!shares.value.length || mode.value === 'focus' && !focusedShare.value) collapse();
@@ -90,6 +92,7 @@ export function useScreenShareLayout(options: LayoutOptions) {
   }, { immediate: true, flush: 'sync' });
   watch(options.status, status => { if (status === 'reconnecting') reconnecting = true; }, { flush: 'sync' });
   watch(options.revision, sync, { flush: 'sync' });
+  if (options.timings) watch(options.timings, sync);
   onScopeDispose(reset);
   return { mode, shares, focused, focusedShare, displayed, membersVisible, height, expanded, select, grid, collapse, reset };
 }

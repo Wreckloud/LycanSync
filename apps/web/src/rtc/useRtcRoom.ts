@@ -23,7 +23,6 @@ import { syncScreenShareViewing } from './screenShareViewing';
 type RoomStatus = 'idle' | 'joining' | 'connected' | 'reconnecting';
 type MediaSource = Track.Source.Microphone | Track.Source.ScreenShare;
 const SCREEN_SHARE_PRESET = screenShareVideoPreset('standard');
-const SPEAKER_REFRESH_INTERVAL_MS = 120;
 const ENTRANCE_SOUND_RECEIVE_TIMEOUT_MS = 8_000;
 const PROCESSING_RESTART_NOTICE = '重新开启麦克风后，部分声音处理设置才会生效。';
 const PROCESSING_UNSUPPORTED_NOTICE = '这项声音处理设置需要重新开启麦克风后生效。';
@@ -130,6 +129,7 @@ function reportNativeAudioCleanupFailure(error: unknown) {
 /** 编排房间与媒体生命周期；桌面走原生采集，浏览器走 Chromium，不持久化凭证。 */
 export function useRtcRoom(options?: RtcRoomOptions) {
   const revision = ref(0);
+  const speakerRevision = ref(0);
   const activeRoom = shallowRef<Room | null>(null);
   const pendingJoin = shallowRef<AbortController | null>(null);
   const pendingMedia = shallowRef(new Set<MediaSource>());
@@ -170,7 +170,6 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       };
   let microphoneProcessor: MicrophoneAudioProcessor | null = null;
   let nativeMicrophoneSession: NativeMicrophoneAudioSession | null = null;
-  let speakerRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   let screenShareResource: ScreenShareResource | null = null;
   let screenShareIntentVersion = 0;
   const currentScreenShareQuality = ref<ScreenShareQualityId>(options?.screenShareQuality ?? 'standard');
@@ -287,10 +286,6 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     return task.promise;
   }
 
-  function clearSpeakerRefreshTimer() {
-    if (speakerRefreshTimer !== null) clearTimeout(speakerRefreshTimer);
-    speakerRefreshTimer = null;
-  }
 
   onScopeDispose(() => {
     microphoneVersion++;
@@ -324,7 +319,6 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     currentRoom?.localParticipant.trackPublications.forEach((publication) => publication.track?.stop());
     microphoneTracks.clear();
     currentRoom?.removeAllListeners();
-    clearSpeakerRefreshTimer();
     remoteControl.clearRoomState();
     void currentRoom?.disconnect();
   });
@@ -412,17 +406,11 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         screenShareActive.value = Boolean(currentRoom.localParticipant.getTrackPublication(Track.Source.ScreenShare)?.track);
         needsAudioPlayback.value = !currentRoom.canPlaybackAudio;
       };
-      const scheduleSpeakerRefresh = () => {
-        if (speakerRefreshTimer !== null) return;
-        speakerRefreshTimer = setTimeout(() => {
-          speakerRefreshTimer = null;
-          refresh();
-        }, SPEAKER_REFRESH_INTERVAL_MS);
-      };
+
       [
         RoomEvent.TrackSubscribed,
         RoomEvent.TrackMuted, RoomEvent.TrackUnmuted,
-        RoomEvent.ParticipantAttributesChanged,
+        RoomEvent.ParticipantAttributesChanged, RoomEvent.ConnectionQualityChanged,
         RoomEvent.AudioPlaybackStatusChanged,
       ].forEach((event) => currentRoom.on(event, refresh));
       // SDK 先发取消订阅事件，再清空 publication.track；同步重读会缓存旧播放轨道。
@@ -524,7 +512,9 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         }
       });
       // 发言状态变化可能很频繁，节流只影响 UI 指示，不影响音频传输。
-      currentRoom.on(RoomEvent.ActiveSpeakersChanged, scheduleSpeakerRefresh);
+      currentRoom.on(RoomEvent.ActiveSpeakersChanged, () => {
+        if (activeRoom.value === currentRoom) speakerRevision.value++;
+      });
       currentRoom.on(RoomEvent.ConnectionStateChanged, (connectionState) => {
         if (activeRoom.value !== currentRoom) return;
         if (connectionState === ConnectionState.Connected) {
@@ -651,7 +641,6 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     currentRoom?.localParticipant.trackPublications.forEach((publication) => publication.track?.stop());
     microphoneTracks.clear();
     currentRoom?.removeAllListeners();
-    clearSpeakerRefreshTimer();
     remoteControl.clearRoomState();
     pendingMedia.value = new Set();
     busySources.value = [];
@@ -1172,7 +1161,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             shareResource.remoteShare = { shareId: nextSessionId, captureSessionId: nextSessionId,
               sourceId: nextSourceId, kind: 'window', liveKitTrackId: shareResource.liveKitTrackId };
             shareResource.sourceChanging = false;
-            remoteControl.beginShare(currentRoom);
+            remoteControl.beginShare(currentRoom, shareResource.liveKitTrackId);
             revision.value++;
             // 与首次共享一致，画面切换完成后异步接回声音，不占用画质操作。
             if (shareResource.audioWanted) void applyScreenShareAudioEnabled(true, true);
@@ -1293,9 +1282,10 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             kind: shareResource.kind,
             liveKitTrackId: shareResource.liveKitTrackId,
           };
-          remoteControl.beginShare(currentRoom);
         }
       }
+      const videoPublication = participant.getTrackPublication(Track.Source.ScreenShare);
+      remoteControl.beginShare(currentRoom, videoPublication?.trackSid ?? null);
     } catch (error) {
       // 自定义选择器的取消会被 Chromium 以拒绝采集返回；这是正常结束，不能误报为权限或连接故障。
       const targetClosed = error instanceof Error
@@ -1740,14 +1730,14 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     }
   }
 
-  return { revision, room, playbackContext, status, participants, notice, noticeEvent, needsAudioPlayback, busySources, screenShareActive,
+  return { revision, speakerRevision, room, playbackContext, status, participants, notice, noticeEvent, needsAudioPlayback, busySources, screenShareActive,
     screenShareStarting,
     listening, microphoneIntent, microphoneEnabled,
     currentScreenShareQuality, currentCustomScreenShareQuality, screenShareQualityBusy, setScreenShareQuality,
     currentScreenShareAudioMode, screenShareSourceBusy, changeScreenShareSource, setScreenShareAudioEnabled,
     screenShareAudioRestricted,
     remoteControlRequest: remoteControl.request, remoteControlOwner: remoteControl.owner,
-    remoteControlShares: remoteControl.shares, remoteControlActive: remoteControl.active,
+    remoteControlShares: remoteControl.shares, shareTimings: remoteControl.shareTimings, remoteControlActive: remoteControl.active,
     remoteControlAvailable: remoteControl.available, remoteControlPresentations: remoteControl.presentations,
     remoteControlRestoring: remoteControl.restoring,
     remoteControlPending: remoteControl.pending, remoteControlGranting: remoteControl.granting,

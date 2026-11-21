@@ -35,6 +35,67 @@
       ${EndIf}
     ${EndIf}
   !macroend
+
+  !macro LycanDirectoryPage
+    !define MUI_PAGE_CUSTOMFUNCTION_PRE LycanDirectoryPagePre
+    !insertmacro MUI_PAGE_DIRECTORY
+
+    Function LycanDirectoryPagePre
+      ${If} ${isUpdated}
+        Abort
+      ${EndIf}
+      !insertmacro GetDParameter $2
+      ${If} $perUserInstallationFolder != ""
+      ${OrIf} $perMachineInstallationFolder != ""
+      ${OrIf} $2 != ""
+        Return
+      ${EndIf}
+
+      System::Call 'kernel32::GetDriveTypeW(w "D:\") i .r0'
+      StrCpy $1 "D:\Program Files"
+      ${If} $0 != 3 ; DRIVE_FIXED
+      ${OrIf} $1 == $PROGRAMFILES64
+      ${OrIf} $1 == $PROGRAMFILES32
+        Return
+      ${EndIf}
+
+      StrCpy $2 "D:\"
+      StrCpy $4 ""
+      ; 从盘根逐层排除链接，再检查最近的现有目录，不提前创建路径。
+      ${Do}
+        System::Call 'kernel32::GetFileAttributesW(w r2) i .r3 ?e'
+        Pop $0
+        ${If} $3 == -1
+          ${If} $0 != 2
+          ${AndIf} $0 != 3
+            Return
+          ${EndIf}
+          ${Break}
+        ${EndIf}
+        IntOp $3 $3 & 0x410 ; FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT
+        ${If} $3 != 16
+          Return
+        ${EndIf}
+        StrCpy $4 $2
+        ${If} $2 == "D:\"
+          StrCpy $2 $1
+        ${ElseIf} $2 == $1
+          StrCpy $2 "$1\${APP_FILENAME}"
+        ${Else}
+          ${Break}
+        ${EndIf}
+      ${Loop}
+      ${If} $4 == ""
+        Return
+      ${EndIf}
+      ; FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY，OPEN_EXISTING，FILE_FLAG_BACKUP_SEMANTICS。
+      System::Call 'kernel32::CreateFileW(w r4, i 6, i 7, p 0, i 3, i 0x02000000, p 0) p .r3'
+      ${If} $3 != -1
+        System::Call 'kernel32::CloseHandle(p r3)'
+        StrCpy $INSTDIR "$1\${APP_FILENAME}"
+      ${EndIf}
+    FunctionEnd
+  !macroend
 !endif
 
 

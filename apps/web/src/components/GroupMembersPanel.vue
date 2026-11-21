@@ -33,6 +33,7 @@ const loadingHint = useLoadingHint(() => props.loading && !props.members.length 
 const profileAnchor = ref<HTMLElement | null>(null);
 const profileUserId = ref('');
 const profileMember = computed(() => props.members.find(member => member.userId === profileUserId.value));
+const profileActivity = computed(() => profileMember.value ? props.activity(profileMember.value) : null);
 const ownVoice = useOwnVoiceTime(() => !!profileAnchor.value && profileUserId.value === props.user.id);
 const profilePresence = computed(() => props.presences[profileUserId.value]);
 const profileSignature = ref('');
@@ -175,11 +176,11 @@ async function toggleSearch() {
       :avatar="profileMember?.userId === user.id ? user.avatar : profileMember?.avatar ?? ''"
       :signature="profileMember?.userId === user.id ? user.signature : profileSignature"
       :status="profileMember ? status(profileMember) : 'OFFLINE'" :status-label="profileMember ? PRESENCE_STATUS_LABELS[status(profileMember)] : ''"
-      :activity="profileMember ? activity(profileMember)?.text : undefined"
-      :last-online-at="profilePresence?.lastOnlineAt" :recent-game="profilePresence?.recentGame"
-      :activity-started-at="profileMember ? activity(profileMember)?.startedAt : undefined" :loading="profileLoading" :error="profileError"
+      :activity="profileActivity?.text"
+      :last-online-at="profilePresence?.lastOnlineAt" :recent-game="profileActivity?.type === 'GAME' ? null : profilePresence?.recentGame"
+      :activity-started-at="profileActivity?.startedAt" :loading="profileLoading" :error="profileError"
       :own-voice="profileUserId === user.id" :voice-error="profileUserId === user.id ? ownVoice.error.value : ''"
-      :voice-seconds="profileUserId === user.id ? ownVoice.seconds.value : (!profileLoading && !profileError ? sharedVoiceSeconds : null)"
+      :voice-seconds="profileUserId === user.id ? ownVoice.seconds.value : (profileError ? null : sharedVoiceSeconds)"
       @close="closeProfile" @enter="keepProfile" @leave="leaveProfile" @retry="loadProfile" />
   </aside>
 </template>

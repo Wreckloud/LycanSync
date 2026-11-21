@@ -468,7 +468,7 @@ onScopeDispose(() => {
     <ProfilePopover :anchor="historicalAnchor" :profile-key="historicalSender?.senderUserId" placement="left" label="历史成员资料"
       :nickname="historicalSender?.senderNickname ?? ''" :avatar="historicalSender?.senderAvatar ?? ''"
       :deleted-at="historicalSender?.senderDeletedAt" :signature="historicalProfile?.signature" status="OFFLINE" status-label="已注销"
-      :loading="historicalLoading" :error="historicalError" :voice-seconds="historicalProfile?.sharedVoiceSeconds"
+      :loading="historicalLoading" :error="historicalError" :voice-seconds="historicalProfile?.sharedVoiceSeconds ?? null"
       @close="closeHistoricalProfile" @retry="historicalSender && historicalAnchor && showHistoricalProfile(historicalSender, historicalAnchor)" />
     <DialogTransition>
       <ChatMediaViewer v-if="pendingPreview" :key="pendingPreview.id" :group-id="group.id" :attachment="attachmentInfo(pendingPreview)"

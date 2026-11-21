@@ -16,8 +16,8 @@ import java.nio.file.Path;
 public class ChatFileProperties {
 
     private Path storageDirectory = Path.of("./var/chat-files");
-    private long maxFileSize = 536_870_912L;
-    private long maxStorageSize = 10_737_418_240L;
+    private long maxFileSize = 1_073_741_824L;
+    private long maxStorageSize = 34_359_738_368L;
 
     public Path getStorageDirectory() {
         return storageDirectory;

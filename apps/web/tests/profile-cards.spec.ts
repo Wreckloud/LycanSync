@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from '@playwright/test';
+import { expect, test, type Locator, type Route } from '@playwright/test';
 
 async function selectPersonalPresence(menu: Locator, label: string) {
   await menu.getByRole('group', { name: '在线状态', exact: true }).getByRole('button', { name: label, exact: true }).click();
@@ -178,8 +178,11 @@ test('底部整块资料打开菜单，编辑沿用设置且返回原入口，�
 
 test('成员悬浮按需读资料与共同连麦，移入卡片保持，Esc 关闭且缓存避免重复读取', async ({ page }) => {
   let requests = 0;
-  await page.route(`**/api/groups/${groupId}/members/${friendId}/profile`, route => {
+  let release!: () => void;
+  const ready = new Promise<void>(resolve => { release = resolve; });
+  await page.route(`**/api/groups/${groupId}/members/${friendId}/profile`, async route => {
     requests++;
+    await ready;
     return route.fulfill({ json: { userId: friendId, signature: '准备打团。', sharedVoiceSeconds: 151200 } });
   });
   await page.goto('/');
@@ -187,8 +190,13 @@ test('成员悬浮按需读资料与共同连麦，移入卡片保持，Esc 关�
   const friend = page.getByRole('button', { name: '查看 阿岚 的资料', exact: true });
   await friend.hover();
   const card = page.getByRole('dialog', { name: '成员资料', exact: true });
+  await expect(card).toBeVisible();
+  const body = card.locator('.profile-popover-content');
+  const initialHeight = (await body.boundingBox())!.height;
+  release();
   await expect(card).toContainText('准备打团。');
   await expect(card.locator('.profile-voice-time')).toHaveText('一起开黑的时间已经有 42 小时了');
+  expect((await body.boundingBox())!.height).toBe(initialHeight);
   await expect(card).toContainText('最终幻想14');
   await expect(card.locator('.profile-popover-status')).toHaveCount(0);
   await expect(friend.locator('.member-activity')).toHaveText(/^正在玩\s*最终幻想14$/);
@@ -721,20 +729,21 @@ test('本机提示音只提供统一音量和逐项开关，重开后恢复，�
   await expect(page.getByRole('checkbox', { name: '成员加入语音', exact: true })).toBeChecked();
   await expect(page.getByRole('button', { name: '选择音效', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '自定义音效', exact: true })).toBeVisible();
-  const moreSounds = page.getByRole('button', { name: '展开其他 6 项提示音', exact: true });
+  const moreSounds = page.getByRole('button', { name: '展开其他 4 项提示音', exact: true });
   await expect(page.getByRole('checkbox', { name: '开始共享', exact: true })).toBeHidden();
   await moreSounds.click();
   const sharingSound = page.getByRole('checkbox', { name: '开始共享', exact: true });
   await expect(sharingSound).toBeVisible();
-  await expect(page.getByRole('checkbox', { name: '开始录制', exact: true })).toBeChecked();
-  await expect(page.getByRole('checkbox', { name: '结束录制', exact: true })).toBeChecked();
+  await expect(page.getByRole('checkbox', { name: '开始录制', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('checkbox', { name: '结束录制', exact: true })).toHaveCount(0);
   await expect(page.getByRole('checkbox', { name: '恢复收听', exact: true })).toBeChecked();
   await expect(page.getByRole('checkbox', { name: '停止收听', exact: true })).toBeChecked();
   await expect(page.getByRole('link', { name: 'Google Material Design', exact: true })).toBeVisible();
+  await expect(page.locator('.sound-settings').getByRole('link', { name: 'CC BY 4.0', exact: true })).toHaveAttribute('href', 'https://creativecommons.org/licenses/by/4.0/');
   await sharingSound.uncheck();
   await expect.poll(() => page.locator('.sound-settings').evaluate(element => element.getAnimations({ subtree: true }).length)).toBe(0);
   const soundTogglePositions = await page.locator('.sound-settings input[type="checkbox"]').evaluateAll(inputs => inputs.map(input => input.getBoundingClientRect().right));
-  expect(soundTogglePositions).toHaveLength(13);
+  expect(soundTogglePositions).toHaveLength(11);
   expect(Math.max(...soundTogglePositions) - Math.min(...soundTogglePositions)).toBeLessThan(1);
   await page.screenshot({ path: test.info().outputPath('call-sound-settings.png') });
   await page.getByRole('button', { name: '收起其他提示音', exact: true }).click();
@@ -757,7 +766,7 @@ test('本机提示音只提供统一音量和逐项开关，重开后恢复，�
   await expect(sharingSound).not.toBeChecked();
 });
 
-test('Material 提示音从本地资源解码，设置试听采用确认后的十种素材', async ({ page }) => {
+test('Material 提示音从本地资源解码，设置试听采用对应事件的素材', async ({ page }) => {
   // 真正解码资源和运行播放节点，但将输出定向到无声设备，不采集任何声音。
   await page.addInitScript(() => {
     const prototype = AudioContext.prototype as AudioContext & { setSinkId: (id: { type: string }) => Promise<void> };
@@ -780,13 +789,12 @@ test('Material 提示音从本地资源解码，设置试听采用确认后的�
   await page.goto('/');
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '音效', exact: true }).click();
-  await page.getByRole('button', { name: '展开其他 6 项提示音', exact: true }).click();
+  await page.getByRole('button', { name: '展开其他 4 项提示音', exact: true }).click();
   const events = [
     ['成员加入语音', 'navigation_forward-selection.ogg'], ['成员离开语音', 'navigation_backward-selection.ogg'],
     ['麦克风恢复', 'navigation_forward-selection-minimal.ogg'], ['麦克风静音', 'navigation_backward-selection-minimal.ogg'],
-    ['开始共享', 'navigation_selection-complete-celebration.ogg'], ['停止共享', 'alert_error-02.ogg'],
-    ['恢复收听', 'navigation_hover-tap.ogg'], ['停止收听', 'navigation_forward-selection-minimal-short.wav'],
-    ['开始录制', 'notification_simple-01.ogg'], ['结束录制', 'navigation-cancel.ogg'],
+    ['开始共享', 'navigation_selection-complete-celebration.ogg'], ['停止共享', 'navigation-cancel.ogg'],
+    ['恢复收听', 'navigation_forward-selection-minimal-short.wav'], ['停止收听', 'navigation_hover-tap.ogg'],
   ];
   for (const [label, file] of events) {
     const before = await page.evaluate(() => (window as unknown as { materialSoundStarts: number }).materialSoundStarts);
@@ -871,12 +879,23 @@ test('上传入场音效保存规范 WAV，服务端失败保留旧音效，切�
 });
 
 
-test('离线资料卡展示冻结的上次在线和最近游戏，在线只展示最近游戏，未知记录省略', async ({ page }) => {
+test('最近游戏在离线或没有玩游戏时展示，正在玩游戏时隐藏', async ({ page }) => {
   let status: 'ONLINE' | 'OFFLINE' = 'OFFLINE';
+  let activity: 'GAME' | 'MUSIC' | null = null;
   let known = true;
+  let version = 0;
+  let pending: Route | undefined;
+  await page.route(`**/api/groups/${groupId}/presence-changes?**`, route => { pending = route; });
+  async function notifyChange() {
+    await expect.poll(() => Boolean(pending)).toBe(true);
+    const request = pending!;
+    pending = undefined;
+    await request.fulfill({ json: { serverInstanceId: 'test', version: ++version, detailVersion: 1, changed: true } });
+  }
   await page.route(`**/api/groups/${groupId}/presences`, route => route.fulfill({ json: members.map(member => ({
     userId: member.userId, status: member.userId === friendId ? status : 'ONLINE',
-    lastSeenAt: null, activityType: null, activityName: null, activityStartedAt: null,
+    lastSeenAt: null, activityType: activity, activityName: activity ? '星露谷' : null,
+    activityStartedAt: activity ? new Date(Date.now() - 60_000).toISOString() : null,
     lastOnlineAt: known ? new Date(Date.now() - 1800_000).toISOString() : null,
     recentGame: known ? { name: '最终幻想14', endedAt: new Date(Date.now() - 1200_000).toISOString(), playedSeconds: 3600 } : null,
   })) }));
@@ -889,14 +908,20 @@ test('离线资料卡展示冻结的上次在线和最近游戏，在线只展�
   await expect(card).toHaveCSS('opacity', '1');
   await page.screenshot({ path: test.info().outputPath('offline-history.png') });
   status = 'ONLINE';
-  await page.reload();
-  await friend.hover();
+  await notifyChange();
   await expect(card).toContainText('不久前玩了一个多小时的 最终幻想14');
   await expect(card).not.toContainText('上次在线');
+  activity = 'GAME';
+  await notifyChange();
+  await expect(card).toContainText('正在玩 星露谷');
+  await expect(card.locator('.profile-popover-history')).toHaveCount(0);
+  activity = 'MUSIC';
+  await notifyChange();
+  await expect(card).toContainText('正在听 星露谷');
+  await expect(card).toContainText('不久前玩了一个多小时的 最终幻想14');
   known = false;
   status = 'OFFLINE';
-  await page.reload();
-  await friend.hover();
+  await notifyChange();
   await expect(card).toBeVisible();
   await expect(card.locator('.profile-popover-history')).toHaveCount(0);
 });

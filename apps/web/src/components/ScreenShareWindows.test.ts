@@ -99,6 +99,8 @@ it('主窗口点击只唤起已有观看窗；关闭恢复弹出前的聚焦、�
   const f = watchingFixture();
   try {
     f.select('A');
+    expect(f.view.mode).toBe('focus');
+    f.select('A');
     const focused = f.view.focused;
     f.view.membersVisible = false; f.view.height = 240; f.view.expanded = true;
     f.detachWatching();

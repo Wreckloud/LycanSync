@@ -12,7 +12,13 @@
 !macroend
 
 Function EnsureUserInstallLocation
-  GetFullPathName $0 "$INSTDIR"
+  ; 首次安装的目标可能尚不存在，NSIS 的 GetFullPathName 会返回空路径。
+  System::Call 'kernel32::GetFullPathNameW(w "$INSTDIR", i ${NSIS_MAX_STRLEN}, w .r0, p 0) i .r4'
+  ${If} $4 = 0
+  ${OrIf} $4 >= ${NSIS_MAX_STRLEN}
+    MessageBox MB_OK|MB_ICONSTOP "无法确认安装路径。请选择有效的安装目录。" /SD IDOK
+    Abort
+  ${EndIf}
   StrCpy $0 "$0\"
   !insertmacro LycanRejectProtectedDirectory "$PROGRAMFILES64"
   !insertmacro LycanRejectProtectedDirectory "$PROGRAMFILES32"

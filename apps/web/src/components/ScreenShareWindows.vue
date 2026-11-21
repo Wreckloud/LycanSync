@@ -3,6 +3,7 @@ import '../viewing/callViewing.css';
 import { computed, onScopeDispose, reactive, ref, watch } from 'vue';
 import { motionDurationMs } from '../styles/motion';
 import type { UnwrapNestedRefs } from 'vue';
+import type { MediaDiagnosticsSnapshot } from '../diagnostics/mediaDiagnostics';
 import { Track } from 'livekit-client';
 import type { useRtcRoom } from '../rtc/useRtcRoom';
 import { useScreenShareWindows, type ControlWindow } from '../viewing/useScreenShareWindows';
@@ -17,6 +18,7 @@ const props = defineProps<{
   inlineVisible: boolean;
   groupName: string;
   recordingElapsed?: string;
+  snapshot?: MediaDiagnosticsSnapshot | null;
   avatar: (identity: string) => string;
   inputBlocked: boolean;
   mutedShares: string[];
@@ -27,6 +29,7 @@ const view = reactive(useScreenShareLayout({
   room: () => props.rtc.room, participants: () => props.rtc.participants,
   revision: () => props.rtc.revision, status: () => props.rtc.status,
   session: identity => props.rtc.remoteControlShares[identity]?.shareSessionId,
+  timings: () => props.rtc.shareTimings,
   privateControl: identity => props.controlPlaceholder(identity),
 }));
 let beforeDetach: { id: string; room: typeof props.rtc.room; mode: typeof view.mode; focused: number | null;
@@ -141,10 +144,11 @@ defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded, re
 
 <template>
   <Teleport v-if="inlineTarget" :to="inlineTarget">
-    <CallViewingPanel ref="inlinePanel" :active="inlineWatching && !stageHidden" v-model:folded="folded" v-model:stage-hidden="stageHidden" :hidden="detached" :video-active="inlineVisible && !folded && !stageHidden" :view="view" :room="rtc.room" :revision="rtc.revision"
+    <CallViewingPanel ref="inlinePanel" :active="inlineWatching && !stageHidden" v-model:folded="folded" v-model:stage-hidden="stageHidden" :hidden="detached" :video-active="inlineVisible && !folded && !stageHidden" :view="view" :room="rtc.room" :revision="rtc.revision" :snapshot="snapshot"
       :avatar="avatar" :listening="rtc.listening" :recording-elapsed="recordingElapsed"
       :private-control="controlPlaceholder" :reconnecting="rtc.status === 'reconnecting'"
       @detach="detachWatching" @notice="emit('notice', $event)">
+      <template #control="{ identity }"><slot name="control" :identity="identity" /></template>
       <template #default="{ previewsMounted }">
         <HorizontalScroll label="语音成员" :center-key="watching ? undefined : focusedIdentity"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" appear @before-leave="($event as HTMLElement).inert = true"><slot :select="select" :visible="inlineVisible && !folded" :previews-mounted="previewsMounted" :focused-identity="stageHidden ? undefined : focusedIdentity" :watching-elsewhere="!!watching" /></TransitionGroup></HorizontalScroll>
       </template>
@@ -152,10 +156,11 @@ defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded, re
   </Teleport>
   <Teleport v-if="watching?.target" :to="watching.target">
     <section class="watching-window" aria-label="多人观看窗口">
-      <CallViewingPanel :view="view" :room="rtc.room" :revision="rtc.revision" :avatar="avatar" :listening="rtc.listening"
+      <CallViewingPanel :view="view" :room="rtc.room" :revision="rtc.revision" :snapshot="snapshot" :avatar="avatar" :listening="rtc.listening"
         :private-control="controlPlaceholder" :recording-elapsed="recordingElapsed"
         :reconnecting="rtc.status === 'reconnecting'" detached
         @return="returnWatching" @notice="emit('notice', $event)">
+        <template #control="{ identity }"><slot name="control" :identity="identity" /></template>
         <template #default="{ previewsMounted }">
           <HorizontalScroll label="语音成员" :center-key="focusedIdentity"><TransitionGroup name="member-card" tag="div" class="viewing-member-strip" @before-leave="($event as HTMLElement).inert = true"><slot :select="view.select" :visible="true" :previews-mounted="previewsMounted" :focused-identity="focusedIdentity" :watching-elsewhere="false" /></TransitionGroup></HorizontalScroll>
         </template>

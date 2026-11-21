@@ -48,6 +48,7 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
 
   let lastNativeSelection: { discoveryId: string; sourceId: string } | undefined;
   let currentNativeDiscoveryId = '';
+  let awaitingSourceSelection = false;
   const captureAudioCapabilityReady = ref(false);
   const captureAudioCapabilityFailed = ref(false);
   const captureAudioMode = ref<NativeScreenAudioMode>('unavailable');
@@ -68,6 +69,15 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
   const nativeSourceError = ref('');
   const captureSources = computed(() => captureRequest.value?.sources
     .filter((source) => source.type === captureSourceType.value) ?? []);
+  function preselectSource() {
+    const first = captureSources.value[0];
+    if (!awaitingSourceSelection || !first) return;
+    const previous = lastNativeSelection?.discoveryId === currentNativeDiscoveryId
+      ? captureSources.value.find(source => source.id === lastNativeSelection?.sourceId) : undefined;
+    selectedCaptureSourceId.value = (previous ?? first).id;
+    awaitingSourceSelection = false;
+  }
+
   function stopNativeSourceRefresh() {
     // IPC 无法在页面侧取消；使本次选择失效，迟到结果不能改写下次打开的选择器。
     nativeSourceChooserGeneration.value++;
@@ -132,18 +142,16 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
         if (currentNativeDiscoveryId && currentNativeDiscoveryId !== snapshot.discoveryId) {
           // helper 重启后来源标识不再可信，不能按同名窗口恢复选中。
           selectedCaptureSourceId.value = '';
+          awaitingSourceSelection = false;
           captureSourceNotice.value = '共享来源已重新连接，请重新选择。';
         }
         currentNativeDiscoveryId = snapshot.discoveryId;
-        if (firstSnapshot && lastNativeSelection?.discoveryId === snapshot.discoveryId
-            && options.some((source) => source.id === lastNativeSelection?.sourceId && source.type === captureSourceType.value)) {
-          selectedCaptureSourceId.value = lastNativeSelection.sourceId;
-        }
         if (selectedCaptureSourceId.value && !options.some((source) => source.id === selectedCaptureSourceId.value)) {
           selectedCaptureSourceId.value = '';
           captureSourceNotice.value = '所选窗口或屏幕已不可用，请重新选择。';
         }
         captureRequest.value = { ...captureRequest.value!, sources: options };
+        preselectSource();
         for (const id of renderedPreviews) {
           if (!options.some(source => source.id === id && source.thumbnail)) renderedPreviews.delete(id);
         }
@@ -303,6 +311,7 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
     captureShareAudio.value = false;
     captureSourceType.value = lastCaptureSourceType;
     selectedCaptureSourceId.value = '';
+    awaitingSourceSelection = true;
     captureSourceNotice.value = '';
     currentNativeDiscoveryId = '';
     captureRequest.value = {
@@ -326,7 +335,10 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
   }
 
   watch(captureSourceType, () => {
-    if (!captureSources.value.some((source) => source.id === selectedCaptureSourceId.value)) selectedCaptureSourceId.value = '';
+    selectedCaptureSourceId.value = '';
+    awaitingSourceSelection = true;
+    if (currentNativeDiscoveryId) captureSourceNotice.value = '';
+    preselectSource();
     void nextTick().then(refreshVisibleSourceThumbnails);
   });
   watch(selectedCaptureSourceId, (sourceId, _, onCleanup) => {

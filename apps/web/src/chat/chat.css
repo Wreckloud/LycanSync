@@ -179,7 +179,9 @@ button.chat-file-summary { cursor: pointer; }
 .composer-original { display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; cursor: pointer; }
 .composer-original input { margin: 0; accent-color: var(--accent); }
 .composer-attachment-name { min-width: 0; flex: 1; }
-.chat-message-body > .chat-transfer-state { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.chat-transfer-media { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 4px 8px; }
+.chat-transfer-state { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.chat-transfer-media > .chat-transfer-state { padding: 0; }
 .chat-transfer-state strong { overflow-wrap: anywhere; color: var(--text); }
 .chat-transfer-state progress { max-width: 90px; }
 .chat-transfer-state { padding: 6px 0; color: var(--subtle); font-size: 12px; }

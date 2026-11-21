@@ -60,6 +60,7 @@ export class RemoteControlSession {
   readonly owner = shallowRef<{ identity: string; controlSessionId: string; public: boolean } | null>(null);
   readonly shares = shallowRef<Record<string, { shareSessionId: string; kind: 'monitor' | 'window' }>>({});
   readonly available = shallowRef<Record<string, boolean>>({});
+  readonly shareTimings = shallowRef<Record<string, { trackSid: string; startedAt: number }>>({});
   readonly presentations = shallowRef<Record<string, { identity: string; public: boolean }>>({});
   readonly active = shallowRef<{ identity: string; shareSessionId: string; controlSessionId: string; trackSid: string } | null>(null);
   readonly pending = shallowRef<{ identity: string; requestId: string; phase: 'waiting' | 'preparing' } | null>(null);
@@ -92,7 +93,10 @@ export class RemoteControlSession {
   private stateMessage(): Extract<Parameters<typeof encodeRemoteControlMessage>[0], { type: 'state' }> {
     const share = this.options.currentShare();
     const owner = this.owner.value;
+    const identity = this.options.currentRoom()?.localParticipant.identity;
+    const timing = identity ? this.shareTimings.value[identity] : undefined;
     return { type: 'state', available: Boolean(this.options.desktop()),
+      timing: timing && { trackSid: timing.trackSid, elapsedMs: Math.max(0, Math.floor(performance.now() - timing.startedAt)) },
       share: share ? { shareSessionId: share.shareId, kind: share.kind } : null,
       control: owner ? { identity: owner.identity, public: owner.public } : null };
   }
@@ -104,7 +108,12 @@ export class RemoteControlSession {
     }
   }
 
-  beginShare(room: Room) { this.broadcast(room); }
+  beginShare(room: Room, trackSid: string | null) {
+    if (!this.options.isCurrentRoom(room)) return;
+    if (trackSid) this.shareTimings.value = { ...this.shareTimings.value,
+      [room.localParticipant.identity]: { trackSid, startedAt: performance.now() } };
+    this.broadcast(room);
+  }
 
   announceParticipant(room: Room, identity: string) {
     if (!this.options.isCurrentRoom(room)) return;
@@ -123,6 +132,15 @@ export class RemoteControlSession {
     if (message.type === 'queryState') {
       void this.send(room, identity, this.stateMessage()).catch(() => {});
     } else if (message.type === 'state') {
+      // 交换本次发布已持续的时间，两端的系统时钟不必一致。
+      const existing = this.shareTimings.value[identity];
+      if (message.timing && (existing?.trackSid !== message.timing.trackSid
+          || this.shares.value[identity]?.shareSessionId !== message.share?.shareSessionId)) {
+        this.shareTimings.value = { ...this.shareTimings.value,
+          [identity]: { trackSid: message.timing.trackSid, startedAt: performance.now() - message.timing.elapsedMs } };
+      } else if (!message.timing && existing) {
+        this.forgetShareTiming(identity);
+      }
       this.available.value = { ...this.available.value, [identity]: message.available };
       const shares = { ...this.shares.value };
       if (message.share) shares[identity] = message.share;
@@ -509,6 +527,7 @@ export class RemoteControlSession {
   }
 
   async endShare(room: Room, share: RemoteControlShare | null) {
+    if (this.options.isCurrentRoom(room)) this.forgetShareTiming(room.localParticipant.identity);
     if (share && this.authorizedShare === share) {
       if (this.grantAttempt) {
         this.grantAttempt.controller.abort();
@@ -521,6 +540,7 @@ export class RemoteControlSession {
 
   participantDisconnected(room: Room, identity: string) {
     if (!this.options.isCurrentRoom(room)) return;
+    this.forgetShareTiming(identity);
     if (this.request.value?.identity === identity) void this.reject();
     if (this.pending.value?.identity === identity) void this.cancelPending(identity, room);
     if (this.active.value?.identity === identity) void this.exitControl();
@@ -536,6 +556,13 @@ export class RemoteControlSession {
     if (!this.options.isCurrentRoom(room)) return;
     // 旧公开轨道的撤销通知可能晚于新私密授权，不能误停新的控制会话。
     if (this.active.value?.identity === identity && this.active.value.trackSid === trackSid) void this.exitControl();
+  }
+
+  private forgetShareTiming(identity: string) {
+    if (!this.shareTimings.value[identity]) return;
+    const timings = { ...this.shareTimings.value };
+    delete timings[identity];
+    this.shareTimings.value = timings;
   }
 
   connectionReconnecting(room: Room) {
@@ -560,6 +587,7 @@ export class RemoteControlSession {
     this.granting.value = false;
     this.owner.value = null;
     this.shares.value = {};
+    this.shareTimings.value = {};
     this.available.value = {};
     this.presentations.value = {};
     void this.finishController();

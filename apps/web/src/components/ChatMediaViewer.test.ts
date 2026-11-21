@@ -11,7 +11,7 @@ const parsed = ts.createSourceFile('viewer.ts', script, ts.ScriptTarget.Latest, 
 const compiled = ts.transpile(parsed.statements.filter(statement => !ts.isImportDeclaration(statement))
   .map(statement => statement.getText(parsed)).join('\n'), { target: ts.ScriptTarget.ES2022 });
 
-function setup(imageMessage = false, desktop = false, previewBlob?: Blob, localSource?: string) {
+function setup(imageMessage = false, desktop = false, previewBlob?: Blob, localSource?: string, cache: { read: ReturnType<typeof vi.fn>; write: ReturnType<typeof vi.fn>; revision: number } | null = null) {
   const scope = effectScope();
   const pending: Array<{ resolve(blob: Blob): void; signal: AbortSignal }> = [];
   const fetchFilePreview = vi.fn((_group: string, _id: string, signal: AbortSignal) =>
@@ -22,17 +22,43 @@ function setup(imageMessage = false, desktop = false, previewBlob?: Blob, localS
   const emit = vi.fn();
   const videoPreviewStatus = vi.fn().mockResolvedValue({ status: 'ready', message: null });
   const fetchCompatibleVideo = vi.fn().mockResolvedValue(new Blob(['converted'], { type: 'video/mp4' }));
-  const viewer = scope.run(() => runInNewContext(`${compiled}\n({load,close,source,error,player,convertVideo,playbackFailed,compatible,converting})`, {
-    ref, computed, watch, nextTick: async () => {}, CHAT_TRANSFERS: Symbol(), inject: () => ({ downloads: new Map() }), onScopeDispose, onMounted: () => {}, defineEmits: () => emit,
+  const accountCache = Symbol();
+  const viewer = scope.run(() => runInNewContext(`${compiled}\n({load,close,source,error,player,convertVideo,videoPlayable,playbackFailed,compatible,converting})`, {
+    ref, computed, watch, nextTick: async () => {}, ACCOUNT_CACHE: accountCache, CHAT_TRANSFERS: Symbol(), inject: (key: symbol) => key === accountCache ? cache : ({ downloads: new Map() }), onScopeDispose, onMounted: () => {}, defineEmits: () => emit,
     defineProps: () => ({ groupId: 'group', imageMessage, previewBlob, localSource,
       attachment: { id: 'file', fileName: imageMessage ? 'test.png' : 'test.mp4', byteSize: 3, contentType: 'application/octet-stream' } }),
     desktopMediaUrl: (_group: string, _id: string, compatible: boolean) => desktop ? '/api/groups/group/files/file/' + (compatible ? 'preview/media' : 'media') : null, chatMediaFormat, useLoadingHint: () => ref(false), useBackdropDismiss: () => ({}),
     videoPreviewStatus, fetchCompatibleVideo, setTimeout, clearTimeout, Date,
     fetchAttachment, fetchFilePreview, downloadFile: vi.fn(), AbortController, Error, DOMException,
     URL: { createObjectURL, revokeObjectURL },
-  })) as { load(): Promise<void>; close(): void; convertVideo(): Promise<void>; playbackFailed(code?: number): void; compatible: { value: boolean }; converting: { value: boolean }; source: { value: string }; error: { value: string }; player: { value: unknown } };
+  })) as { load(): Promise<void>; close(): void; convertVideo(): Promise<void>; videoPlayable(): void; playbackFailed(code?: number): void; compatible: { value: boolean }; converting: { value: boolean }; source: { value: string }; error: { value: string }; player: { value: unknown } };
   return { scope, viewer, pending, createObjectURL, revokeObjectURL, fetchAttachment, fetchFilePreview, videoPreviewStatus, fetchCompatibleVideo, emit };
 }
+
+it('浏览器二次打开短视频复用完整文件，桌面仍按范围读取', async () => {
+  let saved: Blob | null = null;
+  const cache = { revision: 0, read: vi.fn(async () => saved),
+    write: vi.fn(async (_kind: string, _group: string, blob: Blob) => { saved = blob; }) };
+  const first = setup(false, false, undefined, undefined, cache);
+  const second = setup(false, false, undefined, undefined, cache);
+  const desktop = setup(false, true, undefined, undefined, cache);
+  try {
+    const loading = first.viewer.load();
+    await vi.waitFor(() => expect(first.pending).toHaveLength(1));
+    first.pending[0].resolve(new Blob(['mp4'])); await loading;
+    expect(cache.write).not.toHaveBeenCalled();
+    first.viewer.videoPlayable();
+    first.viewer.videoPlayable();
+    expect(cache.write).toHaveBeenCalledTimes(1);
+    first.viewer.close();
+    await second.viewer.load();
+    expect(second.fetchFilePreview).not.toHaveBeenCalled();
+    expect(second.createObjectURL.mock.calls[0][0].size).toBe(3);
+    await desktop.viewer.load();
+    expect(cache.read).toHaveBeenCalledTimes(2);
+    expect(desktop.viewer.source.value).toMatch(/media$/);
+  } finally { first.scope.stop(); second.scope.stop(); desktop.scope.stop(); }
+});
 
 it('关闭取消加载，迟到响应不能创建媒体 URL', async () => {
   const f = setup();
@@ -44,6 +70,28 @@ it('关闭取消加载，迟到响应不能创建媒体 URL', async () => {
     expect(f.createObjectURL).not.toHaveBeenCalled();
     expect(f.emit).toHaveBeenCalledWith('close');
   } finally { f.scope.stop(); }
+});
+
+it('解码失败清理已命中的原片，首次下载失败或兼容版本就绪均不写原片缓存', async () => {
+  const cache = { revision: 0, read: vi.fn().mockResolvedValueOnce(new Blob(['bad'])).mockResolvedValue(null),
+    write: vi.fn(), discard: vi.fn() };
+  const cached = setup(false, false, undefined, undefined, cache);
+  const fresh = setup(false, false, undefined, undefined, cache);
+  try {
+    await cached.viewer.load();
+    cached.viewer.playbackFailed(3);
+    expect(cache.discard).toHaveBeenCalledExactlyOnceWith('video', 'group', 'file');
+    await vi.waitFor(() => expect(cached.viewer.compatible.value).toBe(true));
+    cached.viewer.videoPlayable();
+    const loading = fresh.viewer.load();
+    await vi.waitFor(() => expect(fresh.pending).toHaveLength(1));
+    fresh.pending[0].resolve(new Blob(['bad']));
+    await loading;
+    fresh.viewer.playbackFailed(3);
+    fresh.viewer.videoPlayable();
+    expect(cache.write).not.toHaveBeenCalled();
+    expect(cache.discard).toHaveBeenCalledTimes(1);
+  } finally { cached.scope.stop(); fresh.scope.stop(); }
 });
 
 it('关闭停止播放并释放 Blob，重新加载先释放上一份资源', async () => {

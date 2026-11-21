@@ -33,14 +33,15 @@ async function fixture(context, overrides = {}) {
   return { recording, root, calls, events, diagnostics, setVideo: value => { video = value; } };
 }
 
-test('默认只录应用声音，主进程生成独占文件，停止保存不停止共享', async context => {
+test('默认录入应用声音、麦克风和朋友语音，主进程生成独占文件，停止保存不停止共享', async context => {
   const f = await fixture(context);
   const settings = await f.recording.load();
   assert.equal(settings.directory, join(f.root, 'recordings'));
-  assert.equal(settings.applicationAudio, true); assert.equal(settings.microphone, false); assert.equal(settings.friends, false);
+  assert.equal(settings.applicationAudio, true); assert.equal(settings.microphone, true); assert.equal(settings.friends, true);
   assert.equal((await f.recording.start()).phase, 'recording');
   assert.deepEqual(f.calls[0], ['audio', 'video-1']);
-  assert.equal(f.calls[1][4], true); assert.equal(f.calls[1][5], false);
+  assert.equal(f.calls[1][0], 'voice');
+  assert.deepEqual(f.calls.find(call => call[0] === 'start').slice(4, 6), [true, true]);
   const saved = await f.recording.stop();
   assert.equal(saved.saved, true); assert.equal(saved.phase, 'saved');
   assert.equal(await readFile(await f.recording.revealPath(), 'utf8'), 'controlled-recorded-content');
@@ -96,6 +97,8 @@ test('旧录制偏好补为关闭自动回放，已有画质和回溯时长保�
   assert.equal(settings.replaySeconds, 120);
   assert.equal(settings.videoHeight, 720);
   assert.equal(settings.microphone, true);
+  assert.equal(settings.applicationAudio, false);
+  assert.equal(settings.friends, false);
 });
 
 test('录制及回放日志关联同次操作，耗时使用单调计时且不输出文件路径', async context => {

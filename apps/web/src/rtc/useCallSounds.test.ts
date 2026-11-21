@@ -72,7 +72,7 @@ it('关闭试听会停止所有试听节点，迟到的恢复不能在退出栏�
   f.scope.stop();
 });
 
-it('默认音效复用解码，录制与共享按最终确认的素材播放', async () => {
+it('默认音效复用解码，停止共享播放原结束录制音', async () => {
   const f = fixture();
   try {
     await f.sounds.joined();
@@ -82,12 +82,9 @@ it('默认音效复用解码，录制与共享按最终确认的素材播放', a
     await f.sounds.participantEntranceSound('other', new Uint8Array([1]));
     expect(f.fetchAudio).toHaveBeenCalledOnce();
     await f.sounds.screenShareStarted(); await f.sounds.screenShareStopped();
-    await f.sounds.recordingStarted(); await f.sounds.recordingStopped();
     expect(f.fetchAudio.mock.calls.map(([url]) => url)).toEqual([
       '/sounds/material/navigation_forward-selection.ogg',
       '/sounds/material/navigation_selection-complete-celebration.ogg',
-      '/sounds/material/alert_error-02.ogg',
-      '/sounds/material/notification_simple-01.ogg',
       '/sounds/material/navigation-cancel.ogg',
     ]);
   } finally { f.scope.stop(); }
@@ -112,9 +109,9 @@ it('默认音效加载失败返回失败，后续试听能够重新加载', asyn
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
   try {
     f.fetchAudio.mockResolvedValueOnce({ ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0) });
-    expect(await f.sounds.preview('recordingStarted')).toBe(false);
+    expect(await f.sounds.preview('screenShareStarted')).toBe(false);
     expect(f.nodes).toHaveLength(0);
-    expect(await f.sounds.preview('recordingStarted')).toBe(true);
+    expect(await f.sounds.preview('screenShareStarted')).toBe(true);
     expect(f.fetchAudio).toHaveBeenCalledTimes(2);
   } finally { warning.mockRestore(); f.scope.stop(); }
 });
@@ -128,8 +125,8 @@ it('收听按确认后的素材播放，关闭事件后不加载，试听仍可�
     expect(await f.sounds.preview('listeningOff')).toBe(true);
     expect(await f.sounds.listeningChanged(true)).toBe(true);
     expect(f.fetchAudio.mock.calls.map(([url]) => url)).toEqual([
-      '/sounds/material/navigation_forward-selection-minimal-short.wav',
       '/sounds/material/navigation_hover-tap.ogg',
+      '/sounds/material/navigation_forward-selection-minimal-short.wav',
     ]);
   } finally { f.scope.stop(); }
 });

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { Circle, Fullscreen, HeadphoneOff, Headphones, MicOff, MousePointer2 } from '@lucide/vue';
+import { Circle, Fullscreen, HeadphoneOff, Headphones, MicOff } from '@lucide/vue';
 import { Track, VideoQuality, type Participant, type RemoteTrackPublication } from 'livekit-client';
 import VoiceLevelMic from './VoiceLevelMic.vue';
 import { observeLocalScreenPreview } from '../rtc/localScreenPreview';
@@ -11,6 +11,7 @@ import { mapRemotePointerToScreen, RemoteInputPresses, remoteKeyFromCode, type R
 const props = withDefaults(defineProps<{
   participant: Participant;
   revision: number;
+  speakerRevision?: number;
   isLocal: boolean;
   recordingElapsed?: string;
   isListening: boolean | null;
@@ -68,20 +69,23 @@ const media = computed(() => {
     track: props.privateControl ? undefined : publication?.track,
     muted: publication?.isMuted,
     sharing: Boolean(props.privateControl) || props.participant.isScreenShareEnabled,
-    speaking: microphone && props.participant.isSpeaking,
     microphone,
     name: props.participant.name || props.participant.identity,
   };
 });
+const speaking = computed(() => {
+  void props.speakerRevision;
+  return media.value.microphone && props.participant.isSpeaking;
+});
 const remoteAudioLabel = computed(() => {
   if (!media.value.microphone) return `${media.value.name}麦克风已关闭`;
   if (props.playbackVolume === 0) return `${media.value.name}已取消收听，点击恢复收听`;
-  const microphoneState = media.value.speaking ? '正在说话' : '麦克风已开启';
+  const microphoneState = speaking.value ? '正在说话' : '麦克风已开启';
   return `${media.value.name}${microphoneState}，点击取消收听`;
 });
 const selectable = computed(() => props.variant !== 'viewer' && media.value.sharing && !props.privateControl);
 const focusedPreview = computed(() => selectable.value && props.focused);
-const selectHint = computed(() => props.watchingElsewhere ? '打开观看窗口' : focusedPreview.value ? '收起聚焦画面' : '聚焦共享画面');
+const selectHint = computed(() => props.watchingElsewhere ? '打开观看窗口' : focusedPreview.value ? '已聚焦' : '聚焦共享画面');
 const fullscreenAvailable = computed(() => Boolean(ownerDocument.value?.fullscreenEnabled || ownerDocument.value?.defaultView?.lycanViewerWindow));
 const viewingQuality = computed(() => props.viewQuality ?? (props.variant === 'viewer' ? VideoQuality.HIGH : VideoQuality.LOW));
 
@@ -241,11 +245,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <article ref="cardElement" class="participant-card" :class="[`is-${variant}`, { 'is-speaking': variant === 'card' && media.speaking }]"
+  <article ref="cardElement" class="participant-card" :class="[`is-${variant}`, { 'is-speaking': variant === 'card' && speaking }]"
     :data-testid="variant === 'viewer' ? 'viewer-screen' : 'participant-card'">
     <div class="participant-media" :class="{ 'is-selectable': selectable, 'is-remote-control': remoteInputAllowed, 'is-focused-preview': focusedPreview }"
       :role="selectable ? 'button' : undefined" :tabindex="remoteInputAllowed || selectable ? 0 : undefined"
-      :aria-label="selectable ? watchingElsewhere ? '打开观看窗口' : focusedPreview ? '收起' + media.name + '的聚焦画面' : '观看' + media.name + '的共享画面' : undefined"
+      :aria-label="selectable ? watchingElsewhere ? '打开观看窗口' : '观看' + media.name + '的共享画面' : undefined"
       :data-select-hint="selectable ? selectHint : undefined"
       @click="handleRemoteClick"
       @keydown="remoteKey($event, true)" @keyup="remoteKey($event, false)"
@@ -266,13 +270,10 @@ onBeforeUnmount(() => {
       <span v-if="isLocal && recordingElapsed" class="recording-indicator" :aria-label="'正在录制 ' + recordingElapsed" title="正在录制">
         <Circle :size="10" fill="currentColor" aria-hidden="true" /><time>{{ recordingElapsed }}</time>
       </span>
-      <div v-if="variant === 'card' && !isLocal && (remoteControlAvailable || media.sharing && shareAudio)" class="participant-share-actions" @click.stop @keydown.stop>
-        <button v-if="media.sharing && !isLocal && shareAudio" type="button" class="viewer-action"
+      <div v-if="variant === 'card' && !isLocal && media.sharing && shareAudio" class="participant-share-actions" @click.stop @keydown.stop>
+        <button type="button" class="viewer-action"
           :disabled="!shareAudioListening" :aria-label="shareMuted ? '恢复这路共享声音' : '静音这路共享声音'"
           :aria-pressed="shareMuted" @click="emit('toggleShareAudio')"><HeadphoneOff v-if="shareMuted || !shareAudioListening" :size="14" /><Headphones v-else :size="14" /></button>
-        <button v-if="!isLocal && remoteControlAvailable" type="button" class="viewer-action"
-          :aria-label="remoteControlActive ? '退出远程控制' : remoteControlPending ? '取消远程控制申请' : '申请远程控制'"
-          @click="remoteControlActive ? stopRemoteControl() : remoteControlPending ? emit('cancelControl') : emit('requestControl')"><MousePointer2 :size="14" /></button>
       </div>
     </div>
     <div class="participant-meta">
@@ -289,12 +290,12 @@ onBeforeUnmount(() => {
       <button v-if="variant === 'card' && isLocal" type="button" class="participant-state participant-state-button"
         :class="{ 'is-off': !media.microphone }"
         :aria-label="media.microphone ? '关闭自己的麦克风' : '开启自己的麦克风'" @click="emit('toggleMicrophone')">
-        <VoiceLevelMic v-if="media.microphone" :size="14" :level="media.speaking ? 1 : 0" :steps="1" /><MicOff v-else :size="14" />
+        <VoiceLevelMic v-if="media.microphone" :size="14" :level="speaking ? 1 : 0" :steps="1" /><MicOff v-else :size="14" />
       </button>
       <button v-else-if="variant === 'card'" type="button" class="participant-state participant-state-button"
         :class="{ 'is-off': !media.microphone || playbackVolume === 0 }" :aria-label="remoteAudioLabel"
         :disabled="!media.microphone" @click="emit('toggleAudio')">
-        <VoiceLevelMic v-if="media.microphone && playbackVolume > 0" :size="14" :level="media.speaking ? 1 : 0" :steps="1" />
+        <VoiceLevelMic v-if="media.microphone && playbackVolume > 0" :size="14" :level="speaking ? 1 : 0" :steps="1" />
         <MicOff v-else :size="14" />
       </button>
       <button v-if="variant === 'card' && isLocal" type="button" class="participant-state participant-state-button"

@@ -7,7 +7,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { useChatScroll } from '../chat/useChatScroll';
 import { useGroupMessages } from '../chat/useGroupMessages';
 import { createChatTransfers, CHAT_TRANSFERS } from '../chat/useChatTransfers';
-import { declareFile, sendFile as requestFile, sendMessage as requestMessage, findMessages as requestMessages } from '../chat/chatApi';
+import { declareFile, sendFile as requestFile, sendMessage as requestMessage, findMessages as requestMessages, stopFile } from '../chat/chatApi';
 import type { ChatMessage, ChatMessagePage } from '../chat/chatApi';
 import type { AccountCache } from '../cache/localCache';
 import { formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey } from '../chat/messageTime';
@@ -662,6 +662,25 @@ it('取消上传后可在原消息重试，重复提交输入框不会再次上�
     await vi.waitFor(() => expect(f.sendFile).toHaveBeenCalledTimes(2));
     expect(f.sendFile.mock.calls.map(call => call[3])).toEqual([id, id]);
   } finally { f.scope.stop(); }
+});
+
+it('重试正在确认上一轮上传状态时，取消后不再启动新上传', async () => {
+  const f = setup();
+  try {
+    f.sendFile.mockRejectedValueOnce(new Error('传输中断'));
+    f.transfers.enqueue('first', '', { id: 'retry-cancel', kind: 'FILE', file: new File(['file'], 'retry.bin'), previewUrl: '' });
+    const job = f.transfers.outgoing.get('retry-cancel')!;
+    await vi.waitFor(() => expect(job.state).toBe('failed'));
+    const cleaned = deferred<void>();
+    vi.mocked(stopFile).mockReturnValueOnce(cleaned.promise);
+    const retry = f.transfers.retry(job);
+    job.controller.abort();
+    cleaned.resolve();
+    await retry;
+    expect(job.state).toBe('failed');
+    expect(job.error).toBe('已取消上传');
+    expect(f.sendFile).toHaveBeenCalledOnce();
+  } finally { f.transfers.dispose(); f.scope.stop(); }
 });
 
 it('历史失败保持原消息，重试按原游标去重并保持可见锚点，到底后不再请求', async () => {

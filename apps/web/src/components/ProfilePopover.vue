@@ -225,6 +225,7 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
             </div>
             <p v-if="voiceDescription && !voiceError" class="profile-voice-time"><Headphones :size="13" aria-hidden="true" />{{ voiceDescription }}</p>
             <p v-else-if="voiceError" class="profile-voice-error" role="status">{{ voiceError }}</p>
+            <div v-else-if="placement === 'left' && !inline && voiceSeconds !== undefined" class="profile-voice-slot" aria-hidden="true" />
             <slot />
           </div>
         </div>
@@ -241,6 +242,7 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
 .profile-popover:is(.is-personal, .is-inline):not(.is-scrollable) { overflow: clip; }
 .profile-popover-banner { height: 38px; background: var(--profile-tint, var(--panel-raised)); }
 .profile-popover.is-inline { position: absolute; top: 50%; right: 0; left: 0; transform: translateY(-50%); z-index: auto; width: 100%; max-height: 100%; overflow-y: auto; }
+.profile-voice-slot, .profile-popover:not(.is-inline, .is-personal) .profile-voice-error { min-height: 29px; }
 .profile-voice-time { display: flex; align-items: center; gap: 8px; margin: 0; padding-top: 10px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 12px; line-height: 18px; }
 .profile-voice-time > svg { flex-shrink: 0; }
 .profile-voice-error { margin: 0; color: var(--muted); font-size: 12px; line-height: 18px; }

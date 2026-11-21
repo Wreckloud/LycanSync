@@ -17,7 +17,7 @@ function recordingError(error) {
 function createRecording({ dataDirectory, host, getVideo, getApplicationName = () => '窗口', ensureAudio, releaseAudio, ensureVoice, releaseVoice, onChange, onDiagnostic,
   io = { mkdir, readFile, writeFile, rename, open, stat, statfs }, createId = randomUUID }) {
   const settingsPath = join(dataDirectory, 'recording-settings.json');
-  let settings = { directory: join(dataDirectory, 'recordings'), applicationAudio: true, microphone: false, friends: false,
+  let settings = { directory: join(dataDirectory, 'recordings'), applicationAudio: true, microphone: true, friends: true,
     replaySeconds: 60, replayEnabled: false, videoHeight: 1080, videoFps: 60 };
   let loaded;
   let active;

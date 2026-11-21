@@ -140,6 +140,26 @@ describe('成员访问链接', () => {
     expect(state.links.value).toEqual([]);
   });
 
+  it('后台刷新时仍可翻页，旧页的迟到结果不能覆盖新页', async () => {
+    serverLinks = Array.from({ length: 100 }, (_, index) => link({ id: `link-${index}` }));
+    const { state } = await open();
+    const firstPage = serverLinks;
+    let finish!: (records: AccessLinkRecord[]) => void;
+    request.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const background = state.refresh();
+    serverLinks = [link({ id: 'next-page' })];
+
+    state.page(1);
+    expect(state.recordsLoaded.value).toBe(false);
+    expect(state.links.value).toEqual([]);
+    await settle();
+    finish(firstPage); await background;
+
+    expect(request).toHaveBeenLastCalledWith('access/links?offset=100&status=PENDING', 'GET', undefined, expect.any(AbortSignal));
+    expect(state.recordsLoaded.value).toBe(true);
+    expect(state.links.value.map(record => record.id)).toEqual(['next-page']);
+  });
+
   it('从已撤销分类重新生成后只刷新一次待使用列表', async () => {
     const { state } = await open();
     serverLinks = [link({ revokedAt: new Date().toISOString() })];

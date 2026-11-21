@@ -43,7 +43,7 @@ it('OBS 面板区分区间渲染、滚动耗时与等待，零延误仍显示真
   expect(html).toContain('区间延误 0 / 150');
   expect(html).toContain('59.8 FPS');
   expect(html).toContain('1.25 ms');
-  expect(html).toContain('不代表不同来源帧、编码或端到端延迟');
+  expect(html).toContain('OBS 最近一秒平均渲染帧率');
 });
 
 it('面板展示未知和false编码线索，网络与缓冲值不标成端到端延迟', async () => {
@@ -61,7 +61,7 @@ it('面板展示未知和false编码线索，网络与缓冲值不标成端到�
   expect(html).toContain('RTCP 报告 RTT 45 ms');
   expect(html).toContain('到 SFU 连接 RTT 6 ms');
   expect(html).toContain('SFU 报告丢包 2%');
-  expect(html).toContain('不是端到端延迟');
+  expect(html).toContain('本机到媒体服务器再返回');
   layers[0].powerEfficientEncoder = null;
   layers[0].roundTripMs = null; layers[0].receiverReportedLossPercent = null;
   const missing = await renderToString(createSSRApp(MediaDiagnostics, { room: {} as Room, statistics: snapshot }));

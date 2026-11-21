@@ -18,7 +18,7 @@ function fixture(width = 600, height = 300) {
     defaultView: { lycanViewerWindow: { toggleFullscreen: vi.fn() }, requestAnimationFrame: (callback: () => void) => callback() } };
   const element = { ownerDocument: page, isConnected: true };
   const emit = vi.fn();
-  const view = reactive({ shares: [], displayed: [] as { key: number }[], mode: 'grid', focused: 1, expanded: false, membersVisible: true, height: 240, collapse: vi.fn(), grid: vi.fn(), select: vi.fn() });
+  const view = reactive({ shares: [], displayed: [] as { key: number }[], mode: 'grid', focused: 1, expanded: false, membersVisible: true, height: 240, collapse: vi.fn(), grid: vi.fn(), select: vi.fn(() => true) });
   const context = { withDefaults: (props: object, defaults: object) => ({ ...defaults, ...props }), defineProps: () => ({ view }), defineEmits: () => emit, defineExpose: vi.fn(),
     useViewingSize: () => ({ width: ref(width), height: ref(height), maximumHeight: ref(420), resizing: ref(false) }),
     computed, ref, watch, nextTick, onScopeDispose, setInterval, clearInterval, onMounted: () => {}, VideoQuality, performance, motionDurationMs,
@@ -32,14 +32,16 @@ function fixture(width = 600, height = 300) {
   return { ...context.api, scope, view, page, element, emit };
 }
 
-it('同一画面连续点击始终按当前模式切换，不等待动画锁', () => {
+it('点击画面直接放大聚焦，重复点击保留布局', () => {
   const f = fixture();
   const share = { participant: { identity: 'A' } };
   f.select(share);
   expect(f.view.select).toHaveBeenCalledWith('A');
   f.view.mode = 'focus';
   f.select(share);
-  expect(f.view.grid).toHaveBeenCalledOnce();
+  expect(f.view.grid).not.toHaveBeenCalled();
+  expect(f.view.membersVisible).toBe(false);
+  expect(f.view.height).toBe('max');
   f.view.mode = 'grid';
   f.select(share);
   expect(f.view.select).toHaveBeenCalledTimes(2);

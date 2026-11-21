@@ -62,6 +62,37 @@ function setup(mode: NativeScreenAudioMode = 'process', configure?: (stored: Map
   return { app, state, stored, getItem, setItem, open, desktop, scope, container, room, sharing, activity };
 }
 
+it('打开和切换分类只预选，优先恢复上次确认的来源；原窗口消失后不改选其他窗口', async () => {
+  vi.useFakeTimers();
+  try {
+    const f = setup();
+    const windows = [source('A'), source('B')];
+    const snapshot = { revision: 1, discoveryId: 'helper', sources: [...windows, source('monitor', 'monitor')] };
+    f.desktop.listNativeVideoSources.mockResolvedValue(snapshot);
+    const first = f.open(); await flush();
+    expect(f.state.selectedCaptureSourceId.value).toBe('A');
+    f.state.captureSourceType.value = 'screen'; await flush();
+    expect(f.state.selectedCaptureSourceId.value).toBe('monitor');
+    f.state.captureSourceType.value = 'window'; await flush();
+    expect(f.state.selectedCaptureSourceId.value).toBe('A');
+    f.app.chooseCaptureSource('B');
+    f.app.selectCaptureSource('B'); await first;
+    const second = f.open(); await flush();
+    expect(f.state.selectedCaptureSourceId.value).toBe('B');
+    snapshot.sources = [source('A')];
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(f.state.selectedCaptureSourceId.value).toBe('');
+    expect(f.state.captureSourceNotice.value).toContain('重新选择');
+    f.app.chooseCaptureSource('A');
+    snapshot.discoveryId = 'new-helper';
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(f.state.selectedCaptureSourceId.value).toBe('');
+    expect(f.state.captureSourceNotice.value).toContain('重新连接');
+    expect(f.state.captureRequest.value).not.toBeNull();
+    f.app.selectCaptureSource(null); await second;
+  } finally { vi.useRealTimers(); }
+});
+
 it('创建模块时恢复画质和来源分类，取消后不写入偏好', async () => {
   const f = setup('process', stored => { stored.set('lycansync.screen-share-quality', 'highFrameRate'); stored.set('lycansync.capture-source-type', 'screen'); });
   expect(f.state.captureQuality.value).toBe('highFrameRate');

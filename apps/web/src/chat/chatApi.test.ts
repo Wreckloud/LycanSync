@@ -65,6 +65,30 @@ it('正常下载逐块写入，完成后提交保存', async () => {
   expect(writer.abort).not.toHaveBeenCalled();
 });
 
+it('收到超过声明大小的内容时中止下载，超出的数据不写入磁盘', async () => {
+  const { writer, controller, progress } = setup();
+  const cancel = vi.fn();
+  const body = new ReadableStream<Uint8Array>({
+    start(stream) {
+      stream.enqueue(new Uint8Array([1, 2]));
+      stream.enqueue(new Uint8Array([3, 4]));
+      controller.signal.addEventListener('abort', () => stream.error(controller.signal.reason), { once: true });
+    },
+    cancel,
+  });
+  vi.mocked(authenticatedFetch).mockResolvedValue(new Response(body));
+  // 最后留有未结束的流，超限处理不能依赖流读到末尾。
+  const timeout = setTimeout(() => controller.abort(), 1000);
+  try {
+    await expect(downloadFile('group', attachment, controller.signal, progress)).rejects.toThrow('文件未能完整下载');
+  } finally { clearTimeout(timeout); }
+  expect(writer.write).toHaveBeenCalledExactlyOnceWith(new Uint8Array([1, 2]));
+  expect(writer.close).not.toHaveBeenCalled();
+  expect(writer.abort).toHaveBeenCalledOnce();
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(body.locked).toBe(false);
+});
+
 it('保存对话框等待期间取消，迟到选址不创建写入或请求', async () => {
   const { handle, picker, controller, progress } = setup();
   const selection = deferred<typeof handle>();
@@ -113,7 +137,7 @@ it('最后一块磁盘写入等待期间取消，不把文件提交保存或报�
 it('写入错误中止网络读取和写入，保留原错误', async () => {
   const { writer, controller, progress } = setup();
   const diskError = new Error('磁盘空间不足');
-  const reader = { read: vi.fn(async () => ({ done: false, value: new Uint8Array([1]) })), cancel: vi.fn(async () => {}) };
+  const reader = { read: vi.fn(async () => ({ done: false, value: new Uint8Array([1]) })), cancel: vi.fn(async () => {}), releaseLock: vi.fn() };
   vi.mocked(authenticatedFetch).mockResolvedValue({ ok: true, body: { getReader: () => reader } } as unknown as Response);
   writer.write.mockRejectedValueOnce(diskError);
   await expect(downloadFile('group', attachment, controller.signal, progress)).rejects.toBe(diskError);

@@ -24,16 +24,24 @@ function applicationEntries(appDirectory) {
 
 function upgradeInstallerScript(script) {
   const anchor = '  !include "installUtil.nsh"';
+  const assisted = '!include "assistedInstaller.nsh"';
   const installSection = '!include "installSection.nsh"';
   const silentElevation = '${if} $hasPerMachineInstallation == "1" # set in onInit by initMultiUser';
-  if (script.split(anchor).length !== 2 || script.split(installSection).length !== 2
+  if (script.split(anchor).length !== 2 || script.split(assisted).length !== 2 || script.split(installSection).length !== 2
       || script.split(silentElevation).length !== 2) {
     throw new Error('固定 NSIS 安装模板已变化，拒绝生成未经核验的升级流程。');
   }
   // 两种安装并存时按本次实际范围提权，不能仅凭历史全用户记录切回旧目录。
   return script.replace(anchor, '  !include "${BUILD_RESOURCES_DIR}\\installer-util.nsh"\n  !include "${BUILD_RESOURCES_DIR}\\installer-upgrade.nsh"')
+    .replace(assisted, '!include "${BUILD_RESOURCES_DIR}\\installer-assisted.nsh"')
     .replace(installSection, '!include "${BUILD_RESOURCES_DIR}\\installer-section.nsh"')
     .replace(silentElevation, '${if} $installMode == "all"');
+}
+
+function upgradeAssistedInstaller(script) {
+  const directoryPage = /^    !insertmacro skipPageIfUpdated\r?\n    !insertmacro MUI_PAGE_DIRECTORY$/gm;
+  if ([...script.matchAll(directoryPage)].length !== 1) throw new Error('固定 NSIS 安装目录页入口已变化。');
+  return script.replace(directoryPage, '    !insertmacro LycanDirectoryPage');
 }
 
 function upgradeInstallerSection(script) {
@@ -82,6 +90,8 @@ function prepareInstallerFiles(appDirectory, resourcesDirectory) {
   writeFileSync(join(resourcesDirectory, 'installer-files.nsh'), applicationEntries(appDirectory));
   writeFileSync(join(resourcesDirectory, 'installer-upgrade.nsh'), readFileSync(join(__dirname, 'installer-upgrade.nsh')));
   const builderRoot = resolve(require.resolve('app-builder-lib/package.json'), '..');
+  writeFileSync(join(resourcesDirectory, 'installer-assisted.nsh'), upgradeAssistedInstaller(
+    readFileSync(join(builderRoot, 'templates/nsis/assistedInstaller.nsh'), 'utf8')));
   writeFileSync(join(resourcesDirectory, 'installer-util.nsh'), upgradeInstallerUtilities(
     readFileSync(join(builderRoot, 'templates/nsis/include/installUtil.nsh'), 'utf8')));
   writeFileSync(join(resourcesDirectory, 'installer-section.nsh'), upgradeInstallerSection(
@@ -90,6 +100,6 @@ function prepareInstallerFiles(appDirectory, resourcesDirectory) {
     readFileSync(join(builderRoot, 'templates/nsis/include/installer.nsh'), 'utf8')));
 }
 
-module.exports = { applicationEntries, upgradeInstallerScript, upgradeInstallerUtilities, upgradeInstallerSection,
+module.exports = { applicationEntries, upgradeInstallerScript, upgradeAssistedInstaller, upgradeInstallerUtilities, upgradeInstallerSection,
   upgradeInstallerPayload, prepareInstallerFiles };
 if (require.main === module) buildInstaller().catch(error => { console.error(error); process.exitCode = 1; });

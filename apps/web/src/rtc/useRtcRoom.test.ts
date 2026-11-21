@@ -505,6 +505,22 @@ describe('room media lifecycle', () => {
     } finally { delayed.resolve(undefined); await rtc.leave(); scope.stop(); }
   });
 
+  it('发言事件立即更新语音指示，保留成员与轨道版本', async () => {
+    configureNativeMicrophoneDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      expect(await rtc.join('speakers')).toBe(true);
+      const members = rtc.participants.value;
+      const revision = rtc.revision.value;
+      const before = rtc.speakerRevision.value;
+      mockRoom().emit('activeSpeakersChanged', []);
+      expect(rtc.speakerRevision.value).toBe(before + 1);
+      expect(rtc.participants.value).toBe(members);
+      expect(rtc.revision.value).toBe(revision);
+    } finally { await rtc.leave(); scope.stop(); }
+  });
+
   it('远端取消订阅先发事件再清空轨道时，同步观察者不会缓存旧播放轨道', async () => {
     configureNativeMicrophoneDesktop();
     const track = { sid: 'remote-microphone' };

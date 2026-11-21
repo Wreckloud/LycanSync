@@ -112,6 +112,41 @@ class ChatFileMediaServiceTests {
     }
 
     @Test
+    void onlyRecognizesSupportedContainerHeaders() throws Exception {
+        Path sample = directory.resolve("container");
+        Files.writeString(sample, "RIFF0000AVI ");
+        assertThat(ChatFileMediaService.inputFormat(sample, "mov")).isEqualTo("avi");
+        Files.writeString(sample, "RIFF0000WAVE");
+        assertThat(ChatFileMediaService.inputFormat(sample, "mov")).isEqualTo("mov");
+        Files.writeString(sample, "0000ftyp");
+        assertThat(ChatFileMediaService.inputFormat(sample, "matroska")).isEqualTo("matroska");
+        assertThat(ChatFileMediaService.videoFormat("video.txt")).isNull();
+    }
+
+    @Test
+    @EnabledIfSystemProperty(named = "lycan.test.ffmpeg", matches = ".+")
+    void misnamedWebmCanBeDisplayedAndEncodedWithoutChangingOriginal() throws Exception {
+        var service = service("upload.mp4");
+        String executable = System.getProperty("lycan.test.ffmpeg");
+        properties.setFfmpegExecutable(executable);
+        Path video = directory.resolve("upload.mp4");
+        Process generator = new ProcessBuilder(executable, "-v", "error", "-y", "-f", "lavfi", "-i",
+                "color=c=blue:s=160x90:r=15:d=1", "-threads", "1", "-c:v", "libvpx", "-f", "webm", video.toString())
+                .redirectError(ProcessBuilder.Redirect.INHERIT).start();
+        assertThat(generator.waitFor(10, TimeUnit.SECONDS)).isTrue();
+        assertThat(generator.exitValue()).isZero();
+        byte[] original = Files.readAllBytes(video);
+        assertThat(ImageIO.read(new ByteArrayInputStream(service.findThumbnail(group, attachment, user)))).isNotNull();
+        var encoder = new ChatVideoEncoder(properties);
+        for (boolean preview : new boolean[]{false, true}) {
+            Path output = directory.resolve(preview ? "preview.mp4" : "optimized.mp4");
+            encoder.encode(video, "mov", output, 1_000_000, preview);
+            assertThat(ChatFileMediaService.inputFormat(output, "matroska")).isEqualTo("mov");
+        }
+        assertThat(Files.readAllBytes(video)).isEqualTo(original);
+    }
+
+    @Test
     @EnabledIfSystemProperty(named = "lycan.test.ffmpeg", matches = ".+")
     void realFfmpegGeneratesSmallJpegAndReusesIt() throws Exception {
         var service = service("test.mp4");

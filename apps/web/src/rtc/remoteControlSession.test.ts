@@ -16,6 +16,7 @@ function fixture() {
     let current = true;
     let share: RemoteControlShare | null = null;
     const room = { remoteParticipants: new Map(), localParticipant: {
+      identity,
       publishData: vi.fn(async (payload: Uint8Array, options: { destinationIdentities: string[] }) => {
         const message = decodeRemoteControlMessage(payload)!;
         for (const to of options.destinationIdentities) {
@@ -58,6 +59,26 @@ function fixture() {
 afterEach(() => vi.useRealTimers());
 
 describe('远控协商与资源归属', () => {
+  it('晚加入按本次共享已持续的时间对齐；同一轨道重新共享时重新计时', async () => {
+    const f = fixture();
+    try {
+      await vi.waitFor(() => expect(f.a.session.available.value.target).toBe(true));
+      const now = vi.spyOn(performance, 'now').mockReturnValue(2000);
+      f.b.session.beginShare(f.b.room, 'video-1');
+      await Promise.resolve();
+      f.a.session.participantDisconnected(f.a.room, 'target');
+      now.mockReturnValue(32000);
+      f.b.session.announceParticipant(f.b.room, 'controller');
+      await Promise.resolve();
+      expect(f.a.session.shareTimings.value.target).toEqual({ trackSid: 'video-1', startedAt: 2000 });
+      await f.b.session.endShare(f.b.room, null);
+      await Promise.resolve();
+      expect(f.a.session.shareTimings.value.target).toBeUndefined();
+      f.b.session.beginShare(f.b.room, 'video-1');
+      await Promise.resolve();
+      expect(f.a.session.shareTimings.value.target?.startedAt).toBe(32000);
+    } finally { vi.restoreAllMocks(); f.stop(); }
+  });
   it('接受后才暂停控制方共享，准备完成才授权；第三人不能抢占或注入输入', async () => {
     const f = fixture();
     const suspended = deferred<() => Promise<void>>();

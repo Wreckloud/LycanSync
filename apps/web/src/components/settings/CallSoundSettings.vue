@@ -29,7 +29,7 @@ onScopeDispose(stopPreview);
 <template>
   <section class="settings-block call-sound-settings">
     <h2>本机提示音</h2>
-    <p>调整加入语音、麦克风切换和录制等操作的提示音。</p>
+    <p>试听并调整通话和共享的提示音。</p>
     <div class="settings-range-row"><span><label for="settings-call-sound-volume">提示音音量</label><RangeValue :value="preferences.volume.value" :active="active" label="重置提示音音量" @reset="preferences.setVolume($event)">{{ Math.round(preferences.volume.value * 100) }}%</RangeValue></span>
       <input id="settings-call-sound-volume" type="range" min="0" max="100" step="1" aria-label="提示音音量" :value="Math.round(preferences.volume.value * 100)"
         @change="preferences.setVolume(Number(($event.target as HTMLInputElement).value) / 100)" />

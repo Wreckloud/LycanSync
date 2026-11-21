@@ -248,7 +248,8 @@ onScopeDispose(() => { document.removeEventListener('visibilitychange', closureV
         <h2>接任服主</h2>
         <p>{{ status.incomingTransfer.ownerNickname }} 邀请你接任服主，管理这个服务器。</p>
         <p>请在 {{ new Date(status.incomingTransfer.expiresAt).toLocaleString() }} 前接受。确认后立即交接权限，原服主将成为普通成员。</p>
-        <p>为自己设置恢复密码，以便在无法使用其他登录方式时找回账号。</p>
+        <p>接任成功后，原服主的恢复密码随即失效。请保存你自己的新恢复密码。</p>
+        <input v-if="nickname" type="text" name="username" autocomplete="username" :value="nickname" hidden readonly />
         <PasswordField id="accept-owner-password" v-model="password" label="恢复密码（至少 6 位）" :disabled="busy || leaving" new-password required />
         <PasswordField id="accept-owner-confirm" v-model="confirmation" label="确认恢复密码" :disabled="busy || leaving" new-password required />
         <InlineFeedback :message="error" :pending="busy ? '正在处理…' : ''" />

@@ -64,7 +64,9 @@ describe('本机麦克风按钮的权威状态', () => {
     expect(button).toBeDefined();
     expect(button).not.toContain('disabled');
     const stopping = await renderControls(false, true, true, false);
-    expect(stopping.controls.match(/<button[^>]*aria-label="开启麦克风"[^>]*>/)?.[0]).toContain('disabled');
+    const stoppingButton = stopping.controls.match(/<button[^>]*aria-label="开启麦克风"[^>]*>/)?.[0];
+    expect(stoppingButton).toContain('disabled');
+    expect(stoppingButton).toContain('is-microphone-stopping');
   });
 
   it('独立观看不重复提供房间麦克风和收听按钮', async () => {

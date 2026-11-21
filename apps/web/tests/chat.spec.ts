@@ -323,6 +323,53 @@ test('文本消息使用统一 multipart 接口发送，并按日期分组且仅
   expect(errorBounds!.y + errorBounds!.height).toBeLessThanOrEqual(composerBoundsAfterError!.y);
 });
 
+test('空缓存进入十万序号群聊只取最近一页，连续上翻十页保持输入可用', async ({ page }) => {
+  await mockChatShell(page);
+  const pages: number[] = [];
+  let firstBytes = 0;
+  await page.route('**/api/groups**', route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
+    if (url.pathname.endsWith(groupId)) return route.fulfill({ json: group });
+    if (url.pathname.endsWith('/messages')) {
+      if (url.searchParams.has('afterMessageId')) return route.fulfill({ json: { messages: [], hasMore: false } });
+      const cursor = url.searchParams.get('beforeMessageId');
+      const end = cursor ? Number(cursor.slice(1)) - 1 : 100000;
+      const body = JSON.stringify({ messages: Array.from({ length: 30 }, (_, i) => chatMessage(end - 29 + i)), hasMore: true });
+      if (!cursor) firstBytes = Buffer.byteLength(body);
+      pages.push(end);
+      return route.fulfill({ contentType: 'application/json', body });
+    }
+    return route.fulfill({ status: 404 });
+  });
+  await page.goto('/');
+  const list = page.locator('.message-list');
+  const rows = list.locator('[data-message-id]');
+  await expect(rows).toHaveCount(30);
+  expect(pages).toEqual([100000]);
+  const composer = page.getByRole('textbox', { name: '消息内容' });
+  await composer.fill('保留输入');
+  const openedAt = await page.evaluate(() => Math.round(performance.now()));
+  for (let i = 1; i <= 10; i++) {
+    await list.evaluate(el => { el.scrollTop = 0; });
+    await list.dispatchEvent('wheel', { deltaY: -100 });
+    await expect(rows).toHaveCount(30 * (i + 1));
+  }
+  expect(pages).toEqual(Array.from({ length: 11 }, (_, i) => 100000 - 30 * i));
+  await expect(composer).toHaveValue('保留输入');
+  const frames = await page.evaluate(async () => {
+    const frame = () => new Promise<number>(done => requestAnimationFrame(done));
+    let last = await frame();
+    const intervals: number[] = [];
+    for (let i = 0; i < 30; i++) {
+      document.querySelector('.message-list')!.scrollBy(0, 28);
+      const time = await frame(); intervals.push(time - last); last = time;
+    }
+    return intervals.sort((a, b) => a - b)[28];
+  });
+  console.log('合成聊天首屏与上翻', { firstBytes, openedAt, rows: await rows.count(), scrollP95Ms: frames });
+});
+
 test('触顶只取一页旧消息，与新消息轮询并行，去重并保持阅读位置', async ({ page }) => {
   await mockChatShell(page);
   const initial = Array.from({ length: 30 }, (_, index) => chatMessage(index + 31));
@@ -643,7 +690,9 @@ test('反复放大已加载图片复用原始内容，关闭后仅保留列表�
 
 test('没有封面的群聊音视频使用紧凑文件行，名称可打开查看器', async ({ page }) => {
   await mockChatShell(page);
-  const items = [fileMessage('A01', 'clip', '片段.mp4'), fileMessage('A02', 'sound', '录音.ogg')];
+  const unfinished = fileMessage('A03', 'failed', '未完成.mp4');
+  unfinished.attachment!.transferStatus = 'FAILED';
+  const items = [fileMessage('A01', 'clip', '片段.mp4'), fileMessage('A02', 'sound', '录音.ogg'), unfinished];
   await page.route('**/api/groups**', route => {
     const url = new URL(route.request().url());
     if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
@@ -654,6 +703,9 @@ test('没有封面的群聊音视频使用紧凑文件行，名称可打开查�
   });
   await page.goto('/');
   const row = page.locator('[data-message-id="A01"] .chat-file-card');
+  const failed = page.locator('[data-message-id="A03"] .chat-transfer-media');
+  await expect(failed.getByText('上传未完成')).toBeVisible();
+  await expect(failed.getByRole('button')).toHaveCount(0);
   await expect(row).toBeVisible();
   await expect(row.locator('.chat-file-icon')).toHaveCount(0);
   for (const [name, target] of [
@@ -931,6 +983,28 @@ test('慢速录像先展示封面，两个客户端都按原顺序看到随后�
   let previewRequests = 0;
   let finish!: () => void;
   const gate = new Promise<void>(resolve => { finish = resolve; });
+  await page.addInitScript(() => {
+    const stream = File.prototype.stream;
+    File.prototype.stream = function () {
+      if (this.name !== '录像.webm') return stream.call(this);
+      const split = Math.ceil(this.size / 2);
+      const file = this;
+      return new ReadableStream<Uint8Array<ArrayBuffer>>({ async start(controller) {
+        controller.enqueue(new Uint8Array(await file.slice(0, split).arrayBuffer()));
+        await new Promise<void>(resolve => window.addEventListener('resume-test-upload', () => resolve(), { once: true }));
+        controller.enqueue(new Uint8Array(await file.slice(split).arrayBuffer()));
+        controller.close();
+      } });
+    };
+    // Playwright 截获请求时不消耗流。让测试传输层读完小样本，再交给模拟服务端。
+    const originalFetch = window.fetch;
+    window.fetch = async (input, init) => {
+      if (String(input).endsWith('/files') && init?.method === 'POST' && init.body instanceof ReadableStream) {
+        return originalFetch(input, { ...init, body: await new Response(init.body).blob() });
+      }
+      return originalFetch(input, init);
+    };
+  });
   for (const tab of [page, peer]) {
     await tab.route(url => url.pathname.startsWith('/api/'), route => route.fulfill({ status: 503, json: { detail: '未模拟接口' } }));
     await tab.route('**/api/presence/heartbeat', route => route.fulfill({ status: 204 }));
@@ -986,7 +1060,18 @@ test('慢速录像先展示封面，两个客户端都按原顺序看到随后�
     await page.getByRole('button', { name: '发送消息' }).click();
     await expect(peer.getByText('文件上传中…')).toBeVisible();
     await expect(peer.locator('.chat-inline-media img')).toBeVisible();
-    await expect(page.getByRole('progressbar', { name: '文件上传进度' })).toHaveAttribute('value', /\d+/);
+    await expect(page.getByText('正在上传 50%')).toBeVisible();
+    await expect(page.getByRole('progressbar', { name: '文件上传进度' })).toHaveAttribute('value', '50');
+    await page.evaluate(() => window.dispatchEvent(new Event('resume-test-upload')));
+    await expect(page.getByText('正在处理视频…')).toBeVisible();
+    await expect(page.getByRole('progressbar', { name: '正在处理视频…' })).not.toHaveAttribute('value');
+    const pending = peer.locator('.chat-transfer-media');
+    await expect(pending.locator('.lucide-download')).toBeVisible();
+    await expect(pending.getByRole('button')).toHaveCount(0);
+    const cover = await pending.locator('.chat-inline-media').boundingBox();
+    const status = await pending.locator('.chat-transfer-state').boundingBox();
+    expect(status!.x).toBeGreaterThanOrEqual(cover!.x + cover!.width);
+    expect(Math.abs(status!.y + status!.height - cover!.y - cover!.height)).toBeLessThanOrEqual(1);
     for (const content of ['后发文字 1', '后发文字 2']) {
       await page.getByLabel('消息内容').fill(content);
       await page.getByLabel('消息内容').press('Enter');
@@ -1031,7 +1116,63 @@ test('慢速录像先展示封面，两个客户端都按原顺序看到随后�
     await expect(peer.getByRole('dialog', { name: '录像.webm' })).toBeVisible();
     await peer.keyboard.press('Escape');
     await expect(peer.getByRole('dialog', { name: '录像.webm' })).toHaveCount(0);
+    const requestsBeforeReopen = previewRequests;
+    await peer.getByRole('button', { name: '播放视频' }).click();
+    const reopened = peer.getByRole('dialog', { name: '录像.webm' });
+    await expect(reopened).toBeVisible();
+    const player = reopened.locator('video');
+    await expect.poll(() => player.evaluate((video: HTMLVideoElement) => video.videoWidth)).toBeGreaterThan(0);
+    await player.evaluate((video: HTMLVideoElement) => { video.currentTime = video.duration / 2; });
+    await expect.poll(() => player.evaluate((video: HTMLVideoElement) => video.readyState)).toBeGreaterThanOrEqual(2);
+    expect(previewRequests).toBe(requestsBeforeReopen);
   } finally { finish(); await peer.close(); }
+});
+
+test('旧视频缓存无法播放且兼容转换失败时，重试取回可播放的原片', async ({ page }) => {
+  await mockChatShell(page);
+  const clip = readFileSync(new URL('./fixtures/chat-clip.webm', import.meta.url));
+  const message = fileMessage('clip-message', 'clip', '短片.webm');
+  message.attachment!.byteSize = clip.length;
+  let downloads = 0, conversions = 0;
+  await page.route('**/api/groups**', route => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
+    if (url.pathname === '/api/groups/' + groupId) return route.fulfill({ json: group });
+    if (url.pathname.endsWith('/messages')) return route.fulfill({ json: { messages: url.searchParams.has('afterMessageId') ? [] : [message], hasMore: false } });
+    if (url.pathname.endsWith('/thumbnail')) return route.fulfill({ status: 204 });
+    if (url.pathname.endsWith('/preview')) {
+      conversions++;
+      return route.fulfill({ json: { status: 'failed' } });
+    }
+    if (url.pathname.endsWith('/files/clip')) {
+      downloads++;
+      return route.fulfill({ contentType: 'video/webm', body: clip });
+    }
+    return route.fulfill({ status: 404 });
+  });
+  await page.goto('/');
+  const open = page.getByRole('button', { name: '预览 短片.webm' });
+  await expect(open).toBeVisible();
+  await page.evaluate(async ({ groupId, userId, size }) => {
+    const modulePath = '/src/cache/localCache.ts';
+    const { createAccountCache } = await import(modulePath);
+    const cache = createAccountCache(userId);
+    cache.allowGroups([groupId]);
+    await cache.write('video', groupId, new Blob([new Uint8Array(size)]), 'clip');
+    cache.dispose();
+  }, { groupId, userId: user.id, size: clip.length });
+  await open.click();
+  const retry = page.getByRole('dialog', { name: '短片.webm' }).getByRole('button', { name: '重试', exact: true });
+  await expect(retry).toBeVisible();
+  expect(downloads).toBe(0);
+  await retry.click();
+  await expect.poll(() => downloads).toBe(1);
+  const player = page.getByRole('dialog', { name: '短片.webm' }).locator('video');
+  await expect.poll(() => player.evaluate((v: HTMLVideoElement) => v.videoWidth)).toBeGreaterThan(0);
+  await page.keyboard.press('Escape');
+  await open.click();
+  await expect.poll(() => player.evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThanOrEqual(2);
+  expect([downloads, conversions]).toEqual([1, 1]);
 });
 
 test('混合拖入按原顺序逐项压缩图片并原样发送其他文件', async ({ page }) => {

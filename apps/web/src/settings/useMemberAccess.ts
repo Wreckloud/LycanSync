@@ -157,12 +157,14 @@ export function useMemberAccess(active: Readonly<Ref<boolean>>, mode: MemberAcce
     catch (exception) { if (current(request)) error.value = message(exception); }
     finally { if (current(request)) busy.value = false; }
   }
-  function page(direction: number) {
-    if (locked.value || refreshing.value) return;
-    offset.value = Math.max(0, offset.value + direction * 100); void refresh();
+  function page(direction: -1 | 1) {
+    if (locked.value || (direction < 0 ? offset.value === 0 : links.value.length < 100)) return;
+    offset.value += direction * 100;
+    recordsLoaded.value = false; recordsError.value = ''; links.value = [];
+    void refresh();
   }
   watch(filter, () => {
-    offset.value = 0; links.value = [];
+    offset.value = 0; recordsLoaded.value = false; recordsError.value = ''; links.value = [];
     // 生成流程会在复制后统一刷新，避免切回待使用分类时重复读取列表。
     if (!busy.value) void refresh();
   }, { flush: 'sync' });

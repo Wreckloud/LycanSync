@@ -162,29 +162,29 @@ onMounted(() => dialog.value?.focus());
       </div>
       <div v-else class="access-body">
         <SegmentedControl :model-value="filter" :options="filters" :disabled="locked" tabs label="链接分类" id-prefix="access-filter" controls="access-records" @update:model-value="changeFilter" />
-        <div id="access-records" class="access-records" role="tabpanel" :aria-labelledby="`access-filter-${filter}`" :aria-busy="refreshing">
-          <p v-if="!links.length && !refreshing && !recordsError">暂无{{ filter === 'PENDING' ? '待使用的链接' : '记录' }}</p>
+        <div id="access-records" class="access-records" role="tabpanel" :aria-labelledby="`access-filter-${filter}`" :aria-busy="!recordsLoaded && refreshing">
+          <p v-if="recordsLoaded && !links.length && !recordsError">暂无{{ filter === 'PENDING' ? '待使用的链接' : '记录' }}</p>
           <article v-for="link in links" :key="link.id" class="access-record" :data-link-id="link.id">
             <div class="access-record-heading"><strong>{{ link.note || (link.kind === 'RECOVERY' ? '恢复链接' : '邀请链接') }}</strong><small>{{ accessLinkStatus(link, currentTime) === '已完成' ? '已使用' : accessLinkStatus(link, currentTime) }}</small></div>
             <small>{{ link.kind === 'RECOVERY' ? '恢复登录' : '邀请加入' }} · {{ pending(link) ? '到期' : '创建' }}：{{ new Date(pending(link) ? link.expiresAt : link.createdAt).toLocaleString() }}</small>
             <small v-if="link.lastFailure" class="error">{{ link.lastFailure }}</small>
             <div v-if="!link.consumedAt" class="button-actions">
               <template v-if="pending(link)">
-                <button type="button" :disabled="locked || refreshing" @click="copy(link.id)">复制链接</button>
-                <button type="button" :disabled="locked || refreshing" @click="edit(link, 'note')">修改备注</button>
+                <button type="button" :disabled="locked" @click="copy(link.id)">复制链接</button>
+                <button type="button" :disabled="locked" @click="edit(link, 'note')">修改备注</button>
               </template>
-              <button type="button" :disabled="locked || refreshing" @click="edit(link, 'renew')">重新生成</button>
-              <button v-if="!link.revokedAt" type="button" :disabled="locked || refreshing" @click="edit(link, 'revoke')">撤销</button>
+              <button type="button" :disabled="locked" @click="edit(link, 'renew')">重新生成</button>
+              <button v-if="!link.revokedAt" type="button" :disabled="locked" @click="edit(link, 'revoke')">撤销</button>
             </div>
           </article>
-          <InlineFeedback :message="recordsError" :pending="refreshing && !links.length ? '正在读取链接…' : ''" />
-          <button v-if="recordsError" type="button" :disabled="locked || refreshing" @click="refresh">重试</button>
+          <InlineFeedback :message="recordsError" :pending="!recordsLoaded && refreshing ? '正在读取链接…' : ''" />
+          <button v-if="recordsError" type="button" :disabled="locked" @click="refresh">重试</button>
         </div>
         <InlineFeedback :message="operation ? '' : error" />
         <label v-if="!operation && error && generatedUrl" class="settings-field">链接<input ref="linkInput" :value="generatedUrl" readonly aria-label="手动复制链接" /></label>
         <div v-if="offset || links.length === 100" class="access-pagination">
-          <button type="button" :disabled="locked || refreshing || offset === 0" @click="page(-1)">上一页记录</button>
-          <button type="button" :disabled="locked || refreshing || links.length < 100" @click="page(1)">下一页记录</button>
+          <button type="button" :disabled="locked || offset === 0" @click="page(-1)">上一页记录</button>
+          <button type="button" :disabled="locked || links.length < 100" @click="page(1)">下一页记录</button>
         </div>
       </div>
       <footer class="card-actions">

@@ -49,9 +49,11 @@ public class QqIdentityClient {
         String nickname = profile.path("nickname").asText().strip();
         if (!profile.has("ret") || profile.path("ret").asInt(-1) != 0 || nickname.isBlank()
                 || nickname.length() > 100 || nickname.codePoints().anyMatch(Character::isISOControl)) throw unavailable();
-        String avatar = profile.path("figureurl_qq_2").asText();
-        if (avatar.isBlank()) avatar = profile.path("figureurl_qq_1").asText();
-        return new Identity(openId.toUpperCase(Locale.ROOT), nickname, avatar(avatar));
+        String large = profile.path("figureurl_qq_2").asText("");
+        String small = profile.path("figureurl_qq_1").asText("");
+        String imported = avatar(large);
+        if (imported == null && !small.equals(large)) imported = avatar(small);
+        return new Identity(openId.toUpperCase(Locale.ROOT), nickname, imported != null ? imported : DefaultAvatar.value());
     }
 
     private JsonNode read(String url) {
@@ -64,7 +66,7 @@ public class QqIdentityClient {
         }
     }
 
-    private byte[] fetch(URI uri, int limit) throws IOException {
+    byte[] fetch(URI uri, int limit) throws IOException {
         var connection = (HttpURLConnection) uri.toURL().openConnection();
         connection.setConnectTimeout(5000);
         connection.setReadTimeout(8000);
@@ -85,12 +87,12 @@ public class QqIdentityClient {
             URI uri = URI.create(url);
             String host = uri.getHost();
             if (!"https".equals(uri.getScheme()) || host == null || !host.endsWith(".qlogo.cn")
-                    || uri.getPort() != -1 || uri.getUserInfo() != null) return DefaultAvatar.value();
+                    || uri.getPort() != -1 || uri.getUserInfo() != null) return null;
             byte[] bytes = fetch(uri, 512 * 1024);
             String type = bytes.length > 3 && bytes[0] == (byte) 0x89 && bytes[1] == 'P' ? "png" : "jpeg";
             return AvatarImageProcessor.normalize("data:image/" + type + ";base64," + Base64.getEncoder().encodeToString(bytes));
         } catch (IOException | IllegalArgumentException | AvatarImageProcessor.InvalidAvatarException exception) {
-            return DefaultAvatar.value();
+            return null;
         }
     }
 

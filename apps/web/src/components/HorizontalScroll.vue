@@ -88,7 +88,8 @@ function wheel(event: WheelEvent) {
   if (!element || event.ctrlKey) return;
   if (Math.abs(event.deltaX) >= Math.abs(event.deltaY)) { cancelScroll(); return; }
   const delta = event.deltaY * (event.deltaMode === 1 ? 20 : event.deltaMode === 2 ? element.clientWidth : 1);
-  if (scrollTarget === undefined && (delta < 0 ? !previous.value : !next.value)) return;
+  if (scrollTarget === undefined && (delta < 0 ? element.scrollLeft <= 0
+    : element.scrollLeft + element.clientWidth >= element.scrollWidth)) return;
   event.preventDefault();
   scrollTo((scrollTarget ?? element.scrollLeft) + delta);
 }

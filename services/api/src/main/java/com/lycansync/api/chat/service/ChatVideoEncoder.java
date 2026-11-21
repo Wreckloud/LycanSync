@@ -35,7 +35,7 @@ public class ChatVideoEncoder {
         try {
             ProcessBuilder builder = new ProcessBuilder(List.of(properties.getFfmpegExecutable(), "-nostdin", "-xerror",
                     "-hide_banner", "-loglevel", "error", "-max_alloc", "67108864", "-threads", "1",
-                    "-filter_threads", "1", "-protocol_whitelist", "file", "-f", format, "-i", source.toString(),
+                    "-filter_threads", "1", "-protocol_whitelist", "file", "-f", ChatFileMediaService.inputFormat(source, format), "-i", source.toString(),
                     "-map", "0:v:0", "-map", preview ? "0:a:0?" : "0:a?", "-sn", "-dn", "-map_metadata", "-1",
                     "-vf", "scale=w='min(" + width + ",iw)':h='min(" + height + ",ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1",
                     "-fpsmax", preview ? "30" : "60", "-c:v", "libx264", "-preset", "veryfast", "-crf", preview ? "25" : "23", "-pix_fmt", "yuv420p",
@@ -53,7 +53,8 @@ public class ChatVideoEncoder {
                 if (Files.exists(output) && Files.size(output) > maxBytes) throw new IOException("size-limit");
             }
             if (encoder.exitValue() != 0 || !Files.isRegularFile(output)
-                    || Files.size(output) == 0 || Files.size(output) > maxBytes) throw new IOException("encode-failed");
+                    || Files.size(output) == 0) throw new IOException("encode-failed");
+            if (Files.size(output) > maxBytes) throw new IOException("size-limit");
         } finally {
             if (encoder != null && encoder.isAlive()) {
                 encoder.destroyForcibly();

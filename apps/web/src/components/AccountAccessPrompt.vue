@@ -76,7 +76,9 @@ async function join() {
 async function switchServer() {
   if (busy.value || props.currentUser) return;
   busy.value = true;
-  try { await window.lycanDesktop?.prepareAccessLink(props.offer); }
+  const { server, token } = props.offer;
+  // Electron IPC 无法序列化 Vue 的响应式代理。
+  try { await window.lycanDesktop?.prepareAccessLink({ server, token }); }
   catch (exception) { error.value = exception instanceof Error ? exception.message : '服务器切换失败'; busy.value = false; }
 }
 </script>

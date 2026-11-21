@@ -171,7 +171,8 @@ onScopeDispose(() => {
   <div ref="root" class="call-controls" :style="{ '--call-menu-max-height': menuMaxHeight + 'px' }" @keydown.esc="escape" @focusout="dismissAfterFocus">
     <div class="call-control-split">
       <button type="button" class="icon-button call-control-main" :aria-label="microphoneEnabled || (microphoneBusy && microphoneIntent) ? '关闭麦克风' : '开启麦克风'"
-        :class="{ 'is-off': !microphoneEnabled }" :disabled="!connected || (microphoneBusy && !microphoneIntent)" @click="emit('microphone')">
+        :class="{ 'is-off': !microphoneEnabled, 'is-microphone-stopping': connected && microphoneBusy && !microphoneIntent }"
+        :disabled="!connected || (microphoneBusy && !microphoneIntent)" @click="emit('microphone')">
         <VoiceLevelMic v-if="microphoneEnabled" :size="17" :level="microphoneLevel" /><MicOff v-else :size="17" />
       </button>
       <button type="button" class="call-control-more" aria-label="麦克风选项" :aria-expanded="menu === 'microphone'"
@@ -285,6 +286,7 @@ onScopeDispose(() => {
 .call-controls { display: flex; align-items: center; gap: 8px; }
 .call-control-split { position: relative; display: flex; flex: 0 0 auto; height: 36px; }
 .call-control-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.call-control-main.is-microphone-stopping:disabled { opacity: 1; cursor: default; }
 .call-control-more { display: grid; place-items: center; width: 20px; padding: 0; border: 1px solid var(--border); border-left: 0; border-radius: 0 6px 6px 0; background: var(--panel-raised); color: var(--muted); cursor: pointer; }
 .call-control-more:hover:not(:disabled), .call-control-more[aria-expanded='true'] { color: var(--text); background: var(--panel-soft); }
 .call-control-more svg.is-open { transform: rotate(180deg); }

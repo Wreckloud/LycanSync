@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { effectScope, ref, shallowRef } from 'vue';
+import { effectScope, nextTick, ref, shallowRef } from 'vue';
 import { RoomEvent, type Participant, type Room } from 'livekit-client';
 import { expect, it } from 'vitest';
 import { useScreenShareLayout } from './useScreenShareLayout';
@@ -11,23 +11,40 @@ function fixture() {
   const revision = ref(0), status = ref('connected');
   const sessions: Record<string, string> = { A: 'a', B: 'b', C: 'c' };
   const privateShares = new Set<string>();
+  const timings = shallowRef<Record<string, { trackSid: string; startedAt: number }>>({});
   const scope = effectScope();
   const view = scope.run(() => useScreenShareLayout({ room: () => room.value,
     participants: () => participants.value, revision: () => revision.value, status: () => status.value,
-    session: identity => sessions[identity], privateControl: identity => privateShares.has(identity) ? '画面未公开' : '',
+    session: identity => sessions[identity], timings: () => timings.value,
+    privateControl: identity => privateShares.has(identity) ? '画面未公开' : '',
   }))!;
-  return { room, participants, revision, status, sessions, privateShares, scope, view };
+  return { room, participants, revision, status, sessions, privateShares, timings, scope, view };
 }
 
-it('预览点击切换聚焦，再点同一共享收起；头像和私密画面不进入观看', () => {
+it('晚到的时长与轨道匹配后校准，布局和同一会话重连保留计时', async () => {
+  const f = fixture();
+  const first = f.view.shares.value[0]!;
+  f.timings.value = { A: { trackSid: 'old-video', startedAt: -90000 } }; await nextTick();
+  expect(f.view.shares.value[0]!.observedAt).toBe(first.observedAt);
+  f.timings.value = { A: { trackSid: 'A-video', startedAt: -30000 } }; await nextTick();
+  f.view.grid(); f.view.select('A');
+  f.status.value = 'reconnecting'; f.status.value = 'connected'; f.room.value.emit(RoomEvent.Reconnected);
+  expect(f.view.focusedShare.value?.observedAt).toBe(-30000);
+  expect(f.view.focusedShare.value?.key).toBe(first.key);
+  f.scope.stop();
+});
+
+it('预览点击直接聚焦，再点同一共享保持聚焦；头像和私密画面不进入观看', () => {
   const f = fixture();
   expect(f.view.mode.value).toBe('collapsed');
+  f.view.select('A');
+  expect(f.view.mode.value).toBe('focus');
   f.view.select('A');
   expect(f.view.focusedShare.value?.participant.identity).toBe('A');
   f.view.select('B');
   expect(f.view.focusedShare.value?.participant.identity).toBe('B');
   f.view.select('B');
-  expect(f.view.mode.value).toBe('collapsed');
+  expect(f.view.mode.value).toBe('focus');
   f.privateShares.add('A');
   f.participants.value = f.participants.value.map(participant => participant.identity === 'B'
     ? { ...participant, isScreenShareEnabled: false } as Participant : participant);
@@ -77,13 +94,16 @@ it('网格自动包含全部有效共享，新增加入、停止移除，不改�
 
 it('聚焦停止、换源或撤回权限后收起，新共享不自动接管；单路网格仍可切换', () => {
   const f = fixture();
+  f.view.grid();
   f.view.select('A');
   f.sessions.A = 'new-a'; f.revision.value++;
   expect(f.view.mode.value).toBe('collapsed');
-  f.view.select('A'); f.privateShares.add('A'); f.revision.value++;
+  f.view.grid(); f.view.select('A'); f.privateShares.add('A'); f.revision.value++;
   expect(f.view.mode.value).toBe('collapsed');
   f.participants.value = f.participants.value.slice(1, 2); f.revision.value++;
-  f.view.select('B'); f.view.grid();
+  f.view.select('B');
+  expect(f.view.mode.value).toBe('focus');
+  f.view.grid();
   expect(f.view.mode.value).toBe('grid');
   expect(f.view.displayed.value).toHaveLength(1);
   f.participants.value = []; f.revision.value++;
@@ -103,7 +123,7 @@ it('网格共享停止后仍展示其他有效来源，观察起点不因界面�
 });
 
 it('重连空快照不收起聚焦；重连完成核验会话，切房清空且旧事件无效', () => {
-  const f = fixture(); f.view.select('A');
+  const f = fixture(); f.view.grid(); f.view.select('A');
   const participants = f.participants.value;
   f.status.value = 'reconnecting'; f.participants.value = []; f.revision.value++;
   expect(f.view.mode.value).toBe('focus');

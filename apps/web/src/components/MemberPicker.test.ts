@@ -8,11 +8,11 @@ import type { MemberOption } from './MemberPicker.vue';
 
 const script = parse(readFileSync(new URL('./MemberPicker.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const source = ts.createSourceFile('MemberPicker.ts', script, ts.ScriptTarget.Latest, true);
-const names = ['loadMore', 'checkScroll', 'unavailable'];
+const names = ['loadMore', 'refreshVisiblePages', 'checkScroll', 'unavailable'];
 const compiled = ts.transpile(source.statements.filter(statement => {
   if (ts.isFunctionDeclaration(statement)) return names.includes(statement.name?.text ?? '');
   const text = statement.getText(source);
-  return /^(let |watch\(search|onScopeDispose\()/.test(text);
+  return /^(let |const refreshTimer |watch\(search|onScopeDispose\()/.test(text);
 }).map(statement => statement.getText(source)).join('\n'), { target: ts.ScriptTarget.ES2022 });
 const scopes: ReturnType<typeof effectScope>[] = [];
 afterEach(() => { scopes.splice(0).forEach(scope => scope.stop()); vi.useRealTimers(); });
@@ -24,7 +24,7 @@ function setup() {
   const state = { props: { load, disabled: false }, loading: ref(false), error: ref(''), search: ref(''), scrollPosition: ref(0),
     results: ref<MemberOption[]>([]), hasMore: ref(false), list: ref<{ scrollHeight: number; scrollTop: number; clientHeight: number } | null>(null) };
   const actions = scope.run(() => runInNewContext(`${compiled}; ({ loadMore, checkScroll, unavailable })`,
-    { ...state, nextTick, watch, onScopeDispose, AbortController, Error, setTimeout, clearTimeout })) as { loadMore(): Promise<void>; checkScroll(): void; unavailable(member: MemberOption): boolean };
+    { ...state, nextTick, watch, onScopeDispose, AbortController, Error, document: { hidden: false }, setInterval, clearInterval, setTimeout, clearTimeout })) as { loadMore(): Promise<void>; checkScroll(): void; unavailable(member: MemberOption): boolean };
   return { state, scope, ...actions };
 }
 it('搜索立即撤销旧请求，迟到结果不能覆盖新搜索，卸载取消后续读取', async () => {
@@ -71,6 +71,24 @@ it('返回列表恢复阅读位置，修改搜索时回到顶部', async () => {
   f.state.search.value = '朋友'; await nextTick();
   expect(f.state.scrollPosition.value).toBe(0);
   expect(f.state.list.value.scrollTop).toBe(0);
+});
+
+it('后台刷新合并已读页，保留位置和搜索，关闭窗口即停止', async () => {
+  const f = setup();
+  const member = (userId: string) => ({ userId, nickname: userId, avatar: '' });
+  f.state.search.value = '成员'; await nextTick();
+  f.state.props.load.mockResolvedValueOnce({ members: [member('A')], hasMore: true });
+  await vi.advanceTimersByTimeAsync(250);
+  await f.loadMore();
+  f.state.list.value = { scrollHeight: 900, scrollTop: 120, clientHeight: 260 };
+  f.state.props.load.mockResolvedValueOnce({ members: [member('新')], hasMore: true })
+    .mockResolvedValueOnce({ members: [member('A')], hasMore: true });
+  await vi.advanceTimersByTimeAsync(15000);
+  expect(f.state.props.load.mock.calls.slice(-2).map(call => call.slice(0, 2))).toEqual([['成员', 0], ['成员', 1]]);
+  expect(f.state.results.value.map(m => m.userId)).toEqual(['新', 'A']);
+  expect(f.state.list.value.scrollTop).toBe(120);
+  f.scope.stop(); await vi.advanceTimersByTimeAsync(30000);
+  expect(f.state.props.load).toHaveBeenCalledTimes(4);
 });
 
 it('确认页隐藏列表时不继续翻页，加载下一页不禁用已有成员', async () => {

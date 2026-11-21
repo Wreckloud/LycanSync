@@ -107,7 +107,7 @@ function updateInputGain(gain: number) {
           <i v-for="segment in levelSegments" :key="segment" :class="{ 'is-active': segment * 100 / levelSegments.length <= displayedInputLevel }" />
         </div>
       </div>
-      <ProjectAttribution>通话与共享传输由 <a href="https://github.com/livekit/livekit" target="_blank" rel="noopener noreferrer">LiveKit</a> 提供支持。</ProjectAttribution>
+      <ProjectAttribution>通话与共享使用 <a href="https://github.com/livekit/livekit" target="_blank" rel="noopener noreferrer">LiveKit</a>。</ProjectAttribution>
     </section>
     <section class="settings-block">
       <h2>麦克风试听</h2>
@@ -124,13 +124,13 @@ function updateInputGain(gain: number) {
     <section class="settings-block">
       <h2>声音处理</h2>
       <div class="settings-toggle">
-        <span><strong>智能声音处理</strong><small>{{ desktop ? '程序使用 RNNoise 降噪，配合回声消除、低频过滤和自动音量调整，让人声更清楚、音量更平稳。' : '使用浏览器的降噪、回声消除和自动音量调整，配合低频过滤，让说话更清楚。' }}</small></span>
+        <span><strong>智能声音处理</strong><small>减少噪声和回声，让说话的音量更平稳。</small></span>
         <input type="checkbox" aria-label="智能声音处理" :checked="processingEnabled" :indeterminate="processingPartial"
           :aria-checked="processingPartial ? 'mixed' : processingEnabled" @change="updateProcessing" />
       </div>
       <p v-if="processingPartial">当前沿用之前的单项设置。开启后应用完整的声音处理。</p>
-      <ProjectAttribution v-if="desktop">降噪由 <a href="https://github.com/xiph/rnnoise" target="_blank" rel="noopener noreferrer">RNNoise 开源项目</a> 提供支持；回声消除、低频过滤与音量处理基于 <a href="https://github.com/dignifiedquire/sonora" target="_blank" rel="noopener noreferrer">Sonora</a>。</ProjectAttribution>
-      <p v-if="!desktop">同时使用浏览器的回声消除。</p>
+      <ProjectAttribution v-if="desktop">降噪由 <a href="https://github.com/xiph/rnnoise" target="_blank" rel="noopener noreferrer">RNNoise</a> 提供，回声消除与音量处理使用 <a href="https://github.com/dignifiedquire/sonora" target="_blank" rel="noopener noreferrer">Sonora</a>。</ProjectAttribution>
+      <p v-if="!desktop">声音处理由浏览器提供。</p>
     </section>
     <section class="settings-block">
       <h2>输出</h2>

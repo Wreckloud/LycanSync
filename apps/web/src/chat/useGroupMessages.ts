@@ -89,9 +89,8 @@ export function useGroupMessages({ getGroupId, getUserId, cache, scroll, onIniti
     if (cache?.revision !== cacheWriteRevision) return;
     const confirmedEnd = latestFetchedMessageId ? messages.value.findIndex(message => message.id === latestFetchedMessageId) + 1 : 0;
     if (!confirmedEnd && (!initialLoaded.value || messages.value.length)) return;
-    const confirmed = messages.value.slice(0, confirmedEnd);
     void cache?.write('messages', getGroupId(), {
-      messages: confirmed.slice(-500), hasMore: hasMore.value || confirmed.length > 500,
+      messages: messages.value.slice(Math.max(0, confirmedEnd - 500), confirmedEnd), hasMore: hasMore.value || confirmedEnd > 500,
     });
   }
 

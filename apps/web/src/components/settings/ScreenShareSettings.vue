@@ -9,7 +9,6 @@ import SegmentedControl from '../SegmentedControl.vue';
 import ScreenShareCustomQuality from '../ScreenShareCustomQuality.vue';
 import ExpandSection from '../ExpandSection.vue';
 import InlineFeedback from '../InlineFeedback.vue';
-import ProjectAttribution from '../ProjectAttribution.vue';
 
 const props = defineProps<{
   active: boolean;
@@ -113,12 +112,11 @@ watch(() => [props.active, props.rtc.screenShareActive], async ([active, sharing
         </div>
         <InlineFeedback :message="audioError" :pending="loadingAudio ? '正在读取声音设置…' : ''" />
         <div class="settings-toggle">
-          <span><strong>隐藏共享画面中的光标</strong><small>选择共享画面是否显示鼠标指针，下次共享生效。</small></span>
+          <span><strong>隐藏共享画面中的光标</strong><small>开启后，下次共享时朋友看不到你的指针。</small></span>
           <input type="checkbox" aria-label="隐藏共享画面中的光标" :checked="hideCursor" @change="toggleCursor" />
         </div>
         <InlineFeedback :message="cursorError" />
       </div>
-      <ProjectAttribution>画面与应用声音采集基于 <a href="https://github.com/obsproject/obs-studio" target="_blank" rel="noopener noreferrer">OBS Studio</a>。</ProjectAttribution>
     </section>
   </section>
 </template>

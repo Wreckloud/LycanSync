@@ -408,20 +408,26 @@ pub(super) fn window_video_target(
         minimized: unsafe { IsIconic(window) }.as_bool()
             || !unsafe { IsWindowVisible(window) }.as_bool(),
         requires_window_capture: requires_window_capture(identity.process_id)?
-            || uses_separate_game_surface(&executable, &identity.class_name),
+            || prefers_game_window_capture(&executable, &identity.class_name),
         executable,
     })
 }
 
-fn uses_separate_game_surface(executable: &str, class_name: &str) -> bool {
+fn prefers_game_window_capture(executable: &str, class_name: &str) -> bool {
+    let path = std::path::Path::new(executable);
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    // PEAK 的游戏采集曾连续收不到首帧，同一窗口已验证可用 WGC。
+    if name.eq_ignore_ascii_case("peak.exe") {
+        return path
+            .parent()
+            .and_then(|dir| dir.file_name())
+            .and_then(|dir| dir.to_str())
+            .is_some_and(|dir| dir.eq_ignore_ascii_case("peak"));
+    }
     // 饥荒 GLES 渲染器的钩子报告隐藏的 1×1 辅助窗，不能据此授权可见游戏窗。
-    class_name == "opengles2.0"
-        && std::path::Path::new(executable)
-            .file_name()
-            .is_some_and(|name| {
-                name.to_string_lossy()
-                    .eq_ignore_ascii_case("dontstarve_steam_x64.exe")
-            })
+    class_name == "opengles2.0" && name.eq_ignore_ascii_case("dontstarve_steam_x64.exe")
 }
 
 fn requires_window_capture(process_id: u32) -> Result<bool, ErrorCode> {
@@ -595,23 +601,39 @@ fn read_window_fingerprint(window: HWND) -> Option<WindowFingerprint> {
 mod tests {
     use super::{
         WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MAXIMIZE, WS_MINIMIZE, is_client_executable,
-        is_helper_window_style, should_exclude_window, stable_window_style,
+        is_helper_window_style, prefers_game_window_capture, should_exclude_window,
+        stable_window_style,
     };
 
     #[test]
     fn routes_confirmed_dont_starve_gles_surface_to_window_capture() {
-        use super::uses_separate_game_surface;
-        assert!(uses_separate_game_surface(
+        assert!(prefers_game_window_capture(
             r"D:\Games\dontstarve_steam_x64.exe",
             "opengles2.0"
         ));
-        assert!(!uses_separate_game_surface(
+        assert!(!prefers_game_window_capture(
             r"D:\Games\other.exe",
             "opengles2.0"
         ));
-        assert!(!uses_separate_game_surface(
+        assert!(!prefers_game_window_capture(
             r"D:\Games\dontstarve_steam_x64.exe",
             "SDL_app"
+        ));
+    }
+
+    #[test]
+    fn prefers_window_capture_for_peak_game_only() {
+        assert!(prefers_game_window_capture(
+            r"D:\Steam\common\PEAK\Peak.exe",
+            "UnityWndClass"
+        ));
+        assert!(!prefers_game_window_capture(
+            r"D:\Tools\Peak.exe",
+            "UnityWndClass"
+        ));
+        assert!(!prefers_game_window_capture(
+            r"D:\Steam\common\PEAK\Other.exe",
+            "UnityWndClass"
         ));
     }
 

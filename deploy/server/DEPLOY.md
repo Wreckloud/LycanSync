@@ -4,6 +4,20 @@
 
 Ubuntu 24.04 或 CentOS Stream 9/10 可按各自的 [Docker 官方安装说明](https://docs.docker.com/engine/install/) 准备环境；旧 CentOS 的版本和已有 Docker 需先核实，不保证可运行当前镜像。Caddy 文件挂载使用 `ro,Z` 以适配 SELinux，不要求关闭 SELinux。
 
+### 新虚拟机首次安装
+
+第一次部署和邀请朋友，可以先按 [服主首次安装手册](QUICKSTART.md) 操作。
+
+在装好 Docker Engine、Compose v2 和 Python 3 的 Ubuntu 虚拟机上，解压完整发布 ZIP，在包目录运行：
+
+```bash
+python3 install.py
+```
+
+供外网朋友使用时，输入已配置的域名和客户端能到达的媒体入口 IPv4。只做局域网测试时，第一项输入虚拟机的固定 IPv4，脚本会选择内网配置；按第 3 节导出测试 CA。脚本在本机生成两个独立密钥，并将 Compose 文件选择保存在私有的 `.env` 中。中断后可从同一目录再次运行，沿用已有配置和容器。手动安装和版本升级按下文操作。
+
+终端确认本机 API 就绪后，按提示查看服主激活链接。在外网用全新 Windows 用户打开邀请、下载安装并确认入群，再测试双向语音和屏幕共享。包内客户端的默认地址和更新源应在发布时核对；脚本不会更改 DNS、配置穿透或重打客户端。
+
 ## 1. 准备地址和网络
 
 - `SERVER_DOMAIN`：API 使用 `https://域名`，LiveKit 信令使用同一域名的 `wss://域名:8443`。
@@ -173,7 +187,7 @@ curl --fail --cacert ./lycansync-local-ca.crt \
 
 ## 5. 数据和维护
 
-- PostgreSQL 数据位于 `postgres-data` 卷；原始文件位于 `chat-files` 卷。默认单文件 512 MiB，总文件容量 10 GiB；服主可在客户端的「服主管理 → 文件上传」调整，保存后对新上传生效。
+- PostgreSQL 数据位于 `postgres-data` 卷；原始文件位于 `chat-files` 卷。默认单文件 1 GiB，总文件容量 32 GiB；服主可在客户端的「服主管理 → 文件上传」调整，保存后对新上传生效。
 - Caddy 证书位于 `caddy-data` 卷；不要丢弃，否则需要重新申请证书。
 - `docker compose stop` 保留数据；`docker compose down` 也保留命名卷。**不要用 `down -v`，它会删除数据。**
 - 备份时先停止写入，备份 PostgreSQL 和聊天文件同一时间点的数据；恢复时一起恢复。不要只备份数据库。

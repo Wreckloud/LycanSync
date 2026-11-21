@@ -2,6 +2,7 @@
 import { computed, inject, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import { Download, Music2, X } from '@lucide/vue';
 import { desktopMediaUrl, fetchAttachment, fetchFilePreview, fetchCompatibleVideo, videoPreviewStatus, type ChatAttachment } from '../chat/chatApi';
+import { ACCOUNT_CACHE } from '../cache/localCache';
 import { CHAT_TRANSFERS } from '../chat/useChatTransfers';
 import { chatMediaFormat } from '../chat/chatMedia';
 import { useLoadingHint } from './useLoadingHint';
@@ -19,6 +20,7 @@ const error = ref('');
 const previewFailed = ref(false);
 const loading = ref(false);
 const transfers = inject(CHAT_TRANSFERS)!;
+const cache = inject(ACCOUNT_CACHE, null);
 const downloadTask = computed(() => transfers.downloads.get(props.attachment.id));
 const downloading = computed(() => Boolean(downloadTask.value?.controller));
 const converting = ref(false);
@@ -32,9 +34,11 @@ const loadingHint = useLoadingHint(() => loading.value);
 const backdropEvents = useBackdropDismiss(close);
 let request: AbortController | undefined;
 let conversionRequest: AbortController | undefined;
+let originalVideoCache: { revision: number; pending?: Blob } | undefined;
 let disposed = false;
 
 function release() {
+  originalVideoCache = undefined;
   player.value?.pause();
   player.value?.removeAttribute('src');
   player.value?.load();
@@ -50,7 +54,7 @@ function close() {
   emit('close');
 }
 
-async function load() {
+async function load(refresh = false) {
   if (disposed) return;
   request?.abort();
   conversionRequest?.abort();
@@ -68,12 +72,20 @@ async function load() {
     const streamUrl = format.value?.kind === 'video' || format.value?.kind === 'audio'
       ? desktopMediaUrl(props.groupId, props.attachment.id) : null;
     if (streamUrl) { source.value = streamUrl; return; }
-    const blob = props.previewBlob ?? (props.imageMessage
+    const smallVideo = cache && format.value?.kind === 'video' && props.attachment.byteSize > 0
+      && props.attachment.byteSize <= 8 * 1024 * 1024;
+    const revision = cache?.revision;
+    const cached = smallVideo && !refresh ? await cache.read<Blob>('video', props.groupId, props.attachment.id) : null;
+    if (current.signal.aborted || disposed) return;
+    const blob = (smallVideo && refresh ? null : props.previewBlob) ?? cached ?? (props.imageMessage
       ? await fetchAttachment(props.groupId, props.attachment.id, current.signal)
       : await fetchFilePreview(props.groupId, props.attachment.id, current.signal, props.inlineLoading
         ? bytes => { if (!current.signal.aborted) emit('progress', Math.min(99, Math.floor(bytes * 100 / (props.attachment.byteSize || 1)))); }
         : undefined));
     if (disposed || current.signal.aborted || request !== current) return;
+    if (smallVideo && revision !== undefined && cache.revision === revision && (cached || blob.size === props.attachment.byteSize)) {
+      originalVideoCache = { revision, pending: cached ? undefined : blob };
+    }
     source.value = URL.createObjectURL(blob.slice(0, blob.size, format.value?.contentType || blob.type));
   } catch (reason) {
     if (!current.signal.aborted && !disposed) {
@@ -83,6 +95,16 @@ async function load() {
   } finally {
     if (request === current) loading.value = false;
   }
+}
+
+function videoPlayable() {
+  if (disposed || previewFailed.value) return;
+  const entry = originalVideoCache;
+  if (entry?.pending && cache?.revision === entry.revision) {
+    void cache.write('video', props.groupId, entry.pending, props.attachment.id);
+    entry.pending = undefined;
+  }
+  emit('ready');
 }
 
 async function convertVideo() {
@@ -137,6 +159,11 @@ async function download() {
 
 function playbackFailed(code?: number | Event) {
   if (!disposed) {
+    const entry = originalVideoCache;
+    originalVideoCache = undefined;
+    if (entry && !entry.pending && cache?.revision === entry.revision && code !== 2) {
+      void cache.discard('video', props.groupId, props.attachment.id);
+    }
     emit('ready');
     previewFailed.value = true;
     if (props.localSource) { error.value = '此文件暂时无法在应用中预览，仍可作为附件发送。'; return; }
@@ -167,7 +194,7 @@ onScopeDispose(() => {
       <div class="chat-media-stage" :aria-busy="loading">
         <ChatImageSurface v-if="source && format?.kind === 'image' && !previewFailed" :source="source" :title="title" :downloadable="!localSource" @close="close" @download="download" @error="playbackFailed" />
         <MediaVideoSurface v-else-if="source && format?.kind === 'video'" :key="source" :source="source" :downloadable="!localSource" :downloading="downloading"
-          :buffer-for-preview="inlineLoading" @buffered="percent => { if (!source.startsWith('blob:')) emit('progress', percent); }" @playable="emit('ready')" @close="close" @download="download" @error="playbackFailed" />
+          :buffer-for-preview="inlineLoading" @buffered="percent => { if (!source.startsWith('blob:')) emit('progress', percent); }" @playable="videoPlayable" @close="close" @download="download" @error="playbackFailed" />
         <div v-else-if="source && format?.kind === 'audio'" class="chat-media-audio">
           <Music2 :size="64" aria-hidden="true" />
           <audio ref="player" :src="source" controls preload="metadata" tabindex="0" @error="playbackFailed" />
@@ -180,7 +207,7 @@ onScopeDispose(() => {
       <footer v-if="error || downloadTask?.error || conversionHint" class="chat-media-feedback">
         <span v-if="error || downloadTask?.error" role="alert">{{ error || downloadTask?.error }}</span>
         <span v-else-if="conversionHint" class="conversion-status" role="status">{{ conversionStatus }}</span>
-        <button v-if="error && !localSource && !converting" type="button" @click="load">重试</button>
+        <button v-if="error && !localSource && !converting" type="button" @click="load(true)">重试</button>
       </footer>
     </section>
   </div>

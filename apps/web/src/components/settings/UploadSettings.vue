@@ -46,7 +46,7 @@ onScopeDispose(() => request?.abort());
   <form class="upload-limits" @submit.prevent="update(true)">
     <div class="settings-action-row">
       <div><strong>群聊文件上传</strong>
-        <small>限制通过加号发送的文件和分享的录像。所有群聊共用这份容量，用满后将无法上传新文件。</small>
+        <small>文件和录像共用所有群聊的存储空间。</small>
       </div>
     </div>
     <template v-if="saved">
