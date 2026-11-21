@@ -2,6 +2,7 @@
 #include <util/windows/win-version.h>
 #include <winrt/base.h>
 #include <objbase.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -49,6 +50,28 @@ bool valid_size(DWORD width, DWORD height) {
   return width && height && uint64_t(width) * height <= 16'777'216;
 }
 
+// 同类 Chromium 窗口先检查客户区内部的首帧，避免把黑画布与成功返回混为一谈。
+bool has_content_detail(const std::wstring &channel, const FrameSlot &slot) {
+  if (!valid_size(slot.width, slot.height)) return false;
+  Mapping frame;
+  if (!frame.open(channel + L"." + std::to_wstring(slot.generation), FILE_MAP_READ,
+                  size_t(slot.width) * slot.height * 4)) return false;
+  const auto *pixels = static_cast<const DWORD *>(frame.view);
+  DWORD minimum[3] = {255, 255, 255}, maximum[3]{};
+  for (DWORD row = 2; row <= 8; ++row) {
+    for (DWORD column = 2; column <= 8; ++column) {
+      const DWORD pixel = pixels[size_t(slot.height * row / 10) * slot.width + slot.width * column / 10];
+      for (int c = 0; c < 3; ++c) {
+        const DWORD value = (pixel >> (c * 8)) & 255;
+        minimum[c] = (std::min)(minimum[c], value);
+        maximum[c] = (std::max)(maximum[c], value);
+        if (maximum[c] - minimum[c] >= 16) return true;
+      }
+    }
+  }
+  return false;
+}
+
 struct PrintSource {
   std::wstring channel;
   Mapping control, pixels;
@@ -67,7 +90,7 @@ struct PrintSource {
     gs_texture_destroy(texture);
     obs_leave_graphics();
   }
-  bool start(const WindowVideoTarget &selected, bool show_cursor) {
+  bool start(const WindowVideoTarget &selected, bool show_cursor, bool check_content) {
     target = selected;
     GUID guid{};
     wchar_t identifier[40]{}, executable[32768]{};
@@ -83,10 +106,11 @@ struct PrintSource {
     strcpy_s(slot.lifetime, target.lifetime_name.c_str());
     strcpy_s(slot.creation, target.process_creation.c_str());
     wake.attach(CreateEventW(nullptr, FALSE, TRUE, (channel + L".request").c_str()));
+    winrt::handle first_frame(CreateEventW(nullptr, FALSE, FALSE, (channel + L".first").c_str()));
     job.attach(CreateJobObjectW(nullptr, nullptr));
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if (!wake || !job || !SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits))) return false;
+    if (!wake || !first_frame || !job || !SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &limits, sizeof(limits))) return false;
     STARTUPINFOEXW startup{};
     startup.StartupInfo.cb = sizeof(startup);
     SIZE_T bytes = 0;
@@ -104,6 +128,10 @@ struct PrintSource {
     if (!launched) return false;
     CloseHandle(child.hThread);
     process.attach(child.hProcess);
+    // 确认工作进程能交付首帧后再对外报告方式。超时、退出或内容检查失败只回退一次。
+    HANDLE pending[] = {first_frame.get(), process.get()};
+    if (WaitForMultipleObjects(2, pending, FALSE, 2000) != WAIT_OBJECT_0 || !window_video_target_valid(target)) return false;
+    if (check_content && !has_content_detail(channel, slot)) return false;
     requested = Clock::now();
     started.store(true);
     return true;
@@ -181,16 +209,23 @@ struct WorkerBitmap {
 };
 }
 
-bool prefers_print_window(const WindowVideoTarget &target) {
+enum class PrintWindowSupport { none, verified, chromium };
+
+static PrintWindowSupport print_window_support(const WindowVideoTarget &target) {
   win_version_info version{};
   get_win_ver(&version);
-  if (version.major != 10 || version.build < 19041 || version.build >= 20348 || !window_video_target_valid(target)) return false;
+  if (version.major != 10 || version.build < 19041 || version.build >= 20348 || !window_video_target_valid(target)) return PrintWindowSupport::none;
   wchar_t path[32768]{}, cls[128]{};
   DWORD length = 32768;
-  if (!QueryFullProcessImageNameW(target.binding->process, 0, path, &length) || !GetClassNameW(target.window, cls, 128)) return false;
+  if (!QueryFullProcessImageNameW(target.binding->process, 0, path, &length) || !GetClassNameW(target.window, cls, 128)) return PrintWindowSupport::none;
   const auto exe = std::filesystem::path(path).filename().wstring();
-  return ((!_wcsicmp(exe.c_str(), L"ChatGPT.exe") || !_wcsicmp(exe.c_str(), L"chrome.exe")) && !wcscmp(cls, L"Chrome_WidgetWin_1"))
-      || (!_wcsicmp(exe.c_str(), L"dontstarve_steam_x64.exe") && !wcscmp(cls, L"opengles2.0"));
+  if (!wcscmp(cls, L"Chrome_WidgetWin_1")) {
+    if (!_wcsicmp(exe.c_str(), L"ChatGPT.exe") || !_wcsicmp(exe.c_str(), L"chrome.exe")) return PrintWindowSupport::verified;
+    if (FindWindowExW(target.window, nullptr, L"Chrome_RenderWidgetHostHWND", nullptr)) return PrintWindowSupport::chromium;
+  }
+  if ((!_wcsicmp(exe.c_str(), L"krita.exe") && !wcscmp(cls, L"Qt5157QWindowIcon"))
+      || (!_wcsicmp(exe.c_str(), L"dontstarve_steam_x64.exe") && !wcscmp(cls, L"opengles2.0"))) return PrintWindowSupport::verified;
+  return PrintWindowSupport::none;
 }
 
 void register_print_window_source() {
@@ -212,10 +247,12 @@ void register_print_window_source() {
   obs_register_source(&info);
 }
 
-obs_source_t *create_print_window_source(const WindowVideoTarget &target, bool show_cursor) {
+obs_source_t *try_auto_print_window_source(const WindowVideoTarget &target, bool show_cursor) {
+  const auto support = print_window_support(target);
+  if (support == PrintWindowSupport::none) return nullptr;
   auto *source = obs_source_create_private(source_id, "LycanSync selected window", nullptr);
   auto *state = source ? static_cast<PrintSource *>(obs_obj_get_data(source)) : nullptr;
-  if (state && state->start(target, show_cursor)) return source;
+  if (state && state->start(target, show_cursor, support == PrintWindowSupport::chromium)) return source;
   obs_source_release(source);
   return nullptr;
 }
@@ -230,7 +267,8 @@ int run_print_window_worker(const wchar_t *name) {
   SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   Mapping control;
   winrt::handle wake(OpenEventW(SYNCHRONIZE, FALSE, (channel + L".request").c_str()));
-  if (!wake || !control.open(channel, FILE_MAP_WRITE, sizeof(FrameSlot))) return 1;
+  winrt::handle first_frame(OpenEventW(EVENT_MODIFY_STATE, FALSE, (channel + L".first").c_str()));
+  if (!wake || !first_frame || !control.open(channel, FILE_MAP_WRITE, sizeof(FrameSlot))) return 1;
   auto &slot = *static_cast<FrameSlot *>(control.view);
   if (!memchr(slot.lifetime, 0, sizeof(slot.lifetime)) || !memchr(slot.creation, 0, sizeof(slot.creation))) return 2;
   WindowVideoTarget target{slot.window, slot.lifetime, slot.pid, slot.creation};
@@ -250,11 +288,15 @@ int run_print_window_worker(const wchar_t *name) {
         if (!bitmap.resize(channel + L"." + std::to_wstring(++slot.generation), client.right, client.bottom)) return 1;
       }
       if (!PrintWindow(target.window, bitmap.dc, PW_CLIENTONLY | PW_RENDERFULLCONTENT)) return 1;
-      if (slot.show_cursor) bitmap.draw_cursor(target.window);
+      if (slot.show_cursor && !first_frame) bitmap.draw_cursor(target.window);
       if (!GdiFlush() || !window_video_target_valid(target)) return 1;
       slot.width = bitmap.width; slot.height = bitmap.height;
     }
     InterlockedExchange(&slot.ready, 1);
+    if (first_frame) {
+      if (!SetEvent(first_frame.get())) return 1;
+      first_frame.close();
+    }
   }
   return 1;
 }

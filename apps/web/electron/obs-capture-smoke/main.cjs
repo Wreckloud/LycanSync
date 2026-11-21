@@ -337,6 +337,8 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
   }
   if (applicationCheck) {
     const existingWindowId = process.env.LYCANSYNC_CAPTURE_APPLICATION_WINDOW_ID;
+    const kritaAnimation = process.env.LYCANSYNC_CAPTURE_KRITA_ANIMATION === '1';
+    if (kritaAnimation && (!existingWindowId || applicationRepeats !== 1)) throw new Error('kritaFixtureWindowRequired');
     if (existingWindowId && !/^[1-9]\d{0,19}$/.test(existingWindowId)) throw new Error('invalidApplicationTestWindow');
     if (!existingWindowId) {
       // 自建 Chromium/WebGL 来源，避免依赖手动打开的浏览器或用户账号。
@@ -359,6 +361,9 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
     if (existingWindowId) {
       const { createActivityHelper } = require('../activity-helper.cjs');
       const target = await targetHelper.inspectVideoSource(sources[0].sourceId);
+      if (kritaAnimation) {
+        assert(/[/\\]krita\.exe$/i.test(target.executable) && sources[0].title.includes('LycanSync-BlueGreen.kra'), 'kritaFixtureMismatch');
+      }
       production.activityMonitor = createActivityHelper({ enabled: true,
         executablePath: () => resolve(projectRoot, 'native/activity-helper/target/release/lycansync-activity.exe'), onActivity: () => {} });
       await production.activityMonitor.configure([{ executable: target.executable, name: '本机采集验证' }]);
@@ -369,6 +374,48 @@ $markerWindow = [IntPtr]::new([long]${windowHandle})
       const started = await renderer(`start(${JSON.stringify(source.sourceId)})`);
       testPhase = 'application-playback';
       const state = manager.state;
+      if (kritaAnimation) {
+        assert(state.captureMethod === 'print-window', 'kritaAutomaticMethodMismatch');
+        const fixturePath = resolve(projectRoot, 'release/build-cache/obs-32.2.2/cmake-build/test-tools/lycansync-obs-test-windows.exe');
+        targetFixture = spawn(fixturePath, ['--cover-only'], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
+        const lines = require('node:readline').createInterface({ input: targetFixture.stdout })[Symbol.asyncIterator]();
+        async function response() {
+          let timer;
+          try {
+            const next = await Promise.race([lines.next(), new Promise((_, reject) => {
+              timer = setTimeout(() => reject(new Error('kritaCoverTimeout')), 3000);
+            })]);
+            return JSON.parse(next.value);
+          } finally { clearTimeout(timer); }
+        }
+        assert((await response()).event === 'ready', 'kritaCoverUnavailable');
+        async function cover(command) {
+          targetFixture.stdin.write(command + ':' + existingWindowId + '\n');
+          assert((await response()).covered === true, 'kritaCoverIncomplete');
+        }
+        const animationSamples = [];
+        for (const covered of [false, true]) {
+          if (covered) await cover('place-cover');
+          let previous, changes = 0;
+          for (let index = 0; index < 16; index++) {
+            await sleep(220);
+            const { pixel, errors } = await renderer('probe(960,540)');
+            const color = [[16, 200, 80], [32, 64, 220]].findIndex(rgb =>
+              rgb.every((value, channel) => Math.abs(value - pixel?.[channel]) <= 30));
+            assert(color >= 0 && errors.length === 0, 'kritaCanvasPixelsMismatch');
+            if (previous !== undefined && color !== previous) changes++;
+            previous = color;
+            if (covered) await cover('verify-cover');
+          }
+          assert(changes >= 2, 'kritaAnimationStalled');
+          animationSamples.push({ covered, samples: 16, changes });
+        }
+        const stopped = await renderer('stop()');
+        assert(stopped.readyState === 'ended' && !state.videoSessionId, 'kritaStopUnconfirmed');
+        cases.push({ mode: 'krita-animation', animationSamples, actualMethod: state.captureMethod, occlusionChecked: true,
+          hostRetained: manager.state === state && !state.closed });
+        break;
+      }
       const palette = new Set();
       const before = await renderer('probe(960,540)');
       const beforeAt = performance.now();

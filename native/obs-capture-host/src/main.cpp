@@ -851,14 +851,15 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
   const char *source_error = "obsDisplaySourceUnavailable";
   if (game_source) {
     source = create_game_video_source(window_target, capture_cursor_argument == "0", source_error);
-  } else if (window_source && window_method == "auto" && prefers_print_window(window_target)) {
-    g_host.capture_method = "print-window";
-    source = create_print_window_source(window_target, capture_cursor_argument == "1");
-    source_error = "obsWindowCaptureStartFailed";
   } else if (window_source) {
-    source = create_window_video_source(window_target, capture_cursor_argument == "0",
-        hide_border_argument == "1", window_method, source_error);
-    if (source) g_host.capture_method = window_video_method(source);
+    if (window_method == "auto") source = try_auto_print_window_source(window_target, capture_cursor_argument == "1");
+    if (source) {
+      g_host.capture_method = "print-window";
+    } else {
+      source = create_window_video_source(window_target, capture_cursor_argument == "0",
+          hide_border_argument == "1", window_method, source_error);
+      if (source) g_host.capture_method = window_video_method(source);
+    }
   } else {
     obs_data_t *settings = obs_data_create();
     // 来源 ID 的尾号不是系统显示器序号；固定版本按设备名匹配 monitor_id。
