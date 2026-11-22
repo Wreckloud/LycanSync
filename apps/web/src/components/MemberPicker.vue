@@ -6,11 +6,11 @@ import InlineFeedback from './InlineFeedback.vue';
 
 export interface MemberOption { userId: string; nickname: string; avatar: string; role?: string; joined?: boolean }
 const props = defineProps<{
-  members?: MemberOption[];
+  members?: MemberOption[]; pendingMembers?: boolean; membersError?: string;
   load?: (search: string, offset: number, signal: AbortSignal) => Promise<{ members: MemberOption[]; hasMore: boolean }>;
   disabled?: boolean; selected?: string; action?: string; label?: string; joinedIds?: string[];
 }>();
-const emit = defineEmits<{ select: [member: MemberOption] }>();
+const emit = defineEmits<{ 'retry-members': []; select: [member: MemberOption] }>();
 const scrollPosition = defineModel<number>('scrollPosition', { default: 0 });
 const search = defineModel<string>('search', { default: '' });
 const results = ref<MemberOption[]>([]);
@@ -97,15 +97,16 @@ onScopeDispose(() => { refresh?.abort(); request?.abort(); clearTimeout(timer); 
 <template>
   <div class="member-picker">
     <input v-model="search" type="search" :disabled="disabled" maxlength="100" :aria-label="label ?? '搜索群成员'" placeholder="搜索成员" />
-    <div ref="list" class="member-picker-list" :aria-label="label ?? '群成员'" :aria-busy="loading" @scroll.passive="scrollPosition = ($event.target as HTMLElement).scrollTop; checkScroll()">
+    <div ref="list" class="member-picker-list" :aria-label="label ?? '群成员'" :aria-busy="loading || (pendingMembers && !membersError)" @scroll.passive="scrollPosition = ($event.target as HTMLElement).scrollTop; checkScroll()">
       <div v-for="member in visibleMembers" :key="member.userId" class="member-picker-row">
         <Avatar :src="member.avatar" :icon-size="36" />
         <strong><span>{{ member.nickname }}</span><Crown v-if="member.role === 'OWNER'" :size="13" aria-label="群主" /></strong>
         <button type="button" :disabled="unavailable(member)" :aria-pressed="selected === member.userId" @click="emit('select', member)"><slot name="action-label" :member="member">{{ member.joined || joinedIds?.includes(member.userId) ? '已加入' : selected === member.userId ? '已选择' : action ?? '选择' }}</slot></button>
       </div>
-      <p v-if="!loading && !error && !visibleMembers.length">没有匹配的成员</p>
-      <InlineFeedback :message="error" :pending="loading ? '正在查找成员…' : ''" />
-      <button v-if="error" type="button" :disabled="disabled || loading" @click="refreshFailed ? refreshVisiblePages() : loadMore()">重新读取</button>
+      <p v-if="!pendingMembers && !loading && !error && !visibleMembers.length">没有匹配的成员</p>
+      <InlineFeedback :message="membersError || error" :pending="loading || pendingMembers ? '正在查找成员…' : ''" />
+      <button v-if="membersError" type="button" @click="emit('retry-members')">重新读取</button>
+      <button v-else-if="error" type="button" :disabled="disabled || loading" @click="refreshFailed ? refreshVisiblePages() : loadMore()">重新读取</button>
     </div>
   </div>
 </template>

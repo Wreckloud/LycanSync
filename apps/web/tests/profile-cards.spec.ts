@@ -11,7 +11,7 @@ const user = { id: '2d983469-4442-44f5-b5a8-f3819f16a611', nickname: '维克罗�
   signature: '一起开黑，慢慢来。', administrator: true, createdAt: '2026-09-01T00:00:00Z' };
 const members = [
   { userId: user.id, nickname: user.nickname, avatar: '', role: 'OWNER', joinedAt: user.createdAt },
-  { userId: friendId, nickname: '阿岚', avatar: '', role: 'MEMBER', joinedAt: user.createdAt },
+  { userId: friendId, nickname: '阿岚', avatar: '', signature: '准备打团。', role: 'MEMBER', joinedAt: user.createdAt },
   { userId: secondId, nickname: '小满', avatar: '', role: 'MEMBER', joinedAt: user.createdAt },
 ];
 const group = { id: groupId, name: '周末开黑', description: '资料卡布局检查', avatar: '', role: 'OWNER',
@@ -193,6 +193,7 @@ test('成员悬浮按需读资料与共同连麦，移入卡片保持，Esc 关�
   await expect(card).toBeVisible();
   const body = card.locator('.profile-popover-content');
   const initialHeight = (await body.boundingBox())!.height;
+  await expect(card).toContainText('准备打团。');
   release();
   await expect(card).toContainText('准备打团。');
   await expect(card.locator('.profile-voice-time')).toHaveText('一起开黑的时间已经有 42 小时了');
@@ -243,7 +244,7 @@ test('成员悬浮按需读资料与共同连麦，移入卡片保持，Esc 关�
   await expect(card).toHaveCount(0);
 });
 
-test('共同连麦读取失败不冒充无记录，重试无记录时隐藏，自己无记录也隐藏', async ({ page }) => {
+test('共同连麦读取失败不冒充无记录，重试确认零时长时显示空态，自己无记录也隐藏', async ({ page }) => {
   let failed = true;
   await page.route(`**/api/groups/${groupId}/members/${friendId}/profile`, route => failed
     ? route.fulfill({ status: 503, json: { detail: '成员资料暂时无法读取' } })
@@ -252,10 +253,11 @@ test('共同连麦读取失败不冒充无记录，重试无记录时隐藏，�
   await page.getByRole('button', { name: '查看 阿岚 的资料', exact: true }).hover();
   const card = page.getByRole('dialog', { name: '成员资料', exact: true });
   await expect(card.getByRole('alert')).toBeVisible();
+  await expect(card).toContainText('准备打团。');
   await expect(card.locator('.profile-voice-time')).toHaveCount(0);
   failed = false;
   await card.getByRole('button', { name: '重试', exact: true }).click();
-  await expect(card.locator('.profile-voice-time')).toHaveCount(0);
+  await expect(card.locator('.profile-voice-time')).toHaveText('你们还没有一起开过黑');
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: `查看 ${user.nickname} 的资料`, exact: true }).click();
   await expect(card).toContainText(user.signature);
@@ -656,7 +658,7 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
   await expect(page.getByRole('heading', { name: '共享与录制', exact: true })).toBeVisible();
   const presets = page.getByRole('group', { name: '共享画质' });
   await presets.getByRole('button', { name: '高帧率', exact: true }).click();
-  await page.getByRole('checkbox', { name: '共享声音', exact: true }).uncheck();
+  await expect(page.getByRole('checkbox', { name: '共享声音', exact: true })).toHaveCount(0);
   await page.getByRole('checkbox', { name: /隐藏共享画面中的光标/ }).check();
   const replay = page.getByRole('checkbox', { name: /开启即时回放/ });
   await expect(replay).toBeEnabled();
@@ -666,7 +668,7 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '共享与录制', exact: true }).click();
   await expect(presets.getByRole('button', { name: '高帧率', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('checkbox', { name: '共享声音', exact: true })).not.toBeChecked();
+  await expect(page.getByRole('checkbox', { name: '共享声音', exact: true })).toHaveCount(0);
   await expect(page.getByRole('checkbox', { name: /隐藏共享画面中的光标/ })).toBeChecked();
   await expect(page.getByRole('heading', { name: '录制内容', exact: true })).toBeVisible();
   await expect(page.locator('.settings-recording-page h2')).toHaveText(['共享画面', '录像管理', '共享录制', '文件与画质', '即时回放']);
@@ -678,7 +680,7 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('lycansync.screen-share-quality')!).quality)).toBe('highFrameRate');
   await page.setViewportSize({ width: 1280, height: 820 });
   const shareTogglePositions = await page.locator('.settings-toggle input[type="checkbox"]:visible').evaluateAll(inputs => inputs.map(input => input.getBoundingClientRect().right));
-  expect(shareTogglePositions).toHaveLength(6);
+  expect(shareTogglePositions).toHaveLength(5);
   expect(Math.max(...shareTogglePositions) - Math.min(...shareTogglePositions)).toBeLessThan(1);
   await page.screenshot({ path: testInfo.outputPath('sharing-and-recording.png') });
   await page.locator('.recording-file-settings').screenshot({ path: testInfo.outputPath('recording-file-settings.png') });
@@ -975,7 +977,11 @@ test('关闭动态的心跳尚未返回就退出时，离线请求仍带上最�
 
 test('自己语音记录在卡片底部，资料预览仅在保存成功后更新，清空成功才显示默认签名', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.route('**/api/rtc/voice-time', route => route.fulfill({ json: { seconds: 460800 } }));
+  let voiceRequests = 0;
+  await page.route('**/api/rtc/voice-time', route => {
+    voiceRequests++;
+    return route.fulfill({ json: { seconds: 460800 } });
+  });
   let savedSignature = '';
   let failSave = false;
   let releaseSave: (() => void) | undefined;
@@ -996,6 +1002,7 @@ test('自己语音记录在卡片底部，资料预览仅在保存成功后更�
   const preview = page.getByRole('region', { name: '资料卡预览', exact: true });
   await expect(preview).toBeVisible();
   await expect(preview.locator('.profile-voice-time')).toHaveText('累计已与朋友开黑了 128 小时');
+  expect(voiceRequests).toBe(1);
   const statusSelect = page.getByRole('group', { name: '在线状态', exact: true });
   await expect(statusSelect.getByRole('button', { name: '在线', exact: true })).toHaveAttribute('aria-pressed', 'true');
   for (const mode of ['invisible', 'online']) {

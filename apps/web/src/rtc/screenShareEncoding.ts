@@ -47,7 +47,7 @@ export function screenShareEncodingLimits(id: ScreenShareQualityId, current: Scr
   const scale = Math.min(1, quality.width / dimensions.width, quality.height / dimensions.height);
   const thumbnailShortSide = Math.min(thumbnail.width, thumbnail.height);
   return {
-    degradationPreference: screenShareDegradationPreference(id),
+    degradationPreference: screenShareDegradationPreference(id, custom),
     encodings: current.encodings.map((encoding, index) => {
       if (current.encodings.length === 2 && index === 0) {
         return {

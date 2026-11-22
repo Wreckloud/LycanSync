@@ -47,7 +47,8 @@ const activitySeconds = ref<number | null>(null);
 const historyNow = ref(Date.now());
 const lastOnline = computed(() => props.status === 'OFFLINE' ? formatPresenceAgo(props.lastOnlineAt, historyNow.value) : '');
 const recentGameDescription = computed(() => formatRecentGame(props.recentGame, historyNow.value));
-const voiceDescription = computed(() => props.voiceSeconds == null ? '' : formatSharedVoiceTime(props.voiceSeconds, props.ownVoice));
+const voiceDescription = computed(() => props.voiceSeconds === 0 && !props.ownVoice ? '你们还没有一起开过黑'
+  : props.voiceSeconds == null ? '' : formatSharedVoiceTime(props.voiceSeconds, props.ownVoice));
 const activityDuration = computed(() => {
   const elapsed = activitySeconds.value;
   if (elapsed === null) return '';
@@ -224,7 +225,9 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
               <p v-if="recentGameDescription">{{ recentGameDescription }}</p>
             </div>
             <p v-if="voiceDescription && !voiceError" class="profile-voice-time"><Headphones :size="13" aria-hidden="true" />{{ voiceDescription }}</p>
-            <p v-else-if="voiceError" class="profile-voice-error" role="status">{{ voiceError }}</p>
+            <p v-else-if="voiceError" class="profile-voice-error" role="alert">{{ voiceError }}
+              <button v-if="!ownVoice" type="button" @click="emit('retry')">重试</button>
+            </p>
             <div v-else-if="placement === 'left' && !inline && voiceSeconds !== undefined" class="profile-voice-slot" aria-hidden="true" />
             <slot />
           </div>
@@ -254,7 +257,7 @@ defineExpose({ contains: (target: Node | null) => Boolean(surface.value?.contain
 .profile-popover-signature { min-height: 36px; color: var(--muted); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .profile-popover-signature p { margin: 0; height: 36px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .profile-popover-signature [role='alert'] { color: var(--danger); }
-.profile-popover-signature button { margin-left: 6px; padding: 0; border: 0; background: transparent; color: var(--accent); font-size: 12px; }
+.profile-popover-signature button, .profile-voice-error button { margin-left: 6px; padding: 0; border: 0; background: transparent; color: var(--accent); font-size: 12px; }
 .profile-popover-activity { padding-top: 8px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
 .profile-popover-history { display: grid; gap: 4px; color: var(--muted); font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
 .profile-popover-history p { margin: 0; }

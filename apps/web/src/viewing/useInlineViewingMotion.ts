@@ -49,7 +49,7 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
   function measure(element: HTMLElement) {
     if (activeElement !== element) return;
     const height = element.getBoundingClientRect().height;
-    if (height > 0 && !finishLeave) lastHeight = height;
+    if (!finishLeave && (height > 0 || element.childElementCount > 0)) lastHeight = height;
     // Teleport 在空容器挂载后才填入成员；首次有效尺寸到达时再展开。
     if (entering && height > 0) {
       entering = false;
@@ -66,7 +66,7 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
     const owner = element.ownerDocument.defaultView!;
     conversation = nextConversation;
     observer = new owner.ResizeObserver(() => measure(element));
-    observer.observe(element);
+    observer.observe(element, { box: 'border-box' });
     if (!preference) {
       preference = owner.matchMedia('(prefers-reduced-motion: reduce)');
       preference.addEventListener('change', reduceMotion);
@@ -115,6 +115,7 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
   watch([target, expanded], async ([element], [previous]) => {
     if (!element) { if (!finishLeave) clearDirectory(); return; }
     const bounds = element.getBoundingClientRect();
+    const followingPointer = resizing();
     cancel();
     const current = ++generation;
     await nextTick();
@@ -122,7 +123,7 @@ export function useInlineViewingMotion(target: Ref<HTMLElement | null>, expanded
     observe(element, element !== previous);
     const next = element.getBoundingClientRect();
     // 内部观看和成员条各自改变实际高度；外层只衔接顶边，避免两套高度动画相互追赶。
-    if (element === previous) animateSurface(element, bounds.height, next.height, undefined, bounds.top - next.top);
+    if (element === previous && !followingPointer) animateSurface(element, bounds.height, next.height, undefined, bounds.top - next.top);
     measure(element);
   }, { flush: 'pre' });
 

@@ -11,7 +11,7 @@ export const SCREEN_SHARE_QUALITIES = [
   { id: 'highFrameRate', guidance: '快速移动的画面更连贯。适合网络稳定、设备性能充足时分享竞速、射击等快节奏游戏。', label: '高帧率', description: '1080p · 120 FPS', width: 1920, height: 1080, fps: 120, bitrate: RECOMMENDED_BITRATES[1080][120] },
   { id: 'standard', guidance: '兼顾画面清晰度与流畅度。适合日常游戏、视频和应用演示。', label: '标准', description: '1080p · 60 FPS', width: 1920, height: 1080, fps: 60, bitrate: RECOMMENDED_BITRATES[1080][60] },
   { id: 'economy', guidance: '降低网络占用，细节和运动流畅度有所减少。适合网络有限时分享文档、聊天或变化较少的画面。', label: '节省流量', description: '720p · 30 FPS', width: 1280, height: 720, fps: 30, bitrate: RECOMMENDED_BITRATES[720][30] },
-  { id: 'custom', guidance: '适合进阶用户自行调整分辨率、帧率和码率，按画面内容、设备性能和网络情况选择。', label: '自定义', description: '自行选择分辨率和帧率', width: 1920, height: 1080, fps: 60, bitrate: RECOMMENDED_BITRATES[1080][60] },
+  { id: 'custom', guidance: '分享小字或绘画时可选 30 FPS，优先保留细节。60 和 120 FPS 优先保持流畅。', label: '自定义', description: '自行选择分辨率和帧率', width: 1920, height: 1080, fps: 60, bitrate: RECOMMENDED_BITRATES[1080][60] },
 ] as const;
 
 export type ScreenShareQualityId = typeof SCREEN_SHARE_QUALITIES[number]['id'];
@@ -60,10 +60,15 @@ export function screenShareVideoPreset(id: ScreenShareQualityId, custom = DEFAUL
   return new VideoPreset(quality.width, quality.height, quality.bitrate, quality.fps, 'medium');
 }
 
-export function screenShareDegradationPreference(id: ScreenShareQualityId): RTCDegradationPreference {
-  screenShareQuality(id);
+export function screenShareDegradationPreference(id: ScreenShareQualityId, custom?: CustomScreenShareQuality): RTCDegradationPreference {
+  const profile = screenShareQuality(id, custom);
+  if (id === 'custom' && profile.fps === 30) return 'maintain-resolution';
   if (id === 'economy') return 'balanced';
   return 'maintain-framerate';
+}
+
+export function screenShareContentHint(id: ScreenShareQualityId, custom?: CustomScreenShareQuality) {
+  return screenShareDegradationPreference(id, custom) === 'maintain-resolution' ? 'detail' : 'motion';
 }
 
 export function screenShareThumbnailPreset() {

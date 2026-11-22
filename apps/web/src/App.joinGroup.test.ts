@@ -26,7 +26,10 @@ function joining() {
     selectedGroupDetail: { value: null as { id: string } | null }, listening: { value: true },
     callSounds: { left: vi.fn(), joined: vi.fn() },
     recentGroups: { mark: vi.fn() },
-    rtc: { leave: vi.fn(async () => {}), join: vi.fn(async () => true) },
+    rtc: { leave: vi.fn(async () => {}), join: vi.fn(async (_id: string, onConnected: () => void) => {
+      onConnected();
+      return true;
+    }) },
     findGroup: vi.fn(async (id: string) => ({ id })), props: { user: { id: 'user' } },
     loadEntranceSound: vi.fn(() => null), refreshGroups: vi.fn(),
     joinGroup: undefined as unknown as (id: string) => Promise<void>,
@@ -34,6 +37,26 @@ function joining() {
   runInNewContext(script, context);
   return context;
 }
+
+it('房间连接后直接完成界面加入，旧麦克风任务结束不影响切房', async () => {
+  const context = joining();
+  const microphone = deferred<boolean>();
+  context.rtc.join.mockImplementationOnce(async (_id, onConnected) => {
+    onConnected();
+    return microphone.promise;
+  });
+  const firstJoin = context.joinGroup('first');
+  await vi.waitFor(() => expect(context.joinedGroupId.value).toBe('first'));
+  expect(context.joiningGroupId.value).toBeNull();
+  expect(context.callSounds.joined).toHaveBeenCalledOnce();
+
+  await context.joinGroup('next');
+  microphone.resolve(false);
+  await firstJoin;
+  expect(context.joinedGroupId.value).toBe('next');
+  expect(context.joinedGroupDetail.value).toEqual({ id: 'next' });
+  expect(context.callSounds.joined).toHaveBeenCalledTimes(2);
+});
 
 it.each(['success', 'failure'])('旧群成员查询迟到 %s 不覆盖新群资料或加入状态', async (result) => {
   const context = joining();

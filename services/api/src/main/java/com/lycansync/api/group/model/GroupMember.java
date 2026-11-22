@@ -13,6 +13,7 @@ public record GroupMember(
         UUID userId,
         String nickname,
         String avatar,
+        String signature,
         GroupRole role,
         Instant joinedAt
 ) {

@@ -8,11 +8,11 @@ import type { GroupDetail } from './group/groupApi';
 
 const script = parse(readFileSync(new URL('./App.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('App.ts', script, ts.ScriptTarget.Latest, true);
-const functionNames = ['openEditor', 'closeGroupEditor', 'createGroupFromDialog', 'applyGroupDetail', 'joinedFromCode', 'openGroupAction'];
+const functionNames = ['openEditor', 'closeGroupEditor', 'createGroupFromDialog', 'applyGroupDetail', 'joinedFromCode', 'openGroupAction', 'loadGroup'];
 const callbacks = sourceFile.statements.filter((statement) => {
   if (ts.isFunctionDeclaration(statement)) return Boolean(statement.name && functionNames.includes(statement.name.text));
   if (ts.isVariableStatement(statement)) return statement.declarationList.declarations
-    .some((declaration) => ['groupActionRequest', 'groupEditorGeneration'].includes(declaration.name.getText(sourceFile)));
+    .some((declaration) => declaration.name.getText(sourceFile) === 'groupEditorGeneration');
   const text = statement.getText(sourceFile);
   return text.startsWith('watch(selectedGroupId,') || (text.startsWith('onScopeDispose(') && text.includes('joinAttempt++'));
 }).map((statement) => statement.getText(sourceFile)).join('\n');
@@ -38,7 +38,8 @@ function setup() {
   const state = { selectedGroupId: ref<string | null>('one'), selectedGroupDetail: ref<GroupDetail | null>(detail('one')),
     joinedGroupId: ref<string | null>(null), joinedGroupDetail: ref<GroupDetail | null>(null), groups: ref([detail('one')]),
     editorOpen: ref(false), editingGroup: ref<GroupDetail | null>(null),
-    management: ref<{ group: GroupDetail; mode: string } | null>(null), groupError: ref(''),
+    management: ref<{ group: GroupDetail; mode: string } | null>(null), groupError: ref(''), groupLoading: ref(false),
+    accountCache: { revision: 0, read: vi.fn(async () => null), write: vi.fn() }, ApiRequestError: class extends Error {},
     viewingWindows: { value: { closeAll: vi.fn() } },
     findGroup: vi.fn((_id: string, _signal: AbortSignal): Promise<GroupDetail> => Promise.resolve(detail('one'))),
     createGroup: vi.fn(async () => detail('created')), updateGroup: vi.fn(async () => detail('one')),
@@ -48,9 +49,10 @@ function setup() {
   };
   // 执行 App 正式弹窗回调、切群监听及销毁清理；只替代 HTTP 和 RTC 边界。
   const app = scope.run(() => runInNewContext(`${compiled}\n({ ${functionNames.join(', ')} })`, {
-    ...state, AbortController, onScopeDispose, watch,
+    ...state, selectedGroup: { get value() { const group = state.groups.value.find(group => group.id === state.selectedGroupId.value);
+      if (group) { const { members, ...summary } = group; return summary; } } }, AbortController, onScopeDispose, watch,
   })) as {
-    openEditor(): void; closeGroupEditor(): void; createGroupFromDialog(name: string, description: string, avatar: string): Promise<void>;
+    loadGroup(id: string): Promise<void>; openEditor(): void; closeGroupEditor(): void; createGroupFromDialog(name: string, description: string, avatar: string): Promise<void>;
     openGroupAction(action: 'edit' | 'members' | 'invite'): Promise<void>; joinedFromCode(group: GroupDetail): void;
   };
   return { state, app, scope };
@@ -60,9 +62,12 @@ it('切群时取消旧管理请求，旧失败不覆盖新群错误', async () =
   const { state, app } = setup();
   const pending = deferred<GroupDetail>();
   state.findGroup.mockReturnValue(pending.promise);
+  state.selectedGroupDetail.value = null;
   const opening = app.openGroupAction('members');
   const signal = state.findGroup.mock.calls[0][1];
   state.selectedGroupId.value = 'two';
+  state.findGroup.mockResolvedValueOnce(detail('two'));
+  await app.loadGroup('two');
   state.groupError.value = '新群提示';
   await nextTick();
   expect(signal.aborted).toBe(true);
@@ -76,6 +81,7 @@ it('离开再返回同群，旧请求也不能重新弹出管理窗口', async (
   const { state, app } = setup();
   const pending = deferred<GroupDetail>();
   state.findGroup.mockReturnValue(pending.promise);
+  state.selectedGroupDetail.value = null;
   const opening = app.openGroupAction('members');
   state.selectedGroupId.value = 'two';
   await nextTick();
@@ -90,6 +96,7 @@ it('后一次菜单操作替代前一次，当前有效请求仍可打开编辑�
   const { state, app } = setup();
   const old = deferred<GroupDetail>();
   state.findGroup.mockReturnValueOnce(old.promise);
+  state.selectedGroupDetail.value = null;
   const opening = app.openGroupAction('members');
   await app.openGroupAction('edit');
   old.resolve(detail('one'));
@@ -103,6 +110,7 @@ it('打开创建窗口后，迟到的菜单结果不能打开第二个弹窗', a
   const { state, app } = setup();
   const pending = deferred<GroupDetail>();
   state.findGroup.mockReturnValue(pending.promise);
+  state.selectedGroupDetail.value = null;
   const opening = app.openGroupAction('members');
   app.openEditor();
   pending.resolve(detail('one'));
@@ -114,9 +122,11 @@ it('打开创建窗口后，迟到的菜单结果不能打开第二个弹窗', a
 
 it('当前有效菜单请求失败仍明确显示错误', async () => {
   const { state, app } = setup();
+  state.selectedGroupDetail.value = null;
   state.findGroup.mockRejectedValueOnce('unavailable');
   await app.openGroupAction('members');
-  expect(state.groupError.value).toBe('无法读取群组，请重试。');
+  expect(state.groupError.value).toBe('无法读取群组资料');
+  expect(state.management.value?.mode).toBe('members');
 });
 
 it('正常创建和凭码入群会选择该群、关闭弹窗，保持未加入语音', async () => {
@@ -201,6 +211,7 @@ it('销毁 App 取消菜单读取并使未完成创建失效', async () => {
   const saving = app.createGroupFromDialog('旧群', '', '');
   const menu = deferred<GroupDetail>();
   state.findGroup.mockReturnValueOnce(menu.promise);
+  state.selectedGroupDetail.value = null;
   const opening = app.openGroupAction('members');
   const signal = state.findGroup.mock.calls[0][1];
   scope.stop();
@@ -211,4 +222,12 @@ it('销毁 App 取消菜单读取并使未完成创建失效', async () => {
   expect(state.editorOpen.value).toBe(false);
   expect(state.management.value).toBeNull();
   expect(state.refreshGroups).not.toHaveBeenCalled();
+});
+
+it.each(['edit', 'invite', 'members'] as const)('%s 使用已加载的群资料同步打开', (mode) => {
+  const { app, state } = setup();
+  if (mode !== 'members') state.selectedGroupDetail.value = null;
+  void app.openGroupAction(mode);
+  expect(mode === 'edit' ? state.editorOpen.value : state.management.value?.mode === mode).toBe(true);
+  expect(state.findGroup).not.toHaveBeenCalled();
 });

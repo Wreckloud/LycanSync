@@ -63,6 +63,7 @@ vi.mock('./nativeScreenVideo', () => ({
     sessionId?: string;
     private startPromise?: Promise<never>;
     private stopPromise?: Promise<void>;
+    private stopFailed = false;
     needsFrameRateRecovery = false;
     constructor(private readonly desktop: Window['lycanDesktop'], private readonly options: { maxFps: number; resolution: { width: number; height: number };
       captureSettings?: ScreenSharePreferences;
@@ -96,12 +97,13 @@ vi.mock('./nativeScreenVideo', () => ({
       await rtcMocks.nativeConfigured(id, custom);
       this.needsFrameRateRecovery = false;
     }
-    stop() {
-      if (!this.stopPromise) {
+    stop(retryNativeStop = false) {
+      if (!this.stopPromise || (retryNativeStop && this.stopFailed)) {
+        this.stopFailed = false;
         this.stopPromise = (async () => {
           await this.startPromise?.catch(() => {});
           if (this.sessionId) await this.desktop!.stopNativeVideo(this.sessionId);
-        })();
+        })().catch(error => { this.stopFailed = true; throw error; });
       }
       return this.stopPromise;
     }
@@ -866,11 +868,13 @@ describe('room media lifecycle', () => {
       processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: true },
       events: { beforeMicrophoneChange: () => stopped.promise },
     }))!;
-    const joining = rtc.join('test-microphone');
+    const onConnected = vi.fn();
+    const joining = rtc.join('test-microphone', onConnected);
     await rtc.leave();
     stopped.resolve();
     expect(await joining).toBe(false);
     expect(rtcMocks.token).not.toHaveBeenCalled();
+    expect(onConnected).not.toHaveBeenCalled();
     expect(rtc.status.value).toBe('idle');
     scope.stop();
   });
@@ -1433,6 +1437,9 @@ describe('room media lifecycle', () => {
       expect(await rtc.changeScreenShareSource()).toBe(false);
       expect(rtcMocks.nativeStarts).toHaveBeenCalledOnce();
       expect(rtc.notice.value).toContain('发生问题');
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true, { sourceId: 'window:next:0', shareAudio: false });
+      expect(rtcMocks.nativeStarts).toHaveBeenCalledTimes(2);
+      expect(rtc.screenShareActive.value).toBe(true);
     } finally {
       await rtc.leave();
       scope.stop();
@@ -1819,7 +1826,7 @@ describe('room media lifecycle', () => {
     }
   });
 
-  it('returns false when default microphone startup belongs to a room replaced before it finishes', async () => {
+  it('announces a connected room before the microphone is ready and ignores completion after switching rooms', async () => {
     rtcMocks.token.mockResolvedValue({ serverUrl: 'wss://example.test', token: 'test-token' });
     const delayedMicrophone = deferred<never[]>();
     rtcMocks.createTracks.mockImplementationOnce(() => delayedMicrophone.promise)
@@ -1828,8 +1835,15 @@ describe('room media lifecycle', () => {
     const scope = effectScope();
     const rtc = scope.run(() => useRtcRoom())!;
     try {
-      const joiningA = rtc.join('join-room-a');
+      const onConnectedA = vi.fn(() => {
+        expect(rtc.status.value).toBe('connected');
+        expect(rtc.listening.value).toBe(true);
+        expect(rtc.microphoneEnabled.value).toBe(false);
+        expect(rtc.busySources.value).toContain(Track.Source.Microphone);
+      });
+      const joiningA = rtc.join('join-room-a', onConnectedA);
       await vi.waitFor(() => expect(rtcMocks.createTracks).toHaveBeenCalledOnce());
+      expect(onConnectedA).toHaveBeenCalledOnce();
       const roomA = rtcMocks.rooms[0] as { attributes: Array<Record<string, string>> };
       expect(roomA.attributes).toEqual([{ 'lycansync.listening': 'true' }]);
 
@@ -1840,6 +1854,7 @@ describe('room media lifecycle', () => {
 
       delayedMicrophone.resolve([] as never[]);
       expect(await joiningA).toBe(false);
+      expect(onConnectedA).toHaveBeenCalledOnce();
       expect(roomA.attributes).toEqual([{ 'lycansync.listening': 'true' }]);
       expect(roomB.attributes).toEqual([{ 'lycansync.listening': 'true' }]);
     } finally {

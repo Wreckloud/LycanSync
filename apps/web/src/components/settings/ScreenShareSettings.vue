@@ -3,7 +3,6 @@ import { computed, ref, watch, type UnwrapNestedRefs } from 'vue';
 import { Track } from 'livekit-client';
 import type { useRtcRoom } from '../../rtc/useRtcRoom';
 import { SCREEN_SHARE_QUALITIES, screenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from '../../rtc/screenShareQuality';
-import { readScreenShareAudioPreference, resolveNativeScreenAudioCapability, saveScreenShareAudioPreference, type NativeScreenAudioMode } from '../../rtc/nativeScreenAudioMode';
 import { readScreenSharePreferences, saveScreenSharePreferences } from '../../settings/screenSharePreferences';
 import SegmentedControl from '../SegmentedControl.vue';
 import ScreenShareCustomQuality from '../ScreenShareCustomQuality.vue';
@@ -20,15 +19,11 @@ const props = defineProps<{
   changeAudio: (enabled: boolean) => Promise<boolean>;
 }>();
 const busy = ref(false);
-const loadingAudio = ref(false);
-const defaultAudioMode = ref<NativeScreenAudioMode>('unavailable');
-const defaultShareAudio = ref(false);
 const hideCursor = ref(false);
 const qualityError = ref('');
 const audioError = ref('');
 const cursorError = ref('');
-const audioMode = computed(() => props.rtc.screenShareActive ? props.rtc.currentScreenShareAudioMode : defaultAudioMode.value);
-const shareAudio = computed(() => props.rtc.screenShareActive ? props.sharedAudio : defaultShareAudio.value);
+const audioMode = computed(() => props.rtc.currentScreenShareAudioMode);
 const shareBusy = computed(() => busy.value || props.rtc.screenShareQualityBusy || props.rtc.screenShareSourceBusy
   || props.rtc.busySources.includes(Track.Source.ScreenShare));
 const selectedQuality = computed(() => screenShareQuality(props.quality, props.customQuality));
@@ -45,18 +40,13 @@ async function selectQuality(quality: ScreenShareQualityId, custom = props.custo
 async function toggleAudio(event: Event) {
   const input = event.target as HTMLInputElement;
   const enabled = input.checked;
-  input.checked = shareAudio.value;
+  input.checked = props.sharedAudio;
   if (shareBusy.value || audioMode.value === 'unavailable') return;
   busy.value = true; audioError.value = '';
   try {
-    if (props.rtc.screenShareActive) {
-      if (!await props.changeAudio(enabled) && !props.rtc.notice) audioError.value = '共享声音未能切换，请重试。';
-    } else {
-      saveScreenShareAudioPreference(audioMode.value, enabled);
-      defaultShareAudio.value = enabled;
-    }
-  } catch { audioError.value = '共享声音设置未能保存，请重试。'; }
-  finally { busy.value = false; input.checked = shareAudio.value; }
+    if (!await props.changeAudio(enabled) && !props.rtc.notice) audioError.value = '共享声音未能切换，请重试。';
+  } catch { audioError.value = '共享声音未能切换，请重试。'; }
+  finally { busy.value = false; input.checked = props.sharedAudio; }
 }
 function toggleCursor(event: Event) {
   const input = event.target as HTMLInputElement;
@@ -67,29 +57,16 @@ function toggleCursor(event: Event) {
   } catch { cursorError.value = '光标设置未能保存，请重试。'; }
   input.checked = hideCursor.value;
 }
-watch(() => [props.active, props.rtc.screenShareActive], async ([active, sharing], _, onCleanup) => {
-  let cancelled = false;
-  onCleanup(() => { cancelled = true; });
+watch(() => [props.active, props.rtc.screenShareActive], ([active]) => {
   if (!active) return;
   cursorError.value = '';
   try { hideCursor.value = readScreenSharePreferences().hideCursor; }
   catch { cursorError.value = '无法读取光标设置，请重新选择。'; }
   audioError.value = '';
-  loadingAudio.value = false;
-  if (sharing) return;
-  loadingAudio.value = true;
-  try {
-    const state = await resolveNativeScreenAudioCapability(window.lycanDesktop!.getNativeMediaCapabilities());
-    if (cancelled) return;
-    defaultAudioMode.value = state.mode;
-    if (state.failed) throw new Error('audioCapabilitiesUnavailable');
-    defaultShareAudio.value = readScreenShareAudioPreference(state.mode);
-  } catch {
-    if (!cancelled) { defaultAudioMode.value = 'unavailable'; audioError.value = '无法读取共享声音设置，请重新打开此页面。'; }
-  } finally { if (!cancelled) loadingAudio.value = false; }
 }, { immediate: true });
 
 </script>
+
 
 <template>
   <section class="settings-section">
@@ -104,13 +81,13 @@ watch(() => [props.active, props.rtc.screenShareActive], async ([active, sharing
       </ExpandSection>
       <InlineFeedback :message="qualityError" />
       <div class="settings-toggle-group">
-        <div class="settings-toggle">
+        <div v-if="rtc.screenShareActive" class="settings-toggle">
           <span><strong>共享声音</strong><small>{{ rtc.screenShareAudioRestricted ? '远控画面不包含电脑声音，语音通话不受影响。'
             : audioMode === 'systemMix' ? '包含全部电脑声音，可能产生回声。'
-              : audioMode === 'process' ? '共享所选应用的声音，与录制声音分开控制。' : loadingAudio || audioError ? '' : '当前系统不支持共享声音。' }}</small></span>
-          <input type="checkbox" aria-label="共享声音" :checked="shareAudio" :disabled="shareBusy || loadingAudio || audioMode === 'unavailable' || rtc.screenShareAudioRestricted" @change="toggleAudio" />
+              : audioMode === 'process' ? '共享所选应用的声音，与录制声音分开控制。' : '当前系统不支持共享声音。' }}</small></span>
+          <input type="checkbox" aria-label="共享声音" :checked="sharedAudio" :disabled="shareBusy || audioMode === 'unavailable' || rtc.screenShareAudioRestricted" @change="toggleAudio" />
         </div>
-        <InlineFeedback :message="audioError" :pending="loadingAudio ? '正在读取声音设置…' : ''" />
+        <InlineFeedback :message="audioError" />
         <div class="settings-toggle">
           <span><strong>隐藏共享画面中的光标</strong><small>开启后，下次共享时朋友看不到你的指针。</small></span>
           <input type="checkbox" aria-label="隐藏共享画面中的光标" :checked="hideCursor" @change="toggleCursor" />

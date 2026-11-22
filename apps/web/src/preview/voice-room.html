@@ -1,0 +1,132 @@
+<meta charset="utf-8">
+<div id="voice-room-demo" class="viz-dotted-background" lang="zh-CN">
+  <div class="room">
+    <header><strong>哇哦</strong><small>语音成员 · 2</small></header>
+    <div class="members">
+      <article>
+        <div class="picture"><span class="avatar own">维</span></div>
+        <footer><strong>维克罗德（你）</strong><span id="own-flags"></span></footer>
+      </article>
+      <article id="friend-card">
+        <div class="picture">
+          <span class="quality" id="friend-quality" role="img"><i></i><i></i><i></i></span>
+          <span class="avatar friend">A</span>
+          <button class="screen" hidden aria-label="聚焦共享画面"><span class="canvas"><i></i></span><small>共享画面</small></button>
+        </div>
+        <footer><strong>Airthead</strong><span id="friend-flags"></span><button id="audio-menu" aria-expanded="false" aria-controls="audio-options">音量</button></footer>
+      </article>
+    </div>
+    <section id="audio-options" hidden aria-label="我听到的声音">
+      <label>成员语音 <input id="peer-level" type="range" min="0" max="200" value="100"><output>100%</output></label>
+      <label>共享声音 <input id="share-muted" type="checkbox" checked></label>
+    </section>
+    <div class="bar">
+      <div><b id="call-status">语音已连接</b> <span id="net">28 ms</span><small id="room-note">哇哦</small></div>
+      <div class="controls"><button id="mic"></button><button id="ears"></button><button id="my-share"></button></div>
+    </div>
+  </div>
+  <section class="choices" aria-label="模拟状态">
+    <label>对方状态<select id="peer"><option>正常</option><option>正在说话</option><option>已闭麦</option><option>已停止收听</option><option>状态未同步</option></select></label>
+    <label>对方画面<select id="picture"><option>仅语音</option><option>共享画面</option><option>画面和声音</option></select></label>
+    <label>对方网络<select id="peer-net"><option>良好</option><option>较弱</option><option>中断</option><option>未知</option></select></label>
+    <label>我的连接<select id="link"><option>已连接</option><option>延迟较高</option><option>暂无测量</option><option>准备麦克风</option><option>正在入房</option><option>正在重连</option></select></label>
+    <label>语音栏排布<select id="bar-layout"><option>延迟放在连接状态旁</option><option>延迟放在群名旁</option></select></label>
+  </section>
+</div>
+<style>
+#voice-room-demo { color-scheme:dark; font:14px/1.4 "Segoe UI","Microsoft YaHei",sans-serif; color:#e1e7ed; }
+#voice-room-demo * { box-sizing:border-box; }
+#voice-room-demo [hidden] { display:none!important; }
+#voice-room-demo .room { background:#10151b; border:1px solid #293440; border-radius:8px; overflow:hidden; }
+#voice-room-demo header,#voice-room-demo .bar { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 16px; }
+#voice-room-demo header { border-bottom:1px solid #293440; }
+#voice-room-demo small,#voice-room-demo footer span { color:#a0afbd; font-size:12px; }
+#voice-room-demo .members { display:grid; grid-template-columns:repeat(2,minmax(0,210px)); gap:9px; padding:16px; background:#151b22; }
+#voice-room-demo article { min-width:0; background:#11171d; border:1px solid #303b46; border-radius:5px; overflow:hidden; }
+#voice-room-demo .speaking { border-color:#5abc92; }
+#voice-room-demo .picture { position:relative; display:grid; place-items:center; aspect-ratio:16/9; background:#0c1117; }
+#voice-room-demo .avatar { width:44px; height:44px; border-radius:50%; display:grid; place-items:center; font-size:19px; }
+#voice-room-demo .own { background:#334d42; color:#dfefe3; }
+#voice-room-demo .friend { background:#394756; color:#ebedf1; }
+#voice-room-demo .quality i { display:inline-block; width:2px; height:4px; background:currentColor; margin-right:1px; }
+#voice-room-demo .quality i:nth-child(2) { height:7px; }
+#voice-room-demo .quality i:nth-child(3) { height:10px; }
+#voice-room-demo .quality { position:absolute; top:5px; left:6px; z-index:1; color:#bcc7d1; background:#11171ed9; border-radius:3px; padding:1px 4px; font-size:11px; }
+#voice-room-demo footer { display:flex; align-items:center; flex-wrap:wrap; gap:4px; min-height:35px; padding:4px 7px; }
+#voice-room-demo footer strong { min-width:0; flex:1; white-space:nowrap; font-size:13px; }
+#voice-room-demo button,#voice-room-demo select { background:#202830; color:#dce4eb; border:1px solid #35414d; border-radius:4px; padding:5px 8px; font:inherit; cursor:pointer; }
+#voice-room-demo button:hover { background:#2a3541; }
+#voice-room-demo button:focus-visible,#voice-room-demo select:focus-visible { outline:2px solid #78aaff; outline-offset:1px; }
+#voice-room-demo button[aria-pressed=true] { border-color:#749ac1; }
+#voice-room-demo button:disabled { opacity:.45; }
+#voice-room-demo .screen { position:absolute; inset:0; width:100%; display:grid; place-items:center; border:0; border-radius:0; background:#343a43; }
+#voice-room-demo .canvas { width:54%; height:70%; background:#cbd8cd; display:grid; place-items:center; border:4px solid #535c65; }
+#voice-room-demo .canvas i { width:45%; height:60%; border-radius:80% 10% 75% 12%; background:#688a73; }
+#voice-room-demo .screen small { position:absolute; bottom:3px; right:6px; color:#fff; }
+#voice-room-demo .focused { grid-column:1/-1; }
+#voice-room-demo .focused .picture { max-height:175px; aspect-ratio:auto; height:175px; }
+#voice-room-demo #audio-options { padding:9px 16px; background:#19212a; }
+#voice-room-demo #audio-options label { display:flex; align-items:center; gap:8px; min-height:30px; }
+#voice-room-demo output { min-width:4ch; }
+#voice-room-demo .bar { border-top:1px solid #293440; flex-wrap:wrap; }
+#voice-room-demo .bar b { color:#66c497; }
+#voice-room-demo #net { background:transparent; border:0; color:#a1adba; font-size:12px; font-variant-numeric:tabular-nums; }
+#voice-room-demo #room-note { display:block; }
+#voice-room-demo .controls,#voice-room-demo .choices { display:flex; flex-wrap:wrap; gap:6px; }
+#voice-room-demo .choices { margin-top:10px; padding:9px; background:#182028; border-radius:5px; gap:8px 12px; }
+#voice-room-demo .choices label { color:#b3bfca; font-size:12px; }
+#voice-room-demo select { display:block; margin-top:4px; }
+@media(max-width:450px){#voice-room-demo .members{padding:8px}#voice-room-demo header,#voice-room-demo .bar{padding:9px}#voice-room-demo footer strong{flex-basis:100%}}
+</style>
+<script>
+(() => {
+  const root = document.getElementById('voice-room-demo');
+  const get = id => root.querySelector('#' + id);
+  const state = { microphone:true, listening:true, sharing:false, focused:false };
+  function togglePanel(trigger, panel) {
+    const open = get(panel).hidden;
+    get(panel).hidden = !open;
+    get(trigger).setAttribute('aria-expanded', String(open));
+  }
+  function render() {
+    const peer = get('peer').value, picture = get('picture').value, link = get('link').value;
+    const waiting = link === '正在入房' || link === '正在重连';
+    const quality = get('peer-net').value;
+    const lit = {良好:2,较弱:1,中断:0,未知:0}[quality];
+    Array.from(get('friend-quality').children).forEach((bar, i) => bar.style.opacity = i < lit ? '1' : '.45');
+    get('friend-quality').setAttribute('aria-label', '对方网络' + quality);
+    get('friend-flags').textContent = peer === '正常' || peer === '状态未同步' ? '' : peer;
+    get('friend-card').classList.toggle('speaking', peer === '正在说话');
+    if (picture === '仅语音') state.focused = false;
+    get('friend-card').classList.toggle('focused', state.focused);
+    const screen = root.querySelector('.screen');
+    screen.hidden = picture === '仅语音';
+    screen.setAttribute('aria-label', state.focused ? '收起共享画面' : '聚焦共享画面');
+    get('friend-card').querySelector('.avatar').hidden = !screen.hidden;
+    get('audio-menu').textContent = get('peer-level').value === '0' ? '已静音' : '音量';
+    get('share-muted').disabled = picture !== '画面和声音' || !state.listening;
+    get('peer-level').disabled = !state.listening;
+    root.querySelector('output').value = get('peer-level').value + '%';
+    get('call-status').textContent = waiting ? link + '…' : '语音已连接';
+    const ms = waiting || link === '暂无测量' ? '—' : link === '延迟较高' ? '168 ms' : '28 ms';
+    get('net').textContent = (ms === '—' ? '·' : ms === '168 ms' ? '▂' : '▂▃▅') + '　' + ms;
+    get('call-status').after(get('net'));
+    get('room-note').textContent = link === '准备麦克风' ? '正在准备麦克风…' : '哇哦';
+    if (get('bar-layout').selectedIndex) get('room-note').append('　', get('net'));
+    else get('call-status').after(get('net'));
+    get('own-flags').textContent = [state.microphone ? '' : '闭麦', state.listening ? '' : '停听',state.sharing ? '共享中' : ''].filter(Boolean).join(' · ');
+    for (const [id, key, on, off] of [['mic','microphone','闭麦','开麦'],['ears','listening','停止收听','恢复收听'],['my-share','sharing','停止共享','共享画面']]) {
+      const button = get(id);
+      button.textContent = state[key] ? on : off;
+      button.disabled = waiting || (id === 'mic' && (!state.listening || link === '准备麦克风'));
+    }
+  }
+  root.addEventListener('input',render);
+  get('audio-menu').onclick = () => togglePanel('audio-menu','audio-options');
+  get('mic').onclick = () => { state.microphone = !state.microphone; render(); };
+  get('ears').onclick = () => { state.listening = !state.listening; render(); };
+  get('my-share').onclick = () => { state.sharing = !state.sharing; render(); };
+  root.querySelector('.screen').onclick = () => { state.focused = !state.focused; render(); };
+  render();
+})();
+</script>

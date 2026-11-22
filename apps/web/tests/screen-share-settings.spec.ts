@@ -85,20 +85,7 @@ test('共享中切换失败保持实际状态，重试可恢复，重复点击�
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
-test('应用声音偏好不会扩展为全部电脑声音，读取失败明确提示', async ({ page }) => {
-  const audio = page.getByRole('checkbox', { name: '共享声音', exact: true });
-  await expect(audio).toBeChecked();
-  await audio.uncheck();
-  await audio.check();
-  await page.evaluate(() => { window.shareSettingsTest.active = false; });
-  await page.evaluate(() => { window.shareSettingsTest.capability = 'windowsSystemMixLoopback'; window.shareSettingsTest.active = true; });
-  await expect(audio).not.toBeChecked();
-  await expect(page.getByText('包含全部电脑声音，可能产生回声。')).toBeVisible();
-  await audio.check();
-  expect(await page.evaluate(() => localStorage.getItem('lycansync.screen-share-audio.systemMix'))).toBe('true');
-  await page.evaluate(() => { window.shareSettingsTest.active = false; });
-  await page.evaluate(() => { window.shareSettingsTest.capability = 'error'; window.shareSettingsTest.active = true; });
-  await expect(audio).toBeDisabled();
-  await expect(page.getByRole('alert')).toContainText('无法读取共享声音设置');
-  await expect(page.getByText('当前系统不支持共享声音。')).toHaveCount(0);
+test('未开始共享时不提供跨会话的声音开关', async ({ page }) => {
+  await expect(page.getByRole('checkbox', { name: '共享声音', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('checkbox', { name: /隐藏共享画面中的光标/ })).toBeVisible();
 });

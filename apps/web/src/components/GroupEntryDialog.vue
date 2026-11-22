@@ -4,13 +4,13 @@ import { ArrowRight, Pencil, UsersRound } from '@lucide/vue';
 import AvatarCropDialog from './AvatarCropDialog.vue';
 import DialogTransition from './DialogTransition.vue';
 import InlineFeedback from './InlineFeedback.vue';
-import { joinGroupByCode, type GroupDetail } from '../group/groupApi';
+import { joinGroupByCode, type GroupDetail, type GroupSummary } from '../group/groupApi';
 import { useAvatarCrop } from '../profile/useAvatarCrop';
 import { useBackdropDismiss } from './useBackdropDismiss';
 import { keepDialogFocus } from './dialogFocus';
 import { motionDurationMs } from '../styles/motion';
 
-const props = defineProps<{ createGroup: (name: string, description: string, avatar: string) => Promise<void>; group?: GroupDetail }>();
+const props = defineProps<{ createGroup: (name: string, description: string, avatar: string) => Promise<void>; group?: GroupSummary }>();
 const emit = defineEmits<{ close: []; joined: [group: GroupDetail] }>();
 const mode = ref<'create' | 'join'>('create');
 let modeAnimation: Animation | undefined;

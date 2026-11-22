@@ -541,6 +541,7 @@ describe('NativeScreenVideoSession', () => {
 
   it('stops local resources immediately and keeps a rejected native stop visible on repeated calls', async () => {
     const target = installWindowMessageTarget();
+    const removeListener = vi.spyOn(target, 'removeEventListener');
     const nativeStop = deferred<{ changed: boolean }>();
     const stopNativeVideo = vi.fn(() => nativeStop.promise);
     const generator = {
@@ -575,14 +576,22 @@ describe('NativeScreenVideoSession', () => {
     const lateFrame = createFrame();
     dispatchFrame(target, lateFrame, 'stop-fails');
     expect(lateFrame.close).toHaveBeenCalledOnce();
+    const nextFrame = createFrame();
+    dispatchFrame(target, nextFrame, 'next-session');
+    expect(nextFrame.close).not.toHaveBeenCalled();
 
     nativeStop.reject(new Error('videoStopFailed'));
     await expect(stopping).rejects.toThrow('videoStopFailed');
+    expect(removeListener).toHaveBeenCalledWith('message', expect.any(Function));
     await expect(session.stop()).rejects.toThrow('videoStopFailed');
     expect(stopNativeVideo).toHaveBeenCalledOnce();
-    const laterFrame = createFrame();
-    dispatchFrame(target, laterFrame, 'stop-fails');
-    expect(laterFrame.close).toHaveBeenCalledOnce();
+    stopNativeVideo.mockResolvedValueOnce({ changed: true });
+    await Promise.all([session.stop(true), session.stop(true)]);
+    expect(stopNativeVideo).toHaveBeenCalledTimes(2);
+    expect(generator.stop).toHaveBeenCalledOnce();
+    expect(track.stop).toHaveBeenCalledOnce();
+    dispatchFrame(target, nextFrame, 'next-session');
+    expect(nextFrame.close).not.toHaveBeenCalled();
   });
 
   it.each([30, 60, 120])('目标 %s FPS 只按写入背压丢帧，不在页面重复限帧', async (maxFps) => {

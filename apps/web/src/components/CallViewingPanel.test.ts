@@ -21,7 +21,7 @@ function fixture(width = 600, height = 300) {
   const view = reactive({ shares: [], displayed: [] as { key: number }[], mode: 'grid', focused: 1, expanded: false, membersVisible: true, height: 240, collapse: vi.fn(), grid: vi.fn(), select: vi.fn(() => true) });
   const context = { withDefaults: (props: object, defaults: object) => ({ ...defaults, ...props }), defineProps: () => ({ view }), defineEmits: () => emit, defineExpose: vi.fn(),
     useViewingSize: () => ({ width: ref(width), height: ref(height), maximumHeight: ref(420), resizing: ref(false) }),
-    computed, ref, watch, nextTick, onScopeDispose, setInterval, clearInterval, onMounted: () => {}, VideoQuality, performance, motionDurationMs,
+    computed, ref, watch, nextTick, onScopeDispose, setInterval, clearInterval, setTimeout, clearTimeout, onMounted: () => {}, VideoQuality, performance, motionDurationMs,
     api: null as unknown as { panel: { value: unknown }; toggleExpanded(): void; expandMembers(): void;
       sizing: { value: { rows: number } }; tileStyle(share: { key: number }): { width: string; height: string };
       videoSize(key: number, size: { width: number; height: number }): void;

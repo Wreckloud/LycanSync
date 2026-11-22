@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, ref, shallowRef, watch } from 'vue';
+import { computed, onMounted, onScopeDispose, ref, watch } from 'vue';
+import ConnectionSignal from './ConnectionSignal.vue';
 import { Track, type Participant } from 'livekit-client';
 import type { MediaDiagnosticsSnapshot } from '../diagnostics/mediaDiagnostics';
-import { readVideoLayers, type VideoLayerStats } from '../rtc/mediaStats';
+import { readTransportFeedback, readVideoLayers, type VideoLayerStats } from '../rtc/mediaStats';
 
 const props = defineProps<{ participant: Participant; revision: number; active: boolean; local: boolean;
-  snapshot?: MediaDiagnosticsSnapshot | null }>();
+  voiceTrack?: Track; snapshot?: MediaDiagnosticsSnapshot | null }>();
 const indicator = ref<HTMLElement | null>(null);
-const layer = shallowRef<VideoLayerStats>();
 const latency = ref<number>();
 const visible = ref(false);
 let observer: IntersectionObserver | undefined;
@@ -28,27 +28,20 @@ onScopeDispose(() => {
   observer?.disconnect();
   page?.removeEventListener('visibilitychange', visibilityChanged);
 });
-const signal = computed(() => {
+const quality = computed(() => {
   void props.revision;
-  return ({ excellent: 3, good: 2, poor: 1, lost: 0, unknown: 0 })[props.participant.connectionQuality] ?? 0;
-});
-const title = computed(() => {
-  const sample = layer.value;
-  const loss = props.local ? sample?.receiverReportedLossPercent : sample?.receiveLossPercent;
-  return [`连接质量：${['未知或中断','较弱','良好','优秀'][signal.value]}`,
-    `到媒体服务器的往返延迟：${latency.value === undefined ? '—' : latency.value + ' ms'}`,
-    `${props.local ? '发送' : '接收'}：${sample?.size ?? '—'} · ${sample?.fps ?? '—'} FPS · ${sample?.bitrateKbps ?? '—'} kbps`,
-    `丢包：${loss == null ? '—' : loss + '%'}`].join('\n');
+  return props.participant.connectionQuality;
 });
 watch(() => {
   void props.revision;
-  return props.active && visible.value ? props.participant.getTrackPublication(Track.Source.ScreenShare)?.track : undefined;
+  if (!props.active || !visible.value) return;
+  return props.participant.getTrackPublication(Track.Source.ScreenShare)?.track ?? props.voiceTrack;
 }, (track, _, cleanup) => {
   latency.value = undefined;
-  layer.value = undefined;
   if (!track) return;
   const previous: Parameters<typeof readVideoLayers>[2] = new Map();
-  const trackId = track.mediaStreamTrack.id;
+  const trackId = track.mediaStreamTrack?.id;
+  let audioFeedback: ReturnType<typeof readTransportFeedback> | undefined;
   let timer: ReturnType<typeof setTimeout>;
   let stopped = false;
   let lastLatencyAt = 0;
@@ -63,16 +56,27 @@ watch(() => {
       if (stream) layers = stream.layers;
       else {
         const report = await track?.getRTCStatsReport?.();
-        if (report) layers = readVideoLayers(report, props.local ? 'outbound-rtp' : 'inbound-rtp', previous, trackId);
+        if (stopped) return;
+        if (report && track && track === props.voiceTrack) {
+          const direction = track.isLocal ? 'outbound-rtp' : 'inbound-rtp';
+          report.forEach(stat => {
+            if (stat.type !== direction || (stat.kind ?? stat.mediaType) !== 'audio') return;
+            audioFeedback = readTransportFeedback(report, stat.transportId, audioFeedback);
+            if (audioFeedback.milliseconds !== null) {
+              latency.value = Math.round(audioFeedback.milliseconds);
+              lastLatencyAt = Date.now();
+            }
+          });
+        } else if (report) layers = readVideoLayers(report, props.local ? 'outbound-rtp' : 'inbound-rtp', previous, trackId);
       }
       if (stopped) return;
-      layer.value = layers.find(item => (item.bitrateKbps ?? 0) > 0) ?? layers[0];
-      if (layer.value?.transportRoundTripMs != null) {
-        latency.value = layer.value.transportRoundTripMs;
+      const layer = layers.find(item => (item.bitrateKbps ?? 0) > 0) ?? layers[0];
+      if (layer?.transportRoundTripMs != null) {
+        latency.value = layer.transportRoundTripMs;
         lastLatencyAt = stream ? time : Date.now();
       }
     } catch {
-      if (!stopped) layer.value = undefined;
+      // 暂留最近一次有效采样，超过有效期时统一清空。
     } finally {
       if (!stopped) {
         if (Date.now() - lastLatencyAt > 12000) latency.value = undefined;
@@ -85,18 +89,12 @@ watch(() => {
 </script>
 
 <template>
-  <span ref="indicator" class="viewing-connection" :title="title" :aria-label="title" tabindex="0">
-    <span class="signal-bars" aria-hidden="true"><i v-for="n in 3" :key="n" :class="{ lit: n <= signal }" /></span>
+  <span ref="indicator" class="viewing-connection">
+    <ConnectionSignal :quality="quality" />
     <span class="latency">{{ latency === undefined ? '—' : latency + ' ms' }}</span>
   </span>
 </template>
 
 <style scoped>
-.viewing-connection { flex: none; display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; }
-.signal-bars { height: 11px; display: inline-flex; align-items: flex-end; gap: 2px; }
-.signal-bars i { width: 3px; height: 4px; background: var(--muted); opacity: .45; }
-.signal-bars i:nth-child(2) { height: 7px; }
-.signal-bars i:nth-child(3) { height: 10px; }
-.signal-bars .lit { background: var(--success, #48bd87); opacity: 1; }
 .latency { width: 7ch; font-variant-numeric: tabular-nums; }
 </style>

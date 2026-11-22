@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onScopeDispose, provide, reactive, ref, 
 import { ACCOUNT_CACHE, clearOtherAccountContentCaches, createAccountCache } from './cache/localCache';
 import { useNotice } from './feedback/useNotice';
 import { useInitialLoading } from './profile/useInitialLoading';
+import { provideOwnVoiceTime } from './profile/useOwnVoiceTime';
 import { ArrowLeft, AudioLines, Copy, CornerUpLeft, Headphones,
   LoaderCircle, LogOut, Minus, Plus, RadioTower,
   MousePointer2, Settings, Square, UserRound, Volume2, X } from '@lucide/vue';
@@ -13,11 +14,13 @@ import PersonalStatusCard from './components/PersonalStatusCard.vue';
 import RemoteAudio from './components/RemoteAudio.vue';
 import IconButton from './components/IconButton.vue';
 import HoverHint from './components/HoverHint.vue';
+import { useLoadingHint } from './components/useLoadingHint';
 import SettingsView from './components/SettingsView.vue';
 import AppNotice from './components/AppNotice.vue';
 import GroupEntryDialog from './components/GroupEntryDialog.vue';
 import DialogTransition from './components/DialogTransition.vue';
 import GroupMenu from './components/GroupMenu.vue';
+import ViewingConnectionStatus from './components/ViewingConnectionStatus.vue';
 import GroupManagementDialog from './components/GroupManagementDialog.vue';
 import { CHAT_TRANSFERS, createChatTransfers } from './chat/useChatTransfers';
 import GroupChat from './components/GroupChat.vue';
@@ -36,7 +39,6 @@ import RecordingShareDialog from './components/settings/RecordingShareDialog.vue
 import { useRecordingShare, RECORDING_SHARE } from './recording/useRecordingShare';
 import { useRecording } from './recording/useRecording';
 import type { ScreenShareQualityId } from './rtc/screenShareQuality';
-import { saveScreenShareAudioPreference } from './rtc/nativeScreenAudioMode';
 import { useScreenShareSelection } from './rtc/useScreenShareSelection';
 import { useRoomSummary } from './rtc/useRoomSummary';
 import { requestRoomOccupancies } from './rtc/roomSummaryApi';
@@ -75,6 +77,7 @@ void clearOtherAccountContentCaches(props.user.id, cacheCleanup.signal).catch(()
 });
 onScopeDispose(() => { accountCache.dispose(); cacheCleanup.abort(); });
 provide(ACCOUNT_CACHE, accountCache);
+provideOwnVoiceTime();
 
 const STATUS_LABELS = { idle: '未加入语音', joining: '正在连接语音', connected: '语音已连接', reconnecting: '正在重连' };
 const CALLBAR_EXIT_DURATION_MS = 180;
@@ -129,11 +132,7 @@ async function changeScreenShareQuality(quality: ScreenShareQualityId,
   return applied;
 }
 async function changeScreenShareAudio(enabled: boolean) {
-  const mode = rtc.currentScreenShareAudioMode;
-  if (!await rtc.setScreenShareAudioEnabled(enabled)) return false;
-  try { saveScreenShareAudioPreference(mode, enabled); }
-  catch { viewerNotice.value = '本次声音设置已生效，但未能保存。'; }
-  return true;
+  return rtc.setScreenShareAudioEnabled(enabled);
 }
 const rtc = reactive(useRtcRoom({
   inputDeviceId: audioPreferences.inputDeviceId.value,
@@ -213,7 +212,7 @@ onScopeDispose(() => {
   joinAttempt++;
   viewingWindows.value?.closeAll();
   removeCloseListener?.();
-  closeGroupEditor(); groupActionRequest?.abort();
+  closeGroupEditor(); management.value = null;
   detailRequest?.abort(); listRequest?.abort(); void rtc.leave();
 });
 watch(() => rtc.status, (status) => { if (status === 'idle') selectCaptureSource(null); });
@@ -243,11 +242,10 @@ const initialLoading = useInitialLoading(() => initialGroupsLoaded.value && !gro
   (stage, durationMs) => desktop?.reportStartupTiming?.(stage, durationMs));
 watch(initialLoading, loading => { if (!loading) emit('ready'); }, { flush: 'sync' });
 const editorOpen = ref(false);
-const editingGroup = ref<GroupDetail | null>(null);
-const management = ref<{ group: GroupDetail; mode: 'invite' | 'members' | 'transfer' | 'leave' | 'dissolve' } | null>(null);
+const editingGroup = ref<GroupSummary | null>(null);
+const management = ref<{ group: GroupSummary & Partial<Pick<GroupDetail, 'members'>>; mode: 'invite' | 'members' | 'transfer' | 'leave' | 'dissolve' } | null>(null);
 let detailRequest: AbortController | null = null;
 let listRequest: AbortController | null = null;
-let groupActionRequest: AbortController | null = null;
 let groupEditorGeneration = 0;
 const { groupPresences, presenceConnectionLost, refreshGroupPresence } = useGroupPresences(selectedGroupId,
   () => selectedGroupDetail.value, loadGroup);
@@ -311,6 +309,7 @@ async function loadGroup(groupId: string, keepExisting = false) {
     if (valid && !request.signal.aborted
         && selectedGroupId.value === groupId && groupLoading.value && !selectedGroupDetail.value) {
       selectedGroupDetail.value = { ...cached, ...selectedGroup.value, members: cached.members };
+      if (management.value?.group.id === groupId) management.value.group = selectedGroupDetail.value;
     }
   });
   try {
@@ -417,7 +416,7 @@ onMounted(() => {
     }
   }, ROOM_OCCUPANCY_REFRESH_INTERVAL_MS);
 });
-watch(selectedGroupId, () => { groupActionRequest?.abort(); });
+watch(selectedGroupId, () => { management.value = null; });
 function handlePresenceNetworkRestored() {
   void updateOwnPresenceStatus();
   void sendHeartbeat();
@@ -441,7 +440,7 @@ onScopeDispose(() => {
 });
 
 function openEditor() {
-  groupActionRequest?.abort();
+  management.value = null;
   groupEditorGeneration++;
   editingGroup.value = null;
   editorOpen.value = true;
@@ -490,21 +489,20 @@ function joinedFromCode(detail: GroupDetail) {
 async function openGroupAction(action: 'edit' | 'invite' | 'members' | 'transfer' | 'leave' | 'dissolve') {
   const groupId = selectedGroupId.value;
   if (!groupId) return;
-  groupActionRequest?.abort();
-  const request = new AbortController();
-  groupActionRequest = request;
-  try {
-    const detail = await findGroup(groupId, request.signal);
-    if (request.signal.aborted || selectedGroupId.value !== groupId) return;
-    applyGroupDetail(detail);
-    if (action === 'edit') { groupEditorGeneration++; editingGroup.value = detail; editorOpen.value = true; }
-    else management.value = { group: detail, mode: action };
-  } catch (exception) {
-    if (!request.signal.aborted && selectedGroupId.value === groupId) {
-      groupError.value = exception instanceof Error ? exception.message : '无法读取群组，请重试。';
-    }
-  } finally {
-    if (groupActionRequest === request) groupActionRequest = null;
+  management.value = null;
+  const summary = selectedGroup.value;
+  if (!summary || summary.id !== groupId) return;
+  if (action === 'edit') {
+    groupEditorGeneration++;
+    editingGroup.value = summary;
+    editorOpen.value = true;
+    return;
+  }
+  const detail = selectedGroupDetail.value;
+  management.value = { group: detail?.id === groupId ? { ...detail, ...summary } : summary, mode: action };
+  // 首次打开复用当前群的成员请求，窗口可在请求完成前关闭或搜索。
+  if ((action === 'members' || action === 'transfer') && !management.value.group.members && !groupLoading.value) {
+    await loadGroup(groupId);
   }
 }
 
@@ -704,6 +702,9 @@ const localMicrophoneLevel = computed(() => {
 const localInputLevel = computed(() => normalizeVoiceLevel(localMicrophoneLevel.value));
 const localInputLevelPercent = computed(() => Math.round(localInputLevel.value * 100));
 const connected = computed(() => rtc.status === 'connected');
+const microphoneBusy = computed(() => rtc.busySources.includes(Track.Source.Microphone));
+const preparingMicrophone = useLoadingHint(() => connected.value && microphoneBusy.value
+  && rtc.microphoneIntent && !rtc.microphoneEnabled);
 watch(() => connected.value ? rtc.room : null, (room, _, onCleanup) => {
   if (!desktop || !room) return;
   // 避开入房建链与声音初始化；这里只准备图形环境，不创建采集来源。
@@ -774,6 +775,13 @@ const previewParticipantName = (identity: string, displayName: string) =>
   selectedGroupDetail.value?.members.find((member) => `user-${member.userId}` === identity)?.nickname ?? displayName;
 const previewParticipantAvatar = (identity: string) =>
   selectedGroupDetail.value?.members.find((member) => `user-${member.userId}` === identity)?.avatar ?? '';
+const callbarVoiceTrack = computed(() => {
+  void rtc.revision;
+  for (const participant of rtc.participants) {
+    const track = participant.getTrackPublication(Track.Source.Microphone)?.track;
+    if (track) return track;
+  }
+});
 const groupParticipants = computed(() => showingJoinedGroup.value ? rtc.participants : []);
 const activeScreenShareCount = computed(() => {
   void rtc.revision;
@@ -857,10 +865,10 @@ async function joinGroup(groupId: string) {
   }
   if (attempt !== joinAttempt) return;
 
-  const joined = await rtc.join(groupId);
-  if (attempt !== joinAttempt) return;
-  if (joined) {
+  await rtc.join(groupId, () => {
+    if (attempt !== joinAttempt) return;
     joinedGroupId.value = groupId;
+    joiningGroupId.value = null;
     recentGroups.mark(groupId);
     if (locallyLeftVoiceGroupId.value === groupId) locallyLeftVoiceGroupId.value = null;
     void callSounds.joined();
@@ -870,8 +878,8 @@ async function joinGroup(groupId: string) {
       catch { viewerNotice.value = '本机保存的入场音效已损坏，请在“音效”设置中重新选择。'; }
     }
     void refreshGroups();
-  }
-  joiningGroupId.value = null;
+  });
+  if (attempt === joinAttempt) joiningGroupId.value = null;
 }
 
 function requestJoin(groupId: string) {
@@ -1044,8 +1052,9 @@ const diagnosticReport = useDiagnosticReport({
 });
 
 function participantListening(participant: Participant) {
-  return participant === localParticipant.value ? listening.value
-    : participant.attributes['lycansync.listening'] !== 'false';
+  if (participant === localParticipant.value) return listening.value;
+  const state = participant.attributes['lycansync.listening'];
+  return state === 'true' ? true : state === 'false' ? false : null;
 }
 
 </script>
@@ -1126,7 +1135,8 @@ function participantListening(participant: Participant) {
       </nav>
       <main class="group-main">
         <div v-if="selectedGroup" class="group-heading-content">
-        <div class="group-header-region" :aria-hidden="showingJoinedGroup && viewingWindows?.inlineExpanded || undefined" :inert="showingJoinedGroup && viewingWindows?.inlineExpanded">
+        <div class="group-header-region" :class="{ 'is-drag-revealed': showingJoinedGroup && viewingWindows?.headerReveal }"
+          :style="showingJoinedGroup && viewingWindows?.headerReveal ? { opacity: viewingWindows.headerReveal } : undefined" :aria-hidden="showingJoinedGroup && viewingWindows?.inlineExpanded || undefined" :inert="showingJoinedGroup && viewingWindows?.inlineExpanded">
           <div class="group-header-clip">
             <header class="group-header">
               <div :key="selectedGroup.id" class="group-copy group-content-ready">
@@ -1186,14 +1196,19 @@ function participantListening(participant: Participant) {
                   <footer class="callbar">
                     <div class="call-state" role="status">
                       <RadioTower v-if="connected || rtc.status === 'reconnecting'" :size="17" /><Headphones v-else :size="17" />
-                      <span><strong>{{ callbarStatus }}</strong>
+                      <span><span class="call-state-summary"><strong>{{ callbarStatus }}</strong>
+                        <ViewingConnectionStatus v-if="connected && localParticipant && !callbarLeaving" :participant="localParticipant"
+                          local :revision="rtc.revision" :active="mainWindowVisible && !settingsPresented"
+                          :voice-track="callbarVoiceTrack" :snapshot="diagnosticReport.latest.value" />
+                      </span>
                         <small v-if="!callbarLeaving && connected && rtc.screenShareStarting">正在启动屏幕共享…</small>
+                        <small v-else-if="!callbarLeaving && preparingMicrophone">正在准备麦克风…</small>
                         <small v-else>{{ callbarGroup?.name }}{{ joinedGroup && selectedGroupId !== joinedGroup.id && selectedGroup ? ' · 正在浏览 ' + selectedGroup.name : '' }}</small>
                       </span>
                     </div>
                     <IconButton v-if="joinedGroup && selectedGroupId !== joinedGroup.id" label="返回当前通话群组" @click="previewGroup(joinedGroup.id)"><CornerUpLeft :size="17" /></IconButton>
                     <CallControls :connected="connected" :desktop="Boolean(desktop)"
-                      :microphone-enabled="rtc.microphoneEnabled" :microphone-intent="rtc.microphoneIntent" :microphone-busy="rtc.busySources.includes(Track.Source.Microphone)"
+                      :microphone-enabled="rtc.microphoneEnabled" :microphone-intent="rtc.microphoneIntent" :microphone-busy="microphoneBusy"
                       :microphone-level="localMicrophoneLevel" :input-level-percent="localInputLevelPercent"
                       :listening="listening" :input-gain="inputGain" :output-volume="outputVolume"
                       :member-volumes="memberVolumes" @member-volume="updateParticipantVolume"
@@ -1257,6 +1272,7 @@ function participantListening(participant: Participant) {
     </DialogTransition>
     <DialogTransition>
     <GroupManagementDialog v-if="management" :group="management.group" :mode="management.mode" :user-id="user.id"
+      :members-error="groupError" @retry-members="retryGroupSync"
       @notice="showAppNotice($event, 'group', 'success')" @updated="applyGroupDetail" @removed="removedFromGroup" @close="management = null" />
     </DialogTransition>
     </div>
@@ -1303,7 +1319,7 @@ function participantListening(participant: Participant) {
       @notice="viewerNotice = $event" @toggle-share-audio="toggleSharedAudio" @request-control="requestParticipantControl">
       <template #control="{ identity }">
         <button v-if="identity !== localParticipant?.identity && remoteControlCanRequest(identity)" type="button"
-          class="viewing-control-action" :aria-label="remoteControlIsActive(identity) ? '退出远程控制' : remoteControlIsPending(identity) ? '取消远程控制申请' : '申请远程控制'"
+          class="viewing-control-action" :class="{ 'is-engaged': remoteControlIsActive(identity) || remoteControlIsPending(identity) }" :aria-label="remoteControlIsActive(identity) ? '退出远程控制' : remoteControlIsPending(identity) ? '取消远程控制申请' : '申请远程控制'"
           @click.stop="remoteControlIsActive(identity) ? rtc.exitRemoteControl() : remoteControlIsPending(identity) ? rtc.cancelPendingRemoteControl(identity) : requestParticipantControl(identity)">
           <MousePointer2 :size="14" />{{ remoteControlIsActive(identity) ? '退出控制' : remoteControlIsPending(identity) ? '取消申请' : '申请控制' }}
         </button>

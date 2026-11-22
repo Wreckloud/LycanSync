@@ -8,6 +8,7 @@ import { VideoQuality, type Room } from 'livekit-client';
 import type { useScreenShareLayout, ViewedShare } from '../viewing/useScreenShareLayout';
 import { useViewingSize } from '../viewing/useViewingSize';
 import ParticipantCard from './ParticipantCard.vue';
+import ConnectionSignal from './ConnectionSignal.vue';
 import ViewingConnectionStatus from './ViewingConnectionStatus.vue';
 import HorizontalScroll from './HorizontalScroll.vue';
 import { observeWindowLayoutRestore } from '../viewing/windowLayoutRestore';
@@ -62,11 +63,18 @@ const { width, height, minimumHeight, maximumHeight, changeHeight } = useViewing
 const dragHeight = ref<number | null>(null);
 const memberBlend = ref(0);
 const stageHeight = computed(() => dragHeight.value ?? height.value);
-const foldLabel = computed(() => props.folded ? '展开语音成员和画面' : '收起语音成员和画面');
+const foldAction = computed(() => {
+  if (props.folded) return { label: '展开成员卡片', direction: 'down' };
+  if (props.active) return { label: '收起共享画面', direction: 'up' };
+  if (props.stageHidden || props.view.shares.length) return { label: '展开共享画面', direction: 'down' };
+  return { label: '向上拖动收起成员卡片', direction: undefined };
+});
 const resizing = ref(false);
-defineExpose({ resizing });
+const foldHint = ref<'up' | 'down' | 'flat'>();
+let foldIdleTimer: ReturnType<typeof setTimeout> | undefined;
+defineExpose({ resizing, memberBlend });
 // 一次手势始终使用同一个屏幕坐标系，吸附和越界都不重设指针原点。
-let drag: { id: number; startY: number; pointerY: number; offset: number; baseY: number | null; membersY: number | null; snap: 'min' | 'max' | null;
+let drag: { id: number; startY: number; pointerY: number; hintY: number; offset: number; baseY: number | null; membersY: number | null; snap: 'min' | 'max' | null;
   folded: boolean; stageHidden: boolean } | undefined;
 let moved = false;
 let membersOnlyHeight = 0;
@@ -81,7 +89,7 @@ function startPull(event: PointerEvent) {
   if (!event.isPrimary || event.button !== 0 || drag) return;
   const handle = event.currentTarget as HTMLElement;
   const offset = event.clientY - handle.getBoundingClientRect().top;
-  drag = { id: event.pointerId, startY: event.clientY, pointerY: event.clientY, offset, baseY: null, membersY: null,
+  drag = { id: event.pointerId, startY: event.clientY, pointerY: event.clientY, hintY: event.clientY, offset, baseY: null, membersY: null,
     snap: null, folded: !!props.folded, stageHidden: !!props.stageHidden };
   moved = false;
   handle.setPointerCapture(event.pointerId);
@@ -89,6 +97,13 @@ function startPull(event: PointerEvent) {
 function movePull(event: PointerEvent) {
   if (!drag || drag.id !== event.pointerId) return;
   drag.pointerY = event.clientY;
+  const delta = event.clientY - drag.hintY;
+  if (Math.abs(delta) >= 4) {
+    drag.hintY = event.clientY;
+    foldHint.value = delta < 0 ? 'up' : 'down';
+    clearTimeout(foldIdleTimer);
+    foldIdleTimer = setTimeout(() => { foldHint.value = 'flat'; }, 180);
+  }
   if (resizing.value) {
     resizeToPointer(drag.pointerY);
     return;
@@ -96,12 +111,11 @@ function movePull(event: PointerEvent) {
   const distance = event.clientY - drag.startY;
   if (Math.abs(distance) < 5) return;
   moved = true;
-  if ((drag.folded || drag.stageHidden) && distance < 16) return;
+  if (drag.folded || props.view.mode === 'collapsed') return;
+  if (drag.stageHidden && distance < 16) return;
   panelGeneration++;
   stopPanelMotion();
   resizing.value = true;
-  if (props.folded) emit('update:folded', false);
-  if (props.view.mode === 'collapsed') return;
   if (props.stageHidden) {
     if ((!focus.value || !props.view.membersVisible) && membersOnlyHeight) {
       dragHeight.value = membersOnlyHeight;
@@ -153,22 +167,35 @@ function resizeToPointer(y: number) {
     dragHeight.value = Math.max(min, Math.min(max, desired));
   }
 }
-function finishPull(event: PointerEvent) {
+async function finishPull(event: PointerEvent) {
   if (!drag || drag.id !== event.pointerId) return;
-  if (moved) movePull(event);
-  if (drag.snap === 'min') emit('update:stageHidden', true);
+  if (moved && !resizing.value && (drag.folded || drag.stageHidden || props.view.mode === 'collapsed')) {
+    const distance = event.clientY - drag.startY;
+    if (Math.abs(distance) >= 16) {
+      if (distance < 0) emit('update:folded', true);
+      else expandNext();
+    }
+  } else if (moved) movePull(event);
+  const settledAtMembers = drag.snap === 'min';
+  if (settledAtMembers) emit('update:stageHidden', true);
   if (drag.snap === 'max') {
     changeHeight(maximumHeight.value);
     props.view.height = 'max';
     if (drag.baseY !== null && event.clientY - drag.baseY >= maximumHeight.value + 96) props.view.expanded = true;
   } else if (drag.snap !== 'min' && dragHeight.value !== null) changeHeight(dragHeight.value);
   drag = undefined;
+  clearTimeout(foldIdleTimer);
+  foldHint.value = moved ? 'flat' : undefined;
   memberBlend.value = 0;
   dragHeight.value = null;
-  resizing.value = false;
+  // 成员条已经跟手到位，布局交接完成后再恢复点击展开时的过渡。
+  if (settledAtMembers) await nextTick();
+  if (!drag) resizing.value = false;
 }
 function cancelPull(restore = false) {
+  clearTimeout(foldIdleTimer);
   if (drag) {
+    foldHint.value = 'flat';
     moved = true;
     if (restore) {
       emit('update:folded', drag.folded);
@@ -180,14 +207,23 @@ function cancelPull(restore = false) {
   dragHeight.value = null;
   resizing.value = false;
 }
+function expandNext() {
+  if (props.folded) emit('update:folded', false);
+  else if (props.stageHidden) emit('update:stageHidden', false);
+  else if (props.view.shares[0]) props.view.select(props.view.shares[0].participant.identity);
+}
 function clickHandle(event: MouseEvent) {
-  if (!moved || event.detail === 0) emit('update:folded', !props.folded);
+  if (!moved || event.detail === 0) {
+    if (foldAction.value.direction === 'up') emit('update:stageHidden', true);
+    else if (foldAction.value.direction === 'down') expandNext();
+  }
   moved = false;
 }
 function nudgeHeight(event: KeyboardEvent, delta: number) {
-  if (!props.active || props.folded) return;
   event.preventDefault();
-  changeHeight(height.value + delta);
+  if (props.active && !props.folded) changeHeight(height.value + delta);
+  else if (delta > 0) expandNext();
+  else if (!props.folded) emit('update:folded', true);
 }
 watch(() => [props.view.mode, props.view.focused, props.view.expanded, props.hidden, props.room], () => cancelPull());
 
@@ -326,6 +362,7 @@ onMounted(() => {
   motionPreference.addEventListener('change', reducePanelMotion);
 });
 onScopeDispose(() => {
+  clearTimeout(foldIdleTimer);
   stopWindowRestore?.();
   panelGeneration++;
   stopPanelMotion();
@@ -358,9 +395,10 @@ onScopeDispose(() => {
             <slot v-if="focus" name="control" :identity="share.participant.identity" />
             <div class="viewing-actions">
               <span class="viewing-caption" :title="share.participant.name"><span>{{ share.participant.name || share.participant.identity }}</span>
-                <time title="本次共享时长（以这台设备收到的状态为准）">{{ elapsed(share) }}</time>
-                <ViewingConnectionStatus :participant="share.participant" :local="share.participant === room?.localParticipant"
+                <time aria-label="本次共享时长">{{ elapsed(share) }}</time>
+                <ViewingConnectionStatus v-if="detached" :participant="share.participant" :local="share.participant === room?.localParticipant"
                   :revision="revision" :snapshot="snapshot" :active="videoActive && !folded && !reconnecting" />
+                <span v-else-if="share.participant !== room?.localParticipant" class="viewing-connection"><ConnectionSignal :quality="share.participant.connectionQuality" /></span>
               </span>
               <button v-if="focus && !view.membersVisible && !view.expanded" type="button" class="viewing-expand-members"
                 aria-label="展开成员" title="展开成员" @click="expandMembers"><ChevronDown :size="16" /></button>
@@ -395,8 +433,15 @@ onScopeDispose(() => {
       </div>
     </Transition>
   </section>
-  <button v-if="!hidden && !detached && !view.expanded" type="button" class="viewing-fold" aria-controls="inline-call-view"
-    :aria-label="foldLabel" :aria-expanded="!folded" :title="folded || view.mode === 'collapsed' ? foldLabel : foldLabel + '，拖动调整画面高度'"
-    @pointerdown="startPull" @pointermove="movePull" @pointerup="finishPull" @pointercancel="cancelPull(true)" @lostpointercapture="cancelPull(true)"
-    @click="clickHandle" @keydown.up="nudgeHeight($event, -20)" @keydown.down="nudgeHeight($event, 20)" />
+  <template v-if="!hidden && !detached && !view.expanded">
+    <button type="button" class="viewing-fold" aria-controls="inline-call-view"
+      :aria-label="foldAction.label" :aria-expanded="!folded" :data-click-direction="foldAction.direction" :data-direction="foldHint"
+      @pointerenter="!drag && (foldHint = undefined)" @focus="!drag && (foldHint = undefined)"
+      @pointerdown="startPull" @pointermove="movePull" @pointerup="finishPull" @pointercancel="cancelPull(true)" @lostpointercapture="drag && cancelPull(true)"
+      @click="clickHandle" @keydown.up="nudgeHeight($event, -20)" @keydown.down="nudgeHeight($event, 20)">
+      <svg width="22" height="10" viewBox="0 0 22 10" aria-hidden="true"><path d="M2 5 L11 5 L20 5" /></svg>
+    </button>
+    <span class="viewing-fold-strip" aria-hidden="true" :class="{ 'is-under-focus': active && focus && !showMembers && !folded }"
+      :style="memberBlend ? { '--member-blend': memberBlend * 100 + '%' } : undefined" />
+  </template>
 </template>

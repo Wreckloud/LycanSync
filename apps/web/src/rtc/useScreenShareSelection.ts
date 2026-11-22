@@ -2,7 +2,7 @@ import { computed, nextTick, onScopeDispose, ref, watch, type Ref } from 'vue';
 import { createNativeVideoSourceSelection, type NativeScreenSourceSelection } from '../components/nativeVideoSourceSelection';
 import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, readScreenShareQuality, saveScreenShareQuality,
   type CustomScreenShareQuality, type ScreenShareQualityId } from './screenShareQuality';
-import { canSelectNativeSource, readScreenShareAudioPreference, saveScreenShareAudioPreference,
+import { canSelectNativeSource,
   resolveNativeScreenAudioCapability, shouldShareAudioInNativeSelection, type NativeScreenAudioMode } from './nativeScreenAudioMode';
 import { readScreenSharePreferences, type ScreenSharePreferences } from '../settings/screenSharePreferences';
 
@@ -271,13 +271,7 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
     captureAudioCapabilityFailed.value = false;
     // 取消及清理不依赖偏好存储；写入失败也必须结束本次选择等待。
     chooser?.finish(selection);
-    if (selection) {
-      saveCapturePreferences(captureQuality.value, lastCaptureSourceType);
-      if (captureAudioMode.value !== 'unavailable') {
-        try { saveScreenShareAudioPreference(captureAudioMode.value, selection.shareAudio); }
-        catch { notice.value = '已确认本次共享选择，但声音设置未能保存。'; }
-      }
-    }
+    if (selection) saveCapturePreferences(captureQuality.value, lastCaptureSourceType);
   }
   function saveCapturePreferences(quality: ScreenShareQualityId, sourceType?: 'window' | 'screen') {
     try {
@@ -322,11 +316,6 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
     void resolveNativeScreenAudioCapability(capabilities).then((state) => {
       if (generation !== nativeSourceChooserGeneration.value || nativeSourceChooser !== chooser) return;
       captureAudioMode.value = state.mode;
-      try { captureShareAudio.value = readScreenShareAudioPreference(captureAudioMode.value); }
-      catch {
-        captureShareAudio.value = captureAudioMode.value === 'process';
-        captureSourceNotice.value = '无法读取声音设置，暂用默认设置。';
-      }
       captureAudioCapabilityFailed.value = state.failed;
       captureAudioCapabilityReady.value = true;
     });
@@ -342,6 +331,7 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
     void nextTick().then(refreshVisibleSourceThumbnails);
   });
   watch(selectedCaptureSourceId, (sourceId, _, onCleanup) => {
+    captureShareAudio.value = false;
     captureFollowGameAvailable.value = false;
     if (!desktop) return;
     let current = true;
@@ -350,7 +340,7 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
     void desktop.prepareNativeVideoSource(sourceId || null).then((result) => {
       if (current) captureFollowGameAvailable.value = result.followGame === 'league';
     }).catch((error) => console.error('共享来源准备未完成', error));
-  });
+  }, { flush: 'sync' });
 
   async function resolveGameScreenSource(game: DetectedActivity,
     capabilities: Promise<Record<string, { available: boolean; reason: string }>>): Promise<NativeScreenSourceSelection | null> {
@@ -372,7 +362,7 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
       const source = candidates[0]!;
       return { sourceId: source.sourceId, discoveryId: snapshot.discoveryId, quality: captureQuality.value,
         customQuality: { ...captureCustomQuality.value }, captureSettings: { ...readScreenSharePreferences(), windowMethod: 'auto' as const },
-        shareAudio: shouldShareAudioInNativeSelection(true, audio.mode, readScreenShareAudioPreference(audio.mode)) };
+        shareAudio: false };
     } catch {
       if (!disposed && Boolean(options.room()) && options.room() === room) notice.value = '无法准备游戏共享，请使用共享按钮重新选择。';
       return null;

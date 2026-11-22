@@ -39,7 +39,9 @@ describe('观看 RTC 模拟与当前调用方一致', () => {
     expect(rtc.listening.value).toBe(true);
     expect(rtc.microphoneIntent.value).toBe(false);
     expect(rtc.microphoneEnabled.value).toBe(false);
-    expect(await rtc.join('viewing')).toBe(true);
+    const onConnected = vi.fn();
+    expect(await rtc.join('viewing', onConnected)).toBe(true);
+    expect(onConnected).toHaveBeenCalledOnce();
     expect(rtc.microphoneIntent.value).toBe(true);
     expect(rtc.microphoneEnabled.value).toBe(true);
     await rtc.enableAudioPlayback();

@@ -38,7 +38,7 @@
         WHERE g.id = #{groupId}
     </select>
     <select id="findMembers" resultType="com.lycansync.api.group.model.GroupMember">
-        SELECT users.id AS user_id, users.nickname, users.avatar,
+        SELECT users.id AS user_id, users.nickname, users.avatar, users.signature,
             CASE WHEN users.id = g.owner_user_id THEN 'OWNER' ELSE 'MEMBER' END AS role, membership.joined_at
         FROM group_member membership JOIN app_user users ON users.id = membership.user_id
         JOIN chat_group g ON g.id = membership.group_id

@@ -1,35 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
-import { canSelectNativeSource, nativeScreenAudioMode, shouldDefaultShareAudio,
-  readScreenShareAudioPreference, saveScreenShareAudioPreference,
+import { describe, expect, it } from 'vitest';
+import { canSelectNativeSource, nativeScreenAudioMode,
   resolveNativeScreenAudioCapability, shouldShareAudioInNativeSelection } from './nativeScreenAudioMode';
 
 describe('native screen audio mode', () => {
-  it('记住用户开关，应用声音的默认选择不扩展到系统混音', () => {
-    const stored = new Map<string, string>();
-    vi.stubGlobal('localStorage', { getItem: (key: string) => stored.get(key) ?? null,
-      setItem: (key: string, value: string) => stored.set(key, value) });
-    try {
-      expect(readScreenShareAudioPreference('process')).toBe(true);
-      expect(readScreenShareAudioPreference('systemMix')).toBe(false);
-      saveScreenShareAudioPreference('process', false);
-      expect(readScreenShareAudioPreference('process')).toBe(false);
-      saveScreenShareAudioPreference('systemMix', true);
-      expect(readScreenShareAudioPreference('systemMix')).toBe(true);
-      expect(readScreenShareAudioPreference('process')).toBe(false);
-      expect(readScreenShareAudioPreference('unavailable')).toBe(false);
-      expect(() => saveScreenShareAudioPreference('unavailable', true)).toThrow('screenShareAudioUnavailable');
-    } finally { vi.unstubAllGlobals(); }
-  });
-  it('defaults process loopback on for the Windows 10 19041+ process capability', () => {
+  it('recognizes the Windows 10 19041+ process capability', () => {
     const mode = nativeScreenAudioMode({ available: true, reason: 'windowsApplicationLoopbackProcessTree' });
     expect(mode).toBe('process');
-    expect(shouldDefaultShareAudio(mode)).toBe(true);
   });
 
   it('requires explicit opt-in for default-output system mix', () => {
     const mode = nativeScreenAudioMode({ available: true, reason: 'windowsSystemMixLoopback' });
     expect(mode).toBe('systemMix');
-    expect(shouldDefaultShareAudio(mode)).toBe(false);
   });
 
   it('does not enable unknown or unavailable capture capabilities', () => {
@@ -40,7 +21,6 @@ describe('native screen audio mode', () => {
     ]) {
       const mode = nativeScreenAudioMode(capability);
       expect(mode).toBe('unavailable');
-      expect(shouldDefaultShareAudio(mode)).toBe(false);
     }
   });
 
@@ -52,7 +32,7 @@ describe('native screen audio mode', () => {
     const sources = await Promise.resolve([{ id: 'window:1:0' }]);
     let capabilityReady = false;
     let mode = nativeScreenAudioMode(undefined);
-    let shareAudioChecked = false;
+    const shareAudioChecked = false;
     const chooseSource = () => {
       if (!canSelectNativeSource(capabilityReady)) return null;
       return {
@@ -67,7 +47,6 @@ describe('native screen audio mode', () => {
 
     resolveCapability({ available: true, reason: 'windowsSystemMixLoopback' });
     mode = nativeScreenAudioMode(await capabilityRequest);
-    shareAudioChecked = shouldDefaultShareAudio(mode);
     capabilityReady = true;
 
     expect(canSelectNativeSource(capabilityReady)).toBe(true);

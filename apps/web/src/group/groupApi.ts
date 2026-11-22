@@ -18,6 +18,8 @@ export interface GroupMember {
   userId: string;
   nickname: string;
   avatar: string;
+  /** 旧服务端及其本地成员列表缓存可能缺少签名。 */
+  signature?: string;
   role: GroupRole;
   joinedAt: string;
 }

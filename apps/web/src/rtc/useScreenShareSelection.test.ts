@@ -276,17 +276,18 @@ describe('选择草稿与偏好提交边界', () => {
   });
 
   it.each([['process', true], ['process', false], ['systemMix', true], ['systemMix', false]] as const)(
-    '%s 声音 %s 有效确认先结束选择，再保存独立的声音、画质与来源偏好',
+    '%s 声音 %s 有效确认先结束选择，声音只在本次生效，保存画质与来源偏好',
     async (mode, enabled) => {
       const { app, state, stored, setItem, open } = setup(mode);
       const waiting = open();
       await vi.waitFor(() => expect(state.captureAudioCapabilityReady.value).toBe(true));
+      expect(state.captureShareAudio.value).toBe(false);
       app.updateCaptureShareAudio(enabled);
       expect(setItem).not.toHaveBeenCalled();
       app.selectCaptureSource('window:test');
       expect(await waiting).toEqual({ sourceId: 'window:test', discoveryId: 'helper', shareAudio: enabled, quality: 'custom',
         customQuality: { resolution: 1440, fps: 120 } });
-      expect(stored.get(`lycansync.screen-share-audio.${mode}`)).toBe(String(enabled));
+      expect(stored.has(`lycansync.screen-share-audio.${mode}`)).toBe(false);
       expect(stored.has(`lycansync.screen-share-audio.${mode === 'process' ? 'systemMix' : 'process'}`)).toBe(false);
       expect(JSON.parse(stored.get('lycansync.screen-share-quality')!)).toEqual({ quality: 'custom',
         customQuality: { resolution: 1440, fps: 120 } });
@@ -333,12 +334,12 @@ describe('选择草稿与偏好提交边界', () => {
     expect(state.viewerNotice.value).toBe('');
   });
 
-  it.each(['all', 'audio'] as const)('%s 存储失败也返回选择，不宣称采集已生效', async (failure) => {
+  it('画质存储失败也返回选择，不宣称采集已生效', async () => {
     const { app, state, setItem, open } = setup();
     const waiting = open();
     await vi.waitFor(() => expect(state.captureAudioCapabilityReady.value).toBe(true));
-    setItem.mockImplementation((key) => {
-      if (failure === 'all' || key.includes('screen-share-audio')) throw new Error('storage denied');
+    setItem.mockImplementation(() => {
+      throw new Error('storage denied');
     });
     app.updateCaptureShareAudio(true);
     expect(() => app.selectCaptureSource('window:test')).not.toThrow();

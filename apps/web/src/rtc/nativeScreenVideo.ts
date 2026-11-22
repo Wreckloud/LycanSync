@@ -1,7 +1,7 @@
 import { readScreenSharePreferences, type ScreenSharePreferences } from '../settings/screenSharePreferences';
 import { LocalVideoTrack } from 'livekit-client';
 import { createScreenStatusFrame } from './screenStatusFrame';
-import { screenShareDegradationPreference, screenShareQuality, screenShareThumbnailPreset, type CustomScreenShareQuality, type ScreenShareQualityId } from './screenShareQuality';
+import { screenShareContentHint, screenShareDegradationPreference, screenShareQuality, screenShareThumbnailPreset, type CustomScreenShareQuality, type ScreenShareQualityId } from './screenShareQuality';
 import { applyScreenShareEncoding, readScreenShareEncoding, screenShareEncodingLimits } from './screenShareEncoding';
 
 export interface NativeVideoDesktopBridge {
@@ -103,6 +103,7 @@ export class NativeScreenVideoSession {
   private startCommand?: ReturnType<NativeVideoDesktopBridge['startNativeVideo']>;
   private startPromise?: Promise<LocalVideoTrack>;
   private stopPromise?: Promise<void>;
+  private nativeStopUnconfirmed = false;
   private startupResolve?: () => void;
   private startupReject?: (error: Error) => void;
   private suspensionTimer?: ReturnType<typeof setInterval>;
@@ -366,14 +367,14 @@ export class NativeScreenVideoSession {
       if (nativeRequested) this.deliveryFrameRate = quality.fps;
       this.frameRateAdjustmentFailed = false;
       this.resolution = { width: quality.width, height: quality.height };
-      this.generator.contentHint = 'motion';
+      this.generator.contentHint = screenShareContentHint(id, custom);
       // SDK 重发布使用当前配置，不能重新套用最初发布时的画质。
       if (this.track.publishOptions) {
         // SDK 对 ScreenShare 单独读取 screenShareEncoding，不能写入摄像头编码字段。
         this.track.publishOptions.screenShareEncoding = {
           maxBitrate: quality.bitrate, maxFramerate: quality.fps, priority: 'high',
         };
-        this.track.publishOptions.degradationPreference = screenShareDegradationPreference(id);
+        this.track.publishOptions.degradationPreference = screenShareDegradationPreference(id, custom);
         this.track.publishOptions.screenShareSimulcastLayers = [screenShareThumbnailPreset()];
       }
     } catch (error) {
@@ -395,7 +396,10 @@ export class NativeScreenVideoSession {
     }
   }
 
-  stop(): Promise<void> {
+  stop(retryNativeStop = false): Promise<void> {
+    if (retryNativeStop && this.nativeStopUnconfirmed) {
+      this.stopPromise = this.finishNativeStop(Promise.resolve());
+    }
     if (this.stopPromise) return this.stopPromise;
     this.stopped = true;
     clearTimeout(this.gameFollowTimer);
@@ -417,7 +421,9 @@ export class NativeScreenVideoSession {
     this.unconfirmedFrame?.close();
     this.unconfirmedFrame = undefined;
     this.unconfirmedFrameSessionId = undefined;
-    this.stopPromise = this.stopResources(endFollow, this.gameFollowId);
+    this.stopPromise = this.stopResources(endFollow, this.gameFollowId).finally(() => {
+      window.removeEventListener('message', this.onWindowMessage);
+    });
     return this.stopPromise;
   }
 
@@ -439,8 +445,18 @@ export class NativeScreenVideoSession {
     }
     if (this.writePromise) await waitWithTimeout(this.writePromise, 500, 'nativeVideoWriterCloseTimeout').catch(() => {});
     await waitWithTimeout(this.writer.close(), 500, 'nativeVideoWriterCloseTimeout').catch(() => {});
-    if (this.sessionId) await this.desktop.stopNativeVideo(this.sessionId);
-    window.removeEventListener('message', this.onWindowMessage);
+    await this.finishNativeStop(endFollow);
+  }
+
+  private async finishNativeStop(endFollow: Promise<void>): Promise<void> {
+    this.nativeStopUnconfirmed = false;
+    try {
+      if (this.sessionId) await this.desktop.stopNativeVideo(this.sessionId);
+    } catch (error) {
+      await endFollow;
+      this.nativeStopUnconfirmed = true;
+      throw error;
+    }
     await endFollow;
   }
 
@@ -449,6 +465,7 @@ export class NativeScreenVideoSession {
     let frame = event.data.frame as VideoFrame | undefined;
     if (!frame || typeof frame.close !== 'function') return;
     const frameSessionId = event.data.sessionId;
+    if (this.stopped && this.sessionId && frameSessionId && frameSessionId !== this.sessionId) return;
     if (typeof frameSessionId !== 'string' || !frameSessionId || this.stopped
         || (this.sessionId && frameSessionId !== this.sessionId)) {
       frame.close();

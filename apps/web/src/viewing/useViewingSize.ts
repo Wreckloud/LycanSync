@@ -74,7 +74,8 @@ export function useViewingSize(panel: Ref<HTMLElement | null>, options: ViewingS
         }
       }
       const memberHeight = memberPanel?.parentElement?.scrollHeight ?? memberPanel?.offsetHeight ?? 0;
-      maximumHeight.value = Math.max(0, Math.floor(availableHeight - memberHeight));
+      const handleHeight = overlay?.querySelector<HTMLElement>('.viewing-fold')?.offsetHeight ?? 0;
+      maximumHeight.value = Math.max(0, Math.floor(availableHeight - memberHeight - handleHeight));
       const preferredHeight = options.preferredHeight();
       const requestedHeight = options.expanded() || options.detached() || preferredHeight === 'max' ? maximumHeight.value : preferredHeight ?? 480;
       height.value = Math.max(minimumHeight.value, Math.min(maximumHeight.value, requestedHeight));

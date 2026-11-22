@@ -719,13 +719,21 @@ class ObsCaptureHostManager {
   async stop(sessionId) {
     const state = this.state;
     if (!state) return { changed: false };
-    if (!state.videoSessionId && state.lastStoppedSessionId === sessionId) return { changed: false };
+    if (!state.videoSessionId && state.lastStoppedSessionId === sessionId) {
+      if (state.shuttingDown) await this.shutdown(true, state.shutdownReason);
+      return { changed: false };
+    }
     if (state.videoSessionId !== sessionId) throw new Error('videoSessionMismatch');
     if (state.closed) {
       if (this.state === state) this.state = undefined;
       return { changed: true };
     }
     if (state.stopPromise) return state.stopPromise;
+    if (state.shuttingDown && (state.stopRequested || !state.shutdownPromise)) {
+      state.stopRequested = true;
+      await this.shutdown(true, state.shutdownReason);
+      return { changed: true };
+    }
     state.stopRequested = true;
     clearTimeout(state.startTimer);
     state.startReject?.(new Error('obsCaptureStopping'));
@@ -752,7 +760,10 @@ class ObsCaptureHostManager {
         if (!state.closed && state.videoSessionId === sessionId) await this.shutdown(true, 'stopTimeout');
       }
       return { changed: true };
-    })();
+    })().catch(error => {
+      state.stopPromise = undefined;
+      throw error;
+    });
     return state.stopPromise;
   }
 
@@ -787,7 +798,10 @@ class ObsCaptureHostManager {
         await waitForClose(state, TERMINATE_TIMEOUT_MS);
       }
       if (!state.closed) throw new Error('obsCaptureStopUnconfirmed');
-    })();
+    })().catch(error => {
+      state.shutdownPromise = undefined;
+      throw error;
+    });
     return state.shutdownPromise;
   }
 

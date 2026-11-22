@@ -10,10 +10,12 @@ it('画质保留三个预设，自定义固定在最后，帧率最高 120', () 
   expect(SCREEN_SHARE_RESOLUTIONS).toEqual([1440, 1080, 720]);
 });
 
-it('自定义及常用画质优先保留帧率，节省流量使用平衡策略', () => {
+it('自定义 30 FPS 保留细节，高帧率和节省流量沿用各自策略', () => {
   expect(screenShareDegradationPreference('standard')).toBe('maintain-framerate');
   expect(screenShareDegradationPreference('highFrameRate')).toBe('maintain-framerate');
   expect(screenShareDegradationPreference('custom')).toBe('maintain-framerate');
+  expect(screenShareDegradationPreference('custom', { resolution: 1080, fps: 30 })).toBe('maintain-resolution');
+  expect(screenShareDegradationPreference('custom', { resolution: 1440, fps: 120 })).toBe('maintain-framerate');
   expect(screenShareDegradationPreference('economy')).toBe('balanced');
   expect(() => screenShareDegradationPreference('unknown' as never)).toThrow('invalidScreenShareQuality');
 });

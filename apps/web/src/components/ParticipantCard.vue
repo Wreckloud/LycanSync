@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { Circle, Fullscreen, HeadphoneOff, Headphones, MicOff } from '@lucide/vue';
+import { AudioLines, Circle, Fullscreen, HeadphoneOff, Headphones, MicOff } from '@lucide/vue';
 import { Track, VideoQuality, type Participant, type RemoteTrackPublication } from 'livekit-client';
+import ConnectionSignal from './ConnectionSignal.vue';
 import VoiceLevelMic from './VoiceLevelMic.vue';
 import { observeLocalScreenPreview } from '../rtc/localScreenPreview';
 import { setNativeScreenPreviewDemand } from '../rtc/nativeScreenVideo';
@@ -65,6 +66,7 @@ const media = computed(() => {
   const microphone = props.isLocal ? props.localMicrophoneEnabled === true
     : props.isListening !== false && props.participant.isMicrophoneEnabled;
   return {
+    quality: props.participant.connectionQuality,
     publication: props.privateControl ? undefined : publication,
     track: props.privateControl ? undefined : publication?.track,
     muted: publication?.isMuted,
@@ -270,14 +272,15 @@ onBeforeUnmount(() => {
       <span v-if="isLocal && recordingElapsed" class="recording-indicator" :aria-label="'正在录制 ' + recordingElapsed" title="正在录制">
         <Circle :size="10" fill="currentColor" aria-hidden="true" /><time>{{ recordingElapsed }}</time>
       </span>
-      <div v-if="variant === 'card' && !isLocal && media.sharing && shareAudio" class="participant-share-actions" @click.stop @keydown.stop>
-        <button type="button" class="viewer-action"
-          :disabled="!shareAudioListening" :aria-label="shareMuted ? '恢复这路共享声音' : '静音这路共享声音'"
-          :aria-pressed="shareMuted" @click="emit('toggleShareAudio')"><HeadphoneOff v-if="shareMuted || !shareAudioListening" :size="14" /><Headphones v-else :size="14" /></button>
-      </div>
     </div>
     <div class="participant-meta">
-      <strong :title="media.name">{{ media.name }}{{ isLocal ? '（你）' : '' }}</strong>
+      <span class="participant-name">
+        <strong :title="media.name">{{ media.name }}{{ isLocal ? '（你）' : '' }}</strong>
+        <ConnectionSignal v-if="variant === 'card' && !isLocal" class="member-signal" :quality="media.quality" />
+      </span>
+      <button v-if="variant === 'card' && !isLocal && media.sharing && shareAudio" type="button" class="participant-state participant-state-button"
+        :disabled="!shareAudioListening" :title="shareMuted ? '恢复这路共享声音' : '静音这路共享声音'"
+        :aria-label="shareMuted ? '恢复这路共享声音' : '静音这路共享声音'" :aria-pressed="shareMuted" @click="emit('toggleShareAudio')"><AudioLines :size="14" /></button>
       <button v-if="variant === 'viewer' && showFullscreen" type="button" class="viewer-action"
         :aria-label="'切换全屏观看' + media.name + '的共享画面'" :disabled="!media.track || media.muted || !fullscreenAvailable"
         @click="openFullscreen"><Fullscreen :size="16" /></button>
@@ -303,8 +306,8 @@ onBeforeUnmount(() => {
         :aria-label="isListening ? '停止接收所有成员声音' : '恢复接收所有成员声音'" @click="emit('toggleListening')">
         <HeadphoneOff v-if="isListening === false" :size="14" /><Headphones v-else :size="14" />
       </button>
-      <span v-else-if="variant === 'card'" class="participant-state" :class="{ 'is-off': isListening === false }"
-        :aria-label="isListening === null ? '收听状态尚未同步' : isListening ? '正在接收声音' : '已停止接收声音'">
+      <span v-else-if="variant === 'card' && isListening !== null" class="participant-state" :class="{ 'is-off': isListening === false }"
+        :aria-label="isListening ? '正在接收声音' : '已停止接收声音'">
         <HeadphoneOff v-if="isListening === false" :size="14" /><Headphones v-else :size="14" />
       </span>
     </div>
@@ -312,6 +315,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.member-signal { color: var(--muted); }
 .recording-indicator { position: absolute; top: 8px; right: 8px; z-index: 1; display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px; border-radius: 4px; background: #0b0f14cc; color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; line-height: 16px; pointer-events: none; }
 .recording-indicator svg { color: var(--danger); flex-shrink: 0; }
 .private-control-placeholder { display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 12px; text-align: center; }

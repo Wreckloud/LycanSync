@@ -4,7 +4,7 @@ import { parse } from '@vue/compiler-sfc';
 import ts from 'typescript';
 import { effectScope, ref } from 'vue';
 import { afterEach, expect, it, vi } from 'vitest';
-import { saveScreenShareAudioPreference, type NativeScreenAudioMode } from './rtc/nativeScreenAudioMode';
+import { type NativeScreenAudioMode } from './rtc/nativeScreenAudioMode';
 import type { CustomScreenShareQuality, ScreenShareQualityId } from './rtc/screenShareQuality';
 import { useScreenShareSelection } from './rtc/useScreenShareSelection';
 
@@ -30,7 +30,7 @@ function setup(mode: NativeScreenAudioMode = 'process') {
     currentCustomScreenShareQuality: { resolution: 1080, fps: 60 } as CustomScreenShareQuality, setScreenShareQuality: vi.fn(async () => true) };
   const state = { ...selection, viewerNotice };
   const app = runInNewContext(compiled + '\n({ changeScreenShareQuality, changeScreenShareAudio })', {
-    ...state, rtc, localParticipant: ref({ isScreenShareEnabled: true }), saveScreenShareAudioPreference,
+    ...state, rtc, localParticipant: ref({ isScreenShareEnabled: true }),
   }) as { changeScreenShareQuality(quality: ScreenShareQualityId, custom?: CustomScreenShareQuality): Promise<boolean>;
     changeScreenShareAudio(enabled: boolean): Promise<boolean> };
   return { app, state, rtc, setItem };
@@ -57,7 +57,7 @@ it.each([true, false])('共享中自定义只有实际应用成功 %s 才更新�
   expect(state.captureCustomQuality.value).toEqual(success ? { resolution: 1080, fps: 60 } : { resolution: 1440, fps: 120 });
 });
 
-it.each([true, false])('共享中开关仅在 RTC 操作成功 %s 后保存', async (success) => {
+it.each([true, false])('本次开关返回 RTC 操作结果 %s，不修改下次共享', async (success) => {
   const { app, rtc, setItem } = setup('systemMix');
   let complete!: (success: boolean) => void;
   rtc.setScreenShareAudioEnabled.mockReturnValueOnce(new Promise((resolve) => { complete = resolve; }));
@@ -65,7 +65,6 @@ it.each([true, false])('共享中开关仅在 RTC 操作成功 %s 后保存', as
   expect(rtc.setScreenShareAudioEnabled).toHaveBeenCalledWith(true);
   expect(setItem).not.toHaveBeenCalled();
   complete(success);
-  await changing;
-  if (success) expect(setItem).toHaveBeenCalledWith('lycansync.screen-share-audio.systemMix', 'true');
-  else expect(setItem).not.toHaveBeenCalled();
+  expect(await changing).toBe(success);
+  expect(setItem).not.toHaveBeenCalled();
 });

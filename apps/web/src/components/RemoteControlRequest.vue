@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onScopeDispose, ref } from 'vue';
 import InlineFeedback from './InlineFeedback.vue';
-import { useBackdropDismiss } from './useBackdropDismiss';
 import { keepDialogFocus } from './dialogFocus';
 
 defineProps<{ name: string; busy: boolean }>();
@@ -12,7 +11,6 @@ const publicVideo = ref(true);
 const loading = ref(false);
 const error = ref('');
 const dialog = ref<HTMLElement | null>(null);
-const backdropEvents = useBackdropDismiss(() => emit('reject'));
 let disposed = false;
 
 
@@ -40,7 +38,7 @@ onScopeDispose(() => {
 </script>
 
 <template>
-  <div class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop.prevent="emit('reject')">
+  <div class="dialog-backdrop" @mousedown.self.prevent @keydown.esc.stop.prevent="emit('reject')">
     <section ref="dialog" class="remote-request-card" role="dialog" aria-modal="true" aria-labelledby="remote-request-title"
       tabindex="-1" @keydown="keepDialogFocus">
       <header><h2 id="remote-request-title">{{ name }}申请远程控制</h2>

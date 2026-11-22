@@ -17,6 +17,7 @@ public record GroupMemberResponse(
         UUID userId,
         String nickname,
         String avatar,
+        @Schema(description = "个性签名，未填写时为空串") String signature,
         GroupRole role,
         Instant joinedAt
 ) {

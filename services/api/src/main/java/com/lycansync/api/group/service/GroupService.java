@@ -307,7 +307,7 @@ public class GroupService {
 
     private GroupMemberResponse toMember(GroupMember member) {
         return new GroupMemberResponse(
-                member.userId(), member.nickname(), member.avatar(), member.role(),
+                member.userId(), member.nickname(), member.avatar(), member.signature(), member.role(),
                 member.joinedAt());
     }
 

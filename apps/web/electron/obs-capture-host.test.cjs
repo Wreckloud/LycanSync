@@ -1675,7 +1675,11 @@ test('停止和强制结束均未确认时明确失败，保留状态阻止重�
   assert.equal(manager.state, state);
   assert.equal(state.closed, false);
   await assert.rejects(start(), /obsCaptureAlreadyRunning/);
+  const retried = manager.stop(sessionId);
+  const concurrent = manager.stop(sessionId);
+  assert.equal(killCount(), 2);
   child.emit('close', 0);
+  await Promise.all([retried, concurrent]);
   assert.equal(manager.state, undefined);
 });
 

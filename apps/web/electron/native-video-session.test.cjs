@@ -165,9 +165,9 @@ test('纹理释放超时只在宿主退出和身份释放确认后允许重开',
     if (failure) {
       await rejected;
       assert.equal(sandbox.nativeVideo.current, video);
-      await assert.rejects(f.start(), /AlreadyRunning/);
+      await assert.rejects(f.start(), failure === 'shutdown' ? /obsCaptureStopUnconfirmed/ : /identityReleaseFailed/);
       assert.ok(!events.some(entry => entry.stage === 'screenVideoStopRecovered'));
-      if (failure === 'shutdown') assert.equal(calls.length, 1);
+      assert.equal(calls.filter(call => call.action === 'shutdown').length, failure === 'shutdown' ? 2 : 1);
     } else {
       await stopping;
       assert.equal(sandbox.nativeVideo.current, undefined);
@@ -190,9 +190,32 @@ test('宿主未确认停止时保留来源身份，启动失败的清理也不�
     }
     assert.ok(sandbox.mediaHelper.videoCapture);
     assert.equal(sandbox.nativeVideo.current.stopping, true);
-    await assert.rejects(f.start(), /AlreadyRunning/);
+    await assert.rejects(f.start(), /obsCaptureStopUnconfirmed/);
     assert.equal(f.calls.some(call => call.action === 'release'), false);
   }
+});
+
+test('重选仅补做未完成的清理，同时重选只打开一个新会话', async () => {
+  const f = gameRoutingFixture(async () => false);
+  const { nativeVideo, obsCaptureHost, recording } = f.sandbox;
+  const old = await f.start();
+  let recordingsStopped = 0;
+  recording.active = { videoSessionId: old.sessionId };
+  recording.stopAll = async () => { recordingsStopped++; };
+  const stopHost = obsCaptureHost.stop;
+  obsCaptureHost.stop = async () => { throw new Error('obsCaptureStopUnconfirmed'); };
+  await assert.rejects(nativeVideo.stop(old.sessionId), /obsCaptureStopUnconfirmed/);
+  obsCaptureHost.stop = stopHost;
+  const first = f.start();
+  const duplicate = assert.rejects(f.start(), /AlreadyRunning/);
+  const current = await first;
+  await duplicate;
+  assert.notEqual(current.sessionId, old.sessionId);
+  assert.equal(recordingsStopped, 1);
+  assert.equal(f.calls.filter(call => call.action === 'release').length, 1);
+  await assert.rejects(nativeVideo.stop(old.sessionId), /videoSessionMismatch/);
+  assert.equal(nativeVideo.current.sessionId, current.sessionId);
+  await nativeVideo.stop(current.sessionId);
 });
 
 test('宿主已属于其他会话时，旧会话清理不释放新来源', async () => {

@@ -57,11 +57,11 @@ function setup() {
   return { app, state, sources, game, resolve: () => app.resolveGameScreenSource(game, capabilities()) };
 }
 
-it('直分享按窗口身份匹配，忽略名称并继承画质、光标和声音偏好', async () => {
+it('直分享按窗口身份匹配，忽略名称并继承画质、光标，声音默认关闭', async () => {
   const f = setup();
   f.state.requestedGame = f.game;
   expect(await f.app.requestNativeScreenSource(capabilities())).toEqual({ sourceId: 'game', discoveryId: 'discovery', quality: 'custom', customQuality: { resolution: 1440, fps: 60 },
-    captureSettings: { hideCursor: true, hideBorder: false, windowMethod: 'auto' }, shareAudio: true });
+    captureSettings: { hideCursor: true, hideBorder: false, windowMethod: 'auto' }, shareAudio: false });
   expect(f.state.captureRequest.value).toBeNull();
 });
 

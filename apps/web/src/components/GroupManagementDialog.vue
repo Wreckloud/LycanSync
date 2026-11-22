@@ -6,17 +6,18 @@ import InlineFeedback from './InlineFeedback.vue';
 import MemberPicker, { type MemberOption } from './MemberPicker.vue';
 import { motionDurationMs } from '../styles/motion';
 import { addGroupMember, dissolveGroup, findGroup, findGroupCandidates, getGroupInviteCode,
-  removeGroupMember, transferGroupOwner, type GroupDetail } from '../group/groupApi';
+  removeGroupMember, transferGroupOwner, type GroupDetail, type GroupSummary } from '../group/groupApi';
 import { useBackdropDismiss } from './useBackdropDismiss';
 import { keepDialogFocus } from './dialogFocus';
 
-const props = defineProps<{ group: GroupDetail; userId: string; mode: 'invite' | 'members' | 'transfer' | 'leave' | 'dissolve' | 'resolve'; remaining?: number; pending?: boolean }>();
+const props = defineProps<{ group: GroupSummary & Partial<Pick<GroupDetail, 'members'>>; userId: string; mode: 'invite' | 'members' | 'transfer' | 'leave' | 'dissolve' | 'resolve'; remaining?: number; pending?: boolean; membersError?: string }>();
 const disposition = ref<'transfer' | 'dissolve' | null>(null);
 const mode = computed(() => props.mode === 'resolve' ? disposition.value ?? 'resolve' : props.mode);
-const emit = defineEmits<{ close: []; updated: [group: GroupDetail]; removed: [groupId: string]; notice: [message: string] }>();
+const emit = defineEmits<{ 'retry-members': []; close: []; updated: [group: GroupDetail]; removed: [groupId: string]; notice: [message: string] }>();
 const dialog = ref<HTMLElement | null>(null);
 const search = ref('');
 const code = ref('');
+const loadingCode = ref(false);
 const error = ref('');
 const busy = ref(false);
 const backdropEvents = useBackdropDismiss(close);
@@ -146,7 +147,12 @@ watch(() => props.group.role, (role) => { if (role !== 'OWNER' && mode.value !==
 onMounted(() => {
   dialog.value?.focus();
   if (mode.value === 'invite') {
-    void action(async () => { const result = await getGroupInviteCode(props.group.id); if (!disposed) code.value = result.code; });
+    loadingCode.value = true;
+    void getGroupInviteCode(props.group.id).then(result => {
+      if (!disposed) code.value = result.code;
+    }).catch(reason => {
+      if (!disposed) error.value = reason instanceof Error ? reason.message : '无法读取邀请码。';
+    }).finally(() => { if (!disposed) loadingCode.value = false; });
   }
 });
 onScopeDispose(() => {
@@ -191,11 +197,12 @@ onScopeDispose(() => {
       </div>
       <div v-else class="management-body">
         <MemberPicker v-if="mode === 'invite'" v-model:search="search" :load="loadCandidates" :disabled="busy" action="添加" label="搜索服务器成员"
-          :joined-ids="group.members.map(member => member.userId)" @select="addMember" />
-        <MemberPicker v-else v-model:search="search" :members="group.members" :selected="confirmation?.userId" :disabled="busy" :action="mode === 'transfer' ? '选择' : '移出'" @select="selectMember" />
+          :joined-ids="group.members?.map(member => member.userId)" @select="addMember" />
+        <MemberPicker v-else v-model:search="search" :members="group.members" :pending-members="!group.members" :members-error="!group.members ? membersError : undefined"
+          @retry-members="emit('retry-members')" :selected="confirmation?.userId" :disabled="busy" :action="mode === 'transfer' ? '选择' : '移出'" @select="selectMember" />
         <div v-if="mode === 'invite'" class="management-code"><label for="group-invite-code">群组邀请码</label>
-          <div><input id="group-invite-code" :value="code" readonly /><button type="button" :disabled="busy || !code" @click="copyCode">复制</button></div>
-          <small>服务器成员持有此码即可入群。<button type="button" :disabled="busy" @click="refreshCode">更换邀请码</button></small>
+          <div><input id="group-invite-code" :value="code" :placeholder="loadingCode ? '正在读取…' : undefined" readonly /><button type="button" :disabled="busy || !code" @click="copyCode">复制</button></div>
+          <small>服务器成员持有此码即可入群。<button type="button" :disabled="busy || loadingCode" @click="refreshCode">更换邀请码</button></small>
         </div>
       </div>
       </div>

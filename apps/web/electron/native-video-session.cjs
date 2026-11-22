@@ -85,6 +85,12 @@ function createNativeVideoSession({ host: obsCaptureHost, mediaHelper, getSource
     if (settings?.followGame && (settings.followGame !== 'league' || !['auto', undefined].includes(settings.windowMethod))) {
       throw new Error('nativeGameFollowTargetInvalid');
     }
+    if (nativeVideoSession?.retryCaptureStop) {
+      const selectedState = mediaHelper.videoSourceSnapshot?.state;
+      await stopNativeVideo(nativeVideoSession.sessionId);
+      if (isClosing()) throw new Error('mediaHelperShuttingDown');
+      if (mediaHelper.videoSourceSnapshot?.state !== selectedState) throw new Error('videoSourceExpired');
+    }
     if (nativeVideoSession) throw new Error('videoCaptureAlreadyRunning');
     const continuingGameFollow = Boolean(gameFollowId);
     getBridge();
@@ -175,7 +181,8 @@ function createNativeVideoSession({ host: obsCaptureHost, mediaHelper, getSource
   async function stopObsVideo(video) {
     // 未确认采集清理或宿主退出时保留来源身份，不能让另一来源越过清理。
     const state = obsCaptureHost.state;
-    const ownsCapture = !state || state.videoSessionId === video.sessionId;
+    const ownsCapture = !state || state.videoSessionId === video.sessionId
+      || (!state.videoSessionId && state.shuttingDown && state.lastStoppedSessionId === video.sessionId);
     const stopped = ownsCapture
       ? await obsCaptureHost.stop(video.sessionId) : { changed: false };
     if (video.helperState && (video.helperState !== state || ownsCapture)) nativeVideoTextures.releaseHost(video.helperState);
@@ -186,9 +193,41 @@ function createNativeVideoSession({ host: obsCaptureHost, mediaHelper, getSource
     return stopped;
   }
 
-  async function stopNativeVideo(sessionId, preserveGameFollow = false) {
-    const leagueCaptureFollow = getGameFollow();
+  async function stopVideoConsumers(video) {
+    const { sessionId } = video;
     const recording = getRecording();
+    if (video.renderer && !video.renderer.isDestroyed()) {
+      video.renderer.send('media:native-video-stopping', { sessionId });
+    }
+    // 先撤销输入和释放按住的键；画面/GPU 回收再慢也不能继续接受远控。
+    const active = mediaHelper.videoCapture;
+    const control = active?.sessionId === sessionId ? active.remoteControl : undefined;
+    let controlFailure;
+    if (control) {
+      try { await mediaHelper.clearRemoteControl(sessionId, control.controlSessionId); }
+      catch (error) {
+        controlFailure = error;
+        recordVideoFailure('revokeRemoteControlBeforeVideoStop', error);
+      }
+    }
+    if (recording.active?.videoSessionId === sessionId || recording.replay?.videoSessionId === sessionId) {
+      nativeScreenAudio.pausePublishing(sessionId);
+      await recording.stopAll().catch(error => {
+        void writeMediaDiagnostic({ stage: 'recordingFailed', code: error.message });
+      });
+    }
+    if (nativeScreenAudio.sessionId === sessionId) {
+      await nativeScreenAudio.stop(sessionId).catch(() => {});
+    }
+    nativeVideoTextures.releaseImports(video);
+    const deadline = Date.now() + 1_200;
+    while ((video.imported.size || video.pendingSlotReleases.size) && Date.now() < deadline) {
+      await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+    }
+    return controlFailure;
+  }
+
+  async function stopNativeVideo(sessionId, preserveGameFollow = false) {
     const video = nativeVideoSession;
     if (!video) {
       return lastStoppedNativeVideoSession === sessionId
@@ -196,49 +235,29 @@ function createNativeVideoSession({ host: obsCaptureHost, mediaHelper, getSource
         : Promise.reject(new Error('videoSessionMismatch'));
     }
     if (video.sessionId !== sessionId) throw new Error('videoSessionMismatch');
-    if (!preserveGameFollow && video.gameFollowId) leagueCaptureFollow.end(video.gameFollowId);
+    if (!preserveGameFollow && video.gameFollowId) getGameFollow().end(video.gameFollowId);
     if (video.stopPromise) return video.stopPromise;
     video.stopping = true;
-    if (video.renderer && !video.renderer.isDestroyed()) {
-      video.renderer.send('media:native-video-stopping', { sessionId });
-    }
     const startedAt = performance.now();
     video.stopPromise = (async () => {
-      // 先撤销输入和释放按住的键；画面/GPU 回收再慢也不能继续接受远控。
-      const active = mediaHelper.videoCapture;
-      const control = active?.sessionId === sessionId ? active.remoteControl : undefined;
-      let controlFailure;
-      if (control) {
-        try { await mediaHelper.clearRemoteControl(sessionId, control.controlSessionId); }
-        catch (error) {
-          controlFailure = error;
-          recordVideoFailure('revokeRemoteControlBeforeVideoStop', error);
+      const controlFailure = video.retryCaptureStop ? undefined : await stopVideoConsumers(video);
+      const host = obsCaptureHost.state;
+      const textureTimeout = (video.imported.size || video.pendingSlotReleases.size)
+        && host && host === video.helperState && host.videoSessionId === sessionId;
+      try {
+        if (textureTimeout) {
+          void writeMediaDiagnostic({ stage: 'screenTextureReleaseTimeout',
+            importedCount: video.imported.size, pendingReleaseCount: video.pendingSlotReleases.size });
+          // 外部纹理未归还时不复用宿主；退出确认后才释放来源并允许下一次共享。
+          await obsCaptureHost.shutdown(true, 'textureTimeout');
         }
-      }
-      if (recording.active?.videoSessionId === sessionId || recording.replay?.videoSessionId === sessionId) {
-        nativeScreenAudio.pausePublishing(sessionId);
-        await recording.stopAll().catch(error => {
-          void writeMediaDiagnostic({ stage: 'recordingFailed', code: error.message });
-        });
-      }
-      if (nativeScreenAudio.sessionId === sessionId) {
-        await nativeScreenAudio.stop(sessionId).catch(() => {});
-      }
-      nativeVideoTextures.releaseImports(video);
-      const deadline = Date.now() + 1_200;
-      while ((video.imported.size || video.pendingSlotReleases.size) && Date.now() < deadline) {
-        await new Promise((resolveWait) => setTimeout(resolveWait, 10));
-      }
-      if (video.imported.size || video.pendingSlotReleases.size) {
-        void writeMediaDiagnostic({ stage: 'screenTextureReleaseTimeout',
-          importedCount: video.imported.size, pendingReleaseCount: video.pendingSlotReleases.size });
-        // 外部纹理未归还时不复用宿主；退出确认后才释放来源并允许下一次共享。
-        await obsCaptureHost.shutdown(true, 'textureTimeout');
         await stopObsVideo(video);
-        void writeMediaDiagnostic({ stage: 'screenVideoStopRecovered' });
-      } else {
-        await stopObsVideo(video);
+      } catch (error) {
+        // 用户再次选择时只补做采集清理，远控撤销失败仍保留原来的阻挡。
+        video.retryCaptureStop = !controlFailure;
+        throw error;
       }
+      if (textureTimeout || video.retryCaptureStop) void writeMediaDiagnostic({ stage: 'screenVideoStopRecovered' });
       if (controlFailure) throw controlFailure;
       if (nativeVideoSession === video) {
         restoreNativeVideoBackgroundThrottling(video);
@@ -248,6 +267,7 @@ function createNativeVideoSession({ host: obsCaptureHost, mediaHelper, getSource
       void writeMediaDiagnostic({ stage: 'screenVideoStopped', durationMs: Math.round(performance.now() - startedAt) });
       return { changed: true };
     })().catch(error => {
+      if (video.retryCaptureStop) video.stopPromise = undefined;
       void writeMediaDiagnostic({ stage: 'screenVideoStopFailed',
         code: String(error?.message ?? error).match(/(?:^|: )([a-z][A-Za-z0-9]{0,63})$/)?.[1],
         durationMs: Math.round(performance.now() - startedAt) });

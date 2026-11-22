@@ -51,6 +51,7 @@
 .group-header-region { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 1fr; min-width: 0; visibility: visible; transition: opacity var(--motion-surface-duration) ease; }
 .group-header-clip { min-width: 0; min-height: 0; overflow: visible; }
 .group-header-region[aria-hidden='true'] .group-header-clip { overflow: hidden; }
+.group-header-region.is-drag-revealed[aria-hidden='true'] { position: relative; z-index: 3; visibility: visible; transition: none; pointer-events: none; background: var(--panel); }
 .group-header-region[aria-hidden='true'] { opacity: 0; visibility: hidden; transition: opacity var(--motion-surface-duration) ease, visibility 0s var(--motion-surface-duration); }
 
 .layout-reveal { display: grid; grid-template-rows: 1fr; }

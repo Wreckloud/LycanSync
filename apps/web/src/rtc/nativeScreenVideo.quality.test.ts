@@ -67,6 +67,7 @@ it('四档画质依次切换只更新同一轨道的发送参数及后续帧尺�
       await session.configureQuality(quality, { resolution: 1080, fps: 30 });
       expect(desktop.configureNativeVideo).toHaveBeenLastCalledWith('quality-session', fps, { width, height });
       expect(sender.getParameters().encodings[0].maxFramerate).toBe(fps);
+      if (quality === 'custom' && fps === 30) expect(sender.getParameters().degradationPreference).toBe('maintain-resolution');
       expect(track.publishOptions.screenShareEncoding.maxFramerate).toBe(fps);
       expect(session.track).toBe(track);
       await sendFrame();
@@ -242,7 +243,7 @@ it('SDK 重发布读取更新后的屏幕编码和降级策略，不恢复初始
     expect(participant.unpublishTrack).toHaveBeenCalledWith(track, false);
     expect(participant.publishOrRepublishTrack).toHaveBeenCalledWith(track, expect.objectContaining({
       screenShareEncoding: { maxBitrate: 8_000_000, maxFramerate: 30, priority: 'high' },
-      degradationPreference: 'maintain-framerate',
+      degradationPreference: 'maintain-resolution',
     }), true);
     expect(publication.options).not.toHaveProperty('videoEncoding');
   } finally { await session.stop(); }

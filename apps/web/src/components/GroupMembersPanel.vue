@@ -36,10 +36,17 @@ const profileMember = computed(() => props.members.find(member => member.userId 
 const profileActivity = computed(() => profileMember.value ? props.activity(profileMember.value) : null);
 const ownVoice = useOwnVoiceTime(() => !!profileAnchor.value && profileUserId.value === props.user.id);
 const profilePresence = computed(() => props.presences[profileUserId.value]);
-const profileSignature = ref('');
+const detailSignature = ref<string>();
+const profileSignature = computed(() => profileMember.value?.userId === props.user.id
+  ? props.user.signature ?? '' : profileMember.value?.signature ?? detailSignature.value);
 const sharedVoiceSeconds = ref<number | null>(null);
 const profileLoading = ref(false);
 const profileError = ref('');
+const voiceError = computed(() => {
+  if (profileUserId.value === props.user.id) return ownVoice.error.value;
+  return profileSignature.value !== undefined && sharedVoiceSeconds.value === null && profileError.value
+    ? '未能读取共同语音时长' : '';
+});
 const profileCard = ref<InstanceType<typeof ProfilePopover> | null>(null);
 let openTimer: ReturnType<typeof setTimeout> | undefined;
 let closeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -64,7 +71,7 @@ async function loadProfile() {
   if (!profileAnchor.value || !member) return;
   profileRequest?.abort();
   profileError.value = '';
-  if (member.userId === props.user.id) { profileSignature.value = props.user.signature ?? ''; sharedVoiceSeconds.value = null; return; }
+  if (member.userId === props.user.id) return;
   const controller = new AbortController();
   profileRequest = controller;
   profileLoading.value = true;
@@ -75,9 +82,9 @@ async function loadProfile() {
     const seconds = profile.sharedVoiceSeconds;
     if (profile.userId !== member.userId || typeof profile.signature !== 'string'
       || typeof seconds !== 'number' || !Number.isSafeInteger(seconds) || seconds < 0) throw new Error('暂时无法读取成员资料。');
-    profileSignature.value = profile.signature;
+    detailSignature.value = profile.signature;
     sharedVoiceSeconds.value = seconds;
-    if (profiles.size >= 8) profiles.delete(profiles.keys().next().value!);
+    if (!profiles.has(member.userId) && profiles.size >= 8) profiles.delete(profiles.keys().next().value!);
     profiles.set(member.userId, { signature: profile.signature, sharedVoiceSeconds: seconds, fetchedAt: Date.now() });
   } catch (reason) {
     if (!controller.signal.aborted && profileRequest === controller) {
@@ -97,7 +104,7 @@ function showProfile(member: GroupMember, anchor: HTMLElement) {
   profileAnchor.value = anchor;
   profileError.value = '';
   const cached = profiles.get(member.userId);
-  profileSignature.value = member.userId === props.user.id ? props.user.signature ?? '' : cached?.signature ?? '';
+  detailSignature.value = cached?.signature;
   sharedVoiceSeconds.value = member.userId === props.user.id ? null : cached?.sharedVoiceSeconds ?? null;
   if (member.userId !== props.user.id && (!cached || Date.now() - cached.fetchedAt >= 60_000)) void loadProfile();
 }
@@ -174,13 +181,14 @@ async function toggleSearch() {
     <ProfilePopover ref="profileCard" :anchor="profileAnchor" :profile-key="profileUserId" placement="left" label="成员资料"
       :nickname="profileMember?.userId === user.id ? user.nickname : profileMember?.nickname ?? ''"
       :avatar="profileMember?.userId === user.id ? user.avatar : profileMember?.avatar ?? ''"
-      :signature="profileMember?.userId === user.id ? user.signature : profileSignature"
+      :signature="profileSignature"
       :status="profileMember ? status(profileMember) : 'OFFLINE'" :status-label="profileMember ? PRESENCE_STATUS_LABELS[status(profileMember)] : ''"
       :activity="profileActivity?.text"
       :last-online-at="profilePresence?.lastOnlineAt" :recent-game="profileActivity?.type === 'GAME' ? null : profilePresence?.recentGame"
-      :activity-started-at="profileActivity?.startedAt" :loading="profileLoading" :error="profileError"
-      :own-voice="profileUserId === user.id" :voice-error="profileUserId === user.id ? ownVoice.error.value : ''"
-      :voice-seconds="profileUserId === user.id ? ownVoice.seconds.value : (profileError ? null : sharedVoiceSeconds)"
+      :activity-started-at="profileActivity?.startedAt" :loading="profileLoading && profileSignature === undefined"
+      :error="profileSignature === undefined ? profileError : ''"
+      :own-voice="profileUserId === user.id" :voice-error="voiceError"
+      :voice-seconds="profileUserId === user.id ? ownVoice.seconds.value : sharedVoiceSeconds"
       @close="closeProfile" @enter="keepProfile" @leave="leaveProfile" @retry="loadProfile" />
   </aside>
 </template>

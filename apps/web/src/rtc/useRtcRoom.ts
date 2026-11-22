@@ -17,7 +17,7 @@ import { NativeMicrophoneAudioSession, type NativeMicrophoneSettings } from './n
 import { nativeScreenAudioMode, type NativeScreenAudioMode } from './nativeScreenAudioMode';
 import { REMOTE_CONTROL_TOPIC, type RemoteControlInput } from './remoteControl';
 import { RemoteControlSession, type RemoteControlShare } from './remoteControlSession';
-import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, validateCustomScreenShareQuality, screenShareDegradationPreference, screenShareQuality, screenShareThumbnailPreset, screenShareVideoPreset, type CustomScreenShareQuality, type ScreenShareQualityId } from './screenShareQuality';
+import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, validateCustomScreenShareQuality, screenShareContentHint, screenShareDegradationPreference, screenShareQuality, screenShareThumbnailPreset, screenShareVideoPreset, type CustomScreenShareQuality, type ScreenShareQualityId } from './screenShareQuality';
 import { syncScreenShareViewing } from './screenShareViewing';
 
 type RoomStatus = 'idle' | 'joining' | 'connected' | 'reconnecting';
@@ -81,6 +81,8 @@ interface RtcRoomOptions {
   events?: RtcRoomEvents;
 }
 
+const SCREEN_SHARE_STOP_NOTICE = '停止屏幕共享时发生问题。请重新选择共享画面，若仍失败可重启应用。';
+
 function captureErrorMessage(error: unknown, source: MediaSource): string {
   const label = source === Track.Source.Microphone ? '麦克风' : '屏幕共享';
   if (error instanceof Error) {
@@ -96,7 +98,7 @@ function captureErrorMessage(error: unknown, source: MediaSource): string {
     }
     if (source === Track.Source.ScreenShare) {
       const code = error.message.match(/(?:^|: )([a-z][A-Za-z0-9]{0,63})$/)?.[1];
-      if (code === 'nativeVideoStopNotConfirmed') return '停止屏幕共享时发生问题，请重启应用后再试。';
+      if (code === 'nativeVideoStopNotConfirmed' || code === 'obsCaptureStopUnconfirmed') return SCREEN_SHARE_STOP_NOTICE;
       if (code === 'nativeVideoFirstFrameTimeout') return '未能及时收到共享画面，本次共享已停止。';
       if (code === 'dxgiMonitorUnavailable') return '所选显示器暂不支持无边框共享，请确认显示器连接后重试。';
       if (code === 'dxgiAdapterMismatch') return '无法共享所选屏幕，本次共享已停止。请重新选择屏幕后重试。';
@@ -323,7 +325,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
     void currentRoom?.disconnect();
   });
 
-  async function join(groupId: string): Promise<boolean> {
+  async function join(groupId: string, onConnected?: () => void): Promise<boolean> {
     if (pendingJoin.value || activeRoom.value) return false;
 
     const startedAt = performance.now();
@@ -564,10 +566,13 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       // 5. 明确加入语音后默认开麦；权限失败只保持关麦，不退出已经建立的语音会话。
       listening.value = true;
       const mediaStartedAt = performance.now();
-      const [microphoneMs, listeningMs] = await Promise.all([
+      const mediaReady = Promise.all([
         setMediaEnabled(Track.Source.Microphone, true).then(() => performance.now() - mediaStartedAt),
         synchronizeListeningAttribute(currentRoom).then(() => performance.now() - mediaStartedAt),
       ]);
+      // 先让界面进入已连接状态；麦克风仍由本次房间任务管理和计时。
+      onConnected?.();
+      const [microphoneMs, listeningMs] = await mediaReady;
       if (request.signal.aborted || activeRoom.value !== currentRoom) return false;
       window.lycanDesktop?.reportVoiceJoinTiming?.({
         durationMs: performance.now() - startedAt, preflightMs: tokenStartedAt - startedAt,
@@ -1061,7 +1066,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         if (nativeAudio?.track && nativeAudio.track !== shareAudioTrack) retireRoomTrack(currentRoom, nativeAudio.track);
         if (screenShareResource === shareResource) screenShareResource = null;
         if (nativeScreenAudioSession === nativeAudio) nativeScreenAudioSession = null;
-        const nativeStop = nativeVideo?.stop();
+        const nativeStop = nativeVideo?.stop(true);
         await remoteControl.endShare(currentRoom, shareResource?.remoteShare ?? null);
         let videoStopFailed = false;
         let videoStopError: unknown;
@@ -1100,6 +1105,14 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         return;
       }
       if (existingTrack) return;
+      const previous = screenShareResource;
+      if (previous?.stopping && !nativeScreenAudioSession) {
+        try { await previous.videoSession.stop(true); }
+        catch (error) { throw new Error('nativeVideoStopNotConfirmed', { cause: error }); }
+        if (screenShareResource === previous) screenShareResource = null;
+        if (activeRoom.value === currentRoom && previous.captureSessionId) remoteControl.completeNativeCleanup(previous.captureSessionId);
+        if (!isCurrentTask()) return;
+      }
       if (screenShareResource || nativeScreenAudioSession) {
         throw new Error('nativeVideoStopNotConfirmed');
       }
@@ -1136,7 +1149,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           maxFps: selectedProfile.fps,
           captureSettings: selection.captureSettings,
           resolution: { width: selectedProfile.width, height: selectedProfile.height },
-          contentHint: 'motion',
+          contentHint: screenShareContentHint(selectedQuality, selectedCustomQuality),
           isCurrentCapture: () => activeRoom.value === currentRoom && screenShareResource === shareResource
             && shareResource != null && !shareResource.stopping,
           canReduceFrameRate: () => status.value === 'connected'
@@ -1201,7 +1214,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             }).catch((error) => {
               reportNativeAudioCleanupFailure(error);
               if (activeRoom.value === currentRoom && screenShareResource === failedShareResource) {
-                notice.value = '停止屏幕共享时发生问题，请重启应用后再试。';
+                notice.value = SCREEN_SHARE_STOP_NOTICE;
               }
             });
             revision.value++;
@@ -1223,7 +1236,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         // 仅浏览器使用 Chromium 采集；Electron 原生失败不会回退到此路径。
         capturedTracks = await participant.createScreenTracks({
           audio: false,
-          contentHint: 'motion',
+          contentHint: screenShareContentHint(selectedQuality, selectedCustomQuality),
           resolution: sharePreset.resolution,
         });
         if (!isCurrentTask()) return;
@@ -1246,7 +1259,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             videoCodec: 'h264', simulcast: true,
             screenShareSimulcastLayers: [screenShareThumbnailPreset()],
             // 降级偏好只作用于本次共享，不改变房间其他视频的策略。
-            degradationPreference: screenShareDegradationPreference(selectedQuality),
+            degradationPreference: screenShareDegradationPreference(selectedQuality, selectedCustomQuality),
           });
         }
         return participant.publishTrack(track);
@@ -1294,7 +1307,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         && !screenShareSelectionCancelled.value) {
         notice.value = enabled ? captureErrorMessage(error, source)
           : nativeVideoStopFailed
-            ? '停止屏幕共享时发生问题，请重启应用后再试。'
+            ? SCREEN_SHARE_STOP_NOTICE
             : '停止屏幕共享时发生问题，请重新连接语音。';
       }
     } finally {
@@ -1336,7 +1349,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           reportNativeAudioCleanupFailure(error);
           if (activeRoom.value === currentRoom && shareResource && screenShareResource === shareResource) {
             shareResource.stopping = true;
-            notice.value = '停止屏幕共享时发生问题，请重启应用后再试。';
+            notice.value = SCREEN_SHARE_STOP_NOTICE;
           }
         }
       }

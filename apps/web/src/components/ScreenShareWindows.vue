@@ -69,6 +69,7 @@ const folded = ref(false);
 const stageHidden = ref(false);
 const inlinePanel = ref<InstanceType<typeof CallViewingPanel> | null>(null);
 const resizing = computed(() => inlinePanel.value?.resizing ?? false);
+const headerReveal = computed(() => inlinePanel.value?.memberBlend ?? 0);
 const inlineExpanded = computed(() => inlineWatching.value && !folded.value && !stageHidden.value);
 watch([() => props.inlineTarget, () => props.rtc.room, detached], () => { folded.value = false; stageHidden.value = false; });
 watch(() => view.mode, mode => { if (mode === 'collapsed') stageHidden.value = false; });
@@ -139,7 +140,7 @@ watch(() => [props.rtc.remoteControlActive, props.rtc.revision] as const, ([acti
     if (!windows.openControl(active.identity)) void props.rtc.exitRemoteControl();
   }
 }, { flush: 'post' });
-defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded, resizing, detached, returning, returnWatching });
+defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded, headerReveal, resizing, detached, returning, returnWatching });
 </script>
 
 <template>
