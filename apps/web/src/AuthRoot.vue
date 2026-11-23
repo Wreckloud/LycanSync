@@ -90,12 +90,13 @@ useIdentityTransition(() => ({
       : logoutBusy.value ? 'leaving' : onboarding.value ? 'profile' : 'account',
 }));
 
-function expired() {
+function expired(event?: Event) {
   sessionRevision++;
   initializationRequest?.abort();
   user.value = null;
   entryUser.value = null;
   onboarding.value = false;
+  if (event && event instanceof CustomEvent && typeof event.detail === 'string') error.value = event.detail;
 }
 const removeAccessLink = desktop?.onAccessLink((offer) => {
   // 当前确认未结束前不切换链接，避免两次兑换的响应互相覆盖。

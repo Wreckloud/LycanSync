@@ -36,7 +36,7 @@ function setup() {
     entryUser: ref<AuthUser | null>(null), qqAvailable: ref(false), initialized: ref<boolean | null>(null), accountUpdated: vi.fn(), autoLogin: ref(true), manualEntryRequired: ref(false), preferenceSaving: ref(false),
     clearRequest: null, clearPasswordOpen: ref(false), removeConfirm: ref(false), removing: ref(false), submitting: ref(false), ready: ref(true), accessOffer: ref(null),
     onboarding: ref(false), error: ref(''), logoutTarget: ref<AuthUser | null>(null), logoutBusy: ref(false),
-    logoutInProgress: false, initializationRequest: null, ApiRequestError, Error, AbortSignal, AbortController,
+    logoutInProgress: false, initializationRequest: null, ApiRequestError, Error, CustomEvent, AbortSignal, AbortController,
     desktop: { returnToAccountEntry: vi.fn(async () => {}), clearSession: vi.fn(async () => {}),
       getAutoLogin: vi.fn(async () => ({ enabled: true, manualEntryRequired: false })), setAutoLogin: vi.fn(async (_id: string, enabled: boolean) => enabled) },
     authenticatedFetch: vi.fn(async () => Response.json({ id: 'member', nickname: '服务端昵称', avatar: '', administrator: false })),
@@ -46,10 +46,19 @@ function setup() {
     requestClearSession: () => void; confirmClearSession: () => Promise<void>; clearLocalSession: () => Promise<void>; initialize: (automatic?: boolean) => Promise<void>;
     completeAccess: (result: { user: AuthUser }, kind: string) => Promise<void>; enterAccount: () => Promise<void>;
     changeAutoLogin: (event: unknown) => Promise<void>;
-    expired: () => void; saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
+    expired: (event?: Event) => void; saveProfile: (profile: ProfileUpdate) => Promise<AuthUser>;
   };
   return { context, verify: functions.verifyCurrentSession, ...functions, resolve };
 }
+
+it('注销已完成时返回入口并显示本机凭据清理提示', () => {
+  const f = setup();
+  const detail = '账号已注销。本机登录信息未能清除，请检查数据目录的读写权限。';
+  f.expired(new CustomEvent('lycan:unauthorized', { detail }));
+  expect(f.context.user.value).toBeNull();
+  expect(f.context.entryUser.value).toBeNull();
+  expect(f.context.error.value).toBe(detail);
+});
 
 it('普通退出先确认，取消不动凭据；确认后只停止媒体并返回账号页', async () => {
   const f = setup();

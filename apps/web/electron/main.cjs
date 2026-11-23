@@ -671,11 +671,13 @@ async function serveApplication(request) {
           && (response.status === 401 || (routePolicy.clearsSession && response.ok))) {
         try { await clearSession(); }
         catch {
-          // 服务端已结束会话，文件清理失败也不能继续展示为已登录。
-          return Response.json({ code: 'LOCAL_SESSION_CLEAR_FAILED', message: '已退出登录，但本机登录信息未能清除。请检查数据目录的读写权限。' }, {
+          const accountClosed = response.ok && url.pathname === '/api/auth/account/close';
+          const message = accountClosed ? '账号已注销。本机登录信息未能清除，请检查数据目录的读写权限。'
+            : '已退出登录，但本机登录信息未能清除。请检查数据目录的读写权限。';
+          return Response.json({ code: 'LOCAL_SESSION_CLEAR_FAILED', message }, {
             status: currentSessionUnauthorized ? 401 : 502,
             headers: { 'Cache-Control': 'no-store',
-              ...(currentSessionUnauthorized ? { 'X-Lycan-Session-Expired': 'true' } : {}) },
+              ...(currentSessionUnauthorized || accountClosed ? { 'X-Lycan-Session-Expired': 'true' } : {}) },
           });
         }
       }

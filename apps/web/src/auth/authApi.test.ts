@@ -96,4 +96,17 @@ describe('authRequest', () => {
     await authenticatedFetch('/api/groups');
     expect(new Headers(fetchMock.mock.calls[3][1].headers).get('Authorization')).toBe(`Bearer ${session}`);
   });
+
+  test.each([false, true])('桌面注销本机清理失败时依据代理确认结束会话（%s）', async (closed) => {
+    const message = '账号已注销。本机登录信息未能清除，请检查数据目录的读写权限。';
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal('window', { lycanDesktop: {}, dispatchEvent });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ code: 'LOCAL_SESSION_CLEAR_FAILED', message }, {
+      status: 502, headers: closed ? { 'X-Lycan-Session-Expired': 'true' } : {},
+    })));
+
+    await expect(authRequest('account/close', 'POST')).rejects.toMatchObject({ status: 502, message });
+    if (closed) expect(dispatchEvent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: 'lycan:unauthorized', detail: message }));
+    else expect(dispatchEvent).not.toHaveBeenCalled();
+  });
 });

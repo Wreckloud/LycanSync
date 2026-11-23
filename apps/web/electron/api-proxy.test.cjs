@@ -631,6 +631,16 @@ test('服务端退出成功但本机文件清理失败明确报告已结束会�
     message: '已退出登录，但本机登录信息未能清除。请检查数据目录的读写权限。' });
 });
 
+test('服务器确认注销后，本机凭据清理失败仍通知页面结束会话', async () => {
+  const { serve } = proxyFixture({ net: { fetch: async () => new Response(null, { status: 204 }) },
+    clearSession: async () => { throw new Error('private-session-path'); } });
+  const response = await serve(new Request('lycan://app/api/auth/account/close', { method: 'POST' }));
+  assert.equal(response.status, 502);
+  assert.equal(response.headers.get('X-Lycan-Session-Expired'), 'true');
+  assert.deepEqual(await response.json(), { code: 'LOCAL_SESSION_CLEAR_FAILED',
+    message: '账号已注销。本机登录信息未能清除，请检查数据目录的读写权限。' });
+});
+
 test('群组超过 3 MiB 接口预算时本地返回明确 413，不转发到后端', async () => {
   const { serve, forwarded } = proxyFixture();
   const response = await serve(new Request('lycan://app/api/groups', { method: 'POST', body: 'x'.repeat(3 * 1024 * 1024 + 1) }));

@@ -101,7 +101,12 @@ export async function authenticatedFetch(input: string, init: RequestInit = {}, 
     ? await uploadForm(input, init.body, headers, init.signal, uploadProgress)
     : await fetch(input, { ...init, headers, credentials: 'omit', cache: 'no-store' });
   const path = new URL(input, 'http://localhost').pathname;
-  if (response.status === 401 && !publicApiPaths.has(path)) {
+  if (response.status === 502 && path === '/api/auth/account/close' && window.lycanDesktop
+      && response.headers.get('X-Lycan-Session-Expired') === 'true') {
+    // 代理已确认注销，只需把本机凭据清理提示带回登录入口。
+    const warning = await readApiError(response.clone());
+    window.dispatchEvent(new CustomEvent('lycan:unauthorized', { detail: warning.message }));
+  } else if (response.status === 401 && !publicApiPaths.has(path)) {
     if (window.lycanDesktop) {
       if (response.headers.get('X-Lycan-Session-Expired') === 'true') {
         window.dispatchEvent(new Event('lycan:unauthorized'));
