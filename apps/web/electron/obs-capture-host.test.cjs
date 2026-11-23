@@ -368,6 +368,26 @@ test('热宿主再次启动时目标退出，保留正常结束错误码而不�
   assert.equal(f.failures.at(-1), 'captureTargetClosed');
 });
 
+test('没有共享会话时预热宿主异常退出，下一次共享可直接启动新宿主', async context => {
+  const { manager, children, diagnostics, start, emit } = adapterFixture(context);
+  const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const callbacks = source.slice(source.indexOf('  onFailure: (state, error)'), source.indexOf('  onAudioFailure:'));
+  manager.onFailure = runInNewContext(`({${callbacks}}).onFailure`, { nativeVideo: { current: undefined } });
+  await manager.prepare();
+  const oldHost = manager.state;
+  children[0].emit('close', 1);
+  await oldHost.closePromise;
+  assert.equal(manager.state, undefined);
+  assert.deepEqual(diagnostics.at(-1), { stage: 'obsHostExited', stopMode: 'unexpected', stopReason: 'failure', exitCode: 1 });
+
+  const starting = start();
+  await flush();
+  assert.equal(children.length, 2);
+  emit(children[1], { event: 'captureStarted', helperVersion: '32.2.2' });
+  await starting;
+  assert.equal(manager.state.child, children[1]);
+});
+
 test('预热显卡不匹配先等待旧宿主退出，再按原来源和画质重建，不切换采集范围', async (context) => {
   const { manager, children, diagnostics, failures, start, emit } = adapterFixture(context);
   const started = start();
@@ -522,7 +542,7 @@ test('停止超时后的强制结束单独记录，不伪报正常停止', async
   const stopped = manager.stop(sessionId);
   context.mock.timers.tick(4000);
   await stopped;
-  assert.deepEqual(captureDiagnostics, [{ stage: 'obsHostExited', stopMode: 'forced', stopReason: 'stopTimeout' }]);
+  assert.deepEqual(captureDiagnostics, [{ stage: 'obsHostExited', stopMode: 'forced', stopReason: 'stopTimeout', exitCode: 0 }]);
 });
 
 test('请求退出后原生进程异常退出，也不能记为正常清理', async (context) => {
@@ -531,7 +551,7 @@ test('请求退出后原生进程异常退出，也不能记为正常清理', as
   const stopped = manager.shutdown();
   child.emit('close', 1);
   await stopped;
-  assert.deepEqual(captureDiagnostics, [{ stage: 'obsHostExited', stopMode: 'unexpected', stopReason: 'shutdown' }]);
+  assert.deepEqual(captureDiagnostics, [{ stage: 'obsHostExited', stopMode: 'unexpected', stopReason: 'shutdown', exitCode: 1 }]);
 });
 
 const audioId = '00000000-0000-0000-0000-000000000001';

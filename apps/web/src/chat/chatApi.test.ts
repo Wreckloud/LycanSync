@@ -19,6 +19,22 @@ afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 const attachment = { id: 'file', byteSize: 3, contentType: 'application/octet-stream', fileName: 'sample.bin' };
 
+it('桌面下载使用原生保存框并按本次请求取消', async () => {
+  const pending = deferred<'cancelled'>();
+  const downloadChatFile = vi.fn(() => pending.promise);
+  const cancelChatDownload = vi.fn();
+  vi.stubGlobal('window', { lycanDesktop: { downloadChatFile, cancelChatDownload } });
+  const controller = new AbortController();
+  const progress = vi.fn();
+  const result = downloadFile('group', attachment, controller.signal, progress);
+  expect(downloadChatFile).toHaveBeenCalledWith(expect.any(String), '/api/groups/group/files/file', 'sample.bin', 3, progress);
+  controller.abort();
+  expect(cancelChatDownload).toHaveBeenCalledExactlyOnceWith(downloadChatFile.mock.calls[0]?.at(0));
+  pending.resolve('cancelled');
+  await expect(result).rejects.toMatchObject({ name: 'AbortError' });
+  expect(authenticatedFetch).not.toHaveBeenCalled();
+});
+
 it('封面只请求封面接口，204 表示无封面，不回退下载原视频', async () => {
   vi.mocked(authenticatedFetch).mockResolvedValue(new Response(null, { status: 204 }));
   expect(await fetchVideoThumbnail('group', 'file', new AbortController().signal)).toBeNull();

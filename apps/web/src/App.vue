@@ -627,9 +627,10 @@ const viewerInputBlocked = computed(() => Boolean(props.interactionBlocked || se
   || management.value || captureRequest.value || pendingSwitchGroupId.value || rtc.remoteControlRequest || rtc.status !== 'connected'));
 watch(viewerInputBlocked, (blocked) => { if (blocked) viewingWindows.value?.disarmAll(); }, { flush: 'sync' });
 const mutedShares = ref<string[]>([]);
+const shareLevels = reactive(new Map<string, number>());
 const departingGroupId = ref<string | null>(null);
 const callbarLeaving = ref(false);
-watch(() => rtc.room, (room) => { if (room) mutedShares.value = []; }, { flush: 'sync' });
+watch(() => rtc.room, () => { mutedShares.value = []; shareLevels.clear(); }, { flush: 'sync' });
 
 async function openSettings(section: SettingsSectionId, event: Event | HTMLElement) {
   if (settingsOpen.value) { await settingsView.value?.selectSection(section); return; }
@@ -796,6 +797,8 @@ const remoteControlPlaceholder = (identity: string) => {
 };
 const remoteControlIsPending = (identity: string) => rtc.remoteControlPending?.identity === identity;
 const remoteControlIsActive = (identity: string) => rtc.remoteControlActive?.identity === identity;
+const controlActionLabel = (identity: string) => remoteControlIsActive(identity) ? '退出远程控制'
+  : remoteControlIsPending(identity) ? '取消远程控制申请' : '申请远程控制';
 // 测试期的客户端软限制，不代表服务端并发容量；后续按实测逐步移除。
 const screenShareLimitReached = computed(() => activeScreenShareCount.value >= 8 && !localParticipant.value?.isScreenShareEnabled);
 watch(() => [joinedGroupId.value, joiningGroupId.value, rtc.status, rtc.room], () => {
@@ -1019,9 +1022,16 @@ function updateOutputVolume(volume: number) {
 function remotePlaybackVolume(identity: string) {
   return Math.min(AUDIO_VOLUME_MAX, participantVolume(identity) * outputVolume.value);
 }
-function remoteScreenSharePlaybackVolume(identity: string) {
+function shareVolume(identity: string) {
   if (mutedShares.value.includes(identity)) return 0;
-  return Math.min(AUDIO_VOLUME_MAX, screenShareVolume.value * outputVolume.value);
+  return shareLevels.get(identity) ?? 1;
+}
+function remoteScreenSharePlaybackVolume(identity: string) {
+  return Math.min(AUDIO_VOLUME_MAX, shareVolume(identity) * screenShareVolume.value * outputVolume.value);
+}
+function updateSharedVolume(identity: string, value: number) {
+  if (value > 0) shareLevels.set(identity, value);
+  if (mutedShares.value.includes(identity) !== (value === 0)) toggleSharedAudio(identity);
 }
 
 function requestParticipantControl(identity: string) {
@@ -1032,7 +1042,7 @@ function toggleSharedAudio(identity: string) {
   mutedShares.value = mutedShares.value.includes(identity)
     ? mutedShares.value.filter((current) => current !== identity) : [...mutedShares.value, identity];
   remoteAudioTracks.value.filter((item) => item.participantIdentity === identity && item.source === Track.Source.ScreenShareAudio)
-    .forEach((item) => item.track.setVolume(listening.value ? remoteScreenSharePlaybackVolume(identity) : 0));
+    .forEach((item) => item.track.setVolume(listening.value && audioOutput.available.value ? remoteScreenSharePlaybackVolume(identity) : 0));
 }
 
 function previewGroup(groupId: string) {
@@ -1319,9 +1329,10 @@ function participantListening(participant: Participant) {
       @notice="viewerNotice = $event" @toggle-share-audio="toggleSharedAudio" @request-control="requestParticipantControl">
       <template #control="{ identity }">
         <button v-if="identity !== localParticipant?.identity && remoteControlCanRequest(identity)" type="button"
-          class="viewing-control-action" :class="{ 'is-engaged': remoteControlIsActive(identity) || remoteControlIsPending(identity) }" :aria-label="remoteControlIsActive(identity) ? '退出远程控制' : remoteControlIsPending(identity) ? '取消远程控制申请' : '申请远程控制'"
+          class="viewing-control-action" :class="{ 'is-engaged': remoteControlIsActive(identity) || remoteControlIsPending(identity) }"
+          :aria-label="controlActionLabel(identity)" :title="controlActionLabel(identity)"
           @click.stop="remoteControlIsActive(identity) ? rtc.exitRemoteControl() : remoteControlIsPending(identity) ? rtc.cancelPendingRemoteControl(identity) : requestParticipantControl(identity)">
-          <MousePointer2 :size="14" />{{ remoteControlIsActive(identity) ? '退出控制' : remoteControlIsPending(identity) ? '取消申请' : '申请控制' }}
+          <Square v-if="remoteControlIsActive(identity)" :size="15" /><X v-else-if="remoteControlIsPending(identity)" :size="15" /><MousePointer2 v-else :size="15" />
         </button>
       </template>
       <template #default="{ select, visible, previewsMounted, focusedIdentity, watchingElsewhere }">
@@ -1336,7 +1347,8 @@ function participantListening(participant: Participant) {
           :private-control="remoteControlPlaceholder(participant.identity)"
           :playback-volume="participantVolume(participant.identity)"
           :share-audio="Boolean(participant.getTrackPublication(Track.Source.ScreenShareAudio)?.track)"
-          :share-muted="mutedShares.includes(participant.identity)" :share-audio-listening="listening"
+          :share-volume="shareVolume(participant.identity)" :share-audio-listening="listening"
+          @change-share-volume="updateSharedVolume(participant.identity, $event)" @change-voice-volume="updateParticipantVolume(participant.identity, $event)"
           @toggle-share-audio="toggleSharedAudio(participant.identity)" @select="viewerNotice = ''; select(participant.identity)"
           @toggle-audio="toggleParticipantAudio(participant.identity)"
           @toggle-microphone="toggleMicrophone" @toggle-listening="toggleListening" />

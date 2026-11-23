@@ -200,6 +200,13 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
     return () => ipcRenderer.removeListener('recording:state', listener);
   },
   getProcessMetrics: () => ipcRenderer.invoke('diagnostics:process-metrics'),
+  downloadChatFile: async (id, path, name, size, onProgress) => {
+    const listener = (_event, jobId, bytes) => { if (jobId === id) onProgress(bytes); };
+    ipcRenderer.on('chat:download-progress', listener);
+    try { return await ipcRenderer.invoke('chat:download', id, path, name, size); }
+    finally { ipcRenderer.removeListener('chat:download-progress', listener); }
+  },
+  cancelChatDownload: id => ipcRenderer.send('chat:cancel-download', id),
   exportDiagnosticReport: (report, chooseLocation) => ipcRenderer.invoke('diagnostics:export', report, chooseLocation),
   saveDiagnosticSnapshot: (report) => ipcRenderer.invoke('diagnostics:checkpoint', report),
   getSavedDiagnosticReport: () => ipcRenderer.invoke('diagnostics:saved'),

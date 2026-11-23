@@ -692,7 +692,11 @@ test('没有封面的群聊音视频使用紧凑文件行，名称可打开查�
   await mockChatShell(page);
   const unfinished = fileMessage('A03', 'failed', '未完成.mp4');
   unfinished.attachment!.transferStatus = 'FAILED';
-  const items = [fileMessage('A01', 'clip', '片段.mp4'), fileMessage('A02', 'sound', '录音.ogg'), unfinished];
+  const fileName = 'LycanSync-diagnostics-1795345026223.json';
+  const pendingFile = fileMessage('A04', 'pending-file', fileName);
+  pendingFile.attachment!.transferStatus = 'PENDING';
+  const items = [fileMessage('A01', 'clip', '片段.mp4'), fileMessage('A02', 'sound', '录音.ogg'), unfinished,
+    pendingFile, fileMessage('A05', 'completed-file', fileName)];
   await page.route('**/api/groups**', route => {
     const url = new URL(route.request().url());
     if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
@@ -706,6 +710,17 @@ test('没有封面的群聊音视频使用紧凑文件行，名称可打开查�
   const failed = page.locator('[data-message-id="A03"] .chat-transfer-media');
   await expect(failed.getByText('上传未完成')).toBeVisible();
   await expect(failed.getByRole('button')).toHaveCount(0);
+  const pendingCard = page.locator('[data-message-id="A04"] .chat-file-card');
+  const completedCard = page.locator('[data-message-id="A05"] .chat-file-card');
+  const bar = pendingCard.getByRole('progressbar', { name: '文件上传进度' });
+  await expect(bar).toBeVisible();
+  await expect(bar).not.toHaveAttribute('value');
+  await expect(pendingCard.getByRole('button')).toHaveCount(0);
+  await expect(completedCard.getByRole('button', { name: '下载文件' })).toBeVisible();
+  const before = (await pendingCard.boundingBox())!, after = (await completedCard.boundingBox())!;
+  expect([before.width, before.height]).toEqual([after.width, after.height]);
+  const details = (await pendingCard.locator('.chat-file-details').boundingBox())!;
+  expect((await bar.boundingBox())!.y).toBeGreaterThanOrEqual(details.y + details.height);
   await expect(row).toBeVisible();
   await expect(row.locator('.chat-file-icon')).toHaveCount(0);
   for (const [name, target] of [
@@ -970,7 +985,7 @@ test('批量文件失败后重试只再次发送失败项', async ({ page }) => 
   expect(requests.get('first.bin')).toBe(1);
   expect(requests.get('second.bin')).toBe(1);
   await page.locator('.chat-message').getByRole('button', { name: '重试', exact: true }).click();
-  await expect(page.locator('.chat-file-card').filter({ hasText: 'second.bin' })).toHaveCount(1);
+  await expect(page.locator('.chat-file-card').filter({ hasText: 'second.bin' }).getByRole('button', { name: '下载文件' })).toBeVisible();
   expect(requests.get('first.bin')).toBe(1);
   expect(requests.get('second.bin')).toBe(2);
 });
@@ -1299,12 +1314,15 @@ test('取消文件上传后可重新发送且不会重复创建成功消息', as
   });
   await page.getByRole('button', { name: '发送消息' }).click();
   await expect.poll(() => uploadRequests).toBe(1);
-  await page.getByRole('button', { name: '取消上传' }).click();
-  await expect(page.getByText('已取消上传')).toBeVisible();
+  const file = page.locator('.chat-file-card').filter({ hasText: 'cancel.bin' });
+  await expect(file.getByRole('progressbar')).toBeVisible();
+  await file.getByRole('button', { name: '取消上传' }).click();
+  await expect(file.getByText('已取消上传')).toBeVisible();
+  await expect(file.getByRole('progressbar')).toHaveCount(0);
   releaseUpload();
   await uploadFinished;
   await page.locator('.chat-message').getByRole('button', { name: '重试', exact: true }).click();
-  await expect(page.locator('.chat-file-card').filter({ hasText: 'cancel.bin' })).toHaveCount(1);
+  await expect(file.getByRole('button', { name: '下载文件' })).toBeVisible();
   expect(uploadRequests).toBe(2);
   await expect(page.locator('[data-message-id="F-canceled"]')).toHaveCount(0);
 });

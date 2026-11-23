@@ -166,7 +166,7 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
             if (Number.isInteger(entry[key]) && entry[key] >= 0 && entry[key] <= 300_000) details[key] = entry[key];
           }
         }
-        if (stage === 'microphoneHostExited' && Number.isInteger(entry.exitCode)
+        if ((stage === 'microphoneHostExited' || stage === 'obsHostExited') && Number.isInteger(entry.exitCode)
             && entry.exitCode >= -2147483648 && entry.exitCode <= 4294967295) details.exitCode = entry.exitCode;
         if (['window', 'monitor'].includes(entry.sourceKind)) details.sourceKind = entry.sourceKind;
         if (typeof entry.hostReused === 'boolean') details.hostReused = entry.hostReused;

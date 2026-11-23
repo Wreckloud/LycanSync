@@ -68,7 +68,7 @@ describe('audioPreferences', () => {
     expect(loadAudioPreferences('local-user', storage)).toMatchObject({
       inputGain: 0.8,
       outputVolume: 1.2,
-      screenShareVolume: 1,
+      screenShareVolume: 0.85,
       voiceVolumeBalance: true,
       echoCancellation: true,
       noiseSuppression: true,

@@ -327,7 +327,7 @@ test('群头像提示在右侧进退，显示通话状态且不重复系统提�
   await expect(hint).toHaveCount(0);
 });
 
-test('成员卡片只点击切换，音量调节统一在底部收听面板', async ({ page }) => {
+test('成员卡片短按静音、长按拖动后与底部收听面板同步', async ({ page }) => {
   await page.evaluate(() => (window as unknown as { __viewingTest: { microphones(ids: string[]): void } }).__viewingTest.microphones(['A']));
   const local = page.getByTestId('participant-card').first();
   const microphone = local.getByRole('button', { name: '关闭自己的麦克风', exact: true });
@@ -354,9 +354,31 @@ test('成员卡片只点击切换，音量调节统一在底部收听面板', as
   const remote = page.getByTestId('participant-card').filter({ hasText: '成员A' });
   await remote.getByRole('button', { name: /点击取消收听/ }).click();
   await remote.getByRole('button', { name: /点击恢复收听/ }).click();
+  const voice = remote.getByRole('button', { name: /点击取消收听/ });
+  await voice.hover();
+  const box = (await voice.boundingBox())!;
+  const x = box.x + box.width / 2, y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  const popover = page.locator('.volume-popup');
+  await expect(popover).toHaveText('200%');
+  await page.mouse.move(x, y + 72);
+  await expect(popover).toHaveText('100%');
+  await page.mouse.up();
+  await expect(popover).toHaveCount(0);
+  await expect(voice).toHaveAttribute('aria-pressed', 'false');
+  await voice.hover();
+  const strip = remote.locator('xpath=ancestor::*[contains(@class,"horizontal-viewport")][1]');
+  const beforeWheel = await strip.evaluate(element => element.scrollLeft);
+  await page.mouse.wheel(0, -100);
+  await expect(popover).toHaveText('105%');
+  await page.mouse.wheel(0, 100);
+  await expect(popover).toHaveText('100%');
+  await expect(popover).toHaveCount(0);
+  expect(await strip.evaluate(element => element.scrollLeft)).toBe(beforeWheel);
   await page.getByRole('button', { name: '收听选项', exact: true }).click();
   await page.getByRole('button', { name: '调整成员音量', exact: true }).click();
-  await expect(volume).toHaveValue('2');
+  await expect(volume).toHaveValue('1');
   await expect.poll(() => page.locator('.call-control-menu').evaluate(element => element.getAnimations({ subtree: true }).length)).toBe(0);
   await page.screenshot({ path: test.info().outputPath('member-volume-panel.png') });
 });
@@ -850,7 +872,9 @@ test('默认仅小预览，网格和聚焦使用原比例，整体弹出后返�
   await expect(page.locator('.viewing-actions')).toHaveCSS('opacity', '1');
   expect(await page.locator('.viewing-action-buttons button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label'))))
     .toEqual(['查看全部共享画面', '占满窗口', '弹出观看区', '退出观看']);
-  await expect(page.locator('.viewing-members-toggle')).toHaveCSS('border-top-width', '1px');
+  const membersToggle = page.getByRole('button', { name: '收起成员', exact: true });
+  const center = (box: { x: number; width: number }) => box.x + box.width / 2;
+  expect(Math.abs(center((await membersToggle.boundingBox())!) - center((await page.locator('.viewing-actions').boundingBox())!))).toBeLessThan(1);
   await expect(page.getByRole('button', { name: '单路全屏', exact: true })).toHaveCount(0);
   await page.screenshot({ path: test.info().outputPath('focus-video-and-members.png') });
   const windowSize = await page.evaluate(() => [innerWidth, innerHeight, outerWidth, outerHeight]);

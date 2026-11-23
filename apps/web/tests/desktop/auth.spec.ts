@@ -1,11 +1,11 @@
 import { test, expect, type ElectronApplication } from '@playwright/test';
 import { createServer } from 'node:http';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { launchIsolatedDesktop } from './fixtures/isolatedDesktop';
 
-async function createAccountServer(administrator = true) {
+async function createAccountServer(administrator = true, attachment?: { path: string; bytes: Buffer }) {
   const user = { id: randomUUID(), nickname: '行者1001', avatar: '', signature: '', administrator };
   let token = '';
   let revoked = false;
@@ -21,6 +21,12 @@ async function createAccountServer(administrator = true) {
     response.setHeader('Content-Type', 'application/json');
     const reply = (status: number, value?: unknown) => { response.writeHead(status); response.end(value === undefined ? undefined : JSON.stringify(value)); };
     const authenticated = !!token && !revoked && request.headers.authorization === 'Bearer ' + token;
+    if (attachment && request.url === attachment.path && request.method === 'GET') {
+      if (!authenticated) return reply(401);
+      response.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': attachment.bytes.length });
+      response.end(attachment.bytes);
+      return;
+    }
     if (request.url === '/api/auth/options') return reply(200, { mode: 'invite', initialized: true, qqAvailable: false });
     if (request.url === '/api/system/initialization') return reply(200, { initialized: true });
     if (request.url === '/api/auth/access/preview') return reply(200, { kind: redemptions ? 'RECOVERY' : administrator ? 'ACTIVATE' : 'INVITE', status: 'PENDING', serverName: '测试服务器' });
@@ -81,6 +87,29 @@ async function redeem(application: ElectronApplication, origin: string, recovery
   await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible();
   return page;
 }
+
+test('桌面登录后可把群聊附件完整保存到所选位置', async () => {
+  const path = '/api/groups/' + randomUUID() + '/files/' + randomUUID();
+  const bytes = randomBytes(18 * 1024 * 1024);
+  const api = await createAccountServer(false, { path, bytes });
+  const directory = test.info().outputPath('chat-download');
+  const target = resolve(directory, '诊断.bin');
+  let application: ElectronApplication | undefined;
+  try {
+    ({ application } = await launchIsolatedDesktop(directory, api.origin));
+    const page = await redeem(application, api.origin);
+    await application.evaluate(({ dialog }, filePath) => {
+      dialog.showSaveDialog = async () => ({ canceled: false, filePath });
+    }, target);
+    const download = await page.evaluate(async ({ path, size }) => {
+      let loaded = 0;
+      const result = await window.lycanDesktop!.downloadChatFile(crypto.randomUUID(), path, '诊断.bin', size, bytes => { loaded = bytes; });
+      return { result, loaded };
+    }, { path, size: bytes.length });
+    expect(download).toEqual({ result: 'saved', loaded: bytes.length });
+    expect(createHash('sha256').update(readFileSync(target)).digest('hex')).toBe(createHash('sha256').update(bytes).digest('hex'));
+  } finally { await application?.close(); await api.close(); }
+});
 
 test('跨服务器邀请保存新地址与加密链接，再请求重启', async () => {
   const api = await createAccountServer();

@@ -5,7 +5,7 @@ import { expect, it, vi } from 'vitest';
 import { Track } from 'livekit-client';
 
 const source = readFileSync(new URL('./App.vue', import.meta.url), 'utf8');
-const volumeStart = source.indexOf('function remoteScreenSharePlaybackVolume(');
+const volumeStart = source.indexOf('function shareVolume(');
 const volumeEnd = source.indexOf('function requestParticipantControl(', volumeStart);
 const toggleStart = source.indexOf('function toggleSharedAudio(');
 const toggleEnd = source.indexOf('function previewGroup(', toggleStart);
@@ -15,6 +15,7 @@ it('逐路共享声音开关立即作用于该声音轨，不修改人声、其�
   const microphone = { setVolume: vi.fn() }, screen = { setVolume: vi.fn() }, other = { setVolume: vi.fn() };
   const context = {
     Track, AUDIO_VOLUME_MAX: 2, mutedShares: { value: [] as string[] }, listening: { value: true },
+    shareLevels: new Map([['A', 0.5]]), audioOutput: { available: { value: true } },
     screenShareVolume: { value: 0.2 }, outputVolume: { value: 0.8 },
     remoteAudioTracks: { value: [
       { participantIdentity: 'A', source: Track.Source.Microphone, track: microphone },
@@ -28,7 +29,7 @@ it('逐路共享声音开关立即作用于该声音轨，不修改人声、其�
   expect(screen.setVolume).toHaveBeenLastCalledWith(0);
   expect([...context.mutedShares.value]).toEqual(['A']);
   context.toggleSharedAudio('A');
-  expect(screen.setVolume.mock.lastCall![0]).toBeCloseTo(0.16);
+  expect(screen.setVolume.mock.lastCall![0]).toBeCloseTo(0.08);
   context.listening.value = false;
   context.toggleSharedAudio('A'); context.toggleSharedAudio('A');
   expect(screen.setVolume).toHaveBeenLastCalledWith(0);

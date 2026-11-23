@@ -3,7 +3,7 @@ import { motionDurationMs } from '../styles/motion';
 import { computed, nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
 import type { UnwrapNestedRefs } from 'vue';
 import type { MediaDiagnosticsSnapshot } from '../diagnostics/mediaDiagnostics';
-import { ArrowLeft, ChevronDown, ChevronUp, Fullscreen, Grid2X2, Focus, Maximize2, X } from '@lucide/vue';
+import { ArrowLeft, ChevronDown, ExternalLink, Grid2X2, Focus, Maximize, Minimize, X } from '@lucide/vue';
 import { VideoQuality, type Room } from 'livekit-client';
 import type { useScreenShareLayout, ViewedShare } from '../viewing/useScreenShareLayout';
 import { useViewingSize } from '../viewing/useViewingSize';
@@ -272,9 +272,9 @@ function toggleExpanded() {
   props.view.expanded = !props.view.expanded;
 }
 
-function expandMembers() {
+function toggleMembers() {
+  props.view.membersVisible = props.view.expanded || !props.view.membersVisible;
   props.view.expanded = false;
-  props.view.membersVisible = true;
 }
 
 function select(share: ViewedShare) {
@@ -392,7 +392,6 @@ onScopeDispose(() => {
                 :private-control="privateControl(share.participant.identity)" :view-quality="quality"
                 @video-size="videoSize(share.key, $event)" @notice="emit('notice', $event)" />
             </div>
-            <slot v-if="focus" name="control" :identity="share.participant.identity" />
             <div class="viewing-actions">
               <span class="viewing-caption" :title="share.participant.name"><span>{{ share.participant.name || share.participant.identity }}</span>
                 <time aria-label="本次共享时长">{{ elapsed(share) }}</time>
@@ -400,18 +399,20 @@ onScopeDispose(() => {
                   :revision="revision" :snapshot="snapshot" :active="videoActive && !folded && !reconnecting" />
                 <span v-else-if="share.participant !== room?.localParticipant" class="viewing-connection"><ConnectionSignal :quality="share.participant.connectionQuality" /></span>
               </span>
-              <button v-if="focus && !view.membersVisible && !view.expanded" type="button" class="viewing-expand-members"
-                aria-label="展开成员" title="展开成员" @click="expandMembers"><ChevronDown :size="16" /></button>
+              <button v-if="focus && !view.expanded" type="button" class="viewing-expand-members"
+                :aria-label="view.membersVisible ? '收起成员' : '展开成员'" :aria-expanded="view.membersVisible"
+                @click="toggleMembers"><ChevronDown :size="16" /></button>
               <div class="viewing-action-buttons">
+                <slot v-if="focus" name="control" :identity="share.participant.identity" />
                 <button type="button" :aria-label="focus ? '查看全部共享画面' : '返回聚焦画面'"
                   :title="focus ? '点击查看全部共享画面' : '返回聚焦画面'" :disabled="!focus && !view.focusedShare"
                   @click="focus ? view.grid() : view.focusedShare && view.select(view.focusedShare.participant.identity)">
                   <Grid2X2 v-if="focus" :size="15" /><Focus v-else :size="15" />
                 </button>
                 <button type="button" :aria-label="view.expanded ? '恢复观看布局' : '占满窗口'"
-                  :title="view.expanded ? '恢复观看布局' : '占满窗口'" :aria-pressed="view.expanded" @click="toggleExpanded"><Fullscreen :size="15" /></button>
+                  :title="view.expanded ? '恢复观看布局' : '占满窗口'" :aria-pressed="view.expanded" @click="toggleExpanded"><Minimize v-if="view.expanded" :size="15" /><Maximize v-else :size="15" /></button>
                 <button type="button" :aria-label="detached ? '返回主界面' : '弹出观看区'" :title="detached ? '返回主界面' : '弹出观看区'"
-                  @click="detached ? emit('return') : emit('detach')"><ArrowLeft v-if="detached" :size="15" /><Maximize2 v-else :size="15" /></button>
+                  @click="detached ? emit('return') : emit('detach')"><ArrowLeft v-if="detached" :size="15" /><ExternalLink v-else :size="15" /></button>
                 <button type="button" aria-label="退出观看" title="退出观看" @click="view.collapse()"><X :size="15" /></button>
               </div>
             </div>
@@ -424,9 +425,6 @@ onScopeDispose(() => {
         :style="memberBlend ? { opacity: memberBlend } : undefined" :inert="memberBlend > 0">
         <div class="layout-reveal-inner">
           <div class="viewing-members-panel">
-            <div v-if="active && !memberBlend" class="viewing-members-toggle">
-              <button type="button" aria-label="收起成员" title="收起成员" :aria-expanded="true" @click="view.membersVisible = false"><ChevronUp :size="16" /></button>
-            </div>
             <slot :previews-mounted="showMembers" />
           </div>
         </div>

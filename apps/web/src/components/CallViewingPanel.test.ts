@@ -11,7 +11,7 @@ const script = parse(readFileSync(new URL('./CallViewingPanel.vue', import.meta.
 const source = ts.createSourceFile('CallViewingPanel.ts', script, ts.ScriptTarget.Latest, true);
 const callbacks = source.statements.filter(statement => !ts.isImportDeclaration(statement))
   .map(statement => statement.getText(source)).join('\n');
-const compiled = ts.transpile(callbacks + '\nglobalThis.api = { panel, toggleExpanded, expandMembers, escape, elapsed, now, select, sizing, tileStyle, videoSize };', { target: ts.ScriptTarget.ES2022 });
+const compiled = ts.transpile(callbacks + '\nglobalThis.api = { panel, toggleExpanded, toggleMembers, escape, elapsed, now, select, sizing, tileStyle, videoSize };', { target: ts.ScriptTarget.ES2022 });
 
 function fixture(width = 600, height = 300) {
   const page = { exitFullscreen: vi.fn(), documentElement: { requestFullscreen: vi.fn() },
@@ -22,7 +22,7 @@ function fixture(width = 600, height = 300) {
   const context = { withDefaults: (props: object, defaults: object) => ({ ...defaults, ...props }), defineProps: () => ({ view }), defineEmits: () => emit, defineExpose: vi.fn(),
     useViewingSize: () => ({ width: ref(width), height: ref(height), maximumHeight: ref(420), resizing: ref(false) }),
     computed, ref, watch, nextTick, onScopeDispose, setInterval, clearInterval, setTimeout, clearTimeout, onMounted: () => {}, VideoQuality, performance, motionDurationMs,
-    api: null as unknown as { panel: { value: unknown }; toggleExpanded(): void; expandMembers(): void;
+    api: null as unknown as { panel: { value: unknown }; toggleExpanded(): void; toggleMembers(): void;
       sizing: { value: { rows: number } }; tileStyle(share: { key: number }): { width: string; height: string };
       videoSize(key: number, size: { width: number; height: number }): void;
       select(share: { participant: { identity: string } }): void; escape(event: KeyboardEvent): void; elapsed(share: { observedAt: number }): string; now: { value: number } } };
@@ -98,9 +98,11 @@ it('Esc 先恢复布局，再退出观看；展开成员恢复普通布局并显
   expect(f.view.collapse).toHaveBeenCalledOnce();
   f.view.membersVisible = false;
   f.toggleExpanded();
-  f.expandMembers();
+  f.toggleMembers();
   expect(f.view.expanded).toBe(false);
   expect(f.view.membersVisible).toBe(true);
+  f.toggleMembers();
+  expect(f.view.membersVisible).toBe(false);
   f.scope.stop();
 });
 

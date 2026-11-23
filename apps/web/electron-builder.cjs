@@ -21,6 +21,7 @@ module.exports = {
   files: [
     'dist/**/*',
     'electron/main.cjs',
+    'electron/chat-download.cjs',
     'electron/audio-shortcuts.cjs',
     'electron/media-background.cjs',
     'electron/desktop-tray.cjs',

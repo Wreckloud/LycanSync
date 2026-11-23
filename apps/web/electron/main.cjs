@@ -2,7 +2,7 @@ const { app, BrowserWindow, clipboard, desktopCapturer, dialog, ipcMain, Menu, n
 const { release: osRelease } = require('node:os');
 const { existsSync } = require('node:fs');
 const { Module } = require('node:module');
-const { dirname, isAbsolute, resolve, sep } = require('node:path');
+const { dirname, isAbsolute, resolve, sep, win32 } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { readFile, writeFile, unlink, mkdir } = require('node:fs/promises');
 const { MediaHelperManager } = require('./media-helper.cjs');
@@ -12,6 +12,7 @@ const { createNativeMicrophone, validMicrophoneSettings } = require('./native-mi
 const { createNativeScreenAudio } = require('./native-screen-audio.cjs');
 const { createNativeVideoSession } = require('./native-video-session.cjs');
 const { createRecording } = require('./recording.cjs');
+const { saveChatDownload } = require('./chat-download.cjs');
 const { serveRecordingMedia } = require('./recording-media.cjs');
 const { createAudioShortcuts } = require('./audio-shortcuts.cjs');
 const { createMediaBackgroundPolicy } = require('./media-background.cjs');
@@ -145,6 +146,11 @@ let sessionToken;
 let sessionLoaded = false;
 let sessionLoadPromise;
 let sessionRevision = 0;
+const chatDownloads = new Map();
+
+function cancelChatDownloads() {
+  for (const controller of chatDownloads.values()) controller.abort();
+}
 let sessionMutationPromise = Promise.resolve();
 let sessionLoginInProgress = false;
 let sessionClearTask;
@@ -295,18 +301,17 @@ const obsCaptureHost = new ObsCaptureHostManager({
   onFrame: (state, frame) => nativeVideo.receiveFrame(state, frame),
   onFailure: (state, error) => {
     const video = nativeVideo.current;
-    if (video && video.sessionId === state.videoSessionId && !video.stopping) {
-      if (error.message === 'captureTargetClosed') void writeMediaDiagnostic({ stage: 'screenTargetClosed', code: error.message });
-      else recordVideoFailure('obsCaptureHost', error);
-      const code = ['captureTargetClosed', 'captureSettingsUnsupported', 'captureBorderUnsupported', 'captureBorderAccessDenied',
-        'obsGameBindingUnavailable', 'obsGameTargetMismatch', 'obsWindowBindingUnavailable', 'obsWindowTargetMismatch',
-        'obsWindowCaptureStartFailed', 'obsWindowRuntimeUnavailable', 'obsWindowSourceUnavailable',
-        'sharedTextureGpuWaitFailed', 'sharedTextureGpuStalled', 'sharedTextureReleaseFailed', 'sharedTextureAcquireFailed',
-        'dxgiMonitorUnavailable', 'dxgiAdapterMismatch'].includes(error.message)
-        ? error.message : 'obsCaptureHostFailed';
-      return nativeVideo.notifyFailure(video, code);
-    }
-    if (video?.sessionId === state.videoSessionId) return video.stopPromise;
+    if (!video || video.sessionId !== state.videoSessionId) return;
+    if (video.stopping) return video.stopPromise;
+    if (error.message === 'captureTargetClosed') void writeMediaDiagnostic({ stage: 'screenTargetClosed', code: error.message });
+    else recordVideoFailure('obsCaptureHost', error);
+    const code = ['captureTargetClosed', 'captureSettingsUnsupported', 'captureBorderUnsupported', 'captureBorderAccessDenied',
+      'obsGameBindingUnavailable', 'obsGameTargetMismatch', 'obsWindowBindingUnavailable', 'obsWindowTargetMismatch',
+      'obsWindowCaptureStartFailed', 'obsWindowRuntimeUnavailable', 'obsWindowSourceUnavailable',
+      'sharedTextureGpuWaitFailed', 'sharedTextureGpuStalled', 'sharedTextureReleaseFailed', 'sharedTextureAcquireFailed',
+      'dxgiMonitorUnavailable', 'dxgiAdapterMismatch'].includes(error.message)
+      ? error.message : 'obsCaptureHostFailed';
+    return nativeVideo.notifyFailure(video, code);
   },
   onAudioFailure: (state, failure) => nativeScreenAudio.notifyFailure(state.videoSessionId, failure.code, failure.audioId),
   onAudioStopped: (state, event) => nativeScreenAudio.confirmStopped(state.videoSessionId, event?.audioId),
@@ -505,6 +510,7 @@ async function saveSession(token, accountId) {
 }
 
 async function clearSession() {
+  cancelChatDownloads();
   sessionRevision++;
   sessionToken = undefined;
   sessionLoaded = true;
@@ -810,12 +816,14 @@ if (!app.requestSingleInstanceLock()) {
     desktopTray.initialize();
     screenShareWindows.attach(mainWindow);
     mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
+    mainWindow.webContents.on('did-navigate', cancelChatDownloads);
     mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
     mainWindow.webContents.once('did-finish-load', () => {
       void writeMediaDiagnostic({ stage: 'rendererReady', durationMs: Math.round(performance.now() - diagnosticStartedMonotonicAt),
         processUptimeMs: Math.round(process.uptime() * 1000) });
     });
     mainWindow.webContents.on('render-process-gone', (_event, details) => {
+      cancelChatDownloads();
       try { audioShortcuts.clear(); } catch { console.error('audio shortcut cleanup failed'); }
       void writeMediaDiagnostic({ stage: 'rendererExited', outcome: details.reason });
       finishClose();
@@ -840,7 +848,7 @@ if (!app.requestSingleInstanceLock()) {
     mainWindow.on('maximize', () => mainWindow?.webContents.send('window:maximized-changed', true));
     mainWindow.on('unmaximize', () => mainWindow?.webContents.send('window:maximized-changed', false));
     mainWindow.on('query-session-end', () => desktopTray.prepareToQuit());
-    mainWindow.on('closed', () => { clearTimeout(closeTimer); mainWindow = undefined; });
+    mainWindow.on('closed', () => { cancelChatDownloads(); clearTimeout(closeTimer); mainWindow = undefined; });
     mainWindow.loadURL(APP_ORIGIN + '/');
   });
 }
@@ -924,6 +932,43 @@ ipcMain.handle('capture:prepare', (event, graphics = false) => {
 ipcMain.handle('window:is-maximized', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
   return mainWindow.isMaximized();
+});
+ipcMain.on('chat:cancel-download', (event, id) => {
+  if (trustedSender(event)) chatDownloads.get(id)?.abort();
+});
+ipcMain.handle('chat:download', async (event, id, path, name, size) => {
+  if (!trustedSender(event) || closing || !sessionToken || typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id)
+      || chatDownloads.has(id) || typeof path !== 'string' || !groupFileDownloadPath.test(path)
+      || typeof name !== 'string' || !Number.isSafeInteger(size) || size < 0) throw new Error('文件下载请求无效。');
+  const controller = new AbortController();
+  const { signal } = controller;
+  chatDownloads.set(id, controller);
+  try {
+    const leaf = win32.basename(name).replace(/[<>:"|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '');
+    const result = await dialog.showSaveDialog(mainWindow, { title: '保存文件', defaultPath: resolve(app.getPath('downloads'), leaf || 'download') });
+    if (result.canceled || signal.aborted) return 'cancelled';
+    const response = await serveApplication(new Request(APP_ORIGIN + path, { signal }));
+    if (response.status === 401 && response.headers.get('X-Lycan-Session-Expired') === 'true') return 'expired';
+    if (!response.ok) return { error: '文件下载失败，请检查连接和群聊访问权限后重试。' };
+    let lastUpdate = 0;
+    await saveChatDownload(result.filePath, response, size, signal, bytes => {
+      const now = Date.now();
+      if (!signal.aborted && (now - lastUpdate >= 100 || bytes === size)) {
+        event.sender.send('chat:download-progress', id, bytes);
+        lastUpdate = now;
+      }
+    });
+    return 'saved';
+  } catch (error) {
+    if (signal.aborted) return 'cancelled';
+    if (error.code && /^(?:EACCES|EPERM|EBUSY|ENOSPC|ENOENT|EROFS)$/.test(error.code)) {
+      return { error: '无法保存文件，请检查磁盘空间或选择其他位置。' };
+    }
+    return { error: '文件未能完整保存，请重试。' };
+  } finally {
+    controller.abort();
+    chatDownloads.delete(id);
+  }
 });
 ipcMain.handle('diagnostics:process-metrics', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');

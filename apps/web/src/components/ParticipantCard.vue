@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { AudioLines, Circle, Fullscreen, HeadphoneOff, Headphones, MicOff } from '@lucide/vue';
+import { Circle, Fullscreen, HeadphoneOff, Headphones, MicOff, Volume2, VolumeX } from '@lucide/vue';
 import { Track, VideoQuality, type Participant, type RemoteTrackPublication } from 'livekit-client';
 import ConnectionSignal from './ConnectionSignal.vue';
+import MemberVolumeButton from './MemberVolumeButton.vue';
 import VoiceLevelMic from './VoiceLevelMic.vue';
 import { observeLocalScreenPreview } from '../rtc/localScreenPreview';
 import { setNativeScreenPreviewDemand } from '../rtc/nativeScreenVideo';
@@ -25,7 +26,7 @@ const props = withDefaults(defineProps<{
   focused?: boolean;
   watchingElsewhere?: boolean;
   shareAudio?: boolean;
-  shareMuted?: boolean;
+  shareVolume?: number;
   shareAudioListening?: boolean;
   playbackVolume?: number;
   remoteControlAvailable?: boolean;
@@ -35,10 +36,12 @@ const props = withDefaults(defineProps<{
   privateControl?: string;
   showFullscreen?: boolean;
   viewQuality?: VideoQuality;
-}>(), { variant: 'card', playbackVolume: 1, showFullscreen: true, viewActive: true, previewMounted: true });
+}>(), { variant: 'card', playbackVolume: 1, shareVolume: 1, showFullscreen: true, viewActive: true, previewMounted: true });
 const emit = defineEmits<{
   select: [];
   toggleShareAudio: [];
+  changeShareVolume: [volume: number];
+  changeVoiceVolume: [volume: number];
   notice: [message: string];
   toggleAudio: [];
   toggleMicrophone: [];
@@ -278,9 +281,11 @@ onBeforeUnmount(() => {
         <strong :title="media.name">{{ media.name }}{{ isLocal ? '（你）' : '' }}</strong>
         <ConnectionSignal v-if="variant === 'card' && !isLocal" class="member-signal" :quality="media.quality" />
       </span>
-      <button v-if="variant === 'card' && !isLocal && media.sharing && shareAudio" type="button" class="participant-state participant-state-button"
-        :disabled="!shareAudioListening" :title="shareMuted ? '恢复这路共享声音' : '静音这路共享声音'"
-        :aria-label="shareMuted ? '恢复这路共享声音' : '静音这路共享声音'" :aria-pressed="shareMuted" @click="emit('toggleShareAudio')"><AudioLines :size="14" /></button>
+      <MemberVolumeButton v-if="variant === 'card' && !isLocal && media.sharing && shareAudio"
+        :disabled="!shareAudioListening" :volume="shareVolume" :label="shareVolume === 0 ? '恢复这路共享声音' : '静音这路共享声音'"
+        @toggle="emit('toggleShareAudio')" @change="emit('changeShareVolume', $event)">
+        <VolumeX v-if="shareVolume === 0" :size="14" /><Volume2 v-else :size="14" />
+      </MemberVolumeButton>
       <button v-if="variant === 'viewer' && showFullscreen" type="button" class="viewer-action"
         :aria-label="'切换全屏观看' + media.name + '的共享画面'" :disabled="!media.track || media.muted || !fullscreenAvailable"
         @click="openFullscreen"><Fullscreen :size="16" /></button>
@@ -295,12 +300,11 @@ onBeforeUnmount(() => {
         :aria-label="media.microphone ? '关闭自己的麦克风' : '开启自己的麦克风'" @click="emit('toggleMicrophone')">
         <VoiceLevelMic v-if="media.microphone" :size="14" :level="speaking ? 1 : 0" :steps="1" /><MicOff v-else :size="14" />
       </button>
-      <button v-else-if="variant === 'card'" type="button" class="participant-state participant-state-button"
-        :class="{ 'is-off': !media.microphone || playbackVolume === 0 }" :aria-label="remoteAudioLabel"
-        :disabled="!media.microphone" @click="emit('toggleAudio')">
+      <MemberVolumeButton v-else-if="variant === 'card'" :volume="playbackVolume" :label="remoteAudioLabel"
+        :disabled="!media.microphone" @toggle="emit('toggleAudio')" @change="emit('changeVoiceVolume', $event)">
         <VoiceLevelMic v-if="media.microphone && playbackVolume > 0" :size="14" :level="speaking ? 1 : 0" :steps="1" />
         <MicOff v-else :size="14" />
-      </button>
+      </MemberVolumeButton>
       <button v-if="variant === 'card' && isLocal" type="button" class="participant-state participant-state-button"
         :class="{ 'is-off': isListening === false }"
         :aria-label="isListening ? '停止接收所有成员声音' : '恢复接收所有成员声音'" @click="emit('toggleListening')">

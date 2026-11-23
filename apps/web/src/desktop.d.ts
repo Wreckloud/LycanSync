@@ -245,6 +245,8 @@ interface Window {
     getProcessMetrics(): Promise<DesktopProcessMetrics>;
     exportDiagnosticReport(report: string, chooseLocation: boolean): Promise<{ saved: false } | { saved: true; filePath: string; unavailableCount: number }>;
     saveDiagnosticSnapshot(report: string): Promise<number | null>;
+    downloadChatFile(id: string, path: string, name: string, size: number, onProgress: (loaded: number) => void): Promise<'saved' | 'cancelled' | 'expired' | { error: string }>;
+    cancelChatDownload(id: string): void;
     getSavedDiagnosticReport(): Promise<{ kind?: 'screen-media' | 'previous-run'; startedAt: string; endedAt: string; clientVersion: string | null; savedAt: string; bytes: number } | null>;
     clearSavedDiagnosticReports(): Promise<void>;
     getSystemIdleState(): Promise<{ state: 'active' | 'idle' | 'locked' | 'unknown'; idleSeconds: number }>;

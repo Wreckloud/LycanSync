@@ -5,11 +5,11 @@ import { CHAT_TRANSFERS } from '../chat/useChatTransfers';
 import type { ChatAttachment } from '../chat/chatApi';
 import { chatMediaFormat, formatAttachmentSize } from '../chat/chatMedia';
 
-const props = defineProps<{ groupId: string; attachment: ChatAttachment; previewDisabled?: boolean }>();
+const props = defineProps<{ groupId: string; attachment: ChatAttachment; pending?: boolean; previewDisabled?: boolean }>();
 const emit = defineEmits<{ preview: [] }>();
-const previewable = computed(() => !props.previewDisabled && Boolean(chatMediaFormat(props.attachment)));
+const previewable = computed(() => !props.pending && !props.previewDisabled && Boolean(chatMediaFormat(props.attachment)));
 const transfers = inject(CHAT_TRANSFERS)!;
-const task = computed(() => transfers.downloads.get(props.attachment.id));
+const task = computed(() => props.pending ? undefined : transfers.downloads.get(props.attachment.id));
 const downloading = computed(() => Boolean(task.value?.controller));
 const error = computed(() => task.value?.error ?? '');
 function progress() {
@@ -26,12 +26,14 @@ function cancel() { task.value?.controller?.abort(); }
       <span class="chat-file-details">
         <strong>{{ attachment.fileName }}</strong>
         <small>{{ formatAttachmentSize(attachment.byteSize) }}</small>
-        <slot />
-        <progress v-if="downloading" :value="progress()" max="100" aria-label="文件下载进度" />
+        <slot name="status" />
         <small v-if="error" class="chat-file-error" role="alert">{{ error }}</small>
       </span>
     </component>
-    <button v-if="downloading" type="button" aria-label="取消文件下载" @click="cancel"><X :size="15" /></button>
+    <slot v-if="pending" name="actions" />
+    <button v-else-if="downloading" type="button" aria-label="取消文件下载" @click="cancel"><X :size="15" /></button>
     <button v-else type="button" :aria-label="error ? '重试文件下载' : '下载文件'" @click="download"><Download :size="15" /></button>
+    <slot />
+    <progress v-if="downloading" :value="progress()" max="100" aria-label="文件下载进度" />
   </div>
 </template>

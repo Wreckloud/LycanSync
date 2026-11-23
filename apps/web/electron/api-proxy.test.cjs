@@ -32,6 +32,51 @@ function proxyFixture(overrides = {}) {
   return { serve, forwarded, context };
 }
 
+test('原生下载仅保存已授权群文件，系统取消不请求数据，成功写盘后才返回', async t => {
+  const { mkdtemp, readFile, rm } = require('node:fs/promises');
+  const directory = await mkdtemp(join(require('node:os').tmpdir(), 'lycan-chat-ipc-'));
+  t.after(() => rm(directory, { recursive: true, force: true, maxRetries: 3 }));
+  const id = require('node:crypto').randomUUID();
+  const path = '/api/groups/' + id + '/files/' + id;
+  const filePath = join(directory, 'saved.json');
+  const body = Buffer.from('{"test":"群文件"}');
+  let requests = 0;
+  const { serve, context } = proxyFixture({ net: { fetch(url, options) {
+    requests++;
+    assert.equal(url, 'https://example.test' + path);
+    assert.equal(options.headers.Authorization, 'Bearer test-session');
+    return new Response(body);
+  } } });
+  const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
+  const handlers = {};
+  let canceled = true;
+  const chatDownloads = new Map();
+  runInNewContext(main.slice(main.indexOf("ipcMain.on('chat:cancel-download'"), main.indexOf("ipcMain.handle('diagnostics:process-metrics'")), Object.assign(context, {
+    ipcMain: { on(name, fn) { handlers[name] = fn; }, handle(name, fn) { handlers[name] = fn; } },
+    trustedSender: event => event.trusted, closing: false, chatDownloads, mainWindow: {},
+    AbortController, APP_ORIGIN: 'lycan://app', serveApplication: serve, resolve, win32: require('node:path').win32,
+    app: { getPath: () => directory }, dialog: { showSaveDialog: async () => ({ canceled, filePath }) },
+    saveChatDownload: require('./chat-download.cjs').saveChatDownload,
+  }));
+  let loaded;
+  const event = { trusted: true, sender: { send(channel, key, bytes) {
+    assert.equal(channel, 'chat:download-progress');
+    assert.equal(key, id);
+    loaded = bytes;
+  } } };
+  const save = (sender, resource) => handlers['chat:download'](sender, id, resource, 'sample.json', body.length);
+  await assert.rejects(save({ trusted: false }, path), /请求无效/);
+  await assert.rejects(save(event, '/api/groups'), /请求无效/);
+  assert.equal(await save(event, path), 'cancelled');
+  assert.equal(requests, 0);
+  canceled = false;
+  assert.equal(await save(event, path), 'saved');
+  assert.equal(requests, 1);
+  assert.equal(loaded, body.length);
+  assert.deepEqual(await readFile(filePath), body);
+  assert.equal(chatDownloads.size, 0);
+});
+
 function sessionFixture(readEncrypted, overrides = {}) {
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = main.indexOf('async function loadSession(');
@@ -49,7 +94,7 @@ function sessionFixture(readEncrypted, overrides = {}) {
     safeStorage: { isEncryptionAvailable: () => true,
       decryptString: value => { counts.decryptions++; return value.toString(); }, encryptString: value => Buffer.from(value) },
     loginPreferences: { set: async () => {}, clear: async () => {} }, mkdir: async () => {}, writeFile: async () => {}, unlink: async () => {},
-    returnToAccountEntry: async () => {}, trustedSender: () => true,
+    returnToAccountEntry: async () => {}, trustedSender: () => true, cancelChatDownloads() {},
     audioShortcuts: { clear() {} }, screenShareWindows: { closeAll() {} },
     activityMonitor: { stop() {}, clearMappings() {} }, voiceOverlay: { clear() {} },
     ...overrides,

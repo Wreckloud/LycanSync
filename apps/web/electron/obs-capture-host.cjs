@@ -81,7 +81,7 @@ class ObsCaptureHostManager {
       else failState(state, error);
     });
     child.once('close', (code, signal) => {
-      this.closeState(state, code === 0 ? undefined : new Error(`obsCaptureHostExited:${code ?? signal ?? 'unknown'}`));
+      this.closeState(state, code === 0 ? undefined : new Error(`obsCaptureHostExited:${code ?? signal ?? 'unknown'}`), code);
     });
     return state;
   }
@@ -810,7 +810,7 @@ class ObsCaptureHostManager {
     return this.shutdown();
   }
 
-  closeState(state, error) {
+  closeState(state, error, exitCode) {
     if (state.closed) return;
     state.alive = false;
     state.closed = true;
@@ -848,7 +848,7 @@ class ObsCaptureHostManager {
     state.startResolve = undefined;
     state.startReject = undefined;
     if (this.state === state) this.state = undefined;
-    this.onCaptureDiagnostic(state, { stage: 'obsHostExited',
+    this.onCaptureDiagnostic(state, { stage: 'obsHostExited', exitCode,
       stopMode: state.forceTerminated ? 'forced' : state.shuttingDown && !error ? 'graceful' : 'unexpected',
       stopReason: state.shutdownReason ?? 'failure' });
     state.resolveClose?.();
