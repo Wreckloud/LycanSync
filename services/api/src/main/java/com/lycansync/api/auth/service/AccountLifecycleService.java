@@ -5,6 +5,7 @@ import com.lycansync.api.auth.exception.AuthException;
 import com.lycansync.api.auth.mapper.AccessLinkMapper;
 import com.lycansync.api.auth.mapper.AccountLifecycleMapper;
 import com.lycansync.api.auth.mapper.AuthMapper;
+import com.lycansync.api.auth.mapper.QqIdentityMapper;
 import com.lycansync.api.auth.model.AuthUser;
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.common.error.ApiErrorCode;
@@ -48,6 +49,7 @@ public class AccountLifecycleService {
     private final AccountLifecycleMapper accounts;
     private final AccessLinkMapper links;
     private final AuthMapper users;
+    private final QqIdentityMapper qqIdentities;
     private final AuthService sessions;
     private final GroupMapper groups;
     private final GroupRtcAccessService rtc;
@@ -203,6 +205,7 @@ public class AccountLifecycleService {
                 var roomKeys = memberships.stream().map(group -> UUID.fromString(groups.findRtcRoomKey(group.id()))).toList();
                 rtc.removeParticipantFromRooms(roomKeys, user.id(), closureBudget(connection, deadline));
                 if (accounts.closeAccount(user.id(), now()) != 1) throw invalid("账号状态已经变化");
+                qqIdentities.deleteByUserId(user.id());
                 accounts.revokeSessions(user.id());
                 accounts.revokeLinks(user.id(), now());
                 if (user.id().equals(state().transferTargetId())) accounts.clearTransfer();

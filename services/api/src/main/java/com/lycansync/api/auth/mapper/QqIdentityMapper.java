@@ -17,6 +17,7 @@ public interface QqIdentityMapper {
     boolean hasOtherApplication(@Param("appId") String appId);
     String findUserId(@Param("appId") String appId, @Param("openId") String openId);
     String findNickname(@Param("userId") UUID userId);
+    int deleteByUserId(@Param("userId") UUID userId);
     int insert(@Param("appId") String appId, @Param("openId") String openId,
                @Param("userId") UUID userId, @Param("nickname") String nickname, @Param("at") Instant at);
 }

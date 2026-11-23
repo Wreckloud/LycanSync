@@ -8,25 +8,33 @@ import com.lycansync.api.auth.service.OwnerSettingsService;
 import com.lycansync.api.auth.service.QqConfigurationService;
 import com.lycansync.api.auth.mapper.QqIdentityMapper;
 import com.lycansync.api.auth.service.AccessLinkService;
+import com.lycansync.api.auth.service.AccountLifecycleService;
 import com.lycansync.api.auth.service.AuthSecrets;
 import com.lycansync.api.auth.service.AuthService;
 import com.lycansync.api.auth.service.DefaultAvatar;
 import com.lycansync.api.auth.service.QqIdentityClient;
 import com.lycansync.api.auth.service.QqLoginService;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -62,11 +70,13 @@ class QqLoginApplicationIT {
 
     @Autowired private JdbcClient jdbc;
     @Autowired private AccessLinkService links;
+    @Autowired private AccountLifecycleService accounts;
     @Autowired private AuthService sessions;
     @Autowired private QqLoginService login;
     @Autowired private QqIdentityMapper identities;
     @Autowired private OwnerSettingsService settings;
     @Autowired private QqConfigurationMapper configurations;
+    @Autowired private PlatformTransactionManager transactionManager;
     @MockitoBean private QqIdentityClient client;
     private String ownerToken;
     private static final String VERIFIER = "v".repeat(43);
@@ -97,6 +107,65 @@ class QqLoginApplicationIT {
         var second = login.exchange(ready(false).request(), VERIFIER);
         assertThat(second.user().id()).isEqualTo(first.user().id());
         assertThat(second.newAccount()).isFalse();
+    }
+
+    @Test
+    void closingAccountReleasesQqOnlyOnCommitAndAllowsRegistrationAgain() {
+        var flow = ready(false);
+        var first = login.exchange(flow.request(), VERIFIER);
+        var member = sessions.authenticate(first.sessionToken());
+
+        var rollback = new TransactionTemplate(transactionManager);
+        rollback.setPropagationBehavior(TransactionDefinition.PROPAGATION_NESTED);
+        rollback.executeWithoutResult(status -> {
+            accounts.closeAccount(member, member.nickname());
+            assertThat(jdbc.sql("SELECT count(*) FROM auth_qq_identity WHERE user_id = :id")
+                    .param("id", member.id()).query(Long.class).single()).isZero();
+            status.setRollbackOnly();
+        });
+        assertThat(identities.findUserId("1234567", OPEN_ID)).isEqualTo(member.id().toString());
+        assertThat(sessions.authenticate(first.sessionToken()).id()).isEqualTo(member.id());
+
+        accounts.closeAccount(member, member.nickname());
+        assertThat(identities.findUserId("1234567", OPEN_ID)).isNull();
+        assertThatThrownBy(() -> sessions.authenticate(first.sessionToken())).isInstanceOf(AuthException.class);
+        assertThatThrownBy(() -> login.exchange(flow.request(), VERIFIER)).isInstanceOf(AuthException.class);
+
+        var replacement = login.exchange(ready(false).request(), VERIFIER);
+        assertThat(replacement.newAccount()).isTrue();
+        assertThat(replacement.user().id()).isNotEqualTo(member.id());
+        assertThat(replacement.user().administrator()).isFalse();
+        assertThat(identities.findUserId("1234567", OPEN_ID)).isEqualTo(replacement.user().id().toString());
+        assertThat(jdbc.sql("SELECT nickname FROM app_user WHERE id = :id AND deleted_at IS NOT NULL")
+                .param("id", member.id()).query(String.class).single()).isEqualTo("账号已注销");
+    }
+
+    @Test
+    void migrationFromVersion24ReleasesOnlyClosedAccountsQqBindings() {
+        String schema = "qq_migration_" + UUID.randomUUID().toString().replace("-", "");
+        String jdbcUrl = POSTGRES.getJdbcUrl();
+        var configuration = Flyway.configure().dataSource(jdbcUrl, POSTGRES.getUsername(), POSTGRES.getPassword())
+                .schemas(schema).defaultSchema(schema);
+        configuration.target("24").load().migrate();
+        String schemaUrl = jdbcUrl + (jdbcUrl.contains("?") ? "&" : "?") + "currentSchema=" + schema;
+        JdbcClient migrationJdbc = JdbcClient.create(new DriverManagerDataSource(schemaUrl, POSTGRES.getUsername(), POSTGRES.getPassword()));
+        try {
+            UUID closed = UUID.randomUUID();
+            UUID active = UUID.randomUUID();
+            migrationJdbc.sql("INSERT INTO app_user (id, nickname, avatar, created_at, deleted_at) "
+                            + "VALUES (:closed, '账号已注销', '', NOW(), NOW()), (:active, '正常账号', '', NOW(), NULL)")
+                    .param("closed", closed).param("active", active).update();
+            migrationJdbc.sql("INSERT INTO auth_qq_identity (app_id, open_id, user_id, nickname, created_at) "
+                            + "VALUES ('1234567', :closedOpenId, :closed, '旧 QQ', NOW()), ('1234567', :activeOpenId, :active, '正常 QQ', NOW())")
+                    .param("closedOpenId", OPEN_ID).param("closed", closed)
+                    .param("activeOpenId", "B".repeat(32)).param("active", active).update();
+
+            assertThat(configuration.target("25").load().migrate().migrationsExecuted).isEqualTo(1);
+            assertThat(migrationJdbc.sql("SELECT user_id FROM auth_qq_identity").query(UUID.class).list()).containsExactly(active);
+            assertThat(migrationJdbc.sql("SELECT id FROM app_user").query(UUID.class).list()).containsExactlyInAnyOrder(closed, active);
+        } finally {
+            migrationJdbc.sql("DROP SCHEMA " + schema + " CASCADE").update();
+        }
     }
 
     @Test

@@ -4,6 +4,7 @@ import com.lycansync.api.auth.exception.AuthException;
 import com.lycansync.api.auth.mapper.AccessLinkMapper;
 import com.lycansync.api.auth.mapper.AccountLifecycleMapper;
 import com.lycansync.api.auth.mapper.AuthMapper;
+import com.lycansync.api.auth.mapper.QqIdentityMapper;
 import com.lycansync.api.auth.model.AuthUser;
 import com.lycansync.api.auth.model.AuthenticatedUser;
 import com.lycansync.api.common.error.ApiErrorCode;
@@ -62,6 +63,7 @@ class AccountLifecycleServiceTests {
     private final AccountLifecycleMapper accounts = mock(AccountLifecycleMapper.class);
     private final AccessLinkMapper links = mock(AccessLinkMapper.class);
     private final AuthMapper users = mock(AuthMapper.class);
+    private final QqIdentityMapper qqIdentities = mock(QqIdentityMapper.class);
     private final AuthService sessions = mock(AuthService.class);
     private final GroupMapper groups = mock(GroupMapper.class);
     private final GroupRtcAccessService rtc = mock(GroupRtcAccessService.class);
@@ -91,7 +93,7 @@ class AccountLifecycleServiceTests {
         when(transactions.execute(any())).thenAnswer(invocation ->
                 ((TransactionCallback<?>) invocation.getArgument(0)).doInTransaction(new SimpleTransactionStatus()));
         when(sessions.issueSession(any(), anyString())).thenAnswer(invocation -> invocation.getArgument(1));
-        service = new AccountLifecycleService(accounts, links, users, sessions, groups, rtc, events,
+        service = new AccountLifecycleService(accounts, links, users, qqIdentities, sessions, groups, rtc, events,
                 transactions, Clock.fixed(NOW, ZoneOffset.UTC), dataSource);
         TransactionSynchronizationManager.bindResource(dataSource, new ConnectionHolder(mock(Connection.class)));
     }
@@ -209,6 +211,7 @@ class AccountLifecycleServiceTests {
         when(groups.findGroups(member.id())).thenReturn(List.of(new GroupView(groupId, "群组", "", "", GroupRole.OWNER, 1, NOW, NOW)));
         assertThatThrownBy(() -> service.closeAccount(principal(member), member.nickname())).isInstanceOf(AuthException.class);
         verify(accounts, never()).closeAccount(any(), any());
+        verifyNoInteractions(qqIdentities);
         verifyNoInteractions(rtc);
     }
 
@@ -241,17 +244,18 @@ class AccountLifecycleServiceTests {
     }
 
     @Test
-    void shouldRevokeAccessButKeepMembershipAndIdentityHistory() {
+    void shouldReleaseQqBindingAndRevokeAccessWhileKeepingHistory() {
         UUID groupId = UUID.randomUUID();
         UUID room = UUID.randomUUID();
         when(groups.findGroups(member.id())).thenReturn(List.of(new GroupView(groupId, "群组", "", "", GroupRole.MEMBER, 2, NOW, NOW)));
         when(groups.findRtcRoomKey(groupId)).thenReturn(room.toString());
         when(accounts.closeAccount(member.id(), NOW)).thenReturn(1);
         service.closeAccount(principal(member), member.nickname());
-        var order = inOrder(rtc, accounts);
+        var order = inOrder(rtc, accounts, qqIdentities);
         order.verify(rtc).removeParticipantFromRooms(eq(List.of(room)), eq(member.id()),
                 argThat(timeout -> !timeout.isNegative() && !timeout.isZero() && timeout.compareTo(Duration.ofSeconds(10)) <= 0));
         order.verify(accounts).closeAccount(member.id(), NOW);
+        order.verify(qqIdentities).deleteByUserId(member.id());
         order.verify(accounts).revokeSessions(member.id());
         order.verify(accounts).revokeLinks(member.id(), NOW);
         verify(groups, never()).removeMember(any(), any());

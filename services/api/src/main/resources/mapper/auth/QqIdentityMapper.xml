@@ -10,6 +10,7 @@
     <select id="findNickname" resultType="string">
         SELECT nickname FROM auth_qq_identity WHERE user_id = #{userId}
     </select>
+    <delete id="deleteByUserId">DELETE FROM auth_qq_identity WHERE user_id = #{userId}</delete>
     <insert id="insert">
         INSERT INTO auth_qq_identity(app_id, open_id, user_id, nickname, created_at)
         VALUES (#{appId}, #{openId}, #{userId}, #{nickname}, #{at})

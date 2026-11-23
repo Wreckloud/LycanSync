@@ -262,7 +262,7 @@ onScopeDispose(() => { document.removeEventListener('visibilitychange', closureV
       <section ref="closeDialog" class="recovery-password-dialog" role="dialog" aria-modal="true" aria-label="注销账号" tabindex="-1" @keydown="keepDialogFocus">
         <h2>注销账号</h2>
         <p>{{ canClose ? '注销后无法再次登录，此操作不能撤回。' : '完成下面的事项后，即可继续注销。' }}</p>
-        <p v-if="canClose">如已绑定 QQ，注销后绑定仍会保留，同一个 QQ 无法在本服务器注册新账号。</p>
+        <p v-if="canClose">注销后会解除已绑定的 QQ，历史消息和共同语音记录会保留。</p>
           <div v-if="status?.administrator" class="settings-action-row">
             <div><strong>服主转让</strong><small>{{ status.transferTargetId ? '等待接任者确认后，才能继续注销。' : '由另一位成员接任服主后，再继续注销。' }}</small></div>
             <button type="button" :disabled="busy || loading || leaving" @click="beginTransfer">{{ status.transferTargetId ? '查看转让' : '去转让服主' }}</button>

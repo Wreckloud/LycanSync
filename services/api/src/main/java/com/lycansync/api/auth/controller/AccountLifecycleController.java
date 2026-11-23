@@ -97,7 +97,7 @@ public class AccountLifecycleController {
     }
 
     @PostMapping("/close")
-    @Operation(summary = "永久停用当前账号并标记已注销", description = "昵称替换为账号已注销，清空头像和签名，保留消息与共同语音历史；服主和群主必须先交接，撤销登录及语音资格")
+    @Operation(summary = "永久停用当前账号并标记已注销", description = "昵称替换为账号已注销，清空头像和签名，解除 QQ 绑定，保留消息与共同语音历史；服主和群主必须先交接，撤销登录及语音资格")
     public ResponseEntity<Void> close(@AuthenticationPrincipal AuthenticatedUser user, @Valid @RequestBody CloseRequest request) {
         accounts.closeAccount(user, request.confirmation());
         return ResponseEntity.noContent().build();
