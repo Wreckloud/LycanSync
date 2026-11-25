@@ -488,19 +488,24 @@ test('空频道恢复后更新历史分页状态，带游标轮询不清除它',
   expect(beforeCursors).toEqual(['A31']);
 });
 
-test('历史图片在点击时加载，窄窗口保留比例且来回滚动不重复请求', async ({ page }) => {
+test('历史图片先加载缩略图，点击原图后保留比例且来回滚动不重复请求', async ({ page }) => {
   await mockChatShell(page);
   await page.setViewportSize({ width: 360, height: 760 });
   const initial = [imageMessage(31, 'offscreen-wide', 1600, 400),
     ...Array.from({ length: 29 }, (_, index) => chatMessage(index + 32))];
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
   let imageRequests = 0;
+  let thumbnailRequests = 0;
   await page.route('**/api/groups**', (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === '/api/groups') return route.fulfill({ json: [group] });
     if (url.pathname === `/api/groups/${groupId}`) return route.fulfill({ json: group });
     if (url.pathname === `/api/groups/${groupId}/attachments/offscreen-wide`) {
       imageRequests++;
+      return route.fulfill({ contentType: 'image/png', body: png });
+    }
+    if (url.pathname === `/api/groups/${groupId}/attachments/offscreen-wide/thumbnail`) {
+      thumbnailRequests++;
       return route.fulfill({ contentType: 'image/png', body: png });
     }
     if (url.pathname === `/api/groups/${groupId}/messages`) {
@@ -518,10 +523,16 @@ test('历史图片在点击时加载，窄窗口保留比例且来回滚动不�
   const offscreenBounds = await frame.boundingBox();
   expect(offscreenBounds!.y + offscreenBounds!.height).toBeLessThan(listBounds!.y - 180);
   expect(imageRequests).toBe(0);
+  expect(thumbnailRequests).toBe(0);
 
   await list.evaluate((element) => { element.scrollTop = 0; });
-  await article.getByRole('button', { name: '加载图片' }).click();
+  const preview = article.getByAltText('群主 发送的图片');
+  await expect(preview).toHaveJSProperty('naturalWidth', 1);
+  expect(thumbnailRequests).toBe(1);
+  expect(imageRequests).toBe(0);
+  await article.getByRole('button', { name: '加载原图' }).click();
   await expect.poll(() => imageRequests).toBe(1);
+  await expect(article.getByRole('button', { name: '查看图片' })).toBeVisible();
   await expect(article.getByAltText('群主 发送的图片')).toHaveJSProperty('naturalWidth', 1);
   const imageBounds = await frame.boundingBox();
   const bodyBounds = await article.locator('.chat-message-body').boundingBox();
@@ -593,7 +604,7 @@ test('切换群组会取消未完成的图片请求并释放已创建的 Blob UR
   await page.goto('/');
   const frames = page.locator('.chat-image-frame');
   await expect(frames).toHaveCount(2);
-  for (const frame of await frames.all()) await frame.getByRole('button', { name: '加载图片' }).click();
+  for (const frame of await frames.all()) await frame.getByRole('button', { name: '加载原图' }).click();
   await expect(page.getByAltText('群主 发送的图片')).toHaveCount(1);
   await expect(page.getByAltText('群主 发送的图片')).toHaveJSProperty('naturalWidth', 1);
   await expect.poll(() => pendingStarted).toBe(true);
@@ -632,7 +643,7 @@ test('图片加载失败只在用户重试时再次请求', async ({ page }) => 
   });
 
   await page.goto('/');
-  await page.getByRole('button', { name: '加载图片' }).click();
+  await page.getByRole('button', { name: '加载原图' }).click();
   const retry = page.getByRole('button', { name: '图片加载失败，点击重试' });
   await expect(retry).toBeVisible();
   await page.waitForTimeout(2200);
@@ -670,7 +681,7 @@ test('反复放大已加载图片复用原始内容，关闭后仅保留列表�
     return route.fulfill({ status: 404 });
   });
   await page.goto('/');
-  await page.getByRole('button', { name: '加载图片' }).click();
+  await page.getByRole('button', { name: '加载原图' }).click();
   await expect(page.getByAltText('群主 发送的图片')).toHaveJSProperty('naturalWidth', 1);
   const liveUrls = () => page.evaluate(() =>
     (window as unknown as { __liveImageUrls: Set<string> }).__liveImageUrls.size);

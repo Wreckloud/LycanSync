@@ -237,9 +237,11 @@ export async function fetchFilePreview(groupId: string, attachmentId: string, si
   return previewBlob(response, progress);
 }
 
-export async function fetchVideoThumbnail(groupId: string, attachmentId: string, signal: AbortSignal, pending = false): Promise<Blob | null> {
+export async function fetchChatThumbnail(groupId: string, attachmentId: string, signal: AbortSignal,
+  kind: 'image' | 'file', pending = false): Promise<Blob | null> {
+  const collection = kind === 'image' ? '/attachments/' : '/files/';
   const response = await authenticatedFetch(
-    '/api/groups/' + encodeURIComponent(groupId) + '/files/' + encodeURIComponent(attachmentId) + '/thumbnail' + (pending ? '?pending=true' : ''),
+    '/api/groups/' + encodeURIComponent(groupId) + collection + encodeURIComponent(attachmentId) + '/thumbnail' + (pending ? '?pending=true' : ''),
     { headers: { Accept: 'image/jpeg' }, signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) },
   );
   if (!response.ok) throw await readApiError(response);

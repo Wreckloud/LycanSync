@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { authenticatedFetch } from '../auth/authApi';
-import { desktopMediaUrl, videoPreviewStatus, fetchCompatibleVideo, downloadFile, fetchVideoThumbnail, findMessages } from './chatApi';
+import { desktopMediaUrl, videoPreviewStatus, fetchCompatibleVideo, downloadFile, fetchChatThumbnail, findMessages } from './chatApi';
 
 vi.mock('../auth/authApi', () => ({ authenticatedFetch: vi.fn(), readApiError: vi.fn() }));
 
@@ -35,10 +35,13 @@ it('桌面下载使用原生保存框并按本次请求取消', async () => {
   expect(authenticatedFetch).not.toHaveBeenCalled();
 });
 
-it('封面只请求封面接口，204 表示无封面，不回退下载原视频', async () => {
+it('缩略图请求专用接口，204 不触发原文件下载', async () => {
   vi.mocked(authenticatedFetch).mockResolvedValue(new Response(null, { status: 204 }));
-  expect(await fetchVideoThumbnail('group', 'file', new AbortController().signal)).toBeNull();
-  expect(authenticatedFetch).toHaveBeenCalledExactlyOnceWith('/api/groups/group/files/file/thumbnail', expect.any(Object));
+  const signal = new AbortController().signal;
+  expect(await fetchChatThumbnail('group', 'file', signal, 'file')).toBeNull();
+  expect(await fetchChatThumbnail('group', 'picture', signal, 'image')).toBeNull();
+  expect(vi.mocked(authenticatedFetch).mock.calls.map(([path]) => path))
+    .toEqual(['/api/groups/group/files/file/thumbnail', '/api/groups/group/attachments/picture/thumbnail']);
 });
 
 it('只有桌面使用媒体地址，不向 URL 拼入登录凭据', () => {
