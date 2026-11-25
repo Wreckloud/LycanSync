@@ -1565,6 +1565,70 @@ test('成员条按拖动方向逐级展开，聚焦收起时按住即可看到�
   await page.mouse.up();
 });
 
+test('手柄点击展开与下拉到普通最大高度一致', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await sharing(page, ['A']);
+  await page.getByRole('button', { name: '观看成员A的共享画面' }).click();
+  await page.getByRole('button', { name: '放大聚焦画面' }).click();
+  const handle = page.locator('.viewing-fold');
+  const height = () => page.locator('.viewing-stage').evaluate(el => el.getBoundingClientRect().height);
+  await handle.click({ trial: true });
+  const maximum = await height();
+  await handle.press('ArrowUp');
+  await expect.poll(height).toBe(maximum - 20);
+  await handle.click();
+  await expect.poll(height).toBe(0);
+  await handle.click();
+  await expect.poll(height, { timeout: 2000 }).toBe(maximum);
+  await expect(page.locator('.call-viewing-panel')).not.toHaveClass(/is-expanded/);
+});
+
+test('聚焦上拖在成员交接区内松手继续收拢', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await sharing(page, ['A']);
+  const handle = page.locator('.viewing-fold');
+  await handle.click({ trial: true });
+  const memberTop = (await handle.boundingBox())!.y;
+  await page.getByRole('button', { name: '观看成员A的共享画面' }).click();
+  await page.getByRole('button', { name: '放大聚焦画面' }).click();
+  for (const distance of [44, 24, 8]) {
+    await handle.click({ trial: true });
+    const box = (await handle.boundingBox())!;
+    const x = box.x + box.width / 2;
+    await page.mouse.move(x, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(x, memberTop + box.height / 2 + distance, { steps: 12 });
+    const frames = handle.evaluate(el => new Promise<number[][]>(resolve => {
+      const stage = document.querySelector<HTMLElement>('.viewing-stage')!;
+      const measure = () => [el.getBoundingClientRect().top, stage.offsetHeight ? Number(getComputedStyle(stage).opacity) : 0];
+      const positions = [measure()];
+      el.addEventListener('pointerup', () => {
+        const start = performance.now();
+        function sample() {
+          positions.push(measure());
+          if (performance.now() - start < 300) requestAnimationFrame(sample);
+          else resolve(positions);
+        }
+        requestAnimationFrame(sample);
+      }, { once: true });
+      el.setAttribute('data-sampling-release', '');
+    }));
+    await expect(handle).toHaveAttribute('data-sampling-release', '');
+    await page.mouse.up();
+    const positions = await frames;
+    expect(positions[0][1]).toBeGreaterThan(0);
+    expect(positions[0][1]).toBeLessThan(1);
+    for (let i = 1; i < positions.length; i++) {
+      expect(positions[i][0]).toBeLessThanOrEqual(positions[i - 1][0] + 1);
+      expect(positions[i][1]).toBeLessThanOrEqual(positions[i - 1][1]);
+    }
+    await expect(handle).toHaveAccessibleName('展开共享画面');
+    expect(positions.at(-1)![0]).toBeCloseTo(memberTop, 0);
+    await handle.evaluate(el => el.removeAttribute('data-sampling-release'));
+    await handle.click();
+  }
+});
+
 test('成员条按拖动收起后松手保持最终位置', async ({ page }) => {
   await sharing(page, ['A']);
   await page.getByRole('button', { name: '观看成员A的共享画面' }).click();

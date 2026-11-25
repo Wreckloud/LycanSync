@@ -72,10 +72,11 @@ const foldAction = computed(() => {
 const resizing = ref(false);
 const foldHint = ref<'up' | 'down' | 'flat'>();
 let foldIdleTimer: ReturnType<typeof setTimeout> | undefined;
+let settleFrame = 0;
 defineExpose({ resizing, memberBlend });
 // 一次手势始终使用同一个屏幕坐标系，吸附和越界都不重设指针原点。
 let drag: { id: number; startY: number; pointerY: number; hintY: number; offset: number; baseY: number | null; membersY: number | null; snap: 'min' | 'max' | null;
-  folded: boolean; stageHidden: boolean } | undefined;
+  folded: boolean; stageHidden: boolean; upward: boolean } | undefined;
 let moved = false;
 let membersOnlyHeight = 0;
 watch(() => props.active, active => {
@@ -85,12 +86,17 @@ watch(() => props.active, active => {
   if (members?.offsetHeight) membersOnlyHeight = members.offsetHeight;
 }, { flush: 'pre' });
 
+function stopMemberSettle() {
+  if (settleFrame) cancelAnimationFrame(settleFrame);
+  settleFrame = 0;
+}
 function startPull(event: PointerEvent) {
   if (!event.isPrimary || event.button !== 0 || drag) return;
+  stopMemberSettle();
   const handle = event.currentTarget as HTMLElement;
   const offset = event.clientY - handle.getBoundingClientRect().top;
   drag = { id: event.pointerId, startY: event.clientY, pointerY: event.clientY, hintY: event.clientY, offset, baseY: null, membersY: null,
-    snap: null, folded: !!props.folded, stageHidden: !!props.stageHidden };
+    snap: null, folded: !!props.folded, stageHidden: !!props.stageHidden, upward: false };
   moved = false;
   handle.setPointerCapture(event.pointerId);
 }
@@ -100,11 +106,12 @@ function movePull(event: PointerEvent) {
   const delta = event.clientY - drag.hintY;
   if (Math.abs(delta) >= 4) {
     drag.hintY = event.clientY;
+    drag.upward = delta < 0;
     foldHint.value = delta < 0 ? 'up' : 'down';
     clearTimeout(foldIdleTimer);
     foldIdleTimer = setTimeout(() => { foldHint.value = 'flat'; }, 180);
   }
-  if (resizing.value) {
+  if (resizing.value && moved) {
     resizeToPointer(drag.pointerY);
     return;
   }
@@ -176,23 +183,45 @@ async function finishPull(event: PointerEvent) {
       else expandNext();
     }
   } else if (moved) movePull(event);
-  const settledAtMembers = drag.snap === 'min';
-  if (settledAtMembers) emit('update:stageHidden', true);
+  const settledAtMembers = drag.snap === 'min' || moved && drag.upward && memberBlend.value > 0;
   if (drag.snap === 'max') {
     changeHeight(maximumHeight.value);
     props.view.height = 'max';
     if (drag.baseY !== null && event.clientY - drag.baseY >= maximumHeight.value + 96) props.view.expanded = true;
-  } else if (drag.snap !== 'min' && dragHeight.value !== null) changeHeight(dragHeight.value);
+  } else if (moved && !settledAtMembers && dragHeight.value !== null) changeHeight(dragHeight.value);
+  const memberEdge = drag.membersY !== null && drag.baseY !== null ? drag.membersY - drag.baseY : membersOnlyHeight;
   drag = undefined;
   clearTimeout(foldIdleTimer);
   foldHint.value = moved ? 'flat' : undefined;
+  // 交接区内松手时，从当前透明度和高度继续收拢，避免先闪回完整画面。
+  if (settledAtMembers && memberBlend.value > 0 && memberBlend.value < 1 && dragHeight.value !== null) {
+    const startHeight = dragHeight.value, startBlend = memberBlend.value;
+    const duration = motionDurationMs(getComputedStyle(panel.value!).getPropertyValue('--motion-feedback-duration'));
+    if (duration > 0 && !motionPreference?.matches) {
+      const start = performance.now();
+      const advance = (now: number) => {
+        const remaining = Math.max(0, 1 - Math.max(0, now - start) / duration) ** 2;
+        dragHeight.value = memberEdge + (startHeight - memberEdge) * remaining;
+        memberBlend.value = 1 - (1 - startBlend) * remaining;
+        if (remaining > 0) settleFrame = requestAnimationFrame(advance);
+        else void endResize(true);
+      };
+      settleFrame = requestAnimationFrame(advance);
+      return;
+    }
+  }
+  await endResize(settledAtMembers);
+}
+async function endResize(settledAtMembers: boolean) {
+  settleFrame = 0;
+  if (settledAtMembers) emit('update:stageHidden', true);
   memberBlend.value = 0;
   dragHeight.value = null;
-  // 成员条已经跟手到位，布局交接完成后再恢复点击展开时的过渡。
-  if (settledAtMembers) await nextTick();
+  await nextTick();
   if (!drag) resizing.value = false;
 }
 function cancelPull(restore = false) {
+  stopMemberSettle();
   clearTimeout(foldIdleTimer);
   if (drag) {
     foldHint.value = 'flat';
@@ -215,7 +244,10 @@ function expandNext() {
 function clickHandle(event: MouseEvent) {
   if (!moved || event.detail === 0) {
     if (foldAction.value.direction === 'up') emit('update:stageHidden', true);
-    else if (foldAction.value.direction === 'down') expandNext();
+    else if (foldAction.value.direction === 'down') {
+      if (!props.folded) props.view.height = 'max';
+      expandNext();
+    }
   }
   moved = false;
 }
@@ -362,6 +394,7 @@ onMounted(() => {
   motionPreference.addEventListener('change', reducePanelMotion);
 });
 onScopeDispose(() => {
+  stopMemberSettle();
   clearTimeout(foldIdleTimer);
   stopWindowRestore?.();
   panelGeneration++;
