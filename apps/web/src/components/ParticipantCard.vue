@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 import { Circle, Fullscreen, HeadphoneOff, Headphones, MicOff, Volume2, VolumeX } from '@lucide/vue';
 import { Track, VideoQuality, type Participant, type RemoteTrackPublication } from 'livekit-client';
 import ConnectionSignal from './ConnectionSignal.vue';
@@ -83,8 +83,9 @@ const speaking = computed(() => {
   void props.speakerRevision;
   return media.value.microphone && props.participant.isSpeaking;
 });
+const audioStatusId = useId();
+const showAudioStatus = computed(() => props.variant === 'card' && !props.isLocal && !media.value.microphone);
 const remoteAudioLabel = computed(() => {
-  if (!media.value.microphone) return `${media.value.name}麦克风已关闭`;
   if (props.playbackVolume === 0) return `${media.value.name}已取消收听，点击恢复收听`;
   const microphoneState = speaking.value ? '正在说话' : '麦克风已开启';
   return `${media.value.name}${microphoneState}，点击取消收听`;
@@ -256,6 +257,7 @@ onBeforeUnmount(() => {
     <div class="participant-media" :class="{ 'is-selectable': selectable, 'is-remote-control': remoteInputAllowed, 'is-focused-preview': focusedPreview }"
       :role="selectable ? 'button' : undefined" :tabindex="remoteInputAllowed || selectable ? 0 : undefined"
       :aria-label="selectable ? watchingElsewhere ? '打开观看窗口' : '观看' + media.name + '的共享画面' : undefined"
+      :aria-describedby="selectable && showAudioStatus ? audioStatusId : undefined"
       :data-select-hint="selectable ? selectHint : undefined"
       @click="handleRemoteClick"
       @keydown="remoteKey($event, true)" @keyup="remoteKey($event, false)"
@@ -276,14 +278,17 @@ onBeforeUnmount(() => {
       <span v-if="isLocal && recordingElapsed" class="recording-indicator" :aria-label="'正在录制 ' + recordingElapsed" title="正在录制">
         <Circle :size="10" fill="currentColor" aria-hidden="true" /><time>{{ recordingElapsed }}</time>
       </span>
+      <span v-if="showAudioStatus" :id="audioStatusId" class="member-audio-status" role="img" :aria-label="isListening === false ? '已停止接收声音' : '麦克风已关闭'">
+        <HeadphoneOff v-if="isListening === false" :size="13" aria-hidden="true" /><MicOff v-else :size="13" aria-hidden="true" />
+      </span>
     </div>
     <div class="participant-meta">
       <span class="participant-name">
         <strong :title="media.name">{{ media.name }}{{ isLocal ? '（你）' : '' }}</strong>
         <ConnectionSignal v-if="variant === 'card' && !isLocal" class="member-signal" :quality="media.quality" />
       </span>
-      <MemberVolumeButton v-if="variant === 'card' && !isLocal && media.sharing && shareAudio" :max="SHARE_VOLUME_MAX"
-        :disabled="!shareAudioListening" :volume="shareVolume" :label="shareVolume === 0 ? '恢复这路共享声音' : '静音这路共享声音'"
+      <MemberVolumeButton v-if="variant === 'card' && !isLocal && media.sharing && shareAudio && shareAudioListening" :max="SHARE_VOLUME_MAX"
+        :volume="shareVolume" :label="shareVolume === 0 ? '恢复这路共享声音' : '静音这路共享声音'"
         @toggle="emit('toggleShareAudio')" @change="emit('changeShareVolume', $event)">
         <VolumeX v-if="shareVolume === 0" :size="14" /><Volume2 v-else :size="14" />
       </MemberVolumeButton>
@@ -301,9 +306,9 @@ onBeforeUnmount(() => {
         :aria-label="media.microphone ? '关闭自己的麦克风' : '开启自己的麦克风'" @click="emit('toggleMicrophone')">
         <VoiceLevelMic v-if="media.microphone" :size="14" :level="speaking ? 1 : 0" :steps="1" /><MicOff v-else :size="14" />
       </button>
-      <MemberVolumeButton v-else-if="variant === 'card'" :volume="playbackVolume" :label="remoteAudioLabel"
-        :disabled="!media.microphone" @toggle="emit('toggleAudio')" @change="emit('changeVoiceVolume', $event)">
-        <VoiceLevelMic v-if="media.microphone && playbackVolume > 0" :size="14" :level="speaking ? 1 : 0" :steps="1" />
+      <MemberVolumeButton v-else-if="variant === 'card' && media.microphone" :volume="playbackVolume" :label="remoteAudioLabel"
+        @toggle="emit('toggleAudio')" @change="emit('changeVoiceVolume', $event)">
+        <VoiceLevelMic v-if="playbackVolume > 0" :size="14" :level="speaking ? 1 : 0" :steps="1" />
         <MicOff v-else :size="14" />
       </MemberVolumeButton>
       <button v-if="variant === 'card' && isLocal" type="button" class="participant-state participant-state-button"
@@ -311,16 +316,17 @@ onBeforeUnmount(() => {
         :aria-label="isListening ? '停止接收所有成员声音' : '恢复接收所有成员声音'" @click="emit('toggleListening')">
         <HeadphoneOff v-if="isListening === false" :size="14" /><Headphones v-else :size="14" />
       </button>
-      <span v-else-if="variant === 'card' && isListening !== null" class="participant-state" :class="{ 'is-off': isListening === false }"
-        :aria-label="isListening ? '正在接收声音' : '已停止接收声音'">
-        <HeadphoneOff v-if="isListening === false" :size="14" /><Headphones v-else :size="14" />
-      </span>
     </div>
   </article>
 </template>
 
 <style scoped>
 .member-signal { color: var(--muted); }
+.member-audio-status {
+  position: absolute; right: 7px; bottom: 6px; z-index: 3; pointer-events: none;
+  display: grid; place-items: center; width: 22px; height: 22px; border-radius: 5px;
+  color: #d8dfe6; background: #0b0f14b8;
+}
 .recording-indicator { position: absolute; top: 8px; right: 8px; z-index: 1; display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px; border-radius: 4px; background: #0b0f14cc; color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; line-height: 16px; pointer-events: none; }
 .recording-indicator svg { color: var(--danger); flex-shrink: 0; }
 .private-control-placeholder { display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 12px; text-align: center; }

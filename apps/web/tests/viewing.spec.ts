@@ -124,6 +124,10 @@ export function useRtcRoom() {
       for (const member of friends) member.isMicrophoneEnabled = ids.includes(member.identity);
       revision.value++;
     },
+    setListening(id, enabled) {
+      friends.find(member => member.identity === id).attributes['lycansync.listening'] = String(enabled);
+      revision.value++;
+    },
     control(identity) { remoteControlShares.value = { ...remoteControlShares.value, [identity]: { kind: 'monitor', shareSessionId: identity + '-share' } }; remoteControlAvailable.value = { ...remoteControlAvailable.value, [identity]: true }; revision.value++; },
     grant(identity) { remoteControlPending.value = null; remoteControlActive.value = { identity, shareSessionId: identity + '-share', controlSessionId: identity + '-control', trackSid: 'share-' + identity }; },
     inputEvents() { return inputs.slice(); },
@@ -195,6 +199,46 @@ export function useRtcRoom() {
 async function sharing(page: Page, ids: string[]) {
   await page.evaluate((identities) => (window as unknown as { __viewingTest: { sharing(ids: string[]): void } }).__viewingTest.sharing(identities), ids);
 }
+
+test('成员卡片将对方状态放在画面右下角，底栏只显示可操作的音量按钮', async ({ page }, testInfo) => {
+  await sharing(page, ['B']);
+  await page.evaluate(() => {
+    const rtc = (window as unknown as { __viewingTest: {
+      microphones(ids: string[]): void; setListening(id: string, enabled: boolean): void; addShareAudio(ids: string[]): void;
+      paint(width: number, height: number, color: string): void;
+    } }).__viewingTest;
+    rtc.microphones(['A', 'D']);
+    rtc.setListening('C', false);
+    rtc.addShareAudio(['B']);
+    rtc.paint(320, 180, '#8c9ea8');
+  });
+  const cards = page.getByTestId('participant-card');
+  const card = (id: string) => cards.filter({ hasText: '成员' + id });
+  await expect(card('A').locator('.member-audio-status')).toHaveCount(0);
+  const status = card('B').locator('.participant-media').getByRole('img', { name: '麦克风已关闭' });
+  await expect(status).toBeVisible();
+  await expect(status).toHaveCSS('pointer-events', 'none');
+  await expect(card('B').getByRole('button', { name: '静音这路共享声音' })).toBeEnabled();
+  const centers = await card('B').evaluate(element => {
+    const centerX = (selector: string) => {
+      const { x, width } = element.querySelector(selector)!.getBoundingClientRect();
+      return x + width / 2;
+    };
+    return [centerX('.member-audio-status'), centerX('.member-audio-status svg'), centerX('.volume-button svg')];
+  });
+  expect(Math.max(...centers) - Math.min(...centers)).toBeLessThan(0.5);
+  await expect(card('C').locator('.participant-media').getByRole('img', { name: '已停止接收声音' })).toBeVisible();
+  await expect(card('C').locator('.participant-meta button')).toHaveCount(0);
+  await card('D').getByRole('button', { name: /点击取消收听/ }).click();
+  await expect(card('D').getByRole('button', { name: /点击恢复收听/ })).toBeEnabled();
+  await expect(card('D').locator('.member-audio-status')).toHaveCount(0);
+  await expect(cards.first().getByRole('button', { name: '停止接收所有成员声音' })).toBeEnabled();
+  await page.mouse.move(0, 0);
+  await card('B').screenshot({ path: testInfo.outputPath('aligned-card.png') });
+  const first = (await cards.first().boundingBox())!, last = (await card('D').boundingBox())!;
+  await page.screenshot({ path: testInfo.outputPath('member-card-states.png'),
+    clip: { x: first.x, y: first.y, width: last.x + last.width - first.x, height: first.height } });
+});
 
 test('聚焦只播放选中的共享声音，切回网格或成员卡片恢复各自音量', async ({ page }) => {
   await sharing(page, ['A', 'B', 'C']);

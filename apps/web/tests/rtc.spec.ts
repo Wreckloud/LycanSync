@@ -543,7 +543,7 @@ test('双人同时语音和共享：实际收包、多画面观看、静音、�
       .getByLabel('已停止接收声音')).toBeVisible();
     await expect(otherPage.getByRole('button', { name: '开启麦克风', exact: true })).toBeEnabled();
     await expect(page.getByTestId('participant-card').filter({ hasText: '福州小狼' })
-      .getByLabel('麦克风已关闭')).toBeVisible();
+      .getByLabel('麦克风已关闭')).toHaveCount(0);
     await otherPage.getByRole('button', { name: '恢复接收所有成员声音' }).first().click();
     await expect(otherPage.getByRole('button', { name: '关闭麦克风', exact: true })).toBeEnabled();
     await expect(page.getByTestId('participant-card').filter({ hasText: '福州小狼' })

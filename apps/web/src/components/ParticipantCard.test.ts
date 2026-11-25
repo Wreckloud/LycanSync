@@ -10,11 +10,15 @@ function renderCard(isLocal: boolean, recordingElapsed?: string, isListening: bo
   return renderToString(createSSRApp(ParticipantCard, { participant, revision: 0, isLocal, isListening, recordingElapsed }));
 }
 
-it('群友的收听状态只在已知时展示', async () => {
-  expect(await renderCard(false, undefined, true)).toContain('aria-label="正在接收声音"');
-  expect(await renderCard(false, undefined, false)).toContain('aria-label="已停止接收声音"');
+it('群友闭麦在画面上显示状态，停止收听优先，未知收听状态不显示耳机', async () => {
+  const muted = await renderCard(false, undefined, true);
+  expect(muted).toContain('aria-label="麦克风已关闭"');
+  expect(muted).not.toContain('volume-button');
+  const deafened = await renderCard(false, undefined, false);
+  expect(deafened).toContain('aria-label="已停止接收声音"');
+  expect(deafened).not.toContain('aria-label="麦克风已关闭"');
   const unknown = await renderCard(false, undefined, null);
-  expect(unknown).not.toContain('aria-label="正在接收声音"');
+  expect(unknown).toContain('aria-label="麦克风已关闭"');
   expect(unknown).not.toContain('aria-label="已停止接收声音"');
 });
 
