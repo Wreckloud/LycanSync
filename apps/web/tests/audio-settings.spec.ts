@@ -106,7 +106,9 @@ createApp({ setup() {
         return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
       });
       const fixedPosition = await resetPosition();
-      for (const value of ['0', '0.05', '0.55', '1', '2']) {
+      const max = sliderName === '共享画面音量' ? '1' : '2';
+      await expect(slider).toHaveAttribute('max', max);
+      for (const value of ['0', '0.05', '0.55', max]) {
         await slider.fill(value);
         await expect(slider).toHaveValue(value);
         expect(await resetPosition(), `${name}: ${value}`).toEqual(fixedPosition);

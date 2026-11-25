@@ -4,6 +4,7 @@ import { Circle, Fullscreen, HeadphoneOff, Headphones, MicOff, Volume2, VolumeX 
 import { Track, VideoQuality, type Participant, type RemoteTrackPublication } from 'livekit-client';
 import ConnectionSignal from './ConnectionSignal.vue';
 import MemberVolumeButton from './MemberVolumeButton.vue';
+import { SHARE_VOLUME_MAX } from '../rtc/audioPreferences';
 import VoiceLevelMic from './VoiceLevelMic.vue';
 import { observeLocalScreenPreview } from '../rtc/localScreenPreview';
 import { setNativeScreenPreviewDemand } from '../rtc/nativeScreenVideo';
@@ -281,7 +282,7 @@ onBeforeUnmount(() => {
         <strong :title="media.name">{{ media.name }}{{ isLocal ? '（你）' : '' }}</strong>
         <ConnectionSignal v-if="variant === 'card' && !isLocal" class="member-signal" :quality="media.quality" />
       </span>
-      <MemberVolumeButton v-if="variant === 'card' && !isLocal && media.sharing && shareAudio"
+      <MemberVolumeButton v-if="variant === 'card' && !isLocal && media.sharing && shareAudio" :max="SHARE_VOLUME_MAX"
         :disabled="!shareAudioListening" :volume="shareVolume" :label="shareVolume === 0 ? '恢复这路共享声音' : '静音这路共享声音'"
         @toggle="emit('toggleShareAudio')" @change="emit('changeShareVolume', $event)">
         <VolumeX v-if="shareVolume === 0" :size="14" /><Volume2 v-else :size="14" />

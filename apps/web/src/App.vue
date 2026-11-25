@@ -42,7 +42,7 @@ import type { ScreenShareQualityId } from './rtc/screenShareQuality';
 import { useScreenShareSelection } from './rtc/useScreenShareSelection';
 import { useRoomSummary } from './rtc/useRoomSummary';
 import { requestRoomOccupancies } from './rtc/roomSummaryApi';
-import { AUDIO_VOLUME_MAX } from './rtc/audioPreferences';
+import { AUDIO_VOLUME_MAX, SHARE_VOLUME_MAX } from './rtc/audioPreferences';
 import { useAudioPreferences, type AudioVolumeChange } from './rtc/useAudioPreferences';
 import { entranceSoundToFile, loadEntranceSound } from './rtc/entranceSound';
 import { useCallSounds } from './rtc/useCallSounds';
@@ -1027,7 +1027,7 @@ function shareVolume(identity: string) {
   return shareLevels.get(identity) ?? 1;
 }
 function remoteScreenSharePlaybackVolume(identity: string) {
-  return Math.min(AUDIO_VOLUME_MAX, shareVolume(identity) * screenShareVolume.value * outputVolume.value);
+  return Math.min(SHARE_VOLUME_MAX, shareVolume(identity) * screenShareVolume.value * outputVolume.value);
 }
 function updateSharedVolume(identity: string, value: number) {
   if (value > 0) shareLevels.set(identity, value);

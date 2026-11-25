@@ -2,7 +2,7 @@
 import { computed, onScopeDispose, ref, watch } from 'vue';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, normalizeAudioVolume } from '../rtc/audioPreferences';
 
-const props = defineProps<{ volume: number; label: string; disabled?: boolean }>();
+const props = withDefaults(defineProps<{ volume: number; label: string; disabled?: boolean; max?: number }>(), { max: AUDIO_VOLUME_MAX });
 const emit = defineEmits<{ toggle: []; change: [volume: number] }>();
 const button = ref<HTMLButtonElement | null>(null);
 const open = ref(false);
@@ -26,7 +26,7 @@ function positionPopup(target: HTMLButtonElement) {
   left.value = Math.max(24, Math.min(rect.left + rect.width / 2, viewport.clientWidth - 24));
   height.value = Math.min(144, viewport.clientHeight - 24);
   const center = rect.top + rect.height / 2;
-  top.value = Math.max(12, Math.min(center - height.value * (1 - props.volume / AUDIO_VOLUME_MAX),
+  top.value = Math.max(12, Math.min(center - height.value * (1 - props.volume / props.max),
     viewport.clientHeight - height.value - 12));
   origin.value = center - top.value;
 }
@@ -51,7 +51,7 @@ function wheel(event: WheelEvent) {
   wheelPixels += delta;
   draft.value = props.volume;
   if (Math.abs(wheelPixels) >= threshold) {
-    draft.value = normalizeAudioVolume(props.volume - Math.sign(wheelPixels) * AUDIO_VOLUME_STEP);
+    draft.value = normalizeAudioVolume(props.volume - Math.sign(wheelPixels) * AUDIO_VOLUME_STEP, props.max);
     wheelPixels = 0;
     if (draft.value !== props.volume) emit('change', draft.value);
   }
@@ -82,9 +82,9 @@ function move(event: PointerEvent) {
   const travel = startY - event.clientY;
   // 靠近窗口边缘时，剩余的鼠标行程也应能调到端点。
   const distance = travel > 0 ? startY : button.value!.ownerDocument.documentElement.clientHeight - startY - 1;
-  const range = travel > 0 ? AUDIO_VOLUME_MAX - initial : initial;
-  const pixels = Math.max(1, Math.min(distance, height.value * range / AUDIO_VOLUME_MAX));
-  draft.value = normalizeAudioVolume(initial + travel / pixels * range);
+  const range = travel > 0 ? props.max - initial : initial;
+  const pixels = Math.max(1, Math.min(distance, height.value * range / props.max));
+  draft.value = normalizeAudioVolume(initial + travel / pixels * range, props.max);
 }
 
 function end(event?: PointerEvent, commit = false) {
@@ -116,15 +116,15 @@ onScopeDispose(() => end());
     :aria-pressed="volume === 0" aria-description="滚轮、长按拖动或上下方向键可调整音量"
     @pointerdown="begin" @pointermove="move" @pointerup="end($event, true)" @pointercancel="end($event)"
     @lostpointercapture="end($event)" @click.stop="click" @contextmenu.prevent @wheel="wheel"
-    @keydown.up.prevent="emit('change', normalizeAudioVolume(volume + AUDIO_VOLUME_STEP))"
-    @keydown.down.prevent="emit('change', normalizeAudioVolume(volume - AUDIO_VOLUME_STEP))" @keydown.esc="end()">
+    @keydown.up.prevent="emit('change', normalizeAudioVolume(volume + AUDIO_VOLUME_STEP, max))"
+    @keydown.down.prevent="emit('change', normalizeAudioVolume(volume - AUDIO_VOLUME_STEP, max))" @keydown.esc="end()">
     <slot />
   </button>
   <Teleport v-if="button" :to="button.ownerDocument.body">
     <Transition name="volume-pop">
       <div v-if="open" class="volume-popup" aria-hidden="true"
         :style="{ left: left + 'px', top: top + 'px', height: height + 'px', transformOrigin: '50% ' + origin + 'px' }">
-        <span class="volume-track"><i :style="{ height: percent / AUDIO_VOLUME_MAX + '%' }" /></span>
+        <span class="volume-track"><i :style="{ height: percent / max + '%' }" /></span>
         <output>{{ percent }}%</output>
       </div>
     </Transition>

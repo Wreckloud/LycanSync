@@ -17,6 +17,7 @@ export interface AudioPreferences extends AudioProcessingSettings {
 }
 
 export const AUDIO_VOLUME_MAX = 2;
+export const SHARE_VOLUME_MAX = 1;
 export const AUDIO_VOLUME_STEP = 0.05;
 const AUDIO_VOLUME_SCALE = 1 / AUDIO_VOLUME_STEP;
 
@@ -25,7 +26,7 @@ export const DEFAULT_AUDIO_PREFERENCES: AudioPreferences = {
   outputDeviceId: 'default',
   inputGain: 1,
   outputVolume: 1,
-  screenShareVolume: 0.85,
+  screenShareVolume: 0.25,
   voiceVolumeBalance: true,
   echoCancellation: true,
   noiseSuppression: true,
@@ -37,9 +38,9 @@ export const DEFAULT_AUDIO_PREFERENCES: AudioPreferences = {
 
 const STORAGE_PREFIX = 'lycansync.audio-preferences.v1.';
 
-export function normalizeAudioVolume(value: number) {
+export function normalizeAudioVolume(value: number, maximum = AUDIO_VOLUME_MAX) {
   if (!Number.isFinite(value)) return 1;
-  return Math.min(AUDIO_VOLUME_MAX, Math.max(0, Math.round(value * AUDIO_VOLUME_SCALE) / AUDIO_VOLUME_SCALE));
+  return Math.min(maximum, Math.max(0, Math.round(value * AUDIO_VOLUME_SCALE) / AUDIO_VOLUME_SCALE));
 }
 
 export function unappliedCaptureProcessing(settings: AudioProcessingSettings, applied: MediaTrackSettings) {
@@ -76,7 +77,8 @@ export function loadAudioPreferences(userId: string, storage: Pick<Storage, 'get
         ? stored.outputDeviceId : 'default',
       inputGain: normalizeAudioVolume(stored.inputGain ?? 1),
       outputVolume: normalizeAudioVolume(stored.outputVolume ?? 1),
-      screenShareVolume: normalizeAudioVolume(stored.screenShareVolume ?? DEFAULT_AUDIO_PREFERENCES.screenShareVolume),
+      screenShareVolume: typeof stored.screenShareVolume === 'number' && Number.isFinite(stored.screenShareVolume)
+        ? normalizeAudioVolume(stored.screenShareVolume, SHARE_VOLUME_MAX) : DEFAULT_AUDIO_PREFERENCES.screenShareVolume,
       voiceVolumeBalance: stored.voiceVolumeBalance !== false,
       echoCancellation: stored.echoCancellation !== false,
       noiseSuppression: stored.noiseSuppression !== false,

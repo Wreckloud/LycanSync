@@ -63,12 +63,17 @@ describe('audioPreferences', () => {
     });
   });
 
+  it('旧配置中超过 100% 的共享音量按新上限播放，保留总输出增益', () => {
+    const storage = { getItem: () => JSON.stringify({ outputVolume: 1.5, screenShareVolume: 1.8 }) };
+    expect(loadAudioPreferences('local-user', storage)).toMatchObject({ outputVolume: 1.5, screenShareVolume: 1 });
+  });
+
   it('保留旧版偏好并为缺少的处理开关补充默认值', () => {
     const storage = { getItem: () => JSON.stringify({ inputGain: 0.8, outputVolume: 1.2 }) };
     expect(loadAudioPreferences('local-user', storage)).toMatchObject({
       inputGain: 0.8,
       outputVolume: 1.2,
-      screenShareVolume: 0.85,
+      screenShareVolume: 0.25,
       voiceVolumeBalance: true,
       echoCancellation: true,
       noiseSuppression: true,

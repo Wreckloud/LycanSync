@@ -1,5 +1,5 @@
 import { onScopeDispose, reactive, ref } from 'vue';
-import { loadAudioPreferences, normalizeAudioVolume, saveAudioPreferences,
+import { loadAudioPreferences, normalizeAudioVolume, saveAudioPreferences, SHARE_VOLUME_MAX,
   type AudioPreferences, type AudioProcessingSettings } from './audioPreferences';
 
 const SAVE_DELAY_MS = 150;
@@ -117,7 +117,7 @@ export function useAudioPreferences(userId: string,
   }
 
   function setScreenShareVolume(value: number) {
-    const next = normalizeAudioVolume(value);
+    const next = normalizeAudioVolume(value, SHARE_VOLUME_MAX);
     if (next === screenShareVolume.value) return false;
     screenShareVolume.value = next;
     scheduleSave();
