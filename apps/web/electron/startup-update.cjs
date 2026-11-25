@@ -73,6 +73,13 @@ function createStartupUpdate({ enabled, version, createUpdater, onChange, before
     return updater;
   }
 
+  function recordTiming(stage, startedAt) {
+    const durationMs = Math.round(performance.now() - startedAt);
+    // 更新状态只等待 SDK 和安装收尾，日志队列独立完成写入。
+    void Promise.resolve().then(() => onTiming(stage, durationMs))
+      .catch(() => console.warn('无法记录更新阶段耗时', stage));
+  }
+
   async function checkAndInstall(current) {
     const active = () => !finished && current === generation;
     try {
@@ -84,8 +91,7 @@ function createStartupUpdate({ enabled, version, createUpdater, onChange, before
       const result = await updater.checkForUpdates();
       if (!active()) return;
       clearTimeout(checkTimer);
-      await onTiming('updateCheck', Math.round(performance.now() - checkingAt));
-      if (!active()) return;
+      recordTiming('updateCheck', checkingAt);
       if (!result) throw new Error('更新检查没有返回结果');
       if (!result.isUpdateAvailable) {
         complete('当前已是最新版本');
@@ -97,15 +103,13 @@ function createStartupUpdate({ enabled, version, createUpdater, onChange, before
       // SDK 负责缓存复用、SHA-512 与可用的签名校验；校验成功才会结束 downloadUpdate。
       const files = await updater.downloadUpdate(cancellationToken);
       if (!active()) return;
-      await onTiming('updateDownloadAndVerify', Math.round(performance.now() - downloadingAt));
-      if (!active()) return;
+      recordTiming('updateDownloadAndVerify', downloadingAt);
       if (!files?.length) throw new Error('更新安装包不可用');
       publish({ phase: 'preparing', percent: undefined, message: '正在保存录制并准备安装…' });
       const preparingAt = performance.now();
       await beforeInstall(state.intent);
       if (!active()) { onInstallFailure(); return; }
-      await onTiming('updatePrepare', Math.round(performance.now() - preparingAt));
-      if (!active()) return;
+      recordTiming('updatePrepare', preparingAt);
       publish({ phase: 'installing', message: '即将开始安装，完成后自动打开应用…' });
       updater.autoRunAppAfterInstall = true;
       // 应用内升级沿用安装位置与设置，静默替换后重开；首次手动安装仍显示向导。

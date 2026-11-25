@@ -46,6 +46,32 @@ function fixture(options = {}) {
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
+test('诊断写入挂起时无更新仍立即可用，安装继续等待必要的收尾', async () => {
+  const log = deferred();
+  const prepare = deferred();
+  try {
+    const noUpdate = fixture({ onTiming: () => log.promise });
+    const checking = noUpdate.startup.start();
+    noUpdate.checks.resolve({ isUpdateAvailable: false });
+    await flush();
+    assert.equal(noUpdate.startup.getState().phase, 'ready');
+    await checking;
+
+    const update = fixture({ onTiming: () => log.promise, beforeInstall: () => prepare.promise });
+    void update.startup.start();
+    update.available();
+    await flush();
+    update.downloads.resolve(['verified-installer']);
+    await flush();
+    assert.equal(update.startup.getState().phase, 'preparing');
+    assert.equal(update.installs.length, 0);
+    prepare.resolve();
+    await flush();
+    assert.equal(update.installs.length, 1);
+    assert.equal(update.startup.getState().phase, 'installing');
+  } finally { log.resolve(); prepare.resolve(); }
+});
+
 test('更新缓存固定在运行目录，不读取系统本地应用数据目录', async () => {
   const cachePath = join('D:', 'LycanSync', 'data', 'updater');
   const f = fixture({ updaterCachePath: cachePath });
