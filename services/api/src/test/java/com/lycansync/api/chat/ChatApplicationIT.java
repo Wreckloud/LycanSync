@@ -125,7 +125,7 @@ class ChatApplicationIT {
 
     @BeforeEach
     void resetDatabase() throws IOException {
-        jdbc.sql("TRUNCATE rtc_voice_time, system_state, auth_qq_identity, auth_access_link, user_presence, chat_attachment, chat_file_delivery, chat_file_attachment, chat_file_upload_reservation, "
+        jdbc.sql("TRUNCATE diagnostic_report, rtc_voice_time, system_state, auth_qq_identity, auth_access_link, user_presence, chat_attachment, chat_file_delivery, chat_file_attachment, chat_file_upload_reservation, "
                 + "chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
         jdbc.sql("UPDATE chat_file_storage_quota SET used_bytes = 0, reserved_bytes = 0, max_file_bytes = NULL, max_storage_bytes = NULL WHERE id = 1").update();
         jdbc.sql("INSERT INTO system_state(id) VALUES (1)").update();

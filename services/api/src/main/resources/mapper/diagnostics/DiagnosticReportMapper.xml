@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.lycansync.api.diagnostics.mapper.DiagnosticReportMapper">
+    <insert id="insert">
+        INSERT INTO diagnostic_report(id, user_id, uploaded_at, json_bytes, compressed_report)
+        VALUES (#{id}, #{userId}, clock_timestamp(), #{size}, #{gzip})
+    </insert>
+    <delete id="prune">
+        DELETE FROM diagnostic_report WHERE id IN (
+            SELECT id FROM diagnostic_report WHERE user_id = #{userId} ORDER BY uploaded_at DESC, id DESC OFFSET 3
+        )
+    </delete>
+    <delete id="pruneOldest">
+        DELETE FROM diagnostic_report WHERE id IN (SELECT id FROM diagnostic_report ORDER BY uploaded_at DESC, id DESC OFFSET 32)
+    </delete>
+    <select id="list" resultType="com.lycansync.api.diagnostics.model.DiagnosticReportEntry">
+        SELECT r.id, u.nickname, r.uploaded_at AS uploadedAt, r.json_bytes AS byteSize
+        FROM diagnostic_report r JOIN app_user u ON u.id = r.user_id ORDER BY r.uploaded_at DESC, r.id DESC
+    </select>
+    <select id="content" resultType="_byte[]">
+        SELECT compressed_report FROM diagnostic_report WHERE id = #{id}
+    </select>
+</mapper>

@@ -26,6 +26,10 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.concurrent.Executors;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.zip.GZIPOutputStream;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -78,12 +82,38 @@ class AuthApplicationIT {
 
     @BeforeEach
     void resetDatabase() {
-        jdbc.sql("TRUNCATE rtc_voice_time, system_state, auth_qq_identity, auth_access_link, user_presence, chat_attachment, chat_file_delivery, chat_file_attachment, chat_file_upload_reservation, chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
+        jdbc.sql("TRUNCATE diagnostic_report, rtc_voice_time, system_state, auth_qq_identity, auth_access_link, user_presence, chat_attachment, chat_file_delivery, chat_file_attachment, chat_file_upload_reservation, chat_message, group_member, chat_group, auth_session, auth_local_credential, app_user").update();
         jdbc.sql("INSERT INTO system_state(id) VALUES (1)").update();
     }
 
     private String registerAdmin() {
         return localAuth.register(new LocalRegistrationRequest("Admin", ADMIN_PASSWORD)).sessionToken();
+    }
+
+    @Test
+    void membersSubmitReportsAndOnlyOwnerCanReceiveThem() throws Exception {
+        String owner = "Bearer " + registerAdmin();
+        String member = "Bearer " + localAuth.register(new LocalRegistrationRequest("Friend", "friend-password")).sessionToken();
+        String path = "/api/diagnostics/reports";
+        byte[] json = "{\"kind\":\"lycansync-diagnostics\",\"notes\":\"卡顿\",\"samples\":[]}".getBytes(StandardCharsets.UTF_8);
+        var bytes = new ByteArrayOutputStream();
+        try (var gzip = new GZIPOutputStream(bytes)) { gzip.write(json); }
+        mvc.perform(post(path).contentType("application/gzip").content(bytes.toByteArray())).andExpect(status().isUnauthorized());
+        mvc.perform(post(path).header("Authorization", member).contentType("application/gzip").content("bad"))
+                .andExpect(status().isBadRequest());
+        for (int i = 0; i < 4; i++) {
+            mvc.perform(post(path).header("Authorization", member).contentType("application/gzip").content(bytes.toByteArray()))
+                    .andExpect(status().isNoContent());
+        }
+        mvc.perform(get(path).header("Authorization", member)).andExpect(status().isForbidden());
+        var listing = mvc.perform(get(path).header("Authorization", owner)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(3)).andExpect(jsonPath("$[0].nickname").value("Friend"))
+                .andExpect(jsonPath("$[0].byteSize").value(json.length)).andReturn().getResponse();
+        String file = path + "/" + new ObjectMapper().readTree(listing.getContentAsByteArray()).get(0).get("id").asText();
+        mvc.perform(get(file).header("Authorization", member)).andExpect(status().isForbidden());
+        var download = mvc.perform(get(file).header("Authorization", owner)).andExpect(status().isOk()).andReturn().getResponse();
+        assertThat(download.getHeader("Content-Encoding")).isEqualTo("gzip");
+        assertThat(download.getContentAsByteArray()).isEqualTo(bytes.toByteArray());
     }
 
     @Test
