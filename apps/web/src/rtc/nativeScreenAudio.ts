@@ -2,7 +2,7 @@ import { LocalAudioTrack } from 'livekit-client';
 import processorUrl from './nativeScreenAudio.worklet.js?url&no-inline';
 
 export interface NativeScreenAudioDesktopBridge {
-  startNativeScreenAudio(sourceId: string, sessionId: string): Promise<{
+  startNativeScreenAudio(sourceId: string, captureSessionId: string, publicationId: string): Promise<{
     sampleRate: number;
     channels: 2;
     bitsPerSample: 32;
@@ -10,7 +10,7 @@ export interface NativeScreenAudioDesktopBridge {
     pluginLoadMs: number;
     captureReadyMs: number;
   }>;
-  stopNativeScreenAudio(sessionId: string): Promise<{ changed: boolean }>;
+  stopNativeScreenAudio(publicationId: string): Promise<{ changed: boolean }>;
   onNativeScreenAudioChunk(callback: (chunk: NativeScreenAudioChunk) => void): () => void;
   acknowledgeNativeScreenAudioChunk(sessionId: string, sequence: number, droppedChunks: number): void;
   onNativeScreenAudioError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
@@ -77,14 +77,15 @@ export class NativeScreenAudioSession {
     });
   }
 
-  private async startGraphAndCapture(sourceId: string, sessionId: string) {
-    this.sessionId = sessionId;
+  private async startGraphAndCapture(sourceId: string, captureSessionId: string) {
+    // 同一画面和录制音源可以复用，每次页面发布单独识别其迟到消息。
+    const sessionId = this.sessionId = crypto.randomUUID();
     this.removeChunkListener = this.desktop.onNativeScreenAudioChunk((chunk) => this.acceptChunk(chunk));
     this.removeErrorListener = this.desktop.onNativeScreenAudioError((failure) => {
       if (failure?.sessionId === this.sessionId) this.fail(failure.code);
     });
     try {
-      this.nativeStartCommand = this.desktop.startNativeScreenAudio(sourceId, sessionId);
+      this.nativeStartCommand = this.desktop.startNativeScreenAudio(sourceId, captureSessionId, sessionId);
       const format = await this.nativeStartCommand;
       if (format.channels !== 2 || format.bitsPerSample !== 32 || format.nominalChunkMs !== 10
           || !Number.isInteger(format.sampleRate) || format.sampleRate < 8000 || format.sampleRate > 192000) {

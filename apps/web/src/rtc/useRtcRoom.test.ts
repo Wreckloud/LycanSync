@@ -126,8 +126,8 @@ vi.mock('./nativeScreenAudio', () => ({
       }
     }
     async start(sourceId: string, sessionId: string) {
-      this.sessionId = sessionId;
-      const format = await this.desktop!.startNativeScreenAudio(sourceId, sessionId);
+      this.sessionId = crypto.randomUUID();
+      const format = await this.desktop!.startNativeScreenAudio(sourceId, sessionId, this.sessionId);
       this.startupTiming = { pluginLoadMs: format.pluginLoadMs, captureReadyMs: format.captureReadyMs, graphReadyMs: 20 };
       return this.track as never;
     }
@@ -566,7 +566,7 @@ describe('room media lifecycle', () => {
       const microphone = mockRoom().localParticipant.getTrackPublication(Track.Source.Microphone);
       const session = rtcMocks.nativeVideoInstances[0] as { switchGameSource(sourceId: string, sessionId: string): Promise<void> };
       await session.switchGameSource('window:2:0', 'game-capture');
-      expect(rtcMocks.nativeAudioStarts).toHaveBeenLastCalledWith('window:2:0', 'game-capture');
+      expect(rtcMocks.nativeAudioStarts).toHaveBeenLastCalledWith('window:2:0', 'game-capture', expect.any(String));
       await vi.waitFor(() => expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)).toBeDefined());
       expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShare)).toBe(video);
       expect(mockRoom().localParticipant.getTrackPublication(Track.Source.Microphone)).toBe(microphone);
@@ -597,13 +597,13 @@ describe('room media lifecycle', () => {
       rtcMocks.nativeAudioStarts.mockReturnValueOnce(startup.promise);
       const session = rtcMocks.nativeVideoInstances[0] as { switchGameSource(sourceId: string, sessionId: string): Promise<void> };
       await session.switchGameSource('window:2:0', 'game-capture');
-      expect(rtcMocks.nativeAudioStarts).toHaveBeenLastCalledWith('window:2:0', 'game-capture');
+      expect(rtcMocks.nativeAudioStarts).toHaveBeenLastCalledWith('window:2:0', 'game-capture', expect.any(String));
       expect(await rtc.setScreenShareQuality('highFrameRate')).toBe(true);
       expect(rtc.screenShareActive.value).toBe(true);
       expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)).toBeUndefined();
       await rtc.leave();
       startup.resolve({});
-      await vi.waitFor(() => expect(rtcMocks.nativeAudioStops).toHaveBeenCalledWith('game-capture'));
+      await vi.waitFor(() => expect(rtcMocks.nativeAudioStops).toHaveBeenCalledWith(rtcMocks.nativeAudioStarts.mock.calls.find(call => call[1] === 'game-capture')?.[2]));
     } finally { startup.resolve({}); await rtc.leave(); scope.stop(); }
   });
 
@@ -1379,7 +1379,7 @@ describe('room media lifecycle', () => {
         customQuality: { resolution: 1080, fps: 30 } });
       expect(await rtc.changeScreenShareSource()).toBe(true);
       expect(rtcMocks.nativeStarts).toHaveBeenLastCalledWith('window:2:0', 30, expect.anything(), { width: 1920, height: 1080 });
-      expect(rtcMocks.nativeAudioStarts).toHaveBeenLastCalledWith('window:2:0', 'window:2:0-session');
+      expect(rtcMocks.nativeAudioStarts).toHaveBeenLastCalledWith('window:2:0', 'window:2:0-session', expect.any(String));
       expect(rtc.currentScreenShareQuality.value).toBe('custom');
       expect(room.localParticipant.getTrackPublication(Track.Source.Microphone)).toBe(microphone);
       expect(room.localParticipant.getTrackPublication(Track.Source.ScreenShare)).not.toBe(video);
@@ -2062,7 +2062,7 @@ describe('room media lifecycle', () => {
       expect(rtc.currentScreenShareQuality.value).toBe('custom');
       const last = rtcMocks.subscriptionPermissions.at(-1)!.permissions as Array<{ allowedTrackSids: string[] }>;
       expect(last.every(entry => !entry.allowedTrackSids.includes(privateVideo.trackSid))).toBe(true);
-      expect(rtcMocks.nativeAudioStarts).toHaveBeenLastCalledWith('window:test:0', 'window:test:0-3');
+      expect(rtcMocks.nativeAudioStarts).toHaveBeenLastCalledWith('window:test:0', 'window:test:0-3', expect.any(String));
     } finally { await rtc.leave(); scope.stop(); }
   });
 
@@ -2909,7 +2909,7 @@ describe('room media lifecycle', () => {
       }
       await rtc.setMediaEnabled(Track.Source.ScreenShare, false);
       expect(rtcMocks.nativeStops).toHaveBeenCalledWith('window:test:0-session');
-      expect(rtcMocks.nativeAudioStops).toHaveBeenCalledWith('window:test:0-session');
+      expect(rtcMocks.nativeAudioStops).toHaveBeenCalledWith(rtcMocks.nativeAudioStarts.mock.calls.find(call => call[1] === 'window:test:0-session')?.[2]);
       expect(rtc.notice.value).toContain('发生问题');
       expect(rtc.screenShareActive.value).toBe(false);
       if (audioStopFails) expect(cleanupError).toHaveBeenCalledWith('原生音频清理未完成', expect.any(Error));
@@ -2992,7 +2992,7 @@ describe('room media lifecycle', () => {
       expect(rtc.microphoneEnabled.value).toBe(true);
       rtcMocks.published.mockClear();
       await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
-      expect(rtcMocks.nativeAudioStarts).toHaveBeenCalledWith('window:1:0', 'native-session');
+      expect(rtcMocks.nativeAudioStarts).toHaveBeenCalledWith('window:1:0', 'native-session', expect.any(String));
       await waitForSharedAudio();
       expect(rtcMocks.published).toHaveBeenCalledTimes(2);
       expect(rtcMocks.published.mock.calls.map((call) => call[1]?.source)).toEqual([
@@ -3000,11 +3000,37 @@ describe('room media lifecycle', () => {
       ]);
 
       await rtc.setMediaEnabled(Track.Source.ScreenShare, false);
-      expect(rtcMocks.nativeAudioStops).toHaveBeenCalledWith('native-session');
+      expect(rtcMocks.nativeAudioStops).toHaveBeenCalledWith(rtcMocks.nativeAudioStarts.mock.calls.find(call => call[1] === 'native-session')?.[2]);
       expect(rtcMocks.nativeStops).toHaveBeenCalledWith('native-session');
     } finally {
       scope.stop();
     }
+  });
+
+  it('关闭声音失败后可在同一画面重开，未确认的重试失败仍可离房', async () => {
+    configureNativeScreenDesktop({ screenAudio: true });
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false },
+      events: { selectNativeScreenSource: rtcMocks.selectedSources } }))!;
+    try {
+      await rtc.join('audio-stop-recovery');
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
+      await waitForSharedAudio();
+      const participant = mockRoom().localParticipant;
+      const video = participant.getTrackPublication(Track.Source.ScreenShare);
+      expect(video).toBeTruthy();
+      rtcMocks.nativeAudioStops.mockRejectedValueOnce(new Error('screenShareAudioStopFailed'));
+      expect(await rtc.setScreenShareAudioEnabled(false)).toBe(false);
+      rtcMocks.nativeAudioStarts.mockRejectedValueOnce(new Error('screenShareAudioAlreadyRunning'));
+      expect(await rtc.setScreenShareAudioEnabled(true)).toBe(false);
+      expect(await rtc.setScreenShareAudioEnabled(true)).toBe(true);
+      expect(participant.getTrackPublication(Track.Source.ScreenShare)).toEqual(video);
+      expect(participant.getTrackPublication(Track.Source.ScreenShareAudio)).toMatchObject({ track: expect.anything() });
+      expect(rtcMocks.nativeStops).not.toHaveBeenCalled();
+      await rtc.leave();
+      expect(rtcMocks.nativeStops).toHaveBeenCalled();
+    } finally { scope.stop(); }
   });
 
   it('共享声音发布失败只清理声音，保留画面和麦克风', async () => {
@@ -3090,7 +3116,7 @@ describe('room media lifecycle', () => {
       expect(rtc.notice.value).not.toContain('默认播放设备');
       expect(rtcMocks.unpublishing).toHaveBeenCalledWith(rtcMocks.published.mock.calls[1][0], true);
       expect(rtcMocks.unpublishing.mock.calls[0][0]).not.toBe(rtcMocks.published.mock.calls[0][0]);
-      expect(rtcMocks.nativeAudioStops).toHaveBeenCalledWith('native-session');
+      expect(rtcMocks.nativeAudioStops).toHaveBeenCalledWith(rtcMocks.nativeAudioStarts.mock.calls.find(call => call[1] === 'native-session')?.[2]);
     } finally {
       await rtc.leave();
       scope.stop();

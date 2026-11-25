@@ -10,6 +10,7 @@ const { MediaHelperManager } = require('./media-helper.cjs');
 const { ObsCaptureHostManager } = require('./obs-capture-host.cjs');
 const { ObsAudioHostManager } = require('./obs-audio-host.cjs');
 const { createNativeMicrophone, validMicrophoneSettings } = require('./native-microphone.cjs');
+const { validNativeAudioSessionId } = require('./native-audio-session.cjs');
 const { createNativeScreenAudio } = require('./native-screen-audio.cjs');
 const { createNativeVideoSession } = require('./native-video-session.cjs');
 const { createSaveDirectories } = require('./save-directories.cjs');
@@ -364,7 +365,7 @@ const recording = createRecording({
     if (screenShareAudioCapability().reason !== 'windowsApplicationLoopbackProcessTree') {
       throw new Error('recordingApplicationAudioUnavailable');
     }
-    await nativeScreenAudio.start(nativeVideo.current.sourceId, sessionId, false);
+    await nativeScreenAudio.start(nativeVideo.current.sourceId, sessionId);
   },
   releaseAudio: async (sessionId) => {
     if (nativeScreenAudio.sessionId === sessionId && !nativeScreenAudio.publishing) {
@@ -1429,18 +1430,18 @@ ipcMain.handle('media:remote-control:revoke', (event, sessionId, controlSessionI
   }
   return mediaHelper.clearRemoteControl(sessionId, controlSessionId);
 });
-ipcMain.handle('media:native-screen-audio:start', (event, sourceId, sessionId) => {
+ipcMain.handle('media:native-screen-audio:start', (event, sourceId, sessionId, publicationId) => {
   if (!trustedSender(event) || closing || typeof sourceId !== 'string' || sourceId.length > 128
-      || typeof sessionId !== 'string' || sessionId.length > 128) {
+      || !validNativeAudioSessionId(sessionId) || !validNativeAudioSessionId(publicationId)) {
     throw new Error('请求参数无效');
   }
-  return nativeScreenAudio.start(sourceId, sessionId);
+  return nativeScreenAudio.start(sourceId, sessionId, publicationId);
 });
-ipcMain.handle('media:native-screen-audio:stop', (event, sessionId) => {
-  if (!trustedSender(event) || typeof sessionId !== 'string' || sessionId.length > 128) {
+ipcMain.handle('media:native-screen-audio:stop', (event, publicationId) => {
+  if (!trustedSender(event) || !validNativeAudioSessionId(publicationId)) {
     throw new Error('请求参数无效');
   }
-  return nativeScreenAudio.stop(sessionId);
+  return nativeScreenAudio.stopPublishing(publicationId);
 });
 ipcMain.on('media:native-screen-audio:consumed', (event, sessionId, sequence, droppedChunks) => {
   if (!trustedSender(event)) return;

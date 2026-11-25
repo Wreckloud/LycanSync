@@ -92,8 +92,8 @@ const { createNativeMicrophone } = require('../../electron/native-microphone.cjs
 const { createNativeScreenAudio } = require('../../electron/native-screen-audio.cjs') as {
   createNativeScreenAudio(options: Record<string, unknown>): AudioCapture;
 };
-const captures: AudioCapture[] = [];
-afterEach(async () => { await Promise.all(captures.splice(0).map(capture => capture.stop('session-b'))); });
+const captures: (() => Promise<unknown>)[] = [];
+afterEach(async () => { await Promise.all(captures.splice(0).map(stop => stop())); });
 
 // 直接连接生产管道入口与 Worklet；宿主和管道均为受控对象，不访问真实设备。
 async function mainAudio(channels: number, publishing = true) {
@@ -106,7 +106,7 @@ async function mainAudio(channels: number, publishing = true) {
   const format = { sampleRate: 48000, channels, bitsPerSample: 32, nominalChunkMs: 10 };
   const window = { isDestroyed: () => false, webContents: { isDestroyed: () => false,
     send: (_channel: string, packet: typeof sent[number]) => sent.push(packet) } };
-  const video = { sessionId: 'session-b', sourceId: 'monitor:7:0' };
+  const video = { sessionId: 'video-b', sourceId: 'monitor:7:0' };
   const capture = (channels === 1 ? createNativeMicrophone : createNativeScreenAudio)({
     host: { start: async () => format, startScreenAudio: async () => format,
       stop: async () => ({ changed: true }), stopScreenAudio: async () => ({ changed: true }),
@@ -116,11 +116,12 @@ async function mainAudio(channels: number, publishing = true) {
     capability: () => ({ available: true, reason: 'windowsApplicationLoopbackProcessTree' }),
     createPipeServer: () => server, writeDiagnostic: async () => {},
   });
-  captures.push(capture);
+  const stop = () => capture.stop(channels === 1 ? 'session-b' : video.sessionId);
+  captures.push(stop);
   // 共享来源身份必须保持同一对象，不能在每次查询时伪造新的会话。
   const startArgs = channels === 1
     ? ['session-b', { noiseSuppression: true, autoGainControl: true, voiceEnhancement: true, echoCancellation: true, inputGain: 1 }, 'default', false]
-    : ['monitor:7:0', 'session-b', publishing];
+    : ['monitor:7:0', 'video-b', publishing ? 'session-b' : undefined];
   await capture.start(...startArgs);
   const socket = new class extends EventEmitter {
     destroyed = false;
@@ -138,8 +139,8 @@ async function mainAudio(channels: number, publishing = true) {
   const acknowledge = (sessionId = 'session-b', sequence = sent.at(-1)!.sequence, droppedChunks = 0) =>
     capture.acknowledge(sessionId, sequence, droppedChunks);
   return { sent, receive: (bytes: Buffer) => socket.emit('data', bytes), packet, acknowledge,
-    resumePublishing: () => capture.start('monitor:7:0', 'session-b'),
-    stop: () => capture.stop('session-b'),
+    resumePublishing: () => capture.start('monitor:7:0', 'video-b', 'session-b'),
+    stop,
     drops: async () => channels === 1 ? (await capture.diagnostics()).microphoneCaptureDroppedChunks : capture.droppedChunks };
 }
 describe.each([1, 2])('native audio %i-channel pipe buffering', (channels) => {

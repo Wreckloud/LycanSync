@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NativeScreenAudioSession, type NativeScreenAudioDesktopBridge } from './nativeScreenAudio';
 
 class FakePort {
@@ -23,6 +23,8 @@ function createFakes() {
     close: context.close, addModule: context.audioWorklet.addModule, connect: node.connect, disconnect: node.disconnect };
 }
 
+const publicationId = '00000000-0000-4000-8000-000000000001';
+beforeEach(() => { vi.spyOn(crypto, 'randomUUID').mockReturnValue(publicationId); });
 afterEach(() => vi.restoreAllMocks());
 
 describe('NativeScreenAudioSession', () => {
@@ -49,7 +51,7 @@ describe('NativeScreenAudioSession', () => {
     });
 
     expect(await session.start('window:1:0', 'video-session')).toBe(track);
-    expect(started).toHaveBeenCalledWith('window:1:0', 'video-session');
+    expect(started).toHaveBeenCalledWith('window:1:0', 'video-session', publicationId);
     expect(fakes.addModule).toHaveBeenCalledWith(expect.stringContaining('nativeScreenAudio.worklet.js'));
     expect(fakes.addModule.mock.calls[0][0]).not.toMatch(/^(blob:|data:)/);
     expect(fakes.connect).toHaveBeenCalledOnce();
@@ -57,7 +59,7 @@ describe('NativeScreenAudioSession', () => {
       channels: 2, pcm: new Uint8Array(480 * 8) });
     expect(fakes.port.postMessage).not.toHaveBeenCalled();
     expect(acknowledge).not.toHaveBeenCalled();
-    receiveChunk?.({ sessionId: 'video-session', sequence: 1, frames: 480, sampleRate: 48000,
+    receiveChunk?.({ sessionId: publicationId, sequence: 1, frames: 480, sampleRate: 48000,
       channels: 2, pcm: new Uint8Array(480 * 8) });
     expect(fakes.port.postMessage).toHaveBeenCalledOnce();
     const [message, transfer] = fakes.port.postMessage.mock.calls[0];
@@ -65,7 +67,7 @@ describe('NativeScreenAudioSession', () => {
     expect((message as { pcm: ArrayBuffer }).pcm.byteLength).toBe(480 * 8);
     expect(transfer).toHaveLength(1);
     fakes.port.dispatch({ type: 'accepted', sequence: 1, droppedChunks: 0 });
-    expect(acknowledge).toHaveBeenCalledWith('video-session', 1, 0);
+    expect(acknowledge).toHaveBeenCalledWith(publicationId, 1, 0);
 
     await session.stop();
     await session.stop();
@@ -74,7 +76,7 @@ describe('NativeScreenAudioSession', () => {
     expect(track.stop).toHaveBeenCalledOnce();
     expect(fakes.close).toHaveBeenCalledOnce();
     expect(fakes.disconnect).toHaveBeenCalledOnce();
-    expect(stopped).toHaveBeenCalledWith('video-session');
+    expect(stopped).toHaveBeenCalledWith(publicationId);
     expect(receiveChunk).toBeUndefined();
   });
 
@@ -102,8 +104,8 @@ describe('NativeScreenAudioSession', () => {
     reportError?.({ sessionId: 'old-video-session', code: 'oldSessionFailure' });
     expect(onError).not.toHaveBeenCalled();
     expect(stopped).not.toHaveBeenCalled();
-    reportError?.({ sessionId: 'video-session', code: 'screenShareAudioDeviceLost' });
-    reportError?.({ sessionId: 'video-session', code: 'screenShareAudioDeviceLost' });
+    reportError?.({ sessionId: publicationId, code: 'screenShareAudioDeviceLost' });
+    reportError?.({ sessionId: publicationId, code: 'screenShareAudioDeviceLost' });
     await session.stop();
     expect(onError).toHaveBeenCalledOnce();
     expect(onError).toHaveBeenCalledWith('screenShareAudioDeviceLost');
@@ -128,7 +130,7 @@ function cleanupHarness() {
     onNativeScreenAudioChunk: () => removeChunks,
     acknowledgeNativeScreenAudioChunk: vi.fn(),
     onNativeScreenAudioError: (callback) => {
-      reportError = () => callback({ sessionId: 'session', code: 'screenShareAudioFailed' });
+      reportError = () => callback({ sessionId: publicationId, code: 'screenShareAudioFailed' });
       return removeErrors;
     },
   };

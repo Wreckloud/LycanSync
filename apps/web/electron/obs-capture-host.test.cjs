@@ -923,8 +923,8 @@ function mainScreenAudioFixture({ capability = 'windowsApplicationLoopbackProces
   };
   return { sandbox, capture, calls, messages, servers, connect, packet,
     pipeId: () => calls.filter(entry => entry[0] === 'start').at(-1)?.[2],
-    start: () => capture.start('monitor:7:0', sessionId),
-    stop: () => capture.stop(sessionId) };
+    start: (publicationId = sessionId) => capture.start('monitor:7:0', sessionId, publicationId),
+    stop: (publicationId = sessionId) => capture.stopPublishing(publicationId) };
 }
 
 test('正式声音入口按能力选择 OBS 模式，先建立管道，成功才返回格式；重复点击共用等待', async () => {
@@ -1033,14 +1033,15 @@ test('录制复用声音时暂停发布不关宿主，恢复发布不重启声�
   assert.equal(f.capture.publishing, false);
   assert.equal(f.messages.length, 1);
   assert.equal(socket.destroyed, false);
-  await f.start();
+  await f.start('next-publication');
+  assert.deepEqual(await f.stop(), { changed: false });
   assert.equal(f.capture.publishing, true);
   assert.equal(f.calls.filter(call => call[0] === 'start').length, 1);
   socket.emit('data', f.packet());
   assert.equal(f.messages.length, 2);
   assert.equal(f.messages[1][1].sequence, 2);
   f.sandbox.recording.media = undefined;
-  await f.stop();
+  await f.stop('next-publication');
   assert.equal(socket.destroyed, true);
 });
 
@@ -1081,6 +1082,28 @@ test('声音启动失败不回退；停止失败保留禁发与阻挡，迟到�
   f.capture.confirmStopped(sessionId, f.pipeId());
   assert.equal(f.capture.sessionId, undefined);
   assert.equal(f.sandbox.nativeVideoSession.stopping, false);
+});
+
+test('超时后旧确认解锁同一共享，迟到的停止、错误和消费确认不能触碰新发布', async () => {
+  const f = mainScreenAudioFixture({ captureStop: async () => { throw new Error('screenShareAudioStopFailed'); } });
+  await f.start('publication-one');
+  const oldPipe = f.pipeId();
+  await assert.rejects(f.stop('publication-one'), /StopFailed/);
+  await assert.rejects(f.start('publication-two'), /AlreadyRunning/);
+  assert.deepEqual(await f.stop('publication-two'), { changed: false });
+  f.capture.confirmStopped(sessionId, oldPipe);
+  await f.start('publication-three');
+  f.capture.confirmStopped(sessionId, oldPipe);
+  f.capture.notifyFailure(sessionId, 'screenShareAudioPipeFailed', oldPipe);
+  assert.deepEqual(await f.stop('publication-one'), { changed: false });
+  const socket = f.connect();
+  socket.emit('data', f.packet());
+  socket.emit('data', f.packet());
+  f.capture.acknowledge('publication-one', 1, 0);
+  assert.equal(f.messages.length, 1);
+  assert.equal(f.messages[0][1].sessionId, 'publication-three');
+  f.capture.acknowledge('publication-three', 1, 0);
+  assert.equal(f.messages.length, 2);
 });
 
 test('关闭共享来源时，渲染端停止声音不打断录制收尾，正常声音结束不标记录制失败', async () => {

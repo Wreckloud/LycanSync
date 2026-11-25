@@ -43,7 +43,7 @@ function createNativeScreenAudio({ host: obsCaptureHost, getVideo, getRecording,
       const packetBytes = 4 + frames * 2 * 4;
       if (audio.buffer.length < packetBytes) break;
       // 仅录制时宿主持有声音；页面管道仍排空，但不复制无人消费的 PCM。
-      if (audio.publishing) {
+      if (audio.publicationId) {
         const pcm = Uint8Array.from(audio.buffer.subarray(4, packetBytes));
         if (audio.queue.length === 12) {
           audio.queue.shift();
@@ -62,13 +62,13 @@ function createNativeScreenAudio({ host: obsCaptureHost, getVideo, getRecording,
 
   function sendNextNativeScreenAudioChunk(audio) {
     const mainWindow = getWindow();
-    if (!audio.publishing || nativeScreenAudioSession !== audio || audio.stopping || !audio.format || audio.inFlight || !audio.queue.length
+    if (!audio.publicationId || nativeScreenAudioSession !== audio || audio.stopping || !audio.format || audio.inFlight || !audio.queue.length
         || !mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
     const sequence = ++audio.sequence;
     const packet = audio.queue.shift();
     audio.inFlight = sequence;
     mainWindow.webContents.send('media:native-screen-audio-frame', {
-      sessionId: audio.sessionId,
+      sessionId: audio.publicationId,
       sequence,
       frames: packet.frames,
       sampleRate: audio.sampleRate,
@@ -81,7 +81,7 @@ function createNativeScreenAudio({ host: obsCaptureHost, getVideo, getRecording,
     if (!validNativeAudioSessionId(sessionId) || !Number.isSafeInteger(sequence)
         || !Number.isSafeInteger(droppedChunks) || droppedChunks < 0) return;
     const audio = nativeScreenAudioSession;
-    if (!audio || audio.sessionId !== sessionId || audio.inFlight !== sequence) return;
+    if (!audio || audio.publicationId !== sessionId || audio.inFlight !== sequence) return;
     audio.rendererDroppedChunks = Math.max(audio.rendererDroppedChunks, droppedChunks);
     audio.inFlight = undefined;
     sendNextNativeScreenAudioChunk(audio);
@@ -99,15 +99,15 @@ function createNativeScreenAudio({ host: obsCaptureHost, getVideo, getRecording,
     }
     const safeCode = /^[a-z][A-Za-z0-9]{0,63}$/.test(code) ? code : 'screenShareAudioFailed';
     finishNativeScreenAudioPipe(audio, { destroy: true });
-    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
-      mainWindow.webContents.send('media:native-screen-audio-error', { sessionId: audio.sessionId, code: safeCode });
+    if (audio.publicationId && mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send('media:native-screen-audio-error', { sessionId: audio.publicationId, code: safeCode });
     }
     void stopNativeScreenAudio(audio.sessionId, true).catch((error) => {
       void writeMediaDiagnostic({ stage: 'stopScreenAudioAfterFailure', message: String(error.message).slice(0, 500) });
     });
   }
 
-  async function startNativeScreenAudio(sourceId, sessionId, publishing = true) {
+  async function startNativeScreenAudio(sourceId, sessionId, publicationId) {
     const video = getVideo();
     if (isClosing() || platform !== 'win32') throw new Error('platformUnsupported');
     if (!video || video.starting || video.stopping || video.sessionId !== sessionId || video.sourceId !== sourceId) {
@@ -115,7 +115,10 @@ function createNativeScreenAudio({ host: obsCaptureHost, getVideo, getRecording,
     }
     if (nativeScreenAudioSession) {
       if (nativeScreenAudioSession.sessionId === sessionId && !nativeScreenAudioSession.stopping) {
-        nativeScreenAudioSession.publishing ||= publishing;
+        if (publicationId && nativeScreenAudioSession.publicationId && nativeScreenAudioSession.publicationId !== publicationId) {
+          throw new Error('screenShareAudioAlreadyRunning');
+        }
+        nativeScreenAudioSession.publicationId ||= publicationId;
         return nativeScreenAudioSession.startPromise;
       }
       throw new Error('screenShareAudioAlreadyRunning');
@@ -126,7 +129,7 @@ function createNativeScreenAudio({ host: obsCaptureHost, getVideo, getRecording,
     const audio = {
       sessionId, pipeId, server, socket: undefined, buffer: Buffer.alloc(0), queue: [],
       inFlight: undefined, sequence: 0, sampleRate: undefined, droppedChunks: 0,
-      rendererDroppedChunks: 0, stopping: false, failureNotified: false, publishing,
+      rendererDroppedChunks: 0, stopping: false, failureNotified: false, publicationId,
     };
     nativeScreenAudioSession = audio;
     server.on('connection', (socket) => {
@@ -216,10 +219,17 @@ function createNativeScreenAudio({ host: obsCaptureHost, getVideo, getRecording,
     return audio.stopPromise;
   }
 
+  function stopPublishing(publicationId) {
+    const audio = nativeScreenAudioSession;
+    // 页面只释放自己的发布；被拒绝或已经结束的尝试不能触碰下一次发布或录制。
+    if (!audio || audio.publicationId !== publicationId) return { changed: false };
+    return stopNativeScreenAudio(audio.sessionId);
+  }
+
   function pausePublishing(sessionId) {
     const audio = nativeScreenAudioSession;
     if (audio?.sessionId !== sessionId) return;
-    audio.publishing = false; audio.queue.length = 0; audio.inFlight = undefined;
+    audio.publicationId = undefined; audio.queue.length = 0; audio.inFlight = undefined;
   }
 
   function notifyFailure(sessionId, code, pipeId) {
@@ -228,9 +238,9 @@ function createNativeScreenAudio({ host: obsCaptureHost, getVideo, getRecording,
   }
 
   return { start: startNativeScreenAudio, stop: stopNativeScreenAudio, acknowledge: acknowledgeNativeScreenAudioChunk,
-    confirmStopped, notifyFailure, pausePublishing,
+    confirmStopped, notifyFailure, pausePublishing, stopPublishing,
     get sessionId() { return nativeScreenAudioSession?.sessionId; },
-    get publishing() { return nativeScreenAudioSession?.publishing ?? false; },
+    get publishing() { return Boolean(nativeScreenAudioSession?.publicationId); },
     get droppedChunks() { return nativeScreenAudioSession
       ? nativeScreenAudioSession.droppedChunks + nativeScreenAudioSession.rendererDroppedChunks : lastScreenAudioDroppedChunks; } };
 }

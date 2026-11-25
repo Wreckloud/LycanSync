@@ -1652,13 +1652,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         try {
           if (existingTrack) await participant.unpublishTrack(existingTrack, true);
         } finally {
-          try {
-            await session?.stop();
-          } catch (error) {
-            // 停止未确认时保留资源引用，不能再叠加第二路原生音频采集。
-            if (isCurrentTask() && !nativeScreenAudioSession) nativeScreenAudioSession = session;
-            throw error;
-          }
+          // 管道停止的确认由主进程持有；页面只收尾这一代发布。
+          await session?.stop();
         }
         session = null;
         return isCurrentTask();
@@ -1687,8 +1682,8 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       if (publishStartedAt !== undefined) publishMs = audioStartupEndedAt - publishStartedAt;
       if (isCurrentTask()) {
         const code = error instanceof Error ? error.message : '';
-        if (!enabled || code === 'nativeAudioStopNotConfirmed') {
-          notice.value = '停止共享声音时发生问题，请停止共享后重试。';
+        if (!enabled || code === 'nativeAudioStopNotConfirmed' || code.includes('screenShareAudioAlreadyRunning')) {
+          notice.value = '共享声音尚未确认停止，请稍后重试。';
         } else {
           let reason = '共享声音未能开启，请检查声音来源后重试';
           if (code === 'screenShareAudioUnsupported') reason = '当前 Windows 版本不支持共享电脑声音';
@@ -1720,10 +1715,11 @@ export function useRtcRoom(options?: RtcRoomOptions) {
         }
         try {
           await session.stop();
-          if (nativeScreenAudioSession === session) nativeScreenAudioSession = null;
         } catch (error) {
           reportNativeAudioCleanupFailure(error);
-          if (isCurrentTask()) notice.value = '停止共享声音时发生问题，请停止共享后重试。';
+          if (isCurrentTask()) notice.value = '共享声音尚未确认停止，请稍后重试。';
+        } finally {
+          if (nativeScreenAudioSession === session) nativeScreenAudioSession = null;
         }
       }
       resource.audioChanging = false;

@@ -281,11 +281,11 @@ interface Window {
       stage: 'screenVideoFirstFrame' | 'screenVideoStartupFailed' | 'screenAudioStartup' | 'screenVideoPublished', durationMs: number,
       audioTiming?: { outcome: 'published' | 'failed'; phase: 'capture' | 'graph' | 'publish';
         pluginLoadMs?: number; captureReadyMs?: number; graphReadyMs?: number; publishMs?: number } | { code: string }): void;
-    startNativeScreenAudio(sourceId: string, sessionId: string): Promise<{
+    startNativeScreenAudio(sourceId: string, captureSessionId: string, publicationId: string): Promise<{
       sampleRate: number; channels: 2; bitsPerSample: 32; nominalChunkMs: 10;
       pluginLoadMs: number; captureReadyMs: number;
     }>;
-    stopNativeScreenAudio(sessionId: string): Promise<{ changed: boolean }>;
+    stopNativeScreenAudio(publicationId: string): Promise<{ changed: boolean }>;
     onNativeScreenAudioChunk(callback: (chunk: NativeScreenAudioChunk) => void): () => void;
     acknowledgeNativeScreenAudioChunk(sessionId: string, sequence: number, droppedChunks: number): void;
     onNativeScreenAudioError(callback: (failure: { sessionId: string; code: string }) => void): () => void;
