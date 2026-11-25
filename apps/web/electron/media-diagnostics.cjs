@@ -162,7 +162,7 @@ async function readDiagnosticEvents(path, startedAt, endedAt) {
             && ['sonora-0.2.0', 'aec3+rnnoise-obs32.2.2+sonora-0.2.0'].includes(entry.processing)) {
           details.backend = entry.backend;
           details.processing = entry.processing;
-          for (const key of ['coreReadyMs', 'pluginLoadMs', 'sourceSetupMs', 'firstBlockWaitMs']) {
+          for (const key of ['coreReadyMs', 'pluginLoadMs', 'sourceSetupMs', 'firstCaptureWaitMs', 'captureToDeliveryMs', 'firstBlockWaitMs']) {
             if (Number.isInteger(entry[key]) && entry[key] >= 0 && entry[key] <= 300_000) details[key] = entry[key];
           }
         }

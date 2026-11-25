@@ -98,13 +98,15 @@ test('启动中取消不等待设备就绪，迟到首块不能恢复旧会话',
 test('麦克风启动仅记录有效阶段耗时，不转发设备或任意正文', async context => {
   const { children, diagnostics, start } = fixture(context);
   const pending = start();
-  children[0].send({ ...ready, coreReadyMs: 3, pluginLoadMs: 7, sourceSetupMs: -1, firstBlockWaitMs: 'missing',
+  children[0].send({ ...ready, coreReadyMs: 3, pluginLoadMs: 7, sourceSetupMs: -1, firstBlockWaitMs: 'missing', firstCaptureWaitMs: 16, captureToDeliveryMs: 51,
     deviceId: 'private-device', message: 'private-message' });
   await pending;
   assert.equal(diagnostics[0].coreReadyMs, 3);
   assert.equal(diagnostics[0].pluginLoadMs, 7);
   assert.equal('sourceSetupMs' in diagnostics[0], false);
   assert.equal('firstBlockWaitMs' in diagnostics[0], false);
+  assert.equal(diagnostics[0].firstCaptureWaitMs, 16);
+  assert.equal(diagnostics[0].captureToDeliveryMs, 51);
   assert.doesNotMatch(JSON.stringify(diagnostics), /private-device|private-message/);
 });
 

@@ -100,7 +100,7 @@ class ObsAudioHostManager {
         clearTimeout(state.startTimer);
         state.resolveStart({ sampleRate: 48000, channels: 1, bitsPerSample: 32, nominalChunkMs: 10, changed: true });
         const timing = {};
-        for (const key of ['coreReadyMs', 'pluginLoadMs', 'sourceSetupMs', 'firstBlockWaitMs']) {
+        for (const key of ['coreReadyMs', 'pluginLoadMs', 'sourceSetupMs', 'firstCaptureWaitMs', 'captureToDeliveryMs', 'firstBlockWaitMs']) {
           if (Number.isInteger(event[key]) && event[key] >= 0 && event[key] <= this.startTimeoutMs) timing[key] = event[key];
         }
         this.onDiagnostic({ stage: 'microphoneReady', backend: 'obsLibobs', processing: 'aec3+rnnoise-obs32.2.2+sonora-0.2.0',

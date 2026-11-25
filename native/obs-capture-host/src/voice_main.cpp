@@ -101,6 +101,7 @@ struct AudioPipe {
   uint64_t dropped = 0;
   uint64_t received = 0;
   bool accepting = true;
+  Clock::time_point first_capture, first_delivery;
   std::atomic<bool> delivered = false;
   std::atomic<bool> failed = false;
   const char *failure_phase = "";
@@ -129,6 +130,7 @@ struct AudioPipe {
       if (!pipe.failed) { pipe.failure_phase = "samples"; pipe.failed = true; }
       return;
     }
+    if (!pipe.received && audio->frames) pipe.first_capture = Clock::now();
     pipe.received += audio->frames;
     const bool transmitting = pipe.transmission.allowed();
     pipe.partial.transmission_epoch = pipe.transmission_epoch;
@@ -173,7 +175,10 @@ struct AudioPipe {
       }
       if (!GetOverlappedResult(pipe, &operation, &written, FALSE)) { fail("writeResult", GetLastError()); break; }
       if (written != sizeof(packet)) { fail("shortWrite", ERROR_WRITE_FAULT); break; }
-      delivered = true;
+      if (!delivered) {
+        first_delivery = Clock::now();
+        delivered = true;
+      }
     }
     if (completed) CloseHandle(completed);
     if (pipe != INVALID_HANDLE_VALUE) CloseHandle(pipe);
@@ -280,10 +285,10 @@ int capture(int argc, wchar_t **argv) {
   AudioPipe pipe;
   pipe.transmission.set_mode(std::wstring_view(argv[7]) == L"1");
   if (!pipe.stop) { event("failed", ",\"code\":\"microphoneCapturePipeFailed\""); return 1; }
+  const auto started = Clock::now();
   CaptureCallback callback(source, pipe);
   pipe.writer = std::thread([&] { pipe.run(L"\\\\.\\pipe\\lycansync-microphone-audio-" + std::wstring(argv[4])); });
   Commands commands;
-  const auto started = Clock::now();
   auto lastAudio = started;
   uint64_t previousFrames = 0;
   bool ready = false;
@@ -373,6 +378,8 @@ int capture(int argc, wchar_t **argv) {
           ",\"coreReadyMs\":" + milliseconds(core_ready - initialization_started)
           + ",\"pluginLoadMs\":" + milliseconds(module_ready - core_ready)
           + ",\"sourceSetupMs\":" + milliseconds(started - module_ready)
+          + ",\"firstCaptureWaitMs\":" + milliseconds(pipe.first_capture - started)
+          + ",\"captureToDeliveryMs\":" + milliseconds(pipe.first_delivery - pipe.first_capture)
           + ",\"firstBlockWaitMs\":" + milliseconds(Clock::now() - started));
     }
     if (!ready && Clock::now() - started > std::chrono::seconds(10)) { failure = "microphoneCaptureStartTimedOut"; break; }

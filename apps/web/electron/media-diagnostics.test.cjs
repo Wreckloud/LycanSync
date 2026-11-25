@@ -56,7 +56,7 @@ test('OBS 麦克风导出处理实现和固定故障，不泄露设备或异常�
   const path = join(directory, 'events.jsonl');
   const time = new Date().toISOString();
   await writeFile(path, [
-    { stage: 'microphoneReady', backend: 'obsLibobs', processing: 'aec3+rnnoise-obs32.2.2+sonora-0.2.0', device: 'private-device' },
+    { stage: 'microphoneReady', backend: 'obsLibobs', processing: 'aec3+rnnoise-obs32.2.2+sonora-0.2.0', device: 'private-device', firstCaptureWaitMs: 16, captureToDeliveryMs: 51 },
     ...['microphoneDeviceUnavailable', 'microphoneProcessingFailed', 'microphoneCaptureStopFailed', 'private-path']
       .map(code => ({ stage: 'microphoneCaptureFailed', code, message: 'private-device-error' })),
     { stage: 'microphoneEchoState', status: 'unavailable', device: 'private-device' },
@@ -64,6 +64,8 @@ test('OBS 麦克风导出处理实现和固定故障，不泄露设备或异常�
   ].map(entry => JSON.stringify({ time, ...entry })).join('\n'));
   const events = await readDiagnosticEvents(path, 0, Date.parse(time));
   assert.equal(events[0].backend, 'obsLibobs');
+  assert.equal(events[0].firstCaptureWaitMs, 16);
+  assert.equal(events[0].captureToDeliveryMs, 51);
   assert.equal(events[0].processing, 'aec3+rnnoise-obs32.2.2+sonora-0.2.0');
   assert.deepEqual(events.slice(1, 4).map(event => event.code),
     ['microphoneDeviceUnavailable', 'microphoneProcessingFailed', 'microphoneCaptureStopFailed']);
