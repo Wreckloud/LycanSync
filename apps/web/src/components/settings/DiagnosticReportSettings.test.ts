@@ -21,7 +21,7 @@ it.each([true, false])('自动记录为 %s 时开关、导出和手动操作保�
   expect(exportButton!.includes('disabled')).toBe(false);
   expect(html.includes('结束记录</button>')).toBe(!automatic);
   expect(html).toContain('报告不含通话声音和共享画面');
-  expect(html).toContain('导出时选择保存位置');
+  expect(html).not.toContain('导出时选择');
   expect(html).toContain('清除详细报告');
   expect(html).toContain(automatic ? '文件大小 1.5 KiB' : '尚未保存');
   if (automatic) expect(html).toContain('1.0 MiB');
@@ -36,7 +36,7 @@ it('历史画面报告沿用同一个导出入口', async () => {
   } as unknown as ReturnType<typeof useDiagnosticReport>;
   const html = await renderToString(createSSRApp(DiagnosticReportSettings, { report, room: null, active: true }));
   expect(html).toContain('最近共享与观看报告');
-  expect(html.match(/<button[^>]*>导出[^<]+<\/button>/g)).toHaveLength(1);
+  expect(html.match(/>导出全部报告<\/button>/g)).toHaveLength(1);
   expect(html).not.toContain('导出上次使用');
   expect(html).not.toMatch(/份统计|旧统计|滚动|900 份|两份/);
 });

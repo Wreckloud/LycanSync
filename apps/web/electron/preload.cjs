@@ -206,7 +206,9 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
     finally { ipcRenderer.removeListener('chat:download-progress', listener); }
   },
   cancelChatDownload: id => ipcRenderer.send('chat:cancel-download', id),
-  exportDiagnosticReport: (report, chooseLocation) => ipcRenderer.invoke('diagnostics:export', report, chooseLocation),
+  exportDiagnosticReport: report => ipcRenderer.invoke('diagnostics:export', report),
+  prepareDiagnosticUpload: report => ipcRenderer.invoke('diagnostics:prepare-upload', report),
+  receiveDiagnosticReport: (id, size) => ipcRenderer.invoke('diagnostics:receive', id, size),
   saveDiagnosticSnapshot: (report) => ipcRenderer.invoke('diagnostics:checkpoint', report),
   getSavedDiagnosticReport: () => ipcRenderer.invoke('diagnostics:saved'),
   clearSavedDiagnosticReports: () => ipcRenderer.invoke('diagnostics:clear-saved'),

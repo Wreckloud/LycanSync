@@ -518,12 +518,13 @@ test('报告日志只保留时间/阶段/HRESULT，忽略坏行并限制数量�
 
 function exportFixture() {
   const main = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
-  const start = main.indexOf("ipcMain.handle('diagnostics:export'");
+  const start = main.indexOf("async function prepareDiagnosticReport(");
   const end = main.indexOf("ipcMain.handle('presence:system-idle-state'", start);
   assert.ok(start >= 0 && end > start);
   let exportReport;
   const calls = { read: 0, dialog: 0, writes: [], ranges: [], flushed: 0, exportDirectory: null, dialogOptions: null };
   const state = { closing: false, diagnosticExportPending: false, trustedSender: () => true, parseDiagnosticReport,
+    saveDirectories: { exportDirectory: async () => join('/private', 'exports') },
     diagnosticStartedAt: Date.parse('2026-10-14T00:00:00Z'), writeMediaDiagnostic: { flush: async () => { calls.flushed++; } },
     savedDiagnosticReports: { all: async () => ({ reports: {}, unavailable: [] }) },
     Buffer, JSON, Date, Error, resolve: join, mainWindow: {}, process: { versions: { electron: 'test' }, platform: 'win32', arch: 'x64' },
@@ -537,7 +538,7 @@ function exportFixture() {
       calls.dialog++; calls.dialogOptions = options; return { canceled: false, filePath: '/selected/report.json' };
     } },
     writeFile: async (...args) => { calls.writes.push(args); },
-    ipcMain: { handle: (_name, callback) => { exportReport = callback; } },
+    ipcMain: { handle: (name, callback) => { if (name === 'diagnostics:export') exportReport = callback; } },
   };
   runInNewContext(main.slice(start, end), state);
   const text = JSON.stringify({ kind: 'lycansync-diagnostics', schemaVersion: 9,
@@ -554,11 +555,11 @@ test('诊断导出仅允许可信页面，验证格式并通过用户选址写�
   await assert.rejects(exportReport({}, '{}'), /无效/);
   await assert.rejects(exportReport({}, text.replace('"schemaVersion":9', '"schemaVersion":8')), /无效/);
   await assert.rejects(exportReport({}, 'x'.repeat(8 * 1024 * 1024 + 1)), /过大/);
-  await exportReport({}, text, true);
+  state.saveDirectories.exportDirectory = async () => '/selected';
+  await exportReport({}, text);
   assert.equal(calls.writes.length, 1);
-  assert.equal(calls.writes[0][0], '/selected/report.json');
-  assert.equal(calls.exportDirectory, null);
-  assert.ok(calls.dialogOptions.defaultPath.startsWith(join('/private', 'exports') + require('node:path').sep));
+  assert.equal(calls.exportDirectory, '/selected');
+  assert.equal(calls.writes[0][0], join('/selected', require('node:path').basename(calls.writes[0][0])));
   const report = JSON.parse(calls.writes[0][1]);
   assert.equal(calls.ranges[0][0], state.diagnosticStartedAt);
   assert.ok(calls.ranges[0][1] > Date.parse(report.endedAt));
@@ -569,21 +570,18 @@ test('诊断导出仅允许可信页面，验证格式并通过用户选址写�
   assert.doesNotMatch(calls.writes[0][1], /\/private|\/selected/);
 });
 
-test('选址取消或关闭期间迟到结果不写入，保存失败后仍可重试', async () => {
+test('读取目录期间关闭后不写入，保存失败后仍可重试', async () => {
   const { state, calls, text, exportReport } = exportFixture();
-  state.dialog.showSaveDialog = async () => ({ canceled: true });
-  await exportReport({}, text, true);
-  assert.equal(calls.writes.length, 0);
-  state.dialog.showSaveDialog = async () => { state.closing = true; return { canceled: false, filePath: '/selected/report.json' }; };
-  await exportReport({}, text, true);
+  state.saveDirectories.exportDirectory = async () => { state.closing = true; return '/selected'; };
+  await exportReport({}, text);
   assert.equal(calls.writes.length, 0);
   state.closing = false;
-  state.dialog.showSaveDialog = async () => ({ canceled: false, filePath: '/selected/report.json' });
+  state.saveDirectories.exportDirectory = async () => '/selected';
   state.writeFile = async () => { throw new Error('disk full'); };
   await assert.rejects(exportReport({}, text), /disk full/);
   assert.equal(state.diagnosticExportPending, false);
   state.writeFile = async (...args) => { calls.writes.push(args); };
-  await exportReport({}, text, true);
+  await exportReport({}, text);
   assert.equal(calls.writes.length, 1);
 });
 

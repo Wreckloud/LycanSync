@@ -242,7 +242,9 @@ interface Window {
     recordingFile(id: string, action: 'play' | 'reveal' | 'delete' | 'relink' | 'clearUnavailable'): Promise<boolean>;
     onRecordingState(callback: (state: DesktopRecordingStatus) => void): () => void;
     getProcessMetrics(): Promise<DesktopProcessMetrics>;
-    exportDiagnosticReport(report: string, chooseLocation: boolean): Promise<{ saved: false } | { saved: true; filePath: string; unavailableCount: number }>;
+    exportDiagnosticReport(report: string): Promise<{ saved: false } | { saved: true; filePath: string; unavailableCount: number }>;
+    prepareDiagnosticUpload(report: string): Promise<{ gzip: Uint8Array<ArrayBuffer>; filePath: string | null; unavailableCount: number } | { saved: false }>;
+    receiveDiagnosticReport(id: string, size: number): Promise<string>;
     saveDiagnosticSnapshot(report: string): Promise<number | null>;
     downloadChatFile(id: string, path: string, name: string, size: number, onProgress: (loaded: number) => void): Promise<'saved' | 'cancelled' | 'expired' | { error: string }>;
     cancelChatDownload(id: string): void;

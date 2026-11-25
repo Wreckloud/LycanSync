@@ -65,6 +65,25 @@ function persistenceBridge() {
   return bridge;
 }
 
+it('只在用户点击时上传诊断，失败后保留本机报告并允许重试', async () => {
+  const { report } = setup(true);
+  const bridge = persistenceBridge();
+  bridge.prepareDiagnosticUpload = vi.fn(async () => ({ gzip: new Uint8Array([1, 2]), filePath: '/exports/report.json', unavailableCount: 0 }));
+  const fetch = vi.fn().mockResolvedValueOnce(Response.json({ message: '服务暂忙' }, { status: 503 }))
+    .mockResolvedValueOnce(new Response(null, { status: 204 }));
+  vi.stubGlobal('fetch', fetch);
+  report.markProblem('video-stutter');
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fetch).not.toHaveBeenCalled();
+  await report.upload();
+  expect(report.error.value).toBe('服务暂忙');
+  expect(report.exportStatus.value).toContain('/exports/report.json');
+  await report.upload();
+  expect(fetch).toHaveBeenLastCalledWith('/api/diagnostics/reports', expect.objectContaining({ method: 'POST', body: expect.any(Blob) }));
+  expect(report.exportStatus.value).toBe('日志已上传给服主。 本机副本：/exports/report.json');
+  expect(bridge.clearSavedDiagnosticReports).not.toHaveBeenCalled();
+});
+
 it('问题标记即时持久化并随导出保留，关闭记录不伪造之前的采样', async () => {
   const { report, exportDiagnosticReport } = setup();
   const bridge = persistenceBridge();
@@ -239,8 +258,8 @@ it('无媒体使用只读取进程的启动不覆盖上次报告，恢复入口�
   await report.flush();
   expect(bridge.saveDiagnosticSnapshot).not.toHaveBeenCalled();
   report.notes.value = '上次使用卡顿';
-  await report.save(report.notes.value, true);
-  expect(bridge.exportDiagnosticReport).toHaveBeenCalledWith(expect.stringContaining('上次使用卡顿'), true);
+  await report.save(report.notes.value);
+  expect(bridge.exportDiagnosticReport).toHaveBeenCalledWith(expect.stringContaining('上次使用卡顿'));
 });
 
 it('持久化失败明确提示且保留内存导出；关闭开关后才可清除，旧样本不回写', async () => {

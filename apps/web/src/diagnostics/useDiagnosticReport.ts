@@ -4,6 +4,7 @@ import { createMediaDiagnosticsSampler, type MediaDiagnosticsSnapshot } from './
 import packageInfo from '../../package.json';
 import { SCREEN_SHARE_QUALITIES, screenShareQuality, type CustomScreenShareQuality } from '../rtc/screenShareQuality';
 import { serializeDiagnosticReport } from './serializeDiagnosticReport';
+import { authenticatedFetch, readApiError } from '../auth/authApi';
 
 const SAMPLE_INTERVAL_MS = 2_000;
 const CHECKPOINT_INTERVAL_MS = 15_000;
@@ -758,27 +759,52 @@ export function useDiagnosticReport(options: {
     finally { saving.value = false; }
   }
 
-  async function save(notes: string, chooseLocation = false) {
+  const uploadLifetime = new AbortController();
+  async function deliver(notes: string, destination: 'export' | 'owner') {
     if (disposed || saving.value || (!startedAt && !window.lycanDesktop)) return;
     saving.value = true; error.value = '';
     exportStatus.value = '';
     try {
       const text = await serializeDiagnosticReport(createReport(notes));
       if (disposed) return;
-      if (window.lycanDesktop) {
-        const result = await window.lycanDesktop.exportDiagnosticReport(text, chooseLocation);
-        if (result.saved && !disposed) {
-          const skipped = result.unavailableCount ? `（${result.unavailableCount} 份历史报告无法读取）` : '';
-          exportStatus.value = `已导出至 ${result.filePath}${skipped}`;
-        }
-      } else {
+      if (!window.lycanDesktop) {
         const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
         const link = document.createElement('a'); link.href = url; link.download = 'LycanSync-diagnostics.json';
         link.click();
         exportStatus.value = '报告已交给浏览器下载。';
         setTimeout(() => URL.revokeObjectURL(url), 0);
       }
-    } catch { if (!disposed) error.value = '无法导出诊断报告，请检查保存位置后重试。'; }
+      if (destination === 'owner') {
+        let body: Blob;
+        let unavailable = 0;
+        if (window.lycanDesktop) {
+          const result = await window.lycanDesktop.prepareDiagnosticUpload(text);
+          if (disposed) return;
+          if (!('gzip' in result)) throw new Error('无法读取本机诊断报告。');
+          body = new Blob([result.gzip], { type: 'application/gzip' });
+          unavailable = result.unavailableCount;
+          exportStatus.value = result.filePath ? `本机副本：${result.filePath}` : '本机副本未能保存，请检查日志目录和磁盘空间。';
+        } else {
+          body = await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'))).blob();
+        }
+        if (disposed) return;
+        if (body.size > 8 * 1024 * 1024) throw new Error('日志压缩后超过 8 MiB，无法上传。');
+        const response = await authenticatedFetch('/api/diagnostics/reports', { method: 'POST', headers: { 'Content-Type': 'application/gzip' },
+          body, signal: AbortSignal.any([uploadLifetime.signal, AbortSignal.timeout(30 * 60_000)]) });
+        if (!response.ok) throw await readApiError(response);
+        const skipped = unavailable ? `（${unavailable} 份历史报告无法读取）` : '';
+        if (!disposed) exportStatus.value = `日志已上传给服主${skipped}。 ${exportStatus.value}`;
+      } else if (window.lycanDesktop) {
+        const result = await window.lycanDesktop.exportDiagnosticReport(text);
+        if (result.saved && !disposed) {
+          const skipped = result.unavailableCount ? `（${result.unavailableCount} 份历史报告无法读取）` : '';
+          exportStatus.value = `已导出至 ${result.filePath}${skipped}`;
+        }
+      }
+    } catch (cause) {
+      if (!disposed) error.value = destination === 'export' ? '无法导出诊断报告，请检查保存位置后重试。'
+        : cause instanceof Error && cause.name !== 'TypeError' ? cause.message : '无法上传日志，请检查连接后重试。';
+    }
     finally { saving.value = false; }
   }
   watch(options.room, () => {
@@ -792,9 +818,12 @@ export function useDiagnosticReport(options: {
     if (stored !== null && stored !== 'true' && stored !== 'false') throw new Error('invalidAutomaticDiagnosticsPreference');
     automaticEnabled.value = stored === null ? options.automaticDefault ?? Boolean(window.lycanDesktop) : stored === 'true';
   } catch { error.value = '无法读取自动诊断设置，已暂停自动记录；可手动开启。'; }
+  const save = (notes: string) => deliver(notes, 'export');
+  const upload = (description = '') => deliver(description, 'owner');
+  onScopeDispose(() => uploadLifetime.abort());
   if (automaticEnabled.value) start(true);
   void refreshSavedReport();
   onScopeDispose(() => { stop('closed'); disposed = true; generation++; if (timer) clearInterval(timer); });
   return { latest, recording, automaticEnabled, discardedSamples, sampleCount, reason, error, saving, notes, problemMarkers, markProblem,
-    savedReport, savedSizeBytes, persistenceError, setViewing, setAutomatic, start, stop, save, exportStatus, clearSaved, beginClose, flush };
+    savedReport, savedSizeBytes, persistenceError, setViewing, setAutomatic, start, stop, save, upload, exportStatus, clearSaved, beginClose, flush };
 }

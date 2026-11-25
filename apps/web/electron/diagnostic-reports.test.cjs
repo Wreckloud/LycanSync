@@ -152,12 +152,14 @@ test('清除排在在途保存之后，不会被旧写入恢复，清除后可�
 function ipcFixture() {
   const source = readFileSync(join(__dirname, 'main.cjs'), 'utf8');
   const start = source.indexOf("ipcMain.handle('diagnostics:checkpoint'");
-  const end = source.indexOf("ipcMain.handle(", source.indexOf("ipcMain.handle('diagnostics:export',", start) + 1);
+  const end = source.indexOf("ipcMain.handle('presence:system-idle-state'", start);
   const handlers = new Map();
   const saved = [], writes = [], exportDirectories = [], dialogOptions = [], failures = [];
   let cleared = 0;
   const state = { closing: false, allowQuitAfterMediaHelper: false, diagnosticExportPending: false,
     diagnosticReportsGeneration: 0, diagnosticStartedAt: Date.parse('2026-10-26T00:00:00Z'),
+    saveDirectories: { exportDirectory: async () => resolve('/private', 'exports') },
+    gzipReport: require('node:util').promisify(require('node:zlib').gzip),
     trustedSender: event => event.trusted, parseDiagnosticReport,
     writeMediaDiagnostic: Object.assign(async entry => failures.push(entry), { flush: async () => {} }),
     Date, JSON, Error, resolve, mainWindow: {},
@@ -177,6 +179,49 @@ function ipcFixture() {
   runInNewContext(source.slice(start, end), state);
   return { state, handlers, saved, writes, exportDirectories, dialogOptions, failures, cleared: () => cleared };
 }
+
+test('主动上传将同一份完整报告保存到默认目录，无需选择位置', async () => {
+  const f = ipcFixture();
+  const result = await f.handlers.get('diagnostics:prepare-upload')({ trusted: true }, report('new-version'));
+  const body = JSON.parse(require('node:zlib').gunzipSync(result.gzip));
+  assert.equal(body.kind, 'lycansync-diagnostics');
+  assert.equal(body.savedReports.previous.environment.appVersion, 'old-version');
+  assert.equal(body.events[0].stage, 'current-start');
+  assert.equal(f.writes.length, 1);
+  assert.equal(result.filePath, f.writes[0].path);
+  assert.deepEqual(f.writes[0].report, body);
+  assert.equal(f.dialogOptions.length, 0);
+});
+
+test('本地副本无法写入时仍能上传，并明确返回保存结果', async () => {
+  const f = ipcFixture();
+  f.state.writeFile = async () => { throw new Error('disk full'); };
+  const result = await f.handlers.get('diagnostics:prepare-upload')({ trusted: true }, report('current'));
+  assert.equal(result.filePath, null);
+  assert.equal(JSON.parse(require('node:zlib').gunzipSync(result.gzip)).kind, 'lycansync-diagnostics');
+});
+
+test('服主接收完整 JSON 到固定目录，短响应和无效标识不覆盖旧报告', async t => {
+  const { directory } = await fixture(t);
+  const f = ipcFixture();
+  const id = '30122072-cabb-4be1-89ab-a49351c83457';
+  const json = report('联测');
+  Object.assign(f.state, { sessionRevision: 1, sessionToken: 'test', APP_ORIGIN: 'lycan://app', AbortSignal, Request,
+    reportIdPattern: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    app: { getPath: () => directory }, mkdir, saveChatDownload: require('./chat-download.cjs').saveChatDownload,
+    serveApplication: async request => { assert.equal(request.url, 'lycan://app/api/diagnostics/reports/' + id); return new Response(json); } });
+  const receive = f.handlers.get('diagnostics:receive');
+  const trusted = { trusted: true };
+  const size = Buffer.byteLength(json);
+  const path = await receive(trusted, id, size);
+  assert.equal(path, join(directory, 'exports', 'received', 'LycanSync-diagnostics-' + id + '.json'));
+  assert.equal(await readFile(path, 'utf8'), json);
+  f.state.serveApplication = async () => new Response('{');
+  await assert.rejects(receive(trusted, id, size), /完整下载/);
+  await assert.rejects(receive(trusted, '../test', size), /无效/);
+  await assert.rejects(receive({ trusted: false }, id, size), /无效/);
+  assert.equal(await readFile(path, 'utf8'), json);
+});
 
 test('保存只接受可信页面且不落盘体验说明，上次导出不混入本次环境或事件', async () => {
   const { handlers, saved, writes, exportDirectories, dialogOptions } = ipcFixture();

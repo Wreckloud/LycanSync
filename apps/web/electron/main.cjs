@@ -5,6 +5,7 @@ const { Module } = require('node:module');
 const { dirname, isAbsolute, resolve, sep, win32 } = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { readFile, writeFile, unlink, mkdir } = require('node:fs/promises');
+const gzipReport = require('node:util').promisify(require('node:zlib').gzip);
 const { MediaHelperManager } = require('./media-helper.cjs');
 const { ObsCaptureHostManager } = require('./obs-capture-host.cjs');
 const { ObsAudioHostManager } = require('./obs-audio-host.cjs');
@@ -51,6 +52,8 @@ const apiRoutePolicies = new Map([
   ['POST /api/auth/access/redeem', { public: true, savesSession: true }],
   ['GET /api/auth/account', {}],
   ['GET /api/chat/upload-limits', {}],
+  ['GET /api/diagnostics/reports', {}],
+  ['POST /api/diagnostics/reports', { maxBodyBytes: 8 * 1024 * 1024, reportTransfer: true }],
   ['PUT /api/chat/upload-limits', {}],
   ['GET /api/auth/server-settings', {}],
   ['GET /api/auth/server-settings/qq', {}],
@@ -87,6 +90,7 @@ const apiRoutePolicies = new Map([
   ['POST /api/groups/join', {}],
 ]);
 const groupPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const reportIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const groupManagementPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/(?:candidates|members|owner|invite-code(?:\/refresh)?)$/i;
 const groupMemberPath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/members\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const groupMemberProfilePath = /^\/api\/groups\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/members\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/profile$/i;
@@ -612,6 +616,8 @@ async function serveApplication(request) {
           || (request.method === 'PUT' && url.pathname.endsWith('/note'))
           || (request.method === 'DELETE' && !/\/(renew|url|note)$/.test(url.pathname))) ? {} : undefined)
       ?? (request.method === 'GET' && transferPath.test(url.pathname) ? {} : undefined)
+      ?? (request.method === 'GET' && url.pathname.startsWith('/api/diagnostics/reports/')
+        && reportIdPattern.test(url.pathname.slice('/api/diagnostics/reports/'.length)) ? { reportTransfer: true } : undefined)
       ?? (request.method === 'POST' && declareFilePath.test(url.pathname) ? { maxBodyBytes: 48 * 1024 } : undefined)
       ?? (request.method === 'DELETE' && stopFilePath.test(url.pathname) ? {} : undefined)
       ?? (request.method === 'GET' && groupMessagePath.test(url.pathname) && url.searchParams.get('wait') === 'true'
@@ -665,7 +671,7 @@ async function serveApplication(request) {
           ...(!routePolicy.public && token ? { Authorization: 'Bearer ' + token } : {}) },
         body, ...(streamingUpload ? { duplex: 'half' } : {}), redirect: 'error', credentials: 'omit',
         signal: AbortSignal.any([request.signal,
-          AbortSignal.timeout(streamingUpload || groupFileDownloadPath.test(url.pathname) || groupFileMediaPath.test(url.pathname) ? 30 * 60_000
+          AbortSignal.timeout(streamingUpload || routePolicy.reportTransfer || groupFileDownloadPath.test(url.pathname) || groupFileMediaPath.test(url.pathname) ? 30 * 60_000
             : routePolicy.longPolling ? 52_000 : 15000)]),
       });
       const currentSessionUnauthorized = !routePolicy.public && Boolean(token)
@@ -1017,9 +1023,8 @@ ipcMain.handle('diagnostics:clear-saved', (event) => {
   diagnosticReportsGeneration++;
   return savedDiagnosticReports.clear();
 });
-ipcMain.handle('diagnostics:export', async (event, text, chooseLocation = false) => {
+async function prepareDiagnosticReport(event, text, upload) {
   if (!trustedSender(event) || closing || diagnosticExportPending) throw new Error('当前不能导出诊断。');
-  if (typeof chooseLocation !== 'boolean') throw new Error('导出选项无效。');
   const report = parseDiagnosticReport(text);
   diagnosticExportPending = true;
   try {
@@ -1030,17 +1035,7 @@ ipcMain.handle('diagnostics:export', async (event, text, chooseLocation = false)
       eventStartedAt, eventEndedAt);
     if (!trustedSender(event) || closing) return { saved: false };
     const retained = await savedDiagnosticReports.all();
-    const exportDirectory = resolve(app.getPath('userData'), 'exports');
-    if (!chooseLocation) await mkdir(exportDirectory, { recursive: true });
     if (!trustedSender(event) || closing) return { saved: false };
-    let filePath = resolve(exportDirectory, `LycanSync-diagnostics-${Date.now()}.json`);
-    if (chooseLocation) {
-      const result = await dialog.showSaveDialog(mainWindow, {
-        title: '导出全部报告', defaultPath: filePath, filters: [{ name: 'JSON 诊断报告', extensions: ['json'] }],
-      });
-      if (result.canceled || !result.filePath || !trustedSender(event) || closing) return { saved: false };
-      filePath = result.filePath;
-    }
     report.environment = { appVersion: app.getVersion(), electronVersion: process.versions.electron,
       platform: process.platform, arch: process.arch, osVersion: osRelease(), gpuFeatures: app.getGPUFeatureStatus(),
       gpuUtilization: null };
@@ -1049,9 +1044,38 @@ ipcMain.handle('diagnostics:export', async (event, text, chooseLocation = false)
     report.eventLimit = '最多读取当前及上一份日志各256KiB，保留本次启动至导出最近200项；不含异常正文';
     report.savedReports = retained.reports;
     report.unavailableReports = retained.unavailable;
-    await writeFile(filePath, JSON.stringify(report), { encoding: 'utf8', flag: chooseLocation ? 'w' : 'wx' });
+    const json = JSON.stringify(report);
+    let filePath;
+    try {
+      const directory = await saveDirectories.exportDirectory();
+      filePath = resolve(directory, `LycanSync-diagnostics-${Date.now()}.json`);
+      await mkdir(directory, { recursive: true });
+      if (!trustedSender(event) || closing) return { saved: false };
+      await writeFile(filePath, json, { encoding: 'utf8', flag: 'wx' });
+    } catch (error) {
+      if (!upload) throw error;
+      // 本机目录不可写时仍可交给服主，调用方分别提示两个结果。
+      filePath = null;
+    }
+    if (upload) return { gzip: await gzipReport(json), filePath, unavailableCount: retained.unavailable.length };
     return { saved: true, filePath, unavailableCount: retained.unavailable.length };
   } finally { diagnosticExportPending = false; }
+}
+ipcMain.handle('diagnostics:export', (event, text) => prepareDiagnosticReport(event, text, false));
+ipcMain.handle('diagnostics:prepare-upload', (event, text) => prepareDiagnosticReport(event, text, true));
+ipcMain.handle('diagnostics:receive', async (event, id, size) => {
+  if (!trustedSender(event) || closing || typeof id !== 'string' || !reportIdPattern.test(id) || !Number.isSafeInteger(size) || size <= 0 || size > 40 * 1024 * 1024) {
+    throw new Error('报告信息无效，请刷新列表。');
+  }
+  const revision = sessionRevision;
+  const signal = AbortSignal.timeout(30 * 60_000);
+  const response = await serveApplication(new Request(APP_ORIGIN + '/api/diagnostics/reports/' + id, { signal }));
+  if (!response.ok || revision !== sessionRevision || !trustedSender(event)) throw new Error('无法接收报告，请刷新列表并确认服主身份。');
+  const directory = resolve(app.getPath('userData'), 'exports', 'received');
+  await mkdir(directory, { recursive: true });
+  const filePath = resolve(directory, 'LycanSync-diagnostics-' + id + '.json');
+  await saveChatDownload(filePath, response, size, signal, () => {});
+  return filePath;
 });
 ipcMain.handle('presence:system-idle-state', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');

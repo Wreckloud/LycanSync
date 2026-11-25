@@ -8,6 +8,7 @@ import AccountLifecycleSettings from './AccountLifecycleSettings.vue';
 import MemberAccessSettings from './MemberAccessSettings.vue';
 import UploadSettings from './UploadSettings.vue';
 import QqLoginSettings from './QqLoginSettings.vue';
+import ReceivedDiagnosticReports from './ReceivedDiagnosticReports.vue';
 
 const props = defineProps<{ active: boolean; leaving: boolean }>();
 const emit = defineEmits<{ notice: [message: string] }>();
@@ -49,6 +50,7 @@ onScopeDispose(() => request?.abort());
 <template>
   <section class="settings-section owner-settings">
     <MemberAccessSettings :active="active" @notice="emit('notice', $event)" />
+    <ReceivedDiagnosticReports :active="active" />
     <section class="settings-block">
       <h2>服务器配置</h2>
       <dl v-if="status" class="owner-status">

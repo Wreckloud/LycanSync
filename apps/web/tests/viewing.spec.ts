@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import { gunzipSync } from 'node:zlib';
 
 const user = { id: 'viewing-user', nickname: '自己', avatar: '', administrator: true };
 const groups = ['观看测试', '另一群组'].map((name, index) => ({
@@ -792,7 +793,7 @@ test('主动诊断记录返回应用后继续，离房结束并导出匿名报�
   await page.getByRole('button', { name: '客户端', exact: true }).click();
   const report = page.locator('.diagnostic-report-settings');
   await report.getByRole('button', { name: '更多诊断选项', exact: true }).click();
-  await report.getByRole('textbox', { name: '体验说明（选填）' }).fill('合成界面回归');
+  await report.getByRole('textbox', { name: /问题说明/ }).fill('合成界面回归');
   await report.getByRole('button', { name: '开始记录', exact: true }).click();
   await expect(report.getByRole('status')).toContainText('记录中');
   await expect(report.getByRole('status')).not.toContainText('0 份统计');
@@ -806,7 +807,8 @@ test('主动诊断记录返回应用后继续，离房结束并导出匿名报�
   await page.getByRole('button', { name: '客户端', exact: true }).click();
   await report.getByRole('button', { name: '更多诊断选项', exact: true }).click();
   await expect(report.getByRole('status')).toContainText('记录已结束');
-  await expect(report.getByRole('textbox', { name: '体验说明（选填）' })).toHaveValue('合成界面回归');
+  await expect(report.getByRole('textbox', { name: /问题说明/ })).toHaveValue('合成界面回归');
+  await expect(report.getByRole('group', { name: '日志保存位置' })).toHaveCount(0);
   const downloading = page.waitForEvent('download');
   await report.getByRole('button', { name: '导出全部报告', exact: true }).click();
   const download = await downloading;
@@ -824,6 +826,15 @@ test('主动诊断记录返回应用后继续，离房结束并导出匿名报�
   expect(result.problemMarkers).toEqual([{ time: expect.any(String), category: 'video-stutter', recording: true }]);
   expect(text).not.toContain('user-viewing-user');
   expect(text).not.toContain('成员A');
+  await page.route('**/api/diagnostics/reports', route => route.fulfill({ status: 204 }));
+  const localCopy = page.waitForEvent('download');
+  const uploaded = page.waitForRequest(request => request.method() === 'POST' && request.url().endsWith('/api/diagnostics/reports'));
+  await report.getByRole('button', { name: '上传日志', exact: true }).click();
+  const copyPath = await (await localCopy).path();
+  const compressed = (await uploaded).postDataBuffer();
+  if (!copyPath || !compressed) throw new Error('缺少本地副本或上传内容');
+  expect(gunzipSync(compressed).toString('utf8')).toBe(await readFile(copyPath, 'utf8'));
+  await expect(report).toContainText('日志已上传给服主');
   expect(pageErrors).toEqual([]);
 });
 
