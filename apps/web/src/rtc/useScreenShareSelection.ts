@@ -86,36 +86,25 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
     nativeSourceLoading.value = false;
   }
 
-  function updateNativeSourceOptions(generation: number, chooser: ReturnType<typeof createNativeVideoSourceSelection>) {
-    if (generation !== nativeSourceChooserGeneration.value || !captureRequest.value) return;
-    captureRequest.value = { ...captureRequest.value, sources: chooser.options };
-  }
-
   async function loadNativeSourceThumbnails(
     generation: number,
     chooser: ReturnType<typeof createNativeVideoSourceSelection>,
+    visibleIds?: string[],
   ) {
     const sourceType = captureSourceType.value;
     if (!desktop || nativeThumbnailRefresh.get(sourceType)?.generation === generation || document.hidden
         || generation !== nativeSourceChooserGeneration.value || nativeSourceChooser !== chooser) return;
-    const container = options.sourcesElement();
-    if (!container) return;
-    const bounds = container.getBoundingClientRect();
-    const visibleIds = new Set([...container.querySelectorAll<HTMLButtonElement>('[data-source-id]')]
-      .filter((element) => {
-        const rect = element.getBoundingClientRect();
-        return rect.bottom > bounds.top && rect.top < bounds.bottom;
-      }).map((element) => element.dataset.sourceId!));
-    const requested = chooser.sourcesNeedingThumbnails(Date.now(), visibleIds, selectedCaptureSourceId.value);
+    const ids = visibleIds ?? readVisibleSourceIds();
+    if (!ids) return;
+    const requested = chooser.sourcesNeedingThumbnails(Date.now(), new Set(ids), selectedCaptureSourceId.value);
     if (!requested.length) return;
     const discoveryId = currentNativeDiscoveryId;
     // 窗口逐项交付，慢窗口不阻挡其他预览；主进程统一限制并发和子进程寿命。
     const batches = sourceType === 'window' ? requested.map(source => [source]) : [requested];
     const promise = Promise.all(batches.map(batch => desktop.getNativeVideoSourceThumbnails(batch).then((thumbnails) => {
-      if (generation !== nativeSourceChooserGeneration.value || nativeSourceChooser !== chooser
-          || currentNativeDiscoveryId !== discoveryId) return;
-      chooser.applyThumbnails(batch, thumbnails);
-      updateNativeSourceOptions(generation, chooser);
+      if (!thumbnails.length || !captureRequest.value || generation !== nativeSourceChooserGeneration.value
+          || nativeSourceChooser !== chooser || currentNativeDiscoveryId !== discoveryId) return;
+      captureRequest.value = { ...captureRequest.value, sources: chooser.applyThumbnails(batch, thumbnails) };
     }).catch((error) => {
       console.error('共享来源缩略图更新失败', error);
     }))).then(() => {});
@@ -187,25 +176,31 @@ export function useScreenShareSelection(options: ScreenShareSelectionOptions) {
   }
 
   function refreshVisibleSourceThumbnails() {
-    reportRenderedPreviews();
-    if (nativeSourceChooser) void loadNativeSourceThumbnails(nativeSourceChooserGeneration.value, nativeSourceChooser);
+    if (!nativeSourceChooser || document.hidden) return;
+    const ids = readVisibleSourceIds();
+    if (!ids) return;
+    reportRenderedPreviews(undefined, ids);
+    void loadNativeSourceThumbnails(nativeSourceChooserGeneration.value, nativeSourceChooser, ids);
   }
 
-  function visiblePreviewCounts() {
+  function readVisibleSourceIds() {
     const container = options.sourcesElement();
-    if (!container) return { sourceCount: 0, readyCount: 0, ids: [] as string[] };
+    if (!container) return;
     const bounds = container.getBoundingClientRect();
-    const ids = [...container.querySelectorAll<HTMLButtonElement>('[data-source-id]')].filter(element => {
+    return [...container.querySelectorAll<HTMLButtonElement>('[data-source-id]')].filter(element => {
       const rect = element.getBoundingClientRect();
       return rect.bottom > bounds.top && rect.top < bounds.bottom;
     }).map(element => element.dataset.sourceId!);
+  }
+
+  function visiblePreviewCounts(ids = readVisibleSourceIds() ?? []) {
     return { sourceCount: ids.length, readyCount: ids.filter(id => renderedPreviews.has(id)).length, ids };
   }
 
-  function reportRenderedPreviews(sourceId?: string) {
+  function reportRenderedPreviews(sourceId?: string, visibleIds?: string[]) {
     if (!captureRequest.value || document.hidden) return;
     if (sourceId && captureSources.value.some(source => source.id === sourceId && source.thumbnail)) renderedPreviews.add(sourceId);
-    const { sourceCount, readyCount, ids } = visiblePreviewCounts();
+    const { sourceCount, readyCount, ids } = visiblePreviewCounts(visibleIds);
     const details = { pickerId: nativeSourceChooserGeneration.value, sourceCount, readyCount };
     if (!nativeSourcePreviewReported && readyCount) {
       nativeSourcePreviewReported = true;

@@ -144,6 +144,48 @@ it('两个分类可独立出图，关闭后迟到的缩略图不进入新选择�
   f.app.selectCaptureSource(null); await second;
 });
 
+it('滚动一次只测量一次各来源位置，可见统计与缩略图请求使用同一视口', async () => {
+  const f = setup();
+  const windows = [source('selected'), source('visible'), source('offscreen')];
+  f.desktop.listNativeVideoSources.mockResolvedValue({ revision: 1, discoveryId: 'helper', sources: windows });
+  f.desktop.getNativeVideoSourceThumbnails.mockImplementation(async ([item]) =>
+    [{ sourceId: item!.sourceId, thumbnail: 'preview' }]);
+  const pending = f.open(); await flush();
+  const rows = windows.map(({ sourceId }, index) => ({ dataset: { sourceId },
+    getBoundingClientRect: vi.fn(() => ({ top: index * 100, bottom: (index + 1) * 100 })) }));
+  const bounds = vi.fn(() => ({ top: 100, bottom: 200 }));
+  f.container.value = { getBoundingClientRect: bounds, querySelectorAll: () => rows } as unknown as HTMLElement;
+  f.app.refreshVisibleSourceThumbnails(); await flush();
+  expect(f.desktop.getNativeVideoSourceThumbnails.mock.calls.map(([batch]) => batch[0]?.sourceId))
+    .toEqual(['selected', 'visible']);
+  expect([bounds, ...rows.map(row => row.getBoundingClientRect)].map(read => read.mock.calls.length))
+    .toEqual([1, 1, 1, 1]);
+  f.app.reportRenderedPreviews('visible');
+  expect(f.desktop.reportCapturePickerTiming).toHaveBeenCalledWith('screenPickerVisibleReady', expect.any(Number),
+    expect.objectContaining({ sourceCount: 1, readyCount: 1 }));
+  f.app.selectCaptureSource(null); await pending;
+});
+
+it('空缩略图响应保留当前列表，下一次重试仍可显示预览', async () => {
+  vi.useFakeTimers();
+  try {
+    const f = setup();
+    const pending = f.open(); await flush();
+    const original = f.state.captureRequest.value;
+    const bounds = () => ({ top: 0, bottom: 100 });
+    f.container.value = { getBoundingClientRect: bounds, querySelectorAll: () => [
+      { dataset: { sourceId: 'window:test' }, getBoundingClientRect: bounds },
+    ] } as unknown as HTMLElement;
+    f.app.refreshVisibleSourceThumbnails(); await flush();
+    expect(f.desktop.getNativeVideoSourceThumbnails).toHaveBeenCalledOnce();
+    expect(f.state.captureRequest.value).toBe(original);
+    f.desktop.getNativeVideoSourceThumbnails.mockResolvedValue([{ sourceId: 'window:test', thumbnail: 'ready' }]);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(f.state.captureRequest.value?.sources[0]?.thumbnail).toBe('ready');
+    f.app.selectCaptureSource(null); await pending;
+  } finally { vi.useRealTimers(); }
+});
+
 it('A→B→A 不接受第一次 A 的迟到准备结果，销毁后也不更新跟随状态', async () => {
   const f = setup();
   const pending: ((value: { prepared: boolean; followGame?: 'league' }) => void)[] = [];
