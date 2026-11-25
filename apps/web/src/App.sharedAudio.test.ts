@@ -14,7 +14,7 @@ const script = transpileModule(source.slice(volumeStart, volumeEnd) + source.sli
 it('逐路共享声音开关立即作用于该声音轨，不修改人声、其他共享或总音量；停止收听不被绕过', () => {
   const microphone = { setVolume: vi.fn() }, screen = { setVolume: vi.fn() }, other = { setVolume: vi.fn() };
   const context = {
-    Track, SHARE_VOLUME_MAX: 1, mutedShares: { value: [] as string[] }, listening: { value: true },
+    Track, SHARE_VOLUME_MAX: 1, viewingWindows: { value: null }, mutedShares: { value: [] as string[] }, listening: { value: true },
     shareLevels: new Map([['A', 0.5]]), audioOutput: { available: { value: true } },
     screenShareVolume: { value: 0.2 }, outputVolume: { value: 0.8 },
     remoteAudioTracks: { value: [

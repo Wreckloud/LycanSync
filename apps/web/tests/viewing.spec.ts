@@ -36,7 +36,7 @@ test.beforeEach(async ({ page }) => {
     if (!vuePath || !livekitPath) throw new Error('未找到 Vite Vue 或 LiveKit 模块');
     await route.fulfill({ contentType: 'text/javascript', body: `
 import { ref, shallowRef, markRaw } from ${JSON.stringify(vuePath)};
-import { LocalVideoTrack, RemoteVideoTrack, RemoteTrackPublication, Track, TrackEvent, RoomEvent } from ${JSON.stringify(livekitPath)};
+import { LocalVideoTrack, RemoteAudioTrack, RemoteVideoTrack, RemoteTrackPublication, Track, TrackEvent, RoomEvent } from ${JSON.stringify(livekitPath)};
 export function useRtcRoom() {
   const revision = ref(0), status = ref('idle'), room = shallowRef(null), participants = shallowRef([]);
   const listening = ref(true), microphoneIntent = ref(false), microphoneEnabled = ref(false);
@@ -57,6 +57,8 @@ export function useRtcRoom() {
   const stream = canvas.captureStream(0);
   const track = new LocalVideoTrack(stream.getVideoTracks()[0], undefined, true);
   const visibility = {}, quality = {}, remoteTracks = [], reports = {};
+  const shareAudioTracks = new Map();
+  let shareAudioContext;
   const makeParticipant = (identity, name, isLocal = false) => {
     const video = isLocal ? track : new RemoteVideoTrack(stream.getVideoTracks()[0].clone(), 'share-' + identity,
       { getStats: async () => reports[identity] || new Map() });
@@ -72,11 +74,25 @@ export function useRtcRoom() {
     }
     return markRaw({ identity, name, attributes: {},
     isScreenShareEnabled: false, isMicrophoneEnabled: false, isSpeaking: false, audioLevel: 0,
-    getTrackPublication(source) { if (source === 'microphone' && !isLocal && this.isMicrophoneEnabled) return { track: audio }; return source === 'screen_share' && this.isScreenShareEnabled ? publication : undefined; }
+    getTrackPublication(source) {
+      if (source === 'screen_share_audio' && this.isScreenShareEnabled && shareAudioTracks.has(identity)) return { track: shareAudioTracks.get(identity) };
+      if (source === 'microphone' && !isLocal && this.isMicrophoneEnabled) return { track: audio };
+      return source === 'screen_share' && this.isScreenShareEnabled ? publication : undefined;
+    }
   }); };
   const local = makeParticipant('user-viewing-user', '自己', true);
   const friends = ['A','B','C','D','E','F','G','H'].map((id) => makeParticipant(id, '成员' + id));
   window.__viewingTest = {
+    addShareAudio(ids) {
+      shareAudioContext ??= new AudioContext();
+      for (const id of ids) {
+        const silent = shareAudioContext.createMediaStreamDestination().stream.getAudioTracks()[0];
+        shareAudioTracks.set(id, new RemoteAudioTrack(silent, 'share-audio-' + id, { getStats: async () => new Map() }));
+      }
+      participants.value = [...participants.value];
+      revision.value++;
+    },
+    shareVolumes() { return Object.fromEntries([...shareAudioTracks].map(([id, audio]) => [id, audio.getVolume()])); },
     requestControl(identity) { remoteControlRequest.value = { identity, requestId: identity + '-incoming' }; },
     transport(identity, ms) {
       const participant = friends.find(friend => friend.identity === identity);
@@ -122,6 +138,8 @@ export function useRtcRoom() {
     reorder() { participants.value = [local, ...friends.slice().reverse()]; revision.value++; }
   };
   window.addEventListener('pagehide', () => {
+    shareAudioTracks.forEach(audio => audio.mediaStreamTrack.stop());
+    void shareAudioContext?.close();
     remoteTracks.forEach((track) => track.stop());
     track.stop();
     stream.getTracks().forEach((track) => track.stop());
@@ -177,6 +195,38 @@ export function useRtcRoom() {
 async function sharing(page: Page, ids: string[]) {
   await page.evaluate((identities) => (window as unknown as { __viewingTest: { sharing(ids: string[]): void } }).__viewingTest.sharing(identities), ids);
 }
+
+test('聚焦只播放选中的共享声音，切回网格或成员卡片恢复各自音量', async ({ page }) => {
+  await sharing(page, ['A', 'B', 'C']);
+  await page.evaluate(() => (window as unknown as { __viewingTest: { addShareAudio(ids: string[]): void } }).__viewingTest.addShareAudio(['A', 'B', 'C']));
+  const volumes = () => page.evaluate(() =>
+    (window as unknown as { __viewingTest: { shareVolumes(): Record<string, number> } }).__viewingTest.shareVolumes());
+  const sound = (name: string) => page.getByTestId('participant-card').filter({ hasText: name }).getByRole('button', { name: '静音这路共享声音' });
+  await expect.poll(volumes).toEqual({ A: 0.25, B: 0.25, C: 0.25 });
+  await sound('成员B').press('ArrowUp');
+  await expect.poll(volumes).toMatchObject({ B: 0.25 });
+  await sound('成员B').press('ArrowDown');
+  await sound('成员C').click();
+  await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
+  await expect.poll(volumes).toEqual({ A: 0.25, B: 0, C: 0 });
+  await page.locator('.viewing-surface').first().hover();
+  await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
+  await expect.poll(volumes).toEqual({ A: 0.25, B: 0.2375, C: 0 });
+  await page.getByRole('button', { name: '聚焦成员B', exact: true }).click();
+  await expect.poll(volumes).toEqual({ A: 0, B: 0.2375, C: 0 });
+  const popup = page.waitForEvent('popup');
+  await page.locator('.viewing-tile:not(.view-tile-leave-active) .viewing-surface').hover();
+  await page.getByRole('button', { name: '弹出观看区', exact: true }).click();
+  const viewer = await popup;
+  await viewer.locator('.viewing-surface').hover();
+  await expect.poll(volumes).toEqual({ A: 0, B: 0.2375, C: 0 });
+  await viewer.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
+  await expect.poll(volumes).toEqual({ A: 0.25, B: 0.2375, C: 0 });
+  await viewer.close();
+  await expect.poll(volumes).toEqual({ A: 0, B: 0.2375, C: 0 });
+  await page.getByRole('button', { name: '收起共享画面', exact: true }).click();
+  await expect.poll(volumes).toEqual({ A: 0.25, B: 0.2375, C: 0 });
+});
 
 test('从缩略图进入聚焦只提升选中的实际订阅，退出后恢复低层', async ({ page }) => {
   await sharing(page, ['A', 'B']);

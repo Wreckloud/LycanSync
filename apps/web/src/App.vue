@@ -1027,6 +1027,8 @@ function shareVolume(identity: string) {
   return shareLevels.get(identity) ?? 1;
 }
 function remoteScreenSharePlaybackVolume(identity: string) {
+  const focused = viewingWindows.value?.audioFocusIdentity;
+  if (focused && focused !== identity) return 0;
   return Math.min(SHARE_VOLUME_MAX, shareVolume(identity) * screenShareVolume.value * outputVolume.value);
 }
 function updateSharedVolume(identity: string, value: number) {

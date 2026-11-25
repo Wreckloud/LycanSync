@@ -76,6 +76,8 @@ watch(() => view.mode, mode => { if (mode === 'collapsed') stageHidden.value = f
 const returning = ref(false);
 let returnTimer: ReturnType<typeof setTimeout> | undefined;
 const focusedIdentity = computed(() => view.mode === 'focus' ? view.focusedShare?.participant.identity : undefined);
+const audioFocusIdentity = computed(() => detached.value || (props.inlineTarget && inlineExpanded.value)
+  ? focusedIdentity.value : undefined);
 const controls = computed(() => entries.value.filter((entry): entry is ControlWindow => entry.kind === 'control'));
 const count = computed(() => entries.value.length);
 const controlAvailable = (identity: string) => props.rtc.remoteControlAvailable[identity] === true;
@@ -140,7 +142,7 @@ watch(() => [props.rtc.remoteControlActive, props.rtc.revision] as const, ([acti
     if (!windows.openControl(active.identity)) void props.rtc.exitRemoteControl();
   }
 }, { flush: 'post' });
-defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded, headerReveal, resizing, detached, returning, returnWatching });
+defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded, audioFocusIdentity, headerReveal, resizing, detached, returning, returnWatching });
 </script>
 
 <template>
