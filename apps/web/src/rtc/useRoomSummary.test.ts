@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { effectScope, nextTick, ref, type EffectScope } from 'vue';
 import { requestRoomSummary, type RtcRoomSummary } from './roomSummaryApi';
 import { useRoomSummary } from './useRoomSummary';
+import { ApiRequestError } from '../auth/authApi';
 
 vi.mock('./roomSummaryApi', () => ({ requestRoomSummary: vi.fn() }));
 const requestSummary = vi.mocked(requestRoomSummary);
@@ -28,13 +29,49 @@ function stubDocumentVisibility(initial: DocumentVisibilityState) {
 }
 
 describe('Vue 房间摘要生命周期', () => {
+  it('短暂错误保留名单，过期或失去权限后清除；重新选群不会恢复过期数据', async () => {
+    vi.useFakeTimers();
+    const group = ref(groupIdValue);
+    const member = { participantCount: 1, participants: [{ participantIdentity: 'user-a', displayName: '成员A' }] };
+    requestSummary.mockResolvedValueOnce(member).mockRejectedValue(new Error('offline'));
+    scope = effectScope();
+    const { summary } = scope.run(() => useRoomSummary(group, ref(true)))!;
+    await nextTick();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(summary.value).toEqual(member);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(summary.value).toBeNull();
+    requestSummary.mockResolvedValueOnce(member);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(summary.value).toEqual(member);
+    requestSummary.mockRejectedValueOnce(new ApiRequestError(403, 'FORBIDDEN', '无权限'));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(summary.value).toBeNull();
+    group.value = otherGroupId;
+    await nextTick();
+    group.value = groupIdValue;
+    await nextTick();
+    expect(summary.value).toBeNull();
+  });
+
+  it('收到退群通知后，正在查询的响应不能重新写入预览', async () => {
+    let complete!: (summary: RtcRoomSummary) => void;
+    requestSummary.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    scope = effectScope();
+    const { summary, forget } = scope.run(() => useRoomSummary(ref(groupIdValue), ref(true)))!;
+    forget(groupIdValue);
+    complete({ participantCount: 1, participants: [{ participantIdentity: 'user-a', displayName: '成员A' }] });
+    await nextTick();
+    expect(summary.value).toBeNull();
+    expect(requestSummary.mock.calls[0][1].aborted).toBe(true);
+  });
   it('慢请求超时后显示查询失败，五秒后仍能重新获取当前摘要', async () => {
     vi.useFakeTimers();
     requestSummary.mockRejectedValueOnce(new DOMException('请求超时', 'TimeoutError'));
     requestSummary.mockResolvedValue({ participantCount: 0, participants: [] });
     const onError = vi.fn();
     scope = effectScope();
-    const summary = scope.run(() => useRoomSummary(ref(groupIdValue), ref(true), onError))!;
+    const { summary } = scope.run(() => useRoomSummary(ref(groupIdValue), ref(true), onError))!;
     await nextTick();
     expect(summary.value).toBeNull();
     expect(onError).toHaveBeenLastCalledWith('暂时无法查询当前语音成员');
@@ -52,7 +89,7 @@ describe('Vue 房间摘要生命周期', () => {
     requestSummary.mockResolvedValue({ participantCount: 1, participants: [{ participantIdentity: 'user-new', displayName: '新房间成员' }] });
     const groupId = ref(groupIdValue);
     scope = effectScope();
-    const summary = scope.run(() => useRoomSummary(groupId, ref(true)))!;
+    const { summary } = scope.run(() => useRoomSummary(groupId, ref(true)))!;
     const oldSignal = requestSummary.mock.calls[0][1];
     groupId.value = otherGroupId;
     await nextTick();
@@ -69,7 +106,7 @@ describe('Vue 房间摘要生命周期', () => {
     requestSummary.mockResolvedValue({ participantCount: 0, participants: [] });
     const enabled = ref(true);
     scope = effectScope();
-    const summary = scope.run(() => useRoomSummary(ref(groupIdValue), enabled))!;
+    const { summary } = scope.run(() => useRoomSummary(ref(groupIdValue), enabled))!;
     await nextTick();
     expect(summary.value?.participantCount).toBe(0);
     enabled.value = false;
@@ -85,7 +122,7 @@ describe('Vue 房间摘要生命周期', () => {
     let finish!: (summary: RtcRoomSummary) => void;
     requestSummary.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     scope = effectScope();
-    const summary = scope.run(() => useRoomSummary(ref(groupIdValue), ref(true)))!;
+    const { summary } = scope.run(() => useRoomSummary(ref(groupIdValue), ref(true)))!;
     scope.stop();
     expect(requestSummary.mock.calls[0][1].aborted).toBe(true);
     finish({ participantCount: 1, participants: [{ participantIdentity: 'user-late', displayName: '迟到成员' }] });
@@ -136,7 +173,7 @@ describe('Vue 房间摘要生命周期', () => {
     requestSummary.mockResolvedValue({ participantCount: 0, participants: [] });
     const refreshVersion = ref(0);
     scope = effectScope();
-    const summary = scope.run(() => useRoomSummary(ref(groupIdValue), ref(true), undefined, refreshVersion))!;
+    const { summary } = scope.run(() => useRoomSummary(ref(groupIdValue), ref(true), undefined, refreshVersion))!;
     const oldSignal = requestSummary.mock.calls[0][1];
     refreshVersion.value++;
     await nextTick();

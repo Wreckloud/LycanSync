@@ -1,4 +1,4 @@
-import { authenticatedFetch } from '../auth/authApi';
+import { authenticatedFetch, readApiError } from '../auth/authApi';
 
 export interface RtcRoomSummary {
   participantCount: number;
@@ -36,7 +36,7 @@ export async function requestRoomSummary(groupId: string, signal: AbortSignal): 
     signal: AbortSignal.any([signal, AbortSignal.timeout(15000)]),
   });
   if (!response.ok) {
-    throw new RoomSummaryRequestError('暂时无法读取语音成员。');
+    throw await readApiError(response);
   }
 
   let summary: unknown;

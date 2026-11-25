@@ -8,13 +8,13 @@ import type { RtcRoomSummary } from './rtc/roomSummaryApi';
 
 const script = parse(readFileSync(new URL('./App.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
 const sourceFile = ts.createSourceFile('App.ts', script, ts.ScriptTarget.Latest, true);
-const functionNames = ['refreshOnActivation', 'handlePresenceNetworkRestored', 'leaveVoice'];
-const variableNames = ['fetchedRoomSummary', 'roomSummary', 'groupHasVoiceActivity'];
+const functionNames = ['refreshOnActivation', 'handlePresenceNetworkRestored', 'rememberLeavingMembers', 'leaveVoice'];
+const variableNames = ['voicePreview', 'roomSummary', 'groupHasVoiceActivity'];
 const callbacks = sourceFile.statements.filter(statement => {
   if (ts.isFunctionDeclaration(statement)) return Boolean(statement.name && functionNames.includes(statement.name.text));
   if (ts.isVariableStatement(statement)) return statement.declarationList.declarations
     .some(declaration => variableNames.includes(declaration.name.getText(sourceFile)));
-  return statement.getText(sourceFile).startsWith('watch(fetchedRoomSummary,');
+  return false;
 }).map(statement => statement.getText(sourceFile)).join('\n');
 const compiled = ts.transpile(callbacks, { target: ts.ScriptTarget.ES2022 });
 
@@ -46,7 +46,12 @@ function setup() {
     selectCaptureSource: vi.fn(), viewingWindows: { value: { closeAll: vi.fn() } },
     callSounds: { left: vi.fn(async () => {}) }, sendHeartbeat: vi.fn(async () => {}), updateOwnPresenceStatus: vi.fn(async () => {}),
     refreshRoomOccupancies: vi.fn(async () => {}), refreshGroups: vi.fn(async () => {}), refreshGroupPresence: vi.fn(),
-    computed, watch, document: { visibilityState: 'visible' }, useRoomSummary: () => rawSummary,
+    computed, watch, document: { visibilityState: 'visible' },
+    useRoomSummary: (_id: unknown, _enabled: unknown, _error: unknown, _version: unknown,
+      received: (id: string, summary: RtcRoomSummary) => void) => {
+      watch(rawSummary, summary => { if (summary) received(state.selectedGroupId.value!, summary); });
+      return { summary: rawSummary, remember: vi.fn() };
+    },
   };
   const showingJoinedGroup = computed(() => state.joinedGroupId.value !== null && state.joinedGroupId.value === state.selectedGroupId.value);
   const sandbox = { ...state, showingJoinedGroup };

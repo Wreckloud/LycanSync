@@ -200,6 +200,52 @@ async function sharing(page: Page, ids: string[]) {
   await page.evaluate((identities) => (window as unknown as { __viewingTest: { sharing(ids: string[]): void } }).__viewingTest.sharing(identities), ids);
 }
 
+test('离房和切回群组先显示已知的语音成员，慢摘要在原处更新', async ({ page }) => {
+  const preview = page.getByRole('region', { name: '当前语音成员预览' });
+  const count = page.getByTestId('room-summary-count');
+  const first = page.getByRole('button', { name: /^观看测试，/ });
+  const second = page.getByRole('button', { name: /^另一群组，/ });
+  await page.route('**/api/rtc/room-occupancies', route => route.fulfill({
+    json: [{ groupId: groups[1].id, participantCount: 1 }],
+  }));
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/rtc/room-summary*', async route => {
+    const id = new URL(route.request().url()).searchParams.get('groupId');
+    await held;
+    const participants = id === groups[0].id
+      ? [{ participantIdentity: 'user-viewing-user', displayName: '自己' }, { participantIdentity: 'A', displayName: '成员A' }]
+      : [{ participantIdentity: 'other', displayName: '另一群的成员' }];
+    await route.fulfill({ json: { participantCount: participants.length, participants } });
+  });
+  try {
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await page.evaluate(() => {
+      const strip = document.querySelector('.voice-preview')!.closest('.layout-reveal')!;
+      strip.addEventListener('transitionrun', event => {
+        if (event.target === strip && (event as TransitionEvent).propertyName === 'grid-template-rows') {
+          strip.setAttribute('data-preview-animated', '');
+        }
+      });
+    });
+    await page.getByRole('button', { name: '离开当前群组语音' }).click();
+    await expect(count).toHaveText('8 人');
+    await expect(preview).toContainText('成员H');
+    await expect(preview).not.toContainText('自己');
+    await expect(page.locator('.layout-reveal[data-preview-animated]')).toHaveCount(1);
+    await second.click();
+    await expect(count).toHaveText('1 人');
+    await expect(preview.locator('.voice-preview-member')).toHaveCount(0);
+    await first.click();
+    await expect(count).toHaveText('8 人');
+    await expect(preview).toContainText('成员H');
+    await preview.evaluate(el => el.setAttribute('data-before-refresh', ''));
+  } finally { release(); }
+  await expect(count).toHaveText('1 人');
+  await expect(preview).toHaveAttribute('data-before-refresh', '');
+  await expect(preview.locator('.voice-preview-member strong')).toHaveText(['成员A']);
+});
+
 test('成员卡片将对方状态放在画面右下角，底栏只显示可操作的音量按钮', async ({ page }, testInfo) => {
   await sharing(page, ['B']);
   await page.evaluate(() => {

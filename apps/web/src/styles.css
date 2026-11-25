@@ -326,6 +326,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .voice-preview { display: grid; align-content: safe center; max-height: none; padding-block: 12px; }
 .voice-preview-list {
   display: flex;
+  min-height: 36px;
   flex-wrap: wrap;
   gap: 7px;
 }

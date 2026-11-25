@@ -329,6 +329,7 @@ async function loadGroup(groupId: string, keepExisting = false) {
       if (error instanceof ApiRequestError && (error.status === 404 || error.status === 403)) {
         void accountCache.revokeGroup(groupId);
         if (joinedGroupId.value === groupId || joiningGroupId.value === groupId) leaveVoice();
+        voicePreview.forget(groupId);
         if (selectedGroupDetail.value?.id === groupId) selectedGroupDetail.value = null;
         if (management.value?.group.id === groupId) management.value = null;
         void refreshGroups(false);
@@ -351,13 +352,15 @@ async function refreshGroups(refreshDetail = true, refreshOccupancy = true) {
   try {
     const result = await findGroups(request.signal);
     if (request.signal.aborted) return;
-    for (const previous of groups.value) {
-      if (!result.some(group => group.id === previous.id)) void accountCache.revokeGroup(previous.id);
-    }
-    accountCache.allowGroups(result.map(group => group.id));
+    const removed = groups.value.filter(previous => !result.some(group => group.id === previous.id));
     groups.value = result;
     if (joinedGroupId.value && !result.some((group) => group.id === joinedGroupId.value)) leaveVoice();
     if (joiningGroupId.value && !result.some((group) => group.id === joiningGroupId.value)) leaveVoice();
+    for (const previous of removed) {
+      voicePreview.forget(previous.id);
+      void accountCache.revokeGroup(previous.id);
+    }
+    accountCache.allowGroups(result.map(group => group.id));
     if (management.value && !result.some((group) => group.id === management.value?.group.id)) management.value = null;
     if (editingGroup.value && !result.some((group) => group.id === editingGroup.value?.id)) closeGroupEditor();
     if (result.length > 0 && refreshOccupancy) void refreshRoomOccupancies();
@@ -508,6 +511,7 @@ async function openGroupAction(action: 'edit' | 'invite' | 'members' | 'transfer
 
 function removedFromGroup(groupId: string) {
   if (joinedGroupId.value === groupId || joiningGroupId.value === groupId) leaveVoice();
+  voicePreview.forget(groupId);
   management.value = null;
   groups.value = groups.value.filter((group) => group.id !== groupId);
   if (selectedGroupId.value === groupId) selectedGroupId.value = groups.value[0]?.id ?? null;
@@ -715,21 +719,22 @@ watch(() => connected.value ? rtc.room : null, (room, _, onCleanup) => {
   onCleanup(() => clearTimeout(timer));
 });
 const showingJoinedGroup = computed(() => joinedGroupId.value !== null && selectedGroupId.value === joinedGroupId.value);
-const fetchedRoomSummary = useRoomSummary(selectedGroupId, computed(() => !showingJoinedGroup.value),
-  (message) => { summaryError.value = message; }, roomSummaryRefreshVersion);
+const voicePreview = useRoomSummary(selectedGroupId, computed(() => !showingJoinedGroup.value),
+  (message) => { summaryError.value = message; }, roomSummaryRefreshVersion, (groupId, summary) => {
+    if (locallyLeftVoiceGroupId.value === groupId
+      && !summary.participants.some(participant => participant.participantIdentity === `user-${props.user.id}`)) {
+      locallyLeftVoiceGroupId.value = null;
+    }
+  });
 const roomSummary = computed(() => {
-  const summary = fetchedRoomSummary.value;
+  const summary = voicePreview.summary.value;
   if (!summary || locallyLeftVoiceGroupId.value !== selectedGroupId.value) return summary;
   // 离房清理和服务端成员移除可能尚未完成，本机不能用旧快照重新显示自己在语音中。
   const participants = summary.participants.filter((participant) => participant.participantIdentity !== `user-${props.user.id}`);
   return { participantCount: participants.length, participants };
 });
-watch(fetchedRoomSummary, (summary) => {
-  if (summary && locallyLeftVoiceGroupId.value === selectedGroupId.value
-      && !summary.participants.some((participant) => participant.participantIdentity === `user-${props.user.id}`)) {
-    locallyLeftVoiceGroupId.value = null;
-  }
-});
+const previewCount = computed(() => roomSummary.value?.participantCount
+  ?? (selectedGroupId.value && !summaryError.value && !groupError.value ? roomOccupancies.value[selectedGroupId.value] ?? 0 : 0));
 const groupHasVoiceActivity = (groupId: string) => {
   if (joinedGroupId.value === groupId) return true;
   if (selectedGroupId.value === groupId && roomSummary.value) return roomSummary.value.participantCount > 0;
@@ -843,6 +848,7 @@ async function joinGroup(groupId: string) {
 
   if (joinedGroupId.value !== null) {
     void callSounds.left();
+    rememberLeavingMembers(joinedGroupId.value);
     try { await rtc.leave(); }
     catch {
       if (attempt !== joinAttempt) return;
@@ -851,6 +857,7 @@ async function joinGroup(groupId: string) {
       return;
     }
     if (attempt !== joinAttempt) return;
+    locallyLeftVoiceGroupId.value = joinedGroupId.value;
     joinedGroupId.value = null;
   }
 
@@ -901,6 +908,13 @@ function requestJoin(groupId: string) {
   void joinGroup(groupId);
 }
 
+function rememberLeavingMembers(groupId: string) {
+  const participants = rtc.participants.filter(participant => participant.identity !== `user-${props.user.id}`)
+    .map(participant => ({ participantIdentity: participant.identity, displayName: participant.name || participant.identity }));
+  voicePreview.remember(groupId, { participantCount: participants.length, participants });
+  roomOccupancies.value = { ...roomOccupancies.value, [groupId]: participants.length };
+}
+
 function leaveVoice() {
   selectCaptureSource(null);
   viewingWindows.value?.closeAll();
@@ -909,10 +923,7 @@ function leaveVoice() {
   if (leavingGroupId !== null) {
     locallyLeftVoiceGroupId.value = leavingGroupId;
     roomOccupancyRequest?.abort();
-    if (joinedGroupId.value !== null) {
-      roomOccupancies.value = { ...roomOccupancies.value, [leavingGroupId]: rtc.participants
-        .filter((participant) => participant.identity !== `user-${props.user.id}`).length };
-    }
+    if (joinedGroupId.value !== null) rememberLeavingMembers(leavingGroupId);
     // 本机先更新离房意愿，真实断开等待资源清理；底栏只保留退场动画快照。
     departingGroupId.value = leavingGroupId;
     callbarLeaving.value = true;
@@ -1174,16 +1185,22 @@ function participantListening(participant: Participant) {
           <button type="button" class="confirm-button" @click="joinGroup(pendingSwitchGroup.id)">切换</button>
         </div>
         <p v-if="summaryError" class="group-error" role="status">{{ summaryError }}</p>
-        <section v-if="!showingJoinedGroup && roomSummary && roomSummary.participantCount > 0" class="voice-preview" aria-label="当前语音成员预览">
-          <div class="voice-heading"><span><AudioLines :size="15" />语音中</span><small data-testid="room-summary-count">{{ roomSummary.participantCount }} 人</small></div>
-          <div class="voice-preview-list">
-            <span v-for="member in roomSummary.participants" :key="member.participantIdentity" class="voice-preview-member">
-              <img v-if="previewParticipantAvatar(member.participantIdentity)" :src="previewParticipantAvatar(member.participantIdentity)" alt="" />
-              <i v-else aria-hidden="true">{{ previewParticipantName(member.participantIdentity, member.displayName).slice(0, 1) }}</i>
-              <strong>{{ previewParticipantName(member.participantIdentity, member.displayName) }}</strong>
-            </span>
+        <Transition name="layout-reveal">
+          <div v-show="!showingJoinedGroup && previewCount > 0" class="layout-reveal" :aria-hidden="showingJoinedGroup || !previewCount || undefined">
+            <div class="layout-reveal-inner">
+              <section class="voice-preview" aria-label="当前语音成员预览">
+                <div class="voice-heading"><span><AudioLines :size="15" />语音中</span><small v-if="!showingJoinedGroup && previewCount" data-testid="room-summary-count">{{ previewCount }} 人</small></div>
+                <div class="voice-preview-list">
+                  <span v-for="member in roomSummary?.participants" :key="member.participantIdentity" class="voice-preview-member group-content-ready">
+                    <img v-if="previewParticipantAvatar(member.participantIdentity)" :src="previewParticipantAvatar(member.participantIdentity)" alt="" />
+                    <i v-else aria-hidden="true">{{ previewParticipantName(member.participantIdentity, member.displayName).slice(0, 1) }}</i>
+                    <strong>{{ previewParticipantName(member.participantIdentity, member.displayName) }}</strong>
+                  </span>
+                </div>
+              </section>
+            </div>
           </div>
-        </section>
+        </Transition>
         </div>
         <Transition :css="false" @leave="voicePanelMotion.leave">
           <section v-if="showingJoinedGroup && groupParticipants.length > 0" ref="viewingTarget" class="voice-panel"

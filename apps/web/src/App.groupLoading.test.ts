@@ -83,6 +83,7 @@ function setup() {
   const state = { selectedGroupId: ref<string | null>('one'), selectedGroupDetail: ref<GroupDetail | null>(detail('one')),
     selectedGroup: ref<GroupDetail | null>(detail('one')),
     accountCache: { read: vi.fn(async (): Promise<GroupDetail | null> => null), write: vi.fn(), revokeGroup: vi.fn() },
+    voicePreview: { forget: vi.fn() },
     joinedGroupId: ref<string | null>('one'), joiningGroupId: ref<string | null>(null),
     joinedGroupDetail: ref<GroupDetail | null>(detail('one')), management: ref<{ group: GroupDetail } | null>(null),
     groupError: ref(''), groupLoading: ref(false), detailRequest: null,

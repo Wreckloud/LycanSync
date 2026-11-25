@@ -22,7 +22,7 @@ function joining() {
     viewerNotice: { value: '' },
     callbarLeaving: { value: false }, departingGroupId: { value: null },
     joinedGroupId: { value: null as string | null }, joinedGroupDetail: { value: null as { id: string } | null },
-    locallyLeftVoiceGroupId: { value: null as string | null },
+    locallyLeftVoiceGroupId: { value: null as string | null }, rememberLeavingMembers: vi.fn(),
     selectedGroupDetail: { value: null as { id: string } | null }, listening: { value: true },
     callSounds: { left: vi.fn(), joined: vi.fn() },
     recentGroups: { mark: vi.fn() },
@@ -54,6 +54,8 @@ it('房间连接后直接完成界面加入，旧麦克风任务结束不影响�
   microphone.resolve(false);
   await firstJoin;
   expect(context.joinedGroupId.value).toBe('next');
+  expect(context.rememberLeavingMembers).toHaveBeenCalledWith('first');
+  expect(context.locallyLeftVoiceGroupId.value).toBe('first');
   expect(context.joinedGroupDetail.value).toEqual({ id: 'next' });
   expect(context.callSounds.joined).toHaveBeenCalledTimes(2);
 });
