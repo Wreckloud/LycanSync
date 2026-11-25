@@ -2,8 +2,11 @@ package com.lycansync.api.chat.service;
 
 import com.lycansync.api.audio.config.AudioProcessingProperties;
 import com.lycansync.api.auth.model.AuthenticatedUser;
+import com.lycansync.api.chat.mapper.ChatMapper;
+import com.lycansync.api.chat.model.ChatAttachmentContent;
 import com.lycansync.api.chat.model.ChatFileMetadata;
 import com.lycansync.api.group.exception.GroupException;
+import com.lycansync.api.group.service.GroupService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.api.io.TempDir;
@@ -11,11 +14,15 @@ import org.springframework.core.io.FileSystemResource;
 import org.springframework.http.HttpStatus;
 
 import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -24,6 +31,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockConstruction;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -51,6 +59,56 @@ class ChatFileMediaServiceTests {
         when(files.findMetadata(group, attachment, user)).thenReturn(new ChatFileMetadata(attachment, name, 3));
         when(files.findFile(attachment)).thenReturn(new FileSystemResource(original));
         return new ChatFileMediaService(files, properties);
+    }
+
+    @Test
+    void imageThumbnailUsesTheActualFormatForBothStoragePathsAndKeepsTheOriginal() throws Exception {
+        byte[] original;
+        var picture = new BufferedImage(1280, 720, BufferedImage.TYPE_INT_RGB);
+        var random = new Random(7);
+        for (int y = 0; y < picture.getHeight(); y++) {
+            for (int x = 0; x < picture.getWidth(); x++) picture.setRGB(x, y, random.nextInt());
+        }
+        try (var bytes = new ByteArrayOutputStream()) {
+            ImageIO.write(picture, "png", bytes);
+            original = bytes.toByteArray();
+        }
+        var media = service("photo.jpg");
+        Path file = Files.write(directory.resolve("photo.jpg"), original);
+        when(files.findMetadata(group, attachment, user)).thenReturn(new ChatFileMetadata(attachment, "photo.jpg", original.length));
+        byte[] fileThumbnail = media.findThumbnail(group, attachment, user);
+        assertThat(fileThumbnail).isNotNull();
+        assertThat(fileThumbnail.length).isLessThan(original.length / 10);
+        assertThat(fileThumbnail.length).isLessThan(256 * 1024);
+        var decoded = ImageIO.read(new ByteArrayInputStream(fileThumbnail));
+        assertThat(decoded.getWidth()).isEqualTo(420);
+        assertThat(decoded.getHeight()).isEqualTo(236);
+        assertThat(Files.readAllBytes(file)).isEqualTo(original);
+
+        var mapper = mock(ChatMapper.class);
+        var groups = mock(GroupService.class);
+        var chat = new ChatService(mapper, groups, Clock.systemUTC(), mock(org.springframework.context.ApplicationEventPublisher.class),
+                mock(ChatUploadSettingsService.class), media);
+        when(mapper.findAttachment(group, attachment)).thenReturn(new ChatAttachmentContent(attachment, "image/png", original));
+        assertThat(chat.findAttachmentThumbnail(group, attachment, user)).isEqualTo(fileThumbnail);
+        assertThat(chat.findAttachmentThumbnail(group, attachment, user)).isEqualTo(fileThumbnail);
+        verify(mapper, times(1)).findAttachment(group, attachment);
+        verify(groups, times(2)).requireMember(group, user);
+        assertThatThrownBy(() -> chat.findAttachmentThumbnail(UUID.randomUUID(), attachment, user)).isInstanceOf(GroupException.class);
+        doThrow(new GroupException(HttpStatus.FORBIDDEN, com.lycansync.api.common.error.ApiErrorCode.INVALID_REQUEST, "已退出群聊"))
+                .when(groups).requireMember(group, user);
+        assertThatThrownBy(() -> chat.findAttachmentThumbnail(group, attachment, user)).isInstanceOf(GroupException.class);
+    }
+
+    @Test
+    void temporaryImageReadFailureCanRecoverOnNextRequest() throws Exception {
+        var media = service("test.png");
+        Path file = directory.resolve("test.png");
+        Files.delete(file);
+        assertThatThrownBy(() -> media.findThumbnail(group, attachment, user))
+                .isInstanceOfSatisfying(GroupException.class, error -> assertThat(error.getStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
+        ImageIO.write(new BufferedImage(2, 2, BufferedImage.TYPE_INT_RGB), "png", file.toFile());
+        assertThat(media.findThumbnail(group, attachment, user)).isNotEmpty();
     }
 
     @Test

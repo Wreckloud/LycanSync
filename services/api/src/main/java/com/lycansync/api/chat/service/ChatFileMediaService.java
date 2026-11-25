@@ -9,6 +9,16 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
+import javax.imageio.ImageIO;
+import javax.imageio.stream.FileImageInputStream;
+import javax.imageio.stream.ImageInputStream;
+import javax.imageio.stream.MemoryCacheImageInputStream;
+import javax.imageio.stream.MemoryCacheImageOutputStream;
+import java.awt.Color;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,9 +30,10 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 /**
- * 群聊音视频预览类型与按需封面，限制解码并发及缓存占用，不修改原文件。
+ * 群聊媒体预览类型与按需缩略图，限制解码并发及缓存占用，不修改原文件。
  *
  * @author Wreckloud
  * @since 2026-11-15
@@ -32,10 +43,13 @@ import java.util.concurrent.TimeUnit;
 public class ChatFileMediaService {
 
     private static final int MAX_THUMBNAIL_BYTES = 256 * 1024;
+    private static final long MAX_IMAGE_BYTES = 32L * 1024 * 1024;
+    private static final long MAX_IMAGE_PIXELS = 40_000_000L;
     private static final int CACHE_BYTES = 8 * 1024 * 1024;
     private final ChatFileService files;
     private final AudioProcessingProperties properties;
     private final Semaphore processing = new Semaphore(1, true);
+    private final Semaphore imageProcessing = new Semaphore(2, true);
     private final Map<String, byte[]> thumbnails = new LinkedHashMap<>(16, 0.75f, true);
     private int cachedBytes;
 
@@ -54,7 +68,8 @@ public class ChatFileMediaService {
             }
         }
         ChatMessageResponse message = files.declare(groupId, user, messageId, attemptId, encodedName, size, content);
-        if (cover != null && message.attachment().transferStatus() != null && videoFormat(message.attachment().fileName()) != null) {
+        if (cover != null && message.attachment().transferStatus() != null
+                && (imageFileName(message.attachment().fileName()) || videoFormat(message.attachment().fileName()) != null)) {
             remember("pending:" + messageId, cover);
         }
         return message;
@@ -69,6 +84,11 @@ public class ChatFileMediaService {
     public byte[] findThumbnail(UUID groupId, UUID attachmentId, AuthenticatedUser user) {
         // 即使缓存命中，也先核对当前群成员资格与附件是否仍然存在。
         var metadata = files.findMetadata(groupId, attachmentId, user);
+        if (imageFileName(metadata.fileName())) {
+            if (metadata.byteSize() > MAX_IMAGE_BYTES) return null;
+            return imageThumbnail("file:" + attachmentId, () ->
+                    new FileImageInputStream(files.findFile(attachmentId).getFile()));
+        }
         String format = videoFormat(metadata.fileName());
         if (format == null) return null;
         try {
@@ -93,6 +113,84 @@ public class ChatFileMediaService {
             log.warn("视频封面处理工具或目录不可用");
             throw unavailable();
         }
+    }
+
+    byte[] attachmentThumbnail(UUID groupId, UUID attachmentId, Supplier<byte[]> attachment) {
+        // 群成员资格由调用方验证，缓存键保留群组归属，命中时无需读取原图字段。
+        return imageThumbnail(groupId + ":" + attachmentId, () ->
+                new MemoryCacheImageInputStream(new ByteArrayInputStream(attachment.get())));
+    }
+
+    private byte[] imageThumbnail(String key, ImageInput opener) {
+        byte[] thumbnail = cached(key);
+        if (thumbnail != null) return thumbnail.length == 0 ? null : thumbnail;
+        try {
+            if (!imageProcessing.tryAcquire(3, TimeUnit.SECONDS)) {
+                throw new GroupException(HttpStatus.TOO_MANY_REQUESTS, ApiErrorCode.INVALID_REQUEST,
+                        "图片缩略图正在处理中，请稍后重试。");
+            }
+            try {
+                thumbnail = cached(key);
+                if (thumbnail == null) {
+                    try (var input = opener.open()) { thumbnail = resizeImage(input); }
+                    remember(key, thumbnail == null ? new byte[0] : thumbnail);
+                }
+            } finally { imageProcessing.release(); }
+        } catch (IOException exception) {
+            log.warn("图片缩略图读取或生成失败");
+            throw new GroupException(HttpStatus.SERVICE_UNAVAILABLE, ApiErrorCode.CHAT_FILE_STORAGE_FAILED,
+                    "暂时无法读取图片预览，请稍后重试。");
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new GroupException(HttpStatus.SERVICE_UNAVAILABLE, ApiErrorCode.CHAT_FILE_STORAGE_FAILED,
+                    "图片预览已中断，请稍后重试。");
+        }
+        return thumbnail == null || thumbnail.length == 0 ? null : thumbnail;
+    }
+
+    private static byte[] resizeImage(ImageInputStream input) throws IOException {
+        var readers = ImageIO.getImageReaders(input);
+        if (!readers.hasNext()) return null;
+        var reader = readers.next();
+        try {
+            if (!List.of("png", "jpeg", "gif").contains(reader.getFormatName().toLowerCase(Locale.ROOT))) return null;
+            reader.setInput(input, true, true);
+            int width = reader.getWidth(0);
+            int height = reader.getHeight(0);
+            if (width <= 0 || height <= 0 || (long) width * height > MAX_IMAGE_PIXELS) return null;
+            double scale = Math.min(1, Math.min(420.0 / width, 340.0 / height));
+            int targetWidth = Math.max(1, (int) Math.round(width * scale));
+            int targetHeight = Math.max(1, (int) Math.round(height * scale));
+            // 只解码供缩略图使用的像素，动图只读首帧。
+            int step = Math.max(1, (int) (1 / scale / 2));
+            var options = reader.getDefaultReadParam();
+            options.setSourceSubsampling(step, step, 0, 0);
+            BufferedImage source = reader.read(0, options);
+            BufferedImage target = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB);
+            var graphics = target.createGraphics();
+            try {
+                graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+                graphics.drawImage(source, 0, 0, targetWidth, targetHeight, Color.WHITE, null);
+            } finally { graphics.dispose(); source.flush(); }
+            var encoded = new ByteArrayOutputStream();
+            try (var output = new MemoryCacheImageOutputStream(encoded)) {
+                if (!ImageIO.write(target, "jpeg", output)) return null;
+            } finally { target.flush(); }
+            return encoded.size() <= MAX_THUMBNAIL_BYTES ? encoded.toByteArray() : null;
+        } finally { reader.dispose(); }
+    }
+
+    @FunctionalInterface
+    private interface ImageInput {
+        ImageInputStream open() throws IOException;
+    }
+
+    private static boolean imageFileName(String fileName) {
+        int dot = fileName.lastIndexOf('.');
+        return dot >= 0 && switch (fileName.substring(dot + 1).toLowerCase(Locale.ROOT)) {
+            case "png", "jpg", "jpeg", "gif" -> true;
+            default -> false;
+        };
     }
 
     private byte[] extract(Path source, String format) throws IOException, InterruptedException {

@@ -51,7 +51,7 @@ final class ChatImageValidator {
                 int width = reader.getWidth(0);
                 int height = reader.getHeight(0);
                 if (width <= 0 || height <= 0 || (long) width * height > maxPixels) {
-                    throw new InvalidImageException(maxPixels == MAX_PIXELS ? "图片尺寸不能超过 829 万像素" : "视频封面尺寸过大");
+                    throw new InvalidImageException(maxPixels == MAX_PIXELS ? "图片尺寸不能超过 829 万像素" : "缩略图尺寸过大");
                 }
                 if (reader.read(0) == null) throw new InvalidImageException("图片文件无效");
                 return new ValidatedImage(contentType, width, height, data);

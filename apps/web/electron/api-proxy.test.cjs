@@ -795,6 +795,17 @@ test('封面接口只开放读取，完整透传无封面的 204 与范围失败
   assert.equal(response.headers.get('Content-Range'), 'bytes */10');
 });
 
+test('群聊图片缩略图仅代理固定 GET 路径并携带当前会话', async () => {
+  const { serve, forwarded } = proxyFixture();
+  const path = '/api/groups/11111111-1111-4111-8111-111111111111/attachments/22222222-2222-4222-8222-222222222222/thumbnail';
+  await serve(new Request('lycan://app' + path));
+  assert.equal(new URL(forwarded[0].url).pathname, path);
+  assert.equal(forwarded[0].options.headers.Authorization, 'Bearer test-session');
+  assert.equal((await serve(new Request('lycan://app' + path, { method: 'POST' }))).status, 404);
+  assert.equal((await serve(new Request('lycan://app' + path + '/extra'))).status, 404);
+  assert.equal(forwarded.length, 1);
+});
+
 
 test('兼容视频仅主动 POST 转换，状态查询与分段播放使用固定认证路由', async () => {
   const { serve, forwarded } = proxyFixture();

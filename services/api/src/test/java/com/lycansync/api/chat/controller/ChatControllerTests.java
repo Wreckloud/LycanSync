@@ -124,6 +124,10 @@ class ChatControllerTests {
                 .andExpect(content().bytes(new byte[]{1, 2}));
         when(thumbnails.findThumbnail(groupId, attachment, user)).thenReturn(null);
         mvc.perform(get(path)).andExpect(status().isNoContent());
+        String imagePath = "/api/groups/" + groupId + "/attachments/" + attachment + "/thumbnail";
+        when(chat.findAttachmentThumbnail(groupId, attachment, user)).thenReturn(new byte[]{3, 4});
+        mvc.perform(get(imagePath)).andExpect(status().isOk()).andExpect(content().contentType("image/jpeg"))
+                .andExpect(content().bytes(new byte[]{3, 4}));
         verifyNoInteractions(files);
     }
 

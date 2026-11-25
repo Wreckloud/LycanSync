@@ -38,16 +38,18 @@ public class ChatService {
     private final ChatMapper mapper;
     private final GroupService groupService;
     private final ChatUploadSettingsService settings;
+    private final ChatFileMediaService media;
     private final Clock systemClock;
     private final ApplicationEventPublisher events;
 
     public ChatService(ChatMapper mapper, GroupService groupService, Clock systemClock, ApplicationEventPublisher events,
-                       ChatUploadSettingsService settings) {
+                       ChatUploadSettingsService settings, ChatFileMediaService media) {
         this.mapper = mapper;
         this.groupService = groupService;
         this.systemClock = systemClock;
         this.events = events;
         this.settings = settings;
+        this.media = media;
     }
 
     public ChatMessagePageResponse findMessages(
@@ -121,6 +123,15 @@ public class ChatService {
 
     public ChatAttachmentContent findAttachment(UUID groupId, UUID attachmentId, AuthenticatedUser user) {
         groupService.requireMember(groupId, user);
+        return requireAttachment(groupId, attachmentId);
+    }
+
+    public byte[] findAttachmentThumbnail(UUID groupId, UUID attachmentId, AuthenticatedUser user) {
+        groupService.requireMember(groupId, user);
+        return media.attachmentThumbnail(groupId, attachmentId, () -> requireAttachment(groupId, attachmentId).data());
+    }
+
+    private ChatAttachmentContent requireAttachment(UUID groupId, UUID attachmentId) {
         ChatAttachmentContent attachment = mapper.findAttachment(groupId, attachmentId);
         if (attachment == null) {
             throw new GroupException(HttpStatus.NOT_FOUND, ApiErrorCode.CHAT_ATTACHMENT_NOT_FOUND, "消息图片不存在");
