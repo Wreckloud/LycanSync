@@ -5,7 +5,10 @@ const MAX_REPORT_BYTES = 8 * 1024 * 1024;
 
 function parseDiagnosticReport(text) {
   if (typeof text !== 'string' || Buffer.byteLength(text) > MAX_REPORT_BYTES) throw new Error('诊断报告过大或无效。');
-  const report = JSON.parse(text);
+  return validateDiagnosticReport(JSON.parse(text));
+}
+
+function validateDiagnosticReport(report) {
   if (!report || report.kind !== 'lycansync-diagnostics' || ![9, 10, 11, 12, 13, 14].includes(report.schemaVersion) || !Array.isArray(report.samples)
       || report.samples.length > 900 || !Number.isFinite(Date.parse(report.startedAt))
       || !Number.isFinite(Date.parse(report.endedAt)) || Date.parse(report.endedAt) < Date.parse(report.startedAt)) {
@@ -17,6 +20,12 @@ function parseDiagnosticReport(text) {
     throw new Error('诊断问题标记无效。');
   }
   return report;
+}
+
+function serializeDiagnosticReport(report) {
+  const text = JSON.stringify(report);
+  if (Buffer.byteLength(text) > MAX_REPORT_BYTES) throw new Error('诊断报告过大或无效。');
+  return text;
 }
 
 function hasScreenMedia(sample) {
@@ -70,8 +79,7 @@ function createDiagnosticReportStore(directory) {
     if (time === null || retainedScreenTime !== null && time <= retainedScreenTime) return;
     const retained = { ...report, persistence: { ...report.persistence,
       retainedScreenUsage: true, lastScreenActivityAt: new Date(time).toISOString() } };
-    const text = JSON.stringify(retained);
-    parseDiagnosticReport(text);
+    const text = serializeDiagnosticReport(retained);
     await writeFile(screenTemporary, text, 'utf8');
     await rename(screenTemporary, screenUsage);
     retainedScreenTime = time;
@@ -90,8 +98,9 @@ function createDiagnosticReportStore(directory) {
   }
 
   return {
-    save(text) {
-      const report = parseDiagnosticReport(text);
+    save(report) {
+      validateDiagnosticReport(report);
+      const text = serializeDiagnosticReport(report);
       return serialize(async () => {
         await mkdir(directory, { recursive: true });
         if (retainedScreenTime === undefined) retainedScreenTime = lastScreenActivity((await read(screenUsage))?.report);

@@ -14,18 +14,20 @@ async function fixture(context) {
   return { directory, store: createDiagnosticReportStore(directory) };
 }
 
-function report(version) {
-  return JSON.stringify({ kind: 'lycansync-diagnostics', schemaVersion: 9,
+function savedReport(version) {
+  return { kind: 'lycansync-diagnostics', schemaVersion: 9,
     startedAt: '2026-10-26T00:00:00Z', endedAt: '2026-10-26T00:01:00Z',
     runtime: { clientVersion: version }, samples: [{ streams: [] }], notes: '',
-    events: [{ stage: 'screenVideoPublished' }] });
+    events: [{ stage: 'screenVideoPublished' }] };
 }
+
+function report(version) { return JSON.stringify(savedReport(version)); }
 
 test('新回放报告使用 schema 10，已有 schema 9 报告仍能保留并导出', async context => {
   const f = await fixture(context);
   await writeFile(join(f.directory, 'current.json'), report('previous'));
   const current = report('current').replace('"schemaVersion":9', '"schemaVersion":10');
-  await f.store.save(current);
+  await f.store.save(JSON.parse(current));
   const { previous } = (await f.store.all()).reports;
   assert.equal(previous.schemaVersion, 9);
   assert.equal(previous.runtime.clientVersion, 'previous');
@@ -34,8 +36,8 @@ test('新回放报告使用 schema 10，已有 schema 9 报告仍能保留并导
 
 function screenReport(version, lastActiveAt, ended = false) {
   const sample = { time: lastActiveAt, streams: [{ member: 'member-1', direction: '发送', sourceFps: 60 }] };
-  return JSON.stringify({ ...JSON.parse(report(version)), endedAt: '2026-10-26T00:10:00Z',
-    samples: ended ? [sample, { time: '2026-10-26T00:10:00Z', streams: [] }] : [sample] });
+  return { ...savedReport(version), endedAt: '2026-10-26T00:10:00Z',
+    samples: ended ? [sample, { time: '2026-10-26T00:10:00Z', streams: [] }] : [sample] };
 }
 
 test('重启后优先显示带有较新问题标记的报告，不能总被旧共享报告遮住', async context => {
@@ -43,7 +45,7 @@ test('重启后优先显示带有较新问题标记的报告，不能总被旧�
   await f.store.save(screenReport('old-screen', '2026-10-26T00:05:00Z', true));
   const marked = { ...JSON.parse(report('marked-voice')), schemaVersion: 12, endedAt: '2026-10-26T00:15:00Z',
     problemMarkers: [{ time: '2026-10-26T00:14:00Z', category: 'no-audio', recording: true }] };
-  await f.store.save(JSON.stringify(marked));
+  await f.store.save(marked);
   const restarted = createDiagnosticReportStore(f.directory);
   const { current: previous } = (await restarted.all()).reports;
   assert.equal((await restarted.info()).clientVersion, 'marked-voice');
@@ -61,7 +63,7 @@ test('共享结束固定完整窗口，随后闲置、裁剪窗口及重启不�
   const retained = await readFile(path, 'utf8');
   assert.equal((await store.info()).kind, 'screen-media');
   await store.save(screenReport('trimmed-window', '2026-10-26T00:02:00Z', true));
-  await store.save(report('idle-no-screen'));
+  await store.save(savedReport('idle-no-screen'));
   assert.equal(await readFile(path, 'utf8'), retained);
   const reopened = createDiagnosticReportStore(directory);
   assert.equal((await reopened.info()).clientVersion, 'screen-session');
@@ -87,8 +89,8 @@ test('画面尚在运行时异常退出，下一启动的空闲快照先保留�
   const { directory, store } = await fixture(context);
   await store.save(screenReport('interrupted', '2026-10-26T00:05:00Z'));
   const reopened = createDiagnosticReportStore(directory);
-  await reopened.save(report('new-idle-run'));
-  await reopened.save(report('new-idle-run-later'));
+  await reopened.save(savedReport('new-idle-run'));
+  await reopened.save(savedReport('new-idle-run-later'));
   const afterAnotherExit = createDiagnosticReportStore(directory);
   assert.equal((await afterAnotherExit.info()).clientVersion, 'interrupted');
   assert.equal((await afterAnotherExit.info()).kind, 'screen-media');
@@ -96,14 +98,14 @@ test('画面尚在运行时异常退出，下一启动的空闲快照先保留�
 
 test('重新打开只读设置不覆盖上次使用，本次连续快照只轮转一次', async (context) => {
   const { directory, store } = await fixture(context);
-  const first = JSON.stringify({ ...JSON.parse(report('first')), notes: '测试字节大小' }, null, 2);
-  assert.equal(await store.save(first), Buffer.byteLength(first));
+  const first = { ...savedReport('first'), notes: '测试字节大小' };
+  assert.equal(await store.save(first), Buffer.byteLength(JSON.stringify(first)));
   const reopened = createDiagnosticReportStore(directory);
   assert.equal((await reopened.info()).clientVersion, 'first');
-  assert.equal((await reopened.info()).bytes, Buffer.byteLength(first));
+  assert.equal((await reopened.info()).bytes, Buffer.byteLength(JSON.stringify(first)));
   assert.equal((await createDiagnosticReportStore(directory).info()).clientVersion, 'first');
-  await reopened.save(report('second'));
-  await reopened.save(report('second-latest'));
+  await reopened.save(savedReport('second'));
+  await reopened.save(savedReport('second-latest'));
   assert.equal((await reopened.info()).clientVersion, 'first');
   const afterExit = createDiagnosticReportStore(directory);
   assert.equal((await afterExit.info()).clientVersion, 'second-latest');
@@ -112,39 +114,39 @@ test('重新打开只读设置不覆盖上次使用，本次连续快照只轮�
 
 test('中断写入不读取半份文件，主文件缺失时仍保留上一份有效报告', async (context) => {
   const { directory, store } = await fixture(context);
-  await store.save(report('retained'));
+  await store.save(savedReport('retained'));
   await rename(join(directory, 'current.json'), join(directory, 'previous.json'));
   await writeFile(join(directory, 'current.pending'), '{incomplete');
   const reopened = createDiagnosticReportStore(directory);
   assert.equal((await reopened.info()).clientVersion, 'retained');
-  await reopened.save(report('new'));
+  await reopened.save(savedReport('new'));
   assert.equal((await reopened.info()).clientVersion, 'retained');
 });
 
 test('无效或过大报告不覆盖文件，损坏旧文件明确失败而不覆盖有效历史', async (context) => {
   const { directory, store } = await fixture(context);
-  await store.save(report('retained'));
-  assert.throws(() => store.save('{}'), /无效/);
-  assert.throws(() => store.save('x'.repeat(8 * 1024 * 1024 + 1)), /过大/);
-  assert.throws(() => store.save(report('bad').replace('"schemaVersion":9', '"schemaVersion":8')), /无效/);
+  await store.save(savedReport('retained'));
+  assert.throws(() => store.save({}), /无效/);
+  assert.throws(() => store.save({ ...savedReport('large'), events: ['测'.repeat(3 * 1024 * 1024)] }), /过大/);
+  assert.throws(() => store.save({ ...savedReport('bad'), schemaVersion: 8 }), /无效/);
   const reopened = createDiagnosticReportStore(directory);
-  await reopened.save(report('current'));
+  await reopened.save(savedReport('current'));
   await writeFile(join(directory, 'current.json'), '{broken');
   const afterCorruption = createDiagnosticReportStore(directory);
   await assert.rejects(afterCorruption.info(), /无法读取/);
-  await assert.rejects(afterCorruption.save(report('replacement')), /无法读取/);
+  await assert.rejects(afterCorruption.save(savedReport('replacement')), /无法读取/);
   assert.equal(JSON.parse(await readFile(join(directory, 'previous.json'), 'utf8')).runtime.clientVersion, 'retained');
 });
 
 test('清除排在在途保存之后，不会被旧写入恢复，清除后可重新记录', async (context) => {
   const { directory, store } = await fixture(context);
   await writeFile(join(directory, 'user-export.json'), 'manual report');
-  const saving = store.save(report('old'));
+  const saving = store.save(savedReport('old'));
   const clearing = store.clear();
   await Promise.all([saving, clearing]);
   assert.equal(await createDiagnosticReportStore(directory).info(), null);
   assert.equal(await readFile(join(directory, 'user-export.json'), 'utf8'), 'manual report');
-  await store.save(report('fresh'));
+  await store.save(savedReport('fresh'));
   assert.equal(await store.info(), null);
   assert.equal((await createDiagnosticReportStore(directory).info()).clientVersion, 'fresh');
 });
@@ -166,7 +168,7 @@ function ipcFixture() {
     process: { platform: 'win32', arch: 'x64', versions: { electron: 'current-electron' } }, osRelease: () => 'current-os',
     app: { getPath: () => '/private', getVersion: () => 'current-version', getGPUFeatureStatus: () => ({}) },
     readDiagnosticEvents: async () => [{ stage: 'current-start' }],
-    savedDiagnosticReports: { save: async text => { saved.push(JSON.parse(text)); return Buffer.byteLength(text); }, info: async () => null,
+    savedDiagnosticReports: { save: async report => { saved.push(report); return Buffer.byteLength(JSON.stringify(report)); }, info: async () => null,
       all: async () => ({ reports: { previous: { ...JSON.parse(report('old-version')), environment: { appVersion: 'old-version' },
         events: [{ stage: 'old-start' }] } }, unavailable: [] }), clear: async () => { cleared++; } },
     mkdir: async directory => exportDirectories.push(directory),
@@ -263,7 +265,7 @@ test('清除使尚在补齐事件的旧快照失效，清除后不会被迟到�
 test('合并导出读取三种已保存的快照，单份损坏时保留其余内容', async context => {
   const { directory, store } = await fixture(context);
   await store.save(screenReport('screen', '2026-10-26T00:05:00Z', true));
-  await createDiagnosticReportStore(directory).save(report('second'));
+  await createDiagnosticReportStore(directory).save(savedReport('second'));
   const { reports, unavailable } = await store.all();
   assert.deepEqual(unavailable, []);
   assert.equal(reports.current.runtime.clientVersion, 'second');

@@ -1008,7 +1008,7 @@ ipcMain.handle('diagnostics:checkpoint', async (event, text) => {
   report.persistence = { savedAt: new Date().toISOString(), checkpointIntervalMs: 15_000,
     storage: 'installation-data-directory', unexpectedExitMayLoseLastInterval: true };
   if (generation !== diagnosticReportsGeneration) return null;
-  try { return await savedDiagnosticReports.save(JSON.stringify(report)); }
+  try { return await savedDiagnosticReports.save(report); }
   catch (error) {
     void writeMediaDiagnostic({ stage: 'diagnosticSnapshotFailed',
       storageError: ['EACCES', 'EPERM', 'ENOSPC', 'EIO', 'EBUSY'].includes(error.code) ? error.code : 'unknown' });
