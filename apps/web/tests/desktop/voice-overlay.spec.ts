@@ -91,6 +91,9 @@ test('隔离覆盖页：真实协议与preload、说话展示、权限隔离、�
     });
     await expect(overlay.locator('.member')).toHaveCount(3);
     for (const name of ['狼', 'wolf', '非常个性的昵称用户']) await expect(overlay.getByText(name, { exact: true })).toBeVisible();
+    await expect(overlay.locator('.audio-badge')).toHaveCount(2);
+    await expect(overlay.getByLabel('wolf，麦克风已关闭').locator('.avatar .lucide-mic-off')).toBeVisible();
+    await expect(overlay.getByLabel('非常个性的昵称用户，已停止收听').locator('.avatar .lucide-headphone-off')).toBeVisible();
     const geometry = await overlay.locator('.member').first().evaluate(element => {
       const avatar = element.querySelector('.avatar')!;
       const name = element.querySelector('.name')!;

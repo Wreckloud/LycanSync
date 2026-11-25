@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onScopeDispose, ref, shallowRef } from 'vue';
+import { HeadphoneOff, MicOff } from '@lucide/vue';
 import Avatar from '../components/Avatar.vue';
 import type { VoiceOverlayView } from './types';
 
@@ -26,7 +27,12 @@ onScopeDispose(() => removeListener?.());
       <div v-for="member in members" :key="member.identity" class="member"
         :class="{ speaking: member.speaking, 'is-muted': !member.microphone || !member.listening }"
         :aria-label="`${member.name}${!member.listening ? '，已停止收听' : !member.microphone ? '，麦克风已关闭' : ''}`">
-        <span class="avatar"><Avatar :src="portraits.get(member.identity)" :icon-size="20" /></span>
+        <span class="avatar">
+          <span class="portrait"><Avatar :src="portraits.get(member.identity)" :icon-size="20" /></span>
+          <span v-if="!member.listening || !member.microphone" class="audio-badge" aria-hidden="true">
+            <HeadphoneOff v-if="!member.listening" /><MicOff v-else />
+          </span>
+        </span>
         <span class="name">{{ member.name }}</span>
       </div>
     </div>
@@ -46,8 +52,24 @@ body { color: #e7ebef; font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; u
 .member { width: var(--column-width); height: var(--row-height); flex: 0 0 auto; display: flex; align-items: center; gap: calc(6px * var(--scale)); padding: calc(3px * var(--scale)) 0; }
 .align-right .member { flex-direction: row-reverse; }
 .align-right .name { text-align: right; }
-.avatar { display: grid; place-items: center; flex-shrink: 0; width: calc(28px * var(--scale)); height: calc(28px * var(--scale)); border-radius: 50%; background: #3c4854; }
-.avatar svg { width: calc(18px * var(--scale)); height: calc(18px * var(--scale)); }
+.avatar {
+  --avatar-size: calc(28px * var(--scale));
+  --badge-radius: calc(5px * var(--scale));
+  position: relative; flex-shrink: 0; width: var(--avatar-size); height: var(--avatar-size);
+}
+.portrait { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 50%; background: #3c4854; }
+.is-muted .portrait {
+  --cutout-radius: calc(var(--badge-radius) + var(--avatar-size) / 16);
+  mask-image: radial-gradient(circle at right var(--badge-radius) bottom var(--badge-radius),
+    transparent calc(var(--cutout-radius) - 0.5px), black calc(var(--cutout-radius) + 0.5px));
+}
+.portrait > svg { width: calc(18px * var(--scale)); height: calc(18px * var(--scale)); }
+.audio-badge {
+  position: absolute; right: 0; bottom: 0; display: grid; place-items: center;
+  width: calc(2 * var(--badge-radius)); height: calc(2 * var(--badge-radius)); border-radius: 50%;
+  color: #bec6ce; background: #1c2228;
+}
+.audio-badge svg { display: block; width: 90%; height: 90%; stroke-width: 2.5; }
 .avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
 .speaking .name { color: #8de3c3; }
 .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: calc(15px * var(--scale)); line-height: calc(28px * var(--scale)); text-shadow: 0 1px 2px #000, 1px 0 2px #000, -1px 0 2px #000; }

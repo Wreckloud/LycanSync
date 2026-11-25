@@ -118,8 +118,12 @@ function createVoiceOverlay({ BrowserWindow, screen, session, net, rendererRoot,
       visible: settings.mode === 'all' || (connected && (member.speaking || (speakingUntil.get(member.identity) ?? 0) > Date.now())),
       avatar: portraits.get(member.identity) ?? '',
     }));
-    if (editing && snapshot.status === 'hidden') ['狼', 'wolf', '非常个性的昵称用户'].forEach((name, index) => members.push({
-      identity: `overlay-preview-${index}`, name, microphone: true, listening: true, speaking: false, visible: true, avatar: '',
+    if (editing && snapshot.status === 'hidden') [
+      { name: '狼', microphone: true, listening: true },
+      { name: 'wolf', microphone: false, listening: true },
+      { name: '非常个性的昵称用户', microphone: false, listening: false },
+    ].forEach((member, index) => members.push({
+      identity: `overlay-preview-${index}`, ...member, speaking: false, visible: true, avatar: '',
     }));
     // 按完整名单估算最长昵称宽度，说话状态切换不反复改变窗口宽度。
     const nameWidth = Math.max(15, ...members.map((member) => Array.from(member.name).reduce((width, character) =>
