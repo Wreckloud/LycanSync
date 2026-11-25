@@ -15,7 +15,7 @@ export default defineConfig(({ mode }) => ({
     port: webPort,
     strictPort: true,
     proxy: {
-      // 私有开发地址从仓库根目录 .env.local 读取，证书仍须受系统信任。
+      // 私有开发地址可写在仓库根目录 .env，证书仍须受系统信任。
       // 只代理业务 HTTP；音视频和信令由浏览器直接连接 LiveKit。
       // Caddy 按 Host 选择站点。不改写时仍带本机地址，虚拟机会返回空内容。
       '/api': { target: process.env.LYCANSYNC_API_URL
