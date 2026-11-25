@@ -60,13 +60,14 @@ function setup(cache: AccountCache | null = null) {
   vi.stubGlobal('fetch', fetchRecording);
   const transfers = createChatTransfers({ ...props.user, avatar: '', administrator: false }, id => emit('messageSent', id));
   const uploadLimits = vi.fn(async () => ({ maxFileBytes: 512 * 1024 ** 2 }));
+  const chatUploadImageThumbnail = vi.fn<(_file: File, _signal: AbortSignal) => Promise<string | undefined>>().mockResolvedValue(undefined);
   // 真实组件的任务、监听和销毁；只替换网络、DOM 与图片边界，不启动浏览器或传输文件。
   const chat = scope.run(() => runInNewContext(`${compiled}\n({ ...synchronization, ...scroll, handleVisibilityChange, submit, enqueueFiles, attachmentKind, pendingPreview,
     text, error, syncError, retrySync, pendingAttachments, initialLoadingHint, historyLoadingHint, refreshCalendar, calendarNow, senderName, senderAvatar, messageInput,
     setScrollPreference: value => { Object.assign(scrollPreference, value); } })`, {
     computed, ref, watch, nextTick, onScopeDispose, useLoadingHint, useComposerHeight: () => () => {}, onMounted: () => {}, defineProps: () => props, defineEmits: () => emit,
     inject: (key: symbol) => key === CHAT_TRANSFERS ? transfers : cache, CHAT_TRANSFERS, ACCOUNT_CACHE: Symbol(), uploadLimits,
-    sendMessage, sendFile, compressChatImage: vi.fn(), defaultAvatar,
+    sendMessage, sendFile, compressChatImage: vi.fn(), chatUploadImageThumbnail, defaultAvatar,
     formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey,
     AbortController, ReadableStream, crypto, fetch: fetchRecording, setTimeout, clearTimeout, Error, Date, chatMediaFormat, formatAttachmentSize,
     document, window, scrollPreference, useChatScroll, useGroupMessages, URL: { revokeObjectURL: vi.fn(), createObjectURL: vi.fn(() => 'blob:preview') },
@@ -93,8 +94,31 @@ function setup(cache: AccountCache | null = null) {
     pendingAttachments: { value: Array<{ id: string; kind: 'FILE'; file: File; previewUrl: string;
       state: 'pending' | 'uploading' | 'failed' | 'sent'; progress: number; error: string }> };
   };
-  return { scope, props, chat, findMessages, sendMessage, sendFile, fetchRecording, document, emit, transfers, uploadLimits };
+  return { scope, props, chat, findMessages, sendMessage, sendFile, fetchRecording, document, emit, transfers, uploadLimits, chatUploadImageThumbnail };
 }
+
+it.each([false, true])('只随文件登记发送已经生成的封面，后发文字保持顺序（就绪 %s）', async ready => {
+  const f = setup();
+  const preview = deferred<string>();
+  f.chatUploadImageThumbnail.mockReturnValueOnce(preview.promise);
+  vi.mocked(declareFile).mockClear();
+  try {
+    await f.chat.enqueueFiles([new File(['GIF'], 'test.gif', { type: 'image/gif' })], false);
+    await vi.waitFor(() => expect(f.chatUploadImageThumbnail).toHaveBeenCalledOnce());
+    if (ready) {
+      preview.resolve('jpeg');
+      await vi.waitFor(() => expect(f.chat.pendingAttachments.value[0]).toHaveProperty('thumbnail', 'jpeg'));
+    }
+    await f.chat.submit(false);
+    f.chat.text.value = '随后文字';
+    await f.chat.submit(false);
+    await vi.waitFor(() => expect(f.sendMessage).toHaveBeenCalledOnce());
+    expect(declareFile).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(declareFile).mock.calls[0][6]).toBe(ready ? 'jpeg' : undefined);
+    expect(vi.mocked(declareFile).mock.invocationCallOrder[0]).toBeLessThan(f.sendMessage.mock.invocationCallOrder[0]);
+    expect(f.chatUploadImageThumbnail.mock.calls[0][1].aborted).toBe(true);
+  } finally { preview.resolve('jpeg'); f.scope.stop(); }
+});
 
 it('注销消息忽略旧头像与昵称缓存，显示注册使用的默认头像', () => {
   const f = setup();

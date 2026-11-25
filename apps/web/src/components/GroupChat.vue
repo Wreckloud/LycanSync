@@ -11,7 +11,7 @@ import defaultAvatar from '../../../../services/api/src/main/resources/account/d
 import type { AuthUser } from '../auth/authApi';
 import { uploadLimits, type ChatMessage } from '../chat/chatApi';
 import { CHAT_TRANSFERS, type DraftAttachment } from '../chat/useChatTransfers';
-import { compressChatImage } from '../chat/messageImage';
+import { chatUploadImageThumbnail, compressChatImage } from '../chat/messageImage';
 import { formatFullMessageTime, formatMessageDateDivider, formatMessageTime, localDateKey } from '../chat/messageTime';
 import type { GroupMember, GroupSummary } from '../group/groupApi';
 import ChatTransferStatus from './ChatTransferStatus.vue';
@@ -26,6 +26,7 @@ import DialogTransition from './DialogTransition.vue';
 
 type PendingAttachment = DraftAttachment & {
   originalFile?: File; optimizedImage?: File; sendOriginal?: boolean; originalLimit?: number; imageError?: boolean;
+  thumbnailRequest?: AbortController;
 };
 type MessageSegment = { text: string; href?: string };
 const props = defineProps<{ group: GroupSummary; members: GroupMember[]; user: AuthUser; syncError?: string; recordingAttachment?: RecordingLibraryEntry }>();
@@ -133,8 +134,26 @@ function allowedSize(file: Pick<File, 'name' | 'size'>, limit: number) {
 }
 
 function revokePreview(item: PendingAttachment) {
+  item.thumbnailRequest?.abort();
   if (pendingPreview.value?.id === item.id) pendingPreview.value = null;
   if (item.previewUrl.startsWith('blob:')) URL.revokeObjectURL(item.previewUrl);
+}
+
+// 草稿依次解码小图；发送只取此刻已完成的结果，后续消息不等待预览。
+let preparingThumbnail = Promise.resolve();
+function prepareThumbnail(item: PendingAttachment) {
+  item.thumbnailRequest?.abort();
+  item.thumbnail = undefined;
+  if (item.recordingId !== undefined || (item.kind === 'IMAGE' && !item.sendOriginal)) return;
+  const format = chatMediaFormat(attachmentInfo(item));
+  if (!format || !['image/jpeg', 'image/png', 'image/gif'].includes(format.contentType)) return;
+  const file = item.file;
+  const request = item.thumbnailRequest = new AbortController();
+  preparingThumbnail = preparingThumbnail.then(async () => {
+    if (request.signal.aborted) return;
+    const thumbnail = await chatUploadImageThumbnail(file, request.signal);
+    if (!request.signal.aborted) item.thumbnail = thumbnail;
+  });
 }
 
 function clearPendingAttachments() {
@@ -183,6 +202,7 @@ async function enqueueFiles(files: File[], sendAsImageMessage: boolean) {
       }
     }
     pendingAttachments.value.push(...preparedItems);
+    for (const item of preparedItems) prepareThumbnail(item);
   } catch (reason) {
     for (const item of preparedItems) revokePreview(item);
     if (!disposed) error.value = reason instanceof Error ? reason.message : '添加附件失败';
@@ -199,11 +219,13 @@ function selectOriginal(item: PendingAttachment, event: Event) {
   }
   error.value = '';
   item.sendOriginal = input.checked;
-  if (!item.originalFile || !item.optimizedImage) return;
-  revokePreview(item);
-  const file = input.checked ? item.originalFile : item.optimizedImage;
-  item.file = file;
-  item.previewUrl = URL.createObjectURL(file);
+  if (item.originalFile && item.optimizedImage) {
+    revokePreview(item);
+    const file = input.checked ? item.originalFile : item.optimizedImage;
+    item.file = file;
+    item.previewUrl = URL.createObjectURL(file);
+  }
+  prepareThumbnail(item);
 }
 
 function attachmentInfo(item: PendingAttachment) {
@@ -268,9 +290,10 @@ async function submit(restoreFocus = false) {
   text.value = '';
   error.value = '';
   if (queued.length) queued.forEach((draft, index) => {
+    draft.thumbnailRequest?.abort();
     const attachment: DraftAttachment = draft.recordingId !== undefined
       ? { id: draft.id, recordingId: draft.recordingId, kind: 'FILE', file: draft.file, previewUrl: draft.previewUrl }
-      : { id: draft.id, kind: draft.sendOriginal ? 'FILE' : draft.kind, file: draft.file, previewUrl: draft.previewUrl };
+      : { id: draft.id, kind: draft.sendOriginal ? 'FILE' : draft.kind, file: draft.file, previewUrl: draft.previewUrl, thumbnail: draft.thumbnail };
     attachment.optimizeVideo = attachmentKind(draft) === 'video' && !draft.sendOriginal;
     transfers.enqueue(groupId, index === 0 ? content : '', attachment);
   });

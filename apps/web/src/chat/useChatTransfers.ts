@@ -3,7 +3,7 @@ import { declareFile, downloadFile, sendFile, sendMessage, stopFile, type ChatAt
 import { cachedRecordingJpeg } from '../recording/recordingThumbnails';
 import type { AuthUser } from '../auth/authApi';
 
-export type DraftAttachment = { id: string; previewUrl: string; optimizeVideo?: boolean } & (
+export type DraftAttachment = { id: string; previewUrl: string; thumbnail?: string; optimizeVideo?: boolean } & (
   | { kind: 'IMAGE' | 'FILE'; file: File; recordingId?: never }
   | { kind: 'FILE'; file: Pick<File, 'name' | 'size'>; recordingId: string }
 );
@@ -116,8 +116,8 @@ export function createChatTransfers(user: AuthUser, onSent: (groupId: string) =>
             bytes => { job.progress = bytes; }));
           return;
         }
-        const registered = await declareFile(groupId, message.id, job.attemptId, item.file, message.content, session.signal,
-          cachedRecordingJpeg(item.previewUrl));
+        const thumbnail = item.thumbnail ?? cachedRecordingJpeg(item.previewUrl);
+        const registered = await declareFile(groupId, message.id, job.attemptId, item.file, message.content, session.signal, thumbnail);
         if (!registered.attachment?.transferStatus) { complete(job, registered); return; }
         if (session.signal.aborted) return;
         notify(groupId, registered);

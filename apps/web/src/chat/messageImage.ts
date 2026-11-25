@@ -2,6 +2,29 @@ const MAX_COMPRESSED_SOURCE_BYTES = 10 * 1024 * 1024;
 const MAX_COMPRESSED_OUTPUT_BYTES = 2 * 1024 * 1024;
 const ACCEPTED_TYPES = new Set(['image/png', 'image/jpeg']);
 
+export async function chatUploadImageThumbnail(file: File, signal: AbortSignal): Promise<string | undefined> {
+  if (file.size > MAX_COMPRESSED_SOURCE_BYTES || signal.aborted) return;
+  let image: ImageBitmap | undefined;
+  try {
+    image = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    if (signal.aborted || image.width * image.height > 40_000_000) return;
+    const scale = Math.min(1, 240 / image.width, 136 / image.height);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(image.width * scale));
+    canvas.height = Math.max(1, Math.round(image.height * scale));
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    context.fillStyle = '#fff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const base64 = canvas.toDataURL('image/jpeg', 0.65).split(',')[1];
+    return base64 && base64.length <= Math.floor(16384 / 3) * 4 ? base64 : undefined;
+  } catch {
+    // 预览不可用时仍发送用户选定的文件。
+    return undefined;
+  } finally { image?.close(); }
+}
+
 export class ChatImageError extends Error {
   constructor(message: string) {
     super(message);
