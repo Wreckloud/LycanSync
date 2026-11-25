@@ -540,22 +540,25 @@ onMounted(async () => {
             <label for="manual-access-link">邀请或恢复登录链接</label>
             <div class="auth-input-row">
               <input v-model="manualAccessLink" type="text" required maxlength="2048" autocomplete="off" spellcheck="false"
-                id="manual-access-link" aria-describedby="manual-access-feedback" placeholder="粘贴服主发来的完整链接" :disabled="submitting || serverSaving || !!entryUser" />
+                id="manual-access-link" :aria-describedby="entryUser ? 'account-switch-feedback' : 'manual-access-feedback'"
+                placeholder="粘贴服主发来的完整链接" :disabled="submitting || serverSaving || !!entryUser" />
               <button type="submit" class="confirm-button" :disabled="submitting || serverSaving || !!entryUser">检查链接</button>
             </div>
             <InlineFeedback id="manual-access-feedback" :message="manualAccessError"
-              :status="submitting ? '正在检查…' : '检查链接不会自动加入，你可以在下一步确认或取消。'" />
+              :status="entryUser ? '' : submitting ? '正在检查…' : '检查链接不会自动加入，你可以在下一步确认或取消。'" />
           </form>
           <form v-if="serverEditable" @submit.prevent="saveServerAddress">
             <label for="auth-server-address">服务器地址</label>
             <div class="auth-input-row">
               <input v-model="serverAddress" id="auth-server-address" type="url" required autocomplete="off"
-                aria-describedby="server-address-feedback" :disabled="submitting || serverSaving || !!entryUser" />
+                :aria-describedby="entryUser ? 'account-switch-feedback' : 'server-address-feedback'" :disabled="submitting || serverSaving || !!entryUser" />
               <button type="submit" class="confirm-button" :disabled="submitting || serverSaving || !!entryUser">{{ serverSaving ? '正在重启…' : '保存并重启' }}</button>
             </div>
             <InlineFeedback id="server-address-feedback" :message="serverError"
-              :status="serverSaving ? '正在重启…' : '保存后重启应用，使用该服务器的账号登录。'" />
+              :status="entryUser ? '' : serverSaving ? '正在重启…' : '保存后重启应用，使用该服务器的账号登录。'" />
           </form>
+          <InlineFeedback v-if="entryUser && (desktop || serverEditable)" id="account-switch-feedback" class="account-switch-feedback"
+            status="本机已保存当前账号。要使用邀请或恢复链接、修改服务器地址，请先清除本机登录凭据。" />
           <button v-if="desktop || entryUser" type="button" class="settings-button account-clear-session" :disabled="!ready || submitting || logoutBusy || removing || preferenceSaving || qq.finishing.value"
             @click="requestClearSession">清除本机登录凭据</button>
           </div>
@@ -601,4 +604,5 @@ onMounted(async () => {
 .auth-more-toggle svg { transition: transform var(--motion-expand-duration) var(--motion-ease); }
 .auth-more-toggle svg.is-open { transform: rotate(180deg); }
 .auth-more-content { padding-top: 12px; }
+.account-switch-feedback { margin-top: 8px; }
 </style>
