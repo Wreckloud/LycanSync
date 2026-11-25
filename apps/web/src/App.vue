@@ -1126,7 +1126,8 @@ function participantListening(participant: Participant) {
         <div class="group-list">
           <span v-if="selectedGroupIndex >= 0" class="group-selection-marker" aria-hidden="true"
             :style="{ '--selected-group-index': selectedGroupIndex }" />
-          <HoverHint boundary=".group-rail" v-for="group in groups" :key="group.id" :text="group.name" :detail="joinedGroupId === group.id ? '语音中' : undefined"
+          <HoverHint boundary=".group-rail" v-for="group in groups" :key="group.id" :text="group.name"
+             :detail="joinedGroupId === group.id ? '语音中' : groupHasVoiceActivity(group.id) ? '双击加入语音' : undefined"
             :disabled="settingsOpen || editorOpen || !!management || !mainWindowVisible || initialLoading || !!rtc.remoteControlRequest">
           <template #default="{ descriptionId }">
           <button type="button" class="group-button"
@@ -1152,8 +1153,6 @@ function participantListening(participant: Participant) {
               <div :key="selectedGroup.id" class="group-copy group-content-ready">
                 <div class="group-title-row">
                   <GroupMenu :key="selectedGroup.id" :group="selectedGroup" @select="openGroupAction" />
-                  <small v-if="!showingJoinedGroup && groupHasVoiceActivity(selectedGroup.id)" class="group-voice-hint"
-                    title="双击左侧群图标加入语音">双击加入语音</small>
                 </div>
                 <p :title="selectedGroup.description || undefined">{{ selectedGroup.description }}</p>
               </div>

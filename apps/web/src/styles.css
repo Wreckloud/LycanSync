@@ -251,7 +251,6 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
   font-weight: 650;
   line-height: 28px;
 }
-.group-voice-hint { flex-shrink: 0; color: var(--muted); font-size: 12px; }
 
 .group-copy p { height: 18px; margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
