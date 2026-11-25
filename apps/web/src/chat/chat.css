@@ -196,7 +196,6 @@ button.chat-file-summary { cursor: pointer; }
 .chat-media-placeholder { position: absolute; inset: 0; background: var(--panel-soft); pointer-events: none; }
 :is(.chat-image-frame, .chat-inline-media):has(.chat-media-placeholder) .chat-media-play, .chat-image-download { inset: auto 10px 10px auto; transform: none; width: 36px; height: 36px; }
 .chat-image-frame .chat-image-open .chat-image-temporary { width: auto; height: auto; padding: 4px 8px; border-radius: 4px; }
-.chat-cover-retry { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: 12px; color: var(--muted); }
 
 .chat-media-progress { position: absolute; inset: auto 0 0; display: block; width: 100%; pointer-events: none; }
 .chat-file-media .chat-inline-media > .recording-thumbnail { width: 100%; height: 100%; border: 0; }

@@ -1,12 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { parse } from '@vue/compiler-sfc';
+import { compile } from '@vue/compiler-dom';
+import * as Vue from 'vue';
 import ts from 'typescript';
 import { computed, effectScope, onScopeDispose, ref } from 'vue';
 import { expect, it, vi } from 'vitest';
 import { chatMediaFormat, chatMediaFrameStyle } from '../chat/chatMedia';
 
-const script = parse(readFileSync(new URL('./ChatFileMedia.vue', import.meta.url), 'utf8')).descriptor.scriptSetup!.content;
+const { descriptor } = parse(readFileSync(new URL('./ChatFileMedia.vue', import.meta.url), 'utf8'));
+const script = descriptor.scriptSetup!.content;
 const parsed = ts.createSourceFile('media.ts', script, ts.ScriptTarget.Latest, true);
 const compiled = ts.transpile(parsed.statements.filter(statement => !ts.isImportDeclaration(statement))
   .map(statement => statement.getText(parsed)).join('\n'), { target: ts.ScriptTarget.ES2022 });
@@ -141,7 +144,15 @@ it('视频封面临时失败后可以手动重试，不判为不支持，也不�
   f.callbacks[0]([{ isIntersecting: true }]);
   expect(f.fetchChatThumbnail).toHaveBeenCalledTimes(1);
   f.fetchChatThumbnail.mockResolvedValueOnce(new Blob(['cover']));
-  await f.media.load();
+  // 执行实际模板的失败分支，点击文件卡片中交给用户的按钮。
+  const render = new Function('Vue', compile(descriptor.template!.content, { prefixIdentifiers: true }).code)(
+    { ...Vue, resolveComponent: (name: string) => name });
+  const root = render({ attachment: { id: 'file' }, format: { kind: 'video' },
+    loadingFailed: f.media.loadingFailed.value, load: f.media.load }, []);
+  const card = root.children.find((child: Vue.VNode) => child.type === 'ChatFileCard');
+  const retry = card?.children.find((child: Vue.VNode) => child.props?.['aria-label'] === '重试视频封面');
+  expect(retry?.type).toBe('button');
+  await retry.props.onClick();
   expect(f.media.source.value).toBe('blob:media');
   expect(f.media.loadingFailed.value).toBe(false);
   expect(f.fetchFilePreview).not.toHaveBeenCalled();

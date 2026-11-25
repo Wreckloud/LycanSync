@@ -2,7 +2,7 @@
 import { computed, inject, onMounted, onScopeDispose, ref } from 'vue';
 import RecordingThumbnail from './settings/RecordingThumbnail.vue';
 import ChatMediaProgress from './ChatMediaProgress.vue';
-import { Download, Play } from '@lucide/vue';
+import { Download, Play, RotateCcw } from '@lucide/vue';
 import { fetchChatThumbnail, type ChatAttachment } from '../chat/chatApi';
 import { chatMediaFormat, chatMediaFrameStyle } from '../chat/chatMedia';
 import { ACCOUNT_CACHE } from '../cache/localCache';
@@ -96,6 +96,8 @@ onScopeDispose(() => { disposed = true; observer?.disconnect(); release(); });
       @preview="emit('preview', $event)" @unpreviewable="failed = true" />
     <ChatFileCard v-else-if="!format || format.kind === 'audio' || failed || (format.kind === 'video' && loadingFailed)"
       :group-id="groupId" :attachment="attachment" :preview-disabled="failed && format?.kind === 'image'" @preview="emit('preview')">
+      <button v-if="format?.kind === 'video' && loadingFailed && !failed && !videoLoading" type="button"
+        aria-label="重试视频封面" title="重试视频封面" @click="load()"><RotateCcw :size="15" /></button>
       <progress v-if="videoLoading" max="100" :value="videoPercent" aria-label="视频加载进度" />
     </ChatFileCard>
     <div v-else class="chat-inline-media" :style="frameStyle">
@@ -105,7 +107,6 @@ onScopeDispose(() => { disposed = true; observer?.disconnect(); release(); });
         <ChatMediaProgress v-if="videoLoading" :percent="videoPercent" label="媒体加载进度"><Download :size="20" /></ChatMediaProgress>
         <span v-else class="chat-media-play"><Play :size="24" /></span>
       </button>
-      <button v-if="loadingFailed && !videoLoading" class="chat-cover-retry" type="button" @click="load()">图片加载失败，点击重试</button>
     </div>
   </div>
 </template>
