@@ -6,7 +6,7 @@ const layers = new Map<HTMLElement, number>();
 <script setup lang="ts">
 import { onScopeDispose, watch } from 'vue';
 
-const props = defineProps<{ deferOpen?: boolean }>();
+const props = defineProps<{ deferOpen?: boolean; focusFallback?: HTMLElement }>();
 const sessions = new Map<HTMLElement, { background: Set<HTMLElement>; focus: HTMLElement | null; zIndex: string }>();
 let waiting: Element | null = null;
 
@@ -67,6 +67,7 @@ function restore(element: Element) {
     }
   }
   if (session.focus?.isConnected) session.focus.focus({ preventScroll: true });
+  else if (props.focusFallback?.isConnected) props.focusFallback.focus({ preventScroll: true });
 }
 
 onScopeDispose(() => { for (const surface of sessions.keys()) restore(surface); });

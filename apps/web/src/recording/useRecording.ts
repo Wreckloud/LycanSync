@@ -116,13 +116,6 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
     } catch { reportNotice('录制设置未能保存，请重试。', patch.videoHeight !== undefined || patch.videoFps !== undefined ? 'files' : 'content'); }
     finally { pending.value = false; }
   }
-  async function chooseDirectory() {
-    if (!desktop || localActive.value || busy.value) return;
-    pending.value = true; notice.value = '';
-    try { settings.value = await desktop.chooseRecordingDirectory(); }
-    catch { reportNotice('保存目录未能修改，请重试。', 'files'); }
-    finally { pending.value = false; }
-  }
   async function startCurrent(previousId?: string) {
     const version = recordingStartVersion;
     // “共享并录制”可能与自动回放同时到达，等待回放准备完成，不丢弃显式录制请求。
@@ -246,11 +239,6 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
       return changed;
     } finally { changingSource.value = false; }
   }
-  async function reveal() {
-    notice.value = '';
-    try { await desktop?.revealRecording(); }
-    catch { reportNotice('无法打开录像目录，请检查目录是否仍存在。', 'files'); }
-  }
   watch([() => settings.value?.replayEnabled, options.track, options.canStart, busy, replayActive, statusLoaded, replayStartCommand],
     ([enabled, track, canStart, isBusy, buffering, loaded, starting]) => {
       if (!enabled || !track) { replayAttemptTrack = undefined; return; }
@@ -302,7 +290,7 @@ export function useRecording(options: { track: () => MediaStreamTrack | undefine
       replayActive.value ? desktop?.stopReplay() : undefined];
     void Promise.allSettled(cleanups).finally(() => { if (track) void setNativeScreenRecordingDemand(track, false); });
   });
-  return { settings, state, notice, noticeEvent, noticeTarget, active, localActive, replayActive, successNotice, busy, elapsed, load, configure, chooseDirectory,
-    start: () => startCurrent(), stop, reveal, withSourceChange, configureReplay, setReplayEnabled,
+  return { settings, state, notice, noticeEvent, noticeTarget, active, localActive, replayActive, successNotice, busy, elapsed, load, configure,
+    start: () => startCurrent(), stop, withSourceChange, configureReplay, setReplayEnabled,
     startReplay, saveReplay: () => replayAction('save'), stopReplay: () => replayAction('stop') };
 }

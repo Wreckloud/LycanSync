@@ -17,7 +17,8 @@ function recordingError(error) {
 function createRecording({ dataDirectory, host, getVideo, getApplicationName = () => '窗口', ensureAudio, releaseAudio, ensureVoice, releaseVoice, onChange, onDiagnostic,
   io = { mkdir, readFile, writeFile, rename, open, stat, statfs }, createId = randomUUID }) {
   const settingsPath = join(dataDirectory, 'recording-settings.json');
-  let settings = { directory: join(dataDirectory, 'recordings'), applicationAudio: true, microphone: true, friends: true,
+  const defaultDirectory = join(dataDirectory, 'recordings');
+  let settings = { directory: defaultDirectory, applicationAudio: true, microphone: true, friends: true,
     replaySeconds: 60, replayEnabled: false, videoHeight: 1080, videoFps: 60 };
   let loaded;
   let active;
@@ -69,14 +70,14 @@ function createRecording({ dataDirectory, host, getVideo, getApplicationName = (
   }
   async function configure(patch) {
     await load();
-    const replayPreferenceOnly = Object.keys(patch).length === 1 && Object.hasOwn(patch, 'replayEnabled');
-    if ((active || replay || continuing) && !replayPreferenceOnly) throw new Error('recordingBusy');
-    const next = { ...settings, ...patch };
-    if (typeof next.directory !== 'string' || !isAbsolute(next.directory) || next.directory.includes('\0')
-        || !['applicationAudio', 'microphone', 'friends'].every(key => typeof next[key] === 'boolean') || ![30, 60, 120].includes(next.replaySeconds)
-        || typeof next.replayEnabled !== 'boolean'
-        || ![720, 1080, 1440].includes(next.videoHeight) || ![30, 60, 120].includes(next.videoFps)) throw new Error('recordingPathInvalid');
     const result = saveSettings.then(async () => {
+      const replayPreferenceOnly = Object.keys(patch).length === 1 && Object.hasOwn(patch, 'replayEnabled');
+      if ((active || replay || continuing) && !replayPreferenceOnly) throw new Error('recordingBusy');
+      const next = { ...settings, ...patch };
+      if (typeof next.directory !== 'string' || !isAbsolute(next.directory) || next.directory.includes('\0')
+          || !['applicationAudio', 'microphone', 'friends'].every(key => typeof next[key] === 'boolean') || ![30, 60, 120].includes(next.replaySeconds)
+          || typeof next.replayEnabled !== 'boolean'
+          || ![720, 1080, 1440].includes(next.videoHeight) || ![30, 60, 120].includes(next.videoFps)) throw new Error('recordingPathInvalid');
       await io.mkdir(dataDirectory, { recursive: true });
       await io.writeFile(settingsPath + '.pending', JSON.stringify(next));
       await io.rename(settingsPath + '.pending', settingsPath);
@@ -392,7 +393,7 @@ function createRecording({ dataDirectory, host, getVideo, getApplicationName = (
       return result;
     } finally { continuing = false; publish(); }
   }
-  return { load, configure, start, stop, hostEvent, withVideoChange, snapshot, library,
+  return { defaultDirectory, load, configure, start, stop, hostEvent, withVideoChange, snapshot, library,
     startReplay: () => startReplay(), saveReplay, stopReplay, replayHostEvent,
     get replay() { return replay; }, get media() { return media; },
     async stopAll() {
@@ -416,11 +417,6 @@ function createRecording({ dataDirectory, host, getVideo, getApplicationName = (
     },
     get active() { return active; },
     async status() { if (active?.path) await updateSize(active); return snapshot(); },
-    async revealPath() {
-      await load();
-      if (latest?.saved) return latest.path;
-      await io.mkdir(settings.directory, { recursive: true }); return settings.directory;
-    },
   };
 }
 

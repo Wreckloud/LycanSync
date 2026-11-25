@@ -634,6 +634,8 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
       getCurrentActivity: async () => null, onActivityChange: () => () => {},
       getNativeMediaCapabilities: async () => ({ screenShareAudioCapture: { available: true, reason: 'windowsApplicationLoopbackProcessTree' } }),
       setMicrophoneEchoOutput: async () => ({ changed: false }),
+      saveDirectory: async () => ({ path: 'D:/LycanSync/data/recordings'.replaceAll('/', String.fromCharCode(92)),
+        defaultPath: 'D:/LycanSync/data/recordings'.replaceAll('/', String.fromCharCode(92)), isDefault: true }),
       getRecordingSettings: async () => ({ directory: 'test-recordings', applicationAudio: true, microphone: false, friends: false,
         videoHeight: 1080, videoFps: 60, replaySeconds: 60, replayEnabled: localStorage.getItem('test.replayEnabled') === 'true' }),
       configureReplay: async (settings: { enabled?: boolean }) => {

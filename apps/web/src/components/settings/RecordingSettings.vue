@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import { useLoadingHint } from '../useLoadingHint';
 import type { useRecording } from '../../recording/useRecording';
 import InlineFeedback from '../InlineFeedback.vue';
+import SaveDirectorySetting from './SaveDirectorySetting.vue';
 import ProjectAttribution from '../ProjectAttribution.vue';
 
 const props = defineProps<{ recording: ReturnType<typeof useRecording>; desktop: boolean; sharing: boolean }>();
@@ -75,11 +76,8 @@ async function toggleReplay(event: Event) {
           <option :value="30">30 FPS</option><option :value="60">60 FPS</option><option :value="120">120 FPS</option>
         </select></label>
       </div>
-      <p class="recording-directory">{{ recording.settings.value?.directory ?? '—' }}</p>
-      <div class="recording-file-controls">
-        <button type="button" class="settings-button" :disabled="recording.localActive.value || recording.busy.value" @click="recording.chooseDirectory">更换目录</button>
-        <button type="button" class="settings-button" @click="recording.reveal">打开目录</button>
-      </div>
+      <SaveDirectorySetting kind="recording" label="录像与回放保存位置"
+        :disabled="recording.localActive.value || recording.replayActive.value || recording.busy.value" />
       <InlineFeedback :message="recording.noticeTarget.value === 'files' ? recording.notice.value : ''" />
     </section>
     <section v-if="desktop" class="settings-block">
@@ -112,10 +110,9 @@ async function toggleReplay(event: Event) {
 <style scoped>
 h3 { margin: 8px 0 0; font-size: 14px; font-weight: 600; }
 .recording-file-controls { display: flex; flex-wrap: wrap; gap: 8px 12px; }
-.recording-file-controls > label, .recording-file-controls > button { flex: 1; min-width: 100px; }
+.recording-file-controls > label { flex: 1; min-width: 100px; }
 .recording-file-controls > label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
 .recording-file-controls select { width: 100%; }
-.recording-directory { overflow-wrap: anywhere; color: var(--muted); }
 .recording-status { min-height: 20px; }
 .recording-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 </style>

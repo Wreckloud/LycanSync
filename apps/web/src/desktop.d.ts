@@ -223,7 +223,7 @@ interface Window {
     prepareCapture(graphics?: boolean): Promise<void>;
     getRecordingSettings(): Promise<RecordingSettings>;
     configureRecording(settings: Omit<RecordingSettings, 'directory' | 'replaySeconds' | 'replayEnabled'>): Promise<RecordingSettings>;
-    chooseRecordingDirectory(): Promise<RecordingSettings>;
+    saveDirectory(kind: 'recording' | 'diagnostics', action: 'read' | 'choose' | 'reset' | 'open'): Promise<{ path: string; defaultPath: string; isDefault: boolean }>;
     failRecordingVoice(id: string): Promise<DesktopRecordingStatus>;
     sendRecordingVoice(id: string, position: number, pcm: Uint8Array): Promise<boolean>;
     startRecording(previousId?: string): Promise<DesktopRecordingStatus>;
@@ -233,7 +233,6 @@ interface Window {
     stopReplay(): Promise<DesktopRecordingStatus>;
     configureReplay(settings: { seconds?: number; enabled?: boolean }): Promise<RecordingSettings>;
     getRecordingStatus(): Promise<DesktopRecordingStatus>;
-    revealRecording(): Promise<void>;
     getRecordingFrameRate(id: string): Promise<number>;
     exportRecordingClip(requestId: string, id: string, startMs: number, endMs: number): Promise<RecordingLibraryEntry>;
     cancelRecordingClip(requestId: string): Promise<void>;

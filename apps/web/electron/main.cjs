@@ -11,6 +11,7 @@ const { ObsAudioHostManager } = require('./obs-audio-host.cjs');
 const { createNativeMicrophone, validMicrophoneSettings } = require('./native-microphone.cjs');
 const { createNativeScreenAudio } = require('./native-screen-audio.cjs');
 const { createNativeVideoSession } = require('./native-video-session.cjs');
+const { createSaveDirectories } = require('./save-directories.cjs');
 const { createRecording } = require('./recording.cjs');
 const { saveChatDownload } = require('./chat-download.cjs');
 const { serveRecordingMedia } = require('./recording-media.cjs');
@@ -373,6 +374,8 @@ const recording = createRecording({
   },
   onDiagnostic: entry => { void writeMediaDiagnostic(entry); },
 });
+
+const saveDirectories = createSaveDirectories(app.getPath('userData'), recording);
 
 let obsCorePreparationRequested = false;
 let obsBackgroundPreparationFailed = false;
@@ -1284,12 +1287,14 @@ ipcMain.handle('recording:configure', (event, settings) => {
       || ![720, 1080, 1440].includes(settings.videoHeight) || ![30, 60, 120].includes(settings.videoFps)) throw new Error('请求参数无效');
   return recording.configure(settings);
 });
-ipcMain.handle('recording:directory', async (event) => {
-  if (!trustedSender(event) || closing || recording.active || recording.replay) throw new Error('当前不能修改录像目录');
-  const result = await dialog.showOpenDialog(mainWindow, { title: '选择录像保存目录', properties: ['openDirectory', 'createDirectory'],
-    defaultPath: (await recording.load()).directory });
-  return result.canceled ? recording.load() : recording.configure({ directory: result.filePaths[0] });
-});
+ipcMain.handle('settings:save-directory', (event, kind, action) => saveDirectories.operate(kind, action, {
+  allowed: () => trustedSender(event) && !closing,
+  choose: async defaultPath => {
+    const result = await dialog.showOpenDialog(mainWindow, { title: '选择保存位置', defaultPath, properties: ['openDirectory', 'createDirectory'] });
+    return result.canceled ? null : result.filePaths[0];
+  },
+  open: directory => shell.openPath(directory),
+}));
 ipcMain.handle('recording:start', (event, previousId) => {
   if (!trustedSender(event) || closing || (previousId !== undefined && typeof previousId !== 'string')) throw new Error('请求来源无效');
   return recording.start(previousId);
@@ -1329,12 +1334,6 @@ ipcMain.handle('recording:replay-settings', (event, settings) => {
       || !((Object.hasOwn(settings, 'seconds') && [30, 60, 120].includes(settings.seconds))
         || (Object.hasOwn(settings, 'enabled') && typeof settings.enabled === 'boolean'))) throw new Error('请求参数无效');
   return recording.configure(Object.hasOwn(settings, 'enabled') ? { replayEnabled: settings.enabled } : { replaySeconds: settings.seconds });
-});
-ipcMain.handle('recording:reveal', async (event) => {
-  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
-  const path = await recording.revealPath();
-  if (path.endsWith('.mkv')) shell.showItemInFolder(path);
-  else { const error = await shell.openPath(path); if (error) throw new Error('无法打开录像目录'); }
 });
 const recordingEditor = createRecordingEditor({ library: recording.library,
   executablePath: resolve(dirname(obsHostSettings.executablePath), 'lycansync-recording-clip.exe'),

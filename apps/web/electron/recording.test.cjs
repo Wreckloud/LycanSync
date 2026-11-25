@@ -44,7 +44,7 @@ test('默认录入应用声音、麦克风和朋友语音，主进程生成独�
   assert.deepEqual(f.calls.find(call => call[0] === 'start').slice(4, 6), [true, true]);
   const saved = await f.recording.stop();
   assert.equal(saved.saved, true); assert.equal(saved.phase, 'saved');
-  assert.equal(await readFile(await f.recording.revealPath(), 'utf8'), 'controlled-recorded-content');
+  assert.equal(await readFile(await f.recording.library.filePath(saved.recordingId), 'utf8'), 'controlled-recorded-content');
   assert.equal(f.calls.filter(call => call[0] === 'releaseAudio').length, 1);
   assert.doesNotMatch(JSON.stringify(f.events), /recordings[\\/]|\.mkv/);
   assert.doesNotMatch(JSON.stringify(f.diagnostics), /recordings[\\/]|\.mkv/);
