@@ -448,7 +448,7 @@ button:where(:not([class]), .confirm-button, .settings-button, .account-row butt
 .group-member-name { display: flex; align-items: center; gap: 5px; min-width: 0; font-size: 15px; line-height: 20px; }
 .group-member-name > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-member-role { flex-shrink: 0; color: var(--warning); }
-.member-activity { display: flex; align-items: center; gap: 3px; min-width: 0; overflow: hidden; color: #43b6da; font-size: 12px; line-height: 14px; white-space: nowrap; }
+.member-activity { display: flex; align-items: center; gap: 3px; min-width: 0; overflow: hidden; color: #43b6da; font-size: 12px; line-height: 16px; white-space: nowrap; }
 .activity-prefix { flex-shrink: 0; }
 .activity-viewport { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-content { display: inline; white-space: nowrap; vertical-align: top; }
