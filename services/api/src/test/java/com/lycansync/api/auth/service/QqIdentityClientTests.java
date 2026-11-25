@@ -26,17 +26,17 @@ import static org.mockito.Mockito.spy;
  * @since 2026-11-21
  */
 class QqIdentityClientTests {
-    private static final String LARGE = "https://q1.qlogo.cn/large";
-    private static final String SMALL = "https://q1.qlogo.cn/small";
+    private static final String LARGE = "https://q.qlogo.cn/large";
+    private static final String SMALL = "https://q.qlogo.cn/small";
     private final List<String> downloads = new ArrayList<>();
 
-    private String exchange(String small, String valid) throws Exception {
+    private String exchange(String large, String small, String valid) throws Exception {
         var client = spy(new QqIdentityClient(new ObjectMapper()));
         var png = new ByteArrayOutputStream();
         ImageIO.write(new BufferedImage(32, 32, BufferedImage.TYPE_INT_RGB), "png", png);
         doAnswer(call -> {
             URI uri = call.getArgument(0);
-            if ("q1.qlogo.cn".equals(uri.getHost())) {
+            if ("q.qlogo.cn".equals(uri.getHost())) {
                 assertEquals(512 * 1024, (int) call.getArgument(1));
                 downloads.add(uri.toString());
                 return uri.toString().equals(valid) ? png.toByteArray() : new byte[]{1, 2, 3};
@@ -44,7 +44,7 @@ class QqIdentityClientTests {
             String body = switch (uri.getPath()) {
                 case "/oauth2.0/token" -> "{\"access_token\":\"abcdefghijklmnop\"}";
                 case "/oauth2.0/me" -> "{\"client_id\":\"12345\",\"openid\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}";
-                case "/user/get_user_info" -> "{\"ret\":0,\"nickname\":\"test\",\"figureurl_qq_2\":\"" + LARGE
+                case "/user/get_user_info" -> "{\"ret\":0,\"nickname\":\"test\",\"figureurl_qq_2\":\"" + large
                         + "\",\"figureurl_qq_1\":\"" + small + "\"}";
                 default -> throw new AssertionError(uri.getPath());
             };
@@ -56,19 +56,34 @@ class QqIdentityClientTests {
 
     @Test
     void importsSmallAvatarAfterInvalidLargeImage() throws Exception {
-        assertNotEquals(DefaultAvatar.value(), exchange(SMALL, SMALL));
+        assertNotEquals(DefaultAvatar.value(), exchange(LARGE, SMALL, SMALL));
         assertEquals(List.of(LARGE, SMALL), downloads);
     }
 
     @Test
     void usesValidLargeAvatarImmediately() throws Exception {
-        assertNotEquals(DefaultAvatar.value(), exchange(SMALL, LARGE));
+        assertNotEquals(DefaultAvatar.value(), exchange(LARGE, SMALL, LARGE));
         assertEquals(List.of(LARGE), downloads);
     }
 
     @Test
     void usesRegistrationDefaultWhenBothReferencesAreIdenticalAndBroken() throws Exception {
-        assertEquals(DefaultAvatar.value(), exchange(LARGE, ""));
+        assertEquals(DefaultAvatar.value(), exchange(LARGE, LARGE, ""));
         assertEquals(List.of(LARGE), downloads);
+    }
+
+    @Test
+    void importsLegacyHttpAvatarOverHttpsWithTheSamePathAndQuery() throws Exception {
+        String httpAvatar = "http://q.qlogo.cn/qqapp/12345/test%2Fid/40?key=test%2Fkey";
+        String httpsAvatar = "https://q.qlogo.cn/qqapp/12345/test%2Fid/40?key=test%2Fkey";
+        assertNotEquals(DefaultAvatar.value(), exchange("http://q.qlogo.cn/large", httpAvatar, httpsAvatar));
+        assertEquals(List.of(LARGE, httpsAvatar), downloads);
+    }
+
+    @Test
+    void skipsUntrustedHttpAvatarUrls() throws Exception {
+        assertEquals(DefaultAvatar.value(), exchange("http://q.qlogo.cn.example.test/large",
+                "http://user@q.qlogo.cn/small", ""));
+        assertEquals(List.of(), downloads);
     }
 }

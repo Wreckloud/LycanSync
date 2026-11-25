@@ -86,8 +86,12 @@ public class QqIdentityClient {
         try {
             URI uri = URI.create(url);
             String host = uri.getHost();
-            if (!"https".equals(uri.getScheme()) || host == null || !host.endsWith(".qlogo.cn")
+            String scheme = uri.getScheme();
+            if ((!"https".equalsIgnoreCase(scheme) && !"http".equalsIgnoreCase(scheme))
+                    || host == null || !host.toLowerCase(Locale.ROOT).endsWith(".qlogo.cn")
                     || uri.getPort() != -1 || uri.getUserInfo() != null) return null;
+            // QQ 互联可能返回 HTTP 头像地址，从同一 CDN 通过 HTTPS 获取。
+            if ("http".equalsIgnoreCase(scheme)) uri = URI.create("https:" + uri.getRawSchemeSpecificPart());
             byte[] bytes = fetch(uri, 512 * 1024);
             String type = bytes.length > 3 && bytes[0] == (byte) 0x89 && bytes[1] == 'P' ? "png" : "jpeg";
             return AvatarImageProcessor.normalize("data:image/" + type + ";base64," + Base64.getEncoder().encodeToString(bytes));
