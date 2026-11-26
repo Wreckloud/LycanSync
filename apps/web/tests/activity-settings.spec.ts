@@ -3,6 +3,12 @@ import { expect, test } from '@playwright/test';
 test('识别修正紧凑排列，弹窗编辑不移动背景，支持取消、失败重试与窄窗操作', async ({ page }, testInfo) => {
   await page.route(url => url.pathname.startsWith('/api/'), route => route.fulfill({ status: 503, json: { detail: '未提供的测试接口' } }));
   await page.route('**/api/rtc/voice-time', route => route.fulfill({ json: { seconds: 7200 } }));
+  const game = 'c:\\apps\\game.exe', music = 'c:\\apps\\music.exe', offline = 'c:\\apps\\old.exe';
+  const sent: { status: string; activity: { type: string; name: string } | null }[] = [];
+  await page.route('**/api/presence/heartbeat', async route => {
+    sent.push(route.request().postDataJSON());
+    await route.fulfill({ status: 204 });
+  });
   await page.route('**/src/main.ts*', async route => {
     const original = await (await route.fetch()).text();
     const vuePath = original.match(/from ["']([^"']*\/vue\.js[^"']*)["']/)?.[1];
@@ -12,25 +18,38 @@ import { createApp, ref, h } from ${JSON.stringify(vuePath)};
 import ActivitySettings from '/src/components/settings/ActivitySettings.vue';
 import '/src/styles.css';
 import '/src/settings/settings.css';
-const entries = ref([{ executable: 'game.exe', name: '固定游戏名' }]);
-const showActivity = ref(true);
-const presenceMode = ref('online');
-const mappings = { entries, windows: ref([{ executable: 'game.exe', title: '游戏窗口' }, { executable: 'music.exe', title: '音乐窗口' }]),
-  busy: ref(false), loading: ref(false), ready: ref(true), error: ref(''), windowError: ref(''),
-  refreshWindows: async () => {}, initialize: async () => {},
-  save: async (executable, name) => {
-    mappings.error.value = '';
-    if (name === '保存失败') { mappings.error.value = '动态名称未能应用，请重试。'; return false; }
-    entries.value = [{ executable, name }]; return true;
-  },
-  remove: async executable => { entries.value = entries.value.filter(entry => entry.executable !== executable); return true; } };
-createApp({ render: () => h('main', { style: 'padding:32px;max-width:1000px;margin:auto' }, [h(ActivitySettings, {
-  user: { id: 'test', nickname: '测试成员', avatar: '', signature: '旧签名'.repeat(40), administrator: false },
-  desktop: true, active: true, activity: { type: 'GAME', name: '最终幻想14' },
-  presenceMode: presenceMode.value, presenceReady: true, status: presenceMode.value === 'invisible' ? 'OFFLINE' : 'ONLINE',
-  onPresenceMode: value => { presenceMode.value = value; },
-  showActivity: showActivity.value, onVisibility: value => { showActivity.value = value; }, showLastOnline: true, error: '', mappings,
-})]) }).mount('#root');
+import { useActivityMappings } from '/src/settings/useActivityMappings.ts';
+import { useOwnPresence } from '/src/presence/useOwnPresence.ts';
+const game = ${JSON.stringify(game)}, music = ${JSON.stringify(music)}, offline = ${JSON.stringify(offline)};
+localStorage.setItem('lycansync.activity-mappings.v1.test', JSON.stringify([
+  { executable: game, name: '固定游戏名' }, { executable: offline, name: '旧程序名' }]));
+createApp({ setup() {
+  const showActivity = ref(true), showLastOnline = ref(true);
+  const auto = { type: 'GAME', name: '最终幻想14', startedAt: new Date().toISOString() };
+  let selected, notify;
+  const bridge = {
+    getServerSettings: async () => ({ apiUrl: location.origin }),
+    getSystemIdleState: async () => ({ state: 'active', idleSeconds: 0 }),
+    getCurrentActivity: async () => auto,
+    onActivityChange: cb => { notify = cb; return () => {}; },
+    listActivityWindows: async () => [{ executable: game, title: '游戏窗口' }, { executable: music, title: '音乐窗口' }],
+    configureActivityMappings: async (entries, target) => {
+      if (entries.some(e => e.name === '保存失败')) throw new Error('测试写入失败');
+      if (target !== undefined) selected = target;
+      notify(selected ? { ...auto, selectedExecutable: selected, type: selected === music ? 'MUSIC' : 'GAME',
+        name: entries.find(e => e.executable === selected)?.name ?? (selected === music ? '歌曲名' : '游戏原名') } : auto);
+    }
+  };
+  const own = useOwnPresence('test', { showActivity, showLastOnline }, bridge);
+  const mappings = useActivityMappings('test', bridge, localStorage, () => own.currentActivity.value?.selectedExecutable);
+  return () => h('main', { style: 'padding:32px;max-width:1000px;margin:auto' }, [h(ActivitySettings, {
+    user: { id: 'test', nickname: '测试成员', avatar: '', signature: '旧签名'.repeat(40), administrator: false },
+    desktop: true, active: true, activity: own.currentActivity.value, presenceMode: own.presenceMode.value,
+    presenceReady: own.presenceReady.value, status: own.publicPresenceStatus.value, onPresenceMode: own.changePresenceMode,
+    showActivity: showActivity.value, onVisibility: value => { showActivity.value = value; },
+    showLastOnline: true, error: '', mappings,
+  })]);
+} }).mount('#root');
 ` });
   });
   await page.goto('/');
@@ -111,11 +130,11 @@ createApp({ render: () => h('main', { style: 'padding:32px;max-width:1000px;marg
   await page.keyboard.press('Escape');
   await expect.poll(() => select.evaluate(element => element.matches(':open'))).toBe(false);
   const layout = () => page.locator('.activity-settings').evaluate(element =>
-    ['.activity-profile-preview', '.activity-settings-controls', '.activity-mappings', '.activity-saved-names']
+    ['.activity-profile-preview', '.activity-settings-controls', '.activity-mappings']
       .map(selector => { const { x, y, width, height } = element.querySelector(selector)!.getBoundingClientRect();
         return { x: x + scrollX, y: y + scrollY, width, height }; }));
   const beforeSelection = await layout();
-  await select.selectOption('game.exe');
+  await select.selectOption(game);
   await expect(dialog).toHaveCount(0);
   expect(await layout()).toEqual(beforeSelection);
   await edit.click();
@@ -133,8 +152,8 @@ createApp({ render: () => h('main', { style: 'padding:32px;max-width:1000px;marg
   await page.keyboard.press('Escape');
   await expect(dialog).toHaveCount(0);
   await expect(edit).toBeFocused();
-  await expect(select).toHaveValue('game.exe');
-  await expect(page.locator('.activity-saved-names')).toContainText('固定游戏名');
+  await expect(select).toHaveValue(game);
+  await expect(current).toContainText('固定游戏名');
   await edit.click();
   await expect(name).toHaveValue('固定游戏名');
   await name.fill('保存失败');
@@ -144,15 +163,35 @@ createApp({ render: () => h('main', { style: 'padding:32px;max-width:1000px;marg
   await name.fill('新的游戏名');
   await dialog.getByRole('button', { name: '保存名称' }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(page.locator('.activity-saved-names')).toContainText('新的游戏名');
+  await expect(current).toContainText('新的游戏名');
+  await expect.poll(() => sent.at(-1)?.activity).toEqual({ type: 'GAME', name: '新的游戏名' });
+  await edit.click();
+  await expect(name).toHaveValue('新的游戏名');
+  await dialog.getByRole('button', { name: '移除自定义名称' }).click();
+  await expect(current).toContainText('游戏原名');
+  await expect(select).toHaveValue(game);
+  await select.selectOption(offline);
+  await expect(reset).toBeDisabled();
+  await expect(current).toContainText('游戏原名');
+  await edit.click();
+  await expect(name).toHaveValue('旧程序名');
+  await dialog.getByRole('button', { name: '移除自定义名称' }).click();
+  await expect(select).toHaveValue(game);
+  await expect(select.locator('option', { hasText: '旧程序名' })).toHaveCount(0);
+  await edit.click();
+  await name.fill('再改一次');
+  await dialog.getByRole('button', { name: '保存名称' }).click();
   await reset.click();
   await expect(select).toHaveValue('');
+  await expect(current).toContainText('最终幻想14');
+  await expect.poll(() => sent.at(-1)?.activity).toEqual({ type: 'GAME', name: '最终幻想14' });
   expect(await layout()).toEqual(beforeSelection);
-  await expect(page.locator('.activity-saved-names')).toContainText('新的游戏名');
-  await page.getByRole('button', { name: '编辑动态名称 新的游戏名' }).click();
-  await expect(name).toHaveValue('新的游戏名');
+  await select.selectOption(game);
+  await edit.click();
+  await expect(name).toHaveValue('游戏原名');
+  await expect(dialog.getByRole('button', { name: '移除自定义名称' })).toHaveCount(0);
   await dialog.getByRole('button', { name: '取消', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
+  await reset.click();
   await page.getByRole('checkbox', { name: '显示动态', exact: true }).uncheck();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole('checkbox', { name: '显示动态', exact: true })).not.toBeChecked();
@@ -160,16 +199,21 @@ createApp({ render: () => h('main', { style: 'padding:32px;max-width:1000px;marg
   await expect.poll(() => select.evaluate(element => getComputedStyle(element, '::picker(select)').transitionDuration)).toBe('0s');
   await select.focus(); await page.keyboard.press('Space');
   await expect.poll(() => select.evaluate(element => element.matches(':open'))).toBe(true);
+  await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
   await expect(select).not.toHaveValue('');
   await page.setViewportSize({ width: 420, height: 760 });
   const narrowExpanded = await layout();
   await reset.click();
   expect(await layout()).toEqual(narrowExpanded);
-  await select.selectOption('music.exe');
+  await select.selectOption(music);
   expect(await layout()).toEqual(narrowExpanded);
   await edit.click();
-  await expect(name).toHaveValue('音乐窗口');
+  await expect(name).toHaveValue('歌曲名');
+  await name.fill('音乐别名');
+  await dialog.getByRole('button', { name: '保存名称' }).click();
+  await edit.click();
+  await expect(dialog.getByRole('button', { name: '移除自定义名称' })).toBeVisible();
   expect(await layout()).toEqual(narrowExpanded);
   const dialogBox = await dialog.boundingBox();
   expect(dialogBox!.x).toBeGreaterThanOrEqual(0);

@@ -281,7 +281,7 @@ async function shareAndRecord() {
   // 取消、启动失败或切房后不录制；录制模块还会核对当前轨道与采集资格。
   if (!appDisposed && rtc.room === room && connected.value && rtc.screenShareActive) await recording.start();
 }
-const activityMappings = useActivityMappings(props.user.id, desktop);
+const activityMappings = useActivityMappings(props.user.id, desktop, undefined, () => currentActivity.value?.selectedExecutable);
 const roomOccupancies = ref<Record<string, number>>({});
 async function refreshRoomOccupancies(force = false) {
   // 周期刷新复用在途请求；明确的离房/网络恢复才取消旧请求，避免慢网络下反复中止。

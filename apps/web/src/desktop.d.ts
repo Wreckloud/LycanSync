@@ -61,6 +61,7 @@ interface DesktopProcessMetrics {
 }
 
 interface DetectedActivity {
+  selectedExecutable?: string;
   type: 'GAME' | 'MUSIC';
   name: string;
   startedAt: string;
@@ -258,7 +259,7 @@ interface Window {
     setCloseToTray(enabled: boolean): Promise<{ supported: boolean; enabled: boolean; error: string }>;
     getCurrentActivity(): Promise<DetectedActivity | null>;
     listActivityWindows(): Promise<ActivityWindow[]>;
-    configureActivityMappings(mappings: ActivityMapping[]): Promise<void>;
+    configureActivityMappings(mappings: ActivityMapping[], selectedExecutable?: string | null): Promise<void>;
     getNativeMediaCapabilities(): Promise<Record<string, { available: boolean; reason: string }>>;
     listNativeVideoSources(): Promise<{ revision: number; discoveryId: string; sources: NativeVideoSource[] }>;
     prepareNativeVideoSource(sourceId: string | null): Promise<{ prepared: boolean; followGame?: 'league' }>;

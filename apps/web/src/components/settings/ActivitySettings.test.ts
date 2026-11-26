@@ -7,9 +7,9 @@ import type { UserActivity, UserPresenceStatus } from '../../presence/presenceAp
 async function render(activity: UserActivity | null, desktop = true, loading = false, presenceMode: 'online' | 'invisible' = 'online', status: UserPresenceStatus = 'ONLINE') {
   const mappings = { entries: ref([{ executable: 'c:\\game.exe', name: '固定游戏名' }]),
     windows: ref([{ executable: 'c:\\game.exe', title: '当前窗口' }]), busy: ref(false),
-    loading: ref(loading), ready: ref(true), error: ref(''), windowError: ref(''),
+    loading: ref(loading), windowsReady: ref(!loading), ready: ref(true), error: ref(''), windowError: ref(''),
     initialize: vi.fn(async () => {}), refreshWindows: vi.fn(async () => {}),
-    save: vi.fn(async () => true), remove: vi.fn(async () => true) };
+    select: vi.fn(async () => true), reset: vi.fn(async () => true), save: vi.fn(async () => true), remove: vi.fn(async () => true) };
   const html = await renderToString(createSSRApp(ActivitySettings, {
     user: { id: 'self', nickname: '测试成员', avatar: '', administrator: false },
     active: false, activity, desktop, showActivity: true, showLastOnline: true, error: '', mappings,
@@ -22,9 +22,9 @@ it('动态与上次在线分别提供开关，游戏与音乐共用动态设置�
   const { html, mappings } = await render({ type: 'MUSIC', name: '歌曲' });
   expect(html).toContain('正在听');
   expect(html).toContain('歌曲');
-  expect(html).toContain('选择正在运行的窗口');
-  expect(html).toContain('编辑动态名称 固定游戏名');
-  expect(html).toContain('移除动态名称 固定游戏名');
+  expect(html).toContain('自动识别');
+  expect(html).not.toContain('已保存的修正');
+  expect(html).not.toContain('移除自定义名称');
   expect(html.match(/type="checkbox"/g)).toHaveLength(2);
   expect(html).not.toContain('手动输入并回车');
   expect(mappings.refreshWindows).not.toHaveBeenCalled();
@@ -60,7 +60,7 @@ it('刷新窗口时保留选择框文字，不立即闪现读取状态', async (
   const { html } = await render(null, true, true);
   const select = html.match(/<select id="activity-window"[^>]*>[\s\S]*?<\/select>/)?.[0];
   expect(select).toContain('aria-busy="true"');
-  expect(select).toContain('选择正在运行的窗口');
+  expect(select).toContain('自动识别');
   expect(select).not.toContain('正在读取窗口');
   expect(html).not.toContain('正在读取窗口…');
 });

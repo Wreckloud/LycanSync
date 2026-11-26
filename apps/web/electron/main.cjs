@@ -1179,10 +1179,10 @@ ipcMain.handle('activity:windows', (event) => {
   if (!trustedSender(event) || closing || !startupReady) throw new Error('请求来源无效');
   return activityMonitor.listWindows();
 });
-ipcMain.handle('activity:configure', (event, mappings) => {
+ipcMain.handle('activity:configure', (event, mappings, selectedExecutable) => {
   if (!trustedSender(event) || closing || !startupReady) throw new Error('请求来源无效');
   void nativeVideo.prepare(null);
-  return activityMonitor.configure(mappings);
+  return activityMonitor.configure(mappings, selectedExecutable);
 });
 ipcMain.handle('media:capabilities', (event) => {
   if (!trustedSender(event) || closing) throw new Error('请求来源无效');

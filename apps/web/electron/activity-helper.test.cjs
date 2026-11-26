@@ -272,9 +272,9 @@ test('退出、重启及配置变化后旧 helper 输出不能恢复活动', asy
     assert.equal(activities.at(-1).type, 'MUSIC');
     const previousId = children[1].commands.at(-1).requestId;
     const configuring = monitor.configure([{ executable: 'c:\\games\\game.exe', name: '自定义' }]);
-    assert.equal(activities.at(-1), null);
+    assert.equal(activities.at(-1).type, 'MUSIC');
     activity(1, '旧配置', 'GAME', previousId);
-    assert.equal(activities.at(-1), null);
+    assert.equal(activities.at(-1).type, 'MUSIC');
     reply(1, children[1].commands.at(-1));
     await configuring;
     activity(1, '自定义');
@@ -383,6 +383,29 @@ test('并发新配置胜出，旧确认不能改变新配置；重复活动不�
   } finally { monitor.stop(); }
 });
 
+test('目标刚关闭时沿用识别器确认的当前动态，拒绝旧序号且不重启进程', async () => {
+  const { monitor, children, activities, reply, activity, readers } = fixture();
+  try {
+    activity(0, '当前游戏');
+    const before = children[0].commands.at(-1).requestId;
+    const choosing = monitor.configure([], 'c:\\apps\\closed.exe');
+    const command = children[0].commands.at(-1);
+    assert.deepEqual(command.selection, { executable: 'c:\\apps\\closed.exe' });
+    activity(0, '迟到结果', 'GAME', before);
+    reply(0, command, { error: '程序已关闭', configurationRetained: true });
+    await assert.rejects(choosing, /程序已关闭/);
+    assert.equal(children.length, 1);
+    assert.deepEqual(activities.map(item => item?.name), ['当前游戏']);
+    const resetting = monitor.configure([], null);
+    const reset = children[0].commands.at(-1);
+    assert.deepEqual(reset.selection, { executable: null });
+    readers[0].emit('line', JSON.stringify({ configurationId: reset.requestId, activityType: null }));
+    reply(0, reset);
+    await resetting;
+    assert.equal(activities.at(-1), null);
+  } finally { monitor.stop(); }
+});
+
 test('非 Windows 明确不支持，不生成子进程', async () => {
   const { monitor, children } = fixture(false);
   await assert.rejects(monitor.listWindows(), /仅支持 Windows/);
@@ -431,7 +454,7 @@ test('窗口/名称 IPC 仅接受启动完成后的可信页面，preload 不开
   assert.throws(() => handlers.get('activity:windows')({ trusted: true }), /请求来源无效/);
   const preload = readFileSync(join(__dirname, 'preload.cjs'), 'utf8');
   assert.ok(preload.includes("listActivityWindows: () => ipcRenderer.invoke('activity:windows')"));
-  assert.ok(preload.includes("configureActivityMappings: (mappings) => ipcRenderer.invoke('activity:configure', mappings)"));
+  assert.ok(preload.includes("configureActivityMappings: (mappings, selectedExecutable) => ipcRenderer.invoke('activity:configure', mappings, selectedExecutable)"));
 });
 
 test('旧账号清理失败不能中断新账号已确认的配置', async () => {

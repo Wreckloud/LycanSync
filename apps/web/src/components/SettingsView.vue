@@ -54,7 +54,7 @@ const props = defineProps<{
   audioOutput: ReturnType<typeof useAudioOutput>;
   diagnosticReport: ReturnType<typeof useDiagnosticReport>;
   inputLevelPercent: number;
-  activity: UserActivity | null;
+  activity: (UserActivity & Pick<DetectedActivity, 'selectedExecutable'>) | null;
   presenceStatus?: UserPresenceStatus;
   presenceMode?: PresenceMode;
   presenceReady?: boolean;

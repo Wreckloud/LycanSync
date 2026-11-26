@@ -233,7 +233,7 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
   setCloseToTray: (enabled) => ipcRenderer.invoke('settings:tray:set', enabled),
   getCurrentActivity: () => ipcRenderer.invoke('activity:current'),
   listActivityWindows: () => ipcRenderer.invoke('activity:windows'),
-  configureActivityMappings: (mappings) => ipcRenderer.invoke('activity:configure', mappings),
+  configureActivityMappings: (mappings, selectedExecutable) => ipcRenderer.invoke('activity:configure', mappings, selectedExecutable),
   getNativeMediaCapabilities: () => ipcRenderer.invoke('media:capabilities'),
   listNativeVideoSources: () => ipcRenderer.invoke('media:video-sources'),
   prepareNativeVideoSource: (sourceId) => ipcRenderer.invoke('media:video-source:prepare', sourceId),

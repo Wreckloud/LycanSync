@@ -11,15 +11,20 @@ import { PRESENCE_STATUS_LABELS, type UserActivity, type UserPresenceStatus } fr
 import type { useActivityMappings } from '../../settings/useActivityMappings';
 import type { PresenceMode } from '../../presence/usePresencePreference';
 
-const props = defineProps<{ user: AuthUser; desktop: boolean; active: boolean; activity: UserActivity | null;
+const props = defineProps<{ user: AuthUser; desktop: boolean; active: boolean; activity: (UserActivity & Pick<DetectedActivity, 'selectedExecutable'>) | null;
   status?: UserPresenceStatus;
   presenceMode?: PresenceMode; presenceReady?: boolean; presenceSyncing?: boolean; presenceError?: string;
   showActivity: boolean; showLastOnline: boolean; error: string; mappings: ReturnType<typeof useActivityMappings> }>();
 const emit = defineEmits<{ visibility: [enabled: boolean]; lastOnlineVisibility: [enabled: boolean]; presenceMode: [mode: PresenceMode] }>();
-const executable = ref('');
+const offlineTarget = ref('');
+const selected = computed(() => props.activity?.selectedExecutable ?? '');
+const executable = computed(() => offlineTarget.value || selected.value);
 const editingName = ref(false);
-const selectedName = computed(() => props.mappings.entries.value.find((entry) => entry.executable === executable.value)?.name
-  ?? props.mappings.windows.value.find((window) => window.executable === executable.value)?.title ?? '');
+const editingExecutable = ref('');
+const offlineEntries = computed(() => !props.mappings.windowsReady.value ? [] : props.mappings.entries.value.filter(entry => entry.executable !== selected.value
+  && !props.mappings.windows.value.some(window => window.executable === entry.executable)));
+const editingAlias = computed(() => props.mappings.entries.value.find(entry => entry.executable === editingExecutable.value)?.name);
+const initialName = computed(() => editingAlias.value ?? (editingExecutable.value === selected.value ? props.activity?.name : '') ?? '');
 const voiceTime = useOwnVoiceTime(() => props.active);
 const presenceDescription = computed(() => {
   if (props.presenceMode === 'invisible') return '向朋友显示离线，仍可正常聊天、通话和共享画面。';
@@ -30,18 +35,36 @@ const presenceDescription = computed(() => {
 function openEditor() {
   if (!executable.value || props.mappings.busy.value || !props.mappings.ready.value) return;
   props.mappings.error.value = '';
+  editingExecutable.value = executable.value;
   editingName.value = true;
 }
 
-function edit(entry: ActivityMapping) { executable.value = entry.executable; openEditor(); }
-function resetSelection() { executable.value = ''; }
-async function saveName(name: string) {
-  if (await props.mappings.save(executable.value, name)) editingName.value = false;
+async function selectProgram(event: Event) {
+  const input = event.target as HTMLSelectElement;
+  const target = input.value;
+  input.value = executable.value;
+  props.mappings.error.value = '';
+  if (offlineEntries.value.some(entry => entry.executable === target)) {
+    offlineTarget.value = target;
+  } else if (target === selected.value || await props.mappings.select(target)) {
+    offlineTarget.value = '';
+  }
 }
 
+async function saveName(name: string) {
+  if (await props.mappings.save(editingExecutable.value, name)) editingName.value = false;
+}
+
+async function removeName() {
+  if (await props.mappings.remove(editingExecutable.value)) editingName.value = false;
+}
+
+watch(offlineEntries, entries => {
+  if (!entries.some(entry => entry.executable === offlineTarget.value)) offlineTarget.value = '';
+});
 watch(() => props.active, (active) => {
   editingName.value = false;
-  resetSelection();
+  offlineTarget.value = '';
   if (active && props.desktop) void props.mappings.refreshWindows();
 }, { immediate: true });
 defineExpose({ editingName });
@@ -82,32 +105,26 @@ defineExpose({ editingName });
       </header>
       <div class="activity-window-choice">
         <label for="activity-window">运行中的程序</label>
-        <select id="activity-window" v-model="executable" :aria-busy="mappings.loading.value" aria-describedby="activity-mapping-feedback" :disabled="mappings.busy.value || !mappings.ready.value" @pointerdown="mappings.refreshWindows" @focus="mappings.refreshWindows">
-          <option value="" disabled>选择正在运行的窗口</option>
+        <select id="activity-window" :value="executable" :aria-busy="mappings.loading.value" aria-describedby="activity-mapping-feedback" :disabled="mappings.busy.value || !mappings.ready.value" @change="selectProgram" @pointerdown="mappings.refreshWindows" @focus="mappings.refreshWindows">
+          <option value="" disabled>自动识别</option>
           <option v-for="entry in mappings.windows.value" :key="entry.executable" :value="entry.executable">{{ entry.title }}</option>
-          <option v-if="executable && !mappings.windows.value.some((entry) => entry.executable === executable)" :value="executable">{{ selectedName }}（未运行）</option>
+          <option v-if="selected && !mappings.windows.value.some(entry => entry.executable === selected)" :value="selected">{{ activity?.name }}</option>
+          <option v-for="entry in offlineEntries" :key="entry.executable" :value="entry.executable">{{ entry.name }}（未运行）</option>
         </select>
         <div class="activity-window-actions">
-          <button type="button" :disabled="!executable || mappings.busy.value" title="清除当前选择，已保存的名称修正会保留" @click="resetSelection">重置</button>
+          <button type="button" :disabled="!selected || !!offlineTarget || mappings.busy.value" title="恢复自动识别并移除当前程序的自定义名称" @click="mappings.reset">重置</button>
           <button type="button" :disabled="!executable || mappings.busy.value || !mappings.ready.value" @click="openEditor">修改名称</button>
         </div>
       </div>
       <div class="activity-mapping-feedback"><InlineFeedback id="activity-mapping-feedback" :message="(!editingName && mappings.error.value) || mappings.windowError.value"
         :pending="mappings.loading.value ? '正在读取窗口…' : ''" />
         <button v-if="!mappings.ready.value && !mappings.busy.value" type="button" @click="mappings.initialize">重试</button></div>
-      <div v-if="mappings.entries.value.length" class="activity-saved-names">
-        <h3>已保存的修正</h3>
-        <div v-for="entry in mappings.entries.value" :key="entry.executable">
-          <span>{{ entry.name }}</span><button type="button" :disabled="mappings.busy.value" :aria-label="`编辑动态名称 ${entry.name}`" @click="edit(entry)">编辑</button>
-          <button type="button" :disabled="mappings.busy.value" :aria-label="`移除动态名称 ${entry.name}`" @click="mappings.remove(entry.executable)">移除</button>
-        </div>
-      </div>
-      <small>为所选程序设置显示名称，优先展示最近启动的游戏。</small>
+      <small>所选程序会优先展示，关闭后恢复自动识别。</small>
     </div>
   </section>
   <DialogTransition>
-    <ActivityNameDialog v-if="editingName" :initial-name="selectedName" :busy="mappings.busy.value" :error="mappings.error.value"
-      @cancel="editingName = false" @save="saveName" />
+    <ActivityNameDialog v-if="editingName" :initial-name="initialName" :has-alias="!!editingAlias" :busy="mappings.busy.value" :error="mappings.error.value"
+      @cancel="editingName = false" @remove="removeName" @save="saveName" />
   </DialogTransition>
 </template>
 
@@ -131,10 +148,6 @@ defineExpose({ editingName });
 .activity-mapping-feedback { display: flex; align-items: center; gap: 8px; }
 .activity-mapping-feedback:not(:has(> *)) { display: none; }
 .activity-mapping-feedback .inline-feedback { flex: 1; }
-.activity-saved-names { display: grid; gap: 4px; }
-.activity-saved-names h3 { margin: 0 0 4px; color: var(--muted); font-size: 13px; font-weight: 500; }
-.activity-saved-names > div { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.activity-saved-names span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 640px) {
   .activity-window-choice { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .activity-window-choice label { grid-column: 1 / -1; }

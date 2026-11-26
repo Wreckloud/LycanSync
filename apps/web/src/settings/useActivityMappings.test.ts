@@ -13,12 +13,12 @@ const option = { executable: 'c:\\game\\app.exe', title: '游戏 - 当前房间'
 const mapping = { executable: option.executable, name: '固定名称' };
 async function settle() { for (let turn = 0; turn < 4; turn++) await nextTick(); }
 
-function setup(stored: string | null = null) {
+function setup(stored: string | null = null, selectedExecutable?: () => string | undefined) {
   const scope = effectScope();
   const bridge = { configureActivityMappings: vi.fn(async (_mappings: ActivityMapping[]) => {}),
     listActivityWindows: vi.fn(async () => [option]) };
   const storage = { getItem: vi.fn(() => stored), setItem: vi.fn() };
-  const model = scope.run(() => useActivityMappings('member-a', bridge, storage))!;
+  const model = scope.run(() => useActivityMappings('member-a', bridge, storage, selectedExecutable))!;
   return { scope, bridge, storage, model };
 }
 
@@ -43,6 +43,28 @@ it('先恢复当前账号名称，选择真实清单后才允许保存，名称�
     bridge.listActivityWindows.mockResolvedValueOnce([{ ...option, title: '另一个房间' }]);
     await model.refreshWindows();
     expect(model.entries.value).toEqual([mapping]);
+  } finally { scope.stop(); }
+});
+
+it('手动选择只作用于本次会话；重置同时清除此程序别名，保留其他程序', async () => {
+  const other = { executable: 'c:\\apps\\other.exe', name: '另一个程序' };
+  const { scope, model, storage, bridge } = setup(JSON.stringify([other, mapping]), () => option.executable);
+  try {
+    await settle();
+    await model.refreshWindows();
+    expect(await model.select(other.executable)).toBe(false);
+    expect(await model.select(option.executable)).toBe(true);
+    expect(bridge.configureActivityMappings).toHaveBeenLastCalledWith([other, mapping], option.executable);
+    expect(storage.setItem).not.toHaveBeenCalled();
+    bridge.configureActivityMappings.mockRejectedValueOnce(new Error('配置失败'));
+    expect(await model.reset()).toBe(false);
+    expect(model.entries.value).toEqual([other, mapping]);
+    expect(await model.reset()).toBe(true);
+    expect(bridge.configureActivityMappings).toHaveBeenLastCalledWith([other], null);
+    expect(model.entries.value).toEqual([other]);
+    storage.setItem.mockClear();
+    expect(await model.reset()).toBe(true);
+    expect(storage.setItem).not.toHaveBeenCalled();
   } finally { scope.stop(); }
 });
 

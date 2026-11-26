@@ -13,7 +13,9 @@ function normalizeActivity(value) {
       || startedAt <= 0 || startedAt > Date.now() + 60_000) return undefined;
   if (value.windowIds !== undefined && (!Array.isArray(value.windowIds) || value.windowIds.length > 32
       || value.windowIds.some(id => typeof id !== 'string' || !/^[1-9]\d{0,19}$/.test(id)))) return undefined;
+  if (value.selectedExecutable != null && !validExecutable(value.selectedExecutable)) return undefined;
   return { type: value.activityType, name, startedAt: new Date(startedAt).toISOString(),
+    ...(value.selectedExecutable ? { selectedExecutable: value.selectedExecutable } : {}),
     ...(value.activityType === 'GAME' && value.windowIds ? { windowIds: [...new Set(value.windowIds)] } : {}) };
 }
 
@@ -79,10 +81,7 @@ function createActivityHelper({ enabled, executablePath, onActivity, spawnProces
         target.kill();
       });
     });
-    if (method === 'configure') {
-      configurationId = requestId;
-      publish(null);
-    }
+    if (method === 'configure') configurationId = requestId;
     return promise;
   }
 
@@ -127,7 +126,8 @@ function createActivityHelper({ enabled, executablePath, onActivity, spawnProces
         if (!entry) return;
         cancel(entry.timeout);
         pending.delete(message.requestId);
-        if (message.error) entry.reject(new Error(String(message.error).slice(0, 120)));
+        if (message.error) entry.reject(Object.assign(new Error(String(message.error).slice(0, 120)),
+          { configurationRetained: message.configurationRetained === true }));
         else entry.resolve(message);
         return;
       }
@@ -158,20 +158,20 @@ function createActivityHelper({ enabled, executablePath, onActivity, spawnProces
     publish(null);
   }
 
-  async function configure(value) {
+  async function configure(value, selectedExecutable) {
     const next = normalizeMappings(value);
+    if (selectedExecutable != null && !validExecutable(selectedExecutable)) throw new Error('所选程序无效。');
     if (!enabled) throw new Error('动态检测仅支持 Windows 桌面版。');
     start();
-    const previous = mappings;
-    mappings = next;
-    const configuring = request('configure', { mappings: next });
+    const configuring = request('configure', { mappings: next, ...(selectedExecutable === undefined ? {}
+      : { selection: { executable: selectedExecutable } }) });
     const revision = configurationId;
     try {
       await configuring;
       if (revision !== configurationId) throw new Error('已有更新的名称设置，本次修改未应用。');
+      mappings = next;
     } catch (error) {
-      if (revision === configurationId) {
-        mappings = previous;
+      if (revision === configurationId && !error.configurationRetained) {
         publish(null);
         child?.kill();
       }
@@ -198,7 +198,7 @@ function createActivityHelper({ enabled, executablePath, onActivity, spawnProces
     publish(null);
     if (child) {
       const target = child;
-      const clearing = request('configure', { mappings });
+      const clearing = request('configure', { mappings, selection: { executable: null } });
       const revision = configurationId;
       void clearing.catch(() => { if (child === target && configurationId === revision) target.kill(); });
     }

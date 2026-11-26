@@ -18,12 +18,18 @@ use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 const SCAN_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Deserialize)]
+struct SelectionChange {
+    executable: Option<String>,
+}
+
+#[derive(Deserialize)]
 #[serde(tag = "method", rename_all = "camelCase")]
 enum Command {
     Configure {
         #[serde(rename = "requestId")]
         request_id: u64,
         mappings: Vec<ActivityMapping>,
+        selection: Option<SelectionChange>,
     },
     Windows {
         #[serde(rename = "requestId")]
@@ -105,25 +111,23 @@ fn main() {
             // 只查询已知游戏规则与安装清单，显示名称映射不决定采集方式。
             continue;
         }
-        if let Some(Command::Configure {
-            request_id,
-            mappings: next,
-        }) = &command
-        {
-            if next.len() > 32 || next.iter().any(|mapping| !mapping.valid()) {
-                write_message(json!({ "requestId": request_id, "error": "动态名称设置无效。" }));
-                continue;
-            }
-            mappings = next.clone();
-            configuration_id = *request_id;
-            last_activity = None;
-        }
         let processes = process_snapshot(&mut system);
         let list_windows = matches!(command, Some(Command::Windows { .. }));
+        let requested = match &command {
+            Some(Command::Configure {
+                selection: Some(change),
+                ..
+            }) => change.executable.as_deref(),
+            _ => None,
+        };
         // 只枚举候选游戏、播放器及用户指定程序的窗口；自动游戏也需窗口身份用于快速共享。
         let wanted_pids = processes
             .iter()
-            .filter(|process| list_windows || detection::needs_window(process, &games, &mappings))
+            .filter(|process| {
+                list_windows
+                    || requested == Some(process.executable.as_str())
+                    || detection::needs_window(process, &games, detector.selected_executable())
+            })
             .map(|process| process.pid)
             .collect();
         let windows = match windows::snapshot(&wanted_pids) {
@@ -146,10 +150,27 @@ fn main() {
                 continue;
             }
         };
+        let configuring = matches!(command, Some(Command::Configure { .. }));
+        let mut configuration_error = None;
         if let Some(command) = command {
             match command {
-                Command::Configure { request_id, .. } => {
-                    write_message(json!({ "requestId": request_id }));
+                Command::Configure {
+                    request_id,
+                    mappings: next,
+                    selection,
+                } => {
+                    configuration_id = request_id;
+                    if next.len() > 32 || next.iter().any(|mapping| !mapping.valid()) {
+                        configuration_error = Some("动态名称设置无效。");
+                    } else if let Some(change) = selection
+                        && let Err(error) =
+                            detector.select(change.executable.as_deref(), &processes, &windows)
+                    {
+                        configuration_error = Some(error);
+                    }
+                    if configuration_error.is_none() {
+                        mappings = next;
+                    }
                 }
                 Command::Windows { request_id } => {
                     write_message(
@@ -162,9 +183,15 @@ fn main() {
             }
         }
         let activity = detector.detect(&processes, &windows, &games, &mappings);
-        if activity != last_activity || configuration_id == 0 {
+        if activity != last_activity || configuring || configuration_id == 0 {
             write_activity(activity.as_ref(), configuration_id);
             last_activity = activity;
+        }
+        if configuring {
+            write_message(
+                json!({ "requestId": configuration_id, "error": configuration_error,
+                "configurationRetained": configuration_error.is_some() }),
+            );
         }
         next_scan = Instant::now() + SCAN_INTERVAL;
     }
@@ -219,6 +246,7 @@ fn write_activity(activity: Option<&DetectedActivity>, configuration_id: u64) {
         "activityName": activity.map(|activity| activity.name.as_str()),
         "startedAtEpochSeconds": activity.map(|activity| activity.started_at),
         "windowIds": activity.map(|activity| &activity.window_ids),
+        "selectedExecutable": activity.and_then(|activity| activity.selected_executable.as_deref()),
     }));
 }
 

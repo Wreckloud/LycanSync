@@ -4,8 +4,8 @@ import InlineFeedback from './InlineFeedback.vue';
 import { useBackdropDismiss } from './useBackdropDismiss';
 import { keepDialogFocus } from './dialogFocus';
 
-const props = defineProps<{ initialName: string; busy: boolean; error: string }>();
-const emit = defineEmits<{ cancel: []; save: [name: string] }>();
+const props = defineProps<{ initialName: string; hasAlias: boolean; busy: boolean; error: string }>();
+const emit = defineEmits<{ cancel: []; save: [name: string]; remove: [] }>();
 const name = ref(props.initialName);
 const input = ref<HTMLInputElement | null>(null);
 const backdropEvents = useBackdropDismiss(cancel);
@@ -27,6 +27,7 @@ onMounted(() => { input.value?.focus(); input.value?.select(); });
       <InlineFeedback id="activity-name-feedback" :message="error" :pending="busy ? '正在保存…' : ''" />
       <footer class="card-actions">
         <button type="button" :disabled="busy" @click="cancel">取消</button>
+        <button v-if="hasAlias" type="button" :disabled="busy" @click="emit('remove')">移除自定义名称</button>
         <button type="submit" class="confirm-button card-actions-end" :disabled="busy || !name.trim()">保存名称</button>
       </footer>
     </form>
@@ -35,6 +36,8 @@ onMounted(() => { input.value?.focus(); input.value?.select(); });
 
 <style scoped>
 .activity-name-dialog { --dialog-width: 420px; display: grid; gap: 12px; }
+.activity-name-dialog .card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.activity-name-dialog .card-actions-end { margin-left: auto; }
 .activity-name-dialog label { font-size: 13px; }
 .activity-name-dialog input { min-width: 0; width: 100%; box-sizing: border-box; height: var(--button-height); padding: var(--button-padding); border: 1px solid var(--border); border-radius: 6px; background: var(--background); color: var(--text); font: inherit; font-size: 13px; }
 </style>

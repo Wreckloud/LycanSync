@@ -2,6 +2,66 @@ use crate::detection::WindowSnapshot;
 use std::collections::HashSet;
 
 #[cfg(target_os = "windows")]
+pub fn application_name(executable: &str) -> Option<String> {
+    use windows::Win32::Storage::FileSystem::{
+        GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+    };
+    use windows::core::{HSTRING, w};
+
+    let path = HSTRING::from(executable);
+    // 仅在选择程序时读取一次版本资源；没有产品信息的程序使用可执行文件名。
+    let size = unsafe { GetFileVersionInfoSizeW(&path, None) };
+    if !(1..=1024 * 1024).contains(&size) {
+        return None;
+    }
+    let mut buffer = vec![0_u32; (size as usize).div_ceil(4)];
+    let block = buffer.as_mut_ptr().cast();
+    unsafe { GetFileVersionInfoW(&path, None, size, block).ok()? };
+    let mut value = std::ptr::null_mut();
+    let mut length = 0;
+    // VerQueryValueW 返回的翻译表及 UTF-16 字符串均借用上方版本资源缓冲区。
+    unsafe {
+        if !VerQueryValueW(
+            block,
+            w!("\\VarFileInfo\\Translation"),
+            &mut value,
+            &mut length,
+        )
+        .as_bool()
+            || value.is_null()
+            || length < 4
+        {
+            return None;
+        }
+        let language = value.cast::<u16>().read_unaligned();
+        let codepage = value.cast::<u16>().add(1).read_unaligned();
+        for field in ["ProductName", "FileDescription"] {
+            let key = HSTRING::from(format!(
+                "\\StringFileInfo\\{language:04x}{codepage:04x}\\{field}"
+            ));
+            if VerQueryValueW(block, &key, &mut value, &mut length).as_bool()
+                && !value.is_null()
+                && length > 1
+            {
+                let chars = std::slice::from_raw_parts(value.cast::<u16>(), length as usize);
+                let name = crate::detection::display_name(
+                    String::from_utf16_lossy(chars).trim_end_matches('\0'),
+                );
+                if !name.is_empty() {
+                    return Some(name);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn application_name(_executable: &str) -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "windows")]
 pub fn snapshot(wanted_pids: &HashSet<u32>) -> Result<Vec<WindowSnapshot>, String> {
     use windows::Win32::Foundation::{HWND, LPARAM, RECT};
     use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};

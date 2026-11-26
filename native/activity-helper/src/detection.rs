@@ -56,6 +56,7 @@ pub struct DetectedActivity {
     pub name: String,
     pub started_at: u64,
     pub window_ids: Vec<String>,
+    pub selected_executable: Option<String>,
     key: String,
 }
 
@@ -131,16 +132,14 @@ pub fn is_capture_game(executable: &str, games: &[GameInstall]) -> bool {
 pub fn needs_window(
     process: &ProcessSnapshot,
     games: &[GameInstall],
-    mappings: &[ActivityMapping],
+    selected: Option<&str>,
 ) -> bool {
     music_player(&process.executable).is_some()
         || known_games::find(&process.executable, &process.arguments).is_some()
         || games.iter().any(|game| {
             game.key != "steam:431960" && process.executable.starts_with(&game.directory)
         })
-        || mappings
-            .iter()
-            .any(|mapping| mapping.executable == process.executable)
+        || selected == Some(process.executable.as_str())
 }
 
 fn music_name(player: &str, title: &str) -> Option<String> {
@@ -221,7 +220,7 @@ pub fn window_options(
     let mut seen = HashSet::new();
     for window in windows
         .iter()
-        .filter(|window| window.visible && window.selectable)
+        .filter(|window| window.visible && (window.selectable || window.minimized))
     {
         let Some(process) = processes.iter().find(|process| process.pid == window.pid) else {
             continue;
@@ -246,6 +245,34 @@ pub fn window_options(
 #[derive(Default)]
 pub struct ActivityDetector {
     sessions: BTreeMap<String, RunningSession>,
+    selection: Option<SelectedProgram>,
+}
+
+struct SelectedProgram {
+    executable: String,
+    application_name: String,
+    processes: HashSet<(u32, u64)>,
+}
+
+fn window_processes(
+    executable: &str,
+    processes: &[ProcessSnapshot],
+    windows: &[WindowSnapshot],
+) -> HashSet<(u32, u64)> {
+    processes
+        .iter()
+        .filter(|p| {
+            p.executable == executable
+                && p.started_at != 0
+                && windows.iter().any(|w| {
+                    w.pid == p.pid
+                        && w.visible
+                        && (w.selectable || w.minimized)
+                        && !w.title.trim().is_empty()
+                })
+        })
+        .map(|p| (p.pid, p.started_at))
+        .collect()
 }
 
 struct RunningSession {
@@ -262,6 +289,37 @@ struct ActivityCandidate {
 }
 
 impl ActivityDetector {
+    pub fn selected_executable(&self) -> Option<&str> {
+        self.selection
+            .as_ref()
+            .map(|selected| selected.executable.as_str())
+    }
+
+    pub fn select(
+        &mut self,
+        executable: Option<&str>,
+        processes: &[ProcessSnapshot],
+        windows: &[WindowSnapshot],
+    ) -> Result<(), &'static str> {
+        self.selection = match executable {
+            None => None,
+            Some(path) => {
+                let running = window_processes(path, processes, windows);
+                if running.is_empty() || ignored_executable(path) {
+                    return Err("所选程序已关闭，请重新选择。");
+                }
+                let name = crate::windows::application_name(path)
+                    .unwrap_or_else(|| display_name(file_name(path).trim_end_matches(".exe")));
+                Some(SelectedProgram {
+                    executable: path.to_owned(),
+                    application_name: name,
+                    processes: running,
+                })
+            }
+        };
+        Ok(())
+    }
+
     pub fn detect(
         &mut self,
         processes: &[ProcessSnapshot],
@@ -269,11 +327,24 @@ impl ActivityDetector {
         games: &[GameInstall],
         mappings: &[ActivityMapping],
     ) -> Option<DetectedActivity> {
+        if let Some(selected) = &mut self.selection {
+            let running = window_processes(&selected.executable, processes, windows);
+            // 路径相同但进程已换一批，表明程序关闭后重开，不能继承上次手动优先。
+            if selected.processes.is_disjoint(&running) {
+                self.selection = None;
+            } else {
+                selected.processes = running;
+            }
+        }
         let mut candidates: BTreeMap<String, ActivityCandidate> = BTreeMap::new();
         for process in processes {
             if process.started_at == 0 || ignored_executable(&process.executable) {
                 continue;
             }
+            let selected = self
+                .selection
+                .as_ref()
+                .filter(|s| s.processes.contains(&(process.pid, process.started_at)));
             let player = music_player(&process.executable);
             let mapping = mappings
                 .iter()
@@ -336,18 +407,12 @@ impl ActivityDetector {
                     ),
                     override_name.map(|mapping| display_name(&mapping.name)),
                 )
-            } else if let Some(mapping) = mapping {
-                // 手动游戏随有效窗口关闭而清除；隐藏辅助窗口不代表用户仍在玩。
-                if !windows.iter().any(|window| {
-                    window.pid == process.pid && window.visible && !window.title.trim().is_empty()
-                }) {
-                    continue;
-                }
+            } else if let Some(selected) = selected {
                 (
                     format!("custom:{}", process.executable),
                     ActivityType::Game,
-                    display_name(&mapping.name),
-                    Some(display_name(&mapping.name)),
+                    selected.application_name.clone(),
+                    mapping.map(|entry| display_name(&entry.name)),
                 )
             } else {
                 continue;
@@ -363,12 +428,17 @@ impl ActivityDetector {
                         name: default_name.clone(),
                         started_at: process.started_at,
                         window_ids: Vec::new(),
+                        selected_executable: None,
                         key,
                     },
                     processes: HashSet::new(),
                     default_name,
                     override_name,
                 });
+            if selected.is_some() {
+                candidate.activity.selected_executable = Some(process.executable.clone());
+                candidate.override_name = mapping.map(|entry| display_name(&entry.name));
+            }
             candidate.activity.started_at = candidate.activity.started_at.min(process.started_at);
             candidate
                 .processes
@@ -424,8 +494,12 @@ impl ActivityDetector {
             .into_values()
             .map(|candidate| candidate.activity)
             .max_by(|left, right| {
-                (left.kind == ActivityType::Game)
-                    .cmp(&(right.kind == ActivityType::Game))
+                left.selected_executable
+                    .is_some()
+                    .cmp(&right.selected_executable.is_some())
+                    .then_with(|| {
+                        (left.kind == ActivityType::Game).cmp(&(right.kind == ActivityType::Game))
+                    })
                     .then_with(|| left.started_at.cmp(&right.started_at))
                     .then_with(|| left.key.cmp(&right.key))
             })
@@ -475,25 +549,35 @@ mod tests {
             name: "自定义显示名".to_owned(),
         }];
         let mut windows = vec![window(1, "真实游戏窗口"), window(2, "自定义显示名")];
-        let first = select_activity(&processes, &windows, &[], &mappings).unwrap();
+        let mut detector = ActivityDetector::default();
+        detector
+            .select(Some(&mappings[0].executable), &processes, &windows)
+            .unwrap();
+        let first = detector
+            .detect(&processes, &windows, &[], &mappings)
+            .unwrap();
         assert_eq!(first.window_ids, vec!["1"]);
         windows.push(WindowSnapshot {
             window_id: "3".to_owned(),
             ..window(1, "另一个游戏窗口")
         });
-        let multiple = select_activity(&processes, &windows, &[], &mappings).unwrap();
+        let multiple = detector
+            .detect(&processes, &windows, &[], &mappings)
+            .unwrap();
         assert_eq!(multiple.window_ids, vec!["1", "3"]);
         windows[0].selectable = false;
         windows[0].minimized = true;
         assert_eq!(
-            select_activity(&processes, &windows, &[], &mappings)
+            detector
+                .detect(&processes, &windows, &[], &mappings)
                 .unwrap()
                 .window_ids,
             vec!["1", "3"]
         );
         windows[0].minimized = false;
         assert_eq!(
-            select_activity(&processes, &windows, &[], &mappings)
+            detector
+                .detect(&processes, &windows, &[], &mappings)
                 .unwrap()
                 .window_ids,
             vec!["3"]
@@ -667,14 +751,27 @@ mod tests {
             name: "自定义游戏".into(),
         }];
         let processes = [process(1, "c:/custom/app.exe", 100)];
+        let mut detector = ActivityDetector::default();
+        detector
+            .select(
+                Some(&mappings[0].executable),
+                &processes,
+                &[window(1, "游戏")],
+            )
+            .unwrap();
         assert_eq!(
-            select_activity(&processes, &[window(1, "不同标题")], &[], &mappings)
+            detector
+                .detect(&processes, &[window(1, "不同标题")], &[], &mappings)
                 .unwrap()
                 .name,
             "自定义游戏"
         );
-        assert!(select_activity(&processes, &[], &[], &mappings).is_none());
-        assert!(select_activity(&[], &[window(1, "相同标题")], &[], &mappings).is_none());
+        assert!(detector.detect(&processes, &[], &[], &mappings).is_none());
+        assert!(
+            detector
+                .detect(&[], &[window(1, "相同标题")], &[], &mappings)
+                .is_none()
+        );
     }
 
     #[test]
@@ -685,6 +782,13 @@ mod tests {
         }];
         let processes = [process(1, "c:/custom/app.exe", 100)];
         let mut detector = ActivityDetector::default();
+        detector
+            .select(
+                Some(&mappings[0].executable),
+                &processes,
+                &[window(1, "游戏")],
+            )
+            .unwrap();
         // Windows 最小化窗口仍保留 visible 标记，不使用前台或窗口尺寸判断。
         assert!(
             detector
@@ -847,7 +951,7 @@ mod tests {
     }
 
     #[test]
-    fn window_choices_require_selectable_windows_but_minimized_manual_game_stays_active() {
+    fn window_choices_keep_minimized_programs_and_exclude_tool_windows() {
         let processes = [
             process(1, "c:/custom.exe", 100),
             process(2, "c:/TextInputHost.exe", 200),
@@ -858,14 +962,26 @@ mod tests {
         }];
         let windows = [
             WindowSnapshot {
+                minimized: true,
                 selectable: false,
                 ..window(1, "已最小化游戏")
             },
             window(2, "输入法"),
         ];
-        assert!(window_options(&processes, &windows).is_empty());
+        let mut detector = ActivityDetector::default();
+        detector
+            .select(
+                Some(&mappings[0].executable),
+                &processes,
+                &[window(1, "窗口")],
+            )
+            .unwrap();
+        let options = window_options(&processes, &windows);
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].executable, processes[0].executable);
         assert_eq!(
-            select_activity(&processes, &windows, &[], &mappings)
+            detector
+                .detect(&processes, &windows, &[], &mappings)
                 .unwrap()
                 .name,
             "自选游戏"
@@ -993,12 +1109,12 @@ mod tests {
         assert!(!needs_window(
             &process(1, "c:/browser/msedge.exe", 100),
             &games(),
-            &[]
+            None
         ));
         assert!(needs_window(
             &process(1, "c:/music/cloudmusic.exe", 100),
             &games(),
-            &[]
+            None
         ));
         let mappings = [ActivityMapping {
             executable: "c:\\custom.exe".into(),
@@ -1007,17 +1123,17 @@ mod tests {
         assert!(needs_window(
             &process(1, "c:/custom.exe", 100),
             &games(),
-            &mappings
+            Some(&mappings[0].executable)
         ));
         assert!(needs_window(
             &process(1, "d:/games/a/game.exe", 100),
             &games(),
-            &[]
+            None
         ));
         assert!(needs_window(
             &process(1, "c:/riot/league of legends.exe", 100),
             &[],
-            &[]
+            None
         ));
         let name = display_name(&"🎮".repeat(50));
         assert_eq!(name.encode_utf16().count(), 80);
@@ -1030,8 +1146,16 @@ mod tests {
             executable: app.executable.clone(),
             name: "画画".into(),
         }];
-        assert!(needs_window(&app, &[], &mappings));
-        let activity = ActivityDetector::default()
+        assert!(needs_window(&app, &[], Some(&app.executable)));
+        let mut detector = ActivityDetector::default();
+        detector
+            .select(
+                Some(&app.executable),
+                std::slice::from_ref(&app),
+                &[window(9, "Krita")],
+            )
+            .unwrap();
+        let activity = detector
             .detect(
                 &[app],
                 &[WindowSnapshot {
@@ -1238,6 +1362,85 @@ mod tests {
     }
 
     #[test]
+    fn manual_selection_ends_with_window_session_and_never_publishes_document_title() {
+        let mut detector = ActivityDetector::default();
+        let mut programs = [
+            process(21, "c:/test/draw.exe", 100),
+            process(22, "d:/games/a/game.exe", 200),
+        ];
+        let mut windows = [window(21, "私人画稿.kra"), window(22, "游戏")];
+        let path = programs[0].executable.clone();
+        let aliases = [ActivityMapping {
+            executable: path.clone(),
+            name: "画画".into(),
+        }];
+        assert_eq!(
+            detector
+                .detect(&programs, &windows, &games(), &aliases)
+                .unwrap()
+                .name,
+            "游戏 A"
+        );
+        detector.select(Some(&path), &programs, &windows).unwrap();
+        assert_eq!(
+            detector
+                .detect(&programs, &windows, &games(), &aliases)
+                .unwrap()
+                .name,
+            "画画"
+        );
+        assert!(
+            detector
+                .select(Some("c:\\test\\missing.exe"), &programs, &windows)
+                .is_err()
+        );
+        windows[0].selectable = false;
+        windows[0].minimized = true;
+        let unnamed = detector.detect(&programs, &windows, &games(), &[]).unwrap();
+        assert_eq!(unnamed.selected_executable.as_deref(), Some(path.as_str()));
+        assert_eq!(unnamed.name, "draw");
+        programs[0].started_at = 300;
+        let reopened = detector
+            .detect(&programs, &windows, &games(), &aliases)
+            .unwrap();
+        assert_eq!(reopened.selected_executable, None);
+        assert_eq!(reopened.name, "游戏 A");
+        detector.select(Some(&path), &programs, &windows).unwrap();
+        detector.select(None, &programs, &windows).unwrap();
+        assert!(
+            detector
+                .detect(&programs[..1], &windows[..1], &[], &[])
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn selected_player_keeps_music_rules_even_while_a_game_is_running() {
+        let programs = [
+            process(1, "c:/music/cloudmusic.exe", 50),
+            process(2, "d:/games/a/game.exe", 100),
+        ];
+        let windows = [window(1, "歌曲 - 网易云音乐"), window(2, "游戏")];
+        let mut detector = ActivityDetector::default();
+        detector
+            .select(Some(&programs[0].executable), &programs, &windows)
+            .unwrap();
+        let playing = detector.detect(&programs, &windows, &games(), &[]).unwrap();
+        assert_eq!(
+            (playing.kind, playing.name.as_str()),
+            (ActivityType::Music, "歌曲")
+        );
+        assert_eq!(
+            detector
+                .detect(&programs[1..], &windows[1..], &games(), &[])
+                .unwrap()
+                .name,
+            "游戏 A"
+        );
+        assert_eq!(detector.selected_executable(), None);
+    }
+
+    #[test]
     fn manual_unknown_game_can_be_renamed_during_the_same_session() {
         let processes = [process(1, "c:/custom/app.exe", 100)];
         let windows = [window(1, "窗口")];
@@ -1246,6 +1449,9 @@ mod tests {
             name: "原名称".into(),
         }];
         let mut detector = ActivityDetector::default();
+        detector
+            .select(Some(&mappings[0].executable), &processes, &windows)
+            .unwrap();
         let first = detector
             .detect(&processes, &windows, &[], &mappings)
             .unwrap();

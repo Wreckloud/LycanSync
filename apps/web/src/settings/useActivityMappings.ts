@@ -3,10 +3,11 @@ import { onScopeDispose, ref } from 'vue';
 type ActivityBridge = Pick<NonNullable<Window['lycanDesktop']>, 'configureActivityMappings' | 'listActivityWindows'>;
 
 export function useActivityMappings(userId: string, desktop?: ActivityBridge,
-  storage?: Pick<Storage, 'getItem' | 'setItem'>) {
+  storage?: Pick<Storage, 'getItem' | 'setItem'>, selectedExecutable: () => string | undefined = () => undefined) {
   const key = `lycansync.activity-mappings.v1.${userId}`;
   const entries = ref<ActivityMapping[]>([]);
   const windows = ref<ActivityWindow[]>([]);
+  const windowsReady = ref(false);
   const busy = ref(false);
   const loading = ref(false);
   const ready = ref(!desktop);
@@ -58,7 +59,10 @@ export function useActivityMappings(userId: string, desktop?: ActivityBridge,
     windowError.value = '';
     try {
       const snapshot = await desktop.listActivityWindows();
-      if (!disposed && revision === windowRevision) windows.value = snapshot;
+      if (!disposed && revision === windowRevision) {
+        windows.value = snapshot;
+        windowsReady.value = true;
+      }
     } catch {
       if (!disposed && revision === windowRevision) windowError.value = '无法读取运行窗口，请重新打开选择框重试。';
     } finally {
@@ -66,19 +70,22 @@ export function useActivityMappings(userId: string, desktop?: ActivityBridge,
     }
   }
 
-  async function replace(next: ActivityMapping[]) {
+  async function replace(next: ActivityMapping[], selection?: string | null) {
     if (!desktop || disposed || busy.value || !ready.value) return false;
     busy.value = true;
     error.value = '';
     try {
-      await desktop.configureActivityMappings(next);
+      if (selection === undefined) await desktop.configureActivityMappings(next);
+      else await desktop.configureActivityMappings(next, selection);
       if (disposed) return false;
+      if (next === entries.value) return true;
       entries.value = next;
       try { (storage ?? localStorage).setItem(key, JSON.stringify(next)); }
       catch { error.value = '本次名称修改已生效，但未能保存。'; }
       return true;
     } catch {
-      if (!disposed) error.value = '动态名称未能应用，请重试。';
+      if (!disposed) error.value = selection === undefined ? '动态名称未能应用，请重试。'
+        : selection === null ? '未能恢复自动识别，请重试。' : '所选程序未能应用，请刷新运行窗口后重试。';
       return false;
     } finally {
       if (!disposed) busy.value = false;
@@ -92,7 +99,7 @@ export function useActivityMappings(userId: string, desktop?: ActivityBridge,
       return false;
     }
     // 新条目只能来自本次窗口清单，不能通过输入名称创建虚构程序。
-    if (!entries.value.some((entry) => entry.executable === executable)
+    if (executable !== selectedExecutable() && !entries.value.some((entry) => entry.executable === executable)
         && !windows.value.some((window) => window.executable === executable)) {
       error.value = '请先从运行窗口中选择程序。';
       return false;
@@ -107,7 +114,19 @@ export function useActivityMappings(userId: string, desktop?: ActivityBridge,
     return replace(entries.value.filter((entry) => entry.executable !== executable));
   }
 
+  function select(executable: string) {
+    if (!windows.value.some(entry => entry.executable === executable)) return false;
+    return replace(entries.value, executable);
+  }
+
+  function reset() {
+    const current = selectedExecutable();
+    if (!current) return false;
+    const remaining = entries.value.filter(entry => entry.executable !== current);
+    return replace(remaining.length === entries.value.length ? entries.value : remaining, null);
+  }
+
   void initialize();
   onScopeDispose(() => { disposed = true; windowRevision++; });
-  return { entries, windows, busy, loading, ready, error, windowError, initialize, refreshWindows, save, remove };
+  return { entries, windows, windowsReady, busy, loading, ready, error, windowError, initialize, refreshWindows, select, reset, save, remove };
 }

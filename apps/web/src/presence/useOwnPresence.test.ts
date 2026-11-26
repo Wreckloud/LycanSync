@@ -88,7 +88,8 @@ it('关闭时撤销在途心跳及排队状态，旧请求结束后不能重新�
 it('游戏快捷共享的本机窗口身份不会进入公开心跳', async () => {
   const f = setup();
   try {
-    f.notifyActivity({ type: 'GAME', name: '游戏', startedAt: '2026-11-08T00:00:00Z', windowIds: ['123'] });
+    f.notifyActivity({ type: 'GAME', name: '游戏', startedAt: '2026-11-08T00:00:00Z',
+      windowIds: ['123'], selectedExecutable: 'c:\\local\\private.exe' });
     await settle();
     expect(f.state.sendPresenceHeartbeat).toHaveBeenCalledWith('ONLINE', { type: 'GAME', name: '游戏' },
       expect.any(AbortSignal), { showActivity: true, showLastOnline: true });
