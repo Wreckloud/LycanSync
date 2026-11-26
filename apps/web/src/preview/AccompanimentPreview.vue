@@ -1,16 +1,24 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
-import { AppWindow, AudioLines, HeadphoneOff, Headphones, MicOff, Monitor, Music2, Square, Volume2, VolumeX } from '@lucide/vue';
+import { AppWindow, AudioWaveform, HeadphoneOff, Headphones, MicOff, Monitor, Music, Square, Volume2, VolumeX } from '@lucide/vue';
 import DialogTransition from '../components/DialogTransition.vue';
 import MemberVolumeButton from '../components/MemberVolumeButton.vue';
+import SegmentedControl from '../components/SegmentedControl.vue';
 import VoiceLevelMic from '../components/VoiceLevelMic.vue';
 import { useBackdropDismiss } from '../components/useBackdropDismiss';
 import { keepDialogFocus } from '../components/dialogFocus';
 import { SHARE_VOLUME_MAX } from '../rtc/audioPreferences';
+import qqMusicIcon from './assets/qq-music.png';
+import chromeIcon from './assets/chrome.png';
+
+const marks = [{ id: 'note', label: '双音符' }, { id: 'wave', label: '单线波形' }] as const;
+const markIcons = { note: Music, wave: AudioWaveform };
+const markStyle = ref<typeof marks[number]['id']>('note');
+const sharingMark = computed(() => markIcons[markStyle.value]);
 
 const sources = ref([
-  { id: 'player', name: 'QQ 音乐', open: true, paused: false },
-  { id: 'browser', name: 'Google Chrome', open: true, paused: false },
+  { id: 'player', name: 'QQ 音乐', icon: qqMusicIcon, open: true, paused: false },
+  { id: 'browser', name: 'Google Chrome', icon: chromeIcon, open: true, paused: false },
   { id: 'other', name: '本地播放器', open: false, paused: true },
 ]);
 type Source = typeof sources.value[number];
@@ -74,6 +82,9 @@ function setSourceOpen(source: Source, open: boolean) {
       <h2 id="accompaniment-title">分享伴奏</h2>
       <p>指向自己的卡片，点「播放伴奏」。两张卡片同步演示同一位成员，仅模拟界面。</p>
     </header>
+    <SegmentedControl v-model="markStyle" class="mark-options" :options="marks" label="分享标记样式">
+      <template #default="{ option }"><component :is="markIcons[option.id]" :size="16" aria-hidden="true" />{{ option.label }}</template>
+    </SegmentedControl>
     <div class="card-pair">
       <section v-for="card in cards" :key="card.label" :aria-label="card.label">
         <h3>{{ card.label }}</h3>
@@ -86,13 +97,13 @@ function setSourceOpen(source: Source, open: boolean) {
                 :class="{ 'is-sharing': accompaniment }" :aria-label="accompaniment ? '停止伴奏，' + accompaniment.name : '播放伴奏'"
                 @click="accompaniment ? sharingId = '' : openDialog('audio')">
                 <template v-if="accompaniment">
-                  <span class="source-label"><AudioLines :size="14" />{{ accompaniment.name }}</span>
+                  <span class="source-label"><component :is="sharingMark" :size="16" aria-hidden="true" />{{ accompaniment.name }}</span>
                   <span class="stop-label"><Square :size="12" />停止伴奏</span>
                 </template>
-                <span v-else><Music2 :size="14" />播放伴奏</span>
+                <span v-else><Music :size="16" aria-hidden="true" />播放伴奏</span>
               </button>
               <span v-if="!card.local && accompaniment" class="media-badge remote-badge" role="img" tabindex="0" aria-label="正在分享伴奏">
-                <AudioLines :size="14" /><span class="remote-label" aria-hidden="true">正在分享伴奏</span>
+                <component :is="sharingMark" :size="16" aria-hidden="true" /><span class="remote-label" aria-hidden="true">正在分享伴奏</span>
               </span>
               <span v-if="!card.local && (!listening || !mic)" class="media-badge muted-badge" role="img" :aria-label="!listening ? '已停止收听' : '麦克风已关闭'">
                 <HeadphoneOff v-if="!listening" :size="13" /><MicOff v-else :size="13" />
@@ -149,9 +160,8 @@ function setSourceOpen(source: Source, open: boolean) {
           </header>
           <div v-if="dialog === 'audio'" class="sources">
             <button v-for="source in available" :key="source.id" type="button" @click="startAudio(source)">
-              <span class="app-symbol" :class="source.id" aria-hidden="true">
-                <Music2 v-if="source.id === 'player'" :size="20" /><i v-else-if="source.id === 'browser'" /><AppWindow v-else :size="20" />
-              </span>
+              <img v-if="source.icon" class="app-symbol" :src="source.icon" alt="" />
+              <AppWindow v-else class="app-symbol" aria-hidden="true" />
               <span><strong>{{ source.name }}</strong><small v-if="source.id === 'browser'">其他标签页的声音也可能被听到</small>
                 <small v-else>{{ source.paused ? '已暂停' : '播放中' }}</small></span>
             </button>
@@ -174,6 +184,7 @@ function setSourceOpen(source: Source, open: boolean) {
 
 <style scoped>
 .accompaniment-lab { max-width: 680px; padding-bottom: 40px; }
+.mark-options { justify-self: start; }
 .card-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 222px)); width: min(100%, 464px); gap: 20px; }
 .participant-meta :deep(.volume-button:disabled) { color: var(--muted); }
 .card-pair h3 { margin: 0 0 8px; color: var(--muted); font-size: 13px; font-weight: 500; }
@@ -182,7 +193,10 @@ function setSourceOpen(source: Source, open: boolean) {
 .own-badge { display: grid; cursor: pointer; opacity: 0; pointer-events: none; transition: opacity var(--motion-feedback-duration) ease; }
 .participant-card:hover .own-badge, .participant-card:focus-within .own-badge, .own-badge.is-sharing { opacity: 1; pointer-events: auto; }
 .own-badge span { grid-area: 1 / 1; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
-.own-badge svg, .remote-badge svg { color: var(--accent); }
+.own-badge, .remote-badge { background: #10161deb; font-size: 12px; }
+.own-badge { padding-inline: 6px; }
+.own-badge svg { color: var(--muted); }
+.source-label svg, .remote-badge svg { color: color-mix(in srgb, var(--accent) 48%, var(--text)); }
 .own-badge .stop-label, .own-badge:is(:hover,:focus-visible) .source-label { visibility: hidden; }
 .own-badge:is(:hover,:focus-visible) .stop-label { visibility: visible; }
 .remote-badge, .muted-badge { min-width: 22px; padding-inline: 4px; }
@@ -200,10 +214,7 @@ function setSourceOpen(source: Source, open: boolean) {
 .sources button:is(:hover,:focus-visible) { border-color: var(--accent); }
 .sources strong, .sources small { display: block; }
 .sources small, .sources p, .screen-options p { margin: 0; color: var(--muted); }
-.app-symbol { display: grid; place-items: center; flex: 0 0 32px; height: 32px; border-radius: 8px; color: var(--muted); background: var(--panel-raised); }
-.app-symbol.player { color: #145d33; background: #a9df64; }
-.app-symbol.browser { border-radius: 50%; background: conic-gradient(from -60deg,#df574b 0 33%,#e8be53 33% 66%,#58a16c 66%); }
-.app-symbol.browser i { width: 15px; height: 15px; background: #467bc1; border: 2px solid #e7ebee; border-radius: 50%; }
+.app-symbol { width: 24px; height: 24px; flex: none; object-fit: contain; color: var(--muted); }
 .picker-error { color: var(--danger); }
 @media (hover: none), (pointer: coarse) { .own-badge { opacity: 1; pointer-events: auto; } }
 @media (max-width: 480px) { .card-pair { grid-template-columns: minmax(0, 222px); } }
