@@ -5,6 +5,7 @@ import { motionDurationMs } from '../styles/motion';
 import type { UnwrapNestedRefs } from 'vue';
 import type { MediaDiagnosticsSnapshot } from '../diagnostics/mediaDiagnostics';
 import { Track } from 'livekit-client';
+import { screenAudioPublication } from '../rtc/applicationAudio';
 import type { useRtcRoom } from '../rtc/useRtcRoom';
 import { useScreenShareWindows, type ControlWindow } from '../viewing/useScreenShareWindows';
 import { useScreenShareLayout } from '../viewing/useScreenShareLayout';
@@ -179,7 +180,7 @@ defineExpose({ closeAll, disarmAll: windows.disarmAll, count, inlineExpanded, au
         :control-available="controlAvailable(entry.participant.identity)" :private-control="controlPlaceholder(entry.participant.identity)"
         :control-pending="rtc.remoteControlPending?.identity === entry.participant.identity"
         :control-active="rtc.remoteControlActive?.identity === entry.participant.identity"
-        :share-audio="Boolean(entry.participant.getTrackPublication(Track.Source.ScreenShareAudio)?.track)"
+        :share-audio="Boolean(screenAudioPublication(entry.participant)?.track)"
         :listening="rtc.listening" :share-muted="mutedShares.includes(entry.participant.identity)"
         @toggle-share-audio="emit('toggleShareAudio', entry.participant.identity)"
         @request-control="emit('requestControl', entry.participant.identity)"

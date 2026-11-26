@@ -202,6 +202,10 @@ void ScreenAudioHost::run(const std::shared_ptr<Session> &session, bool system_m
     obs_data_t *settings = obs_data_create();
     if (system_mix) {
       obs_data_set_string(settings, "device_id", "default");
+    } else if (!window_ && target_.process_id) {
+      obs_data_set_bool(settings, "lycansync_application_audio", true);
+      obs_data_set_int(settings, "lycansync_process_id", target_.process_id);
+      obs_data_set_string(settings, "lycansync_process_creation", target_.process_creation.c_str());
     } else if (window_) {
       obs_data_set_int(settings, "lycansync_window_id", static_cast<long long>(reinterpret_cast<uintptr_t>(target_.window)));
       obs_data_set_string(settings, "lycansync_window_lifetime", target_.lifetime_name.c_str());

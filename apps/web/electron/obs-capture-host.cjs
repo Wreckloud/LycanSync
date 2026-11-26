@@ -38,7 +38,7 @@ class ObsCaptureHostManager {
     this.disposed = false;
   }
 
-  ensureHost() {
+  ensureHost(applicationArgs) {
     if (this.disposed) throw new Error('obsCaptureHostDisposed');
     if (this.platform !== 'win32') throw new Error('platformUnsupported');
     if (this.state) {
@@ -47,7 +47,8 @@ class ObsCaptureHostManager {
     }
     if (typeof this.configPath !== 'string' || !win32.isAbsolute(this.configPath)) throw new Error('invalidObsCaptureArguments');
     const args = [this.modulePath, this.dataPath, this.configPath];
-    if (this.adapterIndex !== undefined) args.push(String(this.adapterIndex));
+    if (applicationArgs) args.push(...applicationArgs);
+    else if (this.adapterIndex !== undefined) args.push(String(this.adapterIndex));
     const child = this.spawnProcess(this.executablePath, args,
       // 官方 libobs 按 bin/64bit 的相对路径查找 effect 文件，不能继承项目工作目录。
       { cwd: win32.dirname(this.executablePath), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -654,10 +655,23 @@ class ObsCaptureHostManager {
     return replay.stop;
   }
 
+  async startApplicationAudio(sessionId, pipeId, target) {
+    if (this.state || !isSessionId(sessionId) || !isSessionId(pipeId) || !Number.isInteger(target.pid)
+        || target.pid <= 0 || target.pid > 0xffffffff || !/^[1-9]\d{0,19}$/.test(target.creation)) {
+      throw new Error('invalidApplicationAudioStart');
+    }
+    const state = this.ensureHost(['--application-audio', sessionId, String(target.pid), target.creation]);
+    state.videoSessionId = sessionId;
+    state.applicationAudio = true;
+    await state.corePromise;
+    if (state.shuttingDown || state.closed) throw new Error('screenShareAudioSessionStopped');
+    return this.startScreenAudio(sessionId, pipeId, 'process');
+  }
+
   startScreenAudio(sessionId, pipeId, mode) {
     const state = this.state;
     if (!state || !state.alive || state.closed || state.failed || state.stopRequested
-        || state.videoSessionId !== sessionId || !state.helperVersion || !isSessionId(pipeId)
+        || state.videoSessionId !== sessionId || (!state.helperVersion && !state.applicationAudio) || !isSessionId(pipeId)
         || !['process', 'systemMix'].includes(mode) || !Number.isInteger(this.clientProcessId)
         || this.clientProcessId <= 0 || this.clientProcessId > 0xffffffff) {
       return Promise.reject(new Error('invalidScreenShareAudioStart'));

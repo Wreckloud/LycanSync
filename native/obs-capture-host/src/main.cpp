@@ -751,6 +751,19 @@ void destroy_textures() {
   g_host.textures_initialized = false;
 }
 
+void write_audio_event(std::string_view event, std::string_view audio_id, std::string_view code, ScreenAudioStartupTiming timing) {
+  const std::lock_guard<std::mutex> output_lock(g_output_mutex);
+  std::cout << "{\"event\":\"" << event << "\",\"sessionId\":\"" << g_host.session_id
+            << "\",\"audioId\":\"" << audio_id << "\"";
+  if (event == "audioStarted") {
+    std::cout << ",\"sampleRate\":48000,\"channels\":2,\"bitsPerSample\":32,\"nominalChunkMs\":10"
+              << ",\"pluginLoadMs\":" << timing.plugin_load_ms << ",\"captureReadyMs\":" << timing.capture_ready_ms;
+  }
+  if (!code.empty()) std::cout << ",\"code\":\"" << code << "\"";
+  std::cout << "}\n";
+  std::cout.flush();
+}
+
 }  // namespace
 
 int capture(const std::array<std::string, 12> &arguments, const std::filesystem::path &module_path,
@@ -915,18 +928,7 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
   if (capture_data.filename().empty()) capture_data = capture_data.parent_path();
   const auto audio_data = capture_data.parent_path() / L"win-wasapi";
   ScreenAudioHost screen_audio(to_utf8(audio_module.wstring()), to_utf8(audio_data.wstring()), window_target, window_source,
-      [](std::string_view event, std::string_view audio_id, std::string_view code, ScreenAudioStartupTiming timing) {
-        const std::lock_guard<std::mutex> output_lock(g_output_mutex);
-        std::cout << "{\"event\":\"" << event << "\",\"sessionId\":\"" << g_host.session_id
-                  << "\",\"audioId\":\"" << audio_id << "\"";
-        if (event == "audioStarted") {
-          std::cout << ",\"sampleRate\":48000,\"channels\":2,\"bitsPerSample\":32,\"nominalChunkMs\":10"
-                    << ",\"pluginLoadMs\":" << timing.plugin_load_ms << ",\"captureReadyMs\":" << timing.capture_ready_ms;
-        }
-        if (!code.empty()) std::cout << ",\"code\":\"" << code << "\"";
-        std::cout << "}\n";
-        std::cout.flush();
-      });
+      write_audio_event);
 
   std::function<bool()> window_suspended;
   if (window_source) window_suspended = [&] {
@@ -1114,6 +1116,35 @@ int capture(const std::array<std::string, 12> &arguments, const std::filesystem:
 
 int wmain(int argc, wchar_t **argv) {
   if (argc == 3 && std::wstring_view(argv[1]) == L"--print-window") return run_print_window_worker(argv[2]);
+  if (argc == 8 && std::wstring_view(argv[4]) == L"--application-audio") {
+    WindowVideoTarget target;
+    const auto pid = to_utf8(argv[6]);
+    const auto parsed = std::from_chars(pid.data(), pid.data() + pid.size(), target.process_id);
+    target.process_creation = to_utf8(argv[7]);
+    g_host.session_id = to_utf8(argv[5]);
+    if (!valid_session_id(g_host.session_id) || !target.process_id || parsed.ec != std::errc{}
+        || parsed.ptr != pid.data() + pid.size() || !std::filesystem::path(argv[3]).is_absolute()) return 2;
+    base_set_log_handler(obs_log_handler, nullptr);
+    if (!obs_startup("en-US", to_utf8(argv[3]).c_str(), nullptr)) return 1;
+    obs_audio_info audio{};
+    audio.samples_per_sec = 48'000;
+    audio.speakers = SPEAKERS_STEREO;
+    int result = 1;
+    if (std::string_view(obs_get_version_string()) == "32.2.2" && obs_reset_audio(&audio)) {
+      ScreenAudioHost host(to_utf8(argv[1]), to_utf8(argv[2]), target, false, write_audio_event);
+      write_event("coreReady");
+      CommandReader commands;
+      std::string command;
+      result = 0;
+      while (commands.next(command) && command != "shutdown") {
+        if (!command.starts_with("audioStart:") || command.find(":process:") == std::string::npos
+            || !host.command(command)) { result = 2; break; }
+      }
+      host.shutdown();
+    }
+    obs_shutdown();
+    return result;
+  }
   if ((argc != 4 && argc != 5) || !std::filesystem::path(argv[3]).is_absolute()) return 2;
   if (argc == 5) {
     const auto requested = to_utf8(argv[4]);

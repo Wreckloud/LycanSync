@@ -90,7 +90,7 @@ test('返回账号页停止待确认配置，旧进程迟到与失败不能影�
   const leave = runInNewContext(`${main.slice(start, end)}; returnToAccountEntry`, {
     audioShortcuts: { clear: noop }, screenShareWindows: { closeAll: noop }, activityMonitor: f.monitor,
     voiceOverlay: { clear: noop }, recordingEditor: { cancel: noop }, recording: { stopAll: noop },
-    nativeVideo: {}, nativeScreenAudio: {}, nativeMicrophone: {}, savedDiagnosticReports: { flush: noop },
+    nativeVideo: {}, applicationAudio: {}, nativeScreenAudio: {}, nativeMicrophone: {}, savedDiagnosticReports: { flush: noop },
     writeMediaDiagnostic: Object.assign(noop, { flush: noop }),
   });
   try {

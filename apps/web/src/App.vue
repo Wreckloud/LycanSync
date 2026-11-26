@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { applicationAudioName, screenAudioPublication } from './rtc/applicationAudio';
 import { computed, nextTick, onMounted, onScopeDispose, provide, reactive, ref, watch } from 'vue';
 import { ACCOUNT_CACHE, clearOtherAccountContentCaches, createAccountCache } from './cache/localCache';
 import { useNotice } from './feedback/useNotice';
@@ -698,7 +699,7 @@ const memberVolumes = computed(() => {
 });
 const sharingAudio = computed(() => {
   void rtc.revision;
-  return Boolean(localParticipant.value?.getTrackPublication(Track.Source.ScreenShareAudio)?.track);
+  return Boolean(localParticipant.value && screenAudioPublication(localParticipant.value)?.track);
 });
 const localMicrophoneLevel = computed(() => {
   void rtc.speakerRevision;
@@ -825,12 +826,13 @@ watch(callbarLeaving, (leaving, _, onCleanup) => {
 const remoteAudioTracks = computed(() => rtc.participants
   .filter((participant) => participant !== localParticipant.value)
   .flatMap((participant) => ([
-    { participantIdentity: participant.identity, source: Track.Source.Microphone,
+    { participantIdentity: participant.identity, source: Track.Source.Microphone, music: false,
       track: participant.getTrackPublication(Track.Source.Microphone)?.track },
     { participantIdentity: participant.identity, source: Track.Source.ScreenShareAudio,
+      music: Boolean(applicationAudioName(participant.getTrackPublication(Track.Source.ScreenShareAudio))),
       track: participant.getTrackPublication(Track.Source.ScreenShareAudio)?.track },
   ]))
-  .filter((item): item is { participantIdentity: string; source: Track.Source; track: RemoteAudioTrack } =>
+  .filter((item): item is { participantIdentity: string; source: Track.Source; music: boolean; track: RemoteAudioTrack } =>
     item.track instanceof RemoteAudioTrack));
 // 先直接静音现有播放轨道，不能等 Vue 更新音频组件后才停止本机收听。
 watch([listening, remoteAudioTracks], ([enabled, tracks]) => {
@@ -1038,11 +1040,11 @@ function shareVolume(identity: string) {
   if (mutedShares.value.includes(identity)) return 0;
   return shareLevels.get(identity) ?? 1;
 }
-function remoteScreenSharePlaybackVolume(identity: string) {
+function remoteScreenSharePlaybackVolume(identity: string, music = false) {
   const focused = viewingWindows.value?.audioFocusIdentity;
-  if (focused && focused !== identity) return 0;
+  if (!music && focused && focused !== identity) return 0;
   const volume = Math.min(SHARE_VOLUME_MAX, shareVolume(identity) * screenShareVolume.value * outputVolume.value);
-  return focused ? volume : volume * BACKGROUND_SHARE_GAIN;
+  return music || focused ? volume : volume * BACKGROUND_SHARE_GAIN;
 }
 function updateSharedVolume(identity: string, value: number) {
   if (value > 0) shareLevels.set(identity, value);
@@ -1057,7 +1059,7 @@ function toggleSharedAudio(identity: string) {
   mutedShares.value = mutedShares.value.includes(identity)
     ? mutedShares.value.filter((current) => current !== identity) : [...mutedShares.value, identity];
   remoteAudioTracks.value.filter((item) => item.participantIdentity === identity && item.source === Track.Source.ScreenShareAudio)
-    .forEach((item) => setRemotePlaybackVolume(item.track, listening.value && audioOutput.available.value ? remoteScreenSharePlaybackVolume(identity) : 0));
+    .forEach((item) => setRemotePlaybackVolume(item.track, listening.value && audioOutput.available.value ? remoteScreenSharePlaybackVolume(identity, item.music) : 0));
 }
 
 function previewGroup(groupId: string) {
@@ -1382,6 +1384,6 @@ function participantListening(participant: Participant) {
       @balance-error="audioPreferences.setVoiceVolumeBalance(false); viewerNotice = '成员语音音量平衡未能运行，已关闭该功能，语音继续按原音量播放。'"
       @playback-error="viewerNotice = '远端声音未能开始播放，请检查输出设备或重新连接语音。'"
       :volume="listening && audioOutput.available.value ? (item.source === Track.Source.ScreenShareAudio
-        ? remoteScreenSharePlaybackVolume(item.participantIdentity) : remotePlaybackVolume(item.participantIdentity)) : 0" />
+        ? remoteScreenSharePlaybackVolume(item.participantIdentity, item.music) : remotePlaybackVolume(item.participantIdentity)) : 0" />
   </div>
 </template>

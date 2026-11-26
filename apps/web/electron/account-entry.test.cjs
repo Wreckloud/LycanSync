@@ -16,6 +16,7 @@ function fixture(failVideo = false) {
     recordingEditor: { cancel: stop('clip') },
     recording: { stopAll: stop('recording') }, nativeVideo: { current: { sessionId: 'video' },
       stop: async () => { calls.push('video'); if (failVideo) throw new Error('failed'); } },
+    applicationAudio: { sessionId: 'music', stop: stop('music') },
     nativeScreenAudio: { sessionId: 'audio', stop: stop('audio') }, nativeMicrophone: { sessionId: 'microphone', stop: stop('microphone') },
     savedDiagnosticReports: { flush: stop('report') },
     writeMediaDiagnostic: Object.assign(() => {}, { flush: stop('log') }),
@@ -31,7 +32,7 @@ function fixture(failVideo = false) {
 test('返回账号页回收每项媒体，不接触已保存凭据', async () => {
   const f = fixture();
   await f.leave();
-  assert.deepEqual(f.calls, ['shortcuts', 'viewers', 'activity-stop', 'activity', 'overlay', 'clip', 'recording', 'video', 'audio', 'microphone', 'report', 'log']);
+  assert.deepEqual(f.calls, ['shortcuts', 'viewers', 'activity-stop', 'activity', 'overlay', 'clip', 'recording', 'video', 'music', 'audio', 'microphone', 'report', 'log']);
 });
 
 test('反复返回账号页会关闭合成活动子进程，重新配置只启动一个', { timeout: 15_000 }, async () => {
@@ -80,7 +81,7 @@ test('活动停止失败仍清空映射并继续其余清理，明确报告退�
 test('一路停止失败仍继续清理声音与麦克风，并报告失败', async () => {
   const f = fixture(true);
   await assert.rejects(f.leave(), /退出时发生问题/);
-  assert.deepEqual(f.calls.slice(-5), ['video', 'audio', 'microphone', 'report', 'log']);
+  assert.deepEqual(f.calls.slice(-6), ['video', 'music', 'audio', 'microphone', 'report', 'log']);
 });
 
 test('录像尚未保存时不停止采集，也不提前完成退出', async () => {
@@ -92,7 +93,7 @@ test('录像尚未保存时不停止采集，也不提前完成退出', async ()
   assert.equal(f.calls.includes('video'), false);
   finish();
   await leaving;
-  assert.deepEqual(f.calls.slice(-5), ['video', 'audio', 'microphone', 'report', 'log']);
+  assert.deepEqual(f.calls.slice(-6), ['video', 'music', 'audio', 'microphone', 'report', 'log']);
 });
 
 test('窗口关闭或渲染端崩溃仍等待主进程收尾，再销毁窗口', async () => {

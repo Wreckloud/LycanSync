@@ -38,3 +38,11 @@ it('逐路共享声音开关立即作用于该声音轨，不修改人声、其�
   expect(microphone.setVolume).not.toHaveBeenCalled(); expect(other.setVolume).not.toHaveBeenCalled();
   expect(context.outputVolume.value).toBe(0.8); expect(context.screenShareVolume.value).toBe(0.2);
 });
+
+it('聚焦其他人的画面时伴奏仍使用平时音量', () => {
+  const context = { BACKGROUND_SHARE_GAIN, SHARE_VOLUME_MAX: 1, mutedShares: { value: [] },
+    shareLevels: new Map(), screenShareVolume: { value: 0.35 }, outputVolume: { value: 1 },
+    viewingWindows: { value: { audioFocusIdentity: 'B' } } };
+  expect(runInNewContext(script + '; remoteScreenSharePlaybackVolume("A", true)', context)).toBeCloseTo(0.35);
+  expect(runInNewContext(script + '; remoteScreenSharePlaybackVolume("A", false)', context)).toBe(0);
+});

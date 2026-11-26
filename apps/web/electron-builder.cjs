@@ -45,6 +45,7 @@ module.exports = {
     'electron/obs-audio-host.cjs',
     'electron/native-microphone.cjs',
     'electron/native-screen-audio.cjs',
+    'electron/application-audio-sources.cjs',
     'electron/native-video-textures.cjs',
     'electron/native-video-session.cjs',
     'electron/native-audio-session.cjs',

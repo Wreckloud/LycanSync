@@ -1,4 +1,6 @@
 #include "bound_audio_target.h"
+#include <charconv>
+#include <string_view>
 
 BoundAudioTarget::~BoundAudioTarget() {
   if (process_) CloseHandle(process_);
@@ -8,6 +10,17 @@ BoundAudioTarget::~BoundAudioTarget() {
 bool BoundAudioTarget::read(obs_data_t *settings) {
   if (process_ || target_.lifetime || !settings) return false;
   exclude_ = obs_data_get_bool(settings, "lycansync_exclude_process");
+  if (obs_data_get_bool(settings, "lycansync_application_audio")) {
+    const auto pid = obs_data_get_int(settings, "lycansync_process_id");
+    const std::string_view birth = obs_data_get_string(settings, "lycansync_process_creation");
+    unsigned long long creation = 0;
+    const auto parsed = std::from_chars(birth.data(), birth.data() + birth.size(), creation);
+    if (exclude_ || pid <= 0 || pid > MAXDWORD || !creation || parsed.ec != std::errc{}
+        || parsed.ptr != birth.data() + birth.size()) return false;
+    process_id_ = static_cast<DWORD>(pid);
+    process_ = lycan_open_original_process(process_id_, creation);
+    return process_ && valid();
+  }
   if (exclude_) {
     // 整屏仅排除主进程树；不能把缺失窗口偷偷扩大为系统声音。
     if (obs_data_has_user_value(settings, "lycansync_window_id")
@@ -28,6 +41,6 @@ bool BoundAudioTarget::read(obs_data_t *settings) {
 
 bool BoundAudioTarget::valid() const {
   // 持有并检查原进程对象；即使 PID/HWND 被复用，也不接管新实例。
-  if (!exclude_) return lycan_game_target_valid(&target_);
+  if (window_) return lycan_game_target_valid(&target_);
   return process_ && WaitForSingleObject(process_, 0) == WAIT_TIMEOUT;
 }

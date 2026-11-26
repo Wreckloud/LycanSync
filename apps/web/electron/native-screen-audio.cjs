@@ -3,7 +3,7 @@ const { randomUUID } = require('node:crypto');
 const { validNativeAudioSessionId } = require('./native-audio-session.cjs');
 
 // 共享声音的本机管道独立于页面发布；录制仍需要声音时只暂停交付，宿主继续持有来源。
-function createNativeScreenAudio({ host: obsCaptureHost, getVideo, getRecording, getWindow, isClosing,
+function createNativeScreenAudio({ host: obsCaptureHost, applicationHost, getVideo, getRecording, getWindow, isClosing,
   capability: screenShareAudioCapability, writeDiagnostic: writeMediaDiagnostic, platform = process.platform,
   createPipeServer = createServer }) {
   let nativeScreenAudioSession;
@@ -107,10 +107,10 @@ function createNativeScreenAudio({ host: obsCaptureHost, getVideo, getRecording,
     });
   }
 
-  async function startNativeScreenAudio(sourceId, sessionId, publicationId) {
+  async function startNativeScreenAudio(sourceId, sessionId, publicationId, applicationTarget) {
     const video = getVideo();
     if (isClosing() || platform !== 'win32') throw new Error('platformUnsupported');
-    if (!video || video.starting || video.stopping || video.sessionId !== sessionId || video.sourceId !== sourceId) {
+    if (!applicationTarget && (!video || video.starting || video.stopping || video.sessionId !== sessionId || video.sourceId !== sourceId)) {
       throw new Error('videoSourceExpired');
     }
     if (nativeScreenAudioSession) {
@@ -127,7 +127,7 @@ function createNativeScreenAudio({ host: obsCaptureHost, getVideo, getRecording,
     const pipeId = randomUUID();
     const server = createPipeServer();
     const audio = {
-      sessionId, pipeId, server, socket: undefined, buffer: Buffer.alloc(0), queue: [],
+      sessionId, applicationTarget, pipeId, server, socket: undefined, buffer: Buffer.alloc(0), queue: [],
       inFlight: undefined, sequence: 0, sampleRate: undefined, droppedChunks: 0,
       rendererDroppedChunks: 0, stopping: false, failureNotified: false, publicationId,
     };
@@ -157,16 +157,18 @@ function createNativeScreenAudio({ host: obsCaptureHost, getVideo, getRecording,
           server.once('listening', onListening);
           server.listen(`\\\\.\\pipe\\lycansync-screen-audio-${pipeId}`);
         });
-        if (nativeScreenAudioSession !== audio || audio.stopping || getVideo() !== video || video.stopping) {
+        if (nativeScreenAudioSession !== audio || audio.stopping || (!applicationTarget && (getVideo() !== video || video.stopping))) {
           throw new Error('screenShareAudioSessionStopped');
         }
         const capability = screenShareAudioCapability();
         const mode = capability.available && capability.reason === 'windowsApplicationLoopbackProcessTree' ? 'process'
           : capability.available && capability.reason === 'windowsSystemMixLoopback' ? 'systemMix' : undefined;
-        if (!mode) throw new Error('screenShareAudioUnsupported');
-        audio.captureStart = obsCaptureHost.startScreenAudio(sessionId, pipeId, mode);
+        if (!mode || (applicationTarget && mode !== 'process')) throw new Error('screenShareAudioUnsupported');
+        audio.captureStart = applicationTarget
+          ? applicationHost.startApplicationAudio(sessionId, pipeId, applicationTarget)
+          : obsCaptureHost.startScreenAudio(sessionId, pipeId, mode);
         const format = await audio.captureStart;
-        if (nativeScreenAudioSession !== audio || audio.stopping || getVideo() !== video || video.stopping) {
+        if (nativeScreenAudioSession !== audio || audio.stopping || (!applicationTarget && (getVideo() !== video || video.stopping))) {
           throw new Error('screenShareAudioSessionStopped');
         }
         audio.sampleRate = format.sampleRate;
@@ -188,6 +190,11 @@ function createNativeScreenAudio({ host: obsCaptureHost, getVideo, getRecording,
 
   async function stopScreenAudioCapture(audio) {
     if (!audio.captureStart) return { changed: false };
+    if (audio.applicationTarget) {
+      if (applicationHost.state?.videoSessionId !== audio.sessionId) return { changed: false };
+      await applicationHost.shutdown();
+      return { changed: true };
+    }
     return obsCaptureHost.stopScreenAudio(audio.sessionId, audio.pipeId);
   }
 

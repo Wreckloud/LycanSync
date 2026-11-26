@@ -23,6 +23,7 @@ mod windows_bridge {
     use windows::Win32::System::ProcessStatus::{
         GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
     };
+    use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
     use windows::Win32::System::Threading::{
         GetCurrentProcess, GetCurrentProcessId, GetExitCodeProcess, GetProcessHandleCount,
         GetProcessIoCounters, GetProcessTimes, IO_COUNTERS, OpenProcess, PROCESS_DUP_HANDLE,
@@ -278,6 +279,103 @@ mod windows_bridge {
         left.to_string_lossy()
             .replace('/', "\\")
             .eq_ignore_ascii_case(&right.to_string_lossy().replace('/', "\\"))
+    }
+
+    #[napi_derive::napi(object)]
+    pub struct ApplicationAudioProcess {
+        pub executable: String,
+        pub pid: u32,
+        pub creation: String,
+    }
+
+    #[napi_derive::napi]
+    pub fn list_application_audio_processes(
+        executables: Vec<String>,
+    ) -> Result<Vec<ApplicationAudioProcess>> {
+        let snapshot = OwnedHandle::new(
+            unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }
+                .map_err(|_| error("applicationAudioSourcesUnavailable"))?,
+        );
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        unsafe { Process32FirstW(snapshot.raw(), &mut entry) }
+            .map_err(|_| error("applicationAudioSourcesUnavailable"))?;
+        let mut desktop_session = 0;
+        unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut desktop_session) }
+            .map_err(|_| error("applicationAudioSourcesUnavailable"))?;
+        let mut candidates = std::collections::HashMap::new();
+        loop {
+            let len = entry
+                .szExeFile
+                .iter()
+                .position(|c| *c == 0)
+                .unwrap_or(entry.szExeFile.len());
+            let name = String::from_utf16_lossy(&entry.szExeFile[..len]).to_ascii_lowercase();
+            let mut session = 0;
+            if executables.contains(&name)
+                && unsafe { ProcessIdToSessionId(entry.th32ProcessID, &mut session) }.is_ok()
+                && session == desktop_session
+            {
+                candidates.insert(entry.th32ProcessID, (entry.th32ParentProcessID, name));
+            }
+            if let Err(err) = unsafe { Process32NextW(snapshot.raw(), &mut entry) } {
+                if err.code() != windows::Win32::Foundation::ERROR_NO_MORE_FILES.to_hresult() {
+                    return Err(error("applicationAudioSourcesUnavailable"));
+                }
+                break;
+            }
+        }
+        let mut result = Vec::new();
+        for (&pid, (parent, name)) in &candidates {
+            // 浏览器的渲染和音频子进程随根进程一起采集。
+            if candidates
+                .get(parent)
+                .is_some_and(|(_, parent_name)| parent_name == name)
+            {
+                continue;
+            }
+            let Ok(handle) =
+                (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) })
+            else {
+                continue;
+            };
+            let process = OwnedHandle::new(handle);
+            let Ok(path) = process_image_path(process.raw()) else {
+                continue;
+            };
+            if !path
+                .file_name()
+                .and_then(|v| v.to_str())
+                .is_some_and(|v| v.eq_ignore_ascii_case(name))
+            {
+                continue;
+            }
+            let (mut creation, mut exit, mut kernel, mut user) = Default::default();
+            if unsafe {
+                GetProcessTimes(
+                    process.raw(),
+                    &mut creation,
+                    &mut exit,
+                    &mut kernel,
+                    &mut user,
+                )
+            }
+            .is_err()
+            {
+                continue;
+            }
+            let birth =
+                (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime);
+            result.push(ApplicationAudioProcess {
+                pid,
+                executable: name.clone(),
+                creation: birth.to_string(),
+            });
+        }
+        result.sort_by_key(|p| p.pid);
+        Ok(result)
     }
 
     fn parent_process_id(pid: u32) -> Result<u32> {

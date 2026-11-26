@@ -270,6 +270,8 @@ contextBridge.exposeInMainWorld('lycanDesktop', {
     ipcRenderer.on('media:native-video-suspended', listener);
     return () => ipcRenderer.removeListener('media:native-video-suspended', listener);
   },
+  listApplicationAudioSources: () => ipcRenderer.invoke('media:application-audio:sources'),
+  startApplicationAudio: (sourceId, publicationId) => ipcRenderer.invoke('media:application-audio:start', sourceId, publicationId),
   startNativeScreenAudio: (sourceId, sessionId, publicationId) => ipcRenderer.invoke('media:native-screen-audio:start', sourceId, sessionId, publicationId),
   stopNativeScreenAudio: (sessionId) => ipcRenderer.invoke('media:native-screen-audio:stop', sessionId),
   onNativeScreenAudioChunk: (callback) => {

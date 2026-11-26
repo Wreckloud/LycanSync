@@ -2,6 +2,7 @@ import { LocalAudioTrack } from 'livekit-client';
 import processorUrl from './nativeScreenAudio.worklet.js?url&no-inline';
 
 export interface NativeScreenAudioDesktopBridge {
+  startApplicationAudio?(sourceId: string, publicationId: string): ReturnType<NativeScreenAudioDesktopBridge['startNativeScreenAudio']>;
   startNativeScreenAudio(sourceId: string, captureSessionId: string, publicationId: string): Promise<{
     sampleRate: number;
     channels: 2;
@@ -67,7 +68,7 @@ export class NativeScreenAudioSession {
   private readonly createWorkletNode: (context: AudioContext) => AudioWorkletNode;
   private readonly createLocalTrack: (track: MediaStreamTrack, context: AudioContext) => LocalAudioTrack;
 
-  start(sourceId: string, sessionId: string): Promise<LocalAudioTrack> {
+  start(sourceId: string, sessionId?: string): Promise<LocalAudioTrack> {
     if (this.stopped) return Promise.reject(new Error('screenAudioSessionStopped'));
     if (!this.startCommand) this.startCommand = this.startGraphAndCapture(sourceId, sessionId);
     return this.startCommand.then(() => {
@@ -77,7 +78,7 @@ export class NativeScreenAudioSession {
     });
   }
 
-  private async startGraphAndCapture(sourceId: string, captureSessionId: string) {
+  private async startGraphAndCapture(sourceId: string, captureSessionId?: string) {
     // 同一画面和录制音源可以复用，每次页面发布单独识别其迟到消息。
     const sessionId = this.sessionId = crypto.randomUUID();
     this.removeChunkListener = this.desktop.onNativeScreenAudioChunk((chunk) => this.acceptChunk(chunk));
@@ -85,7 +86,9 @@ export class NativeScreenAudioSession {
       if (failure?.sessionId === this.sessionId) this.fail(failure.code);
     });
     try {
-      this.nativeStartCommand = this.desktop.startNativeScreenAudio(sourceId, captureSessionId, sessionId);
+      if (captureSessionId === undefined && !this.desktop.startApplicationAudio) throw new Error('screenShareAudioUnsupported');
+      this.nativeStartCommand = captureSessionId === undefined ? this.desktop.startApplicationAudio!(sourceId, sessionId)
+        : this.desktop.startNativeScreenAudio(sourceId, captureSessionId, sessionId);
       const format = await this.nativeStartCommand;
       if (format.channels !== 2 || format.bitsPerSample !== 32 || format.nominalChunkMs !== 10
           || !Number.isInteger(format.sampleRate) || format.sampleRate < 8000 || format.sampleRate > 192000) {

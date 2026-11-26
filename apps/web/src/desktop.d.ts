@@ -281,6 +281,8 @@ interface Window {
       stage: 'screenVideoFirstFrame' | 'screenVideoStartupFailed' | 'screenAudioStartup' | 'screenVideoPublished', durationMs: number,
       audioTiming?: { outcome: 'published' | 'failed'; phase: 'capture' | 'graph' | 'publish';
         pluginLoadMs?: number; captureReadyMs?: number; graphReadyMs?: number; publishMs?: number } | { code: string }): void;
+    listApplicationAudioSources(): Promise<import('./rtc/applicationAudio').ApplicationAudioSource[]>;
+    startApplicationAudio(sourceId: string, publicationId: string): ReturnType<import('./rtc/nativeScreenAudio').NativeScreenAudioDesktopBridge['startNativeScreenAudio']>;
     startNativeScreenAudio(sourceId: string, captureSessionId: string, publicationId: string): Promise<{
       sampleRate: number; channels: 2; bitsPerSample: 32; nominalChunkMs: 10;
       pluginLoadMs: number; captureReadyMs: number;

@@ -277,6 +277,7 @@ test('诊断IPC只读取现存的四类子进程，不接受页面指定PID和�
   const scope = {
     ipcMain: { handle: (_name, callback) => { handler = callback; } }, trustedSender: (event) => event.trusted,
     app: { getAppMetrics: () => ['electron'] }, obsCaptureHost: { state: { child: 'obs-child' } },
+    applicationHost: { state: { child: 'music-child' } },
     obsHostSettings: { executablePath: 'obs.exe' }, obsAudioHost: { state: { child: 'audio-child' } },
     obsAudioSettings: { executablePath: 'audio.exe' }, mediaHelper: { children: new Set([{ child: 'media-child' }]) },
     mediaHelperPath: () => 'media.exe', activityMonitor: { diagnosticProcesses: () => ['activity-child'] },
@@ -287,7 +288,7 @@ test('诊断IPC只读取现存的四类子进程，不接受页面指定PID和�
   assert.throws(() => handler({ trusted: false }, 12345), /无效/);
   assert.equal(handler({ trusted: true }, 12345), 'result');
   assert.deepEqual(captured, [['electron'], [
-    { role: 'obs', children: ['obs-child'], executablePath: 'obs.exe' },
+    { role: 'obs', children: ['obs-child', 'music-child'], executablePath: 'obs.exe' },
     { role: 'obs-audio', children: ['audio-child'], executablePath: 'audio.exe' },
     { role: 'media', children: ['media-child'], executablePath: 'media.exe' },
     { role: 'activity', children: ['activity-child'], executablePath: 'activity.exe' },

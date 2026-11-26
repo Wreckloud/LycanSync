@@ -11,6 +11,7 @@ const { ObsCaptureHostManager } = require('./obs-capture-host.cjs');
 const { ObsAudioHostManager } = require('./obs-audio-host.cjs');
 const { createNativeMicrophone, validMicrophoneSettings } = require('./native-microphone.cjs');
 const { validNativeAudioSessionId } = require('./native-audio-session.cjs');
+const { createApplicationAudioSources } = require('./application-audio-sources.cjs');
 const { createNativeScreenAudio } = require('./native-screen-audio.cjs');
 const { createNativeVideoSession } = require('./native-video-session.cjs');
 const { createSaveDirectories } = require('./save-directories.cjs');
@@ -345,6 +346,19 @@ const obsAudioHost = new ObsAudioHostManager({
 const nativeMicrophone = createNativeMicrophone({ host: obsAudioHost, getWindow: () => mainWindow,
   isClosing: () => closing, writeDiagnostic: writeMediaDiagnostic });
 
+const applicationSources = createApplicationAudioSources(executables => {
+  const bridge = nativeMediaBridge ??= loadNativeMediaBridge();
+  return bridge.listApplicationAudioProcesses(executables);
+});
+const applicationHost = new ObsCaptureHostManager({
+  ...obsAudioSettings, executablePath: obsHostSettings.executablePath,
+  configPath: resolve(app.getPath('userData'), 'obs-application-audio', '32.2.2'),
+  onAudioFailure: (state, event) => applicationAudio.notifyFailure(state.videoSessionId, event.code, event.audioId),
+  onClosed: state => applicationAudio.confirmStopped(state.videoSessionId),
+});
+const applicationAudio = createNativeScreenAudio({ applicationHost, getVideo: () => undefined,
+  getRecording: () => recording, getWindow: () => mainWindow, isClosing: () => closing,
+  capability: screenShareAudioCapability, writeDiagnostic: writeMediaDiagnostic });
 const nativeScreenAudio = createNativeScreenAudio({ host: obsCaptureHost, getVideo: () => nativeVideo.current,
   getRecording: () => recording, getWindow: () => mainWindow, isClosing: () => closing,
   capability: screenShareAudioCapability, writeDiagnostic: writeMediaDiagnostic });
@@ -985,7 +999,7 @@ ipcMain.handle('chat:download', async (event, id, path, name, size) => {
 ipcMain.handle('diagnostics:process-metrics', (event) => {
   if (!trustedSender(event)) throw new Error('请求来源无效');
   return readProcessMetrics(app.getAppMetrics(), [
-    { role: 'obs', children: obsCaptureHost.state ? [obsCaptureHost.state.child] : [], executablePath: obsHostSettings.executablePath },
+    { role: 'obs', children: [obsCaptureHost.state, applicationHost.state].filter(Boolean).map(state => state.child), executablePath: obsHostSettings.executablePath },
     { role: 'obs-audio', children: obsAudioHost.state ? [obsAudioHost.state.child] : [], executablePath: obsAudioSettings.executablePath },
     { role: 'media', children: [...mediaHelper.children].map((state) => state.child), executablePath: mediaHelperPath() },
     { role: 'activity', children: activityMonitor.diagnosticProcesses(), executablePath: activityHelperPath() },
@@ -1430,6 +1444,15 @@ ipcMain.handle('media:remote-control:revoke', (event, sessionId, controlSessionI
   }
   return mediaHelper.clearRemoteControl(sessionId, controlSessionId);
 });
+ipcMain.handle('media:application-audio:sources', event => {
+  if (!trustedSender(event) || closing) throw new Error('请求来源无效');
+  if (screenShareAudioCapability().reason !== 'windowsApplicationLoopbackProcessTree') throw new Error('screenShareAudioUnsupported');
+  return applicationSources.list();
+});
+ipcMain.handle('media:application-audio:start', (event, sourceId, publicationId) => {
+  if (!trustedSender(event) || closing || !validNativeAudioSessionId(publicationId)) throw new Error('请求参数无效');
+  return applicationAudio.start(sourceId, publicationId, publicationId, applicationSources.resolve(sourceId));
+});
 ipcMain.handle('media:native-screen-audio:start', (event, sourceId, sessionId, publicationId) => {
   if (!trustedSender(event) || closing || typeof sourceId !== 'string' || sourceId.length > 128
       || !validNativeAudioSessionId(sessionId) || !validNativeAudioSessionId(publicationId)) {
@@ -1441,11 +1464,12 @@ ipcMain.handle('media:native-screen-audio:stop', (event, publicationId) => {
   if (!trustedSender(event) || !validNativeAudioSessionId(publicationId)) {
     throw new Error('请求参数无效');
   }
-  return nativeScreenAudio.stopPublishing(publicationId);
+  return (applicationAudio.sessionId === publicationId ? applicationAudio : nativeScreenAudio).stopPublishing(publicationId);
 });
 ipcMain.on('media:native-screen-audio:consumed', (event, sessionId, sequence, droppedChunks) => {
   if (!trustedSender(event)) return;
-  nativeScreenAudio.acknowledge(sessionId, sequence, droppedChunks);
+  const audio = applicationAudio.sessionId === sessionId ? applicationAudio : nativeScreenAudio;
+  audio.acknowledge(sessionId, sequence, droppedChunks);
 });
 ipcMain.handle('media:microphone-echo-output', (event, selector) => {
   if (!trustedSender(event)) throw new Error('请求参数无效');
@@ -1560,6 +1584,10 @@ function shutdownMediaResources() {
       console.error(`native video shutdown failed: ${error.message}`);
     })
     : Promise.resolve())
+    .then(async () => {
+      try { if (applicationAudio.sessionId) await applicationAudio.stop(applicationAudio.sessionId, true); }
+      finally { await applicationHost.dispose(); }
+    }).catch(error => console.error('application audio shutdown failed', error))
     .then(() => obsCaptureHost.dispose().catch(error => {
       console.error(`OBS host shutdown failed: ${error.message}`);
     }))
@@ -1632,6 +1660,7 @@ async function returnToAccountEntry() {
     () => recordingEditor.cancel(),
     () => recording.stopAll(),
     () => nativeVideo.current && nativeVideo.stop(nativeVideo.current.sessionId),
+    () => applicationAudio.sessionId && applicationAudio.stop(applicationAudio.sessionId, true),
     () => nativeScreenAudio.sessionId && nativeScreenAudio.stop(nativeScreenAudio.sessionId, true),
     () => nativeMicrophone.sessionId && nativeMicrophone.stop(nativeMicrophone.sessionId),
     () => savedDiagnosticReports.flush(),

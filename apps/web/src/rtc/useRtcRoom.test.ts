@@ -126,9 +126,10 @@ vi.mock('./nativeScreenAudio', () => ({
         });
       }
     }
-    async start(sourceId: string, sessionId: string) {
+    async start(sourceId: string, sessionId?: string) {
       this.sessionId = crypto.randomUUID();
-      const format = await this.desktop!.startNativeScreenAudio(sourceId, sessionId, this.sessionId);
+      const format = sessionId === undefined ? await this.desktop!.startApplicationAudio(sourceId, this.sessionId)
+        : await this.desktop!.startNativeScreenAudio(sourceId, sessionId, this.sessionId);
       this.startupTiming = { pluginLoadMs: format.pluginLoadMs, captureReadyMs: format.captureReadyMs, graphReadyMs: 20 };
       return this.track as never;
     }
@@ -201,15 +202,16 @@ vi.mock('livekit-client', () => {
     localParticipant = {
       identity: 'local',
       trackPublications: this.publications,
+      audioTrackPublications: this.publications,
       getTrackPublication: (trackSource: string) => this.publications.get(trackSource),
       createTracks: () => rtcMocks.createTracks() as Promise<never[]>,
       setAttributes: async (attributes: Record<string, string>) => {
         this.attributes.push(attributes);
         await rtcMocks.attributesSet(this, attributes);
       },
-      publishTrack: async (track: { stop: ReturnType<typeof vi.fn> }, options?: { source: string }) => {
+      publishTrack: async (track: { stop: ReturnType<typeof vi.fn> }, options?: { source: string; name?: string }) => {
         await rtcMocks.published(track, options);
-        const publication = { trackSid: `track-${++this.publicationSequence}`, track, source: options?.source ?? source.Microphone };
+        const publication = { trackSid: `track-${++this.publicationSequence}`, track, trackName: options?.name ?? '', source: options?.source ?? source.Microphone };
         this.publications.set(publication.source, publication);
         this.emit(events.LocalTrackPublished, publication);
         return publication;
@@ -257,6 +259,7 @@ vi.mock('livekit-client', () => {
     }
   }
   return {
+    AudioPresets: { musicHighQualityStereo: { maxBitrate: 128000 } },
     ConnectionState: { Connected: 'connected', Reconnecting: 'reconnecting', SignalReconnecting: 'signalReconnecting' },
     DisconnectReason: { DUPLICATE_IDENTITY: 'duplicateIdentity', PARTICIPANT_REMOVED: 'participantRemoved' },
     LocalAudioTrack: class LocalAudioTrack {},
@@ -408,6 +411,7 @@ function configureNativeScreenDesktop(options: {
       recordScreenShareStartupTiming: rtcMocks.startupTiming,
       startNativeVideo: rtcMocks.nativeStarts,
       stopNativeVideo: rtcMocks.nativeStops,
+      startApplicationAudio: rtcMocks.nativeAudioStarts,
       startNativeScreenAudio: rtcMocks.nativeAudioStarts,
       stopNativeScreenAudio: rtcMocks.nativeAudioStops,
       onNativeScreenAudioChunk: () => () => {},
@@ -418,6 +422,70 @@ function configureNativeScreenDesktop(options: {
 }
 
 describe('room media lifecycle', () => {
+  const musicSource = { id: 'isolated-player', application: 'vlc', name: 'VLC' };
+
+  it('伴奏独立发布立体声音轨，停止画面时继续播放，离房释放', async () => {
+    configureNativeScreenDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('music');
+      expect(await rtc.startApplicationAudio(musicSource)).toBe(true);
+      expect(rtcMocks.nativeStarts).not.toHaveBeenCalled();
+      expect(rtc.applicationAudioSource.value).toEqual(musicSource);
+      expect(rtcMocks.published).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        source: Track.Source.ScreenShareAudio, name: 'application-audio:vlc', forceStereo: true,
+      }));
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, false);
+      expect(rtc.applicationAudioSource.value).toEqual(musicSource);
+      expect(rtcMocks.nativeAudioStops).not.toHaveBeenCalled();
+      await rtc.leave();
+      expect(rtc.applicationAudioSource.value).toBeNull();
+      expect(rtcMocks.nativeAudioStops).toHaveBeenCalledOnce();
+    } finally { scope.stop(); }
+  });
+
+  it('分享无声画面时保留伴奏，画面音频成功发布才接替', async () => {
+    configureNativeScreenDesktop();
+    rtcMocks.selectedSources.mockResolvedValue({ sourceId: 'window:test:0', shareAudio: false });
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
+      processing: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, voiceEnhancement: false },
+      events: { selectNativeScreenSource: rtcMocks.selectedSources } }))!;
+    try {
+      await rtc.join('music');
+      expect(await rtc.startApplicationAudio(musicSource)).toBe(true);
+      await rtc.setMediaEnabled(Track.Source.ScreenShare, true);
+      expect(rtc.applicationAudioSource.value).toEqual(musicSource);
+      rtcMocks.nativeAudioStarts.mockRejectedValueOnce(new Error('screenShareAudioStartFailed'));
+      expect(await rtc.setScreenShareAudioEnabled(true)).toBe(false);
+      expect(rtc.applicationAudioSource.value).toEqual(musicSource);
+      expect(await rtc.setScreenShareAudioEnabled(true)).toBe(true);
+      expect(rtc.applicationAudioSource.value).toBeNull();
+      expect(mockRoom().localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)).toBeDefined();
+      await rtc.leave();
+    } finally { scope.stop(); }
+  });
+
+  it('取消尚未就绪的伴奏不会迟到发布', async () => {
+    configureNativeScreenDesktop();
+    const scope = effectScope();
+    const rtc = scope.run(() => useRtcRoom())!;
+    try {
+      await rtc.join('music');
+      const capture = deferred<{ pluginLoadMs: number; captureReadyMs: number }>();
+      rtcMocks.nativeAudioStarts.mockReturnValueOnce(capture.promise);
+      const start = rtc.startApplicationAudio(musicSource);
+      const stop = rtc.stopApplicationAudio();
+      capture.resolve({ pluginLoadMs: 1, captureReadyMs: 2 });
+      await stop;
+      expect(await start).toBe(false);
+      expect(rtc.applicationAudioSource.value).toBeNull();
+      expect(rtcMocks.published.mock.calls.some(([, opts]) => opts?.name === 'application-audio:vlc')).toBe(false);
+      await rtc.leave();
+    } finally { scope.stop(); }
+  });
+
   it.each(['empty', 'failed', 'complete'] as const)('入场流%s 结束时仅当前房间的同一成员可触发提示', async outcome => {
     for (const lifecycle of ['current', 'participantLeft', 'roomLeft', 'replaced']) {
       configureNativeMicrophoneDesktop();

@@ -23,7 +23,7 @@ bool lycan_game_target_valid(const struct lycan_game_target *target)
       && process_id == target->process_id;
 }
 
-static HANDLE open_original_process(DWORD process_id, unsigned long long expected_creation)
+HANDLE lycan_open_original_process(DWORD process_id, unsigned long long expected_creation)
 {
   HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, process_id);
   FILETIME creation, exit, kernel, user;
@@ -70,8 +70,8 @@ bool lycan_game_target_read(struct lycan_game_target *target, obs_data_t *settin
       || !read_positive_integer(&parts, 0, &selected_window) || selected_window != (unsigned long long)window) return false;
   target->window = (HWND)(uintptr_t)window;
   target->process_id = (DWORD)process_id;
-  target->owner = open_original_process((DWORD)owner_id, owner_creation);
-  target->process = open_original_process(target->process_id, creation);
+  target->owner = lycan_open_original_process((DWORD)owner_id, owner_creation);
+  target->process = lycan_open_original_process(target->process_id, creation);
   target->lifetime = OpenEventA(SYNCHRONIZE, FALSE, name);
   if (lycan_game_target_valid(target)) return true;
   lycan_game_target_close(target);

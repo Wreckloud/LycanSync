@@ -288,7 +288,7 @@ onBeforeUnmount(() => {
         <strong :title="media.name">{{ media.name }}{{ isLocal ? '（你）' : '' }}</strong>
         <ConnectionSignal v-if="variant === 'card' && !isLocal" class="member-signal" :quality="media.quality" />
       </span>
-      <MemberVolumeButton v-if="variant === 'card' && !isLocal && media.sharing && shareAudio && shareAudioListening" :max="SHARE_VOLUME_MAX"
+      <MemberVolumeButton v-if="variant === 'card' && !isLocal && shareAudio && shareAudioListening" :max="SHARE_VOLUME_MAX"
         :volume="shareVolume" :label="shareVolume === 0 ? '恢复这路共享声音' : '静音这路共享声音'"
         @toggle="emit('toggleShareAudio')" @change="emit('changeShareVolume', $event)">
         <VolumeX v-if="shareVolume === 0" :size="14" /><Volume2 v-else :size="14" />
