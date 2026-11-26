@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onMounted, onScopeDispose, ref, watch } from 'vue';
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, HeadphoneOff, Headphones, MicOff, MonitorUp, MonitorX, Settings } from '@lucide/vue';
+import { ChevronDown, ChevronLeft, ChevronRight, HeadphoneOff, Headphones, MicOff, MonitorUp, MonitorX, Settings } from '@lucide/vue';
 import VoiceLevelMic from './VoiceLevelMic.vue';
 import RangeValue from './RangeValue.vue';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP } from '../rtc/audioPreferences';
@@ -38,10 +38,9 @@ const emit = defineEmits<{
 type ControlMenu = 'microphone' | 'output' | 'share';
 const root = ref<HTMLElement | null>(null);
 const menu = ref<ControlMenu | null>(null);
-const qualityOpen = ref(false);
-const memberVolumesOpen = ref(false);
+const submenuOpen = ref(false);
 const missingTalkBinding = ref(false);
-const qualityPlacement = ref<'right' | 'compact'>('compact');
+const submenuPlacement = ref<'right' | 'compact'>('compact');
 const menuMaxHeight = ref(520);
 let opener: HTMLButtonElement | null = null;
 const levelSegments = Array.from({ length: 16 }, (_, index) => index + 1);
@@ -61,9 +60,8 @@ function scheduleShareIntent() {
 
 function closeMenu(restoreFocus = false) {
   menu.value = null;
-  memberVolumesOpen.value = false;
   missingTalkBinding.value = false;
-  qualityOpen.value = false;
+  submenuOpen.value = false;
   if (restoreFocus) opener?.focus();
 }
 
@@ -74,19 +72,19 @@ function resizeMenu() {
   const titlebarBottom = document.querySelector('.titlebar')?.getBoundingClientRect().bottom ?? 0;
   menuMaxHeight.value = Math.max(60, Math.min(520, (anchor?.getBoundingClientRect().top ?? 520) - titlebarBottom - 16));
   const right = opener?.closest('.call-control-split')?.getBoundingClientRect().right ?? 0;
-  qualityPlacement.value = window.innerWidth > 600 && right + 268 <= window.innerWidth - 16 ? 'right' : 'compact';
+  submenuPlacement.value = window.innerWidth > 600 && right + 268 <= window.innerWidth - 16 ? 'right' : 'compact';
 }
 
 async function toggleMenu(kind: ControlMenu, event: Event) {
   if (menu.value === kind) { closeMenu(true); return; }
   opener = event.currentTarget as HTMLButtonElement;
-  qualityOpen.value = false;
+  submenuOpen.value = false;
   menu.value = kind;
   missingTalkBinding.value = false;
   if (kind === 'share') prepareShare();
   resizeMenu();
   await nextTick();
-  root.value?.querySelector<HTMLElement>('.call-control-menu input:not(:disabled), .call-control-menu button:not(:disabled)')?.focus();
+  if (menu.value === kind) opener?.closest('.call-control-split')?.querySelector<HTMLElement>('.call-control-menu input:not(:disabled), .call-control-menu button:not(:disabled)')?.focus();
 }
 
 function dismiss(event: PointerEvent) {
@@ -123,13 +121,14 @@ function toggleProcessing(event: Event) {
 }
 
 function toggleShare() { closeMenu(true); emit('share'); }
-async function toggleQuality() {
-  const opening = !qualityOpen.value;
-  qualityOpen.value = opening;
+async function toggleSubmenu() {
+  const parent = menu.value;
+  const opening = !submenuOpen.value;
+  submenuOpen.value = opening;
   await nextTick();
-  if (menu.value !== 'share' || qualityOpen.value !== opening) return;
-  root.value?.querySelector<HTMLElement>(opening
-    ? '.call-quality-options input:checked' : '.call-quality-trigger')?.focus();
+  if (menu.value !== parent || submenuOpen.value !== opening) return;
+  const selector = parent === 'share' ? '.call-quality-options input:checked' : '.call-member-volume input';
+  opener?.closest('.call-control-split')?.querySelector<HTMLElement>(opening ? selector : '.call-submenu-trigger')?.focus();
 }
 function chooseQuality(quality: ScreenShareQualityId) {
   if (props.shareBusy) return;
@@ -148,12 +147,18 @@ function toggleShareAudio(event: Event) {
 function escape(event: KeyboardEvent) {
   if (!menu.value) return;
   event.stopPropagation();
-  if (qualityOpen.value) void toggleQuality();
+  if (submenuOpen.value) void toggleSubmenu();
   else closeMenu(true);
 }
 
 watch(() => [props.connected, props.choosingSource], ([connected, choosing]) => { if (!connected || choosing) closeMenu(); });
 watch(() => props.sharing, () => { if (menu.value === 'share') closeMenu(); });
+watch(() => props.memberVolumes?.length, async count => {
+  if (count || menu.value !== 'output' || !submenuOpen.value) return;
+  submenuOpen.value = false;
+  await nextTick();
+  if (menu.value === 'output') opener?.focus();
+});
 watch(() => props.pushToTalkBinding, binding => { if (binding) missingTalkBinding.value = false; });
 watch(() => props.shareBusy, busy => { if (busy && menu.value === 'share') opener?.focus(); });
 onMounted(() => {
@@ -206,27 +211,32 @@ onScopeDispose(() => {
       <button type="button" class="call-control-more" aria-label="收听选项" :aria-expanded="menu === 'output'"
         :disabled="!connected" @click="toggleMenu('output', $event)"><ChevronDown :size="13" :class="{ 'is-open': menu === 'output' }" /></button>
       <Transition name="surface-panel">
-      <section v-if="menu === 'output'" class="call-control-menu" aria-label="收听选项">
-        <header>收听</header>
-        <div class="call-control-range"><span>输出音量<RangeValue :value="outputVolume" label="重置总输出音量" @reset="emit('outputVolume', $event)">{{ Math.round(outputVolume * 100) }}%</RangeValue></span>
-          <input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="outputVolume" aria-label="lycanclaw 总输出音量"
-            @input="emit('outputVolume', Number(($event.target as HTMLInputElement).value))" /></div>
-        <label class="call-share-audio"><span>平衡成员语音音量</span><input type="checkbox" :checked="voiceVolumeBalance"
-          @change="emit('voiceVolumeBalance', ($event.target as HTMLInputElement).checked)" /></label>
-        <template v-if="memberVolumes?.length">
-          <ExpandSection :open="memberVolumesOpen">
-            <div v-for="member in memberVolumes" :key="member.identity" class="call-control-range call-member-volume">
-              <span>{{ member.name }}<RangeValue :value="member.volume" :label="`重置${member.name}接收音量`" @reset="emit('memberVolume', member.identity, $event)">{{ Math.round(member.volume * 100) }}%</RangeValue></span>
-              <input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="member.volume" :aria-label="`${member.name}接收音量`"
-                @input="emit('memberVolume', member.identity, Number(($event.target as HTMLInputElement).value))" />
-            </div>
-          </ExpandSection>
-          <button type="button" class="call-settings-entry" :aria-expanded="memberVolumesOpen" @click="memberVolumesOpen = !memberVolumesOpen">
-            {{ memberVolumesOpen ? '收起成员音量' : '调整成员音量' }}<ChevronUp v-if="memberVolumesOpen" :size="14" /><ChevronDown v-else :size="14" />
-          </button>
-        </template>
-        <button type="button" class="call-settings-entry" @click="openAudioSettings"><Settings :size="15" />语音设置<ChevronRight :size="14" /></button>
-      </section>
+      <div v-if="menu === 'output'" class="call-menu-stack" :class="{ 'is-compact': submenuPlacement === 'compact' }">
+        <section v-show="!submenuOpen || submenuPlacement !== 'compact'" class="call-control-menu call-menu-primary" aria-label="收听选项">
+          <header>收听</header>
+          <div class="call-control-range"><span>输出音量<RangeValue :value="outputVolume" label="重置总输出音量" @reset="emit('outputVolume', $event)">{{ Math.round(outputVolume * 100) }}%</RangeValue></span>
+            <input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="outputVolume" aria-label="lycanclaw 总输出音量"
+              @input="emit('outputVolume', Number(($event.target as HTMLInputElement).value))" /></div>
+          <label class="call-share-audio"><span>平衡成员语音音量</span><input type="checkbox" :checked="voiceVolumeBalance"
+            @change="emit('voiceVolumeBalance', ($event.target as HTMLInputElement).checked)" /></label>
+          <button v-if="memberVolumes?.length" type="button" class="call-menu-action call-submenu-trigger" :aria-expanded="submenuOpen" @click="toggleSubmenu">
+            调整成员音量<ChevronRight class="call-menu-chevron" :size="14" /></button>
+          <button type="button" class="call-settings-entry" @click="openAudioSettings"><Settings :size="15" />语音设置<ChevronRight :size="14" /></button>
+        </section>
+        <Transition :name="submenuPlacement === 'right' ? 'surface-side' : 'surface-panel'">
+        <section v-if="submenuOpen" class="call-control-menu call-submenu" aria-label="成员音量">
+          <header class="call-submenu-heading">
+            <button v-if="submenuPlacement === 'compact'" type="button" class="call-menu-action call-submenu-back" aria-label="返回收听选项" @click="toggleSubmenu"><ChevronLeft :size="14" /></button>
+            成员音量
+          </header>
+          <div v-for="member in memberVolumes" :key="member.identity" class="call-control-range call-member-volume">
+            <span><span class="call-member-name" :title="member.name">{{ member.name }}</span><RangeValue :value="member.volume" :label="`重置${member.name}接收音量`" @reset="emit('memberVolume', member.identity, $event)">{{ Math.round(member.volume * 100) }}%</RangeValue></span>
+            <input type="range" min="0" :max="AUDIO_VOLUME_MAX" :step="AUDIO_VOLUME_STEP" :value="member.volume" :aria-label="`${member.name}接收音量`"
+              @input="emit('memberVolume', member.identity, Number(($event.target as HTMLInputElement).value))" />
+          </div>
+        </section>
+        </Transition>
+      </div>
       </Transition>
     </div>
     <div class="call-control-split">
@@ -239,8 +249,8 @@ onScopeDispose(() => {
         :disabled="!connected || choosingSource" @click="toggleMenu('share', $event)"
         @pointerenter="scheduleShareIntent" @pointerleave="cancelShareIntent" @focus="prepareShare" @blur="cancelShareIntent"><ChevronDown :size="13" :class="{ 'is-open': menu === 'share' }" /></button>
       <Transition name="surface-panel">
-      <div v-if="menu === 'share'" class="call-share-menu" :class="{ 'is-compact': qualityPlacement === 'compact' }">
-        <section v-show="!qualityOpen || qualityPlacement !== 'compact'" class="call-control-menu call-share-actions" aria-label="共享选项">
+      <div v-if="menu === 'share'" class="call-menu-stack" :class="{ 'is-compact': submenuPlacement === 'compact' }">
+        <section v-show="!submenuOpen || submenuPlacement !== 'compact'" class="call-control-menu call-menu-primary" aria-label="共享选项">
           <header>屏幕共享</header>
           <button v-if="sharing" type="button" class="call-menu-action is-danger" :disabled="shareBusy" @click="toggleShare">
             <MonitorX :size="15" />关闭共享</button>
@@ -248,7 +258,7 @@ onScopeDispose(() => {
             @click="closeMenu(true); emit('shareGame')"><MonitorUp :size="15" />快速共享 {{ gameName }}</button>
           <button v-if="desktop" type="button" class="call-menu-action" :disabled="recordingBusy || shareBusy || shareAudioRestricted || (!sharing && shareLimitReached)"
             @click="closeMenu(true); sharing ? emit('recording') : emit('shareAndRecord')">{{ recordingActive ? `停止录制 · ${recordingElapsed}` : sharing ? '开始录制' : '开始共享并录制' }}</button>
-          <button v-if="desktop" type="button" class="call-menu-action call-quality-trigger" :aria-expanded="qualityOpen" :disabled="shareBusy" @click="toggleQuality">
+          <button v-if="desktop" type="button" class="call-menu-action call-submenu-trigger" :aria-expanded="submenuOpen" :disabled="shareBusy" @click="toggleSubmenu">
             共享画质<span>{{ SCREEN_SHARE_QUALITIES.find(preset => preset.id === quality)?.label }}</span><ChevronRight class="call-menu-chevron" :size="14" /></button>
           <label v-if="desktop && sharing" class="call-share-audio"><span>共享音频</span><input type="checkbox" :checked="shareAudio" :disabled="shareBusy || shareAudioRestricted || audioMode === 'unavailable'"
             @change="toggleShareAudio" /></label>
@@ -260,9 +270,9 @@ onScopeDispose(() => {
             @click="closeMenu(true); emit('saveReplay')">保存即时回放</button>
           <button v-if="desktop" type="button" class="call-settings-entry" @click="emit('recordingSettings', opener!); closeMenu()"><Settings :size="15" />共享与录制<ChevronRight class="call-menu-chevron" :size="14" /></button>
         </section>
-        <Transition :name="qualityPlacement === 'right' ? 'surface-side' : 'surface-panel'">
-        <section v-if="qualityOpen" class="call-control-menu call-quality-menu" aria-label="共享画质">
-          <button v-if="qualityPlacement === 'compact'" type="button" class="call-menu-action call-quality-back" aria-label="返回共享选项" @click="toggleQuality"><ChevronLeft :size="14" /></button>
+        <Transition :name="submenuPlacement === 'right' ? 'surface-side' : 'surface-panel'">
+        <section v-if="submenuOpen" class="call-control-menu call-submenu" aria-label="共享画质">
+          <button v-if="submenuPlacement === 'compact'" type="button" class="call-menu-action call-submenu-back" aria-label="返回共享选项" @click="toggleSubmenu"><ChevronLeft :size="14" /></button>
           <div class="call-quality-options" role="group" aria-label="画质预设">
             <label v-for="preset in SCREEN_SHARE_QUALITIES" :key="preset.id">
               <span>{{ preset.label }}<small>{{ screenShareQuality(preset.id, customQuality).description }}</small></span>
@@ -294,7 +304,8 @@ onScopeDispose(() => {
 .call-control-menu { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 8px); display: grid; gap: 12px; width: min(260px, calc(100vw - 32px)); max-height: var(--call-menu-max-height); overflow-y: auto; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-raised); color: var(--text); font-size: 13px; line-height: 20px; }
 .call-control-menu header { color: var(--muted); font-size: 12px; }
 .call-control-range, .call-input-level { display: grid; gap: 6px; }
-.call-member-volume + .call-member-volume { margin-top: 12px; }
+.call-member-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-submenu-heading { display: flex; align-items: center; gap: 4px; }
 .call-control-range > span, .call-input-level > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .call-control-range input { width: 100%; margin: 0; accent-color: var(--accent); }
 .call-control-menu b { color: var(--accent); font-weight: 500; font-variant-numeric: tabular-nums; }
@@ -310,11 +321,12 @@ onScopeDispose(() => {
 .call-menu-action > span + svg { margin-left: 0; }
 .call-menu-action.is-danger { color: var(--danger); }
 .call-settings-entry { border-top: 1px solid var(--border); border-radius: 0; padding-top: 12px; }
-.call-share-menu { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 8px); }
-.call-share-actions { position: relative; right: auto; bottom: auto; }
-.call-quality-menu { left: calc(100% + 8px); bottom: 0; }
-.call-share-menu.is-compact .call-quality-menu { position: relative; right: auto; left: auto; bottom: auto; }
-.call-quality-back { width: 32px; justify-content: center; padding: 6px; }
+.call-menu-stack { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 8px); }
+.call-menu-primary { position: relative; right: auto; bottom: auto; }
+.call-submenu { left: calc(100% + 8px); bottom: 0; }
+.call-menu-stack.is-compact .call-submenu { position: relative; right: auto; left: auto; bottom: auto; }
+.call-menu-stack.is-compact .call-submenu.surface-panel-leave-active { position: absolute; left: 0; bottom: 0; }
+.call-submenu-back { width: 32px; justify-content: center; padding: 6px; }
 .call-quality-options { display: grid; gap: 4px; }
 .call-quality-options label, .call-share-audio { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
 .call-quality-options label { padding: 4px 0; }
@@ -327,7 +339,7 @@ onScopeDispose(() => {
   .call-controls { gap: 6px; }
   .call-control-split { position: static; }
   .call-control-menu { left: 10px; right: 10px; width: auto; max-width: 260px; }
-  .call-share-menu { left: 10px; right: 10px; max-width: 260px; }
-  .call-share-actions, .call-share-menu.is-compact .call-quality-menu { left: auto; right: auto; width: 100%; }
+  .call-menu-stack { left: 10px; right: 10px; max-width: 260px; }
+  .call-menu-primary, .call-menu-stack.is-compact .call-submenu { left: auto; right: auto; width: 100%; }
 }
 </style>

@@ -479,6 +479,7 @@ test('群头像提示在右侧进退，显示通话状态且不重复系统提�
 });
 
 test('成员卡片短按静音、长按拖动后与底部收听面板同步', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.evaluate(() => (window as unknown as { __viewingTest: { microphones(ids: string[]): void } }).__viewingTest.microphones(['A']));
   const local = page.getByTestId('participant-card').first();
   const microphone = local.getByRole('button', { name: '关闭自己的麦克风', exact: true });
@@ -497,10 +498,9 @@ test('成员卡片短按静音、长按拖动后与底部收听面板同步', as
   const volume = page.getByRole('slider', { name: '成员A接收音量', exact: true });
   await volume.fill('2');
   await expect(volume).toHaveValue('2');
-  const collapse = page.getByRole('button', { name: '收起成员音量', exact: true });
-  expect((await collapse.boundingBox())!.y).toBeGreaterThan((await volume.boundingBox())!.y);
-  await collapse.click();
+  await page.keyboard.press('Escape');
   await expect(volume).toBeHidden();
+  await expect(page.getByRole('button', { name: '调整成员音量', exact: true })).toBeFocused();
   await page.getByRole('button', { name: '收听选项', exact: true }).click();
   const remote = page.getByTestId('participant-card').filter({ hasText: '成员A' });
   await remote.getByRole('button', { name: /点击取消收听/ }).click();
@@ -530,8 +530,22 @@ test('成员卡片短按静音、长按拖动后与底部收听面板同步', as
   await page.getByRole('button', { name: '收听选项', exact: true }).click();
   await page.getByRole('button', { name: '调整成员音量', exact: true }).click();
   await expect(volume).toHaveValue('1');
-  await expect.poll(() => page.locator('.call-control-menu').evaluate(element => element.getAnimations({ subtree: true }).length)).toBe(0);
+  const submenu = page.getByRole('region', { name: '成员音量', exact: true });
+  const parent = page.getByRole('region', { name: '收听选项', exact: true });
+  await expect(volume).toBeFocused();
+  await expect(submenu).toHaveCSS('opacity', '1');
+  const parentBounds = (await parent.boundingBox())!;
+  expect((await submenu.boundingBox())!.x).toBeGreaterThan(parentBounds.x + parentBounds.width);
   await page.screenshot({ path: test.info().outputPath('member-volume-panel.png') });
+  await page.setViewportSize({ width: 480, height: 600 });
+  await expect(parent).toBeHidden();
+  const back = submenu.getByRole('button', { name: '返回收听选项' });
+  await expect(back).toBeInViewport();
+  await page.screenshot({ path: test.info().outputPath('member-volume-compact.png') });
+  await submenu.getByRole('slider').last().scrollIntoViewIfNeeded();
+  await expect(submenu.getByRole('slider').last()).toBeInViewport();
+  await back.click();
+  await expect(parent.getByRole('button', { name: '调整成员音量' })).toBeFocused();
 });
 
 test('后台暂时不可测量时保留观看尺寸，切回后原位显示且不重建视频', async ({ page }) => {

@@ -17,26 +17,27 @@ afterEach(() => vi.unstubAllGlobals());
 
 function setup(width = 1280, right = 1000) {
   const props = reactive({ desktop: true, connected: true, choosingSource: false, sharing: true, shareBusy: false, shareLimitReached: false, quality: 'standard' as ScreenShareQualityId,
-    shortcutsReady: true, shortcutsBusy: false, shortcutsSupported: true, pushToTalkBinding: '' });
+    shortcutsReady: true, shortcutsBusy: false, shortcutsSupported: true, pushToTalkBinding: '',
+    memberVolumes: [{ identity: 'A', name: '成员A', volume: 1 }] });
   const focus = vi.fn();
   const inputs = [{ value: 'standard', checked: false }, { value: 'custom', checked: true }];
   const root = { contains: (target: unknown) => target === 'inside', closest: () => ({ getBoundingClientRect: () => ({ top: 700 }) }),
     querySelector: vi.fn(() => ({ focus })), querySelectorAll: () => inputs };
-  const opener = { focus: vi.fn(), closest: () => ({ getBoundingClientRect: () => ({ top: 700, right }) }) };
+  const opener = { focus: vi.fn(), closest: () => ({ getBoundingClientRect: () => ({ top: 700, right }), querySelector: root.querySelector }) };
   const emit = vi.fn();
   vi.stubGlobal('document', { querySelector: () => ({ getBoundingClientRect: () => ({ bottom: 43 }) }), removeEventListener: vi.fn() });
   vi.stubGlobal('window', { innerWidth: width, matchMedia: () => ({ matches: width <= 600 }), removeEventListener: vi.fn() });
   const scope = effectScope();
   // 执行正式菜单回调，仅替换 DOM 边界；不连接房间、采集或启动客户端。
-  const controls = scope.run(() => runInNewContext(`${compiled}\n({ root, menu, qualityOpen, qualityPlacement,
-    changeVoiceMode, missingTalkBinding, openShortcutSettings, toggleMenu, toggleQuality, chooseQuality, escape, dismiss, dismissAfterFocus, prepareShare, scheduleShareIntent, cancelShareIntent })`, {
+  const controls = scope.run(() => runInNewContext(`${compiled}\n({ root, menu, submenuOpen, submenuPlacement,
+    changeVoiceMode, missingTalkBinding, openShortcutSettings, toggleMenu, toggleSubmenu, chooseQuality, escape, dismiss, dismissAfterFocus, prepareShare, scheduleShareIntent, cancelShareIntent })`, {
     setTimeout, clearTimeout,
     ref, watch, nextTick, onScopeDispose, document, window, onMounted: () => {}, defineProps: () => props,
     withDefaults: (value: unknown) => value, defineEmits: () => emit, DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY,
-  })) as { root: Ref<unknown>; menu: Ref<string | null>; qualityOpen: Ref<boolean>; qualityPlacement: Ref<string>;
+  })) as { root: Ref<unknown>; menu: Ref<string | null>; submenuOpen: Ref<boolean>; submenuPlacement: Ref<string>;
     changeVoiceMode(mode: string): void;
     missingTalkBinding: Ref<boolean>; openShortcutSettings(): void;
-    toggleMenu(kind: string, event: unknown): Promise<void>; toggleQuality(): Promise<void>; chooseQuality(id: string): void;
+    toggleMenu(kind: string, event: unknown): Promise<void>; toggleSubmenu(): Promise<void>; chooseQuality(id: string): void;
     escape(event: unknown): void; dismiss(event: unknown): void; dismissAfterFocus(event: unknown): void;
     prepareShare(): void; scheduleShareIntent(): void; cancelShareIntent(): void };
   controls.root.value = root;
@@ -77,16 +78,16 @@ it.each([[1280, 1000, 'compact'], [1280, 350, 'right'], [700, 500, 'compact'], [
     const f = setup(Number(width), Number(right));
     try {
       await f.controls.toggleMenu('share', { currentTarget: f.opener });
-      expect(f.controls.qualityPlacement.value).toBe(placement);
-      await f.controls.toggleQuality();
-      expect(f.controls.qualityOpen.value).toBe(true);
+      expect(f.controls.submenuPlacement.value).toBe(placement);
+      await f.controls.toggleSubmenu();
+      expect(f.controls.submenuOpen.value).toBe(true);
       expect(f.root.querySelector).toHaveBeenLastCalledWith('.call-quality-options input:checked');
       const stopPropagation = vi.fn();
       f.controls.escape({ stopPropagation });
       await nextTick();
-      expect(f.controls.qualityOpen.value).toBe(false);
+      expect(f.controls.submenuOpen.value).toBe(false);
       expect(f.controls.menu.value).toBe('share');
-      await vi.waitFor(() => expect(f.root.querySelector).toHaveBeenLastCalledWith('.call-quality-trigger'));
+      await vi.waitFor(() => expect(f.root.querySelector).toHaveBeenLastCalledWith('.call-submenu-trigger'));
       f.controls.escape({ stopPropagation });
       expect(f.controls.menu.value).toBeNull();
       expect(f.opener.focus).toHaveBeenCalled();
@@ -120,12 +121,27 @@ it('外部点击、切换菜单、选择来源及断线均清除二级菜单状�
       f.props.connected = true;
       await nextTick();
       await f.controls.toggleMenu('share', { currentTarget: f.opener });
-      await f.controls.toggleQuality();
+      await f.controls.toggleSubmenu();
       await close();
       await nextTick();
-      expect(f.controls.qualityOpen.value).toBe(false);
+      expect(f.controls.submenuOpen.value).toBe(false);
       expect(f.emit).not.toHaveBeenCalled();
     }
+  } finally { f.scope.stop(); }
+});
+
+it('最后一名远端成员离开时返回收听菜单，再次加入不会自动弹出成员音量', async () => {
+  const f = setup();
+  try {
+    await f.controls.toggleMenu('output', { currentTarget: f.opener });
+    await f.controls.toggleSubmenu();
+    f.props.memberVolumes = [];
+    await vi.waitFor(() => expect(f.opener.focus).toHaveBeenCalled());
+    expect(f.controls.menu.value).toBe('output');
+    expect(f.controls.submenuOpen.value).toBe(false);
+    f.props.memberVolumes = [{ identity: 'B', name: '成员B', volume: 1 }];
+    await nextTick();
+    expect(f.controls.submenuOpen.value).toBe(false);
   } finally { f.scope.stop(); }
 });
 
@@ -138,17 +154,17 @@ it('实际模板把共享动作和画质分成两块，自定义最后；窄窗�
       quality: 'custom', customQuality: { resolution: 1440, fps: 120 }, shareAudio: false, audioMode: 'process',
     });
     app.mixin({ created() {
-      Object.assign(this.$.setupState, { menu: 'share', qualityOpen: true, qualityPlacement: placement });
+      Object.assign(this.$.setupState, { menu: 'share', submenuOpen: true, submenuPlacement: placement });
     } });
     const html = await renderToString(app);
-    expect(html).toContain('call-share-actions');
-    expect(html).toContain('call-quality-menu');
+    expect(html).toContain('call-menu-primary');
+    expect(html).toContain('call-submenu');
     expect(html.includes('aria-label="返回共享选项"')).toBe(placement === 'compact');
     expect(html.indexOf('value="highFrameRate"')).toBeLessThan(html.indexOf('value="standard"'));
     expect(html.indexOf('value="standard"')).toBeLessThan(html.indexOf('value="economy"'));
     expect(html.indexOf('value="economy"')).toBeLessThan(html.indexOf('value="custom"'));
     expect(html).not.toContain('180 FPS');
-    const actions = html.match(/<section[^>]*call-share-actions[^>]*>/)?.[0];
+    const actions = html.match(/<section[^>]*call-menu-primary[^>]*>/)?.[0];
     expect(actions?.includes('display:none')).toBe(placement === 'compact');
   }
 });
