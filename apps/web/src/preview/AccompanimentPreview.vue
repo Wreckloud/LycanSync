@@ -117,7 +117,7 @@ function setSourceOpen(source: Source, open: boolean) {
           <div class="participant-media">
             <span v-if="screen !== 'off'" class="screen-preview"><Monitor :size="24" />共享画面</span>
             <div v-else class="large-avatar" aria-hidden="true">维</div>
-            <Transition name="badge-fade">
+            <Transition name="spectrum-reveal">
               <div v-if="showSpectrum && accompaniment && screen === 'off'" class="spectrum-preview" aria-hidden="true"
                 :class="{ 'has-sound': !accompaniment.paused && !silent }">
                 <i v-for="(height, i) in [19, 29, 39, 34, 44, 54, 49, 39, 29, 34, 49, 44, 34, 39, 44, 34, 24, 29, 34, 24, 14]" :key="i"
@@ -216,8 +216,6 @@ function setSourceOpen(source: Source, open: boolean) {
 .spectrum-preview.has-sound i::before, .spectrum-preview.has-sound i::after { animation-play-state: running; }
 @keyframes spectrum-pulse { 0%, 85%, 100% { clip-path: inset(calc(100% - 4px) 0 0); } 50% { clip-path: inset(0); } }
 @keyframes spectrum-peak { 0%, 100% { top: calc(100% - 4px); } 50%, 68% { top: 0; } }
-.badge-fade-enter-active, .badge-fade-leave-active { transition: opacity var(--motion-surface-duration) var(--motion-ease); }
-.badge-fade-enter-from, .badge-fade-leave-to { opacity: 0; }
 .muted-badge { right: 7px; min-width: 22px; }
 .source-icon { width: 16px; height: 16px; object-fit: contain; flex: none; }
 .screen-preview { display: grid; justify-items: center; gap: 5px; color: var(--muted); font-size: 12px; }

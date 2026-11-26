@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onScopeDispose, ref, watchEffect } from 'vue';
+import { onBeforeUnmount, onMounted, onScopeDispose, ref, watchEffect } from 'vue';
 
 const props = defineProps<{ track: MediaStreamTrack; context: AudioContext; responsive?: boolean }>();
 const surface = ref<HTMLElement>();
@@ -8,6 +8,8 @@ const foreground = ref(!document.hidden);
 const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const reduced = ref(motion.matches);
 let observer: IntersectionObserver | undefined;
+let leaving = false;
+onBeforeUnmount(() => { leaving = true; });
 const updateMotion = () => { reduced.value = motion.matches; };
 const updateVisibility = () => { foreground.value = !document.hidden; };
 onMounted(() => {
@@ -63,7 +65,8 @@ watchEffect(onCleanup => {
     window.clearInterval(timer);
     input.disconnect();
     analyser.disconnect();
-    bars.forEach(bar => { bar.style.removeProperty('--level'); bar.style.removeProperty('--peak'); });
+    // 退场沿用最后一帧做下落动画；采样和音频节点仍即时释放。
+    if (!leaving) bars.forEach(bar => { bar.style.removeProperty('--level'); bar.style.removeProperty('--peak'); });
   });
 }, { flush: 'post' });
 </script>
@@ -77,4 +80,14 @@ watchEffect(onCleanup => {
 :global(.participant-media:has(.spectrum) .large-avatar) { z-index: 1; }
 .spectrum i { position: relative; height: var(--level, 4px); background: var(--muted); }
 .spectrum i::after { content: ''; position: absolute; inset-inline: 0; bottom: calc(var(--peak, 4px) - 2px); height: 2px; background: var(--text); }
+</style>
+
+<style>
+@media (prefers-reduced-motion: no-preference) {
+  .spectrum-reveal-enter-active, .spectrum-reveal-leave-active { transform-origin: bottom; }
+  .spectrum-reveal-enter-active { transition: transform var(--motion-expand-duration) var(--motion-ease), opacity var(--motion-surface-duration) ease; }
+  .spectrum-reveal-leave-active { transition: transform var(--motion-surface-duration) ease-in, opacity var(--motion-surface-duration) ease var(--motion-surface-duration); }
+  .participant-media .spectrum-reveal-enter-active.spectrum-reveal-enter-from,
+  .participant-media .spectrum-reveal-leave-active.spectrum-reveal-leave-to { transform: scaleY(.025); opacity: 0; }
+}
 </style>

@@ -106,7 +106,9 @@ async function listenToFile(event: Event) {
       <article v-for="responsive in [false, true]" :key="Number(responsive)" class="participant-card">
         <div class="participant-media">
           <img class="large-avatar" :src="avatar" alt="" />
-          <AccompanimentSpectrum v-if="track && context" :track="track" :context="context" :responsive="responsive" />
+          <Transition name="spectrum-reveal">
+            <AccompanimentSpectrum v-if="track && context" :track="track" :context="context" :responsive="responsive" />
+          </Transition>
         </div>
         <div class="participant-meta"><strong>{{ responsive ? '灵敏版' : '当前版' }}</strong></div>
       </article>
