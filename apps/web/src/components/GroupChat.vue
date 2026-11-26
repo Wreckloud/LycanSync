@@ -528,7 +528,7 @@ onScopeDispose(() => {
               </div>
               <button type="button" aria-label="关闭添加失败提示" @click="clearAttachmentErrors"><X :size="13" /></button>
             </div>
-            <textarea ref="messageInput" v-model="text" aria-label="消息内容" maxlength="2000" rows="1" placeholder="发送消息" @input="resizeMessageInput" @keydown="handleKeydown" @paste="handlePaste" />
+            <textarea ref="messageInput" v-model="text" aria-label="消息内容" maxlength="2000" rows="1" spellcheck="false" autocorrect="off" placeholder="发送消息" @input="resizeMessageInput" @keydown="handleKeydown" @paste="handlePaste" />
           </div>
         </div>
         <button type="submit" aria-label="发送消息" :disabled="!canSend" :aria-busy="preparing" :title="attachmentPreparingHint ? '正在准备附件…' : undefined">

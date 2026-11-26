@@ -169,10 +169,8 @@ button.chat-file-summary { cursor: pointer; }
   resize: none;
   overflow-y: auto;
   scrollbar-gutter: stable;
+  font: inherit;
   font-size: var(--chat-font-size);
-  line-height: 22px;
-  font-family: SimHei, "Microsoft YaHei", sans-serif;
-  font-weight: 400;
   border: 0;
   outline: 0;
   background: transparent;
