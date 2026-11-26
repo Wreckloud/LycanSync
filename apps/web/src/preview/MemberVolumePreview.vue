@@ -11,7 +11,7 @@ const modes = [
 ] as const;
 const mode = ref<typeof modes[number]['id']>('ring');
 const presets = [{ value: .25, label: '轻声' }, { value: 1, label: '原声' }, { value: 1.75, label: '增强' }];
-const atEdge = ref(false), mutedMic = ref(true), sharing = ref(true);
+const atEdge = ref(false), mutedMic = ref(false), sharing = ref(true);
 const channels = computed<Channel[]>(() => sharing.value ? ['share', 'voice'] : ['voice']);
 const names = { voice: '成员语音', share: '共享声音' };
 const maxima = { voice: AUDIO_VOLUME_MAX, share: SHARE_VOLUME_MAX };
