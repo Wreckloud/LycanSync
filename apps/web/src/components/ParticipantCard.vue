@@ -86,9 +86,8 @@ const speaking = computed(() => {
 const audioStatusId = useId();
 const showAudioStatus = computed(() => props.variant === 'card' && !props.isLocal && !media.value.microphone);
 const remoteAudioLabel = computed(() => {
-  if (!media.value.microphone) return `${media.value.name}的语音音量暂不可调`;
   if (props.playbackVolume === 0) return `${media.value.name}已取消收听，点击恢复收听`;
-  const microphoneState = speaking.value ? '正在说话' : '麦克风已开启';
+  const microphoneState = !media.value.microphone ? '已闭麦' : speaking.value ? '正在说话' : '麦克风已开启';
   return `${media.value.name}${microphoneState}，点击取消收听`;
 });
 const selectable = computed(() => props.variant !== 'viewer' && media.value.sharing && !props.privateControl);
@@ -308,9 +307,9 @@ onBeforeUnmount(() => {
         :aria-label="media.microphone ? '关闭自己的麦克风' : '开启自己的麦克风'" @click="emit('toggleMicrophone')">
         <VoiceLevelMic v-if="media.microphone" :size="14" :level="speaking ? 1 : 0" :steps="1" /><MicOff v-else :size="14" />
       </button>
-      <MemberVolumeButton v-else-if="variant === 'card'" :disabled="!media.microphone" :volume="playbackVolume" :label="remoteAudioLabel"
+      <MemberVolumeButton v-else-if="variant === 'card'" :volume="playbackVolume" :label="remoteAudioLabel"
         @toggle="emit('toggleAudio')" @change="emit('changeVoiceVolume', $event)">
-        <VoiceLevelMic v-if="media.microphone && playbackVolume > 0" :size="14" :level="speaking ? 1 : 0" :steps="1" />
+        <VoiceLevelMic v-if="playbackVolume > 0" :size="14" :level="speaking ? 1 : 0" :steps="1" />
         <MicOff v-else :size="14" />
       </MemberVolumeButton>
       <button v-if="variant === 'card' && isLocal" type="button" class="participant-state participant-state-button"
@@ -324,7 +323,6 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .member-signal { color: var(--muted); }
-.participant-meta :deep(.volume-button:disabled) { color: var(--muted); }
 .member-audio-status {
   position: absolute; right: 7px; bottom: 6px; z-index: 3; pointer-events: none;
   display: grid; place-items: center; width: 22px; height: 22px; border-radius: 5px;

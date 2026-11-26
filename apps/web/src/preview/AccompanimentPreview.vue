@@ -149,9 +149,9 @@ function setSourceOpen(source: Source, open: boolean) {
                 @toggle="changeMediaVolume(mediaVolume ? 0 : lastAudible)" @change="changeMediaVolume">
                 <Volume2 v-if="mediaVolume" :size="14" /><VolumeX v-else :size="14" />
               </MemberVolumeButton>
-              <MemberVolumeButton :disabled="!mic || !listening" :volume="voiceVolume" :label="voiceVolume ? '静音成员语音' : '恢复成员语音'"
+              <MemberVolumeButton :volume="voiceVolume" :label="voiceVolume ? '静音成员语音' : '恢复成员语音'"
                 @toggle="changeVoiceVolume(voiceVolume ? 0 : lastVoice)" @change="changeVoiceVolume">
-                <VoiceLevelMic v-if="mic && listening && voiceVolume" :size="14" :level="0" /><MicOff v-else :size="14" />
+                <VoiceLevelMic v-if="voiceVolume" :size="14" :level="0" /><MicOff v-else :size="14" />
               </MemberVolumeButton>
             </template>
           </div>
@@ -203,7 +203,6 @@ function setSourceOpen(source: Source, open: boolean) {
 <style scoped>
 .accompaniment-lab { max-width: 680px; padding-bottom: 40px; }
 .card-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 222px)); width: min(100%, 464px); gap: 20px; }
-.participant-meta :deep(.volume-button:disabled) { color: var(--muted); }
 .card-pair h3 { margin: 0 0 8px; color: var(--muted); font-size: 13px; font-weight: 500; }
 .media-badge { position: absolute; bottom: 6px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 22px; padding: 0 4px; border: 0; border-radius: 5px; background: #0b0f14cc; color: var(--text); font: inherit; font-size: 11px; line-height: 16px; }
 .spectrum-preview { position: absolute; inset: 0 5px; display: grid; grid-template-columns: repeat(21, minmax(0, 8px)); align-items: end; justify-content: center; gap: 2px; overflow: hidden; opacity: .3; pointer-events: none; }

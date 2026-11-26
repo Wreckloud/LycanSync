@@ -150,6 +150,8 @@ export function useRtcRoom() {
     stream.getTracks().forEach((track) => track.stop());
   }, { once: true });
   return { revision, status, room, participants, notice: ref(''), busySources: ref([]),
+    async startApplicationAudio() { throw new Error('此观看测试未模拟应用声音采集'); },
+    async stopApplicationAudio() {},
     get screenShareActive() { void revision.value; return local.isScreenShareEnabled; },
     listening, microphoneIntent, microphoneEnabled,
     needsAudioPlayback: ref(false), remoteControlShares, remoteControlActive, remoteControlAvailable,
@@ -247,7 +249,7 @@ test('离房和切回群组先显示已知的语音成员，慢摘要在原处�
   await expect(preview.locator('.voice-preview-member strong')).toHaveText(['成员A']);
 });
 
-test('成员卡片保留底部麦克风，闭麦时禁用并在画面右下角显示状态', async ({ page }, testInfo) => {
+test('成员卡片保留底部麦克风，闭麦时可预调并在画面右下角显示状态', async ({ page }, testInfo) => {
   await sharing(page, ['B']);
   await page.evaluate(() => {
     const rtc = (window as unknown as { __viewingTest: {
@@ -271,15 +273,17 @@ test('成员卡片保留底部麦克风，闭麦时禁用并在画面右下角�
       const { x, width } = element.querySelector(selector)!.getBoundingClientRect();
       return x + width / 2;
     };
-    return [centerX('.member-audio-status'), centerX('.member-audio-status svg'), centerX('.participant-meta .volume-button:disabled svg')];
+    return [centerX('.member-audio-status'), centerX('.member-audio-status svg'), centerX('.participant-meta .volume-button:last-child > svg:first-child')];
   });
   expect(Math.max(...centers) - Math.min(...centers)).toBeLessThan(0.5);
   await expect(card('C').locator('.participant-media').getByRole('img', { name: '已停止接收声音' })).toBeVisible();
-  const mic = card('B').getByRole('button', { name: '成员B的语音音量暂不可调' });
-  await expect(mic).toBeDisabled();
-  await expect(mic.locator('.lucide-mic-off')).toBeVisible();
+  const mic = card('B').getByRole('button', { name: '成员B已闭麦，点击取消收听' });
+  await expect(mic).toBeEnabled();
+  await mic.press('ArrowUp');
+  await expect(mic).toHaveAttribute('aria-description', /105%/);
+  await expect(mic.locator('.volume-ring')).toHaveCount(1);
   await expect(mic).toHaveCSS('color', await card('B').locator('.member-signal').evaluate(el => getComputedStyle(el).color));
-  await expect(card('C').getByRole('button', { name: '成员C的语音音量暂不可调' })).toBeDisabled();
+  await expect(card('C').getByRole('button', { name: '成员C已闭麦，点击取消收听' })).toBeEnabled();
   await card('D').getByRole('button', { name: /点击取消收听/ }).click();
   await expect(card('D').getByRole('button', { name: /点击恢复收听/ })).toBeEnabled();
   await expect(card('D').locator('.member-audio-status')).toHaveCount(0);
@@ -295,6 +299,7 @@ test('成员卡片保留底部麦克风，闭麦时禁用并在画面右下角�
   await expect(reopened).toBeEnabled();
   await expect(card('B').locator('.member-audio-status')).toHaveCount(0);
   expect(await reopened.boundingBox()).toEqual(position);
+  await expect(reopened).toHaveAttribute('aria-description', /105%/);
 });
 
 test('聊天和网格使用背景音量，聚焦和独立窗口只播放所选画面的正常音量', async ({ page }) => {
@@ -478,7 +483,7 @@ test('群头像提示在右侧进退，显示通话状态且不重复系统提�
   await expect(hint).toHaveCount(0);
 });
 
-test('成员卡片短按静音、长按拖动后与底部收听面板同步', async ({ page }) => {
+test('成员卡片短按静音、圆环拖动后与底部收听面板同步', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.evaluate(() => (window as unknown as { __viewingTest: { microphones(ids: string[]): void } }).__viewingTest.microphones(['A']));
   const local = page.getByTestId('participant-card').first();
@@ -511,21 +516,23 @@ test('成员卡片短按静音、长按拖动后与底部收听面板同步', as
   const x = box.x + box.width / 2, y = box.y + box.height / 2;
   await page.mouse.move(x, y);
   await page.mouse.down();
-  const popover = page.locator('.volume-popup');
-  await expect(popover).toHaveText('200%');
-  await page.mouse.move(x, y + 72);
-  await expect(popover).toHaveText('100%');
+  const ring = voice.locator('.volume-ring');
+  await expect(ring).toHaveCSS('opacity', '1');
+  await expect(voice).toHaveAttribute('aria-description', /200%/);
+  await page.mouse.move(x, y + 42);
+  await expect(voice).toHaveAttribute('aria-description', /100%/);
   await page.mouse.up();
-  await expect(popover).toHaveCount(0);
+  await expect(ring).toHaveCSS('opacity', '0');
   await expect(voice).toHaveAttribute('aria-pressed', 'false');
   await voice.hover();
   const strip = remote.locator('xpath=ancestor::*[contains(@class,"horizontal-viewport")][1]');
   const beforeWheel = await strip.evaluate(element => element.scrollLeft);
   await page.mouse.wheel(0, -100);
-  await expect(popover).toHaveText('105%');
+  await expect(voice).toHaveAttribute('aria-description', /105%/);
   await page.mouse.wheel(0, 100);
-  await expect(popover).toHaveText('100%');
-  await expect(popover).toHaveCount(0);
+  await expect(voice).toHaveAttribute('aria-description', /100%/);
+  await page.mouse.move(0, 0);
+  await expect(ring).toHaveCSS('opacity', '0');
   expect(await strip.evaluate(element => element.scrollLeft)).toBe(beforeWheel);
   await page.getByRole('button', { name: '收听选项', exact: true }).click();
   await page.getByRole('button', { name: '调整成员音量', exact: true }).click();
