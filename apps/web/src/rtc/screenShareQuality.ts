@@ -1,6 +1,6 @@
 import { VideoPreset } from 'livekit-client';
 
-// 推荐值是待实测校准的编码上限；固定模式与自定义共用同一张表。
+// 自定义未手填码率时，按所选尺寸和帧率给出上限。
 const RECOMMENDED_BITRATES = {
   720: { 30: 3_000_000, 60: 5_000_000, 120: 8_000_000 },
   1080: { 30: 8_000_000, 60: 12_000_000, 120: 20_000_000 },
@@ -8,9 +8,9 @@ const RECOMMENDED_BITRATES = {
 } as const;
 
 export const SCREEN_SHARE_QUALITIES = [
-  { id: 'highFrameRate', guidance: '快速移动的画面更连贯。适合网络稳定、设备性能充足时分享竞速、射击等快节奏游戏。', label: '高帧率', description: '1080p · 120 FPS', width: 1920, height: 1080, fps: 120, bitrate: RECOMMENDED_BITRATES[1080][120] },
-  { id: 'standard', guidance: '兼顾画面清晰度与流畅度。适合日常游戏、视频和应用演示。', label: '标准', description: '1080p · 60 FPS', width: 1920, height: 1080, fps: 60, bitrate: RECOMMENDED_BITRATES[1080][60] },
-  { id: 'economy', guidance: '降低网络占用，细节和运动流畅度有所减少。适合网络有限时分享文档、聊天或变化较少的画面。', label: '节省流量', description: '720p · 30 FPS', width: 1280, height: 720, fps: 30, bitrate: RECOMMENDED_BITRATES[720][30] },
+  { id: 'highFrameRate', guidance: '适合射击、竞速等快速运动的游戏，优先保持转视角时的流畅度。', label: '游戏', description: '1080p · 60 FPS · 上限 10 Mbps', width: 1920, height: 1080, fps: 60, bitrate: 10_000_000 },
+  { id: 'standard', guidance: '适合日常共享、绘画和文档，优先保留文字与笔画细节。', label: '标准', description: '1080p · 60 FPS · 上限 6 Mbps', width: 1920, height: 1080, fps: 60, bitrate: 6_000_000 },
+  { id: 'economy', guidance: '适合带宽有限或波动时共享，以较低帧率保留画面细节。', label: '稳定', description: '720p · 30 FPS · 上限 2 Mbps', width: 1280, height: 720, fps: 30, bitrate: 2_000_000 },
   { id: 'custom', guidance: '分享小字或绘画时可选 30 FPS，优先保留细节。60 和 120 FPS 优先保持流畅。', label: '自定义', description: '自行选择分辨率和帧率', width: 1920, height: 1080, fps: 60, bitrate: RECOMMENDED_BITRATES[1080][60] },
 ] as const;
 
@@ -62,13 +62,22 @@ export function screenShareVideoPreset(id: ScreenShareQualityId, custom = DEFAUL
 
 export function screenShareDegradationPreference(id: ScreenShareQualityId, custom?: CustomScreenShareQuality): RTCDegradationPreference {
   const profile = screenShareQuality(id, custom);
-  if (id === 'custom' && profile.fps === 30) return 'maintain-resolution';
-  if (id === 'economy') return 'balanced';
+  if (id === 'standard' || id === 'economy' || (id === 'custom' && profile.fps === 30)) return 'maintain-resolution';
   return 'maintain-framerate';
 }
 
 export function screenShareContentHint(id: ScreenShareQualityId, custom?: CustomScreenShareQuality) {
   return screenShareDegradationPreference(id, custom) === 'maintain-resolution' ? 'detail' : 'motion';
+}
+
+export const SCREEN_SHARE_LOWER_LAYER_FPS = 30;
+
+export function canPublishScreenShareMiddleLayer(id: ScreenShareQualityId, dimensions?: { width: number; height: number }) {
+  if (!dimensions || id !== 'standard') return false;
+  const { width, height } = dimensions;
+  const shortSide = Math.min(width, height);
+  // 标准档增加中层前，预览的 1/3 和热切游戏后的 1/2 都须能精确缩成偶数像素。
+  return shortSide >= 960 && shortSide <= 1080 && width % 12 === 0 && height % 12 === 0;
 }
 
 export function screenShareThumbnailPreset(dimensions?: { width: number; height: number }) {
@@ -82,7 +91,27 @@ export function screenShareThumbnailPreset(dimensions?: { width: number; height:
       height = Math.round(dimensions.height / divisor);
     }
   }
-  return new VideoPreset(width, height, 1_000_000, 30, 'high');
+  return new VideoPreset(width, height, 1_000_000, SCREEN_SHARE_LOWER_LAYER_FPS, 'high');
+}
+
+export function screenShareLowerLayers(dimensions: { width: number; height: number }, middle: boolean, mainBitrate: number,
+  preference?: RTCDegradationPreference) {
+  const thumbnail = screenShareThumbnailPreset(dimensions);
+  if (!middle) return [thumbnail];
+  const { width, height } = dimensions;
+  // 标准优先保留 720p；已协商三层时热切游戏，用半尺寸给快速运动留余量。
+  const motion = preference === 'maintain-framerate';
+  const motionHalfSize = motion && width % 4 === 0 && height % 4 === 0;
+  const shortSide = Math.min(width, height);
+  const twoThirds = shortSide >= 960 && shortSide <= 1080 && width % 3 === 0 && height % 3 === 0;
+  const divisor = twoThirds && !motionHalfSize ? 1.5 : 2;
+  const midRate = Math.min(motion ? 1_500_000 : 2_000_000, Math.floor(mainBitrate / 2));
+  const mid = new VideoPreset(width / divisor, height / divisor, midRate, SCREEN_SHARE_LOWER_LAYER_FPS);
+  // 热切档保留已协商的 RID 数量，小画面需要拉开预览和中层，避免编码两份相同的画面。
+  const preview = Math.min(thumbnail.width, thumbnail.height) < Math.min(mid.width, mid.height)
+    ? thumbnail : new VideoPreset(width / 4, height / 4, thumbnail.encoding.maxBitrate, SCREEN_SHARE_LOWER_LAYER_FPS, 'high');
+  preview.encoding.maxBitrate = Math.min(preview.encoding.maxBitrate, Math.floor(midRate / 2));
+  return [preview, mid];
 }
 
 export function readScreenShareQuality(): { quality: ScreenShareQualityId; customQuality: CustomScreenShareQuality } {

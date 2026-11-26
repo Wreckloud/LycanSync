@@ -91,8 +91,8 @@ test('奇数内容按原尺寸绘制到偶数画布，缩小时只清除变成�
   assert.equal(canvas.clears.length, 2);
   await deliver(604, 904);
   await deliver(601, 901);
-  assert.deepEqual([canvas.width, canvas.height], [604, 904]);
-  assert.deepEqual(canvas.clears.slice(-2), [[601, 0, 3, 904], [0, 901, 604, 3]]);
+  assert.deepEqual([canvas.width, canvas.height], [608, 904]);
+  assert.deepEqual(canvas.clears.slice(-2), [[601, 0, 7, 904], [0, 901, 608, 3]]);
   await deliver(1, 5);
   assert.deepEqual([canvas.width, canvas.height], [2, 6]);
   assert.equal(f.canvases.length, 1);

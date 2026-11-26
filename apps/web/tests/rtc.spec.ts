@@ -415,7 +415,7 @@ test('自定义入场音通过房间数据流播放给已在语音中的成员',
   }
 });
 
-test('共享双层参数有效，观看区弹出、占满窗口和关闭不影响小预览或群聊', async ({ browser, context, page }, testInfo) => {
+test('标准共享发布中间层，观看区弹出、占满窗口和关闭不影响小预览或群聊', async ({ browser, context, page }, testInfo) => {
   const teammate = await browser.newContext({
     baseURL: webBaseUrl, permissions: ['microphone'], viewport: { width: 1440, height: 1000 },
   });
@@ -434,13 +434,13 @@ test('共享双层参数有效，观看区弹出、占满窗口和关闭不影�
       .filter((sender) => sender.track?.kind === 'video')
       .flatMap((sender) => sender.getParameters().encodings ?? [])
       .map((encoding) => ({ maxBitrate: encoding.maxBitrate, maxFramerate: encoding.maxFramerate, priority: encoding.priority }))))
-      .toContainEqual(expect.objectContaining({ maxBitrate: 12_000_000, maxFramerate: 60 }));
+      .toContainEqual(expect.objectContaining({ maxBitrate: 6_000_000, maxFramerate: 60 }));
     // SDK 把整条发送轨道的优先级放在第一个编码层，不随主层所在位置变化。
     expect(await otherPage.evaluate(() => window.__rtcTest.peers.flatMap((peer) => peer.getSenders())
       .find((sender) => sender.track?.kind === 'video')?.getParameters().encodings[0].priority)).toBe('high');
     await expect.poll(() => otherPage.evaluate(() => window.__rtcTest.peers.flatMap((peer) => peer.getSenders())
       .filter((sender) => sender.track?.kind === 'video')
-      .map((sender) => sender.getParameters().encodings?.length))).toEqual([2]);
+      .map((sender) => sender.getParameters().encodings.map(layer => layer.maxBitrate)))).toEqual([[1_000_000, 2_000_000, 6_000_000]]);
     await expect(page.getByTestId('participant-card').locator('video')).toHaveCount(1);
     const viewer = await openSharedViewer(page, '福州小狼');
     const focusedVideo = viewer.getByTestId('viewer-screen').locator('video');

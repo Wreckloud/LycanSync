@@ -1,5 +1,5 @@
 import type { CustomScreenShareQuality, ScreenShareQualityId } from './screenShareQuality';
-import { screenShareDegradationPreference, screenShareQuality, screenShareThumbnailPreset } from './screenShareQuality';
+import { screenShareDegradationPreference, screenShareLowerLayers, screenShareQuality } from './screenShareQuality';
 
 type EncodingLimits = Pick<RTCRtpEncodingParameters, 'rid' | 'maxBitrate' | 'maxFramerate' | 'scaleResolutionDownBy'>;
 export interface ScreenShareEncodingLimits {
@@ -7,10 +7,14 @@ export interface ScreenShareEncodingLimits {
   degradationPreference?: RTCDegradationPreference;
 }
 
+export function hasScreenShareSimulcast(encodings: RTCRtpEncodingParameters[]) {
+  return encodings[0]?.rid === 'q' && encodings[1]?.rid === 'h'
+    && (encodings.length === 2 || (encodings.length === 3 && encodings[2].rid === 'f'));
+}
+
 function validateEncodings(encodings: RTCRtpEncodingParameters[]) {
-  // 极小来源可由 SDK 发布为单层；正常双层固定为 q、h，拒绝未知布局。
-  if (encodings.length === 1) return;
-  if (encodings.length !== 2 || encodings[0].rid !== 'q' || encodings[1].rid !== 'h') {
+  // SDK 依据来源尺寸协商一到三层，不能在原 sender 上增删 RID。
+  if (encodings.length !== 1 && !hasScreenShareSimulcast(encodings)) {
     throw new Error('screenShareEncodingUnavailable');
   }
 }
@@ -41,20 +45,22 @@ export async function applyScreenShareEncoding(sender: RTCRtpSender, limits: Scr
 }
 
 export function screenShareEncodingLimits(id: ScreenShareQualityId, current: ScreenShareEncodingLimits,
-  dimensions: { width: number; height: number }, custom?: CustomScreenShareQuality,
-  thumbnail = screenShareThumbnailPreset(dimensions)): ScreenShareEncodingLimits {
+  dimensions: { width: number; height: number }, custom?: CustomScreenShareQuality): ScreenShareEncodingLimits {
   const quality = screenShareQuality(id, custom);
   const scale = Math.min(1, quality.width / dimensions.width, quality.height / dimensions.height);
-  const thumbnailShortSide = Math.min(thumbnail.width, thumbnail.height);
+  const scaled = { width: Math.round(dimensions.width * scale), height: Math.round(dimensions.height * scale) };
+  const degradationPreference = screenShareDegradationPreference(id, custom);
+  const layers = screenShareLowerLayers(scaled, current.encodings.length === 3, quality.bitrate, degradationPreference);
   return {
-    degradationPreference: screenShareDegradationPreference(id, custom),
+    degradationPreference,
     encodings: current.encodings.map((encoding, index) => {
-      if (current.encodings.length === 2 && index === 0) {
+      if (index < current.encodings.length - 1) {
+        const layer = layers[index];
         return {
           rid: encoding.rid,
-          maxBitrate: thumbnail.encoding.maxBitrate,
-          maxFramerate: Math.min(quality.fps, thumbnail.encoding.maxFramerate!),
-          scaleResolutionDownBy: Math.max(1, Math.min(dimensions.width, dimensions.height) * scale / thumbnailShortSide),
+          maxBitrate: layer.encoding.maxBitrate,
+          maxFramerate: Math.min(quality.fps, layer.encoding.maxFramerate!),
+          scaleResolutionDownBy: Math.max(1, Math.min(scaled.width, scaled.height) / Math.min(layer.width, layer.height)),
         };
       }
       return {

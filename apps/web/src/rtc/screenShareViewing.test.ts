@@ -37,6 +37,20 @@ it('同一批中卡片先离屏又返回时，保留最新的可见需求', () =
   view.stop();
 });
 
+it('聚焦关闭后恢复网格中层，只剩缩略图时再降到预览', () => {
+  const main = viewing();
+  const grid = observeScreenShareView(main.publication, main.element(), VideoQuality.MEDIUM);
+  const card = observeScreenShareView(main.publication, main.element(), VideoQuality.LOW);
+  const focus = observeScreenShareView(main.publication, main.element(), VideoQuality.HIGH);
+  expect(main.publication.videoQuality).toBe(VideoQuality.HIGH);
+  focus.stop();
+  expect(main.publication.videoQuality).toBe(VideoQuality.MEDIUM);
+  expect(readScreenShareViewing(main.publication)?.requestedQuality).toBe('medium');
+  grid.stop();
+  expect(main.publication.videoQuality).toBe(VideoQuality.LOW);
+  card.stop();
+});
+
 it('设置覆盖只撤销主界面的观看需求，独立窗继续观看；返回保留订阅和画质', () => {
   const main = viewing(), auxiliary = viewing();
   const inline = observeScreenShareView(main.publication, main.element(), VideoQuality.HIGH);

@@ -662,7 +662,7 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
   await page.getByRole('button', { name: '共享与录制', exact: true }).click();
   await expect(page.getByRole('heading', { name: '共享与录制', exact: true })).toBeVisible();
   const presets = page.getByRole('group', { name: '共享画质' });
-  await presets.getByRole('button', { name: '高帧率', exact: true }).click();
+  await presets.getByRole('button', { name: '游戏', exact: true }).click();
   await expect(page.getByRole('checkbox', { name: '共享声音', exact: true })).toHaveCount(0);
   await page.getByRole('checkbox', { name: /隐藏共享画面中的光标/ }).check();
   const replay = page.getByRole('checkbox', { name: /开启即时回放/ });
@@ -672,7 +672,7 @@ test('共享与录制入口合并设置，默认画质与共享偏好重开后�
   await page.getByRole('button', { name: '返回应用', exact: true }).click();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await page.getByRole('button', { name: '共享与录制', exact: true }).click();
-  await expect(presets.getByRole('button', { name: '高帧率', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(presets.getByRole('button', { name: '游戏', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('checkbox', { name: '共享声音', exact: true })).toHaveCount(0);
   await expect(page.getByRole('checkbox', { name: /隐藏共享画面中的光标/ })).toBeChecked();
   await expect(page.getByRole('heading', { name: '录制内容', exact: true })).toBeVisible();

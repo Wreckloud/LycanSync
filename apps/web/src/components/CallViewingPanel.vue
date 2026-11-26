@@ -277,7 +277,10 @@ const sizing = computed(() => {
   const rows = count > 2 && maxHeight >= 322 ? 2 : 1;
   return { width: Math.min(Math.max(210, maxHeight / rows * 16 / 9), Math.max(180, width.value - 56)), ratio: 16 / 9, rows };
 });
-const quality = computed(() => focus.value || sizing.value.width >= 480 ? VideoQuality.HIGH : VideoQuality.LOW);
+const quality = computed(() => {
+  if (focus.value || singleStage.value) return VideoQuality.HIGH;
+  return sizing.value.width > 640 ? VideoQuality.MEDIUM : VideoQuality.LOW;
+});
 
 function ratio(share: ViewedShare) { return ratios.value[share.key] ?? 16 / 9; }
 

@@ -17,7 +17,7 @@ import { NativeMicrophoneAudioSession, type NativeMicrophoneSettings } from './n
 import { nativeScreenAudioMode, type NativeScreenAudioMode } from './nativeScreenAudioMode';
 import { REMOTE_CONTROL_TOPIC, type RemoteControlInput } from './remoteControl';
 import { RemoteControlSession, type RemoteControlShare } from './remoteControlSession';
-import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, validateCustomScreenShareQuality, screenShareContentHint, screenShareDegradationPreference, screenShareQuality, screenShareThumbnailPreset, screenShareVideoPreset, type CustomScreenShareQuality, type ScreenShareQualityId } from './screenShareQuality';
+import { DEFAULT_CUSTOM_SCREEN_SHARE_QUALITY, validateCustomScreenShareQuality, canPublishScreenShareMiddleLayer, screenShareContentHint, screenShareDegradationPreference, screenShareLowerLayers, screenShareQuality, screenShareThumbnailPreset, screenShareVideoPreset, type CustomScreenShareQuality, type ScreenShareQualityId } from './screenShareQuality';
 import { syncScreenShareViewing } from './screenShareViewing';
 
 type RoomStatus = 'idle' | 'joining' | 'connected' | 'reconnecting';
@@ -368,7 +368,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
           autoGainControl: microphoneProcessing.autoGainControl,
         },
         publishDefaults: {
-          // 屏幕统一使用 H.264 双层，实际编码器及高帧率表现由设备验收确认。
+          // 每次发布按来源尺寸和画质指定 H.264 分层。
           videoCodec: 'h264',
           // 游戏共享不应在同一连接的其他媒体竞争时被优先降级。
           screenShareEncoding: { ...SCREEN_SHARE_PRESET.encoding, priority: 'high' },
@@ -1253,13 +1253,16 @@ export function useRtcRoom(options?: RtcRoomOptions) {
       });
       const publishResults = await Promise.allSettled(capturedTracks.map((track) => {
         if (track.source === Track.Source.ScreenShare || (nativeVideo && track === nativeVideo.track)) {
+          const dimensions = nativeVideo?.frameDimensions ?? track.dimensions;
+          const middle = canPublishScreenShareMiddleLayer(selectedQuality, dimensions);
+          const degradationPreference = screenShareDegradationPreference(selectedQuality, selectedCustomQuality);
           return participant.publishTrack(track, {
             source: Track.Source.ScreenShare,
             screenShareEncoding: { ...sharePreset.encoding, priority: 'high' },
             videoCodec: 'h264', simulcast: true,
-            screenShareSimulcastLayers: [screenShareThumbnailPreset(nativeVideo?.frameDimensions)],
+            screenShareSimulcastLayers: screenShareLowerLayers(dimensions ?? sharePreset, middle, sharePreset.encoding.maxBitrate, degradationPreference),
             // 降级偏好只作用于本次共享，不改变房间其他视频的策略。
-            degradationPreference: screenShareDegradationPreference(selectedQuality, selectedCustomQuality),
+            degradationPreference,
           });
         }
         return participant.publishTrack(track);

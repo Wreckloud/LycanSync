@@ -26,7 +26,7 @@ import RecoveryPasswordDialog from '../components/RecoveryPasswordDialog.vue';
 import LogoutConfirmDialog from '../components/LogoutConfirmDialog.vue';
 import ProjectAttribution from '../components/ProjectAttribution.vue';
 import { useLoadingHint } from '../components/useLoadingHint';
-import type { CustomScreenShareQuality, ScreenShareQualityId } from '../rtc/screenShareQuality';
+import { SCREEN_SHARE_QUALITIES, type CustomScreenShareQuality, type ScreenShareQualityId } from '../rtc/screenShareQuality';
 import type { VoiceMode } from '../settings/useAudioShortcuts';
 import type { PresenceMode } from '../presence/usePresencePreference';
 import type { GroupSummary } from '../group/groupApi';
@@ -64,7 +64,7 @@ const notice = ref<{ message: string; kind?: 'success' } | null>(null);
 const interaction = ref('点击控件可以检查交互；所有数据仅保留在此页面。');
 const group: GroupSummary = { id: 'preview-group', name: '朋友的游戏群', description: '', avatar: '', role: 'OWNER', memberCount: 6,
   createdAt: '2026-11-16T00:00:00Z', updatedAt: '2026-11-16T00:00:00Z' };
-const options = [{ id: 'economy', label: '节省流量' }, { id: 'standard', label: '标准' }, { id: 'high', label: '高帧率' }] as const;
+const options = SCREEN_SHARE_QUALITIES.filter(quality => quality.id !== 'custom');
 const pending = ref(false);
 const outcome = ref('尚未开始');
 const currentHint = useLoadingHint(() => pending.value, 400);

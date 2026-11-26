@@ -67,7 +67,7 @@ test('共享默认画质、自定义参数与光标保存后恢复', async ({ pa
 test('共享中切换失败保持实际状态，重试可恢复，重复点击当前画质不报错', async ({ page }) => {
   await page.evaluate(() => { window.shareSettingsTest.rtc.screenShareActive = true; window.shareSettingsTest.rejectChange = true; });
   const standard = page.getByRole('button', { name: '标准', exact: true });
-  const economy = page.getByRole('button', { name: '节省流量', exact: true });
+  const economy = page.getByRole('button', { name: '稳定', exact: true });
   await standard.click();
   await expect(page.getByRole('alert')).toHaveCount(0);
   await economy.click();

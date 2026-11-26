@@ -11,7 +11,7 @@ const script = parse(readFileSync(new URL('./CallViewingPanel.vue', import.meta.
 const source = ts.createSourceFile('CallViewingPanel.ts', script, ts.ScriptTarget.Latest, true);
 const callbacks = source.statements.filter(statement => !ts.isImportDeclaration(statement))
   .map(statement => statement.getText(source)).join('\n');
-const compiled = ts.transpile(callbacks + '\nglobalThis.api = { panel, toggleExpanded, toggleMembers, escape, elapsed, now, select, sizing, tileStyle, videoSize };', { target: ts.ScriptTarget.ES2022 });
+const compiled = ts.transpile(callbacks + '\nglobalThis.api = { panel, toggleExpanded, toggleMembers, escape, elapsed, now, select, quality, sizing, tileStyle, videoSize };', { target: ts.ScriptTarget.ES2022 });
 
 function fixture(width = 600, height = 300) {
   const page = { exitFullscreen: vi.fn(), documentElement: { requestFullscreen: vi.fn() },
@@ -23,7 +23,7 @@ function fixture(width = 600, height = 300) {
     useViewingSize: () => ({ width: ref(width), height: ref(height), maximumHeight: ref(420), resizing: ref(false) }),
     computed, ref, watch, nextTick, onScopeDispose, setInterval, clearInterval, setTimeout, clearTimeout, onMounted: () => {}, VideoQuality, performance, motionDurationMs,
     api: null as unknown as { panel: { value: unknown }; toggleExpanded(): void; toggleMembers(): void;
-      sizing: { value: { rows: number } }; tileStyle(share: { key: number }): { width: string; height: string };
+      quality: { value: VideoQuality }; sizing: { value: { rows: number } }; tileStyle(share: { key: number }): { width: string; height: string };
       videoSize(key: number, size: { width: number; height: number }): void;
       select(share: { participant: { identity: string } }): void; escape(event: KeyboardEvent): void; elapsed(share: { observedAt: number }): string; now: { value: number } } };
   const scope = effectScope();
@@ -47,6 +47,17 @@ it('点击画面直接放大聚焦，重复点击保留布局', () => {
   expect(f.view.select).toHaveBeenCalledTimes(2);
   f.scope.stop();
 });
+
+it.each([[800, 300, VideoQuality.LOW], [2000, 700, VideoQuality.MEDIUM]])(
+  '网格按可展示尺寸订阅，聚焦后请求最高层（%i × %i）', (width, height, gridQuality) => {
+    const f = fixture(width, height);
+    try {
+      f.view.displayed = [{ key: 1 }, { key: 2 }];
+      expect(f.quality.value).toBe(gridQuality);
+      f.view.mode = 'focus';
+      expect(f.quality.value).toBe(VideoQuality.HIGH);
+    } finally { f.scope.stop(); }
+  });
 
 it('混合横竖屏按真实列宽装入网格，单路超宽画面不溢出，放大后使用整个舞台', () => {
   const f = fixture(1200, 600);

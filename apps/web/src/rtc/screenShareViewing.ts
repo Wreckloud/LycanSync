@@ -3,14 +3,18 @@ import { VideoQuality, type RemoteTrackPublication } from 'livekit-client';
 interface ViewDemand { element: HTMLVideoElement; reason: 'visible' | 'inactive' | 'window-hidden' | 'offscreen' | null; quality: VideoQuality }
 interface ViewingState { demands: Set<ViewDemand>; revision: number }
 const viewingDemands = new WeakMap<RemoteTrackPublication, ViewingState>();
+const qualityNames = { [VideoQuality.LOW]: 'low', [VideoQuality.MEDIUM]: 'medium', [VideoQuality.HIGH]: 'high' } as const;
+
+function visibleQuality(visible: ViewDemand[]) {
+  return visible.reduce<VideoQuality | null>((highest, demand) =>
+    highest === null || demand.quality > highest ? demand.quality : highest, null);
+}
 
 function updateViewing(publication: RemoteTrackPublication, state: ViewingState) {
   state.revision++;
   const visible = [...state.demands].filter((demand) => demand.reason === 'visible');
-  if (visible.length) {
-    publication.setVideoQuality(visible.some((demand) => demand.quality === VideoQuality.HIGH)
-      ? VideoQuality.HIGH : VideoQuality.LOW);
-  }
+  const quality = visibleQuality(visible);
+  if (quality !== null) publication.setVideoQuality(quality);
   // 保留订阅及轨道；SDK 重连时会重发此设置，dynacast 按全房间需求暂停发送层。
   publication.setEnabled(visible.length > 0);
 }
@@ -27,11 +31,12 @@ export function readScreenShareViewing(publication: object) {
   if (!state) return null;
   const demands = [...state.demands];
   const visible = demands.filter(demand => demand.reason === 'visible');
+  const quality = visibleQuality(visible);
   return { revision: state.revision, registeredViews: demands.length, visibleViews: visible.length,
     inactiveViews: demands.filter(demand => demand.reason === 'inactive').length,
     hiddenWindowViews: demands.filter(demand => demand.reason === 'window-hidden').length,
     offscreenViews: demands.filter(demand => demand.reason === 'offscreen').length,
-    requestedQuality: visible.length ? visible.some(demand => demand.quality === VideoQuality.HIGH) ? 'high' as const : 'low' as const : null };
+    requestedQuality: quality === null ? null : qualityNames[quality] };
 }
 
 export function isScreenShareViewVisible(publication: object, element: HTMLVideoElement) {

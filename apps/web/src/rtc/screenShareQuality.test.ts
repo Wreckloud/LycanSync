@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { SCREEN_SHARE_QUALITIES, SCREEN_SHARE_RESOLUTIONS, SCREEN_SHARE_FRAME_RATES,
-  readScreenShareQuality, saveScreenShareQuality, screenShareDegradationPreference, screenShareQuality, screenShareThumbnailPreset, screenShareVideoPreset } from './screenShareQuality';
+  canPublishScreenShareMiddleLayer, readScreenShareQuality, saveScreenShareQuality, screenShareDegradationPreference, screenShareLowerLayers, screenShareQuality, screenShareThumbnailPreset, screenShareVideoPreset } from './screenShareQuality';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -21,13 +21,36 @@ it('画质保留三个预设，自定义固定在最后，帧率最高 120', () 
   expect(SCREEN_SHARE_RESOLUTIONS).toEqual([1440, 1080, 720]);
 });
 
-it('自定义 30 FPS 保留细节，高帧率和节省流量沿用各自策略', () => {
-  expect(screenShareDegradationPreference('standard')).toBe('maintain-framerate');
+it('同为 1080p60 时，游戏与文档给弱网观看者不同的中层预算', () => {
+  const dimensions = { width: 1920, height: 1080 };
+  expect(screenShareLowerLayers(dimensions, true, 6_000_000, 'maintain-resolution')[1]).toMatchObject({
+    width: 1280, height: 720, encoding: { maxBitrate: 2_000_000, maxFramerate: 30 },
+  });
+  expect(screenShareLowerLayers(dimensions, true, 10_000_000, 'maintain-framerate')[1]).toMatchObject({
+    width: 960, height: 540, encoding: { maxBitrate: 1_500_000, maxFramerate: 30 },
+  });
+  expect(screenShareLowerLayers({ width: 1920, height: 1062 }, true, 10_000_000, 'maintain-framerate')[1])
+    .toMatchObject({ width: 1280, height: 708 });
+});
+
+it('首次发布只为可整除缩放的高清标准画面增加中层，游戏沿用双层', () => {
+  const full = { width: 1920, height: 1080 };
+  expect(canPublishScreenShareMiddleLayer('standard', full)).toBe(true);
+  expect(canPublishScreenShareMiddleLayer('highFrameRate', full)).toBe(false);
+  expect(canPublishScreenShareMiddleLayer('economy', full)).toBe(false);
+  expect(canPublishScreenShareMiddleLayer('custom', full)).toBe(false);
+  for (const dimensions of [undefined, { width: 1920, height: 1062 }, { width: 1280, height: 720 }]) {
+    expect(canPublishScreenShareMiddleLayer('standard', dimensions)).toBe(false);
+  }
+});
+
+it('标准、稳定和自定义 30 FPS 保留细节，游戏保持帧率', () => {
+  expect(screenShareDegradationPreference('standard')).toBe('maintain-resolution');
   expect(screenShareDegradationPreference('highFrameRate')).toBe('maintain-framerate');
   expect(screenShareDegradationPreference('custom')).toBe('maintain-framerate');
   expect(screenShareDegradationPreference('custom', { resolution: 1080, fps: 30 })).toBe('maintain-resolution');
   expect(screenShareDegradationPreference('custom', { resolution: 1440, fps: 120 })).toBe('maintain-framerate');
-  expect(screenShareDegradationPreference('economy')).toBe('balanced');
+  expect(screenShareDegradationPreference('economy')).toBe('maintain-resolution');
   expect(() => screenShareDegradationPreference('unknown' as never)).toThrow('invalidScreenShareQuality');
 });
 
@@ -42,7 +65,7 @@ it('restores only known presets and remembers the confirmed selection', () => {
   expect(readScreenShareQuality()).toEqual({ quality: 'custom', customQuality: custom });
   saveScreenShareQuality('highFrameRate', custom);
   expect(readScreenShareQuality()).toEqual({ quality: 'highFrameRate', customQuality: custom });
-  expect(screenShareVideoPreset(readScreenShareQuality().quality).encoding.maxFramerate).toBe(120);
+  expect(screenShareVideoPreset(readScreenShareQuality().quality).encoding.maxFramerate).toBe(60);
   expect(() => saveScreenShareQuality('unknown' as never)).toThrow('invalidScreenShareQuality');
   expect(JSON.parse(stored!)).toEqual({ quality: 'highFrameRate', customQuality: custom });
   stored = 'removedPreset';
@@ -111,11 +134,12 @@ it.each([['custom', 30], ['standard', 60], ['custom', 180]])('旧 360p 配置在
   expect(JSON.parse(setItem.mock.calls[0][1]).customQuality).toEqual(preference.customQuality);
 });
 
-it('固定模式与相同尺寸帧率的自定义共用推荐码率，手动上限不影响固定模式', () => {
+it('固定模式有各自的主画面预算，保留同尺寸自定义的推荐码率和手动上限', () => {
   for (const id of ['highFrameRate', 'standard', 'economy'] as const) {
     const preset = screenShareQuality(id);
     const custom = { resolution: preset.height, fps: preset.fps };
-    expect(screenShareQuality('custom', custom).bitrate).toBe(preset.bitrate);
+    expect(preset.bitrate).toBe({ highFrameRate: 10_000_000, standard: 6_000_000, economy: 2_000_000 }[id]);
+    expect(screenShareQuality('custom', custom).bitrate).toBe(preset.height === 720 ? 3_000_000 : 12_000_000);
     expect(screenShareQuality(id, { ...custom, bitrateMbps: 6 }).bitrate).toBe(preset.bitrate);
   }
 });

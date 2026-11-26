@@ -70,9 +70,11 @@ function copyNativeVideoFrame(frame, sessionId) {
   const height = frame.visibleRect?.height ?? frame.displayHeight;
   if (nativeVideoSurface && nativeVideoSurface.sessionId !== sessionId) releaseNativeVideoCanvas(nativeVideoSurface.sessionId);
   if (!nativeVideoSurface || nativeVideoSurface.width !== width || nativeVideoSurface.height !== height) {
-    // 短边接近 720p 时预览缩小一半；主画面和半尺寸预览都需要偶数像素。
+    // 1080p 共享的下层按 1/3 和 2/3 缩放；缩成小窗时已有三层会用 1/4 和 1/2。
+    // 让缩小后的画面也有偶数像素，避免 H.264 再次裁边或切换软编。
     const shortSide = Math.min(width, height);
-    const alignment = Math.round((shortSide + shortSide % 2) / 360) === 2 ? 4 : 2;
+    const previewDivisor = Math.round((shortSide + shortSide % 2) / 360);
+    const alignment = shortSide >= 960 && shortSide <= 1080 ? 6 : previewDivisor === 2 ? 8 : 2;
     const canvasWidth = Math.ceil(width / alignment) * alignment;
     const canvasHeight = Math.ceil(height / alignment) * alignment;
     if (!nativeVideoSurface) {

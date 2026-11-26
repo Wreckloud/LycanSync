@@ -270,7 +270,7 @@ export function diagnosticReportSample(snapshot: MediaDiagnosticsSnapshot, alias
         registeredViews: numeric(stream.viewing.registeredViews), visibleViews: numeric(stream.viewing.visibleViews),
         inactiveViews: numeric(stream.viewing.inactiveViews), hiddenWindowViews: numeric(stream.viewing.hiddenWindowViews),
         offscreenViews: numeric(stream.viewing.offscreenViews),
-        requestedQuality: stream.viewing.requestedQuality === 'high' ? 'high' : stream.viewing.requestedQuality === 'low' ? 'low' : null,
+        requestedQuality: ['high', 'medium', 'low'].includes(stream.viewing.requestedQuality ?? '') ? stream.viewing.requestedQuality : null,
       },
       nativeInput: stream.nativeInput && {
         receivedFrames: numeric(stream.nativeInput.receivedFrames), submittedFrames: numeric(stream.nativeInput.submittedFrames),

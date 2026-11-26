@@ -264,6 +264,7 @@ vi.mock('livekit-client', () => {
     RoomEvent: events,
     Track: { Source: source },
     VideoPreset: MockVideoPreset,
+    VideoQuality: { LOW: 0, MEDIUM: 1, HIGH: 2 },
   };
 });
 
@@ -1549,9 +1550,9 @@ describe('room media lifecycle', () => {
   });
 
   it.each([
-    { quality: 'economy', fps: 30, bitrate: 3_000_000, degradation: 'balanced' },
-    { quality: 'standard', fps: 60, bitrate: 12_000_000, degradation: 'maintain-framerate' },
-    { quality: 'highFrameRate', fps: 120, bitrate: 20_000_000, degradation: 'maintain-framerate' },
+    { quality: 'economy', fps: 30, bitrate: 2_000_000, degradation: 'maintain-resolution' },
+    { quality: 'standard', fps: 60, bitrate: 6_000_000, degradation: 'maintain-resolution' },
+    { quality: 'highFrameRate', fps: 60, bitrate: 10_000_000, degradation: 'maintain-framerate' },
     { quality: 'custom', fps: 60, bitrate: 12_000_000, degradation: 'maintain-framerate' },
   ] as const)('passes the $quality selection to native capture and publication', async ({ quality, fps, bitrate, degradation }) => {
     configureNativeScreenDesktop();

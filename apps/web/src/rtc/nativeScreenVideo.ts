@@ -1,8 +1,8 @@
 import { readScreenSharePreferences, type ScreenSharePreferences } from '../settings/screenSharePreferences';
 import { LocalVideoTrack } from 'livekit-client';
 import { createScreenStatusFrame } from './screenStatusFrame';
-import { screenShareContentHint, screenShareDegradationPreference, screenShareQuality, screenShareThumbnailPreset, type CustomScreenShareQuality, type ScreenShareQualityId } from './screenShareQuality';
-import { applyScreenShareEncoding, readScreenShareEncoding, screenShareEncodingLimits } from './screenShareEncoding';
+import { SCREEN_SHARE_LOWER_LAYER_FPS, screenShareContentHint, screenShareDegradationPreference, screenShareLowerLayers, screenShareQuality, type CustomScreenShareQuality, type ScreenShareQualityId } from './screenShareQuality';
+import { applyScreenShareEncoding, hasScreenShareSimulcast, readScreenShareEncoding, screenShareEncodingLimits } from './screenShareEncoding';
 
 export interface NativeVideoDesktopBridge {
   recordScreenShareStartupTiming(sessionId: string, stage: 'screenVideoFirstFrame' | 'screenVideoStartupFailed',
@@ -46,7 +46,7 @@ interface NativeScreenVideoOptions {
 const FIRST_FRAME_TIMEOUT_MS = 8_000;
 const SUSPENDED_HINT_INTERVAL_MS = 1_000;
 const DEMAND_CHECK_INTERVAL_MS = 500;
-const THUMBNAIL_DEMAND_DELAY_MS = 3_000;
+const LOWER_LAYER_DEMAND_DELAY_MS = 3_000;
 const RESIZE_SETTLE_MS = 500;
 
 const nativeVideoInputs = new WeakMap<MediaStreamTrack, NativeScreenVideoSession>();
@@ -90,7 +90,7 @@ export class NativeScreenVideoSession {
   private readonly highQualityPreviews = new Set<HTMLVideoElement>();
   private lastDemandCheck = Number.NEGATIVE_INFINITY;
   private lastDemandSender?: RTCRtpSender;
-  private thumbnailDemandSince?: number;
+  private lowerLayerDemandSince?: number;
   private demandChange?: Promise<void>;
   private recordingRequired = false;
   private frameRateAdjustmentFailed = false;
@@ -119,8 +119,8 @@ export class NativeScreenVideoSession {
   private timestampClock?: { localMicros: number; frameMicros: number; offset: number };
   private frameWidth = 1280;
   private frameHeight = 720;
-  private thumbnailResizeTimer?: ReturnType<typeof setTimeout>;
-  private thumbnailChange?: Promise<void>;
+  private layerResizeTimer?: ReturnType<typeof setTimeout>;
+  private layerResize?: Promise<void>;
   private suspended = false;
   private restoreTimer?: ReturnType<typeof setTimeout>;
   private get writing() { return this.writingFrame !== undefined; }
@@ -214,21 +214,21 @@ export class NativeScreenVideoSession {
     const now = this.now();
     if (!immediate && now - this.lastDemandCheck < DEMAND_CHECK_INTERVAL_MS) return;
     this.lastDemandCheck = now;
-    let thumbnailOnly = false;
+    let lowerLayersOnly = false;
     try {
       const sender = this.track.sender;
-      if (sender !== this.lastDemandSender) this.thumbnailDemandSince = undefined;
+      if (sender !== this.lastDemandSender) this.lowerLayerDemandSince = undefined;
       this.lastDemandSender = sender;
       const encodings = sender?.getParameters().encodings;
-      // 高清层明确暂停时只保留小预览预算；低层也已暂停无需继续满帧，未知、单层和重连仍保留用户目标。
-      thumbnailOnly = this.canReduceFrameRate() && this.highQualityPreviews.size === 0
-        && encodings?.length === 2 && encodings[0].rid === 'q' && typeof encodings[0].active === 'boolean'
-        && encodings[1].rid === 'h' && encodings[1].active === false;
+      // 主层明确暂停后，预览和中层最多需要 30 帧；层状态未知时保留用户目标。
+      lowerLayersOnly = this.canReduceFrameRate() && this.highQualityPreviews.size === 0
+        && !!encodings && hasScreenShareSimulcast(encodings) && typeof encodings[0].active === 'boolean'
+        && encodings.at(-1)?.active === false;
     } catch { /* sender 不可读视为未知，按用户目标恢复，不降低采集规格。 */ }
-    if (!thumbnailOnly) this.thumbnailDemandSince = undefined;
-    else this.thumbnailDemandSince ??= now;
-    const frameRate = thumbnailOnly && now - this.thumbnailDemandSince! >= THUMBNAIL_DEMAND_DELAY_MS
-      ? Math.min(this.maxFps, screenShareThumbnailPreset().encoding.maxFramerate!) : this.maxFps;
+    if (!lowerLayersOnly) this.lowerLayerDemandSince = undefined;
+    else this.lowerLayerDemandSince ??= now;
+    const frameRate = lowerLayersOnly && now - this.lowerLayerDemandSince! >= LOWER_LAYER_DEMAND_DELAY_MS
+      ? Math.min(this.maxFps, SCREEN_SHARE_LOWER_LAYER_FPS) : this.maxFps;
     // 本地输出运行时保持 OBS 渲染配置，单独减少网页交付，不能因观看需求改变而清空回放。
     const captureFrameRate = this.recordingRequired ? this.maxFps : frameRate;
     const deliveryOnly = captureFrameRate === this.captureFrameRate;
@@ -338,14 +338,14 @@ export class NativeScreenVideoSession {
     if (this.stopped || this.configuring || this.gameSourceChanging || this.gameTargetClosed) throw new Error('nativeVideoConfigurationUnavailable');
     this.configuring = true;
     try {
-      if (this.thumbnailChange) await this.thumbnailChange;
+      if (this.layerResize) await this.layerResize;
       // 手动画质优先；先收口已发送的节流请求，不与同一宿主的配置命令竞争。
       if (this.demandChange) await this.demandChange;
       await this.applyQuality(id, custom);
     } finally {
       this.configuring = false;
-      if (this.thumbnailResizeTimer !== undefined) this.scheduleThumbnailResize();
-      this.thumbnailDemandSince = undefined;
+      if (this.layerResizeTimer !== undefined) this.scheduleLayerResize();
+      this.lowerLayerDemandSince = undefined;
       this.lastDemandCheck = Number.NEGATIVE_INFINITY;
     }
   }
@@ -365,10 +365,9 @@ export class NativeScreenVideoSession {
       frame.width < Math.min(previousResolution.width, quality.width)
       && frame.height < Math.min(previousResolution.height, quality.height)
     )) ? frame : quality;
-    const thumbnail = screenShareThumbnailPreset(dimensions);
     let nativeRequested = false;
     try {
-      await applyScreenShareEncoding(sender, screenShareEncodingLimits(id, previousLimits, dimensions, custom, thumbnail));
+      await applyScreenShareEncoding(sender, screenShareEncodingLimits(id, previousLimits, dimensions, custom));
       if (this.stopped || this.track.sender !== sender) throw new Error('nativeVideoSessionStopped');
       // 只改编码预算不重置 OBS，避免无必要的停帧和纹理重建。
       if (quality.fps !== previousFps || resolutionChanged) {
@@ -390,7 +389,8 @@ export class NativeScreenVideoSession {
           maxBitrate: quality.bitrate, maxFramerate: quality.fps, priority: 'high',
         };
         this.track.publishOptions.degradationPreference = screenShareDegradationPreference(id, custom);
-        this.track.publishOptions.screenShareSimulcastLayers = [thumbnail];
+        this.track.publishOptions.screenShareSimulcastLayers = screenShareLowerLayers(dimensions,
+          previousLimits.encodings.length === 3, quality.bitrate, this.track.publishOptions.degradationPreference);
       }
     } catch (error) {
       if (!this.stopped) {
@@ -418,7 +418,7 @@ export class NativeScreenVideoSession {
     if (this.stopPromise) return this.stopPromise;
     this.stopped = true;
     clearTimeout(this.gameFollowTimer);
-    clearTimeout(this.thumbnailResizeTimer);
+    clearTimeout(this.layerResizeTimer);
     const endFollow = this.gameFollowId ? this.desktop.endNativeGameFollow!(this.gameFollowId) : Promise.resolve();
     void endFollow.catch(() => {});
     this.highQualityPreviews.clear();
@@ -551,7 +551,7 @@ export class NativeScreenVideoSession {
         && (this.frameWidth !== frame.displayWidth || this.frameHeight !== frame.displayHeight)) {
       this.frameWidth = frame.displayWidth;
       this.frameHeight = frame.displayHeight;
-      if (this.track.sender) this.scheduleThumbnailResize();
+      if (this.track.sender) this.scheduleLayerResize();
     }
     this.submittedFrames++;
     if (this.firstFrameMs === null && this.startedAt !== undefined) {
@@ -568,7 +568,7 @@ export class NativeScreenVideoSession {
   private setSuspended(suspended: boolean): void {
     if (this.stopped || this.suspended === suspended) return;
     this.suspended = suspended;
-    this.thumbnailDemandSince = undefined;
+    this.lowerLayerDemandSince = undefined;
     this.lastDemandCheck = Number.NEGATIVE_INFINITY;
     this.clearSuspensionTimer();
     if (suspended) {
@@ -581,33 +581,39 @@ export class NativeScreenVideoSession {
     }
   }
 
-  private scheduleThumbnailResize(): void {
-    clearTimeout(this.thumbnailResizeTimer);
+  private scheduleLayerResize(): void {
+    clearTimeout(this.layerResizeTimer);
     if (this.stopped) return;
-    // 拖动时保留当前轨道；窗口停止变化后只更新缩略层，保留 SDK 决定的启停和码率。
-    this.thumbnailResizeTimer = setTimeout(() => {
+    // 窗口停止变化后按新尺寸更新各层的缩放，保留 SDK 决定的启停和码率。
+    this.layerResizeTimer = setTimeout(() => {
       if (this.configuring) return;
-      this.thumbnailResizeTimer = undefined;
-      this.thumbnailChange = Promise.resolve(this.thumbnailChange).then(() => this.updateThumbnailEncoding()).catch((error) => {
-        if (!this.stopped) console.warn('窗口尺寸变化后更新共享缩略层失败', error);
+      this.layerResizeTimer = undefined;
+      this.layerResize = Promise.resolve(this.layerResize).then(() => this.updateLayerScales()).catch((error) => {
+        if (!this.stopped) console.warn('窗口尺寸变化后更新共享分层失败', error);
       });
     }, RESIZE_SETTLE_MS);
   }
 
-  private async updateThumbnailEncoding(): Promise<void> {
+  private async updateLayerScales(): Promise<void> {
     const sender = this.track.sender;
     const options = this.track.publishOptions;
     if (this.stopped || this.configuring || !sender || !options) return;
     const parameters = sender.getParameters();
-    const [preview, main] = parameters.encodings;
-    if (parameters.encodings.length !== 2 || preview.rid !== 'q' || main.rid !== 'h') return;
-    const thumbnail = screenShareThumbnailPreset(this.frameDimensions);
-    const scale = Math.max(1, Math.min(this.frameWidth, this.frameHeight) / Math.min(thumbnail.width, thumbnail.height));
-    if (preview.scaleResolutionDownBy !== scale) {
-      preview.scaleResolutionDownBy = scale;
-      await sender.setParameters(parameters);
-    }
-    if (!this.stopped && this.track.sender === sender) options.screenShareSimulcastLayers = [thumbnail];
+    const encodings = parameters.encodings;
+    const dimensions = this.frameDimensions;
+    if (!dimensions || !hasScreenShareSimulcast(encodings)) return;
+    const bitrate = encodings.at(-1)?.maxBitrate;
+    if (!bitrate) return;
+    const layers = screenShareLowerLayers(dimensions, encodings.length === 3, bitrate, options.degradationPreference);
+    let changed = false;
+    layers.forEach((layer, index) => {
+      const scale = Math.max(1, Math.min(this.frameWidth, this.frameHeight) / Math.min(layer.width, layer.height));
+      if (encodings[index].scaleResolutionDownBy === scale) return;
+      encodings[index].scaleResolutionDownBy = scale;
+      changed = true;
+    });
+    if (changed) await sender.setParameters(parameters);
+    if (!this.stopped && this.track.sender === sender) options.screenShareSimulcastLayers = layers;
   }
 
   private writeSuspendedFrame(): void {

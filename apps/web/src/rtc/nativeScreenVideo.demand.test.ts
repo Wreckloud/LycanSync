@@ -60,6 +60,20 @@ async function fixture(maxFps = 120, lowLayerActive = true) {
     retire: () => { current = false; } };
 }
 
+it('三层中只看中层时按 30 帧采集，聚焦恢复主层后回到 60 帧', async () => {
+  const f = await fixture(60);
+  try {
+    const layers = f.parameters().encodings;
+    layers.push({ ...layers[1], rid: 'f', active: false });
+    layers[1].maxFramerate = 30;
+    for (let i = 0; i < 7; i++) await f.frame();
+    expect(f.session.readDiagnostics().captureFrameRate).toBe(30);
+    layers[2].active = true;
+    await f.frame();
+    expect(f.session.readDiagnostics().captureFrameRate).toBe(60);
+  } finally { await f.session.stop(); }
+});
+
 it.each([true, false])('高清层暂停稳定三秒才降低 OBS 帧率，恢复时用户设置、编码预算、轨道和会话不变；低层开启=%s', async (lowLayerActive) => {
   const f = await fixture(120, lowLayerActive);
   try {
@@ -245,7 +259,7 @@ it.each([false, true])('降档或恢复失败不伪报配置、不反复尝试�
     expect(f.desktop.configureNativeVideo).toHaveBeenCalledTimes(count);
     expect(f.desktop.stopNativeVideo).not.toHaveBeenCalled();
     expect(f.onError).not.toHaveBeenCalled();
-    await f.session.configureQuality('highFrameRate');
+    await f.session.configureQuality('custom', { resolution: 1080, fps: 120 });
     expect(f.session.readDiagnostics()).toMatchObject({ requestedFrameRate: 120, captureFrameRate: 120, frameRateAdjustmentFailed: false });
   } finally { await f.session.stop(); }
 });

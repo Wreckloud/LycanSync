@@ -48,10 +48,10 @@ test('画质滑块支持跨项动画和键盘切换，缩放后仍对齐当前�
   const standard = presets.getByRole('tab', { name: '标准', exact: true });
   await standard.focus();
   await page.keyboard.press('Home');
-  await expect(presets.getByRole('tab', { name: '高帧率', exact: true })).toBeFocused();
-  await expect(page.locator('.capture-quality-description')).toContainText('1080p · 120 FPS');
+  await expect(presets.getByRole('tab', { name: '游戏', exact: true })).toBeFocused();
+  await expect(page.locator('.capture-quality-description')).toContainText('1080p · 60 FPS · 上限 10 Mbps');
   await expect.poll(() => presets.locator('.segmented-slider').evaluate(element => element.getAnimations().length)).toBe(0);
-  const positions = await presets.getByRole('tab', { name: '节省流量', exact: true }).evaluate(async element => {
+  const positions = await presets.getByRole('tab', { name: '稳定', exact: true }).evaluate(async element => {
     const slider = element.parentElement!.querySelector('.segmented-slider')!;
     const positions = [slider.getBoundingClientRect().x];
     (element as HTMLButtonElement).click();
@@ -111,8 +111,8 @@ test('四种画质切换、整屏预览、失败阻止确认和恢复', async ({
   await expect(dialog).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('picker-wide.png') });
   await expect(page.getByRole('tablist', { name: '共享画质' }).getByRole('tab')).toHaveCount(4);
-  await page.getByRole('tab', { name: '高帧率', exact: true }).click();
-  await expect(dialog).toContainText('1080p · 120 FPS');
+  await page.getByRole('tab', { name: '游戏', exact: true }).click();
+  await expect(dialog).toContainText('1080p · 60 FPS · 上限 10 Mbps');
   await page.getByRole('tab', { name: '整个屏幕', exact: true }).click();
   await expect(dialog.getByRole('button', { name: '测试窗口', exact: true })).toHaveCount(0);
   const screen = page.getByRole('button', { name: '屏幕 1', exact: true });

@@ -61,11 +61,12 @@ it('四档画质依次切换只更新同一轨道的发送参数及后续帧尺�
   const { session, desktop, sender, track, writes, sendFrame } = await createSession();
   try {
     for (const [quality, fps, width, height] of [
-      ['highFrameRate', 120, 1920, 1080], ['custom', 30, 1920, 1080],
+      ['highFrameRate', 60, 1920, 1080], ['custom', 30, 1920, 1080],
       ['standard', 60, 1920, 1080], ['economy', 30, 1280, 720],
     ] as const) {
       await session.configureQuality(quality, { resolution: 1080, fps: 30 });
-      expect(desktop.configureNativeVideo).toHaveBeenLastCalledWith('quality-session', fps, { width, height });
+      if (quality === 'highFrameRate') expect(desktop.configureNativeVideo).not.toHaveBeenCalled();
+      else expect(desktop.configureNativeVideo).toHaveBeenLastCalledWith('quality-session', fps, { width, height });
       expect(sender.getParameters().encodings[0].maxFramerate).toBe(fps);
       if (quality === 'custom' && fps === 30) expect(sender.getParameters().degradationPreference).toBe('maintain-resolution');
       expect(track.publishOptions.screenShareEncoding.maxFramerate).toBe(fps);
@@ -136,10 +137,10 @@ it('updates capture and encoder without replacing the track or session, and scal
   try {
     await session.configureQuality('economy');
     expect(desktop.configureNativeVideo).toHaveBeenCalledWith('quality-session', 30, { width: 1280, height: 720 });
-    expect(sender.getParameters().encodings[0]).toEqual({ active: true, maxBitrate: 3_000_000, maxFramerate: 30 });
-    expect(track.publishOptions.screenShareEncoding.maxBitrate).toBe(3_000_000);
-    expect(sender.getParameters().degradationPreference).toBe('balanced');
-    expect(track.publishOptions.degradationPreference).toBe('balanced');
+    expect(sender.getParameters().encodings[0]).toEqual({ active: true, maxBitrate: 2_000_000, maxFramerate: 30 });
+    expect(track.publishOptions.screenShareEncoding.maxBitrate).toBe(2_000_000);
+    expect(sender.getParameters().degradationPreference).toBe('maintain-resolution');
+    expect(track.publishOptions.degradationPreference).toBe('maintain-resolution');
     expect(session.track).toBe(track);
     expect(session.captureSessionId).toBe('quality-session');
     expect(desktop.startNativeVideo).toHaveBeenCalledOnce();
@@ -159,16 +160,33 @@ it('双层切换同时更新主层与缩略层，保持 RID、暂停状态和采
     await session.configureQuality('economy');
     expect(sender.getParameters().encodings).toEqual([
       { rid: 'q', active: false, maxBitrate: 1_000_000, maxFramerate: 30, scaleResolutionDownBy: 2 },
-      { rid: 'h', active: true, maxBitrate: 3_000_000, maxFramerate: 30, scaleResolutionDownBy: 1 },
+      { rid: 'h', active: true, maxBitrate: 2_000_000, maxFramerate: 30, scaleResolutionDownBy: 1 },
     ]);
     await session.configureQuality('highFrameRate');
     expect(sender.getParameters().encodings).toEqual([
       { rid: 'q', active: false, maxBitrate: 1_000_000, maxFramerate: 30, scaleResolutionDownBy: 3 },
-      { rid: 'h', active: true, maxBitrate: 20_000_000, maxFramerate: 120, scaleResolutionDownBy: 1 },
+      { rid: 'h', active: true, maxBitrate: 10_000_000, maxFramerate: 60, scaleResolutionDownBy: 1 },
     ]);
-    expect(track.publishOptions.screenShareEncoding.maxFramerate).toBe(120);
+    expect(track.publishOptions.screenShareEncoding.maxFramerate).toBe(60);
     expect(desktop.startNativeVideo).toHaveBeenCalledOnce();
     expect(desktop.stopNativeVideo).not.toHaveBeenCalled();
+  } finally { await session.stop(); }
+});
+
+it('三层热切稳定档后中层小于主画面，保持 SDK 暂停状态与轨道身份', async () => {
+  const { session, sender, track } = await createSession(true);
+  try {
+    const parameters = sender.getParameters();
+    parameters.encodings.push({ ...parameters.encodings[1], rid: 'f' });
+    parameters.encodings[1].active = false;
+    await sender.setParameters(parameters);
+    await session.configureQuality('economy');
+    expect(sender.getParameters().encodings).toMatchObject([
+      { rid: 'q', scaleResolutionDownBy: 4, maxBitrate: 500_000 },
+      { rid: 'h', active: false, scaleResolutionDownBy: 2, maxBitrate: 1_000_000 },
+      { rid: 'f', scaleResolutionDownBy: 1, maxBitrate: 2_000_000, maxFramerate: 30 },
+    ]);
+    expect(session.track).toBe(track);
   } finally { await session.stop(); }
 });
 
@@ -244,7 +262,7 @@ it('does not apply or roll back a late native update after the capture was stopp
   const { session, desktop, track } = await createSession();
   let complete!: (value: { changed: boolean }) => void;
   vi.mocked(desktop.configureNativeVideo).mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
-  const changing = session.configureQuality('highFrameRate');
+  const changing = session.configureQuality('custom', { resolution: 1080, fps: 120 });
   const rejected = expect(changing).rejects.toThrow('nativeVideoSessionStopped');
   await vi.waitFor(() => expect(desktop.configureNativeVideo).toHaveBeenCalledOnce());
   await session.stop();
