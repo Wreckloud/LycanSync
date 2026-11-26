@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
 import { HeadphoneOff, Headphones, MicOff, Monitor, Volume2, VolumeX } from '@lucide/vue';
+import AccompanimentSourceMenu from './AccompanimentSourceMenu.vue';
 import DialogTransition from '../components/DialogTransition.vue';
 import MemberVolumeButton from '../components/MemberVolumeButton.vue';
 import VoiceLevelMic from '../components/VoiceLevelMic.vue';
@@ -17,12 +18,12 @@ import vlcIcon from './assets/vlc.png';
 import stardewIcon from './assets/stardew.png';
 
 interface Source {
-  id: string; name: string; icon?: string; browser?: boolean; open: boolean; paused: boolean;
+  id: string; name: string; icon?: string; browser?: boolean; common?: boolean; open: boolean; paused: boolean;
 }
 const sources = ref<Source[]>([
-  { id: 'player', name: 'QQ 音乐', icon: qqMusicIcon, open: true, paused: false },
-  { id: 'netease', name: '网易云音乐', icon: neteaseIcon, open: false, paused: true },
-  { id: 'spotify', name: 'Spotify', icon: spotifyIcon, open: false, paused: true },
+  { id: 'player', name: 'QQ 音乐', icon: qqMusicIcon, common: true, open: true, paused: false },
+  { id: 'netease', name: '网易云音乐', icon: neteaseIcon, common: true, open: false, paused: true },
+  { id: 'spotify', name: 'Spotify', icon: spotifyIcon, common: true, open: false, paused: true },
   { id: 'browser', name: 'Google Chrome', icon: chromeIcon, browser: true, open: true, paused: false },
   { id: 'edge', name: 'Microsoft Edge', icon: edgeIcon, browser: true, open: false, paused: false },
   { id: 'firefox', name: 'Firefox', icon: firefoxIcon, browser: true, open: false, paused: false },
@@ -36,7 +37,8 @@ const accompaniment = computed(() => available.value.find(source => source.id ==
 const screen = ref<'off' | 'silent' | 'with-audio'>('off');
 const windowAudio = ref(false);
 const simulateFailure = ref(false);
-const dialog = ref<'audio' | 'screen'>();
+const menuAnchor = ref<HTMLElement>();
+const screenDialog = ref(false);
 const dialogPanel = ref<HTMLElement>();
 const error = ref('');
 const mic = ref(true);
@@ -56,21 +58,32 @@ function changeVoiceVolume(value: number) {
   if (value > 0) lastVoice.value = value;
 }
 
-async function openDialog(kind: 'audio' | 'screen') {
+function closeSourceMenu(restoreFocus: boolean) {
+  const anchor = menuAnchor.value;
+  menuAnchor.value = undefined;
+  if (restoreFocus) anchor?.focus({ preventScroll: true });
+}
+function toggleSourceMenu(event: MouseEvent) {
+  if (menuAnchor.value) { closeSourceMenu(true); return; }
+  error.value = '';
+  menuAnchor.value = event.currentTarget as HTMLElement;
+}
+async function openScreenDialog() {
   error.value = '';
   windowAudio.value = screen.value === 'with-audio';
-  dialog.value = kind;
+  screenDialog.value = true;
   await nextTick();
   dialogPanel.value?.focus();
 }
-function closeDialog() { dialog.value = undefined; }
+function closeDialog() { screenDialog.value = false; }
 const backdropEvents = useBackdropDismiss(closeDialog);
 
-function startAudio(source: Source) {
-  if (!source.open || screen.value !== 'off') return;
-  if (simulateFailure.value) { error.value = '模拟分享失败，请取消后重新选择。'; return; }
+function startAudio(id: string) {
+  const source = available.value.find(entry => entry.id === id);
+  if (!source || screen.value !== 'off') return;
+  if (simulateFailure.value) { error.value = '模拟分享失败，请关闭菜单后重试。'; return; }
   sharingId.value = source.id;
-  closeDialog();
+  closeSourceMenu(true);
 }
 function shareScreen() {
   if (simulateFailure.value) { error.value = '模拟共享失败，当前声音保持原样。'; return; }
@@ -88,7 +101,7 @@ function setSourceOpen(source: Source, open: boolean) {
   <section class="preview-content accompaniment-lab" aria-labelledby="accompaniment-title">
     <header class="preview-section-heading">
       <h2 id="accompaniment-title">分享伴奏</h2>
-      <p>指向自己的卡片，点「播放伴奏」。两张卡片同步演示同一位成员，仅模拟界面。</p>
+      <p>指向自己的卡片，点右侧的「播放伴奏」。两张卡片同步演示同一位成员，仅模拟界面。</p>
     </header>
     <div class="card-pair">
       <section v-for="card in cards" :key="card.label" :aria-label="card.label">
@@ -99,8 +112,8 @@ function setSourceOpen(source: Source, open: boolean) {
             <div v-else class="large-avatar" aria-hidden="true">维</div>
             <div class="media-badges">
               <button v-if="card.local && (accompaniment || screen === 'off')" type="button" class="media-badge own-badge"
-                :class="{ 'is-sharing': accompaniment }" :aria-label="accompaniment ? '停止伴奏，' + accompaniment.name : '播放伴奏'"
-                @click="accompaniment ? sharingId = '' : openDialog('audio')">
+                :class="{ 'is-sharing': accompaniment, 'is-open': menuAnchor }" :aria-expanded="accompaniment ? undefined : !!menuAnchor" :aria-label="accompaniment ? '停止伴奏，' + accompaniment.name : '播放伴奏'"
+                @click="accompaniment ? sharingId = '' : toggleSourceMenu($event)">
                 <template v-if="accompaniment">
                   <img v-if="accompaniment.icon" class="source-icon" :src="accompaniment.icon" alt="" @error="accompaniment.icon = undefined" />
                   <span v-else>{{ accompaniment.name }}</span>
@@ -154,34 +167,30 @@ function setSourceOpen(source: Source, open: boolean) {
       </fieldset>
       <label v-if="accompaniment"><input v-model="accompaniment.paused" type="checkbox" />暂停当前播放器</label>
       <label><input v-model="simulateFailure" type="checkbox" />模拟分享失败</label>
-      <button v-if="screen !== 'off'" type="button" @click="openDialog('screen')">调整窗口声音</button>
-      <button type="button" @click="screen === 'off' ? openDialog('screen') : screen = 'off'">
+      <button v-if="screen !== 'off'" type="button" @click="openScreenDialog()">调整窗口声音</button>
+      <button type="button" @click="screen === 'off' ? openScreenDialog() : screen = 'off'">
         {{ screen === 'off' ? '模拟共享画面' : '结束共享画面' }}
       </button>
     </details>
+    <Teleport to="body">
+      <Transition name="surface-panel">
+        <AccompanimentSourceMenu v-if="menuAnchor" :anchor="menuAnchor" :sources="available" :error="error"
+          @choose="startAudio" @close="closeSourceMenu" />
+      </Transition>
+    </Teleport>
     <DialogTransition>
-      <div v-if="dialog" class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="closeDialog">
-        <section ref="dialogPanel" role="dialog" class="dialog-panel audio-picker" aria-modal="true" aria-labelledby="audio-picker-title"
+      <div v-if="screenDialog" class="dialog-backdrop" v-on="backdropEvents" @keydown.esc.stop="closeDialog">
+        <section ref="dialogPanel" role="dialog" class="dialog-panel" aria-modal="true" aria-labelledby="screen-preview-title"
           tabindex="-1" @keydown="keepDialogFocus">
-          <header><h2 id="audio-picker-title">{{ dialog === 'audio' ? '选择音频来源' : screen === 'off' ? '共享模拟窗口' : '调整窗口声音' }}</h2>
-            <p v-if="dialog === 'audio'">选择一个已打开的应用，向语音房分享它的声音。</p>
-          </header>
-          <div v-if="dialog === 'audio'" class="sources">
-            <button v-for="source in available" :key="source.id" type="button" @click="startAudio(source)">
-              <img v-if="source.icon" class="app-symbol" :src="source.icon" alt="" @error="source.icon = undefined" />
-              <span><strong>{{ source.name }}</strong><small v-if="source.browser">其他标签页的声音也可能被听到</small>
-                <small v-else>{{ source.paused ? '已暂停' : '播放中' }}</small></span>
-            </button>
-            <p v-if="!available.length">打开播放器或浏览器后，它会出现在这里。</p>
-          </div>
-          <div v-else class="screen-options">
+          <header><h2 id="screen-preview-title">{{ screen === 'off' ? '共享模拟窗口' : '调整窗口声音' }}</h2></header>
+          <div class="screen-options">
             <label><input v-model="windowAudio" type="checkbox" />共享窗口声音</label>
             <p v-if="accompaniment">{{ windowAudio ? '共享成功后，窗口声音将替换当前伴奏。' : '将继续分享 ' + accompaniment.name + ' 的伴奏。' }}</p>
           </div>
           <p v-if="error" role="alert" class="picker-error">{{ error }}</p>
           <footer class="card-actions">
             <button type="button" @click="closeDialog">取消</button>
-            <button v-if="dialog === 'screen'" type="button" class="confirm-button card-actions-end" @click="shareScreen">{{ screen === 'off' ? '开始共享' : '应用' }}</button>
+            <button type="button" class="confirm-button card-actions-end" @click="shareScreen">{{ screen === 'off' ? '开始共享' : '应用' }}</button>
           </footer>
         </section>
       </div>
@@ -196,8 +205,9 @@ function setSourceOpen(source: Source, open: boolean) {
 .card-pair h3 { margin: 0 0 8px; color: var(--muted); font-size: 13px; font-weight: 500; }
 .media-badges { position: absolute; right: 7px; bottom: 6px; display: flex; align-items: center; gap: 4px; }
 .media-badge { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 22px; padding: 0 5px; border: 0; border-radius: 5px; background: #0b0f14cc; color: var(--text); font: inherit; font-size: 11px; line-height: 16px; }
+.media-badges:has(.own-badge:not(.is-sharing)) { top: 50%; bottom: auto; transform: translateY(-50%); }
 .own-badge { cursor: pointer; opacity: 0; pointer-events: none; transition: opacity var(--motion-feedback-duration) ease; }
-.participant-card:hover .own-badge, .participant-card:focus-within .own-badge, .own-badge.is-sharing { opacity: 1; pointer-events: auto; }
+.participant-card:hover .own-badge, .participant-card:focus-within .own-badge, .own-badge.is-sharing, .own-badge.is-open { opacity: 1; pointer-events: auto; }
 .own-badge, .remote-badge { background: #10161deb; font-size: 12px; }
 .own-badge { padding-inline: 6px; }
 .source-icon { width: 16px; height: 16px; object-fit: contain; flex: none; }
@@ -213,12 +223,8 @@ function setSourceOpen(source: Source, open: boolean) {
 .scenario-controls legend { margin-bottom: 4px; }
 .scenario-controls label, .screen-options label { display: inline-flex; gap: 5px; align-items: center; }
 .scenario-controls > label { margin-right: 12px; }
-.sources, .screen-options { display: grid; gap: 8px; margin: 18px 0; }
-.sources button { display: flex; align-items: center; justify-content: flex-start; gap: 12px; padding: 8px 10px; background: var(--panel-soft); text-align: left; }
-.sources button:is(:hover,:focus-visible) { border-color: var(--accent); }
-.sources strong, .sources small { display: block; }
-.sources small, .sources p, .screen-options p { margin: 0; color: var(--muted); }
-.app-symbol { width: 24px; height: 24px; flex: none; object-fit: contain; color: var(--muted); }
+.screen-options { display: grid; gap: 8px; margin: 18px 0; }
+.screen-options p { margin: 0; color: var(--muted); }
 .picker-error { color: var(--danger); }
 @media (hover: none), (pointer: coarse) { .own-badge { opacity: 1; pointer-events: auto; } }
 @media (max-width: 480px) { .card-pair { grid-template-columns: minmax(0, 222px); } }

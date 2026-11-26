@@ -292,6 +292,7 @@ onScopeDispose(() => {
   </div>
 </template>
 
+<style scoped src="../styles/callMenu.css"></style>
 <style scoped>
 .call-controls { display: flex; align-items: center; gap: 8px; }
 .call-control-split { position: relative; display: flex; flex: 0 0 auto; height: 36px; }
@@ -301,11 +302,9 @@ onScopeDispose(() => {
 .call-control-more:hover:not(:disabled), .call-control-more[aria-expanded='true'] { color: var(--text); background: var(--panel-soft); }
 .call-control-more svg.is-open { transform: rotate(180deg); }
 .call-control-more svg { transition: transform var(--motion-feedback-duration) ease; }
-.call-control-menu { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 8px); display: grid; gap: 12px; width: min(260px, calc(100vw - 32px)); max-height: var(--call-menu-max-height); overflow-y: auto; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-raised); color: var(--text); font-size: 13px; line-height: 20px; }
-.call-control-menu header { color: var(--muted); font-size: 12px; }
+.call-control-menu { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 8px); }
 .call-control-range, .call-input-level { display: grid; gap: 6px; }
 .call-member-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.call-submenu-heading { display: flex; align-items: center; gap: 4px; }
 .call-control-range > span, .call-input-level > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .call-control-range input { width: 100%; margin: 0; accent-color: var(--accent); }
 .call-control-menu b { color: var(--accent); font-weight: 500; font-variant-numeric: tabular-nums; }
@@ -314,9 +313,6 @@ onScopeDispose(() => {
 .call-input-level i.is-active { background: var(--accent); }
 .call-shortcut-hint { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 4px 0; border: 0; background: transparent; color: var(--danger); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .call-shortcut-hint svg { flex-shrink: 0; }
-.call-menu-action, .call-settings-entry { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 6px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text); font-size: 13px; text-align: left; cursor: pointer; }
-.call-menu-action:hover:not(:disabled), .call-settings-entry:hover { background: var(--panel-soft); }
-.call-menu-chevron, .call-settings-entry > svg:last-child { margin-left: auto; }
 .call-menu-action > span { margin-left: auto; color: var(--muted); font-size: 12px; }
 .call-menu-action > span + svg { margin-left: 0; }
 .call-menu-action.is-danger { color: var(--danger); }
@@ -326,7 +322,6 @@ onScopeDispose(() => {
 .call-submenu { left: calc(100% + 8px); bottom: 0; }
 .call-menu-stack.is-compact .call-submenu { position: relative; right: auto; left: auto; bottom: auto; }
 .call-menu-stack.is-compact .call-submenu.surface-panel-leave-active { position: absolute; left: 0; bottom: 0; }
-.call-submenu-back { width: 32px; justify-content: center; padding: 6px; }
 .call-quality-options { display: grid; gap: 4px; }
 .call-quality-options label, .call-share-audio { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; }
 .call-quality-options label { padding: 4px 0; }

@@ -1,0 +1,7 @@
+.call-control-menu { display: grid; gap: 12px; width: min(260px, calc(100vw - 32px)); max-height: var(--call-menu-max-height); overflow-y: auto; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-raised); color: var(--text); font-size: 13px; line-height: 20px; }
+.call-control-menu header { color: var(--muted); font-size: 12px; }
+.call-submenu-heading { display: flex; align-items: center; gap: 4px; }
+.call-menu-action, .call-settings-entry { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 6px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text); font-size: 13px; text-align: left; cursor: pointer; }
+.call-menu-action:hover:not(:disabled), .call-settings-entry:hover { background: var(--panel-soft); }
+.call-menu-chevron, .call-settings-entry > svg:last-child { margin-left: auto; }
+.call-submenu-back { width: 32px; justify-content: center; padding: 6px; }
