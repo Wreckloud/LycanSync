@@ -35,3 +35,13 @@ test('浏览器隐藏后台实例，同名窗口在本地可区分', () => {
     { ...chrome, pid: 3, windowTitle: undefined }, { executable: 'vlc.exe', pid: 4, creation: '40' }]);
   assert.deepEqual(sources.list().map(source => source.name), ['Google Chrome · 窗口 A', 'Google Chrome · 窗口 B', 'VLC']);
 });
+
+test('国内播放器按主进程识别，聊天程序、启动器和更新程序不会冒充音源', () => {
+  const executables = ['qqmusic.exe', 'cloudmusic.exe', 'kugou.exe', 'kwmusic.exe', 'sodamusic.exe',
+    'qq.exe', 'kwservice.exe', 'sodamusiclauncher.exe', 'kugouupdate.exe'];
+  const sources = createApplicationAudioSources(known => executables.filter(exe => known.includes(exe))
+    .map((executable, index) => ({ executable, pid: 10 + index, creation: '100' })));
+  assert.deepEqual(sources.list().map(({ application, name }) => [application, name]), [
+    ['qqmusic', 'QQ 音乐'], ['netease', '网易云音乐'], ['kugou', '酷狗音乐'], ['kuwo', '酷我音乐'], ['soda', '汽水音乐'],
+  ]);
+});

@@ -3,6 +3,9 @@ const { randomUUID } = require('node:crypto');
 const applications = new Map([
   ['qqmusic.exe', ['qqmusic', 'QQ 音乐']],
   ['cloudmusic.exe', ['netease', '网易云音乐']],
+  ['kugou.exe', ['kugou', '酷狗音乐']],
+  ['kwmusic.exe', ['kuwo', '酷我音乐']],
+  ['sodamusic.exe', ['soda', '汽水音乐']],
   ['vlc.exe', ['vlc', 'VLC']],
   ['spotify.exe', ['spotify', 'Spotify']],
   ['chrome.exe', ['chrome', 'Google Chrome']],

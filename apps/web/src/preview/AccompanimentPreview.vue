@@ -13,6 +13,9 @@ import { SHARE_VOLUME_MAX } from '../rtc/audioPreferences';
 import qqMusicIcon from './assets/qq-music.png';
 import chromeIcon from './assets/chrome.png';
 import neteaseIcon from './assets/netease.png';
+import kugouIcon from './assets/kugou.png';
+import kuwoIcon from './assets/kuwo.png';
+import sodaIcon from './assets/soda.png';
 import spotifyIcon from './assets/spotify.png';
 import edgeIcon from './assets/edge.png';
 import firefoxIcon from './assets/firefox.png';
@@ -25,6 +28,9 @@ interface Source {
 const sources = ref<Source[]>([
   { id: 'player', name: 'QQ 音乐', icon: qqMusicIcon, common: true, open: true, paused: false },
   { id: 'netease', name: '网易云音乐', icon: neteaseIcon, common: true, open: false, paused: true },
+  { id: 'kugou', name: '酷狗音乐', icon: kugouIcon, common: true, open: false, paused: false },
+  { id: 'kuwo', name: '酷我音乐', icon: kuwoIcon, common: true, open: false, paused: false },
+  { id: 'soda', name: '汽水音乐', icon: sodaIcon, common: true, open: false, paused: false },
   { id: 'spotify', name: 'Spotify', icon: spotifyIcon, common: true, open: false, paused: true },
   { id: 'browser', name: 'Google Chrome', icon: chromeIcon, common: true, open: true, paused: false },
   { id: 'edge', name: 'Microsoft Edge', icon: edgeIcon, common: true, open: false, paused: false },

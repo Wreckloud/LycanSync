@@ -7,6 +7,9 @@ import AccompanimentSourceMenu from './AccompanimentSourceMenu.vue';
 import AccompanimentSpectrum from './AccompanimentSpectrum.vue';
 import qqmusic from '../preview/assets/qq-music.png';
 import netease from '../preview/assets/netease.png';
+import kugou from '../preview/assets/kugou.png';
+import kuwo from '../preview/assets/kuwo.png';
+import soda from '../preview/assets/soda.png';
 import spotify from '../preview/assets/spotify.png';
 import chrome from '../preview/assets/chrome.png';
 import edge from '../preview/assets/edge.png';
@@ -19,8 +22,8 @@ const props = defineProps<{
   start: (source: ApplicationAudioSource) => Promise<boolean>; stop: () => Promise<void>;
 }>();
 const emit = defineEmits<{ notice: [message: string] }>();
-const icons: Record<string, string> = { qqmusic, netease, spotify, chrome, edge, firefox, vlc };
-const common = ['qqmusic', 'netease', 'spotify', 'chrome', 'edge', 'firefox'];
+const icons: Record<string, string> = { qqmusic, netease, kugou, kuwo, soda, spotify, chrome, edge, firefox, vlc };
+const common = ['qqmusic', 'netease', 'kugou', 'kuwo', 'soda', 'spotify', 'chrome', 'edge', 'firefox'];
 const bridge = window.lycanDesktop;
 const sharing = computed(() => props.local ? props.source?.application : applicationAudioName(props.publication));
 const track = computed(() => {
