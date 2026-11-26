@@ -85,7 +85,7 @@ onScopeDispose(() => {
       </header>
       <div class="source-list">
         <button v-for="source in page.rows" :key="source.id" type="button" class="call-menu-action source-row" :disabled="busy" @click="emit('choose', source.id)">
-          <img v-if="source.common && source.icon" :src="source.icon" width="16" height="16" alt="" />
+          <img v-if="source.icon" :src="source.icon" width="16" height="16" alt="" />
           <span :title="source.name">{{ source.name }}</span>
         </button>
         <p v-if="!page.rows.length && !busy && !error">{{ page.key === 'main' ? '当前没有打开的常用音源。' : '没有其他可选应用。打开应用窗口后，重新打开伴奏菜单即可选择。' }}</p>

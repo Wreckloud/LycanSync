@@ -15,6 +15,10 @@ import chrome from '../preview/assets/chrome.png';
 import edge from '../preview/assets/edge.png';
 import firefox from '../preview/assets/firefox.png';
 import vlc from '../preview/assets/vlc.png';
+import potplayer from '../preview/assets/potplayer.png';
+import mediaplayer from '../preview/assets/media-player.png';
+import legacyplayer from '../preview/assets/legacy-player.png';
+import moviestv from '../preview/assets/movies-tv.png';
 
 const props = defineProps<{
   local: boolean; screen: boolean; visible: boolean; revision: number; publication?: TrackPublication;
@@ -22,8 +26,9 @@ const props = defineProps<{
   start: (source: ApplicationAudioSource) => Promise<boolean>; stop: () => Promise<void>;
 }>();
 const emit = defineEmits<{ notice: [message: string] }>();
-const icons: Record<string, string> = { qqmusic, netease, kugou, kuwo, soda, spotify, chrome, edge, firefox, vlc };
-const common = ['qqmusic', 'netease', 'kugou', 'kuwo', 'soda', 'spotify', 'chrome', 'edge', 'firefox'];
+const icons: Record<string, string> = { qqmusic, netease, kugou, kuwo, soda, spotify, chrome, edge, firefox, vlc,
+  potplayer, mediaplayer, legacyplayer, moviestv };
+const common = ['qqmusic', 'netease', 'kugou', 'kuwo', 'soda', 'spotify', 'potplayer', 'mediaplayer', 'chrome', 'edge', 'firefox'];
 const bridge = window.lycanDesktop;
 const sharing = computed(() => props.local ? props.source?.application : applicationAudioName(props.publication));
 const track = computed(() => {

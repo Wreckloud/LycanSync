@@ -20,6 +20,10 @@ import spotifyIcon from './assets/spotify.png';
 import edgeIcon from './assets/edge.png';
 import firefoxIcon from './assets/firefox.png';
 import vlcIcon from './assets/vlc.png';
+import potplayerIcon from './assets/potplayer.png';
+import mediaPlayerIcon from './assets/media-player.png';
+import legacyPlayerIcon from './assets/legacy-player.png';
+import moviesTvIcon from './assets/movies-tv.png';
 import stardewIcon from './assets/stardew.png';
 
 interface Source {
@@ -32,10 +36,14 @@ const sources = ref<Source[]>([
   { id: 'kuwo', name: '酷我音乐', icon: kuwoIcon, common: true, open: false, paused: false },
   { id: 'soda', name: '汽水音乐', icon: sodaIcon, common: true, open: false, paused: false },
   { id: 'spotify', name: 'Spotify', icon: spotifyIcon, common: true, open: false, paused: true },
+  { id: 'potplayer', name: 'PotPlayer', icon: potplayerIcon, common: true, open: false, paused: false },
+  { id: 'mediaplayer', name: '媒体播放器', icon: mediaPlayerIcon, common: true, open: false, paused: false },
   { id: 'browser', name: 'Google Chrome', icon: chromeIcon, common: true, open: true, paused: false },
   { id: 'edge', name: 'Microsoft Edge', icon: edgeIcon, common: true, open: false, paused: false },
   { id: 'firefox', name: 'Firefox', icon: firefoxIcon, common: true, open: false, paused: false },
   { id: 'vlc', name: 'VLC', icon: vlcIcon, open: true, paused: true },
+  { id: 'legacyplayer', name: 'Windows Media Player', icon: legacyPlayerIcon, open: false, paused: false },
+  { id: 'moviestv', name: '电影和电视', icon: moviesTvIcon, open: false, paused: false },
   { id: 'stardew', name: '星露谷物语', icon: stardewIcon, open: false, paused: false },
   { id: 'other', name: '本地播放器', open: false, paused: true },
 ]);
