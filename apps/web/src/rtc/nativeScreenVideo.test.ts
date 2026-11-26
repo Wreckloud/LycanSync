@@ -372,6 +372,7 @@ describe('NativeScreenVideoSession', () => {
     const ready = session.start('window:1:0');
     await Promise.resolve();
     expect(desktop.startNativeVideo).toHaveBeenCalledWith('window:1:0', 30, captureSettings, { width: 1920, height: 1080 }, undefined);
+    expect(session.frameDimensions).toBeUndefined();
     const sizes = [
       { width: 1920, height: 1080, displayWidth: 1920, displayHeight: 1088 },
       { width: 800, height: 1048, displayWidth: 1920, displayHeight: 1088 },
@@ -391,6 +392,7 @@ describe('NativeScreenVideoSession', () => {
       const output = frames[index];
       expect(output.displayWidth).toBe(size.width);
       expect(output.displayHeight).toBe(size.height);
+      expect(session.frameDimensions).toEqual({ width: size.width, height: size.height });
       expect(output.visibleRect).toEqual(original.visibleRect);
       expect(output.codedWidth).toBe(1920);
       expect(output.codedHeight).toBe(1088);

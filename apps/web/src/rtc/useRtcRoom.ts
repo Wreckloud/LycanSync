@@ -1257,7 +1257,7 @@ export function useRtcRoom(options?: RtcRoomOptions) {
             source: Track.Source.ScreenShare,
             screenShareEncoding: { ...sharePreset.encoding, priority: 'high' },
             videoCodec: 'h264', simulcast: true,
-            screenShareSimulcastLayers: [screenShareThumbnailPreset()],
+            screenShareSimulcastLayers: [screenShareThumbnailPreset(nativeVideo?.frameDimensions)],
             // 降级偏好只作用于本次共享，不改变房间其他视频的策略。
             degradationPreference: screenShareDegradationPreference(selectedQuality, selectedCustomQuality),
           });

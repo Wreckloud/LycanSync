@@ -41,9 +41,9 @@ export async function applyScreenShareEncoding(sender: RTCRtpSender, limits: Scr
 }
 
 export function screenShareEncodingLimits(id: ScreenShareQualityId, current: ScreenShareEncodingLimits,
-  dimensions: { width: number; height: number }, custom?: CustomScreenShareQuality): ScreenShareEncodingLimits {
+  dimensions: { width: number; height: number }, custom?: CustomScreenShareQuality,
+  thumbnail = screenShareThumbnailPreset(dimensions)): ScreenShareEncodingLimits {
   const quality = screenShareQuality(id, custom);
-  const thumbnail = screenShareThumbnailPreset();
   const scale = Math.min(1, quality.width / dimensions.width, quality.height / dimensions.height);
   const thumbnailShortSide = Math.min(thumbnail.width, thumbnail.height);
   return {

@@ -70,9 +70,11 @@ function copyNativeVideoFrame(frame, sessionId) {
   const height = frame.visibleRect?.height ?? frame.displayHeight;
   if (nativeVideoSurface && nativeVideoSurface.sessionId !== sessionId) releaseNativeVideoCanvas(nativeVideoSurface.sessionId);
   if (!nativeVideoSurface || nativeVideoSurface.width !== width || nativeVideoSurface.height !== height) {
-    // 视频编码使用偶数画布；多出的一行或一列留黑，原画面保持原尺寸。
-    const canvasWidth = width + width % 2;
-    const canvasHeight = height + height % 2;
+    // 短边接近 720p 时预览缩小一半；主画面和半尺寸预览都需要偶数像素。
+    const shortSide = Math.min(width, height);
+    const alignment = Math.round((shortSide + shortSide % 2) / 360) === 2 ? 4 : 2;
+    const canvasWidth = Math.ceil(width / alignment) * alignment;
+    const canvasHeight = Math.ceil(height / alignment) * alignment;
     if (!nativeVideoSurface) {
       const canvas = new OffscreenCanvas(canvasWidth, canvasHeight);
       const context = canvas.getContext('2d', { alpha: false });
@@ -82,8 +84,8 @@ function copyNativeVideoFrame(frame, sessionId) {
       const { canvas, context } = nativeVideoSurface;
       if (canvas.width === canvasWidth && canvas.height === canvasHeight) {
         // 相邻尺寸可能复用同一画布；上帧右边或下边的内容不能留在补边里。
-        if (width < nativeVideoSurface.width) context.clearRect(width, 0, 1, canvasHeight);
-        if (height < nativeVideoSurface.height) context.clearRect(0, height, canvasWidth, 1);
+        if (width < nativeVideoSurface.width) context.clearRect(width, 0, canvasWidth - width, canvasHeight);
+        if (height < nativeVideoSurface.height) context.clearRect(0, height, canvasWidth, canvasHeight - height);
       } else {
         if (canvas.width !== canvasWidth) canvas.width = canvasWidth;
         if (canvas.height !== canvasHeight) canvas.height = canvasHeight;

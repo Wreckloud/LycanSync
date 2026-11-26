@@ -71,8 +71,18 @@ export function screenShareContentHint(id: ScreenShareQualityId, custom?: Custom
   return screenShareDegradationPreference(id, custom) === 'maintain-resolution' ? 'detail' : 'motion';
 }
 
-export function screenShareThumbnailPreset() {
-  return new VideoPreset(640, 360, 1_000_000, 30, 'high');
+export function screenShareThumbnailPreset(dimensions?: { width: number; height: number }) {
+  let width = 640, height = 360;
+  if (dimensions) {
+    const shortSide = Math.min(dimensions.width, dimensions.height);
+    const divisor = Math.round(shortSide / height);
+    // LiveKit 按预设短边计算缩放比；分数倍缩放可能让 H.264 主层也退回软编。
+    if (divisor > 1 && shortSide % divisor === 0) {
+      width = Math.round(dimensions.width / divisor);
+      height = Math.round(dimensions.height / divisor);
+    }
+  }
+  return new VideoPreset(width, height, 1_000_000, 30, 'high');
 }
 
 export function readScreenShareQuality(): { quality: ScreenShareQualityId; customQuality: CustomScreenShareQuality } {

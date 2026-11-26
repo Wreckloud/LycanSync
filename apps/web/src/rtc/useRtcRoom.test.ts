@@ -60,6 +60,7 @@ vi.mock('./microphoneAudioProcessor', () => ({
 vi.mock('./nativeScreenVideo', () => ({
   NativeScreenVideoSession: class NativeScreenVideoSession {
     track = { stop: vi.fn() };
+    frameDimensions = { width: 602, height: 902 };
     sessionId?: string;
     private startPromise?: Promise<never>;
     private stopPromise?: Promise<void>;
@@ -1570,7 +1571,7 @@ describe('room media lifecycle', () => {
         source: Track.Source.ScreenShare,
         screenShareEncoding: expect.objectContaining({ maxFramerate: fps, maxBitrate: bitrate, priority: 'high' }),
         videoCodec: 'h264', simulcast: true,
-        screenShareSimulcastLayers: [expect.objectContaining({ width: 640, height: 360,
+        screenShareSimulcastLayers: [expect.objectContaining({ width: 301, height: 451,
           encoding: expect.objectContaining({ maxBitrate: 1_000_000, maxFramerate: 30 }) })],
         degradationPreference: degradation,
       });

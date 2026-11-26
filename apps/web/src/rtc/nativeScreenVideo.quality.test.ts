@@ -105,6 +105,32 @@ it('1440p120 传到原生并接收真实尺寸，保留同一轨道及 SDK 的�
   } finally { await session.stop(); }
 });
 
+it('保留小窗口的整数缩放比，并同步 SDK 重发布参数', async () => {
+  const { session, sender, track, sendFrame } = await createSession(true);
+  try {
+    await sendFrame(602, 902);
+    await session.configureQuality('highFrameRate');
+    expect(sender.getParameters().encodings[0].scaleResolutionDownBy).toBe(2);
+    expect(track.publishOptions).toMatchObject({ screenShareSimulcastLayers: [{ width: 301, height: 451 }] });
+  } finally { await session.stop(); }
+});
+
+it('窗口连续缩放后只按最终尺寸更新预览层，保留订阅状态和主层预算', async () => {
+  const { session, sender, track, sendFrame } = await createSession(true);
+  try {
+    const previous = sender.getParameters();
+    previous.encodings[0].active = false;
+    await sender.setParameters(previous);
+    sender.setParameters.mockClear();
+    await sendFrame(900, 600);
+    await sendFrame(602, 902);
+    await vi.waitFor(() => expect(sender.setParameters).toHaveBeenCalledOnce());
+    const current = sender.getParameters();
+    expect(current.encodings).toEqual([{ ...previous.encodings[0], scaleResolutionDownBy: 2 }, previous.encodings[1]]);
+    expect(track.publishOptions).toMatchObject({ screenShareSimulcastLayers: [{ width: 301, height: 451 }] });
+  } finally { await session.stop(); }
+});
+
 it('updates capture and encoder without replacing the track or session, and scales the next frame', async () => {
   const { session, desktop, sender, track, writes, sendFrame } = await createSession();
   try {

@@ -1,8 +1,19 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { SCREEN_SHARE_QUALITIES, SCREEN_SHARE_RESOLUTIONS, SCREEN_SHARE_FRAME_RATES,
-  readScreenShareQuality, saveScreenShareQuality, screenShareDegradationPreference, screenShareQuality, screenShareVideoPreset } from './screenShareQuality';
+  readScreenShareQuality, saveScreenShareQuality, screenShareDegradationPreference, screenShareQuality, screenShareThumbnailPreset, screenShareVideoPreset } from './screenShareQuality';
 
 afterEach(() => vi.unstubAllGlobals());
+
+it('按实际横竖画面选择整数倍缩略层，保留常规档位和无法精确表示的短边预算', () => {
+  for (const [width, height, expectedWidth, expectedHeight] of [
+    [602, 902, 301, 451], [902, 602, 451, 301], [1920, 1062, 640, 354],
+    [1920, 1080, 640, 360], [1280, 720, 640, 360], [1920, 1060, 640, 360],
+  ]) {
+    expect(screenShareThumbnailPreset({ width, height })).toMatchObject({
+      width: expectedWidth, height: expectedHeight, encoding: { maxBitrate: 1_000_000, maxFramerate: 30 },
+    });
+  }
+});
 
 it('画质保留三个预设，自定义固定在最后，帧率最高 120', () => {
   expect(SCREEN_SHARE_QUALITIES.map((quality) => quality.id)).toEqual(['highFrameRate', 'standard', 'economy', 'custom']);
