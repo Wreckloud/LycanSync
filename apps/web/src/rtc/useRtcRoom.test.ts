@@ -1582,9 +1582,10 @@ describe('room media lifecycle', () => {
     }
   });
 
-  it('选择器手动码率贯通首次原生启动与 WebRTC 发布，尺寸帧率仍采用自定义值', async () => {
+  it.each([[0.5, 250_000], [1, 500_000], [2, 1_000_000], [6, 1_000_000]])(
+    '首次发布自定义 %s Mbps 时预览层上限为 %i bps', async (bitrateMbps, previewBitrate) => {
     configureNativeScreenDesktop();
-    const customQuality = { resolution: 1440, fps: 120, bitrateMbps: 6 } as const;
+    const customQuality = { resolution: 1440, fps: 120, bitrateMbps } as const;
     rtcMocks.selectedSources.mockResolvedValueOnce({ sourceId: 'window:test:0', shareAudio: false, quality: 'custom', customQuality });
     const scope = effectScope();
     const rtc = scope.run(() => useRtcRoom({ inputGain: 1,
@@ -1597,7 +1598,8 @@ describe('room media lifecycle', () => {
       expect(rtcMocks.nativeStarts).toHaveBeenCalledWith('window:test:0', 120, expect.anything(), { width: 2560, height: 1440 });
       expect(rtcMocks.published).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
         source: Track.Source.ScreenShare,
-        screenShareEncoding: expect.objectContaining({ maxBitrate: 6_000_000, maxFramerate: 120 }),
+        screenShareEncoding: expect.objectContaining({ maxBitrate: bitrateMbps * 1_000_000, maxFramerate: 120 }),
+        screenShareSimulcastLayers: [expect.objectContaining({ encoding: expect.objectContaining({ maxBitrate: previewBitrate }) })],
       }));
       expect(rtc.currentCustomScreenShareQuality.value).toEqual(customQuality);
     } finally { await rtc.leave(); scope.stop(); }

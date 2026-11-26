@@ -97,7 +97,10 @@ export function screenShareThumbnailPreset(dimensions?: { width: number; height:
 export function screenShareLowerLayers(dimensions: { width: number; height: number }, middle: boolean, mainBitrate: number,
   preference?: RTCDegradationPreference) {
   const thumbnail = screenShareThumbnailPreset(dimensions);
-  if (!middle) return [thumbnail];
+  if (!middle) {
+    thumbnail.encoding.maxBitrate = Math.min(thumbnail.encoding.maxBitrate, Math.floor(mainBitrate / 2));
+    return [thumbnail];
+  }
   const { width, height } = dimensions;
   // 标准优先保留 720p；已协商三层时热切游戏，用半尺寸给快速运动留余量。
   const motion = preference === 'maintain-framerate';

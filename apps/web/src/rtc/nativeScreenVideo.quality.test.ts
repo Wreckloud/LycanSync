@@ -119,7 +119,9 @@ it('保留小窗口的整数缩放比，并同步 SDK 重发布参数', async ()
 it('窗口连续缩放后只按最终尺寸更新预览层，保留订阅状态和主层预算', async () => {
   const { session, sender, track, sendFrame } = await createSession(true);
   try {
+    await session.configureQuality('custom', { resolution: 1080, fps: 60, bitrateMbps: 0.5 });
     const previous = sender.getParameters();
+    expect(previous.encodings.map(layer => layer.maxBitrate)).toEqual([250_000, 500_000]);
     previous.encodings[0].active = false;
     await sender.setParameters(previous);
     sender.setParameters.mockClear();
@@ -128,7 +130,9 @@ it('窗口连续缩放后只按最终尺寸更新预览层，保留订阅状态�
     await vi.waitFor(() => expect(sender.setParameters).toHaveBeenCalledOnce());
     const current = sender.getParameters();
     expect(current.encodings).toEqual([{ ...previous.encodings[0], scaleResolutionDownBy: 2 }, previous.encodings[1]]);
-    expect(track.publishOptions).toMatchObject({ screenShareSimulcastLayers: [{ width: 301, height: 451 }] });
+    expect(track.publishOptions).toMatchObject({ screenShareSimulcastLayers: [
+      { width: 301, height: 451, encoding: { maxBitrate: 250_000 } },
+    ] });
   } finally { await session.stop(); }
 });
 
