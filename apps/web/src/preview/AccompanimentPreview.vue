@@ -113,28 +113,26 @@ function setSourceOpen(source: Source, open: boolean) {
           <div class="participant-media">
             <span v-if="screen !== 'off'" class="screen-preview"><Monitor :size="24" />共享画面</span>
             <div v-else class="large-avatar" aria-hidden="true">维</div>
+            <Transition name="badge-fade">
+              <component :is="card.local ? 'button' : 'span'" v-if="accompaniment || (card.local && screen === 'off')"
+                class="media-badge audio-badge" :class="{ 'own-badge': card.local, 'is-sharing': accompaniment, 'is-open': card.local && menuAnchor }"
+                :type="card.local ? 'button' : undefined" :aria-expanded="card.local && !accompaniment ? !!menuAnchor : undefined"
+                :aria-label="card.local && accompaniment ? '正在分享，点击停止伴奏' : undefined" :title="card.local && accompaniment ? '停止伴奏' : undefined"
+                v-on="card.local ? { click: accompaniment ? stopAudio : toggleSourceMenu } : {}">
+                <span :key="sharingId" class="audio-badge-content">
+                  <span v-if="accompaniment?.icon" class="record-icon">
+                    <img class="source-icon" :class="{ 'is-playing': !accompaniment.paused && !silent }" :src="accompaniment.icon" alt="" @error="accompaniment.icon = undefined" />
+                  </span>
+                  {{ accompaniment ? '正在分享' : '播放伴奏' }}
+                </span>
+              </component>
+            </Transition>
             <span v-if="!card.local && (!listening || !mic)" class="media-badge muted-badge" role="img" :aria-label="!listening ? '已停止收听' : '麦克风已关闭'">
               <HeadphoneOff v-if="!listening" :size="13" /><MicOff v-else :size="13" />
             </span>
           </div>
           <div class="participant-meta">
-            <span class="participant-name">
-              <strong>维克罗德{{ card.local ? '（你）' : '' }}</strong>
-              <Transition name="surface-panel">
-                <component :is="card.local ? 'button' : 'span'" v-if="accompaniment || (card.local && screen === 'off')"
-                  class="media-badge audio-badge" :class="{ 'own-badge': card.local, 'is-sharing': accompaniment, 'is-open': card.local && menuAnchor }"
-                  :type="card.local ? 'button' : undefined" :aria-expanded="card.local && !accompaniment ? !!menuAnchor : undefined"
-                  :aria-label="card.local && accompaniment ? '正在分享，点击停止伴奏' : undefined" :title="card.local && accompaniment ? '停止伴奏' : undefined"
-                  v-on="card.local ? { click: accompaniment ? stopAudio : toggleSourceMenu } : {}">
-                  <span :key="sharingId" class="audio-badge-content">
-                    <span v-if="accompaniment?.icon" class="record-icon">
-                      <img class="source-icon" :class="{ 'is-playing': !accompaniment.paused && !silent }" :src="accompaniment.icon" alt="" @error="accompaniment.icon = undefined" />
-                    </span>
-                    {{ accompaniment ? '正在分享' : '播放伴奏' }}
-                  </span>
-                </component>
-              </Transition>
-            </span>
+            <span class="participant-name"><strong>维克罗德{{ card.local ? '（你）' : '' }}</strong></span>
             <template v-if="card.local">
               <button type="button" class="participant-state participant-state-button" :class="{ 'is-off': !mic }"
                 :aria-label="mic ? '关闭自己的麦克风' : '开启自己的麦克风'" @click="mic = !mic">
@@ -207,16 +205,15 @@ function setSourceOpen(source: Source, open: boolean) {
 .participant-meta :deep(.volume-button:disabled) { color: var(--muted); }
 .card-pair h3 { margin: 0 0 8px; color: var(--muted); font-size: 13px; font-weight: 500; }
 .media-badge { position: absolute; bottom: 6px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 22px; padding: 0 4px; border: 0; border-radius: 5px; background: #0b0f14cc; color: var(--text); font: inherit; font-size: 11px; line-height: 16px; }
-.participant-meta { --meta-padding-y: 6px; padding-block: var(--meta-padding-y); }
-.participant-name { position: relative; flex: 0 1 auto; margin-right: auto; align-self: stretch; align-items: center; }
-.audio-badge { --record-size: 16px; --badge-inset: 4px; left: calc(0px - var(--badge-inset)); bottom: calc(100% + var(--meta-padding-y) + 6px); padding-inline: var(--badge-inset); background: #10161deb; font-size: 12px; white-space: nowrap; }
-.audio-badge:has(.record-icon) { left: calc(100% - var(--record-size) - var(--badge-inset)); }
+.audio-badge { left: 7px; background: #10161deb; font-size: 12px; white-space: nowrap; }
 .audio-badge-content { display: inline-flex; align-items: center; gap: 5px; animation: group-content-reveal var(--motion-surface-duration) var(--motion-ease); }
-.record-icon { display: flex; width: var(--record-size); height: var(--record-size); border-radius: 50%; overflow: hidden; }
+.record-icon { display: flex; width: 16px; height: 16px; border-radius: 50%; overflow: hidden; }
 .record-icon img { animation: app-loading-spin 12s linear infinite paused; }
 .record-icon img.is-playing { animation-play-state: running; }
+.badge-fade-enter-active, .badge-fade-leave-active { transition: opacity var(--motion-surface-duration) var(--motion-ease); }
+.badge-fade-enter-from, .badge-fade-leave-to { opacity: 0; }
 .muted-badge { right: 7px; min-width: 22px; }
-.own-badge { cursor: pointer; opacity: 0; pointer-events: none; transition: opacity var(--motion-surface-duration) var(--motion-ease), left var(--motion-surface-duration) var(--motion-ease); }
+.own-badge { cursor: pointer; opacity: 0; pointer-events: none; transition: opacity var(--motion-surface-duration) var(--motion-ease); }
 .participant-card:hover .own-badge, .participant-card:focus-within .own-badge, .own-badge.is-sharing, .own-badge.is-open { opacity: 1; pointer-events: auto; }
 .source-icon { width: 16px; height: 16px; object-fit: contain; flex: none; }
 .screen-preview { display: grid; justify-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
