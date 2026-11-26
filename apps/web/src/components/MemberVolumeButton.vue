@@ -2,7 +2,7 @@
 import { ref } from 'vue';
 import { AUDIO_VOLUME_MAX, AUDIO_VOLUME_STEP, normalizeAudioVolume } from '../rtc/audioPreferences';
 
-const props = withDefaults(defineProps<{ volume: number; label: string; max?: number }>(), { max: AUDIO_VOLUME_MAX });
+const props = withDefaults(defineProps<{ volume: number; label: string; max?: number; sliderLabel?: string }>(), { max: AUDIO_VOLUME_MAX });
 const emit = defineEmits<{ toggle: []; change: [volume: number] }>();
 const dragging = ref(false);
 let gesture: { id: number; x: number; y: number; initial: number } | undefined;
@@ -63,7 +63,15 @@ function click(event: MouseEvent) {
 </script>
 
 <template>
-  <button type="button" class="participant-state participant-state-button volume-button"
+  <span v-if="sliderLabel" class="inline-volume" @wheel="wheel" @pointerleave="wheelPixels = 0">
+    <button type="button" :aria-label="label" :aria-pressed="volume === 0" @click.stop="emit('toggle')">
+      <slot />
+    </button>
+    <input class="inline-volume-slider" type="range" min="0" :max="max" :step="AUDIO_VOLUME_STEP" :value="volume"
+      :aria-label="sliderLabel" :aria-valuetext="Math.round(volume * 100) + '%'"
+      @input="change(($event.target as HTMLInputElement).valueAsNumber)" />
+  </span>
+  <button v-else type="button" class="participant-state participant-state-button volume-button"
     :class="{ 'is-off': volume === 0, 'is-dragging': dragging }" :aria-label="label"
     :aria-pressed="volume === 0" :aria-description="`当前音量 ${Math.round(volume * 100)}%，上下拖动、滚轮或上下方向键可调整音量`"
     @pointerdown="begin" @pointermove="move" @pointerup="finish" @pointercancel="finish" @lostpointercapture="finish"
@@ -79,6 +87,13 @@ function click(event: MouseEvent) {
 </template>
 
 <style scoped>
+.inline-volume { position: relative; display: inline-flex; align-items: center; }
+.inline-volume-slider { position: absolute; right: 100%; top: 50%; box-sizing: border-box; width: var(--view-volume-width, 84px); height: 24px; margin: 0; padding: 0 5px; translate: 0 -50%; border: 0; background: transparent; appearance: none; color: var(--text); opacity: 0; pointer-events: none; transform: scaleX(.85); transform-origin: right center; }
+.inline-volume-slider::-webkit-slider-runnable-track { height: 3px; border-radius: 2px; background: var(--muted); }
+.inline-volume-slider::-webkit-slider-thumb { appearance: none; width: 9px; height: 9px; margin-top: -3px; border-radius: 50%; background: currentColor; }
+.inline-volume:is(:hover, :has(:focus-visible, :active)) .inline-volume-slider { opacity: 1; transform: none; pointer-events: auto; }
+@media (hover: none) { .inline-volume-slider { opacity: 1; transform: none; pointer-events: auto; } }
+@media (prefers-reduced-motion: no-preference) { .inline-volume-slider { transition: opacity var(--motion-surface-duration) ease, transform var(--motion-surface-duration) var(--motion-ease); } }
 .volume-button { position: relative; width: 24px; height: 32px; margin: -6px -2px; touch-action: none; user-select: none; }
 .volume-ring { position: absolute; left: 50%; top: 50%; translate: -50% -50%; pointer-events: none; fill: none; stroke: var(--border); stroke-width: 1.5; opacity: 0; scale: .8; }
 .volume-ring .ring-value { stroke: var(--accent); }

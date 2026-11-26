@@ -66,8 +66,13 @@
 .viewing-control-action { position: absolute; z-index: 2; right: 8px; top: 8px; display: inline-flex; align-items: center; gap: 5px; min-height: 26px; padding: 3px 7px; border: 1px solid var(--border); border-radius: var(--control-radius); color: var(--text); font: inherit; font-size: 12px; background: var(--viewing-actions-tint); opacity: 0; pointer-events: none; transition: opacity var(--motion-surface-duration) ease; }
 .viewing-tile:is(:hover, :has(:focus-visible)) .viewing-control-action { opacity: 1; pointer-events: auto; }
 .viewing-control-action.is-engaged { color: var(--accent); }
-.viewing-actions .volume-button { margin: 0; }
-.viewing-actions:has(.volume-button.is-dragging) { opacity: 1; transform: none; }
+.viewing-actions:has(.inline-volume-slider:active) { opacity: 1; transform: none; }
+.viewing-grid.is-focus .viewing-tile { container: focus-tile / inline-size; }
+.viewing-action-buttons { --view-volume-width: clamp(44px, calc(50cqi - 160px), 84px); }
+@container focus-tile (max-width: 410px) {
+  .viewing-actions:has(.inline-volume) .viewing-expand-members { position: static; margin-left: auto; transform: none; }
+  .viewing-action-buttons:has(.inline-volume) { padding-left: var(--view-volume-width); }
+}
 .viewing-tile:is(:hover, :has(:focus-visible)) .viewing-connection { pointer-events: auto; }
 .viewing-action-buttons { display: flex; flex-shrink: 0; gap: 4px; }
 .viewing-actions .viewing-expand-members { position: absolute; left: 50%; transform: translateX(-50%); }

@@ -101,7 +101,8 @@ export function useRtcRoom() {
       participant.isMicrophoneEnabled = true;
       reports[identity] = new Map([
         ['audio', { id: 'audio', type: 'inbound-rtp', kind: 'audio', transportId: 'transport' }],
-        ['video', { id: 'video', type: 'inbound-rtp', kind: 'video', frameWidth: 1280, frameHeight: 720, transportId: 'transport' }],
+        ['video', { id: 'video', type: 'inbound-rtp', kind: 'video', frameWidth: 1280, frameHeight: 720, transportId: 'transport',
+          get timestamp() { return performance.now(); }, get framesDecoded() { return Math.floor(performance.now() * .06); } }],
         ['transport', { type: 'transport', selectedCandidatePairId: 'pair' }],
         ['pair', { id: 'pair', type: 'candidate-pair', state: 'succeeded', currentRoundTripTime: ms / 1000, responsesReceived: ms }],
       ]);
@@ -302,7 +303,7 @@ test('成员卡片保留底部麦克风，闭麦时可预调并在画面右下�
   await expect(reopened).toHaveAttribute('aria-description', /105%/);
 });
 
-test('聊天和网格使用背景音量，聚焦和独立窗口只播放所选画面的正常音量', async ({ page }) => {
+test('聊天和网格使用背景音量，聚焦和独立窗口只播放所选画面的正常音量', async ({ page }, testInfo) => {
   await sharing(page, ['A', 'B', 'C']);
   await page.evaluate(() => (window as unknown as { __viewingTest: { addShareAudio(ids: string[]): void } }).__viewingTest.addShareAudio(['A', 'B', 'C']));
   const volumes = () => page.evaluate(() =>
@@ -316,12 +317,35 @@ test('聊天和网格使用背景音量，聚焦和独立窗口只播放所选�
   await page.getByRole('button', { name: '观看成员A的共享画面', exact: true }).click();
   await expect.poll(volumes).toEqual({ A: 0.35, B: 0, C: 0 });
   await page.locator('.viewing-surface').first().hover();
-  const focusedSound = page.locator('.viewing-action-buttons .volume-button');
+  const focusedSound = page.locator('.viewing-action-buttons').getByRole('button', { name: '静音这路共享声音' });
+  const slider = page.getByRole('slider', { name: '共享画面音量' });
   await focusedSound.hover();
+  await expect(slider).toHaveCSS('opacity', '1');
+  await slider.hover();
   await page.mouse.wheel(0, 80);
-  await expect(focusedSound).toHaveAttribute('aria-description', /95%/);
+  await expect(slider).toHaveAttribute('aria-valuetext', '95%');
   await expect.poll(volumes).toMatchObject({ A: expect.closeTo(0.3325, 6) });
-  await focusedSound.press('ArrowUp');
+  const track = (await slider.boundingBox())!, icon = (await focusedSound.boundingBox())!;
+  expect(track.x + track.width).toBeLessThanOrEqual(icon.x + 1);
+  expect(Math.abs(track.y + track.height / 2 - icon.y - icon.height / 2)).toBeLessThan(1);
+  await page.mouse.move(track.x + track.width - 10, track.y + track.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(track.x + track.width / 2, track.y + track.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await expect(slider).toHaveAttribute('aria-valuetext', '50%');
+  await expect.poll(volumes).toMatchObject({ A: expect.closeTo(0.175, 6) });
+  await page.locator('.viewing-actions').screenshot({ path: testInfo.outputPath('focused-volume.png') });
+  await page.setViewportSize({ width: 440, height: 800 });
+  await page.locator('.viewing-surface').first().hover();
+  await focusedSound.hover();
+  await expect.poll(async () => {
+    const bounds = await slider.boundingBox(), fold = await page.locator('.viewing-expand-members').boundingBox();
+    return !!bounds && !!fold && bounds.x >= fold.x + fold.width;
+  }).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.locator('.viewing-surface').first().hover();
+  await focusedSound.hover();
+  await slider.press('End');
   await page.getByRole('button', { name: '查看全部共享画面', exact: true }).click();
   await expect.poll(volumes).toEqual({ A: 0.1, B: expect.closeTo(0.095, 6), C: 0 });
   await page.getByRole('button', { name: '聚焦成员B', exact: true }).click();
@@ -386,8 +410,8 @@ test('观看状态使用实际往返延迟，滚轮进网格且网格选中一�
   }
   await page.locator('.viewing-surface').hover();
   await connection.locator('.signal-bars').hover();
-  await expect(page.getByRole('tooltip')).toContainText('主播连接质量：良好 本机到媒体服务器往返：100 ms');
-  await expect(page.getByRole('tooltip')).toContainText('接收画面：1280×720');
+  await expect(page.getByRole('tooltip')).toContainText('连接质量：良好 延迟：100 ms');
+  await expect(page.getByRole('tooltip')).toContainText('画面：1280×720 · 60 fps');
   await page.screenshot({ path: testInfo.outputPath('focus-network.png') });
   await page.locator('.viewing-surface').hover();
   await page.mouse.wheel(0, 120);

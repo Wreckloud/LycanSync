@@ -324,7 +324,7 @@ function select(share: ViewedShare) {
 
 let lastLayoutWheelAt = -Infinity;
 function layoutWheel(event: WheelEvent) {
-  if ((event.target as Element).closest('.volume-button')) return;
+  if ((event.target as Element).closest('.inline-volume')) return;
   if (event.ctrlKey || event.metaKey || event.deltaY <= 0 || Math.abs(event.deltaX) >= event.deltaY) return;
   const now = performance.now();
   if (now - lastLayoutWheelAt >= 160) {
@@ -444,7 +444,7 @@ onScopeDispose(() => {
                 @click="toggleMembers"><ChevronDown :size="16" /></button>
               <div class="viewing-action-buttons">
                 <MemberVolumeButton v-if="focus && listening && share.participant !== room?.localParticipant && screenAudioPublication(share.participant)?.track"
-                  :volume="shareVolume(share.participant.identity)" :max="SHARE_VOLUME_MAX"
+                  slider-label="共享画面音量" :volume="shareVolume(share.participant.identity)" :max="SHARE_VOLUME_MAX"
                   :label="shareVolume(share.participant.identity) ? '静音这路共享声音' : '恢复这路共享声音'"
                   @toggle="emit('toggleShareAudio', share.participant.identity)" @change="emit('changeShareVolume', share.participant.identity, $event)">
                   <Volume2 v-if="shareVolume(share.participant.identity)" :size="15" /><VolumeX v-else :size="15" />

@@ -9,7 +9,7 @@ const level = computed(() => levels[props.quality ?? 'unknown']);
 </script>
 
 <template>
-  <HoverHint class="signal-hint" boundary=".signal-hint" :text="(subject ?? '成员') + '连接质量：' + level[1] + (detail ? '\n' + detail : '')" v-slot="{ descriptionId }">
+  <HoverHint class="signal-hint" boundary=".signal-hint" :text="'连接质量：' + level[1] + (detail ? '\n' + detail : '')" v-slot="{ descriptionId }">
     <span class="signal-bars" role="img" tabindex="0" :aria-label="(subject ?? '成员') + '连接质量：' + level[1]" :aria-describedby="descriptionId">
       <i v-for="n in 3" :key="n" :class="{ lit: n <= level[0] }" aria-hidden="true" />
     </span>

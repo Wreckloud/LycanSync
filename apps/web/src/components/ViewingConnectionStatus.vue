@@ -13,7 +13,7 @@ const picture = ref('');
 const hovered = ref(false);
 const focused = ref(false);
 const detail = computed(() => [
-  '本机到媒体服务器往返：' + (latency.value === undefined ? '暂无数据' : latency.value + ' ms'),
+  '延迟：' + (latency.value === undefined ? '暂无数据' : latency.value + ' ms'),
   picture.value,
 ].filter(Boolean).join('\n'));
 const visible = ref(false);
@@ -80,7 +80,7 @@ watch(() => {
       if (stopped) return;
       const layer = layers.find(item => (item.bitrateKbps ?? 0) > 0) ?? layers[0];
       const metrics = layer && [layer.size === '未知' ? '' : layer.size, layer.fps == null ? '' : layer.fps + ' fps'].filter(Boolean).join(' · ');
-      picture.value = metrics ? (props.local ? '发送画面：' : '接收画面：') + metrics : '';
+      picture.value = metrics ? '画面：' + metrics : '';
       if (layer?.transportRoundTripMs != null) {
         latency.value = layer.transportRoundTripMs;
         lastLatencyAt = stream ? time : Date.now();
