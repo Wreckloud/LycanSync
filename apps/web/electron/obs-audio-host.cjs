@@ -1,5 +1,6 @@
 const { spawn } = require('node:child_process');
 const { win32 } = require('node:path');
+const MAX_PROTOCOL_LINE_BYTES = 8192;
 
 function readProcessingMetrics(value) {
   if (!value || !Number.isSafeInteger(value.samples) || value.samples <= 0
@@ -119,9 +120,10 @@ class ObsAudioHostManager {
   read(state, chunk) {
     if (!state.alive) return;
     state.buffer += String(chunk);
-    if (Buffer.byteLength(state.buffer) > 8192) { this.fail(state, 'obsAudioProtocolInvalid'); return; }
     for (let end = state.buffer.indexOf('\n'); end >= 0; end = state.buffer.indexOf('\n')) {
       const line = state.buffer.slice(0, end); state.buffer = state.buffer.slice(end + 1);
+      // stdout 的一次读取可以合并多条响应，长度上限只约束一条协议消息。
+      if (Buffer.byteLength(line) > MAX_PROTOCOL_LINE_BYTES) { this.fail(state, 'obsAudioProtocolInvalid'); return; }
       let event;
       try { event = JSON.parse(line); } catch { this.fail(state, 'obsAudioProtocolInvalid'); return; }
       if (!event || typeof event !== 'object' || Array.isArray(event)) { this.fail(state, 'obsAudioProtocolInvalid'); return; }
@@ -187,6 +189,10 @@ class ObsAudioHostManager {
           ...(typeof event.hresult === 'string' && /^0x[0-9a-fA-F]{8}$/.test(event.hresult) ? { message: event.hresult } : {}) });
         this.fail(state, event.code);
       } else if (!state.stopping) this.fail(state, 'obsAudioProtocolInvalid');
+    }
+    if (Buffer.byteLength(state.buffer) > MAX_PROTOCOL_LINE_BYTES) {
+      state.buffer = '';
+      this.fail(state, 'obsAudioProtocolInvalid');
     }
   }
 

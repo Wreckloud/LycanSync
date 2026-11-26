@@ -9,9 +9,9 @@ diff --git a/plugins/win-wasapi/win-wasapi.cpp b/plugins/win-wasapi/win-wasapi.c
  class WASAPISource {
 +	BoundAudioTarget bound_target;
 +	std::atomic<unsigned long> startup_id = 0;
-+	void TraceStartup(const char *phase, HRESULT result = S_OK) const
++	void TraceStartup(const char *phase, HRESULT result = S_OK, bool complete = false)
 +	{
-+		const auto id = startup_id.load();
++		const auto id = complete ? startup_id.exchange(0) : startup_id.load();
 +		if (id)
 +			blog(LOG_INFO, "LycanSync startup %lu %d %s %08lX", id, int(sourceType != SourceType::Input), phase,
 +			     static_cast<unsigned long>(result));
@@ -178,8 +178,8 @@ diff --git a/plugins/win-wasapi/win-wasapi.cpp b/plugins/win-wasapi/win-wasapi.c
 +			capture->ReleaseBuffer(frames);
 +			return false;
 +		}
-+		const auto id = startup_id.load();
-+		if (id) TraceStartup("firstPacket");
++		// 首包结束该来源的启动计时，持续采集时不再向宿主发送计时事件。
++		if (startup_id.load()) TraceStartup("firstPacket", S_OK, true);
 +		++packets_received;
 +		frames_received += frames;
 +		if (flags & AUDCLNT_BUFFERFLAGS_SILENT) ++silent_packets;

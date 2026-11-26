@@ -52,6 +52,34 @@ function fixture(context, mode = {}) {
   return { manager, children, failures, diagnostics, spawns, start, started };
 }
 
+test('麦克风连续收到合并的多行和跨块的响应时保持采集', async context => {
+  const { manager, children, failures, started } = fixture(context, { statisticsHang: true });
+  await started();
+  const metrics = manager.getDiagnostics('voice-session');
+  const phase = JSON.stringify({ event: 'startupPhase', source: 'input', instance: 1,
+    phase: 'firstPacket', atMs: 300, result: 0 }) + '\n';
+  const reply = JSON.stringify({ event: 'statistics', requestId: 1, framesReceived: 960, droppedChunks: 0,
+    sourceState: 1, sourceFrames: 960, pushToTalk: false, transmissionAllowed: true });
+  const chunk = phase.repeat(100) + reply.slice(0, 30);
+  assert.ok(Buffer.byteLength(chunk) > 8192);
+  children[0].stdout.write(chunk);
+  children[0].stdout.write(reply.slice(30) + '\n');
+  assert.equal((await metrics).framesReceived, 960);
+  assert.deepEqual(failures, []);
+});
+
+test('麦克风拒绝超长的完整协议行和未结束的单行', async context => {
+  for (const ending of ['', '\n']) {
+    const { children, start } = fixture(context);
+    const rejected = assert.rejects(start(), /obsAudioProtocolInvalid/);
+    // 这条 ready 消息除长度外完全合法。
+    const line = JSON.stringify({ ...ready, padding: 'a'.repeat(8200) });
+    children[0].stdout.write(line.slice(0, 4096));
+    children[0].stdout.write(line.slice(4096) + ending);
+    await rejected;
+  }
+});
+
 test('输入与播放参考分别汇总首包，重试保留失败阶段和等待时间', async context => {
   const { manager, children, diagnostics, start } = fixture(context);
   const pending = start();
