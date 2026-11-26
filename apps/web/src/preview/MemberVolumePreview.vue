@@ -9,7 +9,7 @@ type Channel = 'voice' | 'share';
 const modes = [
   { id: 'ticks', label: '两侧刻度' }, { id: 'ring', label: '图标环' }, { id: 'line', label: '底部细线' },
 ] as const;
-const mode = ref<typeof modes[number]['id']>('ticks');
+const mode = ref<typeof modes[number]['id']>('ring');
 const presets = [{ value: .25, label: '轻声' }, { value: 1, label: '原声' }, { value: 1.75, label: '增强' }];
 const atEdge = ref(false), mutedMic = ref(false), sharing = ref(false);
 const channels = computed<Channel[]>(() => sharing.value ? ['share', 'voice'] : ['voice']);
@@ -41,14 +41,17 @@ function show(channel: Channel) {
   active.value = channel;
 }
 function enter(channel: Channel, event: PointerEvent) {
-  if (event.pointerType === 'touch' || iconDrag || mode.value === 'ring') return;
+  if (event.pointerType === 'touch' || iconDrag) return;
+  if (mode.value === 'ring') { show(channel); return; }
   clearTimeout(timer);
   timer = setTimeout(() => show(channel), 180);
 }
 function leave(event: PointerEvent) {
   if (iconDrag) return;
   clearTimeout(timer);
-  if (!(event.currentTarget as HTMLElement).matches(':focus-visible')) timer = setTimeout(close, 250);
+  if ((event.currentTarget as HTMLElement).matches(':focus-visible')) return;
+  if (mode.value === 'ring') close();
+  else timer = setTimeout(close, 250);
 }
 function arrow(channel: Channel, event: KeyboardEvent) {
   const maximum = maxima[channel];
@@ -85,7 +88,7 @@ function finish(event: PointerEvent) {
   suppressClick = iconDrag.moved || event.type !== 'pointerup';
   iconDrag = undefined;
   const target = event.currentTarget as HTMLElement;
-  if (mode.value === 'ring' || !target.matches(':hover, :focus-visible')) timer = setTimeout(close, 650);
+  if (event.pointerType === 'touch' || !target.matches(':hover, :focus-visible')) timer = setTimeout(close, 250);
 }
 function toggle(channel: Channel, event: MouseEvent) {
   if (!suppressClick || event.detail === 0) setVolume(channel, volume.value[channel] ? 0 : lastAudible[channel]);
@@ -102,7 +105,6 @@ function wheel(channel: Channel, event: WheelEvent) {
     setVolume(channel, volume.value[channel] - Math.sign(wheelPixels) * AUDIO_VOLUME_STEP);
     wheelPixels = 0;
   }
-  if (mode.value === 'ring') timer = setTimeout(close, 650);
 }
 watch([mode, sharing, atEdge], close, { flush: 'sync' });
 onScopeDispose(close);
@@ -112,7 +114,7 @@ onScopeDispose(close);
   <section class="volume-lab" aria-labelledby="volume-title">
     <h1 id="volume-title">成员卡片音量</h1>
     <SegmentedControl v-model="mode" :options="modes" label="展开方式" />
-    <p>按住图标左右拖动，滚轮微调，单击静音。图标环只在操作或键盘聚焦时出现。</p>
+    <p>指向图标查看音量，左右拖动或用滚轮微调，单击静音或恢复。</p>
     <div class="volume-stage" :class="{ 'at-edge': atEdge }">
       <article class="participant-card">
         <div class="participant-media">
@@ -133,20 +135,22 @@ onScopeDispose(close);
             @pointerup="finish" @pointercancel="finish" @lostpointercapture="finish" @click="toggle(channel, $event)">
             <template v-if="channel === 'voice'"><MicOff v-if="mutedMic || !volume.voice" :size="14" /><VoiceLevelMic v-else :level="0" :size="14" /></template>
             <template v-else><Volume2 v-if="volume.share" :size="14" /><VolumeX v-else :size="14" /></template>
-            <span v-if="active === channel" class="volume-mark" :class="mode" aria-hidden="true"
-              :style="{ '--level': volume[channel] / maxima[channel] }">
-              <template v-if="mode === 'ticks'">
-                <span v-for="side in ['left', 'right']" :key="side" class="tick-bank" :class="side">
-                  <i v-for="n in 5" :key="n" :style="{ '--tick': n }" />
-                </span>
-              </template>
-              <svg v-else-if="mode === 'ring'" width="28" height="28" viewBox="0 0 28 28">
-                <circle class="ring-track" cx="14" cy="14" r="11.5" />
-                <circle class="ring-value" cx="14" cy="14" r="11.5" pathLength="1" stroke-dasharray="1 1"
-                  :stroke-dashoffset="1 - volume[channel] / maxima[channel]" transform="rotate(-90 14 14)" />
-              </svg>
-              <span v-else class="line-track"><i /></span>
-            </span>
+            <Transition name="volume-feedback">
+              <span v-if="active === channel" class="volume-mark" :class="mode" aria-hidden="true"
+                :style="{ '--level': volume[channel] / maxima[channel] }">
+                <template v-if="mode === 'ticks'">
+                  <span v-for="side in ['left', 'right']" :key="side" class="tick-bank" :class="side">
+                    <i v-for="n in 5" :key="n" :style="{ '--tick': n }" />
+                  </span>
+                </template>
+                <svg v-else-if="mode === 'ring'" width="28" height="28" viewBox="0 0 28 28">
+                  <circle class="ring-track" cx="14" cy="14" r="11.5" />
+                  <circle class="ring-value" cx="14" cy="14" r="11.5" pathLength="1" stroke-dasharray="1 1"
+                    :stroke-dashoffset="1 - volume[channel] / maxima[channel]" transform="rotate(-90 14 14)" />
+                </svg>
+                <span v-else class="line-track"><i /></span>
+              </span>
+            </Transition>
           </button>
         </div>
       </article>
@@ -175,8 +179,7 @@ onScopeDispose(close);
 .volume-stage .participant-card { width: 220px; overflow: visible; }
 .participant-media { aspect-ratio: 16/9; border-radius: 4px 4px 0 0; color: var(--muted); }
 .muted-badge { position: absolute; right: 7px; bottom: 6px; padding: 3px; color: var(--text); background: var(--panel); border-radius: 4px; }
-.participant-meta { padding-inline-end: 18px; gap: 12px; }
-.volume-control { position: relative; touch-action: none; user-select: none; cursor: ew-resize; }
+.volume-control { position: relative; touch-action: none; user-select: none; }
 .volume-control:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
 .volume-mark { position: absolute; top: 50%; left: 50%; translate: -50% -50%; pointer-events: none; color: var(--text); }
 .volume-mark.ticks { width: 48px; height: 12px; display: flex; align-items: center; justify-content: space-between; }
@@ -191,8 +194,8 @@ onScopeDispose(close);
 .line-track { width: 100%; height: 2px; background: var(--border); }
 .line-track i { display: block; height: 100%; background: var(--muted); transform-origin: left; transform: scaleX(var(--level)); }
 @media (prefers-reduced-motion: no-preference) {
-  .volume-mark { animation: volume-reveal 120ms var(--motion-ease); }
-  @keyframes volume-reveal { from { scale: .45 .85; opacity: 0; } to { scale: 1; opacity: 1; } }
+  .volume-feedback-enter-active, .volume-feedback-leave-active { transition: opacity 120ms var(--motion-ease), scale 120ms var(--motion-ease); }
+  .volume-feedback-enter-from, .volume-feedback-leave-to { opacity: 0; scale: .8; }
 }
 .volume-options { display: flex; justify-content: center; flex-wrap: wrap; gap: 12px 22px; align-items: center; }
 .volume-options button[aria-pressed=true] { border-color: var(--accent); }
