@@ -1372,7 +1372,7 @@ function participantListening(participant: Participant) {
         <div v-for="participant in rtc.participants" :key="participant.identity" class="member-card" :data-scroll-key="participant.identity">
         <ParticipantCard :participant="participant"
           :focused="focusedIdentity === participant.identity" :watching-elsewhere="watchingElsewhere"
-          :view-active="visible"
+          :view-active="visible" :snapshot="diagnosticReport.latest.value"
           :preview-mounted="previewsMounted"
           :revision="rtc.revision" :speaker-revision="rtc.speakerRevision" :avatar="participantAvatar(participant.identity)" :is-local="participant === localParticipant"
           :recording-elapsed="recording.state.value.phase === 'recording' ? recording.elapsed.value : undefined"

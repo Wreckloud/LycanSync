@@ -6,7 +6,7 @@ import type { MediaDiagnosticsSnapshot } from '../diagnostics/mediaDiagnostics';
 import { readTransportFeedback, readVideoLayers, type VideoLayerStats } from '../rtc/mediaStats';
 
 const props = defineProps<{ participant: Participant; revision: number; active: boolean; local: boolean;
-  compact?: boolean; voiceTrack?: Track; snapshot?: MediaDiagnosticsSnapshot | null }>();
+  compact?: boolean; subject?: string; voiceTrack?: Track; snapshot?: MediaDiagnosticsSnapshot | null }>();
 const indicator = ref<HTMLElement | null>(null);
 const latency = ref<number>();
 const picture = ref('');
@@ -102,7 +102,7 @@ watch(() => {
 <template>
   <span ref="indicator" class="viewing-connection" @pointerenter="hovered = true" @pointerleave="hovered = false"
     @focusin="focused = true" @focusout="focused = false">
-    <ConnectionSignal :quality="quality" :subject="local ? '我的' : '主播'" :detail="detail" />
+    <ConnectionSignal :quality="quality" :subject="subject ?? (local ? '我的' : '主播')" :detail="detail" />
     <span v-if="!compact" class="latency">{{ latency === undefined ? '—' : latency + ' ms' }}</span>
   </span>
 </template>

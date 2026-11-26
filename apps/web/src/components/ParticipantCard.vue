@@ -2,7 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 import { Circle, Fullscreen, HeadphoneOff, Headphones, MicOff, Volume2, VolumeX } from '@lucide/vue';
 import { Track, VideoQuality, type Participant, type RemoteTrackPublication } from 'livekit-client';
-import ConnectionSignal from './ConnectionSignal.vue';
+import ViewingConnectionStatus from './ViewingConnectionStatus.vue';
+import type { MediaDiagnosticsSnapshot } from '../diagnostics/mediaDiagnostics';
 import MemberVolumeButton from './MemberVolumeButton.vue';
 import { SHARE_VOLUME_MAX } from '../rtc/audioPreferences';
 import VoiceLevelMic from './VoiceLevelMic.vue';
@@ -23,6 +24,7 @@ const props = withDefaults(defineProps<{
   variant?: 'card' | 'viewer';
   inputBlocked?: boolean;
   viewActive?: boolean;
+  snapshot?: MediaDiagnosticsSnapshot | null;
   previewMounted?: boolean;
   focused?: boolean;
   watchingElsewhere?: boolean;
@@ -70,7 +72,6 @@ const media = computed(() => {
   const microphone = props.isLocal ? props.localMicrophoneEnabled === true
     : props.isListening !== false && props.participant.isMicrophoneEnabled;
   return {
-    quality: props.participant.connectionQuality,
     publication: props.privateControl ? undefined : publication,
     track: props.privateControl ? undefined : publication?.track,
     muted: publication?.isMuted,
@@ -284,7 +285,9 @@ onBeforeUnmount(() => {
     <div class="participant-meta">
       <span class="participant-name">
         <strong :title="media.name">{{ media.name }}{{ isLocal ? '（你）' : '' }}</strong>
-        <ConnectionSignal v-if="variant === 'card' && !isLocal" class="member-signal" :quality="media.quality" />
+        <ViewingConnectionStatus v-if="variant === 'card' && !isLocal" class="member-signal" compact :local="false"
+          :participant="participant" :subject="media.name" :revision="revision" :active="viewActive && !privateControl"
+          :voice-track="participant.getTrackPublication(Track.Source.Microphone)?.track" :snapshot="snapshot" />
       </span>
       <MemberVolumeButton v-if="variant === 'card' && !isLocal && shareAudio && shareAudioListening" :max="SHARE_VOLUME_MAX"
         :volume="shareVolume" :label="shareVolume === 0 ? '恢复这路共享声音' : '静音这路共享声音'"
@@ -320,7 +323,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.member-signal { color: var(--muted); }
+.member-signal { margin-left: 0; align-items: center; }
 .member-audio-status {
   position: absolute; right: 7px; bottom: 6px; z-index: 3; pointer-events: none;
   display: grid; place-items: center; width: 22px; height: 22px; border-radius: 5px;

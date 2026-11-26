@@ -385,6 +385,21 @@ test('从缩略图进入聚焦只提升选中的实际订阅，退出后恢复�
 
 test('观看状态使用实际往返延迟，滚轮进网格且网格选中一路后放大', async ({ page }, testInfo) => {
   await sharing(page, ['A', 'B']);
+  const memberSignal = (name: string) => page.getByTestId('participant-card').filter({ hasText: name }).locator('.member-signal .signal-bars');
+  const tooltip = page.getByRole('tooltip');
+  const audioOnly = memberSignal('成员C');
+  await audioOnly.hover();
+  await expect(tooltip).toContainText('延迟：暂无数据');
+  await page.evaluate(() => (window as unknown as { __viewingTest: { transport(id: string, ms: number): void } }).__viewingTest.transport('C', 32));
+  await expect(tooltip).toContainText('连接质量：良好 延迟：32 ms');
+  await expect(tooltip).not.toContainText('画面');
+  await page.mouse.move(2, 2);
+  await expect(tooltip).toHaveCount(0);
+  await page.keyboard.press('Tab');
+  await audioOnly.focus();
+  await expect(audioOnly).toHaveAccessibleDescription(/延迟：32 ms/);
+  await audioOnly.blur();
+  await page.evaluate(() => (window as unknown as { __viewingTest: { microphones(ids: string[]): void } }).__viewingTest.microphones([]));
   await page.evaluate(() => {
     const room = (window as unknown as { __viewingTest: { control(id: string): void; addShareAudio(ids: string[]): void } }).__viewingTest;
     room.control('A');
@@ -413,6 +428,8 @@ test('观看状态使用实际往返延迟，滚轮进网格且网格选中一�
   await expect(page.getByRole('tooltip')).toContainText('连接质量：良好 延迟：100 ms');
   await expect(page.getByRole('tooltip')).toContainText('画面：1280×720 · 60 fps');
   await page.screenshot({ path: testInfo.outputPath('focus-network.png') });
+  await memberSignal('成员A').hover();
+  await expect(memberSignal('成员A')).toHaveAccessibleDescription(/连接质量：良好.*延迟：100 ms.*画面：1280×720 · 60 fps/s);
   await page.locator('.viewing-surface').hover();
   await page.mouse.wheel(0, 120);
   await expect(page.locator('.viewing-tile')).toHaveCount(2);
