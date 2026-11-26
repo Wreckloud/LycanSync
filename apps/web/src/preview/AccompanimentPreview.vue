@@ -128,8 +128,8 @@ function setSourceOpen(source: Source, open: boolean) {
             <div v-else class="large-avatar" aria-hidden="true">维</div>
             <div v-if="showSpectrum && accompaniment && screen === 'off'" class="spectrum-preview" aria-hidden="true"
               :class="{ 'has-sound': !sharingPaused && !accompaniment.paused && !silent }">
-              <i v-for="(height, i) in [19, 29, 39, 34, 44, 54, 49, 39, 29, 34, 49, 44, 34, 39, 44, 34, 24, 29, 34, 24, 19, 24, 19, 14]" :key="i"
-                :style="{ height: height + 'px', animationDelay: i * -0.17 + 's' }" />
+              <i v-for="(height, i) in [19, 29, 39, 34, 44, 54, 49, 39, 29, 34, 49, 44, 34, 39, 44, 34, 24, 29, 34, 24, 14]" :key="i"
+                :style="{ '--band-height': height + 'px', '--phase': i * -0.17 + 's' }" />
             </div>
             <Transition name="badge-fade">
               <component :is="card.local ? 'button' : 'span'" v-if="accompaniment || (card.local && screen === 'off')"
@@ -232,11 +232,17 @@ function setSourceOpen(source: Source, open: boolean) {
 .record-icon { display: flex; width: 16px; height: 16px; border-radius: 50%; overflow: hidden; }
 .badge-action, .own-badge.is-sharing:is(:hover, :focus-visible) .badge-status { display: none; }
 .own-badge.is-sharing:is(:hover, :focus-visible) .badge-action { display: inline; }
-.spectrum-preview { position: absolute; inset: 0 5px; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; align-items: end; gap: 2px; overflow: hidden; opacity: .3; pointer-events: none; }
+.spectrum-preview { position: absolute; inset: 0 5px; display: grid; grid-template-columns: repeat(21, minmax(0, 8px)); align-items: end; justify-content: center; gap: 2px; overflow: hidden; opacity: .3; pointer-events: none; }
 .participant-media:has(.spectrum-preview) .large-avatar { z-index: 1; }
-.spectrum-preview i { background: var(--muted); clip-path: inset(calc(100% - 4px) 0 0); }
-.spectrum-preview.has-sound i { animation: spectrum-pulse 900ms ease-in-out infinite alternate; }
-@keyframes spectrum-pulse { from { clip-path: inset(calc(100% - 4px) 0 0); } to { clip-path: inset(0); } }
+.spectrum-preview i { position: relative; height: 4px; transition: height 550ms ease-in 240ms; }
+.spectrum-preview.has-sound i { height: var(--band-height); transition: none; }
+.spectrum-preview i::before, .spectrum-preview i::after { content: ''; position: absolute; inset-inline: 0; }
+.spectrum-preview i::before { bottom: 0; height: 100%; max-height: 4px; background: var(--muted); clip-path: inset(calc(100% - 4px) 0 0); animation: spectrum-pulse 1.8s ease-in-out var(--phase) infinite paused; }
+.spectrum-preview.has-sound i::before { max-height: none; }
+.spectrum-preview i::after { top: calc(100% - 4px); height: 2px; background: var(--text); animation: spectrum-peak 1.8s ease-in-out var(--phase) infinite paused; }
+.spectrum-preview.has-sound i::before, .spectrum-preview.has-sound i::after { animation-play-state: running; }
+@keyframes spectrum-pulse { 0%, 85%, 100% { clip-path: inset(calc(100% - 4px) 0 0); } 50% { clip-path: inset(0); } }
+@keyframes spectrum-peak { 0%, 100% { top: calc(100% - 4px); } 50%, 64% { top: 0; } }
 .badge-fade-enter-active, .badge-fade-leave-active { transition: opacity var(--motion-surface-duration) var(--motion-ease); }
 .badge-fade-enter-from, .badge-fade-leave-to { opacity: 0; }
 .muted-badge { right: 7px; min-width: 22px; }
